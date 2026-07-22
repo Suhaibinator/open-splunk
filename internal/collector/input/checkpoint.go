@@ -19,6 +19,14 @@ const checkpointFileName = "checkpoints.json"
 // change can be detected on load.
 const checkpointFormatVersion = 1
 
+// defaultCheckpointRetention bounds how long a checkpoint for a vanished file
+// is kept. Hosts that rotate to fresh inodes accumulate one entry per rotated
+// file; without pruning the store grows without bound and every Set rewrites an
+// ever-larger document. Entries older than this are dropped when the store is
+// opened. Seven days comfortably exceeds any plausible collector downtime while
+// keeping the store bounded by the number of files active within the window.
+const defaultCheckpointRetention = 7 * 24 * time.Hour
+
 // checkpointDoc is the on-disk shape of the checkpoint store.
 type checkpointDoc struct {
 	Version     int          `json:"version"`
@@ -41,8 +49,14 @@ type fileCheckpointStore struct {
 // but cannot be parsed is a hard error naming the path, so a corrupt file is
 // never silently discarded.
 func NewCheckpointStore(dir string) (CheckpointStore, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// 0o700 and tighten a pre-existing directory: checkpoints reveal tracked
+	// file paths and must not be world-readable, matching the WAL and
+	// dead-letter treatment of the state directory.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("collector/input: create checkpoint dir %s: %w", dir, err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("collector/input: secure checkpoint dir %s: %w", dir, err)
 	}
 	s := &fileCheckpointStore{
 		dir:     dir,
@@ -52,7 +66,30 @@ func NewCheckpointStore(dir string) (CheckpointStore, error) {
 	if err := s.load(); err != nil {
 		return nil, err
 	}
+	if _, err := s.pruneOlderThan(defaultCheckpointRetention); err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+// pruneOlderThan drops entries whose UpdatedAt is older than retention and
+// persists the result when anything was removed, returning the removed count.
+// Entries with a zero UpdatedAt (a format predating the field) are kept.
+func (s *fileCheckpointStore) pruneOlderThan(retention time.Duration) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cutoff := time.Now().UTC().Add(-retention)
+	removed := 0
+	for key, cp := range s.entries {
+		if !cp.UpdatedAt.IsZero() && cp.UpdatedAt.Before(cutoff) {
+			delete(s.entries, key)
+			removed++
+		}
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	return removed, s.persistLocked()
 }
 
 // load reads the store file into memory. A missing file yields an empty store.

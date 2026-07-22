@@ -17,7 +17,9 @@ func TestCheckpointStoreSetGetReopen(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	id := FileIdentity{Device: 7, Inode: 42, Fingerprint: "deadbeef"}
-	cp := Checkpoint{Identity: id, Path: "/var/log/app.log", Offset: 4096, LineNumber: 12, UpdatedAt: time.Unix(1000, 0).UTC()}
+	// A recent timestamp: the store prunes entries older than
+	// defaultCheckpointRetention at open, so a fixed 1970 stamp would be dropped.
+	cp := Checkpoint{Identity: id, Path: "/var/log/app.log", Offset: 4096, LineNumber: 12, UpdatedAt: time.Now().UTC().Add(-time.Minute).Truncate(time.Second)}
 	if err := store.Set(cp); err != nil {
 		t.Fatalf("set: %v", err)
 	}

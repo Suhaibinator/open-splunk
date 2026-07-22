@@ -1133,3 +1133,39 @@ func TestSenderRedeliversOrphanedInflightAfterReconnect(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// invalidResumeQueue simulates a fresh/quarantined local queue that does not
+// know the durability point the server advertises: AckThrough fails closed
+// with wal.ErrInvalidAck while everything else behaves normally.
+type invalidResumeQueue struct{ *fakeQueue }
+
+func (q *invalidResumeQueue) AckThrough(uint64) error { return wal.ErrInvalidAck }
+
+// TestSenderContinuesWhenResumePointUnknown covers the fresh-state-dir edge: a
+// server Ready carrying resume_after_batch_sequence ahead of anything the local
+// WAL knows must not fail the connection (which would crash-loop forever) —
+// the sender logs, skips the resume ack, and delivers the queue normally.
+func TestSenderContinuesWhenResumePointUnknown(t *testing.T) {
+	t.Parallel()
+	fs := newFakeServer()
+	fs.readyFn = func() *opensplunkv1.CollectorReady {
+		ready := defaultReady()
+		resume := uint64(500)
+		ready.ResumeAfterBatchSequence = &resume
+		return ready
+	}
+	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+		fs.ackBatch(b.GetBatchSequence(), uint32(len(b.GetEvents())), 0)
+	}
+	conn := startServer(t, fs)
+	q := &invalidResumeQueue{fakeQueue: newFakeQueue(fakeBatch(1, makeEvent("e1", "main")))}
+	s := newTestSender(t, testOptions(), q, &memSink{}, nil, conn)
+	cancel, done := runSender(t, s)
+
+	waitFor(t, "batch delivered despite unknown resume point", func() bool { return q.ackedSeq() >= 1 })
+	if calls := fs.calls(); calls != 1 {
+		t.Fatalf("server Collect calls = %d, want 1 (no reconnect churn)", calls)
+	}
+	cancel()
+	<-done
+}

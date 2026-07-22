@@ -8,6 +8,7 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -46,6 +47,10 @@ type conn struct {
 	// ack can map event indices back to events.
 	inflight  map[uint64]*opensplunkv1.EventBatch
 	inflightN int
+	// pendingRetry tracks batch sequences with a resend already scheduled, so a
+	// flood of RetryBatch messages for one sequence coalesces to a single resend
+	// goroutine instead of spawning one per message.
+	pendingRetry map[uint64]struct{}
 
 	maxInFlight    int
 	maxBatchEvents uint32
@@ -72,6 +77,7 @@ func (s *Sender) newConn(ctx context.Context, cancel, streamCancel context.Cance
 		cancel:       cancel,
 		streamCancel: streamCancel,
 		inflight:     make(map[uint64]*opensplunkv1.EventBatch),
+		pendingRetry: make(map[uint64]struct{}),
 	}
 	c.cond = sync.NewCond(&c.mu)
 	return c
@@ -233,10 +239,21 @@ func (c *conn) awaitReady() error {
 	// unacked batch.
 	if ready.ResumeAfterBatchSequence != nil {
 		resume := ready.GetResumeAfterBatchSequence()
-		if err := c.s.queue.AckThrough(resume); err != nil {
-			return fmt.Errorf("collector/sender: invalid resume sequence %d: %w", resume, err)
+		switch err := c.s.queue.AckThrough(resume); {
+		case err == nil:
+			c.s.markAcked(resume, 0)
+		case errors.Is(err, wal.ErrInvalidAck):
+			// The server remembers a durability point this queue does not know —
+			// typically a fresh or quarantined state directory behind an older
+			// collector identity. Failing the connection here would crash-loop
+			// forever and deliver nothing. Proceed without acking: everything
+			// local is (re)sent and the server deduplicates or rejects with
+			// explicit, operator-visible responses.
+			c.s.logger.Warn("collector stream resume point unknown to local queue; continuing without ack",
+				"resume_sequence", resume, "error", err.Error())
+		default:
+			return fmt.Errorf("collector/sender: resume sequence %d: %w", resume, err)
 		}
-		c.s.markAcked(resume, 0)
 	}
 	return nil
 }
@@ -255,6 +272,9 @@ func (c *conn) send(req *opensplunkv1.CollectRequest) error {
 // --- pump -------------------------------------------------------------------
 
 func (c *conn) pumpLoop() {
+	// pending retains a batch already dequeued by NextBatch but held back because a
+	// temporary throttle forbids it right now; it must not be re-appended.
+	var pending *opensplunkv1.EventBatch
 	for {
 		c.mu.Lock()
 		for {
@@ -275,16 +295,20 @@ func (c *conn) pumpLoop() {
 			}
 		}
 
-		batch, err := c.s.queue.NextBatch(c.ctx)
-		if err != nil {
-			return // context cancelled
+		batch := pending
+		pending = nil
+		if batch == nil {
+			var err error
+			batch, err = c.s.queue.NextBatch(c.ctx)
+			if err != nil {
+				return // context cancelled
+			}
 		}
 
-		// Send-time guards. A pre-sealed batch that exceeds the negotiated (or
-		// throttled) server limits can never be accepted; it is a permanent local
-		// dead-letter case. Dead-letter it and ack it off the queue so delivery
-		// makes progress rather than looping forever.
-		if code, ok := c.batchExceedsLimits(batch); ok {
+		// A batch that exceeds the NEGOTIATED Ready limits can never be accepted on
+		// this stream, so it is a permanent local dead-letter case: dead-letter it
+		// and ack it off the queue so delivery makes progress instead of looping.
+		if code, ok := c.batchExceedsReadyLimits(batch); ok {
 			if err := c.deadLetterWholeBatch(batch, code, "batch exceeds negotiated server limits"); err != nil {
 				c.fail(err)
 				return
@@ -294,6 +318,17 @@ func (c *conn) pumpLoop() {
 				return
 			}
 			c.s.markDropped(uint64(len(batch.GetEvents())))
+			continue
+		}
+
+		// A batch that exceeds only a TEMPORARY throttle's reduced limits must NOT
+		// be dropped: hold it and wait out the throttle, then retry the same batch.
+		// Head-of-line blocking during a throttle is the correct behavior.
+		if c.batchExceedsThrottleLimits(batch) {
+			pending = batch
+			if !c.waitOutThrottle() {
+				return
+			}
 			continue
 		}
 
@@ -350,18 +385,13 @@ func (c *conn) throttleWaitDuration() time.Duration {
 	return d
 }
 
-func (c *conn) batchExceedsLimits(batch *opensplunkv1.EventBatch) (string, bool) {
+// batchExceedsReadyLimits reports whether batch exceeds the NEGOTIATED Ready
+// limits (fixed for the life of the stream). Such a batch can never be accepted
+// and is permanently dead-lettered; the returned string is the rejection code.
+func (c *conn) batchExceedsReadyLimits(batch *opensplunkv1.EventBatch) (string, bool) {
 	c.mu.Lock()
 	maxEvents := c.maxBatchEvents
 	maxBytes := c.maxBatchBytes
-	if c.throttleActiveLocked() {
-		if c.throttleMaxEvents > 0 {
-			maxEvents = c.throttleMaxEvents
-		}
-		if c.throttleMaxBytes > 0 {
-			maxBytes = c.throttleMaxBytes
-		}
-	}
 	c.mu.Unlock()
 
 	if maxEvents > 0 && uint32(len(batch.GetEvents())) > maxEvents {
@@ -371,6 +401,56 @@ func (c *conn) batchExceedsLimits(batch *opensplunkv1.EventBatch) (string, bool)
 		return opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE.String(), true
 	}
 	return "", false
+}
+
+// batchExceedsThrottleLimits reports whether an active throttle's reduced limits
+// (tighter than Ready) currently forbid batch. Because a throttle is temporary,
+// such a batch is not dropped: the pump waits it out and retries the same batch.
+func (c *conn) batchExceedsThrottleLimits(batch *opensplunkv1.EventBatch) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.throttleActiveLocked() {
+		return false
+	}
+	if c.throttleMaxEvents > 0 && uint32(len(batch.GetEvents())) > c.throttleMaxEvents {
+		return true
+	}
+	if c.throttleMaxBytes > 0 && batch.GetUncompressedSizeBytes() > c.throttleMaxBytes {
+		return true
+	}
+	return false
+}
+
+// waitOutThrottle blocks until the active throttle expires or is lifted, so the
+// held batch can be retried. When the throttle has an effective_until it uses a
+// ctx-aware sleep to that instant; otherwise it waits on cond for the next
+// Throttle or connection state change. It returns false when ctx is cancelled.
+func (c *conn) waitOutThrottle() bool {
+	c.mu.Lock()
+	if !c.throttleActiveLocked() {
+		c.mu.Unlock()
+		return c.ctx.Err() == nil
+	}
+	until := c.throttleUntil
+	c.mu.Unlock()
+
+	if !until.IsZero() {
+		d := until.Sub(c.s.now())
+		if d <= 0 {
+			return c.ctx.Err() == nil
+		}
+		return c.s.sleep(c.ctx, d)
+	}
+
+	// No expiry time: block until a Throttle update, inflight release, drain, or
+	// teardown broadcasts on cond. The outer pump loop re-evaluates afterward.
+	c.mu.Lock()
+	if c.ctx.Err() == nil && !c.draining {
+		c.cond.Wait()
+	}
+	stopped := c.ctx.Err() != nil
+	c.mu.Unlock()
+	return !stopped
 }
 
 // --- heartbeat --------------------------------------------------------------
@@ -550,16 +630,33 @@ func (c *conn) handleReject(reject *opensplunkv1.BatchReject) error {
 // resent after retry_after. The in-flight slot is kept the whole time.
 func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) error {
 	seq := retry.GetBatchSequence()
-	batch := c.lookupInflight(seq)
+	c.mu.Lock()
+	batch := c.inflight[seq]
 	if batch == nil {
+		c.mu.Unlock()
 		return fmt.Errorf("collector/sender: retry for unknown batch sequence %d", seq)
 	}
 	if retry.GetBatchId() != batch.GetBatchId() {
+		c.mu.Unlock()
 		return fmt.Errorf("collector/sender: retry batch id %q does not match sequence %d", retry.GetBatchId(), seq)
 	}
+	if _, scheduled := c.pendingRetry[seq]; scheduled {
+		// A resend is already pending for this sequence; coalesce so a flood of
+		// RetryBatch messages cannot spawn thousands of goroutines.
+		c.mu.Unlock()
+		return nil
+	}
+	c.pendingRetry[seq] = struct{}{}
+	c.mu.Unlock()
+
 	c.s.markRetried()
 	delay := retry.GetRetryAfter().AsDuration()
 	go func() {
+		defer func() {
+			c.mu.Lock()
+			delete(c.pendingRetry, seq)
+			c.mu.Unlock()
+		}()
 		if delay > 0 {
 			if !c.s.sleep(c.ctx, delay) {
 				return
@@ -627,6 +724,7 @@ func (c *conn) releaseInflight(seq uint64) {
 	c.mu.Lock()
 	if _, ok := c.inflight[seq]; ok {
 		delete(c.inflight, seq)
+		delete(c.pendingRetry, seq)
 		c.inflightN--
 		c.cond.Broadcast()
 	}
@@ -638,6 +736,7 @@ func (c *conn) releaseInflightThrough(seq uint64) {
 	for key := range c.inflight {
 		if key <= seq {
 			delete(c.inflight, key)
+			delete(c.pendingRetry, key)
 			c.inflightN--
 		}
 	}
