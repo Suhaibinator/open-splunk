@@ -1,3 +1,17 @@
+# Open Splunk Collector configuration.
+#
+# The daemon persists everything under state.directory:
+#   <dir>/wal/            durable, fsync-on-append event-batch queue
+#   <dir>/checkpoints/    per-file read offsets (advanced only after a durable append)
+#   <dir>/dead-letter.jsonl  events the server permanently rejected
+#   <dir>/collector_id    stable collector id, generated once and reused across restarts
+#
+# Batching is not configured here: the daemon flushes an accumulating batch to
+# the durable queue when it reaches 500 events, 1 MiB of encoded events, or
+# after 250ms of linger, whichever comes first. When the queue reaches
+# state.max_queue_bytes the daemon stops reading inputs (backpressure to the
+# source files, which persist) rather than dropping data.
+
 server:
   address: 127.0.0.1:8443
   transport: grpc
@@ -16,9 +30,14 @@ inputs:
       - ../gradethis/be/.logs.tmp/*.log
     format: ndjson
     start_at: end
+    # index is required (event routing). host defaults to the OS hostname when
+    # omitted; source defaults to the input id and sourcetype to the format.
     index: gradethis
     source: gradethis-backend
     sourcetype: go:zap:json
+    # Static fields are attached to every event as trusted metadata. The special
+    # key "service" populates the canonical LogEvent.service; all other keys
+    # become typed string fields.
     fields:
       service: gradethis
       environment: development
