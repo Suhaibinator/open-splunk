@@ -2,6 +2,8 @@ package wal
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"time"
 
@@ -20,9 +22,6 @@ var (
 
 	// ErrClosed is returned once the queue has been closed.
 	ErrClosed = errors.New("collector/wal: queue is closed")
-
-	// errNotImplemented is returned by contract stubs during the skeleton phase.
-	errNotImplemented = errors.New("collector/wal: not implemented")
 )
 
 // SyncPolicy selects the fsync cadence for durability versus throughput.
@@ -69,6 +68,15 @@ type Stats struct {
 	OldestEventAge         time.Duration
 	NextBatchSequence      uint64
 	LastAckedBatchSequence uint64
+
+	// QuarantinedSegments counts segment tails that failed CRC/length validation
+	// during recovery and were renamed to a .wal.corrupt sibling. It is the
+	// documented mechanism by which a non-fatal [ErrCorruptSegment] event is
+	// surfaced: Open never fails hard on corruption, so callers observe it here.
+	//
+	// This field is an additive extension to the frozen contract Stats struct;
+	// existing callers that only read the queue-depth fields are unaffected.
+	QuarantinedSegments uint64
 }
 
 // Queue is the durable, at-least-once batch queue.
@@ -92,6 +100,15 @@ type Queue interface {
 	// are reclaimed. Acking an already-acked or unknown sequence is a no-op.
 	Ack(batchSequence uint64) error
 
+	// Rewind restarts delivery so NextBatch re-yields every unacked batch,
+	// beginning again from the lowest unacked sequence. The sender must call it
+	// when a delivery stream is (re)established: batches handed out on a
+	// previous connection but never acknowledged would otherwise be stranded
+	// behind the delivery cursor until process restart. Redelivering
+	// sent-but-unacknowledged batches is exactly the at-least-once contract;
+	// the server deduplicates by batch ID.
+	Rewind()
+
 	// Stats returns the current queue-depth snapshot.
 	Stats() Stats
 
@@ -101,8 +118,12 @@ type Queue interface {
 
 // Open opens or creates the durable queue described by opts, replaying and
 // validating existing segments (quarantining any corrupt tail).
+//
+// Corruption discovered during replay is non-fatal: the unreadable tail is
+// quarantined, recovery continues with the intact prefix, and the count is
+// reported via Stats.QuarantinedSegments rather than an Open error.
 func Open(opts Options) (Queue, error) {
-	return nil, errNotImplemented
+	return openQueue(opts)
 }
 
 // ComputeEventIDsDigest returns the event_ids_sha256 value defined by
@@ -110,5 +131,16 @@ func Open(opts Options) (Queue, error) {
 // its unsigned 32-bit big-endian byte length. Exposed so the server-side and
 // tests can compute the same digest.
 func ComputeEventIDsDigest(events []*opensplunkv1.LogEvent) []byte {
-	return nil
+	h := sha256.New()
+	var length [4]byte
+	for _, event := range events {
+		id := ""
+		if event != nil {
+			id = event.GetEventId()
+		}
+		binary.BigEndian.PutUint32(length[:], uint32(len(id)))
+		_, _ = h.Write(length[:])
+		_, _ = h.Write([]byte(id))
+	}
+	return h.Sum(nil)
 }

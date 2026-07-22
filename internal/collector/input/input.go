@@ -2,15 +2,12 @@ package input
 
 import (
 	"context"
-	"errors"
+	"strconv"
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/collector/framing"
 )
-
-// errNotImplemented is returned by contract stubs during the skeleton phase.
-var errNotImplemented = errors.New("collector/input: not implemented")
 
 // StartPosition selects where an input begins reading a newly discovered file.
 type StartPosition string
@@ -34,7 +31,11 @@ type FileIdentity struct {
 
 // String returns the stable identity string passed to the decoder as
 // SourcePosition.FileIdentity (for example "dev=1;ino=2;fp=ab12").
-func (id FileIdentity) String() string { return "" }
+func (id FileIdentity) String() string {
+	return "dev=" + strconv.FormatUint(id.Device, 10) +
+		";ino=" + strconv.FormatUint(id.Inode, 10) +
+		";fp=" + id.Fingerprint
+}
 
 // IsZero reports whether id is the zero identity.
 func (id FileIdentity) IsZero() bool {
@@ -84,11 +85,6 @@ type CheckpointStore interface {
 	Close() error
 }
 
-// NewCheckpointStore opens or creates the checkpoint store rooted at dir.
-func NewCheckpointStore(dir string) (CheckpointStore, error) {
-	return nil, errNotImplemented
-}
-
 // Health is a point-in-time snapshot of one input's status. Its fields mirror
 // opensplunkv1.CollectorInputHealth one-to-one; the daemon converts a Health
 // into that protobuf message for heartbeats.
@@ -116,6 +112,14 @@ type Config struct {
 	Multiline bool
 	// Framing is passed through to the selected framer (size cap, patterns).
 	Framing framing.Options
+	// FlushAfter bounds how long a multiline framer may hold a buffered partial
+	// event with no new input before the tailer force-emits it via the framer's
+	// Flush capability. Zero disables inactivity flushing (a partial multiline
+	// event waits indefinitely for its next start line). Ignored when Multiline
+	// is false. It lives here (rather than on framing.Options) because the
+	// inactivity clock is a tailer concern: the framer is a pure stream splitter
+	// with no notion of wall-clock time.
+	FlushAfter time.Duration
 }
 
 // Manager discovers and tails the files for one input, emitting RawEvents until
@@ -132,10 +136,4 @@ type Manager interface {
 	Health() Health
 	// Close releases resources; safe to call after Run returns.
 	Close() error
-}
-
-// NewManager constructs a file input Manager. checkpoints supplies resume
-// offsets at discovery time.
-func NewManager(cfg Config, checkpoints CheckpointStore) (Manager, error) {
-	return nil, errNotImplemented
 }
