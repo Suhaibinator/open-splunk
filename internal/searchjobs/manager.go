@@ -22,6 +22,8 @@ const (
 	defaultMaxConcurrent          = 4
 	defaultMaxConcurrentReads     = 8
 	defaultMaxConcurrentSnapshots = 4
+	defaultMaxResultLeases        = 256
+	defaultMaxResultLeasesPerJob  = 16
 	defaultMaxQueued              = 128
 	defaultMaxJobs                = 1_024
 	defaultMaxRows                = 10_000
@@ -44,6 +46,8 @@ const (
 	maximumConcurrent             = 256
 	maximumConcurrentReads        = 256
 	maximumConcurrentSnapshots    = 64
+	maximumResultLeases           = 65_536
+	maximumResultLeasesPerJob     = 4_096
 	maximumQueued                 = 100_000
 	maximumJobs                   = 100_000
 	maximumMetadataBytes          = 1 << 30
@@ -55,7 +59,8 @@ var (
 	ErrClosed = errors.New("search job manager is closed")
 	// ErrQueueFull means the bounded pending-job queue has no capacity.
 	ErrQueueFull = errors.New("search job queue is full")
-	// ErrCapacity means the manager-wide retained job or byte budget is full.
+	// ErrCapacity means a manager-wide retained job, byte, or result-reader
+	// budget is full.
 	ErrCapacity = errors.New("search job manager capacity is exhausted")
 	// ErrRequestTooLarge means query or scope metadata exceeded an admission
 	// bound before the job could be safely queued.
@@ -137,23 +142,28 @@ type Config struct {
 	MaxConcurrent          int
 	MaxConcurrentReads     int
 	MaxConcurrentSnapshots int
-	MaxQueued              int
-	MaxJobs                int
-	MaxRows                uint64
-	MaxBytes               uint64
-	MaxTotalBytes          uint64
-	MaxMetadataBytes       uint64
-	DefaultPageSize        int
-	MaxPageSize            int
-	MaxPageBytes           uint64
-	MaxRuntime             time.Duration
-	SnapshotTimeout        time.Duration
-	JournalTimeout         time.Duration
-	MaxSPLBytes            int
-	MaxScopeIndexes        int
-	RetentionTTL           time.Duration
-	ExpiredRetention       time.Duration
-	CleanupInterval        time.Duration
+	// MaxResultLeases bounds pinned result iterators across the manager;
+	// MaxResultLeasesPerJob prevents one snapshot from consuming that entire
+	// capacity. Zero selects bounded defaults.
+	MaxResultLeases       int
+	MaxResultLeasesPerJob int
+	MaxQueued             int
+	MaxJobs               int
+	MaxRows               uint64
+	MaxBytes              uint64
+	MaxTotalBytes         uint64
+	MaxMetadataBytes      uint64
+	DefaultPageSize       int
+	MaxPageSize           int
+	MaxPageBytes          uint64
+	MaxRuntime            time.Duration
+	SnapshotTimeout       time.Duration
+	JournalTimeout        time.Duration
+	MaxSPLBytes           int
+	MaxScopeIndexes       int
+	RetentionTTL          time.Duration
+	ExpiredRetention      time.Duration
+	CleanupInterval       time.Duration
 	// Now and NewID may be called concurrently and must be safe for concurrent
 	// use. Returned strings and times are detached before they are retained.
 	Now   func() time.Time
@@ -177,33 +187,35 @@ type Manager struct {
 	nextGeneration      uint64
 	nextCapacityCleanup time.Time
 
-	executor         Executor
-	snapshotter      Snapshotter
-	journal          JobJournal
-	journalTimeout   time.Duration
-	onJournalError   func(error)
-	compiler         clickhouse.Compiler
-	maxRows          uint64
-	maxBytes         uint64
-	maxJobs          int
-	maxTotalBytes    uint64
-	maxMetadataBytes uint64
-	defaultPageSize  int
-	maxPageSize      int
-	maxPageBytes     uint64
-	maxRuntime       time.Duration
-	snapshotTimeout  time.Duration
-	maxSPLBytes      int
-	maxScopeIndexes  int
-	retentionTTL     time.Duration
-	expiredRetention time.Duration
-	cleanupInterval  time.Duration
-	now              func() time.Time
-	newID            func() string
-	cursorKey        []byte
-	cursorScope      string
-	readGate         chan struct{}
-	snapshotGate     chan struct{}
+	executor              Executor
+	snapshotter           Snapshotter
+	journal               JobJournal
+	journalTimeout        time.Duration
+	onJournalError        func(error)
+	compiler              clickhouse.Compiler
+	maxRows               uint64
+	maxBytes              uint64
+	maxJobs               int
+	maxResultLeases       int
+	maxResultLeasesPerJob int
+	maxTotalBytes         uint64
+	maxMetadataBytes      uint64
+	defaultPageSize       int
+	maxPageSize           int
+	maxPageBytes          uint64
+	maxRuntime            time.Duration
+	snapshotTimeout       time.Duration
+	maxSPLBytes           int
+	maxScopeIndexes       int
+	retentionTTL          time.Duration
+	expiredRetention      time.Duration
+	cleanupInterval       time.Duration
+	now                   func() time.Time
+	newID                 func() string
+	cursorKey             []byte
+	cursorScope           string
+	readGate              chan struct{}
+	snapshotGate          chan struct{}
 
 	ctx               context.Context
 	cancel            context.CancelFunc
@@ -221,6 +233,7 @@ type Manager struct {
 	budgetMu             sync.Mutex
 	retainedBytes        uint64
 	metadataBytes        uint64
+	activeResultLeases   int
 	cleanupMu            sync.Mutex
 	journalErrMu         sync.RWMutex
 	lastJournalErr       *JournalError
@@ -232,9 +245,11 @@ type jobEntry struct {
 
 	job                    Job
 	authorizedIndexes      []string
+	resultSchema           *Schema
 	rows                   []ResultRow
 	history                []State
 	resultGeneration       uint64
+	resultPins             int
 	generation             uint64
 	retainedBytes          uint64
 	metadataBytes          uint64
@@ -256,13 +271,13 @@ func New(config Config) (*Manager, error) {
 	if config.Snapshotter == nil {
 		return nil, errors.New("create search job manager: visibility snapshotter is required")
 	}
-	if config.MaxConcurrent < 0 || config.MaxConcurrentReads < 0 || config.MaxConcurrentSnapshots < 0 || config.MaxQueued < 0 || config.MaxJobs < 0 || config.DefaultPageSize < 0 || config.MaxPageSize < 0 || config.MaxSPLBytes < 0 || config.MaxScopeIndexes < 0 {
+	if config.MaxConcurrent < 0 || config.MaxConcurrentReads < 0 || config.MaxConcurrentSnapshots < 0 || config.MaxResultLeases < 0 || config.MaxResultLeasesPerJob < 0 || config.MaxQueued < 0 || config.MaxJobs < 0 || config.DefaultPageSize < 0 || config.MaxPageSize < 0 || config.MaxSPLBytes < 0 || config.MaxScopeIndexes < 0 {
 		return nil, errors.New("create search job manager: limits cannot be negative")
 	}
 	if config.MaxRuntime < 0 || config.SnapshotTimeout < 0 || config.JournalTimeout < 0 || config.RetentionTTL < 0 || config.ExpiredRetention < 0 {
 		return nil, errors.New("create search job manager: retention durations cannot be negative")
 	}
-	if config.MaxConcurrent > maximumConcurrent || config.MaxConcurrentReads > maximumConcurrentReads || config.MaxConcurrentSnapshots > maximumConcurrentSnapshots || config.MaxQueued > maximumQueued || config.MaxJobs > maximumJobs {
+	if config.MaxConcurrent > maximumConcurrent || config.MaxConcurrentReads > maximumConcurrentReads || config.MaxConcurrentSnapshots > maximumConcurrentSnapshots || config.MaxResultLeases > maximumResultLeases || config.MaxResultLeasesPerJob > maximumResultLeasesPerJob || config.MaxQueued > maximumQueued || config.MaxJobs > maximumJobs {
 		return nil, errors.New("create search job manager: configured concurrency or capacity exceeds the safe maximum")
 	}
 	if config.MaxMetadataBytes > maximumMetadataBytes {
@@ -279,6 +294,16 @@ func New(config Config) (*Manager, error) {
 	maxConcurrentSnapshots := config.MaxConcurrentSnapshots
 	if maxConcurrentSnapshots == 0 {
 		maxConcurrentSnapshots = defaultMaxConcurrentSnapshots
+	}
+	maxResultLeases := config.MaxResultLeases
+	if maxResultLeases == 0 {
+		maxResultLeases = defaultMaxResultLeases
+	}
+	maxResultLeasesPerJob := config.MaxResultLeasesPerJob
+	if maxResultLeasesPerJob == 0 {
+		maxResultLeasesPerJob = min(defaultMaxResultLeasesPerJob, maxResultLeases)
+	} else if maxResultLeasesPerJob > maxResultLeases {
+		return nil, errors.New("create search job manager: per-job result lease limit exceeds manager-wide limit")
 	}
 	maxQueued := config.MaxQueued
 	if maxQueued == 0 {
@@ -395,39 +420,41 @@ func New(config Config) (*Manager, error) {
 
 	managerContext, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
-		jobs:                 make(map[string]*jobEntry),
-		reservedIDs:          make(map[string]struct{}),
-		executor:             config.Executor,
-		snapshotter:          config.Snapshotter,
-		journal:              config.Journal,
-		journalTimeout:       journalTimeout,
-		onJournalError:       config.OnJournalError,
-		journalErrorHookGate: make(chan struct{}, 1),
-		compiler:             config.Compiler,
-		maxRows:              maxRows,
-		maxBytes:             maxBytes,
-		maxJobs:              maxJobs,
-		maxTotalBytes:        maxTotalBytes,
-		maxMetadataBytes:     maxMetadataBytes,
-		defaultPageSize:      pageSize,
-		maxPageSize:          maxPageSize,
-		maxPageBytes:         maxPageBytes,
-		maxRuntime:           maxRuntime,
-		snapshotTimeout:      snapshotTimeout,
-		maxSPLBytes:          maxSPLBytes,
-		maxScopeIndexes:      maxScopeIndexes,
-		retentionTTL:         retentionTTL,
-		expiredRetention:     expiredRetention,
-		cleanupInterval:      cleanupInterval,
-		now:                  now,
-		newID:                newID,
-		cursorKey:            cursorKey,
-		cursorScope:          cursorScope,
-		readGate:             make(chan struct{}, maxConcurrentReads),
-		snapshotGate:         make(chan struct{}, maxConcurrentSnapshots),
-		ctx:                  managerContext,
-		cancel:               cancel,
-		queueCapacity:        maxQueued,
+		jobs:                  make(map[string]*jobEntry),
+		reservedIDs:           make(map[string]struct{}),
+		executor:              config.Executor,
+		snapshotter:           config.Snapshotter,
+		journal:               config.Journal,
+		journalTimeout:        journalTimeout,
+		onJournalError:        config.OnJournalError,
+		journalErrorHookGate:  make(chan struct{}, 1),
+		compiler:              config.Compiler,
+		maxRows:               maxRows,
+		maxBytes:              maxBytes,
+		maxJobs:               maxJobs,
+		maxResultLeases:       maxResultLeases,
+		maxResultLeasesPerJob: maxResultLeasesPerJob,
+		maxTotalBytes:         maxTotalBytes,
+		maxMetadataBytes:      maxMetadataBytes,
+		defaultPageSize:       pageSize,
+		maxPageSize:           maxPageSize,
+		maxPageBytes:          maxPageBytes,
+		maxRuntime:            maxRuntime,
+		snapshotTimeout:       snapshotTimeout,
+		maxSPLBytes:           maxSPLBytes,
+		maxScopeIndexes:       maxScopeIndexes,
+		retentionTTL:          retentionTTL,
+		expiredRetention:      expiredRetention,
+		cleanupInterval:       cleanupInterval,
+		now:                   now,
+		newID:                 newID,
+		cursorKey:             cursorKey,
+		cursorScope:           cursorScope,
+		readGate:              make(chan struct{}, maxConcurrentReads),
+		snapshotGate:          make(chan struct{}, maxConcurrentSnapshots),
+		ctx:                   managerContext,
+		cancel:                cancel,
+		queueCapacity:         maxQueued,
 	}
 	manager.queueCond = sync.NewCond(&manager.mu)
 	manager.wg.Add(maxConcurrent)
@@ -926,7 +953,7 @@ func (manager *Manager) resultsEntry(id string, entry *jobEntry, limit int, curs
 	default:
 		return ResultPage{}, ErrResultsNotReady
 	}
-	if entry.job.Schema == nil || entry.resultGeneration == 0 {
+	if entry.resultSchema == nil || entry.resultGeneration == 0 {
 		return ResultPage{}, ErrResultsUnavailable
 	}
 	offset := uint64(0)
@@ -955,7 +982,7 @@ func (manager *Manager) resultsEntry(id string, entry *jobEntry, limit int, curs
 		return ResultPage{}, ErrByteLimit
 	}
 	page := ResultPage{
-		Schema:    cloneSchema(*entry.job.Schema),
+		Schema:    cloneSchema(*entry.resultSchema),
 		Rows:      cloneRows(entry.rows[int(offset):int(end)]),
 		TotalRows: total,
 		Complete:  end == total,
@@ -1031,7 +1058,7 @@ func (manager *Manager) cleanup() int {
 		if canExpireLocked(entry, now) {
 			manager.expireLocked(entry, now)
 			changed++
-		} else if entry.job.State == StateExpired && !entry.expiredAt.Add(manager.expiredRetention).After(now) {
+		} else if entry.job.State == StateExpired && entry.resultPins == 0 && !entry.expiredAt.Add(manager.expiredRetention).After(now) {
 			remove = true
 		}
 		entry.mu.Unlock()
@@ -1052,9 +1079,10 @@ func (manager *Manager) cleanup() int {
 	return changed
 }
 
-// Close gracefully rejects new jobs, cancels all queued and running work,
-// waits for admissions, workers, and cleanup to exit, and releases retained
-// completed results. It is idempotent.
+// Close gracefully rejects new jobs, cancels all queued and running work, and
+// waits for admissions, workers, and cleanup to exit. Unpinned completed
+// results are released before it returns; a pre-existing immutable result
+// lease keeps its storage until that lease closes. Close is idempotent.
 func (manager *Manager) Close() error {
 	manager.closeOnce.Do(func() {
 		manager.mu.Lock()
@@ -1429,7 +1457,13 @@ func canExpireLocked(entry *jobEntry, now time.Time) bool {
 func (manager *Manager) expireLocked(entry *jobEntry, now time.Time) {
 	entry.job.State = StateExpired
 	entry.job.Version++
-	manager.clearResultsLocked(entry)
+	// Expiration is immediately visible to callers even while an existing
+	// immutable-result lease pins the backing schema and rows. New readers are
+	// denied by StateExpired; the final lease release reclaims the storage.
+	entry.job.Schema = nil
+	if entry.resultPins == 0 {
+		manager.clearResultsLocked(entry)
+	}
 	entry.resultGeneration = 0
 	entry.expiredAt = now
 	entry.history = append(entry.history, StateExpired)
@@ -1504,13 +1538,18 @@ func (manager *Manager) releaseMetadata(amount uint64) {
 	manager.budgetMu.Unlock()
 }
 
-// clearResultsLocked releases all accounted result memory. RowCount and
-// ResultBytes remain as terminal progress metadata.
+// clearResultsLocked releases all accounted result memory when no immutable
+// result lease pins it. RowCount and ResultBytes remain as terminal progress
+// metadata.
 func (manager *Manager) clearResultsLocked(entry *jobEntry) {
+	if entry.resultPins != 0 {
+		return
+	}
 	amount := entry.retainedBytes
 	entry.retainedBytes = 0
 	entry.schemaBytes = 0
 	entry.job.Schema = nil
+	entry.resultSchema = nil
 	entry.rows = nil
 	if amount == 0 {
 		return
@@ -1642,7 +1681,8 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 		return sink.rememberLocked(err)
 	}
 	cloned := cloneSchema(schema)
-	entry.job.Schema = &cloned
+	entry.resultSchema = &cloned
+	entry.job.Schema = entry.resultSchema
 	entry.schemaBytes = retainedBytes
 	entry.job.Version++
 	sink.receivedSchema = true
