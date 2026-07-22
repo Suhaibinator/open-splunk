@@ -193,17 +193,40 @@ func TestMixedSchemaRetainsConcreteCellType(t *testing.T) {
 
 func TestResultKindForSPLRecognizesTransformingCommands(t *testing.T) {
 	tests := map[string]opensplunkv1.ResultSetKind{
-		"index=main":                                                opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS,
-		"index=main | table level count":                            opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-		"index=main | stats count by level":                         opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-		"index=main | stats count by level | sort -count | head 20": opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-		"index=main | top limit=20 message":                         opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main":                                                        opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS,
+		"index=main | table level count":                                    opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | stats count by level":                                 opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | stats count by level | sort -count | head 20":         opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | top limit=20 message":                                 opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | timechart span=5m count by level":                     opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
+		"index=main | table _time level | timechart span=5m count by level": opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
 		`index=main | eval duration_ms=tonumber(replace(duration, "ms$", "")) | stats count p95(duration_ms) AS p95_ms BY path | where p95_ms>500`: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
 		"index=main | unsupported": opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED,
 	}
 	for source, want := range tests {
 		if got := resultKindForSPL(source); got != want {
 			t.Errorf("resultKindForSPL(%q) = %v, want %v", source, got, want)
+		}
+	}
+}
+
+func TestTimeSeriesSchemaMarksWideSeriesAsMetrics(t *testing.T) {
+	t.Parallel()
+
+	converted, err := schemaToProto("timechart", searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "_time", Kind: searchjobs.ValueKindTime},
+		{Name: "ERROR", Kind: searchjobs.ValueKindUnsigned},
+		{Name: "NULL", Kind: searchjobs.ValueKindUnsigned},
+	}}, opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if converted.Columns[0].SemanticType != opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME {
+		t.Fatalf("time semantic = %v", converted.Columns[0].SemanticType)
+	}
+	for index := 1; index < len(converted.Columns); index++ {
+		if converted.Columns[index].SemanticType != opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
+			t.Fatalf("series %d semantic = %v", index, converted.Columns[index].SemanticType)
 		}
 	}
 }

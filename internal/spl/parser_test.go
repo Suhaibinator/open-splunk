@@ -575,6 +575,122 @@ func TestParseStatsP95DefaultOutputName(t *testing.T) {
 	}
 }
 
+func TestParseTimechartFixedSpanCountByField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		source    string
+		magnitude uint64
+		unit      TimeSpanUnit
+		field     string
+	}{
+		{
+			name:      "minutes corpus query",
+			source:    `index=gradethis | timechart span=5m count by level`,
+			magnitude: 5,
+			unit:      TimeSpanUnitMinute,
+			field:     "level",
+		},
+		{
+			name:      "seconds with whitespace and case",
+			source:    `index=gradethis | TIMECHART SPAN = 30S COUNT BY service`,
+			magnitude: 30,
+			unit:      TimeSpanUnitSecond,
+			field:     "service",
+		},
+		{
+			name:      "hours",
+			source:    `index=gradethis | timechart span=2h count BY http.route`,
+			magnitude: 2,
+			unit:      TimeSpanUnitHour,
+			field:     "http.route",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if len(query.Commands) != 1 {
+				t.Fatalf("command count = %d, want 1", len(query.Commands))
+			}
+			command, ok := query.Commands[0].(*TimechartCommand)
+			if !ok {
+				t.Fatalf("command = %T, want *TimechartCommand", query.Commands[0])
+			}
+			if command.Span.Magnitude != test.magnitude || command.Span.Unit != test.unit ||
+				command.Function != AggregateFunctionCount || command.SplitBy.Name != test.field {
+				t.Fatalf("timechart = %#v", command)
+			}
+			spanText := test.source[command.Span.Range.Start.Offset:command.Span.Range.End.Offset]
+			if !strings.EqualFold(spanText, strconv.FormatUint(test.magnitude, 10)+command.Span.Unit.String()) {
+				t.Fatalf("span source = %q", spanText)
+			}
+			if aggregateText := test.source[command.AggregateRange.Start.Offset:command.AggregateRange.End.Offset]; !strings.EqualFold(aggregateText, "count") {
+				t.Fatalf("aggregate source = %q", aggregateText)
+			}
+			if fieldText := test.source[command.SplitBy.Range.Start.Offset:command.SplitBy.Range.End.Offset]; fieldText != test.field {
+				t.Fatalf("split field source = %q", fieldText)
+			}
+		})
+	}
+}
+
+func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		source    string
+		code      string
+		locatedAt string
+	}{
+		{"missing arguments", `index=main | timechart`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", ""},
+		{"missing equal", `index=main | timechart span 5m count by level`, "SPL_EXPECTED_EQUAL", "span"},
+		{"missing span", `index=main | timechart span=`, "SPL_INVALID_ARGUMENT", ""},
+		{"zero span", `index=main | timechart span=0m count by level`, "SPL_INVALID_ARGUMENT", "0m"},
+		{"negative span", `index=main | timechart span=-5m count by level`, "SPL_INVALID_ARGUMENT", "-5m"},
+		{"duration overflow", `index=main | timechart span=2562048h count by level`, "SPL_NUMBER_OUT_OF_RANGE", "2562048h"},
+		{"integer overflow", `index=main | timechart span=18446744073709551616s count by level`, "SPL_NUMBER_OUT_OF_RANGE", "18446744073709551616s"},
+		{"calendar day", `index=main | timechart span=1d count by level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "1d"},
+		{"subsecond", `index=main | timechart span=5ms count by level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "5ms"},
+		{"compound span", `index=main | timechart span=1h30m count by level`, "SPL_INVALID_ARGUMENT", "1h30m"},
+		{"missing aggregate", `index=main | timechart span=5m`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", ""},
+		{"unsupported aggregate", `index=main | timechart span=5m p95(duration) by level`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", "p95"},
+		{"count arguments", `index=main | timechart span=5m count() by level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "("},
+		{"missing by", `index=main | timechart span=5m count level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "level"},
+		{"missing split field", `index=main | timechart span=5m count by`, "SPL_EXPECTED_FIELD", ""},
+		{"quoted split field", `index=main | timechart span=5m count by "level"`, "SPL_EXPECTED_FIELD", `"level"`},
+		{"wildcard split field", `index=main | timechart span=5m count by level*`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "level*"},
+		{"multiple split fields", `index=main | timechart span=5m count by level host`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "host"},
+		{"unsupported option", `index=main | timechart span=5m count by level useother=false`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "useother"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(test.source)
+			if err == nil {
+				t.Fatal("Parse succeeded")
+			}
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != test.code {
+				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
+			}
+			if test.locatedAt != "" {
+				got := test.source[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset]
+				if got != test.locatedAt {
+					t.Fatalf("diagnostic source = %q, want %q", got, test.locatedAt)
+				}
+			}
+		})
+	}
+}
+
 func TestUnsupportedStatsAggregatesAreSourceLocated(t *testing.T) {
 	t.Parallel()
 

@@ -201,29 +201,71 @@ Multiple fields, `BY`, wildcards, `countfield`, `percentfield`, `showcount`,
 `showperc`, `useother`, and `otherstr` are not yet supported. Selecting a field
 named `count` or `percent` is rejected until output-renaming options exist.
 
+### `timechart`
+
+```spl
+| timechart span=5m count BY level
+```
+
+The initial slice accepts exactly one argument-free `count`, one exact split
+field, and a positive fixed `s`, `m`, or `h` span from one second through 24
+hours. `timechart` must be the final command because its wide output columns
+are derived from runtime field values. Options, aliases, calendar/subsecond
+spans, multiple split fields, and other aggregate functions fail explicitly.
+
+The search time range remains half-open `[earliest, latest)`. Buckets are
+aligned to Unix epoch boundaries using mathematical floor division, including
+before 1970. Partial first and last buckets are retained, missing buckets are
+filled, and rows are ordered by `_time` ascending. `timechart` requires the
+unmodified canonical `_time`; removing, replacing, or transforming it is a
+source-located error. A completely empty input returns an `_time`-only schema
+and zero rows.
+
+The public result is wide: `_time` is a non-null timestamp followed by
+non-null unsigned count columns. The ten ordinary string series with the
+highest total count across the complete range are retained; equal scores use
+UTF-8 lexical order. Ordinary output columns are then ordered lexically,
+followed by `NULL` for missing/explicit-null values and `OTHER` for omitted
+ordinary series. `NULL` does not consume a top-ten slot. Split values beginning
+with `_` receive Splunk's `VALUE` prefix (`_audit` becomes `VALUE_audit`). An
+upstream projection that removes the split field treats it as missing for all
+retained events.
+
+This version supports string split values plus missing/null. Numeric, Boolean,
+extended, list, and object values fail the whole command before schema or rows
+are published; Splunk's default numeric discretization is not approximated.
+Empty, invalid UTF-8, reserved `NULL`/`OTHER`, or labels over 256 bytes also
+fail atomically, as do collisions after `VALUE` normalization. Results are
+bounded to 10,000 buckets and 12 runtime series (ten ordinary, `NULL`, and
+`OTHER`), for at most 13 public columns. The 10,000-bucket resource policy is
+intentionally lower than Splunk's installation-configurable `maxbins` default.
+With default executor settings, the intermediate group budget grows with the
+requested bucket count to at most 130,000 states. Domains with enough distinct
+raw values to exceed that budget fail atomically with an execution-limit error;
+an explicitly configured lower group cap remains authoritative.
+
 ## Current GradeThis corpus
 
-Eight of the product plan's ten initial searches compile and execute in v0.1:
+All ten of the product plan's initial searches compile in v0.1, and their
+storage/execution primitives have pinned ClickHouse integration coverage:
 
 - trace-ID event investigation;
 - errors/warnings with descending time;
 - quoted raw error fragments;
 - severity counts;
 - frequent errors by logger and message;
+- event volume by severity through `timechart`;
+- server errors by route through `timechart`;
 - HTTP response counts by route and status;
 - slow routes through `eval`, `p95`, and `where`; and
 - top messages.
-
-The two remaining searches fail explicitly at `timechart`; its dynamic wide
-series schema, fixed-range bucketing, gap filling, and bounded series-selection
-contract remain the blocker.
 
 ## Explicitly unsupported surface
 
 The following planned commands are not implemented in this version:
 
 ```text
-rename, rex, spath, bin, bucket, chart, timechart,
+rename, rex, spath, bin, bucket, chart,
 dedup, rare, eventstats, streamstats
 ```
 
@@ -244,5 +286,6 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`replace`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.4.2604/evaluation-functions/text-functions),
 [`tonumber`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/9.0/evaluation-functions/conversion-functions),
 [`percentile functions`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/9.4/statistical-and-charting-functions/aggregate-functions),
-and [`top`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.0/search-commands/top)
+[`top`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.0/search-commands/top),
+and [`timechart`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/timechart)
 documentation.

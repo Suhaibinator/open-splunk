@@ -1217,7 +1217,12 @@ func (manager *Manager) run(entry *jobEntry) {
 	}
 	compiled, err := manager.compiler.Compile(logical)
 	if err != nil {
-		manager.failOrCancel(entry, Failure{Code: FailureInternal, Message: "search planning failed"}, manager.nowUTC())
+		var diagnostic *plan.Diagnostic
+		if errors.As(err, &diagnostic) {
+			manager.failOrCancel(entry, planningFailure(err), manager.nowUTC())
+		} else {
+			manager.failOrCancel(entry, Failure{Code: FailureInternal, Message: "search planning failed"}, manager.nowUTC())
+		}
 		return
 	}
 	if !manager.advance(entry, StatePlanning, StateRunning, func(job *Job) {
@@ -1226,10 +1231,16 @@ func (manager *Manager) run(entry *jobEntry) {
 		return
 	}
 
+	var timechart *clickhouse.TimechartOutput
+	if compiled.Timechart != nil {
+		cloned := *compiled.Timechart
+		timechart = &cloned
+	}
 	sink := &resultSink{
 		manager:        manager,
 		entry:          entry,
 		expectedFields: cloneStrings(compiled.OutputFields),
+		timechart:      timechart,
 	}
 	executionContext, cancelExecution := context.WithTimeout(entry.ctx, manager.maxRuntime)
 	defer cancelExecution()
@@ -1595,6 +1606,7 @@ type resultSink struct {
 	entry          *jobEntry
 	ctx            context.Context
 	expectedFields []string
+	timechart      *clickhouse.TimechartOutput
 	closed         bool
 	receivedSchema bool
 	firstErr       error
@@ -1610,8 +1622,14 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 	if sink.receivedSchema {
 		return sink.rememberLocked(fmt.Errorf("%w: schema was emitted more than once", ErrInvalidResult))
 	}
-	if err := validateSchema(schema, sink.expectedFields); err != nil {
-		return sink.rememberLocked(err)
+	var schemaErr error
+	if sink.timechart == nil {
+		schemaErr = validateSchema(schema, sink.expectedFields)
+	} else {
+		schemaErr = validateTimechartSchema(schema, sink.expectedFields, *sink.timechart)
+	}
+	if schemaErr != nil {
+		return sink.rememberLocked(schemaErr)
 	}
 	retainedBytes, err := retainedSchemaSize(schema)
 	if err != nil {
@@ -1770,6 +1788,37 @@ func validateSchema(schema Schema, expected []string) error {
 			return fmt.Errorf("%w: schema column %q is duplicated", ErrInvalidResult, column.Name)
 		}
 		seen[column.Name] = struct{}{}
+	}
+	return nil
+}
+
+func validateTimechartSchema(schema Schema, expected []string, output clickhouse.TimechartOutput) error {
+	if !slices.Equal(expected, []string{"_time"}) || len(schema.Columns) == 0 || len(schema.Columns)-1 > int(output.MaxSeries) {
+		return fmt.Errorf("%w: timechart schema exceeds the compiled output", ErrInvalidResult)
+	}
+	seen := make(map[string]struct{}, len(schema.Columns))
+	for index, column := range schema.Columns {
+		if column.Name == "" || !utf8.ValidString(column.Name) {
+			return fmt.Errorf("%w: timechart schema column %d has an invalid name", ErrInvalidResult, index)
+		}
+		if _, exists := seen[column.Name]; exists {
+			return fmt.Errorf("%w: timechart schema column %q is duplicated", ErrInvalidResult, column.Name)
+		}
+		seen[column.Name] = struct{}{}
+		if index == 0 {
+			if column.Name != "_time" || column.Kind != ValueKindTime || column.Nullable || column.Multivalue {
+				return fmt.Errorf("%w: timechart schema has an invalid time column", ErrInvalidResult)
+			}
+			continue
+		}
+		maximumPublicBytes := int(output.MaxLabelBytes)
+		if strings.HasPrefix(column.Name, "VALUE_") {
+			maximumPublicBytes += len("VALUE")
+		}
+		if len(column.Name) > maximumPublicBytes || strings.HasPrefix(column.Name, "_") ||
+			column.Kind != ValueKindUnsigned || column.Nullable || column.Multivalue {
+			return fmt.Errorf("%w: timechart schema column %d is invalid", ErrInvalidResult, index)
+		}
 	}
 	return nil
 }

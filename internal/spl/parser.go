@@ -149,12 +149,152 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseStatsCommand(nameToken)
 	case "top":
 		return p.parseTopCommand(nameToken)
+	case "timechart":
+		return p.parseTimechartCommand(nameToken)
 	default:
 		return nil, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_COMMAND",
 			Message: fmt.Sprintf("unsupported command %q at pipeline stage %d", nameToken.text, stage),
 			Range:   nameToken.range_,
 		}
+	}
+}
+
+func (p *parser) parseTimechartCommand(name token) (Command, error) {
+	if !p.isKeyword("SPAN") {
+		return nil, p.unsupportedTimechartSyntax(p.current(), "timechart requires span=<positive integer><s|m|h> before count")
+	}
+	spanOption := p.current()
+	p.advance()
+	if !p.match(tokenEqual) {
+		return nil, &Diagnostic{
+			Code:        "SPL_EXPECTED_EQUAL",
+			Message:     "timechart span must be followed by '='",
+			Range:       spanOption.range_,
+			Suggestions: []string{"timechart span=5m count by field"},
+		}
+	}
+	spanToken := p.current()
+	if spanToken.kind != tokenWord {
+		return nil, &Diagnostic{
+			Code:        "SPL_INVALID_ARGUMENT",
+			Message:     "timechart span must be a positive integer followed by s, m, or h",
+			Range:       spanToken.range_,
+			Suggestions: []string{"timechart span=5m count by field"},
+		}
+	}
+	span, err := parseTimechartSpan(spanToken)
+	if err != nil {
+		return nil, err
+	}
+	p.advance()
+
+	aggregate := p.current()
+	if aggregate.kind != tokenWord || !strings.EqualFold(aggregate.text, "count") {
+		return nil, &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
+			Message:     "only argument-free count is supported by timechart",
+			Range:       aggregate.range_,
+			Suggestions: []string{"timechart span=5m count by field"},
+		}
+	}
+	p.advance()
+	if !p.isKeyword("BY") {
+		return nil, p.unsupportedTimechartSyntax(p.current(), "timechart count requires BY followed by one split field")
+	}
+	p.advance()
+
+	field := p.current()
+	if field.kind != tokenWord {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "timechart BY requires one split field")
+	}
+	if strings.Contains(field.text, "*") {
+		return nil, p.unsupportedTimechartSyntax(field, "wildcard timechart split fields are not supported")
+	}
+	p.advance()
+	if !p.atCommandEnd() {
+		return nil, p.unsupportedTimechartSyntax(p.current(), "only one timechart split field is currently supported")
+	}
+	return &TimechartCommand{
+		Span:           span,
+		Function:       AggregateFunctionCount,
+		AggregateRange: aggregate.range_,
+		SplitBy:        StatsGroupField{Name: field.text, Range: field.range_},
+		Range:          Range{Start: name.range_.Start, End: field.range_.End},
+	}, nil
+}
+
+func parseTimechartSpan(tok token) (TimeSpan, error) {
+	digitEnd := 0
+	for digitEnd < len(tok.text) && tok.text[digitEnd] >= '0' && tok.text[digitEnd] <= '9' {
+		digitEnd++
+	}
+	if digitEnd == 0 || digitEnd == len(tok.text) {
+		return TimeSpan{}, invalidTimechartSpan(tok)
+	}
+	unitText := tok.text[digitEnd:]
+	for index := range len(unitText) {
+		if unitText[index] >= '0' && unitText[index] <= '9' {
+			return TimeSpan{}, invalidTimechartSpan(tok)
+		}
+	}
+	var unit TimeSpanUnit
+	var unitNanoseconds uint64
+	switch strings.ToLower(unitText) {
+	case "s":
+		unit = TimeSpanUnitSecond
+		unitNanoseconds = 1_000_000_000
+	case "m":
+		unit = TimeSpanUnitMinute
+		unitNanoseconds = 60 * 1_000_000_000
+	case "h":
+		unit = TimeSpanUnitHour
+		unitNanoseconds = 60 * 60 * 1_000_000_000
+	default:
+		return TimeSpan{}, &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+			Message:     fmt.Sprintf("timechart span unit in %q is unsupported; use fixed seconds, minutes, or hours", tok.text),
+			Range:       tok.range_,
+			Suggestions: []string{"timechart span=5m count by field"},
+		}
+	}
+	magnitude, err := strconv.ParseUint(tok.text[:digitEnd], 10, 64)
+	if err != nil {
+		return TimeSpan{}, &Diagnostic{
+			Code:    "SPL_NUMBER_OUT_OF_RANGE",
+			Message: "timechart span is outside the supported 64-bit range",
+			Range:   tok.range_,
+		}
+	}
+	if magnitude == 0 {
+		return TimeSpan{}, invalidTimechartSpan(tok)
+	}
+	const maxDurationNanoseconds = uint64(1<<63 - 1)
+	if magnitude > maxDurationNanoseconds/unitNanoseconds {
+		return TimeSpan{}, &Diagnostic{
+			Code:    "SPL_NUMBER_OUT_OF_RANGE",
+			Message: "timechart span is outside the supported duration range",
+			Range:   tok.range_,
+		}
+	}
+	return TimeSpan{Magnitude: magnitude, Unit: unit, Range: tok.range_}, nil
+}
+
+func invalidTimechartSpan(tok token) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_INVALID_ARGUMENT",
+		Message:     "timechart span must be a positive integer followed by s, m, or h",
+		Range:       tok.range_,
+		Suggestions: []string{"timechart span=5m count by field"},
+	}
+}
+
+func (p *parser) unsupportedTimechartSyntax(tok token, message string) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+		Message:     message,
+		Range:       tok.range_,
+		Suggestions: []string{"timechart span=5m count by field"},
 	}
 }
 

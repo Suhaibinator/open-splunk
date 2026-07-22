@@ -20,6 +20,10 @@ const (
 	maxFieldNameBytes        = 8720
 	maxFieldPathSegments     = 17
 	maxFieldPathSegmentBytes = 256
+	maxTimechartBuckets      = 10_000
+	maxTimechartSpan         = 24 * time.Hour
+	timechartSeriesLimit     = 10
+	maxTimechartSeries       = 12
 )
 
 // Scope is the server-resolved security and snapshot boundary for a search.
@@ -100,7 +104,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 	}
 
 	outputSchemaKnown := false
-	for _, command := range query.Commands {
+	canonicalTimeAvailable := true
+	for commandIndex, command := range query.Commands {
 		switch command := command.(type) {
 		case *spl.SearchCommand:
 			expression, convertErr := convertExpression(command.Expression)
@@ -133,6 +138,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				if outputSchemaKnown && !slices.Contains(result.OutputFields, assignment.Field) {
 					result.OutputFields = append(result.OutputFields, assignment.Field)
 				}
+				if assignment.Field == "_time" {
+					canonicalTimeAvailable = false
+				}
 			}
 			result.Operators = append(result.Operators, &Extend{Assignments: assignments, Range: command.Range})
 		case *spl.FieldsCommand:
@@ -156,6 +164,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 				}
 			}
+			if command.Exclude && slices.Contains(command.Fields, "_time") {
+				canonicalTimeAvailable = false
+			}
 		case *spl.TableCommand:
 			fields, fieldErr := convertFields(command.Fields, command.Range)
 			if fieldErr != nil {
@@ -163,6 +174,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 			result.OutputFields = append([]string(nil), command.Fields...)
 			outputSchemaKnown = true
+			canonicalTimeAvailable = canonicalTimeAvailable && slices.Contains(command.Fields, "_time")
 			result.Operators = append(result.Operators, &Project{Mode: ProjectModeTable, Fields: fields, Range: command.Range})
 		case *spl.SortCommand:
 			keys := make([]SortKey, 0, len(command.Fields))
@@ -181,6 +193,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		case *spl.LimitCommand:
 			result.Operators = append(result.Operators, &Limit{Count: command.Count, FromEnd: command.Name() == "tail", Range: command.Range})
 		case *spl.StatsCommand:
+			canonicalTimeAvailable = false
 			groupBy, groupErr := convertStatsGroupFields(command.GroupBy)
 			if groupErr != nil {
 				return nil, groupErr
@@ -234,6 +247,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				Range:    command.Range,
 			})
 		case *spl.TopCommand:
+			canonicalTimeAvailable = false
 			field, fieldErr := ResolveField(command.Field, command.FieldRange)
 			if fieldErr != nil {
 				return nil, fieldErr
@@ -275,6 +289,69 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Range: command.Range,
 				},
 			)
+		case *spl.TimechartCommand:
+			if commandIndex+1 != len(query.Commands) {
+				next := query.Commands[commandIndex+1]
+				return nil, &Diagnostic{
+					Code:        "SPL_UNSUPPORTED_TIMECHART_PIPELINE",
+					Message:     "timechart must be the final pipeline command in this compatibility version",
+					Range:       next.SourceRange(),
+					Suggestions: []string{"move timechart to the final pipeline stage"},
+				}
+			}
+			if command.Function != spl.AggregateFunctionCount {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
+					Message: "unsupported timechart aggregate",
+					Range:   command.AggregateRange,
+				}
+			}
+			if !canonicalTimeAvailable {
+				return nil, &Diagnostic{
+					Code:        "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD",
+					Message:     "timechart requires the unmodified canonical _time field",
+					Range:       command.Range,
+					Suggestions: []string{"run timechart before removing, replacing, or transforming _time"},
+				}
+			}
+			span, spanErr := fixedTimechartSpan(command.Span)
+			if spanErr != nil {
+				return nil, spanErr
+			}
+			firstBucket, bucketCount, bucketErr := fixedTimechartBuckets(earliest, latest, span, command.Span.Range)
+			if bucketErr != nil {
+				return nil, bucketErr
+			}
+			timeField, timeErr := ResolveField("_time", command.Range)
+			if timeErr != nil {
+				return nil, timeErr
+			}
+			splitBy, splitErr := ResolveField(command.SplitBy.Name, command.SplitBy.Range)
+			if splitErr != nil {
+				return nil, splitErr
+			}
+			result.OutputFields = nil
+			result.DynamicOutput = &DynamicSeriesOutput{
+				FixedFields: []string{"_time"},
+				MaxSeries:   maxTimechartSeries,
+			}
+			result.Operators = append(result.Operators, &Timechart{
+				Time:           timeField,
+				SplitBy:        splitBy,
+				Function:       AggregateFunctionCountRows,
+				Span:           span,
+				FirstBucket:    firstBucket,
+				BucketCount:    bucketCount,
+				SeriesLimit:    timechartSeriesLimit,
+				IncludeNull:    true,
+				IncludeOther:   true,
+				NullLabel:      "NULL",
+				OtherLabel:     "OTHER",
+				FixedRange:     true,
+				Continuous:     true,
+				IncludePartial: true,
+				Range:          command.Range,
+			})
 		default:
 			return nil, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_COMMAND",
@@ -284,6 +361,90 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		}
 	}
 	return result, nil
+}
+
+func fixedTimechartSpan(span spl.TimeSpan) (time.Duration, error) {
+	var unit time.Duration
+	switch span.Unit {
+	case spl.TimeSpanUnitSecond:
+		unit = time.Second
+	case spl.TimeSpanUnitMinute:
+		unit = time.Minute
+	case spl.TimeSpanUnitHour:
+		unit = time.Hour
+	default:
+		return 0, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+			Message: "unsupported timechart span unit",
+			Range:   span.Range,
+		}
+	}
+	if span.Magnitude == 0 || span.Magnitude > uint64(math.MaxInt64/int64(unit)) {
+		return 0, &Diagnostic{
+			Code:    "SPL_NUMBER_OUT_OF_RANGE",
+			Message: "timechart span is outside the supported duration range",
+			Range:   span.Range,
+		}
+	}
+	duration := time.Duration(span.Magnitude) * unit
+	if duration > maxTimechartSpan {
+		return 0, &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+			Message:     "timechart spans greater than 24 hours are not supported",
+			Range:       span.Range,
+			Suggestions: []string{"use a fixed span from 1s through 24h"},
+		}
+	}
+	return duration, nil
+}
+
+func fixedTimechartBuckets(earliest, latest time.Time, span time.Duration, sourceRange spl.Range) (time.Time, uint64, error) {
+	spanSeconds := int64(span / time.Second)
+	if spanSeconds <= 0 {
+		return time.Time{}, 0, &Diagnostic{
+			Code:    "SPL_INVALID_ARGUMENT",
+			Message: "timechart span must be at least one second",
+			Range:   sourceRange,
+		}
+	}
+	firstSeconds := floorInt64(earliest.Unix(), spanSeconds) * spanSeconds
+	deltaSeconds := latest.Unix() - firstSeconds
+	if deltaSeconds < 0 {
+		return time.Time{}, 0, &Diagnostic{
+			Code:    "SPL_INVALID_TIME_RANGE",
+			Message: "timechart range cannot be represented",
+			Range:   sourceRange,
+		}
+	}
+	bucketCount := uint64(deltaSeconds / spanSeconds)
+	if deltaSeconds%spanSeconds != 0 || latest.Nanosecond() != 0 {
+		bucketCount++
+	}
+	if bucketCount == 0 {
+		// Build has already established a non-empty search interval; retain a
+		// defensive check so malformed plans cannot generate numbers(0).
+		return time.Time{}, 0, &Diagnostic{
+			Code:    "SPL_INVALID_TIME_RANGE",
+			Message: "timechart requires a non-empty bucket range",
+			Range:   sourceRange,
+		}
+	}
+	if bucketCount > maxTimechartBuckets {
+		return time.Time{}, 0, &Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("timechart produces more than %d fixed-range buckets", maxTimechartBuckets),
+			Range:   sourceRange,
+		}
+	}
+	return time.Unix(firstSeconds, 0).UTC(), bucketCount, nil
+}
+
+func floorInt64(value, divisor int64) int64 {
+	quotient := value / divisor
+	if value%divisor < 0 {
+		quotient--
+	}
+	return quotient
 }
 
 func projectKnownOutputFields(current, requested []string, exclude bool) []string {
@@ -403,7 +564,7 @@ func positiveIndexReferences(query *spl.Query) []indexReference {
 					return references
 				}
 			}
-		case *spl.StatsCommand, *spl.TopCommand:
+		case *spl.StatsCommand, *spl.TopCommand, *spl.TimechartCommand:
 			return references
 		}
 		if search, ok := command.(*spl.SearchCommand); ok {

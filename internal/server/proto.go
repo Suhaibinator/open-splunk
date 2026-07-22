@@ -169,11 +169,15 @@ func schemaToProto(schemaID string, schema searchjobs.Schema, resultKind openspl
 		if err != nil {
 			return nil, err
 		}
+		semantic := semanticType(column.Name)
+		if resultKind == opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES && index > 0 {
+			semantic = opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC
+		}
 		columns[index] = &opensplunkv1.ResultColumn{
 			FieldName:    column.Name,
 			DisplayName:  column.Name,
 			ValueType:    valueType,
-			SemanticType: semanticType(column.Name),
+			SemanticType: semantic,
 			Nullable:     column.Nullable,
 			Multivalue:   column.Multivalue,
 		}
@@ -191,13 +195,16 @@ func resultKindForSPL(source string) opensplunkv1.ResultSetKind {
 	if err != nil {
 		return opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED
 	}
+	resultKind := opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS
 	for _, command := range query.Commands {
 		switch command.(type) {
+		case *spl.TimechartCommand:
+			return opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES
 		case *spl.TableCommand, *spl.StatsCommand, *spl.TopCommand:
-			return opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS
+			resultKind = opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS
 		}
 	}
-	return opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS
+	return resultKind
 }
 
 type protoValueFrame struct {

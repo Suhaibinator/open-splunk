@@ -15,6 +15,15 @@ type Query struct {
 	Operators        []Operator
 	EffectiveIndexes []string
 	OutputFields     []string
+	DynamicOutput    *DynamicSeriesOutput
+}
+
+// DynamicSeriesOutput describes a bounded runtime-wide result schema. Fixed
+// fields are known during planning; series column names are derived from
+// runtime values and must not exceed MaxSeries.
+type DynamicSeriesOutput struct {
+	FixedFields []string
+	MaxSeries   uint16
 }
 
 // Operator is one logical pipeline stage.
@@ -120,6 +129,32 @@ type Aggregate struct {
 func (*Aggregate) operator()                 {}
 func (*Aggregate) LogicalName() string       { return "Aggregate" }
 func (op *Aggregate) SourceRange() spl.Range { return op.Range }
+
+// Timechart transforms rows into a runtime-wide count series over fixed,
+// epoch-aligned UTC buckets. FirstBucket and BucketCount describe the complete
+// fixed range, including partial boundary buckets and continuous gaps.
+type Timechart struct {
+	Time        FieldRef
+	SplitBy     FieldRef
+	Function    AggregateFunction
+	Span        time.Duration
+	FirstBucket time.Time
+	BucketCount uint64
+
+	SeriesLimit    uint16
+	IncludeNull    bool
+	IncludeOther   bool
+	NullLabel      string
+	OtherLabel     string
+	FixedRange     bool
+	Continuous     bool
+	IncludePartial bool
+	Range          spl.Range
+}
+
+func (*Timechart) operator()                 {}
+func (*Timechart) LogicalName() string       { return "Timechart" }
+func (op *Timechart) SourceRange() spl.Range { return op.Range }
 
 // WindowFunction identifies a row-preserving calculation over the complete
 // input relation.

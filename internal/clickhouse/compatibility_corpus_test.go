@@ -8,8 +8,9 @@ import (
 )
 
 // TestGradeThisCompatibilityCorpus keeps the product plan's ten initial SPL
-// searches executable as one contract. Unsupported entries remain explicit so
-// each implementation increment turns one expected diagnostic into a compile.
+// searches progressing through the complete parse, plan, and compile contract.
+// Pinned ClickHouse integration tests separately exercise the emitted query
+// primitives and result transport.
 func TestGradeThisCompatibilityCorpus(t *testing.T) {
 	t.Parallel()
 
@@ -39,14 +40,12 @@ func TestGradeThisCompatibilityCorpus(t *testing.T) {
 			source: `index=gradethis level=ERROR | stats count by logger, message | sort -count | head 20`,
 		},
 		{
-			name:               "volume by severity",
-			source:             `index=gradethis | timechart span=5m count by level`,
-			unsupportedCommand: "timechart",
+			name:   "volume by severity",
+			source: `index=gradethis | timechart span=5m count by level`,
 		},
 		{
-			name:               "server errors by route",
-			source:             `index=gradethis message="Request metrics" status>=500 | timechart span=5m count by path`,
-			unsupportedCommand: "timechart",
+			name:   "server errors by route",
+			source: `index=gradethis message="Request metrics" status>=500 | timechart span=5m count by path`,
 		},
 		{
 			name:   "responses by route and status",

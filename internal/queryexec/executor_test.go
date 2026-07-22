@@ -81,6 +81,208 @@ func TestExecutorStreamsTypedRowsAndExactSchema(t *testing.T) {
 	}
 }
 
+func TestExecutorBuffersAndPublishesRuntimeWideTimechart(t *testing.T) {
+	t.Parallel()
+
+	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	names := []string{"0:_audit", "0:Z", "1:", "2:"}
+	rows := timechartFakeRows(first, 5*time.Minute, names, [][]uint64{
+		{2, 1, 0, 3},
+		{0, 4, 1, 0},
+		{5, 0, 0, 2},
+	})
+	sink := &fakeSink{}
+	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
+	if err := executor.Execute(context.Background(), timechartQuery(first, 3), sink); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if sink.setCalls != 1 || !rows.closed {
+		t.Fatalf("schema calls=%d rows closed=%v", sink.setCalls, rows.closed)
+	}
+	wantColumns := []searchjobs.Column{
+		{Name: "_time", Kind: searchjobs.ValueKindTime},
+		{Name: "VALUE_audit", Kind: searchjobs.ValueKindUnsigned},
+		{Name: "Z", Kind: searchjobs.ValueKindUnsigned},
+		{Name: "NULL", Kind: searchjobs.ValueKindUnsigned},
+		{Name: "OTHER", Kind: searchjobs.ValueKindUnsigned},
+	}
+	if !reflect.DeepEqual(sink.schema.Columns, wantColumns) {
+		t.Fatalf("schema = %#v, want %#v", sink.schema.Columns, wantColumns)
+	}
+	if len(sink.rows) != 3 {
+		t.Fatalf("published rows = %d, want 3", len(sink.rows))
+	}
+	for index, row := range sink.rows {
+		bucket, ok := row[0].Time()
+		if !ok || !bucket.Equal(first.Add(time.Duration(index)*5*time.Minute)) {
+			t.Fatalf("row %d bucket = %v, %v", index, bucket, ok)
+		}
+		for seriesIndex, want := range rows.data[index][2].([]uint64) {
+			got, ok := row[seriesIndex+1].Unsigned()
+			if !ok || got != want {
+				t.Fatalf("row %d series %d = %d, %v, want %d", index, seriesIndex, got, ok, want)
+			}
+		}
+	}
+}
+
+func TestExecutorSuppressesEmptyTimechartGrid(t *testing.T) {
+	t.Parallel()
+
+	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	rows := timechartFakeRows(first, 5*time.Minute, nil, [][]uint64{{}, {}, {}})
+	sink := &fakeSink{}
+	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
+	if err := executor.Execute(context.Background(), timechartQuery(first, 3), sink); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if sink.setCalls != 1 || len(sink.schema.Columns) != 1 || sink.schema.Columns[0].Name != "_time" || len(sink.rows) != 0 {
+		t.Fatalf("empty timechart schema=%#v rows=%d calls=%d", sink.schema, len(sink.rows), sink.setCalls)
+	}
+}
+
+func TestExecutorRejectsMalformedTimechartAtomically(t *testing.T) {
+	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		mutate      func(*fakeRows, *clickhouse.CompiledQuery)
+		want        error
+		queryIssued bool
+	}{
+		{name: "wrong physical columns", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.columns[1] = "wrong" }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "nullable physical column", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+			rows.types[1] = fakeColumnType{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{}), nullable: true}
+		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "column type name drift", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+			rows.types[1] = fakeColumnType{name: "wrong", databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})}
+		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "wrapped bucket type", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+			rows.types[0] = fakeColumnType{name: clickhouse.TimechartBucketColumn, databaseType: "Nullable(DateTime64(9, 'UTC'))", scanType: reflect.TypeOf(time.Time{})}
+		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "wrong bucket precision", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+			rows.types[0] = fakeColumnType{name: clickhouse.TimechartBucketColumn, databaseType: "DateTime64(6, 'UTC')", scanType: reflect.TypeOf(time.Time{})}
+		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "wrong bucket timezone", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+			rows.types[0] = fakeColumnType{name: clickhouse.TimechartBucketColumn, databaseType: "DateTime64(9, 'America/Los_Angeles')", scanType: reflect.TypeOf(time.Time{})}
+		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "wrong array type", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+			rows.types[2] = fakeColumnType{name: clickhouse.TimechartCountsColumn, databaseType: "Array(UInt32)", scanType: reflect.TypeOf([]uint64{})}
+		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "wrong native bucket", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+			rows.types[0] = fakeColumnType{name: clickhouse.TimechartBucketColumn, databaseType: "DateTime64(9, 'UTC')", scanType: reflect.TypeOf((*any)(nil)).Elem()}
+			rows.data[0][0] = "not time"
+		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "too few buckets", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data = rows.data[:1] }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "too many buckets", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+			rows.data = append(rows.data, []any{first.Add(10 * time.Minute), []string{"0:a"}, []uint64{3}, uint8(0)})
+		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "wrong first bucket", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[0][0] = first.Add(time.Minute) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "bucket gap", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[1][0] = first.Add(10 * time.Minute) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "count length mismatch", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[0][2] = []uint64{} }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "series changed", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[1][1] = []string{"0:b"} }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "series out of order", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { setTimechartNames(rows, []string{"0:b", "0:a"}) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "ordinary after null", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { setTimechartNames(rows, []string{"1:", "0:a"}) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "null after other", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { setTimechartNames(rows, []string{"2:", "1:"}) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "duplicate null", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { setTimechartNames(rows, []string{"1:", "1:"}) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "duplicate other", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { setTimechartNames(rows, []string{"2:", "2:"}) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "duplicate encoded series", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { setTimechartNames(rows, []string{"0:a", "0:a"}) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "empty ordinary label", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { setTimechartNames(rows, []string{"0:"}) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "reserved ordinary label", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { setTimechartNames(rows, []string{"0:NULL"}) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "malformed special label", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { setTimechartNames(rows, []string{"1:value"}) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "unknown encoding", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { setTimechartNames(rows, []string{"3:value"}) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "invalid UTF-8", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+			setTimechartNames(rows, []string{"0:" + string([]byte{0xff})})
+		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "normalized collision", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+			setTimechartNames(rows, []string{"0:VALUE_x", "0:_x"})
+		}, want: searchjobs.ErrUnsupportedValue, queryIssued: true},
+		{name: "too many series", mutate: func(rows *fakeRows, query *clickhouse.CompiledQuery) {
+			query.Timechart.MaxSeries = 1
+			setTimechartNames(rows, []string{"0:a", "0:b"})
+		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "oversized label", mutate: func(rows *fakeRows, query *clickhouse.CompiledQuery) {
+			query.Timechart.MaxLabelBytes = 1
+			setTimechartNames(rows, []string{"0:ab"})
+		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "unsupported runtime value", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[1][3] = uint8(1) }, want: searchjobs.ErrUnsupportedValue, queryIssued: true},
+		{name: "iteration failure", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.err = io.ErrUnexpectedEOF }, want: searchjobs.ErrStorageUnavailable, queryIssued: true},
+		{name: "close failure", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.closeErr = io.ErrUnexpectedEOF }, want: searchjobs.ErrStorageUnavailable, queryIssued: true},
+		{name: "invalid output prefix", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) { query.OutputFields = []string{"wrong"} }, want: searchjobs.ErrInvalidResult},
+		{name: "zero bucket count", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) { query.Timechart.BucketCount = 0 }, want: searchjobs.ErrInvalidResult},
+		{name: "unaligned origin", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
+			query.Timechart.FirstBucket = first.Add(time.Minute)
+		}, want: searchjobs.ErrInvalidResult},
+		{name: "excessive bucket count", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
+			query.Timechart.BucketCount = maximumTimechartBuckets + 1
+		}, want: searchjobs.ErrInvalidResult},
+		{name: "excessive metadata series", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
+			query.Timechart.MaxSeries = maximumTimechartSeries + 1
+		}, want: searchjobs.ErrInvalidResult},
+		{name: "excessive metadata label", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
+			query.Timechart.MaxLabelBytes = maximumTimechartLabel + 1
+		}, want: searchjobs.ErrInvalidResult},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rows := timechartFakeRows(first, 5*time.Minute, []string{"0:a"}, [][]uint64{{1}, {2}})
+			query := timechartQuery(first, 2)
+			test.mutate(rows, &query)
+			connection := &fakeQueryConnection{rows: rows}
+			sink := &fakeSink{}
+			err := mustExecutor(t, connection).Execute(context.Background(), query, sink)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Execute error = %v, want %v", err, test.want)
+			}
+			if sink.setCalls != 0 || len(sink.rows) != 0 {
+				t.Fatalf("invalid result was partially published: schema calls=%d rows=%d", sink.setCalls, len(sink.rows))
+			}
+			if got := connection.query != ""; got != test.queryIssued {
+				t.Fatalf("query issued = %v, want %v", got, test.queryIssued)
+			}
+		})
+	}
+}
+
+func timechartQuery(first time.Time, bucketCount uint64) clickhouse.CompiledQuery {
+	return clickhouse.CompiledQuery{
+		SQL:          "SELECT bounded_timechart",
+		OutputFields: []string{"_time"},
+		Timechart: &clickhouse.TimechartOutput{
+			FirstBucket: first, Span: 5 * time.Minute, BucketCount: bucketCount,
+			MaxSeries: 12, MaxLabelBytes: 256,
+		},
+	}
+}
+
+func timechartFakeRows(first time.Time, span time.Duration, names []string, counts [][]uint64) *fakeRows {
+	rows := &fakeRows{
+		columns: []string{
+			clickhouse.TimechartBucketColumn,
+			clickhouse.TimechartNamesColumn,
+			clickhouse.TimechartCountsColumn,
+			clickhouse.TimechartInvalidColumn,
+		},
+		types: []driver.ColumnType{
+			fakeColumnType{name: clickhouse.TimechartBucketColumn, databaseType: "DateTime64(9, 'UTC')", scanType: reflect.TypeOf(time.Time{})},
+			fakeColumnType{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
+			fakeColumnType{name: clickhouse.TimechartCountsColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeOf([]uint64{})},
+			fakeColumnType{name: clickhouse.TimechartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+		},
+		data: make([][]any, len(counts)),
+	}
+	for index, values := range counts {
+		rows.data[index] = []any{first.Add(time.Duration(index) * span), slices.Clone(names), slices.Clone(values), uint8(0)}
+	}
+	return rows
+}
+
+func setTimechartNames(rows *fakeRows, names []string) {
+	for _, row := range rows.data {
+		row[1] = slices.Clone(names)
+		row[2] = make([]uint64, len(names))
+	}
+}
+
 func TestConvertJSONRestoresLogicalPathsAndNestedTypes(t *testing.T) {
 	t.Parallel()
 	document := chcol.NewJSON()
@@ -387,7 +589,8 @@ func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	}
 	for _, name := range []string{
 		"readonly", "max_execution_time", "max_memory_usage", "max_rows_to_read", "max_bytes_to_read",
-		"max_result_rows", "max_result_bytes", "max_rows_to_group_by", "max_threads", "max_query_size",
+		"max_result_rows", "max_result_bytes", "max_rows_to_group_by", "max_threads", "max_query_size", "enable_materialized_cte",
+		"short_circuit_function_evaluation",
 	} {
 		if _, exists := settings[name]; !exists {
 			t.Errorf("missing query setting %q", name)
@@ -402,6 +605,12 @@ func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	}
 	if settings["max_query_size"] != defaultMaxQueryBytes {
 		t.Fatalf("default query cap = %v, want %d", settings["max_query_size"], defaultMaxQueryBytes)
+	}
+	if settings["enable_materialized_cte"] != uint8(1) {
+		t.Fatalf("materialized CTE setting = %v, want 1", settings["enable_materialized_cte"])
+	}
+	if settings["short_circuit_function_evaluation"] != "enable" {
+		t.Fatalf("short-circuit setting = %v, want enable", settings["short_circuit_function_evaluation"])
 	}
 	custom, err := querySettings(Config{MaxResultRows: 77, MaxRowsToGroupBy: 33})
 	if err != nil {
@@ -419,6 +628,41 @@ func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	}
 	if _, err := querySettings(Config{MaxExecutionTime: -time.Second}); err == nil {
 		t.Fatal("negative execution time accepted")
+	}
+}
+
+func TestExecutorExpandsOnlyDefaultTimechartGroupBudget(t *testing.T) {
+	t.Parallel()
+
+	settings, err := querySettings(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &Executor{settings: settings, expandDefaultTimechartGroupLimit: true}
+	dense := timechartQuery(time.Unix(0, 0).UTC(), 5_001)
+	dense.Timechart.MaxSeries = 2
+	denseSettings := executor.settingsFor(dense)
+	if got, want := denseSettings["max_rows_to_group_by"], uint64(15_003); got != want {
+		t.Fatalf("dense timechart group cap = %v, want %d", got, want)
+	}
+	if got := settings["max_rows_to_group_by"]; got != defaultMaxResultRows {
+		t.Fatalf("base settings were mutated: cap=%v", got)
+	}
+	maximum := timechartQuery(time.Unix(0, 0).UTC(), maximumTimechartBuckets)
+	if got, want := executor.settingsFor(maximum)["max_rows_to_group_by"], uint64(130_000); got != want {
+		t.Fatalf("maximum timechart group cap = %v, want %d", got, want)
+	}
+	if got := executor.settingsFor(clickhouse.CompiledQuery{SQL: "SELECT 1"})["max_rows_to_group_by"]; got != defaultMaxResultRows {
+		t.Fatalf("ordinary query group cap = %v, want %d", got, defaultMaxResultRows)
+	}
+
+	customSettings, err := querySettings(Config{MaxRowsToGroupBy: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	custom := &Executor{settings: customSettings}
+	if got := custom.settingsFor(dense)["max_rows_to_group_by"]; got != uint64(7) {
+		t.Fatalf("explicit group cap = %v, want 7", got)
 	}
 }
 
@@ -465,9 +709,10 @@ func mustExecutor(t *testing.T, connection queryConnection) *Executor {
 		t.Fatal(err)
 	}
 	return &Executor{
-		connection: connection,
-		settings:   settings,
-		newQueryID: func() (string, error) { return "open-splunk-search-test", nil },
+		connection:                       connection,
+		settings:                         settings,
+		expandDefaultTimechartGroupLimit: true,
+		newQueryID:                       func() (string, error) { return "open-splunk-search-test", nil },
 	}
 }
 
@@ -567,13 +812,15 @@ func assignFakeValue(target reflect.Value, source any) error {
 }
 
 type fakeSink struct {
-	schema searchjobs.Schema
-	rows   [][]searchjobs.Value
-	setErr error
-	addErr error
+	schema   searchjobs.Schema
+	rows     [][]searchjobs.Value
+	setErr   error
+	addErr   error
+	setCalls int
 }
 
 func (sink *fakeSink) SetSchema(schema searchjobs.Schema) error {
+	sink.setCalls++
 	if sink.setErr != nil {
 		return sink.setErr
 	}

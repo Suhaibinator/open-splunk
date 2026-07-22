@@ -328,6 +328,104 @@ func TestCompileStatsCountUsesTransformingSchemaAndSplunkNullGrouping(t *testing
 	}
 }
 
+func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis message="Request metrics" status>=500 | timechart span=5m count by path`)
+	if !slices.Equal(compiled.OutputFields, []string{"_time"}) {
+		t.Fatalf("public fixed fields = %v", compiled.OutputFields)
+	}
+	if compiled.Timechart == nil {
+		t.Fatal("compiled timechart metadata is missing")
+	}
+	if compiled.Timechart.FirstBucket != time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC) ||
+		compiled.Timechart.Span != 5*time.Minute || compiled.Timechart.BucketCount != 288 ||
+		compiled.Timechart.MaxSeries != 12 || compiled.Timechart.MaxLabelBytes != 256 {
+		t.Fatalf("compiled timechart metadata = %#v", compiled.Timechart)
+	}
+	for _, required := range []string{
+		`"__os_timechart_source" AS (`,
+		`"__os_timechart_prepared" AS (SELECT *, toUInt8(if("__os_tc_present" != 0, 0, arrayExists(`,
+		`"__os_timechart_classified" AS (`,
+		`"__os_timechart_canonicalized" AS (`,
+		`"__os_timechart_group_counts" AS MATERIALIZED`,
+		`"__os_timechart_top" AS MATERIALIZED`,
+		`"__os_timechart_normalization_collisions" AS (`,
+		`LIMIT 10`,
+		`sumIf("__os_tc_count", "__os_tc_kind" = 3)`,
+		`HAVING uniqExact("__os_tc_label") > 1`,
+		`concat('VALUE', "__os_tc_label")`,
+		`"__os_tc_sort_label"`,
+		`arrayMap(item -> item.3`,
+		`mapFromArrays(`,
+		`FROM numbers(?)`,
+		`AS "` + TimechartBucketColumn + `"`,
+		`AS "` + TimechartNamesColumn + `"`,
+		`AS "` + TimechartCountsColumn + `"`,
+		`AS "` + TimechartInvalidColumn + `"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("timechart SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
+		t.Fatalf("scoped storage scan occurs %d times, want once:\n%s", got, compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+	if got := compiled.Args[0]; got != "path" {
+		t.Fatalf("dynamic exact-presence argument = %#v, want path before nested scan", got)
+	}
+	if got := compiled.Args[len(compiled.Args)-3]; got != "path." {
+		t.Fatalf("dynamic descendant argument = %#v, want path. after nested scan", got)
+	}
+	wantTail := []any{"2026-07-21 00:00:00.000000000", uint64(288)}
+	if got := compiled.Args[len(compiled.Args)-2:]; !reflect.DeepEqual(got, wantTail) {
+		t.Fatalf("grid arguments = %#v, want %#v", got, wantTail)
+	}
+}
+
+func TestCompileTimechartUsesMathematicalPreEpochFloor(t *testing.T) {
+	t.Parallel()
+
+	parsed, err := spl.Parse(`index=gradethis | timechart span=5m count by level`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visibility := uint64(1)
+	logical, err := plan.Build(parsed, plan.Scope{
+		TenantID:          "tenant-1",
+		AuthorizedIndexes: []string{"gradethis"},
+		Earliest:          time.Date(1969, 12, 31, 23, 59, 59, 999999999, time.UTC),
+		Latest:            time.Date(1970, 1, 1, 0, 0, 0, 1, time.UTC),
+		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
+		VisibilityCutoff:  &visibility,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := (Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		`reinterpretAsInt64("__os_tc_event_time")`,
+		`"__os_tc_ticks" < 0 AND "__os_tc_ticks" % 300000000000 != 0`,
+		`fromUnixTimestamp64Nano(`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("pre-epoch SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, "toStartOfInterval") {
+		t.Fatalf("timechart used origin-restricted bucketing:\n%s", compiled.SQL)
+	}
+	if compiled.Timechart == nil || compiled.Timechart.FirstBucket != time.Date(1969, 12, 31, 23, 55, 0, 0, time.UTC) || compiled.Timechart.BucketCount != 2 {
+		t.Fatalf("pre-epoch metadata = %#v", compiled.Timechart)
+	}
+}
+
 func TestCompileStatsDetectsFlattenedObjectParentsWithEscapedPaths(t *testing.T) {
 	t.Parallel()
 
