@@ -774,6 +774,51 @@ func TestCompileTopLimitZeroAndDownstreamPipeline(t *testing.T) {
 	}
 }
 
+func TestCompileRareCalculatesPercentBeforeDeterministicLimit(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | rare limit=2 message`)
+	if !slices.Equal(compiled.OutputFields, []string{"message", "count", "percent"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, required := range []string{
+		`count() AS "count"`,
+		`sum("count") OVER ()`,
+		`AS "percent"`,
+		`ASC NULLS LAST`,
+		`DESC NULLS LAST`,
+		`LIMIT ?`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("rare SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if got := compiled.Args[len(compiled.Args)-1]; got != uint64(2) {
+		t.Fatalf("rare limit argument = %#v, want 2", got)
+	}
+	if strings.Contains(compiled.SQL, "_tie_") {
+		t.Fatalf("rare repeated its explicit group field as a contradictory tie key:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+}
+
+func TestCompileRareLimitZeroAndDownstreamPipeline(t *testing.T) {
+	t.Parallel()
+
+	unlimited := compileSPL(t, `index=gradethis | rare limit=0 message`)
+	if strings.Contains(unlimited.SQL, "LIMIT ?") {
+		t.Fatalf("rare limit=0 emitted a SQL limit:\n%s", unlimited.SQL)
+	}
+
+	downstream := compileSPL(t, `index=gradethis | rare message | search percent>=10 | sort -percent | table message, count, percent`)
+	if !slices.Equal(downstream.OutputFields, []string{"message", "count", "percent"}) ||
+		!strings.Contains(downstream.SQL, `toFloat64("percent") >= toFloat64OrNull(?)`) {
+		t.Fatalf("post-rare pipeline output=%v\nSQL: %s", downstream.OutputFields, downstream.SQL)
+	}
+}
+
 func TestCompilePostStatsProjectionPreservesDeclaredSchemaAndAliases(t *testing.T) {
 	t.Parallel()
 

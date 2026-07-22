@@ -242,6 +242,27 @@ Multiple fields, `BY`, wildcards, `countfield`, `percentfield`, `showcount`,
 `showperc`, `useother`, and `otherstr` are not yet supported. Selecting a field
 named `count` or `percent` is rejected until output-renaming options exist.
 
+### `rare`
+
+```spl
+| rare field
+| rare 20 field
+| rare limit=20 field
+| rare limit=0 field
+```
+
+The supported schema, scalar eligibility, percentage calculation, limit
+behavior, and failure semantics are identical to `top`. Rows order by count
+ascending to select the least frequent values, then by field value descending
+in UTF-8 lexical order for a deterministic tie cutoff. The default limit is 10;
+`limit=0` removes the logical bottom-N limit while retaining the same configured
+group and result budgets.
+
+Only one exact field and a limit are accepted. Multiple fields, `BY`, wildcards,
+`countfield`, `percentfield`, `showcount`, `showperc`, and any other option are
+rejected. A field named `count` or `percent` is rejected because it collides with
+the fixed output schema.
+
 ### `timechart`
 
 ```spl
@@ -307,7 +328,7 @@ The following planned commands are not implemented in this version:
 
 ```text
 rex, spath, bin, bucket, chart,
-dedup, rare, eventstats, streamstats
+dedup, eventstats, streamstats
 ```
 
 All `stats` functions other than argument-free `count` and `p95(field)` are
@@ -329,5 +350,6 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`rename`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/rename),
 [`percentile functions`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/9.4/statistical-and-charting-functions/aggregate-functions),
 [`top`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.0/search-commands/top),
+[`rare`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.4/search-commands/rare),
 and [`timechart`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/timechart)
 documentation.

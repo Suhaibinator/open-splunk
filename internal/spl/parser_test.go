@@ -883,6 +883,72 @@ func TestParseTopLocatesUnsupportedOptionAfterLimit(t *testing.T) {
 	}
 }
 
+func TestParseRareSingleFieldAndLimits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		field  string
+		limit  uint64
+	}{
+		{name: "default", source: `index=main | rare message`, field: "message", limit: 10},
+		{name: "limit option", source: `index=main | rare limit=20 message`, field: "message", limit: 20},
+		{name: "positional limit", source: `index=main | rare 5 status`, field: "status", limit: 5},
+		{name: "unlimited", source: `index=main | rare limit=0 host`, field: "host", limit: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command, ok := query.Commands[0].(*RareCommand)
+			if !ok || command.Field != test.field || command.Limit != test.limit || command.Name() != "rare" {
+				t.Fatalf("rare command = %#v, want field %q limit %d", query.Commands[0], test.field, test.limit)
+			}
+			if command.FieldRange.Start.Column <= command.Range.Start.Column {
+				t.Fatalf("field range = %#v, command range = %#v", command.FieldRange, command.Range)
+			}
+		})
+	}
+}
+
+func TestParseRareRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		code   string
+	}{
+		{name: "missing field", source: `index=main | rare`, code: "SPL_EXPECTED_FIELD"},
+		{name: "missing limit", source: `index=main | rare limit= message`, code: "SPL_INVALID_ARGUMENT"},
+		{name: "negative limit", source: `index=main | rare limit=-1 message`, code: "SPL_INVALID_ARGUMENT"},
+		{name: "negative positional limit", source: `index=main | rare -1 message`, code: "SPL_INVALID_ARGUMENT"},
+		{name: "limit overflow", source: `index=main | rare limit=18446744073709551616 message`, code: "SPL_NUMBER_OUT_OF_RANGE"},
+		{name: "multiple fields", source: `index=main | rare message, host`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
+		{name: "by clause", source: `index=main | rare message BY host`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
+		{name: "unsupported option", source: `index=main | rare showperc=false message`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
+		{name: "wildcard field", source: `index=main | rare mes*`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
+		{name: "trailing option", source: `index=main | rare message limit=5`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(test.source)
+			if err == nil {
+				t.Fatal("Parse succeeded, want error")
+			}
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != test.code {
+				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
+			}
+		})
+	}
+}
+
 func TestParseErrorsAreSourceLocated(t *testing.T) {
 	t.Parallel()
 
@@ -922,6 +988,7 @@ func FuzzParseDoesNotPanic(f *testing.F) {
 		`index=main | stats count AS events by host, service`,
 		`index=main | stats sum(bytes) by host`,
 		`index=main | top limit=20 message`,
+		`index=main | rare limit=20 message`,
 		"index=x\n| transaction trace_id",
 		"\x00\xff",
 	} {

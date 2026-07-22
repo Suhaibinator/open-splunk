@@ -152,6 +152,8 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseStatsCommand(nameToken)
 	case "top":
 		return p.parseTopCommand(nameToken)
+	case "rare":
+		return p.parseRareCommand(nameToken)
 	case "timechart":
 		return p.parseTimechartCommand(nameToken)
 	default:
@@ -404,10 +406,43 @@ func (p *parser) unsupportedTimechartSyntax(tok token, message string) *Diagnost
 	}
 }
 
+type parsedFrequencyCommand struct {
+	field      string
+	fieldRange Range
+	limit      uint64
+	range_     Range
+}
+
 func (p *parser) parseTopCommand(name token) (Command, error) {
-	command := &TopCommand{Limit: 10}
+	parsed, err := p.parseFrequencyCommand(name, "top")
+	if err != nil {
+		return nil, err
+	}
+	return &TopCommand{
+		Field:      parsed.field,
+		FieldRange: parsed.fieldRange,
+		Limit:      parsed.limit,
+		Range:      parsed.range_,
+	}, nil
+}
+
+func (p *parser) parseRareCommand(name token) (Command, error) {
+	parsed, err := p.parseFrequencyCommand(name, "rare")
+	if err != nil {
+		return nil, err
+	}
+	return &RareCommand{
+		Field:      parsed.field,
+		FieldRange: parsed.fieldRange,
+		Limit:      parsed.limit,
+		Range:      parsed.range_,
+	}, nil
+}
+
+func (p *parser) parseFrequencyCommand(name token, commandName string) (parsedFrequencyCommand, error) {
+	command := parsedFrequencyCommand{limit: 10}
 	if p.atCommandEnd() {
-		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "top requires one field")
+		return parsedFrequencyCommand{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", commandName+" requires one field")
 	}
 
 	var limitToken token
@@ -417,64 +452,64 @@ func (p *parser) parseTopCommand(name token) (Command, error) {
 		hasLimit = true
 		p.advance()
 	} else if p.current().kind == tokenWord && strings.HasPrefix(p.current().text, "-") && integerSyntax(p.current().text) {
-		return nil, p.errorAtCurrent("SPL_INVALID_ARGUMENT", "top limit must be a non-negative integer")
+		return parsedFrequencyCommand{}, p.errorAtCurrent("SPL_INVALID_ARGUMENT", commandName+" limit must be a non-negative integer")
 	} else if p.isKeyword("LIMIT") && p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
 		p.advance()
 		p.advance()
 		limitToken = p.current()
 		if limitToken.kind != tokenWord || !unsignedIntegerSyntax(limitToken.text) {
-			return nil, p.errorAtCurrent("SPL_INVALID_ARGUMENT", "top limit must be a non-negative integer")
+			return parsedFrequencyCommand{}, p.errorAtCurrent("SPL_INVALID_ARGUMENT", commandName+" limit must be a non-negative integer")
 		}
 		hasLimit = true
 		p.advance()
 	} else if p.current().kind == tokenWord && p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
-		return nil, p.unsupportedTopSyntax(
-			p.current(), fmt.Sprintf("top option %q is not supported", p.current().text),
+		return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
+			p.current(), commandName, fmt.Sprintf("%s option %q is not supported", commandName, p.current().text),
 		)
 	}
 	if hasLimit {
 		limit, err := strconv.ParseUint(limitToken.text, 10, 64)
 		if err != nil {
-			return nil, &Diagnostic{
+			return parsedFrequencyCommand{}, &Diagnostic{
 				Code:    "SPL_NUMBER_OUT_OF_RANGE",
-				Message: "top result count is outside the supported 64-bit range",
+				Message: commandName + " result count is outside the supported 64-bit range",
 				Range:   limitToken.range_,
 			}
 		}
-		command.Limit = limit
+		command.limit = limit
 	}
 
 	if p.atCommandEnd() {
-		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "top requires one field")
+		return parsedFrequencyCommand{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", commandName+" requires one field")
 	}
 	if p.current().kind == tokenWord && p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
-		return nil, p.unsupportedTopSyntax(
-			p.current(), fmt.Sprintf("top option %q is not supported", p.current().text),
+		return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
+			p.current(), commandName, fmt.Sprintf("%s option %q is not supported", commandName, p.current().text),
 		)
 	}
 	field := p.current()
 	if field.kind != tokenWord {
-		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "top requires one field")
+		return parsedFrequencyCommand{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", commandName+" requires one field")
 	}
 	if strings.Contains(field.text, "*") {
-		return nil, p.unsupportedTopSyntax(field, "wildcard top fields are not supported")
+		return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(field, commandName, "wildcard "+commandName+" fields are not supported")
 	}
-	command.Field = field.text
-	command.FieldRange = field.range_
-	command.Range = Range{Start: name.range_.Start, End: field.range_.End}
+	command.field = field.text
+	command.fieldRange = field.range_
+	command.range_ = Range{Start: name.range_.Start, End: field.range_.End}
 	p.advance()
 	if !p.atCommandEnd() {
-		return nil, p.unsupportedTopSyntax(p.current(), "only one top field is currently supported")
+		return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(p.current(), commandName, "only one "+commandName+" field is currently supported")
 	}
 	return command, nil
 }
 
-func (p *parser) unsupportedTopSyntax(tok token, message string) *Diagnostic {
+func (p *parser) unsupportedFrequencySyntax(tok token, commandName, message string) *Diagnostic {
 	return &Diagnostic{
-		Code:        "SPL_UNSUPPORTED_TOP_SYNTAX",
+		Code:        "SPL_UNSUPPORTED_" + strings.ToUpper(commandName) + "_SYNTAX",
 		Message:     message,
 		Range:       tok.range_,
-		Suggestions: []string{"top field", "top limit=20 field"},
+		Suggestions: []string{commandName + " field", commandName + " limit=20 field"},
 	}
 }
 
