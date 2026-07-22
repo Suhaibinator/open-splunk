@@ -143,6 +143,41 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 			}
 			result.Operators = append(result.Operators, &Extend{Assignments: assignments, Range: command.Range})
+		case *spl.RenameCommand:
+			assignments, renameErr := convertRenameAssignments(command)
+			if renameErr != nil {
+				return nil, renameErr
+			}
+			if !outputSchemaKnown {
+				for index, assignment := range assignments {
+					syntax := command.Assignments[index]
+					if syntax.Source == "fields" || syntax.Destination == "fields" {
+						return nil, &Diagnostic{
+							Code:    "SPL_AMBIGUOUS_RENAME_FIELD",
+							Message: "rename cannot use the event result's reserved fields payload without an exact upstream schema",
+							Range:   syntax.Range,
+						}
+					}
+					if (!assignment.Source.Canonical && len(assignment.Source.Path) != 1) ||
+						(!assignment.Destination.Canonical && len(assignment.Destination.Path) != 1) {
+						return nil, &Diagnostic{
+							Code:        "SPL_UNSUPPORTED_RENAME_PATH",
+							Message:     "rename on an open event schema currently supports top-level exact fields only",
+							Range:       syntax.Range,
+							Suggestions: []string{"select an exact schema with table before renaming a dotted output field"},
+						}
+					}
+				}
+			}
+			if outputSchemaKnown {
+				result.OutputFields = renameKnownOutputFields(result.OutputFields, command.Assignments)
+			}
+			for _, assignment := range command.Assignments {
+				if assignment.Source == "_time" || assignment.Destination == "_time" {
+					canonicalTimeAvailable = false
+				}
+			}
+			result.Operators = append(result.Operators, &Rename{Assignments: assignments, Range: command.Range})
 		case *spl.FieldsCommand:
 			fields, fieldErr := convertFields(command.Fields, command.Range)
 			if fieldErr != nil {
@@ -480,6 +515,78 @@ func projectKnownOutputFields(current, requested []string, exclude bool) []strin
 	return result
 }
 
+func renameKnownOutputFields(current []string, assignments []spl.RenameAssignment) []string {
+	result := append([]string(nil), current...)
+	for _, assignment := range assignments {
+		if !slices.Contains(result, assignment.Source) {
+			// Splunk nulls an existing destination when the source is absent.
+			// The column therefore remains part of a known result schema.
+			continue
+		}
+		next := make([]string, 0, len(result))
+		for _, name := range result {
+			switch name {
+			case assignment.Source:
+				next = append(next, assignment.Destination)
+			case assignment.Destination:
+				// A present source replaces an existing destination.
+			default:
+				next = append(next, name)
+			}
+		}
+		result = next
+	}
+	return result
+}
+
+func convertRenameAssignments(command *spl.RenameCommand) ([]RenameAssignment, error) {
+	if command == nil || len(command.Assignments) == 0 {
+		return nil, &Diagnostic{Code: "SPL_INVALID_RENAME", Message: "rename requires at least one assignment"}
+	}
+	result := make([]RenameAssignment, 0, len(command.Assignments))
+	seenSources := make(map[string]struct{}, len(command.Assignments))
+	seenDestinations := make(map[string]struct{}, len(command.Assignments))
+	for _, assignment := range command.Assignments {
+		if assignment.Source == assignment.Destination {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_RENAME",
+				Message: fmt.Sprintf("rename source and destination are both %q", assignment.Source),
+				Range:   assignment.Range,
+			}
+		}
+		if _, duplicate := seenSources[assignment.Source]; duplicate {
+			return nil, &Diagnostic{
+				Code:    "SPL_DUPLICATE_RENAME_SOURCE",
+				Message: fmt.Sprintf("rename source field %q is repeated", assignment.Source),
+				Range:   assignment.SourceRange,
+			}
+		}
+		if _, duplicate := seenDestinations[assignment.Destination]; duplicate {
+			return nil, &Diagnostic{
+				Code:    "SPL_DUPLICATE_RENAME_TARGET",
+				Message: fmt.Sprintf("rename destination field %q is repeated", assignment.Destination),
+				Range:   assignment.DestinationRange,
+			}
+		}
+		source, err := ResolveField(assignment.Source, assignment.SourceRange)
+		if err != nil {
+			return nil, err
+		}
+		destination, err := ResolveField(assignment.Destination, assignment.DestinationRange)
+		if err != nil {
+			return nil, err
+		}
+		seenSources[assignment.Source] = struct{}{}
+		seenDestinations[assignment.Destination] = struct{}{}
+		result = append(result, RenameAssignment{
+			Source:      source,
+			Destination: destination,
+			Range:       assignment.Range,
+		})
+	}
+	return result, nil
+}
+
 func convertStatsGroupFields(fields []spl.StatsGroupField) ([]FieldRef, error) {
 	result := make([]FieldRef, 0, len(fields))
 	seen := make(map[string]struct{}, len(fields))
@@ -561,6 +668,12 @@ func positiveIndexReferences(query *spl.Query) []indexReference {
 		case *spl.EvalCommand:
 			for _, assignment := range command.Assignments {
 				if assignment.Field == "index" {
+					return references
+				}
+			}
+		case *spl.RenameCommand:
+			for _, assignment := range command.Assignments {
+				if assignment.Source == "index" || assignment.Destination == "index" {
 					return references
 				}
 			}

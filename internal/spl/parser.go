@@ -14,6 +14,7 @@ const (
 	maxSPLTokens          = 1024
 	maxPipelineCommands   = 64
 	maxEvalAssignments    = 64
+	maxRenameAssignments  = 64
 	maxStatsAggregates    = 16
 	maxStatsGroupFields   = 16
 	maxWhereComparisons   = 32
@@ -137,6 +138,8 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseWhereCommand(nameToken)
 	case "eval":
 		return p.parseEvalCommand(nameToken)
+	case "rename":
+		return p.parseRenameCommand(nameToken)
 	case "fields":
 		return p.parseFieldsCommand(nameToken)
 	case "table":
@@ -158,6 +161,109 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 			Range:   nameToken.range_,
 		}
 	}
+}
+
+func (p *parser) parseRenameCommand(name token) (Command, error) {
+	command := &RenameCommand{}
+	seenSources := make(map[string]struct{})
+	seenDestinations := make(map[string]struct{})
+	end := name.range_.End
+
+	if p.atCommandEnd() {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "rename requires a source field")
+	}
+	for {
+		source := p.current()
+		if source.kind != tokenWord {
+			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "rename requires an exact source field")
+		}
+		if strings.Contains(source.text, "*") {
+			return nil, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_RENAME_PATTERN",
+				Message:     "wildcard rename patterns are not supported in compatibility version 0.1",
+				Range:       source.range_,
+				Suggestions: []string{"rename old_field AS new_field"},
+			}
+		}
+		if _, duplicate := seenSources[source.text]; duplicate {
+			return nil, &Diagnostic{
+				Code:    "SPL_DUPLICATE_RENAME_SOURCE",
+				Message: fmt.Sprintf("rename source field %q is repeated", source.text),
+				Range:   source.range_,
+			}
+		}
+		p.advance()
+		if !p.isKeyword("AS") {
+			return nil, &Diagnostic{
+				Code:        "SPL_EXPECTED_AS",
+				Message:     "rename source field must be followed by AS",
+				Range:       p.current().range_,
+				Suggestions: []string{"rename old_field AS new_field"},
+			}
+		}
+		p.advance()
+
+		destination := p.current()
+		if destination.kind != tokenWord {
+			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "rename AS requires an exact destination field")
+		}
+		if strings.Contains(destination.text, "*") {
+			return nil, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_RENAME_PATTERN",
+				Message:     "wildcard rename patterns are not supported in compatibility version 0.1",
+				Range:       destination.range_,
+				Suggestions: []string{"rename old_field AS new_field"},
+			}
+		}
+		if source.text == destination.text {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_RENAME",
+				Message: fmt.Sprintf("rename source and destination are both %q", source.text),
+				Range:   Range{Start: source.range_.Start, End: destination.range_.End},
+			}
+		}
+		if _, duplicate := seenDestinations[destination.text]; duplicate {
+			return nil, &Diagnostic{
+				Code:    "SPL_DUPLICATE_RENAME_TARGET",
+				Message: fmt.Sprintf("rename destination field %q is repeated", destination.text),
+				Range:   destination.range_,
+			}
+		}
+		seenSources[source.text] = struct{}{}
+		seenDestinations[destination.text] = struct{}{}
+		command.Assignments = append(command.Assignments, RenameAssignment{
+			Source:           source.text,
+			SourceRange:      source.range_,
+			Destination:      destination.text,
+			DestinationRange: destination.range_,
+			Range:            Range{Start: source.range_.Start, End: destination.range_.End},
+		})
+		if len(command.Assignments) > maxRenameAssignments {
+			return nil, &Diagnostic{
+				Code:    "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf("rename contains more than %d assignments", maxRenameAssignments),
+				Range:   destination.range_,
+			}
+		}
+		end = destination.range_.End
+		p.advance()
+		if p.atCommandEnd() {
+			break
+		}
+		if !p.match(tokenComma) {
+			return nil, &Diagnostic{
+				Code:        "SPL_EXPECTED_COMMA",
+				Message:     "rename pairs must be separated by a comma",
+				Range:       p.current().range_,
+				Suggestions: []string{"rename first AS one, second AS two"},
+			}
+		}
+		if p.atCommandEnd() {
+			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected another rename source field after comma")
+		}
+	}
+	command.Range = Range{Start: name.range_.Start, End: end}
+	return command, nil
 }
 
 func (p *parser) parseTimechartCommand(name token) (Command, error) {

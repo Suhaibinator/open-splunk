@@ -100,6 +100,76 @@ func TestParseProjectionSortAndLimits(t *testing.T) {
 	}
 }
 
+func TestParseRenameExactPairs(t *testing.T) {
+	t.Parallel()
+
+	source := `index=gradethis | rename logger AS component, request.path AS route`
+	query, err := Parse(source)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command, ok := query.Commands[0].(*RenameCommand)
+	if !ok || len(command.Assignments) != 2 {
+		t.Fatalf("command = %#v, want two rename assignments", query.Commands[0])
+	}
+	want := [][2]string{{"logger", "component"}, {"request.path", "route"}}
+	for index, assignment := range command.Assignments {
+		if assignment.Source != want[index][0] || assignment.Destination != want[index][1] {
+			t.Fatalf("assignment %d = %#v, want %q AS %q", index, assignment, want[index][0], want[index][1])
+		}
+		if got := source[assignment.SourceRange.Start.Offset:assignment.SourceRange.End.Offset]; got != want[index][0] {
+			t.Fatalf("assignment %d source range = %q", index, got)
+		}
+		if got := source[assignment.DestinationRange.Start.Offset:assignment.DestinationRange.End.Offset]; got != want[index][1] {
+			t.Fatalf("assignment %d destination range = %q", index, got)
+		}
+	}
+}
+
+func TestParseRenameRejectsPatternsDuplicatesAndAmbiguousSyntax(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		source string
+		code   string
+	}{
+		{`* | rename`, "SPL_EXPECTED_FIELD"},
+		{`* | rename old new`, "SPL_EXPECTED_AS"},
+		{`* | rename old AS`, "SPL_EXPECTED_FIELD"},
+		{`* | rename old AS new,`, "SPL_EXPECTED_FIELD"},
+		{`* | rename old AS new next AS final`, "SPL_EXPECTED_COMMA"},
+		{`* | rename old* AS new`, "SPL_UNSUPPORTED_RENAME_PATTERN"},
+		{`* | rename old AS new*`, "SPL_UNSUPPORTED_RENAME_PATTERN"},
+		{`* | rename old AS old`, "SPL_INVALID_RENAME"},
+		{`* | rename old AS first, old AS second`, "SPL_DUPLICATE_RENAME_SOURCE"},
+		{`* | rename first AS target, second AS target`, "SPL_DUPLICATE_RENAME_TARGET"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			assertParseDiagnosticCode(t, test.source, test.code)
+		})
+	}
+}
+
+func TestParseRenameBoundsAssignmentCount(t *testing.T) {
+	t.Parallel()
+
+	var source strings.Builder
+	source.WriteString(`* | rename `)
+	for index := 0; index <= maxRenameAssignments; index++ {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString("source")
+		source.WriteString(strconv.Itoa(index))
+		source.WriteString(" AS target")
+		source.WriteString(strconv.Itoa(index))
+	}
+	assertParseDiagnosticCode(t, source.String(), "SPL_QUERY_TOO_COMPLEX")
+}
+
 func TestParseSortDistinguishesDefaultBoundFromExplicitUnlimited(t *testing.T) {
 	t.Parallel()
 

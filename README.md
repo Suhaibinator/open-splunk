@@ -62,6 +62,16 @@ The resulting `build/open-splunk-server` serves the UI and protobuf API from the
 
 In VS Code, **Run Build Task** (`Cmd+Shift+B` on macOS or `Ctrl+Shift+B` elsewhere) runs the default **Generate protobufs (Go, gRPC, TypeScript)** task, which delegates to `make proto`.
 
-The current commands are scaffolding only; the SRouter contracts, gRPC collector service, SQLite control plane, and ClickHouse implementation will be added in subsequent slices.
+The backend includes the protobuf HTTP API, authenticated gRPC ingestion,
+collector WAL and file tailing, the SQLite control plane, ClickHouse storage,
+bounded search jobs, and the executable SPL subset documented in
+[`docs/spl-compatibility-v0.1.md`](docs/spl-compatibility-v0.1.md). The default
+Go test suite is self-contained. The pinned ClickHouse and full collector-to-search
+tests are opt-in because they start ephemeral Docker containers:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/queryexec -run TestExecutorAndManagerAgainstClickHouse
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 go test ./integration -run TestBackendVertical
+```
 
 See [the product and architecture plan](docs/product-architecture-plan.md) for the complete design.

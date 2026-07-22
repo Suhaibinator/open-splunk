@@ -511,6 +511,161 @@ func TestCompileSearchHonorsProjectionBoundaries(t *testing.T) {
 	}
 }
 
+func TestCompileRenameDynamicFieldFeedsDownstreamPipeline(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | rename logger AS component | where component="api" | table component`)
+	if !slices.Equal(compiled.OutputFields, []string{"component"}) {
+		t.Fatalf("output fields = %v, want [component]", compiled.OutputFields)
+	}
+	if !strings.Contains(compiled.SQL, `"__os_fields"."logger" AS "component"`) {
+		t.Fatalf("rename did not alias the dynamic source:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, `"__os_fields"."component"`) {
+		t.Fatalf("downstream pipeline resurrected the pre-rename dynamic target:\n%s", compiled.SQL)
+	}
+	if !slices.Contains(compiled.Args, any("logger")) {
+		t.Fatalf("rename source existence argument missing: %#v", compiled.Args)
+	}
+}
+
+func TestCompileRenameSuppressesStalePublicFieldsPayload(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | rename logger AS component`)
+	if slices.Contains(compiled.OutputFields, "fields") {
+		t.Fatalf("stale raw fields payload remained public: %v", compiled.OutputFields)
+	}
+	if !slices.Contains(compiled.OutputFields, "component") {
+		t.Fatalf("renamed destination is absent: %v", compiled.OutputFields)
+	}
+	// The private document must survive the rename stage so an unrelated
+	// dynamic field can still be selected later.
+	downstream := compileSPL(t, `index=gradethis | rename logger AS component | table component, path`)
+	if !slices.Equal(downstream.OutputFields, []string{"component", "path"}) ||
+		!strings.Contains(downstream.SQL, `"__os_fields"."path" AS "path"`) {
+		t.Fatalf("unrelated dynamic field was not preserved; output=%v\n%s", downstream.OutputFields, downstream.SQL)
+	}
+	descendants := compileSPL(t, `index=gradethis | rename logger AS component | table logger.child, component.child, path`)
+	if strings.Contains(descendants.SQL, `"__os_fields"."logger"."child"`) ||
+		strings.Contains(descendants.SQL, `"__os_fields"."component"."child"`) ||
+		!strings.Contains(descendants.SQL, `"__os_fields"."path" AS "path"`) {
+		t.Fatalf("rename leaked stale source/target descendants or blocked an unrelated field:\n%s", descendants.SQL)
+	}
+}
+
+func TestCompileRenameTombstonesSurviveExactEvalRedefinition(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | rename logger AS component | eval component="replacement" | table logger.child, component.child`)
+	for _, stalePath := range []string{
+		`"__os_fields"."logger"."child"`,
+		`"__os_fields"."component"."child"`,
+	} {
+		if strings.Contains(compiled.SQL, stalePath) {
+			t.Fatalf("eval resurrected renamed descendant %q:\n%s", stalePath, compiled.SQL)
+		}
+	}
+	if !slices.Equal(compiled.OutputFields, []string{"logger.child", "component.child"}) ||
+		strings.Count(compiled.SQL, `CAST(NULL AS Nullable(String))`) < 2 {
+		t.Fatalf("renamed descendants were not retained as missing columns; output=%v\n%s", compiled.OutputFields, compiled.SQL)
+	}
+}
+
+func TestCompileRenameKeepsCanonicalScanPredicatesAuthoritative(t *testing.T) {
+	t.Parallel()
+
+	calculatedIndex := compileSPL(t, `index=gradethis | table path | rename path AS index | search index="/manager" | table index`)
+	for _, predicate := range []string{
+		`"tenant_id" = ?`,
+		`"index_name" IN (?)`,
+		`"event_time" >= parseDateTime64BestEffort(?, 9, 'UTC')`,
+		`"event_time" < parseDateTime64BestEffort(?, 9, 'UTC')`,
+		`"index_time" <= parseDateTime64BestEffort(?, 3, 'UTC')`,
+		`"visibility_seq" <= ?`,
+	} {
+		if !strings.Contains(calculatedIndex.SQL, predicate) {
+			t.Fatalf("calculated index rename lost scan predicate %q:\n%s", predicate, calculatedIndex.SQL)
+		}
+	}
+	if len(calculatedIndex.Args) < 2 || calculatedIndex.Args[0] != "tenant-1" || calculatedIndex.Args[1] != "gradethis" {
+		t.Fatalf("calculated index changed physical scope args: %#v", calculatedIndex.Args)
+	}
+
+	calculatedTime := compileSPL(t, `index=gradethis | table path | rename path AS _time | search _time="/manager" | table _time`)
+	if !strings.Contains(calculatedTime.SQL, `"event_time" >= parseDateTime64BestEffort(?, 9, 'UTC')`) ||
+		!strings.Contains(calculatedTime.SQL, `"path" AS "_time"`) {
+		t.Fatalf("calculated _time changed the immutable scan range or lost its value:\n%s", calculatedTime.SQL)
+	}
+}
+
+func TestCompileRenameBlocksOldNameAndPreservesLeftToRightPairs(t *testing.T) {
+	t.Parallel()
+
+	blocked := compileSPL(t, `index=gradethis | rename logger AS component | search logger=api | table component`)
+	if !strings.Contains(blocked.SQL, `WHERE 0`) {
+		t.Fatalf("search resurrected renamed source:\n%s", blocked.SQL)
+	}
+
+	chained := compileSPL(t, `index=gradethis | rename path AS route, route AS endpoint | table endpoint`)
+	if !slices.Equal(chained.OutputFields, []string{"endpoint"}) ||
+		!strings.Contains(chained.SQL, `"__os_fields"."path" AS "route"`) ||
+		!strings.Contains(chained.SQL, `"route" AS "endpoint"`) {
+		t.Fatalf("left-to-right rename was not preserved; output=%v\n%s", chained.OutputFields, chained.SQL)
+	}
+}
+
+func TestCompileRenameOverwriteAndMissingSourceSemantics(t *testing.T) {
+	t.Parallel()
+
+	overwrite := compileSPL(t, `index=gradethis | stats count by logger | rename logger AS count`)
+	if !slices.Equal(overwrite.OutputFields, []string{"count"}) || !strings.Contains(overwrite.SQL, `"__os_group_0" AS "count"`) {
+		t.Fatalf("known target overwrite output=%v\n%s", overwrite.OutputFields, overwrite.SQL)
+	}
+
+	missingToExisting := compileSPL(t, `index=gradethis | stats count by logger | rename absent AS count`)
+	if !slices.Equal(missingToExisting.OutputFields, []string{"logger", "count"}) ||
+		!strings.Contains(missingToExisting.SQL, `CAST(NULL AS Nullable(String)) AS "count"`) {
+		t.Fatalf("missing source did not null existing target; output=%v\n%s", missingToExisting.OutputFields, missingToExisting.SQL)
+	}
+
+	missingToMissing := compileSPL(t, `index=gradethis | stats count by logger | rename absent AS unknown`)
+	if !slices.Equal(missingToMissing.OutputFields, []string{"logger", "count"}) || strings.Contains(missingToMissing.SQL, ` AS "unknown"`) {
+		t.Fatalf("missing-to-missing rename was not a no-op; output=%v\n%s", missingToMissing.OutputFields, missingToMissing.SQL)
+	}
+
+	dynamicDestination := compileSPL(t, `index=gradethis | fields - logger | rename logger AS path | table path`)
+	if !slices.Equal(dynamicDestination.OutputFields, []string{"path"}) ||
+		!strings.Contains(dynamicDestination.SQL, `CAST(NULL AS Nullable(String)) AS "path"`) ||
+		strings.Contains(dynamicDestination.SQL, `"__os_fields"."path" AS "path"`) {
+		t.Fatalf("missing source did not remove a potentially stored dynamic target; output=%v\n%s", dynamicDestination.OutputFields, dynamicDestination.SQL)
+	}
+
+	blockedSource := compileSPL(t, `index=gradethis | rename logger AS component | rename logger AS path | table component, path`)
+	if !slices.Equal(blockedSource.OutputFields, []string{"component", "path"}) ||
+		!strings.Contains(blockedSource.SQL, `CAST(NULL AS Nullable(String)) AS "path"`) ||
+		strings.Contains(blockedSource.SQL, `"__os_fields"."path" AS "path"`) {
+		t.Fatalf("blocked source resurrected a stored dynamic target; output=%v\n%s", blockedSource.OutputFields, blockedSource.SQL)
+	}
+}
+
+func TestCompileRenameDriverMetacharactersRemainQuoted(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | table foo?bar | rename foo?bar AS target${x}`)
+	if !slices.Equal(compiled.OutputFields, []string{"target${x}"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, unsafe := range []string{`"foo?bar"`, `"target${x}"`} {
+		if strings.Contains(compiled.SQL, unsafe) {
+			t.Fatalf("compiled SQL retained unsafe binder-shaped identifier %q:\n%s", unsafe, compiled.SQL)
+		}
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d: %#v\n%s", got, want, compiled.Args, compiled.SQL)
+	}
+}
+
 func TestCompileStatsCountSQLGolden(t *testing.T) {
 	t.Parallel()
 

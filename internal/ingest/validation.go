@@ -152,8 +152,12 @@ func (v *Validator) ValidateAndNormalizeEvent(event *opensplunkv1.LogEvent, ctx 
 
 	cloned := proto.Clone(event).(*opensplunkv1.LogEvent)
 	v.redactObject(cloned.GetFields())
-	if cloned.GetRawEncoding() == opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 {
+	if cloned.GetRawEncoding() == opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 || utf8.Valid(cloned.GetRaw()) {
 		cloned.Raw = v.redactText(cloned.GetRaw())
+	} else {
+		// Binary payloads can still contain ASCII credentials. The raw scanner
+		// is byte-oriented and preserves unrelated invalid UTF-8 verbatim.
+		cloned.Raw = v.redactKeyValueText(cloned.GetRaw())
 	}
 	if cloned.Message != nil {
 		redactedMessage := string(v.redactText([]byte(cloned.GetMessage())))

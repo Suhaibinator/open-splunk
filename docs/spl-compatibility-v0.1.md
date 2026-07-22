@@ -2,7 +2,7 @@
 
 **Status:** executable implementation contract
 **Compatibility version:** `0.1`
-**Last updated:** July 21, 2026
+**Last updated:** July 22, 2026
 
 Open Splunk accepts only the syntax and behavior described here. Unsupported
 commands or forms fail with a source-located diagnostic; the compiler never
@@ -15,8 +15,8 @@ storage visibility snapshot. SPL cannot widen those boundaries.
 To bound parser, compiler, and ClickHouse AST work, one search may contain at
 most 16 KiB of UTF-8 source, 1,024 syntax tokens, and 64 pipeline commands.
 Scalar expressions may nest 32 levels, with at most 32 `where` comparisons.
-`eval` accepts at most 64 assignments; `stats` accepts at most 16 measures and
-16 `BY` fields. Exceeding a limit returns the source-located
+`eval` and `rename` accept at most 64 assignments; `stats` accepts at most 16
+measures and 16 `BY` fields. Exceeding a limit returns the source-located
 `SPL_QUERY_TOO_COMPLEX` diagnostic before planning or execution. Dynamic field
 paths align with ingestion's ceiling: 17 dotted segments and 256 unescaped
 UTF-8 bytes per segment. Generated ClickHouse SQL is additionally capped at
@@ -112,6 +112,47 @@ being resolved later. Wildcard field names are not yet supported.
 Declares the exact ordered output schema and removes other public fields. If a
 prior transforming command removed a requested field, the declared column is
 retained as a nullable missing value rather than resurrecting event data.
+
+### `rename`
+
+```spl
+| rename logger AS component
+| rename path AS route, status AS response_status
+```
+
+This slice accepts one or more comma-separated, exact `source AS destination`
+pairs. Pairs run from left to right, so `a AS b, b AS c` leaves `c` with the
+original value of `a`. Repeating a source, merging multiple sources into one
+destination, using the same source and destination, omitting `AS`, or omitting
+the comma between pairs produces a source-located diagnostic. Wildcard rename
+patterns and quoted field-name syntax are not supported. On an open event
+schema, sources and destinations must be top-level exact fields; dotted paths
+require an upstream `table` or transforming command that declares the dotted
+name as one exact output column. Descendant paths under an open-schema source
+or destination are unavailable after the rename rather than resolving stale
+members from the immutable payload.
+
+A present source replaces an existing destination. On a closed transforming
+schema, a missing source nulls an existing destination and a missing-to-missing
+pair is a no-op. Event schemas are sparse, so an exact dynamic source such as
+`logger` or `path` is represented by one nullable destination column; its
+per-row presence predicate follows the original source. The old name is
+blocked from later pipeline resolution, while later `search`, `where`, `stats`,
+`table`, and rename pairs resolve the new name. The immutable tenant, physical
+index, time, and visibility scan predicates remain below every rename stage.
+Renaming from or to `_time` makes the value ineligible as timechart's canonical
+event clock. Renaming from or to `index` never changes the already-resolved
+authorization scope or turns calculated data into a physical index selector.
+
+Open Splunk normally includes a convenience `fields` JSON object in unprojected
+event results. Its contents are the immutable stored dynamic payload, so after
+the first rename on an open event schema that convenience column is omitted
+instead of leaking the old source or an overwritten destination. The private
+payload remains available to downstream SPL: unrelated dynamic fields can
+still be searched or selected with `table`. Using `fields` itself as a rename
+source or destination is rejected as ambiguous unless an upstream exact schema
+has declared an ordinary column with that name. This result-shape rule avoids a
+per-event JSON serialize/reparse pass for every rename pair.
 
 ### `sort`
 
@@ -265,7 +306,7 @@ storage/execution primitives have pinned ClickHouse integration coverage:
 The following planned commands are not implemented in this version:
 
 ```text
-rename, rex, spath, bin, bucket, chart,
+rex, spath, bin, bucket, chart,
 dedup, rare, eventstats, streamstats
 ```
 
@@ -285,6 +326,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
 [`replace`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.4.2604/evaluation-functions/text-functions),
 [`tonumber`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/9.0/evaluation-functions/conversion-functions),
+[`rename`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/rename),
 [`percentile functions`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/9.4/statistical-and-charting-functions/aggregate-functions),
 [`top`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.0/search-commands/top),
 and [`timechart`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/timechart)
