@@ -552,7 +552,7 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 			Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
 			Message:     fmt.Sprintf("unsupported stats syntax at %q; expected another supported aggregate, AS, or BY", current.text),
 			Range:       current.range_,
-			Suggestions: []string{"stats count", "stats count p95(field) AS p95_value BY group"},
+			Suggestions: []string{"stats count", "stats sum(field) avg(field) BY group", "stats p95(field) AS p95_value BY group"},
 		}
 	}
 
@@ -587,34 +587,42 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 		if p.current().kind == tokenLeftParen {
 			return StatsAggregate{}, end, p.unsupportedStatsAggregate(p.current(), "count arguments are not supported; use argument-free count")
 		}
-	case "p95":
-		aggregate.Function = AggregateFunctionP95
+	case "p95", "sum", "avg":
+		functionName := strings.ToLower(functionToken.text)
+		switch functionName {
+		case "p95":
+			aggregate.Function = AggregateFunctionP95
+		case "sum":
+			aggregate.Function = AggregateFunctionSum
+		case "avg":
+			aggregate.Function = AggregateFunctionAverage
+		}
 		if !p.match(tokenLeftParen) {
 			return StatsAggregate{}, end, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
-				Message:     "p95 requires one field argument in parentheses",
+				Message:     functionName + " requires one field argument in parentheses",
 				Range:       functionToken.range_,
-				Suggestions: []string{"p95(field)"},
+				Suggestions: []string{functionName + "(field)"},
 			}
 		}
 		input := p.current()
 		if input.kind != tokenWord {
-			return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "p95 requires one input field")
+			return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", functionName+" requires one input field")
 		}
 		aggregate.Input = input.text
 		aggregate.InputRange = input.range_
 		p.advance()
 		if !p.match(tokenRightParen) {
-			return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' after the p95 input field")
+			return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' after the "+functionName+" input field")
 		}
 		end = p.previous().range_.End
 		aggregate.Range.End = end
-		aggregate.Alias = "p95(" + input.text + ")"
+		aggregate.Alias = functionName + "(" + input.text + ")"
 		aggregate.AliasRange = Range{Start: functionToken.range_.Start, End: end}
 	default:
 		return StatsAggregate{}, end, p.unsupportedStatsAggregate(
 			functionToken,
-			fmt.Sprintf("stats aggregate %q is not supported; count and p95 are available", functionToken.text),
+			fmt.Sprintf("stats aggregate %q is not supported; count, p95, sum, and avg are available", functionToken.text),
 		)
 	}
 
@@ -634,7 +642,8 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 }
 
 func supportedStatsAggregateName(name string) bool {
-	return strings.EqualFold(name, "count") || strings.EqualFold(name, "p95")
+	return strings.EqualFold(name, "count") || strings.EqualFold(name, "p95") ||
+		strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg")
 }
 
 func (p *parser) parseStatsGroupFields() ([]StatsGroupField, Position, error) {
@@ -685,7 +694,7 @@ func (p *parser) unsupportedStatsAggregate(tok token, message string) *Diagnosti
 		Code:        "SPL_UNSUPPORTED_STATS_AGGREGATE",
 		Message:     message,
 		Range:       tok.range_,
-		Suggestions: []string{"stats count", "stats count p95(field) AS p95_value BY group"},
+		Suggestions: []string{"stats count", "stats sum(field) avg(field) BY group", "stats p95(field) AS p95_value BY group"},
 	}
 }
 

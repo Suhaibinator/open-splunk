@@ -486,6 +486,31 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("stats sum and average nullable doubles through manager", func(t *testing.T) {
+		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-stats-sum-average",
+			`index=main | stats count sum(status) AS total avg(status) AS mean`,
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("sum/avg state = %v, failure=%#v", job.State, job.Failure)
+		}
+		if len(page.Schema.Columns) != 3 || page.Schema.Columns[0].Name != "count" ||
+			page.Schema.Columns[0].Kind != searchjobs.ValueKindUnsigned ||
+			page.Schema.Columns[1].Name != "total" || page.Schema.Columns[1].Kind != searchjobs.ValueKindDouble || !page.Schema.Columns[1].Nullable ||
+			page.Schema.Columns[2].Name != "mean" || page.Schema.Columns[2].Kind != searchjobs.ValueKindDouble || !page.Schema.Columns[2].Nullable {
+			t.Fatalf("sum/avg schema = %#v", page.Schema)
+		}
+		if len(page.Rows) != 1 {
+			t.Fatalf("sum/avg rows = %d, want 1", len(page.Rows))
+		}
+		count, countOK := page.Rows[0].Values[0].Unsigned()
+		total, totalOK := page.Rows[0].Values[1].Double()
+		mean, meanOK := page.Rows[0].Values[2].Double()
+		if !countOK || count != 1 || !totalOK || total != 200 || !meanOK || mean != 200 {
+			t.Fatalf("sum/avg row = %#v", page.Rows[0])
+		}
+	})
+
 	t.Run("rename dynamic field through manager", func(t *testing.T) {
 		defaultJob, defaultPage := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
 			"queryexec-rename-default-output", `index=main | rename path AS route`,

@@ -1176,6 +1176,109 @@ func TestCompileStatsP95DoesNotResurrectProjectedInput(t *testing.T) {
 	}
 }
 
+func TestCompileStatsSumAndAverageUseBoundedNumericArraysWithoutRowExpansion(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | stats count sum(amount) AS total avg(amount) AS mean BY service`)
+	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "total", "mean"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, required := range []string{
+		`dynamicElement("__os_fields"."amount", 'Array(Dynamic)')`,
+		`AS "__os_measure_values_0"`,
+		`sum(length("__os_measure_values_0"))`,
+		`sum(arraySum("__os_measure_values_0"))`,
+		`AS "total"`,
+		`AS "mean"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("sum/avg SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
+		t.Fatalf("sum/avg expanded event rows and would corrupt count:\n%s", compiled.SQL)
+	}
+	if strings.Count(compiled.SQL, `dynamicElement("__os_fields"."amount", 'Array(Dynamic)')`) != 1 ||
+		strings.Contains(compiled.SQL, `__os_measure_values_1`) {
+		t.Fatalf("sum/avg did not reuse one numeric conversion for the same input:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsNumericInputCachingPreservesPreAggregateArgumentOrder(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | stats sum(request.amount) avg(other.amount) sum(request.amount) AS repeated`)
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+	if len(compiled.Args) < 2 || compiled.Args[0] != "request.amount" || compiled.Args[1] != "other.amount" {
+		t.Fatalf("pre-aggregate args = %#v, want request.amount then other.amount before scan args", compiled.Args)
+	}
+	if strings.Count(compiled.SQL, `AS "__os_measure_values_0"`) != 1 ||
+		strings.Count(compiled.SQL, `AS "__os_measure_values_1"`) != 1 ||
+		strings.Contains(compiled.SQL, `__os_measure_values_2`) {
+		t.Fatalf("numeric input cache aliases are not stable:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsSumAndAveragePreserveComputedNonFiniteResults(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | stats sum(amount) AS total avg(amount) AS mean`)
+	for _, required := range []string{
+		`if(sum(length("__os_measure_values_0")) = 0, CAST(NULL AS Nullable(Float64)), toFloat64(sum(arraySum("__os_measure_values_0")))) AS "total"`,
+		`if(sum(length("__os_measure_values_0")) = 0, CAST(NULL AS Nullable(Float64)), toFloat64(sum(arraySum("__os_measure_values_0"))) / toFloat64(sum(length("__os_measure_values_0")))) AS "mean"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("sum/avg SQL missing non-finite-preserving expression %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, `ifNotFinite(toFloat64(sum(arraySum(`) {
+		t.Fatalf("computed non-finite sum/avg was converted to null:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsSumAndAverageAliasesCanReplaceConvenienceColumns(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | stats sum(amount) AS fields avg(amount) AS _raw`)
+	if !slices.Equal(compiled.OutputFields, []string{"fields", "_raw"}) ||
+		!strings.Contains(compiled.SQL, `AS "fields"`) || !strings.Contains(compiled.SQL, `AS "_raw"`) {
+		t.Fatalf("sum/avg aliases output=%v\nSQL: %s", compiled.OutputFields, compiled.SQL)
+	}
+}
+
+func TestCompileStatsSumAndAverageSupportTimeDownstreamAndRepeatedAggregation(t *testing.T) {
+	t.Parallel()
+
+	timeSum := compileSPL(t, `index=gradethis | stats sum(_time) AS total avg(_time) AS mean`)
+	if strings.Count(timeSum.SQL, `toFloat64(toUnixTimestamp64Nano("_time")) / 1000000000`) != 1 {
+		t.Fatalf("time sum/avg did not share one epoch conversion:\n%s", timeSum.SQL)
+	}
+
+	downstream := compileSPL(t, `index=gradethis | stats sum(amount) AS total BY service | where total>30`)
+	if !strings.Contains(downstream.SQL, `toFloat64("total") > toFloat64(CAST(? AS Int64))`) {
+		t.Fatalf("downstream sum predicate is not numeric:\n%s", downstream.SQL)
+	}
+
+	repeated := compileSPL(t, `index=gradethis | stats sum(amount) AS total BY service | stats avg(total) AS mean`)
+	if !slices.Equal(repeated.OutputFields, []string{"mean"}) || strings.Count(repeated.SQL, `sum(arraySum(`) != 2 {
+		t.Fatalf("repeated sum/avg output=%v\nSQL: %s", repeated.OutputFields, repeated.SQL)
+	}
+}
+
+func TestCompileStatsSumAndAverageDoNotResurrectProjectedInput(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | fields service | stats count sum(amount) AS total avg(amount) AS mean BY service`)
+	if strings.Count(compiled.SQL, `CAST([], 'Array(Float64)') AS "__os_measure_values_`) != 1 {
+		t.Fatalf("projected numeric inputs were not materialized as empty arrays:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, `fields.amount`) {
+		t.Fatalf("projected numeric input was resurrected:\n%s", compiled.SQL)
+	}
+}
+
 func TestCompileFixedNumericComparisonsPreserveOutOfRangeOrdering(t *testing.T) {
 	t.Parallel()
 

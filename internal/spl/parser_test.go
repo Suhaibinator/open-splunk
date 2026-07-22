@@ -645,6 +645,58 @@ func TestParseStatsP95DefaultOutputName(t *testing.T) {
 	}
 }
 
+func TestParseStatsSumAndAvgFieldsAliasesAndFunctionCase(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | stats SUM(amount) AvG(latency) AS mean BY service`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command := query.Commands[0].(*StatsCommand)
+	if len(command.Aggregates) != 2 {
+		t.Fatalf("aggregates = %#v", command.Aggregates)
+	}
+	sum := command.Aggregates[0]
+	if sum.Function != AggregateFunctionSum || sum.Input != "amount" || sum.Alias != "sum(amount)" {
+		t.Fatalf("sum aggregate = %#v", sum)
+	}
+	average := command.Aggregates[1]
+	if average.Function != AggregateFunctionAverage || average.Input != "latency" || average.Alias != "mean" {
+		t.Fatalf("avg aggregate = %#v", average)
+	}
+	if len(command.GroupBy) != 1 || command.GroupBy[0].Name != "service" {
+		t.Fatalf("group fields = %#v", command.GroupBy)
+	}
+}
+
+func TestParseStatsSumAndAvgRequireExactlyOneField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		code   string
+	}{
+		{name: "sum missing parentheses", source: `index=main | stats sum`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
+		{name: "avg missing parentheses", source: `index=main | stats avg`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
+		{name: "sum missing field", source: `index=main | stats sum()`, code: "SPL_EXPECTED_FIELD"},
+		{name: "avg multiple fields", source: `index=main | stats avg(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(test.source)
+			if err == nil {
+				t.Fatal("Parse succeeded, want error")
+			}
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != test.code {
+				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
+			}
+		})
+	}
+}
+
 func TestParseTimechartFixedSpanCountByField(t *testing.T) {
 	t.Parallel()
 
@@ -771,7 +823,7 @@ func TestUnsupportedStatsAggregatesAreSourceLocated(t *testing.T) {
 		line   int
 		column int
 	}{
-		{"other function", "index=main\n| stats sum(bytes)", "SPL_UNSUPPORTED_STATS_AGGREGATE", 2, 9},
+		{"other function", "index=main\n| stats min(bytes)", "SPL_UNSUPPORTED_STATS_AGGREGATE", 2, 9},
 		{"count argument", `* | stats count(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 16},
 		{"second aggregate", `* | stats count, dc(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 18},
 		{"space-separated aggregate", `* | stats count dc(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 17},

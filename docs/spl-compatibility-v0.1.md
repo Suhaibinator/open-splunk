@@ -185,15 +185,37 @@ the selected rows in reversed order, matching its pipeline semantics.
 | stats count
 | stats count AS events BY field1, field2
 | stats count p95(duration_ms) AS p95_ms BY path
+| stats sum(bytes) AS total_bytes avg(duration_ms) AS mean_ms BY path
 ```
 
-Argument-free `count` and `p95(field)` are supported, including multiple
-space- or comma-separated measures and `AS` aliases. The command is
-transforming: output contains only the `BY` fields followed by measures in
-source order. `count` includes every row in a retained group; `p95` ignores
-missing, null, nonnumeric, `NaN`, and infinite inputs and returns nullable
-`Float64`. Canonical timestamps are converted to Unix epoch seconds, and
-tagged decimal values are converted to finite `Float64` inputs.
+Argument-free `count` plus `p95(field)`, `sum(field)`, and `avg(field)` are
+supported, including multiple space- or comma-separated measures and `AS`
+aliases. Function names are case-insensitive; default output names use canonical
+lowercase spelling such as `sum(bytes)`. The command is transforming: output
+contains only the `BY` fields followed by measures in source order. `count`
+includes every input row in a retained group.
+
+The current downstream field grammar cannot reference a default aggregate name
+that contains parentheses. Use `AS` when a `sum`, `avg`, or `p95` result will be
+consumed by a later `search`, `where`, `sort`, `fields`, or `table` command.
+
+The numeric aggregates accept finite integers, floats, numeric strings, tagged
+decimals, and canonical timestamps converted to Unix epoch seconds. Missing,
+null, empty-string, Boolean, bytes, object, nonnumeric, `NaN`, and infinite
+inputs are ignored. For `sum` and `avg`, each finite numeric scalar in a
+top-level multivalue array contributes independently; nonnumeric elements and
+nested containers are ignored without expanding event rows. `p95` retains its
+scalar-only behavior and treats a multivalue input as ineligible.
+
+`sum`, `avg`, and `p95` return nullable `Float64`. A global aggregation over no
+rows still emits one row; an aggregate with no eligible numeric contribution is
+null, including `sum` rather than zero. Splunk's primary documentation specifies
+that nonnumeric values are ignored but does not define the empty `sum` result,
+so null is the explicit v0.1 compatibility choice. A grouped aggregation over no
+rows emits no groups. Finite inputs are filtered before aggregation, but a
+computed IEEE `NaN` or positive/negative infinity caused by Float64 arithmetic
+is preserved rather than changed to null. Projected-away inputs stay absent and
+cannot be recovered from hidden event columns.
 
 `p95` uses ClickHouse `quantileGKOrNull(100, 0.95)`, a bounded approximately
 1%-rank-error aggregate. Splunk's percentile implementation uses different
@@ -331,10 +353,10 @@ rex, spath, bin, bucket, chart,
 dedup, eventstats, streamstats
 ```
 
-All `stats` functions other than argument-free `count` and `p95(field)` are
-unsupported, including `count(field)`, `dc`, `values`, `list`, `sum`, `avg`,
-`min`, `max`, `earliest`, `latest`, other fixed percentiles, `perc<N>`,
-`upperperc`, and `exactperc`.
+All `stats` functions other than argument-free `count`, `p95(field)`,
+`sum(field)`, and `avg(field)` are unsupported, including `count(field)`, `dc`,
+`values`, `list`, `min`, `max`, `earliest`, `latest`, other fixed percentiles,
+`perc<N>`, `upperperc`, and `exactperc`.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,

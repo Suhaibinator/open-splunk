@@ -393,6 +393,8 @@ const (
 	AggregateFunctionInvalid AggregateFunction = iota
 	AggregateFunctionCount
 	AggregateFunctionP95
+	AggregateFunctionSum
+	AggregateFunctionAverage
 )
 
 // StatsAggregate is one source-located aggregate expression and its public
