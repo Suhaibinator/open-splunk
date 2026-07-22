@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -160,7 +161,7 @@ func TestBuildStatsCountReplacesEventSchema(t *testing.T) {
 	}
 }
 
-func TestBuildStatsRejectsAmbiguousOutputAndUnsupportedFollowingStage(t *testing.T) {
+func TestBuildStatsRejectsAmbiguousOutput(t *testing.T) {
 	t.Parallel()
 
 	_, err := Build(
@@ -168,12 +169,69 @@ func TestBuildStatsRejectsAmbiguousOutputAndUnsupportedFollowingStage(t *testing
 		testScope([]string{"gradethis"}, nil),
 	)
 	assertDiagnosticCode(t, err, "SPL_DUPLICATE_FIELD")
+}
 
-	_, err = Build(
-		mustParse(t, `index=gradethis | stats count by host | sort -count`),
+func TestBuildStatsSupportsDownstreamTransformingPipeline(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count AS events by level | search events>1 | sort -events | head 20 | table level, events`),
 		testScope([]string{"gradethis"}, nil),
 	)
-	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_AFTER_STATS")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"level", "events"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+	wantOperators := []any{&Scan{}, &Filter{}, &Aggregate{}, &Filter{}, &Sort{}, &Limit{}, &Project{}}
+	if len(logical.Operators) != len(wantOperators) {
+		t.Fatalf("operator count = %d, want %d", len(logical.Operators), len(wantOperators))
+	}
+	for index, want := range wantOperators {
+		if fmt.Sprintf("%T", logical.Operators[index]) != fmt.Sprintf("%T", want) {
+			t.Fatalf("operator %d = %T, want %T", index, logical.Operators[index], want)
+		}
+	}
+}
+
+func TestBuildPostStatsIndexAliasDoesNotChangeInputScope(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count AS index | search index=1`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.EffectiveIndexes, []string{"gradethis"}) || !slices.Equal(logical.OutputFields, []string{"index"}) {
+		t.Fatalf("scope/output = %v / %v", logical.EffectiveIndexes, logical.OutputFields)
+	}
+	if _, ok := logical.Operators[len(logical.Operators)-1].(*Filter); !ok {
+		t.Fatalf("last operator = %T, want post-stats Filter", logical.Operators[len(logical.Operators)-1])
+	}
+}
+
+func TestBuildFieldsUpdatesKnownTransformingSchema(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count AS events by level | fields events`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"events"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+
+	_, err = Build(
+		mustParse(t, `index=gradethis | stats count AS events by level | fields - level, events`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	assertDiagnosticCode(t, err, "SPL_EMPTY_PROJECTION")
 }
 
 func TestResolveFieldRejectsCompilerPrivateNamespace(t *testing.T) {

@@ -179,10 +179,11 @@ func TestMixedSchemaRetainsConcreteCellType(t *testing.T) {
 
 func TestResultKindForSPLRecognizesTransformingCommands(t *testing.T) {
 	tests := map[string]opensplunkv1.ResultSetKind{
-		"index=main":                        opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS,
-		"index=main | table level count":    opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-		"index=main | stats count by level": opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-		"index=main | unsupported":          opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED,
+		"index=main":                                                opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS,
+		"index=main | table level count":                            opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | stats count by level":                         opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | stats count by level | sort -count | head 20": opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | unsupported":                                  opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED,
 	}
 	for source, want := range tests {
 		if got := resultKindForSPL(source); got != want {

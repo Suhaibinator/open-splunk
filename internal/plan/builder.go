@@ -3,6 +3,7 @@ package plan
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -89,7 +90,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		result.Operators = append(result.Operators, &Filter{Expression: expression, Range: query.Search.SourceRange()})
 	}
 
-	for commandIndex, command := range query.Commands {
+	outputSchemaKnown := false
+	for _, command := range query.Commands {
 		switch command := command.(type) {
 		case *spl.SearchCommand:
 			expression, convertErr := convertExpression(command.Expression)
@@ -107,12 +109,24 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				mode = ProjectModeExclude
 			}
 			result.Operators = append(result.Operators, &Project{Mode: mode, Fields: fields, Range: command.Range})
+			if outputSchemaKnown {
+				result.OutputFields = projectKnownOutputFields(result.OutputFields, command.Fields, command.Exclude)
+				if len(result.OutputFields) == 0 {
+					return nil, &Diagnostic{
+						Code:        "SPL_EMPTY_PROJECTION",
+						Message:     "fields removes every column from the transforming result",
+						Range:       command.Range,
+						Suggestions: []string{"retain at least one stats or table output field"},
+					}
+				}
+			}
 		case *spl.TableCommand:
 			fields, fieldErr := convertFields(command.Fields, command.Range)
 			if fieldErr != nil {
 				return nil, fieldErr
 			}
 			result.OutputFields = append([]string(nil), command.Fields...)
+			outputSchemaKnown = true
 			result.Operators = append(result.Operators, &Project{Mode: ProjectModeTable, Fields: fields, Range: command.Range})
 		case *spl.SortCommand:
 			keys := make([]SortKey, 0, len(command.Fields))
@@ -131,15 +145,6 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		case *spl.LimitCommand:
 			result.Operators = append(result.Operators, &Limit{Count: command.Count, FromEnd: command.Name() == "tail", Range: command.Range})
 		case *spl.StatsCommand:
-			if commandIndex+1 != len(query.Commands) {
-				next := query.Commands[commandIndex+1]
-				return nil, &Diagnostic{
-					Code:        "SPL_UNSUPPORTED_AFTER_STATS",
-					Message:     fmt.Sprintf("command %q after stats is not supported in compatibility version 0.1", next.Name()),
-					Range:       next.SourceRange(),
-					Suggestions: []string{"make stats the final pipeline command"},
-				}
-			}
 			if command.Aggregate.Function != spl.AggregateFunctionCount {
 				return nil, &Diagnostic{
 					Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
@@ -169,6 +174,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 			outputFields = append(outputFields, command.Aggregate.Alias)
 			result.OutputFields = outputFields
+			outputSchemaKnown = true
 			result.Operators = append(result.Operators, &Aggregate{
 				GroupBy: groupBy,
 				Measures: []AggregateMeasure{{
@@ -186,6 +192,39 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		}
 	}
 	return result, nil
+}
+
+func projectKnownOutputFields(current, requested []string, exclude bool) []string {
+	requestedSet := make(map[string]struct{}, len(requested))
+	for _, name := range requested {
+		requestedSet[name] = struct{}{}
+	}
+	if exclude {
+		result := make([]string, 0, len(current))
+		for _, name := range current {
+			if _, remove := requestedSet[name]; !remove {
+				result = append(result, name)
+			}
+		}
+		return result
+	}
+
+	available := make(map[string]struct{}, len(current))
+	for _, name := range current {
+		available[name] = struct{}{}
+	}
+	result := make([]string, 0, len(requested)+2)
+	for _, name := range requested {
+		if _, ok := available[name]; ok {
+			result = append(result, name)
+		}
+	}
+	for _, implicit := range []string{"_time", "_raw"} {
+		if _, ok := available[implicit]; ok && !slices.Contains(result, implicit) {
+			result = append(result, implicit)
+		}
+	}
+	return result
 }
 
 func convertStatsGroupFields(fields []spl.StatsGroupField) ([]FieldRef, error) {
@@ -265,6 +304,9 @@ func positiveIndexReferences(query *spl.Query) []indexReference {
 		collect(query.Search)
 	}
 	for _, command := range query.Commands {
+		if _, transformed := command.(*spl.StatsCommand); transformed {
+			break
+		}
 		if search, ok := command.(*spl.SearchCommand); ok {
 			collect(search.Expression)
 		}

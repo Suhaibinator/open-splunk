@@ -68,7 +68,7 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 
 	aliasSequence := 0
 	remainingOperators := query.Operators[1:]
-	for operatorIndex, operator := range remainingOperators {
+	for _, operator := range remainingOperators {
 		aliasSequence++
 		alias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 		switch operator := operator.(type) {
@@ -88,9 +88,6 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 			args = append(args, projectionArgs...)
 			state = nextState
 		case *plan.Aggregate:
-			if operatorIndex+1 != len(remainingOperators) {
-				return CompiledQuery{}, errors.New("compile ClickHouse aggregate: Aggregate must be the final logical operator")
-			}
 			projection, predicates, groups, nextState, aggregateArgs, compileErr := compileAggregate(operator, state)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
@@ -177,15 +174,15 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 		return CompiledQuery{}, err
 	}
 	aliasSequence++
-	finalOrder := state.order
-	if len(finalOrder) == 0 {
-		finalOrder = stableCompiledSortKeys()
+	fragment = "SELECT " + strings.Join(finalProjection, ", ") + " FROM (" + fragment + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+	finalOrder := defaultCompiledOrder(state)
+	if len(finalOrder) > 0 {
+		order, orderErr := compileMaterializedOrder(finalOrder, false)
+		if orderErr != nil {
+			return CompiledQuery{}, orderErr
+		}
+		fragment += " ORDER BY " + order
 	}
-	order, err := compileMaterializedOrder(finalOrder, false)
-	if err != nil {
-		return CompiledQuery{}, err
-	}
-	fragment = "SELECT " + strings.Join(finalProjection, ", ") + " FROM (" + fragment + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence)) + " ORDER BY " + order
 	return CompiledQuery{SQL: fragment, Args: args, OutputFields: outputFields}, nil
 }
 
@@ -193,8 +190,10 @@ type compileState struct {
 	visible                 map[string]fieldState
 	publicOrder             []string
 	allowDynamic            bool
+	eventRows               bool
 	blocked                 map[string]struct{}
 	order                   []compiledSortKey
+	tieBreakers             []compiledSortKey
 	preAggregateColumns     []string
 	postAggregateColumns    []string
 	postAggregatePredicates []string
@@ -219,6 +218,9 @@ type fieldState struct {
 	descendantSQL  string
 	descendantArgs []any
 	kind           fieldKind
+	caseSensitive  bool
+	numberType     string
+	numericSort    bool
 }
 
 type compiledSortKey struct {
@@ -287,7 +289,11 @@ func compileScan(database, table string, scan *plan.Scan) (string, compileState,
 		visible:      visible,
 		publicOrder:  append([]string(nil), defaultPublicFields...),
 		allowDynamic: true,
+		eventRows:    true,
 		blocked:      make(map[string]struct{}),
+		tieBreakers: []compiledSortKey{
+			{valueSQL: quoteIdentifier(internalSortIDColumn), descending: true},
+		},
 	}
 	return "SELECT " + strings.Join(selects, ", ") + " FROM " + quoteIdentifier(database) + "." + quoteIdentifier(table) + " WHERE " + strings.Join(where, " AND "), state, args, nil
 }
@@ -321,7 +327,11 @@ func canonicalState(field string) fieldState {
 	// Canonical columns exist in the event schema even when their value is
 	// nullable. This preserves explicit-null comparisons; field=* separately
 	// requires a non-null value.
-	return fieldState{valueSQL: value, existsSQL: "1", kind: kind}
+	state := fieldState{valueSQL: value, existsSQL: "1", kind: kind, caseSensitive: field == "index"}
+	if field == "severity" {
+		state.numberType = "UInt8"
+	}
+	return state
 }
 
 func compileExpression(expression plan.Expression, state compileState) (string, []any, error) {
@@ -432,8 +442,16 @@ func equalityPredicate(expression *plan.ComparisonExpression, field fieldState, 
 	if expression.Value.Kind == plan.ValueKindString && strings.Contains(text, "*") {
 		return "match(toString(" + valueSQL + "), ?)"
 	}
-	if expression.Field.Name == "index" {
+	if field.caseSensitive {
 		return valueSQL + " = ?"
+	}
+	if field.numberType != "" {
+		switch expression.Value.Kind {
+		case plan.ValueKindInt64, plan.ValueKindUint64:
+			return "toInt256(" + valueSQL + ") = accurateCastOrNull(?, 'Int256')"
+		case plan.ValueKindFloat64:
+			return "toFloat64(" + valueSQL + ") = toFloat64OrNull(?)"
+		}
 	}
 	base := "lowerUTF8(toString(" + valueSQL + ")) = lowerUTF8(?)"
 	if field.kind != fieldKindDynamic {
@@ -455,6 +473,14 @@ func relationalPredicate(expression *plan.ComparisonExpression, field fieldState
 			return field.valueSQL + " " + operator + " parseDateTime64BestEffortOrNull(?, 9, 'UTC')", nil
 		}
 		return "(toFloat64(toUnixTimestamp64Nano(" + field.valueSQL + ")) / 1000000000) " + operator + " toFloat64OrNull(?)", nil
+	}
+	if field.numberType != "" {
+		switch expression.Value.Kind {
+		case plan.ValueKindInt64, plan.ValueKindUint64:
+			return "toInt256(" + field.valueSQL + ") " + operator + " accurateCastOrNull(?, 'Int256')", nil
+		case plan.ValueKindFloat64:
+			return "toFloat64(" + field.valueSQL + ") " + operator + " toFloat64OrNull(?)", nil
+		}
 	}
 	return "toFloat64OrNull(toString(" + field.valueSQL + ")) " + operator + " toFloat64OrNull(?)", nil
 }
@@ -556,8 +582,10 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 	next := compileState{
 		visible:      make(map[string]fieldState),
 		allowDynamic: operator.Mode == plan.ProjectModeExclude && state.allowDynamic,
+		eventRows:    state.eventRows,
 		blocked:      cloneSet(state.blocked),
 		order:        append([]compiledSortKey(nil), state.order...),
+		tieBreakers:  append([]compiledSortKey(nil), state.tieBreakers...),
 	}
 	var names []string
 	switch operator.Mode {
@@ -579,8 +607,10 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 			next.blocked[field.Name] = struct{}{}
 		}
 		for _, name := range state.publicOrder {
-			if name == "fields" {
-				continue // avoid leaking excluded dynamic members in the public object
+			if name == "fields" && state.eventRows {
+				if _, visible := state.visible[name]; !visible {
+					continue // avoid leaking excluded dynamic members in the public object
+				}
 			}
 			if _, remove := excluded[name]; !remove {
 				names = append(names, name)
@@ -608,24 +638,48 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 			return nil, compileState{}, nil, err
 		}
 		if !ok {
-			continue
+			if operator.Mode != plan.ProjectModeTable {
+				continue
+			}
+			// table declares an exact output schema. Preserve requested fields
+			// that a prior transforming stage removed as nullable missing columns
+			// instead of silently changing the result shape.
+			compiled = fieldState{
+				valueSQL:  "CAST(NULL AS Nullable(String))",
+				existsSQL: "0",
+				kind:      fieldKindString,
+			}
 		}
-		projection = append(projection, compiled.valueSQL+" AS "+quoteIdentifier(name))
+		publicName := quoteIdentifier(name)
+		if compiled.valueSQL == publicName {
+			projection = append(projection, publicName)
+		} else {
+			projection = append(projection, compiled.valueSQL+" AS "+publicName)
+		}
 		next.visible[name] = fieldState{
-			valueSQL: quoteIdentifier(name), dynamicTypeSQL: compiled.dynamicTypeSQL,
+			valueSQL: publicName, dynamicTypeSQL: compiled.dynamicTypeSQL,
 			existsSQL:      rewriteExistenceForProjection(compiled, name),
 			existsArgs:     append([]any(nil), compiled.existsArgs...),
 			descendantSQL:  compiled.descendantSQL,
 			descendantArgs: append([]any(nil), compiled.descendantArgs...),
 			kind:           compiled.kind,
+			caseSensitive:  compiled.caseSensitive,
+			numberType:     compiled.numberType,
+			numericSort:    compiled.numericSort,
 		}
 		next.publicOrder = append(next.publicOrder, name)
 	}
-	privateColumns := []string{
-		quoteIdentifier(internalFieldsColumn), quoteIdentifier(internalFieldNamesColumn),
-		quoteIdentifier(internalSortTimeColumn), quoteIdentifier(internalSortIDColumn),
+	privateColumns := make([]string, 0, 4+len(state.order)+len(state.tieBreakers))
+	if state.eventRows {
+		privateColumns = append(privateColumns,
+			quoteIdentifier(internalFieldsColumn), quoteIdentifier(internalFieldNamesColumn),
+			quoteIdentifier(internalSortTimeColumn), quoteIdentifier(internalSortIDColumn),
+		)
 	}
 	for _, key := range state.order {
+		privateColumns = append(privateColumns, key.valueSQL)
+	}
+	for _, key := range state.tieBreakers {
 		privateColumns = append(privateColumns, key.valueSQL)
 	}
 	for _, column := range privateColumns {
@@ -660,6 +714,7 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 	next = compileState{
 		visible:      make(map[string]fieldState, len(operator.GroupBy)+len(operator.Measures)),
 		allowDynamic: false,
+		eventRows:    false,
 		blocked:      make(map[string]struct{}),
 	}
 	seen := make(map[string]struct{}, len(operator.GroupBy)+len(operator.Measures))
@@ -687,6 +742,7 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		}
 		valueSQL := field.valueSQL
 		kind := field.kind
+		numericSort := field.numericSort
 		if kind == fieldKindDynamic {
 			// SPL fields are compared and grouped by their lexical value. Dynamic
 			// scalar storage types therefore intentionally converge on the same
@@ -703,6 +759,7 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			)
 			valueSQL = valueAlias
 			kind = fieldKindString
+			numericSort = true
 			dynamicGroupSupport = append(dynamicGroupSupport, supportAlias)
 		}
 		groupOutput := fmt.Sprintf("__os_group_%d", len(groups))
@@ -719,9 +776,15 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		predicates = append(predicates, presence)
 		args = append(args, presenceArgs...)
 		groups = append(groups, valueSQL)
-		next.visible[group.Name] = fieldState{valueSQL: quoteIdentifier(groupOutput), existsSQL: "1", kind: kind}
+		privateGroup := quoteIdentifier(groupOutput)
+		next.visible[group.Name] = fieldState{
+			valueSQL: privateGroup, existsSQL: "1", kind: kind,
+			caseSensitive: field.caseSensitive, numberType: field.numberType,
+			numericSort: numericSort,
+		}
 		next.publicOrder = append(next.publicOrder, group.Name)
-		next.order = append(next.order, compiledSortKey{valueSQL: quoteIdentifier(group.Name)})
+		next.order = append(next.order, compiledSortKey{valueSQL: privateGroup})
+		next.tieBreakers = append(next.tieBreakers, compiledSortKey{valueSQL: privateGroup})
 	}
 	for _, measure := range operator.Measures {
 		if _, duplicate := seen[measure.Output]; duplicate {
@@ -732,7 +795,10 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: unsupported function %d", measure.Function)
 		}
 		projection = append(projection, "count() AS "+quoteIdentifier(measure.Output))
-		next.visible[measure.Output] = fieldState{valueSQL: quoteIdentifier(measure.Output), existsSQL: "1", kind: fieldKindNumber}
+		next.visible[measure.Output] = fieldState{
+			valueSQL: quoteIdentifier(measure.Output), existsSQL: "1",
+			kind: fieldKindNumber, numberType: "UInt64",
+		}
 		next.publicOrder = append(next.publicOrder, measure.Output)
 		if len(next.order) == 0 {
 			next.order = append(next.order, compiledSortKey{valueSQL: quoteIdentifier(measure.Output)})
@@ -775,29 +841,40 @@ func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, 
 	if len(keys) == 0 {
 		return nil, nil, "", errors.New("compile ClickHouse sort: no keys")
 	}
-	materialized := make([]string, 0, len(keys)+1)
-	compiled := make([]compiledSortKey, 0, len(keys)+1)
+	materialized := make([]string, 0, len(keys)+len(state.tieBreakers))
+	compiled := make([]compiledSortKey, 0, len(keys)+len(state.tieBreakers))
 	for i, key := range keys {
 		field, ok, err := resolveCompiledField(key.Field, state)
 		if err != nil {
 			return nil, nil, "", err
 		}
 		if !ok {
-			return nil, nil, "", fmt.Errorf("compile ClickHouse sort: field %q is not available", key.Field.Name)
+			// SPL permits sorting by a field that is missing from every row. Use
+			// one typed NULL key and retain the pipeline's stable row identity;
+			// never resurrect event columns after a transforming command.
+			field = fieldState{
+				valueSQL:  "CAST(NULL AS Nullable(String))",
+				existsSQL: "0",
+				kind:      fieldKindString,
+			}
 		}
 		alias := fmt.Sprintf("__os_order_%d_%d", stage, i)
 		sortValue := field.valueSQL
-		if field.kind == fieldKindDynamic {
+		if field.kind == fieldKindDynamic || field.numericSort {
 			sortValue = dynamicSortValue(field.valueSQL)
 		}
 		materialized = append(materialized, sortValue+" AS "+quoteIdentifier(alias))
 		compiled = append(compiled, compiledSortKey{valueSQL: quoteIdentifier(alias), descending: key.Descending})
 	}
-	// A stable event ID tie-breaker makes result paging deterministic without
-	// changing the user's primary sort semantics.
-	tieAlias := fmt.Sprintf("__os_order_%d_tie", stage)
-	materialized = append(materialized, quoteIdentifier(internalSortIDColumn)+" AS "+quoteIdentifier(tieAlias))
-	compiled = append(compiled, compiledSortKey{valueSQL: quoteIdentifier(tieAlias), descending: true})
+	// Preserve a stable row identity without assuming the input still consists
+	// of events. Event pipelines use event_id; transforming pipelines use their
+	// unique grouping tuple, and a global aggregate needs no tie-breaker.
+	for index, tie := range state.tieBreakers {
+		tieAlias := fmt.Sprintf("__os_order_%d_tie_%d", stage, index)
+		materialized = append(materialized, tie.valueSQL+" AS "+quoteIdentifier(tieAlias))
+		tie.valueSQL = quoteIdentifier(tieAlias)
+		compiled = append(compiled, tie)
+	}
 	order, err := compileMaterializedOrder(compiled, false)
 	if err != nil {
 		return nil, nil, "", err
@@ -860,6 +937,16 @@ func stableCompiledSortKeys() []compiledSortKey {
 	}
 }
 
+func defaultCompiledOrder(state compileState) []compiledSortKey {
+	if len(state.order) > 0 {
+		return state.order
+	}
+	if state.eventRows {
+		return stableCompiledSortKeys()
+	}
+	return state.tieBreakers
+}
+
 func finalProjection(state compileState) ([]string, []string, error) {
 	projection := make([]string, 0, len(state.publicOrder))
 	output := make([]string, 0, len(state.publicOrder))
@@ -870,7 +957,7 @@ func finalProjection(state compileState) ([]string, []string, error) {
 		}
 		seen[name] = struct{}{}
 		field, visible := state.visible[name]
-		if name == "fields" && !visible {
+		if name == "fields" && !visible && state.eventRows {
 			projection = append(projection, quoteIdentifier(internalFieldsColumn)+" AS "+quoteIdentifier("fields"))
 			output = append(output, name)
 			continue
