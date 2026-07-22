@@ -112,6 +112,31 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	})
 
 	eventIndexTime := queryIntegrationInsertEvent(t, ctx, connection)
+	t.Run("extended event fields retain their types", func(t *testing.T) {
+		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-extended-values",
+			`index=main | table typed_bytes, typed_timestamp, typed_duration, typed_decimal`,
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("extended-value state = %v, failure=%#v", job.State, job.Failure)
+		}
+		if len(page.Rows) != 1 || len(page.Rows[0].Values) != 4 {
+			t.Fatalf("extended-value page = %#v", page)
+		}
+		if got, ok := page.Rows[0].Values[0].Bytes(); !ok || !bytes.Equal(got, []byte{0, 0xff}) {
+			t.Fatalf("bytes = %v, %v", got, ok)
+		}
+		wantTimestamp := eventIndexTime.Add(42 * time.Second)
+		if got, ok := page.Rows[0].Values[1].Time(); !ok || !got.Equal(wantTimestamp) || got.Location() != time.UTC {
+			t.Fatalf("timestamp = %v, %v", got, ok)
+		}
+		if got, ok := page.Rows[0].Values[2].Duration(); !ok || got != -(12*time.Second+345*time.Millisecond) {
+			t.Fatalf("duration = %v, %v", got, ok)
+		}
+		if got, ok := page.Rows[0].Values[3].Decimal(); !ok || got != "-123.4500e+2" {
+			t.Fatalf("decimal = %q, %v", got, ok)
+		}
+	})
 	t.Run("manager pipeline and stable page", func(t *testing.T) {
 		manager, err := searchjobs.New(searchjobs.Config{
 			Executor:        executor,
@@ -263,6 +288,35 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("eval percentile where pipeline through manager", func(t *testing.T) {
+		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-slow-route-pipeline",
+			`index=main | eval duration_ms=tonumber(replace(duration, "ms$", "")) | stats count p95(duration_ms) AS p95_ms BY path | where p95_ms>500`,
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("slow-route state = %v, failure=%#v", job.State, job.Failure)
+		}
+		if len(page.Schema.Columns) != 3 || page.Schema.Columns[0].Name != "path" ||
+			page.Schema.Columns[0].Kind != searchjobs.ValueKindString ||
+			page.Schema.Columns[1].Name != "count" || page.Schema.Columns[1].Kind != searchjobs.ValueKindUnsigned ||
+			page.Schema.Columns[2].Name != "p95_ms" || page.Schema.Columns[2].Kind != searchjobs.ValueKindDouble ||
+			!page.Schema.Columns[2].Nullable {
+			t.Fatalf("slow-route schema = %#v", page.Schema)
+		}
+		if len(page.Rows) != 1 {
+			t.Fatalf("slow-route rows = %d, want 1", len(page.Rows))
+		}
+		if path, ok := page.Rows[0].Values[0].String(); !ok || path != "/manager" {
+			t.Fatalf("slow-route path = %q, %v", path, ok)
+		}
+		if count, ok := page.Rows[0].Values[1].Unsigned(); !ok || count != 1 {
+			t.Fatalf("slow-route count = %d, %v", count, ok)
+		}
+		if percentile, ok := page.Rows[0].Values[2].Double(); !ok || percentile != 650 {
+			t.Fatalf("slow-route p95 = %v, %v", percentile, ok)
+		}
+	})
+
 	t.Run("stats aliases retain aggregate types", func(t *testing.T) {
 		for _, alias := range []string{"fields", "_raw"} {
 			job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime, "queryexec-stats-alias-"+alias, `index=main | stats count AS `+alias)
@@ -384,10 +438,18 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 	message := "manager integration"
 	document := clickhousedriver.NewJSON()
 	document.SetValueAtPath("status", clickhousedriver.NewDynamic("200"))
+	document.SetValueAtPath("path", clickhousedriver.NewDynamic("/manager"))
+	document.SetValueAtPath("duration", clickhousedriver.NewDynamic("650ms"))
+	document.SetValueAtPath("typed_bytes", queryIntegrationExtendedValue("bytes/v1", "AP8"))
+	document.SetValueAtPath("typed_timestamp", queryIntegrationExtendedValue("timestamp/v1", now.Add(42*time.Second).Format(time.RFC3339Nano)))
+	document.SetValueAtPath("typed_duration", queryIntegrationExtendedValue("duration/v1", "-12:-345000000"))
+	document.SetValueAtPath("typed_decimal", queryIntegrationExtendedValue("decimal/v1", "-123.4500e+2"))
 	if err := batch.Append(
 		"queryexec-event", "tenant", "main", now, now,
 		nil, uint8(1), "host", "source", "test", nil, uint8(1), nil, &message, []byte(message),
-		uint8(1), nil, nil, document, []string{"status"}, "collector", "batch", uint64(1),
+		uint8(1), nil, nil, document,
+		[]string{"duration", "path", "status", "typed_bytes", "typed_decimal", "typed_duration", "typed_timestamp"},
+		"collector", "batch", uint64(1),
 		now.Add(24*time.Hour), uint64(1),
 	); err != nil {
 		t.Fatal(err)
@@ -396,6 +458,13 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 		t.Fatal(err)
 	}
 	return now
+}
+
+func queryIntegrationExtendedValue(kind, value string) clickhousedriver.Dynamic {
+	return clickhousedriver.NewDynamicWithType(map[string]string{
+		extendedTypeKey:  kind,
+		extendedValueKey: value,
+	}, "Map(String, String)")
 }
 
 func queryIntegrationRunSearch(

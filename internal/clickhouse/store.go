@@ -938,7 +938,7 @@ func typedValueToNative(value *opensplunkv1.TypedValue) (any, error) {
 		}
 		return extendedValue("timestamp/v1", kind.TimestampValue.AsTime().UTC().Format(time.RFC3339Nano)), nil
 	case *opensplunkv1.TypedValue_DurationValue:
-		if kind.DurationValue == nil || kind.DurationValue.CheckValid() != nil {
+		if !ingest.DurationFitsResultRange(kind.DurationValue) {
 			return nil, errors.New("typed duration is invalid")
 		}
 		encoded := strconv.FormatInt(kind.DurationValue.GetSeconds(), 10) + ":" + strconv.FormatInt(int64(kind.DurationValue.GetNanos()), 10)

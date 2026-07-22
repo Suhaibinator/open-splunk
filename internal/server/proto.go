@@ -270,7 +270,7 @@ func valueToProto(ctx context.Context, value searchjobs.Value) (*opensplunkv1.Ty
 		case searchjobs.ValueVisitBytes:
 			converted = &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_BytesValue{BytesValue: token.BytesValue}}
 		case searchjobs.ValueVisitTime:
-			timestamp, err := validTimestamp(token.TimeValue)
+			timestamp, err := timestampToProto(token.TimeValue)
 			if err != nil {
 				return err
 			}
@@ -631,6 +631,13 @@ func validTimestamp(input time.Time) (*timestamppb.Timestamp, error) {
 	if input.IsZero() {
 		return nil, errors.New("required timestamp is zero")
 	}
+	return timestampToProto(input)
+}
+
+// timestampToProto accepts the protobuf minimum instant. In Go that instant is
+// time.Time's zero value, which is invalid only for required metadata fields,
+// not for a typed search-result cell.
+func timestampToProto(input time.Time) (*timestamppb.Timestamp, error) {
 	result := timestamppb.New(input.Round(0).UTC())
 	if err := result.CheckValid(); err != nil {
 		return nil, errors.New("timestamp is outside protobuf range")

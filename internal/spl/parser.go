@@ -4,22 +4,82 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/Suhaibinator/open-splunk/internal/splregex"
+)
+
+const (
+	maxSPLSourceBytes     = 16 << 10
+	maxSPLTokens          = 1024
+	maxPipelineCommands   = 64
+	maxEvalAssignments    = 64
+	maxStatsAggregates    = 16
+	maxStatsGroupFields   = 16
+	maxWhereComparisons   = 32
+	maxScalarNestingDepth = 32
 )
 
 // Parse parses the supported SPL compatibility tier. Unsupported commands and
 // syntax are rejected; a valid prefix is never returned as a partial query.
 func Parse(source string) (*Query, error) {
+	if len(source) > maxSPLSourceBytes {
+		start := sourcePositionAtOffset(source, maxSPLSourceBytes)
+		end := sourcePositionAtOffset(source, maxSPLSourceBytes+1)
+		return nil, &Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("search source exceeds %d UTF-8 bytes", maxSPLSourceBytes),
+			Range:   Range{Start: start, End: end},
+		}
+	}
 	tokens, err := lex(source)
 	if err != nil {
 		return nil, err
+	}
+	// Bound syntax before constructing recursive ASTs or nested SQL. The server
+	// also caps source bytes, but a short token stream can still create deeply
+	// nested expressions and quadratic compiler work.
+	if len(tokens)-1 > maxSPLTokens { // exclude EOF
+		return nil, &Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("search contains more than %d syntax tokens", maxSPLTokens),
+			Range:   tokens[maxSPLTokens].range_,
+		}
 	}
 	p := parser{tokens: tokens}
 	return p.parseQuery()
 }
 
+func sourcePositionAtOffset(source string, offset int) Position {
+	if offset > len(source) {
+		offset = len(source)
+	}
+	position := Position{Line: 1, Column: 1}
+	for position.Offset < offset {
+		r, width := utf8.DecodeRuneInString(source[position.Offset:])
+		if r == utf8.RuneError && width == 1 {
+			width = 1
+		}
+		if position.Offset+width > offset {
+			position.Offset = offset
+			return position
+		}
+		position.Offset += width
+		if r == '\n' {
+			position.Line++
+			position.Column = 1
+		} else {
+			position.Column++
+		}
+	}
+	return position
+}
+
 type parser struct {
-	tokens []token
-	index  int
+	tokens           []token
+	index            int
+	scalarDepth      int
+	whereComparisons int
 }
 
 func (p *parser) parseQuery() (*Query, error) {
@@ -37,6 +97,13 @@ func (p *parser) parseQuery() (*Query, error) {
 	stage := 0
 	for p.match(tokenPipe) {
 		stage++
+		if stage > maxPipelineCommands {
+			return nil, &Diagnostic{
+				Code:    "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf("search contains more than %d pipeline commands", maxPipelineCommands),
+				Range:   p.current().range_,
+			}
+		}
 		command, err := p.parseCommand(stage)
 		if err != nil {
 			return nil, err
@@ -66,6 +133,10 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 	switch name {
 	case "search":
 		return p.parseSearchCommand(nameToken)
+	case "where":
+		return p.parseWhereCommand(nameToken)
+	case "eval":
+		return p.parseEvalCommand(nameToken)
 	case "fields":
 		return p.parseFieldsCommand(nameToken)
 	case "table":
@@ -165,33 +236,43 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 	if p.atCommandEnd() {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "stats requires an aggregate function")
 	}
-	aggregateToken := p.current()
-	if aggregateToken.kind != tokenWord {
-		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "stats requires an aggregate function")
-	}
-	if !strings.EqualFold(aggregateToken.text, "count") {
-		return nil, p.unsupportedStatsAggregate(aggregateToken, fmt.Sprintf("stats aggregate %q is not supported; only count is available", aggregateToken.text))
-	}
-	p.advance()
 
-	aggregate := StatsAggregate{
-		Function:   AggregateFunctionCount,
-		Alias:      "count",
-		Range:      aggregateToken.range_,
-		AliasRange: aggregateToken.range_,
-	}
-	end := aggregateToken.range_.End
-	if p.isKeyword("AS") {
-		p.advance()
-		alias := p.current()
-		if alias.kind != tokenWord || p.isKeyword("BY") {
-			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected an output field name after AS")
+	aggregates := make([]StatsAggregate, 0, 4)
+	end := name.range_.End
+	for {
+		if len(aggregates) >= maxStatsAggregates {
+			return nil, &Diagnostic{
+				Code:    "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf("stats contains more than %d aggregate measures", maxStatsAggregates),
+				Range:   p.current().range_,
+			}
 		}
-		aggregate.Alias = alias.text
-		aggregate.AliasRange = alias.range_
-		aggregate.Range.End = alias.range_.End
-		end = alias.range_.End
-		p.advance()
+		aggregate, aggregateEnd, err := p.parseStatsAggregate()
+		if err != nil {
+			return nil, err
+		}
+		aggregates = append(aggregates, aggregate)
+		end = aggregateEnd
+		if p.isKeyword("BY") || p.atCommandEnd() {
+			break
+		}
+		if p.match(tokenComma) {
+			if p.atCommandEnd() || p.isKeyword("BY") {
+				return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "expected a stats aggregate after comma")
+			}
+			continue
+		}
+		if p.current().kind == tokenWord && (supportedStatsAggregateName(p.current().text) ||
+			(p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenLeftParen)) {
+			continue
+		}
+		current := p.current()
+		return nil, &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
+			Message:     fmt.Sprintf("unsupported stats syntax at %q; expected another supported aggregate, AS, or BY", current.text),
+			Range:       current.range_,
+			Suggestions: []string{"stats count", "stats count p95(field) AS p95_value BY group"},
+		}
 	}
 
 	var groupBy []StatsGroupField
@@ -203,23 +284,76 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 			return nil, err
 		}
 	}
-	if !p.atCommandEnd() {
-		current := p.current()
-		if current.kind == tokenLeftParen || current.kind == tokenComma {
-			return nil, p.unsupportedStatsAggregate(current, "only the argument-free count aggregate is supported")
-		}
-		return nil, &Diagnostic{
-			Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
-			Message:     fmt.Sprintf("unsupported stats syntax at %q; use AS for an alias and BY for grouping", current.text),
-			Range:       current.range_,
-			Suggestions: []string{"stats count", "stats count AS total BY field"},
-		}
-	}
 	return &StatsCommand{
-		Aggregate: aggregate,
-		GroupBy:   groupBy,
-		Range:     Range{Start: name.range_.Start, End: end},
+		Aggregates: aggregates,
+		GroupBy:    groupBy,
+		Range:      Range{Start: name.range_.Start, End: end},
 	}, nil
+}
+
+func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
+	functionToken := p.current()
+	if functionToken.kind != tokenWord {
+		return StatsAggregate{}, functionToken.range_.End, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "stats requires an aggregate function")
+	}
+	p.advance()
+	aggregate := StatsAggregate{Range: functionToken.range_, AliasRange: functionToken.range_}
+	end := functionToken.range_.End
+	switch strings.ToLower(functionToken.text) {
+	case "count":
+		aggregate.Function = AggregateFunctionCount
+		aggregate.Alias = "count"
+		if p.current().kind == tokenLeftParen {
+			return StatsAggregate{}, end, p.unsupportedStatsAggregate(p.current(), "count arguments are not supported; use argument-free count")
+		}
+	case "p95":
+		aggregate.Function = AggregateFunctionP95
+		if !p.match(tokenLeftParen) {
+			return StatsAggregate{}, end, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
+				Message:     "p95 requires one field argument in parentheses",
+				Range:       functionToken.range_,
+				Suggestions: []string{"p95(field)"},
+			}
+		}
+		input := p.current()
+		if input.kind != tokenWord {
+			return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "p95 requires one input field")
+		}
+		aggregate.Input = input.text
+		aggregate.InputRange = input.range_
+		p.advance()
+		if !p.match(tokenRightParen) {
+			return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' after the p95 input field")
+		}
+		end = p.previous().range_.End
+		aggregate.Range.End = end
+		aggregate.Alias = "p95(" + input.text + ")"
+		aggregate.AliasRange = Range{Start: functionToken.range_.Start, End: end}
+	default:
+		return StatsAggregate{}, end, p.unsupportedStatsAggregate(
+			functionToken,
+			fmt.Sprintf("stats aggregate %q is not supported; count and p95 are available", functionToken.text),
+		)
+	}
+
+	if p.isKeyword("AS") {
+		p.advance()
+		alias := p.current()
+		if alias.kind != tokenWord || p.isKeyword("BY") {
+			return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected an output field name after AS")
+		}
+		aggregate.Alias = alias.text
+		aggregate.AliasRange = alias.range_
+		aggregate.Range.End = alias.range_.End
+		end = alias.range_.End
+		p.advance()
+	}
+	return aggregate, end, nil
+}
+
+func supportedStatsAggregateName(name string) bool {
+	return strings.EqualFold(name, "count") || strings.EqualFold(name, "p95")
 }
 
 func (p *parser) parseStatsGroupFields() ([]StatsGroupField, Position, error) {
@@ -247,6 +381,13 @@ func (p *parser) parseStatsGroupFields() ([]StatsGroupField, Position, error) {
 				Suggestions: []string{"stats count AS total BY field"},
 			}
 		}
+		if len(fields) >= maxStatsGroupFields {
+			return nil, end, &Diagnostic{
+				Code:    "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf("stats BY contains more than %d grouping fields", maxStatsGroupFields),
+				Range:   tok.range_,
+			}
+		}
 		fields = append(fields, StatsGroupField{Name: tok.text, Range: tok.range_})
 		end = tok.range_.End
 		wantField = false
@@ -263,7 +404,7 @@ func (p *parser) unsupportedStatsAggregate(tok token, message string) *Diagnosti
 		Code:        "SPL_UNSUPPORTED_STATS_AGGREGATE",
 		Message:     message,
 		Range:       tok.range_,
-		Suggestions: []string{"stats count", "stats count AS total BY field"},
+		Suggestions: []string{"stats count", "stats count p95(field) AS p95_value BY group"},
 	}
 }
 
@@ -276,6 +417,91 @@ func (p *parser) parseSearchCommand(name token) (Command, error) {
 		return nil, err
 	}
 	return &SearchCommand{Expression: expression, Range: Range{Start: name.range_.Start, End: expression.SourceRange().End}}, nil
+}
+
+func (p *parser) parseWhereCommand(name token) (Command, error) {
+	if p.atCommandEnd() {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_EXPRESSION", "where requires a boolean expression")
+	}
+	expression, err := p.parseWhereExpression()
+	if err != nil {
+		return nil, err
+	}
+	if !p.atCommandEnd() {
+		return nil, &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_WHERE_EXPRESSION",
+			Message:     fmt.Sprintf("unsupported where syntax at %q; explicit AND or OR is required between comparisons", p.current().text),
+			Range:       p.current().range_,
+			Suggestions: []string{"where field=value AND other_field>0"},
+		}
+	}
+	return &WhereCommand{
+		Expression: expression,
+		Range:      Range{Start: name.range_.Start, End: expression.SourceRange().End},
+	}, nil
+}
+
+func (p *parser) parseEvalCommand(name token) (Command, error) {
+	command := &EvalCommand{}
+	end := name.range_.End
+	for {
+		if len(command.Assignments) >= maxEvalAssignments {
+			return nil, &Diagnostic{
+				Code:    "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf("eval contains more than %d assignments", maxEvalAssignments),
+				Range:   p.current().range_,
+			}
+		}
+		field := p.current()
+		if field.kind != tokenWord {
+			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "eval requires a destination field")
+		}
+		if classifyLiteral(field.text, false) != LiteralKindString || unsupportedScalarIdentifier(field.text) {
+			return nil, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message:     fmt.Sprintf("unsupported eval destination %q", field.text),
+				Range:       field.range_,
+				Suggestions: []string{"use an unquoted field name without arithmetic operators"},
+			}
+		}
+		p.advance()
+		if !p.match(tokenEqual) {
+			return nil, &Diagnostic{
+				Code:        "SPL_EXPECTED_EQUAL",
+				Message:     fmt.Sprintf("eval destination field %q must be followed by '='", field.text),
+				Range:       field.range_,
+				Suggestions: []string{"eval field=expression"},
+			}
+		}
+		expression, err := p.parseScalarExpression()
+		if err != nil {
+			return nil, err
+		}
+		assignment := EvalAssignment{
+			Field:      field.text,
+			FieldRange: field.range_,
+			Expression: expression,
+			Range:      Range{Start: field.range_.Start, End: expression.SourceRange().End},
+		}
+		command.Assignments = append(command.Assignments, assignment)
+		end = expression.SourceRange().End
+		if !p.match(tokenComma) {
+			break
+		}
+		if p.atCommandEnd() {
+			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected another eval destination field after comma")
+		}
+	}
+	if !p.atCommandEnd() {
+		return nil, &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+			Message:     fmt.Sprintf("unsupported eval syntax at %q", p.current().text),
+			Range:       p.current().range_,
+			Suggestions: []string{"eval field=expression"},
+		}
+	}
+	command.Range = Range{Start: name.range_.Start, End: end}
+	return command, nil
 }
 
 func (p *parser) parseFieldsCommand(name token) (Command, error) {
@@ -410,6 +636,245 @@ func (p *parser) parseLimitCommand(name string, nameToken token) (Command, error
 // parentheses, NOT, OR, AND. Adjacent operands imply AND.
 func (p *parser) parseSearchExpression() (Expr, error) {
 	return p.parseSearchAnd()
+}
+
+// parseWhereExpression implements expression-language precedence:
+// parentheses, NOT, AND, OR. Unlike search, adjacent operands do not imply
+// AND and a primary must be a scalar-to-scalar comparison.
+func (p *parser) parseWhereExpression() (WhereExpr, error) {
+	return p.parseWhereOr()
+}
+
+func (p *parser) parseWhereOr() (WhereExpr, error) {
+	left, err := p.parseWhereAnd()
+	if err != nil {
+		return nil, err
+	}
+	for p.isKeyword("OR") {
+		p.advance()
+		if !p.canStartWhereOperand() {
+			return nil, p.errorAtCurrent("SPL_EXPECTED_EXPRESSION", "expected an expression after OR")
+		}
+		right, parseErr := p.parseWhereAnd()
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		left = &WhereBoolExpr{Op: BoolOpOr, Left: left, Right: right, Range: Range{Start: left.SourceRange().Start, End: right.SourceRange().End}}
+	}
+	return left, nil
+}
+
+func (p *parser) parseWhereAnd() (WhereExpr, error) {
+	left, err := p.parseWhereUnary()
+	if err != nil {
+		return nil, err
+	}
+	for p.isKeyword("AND") {
+		p.advance()
+		if !p.canStartWhereOperand() {
+			return nil, p.errorAtCurrent("SPL_EXPECTED_EXPRESSION", "expected an expression after AND")
+		}
+		right, parseErr := p.parseWhereUnary()
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		left = &WhereBoolExpr{Op: BoolOpAnd, Left: left, Right: right, Range: Range{Start: left.SourceRange().Start, End: right.SourceRange().End}}
+	}
+	return left, nil
+}
+
+func (p *parser) parseWhereUnary() (WhereExpr, error) {
+	if p.isKeyword("NOT") {
+		start := p.current().range_.Start
+		p.advance()
+		if !p.canStartWhereOperand() {
+			return nil, p.errorAtCurrent("SPL_EXPECTED_EXPRESSION", "expected an expression after NOT")
+		}
+		operand, err := p.parseWhereUnary()
+		if err != nil {
+			return nil, err
+		}
+		return &WhereNotExpr{Operand: operand, Range: Range{Start: start, End: operand.SourceRange().End}}, nil
+	}
+	return p.parseWherePrimary()
+}
+
+func (p *parser) parseWherePrimary() (WhereExpr, error) {
+	if p.match(tokenLeftParen) {
+		start := p.previous().range_.Start
+		if p.current().kind == tokenRightParen {
+			return nil, p.errorAtCurrent("SPL_EXPECTED_EXPRESSION", "empty parenthesized where expression")
+		}
+		expression, err := p.parseWhereExpression()
+		if err != nil {
+			return nil, err
+		}
+		if !p.match(tokenRightParen) {
+			return nil, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' to close where expression")
+		}
+		setWhereExpressionRange(expression, Range{Start: start, End: p.previous().range_.End})
+		return expression, nil
+	}
+
+	left, err := p.parseScalarExpression()
+	if err != nil {
+		return nil, err
+	}
+	op, ok := comparisonOperator(p.current().kind)
+	if !ok {
+		if p.current().kind == tokenWord && unsupportedScalarIdentifier(p.current().text) {
+			return nil, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message:     fmt.Sprintf("unsupported where scalar operator %q", p.current().text),
+				Range:       p.current().range_,
+				Suggestions: []string{"use a supported comparison operator"},
+			}
+		}
+		return nil, &Diagnostic{
+			Code:        "SPL_EXPECTED_COMPARISON",
+			Message:     "where scalar expression must be followed by a comparison operator",
+			Range:       left.SourceRange(),
+			Suggestions: []string{"where field=value"},
+		}
+	}
+	p.advance()
+	right, err := p.parseScalarExpression()
+	if err != nil {
+		return nil, err
+	}
+	if p.whereComparisons >= maxWhereComparisons {
+		return nil, &Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("search contains more than %d where comparisons", maxWhereComparisons),
+			Range:   left.SourceRange(),
+		}
+	}
+	p.whereComparisons++
+	return &WhereComparisonExpr{
+		Left:  left,
+		Op:    op,
+		Right: right,
+		Range: Range{Start: left.SourceRange().Start, End: right.SourceRange().End},
+	}, nil
+}
+
+func (p *parser) parseScalarExpression() (ScalarExpr, error) {
+	if p.scalarDepth >= maxScalarNestingDepth {
+		return nil, &Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("scalar expression nesting exceeds %d levels", maxScalarNestingDepth),
+			Range:   p.current().range_,
+		}
+	}
+	p.scalarDepth++
+	defer func() { p.scalarDepth-- }()
+
+	tok := p.current()
+	if tok.kind == tokenString {
+		p.advance()
+		literal := Literal{Kind: LiteralKindString, Text: tok.text, Quoted: true, Range: tok.range_}
+		return &ScalarLiteralExpr{Value: literal, Range: tok.range_}, nil
+	}
+	if tok.kind != tokenWord || p.isKeyword("AND") || p.isKeyword("OR") || p.isKeyword("NOT") {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_SCALAR_EXPRESSION", "expected a field, literal, or supported function call")
+	}
+	p.advance()
+	if p.match(tokenLeftParen) {
+		return p.parseScalarCall(tok)
+	}
+	kind := classifyLiteral(tok.text, false)
+	if kind != LiteralKindString {
+		literal := Literal{Kind: kind, Text: tok.text, Range: tok.range_}
+		return &ScalarLiteralExpr{Value: literal, Range: tok.range_}, nil
+	}
+	if unsupportedScalarIdentifier(tok.text) {
+		return nil, &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+			Message:     fmt.Sprintf("unsupported unquoted scalar expression %q", tok.text),
+			Range:       tok.range_,
+			Suggestions: []string{"use a supported field, literal, or function call"},
+		}
+	}
+	return &ScalarFieldExpr{Field: tok.text, Range: tok.range_}, nil
+}
+
+func unsupportedScalarIdentifier(value string) bool {
+	return strings.ContainsAny(value, "+-*/%'")
+}
+
+func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
+	arguments := make([]ScalarExpr, 0, 3)
+	if p.current().kind != tokenRightParen {
+		for {
+			argument, err := p.parseScalarExpression()
+			if err != nil {
+				return nil, err
+			}
+			arguments = append(arguments, argument)
+			if !p.match(tokenComma) {
+				break
+			}
+			if p.current().kind == tokenRightParen {
+				return nil, p.errorAtCurrent("SPL_EXPECTED_SCALAR_EXPRESSION", "expected a function argument after comma")
+			}
+		}
+	}
+	if !p.match(tokenRightParen) {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' to close function call")
+	}
+	function := ScalarFunctionInvalid
+	switch strings.ToLower(name.text) {
+	case "tonumber":
+		function = ScalarFunctionToNumber
+		if len(arguments) != 1 {
+			return nil, &Diagnostic{Code: "SPL_INVALID_EVAL_ARITY", Message: "tonumber requires exactly one argument in compatibility version 0.1", Range: name.range_}
+		}
+	case "replace":
+		function = ScalarFunctionReplace
+		if len(arguments) != 3 {
+			return nil, &Diagnostic{Code: "SPL_INVALID_EVAL_ARITY", Message: "replace requires exactly three arguments", Range: name.range_}
+		}
+		for index := 1; index < 3; index++ {
+			literal, ok := arguments[index].(*ScalarLiteralExpr)
+			if !ok || literal.Value.Kind != LiteralKindString || !literal.Value.Quoted {
+				return nil, &Diagnostic{
+					Code:        "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message:     "replace regex and replacement arguments must be quoted string literals",
+					Range:       arguments[index].SourceRange(),
+					Suggestions: []string{`replace(field, "pattern", "replacement")`},
+				}
+			}
+		}
+		pattern := arguments[1].(*ScalarLiteralExpr)
+		if pattern.Value.Text == "" {
+			return nil, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_REGEX",
+				Message:     "replace does not support an empty regular expression in compatibility version 0.1",
+				Range:       pattern.Range,
+				Suggestions: []string{"use a non-empty RE2-compatible regular expression"},
+			}
+		}
+		if err := splregex.ValidateReplacePattern(pattern.Value.Text); err != nil {
+			return nil, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_REGEX",
+				Message:     "replace regular expression is outside the supported always-consuming RE2-compatible subset",
+				Range:       pattern.Range,
+				Suggestions: []string{"use an RE2-compatible regular expression"},
+			}
+		}
+	default:
+		return nil, &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_EVAL_FUNCTION",
+			Message:     fmt.Sprintf("eval function %q is not supported", name.text),
+			Range:       name.range_,
+			Suggestions: []string{"tonumber(value)", `replace(value, "pattern", "replacement")`},
+		}
+	}
+	return &ScalarCallExpr{
+		Function:  function,
+		Arguments: arguments,
+		Range:     Range{Start: name.range_.Start, End: p.previous().range_.End},
+	}, nil
 }
 
 func (p *parser) parseSearchAnd() (Expr, error) {
@@ -649,6 +1114,17 @@ func setExpressionRange(expression Expr, sourceRange Range) {
 	}
 }
 
+func setWhereExpressionRange(expression WhereExpr, sourceRange Range) {
+	switch expression := expression.(type) {
+	case *WhereBoolExpr:
+		expression.Range = sourceRange
+	case *WhereNotExpr:
+		expression.Range = sourceRange
+	case *WhereComparisonExpr:
+		expression.Range = sourceRange
+	}
+}
+
 func (p *parser) canStartSearchOperand() bool {
 	tok := p.current()
 	if tok.kind == tokenString || tok.kind == tokenLeftParen {
@@ -658,6 +1134,14 @@ func (p *parser) canStartSearchOperand() bool {
 		return false
 	}
 	return !p.isKeyword("AND") && !p.isKeyword("OR")
+}
+
+func (p *parser) canStartWhereOperand() bool {
+	tok := p.current()
+	if tok.kind == tokenLeftParen || tok.kind == tokenString {
+		return true
+	}
+	return tok.kind == tokenWord && !p.isKeyword("AND") && !p.isKeyword("OR")
 }
 
 func (p *parser) atCommandEnd() bool {

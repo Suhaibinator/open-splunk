@@ -14,10 +14,24 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var decimalPattern = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?$`)
+
+// DurationFitsResultRange reports whether a protobuf duration can round-trip
+// through the nanosecond-resolution time.Duration used by search result values.
+// Keeping this invariant at ingestion prevents an accepted durable event from
+// making a later table search fail during result conversion.
+func DurationFitsResultRange(value *durationpb.Duration) bool {
+	if value == nil || value.CheckValid() != nil {
+		return false
+	}
+	converted := value.AsDuration()
+	roundTrip := durationpb.New(converted)
+	return roundTrip.GetSeconds() == value.GetSeconds() && roundTrip.GetNanos() == value.GetNanos()
+}
 
 var canonicalDynamicFields = map[string]struct{}{
 	"_time":        {},
@@ -260,7 +274,7 @@ func (v *Validator) validateValue(value *opensplunkv1.TypedValue, path string, d
 			return invalidTypedValue(path, "invalid_timestamp")
 		}
 	case *opensplunkv1.TypedValue_DurationValue:
-		if kind.DurationValue == nil || kind.DurationValue.CheckValid() != nil {
+		if !DurationFitsResultRange(kind.DurationValue) {
 			return invalidTypedValue(path, "invalid_duration")
 		}
 	case *opensplunkv1.TypedValue_ListValue:

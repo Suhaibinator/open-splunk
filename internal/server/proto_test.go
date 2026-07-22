@@ -116,6 +116,20 @@ func TestValueToProtoRejectsInvalidUTF8(t *testing.T) {
 	}
 }
 
+func TestValueToProtoAcceptsProtobufMinimumTimestamp(t *testing.T) {
+	converted, err := valueToProto(context.Background(), searchjobs.TimeValue(time.Time{}))
+	if err != nil {
+		t.Fatalf("valueToProto(minimum timestamp): %v", err)
+	}
+	timestamp := converted.GetTimestampValue()
+	if timestamp == nil || timestamp.CheckValid() != nil || timestamp.GetSeconds() != -62_135_596_800 || timestamp.GetNanos() != 0 {
+		t.Fatalf("minimum timestamp = %#v", timestamp)
+	}
+	if _, err := validTimestamp(time.Time{}); err == nil {
+		t.Fatal("required metadata accepted a zero timestamp")
+	}
+}
+
 func TestValueToProtoCanonicalizesDecimalLexicalForm(t *testing.T) {
 	decimal, err := searchjobs.DecimalValue("+0012.3400E+002")
 	if err != nil {
@@ -184,7 +198,8 @@ func TestResultKindForSPLRecognizesTransformingCommands(t *testing.T) {
 		"index=main | stats count by level":                         opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
 		"index=main | stats count by level | sort -count | head 20": opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
 		"index=main | top limit=20 message":                         opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-		"index=main | unsupported":                                  opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED,
+		`index=main | eval duration_ms=tonumber(replace(duration, "ms$", "")) | stats count p95(duration_ms) AS p95_ms BY path | where p95_ms>500`: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | unsupported": opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED,
 	}
 	for source, want := range tests {
 		if got := resultKindForSPL(source); got != want {

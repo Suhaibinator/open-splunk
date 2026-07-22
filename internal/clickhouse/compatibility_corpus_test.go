@@ -58,7 +58,6 @@ func TestGradeThisCompatibilityCorpus(t *testing.T) {
 | eval duration_ms=tonumber(replace(duration, "ms$", ""))
 | stats count p95(duration_ms) as p95_ms by path
 | where p95_ms > 500`,
-			unsupportedCommand: "eval",
 		},
 		{
 			name:   "common messages",
@@ -82,7 +81,10 @@ func TestGradeThisCompatibilityCorpus(t *testing.T) {
 				t.Fatalf("Parse succeeded; remove the expected %q diagnostic and exercise compilation", test.unsupportedCommand)
 			}
 			diagnostic, ok := err.(*spl.Diagnostic)
-			if !ok || diagnostic.Code != "SPL_UNSUPPORTED_COMMAND" ||
+			if !ok {
+				t.Fatalf("diagnostic = %T, want *spl.Diagnostic", err)
+			}
+			if diagnostic.Code != "SPL_UNSUPPORTED_COMMAND" ||
 				!strings.Contains(diagnostic.Message, `unsupported command "`+test.unsupportedCommand+`"`) {
 				t.Fatalf("diagnostic = %#v, want unsupported %q", err, test.unsupportedCommand)
 			}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/splregex"
 )
 
 const (
@@ -16,6 +17,7 @@ const (
 	internalFieldNamesColumn = "__os_field_names"
 	internalSortTimeColumn   = "__os_sort_time"
 	internalSortIDColumn     = "__os_sort_event_id"
+	maxCompiledQueryBytes    = 256 << 10
 
 	// UnsupportedStatsByValueMarker is emitted by the scalar-only stats BY
 	// guard so the executor can classify the ClickHouse exception without
@@ -87,6 +89,32 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 			fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + alias
 			args = append(args, projectionArgs...)
 			state = nextState
+		case *plan.Extend:
+			if len(operator.Assignments) == 0 {
+				return CompiledQuery{}, errors.New("compile ClickHouse extend: no assignments")
+			}
+			for index, assignment := range operator.Assignments {
+				value, compileErr := compileScalarValue(assignment.Expression, state)
+				if compileErr != nil {
+					return CompiledQuery{}, compileErr
+				}
+				output := quoteIdentifier(assignment.Output.Name)
+				if _, replacing := state.visible[assignment.Output.Name]; replacing {
+					fragment = "SELECT * REPLACE (" + value.valueSQL + " AS " + output + ") FROM (" + fragment + ") AS " + alias
+				} else {
+					fragment = "SELECT *, " + value.valueSQL + " AS " + output + " FROM (" + fragment + ") AS " + alias
+				}
+				// Extend is emitted in an outer SELECT, so its placeholders occur
+				// before every placeholder already present in the nested fragment.
+				// Sequential assignments add another outer SELECT and therefore
+				// prepend in reverse nesting order as well.
+				args = prependArguments(value.valueArgs, args)
+				state = extendCompileState(state, assignment.Output, value)
+				if index+1 < len(operator.Assignments) {
+					aliasSequence++
+					alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+				}
+			}
 		case *plan.Aggregate:
 			projection, predicates, groups, nextState, aggregateArgs, compileErr := compileAggregate(operator, state)
 			if compileErr != nil {
@@ -190,7 +218,23 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 		}
 		fragment += " ORDER BY " + order
 	}
+	if len(fragment) > maxCompiledQueryBytes {
+		return CompiledQuery{}, &plan.Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("compiled query exceeds %d bytes", maxCompiledQueryBytes),
+			Range:   scan.Range,
+		}
+	}
 	return CompiledQuery{SQL: fragment, Args: args, OutputFields: outputFields}, nil
+}
+
+func prependArguments(prefix, existing []any) []any {
+	if len(prefix) == 0 {
+		return existing
+	}
+	result := make([]any, 0, len(prefix)+len(existing))
+	result = append(result, prefix...)
+	return append(result, existing...)
 }
 
 type compileState struct {
@@ -387,9 +431,443 @@ func compileExpression(expression plan.Expression, state compileState) (string, 
 			return "0", nil, nil
 		}
 		return compileComparison(expression, field)
+	case *plan.EvalComparisonExpression:
+		return compileEvalComparison(expression, state)
 	default:
 		return "", nil, fmt.Errorf("compile ClickHouse predicate: unsupported expression %T", expression)
 	}
+}
+
+type compiledScalar struct {
+	valueSQL       string
+	valueArgs      []any
+	existsSQL      string
+	existsArgs     []any
+	dynamicTypeSQL string
+	kind           fieldKind
+	numberType     string
+	literal        *plan.Value
+}
+
+func compileScalarValue(expression plan.ScalarExpression, state compileState) (compiledScalar, error) {
+	switch expression := expression.(type) {
+	case *plan.ScalarFieldExpression:
+		field, ok, err := resolveCompiledField(expression.Field, state)
+		if err != nil {
+			return compiledScalar{}, err
+		}
+		if !ok {
+			return compiledScalar{
+				valueSQL:  "CAST(NULL AS Nullable(String))",
+				existsSQL: "0",
+				kind:      fieldKindString,
+			}, nil
+		}
+		return compiledScalar{
+			valueSQL:       field.valueSQL,
+			existsSQL:      field.existsSQL,
+			existsArgs:     append([]any(nil), field.existsArgs...),
+			dynamicTypeSQL: field.dynamicTypeSQL,
+			kind:           field.kind,
+			numberType:     field.numberType,
+		}, nil
+	case *plan.ScalarLiteralExpression:
+		value := expression.Value
+		kind := fieldKindString
+		numberType := ""
+		valueSQL := ""
+		var argument any
+		switch value.Kind {
+		case plan.ValueKindString:
+			valueSQL, argument = "CAST(? AS String)", value.String
+		case plan.ValueKindInt64:
+			kind, numberType = fieldKindNumber, "Int64"
+			valueSQL, argument = "CAST(? AS Int64)", value.Int64
+		case plan.ValueKindUint64:
+			kind, numberType = fieldKindNumber, "UInt64"
+			valueSQL, argument = "CAST(? AS UInt64)", value.Uint64
+		case plan.ValueKindFloat64:
+			kind, numberType = fieldKindNumber, "Float64"
+			valueSQL, argument = "CAST(? AS Float64)", value.Float64
+		case plan.ValueKindBool:
+			kind = fieldKindBool
+			valueSQL, argument = "CAST(? AS Bool)", value.Bool
+		case plan.ValueKindNull:
+			return compiledScalar{
+				valueSQL:  "CAST(NULL AS Nullable(String))",
+				existsSQL: "1",
+				kind:      fieldKindInvalid,
+				literal:   &value,
+			}, nil
+		default:
+			return compiledScalar{}, errors.New("compile ClickHouse scalar expression: invalid literal")
+		}
+		return compiledScalar{
+			valueSQL:   valueSQL,
+			valueArgs:  []any{argument},
+			existsSQL:  "1",
+			kind:       kind,
+			numberType: numberType,
+			literal:    &value,
+		}, nil
+	case *plan.ScalarCallExpression:
+		switch expression.Function {
+		case plan.ScalarFunctionReplace:
+			return compileReplaceScalar(expression, state)
+		case plan.ScalarFunctionToNumber:
+			return compileToNumberScalar(expression, state)
+		default:
+			return compiledScalar{}, fmt.Errorf("compile ClickHouse scalar expression: unsupported function %d", expression.Function)
+		}
+	default:
+		return compiledScalar{}, fmt.Errorf("compile ClickHouse scalar expression: unsupported expression %T", expression)
+	}
+}
+
+func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileState) (compiledScalar, error) {
+	if len(expression.Arguments) != 3 {
+		return compiledScalar{}, errors.New("compile ClickHouse replace: expected three arguments")
+	}
+	input, err := compileScalarValue(expression.Arguments[0], state)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	pattern, ok := scalarStringLiteral(expression.Arguments[1])
+	if !ok {
+		return compiledScalar{}, errors.New("compile ClickHouse replace: regular expression must be a string literal")
+	}
+	if pattern == "" {
+		return compiledScalar{}, errors.New("compile ClickHouse replace: empty regular expressions are not supported")
+	}
+	if err := splregex.ValidateReplacePattern(pattern); err != nil {
+		return compiledScalar{}, fmt.Errorf("compile ClickHouse replace: regular expression is outside the supported RE2 subset: %w", err)
+	}
+	replacement, ok := scalarStringLiteral(expression.Arguments[2])
+	if !ok {
+		return compiledScalar{}, errors.New("compile ClickHouse replace: replacement must be a string literal")
+	}
+	inputSQL, inputArgs := compiledStringScalar(input)
+	return compiledScalar{
+		valueSQL:  "replaceRegexpAll(" + inputSQL + ", ?, ?)",
+		valueArgs: append(inputArgs, pattern, replacement),
+		existsSQL: "1",
+		kind:      fieldKindString,
+	}, nil
+}
+
+func compileToNumberScalar(expression *plan.ScalarCallExpression, state compileState) (compiledScalar, error) {
+	if len(expression.Arguments) != 1 {
+		return compiledScalar{}, errors.New("compile ClickHouse tonumber: expected one argument")
+	}
+	input, err := compileScalarValue(expression.Arguments[0], state)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	inputSQL, inputArgs := compiledStringScalar(input)
+	return compiledScalar{
+		valueSQL:   "ifNotFinite(toFloat64OrNull(" + inputSQL + "), CAST(NULL AS Nullable(Float64)))",
+		valueArgs:  inputArgs,
+		existsSQL:  "1",
+		kind:       fieldKindNumber,
+		numberType: "Float64",
+	}, nil
+}
+
+func compiledStringScalar(value compiledScalar) (string, []any) {
+	if value.kind == fieldKindDynamic {
+		return "if(" + value.existsSQL + ", dynamicElement(" + value.valueSQL + ", 'String'), CAST(NULL AS Nullable(String)))",
+			append(append([]any(nil), value.existsArgs...), value.valueArgs...)
+	}
+	if value.existsSQL != "" && value.existsSQL != "1" {
+		return "if(" + value.existsSQL + ", toString(" + value.valueSQL + "), CAST(NULL AS Nullable(String)))",
+			append(append([]any(nil), value.existsArgs...), value.valueArgs...)
+	}
+	if value.kind == fieldKindString {
+		return value.valueSQL, append([]any(nil), value.valueArgs...)
+	}
+	if value.kind == fieldKindTime {
+		return "toString(" + numericScalarSQL(value, false) + ")", append([]any(nil), value.valueArgs...)
+	}
+	return "toString(" + value.valueSQL + ")", append([]any(nil), value.valueArgs...)
+}
+
+func scalarStringLiteral(expression plan.ScalarExpression) (string, bool) {
+	literal, ok := expression.(*plan.ScalarLiteralExpression)
+	if !ok || literal.Value.Kind != plan.ValueKindString {
+		return "", false
+	}
+	return literal.Value.String, true
+}
+
+func extendCompileState(state compileState, output plan.FieldRef, value compiledScalar) compileState {
+	next := state
+	next.visible = make(map[string]fieldState, len(state.visible)+1)
+	for name, field := range state.visible {
+		next.visible[name] = field
+	}
+	next.publicOrder = append([]string(nil), state.publicOrder...)
+	next.blocked = cloneSet(state.blocked)
+	delete(next.blocked, output.Name)
+	if !slices.Contains(next.publicOrder, output.Name) {
+		next.publicOrder = append(next.publicOrder, output.Name)
+	}
+	field := fieldState{
+		valueSQL:  quoteIdentifier(output.Name),
+		existsSQL: "1",
+		kind:      value.kind,
+		// An eval output named index is calculated data, not the physical scan
+		// selector. It follows its expression type and ordinary comparison rules.
+		caseSensitive: false,
+		numberType:    value.numberType,
+	}
+	if value.kind == fieldKindDynamic {
+		field.dynamicTypeSQL = "dynamicType(" + field.valueSQL + ")"
+	}
+	next.visible[output.Name] = field
+	return next
+}
+
+func compileEvalComparison(expression *plan.EvalComparisonExpression, state compileState) (string, []any, error) {
+	left, err := compileComparisonScalar(expression.Left, state)
+	if err != nil {
+		return "", nil, err
+	}
+	right, err := compileComparisonScalar(expression.Right, state)
+	if err != nil {
+		return "", nil, err
+	}
+	operator, err := comparisonSQL(expression.Op)
+	if err != nil {
+		return "", nil, err
+	}
+	if expression.Op == plan.ComparisonOpNotEqual {
+		operator = "!="
+	}
+
+	core, coreArgs := evalComparisonCore(left, right, operator)
+	// Eval expressions use three-valued logic. Preserve null for a missing or
+	// null operand so NOT(NULL) remains NULL and the final WHERE rejects it;
+	// coercing the comparison to false here would make NOT missing=value match.
+	predicate := "if((" + left.existsSQL + ") AND (" + right.existsSQL + "), " + core + ", CAST(NULL AS Nullable(Bool)))"
+	args := make([]any, 0, len(left.existsArgs)+len(right.existsArgs)+len(coreArgs))
+	args = append(args, left.existsArgs...)
+	args = append(args, right.existsArgs...)
+	args = append(args, coreArgs...)
+	return predicate, args, nil
+}
+
+func compileComparisonScalar(expression plan.ScalarExpression, state compileState) (compiledScalar, error) {
+	return compileScalarValue(expression, state)
+}
+
+func evalComparisonCore(left, right compiledScalar, operator string) (string, []any) {
+	if comparisonOperatorIsOrdered(operator) && (left.kind == fieldKindBool || right.kind == fieldKindBool) {
+		return "CAST(NULL AS Nullable(Bool))", nil
+	}
+	if left.kind == fieldKindDynamic || right.kind == fieldKindDynamic {
+		return dynamicEvalComparisonCore(left, right, operator)
+	}
+	if !fixedScalarKindsComparable(left.kind, right.kind) {
+		return "CAST(NULL AS Nullable(Bool))", nil
+	}
+	leftSQL := left.valueSQL
+	rightSQL := right.valueSQL
+	if scalarUsesNumericComparison(left, right) {
+		integer := scalarIntegerComparison(left, right)
+		leftSQL = numericScalarSQL(left, integer)
+		rightSQL = numericScalarSQL(right, integer)
+	} else if left.kind == fieldKindString || right.kind == fieldKindString {
+		// Eval/where string comparisons are case-sensitive. This intentionally
+		// differs from the search command's lowerUTF8 comparison behavior.
+		leftSQL = stringScalarSQL(left)
+		rightSQL = stringScalarSQL(right)
+	}
+	return leftSQL + " " + operator + " " + rightSQL, comparisonValueArgs(left, right)
+}
+
+func fixedScalarKindsComparable(left, right fieldKind) bool {
+	if left == fieldKindInvalid || right == fieldKindInvalid {
+		return false
+	}
+	// Bool participates only in Bool-v-Bool equality comparisons. ClickHouse otherwise
+	// coerces Bool to 0/1, producing results that disagree with runtime-typed
+	// Dynamic comparisons and SPL eval's type semantics.
+	if (left == fieldKindBool) != (right == fieldKindBool) {
+		return false
+	}
+	return left == right || left == fieldKindNumber || right == fieldKindNumber ||
+		left == fieldKindString || right == fieldKindString
+}
+
+func dynamicEvalComparisonCore(left, right compiledScalar, operator string) (string, []any) {
+	const nullBool = "CAST(NULL AS Nullable(Bool))"
+	leftDynamic := left.kind == fieldKindDynamic
+	rightDynamic := right.kind == fieldKindDynamic
+	if leftDynamic && rightDynamic {
+		leftType := dynamicScalarTypeSQL(left)
+		rightType := dynamicScalarTypeSQL(right)
+		integerCondition := "(" + dynamicIntegerTypePredicate(leftType) + " AND " + dynamicIntegerTypePredicate(rightType) + ")"
+		numericCondition := "(" + dynamicNumericValuePredicate(left) + " AND " + dynamicNumericValuePredicate(right) + ")"
+		stringCondition := "(" + leftType + " = 'String' AND " + rightType + " = 'String')"
+		boolCondition := "(" + leftType + " = 'Bool' AND " + rightType + " = 'Bool')"
+		boolComparison := nullBool
+		argumentOccurrences := 3
+		if !comparisonOperatorIsOrdered(operator) {
+			boolComparison = dynamicBoolScalarSQL(left) + " " + operator + " " + dynamicBoolScalarSQL(right)
+			argumentOccurrences++
+		}
+		result := "multiIf(" +
+			integerCondition + ", " + scalarComparisonSQL(left, right, operator, true) + ", " +
+			numericCondition + ", " + scalarComparisonSQL(left, right, operator, false) + ", " +
+			stringCondition + ", " + dynamicStringScalarSQL(left) + " " + operator + " " + dynamicStringScalarSQL(right) + ", " +
+			boolCondition + ", " + boolComparison + ", " +
+			nullBool + ")"
+		args := make([]any, 0, argumentOccurrences*(len(left.valueArgs)+len(right.valueArgs)))
+		for range argumentOccurrences {
+			args = append(args, comparisonValueArgs(left, right)...)
+		}
+		return result, args
+	}
+
+	dynamic := left
+	fixed := right
+	if rightDynamic {
+		dynamic, fixed = right, left
+	}
+	typeSQL := dynamicScalarTypeSQL(dynamic)
+	comparison := func(dynamicSQL, fixedSQL string) string {
+		if leftDynamic {
+			return dynamicSQL + " " + operator + " " + fixedSQL
+		}
+		return fixedSQL + " " + operator + " " + dynamicSQL
+	}
+	switch fixed.kind {
+	case fieldKindNumber:
+		if fixedNumberTypeIsInteger(fixed.numberType) {
+			integer := comparison(numericScalarSQL(dynamic, true), numericScalarSQL(fixed, true))
+			floating := comparison(numericScalarSQL(dynamic, false), numericScalarSQL(fixed, false))
+			result := "multiIf(" + dynamicIntegerTypePredicate(typeSQL) + ", " + integer + ", " +
+				dynamicNumericValuePredicate(dynamic) + ", " + floating + ", " + nullBool + ")"
+			args := comparisonValueArgs(left, right)
+			return result, append(args, comparisonValueArgs(left, right)...)
+		}
+		return "if(" + dynamicNumericValuePredicate(dynamic) + ", " +
+			comparison(numericScalarSQL(dynamic, false), numericScalarSQL(fixed, false)) + ", " + nullBool + ")", comparisonValueArgs(left, right)
+	case fieldKindTime:
+		return "if(" + dynamicNumericValuePredicate(dynamic) + ", " +
+			comparison(numericScalarSQL(dynamic, false), numericScalarSQL(fixed, false)) + ", " + nullBool + ")", comparisonValueArgs(left, right)
+	case fieldKindString:
+		return "if(" + typeSQL + " = 'String', " +
+			comparison(dynamicStringScalarSQL(dynamic), stringScalarSQL(fixed)) + ", " + nullBool + ")", comparisonValueArgs(left, right)
+	case fieldKindBool:
+		return "if(" + typeSQL + " = 'Bool', " +
+			comparison(dynamicBoolScalarSQL(dynamic), fixed.valueSQL) + ", " + nullBool + ")", comparisonValueArgs(left, right)
+	default:
+		return nullBool, nil
+	}
+}
+
+func comparisonOperatorIsOrdered(operator string) bool {
+	return operator != "=" && operator != "!="
+}
+
+func comparisonValueArgs(left, right compiledScalar) []any {
+	args := make([]any, 0, len(left.valueArgs)+len(right.valueArgs))
+	args = append(args, left.valueArgs...)
+	return append(args, right.valueArgs...)
+}
+
+func scalarComparisonSQL(left, right compiledScalar, operator string, integer bool) string {
+	return numericScalarSQL(left, integer) + " " + operator + " " + numericScalarSQL(right, integer)
+}
+
+func dynamicScalarTypeSQL(value compiledScalar) string {
+	if value.dynamicTypeSQL != "" {
+		return value.dynamicTypeSQL
+	}
+	return "dynamicType(" + value.valueSQL + ")"
+}
+
+func dynamicIntegerTypePredicate(typeSQL string) string {
+	return typeSQL + " IN ('Int8', 'Int16', 'Int32', 'Int64', 'Int128', 'Int256', 'UInt8', 'UInt16', 'UInt32', 'UInt64', 'UInt128', 'UInt256')"
+}
+
+func dynamicNumericTypePredicate(typeSQL string) string {
+	return "(" + dynamicIntegerTypePredicate(typeSQL) + " OR startsWith(" + typeSQL + ", 'Float') OR startsWith(" + typeSQL + ", 'Decimal'))"
+}
+
+func dynamicNumericValuePredicate(value compiledScalar) string {
+	return "(" + dynamicNumericTypePredicate(dynamicScalarTypeSQL(value)) + " OR " + dynamicTaggedDecimalCondition(value) + ")"
+}
+
+func dynamicTaggedDecimalCondition(value compiledScalar) string {
+	typeSQL := dynamicScalarTypeSQL(value)
+	mapSQL := dynamicTaggedMapSQL(value)
+	typeKey := "concat(char(0), 'open_splunk_type')"
+	valueKey := "concat(char(0), 'open_splunk_value')"
+	return "(" + typeSQL + " = 'Map(String, String)'" +
+		" AND length(" + mapSQL + ") = 2" +
+		" AND mapContains(" + mapSQL + ", " + typeKey + ")" +
+		" AND mapContains(" + mapSQL + ", " + valueKey + ")" +
+		" AND " + mapSQL + "[" + typeKey + "] = 'decimal/v1')"
+}
+
+func dynamicTaggedMapSQL(value compiledScalar) string {
+	return "dynamicElement(" + value.valueSQL + ", 'Map(String, String)')"
+}
+
+func dynamicTaggedDecimalFloatSQL(value compiledScalar) string {
+	valueKey := "concat(char(0), 'open_splunk_value')"
+	return finiteFloatOrNullSQL(dynamicTaggedMapSQL(value) + "[" + valueKey + "]")
+}
+
+func dynamicStringScalarSQL(value compiledScalar) string {
+	return "dynamicElement(" + value.valueSQL + ", 'String')"
+}
+
+func dynamicBoolScalarSQL(value compiledScalar) string {
+	return "dynamicElement(" + value.valueSQL + ", 'Bool')"
+}
+
+func scalarUsesNumericComparison(left, right compiledScalar) bool {
+	return left.kind == fieldKindNumber || right.kind == fieldKindNumber
+}
+
+func scalarIntegerComparison(left, right compiledScalar) bool {
+	return fixedNumberTypeIsInteger(left.numberType) && fixedNumberTypeIsInteger(right.numberType)
+}
+
+func numericScalarSQL(value compiledScalar, integer bool) string {
+	if integer {
+		if fixedNumberTypeIsInteger(value.numberType) {
+			if value.literal != nil {
+				return "accurateCastOrNull(" + value.valueSQL + ", 'Int256')"
+			}
+			return "toInt256(" + value.valueSQL + ")"
+		}
+		return "accurateCastOrNull(toString(" + value.valueSQL + "), 'Int256')"
+	}
+	if value.kind == fieldKindTime {
+		return "(toFloat64(toUnixTimestamp64Nano(" + value.valueSQL + ")) / 1000000000)"
+	}
+	if value.kind == fieldKindDynamic {
+		return "if(" + dynamicTaggedDecimalCondition(value) + ", " + dynamicTaggedDecimalFloatSQL(value) +
+			", toFloat64OrNull(toString(" + value.valueSQL + ")))"
+	}
+	if value.kind == fieldKindNumber {
+		return "toFloat64(" + value.valueSQL + ")"
+	}
+	return "toFloat64OrNull(toString(" + value.valueSQL + "))"
+}
+
+func stringScalarSQL(value compiledScalar) string {
+	if value.literal != nil && value.literal.Kind == plan.ValueKindString {
+		return value.valueSQL
+	}
+	if value.kind == fieldKindDynamic {
+		return dynamicStringScalarSQL(value)
+	}
+	return "toString(" + value.valueSQL + ")"
 }
 
 func compileComparison(expression *plan.ComparisonExpression, field fieldState) (string, []any, error) {
@@ -422,10 +900,11 @@ func compileComparison(expression *plan.ComparisonExpression, field fieldState) 
 		return "", nil, err
 	}
 	var predicate string
+	argumentOccurrences := 1
 	if expression.Op == plan.ComparisonOpEqual || expression.Op == plan.ComparisonOpNotEqual {
-		predicate = equalityPredicate(expression, field, text)
+		predicate, argumentOccurrences = equalityPredicate(expression, field, text)
 	} else {
-		predicate, err = relationalPredicate(expression, field, operator)
+		predicate, argumentOccurrences, err = relationalPredicate(expression, field, operator)
 		if err != nil {
 			return "", nil, err
 		}
@@ -435,7 +914,9 @@ func compileComparison(expression *plan.ComparisonExpression, field fieldState) 
 		(expression.Op == plan.ComparisonOpEqual || expression.Op == plan.ComparisonOpNotEqual) {
 		argument = wildcardRegex(text, true)
 	}
-	args = append(args, argument)
+	for range argumentOccurrences {
+		args = append(args, argument)
+	}
 	if expression.Op == plan.ComparisonOpNotEqual {
 		// SPL field!=value excludes missing fields while treating a present null
 		// as unequal to a non-null value. ifNull collapses SQL's UNKNOWN here.
@@ -444,42 +925,91 @@ func compileComparison(expression *plan.ComparisonExpression, field fieldState) 
 	return "(" + exists + " AND ifNull(" + predicate + ", 0))", args, nil
 }
 
-func equalityPredicate(expression *plan.ComparisonExpression, field fieldState, text string) string {
+func equalityPredicate(expression *plan.ComparisonExpression, field fieldState, text string) (string, int) {
 	valueSQL := field.valueSQL
 	if expression.Value.Kind == plan.ValueKindString && strings.Contains(text, "*") {
-		return "match(toString(" + valueSQL + "), ?)"
+		return "match(toString(" + valueSQL + "), ?)", 1
 	}
 	if field.caseSensitive {
-		return valueSQL + " = ?"
-	}
-	if left, right, ok := fixedNumberComparisonOperands(field, expression.Value.Kind); ok {
-		return left + " = " + right
-	}
-	base := "lowerUTF8(toString(" + valueSQL + ")) = lowerUTF8(?)"
-	if field.kind != fieldKindDynamic {
-		return base
-	}
-	guard := dynamicLiteralGuard(dynamicTypeExpression(field), expression.Value.Kind)
-	if expression.Value.Kind == plan.ValueKindFloat64 {
-		base = "toFloat64OrNull(toString(" + valueSQL + ")) = toFloat64OrNull(?)"
-	}
-	return "(" + guard + " AND " + base + ")"
-}
-
-func relationalPredicate(expression *plan.ComparisonExpression, field fieldState, operator string) (string, error) {
-	if expression.Value.Kind == plan.ValueKindBool {
-		return "", errors.New("compile ClickHouse predicate: booleans do not support ordered comparison")
+		return valueSQL + " = ?", 1
 	}
 	if field.kind == fieldKindTime {
 		if expression.Value.Kind == plan.ValueKindString {
-			return field.valueSQL + " " + operator + " parseDateTime64BestEffortOrNull(?, 9, 'UTC')", nil
+			return valueSQL + " = parseDateTime64BestEffortOrNull(?, 9, 'UTC')", 1
 		}
-		return "(toFloat64(toUnixTimestamp64Nano(" + field.valueSQL + ")) / 1000000000) " + operator + " toFloat64OrNull(?)", nil
+		return "(toFloat64(toUnixTimestamp64Nano(" + valueSQL + ")) / 1000000000) = toFloat64OrNull(?)", 1
 	}
 	if left, right, ok := fixedNumberComparisonOperands(field, expression.Value.Kind); ok {
-		return left + " " + operator + " " + right, nil
+		return left + " = " + right, 1
 	}
-	return "toFloat64OrNull(toString(" + field.valueSQL + ")) " + operator + " toFloat64OrNull(?)", nil
+	base := "lowerUTF8(toString(" + valueSQL + ")) = lowerUTF8(?)"
+	if field.kind != fieldKindDynamic {
+		return base, 1
+	}
+	dynamic := compiledScalarFromField(field)
+	typeSQL := dynamicScalarTypeSQL(dynamic)
+	guard := dynamicLiteralGuard(typeSQL, expression.Value.Kind)
+	if expression.Value.Kind == plan.ValueKindInt64 || expression.Value.Kind == plan.ValueKindUint64 {
+		exact := "accurateCastOrNull(toString(" + valueSQL + "), 'Int256') = accurateCastOrNull(?, 'Int256')"
+		decimal := dynamicTaggedDecimalFloatSQL(dynamic) + " = toFloat64OrNull(?)"
+		return "multiIf(" + dynamicIntegerTypePredicate(typeSQL) + ", " + exact + ", " +
+			dynamicTaggedDecimalCondition(dynamic) + ", " + decimal + ", 0)", 2
+	} else if expression.Value.Kind == plan.ValueKindFloat64 {
+		guard = "(" + guard + " OR " + dynamicTaggedDecimalCondition(dynamic) + ")"
+		base = numericScalarSQL(dynamic, false) + " = toFloat64OrNull(?)"
+	}
+	return "(" + guard + " AND " + base + ")", 1
+}
+
+func relationalPredicate(expression *plan.ComparisonExpression, field fieldState, operator string) (string, int, error) {
+	if expression.Value.Kind == plan.ValueKindBool {
+		return "", 0, errors.New("compile ClickHouse predicate: booleans do not support ordered comparison")
+	}
+	if field.kind == fieldKindTime {
+		if expression.Value.Kind == plan.ValueKindString {
+			return field.valueSQL + " " + operator + " parseDateTime64BestEffortOrNull(?, 9, 'UTC')", 1, nil
+		}
+		return "(toFloat64(toUnixTimestamp64Nano(" + field.valueSQL + ")) / 1000000000) " + operator + " toFloat64OrNull(?)", 1, nil
+	}
+	if expression.Value.Kind == plan.ValueKindString {
+		switch field.kind {
+		case fieldKindString:
+			if field.caseSensitive {
+				return field.valueSQL + " " + operator + " ?", 1, nil
+			}
+			return "lowerUTF8(toString(" + field.valueSQL + ")) " + operator + " lowerUTF8(?)", 1, nil
+		case fieldKindDynamic:
+			typeSQL := dynamicTypeExpression(field)
+			valueSQL := "dynamicElement(" + field.valueSQL + ", 'String')"
+			comparison := "lowerUTF8(" + valueSQL + ") " + operator + " lowerUTF8(?)"
+			return "(" + typeSQL + " = 'String' AND " + comparison + ")", 1, nil
+		}
+	}
+	if left, right, ok := fixedNumberComparisonOperands(field, expression.Value.Kind); ok {
+		return left + " " + operator + " " + right, 1, nil
+	}
+	if field.kind == fieldKindDynamic &&
+		(expression.Value.Kind == plan.ValueKindInt64 || expression.Value.Kind == plan.ValueKindUint64) {
+		typeSQL := dynamicTypeExpression(field)
+		exact := "accurateCastOrNull(toString(" + field.valueSQL + "), 'Int256') " + operator + " accurateCastOrNull(?, 'Int256')"
+		fallback := numericScalarSQL(compiledScalarFromField(field), false) + " " + operator + " toFloat64OrNull(?)"
+		return "multiIf(" + dynamicIntegerTypePredicate(typeSQL) + ", " + exact + ", " + fallback + ")", 2, nil
+	}
+	if field.kind == fieldKindDynamic {
+		return numericScalarSQL(compiledScalarFromField(field), false) + " " + operator + " toFloat64OrNull(?)", 1, nil
+	}
+	return "toFloat64OrNull(toString(" + field.valueSQL + ")) " + operator + " toFloat64OrNull(?)", 1, nil
+}
+
+func compiledScalarFromField(field fieldState) compiledScalar {
+	return compiledScalar{
+		valueSQL:       field.valueSQL,
+		existsSQL:      field.existsSQL,
+		existsArgs:     append([]any(nil), field.existsArgs...),
+		dynamicTypeSQL: field.dynamicTypeSQL,
+		kind:           field.kind,
+		numberType:     field.numberType,
+	}
 }
 
 func fixedNumberComparisonOperands(field fieldState, literalKind plan.ValueKind) (left, right string, ok bool) {
@@ -805,14 +1335,30 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: output field %q is duplicated", measure.Output)
 		}
 		seen[measure.Output] = struct{}{}
-		if measure.Function != plan.AggregateFunctionCountRows {
+		output := quoteIdentifier(measure.Output)
+		measureState := fieldState{valueSQL: output, existsSQL: "1", kind: fieldKindNumber}
+		switch measure.Function {
+		case plan.AggregateFunctionCountRows:
+			projection = append(projection, "count() AS "+output)
+			measureState.numberType = "UInt64"
+		case plan.AggregateFunctionPercentile:
+			if measure.Percentile != 0.95 {
+				return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: unsupported percentile %g", measure.Percentile)
+			}
+			input, ok, resolveErr := resolveCompiledField(measure.Input, state)
+			if resolveErr != nil {
+				return nil, nil, nil, compileState{}, nil, resolveErr
+			}
+			inputSQL := "CAST(NULL AS Nullable(Float64))"
+			if ok {
+				inputSQL = percentileInputSQL(input)
+			}
+			projection = append(projection, "quantileGKOrNull(100, 0.95)("+inputSQL+") AS "+output)
+			measureState.numberType = "Float64"
+		default:
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: unsupported function %d", measure.Function)
 		}
-		projection = append(projection, "count() AS "+quoteIdentifier(measure.Output))
-		next.visible[measure.Output] = fieldState{
-			valueSQL: quoteIdentifier(measure.Output), existsSQL: "1",
-			kind: fieldKindNumber, numberType: "UInt64",
-		}
+		next.visible[measure.Output] = measureState
 		next.publicOrder = append(next.publicOrder, measure.Output)
 		if len(next.order) == 0 {
 			next.order = append(next.order, compiledSortKey{valueSQL: quoteIdentifier(measure.Output)})
@@ -831,6 +1377,38 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		}
 	}
 	return projection, predicates, groups, next, args, nil
+}
+
+func percentileInputSQL(field fieldState) string {
+	nullFloat := "CAST(NULL AS Nullable(Float64))"
+	switch field.kind {
+	case fieldKindNumber:
+		return "ifNotFinite(toFloat64(" + field.valueSQL + "), " + nullFloat + ")"
+	case fieldKindTime:
+		return "ifNotFinite(toFloat64(toUnixTimestamp64Nano(" + field.valueSQL + ")) / 1000000000, " + nullFloat + ")"
+	case fieldKindDynamic:
+		typeSQL := dynamicTypeExpression(field)
+		numericOrString := "(" + typeSQL + " = 'String' OR " + dynamicNumericTypePredicate(typeSQL) + ")"
+		converted := finiteFloatOrNullSQL("toString(" + field.valueSQL + ")")
+		mapSQL := "dynamicElement(" + field.valueSQL + ", 'Map(String, String)')"
+		typeKey := "concat(char(0), 'open_splunk_type')"
+		valueKey := "concat(char(0), 'open_splunk_value')"
+		decimalTag := "(" + typeSQL + " = 'Map(String, String)'" +
+			" AND length(" + mapSQL + ") = 2" +
+			" AND mapContains(" + mapSQL + ", " + typeKey + ")" +
+			" AND mapContains(" + mapSQL + ", " + valueKey + ")" +
+			" AND " + mapSQL + "[" + typeKey + "] = 'decimal/v1')"
+		decimal := finiteFloatOrNullSQL(mapSQL + "[" + valueKey + "]")
+		return "multiIf(" + numericOrString + ", " + converted + ", " + decimalTag + ", " + decimal + ", " + nullFloat + ")"
+	case fieldKindString:
+		return finiteFloatOrNullSQL(field.valueSQL)
+	default:
+		return nullFloat
+	}
+}
+
+func finiteFloatOrNullSQL(valueSQL string) string {
+	return "ifNotFinite(toFloat64OrNull(" + valueSQL + "), CAST(NULL AS Nullable(Float64)))"
 }
 
 func statsByScalarExpressions(field fieldState) (supported, lexical string) {
@@ -916,7 +1494,7 @@ func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, 
 		switch key.Mode {
 		case plan.SortValueModeAuto:
 			if field.kind == fieldKindDynamic || field.numericSort {
-				sortValue = dynamicSortValue(field.valueSQL)
+				sortValue = dynamicSortValue(field.valueSQL, field.kind == fieldKindDynamic)
 			}
 		case plan.SortValueModeLexical:
 			sortValue = "toString(" + field.valueSQL + ")"
@@ -945,15 +1523,28 @@ func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, 
 	return materialized, compiled, order, nil
 }
 
-func dynamicSortValue(valueSQL string) string {
+func dynamicSortValue(valueSQL string, dynamicValue bool) string {
 	text := "toString(" + valueSQL + ")"
-	number := "toFloat64OrNull(" + text + ")"
+	number := finiteFloatOrNullSQL(text)
+	if dynamicValue {
+		dynamic := compiledScalar{
+			valueSQL:       valueSQL,
+			dynamicTypeSQL: "dynamicType(" + valueSQL + ")",
+			kind:           fieldKindDynamic,
+		}
+		number = "ifNotFinite(" + numericScalarSQL(dynamic, false) + ", CAST(NULL AS Nullable(Float64)))"
+	}
+	integer := "accurateCastOrNull(" + text + ", 'Int256')"
 	// Dynamic itself is intentionally forbidden in ClickHouse ORDER BY. A
 	// fixed tuple also gives SPL-like numeric ordering for numeric values and
-	// strings, then puts nonnumeric scalars before missing/explicit null.
+	// strings. The Int256 tie-break preserves adjacent integral values that
+	// collapse to the same Float64 beyond 2^53. Nonnumeric scalars sort before
+	// missing/explicit null.
 	return "tuple(" +
 		"if(isNull(" + valueSQL + "), toUInt8(2), if(isNotNull(" + number + "), toUInt8(0), toUInt8(1))), " +
 		"ifNull(" + number + ", 0.), " +
+		"if(isNotNull(" + integer + "), toUInt8(0), toUInt8(1)), " +
+		"ifNull(" + integer + ", toInt256(0)), " +
 		"ifNull(" + text + ", '')" +
 		")"
 }
@@ -1047,7 +1638,27 @@ func aliasPhysical(physical, alias string) string {
 }
 
 func quoteIdentifier(identifier string) string {
-	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+	const hexadecimal = "0123456789ABCDEF"
+	var quoted strings.Builder
+	quoted.Grow(len(identifier) + 2)
+	quoted.WriteByte('"')
+	for index := 0; index < len(identifier); index++ {
+		value := identifier[index]
+		switch value {
+		case '\\', '"', '?', '$', '{', '}':
+			// clickhouse-go's legacy binder recognizes ?, $N, and {name:type}
+			// without parsing SQL quoting. ClickHouse decodes hexadecimal escapes
+			// inside quoted identifiers, so keep bind markers out of the client-side
+			// query while preserving the exact server-visible column name.
+			quoted.WriteString(`\x`)
+			quoted.WriteByte(hexadecimal[value>>4])
+			quoted.WriteByte(hexadecimal[value&0x0f])
+		default:
+			quoted.WriteByte(value)
+		}
+	}
+	quoted.WriteByte('"')
+	return quoted.String()
 }
 
 func normalizedDynamicPath(path []string) string {

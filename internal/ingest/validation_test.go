@@ -10,6 +10,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -121,6 +122,39 @@ func TestTypedObjectValidation(t *testing.T) {
 			assertEventRejectionCode(t, rejection, tt.code)
 		})
 	}
+}
+
+func TestDurationFitsResultRangeBoundaries(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []*durationpb.Duration{
+		durationpb.New(time.Duration(math.MaxInt64)),
+		durationpb.New(time.Duration(math.MinInt64)),
+	} {
+		if !DurationFitsResultRange(value) {
+			t.Fatalf("result-range boundary rejected: %#v", value)
+		}
+	}
+	for _, value := range []*durationpb.Duration{
+		{Seconds: 9_223_372_036, Nanos: 854_775_808},
+		{Seconds: -9_223_372_036, Nanos: -854_775_809},
+		{Seconds: 9_223_372_037},
+	} {
+		if DurationFitsResultRange(value) {
+			t.Fatalf("out-of-range duration accepted: %#v", value)
+		}
+	}
+
+	v := newTestValidator(t, DefaultLimits())
+	event := validTestEvent("event-duration", "main")
+	event.Fields = object(&opensplunkv1.TypedObjectField{
+		Name: "too_long",
+		Value: &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DurationValue{
+			DurationValue: &durationpb.Duration{Seconds: 9_223_372_037},
+		}},
+	})
+	_, rejection := v.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
+	assertEventRejectionCode(t, rejection, opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID)
 }
 
 func TestValidateAndNormalizeEventRedactsRecursivelyAndSanitizesRawJSON(t *testing.T) {

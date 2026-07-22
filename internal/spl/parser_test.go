@@ -1,6 +1,7 @@
 package spl
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -151,6 +152,280 @@ func TestPipelineSearchUsesSearchPrecedence(t *testing.T) {
 	}
 }
 
+func TestParseWhereUsesExpressionPrecedence(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=gradethis | where status=500 OR duration_ms>500 AND level="ERROR"`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command, ok := query.Commands[0].(*WhereCommand)
+	if !ok {
+		t.Fatalf("command = %T, want *WhereCommand", query.Commands[0])
+	}
+	root, ok := command.Expression.(*WhereBoolExpr)
+	if !ok || root.Op != BoolOpOr {
+		t.Fatalf("where root = %#v, want OR", command.Expression)
+	}
+	and, ok := root.Right.(*WhereBoolExpr)
+	if !ok || and.Op != BoolOpAnd {
+		t.Fatalf("where right = %#v, want AND", root.Right)
+	}
+	assertWhereLiteralComparison(t, root.Left, "status", CompareOpEqual, "500", false)
+	assertWhereLiteralComparison(t, and.Left, "duration_ms", CompareOpGreater, "500", false)
+	assertWhereLiteralComparison(t, and.Right, "level", CompareOpEqual, "ERROR", true)
+}
+
+func TestParseWhereTreatsBareRightHandNameAsField(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | where source_ip=client_ip`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	comparison := query.Commands[0].(*WhereCommand).Expression.(*WhereComparisonExpr)
+	left, leftOK := comparison.Left.(*ScalarFieldExpr)
+	right, rightOK := comparison.Right.(*ScalarFieldExpr)
+	if !leftOK || !rightOK || left.Field != "source_ip" || right.Field != "client_ip" {
+		t.Fatalf("where comparison = %#v", comparison)
+	}
+}
+
+func TestParseWhereAllowsLiteralLeftOperandAfterBooleanOperators(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=main | where status=500 OR "api"=host`,
+		`index=main | where status=500 AND "api"=host`,
+		`index=main | where NOT "api"=host`,
+	} {
+		if _, err := Parse(source); err != nil {
+			t.Fatalf("Parse(%q): %v", source, err)
+		}
+	}
+}
+
+func TestParseWhereRejectsSearchTermsAndImplicitAND(t *testing.T) {
+	t.Parallel()
+
+	tests := []string{
+		`index=main | where "connection refused"`,
+		`index=main | where status=500 level=ERROR`,
+		`index=main | where status`,
+	}
+	for _, source := range tests {
+		if _, err := Parse(source); err == nil {
+			t.Fatalf("Parse(%q) unexpectedly succeeded", source)
+		}
+	}
+}
+
+func TestParseEvalNestedReplaceAndToNumber(t *testing.T) {
+	t.Parallel()
+
+	source := `index=gradethis | eval duration_ms=tonumber(replace(duration, "ms$", ""))`
+	query, err := Parse(source)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command, ok := query.Commands[0].(*EvalCommand)
+	if !ok || len(command.Assignments) != 1 {
+		t.Fatalf("command = %#v, want one eval assignment", query.Commands[0])
+	}
+	assignment := command.Assignments[0]
+	if assignment.Field != "duration_ms" || source[assignment.FieldRange.Start.Offset:assignment.FieldRange.End.Offset] != "duration_ms" {
+		t.Fatalf("assignment = %#v", assignment)
+	}
+	toNumber, ok := assignment.Expression.(*ScalarCallExpr)
+	if !ok || toNumber.Function != ScalarFunctionToNumber || len(toNumber.Arguments) != 1 {
+		t.Fatalf("outer expression = %#v", assignment.Expression)
+	}
+	replace, ok := toNumber.Arguments[0].(*ScalarCallExpr)
+	if !ok || replace.Function != ScalarFunctionReplace || len(replace.Arguments) != 3 {
+		t.Fatalf("inner expression = %#v", toNumber.Arguments[0])
+	}
+	field, ok := replace.Arguments[0].(*ScalarFieldExpr)
+	pattern, patternOK := replace.Arguments[1].(*ScalarLiteralExpr)
+	replacement, replacementOK := replace.Arguments[2].(*ScalarLiteralExpr)
+	if !ok || field.Field != "duration" || !patternOK || pattern.Value.Text != "ms$" ||
+		!replacementOK || replacement.Value.Text != "" {
+		t.Fatalf("replace arguments = %#v", replace.Arguments)
+	}
+}
+
+func TestParseEvalAssignmentsRemainLeftToRight(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | eval first=tonumber(raw), second=replace(first, "x", "y")`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command := query.Commands[0].(*EvalCommand)
+	if len(command.Assignments) != 2 || command.Assignments[0].Field != "first" || command.Assignments[1].Field != "second" {
+		t.Fatalf("assignments = %#v", command.Assignments)
+	}
+	secondInput := command.Assignments[1].Expression.(*ScalarCallExpr).Arguments[0].(*ScalarFieldExpr)
+	if secondInput.Field != "first" {
+		t.Fatalf("second input = %#v", secondInput)
+	}
+}
+
+func TestParseEvalReplacePreservesRegexAndBackreferenceEscapes(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | eval formatted=replace(date, "^(\d{1,2})/(\d{1,2})/", "\2/\1/")`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	call := query.Commands[0].(*EvalCommand).Assignments[0].Expression.(*ScalarCallExpr)
+	pattern := call.Arguments[1].(*ScalarLiteralExpr).Value.Text
+	replacement := call.Arguments[2].(*ScalarLiteralExpr).Value.Text
+	if pattern != `^(\d{1,2})/(\d{1,2})/` || replacement != `\2/\1/` {
+		t.Fatalf("replace escapes = %q/%q", pattern, replacement)
+	}
+}
+
+func TestParseEvalRejectsMalformedOrUnsupportedExpressions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		source string
+		code   string
+	}{
+		{`index=main | eval duration_ms`, "SPL_EXPECTED_EQUAL"},
+		{`index=main | eval duration_ms=`, "SPL_EXPECTED_SCALAR_EXPRESSION"},
+		{`index=main | eval duration_ms=tonumber()`, "SPL_INVALID_EVAL_ARITY"},
+		{`index=main | eval duration_ms=tonumber(duration, 10)`, "SPL_INVALID_EVAL_ARITY"},
+		{`index=main | eval value=replace(duration, pattern, "")`, "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{`index=main | eval value=replace(message, "(?=secret)", "")`, "SPL_UNSUPPORTED_REGEX"},
+		{`index=main | eval value=replace(message, "", "x")`, "SPL_UNSUPPORTED_REGEX"},
+		{`index=main | eval value=replace(message, "a*", "x")`, "SPL_UNSUPPORTED_REGEX"},
+		{`index=main | eval value=trim(duration)`, "SPL_UNSUPPORTED_EVAL_FUNCTION"},
+		{`index=main | eval value=duration_ms+1`, "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{`index=main | eval value='duration_ms'`, "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{`index=main | eval x+1=duration_ms`, "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{`index=main | eval 'x'=duration_ms`, "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{`index=main | where duration_ms+1>500`, "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{`index=main | where 'duration_ms'>500`, "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{`index=main | eval value=tonumber(duration),`, "SPL_EXPECTED_FIELD"},
+	}
+	for _, test := range tests {
+		_, err := Parse(test.source)
+		if err == nil {
+			t.Fatalf("Parse(%q) unexpectedly succeeded", test.source)
+		}
+		diagnostic, ok := err.(*Diagnostic)
+		if !ok || diagnostic.Code != test.code {
+			t.Fatalf("Parse(%q) diagnostic = %#v, want %s", test.source, err, test.code)
+		}
+	}
+}
+
+func TestParseBoundsQueryComplexity(t *testing.T) {
+	t.Parallel()
+
+	var assignments strings.Builder
+	assignments.WriteString(`index=main | eval `)
+	for index := 0; index <= maxEvalAssignments; index++ {
+		if index > 0 {
+			assignments.WriteByte(',')
+		}
+		assignments.WriteString("f")
+		assignments.WriteString(strconv.Itoa(index))
+		assignments.WriteString("=1")
+	}
+	assertParseDiagnosticCode(t, assignments.String(), "SPL_QUERY_TOO_COMPLEX")
+	exactAssignments := strings.TrimSuffix(assignments.String(), ",f"+strconv.Itoa(maxEvalAssignments)+"=1")
+	if _, err := Parse(exactAssignments); err != nil {
+		t.Fatalf("Parse(exact eval assignment limit): %v", err)
+	}
+
+	var commands strings.Builder
+	commands.WriteString("index=main")
+	for index := 0; index <= maxPipelineCommands; index++ {
+		commands.WriteString(" | head 1")
+	}
+	assertParseDiagnosticCode(t, commands.String(), "SPL_QUERY_TOO_COMPLEX")
+	exactCommands := strings.TrimSuffix(commands.String(), " | head 1")
+	if _, err := Parse(exactCommands); err != nil {
+		t.Fatalf("Parse(exact pipeline command limit): %v", err)
+	}
+
+	nested := strings.Repeat("tonumber(", maxScalarNestingDepth) + "duration" + strings.Repeat(")", maxScalarNestingDepth)
+	assertParseDiagnosticCode(t, "index=main | eval value="+nested, "SPL_QUERY_TOO_COMPLEX")
+	exactNested := strings.Repeat("tonumber(", maxScalarNestingDepth-1) + "duration" + strings.Repeat(")", maxScalarNestingDepth-1)
+	if _, err := Parse("index=main | eval value=" + exactNested); err != nil {
+		t.Fatalf("Parse(exact scalar nesting limit): %v", err)
+	}
+
+	var tokens strings.Builder
+	for index := 0; index < maxSPLTokens+1; index++ {
+		if index > 0 {
+			tokens.WriteByte(' ')
+		}
+		tokens.WriteByte('x')
+	}
+	assertParseDiagnosticCode(t, tokens.String(), "SPL_QUERY_TOO_COMPLEX")
+	exactTokens := strings.TrimSuffix(tokens.String(), " x")
+	if _, err := Parse(exactTokens); err != nil {
+		t.Fatalf("Parse(exact token limit): %v", err)
+	}
+
+	var measures strings.Builder
+	measures.WriteString("index=main | stats ")
+	for index := 0; index <= maxStatsAggregates; index++ {
+		if index > 0 {
+			measures.WriteByte(' ')
+		}
+		measures.WriteString("p95(f")
+		measures.WriteString(strconv.Itoa(index))
+		measures.WriteString(") AS p")
+		measures.WriteString(strconv.Itoa(index))
+	}
+	assertParseDiagnosticCode(t, measures.String(), "SPL_QUERY_TOO_COMPLEX")
+	lastMeasure := " p95(f" + strconv.Itoa(maxStatsAggregates) + ") AS p" + strconv.Itoa(maxStatsAggregates)
+	if _, err := Parse(strings.TrimSuffix(measures.String(), lastMeasure)); err != nil {
+		t.Fatalf("Parse(exact stats measure limit): %v", err)
+	}
+
+	var groups strings.Builder
+	groups.WriteString("index=main | stats count BY ")
+	for index := 0; index <= maxStatsGroupFields; index++ {
+		if index > 0 {
+			groups.WriteByte(' ')
+		}
+		groups.WriteString("f")
+		groups.WriteString(strconv.Itoa(index))
+	}
+	assertParseDiagnosticCode(t, groups.String(), "SPL_QUERY_TOO_COMPLEX")
+	lastGroup := " f" + strconv.Itoa(maxStatsGroupFields)
+	if _, err := Parse(strings.TrimSuffix(groups.String(), lastGroup)); err != nil {
+		t.Fatalf("Parse(exact stats BY field limit): %v", err)
+	}
+
+	exactSource := `"` + strings.Repeat("x", maxSPLSourceBytes-2) + `"`
+	if _, err := Parse(exactSource); err != nil {
+		t.Fatalf("Parse(exact source-byte limit): %v", err)
+	}
+	assertParseDiagnosticCode(t, exactSource+"x", "SPL_QUERY_TOO_COMPLEX")
+
+	var where strings.Builder
+	where.WriteString("index=main | where ")
+	for index := 0; index <= maxWhereComparisons; index++ {
+		if index > 0 {
+			where.WriteString(" AND ")
+		}
+		where.WriteString("f")
+		where.WriteString(strconv.Itoa(index))
+		where.WriteString("=1")
+	}
+	assertParseDiagnosticCode(t, where.String(), "SPL_QUERY_TOO_COMPLEX")
+	lastComparison := " AND f" + strconv.Itoa(maxWhereComparisons) + "=1"
+	if _, err := Parse(strings.TrimSuffix(where.String(), lastComparison)); err != nil {
+		t.Fatalf("Parse(exact where comparison limit): %v", err)
+	}
+}
+
 func TestLiteralsRetainTypeIntent(t *testing.T) {
 	t.Parallel()
 
@@ -248,8 +523,8 @@ func TestParseStatsCountAndGroupedAlias(t *testing.T) {
 			if !ok {
 				t.Fatalf("command = %T, want *StatsCommand", query.Commands[0])
 			}
-			if command.Aggregate.Function != AggregateFunctionCount || command.Aggregate.Alias != test.alias {
-				t.Fatalf("aggregate = %#v, want count AS %q", command.Aggregate, test.alias)
+			if len(command.Aggregates) != 1 || command.Aggregates[0].Function != AggregateFunctionCount || command.Aggregates[0].Alias != test.alias {
+				t.Fatalf("aggregates = %#v, want count AS %q", command.Aggregates, test.alias)
 			}
 			if len(command.GroupBy) != len(test.groupNames) {
 				t.Fatalf("group fields = %#v, want %v", command.GroupBy, test.groupNames)
@@ -260,6 +535,43 @@ func TestParseStatsCountAndGroupedAlias(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestParseStatsMultipleMeasuresWithP95(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | stats count p95(duration_ms) AS p95_ms BY path`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command := query.Commands[0].(*StatsCommand)
+	if len(command.Aggregates) != 2 {
+		t.Fatalf("aggregates = %#v", command.Aggregates)
+	}
+	count := command.Aggregates[0]
+	percentile := command.Aggregates[1]
+	if count.Function != AggregateFunctionCount || count.Alias != "count" || count.Input != "" {
+		t.Fatalf("count aggregate = %#v", count)
+	}
+	if percentile.Function != AggregateFunctionP95 || percentile.Input != "duration_ms" || percentile.Alias != "p95_ms" {
+		t.Fatalf("percentile aggregate = %#v", percentile)
+	}
+	if len(command.GroupBy) != 1 || command.GroupBy[0].Name != "path" {
+		t.Fatalf("group fields = %#v", command.GroupBy)
+	}
+}
+
+func TestParseStatsP95DefaultOutputName(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | stats p95(duration_ms)`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	aggregate := query.Commands[0].(*StatsCommand).Aggregates[0]
+	if aggregate.Alias != "p95(duration_ms)" {
+		t.Fatalf("default alias = %q", aggregate.Alias)
 	}
 }
 
@@ -275,7 +587,8 @@ func TestUnsupportedStatsAggregatesAreSourceLocated(t *testing.T) {
 	}{
 		{"other function", "index=main\n| stats sum(bytes)", "SPL_UNSUPPORTED_STATS_AGGREGATE", 2, 9},
 		{"count argument", `* | stats count(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 16},
-		{"second aggregate", `* | stats count, dc(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 16},
+		{"second aggregate", `* | stats count, dc(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 18},
+		{"space-separated aggregate", `* | stats count dc(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 17},
 		{"missing AS", `* | stats count total`, "SPL_UNSUPPORTED_STATS_SYNTAX", 1, 17},
 		{"missing group field", `* | stats count by`, "SPL_EXPECTED_FIELD", 1, 19},
 	}
@@ -441,5 +754,31 @@ func assertComparison(t *testing.T, expression Expr, field string, op CompareOp,
 	}
 	if comparison.Field != field || comparison.Op != op || comparison.Value.Text != value || comparison.Value.Quoted != quoted {
 		t.Fatalf("comparison = %#v, want %s%s%q (quoted=%t)", comparison, field, op, value, quoted)
+	}
+}
+
+func assertWhereLiteralComparison(t *testing.T, expression WhereExpr, field string, op CompareOp, value string, quoted bool) {
+	t.Helper()
+	comparison, ok := expression.(*WhereComparisonExpr)
+	if !ok {
+		t.Fatalf("expression = %T, want *WhereComparisonExpr", expression)
+	}
+	left, leftOK := comparison.Left.(*ScalarFieldExpr)
+	right, rightOK := comparison.Right.(*ScalarLiteralExpr)
+	if !leftOK || !rightOK || left.Field != field || comparison.Op != op ||
+		right.Value.Text != value || right.Value.Quoted != quoted {
+		t.Fatalf("comparison = %#v, want %s%s%q (quoted=%t)", comparison, field, op, value, quoted)
+	}
+}
+
+func assertParseDiagnosticCode(t *testing.T, source, code string) {
+	t.Helper()
+	_, err := Parse(source)
+	if err == nil {
+		t.Fatalf("Parse(%q) unexpectedly succeeded", source)
+	}
+	diagnostic, ok := err.(*Diagnostic)
+	if !ok || diagnostic.Code != code {
+		t.Fatalf("Parse(%q) error = %#v, want %s", source, err, code)
 	}
 }

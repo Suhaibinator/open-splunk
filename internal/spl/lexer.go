@@ -112,16 +112,18 @@ func (l *lexer) scanString(start Position) (token, error) {
 			return token{kind: tokenString, text: value.String(), quoted: true, range_: Range{Start: start, End: l.position()}}, nil
 		}
 		if l.source[l.offset] == '\\' {
-			escapeStart := l.position()
 			l.advanceASCII()
 			if l.offset >= len(l.source) {
 				return token{}, l.diagnostic("SPL_UNTERMINATED_STRING", "unterminated quoted string", start, l.position())
 			}
-			escaped := l.source[l.offset]
-			l.advanceASCII()
-			switch escaped {
+			escapedRune, width := utf8.DecodeRuneInString(l.source[l.offset:])
+			if escapedRune == utf8.RuneError && width == 1 {
+				escapedRune = rune(l.source[l.offset])
+			}
+			l.advanceRune(escapedRune, width)
+			switch escapedRune {
 			case '"', '\\':
-				value.WriteByte(escaped)
+				value.WriteRune(escapedRune)
 			case 'n':
 				value.WriteByte('\n')
 			case 'r':
@@ -129,12 +131,11 @@ func (l *lexer) scanString(start Position) (token, error) {
 			case 't':
 				value.WriteByte('\t')
 			default:
-				return token{}, l.diagnostic(
-					"SPL_INVALID_ESCAPE",
-					fmt.Sprintf("unsupported escape sequence \\%c", escaped),
-					escapeStart,
-					l.position(),
-				)
+				// SPL regexes and replacement backreferences use single
+				// backslashes (for example \d and \2). Preserve escapes that
+				// are not string-control escapes for the consuming command.
+				value.WriteByte('\\')
+				value.WriteRune(escapedRune)
 			}
 			continue
 		}
