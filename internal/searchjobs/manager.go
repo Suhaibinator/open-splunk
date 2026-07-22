@@ -48,12 +48,12 @@ const (
 	maximumConcurrentSnapshots    = 64
 	// Cancellation may schedule one AfterFunc callback per active lease, so
 	// the hard ceilings also bound shutdown/cancellation fan-out.
-	maximumResultLeases           = 4_096
-	maximumResultLeasesPerJob     = 256
-	maximumQueued                 = 100_000
-	maximumJobs                   = 100_000
-	maximumMetadataBytes          = 1 << 30
-	capacityCleanupThrottle       = 250 * time.Millisecond
+	maximumResultLeases       = 4_096
+	maximumResultLeasesPerJob = 256
+	maximumQueued             = 100_000
+	maximumJobs               = 100_000
+	maximumMetadataBytes      = 1 << 30
+	capacityCleanupThrottle   = 250 * time.Millisecond
 )
 
 var (
@@ -1281,10 +1281,20 @@ func (manager *Manager) run(entry *jobEntry) {
 	executionContextErr := executionContext.Err()
 	sink.close()
 	cancelExecution()
-	if sinkErr := sink.failure(); sinkErr != nil {
-		executionErr = sinkErr
-	} else if executionContextErr != nil {
+	sinkErr, truncationErr := sink.outcome()
+	resultsTruncated := false
+	if executionContextErr != nil {
 		executionErr = executionContextErr
+	} else if truncationErr != nil && (executionErr == nil || errorWrapsOnly(executionErr, truncationErr)) {
+		// A private per-stream sentinel proves this is the sink's first rejected
+		// overflow row. An executor-originated ErrRowLimit, or a joined error
+		// containing any other failure, must still fail the job.
+		executionErr = nil
+		resultsTruncated = true
+	} else if sinkErr != nil && truncationErr == nil {
+		// Schema, row, byte, and capacity failures discovered by the sink remain
+		// authoritative over the executor's propagated/wrapped error.
+		executionErr = sinkErr
 	}
 	if executionErr != nil {
 		manager.executionFailed(entry, executionErr)
@@ -1294,7 +1304,7 @@ func (manager *Manager) run(entry *jobEntry) {
 		manager.failOrCancel(entry, Failure{Code: FailureInternal, Message: "search execution returned an invalid result"}, manager.nowUTC())
 		return
 	}
-	manager.finishCompleted(entry, manager.nowUTC())
+	manager.finishCompleted(entry, manager.nowUTC(), resultsTruncated)
 }
 
 func (manager *Manager) advance(entry *jobEntry, from, to State, update func(*Job)) bool {
@@ -1335,14 +1345,6 @@ func (manager *Manager) executionFailed(entry *jobEntry, err error) {
 	}
 	var failure Failure
 	switch {
-	case errors.Is(err, ErrRowLimit):
-		failure = Failure{Code: FailureResourceLimit, Message: "search exceeded the configured result row limit"}
-	case errors.Is(err, ErrByteLimit):
-		failure = Failure{Code: FailureResourceLimit, Message: "search exceeded the configured result byte limit"}
-	case errors.Is(err, ErrCapacity):
-		failure = Failure{Code: FailureResourceLimit, Message: "search result capacity is temporarily exhausted", Retryable: true}
-	case errors.Is(err, ErrExecutionLimit):
-		failure = Failure{Code: FailureResourceLimit, Message: "search exceeded a configured execution resource limit"}
 	case errors.Is(err, context.DeadlineExceeded):
 		failure = Failure{Code: FailureTimeout, Message: "search execution timed out", Retryable: true}
 	case errors.Is(err, ErrStorageUnavailable):
@@ -1351,6 +1353,14 @@ func (manager *Manager) executionFailed(entry *jobEntry, err error) {
 		failure = Failure{Code: FailureUnsupportedSPL, Message: "search command does not support one or more field values"}
 	case errors.Is(err, ErrInvalidResult), errors.Is(err, ErrStreamClosed):
 		failure = Failure{Code: FailureInternal, Message: "search execution returned an invalid result"}
+	case errors.Is(err, ErrByteLimit):
+		failure = Failure{Code: FailureResourceLimit, Message: "search exceeded the configured result byte limit"}
+	case errors.Is(err, ErrCapacity):
+		failure = Failure{Code: FailureResourceLimit, Message: "search result capacity is temporarily exhausted", Retryable: true}
+	case errors.Is(err, ErrExecutionLimit):
+		failure = Failure{Code: FailureResourceLimit, Message: "search exceeded a configured execution resource limit"}
+	case errors.Is(err, ErrRowLimit):
+		failure = Failure{Code: FailureResourceLimit, Message: "search exceeded the configured result row limit"}
 	default:
 		failure = Failure{Code: FailureExecution, Message: "search execution failed"}
 	}
@@ -1380,7 +1390,7 @@ func (manager *Manager) failOrCancel(entry *jobEntry, failure Failure, now time.
 	}
 }
 
-func (manager *Manager) finishCompleted(entry *jobEntry, now time.Time) {
+func (manager *Manager) finishCompleted(entry *jobEntry, now time.Time, resultsTruncated bool) {
 	entry.mu.Lock()
 	if entry.job.State == StateRunning {
 		if entry.ctx.Err() != nil {
@@ -1390,6 +1400,7 @@ func (manager *Manager) finishCompleted(entry *jobEntry, now time.Time) {
 			entry.job.Version++
 			entry.job.FinishedAt = now
 			entry.job.ExpiresAt = now.Add(manager.retentionTTL)
+			entry.job.ResultsTruncated = resultsTruncated
 			entry.resultGeneration = entry.generation
 			entry.history = append(entry.history, StateCompleted)
 		}
@@ -1652,7 +1663,17 @@ type resultSink struct {
 	closed         bool
 	receivedSchema bool
 	firstErr       error
+	truncationErr  *retainedRowLimitError
 }
+
+// retainedRowLimitError is allocated once for the first overflow row of one
+// stream. Its identity lets Manager distinguish a propagated sink boundary
+// from an unrelated executor ErrRowLimit while errors.Is remains compatible.
+type retainedRowLimitError struct{ streamMarker byte }
+
+func (*retainedRowLimitError) Error() string { return ErrRowLimit.Error() }
+
+func (*retainedRowLimitError) Unwrap() error { return ErrRowLimit }
 
 func (sink *resultSink) SetSchema(schema Schema) error {
 	entry := sink.entry
@@ -1705,9 +1726,6 @@ func (sink *resultSink) AddRow(values []Value) error {
 	if len(values) != len(entry.job.Schema.Columns) {
 		return sink.rememberLocked(fmt.Errorf("%w: row has %d cells for %d columns", ErrInvalidResult, len(values), len(entry.job.Schema.Columns)))
 	}
-	if uint64(len(entry.rows)) >= sink.manager.maxRows {
-		return sink.rememberLocked(ErrRowLimit)
-	}
 	var payloadBytes uint64
 	var retainedBytes uint64
 	for index, value := range values {
@@ -1730,6 +1748,14 @@ func (sink *resultSink) AddRow(values []Value) error {
 		if err != nil {
 			return sink.rememberLocked(ErrByteLimit)
 		}
+	}
+	// Validate an overflow row before recording truncation. A malformed row is
+	// not evidence that another valid result existed and must remain a failed
+	// executor result, even though its values will not be retained.
+	if uint64(len(entry.rows)) >= sink.manager.maxRows {
+		limitErr := &retainedRowLimitError{}
+		sink.truncationErr = limitErr
+		return sink.rememberLocked(limitErr)
 	}
 	nextBytes, err := checkedAdd(entry.job.ResultBytes, payloadBytes)
 	if err != nil {
@@ -1803,16 +1829,54 @@ func (sink *resultSink) close() {
 	sink.entry.mu.Unlock()
 }
 
-func (sink *resultSink) failure() error {
+func (sink *resultSink) outcome() (error, *retainedRowLimitError) {
 	sink.entry.mu.RLock()
 	defer sink.entry.mu.RUnlock()
-	return sink.firstErr
+	return sink.firstErr, sink.truncationErr
 }
 
 func (sink *resultSink) schemaReceived() bool {
 	sink.entry.mu.RLock()
 	defer sink.entry.mu.RUnlock()
 	return sink.receivedSchema
+}
+
+// errorWrapsOnly accepts ordinary single-error wrapping and rejects joined
+// errors with any leaf other than target. This prevents an executor from
+// hiding a storage or execution failure alongside the sink's stop sentinel.
+func errorWrapsOnly(err, target error) bool {
+	return errorWrapsOnlyDepth(err, target, 0)
+}
+
+func errorWrapsOnlyDepth(err, target error, depth int) bool {
+	if err == nil || target == nil {
+		return false
+	}
+	if depth > 64 {
+		return false
+	}
+	if err == target {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !errorWrapsOnlyDepth(child, target, depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		child := wrapped.Unwrap()
+		if child != nil {
+			return errorWrapsOnlyDepth(child, target, depth+1)
+		}
+	}
+	return false
 }
 
 func validateSchema(schema Schema, expected []string) error {

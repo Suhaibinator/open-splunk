@@ -31,6 +31,12 @@ var (
 type ResultLease interface {
 	Schema() Schema
 	RowCount() uint64
+	// RowCountExact reports whether RowCount is known before iteration. Retained
+	// in-memory generations always have an exact count, including empty ones.
+	RowCountExact() bool
+	// ResultsTruncated reports whether this immutable retained snapshot ended
+	// at the manager's row boundary rather than the executor's natural end.
+	ResultsTruncated() bool
 	Generation() uint64
 	Next(context.Context) (ResultRow, bool, error)
 	Close() error
@@ -41,6 +47,7 @@ type resultLease struct {
 	entry      *jobEntry
 	schema     *Schema
 	rowCount   uint64
+	truncated  bool
 	generation uint64
 
 	mu          sync.Mutex
@@ -121,6 +128,7 @@ func (manager *Manager) AcquireResultsFor(ctx context.Context, access AccessScop
 		entry:      entry,
 		schema:     entry.resultSchema,
 		rowCount:   uint64(len(entry.rows)),
+		truncated:  entry.job.ResultsTruncated,
 		generation: entry.resultGeneration,
 	}
 	entry.mu.Unlock()
@@ -146,6 +154,18 @@ func (lease *resultLease) Schema() Schema {
 // RowCount returns the exact number of rows in the pinned generation.
 func (lease *resultLease) RowCount() uint64 {
 	return lease.rowCount
+}
+
+// RowCountExact reports that retained generations capture their final count
+// atomically at acquisition.
+func (lease *resultLease) RowCountExact() bool {
+	return true
+}
+
+// ResultsTruncated returns the completeness flag captured atomically with the
+// immutable result generation at acquisition.
+func (lease *resultLease) ResultsTruncated() bool {
+	return lease.truncated
 }
 
 // Generation returns the manager-local immutable result generation.

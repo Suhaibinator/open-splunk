@@ -132,6 +132,10 @@ type Job struct {
 	Schema           *Schema
 	RowCount         uint64
 	ResultBytes      uint64
+	// ResultsTruncated reports that the retained immutable snapshot contains
+	// exactly the configured row limit and the executor attempted to emit at
+	// least one additional row. It is never inferred from an executor error.
+	ResultsTruncated bool
 	Failure          *Failure
 	CreatedAt        time.Time
 	StartedAt        time.Time

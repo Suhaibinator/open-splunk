@@ -814,7 +814,7 @@ func TestScopedAccessDoesNotDiscloseCrossTenantOrOwnerJobs(t *testing.T) {
 	}
 }
 
-func TestResultLimitsFailWithoutExceedingStoredBounds(t *testing.T) {
+func TestResultLimitsDoNotExceedStoredBounds(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -825,15 +825,18 @@ func TestResultLimitsFailWithoutExceedingStoredBounds(t *testing.T) {
 		wantRows    uint64
 		wantBytes   uint64
 		wantSinkErr error
+		wantState   State
+		truncated   bool
 	}{
 		{
 			name:        "rows",
 			config:      Config{MaxRows: 2, MaxBytes: 1 << 20},
 			rows:        [][]Value{{StringValue("a")}, {StringValue("bb")}, {StringValue("ccc")}},
-			wantCode:    FailureResourceLimit,
 			wantRows:    2,
 			wantBytes:   3,
 			wantSinkErr: ErrRowLimit,
+			wantState:   StateCompleted,
+			truncated:   true,
 		},
 		{
 			name:        "bytes",
@@ -843,6 +846,7 @@ func TestResultLimitsFailWithoutExceedingStoredBounds(t *testing.T) {
 			wantRows:    0,
 			wantBytes:   0,
 			wantSinkErr: ErrByteLimit,
+			wantState:   StateFailed,
 		},
 	}
 	for _, test := range tests {
@@ -868,18 +872,30 @@ func TestResultLimitsFailWithoutExceedingStoredBounds(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			failed := waitForState(t, manager, job.ID, StateFailed)
-			if failed.Failure == nil || failed.Failure.Code != test.wantCode {
-				t.Fatalf("failure = %#v, want code %v", failed.Failure, test.wantCode)
+			terminal := waitForState(t, manager, job.ID, test.wantState)
+			if terminal.ResultsTruncated != test.truncated {
+				t.Fatalf("ResultsTruncated = %v, want %v", terminal.ResultsTruncated, test.truncated)
 			}
-			if failed.RowCount != test.wantRows || failed.ResultBytes != test.wantBytes {
-				t.Fatalf("stored counts = (%d,%d), want (%d,%d)", failed.RowCount, failed.ResultBytes, test.wantRows, test.wantBytes)
+			if terminal.RowCount != test.wantRows || terminal.ResultBytes != test.wantBytes {
+				t.Fatalf("stored counts = (%d,%d), want (%d,%d)", terminal.RowCount, terminal.ResultBytes, test.wantRows, test.wantBytes)
 			}
 			if !errors.Is(observed, test.wantSinkErr) {
 				t.Fatalf("sink error = %v, want %v", observed, test.wantSinkErr)
 			}
-			if _, err := manager.Results(job.ID, PageRequest{}); !errors.Is(err, ErrResultsUnavailable) {
-				t.Fatalf("Results(failed) = %v, want unavailable", err)
+			if test.wantState == StateCompleted {
+				if terminal.Failure != nil {
+					t.Fatalf("completed job failure = %#v", terminal.Failure)
+				}
+				if page, err := manager.Results(job.ID, PageRequest{}); err != nil || page.TotalRows != test.wantRows {
+					t.Fatalf("Results(completed) = (%#v, %v), want %d rows", page, err, test.wantRows)
+				}
+			} else {
+				if terminal.Failure == nil || terminal.Failure.Code != test.wantCode {
+					t.Fatalf("failure = %#v, want code %v", terminal.Failure, test.wantCode)
+				}
+				if _, err := manager.Results(job.ID, PageRequest{}); !errors.Is(err, ErrResultsUnavailable) {
+					t.Fatalf("Results(failed) = %v, want unavailable", err)
+				}
 			}
 		})
 	}

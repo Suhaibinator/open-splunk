@@ -3,6 +3,8 @@ package export
 import (
 	"context"
 	"errors"
+	"io"
+	"sync"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -33,10 +35,22 @@ var (
 	ErrSourceExpired = errors.New("export source results expired")
 	// ErrSourceUnavailable means the referenced search cannot produce results.
 	ErrSourceUnavailable = errors.New("export source results are unavailable")
+	// ErrSourceTruncated means the retained source preview ended at its manager
+	// boundary and therefore cannot safely stand in for the full SPL result.
+	ErrSourceTruncated = errors.New("retained source snapshot is truncated")
 	// ErrRowLimit means another result row would exceed the export row bound.
 	ErrRowLimit = errors.New("export row limit exceeded")
 	// ErrByteLimit means another artifact byte would exceed the export byte bound.
 	ErrByteLimit = errors.New("export byte limit exceeded")
+	// ErrDownloadGrantCapacity means a manager-wide or per-job bound on
+	// outstanding grants or active artifact downloads is exhausted.
+	ErrDownloadGrantCapacity = errors.New("export download grant capacity is exhausted")
+	// ErrInvalidDownloadGrant intentionally covers malformed, unknown, expired,
+	// replayed, and revoked bearer grants without disclosing which case applied.
+	ErrInvalidDownloadGrant = errors.New("invalid export download grant")
+	// ErrArtifactUnavailable is a path-free storage failure returned when an
+	// artifact cannot be securely opened or read.
+	ErrArtifactUnavailable = errors.New("export artifact is unavailable")
 )
 
 // ResultSource supplies immutable, owner-and-tenant-scoped search snapshots.
@@ -186,6 +200,46 @@ type Artifact struct {
 	SizeBytes uint64
 	RowCount  uint64
 	ExpiresAt time.Time
+}
+
+// DownloadGrant is a short-lived, one-time bearer credential. Token is the
+// only secret returned to the caller; Manager retains only its SHA-256 digest.
+type DownloadGrant struct {
+	Token     string
+	ExpiresAt time.Time
+}
+
+// ArtifactDownload is the path-free read contract used by transport adapters.
+// Implementations remain readable after logical artifact expiration until
+// Close or Manager.Close.
+type ArtifactDownload interface {
+	io.Reader
+	io.Closer
+	Artifact() Artifact
+}
+
+// DownloadLease is a pinned read of one completed artifact. It never exposes
+// a filesystem path. Close is idempotent and safe to call concurrently with
+// Read; it waits for an in-flight Read before releasing the artifact pin.
+// Manager.Close also closes every outstanding lease.
+type DownloadLease struct {
+	mu            sync.Mutex
+	closeOnce     sync.Once
+	file          io.ReadCloser
+	artifact      Artifact
+	manager       *Manager
+	entry         *jobEntry
+	jobID         string
+	metadataBytes uint64
+	closeErr      error
+}
+
+// Artifact returns detached public metadata for the pinned artifact.
+func (lease *DownloadLease) Artifact() Artifact {
+	if lease == nil {
+		return Artifact{}
+	}
+	return lease.artifact
 }
 
 // Job is a detached export-job snapshot. Owner and tenant are enforced by

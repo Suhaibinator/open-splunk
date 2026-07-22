@@ -19,33 +19,43 @@ import (
 )
 
 const (
-	defaultMaxWorkers       = 2
-	defaultMaxQueued        = 64
-	defaultMaxJobs          = 1_024
-	defaultRowLimit         = 100_000
-	defaultByteLimit        = 256 << 20
-	defaultMaximumRowLimit  = 10_000_000
-	defaultMaximumByteLimit = 4 << 30
-	defaultMaxTotalBytes    = 4 << 30
-	defaultMaxTotalMetadata = 64 << 20
-	defaultArtifactTTL      = 15 * time.Minute
-	defaultExpiredRetention = 5 * time.Minute
-	defaultCleanupInterval  = time.Minute
+	defaultMaxWorkers         = 2
+	defaultMaxQueued          = 64
+	defaultMaxJobs            = 1_024
+	defaultRowLimit           = 100_000
+	defaultByteLimit          = 256 << 20
+	defaultMaximumRowLimit    = 10_000_000
+	defaultMaximumByteLimit   = 4 << 30
+	defaultMaxTotalBytes      = 4 << 30
+	defaultMaxTotalMetadata   = 64 << 20
+	defaultArtifactTTL        = 15 * time.Minute
+	defaultExpiredRetention   = 5 * time.Minute
+	defaultCleanupInterval    = time.Minute
+	defaultDownloadGrantTTL   = time.Minute
+	defaultMaxDownloadGrants  = 4_096
+	defaultMaxGrantsPerJob    = 16
+	defaultMaxActiveDownloads = 128
+	defaultMaxActivePerJob    = 4
 
-	maximumWorkers        = 64
-	maximumQueued         = 10_000
-	maximumJobs           = 100_000
-	hardMaximumRowLimit   = uint64(100_000_000)
-	hardMaximumByteLimit  = uint64(64 << 30)
-	hardMaximumTotalBytes = uint64(1 << 40)
-	hardMaximumMetadata   = uint64(4 << 30)
-	maximumArtifactTTL    = 7 * 24 * time.Hour
-	maximumIDAttempts     = 8
-	maximumExportIDBytes  = 128
-	maximumColumns        = 1_024
-	maximumColumnBytes    = 256 << 10
-	maximumAccessIDBytes  = 1 << 10
-	maximumSearchIDBytes  = 256
+	maximumWorkers          = 64
+	maximumQueued           = 10_000
+	maximumJobs             = 100_000
+	hardMaximumRowLimit     = uint64(100_000_000)
+	hardMaximumByteLimit    = uint64(64 << 30)
+	hardMaximumTotalBytes   = uint64(1 << 40)
+	hardMaximumMetadata     = uint64(4 << 30)
+	maximumArtifactTTL      = 7 * 24 * time.Hour
+	maximumDownloadGrantTTL = 5 * time.Minute
+	maximumDownloadGrants   = 100_000
+	maximumGrantsPerJob     = 1_024
+	maximumActiveDownloads  = 4_096
+	maximumActivePerJob     = 64
+	maximumIDAttempts       = 8
+	maximumExportIDBytes    = 128
+	maximumColumns          = 1_024
+	maximumColumnBytes      = 256 << 10
+	maximumAccessIDBytes    = 1 << 10
+	maximumSearchIDBytes    = 256
 
 	// Metadata accounting conservatively covers the retained Job column slice,
 	// active column selection, index slice, column-name storage, and fixed job
@@ -98,6 +108,17 @@ type Config struct {
 	ArtifactTTL      time.Duration
 	ExpiredRetention time.Duration
 	CleanupInterval  time.Duration
+	// DownloadGrantTTL is the maximum lifetime of a one-time bearer grant. A
+	// grant is always capped by its artifact's earlier expiration.
+	DownloadGrantTTL time.Duration
+	// MaxDownloadGrants and MaxDownloadGrantsPerJob bound outstanding,
+	// unredeemed grants. Grant metadata also consumes MaxTotalMetadataBytes.
+	MaxDownloadGrants       int
+	MaxDownloadGrantsPerJob int
+	// MaxActiveDownloads and MaxActiveDownloadsPerJob separately bound open
+	// artifact descriptors after grants are redeemed.
+	MaxActiveDownloads       int
+	MaxActiveDownloadsPerJob int
 
 	// Now and NewID may be invoked concurrently and must be concurrency-safe.
 	Now   func() time.Time
@@ -130,13 +151,25 @@ type Manager struct {
 	totalBytes       uint64
 	totalMetadata    uint64
 
-	artifactDir       string
-	removeArtifactDir bool
-	artifactTTL       time.Duration
-	expiredRetention  time.Duration
-	cleanupInterval   time.Duration
-	now               func() time.Time
-	newID             func() string
+	artifactDir        string
+	artifactRoot       *os.Root
+	removeArtifactDir  bool
+	artifactTTL        time.Duration
+	expiredRetention   time.Duration
+	cleanupInterval    time.Duration
+	downloadGrantTTL   time.Duration
+	maxDownloadGrants  int
+	maxGrantsPerJob    int
+	maxActiveDownloads int
+	maxActivePerJob    int
+	grants             map[[32]byte]*downloadGrantEntry
+	grantExpirations   downloadGrantExpiryHeap
+	grantMapHighWater  int
+	grantsByJob        map[string]int
+	activeDownloads    int
+	downloadsByJob     map[string]int
+	now                func() time.Time
+	newID              func() string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -167,6 +200,8 @@ type jobEntry struct {
 	artifactPath      string
 	tempRemoving      bool
 	artifactRemoving  bool
+	artifactIdentity  os.FileInfo
+	downloads         map[*DownloadLease]struct{}
 }
 
 type admissionReservation struct {
@@ -239,8 +274,37 @@ func New(config Config) (*Manager, error) {
 	if cleanupInterval == 0 {
 		cleanupInterval = defaultCleanupInterval
 	}
+	downloadGrantTTL := config.DownloadGrantTTL
+	if downloadGrantTTL == 0 {
+		downloadGrantTTL = defaultDownloadGrantTTL
+	}
+	maxDownloadGrants, err := boundedInt(config.MaxDownloadGrants, defaultMaxDownloadGrants, maximumDownloadGrants, "download grant")
+	if err != nil {
+		return nil, err
+	}
+	maxGrantsPerJob, err := boundedInt(config.MaxDownloadGrantsPerJob, defaultMaxGrantsPerJob, maximumGrantsPerJob, "per-job download grant")
+	if err != nil {
+		return nil, err
+	}
+	if maxGrantsPerJob > maxDownloadGrants {
+		return nil, errors.New("create export manager: per-job download grant limit exceeds total limit")
+	}
+	maxActiveDownloads, err := boundedInt(config.MaxActiveDownloads, defaultMaxActiveDownloads, maximumActiveDownloads, "active download")
+	if err != nil {
+		return nil, err
+	}
+	maxActivePerJob, err := boundedInt(config.MaxActiveDownloadsPerJob, defaultMaxActivePerJob, maximumActivePerJob, "per-job active download")
+	if err != nil {
+		return nil, err
+	}
+	if maxActivePerJob > maxActiveDownloads {
+		return nil, errors.New("create export manager: per-job active download limit exceeds total limit")
+	}
 	if artifactTTL < 0 || artifactTTL > maximumArtifactTTL || expiredRetention < 0 || expiredRetention > maximumArtifactTTL {
 		return nil, errors.New("create export manager: invalid retention duration")
+	}
+	if downloadGrantTTL < 0 || downloadGrantTTL > maximumDownloadGrantTTL {
+		return nil, errors.New("create export manager: invalid download grant duration")
 	}
 
 	artifactDir, removeDir, err := prepareArtifactDirectory(config.ArtifactDir)
@@ -254,6 +318,13 @@ func New(config Config) (*Manager, error) {
 		}
 		return nil, errors.New("create export manager: invalid total metadata byte limit")
 	}
+	artifactRoot, err := os.OpenRoot(artifactDir)
+	if err != nil {
+		if removeDir {
+			_ = os.RemoveAll(artifactDir)
+		}
+		return nil, fmt.Errorf("open export artifact directory: %w", err)
+	}
 	now := config.Now
 	if now == nil {
 		now = time.Now
@@ -264,29 +335,38 @@ func New(config Config) (*Manager, error) {
 	}
 	managerContext, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
-		jobs:              make(map[string]*jobEntry),
-		reservedIDs:       make(map[string]admissionReservation),
-		source:            config.Source,
-		queue:             make(chan *jobEntry, maxQueued),
-		maxWorkers:        maxWorkers,
-		maxQueued:         maxQueued,
-		maxJobs:           maxJobs,
-		defaultRowLimit:   defaultRows,
-		maximumRowLimit:   maximumRows,
-		defaultByteLimit:  defaultBytes,
-		maximumByteLimit:  maximumBytes,
-		maxTotalBytes:     maxTotalBytes,
-		maxTotalMetadata:  maxTotalMetadata,
-		artifactDir:       artifactDir,
-		removeArtifactDir: removeDir,
-		artifactTTL:       artifactTTL,
-		expiredRetention:  expiredRetention,
-		cleanupInterval:   cleanupInterval,
-		now:               now,
-		newID:             newID,
-		ctx:               managerContext,
-		cancel:            cancel,
-		removePath:        removeFile,
+		jobs:               make(map[string]*jobEntry),
+		reservedIDs:        make(map[string]admissionReservation),
+		source:             config.Source,
+		queue:              make(chan *jobEntry, maxQueued),
+		maxWorkers:         maxWorkers,
+		maxQueued:          maxQueued,
+		maxJobs:            maxJobs,
+		defaultRowLimit:    defaultRows,
+		maximumRowLimit:    maximumRows,
+		defaultByteLimit:   defaultBytes,
+		maximumByteLimit:   maximumBytes,
+		maxTotalBytes:      maxTotalBytes,
+		maxTotalMetadata:   maxTotalMetadata,
+		artifactDir:        artifactDir,
+		artifactRoot:       artifactRoot,
+		removeArtifactDir:  removeDir,
+		artifactTTL:        artifactTTL,
+		expiredRetention:   expiredRetention,
+		cleanupInterval:    cleanupInterval,
+		downloadGrantTTL:   downloadGrantTTL,
+		maxDownloadGrants:  maxDownloadGrants,
+		maxGrantsPerJob:    maxGrantsPerJob,
+		maxActiveDownloads: maxActiveDownloads,
+		maxActivePerJob:    maxActivePerJob,
+		grants:             make(map[[32]byte]*downloadGrantEntry),
+		grantsByJob:        make(map[string]int),
+		downloadsByJob:     make(map[string]int),
+		now:                now,
+		newID:              newID,
+		ctx:                managerContext,
+		cancel:             cancel,
+		removePath:         removeFile,
 	}
 	for range maxWorkers {
 		manager.workers.Add(1)
@@ -421,6 +501,17 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 			_ = lease.Close()
 		}
 	}()
+	if lease.ResultsTruncated() {
+		stopRequestCancellation()
+		jobCancel()
+		if err := ctx.Err(); err != nil {
+			return Job{}, err
+		}
+		if manager.isClosed() {
+			return Job{}, ErrClosed
+		}
+		return Job{}, ErrSourceTruncated
+	}
 	selection, err := selectColumns(lease.Schema(), normalized.Columns)
 	if err != nil {
 		stopRequestCancellation()
@@ -905,7 +996,7 @@ func (manager *Manager) run(entry *jobEntry) {
 	format := entry.job.Format
 	entry.mu.Unlock()
 
-	if entry.lease.RowCount() > rowLimit {
+	if entry.lease.RowCountExact() && entry.lease.RowCount() > rowLimit {
 		manager.finishFailure(entry, ErrRowLimit)
 		return
 	}
@@ -990,6 +1081,14 @@ func (manager *Manager) run(entry *jobEntry) {
 		fail(err)
 		return
 	}
+	artifactIdentity, err := tempFile.Stat()
+	if err != nil || !artifactIdentity.Mode().IsRegular() || artifactIdentity.Size() < 0 || uint64(artifactIdentity.Size()) != limited.written {
+		if err == nil {
+			err = errArtifactStorage
+		}
+		fail(err)
+		return
+	}
 	if err := tempFile.Close(); err != nil {
 		fail(err)
 		return
@@ -1006,7 +1105,7 @@ func (manager *Manager) run(entry *jobEntry) {
 	entry.artifactPath = finalPath
 	entry.mu.Unlock()
 	cleanupTemp()
-	manager.finishCompleted(entry, finalPath, rows, limited.written)
+	manager.finishCompleted(entry, finalPath, artifactIdentity, rows, limited.written)
 }
 
 type rowSerializer interface {
@@ -1056,7 +1155,7 @@ func (manager *Manager) updateProgress(entry *jobEntry, rows, bytes uint64) {
 	entry.mu.Unlock()
 }
 
-func (manager *Manager) finishCompleted(entry *jobEntry, path string, rows, bytes uint64) {
+func (manager *Manager) finishCompleted(entry *jobEntry, path string, identity os.FileInfo, rows, bytes uint64) {
 	now := manager.nowUTC()
 	entry.mu.Lock()
 	if entry.job.State != StateRunning || entry.ctx.Err() != nil {
@@ -1071,6 +1170,7 @@ func (manager *Manager) finishCompleted(entry *jobEntry, path string, rows, byte
 	}
 	expires := now.Add(manager.artifactTTL)
 	entry.artifactPath = path
+	entry.artifactIdentity = identity
 	entry.job.State = StateCompleted
 	entry.job.Version++
 	entry.job.Progress = Progress{RowsWritten: rows, BytesWritten: bytes, UpdatedAt: now}
@@ -1269,6 +1369,13 @@ func (manager *Manager) Cleanup(ctx context.Context) error {
 		return err
 	}
 	now := manager.nowUTC()
+	manager.mu.Lock()
+	if manager.closed {
+		manager.mu.Unlock()
+		return ErrClosed
+	}
+	manager.purgeExpiredGrantsLocked(now)
+	manager.mu.Unlock()
 	manager.mu.RLock()
 	if manager.closed {
 		manager.mu.RUnlock()
@@ -1311,6 +1418,7 @@ func (manager *Manager) Cleanup(ctx context.Context) error {
 		}
 		entry.mu.Unlock()
 		if remove {
+			manager.revokeJobGrantsLocked(id)
 			delete(manager.jobs, id)
 			manager.releaseMetadata(retainedMetadata)
 		}
@@ -1345,6 +1453,9 @@ func (manager *Manager) expireLocked(entry *jobEntry, now time.Time) (artifactPa
 		entry.job.Progress.UpdatedAt = now
 	}
 	if entry.job.State == StateExpired {
+		if len(entry.downloads) != 0 {
+			return "", entry.tempPath
+		}
 		return entry.artifactPath, entry.tempPath
 	}
 	return "", ""
@@ -1355,7 +1466,7 @@ func (manager *Manager) removeTrackedArtifact(entry *jobEntry, path string) erro
 		return nil
 	}
 	entry.mu.Lock()
-	if entry.artifactPath != path || entry.artifactRemoving {
+	if entry.artifactPath != path || entry.artifactRemoving || len(entry.downloads) != 0 {
 		entry.mu.Unlock()
 		return nil
 	}
@@ -1366,6 +1477,7 @@ func (manager *Manager) removeTrackedArtifact(entry *jobEntry, path string) erro
 	entry.artifactRemoving = false
 	if err == nil && entry.artifactPath == path {
 		entry.artifactPath = ""
+		entry.artifactIdentity = nil
 	}
 	entry.mu.Unlock()
 	if err != nil {
@@ -1407,6 +1519,7 @@ func (manager *Manager) Close() error {
 		manager.mu.Lock()
 		manager.closed = true
 		manager.cancel()
+		manager.revokeAllGrantsLocked()
 		entries := make([]*jobEntry, 0, len(manager.jobs))
 		for _, entry := range manager.jobs {
 			entries = append(entries, entry)
@@ -1437,6 +1550,9 @@ func (manager *Manager) Close() error {
 		}
 		manager.jobs = make(map[string]*jobEntry)
 		manager.reservedIDs = make(map[string]admissionReservation)
+		manager.grants = make(map[[32]byte]*downloadGrantEntry)
+		manager.grantExpirations = nil
+		manager.grantsByJob = make(map[string]int)
 		manager.mu.Unlock()
 		for _, entry := range entries {
 			if err := entry.finalizeLease(); err != nil {
@@ -1444,7 +1560,16 @@ func (manager *Manager) Close() error {
 			}
 			entry.mu.Lock()
 			entry.workerDone = true
+			downloads := make([]*DownloadLease, 0, len(entry.downloads))
+			for lease := range entry.downloads {
+				downloads = append(downloads, lease)
+			}
 			entry.mu.Unlock()
+			for _, lease := range downloads {
+				if err := lease.Close(); err != nil {
+					manager.closeErr = errors.Join(manager.closeErr, fmt.Errorf("close export download: %w", err))
+				}
+			}
 			entry.mu.Lock()
 			tempPath := entry.tempPath
 			artifactPath := entry.artifactPath
@@ -1456,6 +1581,9 @@ func (manager *Manager) Close() error {
 				manager.closeErr = errors.Join(manager.closeErr, fmt.Errorf("remove export artifact: %w", err))
 			}
 		}
+		if err := manager.artifactRoot.Close(); err != nil {
+			manager.closeErr = errors.Join(manager.closeErr, errors.New("close export artifact directory"))
+		}
 		if manager.removeArtifactDir {
 			manager.closeErr = errors.Join(manager.closeErr, os.RemoveAll(manager.artifactDir))
 		}
@@ -1463,6 +1591,10 @@ func (manager *Manager) Close() error {
 		manager.totalBytes = 0
 		manager.totalMetadata = 0
 		manager.budgetMu.Unlock()
+		manager.mu.Lock()
+		manager.activeDownloads = 0
+		manager.downloadsByJob = make(map[string]int)
+		manager.mu.Unlock()
 	})
 	return manager.closeErr
 }

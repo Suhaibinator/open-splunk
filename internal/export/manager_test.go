@@ -20,26 +20,29 @@ import (
 var testAccess = searchjobs.AccessScope{TenantID: "tenant-a", OwnerID: "owner-a"}
 
 type exportTestDataset struct {
-	schema         searchjobs.Schema
-	rows           []searchjobs.ResultRow
-	rowCount       uint64
-	nextGate       <-chan struct{}
-	nextExitGate   <-chan struct{}
-	nextStarted    chan<- struct{}
-	ignoreNextCtx  bool
-	unboundContext bool
-	nextErr        error
-	expectedScope  *searchjobs.AccessScope
+	schema          searchjobs.Schema
+	rows            []searchjobs.ResultRow
+	rowCount        uint64
+	rowCountInexact bool
+	truncated       bool
+	nextGate        <-chan struct{}
+	nextExitGate    <-chan struct{}
+	nextStarted     chan<- struct{}
+	ignoreNextCtx   bool
+	unboundContext  bool
+	nextErr         error
+	expectedScope   *searchjobs.AccessScope
 }
 
 type exportTestSource struct {
-	mu       sync.Mutex
-	datasets map[string]exportTestDataset
-	errors   map[string]error
-	leases   []*exportTestLease
-	acquires int
-	gate     <-chan struct{}
-	started  chan<- struct{}
+	mu           sync.Mutex
+	datasets     map[string]exportTestDataset
+	errors       map[string]error
+	leases       []*exportTestLease
+	acquires     int
+	gate         <-chan struct{}
+	started      chan<- struct{}
+	beforeReturn func()
 }
 
 func (source *exportTestSource) AcquireResultsFor(ctx context.Context, access searchjobs.AccessScope, id string) (searchjobs.ResultLease, error) {
@@ -74,15 +77,17 @@ func (source *exportTestSource) AcquireResultsFor(ctx context.Context, access se
 		rowCount = uint64(len(dataset.rows))
 	}
 	lease := &exportTestLease{
-		schema:        cloneTestSchema(dataset.schema),
-		rows:          cloneTestRows(dataset.rows),
-		rowCount:      rowCount,
-		nextGate:      dataset.nextGate,
-		nextExitGate:  dataset.nextExitGate,
-		nextStarted:   dataset.nextStarted,
-		ignoreNextCtx: dataset.ignoreNextCtx,
-		nextErr:       dataset.nextErr,
-		closedSignal:  make(chan struct{}),
+		schema:          cloneTestSchema(dataset.schema),
+		rows:            cloneTestRows(dataset.rows),
+		rowCount:        rowCount,
+		rowCountInexact: dataset.rowCountInexact,
+		truncated:       dataset.truncated,
+		nextGate:        dataset.nextGate,
+		nextExitGate:    dataset.nextExitGate,
+		nextStarted:     dataset.nextStarted,
+		ignoreNextCtx:   dataset.ignoreNextCtx,
+		nextErr:         dataset.nextErr,
+		closedSignal:    make(chan struct{}),
 	}
 	if !dataset.unboundContext {
 		stop := context.AfterFunc(ctx, func() { _ = lease.Close() })
@@ -96,6 +101,9 @@ func (source *exportTestSource) AcquireResultsFor(ctx context.Context, access se
 		}
 	}
 	source.leases = append(source.leases, lease)
+	if source.beforeReturn != nil {
+		source.beforeReturn()
+	}
 	return lease, nil
 }
 
@@ -112,26 +120,30 @@ func (source *exportTestSource) closedLeases() int {
 }
 
 type exportTestLease struct {
-	mu            sync.Mutex
-	schema        searchjobs.Schema
-	rows          []searchjobs.ResultRow
-	rowCount      uint64
-	next          int
-	closed        bool
-	nextGate      <-chan struct{}
-	nextExitGate  <-chan struct{}
-	nextStarted   chan<- struct{}
-	ignoreNextCtx bool
-	nextErr       error
-	closeOnce     sync.Once
-	closeCount    atomic.Int32
-	closedSignal  chan struct{}
-	stopContext   func() bool
+	mu              sync.Mutex
+	schema          searchjobs.Schema
+	rows            []searchjobs.ResultRow
+	rowCount        uint64
+	rowCountInexact bool
+	truncated       bool
+	next            int
+	closed          bool
+	nextGate        <-chan struct{}
+	nextExitGate    <-chan struct{}
+	nextStarted     chan<- struct{}
+	ignoreNextCtx   bool
+	nextErr         error
+	closeOnce       sync.Once
+	closeCount      atomic.Int32
+	closedSignal    chan struct{}
+	stopContext     func() bool
 }
 
 func (lease *exportTestLease) Schema() searchjobs.Schema { return cloneTestSchema(lease.schema) }
 func (lease *exportTestLease) RowCount() uint64          { return lease.rowCount }
 func (*exportTestLease) Generation() uint64              { return 1 }
+func (lease *exportTestLease) ResultsTruncated() bool    { return lease.truncated }
+func (lease *exportTestLease) RowCountExact() bool       { return !lease.rowCountInexact }
 
 func (lease *exportTestLease) Next(ctx context.Context) (searchjobs.ResultRow, bool, error) {
 	if lease.nextStarted != nil {
@@ -403,6 +415,31 @@ func TestManagerRowAndExactByteLimitsNeverPublishArtifacts(t *testing.T) {
 	}, "failed export partial cleanup")
 }
 
+func TestManagerDoesNotPrecheckAnInexactSourceRowCount(t *testing.T) {
+	t.Parallel()
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"inexact": {
+			schema:          basicExportSchema(),
+			rows:            basicExportRows()[:1],
+			rowCount:        1_000_000,
+			rowCountInexact: true,
+		},
+	}}
+	manager := newExportTestManager(t, source, nil)
+	created, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "inexact",
+		Format:      FormatJSONLines,
+		RowLimit:    1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := waitExportState(t, manager, testAccess, created.ID, StateCompleted)
+	if completed.Artifact == nil || completed.Artifact.RowCount != 1 {
+		t.Fatalf("inexact-count export = %#v", completed)
+	}
+}
+
 func TestManagerRejectsInvalidUTF8CSVWithoutPublishing(t *testing.T) {
 	t.Parallel()
 	schema := searchjobs.Schema{Columns: []searchjobs.Column{{Name: "message", Kind: searchjobs.ValueKindString}}}
@@ -635,6 +672,74 @@ func TestManagerMapsSourceErrorsAndReleasesInvalidColumnLease(t *testing.T) {
 		t.Fatalf("Create(invalid columns) = %v, want ErrInvalidColumns", err)
 	}
 	waitFor(t, func() bool { return source.closedLeases() == 1 }, "invalid-column lease release")
+}
+
+func TestManagerRejectsTruncatedRetainedSourceBeforeAdmission(t *testing.T) {
+	t.Parallel()
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"truncated": {
+			schema:    basicExportSchema(),
+			rows:      basicExportRows(),
+			truncated: true,
+		},
+	}}
+	manager := newExportTestManager(t, source, nil)
+	if _, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "truncated",
+		Format:      FormatJSONLines,
+	}); !errors.Is(err, ErrSourceTruncated) {
+		t.Fatalf("Create(truncated source) = %v, want ErrSourceTruncated", err)
+	}
+	waitFor(t, func() bool { return source.closedLeases() == 1 }, "truncated source lease release")
+	manager.mu.RLock()
+	jobs := len(manager.jobs)
+	reservations := manager.reservations
+	manager.mu.RUnlock()
+	manager.budgetMu.Lock()
+	artifactBytes, metadataBytes := manager.totalBytes, manager.totalMetadata
+	manager.budgetMu.Unlock()
+	if jobs != 0 || reservations != 0 || artifactBytes != 0 || metadataBytes != 0 {
+		t.Fatalf("truncated-source admission leaked jobs=%d reservations=%d artifact=%d metadata=%d", jobs, reservations, artifactBytes, metadataBytes)
+	}
+}
+
+func TestManagerCallerCancellationPrecedesTruncatedSourceError(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	source := &exportTestSource{
+		datasets: map[string]exportTestDataset{
+			"truncated": {schema: basicExportSchema(), truncated: true},
+		},
+		beforeReturn: cancel,
+	}
+	manager := newExportTestManager(t, source, nil)
+	if _, err := manager.Create(ctx, testAccess, CreateRequest{
+		SearchJobID: "truncated",
+		Format:      FormatJSONLines,
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Create(canceled truncated source) = %v, want context.Canceled", err)
+	}
+	waitFor(t, func() bool { return source.closedLeases() == 1 }, "canceled truncated source lease release")
+}
+
+func TestManagerShutdownPrecedesTruncatedSourceError(t *testing.T) {
+	t.Parallel()
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"truncated": {schema: basicExportSchema(), truncated: true},
+	}}
+	manager := newExportTestManager(t, source, nil)
+	source.beforeReturn = func() {
+		manager.mu.Lock()
+		manager.closed = true
+		manager.mu.Unlock()
+	}
+	if _, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "truncated",
+		Format:      FormatJSONLines,
+	}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Create(closed truncated source) = %v, want ErrClosed", err)
+	}
+	waitFor(t, func() bool { return source.closedLeases() == 1 }, "closed truncated source lease release")
 }
 
 func TestManagerBoundsResolvedDefaultColumnSelection(t *testing.T) {
