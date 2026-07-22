@@ -76,12 +76,88 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseLimitCommand(name, nameToken)
 	case "stats":
 		return p.parseStatsCommand(nameToken)
+	case "top":
+		return p.parseTopCommand(nameToken)
 	default:
 		return nil, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_COMMAND",
 			Message: fmt.Sprintf("unsupported command %q at pipeline stage %d", nameToken.text, stage),
 			Range:   nameToken.range_,
 		}
+	}
+}
+
+func (p *parser) parseTopCommand(name token) (Command, error) {
+	command := &TopCommand{Limit: 10}
+	if p.atCommandEnd() {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "top requires one field")
+	}
+
+	var limitToken token
+	hasLimit := false
+	if p.current().kind == tokenWord && unsignedIntegerSyntax(p.current().text) {
+		limitToken = p.current()
+		hasLimit = true
+		p.advance()
+	} else if p.current().kind == tokenWord && strings.HasPrefix(p.current().text, "-") && integerSyntax(p.current().text) {
+		return nil, p.errorAtCurrent("SPL_INVALID_ARGUMENT", "top limit must be a non-negative integer")
+	} else if p.isKeyword("LIMIT") && p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
+		p.advance()
+		p.advance()
+		limitToken = p.current()
+		if limitToken.kind != tokenWord || !unsignedIntegerSyntax(limitToken.text) {
+			return nil, p.errorAtCurrent("SPL_INVALID_ARGUMENT", "top limit must be a non-negative integer")
+		}
+		hasLimit = true
+		p.advance()
+	} else if p.current().kind == tokenWord && p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
+		return nil, p.unsupportedTopSyntax(
+			p.current(), fmt.Sprintf("top option %q is not supported", p.current().text),
+		)
+	}
+	if hasLimit {
+		limit, err := strconv.ParseUint(limitToken.text, 10, 64)
+		if err != nil {
+			return nil, &Diagnostic{
+				Code:    "SPL_NUMBER_OUT_OF_RANGE",
+				Message: "top result count is outside the supported 64-bit range",
+				Range:   limitToken.range_,
+			}
+		}
+		command.Limit = limit
+	}
+
+	if p.atCommandEnd() {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "top requires one field")
+	}
+	if p.current().kind == tokenWord && p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
+		return nil, p.unsupportedTopSyntax(
+			p.current(), fmt.Sprintf("top option %q is not supported", p.current().text),
+		)
+	}
+	field := p.current()
+	if field.kind != tokenWord {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "top requires one field")
+	}
+	if strings.Contains(field.text, "*") {
+		return nil, p.unsupportedTopSyntax(field, "wildcard top fields are not supported")
+	}
+	command.Field = field.text
+	command.FieldRange = field.range_
+	command.Range = Range{Start: name.range_.Start, End: field.range_.End}
+	p.advance()
+	if !p.atCommandEnd() {
+		return nil, p.unsupportedTopSyntax(p.current(), "only one top field is currently supported")
+	}
+	return command, nil
+}
+
+func (p *parser) unsupportedTopSyntax(tok token, message string) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_TOP_SYNTAX",
+		Message:     message,
+		Range:       tok.range_,
+		Suggestions: []string{"top field", "top limit=20 field"},
 	}
 }
 

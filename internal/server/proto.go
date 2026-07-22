@@ -193,7 +193,7 @@ func resultKindForSPL(source string) opensplunkv1.ResultSetKind {
 	}
 	for _, command := range query.Commands {
 		switch command.(type) {
-		case *spl.TableCommand, *spl.StatsCommand:
+		case *spl.TableCommand, *spl.StatsCommand, *spl.TopCommand:
 			return opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS
 		}
 	}
