@@ -53,78 +53,7 @@ func New(database *control.DB, options Options) (*Store, error) {
 // identical terminal callback is idempotent; different content for an existing
 // search ID returns ErrVersionConflict instead of rewriting audit metadata.
 func (store *Store) Record(ctx context.Context, scope AccessScope, input *opensplunkv1.SearchHistoryEntry) (result *opensplunkv1.SearchHistoryEntry, returnedErr error) {
-	if err := validateContext(ctx); err != nil {
-		return nil, err
-	}
-	scope, err := normalizeScope(scope)
-	if err != nil {
-		return nil, err
-	}
-	entry, indexed, err := normalizeEntry(input)
-	if err != nil {
-		return nil, err
-	}
-	now := store.clock().Round(0).UTC()
-	if timestamppb.New(now).CheckValid() != nil {
-		return nil, errors.New("record search history: clock returned an invalid timestamp")
-	}
-
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, mapContextError(ctx, "begin search-history record", err)
-	}
-	defer finishTx(tx, &returnedErr)
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO search_history (
-			search_job_id, tenant_id, owner_id, app_id, saved_search_id,
-			final_state, search_text, created_at_unix_micro,
-			finished_at_unix_micro, duration_nanoseconds, matched_events,
-			entry_proto, entry_sha256
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		indexed.jobID, scope.TenantID, scope.OwnerID, indexed.appID,
-		indexed.savedSearchID, indexed.state, indexed.searchText,
-		indexed.createdAt, indexed.finishedAt, indexed.duration,
-		indexed.matchedEvents, indexed.encoded, indexed.checksum[:],
-	)
-	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return nil, fmt.Errorf("record search history: %w", contextErr)
-		}
-		var existingTenant, existingOwner string
-		var existingEncoded, existingChecksum []byte
-		lookupErr := tx.QueryRowContext(ctx, `
-			SELECT tenant_id, owner_id, entry_proto, entry_sha256
-			FROM search_history WHERE search_job_id = ?`, indexed.jobID,
-		).Scan(&existingTenant, &existingOwner, &existingEncoded, &existingChecksum)
-		if errors.Is(lookupErr, sql.ErrNoRows) {
-			return nil, fmt.Errorf("record search history: %w", err)
-		}
-		if lookupErr != nil {
-			return nil, fmt.Errorf("classify duplicate search-history record: %w", lookupErr)
-		}
-		if existingTenant != scope.TenantID || existingOwner != scope.OwnerID {
-			return nil, fmt.Errorf("%w: search job ID already exists", control.ErrAlreadyExists)
-		}
-		if _, _, decodeErr := decodeEntry(existingEncoded, existingChecksum); decodeErr != nil {
-			return nil, fmt.Errorf("read duplicate search-history record: %w", decodeErr)
-		}
-		if !slices.Equal(existingEncoded, indexed.encoded) || !slices.Equal(existingChecksum, indexed.checksum[:]) {
-			return nil, control.ErrVersionConflict
-		}
-		if err := tx.Commit(); err != nil {
-			return nil, fmt.Errorf("commit idempotent search-history record: %w", err)
-		}
-		return entry, nil
-	}
-
-	if _, err := store.pruneScope(ctx, tx, scope, now); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit search-history record: %w", err)
-	}
-	return entry, nil
+	return store.CompleteAttempt(ctx, scope, input)
 }
 
 // Get returns one detached owner-scoped terminal entry.
