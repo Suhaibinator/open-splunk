@@ -46,8 +46,10 @@ const (
 	maximumConcurrent             = 256
 	maximumConcurrentReads        = 256
 	maximumConcurrentSnapshots    = 64
-	maximumResultLeases           = 65_536
-	maximumResultLeasesPerJob     = 4_096
+	// Cancellation may schedule one AfterFunc callback per active lease, so
+	// the hard ceilings also bound shutdown/cancellation fan-out.
+	maximumResultLeases           = 4_096
+	maximumResultLeasesPerJob     = 256
 	maximumQueued                 = 100_000
 	maximumJobs                   = 100_000
 	maximumMetadataBytes          = 1 << 30
@@ -68,7 +70,8 @@ var (
 	// ErrNotFound means no retained job has the supplied ID.
 	ErrNotFound = errors.New("search job not found")
 	// ErrExpired means the job metadata tombstone remains but its results have
-	// passed their retention deadline and were released.
+	// passed their retention deadline and are unavailable to new readers.
+	// Storage may remain pinned by a lease acquired before expiration.
 	ErrExpired = errors.New("search job results expired")
 	// ErrResultsNotReady means an active job has no immutable result snapshot.
 	ErrResultsNotReady = errors.New("search job results are not ready")
