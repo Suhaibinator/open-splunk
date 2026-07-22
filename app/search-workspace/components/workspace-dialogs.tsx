@@ -1,6 +1,6 @@
 import type { DemoHistoryEntry, DemoSavedSearch } from "@/lib/demo/search-data";
 
-import { EXPORT_FIELD_LABELS, NUMBER_FORMAT } from "../constants";
+import { NUMBER_FORMAT } from "../constants";
 import { Modal } from "../modal";
 import type { ExportStage, JobPhase, ModalName, ResultTab, SearchMode, TimeRange } from "../model";
 import { phaseLabel, stateClass } from "../workspace-utils";
@@ -10,6 +10,7 @@ interface WorkspaceDialogsProps {
   activeTab: ResultTab;
   displayedExportRows: number;
   elapsed: string;
+  exportFieldLabels: Record<string, string>;
   exportFieldOptions: string[];
   exportFields: string[];
   exportFormat: "csv" | "jsonl";
@@ -57,6 +58,7 @@ export function WorkspaceDialogs({
   activeTab,
   displayedExportRows,
   elapsed,
+  exportFieldLabels,
   exportFieldOptions,
   exportFields,
   exportFormat,
@@ -167,7 +169,11 @@ export function WorkspaceDialogs({
           </fieldset>
           <fieldset className="export-fields" disabled={exportStage !== "configure"}>
             <legend>Columns <small>{exportFields.length} selected</small></legend>
-            {exportFieldOptions.map((field) => <label key={field} htmlFor={`export-field-${field}`}><input id={`export-field-${field}`} aria-label={`Include ${field} in export`} type="checkbox" checked={exportFields.includes(field)} onChange={() => onExportFieldToggle(field)} /><code>{EXPORT_FIELD_LABELS[field] ?? field}</code></label>)}
+            {exportFieldOptions.map((field, index) => {
+              const fieldLabel = exportFieldLabels[field] ?? field;
+              const inputId = `export-field-${index}`;
+              return <label key={field} htmlFor={inputId}><input id={inputId} aria-label={`Include ${fieldLabel} in export`} type="checkbox" checked={exportFields.includes(field)} onChange={() => onExportFieldToggle(field)} /><code>{fieldLabel}</code></label>;
+            })}
           </fieldset>
           <div className="export-limit"><span>Maximum rows</span><strong>50,000</strong><small>{displayedExportRows} displayed {exportSourceTab === "events" ? "events" : "rows"}</small></div>
           {exportStage === "preparing" ? <div className="export-progress"><span style={{ width: "72%" }} /><strong>Materializing results…</strong></div> : null}

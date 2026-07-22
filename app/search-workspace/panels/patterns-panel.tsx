@@ -58,15 +58,18 @@ export function PatternsPanel({
       </header>
       <div className="pattern-table">
         <div className="pattern-head"><span>Pattern</span><span className="pattern-events-head">Events</span><span className="pattern-coverage-head">Coverage</span><span className="pattern-action-head">Action</span></div>
-        {patternRows.map((pattern, index) => (
-          <article key={pattern.signature}>
-            <span className="pattern-rank">{index + 1}</span>
-            <code title={pattern.signature}>{pattern.signature}</code>
-            <strong className="pattern-event-count">{NUMBER_FORMAT.format(pattern.count)}<span> events</span></strong>
-            <div className="pattern-coverage"><span style={{ width: `${pattern.percent}%` }} /><b>{pattern.percent}%</b></div>
-            <button className="pattern-action" type="button" onClick={() => { onTabChange("events"); onViewEvents(pattern.signature); }}>View events <span aria-hidden="true">›</span></button>
-          </article>
-        ))}
+        {patternRows.map((pattern, index) => {
+          const roundedPercent = Math.round(pattern.percent * 10) / 10;
+          return (
+            <article key={pattern.signature}>
+              <span className="pattern-rank">{index + 1}</span>
+              <code title={pattern.signature}>{pattern.signature}</code>
+              <strong className="pattern-event-count">{NUMBER_FORMAT.format(pattern.count)}<span> events</span></strong>
+              <div className="pattern-coverage"><span style={{ width: `${Math.max(0, Math.min(100, roundedPercent))}%` }} /><b>{roundedPercent.toFixed(1)}%</b></div>
+              <button className="pattern-action" type="button" onClick={() => { onTabChange("events"); onViewEvents(pattern.signature); }}>View events <span aria-hidden="true">›</span></button>
+            </article>
+          );
+        })}
       </div>
     </section>
   );

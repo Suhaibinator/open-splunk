@@ -7,6 +7,7 @@ export type MenuName =
   | "user"
   | "activity"
   | "help"
+  | "search-actions"
   | "search-mode"
   | "save-as"
   | "stats-format"

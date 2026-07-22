@@ -1,0 +1,322 @@
+.headerActions {
+  align-items: flex-end !important;
+  display: grid !important;
+  grid-template-columns: auto auto auto;
+  justify-items: end;
+}
+
+.rangePicker {
+  display: grid;
+  gap: 3px;
+}
+
+.rangePicker > span {
+  color: #6c7980;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.rangePicker select {
+  appearance: none;
+  background: #fff
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath fill='%23526068' d='M0 0h8L4 5z'/%3E%3C/svg%3E")
+    no-repeat right 9px center;
+  border: 1px solid #aeb8bd;
+  border-radius: 2px;
+  color: #31424b;
+  font: 600 10px/1 system-ui, sans-serif;
+  height: 31px;
+  min-width: 148px;
+  padding: 0 28px 0 10px;
+}
+
+.rangePicker select:focus-visible,
+.serviceLink:focus-visible,
+.notableList a:focus-visible {
+  outline: 2px solid #2f789e;
+  outline-offset: 2px;
+}
+
+.disabledAction {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.updateStatus {
+  color: #758188;
+  font-size: 10px;
+  grid-column: 1 / -1;
+  line-height: 1.3;
+}
+
+.lineChart {
+  min-height: 320px;
+  padding: 20px 20px 8px 13px;
+  position: relative;
+}
+
+.lineChart :global(.time-series-chart) {
+  grid-template-rows: minmax(235px, 1fr) 34px;
+  height: 282px;
+}
+
+.lineChart :global(.time-series-chart__line) {
+  stroke-width: 2;
+}
+
+.chartUnit {
+  color: #77838a;
+  font-size: 10px;
+  left: 13px;
+  position: absolute;
+  top: 8px;
+}
+
+.chartHint {
+  color: #7a868c;
+  font-size: 10px;
+  line-height: 1.35;
+  margin: 3px 0 0 48px;
+}
+
+.volumeChart {
+  padding: 13px 15px 9px;
+}
+
+.volumePlot {
+  align-items: stretch;
+  border: 0;
+  border-bottom: 1px solid #9ba8ae;
+  display: grid;
+  gap: 3px;
+  grid-template-columns: repeat(24, minmax(4px, 1fr));
+  height: 215px;
+  margin: 0;
+  min-width: 0;
+  padding: 37px 4px 0;
+}
+
+.volumeBar {
+  align-items: flex-end;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  cursor: crosshair;
+  display: flex;
+  height: 100%;
+  justify-content: stretch;
+  min-width: 0;
+  outline: 0;
+  padding: 0;
+  position: relative;
+}
+
+.volumeBar:focus-visible {
+  box-shadow: 0 0 0 2px rgb(47 120 158 / 45%);
+  z-index: 3;
+}
+
+.volumeFill {
+  background: #70a94b;
+  height: var(--bar-height);
+  min-height: 5px;
+  position: relative;
+  transition: background-color 120ms ease, filter 120ms ease;
+  width: 100%;
+}
+
+.volumeBar:hover .volumeFill,
+.volumeBarActive .volumeFill {
+  background: #4f8a30;
+  filter: saturate(1.1);
+}
+
+.volumeTooltip {
+  background: #fff;
+  border: 1px solid #98a4aa;
+  border-radius: 2px;
+  bottom: calc(100% + 7px);
+  box-shadow: 0 3px 9px rgb(21 35 43 / 24%);
+  color: #2f3d45;
+  display: grid;
+  font-size: 10px;
+  gap: 3px;
+  left: 50%;
+  min-width: 124px;
+  padding: 6px 8px;
+  pointer-events: none;
+  position: absolute;
+  text-align: left;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  z-index: 5;
+}
+
+.volumeTooltip strong {
+  border-bottom: 1px solid #e2e6e8;
+  font-size: 10px;
+  padding-bottom: 4px;
+}
+
+.tooltipStart {
+  left: -3px;
+  transform: none;
+}
+
+.tooltipEnd {
+  left: auto;
+  right: -3px;
+  transform: none;
+}
+
+.volumeAxis {
+  color: #6f7c83;
+  display: flex;
+  font-size: 10px;
+  justify-content: space-between;
+  padding-top: 7px;
+}
+
+.volumeChart .chartHint {
+  margin-left: 0;
+}
+
+.readOnlyBadge {
+  background: #eef1f2;
+  border: 1px solid #d1d7da;
+  border-radius: 10px;
+  color: #66747b;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  text-transform: uppercase;
+}
+
+.donutFigure {
+  margin: 0;
+}
+
+.serviceLink {
+  color: #267499;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.notableList a {
+  color: #304149;
+  font-size: 10px;
+  font-weight: 600;
+  overflow: hidden;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notableList a:hover,
+.serviceLink:hover {
+  color: #175d81;
+  text-decoration: underline;
+}
+
+@media (max-width: 760px) {
+  .volumeChart {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  .volumePlot,
+  .volumeAxis {
+    min-width: 660px;
+  }
+
+  .volumeBar {
+    min-width: 22px;
+  }
+
+  .volumeChart .chartHint {
+    left: 0;
+    position: sticky;
+    width: calc(100vw - 52px);
+  }
+}
+
+@media (max-width: 760px) {
+  .headerActions {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    justify-items: stretch;
+    width: 100%;
+  }
+
+  .rangePicker select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .headerActions > button {
+    align-self: end;
+  }
+
+  .updateStatus {
+    justify-self: start;
+  }
+
+  .lineChart {
+    min-height: 285px;
+    padding-inline: 8px 12px;
+  }
+
+  .lineChart :global(.time-series-chart) {
+    grid-template-columns: 38px minmax(0, 1fr);
+    grid-template-rows: minmax(205px, 1fr) 42px;
+    height: 250px;
+  }
+
+  .lineChart :global(.time-series-chart__x-axis) {
+    font-size: 10px;
+  }
+
+  .chartHint {
+    margin-left: 38px;
+  }
+
+  .volumeChart {
+    padding-inline: 10px;
+  }
+
+  .volumePlot {
+    gap: 2px;
+    padding-inline: 1px;
+  }
+
+  .notableList a {
+    overflow: visible;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 430px) {
+  .headerActions {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .rangePicker {
+    grid-column: 1 / -1;
+  }
+
+  .headerActions > button {
+    width: 100%;
+  }
+
+  .volumePlot {
+    height: 196px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .volumeFill {
+    transition: none;
+  }
+}

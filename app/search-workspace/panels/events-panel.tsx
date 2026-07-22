@@ -1,4 +1,6 @@
-import type { Dispatch, PointerEvent, SetStateAction } from "react";
+/* oxlint-disable jsx-a11y/prefer-tag-over-role */
+
+import { type Dispatch, type KeyboardEvent, type PointerEvent, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 
 import type { DemoEvent, DemoField, DemoScalar, TimelinePoint } from "@/lib/demo/search-data";
 import type { PivotMode } from "@/lib/search/query-pivots";
@@ -52,6 +54,8 @@ interface EventsPanelProps {
   toggleEvent: (eventId: string) => void;
   toggleField: (fieldName: string) => void;
   zoomTimeline: () => void;
+  zoomOutTimeline: () => void;
+  canZoomOut: boolean;
 }
 
 export function EventsPanel({
@@ -99,14 +103,126 @@ export function EventsPanel({
   toggleEvent,
   toggleField,
   zoomTimeline,
+  zoomOutTimeline,
+  canZoomOut,
 }: EventsPanelProps) {
+  const [timelineKeyboardIndex, setTimelineKeyboardIndex] = useState(0);
+  const [mobileFieldsMode, setMobileFieldsMode] = useState(false);
+  const fieldsRailRef = useRef<HTMLElement>(null);
+  const fieldsReturnFocusRef = useRef<HTMLElement | null>(null);
+  const mobileFieldsButtonRef = useRef<HTMLButtonElement>(null);
   const selectedFields = fields.filter((field) => field.selected);
   const interestingFields = fields.filter((field) => field.interesting && !field.selected);
-  const visibleInterestingFields = (showAllFields ? interestingFields : interestingFields.slice(0, 8)).filter((field) =>
-    field.name.toLowerCase().includes(fieldFilter.toLowerCase()),
-  );
+  const matchingInterestingFields = interestingFields.filter((field) => field.name.toLowerCase().includes(fieldFilter.toLowerCase()));
+  const visibleInterestingFields = showAllFields || fieldFilter.trim().length > 0 ? matchingInterestingFields : matchingInterestingFields.slice(0, 8);
   const activeFieldData = fields.find((field) => field.name === activeField) ?? null;
   const maxTimelineCount = Math.max(1, ...timelinePoints.map((point) => point.count));
+  const timelineAxisLabels = useMemo(() => {
+    if (timelinePoints.length === 0) return [];
+    const indexes = [0, Math.round((timelinePoints.length - 1) * 0.25), Math.round((timelinePoints.length - 1) * 0.5), Math.round((timelinePoints.length - 1) * 0.75), timelinePoints.length - 1];
+    return [...new Set(indexes)].map((index) => timelinePoints[index]?.label).filter((label): label is string => label !== undefined);
+  }, [timelinePoints]);
+
+  useEffect(() => {
+    setTimelineKeyboardIndex((current) => Math.min(current, Math.max(0, timelinePoints.length - 1)));
+  }, [timelinePoints.length]);
+
+  useEffect(() => {
+    const phoneViewport = window.matchMedia("(max-width: 760px)");
+    const updateMode = () => setMobileFieldsMode(phoneViewport.matches);
+    updateMode();
+    phoneViewport.addEventListener("change", updateMode);
+    return () => phoneViewport.removeEventListener("change", updateMode);
+  }, []);
+
+  useEffect(() => {
+    if (fieldsCollapsed || !window.matchMedia("(max-width: 760px)").matches) return;
+    const rail = fieldsRailRef.current;
+    const previousOverflow = document.body.style.overflow;
+    const inertedElements: HTMLElement[] = [];
+    document.body.style.overflow = "hidden";
+    let current = rail;
+    while (current !== null && current.parentElement !== null && current !== document.body) {
+      const parent = current.parentElement;
+      for (const sibling of parent.children) {
+        if (sibling !== current
+          && sibling instanceof HTMLElement
+          && !sibling.classList.contains("fields-mobile-dismiss")
+          && !sibling.inert) {
+          sibling.inert = true;
+          inertedElements.push(sibling);
+        }
+      }
+      current = parent;
+    }
+    window.requestAnimationFrame(() => rail?.querySelector<HTMLElement>("button, input")?.focus());
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        setFieldsCollapsed(true);
+        return;
+      }
+      if (event.key !== "Tab" || rail === null) return;
+      const controls = Array.from(rail.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])'));
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (first === undefined || last === undefined) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      for (const element of inertedElements) element.inert = false;
+      document.removeEventListener("keydown", handleKeyDown);
+      window.requestAnimationFrame(() => fieldsReturnFocusRef.current?.focus());
+    };
+  }, [fieldsCollapsed, setFieldsCollapsed]);
+
+  function handleTimelineKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (timelinePoints.length === 0) return;
+    let nextIndex = timelineKeyboardIndex;
+    if (event.key === "ArrowLeft") nextIndex = Math.max(0, timelineKeyboardIndex - 1);
+    else if (event.key === "ArrowRight") nextIndex = Math.min(timelinePoints.length - 1, timelineKeyboardIndex + 1);
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = timelinePoints.length - 1;
+    else if (event.key === "Escape") {
+      event.preventDefault();
+      setTimelineStart(null);
+      setTimelineEnd(null);
+      return;
+    } else if (event.key === "Enter" && timelineSelection !== null) {
+      event.preventDefault();
+      zoomTimeline();
+      return;
+    } else return;
+    event.preventDefault();
+    setTimelineKeyboardIndex(nextIndex);
+    setTimelineStart(nextIndex);
+    setTimelineEnd(nextIndex);
+  }
+
+  function openFieldInspector(fieldName: string) {
+    if (mobileFieldsMode && document.activeElement instanceof HTMLElement) fieldsReturnFocusRef.current = document.activeElement;
+    setActiveField(fieldName);
+    setFieldsCollapsed(false);
+  }
+
+  function closeFieldInspector() {
+    const fieldName = activeField;
+    setActiveField(null);
+    window.requestAnimationFrame(() => {
+      const matchingRow = fieldName === null
+        ? null
+        : Array.from(fieldsRailRef.current?.querySelectorAll<HTMLButtonElement>("[data-field-name]") ?? [])
+            .find((button) => button.dataset.fieldName === fieldName);
+      (matchingRow ?? fieldsRailRef.current?.querySelector<HTMLInputElement>(".field-filter input"))?.focus();
+    });
+  }
 
   return (
       <section id="panel-events" role="tabpanel" aria-labelledby="tab-events" className="events-panel">
@@ -123,7 +239,7 @@ export function EventsPanel({
                   </div>
                 ) : null}
               </div>
-              <button type="button" onClick={() => showToast("Timeline is already at the full selected range.")}>− Zoom Out</button>
+              <button type="button" disabled={!canZoomOut} onClick={zoomOutTimeline}>− Zoom Out</button>
               <button type="button" disabled={timelineSelection === null} onClick={zoomTimeline}>＋ Zoom to Selection</button>
               <button type="button" disabled={timelineSelection === null} onClick={() => { setTimelineStart(null); setTimelineEnd(null); }}>× Deselect</button>
             </div>
@@ -131,21 +247,27 @@ export function EventsPanel({
           </div>
           <div
             className={`timeline-chart timeline-${timelineDisplay.toLowerCase()}${draggingTimeline ? " dragging" : ""}`}
+            role="slider"
+            tabIndex={0}
+            aria-label="Event timeline. Use Left and Right arrows to inspect a bucket, then Enter to zoom."
+            aria-valuemin={0}
+            aria-valuemax={Math.max(0, timelinePoints.length - 1)}
+            aria-valuenow={Math.min(timelineKeyboardIndex, Math.max(0, timelinePoints.length - 1))}
+            aria-valuetext={timelinePoints[timelineKeyboardIndex] === undefined ? "No timeline data" : `${timelinePoints[timelineKeyboardIndex].label}, ${NUMBER_FORMAT.format(timelinePoints[timelineKeyboardIndex].count)} events`}
             onPointerDown={startTimelineDrag}
             onPointerMove={moveTimelineDrag}
             onPointerUp={endTimelineDrag}
             onPointerCancel={endTimelineDrag}
+            onKeyDown={handleTimelineKeyDown}
           >
             <div className="timeline-grid-lines" aria-hidden="true"><span /><span /><span /></div>
-            <div className="timeline-bars">
+            <div className="timeline-bars" aria-hidden="true">
               {timelinePoints.map((point, index) => {
                 const selected = timelineSelection !== null && index >= timelineSelection[0] && index <= timelineSelection[1];
                 return (
-                  <button
-                    type="button"
+                  <span
                     className={selected ? "selected" : ""}
                     data-timeline-index={index}
-                    aria-label={`${point.label}: ${NUMBER_FORMAT.format(point.count)} events`}
                     title={`${point.label}\n${NUMBER_FORMAT.format(point.count)} events`}
                     key={point.id}
                     style={{ height: `${Math.max(4, (point.count / maxTimelineCount) * 100)}%` }}
@@ -164,11 +286,11 @@ export function EventsPanel({
               />
             )}
           </div>
-          <div className="timeline-axis" aria-hidden="true"><span>Jul 20, 4 PM</span><span>Jul 20, 10 PM</span><span>Jul 21, 4 AM</span><span>Jul 21, 10 AM</span><span>Jul 21, 4 PM</span></div>
+          <div className="timeline-axis" aria-hidden="true">{timelineAxisLabels.map((label) => <span key={label}>{label}</span>)}</div>
         </section>
 
         <div className={`events-layout${fieldsCollapsed ? " fields-collapsed" : ""}`}>
-          <aside className="fields-rail" data-testid="fields-rail" aria-label="Search fields">
+          <aside ref={fieldsRailRef} className="fields-rail" data-testid="fields-rail" role={mobileFieldsMode && !fieldsCollapsed ? "dialog" : undefined} aria-modal={mobileFieldsMode && !fieldsCollapsed ? "true" : undefined} aria-label="Search fields">
             <div className="fields-topbar">
               <button type="button" onClick={() => setFieldsCollapsed(!fieldsCollapsed)}><span aria-hidden="true">{fieldsCollapsed ? "»" : "‹"}</span>{fieldsCollapsed ? null : "Hide Fields"}</button>
               {fieldsCollapsed ? null : <button type="button" onClick={() => setShowAllFields(true)}>▦ All Fields</button>}
@@ -185,7 +307,7 @@ export function EventsPanel({
                   <h2>Selected Fields <span>{selectedFields.length}</span></h2>
                   <div className="field-list">
                     {selectedFields.filter((field) => field.name.toLowerCase().includes(fieldFilter.toLowerCase())).map((field) => (
-                      <button type="button" key={field.name} className={activeField === field.name ? "active" : ""} onClick={() => setActiveField(activeField === field.name ? null : field.name)}>
+                      <button type="button" key={field.name} data-field-name={field.name} className={activeField === field.name ? "active" : ""} onClick={() => activeField === field.name ? closeFieldInspector() : setActiveField(field.name)}>
                         <span className={`field-type type-${field.type}`}>{field.type === "number" ? "#" : field.type === "boolean" ? "✓" : "a"}</span>
                         <span>{field.displayName}</span><b>{COMPACT_NUMBER_FORMAT.format(field.distinctCount)}</b>
                       </button>
@@ -196,13 +318,13 @@ export function EventsPanel({
                   <h2>Interesting Fields <span>{interestingFields.length}</span></h2>
                   <div className="field-list">
                     {visibleInterestingFields.map((field) => (
-                      <button type="button" key={field.name} className={activeField === field.name ? "active" : ""} onClick={() => setActiveField(activeField === field.name ? null : field.name)}>
+                      <button type="button" key={field.name} data-field-name={field.name} className={activeField === field.name ? "active" : ""} onClick={() => activeField === field.name ? closeFieldInspector() : setActiveField(field.name)}>
                         <span className={`field-type type-${field.type}`}>{field.type === "number" ? "#" : field.type === "boolean" ? "✓" : "a"}</span>
                         <span>{field.displayName}</span><b>{COMPACT_NUMBER_FORMAT.format(field.distinctCount)}</b>
                       </button>
                     ))}
                   </div>
-                  {!showAllFields && interestingFields.length > 8 ? <button className="more-fields" type="button" onClick={() => setShowAllFields(true)}>Show {interestingFields.length - 8} more fields</button> : null}
+                  {!showAllFields && fieldFilter.trim().length === 0 && interestingFields.length > 8 ? <button className="more-fields" type="button" onClick={() => setShowAllFields(true)}>Show {interestingFields.length - 8} more fields</button> : null}
                 </div>
               </>
             )}
@@ -210,7 +332,7 @@ export function EventsPanel({
               <section className="field-inspector" data-testid="field-inspector" aria-label={`${activeFieldData.displayName} field summary`}>
                 <header>
                   <div><span className={`field-type type-${activeFieldData.type}`}>{activeFieldData.type === "number" ? "#" : "a"}</span><strong>{activeFieldData.displayName}</strong></div>
-                  <button className="icon-button" type="button" aria-label="Close field summary" onClick={() => setActiveField(null)}>×</button>
+                  <button className="icon-button" type="button" aria-label="Close field summary" onClick={closeFieldInspector}>×</button>
                 </header>
                 <div className="field-summary-meta">
                   <span><strong>{NUMBER_FORMAT.format(activeFieldData.eventCount)}</strong> events</span>
@@ -230,7 +352,7 @@ export function EventsPanel({
                     );
                   })}
                 </div>
-                <footer><button type="button" onClick={() => setShowAllFields(true)}>View all values</button><button type="button" onClick={() => applyPivot(activeFieldData.name, activeFieldData.values[0]?.value ?? "*", "new", true)}>New search</button></footer>
+                <footer><span>Showing top {activeFieldData.values.length} values</span><button type="button" onClick={() => applyPivot(activeFieldData.name, activeFieldData.values[0]?.value ?? "*", "new", true)}>New search</button></footer>
               </section>
             )}
           </aside>
@@ -239,7 +361,7 @@ export function EventsPanel({
           <section className={`event-results display-${eventDisplay.toLowerCase()}${wrapEvents ? " wrap-events" : " nowrap-events"}`} aria-label="Events">
             <div className="event-toolbar">
               <div>
-                <button className="mobile-fields-button" type="button" onClick={() => setFieldsCollapsed(false)}>☰ Fields</button>
+                <button ref={mobileFieldsButtonRef} className="mobile-fields-button" type="button" onClick={() => { fieldsReturnFocusRef.current = mobileFieldsButtonRef.current; setFieldsCollapsed(false); }}>☰ Fields</button>
                 <div className="header-menu-wrap result-menu-wrap">
                   <button type="button" aria-haspopup="menu" aria-expanded={menu === "event-display"} onClick={() => setMenu(menu === "event-display" ? null : "event-display")}>{eventDisplay} <span aria-hidden="true">▾</span></button>
                   {menu === "event-display" ? (
@@ -282,7 +404,7 @@ export function EventsPanel({
                       <button className="event-raw" type="button" aria-label={`${expanded ? "Collapse" : "Expand"} event details`} onClick={() => toggleEvent(event.id)}>{highlightedRaw(event.raw, submittedQuery)}</button>
                       <div className="event-chips">
                         {["host", "source", "sourcetype"].map((fieldName) => (
-                          <button type="button" key={fieldName} onClick={() => setActiveField(fieldName)}><span>{fieldName}</span> = {formatFieldValue(event.fields[fieldName] ?? "")}</button>
+                          <button type="button" key={fieldName} onClick={() => openFieldInspector(fieldName)}><span>{fieldName}</span> = {formatFieldValue(event.fields[fieldName] ?? "")}</button>
                         ))}
                       </div>
                       {expanded ? (
@@ -291,7 +413,7 @@ export function EventsPanel({
                           <div className="event-field-grid">
                             {Object.entries(event.fields).map(([fieldName, fieldValue]) => (
                               <div className="event-field" key={fieldName}>
-                                <button className="event-field-name" type="button" onClick={() => setActiveField(fieldName)}>{fieldName}</button>
+                                <button className="event-field-name" type="button" onClick={() => openFieldInspector(fieldName)}>{fieldName}</button>
                                 <span className={`value-type value-${fieldValue === null ? "null" : typeof fieldValue}`}>{fieldValue === null ? "null" : typeof fieldValue}</span>
                                 <code>{formatFieldValue(fieldValue)}</code>
                                 <div className="event-field-actions">
