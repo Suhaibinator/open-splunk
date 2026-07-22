@@ -90,12 +90,47 @@ func TestDeriveServerKeySeparatesPurposes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	history, err := deriveServerKey(master, "search-history-cursors")
+	if err != nil {
+		t.Fatal(err)
+	}
 	firstAgain, err := deriveServerKey(master, "saved-search-cursors")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Equal(first, second) || !bytes.Equal(first, firstAgain) || len(first) != 32 {
+	if bytes.Equal(first, second) || bytes.Equal(first, history) || bytes.Equal(second, history) ||
+		!bytes.Equal(first, firstAgain) || len(first) != 32 || len(history) != 32 {
 		t.Fatalf("derived keys do not provide deterministic purpose separation")
+	}
+}
+
+func TestOpenSearchHistoryStoreUsesRegisteredStableMasterKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	directory := t.TempDir()
+	db, err := control.Open(ctx, filepath.Join(directory, "control.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	keyPath := filepath.Join(directory, "server.key")
+	if _, _, err := openSecurityStores(ctx, db, keyPath); err != nil {
+		t.Fatal(err)
+	}
+	first, err := openSearchHistoryStore(ctx, db, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := openSearchHistoryStore(ctx, db, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == nil || second == nil {
+		t.Fatal("openSearchHistoryStore() returned a nil store")
 	}
 }
 

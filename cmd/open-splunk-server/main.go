@@ -24,6 +24,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
+	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
@@ -34,6 +35,7 @@ const (
 	startupTimeout        = 2 * time.Minute
 	shutdownTimeout       = 35 * time.Second
 	defaultIndexRetention = 30 * 24 * time.Hour
+	defaultOwnerID        = "single-user"
 )
 
 type options struct {
@@ -104,6 +106,20 @@ func run() error {
 	savedSearches, tokenStore, err := openSecurityStores(startupContext, controlDB, config.masterKeyPath)
 	if err != nil {
 		return err
+	}
+	searchHistory, err := openSearchHistoryStore(startupContext, controlDB, config.masterKeyPath)
+	if err != nil {
+		return err
+	}
+	recoveredSearches, err := searchHistory.RecoverInterrupted(startupContext, searchhistory.AccessScope{
+		TenantID: config.tenantID,
+		OwnerID:  defaultOwnerID,
+	})
+	if err != nil {
+		return fmt.Errorf("recover interrupted search history: %w", err)
+	}
+	if recoveredSearches != 0 {
+		log.Printf("recovered %d interrupted search attempts", recoveredSearches)
 	}
 	connection, err := openClickHouse(config)
 	if err != nil {
@@ -192,7 +208,9 @@ func run() error {
 		Indexes:                    controlDB,
 		IngestionTokens:            tokenStore,
 		SavedSearches:              savedSearches,
+		SearchHistory:              searchHistory,
 		WebUI:                      webUI,
+		OwnerID:                    defaultOwnerID,
 		TenantID:                   config.tenantID,
 		AdministrativeAllowedHosts: config.httpAllowedHosts,
 		Bootstrap: server.BootstrapConfig{
@@ -289,6 +307,24 @@ func openSecurityStores(ctx context.Context, db *control.DB, masterKeyPath strin
 		return nil, nil, fmt.Errorf("create collector-token store: %w", err)
 	}
 	return savedSearches, tokens, nil
+}
+
+func openSearchHistoryStore(ctx context.Context, db *control.DB, masterKeyPath string) (*searchhistory.Store, error) {
+	masterKey, err := loadVerifiedMasterKey(ctx, db, masterKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("open search-history master key: %w", err)
+	}
+	defer clear(masterKey)
+	cursorKey, err := deriveServerKey(masterKey, "search-history-cursors")
+	if err != nil {
+		return nil, err
+	}
+	defer clear(cursorKey)
+	store, err := searchhistory.New(db, searchhistory.Options{CursorKey: cursorKey})
+	if err != nil {
+		return nil, fmt.Errorf("create search-history store: %w", err)
+	}
+	return store, nil
 }
 
 func openClickHouse(config options) (clickhousedriver.Conn, error) {

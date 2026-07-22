@@ -21,6 +21,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
+	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -94,6 +95,17 @@ type SavedSearches interface {
 	Delete(context.Context, savedobjects.AccessScope, string, uint64) error
 }
 
+// SearchHistory is the immutable, owner-scoped terminal-search metadata
+// surface exposed to the browser API. searchhistory.Store satisfies this
+// interface directly; recording and retention maintenance remain runtime
+// responsibilities rather than browser operations.
+type SearchHistory interface {
+	Get(context.Context, searchhistory.AccessScope, string) (*opensplunkv1.SearchHistoryEntry, error)
+	List(context.Context, searchhistory.AccessScope, searchhistory.ListRequest) (searchhistory.ListResult, error)
+	Delete(context.Context, searchhistory.AccessScope, string) error
+	Clear(context.Context, searchhistory.AccessScope, searchhistory.Filter) (uint64, error)
+}
+
 // BootstrapConfig contains build information and static workspace summaries.
 // Index summaries are always loaded from IndexCatalog so authorization and the
 // UI bootstrap cannot drift apart.
@@ -124,6 +136,7 @@ type Config struct {
 	IndexAdmin                 IndexAdministration
 	IngestionTokens            IngestionTokenAdministration
 	SavedSearches              SavedSearches
+	SearchHistory              SearchHistory
 	WebUI                      fs.FS
 	Bootstrap                  BootstrapConfig
 	OwnerID                    string
@@ -146,6 +159,7 @@ type apiHandler struct {
 	indexAdmin        IndexAdministration
 	ingestionTokens   IngestionTokenAdministration
 	savedSearches     SavedSearches
+	searchHistory     SearchHistory
 	ownerID           string
 	tenantID          string
 	maximumPageSize   uint32
@@ -181,6 +195,10 @@ func NewHandler(config Config) (http.Handler, error) {
 	}
 	if isNilDependency(config.SavedSearches) {
 		return nil, errors.New("create server handler: saved search service is required")
+	}
+	searchHistoryService := config.SearchHistory
+	if isNilDependency(searchHistoryService) {
+		searchHistoryService = nil
 	}
 	if config.WebUI == nil {
 		return nil, errors.New("create server handler: web UI filesystem is required")
@@ -239,7 +257,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	bootstrap.Features = featuresForServices(bootstrap.Features, indexAdmin != nil, ingestionTokens != nil)
+	bootstrap.Features = featuresForServices(bootstrap.Features, indexAdmin != nil, ingestionTokens != nil, searchHistoryService != nil)
 	adminAllowedHosts, err := normalizeAdministrativeAllowedHosts(config.AdministrativeAllowedHosts, indexAdmin != nil || ingestionTokens != nil)
 	if err != nil {
 		return nil, fmt.Errorf("create server handler: %w", err)
@@ -261,6 +279,7 @@ func NewHandler(config Config) (http.Handler, error) {
 		indexAdmin:        indexAdmin,
 		ingestionTokens:   ingestionTokens,
 		savedSearches:     config.SavedSearches,
+		searchHistory:     searchHistoryService,
 		ownerID:           ownerID,
 		tenantID:          tenantID,
 		maximumPageSize:   pageSize,
@@ -284,6 +303,16 @@ func NewHandler(config Config) (http.Handler, error) {
 		"/api/v1/saved-searches/update":    {},
 		"/api/v1/saved-searches/duplicate": {},
 		"/api/v1/saved-searches/delete":    {},
+	}
+	if api.searchHistory != nil {
+		for _, path := range []string{
+			"/api/v1/search/history/get",
+			"/api/v1/search/history/list",
+			"/api/v1/search/history/delete",
+			"/api/v1/search/history/clear",
+		} {
+			apiRoutes[path] = struct{}{}
+		}
 	}
 	if api.indexAdmin != nil {
 		for _, path := range []string{
@@ -404,16 +433,22 @@ func normalizeBootstrap(config BootstrapConfig) (BootstrapConfig, error) {
 	return result, nil
 }
 
-func featuresForServices(features []opensplunkv1.ServerFeature, _, _ bool) []opensplunkv1.ServerFeature {
+func featuresForServices(features []opensplunkv1.ServerFeature, _, _, historyEnabled bool) []opensplunkv1.ServerFeature {
 	// The current handlers intentionally expose only the clean-install
 	// provisioning subset of these API families. Do not advertise either broad
 	// capability until every route in the corresponding proto family exists.
-	result := make([]opensplunkv1.ServerFeature, 0, len(features))
+	result := make([]opensplunkv1.ServerFeature, 0, len(features)+1)
+	hasHistory := false
 	for _, feature := range features {
 		if feature != opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN &&
-			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN {
+			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN &&
+			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY || historyEnabled) {
 			result = append(result, feature)
+			hasHistory = hasHistory || feature == opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY
 		}
+	}
+	if historyEnabled && !hasHistory {
+		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY)
 	}
 	return result
 }
@@ -487,6 +522,9 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	}
 	if handler.ingestionTokens != nil {
 		routes = append(routes, handler.ingestionTokenRoutes(noAuth, maximumRequestBytes, smallRequestBytes)...)
+	}
+	if handler.searchHistory != nil {
+		routes = append(routes, handler.searchHistoryRoutes(noAuth, smallRequestBytes)...)
 	}
 
 	return router.NewRouter[string, struct{}](router.RouterConfig{
