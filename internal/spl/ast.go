@@ -225,6 +225,20 @@ func (*LimitCommand) command()             {}
 func (c *LimitCommand) Name() string       { return c.CommandName }
 func (c *LimitCommand) SourceRange() Range { return c.Range }
 
+// TopCommand returns the most frequent scalar values for one field. The
+// initial compatibility slice keeps Splunk's default count and percent output
+// fields while rejecting multi-field, BY, and output-renaming options.
+type TopCommand struct {
+	Field      string
+	FieldRange Range
+	Limit      uint64
+	Range      Range
+}
+
+func (*TopCommand) command()             {}
+func (*TopCommand) Name() string         { return "top" }
+func (c *TopCommand) SourceRange() Range { return c.Range }
+
 // AggregateFunction identifies a supported stats aggregation. The initial
 // compatibility slice intentionally models only an exact row count; accepting
 // other function spellings without their full SPL semantics would be unsafe.

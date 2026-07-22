@@ -7,9 +7,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -236,18 +238,25 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("tenant_probe", typedString("visible")),
 		typedField("sort_value", typedString("10")),
 		typedField("literal.dot", typedString("needle")),
+		typedField("category", typedString("alpha")),
+		typedField("category_nullable", typedString("alpha")),
+		typedField("empty_value", typedString("")),
 	)
 	two := compilerIntegrationEvent("n-two", "500", "prefix error42 suffix", indexTime,
 		typedField("status", typedString("500")),
 		typedField("ratio", typedDouble(1)),
 		typedField("n", typedSint(2)),
 		typedField("sort_value", typedString("2")),
+		typedField("category", typedString("alpha")),
+		typedField("category_nullable", typedString("alpha")),
 	)
 	null := compilerIntegrationEvent("n-null", "nullable", "nothing here", indexTime,
 		typedField("status", typedNull()),
 		typedField("ratio", typedNull()),
 		typedField("n", typedNull()),
 		typedField("nothing", typedNull()),
+		typedField("category", typedString("beta")),
+		typedField("category_nullable", typedNull()),
 	)
 	extendedTimestamp := time.Date(2026, time.July, 21, 3, 4, 5, 123_456_789, time.UTC)
 	complex := compilerIntegrationEvent("n-complex", "complex", "complex values", indexTime,
@@ -261,6 +270,7 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("object_value", typedObject()),
 		typedField("object_parent", typedObject(typedField("child", typedString("nested")))),
 		typedField("mixed_by", typedList(typedString("container"))),
+		typedField("category", typedString("gamma")),
 	)
 	batch := ingest.StoreBatch{
 		TenantID: "tenant", CollectorID: "collector", BatchID: "compiler-batch", BatchSequence: 3,
@@ -368,6 +378,83 @@ func testCompiledQueriesAgainstClickHouse(
 	}
 	if strings.Join(groupedKeys, ",") != "500" || len(groupedCounts) != 1 || groupedCounts[0] != 2 {
 		t.Fatalf("grouped stats = keys %v counts %v, want [500] [2]", groupedKeys, groupedCounts)
+	}
+
+	top := compileIntegrationSPL(t, `index=compiler | top limit=2 category`, indexTime.Add(10*time.Second), visibilityCutoff)
+	topRows, err := connection.Query(ctx, top.SQL, top.Args...)
+	if err != nil {
+		t.Fatalf("execute top: %v\nSQL: %s\nargs: %#v", err, top.SQL, top.Args)
+	}
+	if types := topRows.ColumnTypes(); len(types) != 3 || types[0].DatabaseTypeName() != "String" ||
+		types[1].DatabaseTypeName() != "UInt64" || types[2].DatabaseTypeName() != "Float64" {
+		_ = topRows.Close()
+		t.Fatalf("top column types = %#v", types)
+	}
+	var topKeys []string
+	var topCounts []uint64
+	var topPercents []float64
+	for topRows.Next() {
+		var key string
+		var count uint64
+		var percent float64
+		if err := topRows.Scan(&key, &count, &percent); err != nil {
+			_ = topRows.Close()
+			t.Fatalf("scan top: %v", err)
+		}
+		topKeys = append(topKeys, key)
+		topCounts = append(topCounts, count)
+		topPercents = append(topPercents, percent)
+	}
+	if err := topRows.Err(); err != nil {
+		_ = topRows.Close()
+		t.Fatalf("iterate top: %v", err)
+	}
+	if err := topRows.Close(); err != nil {
+		t.Fatalf("close top: %v", err)
+	}
+	if strings.Join(topKeys, ",") != "alpha,gamma" || !slices.Equal(topCounts, []uint64{2, 1}) ||
+		len(topPercents) != 2 || math.Abs(topPercents[0]-50) > 1e-12 || math.Abs(topPercents[1]-25) > 1e-12 {
+		t.Fatalf("top rows = keys %v counts %v percents %v, want alpha/2/50 then gamma/1/25", topKeys, topCounts, topPercents)
+	}
+
+	nullableTop := compileIntegrationSPL(t, `index=compiler | top limit=0 category_nullable`, indexTime.Add(10*time.Second), visibilityCutoff)
+	var nullableKey string
+	var nullableCount uint64
+	var nullablePercent float64
+	if err := connection.QueryRow(ctx, nullableTop.SQL, nullableTop.Args...).Scan(&nullableKey, &nullableCount, &nullablePercent); err != nil {
+		t.Fatalf("execute missing/null top: %v\nSQL: %s\nargs: %#v", err, nullableTop.SQL, nullableTop.Args)
+	}
+	if nullableKey != "alpha" || nullableCount != 2 || nullablePercent != 100 {
+		t.Fatalf("missing/null top = %q/%d/%v, want alpha/2/100", nullableKey, nullableCount, nullablePercent)
+	}
+
+	emptyTop := compileIntegrationSPL(t, `index=compiler | top empty_value`, indexTime.Add(10*time.Second), visibilityCutoff)
+	var emptyKey string
+	var emptyValueCount uint64
+	var emptyPercent float64
+	if err := connection.QueryRow(ctx, emptyTop.SQL, emptyTop.Args...).Scan(&emptyKey, &emptyValueCount, &emptyPercent); err != nil {
+		t.Fatalf("execute empty-string top: %v", err)
+	}
+	if emptyKey != "" || emptyValueCount != 1 || emptyPercent != 100 {
+		t.Fatalf("empty-string top = %q/%d/%v, want empty/1/100", emptyKey, emptyValueCount, emptyPercent)
+	}
+
+	missingTop := compileIntegrationSPL(t, `index=compiler | top absent`, indexTime.Add(10*time.Second), visibilityCutoff)
+	if err := executeCompiledExpectingNoRows(ctx, connection, missingTop); err != nil {
+		t.Fatalf("execute all-missing top: %v\nSQL: %s\nargs: %#v", err, missingTop.SQL, missingTop.Args)
+	}
+
+	projectedTop := compileIntegrationSPL(t, `index=compiler | fields host | top category`, indexTime.Add(10*time.Second), visibilityCutoff)
+	if err := executeCompiledExpectingNoRows(ctx, connection, projectedTop); err != nil {
+		t.Fatalf("execute projected-away top: %v\nSQL: %s\nargs: %#v", err, projectedTop.SQL, projectedTop.Args)
+	}
+
+	unsupportedTop := compileIntegrationSPL(t, `index=compiler | top mixed_by`, indexTime.Add(10*time.Second), visibilityCutoff)
+	unsupportedTopErr := executeCompiledExpectingNoRows(ctx, connection, unsupportedTop)
+	var unsupportedTopException *clickhousedriver.Exception
+	if !errors.As(unsupportedTopErr, &unsupportedTopException) || unsupportedTopException.Code != 395 ||
+		!strings.Contains(unsupportedTopException.Message, UnsupportedStatsByValueMarker) {
+		t.Fatalf("non-scalar top error = %v, want guarded ClickHouse exception", unsupportedTopErr)
 	}
 
 	numericGroupSort := compileIntegrationSPL(t,
@@ -664,14 +751,18 @@ func testCompiledQueriesAgainstClickHouse(
 	}
 }
 
-func executeCompiledExpectingNoRows(ctx context.Context, connection clickhousedriver.Conn, query CompiledQuery) error {
+func executeCompiledExpectingNoRows(ctx context.Context, connection clickhousedriver.Conn, query CompiledQuery) (resultErr error) {
 	rows, err := connection.Query(ctx, query.SQL, query.Args...)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); resultErr == nil && closeErr != nil {
+			resultErr = fmt.Errorf("close compiled result rows: %w", closeErr)
+		}
+	}()
 	if rows.Next() {
-		return errors.New("query unexpectedly emitted a serialized non-scalar group")
+		return errors.New("query unexpectedly emitted a row")
 	}
 	return rows.Err()
 }

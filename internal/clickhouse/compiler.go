@@ -131,6 +131,13 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 			}
 			args = append(args, aggregateArgs...)
 			state = nextState
+		case *plan.Window:
+			expression, nextState, compileErr := compileWindow(operator, state)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			fragment = "SELECT *, " + expression + " AS " + quoteIdentifier(operator.Output) + " FROM (" + fragment + ") AS " + alias
+			state = nextState
 		case *plan.Sort:
 			materialized, sortKeys, order, compileErr := compileSort(operator.Keys, state, aliasSequence)
 			if compileErr != nil {
@@ -445,13 +452,8 @@ func equalityPredicate(expression *plan.ComparisonExpression, field fieldState, 
 	if field.caseSensitive {
 		return valueSQL + " = ?"
 	}
-	if field.numberType != "" {
-		switch expression.Value.Kind {
-		case plan.ValueKindInt64, plan.ValueKindUint64:
-			return "toInt256(" + valueSQL + ") = accurateCastOrNull(?, 'Int256')"
-		case plan.ValueKindFloat64:
-			return "toFloat64(" + valueSQL + ") = toFloat64OrNull(?)"
-		}
+	if left, right, ok := fixedNumberComparisonOperands(field, expression.Value.Kind); ok {
+		return left + " = " + right
 	}
 	base := "lowerUTF8(toString(" + valueSQL + ")) = lowerUTF8(?)"
 	if field.kind != fieldKindDynamic {
@@ -474,15 +476,27 @@ func relationalPredicate(expression *plan.ComparisonExpression, field fieldState
 		}
 		return "(toFloat64(toUnixTimestamp64Nano(" + field.valueSQL + ")) / 1000000000) " + operator + " toFloat64OrNull(?)", nil
 	}
-	if field.numberType != "" {
-		switch expression.Value.Kind {
-		case plan.ValueKindInt64, plan.ValueKindUint64:
-			return "toInt256(" + field.valueSQL + ") " + operator + " accurateCastOrNull(?, 'Int256')", nil
-		case plan.ValueKindFloat64:
-			return "toFloat64(" + field.valueSQL + ") " + operator + " toFloat64OrNull(?)", nil
-		}
+	if left, right, ok := fixedNumberComparisonOperands(field, expression.Value.Kind); ok {
+		return left + " " + operator + " " + right, nil
 	}
 	return "toFloat64OrNull(toString(" + field.valueSQL + ")) " + operator + " toFloat64OrNull(?)", nil
+}
+
+func fixedNumberComparisonOperands(field fieldState, literalKind plan.ValueKind) (left, right string, ok bool) {
+	if field.numberType == "" {
+		return "", "", false
+	}
+	if literalKind != plan.ValueKindInt64 && literalKind != plan.ValueKindUint64 && literalKind != plan.ValueKindFloat64 {
+		return "", "", false
+	}
+	if literalKind != plan.ValueKindFloat64 && fixedNumberTypeIsInteger(field.numberType) {
+		return "toInt256(" + field.valueSQL + ")", "accurateCastOrNull(?, 'Int256')", true
+	}
+	return "toFloat64(" + field.valueSQL + ")", "toFloat64OrNull(?)", true
+}
+
+func fixedNumberTypeIsInteger(numberType string) bool {
+	return strings.HasPrefix(numberType, "Int") || strings.HasPrefix(numberType, "UInt")
 }
 
 func dynamicLiteralGuard(typeSQL string, kind plan.ValueKind) string {
@@ -837,12 +851,50 @@ func statsByScalarExpressions(field fieldState) (supported, lexical string) {
 	return supported, lexical
 }
 
+func compileWindow(operator *plan.Window, state compileState) (string, compileState, error) {
+	if operator == nil || operator.Output == "" {
+		return "", compileState{}, errors.New("compile ClickHouse window: output field is required")
+	}
+	if _, exists := state.visible[operator.Output]; exists {
+		return "", compileState{}, fmt.Errorf("compile ClickHouse window: output field %q is duplicated", operator.Output)
+	}
+	input, ok, err := resolveCompiledField(operator.Input, state)
+	if err != nil {
+		return "", compileState{}, err
+	}
+	if !ok || input.kind != fieldKindNumber {
+		return "", compileState{}, fmt.Errorf("compile ClickHouse window: input field %q must be numeric", operator.Input.Name)
+	}
+	if operator.Function != plan.WindowFunctionPercentOfTotal {
+		return "", compileState{}, fmt.Errorf("compile ClickHouse window: unsupported function %d", operator.Function)
+	}
+
+	// Aggregate groups always have a strictly positive count, so an empty input
+	// produces no row on which division could occur. Cast before multiplication
+	// to avoid integer overflow and retain the unrounded SPL percentage.
+	total := "sum(" + input.valueSQL + ") OVER ()"
+	expression := "toFloat64(" + input.valueSQL + ") * 100.0 / toFloat64(" + total + ")"
+	next := state
+	next.visible = make(map[string]fieldState, len(state.visible)+1)
+	for name, field := range state.visible {
+		next.visible[name] = field
+	}
+	next.publicOrder = append([]string(nil), state.publicOrder...)
+	output := quoteIdentifier(operator.Output)
+	next.visible[operator.Output] = fieldState{
+		valueSQL: output, existsSQL: "1", kind: fieldKindNumber, numberType: "Float64",
+	}
+	next.publicOrder = append(next.publicOrder, operator.Output)
+	return expression, next, nil
+}
+
 func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, []compiledSortKey, string, error) {
 	if len(keys) == 0 {
 		return nil, nil, "", errors.New("compile ClickHouse sort: no keys")
 	}
 	materialized := make([]string, 0, len(keys)+len(state.tieBreakers))
 	compiled := make([]compiledSortKey, 0, len(keys)+len(state.tieBreakers))
+	explicitValues := make(map[string]struct{}, len(keys))
 	for i, key := range keys {
 		field, ok, err := resolveCompiledField(key.Field, state)
 		if err != nil {
@@ -858,10 +910,18 @@ func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, 
 				kind:      fieldKindString,
 			}
 		}
+		explicitValues[field.valueSQL] = struct{}{}
 		alias := fmt.Sprintf("__os_order_%d_%d", stage, i)
 		sortValue := field.valueSQL
-		if field.kind == fieldKindDynamic || field.numericSort {
-			sortValue = dynamicSortValue(field.valueSQL)
+		switch key.Mode {
+		case plan.SortValueModeAuto:
+			if field.kind == fieldKindDynamic || field.numericSort {
+				sortValue = dynamicSortValue(field.valueSQL)
+			}
+		case plan.SortValueModeLexical:
+			sortValue = "toString(" + field.valueSQL + ")"
+		default:
+			return nil, nil, "", fmt.Errorf("compile ClickHouse sort: invalid value mode %d", key.Mode)
 		}
 		materialized = append(materialized, sortValue+" AS "+quoteIdentifier(alias))
 		compiled = append(compiled, compiledSortKey{valueSQL: quoteIdentifier(alias), descending: key.Descending})
@@ -870,6 +930,9 @@ func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, 
 	// of events. Event pipelines use event_id; transforming pipelines use their
 	// unique grouping tuple, and a global aggregate needs no tie-breaker.
 	for index, tie := range state.tieBreakers {
+		if _, explicit := explicitValues[tie.valueSQL]; explicit {
+			continue
+		}
 		tieAlias := fmt.Sprintf("__os_order_%d_tie_%d", stage, index)
 		materialized = append(materialized, tie.valueSQL+" AS "+quoteIdentifier(tieAlias))
 		tie.valueSQL = quoteIdentifier(tieAlias)

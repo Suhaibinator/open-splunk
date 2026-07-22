@@ -100,10 +100,41 @@ func (*Aggregate) operator()                 {}
 func (*Aggregate) LogicalName() string       { return "Aggregate" }
 func (op *Aggregate) SourceRange() spl.Range { return op.Range }
 
+// WindowFunction identifies a row-preserving calculation over the complete
+// input relation.
+type WindowFunction uint8
+
+const (
+	WindowFunctionInvalid WindowFunction = iota
+	WindowFunctionPercentOfTotal
+)
+
+// Window appends one derived output field without changing row cardinality.
+// PercentOfTotal is evaluated before any downstream top-N limit.
+type Window struct {
+	Function WindowFunction
+	Input    FieldRef
+	Output   string
+	Range    spl.Range
+}
+
+func (*Window) operator()                 {}
+func (*Window) LogicalName() string       { return "Window" }
+func (op *Window) SourceRange() spl.Range { return op.Range }
+
+// SortValueMode controls how one field is interpreted for ordering.
+type SortValueMode uint8
+
+const (
+	SortValueModeAuto SortValueMode = iota
+	SortValueModeLexical
+)
+
 // SortKey is one logical sort key.
 type SortKey struct {
 	Field      FieldRef
 	Descending bool
+	Mode       SortValueMode
 }
 
 // Sort establishes row ordering. Limit is zero when the sort command did not

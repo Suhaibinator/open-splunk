@@ -183,6 +183,48 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}},
 				Range: command.Range,
 			})
+		case *spl.TopCommand:
+			field, fieldErr := ResolveField(command.Field, command.FieldRange)
+			if fieldErr != nil {
+				return nil, fieldErr
+			}
+			if command.Field == "count" || command.Field == "percent" {
+				return nil, &Diagnostic{
+					Code:    "SPL_DUPLICATE_FIELD",
+					Message: fmt.Sprintf("top field %q collides with a generated output field", command.Field),
+					Range:   command.FieldRange,
+				}
+			}
+			countField, countErr := ResolveField("count", command.Range)
+			if countErr != nil {
+				return nil, countErr
+			}
+			result.OutputFields = []string{command.Field, "count", "percent"}
+			outputSchemaKnown = true
+			result.Operators = append(result.Operators,
+				&Aggregate{
+					GroupBy: []FieldRef{field},
+					Measures: []AggregateMeasure{{
+						Function: AggregateFunctionCountRows,
+						Output:   "count",
+					}},
+					Range: command.Range,
+				},
+				&Window{
+					Function: WindowFunctionPercentOfTotal,
+					Input:    countField,
+					Output:   "percent",
+					Range:    command.Range,
+				},
+				&Sort{
+					Keys: []SortKey{
+						{Field: countField, Descending: true},
+						{Field: field, Descending: true, Mode: SortValueModeLexical},
+					},
+					Limit: command.Limit,
+					Range: command.Range,
+				},
+			)
 		default:
 			return nil, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_COMMAND",
@@ -304,8 +346,9 @@ func positiveIndexReferences(query *spl.Query) []indexReference {
 		collect(query.Search)
 	}
 	for _, command := range query.Commands {
-		if _, transformed := command.(*spl.StatsCommand); transformed {
-			break
+		switch command.(type) {
+		case *spl.StatsCommand, *spl.TopCommand:
+			return references
 		}
 		if search, ok := command.(*spl.SearchCommand); ok {
 			collect(search.Expression)

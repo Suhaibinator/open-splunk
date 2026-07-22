@@ -195,6 +195,76 @@ func TestBuildStatsSupportsDownstreamTransformingPipeline(t *testing.T) {
 	}
 }
 
+func TestBuildTopLowersToAggregateWindowAndDeterministicTopN(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | top limit=20 message`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"message", "count", "percent"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+	if len(logical.Operators) != 5 {
+		t.Fatalf("operator count = %d, want Scan, Filter, Aggregate, Window, Sort", len(logical.Operators))
+	}
+	aggregate, ok := logical.Operators[2].(*Aggregate)
+	if !ok || len(aggregate.GroupBy) != 1 || aggregate.GroupBy[0].Name != "message" ||
+		len(aggregate.Measures) != 1 || aggregate.Measures[0].Function != AggregateFunctionCountRows ||
+		aggregate.Measures[0].Output != "count" {
+		t.Fatalf("aggregate = %#v", logical.Operators[2])
+	}
+	window, ok := logical.Operators[3].(*Window)
+	if !ok || window.Function != WindowFunctionPercentOfTotal || window.Input.Name != "count" || window.Output != "percent" {
+		t.Fatalf("window = %#v", logical.Operators[3])
+	}
+	sortOp, ok := logical.Operators[4].(*Sort)
+	if !ok || sortOp.Limit != 20 || len(sortOp.Keys) != 2 || sortOp.Keys[0].Field.Name != "count" ||
+		!sortOp.Keys[0].Descending || sortOp.Keys[1].Field.Name != "message" ||
+		!sortOp.Keys[1].Descending || sortOp.Keys[1].Mode != SortValueModeLexical {
+		t.Fatalf("top sort = %#v", logical.Operators[4])
+	}
+}
+
+func TestBuildTopLimitZeroIsBoundedOnlyByExecutorPolicy(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(mustParse(t, `index=gradethis | top limit=0 host`), testScope([]string{"gradethis"}, nil))
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got := logical.Operators[len(logical.Operators)-1].(*Sort).Limit; got != 0 {
+		t.Fatalf("top limit = %d, want unlimited logical result", got)
+	}
+}
+
+func TestBuildTopRejectsGeneratedOutputCollisions(t *testing.T) {
+	t.Parallel()
+
+	for _, field := range []string{"count", "percent"} {
+		_, err := Build(mustParse(t, `index=gradethis | top `+field), testScope([]string{"gradethis"}, nil))
+		assertDiagnosticCode(t, err, "SPL_DUPLICATE_FIELD")
+	}
+}
+
+func TestBuildPostTopIndexFieldDoesNotChangeInputScope(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | top message | search index=not-an-index`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.EffectiveIndexes, []string{"gradethis"}) {
+		t.Fatalf("effective indexes = %v", logical.EffectiveIndexes)
+	}
+}
+
 func TestBuildPostStatsIndexAliasDoesNotChangeInputScope(t *testing.T) {
 	t.Parallel()
 

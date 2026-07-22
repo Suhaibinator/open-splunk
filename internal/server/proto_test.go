@@ -183,6 +183,7 @@ func TestResultKindForSPLRecognizesTransformingCommands(t *testing.T) {
 		"index=main | table level count":                            opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
 		"index=main | stats count by level":                         opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
 		"index=main | stats count by level | sort -count | head 20": opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | top limit=20 message":                         opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
 		"index=main | unsupported":                                  opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED,
 	}
 	for source, want := range tests {

@@ -452,6 +452,51 @@ func TestCompileStatsSupportsImmediateLimitsAndRepeatedAggregation(t *testing.T)
 	}
 }
 
+func TestCompileTopCalculatesPercentBeforeDeterministicLimit(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | top limit=20 message`)
+	if !slices.Equal(compiled.OutputFields, []string{"message", "count", "percent"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, required := range []string{
+		`count() AS "count"`,
+		`sum("count") OVER ()`,
+		`AS "percent"`,
+		`ORDER BY`,
+		`DESC NULLS LAST`,
+		`LIMIT ?`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("top SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if got := compiled.Args[len(compiled.Args)-1]; got != uint64(20) {
+		t.Fatalf("top limit argument = %#v, want 20", got)
+	}
+	if strings.Contains(compiled.SQL, "_tie_") {
+		t.Fatalf("top repeated its explicit group field as a contradictory tie key:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+}
+
+func TestCompileTopLimitZeroAndDownstreamPipeline(t *testing.T) {
+	t.Parallel()
+
+	unlimited := compileSPL(t, `index=gradethis | top limit=0 message`)
+	if strings.Contains(unlimited.SQL, "LIMIT ?") {
+		t.Fatalf("top limit=0 emitted a SQL limit:\n%s", unlimited.SQL)
+	}
+
+	downstream := compileSPL(t, `index=gradethis | top message | search percent>=10 | sort -percent | table message, count, percent`)
+	if !slices.Equal(downstream.OutputFields, []string{"message", "count", "percent"}) ||
+		!strings.Contains(downstream.SQL, `toFloat64("percent") >= toFloat64OrNull(?)`) {
+		t.Fatalf("post-top pipeline output=%v\nSQL: %s", downstream.OutputFields, downstream.SQL)
+	}
+}
+
 func TestCompilePostStatsProjectionPreservesDeclaredSchemaAndAliases(t *testing.T) {
 	t.Parallel()
 
@@ -558,6 +603,7 @@ func TestCompiledPlaceholderCountMatchesArguments(t *testing.T) {
 		`index=gradethis status>=500 | table status | search status!=503`,
 		`index=gradethis | sort 25 -status | tail 3`,
 		`"connection*refused" | fields _time,message`,
+		`index=gradethis | top limit=20 message | search percent>1`,
 	}
 	for _, source := range queries {
 		compiled := compileSPL(t, source)

@@ -235,7 +235,6 @@ func TestParseStatsCountAndGroupedAlias(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			query, err := Parse(test.source)
@@ -281,7 +280,6 @@ func TestUnsupportedStatsAggregatesAreSourceLocated(t *testing.T) {
 		{"missing group field", `* | stats count by`, "SPL_EXPECTED_FIELD", 1, 19},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
@@ -296,6 +294,93 @@ func TestUnsupportedStatsAggregatesAreSourceLocated(t *testing.T) {
 				t.Fatalf("diagnostic = %#v, want %s at %d:%d", diagnostic, test.code, test.line, test.column)
 			}
 		})
+	}
+}
+
+func TestParseTopSingleFieldAndLimits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		field  string
+		limit  uint64
+	}{
+		{name: "default", source: `index=main | top message`, field: "message", limit: 10},
+		{name: "limit option", source: `index=main | top limit=20 message`, field: "message", limit: 20},
+		{name: "positional limit", source: `index=main | top 5 status`, field: "status", limit: 5},
+		{name: "unlimited", source: `index=main | top limit=0 host`, field: "host", limit: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command, ok := query.Commands[0].(*TopCommand)
+			if !ok || command.Field != test.field || command.Limit != test.limit {
+				t.Fatalf("top command = %#v, want field %q limit %d", query.Commands[0], test.field, test.limit)
+			}
+			if command.FieldRange.Start.Column <= command.Range.Start.Column {
+				t.Fatalf("field range = %#v, command range = %#v", command.FieldRange, command.Range)
+			}
+		})
+	}
+}
+
+func TestParseTopRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		code   string
+	}{
+		{name: "missing field", source: `index=main | top`, code: "SPL_EXPECTED_FIELD"},
+		{name: "missing limit", source: `index=main | top limit= message`, code: "SPL_INVALID_ARGUMENT"},
+		{name: "negative limit", source: `index=main | top limit=-1 message`, code: "SPL_INVALID_ARGUMENT"},
+		{name: "negative positional limit", source: `index=main | top -1 message`, code: "SPL_INVALID_ARGUMENT"},
+		{name: "limit overflow", source: `index=main | top limit=18446744073709551616 message`, code: "SPL_NUMBER_OUT_OF_RANGE"},
+		{name: "multiple fields", source: `index=main | top message, host`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "by clause", source: `index=main | top message BY host`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "unsupported option", source: `index=main | top showperc=false message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+		{name: "wildcard field", source: `index=main | top mes*`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(test.source)
+			if err == nil {
+				t.Fatal("Parse succeeded, want error")
+			}
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != test.code {
+				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
+			}
+		})
+	}
+}
+
+func TestParseTopLocatesUnsupportedOptionAfterLimit(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=main | top limit=20 showperc=false message`,
+		`index=main | top 20 showperc=false message`,
+	} {
+		_, err := Parse(source)
+		if err == nil {
+			t.Fatalf("Parse(%q) succeeded, want error", source)
+		}
+		diagnostic, ok := err.(*Diagnostic)
+		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_TOP_SYNTAX" ||
+			!strings.Contains(diagnostic.Message, `option "showperc"`) {
+			t.Fatalf("diagnostic = %#v", err)
+		}
+		if got := source[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset]; got != "showperc" {
+			t.Fatalf("diagnostic source = %q, want showperc", got)
+		}
 	}
 }
 
@@ -337,6 +422,7 @@ func FuzzParseDoesNotPanic(f *testing.F) {
 		`"connection refused" | table _time message`,
 		`index=main | stats count AS events by host, service`,
 		`index=main | stats sum(bytes) by host`,
+		`index=main | top limit=20 message`,
 		"index=x\n| transaction trace_id",
 		"\x00\xff",
 	} {
