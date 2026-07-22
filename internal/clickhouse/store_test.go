@@ -49,6 +49,9 @@ func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
 	if conn.prepareCalls != 1 || conn.query != eventsInsertSQL || strings.Contains(conn.query, "?") {
 		t.Fatalf("native prepare contract calls=%d query=%q", conn.prepareCalls, conn.query)
 	}
+	if conn.maxVisibilityCalls != 1 || conn.maxVisibilityQuery != buildMaxVisibilitySQL("open_splunk", "events") {
+		t.Fatalf("visibility lookup calls=%d query=%q", conn.maxVisibilityCalls, conn.maxVisibilityQuery)
+	}
 	wantSettings := map[string]any{
 		"async_insert": uint8(0), "wait_for_async_insert": uint8(1),
 		"insert_deduplication_token":                                             deduplicationToken(input),
@@ -91,6 +94,9 @@ func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
 	if got := conn.batch.rows[0][23]; got != wantIndexTime.Add(72*time.Hour) {
 		t.Fatalf("expires_at = %v", got)
 	}
+	if got := conn.batch.rows[0][24]; got != uint64(1) {
+		t.Fatalf("visibility_seq = %#v, want 1", got)
+	}
 	if conn.batch.sendCalls != 1 || conn.batch.abortCalls != 0 || conn.batch.closeCalls != 1 {
 		t.Fatalf("batch lifecycle send=%d abort=%d close=%d", conn.batch.sendCalls, conn.batch.abortCalls, conn.batch.closeCalls)
 	}
@@ -102,6 +108,41 @@ func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
 	}
 	if !slices.Equal(retention.calls, []string{"tenant/main"}) {
 		t.Fatalf("retention calls = %v", retention.calls)
+	}
+}
+
+func TestStoreAssignsCommitOrderedVisibilityAndCapturesCutoff(t *testing.T) {
+	t.Parallel()
+	conn := &fakeStoreConnection{batch: &fakeWriteBatch{}, maxVisibility: 9}
+	store := mustTestStore(t, conn, fixedRetention(time.Hour))
+
+	if _, err := store.Store(context.Background(), validStoreBatch()); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if got := conn.batch.rows[0][24]; got != uint64(10) {
+		t.Fatalf("stored visibility = %#v, want 10", got)
+	}
+	conn.maxVisibility = 10
+	cutoff, err := store.VisibilityCutoff(context.Background())
+	if err != nil {
+		t.Fatalf("VisibilityCutoff: %v", err)
+	}
+	if cutoff != 10 || conn.maxVisibilityCalls != 2 {
+		t.Fatalf("cutoff=%d calls=%d, want 10 and 2", cutoff, conn.maxVisibilityCalls)
+	}
+}
+
+func TestVisibilityLookupFailureIsClassified(t *testing.T) {
+	t.Parallel()
+	connectionErr := &net.OpError{Op: "read", Net: "tcp", Err: io.EOF}
+	conn := &fakeStoreConnection{maxVisibilityErr: connectionErr}
+	store := mustTestStore(t, conn, fixedRetention(time.Hour))
+
+	if _, err := store.Store(context.Background(), validStoreBatch()); !isTransient(err) {
+		t.Fatalf("Store error = %v, want transient visibility lookup failure", err)
+	}
+	if _, err := store.VisibilityCutoff(context.Background()); !isTransient(err) {
+		t.Fatalf("VisibilityCutoff error = %v, want transient failure", err)
 	}
 }
 
@@ -399,12 +440,16 @@ func TestConfigAndConnectionLifecycle(t *testing.T) {
 }
 
 type fakeStoreConnection struct {
-	prepareCalls      int
-	query             string
-	settings          clickhousedriver.Settings
-	prepareErr        error
-	batch             *fakeWriteBatch
-	pingErr, closeErr error
+	prepareCalls       int
+	query              string
+	settings           clickhousedriver.Settings
+	prepareErr         error
+	batch              *fakeWriteBatch
+	pingErr, closeErr  error
+	maxVisibilityCalls int
+	maxVisibilityQuery string
+	maxVisibility      uint64
+	maxVisibilityErr   error
 }
 
 func (c *fakeStoreConnection) prepare(_ context.Context, query string, settings clickhousedriver.Settings) (writeBatch, error) {
@@ -421,6 +466,11 @@ func (c *fakeStoreConnection) prepare(_ context.Context, query string, settings 
 		c.batch = &fakeWriteBatch{}
 	}
 	return c.batch, nil
+}
+func (c *fakeStoreConnection) maxVisibilitySequence(_ context.Context, query string) (uint64, error) {
+	c.maxVisibilityCalls++
+	c.maxVisibilityQuery = query
+	return c.maxVisibility, c.maxVisibilityErr
 }
 func (c *fakeStoreConnection) Ping(context.Context) error { return c.pingErr }
 func (c *fakeStoreConnection) Close() error               { return c.closeErr }

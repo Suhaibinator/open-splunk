@@ -31,7 +31,10 @@ type Scan struct {
 	Earliest        time.Time
 	Latest          time.Time
 	IndexTimeCutoff time.Time
-	Range           spl.Range
+	// VisibilityCutoff is the highest storage commit sequence visible to the
+	// search job. Zero is a valid cutoff for a snapshot of an empty table.
+	VisibilityCutoff uint64
+	Range            spl.Range
 }
 
 func (*Scan) operator()                 {}

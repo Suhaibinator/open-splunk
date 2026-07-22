@@ -83,6 +83,20 @@ func TestInitialEventsSchemaContract(t *testing.T) {
 	}
 }
 
+func TestVisibilitySequenceMigrationContract(t *testing.T) {
+	t.Parallel()
+	sql := readFile(t, "0002_add_visibility_sequence.sql")
+	for _, fragment := range []string{
+		"ADD COLUMN IF NOT EXISTS `visibility_seq` UInt64 DEFAULT 0",
+		"SELECT 2, 'add_visibility_sequence'",
+		"WHERE `version` = 2",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("visibility migration is missing contract fragment %q", fragment)
+		}
+	}
+}
+
 func TestComposeIsPinnedAndLoopbackOnly(t *testing.T) {
 	compose := readFile(t, filepath.Join("..", "..", "deploy", "docker-compose.yaml"))
 
@@ -160,7 +174,7 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 		FORMAT TSVRaw`)
 	for _, name := range []string{
 		"event_id", "tenant_id", "index_name", "event_time", "index_time", "raw",
-		"fields", "field_names", "collector_id", "batch_id", "expires_at",
+		"fields", "field_names", "collector_id", "batch_id", "visibility_seq", "expires_at",
 	} {
 		if !strings.Contains(columns, name) {
 			t.Errorf("live events schema is missing column %q; columns: %s", name, columns)
@@ -223,9 +237,17 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 	}
 
 	versions := clickHouseQuery(t, ctx, container, password, `
-		SELECT count() FROM open_splunk.schema_migrations WHERE version = 1 FORMAT TSVRaw`)
-	if versions != "1" {
-		t.Fatalf("migration ledger has %q rows for version 1; want 1", versions)
+		SELECT groupArray((version, count))
+		FROM
+		(
+			SELECT version, count() AS count
+			FROM open_splunk.schema_migrations
+			GROUP BY version
+			ORDER BY version
+		)
+		FORMAT TSVRaw`)
+	if versions != "[(1,1),(2,1)]" {
+		t.Fatalf("migration ledger = %q, want one row for each version", versions)
 	}
 }
 

@@ -56,12 +56,20 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	})
 	integrationWaitForClickHouse(t, ctx, container, password)
 
-	migrationPath := filepath.Join("..", "..", "migrations", "clickhouse", "0001_create_events.sql")
-	migration, err := os.ReadFile(migrationPath)
-	if err != nil {
-		t.Fatalf("read migration: %v", err)
+	migrationPaths, err := filepath.Glob(filepath.Join("..", "..", "migrations", "clickhouse", "[0-9][0-9][0-9][0-9]_*.sql"))
+	if err != nil || len(migrationPaths) == 0 {
+		t.Fatalf("discover migrations: paths=%v err=%v", migrationPaths, err)
 	}
-	integrationDocker(t, ctx, bytes.NewReader(migration),
+	var migrations bytes.Buffer
+	for _, migrationPath := range migrationPaths {
+		migration, readErr := os.ReadFile(migrationPath)
+		if readErr != nil {
+			t.Fatalf("read migration %s: %v", migrationPath, readErr)
+		}
+		migrations.Write(migration)
+		migrations.WriteByte('\n')
+	}
+	integrationDocker(t, ctx, bytes.NewReader(migrations.Bytes()),
 		"exec", "--interactive", container, "clickhouse-client",
 		"--user", "open_splunk", "--password", password, "--multiquery",
 	)
@@ -120,6 +128,31 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("retry stored %d rows, want 1", count)
+	}
+	cutoff, err := store.VisibilityCutoff(ctx)
+	if err != nil {
+		t.Fatalf("capture visibility cutoff: %v", err)
+	}
+	if cutoff != 1 {
+		t.Fatalf("visibility cutoff after deduplicated retry = %d, want 1", cutoff)
+	}
+	late := testStoredEvent("late-event", "main", indexTime.Add(-time.Hour))
+	late.BatchID = "late-batch"
+	if _, err := store.Store(ctx, ingest.StoreBatch{
+		TenantID: "tenant", CollectorID: "collector", BatchID: "late-batch", BatchSequence: 2,
+		Events: []*ingest.StoredEvent{late},
+	}); err != nil {
+		t.Fatalf("store post-snapshot event: %v", err)
+	}
+	var visibleLate uint64
+	if err := queryConnection.QueryRow(ctx,
+		"SELECT count() FROM open_splunk.events WHERE event_id = ? AND visibility_seq <= ?",
+		"late-event", cutoff,
+	).Scan(&visibleLate); err != nil {
+		t.Fatalf("query immutable cutoff: %v", err)
+	}
+	if visibleLate != 0 {
+		t.Fatalf("post-snapshot event is visible at cutoff %d", cutoff)
 	}
 
 	var (
@@ -196,6 +229,10 @@ func testCompiledQueriesAgainstClickHouse(
 	if _, err := store.Store(ctx, batch); err != nil {
 		t.Fatalf("store compiler fixtures: %v", err)
 	}
+	visibilityCutoff, err := store.VisibilityCutoff(ctx)
+	if err != nil {
+		t.Fatalf("capture compiler visibility cutoff: %v", err)
+	}
 	for eventID, wantType := range map[string]string{"n-one": "Int64", "n-two": "Float64", "n-null": "None"} {
 		var gotType string
 		if err := connection.QueryRow(ctx,
@@ -218,7 +255,7 @@ func testCompiledQueriesAgainstClickHouse(
 		`index=compiler error*`:              1,
 		`index=compiler literal\.dot=needle`: 1,
 	} {
-		compiled := compileIntegrationSPL(t, source, indexTime.Add(10*time.Second))
+		compiled := compileIntegrationSPL(t, source, indexTime.Add(10*time.Second), visibilityCutoff)
 		var count uint64
 		if err := connection.QueryRow(ctx, "SELECT count() FROM ("+compiled.SQL+")", compiled.Args...).Scan(&count); err != nil {
 			t.Fatalf("execute compiled %q: %v\nSQL: %s\nargs: %#v", source, err, compiled.SQL, compiled.Args)
@@ -228,7 +265,7 @@ func testCompiledQueriesAgainstClickHouse(
 		}
 	}
 
-	compiled := compileIntegrationSPL(t, `index=compiler | sort n | tail 2 | table event_id`, indexTime.Add(10*time.Second))
+	compiled := compileIntegrationSPL(t, `index=compiler | sort n | tail 2 | table event_id`, indexTime.Add(10*time.Second), visibilityCutoff)
 	rows, err := connection.Query(ctx, compiled.SQL, compiled.Args...)
 	if err != nil {
 		t.Fatalf("execute compiled tail: %v\nSQL: %s\nargs: %#v", err, compiled.SQL, compiled.Args)
@@ -259,7 +296,7 @@ func compilerIntegrationEvent(id, host, raw string, indexTime time.Time, fields 
 	return event
 }
 
-func compileIntegrationSPL(t *testing.T, source string, cutoff time.Time) CompiledQuery {
+func compileIntegrationSPL(t *testing.T, source string, cutoff time.Time, visibilityCutoff uint64) CompiledQuery {
 	t.Helper()
 	parsed, err := spl.Parse(source)
 	if err != nil {
@@ -267,9 +304,10 @@ func compileIntegrationSPL(t *testing.T, source string, cutoff time.Time) Compil
 	}
 	logical, err := plan.Build(parsed, plan.Scope{
 		TenantID: "tenant", AuthorizedIndexes: []string{"compiler"},
-		Earliest:        time.Date(2026, time.July, 20, 0, 0, 0, 0, time.UTC),
-		Latest:          time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC),
-		IndexTimeCutoff: cutoff,
+		Earliest:         time.Date(2026, time.July, 20, 0, 0, 0, 0, time.UTC),
+		Latest:           time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC),
+		IndexTimeCutoff:  cutoff,
+		VisibilityCutoff: uint64PointerForIntegration(visibilityCutoff),
 	})
 	if err != nil {
 		t.Fatalf("build integration SPL %q: %v", source, err)
@@ -280,6 +318,8 @@ func compileIntegrationSPL(t *testing.T, source string, cutoff time.Time) Compil
 	}
 	return compiled
 }
+
+func uint64PointerForIntegration(value uint64) *uint64 { return &value }
 
 func integrationRandomHex(t *testing.T, size int) string {
 	t.Helper()

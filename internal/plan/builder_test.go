@@ -26,6 +26,9 @@ func TestBuildIntersectsTrustedIndexScope(t *testing.T) {
 	if scan.TenantID != "tenant-1" || !slices.Equal(scan.Indexes, []string{"gradethis"}) {
 		t.Fatalf("scan = %#v", scan)
 	}
+	if scan.VisibilityCutoff != 41 {
+		t.Fatalf("visibility cutoff = %d, want 41", scan.VisibilityCutoff)
+	}
 	if !scan.Earliest.Equal(time.Date(2026, 7, 21, 8, 0, 0, 0, time.UTC)) || !scan.Latest.Equal(time.Date(2026, 7, 21, 9, 0, 0, 0, time.UTC)) {
 		t.Fatalf("scan range = [%v, %v)", scan.Earliest, scan.Latest)
 	}
@@ -177,7 +180,27 @@ func TestBuildRejectsInvalidSnapshot(t *testing.T) {
 	assertDiagnosticCode(t, err, "SPL_INVALID_TIME_RANGE")
 }
 
+func TestBuildRequiresResolvedVisibilitySnapshotButAllowsEmptyTable(t *testing.T) {
+	t.Parallel()
+
+	scope := testScope([]string{"gradethis"}, nil)
+	scope.VisibilityCutoff = nil
+	_, err := Build(mustParse(t, `index=gradethis`), scope)
+	assertDiagnosticCode(t, err, "SPL_INVALID_SNAPSHOT")
+
+	emptyCutoff := uint64(0)
+	scope.VisibilityCutoff = &emptyCutoff
+	logical, err := Build(mustParse(t, `index=gradethis`), scope)
+	if err != nil {
+		t.Fatalf("Build empty-table snapshot: %v", err)
+	}
+	if got := logical.Operators[0].(*Scan).VisibilityCutoff; got != 0 {
+		t.Fatalf("empty-table cutoff = %d, want 0", got)
+	}
+}
+
 func testScope(authorized, requested []string) Scope {
+	visibilityCutoff := uint64(41)
 	return Scope{
 		TenantID:          "tenant-1",
 		AuthorizedIndexes: authorized,
@@ -185,6 +208,7 @@ func testScope(authorized, requested []string) Scope {
 		Earliest:          time.Date(2026, 7, 21, 1, 0, 0, 0, time.FixedZone("test", -7*60*60)),
 		Latest:            time.Date(2026, 7, 21, 2, 0, 0, 0, time.FixedZone("test", -7*60*60)),
 		IndexTimeCutoff:   time.Date(2026, 7, 21, 2, 0, 1, 0, time.UTC),
+		VisibilityCutoff:  &visibilityCutoff,
 	}
 }
 

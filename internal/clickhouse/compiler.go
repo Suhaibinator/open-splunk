@@ -200,13 +200,14 @@ func compileScan(database, table string, scan *plan.Scan) (string, compileState,
 		quoteIdentifier("event_time") + " >= ?",
 		quoteIdentifier("event_time") + " < ?",
 		quoteIdentifier("index_time") + " <= ?",
+		quoteIdentifier("visibility_seq") + " <= ?",
 	}
-	args := make([]any, 0, len(scan.Indexes)+4)
+	args := make([]any, 0, len(scan.Indexes)+5)
 	args = append(args, scan.TenantID)
 	for _, index := range scan.Indexes {
 		args = append(args, index)
 	}
-	args = append(args, scan.Earliest.UTC(), scan.Latest.UTC(), scan.IndexTimeCutoff.UTC())
+	args = append(args, scan.Earliest.UTC(), scan.Latest.UTC(), scan.IndexTimeCutoff.UTC(), scan.VisibilityCutoff)
 
 	visible := make(map[string]fieldState, len(canonicalColumnNames))
 	for _, field := range canonicalColumnNames {

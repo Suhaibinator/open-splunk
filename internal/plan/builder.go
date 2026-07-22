@@ -21,6 +21,10 @@ type Scope struct {
 	Earliest          time.Time
 	Latest            time.Time
 	IndexTimeCutoff   time.Time
+	// VisibilityCutoff must be resolved by the storage writer when the search
+	// job starts. A pointer distinguishes an empty-table cutoff of zero from a
+	// caller that forgot to establish an immutable snapshot.
+	VisibilityCutoff *uint64
 }
 
 var canonicalFields = map[string]struct{}{
@@ -63,15 +67,19 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 	if cutoff.IsZero() {
 		return nil, &Diagnostic{Code: "SPL_INVALID_TIME_RANGE", Message: "index-time cutoff is required", Range: query.Range}
 	}
+	if scope.VisibilityCutoff == nil {
+		return nil, &Diagnostic{Code: "SPL_INVALID_SNAPSHOT", Message: "storage visibility cutoff is required", Range: query.Range}
+	}
 
 	result := &Query{EffectiveIndexes: indexes}
 	result.Operators = append(result.Operators, &Scan{
-		TenantID:        scope.TenantID,
-		Indexes:         append([]string(nil), indexes...),
-		Earliest:        earliest,
-		Latest:          latest,
-		IndexTimeCutoff: cutoff,
-		Range:           query.Range,
+		TenantID:         scope.TenantID,
+		Indexes:          append([]string(nil), indexes...),
+		Earliest:         earliest,
+		Latest:           latest,
+		IndexTimeCutoff:  cutoff,
+		VisibilityCutoff: *scope.VisibilityCutoff,
+		Range:            query.Range,
 	})
 	if query.Search != nil {
 		expression, convertErr := convertExpression(query.Search)

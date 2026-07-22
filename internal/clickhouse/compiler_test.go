@@ -21,6 +21,7 @@ func TestCompileGradeThisEventSearchIsScopedAndParameterized(t *testing.T) {
 		`"event_time" >= ?`,
 		`"event_time" < ?`,
 		`"index_time" <= ?`,
+		`"visibility_seq" <= ?`,
 		`ORDER BY "__os_order_`,
 		`ASC NULLS LAST`,
 		`LIMIT ?`,
@@ -270,9 +271,12 @@ func buildPlan(t *testing.T, source string) *plan.Query {
 		Earliest:          time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC),
 		Latest:            time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 1, 0, time.UTC),
+		VisibilityCutoff:  uint64Pointer(73),
 	})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	return logical
 }
+
+func uint64Pointer(value uint64) *uint64 { return &value }

@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode"
@@ -42,7 +43,7 @@ var (
 		"collected_at", "event_time_source", "host", "source", "sourcetype",
 		"service", "severity", "level", "body", "raw", "raw_encoding",
 		"trace_id", "span_id", "fields", "field_names", "collector_id",
-		"batch_id", "batch_sequence", "expires_at",
+		"batch_id", "batch_sequence", "expires_at", "visibility_seq",
 	}
 	eventsInsertSQL = buildEventsInsertSQL(defaultDatabase, defaultTable)
 )
@@ -140,11 +141,13 @@ func NewStore(connection clickhousedriver.Conn, retention RetentionProvider) (*S
 // Store implements ingest.EventStore using one synchronous native insert per
 // accepted protocol batch.
 type Store struct {
-	connection storeConnection
-	insertSQL  string
-	retention  RetentionProvider
-	clock      func() time.Time
-	retryAfter time.Duration
+	connection            storeConnection
+	insertSQL             string
+	maxVisibilitySQL      string
+	retention             RetentionProvider
+	clock                 func() time.Time
+	retryAfter            time.Duration
+	visibilityCommitMutex sync.Mutex
 }
 
 var _ ingest.EventStore = (*Store)(nil)
@@ -172,11 +175,12 @@ func newStore(
 		return nil, errors.New("ClickHouse retry delay must be positive")
 	}
 	return &Store{
-		connection: connection,
-		insertSQL:  buildEventsInsertSQL(database, table),
-		retention:  retention,
-		clock:      clock,
-		retryAfter: retryAfter,
+		connection:       connection,
+		insertSQL:        buildEventsInsertSQL(database, table),
+		maxVisibilitySQL: buildMaxVisibilitySQL(database, table),
+		retention:        retention,
+		clock:            clock,
+		retryAfter:       retryAfter,
 	}, nil
 }
 
@@ -187,6 +191,25 @@ func (s *Store) Store(ctx context.Context, batch ingest.StoreBatch) (ingest.Stor
 	if err != nil {
 		return ingest.StoreResult{}, s.classifyError(err)
 	}
+
+	// The first release has one application writer. Serializing the database
+	// watermark read, insert, and snapshot capture creates a total commit order
+	// even when many collector streams call Store concurrently. Reading max on
+	// every attempt also recovers correctly after an ambiguous insert result.
+	s.visibilityCommitMutex.Lock()
+	defer s.visibilityCommitMutex.Unlock()
+	priorVisibility, err := s.connection.maxVisibilitySequence(ctx, s.maxVisibilitySQL)
+	if err != nil {
+		return ingest.StoreResult{}, s.classifyError(fmt.Errorf("read ClickHouse visibility sequence: %w", err))
+	}
+	if priorVisibility == math.MaxUint64 {
+		return ingest.StoreResult{}, errors.New("store ClickHouse batch: visibility sequence exhausted")
+	}
+	visibility := priorVisibility + 1
+	for _, row := range rows {
+		row[len(row)-1] = visibility
+	}
+
 	settings := insertSettings(deduplicationToken(batch))
 	prepared, err := s.connection.prepare(ctx, s.insertSQL, settings)
 	if err != nil {
@@ -221,6 +244,19 @@ func (s *Store) Store(ctx context.Context, batch ingest.StoreBatch) (ingest.Stor
 		AcknowledgedThrough: &acknowledged,
 		CommittedAt:         s.clock().UTC(),
 	}, nil
+}
+
+// VisibilityCutoff captures the highest fully committed batch visible to a
+// new search job. Holding the writer mutex ensures that no later batch can be
+// committed with a sequence at or below the returned cutoff.
+func (s *Store) VisibilityCutoff(ctx context.Context) (uint64, error) {
+	s.visibilityCommitMutex.Lock()
+	defer s.visibilityCommitMutex.Unlock()
+	cutoff, err := s.connection.maxVisibilitySequence(ctx, s.maxVisibilitySQL)
+	if err != nil {
+		return 0, s.classifyError(fmt.Errorf("read ClickHouse visibility cutoff: %w", err))
+	}
+	return cutoff, nil
 }
 
 // Ping verifies network reachability and authentication.
@@ -339,6 +375,7 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch) ([][]
 			batch.BatchID,
 			batch.BatchSequence,
 			expiresAt,
+			uint64(0), // Filled under the visibility commit lock immediately before insert.
 		})
 	}
 	return rows, nil
@@ -642,6 +679,11 @@ func buildEventsInsertSQL(database, table string) string {
 	return "INSERT INTO " + quoteIdentifier(database) + "." + quoteIdentifier(table) + " (" + strings.Join(columns, ", ") + ")"
 }
 
+func buildMaxVisibilitySQL(database, table string) string {
+	return "SELECT max(" + quoteIdentifier("visibility_seq") + ") FROM " +
+		quoteIdentifier(database) + "." + quoteIdentifier(table)
+}
+
 func (s *Store) classifyError(err error) error {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
@@ -702,6 +744,7 @@ type writeBatch interface {
 
 type storeConnection interface {
 	prepare(context.Context, string, clickhousedriver.Settings) (writeBatch, error)
+	maxVisibilitySequence(context.Context, string) (uint64, error)
 	Ping(context.Context) error
 	Close() error
 }
@@ -713,6 +756,14 @@ type nativeStoreConnection struct {
 func (c *nativeStoreConnection) prepare(ctx context.Context, query string, settings clickhousedriver.Settings) (writeBatch, error) {
 	ctx = clickhousedriver.Context(ctx, clickhousedriver.WithSettings(settings))
 	return c.connection.PrepareBatch(ctx, query)
+}
+
+func (c *nativeStoreConnection) maxVisibilitySequence(ctx context.Context, query string) (uint64, error) {
+	var sequence uint64
+	if err := c.connection.QueryRow(ctx, query).Scan(&sequence); err != nil {
+		return 0, err
+	}
+	return sequence, nil
 }
 
 func (c *nativeStoreConnection) Ping(ctx context.Context) error {
