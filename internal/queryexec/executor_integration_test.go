@@ -285,6 +285,38 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("group cardinality is bounded before result streaming", func(t *testing.T) {
+		bounded, err := New(connection, Config{MaxRowsToGroupBy: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, query := range []clickhouse.CompiledQuery{
+			{
+				SQL:          "SELECT count() AS total FROM numbers(2)",
+				OutputFields: []string{"total"},
+			},
+			{
+				SQL:          "SELECT number % 1 AS bucket FROM numbers(2) GROUP BY bucket",
+				OutputFields: []string{"bucket"},
+			},
+		} {
+			if err := bounded.Execute(ctx, query, &fakeSink{}); err != nil {
+				t.Fatalf("query at group boundary: %v", err)
+			}
+		}
+		sink := &fakeSink{}
+		err = bounded.Execute(ctx, clickhouse.CompiledQuery{
+			SQL:          "SELECT number FROM numbers(2) GROUP BY number ORDER BY number",
+			OutputFields: []string{"number"},
+		}, sink)
+		if !errors.Is(err, searchjobs.ErrExecutionLimit) {
+			t.Fatalf("group cardinality error = %v", err)
+		}
+		if len(sink.rows) != 0 {
+			t.Fatalf("group cardinality limit streamed %d rows", len(sink.rows))
+		}
+	})
+
 	t.Run("cancellation reaches native query", func(t *testing.T) {
 		cancelCtx, cancelQuery := context.WithTimeout(ctx, 150*time.Millisecond)
 		defer cancelQuery()
