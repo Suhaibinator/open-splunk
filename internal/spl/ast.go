@@ -201,12 +201,13 @@ type SortField struct {
 	Range      Range
 }
 
-// SortCommand establishes result order. Limit is zero when SPL did not supply
-// the optional sort result count.
+// SortCommand establishes result order. LimitSpecified distinguishes an
+// omitted count (Splunk's 10,000-row default) from explicit zero (unlimited).
 type SortCommand struct {
-	Limit  uint64
-	Fields []SortField
-	Range  Range
+	Limit          uint64
+	LimitSpecified bool
+	Fields         []SortField
+	Range          Range
 }
 
 func (*SortCommand) command()             {}

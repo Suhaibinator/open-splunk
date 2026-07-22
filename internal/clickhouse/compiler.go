@@ -81,63 +81,41 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 			args = append(args, projectionArgs...)
 			state = nextState
 		case *plan.Sort:
-			order, orderArgs, compileErr := compileOrder(operator.Keys, state, false)
+			materialized, sortKeys, order, compileErr := compileSort(operator.Keys, state, aliasSequence)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			fragment = "SELECT * FROM (" + fragment + ") AS " + alias + " ORDER BY " + order
-			args = append(args, orderArgs...)
+			fragment = "SELECT *, " + strings.Join(materialized, ", ") + " FROM (" + fragment + ") AS " + alias + " ORDER BY " + order
 			if operator.Limit > 0 {
 				fragment += " LIMIT ?"
 				args = append(args, operator.Limit)
 			}
-			state.order = append([]plan.SortKey(nil), operator.Keys...)
+			state.order = sortKeys
 		case *plan.Limit:
 			keys := state.order
 			if len(keys) == 0 {
-				keys = stableSortKeys()
+				keys = stableCompiledSortKeys()
 			}
 			if operator.FromEnd {
-				reversed, reversedArgs, compileErr := compileOrder(keys, state, true)
+				reversed, compileErr := compileMaterializedOrder(keys, true)
 				if compileErr != nil {
 					return CompiledQuery{}, compileErr
 				}
-				innerAlias := quoteIdentifier(fmt.Sprintf("_tail_%d", aliasSequence))
-				fragment = "SELECT * FROM (SELECT * FROM (" + fragment + ") AS " + alias + " ORDER BY " + reversed + " LIMIT ?) AS " + innerAlias
-				args = append(args, reversedArgs...)
+				fragment = "SELECT * FROM (" + fragment + ") AS " + alias + " ORDER BY " + reversed + " LIMIT ?"
 				args = append(args, operator.Count)
-				forward, forwardArgs, compileErr := compileOrder(keys, state, false)
-				if compileErr != nil {
-					return CompiledQuery{}, compileErr
-				}
-				fragment += " ORDER BY " + forward
-				args = append(args, forwardArgs...)
+				state.order = reverseCompiledSortKeys(keys)
 			} else {
-				if len(state.order) == 0 {
-					order, orderArgs, compileErr := compileOrder(keys, state, false)
-					if compileErr != nil {
-						return CompiledQuery{}, compileErr
-					}
-					fragment = "SELECT * FROM (" + fragment + ") AS " + alias + " ORDER BY " + order + " LIMIT ?"
-					args = append(args, orderArgs...)
-				} else {
-					fragment = "SELECT * FROM (" + fragment + ") AS " + alias + " LIMIT ?"
+				order, compileErr := compileMaterializedOrder(keys, false)
+				if compileErr != nil {
+					return CompiledQuery{}, compileErr
 				}
+				fragment = "SELECT * FROM (" + fragment + ") AS " + alias + " ORDER BY " + order + " LIMIT ?"
 				args = append(args, operator.Count)
+				state.order = append([]compiledSortKey(nil), keys...)
 			}
 		default:
 			return CompiledQuery{}, fmt.Errorf("compile ClickHouse query: unsupported logical operator %T", operator)
 		}
-	}
-
-	if len(state.order) == 0 && !hasLimit(query.Operators) {
-		order, orderArgs, compileErr := compileOrder(stableSortKeys(), state, false)
-		if compileErr != nil {
-			return CompiledQuery{}, compileErr
-		}
-		aliasSequence++
-		fragment = "SELECT * FROM (" + fragment + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence)) + " ORDER BY " + order
-		args = append(args, orderArgs...)
 	}
 
 	finalProjection, outputFields, err := finalProjection(state)
@@ -145,7 +123,15 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 		return CompiledQuery{}, err
 	}
 	aliasSequence++
-	fragment = "SELECT " + strings.Join(finalProjection, ", ") + " FROM (" + fragment + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+	finalOrder := state.order
+	if len(finalOrder) == 0 {
+		finalOrder = stableCompiledSortKeys()
+	}
+	order, err := compileMaterializedOrder(finalOrder, false)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
+	fragment = "SELECT " + strings.Join(finalProjection, ", ") + " FROM (" + fragment + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence)) + " ORDER BY " + order
 	return CompiledQuery{SQL: fragment, Args: args, OutputFields: outputFields}, nil
 }
 
@@ -154,13 +140,31 @@ type compileState struct {
 	publicOrder  []string
 	allowDynamic bool
 	blocked      map[string]struct{}
-	order        []plan.SortKey
+	order        []compiledSortKey
 }
+
+type fieldKind uint8
+
+const (
+	fieldKindInvalid fieldKind = iota
+	fieldKindDynamic
+	fieldKindString
+	fieldKindNumber
+	fieldKindBool
+	fieldKindTime
+)
 
 type fieldState struct {
 	valueSQL   string
 	existsSQL  string
 	existsArgs []any
+	kind       fieldKind
+}
+
+type compiledSortKey struct {
+	valueSQL   string
+	descending bool
+	nullsFirst bool
 }
 
 func compileScan(database, table string, scan *plan.Scan) (string, compileState, []any, error) {
@@ -228,12 +232,17 @@ var defaultPublicFields = []string{
 
 func canonicalState(field string) fieldState {
 	value := quoteIdentifier(field)
+	kind := fieldKindString
 	switch field {
-	case "service", "level", "message", "trace_id", "span_id":
-		return fieldState{valueSQL: value, existsSQL: "isNotNull(" + value + ")"}
-	default:
-		return fieldState{valueSQL: value, existsSQL: "1"}
+	case "severity":
+		kind = fieldKindNumber
+	case "_time", "_indextime":
+		kind = fieldKindTime
 	}
+	// Canonical columns exist in the event schema even when their value is
+	// nullable. This preserves explicit-null comparisons; field=* separately
+	// requires a non-null value.
+	return fieldState{valueSQL: value, existsSQL: "1", kind: kind}
 }
 
 func compileExpression(expression plan.Expression, state compileState) (string, []any, error) {
@@ -263,8 +272,14 @@ func compileExpression(expression plan.Expression, state compileState) (string, 
 		if !ok {
 			return "0", nil, nil
 		}
+		if expression.Value == "*" {
+			return "isNotNull(" + raw.valueSQL + ")", nil, nil
+		}
 		if expression.Wildcard {
-			return "match(toString(" + raw.valueSQL + "), ?)", []any{wildcardRegex(expression.Value, true)}, nil
+			return "match(toString(" + raw.valueSQL + "), ?)", []any{freeTextRegex(expression.Value, expression.Quoted)}, nil
+		}
+		if !expression.Quoted {
+			return "match(toString(" + raw.valueSQL + "), ?)", []any{freeTextRegex(expression.Value, false)}, nil
 		}
 		return "positionCaseInsensitiveUTF8(toString(" + raw.valueSQL + "), ?) > 0", []any{expression.Value}, nil
 	case *plan.ComparisonExpression:
@@ -295,42 +310,34 @@ func compileComparison(expression *plan.ComparisonExpression, field fieldState) 
 		return "", nil, errors.New("compile ClickHouse predicate: null only supports = and !=")
 	}
 
+	text := comparisonSourceText(expression.Value)
+	if expression.Value.Kind == plan.ValueKindString && text == "*" &&
+		(expression.Op == plan.ComparisonOpEqual || expression.Op == plan.ComparisonOpNotEqual) {
+		if expression.Op == plan.ComparisonOpNotEqual {
+			// SPL field!=* excludes missing fields and every present value,
+			// including explicit null, so it cannot match an event.
+			return "0", nil, nil
+		}
+		return "(" + exists + " AND isNotNull(" + field.valueSQL + "))", args, nil
+	}
+
 	operator, err := comparisonSQL(expression.Op)
 	if err != nil {
 		return "", nil, err
 	}
-	valueSQL := field.valueSQL
 	var predicate string
-	var argument any
-	switch expression.Value.Kind {
-	case plan.ValueKindString:
-		argument = expression.Value.String
-		if strings.ContainsAny(expression.Value.String, "*?") && (expression.Op == plan.ComparisonOpEqual || expression.Op == plan.ComparisonOpNotEqual) {
-			predicate = "match(toString(" + valueSQL + "), ?)"
-			argument = wildcardRegex(expression.Value.String, true)
-		} else if expression.Op == plan.ComparisonOpEqual || expression.Op == plan.ComparisonOpNotEqual {
-			if expression.Field.Name == "index" {
-				predicate = valueSQL + " = ?"
-			} else {
-				predicate = "lowerUTF8(toString(" + valueSQL + ")) = lowerUTF8(?)"
-			}
-		} else {
-			predicate = "toString(" + valueSQL + ") " + operator + " ?"
+	if expression.Op == plan.ComparisonOpEqual || expression.Op == plan.ComparisonOpNotEqual {
+		predicate = equalityPredicate(expression, field, text)
+	} else {
+		predicate, err = relationalPredicate(expression, field, operator)
+		if err != nil {
+			return "", nil, err
 		}
-	case plan.ValueKindInt64:
-		argument = expression.Value.Int64
-		predicate = valueSQL + " " + operator + " ?"
-	case plan.ValueKindUint64:
-		argument = expression.Value.Uint64
-		predicate = valueSQL + " " + operator + " ?"
-	case plan.ValueKindFloat64:
-		argument = expression.Value.Float64
-		predicate = valueSQL + " " + operator + " ?"
-	case plan.ValueKindBool:
-		argument = expression.Value.Bool
-		predicate = valueSQL + " " + operator + " ?"
-	default:
-		return "", nil, errors.New("compile ClickHouse predicate: invalid literal type")
+	}
+	argument := any(text)
+	if expression.Value.Kind == plan.ValueKindString && strings.Contains(text, "*") &&
+		(expression.Op == plan.ComparisonOpEqual || expression.Op == plan.ComparisonOpNotEqual) {
+		argument = wildcardRegex(text, true)
 	}
 	args = append(args, argument)
 	if expression.Op == plan.ComparisonOpNotEqual {
@@ -339,6 +346,79 @@ func compileComparison(expression *plan.ComparisonExpression, field fieldState) 
 		return "(" + exists + " AND NOT ifNull(" + predicate + ", 0))", args, nil
 	}
 	return "(" + exists + " AND ifNull(" + predicate + ", 0))", args, nil
+}
+
+func equalityPredicate(expression *plan.ComparisonExpression, field fieldState, text string) string {
+	valueSQL := field.valueSQL
+	if expression.Value.Kind == plan.ValueKindString && strings.Contains(text, "*") {
+		return "match(toString(" + valueSQL + "), ?)"
+	}
+	if expression.Field.Name == "index" {
+		return valueSQL + " = ?"
+	}
+	base := "lowerUTF8(toString(" + valueSQL + ")) = lowerUTF8(?)"
+	if field.kind != fieldKindDynamic {
+		return base
+	}
+	guard := dynamicLiteralGuard(valueSQL, expression.Value.Kind)
+	if expression.Value.Kind == plan.ValueKindFloat64 {
+		base = "toFloat64OrNull(toString(" + valueSQL + ")) = toFloat64OrNull(?)"
+	}
+	return "(" + guard + " AND " + base + ")"
+}
+
+func relationalPredicate(expression *plan.ComparisonExpression, field fieldState, operator string) (string, error) {
+	if expression.Value.Kind == plan.ValueKindBool {
+		return "", errors.New("compile ClickHouse predicate: booleans do not support ordered comparison")
+	}
+	if field.kind == fieldKindTime {
+		if expression.Value.Kind == plan.ValueKindString {
+			return field.valueSQL + " " + operator + " parseDateTime64BestEffortOrNull(?, 9, 'UTC')", nil
+		}
+		return "(toFloat64(toUnixTimestamp64Nano(" + field.valueSQL + ")) / 1000000000) " + operator + " toFloat64OrNull(?)", nil
+	}
+	return "toFloat64OrNull(toString(" + field.valueSQL + ")) " + operator + " toFloat64OrNull(?)", nil
+}
+
+func dynamicLiteralGuard(valueSQL string, kind plan.ValueKind) string {
+	typeSQL := "dynamicType(" + valueSQL + ")"
+	switch kind {
+	case plan.ValueKindInt64, plan.ValueKindUint64:
+		return typeSQL + " IN ('Int8', 'Int16', 'Int32', 'Int64', 'Int128', 'Int256', 'UInt8', 'UInt16', 'UInt32', 'UInt64', 'UInt128', 'UInt256')"
+	case plan.ValueKindFloat64:
+		return "(startsWith(" + typeSQL + ", 'Float') OR startsWith(" + typeSQL + ", 'Decimal'))"
+	case plan.ValueKindBool:
+		return typeSQL + " = 'Bool'"
+	case plan.ValueKindString:
+		return typeSQL + " = 'String'"
+	default:
+		return "0"
+	}
+}
+
+func comparisonSourceText(value plan.Value) string {
+	if value.SourceText != "" {
+		return value.SourceText
+	}
+	switch value.Kind {
+	case plan.ValueKindString:
+		return value.String
+	case plan.ValueKindInt64:
+		return fmt.Sprintf("%d", value.Int64)
+	case plan.ValueKindUint64:
+		return fmt.Sprintf("%d", value.Uint64)
+	case plan.ValueKindFloat64:
+		return fmt.Sprintf("%g", value.Float64)
+	case plan.ValueKindBool:
+		if value.Bool {
+			return "true"
+		}
+		return "false"
+	case plan.ValueKindNull:
+		return "null"
+	default:
+		return ""
+	}
 }
 
 func comparisonSQL(operator plan.ComparisonOp) (string, error) {
@@ -373,12 +453,13 @@ func resolveCompiledField(field plan.FieldRef, state compileState) (fieldState, 
 		if segment == "" {
 			return fieldState{}, false, fmt.Errorf("compile ClickHouse field %q: dynamic path has empty segment", field.Name)
 		}
-		value += "." + quoteIdentifier(segment)
+		value += "." + quoteIdentifier(encodePhysicalPathSegment(segment))
 	}
 	return fieldState{
 		valueSQL:   value,
 		existsSQL:  "has(" + quoteIdentifier(internalFieldNamesColumn) + ", ?)",
 		existsArgs: []any{normalizedDynamicPath(field.Path)},
+		kind:       fieldKindDynamic,
 	}, true, nil
 }
 
@@ -387,7 +468,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		visible:      make(map[string]fieldState),
 		allowDynamic: operator.Mode != plan.ProjectModeTable,
 		blocked:      cloneSet(state.blocked),
-		order:        append([]plan.SortKey(nil), state.order...),
+		order:        append([]compiledSortKey(nil), state.order...),
 	}
 	var names []string
 	switch operator.Mode {
@@ -441,15 +522,24 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 			continue
 		}
 		projection = append(projection, compiled.valueSQL+" AS "+quoteIdentifier(name))
-		next.visible[name] = fieldState{valueSQL: quoteIdentifier(name), existsSQL: rewriteExistenceForProjection(compiled, name), existsArgs: append([]any(nil), compiled.existsArgs...)}
+		next.visible[name] = fieldState{
+			valueSQL: quoteIdentifier(name), existsSQL: rewriteExistenceForProjection(compiled, name),
+			existsArgs: append([]any(nil), compiled.existsArgs...), kind: compiled.kind,
+		}
 		next.publicOrder = append(next.publicOrder, name)
 	}
-	projection = append(projection,
-		quoteIdentifier(internalFieldsColumn),
-		quoteIdentifier(internalFieldNamesColumn),
-		quoteIdentifier(internalSortTimeColumn),
-		quoteIdentifier(internalSortIDColumn),
-	)
+	privateColumns := []string{
+		quoteIdentifier(internalFieldsColumn), quoteIdentifier(internalFieldNamesColumn),
+		quoteIdentifier(internalSortTimeColumn), quoteIdentifier(internalSortIDColumn),
+	}
+	for _, key := range state.order {
+		privateColumns = append(privateColumns, key.valueSQL)
+	}
+	for _, column := range privateColumns {
+		if !slices.Contains(projection, column) {
+			projection = append(projection, column)
+		}
+	}
 	if operator.Mode == plan.ProjectModeTable {
 		next.allowDynamic = false
 	}
@@ -466,43 +556,92 @@ func rewriteExistenceForProjection(field fieldState, name string) string {
 	return field.existsSQL
 }
 
-func compileOrder(keys []plan.SortKey, state compileState, reverse bool) (string, []any, error) {
-	parts := make([]string, 0, len(keys))
-	args := make([]any, 0)
-	for _, key := range keys {
-		var value string
-		if key.Field.Name == internalSortTimeColumn || key.Field.Name == internalSortIDColumn {
-			value = quoteIdentifier(key.Field.Name)
-		} else {
-			field, ok, err := resolveCompiledField(key.Field, state)
-			if err != nil {
-				return "", nil, err
-			}
-			if !ok {
-				return "", nil, fmt.Errorf("compile ClickHouse sort: field %q is not available", key.Field.Name)
-			}
-			value = field.valueSQL
+func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, []compiledSortKey, string, error) {
+	if len(keys) == 0 {
+		return nil, nil, "", errors.New("compile ClickHouse sort: no keys")
+	}
+	materialized := make([]string, 0, len(keys)+1)
+	compiled := make([]compiledSortKey, 0, len(keys)+1)
+	for i, key := range keys {
+		field, ok, err := resolveCompiledField(key.Field, state)
+		if err != nil {
+			return nil, nil, "", err
 		}
-		descending := key.Descending
+		if !ok {
+			return nil, nil, "", fmt.Errorf("compile ClickHouse sort: field %q is not available", key.Field.Name)
+		}
+		alias := fmt.Sprintf("__os_order_%d_%d", stage, i)
+		sortValue := field.valueSQL
+		if field.kind == fieldKindDynamic {
+			sortValue = dynamicSortValue(field.valueSQL)
+		}
+		materialized = append(materialized, sortValue+" AS "+quoteIdentifier(alias))
+		compiled = append(compiled, compiledSortKey{valueSQL: quoteIdentifier(alias), descending: key.Descending})
+	}
+	// A stable event ID tie-breaker makes result paging deterministic without
+	// changing the user's primary sort semantics.
+	tieAlias := fmt.Sprintf("__os_order_%d_tie", stage)
+	materialized = append(materialized, quoteIdentifier(internalSortIDColumn)+" AS "+quoteIdentifier(tieAlias))
+	compiled = append(compiled, compiledSortKey{valueSQL: quoteIdentifier(tieAlias), descending: true})
+	order, err := compileMaterializedOrder(compiled, false)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return materialized, compiled, order, nil
+}
+
+func dynamicSortValue(valueSQL string) string {
+	text := "toString(" + valueSQL + ")"
+	number := "toFloat64OrNull(" + text + ")"
+	// Dynamic itself is intentionally forbidden in ClickHouse ORDER BY. A
+	// fixed tuple also gives SPL-like numeric ordering for numeric values and
+	// strings, then puts nonnumeric scalars before missing/explicit null.
+	return "tuple(" +
+		"if(isNull(" + valueSQL + "), toUInt8(2), if(isNotNull(" + number + "), toUInt8(0), toUInt8(1))), " +
+		"ifNull(" + number + ", 0.), " +
+		"ifNull(" + text + ", '')" +
+		")"
+}
+
+func compileMaterializedOrder(keys []compiledSortKey, reverse bool) (string, error) {
+	if len(keys) == 0 {
+		return "", errors.New("compile ClickHouse sort: no keys")
+	}
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		descending := key.descending
+		nullsFirst := key.nullsFirst
 		if reverse {
 			descending = !descending
+			nullsFirst = !nullsFirst
 		}
 		direction := "ASC"
 		if descending {
 			direction = "DESC"
 		}
-		parts = append(parts, value+" "+direction+" NULLS LAST")
+		nulls := "NULLS LAST"
+		if nullsFirst {
+			nulls = "NULLS FIRST"
+		}
+		parts = append(parts, key.valueSQL+" "+direction+" "+nulls)
 	}
-	if len(parts) == 0 {
-		return "", nil, errors.New("compile ClickHouse sort: no keys")
-	}
-	return strings.Join(parts, ", "), args, nil
+	return strings.Join(parts, ", "), nil
 }
 
-func stableSortKeys() []plan.SortKey {
-	return []plan.SortKey{
-		{Field: plan.FieldRef{Name: internalSortTimeColumn}, Descending: true},
-		{Field: plan.FieldRef{Name: internalSortIDColumn}, Descending: true},
+func reverseCompiledSortKeys(keys []compiledSortKey) []compiledSortKey {
+	result := make([]compiledSortKey, len(keys))
+	for i, key := range keys {
+		key.descending = !key.descending
+		key.nullsFirst = !key.nullsFirst
+		result[i] = key
+	}
+	return result
+}
+
+func stableCompiledSortKeys() []compiledSortKey {
+	return []compiledSortKey{
+		{valueSQL: quoteIdentifier(internalSortTimeColumn), descending: true},
+		{valueSQL: quoteIdentifier(internalSortIDColumn), descending: true},
 	}
 }
 
@@ -530,18 +669,6 @@ func finalProjection(state compileState) ([]string, []string, error) {
 		return nil, nil, errors.New("compile ClickHouse query: projection has no visible fields")
 	}
 	return projection, output, nil
-}
-
-func hasLimit(operators []plan.Operator) bool {
-	for _, operator := range operators {
-		if _, ok := operator.(*plan.Limit); ok {
-			return true
-		}
-		if sortOperator, ok := operator.(*plan.Sort); ok && sortOperator.Limit > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func aliasPhysical(physical, alias string) string {
@@ -572,9 +699,7 @@ func wildcardRegex(value string, caseInsensitive bool) string {
 		switch r {
 		case '*':
 			result.WriteString(".*")
-		case '?':
-			result.WriteByte('.')
-		case '.', '+', '(', ')', '[', ']', '{', '}', '^', '$', '|', '\\':
+		case '.', '+', '?', '(', ')', '[', ']', '{', '}', '^', '$', '|', '\\':
 			result.WriteByte('\\')
 			result.WriteRune(r)
 		default:
@@ -582,6 +707,32 @@ func wildcardRegex(value string, caseInsensitive bool) string {
 		}
 	}
 	result.WriteByte('$')
+	return result.String()
+}
+
+func freeTextRegex(value string, quoted bool) string {
+	var result strings.Builder
+	result.WriteString("(?i)")
+	if !quoted {
+		result.WriteString("(?:^|[^[:alnum:]_])")
+	}
+	for _, r := range value {
+		if r == '*' {
+			if quoted {
+				result.WriteString(".*")
+			} else {
+				result.WriteString("[[:alnum:]_]*")
+			}
+			continue
+		}
+		if strings.ContainsRune(`.+?()[]{}^$|\\`, r) {
+			result.WriteByte('\\')
+		}
+		result.WriteRune(r)
+	}
+	if !quoted {
+		result.WriteString("(?:$|[^[:alnum:]_])")
+	}
 	return result.String()
 }
 

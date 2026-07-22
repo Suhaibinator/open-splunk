@@ -406,13 +406,20 @@ func flattenTypedObject(
 		if err != nil {
 			return fmt.Errorf("typed object field %q: %w", field.GetName(), err)
 		}
+		dynamic, err := nativeDynamic(value)
+		if err != nil {
+			return fmt.Errorf("typed object field %q: %w", field.GetName(), err)
+		}
 		logicalName := normalizedDynamicPath(logicalPath)
 		physicalName := strings.Join(physicalPath, ".")
 		if prior, collision := physicalPaths[physicalName]; collision && prior != logicalName {
 			return fmt.Errorf("typed fields %q and %q collide in ClickHouse JSON path %q", prior, logicalName, physicalName)
 		}
 		physicalPaths[physicalName] = logicalName
-		document.SetValueAtPath(physicalName, value)
+		// Always force the protobuf-declared scalar type. Without a Dynamic
+		// wrapper the driver's per-path type reuse can coerce a later integral
+		// Float64 into an existing Int64 subcolumn, destroying type intent.
+		document.SetValueAtPath(physicalName, dynamic)
 		fieldNames[logicalName] = struct{}{}
 	}
 	return nil

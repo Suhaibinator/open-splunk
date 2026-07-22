@@ -149,18 +149,28 @@ func (p *parser) parseSortCommand(name token) (Command, error) {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "sort requires at least one field")
 	}
 	if p.current().kind == tokenWord {
-		if limit, err := strconv.ParseUint(p.current().text, 10, 64); err == nil {
-			if limit == 0 {
-				return nil, p.errorAtCurrent("SPL_INVALID_ARGUMENT", "sort result count must be greater than zero")
+		if unsignedIntegerSyntax(p.current().text) {
+			limit, err := strconv.ParseUint(p.current().text, 10, 64)
+			if err != nil {
+				return nil, p.errorAtCurrent("SPL_NUMBER_OUT_OF_RANGE", "sort result count is outside the supported 64-bit range")
 			}
 			command.Limit = limit
+			command.LimitSpecified = true
 			p.advance()
 		}
 	}
+	if p.current().kind == tokenWord && (strings.EqualFold(p.current().text, "asc") || strings.EqualFold(p.current().text, "desc")) {
+		return nil, p.errorAtCurrent("SPL_UNSUPPORTED_SORT_SYNTAX", "use a + or - prefix on each sort field")
+	}
 
 	end := name.range_.End
+	lastWasComma := false
 	for !p.atCommandEnd() {
 		if p.match(tokenComma) {
+			if len(command.Fields) == 0 || lastWasComma {
+				return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field before comma")
+			}
+			lastWasComma = true
 			continue
 		}
 		tok := p.current()
@@ -180,9 +190,10 @@ func (p *parser) parseSortCommand(name token) (Command, error) {
 		}
 		command.Fields = append(command.Fields, SortField{Field: field, Descending: descending, Range: tok.range_})
 		end = tok.range_.End
+		lastWasComma = false
 		p.advance()
 	}
-	if len(command.Fields) == 0 {
+	if len(command.Fields) == 0 || lastWasComma {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "sort requires at least one field")
 	}
 	command.Range = Range{Start: name.range_.Start, End: end}
@@ -342,12 +353,65 @@ func classifyLiteral(text string, quoted bool) LiteralKind {
 	if integerSyntax(text) {
 		return LiteralKindInteger
 	}
-	if strings.ContainsAny(text, ".eE") {
-		if _, err := strconv.ParseFloat(text, 64); err == nil {
-			return LiteralKindFloat
-		}
+	if floatSyntax(text) {
+		return LiteralKindFloat
 	}
 	return LiteralKindString
+}
+
+func unsignedIntegerSyntax(text string) bool {
+	if text == "" {
+		return false
+	}
+	for i := range len(text) {
+		if text[i] < '0' || text[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func floatSyntax(text string) bool {
+	if text == "" {
+		return false
+	}
+	i := 0
+	if text[i] == '-' || text[i] == '+' {
+		i++
+	}
+	digits := 0
+	for i < len(text) && text[i] >= '0' && text[i] <= '9' {
+		i++
+		digits++
+	}
+	hasDecimalPoint := false
+	if i < len(text) && text[i] == '.' {
+		hasDecimalPoint = true
+		i++
+		for i < len(text) && text[i] >= '0' && text[i] <= '9' {
+			i++
+			digits++
+		}
+	}
+	if digits == 0 {
+		return false
+	}
+	hasExponent := false
+	if i < len(text) && (text[i] == 'e' || text[i] == 'E') {
+		hasExponent = true
+		i++
+		if i < len(text) && (text[i] == '-' || text[i] == '+') {
+			i++
+		}
+		exponentStart := i
+		for i < len(text) && text[i] >= '0' && text[i] <= '9' {
+			i++
+		}
+		if exponentStart == i {
+			return false
+		}
+	}
+	return i == len(text) && (hasDecimalPoint || hasExponent)
 }
 
 func integerSyntax(text string) bool {

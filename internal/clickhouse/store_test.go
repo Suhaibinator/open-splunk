@@ -138,6 +138,11 @@ func TestConvertTypedObjectPreservesTypesTagsAndEscapedNames(t *testing.T) {
 	assertJSONPath(t, document, "signed", int64(-1<<63))
 	assertJSONPath(t, document, "unsigned", ^uint64(0))
 	assertJSONPath(t, document, "ratio", 1.25)
+	ratioValue, ratioExists := document.ValueAtPath("ratio")
+	ratioDynamic, ratioTyped := ratioValue.(clickhousedriver.Dynamic)
+	if !ratioExists || !ratioTyped || ratioDynamic.Type() != "Float64" {
+		t.Fatalf("ratio did not retain forced Float64 type: %#v", ratioValue)
+	}
 	assertJSONPath(t, document, "ok", true)
 	assertJSONPath(t, document, "nothing", nil)
 	assertJSONPath(t, document, "text", "2026-07-21T03:04:05Z")
@@ -497,6 +502,13 @@ func assertOptionalString(t *testing.T, value any, present bool, want string) {
 func assertJSONPath(t *testing.T, document *clickhousedriver.JSON, path string, want any) {
 	t.Helper()
 	got, ok := document.ValueAtPath(path)
+	if dynamic, isDynamic := got.(clickhousedriver.Dynamic); isDynamic {
+		if dynamic.Nil() {
+			got = nil
+		} else {
+			got = dynamic.Any()
+		}
+	}
 	if !ok || !reflect.DeepEqual(got, want) {
 		t.Fatalf("path %q = %#v (%T), want %#v", path, got, got, want)
 	}

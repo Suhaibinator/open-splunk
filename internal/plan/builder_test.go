@@ -106,8 +106,38 @@ func TestBuildPreservesLiteralTypes(t *testing.T) {
 			if comparison.Value.Kind != test.kind {
 				t.Fatalf("kind = %v, want %v", comparison.Value.Kind, test.kind)
 			}
+			if comparison.Value.SourceText == "" {
+				t.Fatalf("source text was not retained: %#v", comparison.Value)
+			}
 		})
 	}
+}
+
+func TestBuildAppliesSplunkDefaultSortLimitButHonorsSortZero(t *testing.T) {
+	t.Parallel()
+
+	defaulted, err := Build(mustParse(t, `* | sort -_time`), testScope([]string{"gradethis"}, nil))
+	if err != nil {
+		t.Fatalf("Build(default sort): %v", err)
+	}
+	if got := defaulted.Operators[2].(*Sort).Limit; got != 10_000 {
+		t.Fatalf("default sort limit = %d, want 10000", got)
+	}
+
+	unlimited, err := Build(mustParse(t, `* | sort 0 -_time`), testScope([]string{"gradethis"}, nil))
+	if err != nil {
+		t.Fatalf("Build(sort 0): %v", err)
+	}
+	if got := unlimited.Operators[2].(*Sort).Limit; got != 0 {
+		t.Fatalf("sort 0 limit = %d, want unlimited", got)
+	}
+}
+
+func TestResolveFieldRejectsCompilerPrivateNamespace(t *testing.T) {
+	t.Parallel()
+
+	_, err := ResolveField(`__os_sort_time`, spl.Range{})
+	assertDiagnosticCode(t, err, "SPL_RESERVED_FIELD")
 }
 
 func TestResolveFieldSupportsNestedAndEscapedDot(t *testing.T) {

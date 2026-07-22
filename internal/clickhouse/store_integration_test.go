@@ -14,7 +14,10 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 const storeIntegrationImage = "clickhouse/clickhouse-server:26.3.17.4"
@@ -157,6 +160,125 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	if want := indexTime.Truncate(time.Millisecond).Add(30 * 24 * time.Hour); !expiresAt.Equal(want) {
 		t.Fatalf("expires_at = %v, want %v", expiresAt, want)
 	}
+
+	testCompiledQueriesAgainstClickHouse(t, ctx, store, queryConnection, indexTime)
+}
+
+func testCompiledQueriesAgainstClickHouse(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	connection clickhousedriver.Conn,
+	indexTime time.Time,
+) {
+	t.Helper()
+	one := compilerIntegrationEvent("n-one", "api", "prefix informational suffix", indexTime.Add(time.Second),
+		typedField("status", typedSint(500)),
+		typedField("ratio", typedSint(1)),
+		typedField("n", typedSint(1)),
+		typedField("literal.dot", typedString("needle")),
+	)
+	two := compilerIntegrationEvent("n-two", "500", "prefix error42 suffix", indexTime.Add(2*time.Second),
+		typedField("status", typedString("500")),
+		typedField("ratio", typedDouble(1)),
+		typedField("n", typedSint(2)),
+	)
+	null := compilerIntegrationEvent("n-null", "nullable", "nothing here", indexTime.Add(3*time.Second),
+		typedField("status", typedNull()),
+		typedField("ratio", typedNull()),
+		typedField("n", typedNull()),
+		typedField("nothing", typedNull()),
+	)
+	batch := ingest.StoreBatch{
+		TenantID: "tenant", CollectorID: "collector", BatchID: "compiler-batch", BatchSequence: 2,
+		Events: []*ingest.StoredEvent{one, two, null},
+	}
+	if _, err := store.Store(ctx, batch); err != nil {
+		t.Fatalf("store compiler fixtures: %v", err)
+	}
+	for eventID, wantType := range map[string]string{"n-one": "Int64", "n-two": "Float64", "n-null": "None"} {
+		var gotType string
+		if err := connection.QueryRow(ctx,
+			"SELECT dynamicType(fields.ratio) FROM open_splunk.events WHERE event_id = ?", eventID,
+		).Scan(&gotType); err != nil {
+			t.Fatalf("query ratio type for %s: %v", eventID, err)
+		}
+		if gotType != wantType {
+			t.Fatalf("ratio type for %s = %q, want %q", eventID, gotType, wantType)
+		}
+	}
+
+	for source, want := range map[string]uint64{
+		`index=compiler host=500`:            1,
+		`index=compiler status>=500`:         2,
+		`index=compiler ratio=1`:             1,
+		`index=compiler ratio=1.0`:           1,
+		`index=compiler nothing=null`:        1,
+		`index=compiler nothing=*`:           0,
+		`index=compiler error*`:              1,
+		`index=compiler literal\.dot=needle`: 1,
+	} {
+		compiled := compileIntegrationSPL(t, source, indexTime.Add(10*time.Second))
+		var count uint64
+		if err := connection.QueryRow(ctx, "SELECT count() FROM ("+compiled.SQL+")", compiled.Args...).Scan(&count); err != nil {
+			t.Fatalf("execute compiled %q: %v\nSQL: %s\nargs: %#v", source, err, compiled.SQL, compiled.Args)
+		}
+		if count != want {
+			t.Fatalf("compiled %q count = %d, want %d", source, count, want)
+		}
+	}
+
+	compiled := compileIntegrationSPL(t, `index=compiler | sort n | tail 2 | table event_id`, indexTime.Add(10*time.Second))
+	rows, err := connection.Query(ctx, compiled.SQL, compiled.Args...)
+	if err != nil {
+		t.Fatalf("execute compiled tail: %v\nSQL: %s\nargs: %#v", err, compiled.SQL, compiled.Args)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan tail row: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate tail rows: %v", err)
+	}
+	if strings.Join(ids, ",") != "n-null,n-two" {
+		t.Fatalf("tail IDs = %v, want [n-null n-two]", ids)
+	}
+}
+
+func compilerIntegrationEvent(id, host, raw string, indexTime time.Time, fields ...*opensplunkv1.TypedObjectField) *ingest.StoredEvent {
+	event := testStoredEvent(id, "compiler", indexTime)
+	event.BatchID = "compiler-batch"
+	event.Event.Host = host
+	event.Event.Raw = []byte(raw)
+	event.Event.Fields = typedObjectValue(fields...)
+	return event
+}
+
+func compileIntegrationSPL(t *testing.T, source string, cutoff time.Time) CompiledQuery {
+	t.Helper()
+	parsed, err := spl.Parse(source)
+	if err != nil {
+		t.Fatalf("parse integration SPL %q: %v", source, err)
+	}
+	logical, err := plan.Build(parsed, plan.Scope{
+		TenantID: "tenant", AuthorizedIndexes: []string{"compiler"},
+		Earliest:        time.Date(2026, time.July, 20, 0, 0, 0, 0, time.UTC),
+		Latest:          time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC),
+		IndexTimeCutoff: cutoff,
+	})
+	if err != nil {
+		t.Fatalf("build integration SPL %q: %v", source, err)
+	}
+	compiled, err := (Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatalf("compile integration SPL %q: %v", source, err)
+	}
+	return compiled
 }
 
 func integrationRandomHex(t *testing.T, size int) string {

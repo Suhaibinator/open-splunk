@@ -115,7 +115,11 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 				keys = append(keys, SortKey{Field: ref, Descending: field.Descending})
 			}
-			result.Operators = append(result.Operators, &Sort{Keys: keys, Limit: command.Limit, Range: command.Range})
+			limit := command.Limit
+			if !command.LimitSpecified {
+				limit = 10_000
+			}
+			result.Operators = append(result.Operators, &Sort{Keys: keys, Limit: limit, Range: command.Range})
 		case *spl.LimitCommand:
 			result.Operators = append(result.Operators, &Limit{Count: command.Count, FromEnd: command.Name() == "tail", Range: command.Range})
 		default:
@@ -148,7 +152,7 @@ func resolveIndexes(scope Scope, query *spl.Query) ([]string, error) {
 	}
 
 	for _, reference := range positiveIndexReferences(query) {
-		if strings.ContainsAny(reference.value, "*?") {
+		if strings.Contains(reference.value, "*") {
 			return nil, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_INDEX_SELECTOR",
 				Message: "wildcard index selectors are not supported in compatibility version 0.1",
@@ -240,7 +244,7 @@ func convertExpression(expression spl.Expr) (Expression, error) {
 		}
 		return &NotExpression{Operand: operand, Range: expression.Range}, nil
 	case *spl.TermExpr:
-		return &TextExpression{Value: expression.Value, Quoted: expression.Quoted, Wildcard: strings.ContainsAny(expression.Value, "*?"), Range: expression.Range}, nil
+		return &TextExpression{Value: expression.Value, Quoted: expression.Quoted, Wildcard: strings.Contains(expression.Value, "*"), Range: expression.Range}, nil
 	case *spl.ComparisonExpr:
 		field, err := ResolveField(expression.Field, expression.Range)
 		if err != nil {
@@ -278,33 +282,33 @@ func convertComparisonOp(op spl.CompareOp) ComparisonOp {
 func convertValue(literal spl.Literal) (Value, error) {
 	switch literal.Kind {
 	case spl.LiteralKindString:
-		return Value{Kind: ValueKindString, String: literal.Text, Quoted: literal.Quoted}, nil
+		return Value{Kind: ValueKindString, String: literal.Text, Quoted: literal.Quoted, SourceText: literal.Text}, nil
 	case spl.LiteralKindInteger:
 		if strings.HasPrefix(literal.Text, "-") {
 			value, err := strconv.ParseInt(literal.Text, 10, 64)
 			if err != nil {
 				return Value{}, &Diagnostic{Code: "SPL_NUMBER_OUT_OF_RANGE", Message: "signed integer literal is outside the supported 64-bit range", Range: literal.Range}
 			}
-			return Value{Kind: ValueKindInt64, Int64: value}, nil
+			return Value{Kind: ValueKindInt64, Int64: value, SourceText: literal.Text}, nil
 		}
 		value, err := strconv.ParseUint(strings.TrimPrefix(literal.Text, "+"), 10, 64)
 		if err != nil {
 			return Value{}, &Diagnostic{Code: "SPL_NUMBER_OUT_OF_RANGE", Message: "unsigned integer literal is outside the supported 64-bit range", Range: literal.Range}
 		}
 		if value <= math.MaxInt64 {
-			return Value{Kind: ValueKindInt64, Int64: int64(value)}, nil
+			return Value{Kind: ValueKindInt64, Int64: int64(value), SourceText: literal.Text}, nil
 		}
-		return Value{Kind: ValueKindUint64, Uint64: value}, nil
+		return Value{Kind: ValueKindUint64, Uint64: value, SourceText: literal.Text}, nil
 	case spl.LiteralKindFloat:
 		value, err := strconv.ParseFloat(literal.Text, 64)
 		if err != nil || math.IsInf(value, 0) || math.IsNaN(value) {
 			return Value{}, &Diagnostic{Code: "SPL_NUMBER_OUT_OF_RANGE", Message: "floating-point literal is not finite", Range: literal.Range}
 		}
-		return Value{Kind: ValueKindFloat64, Float64: value}, nil
+		return Value{Kind: ValueKindFloat64, Float64: value, SourceText: literal.Text}, nil
 	case spl.LiteralKindBool:
-		return Value{Kind: ValueKindBool, Bool: strings.EqualFold(literal.Text, "true")}, nil
+		return Value{Kind: ValueKindBool, Bool: strings.EqualFold(literal.Text, "true"), SourceText: literal.Text}, nil
 	case spl.LiteralKindNull:
-		return Value{Kind: ValueKindNull}, nil
+		return Value{Kind: ValueKindNull, SourceText: literal.Text}, nil
 	default:
 		return Value{}, &Diagnostic{Code: "SPL_INVALID_LITERAL", Message: "invalid comparison literal", Range: literal.Range}
 	}
@@ -335,6 +339,12 @@ func ResolveField(name string, sourceRange spl.Range) (FieldRef, error) {
 	}
 	if name == "" || !utf8.ValidString(name) {
 		return FieldRef{}, &Diagnostic{Code: "SPL_INVALID_FIELD", Message: "field name must be non-empty UTF-8", Range: sourceRange}
+	}
+	if strings.HasPrefix(strings.ToLower(name), "__os_") {
+		return FieldRef{}, &Diagnostic{Code: "SPL_RESERVED_FIELD", Message: "field name uses the compiler-private __os_ namespace", Range: sourceRange}
+	}
+	if strings.Contains(name, "*") {
+		return FieldRef{}, &Diagnostic{Code: "SPL_UNSUPPORTED_FIELD_PATTERN", Message: "wildcard field-name patterns are not supported in compatibility version 0.1", Range: sourceRange}
 	}
 	path, err := splitFieldPath(name)
 	if err != nil {

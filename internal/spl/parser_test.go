@@ -99,6 +99,44 @@ func TestParseProjectionSortAndLimits(t *testing.T) {
 	}
 }
 
+func TestParseSortDistinguishesDefaultBoundFromExplicitUnlimited(t *testing.T) {
+	t.Parallel()
+
+	defaulted, err := Parse(`* | sort -_time`)
+	if err != nil {
+		t.Fatalf("Parse(default): %v", err)
+	}
+	defaultSort := defaulted.Commands[0].(*SortCommand)
+	if defaultSort.LimitSpecified {
+		t.Fatalf("omitted sort count marked specified: %#v", defaultSort)
+	}
+
+	unlimited, err := Parse(`* | sort 0 -_time`)
+	if err != nil {
+		t.Fatalf("Parse(unlimited): %v", err)
+	}
+	unlimitedSort := unlimited.Commands[0].(*SortCommand)
+	if !unlimitedSort.LimitSpecified || unlimitedSort.Limit != 0 {
+		t.Fatalf("explicit unlimited sort = %#v", unlimitedSort)
+	}
+}
+
+func TestParseSortRejectsAmbiguousOrMalformedArguments(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`* | sort desc status`,
+		`* | sort , status`,
+		`* | sort status,,host`,
+		`* | sort status,`,
+		`* | sort 18446744073709551616 status`,
+	} {
+		if _, err := Parse(source); err == nil {
+			t.Fatalf("Parse(%q) unexpectedly succeeded", source)
+		}
+	}
+}
+
 func TestPipelineSearchUsesSearchPrecedence(t *testing.T) {
 	t.Parallel()
 
@@ -141,6 +179,19 @@ func TestLiteralsRetainTypeIntent(t *testing.T) {
 				t.Fatalf("literal = %#v, want kind %v text %q", comparison.Value, test.kind, test.text)
 			}
 		})
+	}
+}
+
+func TestOutOfRangeFloatRemainsNumericIntent(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`ratio=1e309`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	comparison := query.Search.(*ComparisonExpr)
+	if comparison.Value.Kind != LiteralKindFloat {
+		t.Fatalf("literal kind = %v, want float intent", comparison.Value.Kind)
 	}
 }
 

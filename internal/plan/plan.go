@@ -174,13 +174,14 @@ const (
 
 // Value contains exactly one scalar selected by Kind.
 type Value struct {
-	Kind    ValueKind
-	String  string
-	Int64   int64
-	Uint64  uint64
-	Float64 float64
-	Bool    bool
-	Quoted  bool
+	Kind       ValueKind
+	String     string
+	Int64      int64
+	Uint64     uint64
+	Float64    float64
+	Bool       bool
+	Quoted     bool
+	SourceText string
 }
 
 // FieldRef is a canonical field or a deterministic dotted dynamic path.
