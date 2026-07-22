@@ -1,0 +1,25 @@
+server:
+  address: 127.0.0.1:8443
+  transport: grpc
+  token_file: ./collector.token
+  tls:
+    enabled: false # Local development only.
+
+state:
+  directory: ./data/collector
+  max_queue_bytes: 1GiB
+
+inputs:
+  - id: gradethis-backend
+    type: file
+    include:
+      - ../gradethis/be/.logs.tmp/*.log
+    format: ndjson
+    start_at: end
+    index: gradethis
+    source: gradethis-backend
+    sourcetype: go:zap:json
+    fields:
+      service: gradethis
+      environment: development
+

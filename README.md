@@ -1,0 +1,52 @@
+# Open Splunk
+
+Open Splunk is a single-node log search and analytics application with an SPL-compatible query layer over ClickHouse.
+
+The server is written in Go. Its browser UI is a statically exported Next.js application embedded into the server executable at build time. Log-producing hosts run the separate Go collector and send protobuf batches to the server over gRPC.
+
+## Repository layout
+
+```text
+app/                    Next.js App Router source
+cmd/
+  open-splunk-server/   Self-contained server application
+  open-splunk-collector/ Log collector deployed beside applications
+  open-splunk-loggen/   Test and benchmark event generator
+configs/examples/       Example runtime configuration
+deploy/                 Local and production deployment assets
+docs/                   Product, architecture, and operational documentation
+gen/
+  go/                   Generated Go protobuf and gRPC code
+  ts/                   Generated TypeScript protobuf code
+internal/               Private Go application packages
+migrations/
+  clickhouse/            ClickHouse schema migrations
+  sqlite/                SQLite control-plane migrations
+out/                    Generated Next.js static export embedded by Go
+proto/open_splunk/v1/   Versioned protobuf source contracts
+public/                 Next.js public assets
+scripts/                Build and developer automation
+go.mod                  Root Go module
+Makefile                Canonical local build and test targets
+package.json            Root Next.js/TypeScript workspace
+next.config.ts          Static-export configuration
+webui.go                Go embed boundary for the generated UI
+```
+
+The root TypeScript files (`package.json`, `next.config.ts`, and `tsconfig.json`) define the Next.js application. The root Go package embeds `out/`, which is why the generated static export lives at the repository root.
+
+## Initial commands
+
+```sh
+npm ci
+npm run build
+go test ./...
+go build -o build/open-splunk-server ./cmd/open-splunk-server
+go build -o build/open-splunk-collector ./cmd/open-splunk-collector
+```
+
+`make build` performs the UI export before compiling the server, ensuring the resulting server binary contains the current frontend.
+
+The current commands are scaffolding only; the SRouter API, protobuf generation, gRPC collector service, SQLite control plane, and ClickHouse implementation will be added in subsequent slices.
+
+See [the product and architecture plan](docs/product-architecture-plan.md) for the complete design.
