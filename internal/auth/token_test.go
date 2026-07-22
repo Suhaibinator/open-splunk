@@ -300,6 +300,112 @@ func TestGetAndListCollectorTokensReturnSafeMetadata(t *testing.T) {
 	}
 }
 
+func TestUpdateCollectorTokenReplacesDefinitionAndScopesAtomically(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openControlDB(t)
+	for _, name := range []string{"first", "second"} {
+		if _, err := db.CreateIndex(ctx, activeIndex(name)); err != nil {
+			t.Fatalf("CreateIndex(%q): %v", name, err)
+		}
+	}
+	store, err := NewStore(db, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("NewStore(): %v", err)
+	}
+	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name: "before", Description: "old", AllowedIndexNames: []string{"first"},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollectorToken(): %v", err)
+	}
+
+	updated, err := store.UpdateCollectorToken(ctx, issued.Token.ID, issued.Token.Version, UpdateCollectorTokenRequest{
+		Name: " after ", Description: "new", AllowedIndexNames: []string{"second"}, ExpiresAt: now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("UpdateCollectorToken(): %v", err)
+	}
+	if updated.Version != 2 || updated.Name != "after" || updated.Description != "new" ||
+		fmt.Sprint(updated.AllowedIndexNames) != fmt.Sprint([]string{"second"}) || !updated.ExpiresAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("updated token = %#v", updated)
+	}
+	if _, err := store.Authorize(ctx, issued.Secret.Plaintext(), "first"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Authorize(old scope) error = %v, want ErrUnauthorized", err)
+	}
+	if principal, err := store.Authorize(ctx, issued.Secret.Plaintext(), "second"); err != nil || principal.TokenID != issued.Token.ID {
+		t.Fatalf("Authorize(new scope) = %#v, %v", principal, err)
+	}
+
+	if _, err := store.UpdateCollectorToken(ctx, issued.Token.ID, 1, UpdateCollectorTokenRequest{
+		Name: "stale", AllowedIndexNames: []string{"first"}, ExpiresAt: now.Add(time.Hour),
+	}); !errors.Is(err, control.ErrVersionConflict) {
+		t.Fatalf("stale UpdateCollectorToken() error = %v, want ErrVersionConflict", err)
+	}
+	current, err := store.GetCollectorToken(ctx, issued.Token.ID)
+	if err != nil {
+		t.Fatalf("GetCollectorToken(): %v", err)
+	}
+	if current.Name != "after" || fmt.Sprint(current.AllowedIndexNames) != fmt.Sprint([]string{"second"}) {
+		t.Fatalf("stale update mutated token: %#v", current)
+	}
+}
+
+func TestUpdateCollectorTokenRejectsInactiveOrInvalidReplacement(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openControlDB(t)
+	if _, err := db.CreateIndex(ctx, activeIndex("main")); err != nil {
+		t.Fatalf("CreateIndex(main): %v", err)
+	}
+	store, err := NewStore(db, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("NewStore(): %v", err)
+	}
+	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{Name: "token", AllowedIndexNames: []string{"main"}})
+	if err != nil {
+		t.Fatalf("CreateCollectorToken(): %v", err)
+	}
+	if _, err := store.UpdateCollectorToken(ctx, issued.Token.ID, issued.Token.Version, UpdateCollectorTokenRequest{
+		Name: "invalid", AllowedIndexNames: []string{"missing"},
+	}); !errors.Is(err, control.ErrInvalidArgument) {
+		t.Fatalf("invalid scope error = %v, want ErrInvalidArgument", err)
+	}
+	unchanged, err := store.GetCollectorToken(ctx, issued.Token.ID)
+	if err != nil || unchanged.Version != 1 || unchanged.Name != "token" {
+		t.Fatalf("invalid update changed token = %#v, %v", unchanged, err)
+	}
+
+	revoked, err := store.RevokeCollectorToken(ctx, issued.Token.ID, issued.Token.Version)
+	if err != nil {
+		t.Fatalf("RevokeCollectorToken(): %v", err)
+	}
+	if _, err := store.UpdateCollectorToken(ctx, issued.Token.ID, revoked.Version, UpdateCollectorTokenRequest{
+		Name: "cannot-reactivate", AllowedIndexNames: []string{"main"},
+	}); !errors.Is(err, ErrInactiveToken) {
+		t.Fatalf("revoked update error = %v, want ErrInactiveToken", err)
+	}
+
+	shortLived, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name: "short", AllowedIndexNames: []string{"main"}, ExpiresAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("CreateCollectorToken(short): %v", err)
+	}
+	store.now = func() time.Time { return now.Add(2 * time.Minute) }
+	if _, err := store.UpdateCollectorToken(ctx, shortLived.Token.ID, shortLived.Token.Version, UpdateCollectorTokenRequest{
+		Name: "cannot-extend", AllowedIndexNames: []string{"main"}, ExpiresAt: now.Add(time.Hour),
+	}); !errors.Is(err, ErrInactiveToken) {
+		t.Fatalf("expired update error = %v, want ErrInactiveToken", err)
+	}
+}
+
 func TestCollectorTokenRandomnessFailuresAreSafe(t *testing.T) {
 	t.Parallel()
 

@@ -15,17 +15,19 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 const (
-	collectorTokenPrefix  = "ost_v1_"
-	tokenRandomBytes      = 32
-	tokenIDRandomBytes    = 16
-	minimumDigestKeyBytes = 32
-	maximumTokenScopes    = 256
-	redactedValue         = "[REDACTED]"
+	collectorTokenPrefix    = "ost_v1_"
+	tokenRandomBytes        = 32
+	tokenIDRandomBytes      = 16
+	minimumDigestKeyBytes   = 32
+	maximumTokenScopes      = 256
+	maximumDescriptionBytes = 8 << 10
+	redactedValue           = "[REDACTED]"
 )
 
 var (
@@ -36,6 +38,10 @@ var (
 	// credentials, expired credentials, and forbidden indexes into one safe
 	// externally reportable error.
 	ErrUnauthorized = errors.New("auth: collector authentication or index authorization failed")
+	// ErrInactiveToken means an administrative mutation targeted a revoked or
+	// effectively expired token. Neither state can safely be made active again
+	// by changing token metadata.
+	ErrInactiveToken = errors.New("auth: collector token is inactive")
 )
 
 // CollectorTokenState is the administrative/effective state of a token.
@@ -102,6 +108,15 @@ type CreateCollectorTokenRequest struct {
 	ExpiresAt         time.Time
 }
 
+// UpdateCollectorTokenRequest replaces the mutable definition of an existing
+// collector token. The credential digest and safe prefix are immutable.
+type UpdateCollectorTokenRequest struct {
+	Name              string
+	Description       string
+	AllowedIndexNames []string
+	ExpiresAt         time.Time
+}
+
 // Principal is the safe result of a collector authorization check.
 type Principal struct {
 	TokenID   string
@@ -147,18 +162,12 @@ func NewStore(db *control.DB, digestKey []byte) (*Store, error) {
 // CreateCollectorToken generates a cryptographically random token, persists
 // only its HMAC-SHA-256 digest, and returns the plaintext exactly once.
 func (store *Store) CreateCollectorToken(ctx context.Context, request CreateCollectorTokenRequest) (issued IssuedCollectorToken, err error) {
-	name := strings.TrimSpace(request.Name)
-	if len(name) == 0 || len(name) > 255 {
-		return IssuedCollectorToken{}, fmt.Errorf("%w: token name must contain between 1 and 255 bytes", control.ErrInvalidArgument)
-	}
-	allowedNames, err := normalizeTokenScopes(request.AllowedIndexNames)
+	now := databaseTime(store.now())
+	name, description, allowedNames, expiresAt, err := normalizeTokenDefinition(
+		request.Name, request.Description, request.AllowedIndexNames, request.ExpiresAt, now,
+	)
 	if err != nil {
 		return IssuedCollectorToken{}, err
-	}
-	now := databaseTime(store.now())
-	expiresAt := databaseTime(request.ExpiresAt)
-	if !request.ExpiresAt.IsZero() && !expiresAt.After(now) {
-		return IssuedCollectorToken{}, fmt.Errorf("%w: token expiration must be in the future", control.ErrInvalidArgument)
 	}
 
 	plaintext, err := store.generatePlaintext()
@@ -204,7 +213,7 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 			token_digest, state, created_at_unix_micro, updated_at_unix_micro,
 			expires_at_unix_micro, revoked_at_unix_micro
 		) VALUES (?, 1, ?, ?, ?, ?, 'active', ?, ?, ?, NULL)`,
-		tokenID, name, request.Description, prefix, digest,
+		tokenID, name, description, prefix, digest,
 		now.UnixMicro(), now.UnixMicro(), expiration,
 	)
 	if err != nil {
@@ -224,12 +233,110 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 	}
 
 	metadata := CollectorToken{
-		ID: tokenID, Version: 1, Name: name, Description: request.Description,
+		ID: tokenID, Version: 1, Name: name, Description: description,
 		Prefix: prefix, State: CollectorTokenStateActive,
 		AllowedIndexNames: append([]string(nil), allowedNames...),
 		CreatedAt:         now, UpdatedAt: now, ExpiresAt: expiresAt,
 	}
 	return IssuedCollectorToken{Token: metadata, Secret: Secret{plaintext: plaintext}}, nil
+}
+
+// UpdateCollectorToken atomically replaces mutable metadata and explicit
+// index scopes under optimistic locking. Revoked and effectively expired
+// credentials remain immutable so an administrative edit cannot accidentally
+// reactivate them.
+func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, expectedVersion uint64, request UpdateCollectorTokenRequest) (result CollectorToken, err error) {
+	if strings.TrimSpace(tokenID) == "" {
+		return CollectorToken{}, fmt.Errorf("%w: token ID is required", control.ErrInvalidArgument)
+	}
+	if expectedVersion == 0 || expectedVersion > math.MaxInt64 {
+		return CollectorToken{}, fmt.Errorf("%w: expected token version is outside the supported range", control.ErrInvalidArgument)
+	}
+	now := databaseTime(store.now())
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return CollectorToken{}, fmt.Errorf("begin collector token update: %w", err)
+	}
+	defer finishTx(tx, &err)
+
+	current, err := scanCollectorToken(tx.QueryRowContext(ctx, tokenSelect+` WHERE t.ingestion_token_id = ? GROUP BY t.ingestion_token_id`, tokenID), now)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CollectorToken{}, control.ErrNotFound
+	}
+	if err != nil {
+		return CollectorToken{}, fmt.Errorf("read collector token for update: %w", err)
+	}
+	if current.Version != expectedVersion {
+		return CollectorToken{}, control.ErrVersionConflict
+	}
+	if current.State == CollectorTokenStateRevoked || current.State == CollectorTokenStateExpired {
+		return CollectorToken{}, ErrInactiveToken
+	}
+	name, description, allowedNames, expiresAt, err := normalizeTokenDefinition(
+		request.Name, request.Description, request.AllowedIndexNames, request.ExpiresAt, now,
+	)
+	if err != nil {
+		return CollectorToken{}, err
+	}
+	if !expiresAt.IsZero() && !expiresAt.After(current.CreatedAt) {
+		return CollectorToken{}, fmt.Errorf("%w: token expiration must be after its creation time", control.ErrInvalidArgument)
+	}
+
+	indexIDs := make([]string, 0, len(allowedNames))
+	for _, indexName := range allowedNames {
+		var indexID string
+		queryErr := tx.QueryRowContext(ctx, `
+			SELECT index_id
+			FROM indexes
+			WHERE name = ? AND state = 'active' AND ingestion_enabled = 1`, indexName).Scan(&indexID)
+		if errors.Is(queryErr, sql.ErrNoRows) {
+			return CollectorToken{}, fmt.Errorf("%w: every token scope must name an active ingestion-enabled index", control.ErrInvalidArgument)
+		}
+		if queryErr != nil {
+			return CollectorToken{}, fmt.Errorf("validate collector token update scope: %w", queryErr)
+		}
+		indexIDs = append(indexIDs, indexID)
+	}
+
+	var expiration any
+	if !expiresAt.IsZero() {
+		expiration = expiresAt.UnixMicro()
+	}
+	update, err := tx.ExecContext(ctx, `
+		UPDATE ingestion_tokens
+		SET name = ?, description = ?, expires_at_unix_micro = ?,
+			version = version + 1, updated_at_unix_micro = ?
+		WHERE ingestion_token_id = ? AND version = ? AND state != 'revoked'`,
+		name, description, expiration, now.UnixMicro(), tokenID, int64(expectedVersion))
+	if err != nil {
+		return CollectorToken{}, fmt.Errorf("update collector token: %w", err)
+	}
+	rows, err := update.RowsAffected()
+	if err != nil {
+		return CollectorToken{}, fmt.Errorf("read updated collector token row count: %w", err)
+	}
+	if rows != 1 {
+		return CollectorToken{}, control.ErrVersionConflict
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM ingestion_token_indexes WHERE ingestion_token_id = ?`, tokenID); err != nil {
+		return CollectorToken{}, fmt.Errorf("replace collector token scopes: %w", err)
+	}
+	for _, indexID := range indexIDs {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
+			VALUES (?, ?)`, tokenID, indexID); err != nil {
+			return CollectorToken{}, fmt.Errorf("store updated collector token scope: %w", err)
+		}
+	}
+
+	result, err = scanCollectorToken(tx.QueryRowContext(ctx, tokenSelect+` WHERE t.ingestion_token_id = ? GROUP BY t.ingestion_token_id`, tokenID), now)
+	if err != nil {
+		return CollectorToken{}, fmt.Errorf("read updated collector token: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return CollectorToken{}, fmt.Errorf("commit collector token update: %w", err)
+	}
+	return result, nil
 }
 
 // Authorize atomically checks a collector credential and one target index.
@@ -457,6 +564,26 @@ func normalizeTokenScopes(inputs []string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+func normalizeTokenDefinition(name, description string, scopes []string, expiration, now time.Time) (string, string, []string, time.Time, error) {
+	name = strings.TrimSpace(name)
+	if len(name) == 0 || len(name) > 255 || !utf8.ValidString(name) || strings.IndexByte(name, 0) >= 0 {
+		return "", "", nil, time.Time{}, fmt.Errorf("%w: token name must contain between 1 and 255 valid UTF-8 bytes", control.ErrInvalidArgument)
+	}
+	if len(description) > maximumDescriptionBytes || !utf8.ValidString(description) || strings.IndexByte(description, 0) >= 0 {
+		return "", "", nil, time.Time{}, fmt.Errorf("%w: token description is invalid or exceeds %d bytes", control.ErrInvalidArgument, maximumDescriptionBytes)
+	}
+	allowedNames, err := normalizeTokenScopes(scopes)
+	if err != nil {
+		return "", "", nil, time.Time{}, err
+	}
+	expiresAt := databaseTime(expiration)
+	now = databaseTime(now)
+	if !expiration.IsZero() && !expiresAt.After(now) {
+		return "", "", nil, time.Time{}, fmt.Errorf("%w: token expiration must be in the future", control.ErrInvalidArgument)
+	}
+	return name, description, allowedNames, expiresAt, nil
 }
 
 func (store *Store) generatePlaintext() (string, error) {

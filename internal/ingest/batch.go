@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"google.golang.org/grpc/codes"
@@ -315,10 +316,41 @@ func responseWithBatchReject(rejection *opensplunkv1.BatchReject) *opensplunkv1.
 	// returns. Their maximum valid wire encoding is below 64 bytes, including
 	// tags and lengths, so reserve that space inside the transport ceiling.
 	const batchRejectResponseBudget = HardMaxCollectResponseBytes - 64
-	response := &opensplunkv1.CollectResponse{
-		Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: rejection},
+	if rejection == nil {
+		return &opensplunkv1.CollectResponse{
+			Payload: &opensplunkv1.CollectResponse_BatchReject{},
+		}
 	}
-	if uint64(proto.Size(response)) <= batchRejectResponseBudget || rejection == nil {
+	boundedRejection := &opensplunkv1.BatchReject{
+		BatchId:       rejection.GetBatchId(),
+		BatchSequence: rejection.GetBatchSequence(),
+		Code:          rejection.GetCode(),
+		Message:       boundedProtocolText(rejection.GetMessage(), 8<<10, "batch rejected; oversized message omitted"),
+		Violations:    make([]*opensplunkv1.FieldViolation, len(rejection.GetViolations())),
+	}
+	// A batch can fail an earlier envelope check (for example collector-ID
+	// mismatch) before batch_id itself is validated. Never reflect an unbounded
+	// or malformed request scalar into the server response.
+	if !validIdentifier(boundedRejection.BatchId, HardMaxIDBytes) {
+		boundedRejection.BatchId = ""
+	}
+	for index, violation := range rejection.GetViolations() {
+		if violation == nil {
+			boundedRejection.Violations[index] = &opensplunkv1.FieldViolation{
+				FieldPath: "violations", Code: "invalid", Message: "invalid violation detail omitted",
+			}
+			continue
+		}
+		boundedRejection.Violations[index] = &opensplunkv1.FieldViolation{
+			FieldPath: boundedProtocolText(violation.GetFieldPath(), 16<<10, "violations"),
+			Code:      boundedProtocolText(violation.GetCode(), 256, "invalid"),
+			Message:   boundedProtocolText(violation.GetMessage(), 8<<10, "oversized violation detail omitted"),
+		}
+	}
+	response := &opensplunkv1.CollectResponse{
+		Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: boundedRejection},
+	}
+	if uint64(proto.Size(response)) <= batchRejectResponseBudget {
 		return response
 	}
 
@@ -334,19 +366,19 @@ func responseWithBatchReject(rejection *opensplunkv1.BatchReject) *opensplunkv1.
 	}
 	build := func(prefix int) *opensplunkv1.CollectResponse {
 		bounded := &opensplunkv1.BatchReject{
-			BatchId:       rejection.GetBatchId(),
-			BatchSequence: rejection.GetBatchSequence(),
-			Code:          rejection.GetCode(),
-			Message:       rejection.GetMessage(),
+			BatchId:       boundedRejection.GetBatchId(),
+			BatchSequence: boundedRejection.GetBatchSequence(),
+			Code:          boundedRejection.GetCode(),
+			Message:       boundedRejection.GetMessage(),
 			Violations:    make([]*opensplunkv1.FieldViolation, prefix+1),
 		}
-		copy(bounded.Violations, rejection.GetViolations()[:prefix])
+		copy(bounded.Violations, boundedRejection.GetViolations()[:prefix])
 		bounded.Violations[prefix] = summary
 		return &opensplunkv1.CollectResponse{
 			Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: bounded},
 		}
 	}
-	low, high := 0, len(rejection.GetViolations())
+	low, high := 0, len(boundedRejection.GetViolations())
 	for low < high {
 		middle := low + (high-low+1)/2
 		if uint64(proto.Size(build(middle))) <= batchRejectResponseBudget {
@@ -355,7 +387,24 @@ func responseWithBatchReject(rejection *opensplunkv1.BatchReject) *opensplunkv1.
 			high = middle - 1
 		}
 	}
-	return build(low)
+	result := build(low)
+	if uint64(proto.Size(result)) <= batchRejectResponseBudget {
+		return result
+	}
+	// All fields above are bounded, so this is defensive against future proto
+	// growth. Preserve only the stable rejection category and sequence.
+	return &opensplunkv1.CollectResponse{Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: &opensplunkv1.BatchReject{
+		BatchSequence: boundedRejection.GetBatchSequence(),
+		Code:          boundedRejection.GetCode(),
+		Message:       "batch rejected; response details omitted",
+	}}}
+}
+
+func boundedProtocolText(value string, maximum int, fallback string) string {
+	if value == "" || len(value) > maximum || !utf8.ValidString(value) {
+		return fallback
+	}
+	return value
 }
 
 func responseWithRetryBatch(

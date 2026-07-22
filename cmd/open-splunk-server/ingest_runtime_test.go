@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,57 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 )
+
+func TestNormalizeRuntimeOptionsCanonicalizesAndBoundsTenantIdentity(t *testing.T) {
+	t.Parallel()
+	config := options{httpAddress: "127.0.0.1:8080", tenantID: " tenant ", indexRetention: time.Hour}
+	if err := normalizeRuntimeOptions(&config); err != nil {
+		t.Fatalf("normalizeRuntimeOptions() error = %v", err)
+	}
+	if config.tenantID != "tenant" {
+		t.Fatalf("normalized tenant ID = %q, want tenant", config.tenantID)
+	}
+	for name, candidate := range map[string]options{
+		"nil retention": {httpAddress: "127.0.0.1:8080", tenantID: "tenant"},
+		"empty tenant":  {httpAddress: "127.0.0.1:8080", tenantID: " \t", indexRetention: time.Hour},
+		"oversized":     {httpAddress: "127.0.0.1:8080", tenantID: strings.Repeat("t", maximumDurableTenantIDBytes+1), indexRetention: time.Hour},
+		"invalid UTF-8": {httpAddress: "127.0.0.1:8080", tenantID: string([]byte{0xff}), indexRetention: time.Hour},
+		"embedded NUL":  {httpAddress: "127.0.0.1:8080", tenantID: "tenant\x00other", indexRetention: time.Hour},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := normalizeRuntimeOptions(&candidate); err == nil {
+				t.Fatal("normalizeRuntimeOptions unexpectedly succeeded")
+			}
+		})
+	}
+}
+
+func TestNormalizeRuntimeOptionsRequiresExplicitNonLoopbackHTTPTrust(t *testing.T) {
+	t.Parallel()
+	config := options{httpAddress: "192.0.2.10:8080", tenantID: "tenant", indexRetention: time.Hour}
+	if err := normalizeRuntimeOptions(&config); err == nil {
+		t.Fatal("non-loopback plaintext HTTP unexpectedly succeeded without explicit trust")
+	}
+	config.httpInsecureTrustedNetwork = true
+	if err := normalizeRuntimeOptions(&config); err != nil {
+		t.Fatalf("explicit trusted-network HTTP error = %v", err)
+	}
+	if len(config.httpAllowedHosts) != 1 || config.httpAllowedHosts[0] != "192.0.2.10" {
+		t.Fatalf("derived allowed hosts = %v", config.httpAllowedHosts)
+	}
+
+	wildcard := options{
+		httpAddress: "0.0.0.0:8080", httpInsecureTrustedNetwork: true,
+		tenantID: "tenant", indexRetention: time.Hour,
+	}
+	if err := normalizeRuntimeOptions(&wildcard); err == nil {
+		t.Fatal("wildcard HTTP listener unexpectedly succeeded without allowed hosts")
+	}
+	wildcard.httpAllowedHostsCSV = "logs.internal.example, 192.0.2.10"
+	if err := normalizeRuntimeOptions(&wildcard); err != nil {
+		t.Fatalf("explicit wildcard allowed hosts error = %v", err)
+	}
+}
 
 func TestCollectorAuthorizerMapsCurrentTokenScopeWithoutAliasing(t *testing.T) {
 	t.Parallel()

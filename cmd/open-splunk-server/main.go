@@ -37,19 +37,22 @@ const (
 )
 
 type options struct {
-	httpAddress        string
-	controlDBPath      string
-	masterKeyPath      string
-	clickhouseAddress  string
-	clickhouseDatabase string
-	clickhouseUsername string
-	clickhouseSecure   bool
-	collectorAddress   string
-	collectorInsecure  bool
-	collectorTLSCert   string
-	collectorTLSKey    string
-	indexRetention     time.Duration
-	tenantID           string
+	httpAddress                string
+	httpAllowedHosts           []string
+	httpAllowedHostsCSV        string
+	httpInsecureTrustedNetwork bool
+	controlDBPath              string
+	masterKeyPath              string
+	clickhouseAddress          string
+	clickhouseDatabase         string
+	clickhouseUsername         string
+	clickhouseSecure           bool
+	collectorAddress           string
+	collectorInsecure          bool
+	collectorTLSCert           string
+	collectorTLSKey            string
+	indexRetention             time.Duration
+	tenantID                   string
 }
 
 type visibilitySnapshotter struct {
@@ -68,8 +71,8 @@ func main() {
 
 func run() error {
 	config := parseFlags()
-	if config.indexRetention <= 0 {
-		return errors.New("default index retention must be positive")
+	if err := normalizeRuntimeOptions(&config); err != nil {
+		return err
 	}
 	serverLock, err := acquireServerLock(config.controlDBPath)
 	if err != nil {
@@ -185,11 +188,13 @@ func run() error {
 		return fmt.Errorf("open embedded web UI: %w", err)
 	}
 	handler, err := server.NewHandler(server.Config{
-		SearchJobs:    jobs,
-		Indexes:       controlDB,
-		SavedSearches: savedSearches,
-		WebUI:         webUI,
-		TenantID:      config.tenantID,
+		SearchJobs:                 jobs,
+		Indexes:                    controlDB,
+		IngestionTokens:            tokenStore,
+		SavedSearches:              savedSearches,
+		WebUI:                      webUI,
+		TenantID:                   config.tenantID,
+		AdministrativeAllowedHosts: config.httpAllowedHosts,
 		Bootstrap: server.BootstrapConfig{
 			ServerVersion:           "dev",
 			APIVersion:              "v1",
@@ -237,6 +242,8 @@ func run() error {
 func parseFlags() options {
 	var result options
 	flag.StringVar(&result.httpAddress, "http-address", "127.0.0.1:8080", "HTTP listen address (set explicitly to expose on a trusted network)")
+	flag.StringVar(&result.httpAllowedHostsCSV, "http-allowed-hosts", "", "comma-separated Host names allowed to use browser administration (defaults to the specific listen host)")
+	flag.BoolVar(&result.httpInsecureTrustedNetwork, "http-insecure-trusted-network", false, "explicitly allow plaintext browser HTTP on a non-loopback trusted network")
 	flag.StringVar(&result.controlDBPath, "control-db", "open-splunk.db", "SQLite control-plane path")
 	flag.StringVar(&result.masterKeyPath, "master-key", "", "server master-key path (default: <control-db>.key)")
 	flag.StringVar(&result.clickhouseAddress, "clickhouse-address", "127.0.0.1:9000", "ClickHouse native-protocol address")

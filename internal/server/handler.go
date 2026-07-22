@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -17,6 +18,7 @@ import (
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -37,7 +39,7 @@ const (
 	maximumTransportPageSize          = uint32(10_000)
 	maximumConcurrentResponses        = 256
 	maximumConcurrentRequests         = 1_024
-	maximumIdentityBytes              = 1 << 10
+	maximumIdentityBytes              = 255
 	maximumBootstrapApps              = 256
 )
 
@@ -55,6 +57,28 @@ type SearchJobs interface {
 type IndexCatalog interface {
 	ListIndexes(context.Context) ([]control.Index, error)
 	GetIndexByName(context.Context, string) (control.Index, error)
+}
+
+// IndexAdministration is the mutable control-plane surface used by the index
+// provisioning API. control.DB satisfies this interface directly.
+type IndexAdministration interface {
+	CreateIndex(context.Context, control.IndexDefinition) (control.Index, error)
+	GetIndex(context.Context, string) (control.Index, error)
+	GetIndexByName(context.Context, string) (control.Index, error)
+	ListIndexes(context.Context) ([]control.Index, error)
+	UpdateIndex(context.Context, string, uint64, control.IndexDefinition) (control.Index, error)
+	SetIndexState(context.Context, string, uint64, control.IndexState) (control.Index, error)
+}
+
+// IngestionTokenAdministration is the secret-safe collector credential
+// surface exposed to the browser API. Only Create returns a one-time Secret;
+// every other method returns metadata which cannot authenticate a collector.
+type IngestionTokenAdministration interface {
+	CreateCollectorToken(context.Context, auth.CreateCollectorTokenRequest) (auth.IssuedCollectorToken, error)
+	GetCollectorToken(context.Context, string) (auth.CollectorToken, error)
+	ListCollectorTokens(context.Context) ([]auth.CollectorToken, error)
+	UpdateCollectorToken(context.Context, string, uint64, auth.UpdateCollectorTokenRequest) (auth.CollectorToken, error)
+	RevokeCollectorToken(context.Context, string, uint64) (auth.CollectorToken, error)
 }
 
 // SavedSearches is the owner-scoped saved-search surface exposed to the
@@ -97,6 +121,8 @@ type BootstrapConfig struct {
 type Config struct {
 	SearchJobs                 SearchJobs
 	Indexes                    IndexCatalog
+	IndexAdmin                 IndexAdministration
+	IngestionTokens            IngestionTokenAdministration
 	SavedSearches              SavedSearches
 	WebUI                      fs.FS
 	Bootstrap                  BootstrapConfig
@@ -108,11 +134,17 @@ type Config struct {
 	MaximumConcurrentResponses int
 	RouteTimeout               time.Duration
 	Now                        func() time.Time
+	// AdministrativeAllowedHosts is an explicit browser trust boundary for
+	// unauthenticated index and ingestion-token administration. Values are host
+	// names or IP literals without paths. Empty defaults to loopback names only.
+	AdministrativeAllowedHosts []string
 }
 
 type apiHandler struct {
 	jobs              SearchJobs
 	indexes           IndexCatalog
+	indexAdmin        IndexAdministration
+	ingestionTokens   IngestionTokenAdministration
 	savedSearches     SavedSearches
 	ownerID           string
 	tenantID          string
@@ -121,17 +153,31 @@ type apiHandler struct {
 	now               func() time.Time
 	requestGate       chan struct{}
 	serializationGate chan struct{}
+	adminCursorKey    [32]byte
+	adminAllowedHosts map[string]struct{}
 }
 
 // NewHandler constructs the complete HTTP handler. API paths are dispatched
 // before the SPA handler, including unknown API paths, so frontend fallback can
 // never conceal an unavailable or misspelled backend route.
 func NewHandler(config Config) (http.Handler, error) {
-	if config.SearchJobs == nil {
+	if isNilDependency(config.SearchJobs) {
 		return nil, errors.New("create server handler: search job service is required")
 	}
-	if config.Indexes == nil {
+	if isNilDependency(config.Indexes) {
 		return nil, errors.New("create server handler: index catalog is required")
+	}
+	indexAdmin := config.IndexAdmin
+	if isNilDependency(indexAdmin) {
+		if inferred, ok := config.Indexes.(IndexAdministration); ok && !isNilDependency(inferred) {
+			indexAdmin = inferred
+		} else {
+			indexAdmin = nil
+		}
+	}
+	ingestionTokens := config.IngestionTokens
+	if isNilDependency(ingestionTokens) {
+		ingestionTokens = nil
 	}
 	if isNilDependency(config.SavedSearches) {
 		return nil, errors.New("create server handler: saved search service is required")
@@ -193,14 +239,27 @@ func NewHandler(config Config) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
+	bootstrap.Features = featuresForServices(bootstrap.Features, indexAdmin != nil, ingestionTokens != nil)
+	adminAllowedHosts, err := normalizeAdministrativeAllowedHosts(config.AdministrativeAllowedHosts, indexAdmin != nil || ingestionTokens != nil)
+	if err != nil {
+		return nil, fmt.Errorf("create server handler: %w", err)
+	}
 	spa, err := newSPAHandler(config.WebUI)
 	if err != nil {
 		return nil, fmt.Errorf("create server handler: %w", err)
+	}
+	var adminCursorKey [32]byte
+	if indexAdmin != nil || ingestionTokens != nil {
+		if _, err := rand.Read(adminCursorKey[:]); err != nil {
+			return nil, errors.New("create server handler: secure randomness unavailable for administrative cursors")
+		}
 	}
 
 	api := &apiHandler{
 		jobs:              config.SearchJobs,
 		indexes:           config.Indexes,
+		indexAdmin:        indexAdmin,
+		ingestionTokens:   ingestionTokens,
 		savedSearches:     config.SavedSearches,
 		ownerID:           ownerID,
 		tenantID:          tenantID,
@@ -209,6 +268,8 @@ func NewHandler(config Config) (http.Handler, error) {
 		now:               now,
 		requestGate:       make(chan struct{}, concurrentRequests),
 		serializationGate: make(chan struct{}, concurrentResponses),
+		adminCursorKey:    adminCursorKey,
+		adminAllowedHosts: adminAllowedHosts,
 	}
 	apiRouter := api.newRouter(requestBytes, routeTimeout)
 	apiRoutes := map[string]struct{}{
@@ -224,7 +285,29 @@ func NewHandler(config Config) (http.Handler, error) {
 		"/api/v1/saved-searches/duplicate": {},
 		"/api/v1/saved-searches/delete":    {},
 	}
-	apiBoundary := exactAPIRoutes(apiRouter, apiRoutes)
+	if api.indexAdmin != nil {
+		for _, path := range []string{
+			"/api/v1/indexes/create",
+			"/api/v1/indexes/get",
+			"/api/v1/indexes/list",
+			"/api/v1/indexes/update",
+			"/api/v1/indexes/state/set",
+		} {
+			apiRoutes[path] = struct{}{}
+		}
+	}
+	if api.ingestionTokens != nil {
+		for _, path := range []string{
+			"/api/v1/ingestion-tokens/create",
+			"/api/v1/ingestion-tokens/get",
+			"/api/v1/ingestion-tokens/list",
+			"/api/v1/ingestion-tokens/update",
+			"/api/v1/ingestion-tokens/revoke",
+		} {
+			apiRoutes[path] = struct{}{}
+		}
+	}
+	apiBoundary := exactAPIRoutes(api.protectAdministrativeRoutes(apiRouter), apiRoutes)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
@@ -321,6 +404,20 @@ func normalizeBootstrap(config BootstrapConfig) (BootstrapConfig, error) {
 	return result, nil
 }
 
+func featuresForServices(features []opensplunkv1.ServerFeature, _, _ bool) []opensplunkv1.ServerFeature {
+	// The current handlers intentionally expose only the clean-install
+	// provisioning subset of these API families. Do not advertise either broad
+	// capability until every route in the corresponding proto family exists.
+	result := make([]opensplunkv1.ServerFeature, 0, len(features))
+	for _, feature := range features {
+		if feature != opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN &&
+			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN {
+			result = append(result, feature)
+		}
+	}
+	return result
+}
+
 func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout time.Duration) http.Handler {
 	noAuth := router.NoAuth
 	protobufMiddleware := requireProtobufContentType
@@ -385,6 +482,12 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.DeleteSavedSearchRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
+	if handler.indexAdmin != nil {
+		routes = append(routes, handler.indexAdministrationRoutes(noAuth, smallRequestBytes)...)
+	}
+	if handler.ingestionTokens != nil {
+		routes = append(routes, handler.ingestionTokenRoutes(noAuth, maximumRequestBytes, smallRequestBytes)...)
+	}
 
 	return router.NewRouter[string, struct{}](router.RouterConfig{
 		ServiceName: "open-splunk-server",
@@ -396,10 +499,18 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 		SubRouters: []router.SubRouterConfig{{
 			PathPrefix:  "/api/v1",
 			AuthLevel:   &noAuth,
-			Middlewares: []sroutercommon.Middleware{protobufMiddleware, requestMiddleware, deadlineMiddleware},
+			Middlewares: []sroutercommon.Middleware{disableAPICaching, protobufMiddleware, requestMiddleware, deadlineMiddleware},
 			Routes:      routes,
 		}},
 	}, nil, nil)
+}
+
+func disableAPICaching(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Cache-Control", "no-store")
+		response.Header().Set("Pragma", "no-cache")
+		next.ServeHTTP(response, request)
+	})
 }
 
 func requireProtobufContentType(next http.Handler) http.Handler {
