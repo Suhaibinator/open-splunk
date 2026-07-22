@@ -177,16 +177,27 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
+			if len(nextState.preAggregateValidationColumns) > 0 {
+				// Materialize whole-input validation windows before filtering incomplete
+				// group tuples. Otherwise a missing sibling key could hide an
+				// unsupported container value.
+				fragment = "SELECT *, " + strings.Join(nextState.preAggregateValidationColumns, ", ") + " FROM (" + fragment + ") AS " + alias
+				args = prependArguments(nextState.preAggregateValidationArgs, args)
+				aliasSequence++
+				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+				nextState.preAggregateValidationColumns = nil
+				nextState.preAggregateValidationArgs = nil
+			}
 			if len(predicates) > 0 {
-				// Keep missing/null elimination in a distinct pre-aggregation scope.
+				// Keep validation and missing/null elimination in a distinct
+				// pre-aggregation scope after whole-input flags are materialized.
 				fragment = "SELECT * FROM (" + fragment + ") AS " + alias + " WHERE " + strings.Join(predicates, " AND ")
 				aliasSequence++
 				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 			}
 			if len(nextState.preAggregateColumns) > 0 {
-				// Materialize each dynamic key and support bit once. The aggregate then
-				// groups and validates short private aliases instead of repeating large
-				// Dynamic/tag expressions in SELECT, GROUP BY, and max().
+				// Materialize grouping keys and numeric measure inputs only after
+				// sparse group tuples have been discarded.
 				fragment = "SELECT *, " + strings.Join(nextState.preAggregateColumns, ", ") + " FROM (" + fragment + ") AS " + alias
 				args = prependArguments(nextState.preAggregateArgs, args)
 				aliasSequence++
@@ -197,24 +208,6 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 			fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + alias
 			if len(groups) > 0 {
 				fragment += " GROUP BY " + strings.Join(groups, ", ")
-			}
-			if len(nextState.postAggregateColumns) > 0 {
-				// Collapse per-group validation into one whole-result flag before
-				// exposing any group. This prevents a valid group from streaming
-				// before a later unsupported group raises the stable error.
-				aliasSequence++
-				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
-				fragment = "SELECT *, " + strings.Join(nextState.postAggregateColumns, ", ") + " FROM (" + fragment + ") AS " + alias
-				nextState.postAggregateColumns = nil
-			}
-			if len(nextState.postAggregatePredicates) > 0 {
-				// Validation depends on aggregate state, so ClickHouse cannot push it
-				// beneath the tenant/index/time scan boundary. A row-level throwIf can
-				// otherwise be evaluated against another tenant's physical rows.
-				aliasSequence++
-				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
-				fragment = "SELECT * FROM (" + fragment + ") AS " + alias + " WHERE " + strings.Join(nextState.postAggregatePredicates, " AND ")
-				nextState.postAggregatePredicates = nil
 			}
 			args = append(args, aggregateArgs...)
 			state = nextState
@@ -541,18 +534,18 @@ func compileTimechart(
 }
 
 type compileState struct {
-	visible                 map[string]fieldState
-	publicOrder             []string
-	allowDynamic            bool
-	eventRows               bool
-	blocked                 map[string]struct{}
-	blockedPrefixes         map[string]struct{}
-	order                   []compiledSortKey
-	tieBreakers             []compiledSortKey
-	preAggregateColumns     []string
-	preAggregateArgs        []any
-	postAggregateColumns    []string
-	postAggregatePredicates []string
+	visible                       map[string]fieldState
+	publicOrder                   []string
+	allowDynamic                  bool
+	eventRows                     bool
+	blocked                       map[string]struct{}
+	blockedPrefixes               map[string]struct{}
+	order                         []compiledSortKey
+	tieBreakers                   []compiledSortKey
+	preAggregateValidationColumns []string
+	preAggregateValidationArgs    []any
+	preAggregateColumns           []string
+	preAggregateArgs              []any
 }
 
 type fieldKind uint8
@@ -750,6 +743,8 @@ type compiledScalar struct {
 	existsSQL      string
 	existsArgs     []any
 	dynamicTypeSQL string
+	descendantSQL  string
+	descendantArgs []any
 	kind           fieldKind
 	numberType     string
 	literal        *plan.Value
@@ -774,6 +769,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			existsSQL:      field.existsSQL,
 			existsArgs:     append([]any(nil), field.existsArgs...),
 			dynamicTypeSQL: field.dynamicTypeSQL,
+			descendantSQL:  field.descendantSQL,
+			descendantArgs: append([]any(nil), field.descendantArgs...),
 			kind:           field.kind,
 			numberType:     field.numberType,
 		}, nil
@@ -919,9 +916,11 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 		next.publicOrder = append(next.publicOrder, output.Name)
 	}
 	field := fieldState{
-		valueSQL:  quoteIdentifier(output.Name),
-		existsSQL: "1",
-		kind:      value.kind,
+		valueSQL:       quoteIdentifier(output.Name),
+		existsSQL:      "1",
+		descendantSQL:  value.descendantSQL,
+		descendantArgs: append([]any(nil), value.descendantArgs...),
+		kind:           value.kind,
 		// An eval output named index is calculated data, not the physical scan
 		// selector. It follows its expression type and ordinary comparison rules.
 		caseSensitive: false,
@@ -1019,10 +1018,10 @@ func cloneCompileState(state compileState) compileState {
 	next.blockedPrefixes = cloneSet(state.blockedPrefixes)
 	next.order = append([]compiledSortKey(nil), state.order...)
 	next.tieBreakers = append([]compiledSortKey(nil), state.tieBreakers...)
+	next.preAggregateValidationColumns = append([]string(nil), state.preAggregateValidationColumns...)
+	next.preAggregateValidationArgs = append([]any(nil), state.preAggregateValidationArgs...)
 	next.preAggregateColumns = append([]string(nil), state.preAggregateColumns...)
 	next.preAggregateArgs = append([]any(nil), state.preAggregateArgs...)
-	next.postAggregateColumns = append([]string(nil), state.postAggregateColumns...)
-	next.postAggregatePredicates = append([]string(nil), state.postAggregatePredicates...)
 	return next
 }
 
@@ -1781,7 +1780,8 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		blocked:      make(map[string]struct{}),
 	}
 	seen := make(map[string]struct{}, len(operator.GroupBy)+len(operator.Measures))
-	dynamicGroupSupport := make([]string, 0, len(operator.GroupBy))
+	dynamicGroupInvalid := make([]string, 0, len(operator.GroupBy))
+	var dynamicGroupInvalidArgs []any
 	for _, group := range operator.GroupBy {
 		if _, duplicate := seen[group.Name]; duplicate {
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: output field %q is duplicated", group.Name)
@@ -1806,6 +1806,7 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		valueSQL := field.valueSQL
 		kind := field.kind
 		numericSort := field.numericSort
+		supportedSQL := ""
 		if kind == fieldKindDynamic {
 			// SPL fields are compared and grouped by their lexical value. Dynamic
 			// scalar storage types therefore intentionally converge on the same
@@ -1813,17 +1814,15 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			// Missing and explicit-null values are removed below.
 			supported, lexical := statsByScalarExpressions(field)
 			// Unsupported containers use one private placeholder group. A scoped
-			// aggregate flag below fails the whole search before any key is exposed.
-			supportAlias := quoteIdentifier(fmt.Sprintf("__os_group_supported_%d", len(groups)))
+			// whole-input window below fails the search before any key is exposed.
 			valueAlias := quoteIdentifier(fmt.Sprintf("__os_group_value_%d", len(groups)))
 			next.preAggregateColumns = append(next.preAggregateColumns,
-				supported+" AS "+supportAlias,
 				"if("+supported+", "+lexical+", '') AS "+valueAlias,
 			)
 			valueSQL = valueAlias
 			kind = fieldKindString
 			numericSort = true
-			dynamicGroupSupport = append(dynamicGroupSupport, supportAlias)
+			supportedSQL = supported
 		}
 		groupOutput := fmt.Sprintf("__os_group_%d", len(groups))
 		projection = append(projection, valueSQL+" AS "+quoteIdentifier(groupOutput))
@@ -1835,6 +1834,13 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			// aggregate support check can reject the container explicitly.
 			presence = "(" + presence + " OR " + field.descendantSQL + ")"
 			presenceArgs = append(presenceArgs, field.descendantArgs...)
+		}
+		if supportedSQL != "" {
+			// Validate each key against its own presence rather than the combined
+			// group eligibility predicate. A container must fail the whole scoped
+			// search even when another BY key is missing on the same row.
+			dynamicGroupInvalid = append(dynamicGroupInvalid, "("+presence+") AND NOT ("+supportedSQL+")")
+			dynamicGroupInvalidArgs = append(dynamicGroupInvalidArgs, presenceArgs...)
 		}
 		predicates = append(predicates, presence)
 		args = append(args, presenceArgs...)
@@ -1910,16 +1916,16 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			next.order = append(next.order, compiledSortKey{valueSQL: quoteIdentifier(measure.Output)})
 		}
 	}
-	if len(dynamicGroupSupport) > 0 {
-		unsupportedColumn := quoteIdentifier("__os_stats_by_unsupported")
+	if len(dynamicGroupInvalid) > 0 {
 		anyUnsupportedColumn := quoteIdentifier("__os_stats_by_any_unsupported")
-		allSupported := "(" + strings.Join(dynamicGroupSupport, " AND ") + ")"
-		projection = append(projection, "max(CAST(NOT "+allSupported+" AS UInt8)) AS "+unsupportedColumn)
-		next.postAggregateColumns = []string{
-			"max(" + unsupportedColumn + ") OVER () AS " + anyUnsupportedColumn,
-		}
-		next.postAggregatePredicates = []string{
-			"throwIf(CAST(" + anyUnsupportedColumn + " != 0 AS UInt8), '" + UnsupportedStatsByValueMarker + "') = 0",
+		invalid := "(" + strings.Join(dynamicGroupInvalid, ") OR (") + ")"
+		next.preAggregateValidationColumns = append(next.preAggregateValidationColumns,
+			"max(CAST("+invalid+" AS UInt8)) OVER () AS "+anyUnsupportedColumn,
+		)
+		next.preAggregateValidationArgs = append(next.preAggregateValidationArgs, dynamicGroupInvalidArgs...)
+		eligible := "(" + strings.Join(predicates, " AND ") + ")"
+		predicates = []string{
+			"if(" + anyUnsupportedColumn + " != 0, throwIf(toUInt8(1), '" + UnsupportedStatsByValueMarker + "') = 0, " + eligible + ")",
 		}
 	}
 	return projection, predicates, groups, next, args, nil

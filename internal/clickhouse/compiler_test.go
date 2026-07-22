@@ -334,6 +334,78 @@ func TestCompileDedupHonorsPriorSortAndProjectionBoundaries(t *testing.T) {
 	}
 }
 
+func TestCompileEvalFieldCopiesPreserveFlattenedObjectProvenance(t *testing.T) {
+	t.Parallel()
+
+	direct := compileSPL(t, `index=gradethis | eval copied=object_parent | dedup copied`)
+	for _, required := range []string{
+		`arrayExists(name -> startsWith(name, ?), "__os_field_names")`,
+		`OVER () AS "__os_dedup_any_unsupported_`,
+		UnsupportedDedupValueMarker,
+	} {
+		if !strings.Contains(direct.SQL, required) {
+			t.Fatalf("direct eval copy lost flattened-object provenance %q:\n%s", required, direct.SQL)
+		}
+	}
+	if got := direct.Args[0]; got != "object_parent." {
+		t.Fatalf("direct eval descendant argument = %#v, want object_parent.; args=%#v", got, direct.Args)
+	}
+	if got, want := strings.Count(direct.SQL, "?"), len(direct.Args); got != want {
+		t.Fatalf("direct eval placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, direct.SQL, direct.Args)
+	}
+	if !slices.Contains(direct.OutputFields, "copied") || slices.Contains(direct.OutputFields, internalFieldNamesColumn) {
+		t.Fatalf("direct eval public output fields = %v", direct.OutputFields)
+	}
+
+	chained := compileSPL(t, `index=gradethis | eval first=object_parent, copied=first | stats count BY copied`)
+	for _, required := range []string{
+		`arrayExists(name -> startsWith(name, ?), "__os_field_names")`,
+		`OVER () AS "__os_stats_by_any_unsupported"`,
+		UnsupportedStatsByValueMarker,
+	} {
+		if !strings.Contains(chained.SQL, required) {
+			t.Fatalf("chained eval copy lost flattened-object provenance %q:\n%s", required, chained.SQL)
+		}
+	}
+	if got := chained.Args[len(chained.Args)-1]; got != "object_parent." {
+		t.Fatalf("chained eval descendant argument = %#v, want object_parent.; args=%#v", got, chained.Args)
+	}
+	if got := chained.Args[0]; got != "object_parent." {
+		t.Fatalf("chained eval validation argument = %#v, want object_parent.; args=%#v", got, chained.Args)
+	}
+	if got, want := strings.Count(chained.SQL, "?"), len(chained.Args); got != want {
+		t.Fatalf("chained eval placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, chained.SQL, chained.Args)
+	}
+	if !slices.Equal(chained.OutputFields, []string{"copied", "count"}) {
+		t.Fatalf("chained eval stats output fields = %v", chained.OutputFields)
+	}
+
+	multiKey := compileSPL(t, `index=gradethis | eval copied=object_parent | stats count BY copied, absent`)
+	validation := strings.Index(multiKey.SQL, `OVER () AS "__os_stats_by_any_unsupported"`)
+	eligibility := strings.Index(multiKey.SQL, `WHERE if("__os_stats_by_any_unsupported" != 0`)
+	if validation < 0 || eligibility < 0 || validation >= eligibility {
+		t.Fatalf("multi-key stats did not validate before eligibility filtering:\n%s", multiKey.SQL)
+	}
+	if got, want := strings.Count(multiKey.SQL, "?"), len(multiKey.Args); got != want {
+		t.Fatalf("multi-key stats placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, multiKey.SQL, multiKey.Args)
+	}
+
+	scalar := compileSPL(t, `index=gradethis | eval copied="ordinary" | dedup copied`)
+	if strings.Contains(scalar.SQL, `arrayExists(name -> startsWith(name, ?), "__os_field_names")`) ||
+		strings.Contains(scalar.SQL, `AS "__os_dedup_supported_`) {
+		t.Fatalf("ordinary scalar eval acquired Dynamic descendant guards:\n%s", scalar.SQL)
+	}
+	if got, want := strings.Count(scalar.SQL, "?"), len(scalar.Args); got != want {
+		t.Fatalf("scalar eval placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, scalar.SQL, scalar.Args)
+	}
+
+	projectedAway := compileSPL(t, `index=gradethis | fields host | eval copied=object_parent | dedup copied`)
+	if strings.Contains(projectedAway.SQL, `"__os_fields"."object_parent"`) ||
+		strings.Contains(projectedAway.SQL, `arrayExists(name -> startsWith(name, ?), "__os_field_names")`) {
+		t.Fatalf("eval resurrected projected-away object provenance:\n%s", projectedAway.SQL)
+	}
+}
+
 func TestCompileDedupSupportsTransformingAndDownstreamPipelines(t *testing.T) {
 	t.Parallel()
 
@@ -418,17 +490,15 @@ func TestCompileStatsCountUsesTransformingSchemaAndSplunkNullGrouping(t *testing
 	for _, required := range []string{
 		`SELECT "__os_group_0" AS "level", "__os_group_1" AS "status", "events"`,
 		`"level" AS "__os_group_0"`,
-		`AS "__os_group_supported_1"`,
 		`AS "__os_group_value_1"`,
 		`"__os_group_value_1" AS "__os_group_1"`,
 		`count() AS "events"`,
-		`max(CAST(NOT ("__os_group_supported_1") AS UInt8)) AS "__os_stats_by_unsupported"`,
-		`max("__os_stats_by_unsupported") OVER () AS "__os_stats_by_any_unsupported"`,
+		`OVER () AS "__os_stats_by_any_unsupported"`,
 		`(1 AND isNotNull("level"))`,
 		`(has("__os_field_names", ?) AND isNotNull("__os_fields"."status"))`,
 		`arrayExists(name -> startsWith(name, ?), "__os_field_names")`,
 		`GROUP BY "level", "__os_group_value_1"`,
-		`throwIf(CAST("__os_stats_by_any_unsupported" != 0 AS UInt8)`,
+		`if("__os_stats_by_any_unsupported" != 0, throwIf(toUInt8(1)`,
 		`ORDER BY "__os_group_0" ASC NULLS LAST, "__os_group_1" ASC NULLS LAST`,
 	} {
 		if !strings.Contains(grouped.SQL, required) {
@@ -444,6 +514,9 @@ func TestCompileStatsCountUsesTransformingSchemaAndSplunkNullGrouping(t *testing
 	}
 	if got := grouped.Args[len(grouped.Args)-2:]; !reflect.DeepEqual(got, []any{"status", "status."}) {
 		t.Fatalf("dynamic presence arguments = %#v, want [status status.]", got)
+	}
+	if got := grouped.Args[:2]; !reflect.DeepEqual(got, []any{"status", "status."}) {
+		t.Fatalf("dynamic validation arguments = %#v, want [status status.]", got)
 	}
 	if !strings.Contains(grouped.SQL, UnsupportedStatsByValueMarker) ||
 		!strings.Contains(grouped.SQL, `dynamicElement("__os_fields"."status", 'Map(String, String)')`) ||
@@ -611,12 +684,14 @@ func TestCompileStatsHonorsProjectionBoundaries(t *testing.T) {
 
 	retained := compileSPL(t, `index=gradethis | fields status | stats count BY status`)
 	if !strings.Contains(retained.SQL, `"__os_fields"."status" AS "status"`) ||
-		!strings.Contains(retained.SQL, `AS "__os_group_supported_0"`) ||
 		!strings.Contains(retained.SQL, `AS "__os_group_value_0"`) ||
 		!strings.Contains(retained.SQL, `GROUP BY "__os_group_value_0"`) ||
 		!strings.Contains(retained.SQL, `dynamicType("__os_fields"."status")`) ||
 		strings.Contains(retained.SQL, `CAST(NULL AS Nullable(String)) AS "status"`) {
 		t.Fatalf("explicitly retained field was not grouped:\n%s", retained.SQL)
+	}
+	if strings.Contains(retained.SQL, `AS "__os_group_supported_0"`) {
+		t.Fatalf("unused dynamic support alias was materialized:\n%s", retained.SQL)
 	}
 }
 

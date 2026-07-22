@@ -1115,6 +1115,47 @@ func testCompiledQueriesAgainstClickHouse(
 		}
 	}
 
+	for _, test := range []struct {
+		name   string
+		source string
+		marker string
+	}{
+		{
+			name:   "direct copy into dedup",
+			source: `index=compiler | eval copied=object_parent | dedup copied | head 1`,
+			marker: UnsupportedDedupValueMarker,
+		},
+		{
+			name:   "chained copy into stats",
+			source: `index=compiler | eval first=object_parent, copied=first | stats count BY copied | search count>100 | head 1`,
+			marker: UnsupportedStatsByValueMarker,
+		},
+		{
+			name:   "multi-key stats cannot hide container behind missing sibling",
+			source: `index=compiler | eval copied=object_parent | stats count BY copied, absent | head 1`,
+			marker: UnsupportedStatsByValueMarker,
+		},
+	} {
+		unsupported := compileIntegrationSPL(t, test.source, indexTime.Add(10*time.Second), visibilityCutoff)
+		queryErr := executeCompiledExpectingNoRows(ctx, connection, unsupported)
+		var exception *clickhousedriver.Exception
+		if !errors.As(queryErr, &exception) || exception.Code != 395 || !strings.Contains(exception.Message, test.marker) {
+			t.Fatalf("%s error = %v, want guarded ClickHouse exception containing %q", test.name, queryErr, test.marker)
+		}
+	}
+
+	ordinaryEval := compileIntegrationSPL(t,
+		`index=compiler event_id=n-complex | eval copied="ordinary" | dedup copied | table event_id`,
+		indexTime.Add(10*time.Second), visibilityCutoff,
+	)
+	var ordinaryEventID string
+	if err := connection.QueryRow(ctx, ordinaryEval.SQL, ordinaryEval.Args...).Scan(&ordinaryEventID); err != nil {
+		t.Fatalf("execute ordinary scalar eval through dedup: %v\nSQL: %s\nargs: %#v", err, ordinaryEval.SQL, ordinaryEval.Args)
+	}
+	if ordinaryEventID != "n-complex" {
+		t.Fatalf("ordinary scalar eval event ID = %q, want n-complex", ordinaryEventID)
+	}
+
 	compiled := compileIntegrationSPL(t, `index=compiler | sort n | tail 2 | table event_id`, indexTime.Add(10*time.Second), visibilityCutoff)
 	rows, err := connection.Query(ctx, compiled.SQL, compiled.Args...)
 	if err != nil {
