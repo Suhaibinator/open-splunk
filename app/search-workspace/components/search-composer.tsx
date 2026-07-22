@@ -8,7 +8,9 @@ import type {
   SetStateAction,
   UIEvent,
 } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { resolveAbsoluteTimeRange } from "@/lib/search/backend-data";
 import type { SplDiagnostic } from "@/lib/search/spl-editor";
 
 import { TIME_PRESETS } from "../constants";
@@ -60,6 +62,7 @@ interface SearchComposerProps {
   onModalChange: (modal: ModalName | null) => void;
   onRelativeRangeChange: (amount: number, unit: "m" | "h" | "d") => void;
   onRunSearch: () => void;
+  onSeedAbsoluteRange: () => void;
   onTimePickerSectionChange: (section: TimePickerSection) => void;
   onTimeRangeChange: (range: TimeRange) => void;
 }
@@ -103,19 +106,87 @@ export function SearchComposer({
   onModalChange,
   onRelativeRangeChange,
   onRunSearch,
+  onSeedAbsoluteRange,
   onTimePickerSectionChange,
   onTimeRangeChange,
 }: SearchComposerProps) {
+  const closeTimePickerRef = useRef(onCloseTimePicker);
+  const [mobileTimePicker, setMobileTimePicker] = useState(false);
+  const [localTimeZone, setLocalTimeZone] = useState("Local browser time");
+  closeTimePickerRef.current = onCloseTimePicker;
+  let draftTimeRangeInvalid = false;
+  try {
+    resolveAbsoluteTimeRange(draftTimeRange.earliest, draftTimeRange.latest);
+  } catch {
+    draftTimeRangeInvalid = true;
+  }
+
+  useEffect(() => {
+    const phoneViewport = window.matchMedia("(max-width: 760px)");
+    const updateViewport = () => setMobileTimePicker(phoneViewport.matches);
+    updateViewport();
+    setLocalTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone || "Local browser time");
+    phoneViewport.addEventListener("change", updateViewport);
+    return () => phoneViewport.removeEventListener("change", updateViewport);
+  }, []);
+
+  useEffect(() => {
+    if (modal !== "time" || !mobileTimePicker) return;
+    const dialog = document.querySelector<HTMLElement>("[data-testid='time-picker-dialog']");
+    const trigger = document.querySelector<HTMLButtonElement>("[data-testid='time-range-button']");
+    const previousBodyOverflow = document.body.style.overflow;
+    const inertedElements: HTMLElement[] = [];
+    document.body.style.overflow = "hidden";
+    let current = dialog;
+    while (current !== null && current.parentElement !== null && current !== document.body) {
+      const parent = current.parentElement;
+      for (const sibling of parent.children) {
+        if (sibling !== current
+          && sibling instanceof HTMLElement
+          && !sibling.classList.contains("time-picker-mobile-backdrop")
+          && !sibling.inert) {
+          sibling.inert = true;
+          inertedElements.push(sibling);
+        }
+      }
+      current = parent;
+    }
+    window.requestAnimationFrame(() => dialog?.querySelector<HTMLElement>("button, input, select")?.focus());
+
+    function trapDialogFocus(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeTimePickerRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || dialog === null) return;
+      const controls = Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])'));
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (first === undefined || last === undefined) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", trapDialogFocus);
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      for (const element of inertedElements) element.inert = false;
+      document.removeEventListener("keydown", trapDialogFocus);
+      trigger?.focus();
+    };
+  }, [mobileTimePicker, modal]);
+
   return (
     <>
       <section className="search-composer" aria-label="SPL search">
         <div
           className={`spl-editor${editorFocused ? " focused" : ""}${diagnostic === null ? "" : " has-error"}`}
-          role="combobox"
-          aria-label="SPL command editor"
-          aria-expanded={completionOpen}
-          aria-haspopup="listbox"
-          aria-controls={completionOpen ? "spl-completion-list" : undefined}
         >
           <div className="editor-gutter" aria-hidden="true">
             <div className="editor-gutter-lines" ref={gutterLinesRef}>
@@ -126,7 +197,10 @@ export function SearchComposer({
           <textarea
             ref={editorRef}
             data-testid="search-input"
+            role="combobox"
             aria-label="Search with SPL"
+            aria-expanded={completionOpen}
+            aria-haspopup="listbox"
             aria-describedby={`${diagnostic === null ? "editor-help" : "editor-diagnostic"} spl-completion-status`}
             aria-autocomplete="list"
             aria-controls={completionOpen ? "spl-completion-list" : undefined}
@@ -204,9 +278,11 @@ export function SearchComposer({
             <span aria-hidden="true">▾</span>
           </button>
           {modal === "time" ? (
-            <section className="time-popover" id="time-range-popover" data-testid="time-picker-dialog" role="dialog" aria-modal="false" aria-labelledby="time-popover-title">
+            <>
+            <button className="time-picker-mobile-backdrop" type="button" aria-label="Close time range" onClick={onCloseTimePicker} />
+            <section className="time-popover" id="time-range-popover" data-testid="time-picker-dialog" role="dialog" aria-modal={mobileTimePicker} aria-labelledby="time-popover-title">
               <header className="time-popover-header">
-                <div><strong id="time-popover-title">Select time range</strong><small>America/Los_Angeles</small></div>
+                <div><strong id="time-popover-title">Select time range</strong><small>{localTimeZone}</small></div>
                 <button type="button" aria-label="Close time range" onClick={onCloseTimePicker}>×</button>
               </header>
               <div className="time-picker-layout">
@@ -222,7 +298,7 @@ export function SearchComposer({
                       onClick={() => {
                         onTimePickerSectionChange(section);
                         if (section === "relative") onRelativeRangeChange(relativeAmount, relativeUnit);
-                        if (section === "range") onAbsoluteRangeChange(absoluteStart, absoluteEnd);
+                        if (section === "range") onSeedAbsoluteRange();
                       }}
                     >{label}</button>
                   ))}
@@ -245,7 +321,7 @@ export function SearchComposer({
                   ) : null}
                   {timePickerSection === "range" ? (
                     <div className="time-form-section">
-                      <h3>Date &amp; time range</h3><p>Use local time in America/Los_Angeles.</p>
+                      <h3>Date &amp; time range</h3><p>Use local time in {localTimeZone}.</p>
                       <div className="absolute-time-row">
                         <label><span>Start</span><input type="datetime-local" max={absoluteEnd} value={absoluteStart} onInput={(event) => onAbsoluteRangeChange(event.currentTarget.value, absoluteEnd)} /></label>
                         <label><span>End</span><input type="datetime-local" min={absoluteStart} value={absoluteEnd} onInput={(event) => onAbsoluteRangeChange(absoluteStart, event.currentTarget.value)} /></label>
@@ -260,6 +336,7 @@ export function SearchComposer({
                         <label><span>Earliest</span><input value={draftTimeRange.earliest} onChange={(event) => onDraftTimeRangeChange({ ...draftTimeRange, label: "Custom time range", earliest: event.target.value })} /></label>
                         <label><span>Latest</span><input value={draftTimeRange.latest} onChange={(event) => onDraftTimeRangeChange({ ...draftTimeRange, label: "Custom time range", latest: event.target.value })} /></label>
                       </div>
+                      {draftTimeRangeInvalid ? <p className="time-validation" role="alert">Enter valid time modifiers and make earliest precede latest.</p> : null}
                     </div>
                   ) : null}
                 </div>
@@ -270,11 +347,12 @@ export function SearchComposer({
                 <button
                   className="button primary compact"
                   type="button"
-                  disabled={draftTimeRange.earliest.trim().length === 0 || draftTimeRange.latest.trim().length === 0 || (timePickerSection === "range" && absoluteTimeInvalid)}
+                  disabled={draftTimeRange.earliest.trim().length === 0 || draftTimeRange.latest.trim().length === 0 || draftTimeRangeInvalid || (timePickerSection === "range" && absoluteTimeInvalid)}
                   onClick={() => { onTimeRangeChange(draftTimeRange); onCloseTimePicker(); }}
                 >Apply</button>
               </footer>
             </section>
+            </>
           ) : null}
         </div>
         <button

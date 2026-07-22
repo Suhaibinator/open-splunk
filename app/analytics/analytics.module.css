@@ -1,0 +1,1004 @@
+.page {
+  max-width: 1540px;
+}
+
+.updateStatus {
+  color: #718087;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.contextBar {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #cfd5d8;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(220px, 1fr) 178px 178px;
+  margin-bottom: 10px;
+  min-height: 58px;
+  padding: 8px 10px 8px 13px;
+}
+
+.contextBar > div {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.contextBar > div > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.contextBar strong {
+  color: #30414a;
+  font-size: 11px;
+}
+
+.contextBar small {
+  color: #758289;
+  font-size: 10px;
+  margin-top: 2px;
+}
+
+.contextIcon {
+  align-items: center;
+  background: #e7f0e2;
+  color: #568b36;
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 17px;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.contextBar label,
+.fieldToolbar > label:not(.fieldSearch) {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.contextBar label > span,
+.fieldToolbar > label > span {
+  color: #64737b;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.contextBar select,
+.fieldToolbar select {
+  appearance: none;
+  background: #fff linear-gradient(45deg, transparent 50%, #66757d 50%) calc(100% - 11px) 13px / 4px 4px no-repeat;
+  border: 1px solid #adb8bd;
+  border-radius: 0;
+  color: #34464f;
+  font-size: 10px;
+  height: 31px;
+  padding: 0 26px 0 8px;
+  width: 100%;
+}
+
+.contextBar select:focus-visible,
+.fieldToolbar select:focus-visible {
+  border-color: #317fa6;
+  box-shadow: 0 0 0 1px #317fa6;
+  outline: 0;
+}
+
+.metricGrid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 10px;
+}
+
+.metricGrid > a {
+  background: #fff;
+  border: 1px solid #cfd5d8;
+  color: inherit;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  min-height: 85px;
+  padding: 11px 12px 10px;
+  position: relative;
+  text-decoration: none;
+}
+
+.metricGrid > a:hover {
+  border-color: #93a2a9;
+  box-shadow: 0 1px 4px rgb(21 36 45 / 9%);
+}
+
+.metricGrid > a:focus-visible {
+  outline: 2px solid #287ba5;
+  outline-offset: 1px;
+}
+
+.metricGrid span {
+  color: #65747c;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.metricGrid strong {
+  color: #283840;
+  font-size: 21px;
+  font-weight: 400;
+  grid-column: 1;
+  line-height: 1.2;
+  margin-top: 5px;
+}
+
+.metricGrid small {
+  color: #64747c;
+  font-size: 10px;
+  grid-column: 1;
+  margin-top: 3px;
+}
+
+.metricGrid > a:first-child small,
+.metricGrid > a:nth-child(3) small {
+  color: #4f8432;
+}
+
+.metricGrid i {
+  align-self: start;
+  color: #2d779b;
+  font-size: 13px;
+  font-style: normal;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.primaryGrid,
+.secondaryGrid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1.75fr) minmax(310px, 0.8fr);
+  margin-bottom: 10px;
+}
+
+.secondaryGrid {
+  grid-template-columns: minmax(0, 1.55fr) minmax(350px, 0.85fr);
+  margin-bottom: 0;
+}
+
+.performancePanel,
+.insightsPanel,
+.fieldsPanel,
+.slowestPanel {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.panelHeader {
+  align-items: center;
+  border-bottom: 1px solid #dce1e3;
+  display: flex;
+  justify-content: space-between;
+  min-height: 55px;
+  padding: 9px 13px;
+}
+
+.panelHeader h2 {
+  color: #2d3d45;
+  font-size: 13px;
+  margin: 0 0 3px;
+}
+
+.panelHeader p {
+  color: #748188;
+  font-size: 10px;
+  margin: 0;
+}
+
+.legend {
+  align-items: center;
+  color: #68767d;
+  display: flex;
+  font-size: 10px;
+  gap: 5px;
+}
+
+.legend > span:first-child {
+  background: #5b933a;
+  height: 2px;
+  width: 14px;
+}
+
+.legend b {
+  background: #eef1f2;
+  color: #718087;
+  font-size: 10px;
+  margin-left: 4px;
+  padding: 3px 5px;
+  text-transform: uppercase;
+}
+
+.trendFigure {
+  margin: 0;
+  padding: 12px 14px 4px;
+}
+
+.trendPlot {
+  height: 214px;
+  position: relative;
+  width: 100%;
+}
+
+.trendPlot svg {
+  display: block;
+  height: 184px;
+  overflow: visible;
+  width: 100%;
+}
+
+.gridLine {
+  stroke: #e1e5e7;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.trendLine {
+  fill: none;
+  stroke: #558c35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.25;
+  vector-effect: non-scaling-stroke;
+}
+
+.trendPoints {
+  height: 184px;
+  inset: 0 0 auto;
+  position: absolute;
+}
+
+.trendPoint {
+  background: transparent;
+  border: 0;
+  height: 26px;
+  left: var(--point-x);
+  padding: 0;
+  position: absolute;
+  top: var(--point-y);
+  transform: translate(-50%, -50%);
+  width: 26px;
+  z-index: 1;
+}
+
+.pointMarker {
+  background: #fff;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  height: 8px;
+  left: 50%;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  transition: border-color 100ms, box-shadow 100ms, height 100ms, width 100ms;
+  width: 8px;
+}
+
+.trendPoint:hover .pointMarker,
+.trendPoint:focus-visible .pointMarker,
+.trendPointActive .pointMarker {
+  border-color: #568e36;
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 90%);
+  height: 10px;
+  width: 10px;
+}
+
+.trendPoint:focus-visible {
+  outline: 0;
+}
+
+.trendPoint:focus-visible .pointMarker {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #287ba5;
+}
+
+.trendTooltip {
+  align-items: flex-start;
+  background: #26333a;
+  border-radius: 2px;
+  bottom: calc(100% + 1px);
+  box-shadow: 0 3px 9px rgb(18 29 35 / 25%);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  left: 50%;
+  min-width: 90px;
+  padding: 6px 7px;
+  pointer-events: none;
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  z-index: 8;
+}
+
+.trendTooltip strong {
+  font-size: 10px;
+}
+
+.trendTooltip small {
+  color: #c3cdd2;
+  font-size: 10px;
+  margin-top: 2px;
+}
+
+.trendTooltip.tooltipStart {
+  left: 3px;
+  transform: none;
+}
+
+.trendTooltip.tooltipEnd {
+  left: auto;
+  right: 3px;
+  transform: none;
+}
+
+.axisLabel {
+  bottom: 3px;
+  color: #748188;
+  font-size: 10px;
+  position: absolute;
+}
+
+.axisStart { left: 1px; }
+.axisMiddle { left: 50%; transform: translateX(-50%); }
+.axisEnd { right: 1px; }
+
+.trendFigure figcaption {
+  color: #64717a;
+  font-size: 10px;
+  margin-top: 1px;
+}
+
+.performanceFooter {
+  align-items: stretch;
+  background: #f7f8f8;
+  border-top: 1px solid #dfe3e5;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(80px, 1fr)) auto;
+  min-height: 53px;
+}
+
+.performanceFooter > div {
+  border-right: 1px solid #e0e4e6;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 7px 12px;
+}
+
+.performanceFooter span {
+  color: #718087;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.performanceFooter strong {
+  color: #36474f;
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.performanceFooter > a {
+  align-items: center;
+  color: #28749a;
+  display: flex;
+  font-size: 10px;
+  font-weight: 600;
+  justify-content: center;
+  padding: 0 13px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.performanceFooter > a:hover,
+.insightList a:hover,
+.fieldList a:hover,
+.slowestList a:hover,
+.slowestFooter a:hover {
+  text-decoration: underline;
+}
+
+.insightCount {
+  align-items: center;
+  background: #e7ebed;
+  border-radius: 50%;
+  color: #64727a;
+  display: flex;
+  font-size: 10px;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
+
+.insightList,
+.fieldList ul,
+.slowestList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.insightList > li {
+  border-bottom: 1px solid #e0e4e6;
+  padding: 11px 12px 10px;
+}
+
+.insightList > li:last-child {
+  border-bottom: 0;
+}
+
+.insightTopline,
+.insightList footer {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.severity {
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  padding: 2px 6px;
+  text-transform: uppercase;
+}
+
+.severityhigh {
+  background: #f8e2df;
+  color: #a63f35;
+}
+
+.severitymedium {
+  background: #fff0d9;
+  color: #9b691d;
+}
+
+.severitylow {
+  background: #e5f0f5;
+  color: #34728f;
+}
+
+.insightTopline small {
+  color: #64717a;
+  font-size: 10px;
+}
+
+.insightList h3 {
+  color: #31434c;
+  font-size: 10px;
+  margin: 7px 0 4px;
+}
+
+.insightList p {
+  color: #69777f;
+  font-size: 10px;
+  line-height: 1.45;
+  margin: 0 0 9px;
+}
+
+.insightList footer strong {
+  color: #4f8132;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.insightList footer a,
+.fieldList a,
+.slowestList a,
+.slowestFooter a {
+  color: #26749b;
+  font-size: 10px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.resultCount {
+  color: #738087;
+  font-size: 10px;
+}
+
+.resultCount strong {
+  color: #3a4b53;
+  font-size: 10px;
+}
+
+.fieldToolbar {
+  align-items: end;
+  background: #f7f8f8;
+  border-bottom: 1px solid #d9dee0;
+  display: grid;
+  gap: 7px;
+  grid-template-columns: minmax(190px, 1fr) 138px 128px;
+  padding: 8px 9px;
+}
+
+.fieldSearch {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #adb8bd;
+  display: flex;
+  height: 31px;
+}
+
+.fieldSearch:focus-within {
+  border-color: #317fa6;
+  box-shadow: 0 0 0 1px #317fa6;
+}
+
+.fieldSearch i {
+  color: #748188;
+  font-size: 12px;
+  font-style: normal;
+  margin-left: 8px;
+}
+
+.fieldSearch input {
+  background: transparent;
+  border: 0;
+  font-size: 10px;
+  height: 29px;
+  min-width: 0;
+  outline: 0;
+  padding: 0 8px;
+  width: 100%;
+}
+
+.fieldListHeader,
+.fieldList li {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(130px, 1.1fr) minmax(140px, 1fr) 64px minmax(150px, 1fr) 60px;
+}
+
+.fieldListHeader {
+  background: #eceff0;
+  border-bottom: 1px solid #cdd3d6;
+  color: #52626a;
+  font-size: 10px;
+  font-weight: 700;
+  min-height: 29px;
+  padding: 0 10px;
+}
+
+.fieldList li {
+  border-bottom: 1px solid #e2e6e7;
+  min-height: 47px;
+  padding: 7px 10px;
+}
+
+.fieldList li:last-child {
+  border-bottom: 0;
+}
+
+.fieldList li:hover {
+  background: #f8f9f9;
+}
+
+.fieldIdentity {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+  min-width: 0;
+}
+
+.fieldIdentity > code {
+  color: #2f718f;
+  font-size: 10px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fieldType {
+  background: #edf1f2;
+  border: 1px solid #d3dadd;
+  color: #6e7c83;
+  font-size: 10px;
+  padding: 2px 4px;
+}
+
+.coverageCell {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(65px, 1fr) 38px;
+}
+
+.coverageCell > span,
+.durationTrack {
+  background: #e1e6e8;
+  height: 5px;
+  overflow: hidden;
+}
+
+.coverageCell > span > i,
+.durationTrack > i {
+  background: #69a343;
+  display: block;
+  height: 100%;
+}
+
+.coverageCell strong,
+.cardinality {
+  color: #475860;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.example {
+  color: #6f7c83;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fieldList a {
+  text-align: right;
+}
+
+.emptyFields {
+  align-items: center;
+  color: #748188;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 270px;
+  padding: 28px;
+  text-align: center;
+}
+
+.emptyFields > span {
+  align-items: center;
+  background: #edf1f2;
+  border-radius: 50%;
+  display: flex;
+  font-size: 18px;
+  height: 38px;
+  justify-content: center;
+  margin-bottom: 9px;
+  width: 38px;
+}
+
+.emptyFields strong {
+  color: #35464f;
+  font-size: 11px;
+}
+
+.emptyFields p {
+  font-size: 10px;
+  margin: 4px 0 12px;
+}
+
+.slowestList > li {
+  align-items: center;
+  border-bottom: 1px solid #e1e5e7;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: 22px minmax(0, 1fr) 50px;
+  min-height: 64px;
+  padding: 8px 11px;
+}
+
+.rank {
+  align-items: center;
+  background: #edf0f1;
+  border-radius: 50%;
+  color: #66757d;
+  display: flex;
+  font-size: 10px;
+  height: 22px;
+  justify-content: center;
+  width: 22px;
+}
+
+.searchDetail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.searchDetail > a {
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.searchDetail small {
+  color: #76838a;
+  font-size: 10px;
+  margin: 3px 0 6px;
+}
+
+.durationTrack {
+  width: 100%;
+}
+
+.durationTrack > i {
+  background: #639c40;
+}
+
+.slowestList > li > strong {
+  color: #46575f;
+  font-size: 10px;
+  text-align: right;
+}
+
+.slowestFooter {
+  align-items: center;
+  background: #f7f8f8;
+  display: flex;
+  justify-content: space-between;
+  min-height: 41px;
+  padding: 7px 11px;
+}
+
+.slowestFooter span {
+  color: #64717a;
+  font-size: 10px;
+}
+
+@media (max-width: 1120px) {
+  .primaryGrid,
+  .secondaryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .insightList {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .insightList > li {
+    border-bottom: 0;
+    border-right: 1px solid #e0e4e6;
+  }
+
+  .insightList > li:last-child {
+    border-right: 0;
+  }
+}
+
+@media (max-width: 800px) {
+  .metricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fieldListHeader,
+  .fieldList li {
+    grid-template-columns: minmax(120px, 1fr) minmax(125px, 0.9fr) 56px 58px;
+  }
+
+  .fieldListHeader span:nth-child(4),
+  .fieldList li > .example {
+    display: none;
+  }
+}
+
+@media (max-width: 650px) {
+  .updateStatus {
+    flex-basis: 100%;
+    order: 3;
+  }
+
+  .contextBar {
+    grid-template-columns: 1fr 1fr;
+    padding: 10px;
+  }
+
+  .contextBar > div {
+    grid-column: 1 / -1;
+  }
+
+  .contextBar select,
+  .fieldToolbar select {
+    font-size: 16px;
+    height: 44px;
+  }
+
+  .metricGrid > a {
+    min-height: 94px;
+    padding: 12px;
+  }
+
+  .primaryGrid,
+  .secondaryGrid {
+    gap: 8px;
+  }
+
+  .trendFigure {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding-inline: 8px;
+    scrollbar-width: thin;
+  }
+
+  .trendPlot {
+    height: 194px;
+    min-width: 840px;
+  }
+
+  .trendPlot svg,
+  .trendPoints {
+    height: 164px;
+  }
+
+  .trendPoint {
+    height: 36px;
+    width: 36px;
+  }
+
+  .trendFigure figcaption {
+    left: 0;
+    line-height: 1.4;
+    position: sticky;
+    width: calc(100vw - 52px);
+  }
+
+  .performanceFooter {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .performanceFooter > a {
+    border-top: 1px solid #dfe3e5;
+    grid-column: 1 / -1;
+    min-height: 42px;
+  }
+
+  .insightList {
+    display: block;
+  }
+
+  .insightList > li {
+    border-bottom: 1px solid #e0e4e6;
+    border-right: 0;
+    padding-block: 13px;
+  }
+
+  .fieldToolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .fieldSearch {
+    grid-column: 1 / -1;
+    height: 44px;
+  }
+
+  .fieldSearch input {
+    font-size: 16px;
+    height: 42px;
+  }
+
+  .fieldListHeader {
+    display: none;
+  }
+
+  .fieldList li {
+    gap: 9px 12px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 76px;
+    padding: 10px;
+  }
+
+  .fieldIdentity {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .coverageCell {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .cardinality {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .cardinality::before {
+    color: #7b878d;
+    content: "distinct ";
+    font-size: 10px;
+    font-weight: 400;
+  }
+
+  .fieldList li > .example {
+    display: none;
+  }
+
+  .fieldList a {
+    align-self: center;
+    grid-column: 2;
+    grid-row: 2;
+    min-height: 34px;
+    padding-top: 10px;
+  }
+}
+
+@media (max-width: 420px) {
+  .contextBar {
+    grid-template-columns: 1fr;
+  }
+
+  .contextBar > div,
+  .contextBar label {
+    grid-column: 1;
+  }
+
+  .metricGrid {
+    gap: 7px;
+  }
+
+  .metricGrid strong {
+    font-size: 18px;
+  }
+
+  .metricGrid small {
+    line-height: 1.25;
+  }
+
+  .panelHeader {
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .legend b {
+    display: none;
+  }
+
+  .axisMiddle {
+    display: none;
+  }
+
+  .trendTooltip {
+    min-width: 80px;
+  }
+
+  .performanceFooter > div {
+    padding-inline: 8px;
+  }
+
+  .performanceFooter strong {
+    font-size: 10px;
+  }
+
+  .slowestFooter {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+    padding-block: 9px;
+  }
+}
+
+@media (pointer: coarse) {
+  .metricGrid > a,
+  .insightList a,
+  .fieldList a,
+  .slowestList a,
+  .slowestFooter a {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pointMarker {
+    transition: none;
+  }
+}

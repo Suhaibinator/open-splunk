@@ -14,6 +14,7 @@ import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 
 const VIEWBOX_WIDTH = 1000;
 const VIEWBOX_HEIGHT = 300;
+export const TIME_SERIES_COLORS = ["#5f9f3a", "#2f7fa6", "#e49a2c", "#8b67a8", "#c6534c", "#4d9a8a"] as const;
 
 interface TimeSeriesLineChartProps {
   points: TimelinePoint[];
@@ -29,8 +30,22 @@ function niceStep(maximum: number, targetIntervals = 4): number {
   return niceFraction * power;
 }
 
-function axisScale(points: TimelinePoint[]): { maximum: number; ticks: number[] } {
-  const dataMaximum = Math.max(0, ...points.map((point) => point.count));
+export function timelineSeriesNames(points: TimelinePoint[], fallbackLabel = "Events"): string[] {
+  const names = new Set<string>();
+  points.forEach((point) => Object.keys(point.series ?? {}).forEach((name) => names.add(name)));
+  return names.size === 0 ? [fallbackLabel] : [...names];
+}
+
+export function timelineSeriesDisplayName(name: string): string {
+  return /^(?:count|count\(.+\))$/i.test(name) ? "Events" : name;
+}
+
+function pointSeriesValue(point: TimelinePoint, name: string, fallbackLabel: string): number {
+  return point.series?.[name] ?? (name === fallbackLabel ? point.count : 0);
+}
+
+function axisScale(points: TimelinePoint[], seriesNames: string[], fallbackLabel: string): { maximum: number; ticks: number[] } {
+  const dataMaximum = Math.max(0, ...points.flatMap((point) => seriesNames.map((name) => pointSeriesValue(point, name, fallbackLabel))));
   const step = niceStep(dataMaximum);
   const maximum = Math.max(step, Math.ceil(dataMaximum / step) * step);
   const ticks: number[] = [];
@@ -54,7 +69,8 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [plotWidth, setPlotWidth] = useState(900);
   const [keyboardActive, setKeyboardActive] = useState(false);
-  const { maximum, ticks } = useMemo(() => axisScale(points), [points]);
+  const seriesNames = useMemo(() => timelineSeriesNames(points, seriesLabel), [points, seriesLabel]);
+  const { maximum, ticks } = useMemo(() => axisScale(points, seriesNames, seriesLabel), [points, seriesLabel, seriesNames]);
 
   useEffect(() => {
     const plot = plotRef.current;
@@ -70,14 +86,21 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
     setActiveIndex((current) => current === null || points.length === 0 ? null : Math.min(current, points.length - 1));
   }, [points]);
 
-  const coordinates = useMemo(() => points.map((point, index) => ({
-    x: points.length <= 1 ? VIEWBOX_WIDTH / 2 : (index / (points.length - 1)) * VIEWBOX_WIDTH,
-    y: VIEWBOX_HEIGHT - (point.count / maximum) * VIEWBOX_HEIGHT,
-  })), [maximum, points]);
-  const linePoints = coordinates.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ");
+  const seriesCoordinates = useMemo(() => seriesNames.map((name) => ({
+    name,
+    points: points.map((point, index) => ({
+      x: points.length <= 1 ? VIEWBOX_WIDTH / 2 : (index / (points.length - 1)) * VIEWBOX_WIDTH,
+      y: VIEWBOX_HEIGHT - (pointSeriesValue(point, name, seriesLabel) / maximum) * VIEWBOX_HEIGHT,
+    })),
+  })), [maximum, points, seriesLabel, seriesNames]);
   const xTicks = tickIndices(points.length, plotWidth < 520 ? 3 : plotWidth < 820 ? 4 : 5);
   const activePoint = activeIndex === null ? null : points[activeIndex] ?? null;
-  const activeCoordinate = activeIndex === null ? null : coordinates[activeIndex] ?? null;
+  const activeCoordinates = activeIndex === null ? [] : seriesCoordinates.flatMap((series, seriesIndex) => {
+    const coordinate = series.points[activeIndex];
+    return coordinate === undefined ? [] : [{ ...coordinate, name: series.name, seriesIndex }];
+  });
+  const activeCoordinate = activeCoordinates.reduce<(typeof activeCoordinates)[number] | null>((highest, coordinate) =>
+    highest === null || coordinate.y < highest.y ? coordinate : highest, null);
   const activeXPercent = activeCoordinate === null ? 0 : (activeCoordinate.x / VIEWBOX_WIDTH) * 100;
   const activeYPercent = activeCoordinate === null ? 0 : (activeCoordinate.y / VIEWBOX_HEIGHT) * 100;
 
@@ -116,7 +139,7 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
   const tooltipVertical = activeYPercent < 28 ? "below" : "above";
   const activeDescription = activePoint === null
     ? `Inspect ${seriesLabel.toLowerCase()} over time. Use Left and Right arrow keys to move between time buckets.`
-    : `${activePoint.label}, ${NUMBER_FORMAT.format(activePoint.count)} ${seriesLabel.toLowerCase()}`;
+    : `${activePoint.label}, ${seriesNames.map((name) => `${timelineSeriesDisplayName(name)} ${NUMBER_FORMAT.format(pointSeriesValue(activePoint, name, seriesLabel))}`).join(", ")}`;
 
   return (
     <div className="time-series-chart" data-testid="line-chart">
@@ -131,7 +154,14 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
               return <line key={tick} x1="0" x2={VIEWBOX_WIDTH} y1={y} y2={y} />;
             })}
           </g>
-          <polyline className="time-series-chart__line" points={linePoints} />
+          {seriesCoordinates.map((series, seriesIndex) => (
+            <polyline
+              className="time-series-chart__line"
+              key={series.name}
+              points={series.points.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ")}
+              style={{ stroke: TIME_SERIES_COLORS[seriesIndex % TIME_SERIES_COLORS.length] }}
+            />
+          ))}
         </svg>
         <button
           ref={inspectButtonRef}
@@ -154,14 +184,31 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
         {activePoint === null || activeCoordinate === null ? null : (
           <>
             <span className="time-series-chart__crosshair" aria-hidden="true" style={{ left: `${activeXPercent}%` }} />
-            <span className="time-series-chart__marker" aria-hidden="true" style={{ left: `${activeXPercent}%`, top: `${activeYPercent}%` }} />
+            {activeCoordinates.map((coordinate) => (
+              <span
+                className="time-series-chart__marker"
+                aria-hidden="true"
+                key={coordinate.name}
+                style={{
+                  borderColor: TIME_SERIES_COLORS[coordinate.seriesIndex % TIME_SERIES_COLORS.length],
+                  left: `${(coordinate.x / VIEWBOX_WIDTH) * 100}%`,
+                  top: `${(coordinate.y / VIEWBOX_HEIGHT) * 100}%`,
+                }}
+              />
+            ))}
             <div
               className={`time-series-chart__tooltip is-${tooltipHorizontal} is-${tooltipVertical}`}
               role="tooltip"
               style={{ left: `${activeXPercent}%`, top: `${activeYPercent}%` }}
             >
               <strong>{activePoint.label}</strong>
-              <span><i aria-hidden="true" /><span>{seriesLabel}</span><b>{NUMBER_FORMAT.format(activePoint.count)}</b></span>
+              {seriesNames.map((name, seriesIndex) => (
+                <span key={name}>
+                  <i aria-hidden="true" style={{ backgroundColor: TIME_SERIES_COLORS[seriesIndex % TIME_SERIES_COLORS.length] }} />
+                  <span>{timelineSeriesDisplayName(name)}</span>
+                  <b>{NUMBER_FORMAT.format(pointSeriesValue(activePoint, name, seriesLabel))}</b>
+                </span>
+              ))}
             </div>
           </>
         )}

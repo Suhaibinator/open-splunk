@@ -13,12 +13,19 @@ interface ModalProps {
 export function Modal({ title, subtitle, wide = false, onClose, children, footer, returnFocus = null }: ModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     if (dialog === null) return;
     const mountedDialog: HTMLDialogElement = dialog;
+    const previousBodyOverflow = document.body.style.overflow;
     returnFocusRef.current = returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    document.body.style.overflow = "hidden";
 
     const focusableControls = () => Array.from(mountedDialog.querySelectorAll<HTMLElement>(
       'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
@@ -28,7 +35,12 @@ export function Modal({ title, subtitle, wide = false, onClose, children, footer
       (focusableControls()[0] ?? mountedDialog).focus();
     });
 
-    function trapFocus(event: globalThis.KeyboardEvent) {
+    function handleDialogKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
       if (event.key !== "Tab") return;
       const controls = focusableControls();
       if (controls.length === 0) {
@@ -47,10 +59,11 @@ export function Modal({ title, subtitle, wide = false, onClose, children, footer
       }
     }
 
-    document.addEventListener("keydown", trapFocus);
+    document.addEventListener("keydown", handleDialogKeyDown);
     return () => {
       window.cancelAnimationFrame(focusFrame);
-      document.removeEventListener("keydown", trapFocus);
+      document.removeEventListener("keydown", handleDialogKeyDown);
+      document.body.style.overflow = previousBodyOverflow;
       if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus();
     };
   }, [returnFocus]);

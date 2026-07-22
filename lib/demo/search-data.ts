@@ -39,6 +39,8 @@ export interface DemoHistoryEntry {
   id: string;
   query: string;
   timeRange: string;
+  earliest?: string;
+  latest?: string;
   state: "Completed" | "Canceled" | "Failed";
   events: number;
   duration: string;
@@ -49,6 +51,8 @@ export interface TimelinePoint {
   id: string;
   label: string;
   count: number;
+  /** Transforming searches can return one numeric value per split-by series. */
+  series?: Record<string, number>;
   /** Absolute boundaries are populated by the backend adapter. */
   earliest?: string;
   latest?: string;

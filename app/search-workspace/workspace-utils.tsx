@@ -9,6 +9,100 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function pipelineStages(query: string): string[] {
+  const stages: string[] = [];
+  let stageStart = 0;
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+
+  for (let offset = 0; offset < query.length; offset += 1) {
+    const character = query[offset];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character !== "|") continue;
+    stages.push(query.slice(stageStart, offset));
+    stageStart = offset + 1;
+  }
+  stages.push(query.slice(stageStart));
+  return stages;
+}
+
+export function hasPipelineCommand(query: string, commands: string | readonly string[]): boolean {
+  const allowed = new Set((typeof commands === "string" ? [commands] : commands).map((command) => command.toLowerCase()));
+  return pipelineStages(query).slice(1).some((stage) => {
+    const command = /^\s*([A-Za-z][A-Za-z0-9_-]*)\b/.exec(stage)?.[1]?.toLowerCase();
+    return command !== undefined && allowed.has(command);
+  });
+}
+
+interface DemoFieldPredicate {
+  excluded: boolean;
+  field: "level" | "trace_id";
+  value: string;
+}
+
+function offsetIsOutsideQuotes(query: string, targetOffset: number): boolean {
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  for (let offset = 0; offset < targetOffset; offset += 1) {
+    const character = query[offset];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) quote = null;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    }
+  }
+  return quote === null;
+}
+
+function demoFieldPredicates(query: string): DemoFieldPredicate[] {
+  const predicates: DemoFieldPredicate[] = [];
+  const pattern = /\b(NOT\s+)?(level|trace_id)\s*(!=|=)\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|([A-Za-z0-9_.*:-]+))/gi;
+  for (const match of query.matchAll(pattern)) {
+    const offset = match.index ?? 0;
+    if (!offsetIsOutsideQuotes(query, offset)) continue;
+    const field = match[2]?.toLowerCase();
+    if (field !== "level" && field !== "trace_id") continue;
+    const value = (match[4] ?? match[5] ?? match[6] ?? "").replace(/\\([\\"'])/g, "$1").toLowerCase();
+    if (value.length === 0) continue;
+    predicates.push({
+      field,
+      value,
+      excluded: Boolean(match[1]) !== (match[3] === "!="),
+    });
+  }
+  return predicates;
+}
+
+function matchesDemoValue(actualValue: unknown, queryValue: string): boolean {
+  const actual = String(actualValue ?? "").toLowerCase();
+  if (!queryValue.includes("*")) return actual === queryValue;
+  const wildcard = new RegExp(`^${queryValue.split("*").map(escapeRegExp).join(".*")}$`, "i");
+  return wildcard.test(actual);
+}
+
 export function syntaxTokens(query: string): ReactNode[] {
   const tokenPattern = /(\b(?:index|host|source|sourcetype|level|status|trace_id|message|path)\b(?=\s*=)|\b(?:sort|stats|timechart|table|where|eval|fields|rename|head|top|rare|rex|spath|bin|transaction|join|map|subsearch)\b|\b(?:count|avg|sum|min|max|p95|dc|values|tonumber|replace)\b|\b(?:AND|OR|NOT)\b|"(?:\\.|[^"\\])*"|\|)/gi;
   const unsupported = new Set(["transaction", "join", "map", "subsearch"]);
@@ -36,13 +130,35 @@ export function syntaxTokens(query: string): ReactNode[] {
 
 export function eventCountForQuery(query: string): number {
   const lowered = query.toLowerCase();
-  if (lowered.includes("trace_id=")) return 18;
+  const predicates = demoFieldPredicates(query);
+  const tracePredicates = predicates.filter((predicate) => predicate.field === "trace_id");
+  const includedTraceIds = tracePredicates.filter((predicate) => !predicate.excluded).map((predicate) => predicate.value);
+  const excludedTraceIds = tracePredicates.filter((predicate) => predicate.excluded).map((predicate) => predicate.value);
+  if (includedTraceIds.length > 0) {
+    if (excludedTraceIds.includes("*")) return 0;
+    if (includedTraceIds.includes("*")) return excludedTraceIds.length > 0 ? 12_828 : 12_846;
+    return includedTraceIds.some((traceId) => excludedTraceIds.every((excluded) => !matchesDemoValue(traceId, excluded))) ? 18 : 0;
+  }
+  if (excludedTraceIds.includes("*")) return 0;
   if (lowered.includes("connection refused")) return 391;
   if (lowered.includes("status>=500") || lowered.includes("status >= 500")) return 812;
-  if (lowered.includes("level=error") && lowered.includes("level=warn")) return 3923;
-  if (lowered.includes("level=error")) return 1432;
-  if (lowered.includes("level=warn")) return 2491;
-  return 12_846;
+  const levelCounts = new Map([
+    ["info", 8_917],
+    ["warn", 2_491],
+    ["error", 1_432],
+    ["debug", 6],
+  ]);
+  const levelPredicates = predicates.filter((predicate) => predicate.field === "level");
+  const includedLevels = levelPredicates.filter((predicate) => !predicate.excluded);
+  const excludedLevels = levelPredicates.filter((predicate) => predicate.excluded);
+  if (levelPredicates.length > 0) {
+    return [...levelCounts].reduce((total, [level, count]) => {
+      const included = includedLevels.length === 0 || includedLevels.some((predicate) => matchesDemoValue(level, predicate.value));
+      const excluded = excludedLevels.some((predicate) => matchesDemoValue(level, predicate.value));
+      return total + (included && !excluded ? count : 0);
+    }, 0);
+  }
+  return excludedTraceIds.length > 0 ? 12_828 : 12_846;
 }
 
 export function filteredDemoEvents(query: string): DemoEvent[] {
@@ -50,22 +166,28 @@ export function filteredDemoEvents(query: string): DemoEvent[] {
   let events = DEMO_EVENTS;
   if (lowered.includes("connection refused")) {
     events = events.filter((event) => String(event.fields.message).toLowerCase().includes("connection refused"));
-  } else if (lowered.includes("status>=500") || lowered.includes("status >= 500")) {
+  }
+  if (lowered.includes("status>=500") || lowered.includes("status >= 500")) {
     events = events.filter((event) => Number(event.fields.status ?? 0) >= 500);
-  } else if (lowered.includes("level=error") && lowered.includes("level=warn")) {
-    events = events.filter((event) => ["ERROR", "WARN"].includes(String(event.fields.level)));
-  } else if (lowered.includes("level=error")) {
-    events = events.filter((event) => event.fields.level === "ERROR");
-  } else if (lowered.includes("level=warn")) {
-    events = events.filter((event) => event.fields.level === "WARN");
+  }
+  const predicates = demoFieldPredicates(query);
+  for (const field of ["level", "trace_id"] as const) {
+    const fieldPredicates = predicates.filter((predicate) => predicate.field === field);
+    const included = fieldPredicates.filter((predicate) => !predicate.excluded);
+    const excluded = fieldPredicates.filter((predicate) => predicate.excluded);
+    if (included.length > 0) {
+      events = events.filter((event) => included.some((predicate) => matchesDemoValue(event.fields[field], predicate.value)));
+    }
+    if (excluded.length > 0) {
+      events = events.filter((event) => excluded.every((predicate) => !matchesDemoValue(event.fields[field], predicate.value)));
+    }
   }
   return events;
 }
 
 export function resultTabForQuery(query: string): ResultTab {
-  const lowered = query.toLowerCase();
-  if (lowered.includes("timechart") || lowered.includes(" chart ")) return "visualization";
-  if (lowered.includes("stats") || lowered.includes(" top ") || lowered.includes(" rare ")) return "statistics";
+  if (hasPipelineCommand(query, ["timechart", "chart"])) return "visualization";
+  if (hasPipelineCommand(query, ["stats", "top", "rare"])) return "statistics";
   return "events";
 }
 
@@ -84,10 +206,11 @@ export function highlightedRaw(raw: string, query: string): ReactNode[] {
   });
 }
 
-export function queryForPattern(signature: string): string {
+export function queryForPattern(baseQuery: string, signature: string): string {
   const normalized = signature.replace(/\*+/g, "*").replaceAll('"', '\\"');
   const boundedPattern = normalized.replace(/^\*+|\*+$/g, "");
-  return `index=gradethis\n| search _raw="*${boundedPattern}*"`;
+  const sourceClause = pipelineStages(baseQuery)[0]?.trim() || "index=gradethis";
+  return `${sourceClause}\n| search _raw="*${boundedPattern}*"`;
 }
 
 export function formatFieldValue(value: DemoScalar): string {
@@ -152,11 +275,12 @@ export function jobEventCount(job: SearchJob): number {
   return Math.min(Number.MAX_SAFE_INTEGER, Number(count));
 }
 
-export function timelineIndexFromPointer(event: PointerEvent<HTMLElement>): number | null {
-  const target = (event.target as HTMLElement).closest<HTMLElement>("[data-timeline-index]");
-  if (target === null) return null;
-  const index = Number(target.dataset.timelineIndex);
-  return Number.isFinite(index) ? index : null;
+export function timelineIndexFromPointer(event: PointerEvent<HTMLElement>, bucketCount: number): number | null {
+  if (bucketCount <= 0) return null;
+  const bounds = event.currentTarget.getBoundingClientRect();
+  if (bounds.width <= 0) return null;
+  const ratio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+  return Math.min(bucketCount - 1, Math.floor(ratio * bucketCount));
 }
 
 export function timelineBoundaryLabel(bucketIndex: number): string {

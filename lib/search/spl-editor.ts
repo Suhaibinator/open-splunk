@@ -117,7 +117,7 @@ export function getQueryDiagnostic(spl: string): SplDiagnostic | null {
       line: location.line,
       column: location.column,
       suggestion: token === "transaction"
-        ? "Use stats with values() grouped by a correlation field."
+        ? "Use stats count by a correlation field, then inspect matching events."
         : "Remove this stage or use a supported transforming command.",
       actionLabel: "Remove stage",
       removeStart: pipeBefore < 0 ? 0 : pipeBefore,
