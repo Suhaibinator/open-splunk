@@ -224,7 +224,7 @@ func scannedValue(destination any) any {
 
 func schemaKind(field, databaseType string) (searchjobs.ValueKind, bool) {
 	base := unwrapType(databaseType)
-	if field == "_raw" || strings.HasPrefix(base, "Dynamic") || strings.HasPrefix(base, "Variant") || strings.HasPrefix(base, "Tuple") {
+	if (field == "_raw" && base == "String") || strings.HasPrefix(base, "Dynamic") || strings.HasPrefix(base, "Variant") || strings.HasPrefix(base, "Tuple") {
 		return searchjobs.ValueKindMixed, false
 	}
 	switch {
@@ -465,6 +465,12 @@ func classifyQueryError(ctx context.Context, err error) error {
 	}
 	var exception *clickhousedriver.Exception
 	if errors.As(err, &exception) {
+		if exception.Code == 395 && strings.Contains(exception.Message, clickhouse.UnsupportedStatsByValueMarker) {
+			// The compiler deliberately emits this stable marker when stats BY
+			// sees a dynamic non-scalar value. Do not retain any surrounding
+			// ClickHouse message, generated SQL, or storage detail.
+			return searchjobs.ErrUnsupportedValue
+		}
 		switch exception.Code {
 		case 159: // TIMEOUT_EXCEEDED
 			return fmt.Errorf("%w: ClickHouse execution timeout", context.DeadlineExceeded)

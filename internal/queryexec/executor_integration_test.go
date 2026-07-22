@@ -212,6 +212,55 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("stats aliases retain aggregate types", func(t *testing.T) {
+		for _, alias := range []string{"fields", "_raw"} {
+			job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime, "queryexec-stats-alias-"+alias, `index=main | stats count AS `+alias)
+			if job.State != searchjobs.StateCompleted {
+				t.Fatalf("alias %q state = %v, failure=%#v", alias, job.State, job.Failure)
+			}
+			if len(page.Schema.Columns) != 1 || page.Schema.Columns[0].Name != alias || page.Schema.Columns[0].Kind != searchjobs.ValueKindUnsigned {
+				t.Fatalf("alias %q schema = %#v", alias, page.Schema)
+			}
+			if len(page.Rows) != 1 {
+				t.Fatalf("alias %q rows = %d, want 1", alias, len(page.Rows))
+			}
+			if count, ok := page.Rows[0].Values[0].Unsigned(); !ok || count != 1 {
+				t.Fatalf("alias %q count = %d, %v", alias, count, ok)
+			}
+		}
+	})
+
+	t.Run("stats projection boundary retains no hidden dynamic field", func(t *testing.T) {
+		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime, "queryexec-stats-projected", `index=main | fields host | stats count by status`)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("projected stats state = %v, failure=%#v", job.State, job.Failure)
+		}
+		if len(page.Schema.Columns) != 2 || page.Schema.Columns[0].Name != "status" || page.Schema.Columns[1].Name != "count" {
+			t.Fatalf("projected stats schema = %#v", page.Schema)
+		}
+		if len(page.Rows) != 0 {
+			t.Fatalf("projected-away status emitted %d rows", len(page.Rows))
+		}
+
+		retainedJob, retainedPage := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime, "queryexec-stats-retained", `index=main | fields status | stats count by status`)
+		if retainedJob.State != searchjobs.StateCompleted || len(retainedPage.Rows) != 1 {
+			t.Fatalf("retained stats job=%#v page=%#v", retainedJob, retainedPage)
+		}
+		if status, ok := retainedPage.Rows[0].Values[0].String(); !ok || status != "200" {
+			t.Fatalf("retained status = %q, %v", status, ok)
+		}
+	})
+
+	t.Run("stats non-scalar marker is safely classified", func(t *testing.T) {
+		err := executor.Execute(ctx, clickhouse.CompiledQuery{
+			SQL:          `SELECT throwIf(toUInt8(1), '` + clickhouse.UnsupportedStatsByValueMarker + `') AS impossible`,
+			OutputFields: []string{"impossible"},
+		}, &fakeSink{})
+		if !errors.Is(err, searchjobs.ErrUnsupportedValue) || strings.Contains(err.Error(), clickhouse.UnsupportedStatsByValueMarker) {
+			t.Fatalf("non-scalar marker classification = %v", err)
+		}
+	})
+
 	t.Run("cancellation reaches native query", func(t *testing.T) {
 		cancelCtx, cancelQuery := context.WithTimeout(ctx, 150*time.Millisecond)
 		defer cancelQuery()
@@ -251,10 +300,11 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 	now := time.Now().UTC().Add(-time.Minute).Truncate(time.Second).Add(987 * time.Millisecond)
 	message := "manager integration"
 	document := clickhousedriver.NewJSON()
+	document.SetValueAtPath("status", clickhousedriver.NewDynamic("200"))
 	if err := batch.Append(
 		"queryexec-event", "tenant", "main", now, now,
 		nil, uint8(1), "host", "source", "test", nil, uint8(1), nil, &message, []byte(message),
-		uint8(1), nil, nil, document, []string{}, "collector", "batch", uint64(1),
+		uint8(1), nil, nil, document, []string{"status"}, "collector", "batch", uint64(1),
 		now.Add(24*time.Hour), uint64(1),
 	); err != nil {
 		t.Fatal(err)
@@ -263,6 +313,52 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 		t.Fatal(err)
 	}
 	return now
+}
+
+func queryIntegrationRunSearch(
+	t *testing.T,
+	ctx context.Context,
+	executor *Executor,
+	eventIndexTime time.Time,
+	id, source string,
+) (searchjobs.Job, searchjobs.ResultPage) {
+	t.Helper()
+	manager, err := searchjobs.New(searchjobs.Config{
+		Executor:        executor,
+		Snapshotter:     queryIntegrationSnapshotter(1),
+		Compiler:        clickhouse.Compiler{},
+		MaxConcurrent:   1,
+		MaxQueued:       1,
+		CleanupInterval: -1,
+		Now:             func() time.Time { return eventIndexTime.Add(500 * time.Microsecond) },
+		NewID:           func() string { return id },
+		CursorKey:       []byte("0123456789abcdef0123456789abcdef"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	job, err := manager.Create(ctx, searchjobs.CreateRequest{
+		SPL:               source,
+		OwnerID:           "owner",
+		TenantID:          "tenant",
+		AuthorizedIndexes: []string{"main"},
+		RequestedIndexes:  []string{"main"},
+		Earliest:          eventIndexTime.Add(-time.Hour),
+		Latest:            eventIndexTime.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal := queryIntegrationWaitForTerminal(t, manager, job.ID)
+	if terminal.State != searchjobs.StateCompleted {
+		return terminal, searchjobs.ResultPage{}
+	}
+	page, err := manager.Results(job.ID, searchjobs.PageRequest{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return terminal, page
 }
 
 func queryIntegrationWaitForTerminal(t *testing.T, manager *searchjobs.Manager, id string) searchjobs.Job {

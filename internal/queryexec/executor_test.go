@@ -203,6 +203,7 @@ func TestSchemaKindUnwrapsClickHouseWrappers(t *testing.T) {
 		{"anything", "Dynamic", searchjobs.ValueKindMixed, false},
 		{"choice", "Variant(String, UInt64)", searchjobs.ValueKindMixed, false},
 		{"_raw", "String", searchjobs.ValueKindMixed, false},
+		{"_raw", "UInt64", searchjobs.ValueKindUnsigned, false},
 	}
 	for _, test := range tests {
 		kind, multi := schemaKind(test.field, test.database)
@@ -294,6 +295,18 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 	resource := &clickhousedriver.Exception{Code: 241, Name: "MEMORY_LIMIT_EXCEEDED"}
 	if err := classifyQueryError(context.Background(), resource); !errors.Is(err, searchjobs.ErrExecutionLimit) {
 		t.Fatalf("resource error = %v", err)
+	}
+	unsupported := &clickhousedriver.Exception{
+		Code:    395,
+		Name:    "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
+		Message: clickhouse.UnsupportedStatsByValueMarker + "; generated SQL contained secret",
+	}
+	if err := classifyQueryError(context.Background(), unsupported); !errors.Is(err, searchjobs.ErrUnsupportedValue) || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("unsupported dynamic value error = %v", err)
+	}
+	wrongCode := &clickhousedriver.Exception{Code: 241, Message: clickhouse.UnsupportedStatsByValueMarker}
+	if err := classifyQueryError(context.Background(), wrongCode); !errors.Is(err, searchjobs.ErrExecutionLimit) || errors.Is(err, searchjobs.ErrUnsupportedValue) {
+		t.Fatalf("marker on an unrelated exception = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

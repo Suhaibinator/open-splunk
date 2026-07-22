@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -231,6 +232,8 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("status", typedSint(500)),
 		typedField("ratio", typedSint(1)),
 		typedField("n", typedSint(1)),
+		typedField("mixed_by", typedString("scalar")),
+		typedField("tenant_probe", typedString("visible")),
 		typedField("literal.dot", typedString("needle")),
 	)
 	two := compilerIntegrationEvent("n-two", "500", "prefix error42 suffix", indexTime,
@@ -244,14 +247,46 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("n", typedNull()),
 		typedField("nothing", typedNull()),
 	)
+	extendedTimestamp := time.Date(2026, time.July, 21, 3, 4, 5, 123_456_789, time.UTC)
+	complex := compilerIntegrationEvent("n-complex", "complex", "complex values", indexTime,
+		typedField("n", typedSint(0)),
+		typedField("multi", typedList(typedSint(1), typedSint(2))),
+		typedField("bytes_value", typedBytes([]byte{0, 1, 2, 255})),
+		typedField("timestamp_value", typedTimestamp(extendedTimestamp)),
+		typedField("duration_value", typedDuration(3*time.Second+4*time.Nanosecond)),
+		typedField("decimal_value", typedDecimal("123.4500")),
+		typedField("object_value", typedObject()),
+		typedField("object_parent", typedObject(typedField("child", typedString("nested")))),
+		typedField("mixed_by", typedList(typedString("container"))),
+	)
 	batch := ingest.StoreBatch{
 		TenantID: "tenant", CollectorID: "collector", BatchID: "compiler-batch", BatchSequence: 3,
 		SourceBatchSHA256: testSourceBatchDigest("compiler-batch"),
 		ReceivedAt:        indexTime,
-		Events:            []*ingest.StoredEvent{one, two, null},
+		Events:            []*ingest.StoredEvent{one, two, null, complex},
 	}
 	if _, err := store.Store(ctx, batch); err != nil {
 		t.Fatalf("store compiler fixtures: %v", err)
+	}
+	foreign := compilerIntegrationEvent("foreign-complex", "foreign", "must remain out of scope", indexTime,
+		typedField("tenant_probe", typedList(typedString("hidden"))),
+	)
+	foreign.TenantID = "other-tenant"
+	foreign.BatchID = "foreign-compiler-batch"
+	foreignBatch := ingest.StoreBatch{
+		TenantID: "other-tenant", CollectorID: "collector", BatchID: "foreign-compiler-batch", BatchSequence: 4,
+		SourceBatchSHA256: testSourceBatchDigest("foreign-compiler-batch"),
+		ReceivedAt:        indexTime,
+		Events:            []*ingest.StoredEvent{foreign},
+	}
+	if _, err := store.Store(ctx, foreignBatch); err != nil {
+		t.Fatalf("store cross-tenant compiler fixture: %v", err)
+	}
+	// Force both tenant fixtures into one sorted part/granule. This makes the
+	// regression prove that a post-aggregate unsupported-value check cannot be
+	// pushed below tenant filtering and observe the foreign Array value.
+	if err := connection.Exec(ctx, "OPTIMIZE TABLE open_splunk.events FINAL"); err != nil {
+		t.Fatalf("merge cross-tenant compiler fixtures: %v", err)
 	}
 	visibilityCutoff, err := store.VisibilityCutoff(ctx)
 	if err != nil {
@@ -294,8 +329,8 @@ func testCompiledQueriesAgainstClickHouse(
 	if err := connection.QueryRow(ctx, globalStats.SQL, globalStats.Args...).Scan(&globalCount); err != nil {
 		t.Fatalf("execute global stats: %v\nSQL: %s\nargs: %#v", err, globalStats.SQL, globalStats.Args)
 	}
-	if globalCount != 3 {
-		t.Fatalf("global stats count = %d, want 3", globalCount)
+	if globalCount != 4 {
+		t.Fatalf("global stats count = %d, want 4", globalCount)
 	}
 	emptyStats := compileIntegrationSPL(t, `index=compiler event_id=absent | stats count`, indexTime.Add(10*time.Second), visibilityCutoff)
 	var emptyCount uint64
@@ -332,6 +367,62 @@ func testCompiledQueriesAgainstClickHouse(
 		t.Fatalf("grouped stats = keys %v counts %v, want [500] [2]", groupedKeys, groupedCounts)
 	}
 
+	for field, wantKey := range map[string]string{
+		"bytes_value":     "AAEC/w",
+		"timestamp_value": extendedTimestamp.Format(time.RFC3339Nano),
+		"duration_value":  "3:4",
+		"decimal_value":   "123.4500",
+	} {
+		source := `index=compiler | stats count by ` + field
+		extendedStats := compileIntegrationSPL(t, source, indexTime.Add(10*time.Second), visibilityCutoff)
+		extendedRows, queryErr := connection.Query(ctx, extendedStats.SQL, extendedStats.Args...)
+		if queryErr != nil {
+			t.Fatalf("execute extended scalar stats %q: %v\nSQL: %s\nargs: %#v", field, queryErr, extendedStats.SQL, extendedStats.Args)
+		}
+		if !extendedRows.Next() {
+			_ = extendedRows.Close()
+			t.Fatalf("extended scalar stats %q returned no row: %v", field, extendedRows.Err())
+		}
+		var key string
+		var count uint64
+		if scanErr := extendedRows.Scan(&key, &count); scanErr != nil {
+			_ = extendedRows.Close()
+			t.Fatalf("scan extended scalar stats %q: %v", field, scanErr)
+		}
+		if key != wantKey || count != 1 || extendedRows.Next() {
+			_ = extendedRows.Close()
+			t.Fatalf("extended scalar stats %q = %q/%d, want %q/1", field, key, count, wantKey)
+		}
+		if iterationErr := extendedRows.Err(); iterationErr != nil {
+			_ = extendedRows.Close()
+			t.Fatalf("iterate extended scalar stats %q: %v", field, iterationErr)
+		}
+		if closeErr := extendedRows.Close(); closeErr != nil {
+			t.Fatalf("close extended scalar stats %q: %v", field, closeErr)
+		}
+	}
+
+	tenantScoped := compileIntegrationSPL(t, `index=compiler | stats count by tenant_probe`, indexTime.Add(10*time.Second), visibilityCutoff)
+	tenantRows, err := connection.Query(ctx, tenantScoped.SQL, tenantScoped.Args...)
+	if err != nil {
+		t.Fatalf("execute tenant-scoped stats: %v\nSQL: %s\nargs: %#v", err, tenantScoped.SQL, tenantScoped.Args)
+	}
+	defer tenantRows.Close()
+	if !tenantRows.Next() {
+		t.Fatalf("tenant-scoped stats returned no row: %v", tenantRows.Err())
+	}
+	var tenantKey string
+	var tenantCount uint64
+	if err := tenantRows.Scan(&tenantKey, &tenantCount); err != nil {
+		t.Fatalf("scan tenant-scoped stats: %v", err)
+	}
+	if tenantKey != "visible" || tenantCount != 1 || tenantRows.Next() {
+		t.Fatalf("tenant-scoped stats = %q/%d, want visible/1", tenantKey, tenantCount)
+	}
+	if err := tenantRows.Err(); err != nil {
+		t.Fatalf("iterate tenant-scoped stats: %v", err)
+	}
+
 	missingAndNull := compileIntegrationSPL(t, `index=compiler | stats count by nothing`, indexTime.Add(10*time.Second), visibilityCutoff)
 	missingAndNullRows, err := connection.Query(ctx, missingAndNull.SQL, missingAndNull.Args...)
 	if err != nil {
@@ -343,6 +434,92 @@ func testCompiledQueriesAgainstClickHouse(
 	}
 	if err := missingAndNullRows.Err(); err != nil {
 		t.Fatalf("iterate missing/null stats: %v", err)
+	}
+
+	for _, source := range []string{
+		`index=compiler | fields host | stats count by status`,
+		`index=compiler | table host | stats count by status`,
+		`index=compiler | fields - status | stats count by status`,
+	} {
+		projected := compileIntegrationSPL(t, source, indexTime.Add(10*time.Second), visibilityCutoff)
+		projectedRows, queryErr := connection.Query(ctx, projected.SQL, projected.Args...)
+		if queryErr != nil {
+			t.Fatalf("execute projected stats %q: %v\nSQL: %s\nargs: %#v", source, queryErr, projected.SQL, projected.Args)
+		}
+		if projectedRows.Next() {
+			_ = projectedRows.Close()
+			t.Fatalf("projected-away stats field emitted a group for %q", source)
+		}
+		if iterationErr := projectedRows.Err(); iterationErr != nil {
+			_ = projectedRows.Close()
+			t.Fatalf("iterate projected stats %q: %v", source, iterationErr)
+		}
+		if closeErr := projectedRows.Close(); closeErr != nil {
+			t.Fatalf("close projected stats %q: %v", source, closeErr)
+		}
+	}
+
+	retained := compileIntegrationSPL(t, `index=compiler | fields status | stats count AS events by status`, indexTime.Add(10*time.Second), visibilityCutoff)
+	retainedRows, err := connection.Query(ctx, retained.SQL, retained.Args...)
+	if err != nil {
+		t.Fatalf("execute explicitly retained stats: %v\nSQL: %s\nargs: %#v", err, retained.SQL, retained.Args)
+	}
+	defer retainedRows.Close()
+	if !retainedRows.Next() {
+		t.Fatalf("explicitly retained stats returned no group: %v", retainedRows.Err())
+	}
+	var retainedKey string
+	var retainedCount uint64
+	if err := retainedRows.Scan(&retainedKey, &retainedCount); err != nil {
+		t.Fatalf("scan explicitly retained stats: %v", err)
+	}
+	if retainedKey != "500" || retainedCount != 2 || retainedRows.Next() {
+		t.Fatalf("explicitly retained stats = %q/%d, want 500/2", retainedKey, retainedCount)
+	}
+	if err := retainedRows.Err(); err != nil {
+		t.Fatalf("iterate explicitly retained stats: %v", err)
+	}
+
+	for _, alias := range []string{"fields", "_raw"} {
+		aliased := compileIntegrationSPL(t, `index=compiler | stats count AS `+alias, indexTime.Add(10*time.Second), visibilityCutoff)
+		aliasedRows, queryErr := connection.Query(ctx, aliased.SQL, aliased.Args...)
+		if queryErr != nil {
+			t.Fatalf("execute stats alias %q: %v\nSQL: %s\nargs: %#v", alias, queryErr, aliased.SQL, aliased.Args)
+		}
+		if types := aliasedRows.ColumnTypes(); len(types) != 1 || types[0].DatabaseTypeName() != "UInt64" {
+			_ = aliasedRows.Close()
+			t.Fatalf("stats alias %q types = %#v, want UInt64", alias, types)
+		}
+		if !aliasedRows.Next() {
+			_ = aliasedRows.Close()
+			t.Fatalf("stats alias %q returned no row: %v", alias, aliasedRows.Err())
+		}
+		var count uint64
+		if scanErr := aliasedRows.Scan(&count); scanErr != nil {
+			_ = aliasedRows.Close()
+			t.Fatalf("scan stats alias %q: %v", alias, scanErr)
+		}
+		if count != 4 || aliasedRows.Next() {
+			_ = aliasedRows.Close()
+			t.Fatalf("stats alias %q count = %d, want 4", alias, count)
+		}
+		if iterationErr := aliasedRows.Err(); iterationErr != nil {
+			_ = aliasedRows.Close()
+			t.Fatalf("iterate stats alias %q: %v", alias, iterationErr)
+		}
+		if closeErr := aliasedRows.Close(); closeErr != nil {
+			t.Fatalf("close stats alias %q: %v", alias, closeErr)
+		}
+	}
+
+	for _, field := range []string{"multi", "object_value", "object_parent", "mixed_by"} {
+		source := `index=compiler | stats count by ` + field
+		unsupported := compileIntegrationSPL(t, source, indexTime.Add(10*time.Second), visibilityCutoff)
+		queryErr := executeCompiledExpectingNoRows(ctx, connection, unsupported)
+		var exception *clickhousedriver.Exception
+		if !errors.As(queryErr, &exception) || exception.Code != 395 || !strings.Contains(exception.Message, UnsupportedStatsByValueMarker) {
+			t.Fatalf("non-scalar stats BY %q error = %v, want guarded ClickHouse exception", field, queryErr)
+		}
 	}
 
 	compiled := compileIntegrationSPL(t, `index=compiler | sort n | tail 2 | table event_id`, indexTime.Add(10*time.Second), visibilityCutoff)
@@ -365,6 +542,18 @@ func testCompiledQueriesAgainstClickHouse(
 	if strings.Join(ids, ",") != "n-null,n-two" {
 		t.Fatalf("tail IDs = %v, want [n-null n-two]", ids)
 	}
+}
+
+func executeCompiledExpectingNoRows(ctx context.Context, connection clickhousedriver.Conn, query CompiledQuery) error {
+	rows, err := connection.Query(ctx, query.SQL, query.Args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return errors.New("query unexpectedly emitted a serialized non-scalar group")
+	}
+	return rows.Err()
 }
 
 func compilerIntegrationEvent(id, host, raw string, indexTime time.Time, fields ...*opensplunkv1.TypedObjectField) *ingest.StoredEvent {

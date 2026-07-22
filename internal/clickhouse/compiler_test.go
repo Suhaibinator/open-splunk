@@ -267,12 +267,19 @@ func TestCompileStatsCountUsesTransformingSchemaAndSplunkNullGrouping(t *testing
 		t.Fatalf("grouped output fields = %v", grouped.OutputFields)
 	}
 	for _, required := range []string{
-		`"level" AS "level"`,
-		`toString("__os_fields"."status") AS "status"`,
+		`SELECT "__os_group_0" AS "level", "__os_group_1" AS "status", "events"`,
+		`"level" AS "__os_group_0"`,
+		`AS "__os_group_supported_1"`,
+		`AS "__os_group_value_1"`,
+		`"__os_group_value_1" AS "__os_group_1"`,
 		`count() AS "events"`,
+		`max(CAST(NOT ("__os_group_supported_1") AS UInt8)) AS "__os_stats_by_unsupported"`,
+		`max("__os_stats_by_unsupported") OVER () AS "__os_stats_by_any_unsupported"`,
 		`(1 AND isNotNull("level"))`,
 		`(has("__os_field_names", ?) AND isNotNull("__os_fields"."status"))`,
-		`GROUP BY "level", toString("__os_fields"."status")`,
+		`arrayExists(name -> startsWith(name, ?), "__os_field_names")`,
+		`GROUP BY "level", "__os_group_value_1"`,
+		`throwIf(CAST("__os_stats_by_any_unsupported" != 0 AS UInt8)`,
 		`ORDER BY "level" ASC NULLS LAST, "status" ASC NULLS LAST`,
 	} {
 		if !strings.Contains(grouped.SQL, required) {
@@ -286,15 +293,106 @@ func TestCompileStatsCountUsesTransformingSchemaAndSplunkNullGrouping(t *testing
 	if got, want := strings.Count(grouped.SQL, "?"), len(grouped.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, grouped.SQL, grouped.Args)
 	}
-	if got := grouped.Args[len(grouped.Args)-1]; got != "status" {
-		t.Fatalf("dynamic existence argument = %#v, want status", got)
+	if got := grouped.Args[len(grouped.Args)-2:]; !reflect.DeepEqual(got, []any{"status", "status."}) {
+		t.Fatalf("dynamic presence arguments = %#v, want [status status.]", got)
+	}
+	if !strings.Contains(grouped.SQL, UnsupportedStatsByValueMarker) ||
+		!strings.Contains(grouped.SQL, `dynamicElement("__os_fields"."status", 'Map(String, String)')`) ||
+		strings.Contains(grouped.SQL, `IN ('None',`) ||
+		strings.Contains(grouped.SQL, `throwIf(CAST(dynamicType(`) {
+		t.Fatalf("dynamic stats group is not guarded as scalar-only:\n%s", grouped.SQL)
+	}
+}
+
+func TestCompileStatsDetectsFlattenedObjectParentsWithEscapedPaths(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		field string
+		want  []any
+	}{
+		{field: `literal\.dot`, want: []any{`literal\.dot`, `literal\.dot.`}},
+		{field: `literal\\slash`, want: []any{`literal\\slash`, `literal\\slash.`}},
+	} {
+		compiled := compileSPL(t, `index=gradethis | stats count by `+test.field)
+		if !strings.Contains(compiled.SQL, `arrayExists(name -> startsWith(name, ?), "__os_field_names")`) {
+			t.Fatalf("flattened-object parent detection is missing for %q:\n%s", test.field, compiled.SQL)
+		}
+		if got := compiled.Args[len(compiled.Args)-2:]; !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("escaped dynamic presence arguments for %q = %#v, want %#v", test.field, got, test.want)
+		}
+	}
+}
+
+func TestCompileStatsAliasesReservedEventNames(t *testing.T) {
+	t.Parallel()
+
+	for _, alias := range []string{"fields", "_raw"} {
+		compiled := compileSPL(t, `index=gradethis | stats count AS `+alias)
+		if !slices.Equal(compiled.OutputFields, []string{alias}) {
+			t.Fatalf("alias %q output fields = %v", alias, compiled.OutputFields)
+		}
+		wantPrefix := `SELECT "` + alias + `" FROM (`
+		if !strings.HasPrefix(compiled.SQL, wantPrefix) {
+			t.Fatalf("alias %q final projection does not select its aggregate output:\n%s", alias, compiled.SQL)
+		}
+	}
+}
+
+func TestCompileStatsHonorsProjectionBoundaries(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | fields host | stats count BY status`,
+		`index=gradethis | table host | stats count BY status`,
+		`index=gradethis | fields - status | stats count BY status`,
+		`index=gradethis | fields host | fields - host | stats count BY status`,
+	} {
+		compiled := compileSPL(t, source)
+		if !slices.Equal(compiled.OutputFields, []string{"status", "count"}) {
+			t.Fatalf("%q output fields = %v", source, compiled.OutputFields)
+		}
+		if !strings.Contains(compiled.SQL, `SELECT "__os_group_0" AS "status", "count"`) ||
+			!strings.Contains(compiled.SQL, `CAST(NULL AS Nullable(String)) AS "__os_group_0"`) ||
+			!strings.Contains(compiled.SQL, `(0 AND isNotNull(CAST(NULL AS Nullable(String))))`) {
+			t.Fatalf("%q did not compile an empty typed aggregate:\n%s", source, compiled.SQL)
+		}
+		if strings.Contains(compiled.SQL, `"__os_fields"."status"`) {
+			t.Fatalf("%q resurrected the projected-away dynamic field:\n%s", source, compiled.SQL)
+		}
+	}
+
+	retained := compileSPL(t, `index=gradethis | fields status | stats count BY status`)
+	if !strings.Contains(retained.SQL, `"__os_fields"."status" AS "status"`) ||
+		!strings.Contains(retained.SQL, `AS "__os_group_supported_0"`) ||
+		!strings.Contains(retained.SQL, `AS "__os_group_value_0"`) ||
+		!strings.Contains(retained.SQL, `GROUP BY "__os_group_value_0"`) ||
+		!strings.Contains(retained.SQL, `dynamicType("__os_fields"."status")`) ||
+		strings.Contains(retained.SQL, `CAST(NULL AS Nullable(String)) AS "status"`) {
+		t.Fatalf("explicitly retained field was not grouped:\n%s", retained.SQL)
+	}
+}
+
+func TestCompileSearchHonorsProjectionBoundaries(t *testing.T) {
+	t.Parallel()
+
+	removed := compileSPL(t, `index=gradethis | fields host | search status=500`)
+	if !strings.Contains(removed.SQL, `WHERE 0`) || strings.Contains(removed.SQL, `"__os_fields"."status"`) {
+		t.Fatalf("search resurrected a projected-away dynamic field:\n%s", removed.SQL)
+	}
+
+	retained := compileSPL(t, `index=gradethis | fields status | search status=500`)
+	if !strings.Contains(retained.SQL, `"__os_fields"."status" AS "status"`) ||
+		!strings.Contains(retained.SQL, `dynamicType("__os_fields"."status")`) ||
+		strings.Contains(retained.SQL, `dynamicType("status")`) {
+		t.Fatalf("search lost a retained dynamic field's type:\n%s", retained.SQL)
 	}
 }
 
 func TestCompileStatsCountSQLGolden(t *testing.T) {
 	t.Parallel()
 
-	compiled := compileSPL(t, `index=gradethis | stats count AS events by level, status`)
+	compiled := compileSPL(t, `index=gradethis | stats count AS events by level`)
 	want, err := os.ReadFile("testdata/stats_count_by.golden.sql")
 	if err != nil {
 		t.Fatalf("read golden SQL: %v", err)

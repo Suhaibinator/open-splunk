@@ -16,6 +16,11 @@ const (
 	internalFieldNamesColumn = "__os_field_names"
 	internalSortTimeColumn   = "__os_sort_time"
 	internalSortIDColumn     = "__os_sort_event_id"
+
+	// UnsupportedStatsByValueMarker is emitted by the scalar-only stats BY
+	// guard so the executor can classify the ClickHouse exception without
+	// exposing generated SQL or storage details.
+	UnsupportedStatsByValueMarker = "open-splunk: stats BY requires a scalar field"
 )
 
 var physicalIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -90,12 +95,42 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + alias
 			if len(predicates) > 0 {
-				fragment += " WHERE " + strings.Join(predicates, " AND ")
+				// Keep missing/null elimination in a distinct pre-aggregation scope.
+				fragment = "SELECT * FROM (" + fragment + ") AS " + alias + " WHERE " + strings.Join(predicates, " AND ")
+				aliasSequence++
+				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 			}
+			if len(nextState.preAggregateColumns) > 0 {
+				// Materialize each dynamic key and support bit once. The aggregate then
+				// groups and validates short private aliases instead of repeating large
+				// Dynamic/tag expressions in SELECT, GROUP BY, and max().
+				fragment = "SELECT *, " + strings.Join(nextState.preAggregateColumns, ", ") + " FROM (" + fragment + ") AS " + alias
+				aliasSequence++
+				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+				nextState.preAggregateColumns = nil
+			}
+			fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + alias
 			if len(groups) > 0 {
 				fragment += " GROUP BY " + strings.Join(groups, ", ")
+			}
+			if len(nextState.postAggregateColumns) > 0 {
+				// Collapse per-group validation into one whole-result flag before
+				// exposing any group. This prevents a valid group from streaming
+				// before a later unsupported group raises the stable error.
+				aliasSequence++
+				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+				fragment = "SELECT *, " + strings.Join(nextState.postAggregateColumns, ", ") + " FROM (" + fragment + ") AS " + alias
+				nextState.postAggregateColumns = nil
+			}
+			if len(nextState.postAggregatePredicates) > 0 {
+				// Validation depends on aggregate state, so ClickHouse cannot push it
+				// beneath the tenant/index/time scan boundary. A row-level throwIf can
+				// otherwise be evaluated against another tenant's physical rows.
+				aliasSequence++
+				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+				fragment = "SELECT * FROM (" + fragment + ") AS " + alias + " WHERE " + strings.Join(nextState.postAggregatePredicates, " AND ")
+				nextState.postAggregatePredicates = nil
 			}
 			args = append(args, aggregateArgs...)
 			state = nextState
@@ -155,11 +190,14 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 }
 
 type compileState struct {
-	visible      map[string]fieldState
-	publicOrder  []string
-	allowDynamic bool
-	blocked      map[string]struct{}
-	order        []compiledSortKey
+	visible                 map[string]fieldState
+	publicOrder             []string
+	allowDynamic            bool
+	blocked                 map[string]struct{}
+	order                   []compiledSortKey
+	preAggregateColumns     []string
+	postAggregateColumns    []string
+	postAggregatePredicates []string
 }
 
 type fieldKind uint8
@@ -174,10 +212,13 @@ const (
 )
 
 type fieldState struct {
-	valueSQL   string
-	existsSQL  string
-	existsArgs []any
-	kind       fieldKind
+	valueSQL       string
+	dynamicTypeSQL string
+	existsSQL      string
+	existsArgs     []any
+	descendantSQL  string
+	descendantArgs []any
+	kind           fieldKind
 }
 
 type compiledSortKey struct {
@@ -398,7 +439,7 @@ func equalityPredicate(expression *plan.ComparisonExpression, field fieldState, 
 	if field.kind != fieldKindDynamic {
 		return base
 	}
-	guard := dynamicLiteralGuard(valueSQL, expression.Value.Kind)
+	guard := dynamicLiteralGuard(dynamicTypeExpression(field), expression.Value.Kind)
 	if expression.Value.Kind == plan.ValueKindFloat64 {
 		base = "toFloat64OrNull(toString(" + valueSQL + ")) = toFloat64OrNull(?)"
 	}
@@ -418,8 +459,7 @@ func relationalPredicate(expression *plan.ComparisonExpression, field fieldState
 	return "toFloat64OrNull(toString(" + field.valueSQL + ")) " + operator + " toFloat64OrNull(?)", nil
 }
 
-func dynamicLiteralGuard(valueSQL string, kind plan.ValueKind) string {
-	typeSQL := "dynamicType(" + valueSQL + ")"
+func dynamicLiteralGuard(typeSQL string, kind plan.ValueKind) string {
 	switch kind {
 	case plan.ValueKindInt64, plan.ValueKindUint64:
 		return typeSQL + " IN ('Int8', 'Int16', 'Int32', 'Int64', 'Int128', 'Int256', 'UInt8', 'UInt16', 'UInt32', 'UInt64', 'UInt128', 'UInt256')"
@@ -432,6 +472,13 @@ func dynamicLiteralGuard(valueSQL string, kind plan.ValueKind) string {
 	default:
 		return "0"
 	}
+}
+
+func dynamicTypeExpression(field fieldState) string {
+	if field.dynamicTypeSQL != "" {
+		return field.dynamicTypeSQL
+	}
+	return "dynamicType(" + field.valueSQL + ")"
 }
 
 func comparisonSourceText(value plan.Value) string {
@@ -494,17 +541,21 @@ func resolveCompiledField(field plan.FieldRef, state compileState) (fieldState, 
 		value += "." + quoteIdentifier(encodePhysicalPathSegment(segment))
 	}
 	return fieldState{
-		valueSQL:   value,
-		existsSQL:  "has(" + quoteIdentifier(internalFieldNamesColumn) + ", ?)",
-		existsArgs: []any{normalizedDynamicPath(field.Path)},
-		kind:       fieldKindDynamic,
+		valueSQL:       value,
+		dynamicTypeSQL: "dynamicType(" + value + ")",
+		existsSQL:      "has(" + quoteIdentifier(internalFieldNamesColumn) + ", ?)",
+		existsArgs:     []any{normalizedDynamicPath(field.Path)},
+		descendantSQL: "arrayExists(name -> startsWith(name, ?), " +
+			quoteIdentifier(internalFieldNamesColumn) + ")",
+		descendantArgs: []any{normalizedDynamicPath(field.Path) + "."},
+		kind:           fieldKindDynamic,
 	}, true, nil
 }
 
 func compileProjection(operator *plan.Project, state compileState) ([]string, compileState, []any, error) {
 	next := compileState{
 		visible:      make(map[string]fieldState),
-		allowDynamic: operator.Mode != plan.ProjectModeTable,
+		allowDynamic: operator.Mode == plan.ProjectModeExclude && state.allowDynamic,
 		blocked:      cloneSet(state.blocked),
 		order:        append([]compiledSortKey(nil), state.order...),
 	}
@@ -561,8 +612,12 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		}
 		projection = append(projection, compiled.valueSQL+" AS "+quoteIdentifier(name))
 		next.visible[name] = fieldState{
-			valueSQL: quoteIdentifier(name), existsSQL: rewriteExistenceForProjection(compiled, name),
-			existsArgs: append([]any(nil), compiled.existsArgs...), kind: compiled.kind,
+			valueSQL: quoteIdentifier(name), dynamicTypeSQL: compiled.dynamicTypeSQL,
+			existsSQL:      rewriteExistenceForProjection(compiled, name),
+			existsArgs:     append([]any(nil), compiled.existsArgs...),
+			descendantSQL:  compiled.descendantSQL,
+			descendantArgs: append([]any(nil), compiled.descendantArgs...),
+			kind:           compiled.kind,
 		}
 		next.publicOrder = append(next.publicOrder, name)
 	}
@@ -577,9 +632,6 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		if !slices.Contains(projection, column) {
 			projection = append(projection, column)
 		}
-	}
-	if operator.Mode == plan.ProjectModeTable {
-		next.allowDynamic = false
 	}
 	return projection, next, args, nil
 }
@@ -611,6 +663,7 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		blocked:      make(map[string]struct{}),
 	}
 	seen := make(map[string]struct{}, len(operator.GroupBy)+len(operator.Measures))
+	dynamicGroupSupport := make([]string, 0, len(operator.GroupBy))
 	for _, group := range operator.GroupBy {
 		if _, duplicate := seen[group.Name]; duplicate {
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: output field %q is duplicated", group.Name)
@@ -621,7 +674,16 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			return nil, nil, nil, compileState{}, nil, resolveErr
 		}
 		if !ok {
-			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: grouping field %q is not available", group.Name)
+			// A transforming command retains its declared output schema even when
+			// an upstream projection removed the grouping field. SPL emits no
+			// groups in that case; use a typed NULL plus an always-false predicate
+			// rather than resurrecting the private source document or surfacing an
+			// internal compiler error.
+			field = fieldState{
+				valueSQL:  "CAST(NULL AS Nullable(String))",
+				existsSQL: "0",
+				kind:      fieldKindString,
+			}
 		}
 		valueSQL := field.valueSQL
 		kind := field.kind
@@ -630,14 +692,34 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			// scalar storage types therefore intentionally converge on the same
 			// UTF-8 group key (for example integer 500 and string "500").
 			// Missing and explicit-null values are removed below.
-			valueSQL = "toString(" + valueSQL + ")"
+			supported, lexical := statsByScalarExpressions(field)
+			// Unsupported containers use one private placeholder group. A scoped
+			// aggregate flag below fails the whole search before any key is exposed.
+			supportAlias := quoteIdentifier(fmt.Sprintf("__os_group_supported_%d", len(groups)))
+			valueAlias := quoteIdentifier(fmt.Sprintf("__os_group_value_%d", len(groups)))
+			next.preAggregateColumns = append(next.preAggregateColumns,
+				supported+" AS "+supportAlias,
+				"if("+supported+", "+lexical+", '') AS "+valueAlias,
+			)
+			valueSQL = valueAlias
 			kind = fieldKindString
+			dynamicGroupSupport = append(dynamicGroupSupport, supportAlias)
 		}
-		projection = append(projection, valueSQL+" AS "+quoteIdentifier(group.Name))
-		predicates = append(predicates, "("+field.existsSQL+" AND isNotNull("+field.valueSQL+"))")
-		args = append(args, field.existsArgs...)
+		groupOutput := fmt.Sprintf("__os_group_%d", len(groups))
+		projection = append(projection, valueSQL+" AS "+quoteIdentifier(groupOutput))
+		presence := "(" + field.existsSQL + " AND isNotNull(" + field.valueSQL + "))"
+		presenceArgs := append([]any(nil), field.existsArgs...)
+		if field.kind == fieldKindDynamic && field.descendantSQL != "" {
+			// Non-empty objects are stored as flattened leaf paths, so the parent
+			// itself is absent from field_names. Retain those rows until the scoped
+			// aggregate support check can reject the container explicitly.
+			presence = "(" + presence + " OR " + field.descendantSQL + ")"
+			presenceArgs = append(presenceArgs, field.descendantArgs...)
+		}
+		predicates = append(predicates, presence)
+		args = append(args, presenceArgs...)
 		groups = append(groups, valueSQL)
-		next.visible[group.Name] = fieldState{valueSQL: quoteIdentifier(group.Name), existsSQL: "1", kind: kind}
+		next.visible[group.Name] = fieldState{valueSQL: quoteIdentifier(groupOutput), existsSQL: "1", kind: kind}
 		next.publicOrder = append(next.publicOrder, group.Name)
 		next.order = append(next.order, compiledSortKey{valueSQL: quoteIdentifier(group.Name)})
 	}
@@ -656,7 +738,37 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			next.order = append(next.order, compiledSortKey{valueSQL: quoteIdentifier(measure.Output)})
 		}
 	}
+	if len(dynamicGroupSupport) > 0 {
+		unsupportedColumn := quoteIdentifier("__os_stats_by_unsupported")
+		anyUnsupportedColumn := quoteIdentifier("__os_stats_by_any_unsupported")
+		allSupported := "(" + strings.Join(dynamicGroupSupport, " AND ") + ")"
+		projection = append(projection, "max(CAST(NOT "+allSupported+" AS UInt8)) AS "+unsupportedColumn)
+		next.postAggregateColumns = []string{
+			"max(" + unsupportedColumn + ") OVER () AS " + anyUnsupportedColumn,
+		}
+		next.postAggregatePredicates = []string{
+			"throwIf(CAST(" + anyUnsupportedColumn + " != 0 AS UInt8), '" + UnsupportedStatsByValueMarker + "') = 0",
+		}
+	}
 	return projection, predicates, groups, next, args, nil
+}
+
+func statsByScalarExpressions(field fieldState) (supported, lexical string) {
+	typeSQL := dynamicTypeExpression(field)
+	mapSQL := "dynamicElement(" + field.valueSQL + ", 'Map(String, String)')"
+	typeKey := "concat(char(0), 'open_splunk_type')"
+	valueKey := "concat(char(0), 'open_splunk_value')"
+	extended := "(" + typeSQL + " = 'Map(String, String)'" +
+		" AND length(" + mapSQL + ") = 2" +
+		" AND mapContains(" + mapSQL + ", " + typeKey + ")" +
+		" AND mapContains(" + mapSQL + ", " + valueKey + ")" +
+		" AND " + mapSQL + "[" + typeKey + "] IN ('bytes/v1', 'timestamp/v1', 'duration/v1', 'decimal/v1'))"
+	// None is excluded deliberately. Missing and explicit-null leaves are
+	// removed before aggregation, while a flattened object parent reads as None
+	// at its literal path and must set the unsupported-container flag.
+	supported = "(" + typeSQL + " IN ('String', 'Int64', 'UInt64', 'Float64', 'Bool') OR " + extended + ")"
+	lexical = "if(" + typeSQL + " = 'Map(String, String)', " + mapSQL + "[" + valueKey + "], toString(" + field.valueSQL + "))"
+	return supported, lexical
 }
 
 func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, []compiledSortKey, string, error) {
@@ -757,15 +869,21 @@ func finalProjection(state compileState) ([]string, []string, error) {
 			continue
 		}
 		seen[name] = struct{}{}
-		if name == "fields" {
+		field, visible := state.visible[name]
+		if name == "fields" && !visible {
 			projection = append(projection, quoteIdentifier(internalFieldsColumn)+" AS "+quoteIdentifier("fields"))
 			output = append(output, name)
 			continue
 		}
-		if _, ok := state.visible[name]; !ok {
+		if !visible {
 			continue
 		}
-		projection = append(projection, quoteIdentifier(name))
+		publicName := quoteIdentifier(name)
+		if field.valueSQL == publicName {
+			projection = append(projection, publicName)
+		} else {
+			projection = append(projection, field.valueSQL+" AS "+publicName)
+		}
 		output = append(output, name)
 	}
 	if len(projection) == 0 {
