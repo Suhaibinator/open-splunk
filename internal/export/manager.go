@@ -16,6 +16,7 @@ import (
 	"unsafe"
 
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -56,6 +57,8 @@ const (
 	maximumColumnBytes      = 256 << 10
 	maximumAccessIDBytes    = 1 << 10
 	maximumSearchIDBytes    = 256
+	artifactSessionPrefix   = ".open-splunk-export-session-"
+	artifactBaseLockName    = ".open-splunk-export.lock"
 
 	// Metadata accounting conservatively covers the retained Job column slice,
 	// active column selection, index slice, column-name storage, and fixed job
@@ -83,9 +86,10 @@ var errArtifactStorage = errors.New("export artifact storage operation failed")
 type Config struct {
 	Source ResultSource
 
-	// ArtifactDir is an application-private base directory. New creates an
-	// owned, randomized 0700 session directory beneath it and Close removes that
-	// session. When empty, New creates an owned private temporary directory.
+	// ArtifactDir is an application-private base directory. New exclusively
+	// locks it, removes narrowly named sessions left by a crashed prior owner,
+	// and creates an owned randomized 0700 session. Close removes that session.
+	// When empty, New creates an owned private temporary base directory.
 	ArtifactDir string
 
 	MaxWorkers int
@@ -153,7 +157,7 @@ type Manager struct {
 
 	artifactDir        string
 	artifactRoot       *os.Root
-	removeArtifactDir  bool
+	artifactDirectory  *preparedArtifactDirectory
 	artifactTTL        time.Duration
 	expiredRetention   time.Duration
 	cleanupInterval    time.Duration
@@ -307,22 +311,19 @@ func New(config Config) (*Manager, error) {
 		return nil, errors.New("create export manager: invalid download grant duration")
 	}
 
-	artifactDir, removeDir, err := prepareArtifactDirectory(config.ArtifactDir)
+	artifactDirectory, err := prepareArtifactDirectory(config.ArtifactDir)
 	if err != nil {
 		return nil, err
 	}
+	artifactDir := artifactDirectory.session
 	minimumMetadata, err := requestedMetadataBytes(artifactDir, searchjobs.AccessScope{}, "x", []string{"x"})
 	if err != nil || maxTotalMetadata < minimumMetadata {
-		if removeDir {
-			_ = os.RemoveAll(artifactDir)
-		}
+		_ = artifactDirectory.Close()
 		return nil, errors.New("create export manager: invalid total metadata byte limit")
 	}
 	artifactRoot, err := os.OpenRoot(artifactDir)
 	if err != nil {
-		if removeDir {
-			_ = os.RemoveAll(artifactDir)
-		}
+		_ = artifactDirectory.Close()
 		return nil, fmt.Errorf("open export artifact directory: %w", err)
 	}
 	now := config.Now
@@ -350,7 +351,7 @@ func New(config Config) (*Manager, error) {
 		maxTotalMetadata:   maxTotalMetadata,
 		artifactDir:        artifactDir,
 		artifactRoot:       artifactRoot,
-		removeArtifactDir:  removeDir,
+		artifactDirectory:  artifactDirectory,
 		artifactTTL:        artifactTTL,
 		expiredRetention:   expiredRetention,
 		cleanupInterval:    cleanupInterval,
@@ -389,41 +390,229 @@ func boundedInt(value, fallback, maximum int, name string) (int, error) {
 	return value, nil
 }
 
-func prepareArtifactDirectory(configured string) (string, bool, error) {
+type preparedArtifactDirectory struct {
+	base       string
+	session    string
+	removeBase bool
+	lock       *artifactDirectoryLock
+	closeOnce  sync.Once
+	closeErr   error
+}
+
+type artifactDirectoryLock struct {
+	file *os.File
+}
+
+func prepareArtifactDirectory(configured string) (*preparedArtifactDirectory, error) {
+	base := ""
+	removeBase := false
 	if configured == "" {
 		path, err := os.MkdirTemp("", "open-splunk-export-artifacts-")
 		if err != nil {
-			return "", false, fmt.Errorf("create export artifact directory: %w", err)
+			return nil, fmt.Errorf("create export artifact directory: %w", err)
 		}
 		if err := os.Chmod(path, 0o700); err != nil {
 			_ = os.RemoveAll(path)
-			return "", false, fmt.Errorf("secure export artifact directory: %w", err)
+			return nil, fmt.Errorf("secure export artifact directory: %w", err)
 		}
-		return path, true, nil
+		base = path
+		removeBase = true
+	} else {
+		absolute, err := filepath.Abs(configured)
+		if err != nil {
+			return nil, fmt.Errorf("resolve export artifact directory: %w", err)
+		}
+		if err := os.MkdirAll(absolute, 0o700); err != nil {
+			return nil, fmt.Errorf("create export artifact directory: %w", err)
+		}
+		configuredInfo, err := os.Lstat(absolute)
+		if err != nil || !configuredInfo.IsDir() || configuredInfo.Mode()&os.ModeSymlink != 0 {
+			return nil, errors.New("export artifact directory is not a regular directory")
+		}
+		base, err = filepath.EvalSymlinks(absolute)
+		if err != nil {
+			return nil, fmt.Errorf("resolve export artifact directory links: %w", err)
+		}
 	}
-	absolute, err := filepath.Abs(configured)
+	if err := validateArtifactBasePath(base); err != nil {
+		if removeBase {
+			_ = os.RemoveAll(base)
+		}
+		return nil, err
+	}
+	lock, err := acquireArtifactDirectoryLock(base)
 	if err != nil {
-		return "", false, fmt.Errorf("resolve export artifact directory: %w", err)
+		if removeBase {
+			_ = os.RemoveAll(base)
+		}
+		return nil, err
 	}
-	if err := os.MkdirAll(absolute, 0o700); err != nil {
-		return "", false, fmt.Errorf("create export artifact directory: %w", err)
+	prepared := &preparedArtifactDirectory{base: base, removeBase: removeBase, lock: lock}
+	if err := removeStaleArtifactSessions(base); err != nil {
+		return nil, errors.Join(fmt.Errorf("clean stale export artifact sessions: %w", err), prepared.Close())
 	}
-	info, err := os.Lstat(absolute)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", false, errors.New("export artifact directory is not a regular directory")
-	}
-	if err := os.Chmod(absolute, 0o700); err != nil {
-		return "", false, fmt.Errorf("secure export artifact directory: %w", err)
-	}
-	session, err := os.MkdirTemp(absolute, ".open-splunk-export-session-")
+	session, err := os.MkdirTemp(base, artifactSessionPrefix)
 	if err != nil {
-		return "", false, fmt.Errorf("create export artifact session: %w", err)
+		return nil, errors.Join(fmt.Errorf("create export artifact session: %w", err), prepared.Close())
 	}
+	prepared.session = session
 	if err := os.Chmod(session, 0o700); err != nil {
-		_ = os.RemoveAll(session)
-		return "", false, fmt.Errorf("secure export artifact session: %w", err)
+		return nil, errors.Join(fmt.Errorf("secure export artifact session: %w", err), prepared.Close())
 	}
-	return session, true, nil
+	return prepared, nil
+}
+
+func validateArtifactBasePath(base string) error {
+	info, err := os.Lstat(base)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("export artifact directory is not a regular directory")
+	}
+	effectiveUID := uint32(os.Geteuid())
+	baseOwner, err := artifactPathOwner(base)
+	if err != nil || baseOwner != effectiveUID {
+		return errors.New("export artifact directory must be owned by the server user")
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return errors.New("export artifact directory cannot be group- or other-writable")
+	}
+	for ancestor := filepath.Dir(base); ; ancestor = filepath.Dir(ancestor) {
+		info, err := os.Stat(ancestor)
+		if err != nil || !info.IsDir() {
+			return errors.New("export artifact directory ancestor is invalid")
+		}
+		owner, err := artifactPathOwner(ancestor)
+		if err != nil || (owner != effectiveUID && owner != 0) {
+			return errors.New("export artifact directory has an untrusted ancestor owner")
+		}
+		if info.Mode().Perm()&0o022 != 0 && info.Mode()&os.ModeSticky == 0 {
+			return errors.New("export artifact directory has an unsafe writable ancestor")
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			break
+		}
+	}
+	return nil
+}
+
+func artifactPathOwner(path string) (uint32, error) {
+	var identity unix.Stat_t
+	if err := unix.Stat(path, &identity); err != nil {
+		return 0, err
+	}
+	return identity.Uid, nil
+}
+
+func acquireArtifactDirectoryLock(base string) (*artifactDirectoryLock, error) {
+	path := filepath.Join(base, artifactBaseLockName)
+	fd, err := unix.Open(path, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open export artifact directory lock: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("open export artifact directory lock: invalid file descriptor")
+	}
+	var identity unix.Stat_t
+	if err := unix.Fstat(fd, &identity); err != nil || identity.Mode&unix.S_IFMT != unix.S_IFREG ||
+		identity.Nlink != 1 || identity.Uid != uint32(os.Geteuid()) {
+		closeErr := file.Close()
+		return nil, errors.Join(errors.New("export artifact directory lock is not a private regular file"), closeErr)
+	}
+	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		closeErr := file.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+			return nil, errors.Join(errors.New("export artifact directory is already in use"), closeErr)
+		}
+		return nil, errors.Join(fmt.Errorf("lock export artifact directory: %w", err), closeErr)
+	}
+	if err := unix.Fchmod(fd, 0o600); err != nil {
+		unlockErr := unix.Flock(fd, unix.LOCK_UN)
+		closeErr := file.Close()
+		return nil, errors.Join(fmt.Errorf("secure export artifact directory lock: %w", err), unlockErr, closeErr)
+	}
+	return &artifactDirectoryLock{file: file}, nil
+}
+
+func removeStaleArtifactSessions(base string) error {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return err
+	}
+	var result error
+	for _, entry := range entries {
+		if !validArtifactSessionName(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(base, entry.Name())
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			result = errors.Join(result, err)
+			continue
+		}
+		if info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+			err = os.RemoveAll(path)
+		} else {
+			// Remove a reserved-name symlink or file itself; never follow it.
+			err = os.Remove(path)
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			result = errors.Join(result, err)
+		}
+	}
+	return result
+}
+
+func validArtifactSessionName(name string) bool {
+	suffix, found := strings.CutPrefix(name, artifactSessionPrefix)
+	if !found || len(suffix) == 0 || len(suffix) > 64 {
+		return false
+	}
+	for index := range len(suffix) {
+		character := suffix[index]
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func (lock *artifactDirectoryLock) Close() error {
+	if lock == nil || lock.file == nil {
+		return nil
+	}
+	file := lock.file
+	lock.file = nil
+	unlockErr := unix.Flock(int(file.Fd()), unix.LOCK_UN)
+	closeErr := file.Close()
+	if unlockErr != nil {
+		unlockErr = fmt.Errorf("unlock export artifact directory: %w", unlockErr)
+	}
+	if closeErr != nil {
+		closeErr = fmt.Errorf("close export artifact directory lock: %w", closeErr)
+	}
+	return errors.Join(unlockErr, closeErr)
+}
+
+func (prepared *preparedArtifactDirectory) Close() error {
+	if prepared == nil {
+		return nil
+	}
+	prepared.closeOnce.Do(func() {
+		if prepared.session != "" {
+			prepared.closeErr = errors.Join(prepared.closeErr, os.RemoveAll(prepared.session))
+		}
+		prepared.closeErr = errors.Join(prepared.closeErr, prepared.lock.Close())
+		if prepared.removeBase && prepared.base != "" {
+			prepared.closeErr = errors.Join(prepared.closeErr, os.RemoveAll(prepared.base))
+		}
+	})
+	return prepared.closeErr
 }
 
 func randomID() string {
@@ -909,7 +1098,8 @@ func (manager *Manager) Get(ctx context.Context, access searchjobs.AccessScope, 
 	return result, nil
 }
 
-// Cancel requests cancellation for a queued or running scoped job.
+// Cancel requests cancellation for a queued or running scoped job and returns
+// terminal jobs unchanged, making retries idempotent.
 func (manager *Manager) Cancel(ctx context.Context, access searchjobs.AccessScope, id string) (Job, error) {
 	if ctx == nil {
 		return Job{}, errors.New("cancel export job: context is nil")
@@ -936,7 +1126,7 @@ func (manager *Manager) Cancel(ctx context.Context, access searchjobs.AccessScop
 	if entry.job.State != StateQueued && entry.job.State != StateRunning {
 		result := cloneJob(entry.job)
 		entry.mu.Unlock()
-		return result, ErrNotCancelable
+		return result, nil
 	}
 	priorState := entry.job.State
 	now := manager.nowUTC()
@@ -1584,8 +1774,8 @@ func (manager *Manager) Close() error {
 		if err := manager.artifactRoot.Close(); err != nil {
 			manager.closeErr = errors.Join(manager.closeErr, errors.New("close export artifact directory"))
 		}
-		if manager.removeArtifactDir {
-			manager.closeErr = errors.Join(manager.closeErr, os.RemoveAll(manager.artifactDir))
+		if err := manager.artifactDirectory.Close(); err != nil {
+			manager.closeErr = errors.Join(manager.closeErr, fmt.Errorf("close export artifact storage: %w", err))
 		}
 		manager.budgetMu.Lock()
 		manager.totalBytes = 0

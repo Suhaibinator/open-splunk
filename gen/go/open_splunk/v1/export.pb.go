@@ -246,6 +246,7 @@ const (
 	ExportFailureCode_EXPORT_FAILURE_CODE_BYTE_LIMIT          ExportFailureCode = 6
 	ExportFailureCode_EXPORT_FAILURE_CODE_STORAGE_UNAVAILABLE ExportFailureCode = 7
 	ExportFailureCode_EXPORT_FAILURE_CODE_INTERNAL            ExportFailureCode = 8
+	ExportFailureCode_EXPORT_FAILURE_CODE_SEARCH_UNAVAILABLE  ExportFailureCode = 9
 )
 
 // Enum value maps for ExportFailureCode.
@@ -260,6 +261,7 @@ var (
 		6: "EXPORT_FAILURE_CODE_BYTE_LIMIT",
 		7: "EXPORT_FAILURE_CODE_STORAGE_UNAVAILABLE",
 		8: "EXPORT_FAILURE_CODE_INTERNAL",
+		9: "EXPORT_FAILURE_CODE_SEARCH_UNAVAILABLE",
 	}
 	ExportFailureCode_value = map[string]int32{
 		"EXPORT_FAILURE_CODE_UNSPECIFIED":         0,
@@ -271,6 +273,7 @@ var (
 		"EXPORT_FAILURE_CODE_BYTE_LIMIT":          6,
 		"EXPORT_FAILURE_CODE_STORAGE_UNAVAILABLE": 7,
 		"EXPORT_FAILURE_CODE_INTERNAL":            8,
+		"EXPORT_FAILURE_CODE_SEARCH_UNAVAILABLE":  9,
 	}
 )
 
@@ -944,7 +947,7 @@ const file_open_splunk_v1_export_proto_rawDesc = "" +
 	"\x1aEXPORT_JOB_STATE_COMPLETED\x10\x03\x12\x1b\n" +
 	"\x17EXPORT_JOB_STATE_FAILED\x10\x04\x12\x1d\n" +
 	"\x19EXPORT_JOB_STATE_CANCELED\x10\x05\x12\x1c\n" +
-	"\x18EXPORT_JOB_STATE_EXPIRED\x10\x06*\xf3\x02\n" +
+	"\x18EXPORT_JOB_STATE_EXPIRED\x10\x06*\x9f\x03\n" +
 	"\x11ExportFailureCode\x12#\n" +
 	"\x1fEXPORT_FAILURE_CODE_UNSPECIFIED\x10\x00\x12(\n" +
 	"$EXPORT_FAILURE_CODE_SEARCH_NOT_FOUND\x10\x01\x12(\n" +
@@ -954,7 +957,8 @@ const file_open_splunk_v1_export_proto_rawDesc = "" +
 	"\x1dEXPORT_FAILURE_CODE_ROW_LIMIT\x10\x05\x12\"\n" +
 	"\x1eEXPORT_FAILURE_CODE_BYTE_LIMIT\x10\x06\x12+\n" +
 	"'EXPORT_FAILURE_CODE_STORAGE_UNAVAILABLE\x10\a\x12 \n" +
-	"\x1cEXPORT_FAILURE_CODE_INTERNAL\x10\bBHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
+	"\x1cEXPORT_FAILURE_CODE_INTERNAL\x10\b\x12*\n" +
+	"&EXPORT_FAILURE_CODE_SEARCH_UNAVAILABLE\x10\tBHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
 
 var (
 	file_open_splunk_v1_export_proto_rawDescOnce sync.Once

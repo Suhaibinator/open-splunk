@@ -207,7 +207,7 @@ func (handler *apiHandler) getSearchResults(request *http.Request, input *opensp
 	if err != nil {
 		return nil, mapSearchJobError(err)
 	}
-	converted, err := resultPageToProto(request.Context(), id, page, resultKindForSPL(job.SPL), includeTotal)
+	converted, err := resultPageToProto(request.Context(), id, page, resultKindForSPL(job.SPL), includeTotal, job.ResultsTruncated)
 	if err != nil {
 		if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
 			return nil, contextErr

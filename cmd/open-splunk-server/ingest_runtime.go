@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -22,6 +23,29 @@ func normalizeRuntimeOptions(config *options) error {
 	}
 	if config.indexRetention <= 0 {
 		return errors.New("default index retention must be positive")
+	}
+	config.exportArtifactDir = strings.TrimSpace(config.exportArtifactDir)
+	if config.exportArtifactDir == "" {
+		controlDBPath := strings.TrimSpace(config.controlDBPath)
+		if controlDBPath == "" {
+			controlDBPath = "open-splunk.db"
+		}
+		config.exportArtifactDir = controlDBPath + ".exports"
+	}
+	if !utf8.ValidString(config.exportArtifactDir) || strings.IndexByte(config.exportArtifactDir, 0) >= 0 {
+		return errors.New("export artifact directory must be valid UTF-8 without NUL bytes")
+	}
+	config.exportArtifactDir = filepath.Clean(config.exportArtifactDir)
+	if config.exportArtifactDir == "." || config.exportArtifactDir == ".." ||
+		strings.HasPrefix(config.exportArtifactDir, ".."+string(filepath.Separator)) {
+		return errors.New("export artifact directory must be a dedicated child path")
+	}
+	absoluteArtifactDir, err := filepath.Abs(config.exportArtifactDir)
+	if err != nil {
+		return errors.New("export artifact directory is invalid")
+	}
+	if filepath.Dir(absoluteArtifactDir) == absoluteArtifactDir {
+		return errors.New("export artifact directory cannot be a filesystem root")
 	}
 	config.httpAddress = strings.TrimSpace(config.httpAddress)
 	host, _, err := net.SplitHostPort(config.httpAddress)

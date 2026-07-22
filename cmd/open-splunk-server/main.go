@@ -21,6 +21,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	internalclickhouse "github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
@@ -46,6 +47,7 @@ type options struct {
 	httpInsecureTrustedNetwork bool
 	controlDBPath              string
 	masterKeyPath              string
+	exportArtifactDir          string
 	clickhouseAddress          string
 	clickhouseDatabase         string
 	clickhouseUsername         string
@@ -76,6 +78,10 @@ func run() error {
 	config := parseFlags()
 	if err := normalizeRuntimeOptions(&config); err != nil {
 		return err
+	}
+	exportSettings := defaultExportRuntimeSettings()
+	if err := exportSettings.validate(); err != nil {
+		return fmt.Errorf("validate export runtime: %w", err)
 	}
 	serverLock, err := acquireServerLock(config.controlDBPath)
 	if err != nil {
@@ -183,6 +189,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create query executor: %w", err)
 	}
+	compiler := internalclickhouse.Compiler{
+		Database: "open_splunk",
+		Table:    "events",
+	}
 	jobJournal, err := searchhistory.NewJobJournal(searchHistory, splCompatibility)
 	if err != nil {
 		return fmt.Errorf("create search-history job journal: %w", err)
@@ -194,10 +204,7 @@ func run() error {
 		OnJournalError: func(err error) {
 			log.Printf("persist search-job history: %v", err)
 		},
-		Compiler: internalclickhouse.Compiler{
-			Database: "open_splunk",
-			Table:    "events",
-		},
+		Compiler: compiler,
 	})
 	if err != nil {
 		return fmt.Errorf("create search job manager: %w", err)
@@ -207,6 +214,30 @@ func run() error {
 			log.Printf("close search jobs: %v", err)
 		}
 	}()
+	exportExecutor, err := queryexec.New(connection, exportSettings.queryExecutorConfig())
+	if err != nil {
+		return fmt.Errorf("create export query executor: %w", err)
+	}
+	exportSource, err := exportjobs.NewReexecutionSource(exportjobs.ReexecutionSourceConfig{
+		Searches:   jobs,
+		Executor:   exportExecutor,
+		Compiler:   compiler,
+		MaxRuntime: exportSettings.reexecutionMaxRuntime,
+	})
+	if err != nil {
+		return fmt.Errorf("create export re-execution source: %w", err)
+	}
+	exports, err := exportjobs.New(exportSettings.managerConfig(exportSource, config.exportArtifactDir))
+	if err != nil {
+		return fmt.Errorf("create export manager: %w", err)
+	}
+	// Registered after jobs so LIFO shutdown always cancels export workers and
+	// releases their search leases before the search-job manager is closed.
+	defer func() {
+		if err := exports.Close(); err != nil {
+			log.Printf("close exports: %v", err)
+		}
+	}()
 
 	webUI, err := opensplunk.WebUI()
 	if err != nil {
@@ -214,6 +245,7 @@ func run() error {
 	}
 	handler, err := server.NewHandler(server.Config{
 		SearchJobs:                 jobs,
+		Exports:                    exports,
 		Indexes:                    controlDB,
 		IngestionTokens:            tokenStore,
 		SavedSearches:              savedSearches,
@@ -226,6 +258,8 @@ func run() error {
 			ServerVersion:           "dev",
 			APIVersion:              "v1",
 			SPLCompatibilityVersion: splCompatibility,
+			MaximumExportRows:       exportSettings.maximumRowLimit,
+			MaximumExportBytes:      exportSettings.maximumByteLimit,
 		},
 	})
 	if err != nil {
@@ -249,9 +283,11 @@ func run() error {
 		Handler:           requests,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       2 * time.Minute,
-		MaxHeaderBytes:    1 << 20,
+		// Keep ordinary API writes short. The raw export handler explicitly
+		// extends only its own connection deadline through ResponseController.
+		WriteTimeout:   30 * time.Second,
+		IdleTimeout:    2 * time.Minute,
+		MaxHeaderBytes: 1 << 20,
 	}
 	log.Printf("open-splunk server listening on %s", config.httpAddress)
 	if collectorListener == nil {
@@ -269,10 +305,11 @@ func run() error {
 func parseFlags() options {
 	var result options
 	flag.StringVar(&result.httpAddress, "http-address", "127.0.0.1:8080", "HTTP listen address (set explicitly to expose on a trusted network)")
-	flag.StringVar(&result.httpAllowedHostsCSV, "http-allowed-hosts", "", "comma-separated Host names allowed to use browser administration (defaults to the specific listen host)")
+	flag.StringVar(&result.httpAllowedHostsCSV, "http-allowed-hosts", "", "comma-separated Host names allowed to use the browser API (defaults to the specific listen host)")
 	flag.BoolVar(&result.httpInsecureTrustedNetwork, "http-insecure-trusted-network", false, "explicitly allow plaintext browser HTTP on a non-loopback trusted network")
 	flag.StringVar(&result.controlDBPath, "control-db", "open-splunk.db", "SQLite control-plane path")
 	flag.StringVar(&result.masterKeyPath, "master-key", "", "server master-key path (default: <control-db>.key)")
+	flag.StringVar(&result.exportArtifactDir, "export-artifact-dir", "", "private export-artifact base directory (default: <control-db>.exports)")
 	flag.StringVar(&result.clickhouseAddress, "clickhouse-address", "127.0.0.1:9000", "ClickHouse native-protocol address")
 	flag.StringVar(&result.clickhouseDatabase, "clickhouse-database", "open_splunk", "ClickHouse database")
 	flag.StringVar(&result.clickhouseUsername, "clickhouse-username", "open_splunk", "ClickHouse username")

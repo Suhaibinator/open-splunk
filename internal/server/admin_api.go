@@ -48,7 +48,7 @@ const (
 	maximumTokenNameBytes         = 255
 	maximumTokenScopes            = 256
 	adminCursorVersion            = 1
-	maximumAdministrativeHosts    = 32
+	maximumBrowserAllowedHosts    = 32
 )
 
 var indexUpdatePaths = map[string]string{
@@ -89,52 +89,55 @@ var tokenUpdatePaths = map[string]string{
 	"definition.expires_at":  "expires_at",
 }
 
-func normalizeAdministrativeAllowedHosts(input []string, enabled bool) (map[string]struct{}, error) {
-	if !enabled {
-		return nil, nil
-	}
+func normalizeBrowserAllowedHosts(input []string) (map[string]struct{}, error) {
 	if len(input) == 0 {
 		input = []string{"127.0.0.1", "::1", "localhost"}
 	}
-	if len(input) > maximumAdministrativeHosts {
-		return nil, fmt.Errorf("administrative allowed hosts cannot exceed %d", maximumAdministrativeHosts)
+	if len(input) > maximumBrowserAllowedHosts {
+		return nil, fmt.Errorf("browser allowed hosts cannot exceed %d", maximumBrowserAllowedHosts)
 	}
 	result := make(map[string]struct{}, len(input))
 	for _, value := range input {
 		host, _, err := canonicalHTTPAuthority(strings.TrimSpace(value))
 		if err != nil {
-			return nil, errors.New("administrative allowed host is invalid")
+			return nil, errors.New("browser allowed host is invalid")
 		}
 		result[host] = struct{}{}
 	}
 	return result, nil
 }
 
-func (handler *apiHandler) protectAdministrativeRoutes(next http.Handler) http.Handler {
+func (handler *apiHandler) protectBrowserAPIRoutes(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if strings.HasPrefix(request.URL.Path, "/api/v1/indexes/") || strings.HasPrefix(request.URL.Path, "/api/v1/ingestion-tokens/") {
-			if err := handler.validateAdministrativeBrowserRequest(request); err != nil {
-				writeAPIError(response, http.StatusForbidden, "administrative request origin is not trusted")
-				return
-			}
+		if err := handler.validateBrowserAPIRequest(request); err != nil {
+			writeAPIError(response, http.StatusForbidden, "browser request origin is not trusted")
+			return
 		}
 		next.ServeHTTP(response, request)
 	})
 }
 
-func (handler *apiHandler) validateAdministrativeBrowserRequest(request *http.Request) error {
-	if request == nil || len(handler.adminAllowedHosts) == 0 {
-		return errors.New("administrative host policy is unavailable")
+func (handler *apiHandler) validateBrowserAPIRequest(request *http.Request) error {
+	if request == nil || len(handler.browserAllowedHosts) == 0 {
+		return errors.New("browser host policy is unavailable")
 	}
 	requestHost, requestPort, err := canonicalHTTPAuthority(request.Host)
 	if err != nil {
 		return err
 	}
-	if _, allowed := handler.adminAllowedHosts[requestHost]; !allowed {
+	if _, allowed := handler.browserAllowedHosts[requestHost]; !allowed {
 		return errors.New("request host is not allowed")
+	}
+	fetchSites := request.Header.Values("Sec-Fetch-Site")
+	if len(fetchSites) > 1 {
+		return errors.New("fetch-site metadata is ambiguous")
 	}
 	if fetchSite := strings.TrimSpace(strings.ToLower(request.Header.Get("Sec-Fetch-Site"))); fetchSite == "cross-site" {
 		return errors.New("cross-site browser request is not allowed")
+	}
+	origins := request.Header.Values("Origin")
+	if len(origins) > 1 {
+		return errors.New("request origin is ambiguous")
 	}
 	origin := strings.TrimSpace(request.Header.Get("Origin"))
 	if origin == "" {
@@ -144,7 +147,11 @@ func (handler *apiHandler) validateAdministrativeBrowserRequest(request *http.Re
 		return errors.New("request origin is invalid")
 	}
 	parsed, err := url.Parse(origin)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+	expectedScheme := "http"
+	if request.TLS != nil {
+		expectedScheme = "https"
+	}
+	if err != nil || parsed.Scheme != expectedScheme || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return errors.New("request origin is invalid")
 	}
 	originHost, originPort, err := canonicalHTTPAuthority(parsed.Host)

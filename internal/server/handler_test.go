@@ -207,6 +207,44 @@ func TestBootstrapUsesProtobufAndLiveIndexes(t *testing.T) {
 	}
 }
 
+func TestBrowserAPIRoutesDefaultToLoopbackWithoutAdministration(t *testing.T) {
+	handler, err := NewHandler(Config{
+		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: &fakeSavedSearches{}, WebUI: testUI(),
+	})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	response := postProtoHeaders(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{}, map[string]string{
+		"Host": "attacker.example", "Origin": "http://attacker.example",
+	})
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("non-loopback default status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	response = postProtoHeaders(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{}, map[string]string{
+		"Host": "[::1]:8080", "Origin": "http://[::1]:8080", "Sec-Fetch-Site": "same-origin",
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("IPv6 loopback status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	response = postProtoHeaders(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{}, map[string]string{
+		"Host": "localhost:8080",
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("origin-less loopback status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	_, err = NewHandler(Config{
+		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: &fakeSavedSearches{}, WebUI: testUI(),
+		AdministrativeAllowedHosts: []string{"invalid.example/path"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "browser allowed host is invalid") {
+		t.Fatalf("invalid allowed host error = %v", err)
+	}
+}
+
 func TestProtobufMediaTypeMethodAndBodyLimit(t *testing.T) {
 	handler := newTestHandler(t, Config{
 		SearchJobs:          &fakeSearchJobs{},
@@ -703,6 +741,9 @@ func newTestHandler(t *testing.T, config Config) http.Handler {
 	t.Helper()
 	if config.SavedSearches == nil {
 		config.SavedSearches = &fakeSavedSearches{}
+	}
+	if config.AdministrativeAllowedHosts == nil {
+		config.AdministrativeAllowedHosts = []string{"example.com"}
 	}
 	handler, err := NewHandler(config)
 	if err != nil {

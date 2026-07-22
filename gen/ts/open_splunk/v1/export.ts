@@ -205,6 +205,7 @@ export enum ExportFailureCode {
   EXPORT_FAILURE_CODE_BYTE_LIMIT = 6,
   EXPORT_FAILURE_CODE_STORAGE_UNAVAILABLE = 7,
   EXPORT_FAILURE_CODE_INTERNAL = 8,
+  EXPORT_FAILURE_CODE_SEARCH_UNAVAILABLE = 9,
   UNRECOGNIZED = -1,
 }
 
@@ -237,6 +238,9 @@ export function exportFailureCodeFromJSON(object: any): ExportFailureCode {
     case 8:
     case "EXPORT_FAILURE_CODE_INTERNAL":
       return ExportFailureCode.EXPORT_FAILURE_CODE_INTERNAL;
+    case 9:
+    case "EXPORT_FAILURE_CODE_SEARCH_UNAVAILABLE":
+      return ExportFailureCode.EXPORT_FAILURE_CODE_SEARCH_UNAVAILABLE;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -264,6 +268,8 @@ export function exportFailureCodeToJSON(object: ExportFailureCode): string {
       return "EXPORT_FAILURE_CODE_STORAGE_UNAVAILABLE";
     case ExportFailureCode.EXPORT_FAILURE_CODE_INTERNAL:
       return "EXPORT_FAILURE_CODE_INTERNAL";
+    case ExportFailureCode.EXPORT_FAILURE_CODE_SEARCH_UNAVAILABLE:
+      return "EXPORT_FAILURE_CODE_SEARCH_UNAVAILABLE";
     case ExportFailureCode.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

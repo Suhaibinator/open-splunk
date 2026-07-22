@@ -152,4 +152,7 @@ message SearchJob {
   google.protobuf.Timestamp finished_at = 19;
   google.protobuf.Timestamp expires_at = 20;
   optional SearchPlanSummary plan = 21;
+  // True means the retained page snapshot stopped at the server row boundary.
+  // The full SPL result may still be exported through bounded re-execution.
+  bool results_truncated = 22;
 }

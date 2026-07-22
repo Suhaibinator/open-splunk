@@ -3,14 +3,18 @@
 package integration_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,18 +32,26 @@ const (
 	verticalIndexName              = "vertical"
 	verticalTenantID               = "vertical-tenant"
 	verticalEventCount             = uint64(4)
+	bulkIndexName                  = "vertical-bulk"
+	bulkEventCount                 = uint64(10_001)
 	redactionAPIKeySentinel        = "vertical-api-key-must-not-survive"
 	redactionCookieSentinel        = "vertical-cookie-must-not-survive"
 	redactionPrivateKeySentinel    = "vertical-private-key-must-not-survive"
 	verticalSearchSPL              = " \nindex=vertical | table message status duration_ms api_key _raw\t"
+	bulkSearchSPL                  = "index=vertical-bulk | table event_id"
 	splCompatibilityVersionForTest = "tier-1-dev"
+	clickHouseEventInsertSQL       = "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
+		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
+		"expires_at, visibility_seq)"
 )
 
 // TestBackendVertical exercises the deployed backend boundary rather than a
 // collection of in-process components:
 //
 //	HTTP protobuf provisioning -> collector file/WAL/gRPC -> ClickHouse ->
-//	SPL job execution -> HTTP protobuf typed results.
+//	SPL job execution -> HTTP protobuf typed results -> bounded export
+//	re-execution -> one-time raw artifact download.
 //
 // It is opt-in because it builds two binaries and starts a pinned Docker image.
 func TestBackendVertical(t *testing.T) {
@@ -120,6 +132,12 @@ func TestBackendVertical(t *testing.T) {
 		!strings.HasPrefix(plaintextToken, createdToken.GetIngestionToken().GetTokenPrefix()) {
 		t.Fatalf("created ingestion token metadata = %+v, plaintext length = %d", createdToken.GetIngestionToken(), len(plaintextToken))
 	}
+	serverSecrets := []string{
+		plaintextToken,
+		redactionAPIKeySentinel,
+		redactionCookieSentinel,
+		redactionPrivateKeySentinel,
+	}
 
 	fixtureStart := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
 	logPath := filepath.Join(work, "app.log")
@@ -147,7 +165,7 @@ func TestBackendVertical(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 	waitForStoredEvents(t, ctx, storage, collectorProcess, plaintextToken)
-	assertStoredEventBounds(t, ctx, storage, fixtureStart)
+	visibilityCutoff := assertStoredEventBounds(t, ctx, storage, fixtureStart)
 
 	if err := collectorProcess.Interrupt(15 * time.Second); err != nil {
 		t.Fatalf("stop collector: %v\nlogs:\n%s", err, redactForFailure(
@@ -158,9 +176,9 @@ func TestBackendVertical(t *testing.T) {
 	assertProcessLogsDoNotLeak(t, collectorProcess.Logs(), plaintextToken,
 		redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel)
 
-	response := runSearch(t, ctx, httpClient, baseURL, fixtureStart)
-	assertTypedRedactedResults(t, response)
-	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(response)
+	search := runSearch(t, ctx, httpClient, baseURL, fixtureStart)
+	assertTypedRedactedResults(t, search.results)
+	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(search.results)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,15 +187,26 @@ func TestBackendVertical(t *testing.T) {
 			t.Fatalf("HTTP protobuf search response leaked sentinel %q", sentinel)
 		}
 	}
+	completedExport, artifact, downloadToken := exportAndDownloadJSONLines(t, ctx, httpClient, baseURL, search.jobID,
+		[]string{"message", "status", "duration_ms", "api_key", "_raw"}, verticalEventCount)
+	serverSecrets = append(serverSecrets, downloadToken)
+	assertDownloadedRedactedResults(t, completedExport, artifact)
+
+	createVerticalIndex(t, ctx, httpClient, baseURL, bulkIndexName, "Backend vertical bulk export")
+	bulkStart := insertBulkEvents(t, ctx, storage, visibilityCutoff)
+	serverSecrets = append(serverSecrets, assertTruncatedPreviewExportsAllRows(
+		t, ctx, httpClient, storage, baseURL, bulkStart, visibilityCutoff,
+	))
 
 	if err := serverProcess.Interrupt(20 * time.Second); err != nil {
-		t.Fatalf("stop server: %v\nlogs:\n%s", err, redactForFailure(
-			serverProcess.Logs(), plaintextToken,
-			redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
-		))
+		t.Fatalf("stop server: %v\nlogs:\n%s", err, redactForFailure(serverProcess.Logs(), serverSecrets...))
 	}
-	assertProcessLogsDoNotLeak(t, serverProcess.Logs(), plaintextToken,
-		redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel)
+	assertProcessLogsDoNotLeak(t, serverProcess.Logs(), serverSecrets...)
+}
+
+type completedSearch struct {
+	jobID   string
+	results *opensplunkv1.GetSearchResultsResponse
 }
 
 func waitForHealth(t *testing.T, ctx context.Context, client *http.Client, baseURL string, process *managedProcess) {
@@ -246,6 +275,221 @@ func postProto(t *testing.T, ctx context.Context, client *http.Client, url strin
 		t.Fatalf("decode POST %s: %v", url, err)
 	}
 	return body
+}
+
+func createVerticalIndex(t *testing.T, ctx context.Context, client *http.Client, baseURL, name, displayName string) {
+	t.Helper()
+	var created opensplunkv1.CreateIndexResponse
+	postProto(t, ctx, client, baseURL+"/api/v1/indexes/create", &opensplunkv1.CreateIndexRequest{
+		Definition: &opensplunkv1.IndexDefinition{
+			Name:            name,
+			DisplayName:     displayName,
+			RetentionPeriod: durationpb.New(24 * time.Hour),
+			IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+			SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+		},
+	}, &created)
+	if created.GetIndex().GetVersion() != 1 || created.GetIndex().GetDefinition().GetName() != name {
+		t.Fatalf("created index %q = %+v", name, created.GetIndex())
+	}
+}
+
+func exportAndDownloadJSONLines(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL, searchJobID string,
+	columns []string,
+	expectedRows uint64,
+) (*opensplunkv1.ExportJob, []byte, string) {
+	t.Helper()
+	// Leave headroom so a broken snapshot predicate cannot hide extra rows
+	// behind a limit equal to the expected cardinality.
+	rowLimit := expectedRows + 32
+	byteLimit := uint64(16 << 20)
+	var created opensplunkv1.CreateExportJobResponse
+	postProto(t, ctx, client, baseURL+"/api/v1/search/exports/create", &opensplunkv1.CreateExportJobRequest{
+		Definition: &opensplunkv1.ExportDefinition{
+			SearchJobId: searchJobID,
+			Columns:     append([]string(nil), columns...),
+			RowLimit:    &rowLimit,
+			ByteLimit:   &byteLimit,
+			FormatOptions: &opensplunkv1.ExportDefinition_JsonLines{JsonLines: &opensplunkv1.JsonLinesExportOptions{
+				IntegerEncoding: opensplunkv1.JsonIntegerEncoding_JSON_INTEGER_ENCODING_NUMBER_WHEN_SAFE,
+			}},
+		},
+	}, &created)
+	exportID := created.GetExportJob().GetExportJobId()
+	if exportID == "" || created.GetExportJob().GetDefinition().GetSearchJobId() != searchJobID ||
+		created.GetExportJob().GetFormat() != opensplunkv1.ExportFormat_EXPORT_FORMAT_JSON_LINES {
+		t.Fatalf("created export job = %+v", created.GetExportJob())
+	}
+
+	completed := waitForCompletedExport(t, ctx, client, baseURL, exportID)
+	if completed.GetArtifact().GetRowCount() != expectedRows || completed.GetProgress().GetRowsWritten() != expectedRows ||
+		completed.GetArtifact().GetSizeBytes() == 0 || completed.GetProgress().GetBytesWritten() != completed.GetArtifact().GetSizeBytes() {
+		t.Fatalf("completed export job = %+v", completed)
+	}
+
+	var granted opensplunkv1.GetExportJobResponse
+	postProto(t, ctx, client, baseURL+"/api/v1/search/exports/get", &opensplunkv1.GetExportJobRequest{
+		ExportJobId:        exportID,
+		IssueDownloadGrant: true,
+	}, &granted)
+	grant := granted.GetDownloadGrant()
+	if granted.GetExportJob().GetState() != opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
+		grant.GetDownloadPath() != "/api/v1/search/exports/download" || grant.GetDownloadToken() == "" ||
+		grant.GetExpiresAt() == nil || !grant.GetExpiresAt().AsTime().After(time.Now().UTC()) {
+		t.Fatalf("granted completed export = %+v", granted.GetExportJob())
+	}
+	artifact := downloadGrantedArtifact(t, ctx, client, baseURL, granted.GetExportJob().GetArtifact(), grant)
+	return granted.GetExportJob(), artifact, grant.GetDownloadToken()
+}
+
+func waitForCompletedExport(t *testing.T, ctx context.Context, client *http.Client, baseURL, exportID string) *opensplunkv1.ExportJob {
+	t.Helper()
+	deadline := time.NewTimer(90 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var got opensplunkv1.GetExportJobResponse
+		postProto(t, ctx, client, baseURL+"/api/v1/search/exports/get", &opensplunkv1.GetExportJobRequest{ExportJobId: exportID}, &got)
+		job := got.GetExportJob()
+		switch job.GetState() {
+		case opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED:
+			return job
+		case opensplunkv1.ExportJobState_EXPORT_JOB_STATE_FAILED,
+			opensplunkv1.ExportJobState_EXPORT_JOB_STATE_CANCELED,
+			opensplunkv1.ExportJobState_EXPORT_JOB_STATE_EXPIRED:
+			t.Fatalf("export job terminated in %s: %+v", job.GetState(), job.GetFailure())
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for export: %v", ctx.Err())
+		case <-deadline.C:
+			t.Fatal("wait for export: timed out")
+		case <-ticker.C:
+		}
+	}
+}
+
+func downloadGrantedArtifact(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	artifact *opensplunkv1.ExportArtifact,
+	grant *opensplunkv1.ExportDownloadGrant,
+) []byte {
+	t.Helper()
+	if artifact == nil || grant == nil || artifact.GetSizeBytes() > 16<<20 {
+		t.Fatalf("invalid downloadable artifact: artifact present=%t grant present=%t size=%d",
+			artifact != nil, grant != nil, artifact.GetSizeBytes())
+	}
+	if artifact.GetMediaType() != "application/x-ndjson; charset=utf-8" ||
+		!strings.HasSuffix(artifact.GetFileName(), ".jsonl") {
+		t.Fatalf("JSON Lines artifact metadata = type %q filename %q", artifact.GetMediaType(), artifact.GetFileName())
+	}
+	downloadURL := baseURL + grant.GetDownloadPath()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+grant.GetDownloadToken())
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("download export artifact: %v", err)
+	}
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, int64(artifact.GetSizeBytes())+1))
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("read export artifact: read=%v close=%v", readErr, closeErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("download status = %d, body = %q", response.StatusCode, body)
+	}
+	if uint64(len(body)) != artifact.GetSizeBytes() || response.ContentLength != int64(artifact.GetSizeBytes()) {
+		t.Fatalf("download size = body %d header %d, want %d", len(body), response.ContentLength, artifact.GetSizeBytes())
+	}
+	if contentType := response.Header.Get("Content-Type"); contentType != "application/x-ndjson; charset=utf-8" {
+		t.Fatalf("download content type = %q", contentType)
+	}
+	disposition, parameters, err := mime.ParseMediaType(response.Header.Get("Content-Disposition"))
+	if err != nil || disposition != "attachment" || parameters["filename"] != artifact.GetFileName() {
+		t.Fatalf("download content disposition = %q (%v, %v)", response.Header.Get("Content-Disposition"), parameters, err)
+	}
+	if !strings.HasSuffix(parameters["filename"], ".jsonl") {
+		t.Fatalf("download filename = %q", parameters["filename"])
+	}
+	if response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("Pragma") != "no-cache" ||
+		response.Header.Get("X-Content-Type-Options") != "nosniff" || response.Header.Get("Accept-Ranges") != "" ||
+		response.Header.Get("Content-Security-Policy") != "sandbox" ||
+		response.Header.Get("Cross-Origin-Resource-Policy") != "same-origin" {
+		t.Fatalf("download safety headers = %+v", response.Header)
+	}
+
+	replay, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay.Header.Set("Authorization", "Bearer "+grant.GetDownloadToken())
+	replayed, err := client.Do(replay)
+	if err != nil {
+		t.Fatalf("replay export grant: %v", err)
+	}
+	replayBody, replayReadErr := io.ReadAll(io.LimitReader(replayed.Body, 1<<20))
+	_ = replayed.Body.Close()
+	if replayReadErr != nil {
+		t.Fatalf("read replay rejection: %v", replayReadErr)
+	}
+	if replayed.StatusCode != http.StatusUnauthorized || replayed.Header.Get("WWW-Authenticate") == "" ||
+		bytes.Contains(replayBody, []byte(grant.GetDownloadToken())) || bytes.Contains(replayBody, []byte(artifact.GetFileName())) {
+		t.Fatalf("grant replay response = status %d headers %+v body %q", replayed.StatusCode, replayed.Header, replayBody)
+	}
+	return body
+}
+
+func assertDownloadedRedactedResults(t *testing.T, completed *opensplunkv1.ExportJob, artifact []byte) {
+	t.Helper()
+	if completed.GetArtifact().GetRowCount() != verticalEventCount {
+		t.Fatalf("downloaded export metadata = %+v", completed.GetArtifact())
+	}
+	for _, sentinel := range []string{redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel} {
+		if bytes.Contains(artifact, []byte(sentinel)) {
+			t.Fatalf("downloaded export leaked sentinel %q", sentinel)
+		}
+	}
+	var (
+		rowCount uint64
+		found    bool
+	)
+	expectedColumns := []string{"message", "status", "duration_ms", "api_key", "_raw"}
+	forEachJSONLine(t, artifact, func(line int, row map[string]any) {
+		if len(row) != len(expectedColumns) {
+			t.Fatalf("JSON Lines row %d columns = %#v", line, row)
+		}
+		for _, column := range expectedColumns {
+			if _, exists := row[column]; !exists {
+				t.Fatalf("JSON Lines row %d is missing column %q: %#v", line, column, row)
+			}
+		}
+		rowCount++
+		if row["message"] != "typed redaction sentinel" {
+			return
+		}
+		found = true
+		status, statusOK := row["status"].(json.Number)
+		duration, durationOK := row["duration_ms"].(json.Number)
+		raw, rawOK := row["_raw"].(string)
+		if !statusOK || status.String() != "201" || !durationOK || duration.String() != "12.5" ||
+			row["api_key"] != "[REDACTED]" || !rawOK || strings.Count(raw, "[REDACTED]") < 3 {
+			t.Fatalf("downloaded typed redaction row = %#v", row)
+		}
+	})
+	if rowCount != verticalEventCount || !found {
+		t.Fatalf("downloaded rows = %d, sentinel found = %t", rowCount, found)
+	}
 }
 
 func writeFixture(t *testing.T, path string, start time.Time) {
@@ -358,7 +602,7 @@ func waitForStoredEvents(t *testing.T, ctx context.Context, connection clickhous
 	}
 }
 
-func assertStoredEventBounds(t *testing.T, ctx context.Context, connection clickhousedriver.Conn, fixtureStart time.Time) {
+func assertStoredEventBounds(t *testing.T, ctx context.Context, connection clickhousedriver.Conn, fixtureStart time.Time) uint64 {
 	t.Helper()
 	var (
 		earliest, latest                   time.Time
@@ -379,7 +623,8 @@ func assertStoredEventBounds(t *testing.T, ctx context.Context, connection click
 			earliest.Format(time.RFC3339Nano), latest.Format(time.RFC3339Nano),
 			fixtureStart.Format(time.RFC3339Nano), fixtureStart.Add(3*time.Second).Format(time.RFC3339Nano))
 	}
-	if earliestIndexTime.IsZero() || !earliestIndexTime.Equal(latestIndexTime) || minimumVisibility != 1 || maximumVisibility != 1 {
+	if earliestIndexTime.IsZero() || latestIndexTime.Before(earliestIndexTime) ||
+		minimumVisibility == 0 || maximumVisibility < minimumVisibility {
 		t.Fatalf("stored commit bounds: index_time=[%s,%s] visibility=[%d,%d]",
 			earliestIndexTime.Format(time.RFC3339Nano), latestIndexTime.Format(time.RFC3339Nano),
 			minimumVisibility, maximumVisibility)
@@ -388,9 +633,276 @@ func assertStoredEventBounds(t *testing.T, ctx context.Context, connection click
 		earliest.Format(time.RFC3339Nano), latest.Format(time.RFC3339Nano),
 		earliestIndexTime.Format(time.RFC3339Nano), latestIndexTime.Format(time.RFC3339Nano),
 		minimumVisibility, maximumVisibility)
+	return maximumVisibility
 }
 
-func runSearch(t *testing.T, ctx context.Context, client *http.Client, baseURL string, fixtureStart time.Time) *opensplunkv1.GetSearchResultsResponse {
+func insertBulkEvents(t *testing.T, ctx context.Context, connection clickhousedriver.Conn, visibilityCutoff uint64) time.Time {
+	t.Helper()
+	if visibilityCutoff == 0 {
+		t.Fatal("bulk fixture visibility cutoff must be positive")
+	}
+	batch, err := connection.PrepareBatch(ctx, clickHouseEventInsertSQL)
+	if err != nil {
+		t.Fatalf("prepare bulk integration events: %v", err)
+	}
+	start := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	indexTime := start
+	expiresAt := start.Add(24 * time.Hour)
+	for index := uint64(0); index < bulkEventCount; index++ {
+		eventID := fmt.Sprintf("vertical-bulk-%05d", index)
+		message := "bulk export " + eventID
+		document := clickhousedriver.NewJSON()
+		if err := batch.Append(
+			eventID, verticalTenantID, bulkIndexName, start.Add(time.Duration(index)*time.Microsecond), indexTime,
+			nil, uint8(1), "vertical-host", "bulk.log", "integration", nil, uint8(1), nil, &message, []byte(message),
+			uint8(1), nil, nil, document, []string(nil), "integration-direct", "vertical-bulk-batch", uint64(1),
+			expiresAt, visibilityCutoff,
+		); err != nil {
+			t.Fatalf("append bulk integration event %d: %v", index, err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("insert bulk integration events: %v", err)
+	}
+	var stored uint64
+	if err := connection.QueryRow(ctx,
+		"SELECT count() FROM open_splunk.events WHERE tenant_id = ? AND index_name = ?",
+		verticalTenantID, bulkIndexName,
+	).Scan(&stored); err != nil {
+		t.Fatalf("count bulk integration events: %v", err)
+	}
+	if stored != bulkEventCount {
+		t.Fatalf("stored bulk event count = %d, want %d", stored, bulkEventCount)
+	}
+	return start
+}
+
+func insertBulkSnapshotDecoys(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	fixtureStart, indexTimeCutoff time.Time,
+	visibilityCutoff uint64,
+) {
+	t.Helper()
+	if indexTimeCutoff.IsZero() || !indexTimeCutoff.After(fixtureStart) {
+		t.Fatalf("bulk search index-time cutoff = %s, fixture start = %s", indexTimeCutoff, fixtureStart)
+	}
+	if visibilityCutoff == 0 {
+		t.Fatalf("bulk search visibility cutoff = %d", visibilityCutoff)
+	}
+	type decoy struct {
+		id            string
+		tenant        string
+		index         string
+		eventTime     time.Time
+		indexTime     time.Time
+		visibilitySeq uint64
+	}
+	decoys := []decoy{
+		{id: "vertical-decoy-late-visibility", tenant: verticalTenantID, index: bulkIndexName,
+			eventTime: fixtureStart.Add(time.Second), indexTime: fixtureStart, visibilitySeq: ^uint64(0)},
+		{id: "vertical-decoy-late-index-time", tenant: verticalTenantID, index: bulkIndexName,
+			eventTime: fixtureStart.Add(time.Second), indexTime: indexTimeCutoff.Add(time.Minute), visibilitySeq: visibilityCutoff},
+		{id: "vertical-decoy-foreign-tenant", tenant: "vertical-foreign-tenant", index: bulkIndexName,
+			eventTime: fixtureStart.Add(time.Second), indexTime: fixtureStart, visibilitySeq: visibilityCutoff},
+		{id: "vertical-decoy-wrong-index", tenant: verticalTenantID, index: verticalIndexName,
+			eventTime: fixtureStart.Add(time.Second), indexTime: fixtureStart, visibilitySeq: visibilityCutoff},
+		{id: "vertical-decoy-out-of-range", tenant: verticalTenantID, index: bulkIndexName,
+			eventTime: fixtureStart.Add(3 * time.Minute), indexTime: fixtureStart, visibilitySeq: visibilityCutoff},
+	}
+
+	batch, err := connection.PrepareBatch(ctx, clickHouseEventInsertSQL)
+	if err != nil {
+		t.Fatalf("prepare snapshot decoys: %v", err)
+	}
+	expiresAt := indexTimeCutoff.Add(24 * time.Hour)
+	for index, decoy := range decoys {
+		message := "snapshot predicate decoy " + decoy.id
+		document := clickhousedriver.NewJSON()
+		if err := batch.Append(
+			decoy.id, decoy.tenant, decoy.index, decoy.eventTime, decoy.indexTime,
+			nil, uint8(1), "vertical-host", "snapshot-decoys.log", "integration", nil, uint8(1), nil,
+			&message, []byte(message), uint8(1), nil, nil, document, []string(nil), "integration-direct",
+			"vertical-decoy-batch", uint64(index+1), expiresAt, decoy.visibilitySeq,
+		); err != nil {
+			t.Fatalf("append snapshot decoy %q: %v", decoy.id, err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("insert snapshot decoys: %v", err)
+	}
+	var stored uint64
+	if err := connection.QueryRow(ctx,
+		"SELECT count() FROM open_splunk.events WHERE event_id LIKE 'vertical-decoy-%'",
+	).Scan(&stored); err != nil {
+		t.Fatalf("count snapshot decoys: %v", err)
+	}
+	if stored != uint64(len(decoys)) {
+		t.Fatalf("stored snapshot decoys = %d, want %d", stored, len(decoys))
+	}
+}
+
+func assertTruncatedPreviewExportsAllRows(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	connection clickhousedriver.Conn,
+	baseURL string,
+	fixtureStart time.Time,
+	visibilityCutoff uint64,
+) string {
+	t.Helper()
+	earliest := fixtureStart.Add(-time.Minute).Format(time.RFC3339Nano)
+	latest := fixtureStart.Add(2 * time.Minute).Format(time.RFC3339Nano)
+	timezone := "UTC"
+	var created opensplunkv1.CreateSearchJobResponse
+	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/create", &opensplunkv1.CreateSearchJobRequest{
+		Definition: &opensplunkv1.SearchDefinition{
+			Spl: bulkSearchSPL,
+			TimeRange: &opensplunkv1.TimeRangeSpec{
+				Earliest: &earliest,
+				Latest:   &latest,
+				Timezone: &timezone,
+			},
+			IndexScope: []string{bulkIndexName},
+		},
+	}, &created)
+	jobID := created.GetSearchJob().GetSearchJobId()
+	if jobID == "" {
+		t.Fatalf("created bulk search job = %+v", created.GetSearchJob())
+	}
+	completed := waitForCompletedSearch(t, ctx, client, baseURL, jobID, 60*time.Second)
+	if !completed.GetResultsTruncated() || completed.GetProgress().GetProducedRows() != 10_000 ||
+		len(completed.GetEffectiveIndexScope()) != 1 || completed.GetEffectiveIndexScope()[0] != bulkIndexName {
+		t.Fatalf("completed bulk search = %+v", completed)
+	}
+	foundTruncationWarning := false
+	for _, warning := range completed.GetWarnings() {
+		if warning.GetCode() == "RESULTS_TRUNCATED" {
+			foundTruncationWarning = true
+		}
+	}
+	if !foundTruncationWarning {
+		t.Fatalf("completed bulk search warnings = %+v", completed.GetWarnings())
+	}
+	if completed.GetIndexTimeCutoff() == nil {
+		t.Fatalf("completed bulk search lacks an index-time cutoff: %+v", completed)
+	}
+
+	pageSize := uint32(128)
+	var preview opensplunkv1.GetSearchResultsResponse
+	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/results", &opensplunkv1.GetSearchResultsRequest{
+		SearchJobId: jobID,
+		Page:        &opensplunkv1.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
+	}, &preview)
+	page := preview.GetResultPage()
+	if page.GetSnapshotComplete() || page.GetPage().GetTotalSizeExact() || page.GetPage().GetTotalSize() != 10_000 ||
+		len(page.GetRows()) != int(pageSize) {
+		t.Fatalf("truncated bulk preview = %+v", page)
+	}
+
+	// Insert one decoy for every replay predicate only after the search has
+	// captured its immutable cutoffs. Export must not admit any of them.
+	insertBulkSnapshotDecoys(t, ctx, connection, fixtureStart, completed.GetIndexTimeCutoff().AsTime(), visibilityCutoff)
+	exported, artifact, downloadToken := exportAndDownloadJSONLines(t, ctx, client, baseURL, jobID, []string{"event_id"}, bulkEventCount)
+	if exported.GetArtifact().GetRowCount() != bulkEventCount {
+		t.Fatalf("bulk export artifact = %+v", exported.GetArtifact())
+	}
+	assertCompleteBulkArtifact(t, artifact)
+	return downloadToken
+}
+
+func waitForCompletedSearch(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL, jobID string,
+	timeout time.Duration,
+) *opensplunkv1.SearchJob {
+	t.Helper()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var got opensplunkv1.GetSearchJobResponse
+		postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{SearchJobId: jobID}, &got)
+		job := got.GetSearchJob()
+		switch job.GetState() {
+		case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED:
+			return job
+		case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED,
+			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED,
+			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED:
+			t.Fatalf("search job terminated in %s: %+v", job.GetState(), job.GetFailure())
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for search: %v", ctx.Err())
+		case <-deadline.C:
+			t.Fatalf("wait for search %q: timed out", jobID)
+		case <-ticker.C:
+		}
+	}
+}
+
+func assertCompleteBulkArtifact(t *testing.T, artifact []byte) {
+	t.Helper()
+	seen := make(map[uint64]struct{}, bulkEventCount)
+	forEachJSONLine(t, artifact, func(_ int, row map[string]any) {
+		if len(row) != 1 {
+			t.Fatalf("bulk JSON Lines row = %#v", row)
+		}
+		eventID, ok := row["event_id"].(string)
+		if !ok || !strings.HasPrefix(eventID, "vertical-bulk-") {
+			t.Fatalf("bulk event ID = %#v", row["event_id"])
+		}
+		sequence, err := strconv.ParseUint(strings.TrimPrefix(eventID, "vertical-bulk-"), 10, 64)
+		if err != nil || sequence >= bulkEventCount {
+			t.Fatalf("bulk event ID = %q", eventID)
+		}
+		if _, duplicate := seen[sequence]; duplicate {
+			t.Fatalf("bulk export duplicated event ID %q", eventID)
+		}
+		seen[sequence] = struct{}{}
+	})
+	if uint64(len(seen)) != bulkEventCount {
+		t.Fatalf("bulk exported row count = %d, want %d", len(seen), bulkEventCount)
+	}
+}
+
+func forEachJSONLine(t *testing.T, artifact []byte, visit func(int, map[string]any)) {
+	t.Helper()
+	if len(artifact) == 0 || artifact[len(artifact)-1] != '\n' {
+		t.Fatal("JSON Lines artifact is empty or lacks its final newline")
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(artifact))
+	scanner.Buffer(make([]byte, 64<<10), 1<<20)
+	line := 0
+	for scanner.Scan() {
+		line++
+		if len(scanner.Bytes()) == 0 {
+			t.Fatalf("JSON Lines artifact contains an empty line at %d", line)
+		}
+		decoder := json.NewDecoder(bytes.NewReader(scanner.Bytes()))
+		decoder.UseNumber()
+		var row map[string]any
+		if err := decoder.Decode(&row); err != nil {
+			t.Fatalf("decode JSON Lines row %d: %v", line, err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			t.Fatalf("JSON Lines row %d contains trailing data: %v", line, err)
+		}
+		visit(line, row)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan JSON Lines artifact: %v", err)
+	}
+}
+
+func runSearch(t *testing.T, ctx context.Context, client *http.Client, baseURL string, fixtureStart time.Time) completedSearch {
 	t.Helper()
 	earliest := fixtureStart.Add(-time.Minute).Format(time.RFC3339Nano)
 	latest := time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano)
@@ -431,7 +943,7 @@ func runSearch(t *testing.T, ctx context.Context, client *http.Client, baseURL s
 				Page:        &opensplunkv1.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
 			}, &results)
 			waitForTerminalHistory(t, ctx, client, baseURL, jobID)
-			return &results
+			return completedSearch{jobID: jobID, results: &results}
 		case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED,
 			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED,
 			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED:

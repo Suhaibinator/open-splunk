@@ -52,11 +52,12 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 			Latest:   latest,
 			Timezone: "UTC",
 		},
-		IndexTimeCutoff: indexTimeCutoff,
-		State:           searchStateToProto(job.State),
-		ResultKind:      resultKind,
-		Progress:        searchProgressToProto(job, now),
-		CreatedAt:       createdAt,
+		IndexTimeCutoff:  indexTimeCutoff,
+		State:            searchStateToProto(job.State),
+		ResultKind:       resultKind,
+		ResultsTruncated: job.ResultsTruncated,
+		Progress:         searchProgressToProto(job, now),
+		CreatedAt:        createdAt,
 	}
 	if job.Schema != nil {
 		result.ResultSchema, err = schemaToProto(job.ID, *job.Schema, resultKind)
@@ -67,6 +68,21 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 	if job.Failure != nil {
 		result.Failure = failureToProto(*job.Failure)
 		result.Diagnostics = diagnosticsToProto(job.Failure.Diagnostics)
+	}
+	if job.ResultsTruncated {
+		occurredAt := job.FinishedAt
+		if occurredAt.IsZero() {
+			occurredAt = now.Round(0).UTC()
+		}
+		warningTime, timestampErr := validTimestamp(occurredAt)
+		if timestampErr != nil {
+			return nil, timestampErr
+		}
+		result.Warnings = append(result.Warnings, &opensplunkv1.ApiWarning{
+			Code:       "RESULTS_TRUNCATED",
+			Message:    "Retained search results reached the server row boundary; a bounded export can re-execute the same scoped query.",
+			OccurredAt: warningTime,
+		})
 	}
 	if !job.StartedAt.IsZero() {
 		result.StartedAt, err = validTimestamp(job.StartedAt)
@@ -107,7 +123,7 @@ func searchProgressToProto(job searchjobs.Job, now time.Time) *opensplunkv1.Sear
 	}
 }
 
-func resultPageToProto(ctx context.Context, jobID string, page searchjobs.ResultPage, resultKind opensplunkv1.ResultSetKind, includeTotal bool) (*opensplunkv1.ResultPage, error) {
+func resultPageToProto(ctx context.Context, jobID string, page searchjobs.ResultPage, resultKind opensplunkv1.ResultSetKind, includeTotal, resultsTruncated bool) (*opensplunkv1.ResultPage, error) {
 	if ctx == nil {
 		return nil, errors.New("search result conversion context is required")
 	}
@@ -136,7 +152,7 @@ func resultPageToProto(ctx context.Context, jobID string, page searchjobs.Result
 			Cells:   cells,
 		}
 	}
-	pageResponse := &opensplunkv1.PageResponse{TotalSizeExact: includeTotal}
+	pageResponse := &opensplunkv1.PageResponse{TotalSizeExact: includeTotal && !resultsTruncated}
 	if page.NextCursor != "" {
 		pageResponse.NextPageToken = stringPointer(page.NextCursor)
 	}
@@ -147,10 +163,9 @@ func resultPageToProto(ctx context.Context, jobID string, page searchjobs.Result
 		Schema: schema,
 		Rows:   rows,
 		Page:   pageResponse,
-		// ResultsFor is available only after the manager has frozen the result
-		// snapshot. Complete denotes the end of pagination, not snapshot
-		// mutability, so every successfully returned page is complete.
-		SnapshotComplete: true,
+		// The retained generation is immutable, but a truncation boundary means
+		// this preview is not the complete SPL result set.
+		SnapshotComplete: !resultsTruncated,
 	}, nil
 }
 

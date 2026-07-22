@@ -179,7 +179,7 @@ func TestMixedSchemaRetainsConcreteCellType(t *testing.T) {
 		Schema:   searchjobs.Schema{Columns: []searchjobs.Column{{Name: "_raw", Kind: searchjobs.ValueKindMixed, Nullable: true}}},
 		Rows:     []searchjobs.ResultRow{{Ordinal: 0, Values: []searchjobs.Value{searchjobs.BytesValue([]byte{0xff})}}},
 		Complete: true,
-	}, opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS, false)
+	}, opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS, false, false)
 	if err != nil {
 		t.Fatalf("resultPageToProto: %v", err)
 	}
@@ -188,6 +188,54 @@ func TestMixedSchemaRetainsConcreteCellType(t *testing.T) {
 	}
 	if got := page.GetRows()[0].GetCells()[0].GetBytesValue(); !reflect.DeepEqual(got, []byte{0xff}) {
 		t.Fatalf("cell = %v", got)
+	}
+}
+
+func TestSearchJobAndResultPageExposeRetainedResultTruncation(t *testing.T) {
+	job := completeJob("job-truncated")
+	job.ResultsTruncated = true
+	job.RowCount = 10_000
+
+	converted, err := searchJobToProto(job, testNow)
+	if err != nil {
+		t.Fatalf("searchJobToProto: %v", err)
+	}
+	if !converted.GetResultsTruncated() {
+		t.Fatal("results_truncated = false")
+	}
+	if len(converted.GetWarnings()) != 1 || converted.GetWarnings()[0].GetCode() != "RESULTS_TRUNCATED" {
+		t.Fatalf("warnings = %+v", converted.GetWarnings())
+	}
+	if !converted.GetWarnings()[0].GetOccurredAt().AsTime().Equal(job.FinishedAt) {
+		t.Fatalf("warning time = %s, want %s", converted.GetWarnings()[0].GetOccurredAt().AsTime(), job.FinishedAt)
+	}
+
+	page, err := resultPageToProto(context.Background(), job.ID, searchjobs.ResultPage{
+		Schema:    searchjobs.Schema{Columns: []searchjobs.Column{{Name: "count", Kind: searchjobs.ValueKindUnsigned}}},
+		Rows:      []searchjobs.ResultRow{{Ordinal: 9_999, Values: []searchjobs.Value{searchjobs.UnsignedValue(1)}}},
+		TotalRows: 10_000,
+		Complete:  true,
+	}, opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS, true, true)
+	if err != nil {
+		t.Fatalf("resultPageToProto: %v", err)
+	}
+	if page.GetSnapshotComplete() {
+		t.Fatal("snapshot_complete = true for truncated retained results")
+	}
+	if page.GetPage().GetTotalSize() != 10_000 || page.GetPage().GetTotalSizeExact() {
+		t.Fatalf("page metadata = %+v", page.GetPage())
+	}
+
+	complete, err := resultPageToProto(context.Background(), job.ID, searchjobs.ResultPage{
+		Schema:    searchjobs.Schema{Columns: []searchjobs.Column{{Name: "count", Kind: searchjobs.ValueKindUnsigned}}},
+		TotalRows: 10_000,
+		Complete:  true,
+	}, opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS, true, false)
+	if err != nil {
+		t.Fatalf("resultPageToProto(complete): %v", err)
+	}
+	if !complete.GetSnapshotComplete() || !complete.GetPage().GetTotalSizeExact() {
+		t.Fatalf("complete page metadata = %+v", complete)
 	}
 }
 

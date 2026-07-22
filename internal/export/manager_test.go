@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -498,6 +499,10 @@ func TestManagerCancellationIsScopedAndRemovesPartial(t *testing.T) {
 	canceled, err := manager.Cancel(context.Background(), testAccess, job.ID)
 	if err != nil || canceled.State != StateCanceled {
 		t.Fatalf("Cancel() = (%#v, %v)", canceled, err)
+	}
+	repeated, err := manager.Cancel(context.Background(), testAccess, job.ID)
+	if err != nil || !reflect.DeepEqual(repeated, canceled) {
+		t.Fatalf("idempotent Cancel() = (%#v, %v), want %#v", repeated, err, canceled)
 	}
 	waitFor(t, func() bool { return source.closedLeases() == 1 }, "canceled lease release")
 	waitFor(t, func() bool {
@@ -1453,11 +1458,157 @@ func TestManagerCloseCancelsWorkRemovesFilesAndRejectsAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
+	if len(entries) != 1 || entries[0].Name() != artifactBaseLockName {
 		t.Fatalf("artifact directory after Close = %v", entries)
 	}
 	if source.closedLeases() != 1 {
 		t.Fatalf("closed leases = %d, want 1", source.closedLeases())
+	}
+}
+
+func TestManagerDoesNotChangeConfiguredBaseDirectoryPermissions(t *testing.T) {
+	t.Parallel()
+	base := filepath.Join(t.TempDir(), "broad")
+	if err := os.Mkdir(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := New(Config{
+		Source:      &exportTestSource{datasets: map[string]exportTestDataset{}},
+		ArtifactDir: base,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.Close() }()
+	info, statErr := os.Stat(base)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("artifact base permissions changed to %o", info.Mode().Perm())
+	}
+	sessionInfo, statErr := os.Stat(manager.artifactDir)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	resolvedBase, resolveErr := filepath.EvalSymlinks(base)
+	if resolveErr != nil {
+		t.Fatal(resolveErr)
+	}
+	if sessionInfo.Mode().Perm() != 0o700 || filepath.Dir(manager.artifactDir) != resolvedBase {
+		t.Fatalf("owned session = %q mode %o", manager.artifactDir, sessionInfo.Mode().Perm())
+	}
+}
+
+func TestManagerRejectsWritableConfiguredBaseDirectory(t *testing.T) {
+	t.Parallel()
+	base := filepath.Join(t.TempDir(), "shared")
+	if err := os.Mkdir(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(base, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	_, err := New(Config{
+		Source:      &exportTestSource{datasets: map[string]exportTestDataset{}},
+		ArtifactDir: base,
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot be group- or other-writable") {
+		t.Fatalf("New() writable base error = %v", err)
+	}
+	info, statErr := os.Stat(base)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if info.Mode().Perm() != 0o777 {
+		t.Fatalf("writable base permissions changed to %o", info.Mode().Perm())
+	}
+}
+
+func TestManagerRejectsUnsafeWritableArtifactAncestor(t *testing.T) {
+	t.Parallel()
+	ancestor := filepath.Join(t.TempDir(), "unsafe-parent")
+	base := filepath.Join(ancestor, "private-base")
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(ancestor, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	_, err := New(Config{
+		Source:      &exportTestSource{datasets: map[string]exportTestDataset{}},
+		ArtifactDir: base,
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsafe writable ancestor") {
+		t.Fatalf("New() writable ancestor error = %v", err)
+	}
+}
+
+func TestManagerExclusivelyRecoversStaleArtifactSessions(t *testing.T) {
+	t.Parallel()
+	base := filepath.Join(t.TempDir(), "exports")
+	if err := os.Mkdir(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(base, artifactSessionPrefix+"stale123")
+	if err := os.Mkdir(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "sensitive.csv"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(filepath.Dir(base), "outside")
+	if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staleLink := filepath.Join(base, artifactSessionPrefix+"link123")
+	if err := os.Symlink(outside, staleLink); err != nil {
+		t.Fatal(err)
+	}
+	unknown := filepath.Join(base, artifactSessionPrefix+"not.stale")
+	if err := os.Mkdir(unknown, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	source := &exportTestSource{datasets: map[string]exportTestDataset{}}
+	first, err := New(Config{Source: source, ArtifactDir: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale session survived recovery: %v", err)
+	}
+	if _, err := os.Lstat(staleLink); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale session symlink survived recovery: %v", err)
+	}
+	if contents, err := os.ReadFile(outside); err != nil || string(contents) != "keep" {
+		t.Fatalf("stale symlink target changed: contents=%q err=%v", contents, err)
+	}
+	if _, err := os.Stat(unknown); err != nil {
+		t.Fatalf("non-session entry was removed: %v", err)
+	}
+
+	second, err := New(Config{Source: source, ArtifactDir: base})
+	if second != nil {
+		_ = second.Close()
+		t.Fatal("second manager acquired the same artifact base")
+	}
+	if err == nil || !strings.Contains(err.Error(), "already in use") {
+		t.Fatalf("second manager lock error = %v", err)
+	}
+	if _, err := os.Stat(first.artifactDir); err != nil {
+		t.Fatalf("failed lock attempt disturbed live session: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	third, err := New(Config{Source: source, ArtifactDir: base})
+	if err != nil {
+		t.Fatalf("reacquire artifact base after Close: %v", err)
+	}
+	if err := third.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1518,7 +1669,7 @@ func TestManagerConcurrentAndRepeatedCloseReturnsStableRemovalError(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
+	if len(entries) != 1 || entries[0].Name() != artifactBaseLockName {
 		t.Fatalf("session directory survived Close: %v", entries)
 	}
 }
@@ -1633,7 +1784,7 @@ func TestManagerConcurrentInspectionAndCancellation(t *testing.T) {
 		go func() {
 			defer group.Done()
 			_, err := manager.Cancel(context.Background(), testAccess, job.ID)
-			if err != nil && !errors.Is(err, ErrNotCancelable) {
+			if err != nil {
 				t.Errorf("Cancel(%s) = %v", job.ID, err)
 			}
 		}()

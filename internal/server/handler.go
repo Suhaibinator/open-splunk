@@ -20,6 +20,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -32,6 +33,7 @@ const (
 	defaultMaximumPageSize            = uint32(1_000)
 	defaultMaximumConcurrentRequests  = 64
 	defaultMaximumConcurrentResponses = 8
+	defaultMaximumConcurrentDownloads = 16
 	defaultRouteTimeout               = 15 * time.Second
 	defaultSearchTimeout              = 2 * time.Minute
 	defaultResultRetention            = 15 * time.Minute
@@ -40,6 +42,7 @@ const (
 	maximumTransportPageSize          = uint32(10_000)
 	maximumConcurrentResponses        = 256
 	maximumConcurrentRequests         = 1_024
+	maximumConcurrentDownloads        = 256
 	maximumIdentityBytes              = 255
 	maximumBootstrapApps              = 256
 )
@@ -106,6 +109,16 @@ type SearchHistory interface {
 	Clear(context.Context, searchhistory.AccessScope, searchhistory.Filter) (uint64, error)
 }
 
+// Exports is the scoped export-job and one-time artifact capability surface.
+// export.Manager satisfies this interface directly.
+type Exports interface {
+	Create(context.Context, searchjobs.AccessScope, exportjobs.CreateRequest) (exportjobs.Job, error)
+	Get(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error)
+	Cancel(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error)
+	CreateDownloadGrant(context.Context, searchjobs.AccessScope, string) (exportjobs.DownloadGrant, error)
+	RedeemDownload(context.Context, string) (exportjobs.ArtifactDownload, error)
+}
+
 // BootstrapConfig contains build information and static workspace summaries.
 // Index summaries are always loaded from IndexCatalog so authorization and the
 // UI bootstrap cannot drift apart.
@@ -137,6 +150,7 @@ type Config struct {
 	IngestionTokens            IngestionTokenAdministration
 	SavedSearches              SavedSearches
 	SearchHistory              SearchHistory
+	Exports                    Exports
 	WebUI                      fs.FS
 	Bootstrap                  BootstrapConfig
 	OwnerID                    string
@@ -145,30 +159,33 @@ type Config struct {
 	MaximumPageSize            uint32
 	MaximumConcurrentRequests  int
 	MaximumConcurrentResponses int
+	MaximumConcurrentDownloads int
 	RouteTimeout               time.Duration
 	Now                        func() time.Time
-	// AdministrativeAllowedHosts is an explicit browser trust boundary for
-	// unauthenticated index and ingestion-token administration. Values are host
-	// names or IP literals without paths. Empty defaults to loopback names only.
+	// AdministrativeAllowedHosts is retained as a compatibility name, but is
+	// the Host/Origin trust boundary for every browser API route. Values are
+	// host names or IP literals without paths. Empty defaults to loopback only.
 	AdministrativeAllowedHosts []string
 }
 
 type apiHandler struct {
-	jobs              SearchJobs
-	indexes           IndexCatalog
-	indexAdmin        IndexAdministration
-	ingestionTokens   IngestionTokenAdministration
-	savedSearches     SavedSearches
-	searchHistory     SearchHistory
-	ownerID           string
-	tenantID          string
-	maximumPageSize   uint32
-	bootstrap         BootstrapConfig
-	now               func() time.Time
-	requestGate       chan struct{}
-	serializationGate chan struct{}
-	adminCursorKey    [32]byte
-	adminAllowedHosts map[string]struct{}
+	jobs                SearchJobs
+	indexes             IndexCatalog
+	indexAdmin          IndexAdministration
+	ingestionTokens     IngestionTokenAdministration
+	savedSearches       SavedSearches
+	searchHistory       SearchHistory
+	exports             Exports
+	ownerID             string
+	tenantID            string
+	maximumPageSize     uint32
+	bootstrap           BootstrapConfig
+	now                 func() time.Time
+	requestGate         chan struct{}
+	serializationGate   chan struct{}
+	downloadGate        chan struct{}
+	adminCursorKey      [32]byte
+	browserAllowedHosts map[string]struct{}
 }
 
 // NewHandler constructs the complete HTTP handler. API paths are dispatched
@@ -199,6 +216,10 @@ func NewHandler(config Config) (http.Handler, error) {
 	searchHistoryService := config.SearchHistory
 	if isNilDependency(searchHistoryService) {
 		searchHistoryService = nil
+	}
+	exportService := config.Exports
+	if isNilDependency(exportService) {
+		exportService = nil
 	}
 	if config.WebUI == nil {
 		return nil, errors.New("create server handler: web UI filesystem is required")
@@ -231,6 +252,13 @@ func NewHandler(config Config) (http.Handler, error) {
 	if concurrentRequests == 0 {
 		concurrentRequests = defaultMaximumConcurrentRequests
 	}
+	concurrentDownloads := config.MaximumConcurrentDownloads
+	if concurrentDownloads < 0 || concurrentDownloads > maximumConcurrentDownloads {
+		return nil, fmt.Errorf("create server handler: maximum concurrent downloads must be between 1 and %d", maximumConcurrentDownloads)
+	}
+	if concurrentDownloads == 0 {
+		concurrentDownloads = defaultMaximumConcurrentDownloads
+	}
 	routeTimeout := config.RouteTimeout
 	if routeTimeout < 0 {
 		return nil, errors.New("create server handler: route timeout cannot be negative")
@@ -257,8 +285,8 @@ func NewHandler(config Config) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	bootstrap.Features = featuresForServices(bootstrap.Features, indexAdmin != nil, ingestionTokens != nil, searchHistoryService != nil)
-	adminAllowedHosts, err := normalizeAdministrativeAllowedHosts(config.AdministrativeAllowedHosts, indexAdmin != nil || ingestionTokens != nil)
+	bootstrap.Features = featuresForServices(bootstrap.Features, indexAdmin != nil, ingestionTokens != nil, searchHistoryService != nil, exportService != nil)
+	browserAllowedHosts, err := normalizeBrowserAllowedHosts(config.AdministrativeAllowedHosts)
 	if err != nil {
 		return nil, fmt.Errorf("create server handler: %w", err)
 	}
@@ -274,36 +302,38 @@ func NewHandler(config Config) (http.Handler, error) {
 	}
 
 	api := &apiHandler{
-		jobs:              config.SearchJobs,
-		indexes:           config.Indexes,
-		indexAdmin:        indexAdmin,
-		ingestionTokens:   ingestionTokens,
-		savedSearches:     config.SavedSearches,
-		searchHistory:     searchHistoryService,
-		ownerID:           ownerID,
-		tenantID:          tenantID,
-		maximumPageSize:   pageSize,
-		bootstrap:         bootstrap,
-		now:               now,
-		requestGate:       make(chan struct{}, concurrentRequests),
-		serializationGate: make(chan struct{}, concurrentResponses),
-		adminCursorKey:    adminCursorKey,
-		adminAllowedHosts: adminAllowedHosts,
+		jobs:                config.SearchJobs,
+		indexes:             config.Indexes,
+		indexAdmin:          indexAdmin,
+		ingestionTokens:     ingestionTokens,
+		savedSearches:       config.SavedSearches,
+		searchHistory:       searchHistoryService,
+		exports:             exportService,
+		ownerID:             ownerID,
+		tenantID:            tenantID,
+		maximumPageSize:     pageSize,
+		bootstrap:           bootstrap,
+		now:                 now,
+		requestGate:         make(chan struct{}, concurrentRequests),
+		serializationGate:   make(chan struct{}, concurrentResponses),
+		downloadGate:        make(chan struct{}, concurrentDownloads),
+		adminCursorKey:      adminCursorKey,
+		browserAllowedHosts: browserAllowedHosts,
 	}
 	apiRouter := api.newRouter(requestBytes, routeTimeout)
-	apiRoutes := map[string]struct{}{
-		"/api/v1/system/bootstrap":         {},
-		"/api/v1/search/jobs/create":       {},
-		"/api/v1/search/jobs/get":          {},
-		"/api/v1/search/jobs/results":      {},
-		"/api/v1/search/jobs/cancel":       {},
-		"/api/v1/saved-searches/create":    {},
-		"/api/v1/saved-searches/get":       {},
-		"/api/v1/saved-searches/list":      {},
-		"/api/v1/saved-searches/update":    {},
-		"/api/v1/saved-searches/duplicate": {},
-		"/api/v1/saved-searches/delete":    {},
-	}
+	apiRoutes := postAPIRoutes(
+		"/api/v1/system/bootstrap",
+		"/api/v1/search/jobs/create",
+		"/api/v1/search/jobs/get",
+		"/api/v1/search/jobs/results",
+		"/api/v1/search/jobs/cancel",
+		"/api/v1/saved-searches/create",
+		"/api/v1/saved-searches/get",
+		"/api/v1/saved-searches/list",
+		"/api/v1/saved-searches/update",
+		"/api/v1/saved-searches/duplicate",
+		"/api/v1/saved-searches/delete",
+	)
 	if api.searchHistory != nil {
 		for _, path := range []string{
 			"/api/v1/search/history/get",
@@ -311,7 +341,7 @@ func NewHandler(config Config) (http.Handler, error) {
 			"/api/v1/search/history/delete",
 			"/api/v1/search/history/clear",
 		} {
-			apiRoutes[path] = struct{}{}
+			apiRoutes[path] = http.MethodPost
 		}
 	}
 	if api.indexAdmin != nil {
@@ -322,7 +352,7 @@ func NewHandler(config Config) (http.Handler, error) {
 			"/api/v1/indexes/update",
 			"/api/v1/indexes/state/set",
 		} {
-			apiRoutes[path] = struct{}{}
+			apiRoutes[path] = http.MethodPost
 		}
 	}
 	if api.ingestionTokens != nil {
@@ -333,10 +363,20 @@ func NewHandler(config Config) (http.Handler, error) {
 			"/api/v1/ingestion-tokens/update",
 			"/api/v1/ingestion-tokens/revoke",
 		} {
-			apiRoutes[path] = struct{}{}
+			apiRoutes[path] = http.MethodPost
 		}
 	}
-	apiBoundary := exactAPIRoutes(api.protectAdministrativeRoutes(apiRouter), apiRoutes)
+	if api.exports != nil {
+		for _, path := range []string{
+			"/api/v1/search/exports/create",
+			"/api/v1/search/exports/get",
+			"/api/v1/search/exports/cancel",
+		} {
+			apiRoutes[path] = http.MethodPost
+		}
+		apiRoutes[exportDownloadPath] = http.MethodGet
+	}
+	apiBoundary := exactAPIRoutes(api.protectBrowserAPIRoutes(apiRouter), apiRoutes)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
@@ -366,14 +406,23 @@ func isNilDependency(value any) bool {
 	}
 }
 
-func exactAPIRoutes(next http.Handler, routes map[string]struct{}) http.Handler {
+func postAPIRoutes(paths ...string) map[string]string {
+	result := make(map[string]string, len(paths))
+	for _, path := range paths {
+		result[path] = http.MethodPost
+	}
+	return result
+}
+
+func exactAPIRoutes(next http.Handler, routes map[string]string) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if _, exists := routes[request.URL.Path]; !exists {
+		method, exists := routes[request.URL.Path]
+		if !exists {
 			writeAPIError(response, http.StatusNotFound, "API route not found")
 			return
 		}
-		if request.Method != http.MethodPost {
-			response.Header().Set("Allow", http.MethodPost)
+		if request.Method != method {
+			response.Header().Set("Allow", method)
 			writeAPIError(response, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
@@ -433,22 +482,34 @@ func normalizeBootstrap(config BootstrapConfig) (BootstrapConfig, error) {
 	return result, nil
 }
 
-func featuresForServices(features []opensplunkv1.ServerFeature, _, _, historyEnabled bool) []opensplunkv1.ServerFeature {
+func featuresForServices(features []opensplunkv1.ServerFeature, _, _, historyEnabled, exportsEnabled bool) []opensplunkv1.ServerFeature {
 	// The current handlers intentionally expose only the clean-install
 	// provisioning subset of these API families. Do not advertise either broad
 	// capability until every route in the corresponding proto family exists.
-	result := make([]opensplunkv1.ServerFeature, 0, len(features)+1)
+	result := make([]opensplunkv1.ServerFeature, 0, len(features)+3)
 	hasHistory := false
+	hasCSVExport := false
+	hasJSONLinesExport := false
 	for _, feature := range features {
 		if feature != opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN &&
 			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN &&
-			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY || historyEnabled) {
+			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY || historyEnabled) &&
+			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV || exportsEnabled) &&
+			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES || exportsEnabled) {
 			result = append(result, feature)
 			hasHistory = hasHistory || feature == opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY
+			hasCSVExport = hasCSVExport || feature == opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV
+			hasJSONLinesExport = hasJSONLinesExport || feature == opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES
 		}
 	}
 	if historyEnabled && !hasHistory {
 		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY)
+	}
+	if exportsEnabled && !hasCSVExport {
+		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV)
+	}
+	if exportsEnabled && !hasJSONLinesExport {
+		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES)
 	}
 	return result
 }
@@ -526,6 +587,46 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	if handler.searchHistory != nil {
 		routes = append(routes, handler.searchHistoryRoutes(noAuth, smallRequestBytes)...)
 	}
+	if handler.exports != nil {
+		routes = append(routes,
+			router.NewGenericRouteDefinition[*opensplunkv1.CreateExportJobRequest, *opensplunkv1.CreateExportJobResponse, string, struct{}](router.RouteConfig[*opensplunkv1.CreateExportJobRequest, *opensplunkv1.CreateExportJobResponse]{
+				Path: "/search/exports/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+				Codec: codec.NewProtoCodec[*opensplunkv1.CreateExportJobRequest, *opensplunkv1.CreateExportJobResponse](), Handler: handler.createExportJob,
+				SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.CreateExportJobRequest],
+			}),
+			router.NewGenericRouteDefinition[*opensplunkv1.GetExportJobRequest, *opensplunkv1.GetExportJobResponse, string, struct{}](router.RouteConfig[*opensplunkv1.GetExportJobRequest, *opensplunkv1.GetExportJobResponse]{
+				Path: "/search/exports/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+				Codec: codec.NewProtoCodec[*opensplunkv1.GetExportJobRequest, *opensplunkv1.GetExportJobResponse](), Handler: handler.getExportJob,
+				SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.GetExportJobRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			}),
+			router.NewGenericRouteDefinition[*opensplunkv1.CancelExportJobRequest, *opensplunkv1.CancelExportJobResponse, string, struct{}](router.RouteConfig[*opensplunkv1.CancelExportJobRequest, *opensplunkv1.CancelExportJobResponse]{
+				Path: "/search/exports/cancel", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+				Codec: codec.NewProtoCodec[*opensplunkv1.CancelExportJobRequest, *opensplunkv1.CancelExportJobResponse](), Handler: handler.cancelExportJob,
+				SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.CancelExportJobRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			}),
+		)
+	}
+
+	subRouters := []router.SubRouterConfig{{
+		PathPrefix:  "/api/v1",
+		AuthLevel:   &noAuth,
+		Middlewares: []sroutercommon.Middleware{disableAPICaching, protobufMiddleware, requestMiddleware, deadlineMiddleware},
+		Routes:      routes,
+	}}
+	if handler.exports != nil {
+		subRouters = append(subRouters, router.SubRouterConfig{
+			PathPrefix:  "/api/v1",
+			AuthLevel:   &noAuth,
+			Middlewares: []sroutercommon.Middleware{disableAPICaching, handler.boundDownloads},
+			Routes: []router.RouteDefinition{router.RouteConfigBase{
+				Path:           "/search/exports/download",
+				Methods:        []router.HttpMethod{router.MethodGet},
+				AuthLevel:      &noAuth,
+				DisableTimeout: true,
+				Handler:        handler.downloadExport,
+			}},
+		})
+	}
 
 	return router.NewRouter[string, struct{}](router.RouterConfig{
 		ServiceName: "open-splunk-server",
@@ -534,12 +635,7 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 		// context deadline so http.Server.Shutdown owns every handler lifetime.
 		GlobalTimeout:     0,
 		GlobalMaxBodySize: maximumRequestBytes,
-		SubRouters: []router.SubRouterConfig{{
-			PathPrefix:  "/api/v1",
-			AuthLevel:   &noAuth,
-			Middlewares: []sroutercommon.Middleware{disableAPICaching, protobufMiddleware, requestMiddleware, deadlineMiddleware},
-			Routes:      routes,
-		}},
+		SubRouters:        subRouters,
 	}, nil, nil)
 }
 
@@ -574,6 +670,18 @@ func (handler *apiHandler) boundRequests(next http.Handler) http.Handler {
 			next.ServeHTTP(response, request)
 		default:
 			writeBusyResponse(response, "API request capacity is exhausted")
+		}
+	})
+}
+
+func (handler *apiHandler) boundDownloads(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		select {
+		case handler.downloadGate <- struct{}{}:
+			defer func() { <-handler.downloadGate }()
+			next.ServeHTTP(response, request)
+		default:
+			writeBusyResponse(response, "download request capacity is exhausted")
 		}
 	})
 }

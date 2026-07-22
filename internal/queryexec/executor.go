@@ -65,18 +65,22 @@ type Config struct {
 	MaxResultBytes   uint64
 	// MaxRowsToGroupBy bounds distinct groups before result limits apply. When
 	// zero, ordinary queries follow MaxResultRows (including a caller-supplied
-	// value); bounded timecharts may receive a larger per-query default. A
-	// nonzero value is an authoritative cap for every query.
+	// value); bounded timecharts may receive a larger per-query default.
 	MaxRowsToGroupBy uint64
-	MaxThreads       uint64
+	// ExpandTimechartGroupLimit permits only validated timechart queries to
+	// raise MaxRowsToGroupBy to BucketCount*(MaxSeries+1), which is bounded at
+	// 130,000. It leaves the ordinary GROUP BY cap unchanged. The expansion is
+	// enabled automatically when MaxRowsToGroupBy is left at zero.
+	ExpandTimechartGroupLimit bool
+	MaxThreads                uint64
 }
 
 // Executor is a native ClickHouse implementation of searchjobs.Executor.
 type Executor struct {
-	connection                       queryConnection
-	settings                         clickhousedriver.Settings
-	expandDefaultTimechartGroupLimit bool
-	newQueryID                       func() (string, error)
+	connection                queryConnection
+	settings                  clickhousedriver.Settings
+	expandTimechartGroupLimit bool
+	newQueryID                func() (string, error)
 }
 
 type queryConnection interface {
@@ -91,16 +95,16 @@ func New(connection driver.Conn, config Config) (*Executor, error) {
 	if connection == nil {
 		return nil, errors.New("create ClickHouse query executor: connection is required")
 	}
-	expandDefaultTimechartGroupLimit := config.MaxRowsToGroupBy == 0
+	expandTimechartGroupLimit := config.MaxRowsToGroupBy == 0 || config.ExpandTimechartGroupLimit
 	settings, err := querySettings(config)
 	if err != nil {
 		return nil, err
 	}
 	return &Executor{
-		connection:                       connection,
-		settings:                         settings,
-		expandDefaultTimechartGroupLimit: expandDefaultTimechartGroupLimit,
-		newQueryID:                       randomQueryID,
+		connection:                connection,
+		settings:                  settings,
+		expandTimechartGroupLimit: expandTimechartGroupLimit,
+		newQueryID:                randomQueryID,
 	}, nil
 }
 
@@ -266,14 +270,14 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 }
 
 func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {
-	if query.Timechart == nil || !executor.expandDefaultTimechartGroupLimit {
+	if query.Timechart == nil || !executor.expandTimechartGroupLimit {
 		return executor.settings
 	}
 	// The first timechart aggregation has one state per non-empty
 	// (bucket, series) pair. Reserve room for every public series plus one
 	// canonical invalid-value state per bucket. This remains bounded at 130k
-	// groups for the validated 10k-bucket/12-series contract. An explicitly
-	// configured MaxRowsToGroupBy remains an authoritative operator limit.
+	// groups for the validated 10k-bucket/12-series contract. The base setting
+	// continues to govern every non-timechart query.
 	required := query.Timechart.BucketCount * (uint64(query.Timechart.MaxSeries) + 1)
 	current, ok := executor.settings["max_rows_to_group_by"].(uint64)
 	if !ok || current >= required {

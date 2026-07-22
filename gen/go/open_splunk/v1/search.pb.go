@@ -936,8 +936,11 @@ type SearchJob struct {
 	FinishedAt          *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
 	ExpiresAt           *timestamppb.Timestamp `protobuf:"bytes,20,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	Plan                *SearchPlanSummary     `protobuf:"bytes,21,opt,name=plan,proto3,oneof" json:"plan,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// True means the retained page snapshot stopped at the server row boundary.
+	// The full SPL result may still be exported through bounded re-execution.
+	ResultsTruncated bool `protobuf:"varint,22,opt,name=results_truncated,json=resultsTruncated,proto3" json:"results_truncated,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *SearchJob) Reset() {
@@ -1117,6 +1120,13 @@ func (x *SearchJob) GetPlan() *SearchPlanSummary {
 	return nil
 }
 
+func (x *SearchJob) GetResultsTruncated() bool {
+	if x != nil {
+		return x.ResultsTruncated
+	}
+	return false
+}
+
 var File_open_splunk_v1_search_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_search_proto_rawDesc = "" +
@@ -1183,7 +1193,7 @@ const file_open_splunk_v1_search_proto_rawDesc = "" +
 	"\x16enable_field_discovery\x18\x02 \x01(\bR\x14enableFieldDiscovery\x12'\n" +
 	"\x0fenable_timeline\x18\x03 \x01(\bR\x0eenableTimeline\x12/\n" +
 	"\x11preview_row_limit\x18\x04 \x01(\rH\x00R\x0fpreviewRowLimit\x88\x01\x01B\x14\n" +
-	"\x12_preview_row_limit\"\xa4\n" +
+	"\x12_preview_row_limit\"\xd1\n" +
 	"\n" +
 	"\tSearchJob\x12\"\n" +
 	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\x12#\n" +
@@ -1214,7 +1224,8 @@ const file_open_splunk_v1_search_proto_rawDesc = "" +
 	"finishedAt\x129\n" +
 	"\n" +
 	"expires_at\x18\x14 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12:\n" +
-	"\x04plan\x18\x15 \x01(\v2!.open_splunk.v1.SearchPlanSummaryH\x04R\x04plan\x88\x01\x01B\x11\n" +
+	"\x04plan\x18\x15 \x01(\v2!.open_splunk.v1.SearchPlanSummaryH\x04R\x04plan\x88\x01\x01\x12+\n" +
+	"\x11results_truncated\x18\x16 \x01(\bR\x10resultsTruncatedB\x11\n" +
 	"\x0f_normalized_splB\x16\n" +
 	"\x14_resolved_time_rangeB\x10\n" +
 	"\x0e_result_schemaB\n" +

@@ -685,14 +685,14 @@ func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	}
 }
 
-func TestExecutorExpandsOnlyDefaultTimechartGroupBudget(t *testing.T) {
+func TestExecutorExpandsOnlyOptedInTimechartGroupBudget(t *testing.T) {
 	t.Parallel()
 
 	settings, err := querySettings(Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	executor := &Executor{settings: settings, expandDefaultTimechartGroupLimit: true}
+	executor := &Executor{settings: settings, expandTimechartGroupLimit: true}
 	dense := timechartQuery(time.Unix(0, 0).UTC(), 5_001)
 	dense.Timechart.MaxSeries = 2
 	denseSettings := executor.settingsFor(dense)
@@ -717,6 +717,13 @@ func TestExecutorExpandsOnlyDefaultTimechartGroupBudget(t *testing.T) {
 	custom := &Executor{settings: customSettings}
 	if got := custom.settingsFor(dense)["max_rows_to_group_by"]; got != uint64(7) {
 		t.Fatalf("explicit group cap = %v, want 7", got)
+	}
+	customExpanded := &Executor{settings: customSettings, expandTimechartGroupLimit: true}
+	if got, want := customExpanded.settingsFor(dense)["max_rows_to_group_by"], uint64(15_003); got != want {
+		t.Fatalf("opted-in timechart group cap = %v, want %d", got, want)
+	}
+	if got := customExpanded.settingsFor(clickhouse.CompiledQuery{SQL: "SELECT ordinary"})["max_rows_to_group_by"]; got != uint64(7) {
+		t.Fatalf("opted-in ordinary group cap = %v, want 7", got)
 	}
 }
 
@@ -765,10 +772,10 @@ func mustExecutor(t *testing.T, connection queryConnection) *Executor {
 		t.Fatal(err)
 	}
 	return &Executor{
-		connection:                       connection,
-		settings:                         settings,
-		expandDefaultTimechartGroupLimit: true,
-		newQueryID:                       func() (string, error) { return "open-splunk-search-test", nil },
+		connection:                connection,
+		settings:                  settings,
+		expandTimechartGroupLimit: true,
+		newQueryID:                func() (string, error) { return "open-splunk-search-test", nil },
 	}
 }
 

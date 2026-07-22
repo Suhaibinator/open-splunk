@@ -449,7 +449,14 @@ export interface SearchJob {
   startedAt: Date | undefined;
   finishedAt: Date | undefined;
   expiresAt: Date | undefined;
-  plan?: SearchPlanSummary | undefined;
+  plan?:
+    | SearchPlanSummary
+    | undefined;
+  /**
+   * True means the retained page snapshot stopped at the server row boundary.
+   * The full SPL result may still be exported through bounded re-execution.
+   */
+  resultsTruncated: boolean;
 }
 
 function createBaseSearchDefinition(): SearchDefinition {
@@ -1578,6 +1585,7 @@ function createBaseSearchJob(): SearchJob {
     finishedAt: undefined,
     expiresAt: undefined,
     plan: undefined,
+    resultsTruncated: false,
   };
 }
 
@@ -1648,6 +1656,9 @@ export const SearchJob: MessageFns<SearchJob> = {
     }
     if (message.plan !== undefined) {
       SearchPlanSummary.encode(message.plan, writer.uint32(170).fork()).join();
+    }
+    if (message.resultsTruncated !== false) {
+      writer.uint32(176).bool(message.resultsTruncated);
     }
     return writer;
   },
@@ -1827,6 +1838,14 @@ export const SearchJob: MessageFns<SearchJob> = {
           message.plan = SearchPlanSummary.decode(reader, reader.uint32());
           continue;
         }
+        case 22: {
+          if (tag !== 176) {
+            break;
+          }
+
+          message.resultsTruncated = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1915,6 +1934,11 @@ export const SearchJob: MessageFns<SearchJob> = {
         ? fromJsonTimestamp(object.expires_at)
         : undefined,
       plan: isSet(object.plan) ? SearchPlanSummary.fromJSON(object.plan) : undefined,
+      resultsTruncated: isSet(object.resultsTruncated)
+        ? globalThis.Boolean(object.resultsTruncated)
+        : isSet(object.results_truncated)
+        ? globalThis.Boolean(object.results_truncated)
+        : false,
     };
   },
 
@@ -1983,6 +2007,9 @@ export const SearchJob: MessageFns<SearchJob> = {
     if (message.plan !== undefined) {
       obj.plan = SearchPlanSummary.toJSON(message.plan);
     }
+    if (message.resultsTruncated !== false) {
+      obj.resultsTruncated = message.resultsTruncated;
+    }
     return obj;
   },
 
@@ -2028,6 +2055,7 @@ export const SearchJob: MessageFns<SearchJob> = {
     message.plan = (object.plan !== undefined && object.plan !== null)
       ? SearchPlanSummary.fromPartial(object.plan)
       : undefined;
+    message.resultsTruncated = object.resultsTruncated ?? false;
     return message;
   },
 };

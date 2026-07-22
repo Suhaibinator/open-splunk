@@ -464,6 +464,9 @@ func TestAdministrativeRoutesRejectDNSRebindingAndCrossOriginBrowsers(t *testing
 		"dns rebinding host": {"Host": "attacker.example", "Origin": "http://attacker.example"},
 		"foreign origin":     {"Host": "example.com", "Origin": "http://attacker.example"},
 		"cross-site fetch":   {"Host": "example.com", "Origin": "http://example.com", "Sec-Fetch-Site": "cross-site"},
+		"opaque origin":      {"Host": "example.com", "Origin": "null"},
+		"different port":     {"Host": "example.com", "Origin": "http://example.com:8080"},
+		"different scheme":   {"Host": "example.com", "Origin": "https://example.com"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			response := postProtoHeaders(t, handler, "/api/v1/ingestion-tokens/create", requestMessage, headers)
@@ -478,6 +481,21 @@ func TestAdministrativeRoutesRejectDNSRebindingAndCrossOriginBrowsers(t *testing
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("same-origin status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	payload, err := proto.Marshal(requestMessage)
+	if err != nil {
+		t.Fatalf("marshal duplicate-origin request: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/ingestion-tokens/create", bytes.NewReader(payload))
+	request.Host = "example.com"
+	request.Header.Set("Content-Type", "application/x-protobuf")
+	request.Header.Add("Origin", "http://example.com")
+	request.Header.Add("Origin", "http://example.com")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("duplicate-origin status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 
