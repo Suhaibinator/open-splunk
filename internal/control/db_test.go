@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
 
+	"github.com/Suhaibinator/open-splunk/migrations"
 	_ "modernc.org/sqlite"
 )
 
@@ -33,8 +35,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 2 {
-		t.Fatalf("schema migration count = %d, want 2", migrationCount)
+	if migrationCount != 4 {
+		t.Fatalf("schema migration count = %d, want 4", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -82,8 +84,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 2 {
-		t.Fatalf("schema migration count after reopen = %d, want 2", migrationCount)
+	if migrationCount != 4 {
+		t.Fatalf("schema migration count after reopen = %d, want 4", migrationCount)
 	}
 }
 
@@ -173,9 +175,144 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 2 {
-		t.Fatalf("schema migration count = %d, want 2", count)
+	if count != 4 {
+		t.Fatalf("schema migration count = %d, want 4", count)
 	}
+}
+
+func TestVisibilityPhaseMigrationUpgradesDrainedDatabase(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "upgrade.sqlite")+"?_txlock=immediate")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer raw.Close()
+
+	legacy := legacyVisibilityMigrations(t)
+	if err := ApplyMigrations(ctx, raw, legacy); err != nil {
+		t.Fatalf("apply legacy migrations: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		UPDATE ingest_visibility_state
+		SET last_assigned = 2, committed_through = 2
+		WHERE singleton = 1`); err != nil {
+		t.Fatalf("seed drained legacy visibility state: %v", err)
+	}
+	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+		t.Fatalf("upgrade drained database: %v", err)
+	}
+	var lastAssigned, committedThrough, reservationCount int
+	if err := raw.QueryRowContext(ctx, `
+		SELECT last_assigned, committed_through
+		FROM ingest_visibility_state
+		WHERE singleton = 1`).Scan(&lastAssigned, &committedThrough); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.QueryRowContext(ctx, `
+		SELECT count(*) FROM ingest_visibility_reservations`).Scan(&reservationCount); err != nil {
+		t.Fatal(err)
+	}
+	if lastAssigned != 2 || committedThrough != 2 || reservationCount != 0 {
+		t.Fatalf("upgraded state = last %d cutoff %d rows %d", lastAssigned, committedThrough, reservationCount)
+	}
+}
+
+func TestVisibilityPhaseMigrationRejectsLegacyReservedRows(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "undrained.sqlite")+"?_txlock=immediate")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer raw.Close()
+	if err := ApplyMigrations(ctx, raw, legacyVisibilityMigrations(t)); err != nil {
+		t.Fatalf("apply legacy migrations: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		UPDATE ingest_visibility_state SET last_assigned = 1 WHERE singleton = 1;
+		INSERT INTO ingest_visibility_reservations
+			(sequence, batch_key, state, attempt_id, index_time_unix_milli, payload_sha256, metadata)
+		VALUES (1, 'legacy-reserved', 'reserved', 'old-attempt', 1000, zeroblob(32), X'')`); err != nil {
+		t.Fatalf("seed legacy reserved row: %v", err)
+	}
+	err = ApplyMigrations(ctx, raw, migrations.SQLite())
+	if err == nil || !strings.Contains(err.Error(), "legacy_reserved_visibility_rows_must_be_drained") {
+		t.Fatalf("upgrade with reserved row error = %v, want explicit drain failure", err)
+	}
+	var migrationCount int
+	if err := raw.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
+		t.Fatal(err)
+	}
+	if migrationCount != 2 {
+		t.Fatalf("migration count after failed upgrade = %d, want 2", migrationCount)
+	}
+	var storedState string
+	if err := raw.QueryRowContext(ctx, `
+		SELECT state FROM ingest_visibility_reservations WHERE sequence = 1`).Scan(&storedState); err != nil {
+		t.Fatal(err)
+	}
+	if storedState != "reserved" {
+		t.Fatalf("legacy row state after rollback = %q, want reserved", storedState)
+	}
+}
+
+func TestVisibilityPhaseMigrationTombstonesLegacyCommittedRows(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "committed.sqlite")+"?_txlock=immediate")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer raw.Close()
+	if err := ApplyMigrations(ctx, raw, legacyVisibilityMigrations(t)); err != nil {
+		t.Fatalf("apply legacy migrations: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		UPDATE ingest_visibility_state
+		SET last_assigned = 1, committed_through = 1
+		WHERE singleton = 1;
+		INSERT INTO ingest_visibility_reservations
+			(sequence, batch_key, state, attempt_id, index_time_unix_milli, payload_sha256, metadata)
+		VALUES (1, 'legacy-committed', 'committed', '', 1000, zeroblob(32), X'')`); err != nil {
+		t.Fatalf("seed legacy committed row: %v", err)
+	}
+	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+		t.Fatalf("upgrade committed legacy database: %v", err)
+	}
+	var batchKey string
+	var sequence, createdAt int64
+	if err := raw.QueryRowContext(ctx, `
+		SELECT batch_key, legacy_visibility_seq, created_at_unix_micro
+		FROM ingest_visibility_legacy_tombstones`).Scan(&batchKey, &sequence, &createdAt); err != nil {
+		t.Fatal(err)
+	}
+	if batchKey != "legacy-committed" || sequence != 1 || createdAt <= 0 {
+		t.Fatalf("legacy tombstone = batch %q sequence %d created %d", batchKey, sequence, createdAt)
+	}
+	var reservations, identities int
+	if err := raw.QueryRowContext(ctx, `SELECT count(*) FROM ingest_visibility_reservations`).Scan(&reservations); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.QueryRowContext(ctx, `SELECT count(*) FROM ingest_batch_identities`).Scan(&identities); err != nil {
+		t.Fatal(err)
+	}
+	if reservations != 0 || identities != 0 {
+		t.Fatalf("upgraded active ledger = %d reservations, %d identities", reservations, identities)
+	}
+}
+
+func legacyVisibilityMigrations(t *testing.T) fstest.MapFS {
+	t.Helper()
+	legacy := fstest.MapFS{}
+	for _, name := range []string{"0001_control_plane.sql", "0002_ingest_visibility.sql"} {
+		data, err := fs.ReadFile(migrations.SQLite(), name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		legacy[name] = &fstest.MapFile{Data: data}
+	}
+	return legacy
 }
 
 func TestLoadMigrationsRejectsInvalidVersionSequences(t *testing.T) {

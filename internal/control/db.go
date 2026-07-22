@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -39,6 +40,9 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve SQLite path: %w", err)
 	}
+	if err := secureSQLiteFiles(absPath, true); err != nil {
+		return nil, err
+	}
 	dsn := sqliteDSN(absPath)
 	raw, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -63,8 +67,52 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
 		return closeOnError(err)
 	}
+	if err := secureSQLiteFiles(absPath, false); err != nil {
+		return closeOnError(err)
+	}
 
 	return &DB{sql: raw}, nil
+}
+
+// secureSQLiteFiles ensures the control database and every SQLite sidecar are
+// accessible only to their owner. The ingestion visibility outbox can contain
+// normalized log payloads, so relying on the process umask is insufficient.
+func secureSQLiteFiles(path string, create bool) error {
+	if create {
+		for {
+			file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+			if err == nil {
+				if closeErr := file.Close(); closeErr != nil {
+					return fmt.Errorf("secure SQLite control plane: close new database: %w", closeErr)
+				}
+				break
+			}
+			if !errors.Is(err, os.ErrExist) {
+				return fmt.Errorf("secure SQLite control plane: create database: %w", err)
+			}
+			break
+		}
+	}
+
+	for _, candidate := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
+		info, err := os.Lstat(candidate)
+		if errors.Is(err, os.ErrNotExist) && candidate != path {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("secure SQLite control plane file %q: %w", filepath.Base(candidate), err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("secure SQLite control plane file %q: must be a regular file", filepath.Base(candidate))
+		}
+		if err := os.Chmod(candidate, 0o600); err != nil {
+			if candidate != path && errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("secure SQLite control plane file %q: %w", filepath.Base(candidate), err)
+		}
+	}
+	return nil
 }
 
 func enableWAL(ctx context.Context, db *sql.DB) error {

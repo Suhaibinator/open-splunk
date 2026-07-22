@@ -254,6 +254,45 @@ func TestValidateAndNormalizeEventEnforcesTimeAndSizeBounds(t *testing.T) {
 	}
 }
 
+func TestNewValidatorRejectsLimitsAboveHardCeilings(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*Limits)
+	}{
+		{name: "batch events", edit: func(limits *Limits) { limits.MaxBatchEvents = HardMaxBatchEvents + 1 }},
+		{name: "batch bytes", edit: func(limits *Limits) { limits.MaxBatchBytes = HardMaxBatchBytes + 1 }},
+		{name: "event bytes", edit: func(limits *Limits) { limits.MaxEventBytes = HardMaxEventBytes + 1 }},
+		{name: "fields", edit: func(limits *Limits) { limits.MaxFields = HardMaxFields + 1 }},
+		{name: "nesting depth", edit: func(limits *Limits) { limits.MaxNestingDepth = HardMaxNestingDepth + 1 }},
+		{name: "field name bytes", edit: func(limits *Limits) { limits.MaxFieldNameBytes = HardMaxFieldNameBytes + 1 }},
+		{name: "ID bytes", edit: func(limits *Limits) { limits.MaxIDBytes = HardMaxIDBytes + 1 }},
+		{name: "event age", edit: func(limits *Limits) { limits.MaxEventAge = HardMaxEventAge + time.Nanosecond }},
+		{name: "future skew", edit: func(limits *Limits) { limits.MaxFutureSkew = HardMaxFutureSkew + time.Nanosecond }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			limits := DefaultLimits()
+			test.edit(&limits)
+			if _, err := NewValidator(limits, RedactionPolicy{}); err == nil {
+				t.Fatal("NewValidator() error = nil, want hard-limit rejection")
+			}
+		})
+	}
+}
+
+func TestNewServiceRejectsLimitsAboveHardCeiling(t *testing.T) {
+	config := testServiceConfig()
+	config.Limits.MaxBatchEvents = HardMaxBatchEvents + 1
+	if _, err := NewService(config, staticTestAuthorizer(), acceptingStore()); err == nil {
+		t.Fatal("NewService() error = nil, want hard-limit rejection")
+	}
+	config = testServiceConfig()
+	config.MaxInFlightBatches = HardMaxInFlightBatches + 1
+	if _, err := NewService(config, staticTestAuthorizer(), acceptingStore()); err == nil {
+		t.Fatal("NewService() accepted an unsafe in-flight batch limit")
+	}
+}
+
 func TestEventIDDigestUsesLengthPrefixedEventIDs(t *testing.T) {
 	events := []*opensplunkv1.LogEvent{{EventId: "a"}, {EventId: "bc"}}
 	h := sha256.New()

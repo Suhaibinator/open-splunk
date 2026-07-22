@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"sort"
@@ -100,6 +101,9 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 	}
 	if config.DefaultRetryAfter <= 0 {
 		return nil, errors.New("default retry delay must be positive")
+	}
+	if config.MaxInFlightBatches > HardMaxInFlightBatches {
+		return nil, fmt.Errorf("max in-flight batches cannot exceed hard limit %d", HardMaxInFlightBatches)
 	}
 	if !validIdentifier(config.ServerInstanceID, config.Limits.MaxIDBytes) {
 		return nil, errors.New("server instance ID has an invalid format")
@@ -332,21 +336,27 @@ func (s *Service) validateHeartbeat(heartbeat *opensplunkv1.CollectorHeartbeat, 
 }
 
 type streamState struct {
-	collectorID         string
-	instanceID          string
-	protocolMajor       uint32
-	protocolMinor       uint32
-	authorization       Authorization
-	authorizedIndexes   map[string]struct{}
-	hasLastBatch        bool
-	lastBatchSequence   uint64
-	lastBatchIdentity   batchIdentity
-	lastBatchReceivedAt time.Time
+	collectorID       string
+	instanceID        string
+	protocolMajor     uint32
+	protocolMinor     uint32
+	authorization     Authorization
+	authorizedIndexes map[string]struct{}
+
+	hasHighestBatchSequence bool
+	highestBatchSequence    uint64
+	pendingBatches          map[uint64]pendingBatchIdentity
+	pendingSequencesByID    map[string]uint64
 }
 
 type batchIdentity struct {
 	batchID     string
 	contentHash [sha256Size]byte
+}
+
+type pendingBatchIdentity struct {
+	identity   batchIdentity
+	receivedAt time.Time
 }
 
 func bearerToken(ctx context.Context) (string, error) {

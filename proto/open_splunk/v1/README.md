@@ -86,7 +86,7 @@ The native service is `open_splunk.v1.CollectorIngestService/Collect`, a bidirec
 5. `BatchAck` and `BatchReject` are terminal dispositions. An ack may contain permanent per-event rejections; accepted, duplicate, and rejected counts must sum to the original event count. Rejected events go to the collector dead-letter output while the durable batch advances. `RetryBatch` is non-terminal and requires replay of the unchanged batch. `Throttle` applies to future sending without acknowledging anything.
 6. On disconnect, the collector reconnects, sends its last contiguous acknowledged sequence, and replays every unacknowledged batch with the same batch ID, sequence, event IDs, and event-ID digest.
 
-An acknowledgment means the server reached `ACK_DURABILITY_CLICKHOUSE_COMMITTED`. It does not promise global exactly-once delivery. Stable event and batch IDs make at-least-once retries idempotent within the server's documented deduplication window.
+An acknowledgment means the server reached `ACK_DURABILITY_CLICKHOUSE_COMMITTED`. It does not promise global exactly-once delivery. Stable event and batch IDs make retries idempotent for the most recent 10,000 committed server visibility sequences, matching the exclusively managed ClickHouse events table's 10,000-block deduplication window. The server pauses newer sends behind an ambiguous insert until its durable outbox is reconciled, so that insert cannot age out of the window. Replaying a terminal batch older than this explicit horizon is at-least-once and may create duplicates.
 
 ## Search WebSocket
 

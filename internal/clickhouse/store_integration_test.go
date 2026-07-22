@@ -116,8 +116,9 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	)
 	batch := ingest.StoreBatch{
 		TenantID: "tenant", CollectorID: "collector", BatchID: "native-batch", BatchSequence: 1,
-		ReceivedAt: indexTime,
-		Events:     []*ingest.StoredEvent{event},
+		SourceBatchSHA256: testSourceBatchDigest("native-batch"),
+		ReceivedAt:        indexTime,
+		Events:            []*ingest.StoredEvent{event},
 	}
 	for attempt := 1; attempt <= 2; attempt++ {
 		result, storeErr := store.Store(ctx, batch)
@@ -159,8 +160,9 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	late.BatchID = "late-batch"
 	if _, err := store.Store(ctx, ingest.StoreBatch{
 		TenantID: "tenant", CollectorID: "collector", BatchID: "late-batch", BatchSequence: 2,
-		ReceivedAt: indexTime.Add(-time.Hour),
-		Events:     []*ingest.StoredEvent{late},
+		SourceBatchSHA256: testSourceBatchDigest("late-batch"),
+		ReceivedAt:        indexTime.Add(-time.Hour),
+		Events:            []*ingest.StoredEvent{late},
 	}); err != nil {
 		t.Fatalf("store post-snapshot event: %v", err)
 	}
@@ -244,8 +246,9 @@ func testCompiledQueriesAgainstClickHouse(
 	)
 	batch := ingest.StoreBatch{
 		TenantID: "tenant", CollectorID: "collector", BatchID: "compiler-batch", BatchSequence: 3,
-		ReceivedAt: indexTime,
-		Events:     []*ingest.StoredEvent{one, two, null},
+		SourceBatchSHA256: testSourceBatchDigest("compiler-batch"),
+		ReceivedAt:        indexTime,
+		Events:            []*ingest.StoredEvent{one, two, null},
 	}
 	if _, err := store.Store(ctx, batch); err != nil {
 		t.Fatalf("store compiler fixtures: %v", err)
