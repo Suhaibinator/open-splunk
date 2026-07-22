@@ -78,10 +78,11 @@ type RedactionPolicy struct {
 // EventContext contains only server-derived metadata. None of these values are
 // accepted from a dynamic collector field.
 type EventContext struct {
-	ReceivedAt  time.Time
-	TenantID    string
-	CollectorID string
-	BatchID     string
+	ReceivedAt         time.Time
+	TimestampReference time.Time
+	TenantID           string
+	CollectorID        string
+	BatchID            string
 }
 
 // StoredEvent is the normalized event passed across the storage trust

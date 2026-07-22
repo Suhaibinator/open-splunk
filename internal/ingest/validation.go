@@ -93,13 +93,17 @@ func (v *Validator) ValidateAndNormalizeEvent(event *opensplunkv1.LogEvent, ctx 
 			"server receive time is required", "received_at", "required",
 		)
 	}
-	if err := v.validateTimestamp(event.GetEventTime(), ctx.ReceivedAt); err != nil {
+	timestampReference := ctx.TimestampReference
+	if timestampReference.IsZero() {
+		timestampReference = ctx.ReceivedAt
+	}
+	if err := v.validateTimestamp(event.GetEventTime(), timestampReference); err != nil {
 		return nil, eventFailure(
 			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
 			"event_time is outside the accepted bounds", "event_time", err.Error(),
 		)
 	}
-	if err := v.validateTimestamp(event.GetCollectedAt(), ctx.ReceivedAt); err != nil {
+	if err := v.validateTimestamp(event.GetCollectedAt(), timestampReference); err != nil {
 		return nil, eventFailure(
 			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
 			"collected_at is outside the accepted bounds", "collected_at", err.Error(),
@@ -135,7 +139,17 @@ func (v *Validator) ValidateAndNormalizeEvent(event *opensplunkv1.LogEvent, ctx 
 	cloned := proto.Clone(event).(*opensplunkv1.LogEvent)
 	v.redactObject(cloned.GetFields())
 	if cloned.GetRawEncoding() == opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 {
-		cloned.Raw = v.redactJSON(cloned.GetRaw())
+		cloned.Raw = v.redactText(cloned.GetRaw())
+	}
+	if cloned.Message != nil {
+		redactedMessage := string(v.redactText([]byte(cloned.GetMessage())))
+		cloned.Message = &redactedMessage
+	}
+	if uint64(proto.Size(cloned)) > v.limits.MaxEventBytes {
+		return nil, eventFailure(
+			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
+			"event exceeds the maximum encoded size after mandatory redaction", "event", "event_too_large_after_redaction",
+		)
 	}
 	return &StoredEvent{
 		Event:       cloned,

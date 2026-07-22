@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -183,6 +184,41 @@ func TestCollectEnforcesTokenAndPayloadCollectorIdentity(t *testing.T) {
 	})
 }
 
+func TestCollectReauthorizesEveryBatch(t *testing.T) {
+	authorizerCalls := 0
+	authorizer := AuthorizerFunc(func(context.Context, string) (Authorization, error) {
+		authorizerCalls++
+		if authorizerCalls > 1 {
+			return Authorization{}, errors.New("token revoked")
+		}
+		return Authorization{
+			SubjectID:         "token-1",
+			TenantID:          "tenant-a",
+			AuthorizedIndexes: []string{"main"},
+		}, nil
+	})
+	storeCalls := 0
+	store := EventStoreFunc(func(context.Context, StoreBatch) (StoreResult, error) {
+		storeCalls++
+		return StoreResult{Accepted: 1}, nil
+	})
+	harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
+	stream := harness.stream(t, "Bearer token-that-will-be-revoked")
+	sendHello(t, stream, 1, 1, 0)
+	_ = recvResponse(t, stream)
+	batch := validTestBatch("collector-a", "batch-after-revocation", 1, validTestEvent("event-a", "main"))
+	if err := stream.Send(batchRequest(2, batch)); err != nil {
+		t.Fatal(err)
+	}
+	response, err := stream.Recv()
+	if response != nil || status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("Recv() = (%#v, %v), want nil/Unauthenticated", response, err)
+	}
+	if authorizerCalls != 2 || storeCalls != 0 {
+		t.Fatalf("authorizer calls = %d, store calls = %d", authorizerCalls, storeCalls)
+	}
+}
+
 func TestCollectPartiallyRejectsEventsAndStoresOnlyNormalizedAuthorizedEvents(t *testing.T) {
 	var stored StoreBatch
 	store := EventStoreFunc(func(_ context.Context, batch StoreBatch) (StoreResult, error) {
@@ -274,6 +310,85 @@ func TestCollectRetriesTransientStoreFailureThenAcknowledgesDuplicateOutcome(t *
 	}
 }
 
+func TestCollectRetryMustPreserveExactDurableBatch(t *testing.T) {
+	storeCalls := 0
+	store := EventStoreFunc(func(context.Context, StoreBatch) (StoreResult, error) {
+		storeCalls++
+		return StoreResult{}, &TransientStoreError{Err: errors.New("retry")}
+	})
+	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), store)
+	stream := harness.stream(t, "Bearer good-token")
+	sendHello(t, stream, 1, 1, 0)
+	_ = recvResponse(t, stream)
+
+	batch := validTestBatch("collector-a", "batch-retry", 1, validTestEvent("event-a", "main"))
+	if err := stream.Send(batchRequest(2, batch)); err != nil {
+		t.Fatal(err)
+	}
+	if retry := recvResponse(t, stream).GetRetryBatch(); retry == nil {
+		t.Fatal("first response is not RetryBatch")
+	}
+
+	// The event-ID digest and encoded size deliberately remain unchanged. The
+	// server must still detect that the durable batch body changed.
+	batch.Events[0].Raw = bytes.Replace(batch.Events[0].Raw, []byte("200"), []byte("201"), 1)
+	if got, want := UncompressedEventBytes(batch.Events), batch.UncompressedSizeBytes; got != want {
+		t.Fatalf("test mutation changed encoded size: got %d, want %d", got, want)
+	}
+	if err := stream.Send(batchRequest(3, batch)); err != nil {
+		t.Fatal(err)
+	}
+	response := recvResponse(t, stream)
+	if response.GetBatchReject().GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT {
+		t.Fatalf("response = %#v", response)
+	}
+	if storeCalls != 1 {
+		t.Fatalf("store calls = %d, want 1", storeCalls)
+	}
+}
+
+func TestCollectRetryReusesFirstServerReceiveTime(t *testing.T) {
+	var mu sync.Mutex
+	clockCalls := 0
+	cfg := testServiceConfig()
+	cfg.Clock = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		clockCalls++
+		return validationTestNow.Add(time.Duration(clockCalls) * time.Second)
+	}
+	var received []time.Time
+	var indexTimes []time.Time
+	store := EventStoreFunc(func(_ context.Context, batch StoreBatch) (StoreResult, error) {
+		received = append(received, batch.ReceivedAt)
+		indexTimes = append(indexTimes, batch.Events[0].IndexTime)
+		if len(received) == 1 {
+			return StoreResult{}, &TransientStoreError{Err: errors.New("retry")}
+		}
+		return StoreResult{Duplicate: 1}, nil
+	})
+	harness := newServiceHarness(t, cfg, staticTestAuthorizer(), store)
+	stream := harness.stream(t, "Bearer good-token")
+	sendHello(t, stream, 1, 1, 0)
+	_ = recvResponse(t, stream)
+	batch := validTestBatch("collector-a", "batch-retry-time", 1, validTestEvent("event-a", "main"))
+	if err := stream.Send(batchRequest(2, batch)); err != nil {
+		t.Fatal(err)
+	}
+	_ = recvResponse(t, stream)
+	if err := stream.Send(batchRequest(3, batch)); err != nil {
+		t.Fatal(err)
+	}
+	_ = recvResponse(t, stream)
+
+	if len(received) != 2 || !received[0].Equal(received[1]) {
+		t.Fatalf("store receive times = %v, want identical", received)
+	}
+	if len(indexTimes) != 2 || !indexTimes[0].Equal(indexTimes[1]) {
+		t.Fatalf("event index times = %v, want identical", indexTimes)
+	}
+}
+
 func TestCollectDoesNotAcknowledgePermanentStoreFailure(t *testing.T) {
 	store := EventStoreFunc(func(context.Context, StoreBatch) (StoreResult, error) {
 		return StoreResult{}, errors.New("corrupt storage contract")
@@ -345,6 +460,99 @@ func TestCollectRejectsInvalidBatchEnvelopesBeforeStorage(t *testing.T) {
 	}
 	if storeCalls != 0 {
 		t.Fatalf("store calls = %d, want 0", storeCalls)
+	}
+}
+
+func TestCollectEnforcesBatchEventCountAndEncodedByteLimits(t *testing.T) {
+	t.Run("event count", func(t *testing.T) {
+		cfg := testServiceConfig()
+		cfg.Limits.MaxBatchEvents = 1
+		harness := newServiceHarness(t, cfg, staticTestAuthorizer(), acceptingStore())
+		stream := harness.stream(t, "Bearer good-token")
+		sendHello(t, stream, 1, 1, 0)
+		_ = recvResponse(t, stream)
+		batch := validTestBatch(
+			"collector-a", "batch-count", 1,
+			validTestEvent("event-one", "main"),
+			validTestEvent("event-two", "main"),
+		)
+		if err := stream.Send(batchRequest(2, batch)); err != nil {
+			t.Fatal(err)
+		}
+		if got := recvResponse(t, stream).GetBatchReject().GetCode(); got != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS {
+			t.Fatalf("batch rejection = %v", got)
+		}
+	})
+
+	t.Run("encoded bytes use actual events rather than trusting declared size", func(t *testing.T) {
+		first := validTestEvent("event-one", "main")
+		second := validTestEvent("event-two", "main")
+		oneEventBytes := UncompressedEventBytes([]*opensplunkv1.LogEvent{first})
+		allEventBytes := UncompressedEventBytes([]*opensplunkv1.LogEvent{first, second})
+		cfg := testServiceConfig()
+		cfg.Limits.MaxEventBytes = oneEventBytes
+		cfg.Limits.MaxBatchBytes = allEventBytes - 1
+		harness := newServiceHarness(t, cfg, staticTestAuthorizer(), acceptingStore())
+		stream := harness.stream(t, "Bearer good-token")
+		sendHello(t, stream, 1, 1, 0)
+		_ = recvResponse(t, stream)
+		batch := validTestBatch("collector-a", "batch-bytes", 1, first, second)
+		if err := stream.Send(batchRequest(2, batch)); err != nil {
+			t.Fatal(err)
+		}
+		if got := recvResponse(t, stream).GetBatchReject().GetCode(); got != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE {
+			t.Fatalf("batch rejection = %v", got)
+		}
+	})
+}
+
+func TestCollectPartiallyRejectsOversizedEvent(t *testing.T) {
+	small := validTestEvent("event-small", "main")
+	large := validTestEvent("event-large", "main")
+	smallBytes := UncompressedEventBytes([]*opensplunkv1.LogEvent{small})
+	large.Raw = append(large.Raw, bytes.Repeat([]byte("x"), 128)...)
+	cfg := testServiceConfig()
+	cfg.Limits.MaxEventBytes = smallBytes + 16
+	var stored StoreBatch
+	store := EventStoreFunc(func(_ context.Context, batch StoreBatch) (StoreResult, error) {
+		stored = batch
+		return StoreResult{Accepted: uint32(len(batch.Events))}, nil
+	})
+	harness := newServiceHarness(t, cfg, staticTestAuthorizer(), store)
+	stream := harness.stream(t, "Bearer good-token")
+	sendHello(t, stream, 1, 1, 0)
+	_ = recvResponse(t, stream)
+	batch := validTestBatch("collector-a", "batch-event-size", 1, small, large)
+	if err := stream.Send(batchRequest(2, batch)); err != nil {
+		t.Fatal(err)
+	}
+	ack := recvResponse(t, stream).GetBatchAck()
+	if ack == nil || ack.GetAcceptedEventCount() != 1 || len(ack.GetRejectedEvents()) != 1 {
+		t.Fatalf("ack = %#v", ack)
+	}
+	if ack.GetRejectedEvents()[0].GetCode() != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE {
+		t.Fatalf("event rejection = %#v", ack.GetRejectedEvents()[0])
+	}
+	if len(stored.Events) != 1 || stored.Events[0].Event.GetEventId() != "event-small" {
+		t.Fatalf("stored events = %#v", stored.Events)
+	}
+}
+
+func TestCollectRejectsInconsistentStoreAccountingWithoutAck(t *testing.T) {
+	store := EventStoreFunc(func(context.Context, StoreBatch) (StoreResult, error) {
+		return StoreResult{}, nil
+	})
+	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), store)
+	stream := harness.stream(t, "Bearer good-token")
+	sendHello(t, stream, 1, 1, 0)
+	_ = recvResponse(t, stream)
+	batch := validTestBatch("collector-a", "batch-accounting", 1, validTestEvent("event-a", "main"))
+	if err := stream.Send(batchRequest(2, batch)); err != nil {
+		t.Fatal(err)
+	}
+	response, err := stream.Recv()
+	if response != nil || status.Code(err) != codes.Internal {
+		t.Fatalf("Recv() = (%#v, %v), want nil/Internal", response, err)
 	}
 }
 

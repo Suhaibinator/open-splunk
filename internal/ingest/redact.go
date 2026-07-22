@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -29,6 +30,9 @@ var mandatorySensitiveFields = []string{
 	"private_key",
 }
 
+var rawKeyValueSecretPattern = regexp.MustCompile(`(?i)(^|[^a-z0-9_])((?:authorization|proxy[-_. ]authorization|password|passwd|secret|access[-_. ]token|refresh[-_. ]token|session[-_. ]token|auth[-_. ]token|token|api[-_. ]key|client[-_. ]secret))([[:space:]]*[:=][[:space:]]*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^[:space:],;}\]"']+)`)
+var rawAuthorizationSecretPattern = regexp.MustCompile(`(?i)(^|[^a-z0-9_])((?:authorization|proxy[-_. ]authorization))([[:space:]]*[:=][[:space:]]*)(?:(?:bearer|basic)[[:space:]]+)?(?:"[^"\r\n]*"|'[^'\r\n]*'|[^[:space:],;}\]"']+)`)
+
 func sensitiveFieldSet(additional []string) map[string]struct{} {
 	result := make(map[string]struct{}, len(mandatorySensitiveFields)+len(additional))
 	for _, name := range mandatorySensitiveFields {
@@ -45,16 +49,22 @@ func sensitiveFieldSet(additional []string) map[string]struct{} {
 func normalizeSensitiveName(name string) string {
 	var builder strings.Builder
 	lastSeparator := false
-	for _, r := range strings.TrimSpace(strings.ToLower(name)) {
+	previousWasLowerOrDigit := false
+	for _, r := range strings.TrimSpace(name) {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			builder.WriteRune(r)
+			if unicode.IsUpper(r) && previousWasLowerOrDigit && !lastSeparator {
+				builder.WriteByte('_')
+			}
+			builder.WriteRune(unicode.ToLower(r))
 			lastSeparator = false
+			previousWasLowerOrDigit = unicode.IsLower(r) || unicode.IsDigit(r)
 			continue
 		}
 		if !lastSeparator && builder.Len() > 0 {
 			builder.WriteByte('_')
 			lastSeparator = true
 		}
+		previousWasLowerOrDigit = false
 	}
 	return strings.TrimSuffix(builder.String(), "_")
 }
@@ -64,9 +74,13 @@ func (v *Validator) isSensitive(name string) bool {
 	if _, ok := v.sensitive[normalized]; ok {
 		return true
 	}
-	return strings.HasSuffix(normalized, "_password") ||
-		strings.HasSuffix(normalized, "_secret") ||
-		strings.HasSuffix(normalized, "_token")
+	for _, component := range strings.Split(normalized, "_") {
+		switch component {
+		case "authorization", "cookie", "password", "passwd", "secret", "token":
+			return true
+		}
+	}
+	return false
 }
 
 func (v *Validator) redactObject(object *opensplunkv1.TypedObject) {
@@ -92,6 +106,8 @@ func (v *Validator) redactValue(value *opensplunkv1.TypedValue) {
 		return
 	}
 	switch kind := value.GetKind().(type) {
+	case *opensplunkv1.TypedValue_StringValue:
+		kind.StringValue = string(v.redactKeyValueText([]byte(kind.StringValue)))
 	case *opensplunkv1.TypedValue_ObjectValue:
 		v.redactObject(kind.ObjectValue)
 	case *opensplunkv1.TypedValue_ListValue:
@@ -129,6 +145,39 @@ func (v *Validator) redactJSON(raw []byte) []byte {
 	return encoded
 }
 
+func (v *Validator) redactText(raw []byte) []byte {
+	redactedJSON := v.redactJSON(raw)
+	if !bytes.Equal(redactedJSON, raw) {
+		return redactedJSON
+	}
+	return v.redactKeyValueText(raw)
+}
+
+func (v *Validator) redactKeyValueText(raw []byte) []byte {
+	raw = v.replaceSensitiveMatches(rawAuthorizationSecretPattern, raw)
+	return v.replaceSensitiveMatches(rawKeyValueSecretPattern, raw)
+}
+
+func (v *Validator) replaceSensitiveMatches(pattern *regexp.Regexp, raw []byte) []byte {
+	return pattern.ReplaceAllFunc(raw, func(match []byte) []byte {
+		indexes := pattern.FindSubmatchIndex(match)
+		if len(indexes) < 8 {
+			return match
+		}
+		result := make([]byte, 0, len(match)+len(v.replacement))
+		for group := 1; group <= 3; group++ {
+			start, end := indexes[group*2], indexes[group*2+1]
+			if start >= 0 {
+				result = append(result, match[start:end]...)
+			}
+		}
+		result = append(result, '"')
+		result = append(result, v.replacement...)
+		result = append(result, '"')
+		return result
+	})
+}
+
 func (v *Validator) redactJSONValue(value any) (any, bool) {
 	switch typed := value.(type) {
 	case map[string]any:
@@ -156,6 +205,9 @@ func (v *Validator) redactJSONValue(value any) (any, bool) {
 			}
 		}
 		return typed, changed
+	case string:
+		redacted := v.redactKeyValueText([]byte(typed))
+		return string(redacted), !bytes.Equal(redacted, []byte(typed))
 	default:
 		return value, false
 	}

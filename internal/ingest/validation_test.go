@@ -126,10 +126,12 @@ func TestTypedObjectValidation(t *testing.T) {
 func TestValidateAndNormalizeEventRedactsRecursivelyAndSanitizesRawJSON(t *testing.T) {
 	v := newTestValidator(t, DefaultLimits())
 	event := validTestEvent("event-redact", "main")
-	event.Raw = []byte(`{"message":"safe","authorization":"Bearer raw-secret","nested":{"password":"raw-password"},"items":[{"api_key":"raw-key"}]}`)
+	event.Raw = []byte(`{"message":"safe","authorization":"Bearer raw-secret","nested":{"password":"raw-password"},"items":[{"api_key":"raw-key"}],"note":"token=raw-embedded"}`)
 	event.Fields = object(
 		stringField("authorization", "Bearer typed-secret"),
-		objectField("nested", object(stringField("password", "typed-password"))),
+		objectField("nested", object(stringField("passwordHash", "typed-password"))),
+		stringField("note", "token=typed-embedded"),
+		stringField("http.request.header.Authorization", "Bearer typed-header"),
 		&opensplunkv1.TypedObjectField{
 			Name: "items",
 			Value: &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_ListValue{ListValue: &opensplunkv1.TypedValueList{Values: []*opensplunkv1.TypedValue{
@@ -149,7 +151,8 @@ func TestValidateAndNormalizeEventRedactsRecursivelyAndSanitizesRawJSON(t *testi
 	}
 	for _, secret := range [][]byte{
 		[]byte("raw-secret"), []byte("raw-password"), []byte("raw-key"),
-		[]byte("typed-secret"), []byte("typed-password"), []byte("typed-session"),
+		[]byte("raw-embedded"), []byte("typed-secret"), []byte("typed-password"),
+		[]byte("typed-embedded"), []byte("typed-header"), []byte("typed-session"),
 	} {
 		if bytes.Contains(encoded, secret) {
 			t.Fatalf("normalized event still contains secret %q", secret)
@@ -166,6 +169,38 @@ func TestValidateAndNormalizeEventRedactsRecursivelyAndSanitizesRawJSON(t *testi
 	}
 }
 
+func TestValidateAndNormalizeEventSanitizesNonJSONRawKeyValues(t *testing.T) {
+	v := newTestValidator(t, DefaultLimits())
+	event := validTestEvent("event-text", "main")
+	event.Raw = []byte(`request failed authorization=Bearer bearer-secret password="plain-secret" safe=value`)
+
+	got, rejection := v.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
+	if rejection != nil {
+		t.Fatalf("ValidateAndNormalizeEvent() rejection = %v", rejection)
+	}
+	if bytes.Contains(got.Event.Raw, []byte("bearer-secret")) || bytes.Contains(got.Event.Raw, []byte("plain-secret")) {
+		t.Fatalf("sanitized raw still contains a secret: %s", got.Event.Raw)
+	}
+	if !bytes.Contains(got.Event.Raw, []byte(`authorization="[REDACTED]"`)) ||
+		!bytes.Contains(got.Event.Raw, []byte(`password="[REDACTED]"`)) {
+		t.Fatalf("sanitized raw = %s", got.Event.Raw)
+	}
+}
+
+func TestValidateAndNormalizeEventRechecksSizeAfterRedaction(t *testing.T) {
+	event := validTestEvent("event-expansion", "main")
+	event.Fields = object(stringField("token", "x"))
+	limits := DefaultLimits()
+	limits.MaxEventBytes = uint64(proto.Size(event) + 32)
+	v, err := NewValidator(limits, RedactionPolicy{Replacement: string(bytes.Repeat([]byte("r"), 256))})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, rejection := v.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
+	assertEventRejectionCode(t, rejection, opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE)
+}
+
 func TestValidateAndNormalizeEventEnforcesTimeAndSizeBounds(t *testing.T) {
 	limits := DefaultLimits()
 	limits.MaxEventAge = 24 * time.Hour
@@ -179,6 +214,11 @@ func TestValidateAndNormalizeEventEnforcesTimeAndSizeBounds(t *testing.T) {
 		code opensplunkv1.EventRejectionCode
 	}{
 		{
+			name: "invalid event ID",
+			edit: func(e *opensplunkv1.LogEvent) { e.EventId = "event id with spaces" },
+			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID,
+		},
+		{
 			name: "event timestamp too old",
 			edit: func(e *opensplunkv1.LogEvent) { e.EventTime = timestamppb.New(validationTestNow.Add(-25 * time.Hour)) },
 			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
@@ -187,6 +227,13 @@ func TestValidateAndNormalizeEventEnforcesTimeAndSizeBounds(t *testing.T) {
 			name: "collection timestamp in future",
 			edit: func(e *opensplunkv1.LogEvent) {
 				e.CollectedAt = timestamppb.New(validationTestNow.Add(2 * time.Minute))
+			},
+			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
+		},
+		{
+			name: "invalid protobuf timestamp",
+			edit: func(e *opensplunkv1.LogEvent) {
+				e.EventTime = &timestamppb.Timestamp{Seconds: math.MaxInt64}
 			},
 			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
 		},

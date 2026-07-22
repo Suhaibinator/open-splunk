@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"time"
@@ -9,6 +10,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -18,16 +20,21 @@ func (s *Service) processBatch(ctx context.Context, batch *opensplunkv1.EventBat
 		return responseWithBatchReject(rejection), nil
 	}
 
-	identity := batchIdentity{
-		batchID: batch.GetBatchId(),
-		digest:  string(batch.GetEventIdsSha256()),
-		size:    batch.GetUncompressedSizeBytes(),
+	identity, err := batchFingerprint(batch)
+	if err != nil {
+		return responseWithBatchReject(batchRejection(
+			batch,
+			opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_PROTOCOL_VIOLATION,
+			"batch cannot be deterministically decoded",
+			"batch",
+			"invalid_protobuf",
+		)), nil
 	}
-	if rejection := recordBatchIdentity(state, batch.GetBatchSequence(), identity); rejection != nil {
+	receivedAt, rejection := recordBatchIdentity(state, batch.GetBatchSequence(), identity, s.config.Clock().UTC())
+	if rejection != nil {
 		return responseWithBatchReject(rejection), nil
 	}
 
-	receivedAt := s.config.Clock().UTC()
 	normalized := make([]*StoredEvent, 0, len(batch.GetEvents()))
 	rejections := make([]*opensplunkv1.EventRejection, 0)
 	seenEventIDs := make(map[string]struct{}, len(batch.GetEvents()))
@@ -43,10 +50,11 @@ func (s *Service) processBatch(ctx context.Context, batch *opensplunkv1.EventBat
 			seenEventIDs[event.GetEventId()] = struct{}{}
 		}
 		normalizedEvent, eventErr := s.validator.ValidateAndNormalizeEvent(event, EventContext{
-			ReceivedAt:  receivedAt,
-			TenantID:    state.authorization.TenantID,
-			CollectorID: state.collectorID,
-			BatchID:     batch.GetBatchId(),
+			ReceivedAt:         receivedAt,
+			TimestampReference: batch.GetCreatedAt().AsTime(),
+			TenantID:           state.authorization.TenantID,
+			CollectorID:        state.collectorID,
+			BatchID:            batch.GetBatchId(),
 		})
 		if eventErr != nil {
 			eventID := ""
@@ -171,23 +179,37 @@ func (s *Service) validateBatchEnvelope(batch *opensplunkv1.EventBatch, state *s
 	return nil
 }
 
-func recordBatchIdentity(state *streamState, sequence uint64, identity batchIdentity) *opensplunkv1.BatchReject {
-	if previous, exists := state.batchesBySequence[sequence]; exists {
-		if previous != identity {
-			return batchRejectionValues(identity.batchID, sequence, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "batch_sequence was already used for a different durable batch", "batch_sequence", "sequence_conflict")
+func recordBatchIdentity(state *streamState, sequence uint64, identity batchIdentity, receivedAt time.Time) (time.Time, *opensplunkv1.BatchReject) {
+	if state.hasLastBatch {
+		if sequence == state.lastBatchSequence {
+			if state.lastBatchIdentity != identity {
+				return time.Time{}, batchRejectionValues(identity.batchID, sequence, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "retry changed the durable batch payload", "batch_sequence", "sequence_conflict")
+			}
+			return state.lastBatchReceivedAt, nil
 		}
-		return nil
+		if sequence < state.lastBatchSequence {
+			return time.Time{}, batchRejectionValues(identity.batchID, sequence, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "batch_sequence was already used for a different durable batch", "batch_sequence", "sequence_conflict")
+		}
+		if identity.batchID == state.lastBatchIdentity.batchID {
+			return time.Time{}, batchRejectionValues(identity.batchID, sequence, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "batch_id was already used with a different sequence", "batch_id", "sequence_conflict")
+		}
 	}
-	if previousSequence, exists := state.sequenceByBatchID[identity.batchID]; exists && previousSequence != sequence {
-		return batchRejectionValues(identity.batchID, sequence, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "batch_id was already used with a different sequence", "batch_id", "sequence_conflict")
+	state.hasLastBatch = true
+	state.lastBatchSequence = sequence
+	state.lastBatchIdentity = identity
+	state.lastBatchReceivedAt = receivedAt
+	return receivedAt, nil
+}
+
+func batchFingerprint(batch *opensplunkv1.EventBatch) (batchIdentity, error) {
+	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(batch)
+	if err != nil {
+		return batchIdentity{}, err
 	}
-	if state.highestBatchSequence != 0 && sequence <= state.highestBatchSequence {
-		return batchRejectionValues(identity.batchID, sequence, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "batch_sequence must increase for new batches", "batch_sequence", "sequence_conflict")
-	}
-	state.batchesBySequence[sequence] = identity
-	state.sequenceByBatchID[identity.batchID] = sequence
-	state.highestBatchSequence = sequence
-	return nil
+	return batchIdentity{
+		batchID:     batch.GetBatchId(),
+		contentHash: sha256.Sum256(encoded),
+	}, nil
 }
 
 func batchRejection(batch *opensplunkv1.EventBatch, code opensplunkv1.BatchRejectionCode, message, path, violationCode string) *opensplunkv1.BatchReject {

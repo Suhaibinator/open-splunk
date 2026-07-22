@@ -156,8 +156,6 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 		protocolMinor:     hello.GetProtocolMinor(),
 		authorization:     authorization,
 		authorizedIndexes: authorizedSet,
-		batchesBySequence: make(map[uint64]batchIdentity),
-		sequenceByBatchID: make(map[string]uint64),
 	}
 	responseSequence := uint64(1)
 	streamID := s.config.NewStreamID()
@@ -217,6 +215,9 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 			}
 			return nil
 		case *opensplunkv1.CollectRequest_Batch:
+			if err := s.refreshAuthorization(stream.Context(), token, &state); err != nil {
+				return err
+			}
 			response, err := s.processBatch(stream.Context(), payload.Batch, &state)
 			if err != nil {
 				return err
@@ -234,6 +235,33 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 			return status.Error(codes.InvalidArgument, "collector request payload is required")
 		}
 	}
+}
+
+func (s *Service) refreshAuthorization(ctx context.Context, token string, state *streamState) error {
+	authorization, err := s.authorizer.Authorize(ctx, token)
+	if err != nil {
+		return status.Error(codes.Unauthenticated, "collector authentication is no longer valid")
+	}
+	if authorization.CollectorID != "" && authorization.CollectorID != state.collectorID {
+		return status.Error(codes.PermissionDenied, "token is not authorized for this collector_id")
+	}
+	if authorization.CollectorID != state.authorization.CollectorID {
+		return status.Error(codes.PermissionDenied, "collector identity scope changed during the stream")
+	}
+	if authorization.TenantID != state.authorization.TenantID {
+		return status.Error(codes.PermissionDenied, "collector tenant scope changed during the stream")
+	}
+	if authorization.SubjectID != state.authorization.SubjectID {
+		return status.Error(codes.PermissionDenied, "collector principal changed during the stream")
+	}
+	indexes := normalizedAuthorizedIndexes(authorization.AuthorizedIndexes, s.config.Limits.MaxIDBytes)
+	authorizedSet := make(map[string]struct{}, len(indexes))
+	for _, index := range indexes {
+		authorizedSet[index] = struct{}{}
+	}
+	state.authorization = authorization
+	state.authorizedIndexes = authorizedSet
+	return nil
 }
 
 func (s *Service) validateRequestEnvelope(request *opensplunkv1.CollectRequest, expectedSequence uint64) error {
@@ -304,21 +332,21 @@ func (s *Service) validateHeartbeat(heartbeat *opensplunkv1.CollectorHeartbeat, 
 }
 
 type streamState struct {
-	collectorID          string
-	instanceID           string
-	protocolMajor        uint32
-	protocolMinor        uint32
-	authorization        Authorization
-	authorizedIndexes    map[string]struct{}
-	batchesBySequence    map[uint64]batchIdentity
-	sequenceByBatchID    map[string]uint64
-	highestBatchSequence uint64
+	collectorID         string
+	instanceID          string
+	protocolMajor       uint32
+	protocolMinor       uint32
+	authorization       Authorization
+	authorizedIndexes   map[string]struct{}
+	hasLastBatch        bool
+	lastBatchSequence   uint64
+	lastBatchIdentity   batchIdentity
+	lastBatchReceivedAt time.Time
 }
 
 type batchIdentity struct {
-	batchID string
-	digest  string
-	size    uint64
+	batchID     string
+	contentHash [sha256Size]byte
 }
 
 func bearerToken(ctx context.Context) (string, error) {
