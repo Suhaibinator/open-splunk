@@ -390,6 +390,54 @@ func (*StatsCommand) command()             {}
 func (*StatsCommand) Name() string         { return "stats" }
 func (c *StatsCommand) SourceRange() Range { return c.Range }
 
+// TimeSpanUnit identifies the fixed-duration units supported by the initial
+// timechart compatibility slice. Calendar and subsecond spans require separate
+// alignment semantics and are rejected rather than approximated.
+type TimeSpanUnit uint8
+
+const (
+	TimeSpanUnitInvalid TimeSpanUnit = iota
+	TimeSpanUnitSecond
+	TimeSpanUnitMinute
+	TimeSpanUnitHour
+)
+
+// String returns the canonical SPL suffix for unit.
+func (unit TimeSpanUnit) String() string {
+	switch unit {
+	case TimeSpanUnitSecond:
+		return "s"
+	case TimeSpanUnitMinute:
+		return "m"
+	case TimeSpanUnitHour:
+		return "h"
+	default:
+		return ""
+	}
+}
+
+// TimeSpan is one source-located positive fixed-duration span.
+type TimeSpan struct {
+	Magnitude uint64
+	Unit      TimeSpanUnit
+	Range     Range
+}
+
+// TimechartCommand produces a runtime-wide count series over fixed _time
+// buckets. The initial compatibility slice supports one split field and is a
+// terminal transforming command.
+type TimechartCommand struct {
+	Span           TimeSpan
+	Function       AggregateFunction
+	AggregateRange Range
+	SplitBy        StatsGroupField
+	Range          Range
+}
+
+func (*TimechartCommand) command()             {}
+func (*TimechartCommand) Name() string         { return "timechart" }
+func (c *TimechartCommand) SourceRange() Range { return c.Range }
+
 // Diagnostic is a stable, source-located parse or compatibility error.
 type Diagnostic struct {
 	Code        string

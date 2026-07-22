@@ -987,6 +987,58 @@ func TestValueKindWireNumbersMatchProto(t *testing.T) {
 	}
 }
 
+func TestValidateTimechartSchemaEnforcesRuntimeWideContract(t *testing.T) {
+	t.Parallel()
+
+	output := clickhouse.TimechartOutput{MaxSeries: 3, MaxLabelBytes: 256}
+	valid := Schema{Columns: []Column{
+		{Name: "_time", Kind: ValueKindTime},
+		{Name: "api", Kind: ValueKindUnsigned},
+		{Name: "NULL", Kind: ValueKindUnsigned},
+		{Name: "OTHER", Kind: ValueKindUnsigned},
+	}}
+	if err := validateTimechartSchema(valid, []string{"_time"}, output); err != nil {
+		t.Fatalf("valid timechart schema: %v", err)
+	}
+	maximumNormalized := "VALUE_" + strings.Repeat("x", 255)
+	if err := validateTimechartSchema(Schema{Columns: []Column{
+		{Name: "_time", Kind: ValueKindTime},
+		{Name: maximumNormalized, Kind: ValueKindUnsigned},
+	}}, []string{"_time"}, output); err != nil {
+		t.Fatalf("maximum normalized label: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		schema   Schema
+		expected []string
+	}{
+		{name: "missing time", schema: Schema{}, expected: []string{"_time"}},
+		{name: "wrong fixed prefix", schema: valid, expected: []string{"wrong"}},
+		{name: "wrong time name", schema: Schema{Columns: []Column{{Name: "time", Kind: ValueKindTime}}}, expected: []string{"_time"}},
+		{name: "wrong time kind", schema: Schema{Columns: []Column{{Name: "_time", Kind: ValueKindString}}}, expected: []string{"_time"}},
+		{name: "nullable time", schema: Schema{Columns: []Column{{Name: "_time", Kind: ValueKindTime, Nullable: true}}}, expected: []string{"_time"}},
+		{name: "multivalue time", schema: Schema{Columns: []Column{{Name: "_time", Kind: ValueKindTime, Multivalue: true}}}, expected: []string{"_time"}},
+		{name: "too many series", schema: Schema{Columns: []Column{{Name: "_time", Kind: ValueKindTime}, {Name: "a", Kind: ValueKindUnsigned}, {Name: "b", Kind: ValueKindUnsigned}, {Name: "c", Kind: ValueKindUnsigned}, {Name: "d", Kind: ValueKindUnsigned}}}, expected: []string{"_time"}},
+		{name: "duplicate series", schema: Schema{Columns: []Column{{Name: "_time", Kind: ValueKindTime}, {Name: "a", Kind: ValueKindUnsigned}, {Name: "a", Kind: ValueKindUnsigned}}}, expected: []string{"_time"}},
+		{name: "invalid UTF-8", schema: Schema{Columns: []Column{{Name: "_time", Kind: ValueKindTime}, {Name: string([]byte{0xff}), Kind: ValueKindUnsigned}}}, expected: []string{"_time"}},
+		{name: "private-looking name", schema: Schema{Columns: []Column{{Name: "_time", Kind: ValueKindTime}, {Name: "_hidden", Kind: ValueKindUnsigned}}}, expected: []string{"_time"}},
+		{name: "oversized ordinary", schema: Schema{Columns: []Column{{Name: "_time", Kind: ValueKindTime}, {Name: strings.Repeat("x", 257), Kind: ValueKindUnsigned}}}, expected: []string{"_time"}},
+		{name: "oversized normalized", schema: Schema{Columns: []Column{{Name: "_time", Kind: ValueKindTime}, {Name: "VALUE_" + strings.Repeat("x", 256), Kind: ValueKindUnsigned}}}, expected: []string{"_time"}},
+		{name: "wrong series kind", schema: Schema{Columns: []Column{{Name: "_time", Kind: ValueKindTime}, {Name: "a", Kind: ValueKindSigned}}}, expected: []string{"_time"}},
+		{name: "nullable series", schema: Schema{Columns: []Column{{Name: "_time", Kind: ValueKindTime}, {Name: "a", Kind: ValueKindUnsigned, Nullable: true}}}, expected: []string{"_time"}},
+		{name: "multivalue series", schema: Schema{Columns: []Column{{Name: "_time", Kind: ValueKindTime}, {Name: "a", Kind: ValueKindUnsigned, Multivalue: true}}}, expected: []string{"_time"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateTimechartSchema(test.schema, test.expected, output); !errors.Is(err, ErrInvalidResult) {
+				t.Fatalf("validateTimechartSchema() = %v, want ErrInvalidResult", err)
+			}
+		})
+	}
+}
+
 func TestManagerBoundsAggregateRetainedJobsAndBytes(t *testing.T) {
 	t.Parallel()
 
@@ -1250,6 +1302,12 @@ func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 			request:  withSPL(validRequest(), "index=secret | table message"),
 			wantCode: FailureIndexForbidden,
 			wantText: "outside the authorized scope",
+		},
+		{
+			name:     "compiler semantic diagnostic",
+			request:  withSPL(validRequest(), "index=main | timechart span=5m count by severity"),
+			wantCode: FailureUnsupportedSPL,
+			wantText: "currently support strings",
 		},
 		{
 			name:        "storage",

@@ -379,6 +379,139 @@ func TestBuildTopRejectsGeneratedOutputCollisions(t *testing.T) {
 	}
 }
 
+func TestBuildTimechartProducesBoundedRuntimeWideSchema(t *testing.T) {
+	t.Parallel()
+
+	scope := testScope([]string{"gradethis"}, nil)
+	scope.Earliest = time.Date(2026, 7, 21, 8, 2, 30, 0, time.UTC)
+	scope.Latest = time.Date(2026, 7, 21, 8, 12, 0, 1, time.UTC)
+	logical, err := Build(
+		mustParse(t, `index=gradethis | timechart span=5m count by level`),
+		scope,
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(logical.Operators) != 3 {
+		t.Fatalf("operator count = %d, want Scan, Filter, Timechart", len(logical.Operators))
+	}
+	operator, ok := logical.Operators[2].(*Timechart)
+	if !ok {
+		t.Fatalf("last operator = %T, want *Timechart", logical.Operators[2])
+	}
+	if operator.Time.Name != "_time" || !operator.Time.Canonical || operator.SplitBy.Name != "level" ||
+		operator.Function != AggregateFunctionCountRows || operator.Span != 5*time.Minute ||
+		!operator.FirstBucket.Equal(time.Date(2026, 7, 21, 8, 0, 0, 0, time.UTC)) || operator.BucketCount != 3 ||
+		operator.SeriesLimit != 10 || !operator.IncludeNull || operator.NullLabel != "NULL" ||
+		!operator.IncludeOther || operator.OtherLabel != "OTHER" || !operator.FixedRange ||
+		!operator.Continuous || !operator.IncludePartial {
+		t.Fatalf("timechart = %#v", operator)
+	}
+	if len(logical.OutputFields) != 0 {
+		t.Fatalf("static output fields = %v, want runtime schema", logical.OutputFields)
+	}
+	if logical.DynamicOutput == nil || !slices.Equal(logical.DynamicOutput.FixedFields, []string{"_time"}) ||
+		logical.DynamicOutput.MaxSeries != 12 {
+		t.Fatalf("dynamic output = %#v", logical.DynamicOutput)
+	}
+}
+
+func TestBuildTimechartBucketsPreEpochWithHalfOpenLatest(t *testing.T) {
+	t.Parallel()
+
+	scope := testScope([]string{"gradethis"}, nil)
+	scope.Earliest = time.Date(1969, 12, 31, 23, 57, 0, 500, time.UTC)
+	scope.Latest = time.Date(1970, 1, 1, 0, 5, 0, 0, time.UTC)
+	logical, err := Build(mustParse(t, `index=gradethis | timechart span=5m count by level`), scope)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	operator := logical.Operators[len(logical.Operators)-1].(*Timechart)
+	if !operator.FirstBucket.Equal(time.Date(1969, 12, 31, 23, 55, 0, 0, time.UTC)) || operator.BucketCount != 2 {
+		t.Fatalf("bucket start/count = %v/%d, want 1969-12-31T23:55Z/2", operator.FirstBucket, operator.BucketCount)
+	}
+}
+
+func TestBuildTimechartBoundsFixedRangeBucketCount(t *testing.T) {
+	t.Parallel()
+
+	scope := testScope([]string{"gradethis"}, nil)
+	scope.Earliest = time.Unix(0, 0).UTC()
+	scope.Latest = scope.Earliest.Add(maxTimechartBuckets * time.Second)
+	logical, err := Build(mustParse(t, `index=gradethis | timechart span=1s count by level`), scope)
+	if err != nil {
+		t.Fatalf("Build(exact bucket limit): %v", err)
+	}
+	if got := logical.Operators[len(logical.Operators)-1].(*Timechart).BucketCount; got != maxTimechartBuckets {
+		t.Fatalf("bucket count = %d, want %d", got, maxTimechartBuckets)
+	}
+
+	scope.Latest = scope.Latest.Add(time.Nanosecond)
+	_, err = Build(mustParse(t, `index=gradethis | timechart span=1s count by level`), scope)
+	assertDiagnosticCode(t, err, "SPL_QUERY_TOO_COMPLEX")
+}
+
+func TestBuildTimechartBoundsFixedSpan(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | timechart span=86401s count by level`,
+		`index=gradethis | timechart span=25h count by level`,
+	} {
+		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		diagnostic, ok := err.(*Diagnostic)
+		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_TIMECHART_SYNTAX" {
+			t.Errorf("Build(%q) error = %#v, want bounded-span diagnostic", source, err)
+		}
+	}
+}
+
+func TestBuildRequiresTimechartToBeTerminal(t *testing.T) {
+	t.Parallel()
+
+	query := mustParse(t, `index=gradethis | timechart span=5m count by level | search index=secret`)
+	_, err := Build(query, testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_TIMECHART_PIPELINE")
+	diagnostic := err.(*Diagnostic)
+	if got := query.Commands[1].SourceRange(); diagnostic.Range != got {
+		t.Fatalf("diagnostic range = %#v, want next command %#v", diagnostic.Range, got)
+	}
+}
+
+func TestBuildTimechartRequiresUnmodifiedCanonicalTime(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | fields - _time | timechart span=5m count by level`,
+		`index=gradethis | table level | timechart span=5m count by level`,
+		`index=gradethis | eval _time=1 | timechart span=5m count by level`,
+		`index=gradethis | stats count by level | timechart span=5m count by level`,
+		`index=gradethis | top level | timechart span=5m count by level`,
+	} {
+		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		diagnostic, ok := err.(*Diagnostic)
+		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD" {
+			t.Errorf("Build(%q) error = %#v, want canonical-time diagnostic", source, err)
+		}
+	}
+}
+
+func TestBuildTimechartResolvesNestedSplitField(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | timechart span=1h count by http.route`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	operator := logical.Operators[len(logical.Operators)-1].(*Timechart)
+	if !slices.Equal(operator.SplitBy.Path, []string{"http", "route"}) {
+		t.Fatalf("split path = %v", operator.SplitBy.Path)
+	}
+}
+
 func TestBuildPostTopIndexFieldDoesNotChangeInputScope(t *testing.T) {
 	t.Parallel()
 

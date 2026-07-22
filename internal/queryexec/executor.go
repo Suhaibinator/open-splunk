@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"math/big"
 	"net"
@@ -40,12 +41,18 @@ const (
 	defaultMaxResultBytes   = uint64(128 << 20)
 	defaultMaxThreads       = uint64(4)
 	defaultMaxQueryBytes    = uint64(1 << 20)
+	maximumTimechartBuckets = uint64(10_000)
+	maximumTimechartSeries  = uint16(12)
+	maximumTimechartLabel   = uint16(256)
 
 	extendedTypeKey  = "\x00open_splunk_type"
 	extendedValueKey = "\x00open_splunk_value"
 )
 
-var extendedDecimalPattern = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?$`)
+var (
+	extendedDecimalPattern     = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?$`)
+	timechartDateTime64Pattern = regexp.MustCompile(`^DateTime64\(9,\s*'UTC'\)$`)
+)
 
 // Config bounds every ClickHouse query independently of the search-job sink.
 // Zero values select conservative single-node defaults.
@@ -57,16 +64,19 @@ type Config struct {
 	MaxResultRows    uint64
 	MaxResultBytes   uint64
 	// MaxRowsToGroupBy bounds distinct groups before result limits apply. When
-	// zero, it follows MaxResultRows (including a caller-supplied value).
+	// zero, ordinary queries follow MaxResultRows (including a caller-supplied
+	// value); bounded timecharts may receive a larger per-query default. A
+	// nonzero value is an authoritative cap for every query.
 	MaxRowsToGroupBy uint64
 	MaxThreads       uint64
 }
 
 // Executor is a native ClickHouse implementation of searchjobs.Executor.
 type Executor struct {
-	connection queryConnection
-	settings   clickhousedriver.Settings
-	newQueryID func() (string, error)
+	connection                       queryConnection
+	settings                         clickhousedriver.Settings
+	expandDefaultTimechartGroupLimit bool
+	newQueryID                       func() (string, error)
 }
 
 type queryConnection interface {
@@ -81,11 +91,17 @@ func New(connection driver.Conn, config Config) (*Executor, error) {
 	if connection == nil {
 		return nil, errors.New("create ClickHouse query executor: connection is required")
 	}
+	expandDefaultTimechartGroupLimit := config.MaxRowsToGroupBy == 0
 	settings, err := querySettings(config)
 	if err != nil {
 		return nil, err
 	}
-	return &Executor{connection: connection, settings: settings, newQueryID: randomQueryID}, nil
+	return &Executor{
+		connection:                       connection,
+		settings:                         settings,
+		expandDefaultTimechartGroupLimit: expandDefaultTimechartGroupLimit,
+		newQueryID:                       randomQueryID,
+	}, nil
 }
 
 func querySettings(config Config) (clickhousedriver.Settings, error) {
@@ -124,21 +140,23 @@ func querySettings(config Config) (clickhousedriver.Settings, error) {
 		seconds = 1
 	}
 	return clickhousedriver.Settings{
-		"readonly":               uint8(2),
-		"max_execution_time":     seconds,
-		"timeout_overflow_mode":  "throw",
-		"max_memory_usage":       config.MaxMemoryBytes,
-		"max_rows_to_read":       config.MaxRowsToRead,
-		"max_bytes_to_read":      config.MaxBytesToRead,
-		"read_overflow_mode":     "throw",
-		"max_result_rows":        config.MaxResultRows,
-		"max_result_bytes":       config.MaxResultBytes,
-		"result_overflow_mode":   "throw",
-		"max_rows_to_group_by":   config.MaxRowsToGroupBy,
-		"group_by_overflow_mode": "throw",
-		"max_threads":            config.MaxThreads,
-		"max_query_size":         defaultMaxQueryBytes,
-		"async_insert":           uint8(0),
+		"readonly":                          uint8(2),
+		"max_execution_time":                seconds,
+		"timeout_overflow_mode":             "throw",
+		"max_memory_usage":                  config.MaxMemoryBytes,
+		"max_rows_to_read":                  config.MaxRowsToRead,
+		"max_bytes_to_read":                 config.MaxBytesToRead,
+		"read_overflow_mode":                "throw",
+		"max_result_rows":                   config.MaxResultRows,
+		"max_result_bytes":                  config.MaxResultBytes,
+		"result_overflow_mode":              "throw",
+		"max_rows_to_group_by":              config.MaxRowsToGroupBy,
+		"group_by_overflow_mode":            "throw",
+		"max_threads":                       config.MaxThreads,
+		"max_query_size":                    defaultMaxQueryBytes,
+		"enable_materialized_cte":           uint8(1),
+		"short_circuit_function_evaluation": "enable",
+		"async_insert":                      uint8(0),
 	}, nil
 }
 
@@ -154,19 +172,31 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if strings.TrimSpace(query.SQL) == "" || len(query.OutputFields) == 0 {
 		return errors.New("execute ClickHouse search: compiled query is incomplete")
 	}
+	if query.Timechart != nil {
+		if err := validateTimechartOutput(query); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	queryID, err := executor.newQueryID()
 	if err != nil {
 		return fmt.Errorf("execute ClickHouse search: create query ID: %w", err)
 	}
 	queryContext := clickhousedriver.Context(ctx,
 		clickhousedriver.WithQueryID(queryID),
-		clickhousedriver.WithSettings(executor.settings),
+		clickhousedriver.WithSettings(executor.settingsFor(query)),
 	)
 	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
 	if err != nil {
 		return classifyQueryError(ctx, fmt.Errorf("query ClickHouse: %w", err))
 	}
+	rowsClosed := false
 	defer func() {
+		if rowsClosed {
+			return
+		}
 		if closeErr := rows.Close(); resultErr == nil && closeErr != nil {
 			resultErr = classifyQueryError(ctx, fmt.Errorf("close ClickHouse result stream: %w", closeErr))
 		}
@@ -174,6 +204,18 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 
 	columnTypes := rows.ColumnTypes()
 	columns := rows.Columns()
+	if query.Timechart != nil {
+		buffered, err := readTimechartRows(ctx, rows, columns, columnTypes, *query.Timechart)
+		if err != nil {
+			return err
+		}
+		closeErr := rows.Close()
+		rowsClosed = true
+		if closeErr != nil {
+			return classifyQueryError(ctx, fmt.Errorf("close ClickHouse timechart result stream: %w", closeErr))
+		}
+		return publishTimechart(ctx, sink, buffered)
+	}
 	if len(columns) != len(query.OutputFields) || len(columnTypes) != len(columns) || !slices.Equal(columns, query.OutputFields) {
 		return fmt.Errorf("%w: ClickHouse result columns do not match the compiled output", searchjobs.ErrInvalidResult)
 	}
@@ -187,11 +229,17 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 			Multivalue: multivalue,
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := sink.SetSchema(schema); err != nil {
 		return err
 	}
 
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		destinations, err := scanDestinations(columnTypes)
 		if err != nil {
 			return fmt.Errorf("%w: prepare ClickHouse row scan: %v", searchjobs.ErrInvalidResult, err)
@@ -214,7 +262,252 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if err := rows.Err(); err != nil {
 		return classifyQueryError(ctx, fmt.Errorf("iterate ClickHouse results: %w", err))
 	}
+	return ctx.Err()
+}
+
+func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {
+	if query.Timechart == nil || !executor.expandDefaultTimechartGroupLimit {
+		return executor.settings
+	}
+	// The first timechart aggregation has one state per non-empty
+	// (bucket, series) pair. Reserve room for every public series plus one
+	// canonical invalid-value state per bucket. This remains bounded at 130k
+	// groups for the validated 10k-bucket/12-series contract. An explicitly
+	// configured MaxRowsToGroupBy remains an authoritative operator limit.
+	required := query.Timechart.BucketCount * (uint64(query.Timechart.MaxSeries) + 1)
+	current, ok := executor.settings["max_rows_to_group_by"].(uint64)
+	if !ok || current >= required {
+		return executor.settings
+	}
+	settings := maps.Clone(executor.settings)
+	settings["max_rows_to_group_by"] = required
+	return settings
+}
+
+type timechartRow struct {
+	bucket time.Time
+	counts []uint64
+}
+
+type bufferedTimechart struct {
+	columns []string
+	rows    []timechartRow
+}
+
+func validateTimechartOutput(query clickhouse.CompiledQuery) error {
+	output := query.Timechart
+	if output == nil {
+		return nil
+	}
+	if !slices.Equal(query.OutputFields, []string{"_time"}) || output.Span <= 0 || output.Span%time.Second != 0 ||
+		output.Span > 24*time.Hour || output.BucketCount == 0 || output.BucketCount > maximumTimechartBuckets ||
+		output.MaxSeries == 0 || output.MaxSeries > maximumTimechartSeries ||
+		output.MaxLabelBytes == 0 || output.MaxLabelBytes > maximumTimechartLabel {
+		return fmt.Errorf("%w: compiled timechart output contract is invalid", searchjobs.ErrInvalidResult)
+	}
+	first := output.FirstBucket
+	if first.Location() != time.UTC || first.Nanosecond() != 0 || first.Unix()%int64(output.Span/time.Second) != 0 {
+		return fmt.Errorf("%w: compiled timechart bucket origin is invalid", searchjobs.ErrInvalidResult)
+	}
 	return nil
+}
+
+func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, columnTypes []driver.ColumnType, output clickhouse.TimechartOutput) (bufferedTimechart, error) {
+	if err := ctx.Err(); err != nil {
+		return bufferedTimechart{}, err
+	}
+	expectedColumns := []string{
+		clickhouse.TimechartBucketColumn,
+		clickhouse.TimechartNamesColumn,
+		clickhouse.TimechartCountsColumn,
+		clickhouse.TimechartInvalidColumn,
+	}
+	if len(columnTypes) != len(expectedColumns) || !slices.Equal(columns, expectedColumns) {
+		return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart columns do not match the compiled output", searchjobs.ErrInvalidResult)
+	}
+	expectedTypes := []string{"DateTime64", "Array(String)", "Array(UInt64)", "UInt8"}
+	for index, columnType := range columnTypes {
+		if columnType == nil || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
+			!matchesTimechartPhysicalType(columnType.DatabaseTypeName(), expectedTypes[index]) {
+			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart column %q has an invalid type", searchjobs.ErrInvalidResult, expectedColumns[index])
+		}
+	}
+
+	buffered := bufferedTimechart{rows: make([]timechartRow, 0, int(output.BucketCount))}
+	var encodedNames []string
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return bufferedTimechart{}, err
+		}
+		if uint64(len(buffered.rows)) >= output.BucketCount {
+			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart returned too many buckets", searchjobs.ErrInvalidResult)
+		}
+		destinations, err := scanDestinations(columnTypes)
+		if err != nil {
+			return bufferedTimechart{}, fmt.Errorf("%w: prepare ClickHouse timechart row scan: %v", searchjobs.ErrInvalidResult, err)
+		}
+		if err := rows.Scan(destinations...); err != nil {
+			return bufferedTimechart{}, classifyQueryError(ctx, fmt.Errorf("scan ClickHouse timechart result row: %w", err))
+		}
+		bucket, names, counts, invalid, err := scannedTimechartRow(destinations)
+		if err != nil {
+			return bufferedTimechart{}, err
+		}
+		if len(names) != len(counts) || len(names) > int(output.MaxSeries) {
+			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart series arrays are invalid", searchjobs.ErrInvalidResult)
+		}
+		rowIndex := len(buffered.rows)
+		expectedBucket := output.FirstBucket.Add(time.Duration(rowIndex) * output.Span)
+		if !bucket.Equal(expectedBucket) {
+			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart bucket sequence is invalid", searchjobs.ErrInvalidResult)
+		}
+		if rowIndex == 0 {
+			publicColumns, validateErr := decodeTimechartNames(names, output.MaxLabelBytes)
+			if validateErr != nil {
+				return bufferedTimechart{}, validateErr
+			}
+			encodedNames = slices.Clone(names)
+			buffered.columns = publicColumns
+		} else if !slices.Equal(names, encodedNames) {
+			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart series changed between buckets", searchjobs.ErrInvalidResult)
+		}
+		if invalid != 0 {
+			return bufferedTimechart{}, searchjobs.ErrUnsupportedValue
+		}
+		buffered.rows = append(buffered.rows, timechartRow{bucket: bucket, counts: slices.Clone(counts)})
+	}
+	if err := rows.Err(); err != nil {
+		return bufferedTimechart{}, classifyQueryError(ctx, fmt.Errorf("iterate ClickHouse timechart results: %w", err))
+	}
+	if err := ctx.Err(); err != nil {
+		return bufferedTimechart{}, err
+	}
+	if uint64(len(buffered.rows)) != output.BucketCount {
+		return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart returned an incomplete bucket sequence", searchjobs.ErrInvalidResult)
+	}
+	return buffered, nil
+}
+
+func matchesTimechartPhysicalType(databaseType, expected string) bool {
+	databaseType = strings.TrimSpace(databaseType)
+	if expected != "DateTime64" {
+		return databaseType == expected
+	}
+	return timechartDateTime64Pattern.MatchString(databaseType)
+}
+
+func scannedTimechartRow(destinations []any) (time.Time, []string, []uint64, uint8, error) {
+	if len(destinations) != 4 {
+		return time.Time{}, nil, nil, 0, fmt.Errorf("%w: ClickHouse timechart row has an invalid width", searchjobs.ErrInvalidResult)
+	}
+	bucket, bucketOK := scannedValue(destinations[0]).(time.Time)
+	names, namesOK := scannedValue(destinations[1]).([]string)
+	counts, countsOK := scannedValue(destinations[2]).([]uint64)
+	invalid, invalidOK := scannedValue(destinations[3]).(uint8)
+	if !bucketOK || !namesOK || !countsOK || !invalidOK {
+		return time.Time{}, nil, nil, 0, fmt.Errorf("%w: ClickHouse timechart row has invalid native values", searchjobs.ErrInvalidResult)
+	}
+	return bucket, names, counts, invalid, nil
+}
+
+func decodeTimechartNames(encoded []string, maxLabelBytes uint16) ([]string, error) {
+	public := make([]string, len(encoded))
+	seenEncoded := make(map[string]struct{}, len(encoded))
+	seenPublic := make(map[string]string, len(encoded)+1)
+	seenPublic["_time"] = ""
+	lastOrdinary := ""
+	haveOrdinary := false
+	phase := uint8(0) // ordinary, optional NULL, optional OTHER
+	for index, name := range encoded {
+		if !utf8.ValidString(name) {
+			return nil, fmt.Errorf("%w: ClickHouse timechart series encoding is invalid", searchjobs.ErrInvalidResult)
+		}
+		if _, exists := seenEncoded[name]; exists {
+			return nil, fmt.Errorf("%w: ClickHouse timechart series is duplicated", searchjobs.ErrInvalidResult)
+		}
+		seenEncoded[name] = struct{}{}
+		var decoded string
+		switch {
+		case strings.HasPrefix(name, "0:"):
+			if phase != 0 {
+				return nil, fmt.Errorf("%w: ClickHouse timechart series ordering is invalid", searchjobs.ErrInvalidResult)
+			}
+			raw := name[2:]
+			if raw == "" || len(raw) > int(maxLabelBytes) || raw == "NULL" || raw == "OTHER" {
+				return nil, fmt.Errorf("%w: ClickHouse timechart series label is invalid", searchjobs.ErrInvalidResult)
+			}
+			decoded = raw
+			if strings.HasPrefix(decoded, "_") {
+				decoded = "VALUE" + decoded
+			}
+			if prior, exists := seenPublic[decoded]; exists {
+				if prior != name {
+					// Distinct runtime strings can converge after Splunk's
+					// leading-underscore normalization.
+					return nil, searchjobs.ErrUnsupportedValue
+				}
+				return nil, fmt.Errorf("%w: ClickHouse timechart series is duplicated", searchjobs.ErrInvalidResult)
+			}
+			if haveOrdinary && lastOrdinary >= decoded {
+				return nil, fmt.Errorf("%w: ClickHouse timechart series ordering is invalid", searchjobs.ErrInvalidResult)
+			}
+			lastOrdinary, haveOrdinary = decoded, true
+		case name == "1:":
+			if phase != 0 {
+				return nil, fmt.Errorf("%w: ClickHouse timechart series ordering is invalid", searchjobs.ErrInvalidResult)
+			}
+			decoded = "NULL"
+			phase = 1
+		case name == "2:":
+			if phase == 2 {
+				return nil, fmt.Errorf("%w: ClickHouse timechart series ordering is invalid", searchjobs.ErrInvalidResult)
+			}
+			decoded = "OTHER"
+			phase = 2
+		default:
+			return nil, fmt.Errorf("%w: ClickHouse timechart series encoding is invalid", searchjobs.ErrInvalidResult)
+		}
+		if prior, exists := seenPublic[decoded]; exists {
+			if prior != name && strings.HasPrefix(name, "0:") {
+				return nil, searchjobs.ErrUnsupportedValue
+			}
+			return nil, fmt.Errorf("%w: ClickHouse timechart public series is duplicated", searchjobs.ErrInvalidResult)
+		}
+		seenPublic[decoded] = name
+		public[index] = decoded
+	}
+	return public, nil
+}
+
+func publishTimechart(ctx context.Context, sink searchjobs.ResultSink, buffered bufferedTimechart) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(buffered.columns)+1)}
+	schema.Columns[0] = searchjobs.Column{Name: "_time", Kind: searchjobs.ValueKindTime}
+	for index, name := range buffered.columns {
+		schema.Columns[index+1] = searchjobs.Column{Name: name, Kind: searchjobs.ValueKindUnsigned}
+	}
+	if err := sink.SetSchema(schema); err != nil {
+		return err
+	}
+	if len(buffered.columns) == 0 {
+		return ctx.Err()
+	}
+	for _, row := range buffered.rows {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		values := make([]searchjobs.Value, len(row.counts)+1)
+		values[0] = searchjobs.TimeValue(row.bucket)
+		for index, count := range row.counts {
+			values[index+1] = searchjobs.UnsignedValue(count)
+		}
+		if err := sink.AddRow(values); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
 }
 
 func scanDestinations(columnTypes []driver.ColumnType) ([]any, error) {
