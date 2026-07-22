@@ -124,7 +124,11 @@ func TestAdministrativeListPaginationIsBoundAndTamperSafe(t *testing.T) {
 	}
 	token := first.GetPage().GetNextPageToken()
 
-	tampered := token[:len(token)-1] + "A"
+	replacement := "A"
+	if token[len(token)-1] == 'A' {
+		replacement = "B"
+	}
+	tampered := token[:len(token)-1] + replacement
 	response = postProto(t, handler, "/api/v1/indexes/list", &opensplunkv1.ListIndexesRequest{
 		Page: &opensplunkv1.PageRequest{PageSize: &pageSize, PageToken: &tampered, IncludeTotalSize: true},
 	})
@@ -160,6 +164,20 @@ func TestAdministrativeListPaginationIsBoundAndTamperSafe(t *testing.T) {
 	})
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("stale cursor status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestDecodeAdminBase64RejectsNonCanonicalTrailingBits(t *testing.T) {
+	t.Parallel()
+
+	// AA is the canonical RawURL encoding of one zero byte. AB decodes to the
+	// same byte when unused trailing bits are ignored, but cursors accept only
+	// one canonical spelling so an altered token can never verify unchanged.
+	if decoded, err := decodeAdminBase64("AA"); err != nil || !bytes.Equal(decoded, []byte{0}) {
+		t.Fatalf("decode canonical base64 = %v, %v", decoded, err)
+	}
+	if _, err := decodeAdminBase64("AB"); err == nil {
+		t.Fatal("non-canonical base64 with altered trailing bits was accepted")
 	}
 }
 
