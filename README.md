@@ -48,6 +48,14 @@ go build -o build/open-splunk-collector ./cmd/open-splunk-collector
 
 `make build` performs the UI export before compiling the server, ensuring the resulting server binary contains the current frontend.
 
+The search workspace uses deterministic demo fixtures by default. Build the embedded UI against real backend search jobs with one build-time switch:
+
+```sh
+OPEN_SPLUNK_DATA_MODE=backend make build-server
+```
+
+The resulting `build/open-splunk-server` serves the UI and protobuf API from the same origin. Omit the variable (or set it to `demo`) to restore fixture mode. `OPEN_SPLUNK_API_BASE_URL` is available for controlled test builds that need a non-default API origin; it is also resolved at build time and is not a browser setting.
+
 `make proto` compiles every schema under `proto/` into Go protobuf/gRPC code in `gen/go` and `ts-proto` codecs in `gen/ts`. Run `make proto-tools` once to install the pinned Go generators and JavaScript dependencies; `protoc` must also be available on `PATH`.
 
 `make proto-lint` runs the schema compatibility/style linter without regenerating code. `make proto` runs it automatically before generation.
