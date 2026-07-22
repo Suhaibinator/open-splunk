@@ -136,6 +136,46 @@ func TestBuildAppliesSplunkDefaultSortLimitButHonorsSortZero(t *testing.T) {
 	}
 }
 
+func TestBuildStatsCountReplacesEventSchema(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count AS events by host, status`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"host", "status", "events"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+	aggregate, ok := logical.Operators[len(logical.Operators)-1].(*Aggregate)
+	if !ok {
+		t.Fatalf("last operator = %T, want *Aggregate", logical.Operators[len(logical.Operators)-1])
+	}
+	if len(aggregate.GroupBy) != 2 || aggregate.GroupBy[0].Name != "host" ||
+		aggregate.GroupBy[1].Name != "status" || len(aggregate.Measures) != 1 ||
+		aggregate.Measures[0].Function != AggregateFunctionCountRows || aggregate.Measures[0].Output != "events" {
+		t.Fatalf("aggregate = %#v", aggregate)
+	}
+}
+
+func TestBuildStatsRejectsAmbiguousOutputAndUnsupportedFollowingStage(t *testing.T) {
+	t.Parallel()
+
+	_, err := Build(
+		mustParse(t, `index=gradethis | stats count by count`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	assertDiagnosticCode(t, err, "SPL_DUPLICATE_FIELD")
+
+	_, err = Build(
+		mustParse(t, `index=gradethis | stats count by host | sort -count`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_AFTER_STATS")
+}
+
 func TestResolveFieldRejectsCompilerPrivateNamespace(t *testing.T) {
 	t.Parallel()
 

@@ -217,6 +217,88 @@ func TestUnsupportedCommandHasStageAndLocation(t *testing.T) {
 	}
 }
 
+func TestParseStatsCountAndGroupedAlias(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		alias      string
+		groupNames []string
+	}{
+		{name: "global count", source: `index=main | stats count`, alias: "count"},
+		{
+			name:       "aliased grouped count",
+			source:     "index=main\n| stats count AS events BY host, source",
+			alias:      "events",
+			groupNames: []string{"host", "source"},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if len(query.Commands) != 1 {
+				t.Fatalf("command count = %d, want 1", len(query.Commands))
+			}
+			command, ok := query.Commands[0].(*StatsCommand)
+			if !ok {
+				t.Fatalf("command = %T, want *StatsCommand", query.Commands[0])
+			}
+			if command.Aggregate.Function != AggregateFunctionCount || command.Aggregate.Alias != test.alias {
+				t.Fatalf("aggregate = %#v, want count AS %q", command.Aggregate, test.alias)
+			}
+			if len(command.GroupBy) != len(test.groupNames) {
+				t.Fatalf("group fields = %#v, want %v", command.GroupBy, test.groupNames)
+			}
+			for index, want := range test.groupNames {
+				if command.GroupBy[index].Name != want {
+					t.Fatalf("group field %d = %q, want %q", index, command.GroupBy[index].Name, want)
+				}
+			}
+		})
+	}
+}
+
+func TestUnsupportedStatsAggregatesAreSourceLocated(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		code   string
+		line   int
+		column int
+	}{
+		{"other function", "index=main\n| stats sum(bytes)", "SPL_UNSUPPORTED_STATS_AGGREGATE", 2, 9},
+		{"count argument", `* | stats count(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 16},
+		{"second aggregate", `* | stats count, dc(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 16},
+		{"missing AS", `* | stats count total`, "SPL_UNSUPPORTED_STATS_SYNTAX", 1, 17},
+		{"missing group field", `* | stats count by`, "SPL_EXPECTED_FIELD", 1, 19},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(test.source)
+			if err == nil {
+				t.Fatal("Parse succeeded, want error")
+			}
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok {
+				t.Fatalf("error = %T, want *Diagnostic", err)
+			}
+			if diagnostic.Code != test.code || diagnostic.Range.Start.Line != test.line || diagnostic.Range.Start.Column != test.column {
+				t.Fatalf("diagnostic = %#v, want %s at %d:%d", diagnostic, test.code, test.line, test.column)
+			}
+		})
+	}
+}
+
 func TestParseErrorsAreSourceLocated(t *testing.T) {
 	t.Parallel()
 
@@ -253,6 +335,8 @@ func FuzzParseDoesNotPanic(f *testing.F) {
 		`index=gradethis`,
 		`index=gradethis (level=ERROR OR level=WARN) | sort -_time | head 20`,
 		`"connection refused" | table _time message`,
+		`index=main | stats count AS events by host, service`,
+		`index=main | stats sum(bytes) by host`,
 		"index=x\n| transaction trace_id",
 		"\x00\xff",
 	} {

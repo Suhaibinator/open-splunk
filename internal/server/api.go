@@ -79,8 +79,8 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 	if definition == nil {
 		return nil, badRequestError("search definition is required")
 	}
-	spl := strings.TrimSpace(definition.GetSpl())
-	if spl == "" {
+	spl := definition.GetSpl()
+	if strings.TrimSpace(spl) == "" {
 		return nil, badRequestError("SPL is required")
 	}
 	if err := rejectUnsupportedCreateFields(input, definition); err != nil {

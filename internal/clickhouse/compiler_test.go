@@ -1,6 +1,8 @@
 package clickhouse
 
 import (
+	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -18,9 +20,9 @@ func TestCompileGradeThisEventSearchIsScopedAndParameterized(t *testing.T) {
 		`FROM "open_splunk"."events"`,
 		`"tenant_id" = ?`,
 		`"index_name" IN (?)`,
-		`"event_time" >= ?`,
-		`"event_time" < ?`,
-		`"index_time" <= ?`,
+		`"event_time" >= parseDateTime64BestEffort(?, 9, 'UTC')`,
+		`"event_time" < parseDateTime64BestEffort(?, 9, 'UTC')`,
+		`"index_time" <= parseDateTime64BestEffort(?, 3, 'UTC')`,
 		`"visibility_seq" <= ?`,
 		`ORDER BY "__os_order_`,
 		`ASC NULLS LAST`,
@@ -44,6 +46,52 @@ func TestCompileGradeThisEventSearchIsScopedAndParameterized(t *testing.T) {
 	}
 	if got := compiled.Args[len(compiled.Args)-1]; got != uint64(20) {
 		t.Fatalf("last argument = %#v, want head limit", got)
+	}
+}
+
+func TestCompileTimeBoundsUseExplicitDateTime64StringParameters(t *testing.T) {
+	t.Parallel()
+
+	parsed, err := spl.Parse(`index=gradethis`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zone := time.FixedZone("fixture", 9*60*60+30*60)
+	visibility := uint64(73)
+	earliest := time.Date(1960, 1, 2, 3, 4, 5, 123456789, zone)
+	latest := time.Date(2262, 4, 11, 23, 47, 16, 854775807, time.UTC)
+	cutoff := time.Date(2026, 7, 22, 11, 47, 38, 687883000, zone)
+	logical, err := plan.Build(parsed, plan.Scope{
+		TenantID:          "tenant-1",
+		AuthorizedIndexes: []string{"gradethis"},
+		Earliest:          earliest,
+		Latest:            latest,
+		IndexTimeCutoff:   cutoff,
+		VisibilityCutoff:  &visibility,
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	compiled, err := (Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	want := []any{
+		"tenant-1",
+		"gradethis",
+		"1960-01-01 17:34:05.123456789",
+		"2262-04-11 23:47:16.854775807",
+		"2026-07-22 02:17:38.687",
+		uint64(73),
+		"gradethis",
+	}
+	if !reflect.DeepEqual(compiled.Args, want) {
+		t.Fatalf("compiled args = %#v, want %#v", compiled.Args, want)
+	}
+	for _, argument := range compiled.Args {
+		if _, inferredDateTime := argument.(time.Time); inferredDateTime {
+			t.Fatalf("bare time.Time argument retained: %#v", compiled.Args)
+		}
 	}
 }
 
@@ -200,6 +248,69 @@ func TestCompileFieldWildcardExistenceTruthTable(t *testing.T) {
 	notPresent := compileSPL(t, `index=gradethis status!=*`)
 	if !strings.Contains(notPresent.SQL, `AND 0`) {
 		t.Fatalf("field!=* should match no events:\n%s", notPresent.SQL)
+	}
+}
+
+func TestCompileStatsCountUsesTransformingSchemaAndSplunkNullGrouping(t *testing.T) {
+	t.Parallel()
+
+	global := compileSPL(t, `index=gradethis | stats count`)
+	if !slices.Equal(global.OutputFields, []string{"count"}) {
+		t.Fatalf("global output fields = %v", global.OutputFields)
+	}
+	if !strings.Contains(global.SQL, `count() AS "count"`) || strings.Contains(global.SQL, `GROUP BY`) {
+		t.Fatalf("unexpected global count SQL:\n%s", global.SQL)
+	}
+
+	grouped := compileSPL(t, `index=gradethis | stats count AS events by level, status`)
+	if !slices.Equal(grouped.OutputFields, []string{"level", "status", "events"}) {
+		t.Fatalf("grouped output fields = %v", grouped.OutputFields)
+	}
+	for _, required := range []string{
+		`"level" AS "level"`,
+		`toString("__os_fields"."status") AS "status"`,
+		`count() AS "events"`,
+		`(1 AND isNotNull("level"))`,
+		`(has("__os_field_names", ?) AND isNotNull("__os_fields"."status"))`,
+		`GROUP BY "level", toString("__os_fields"."status")`,
+		`ORDER BY "level" ASC NULLS LAST, "status" ASC NULLS LAST`,
+	} {
+		if !strings.Contains(grouped.SQL, required) {
+			t.Fatalf("grouped stats SQL missing %q:\n%s", required, grouped.SQL)
+		}
+	}
+	outerProjectionEnd := strings.Index(grouped.SQL, " FROM (")
+	if outerProjectionEnd < 0 || strings.Contains(grouped.SQL[:outerProjectionEnd], internalSortTimeColumn) {
+		t.Fatalf("event sort helper leaked into aggregate projection:\n%s", grouped.SQL)
+	}
+	if got, want := strings.Count(grouped.SQL, "?"), len(grouped.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, grouped.SQL, grouped.Args)
+	}
+	if got := grouped.Args[len(grouped.Args)-1]; got != "status" {
+		t.Fatalf("dynamic existence argument = %#v, want status", got)
+	}
+}
+
+func TestCompileStatsCountSQLGolden(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | stats count AS events by level, status`)
+	want, err := os.ReadFile("testdata/stats_count_by.golden.sql")
+	if err != nil {
+		t.Fatalf("read golden SQL: %v", err)
+	}
+	if got := compiled.SQL; got != strings.TrimSpace(string(want)) {
+		t.Fatalf("compiled SQL differs from golden\ngot:\n%s\n\nwant:\n%s", got, want)
+	}
+}
+
+func TestCompileRejectsNonTerminalAggregatePlan(t *testing.T) {
+	t.Parallel()
+
+	logical := buildPlan(t, `index=gradethis | stats count`)
+	logical.Operators = append(logical.Operators, &plan.Limit{Count: 1})
+	if _, err := (Compiler{}).Compile(logical); err == nil || !strings.Contains(err.Error(), "final logical operator") {
+		t.Fatalf("Compile error = %v, want non-terminal aggregate rejection", err)
 	}
 }
 

@@ -237,6 +237,33 @@ func TestExecutorRejectsColumnDriftAndPropagatesSinkLimit(t *testing.T) {
 	}
 }
 
+func TestExecutorBuildsStatsCountSchemaFromNativeTypes(t *testing.T) {
+	t.Parallel()
+
+	rows := &fakeRows{
+		columns: []string{"host", "count"},
+		types: []driver.ColumnType{
+			fakeColumnType{name: "host", databaseType: "String", scanType: reflect.TypeOf("")},
+			fakeColumnType{name: "count", databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+		},
+		data: [][]any{{"api", uint64(3)}},
+	}
+	sink := &fakeSink{}
+	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
+	if err := executor.Execute(context.Background(), clickhouse.CompiledQuery{
+		SQL: "SELECT host, count() AS count FROM events GROUP BY host", OutputFields: []string{"host", "count"},
+	}, sink); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(sink.schema.Columns) != 2 || sink.schema.Columns[0].Kind != searchjobs.ValueKindString ||
+		sink.schema.Columns[1].Kind != searchjobs.ValueKindUnsigned {
+		t.Fatalf("schema = %#v", sink.schema)
+	}
+	if got, ok := sink.rows[0][1].Unsigned(); !ok || got != 3 {
+		t.Fatalf("count cell = %d, %v", got, ok)
+	}
+}
+
 func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	t.Parallel()
 	settings, err := querySettings(Config{})

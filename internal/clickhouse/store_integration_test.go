@@ -289,6 +289,62 @@ func testCompiledQueriesAgainstClickHouse(
 		}
 	}
 
+	globalStats := compileIntegrationSPL(t, `index=compiler | stats count`, indexTime.Add(10*time.Second), visibilityCutoff)
+	var globalCount uint64
+	if err := connection.QueryRow(ctx, globalStats.SQL, globalStats.Args...).Scan(&globalCount); err != nil {
+		t.Fatalf("execute global stats: %v\nSQL: %s\nargs: %#v", err, globalStats.SQL, globalStats.Args)
+	}
+	if globalCount != 3 {
+		t.Fatalf("global stats count = %d, want 3", globalCount)
+	}
+	emptyStats := compileIntegrationSPL(t, `index=compiler event_id=absent | stats count`, indexTime.Add(10*time.Second), visibilityCutoff)
+	var emptyCount uint64
+	if err := connection.QueryRow(ctx, emptyStats.SQL, emptyStats.Args...).Scan(&emptyCount); err != nil {
+		t.Fatalf("execute empty global stats: %v\nSQL: %s\nargs: %#v", err, emptyStats.SQL, emptyStats.Args)
+	}
+	if emptyCount != 0 {
+		t.Fatalf("empty global stats count = %d, want 0", emptyCount)
+	}
+
+	// SPL grouping is lexical: a typed integer 500 and a string "500" share a
+	// group. The explicit-null status has no field value and is omitted from BY.
+	groupedStats := compileIntegrationSPL(t, `index=compiler | stats count AS events by status`, indexTime.Add(10*time.Second), visibilityCutoff)
+	groupedRows, err := connection.Query(ctx, groupedStats.SQL, groupedStats.Args...)
+	if err != nil {
+		t.Fatalf("execute grouped stats: %v\nSQL: %s\nargs: %#v", err, groupedStats.SQL, groupedStats.Args)
+	}
+	defer groupedRows.Close()
+	var groupedKeys []string
+	var groupedCounts []uint64
+	for groupedRows.Next() {
+		var key string
+		var count uint64
+		if err := groupedRows.Scan(&key, &count); err != nil {
+			t.Fatalf("scan grouped stats: %v", err)
+		}
+		groupedKeys = append(groupedKeys, key)
+		groupedCounts = append(groupedCounts, count)
+	}
+	if err := groupedRows.Err(); err != nil {
+		t.Fatalf("iterate grouped stats: %v", err)
+	}
+	if strings.Join(groupedKeys, ",") != "500" || len(groupedCounts) != 1 || groupedCounts[0] != 2 {
+		t.Fatalf("grouped stats = keys %v counts %v, want [500] [2]", groupedKeys, groupedCounts)
+	}
+
+	missingAndNull := compileIntegrationSPL(t, `index=compiler | stats count by nothing`, indexTime.Add(10*time.Second), visibilityCutoff)
+	missingAndNullRows, err := connection.Query(ctx, missingAndNull.SQL, missingAndNull.Args...)
+	if err != nil {
+		t.Fatalf("execute missing/null stats: %v\nSQL: %s\nargs: %#v", err, missingAndNull.SQL, missingAndNull.Args)
+	}
+	defer missingAndNullRows.Close()
+	if missingAndNullRows.Next() {
+		t.Fatal("stats BY emitted a group for a missing or explicit-null field")
+	}
+	if err := missingAndNullRows.Err(); err != nil {
+		t.Fatalf("iterate missing/null stats: %v", err)
+	}
+
 	compiled := compileIntegrationSPL(t, `index=compiler | sort n | tail 2 | table event_id`, indexTime.Add(10*time.Second), visibilityCutoff)
 	rows, err := connection.Query(ctx, compiled.SQL, compiled.Args...)
 	if err != nil {

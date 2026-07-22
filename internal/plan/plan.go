@@ -73,6 +73,33 @@ func (*Project) operator()                 {}
 func (*Project) LogicalName() string       { return "Project" }
 func (op *Project) SourceRange() spl.Range { return op.Range }
 
+// AggregateFunction identifies an exact backend-neutral aggregation.
+type AggregateFunction uint8
+
+const (
+	AggregateFunctionInvalid AggregateFunction = iota
+	AggregateFunctionCountRows
+)
+
+// AggregateMeasure is one aggregate output column.
+type AggregateMeasure struct {
+	Function AggregateFunction
+	Output   string
+}
+
+// Aggregate transforms its input into one row per distinct GroupBy tuple, or
+// one global row when GroupBy is empty. Only grouping fields and measures
+// remain visible after this stage.
+type Aggregate struct {
+	GroupBy  []FieldRef
+	Measures []AggregateMeasure
+	Range    spl.Range
+}
+
+func (*Aggregate) operator()                 {}
+func (*Aggregate) LogicalName() string       { return "Aggregate" }
+func (op *Aggregate) SourceRange() spl.Range { return op.Range }
+
 // SortKey is one logical sort key.
 type SortKey struct {
 	Field      FieldRef

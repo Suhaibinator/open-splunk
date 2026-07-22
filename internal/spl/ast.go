@@ -225,6 +225,43 @@ func (*LimitCommand) command()             {}
 func (c *LimitCommand) Name() string       { return c.CommandName }
 func (c *LimitCommand) SourceRange() Range { return c.Range }
 
+// AggregateFunction identifies a supported stats aggregation. The initial
+// compatibility slice intentionally models only an exact row count; accepting
+// other function spellings without their full SPL semantics would be unsafe.
+type AggregateFunction uint8
+
+const (
+	AggregateFunctionInvalid AggregateFunction = iota
+	AggregateFunctionCount
+)
+
+// StatsAggregate is one source-located aggregate expression and its public
+// output name.
+type StatsAggregate struct {
+	Function   AggregateFunction
+	Alias      string
+	Range      Range
+	AliasRange Range
+}
+
+// StatsGroupField is one source-located field in a stats BY clause.
+type StatsGroupField struct {
+	Name  string
+	Range Range
+}
+
+// StatsCommand transforms events into one row per distinct group (or one
+// global row) and removes non-grouped event fields from the result schema.
+type StatsCommand struct {
+	Aggregate StatsAggregate
+	GroupBy   []StatsGroupField
+	Range     Range
+}
+
+func (*StatsCommand) command()             {}
+func (*StatsCommand) Name() string         { return "stats" }
+func (c *StatsCommand) SourceRange() Range { return c.Range }
+
 // Diagnostic is a stable, source-located parse or compatibility error.
 type Diagnostic struct {
 	Code        string

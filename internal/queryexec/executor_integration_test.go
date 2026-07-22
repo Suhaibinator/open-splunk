@@ -111,7 +111,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
-	queryIntegrationInsertEvent(t, ctx, connection)
+	eventIndexTime := queryIntegrationInsertEvent(t, ctx, connection)
 	t.Run("manager pipeline and stable page", func(t *testing.T) {
 		manager, err := searchjobs.New(searchjobs.Config{
 			Executor:        executor,
@@ -156,6 +156,62 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("stats manager pipeline and typed schema", func(t *testing.T) {
+		manager, err := searchjobs.New(searchjobs.Config{
+			Executor:        executor,
+			Snapshotter:     queryIntegrationSnapshotter(1),
+			Compiler:        clickhouse.Compiler{},
+			MaxConcurrent:   1,
+			MaxQueued:       1,
+			CleanupInterval: -1,
+			// The event and cutoff deliberately share a wall-clock second. A bare
+			// time.Time bind is inferred as second-precision DateTime and used to
+			// exclude this already-committed DateTime64(3) event.
+			Now:       func() time.Time { return eventIndexTime.Add(500 * time.Microsecond) },
+			NewID:     func() string { return "queryexec-stats-integration-job" },
+			CursorKey: []byte("0123456789abcdef0123456789abcdef"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer manager.Close()
+		now := eventIndexTime.Add(500 * time.Microsecond)
+		job, err := manager.Create(ctx, searchjobs.CreateRequest{
+			SPL:               "index=main | stats count AS events by host",
+			OwnerID:           "owner",
+			TenantID:          "tenant",
+			AuthorizedIndexes: []string{"main"},
+			RequestedIndexes:  []string{"main"},
+			Earliest:          now.Add(-time.Hour),
+			Latest:            now.Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		completed := queryIntegrationWaitForTerminal(t, manager, job.ID)
+		if completed.State != searchjobs.StateCompleted {
+			t.Fatalf("job state = %v, failure=%#v", completed.State, completed.Failure)
+		}
+		page, err := manager.Results(job.ID, searchjobs.PageRequest{Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Schema.Columns) != 2 || page.Schema.Columns[0].Name != "host" ||
+			page.Schema.Columns[0].Kind != searchjobs.ValueKindString || page.Schema.Columns[1].Name != "events" ||
+			page.Schema.Columns[1].Kind != searchjobs.ValueKindUnsigned {
+			t.Fatalf("stats schema = %#v", page.Schema)
+		}
+		if len(page.Rows) != 1 {
+			t.Fatalf("stats rows = %d, want 1", len(page.Rows))
+		}
+		if host, ok := page.Rows[0].Values[0].String(); !ok || host != "host" {
+			t.Fatalf("stats host = %q, %v", host, ok)
+		}
+		if count, ok := page.Rows[0].Values[1].Unsigned(); !ok || count != 1 {
+			t.Fatalf("stats count = %d, %v", count, ok)
+		}
+	})
+
 	t.Run("cancellation reaches native query", func(t *testing.T) {
 		cancelCtx, cancelQuery := context.WithTimeout(ctx, 150*time.Millisecond)
 		defer cancelQuery()
@@ -182,7 +238,7 @@ func (snapshotter queryIntegrationSnapshotter) VisibilityCutoff(ctx context.Cont
 	return uint64(snapshotter), nil
 }
 
-func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection clickhousedriver.Conn) {
+func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection clickhousedriver.Conn) time.Time {
 	t.Helper()
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
@@ -192,7 +248,7 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now().UTC().Add(-time.Minute)
+	now := time.Now().UTC().Add(-time.Minute).Truncate(time.Second).Add(987 * time.Millisecond)
 	message := "manager integration"
 	document := clickhousedriver.NewJSON()
 	if err := batch.Append(
@@ -206,6 +262,7 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 	if err := batch.Send(); err != nil {
 		t.Fatal(err)
 	}
+	return now
 }
 
 func queryIntegrationWaitForTerminal(t *testing.T, manager *searchjobs.Manager, id string) searchjobs.Job {

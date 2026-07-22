@@ -294,6 +294,7 @@ func TestCreateSearchValidatesAbsoluteTimeAndIndexScope(t *testing.T) {
 	})
 
 	valid := createRequest("2026-07-22T10:00:00-02:00", "2026-07-22T13:00:00Z", "MAIN")
+	valid.Definition.Spl = " \nindex=main | head 10\t"
 	response := postProto(t, handler, "/api/v1/search/jobs/create", valid)
 	if response.Code != http.StatusOK {
 		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
@@ -306,6 +307,9 @@ func TestCreateSearchValidatesAbsoluteTimeAndIndexScope(t *testing.T) {
 	}
 	if len(captured.RequestedIndexes) != 1 || captured.RequestedIndexes[0] != "main" {
 		t.Fatalf("requested indexes = %v", captured.RequestedIndexes)
+	}
+	if captured.SPL != valid.Definition.Spl {
+		t.Fatalf("captured SPL = %q, want original %q", captured.SPL, valid.Definition.Spl)
 	}
 	if !captured.Earliest.Equal(time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)) {
 		t.Fatalf("earliest = %s", captured.Earliest)

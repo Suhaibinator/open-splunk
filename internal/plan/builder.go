@@ -89,7 +89,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		result.Operators = append(result.Operators, &Filter{Expression: expression, Range: query.Search.SourceRange()})
 	}
 
-	for _, command := range query.Commands {
+	for commandIndex, command := range query.Commands {
 		switch command := command.(type) {
 		case *spl.SearchCommand:
 			expression, convertErr := convertExpression(command.Expression)
@@ -130,6 +130,53 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			result.Operators = append(result.Operators, &Sort{Keys: keys, Limit: limit, Range: command.Range})
 		case *spl.LimitCommand:
 			result.Operators = append(result.Operators, &Limit{Count: command.Count, FromEnd: command.Name() == "tail", Range: command.Range})
+		case *spl.StatsCommand:
+			if commandIndex+1 != len(query.Commands) {
+				next := query.Commands[commandIndex+1]
+				return nil, &Diagnostic{
+					Code:        "SPL_UNSUPPORTED_AFTER_STATS",
+					Message:     fmt.Sprintf("command %q after stats is not supported in compatibility version 0.1", next.Name()),
+					Range:       next.SourceRange(),
+					Suggestions: []string{"make stats the final pipeline command"},
+				}
+			}
+			if command.Aggregate.Function != spl.AggregateFunctionCount {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+					Message: "only the argument-free count aggregate is supported",
+					Range:   command.Aggregate.Range,
+				}
+			}
+			groupBy, groupErr := convertStatsGroupFields(command.GroupBy)
+			if groupErr != nil {
+				return nil, groupErr
+			}
+			if _, aliasErr := ResolveField(command.Aggregate.Alias, command.Aggregate.AliasRange); aliasErr != nil {
+				return nil, aliasErr
+			}
+			for _, group := range groupBy {
+				if group.Name == command.Aggregate.Alias {
+					return nil, &Diagnostic{
+						Code:    "SPL_DUPLICATE_FIELD",
+						Message: fmt.Sprintf("aggregate output field %q duplicates a grouping field", command.Aggregate.Alias),
+						Range:   command.Aggregate.AliasRange,
+					}
+				}
+			}
+			outputFields := make([]string, 0, len(groupBy)+1)
+			for _, group := range groupBy {
+				outputFields = append(outputFields, group.Name)
+			}
+			outputFields = append(outputFields, command.Aggregate.Alias)
+			result.OutputFields = outputFields
+			result.Operators = append(result.Operators, &Aggregate{
+				GroupBy: groupBy,
+				Measures: []AggregateMeasure{{
+					Function: AggregateFunctionCountRows,
+					Output:   command.Aggregate.Alias,
+				}},
+				Range: command.Range,
+			})
 		default:
 			return nil, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_COMMAND",
@@ -137,6 +184,27 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				Range:   command.SourceRange(),
 			}
 		}
+	}
+	return result, nil
+}
+
+func convertStatsGroupFields(fields []spl.StatsGroupField) ([]FieldRef, error) {
+	result := make([]FieldRef, 0, len(fields))
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		if _, duplicate := seen[field.Name]; duplicate {
+			return nil, &Diagnostic{
+				Code:    "SPL_DUPLICATE_FIELD",
+				Message: fmt.Sprintf("stats grouping field %q is repeated", field.Name),
+				Range:   field.Range,
+			}
+		}
+		seen[field.Name] = struct{}{}
+		resolved, err := ResolveField(field.Name, field.Range)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, resolved)
 	}
 	return result, nil
 }

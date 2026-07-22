@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
@@ -61,7 +62,8 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 	}
 
 	aliasSequence := 0
-	for _, operator := range query.Operators[1:] {
+	remainingOperators := query.Operators[1:]
+	for operatorIndex, operator := range remainingOperators {
 		aliasSequence++
 		alias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 		switch operator := operator.(type) {
@@ -79,6 +81,23 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 			}
 			fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + alias
 			args = append(args, projectionArgs...)
+			state = nextState
+		case *plan.Aggregate:
+			if operatorIndex+1 != len(remainingOperators) {
+				return CompiledQuery{}, errors.New("compile ClickHouse aggregate: Aggregate must be the final logical operator")
+			}
+			projection, predicates, groups, nextState, aggregateArgs, compileErr := compileAggregate(operator, state)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + alias
+			if len(predicates) > 0 {
+				fragment += " WHERE " + strings.Join(predicates, " AND ")
+			}
+			if len(groups) > 0 {
+				fragment += " GROUP BY " + strings.Join(groups, ", ")
+			}
+			args = append(args, aggregateArgs...)
 			state = nextState
 		case *plan.Sort:
 			materialized, sortKeys, order, compileErr := compileSort(operator.Keys, state, aliasSequence)
@@ -197,9 +216,9 @@ func compileScan(database, table string, scan *plan.Scan) (string, compileState,
 	where := []string{
 		quoteIdentifier("tenant_id") + " = ?",
 		quoteIdentifier("index_name") + " IN (" + placeholders + ")",
-		quoteIdentifier("event_time") + " >= ?",
-		quoteIdentifier("event_time") + " < ?",
-		quoteIdentifier("index_time") + " <= ?",
+		quoteIdentifier("event_time") + " >= parseDateTime64BestEffort(?, 9, 'UTC')",
+		quoteIdentifier("event_time") + " < parseDateTime64BestEffort(?, 9, 'UTC')",
+		quoteIdentifier("index_time") + " <= parseDateTime64BestEffort(?, 3, 'UTC')",
 		quoteIdentifier("visibility_seq") + " <= ?",
 	}
 	args := make([]any, 0, len(scan.Indexes)+5)
@@ -207,7 +226,17 @@ func compileScan(database, table string, scan *plan.Scan) (string, compileState,
 	for _, index := range scan.Indexes {
 		args = append(args, index)
 	}
-	args = append(args, scan.Earliest.UTC(), scan.Latest.UTC(), scan.IndexTimeCutoff.UTC(), scan.VisibilityCutoff)
+	// clickhouse-go infers a bare time.Time placeholder as DateTime, which has
+	// only second precision. Bind canonical text and parse it explicitly so a
+	// DateTime64(3) cutoff cannot exclude rows committed earlier in the same
+	// second. Text also avoids UnixNano overflow for supported pre-epoch and
+	// upper-bound DateTime64 values.
+	args = append(args,
+		formatDateTime64Nanoseconds(scan.Earliest),
+		formatDateTime64Nanoseconds(scan.Latest),
+		formatDateTime64Milliseconds(scan.IndexTimeCutoff),
+		scan.VisibilityCutoff,
+	)
 
 	visible := make(map[string]fieldState, len(canonicalColumnNames))
 	for _, field := range canonicalColumnNames {
@@ -220,6 +249,14 @@ func compileScan(database, table string, scan *plan.Scan) (string, compileState,
 		blocked:      make(map[string]struct{}),
 	}
 	return "SELECT " + strings.Join(selects, ", ") + " FROM " + quoteIdentifier(database) + "." + quoteIdentifier(table) + " WHERE " + strings.Join(where, " AND "), state, args, nil
+}
+
+func formatDateTime64Nanoseconds(value time.Time) string {
+	return value.UTC().Format("2006-01-02 15:04:05.000000000")
+}
+
+func formatDateTime64Milliseconds(value time.Time) string {
+	return value.UTC().Truncate(time.Millisecond).Format("2006-01-02 15:04:05.000")
 }
 
 var canonicalColumnNames = []string{
@@ -555,6 +592,71 @@ func rewriteExistenceForProjection(field fieldState, name string) string {
 		return "isNotNull(" + quoteIdentifier(name) + ")"
 	}
 	return field.existsSQL
+}
+
+func compileAggregate(operator *plan.Aggregate, state compileState) (
+	projection []string,
+	predicates []string,
+	groups []string,
+	next compileState,
+	args []any,
+	err error,
+) {
+	if operator == nil || len(operator.Measures) == 0 {
+		return nil, nil, nil, compileState{}, nil, errors.New("compile ClickHouse aggregate: no measures")
+	}
+	next = compileState{
+		visible:      make(map[string]fieldState, len(operator.GroupBy)+len(operator.Measures)),
+		allowDynamic: false,
+		blocked:      make(map[string]struct{}),
+	}
+	seen := make(map[string]struct{}, len(operator.GroupBy)+len(operator.Measures))
+	for _, group := range operator.GroupBy {
+		if _, duplicate := seen[group.Name]; duplicate {
+			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: output field %q is duplicated", group.Name)
+		}
+		seen[group.Name] = struct{}{}
+		field, ok, resolveErr := resolveCompiledField(group, state)
+		if resolveErr != nil {
+			return nil, nil, nil, compileState{}, nil, resolveErr
+		}
+		if !ok {
+			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: grouping field %q is not available", group.Name)
+		}
+		valueSQL := field.valueSQL
+		kind := field.kind
+		if kind == fieldKindDynamic {
+			// SPL fields are compared and grouped by their lexical value. Dynamic
+			// scalar storage types therefore intentionally converge on the same
+			// UTF-8 group key (for example integer 500 and string "500").
+			// Missing and explicit-null values are removed below.
+			valueSQL = "toString(" + valueSQL + ")"
+			kind = fieldKindString
+		}
+		projection = append(projection, valueSQL+" AS "+quoteIdentifier(group.Name))
+		predicates = append(predicates, "("+field.existsSQL+" AND isNotNull("+field.valueSQL+"))")
+		args = append(args, field.existsArgs...)
+		groups = append(groups, valueSQL)
+		next.visible[group.Name] = fieldState{valueSQL: quoteIdentifier(group.Name), existsSQL: "1", kind: kind}
+		next.publicOrder = append(next.publicOrder, group.Name)
+		next.order = append(next.order, compiledSortKey{valueSQL: quoteIdentifier(group.Name)})
+	}
+	for _, measure := range operator.Measures {
+		if _, duplicate := seen[measure.Output]; duplicate {
+			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: output field %q is duplicated", measure.Output)
+		}
+		seen[measure.Output] = struct{}{}
+		if measure.Function != plan.AggregateFunctionCountRows {
+			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: unsupported function %d", measure.Function)
+		}
+		projection = append(projection, "count() AS "+quoteIdentifier(measure.Output))
+		next.visible[measure.Output] = fieldState{valueSQL: quoteIdentifier(measure.Output), existsSQL: "1", kind: fieldKindNumber}
+		next.publicOrder = append(next.publicOrder, measure.Output)
+		if len(next.order) == 0 {
+			next.order = append(next.order, compiledSortKey{valueSQL: quoteIdentifier(measure.Output)})
+		}
+	}
+	return projection, predicates, groups, next, args, nil
 }
 
 func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, []compiledSortKey, string, error) {
