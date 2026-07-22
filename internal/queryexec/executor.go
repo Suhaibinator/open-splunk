@@ -5,6 +5,7 @@ package queryexec
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -13,7 +14,9 @@ import (
 	"math/big"
 	"net"
 	"reflect"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -36,7 +39,13 @@ const (
 	defaultMaxResultRows    = uint64(10_001)
 	defaultMaxResultBytes   = uint64(128 << 20)
 	defaultMaxThreads       = uint64(4)
+	defaultMaxQueryBytes    = uint64(1 << 20)
+
+	extendedTypeKey  = "\x00open_splunk_type"
+	extendedValueKey = "\x00open_splunk_value"
 )
+
+var extendedDecimalPattern = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?$`)
 
 // Config bounds every ClickHouse query independently of the search-job sink.
 // Zero values select conservative single-node defaults.
@@ -128,6 +137,7 @@ func querySettings(config Config) (clickhousedriver.Settings, error) {
 		"max_rows_to_group_by":   config.MaxRowsToGroupBy,
 		"group_by_overflow_mode": "throw",
 		"max_threads":            config.MaxThreads,
+		"max_query_size":         defaultMaxQueryBytes,
 		"async_insert":           uint8(0),
 	}, nil
 }
@@ -359,6 +369,9 @@ func convertValue(value any) (searchjobs.Value, error) {
 	case float64:
 		return searchjobs.DoubleValue(value), nil
 	}
+	if decoded, tagged, err := convertExtendedValue(value); tagged {
+		return decoded, err
+	}
 
 	reflected := reflect.ValueOf(value)
 	for reflected.IsValid() && (reflected.Kind() == reflect.Pointer || reflected.Kind() == reflect.Interface) {
@@ -410,6 +423,120 @@ func convertValue(value any) (searchjobs.Value, error) {
 	default:
 		return searchjobs.Value{}, fmt.Errorf("unsupported result type %T", value)
 	}
+}
+
+// convertExtendedValue reverses the lossless representation used when an
+// ingestion value has no native ClickHouse Dynamic alternative. Only the
+// exact reserved two-entry map is treated as an envelope; ordinary maps that
+// merely contain a reserved-looking key continue through generic conversion.
+func convertExtendedValue(value any) (searchjobs.Value, bool, error) {
+	reflected := reflect.ValueOf(value)
+	for reflected.IsValid() && (reflected.Kind() == reflect.Pointer || reflected.Kind() == reflect.Interface) {
+		if reflected.IsNil() {
+			return searchjobs.Value{}, false, nil
+		}
+		reflected = reflected.Elem()
+	}
+	if !reflected.IsValid() || reflected.Kind() != reflect.Map || reflected.Type().Key().Kind() != reflect.String || reflected.Len() != 2 {
+		return searchjobs.Value{}, false, nil
+	}
+
+	var kind, encoded string
+	foundType, foundValue := false, false
+	for _, key := range reflected.MapKeys() {
+		var destination *string
+		switch key.String() {
+		case extendedTypeKey:
+			destination = &kind
+			foundType = true
+		case extendedValueKey:
+			destination = &encoded
+			foundValue = true
+		default:
+			return searchjobs.Value{}, false, nil
+		}
+		entry := reflected.MapIndex(key)
+		for entry.IsValid() && (entry.Kind() == reflect.Pointer || entry.Kind() == reflect.Interface) {
+			if entry.IsNil() {
+				return searchjobs.Value{}, true, errors.New("decode extended search result: envelope values must be strings")
+			}
+			entry = entry.Elem()
+		}
+		if !entry.IsValid() || entry.Kind() != reflect.String {
+			return searchjobs.Value{}, true, errors.New("decode extended search result: envelope values must be strings")
+		}
+		*destination = entry.String()
+	}
+	if !foundType || !foundValue {
+		return searchjobs.Value{}, false, nil
+	}
+
+	decoded, err := decodeExtendedValue(kind, encoded)
+	if err != nil {
+		return searchjobs.Value{}, true, fmt.Errorf("decode extended search result %q: %w", kind, err)
+	}
+	return decoded, true, nil
+}
+
+func decodeExtendedValue(kind, encoded string) (searchjobs.Value, error) {
+	switch kind {
+	case "bytes/v1":
+		decoded, err := base64.RawStdEncoding.Strict().DecodeString(encoded)
+		if err != nil || base64.RawStdEncoding.EncodeToString(decoded) != encoded {
+			return searchjobs.Value{}, errors.New("invalid byte encoding")
+		}
+		return searchjobs.BytesValue(decoded), nil
+	case "timestamp/v1":
+		decoded, err := time.Parse(time.RFC3339Nano, encoded)
+		if err != nil || decoded.Year() < 1 || decoded.UTC().Format(time.RFC3339Nano) != encoded {
+			return searchjobs.Value{}, errors.New("invalid timestamp encoding")
+		}
+		return searchjobs.TimeValue(decoded), nil
+	case "duration/v1":
+		decoded, err := decodeExtendedDuration(encoded)
+		if err != nil {
+			return searchjobs.Value{}, err
+		}
+		return searchjobs.DurationValue(decoded), nil
+	case "decimal/v1":
+		if !extendedDecimalPattern.MatchString(encoded) {
+			return searchjobs.Value{}, errors.New("invalid decimal encoding")
+		}
+		decoded, err := searchjobs.DecimalValue(encoded)
+		if err != nil {
+			return searchjobs.Value{}, errors.New("invalid decimal encoding")
+		}
+		return decoded, nil
+	default:
+		return searchjobs.Value{}, errors.New("unknown type tag")
+	}
+}
+
+func decodeExtendedDuration(encoded string) (time.Duration, error) {
+	secondsText, nanosText, found := strings.Cut(encoded, ":")
+	if !found || strings.Contains(nanosText, ":") {
+		return 0, errors.New("invalid duration encoding")
+	}
+	seconds, err := strconv.ParseInt(secondsText, 10, 64)
+	if err != nil || strconv.FormatInt(seconds, 10) != secondsText {
+		return 0, errors.New("invalid duration seconds")
+	}
+	nanos, err := strconv.ParseInt(nanosText, 10, 32)
+	if err != nil || strconv.FormatInt(nanos, 10) != nanosText || nanos < -999_999_999 || nanos > 999_999_999 {
+		return 0, errors.New("invalid duration nanoseconds")
+	}
+	if (seconds < 0 && nanos > 0) || (seconds > 0 && nanos < 0) {
+		return 0, errors.New("duration components have inconsistent signs")
+	}
+	if seconds > int64(math.MaxInt64/int64(time.Second)) || seconds < int64(math.MinInt64/int64(time.Second)) {
+		return 0, errors.New("duration exceeds result range")
+	}
+	result := time.Duration(seconds) * time.Second
+	if (nanos > 0 && result > time.Duration(math.MaxInt64)-time.Duration(nanos)) ||
+		(nanos < 0 && result < time.Duration(math.MinInt64)-time.Duration(nanos)) {
+		return 0, errors.New("duration exceeds result range")
+	}
+	return result + time.Duration(nanos), nil
 }
 
 func convertJSON(document *chcol.JSON) (searchjobs.Value, error) {
@@ -485,7 +612,7 @@ func classifyQueryError(ctx context.Context, err error) error {
 		switch exception.Code {
 		case 159: // TIMEOUT_EXCEEDED
 			return fmt.Errorf("%w: ClickHouse execution timeout", context.DeadlineExceeded)
-		case 158, 241, 396: // TOO_MANY_ROWS, MEMORY_LIMIT_EXCEEDED, TOO_MANY_ROWS_OR_BYTES
+		case 158, 229, 241, 396: // TOO_MANY_ROWS, QUERY_IS_TOO_LARGE, MEMORY_LIMIT_EXCEEDED, TOO_MANY_ROWS_OR_BYTES
 			return fmt.Errorf("%w: ClickHouse resource limit", searchjobs.ErrExecutionLimit)
 		case 202, 203, 209, 210, 225, 242, 243, 279, 285, 286, 319, 341, 999:
 			return fmt.Errorf("%w: %v", searchjobs.ErrStorageUnavailable, err)

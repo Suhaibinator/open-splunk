@@ -108,11 +108,18 @@ func TestCompileDynamicNumericComparisonUsesFailureFreeNumericCoercion(t *testin
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis status>=500`)
-	if !strings.Contains(compiled.SQL, `has("__os_field_names", ?) AND ifNull(toFloat64OrNull(toString("__os_fields"."status")) >= toFloat64OrNull(?), 0)`) {
-		t.Fatalf("unexpected dynamic comparison:\n%s", compiled.SQL)
+	for _, required := range []string{
+		`has("__os_field_names", ?) AND ifNull(multiIf(dynamicType("__os_fields"."status") IN (`,
+		`accurateCastOrNull(toString("__os_fields"."status"), 'Int256') >= accurateCastOrNull(?, 'Int256')`,
+		`'decimal/v1'`,
+		`toFloat64OrNull(?)`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("dynamic comparison SQL missing %q:\n%s", required, compiled.SQL)
+		}
 	}
-	if got := compiled.Args[len(compiled.Args)-1]; got != "500" {
-		t.Fatalf("numeric argument = %#v (%T), want source string", got, got)
+	if got := compiled.Args[len(compiled.Args)-2:]; !reflect.DeepEqual(got, []any{"500", "500"}) {
+		t.Fatalf("numeric argument occurrences = %#v, want source strings", got)
 	}
 }
 
@@ -147,11 +154,28 @@ func TestCompileDynamicEqualityRetainsLiteralTypeIntent(t *testing.T) {
 	}
 }
 
+func TestCompileBaseSearchComparesTaggedDecimalValues(t *testing.T) {
+	t.Parallel()
+
+	equality := compileSPL(t, `index=gradethis decimal_value=123.45`)
+	relational := compileSPL(t, `index=gradethis decimal_value>100`)
+	for name, compiled := range map[string]CompiledQuery{"equality": equality, "relational": relational} {
+		for _, required := range []string{`Map(String, String)`, `'decimal/v1'`, `open_splunk_value`, `ifNotFinite(toFloat64OrNull(`} {
+			if !strings.Contains(compiled.SQL, required) {
+				t.Fatalf("%s tagged-decimal SQL missing %q:\n%s", name, required, compiled.SQL)
+			}
+		}
+		if placeholders := strings.Count(compiled.SQL, "?"); placeholders != len(compiled.Args) {
+			t.Fatalf("%s placeholder count = %d, args = %d: %#v", name, placeholders, len(compiled.Args), compiled.Args)
+		}
+	}
+}
+
 func TestCompileFieldNotEqualRequiresExistence(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis status!=500`)
-	if !strings.Contains(compiled.SQL, `has("__os_field_names", ?) AND NOT ifNull((dynamicType("__os_fields"."status") IN (`) {
+	if !strings.Contains(compiled.SQL, `has("__os_field_names", ?) AND NOT ifNull(multiIf(dynamicType("__os_fields"."status") IN (`) {
 		t.Fatalf("!= does not enforce presence:\n%s", compiled.SQL)
 	}
 }
@@ -160,7 +184,7 @@ func TestCompileNOTComparisonIncludesMissingField(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis NOT status=500`)
-	if !strings.Contains(compiled.SQL, `NOT ((has("__os_field_names", ?) AND ifNull((dynamicType("__os_fields"."status") IN (`) {
+	if !strings.Contains(compiled.SQL, `NOT ((has("__os_field_names", ?) AND ifNull(multiIf(dynamicType("__os_fields"."status") IN (`) {
 		t.Fatalf("NOT comparison grouping is unsafe:\n%s", compiled.SQL)
 	}
 }
@@ -533,8 +557,24 @@ func TestCompileDynamicStatsGroupRetainsNumericAwareSort(t *testing.T) {
 
 	compiled := compileSPL(t, `index=gradethis | stats count by status | sort status`)
 	if !strings.Contains(compiled.SQL, `tuple(if(isNull("__os_group_0")`) ||
-		!strings.Contains(compiled.SQL, `toFloat64OrNull(toString("__os_group_0"))`) {
+		!strings.Contains(compiled.SQL, `toFloat64OrNull(toString("__os_group_0"))`) ||
+		!strings.Contains(compiled.SQL, `accurateCastOrNull(toString("__os_group_0"), 'Int256')`) {
 		t.Fatalf("dynamic stats group lost numeric-aware downstream sort:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileDynamicSortUsesExactIntegralTieBreaker(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | sort wide_sort | table event_id`)
+	for _, required := range []string{
+		`dynamicType("__os_fields"."wide_sort")`,
+		`accurateCastOrNull(toString("__os_fields"."wide_sort"), 'Int256')`,
+		`ifNotFinite(`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("dynamic sort SQL missing %q:\n%s", required, compiled.SQL)
+		}
 	}
 }
 
@@ -544,6 +584,297 @@ func TestCompilePostStatsIndexAliasUsesAggregateType(t *testing.T) {
 	compiled := compileSPL(t, `index=gradethis | stats count AS index | search index=1`)
 	if !strings.Contains(compiled.SQL, `toInt256("index") = accurateCastOrNull(?, 'Int256')`) {
 		t.Fatalf("aggregate alias index retained physical index comparison semantics:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileWhereAfterStatsUsesTypedPostAggregatePredicate(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | stats count by status | where count>1 AND status!=500`)
+	for _, required := range []string{
+		`toInt256("count") > accurateCastOrNull(CAST(? AS Int64), 'Int256')`,
+		`"__os_group_0"`,
+		`AND`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("where SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, "status!=500") {
+		t.Fatalf("where source leaked into SQL:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileWhereKeepsEvalStringAndFieldComparisonSemantics(t *testing.T) {
+	t.Parallel()
+
+	caseSensitive := compileSPL(t, `index=gradethis | where host="API"`)
+	if !strings.Contains(caseSensitive.SQL, `toString("host") = CAST(? AS String)`) || strings.Contains(caseSensitive.SQL, "lowerUTF8") {
+		t.Fatalf("where string comparison is not case-sensitive:\n%s", caseSensitive.SQL)
+	}
+
+	fieldToField := compileSPL(t, `index=gradethis | where host=source`)
+	if !strings.Contains(fieldToField.SQL, `toString("host") = toString("source")`) {
+		t.Fatalf("where field comparison was not preserved:\n%s", fieldToField.SQL)
+	}
+
+	missingUnderNot := compileSPL(t, `index=gradethis | where NOT absent=1`)
+	if !strings.Contains(missingUnderNot.SQL, `CAST(NULL AS Nullable(Bool))`) ||
+		!strings.Contains(missingUnderNot.SQL, `NOT (`) {
+		t.Fatalf("where NOT lost three-valued missing semantics:\n%s", missingUnderNot.SQL)
+	}
+}
+
+func TestCompileWhereRejectsFixedBoolCoercion(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | eval one=1 | where one=true`,
+		`index=gradethis event_id=one | stats count | where count=true`,
+	} {
+		compiled := compileSPL(t, source)
+		if !strings.Contains(compiled.SQL, `CAST(NULL AS Nullable(Bool))`) {
+			t.Fatalf("%q retained numeric/Bool coercion:\n%s", source, compiled.SQL)
+		}
+	}
+}
+
+func TestCompileWhereRejectsOrderedBoolComparisons(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | where true>false`,
+		`index=gradethis | eval flag=true | where flag>false`,
+		`index=gradethis | where dynamic_flag>false`,
+	} {
+		compiled := compileSPL(t, source)
+		if !strings.Contains(compiled.SQL, `CAST(NULL AS Nullable(Bool))`) ||
+			strings.Contains(compiled.SQL, `> CAST(? AS Bool)`) || strings.Contains(compiled.SQL, `Bool') >`) {
+			t.Fatalf("%q retained ordered Bool comparison:\n%s", source, compiled.SQL)
+		}
+	}
+
+	dynamicPair := compileSPL(t, `index=gradethis | where dynamic_flag>other_flag`)
+	if strings.Contains(dynamicPair.SQL, `dynamicElement("__os_fields"."dynamic_flag", 'Bool') >`) ||
+		!strings.Contains(dynamicPair.SQL, `dynamicType("__os_fields"."dynamic_flag") = 'Bool'`) {
+		t.Fatalf("dynamic Bool pair retained ordered comparison:\n%s", dynamicPair.SQL)
+	}
+}
+
+func TestCompileMaterializedNullOutputsRemainPresent(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | eval x=tonumber("bad") | search x=null`,
+		`index=gradethis | stats p95(absent) AS p | search p=null`,
+	} {
+		compiled := compileSPL(t, source)
+		if !strings.Contains(compiled.SQL, `1 AND isNull(`) {
+			t.Fatalf("%q conflated a materialized null with a missing field:\n%s", source, compiled.SQL)
+		}
+	}
+}
+
+func TestCompileBaseSearchOrdersStringsLexically(t *testing.T) {
+	t.Parallel()
+
+	canonical := compileSPL(t, `index=gradethis host>"a"`)
+	if !strings.Contains(canonical.SQL, `lowerUTF8(toString("host")) > lowerUTF8(?)`) {
+		t.Fatalf("canonical string ordering is not lexical:\n%s", canonical.SQL)
+	}
+	dynamic := compileSPL(t, `index=gradethis category>"alpha"`)
+	for _, required := range []string{
+		`dynamicType("__os_fields"."category") = 'String'`,
+		`lowerUTF8(dynamicElement("__os_fields"."category", 'String')) > lowerUTF8(?)`,
+	} {
+		if !strings.Contains(dynamic.SQL, required) {
+			t.Fatalf("dynamic string ordering SQL missing %q:\n%s", required, dynamic.SQL)
+		}
+	}
+}
+
+func TestCompileWhereUsesRuntimeDynamicTypesAndOccurrenceOrderedArguments(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | where unsigned>18446744073709551614`)
+	for _, required := range []string{
+		`multiIf(dynamicType("__os_fields"."unsigned") IN (`,
+		`accurateCastOrNull(toString("__os_fields"."unsigned"), 'Int256') > accurateCastOrNull(CAST(? AS UInt64), 'Int256')`,
+		`'decimal/v1'`,
+		`toFloat64(CAST(? AS UInt64))`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("dynamic integer SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if placeholders := strings.Count(compiled.SQL, "?"); placeholders != len(compiled.Args) {
+		t.Fatalf("placeholder count = %d, args = %d: %#v\n%s", placeholders, len(compiled.Args), compiled.Args, compiled.SQL)
+	}
+	literalCount := 0
+	for _, argument := range compiled.Args {
+		if argument == uint64(18_446_744_073_709_551_614) {
+			literalCount++
+		}
+	}
+	if literalCount != 2 {
+		t.Fatalf("wide integer argument occurrences = %d, want 2: %#v", literalCount, compiled.Args)
+	}
+
+	fieldToField := compileSPL(t, `index=gradethis | where left>right`)
+	if !strings.Contains(fieldToField.SQL, `accurateCastOrNull(toString("__os_fields"."left"), 'Int256') > accurateCastOrNull(toString("__os_fields"."right"), 'Int256')`) ||
+		!strings.Contains(fieldToField.SQL, `dynamicElement("__os_fields"."left", 'String') > dynamicElement("__os_fields"."right", 'String')`) {
+		t.Fatalf("dynamic field comparison is not runtime typed:\n%s", fieldToField.SQL)
+	}
+}
+
+func TestCompileWhereTreatsCanonicalTimeAsEpochSeconds(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | where _time>1700000000`)
+	if !strings.Contains(compiled.SQL, `toFloat64(toUnixTimestamp64Nano("_time")) / 1000000000`) {
+		t.Fatalf("where time comparison is not epoch based:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileEvalReplaceToNumberIsNullableAndParameterized(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | eval duration_ms=tonumber(replace(duration, "ms$", "")) | table duration_ms`)
+	if !slices.Equal(compiled.OutputFields, []string{"duration_ms"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, required := range []string{
+		`dynamicElement("__os_fields"."duration", 'String')`,
+		`replaceRegexpAll(`,
+		`toFloat64OrNull(`,
+		`ifNotFinite(`,
+		`AS "duration_ms"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("eval SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, "ms$") {
+		t.Fatalf("regex literal leaked into SQL:\n%s", compiled.SQL)
+	}
+	wantPrefix := []any{"duration", "ms$", ""}
+	if len(compiled.Args) < len(wantPrefix) || !reflect.DeepEqual(compiled.Args[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("eval arg prefix = %#v, want %#v\nall args: %#v", compiled.Args, wantPrefix, compiled.Args)
+	}
+}
+
+func TestCompileEvalAssignmentsAreSequentialAndOverwriteWithoutDuplicateColumns(t *testing.T) {
+	t.Parallel()
+
+	sequential := compileSPL(t, `index=gradethis | eval first=replace(duration, "ms$", ""), second=tonumber(first) | table second`)
+	if strings.Count(sequential.SQL, `AS "first"`) == 0 || !strings.Contains(sequential.SQL, `"first"`) ||
+		!strings.Contains(sequential.SQL, `AS "second"`) {
+		t.Fatalf("sequential eval aliases are incomplete:\n%s", sequential.SQL)
+	}
+
+	overwrite := compileSPL(t, `index=gradethis | eval message=replace(message, "old", "new") | table message`)
+	if !strings.Contains(overwrite.SQL, `SELECT * REPLACE (`) || strings.Contains(overwrite.SQL, `*, replaceRegexpAll`) {
+		t.Fatalf("existing field was not deliberately replaced:\n%s", overwrite.SQL)
+	}
+}
+
+func TestCompileEvalLiteralsRetainNativeTypesAndCalculatedIndexSemantics(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | eval signed=-7,unsigned=18446744073709551615,ratio=1.25,ok=true,text="x" | table signed,unsigned,ratio,ok,text`)
+	for _, required := range []string{
+		`CAST(? AS Int64) AS "signed"`,
+		`CAST(? AS UInt64) AS "unsigned"`,
+		`CAST(? AS Float64) AS "ratio"`,
+		`CAST(? AS Bool) AS "ok"`,
+		`CAST(? AS String) AS "text"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("typed eval SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if placeholders := strings.Count(compiled.SQL, "?"); placeholders != len(compiled.Args) {
+		t.Fatalf("placeholder count = %d, args = %d: %#v", placeholders, len(compiled.Args), compiled.Args)
+	}
+
+	calculatedIndex := compileSPL(t, `index=gradethis | eval index=1 | search index=1`)
+	if !strings.Contains(calculatedIndex.SQL, `toInt256("index") = accurateCastOrNull(?, 'Int256')`) {
+		t.Fatalf("calculated index retained physical selector semantics:\n%s", calculatedIndex.SQL)
+	}
+}
+
+func TestCompileEvalRejectsRegexOutsideSafeRE2Subset(t *testing.T) {
+	t.Parallel()
+
+	logical := buildPlan(t, `index=gradethis`)
+	output, err := plan.ResolveField("value", spl.Range{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := plan.ResolveField("message", spl.Range{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pattern := range []string{"(?=secret)", "a*"} {
+		candidate := *logical
+		candidate.Operators = append(append([]plan.Operator(nil), logical.Operators...), &plan.Extend{Assignments: []plan.ExtendAssignment{{
+			Output: output,
+			Expression: &plan.ScalarCallExpression{
+				Function: plan.ScalarFunctionReplace,
+				Arguments: []plan.ScalarExpression{
+					&plan.ScalarFieldExpression{Field: message},
+					&plan.ScalarLiteralExpression{Value: plan.Value{Kind: plan.ValueKindString, String: pattern}},
+					&plan.ScalarLiteralExpression{Value: plan.Value{Kind: plan.ValueKindString, String: ""}},
+				},
+			},
+		}}})
+		_, err = (Compiler{}).Compile(&candidate)
+		if err == nil || !strings.Contains(err.Error(), "regular expression") {
+			t.Fatalf("Compile pattern %q error = %v, want safe regex diagnostic", pattern, err)
+		}
+	}
+}
+
+func TestCompileStatsP95UsesBoundedNullableAggregate(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | eval duration_ms=tonumber(replace(duration, "ms$", "")) | stats count p95(duration_ms) AS p95_ms BY path | where p95_ms>500`)
+	if !slices.Equal(compiled.OutputFields, []string{"path", "count", "p95_ms"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, required := range []string{
+		`count() AS "count"`,
+		`quantileGKOrNull(100, 0.95)(ifNotFinite(toFloat64("duration_ms"), CAST(NULL AS Nullable(Float64)))) AS "p95_ms"`,
+		`toFloat64("p95_ms") > toFloat64(CAST(? AS Int64))`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("p95 SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+}
+
+func TestCompileStatsP95SupportsTimeAndTaggedDecimalAndRejectsNonFiniteText(t *testing.T) {
+	t.Parallel()
+
+	timePercentile := compileSPL(t, `index=gradethis | stats p95(_time) AS p95_time`)
+	if !strings.Contains(timePercentile.SQL, `toFloat64(toUnixTimestamp64Nano("_time")) / 1000000000`) {
+		t.Fatalf("time percentile is not epoch based:\n%s", timePercentile.SQL)
+	}
+
+	decimalPercentile := compileSPL(t, `index=gradethis | stats p95(decimal_value) AS p95_decimal`)
+	for _, required := range []string{`'decimal/v1'`, `ifNotFinite(toFloat64OrNull(`, `Map(String, String)`} {
+		if !strings.Contains(decimalPercentile.SQL, required) {
+			t.Fatalf("decimal percentile SQL missing %q:\n%s", required, decimalPercentile.SQL)
+		}
+	}
+}
+
+func TestCompileStatsP95DoesNotResurrectProjectedInput(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | fields - duration | stats count p95(duration) AS p95_ms BY path`)
+	if !strings.Contains(compiled.SQL, `quantileGKOrNull(100, 0.95)(CAST(NULL AS Nullable(Float64))) AS "p95_ms"`) {
+		t.Fatalf("projected percentile input was not retained as null:\n%s", compiled.SQL)
 	}
 }
 
@@ -576,11 +907,56 @@ func TestCompileRejectsUntrustedPhysicalIdentifier(t *testing.T) {
 	}
 }
 
-func TestQuoteIdentifierEscapesEveryDoubleQuote(t *testing.T) {
+func TestQuoteIdentifierEscapesSQLAndDriverBindMetacharacters(t *testing.T) {
 	t.Parallel()
 
-	if got, want := quoteIdentifier(`a"b`), `"a""b"`; got != want {
+	if got, want := quoteIdentifier(`a"b\c?d$1{e:f}`), `"a\x22b\x5Cc\x3Fd\x241\x7Be:f\x7D"`; got != want {
 		t.Fatalf("quoteIdentifier = %q, want %q", got, want)
+	}
+	for _, marker := range []string{"?", "$1", "{e:f}"} {
+		if strings.Contains(quoteIdentifier(`a"b\c?d$1{e:f}`), marker) {
+			t.Fatalf("quoted identifier retained driver marker %q", marker)
+		}
+	}
+}
+
+func TestCompileDriverMetacharacterFieldNamesRemainParameterized(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis foo?bar="value" | eval result?=1 | stats count AS total$1 BY brace{x:y}`)
+	for _, marker := range []string{`"foo?bar"`, `"result?"`, `"total$1"`, `"brace{x:y}"`} {
+		if strings.Contains(compiled.SQL, marker) {
+			t.Fatalf("compiled SQL retained unsafe identifier %q:\n%s", marker, compiled.SQL)
+		}
+	}
+	if placeholders := strings.Count(compiled.SQL, "?"); placeholders != len(compiled.Args) {
+		t.Fatalf("placeholder count = %d, args = %d: %#v\n%s", placeholders, len(compiled.Args), compiled.Args, compiled.SQL)
+	}
+	if !slices.Equal(compiled.OutputFields, []string{"brace{x:y}", "total$1"}) {
+		t.Fatalf("logical output fields = %v", compiled.OutputFields)
+	}
+}
+
+func TestCompileRejectsOversizedGeneratedSQL(t *testing.T) {
+	t.Parallel()
+
+	segment := strings.Repeat("?", 245)
+	field := strings.Repeat(segment+".", 14) + segment
+	var source strings.Builder
+	source.WriteString("index=gradethis | where ")
+	for index := 0; index < 4; index++ {
+		if index > 0 {
+			source.WriteString(" AND ")
+		}
+		source.WriteString(field)
+		source.WriteString("=1")
+	}
+	logical := buildPlan(t, source.String())
+	var err error
+	_, err = (Compiler{}).Compile(logical)
+	diagnostic, ok := err.(*plan.Diagnostic)
+	if !ok || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
+		t.Fatalf("Compile error = %#v, want SPL_QUERY_TOO_COMPLEX", err)
 	}
 }
 
@@ -604,6 +980,7 @@ func TestCompiledPlaceholderCountMatchesArguments(t *testing.T) {
 		`index=gradethis | sort 25 -status | tail 3`,
 		`"connection*refused" | fields _time,message`,
 		`index=gradethis | top limit=20 message | search percent>1`,
+		`index=gradethis | stats count by status | where count>1`,
 	}
 	for _, source := range queries {
 		compiled := compileSPL(t, source)

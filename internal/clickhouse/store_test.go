@@ -763,6 +763,17 @@ func TestConvertTypedObjectPreservesTypesTagsAndEscapedNames(t *testing.T) {
 	}
 }
 
+func TestTypedValueToNativeRejectsDurationOutsideResultRange(t *testing.T) {
+	t.Parallel()
+
+	value := &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DurationValue{
+		DurationValue: &durationpb.Duration{Seconds: 9_223_372_037},
+	}}
+	if _, err := typedValueToNative(value); err == nil || !strings.Contains(err.Error(), "duration") {
+		t.Fatalf("typedValueToNative(out-of-range duration) error = %v", err)
+	}
+}
+
 func TestConvertTypedObjectAvoidsDottedPathCollisions(t *testing.T) {
 	t.Parallel()
 	object := typedObjectValue(

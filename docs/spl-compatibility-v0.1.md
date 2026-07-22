@@ -12,6 +12,19 @@ All searches are additionally constrained by the server-resolved tenant,
 authorized index set, half-open event-time range, index-time cutoff, and
 storage visibility snapshot. SPL cannot widen those boundaries.
 
+To bound parser, compiler, and ClickHouse AST work, one search may contain at
+most 16 KiB of UTF-8 source, 1,024 syntax tokens, and 64 pipeline commands.
+Scalar expressions may nest 32 levels, with at most 32 `where` comparisons.
+`eval` accepts at most 64 assignments; `stats` accepts at most 16 measures and
+16 `BY` fields. Exceeding a limit returns the source-located
+`SPL_QUERY_TOO_COMPLEX` diagnostic before planning or execution. Dynamic field
+paths align with ingestion's ceiling: 17 dotted segments and 256 unescaped
+UTF-8 bytes per segment. Generated ClickHouse SQL is additionally capped at
+256 KiB; exceeding that internal expansion budget returns the same diagnostic.
+The executor applies a 1 MiB ClickHouse `max_query_size` ceiling after bound
+arguments are expanded, in addition to its time, memory, scan, group, and result
+budgets.
+
 ## Search expressions
 
 Base search and pipeline `search` support:
@@ -24,13 +37,60 @@ Base search and pipeline `search` support:
 - `*` wildcards in term and comparison values; and
 - canonical fields plus deterministic dotted dynamic-field paths.
 
-Comparisons preserve literal type intent. Dynamic numeric comparisons do not
-coerce arbitrary strings into stored numeric values. `field!=value` excludes a
-missing field, while `NOT field=value` includes it. `field=*` requires a
-present, non-null value. Canonical `index` comparisons are case-sensitive;
-ordinary string comparisons are case-insensitive.
+Equality comparisons preserve literal type intent. Ordered comparisons against
+a numeric literal also accept numeric-looking dynamic strings; failed numeric
+conversion does not match. `field!=value` excludes a missing field, while `NOT
+field=value` includes it. `field=*` requires a present, non-null value. Canonical
+`index` comparisons are case-sensitive; ordinary string comparisons are
+case-insensitive. Extended decimal values compare through finite `Float64`, so
+distinct values beyond `Float64` precision can compare as equal in compatibility
+version 0.1.
+
+### `where`
+
+```spl
+| where p95_ms > 500
+| where status=500 OR duration_ms>500 AND level="ERROR"
+```
+
+`where` uses a separate eval-expression grammar: quoted strings are literals,
+bare names are fields, comparisons are case-sensitive, implicit `AND` is not
+accepted, and precedence is parentheses, `NOT`, `AND`, then `OR`. The current
+slice supports Boolean combinations of scalar comparisons. Scalar operands may
+be fields, typed literals, or the supported `tonumber` and `replace` calls;
+arithmetic, field quoting, `XOR`, and other eval functions are not yet accepted.
+Missing, null, container, or failed numeric operands do not pass the filter.
+Dynamic values compare through their runtime scalar types: integer pairs retain
+full 64-bit precision, numeric pairs compare numerically, and string pairs
+compare lexically. Canonical `_time` and `_indextime` use Unix epoch seconds in
+numeric comparisons. Extended decimals have the same `Float64` precision caveat
+as base-search comparisons.
 
 ## Pipeline commands
+
+### `eval`
+
+```spl
+| eval duration_ms=tonumber(replace(duration, "ms$", ""))
+```
+
+Assignments are evaluated from left to right, and later assignments may use an
+earlier output. Existing fields can be replaced without producing duplicate
+columns. Literal assignments retain their `Int64`, `UInt64`, `Float64`, `Bool`,
+or `String` output type. The current scalar-expression surface is deliberately narrow:
+
+- `replace(value, "regex", "replacement")` substitutes every match and
+  requires literal regex/replacement arguments;
+- `tonumber(value)` returns a nullable `Float64`; invalid, missing, null,
+  non-string dynamic, multivalue, object, `NaN`, and infinite inputs become
+  null.
+
+Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
+RE2-compatible subset supported by ClickHouse. Any pattern capable of a
+zero-width match is rejected because ClickHouse does not implement PCRE's
+global zero-width replacement semantics. These differences are explicit.
+The optional `tonumber` base and integer-versus-double result distinction are
+not yet implemented.
 
 ### `fields`
 
@@ -83,19 +143,32 @@ the selected rows in reversed order, matching its pipeline semantics.
 ```spl
 | stats count
 | stats count AS events BY field1, field2
+| stats count p95(duration_ms) AS p95_ms BY path
 ```
 
-Only argument-free `count` is supported. The command is transforming: output
-contains only the `BY` fields followed by the count output. Missing and
-explicit-null group values are omitted. Dynamic scalar values group by their
-lexical representation, so numeric `500` and string `"500"` share a group.
-Bytes, timestamps, durations, and decimals use deterministic tagged scalar
-representations. Lists and objects fail the whole search with an unsupported-
-value error before any group is exposed.
+Argument-free `count` and `p95(field)` are supported, including multiple
+space- or comma-separated measures and `AS` aliases. The command is
+transforming: output contains only the `BY` fields followed by measures in
+source order. `count` includes every row in a retained group; `p95` ignores
+missing, null, nonnumeric, `NaN`, and infinite inputs and returns nullable
+`Float64`. Canonical timestamps are converted to Unix epoch seconds, and
+tagged decimal values are converted to finite `Float64` inputs.
 
-Downstream `search`, `fields`, `table`, `sort`, `head`, `tail`, and another
-supported transforming command operate on the statistical schema, never on
-hidden event columns.
+`p95` uses ClickHouse `quantileGKOrNull(100, 0.95)`, a bounded approximately
+1%-rank-error aggregate. Splunk's percentile implementation uses different
+exact/interpolated behavior for small cardinalities and a proprietary bounded
+approximation for larger inputs, so exact percentile values can differ while
+the rank/error intent is preserved. An all-null percentile remains null.
+
+Missing and explicit-null group values are omitted. Dynamic scalar values
+group by their lexical representation, so numeric `500` and string `"500"`
+share a group. Bytes, timestamps, durations, and decimals use deterministic
+tagged scalar representations. Lists and objects fail the whole search with an
+unsupported-value error before any group is exposed.
+
+Downstream `search`, `where`, `eval`, `fields`, `table`, `sort`, `head`, `tail`,
+and another supported transforming command operate on the statistical schema,
+never on hidden event columns.
 
 ### `top`
 
@@ -130,32 +203,34 @@ named `count` or `percent` is rejected until output-renaming options exist.
 
 ## Current GradeThis corpus
 
-Seven of the product plan's ten initial searches compile and execute in v0.1:
+Eight of the product plan's ten initial searches compile and execute in v0.1:
 
 - trace-ID event investigation;
 - errors/warnings with descending time;
 - quoted raw error fragments;
 - severity counts;
 - frequent errors by logger and message;
-- HTTP response counts by route and status; and
+- HTTP response counts by route and status;
+- slow routes through `eval`, `p95`, and `where`; and
 - top messages.
 
-The three remaining searches fail explicitly at `timechart` or `eval`.
-`timechart`, `eval`, `where`, and percentile aggregation are the blockers for
-those corpus entries.
+The two remaining searches fail explicitly at `timechart`; its dynamic wide
+series schema, fixed-range bucketing, gap filling, and bounded series-selection
+contract remain the blocker.
 
 ## Explicitly unsupported surface
 
 The following planned commands are not implemented in this version:
 
 ```text
-where, eval, rename, rex, spath, bin, bucket, chart, timechart,
+rename, rex, spath, bin, bucket, chart, timechart,
 dedup, rare, eventstats, streamstats
 ```
 
-All `stats` functions other than argument-free `count` are unsupported,
-including `count(field)`, `dc`, `values`, `list`, `sum`, `avg`, `min`, `max`,
-`earliest`, `latest`, and percentile functions.
+All `stats` functions other than argument-free `count` and `p95(field)` are
+unsupported, including `count(field)`, `dc`, `values`, `list`, `sum`, `avg`,
+`min`, `max`, `earliest`, `latest`, other fixed percentiles, `perc<N>`,
+`upperperc`, and `exactperc`.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,
@@ -165,5 +240,9 @@ are declared compatible.
 Reference behavior is compared against Splunk's official [`search`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/search),
 [`sort`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/sort),
 [`stats`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/stats),
+[`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
+[`replace`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.4.2604/evaluation-functions/text-functions),
+[`tonumber`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/9.0/evaluation-functions/conversion-functions),
+[`percentile functions`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/9.4/statistical-and-charting-functions/aggregate-functions),
 and [`top`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.0/search-commands/top)
 documentation.

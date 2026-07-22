@@ -234,6 +234,16 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("status", typedSint(500)),
 		typedField("ratio", typedSint(1)),
 		typedField("n", typedSint(1)),
+		typedField("left", typedSint(10)),
+		typedField("right", typedSint(2)),
+		typedField("unsigned_max", typedUint(^uint64(0))),
+		typedField("wide_sort", typedSint(-9_007_199_254_740_993)),
+		typedField("dynamic_flag", typedBool(true)),
+		typedField("other_flag", typedBool(false)),
+		typedField("latency", typedString("NaN")),
+		typedField("foo?bar", typedString("needle")),
+		typedField("amount$1", typedString("money")),
+		typedField("brace{x:y}", typedString("group")),
 		typedField("mixed_by", typedString("scalar")),
 		typedField("tenant_probe", typedString("visible")),
 		typedField("sort_value", typedString("10")),
@@ -241,14 +251,23 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("category", typedString("alpha")),
 		typedField("category_nullable", typedString("alpha")),
 		typedField("empty_value", typedString("")),
+		typedField("path", typedString("/slow")),
+		typedField("duration", typedString("600ms")),
+		typedField("date", typedString("1/14/2023")),
 	)
 	two := compilerIntegrationEvent("n-two", "500", "prefix error42 suffix", indexTime,
 		typedField("status", typedString("500")),
 		typedField("ratio", typedDouble(1)),
 		typedField("n", typedSint(2)),
+		typedField("left", typedSint(2)),
+		typedField("right", typedSint(10)),
+		typedField("wide_sort", typedSint(-9_007_199_254_740_992)),
+		typedField("latency", typedString("200")),
 		typedField("sort_value", typedString("2")),
 		typedField("category", typedString("alpha")),
 		typedField("category_nullable", typedString("alpha")),
+		typedField("path", typedString("/slow")),
+		typedField("duration", typedString("700ms")),
 	)
 	null := compilerIntegrationEvent("n-null", "nullable", "nothing here", indexTime,
 		typedField("status", typedNull()),
@@ -257,6 +276,9 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("nothing", typedNull()),
 		typedField("category", typedString("beta")),
 		typedField("category_nullable", typedNull()),
+		typedField("path", typedString("/fast")),
+		typedField("duration", typedString("20ms")),
+		typedField("duration_null", typedNull()),
 	)
 	extendedTimestamp := time.Date(2026, time.July, 21, 3, 4, 5, 123_456_789, time.UTC)
 	complex := compilerIntegrationEvent("n-complex", "complex", "complex values", indexTime,
@@ -266,11 +288,15 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("timestamp_value", typedTimestamp(extendedTimestamp)),
 		typedField("duration_value", typedDuration(3*time.Second+4*time.Nanosecond)),
 		typedField("decimal_value", typedDecimal("123.4500")),
+		typedField("latency", typedString("100")),
 		typedField("sort_value", typedString("text")),
 		typedField("object_value", typedObject()),
 		typedField("object_parent", typedObject(typedField("child", typedString("nested")))),
 		typedField("mixed_by", typedList(typedString("container"))),
 		typedField("category", typedString("gamma")),
+		typedField("path", typedString("/slow")),
+		typedField("duration", typedString("5µs")),
+		typedField("duration_container", typedList(typedString("800ms"))),
 	)
 	batch := ingest.StoreBatch{
 		TenantID: "tenant", CollectorID: "collector", BatchID: "compiler-batch", BatchSequence: 3,
@@ -318,14 +344,37 @@ func testCompiledQueriesAgainstClickHouse(
 	}
 
 	for source, want := range map[string]uint64{
-		`index=compiler host=500`:            1,
-		`index=compiler status>=500`:         2,
-		`index=compiler ratio=1`:             1,
-		`index=compiler ratio=1.0`:           1,
-		`index=compiler nothing=null`:        1,
-		`index=compiler nothing=*`:           0,
-		`index=compiler error*`:              1,
-		`index=compiler literal\.dot=needle`: 1,
+		`index=compiler host=500`:                                                       1,
+		`index=compiler status>=500`:                                                    2,
+		`index=compiler ratio=1`:                                                        1,
+		`index=compiler ratio=1.0`:                                                      1,
+		`index=compiler nothing=null`:                                                   1,
+		`index=compiler nothing=*`:                                                      0,
+		`index=compiler error*`:                                                         1,
+		`index=compiler literal\.dot=needle`:                                            1,
+		`index=compiler | where left>right`:                                             1,
+		`index=compiler | where unsigned_max>18446744073709551614`:                      1,
+		`index=compiler | where unsigned_max=18446744073709551614`:                      0,
+		`index=compiler | where _time>0`:                                                4,
+		`index=compiler foo?bar=needle`:                                                 1,
+		`index=compiler amount$1=money`:                                                 1,
+		`index=compiler brace{x:y}=group`:                                               1,
+		`index=compiler decimal_value>100`:                                              1,
+		`index=compiler decimal_value=123.45`:                                           1,
+		`index=compiler host>"b"`:                                                       2,
+		`index=compiler category>"alpha"`:                                               2,
+		`index=compiler | eval one=1 | where one=true`:                                  0,
+		`index=compiler event_id=n-one | stats count | where count=true`:                0,
+		`index=compiler | where n=true`:                                                 0,
+		`index=compiler event_id=n-one | eval fixed_flag=true | where fixed_flag>false`: 0,
+		`index=compiler | where dynamic_flag>false`:                                     0,
+		`index=compiler | where dynamic_flag>other_flag`:                                0,
+		`index=compiler | where dynamic_flag=true`:                                      1,
+		`index=compiler | where dynamic_flag!=other_flag`:                               1,
+		`index=compiler event_id=n-one | eval x=tonumber("bad") | search x=null`:        1,
+		`index=compiler event_id=n-one | eval x=tonumber("bad") | search x=*`:           0,
+		`index=compiler | stats p95(absent) AS p | search p=null`:                       1,
+		`index=compiler | stats p95(absent) AS p | search p=*`:                          0,
 	} {
 		compiled := compileIntegrationSPL(t, source, indexTime.Add(10*time.Second), visibilityCutoff)
 		var count uint64
@@ -352,6 +401,269 @@ func testCompiledQueriesAgainstClickHouse(
 	}
 	if emptyCount != 0 {
 		t.Fatalf("empty global stats count = %d, want 0", emptyCount)
+	}
+
+	for _, test := range []struct {
+		name   string
+		source string
+		want   *float64
+	}{
+		{
+			name:   "valid string",
+			source: `index=compiler | eval duration_ms=tonumber(replace(duration, "ms$", "")) | where event_id="n-one" | table duration_ms`,
+			want:   float64PointerForIntegration(600),
+		},
+		{
+			name:   "failed conversion",
+			source: `index=compiler | eval duration_ms=tonumber(replace(duration, "ms$", "")) | where event_id="n-complex" | table duration_ms`,
+		},
+		{
+			name:   "container input",
+			source: `index=compiler | eval duration_ms=tonumber(replace(duration_container, "ms$", "")) | where event_id="n-complex" | table duration_ms`,
+		},
+		{
+			name:   "explicit null input",
+			source: `index=compiler | eval duration_ms=tonumber(replace(duration_null, "ms$", "")) | where event_id="n-null" | table duration_ms`,
+		},
+	} {
+		t.Run("eval "+test.name, func(t *testing.T) {
+			compiled := compileIntegrationSPL(t, test.source, indexTime.Add(10*time.Second), visibilityCutoff)
+			var got *float64
+			if err := connection.QueryRow(ctx, compiled.SQL, compiled.Args...).Scan(&got); err != nil {
+				t.Fatalf("execute eval: %v\nSQL: %s\nargs: %#v", err, compiled.SQL, compiled.Args)
+			}
+			if test.want == nil && got != nil {
+				t.Fatalf("eval value = %v, want null", *got)
+			}
+			if test.want != nil && (got == nil || math.Abs(*got-*test.want) > 1e-12) {
+				t.Fatalf("eval value = %v, want %v", got, *test.want)
+			}
+		})
+	}
+
+	sequentialEval := compileIntegrationSPL(t,
+		`index=compiler | eval first=replace(duration, "ms$", ""), second=replace(first, "6", "9"), parsed=tonumber(second) | where event_id="n-one" | table parsed`,
+		indexTime.Add(10*time.Second), visibilityCutoff,
+	)
+	var sequentialValue *float64
+	if err := connection.QueryRow(ctx, sequentialEval.SQL, sequentialEval.Args...).Scan(&sequentialValue); err != nil {
+		t.Fatalf("execute sequential eval: %v\nSQL: %s\nargs: %#v", err, sequentialEval.SQL, sequentialEval.Args)
+	}
+	if sequentialValue == nil || *sequentialValue != 900 {
+		t.Fatalf("sequential eval = %v, want 900", sequentialValue)
+	}
+
+	captureReplace := compileIntegrationSPL(t,
+		`index=compiler | eval formatted=replace(date, "^(\d{1,2})/(\d{1,2})/", "\2/\1/") | where event_id="n-one" | table formatted`,
+		indexTime.Add(10*time.Second), visibilityCutoff,
+	)
+	var formattedDate *string
+	if err := connection.QueryRow(ctx, captureReplace.SQL, captureReplace.Args...).Scan(&formattedDate); err != nil {
+		t.Fatalf("execute capture replacement: %v\nSQL: %s\nargs: %#v", err, captureReplace.SQL, captureReplace.Args)
+	}
+	if formattedDate == nil || *formattedDate != "14/1/2023" {
+		t.Fatalf("capture replacement = %v, want 14/1/2023", formattedDate)
+	}
+
+	overwriteEval := compileIntegrationSPL(t,
+		`index=compiler | eval message=replace(message, "Request", "Updated") | where event_id="n-one" | table message`,
+		indexTime.Add(10*time.Second), visibilityCutoff,
+	)
+	var overwrittenMessage *string
+	if err := connection.QueryRow(ctx, overwriteEval.SQL, overwriteEval.Args...).Scan(&overwrittenMessage); err != nil {
+		t.Fatalf("execute eval overwrite: %v\nSQL: %s\nargs: %#v", err, overwriteEval.SQL, overwriteEval.Args)
+	}
+	if overwrittenMessage == nil || *overwrittenMessage != "Updated metrics" {
+		t.Fatalf("eval overwrite = %v, want Updated metrics", overwrittenMessage)
+	}
+
+	metacharEval := compileIntegrationSPL(t,
+		`index=compiler event_id=n-one | eval result?=1 | table result?`,
+		indexTime.Add(10*time.Second), visibilityCutoff,
+	)
+	metacharRows, err := connection.Query(ctx, metacharEval.SQL, metacharEval.Args...)
+	if err != nil {
+		t.Fatalf("execute bind-metachar eval: %v\nSQL: %s\nargs: %#v", err, metacharEval.SQL, metacharEval.Args)
+	}
+	if columns := metacharRows.Columns(); !slices.Equal(columns, []string{"result?"}) {
+		_ = metacharRows.Close()
+		t.Fatalf("bind-metachar eval columns = %v", columns)
+	}
+	if !metacharRows.Next() {
+		_ = metacharRows.Close()
+		t.Fatalf("bind-metachar eval returned no row: %v", metacharRows.Err())
+	}
+	var metacharValue int64
+	if err := metacharRows.Scan(&metacharValue); err != nil {
+		_ = metacharRows.Close()
+		t.Fatalf("scan bind-metachar eval: %v", err)
+	}
+	if metacharValue != 1 || metacharRows.Next() {
+		_ = metacharRows.Close()
+		t.Fatalf("bind-metachar eval value = %d", metacharValue)
+	}
+	if err := metacharRows.Err(); err != nil {
+		_ = metacharRows.Close()
+		t.Fatalf("iterate bind-metachar eval: %v", err)
+	}
+	if err := metacharRows.Close(); err != nil {
+		t.Fatalf("close bind-metachar eval: %v", err)
+	}
+
+	metacharStats := compileIntegrationSPL(t,
+		`index=compiler | stats count AS total$1 BY brace{x:y}`,
+		indexTime.Add(10*time.Second), visibilityCutoff,
+	)
+	metacharStatsRows, err := connection.Query(ctx, metacharStats.SQL, metacharStats.Args...)
+	if err != nil {
+		t.Fatalf("execute bind-metachar stats: %v\nSQL: %s\nargs: %#v", err, metacharStats.SQL, metacharStats.Args)
+	}
+	if columns := metacharStatsRows.Columns(); !slices.Equal(columns, []string{"brace{x:y}", "total$1"}) {
+		_ = metacharStatsRows.Close()
+		t.Fatalf("bind-metachar stats columns = %v", columns)
+	}
+	if !metacharStatsRows.Next() {
+		_ = metacharStatsRows.Close()
+		t.Fatalf("bind-metachar stats returned no row: %v", metacharStatsRows.Err())
+	}
+	var metacharGroup string
+	var metacharCount uint64
+	if err := metacharStatsRows.Scan(&metacharGroup, &metacharCount); err != nil {
+		_ = metacharStatsRows.Close()
+		t.Fatalf("scan bind-metachar stats: %v", err)
+	}
+	if metacharGroup != "group" || metacharCount != 1 || metacharStatsRows.Next() {
+		_ = metacharStatsRows.Close()
+		t.Fatalf("bind-metachar stats row = %q/%d", metacharGroup, metacharCount)
+	}
+	if err := metacharStatsRows.Err(); err != nil {
+		_ = metacharStatsRows.Close()
+		t.Fatalf("iterate bind-metachar stats: %v", err)
+	}
+	if err := metacharStatsRows.Close(); err != nil {
+		t.Fatalf("close bind-metachar stats: %v", err)
+	}
+
+	typedEval := compileIntegrationSPL(t,
+		`index=compiler event_id=n-one | eval signed=-7,unsigned=18446744073709551615,ratio_value=1.25,ok=true,text="x" | table signed,unsigned,ratio_value,ok,text`,
+		indexTime.Add(10*time.Second), visibilityCutoff,
+	)
+	typedRows, err := connection.Query(ctx, typedEval.SQL, typedEval.Args...)
+	if err != nil {
+		t.Fatalf("execute typed eval: %v\nSQL: %s\nargs: %#v", err, typedEval.SQL, typedEval.Args)
+	}
+	if types := typedRows.ColumnTypes(); len(types) != 5 || types[0].DatabaseTypeName() != "Int64" ||
+		types[1].DatabaseTypeName() != "UInt64" || types[2].DatabaseTypeName() != "Float64" ||
+		types[3].DatabaseTypeName() != "Bool" || types[4].DatabaseTypeName() != "String" {
+		_ = typedRows.Close()
+		t.Fatalf("typed eval column types = %#v", types)
+	}
+	if !typedRows.Next() {
+		_ = typedRows.Close()
+		t.Fatalf("typed eval returned no row: %v", typedRows.Err())
+	}
+	var signed int64
+	var unsigned uint64
+	var ratioValue float64
+	var okValue bool
+	var textValue string
+	if err := typedRows.Scan(&signed, &unsigned, &ratioValue, &okValue, &textValue); err != nil {
+		_ = typedRows.Close()
+		t.Fatalf("scan typed eval: %v", err)
+	}
+	if signed != -7 || unsigned != ^uint64(0) || ratioValue != 1.25 || !okValue || textValue != "x" || typedRows.Next() {
+		_ = typedRows.Close()
+		t.Fatalf("typed eval values = %d/%d/%g/%t/%q", signed, unsigned, ratioValue, okValue, textValue)
+	}
+	if err := typedRows.Err(); err != nil {
+		_ = typedRows.Close()
+		t.Fatalf("iterate typed eval: %v", err)
+	}
+	if err := typedRows.Close(); err != nil {
+		t.Fatalf("close typed eval: %v", err)
+	}
+
+	slowRoutes := compileIntegrationSPL(t, `index=compiler message="Request metrics"
+| eval duration_ms=tonumber(replace(duration, "ms$", ""))
+| stats count p95(duration_ms) AS p95_ms BY path
+| where p95_ms>500`, indexTime.Add(10*time.Second), visibilityCutoff)
+	slowRows, err := connection.Query(ctx, slowRoutes.SQL, slowRoutes.Args...)
+	if err != nil {
+		t.Fatalf("execute slow-route pipeline: %v\nSQL: %s\nargs: %#v", err, slowRoutes.SQL, slowRoutes.Args)
+	}
+	if types := slowRows.ColumnTypes(); len(types) != 3 || types[0].DatabaseTypeName() != "String" ||
+		types[1].DatabaseTypeName() != "UInt64" || types[2].DatabaseTypeName() != "Nullable(Float64)" {
+		_ = slowRows.Close()
+		t.Fatalf("slow-route column types = %#v", types)
+	}
+	if !slowRows.Next() {
+		_ = slowRows.Close()
+		t.Fatalf("slow-route pipeline returned no row: %v", slowRows.Err())
+	}
+	var slowPath string
+	var slowCount uint64
+	var slowP95 *float64
+	if err := slowRows.Scan(&slowPath, &slowCount, &slowP95); err != nil {
+		_ = slowRows.Close()
+		t.Fatalf("scan slow-route row: %v", err)
+	}
+	if slowPath != "/slow" || slowCount != 3 || slowP95 == nil || math.Abs(*slowP95-700) > 1e-12 || slowRows.Next() {
+		_ = slowRows.Close()
+		t.Fatalf("slow-route row = %q/%d/%v, want /slow/3/700", slowPath, slowCount, slowP95)
+	}
+	if err := slowRows.Err(); err != nil {
+		_ = slowRows.Close()
+		t.Fatalf("iterate slow-route rows: %v", err)
+	}
+	if err := slowRows.Close(); err != nil {
+		t.Fatalf("close slow-route rows: %v", err)
+	}
+
+	allNullP95 := compileIntegrationSPL(t,
+		`index=compiler | stats count p95(duration_container) AS p95_ms BY path | where path="/slow"`,
+		indexTime.Add(10*time.Second), visibilityCutoff,
+	)
+	var nullPath string
+	var nullCount uint64
+	var nullP95 *float64
+	if err := connection.QueryRow(ctx, allNullP95.SQL, allNullP95.Args...).Scan(&nullPath, &nullCount, &nullP95); err != nil {
+		t.Fatalf("execute all-null percentile: %v\nSQL: %s\nargs: %#v", err, allNullP95.SQL, allNullP95.Args)
+	}
+	if nullPath != "/slow" || nullCount != 3 || nullP95 != nil {
+		t.Fatalf("all-null percentile = %q/%d/%v, want /slow/3/null", nullPath, nullCount, nullP95)
+	}
+
+	for _, test := range []struct {
+		name   string
+		source string
+		want   float64
+	}{
+		{name: "tagged decimal", source: `index=compiler | stats p95(decimal_value) AS value`, want: 123.45},
+		{name: "nonfinite string ignored", source: `index=compiler | stats p95(latency) AS value`, want: 200},
+		{name: "canonical time", source: `index=compiler | stats p95(_time) AS value`, want: float64(time.Date(2026, 7, 21, 3, 4, 5, 123456789, time.FixedZone("event-offset", 5*60*60)).UnixNano()) / 1e9},
+	} {
+		compiled := compileIntegrationSPL(t, test.source, indexTime.Add(10*time.Second), visibilityCutoff)
+		var value *float64
+		if err := connection.QueryRow(ctx, compiled.SQL, compiled.Args...).Scan(&value); err != nil {
+			t.Fatalf("execute %s percentile: %v\nSQL: %s\nargs: %#v", test.name, err, compiled.SQL, compiled.Args)
+		}
+		if value == nil || math.Abs(*value-test.want) > 1e-6 {
+			t.Fatalf("%s percentile = %v, want %g", test.name, value, test.want)
+		}
+	}
+
+	for _, source := range []string{
+		`index=compiler | where NOT absent=1`,
+		`index=compiler | where NOT duration_null=1`,
+		`index=compiler | where _time=true`,
+		`index=compiler | where NOT _time=true`,
+		`index=compiler | where _time=null`,
+		`index=compiler | where true=null`,
+	} {
+		compiled := compileIntegrationSPL(t, source, indexTime.Add(10*time.Second), visibilityCutoff)
+		if err := executeCompiledExpectingNoRows(ctx, connection, compiled); err != nil {
+			t.Fatalf("where three-valued NOT %q: %v\nSQL: %s\nargs: %#v", source, err, compiled.SQL, compiled.Args)
+		}
 	}
 
 	// SPL grouping is lexical: a typed integer 500 and a string "500" share a
@@ -488,6 +800,34 @@ func testCompiledQueriesAgainstClickHouse(
 	}
 	if strings.Join(numericGroupKeys, ",") != "2,10,text" {
 		t.Fatalf("numeric-aware stats group order = %v, want [2 10 text]", numericGroupKeys)
+	}
+
+	wideSort := compileIntegrationSPL(t,
+		`index=compiler wide_sort=* | sort wide_sort | table event_id`,
+		indexTime.Add(10*time.Second), visibilityCutoff,
+	)
+	wideSortRows, err := connection.Query(ctx, wideSort.SQL, wideSort.Args...)
+	if err != nil {
+		t.Fatalf("execute exact wide-integer sort: %v\nSQL: %s\nargs: %#v", err, wideSort.SQL, wideSort.Args)
+	}
+	var wideSortIDs []string
+	for wideSortRows.Next() {
+		var eventID string
+		if err := wideSortRows.Scan(&eventID); err != nil {
+			_ = wideSortRows.Close()
+			t.Fatalf("scan exact wide-integer sort: %v", err)
+		}
+		wideSortIDs = append(wideSortIDs, eventID)
+	}
+	if err := wideSortRows.Err(); err != nil {
+		_ = wideSortRows.Close()
+		t.Fatalf("iterate exact wide-integer sort: %v", err)
+	}
+	if err := wideSortRows.Close(); err != nil {
+		t.Fatalf("close exact wide-integer sort: %v", err)
+	}
+	if !slices.Equal(wideSortIDs, []string{"n-one", "n-two"}) {
+		t.Fatalf("exact wide-integer sort order = %v, want [n-one n-two]", wideSortIDs)
 	}
 
 	downstream := compileIntegrationSPL(t,
@@ -772,9 +1112,12 @@ func compilerIntegrationEvent(id, host, raw string, indexTime time.Time, fields 
 	event.BatchID = "compiler-batch"
 	event.Event.Host = host
 	event.Event.Raw = []byte(raw)
+	event.Event.Message = stringPointer("Request metrics")
 	event.Event.Fields = typedObjectValue(fields...)
 	return event
 }
+
+func float64PointerForIntegration(value float64) *float64 { return &value }
 
 func compileIntegrationSPL(t *testing.T, source string, cutoff time.Time, visibilityCutoff uint64) CompiledQuery {
 	t.Helper()

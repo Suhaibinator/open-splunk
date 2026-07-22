@@ -105,6 +105,120 @@ func TestConvertJSONRestoresLogicalPathsAndNestedTypes(t *testing.T) {
 	}
 }
 
+func TestConvertExtendedDynamicValuesRestoresExactTypes(t *testing.T) {
+	t.Parallel()
+
+	timestamp := time.Date(2026, time.July, 22, 1, 2, 3, 456789000, time.UTC)
+	tests := []struct {
+		name    string
+		kind    string
+		encoded string
+		check   func(*testing.T, searchjobs.Value)
+	}{
+		{
+			name: "bytes", kind: "bytes/v1", encoded: "AP8",
+			check: func(t *testing.T, value searchjobs.Value) {
+				t.Helper()
+				if got, ok := value.Bytes(); !ok || !slices.Equal(got, []byte{0, 0xff}) {
+					t.Fatalf("bytes = %v, %v", got, ok)
+				}
+			},
+		},
+		{
+			name: "timestamp", kind: "timestamp/v1", encoded: timestamp.Format(time.RFC3339Nano),
+			check: func(t *testing.T, value searchjobs.Value) {
+				t.Helper()
+				if got, ok := value.Time(); !ok || !got.Equal(timestamp) || got.Location() != time.UTC {
+					t.Fatalf("timestamp = %v, %v", got, ok)
+				}
+			},
+		},
+		{
+			name: "minimum timestamp", kind: "timestamp/v1", encoded: "0001-01-01T00:00:00Z",
+			check: func(t *testing.T, value searchjobs.Value) {
+				t.Helper()
+				if got, ok := value.Time(); !ok || !got.IsZero() {
+					t.Fatalf("minimum timestamp = %v, %v", got, ok)
+				}
+			},
+		},
+		{
+			name: "duration", kind: "duration/v1", encoded: "-12:-345000000",
+			check: func(t *testing.T, value searchjobs.Value) {
+				t.Helper()
+				if got, ok := value.Duration(); !ok || got != -(12*time.Second+345*time.Millisecond) {
+					t.Fatalf("duration = %v, %v", got, ok)
+				}
+			},
+		},
+		{
+			name: "decimal", kind: "decimal/v1", encoded: "-123.4500e+2",
+			check: func(t *testing.T, value searchjobs.Value) {
+				t.Helper()
+				if got, ok := value.Decimal(); !ok || got != "-123.4500e+2" {
+					t.Fatalf("decimal = %q, %v", got, ok)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			envelope := map[string]string{extendedTypeKey: test.kind, extendedValueKey: test.encoded}
+			value, err := convertValue(chcol.NewDynamicWithType(envelope, "Map(String, String)"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.check(t, value)
+		})
+	}
+}
+
+func TestConvertExtendedDynamicValuesRejectsMalformedEnvelopes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		envelope any
+	}{
+		{"padded bytes", map[string]string{extendedTypeKey: "bytes/v1", extendedValueKey: "AP8="}},
+		{"noncanonical timestamp", map[string]string{extendedTypeKey: "timestamp/v1", extendedValueKey: "2026-07-22T01:02:03+00:00"}},
+		{"timestamp before protobuf range", map[string]string{extendedTypeKey: "timestamp/v1", extendedValueKey: "0000-01-01T00:00:00Z"}},
+		{"duration missing nanoseconds", map[string]string{extendedTypeKey: "duration/v1", extendedValueKey: "12"}},
+		{"duration leading zero", map[string]string{extendedTypeKey: "duration/v1", extendedValueKey: "01:0"}},
+		{"duration inconsistent signs", map[string]string{extendedTypeKey: "duration/v1", extendedValueKey: "1:-1"}},
+		{"duration out of range", map[string]string{extendedTypeKey: "duration/v1", extendedValueKey: "9223372037:0"}},
+		{"decimal leading zero", map[string]string{extendedTypeKey: "decimal/v1", extendedValueKey: "01.5"}},
+		{"unknown tag", map[string]string{extendedTypeKey: "future/v1", extendedValueKey: "value"}},
+		{"nonstring payload", map[string]any{extendedTypeKey: "bytes/v1", extendedValueKey: uint64(1)}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := convertValue(test.envelope); err == nil {
+				t.Fatal("malformed reserved envelope was accepted")
+			}
+		})
+	}
+}
+
+func TestConvertReservedLookingOrdinaryMapRemainsObject(t *testing.T) {
+	t.Parallel()
+
+	value, err := convertValue(map[string]string{
+		extendedTypeKey:  "bytes/v1",
+		extendedValueKey: "AP8",
+		"ordinary":       "keeps this a regular map",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, ok := value.Object()
+	if !ok || len(fields) != 3 {
+		t.Fatalf("ordinary map = %#v", value)
+	}
+}
+
 func TestExecutorConvertsDriverDecimalAndDurationScanTypes(t *testing.T) {
 	t.Parallel()
 
@@ -273,7 +387,7 @@ func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	}
 	for _, name := range []string{
 		"readonly", "max_execution_time", "max_memory_usage", "max_rows_to_read", "max_bytes_to_read",
-		"max_result_rows", "max_result_bytes", "max_rows_to_group_by", "max_threads",
+		"max_result_rows", "max_result_bytes", "max_rows_to_group_by", "max_threads", "max_query_size",
 	} {
 		if _, exists := settings[name]; !exists {
 			t.Errorf("missing query setting %q", name)
@@ -285,6 +399,9 @@ func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	}
 	if settings["max_rows_to_group_by"] != defaultMaxResultRows {
 		t.Fatalf("default group cap = %v, want %d", settings["max_rows_to_group_by"], defaultMaxResultRows)
+	}
+	if settings["max_query_size"] != defaultMaxQueryBytes {
+		t.Fatalf("default query cap = %v, want %d", settings["max_query_size"], defaultMaxQueryBytes)
 	}
 	custom, err := querySettings(Config{MaxResultRows: 77, MaxRowsToGroupBy: 33})
 	if err != nil {
@@ -313,6 +430,10 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 	resource := &clickhousedriver.Exception{Code: 241, Name: "MEMORY_LIMIT_EXCEEDED"}
 	if err := classifyQueryError(context.Background(), resource); !errors.Is(err, searchjobs.ErrExecutionLimit) {
 		t.Fatalf("resource error = %v", err)
+	}
+	tooLarge := &clickhousedriver.Exception{Code: 229, Name: "QUERY_IS_TOO_LARGE"}
+	if err := classifyQueryError(context.Background(), tooLarge); !errors.Is(err, searchjobs.ErrExecutionLimit) {
+		t.Fatalf("query-size error = %v", err)
 	}
 	tooManyGroups := &clickhousedriver.Exception{Code: 158, Name: "TOO_MANY_ROWS", Message: "secret query detail"}
 	if err := classifyQueryError(context.Background(), tooManyGroups); !errors.Is(err, searchjobs.ErrExecutionLimit) || strings.Contains(err.Error(), "secret") {

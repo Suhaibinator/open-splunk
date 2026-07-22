@@ -73,18 +73,39 @@ func (*Project) operator()                 {}
 func (*Project) LogicalName() string       { return "Project" }
 func (op *Project) SourceRange() spl.Range { return op.Range }
 
-// AggregateFunction identifies an exact backend-neutral aggregation.
+// ExtendAssignment adds or replaces one field with a typed scalar expression.
+type ExtendAssignment struct {
+	Output     FieldRef
+	Expression ScalarExpression
+	Range      spl.Range
+}
+
+// Extend evaluates assignments from left to right without changing row
+// cardinality. A later assignment may reference an earlier output.
+type Extend struct {
+	Assignments []ExtendAssignment
+	Range       spl.Range
+}
+
+func (*Extend) operator()                 {}
+func (*Extend) LogicalName() string       { return "Extend" }
+func (op *Extend) SourceRange() spl.Range { return op.Range }
+
+// AggregateFunction identifies a backend-neutral aggregation.
 type AggregateFunction uint8
 
 const (
 	AggregateFunctionInvalid AggregateFunction = iota
 	AggregateFunctionCountRows
+	AggregateFunctionPercentile
 )
 
 // AggregateMeasure is one aggregate output column.
 type AggregateMeasure struct {
-	Function AggregateFunction
-	Output   string
+	Function   AggregateFunction
+	Input      FieldRef
+	Percentile float64
+	Output     string
 }
 
 // Aggregate transforms its input into one row per distinct GroupBy tuple, or
@@ -262,6 +283,63 @@ type ComparisonExpression struct {
 
 func (*ComparisonExpression) expression()              {}
 func (e *ComparisonExpression) SourceRange() spl.Range { return e.Range }
+
+// ScalarExpression is one typed eval-language value. It remains distinct from
+// search predicates so where can compare fields, preserve case-sensitive
+// string semantics, and share the same IR with eval assignments.
+type ScalarExpression interface {
+	SourceRange() spl.Range
+	scalarExpression()
+}
+
+// ScalarFieldExpression reads one field from the current pipeline row.
+type ScalarFieldExpression struct {
+	Field FieldRef
+	Range spl.Range
+}
+
+func (*ScalarFieldExpression) scalarExpression()        {}
+func (e *ScalarFieldExpression) SourceRange() spl.Range { return e.Range }
+
+// ScalarLiteralExpression is one typed scalar literal.
+type ScalarLiteralExpression struct {
+	Value Value
+	Range spl.Range
+}
+
+func (*ScalarLiteralExpression) scalarExpression()        {}
+func (e *ScalarLiteralExpression) SourceRange() spl.Range { return e.Range }
+
+// ScalarFunction identifies a supported typed eval operation.
+type ScalarFunction uint8
+
+const (
+	ScalarFunctionInvalid ScalarFunction = iota
+	ScalarFunctionToNumber
+	ScalarFunctionReplace
+)
+
+// ScalarCallExpression invokes one supported eval operation.
+type ScalarCallExpression struct {
+	Function  ScalarFunction
+	Arguments []ScalarExpression
+	Range     spl.Range
+}
+
+func (*ScalarCallExpression) scalarExpression()        {}
+func (e *ScalarCallExpression) SourceRange() spl.Range { return e.Range }
+
+// EvalComparisonExpression compares two scalar expressions using where/eval
+// semantics rather than base-search matching semantics.
+type EvalComparisonExpression struct {
+	Left  ScalarExpression
+	Op    ComparisonOp
+	Right ScalarExpression
+	Range spl.Range
+}
+
+func (*EvalComparisonExpression) expression()              {}
+func (e *EvalComparisonExpression) SourceRange() spl.Range { return e.Range }
 
 // Diagnostic is a source-located semantic/planning error.
 type Diagnostic struct {

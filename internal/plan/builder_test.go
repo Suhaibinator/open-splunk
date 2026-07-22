@@ -3,6 +3,7 @@ package plan
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,6 +162,44 @@ func TestBuildStatsCountReplacesEventSchema(t *testing.T) {
 	}
 }
 
+func TestBuildStatsMultipleMeasuresWithP95(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | eval duration_ms=tonumber(replace(duration, "ms$", "")) | stats count p95(duration_ms) AS p95_ms BY path | where p95_ms>500`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"path", "count", "p95_ms"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+	aggregate, ok := logical.Operators[len(logical.Operators)-2].(*Aggregate)
+	if !ok || len(aggregate.Measures) != 2 {
+		t.Fatalf("aggregate operator = %#v", logical.Operators[len(logical.Operators)-2])
+	}
+	count := aggregate.Measures[0]
+	percentile := aggregate.Measures[1]
+	if count.Function != AggregateFunctionCountRows || count.Output != "count" {
+		t.Fatalf("count measure = %#v", count)
+	}
+	if percentile.Function != AggregateFunctionPercentile || percentile.Input.Name != "duration_ms" ||
+		percentile.Percentile != 0.95 || percentile.Output != "p95_ms" {
+		t.Fatalf("percentile measure = %#v", percentile)
+	}
+}
+
+func TestBuildStatsRejectsDuplicateMeasureOutputs(t *testing.T) {
+	t.Parallel()
+
+	_, err := Build(
+		mustParse(t, `index=gradethis | stats count AS value p95(duration) AS value BY path`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	assertDiagnosticCode(t, err, "SPL_DUPLICATE_FIELD")
+}
+
 func TestBuildStatsRejectsAmbiguousOutput(t *testing.T) {
 	t.Parallel()
 
@@ -193,6 +232,96 @@ func TestBuildStatsSupportsDownstreamTransformingPipeline(t *testing.T) {
 			t.Fatalf("operator %d = %T, want %T", index, logical.Operators[index], want)
 		}
 	}
+}
+
+func TestBuildWhereLowersToPostTransformFilter(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count by status | where count>1 AND status!=500`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"status", "count"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+	filter, ok := logical.Operators[len(logical.Operators)-1].(*Filter)
+	if !ok {
+		t.Fatalf("last operator = %T, want *Filter", logical.Operators[len(logical.Operators)-1])
+	}
+	expression, ok := filter.Expression.(*BooleanExpression)
+	if !ok || expression.Op != BooleanOpAnd {
+		t.Fatalf("where expression = %#v, want logical AND", filter.Expression)
+	}
+	left := expression.Left.(*EvalComparisonExpression)
+	right := expression.Right.(*EvalComparisonExpression)
+	leftField := left.Left.(*ScalarFieldExpression)
+	leftValue := left.Right.(*ScalarLiteralExpression)
+	rightField := right.Left.(*ScalarFieldExpression)
+	rightValue := right.Right.(*ScalarLiteralExpression)
+	if leftField.Field.Name != "count" || left.Op != ComparisonOpGreater || leftValue.Value.Int64 != 1 ||
+		rightField.Field.Name != "status" || right.Op != ComparisonOpNotEqual || rightValue.Value.Int64 != 500 {
+		t.Fatalf("where expression = %#v", filter.Expression)
+	}
+}
+
+func TestBuildEvalLowersOrderedTypedAssignments(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | eval duration_ms=tonumber(replace(duration, "ms$", ""))`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	extend, ok := logical.Operators[len(logical.Operators)-1].(*Extend)
+	if !ok || len(extend.Assignments) != 1 {
+		t.Fatalf("last operator = %#v, want one-assignment Extend", logical.Operators[len(logical.Operators)-1])
+	}
+	assignment := extend.Assignments[0]
+	if assignment.Output.Name != "duration_ms" {
+		t.Fatalf("assignment output = %#v", assignment.Output)
+	}
+	toNumber, ok := assignment.Expression.(*ScalarCallExpression)
+	if !ok || toNumber.Function != ScalarFunctionToNumber || len(toNumber.Arguments) != 1 {
+		t.Fatalf("outer expression = %#v", assignment.Expression)
+	}
+	replace, ok := toNumber.Arguments[0].(*ScalarCallExpression)
+	if !ok || replace.Function != ScalarFunctionReplace || len(replace.Arguments) != 3 {
+		t.Fatalf("inner expression = %#v", toNumber.Arguments[0])
+	}
+	input := replace.Arguments[0].(*ScalarFieldExpression)
+	if input.Field.Name != "duration" {
+		t.Fatalf("replace input = %#v", input)
+	}
+}
+
+func TestBuildEvalBoundaryPreventsPipelineIndexFromChangingScanScope(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | eval index=replace(index, "grade", "other") | search index=otherthis`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.EffectiveIndexes, []string{"gradethis"}) {
+		t.Fatalf("effective indexes = %v", logical.EffectiveIndexes)
+	}
+}
+
+func TestBuildEvalWithoutIndexOverwriteRetainsIndexValidation(t *testing.T) {
+	t.Parallel()
+
+	_, err := Build(
+		mustParse(t, `index=gradethis | eval x=1 | search index=secret`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	assertDiagnosticCode(t, err, "SPL_INDEX_FORBIDDEN")
 }
 
 func TestBuildTopLowersToAggregateWindowAndDeterministicTopN(t *testing.T) {
@@ -336,6 +465,42 @@ func TestResolveFieldRejectsAmbiguousPaths(t *testing.T) {
 	for _, field := range []string{"", ".foo", "foo.", "foo..bar", `foo\q`, "foo\x00bar"} {
 		_, err := ResolveField(field, spl.Range{})
 		assertDiagnosticCode(t, err, "SPL_INVALID_FIELD")
+	}
+}
+
+func TestResolveFieldBoundsDynamicPathSize(t *testing.T) {
+	t.Parallel()
+
+	for _, field := range []string{
+		strings.Repeat("x", maxFieldNameBytes+1),
+		strings.Repeat("x", maxFieldPathSegmentBytes+1),
+		strings.Repeat("x.", maxFieldPathSegments) + "x",
+	} {
+		_, err := ResolveField(field, spl.Range{})
+		assertDiagnosticCode(t, err, "SPL_QUERY_TOO_COMPLEX")
+	}
+	if _, err := ResolveField(strings.Repeat("x", maxFieldPathSegmentBytes), spl.Range{}); err != nil {
+		t.Fatalf("ResolveField(exact segment limit): %v", err)
+	}
+	escapedSegment := strings.Repeat(`\.`, maxFieldPathSegmentBytes)
+	maximal := strings.Repeat(escapedSegment+".", maxFieldPathSegments-1) + escapedSegment
+	if len(maximal) != maxFieldNameBytes {
+		t.Fatalf("maximal escaped field spelling = %d bytes, want %d", len(maximal), maxFieldNameBytes)
+	}
+	field, err := ResolveField(maximal, spl.Range{})
+	if err != nil {
+		t.Fatalf("ResolveField(exact 17-segment escaped limit): %v", err)
+	}
+	if len(field.Path) != maxFieldPathSegments {
+		t.Fatalf("maximal escaped field path has %d segments, want %d", len(field.Path), maxFieldPathSegments)
+	}
+	for index, segment := range field.Path {
+		if len(segment) != maxFieldPathSegmentBytes {
+			t.Fatalf("maximal escaped field segment %d = %d bytes, want %d", index, len(segment), maxFieldPathSegmentBytes)
+		}
+	}
+	if _, err := ResolveField(strings.Repeat("x", 129), spl.Range{}); err != nil {
+		t.Fatalf("ResolveField(ingest-valid 129-byte root): %v", err)
 	}
 }
 

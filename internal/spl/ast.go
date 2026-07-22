@@ -173,6 +173,119 @@ func (*SearchCommand) command()             {}
 func (*SearchCommand) Name() string         { return "search" }
 func (c *SearchCommand) SourceRange() Range { return c.Range }
 
+// ScalarExpr is an eval-language value expression. It is deliberately
+// separate from base-search Expr because bare names are field references and
+// string comparisons are case-sensitive in eval and where expressions.
+type ScalarExpr interface {
+	Node
+	scalarExpression()
+}
+
+// ScalarFieldExpr reads one field from the current pipeline row.
+type ScalarFieldExpr struct {
+	Field string
+	Range Range
+}
+
+func (*ScalarFieldExpr) scalarExpression()    {}
+func (e *ScalarFieldExpr) SourceRange() Range { return e.Range }
+
+// ScalarLiteralExpr is one typed eval-language literal.
+type ScalarLiteralExpr struct {
+	Value Literal
+	Range Range
+}
+
+func (*ScalarLiteralExpr) scalarExpression()    {}
+func (e *ScalarLiteralExpr) SourceRange() Range { return e.Range }
+
+// ScalarFunction identifies a supported, typed eval function.
+type ScalarFunction uint8
+
+const (
+	ScalarFunctionInvalid ScalarFunction = iota
+	ScalarFunctionToNumber
+	ScalarFunctionReplace
+)
+
+// ScalarCallExpr invokes a supported eval function. Function names are
+// resolved by the parser so no user-authored identifier reaches a backend.
+type ScalarCallExpr struct {
+	Function  ScalarFunction
+	Arguments []ScalarExpr
+	Range     Range
+}
+
+func (*ScalarCallExpr) scalarExpression()    {}
+func (e *ScalarCallExpr) SourceRange() Range { return e.Range }
+
+// WhereExpr is a Boolean eval expression accepted by where.
+type WhereExpr interface {
+	Node
+	whereExpression()
+}
+
+// WhereBoolExpr combines where predicates with eval-language precedence.
+type WhereBoolExpr struct {
+	Op    BoolOp
+	Left  WhereExpr
+	Right WhereExpr
+	Range Range
+}
+
+func (*WhereBoolExpr) whereExpression()     {}
+func (e *WhereBoolExpr) SourceRange() Range { return e.Range }
+
+// WhereNotExpr negates one where predicate.
+type WhereNotExpr struct {
+	Operand WhereExpr
+	Range   Range
+}
+
+func (*WhereNotExpr) whereExpression()     {}
+func (e *WhereNotExpr) SourceRange() Range { return e.Range }
+
+// WhereComparisonExpr compares two scalar eval expressions.
+type WhereComparisonExpr struct {
+	Left  ScalarExpr
+	Op    CompareOp
+	Right ScalarExpr
+	Range Range
+}
+
+func (*WhereComparisonExpr) whereExpression()     {}
+func (e *WhereComparisonExpr) SourceRange() Range { return e.Range }
+
+// WhereCommand filters rows with eval-language boolean precedence.
+type WhereCommand struct {
+	Expression WhereExpr
+	Range      Range
+}
+
+func (*WhereCommand) command()             {}
+func (*WhereCommand) Name() string         { return "where" }
+func (c *WhereCommand) SourceRange() Range { return c.Range }
+
+// EvalAssignment writes one scalar expression to a field. Assignments retain
+// source order because later assignments in the same eval command may read
+// fields produced by earlier assignments.
+type EvalAssignment struct {
+	Field      string
+	FieldRange Range
+	Expression ScalarExpr
+	Range      Range
+}
+
+// EvalCommand evaluates one or more assignments from left to right.
+type EvalCommand struct {
+	Assignments []EvalAssignment
+	Range       Range
+}
+
+func (*EvalCommand) command()             {}
+func (*EvalCommand) Name() string         { return "eval" }
+func (c *EvalCommand) SourceRange() Range { return c.Range }
+
 // FieldsCommand includes or excludes fields.
 type FieldsCommand struct {
 	Fields  []string
@@ -239,20 +352,21 @@ func (*TopCommand) command()             {}
 func (*TopCommand) Name() string         { return "top" }
 func (c *TopCommand) SourceRange() Range { return c.Range }
 
-// AggregateFunction identifies a supported stats aggregation. The initial
-// compatibility slice intentionally models only an exact row count; accepting
-// other function spellings without their full SPL semantics would be unsafe.
+// AggregateFunction identifies a supported stats aggregation.
 type AggregateFunction uint8
 
 const (
 	AggregateFunctionInvalid AggregateFunction = iota
 	AggregateFunctionCount
+	AggregateFunctionP95
 )
 
 // StatsAggregate is one source-located aggregate expression and its public
 // output name.
 type StatsAggregate struct {
 	Function   AggregateFunction
+	Input      string
+	InputRange Range
 	Alias      string
 	Range      Range
 	AliasRange Range
@@ -267,9 +381,9 @@ type StatsGroupField struct {
 // StatsCommand transforms events into one row per distinct group (or one
 // global row) and removes non-grouped event fields from the result schema.
 type StatsCommand struct {
-	Aggregate StatsAggregate
-	GroupBy   []StatsGroupField
-	Range     Range
+	Aggregates []StatsAggregate
+	GroupBy    []StatsGroupField
+	Range      Range
 }
 
 func (*StatsCommand) command()             {}

@@ -13,6 +13,15 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
+const (
+	// Ingestion permits a leaf below 16 nested objects: 17 path segments of 256
+	// bytes each. Dots and backslashes require one escape byte in SPL, so the
+	// full query spelling can be at most 17*(2*256)+16 separators.
+	maxFieldNameBytes        = 8720
+	maxFieldPathSegments     = 17
+	maxFieldPathSegmentBytes = 256
+)
+
 // Scope is the server-resolved security and snapshot boundary for a search.
 // AuthorizedIndexes must come from trusted control-plane state, never SPL.
 type Scope struct {
@@ -99,6 +108,33 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, convertErr
 			}
 			result.Operators = append(result.Operators, &Filter{Expression: expression, Range: command.Range})
+		case *spl.WhereCommand:
+			expression, convertErr := convertWhereExpression(command.Expression)
+			if convertErr != nil {
+				return nil, convertErr
+			}
+			result.Operators = append(result.Operators, &Filter{Expression: expression, Range: command.Range})
+		case *spl.EvalCommand:
+			assignments := make([]ExtendAssignment, 0, len(command.Assignments))
+			for _, assignment := range command.Assignments {
+				output, fieldErr := ResolveField(assignment.Field, assignment.FieldRange)
+				if fieldErr != nil {
+					return nil, fieldErr
+				}
+				expression, expressionErr := convertScalarExpression(assignment.Expression)
+				if expressionErr != nil {
+					return nil, expressionErr
+				}
+				assignments = append(assignments, ExtendAssignment{
+					Output:     output,
+					Expression: expression,
+					Range:      assignment.Range,
+				})
+				if outputSchemaKnown && !slices.Contains(result.OutputFields, assignment.Field) {
+					result.OutputFields = append(result.OutputFields, assignment.Field)
+				}
+			}
+			result.Operators = append(result.Operators, &Extend{Assignments: assignments, Range: command.Range})
 		case *spl.FieldsCommand:
 			fields, fieldErr := convertFields(command.Fields, command.Range)
 			if fieldErr != nil {
@@ -145,43 +181,57 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		case *spl.LimitCommand:
 			result.Operators = append(result.Operators, &Limit{Count: command.Count, FromEnd: command.Name() == "tail", Range: command.Range})
 		case *spl.StatsCommand:
-			if command.Aggregate.Function != spl.AggregateFunctionCount {
-				return nil, &Diagnostic{
-					Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
-					Message: "only the argument-free count aggregate is supported",
-					Range:   command.Aggregate.Range,
-				}
-			}
 			groupBy, groupErr := convertStatsGroupFields(command.GroupBy)
 			if groupErr != nil {
 				return nil, groupErr
 			}
-			if _, aliasErr := ResolveField(command.Aggregate.Alias, command.Aggregate.AliasRange); aliasErr != nil {
-				return nil, aliasErr
-			}
+			seenOutputs := make(map[string]struct{}, len(groupBy)+len(command.Aggregates))
+			outputFields := make([]string, 0, len(groupBy)+len(command.Aggregates))
 			for _, group := range groupBy {
-				if group.Name == command.Aggregate.Alias {
-					return nil, &Diagnostic{
-						Code:    "SPL_DUPLICATE_FIELD",
-						Message: fmt.Sprintf("aggregate output field %q duplicates a grouping field", command.Aggregate.Alias),
-						Range:   command.Aggregate.AliasRange,
-					}
-				}
-			}
-			outputFields := make([]string, 0, len(groupBy)+1)
-			for _, group := range groupBy {
+				seenOutputs[group.Name] = struct{}{}
 				outputFields = append(outputFields, group.Name)
 			}
-			outputFields = append(outputFields, command.Aggregate.Alias)
+			measures := make([]AggregateMeasure, 0, len(command.Aggregates))
+			for _, aggregate := range command.Aggregates {
+				if _, aliasErr := ResolveField(aggregate.Alias, aggregate.AliasRange); aliasErr != nil {
+					return nil, aliasErr
+				}
+				if _, duplicate := seenOutputs[aggregate.Alias]; duplicate {
+					return nil, &Diagnostic{
+						Code:    "SPL_DUPLICATE_FIELD",
+						Message: fmt.Sprintf("aggregate output field %q is duplicated", aggregate.Alias),
+						Range:   aggregate.AliasRange,
+					}
+				}
+				seenOutputs[aggregate.Alias] = struct{}{}
+				measure := AggregateMeasure{Output: aggregate.Alias}
+				switch aggregate.Function {
+				case spl.AggregateFunctionCount:
+					measure.Function = AggregateFunctionCountRows
+				case spl.AggregateFunctionP95:
+					input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
+					if inputErr != nil {
+						return nil, inputErr
+					}
+					measure.Function = AggregateFunctionPercentile
+					measure.Input = input
+					measure.Percentile = 0.95
+				default:
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "unsupported stats aggregate",
+						Range:   aggregate.Range,
+					}
+				}
+				measures = append(measures, measure)
+				outputFields = append(outputFields, aggregate.Alias)
+			}
 			result.OutputFields = outputFields
 			outputSchemaKnown = true
 			result.Operators = append(result.Operators, &Aggregate{
-				GroupBy: groupBy,
-				Measures: []AggregateMeasure{{
-					Function: AggregateFunctionCountRows,
-					Output:   command.Aggregate.Alias,
-				}},
-				Range: command.Range,
+				GroupBy:  groupBy,
+				Measures: measures,
+				Range:    command.Range,
 			})
 		case *spl.TopCommand:
 			field, fieldErr := ResolveField(command.Field, command.FieldRange)
@@ -346,7 +396,13 @@ func positiveIndexReferences(query *spl.Query) []indexReference {
 		collect(query.Search)
 	}
 	for _, command := range query.Commands {
-		switch command.(type) {
+		switch command := command.(type) {
+		case *spl.EvalCommand:
+			for _, assignment := range command.Assignments {
+				if assignment.Field == "index" {
+					return references
+				}
+			}
 		case *spl.StatsCommand, *spl.TopCommand:
 			return references
 		}
@@ -418,6 +474,86 @@ func convertExpression(expression spl.Expr) (Expression, error) {
 		return &ComparisonExpression{Field: field, Op: convertComparisonOp(expression.Op), Value: value, Range: expression.Range}, nil
 	default:
 		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EXPRESSION", Message: fmt.Sprintf("unsupported expression type %T", expression), Range: expression.SourceRange()}
+	}
+}
+
+func convertWhereExpression(expression spl.WhereExpr) (Expression, error) {
+	switch expression := expression.(type) {
+	case *spl.WhereBoolExpr:
+		left, err := convertWhereExpression(expression.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := convertWhereExpression(expression.Right)
+		if err != nil {
+			return nil, err
+		}
+		op := BooleanOpAnd
+		if expression.Op == spl.BoolOpOr {
+			op = BooleanOpOr
+		}
+		return &BooleanExpression{Op: op, Left: left, Right: right, Range: expression.Range}, nil
+	case *spl.WhereNotExpr:
+		operand, err := convertWhereExpression(expression.Operand)
+		if err != nil {
+			return nil, err
+		}
+		return &NotExpression{Operand: operand, Range: expression.Range}, nil
+	case *spl.WhereComparisonExpr:
+		left, err := convertScalarExpression(expression.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := convertScalarExpression(expression.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &EvalComparisonExpression{
+			Left:  left,
+			Op:    convertComparisonOp(expression.Op),
+			Right: right,
+			Range: expression.Range,
+		}, nil
+	default:
+		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_WHERE_EXPRESSION", Message: fmt.Sprintf("unsupported where expression type %T", expression), Range: expression.SourceRange()}
+	}
+}
+
+func convertScalarExpression(expression spl.ScalarExpr) (ScalarExpression, error) {
+	switch expression := expression.(type) {
+	case *spl.ScalarFieldExpr:
+		field, err := ResolveField(expression.Field, expression.Range)
+		if err != nil {
+			return nil, err
+		}
+		return &ScalarFieldExpression{Field: field, Range: expression.Range}, nil
+	case *spl.ScalarLiteralExpr:
+		value, err := convertValue(expression.Value)
+		if err != nil {
+			return nil, err
+		}
+		return &ScalarLiteralExpression{Value: value, Range: expression.Range}, nil
+	case *spl.ScalarCallExpr:
+		arguments := make([]ScalarExpression, 0, len(expression.Arguments))
+		for _, argument := range expression.Arguments {
+			converted, err := convertScalarExpression(argument)
+			if err != nil {
+				return nil, err
+			}
+			arguments = append(arguments, converted)
+		}
+		function := ScalarFunctionInvalid
+		switch expression.Function {
+		case spl.ScalarFunctionToNumber:
+			function = ScalarFunctionToNumber
+		case spl.ScalarFunctionReplace:
+			function = ScalarFunctionReplace
+		default:
+			return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EVAL_FUNCTION", Message: "unsupported scalar function", Range: expression.Range}
+		}
+		return &ScalarCallExpression{Function: function, Arguments: arguments, Range: expression.Range}, nil
+	default:
+		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EVAL_EXPRESSION", Message: fmt.Sprintf("unsupported scalar expression type %T", expression), Range: expression.SourceRange()}
 	}
 }
 
@@ -501,6 +637,13 @@ func ResolveField(name string, sourceRange spl.Range) (FieldRef, error) {
 	if name == "" || !utf8.ValidString(name) {
 		return FieldRef{}, &Diagnostic{Code: "SPL_INVALID_FIELD", Message: "field name must be non-empty UTF-8", Range: sourceRange}
 	}
+	if len(name) > maxFieldNameBytes {
+		return FieldRef{}, &Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("field name exceeds %d UTF-8 bytes", maxFieldNameBytes),
+			Range:   sourceRange,
+		}
+	}
 	if strings.HasPrefix(strings.ToLower(name), "__os_") {
 		return FieldRef{}, &Diagnostic{Code: "SPL_RESERVED_FIELD", Message: "field name uses the compiler-private __os_ namespace", Range: sourceRange}
 	}
@@ -510,6 +653,22 @@ func ResolveField(name string, sourceRange spl.Range) (FieldRef, error) {
 	path, err := splitFieldPath(name)
 	if err != nil {
 		return FieldRef{}, &Diagnostic{Code: "SPL_INVALID_FIELD", Message: err.Error(), Range: sourceRange}
+	}
+	if len(path) > maxFieldPathSegments {
+		return FieldRef{}, &Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("field path contains more than %d segments", maxFieldPathSegments),
+			Range:   sourceRange,
+		}
+	}
+	for _, segment := range path {
+		if len(segment) > maxFieldPathSegmentBytes {
+			return FieldRef{}, &Diagnostic{
+				Code:    "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf("field path segment exceeds %d UTF-8 bytes", maxFieldPathSegmentBytes),
+				Range:   sourceRange,
+			}
+		}
 	}
 	return FieldRef{Name: name, Path: path}, nil
 }
