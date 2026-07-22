@@ -373,6 +373,19 @@ func (*TopCommand) command()             {}
 func (*TopCommand) Name() string         { return "top" }
 func (c *TopCommand) SourceRange() Range { return c.Range }
 
+// RareCommand returns the least frequent scalar values for one field. It has
+// the same deliberately bounded compatibility surface as TopCommand.
+type RareCommand struct {
+	Field      string
+	FieldRange Range
+	Limit      uint64
+	Range      Range
+}
+
+func (*RareCommand) command()             {}
+func (*RareCommand) Name() string         { return "rare" }
+func (c *RareCommand) SourceRange() Range { return c.Range }
+
 // AggregateFunction identifies a supported stats aggregation.
 type AggregateFunction uint8
 

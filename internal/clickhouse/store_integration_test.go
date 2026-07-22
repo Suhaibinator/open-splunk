@@ -729,6 +729,43 @@ func testCompiledQueriesAgainstClickHouse(
 		t.Fatalf("top rows = keys %v counts %v percents %v, want alpha/2/50 then gamma/1/25", topKeys, topCounts, topPercents)
 	}
 
+	rare := compileIntegrationSPL(t, `index=compiler | rare limit=2 category`, indexTime.Add(10*time.Second), visibilityCutoff)
+	rareRows, err := connection.Query(ctx, rare.SQL, rare.Args...)
+	if err != nil {
+		t.Fatalf("execute rare: %v\nSQL: %s\nargs: %#v", err, rare.SQL, rare.Args)
+	}
+	if types := rareRows.ColumnTypes(); len(types) != 3 || types[0].DatabaseTypeName() != "String" ||
+		types[1].DatabaseTypeName() != "UInt64" || types[2].DatabaseTypeName() != "Float64" {
+		_ = rareRows.Close()
+		t.Fatalf("rare column types = %#v", types)
+	}
+	var rareKeys []string
+	var rareCounts []uint64
+	var rarePercents []float64
+	for rareRows.Next() {
+		var key string
+		var count uint64
+		var percent float64
+		if err := rareRows.Scan(&key, &count, &percent); err != nil {
+			_ = rareRows.Close()
+			t.Fatalf("scan rare: %v", err)
+		}
+		rareKeys = append(rareKeys, key)
+		rareCounts = append(rareCounts, count)
+		rarePercents = append(rarePercents, percent)
+	}
+	if err := rareRows.Err(); err != nil {
+		_ = rareRows.Close()
+		t.Fatalf("iterate rare: %v", err)
+	}
+	if err := rareRows.Close(); err != nil {
+		t.Fatalf("close rare: %v", err)
+	}
+	if strings.Join(rareKeys, ",") != "gamma,beta" || !slices.Equal(rareCounts, []uint64{1, 1}) ||
+		len(rarePercents) != 2 || math.Abs(rarePercents[0]-25) > 1e-12 || math.Abs(rarePercents[1]-25) > 1e-12 {
+		t.Fatalf("rare rows = keys %v counts %v percents %v, want gamma/1/25 then beta/1/25", rareKeys, rareCounts, rarePercents)
+	}
+
 	nullableTop := compileIntegrationSPL(t, `index=compiler | top limit=0 category_nullable`, indexTime.Add(10*time.Second), visibilityCutoff)
 	var nullableKey string
 	var nullableCount uint64
@@ -738,6 +775,14 @@ func testCompiledQueriesAgainstClickHouse(
 	}
 	if nullableKey != "alpha" || nullableCount != 2 || nullablePercent != 100 {
 		t.Fatalf("missing/null top = %q/%d/%v, want alpha/2/100", nullableKey, nullableCount, nullablePercent)
+	}
+
+	nullableRare := compileIntegrationSPL(t, `index=compiler | rare limit=0 category_nullable`, indexTime.Add(10*time.Second), visibilityCutoff)
+	if err := connection.QueryRow(ctx, nullableRare.SQL, nullableRare.Args...).Scan(&nullableKey, &nullableCount, &nullablePercent); err != nil {
+		t.Fatalf("execute missing/null rare: %v\nSQL: %s\nargs: %#v", err, nullableRare.SQL, nullableRare.Args)
+	}
+	if nullableKey != "alpha" || nullableCount != 2 || nullablePercent != 100 {
+		t.Fatalf("missing/null rare = %q/%d/%v, want alpha/2/100", nullableKey, nullableCount, nullablePercent)
 	}
 
 	emptyTop := compileIntegrationSPL(t, `index=compiler | top empty_value`, indexTime.Add(10*time.Second), visibilityCutoff)

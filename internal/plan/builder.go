@@ -281,24 +281,43 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				Measures: measures,
 				Range:    command.Range,
 			})
-		case *spl.TopCommand:
+		case *spl.TopCommand, *spl.RareCommand:
+			var commandName, fieldName string
+			var fieldRange, commandRange spl.Range
+			var limit uint64
+			leastFrequent := false
+			switch command := command.(type) {
+			case *spl.TopCommand:
+				commandName = command.Name()
+				fieldName = command.Field
+				fieldRange = command.FieldRange
+				commandRange = command.Range
+				limit = command.Limit
+			case *spl.RareCommand:
+				commandName = command.Name()
+				fieldName = command.Field
+				fieldRange = command.FieldRange
+				commandRange = command.Range
+				limit = command.Limit
+				leastFrequent = true
+			}
 			canonicalTimeAvailable = false
-			field, fieldErr := ResolveField(command.Field, command.FieldRange)
+			field, fieldErr := ResolveField(fieldName, fieldRange)
 			if fieldErr != nil {
 				return nil, fieldErr
 			}
-			if command.Field == "count" || command.Field == "percent" {
+			if fieldName == "count" || fieldName == "percent" {
 				return nil, &Diagnostic{
 					Code:    "SPL_DUPLICATE_FIELD",
-					Message: fmt.Sprintf("top field %q collides with a generated output field", command.Field),
-					Range:   command.FieldRange,
+					Message: fmt.Sprintf("%s field %q collides with a generated output field", commandName, fieldName),
+					Range:   fieldRange,
 				}
 			}
-			countField, countErr := ResolveField("count", command.Range)
+			countField, countErr := ResolveField("count", commandRange)
 			if countErr != nil {
 				return nil, countErr
 			}
-			result.OutputFields = []string{command.Field, "count", "percent"}
+			result.OutputFields = []string{fieldName, "count", "percent"}
 			outputSchemaKnown = true
 			result.Operators = append(result.Operators,
 				&Aggregate{
@@ -307,21 +326,21 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 						Function: AggregateFunctionCountRows,
 						Output:   "count",
 					}},
-					Range: command.Range,
+					Range: commandRange,
 				},
 				&Window{
 					Function: WindowFunctionPercentOfTotal,
 					Input:    countField,
 					Output:   "percent",
-					Range:    command.Range,
+					Range:    commandRange,
 				},
 				&Sort{
 					Keys: []SortKey{
-						{Field: countField, Descending: true},
+						{Field: countField, Descending: !leastFrequent},
 						{Field: field, Descending: true, Mode: SortValueModeLexical},
 					},
-					Limit: command.Limit,
-					Range: command.Range,
+					Limit: limit,
+					Range: commandRange,
 				},
 			)
 		case *spl.TimechartCommand:
@@ -677,7 +696,7 @@ func positiveIndexReferences(query *spl.Query) []indexReference {
 					return references
 				}
 			}
-		case *spl.StatsCommand, *spl.TopCommand, *spl.TimechartCommand:
+		case *spl.StatsCommand, *spl.TopCommand, *spl.RareCommand, *spl.TimechartCommand:
 			return references
 		}
 		if search, ok := command.(*spl.SearchCommand); ok {

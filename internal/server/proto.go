@@ -200,7 +200,7 @@ func resultKindForSPL(source string) opensplunkv1.ResultSetKind {
 		switch command.(type) {
 		case *spl.TimechartCommand:
 			return opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES
-		case *spl.TableCommand, *spl.StatsCommand, *spl.TopCommand:
+		case *spl.TableCommand, *spl.StatsCommand, *spl.TopCommand, *spl.RareCommand:
 			resultKind = opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS
 		}
 	}

@@ -198,6 +198,7 @@ func TestResultKindForSPLRecognizesTransformingCommands(t *testing.T) {
 		"index=main | stats count by level":                                 opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
 		"index=main | stats count by level | sort -count | head 20":         opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
 		"index=main | top limit=20 message":                                 opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | rare limit=20 message":                                opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
 		"index=main | timechart span=5m count by level":                     opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
 		"index=main | table _time level | timechart span=5m count by level": opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
 		`index=main | eval duration_ms=tonumber(replace(duration, "ms$", "")) | stats count p95(duration_ms) AS p95_ms BY path | where p95_ms>500`: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
