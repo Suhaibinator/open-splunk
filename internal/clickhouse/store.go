@@ -1,7 +1,9 @@
 package clickhouse
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
@@ -16,7 +18,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 	"unicode"
@@ -26,11 +27,14 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/visibility"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
-	defaultDatabase = "open_splunk"
-	defaultTable    = "events"
+	defaultDatabase           = "open_splunk"
+	defaultTable              = "events"
+	visibilityFinalizeTimeout = 10 * time.Second
 
 	extendedTypeKey  = "\x00open_splunk_type"
 	extendedValueKey = "\x00open_splunk_value"
@@ -98,7 +102,7 @@ func DefaultConfig() Config {
 // Open creates a Store backed by clickhouse-go's native protocol. Open is
 // deliberately lazy like the driver; call Ping during application startup when
 // readiness must verify credentials and network reachability.
-func Open(config Config, retention RetentionProvider) (*Store, error) {
+func Open(config Config, retention RetentionProvider, sequencer visibility.Sequencer) (*Store, error) {
 	options, normalized, err := config.clickHouseOptions()
 	if err != nil {
 		return nil, err
@@ -112,6 +116,7 @@ func Open(config Config, retention RetentionProvider) (*Store, error) {
 		normalized.Database,
 		normalized.Table,
 		retention,
+		sequencer,
 		time.Now,
 		normalized.RetryAfter,
 	)
@@ -123,7 +128,7 @@ func Open(config Config, retention RetentionProvider) (*Store, error) {
 }
 
 // NewStore wraps an existing clickhouse-go connection.
-func NewStore(connection clickhousedriver.Conn, retention RetentionProvider) (*Store, error) {
+func NewStore(connection clickhousedriver.Conn, retention RetentionProvider, sequencer visibility.Sequencer) (*Store, error) {
 	if connection == nil {
 		return nil, errors.New("ClickHouse connection is required")
 	}
@@ -133,6 +138,7 @@ func NewStore(connection clickhousedriver.Conn, retention RetentionProvider) (*S
 		defaults.Database,
 		defaults.Table,
 		retention,
+		sequencer,
 		time.Now,
 		defaults.RetryAfter,
 	)
@@ -141,13 +147,13 @@ func NewStore(connection clickhousedriver.Conn, retention RetentionProvider) (*S
 // Store implements ingest.EventStore using one synchronous native insert per
 // accepted protocol batch.
 type Store struct {
-	connection            storeConnection
-	insertSQL             string
-	maxVisibilitySQL      string
-	retention             RetentionProvider
-	clock                 func() time.Time
-	retryAfter            time.Duration
-	visibilityCommitMutex sync.Mutex
+	connection storeConnection
+	insertSQL  string
+	retention  RetentionProvider
+	visibility visibility.Sequencer
+	attemptID  func() (string, error)
+	clock      func() time.Time
+	retryAfter time.Duration
 }
 
 var _ ingest.EventStore = (*Store)(nil)
@@ -156,6 +162,7 @@ func newStore(
 	connection storeConnection,
 	database, table string,
 	retention RetentionProvider,
+	sequencer visibility.Sequencer,
 	clock func() time.Time,
 	retryAfter time.Duration,
 ) (*Store, error) {
@@ -164,6 +171,9 @@ func newStore(
 	}
 	if retention == nil {
 		return nil, errors.New("ClickHouse retention provider is required")
+	}
+	if sequencer == nil {
+		return nil, errors.New("ClickHouse visibility sequencer is required")
 	}
 	if !physicalIdentifier.MatchString(database) || !physicalIdentifier.MatchString(table) {
 		return nil, errors.New("ClickHouse database and table must be simple identifiers")
@@ -175,12 +185,13 @@ func newStore(
 		return nil, errors.New("ClickHouse retry delay must be positive")
 	}
 	return &Store{
-		connection:       connection,
-		insertSQL:        buildEventsInsertSQL(database, table),
-		maxVisibilitySQL: buildMaxVisibilitySQL(database, table),
-		retention:        retention,
-		clock:            clock,
-		retryAfter:       retryAfter,
+		connection: connection,
+		insertSQL:  buildEventsInsertSQL(database, table),
+		retention:  retention,
+		visibility: sequencer,
+		attemptID:  randomAttemptID,
+		clock:      clock,
+		retryAfter: retryAfter,
 	}, nil
 }
 
@@ -192,28 +203,53 @@ func (s *Store) Store(ctx context.Context, batch ingest.StoreBatch) (ingest.Stor
 		return ingest.StoreResult{}, s.classifyError(err)
 	}
 
-	// The first release has one application writer. Serializing the database
-	// watermark read, insert, and snapshot capture creates a total commit order
-	// even when many collector streams call Store concurrently. Reading max on
-	// every attempt also recovers correctly after an ambiguous insert result.
-	s.visibilityCommitMutex.Lock()
-	defer s.visibilityCommitMutex.Unlock()
-	priorVisibility, err := s.connection.maxVisibilitySequence(ctx, s.maxVisibilitySQL)
+	deduplicationKey := deduplicationToken(batch)
+	metadata, err := encodeReservationMetadata(rows)
 	if err != nil {
-		return ingest.StoreResult{}, s.classifyError(fmt.Errorf("read ClickHouse visibility sequence: %w", err))
+		return ingest.StoreResult{}, err
 	}
-	if priorVisibility == math.MaxUint64 {
-		return ingest.StoreResult{}, errors.New("store ClickHouse batch: visibility sequence exhausted")
+	payloadDigest, err := storePayloadDigest(batch)
+	if err != nil {
+		return ingest.StoreResult{}, err
 	}
-	visibility := priorVisibility + 1
-	for _, row := range rows {
-		row[len(row)-1] = visibility
+	attemptID, err := s.attemptID()
+	if err != nil {
+		return ingest.StoreResult{}, s.classifyError(fmt.Errorf("create ClickHouse visibility attempt: %w", err))
+	}
+	reservation, err := s.visibility.Reserve(ctx, visibility.ReserveRequest{
+		BatchKey:      deduplicationKey,
+		AttemptID:     attemptID,
+		IndexTime:     batch.ReceivedAt,
+		PayloadSHA256: payloadDigest,
+		Metadata:      metadata,
+	})
+	if err != nil {
+		return ingest.StoreResult{}, s.visibilityFailure("reserve ClickHouse visibility sequence", err)
+	}
+	acknowledged := batch.BatchSequence
+	if reservation.AlreadyCommitted {
+		return ingest.StoreResult{
+			Duplicate:           uint32(len(rows)),
+			AcknowledgedThrough: &acknowledged,
+			CommittedAt:         s.clock().UTC(),
+		}, nil
+	}
+	if err := applyReservation(rows, reservation); err != nil {
+		return ingest.StoreResult{}, s.releaseAttempt(
+			reservation.Sequence,
+			attemptID,
+			s.visibilityFailure("apply ClickHouse visibility reservation", err),
+		)
 	}
 
-	settings := insertSettings(deduplicationToken(batch))
+	settings := insertSettings(deduplicationKey)
 	prepared, err := s.connection.prepare(ctx, s.insertSQL, settings)
 	if err != nil {
-		return ingest.StoreResult{}, s.classifyError(fmt.Errorf("prepare ClickHouse event batch: %w", err))
+		return ingest.StoreResult{}, s.releaseAttempt(
+			reservation.Sequence,
+			attemptID,
+			s.classifyError(fmt.Errorf("prepare ClickHouse event batch: %w", err)),
+		)
 	}
 	closed := false
 	defer func() {
@@ -225,12 +261,28 @@ func (s *Store) Store(ctx context.Context, batch ingest.StoreBatch) (ingest.Stor
 	for i, row := range rows {
 		if err := prepared.Append(row...); err != nil {
 			_ = prepared.Abort()
-			return ingest.StoreResult{}, fmt.Errorf("append ClickHouse event row %d: %w", i, err)
+			return ingest.StoreResult{}, s.releaseAttempt(
+				reservation.Sequence,
+				attemptID,
+				s.classifyError(fmt.Errorf("append ClickHouse event row %d: %w", i, err)),
+			)
 		}
 	}
 	if err := prepared.Send(); err != nil {
+		// Send failures are ambiguous: ClickHouse may still finish after the
+		// client loses its response. Preserve the reservation as a gap. A retry
+		// reuses the exact sequence and resolves it by successfully sending the
+		// same deduplication token. The unresolved sequence still blocks every
+		// different batch even though this process attempt releases its lease.
 		_ = prepared.Abort()
-		return ingest.StoreResult{}, s.classifyError(fmt.Errorf("send ClickHouse event batch: %w", err))
+		return ingest.StoreResult{}, s.releaseAttempt(
+			reservation.Sequence,
+			attemptID,
+			s.classifyError(fmt.Errorf("send ClickHouse event batch: %w", err)),
+		)
+	}
+	if err := s.commitVisibility(reservation.Sequence, attemptID); err != nil {
+		return ingest.StoreResult{}, err
 	}
 	if err := prepared.Close(); err != nil {
 		closed = true
@@ -238,7 +290,6 @@ func (s *Store) Store(ctx context.Context, batch ingest.StoreBatch) (ingest.Stor
 	}
 	closed = true
 
-	acknowledged := batch.BatchSequence
 	return ingest.StoreResult{
 		Accepted:            uint32(len(rows)),
 		AcknowledgedThrough: &acknowledged,
@@ -247,16 +298,61 @@ func (s *Store) Store(ctx context.Context, batch ingest.StoreBatch) (ingest.Stor
 }
 
 // VisibilityCutoff captures the highest fully committed batch visible to a
-// new search job. Holding the writer mutex ensures that no later batch can be
-// committed with a sequence at or below the returned cutoff.
+// new search job. The sequencer allocates only above this monotonic boundary.
 func (s *Store) VisibilityCutoff(ctx context.Context) (uint64, error) {
-	s.visibilityCommitMutex.Lock()
-	defer s.visibilityCommitMutex.Unlock()
-	cutoff, err := s.connection.maxVisibilitySequence(ctx, s.maxVisibilitySQL)
+	cutoff, err := s.visibility.Cutoff(ctx)
 	if err != nil {
-		return 0, s.classifyError(fmt.Errorf("read ClickHouse visibility cutoff: %w", err))
+		return 0, s.visibilityFailure("read ClickHouse visibility cutoff", err)
 	}
 	return cutoff, nil
+}
+
+func (s *Store) releaseAttempt(sequence uint64, attemptID string, operationErr error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), visibilityFinalizeTimeout)
+	defer cancel()
+	if err := s.visibility.Release(ctx, sequence, attemptID); err != nil {
+		return errors.Join(operationErr, s.finalizationFailure("release ClickHouse visibility attempt", err))
+	}
+	return operationErr
+}
+
+func (s *Store) commitVisibility(sequence uint64, attemptID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), visibilityFinalizeTimeout)
+	defer cancel()
+	if err := s.visibility.Commit(ctx, sequence, attemptID); err != nil {
+		return s.finalizationFailure("commit ClickHouse visibility sequence", err)
+	}
+	return nil
+}
+
+func (s *Store) finalizationFailure(operation string, err error) error {
+	return &ingest.TransientStoreError{
+		Err:        fmt.Errorf("%s: %w", operation, err),
+		Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
+		RetryAfter: s.retryAfter,
+	}
+}
+
+func (s *Store) visibilityFailure(operation string, err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if errors.Is(err, visibility.ErrInvalidArgument) || errors.Is(err, visibility.ErrConflict) ||
+		errors.Is(err, visibility.ErrExhausted) {
+		return fmt.Errorf("%s: %w", operation, err)
+	}
+	if errors.Is(err, visibility.ErrPendingBarrier) || errors.Is(err, visibility.ErrAttemptInProgress) {
+		return &ingest.TransientStoreError{
+			Err:        fmt.Errorf("%s: %w", operation, err),
+			Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+			RetryAfter: s.retryAfter,
+		}
+	}
+	return &ingest.TransientStoreError{
+		Err:        fmt.Errorf("%s: %w", operation, err),
+		Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
+		RetryAfter: s.retryAfter,
+	}
 }
 
 // Ping verifies network reachability and authentication.
@@ -281,6 +377,9 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch) ([][]
 	}
 	if batch.BatchSequence == 0 {
 		return nil, errors.New("store ClickHouse batch: batch sequence must be positive")
+	}
+	if batch.ReceivedAt.IsZero() {
+		return nil, errors.New("store ClickHouse batch: received time is required")
 	}
 	if len(batch.Events) == 0 {
 		return nil, errors.New("store ClickHouse batch: at least one event is required")
@@ -310,6 +409,9 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch) ([][]
 		}
 		if stored.IndexTime.IsZero() {
 			return nil, fmt.Errorf("store ClickHouse batch: event %d has no index time", i)
+		}
+		if !stored.IndexTime.Equal(batch.ReceivedAt) {
+			return nil, fmt.Errorf("store ClickHouse batch: event %d index time does not match its batch", i)
 		}
 		if event.GetEventTimeSource() < opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED ||
 			event.GetEventTimeSource() > opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK {
@@ -650,6 +752,14 @@ func insertSettings(token string) clickhousedriver.Settings {
 	}
 }
 
+func randomAttemptID() (string, error) {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes[:]), nil
+}
+
 func deduplicationToken(batch ingest.StoreBatch) string {
 	hash := sha256.New()
 	writeTokenPart(hash, "open-splunk-collector-protocol")
@@ -679,9 +789,148 @@ func buildEventsInsertSQL(database, table string) string {
 	return "INSERT INTO " + quoteIdentifier(database) + "." + quoteIdentifier(table) + " (" + strings.Join(columns, ", ") + ")"
 }
 
-func buildMaxVisibilitySQL(database, table string) string {
-	return "SELECT max(" + quoteIdentifier("visibility_seq") + ") FROM " +
-		quoteIdentifier(database) + "." + quoteIdentifier(table)
+func storePayloadDigest(batch ingest.StoreBatch) ([sha256.Size]byte, error) {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("open-splunk-store-payload-v1\x00"))
+	writeTokenPart(hash, batch.TenantID)
+	writeTokenPart(hash, batch.CollectorID)
+	writeTokenPart(hash, batch.BatchID)
+	var number [8]byte
+	binary.BigEndian.PutUint64(number[:], batch.BatchSequence)
+	_, _ = hash.Write(number[:])
+	binary.BigEndian.PutUint64(number[:], uint64(len(batch.Events)))
+	_, _ = hash.Write(number[:])
+	for _, stored := range batch.Events {
+		encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(stored.Event)
+		if err != nil {
+			return [sha256.Size]byte{}, fmt.Errorf("store ClickHouse batch: encode event payload digest: %w", err)
+		}
+		binary.BigEndian.PutUint64(number[:], uint64(len(encoded)))
+		_, _ = hash.Write(number[:])
+		_, _ = hash.Write(encoded)
+	}
+	var digest [sha256.Size]byte
+	copy(digest[:], hash.Sum(nil))
+	return digest, nil
+}
+
+func encodeReservationMetadata(rows [][]any) ([]byte, error) {
+	retentionByIndex := make(map[string]time.Duration)
+	for rowIndex, row := range rows {
+		if len(row) != len(eventInsertColumns) {
+			return nil, fmt.Errorf("store ClickHouse batch: row %d has an invalid storage shape", rowIndex)
+		}
+		index, indexOK := row[2].(string)
+		indexTime, timeOK := row[4].(time.Time)
+		expiresAt, expiryOK := row[23].(time.Time)
+		if !indexOK || !timeOK || !expiryOK || index == "" || len(index) > 255 || !utf8.ValidString(index) {
+			return nil, fmt.Errorf("store ClickHouse batch: row %d has invalid retention metadata", rowIndex)
+		}
+		retention := expiresAt.Sub(indexTime)
+		if retention <= 0 {
+			return nil, fmt.Errorf("store ClickHouse batch: row %d has invalid retention duration", rowIndex)
+		}
+		if previous, exists := retentionByIndex[index]; exists && previous != retention {
+			return nil, fmt.Errorf("store ClickHouse batch: index %q resolved inconsistent retention", index)
+		}
+		retentionByIndex[index] = retention
+	}
+	indexes := make([]string, 0, len(retentionByIndex))
+	for index := range retentionByIndex {
+		indexes = append(indexes, index)
+	}
+	if len(indexes) > 256 {
+		return nil, errors.New("store ClickHouse batch: unique index count exceeds visibility ledger limit")
+	}
+	slices.Sort(indexes)
+	var metadata bytes.Buffer
+	_, _ = metadata.Write([]byte{'O', 'S', 'V', 'M', 1})
+	var number [8]byte
+	binary.BigEndian.PutUint64(number[:], uint64(len(indexes)))
+	_, _ = metadata.Write(number[:])
+	for _, index := range indexes {
+		binary.BigEndian.PutUint64(number[:], uint64(len(index)))
+		_, _ = metadata.Write(number[:])
+		_, _ = metadata.WriteString(index)
+		binary.BigEndian.PutUint64(number[:], uint64(retentionByIndex[index]))
+		_, _ = metadata.Write(number[:])
+	}
+	if metadata.Len() > visibility.MaxMetadataBytes {
+		return nil, errors.New("store ClickHouse batch: retention metadata exceeds visibility ledger limit")
+	}
+	return metadata.Bytes(), nil
+}
+
+func decodeReservationMetadata(metadata []byte) (map[string]time.Duration, error) {
+	reader := bytes.NewReader(metadata)
+	header := make([]byte, 5)
+	if _, err := io.ReadFull(reader, header); err != nil || !bytes.Equal(header, []byte{'O', 'S', 'V', 'M', 1}) {
+		return nil, errors.New("visibility reservation metadata has an invalid version")
+	}
+	readUint64 := func() (uint64, error) {
+		var number [8]byte
+		if _, err := io.ReadFull(reader, number[:]); err != nil {
+			return 0, err
+		}
+		return binary.BigEndian.Uint64(number[:]), nil
+	}
+	count, err := readUint64()
+	if err != nil || count > 256 {
+		return nil, errors.New("visibility reservation metadata has an invalid index count")
+	}
+	retentionByIndex := make(map[string]time.Duration, count)
+	for range count {
+		length, err := readUint64()
+		if err != nil || length == 0 || length > 255 || length > uint64(reader.Len()) {
+			return nil, errors.New("visibility reservation metadata has an invalid index name")
+		}
+		name := make([]byte, int(length))
+		if _, err := io.ReadFull(reader, name); err != nil {
+			return nil, errors.New("visibility reservation metadata is truncated")
+		}
+		duration, err := readUint64()
+		if err != nil || duration == 0 || duration > math.MaxInt64 {
+			return nil, errors.New("visibility reservation metadata has an invalid retention duration")
+		}
+		index := string(name)
+		if _, duplicate := retentionByIndex[index]; duplicate {
+			return nil, errors.New("visibility reservation metadata contains a duplicate index")
+		}
+		retentionByIndex[index] = time.Duration(duration)
+	}
+	if reader.Len() != 0 {
+		return nil, errors.New("visibility reservation metadata has trailing bytes")
+	}
+	return retentionByIndex, nil
+}
+
+func applyReservation(rows [][]any, reservation visibility.Reservation) error {
+	if reservation.Sequence == 0 || reservation.IndexTime.IsZero() {
+		return errors.New("visibility reservation is incomplete")
+	}
+	retentionByIndex, err := decodeReservationMetadata(reservation.Metadata)
+	if err != nil {
+		return err
+	}
+	indexTime := eventStoreMillis(reservation.IndexTime)
+	for rowIndex, row := range rows {
+		index, ok := row[2].(string)
+		if !ok {
+			return fmt.Errorf("store ClickHouse batch: row %d has an invalid index", rowIndex)
+		}
+		retention, exists := retentionByIndex[index]
+		if !exists {
+			return fmt.Errorf("visibility reservation has no retention for index %q", index)
+		}
+		expiresAt := indexTime.Add(retention)
+		if !expiresAt.After(indexTime) {
+			return fmt.Errorf("visibility reservation retention overflows for index %q", index)
+		}
+		row[4] = indexTime
+		row[23] = expiresAt
+		row[len(row)-1] = reservation.Sequence
+	}
+	return nil
 }
 
 func (s *Store) classifyError(err error) error {
@@ -744,7 +993,6 @@ type writeBatch interface {
 
 type storeConnection interface {
 	prepare(context.Context, string, clickhousedriver.Settings) (writeBatch, error)
-	maxVisibilitySequence(context.Context, string) (uint64, error)
 	Ping(context.Context) error
 	Close() error
 }
@@ -756,14 +1004,6 @@ type nativeStoreConnection struct {
 func (c *nativeStoreConnection) prepare(ctx context.Context, query string, settings clickhousedriver.Settings) (writeBatch, error) {
 	ctx = clickhousedriver.Context(ctx, clickhousedriver.WithSettings(settings))
 	return c.connection.PrepareBatch(ctx, query)
-}
-
-func (c *nativeStoreConnection) maxVisibilitySequence(ctx context.Context, query string) (uint64, error) {
-	var sequence uint64
-	if err := c.connection.QueryRow(ctx, query).Scan(&sequence); err != nil {
-		return 0, err
-	}
-	return sequence, nil
 }
 
 func (c *nativeStoreConnection) Ping(ctx context.Context) error {
@@ -780,6 +1020,9 @@ func (config Config) clickHouseOptions() (*clickhousedriver.Options, Config, err
 		config.Addresses = slices.Clone(defaults.Addresses)
 	} else {
 		config.Addresses = slices.Clone(config.Addresses)
+	}
+	if len(config.Addresses) != 1 {
+		return nil, Config{}, errors.New("exactly one ClickHouse address is required in single-node mode")
 	}
 	if config.Database == "" {
 		config.Database = defaults.Database

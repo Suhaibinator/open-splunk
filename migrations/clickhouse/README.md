@@ -34,6 +34,25 @@ The SPL compiler exposes canonical aliases rather than leaking these physical
 names: `index` maps to `index_name`, `_time` to `event_time`, `_indextime` to
 `index_time`, `_raw` to `raw`, and `message` to `body`.
 
+## Immutable search visibility
+
+`visibility_seq` is not derived from `max(events.visibility_seq)`: event rows
+expire under TTL, so such a maximum could move backward, and calculating it on
+every insert would scan retained data. The single-node SQLite control plane
+instead keeps a durable reservation ledger and the highest contiguous committed
+sequence. A ClickHouse batch receives one stable positive sequence, index time,
+and retention snapshot before insertion. Successful inserts mark the reservation
+committed; failures known to occur before `Send` mark it safely skipped; an
+ambiguous `Send` result remains reserved and holds the visible cutoff at the gap
+until an identical retry resolves it.
+
+Search jobs capture that O(1) committed cutoff and the compiler always adds
+`visibility_seq <= ?`. Historical rows added before migration read as sequence
+zero and remain visible, while an insert-time constraint rejects post-upgrade
+writers that omit a positive sequence. Single-node mode requires one ClickHouse
+address and all server writer instances to share the same SQLite control DB.
+The SQLite and ClickHouse data therefore form one backup/restore unit.
+
 The schema targets `clickhouse/clickhouse-server:26.3.17.4`, the concrete patch
 of the current 26.3 LTS line used by local deployment. Native JSON has been
 production-ready since 25.3, and native full-text indexes are GA from 26.2.
@@ -89,13 +108,12 @@ same token, accepted row subset, row order, insert settings, and payload bytes.
 If a batch must be split into multiple inserts, each stable slice needs a stable
 token suffix and must never be re-sliced on retry.
 
-Server-derived values are part of that stable inserted block. In particular,
-`index_time` must be fixed for the first batch attempt and reused after
-reconnect, while `expires_at` must be resolved by the store from the authorized
-tenant/index retention policy. Neither value may come from collector payload.
-If the server cannot reconstruct the exact accepted block after a process
-restart, it needs a durable batch ledger rather than assuming the insert token
-alone makes a changed block idempotent.
+Server-derived values are part of that stable inserted block. The durable
+visibility reservation records the first server `index_time` and a compact
+per-index retention snapshot, so reconnects and process restarts reconstruct
+the same `index_time`, `expires_at`, and `visibility_seq`. A SHA-256 digest of
+the normalized ordered event payload rejects reuse of a stable batch identity
+for different content. Neither timestamp comes from collector payload.
 
 The non-replicated `MergeTree` remembers 10,000 recent insert blocks locally.
 That is a count-bounded retry window, not a time guarantee. Once a token leaves

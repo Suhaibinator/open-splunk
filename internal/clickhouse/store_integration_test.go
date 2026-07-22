@@ -15,9 +15,11 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"github.com/Suhaibinator/open-splunk/internal/visibility"
 )
 
 const storeIntegrationImage = "clickhouse/clickhouse-server:26.3.17.4"
@@ -78,7 +80,16 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	config.Addresses = []string{address}
 	config.Username = "open_splunk"
 	config.Password = password
-	store, err := Open(config, fixedRetention(30*24*time.Hour))
+	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatalf("open visibility control database: %v", err)
+	}
+	t.Cleanup(func() { _ = controlDB.Close() })
+	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	if err != nil {
+		t.Fatalf("create visibility sequencer: %v", err)
+	}
+	store, err := Open(config, fixedRetention(30*24*time.Hour), sequencer)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -105,11 +116,19 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	)
 	batch := ingest.StoreBatch{
 		TenantID: "tenant", CollectorID: "collector", BatchID: "native-batch", BatchSequence: 1,
-		Events: []*ingest.StoredEvent{event},
+		ReceivedAt: indexTime,
+		Events:     []*ingest.StoredEvent{event},
 	}
 	for attempt := 1; attempt <= 2; attempt++ {
-		if _, err := store.Store(ctx, batch); err != nil {
-			t.Fatalf("Store attempt %d: %v", attempt, err)
+		result, storeErr := store.Store(ctx, batch)
+		if storeErr != nil {
+			t.Fatalf("Store attempt %d: %v", attempt, storeErr)
+		}
+		if attempt == 1 && (result.Accepted != 1 || result.Duplicate != 0) {
+			t.Fatalf("initial Store result = %+v", result)
+		}
+		if attempt == 2 && (result.Accepted != 0 || result.Duplicate != 1) {
+			t.Fatalf("retry Store result = %+v", result)
 		}
 	}
 
@@ -140,7 +159,8 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	late.BatchID = "late-batch"
 	if _, err := store.Store(ctx, ingest.StoreBatch{
 		TenantID: "tenant", CollectorID: "collector", BatchID: "late-batch", BatchSequence: 2,
-		Events: []*ingest.StoredEvent{late},
+		ReceivedAt: indexTime.Add(-time.Hour),
+		Events:     []*ingest.StoredEvent{late},
 	}); err != nil {
 		t.Fatalf("store post-snapshot event: %v", err)
 	}
@@ -205,26 +225,27 @@ func testCompiledQueriesAgainstClickHouse(
 	indexTime time.Time,
 ) {
 	t.Helper()
-	one := compilerIntegrationEvent("n-one", "api", "prefix informational suffix", indexTime.Add(time.Second),
+	one := compilerIntegrationEvent("n-one", "api", "prefix informational suffix", indexTime,
 		typedField("status", typedSint(500)),
 		typedField("ratio", typedSint(1)),
 		typedField("n", typedSint(1)),
 		typedField("literal.dot", typedString("needle")),
 	)
-	two := compilerIntegrationEvent("n-two", "500", "prefix error42 suffix", indexTime.Add(2*time.Second),
+	two := compilerIntegrationEvent("n-two", "500", "prefix error42 suffix", indexTime,
 		typedField("status", typedString("500")),
 		typedField("ratio", typedDouble(1)),
 		typedField("n", typedSint(2)),
 	)
-	null := compilerIntegrationEvent("n-null", "nullable", "nothing here", indexTime.Add(3*time.Second),
+	null := compilerIntegrationEvent("n-null", "nullable", "nothing here", indexTime,
 		typedField("status", typedNull()),
 		typedField("ratio", typedNull()),
 		typedField("n", typedNull()),
 		typedField("nothing", typedNull()),
 	)
 	batch := ingest.StoreBatch{
-		TenantID: "tenant", CollectorID: "collector", BatchID: "compiler-batch", BatchSequence: 2,
-		Events: []*ingest.StoredEvent{one, two, null},
+		TenantID: "tenant", CollectorID: "collector", BatchID: "compiler-batch", BatchSequence: 3,
+		ReceivedAt: indexTime,
+		Events:     []*ingest.StoredEvent{one, two, null},
 	}
 	if _, err := store.Store(ctx, batch); err != nil {
 		t.Fatalf("store compiler fixtures: %v", err)

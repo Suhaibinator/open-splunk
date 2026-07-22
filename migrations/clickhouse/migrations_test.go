@@ -88,6 +88,9 @@ func TestVisibilitySequenceMigrationContract(t *testing.T) {
 	sql := readFile(t, "0002_add_visibility_sequence.sql")
 	for _, fragment := range []string{
 		"ADD COLUMN IF NOT EXISTS `visibility_seq` UInt64 DEFAULT 0",
+		"ADD CONSTRAINT IF NOT EXISTS visibility_seq_is_positive",
+		"CHECK `visibility_seq` > 0",
+		"ADD INDEX IF NOT EXISTS idx_visibility_seq `visibility_seq` TYPE minmax GRANULARITY 1",
 		"SELECT 2, 'add_visibility_sequence'",
 		"WHERE `version` = 2",
 	} {
@@ -160,10 +163,24 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 	})
 
 	waitForClickHouse(t, ctx, container, password)
-	for pass := 1; pass <= 2; pass++ {
-		for _, path := range migrationFiles(t) {
-			runClickHouse(t, ctx, container, password, readFile(t, path))
-		}
+	files := migrationFiles(t)
+	runClickHouse(t, ctx, container, password, readFile(t, files[0]))
+	legacyInsert := `
+		INSERT INTO open_splunk.events
+		(
+			event_id, tenant_id, index_name, event_time, index_time, expires_at
+		)
+		VALUES
+		(
+			'legacy-event', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY
+		)`
+	runClickHouse(t, ctx, container, password, legacyInsert)
+	for _, path := range files[1:] {
+		runClickHouse(t, ctx, container, password, readFile(t, path))
+	}
+	// Every migration must remain idempotent after the populated upgrade path.
+	for _, path := range files {
+		runClickHouse(t, ctx, container, password, readFile(t, path))
 	}
 
 	columns := clickHouseQuery(t, ctx, container, password, `
@@ -186,7 +203,7 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 		(
 			event_id, tenant_id, index_name, event_time, index_time,
 			host, source, sourcetype, severity, raw, raw_encoding,
-			fields, field_names, collector_id, batch_id, batch_sequence, expires_at
+			fields, field_names, collector_id, batch_id, batch_sequence, expires_at, visibility_seq
 		)
 		SETTINGS
 			insert_deduplication_token = 'migration-smoke-batch',
@@ -197,12 +214,25 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 			input_format_try_infer_dates = 0,
 			input_format_try_infer_datetimes = 0
 		FORMAT JSONEachRow
-		{"event_id":"event-1","tenant_id":"tenant-1","index_name":"main","event_time":"2026-07-21 03:04:05.123456789","index_time":"2026-07-21 03:04:06.123","host":"host-1","source":"app.log","sourcetype":"go:zap:json","severity":3,"raw":"{\"message\":\"hello\"}","raw_encoding":1,"fields":{"big":9007199254740993,"unsigned":18446744073709551615,"negative":-9223372036854775808,"ratio":1.25,"ok":true,"nothing":null,"mixed":[1,"two",true],"nested":{"label":"kept"}},"field_names":["big","mixed","negative","nested.label","nothing","ok","ratio","unsigned"],"collector_id":"collector-1","batch_id":"batch-1","batch_sequence":1,"expires_at":"2099-02-01 03:04:06.123"}`
+		{"event_id":"event-1","tenant_id":"tenant-1","index_name":"main","event_time":"2026-07-21 03:04:05.123456789","index_time":"2026-07-21 03:04:06.123","host":"host-1","source":"app.log","sourcetype":"go:zap:json","severity":3,"raw":"{\"message\":\"hello\"}","raw_encoding":1,"fields":{"big":9007199254740993,"unsigned":18446744073709551615,"negative":-9223372036854775808,"ratio":1.25,"ok":true,"nothing":null,"mixed":[1,"two",true],"nested":{"label":"kept"}},"field_names":["big","mixed","negative","nested.label","nothing","ok","ratio","unsigned"],"collector_id":"collector-1","batch_id":"batch-1","batch_sequence":1,"expires_at":"2099-02-01 03:04:06.123","visibility_seq":1}`
 
 	// A retry must contain the exact same accepted rows in the same order and
 	// reuse the exact token. The non-replicated MergeTree window then drops it.
 	runClickHouse(t, ctx, container, password, insert)
 	runClickHouse(t, ctx, container, password, insert)
+
+	legacyVisibility := clickHouseQuery(t, ctx, container, password, `
+		SELECT visibility_seq
+		FROM open_splunk.events
+		WHERE event_id = 'legacy-event'
+		FORMAT TSVRaw`)
+	if legacyVisibility != "0" {
+		t.Fatalf("pre-migration row visibility = %q, want migration default 0", legacyVisibility)
+	}
+	legacyError := clickHouseQueryError(t, ctx, container, password, strings.Replace(legacyInsert, "legacy-event", "post-upgrade-legacy-event", 1))
+	if !strings.Contains(legacyError, "visibility_seq_is_positive") {
+		t.Fatalf("legacy writer omission did not fail the visibility constraint: %s", legacyError)
+	}
 
 	rowCount := clickHouseQuery(t, ctx, container, password, `
 		SELECT count()
@@ -336,6 +366,20 @@ func clickHouseQuery(t *testing.T, ctx context.Context, container, password, que
 		t.Fatalf("run ClickHouse query: %v\n%s\ncontainer logs:\n%s", err, output, dockerLogs(container))
 	}
 	return strings.TrimSpace(string(output))
+}
+
+func clickHouseQueryError(t *testing.T, ctx context.Context, container, password, query string) string {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, "docker", "exec", container,
+		"clickhouse-client", "--host", "127.0.0.1",
+		"--user", "open_splunk", "--password", password,
+		"--query", query,
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("ClickHouse query unexpectedly succeeded: %s", query)
+	}
+	return string(output)
 }
 
 func runDocker(t *testing.T, ctx context.Context, stdin io.Reader, args ...string) {

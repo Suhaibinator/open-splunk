@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -15,7 +17,9 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -36,11 +40,12 @@ func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
 	first.Event.Message = stringPointer("")
 	first.Event.TraceId = nil
 	first.Event.SpanId = stringPointer("")
-	second := testStoredEvent("event-1", "main", indexTime.Add(time.Second))
+	second := testStoredEvent("event-1", "main", indexTime)
 	sequence := uint64(19)
 	input := ingest.StoreBatch{
 		TenantID: "tenant", CollectorID: "collector", BatchID: "batch", BatchSequence: sequence,
-		Events: []*ingest.StoredEvent{first, second},
+		ReceivedAt: indexTime,
+		Events:     []*ingest.StoredEvent{first, second},
 	}
 	result, err := store.Store(context.Background(), input)
 	if err != nil {
@@ -49,8 +54,9 @@ func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
 	if conn.prepareCalls != 1 || conn.query != eventsInsertSQL || strings.Contains(conn.query, "?") {
 		t.Fatalf("native prepare contract calls=%d query=%q", conn.prepareCalls, conn.query)
 	}
-	if conn.maxVisibilityCalls != 1 || conn.maxVisibilityQuery != buildMaxVisibilitySQL("open_splunk", "events") {
-		t.Fatalf("visibility lookup calls=%d query=%q", conn.maxVisibilityCalls, conn.maxVisibilityQuery)
+	sequencer := store.visibility.(*fakeVisibilitySequencer)
+	if len(sequencer.reserveKeys) != 1 || sequencer.reserveKeys[0] != deduplicationToken(input) || !slices.Equal(sequencer.committed, []uint64{1}) {
+		t.Fatalf("visibility reserve/commit = %v / %v", sequencer.reserveKeys, sequencer.committed)
 	}
 	wantSettings := map[string]any{
 		"async_insert": uint8(0), "wait_for_async_insert": uint8(1),
@@ -113,8 +119,9 @@ func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
 
 func TestStoreAssignsCommitOrderedVisibilityAndCapturesCutoff(t *testing.T) {
 	t.Parallel()
-	conn := &fakeStoreConnection{batch: &fakeWriteBatch{}, maxVisibility: 9}
-	store := mustTestStore(t, conn, fixedRetention(time.Hour))
+	conn := &fakeStoreConnection{batch: &fakeWriteBatch{}}
+	sequencer := &fakeVisibilitySequencer{reservation: visibility.Reservation{Sequence: 10}, cutoff: 10}
+	store := mustTestStoreWithVisibility(t, conn, fixedRetention(time.Hour), sequencer)
 
 	if _, err := store.Store(context.Background(), validStoreBatch()); err != nil {
 		t.Fatalf("Store: %v", err)
@@ -122,27 +129,169 @@ func TestStoreAssignsCommitOrderedVisibilityAndCapturesCutoff(t *testing.T) {
 	if got := conn.batch.rows[0][24]; got != uint64(10) {
 		t.Fatalf("stored visibility = %#v, want 10", got)
 	}
-	conn.maxVisibility = 10
 	cutoff, err := store.VisibilityCutoff(context.Background())
 	if err != nil {
 		t.Fatalf("VisibilityCutoff: %v", err)
 	}
-	if cutoff != 10 || conn.maxVisibilityCalls != 2 {
-		t.Fatalf("cutoff=%d calls=%d, want 10 and 2", cutoff, conn.maxVisibilityCalls)
+	if cutoff != 10 || sequencer.cutoffCalls != 1 || !slices.Equal(sequencer.committed, []uint64{10}) {
+		t.Fatalf("cutoff=%d calls=%d committed=%v", cutoff, sequencer.cutoffCalls, sequencer.committed)
 	}
 }
 
 func TestVisibilityLookupFailureIsClassified(t *testing.T) {
 	t.Parallel()
-	connectionErr := &net.OpError{Op: "read", Net: "tcp", Err: io.EOF}
-	conn := &fakeStoreConnection{maxVisibilityErr: connectionErr}
-	store := mustTestStore(t, conn, fixedRetention(time.Hour))
+	sequencerErr := errors.New("control database unavailable")
+	conn := &fakeStoreConnection{}
+	sequencer := &fakeVisibilitySequencer{reserveErr: sequencerErr, cutoffErr: sequencerErr}
+	store := mustTestStoreWithVisibility(t, conn, fixedRetention(time.Hour), sequencer)
 
 	if _, err := store.Store(context.Background(), validStoreBatch()); !isTransient(err) {
 		t.Fatalf("Store error = %v, want transient visibility lookup failure", err)
 	}
 	if _, err := store.VisibilityCutoff(context.Background()); !isTransient(err) {
 		t.Fatalf("VisibilityCutoff error = %v, want transient failure", err)
+	}
+}
+
+func TestVisibilityFinalizationDeadlineIsRetryable(t *testing.T) {
+	t.Parallel()
+	sequencer := &fakeVisibilitySequencer{
+		reservation: visibility.Reservation{Sequence: 1},
+		commitErr:   context.DeadlineExceeded,
+	}
+	store := mustTestStoreWithVisibility(t, &fakeStoreConnection{batch: &fakeWriteBatch{}}, fixedRetention(time.Hour), sequencer)
+	if _, err := store.Store(context.Background(), validStoreBatch()); !isTransient(err) {
+		t.Fatalf("Store error = %v, want retryable finalization failure", err)
+	}
+}
+
+func TestStorePreservesAmbiguousReservationAndRecognizesCommittedRetry(t *testing.T) {
+	t.Parallel()
+	batch := validStoreBatch()
+	write := &fakeWriteBatch{sendErr: io.ErrUnexpectedEOF}
+	connection := &fakeStoreConnection{batch: write}
+	sequencer := &fakeVisibilitySequencer{reservation: visibility.Reservation{Sequence: 7}}
+	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
+
+	if _, err := store.Store(context.Background(), batch); !isTransient(err) {
+		t.Fatalf("ambiguous Store error = %v", err)
+	}
+	if !slices.Equal(sequencer.released, []uint64{7}) || len(sequencer.committed) != 0 {
+		t.Fatalf("ambiguous insert lease lifecycle: release=%v commit=%v", sequencer.released, sequencer.committed)
+	}
+
+	connection.batch = &fakeWriteBatch{}
+	batch.ReceivedAt = batch.ReceivedAt.Add(time.Hour)
+	batch.Events[0].IndexTime = batch.ReceivedAt
+	if _, err := store.Store(context.Background(), batch); err != nil {
+		t.Fatalf("retry Store: %v", err)
+	}
+	if got := connection.batch.rows[0][24]; got != uint64(7) {
+		t.Fatalf("retry visibility = %#v, want stable 7", got)
+	}
+	if got := connection.batch.rows[0][4]; got != time.Date(2026, 7, 21, 1, 2, 3, 0, time.UTC) {
+		t.Fatalf("retry index time = %v, want first-attempt time", got)
+	}
+	if !slices.Equal(sequencer.committed, []uint64{7}) {
+		t.Fatalf("committed = %v", sequencer.committed)
+	}
+
+	sequencer.reservation = visibility.Reservation{Sequence: 7, AlreadyCommitted: true}
+	connection.prepareCalls = 0
+	result, err := store.Store(context.Background(), batch)
+	if err != nil {
+		t.Fatalf("committed retry: %v", err)
+	}
+	if result.Accepted != 0 || result.Duplicate != 1 || connection.prepareCalls != 0 {
+		t.Fatalf("committed retry result=%+v prepareCalls=%d", result, connection.prepareCalls)
+	}
+}
+
+func TestStoreReleasesPreviouslyAmbiguousAttemptOnPreSendRetryFailure(t *testing.T) {
+	t.Parallel()
+	connection := &fakeStoreConnection{prepareErr: io.ErrUnexpectedEOF}
+	sequencer := &fakeVisibilitySequencer{reservation: visibility.Reservation{
+		Sequence: 12, PreviouslyReserved: true,
+	}}
+	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
+	if _, err := store.Store(context.Background(), validStoreBatch()); !isTransient(err) {
+		t.Fatalf("Store error = %v, want transient", err)
+	}
+	if !slices.Equal(sequencer.released, []uint64{12}) {
+		t.Fatalf("previously ambiguous attempt releases = %v, want [12]", sequencer.released)
+	}
+}
+
+func TestStoreAttemptLeaseFencesConcurrentWriters(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = controlDB.Close() })
+	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gate := &gatedStoreConnection{
+		entered: make(chan struct{}),
+		resume:  make(chan struct{}),
+		err:     io.ErrUnexpectedEOF,
+	}
+	first := mustTestStoreWithVisibility(t, gate, fixedRetention(time.Hour), sequencer)
+	firstDone := make(chan error, 1)
+	go func() {
+		_, storeErr := first.Store(ctx, validStoreBatch())
+		firstDone <- storeErr
+	}()
+	select {
+	case <-gate.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first Store did not reach Prepare")
+	}
+
+	secondConnection := &fakeStoreConnection{batch: &fakeWriteBatch{}}
+	second := mustTestStoreWithVisibility(t, secondConnection, fixedRetention(time.Hour), sequencer)
+	if _, err := second.Store(ctx, validStoreBatch()); !errors.Is(err, visibility.ErrAttemptInProgress) {
+		t.Fatalf("same batch while first attempt active error = %v, want ErrAttemptInProgress", err)
+	}
+	if secondConnection.prepareCalls != 0 {
+		t.Fatalf("fenced same batch reached ClickHouse Prepare %d times", secondConnection.prepareCalls)
+	}
+
+	different := validStoreBatch()
+	different.BatchID = "different-batch"
+	different.Events[0].BatchID = different.BatchID
+	if _, err := second.Store(ctx, different); !errors.Is(err, visibility.ErrPendingBarrier) {
+		t.Fatalf("different batch behind first attempt error = %v, want ErrPendingBarrier", err)
+	}
+	if secondConnection.prepareCalls != 0 {
+		t.Fatalf("fenced different batch reached ClickHouse Prepare %d times", secondConnection.prepareCalls)
+	}
+
+	close(gate.resume)
+	select {
+	case firstErr := <-firstDone:
+		if !isTransient(firstErr) {
+			t.Fatalf("first Store error = %v, want transient", firstErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("first Store did not release its attempt lease")
+	}
+
+	retryConnection := &fakeStoreConnection{batch: &fakeWriteBatch{}}
+	retry := mustTestStoreWithVisibility(t, retryConnection, fixedRetention(time.Hour), sequencer)
+	if _, err := retry.Store(ctx, validStoreBatch()); err != nil {
+		t.Fatalf("retry Store: %v", err)
+	}
+	if got := retryConnection.batch.rows[0][24]; got != uint64(1) {
+		t.Fatalf("retry visibility sequence = %#v, want stable 1", got)
+	}
+	cutoff, err := retry.VisibilityCutoff(ctx)
+	if err != nil || cutoff != 1 {
+		t.Fatalf("cutoff after retry = %d, err=%v", cutoff, err)
 	}
 }
 
@@ -286,10 +435,11 @@ func TestStoreRetentionLookupIsCachedPerIndex(t *testing.T) {
 	base := time.Date(2026, 7, 21, 1, 2, 3, 456789123, time.UTC)
 	_, err := store.Store(context.Background(), ingest.StoreBatch{
 		TenantID: "tenant", CollectorID: "collector", BatchID: "batch", BatchSequence: 7,
+		ReceivedAt: base,
 		Events: []*ingest.StoredEvent{
 			testStoredEvent("one", "main", base),
-			testStoredEvent("two", "audit", base.Add(time.Minute)),
-			testStoredEvent("three", "main", base.Add(2*time.Minute)),
+			testStoredEvent("two", "audit", base),
+			testStoredEvent("three", "main", base),
 		},
 	})
 	if err != nil {
@@ -300,13 +450,56 @@ func TestStoreRetentionLookupIsCachedPerIndex(t *testing.T) {
 	}
 	wants := []time.Time{
 		base.Truncate(time.Millisecond).Add(time.Hour),
-		base.Add(time.Minute).Truncate(time.Millisecond).Add(30 * 24 * time.Hour),
-		base.Add(2 * time.Minute).Truncate(time.Millisecond).Add(time.Hour),
+		base.Truncate(time.Millisecond).Add(30 * 24 * time.Hour),
+		base.Truncate(time.Millisecond).Add(time.Hour),
 	}
 	for i, want := range wants {
 		if got := conn.batch.rows[i][23]; got != want {
 			t.Errorf("row %d expires_at = %v, want %v", i, got, want)
 		}
+	}
+}
+
+func TestReservationMetadataBoundsMatchIndexScope(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 7, 21, 1, 2, 3, 0, time.UTC)
+	rows := make([][]any, 256)
+	for index := range rows {
+		name := fmt.Sprintf("%03d-%s", index, strings.Repeat("x", 251))
+		row := make([]any, len(eventInsertColumns))
+		row[2] = name
+		row[4] = base
+		row[23] = base.Add(time.Hour)
+		rows[index] = row
+	}
+	metadata, err := encodeReservationMetadata(rows)
+	if err != nil {
+		t.Fatalf("encode 256 maximum-length indexes: %v", err)
+	}
+	decoded, err := decodeReservationMetadata(metadata)
+	if err != nil || len(decoded) != 256 {
+		t.Fatalf("decode maximum index scope: count=%d err=%v", len(decoded), err)
+	}
+	if len(metadata) > visibility.MaxMetadataBytes {
+		t.Fatalf("metadata size = %d, limit = %d", len(metadata), visibility.MaxMetadataBytes)
+	}
+}
+
+func TestStoreRejectsTooManyIndexesBeforeVisibilityReservation(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 7, 21, 1, 2, 3, 0, time.UTC)
+	batch := validStoreBatch()
+	batch.Events = make([]*ingest.StoredEvent, 257)
+	for index := range batch.Events {
+		batch.Events[index] = testStoredEvent(fmt.Sprintf("event-%03d", index), fmt.Sprintf("index-%03d", index), base)
+	}
+	sequencer := &fakeVisibilitySequencer{reservation: visibility.Reservation{Sequence: 1}}
+	store := mustTestStoreWithVisibility(t, &fakeStoreConnection{}, fixedRetention(time.Hour), sequencer)
+	if _, err := store.Store(context.Background(), batch); err == nil || !strings.Contains(err.Error(), "unique index count") {
+		t.Fatalf("Store error = %v, want unique-index limit", err)
+	}
+	if len(sequencer.reserveKeys) != 0 {
+		t.Fatalf("invalid metadata created visibility reservations: %v", sequencer.reserveKeys)
 	}
 }
 
@@ -424,6 +617,11 @@ func TestConfigAndConnectionLifecycle(t *testing.T) {
 		t.Fatal("invalid address accepted")
 	}
 	invalid = DefaultConfig()
+	invalid.Addresses = []string{"127.0.0.1:9000", "127.0.0.1:9001"}
+	if _, _, err := invalid.clickHouseOptions(); err == nil {
+		t.Fatal("multiple ClickHouse addresses accepted in single-node mode")
+	}
+	invalid = DefaultConfig()
 	invalid.Password = "very-secret"
 	invalid.Table = "events; DROP"
 	if _, _, err := invalid.clickHouseOptions(); err == nil || strings.Contains(err.Error(), invalid.Password) {
@@ -440,16 +638,12 @@ func TestConfigAndConnectionLifecycle(t *testing.T) {
 }
 
 type fakeStoreConnection struct {
-	prepareCalls       int
-	query              string
-	settings           clickhousedriver.Settings
-	prepareErr         error
-	batch              *fakeWriteBatch
-	pingErr, closeErr  error
-	maxVisibilityCalls int
-	maxVisibilityQuery string
-	maxVisibility      uint64
-	maxVisibilityErr   error
+	prepareCalls      int
+	query             string
+	settings          clickhousedriver.Settings
+	prepareErr        error
+	batch             *fakeWriteBatch
+	pingErr, closeErr error
 }
 
 func (c *fakeStoreConnection) prepare(_ context.Context, query string, settings clickhousedriver.Settings) (writeBatch, error) {
@@ -467,13 +661,27 @@ func (c *fakeStoreConnection) prepare(_ context.Context, query string, settings 
 	}
 	return c.batch, nil
 }
-func (c *fakeStoreConnection) maxVisibilitySequence(_ context.Context, query string) (uint64, error) {
-	c.maxVisibilityCalls++
-	c.maxVisibilityQuery = query
-	return c.maxVisibility, c.maxVisibilityErr
-}
 func (c *fakeStoreConnection) Ping(context.Context) error { return c.pingErr }
 func (c *fakeStoreConnection) Close() error               { return c.closeErr }
+
+type gatedStoreConnection struct {
+	entered chan struct{}
+	resume  chan struct{}
+	err     error
+}
+
+func (connection *gatedStoreConnection) prepare(ctx context.Context, _ string, _ clickhousedriver.Settings) (writeBatch, error) {
+	close(connection.entered)
+	select {
+	case <-connection.resume:
+		return nil, connection.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (*gatedStoreConnection) Ping(context.Context) error { return nil }
+func (*gatedStoreConnection) Close() error               { return nil }
 
 type fakeWriteBatch struct {
 	rows                              [][]any
@@ -511,16 +719,65 @@ func fixedRetention(period time.Duration) RetentionProvider {
 }
 func mustTestStore(t *testing.T, conn storeConnection, retention RetentionProvider) *Store {
 	t.Helper()
-	store, err := newStore(conn, "open_splunk", "events", retention, time.Now, time.Second)
+	return mustTestStoreWithVisibility(t, conn, retention, &fakeVisibilitySequencer{reservation: visibility.Reservation{Sequence: 1}})
+}
+func mustTestStoreWithVisibility(t *testing.T, conn storeConnection, retention RetentionProvider, sequencer visibility.Sequencer) *Store {
+	t.Helper()
+	store, err := newStore(conn, "open_splunk", "events", retention, sequencer, time.Now, time.Second)
 	if err != nil {
 		t.Fatalf("newStore: %v", err)
 	}
 	return store
 }
+
+type fakeVisibilitySequencer struct {
+	reservation visibility.Reservation
+	reserveErr  error
+	commitErr   error
+	releaseErr  error
+	cutoff      uint64
+	cutoffErr   error
+	reserveKeys []string
+	committed   []uint64
+	released    []uint64
+	cutoffCalls int
+}
+
+func (sequencer *fakeVisibilitySequencer) Reserve(_ context.Context, request visibility.ReserveRequest) (visibility.Reservation, error) {
+	sequencer.reserveKeys = append(sequencer.reserveKeys, request.BatchKey)
+	reservation := sequencer.reservation
+	if len(sequencer.reserveKeys) > 1 && !reservation.AlreadyCommitted {
+		reservation.PreviouslyReserved = true
+	}
+	if reservation.Sequence == 0 {
+		reservation.Sequence = 1
+	}
+	if reservation.IndexTime.IsZero() {
+		reservation.IndexTime = request.IndexTime.UTC().Truncate(time.Millisecond)
+	}
+	if reservation.Metadata == nil {
+		reservation.Metadata = slices.Clone(request.Metadata)
+	}
+	sequencer.reservation = reservation
+	return reservation, sequencer.reserveErr
+}
+func (sequencer *fakeVisibilitySequencer) Commit(_ context.Context, sequence uint64, _ string) error {
+	sequencer.committed = append(sequencer.committed, sequence)
+	return sequencer.commitErr
+}
+func (sequencer *fakeVisibilitySequencer) Release(_ context.Context, sequence uint64, _ string) error {
+	sequencer.released = append(sequencer.released, sequence)
+	return sequencer.releaseErr
+}
+func (sequencer *fakeVisibilitySequencer) Cutoff(context.Context) (uint64, error) {
+	sequencer.cutoffCalls++
+	return sequencer.cutoff, sequencer.cutoffErr
+}
 func validStoreBatch() ingest.StoreBatch {
 	now := time.Date(2026, 7, 21, 1, 2, 3, 0, time.UTC)
 	return ingest.StoreBatch{TenantID: "tenant", CollectorID: "collector", BatchID: "batch", BatchSequence: 1,
-		Events: []*ingest.StoredEvent{testStoredEvent("event", "main", now)}}
+		ReceivedAt: now,
+		Events:     []*ingest.StoredEvent{testStoredEvent("event", "main", now)}}
 }
 func testStoredEvent(id, index string, indexTime time.Time) *ingest.StoredEvent {
 	eventTime := time.Date(2026, 7, 21, 3, 4, 5, 123456789, time.FixedZone("event-offset", 5*60*60))
