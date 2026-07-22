@@ -184,9 +184,11 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 				// groups and validates short private aliases instead of repeating large
 				// Dynamic/tag expressions in SELECT, GROUP BY, and max().
 				fragment = "SELECT *, " + strings.Join(nextState.preAggregateColumns, ", ") + " FROM (" + fragment + ") AS " + alias
+				args = prependArguments(nextState.preAggregateArgs, args)
 				aliasSequence++
 				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 				nextState.preAggregateColumns = nil
+				nextState.preAggregateArgs = nil
 			}
 			fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + alias
 			if len(groups) > 0 {
@@ -534,6 +536,7 @@ type compileState struct {
 	order                   []compiledSortKey
 	tieBreakers             []compiledSortKey
 	preAggregateColumns     []string
+	preAggregateArgs        []any
 	postAggregateColumns    []string
 	postAggregatePredicates []string
 }
@@ -1003,6 +1006,7 @@ func cloneCompileState(state compileState) compileState {
 	next.order = append([]compiledSortKey(nil), state.order...)
 	next.tieBreakers = append([]compiledSortKey(nil), state.tieBreakers...)
 	next.preAggregateColumns = append([]string(nil), state.preAggregateColumns...)
+	next.preAggregateArgs = append([]any(nil), state.preAggregateArgs...)
 	next.postAggregateColumns = append([]string(nil), state.postAggregateColumns...)
 	next.postAggregatePredicates = append([]string(nil), state.postAggregatePredicates...)
 	return next
@@ -1831,6 +1835,7 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		next.order = append(next.order, compiledSortKey{valueSQL: privateGroup})
 		next.tieBreakers = append(next.tieBreakers, compiledSortKey{valueSQL: privateGroup})
 	}
+	numericInputs := make(map[string]string)
 	for _, measure := range operator.Measures {
 		if _, duplicate := seen[measure.Output]; duplicate {
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: output field %q is duplicated", measure.Output)
@@ -1855,6 +1860,32 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 				inputSQL = percentileInputSQL(input)
 			}
 			projection = append(projection, "quantileGKOrNull(100, 0.95)("+inputSQL+") AS "+output)
+			measureState.numberType = "Float64"
+		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
+			inputAlias, cached := numericInputs[measure.Input.Name]
+			if !cached {
+				input, ok, resolveErr := resolveCompiledField(measure.Input, state)
+				if resolveErr != nil {
+					return nil, nil, nil, compileState{}, nil, resolveErr
+				}
+				inputSQL := "CAST([], 'Array(Float64)')"
+				var inputArgs []any
+				if ok {
+					inputSQL, inputArgs = numericArrayInputSQL(input)
+				}
+				inputAlias = quoteIdentifier(fmt.Sprintf("__os_measure_values_%d", len(numericInputs)))
+				numericInputs[measure.Input.Name] = inputAlias
+				next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
+				next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
+			}
+			countSQL := "sum(length(" + inputAlias + "))"
+			sumSQL := "sum(arraySum(" + inputAlias + "))"
+			nullFloat := "CAST(NULL AS Nullable(Float64))"
+			valueSQL := "if(" + countSQL + " = 0, " + nullFloat + ", toFloat64(" + sumSQL + "))"
+			if measure.Function == plan.AggregateFunctionAverage {
+				valueSQL = "if(" + countSQL + " = 0, " + nullFloat + ", toFloat64(" + sumSQL + ") / toFloat64(" + countSQL + "))"
+			}
+			projection = append(projection, valueSQL+" AS "+output)
 			measureState.numberType = "Float64"
 		default:
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: unsupported function %d", measure.Function)
@@ -1888,24 +1919,39 @@ func percentileInputSQL(field fieldState) string {
 	case fieldKindTime:
 		return "ifNotFinite(toFloat64(toUnixTimestamp64Nano(" + field.valueSQL + ")) / 1000000000, " + nullFloat + ")"
 	case fieldKindDynamic:
-		typeSQL := dynamicTypeExpression(field)
-		numericOrString := "(" + typeSQL + " = 'String' OR " + dynamicNumericTypePredicate(typeSQL) + ")"
-		converted := finiteFloatOrNullSQL("toString(" + field.valueSQL + ")")
-		mapSQL := "dynamicElement(" + field.valueSQL + ", 'Map(String, String)')"
-		typeKey := "concat(char(0), 'open_splunk_type')"
-		valueKey := "concat(char(0), 'open_splunk_value')"
-		decimalTag := "(" + typeSQL + " = 'Map(String, String)'" +
-			" AND length(" + mapSQL + ") = 2" +
-			" AND mapContains(" + mapSQL + ", " + typeKey + ")" +
-			" AND mapContains(" + mapSQL + ", " + valueKey + ")" +
-			" AND " + mapSQL + "[" + typeKey + "] = 'decimal/v1')"
-		decimal := finiteFloatOrNullSQL(mapSQL + "[" + valueKey + "]")
-		return "multiIf(" + numericOrString + ", " + converted + ", " + decimalTag + ", " + decimal + ", " + nullFloat + ")"
+		return dynamicFiniteFloatOrNullSQL(field.valueSQL, dynamicTypeExpression(field))
 	case fieldKindString:
 		return finiteFloatOrNullSQL(field.valueSQL)
 	default:
 		return nullFloat
 	}
+}
+
+func numericArrayInputSQL(field fieldState) (string, []any) {
+	empty := "CAST([], 'Array(Float64)')"
+	scalar := percentileInputSQL(field)
+	scalarArray := "arrayMap(value -> assumeNotNull(value), arrayFilter(value -> isNotNull(value), [" + scalar + "]))"
+	value := scalarArray
+	if field.kind == fieldKindDynamic {
+		element := dynamicFiniteFloatOrNullSQL("element", "dynamicType(element)")
+		array := "arrayMap(value -> assumeNotNull(value), arrayFilter(value -> isNotNull(value), " +
+			"arrayMap(element -> " + element + ", dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)'))))"
+		value = "if(" + dynamicTypeExpression(field) + " = 'Array(Dynamic)', " + array + ", " + scalarArray + ")"
+	}
+	if field.existsSQL == "" || field.existsSQL == "1" {
+		return value, nil
+	}
+	return "if(" + field.existsSQL + ", " + value + ", " + empty + ")", append([]any(nil), field.existsArgs...)
+}
+
+func dynamicFiniteFloatOrNullSQL(valueSQL, typeSQL string) string {
+	value := compiledScalar{valueSQL: valueSQL, dynamicTypeSQL: typeSQL, kind: fieldKindDynamic}
+	numericOrString := "(" + typeSQL + " = 'String' OR " + dynamicNumericTypePredicate(typeSQL) + ")"
+	converted := finiteFloatOrNullSQL("toString(" + valueSQL + ")")
+	decimalTag := dynamicTaggedDecimalCondition(value)
+	decimal := dynamicTaggedDecimalFloatSQL(value)
+	return "multiIf(" + numericOrString + ", " + converted + ", " + decimalTag + ", " + decimal +
+		", CAST(NULL AS Nullable(Float64)))"
 }
 
 func finiteFloatOrNullSQL(valueSQL string) string {

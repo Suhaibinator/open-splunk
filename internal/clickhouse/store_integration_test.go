@@ -1134,6 +1134,242 @@ func testCompiledQueriesAgainstClickHouse(
 	if strings.Join(ids, ",") != "n-null,n-two" {
 		t.Fatalf("tail IDs = %v, want [n-null n-two]", ids)
 	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close tail rows: %v", err)
+	}
+
+	testStatsSumAndAverageAgainstClickHouse(t, ctx, store, connection, indexTime)
+}
+
+func testStatsSumAndAverageAgainstClickHouse(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	connection clickhousedriver.Conn,
+	indexTime time.Time,
+) {
+	t.Helper()
+	newEvent := func(id, group string, fields ...*opensplunkv1.TypedObjectField) *ingest.StoredEvent {
+		fields = append([]*opensplunkv1.TypedObjectField{typedField("aggregate_group", typedString(group))}, fields...)
+		event := compilerIntegrationEvent(id, "aggregate-host", "sum avg fixture", indexTime, fields...)
+		event.BatchID = "stats-sum-avg-batch"
+		event.Event.Source = "stats-sum-avg"
+		return event
+	}
+	events := []*ingest.StoredEvent{
+		newEvent("sum-avg-a-int", "A",
+			typedField("aggregate_value", typedSint(10)),
+			typedField("float_metric", typedDouble(1.25)),
+			typedField("overflow_metric", typedDouble(math.MaxFloat64)),
+			typedField("ignored_metric", typedBool(true)),
+		),
+		newEvent("sum-avg-a-string", "A",
+			typedField("aggregate_value", typedString("20.5")),
+			typedField("overflow_metric", typedDouble(math.MaxFloat64)),
+			typedField("ignored_metric", typedBytes([]byte{1, 2, 3})),
+		),
+		newEvent("sum-avg-a-array", "A",
+			typedField("aggregate_value", typedList(typedSint(1), typedString("2.5"), typedString("bad"), typedNull())),
+			typedField("ignored_metric", typedObject(typedField("child", typedSint(9)))),
+		),
+		newEvent("sum-avg-a-missing", "A",
+			typedField("decimal_metric", typedDecimal("3.25")),
+			typedField("nested_metric", typedList(typedSint(5), typedList(typedSint(99)), typedObject(typedField("child", typedSint(100))))),
+			typedField("ignored_metric", typedString("NaN")),
+		),
+		newEvent("sum-avg-b-bad", "B",
+			typedField("aggregate_value", typedString("bad")),
+			typedField("ignored_metric", typedString("Inf")),
+		),
+		newEvent("sum-avg-b-null", "B",
+			typedField("aggregate_value", typedNull()),
+			typedField("ignored_metric", typedString("")),
+		),
+	}
+	batch := ingest.StoreBatch{
+		TenantID: "tenant", CollectorID: "collector", BatchID: "stats-sum-avg-batch", BatchSequence: 5,
+		SourceBatchSHA256: testSourceBatchDigest("stats-sum-avg-batch"),
+		ReceivedAt:        indexTime,
+		Events:            events,
+	}
+	if _, err := store.Store(ctx, batch); err != nil {
+		t.Fatalf("store sum/avg fixtures: %v", err)
+	}
+	foreign := newEvent("sum-avg-foreign", "A", typedField("aggregate_value", typedList(typedSint(999999))))
+	foreign.TenantID = "other-tenant"
+	foreign.BatchID = "stats-sum-avg-foreign-batch"
+	foreignBatch := ingest.StoreBatch{
+		TenantID: "other-tenant", CollectorID: "collector", BatchID: "stats-sum-avg-foreign-batch", BatchSequence: 6,
+		SourceBatchSHA256: testSourceBatchDigest("stats-sum-avg-foreign-batch"),
+		ReceivedAt:        indexTime,
+		Events:            []*ingest.StoredEvent{foreign},
+	}
+	if _, err := store.Store(ctx, foreignBatch); err != nil {
+		t.Fatalf("store cross-tenant sum/avg fixture: %v", err)
+	}
+	visibilityCutoff, err := store.VisibilityCutoff(ctx)
+	if err != nil {
+		t.Fatalf("capture sum/avg visibility cutoff: %v", err)
+	}
+	compile := func(source string) CompiledQuery {
+		return compileIntegrationSPL(t, source, indexTime.Add(10*time.Second), visibilityCutoff)
+	}
+	base := `index=compiler source="stats-sum-avg"`
+
+	grouped := compile(base + ` | stats count sum(aggregate_value) AS total avg(aggregate_value) AS mean BY aggregate_group | sort aggregate_group`)
+	groupedRows, err := connection.Query(ctx, grouped.SQL, grouped.Args...)
+	if err != nil {
+		t.Fatalf("execute grouped sum/avg: %v\nSQL: %s\nargs: %#v", err, grouped.SQL, grouped.Args)
+	}
+	if types := groupedRows.ColumnTypes(); len(types) != 4 || types[0].DatabaseTypeName() != "String" ||
+		types[1].DatabaseTypeName() != "UInt64" || types[2].DatabaseTypeName() != "Nullable(Float64)" ||
+		types[3].DatabaseTypeName() != "Nullable(Float64)" {
+		_ = groupedRows.Close()
+		t.Fatalf("grouped sum/avg column types = %#v", types)
+	}
+	type aggregateRow struct {
+		group       string
+		count       uint64
+		total, mean *float64
+	}
+	var got []aggregateRow
+	for groupedRows.Next() {
+		var row aggregateRow
+		if err := groupedRows.Scan(&row.group, &row.count, &row.total, &row.mean); err != nil {
+			_ = groupedRows.Close()
+			t.Fatalf("scan grouped sum/avg: %v", err)
+		}
+		got = append(got, row)
+	}
+	if err := groupedRows.Err(); err != nil {
+		_ = groupedRows.Close()
+		t.Fatalf("iterate grouped sum/avg: %v", err)
+	}
+	if err := groupedRows.Close(); err != nil {
+		t.Fatalf("close grouped sum/avg: %v", err)
+	}
+	if len(got) != 2 || got[0].group != "A" || got[0].count != 4 || got[0].total == nil || math.Abs(*got[0].total-34) > 1e-12 ||
+		got[0].mean == nil || math.Abs(*got[0].mean-8.5) > 1e-12 || got[1].group != "B" || got[1].count != 2 ||
+		got[1].total != nil || got[1].mean != nil {
+		t.Fatalf("grouped sum/avg rows = %#v", got)
+	}
+
+	emptyGlobal := compile(`index=compiler source="sum-avg-absent" | stats sum(aggregate_value) AS total avg(aggregate_value) AS mean`)
+	var emptyTotal, emptyMean *float64
+	if err := connection.QueryRow(ctx, emptyGlobal.SQL, emptyGlobal.Args...).Scan(&emptyTotal, &emptyMean); err != nil {
+		t.Fatalf("execute empty global sum/avg: %v\nSQL: %s\nargs: %#v", err, emptyGlobal.SQL, emptyGlobal.Args)
+	}
+	if emptyTotal != nil || emptyMean != nil {
+		t.Fatalf("empty global sum/avg = %v/%v, want null/null", emptyTotal, emptyMean)
+	}
+	emptyGrouped := compile(`index=compiler source="sum-avg-absent" | stats sum(aggregate_value) BY aggregate_group`)
+	if err := executeCompiledExpectingNoRows(ctx, connection, emptyGrouped); err != nil {
+		t.Fatalf("execute empty grouped sum: %v\nSQL: %s\nargs: %#v", err, emptyGrouped.SQL, emptyGrouped.Args)
+	}
+
+	projected := compile(base + ` | fields aggregate_group | stats count sum(aggregate_value) AS total avg(aggregate_value) AS mean BY aggregate_group`)
+	projectedRows, err := connection.Query(ctx, projected.SQL, projected.Args...)
+	if err != nil {
+		t.Fatalf("execute projected sum/avg: %v\nSQL: %s\nargs: %#v", err, projected.SQL, projected.Args)
+	}
+	projectedCount := 0
+	projectedGroups := make(map[string]struct{}, 2)
+	for projectedRows.Next() {
+		var group string
+		var count uint64
+		var total, mean *float64
+		if err := projectedRows.Scan(&group, &count, &total, &mean); err != nil {
+			_ = projectedRows.Close()
+			t.Fatalf("scan projected sum/avg: %v", err)
+		}
+		if total != nil || mean != nil || (group == "A" && count != 4) || (group == "B" && count != 2) {
+			_ = projectedRows.Close()
+			t.Fatalf("projected sum/avg row = %q/%d/%v/%v", group, count, total, mean)
+		}
+		projectedCount++
+		projectedGroups[group] = struct{}{}
+	}
+	if err := projectedRows.Err(); err != nil {
+		_ = projectedRows.Close()
+		t.Fatalf("iterate projected sum/avg: %v", err)
+	}
+	if err := projectedRows.Close(); err != nil {
+		t.Fatalf("close projected sum/avg: %v", err)
+	}
+	if projectedCount != 2 {
+		t.Fatalf("projected sum/avg emitted %d rows for groups %v, want A and B", projectedCount, projectedGroups)
+	}
+	if _, ok := projectedGroups["A"]; !ok {
+		t.Fatalf("projected sum/avg groups = %v, missing A", projectedGroups)
+	}
+	if _, ok := projectedGroups["B"]; !ok {
+		t.Fatalf("projected sum/avg groups = %v, missing B", projectedGroups)
+	}
+
+	downstream := compile(base + ` | stats sum(aggregate_value) AS total BY aggregate_group | where total>30`)
+	var downstreamGroup string
+	var downstreamTotal *float64
+	if err := connection.QueryRow(ctx, downstream.SQL, downstream.Args...).Scan(&downstreamGroup, &downstreamTotal); err != nil {
+		t.Fatalf("execute downstream sum: %v\nSQL: %s\nargs: %#v", err, downstream.SQL, downstream.Args)
+	}
+	if downstreamGroup != "A" || downstreamTotal == nil || math.Abs(*downstreamTotal-34) > 1e-12 {
+		t.Fatalf("downstream sum = %q/%v, want A/34", downstreamGroup, downstreamTotal)
+	}
+
+	repeated := compile(base + ` | stats sum(aggregate_value) AS total BY aggregate_group | stats avg(total) AS mean`)
+	var repeatedMean *float64
+	if err := connection.QueryRow(ctx, repeated.SQL, repeated.Args...).Scan(&repeatedMean); err != nil {
+		t.Fatalf("execute repeated sum/avg: %v\nSQL: %s\nargs: %#v", err, repeated.SQL, repeated.Args)
+	}
+	if repeatedMean == nil || math.Abs(*repeatedMean-34) > 1e-12 {
+		t.Fatalf("repeated sum/avg = %v, want 34", repeatedMean)
+	}
+
+	for _, test := range []struct {
+		name  string
+		field string
+		want  float64
+	}{
+		{name: "float", field: "float_metric", want: 1.25},
+		{name: "tagged decimal", field: "decimal_metric", want: 3.25},
+		{name: "one-level array", field: "nested_metric", want: 5},
+	} {
+		query := compile(base + ` | stats sum(` + test.field + `) AS total avg(` + test.field + `) AS mean`)
+		var total, mean *float64
+		if err := connection.QueryRow(ctx, query.SQL, query.Args...).Scan(&total, &mean); err != nil {
+			t.Fatalf("execute %s sum/avg: %v\nSQL: %s\nargs: %#v", test.name, err, query.SQL, query.Args)
+		}
+		if total == nil || mean == nil || math.Abs(*total-test.want) > 1e-12 || math.Abs(*mean-test.want) > 1e-12 {
+			t.Fatalf("%s sum/avg = %v/%v, want %g/%g", test.name, total, mean, test.want, test.want)
+		}
+	}
+
+	ignored := compile(base + ` | stats sum(ignored_metric) AS total avg(ignored_metric) AS mean`)
+	if err := connection.QueryRow(ctx, ignored.SQL, ignored.Args...).Scan(&emptyTotal, &emptyMean); err != nil {
+		t.Fatalf("execute ignored-type sum/avg: %v\nSQL: %s\nargs: %#v", err, ignored.SQL, ignored.Args)
+	}
+	if emptyTotal != nil || emptyMean != nil {
+		t.Fatalf("ignored-type sum/avg = %v/%v, want null/null", emptyTotal, emptyMean)
+	}
+
+	overflow := compile(base + ` | stats sum(overflow_metric) AS total avg(overflow_metric) AS mean`)
+	var overflowTotal, overflowMean *float64
+	if err := connection.QueryRow(ctx, overflow.SQL, overflow.Args...).Scan(&overflowTotal, &overflowMean); err != nil {
+		t.Fatalf("execute overflow sum/avg: %v\nSQL: %s\nargs: %#v", err, overflow.SQL, overflow.Args)
+	}
+	if overflowTotal == nil || !math.IsInf(*overflowTotal, 1) || overflowMean == nil || !math.IsInf(*overflowMean, 1) {
+		t.Fatalf("overflow sum/avg = %v/%v, want +Inf/+Inf", overflowTotal, overflowMean)
+	}
+
+	canonicalTime := compile(base + ` | stats avg(_time) AS mean_time`)
+	var meanTime *float64
+	if err := connection.QueryRow(ctx, canonicalTime.SQL, canonicalTime.Args...).Scan(&meanTime); err != nil {
+		t.Fatalf("execute canonical time average: %v\nSQL: %s\nargs: %#v", err, canonicalTime.SQL, canonicalTime.Args)
+	}
+	wantTime := float64(time.Date(2026, 7, 21, 3, 4, 5, 123456789, time.FixedZone("event-offset", 5*60*60)).UnixNano()) / 1e9
+	if meanTime == nil || math.Abs(*meanTime-wantTime) > 1e-6 {
+		t.Fatalf("canonical time average = %v, want %g", meanTime, wantTime)
+	}
 }
 
 func executeCompiledExpectingNoRows(ctx context.Context, connection clickhousedriver.Conn, query CompiledQuery) (resultErr error) {

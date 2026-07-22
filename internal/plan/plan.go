@@ -127,6 +127,8 @@ const (
 	AggregateFunctionInvalid AggregateFunction = iota
 	AggregateFunctionCountRows
 	AggregateFunctionPercentile
+	AggregateFunctionSum
+	AggregateFunctionAverage
 )
 
 // AggregateMeasure is one aggregate output column.

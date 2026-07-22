@@ -296,6 +296,43 @@ func TestBuildStatsMultipleMeasuresWithP95(t *testing.T) {
 	}
 }
 
+func TestBuildStatsSumAndAveragePreserveMeasureOrder(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count sum(amount) avg(latency) AS mean BY service, host`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"service", "host", "count", "sum(amount)", "mean"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+	aggregate, ok := logical.Operators[len(logical.Operators)-1].(*Aggregate)
+	if !ok || len(aggregate.Measures) != 3 {
+		t.Fatalf("aggregate operator = %#v", logical.Operators[len(logical.Operators)-1])
+	}
+	if sum := aggregate.Measures[1]; sum.Function != AggregateFunctionSum || sum.Input.Name != "amount" || sum.Output != "sum(amount)" {
+		t.Fatalf("sum measure = %#v", sum)
+	}
+	if average := aggregate.Measures[2]; average.Function != AggregateFunctionAverage || average.Input.Name != "latency" || average.Output != "mean" {
+		t.Fatalf("avg measure = %#v", average)
+	}
+}
+
+func TestBuildStatsSumAndAverageRequireExactInputFields(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | stats sum(request*)`,
+		`index=gradethis | stats avg(request*)`,
+	} {
+		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_FIELD_PATTERN")
+	}
+}
+
 func TestBuildStatsRejectsDuplicateMeasureOutputs(t *testing.T) {
 	t.Parallel()
 

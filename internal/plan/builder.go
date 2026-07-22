@@ -264,6 +264,17 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					measure.Function = AggregateFunctionPercentile
 					measure.Input = input
 					measure.Percentile = 0.95
+				case spl.AggregateFunctionSum, spl.AggregateFunctionAverage:
+					input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
+					if inputErr != nil {
+						return nil, inputErr
+					}
+					measure.Input = input
+					if aggregate.Function == spl.AggregateFunctionSum {
+						measure.Function = AggregateFunctionSum
+					} else {
+						measure.Function = AggregateFunctionAverage
+					}
 				default:
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
