@@ -47,6 +47,9 @@ type Config struct {
 	MaxBytesToRead   uint64
 	MaxResultRows    uint64
 	MaxResultBytes   uint64
+	// MaxRowsToGroupBy bounds distinct groups before result limits apply. When
+	// zero, it follows MaxResultRows (including a caller-supplied value).
+	MaxRowsToGroupBy uint64
 	MaxThreads       uint64
 }
 
@@ -98,6 +101,12 @@ func querySettings(config Config) (clickhousedriver.Settings, error) {
 	if config.MaxResultBytes == 0 {
 		config.MaxResultBytes = defaultMaxResultBytes
 	}
+	if config.MaxRowsToGroupBy == 0 {
+		// A GROUP BY builds its hash table before max_result_rows can reject
+		// the response. Keep both cardinality limits aligned by default to
+		// bound distinct groups and reduce memory-exhaustion risk.
+		config.MaxRowsToGroupBy = config.MaxResultRows
+	}
 	if config.MaxThreads == 0 {
 		config.MaxThreads = defaultMaxThreads
 	}
@@ -106,18 +115,20 @@ func querySettings(config Config) (clickhousedriver.Settings, error) {
 		seconds = 1
 	}
 	return clickhousedriver.Settings{
-		"readonly":              uint8(2),
-		"max_execution_time":    seconds,
-		"timeout_overflow_mode": "throw",
-		"max_memory_usage":      config.MaxMemoryBytes,
-		"max_rows_to_read":      config.MaxRowsToRead,
-		"max_bytes_to_read":     config.MaxBytesToRead,
-		"read_overflow_mode":    "throw",
-		"max_result_rows":       config.MaxResultRows,
-		"max_result_bytes":      config.MaxResultBytes,
-		"result_overflow_mode":  "throw",
-		"max_threads":           config.MaxThreads,
-		"async_insert":          uint8(0),
+		"readonly":               uint8(2),
+		"max_execution_time":     seconds,
+		"timeout_overflow_mode":  "throw",
+		"max_memory_usage":       config.MaxMemoryBytes,
+		"max_rows_to_read":       config.MaxRowsToRead,
+		"max_bytes_to_read":      config.MaxBytesToRead,
+		"read_overflow_mode":     "throw",
+		"max_result_rows":        config.MaxResultRows,
+		"max_result_bytes":       config.MaxResultBytes,
+		"result_overflow_mode":   "throw",
+		"max_rows_to_group_by":   config.MaxRowsToGroupBy,
+		"group_by_overflow_mode": "throw",
+		"max_threads":            config.MaxThreads,
+		"async_insert":           uint8(0),
 	}, nil
 }
 
@@ -474,7 +485,7 @@ func classifyQueryError(ctx context.Context, err error) error {
 		switch exception.Code {
 		case 159: // TIMEOUT_EXCEEDED
 			return fmt.Errorf("%w: ClickHouse execution timeout", context.DeadlineExceeded)
-		case 241, 396: // MEMORY_LIMIT_EXCEEDED, TOO_MANY_ROWS_OR_BYTES
+		case 158, 241, 396: // TOO_MANY_ROWS, MEMORY_LIMIT_EXCEEDED, TOO_MANY_ROWS_OR_BYTES
 			return fmt.Errorf("%w: ClickHouse resource limit", searchjobs.ErrExecutionLimit)
 		case 202, 203, 209, 210, 225, 242, 243, 279, 285, 286, 319, 341, 999:
 			return fmt.Errorf("%w: %v", searchjobs.ErrStorageUnavailable, err)

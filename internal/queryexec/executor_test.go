@@ -273,14 +273,32 @@ func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	}
 	for _, name := range []string{
 		"readonly", "max_execution_time", "max_memory_usage", "max_rows_to_read", "max_bytes_to_read",
-		"max_result_rows", "max_result_bytes", "max_threads",
+		"max_result_rows", "max_result_bytes", "max_rows_to_group_by", "max_threads",
 	} {
 		if _, exists := settings[name]; !exists {
 			t.Errorf("missing query setting %q", name)
 		}
 	}
-	if settings["readonly"] != uint8(2) || settings["result_overflow_mode"] != "throw" || settings["read_overflow_mode"] != "throw" {
+	if settings["readonly"] != uint8(2) || settings["result_overflow_mode"] != "throw" ||
+		settings["read_overflow_mode"] != "throw" || settings["group_by_overflow_mode"] != "throw" {
 		t.Fatalf("unsafe settings = %#v", settings)
+	}
+	if settings["max_rows_to_group_by"] != defaultMaxResultRows {
+		t.Fatalf("default group cap = %v, want %d", settings["max_rows_to_group_by"], defaultMaxResultRows)
+	}
+	custom, err := querySettings(Config{MaxResultRows: 77, MaxRowsToGroupBy: 33})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if custom["max_result_rows"] != uint64(77) || custom["max_rows_to_group_by"] != uint64(33) {
+		t.Fatalf("custom result/group caps = %#v", custom)
+	}
+	aligned, err := querySettings(Config{MaxResultRows: 77})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aligned["max_rows_to_group_by"] != uint64(77) {
+		t.Fatalf("implicit group cap = %v, want result cap 77", aligned["max_rows_to_group_by"])
 	}
 	if _, err := querySettings(Config{MaxExecutionTime: -time.Second}); err == nil {
 		t.Fatal("negative execution time accepted")
@@ -295,6 +313,10 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 	resource := &clickhousedriver.Exception{Code: 241, Name: "MEMORY_LIMIT_EXCEEDED"}
 	if err := classifyQueryError(context.Background(), resource); !errors.Is(err, searchjobs.ErrExecutionLimit) {
 		t.Fatalf("resource error = %v", err)
+	}
+	tooManyGroups := &clickhousedriver.Exception{Code: 158, Name: "TOO_MANY_ROWS", Message: "secret query detail"}
+	if err := classifyQueryError(context.Background(), tooManyGroups); !errors.Is(err, searchjobs.ErrExecutionLimit) || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("group cap error = %v", err)
 	}
 	unsupported := &clickhousedriver.Exception{
 		Code:    395,
