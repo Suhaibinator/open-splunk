@@ -201,7 +201,7 @@ func quarantineTail(dir, name string, badOffset int64) error {
 
 	// 2. Write the intact prefix into a fresh segment under the original name.
 	tmp := live + ".rewrite"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}

@@ -18,6 +18,12 @@ server:
   token_file: ./collector.token
   tls:
     enabled: false # Local development only.
+    # DANGER: with tls.enabled=false the bearer token is sent in CLEARTEXT.
+    # Plaintext is permitted only to a loopback address (127.0.0.0/8, ::1,
+    # localhost). Sending it to any remote host is REJECTED at startup unless you
+    # explicitly acknowledge the risk by setting allow_insecure_remote: true
+    # (only ever appropriate behind a trusted TLS-terminating sidecar/mesh).
+    # allow_insecure_remote: false
 
 state:
   directory: ./data/collector

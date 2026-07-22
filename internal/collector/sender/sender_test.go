@@ -97,6 +97,8 @@ func (q *fakeQueue) Ack(batchSequence uint64) error {
 	return nil
 }
 
+func (q *fakeQueue) AckThrough(batchSequence uint64) error { return q.Ack(batchSequence) }
+
 func (q *fakeQueue) Stats() wal.Stats {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -137,6 +139,26 @@ var _ wal.Queue = (*fakeQueue)(nil)
 type memSink struct {
 	mu      sync.Mutex
 	records []DeadLetterRecord
+}
+
+type failingSink struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *failingSink) WriteRecords([]DeadLetterRecord) error {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+	return errors.New("simulated dead-letter disk failure")
+}
+
+func (s *failingSink) Close() error { return nil }
+
+func (s *failingSink) writeCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
 }
 
 func (m *memSink) WriteRecords(records []DeadLetterRecord) error {
@@ -815,6 +837,35 @@ func TestSenderBatchRejectDeadLettersWholeBatch(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+func TestSenderDeadLetterFailureRetainsWALBatch(t *testing.T) {
+	t.Parallel()
+	fs := newFakeServer()
+	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+		_ = fs.send(&opensplunkv1.CollectResponse{
+			Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: &opensplunkv1.BatchReject{
+				BatchId: b.GetBatchId(), BatchSequence: b.GetBatchSequence(),
+				Code: opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+			}},
+		})
+	}
+	conn := startServer(t, fs)
+	q := newFakeQueue(fakeBatch(1, makeEvent("e1", "forbidden")))
+	sink := &failingSink{}
+	s := newTestSender(t, testOptions(), q, sink, nil, conn)
+	cancel, done := runSender(t, s)
+
+	waitFor(t, "dead-letter failure retried on a new connection", func() bool {
+		return sink.writeCalls() >= 2 && fs.calls() >= 2
+	})
+	if got := q.ackedSeq(); got != 0 {
+		t.Fatalf("queue acked through %d despite dead-letter failure", got)
+	}
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run: %v", err)
+	}
 }
 
 func TestSenderReconnectsWithBackoff(t *testing.T) {

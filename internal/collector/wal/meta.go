@@ -68,7 +68,7 @@ func writeMeta(dir string, m walMeta) error {
 		return fmt.Errorf("collector/wal: marshal meta: %w", err)
 	}
 	tmp := filepath.Join(dir, metaTempName)
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("collector/wal: create meta temp: %w", err)
 	}

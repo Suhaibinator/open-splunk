@@ -37,6 +37,7 @@ type conn struct {
 	// and guards the outgoing stream sequence. gRPC permits one concurrent Send.
 	sendMu    sync.Mutex
 	streamSeq uint64
+	recvSeq   uint64
 
 	mu   sync.Mutex
 	cond *sync.Cond
@@ -102,8 +103,27 @@ func (s *Sender) runConnection(parent context.Context) (connected bool, reconnec
 	if err := c.sendHello(); err != nil {
 		return false, 0, err
 	}
-	if err := c.awaitReady(); err != nil {
-		return false, 0, err
+	readyDone := make(chan error, 1)
+	go func() { readyDone <- c.awaitReady() }()
+	var readyTimer <-chan time.Time
+	var timer *time.Timer
+	if s.opts.DialTimeout > 0 {
+		timer = time.NewTimer(s.opts.DialTimeout)
+		readyTimer = timer.C
+		defer timer.Stop()
+	}
+	select {
+	case err := <-readyDone:
+		if err != nil {
+			return false, 0, err
+		}
+	case <-parent.Done():
+		c.gracefulPreReadyShutdown(readyDone)
+		streamCancel()
+		return false, 0, parent.Err()
+	case <-readyTimer:
+		streamCancel()
+		return false, 0, fmt.Errorf("collector/sender: ready negotiation timed out after %s", s.opts.DialTimeout)
 	}
 
 	// Batches handed out on a previous connection but never terminally
@@ -185,6 +205,9 @@ func (c *conn) awaitReady() error {
 	if err != nil {
 		return err
 	}
+	if err := c.validateResponse(resp); err != nil {
+		return err
+	}
 	ready := resp.GetReady()
 	if ready == nil {
 		return fmt.Errorf("collector/sender: expected CollectorReady, got %T", resp.GetPayload())
@@ -210,8 +233,8 @@ func (c *conn) awaitReady() error {
 	// unacked batch.
 	if ready.ResumeAfterBatchSequence != nil {
 		resume := ready.GetResumeAfterBatchSequence()
-		if err := c.s.queue.Ack(resume); err != nil {
-			c.s.logger.Warn("resume ack failed", "sequence", resume, "error", err.Error())
+		if err := c.s.queue.AckThrough(resume); err != nil {
+			return fmt.Errorf("collector/sender: invalid resume sequence %d: %w", resume, err)
 		}
 		c.s.markAcked(resume, 0)
 	}
@@ -262,9 +285,13 @@ func (c *conn) pumpLoop() {
 		// dead-letter case. Dead-letter it and ack it off the queue so delivery
 		// makes progress rather than looping forever.
 		if code, ok := c.batchExceedsLimits(batch); ok {
-			c.deadLetterWholeBatch(batch, code, "batch exceeds negotiated server limits")
+			if err := c.deadLetterWholeBatch(batch, code, "batch exceeds negotiated server limits"); err != nil {
+				c.fail(err)
+				return
+			}
 			if err := c.s.queue.Ack(batch.GetBatchSequence()); err != nil {
-				c.s.logger.Warn("ack of oversized batch failed", "error", err.Error())
+				c.fail(err)
+				return
 			}
 			c.s.markDropped(uint64(len(batch.GetEvents())))
 			continue
@@ -385,43 +412,82 @@ func (c *conn) receiveLoop() error {
 		if err != nil {
 			return err
 		}
+		if err := c.validateResponse(resp); err != nil {
+			return err
+		}
 		switch {
 		case resp.GetReady() != nil:
-			// A second Ready is a protocol nicety we ignore.
+			return errors.New("collector/sender: duplicate CollectorReady")
 		case resp.GetBatchAck() != nil:
-			c.handleAck(resp.GetBatchAck())
+			if err := c.handleAck(resp.GetBatchAck()); err != nil {
+				return err
+			}
 		case resp.GetBatchReject() != nil:
-			c.handleReject(resp.GetBatchReject())
+			if err := c.handleReject(resp.GetBatchReject()); err != nil {
+				return err
+			}
 		case resp.GetRetryBatch() != nil:
-			c.handleRetry(resp.GetRetryBatch())
+			if err := c.handleRetry(resp.GetRetryBatch()); err != nil {
+				return err
+			}
 		case resp.GetThrottle() != nil:
 			c.handleThrottle(resp.GetThrottle())
 		case resp.GetNotice() != nil:
 			c.handleNotice(resp.GetNotice())
+		default:
+			return errors.New("collector/sender: response has no payload")
 		}
 	}
+}
+
+func (c *conn) validateResponse(resp *opensplunkv1.CollectResponse) error {
+	if resp == nil {
+		return errors.New("collector/sender: nil response")
+	}
+	want := c.recvSeq + 1
+	if resp.GetStreamSequence() != want {
+		return fmt.Errorf("collector/sender: response stream sequence %d, want %d", resp.GetStreamSequence(), want)
+	}
+	c.recvSeq = want
+	return nil
 }
 
 // handleAck is terminal for the batch. Accepted and duplicate events are acked
 // off the durable queue; rejected events are dead-lettered but the batch is
 // still acked (the ack is terminal).
-func (c *conn) handleAck(ack *opensplunkv1.BatchAck) {
+func (c *conn) handleAck(ack *opensplunkv1.BatchAck) error {
 	seq := ack.GetBatchSequence()
-	through := seq
-	if ack.AcknowledgedThroughBatchSequence != nil && ack.GetAcknowledgedThroughBatchSequence() > through {
-		through = ack.GetAcknowledgedThroughBatchSequence()
+	batch := c.lookupInflight(seq)
+	if batch == nil {
+		return fmt.Errorf("collector/sender: ack for unknown batch sequence %d", seq)
+	}
+	if ack.GetBatchId() != batch.GetBatchId() {
+		return fmt.Errorf("collector/sender: ack batch id %q does not match sequence %d", ack.GetBatchId(), seq)
+	}
+	if ack.AcknowledgedThroughBatchSequence != nil && ack.GetAcknowledgedThroughBatchSequence() < seq {
+		return fmt.Errorf("collector/sender: acknowledged-through %d precedes batch %d", ack.GetAcknowledgedThroughBatchSequence(), seq)
 	}
 
+	accounted := uint64(ack.GetAcceptedEventCount()) + uint64(ack.GetDuplicateEventCount()) + uint64(len(ack.GetRejectedEvents()))
+	if accounted != uint64(len(batch.GetEvents())) {
+		return fmt.Errorf("collector/sender: ack accounts for %d of %d events in batch %d", accounted, len(batch.GetEvents()), seq)
+	}
 	if rejected := ack.GetRejectedEvents(); len(rejected) > 0 {
-		batch := c.lookupInflight(seq)
 		records := make([]DeadLetterRecord, 0, len(rejected))
 		now := c.s.now()
+		seen := make(map[uint32]struct{}, len(rejected))
 		for _, rej := range rejected {
-			var event *opensplunkv1.LogEvent
-			if batch != nil {
-				if idx := int(rej.GetEventIndex()); idx >= 0 && idx < len(batch.GetEvents()) {
-					event = batch.GetEvents()[idx]
-				}
+			idx := rej.GetEventIndex()
+			if int(idx) >= len(batch.GetEvents()) {
+				return fmt.Errorf("collector/sender: rejection index %d out of range for batch %d", idx, seq)
+			}
+			if _, duplicate := seen[idx]; duplicate {
+				return fmt.Errorf("collector/sender: duplicate rejection index %d for batch %d", idx, seq)
+			}
+			seen[idx] = struct{}{}
+			event := batch.GetEvents()[idx]
+			if rej.GetEventId() != "" && rej.GetEventId() != event.GetEventId() {
+				return fmt.Errorf("collector/sender: rejection event id does not match index %d for batch %d", idx, seq)
 			}
 			records = append(records, DeadLetterRecord{
 				Event:         event,
@@ -432,57 +498,64 @@ func (c *conn) handleAck(ack *opensplunkv1.BatchAck) {
 				RejectedAt:    now,
 			})
 		}
-		c.s.writeDeadLetter(records)
+		if err := c.s.writeDeadLetter(records); err != nil {
+			return err
+		}
 		c.s.markRejected(uint64(len(records)))
 	}
-
-	if err := c.s.queue.Ack(through); err != nil {
-		c.s.logger.Warn("queue ack failed", "sequence", through, "error", err.Error())
+	if err := c.s.queue.Ack(seq); err != nil {
+		return fmt.Errorf("collector/sender: queue ack %d: %w", seq, err)
 	}
-	c.s.markAcked(through, uint64(ack.GetAcceptedEventCount())+uint64(ack.GetDuplicateEventCount()))
-
-	if ack.AcknowledgedThroughBatchSequence != nil {
-		c.releaseInflightThrough(through)
-	} else {
-		c.releaseInflight(seq)
-	}
+	c.s.markAcked(c.s.queue.Stats().LastAckedBatchSequence, uint64(ack.GetAcceptedEventCount())+uint64(ack.GetDuplicateEventCount()))
+	c.releaseInflight(seq)
+	return nil
 }
 
 // handleReject permanently dead-letters the entire batch, then acks it off the
 // durable queue. BatchReject is terminal (documented in doc.go).
-func (c *conn) handleReject(reject *opensplunkv1.BatchReject) {
+func (c *conn) handleReject(reject *opensplunkv1.BatchReject) error {
 	seq := reject.GetBatchSequence()
 	batch := c.lookupInflight(seq)
-	if batch != nil {
-		records := make([]DeadLetterRecord, 0, len(batch.GetEvents()))
-		now := c.s.now()
-		for _, event := range batch.GetEvents() {
-			records = append(records, DeadLetterRecord{
-				Event:         event,
-				BatchID:       reject.GetBatchId(),
-				BatchSequence: seq,
-				Code:          reject.GetCode().String(),
-				Reason:        reject.GetMessage(),
-				RejectedAt:    now,
-			})
-		}
-		c.s.writeDeadLetter(records)
-		c.s.markDropped(uint64(len(records)))
+	if batch == nil {
+		return fmt.Errorf("collector/sender: reject for unknown batch sequence %d", seq)
 	}
+	if reject.GetBatchId() != batch.GetBatchId() {
+		return fmt.Errorf("collector/sender: reject batch id %q does not match sequence %d", reject.GetBatchId(), seq)
+	}
+	records := make([]DeadLetterRecord, 0, len(batch.GetEvents()))
+	now := c.s.now()
+	for _, event := range batch.GetEvents() {
+		records = append(records, DeadLetterRecord{
+			Event:         event,
+			BatchID:       reject.GetBatchId(),
+			BatchSequence: seq,
+			Code:          reject.GetCode().String(),
+			Reason:        reject.GetMessage(),
+			RejectedAt:    now,
+		})
+	}
+	if err := c.s.writeDeadLetter(records); err != nil {
+		return err
+	}
+	c.s.markDropped(uint64(len(records)))
 	if err := c.s.queue.Ack(seq); err != nil {
-		c.s.logger.Warn("queue ack failed", "sequence", seq, "error", err.Error())
+		return fmt.Errorf("collector/sender: queue ack %d: %w", seq, err)
 	}
-	c.s.markAcked(seq, 0)
+	c.s.markAcked(c.s.queue.Stats().LastAckedBatchSequence, 0)
 	c.releaseInflight(seq)
+	return nil
 }
 
 // handleRetry is non-terminal: the exact same durable batch is retained and
 // resent after retry_after. The in-flight slot is kept the whole time.
-func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) {
+func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) error {
 	seq := retry.GetBatchSequence()
 	batch := c.lookupInflight(seq)
 	if batch == nil {
-		return
+		return fmt.Errorf("collector/sender: retry for unknown batch sequence %d", seq)
+	}
+	if retry.GetBatchId() != batch.GetBatchId() {
+		return fmt.Errorf("collector/sender: retry batch id %q does not match sequence %d", retry.GetBatchId(), seq)
 	}
 	c.s.markRetried()
 	delay := retry.GetRetryAfter().AsDuration()
@@ -501,6 +574,7 @@ func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) {
 			c.fail(err)
 		}
 	}()
+	return nil
 }
 
 // handleThrottle applies the pacing and in-flight limits until effective_until
@@ -571,7 +645,7 @@ func (c *conn) releaseInflightThrough(seq uint64) {
 	c.mu.Unlock()
 }
 
-func (c *conn) deadLetterWholeBatch(batch *opensplunkv1.EventBatch, code, reason string) {
+func (c *conn) deadLetterWholeBatch(batch *opensplunkv1.EventBatch, code, reason string) error {
 	records := make([]DeadLetterRecord, 0, len(batch.GetEvents()))
 	now := c.s.now()
 	for _, event := range batch.GetEvents() {
@@ -584,7 +658,7 @@ func (c *conn) deadLetterWholeBatch(batch *opensplunkv1.EventBatch, code, reason
 			RejectedAt:    now,
 		})
 	}
-	c.s.writeDeadLetter(records)
+	return c.s.writeDeadLetter(records)
 }
 
 func (c *conn) fail(err error) {
@@ -594,6 +668,50 @@ func (c *conn) fail(err error) {
 	// Break the stream so a blocked receive unblocks, then stop the workers.
 	c.streamCancel()
 	c.cancel()
+}
+
+// gracefulPreReadyShutdown covers cancellation after Hello was sent but while
+// Ready is still racing with the caller. The stream context is intentionally
+// independent of parent, so this best-effort Goodbye remains transmissible.
+func (c *conn) gracefulPreReadyShutdown(readyDone <-chan error) {
+	if err := c.send(&opensplunkv1.CollectRequest{
+		Payload: &opensplunkv1.CollectRequest_Goodbye{Goodbye: &opensplunkv1.CollectorGoodbye{
+			Reason: opensplunkv1.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
+		}},
+	}); err != nil {
+		return
+	}
+	_ = c.stream.CloseSend()
+
+	// Do not immediately cancel the independent stream context: Send returning
+	// only queues bytes locally. Wait for the outstanding Ready receive, then an
+	// EOF, so the server has a chance to consume Goodbye. Both waits are bounded.
+	timer := time.NewTimer(c.s.drainTimeout)
+	defer timer.Stop()
+	select {
+	case err := <-readyDone:
+		if err != nil {
+			return
+		}
+	case <-timer.C:
+		return
+	}
+	recvDone := make(chan struct{}, 1)
+	go func() {
+		_, _ = c.stream.Recv()
+		recvDone <- struct{}{}
+	}()
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(c.s.drainTimeout)
+	select {
+	case <-recvDone:
+	case <-timer.C:
+	}
 }
 
 // gracefulShutdown sends Goodbye(SHUTDOWN) best-effort, half-closes the send

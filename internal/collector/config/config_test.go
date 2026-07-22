@@ -28,6 +28,7 @@ inputs:
       - /var/log/app/*.log
     format: ndjson
     start_at: end
+    index: main
 `
 
 func writeFile(t *testing.T, dir, name, content string) string {
@@ -62,13 +63,14 @@ func TestLoadDefaults(t *testing.T) {
 	t.Parallel()
 	const y = `
 server:
-  address: h:1
+  address: 127.0.0.1:1
   token_file: ./t
 state:
   directory: ./d
 inputs:
   - id: app
     include: [/var/log/*.log]
+    index: main
 `
 	dir := t.TempDir()
 	cfg, err := Load(writeFile(t, dir, "c.yaml", y))
@@ -114,11 +116,14 @@ func TestEnvSubstitution(t *testing.T) {
 server:
   address: ${OS_ADDR}
   token_file: ./t
+  tls:
+    enabled: true
 state:
   directory: ./d
 inputs:
   - id: app
     include: [/var/log/*.log]
+    index: main
 `
 	dir := t.TempDir()
 	cfg, err := Load(writeFile(t, dir, "c.yaml", y))
@@ -180,11 +185,11 @@ func TestValidate(t *testing.T) {
 	t.Parallel()
 	base := func() *Config {
 		return &Config{
-			Server: ServerConfig{Address: "h:1", Transport: "grpc", TokenFile: "./t"},
+			Server: ServerConfig{Address: "127.0.0.1:1", Transport: "grpc", TokenFile: "./t"},
 			State:  StateConfig{Directory: "./d"},
 			Inputs: []InputConfig{{
 				ID: "app", Type: "file", Include: []string{"/var/log/*.log"},
-				Format: "ndjson", StartAt: "end",
+				Format: "ndjson", StartAt: "end", Index: "main",
 			}},
 		}
 	}
@@ -198,6 +203,11 @@ func TestValidate(t *testing.T) {
 		{"bad transport", func(c *Config) { c.Server.Transport = "http" }, "server.transport"},
 		{"no token_file", func(c *Config) { c.Server.TokenFile = "" }, "server.token_file"},
 		{"tls incoherent", func(c *Config) { c.Server.TLS.CAFile = "/ca.pem" }, "server.tls"},
+		{"plaintext remote", func(c *Config) { c.Server.Address = "logs.example.com:443" }, "tls.enabled"},
+		{"tls remote", func(c *Config) {
+			c.Server.Address = "logs.example.com:443"
+			c.Server.TLS.Enabled = true
+		}, ""},
 		{"no directory", func(c *Config) { c.State.Directory = "" }, "state.directory"},
 		{"no inputs", func(c *Config) { c.Inputs = nil }, "at least one input"},
 		{"no id", func(c *Config) { c.Inputs[0].ID = "" }, "inputs[0].id"},
@@ -206,6 +216,7 @@ func TestValidate(t *testing.T) {
 		{"bad format", func(c *Config) { c.Inputs[0].Format = "csv" }, "format must be"},
 		{"bad start_at", func(c *Config) { c.Inputs[0].StartAt = "middle" }, "start_at must be"},
 		{"no include", func(c *Config) { c.Inputs[0].Include = nil }, "at least one include glob"},
+		{"no index", func(c *Config) { c.Inputs[0].Index = "" }, "index is required"},
 		{"bad include glob", func(c *Config) { c.Inputs[0].Include = []string{"[bad"} }, "invalid include glob"},
 		{"bad exclude glob", func(c *Config) { c.Inputs[0].Exclude = []string{"[bad"} }, "invalid exclude glob"},
 		{"multiline empty pattern", func(c *Config) {

@@ -502,12 +502,19 @@ func canonicalDecimal(text string) string {
 	return mantissa + "e" + sign + exponent
 }
 
+// parseEventTime converts a canonical timestamp value to a time.Time. Every
+// error it returns is deliberately VALUE-FREE (no payload bytes): the offending
+// timestamp string/number is never embedded, because these errors flow into
+// recordDecodeFailure logs and a source field may carry secret material. In
+// particular the string branch does not wrap time.Parse's error (which embeds
+// the input value), and the numeric branch does not propagate decimalRat's
+// %q-bearing error.
 func parseEventTime(value any) (time.Time, error) {
 	switch value := value.(type) {
 	case string:
 		parsed, err := time.Parse(time.RFC3339Nano, value)
 		if err != nil {
-			return time.Time{}, err
+			return time.Time{}, errors.New("timestamp is not RFC3339")
 		}
 		return parsed.UTC(), nil
 	case json.Number:
@@ -516,7 +523,7 @@ func parseEventTime(value any) (time.Time, error) {
 		}
 		rat, err := decimalRat(value.String())
 		if err != nil {
-			return time.Time{}, err
+			return time.Time{}, errors.New("numeric timestamp is invalid")
 		}
 		nanoseconds := new(big.Rat).Mul(rat, big.NewRat(int64(time.Second), 1))
 		if !nanoseconds.IsInt() {
@@ -588,10 +595,12 @@ func stableEventID(inputID string, position SourcePosition, raw []byte) string {
 	hash := sha256.New()
 	writeHashString(hash, inputID)
 	writeHashString(hash, position.FileIdentity)
-	var integers [24]byte
+	// LineNumber is deliberately excluded. Framers reconstruct line counts on
+	// restart, while byte coordinates and the persisted file-generation identity
+	// remain stable. Including it would turn a crash replay into a new event ID.
+	var integers [16]byte
 	binary.BigEndian.PutUint64(integers[0:8], position.StartOffset)
 	binary.BigEndian.PutUint64(integers[8:16], position.EndOffset)
-	binary.BigEndian.PutUint64(integers[16:24], position.LineNumber)
 	_, _ = hash.Write(integers[:])
 	writeHashBytes(hash, raw)
 	return hex.EncodeToString(hash.Sum(nil))

@@ -382,14 +382,17 @@ func (s *Sender) markRetried() {
 	s.report()
 }
 
-// writeDeadLetter is nil-safe and never blocks live delivery on its error.
-func (s *Sender) writeDeadLetter(records []DeadLetterRecord) {
+// writeDeadLetter is part of the terminal-delivery transaction: callers must
+// not acknowledge the WAL batch unless this durable write succeeds.
+func (s *Sender) writeDeadLetter(records []DeadLetterRecord) error {
 	if len(records) == 0 {
-		return
+		return nil
 	}
 	if err := s.deadLetter.WriteRecords(records); err != nil {
 		s.logger.Error("dead-letter write failed", "error", err.Error(), "records", len(records))
+		return fmt.Errorf("collector/sender: persist dead letter: %w", err)
 	}
+	return nil
 }
 
 func (s *Sender) buildHeartbeat() *opensplunkv1.CollectorHeartbeat {

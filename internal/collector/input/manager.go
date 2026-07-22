@@ -97,7 +97,10 @@ func (m *manager) Run(ctx context.Context) error {
 	ticker := time.NewTicker(m.poll)
 	defer ticker.Stop()
 
-	m.pollOnce(ctx)
+	// start_at=end is a startup policy, not a policy for every file ever
+	// discovered. Files created or rotated into the glob after this first scan
+	// must be read from the beginning or their already-written prefix is lost.
+	m.pollOnce(ctx, true)
 	for {
 		select {
 		case <-ctx.Done():
@@ -107,7 +110,7 @@ func (m *manager) Run(ctx context.Context) error {
 			close(m.events)
 			return nil
 		case <-ticker.C:
-			m.pollOnce(ctx)
+			m.pollOnce(ctx, false)
 		}
 	}
 }
@@ -137,7 +140,7 @@ func (m *manager) Close() error { return nil }
 
 // pollOnce performs one discovery cycle: glob, reconcile tailers, recompute
 // health state.
-func (m *manager) pollOnce(ctx context.Context) {
+func (m *manager) pollOnce(ctx context.Context, initial bool) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -196,7 +199,13 @@ func (m *manager) pollOnce(ctx context.Context) {
 			continue
 		}
 
-		start := m.resolveStart(id, uint64(fi2.Size()))
+		id, start, err := m.resolveStart(id, p, uint64(fi2.Size()), initial, f)
+		if err != nil {
+			_ = f.Close()
+			openErr = fmt.Sprintf("checkpoint %s: %v", p, err)
+			m.lastErrorNs.Store(time.Now().UnixNano())
+			continue
+		}
 		t, err := m.startTailer(ctx, key, p, f, id, start)
 		if err != nil {
 			_ = f.Close()
@@ -222,20 +231,53 @@ func (m *manager) pollOnce(ctx context.Context) {
 	m.updateState(len(paths), openErr)
 }
 
-// resolveStart picks the initial read offset for a newly discovered file: the
-// checkpointed offset when one exists (clamped to 0 if the file is now shorter,
-// which signals copy-truncate or a rotated-in smaller file), otherwise StartAt.
-func (m *manager) resolveStart(id FileIdentity, size uint64) uint64 {
-	if cp, ok, err := m.checkpoints.Get(id); err == nil && ok {
-		if cp.Offset > size {
-			return 0
+// resolveStart chooses both the durable generation identity and initial offset.
+// A discovery checkpoint is written before any bytes are emitted. This small
+// write is what makes a crash after WAL append but before the first ordinary
+// checkpoint reproduce the same event IDs on restart.
+func (m *manager) resolveStart(id FileIdentity, path string, size uint64, initial bool, f *os.File) (FileIdentity, uint64, error) {
+	cp, ok, err := m.checkpoints.Get(id)
+	if err != nil {
+		return FileIdentity{}, 0, err
+	}
+	if ok {
+		sameGeneration := cp.Offset <= size && persistedPrefixMatches(f, cp.Identity)
+		if sameGeneration {
+			return cp.Identity, cp.Offset, nil
 		}
-		return cp.Offset
+		// The same inode was truncated/reused. Burn a new generation before
+		// offsets restart so identical bytes at identical offsets remain distinct.
+		id.Generation = cp.Identity.Generation + 1
+		if id.Generation == 0 { // uint overflow is practically impossible, fail safe
+			return FileIdentity{}, 0, errors.New("file generation exhausted")
+		}
+		if err := m.checkpoints.Set(Checkpoint{Identity: id, Path: path, Offset: 0}); err != nil {
+			return FileIdentity{}, 0, err
+		}
+		return id, 0, nil
 	}
-	if m.cfg.StartAt == StartAtEnd {
-		return size
+
+	start := uint64(0)
+	if initial && m.cfg.StartAt == StartAtEnd {
+		start = size
 	}
-	return 0
+	if err := m.checkpoints.Set(Checkpoint{Identity: id, Path: path, Offset: start}); err != nil {
+		return FileIdentity{}, 0, err
+	}
+	return id, start, nil
+}
+
+// persistedPrefixMatches compares exactly the bytes covered by the persisted
+// fingerprint. Hashing a fixed prefix length avoids mistaking ordinary append
+// growth for a rewrite when the file was initially shorter than fpBytes.
+func persistedPrefixMatches(f *os.File, id FileIdentity) bool {
+	if id.FingerprintLength == 0 {
+		// Zero-length fingerprints are valid for files discovered empty and for
+		// checkpoints written by the format predating FingerprintLength.
+		return true
+	}
+	fp, err := computeFingerprintRange(f, 0, id.FingerprintLength)
+	return err == nil && fp == id.Fingerprint
 }
 
 // updateState recomputes the aggregate health state after a poll.
@@ -318,6 +360,9 @@ func (m *manager) startTailer(ctx context.Context, key, path string, f *os.File,
 		offset:         start,
 		lastSizeChange: time.Now(),
 	}
+	if err := t.refreshGuard(); err != nil {
+		return nil, err
+	}
 	t.path.Store(&path)
 	m.wg.Add(1)
 	go t.run(ctx)
@@ -381,6 +426,13 @@ type tailer struct {
 	lastSize       uint64
 	lastSizeChange time.Time
 
+	// guard fingerprints a bounded window immediately before offset. It detects
+	// copy-truncate-and-rewrite even when the replacement reaches the old size
+	// before the next poll, while costing at most fpBytes of IO per poll.
+	guardOffset      uint64
+	guardLength      uint32
+	guardFingerprint string
+
 	drainReq atomic.Bool
 	finished atomic.Bool
 }
@@ -411,7 +463,14 @@ func (t *tailer) run(ctx context.Context) {
 	defer t.m.active.Add(-1)
 
 	for {
-		t.trackGrowthAndTruncate()
+		if !t.trackGrowthAndTruncate() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(t.m.poll):
+				continue
+			}
+		}
 
 		fr, err := t.reframe()
 		if err != nil {
@@ -420,6 +479,9 @@ func (t *tailer) run(ctx context.Context) {
 			pendingLen, cont := t.drain(ctx, fr)
 			if !cont {
 				return // ctx cancelled mid-emit
+			}
+			if err := t.refreshGuard(); err != nil {
+				t.m.setReadError(t.pathStr(), err)
 			}
 			if t.drainReq.Load() {
 				// File left the discovery set: emit any buffered remainder (a
@@ -446,25 +508,78 @@ func (t *tailer) run(ctx context.Context) {
 	}
 }
 
-// trackGrowthAndTruncate fstats the file to (a) detect copy-truncate (size drops
-// below our offset => reset to 0 and refresh the fingerprint) and (b) maintain
-// the growth clock used for multiline inactivity flushing.
-func (t *tailer) trackGrowthAndTruncate() {
+// trackGrowthAndTruncate detects both an observable shrink and a replacement of
+// bytes already consumed. The latter catches truncate-and-rewrite operations
+// whose new file has already reached or exceeded the old offset by the poll.
+func (t *tailer) trackGrowthAndTruncate() bool {
 	fi, err := t.f.Stat()
 	if err != nil {
-		return
+		t.m.setReadError(t.pathStr(), err)
+		return false
 	}
 	size := uint64(fi.Size())
-	if size < t.offset {
+	changed := size < t.offset
+	if !changed && t.guardLength > 0 {
+		fp, ferr := computeFingerprintRange(t.f, int64(t.guardOffset), t.guardLength)
+		changed = ferr != nil || fp != t.guardFingerprint
+	}
+	if changed {
+		next, ierr := identityFor(t.f, fi, t.m.fpBytes)
+		if ierr != nil {
+			t.m.setReadError(t.pathStr(), ierr)
+			return false
+		}
+		next.Generation = t.id.Generation + 1
+		if next.Generation == 0 {
+			t.m.setReadError(t.pathStr(), errors.New("file generation exhausted"))
+			return false
+		}
+		if err := t.m.checkpoints.Set(Checkpoint{Identity: next, Path: t.pathStr(), Offset: 0}); err != nil {
+			t.m.setReadError(t.pathStr(), err)
+			return false
+		}
+		t.id = next
 		t.offset = 0
-		if fp, err := computeFingerprint(t.f, t.m.fpBytes); err == nil {
-			t.id.Fingerprint = fp
+		t.guardOffset = 0
+		t.guardLength = 0
+		t.guardFingerprint = ""
+	} else if t.offset == 0 && t.id.FingerprintLength == 0 && size > 0 {
+		// A file discovered empty has no distinguishing prefix. Establish one
+		// before its first event is emitted, retaining the same generation number.
+		next, ierr := identityFor(t.f, fi, t.m.fpBytes)
+		if ierr == nil {
+			next.Generation = t.id.Generation
+			if err := t.m.checkpoints.Set(Checkpoint{Identity: next, Path: t.pathStr(), Offset: 0}); err == nil {
+				t.id = next
+			}
 		}
 	}
 	if size != t.lastSize {
 		t.lastSize = size
 		t.lastSizeChange = time.Now()
 	}
+	return true
+}
+
+// refreshGuard fingerprints the trailing part of the consumed prefix. It is
+// called only by the tailer goroutine, after offset changes.
+func (t *tailer) refreshGuard() error {
+	length := t.offset
+	if max := uint64(t.m.fpBytes); length > max {
+		length = max
+	}
+	t.guardLength = uint32(length)
+	t.guardOffset = t.offset - length
+	if length == 0 {
+		t.guardFingerprint = ""
+		return nil
+	}
+	fp, err := computeFingerprintRange(t.f, int64(t.guardOffset), t.guardLength)
+	if err != nil {
+		return err
+	}
+	t.guardFingerprint = fp
+	return nil
 }
 
 // reframe seeks the file to the current offset and returns a fresh framer whose

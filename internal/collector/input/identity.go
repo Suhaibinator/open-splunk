@@ -31,12 +31,35 @@ func fingerprintBytesOr(n int) int {
 // the fingerprint as a secondary signal used to detect copy-truncate and inode
 // reuse rather than as the primary key.
 func computeFingerprint(f *os.File, fingerprintBytes int) (string, error) {
+	fingerprint, _, err := computeFingerprintWithLength(f, fingerprintBytes)
+	return fingerprint, err
+}
+
+func computeFingerprintWithLength(f *os.File, fingerprintBytes int) (string, uint32, error) {
 	buf := make([]byte, fingerprintBytesOr(fingerprintBytes))
 	n, err := f.ReadAt(buf, 0)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
+		return "", 0, err
 	}
 	sum := sha256.Sum256(buf[:n])
+	return hex.EncodeToString(sum[:]), uint32(n), nil
+}
+
+// computeFingerprintRange hashes exactly length bytes beginning at offset. A
+// short read is reported as an error because callers use this to prove that an
+// already-consumed region has not been replaced.
+func computeFingerprintRange(f *os.File, offset int64, length uint32) (string, error) {
+	buf := make([]byte, int(length))
+	if length > 0 {
+		n, err := f.ReadAt(buf, offset)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", err
+		}
+		if n != len(buf) {
+			return "", io.ErrUnexpectedEOF
+		}
+	}
+	sum := sha256.Sum256(buf)
 	return hex.EncodeToString(sum[:]), nil
 }
 
@@ -44,11 +67,11 @@ func computeFingerprint(f *os.File, fingerprintBytes int) (string, error) {
 // from fi (zero off darwin/linux); the fingerprint hashes the file head.
 func identityFor(f *os.File, fi os.FileInfo, fingerprintBytes int) (FileIdentity, error) {
 	dev, ino, _ := statDevIno(fi)
-	fp, err := computeFingerprint(f, fingerprintBytes)
+	fp, n, err := computeFingerprintWithLength(f, fingerprintBytes)
 	if err != nil {
 		return FileIdentity{}, err
 	}
-	return FileIdentity{Device: dev, Inode: ino, Fingerprint: fp}, nil
+	return FileIdentity{Device: dev, Inode: ino, Generation: 1, Fingerprint: fp, FingerprintLength: n}, nil
 }
 
 // NewFileIdentity opens path and computes its FileIdentity. It is a convenience

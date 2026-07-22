@@ -362,7 +362,7 @@ func TestErrQueueFullThenAckFreesSpace(t *testing.T) {
 	}
 
 	// Acking everything must free the space so the next append succeeds.
-	if err := q.Ack(lastSeq); err != nil {
+	if err := q.AckThrough(lastSeq); err != nil {
 		t.Fatalf("Ack: %v", err)
 	}
 	if st := q.Stats(); st.QueuedBytes != 0 {
@@ -370,6 +370,54 @@ func TestErrQueueFullThenAckFreesSpace(t *testing.T) {
 	}
 	if _, err := q.Append(makeEvents("payload-event")); err != nil {
 		t.Fatalf("Append after freeing space = %v, want success", err)
+	}
+}
+
+func TestAckOutOfOrderDoesNotDeleteRetryablePrefix(t *testing.T) {
+	t.Parallel()
+	q, err := Open(defaultOpts(t.TempDir()))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+	for i := 0; i < 3; i++ {
+		if _, err := q.Append(makeEvents("event")); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+
+	if err := q.Ack(2); err != nil {
+		t.Fatalf("Ack(2): %v", err)
+	}
+	if got := q.Stats(); got.LastAckedBatchSequence != 0 || got.QueuedBatches != 3 {
+		t.Fatalf("out-of-order ack advanced/deleted prefix: %+v", got)
+	}
+	if err := q.Ack(1); err != nil {
+		t.Fatalf("Ack(1): %v", err)
+	}
+	if got := q.Stats(); got.LastAckedBatchSequence != 2 || got.QueuedBatches != 1 {
+		t.Fatalf("contiguous terminal prefix not advanced: %+v", got)
+	}
+}
+
+func TestAckRejectsUnknownFutureSequence(t *testing.T) {
+	t.Parallel()
+	q, err := Open(defaultOpts(t.TempDir()))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+	if _, err := q.Append(makeEvents("event")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := q.Ack(999); !errors.Is(err, ErrInvalidAck) {
+		t.Fatalf("Ack(future) = %v, want ErrInvalidAck", err)
+	}
+	if err := q.AckThrough(999); !errors.Is(err, ErrInvalidAck) {
+		t.Fatalf("AckThrough(future) = %v, want ErrInvalidAck", err)
+	}
+	if got := q.Stats(); got.LastAckedBatchSequence != 0 || got.QueuedBatches != 1 {
+		t.Fatalf("future ack mutated queue: %+v", got)
 	}
 }
 
@@ -395,7 +443,7 @@ func TestSegmentReclamationRemovesFiles(t *testing.T) {
 		t.Fatalf("expected multiple segments, got %v", before)
 	}
 
-	if err := q.Ack(lastSeq); err != nil {
+	if err := q.AckThrough(lastSeq); err != nil {
 		t.Fatalf("Ack: %v", err)
 	}
 	// All sealed segments are reclaimed; only the active (unsealed) one remains.

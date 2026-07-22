@@ -98,6 +98,15 @@ func TestDecoderUsesFallbackTimeAndStableContentAddressedEventID(t *testing.T) {
 	if first.GetEventId() != second.GetEventId() {
 		t.Fatalf("stable source event ID changed: %q != %q", first.GetEventId(), second.GetEventId())
 	}
+	changedLine, err := decoder.Decode([]byte(`{"message":"one"}`), SourcePosition{
+		FileIdentity: "id", StartOffset: 12, EndOffset: 22, LineNumber: 200,
+	}, collectedAt)
+	if err != nil {
+		t.Fatalf("Decode(changed line): %v", err)
+	}
+	if first.GetEventId() != changedLine.GetEventId() {
+		t.Fatal("event ID changed when only restart-relative line number changed")
+	}
 	if first.GetEventId() == changedBody.GetEventId() || first.GetEventId() == changedPosition.GetEventId() {
 		t.Fatal("event ID did not bind both source position and raw content")
 	}

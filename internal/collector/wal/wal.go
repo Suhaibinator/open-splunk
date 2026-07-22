@@ -16,12 +16,24 @@ var (
 	// Options.MaxQueueBytes. The daemon must apply input backpressure, not drop.
 	ErrQueueFull = errors.New("collector/wal: durable queue is full")
 
+	// ErrBatchTooLarge is returned by Append when a single batch's on-disk record
+	// exceeds Options.MaxQueueBytes: it can never fit even in an empty queue, so
+	// retrying as backpressure would wedge the pipeline forever. It is a terminal
+	// condition the daemon resolves by splitting or dead-lettering the batch, and
+	// is distinct from ErrQueueFull (which is transient backpressure).
+	ErrBatchTooLarge = errors.New("collector/wal: batch record exceeds max_queue_bytes")
+
 	// ErrCorruptSegment reports that a segment failed CRC validation during
 	// recovery and its unreadable tail was quarantined. Recovery continues.
 	ErrCorruptSegment = errors.New("collector/wal: corrupt segment quarantined")
 
 	// ErrClosed is returned once the queue has been closed.
 	ErrClosed = errors.New("collector/wal: queue is closed")
+
+	// ErrInvalidAck reports an acknowledgment for a sequence the queue never
+	// handed out (most importantly, a future sequence). Such an ack must never
+	// advance the durable high-water mark.
+	ErrInvalidAck = errors.New("collector/wal: invalid acknowledgment")
 )
 
 // SyncPolicy selects the fsync cadence for durability versus throughput.
@@ -96,9 +108,16 @@ type Queue interface {
 	// batch returned is the lowest unacked sequence.
 	NextBatch(ctx context.Context) (*opensplunkv1.EventBatch, error)
 
-	// Ack marks the batch durably delivered. Segments whose every batch is acked
-	// are reclaimed. Acking an already-acked or unknown sequence is a no-op.
+	// Ack marks exactly one batch terminal. Out-of-order terminal acks are held
+	// in memory until every earlier queued batch is terminal; only then does the
+	// durable cumulative high-water mark advance. Unknown/future sequences fail
+	// with ErrInvalidAck. Replaying an already-durable ack is a no-op.
 	Ack(batchSequence uint64) error
+
+	// AckThrough applies an explicitly cumulative acknowledgment from the
+	// protocol handshake or acknowledged_through field. The endpoint sequence
+	// must identify a real queued batch; unknown/future values fail closed.
+	AckThrough(batchSequence uint64) error
 
 	// Rewind restarts delivery so NextBatch re-yields every unacked batch,
 	// beginning again from the lowest unacked sequence. The sender must call it

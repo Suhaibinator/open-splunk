@@ -56,6 +56,10 @@ type queue struct {
 	deliverIdx   int
 	liveBytes    uint64
 	queuedEvents uint64
+	// terminal contains exact out-of-order acknowledgments not yet representable
+	// by the persisted cumulative high-water mark. It is intentionally volatile:
+	// losing it on crash only causes safe at-least-once replay.
+	terminal map[uint64]struct{}
 
 	segments    []*segInfo
 	activeSeg   *segInfo
@@ -84,8 +88,14 @@ func openQueue(opts Options) (Queue, error) {
 	if opts.Dir == "" {
 		return nil, errors.New("collector/wal: Options.Dir is required")
 	}
-	if err := os.MkdirAll(opts.Dir, 0o755); err != nil {
+	if err := os.MkdirAll(opts.Dir, 0o700); err != nil {
 		return nil, fmt.Errorf("collector/wal: create dir: %w", err)
+	}
+	// Tighten an existing directory too: MkdirAll leaves a pre-existing dir's mode
+	// untouched, and the queue holds raw event payloads that must not be
+	// world/group readable.
+	if err := os.Chmod(opts.Dir, 0o700); err != nil {
+		return nil, fmt.Errorf("collector/wal: secure dir: %w", err)
 	}
 
 	q := &queue{
@@ -93,6 +103,7 @@ func openQueue(opts Options) (Queue, error) {
 		dir:      opts.Dir,
 		notify:   make(chan struct{}, 1),
 		closedCh: make(chan struct{}),
+		terminal: make(map[uint64]struct{}),
 	}
 
 	m, ok, err := readMeta(opts.Dir)
@@ -219,6 +230,13 @@ func (q *queue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatc
 	record := encodeRecord(payload)
 	recordSize := uint64(len(record))
 
+	// A record that cannot fit even an empty queue is terminal, not backpressure:
+	// reporting ErrQueueFull would make the daemon retry it forever. Check this
+	// BEFORE the live-bytes backpressure check.
+	if q.opts.MaxQueueBytes > 0 && recordSize > q.opts.MaxQueueBytes {
+		return nil, ErrBatchTooLarge
+	}
+
 	// Backpressure BEFORE burning a sequence: a full queue must be a clean no-op.
 	if q.opts.MaxQueueBytes > 0 && q.liveBytes+recordSize > q.opts.MaxQueueBytes {
 		return nil, ErrQueueFull
@@ -298,7 +316,7 @@ func (q *queue) writeRecordLocked(seq uint64, record []byte) (string, int64, err
 // openActiveLocked creates a fresh active segment whose first batch is firstSeq.
 func (q *queue) openActiveLocked(firstSeq uint64) error {
 	name := segmentName(firstSeq)
-	f, err := os.OpenFile(filepath.Join(q.dir, name), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(filepath.Join(q.dir, name), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("collector/wal: create segment: %w", err)
 	}
@@ -372,10 +390,9 @@ func (q *queue) readBatch(d batchDesc) (*opensplunkv1.EventBatch, error) {
 	return readRecordPayload(filepath.Join(q.dir, d.segName), d.payloadOff, d.payloadLen, d.crc)
 }
 
-// Ack implements Queue.Ack. Acks are cumulative per the collector protocol's
-// acknowledged_through semantics: Ack(n) marks every batch with sequence <= n as
-// delivered. The high-water mark is persisted durably and advances monotonically;
-// acking an older or unknown sequence is a no-op.
+// Ack implements Queue.Ack. It records one exact terminal disposition. A later
+// batch cannot delete an earlier retryable batch: the durable high-water mark
+// advances only across the terminal prefix of q.unacked.
 func (q *queue) Ack(batchSequence uint64) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -385,8 +402,64 @@ func (q *queue) Ack(batchSequence uint64) error {
 	if batchSequence <= q.lastAcked {
 		return nil
 	}
+	if !q.hasSequenceLocked(batchSequence) {
+		return fmt.Errorf("%w: sequence %d is not queued", ErrInvalidAck, batchSequence)
+	}
+	q.terminal[batchSequence] = struct{}{}
+	return q.advanceTerminalLocked()
+}
 
-	newLast := batchSequence
+// AckThrough implements Queue.AckThrough for a server's explicit cumulative
+// durable claim. Validation prevents a corrupt/malicious future resume value
+// from burning batches that have not even been appended yet.
+func (q *queue) AckThrough(batchSequence uint64) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return ErrClosed
+	}
+	if batchSequence <= q.lastAcked {
+		return nil
+	}
+	if !q.hasSequenceLocked(batchSequence) {
+		return fmt.Errorf("%w: cumulative sequence %d is not queued", ErrInvalidAck, batchSequence)
+	}
+	for _, d := range q.unacked {
+		if d.seq > batchSequence {
+			break
+		}
+		q.terminal[d.seq] = struct{}{}
+	}
+	return q.advanceTerminalLocked()
+}
+
+func (q *queue) hasSequenceLocked(sequence uint64) bool {
+	for _, d := range q.unacked {
+		if d.seq == sequence {
+			return true
+		}
+		if d.seq > sequence {
+			return false
+		}
+	}
+	return false
+}
+
+func (q *queue) advanceTerminalLocked() error {
+	removed := 0
+	var newLast uint64
+	for removed < len(q.unacked) {
+		d := q.unacked[removed]
+		if _, ok := q.terminal[d.seq]; !ok {
+			break
+		}
+		newLast = d.seq
+		removed++
+	}
+	if removed == 0 {
+		return nil
+	}
+
 	prev := q.lastAcked
 	q.lastAcked = newLast
 	if err := q.persistMetaLocked(); err != nil {
@@ -394,19 +467,16 @@ func (q *queue) Ack(batchSequence uint64) error {
 		return err
 	}
 
-	removed := 0
-	for removed < len(q.unacked) && q.unacked[removed].seq <= newLast {
-		d := q.unacked[removed]
+	for i := 0; i < removed; i++ {
+		d := q.unacked[i]
 		q.liveBytes -= d.sizeOnDisk
 		q.queuedEvents -= d.eventCount
-		removed++
+		delete(q.terminal, d.seq)
 	}
-	if removed > 0 {
-		q.unacked = append(q.unacked[:0], q.unacked[removed:]...)
-		q.deliverIdx -= removed
-		if q.deliverIdx < 0 {
-			q.deliverIdx = 0
-		}
+	q.unacked = append(q.unacked[:0], q.unacked[removed:]...)
+	q.deliverIdx -= removed
+	if q.deliverIdx < 0 {
+		q.deliverIdx = 0
 	}
 	return q.reclaimLocked()
 }

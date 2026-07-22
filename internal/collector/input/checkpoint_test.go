@@ -47,6 +47,37 @@ func TestCheckpointStoreSetGetReopen(t *testing.T) {
 	}
 }
 
+func TestCheckpointStoreUsesPhysicalKeyAndFencesOldGeneration(t *testing.T) {
+	t.Parallel()
+	store, err := NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	old := FileIdentity{Device: 7, Inode: 9, Generation: 1, Fingerprint: "old"}
+	newer := FileIdentity{Device: 7, Inode: 9, Generation: 2, Fingerprint: "new"}
+	if err := store.Set(Checkpoint{Identity: old, Offset: 900}); err != nil {
+		t.Fatalf("set old: %v", err)
+	}
+	if err := store.Set(Checkpoint{Identity: newer, Offset: 20}); err != nil {
+		t.Fatalf("set new: %v", err)
+	}
+	// A delayed checkpoint from an old-generation batch cannot restore 900.
+	if err := store.Set(Checkpoint{Identity: old, Offset: 950}); err != nil {
+		t.Fatalf("set stale: %v", err)
+	}
+	lookup := newer
+	lookup.Fingerprint = "fingerprint-computed-after-growth"
+	cp, ok, err := store.Get(lookup)
+	if err != nil || !ok {
+		t.Fatalf("get by stable key: ok=%v err=%v", ok, err)
+	}
+	if cp.Identity.String() != newer.String() || cp.Offset != 20 {
+		t.Fatalf("checkpoint regressed: %+v", cp)
+	}
+}
+
 func TestCheckpointStoreAtomicRewriteNoTempLeak(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

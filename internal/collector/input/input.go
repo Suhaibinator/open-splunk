@@ -24,9 +24,17 @@ const (
 // a hex hash over the first bytes of the file. On platforms without stable
 // inode access Device and Inode are zero and identity relies on Fingerprint.
 type FileIdentity struct {
-	Device      uint64
-	Inode       uint64
+	Device uint64
+	Inode  uint64
+	// Generation increments when the same physical file is copy-truncated or
+	// otherwise rewritten in place. It keeps source coordinates unique when
+	// offsets restart at zero.
+	Generation  uint64
 	Fingerprint string
+	// FingerprintLength is the exact prefix length covered by Fingerprint. A
+	// fixed length lets a growing short file be recognized after restart: only
+	// that original prefix is compared, rather than hashing newly appended data.
+	FingerprintLength uint32
 }
 
 // String returns the stable identity string passed to the decoder as
@@ -34,12 +42,25 @@ type FileIdentity struct {
 func (id FileIdentity) String() string {
 	return "dev=" + strconv.FormatUint(id.Device, 10) +
 		";ino=" + strconv.FormatUint(id.Inode, 10) +
+		";gen=" + strconv.FormatUint(id.Generation, 10) +
 		";fp=" + id.Fingerprint
+}
+
+// TrackingKey identifies the physical file independently of its content
+// generation. Checkpoints are indexed by this key so an in-place truncate can
+// replace the old generation's offset, and a growing short file can still find
+// the identity persisted when it was first discovered.
+func (id FileIdentity) TrackingKey() string {
+	if id.Device != 0 || id.Inode != 0 {
+		return "dev=" + strconv.FormatUint(id.Device, 10) +
+			";ino=" + strconv.FormatUint(id.Inode, 10)
+	}
+	return "fp=" + id.Fingerprint
 }
 
 // IsZero reports whether id is the zero identity.
 func (id FileIdentity) IsZero() bool {
-	return id.Device == 0 && id.Inode == 0 && id.Fingerprint == ""
+	return id.Device == 0 && id.Inode == 0 && id.Generation == 0 && id.Fingerprint == ""
 }
 
 // SourceRef locates one framed event within a file. It is the input-owned

@@ -16,9 +16,12 @@ func writeFileT(t *testing.T, path, content string) {
 
 func TestFileIdentityString(t *testing.T) {
 	t.Parallel()
-	id := FileIdentity{Device: 1, Inode: 2, Fingerprint: "ab12"}
-	if got, want := id.String(), "dev=1;ino=2;fp=ab12"; got != want {
+	id := FileIdentity{Device: 1, Inode: 2, Generation: 3, Fingerprint: "ab12", FingerprintLength: 4}
+	if got, want := id.String(), "dev=1;ino=2;gen=3;fp=ab12"; got != want {
 		t.Fatalf("String() = %q, want %q", got, want)
+	}
+	if got, want := id.TrackingKey(), "dev=1;ino=2"; got != want {
+		t.Fatalf("TrackingKey() = %q, want %q", got, want)
 	}
 	if id.IsZero() {
 		t.Fatalf("non-zero identity reported zero")

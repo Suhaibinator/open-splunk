@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -51,6 +52,12 @@ type TLSConfig struct {
 	// ServerName overrides the SNI / certificate name verified during the
 	// handshake. Empty means the host portion of ServerConfig.Address.
 	ServerName string `yaml:"server_name"`
+	// AllowInsecureRemote permits plaintext (tls.enabled=false) to a non-loopback
+	// server.address. Without it, plaintext to a remote host is rejected because
+	// the bearer token would be transmitted in cleartext. Setting it is an
+	// explicit, audited acknowledgement of that risk (e.g. a trusted private
+	// network or a sidecar TLS terminator).
+	AllowInsecureRemote bool `yaml:"allow_insecure_remote"`
 }
 
 // StateConfig describes the collector's durable local state.
@@ -243,6 +250,9 @@ func (c *Config) Validate() error {
 	if !c.Server.TLS.Enabled && (c.Server.TLS.CAFile != "" || c.Server.TLS.ServerName != "") {
 		return errors.New("server.tls: ca_file/server_name are set but tls.enabled is false")
 	}
+	if !c.Server.TLS.Enabled && !c.Server.TLS.AllowInsecureRemote && !isLoopbackAddress(c.Server.Address) {
+		return errors.New("server.tls.enabled is false and server.address is not loopback: the bearer token would be sent in cleartext; enable TLS or set server.tls.allow_insecure_remote to override")
+	}
 	if strings.TrimSpace(c.State.Directory) == "" {
 		return errors.New("state.directory is required")
 	}
@@ -274,6 +284,9 @@ func (c *Config) Validate() error {
 		}
 		if len(in.Include) == 0 {
 			return fmt.Errorf("input %q: at least one include glob is required", id)
+		}
+		if strings.TrimSpace(in.Index) == "" {
+			return fmt.Errorf("input %q: index is required", id)
 		}
 		for _, g := range in.Include {
 			if _, err := filepath.Match(g, ""); err != nil {
@@ -317,6 +330,19 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func isLoopbackAddress(address string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return false
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // maxTokenBytes bounds the size of a token file. A larger file almost certainly

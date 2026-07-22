@@ -103,6 +103,7 @@ type Daemon struct {
 	checkpoints input.CheckpointStore
 	queue       wal.Queue
 	deadLetter  sender.DeadLetterSink
+	stateLock   *stateDirectoryLock
 	sender      *sender.Sender
 	inputs      []*inputRuntime
 	pipeline    *Pipeline
@@ -121,6 +122,10 @@ type Daemon struct {
 	lastOffsets map[string]uint64
 
 	decodeFailures atomic.Uint64
+
+	// oversizedDrops counts single events whose durable record exceeds
+	// max_queue_bytes and were therefore dead-lettered rather than queued.
+	oversizedDrops atomic.Uint64
 }
 
 // inputRuntime bundles one input's tailer with the decoder built from its
@@ -186,14 +191,32 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	}
 
 	stateDir := cfg.State.Directory
-	if err := os.MkdirAll(stateDir, 0o750); err != nil {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("collector: create state directory %q: %w", stateDir, err)
+	}
+	// The state directory holds raw payloads (WAL segments, dead-letter file), so
+	// tighten it to owner-only even if it pre-existed with looser permissions. A
+	// chmod failure is not fatal: log and continue.
+	if err := os.Chmod(stateDir, 0o700); err != nil {
+		logger.Warn("collector: could not tighten state directory permissions to 0700",
+			"directory", stateDir, "error", err.Error())
+	}
+	// Plaintext transport sends the bearer token in cleartext; warn whenever TLS
+	// is disabled, even for loopback (config.Validate gates non-loopback use).
+	if !cfg.Server.TLS.Enabled {
+		logger.Warn("collector: TLS is disabled; the bearer token is sent to the server in cleartext",
+			"address", cfg.Server.Address)
+	}
+	stateLock, err := acquireStateDirectoryLock(stateDir)
+	if err != nil {
+		return nil, err
 	}
 
 	collectorID := o.collectorID
 	if collectorID == "" {
 		id, err := loadOrCreateCollectorID(stateDir)
 		if err != nil {
+			_ = stateLock.Close()
 			return nil, err
 		}
 		collectorID = id
@@ -205,6 +228,7 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 
 	checkpoints, err := input.NewCheckpointStore(filepath.Join(stateDir, checkpointsSubdir))
 	if err != nil {
+		_ = stateLock.Close()
 		return nil, fmt.Errorf("collector: open checkpoint store: %w", err)
 	}
 
@@ -219,6 +243,7 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	})
 	if err != nil {
 		_ = checkpoints.Close()
+		_ = stateLock.Close()
 		return nil, fmt.Errorf("collector: open durable queue: %w", err)
 	}
 
@@ -226,6 +251,7 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	fail := func(err error) (*Daemon, error) {
 		_ = queue.Close()
 		_ = checkpoints.Close()
+		_ = stateLock.Close()
 		return nil, err
 	}
 
@@ -301,6 +327,7 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		checkpoints:        checkpoints,
 		queue:              queue,
 		deadLetter:         deadLetter,
+		stateLock:          stateLock,
 		sender:             snd,
 		inputs:             inputs,
 		pipeline:           pipeline,
@@ -318,6 +345,10 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 // DecodeFailures returns the running count of records skipped because they could
 // not be decoded. It is monotonic for the life of the process.
 func (d *Daemon) DecodeFailures() uint64 { return d.decodeFailures.Load() }
+
+// OversizedDrops returns the running count of single events dead-lettered
+// because their durable record exceeded max_queue_bytes. Monotonic per process.
+func (d *Daemon) OversizedDrops() uint64 { return d.oversizedDrops.Load() }
 
 // Run starts every input, the decode/process/append pipeline, and the sender,
 // blocking until ctx is cancelled and shutdown completes. It returns nil on a
@@ -361,18 +392,24 @@ func (d *Daemon) Run(ctx context.Context) error {
 		close(processed)
 	}()
 
-	batcherDone := make(chan struct{})
+	batcherErrCh := make(chan error, 1)
 	go func() {
-		defer close(batcherDone)
-		d.runBatcher(pipeCtx, processed)
+		batcherErrCh <- d.runBatcher(pipeCtx, processed)
 	}()
 
 	// Supervise: shut down when the caller cancels, or when the sender returns a
 	// fatal error before that.
 	var runErr error
 	senderDone := false
+	batcherDone := false
 	select {
 	case <-ctx.Done():
+	case err := <-batcherErrCh:
+		batcherDone = true
+		if isRealError(err) {
+			runErr = err
+			d.log.Error("collector: batcher terminated", "error", err.Error())
+		}
 	case err := <-senderErrCh:
 		senderDone = true
 		if isRealError(err) {
@@ -385,7 +422,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// batch, then give the sender a bounded window to deliver what is queued.
 	cancelPipe()
 	inputWG.Wait()
-	<-batcherDone
+	if !batcherDone {
+		if err := <-batcherErrCh; isRealError(err) && runErr == nil {
+			runErr = err
+		}
+	}
 
 	if !senderDone {
 		d.drainSender()
@@ -428,6 +469,7 @@ func (d *Daemon) closeAll() error {
 	record(d.queue.Close())
 	record(d.checkpoints.Close())
 	record(d.deadLetter.Close())
+	record(d.stateLock.Close())
 	return first
 }
 

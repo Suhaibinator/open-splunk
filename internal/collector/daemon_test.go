@@ -2,10 +2,13 @@ package collector
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +78,30 @@ func newTestConfig(t *testing.T, stateDir, logGlob, tokenFile string) *config.Co
 			Host:         "test-host",
 			PollInterval: config.Duration(10 * time.Millisecond),
 		}},
+	}
+}
+
+func TestDaemonStateDirectoryHasSingleOwner(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+	logDir := t.TempDir()
+	cfg := newTestConfig(t, stateDir, filepath.Join(logDir, "*.log"), filepath.Join(stateDir, "token"))
+	first, err := New(cfg, WithLogger(discardLogger()), WithCollectorID("cid-1"), WithInstanceID("iid-1"))
+	if err != nil {
+		t.Fatalf("first New: %v", err)
+	}
+	if _, err := New(cfg, WithLogger(discardLogger()), WithCollectorID("cid-2"), WithInstanceID("iid-2")); err == nil {
+		t.Fatal("second collector unexpectedly acquired the same state directory")
+	}
+	if err := first.closeAll(); err != nil {
+		t.Fatalf("close first: %v", err)
+	}
+	second, err := New(cfg, WithLogger(discardLogger()), WithCollectorID("cid-2"), WithInstanceID("iid-2"))
+	if err != nil {
+		t.Fatalf("New after release: %v", err)
+	}
+	if err := second.closeAll(); err != nil {
+		t.Fatalf("close second: %v", err)
 	}
 }
 
@@ -323,6 +350,60 @@ func TestDaemonBackpressureNoDrop(t *testing.T) {
 	// daemon where the input readers close the processed channel on shutdown.
 	close(processed)
 	<-batcherDone
+}
+
+type appendFailQueue struct{ wal.Queue }
+
+func (appendFailQueue) Append([]*opensplunkv1.LogEvent) (*opensplunkv1.EventBatch, error) {
+	return nil, errors.New("simulated WAL IO failure")
+}
+
+func TestBatcherReturnsFatalAppendFailure(t *testing.T) {
+	t.Parallel()
+	d := &Daemon{
+		log: discardLogger(), queue: appendFailQueue{}, batchMaxEvents: 1,
+		batchMaxBytes: 1024, batchLinger: time.Hour,
+	}
+	processed := make(chan processedEvent, 1)
+	processed <- processedEvent{event: &opensplunkv1.LogEvent{EventId: "e1"}, size: 10}
+	close(processed)
+	if err := d.runBatcher(context.Background(), processed); err == nil || !strings.Contains(err.Error(), "durable append failed") {
+		t.Fatalf("runBatcher error = %v, want fatal durable append failure", err)
+	}
+}
+
+func TestBatcherFlushesBeforeCrossingByteCap(t *testing.T) {
+	t.Parallel()
+	q, err := wal.Open(wal.Options{Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "cid", ProtocolMajor: protocolMajor})
+	if err != nil {
+		t.Fatalf("open queue: %v", err)
+	}
+	defer q.Close()
+	cps, err := input.NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("checkpoint store: %v", err)
+	}
+	defer cps.Close()
+	d := &Daemon{
+		log: discardLogger(), queue: q, checkpoints: cps,
+		batchMaxEvents: 100, batchMaxBytes: 10, batchLinger: time.Hour,
+		lastOffsets: make(map[string]uint64),
+	}
+	identity := input.FileIdentity{Device: 1, Inode: 2, Generation: 1, Fingerprint: "fp"}
+	processed := make(chan processedEvent, 2)
+	for i := 0; i < 2; i++ {
+		processed <- processedEvent{
+			event:    &opensplunkv1.LogEvent{EventId: fmt.Sprintf("e%d", i)},
+			identity: identity, endOffset: uint64(i + 1), size: 6,
+		}
+	}
+	close(processed)
+	if err := d.runBatcher(context.Background(), processed); err != nil {
+		t.Fatalf("runBatcher: %v", err)
+	}
+	if got := q.Stats(); got.QueuedBatches != 2 || got.QueuedEvents != 2 {
+		t.Fatalf("batch cap was crossed instead of pre-flushed: %+v", got)
+	}
 }
 
 // TestDaemonGracefulShutdownFlushesPartialBatch verifies that closing the input

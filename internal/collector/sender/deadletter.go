@@ -39,11 +39,13 @@ func NewFileDeadLetterSink(path string) (DeadLetterSink, error) {
 		return nil, fmt.Errorf("collector/sender: dead-letter path is required")
 	}
 	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("collector/sender: create dead-letter dir: %w", err)
 		}
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	// 0o600: the dead-letter file holds full rejected event payloads, so it must
+	// not be group/world readable.
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("collector/sender: open dead-letter file: %w", err)
 	}

@@ -33,7 +33,7 @@ type fileCheckpointStore struct {
 	path string
 
 	mu      sync.Mutex
-	entries map[string]Checkpoint // keyed by FileIdentity.String()
+	entries map[string]Checkpoint // keyed by FileIdentity.TrackingKey()
 }
 
 // NewCheckpointStore opens or creates the checkpoint store rooted at dir. A
@@ -69,7 +69,7 @@ func (s *fileCheckpointStore) load() error {
 		return fmt.Errorf("collector/input: corrupt checkpoint file %s: %w", s.path, err)
 	}
 	for _, cp := range doc.Checkpoints {
-		s.entries[cp.Identity.String()] = cp
+		s.entries[cp.Identity.TrackingKey()] = cp
 	}
 	return nil
 }
@@ -78,7 +78,7 @@ func (s *fileCheckpointStore) load() error {
 func (s *fileCheckpointStore) Get(id FileIdentity) (Checkpoint, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cp, ok := s.entries[id.String()]
+	cp, ok := s.entries[id.TrackingKey()]
 	return cp, ok, nil
 }
 
@@ -90,7 +90,16 @@ func (s *fileCheckpointStore) Set(cp Checkpoint) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries[cp.Identity.String()] = cp
+	key := cp.Identity.TrackingKey()
+	if current, ok := s.entries[key]; ok {
+		switch {
+		case cp.Identity.Generation < current.Identity.Generation:
+			return nil // a delayed old-generation batch must not undo truncation
+		case cp.Identity.Generation == current.Identity.Generation && cp.Offset < current.Offset:
+			return nil // offsets are monotonic within one generation
+		}
+	}
+	s.entries[key] = cp
 	return s.persistLocked()
 }
 
@@ -98,10 +107,11 @@ func (s *fileCheckpointStore) Set(cp Checkpoint) error {
 func (s *fileCheckpointStore) Delete(id FileIdentity) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.entries[id.String()]; !ok {
+	key := id.TrackingKey()
+	if _, ok := s.entries[key]; !ok {
 		return nil
 	}
-	delete(s.entries, id.String())
+	delete(s.entries, key)
 	return s.persistLocked()
 }
 

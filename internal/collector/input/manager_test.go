@@ -202,6 +202,21 @@ func TestManagerStartAtEnd(t *testing.T) {
 	h.waitForTexts([]string{"new1"})
 }
 
+func TestManagerStartAtEndReadsFileCreatedAfterStartup(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "later.log")
+	h := startManager(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtEnd,
+	}, newStore(t))
+
+	waitFor(t, "initial scan completed", func() bool {
+		return h.mgr.Health().State == opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_MISSING
+	})
+	writeFileT(t, p, "created-before-discovery-1\ncreated-before-discovery-2\n")
+	h.waitForTexts([]string{"created-before-discovery-1", "created-before-discovery-2"})
+}
+
 func TestManagerResumeFromCheckpoint(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -297,6 +312,31 @@ func TestManagerCopyTruncate(t *testing.T) {
 	appendFileT(t, p, "x\n")
 
 	h.waitForTexts([]string{"line-one", "line-two", "x"})
+}
+
+func TestManagerCopyTruncateRewriteLargerBetweenPolls(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	writeFileT(t, p, "old-one\nold-two\n")
+
+	h := startManager(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+		PollInterval: 30 * time.Millisecond,
+	}, newStore(t))
+	h.waitForTexts([]string{"old-one", "old-two"})
+	before := h.col.snapshot()[0].Source.Identity
+
+	// os.WriteFile truncates and rewrites the existing inode. By the next poll
+	// the replacement is larger than the old offset, so size-only detection
+	// would silently skip its prefix.
+	writeFileT(t, p, "replacement-one\nreplacement-two\n")
+	h.waitForTexts([]string{"old-one", "old-two", "replacement-one", "replacement-two"})
+	afterEvents := h.col.snapshot()
+	after := afterEvents[len(afterEvents)-1].Source.Identity
+	if after.Generation <= before.Generation {
+		t.Fatalf("generation did not advance across copy-truncate: %d -> %d", before.Generation, after.Generation)
+	}
 }
 
 func TestManagerDeletionDrainsAndStops(t *testing.T) {
