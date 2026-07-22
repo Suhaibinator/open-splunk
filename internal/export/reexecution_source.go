@@ -12,9 +12,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
-	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 )
 
 const (
@@ -174,24 +173,7 @@ func (source *ReexecutionSource) nextGeneration() (uint64, bool) {
 }
 
 func (source *ReexecutionSource) compile(job searchjobs.Job) (clickhouse.CompiledQuery, error) {
-	parsed, err := spl.Parse(job.SPL)
-	if err != nil {
-		return clickhouse.CompiledQuery{}, err
-	}
-	visibilityCutoff := job.VisibilityCutoff
-	// EffectiveIndexes is the already-authorized immutable scope selected by
-	// the original plan. Reusing it for both scope inputs prevents re-execution
-	// from widening access even if the original request named more indexes.
-	indexes := slices.Clone(job.EffectiveIndexes)
-	logical, err := plan.Build(parsed, plan.Scope{
-		TenantID:          job.TenantID,
-		AuthorizedIndexes: indexes,
-		RequestedIndexes:  slices.Clone(indexes),
-		Earliest:          job.Earliest,
-		Latest:            job.Latest,
-		IndexTimeCutoff:   job.IndexTimeCutoff,
-		VisibilityCutoff:  &visibilityCutoff,
-	})
+	logical, err := searchsnapshot.BuildPlan(job)
 	if err != nil {
 		return clickhouse.CompiledQuery{}, err
 	}
