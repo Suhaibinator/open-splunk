@@ -234,12 +234,14 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("n", typedSint(1)),
 		typedField("mixed_by", typedString("scalar")),
 		typedField("tenant_probe", typedString("visible")),
+		typedField("sort_value", typedString("10")),
 		typedField("literal.dot", typedString("needle")),
 	)
 	two := compilerIntegrationEvent("n-two", "500", "prefix error42 suffix", indexTime,
 		typedField("status", typedString("500")),
 		typedField("ratio", typedDouble(1)),
 		typedField("n", typedSint(2)),
+		typedField("sort_value", typedString("2")),
 	)
 	null := compilerIntegrationEvent("n-null", "nullable", "nothing here", indexTime,
 		typedField("status", typedNull()),
@@ -255,6 +257,7 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("timestamp_value", typedTimestamp(extendedTimestamp)),
 		typedField("duration_value", typedDuration(3*time.Second+4*time.Nanosecond)),
 		typedField("decimal_value", typedDecimal("123.4500")),
+		typedField("sort_value", typedString("text")),
 		typedField("object_value", typedObject()),
 		typedField("object_parent", typedObject(typedField("child", typedString("nested")))),
 		typedField("mixed_by", typedList(typedString("container"))),
@@ -365,6 +368,123 @@ func testCompiledQueriesAgainstClickHouse(
 	}
 	if strings.Join(groupedKeys, ",") != "500" || len(groupedCounts) != 1 || groupedCounts[0] != 2 {
 		t.Fatalf("grouped stats = keys %v counts %v, want [500] [2]", groupedKeys, groupedCounts)
+	}
+
+	numericGroupSort := compileIntegrationSPL(t,
+		`index=compiler | stats count by sort_value | sort sort_value`,
+		indexTime.Add(10*time.Second), visibilityCutoff,
+	)
+	numericGroupRows, err := connection.Query(ctx, numericGroupSort.SQL, numericGroupSort.Args...)
+	if err != nil {
+		t.Fatalf("execute numeric-aware stats group sort: %v\nSQL: %s\nargs: %#v", err, numericGroupSort.SQL, numericGroupSort.Args)
+	}
+	var numericGroupKeys []string
+	for numericGroupRows.Next() {
+		var key string
+		var count uint64
+		if err := numericGroupRows.Scan(&key, &count); err != nil {
+			_ = numericGroupRows.Close()
+			t.Fatalf("scan numeric-aware stats group sort: %v", err)
+		}
+		if count != 1 {
+			_ = numericGroupRows.Close()
+			t.Fatalf("numeric-aware stats group %q count = %d, want 1", key, count)
+		}
+		numericGroupKeys = append(numericGroupKeys, key)
+	}
+	if err := numericGroupRows.Err(); err != nil {
+		_ = numericGroupRows.Close()
+		t.Fatalf("iterate numeric-aware stats group sort: %v", err)
+	}
+	if err := numericGroupRows.Close(); err != nil {
+		t.Fatalf("close numeric-aware stats group sort: %v", err)
+	}
+	if strings.Join(numericGroupKeys, ",") != "2,10,text" {
+		t.Fatalf("numeric-aware stats group order = %v, want [2 10 text]", numericGroupKeys)
+	}
+
+	downstream := compileIntegrationSPL(t,
+		`index=compiler | stats count AS events by status | search events>1 | sort -events | head 1 | table status, events`,
+		indexTime.Add(10*time.Second), visibilityCutoff,
+	)
+	downstreamRows, err := connection.Query(ctx, downstream.SQL, downstream.Args...)
+	if err != nil {
+		t.Fatalf("execute post-stats pipeline: %v\nSQL: %s\nargs: %#v", err, downstream.SQL, downstream.Args)
+	}
+	if !downstreamRows.Next() {
+		_ = downstreamRows.Close()
+		t.Fatalf("post-stats pipeline returned no row: %v", downstreamRows.Err())
+	}
+	var downstreamStatus string
+	var downstreamCount uint64
+	if err := downstreamRows.Scan(&downstreamStatus, &downstreamCount); err != nil {
+		_ = downstreamRows.Close()
+		t.Fatalf("scan post-stats pipeline: %v", err)
+	}
+	if downstreamStatus != "500" || downstreamCount != 2 || downstreamRows.Next() {
+		_ = downstreamRows.Close()
+		t.Fatalf("post-stats pipeline = %q/%d, want 500/2", downstreamStatus, downstreamCount)
+	}
+	if err := downstreamRows.Err(); err != nil {
+		_ = downstreamRows.Close()
+		t.Fatalf("iterate post-stats pipeline: %v", err)
+	}
+	if err := downstreamRows.Close(); err != nil {
+		t.Fatalf("close post-stats pipeline: %v", err)
+	}
+
+	globalTable := compileIntegrationSPL(t, `index=compiler | stats count | table count`, indexTime.Add(10*time.Second), visibilityCutoff)
+	var globalTableCount uint64
+	if err := connection.QueryRow(ctx, globalTable.SQL, globalTable.Args...).Scan(&globalTableCount); err != nil {
+		t.Fatalf("execute projected global stats: %v\nSQL: %s\nargs: %#v", err, globalTable.SQL, globalTable.Args)
+	}
+	if globalTableCount != 4 {
+		t.Fatalf("projected global stats count = %d, want 4", globalTableCount)
+	}
+
+	deterministic := compileIntegrationSPL(t,
+		`index=compiler | stats count by host | sort -count | head 2`,
+		indexTime.Add(10*time.Second), visibilityCutoff,
+	)
+	deterministicRows, err := connection.Query(ctx, deterministic.SQL, deterministic.Args...)
+	if err != nil {
+		t.Fatalf("execute deterministic post-stats sort: %v\nSQL: %s\nargs: %#v", err, deterministic.SQL, deterministic.Args)
+	}
+	var deterministicHosts []string
+	for deterministicRows.Next() {
+		var host string
+		var count uint64
+		if err := deterministicRows.Scan(&host, &count); err != nil {
+			_ = deterministicRows.Close()
+			t.Fatalf("scan deterministic post-stats sort: %v", err)
+		}
+		if count != 1 {
+			_ = deterministicRows.Close()
+			t.Fatalf("deterministic group %q count = %d, want 1", host, count)
+		}
+		deterministicHosts = append(deterministicHosts, host)
+	}
+	if err := deterministicRows.Err(); err != nil {
+		_ = deterministicRows.Close()
+		t.Fatalf("iterate deterministic post-stats sort: %v", err)
+	}
+	if err := deterministicRows.Close(); err != nil {
+		t.Fatalf("close deterministic post-stats sort: %v", err)
+	}
+	if strings.Join(deterministicHosts, ",") != "500,api" {
+		t.Fatalf("deterministic post-stats hosts = %v, want [500 api]", deterministicHosts)
+	}
+
+	hiddenUnsupported := compileIntegrationSPL(t,
+		`index=compiler | stats count by mixed_by | search count>100 | head 1`,
+		indexTime.Add(10*time.Second), visibilityCutoff,
+	)
+	hiddenUnsupportedErr := executeCompiledExpectingNoRows(ctx, connection, hiddenUnsupported)
+	var hiddenUnsupportedException *clickhousedriver.Exception
+	if !errors.As(hiddenUnsupportedErr, &hiddenUnsupportedException) ||
+		hiddenUnsupportedException.Code != 395 ||
+		!strings.Contains(hiddenUnsupportedException.Message, UnsupportedStatsByValueMarker) {
+		t.Fatalf("post-stats filter hid unsupported BY value: %v", hiddenUnsupportedErr)
 	}
 
 	for field, wantKey := range map[string]string{

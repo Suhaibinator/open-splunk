@@ -280,7 +280,7 @@ func TestCompileStatsCountUsesTransformingSchemaAndSplunkNullGrouping(t *testing
 		`arrayExists(name -> startsWith(name, ?), "__os_field_names")`,
 		`GROUP BY "level", "__os_group_value_1"`,
 		`throwIf(CAST("__os_stats_by_any_unsupported" != 0 AS UInt8)`,
-		`ORDER BY "level" ASC NULLS LAST, "status" ASC NULLS LAST`,
+		`ORDER BY "__os_group_0" ASC NULLS LAST, "__os_group_1" ASC NULLS LAST`,
 	} {
 		if !strings.Contains(grouped.SQL, required) {
 			t.Fatalf("grouped stats SQL missing %q:\n%s", required, grouped.SQL)
@@ -402,13 +402,122 @@ func TestCompileStatsCountSQLGolden(t *testing.T) {
 	}
 }
 
-func TestCompileRejectsNonTerminalAggregatePlan(t *testing.T) {
+func TestCompileStatsSupportsDownstreamPipeline(t *testing.T) {
 	t.Parallel()
 
-	logical := buildPlan(t, `index=gradethis | stats count`)
-	logical.Operators = append(logical.Operators, &plan.Limit{Count: 1})
-	if _, err := (Compiler{}).Compile(logical); err == nil || !strings.Contains(err.Error(), "final logical operator") {
-		t.Fatalf("Compile error = %v, want non-terminal aggregate rejection", err)
+	compiled := compileSPL(t, `index=gradethis | stats count AS events by level | search events>1 | sort -events | head 20 | table level, events`)
+	if !slices.Equal(compiled.OutputFields, []string{"level", "events"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, required := range []string{
+		`count() AS "events"`,
+		`"__os_group_0" AS "level"`,
+		`toInt256("events") > accurateCastOrNull(?, 'Int256')`,
+		`"events" AS "__os_order_`,
+		` DESC NULLS LAST`,
+		` LIMIT ?`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("downstream stats SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+	if got := compiled.Args[len(compiled.Args)-3:]; !reflect.DeepEqual(got, []any{"1", uint64(10_000), uint64(20)}) {
+		t.Fatalf("downstream args = %#v", got)
+	}
+	if strings.Contains(compiled.SQL, `"__os_sort_event_id" AS "__os_order_`) ||
+		!strings.Contains(compiled.SQL, `"__os_group_0" AS "__os_order_5_tie_0"`) {
+		t.Fatalf("post-stats sort did not use the grouping tuple as its stable tie-breaker:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsSupportsImmediateLimitsAndRepeatedAggregation(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | stats count by level | head 2`,
+		`index=gradethis | stats count by level | tail 2`,
+		`index=gradethis | stats count AS events by level | stats count`,
+		`index=gradethis | stats count | head 1 | table count`,
+	} {
+		compiled := compileSPL(t, source)
+		if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+			t.Fatalf("%q placeholder count = %d, args = %d\nSQL: %s", source, got, want, compiled.SQL)
+		}
+		if strings.Contains(compiled.SQL, `"__os_sort_event_id" AS "__os_order_`) {
+			t.Fatalf("%q reused event identity after stats:\n%s", source, compiled.SQL)
+		}
+	}
+}
+
+func TestCompilePostStatsProjectionPreservesDeclaredSchemaAndAliases(t *testing.T) {
+	t.Parallel()
+
+	tabled := compileSPL(t, `index=gradethis | stats count by level | table missing, count, level`)
+	if !slices.Equal(tabled.OutputFields, []string{"missing", "count", "level"}) ||
+		!strings.Contains(tabled.SQL, `CAST(NULL AS Nullable(String)) AS "missing"`) {
+		t.Fatalf("post-stats table schema = %v\nSQL: %s", tabled.OutputFields, tabled.SQL)
+	}
+
+	fieldsAlias := compileSPL(t, `index=gradethis | stats count AS fields | fields - missing`)
+	if !slices.Equal(fieldsAlias.OutputFields, []string{"fields"}) {
+		t.Fatalf("aggregate fields alias was dropped: %v\nSQL: %s", fieldsAlias.OutputFields, fieldsAlias.SQL)
+	}
+
+	global := compileSPL(t, `index=gradethis | stats count | table count`)
+	if strings.Contains(global.SQL, `"count" AS "count", "count"`) {
+		t.Fatalf("global count was projected twice:\n%s", global.SQL)
+	}
+}
+
+func TestCompilePostStatsMissingSortUsesAggregateIdentity(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | stats count by level | sort host`)
+	if !strings.Contains(compiled.SQL, `CAST(NULL AS Nullable(String)) AS "__os_order_`) ||
+		!strings.Contains(compiled.SQL, `"__os_group_0" AS "__os_order_`) ||
+		strings.Contains(compiled.SQL, `"host" AS "__os_order_`) {
+		t.Fatalf("missing post-stats sort key was not lowered safely:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileDynamicStatsGroupRetainsNumericAwareSort(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | stats count by status | sort status`)
+	if !strings.Contains(compiled.SQL, `tuple(if(isNull("__os_group_0")`) ||
+		!strings.Contains(compiled.SQL, `toFloat64OrNull(toString("__os_group_0"))`) {
+		t.Fatalf("dynamic stats group lost numeric-aware downstream sort:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompilePostStatsIndexAliasUsesAggregateType(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | stats count AS index | search index=1`)
+	if !strings.Contains(compiled.SQL, `toInt256("index") = accurateCastOrNull(?, 'Int256')`) {
+		t.Fatalf("aggregate alias index retained physical index comparison semantics:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileFixedNumericComparisonsPreserveOutOfRangeOrdering(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis severity<300`,
+		`index=gradethis | stats count AS events | search events>-1`,
+		`index=gradethis | stats count AS events | search events=18446744073709551615`,
+	} {
+		compiled := compileSPL(t, source)
+		if !strings.Contains(compiled.SQL, `toInt256(`) || !strings.Contains(compiled.SQL, `accurateCastOrNull(?, 'Int256')`) {
+			t.Fatalf("%q lost exact wide-integer comparison:\n%s", source, compiled.SQL)
+		}
+	}
+	float := compileSPL(t, `index=gradethis | stats count AS events | search events=1.0`)
+	if !strings.Contains(float.SQL, `toFloat64("events") = toFloat64OrNull(?)`) {
+		t.Fatalf("floating aggregate comparison was not numerically coerced:\n%s", float.SQL)
 	}
 }
 

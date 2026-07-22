@@ -212,6 +212,30 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("post-stats pipeline through manager", func(t *testing.T) {
+		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-post-stats-pipeline",
+			`index=main | stats count AS events by status | search events>0 | sort -events | head 1 | table status, events`,
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("post-stats state = %v, failure=%#v", job.State, job.Failure)
+		}
+		if len(page.Schema.Columns) != 2 || page.Schema.Columns[0].Name != "status" ||
+			page.Schema.Columns[0].Kind != searchjobs.ValueKindString ||
+			page.Schema.Columns[1].Name != "events" || page.Schema.Columns[1].Kind != searchjobs.ValueKindUnsigned {
+			t.Fatalf("post-stats schema = %#v", page.Schema)
+		}
+		if len(page.Rows) != 1 {
+			t.Fatalf("post-stats rows = %d, want 1", len(page.Rows))
+		}
+		if status, ok := page.Rows[0].Values[0].String(); !ok || status != "200" {
+			t.Fatalf("post-stats status = %q, %v", status, ok)
+		}
+		if count, ok := page.Rows[0].Values[1].Unsigned(); !ok || count != 1 {
+			t.Fatalf("post-stats count = %d, %v", count, ok)
+		}
+	})
+
 	t.Run("stats aliases retain aggregate types", func(t *testing.T) {
 		for _, alias := range []string{"fields", "_raw"} {
 			job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime, "queryexec-stats-alias-"+alias, `index=main | stats count AS `+alias)
