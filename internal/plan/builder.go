@@ -24,6 +24,7 @@ const (
 	maxTimechartSpan         = 24 * time.Hour
 	timechartSeriesLimit     = 10
 	maxTimechartSeries       = 12
+	maxDedupFields           = 16
 )
 
 // Scope is the server-resolved security and snapshot boundary for a search.
@@ -225,6 +226,43 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				limit = 10_000
 			}
 			result.Operators = append(result.Operators, &Sort{Keys: keys, Limit: limit, Range: command.Range})
+		case *spl.DedupCommand:
+			if command.Count == 0 || len(command.Fields) == 0 || len(command.Fields) > maxDedupFields {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_DEDUP_SYNTAX",
+					Message: "dedup requires a positive count and between 1 and 16 exact fields",
+					Range:   command.Range,
+				}
+			}
+			keys := make([]FieldRef, 0, len(command.Fields))
+			seen := make(map[string]struct{}, len(command.Fields))
+			for _, field := range command.Fields {
+				if !outputSchemaKnown && field.Name == "fields" {
+					return nil, &Diagnostic{
+						Code:    "SPL_AMBIGUOUS_DEDUP_FIELD",
+						Message: "dedup cannot use the event result's reserved fields payload without an exact upstream schema",
+						Range:   field.Range,
+						Suggestions: []string{
+							"select an exact ordinary field with table before dedup",
+							"produce a closed stats schema before dedup fields",
+						},
+					}
+				}
+				if _, duplicate := seen[field.Name]; duplicate {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_DEDUP_SYNTAX",
+						Message: fmt.Sprintf("dedup field %q is duplicated", field.Name),
+						Range:   field.Range,
+					}
+				}
+				seen[field.Name] = struct{}{}
+				key, fieldErr := ResolveField(field.Name, field.Range)
+				if fieldErr != nil {
+					return nil, fieldErr
+				}
+				keys = append(keys, key)
+			}
+			result.Operators = append(result.Operators, &Deduplicate{Count: command.Count, Keys: keys, Range: command.Range})
 		case *spl.LimitCommand:
 			result.Operators = append(result.Operators, &Limit{Count: command.Count, FromEnd: command.Name() == "tail", Range: command.Range})
 		case *spl.StatsCommand:
@@ -936,7 +974,7 @@ func convertFields(names []string, sourceRange spl.Range) ([]FieldRef, error) {
 // a literal dot or backslash within one path segment.
 func ResolveField(name string, sourceRange spl.Range) (FieldRef, error) {
 	if _, ok := canonicalFields[name]; ok {
-		return FieldRef{Name: name, Canonical: true}, nil
+		return FieldRef{Name: name, Canonical: true, Range: sourceRange}, nil
 	}
 	if name == "" || !utf8.ValidString(name) {
 		return FieldRef{}, &Diagnostic{Code: "SPL_INVALID_FIELD", Message: "field name must be non-empty UTF-8", Range: sourceRange}
@@ -974,7 +1012,7 @@ func ResolveField(name string, sourceRange spl.Range) (FieldRef, error) {
 			}
 		}
 	}
-	return FieldRef{Name: name, Path: path}, nil
+	return FieldRef{Name: name, Path: path, Range: sourceRange}, nil
 }
 
 func splitFieldPath(name string) ([]string, error) {

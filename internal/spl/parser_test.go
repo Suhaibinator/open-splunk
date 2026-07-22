@@ -208,6 +208,96 @@ func TestParseSortRejectsAmbiguousOrMalformedArguments(t *testing.T) {
 	}
 }
 
+func TestParseDedupCountAndExactFieldList(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		count  uint64
+		fields []string
+	}{
+		{name: "default count", source: `index=main | dedup session_id`, count: 1, fields: []string{"session_id"}},
+		{name: "positional count and commas", source: `index=main | dedup 2 host, source`, count: 2, fields: []string{"host", "source"}},
+		{name: "whitespace list", source: `index=main | dedup service severity level`, count: 1, fields: []string{"service", "severity", "level"}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command, ok := query.Commands[0].(*DedupCommand)
+			if !ok || command.Count != test.count || len(command.Fields) != len(test.fields) {
+				t.Fatalf("dedup command = %#v, want count %d fields %v", query.Commands[0], test.count, test.fields)
+			}
+			for index, want := range test.fields {
+				if command.Fields[index].Name != want {
+					t.Fatalf("field %d = %q, want %q", index, command.Fields[index].Name, want)
+				}
+				gotRange := command.Fields[index].Range
+				if got := test.source[gotRange.Start.Offset:gotRange.End.Offset]; got != want {
+					t.Fatalf("field %d range = %q, want %q", index, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestParseDedupRejectsUnsupportedOrAmbiguousSyntax(t *testing.T) {
+	t.Parallel()
+
+	tests := []string{
+		`index=main | dedup`,
+		`index=main | dedup 0 host`,
+		`index=main | dedup -1 host`,
+		`index=main | dedup 18446744073709551616 host`,
+		`index=main | dedup host,`,
+		`index=main | dedup host,,source`,
+		`index=main | dedup host host`,
+		`index=main | dedup ho*`,
+		`index=main | dedup "host"`,
+		`index=main | dedup host keepempty=true`,
+		`index=main | dedup consecutive=true host`,
+		`index=main | dedup keepevents=true host`,
+		`index=main | dedup host sortby -_time`,
+	}
+	for _, source := range tests {
+		source := source
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(source)
+			if err == nil {
+				t.Fatal("Parse unexpectedly succeeded")
+			}
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != "SPL_UNSUPPORTED_DEDUP_SYNTAX" {
+				t.Fatalf("diagnostic = %#v, want SPL_UNSUPPORTED_DEDUP_SYNTAX", err)
+			}
+			if diagnostic.Range.Start.Offset < 0 || diagnostic.Range.Start.Offset > len(source) || diagnostic.Range.End.Offset > len(source) {
+				t.Fatalf("diagnostic range = %#v outside source length %d", diagnostic.Range, len(source))
+			}
+		})
+	}
+}
+
+func TestParseDedupBoundsFieldCount(t *testing.T) {
+	t.Parallel()
+
+	var source strings.Builder
+	source.WriteString(`index=main | dedup `)
+	for index := 0; index <= maxDedupFields; index++ {
+		if index > 0 {
+			source.WriteByte(' ')
+		}
+		source.WriteString("field")
+		source.WriteString(strconv.Itoa(index))
+	}
+	assertParseDiagnosticCode(t, source.String(), "SPL_UNSUPPORTED_DEDUP_SYNTAX")
+}
+
 func TestPipelineSearchUsesSearchPrecedence(t *testing.T) {
 	t.Parallel()
 

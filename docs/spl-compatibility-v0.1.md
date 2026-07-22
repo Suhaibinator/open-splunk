@@ -16,8 +16,10 @@ To bound parser, compiler, and ClickHouse AST work, one search may contain at
 most 16 KiB of UTF-8 source, 1,024 syntax tokens, and 64 pipeline commands.
 Scalar expressions may nest 32 levels, with at most 32 `where` comparisons.
 `eval` and `rename` accept at most 64 assignments; `stats` accepts at most 16
-measures and 16 `BY` fields. Exceeding a limit returns the source-located
-`SPL_QUERY_TOO_COMPLEX` diagnostic before planning or execution. Dynamic field
+measures and 16 `BY` fields; `dedup` accepts at most 16 key fields. Exceeding a
+general structural limit returns the source-located `SPL_QUERY_TOO_COMPLEX`
+diagnostic before planning or execution. Unsupported `dedup` arity is reported
+as `SPL_UNSUPPORTED_DEDUP_SYNTAX`. Dynamic field
 paths align with ingestion's ceiling: 17 dotted segments and 256 unescaped
 UTF-8 bytes per segment. Generated ClickHouse SQL is additionally capped at
 256 KiB; exceeding that internal expansion budget returns the same diagnostic.
@@ -167,6 +169,48 @@ limit but does not bypass server execution, memory, group, result-row, or
 result-byte budgets. Dynamic values use numeric-aware automatic ordering;
 stable private row/group identities make ties deterministic. Missing values
 sort last in the forward direction and first when `tail` reverses the order.
+
+### `dedup`
+
+```spl
+| dedup session_id
+| dedup 2 host, source
+| sort 0 +_time | dedup request_id
+```
+
+The optional leading count is a positive unsigned 64-bit integer and defaults
+to one. One through 16 unique exact fields may follow, separated by whitespace,
+commas, or both. Quoted fields, wildcards, a trailing comma, duplicate fields,
+zero/negative/overflowing counts, and the `keepempty`, `consecutive`,
+`keepevents`, and `sortby` forms are rejected with the source-located
+`SPL_UNSUPPORTED_DEDUP_SYNTAX` diagnostic.
+
+`dedup` is global rather than consecutive: it retains the first count rows for
+each complete key tuple in the deterministic order established by the current
+pipeline. Event searches default to `_time DESC, event_id DESC`; an upstream
+sort controls the winners. Use `sort 0` when the sort itself must not impose its
+normal 10,000-row bound. The command preserves both the public schema and the
+current row order, including through downstream projections and transforming
+pipelines.
+
+With the supported default `keepempty=false` behavior, a row missing any key or
+having an explicit null in any key is removed. An empty string is a present
+value. Keys compare case-sensitively. Dynamic scalar keys use the same lexical
+normalization as `stats BY`, so numeric `500` and string `"500"` share a key;
+bytes, timestamps, durations, and decimals use their deterministic tagged
+scalar representations. A field removed by an upstream projection is missing
+for every row and is never recovered from private event data.
+
+On an open event schema, the name `fields` is reserved for the convenience
+whole-payload result and is therefore rejected as an ambiguous dedup key. A
+closed upstream schema may declare an ordinary output with that name, for
+example `stats count AS fields | dedup fields`.
+
+Multivalue lists and objects, including flattened non-empty object parents,
+are an explicit Open Splunk v0.1 unsupported-value boundary: encountering one
+in any present key fails the whole search before any row is exposed. Splunk
+supports broader field-value behavior; this restriction is conservative and
+intentional rather than a claim of exact compatibility for containers.
 
 ### `head` and `tail`
 
@@ -350,7 +394,7 @@ The following planned commands are not implemented in this version:
 
 ```text
 rex, spath, bin, bucket, chart,
-dedup, eventstats, streamstats
+eventstats, streamstats
 ```
 
 All `stats` functions other than argument-free `count`, `p95(field)`,
@@ -365,6 +409,7 @@ are declared compatible.
 
 Reference behavior is compared against Splunk's official [`search`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/search),
 [`sort`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/sort),
+[`dedup`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/dedup),
 [`stats`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/stats),
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
 [`replace`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.4.2604/evaluation-functions/text-functions),

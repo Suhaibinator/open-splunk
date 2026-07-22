@@ -262,6 +262,131 @@ func TestCompileSortDefaultIsBoundedAndExplicitZeroIsUnlimited(t *testing.T) {
 	}
 }
 
+func TestCompileDedupUsesOrderedLimitByAndPrivateScalarKeys(t *testing.T) {
+	t.Parallel()
+
+	baseline := compileSPL(t, `index=gradethis`)
+	compiled := compileSPL(t, `index=gradethis | dedup 2 status, host`)
+	if !slices.Equal(compiled.OutputFields, baseline.OutputFields) {
+		t.Fatalf("dedup changed output schema: got %v want %v", compiled.OutputFields, baseline.OutputFields)
+	}
+	for _, required := range []string{
+		`AS "__os_dedup_present_`,
+		`AS "__os_dedup_supported_`,
+		`AS "__os_dedup_key_`,
+		`max(CAST(("__os_dedup_present_`,
+		`OVER () AS "__os_dedup_any_unsupported_`,
+		UnsupportedDedupValueMarker,
+		`SELECT * EXCEPT ("__os_dedup_present_`,
+		`ORDER BY "__os_sort_time" DESC NULLS LAST, "__os_sort_event_id" DESC NULLS LAST LIMIT ? BY "__os_dedup_key_`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("dedup SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, "argMax") || strings.Contains(compiled.SQL, "GROUP BY") {
+		t.Fatalf("dedup must use LIMIT BY rather than aggregation:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+	if got := compiled.Args[:2]; !reflect.DeepEqual(got, []any{"status", "status."}) {
+		t.Fatalf("dynamic key arguments = %#v, want [status status.]", got)
+	}
+	if got := compiled.Args[len(compiled.Args)-1]; got != uint64(2) {
+		t.Fatalf("dedup count argument = %#v, want 2", got)
+	}
+	outerProjectionEnd := strings.Index(compiled.SQL, " FROM (")
+	if outerProjectionEnd < 0 || strings.Contains(compiled.SQL[:outerProjectionEnd], "__os_dedup_") {
+		t.Fatalf("private dedup columns leaked into public projection:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileRepeatedDedupPrunesEachStagesPrivateHelpers(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | dedup status | dedup host`)
+	if got := strings.Count(compiled.SQL, `SELECT * EXCEPT (`); got != 2 {
+		t.Fatalf("repeated dedup has %d helper-pruning projections, want 2:\n%s", got, compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+}
+
+func TestCompileDedupHonorsPriorSortAndProjectionBoundaries(t *testing.T) {
+	t.Parallel()
+
+	sorted := compileSPL(t, `index=gradethis | sort 0 +_time | dedup event_id`)
+	limitBy := strings.LastIndex(sorted.SQL, " LIMIT ? BY ")
+	if limitBy < 0 {
+		t.Fatalf("dedup LIMIT BY missing:\n%s", sorted.SQL)
+	}
+	dedupOrder := strings.LastIndex(sorted.SQL[:limitBy], "ORDER BY ")
+	if dedupOrder < 0 || !strings.Contains(sorted.SQL[dedupOrder:limitBy], `"__os_order_2_0" ASC NULLS LAST`) {
+		t.Fatalf("dedup did not reuse the prior materialized sort order:\n%s", sorted.SQL)
+	}
+
+	removed := compileSPL(t, `index=gradethis | fields host | dedup status`)
+	if strings.Contains(removed.SQL, `"__os_fields"."status"`) ||
+		!strings.Contains(removed.SQL, `toUInt8(0) AS "__os_dedup_present_`) {
+		t.Fatalf("dedup resurrected a projected-away key:\n%s", removed.SQL)
+	}
+}
+
+func TestCompileDedupSupportsTransformingAndDownstreamPipelines(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | stats count BY service | sort 0 -count | dedup count | table service, count`)
+	if !slices.Equal(compiled.OutputFields, []string{"service", "count"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	if !strings.Contains(compiled.SQL, `LIMIT ? BY "__os_dedup_key_`) ||
+		!strings.Contains(compiled.SQL, `"count" AS "__os_dedup_key_`) {
+		t.Fatalf("post-stats dedup did not retain its fixed scalar key:\n%s", compiled.SQL)
+	}
+	if got := compiled.Args[len(compiled.Args)-1]; got != uint64(1) {
+		t.Fatalf("dedup count argument = %#v, want 1", got)
+	}
+}
+
+func TestCompileDedupAllowsClosedSchemaFieldNamedFields(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | stats count AS fields | dedup fields`)
+	if !slices.Equal(compiled.OutputFields, []string{"fields"}) ||
+		!strings.Contains(compiled.SQL, `"fields" AS "__os_dedup_key_`) ||
+		strings.Contains(compiled.SQL, `"__os_fields"."fields"`) {
+		t.Fatalf("closed-schema fields key compiled incorrectly; output=%v\n%s", compiled.OutputFields, compiled.SQL)
+	}
+}
+
+func TestCompileDedupRejectsDirectPlanWithAmbiguousEventFieldsPayload(t *testing.T) {
+	t.Parallel()
+
+	logical := buildPlan(t, `index=gradethis`)
+	fieldRange := spl.Range{
+		Start: spl.Position{Offset: 7, Line: 1, Column: 8},
+		End:   spl.Position{Offset: 13, Line: 1, Column: 14},
+	}
+	fields, err := plan.ResolveField("fields", fieldRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logical.Operators = append(logical.Operators, &plan.Deduplicate{
+		Count: 1,
+		Keys:  []plan.FieldRef{fields},
+	})
+	_, err = (Compiler{}).Compile(logical)
+	diagnostic, ok := err.(*plan.Diagnostic)
+	if !ok || diagnostic.Code != "SPL_AMBIGUOUS_DEDUP_FIELD" {
+		t.Fatalf("Compile error = %#v, want SPL_AMBIGUOUS_DEDUP_FIELD", err)
+	}
+	if diagnostic.Range != fieldRange {
+		t.Fatalf("diagnostic range = %#v, want key range %#v", diagnostic.Range, fieldRange)
+	}
+}
+
 func TestCompileFieldWildcardExistenceTruthTable(t *testing.T) {
 	t.Parallel()
 

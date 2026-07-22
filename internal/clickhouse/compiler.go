@@ -33,6 +33,10 @@ const (
 	// guard so the executor can classify the ClickHouse exception without
 	// exposing generated SQL or storage details.
 	UnsupportedStatsByValueMarker = "open-splunk: stats BY requires a scalar field"
+	// UnsupportedDedupValueMarker is emitted when a complete dedup key contains
+	// a runtime list or object. It is intentionally stable for executor-side
+	// classification and is never returned verbatim to clients.
+	UnsupportedDedupValueMarker = "open-splunk: dedup requires scalar fields"
 )
 
 var physicalIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -248,6 +252,16 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 				args = append(args, operator.Limit)
 			}
 			state.order = sortKeys
+		case *plan.Deduplicate:
+			deduplicated, prefixArgs, currentOrder, additionalAliases, compileErr := compileDeduplicate(fragment, operator, state, aliasSequence)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			fragment = deduplicated
+			args = prependArguments(prefixArgs, args)
+			args = append(args, operator.Count)
+			state.order = currentOrder
+			aliasSequence += additionalAliases
 		case *plan.Limit:
 			keys := state.order
 			if len(keys) == 0 {
@@ -1974,6 +1988,125 @@ func statsByScalarExpressions(field fieldState) (supported, lexical string) {
 	supported = "(" + typeSQL + " IN ('String', 'Int64', 'UInt64', 'Float64', 'Bool') OR " + extended + ")"
 	lexical = "if(" + typeSQL + " = 'Map(String, String)', " + mapSQL + "[" + valueKey + "], toString(" + field.valueSQL + "))"
 	return supported, lexical
+}
+
+func compileDeduplicate(
+	fragment string,
+	operator *plan.Deduplicate,
+	state compileState,
+	stage int,
+) (deduplicated string, prefixArgs []any, currentOrder []compiledSortKey, additionalAliases int, err error) {
+	if operator == nil || operator.Count == 0 || len(operator.Keys) == 0 || len(operator.Keys) > 16 {
+		return "", nil, nil, 0, errors.New("compile ClickHouse deduplicate: positive count and 1 through 16 keys are required")
+	}
+
+	materialized := make([]string, 0, len(operator.Keys)*3)
+	presentColumns := make([]string, 0, len(operator.Keys))
+	keyColumns := make([]string, 0, len(operator.Keys))
+	invalidValues := make([]string, 0, len(operator.Keys))
+	helperColumns := make([]string, 0, len(operator.Keys)*3+1)
+	seen := make(map[string]struct{}, len(operator.Keys))
+	for index, key := range operator.Keys {
+		if state.eventRows && state.allowDynamic && key.Name == "fields" {
+			return "", nil, nil, 0, &plan.Diagnostic{
+				Code:    "SPL_AMBIGUOUS_DEDUP_FIELD",
+				Message: "dedup cannot use the event result's reserved fields payload without an exact upstream schema",
+				Range:   key.Range,
+			}
+		}
+		if _, duplicate := seen[key.Name]; duplicate {
+			return "", nil, nil, 0, fmt.Errorf("compile ClickHouse deduplicate: key %q is duplicated", key.Name)
+		}
+		seen[key.Name] = struct{}{}
+
+		field, exists, resolveErr := resolveCompiledField(key, state)
+		if resolveErr != nil {
+			return "", nil, nil, 0, resolveErr
+		}
+		if !exists {
+			// A prior projection is authoritative. Keep a typed missing key so the
+			// eligibility predicate removes every row without consulting the
+			// private event document.
+			field = fieldState{
+				valueSQL:  "CAST(NULL AS Nullable(String))",
+				existsSQL: "0",
+				kind:      fieldKindString,
+			}
+		}
+
+		presentName := quoteIdentifier(fmt.Sprintf("__os_dedup_present_%d_%d", stage, index))
+		keyName := quoteIdentifier(fmt.Sprintf("__os_dedup_key_%d_%d", stage, index))
+		present := "0"
+		if exists {
+			fieldExists := field.existsSQL
+			if fieldExists == "" {
+				fieldExists = "1"
+			}
+			present = "(" + fieldExists + " AND isNotNull(" + field.valueSQL + "))"
+			prefixArgs = append(prefixArgs, field.existsArgs...)
+			if field.kind == fieldKindDynamic && field.descendantSQL != "" {
+				// Flattened non-empty objects do not have an exact parent leaf. Keep
+				// them present until the whole-input unsupported-value guard runs.
+				present = "(" + present + " OR " + field.descendantSQL + ")"
+				prefixArgs = append(prefixArgs, field.descendantArgs...)
+			}
+		}
+		materialized = append(materialized, "toUInt8("+present+") AS "+presentName)
+		presentColumns = append(presentColumns, presentName)
+		helperColumns = append(helperColumns, presentName)
+
+		keyValue := field.valueSQL
+		if field.kind == fieldKindDynamic {
+			supported, lexical := statsByScalarExpressions(field)
+			supportedName := quoteIdentifier(fmt.Sprintf("__os_dedup_supported_%d_%d", stage, index))
+			materialized = append(materialized,
+				"toUInt8("+supported+") AS "+supportedName,
+				"if("+supported+", "+lexical+", '') AS "+keyName,
+			)
+			helperColumns = append(helperColumns, supportedName)
+			invalidValues = append(invalidValues, presentName+" != 0 AND "+supportedName+" = 0")
+		} else {
+			materialized = append(materialized, keyValue+" AS "+keyName)
+		}
+		keyColumns = append(keyColumns, keyName)
+		helperColumns = append(helperColumns, keyName)
+	}
+
+	preparedAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage))
+	deduplicated = "SELECT *, " + strings.Join(materialized, ", ") + " FROM (" + fragment + ") AS " + preparedAlias
+	eligible := make([]string, 0, len(presentColumns))
+	for _, present := range presentColumns {
+		eligible = append(eligible, present+" != 0")
+	}
+	predicate := "(" + strings.Join(eligible, " AND ") + ")"
+
+	if len(invalidValues) > 0 {
+		additionalAliases++
+		validationAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+additionalAliases))
+		anyUnsupported := quoteIdentifier(fmt.Sprintf("__os_dedup_any_unsupported_%d", stage))
+		helperColumns = append(helperColumns, anyUnsupported)
+		invalid := "(" + strings.Join(invalidValues, ") OR (") + ")"
+		deduplicated = "SELECT *, max(CAST(" + invalid + " AS UInt8)) OVER () AS " + anyUnsupported +
+			" FROM (" + deduplicated + ") AS " + validationAlias
+		// Put validation and eligibility in the two branches of one predicate.
+		// The window flag is computed over the complete scoped input first, so an
+		// unsupported key cannot be hidden by a missing value in another key.
+		predicate = "if(" + anyUnsupported + " != 0, throwIf(toUInt8(1), '" + UnsupportedDedupValueMarker + "') = 0, " + predicate + ")"
+	}
+
+	currentOrder = defaultCompiledOrder(state)
+	if len(currentOrder) == 0 {
+		return "", nil, nil, 0, errors.New("compile ClickHouse deduplicate: input has no deterministic order")
+	}
+	order, orderErr := compileMaterializedOrder(currentOrder, false)
+	if orderErr != nil {
+		return "", nil, nil, 0, orderErr
+	}
+	additionalAliases++
+	dedupAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+additionalAliases))
+	deduplicated = "SELECT * EXCEPT (" + strings.Join(helperColumns, ", ") + ") FROM (" + deduplicated + ") AS " + dedupAlias + " WHERE " + predicate +
+		" ORDER BY " + order + " LIMIT ? BY " + strings.Join(keyColumns, ", ")
+	return deduplicated, prefixArgs, currentOrder, additionalAliases, nil
 }
 
 func compileWindow(operator *plan.Window, state compileState) (string, compileState, error) {

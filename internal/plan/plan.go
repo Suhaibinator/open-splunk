@@ -227,6 +227,19 @@ func (*Sort) operator()                 {}
 func (*Sort) LogicalName() string       { return "Sort" }
 func (op *Sort) SourceRange() spl.Range { return op.Range }
 
+// Deduplicate retains the first Count rows for each complete key tuple. It is
+// schema preserving; missing/null handling and scalar validation are backend
+// responsibilities because open event fields are typed at runtime.
+type Deduplicate struct {
+	Count uint64
+	Keys  []FieldRef
+	Range spl.Range
+}
+
+func (*Deduplicate) operator()                 {}
+func (*Deduplicate) LogicalName() string       { return "Deduplicate" }
+func (op *Deduplicate) SourceRange() spl.Range { return op.Range }
+
 // Limit implements head or tail. FromEnd is true for tail.
 type Limit struct {
 	Count   uint64
@@ -328,6 +341,7 @@ type FieldRef struct {
 	Name      string
 	Canonical bool
 	Path      []string
+	Range     spl.Range
 }
 
 // ComparisonExpression compares a field with one scalar.

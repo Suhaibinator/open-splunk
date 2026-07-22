@@ -23,6 +23,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const storeIntegrationImage = "clickhouse/clickhouse-server:26.3.17.4"
@@ -1139,6 +1140,7 @@ func testCompiledQueriesAgainstClickHouse(
 	}
 
 	testStatsSumAndAverageAgainstClickHouse(t, ctx, store, connection, indexTime)
+	testDedupAgainstClickHouse(t, ctx, store, connection, indexTime)
 }
 
 func testStatsSumAndAverageAgainstClickHouse(
@@ -1369,6 +1371,192 @@ func testStatsSumAndAverageAgainstClickHouse(
 	wantTime := float64(time.Date(2026, 7, 21, 3, 4, 5, 123456789, time.FixedZone("event-offset", 5*60*60)).UnixNano()) / 1e9
 	if meanTime == nil || math.Abs(*meanTime-wantTime) > 1e-6 {
 		t.Fatalf("canonical time average = %v, want %g", meanTime, wantTime)
+	}
+}
+
+func testDedupAgainstClickHouse(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	connection clickhousedriver.Conn,
+	indexTime time.Time,
+) {
+	t.Helper()
+	newEvent := func(id, source string, eventTime time.Time, fields ...*opensplunkv1.TypedObjectField) *ingest.StoredEvent {
+		event := compilerIntegrationEvent(id, "dedup-host", "dedup fixture", indexTime, fields...)
+		event.BatchID = "dedup-batch"
+		event.Event.Source = source
+		event.Event.EventTime = timestamppb.New(eventTime)
+		return event
+	}
+	// Keep event time tied to the fixture's index time so a future tightening of
+	// compileIntegrationSPL's event window cannot silently empty this corpus.
+	t0 := indexTime.Add(-5 * time.Second)
+	t1 := t0.Add(time.Second)
+	t2 := t1.Add(time.Second)
+	t3 := t2.Add(time.Second)
+	t4 := t3.Add(time.Second)
+	events := []*ingest.StoredEvent{
+		// Default order is _time DESC then event_id DESC. These rows pin
+		// non-consecutive global deduplication and the event-id tie-break.
+		newEvent("dedup-a-y", "dedup-order", t0,
+			typedField("dedup_key", typedString("A")), typedField("subkey", typedString("y"))),
+		newEvent("dedup-a-old", "dedup-order", t1,
+			typedField("dedup_key", typedString("A")), typedField("subkey", typedString("x"))),
+		newEvent("dedup-b", "dedup-order", t2,
+			typedField("dedup_key", typedString("B")), typedField("subkey", typedString("x"))),
+		newEvent("dedup-a-new", "dedup-order", t3,
+			typedField("dedup_key", typedString("A")), typedField("subkey", typedString("x"))),
+		newEvent("dedup-tie-a", "dedup-order", t4,
+			typedField("dedup_key", typedString("T")), typedField("subkey", typedString("tie"))),
+		newEvent("dedup-tie-z", "dedup-order", t4,
+			typedField("dedup_key", typedString("T")), typedField("subkey", typedString("tie"))),
+
+		newEvent("dedup-optional-value", "dedup-presence", t0,
+			typedField("optional_key", typedString("value"))),
+		newEvent("dedup-optional-empty", "dedup-presence", t1,
+			typedField("optional_key", typedString(""))),
+		newEvent("dedup-optional-null", "dedup-presence", t2,
+			typedField("optional_key", typedNull())),
+		newEvent("dedup-optional-missing", "dedup-presence", t3),
+
+		newEvent("dedup-number-string", "dedup-number", t1,
+			typedField("numeric_key", typedString("500"))),
+		newEvent("dedup-number-int", "dedup-number", t2,
+			typedField("numeric_key", typedSint(500))),
+		newEvent("dedup-case-lower", "dedup-case", t1,
+			typedField("case_key", typedString("case"))),
+		newEvent("dedup-case-upper", "dedup-case", t2,
+			typedField("case_key", typedString("Case"))),
+
+		newEvent("dedup-list-good", "dedup-list", t2,
+			typedField("container_key", typedString("good"))),
+		newEvent("dedup-list-bad", "dedup-list", t1,
+			typedField("container_key", typedList(typedString("bad")))),
+		newEvent("dedup-empty-object-good", "dedup-empty-object", t2,
+			typedField("container_key", typedString("good"))),
+		newEvent("dedup-empty-object-bad", "dedup-empty-object", t1,
+			typedField("container_key", typedObject())),
+		newEvent("dedup-parent-good", "dedup-parent", t2,
+			typedField("container_key", typedString("good"))),
+		newEvent("dedup-parent-bad", "dedup-parent", t1,
+			typedField("container_key", typedObject(typedField("child", typedString("bad"))))),
+		newEvent("dedup-tenant-visible", "dedup-tenant", t2,
+			typedField("tenant_key", typedString("visible"))),
+	}
+	batch := ingest.StoreBatch{
+		TenantID: "tenant", CollectorID: "collector", BatchID: "dedup-batch", BatchSequence: 7,
+		SourceBatchSHA256: testSourceBatchDigest("dedup-batch"),
+		ReceivedAt:        indexTime,
+		Events:            events,
+	}
+	if _, err := store.Store(ctx, batch); err != nil {
+		t.Fatalf("store dedup fixtures: %v", err)
+	}
+	foreign := newEvent("dedup-tenant-hidden", "dedup-tenant", t3,
+		typedField("tenant_key", typedList(typedString("hidden"))))
+	foreign.TenantID = "other-tenant"
+	foreign.BatchID = "dedup-foreign-batch"
+	if _, err := store.Store(ctx, ingest.StoreBatch{
+		TenantID: "other-tenant", CollectorID: "collector", BatchID: "dedup-foreign-batch", BatchSequence: 8,
+		SourceBatchSHA256: testSourceBatchDigest("dedup-foreign-batch"),
+		ReceivedAt:        indexTime,
+		Events:            []*ingest.StoredEvent{foreign},
+	}); err != nil {
+		t.Fatalf("store cross-tenant dedup fixture: %v", err)
+	}
+	if err := connection.Exec(ctx, "OPTIMIZE TABLE open_splunk.events FINAL"); err != nil {
+		t.Fatalf("merge cross-tenant dedup fixtures: %v", err)
+	}
+	visibilityCutoff, err := store.VisibilityCutoff(ctx)
+	if err != nil {
+		t.Fatalf("capture dedup visibility cutoff: %v", err)
+	}
+	compile := func(source string) CompiledQuery {
+		return compileIntegrationSPL(t, source, indexTime.Add(10*time.Second), visibilityCutoff)
+	}
+	ids := func(source string) []string {
+		t.Helper()
+		query := compile(source + ` | table event_id`)
+		rows, queryErr := connection.Query(ctx, query.SQL, query.Args...)
+		if queryErr != nil {
+			t.Fatalf("execute dedup query %q: %v\nSQL: %s\nargs: %#v", source, queryErr, query.SQL, query.Args)
+		}
+		defer rows.Close()
+		var result []string
+		for rows.Next() {
+			var id string
+			if scanErr := rows.Scan(&id); scanErr != nil {
+				t.Fatalf("scan dedup query %q: %v", source, scanErr)
+			}
+			result = append(result, id)
+		}
+		if iterationErr := rows.Err(); iterationErr != nil {
+			t.Fatalf("iterate dedup query %q: %v", source, iterationErr)
+		}
+		return result
+	}
+	assertIDs := func(source string, want ...string) {
+		t.Helper()
+		if got := ids(source); !slices.Equal(got, want) {
+			t.Fatalf("dedup IDs for %q = %v, want %v", source, got, want)
+		}
+	}
+
+	baseOrder := `index=compiler source="dedup-order"`
+	assertIDs(baseOrder+` | dedup dedup_key`, "dedup-tie-z", "dedup-a-new", "dedup-b")
+	assertIDs(baseOrder+` | sort 0 +_time | dedup dedup_key`, "dedup-a-y", "dedup-b", "dedup-tie-z")
+	assertIDs(baseOrder+` | dedup 2 dedup_key`, "dedup-tie-z", "dedup-tie-a", "dedup-a-new", "dedup-b", "dedup-a-old")
+	assertIDs(baseOrder+` | dedup dedup_key, subkey`, "dedup-tie-z", "dedup-a-new", "dedup-b", "dedup-a-y")
+	assertIDs(baseOrder+` | dedup subkey | dedup dedup_key`, "dedup-tie-z", "dedup-a-new")
+	assertIDs(`index=compiler source="dedup-presence" | dedup optional_key`, "dedup-optional-empty", "dedup-optional-value")
+	assertIDs(`index=compiler source="dedup-number" | dedup numeric_key`, "dedup-number-int")
+	assertIDs(`index=compiler source="dedup-case" | dedup case_key`, "dedup-case-upper", "dedup-case-lower")
+	assertIDs(`index=compiler source="dedup-order" | fields event_id | dedup dedup_key`)
+	assertIDs(`index=compiler source="dedup-tenant" | dedup tenant_key`, "dedup-tenant-visible")
+
+	postStats := compile(baseOrder + ` | stats count BY dedup_key | sort 0 -count | dedup count | table dedup_key, count`)
+	postStatsRows, err := connection.Query(ctx, postStats.SQL, postStats.Args...)
+	if err != nil {
+		t.Fatalf("execute post-stats dedup: %v\nSQL: %s\nargs: %#v", err, postStats.SQL, postStats.Args)
+	}
+	var counts []uint64
+	for postStatsRows.Next() {
+		var key string
+		var count uint64
+		if scanErr := postStatsRows.Scan(&key, &count); scanErr != nil {
+			_ = postStatsRows.Close()
+			t.Fatalf("scan post-stats dedup: %v", scanErr)
+		}
+		counts = append(counts, count)
+	}
+	if err := postStatsRows.Err(); err != nil {
+		_ = postStatsRows.Close()
+		t.Fatalf("iterate post-stats dedup: %v", err)
+	}
+	if err := postStatsRows.Close(); err != nil {
+		t.Fatalf("close post-stats dedup: %v", err)
+	}
+	if !slices.Equal(counts, []uint64{3, 2, 1}) {
+		t.Fatalf("post-stats dedup counts = %v, want [3 2 1]", counts)
+	}
+
+	for _, source := range []string{"dedup-list", "dedup-empty-object", "dedup-parent"} {
+		query := compile(`index=compiler source="` + source + `" | dedup container_key | head 1`)
+		queryErr := executeCompiledExpectingNoRows(ctx, connection, query)
+		var exception *clickhousedriver.Exception
+		if !errors.As(queryErr, &exception) || exception.Code != 395 || !strings.Contains(exception.Message, UnsupportedDedupValueMarker) {
+			t.Fatalf("non-scalar dedup source %q error = %v, want guarded ClickHouse exception", source, queryErr)
+		}
+	}
+	// A missing first key must not hide an unsupported value in another key:
+	// validation covers the complete scoped input before eligibility filtering.
+	hiddenByMissing := compile(`index=compiler source="dedup-list" | dedup absent_key, container_key | head 1`)
+	hiddenErr := executeCompiledExpectingNoRows(ctx, connection, hiddenByMissing)
+	var hiddenException *clickhousedriver.Exception
+	if !errors.As(hiddenErr, &hiddenException) || hiddenException.Code != 395 ||
+		!strings.Contains(hiddenException.Message, UnsupportedDedupValueMarker) {
+		t.Fatalf("missing key hid unsupported dedup value: %v", hiddenErr)
 	}
 }
 

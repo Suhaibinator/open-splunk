@@ -348,6 +348,24 @@ func (*SortCommand) command()             {}
 func (*SortCommand) Name() string         { return "sort" }
 func (c *SortCommand) SourceRange() Range { return c.Range }
 
+// DedupField is one exact field in a deduplication key tuple.
+type DedupField struct {
+	Name  string
+	Range Range
+}
+
+// DedupCommand retains the first Count rows for each complete key tuple in
+// the ordering established by the preceding pipeline.
+type DedupCommand struct {
+	Count  uint64
+	Fields []DedupField
+	Range  Range
+}
+
+func (*DedupCommand) command()             {}
+func (*DedupCommand) Name() string         { return "dedup" }
+func (c *DedupCommand) SourceRange() Range { return c.Range }
+
 // LimitCommand implements head and tail.
 type LimitCommand struct {
 	CommandName string

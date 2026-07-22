@@ -17,6 +17,7 @@ const (
 	maxRenameAssignments  = 64
 	maxStatsAggregates    = 16
 	maxStatsGroupFields   = 16
+	maxDedupFields        = 16
 	maxWhereComparisons   = 32
 	maxScalarNestingDepth = 32
 )
@@ -146,6 +147,8 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseTableCommand(nameToken)
 	case "sort":
 		return p.parseSortCommand(nameToken)
+	case "dedup":
+		return p.parseDedupCommand(nameToken)
 	case "head", "tail":
 		return p.parseLimitCommand(name, nameToken)
 	case "stats":
@@ -895,6 +898,72 @@ func (p *parser) parseSortCommand(name token) (Command, error) {
 	}
 	if len(command.Fields) == 0 || lastWasComma {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "sort requires at least one field")
+	}
+	command.Range = Range{Start: name.range_.Start, End: end}
+	return command, nil
+}
+
+func (p *parser) parseDedupCommand(name token) (Command, error) {
+	unsupported := func(tok token, message string) (Command, error) {
+		return nil, &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_DEDUP_SYNTAX",
+			Message:     message,
+			Range:       tok.range_,
+			Suggestions: []string{"dedup field", "dedup 2 field1, field2"},
+		}
+	}
+	if p.atCommandEnd() {
+		return unsupported(p.current(), "dedup requires at least one exact field")
+	}
+
+	command := &DedupCommand{Count: 1}
+	first := p.current()
+	if first.kind == tokenWord && integerSyntax(first.text) {
+		count, err := strconv.ParseUint(first.text, 10, 64)
+		if err != nil || count == 0 {
+			return unsupported(first, "dedup count must be a positive unsigned 64-bit integer")
+		}
+		command.Count = count
+		p.advance()
+	}
+
+	end := name.range_.End
+	wantField := true
+	seen := make(map[string]struct{})
+	for !p.atCommandEnd() {
+		tok := p.current()
+		if tok.kind == tokenComma {
+			if wantField {
+				return unsupported(tok, "dedup requires an exact field before each comma")
+			}
+			wantField = true
+			p.advance()
+			continue
+		}
+		if tok.kind != tokenWord {
+			return unsupported(tok, "dedup supports unquoted exact field names only")
+		}
+		lower := strings.ToLower(tok.text)
+		if lower == "keepempty" || lower == "consecutive" || lower == "keepevents" || lower == "sortby" {
+			return unsupported(tok, fmt.Sprintf("dedup option %q is not supported", tok.text))
+		}
+		if strings.Contains(tok.text, "*") {
+			return unsupported(tok, "dedup wildcard fields are not supported")
+		}
+		if _, duplicate := seen[tok.text]; duplicate {
+			return unsupported(tok, fmt.Sprintf("dedup field %q is duplicated", tok.text))
+		}
+		if len(command.Fields) >= maxDedupFields {
+			return unsupported(tok, fmt.Sprintf("dedup supports at most %d fields", maxDedupFields))
+		}
+		seen[tok.text] = struct{}{}
+		command.Fields = append(command.Fields, DedupField{Name: tok.text, Range: tok.range_})
+		end = tok.range_.End
+		wantField = false
+		p.advance()
+	}
+	if len(command.Fields) == 0 || wantField {
+		return unsupported(p.current(), "dedup requires at least one exact field and cannot end with a comma")
 	}
 	command.Range = Range{Start: name.range_.Start, End: end}
 	return command, nil

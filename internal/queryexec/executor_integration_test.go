@@ -337,6 +337,26 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			})
 		}
 	})
+	t.Run("dedup pipeline through manager preserves deterministic winner", func(t *testing.T) {
+		job, page := queryIntegrationRunGradeThisSearchRange(
+			t, ctx, executor, gradeThisIndexTime, "queryexec-dedup-pipeline",
+			`index=gradethis message=heartbeat | dedup logger | table event_id, logger`,
+			gradeThisBase, gradeThisBase.Add(15*time.Minute),
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("dedup state = %v, failure=%#v", job.State, job.Failure)
+		}
+		queryIntegrationAssertColumns(t, page, []string{"event_id", "logger"})
+		if len(page.Rows) != 1 || page.TotalRows != 1 || !page.Complete {
+			t.Fatalf("dedup page = %#v, want one complete row", page)
+		}
+		if id, ok := page.Rows[0].Values[0].String(); !ok || id != "queryexec-gradethis-heartbeat-b" {
+			t.Fatalf("dedup winner = %q, %v", id, ok)
+		}
+		if logger, ok := page.Rows[0].Values[1].String(); !ok || logger != "health" {
+			t.Fatalf("dedup logger = %q, %v", logger, ok)
+		}
+	})
 	t.Run("extended event fields retain their types", func(t *testing.T) {
 		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
 			"queryexec-extended-values",
@@ -1010,13 +1030,15 @@ ORDER BY grid.number`,
 		}
 	})
 
-	t.Run("stats non-scalar marker is safely classified", func(t *testing.T) {
-		err := executor.Execute(ctx, clickhouse.CompiledQuery{
-			SQL:          `SELECT throwIf(toUInt8(1), '` + clickhouse.UnsupportedStatsByValueMarker + `') AS impossible`,
-			OutputFields: []string{"impossible"},
-		}, &fakeSink{})
-		if !errors.Is(err, searchjobs.ErrUnsupportedValue) || strings.Contains(err.Error(), clickhouse.UnsupportedStatsByValueMarker) {
-			t.Fatalf("non-scalar marker classification = %v", err)
+	t.Run("non-scalar markers are safely classified", func(t *testing.T) {
+		for _, marker := range []string{clickhouse.UnsupportedStatsByValueMarker, clickhouse.UnsupportedDedupValueMarker} {
+			err := executor.Execute(ctx, clickhouse.CompiledQuery{
+				SQL:          `SELECT throwIf(toUInt8(1), '` + marker + `') AS impossible`,
+				OutputFields: []string{"impossible"},
+			}, &fakeSink{})
+			if !errors.Is(err, searchjobs.ErrUnsupportedValue) || strings.Contains(err.Error(), marker) {
+				t.Fatalf("non-scalar marker %q classification = %v", marker, err)
+			}
 		}
 	})
 

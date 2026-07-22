@@ -138,6 +138,59 @@ func TestBuildAppliesSplunkDefaultSortLimitButHonorsSortZero(t *testing.T) {
 	}
 }
 
+func TestBuildDedupPreservesSchemaAndExactKeys(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count BY service, status | dedup 2 service status`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"service", "status", "count"}) {
+		t.Fatalf("output fields = %v, want schema preserved", logical.OutputFields)
+	}
+	dedup, ok := logical.Operators[len(logical.Operators)-1].(*Deduplicate)
+	if !ok || dedup.Count != 2 || len(dedup.Keys) != 2 || dedup.Keys[0].Name != "service" || dedup.Keys[1].Name != "status" {
+		t.Fatalf("last operator = %#v, want Deduplicate(2, service, status)", logical.Operators[len(logical.Operators)-1])
+	}
+}
+
+func TestBuildDedupDoesNotHideDownstreamIndexScope(t *testing.T) {
+	t.Parallel()
+
+	_, err := Build(
+		mustParse(t, `index=gradethis | dedup host | search index=secret`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	assertDiagnosticCode(t, err, "SPL_INDEX_FORBIDDEN")
+}
+
+func TestBuildDedupRejectsAmbiguousEventFieldsPayloadButAllowsClosedSchema(t *testing.T) {
+	t.Parallel()
+
+	_, err := Build(
+		mustParse(t, `index=gradethis | dedup fields`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	assertDiagnosticCode(t, err, "SPL_AMBIGUOUS_DEDUP_FIELD")
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count AS fields | dedup fields`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build(closed schema): %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"fields"}) {
+		t.Fatalf("closed output fields = %v, want [fields]", logical.OutputFields)
+	}
+	if _, ok := logical.Operators[len(logical.Operators)-1].(*Deduplicate); !ok {
+		t.Fatalf("last operator = %T, want *Deduplicate", logical.Operators[len(logical.Operators)-1])
+	}
+}
+
 func TestBuildStatsCountReplacesEventSchema(t *testing.T) {
 	t.Parallel()
 

@@ -737,13 +737,15 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 	if err := classifyQueryError(context.Background(), tooManyGroups); !errors.Is(err, searchjobs.ErrExecutionLimit) || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("group cap error = %v", err)
 	}
-	unsupported := &clickhousedriver.Exception{
-		Code:    395,
-		Name:    "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
-		Message: clickhouse.UnsupportedStatsByValueMarker + "; generated SQL contained secret",
-	}
-	if err := classifyQueryError(context.Background(), unsupported); !errors.Is(err, searchjobs.ErrUnsupportedValue) || strings.Contains(err.Error(), "secret") {
-		t.Fatalf("unsupported dynamic value error = %v", err)
+	for _, marker := range []string{clickhouse.UnsupportedStatsByValueMarker, clickhouse.UnsupportedDedupValueMarker} {
+		unsupported := &clickhousedriver.Exception{
+			Code:    395,
+			Name:    "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
+			Message: marker + "; generated SQL contained secret",
+		}
+		if err := classifyQueryError(context.Background(), unsupported); !errors.Is(err, searchjobs.ErrUnsupportedValue) || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("unsupported dynamic value marker %q error = %v", marker, err)
+		}
 	}
 	wrongCode := &clickhousedriver.Exception{Code: 241, Message: clickhouse.UnsupportedStatsByValueMarker}
 	if err := classifyQueryError(context.Background(), wrongCode); !errors.Is(err, searchjobs.ErrExecutionLimit) || errors.Is(err, searchjobs.ErrUnsupportedValue) {

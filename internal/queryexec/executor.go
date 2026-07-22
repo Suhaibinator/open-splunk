@@ -958,10 +958,11 @@ func classifyQueryError(ctx context.Context, err error) error {
 	}
 	var exception *clickhousedriver.Exception
 	if errors.As(err, &exception) {
-		if exception.Code == 395 && strings.Contains(exception.Message, clickhouse.UnsupportedStatsByValueMarker) {
-			// The compiler deliberately emits this stable marker when stats BY
-			// sees a dynamic non-scalar value. Do not retain any surrounding
-			// ClickHouse message, generated SQL, or storage detail.
+		if exception.Code == 395 && (strings.Contains(exception.Message, clickhouse.UnsupportedStatsByValueMarker) ||
+			strings.Contains(exception.Message, clickhouse.UnsupportedDedupValueMarker)) {
+			// The compiler deliberately emits stable markers when a scalar-only
+			// operation sees a dynamic non-scalar value. Do not retain any
+			// surrounding ClickHouse message, generated SQL, or storage detail.
 			return searchjobs.ErrUnsupportedValue
 		}
 		switch exception.Code {
