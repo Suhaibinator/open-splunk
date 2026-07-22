@@ -384,7 +384,6 @@ func sameAdmission(pending, terminal *opensplunkv1.SearchHistoryEntry) bool {
 		proto.Equal(pending.Definition, terminal.Definition) &&
 		proto.Equal(pending.Source, terminal.Source) &&
 		proto.Equal(pending.ResolvedTimeRange, terminal.ResolvedTimeRange) &&
-		slices.Equal(pending.EffectiveIndexScope, terminal.EffectiveIndexScope) &&
 		pending.CompilerVersion == terminal.CompilerVersion &&
 		proto.Equal(pending.CreatedAt, terminal.CreatedAt)
 }

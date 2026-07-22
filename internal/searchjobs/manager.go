@@ -33,6 +33,7 @@ const (
 	defaultMaxPageBytes           = 4 << 20
 	defaultMaxRuntime             = 2 * time.Minute
 	defaultSnapshotTimeout        = 10 * time.Second
+	defaultJournalTimeout         = 10 * time.Second
 	defaultMaxSPLBytes            = 64 << 10
 	defaultMaxScopeIndexes        = 256
 	defaultMaxIdentityBytes       = 1 << 10
@@ -88,6 +89,14 @@ var (
 	// ErrStorageUnavailable may be wrapped by an Executor. The manager maps it
 	// to a retryable safe failure and never exposes the wrapped storage details.
 	ErrStorageUnavailable = errors.New("search storage unavailable")
+	// ErrUnsupportedValue may be wrapped by an Executor when a supported SPL
+	// command encounters a runtime field value it cannot faithfully process.
+	// The manager maps it to a safe, non-retryable unsupported-SPL failure.
+	ErrUnsupportedValue = errors.New("search command encountered an unsupported field value")
+	// ErrJournalUnavailable means the durable job lifecycle journal could not
+	// admit a search. The underlying storage detail is deliberately available
+	// only through LastJournalError and Config.OnJournalError.
+	ErrJournalUnavailable = errors.New("search job journal unavailable")
 	// ErrExecutionLimit may be wrapped by an Executor when the storage engine
 	// enforces a configured read, memory, or result resource bound.
 	ErrExecutionLimit = errors.New("search execution resource limit exceeded")
@@ -103,7 +112,8 @@ type ResultSink interface {
 
 // Executor streams a compiled, fully scoped ClickHouse query into sink. It must
 // observe ctx cancellation and return promptly; errors may wrap
-// ErrStorageUnavailable when retrying against storage could succeed.
+// ErrStorageUnavailable when retrying against storage could succeed, or
+// ErrUnsupportedValue when a command cannot faithfully process a runtime value.
 type Executor interface {
 	Execute(context.Context, clickhouse.CompiledQuery, ResultSink) error
 }
@@ -122,6 +132,7 @@ type Snapshotter interface {
 type Config struct {
 	Executor               Executor
 	Snapshotter            Snapshotter
+	Journal                JobJournal
 	Compiler               clickhouse.Compiler
 	MaxConcurrent          int
 	MaxConcurrentReads     int
@@ -137,6 +148,7 @@ type Config struct {
 	MaxPageBytes           uint64
 	MaxRuntime             time.Duration
 	SnapshotTimeout        time.Duration
+	JournalTimeout         time.Duration
 	MaxSPLBytes            int
 	MaxScopeIndexes        int
 	RetentionTTL           time.Duration
@@ -144,22 +156,32 @@ type Config struct {
 	CleanupInterval        time.Duration
 	// Now and NewID may be called concurrently and must be safe for concurrent
 	// use. Returned strings and times are detached before they are retained.
-	Now         func() time.Time
-	NewID       func() string
-	CursorKey   []byte
-	CursorScope string
+	Now   func() time.Time
+	NewID func() string
+	// OnJournalError receives trusted operational details after either journal
+	// operation fails. At most one asynchronous hook call is in flight; further
+	// calls are coalesced into LastJournalError so a stuck hook cannot stall
+	// search workers or shutdown. It runs without manager or job locks, and a
+	// panic is contained.
+	OnJournalError func(error)
+	CursorKey      []byte
+	CursorScope    string
 }
 
 // Manager owns a bounded worker pool and retained in-memory result snapshots.
 type Manager struct {
 	mu                  sync.RWMutex
 	jobs                map[string]*jobEntry
+	reservedIDs         map[string]struct{}
 	closed              bool
 	nextGeneration      uint64
 	nextCapacityCleanup time.Time
 
 	executor         Executor
 	snapshotter      Snapshotter
+	journal          JobJournal
+	journalTimeout   time.Duration
+	onJournalError   func(error)
 	compiler         clickhouse.Compiler
 	maxRows          uint64
 	maxBytes         uint64
@@ -196,30 +218,34 @@ type Manager struct {
 	admissionWG       sync.WaitGroup
 	closeOnce         sync.Once
 
-	budgetMu      sync.Mutex
-	retainedBytes uint64
-	metadataBytes uint64
-	cleanupMu     sync.Mutex
+	budgetMu             sync.Mutex
+	retainedBytes        uint64
+	metadataBytes        uint64
+	cleanupMu            sync.Mutex
+	journalErrMu         sync.RWMutex
+	lastJournalErr       *JournalError
+	journalErrorHookGate chan struct{}
 }
 
 type jobEntry struct {
 	mu sync.RWMutex
 
-	job               Job
-	authorizedIndexes []string
-	rows              []ResultRow
-	history           []State
-	resultGeneration  uint64
-	generation        uint64
-	retainedBytes     uint64
-	metadataBytes     uint64
-	schemaBytes       uint64
-	expiredAt         time.Time
-	ctx               context.Context
-	cancel            context.CancelFunc
-	queuePrev         *jobEntry
-	queueNext         *jobEntry
-	queued            bool
+	job                    Job
+	authorizedIndexes      []string
+	rows                   []ResultRow
+	history                []State
+	resultGeneration       uint64
+	generation             uint64
+	retainedBytes          uint64
+	metadataBytes          uint64
+	schemaBytes            uint64
+	expiredAt              time.Time
+	ctx                    context.Context
+	cancel                 context.CancelFunc
+	queuePrev              *jobEntry
+	queueNext              *jobEntry
+	queued                 bool
+	journalFinalizeClaimed bool
 }
 
 // New constructs and starts a search job manager.
@@ -233,7 +259,7 @@ func New(config Config) (*Manager, error) {
 	if config.MaxConcurrent < 0 || config.MaxConcurrentReads < 0 || config.MaxConcurrentSnapshots < 0 || config.MaxQueued < 0 || config.MaxJobs < 0 || config.DefaultPageSize < 0 || config.MaxPageSize < 0 || config.MaxSPLBytes < 0 || config.MaxScopeIndexes < 0 {
 		return nil, errors.New("create search job manager: limits cannot be negative")
 	}
-	if config.MaxRuntime < 0 || config.SnapshotTimeout < 0 || config.RetentionTTL < 0 || config.ExpiredRetention < 0 {
+	if config.MaxRuntime < 0 || config.SnapshotTimeout < 0 || config.JournalTimeout < 0 || config.RetentionTTL < 0 || config.ExpiredRetention < 0 {
 		return nil, errors.New("create search job manager: retention durations cannot be negative")
 	}
 	if config.MaxConcurrent > maximumConcurrent || config.MaxConcurrentReads > maximumConcurrentReads || config.MaxConcurrentSnapshots > maximumConcurrentSnapshots || config.MaxQueued > maximumQueued || config.MaxJobs > maximumJobs {
@@ -317,6 +343,10 @@ func New(config Config) (*Manager, error) {
 	if snapshotTimeout == 0 {
 		snapshotTimeout = defaultSnapshotTimeout
 	}
+	journalTimeout := config.JournalTimeout
+	if journalTimeout == 0 {
+		journalTimeout = defaultJournalTimeout
+	}
 	maxSPLBytes := config.MaxSPLBytes
 	if maxSPLBytes == 0 {
 		maxSPLBytes = defaultMaxSPLBytes
@@ -365,34 +395,39 @@ func New(config Config) (*Manager, error) {
 
 	managerContext, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
-		jobs:             make(map[string]*jobEntry),
-		executor:         config.Executor,
-		snapshotter:      config.Snapshotter,
-		compiler:         config.Compiler,
-		maxRows:          maxRows,
-		maxBytes:         maxBytes,
-		maxJobs:          maxJobs,
-		maxTotalBytes:    maxTotalBytes,
-		maxMetadataBytes: maxMetadataBytes,
-		defaultPageSize:  pageSize,
-		maxPageSize:      maxPageSize,
-		maxPageBytes:     maxPageBytes,
-		maxRuntime:       maxRuntime,
-		snapshotTimeout:  snapshotTimeout,
-		maxSPLBytes:      maxSPLBytes,
-		maxScopeIndexes:  maxScopeIndexes,
-		retentionTTL:     retentionTTL,
-		expiredRetention: expiredRetention,
-		cleanupInterval:  cleanupInterval,
-		now:              now,
-		newID:            newID,
-		cursorKey:        cursorKey,
-		cursorScope:      cursorScope,
-		readGate:         make(chan struct{}, maxConcurrentReads),
-		snapshotGate:     make(chan struct{}, maxConcurrentSnapshots),
-		ctx:              managerContext,
-		cancel:           cancel,
-		queueCapacity:    maxQueued,
+		jobs:                 make(map[string]*jobEntry),
+		reservedIDs:          make(map[string]struct{}),
+		executor:             config.Executor,
+		snapshotter:          config.Snapshotter,
+		journal:              config.Journal,
+		journalTimeout:       journalTimeout,
+		onJournalError:       config.OnJournalError,
+		journalErrorHookGate: make(chan struct{}, 1),
+		compiler:             config.Compiler,
+		maxRows:              maxRows,
+		maxBytes:             maxBytes,
+		maxJobs:              maxJobs,
+		maxTotalBytes:        maxTotalBytes,
+		maxMetadataBytes:     maxMetadataBytes,
+		defaultPageSize:      pageSize,
+		maxPageSize:          maxPageSize,
+		maxPageBytes:         maxPageBytes,
+		maxRuntime:           maxRuntime,
+		snapshotTimeout:      snapshotTimeout,
+		maxSPLBytes:          maxSPLBytes,
+		maxScopeIndexes:      maxScopeIndexes,
+		retentionTTL:         retentionTTL,
+		expiredRetention:     expiredRetention,
+		cleanupInterval:      cleanupInterval,
+		now:                  now,
+		newID:                newID,
+		cursorKey:            cursorKey,
+		cursorScope:          cursorScope,
+		readGate:             make(chan struct{}, maxConcurrentReads),
+		snapshotGate:         make(chan struct{}, maxConcurrentSnapshots),
+		ctx:                  managerContext,
+		cancel:               cancel,
+		queueCapacity:        maxQueued,
 	}
 	manager.queueCond = sync.NewCond(&manager.mu)
 	manager.wg.Add(maxConcurrent)
@@ -438,6 +473,10 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	if id == "" || len(id) > 256 || !utf8.ValidString(id) {
 		return Job{}, errors.New("create search job: ID generator returned an invalid ID")
 	}
+	if err := manager.reserveJobID(id); err != nil {
+		return Job{}, err
+	}
+	defer manager.releaseJobID(id)
 	metadataBytes, err := retainedJobMetadataReservation(id, request)
 	if err != nil || metadataBytes > manager.maxMetadataBytes {
 		return Job{}, ErrCapacity
@@ -481,6 +520,24 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 		cancel:            cancel,
 	}
 	created := cloneJob(entry.job)
+	journalAdmitted := false
+	if manager.journal != nil {
+		if err := manager.admitJournal(ctx, created); err != nil {
+			cancel()
+			return Job{}, err
+		}
+		journalAdmitted = true
+	}
+	memoryCommitted := false
+	defer func() {
+		if journalAdmitted && !memoryCommitted {
+			// Close may begin after durable admission but before the job can be
+			// published. Complete the durable lifecycle as canceled while this
+			// Create call still counts as an active admission, so Close waits.
+			entry.cancel()
+			manager.finishCanceled(entry, manager.nowUTC())
+		}
+	}()
 
 	manager.mu.Lock()
 	if manager.closed {
@@ -513,6 +570,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	manager.jobs[id] = entry
 	manager.enqueueLocked(entry)
 	metadataCommitted = true
+	memoryCommitted = true
 	manager.queueCond.Signal()
 	manager.mu.Unlock()
 	return created, nil
@@ -602,6 +660,130 @@ func (manager *Manager) releaseAdmission() {
 	manager.mu.Lock()
 	manager.pendingAdmissions--
 	manager.mu.Unlock()
+}
+
+// reserveJobID prevents two concurrent calls from durably admitting the same
+// generated ID before either call publishes its in-memory entry. Without this
+// reservation, an idempotent journal could accept both and a losing Create
+// could incorrectly finalize the winner's attempt during compensation.
+func (manager *Manager) reserveJobID(id string) error {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.closed {
+		return ErrClosed
+	}
+	if _, exists := manager.jobs[id]; exists {
+		return fmt.Errorf("create search job: duplicate ID %q", id)
+	}
+	if _, exists := manager.reservedIDs[id]; exists {
+		return fmt.Errorf("create search job: duplicate ID %q", id)
+	}
+	manager.reservedIDs[id] = struct{}{}
+	return nil
+}
+
+func (manager *Manager) releaseJobID(id string) {
+	manager.mu.Lock()
+	delete(manager.reservedIDs, id)
+	manager.mu.Unlock()
+}
+
+func (manager *Manager) admitJournal(ctx context.Context, job Job) error {
+	journalParent, cancelForManager := context.WithCancel(ctx)
+	stopManagerCancellation := context.AfterFunc(manager.ctx, cancelForManager)
+	journalContext, cancelTimeout := context.WithTimeout(journalParent, manager.journalTimeout)
+	defer func() {
+		cancelTimeout()
+		stopManagerCancellation()
+		cancelForManager()
+	}()
+	err := invokeJournal(func() error {
+		return manager.journal.Admit(journalContext, cloneJob(job))
+	})
+	if err == nil {
+		return nil
+	}
+	if callerErr := ctx.Err(); callerErr != nil {
+		return callerErr
+	}
+	if manager.ctx.Err() != nil {
+		return ErrClosed
+	}
+	manager.reportJournalError(JournalOperationAdmit, job, err)
+	return fmt.Errorf("create search job: %w", ErrJournalUnavailable)
+}
+
+func (manager *Manager) finalizeJournal(job Job) {
+	journalContext, cancel := context.WithTimeout(context.Background(), manager.journalTimeout)
+	defer cancel()
+	manager.finalizeJournalWithContext(journalContext, job)
+}
+
+func (manager *Manager) finalizeJournalWithContext(ctx context.Context, job Job) {
+	if err := invokeJournal(func() error {
+		return manager.journal.Finalize(ctx, cloneJob(job))
+	}); err != nil {
+		// Finalize is deliberately not retried here: a callback may have
+		// committed before returning an ambiguous error. The durable pending
+		// record remains available for idempotent startup recovery, while the
+		// in-memory terminal outcome is never rolled back.
+		manager.reportJournalError(JournalOperationFinalize, job, err)
+	}
+}
+
+func invokeJournal(callback func() error) (returnedErr error) {
+	defer func() {
+		if recover() != nil {
+			// Never retain the panic value: it may contain a storage secret.
+			returnedErr = errors.New("search job journal callback panicked")
+		}
+	}()
+	return callback()
+}
+
+func (manager *Manager) reportJournalError(operation JournalOperation, job Job, cause error) {
+	journalErr := &JournalError{
+		Operation: operation,
+		JobID:     strings.Clone(job.ID),
+		State:     job.State,
+		Err:       cause,
+	}
+	stored := *journalErr
+	manager.journalErrMu.Lock()
+	manager.lastJournalErr = &stored
+	manager.journalErrMu.Unlock()
+	if manager.onJournalError == nil {
+		return
+	}
+	select {
+	case manager.journalErrorHookGate <- struct{}{}:
+		hookErr := *journalErr
+		go func() {
+			defer func() {
+				_ = recover()
+				<-manager.journalErrorHookGate
+			}()
+			manager.onJournalError(&hookErr)
+		}()
+	default:
+		// LastJournalError remains lossless for the newest failure even when a
+		// previous optional notification hook is stuck or still running.
+	}
+}
+
+// LastJournalError returns the most recently observed journal callback
+// failure, or nil. Finalize failures do not alter a terminal job and are not
+// retried by Manager; the durable journal is expected to recover its pending
+// attempts at process startup.
+func (manager *Manager) LastJournalError() error {
+	manager.journalErrMu.RLock()
+	defer manager.journalErrMu.RUnlock()
+	if manager.lastJournalErr == nil {
+		return nil
+	}
+	copy := *manager.lastJournalErr
+	copy.JobID = strings.Clone(copy.JobID)
+	return &copy
 }
 
 func (manager *Manager) validateRequestSize(request CreateRequest) error {
@@ -888,10 +1070,18 @@ func (manager *Manager) Close() error {
 		manager.cancel()
 		manager.admissionWG.Wait()
 		now := manager.nowUTC()
+		journalContext, cancelJournal := context.WithTimeout(context.Background(), manager.journalTimeout)
 		for _, entry := range entries {
 			entry.cancel()
-			manager.finishCanceled(entry, now)
+			terminal, finalize := manager.finishCanceledAndClaim(entry, now)
+			if finalize {
+				// All shutdown-owned callbacks share one deadline. A degraded
+				// journal therefore bounds the whole queued drain instead of
+				// consuming JournalTimeout once per retained job.
+				manager.finalizeJournalWithContext(journalContext, terminal)
+			}
 		}
+		cancelJournal()
 		manager.wg.Wait()
 		for _, entry := range entries {
 			entry.mu.Lock()
@@ -1066,25 +1256,34 @@ func (manager *Manager) run(entry *jobEntry) {
 }
 
 func (manager *Manager) advance(entry *jobEntry, from, to State, update func(*Job)) bool {
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	if entry.job.State != from {
-		return false
+	var terminal Job
+	var finalize bool
+	advanced := func() bool {
+		entry.mu.Lock()
+		defer entry.mu.Unlock()
+		if entry.job.State != from {
+			return false
+		}
+		if entry.ctx.Err() != nil {
+			manager.finishCanceledLocked(entry, manager.nowUTC())
+			terminal, finalize = manager.claimTerminalJournalLocked(entry)
+			return false
+		}
+		entry.job.State = to
+		entry.job.Version++
+		entry.history = append(entry.history, to)
+		if to == StateParsing && entry.job.StartedAt.IsZero() {
+			entry.job.StartedAt = manager.nowUTC()
+		}
+		if update != nil {
+			update(&entry.job)
+		}
+		return true
+	}()
+	if finalize {
+		manager.finalizeJournal(terminal)
 	}
-	if entry.ctx.Err() != nil {
-		manager.finishCanceledLocked(entry, manager.nowUTC())
-		return false
-	}
-	entry.job.State = to
-	entry.job.Version++
-	entry.history = append(entry.history, to)
-	if to == StateParsing && entry.job.StartedAt.IsZero() {
-		entry.job.StartedAt = manager.nowUTC()
-	}
-	if update != nil {
-		update(&entry.job)
-	}
-	return true
+	return advanced
 }
 
 func (manager *Manager) executionFailed(entry *jobEntry, err error) {
@@ -1106,6 +1305,8 @@ func (manager *Manager) executionFailed(entry *jobEntry, err error) {
 		failure = Failure{Code: FailureTimeout, Message: "search execution timed out", Retryable: true}
 	case errors.Is(err, ErrStorageUnavailable):
 		failure = Failure{Code: FailureStorageUnavailable, Message: "search storage is unavailable", Retryable: true}
+	case errors.Is(err, ErrUnsupportedValue):
+		failure = Failure{Code: FailureUnsupportedSPL, Message: "search command does not support one or more field values"}
 	case errors.Is(err, ErrInvalidResult), errors.Is(err, ErrStreamClosed):
 		failure = Failure{Code: FailureInternal, Message: "search execution returned an invalid result"}
 	default:
@@ -1129,8 +1330,12 @@ func (manager *Manager) failOrCancel(entry *jobEntry, failure Failure, now time.
 			entry.history = append(entry.history, StateFailed)
 		}
 	}
+	terminal, finalize := manager.claimTerminalJournalLocked(entry)
 	entry.mu.Unlock()
 	entry.cancel()
+	if finalize {
+		manager.finalizeJournal(terminal)
+	}
 }
 
 func (manager *Manager) finishCompleted(entry *jobEntry, now time.Time) {
@@ -1147,16 +1352,29 @@ func (manager *Manager) finishCompleted(entry *jobEntry, now time.Time) {
 			entry.history = append(entry.history, StateCompleted)
 		}
 	}
+	terminal, finalize := manager.claimTerminalJournalLocked(entry)
 	entry.mu.Unlock()
 	entry.cancel()
+	if finalize {
+		manager.finalizeJournal(terminal)
+	}
 }
 
 func (manager *Manager) finishCanceled(entry *jobEntry, now time.Time) {
+	terminal, finalize := manager.finishCanceledAndClaim(entry, now)
+	if finalize {
+		manager.finalizeJournal(terminal)
+	}
+}
+
+func (manager *Manager) finishCanceledAndClaim(entry *jobEntry, now time.Time) (Job, bool) {
 	entry.mu.Lock()
 	if !entry.job.State.terminal() {
 		manager.finishCanceledLocked(entry, now)
 	}
+	terminal, finalize := manager.claimTerminalJournalLocked(entry)
 	entry.mu.Unlock()
+	return terminal, finalize
 }
 
 func (manager *Manager) finishCanceledLocked(entry *jobEntry, now time.Time) {
@@ -1166,6 +1384,22 @@ func (manager *Manager) finishCanceledLocked(entry *jobEntry, now time.Time) {
 	entry.job.ExpiresAt = now.Add(manager.retentionTTL)
 	manager.clearResultsLocked(entry)
 	entry.history = append(entry.history, StateCanceled)
+}
+
+// claimTerminalJournalLocked atomically assigns the sole Finalize callback for
+// the first completed, failed, or canceled transition. The caller must invoke
+// finalizeJournal only after releasing entry.mu.
+func (manager *Manager) claimTerminalJournalLocked(entry *jobEntry) (Job, bool) {
+	if manager.journal == nil || entry.journalFinalizeClaimed {
+		return Job{}, false
+	}
+	switch entry.job.State {
+	case StateCompleted, StateFailed, StateCanceled:
+		entry.journalFinalizeClaimed = true
+		return cloneJob(entry.job), true
+	default:
+		return Job{}, false
+	}
 }
 
 func (manager *Manager) maybeExpire(entry *jobEntry, now time.Time) {

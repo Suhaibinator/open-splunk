@@ -109,7 +109,14 @@ func TestManagerLifecycleUsesImmutableAuthorizedSnapshot(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("executor did not start")
 	}
-	wantPrefix := []any{"tenant-1", "alpha", earliest.UTC(), latest.UTC(), now.UTC(), uint64(41)}
+	wantPrefix := []any{
+		"tenant-1",
+		"alpha",
+		earliest.UTC().Format("2006-01-02 15:04:05.000000000"),
+		latest.UTC().Format("2006-01-02 15:04:05.000000000"),
+		now.UTC().Truncate(time.Millisecond).Format("2006-01-02 15:04:05.000"),
+		uint64(41),
+	}
 	if len(compiled.Args) < len(wantPrefix) || !reflect.DeepEqual(compiled.Args[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("compiled scope args = %#v, want prefix %#v", compiled.Args, wantPrefix)
 	}
@@ -1230,6 +1237,7 @@ func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 		executorErr error
 		wantCode    FailureCode
 		wantText    string
+		wantRetry   bool
 	}{
 		{
 			name:     "parse",
@@ -1249,6 +1257,14 @@ func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 			executorErr: fmt.Errorf("tcp://admin:password@db.internal: %w", ErrStorageUnavailable),
 			wantCode:    FailureStorageUnavailable,
 			wantText:    "storage is unavailable",
+			wantRetry:   true,
+		},
+		{
+			name:        "unsupported runtime field value",
+			request:     validRequest(),
+			executorErr: fmt.Errorf("generated SQL and password: %w", ErrUnsupportedValue),
+			wantCode:    FailureUnsupportedSPL,
+			wantText:    "does not support one or more field values",
 		},
 		{
 			name:        "execution",
@@ -1297,7 +1313,7 @@ func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 				t.Fatal(err)
 			}
 			failed := waitForState(t, manager, job.ID, StateFailed)
-			if failed.Failure == nil || failed.Failure.Code != test.wantCode || !strings.Contains(failed.Failure.Message, test.wantText) {
+			if failed.Failure == nil || failed.Failure.Code != test.wantCode || !strings.Contains(failed.Failure.Message, test.wantText) || failed.Failure.Retryable != test.wantRetry {
 				t.Fatalf("failure = %#v, want code %v containing %q", failed.Failure, test.wantCode, test.wantText)
 			}
 			for _, secret := range []string{"password", "generated SQL", "db.internal"} {

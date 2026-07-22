@@ -1,6 +1,7 @@
 package searchjobs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -136,6 +137,71 @@ type Job struct {
 	StartedAt        time.Time
 	FinishedAt       time.Time
 	ExpiresAt        time.Time
+}
+
+// JobJournal durably brackets one asynchronous search attempt. Admit is
+// invoked synchronously with the fully constructed queued snapshot before the
+// job can become visible or executable. Finalize is invoked exactly once with
+// the first completed, failed, or canceled snapshot for every job whose Admit
+// returned nil. Implementations must observe context cancellation and should
+// make both operations idempotent so process-level recovery can safely retry
+// persistence outside this manager. Calls for different jobs may run
+// concurrently, so implementations must also be concurrency-safe.
+//
+// Both snapshots are deep detached copies. Implementations may retain or
+// mutate them and may call non-blocking Manager inspection methods without
+// deadlocking. They must not call Close from inside a callback because Close
+// intentionally waits for active admissions and workers, including the caller.
+type JobJournal interface {
+	Admit(context.Context, Job) error
+	Finalize(context.Context, Job) error
+}
+
+// JournalOperation identifies the durable lifecycle operation that failed.
+type JournalOperation uint8
+
+const (
+	JournalOperationInvalid JournalOperation = iota
+	JournalOperationAdmit
+	JournalOperationFinalize
+)
+
+// String returns the stable lowercase spelling of a journal operation.
+func (operation JournalOperation) String() string {
+	switch operation {
+	case JournalOperationAdmit:
+		return "admit"
+	case JournalOperationFinalize:
+		return "finalize"
+	default:
+		return "invalid"
+	}
+}
+
+// JournalError is the trusted operational detail retained when a journal
+// callback fails. Create returns only ErrJournalUnavailable for an Admit
+// failure so storage details cannot cross the API boundary; operators can
+// inspect this value through Config.OnJournalError or Manager.LastJournalError.
+type JournalError struct {
+	Operation JournalOperation
+	JobID     string
+	State     State
+	Err       error
+}
+
+func (journalErr *JournalError) Error() string {
+	if journalErr == nil {
+		return "search job journal error"
+	}
+	return fmt.Sprintf("search job journal %s failed for job %q in state %s: %v", journalErr.Operation, journalErr.JobID, journalErr.State, journalErr.Err)
+}
+
+// Unwrap exposes the underlying error to trusted observability code.
+func (journalErr *JournalError) Unwrap() error {
+	if journalErr == nil {
+		return nil
+	}
+	return journalErr.Err
 }
 
 // ValueKind distinguishes every result value the search job layer preserves.

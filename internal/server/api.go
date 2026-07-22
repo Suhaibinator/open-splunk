@@ -83,6 +83,9 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 	if strings.TrimSpace(spl) == "" {
 		return nil, badRequestError("SPL is required")
 	}
+	if strings.IndexByte(spl, 0) >= 0 {
+		return nil, badRequestError("SPL cannot contain NUL bytes")
+	}
 	if err := rejectUnsupportedCreateFields(input, definition); err != nil {
 		return nil, badRequestError(err.Error())
 	}
@@ -396,7 +399,7 @@ func mapSearchJobError(err error) error {
 		return router.NewHTTPError(http.StatusRequestEntityTooLarge, "search request is too large")
 	case errors.Is(err, searchjobs.ErrQueueFull):
 		return router.NewHTTPError(http.StatusTooManyRequests, "search queue is full")
-	case errors.Is(err, searchjobs.ErrCapacity), errors.Is(err, searchjobs.ErrClosed), errors.Is(err, searchjobs.ErrStorageUnavailable):
+	case errors.Is(err, searchjobs.ErrCapacity), errors.Is(err, searchjobs.ErrClosed), errors.Is(err, searchjobs.ErrStorageUnavailable), errors.Is(err, searchjobs.ErrJournalUnavailable):
 		return unavailableError("search service is unavailable")
 	case errors.Is(err, context.DeadlineExceeded):
 		return err

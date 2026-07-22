@@ -24,11 +24,13 @@ import (
 )
 
 const (
-	backendIntegrationFlag = "OPEN_SPLUNK_BACKEND_INTEGRATION"
-	verticalIndexName      = "vertical"
-	verticalTenantID       = "vertical-tenant"
-	verticalEventCount     = uint64(4)
-	redactionSentinel      = "vertical-secret-must-not-survive"
+	backendIntegrationFlag         = "OPEN_SPLUNK_BACKEND_INTEGRATION"
+	verticalIndexName              = "vertical"
+	verticalTenantID               = "vertical-tenant"
+	verticalEventCount             = uint64(4)
+	redactionSentinel              = "vertical-secret-must-not-survive"
+	verticalSearchSPL              = " \nindex=vertical | table message status duration_ms api_key _raw\t"
+	splCompatibilityVersionForTest = "tier-1-dev"
 )
 
 // TestBackendVertical exercises the deployed backend boundary rather than a
@@ -379,7 +381,7 @@ func runSearch(t *testing.T, ctx context.Context, client *http.Client, baseURL s
 	var created opensplunkv1.CreateSearchJobResponse
 	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/create", &opensplunkv1.CreateSearchJobRequest{
 		Definition: &opensplunkv1.SearchDefinition{
-			Spl: "index=vertical | table message status duration_ms api_key _raw",
+			Spl: verticalSearchSPL,
 			TimeRange: &opensplunkv1.TimeRangeSpec{
 				Earliest: &earliest,
 				Latest:   &latest,
@@ -411,6 +413,7 @@ func runSearch(t *testing.T, ctx context.Context, client *http.Client, baseURL s
 				SearchJobId: jobID,
 				Page:        &opensplunkv1.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
 			}, &results)
+			waitForTerminalHistory(t, ctx, client, baseURL, jobID)
 			return &results
 		case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED,
 			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED,
@@ -422,6 +425,58 @@ func runSearch(t *testing.T, ctx context.Context, client *http.Client, baseURL s
 			t.Fatalf("wait for search: %v", ctx.Err())
 		case <-deadline.C:
 			t.Fatal("wait for search: timed out")
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForTerminalHistory(t *testing.T, ctx context.Context, client *http.Client, baseURL, jobID string) {
+	t.Helper()
+	payload, err := proto.Marshal(&opensplunkv1.GetSearchHistoryEntryRequest{SearchJobId: jobID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/v1/search/history/get", bytes.NewReader(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/x-protobuf")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatalf("get search history: %v", err)
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		_ = response.Body.Close()
+		if readErr != nil {
+			t.Fatalf("read search history: %v", readErr)
+		}
+		if response.StatusCode == http.StatusOK {
+			var got opensplunkv1.GetSearchHistoryEntryResponse
+			if err := proto.Unmarshal(body, &got); err != nil {
+				t.Fatalf("decode search history: %v", err)
+			}
+			entry := got.GetHistoryEntry()
+			if entry.GetSearchJobId() != jobID || entry.GetDefinition().GetSpl() != verticalSearchSPL ||
+				entry.GetFinalState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
+				entry.GetProducedRows() != verticalEventCount || entry.GetCompilerVersion() != splCompatibilityVersionForTest ||
+				len(entry.GetEffectiveIndexScope()) != 1 || entry.GetEffectiveIndexScope()[0] != verticalIndexName {
+				t.Fatalf("terminal search history = %+v", entry)
+			}
+			return
+		}
+		if response.StatusCode != http.StatusNotFound {
+			t.Fatalf("get search history status = %d, body = %q", response.StatusCode, body)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for search history: %v", ctx.Err())
+		case <-deadline.C:
+			t.Fatal("wait for search history: timed out")
 		case <-ticker.C:
 		}
 	}

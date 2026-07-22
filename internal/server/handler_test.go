@@ -377,6 +377,9 @@ func TestCreateSearchRejectsUnsupportedSemanticsBeforeCreatingJob(t *testing.T) 
 		{name: "visualization", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
 			request.Definition.Visualization = &opensplunkv1.VisualizationSpec{}
 		}},
+		{name: "SPL NUL", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
+			request.Definition.Spl = "index=main\x00 | head 1"
+		}},
 	}
 	for _, test := range tests {
 		test := test
@@ -425,6 +428,7 @@ func TestSearchErrorMappingDoesNotExposeStorageDetails(t *testing.T) {
 		{searchjobs.ErrResultsNotReady, http.StatusConflict},
 		{searchjobs.ErrInvalidCursor, http.StatusBadRequest},
 		{searchjobs.ErrClosed, http.StatusServiceUnavailable},
+		{searchjobs.ErrJournalUnavailable, http.StatusServiceUnavailable},
 	}
 	for _, test := range statusTests {
 		jobs.getErr = test.err

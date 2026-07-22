@@ -36,6 +36,7 @@ const (
 	shutdownTimeout       = 35 * time.Second
 	defaultIndexRetention = 30 * 24 * time.Hour
 	defaultOwnerID        = "single-user"
+	splCompatibility      = "tier-1-dev"
 )
 
 type options struct {
@@ -182,9 +183,17 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create query executor: %w", err)
 	}
+	jobJournal, err := searchhistory.NewJobJournal(searchHistory, splCompatibility)
+	if err != nil {
+		return fmt.Errorf("create search-history job journal: %w", err)
+	}
 	jobs, err := searchjobs.New(searchjobs.Config{
 		Executor:    executor,
 		Snapshotter: visibilitySnapshotter{sequencer: sequencer},
+		Journal:     jobJournal,
+		OnJournalError: func(err error) {
+			log.Printf("persist search-job history: %v", err)
+		},
 		Compiler: internalclickhouse.Compiler{
 			Database: "open_splunk",
 			Table:    "events",
@@ -216,7 +225,7 @@ func run() error {
 		Bootstrap: server.BootstrapConfig{
 			ServerVersion:           "dev",
 			APIVersion:              "v1",
-			SPLCompatibilityVersion: "tier-1-dev",
+			SPLCompatibilityVersion: splCompatibility,
 		},
 	})
 	if err != nil {
