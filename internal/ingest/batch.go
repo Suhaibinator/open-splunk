@@ -311,9 +311,51 @@ func boundedSizeAdd(total *uint64, value, limit uint64) bool {
 }
 
 func responseWithBatchReject(rejection *opensplunkv1.BatchReject) *opensplunkv1.CollectResponse {
-	return &opensplunkv1.CollectResponse{
+	// Collect adds a uint64 sequence and a protobuf Timestamp after this helper
+	// returns. Their maximum valid wire encoding is below 64 bytes, including
+	// tags and lengths, so reserve that space inside the transport ceiling.
+	const batchRejectResponseBudget = HardMaxCollectResponseBytes - 64
+	response := &opensplunkv1.CollectResponse{
 		Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: rejection},
 	}
+	if uint64(proto.Size(response)) <= batchRejectResponseBudget || rejection == nil {
+		return response
+	}
+
+	// An invalid event contributes at most one violation, but a maximum-size
+	// batch can still make their expanded nested field paths larger than the
+	// response transport limit. Retain the largest ordered prefix that fits and
+	// append an explicit summary marker. Binary search avoids repeatedly sizing
+	// every prefix under adversarial input.
+	summary := &opensplunkv1.FieldViolation{
+		FieldPath: "violations",
+		Code:      "truncated",
+		Message:   "additional field violations omitted to stay within the protocol response limit",
+	}
+	build := func(prefix int) *opensplunkv1.CollectResponse {
+		bounded := &opensplunkv1.BatchReject{
+			BatchId:       rejection.GetBatchId(),
+			BatchSequence: rejection.GetBatchSequence(),
+			Code:          rejection.GetCode(),
+			Message:       rejection.GetMessage(),
+			Violations:    make([]*opensplunkv1.FieldViolation, prefix+1),
+		}
+		copy(bounded.Violations, rejection.GetViolations()[:prefix])
+		bounded.Violations[prefix] = summary
+		return &opensplunkv1.CollectResponse{
+			Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: bounded},
+		}
+	}
+	low, high := 0, len(rejection.GetViolations())
+	for low < high {
+		middle := low + (high-low+1)/2
+		if uint64(proto.Size(build(middle))) <= batchRejectResponseBudget {
+			low = middle
+		} else {
+			high = middle - 1
+		}
+	}
+	return build(low)
 }
 
 func responseWithRetryBatch(

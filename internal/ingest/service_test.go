@@ -57,7 +57,7 @@ func TestCollectAuthenticatesBearerTokenAndNegotiatesReady(t *testing.T) {
 
 func TestCollectRejectsMissingOrInvalidAuthentication(t *testing.T) {
 	authorizer := AuthorizerFunc(func(context.Context, string) (Authorization, error) {
-		return Authorization{}, errors.New("bad token")
+		return Authorization{}, ErrUnauthorized
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
 
@@ -69,6 +69,51 @@ func TestCollectRejectsMissingOrInvalidAuthentication(t *testing.T) {
 				t.Fatalf("Recv() error = %v, want Unauthenticated", err)
 			}
 		})
+	}
+}
+
+func TestCollectReportsAuthenticationBackendFailureAsUnavailable(t *testing.T) {
+	t.Parallel()
+	backendErr := errors.New("database unavailable")
+	authorizer := AuthorizerFunc(func(context.Context, string) (Authorization, error) {
+		return Authorization{}, backendErr
+	})
+	harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
+	stream := harness.stream(t, "Bearer syntactically-valid")
+	if _, err := stream.Recv(); status.Code(err) != codes.Unavailable {
+		t.Fatalf("Recv() error = %v, want Unavailable", err)
+	}
+}
+
+func TestCollectLimitsConcurrentStreamsPerCredential(t *testing.T) {
+	t.Parallel()
+	config := testServiceConfig()
+	config.MaxStreamsPerSubject = 1
+	harness := newServiceHarness(t, config, staticTestAuthorizer(), acceptingStore())
+
+	first := harness.stream(t, "Bearer good-token")
+	sendHello(t, first, 1, 1, 0)
+	_ = recvResponse(t, first)
+	second := harness.stream(t, "Bearer good-token")
+	if _, err := second.Recv(); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("second stream error = %v, want ResourceExhausted", err)
+	}
+	if err := first.Send(&opensplunkv1.CollectRequest{
+		StreamSequence: 2,
+		SentAt:         timestamppb.New(validationTestNow),
+		Payload: &opensplunkv1.CollectRequest_Goodbye{Goodbye: &opensplunkv1.CollectorGoodbye{
+			Reason: opensplunkv1.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Recv(); !errors.Is(err, io.EOF) {
+		t.Fatalf("first stream close error = %v, want EOF", err)
+	}
+	third := harness.stream(t, "Bearer good-token")
+	sendHello(t, third, 1, 1, 0)
+	if ready := recvResponse(t, third).GetReady(); ready == nil {
+		t.Fatal("released per-credential stream capacity was not reusable")
 	}
 }
 
@@ -191,7 +236,7 @@ func TestCollectReauthorizesEveryBatch(t *testing.T) {
 	authorizer := AuthorizerFunc(func(context.Context, string) (Authorization, error) {
 		authorizerCalls++
 		if authorizerCalls > 1 {
-			return Authorization{}, errors.New("token revoked")
+			return Authorization{}, ErrUnauthorized
 		}
 		return Authorization{
 			SubjectID:         "token-1",
@@ -957,7 +1002,7 @@ func testServiceConfig() Config {
 func staticTestAuthorizer() Authorizer {
 	return AuthorizerFunc(func(_ context.Context, token string) (Authorization, error) {
 		if token != "good-token" {
-			return Authorization{}, errors.New("invalid token")
+			return Authorization{}, ErrUnauthorized
 		}
 		return Authorization{
 			SubjectID:         "token-1",

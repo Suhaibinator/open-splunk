@@ -16,22 +16,33 @@ const (
 	// HardMax* bounds are protocol and resource-safety ceilings. Deployment
 	// configuration may tighten them, but must never advertise or accept values
 	// which exceed the durable ingestion format's assumptions.
-	HardMaxBatchEvents     uint32 = 1_000
-	HardMaxBatchBytes      uint64 = 8 << 20
-	HardMaxEventBytes      uint64 = 1 << 20
-	HardMaxFields          uint32 = 1_024
-	HardMaxNestingDepth    uint32 = 16
-	HardMaxFieldNameBytes  uint32 = 256
-	HardMaxIDBytes         uint32 = 128
-	HardMaxInFlightBatches uint32 = 64
+	HardMaxBatchEvents       uint32 = 1_000
+	HardMaxBatchBytes        uint64 = 8 << 20
+	HardMaxEventBytes        uint64 = 1 << 20
+	HardMaxFields            uint32 = 1_024
+	HardMaxNestingDepth      uint32 = 16
+	HardMaxFieldNameBytes    uint32 = 256
+	HardMaxIDBytes           uint32 = 128
+	HardMaxInFlightBatches   uint32 = 64
+	HardMaxStreamsPerSubject uint32 = 16
 	// HardMaxDurable*Bytes mirror the bounded server-owned replay formats. A
 	// source batch can grow during mandatory redaction and rejection reporting,
 	// so normalized representations are checked independently.
 	HardMaxDurableOutboxBytes   uint64 = 16 << 20
 	HardMaxDurableMetadataBytes uint64 = 1 << 20
+	// HardMaxCollectResponseBytes bounds any server-to-collector protobuf
+	// before gRPC compression. Oversized diagnostic lists are summarized so a
+	// valid permanent rejection can always reach the collector.
+	HardMaxCollectResponseBytes uint64 = 2 << 20
 	HardMaxEventAge                    = 365 * 24 * time.Hour
 	HardMaxFutureSkew                  = 5 * time.Minute
 )
+
+// ErrUnauthorized is returned by Authorizer only for invalid, expired,
+// revoked, or otherwise forbidden collector credentials. Operational backend
+// failures must retain their distinct error so the gRPC boundary can return a
+// retryable Unavailable status instead of falsely reporting token revocation.
+var ErrUnauthorized = errors.New("ingest: collector credential is unauthorized")
 
 // Limits are hard ingestion limits advertised during collector negotiation and
 // independently enforced against untrusted wire data.

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -184,6 +185,9 @@ func TestBootstrapUsesProtobufAndLiveIndexes(t *testing.T) {
 	unmarshalResponse(t, response, &decoded)
 	if decoded.GetServerVersion() != "test" || decoded.GetLimits().GetMaximumPageSize() != defaultMaximumPageSize {
 		t.Fatalf("bootstrap = %+v", &decoded)
+	}
+	if !slices.Contains(decoded.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_SAVED_SEARCHES) {
+		t.Fatalf("bootstrap features = %v, want saved searches", decoded.GetFeatures())
 	}
 	if len(decoded.GetIndexes()) != 1 || decoded.GetIndexes()[0].GetName() != "main" {
 		t.Fatalf("indexes = %+v", decoded.GetIndexes())
@@ -689,6 +693,9 @@ func TestSPAFallbackNeverShadowsAPI(t *testing.T) {
 
 func newTestHandler(t *testing.T, config Config) http.Handler {
 	t.Helper()
+	if config.SavedSearches == nil {
+		config.SavedSearches = &fakeSavedSearches{}
+	}
 	handler, err := NewHandler(config)
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)

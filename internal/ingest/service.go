@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -24,30 +26,32 @@ import (
 
 // Config controls collector protocol negotiation and ingestion enforcement.
 type Config struct {
-	Limits             Limits
-	Redaction          RedactionPolicy
-	ProtocolMajor      uint32
-	ProtocolMinor      uint32
-	ServerInstanceID   string
-	ServerVersion      string
-	HeartbeatInterval  time.Duration
-	MaxInFlightBatches uint32
-	DefaultRetryAfter  time.Duration
-	Clock              func() time.Time
-	NewStreamID        func() string
+	Limits               Limits
+	Redaction            RedactionPolicy
+	ProtocolMajor        uint32
+	ProtocolMinor        uint32
+	ServerInstanceID     string
+	ServerVersion        string
+	HeartbeatInterval    time.Duration
+	MaxInFlightBatches   uint32
+	MaxStreamsPerSubject uint32
+	DefaultRetryAfter    time.Duration
+	Clock                func() time.Time
+	NewStreamID          func() string
 }
 
 func DefaultConfig() Config {
 	return Config{
-		Limits:             DefaultLimits(),
-		ProtocolMajor:      1,
-		ProtocolMinor:      0,
-		ServerVersion:      "development",
-		HeartbeatInterval:  15 * time.Second,
-		MaxInFlightBatches: 1,
-		DefaultRetryAfter:  time.Second,
-		Clock:              time.Now,
-		NewStreamID:        randomID,
+		Limits:               DefaultLimits(),
+		ProtocolMajor:        1,
+		ProtocolMinor:        0,
+		ServerVersion:        "development",
+		HeartbeatInterval:    15 * time.Second,
+		MaxInFlightBatches:   1,
+		MaxStreamsPerSubject: 4,
+		DefaultRetryAfter:    time.Second,
+		Clock:                time.Now,
+		NewStreamID:          randomID,
 	}
 }
 
@@ -55,10 +59,12 @@ func DefaultConfig() Config {
 type Service struct {
 	opensplunkv1.UnimplementedCollectorIngestServiceServer
 
-	config     Config
-	validator  *Validator
-	authorizer Authorizer
-	store      EventStore
+	config           Config
+	validator        *Validator
+	authorizer       Authorizer
+	store            EventStore
+	streamMu         sync.Mutex
+	streamsBySubject map[string]uint32
 }
 
 func NewService(config Config, authorizer Authorizer, store EventStore) (*Service, error) {
@@ -80,6 +86,9 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 	}
 	if config.MaxInFlightBatches == 0 {
 		config.MaxInFlightBatches = defaults.MaxInFlightBatches
+	}
+	if config.MaxStreamsPerSubject == 0 {
+		config.MaxStreamsPerSubject = defaults.MaxStreamsPerSubject
 	}
 	if config.DefaultRetryAfter == 0 {
 		config.DefaultRetryAfter = defaults.DefaultRetryAfter
@@ -105,6 +114,9 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 	if config.MaxInFlightBatches > HardMaxInFlightBatches {
 		return nil, fmt.Errorf("max in-flight batches cannot exceed hard limit %d", HardMaxInFlightBatches)
 	}
+	if config.MaxStreamsPerSubject > HardMaxStreamsPerSubject {
+		return nil, fmt.Errorf("max streams per subject cannot exceed hard limit %d", HardMaxStreamsPerSubject)
+	}
 	if !validIdentifier(config.ServerInstanceID, config.Limits.MaxIDBytes) {
 		return nil, errors.New("server instance ID has an invalid format")
 	}
@@ -113,10 +125,11 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 		return nil, err
 	}
 	return &Service{
-		config:     config,
-		validator:  validator,
-		authorizer: authorizer,
-		store:      store,
+		config:           config,
+		validator:        validator,
+		authorizer:       authorizer,
+		store:            store,
+		streamsBySubject: make(map[string]uint32),
 	}, nil
 }
 
@@ -127,8 +140,13 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 	}
 	authorization, err := s.authorizer.Authorize(stream.Context(), token)
 	if err != nil {
-		return status.Error(codes.Unauthenticated, "collector authentication failed")
+		return authorizationRPCError(err, "collector authentication failed")
 	}
+	subjectKey := authorizationSubjectKey(authorization.SubjectID, token)
+	if !s.acquireSubjectStream(subjectKey) {
+		return status.Error(codes.ResourceExhausted, "collector credential stream capacity is exhausted")
+	}
+	defer s.releaseSubjectStream(subjectKey)
 	authorizedIndexes := normalizedAuthorizedIndexes(authorization.AuthorizedIndexes, s.config.Limits.MaxIDBytes)
 	authorizedSet := make(map[string]struct{}, len(authorizedIndexes))
 	for _, index := range authorizedIndexes {
@@ -241,10 +259,38 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 	}
 }
 
+func authorizationSubjectKey(subjectID, token string) string {
+	if subjectID != "" {
+		return "subject:" + subjectID
+	}
+	digest := sha256.Sum256([]byte(token))
+	return "credential:" + string(digest[:])
+}
+
+func (s *Service) acquireSubjectStream(subject string) bool {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.streamsBySubject[subject] >= s.config.MaxStreamsPerSubject {
+		return false
+	}
+	s.streamsBySubject[subject]++
+	return true
+}
+
+func (s *Service) releaseSubjectStream(subject string) {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.streamsBySubject[subject] <= 1 {
+		delete(s.streamsBySubject, subject)
+		return
+	}
+	s.streamsBySubject[subject]--
+}
+
 func (s *Service) refreshAuthorization(ctx context.Context, token string, state *streamState) error {
 	authorization, err := s.authorizer.Authorize(ctx, token)
 	if err != nil {
-		return status.Error(codes.Unauthenticated, "collector authentication is no longer valid")
+		return authorizationRPCError(err, "collector authentication is no longer valid")
 	}
 	if authorization.CollectorID != "" && authorization.CollectorID != state.collectorID {
 		return status.Error(codes.PermissionDenied, "token is not authorized for this collector_id")
@@ -266,6 +312,17 @@ func (s *Service) refreshAuthorization(ctx context.Context, token string, state 
 	state.authorization = authorization
 	state.authorizedIndexes = authorizedSet
 	return nil
+}
+
+func authorizationRPCError(err error, unauthorizedMessage string) error {
+	switch {
+	case errors.Is(err, ErrUnauthorized):
+		return status.Error(codes.Unauthenticated, unauthorizedMessage)
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return status.FromContextError(err).Err()
+	default:
+		return status.Error(codes.Unavailable, "collector authentication service is unavailable")
+	}
 }
 
 func (s *Service) validateRequestEnvelope(request *opensplunkv1.CollectRequest, expectedSequence uint64) error {

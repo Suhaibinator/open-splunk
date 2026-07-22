@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -17,8 +18,10 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 const (
@@ -54,6 +57,19 @@ type IndexCatalog interface {
 	GetIndexByName(context.Context, string) (control.Index, error)
 }
 
+// SavedSearches is the owner-scoped saved-search surface exposed to the
+// browser API. savedobjects.Store satisfies this interface directly. Keeping
+// the authenticated owner outside every protobuf request prevents callers
+// from selecting another user's namespace in the trusted single-user release.
+type SavedSearches interface {
+	Create(context.Context, savedobjects.AccessScope, *opensplunkv1.SavedSearchDefinition) (*opensplunkv1.SavedSearch, error)
+	Get(context.Context, savedobjects.AccessScope, string) (*opensplunkv1.SavedSearch, error)
+	List(context.Context, savedobjects.AccessScope, savedobjects.ListRequest) (savedobjects.ListResult, error)
+	Update(context.Context, savedobjects.AccessScope, string, uint64, *opensplunkv1.SavedSearchDefinition, *fieldmaskpb.FieldMask) (*opensplunkv1.SavedSearch, error)
+	Duplicate(context.Context, savedobjects.AccessScope, string, string, *string) (*opensplunkv1.SavedSearch, error)
+	Delete(context.Context, savedobjects.AccessScope, string, uint64) error
+}
+
 // BootstrapConfig contains build information and static workspace summaries.
 // Index summaries are always loaded from IndexCatalog so authorization and the
 // UI bootstrap cannot drift apart.
@@ -81,6 +97,7 @@ type BootstrapConfig struct {
 type Config struct {
 	SearchJobs                 SearchJobs
 	Indexes                    IndexCatalog
+	SavedSearches              SavedSearches
 	WebUI                      fs.FS
 	Bootstrap                  BootstrapConfig
 	OwnerID                    string
@@ -96,6 +113,7 @@ type Config struct {
 type apiHandler struct {
 	jobs              SearchJobs
 	indexes           IndexCatalog
+	savedSearches     SavedSearches
 	ownerID           string
 	tenantID          string
 	maximumPageSize   uint32
@@ -114,6 +132,9 @@ func NewHandler(config Config) (http.Handler, error) {
 	}
 	if config.Indexes == nil {
 		return nil, errors.New("create server handler: index catalog is required")
+	}
+	if isNilDependency(config.SavedSearches) {
+		return nil, errors.New("create server handler: saved search service is required")
 	}
 	if config.WebUI == nil {
 		return nil, errors.New("create server handler: web UI filesystem is required")
@@ -165,7 +186,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	if tenantID == "" {
 		tenantID = "default"
 	}
-	if len(ownerID) > maximumIdentityBytes || len(tenantID) > maximumIdentityBytes || !utf8.ValidString(ownerID) || !utf8.ValidString(tenantID) {
+	if validateBoundedIdentifier(ownerID, maximumSavedSearchOwnerBytes, false) != nil || len(tenantID) > maximumIdentityBytes || !utf8.ValidString(tenantID) {
 		return nil, errors.New("create server handler: owner or tenant identity is invalid")
 	}
 	bootstrap, err := normalizeBootstrap(config.Bootstrap)
@@ -180,6 +201,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	api := &apiHandler{
 		jobs:              config.SearchJobs,
 		indexes:           config.Indexes,
+		savedSearches:     config.SavedSearches,
 		ownerID:           ownerID,
 		tenantID:          tenantID,
 		maximumPageSize:   pageSize,
@@ -190,11 +212,17 @@ func NewHandler(config Config) (http.Handler, error) {
 	}
 	apiRouter := api.newRouter(requestBytes, routeTimeout)
 	apiRoutes := map[string]struct{}{
-		"/api/v1/system/bootstrap":    {},
-		"/api/v1/search/jobs/create":  {},
-		"/api/v1/search/jobs/get":     {},
-		"/api/v1/search/jobs/results": {},
-		"/api/v1/search/jobs/cancel":  {},
+		"/api/v1/system/bootstrap":         {},
+		"/api/v1/search/jobs/create":       {},
+		"/api/v1/search/jobs/get":          {},
+		"/api/v1/search/jobs/results":      {},
+		"/api/v1/search/jobs/cancel":       {},
+		"/api/v1/saved-searches/create":    {},
+		"/api/v1/saved-searches/get":       {},
+		"/api/v1/saved-searches/list":      {},
+		"/api/v1/saved-searches/update":    {},
+		"/api/v1/saved-searches/duplicate": {},
+		"/api/v1/saved-searches/delete":    {},
 	}
 	apiBoundary := exactAPIRoutes(apiRouter, apiRoutes)
 
@@ -211,6 +239,19 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.Handle("/api/", apiBoundary)
 	mux.Handle("/", spa)
 	return mux, nil
+}
+
+func isNilDependency(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 func exactAPIRoutes(next http.Handler, routes map[string]struct{}) http.Handler {
@@ -259,7 +300,10 @@ func normalizeBootstrap(config BootstrapConfig) (BootstrapConfig, error) {
 		result.SearchResultRetention = defaultResultRetention
 	}
 	if len(result.Features) == 0 {
-		result.Features = []opensplunkv1.ServerFeature{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH}
+		result.Features = []opensplunkv1.ServerFeature{
+			opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
+			opensplunkv1.ServerFeature_SERVER_FEATURE_SAVED_SEARCHES,
+		}
 	} else {
 		result.Features = slices.Clone(result.Features)
 	}
@@ -309,6 +353,36 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 			Path: "/search/jobs/cancel", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.CancelSearchJobRequest, *opensplunkv1.CancelSearchJobResponse](), Handler: handler.cancelSearchJob,
 			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.CancelSearchJobRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+		}),
+		router.NewGenericRouteDefinition[*opensplunkv1.CreateSavedSearchRequest, *opensplunkv1.CreateSavedSearchResponse, string, struct{}](router.RouteConfig[*opensplunkv1.CreateSavedSearchRequest, *opensplunkv1.CreateSavedSearchResponse]{
+			Path: "/saved-searches/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: codec.NewProtoCodec[*opensplunkv1.CreateSavedSearchRequest, *opensplunkv1.CreateSavedSearchResponse](), Handler: handler.createSavedSearch,
+			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.CreateSavedSearchRequest],
+		}),
+		router.NewGenericRouteDefinition[*opensplunkv1.GetSavedSearchRequest, *opensplunkv1.GetSavedSearchResponse, string, struct{}](router.RouteConfig[*opensplunkv1.GetSavedSearchRequest, *opensplunkv1.GetSavedSearchResponse]{
+			Path: "/saved-searches/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: codec.NewProtoCodec[*opensplunkv1.GetSavedSearchRequest, *opensplunkv1.GetSavedSearchResponse](), Handler: handler.getSavedSearch,
+			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.GetSavedSearchRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+		}),
+		router.NewGenericRouteDefinition[*opensplunkv1.ListSavedSearchesRequest, *serializedSavedSearchListResponse, string, struct{}](router.RouteConfig[*opensplunkv1.ListSavedSearchesRequest, *serializedSavedSearchListResponse]{
+			Path: "/saved-searches/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: newSerializedSavedSearchListCodec(), Handler: handler.listSavedSearches,
+			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.ListSavedSearchesRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+		}),
+		router.NewGenericRouteDefinition[*opensplunkv1.UpdateSavedSearchRequest, *opensplunkv1.UpdateSavedSearchResponse, string, struct{}](router.RouteConfig[*opensplunkv1.UpdateSavedSearchRequest, *opensplunkv1.UpdateSavedSearchResponse]{
+			Path: "/saved-searches/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: codec.NewProtoCodec[*opensplunkv1.UpdateSavedSearchRequest, *opensplunkv1.UpdateSavedSearchResponse](), Handler: handler.updateSavedSearch,
+			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.UpdateSavedSearchRequest],
+		}),
+		router.NewGenericRouteDefinition[*opensplunkv1.DuplicateSavedSearchRequest, *opensplunkv1.DuplicateSavedSearchResponse, string, struct{}](router.RouteConfig[*opensplunkv1.DuplicateSavedSearchRequest, *opensplunkv1.DuplicateSavedSearchResponse]{
+			Path: "/saved-searches/duplicate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: codec.NewProtoCodec[*opensplunkv1.DuplicateSavedSearchRequest, *opensplunkv1.DuplicateSavedSearchResponse](), Handler: handler.duplicateSavedSearch,
+			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.DuplicateSavedSearchRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+		}),
+		router.NewGenericRouteDefinition[*opensplunkv1.DeleteSavedSearchRequest, *opensplunkv1.DeleteSavedSearchResponse, string, struct{}](router.RouteConfig[*opensplunkv1.DeleteSavedSearchRequest, *opensplunkv1.DeleteSavedSearchResponse]{
+			Path: "/saved-searches/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: codec.NewProtoCodec[*opensplunkv1.DeleteSavedSearchRequest, *opensplunkv1.DeleteSavedSearchResponse](), Handler: handler.deleteSavedSearch,
+			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.DeleteSavedSearchRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
 

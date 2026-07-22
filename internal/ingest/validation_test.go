@@ -291,6 +291,11 @@ func TestNewServiceRejectsLimitsAboveHardCeiling(t *testing.T) {
 	if _, err := NewService(config, staticTestAuthorizer(), acceptingStore()); err == nil {
 		t.Fatal("NewService() accepted an unsafe in-flight batch limit")
 	}
+	config = testServiceConfig()
+	config.MaxStreamsPerSubject = HardMaxStreamsPerSubject + 1
+	if _, err := NewService(config, staticTestAuthorizer(), acceptingStore()); err == nil {
+		t.Fatal("NewService() accepted an unsafe per-subject stream limit")
+	}
 }
 
 func TestEventIDDigestUsesLengthPrefixedEventIDs(t *testing.T) {
