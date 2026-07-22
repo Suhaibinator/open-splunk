@@ -100,6 +100,26 @@ func (*Extend) operator()                 {}
 func (*Extend) LogicalName() string       { return "Extend" }
 func (op *Extend) SourceRange() spl.Range { return op.Range }
 
+// RenameAssignment moves one exact logical field to another. Assignments are
+// ordered because SPL evaluates multiple pairs from left to right.
+type RenameAssignment struct {
+	Source      FieldRef
+	Destination FieldRef
+	Range       spl.Range
+}
+
+// Rename changes field names without changing row cardinality. A destination
+// replaces any field already using that name; a missing source nulls an
+// existing destination and otherwise has no effect.
+type Rename struct {
+	Assignments []RenameAssignment
+	Range       spl.Range
+}
+
+func (*Rename) operator()                 {}
+func (*Rename) LogicalName() string       { return "Rename" }
+func (op *Rename) SourceRange() spl.Range { return op.Range }
+
 // AggregateFunction identifies a backend-neutral aggregation.
 type AggregateFunction uint8
 

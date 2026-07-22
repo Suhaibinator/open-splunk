@@ -115,6 +115,228 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 
 	eventIndexTime := queryIntegrationInsertEvent(t, ctx, connection)
 	timechartBase, timechartIndexTime := queryIntegrationInsertTimechartEvents(t, ctx, connection)
+	gradeThisBase, gradeThisIndexTime, gradeThisTraceID := queryIntegrationInsertGradeThisEvents(t, ctx, connection)
+	t.Run("GradeThis product plan compatibility corpus", func(t *testing.T) {
+		tests := []struct {
+			name        string
+			source      string
+			wantColumns []string
+			wantRows    int
+			assert      func(*testing.T, searchjobs.ResultPage)
+		}{
+			{
+				name: "follow one request",
+				source: `index=gradethis trace_id="` + gradeThisTraceID + `"
+| sort _time
+| table _time level layer logger message`,
+				wantColumns: []string{"_time", "level", "layer", "logger", "message"},
+				wantRows:    2,
+				assert: func(t *testing.T, page searchjobs.ResultPage) {
+					first, firstOK := page.Rows[0].Values[0].Time()
+					second, secondOK := page.Rows[1].Values[0].Time()
+					if !firstOK || !secondOK || !first.Equal(gradeThisBase.Add(time.Minute)) || !second.Equal(gradeThisBase.Add(2*time.Minute)) {
+						t.Fatalf("trace order = %v, %v (valid %v, %v)", first, second, firstOK, secondOK)
+					}
+				},
+			},
+			{
+				name: "errors and warnings",
+				source: `index=gradethis (level=ERROR OR level=WARN)
+| sort -_time`,
+				wantRows: 5,
+				assert: func(t *testing.T, page searchjobs.ResultPage) {
+					timeColumn := queryIntegrationColumnIndex(t, page, "_time")
+					serviceColumn := queryIntegrationColumnIndex(t, page, "service")
+					if !page.Schema.Columns[serviceColumn].Nullable {
+						t.Fatalf("service schema = %#v, want nullable", page.Schema.Columns[serviceColumn])
+					}
+					nullServices := 0
+					for index := 1; index < len(page.Rows); index++ {
+						previous, previousOK := page.Rows[index-1].Values[timeColumn].Time()
+						current, currentOK := page.Rows[index].Values[timeColumn].Time()
+						if !previousOK || !currentOK || previous.Before(current) {
+							t.Fatalf("descending _time rows %d and %d = %v, %v", index-1, index, previous, current)
+						}
+					}
+					for _, row := range page.Rows {
+						if row.Values[serviceColumn].IsNull() {
+							nullServices++
+						}
+					}
+					if nullServices != 1 {
+						t.Fatalf("null service rows = %d, want 1", nullServices)
+					}
+				},
+			},
+			{
+				name: "known raw error fragment",
+				source: `index=gradethis "connection refused"
+| table _time level logger message trace_id`,
+				wantColumns: []string{"_time", "level", "logger", "message", "trace_id"},
+				wantRows:    1,
+				assert: func(t *testing.T, page searchjobs.ResultPage) {
+					message, messageOK := page.Rows[0].Values[3].String()
+					traceID, traceOK := page.Rows[0].Values[4].String()
+					if !messageOK || message != "connection refused" || !traceOK || traceID != gradeThisTraceID {
+						t.Fatalf("raw match message=%q (%v), trace_id=%q (%v)", message, messageOK, traceID, traceOK)
+					}
+				},
+			},
+			{
+				name: "severity counts",
+				source: `index=gradethis
+| stats count by level
+| sort -count`,
+				wantColumns: []string{"level", "count"},
+				wantRows:    3,
+				assert: func(t *testing.T, page searchjobs.ResultPage) {
+					counts := make(map[string]uint64, len(page.Rows))
+					for _, row := range page.Rows {
+						level, levelOK := row.Values[0].String()
+						count, countOK := row.Values[1].Unsigned()
+						if !levelOK || !countOK {
+							t.Fatalf("severity row = %#v", row)
+						}
+						counts[level] = count
+					}
+					if counts["ERROR"] != 4 || counts["INFO"] != 4 || counts["WARN"] != 1 {
+						t.Fatalf("severity counts = %#v", counts)
+					}
+				},
+			},
+			{
+				name: "frequent errors",
+				source: `index=gradethis level=ERROR
+| stats count by logger, message
+| sort -count
+| head 20`,
+				wantColumns: []string{"logger", "message", "count"},
+				wantRows:    2,
+				assert: func(t *testing.T, page searchjobs.ResultPage) {
+					logger, loggerOK := page.Rows[0].Values[0].String()
+					message, messageOK := page.Rows[0].Values[1].String()
+					count, countOK := page.Rows[0].Values[2].Unsigned()
+					if !loggerOK || logger != "http" || !messageOK || message != "Request metrics" || !countOK || count != 3 {
+						t.Fatalf("most frequent error = %#v", page.Rows[0])
+					}
+				},
+			},
+			{
+				name: "volume by severity",
+				source: `index=gradethis
+| timechart span=5m count by level`,
+				wantColumns: []string{"_time", "ERROR", "INFO", "WARN"},
+				wantRows:    3,
+				assert: func(t *testing.T, page searchjobs.ResultPage) {
+					queryIntegrationAssertTimechartMatrix(t, page, gradeThisBase, 5*time.Minute, map[string][]uint64{
+						"ERROR": {1, 2, 1},
+						"INFO":  {1, 1, 2},
+						"WARN":  {1, 0, 0},
+					})
+				},
+			},
+			{
+				name: "server errors by route",
+				source: `index=gradethis message="Request metrics" status>=500
+| timechart span=5m count by path`,
+				wantColumns: []string{"_time", "/fast", "/slow"},
+				wantRows:    3,
+				assert: func(t *testing.T, page searchjobs.ResultPage) {
+					queryIntegrationAssertTimechartMatrix(t, page, gradeThisBase, 5*time.Minute, map[string][]uint64{
+						"/fast": {0, 0, 1},
+						"/slow": {0, 2, 0},
+					})
+				},
+			},
+			{
+				name: "responses by route and status",
+				source: `index=gradethis message="Request metrics"
+| stats count by path, status
+| sort -count`,
+				wantColumns: []string{"path", "status", "count"},
+				wantRows:    4,
+				assert: func(t *testing.T, page searchjobs.ResultPage) {
+					counts := make(map[string]uint64, len(page.Rows))
+					for _, row := range page.Rows {
+						path, pathOK := row.Values[0].String()
+						status, statusOK := row.Values[1].String()
+						count, countOK := row.Values[2].Unsigned()
+						if !pathOK || !statusOK || !countOK {
+							t.Fatalf("route/status row = %#v", row)
+						}
+						counts[path+"\x00"+status] = count
+					}
+					want := map[string]uint64{
+						"/slow\x00503": 1,
+						"/slow\x00500": 1,
+						"/fast\x00200": 1,
+						"/fast\x00502": 1,
+					}
+					if len(counts) != len(want) {
+						t.Fatalf("route/status counts = %#v, want %#v", counts, want)
+					}
+					for key, wantCount := range want {
+						if counts[key] != wantCount {
+							t.Fatalf("route/status counts = %#v, want %#v", counts, want)
+						}
+					}
+				},
+			},
+			{
+				name: "slow routes",
+				source: `index=gradethis message="Request metrics"
+| eval duration_ms=tonumber(replace(duration, "ms$", ""))
+| stats count p95(duration_ms) as p95_ms by path
+| where p95_ms > 500`,
+				wantColumns: []string{"path", "count", "p95_ms"},
+				wantRows:    1,
+				assert: func(t *testing.T, page searchjobs.ResultPage) {
+					path, pathOK := page.Rows[0].Values[0].String()
+					count, countOK := page.Rows[0].Values[1].Unsigned()
+					p95, p95OK := page.Rows[0].Values[2].Double()
+					if !pathOK || path != "/slow" || !countOK || count != 2 || !p95OK || p95 <= 500 {
+						t.Fatalf("slow route row = %#v", page.Rows[0])
+					}
+				},
+			},
+			{
+				name: "common messages",
+				source: `index=gradethis
+| top limit=20 message`,
+				wantColumns: []string{"message", "count", "percent"},
+				wantRows:    5,
+				assert: func(t *testing.T, page searchjobs.ResultPage) {
+					message, messageOK := page.Rows[0].Values[0].String()
+					count, countOK := page.Rows[0].Values[1].Unsigned()
+					if !messageOK || message != "Request metrics" || !countOK || count != 4 {
+						t.Fatalf("top message row = %#v", page.Rows[0])
+					}
+				},
+			},
+		}
+
+		for index, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				job, page := queryIntegrationRunGradeThisSearchRange(
+					t, ctx, executor, gradeThisIndexTime,
+					fmt.Sprintf("queryexec-gradethis-%02d", index), test.source,
+					gradeThisBase, gradeThisBase.Add(15*time.Minute),
+				)
+				if job.State != searchjobs.StateCompleted {
+					t.Fatalf("state = %v, failure=%#v", job.State, job.Failure)
+				}
+				if test.wantColumns != nil {
+					queryIntegrationAssertColumns(t, page, test.wantColumns)
+				}
+				if len(page.Rows) != test.wantRows || page.TotalRows != uint64(test.wantRows) || !page.Complete {
+					t.Fatalf("rows=%d total=%d complete=%v, want %d complete rows", len(page.Rows), page.TotalRows, page.Complete, test.wantRows)
+				}
+				if test.assert != nil {
+					test.assert(t, page)
+				}
+			})
+		}
+	})
 	t.Run("extended event fields retain their types", func(t *testing.T) {
 		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
 			"queryexec-extended-values",
@@ -261,6 +483,141 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 		if count, ok := page.Rows[0].Values[1].Unsigned(); !ok || count != 1 {
 			t.Fatalf("post-stats count = %d, %v", count, ok)
+		}
+	})
+
+	t.Run("rename dynamic field through manager", func(t *testing.T) {
+		defaultJob, defaultPage := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-rename-default-output", `index=main | rename path AS route`,
+		)
+		if defaultJob.State != searchjobs.StateCompleted {
+			t.Fatalf("rename default state = %v, failure=%#v", defaultJob.State, defaultJob.Failure)
+		}
+		for _, column := range defaultPage.Schema.Columns {
+			if column.Name == "fields" {
+				t.Fatalf("rename default schema leaked stale fields payload: %#v", defaultPage.Schema)
+			}
+		}
+		routeColumn := queryIntegrationColumnIndex(t, defaultPage, "route")
+		if len(defaultPage.Rows) != 1 {
+			t.Fatalf("rename default rows = %d, want 1", len(defaultPage.Rows))
+		}
+		if route, ok := defaultPage.Rows[0].Values[routeColumn].String(); !ok || route != "/manager" {
+			t.Fatalf("renamed default route = %q, %v", route, ok)
+		}
+
+		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-rename-dynamic",
+			`index=main | rename path AS route, route AS endpoint | where endpoint="/manager" | table endpoint, status`,
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("rename state = %v, failure=%#v", job.State, job.Failure)
+		}
+		queryIntegrationAssertColumns(t, page, []string{"endpoint", "status"})
+		if len(page.Rows) != 1 {
+			t.Fatalf("rename rows = %d, want 1", len(page.Rows))
+		}
+		if endpoint, ok := page.Rows[0].Values[0].String(); !ok || endpoint != "/manager" {
+			t.Fatalf("renamed endpoint = %q, %v", endpoint, ok)
+		}
+		if status, ok := page.Rows[0].Values[1].String(); !ok || status != "200" {
+			t.Fatalf("status = %q, %v", status, ok)
+		}
+	})
+
+	t.Run("rename overwrite and missing source through manager", func(t *testing.T) {
+		overwriteJob, overwritePage := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-rename-overwrite",
+			`index=main | stats count by status | rename status AS count`,
+		)
+		if overwriteJob.State != searchjobs.StateCompleted {
+			t.Fatalf("rename overwrite state = %v, failure=%#v", overwriteJob.State, overwriteJob.Failure)
+		}
+		queryIntegrationAssertColumns(t, overwritePage, []string{"count"})
+		if len(overwritePage.Rows) != 1 {
+			t.Fatalf("rename overwrite rows = %d, want 1", len(overwritePage.Rows))
+		}
+		if count, ok := overwritePage.Rows[0].Values[0].String(); !ok || count != "200" {
+			t.Fatalf("overwritten count = %q, %v", count, ok)
+		}
+
+		missingJob, missingPage := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-rename-missing",
+			`index=main | stats count AS events by status | rename absent AS events`,
+		)
+		if missingJob.State != searchjobs.StateCompleted {
+			t.Fatalf("rename missing state = %v, failure=%#v", missingJob.State, missingJob.Failure)
+		}
+		queryIntegrationAssertColumns(t, missingPage, []string{"status", "events"})
+		if len(missingPage.Rows) != 1 || !missingPage.Rows[0].Values[1].IsNull() {
+			t.Fatalf("rename missing page = %#v, want one row with null events", missingPage)
+		}
+
+		for _, test := range []struct {
+			id     string
+			source string
+		}{
+			{
+				id:     "queryexec-rename-projected-away-source",
+				source: `index=main | fields - logger | rename logger AS path | table path`,
+			},
+			{
+				id:     "queryexec-rename-blocked-source",
+				source: `index=main | rename logger AS component | rename logger AS path | table path`,
+			},
+		} {
+			job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime, test.id, test.source)
+			if job.State != searchjobs.StateCompleted {
+				t.Fatalf("dynamic missing-source rename state = %v, failure=%#v", job.State, job.Failure)
+			}
+			queryIntegrationAssertColumns(t, page, []string{"path"})
+			if len(page.Rows) != 1 || !page.Rows[0].Values[0].IsNull() {
+				t.Fatalf("dynamic missing source resurrected stored destination: %#v", page)
+			}
+		}
+	})
+
+	t.Run("rename tombstones and canonical scan scope through manager", func(t *testing.T) {
+		tombstoneJob, tombstonePage := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-rename-tombstones",
+			`index=main | rename logger AS component | eval component="replacement" | table logger.child, component.child`,
+		)
+		if tombstoneJob.State != searchjobs.StateCompleted {
+			t.Fatalf("rename tombstone state = %v, failure=%#v", tombstoneJob.State, tombstoneJob.Failure)
+		}
+		queryIntegrationAssertColumns(t, tombstonePage, []string{"logger.child", "component.child"})
+		if len(tombstonePage.Rows) != 1 || !tombstonePage.Rows[0].Values[0].IsNull() || !tombstonePage.Rows[0].Values[1].IsNull() {
+			t.Fatalf("rename tombstones exposed stored descendants: %#v", tombstonePage)
+		}
+
+		indexJob, indexPage := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-rename-calculated-index",
+			`index=main | table path | rename path AS index | search index="/manager" | table index`,
+		)
+		if indexJob.State != searchjobs.StateCompleted {
+			t.Fatalf("rename calculated index state = %v, failure=%#v", indexJob.State, indexJob.Failure)
+		}
+		queryIntegrationAssertColumns(t, indexPage, []string{"index"})
+		if len(indexPage.Rows) != 1 {
+			t.Fatalf("rename calculated index rows = %d, want 1", len(indexPage.Rows))
+		}
+		if value, ok := indexPage.Rows[0].Values[0].String(); !ok || value != "/manager" {
+			t.Fatalf("calculated index = %q, %v", value, ok)
+		}
+
+		timeJob, timePage := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-rename-canonical-time",
+			`index=main | table _time, path | rename _time AS observed_at | table observed_at, path`,
+		)
+		if timeJob.State != searchjobs.StateCompleted {
+			t.Fatalf("rename canonical time state = %v, failure=%#v", timeJob.State, timeJob.Failure)
+		}
+		queryIntegrationAssertColumns(t, timePage, []string{"observed_at", "path"})
+		if len(timePage.Rows) != 1 {
+			t.Fatalf("rename canonical time rows = %d, want 1", len(timePage.Rows))
+		}
+		if observedAt, ok := timePage.Rows[0].Values[0].Time(); !ok || !observedAt.Equal(eventIndexTime) {
+			t.Fatalf("renamed canonical time = %v, %v, want %v", observedAt, ok, eventIndexTime)
 		}
 	})
 
@@ -712,15 +1069,17 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 	document.SetValueAtPath("status", clickhousedriver.NewDynamic("200"))
 	document.SetValueAtPath("path", clickhousedriver.NewDynamic("/manager"))
 	document.SetValueAtPath("duration", clickhousedriver.NewDynamic("650ms"))
+	document.SetValueAtPath("logger.child", clickhousedriver.NewDynamic("stored-source-child"))
 	document.SetValueAtPath("typed_bytes", queryIntegrationExtendedValue("bytes/v1", "AP8"))
 	document.SetValueAtPath("typed_timestamp", queryIntegrationExtendedValue("timestamp/v1", now.Add(42*time.Second).Format(time.RFC3339Nano)))
 	document.SetValueAtPath("typed_duration", queryIntegrationExtendedValue("duration/v1", "-12:-345000000"))
 	document.SetValueAtPath("typed_decimal", queryIntegrationExtendedValue("decimal/v1", "-123.4500e+2"))
+	document.SetValueAtPath("component.child", clickhousedriver.NewDynamic("stored-target-child"))
 	if err := batch.Append(
 		"queryexec-event", "tenant", "main", now, now,
 		nil, uint8(1), "host", "source", "test", nil, uint8(1), nil, &message, []byte(message),
 		uint8(1), nil, nil, document,
-		[]string{"duration", "path", "status", "typed_bytes", "typed_decimal", "typed_duration", "typed_timestamp"},
+		[]string{"component.child", "duration", "logger.child", "path", "status", "typed_bytes", "typed_decimal", "typed_duration", "typed_timestamp"},
 		"collector", "batch", uint64(1),
 		now.Add(24*time.Hour), uint64(1),
 	); err != nil {
@@ -730,6 +1089,116 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 		t.Fatal(err)
 	}
 	return now
+}
+
+func queryIntegrationInsertGradeThisEvents(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+) (time.Time, time.Time, string) {
+	t.Helper()
+	const traceID = "trace-gradethis-001"
+	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
+		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
+		"expires_at, visibility_seq)"
+	batch, err := connection.PrepareBatch(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC().Add(-3 * time.Hour).Truncate(5 * time.Minute)
+	indexTime := time.Now().UTC().Truncate(time.Millisecond)
+	type fixtureEvent struct {
+		id       string
+		offset   time.Duration
+		level    string
+		layer    string
+		logger   string
+		message  string
+		traceID  string
+		path     string
+		status   int64
+		duration string
+	}
+	events := []fixtureEvent{
+		{
+			id: "trace-start", offset: time.Minute, level: "INFO", layer: "api", logger: "request",
+			message: "request started", traceID: traceID,
+		},
+		{
+			id: "trace-error", offset: 2 * time.Minute, level: "ERROR", layer: "storage", logger: "database",
+			message: "connection refused", traceID: traceID,
+		},
+		{
+			id: "warning", offset: 4 * time.Minute, level: "WARN", layer: "worker", logger: "dependency",
+			message: "dependency warning",
+		},
+		{
+			id: "slow-503", offset: 6 * time.Minute, level: "ERROR", layer: "api", logger: "http",
+			message: "Request metrics", path: "/slow", status: 503, duration: "800ms",
+		},
+		{
+			id: "slow-500", offset: 7 * time.Minute, level: "ERROR", layer: "api", logger: "http",
+			message: "Request metrics", path: "/slow", status: 500, duration: "700ms",
+		},
+		{
+			id: "fast-200", offset: 8 * time.Minute, level: "INFO", layer: "api", logger: "http",
+			message: "Request metrics", path: "/fast", status: 200, duration: "120ms",
+		},
+		{
+			id: "fast-502", offset: 11 * time.Minute, level: "ERROR", layer: "api", logger: "http",
+			message: "Request metrics", path: "/fast", status: 502, duration: "150ms",
+		},
+		{
+			id: "heartbeat-a", offset: 12 * time.Minute, level: "INFO", layer: "worker", logger: "health",
+			message: "heartbeat",
+		},
+		{
+			id: "heartbeat-b", offset: 13 * time.Minute, level: "INFO", layer: "worker", logger: "health",
+			message: "heartbeat",
+		},
+	}
+	for index, event := range events {
+		document := clickhousedriver.NewJSON()
+		document.SetValueAtPath("layer", clickhousedriver.NewDynamic(event.layer))
+		document.SetValueAtPath("logger", clickhousedriver.NewDynamic(event.logger))
+		fieldNames := []string{"layer", "logger"}
+		if event.path != "" {
+			document.SetValueAtPath("duration", clickhousedriver.NewDynamic(event.duration))
+			document.SetValueAtPath("path", clickhousedriver.NewDynamic(event.path))
+			document.SetValueAtPath("status", clickhousedriver.NewDynamic(event.status))
+			fieldNames = []string{"duration", "layer", "logger", "path", "status"}
+		}
+		var eventTraceID *string
+		if event.traceID != "" {
+			value := event.traceID
+			eventTraceID = &value
+		}
+		eventTime := base.Add(event.offset)
+		message := event.message
+		level := event.level
+		var service *string
+		if event.id != "trace-error" {
+			value := "gradethis"
+			service = &value
+		}
+		raw := fmt.Sprintf(
+			`{"level":%q,"layer":%q,"logger":%q,"message":%q}`,
+			event.level, event.layer, event.logger, event.message,
+		)
+		if err := batch.Append(
+			"queryexec-gradethis-"+event.id, "tenant", "gradethis", eventTime, indexTime,
+			nil, uint8(1), "gradethis-host", "app.log", "zap:json", service, uint8(1), &level, &message, []byte(raw),
+			uint8(1), eventTraceID, nil, document, fieldNames, "collector", "gradethis-batch", uint64(index+1),
+			indexTime.Add(24*time.Hour), uint64(1),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatal(err)
+	}
+	return base, indexTime, traceID
 }
 
 func queryIntegrationInsertTimechartEvents(t *testing.T, ctx context.Context, connection clickhousedriver.Conn) (time.Time, time.Time) {
@@ -871,6 +1340,35 @@ func queryIntegrationRunSearchRange(
 	earliest, latest time.Time,
 ) (searchjobs.Job, searchjobs.ResultPage) {
 	t.Helper()
+	return queryIntegrationRunSearchRangeForIndex(
+		t, ctx, executor, indexTime, id, source, earliest, latest, "main",
+	)
+}
+
+func queryIntegrationRunGradeThisSearchRange(
+	t *testing.T,
+	ctx context.Context,
+	executor *Executor,
+	indexTime time.Time,
+	id, source string,
+	earliest, latest time.Time,
+) (searchjobs.Job, searchjobs.ResultPage) {
+	t.Helper()
+	return queryIntegrationRunSearchRangeForIndex(
+		t, ctx, executor, indexTime, id, source, earliest, latest, "gradethis",
+	)
+}
+
+func queryIntegrationRunSearchRangeForIndex(
+	t *testing.T,
+	ctx context.Context,
+	executor *Executor,
+	indexTime time.Time,
+	id, source string,
+	earliest, latest time.Time,
+	indexName string,
+) (searchjobs.Job, searchjobs.ResultPage) {
+	t.Helper()
 	manager, err := searchjobs.New(searchjobs.Config{
 		Executor:        executor,
 		Snapshotter:     queryIntegrationSnapshotter(1),
@@ -890,8 +1388,8 @@ func queryIntegrationRunSearchRange(
 		SPL:               source,
 		OwnerID:           "owner",
 		TenantID:          "tenant",
-		AuthorizedIndexes: []string{"main"},
-		RequestedIndexes:  []string{"main"},
+		AuthorizedIndexes: []string{indexName},
+		RequestedIndexes:  []string{indexName},
 		Earliest:          earliest,
 		Latest:            latest,
 	})
@@ -907,6 +1405,70 @@ func queryIntegrationRunSearchRange(
 		t.Fatal(err)
 	}
 	return terminal, page
+}
+
+func queryIntegrationAssertColumns(t *testing.T, page searchjobs.ResultPage, want []string) {
+	t.Helper()
+	if len(page.Schema.Columns) != len(want) {
+		t.Fatalf("schema = %#v, want columns %v", page.Schema, want)
+	}
+	for index, name := range want {
+		if page.Schema.Columns[index].Name != name {
+			t.Fatalf("column %d = %q, want %q (schema %#v)", index, page.Schema.Columns[index].Name, name, page.Schema)
+		}
+	}
+}
+
+func queryIntegrationColumnIndex(t *testing.T, page searchjobs.ResultPage, name string) int {
+	t.Helper()
+	for index, column := range page.Schema.Columns {
+		if column.Name == name {
+			return index
+		}
+	}
+	t.Fatalf("schema %#v has no column %q", page.Schema, name)
+	return -1
+}
+
+func queryIntegrationAssertTimechartMatrix(
+	t *testing.T,
+	page searchjobs.ResultPage,
+	first time.Time,
+	span time.Duration,
+	want map[string][]uint64,
+) {
+	t.Helper()
+	timeColumn := queryIntegrationColumnIndex(t, page, "_time")
+	wantRows := -1
+	for series, counts := range want {
+		if wantRows < 0 {
+			wantRows = len(counts)
+		} else if len(counts) != wantRows {
+			t.Fatalf("invalid expected matrix: series %q has %d rows, want %d", series, len(counts), wantRows)
+		}
+	}
+	if len(page.Rows) != wantRows {
+		t.Fatalf("timechart rows = %d, want %d", len(page.Rows), wantRows)
+	}
+	for rowIndex, row := range page.Rows {
+		bucket, ok := row.Values[timeColumn].Time()
+		wantBucket := first.Add(time.Duration(rowIndex) * span)
+		if !ok || !bucket.Equal(wantBucket) {
+			t.Fatalf("timechart row %d bucket = %v (%v), want %v", rowIndex, bucket, ok, wantBucket)
+		}
+	}
+	for series, counts := range want {
+		column := queryIntegrationColumnIndex(t, page, series)
+		for rowIndex, wantCount := range counts {
+			value, ok := page.Rows[rowIndex].Values[column].Unsigned()
+			if !ok {
+				t.Fatalf("timechart row %d series %q = %#v, want unsigned", rowIndex, series, page.Rows[rowIndex].Values[column])
+			}
+			if value != wantCount {
+				t.Fatalf("timechart row %d series %q = %d, want %d", rowIndex, series, value, wantCount)
+			}
+		}
+	}
 }
 
 func queryIntegrationCompileSearchRange(

@@ -225,7 +225,7 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 		schema.Columns[index] = searchjobs.Column{
 			Name:       columns[index],
 			Kind:       kind,
-			Nullable:   columnType.Nullable() || kind == searchjobs.ValueKindMixed,
+			Nullable:   columnType.Nullable() || databaseTypeNullable(columnType.DatabaseTypeName()) || kind == searchjobs.ValueKindMixed,
 			Multivalue: multivalue,
 		}
 	}
@@ -572,19 +572,81 @@ func schemaKind(field, databaseType string) (searchjobs.ValueKind, bool) {
 func unwrapType(value string) string {
 	value = strings.TrimSpace(value)
 	for {
-		unwrapped := false
 		for _, wrapper := range []string{"LowCardinality", "Nullable"} {
-			prefix := wrapper + "("
-			if strings.HasPrefix(value, prefix) && strings.HasSuffix(value, ")") {
-				value = strings.TrimSpace(value[len(prefix) : len(value)-1])
-				unwrapped = true
-				break
+			if inner, ok := unwrapDatabaseTypeWrapper(value, wrapper); ok {
+				value = inner
+				goto nextWrapper
 			}
 		}
-		if !unwrapped {
-			return value
+		return value
+	nextWrapper:
+	}
+}
+
+// databaseTypeNullable supplements database/sql's ColumnType.Nullable result.
+// clickhouse-go currently reports false for LowCardinality(Nullable(T)), even
+// though the scanned value can be nil. Only wrappers around the entire column
+// type count: Array(Nullable(T)) contains nullable elements but is not itself a
+// nullable column.
+func databaseTypeNullable(databaseType string) bool {
+	value := strings.TrimSpace(databaseType)
+	for {
+		if _, ok := unwrapDatabaseTypeWrapper(value, "Nullable"); ok {
+			return true
+		}
+		inner, ok := unwrapDatabaseTypeWrapper(value, "LowCardinality")
+		if !ok {
+			return false
+		}
+		value = inner
+	}
+}
+
+func unwrapDatabaseTypeWrapper(value, wrapper string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, wrapper) {
+		return "", false
+	}
+	remainder := strings.TrimSpace(value[len(wrapper):])
+	if len(remainder) < 2 || remainder[0] != '(' {
+		return "", false
+	}
+
+	depth := 0
+	var quote byte
+	escaped := false
+	for index := 0; index < len(remainder); index++ {
+		character := remainder[index]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if character == '\\' {
+				escaped = true
+				continue
+			}
+			if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch character {
+		case '\'', '"':
+			quote = character
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 || (depth == 0 && index != len(remainder)-1) {
+				return "", false
+			}
 		}
 	}
+	if depth != 0 || quote != 0 {
+		return "", false
+	}
+	return strings.TrimSpace(remainder[1 : len(remainder)-1]), true
 }
 
 func convertValue(value any) (searchjobs.Value, error) {

@@ -162,6 +162,112 @@ func TestBuildStatsCountReplacesEventSchema(t *testing.T) {
 	}
 }
 
+func TestBuildRenamePreservesSequentialSchemaEffects(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count by logger | rename logger AS component, component AS subsystem`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"subsystem", "count"}) {
+		t.Fatalf("output fields = %v, want [subsystem count]", logical.OutputFields)
+	}
+	rename, ok := logical.Operators[len(logical.Operators)-1].(*Rename)
+	if !ok || len(rename.Assignments) != 2 {
+		t.Fatalf("last operator = %#v, want two-assignment Rename", logical.Operators[len(logical.Operators)-1])
+	}
+	if rename.Assignments[0].Source.Name != "logger" || rename.Assignments[0].Destination.Name != "component" ||
+		rename.Assignments[1].Source.Name != "component" || rename.Assignments[1].Destination.Name != "subsystem" {
+		t.Fatalf("rename = %#v", rename)
+	}
+}
+
+func TestBuildRenameSupportsDynamicFieldsAndOverwritesKnownTarget(t *testing.T) {
+	t.Parallel()
+
+	dynamic, err := Build(
+		mustParse(t, `index=gradethis | rename logger AS component | where component="api" | table component`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build(dynamic): %v", err)
+	}
+	rename, ok := dynamic.Operators[2].(*Rename)
+	if !ok || rename.Assignments[0].Source.Name != "logger" || rename.Assignments[0].Destination.Name != "component" {
+		t.Fatalf("dynamic rename = %#v", dynamic.Operators[2])
+	}
+
+	overwrite, err := Build(
+		mustParse(t, `index=gradethis | stats count by logger | rename logger AS count`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build(overwrite): %v", err)
+	}
+	if !slices.Equal(overwrite.OutputFields, []string{"count"}) {
+		t.Fatalf("overwrite output fields = %v, want [count]", overwrite.OutputFields)
+	}
+}
+
+func TestBuildRenameDoesNotTurnCalculatedIndexIntoSecurityScope(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | table path | rename path AS index | search index=secret`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.EffectiveIndexes, []string{"gradethis"}) {
+		t.Fatalf("effective indexes = %v", logical.EffectiveIndexes)
+	}
+}
+
+func TestBuildRenameInvalidatesCanonicalTimeForTimechart(t *testing.T) {
+	t.Parallel()
+
+	_, err := Build(
+		mustParse(t, `index=gradethis | table _time, level | rename _time AS observed_at | timechart span=5m count by level`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD")
+}
+
+func TestBuildRenameRejectsAmbiguousOpenSchemaFieldsAndNestedPaths(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		source string
+		code   string
+	}{
+		{`index=gradethis | rename fields AS payload`, "SPL_AMBIGUOUS_RENAME_FIELD"},
+		{`index=gradethis | rename logger AS fields`, "SPL_AMBIGUOUS_RENAME_FIELD"},
+		{`index=gradethis | rename request.path AS route`, "SPL_UNSUPPORTED_RENAME_PATH"},
+		{`index=gradethis | rename route AS request.path`, "SPL_UNSUPPORTED_RENAME_PATH"},
+	} {
+		_, err := Build(mustParse(t, test.source), testScope([]string{"gradethis"}, nil))
+		assertDiagnosticCode(t, err, test.code)
+	}
+
+	// Once a transforming command establishes an exact schema, "fields" and
+	// dotted aliases are ordinary declared columns rather than the open event
+	// payload or unresolved dynamic paths.
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count AS fields | rename fields AS request.path`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build(closed schema): %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"request.path"}) {
+		t.Fatalf("closed-schema output = %v", logical.OutputFields)
+	}
+}
+
 func TestBuildStatsMultipleMeasuresWithP95(t *testing.T) {
 	t.Parallel()
 

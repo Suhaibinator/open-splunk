@@ -28,7 +28,9 @@ const (
 	verticalIndexName              = "vertical"
 	verticalTenantID               = "vertical-tenant"
 	verticalEventCount             = uint64(4)
-	redactionSentinel              = "vertical-secret-must-not-survive"
+	redactionAPIKeySentinel        = "vertical-api-key-must-not-survive"
+	redactionCookieSentinel        = "vertical-cookie-must-not-survive"
+	redactionPrivateKeySentinel    = "vertical-private-key-must-not-survive"
 	verticalSearchSPL              = " \nindex=vertical | table message status duration_ms api_key _raw\t"
 	splCompatibilityVersionForTest = "tier-1-dev"
 )
@@ -148,9 +150,13 @@ func TestBackendVertical(t *testing.T) {
 	assertStoredEventBounds(t, ctx, storage, fixtureStart)
 
 	if err := collectorProcess.Interrupt(15 * time.Second); err != nil {
-		t.Fatalf("stop collector: %v\nlogs:\n%s", err, redactForFailure(collectorProcess.Logs(), plaintextToken, redactionSentinel))
+		t.Fatalf("stop collector: %v\nlogs:\n%s", err, redactForFailure(
+			collectorProcess.Logs(), plaintextToken,
+			redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
+		))
 	}
-	assertProcessLogsDoNotLeak(t, collectorProcess.Logs(), plaintextToken, redactionSentinel)
+	assertProcessLogsDoNotLeak(t, collectorProcess.Logs(), plaintextToken,
+		redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel)
 
 	response := runSearch(t, ctx, httpClient, baseURL, fixtureStart)
 	assertTypedRedactedResults(t, response)
@@ -158,14 +164,20 @@ func TestBackendVertical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(wire, []byte(redactionSentinel)) {
-		t.Fatal("HTTP protobuf search response leaked the redaction sentinel")
+	for _, sentinel := range []string{redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel} {
+		if bytes.Contains(wire, []byte(sentinel)) {
+			t.Fatalf("HTTP protobuf search response leaked sentinel %q", sentinel)
+		}
 	}
 
 	if err := serverProcess.Interrupt(20 * time.Second); err != nil {
-		t.Fatalf("stop server: %v\nlogs:\n%s", err, redactForFailure(serverProcess.Logs(), plaintextToken, redactionSentinel))
+		t.Fatalf("stop server: %v\nlogs:\n%s", err, redactForFailure(
+			serverProcess.Logs(), plaintextToken,
+			redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
+		))
 	}
-	assertProcessLogsDoNotLeak(t, serverProcess.Logs(), plaintextToken, redactionSentinel)
+	assertProcessLogsDoNotLeak(t, serverProcess.Logs(), plaintextToken,
+		redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel)
 }
 
 func waitForHealth(t *testing.T, ctx context.Context, client *http.Client, baseURL string, process *managedProcess) {
@@ -255,8 +267,10 @@ func writeFixture(t *testing.T, path string, start time.Time) {
 		t.Fatal(err)
 	}
 	sentinelLine := fmt.Sprintf(
-		`{"timestamp":%q,"level":"INFO","message":"typed redaction sentinel","status":201,"duration_ms":12.5,"api_key":%q}`+"\n",
-		start.Add(3*time.Second).Format(time.RFC3339Nano), redactionSentinel,
+		`{"timestamp":%q,"level":"INFO","message":"typed redaction sentinel","status":201,"duration_ms":12.5,"api_key":%q,"note_one":%q,"note_two":%q}`+"\n",
+		start.Add(3*time.Second).Format(time.RFC3339Nano), redactionAPIKeySentinel,
+		"Cookie: sid="+redactionCookieSentinel+"; csrf="+redactionCookieSentinel,
+		"private_key=-----BEGIN PRIVATE KEY----- "+redactionPrivateKeySentinel,
 	)
 	if _, err := io.WriteString(file, sentinelLine); err != nil {
 		_ = file.Close()
@@ -327,15 +341,18 @@ func waitForStoredEvents(t *testing.T, ctx context.Context, connection clickhous
 		}
 		if process.Exited() {
 			t.Fatalf("collector exited before ingestion completed: %v, count=%d\nlogs:\n%s", process.Err(), lastCount,
-				redactForFailure(process.Logs(), plaintextToken, redactionSentinel))
+				redactForFailure(process.Logs(), plaintextToken,
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
 		}
 		select {
 		case <-ctx.Done():
 			t.Fatalf("wait for stored events: %v, count=%d\ncollector logs:\n%s", ctx.Err(), lastCount,
-				redactForFailure(process.Logs(), plaintextToken, redactionSentinel))
+				redactForFailure(process.Logs(), plaintextToken,
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
 		case <-deadline.C:
 			t.Fatalf("wait for stored events: timed out, count=%d\ncollector logs:\n%s", lastCount,
-				redactForFailure(process.Logs(), plaintextToken, redactionSentinel))
+				redactForFailure(process.Logs(), plaintextToken,
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
 		case <-ticker.C:
 		}
 	}
@@ -529,11 +546,16 @@ func assertTypedRedactedResults(t *testing.T, response *opensplunkv1.GetSearchRe
 	if rawText == "" {
 		rawText = string(raw.GetBytesValue())
 	}
-	if strings.Contains(rawText, redactionSentinel) {
-		t.Fatal("raw search-result cell leaked the redaction sentinel")
+	for _, sentinel := range []string{redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel} {
+		if strings.Contains(rawText, sentinel) {
+			t.Fatalf("raw search-result cell leaked sentinel %q", sentinel)
+		}
 	}
 	if !strings.Contains(rawText, `"api_key":"[REDACTED]"`) {
 		t.Fatalf("raw cell was not mandatorily redacted: %q", rawText)
+	}
+	if strings.Count(rawText, "[REDACTED]") < 3 {
+		t.Fatalf("raw cell did not redact the structured key plus embedded cookie/private-key values: %q", rawText)
 	}
 }
 

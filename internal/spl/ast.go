@@ -286,6 +286,27 @@ func (*EvalCommand) command()             {}
 func (*EvalCommand) Name() string         { return "eval" }
 func (c *EvalCommand) SourceRange() Range { return c.Range }
 
+// RenameAssignment moves one exact field name to another. Assignments retain
+// source order because SPL applies multiple rename pairs from left to right.
+type RenameAssignment struct {
+	Source           string
+	SourceRange      Range
+	Destination      string
+	DestinationRange Range
+	Range            Range
+}
+
+// RenameCommand applies one or more exact field-to-field renames. Wildcard
+// patterns are deliberately outside this compatibility slice.
+type RenameCommand struct {
+	Assignments []RenameAssignment
+	Range       Range
+}
+
+func (*RenameCommand) command()             {}
+func (*RenameCommand) Name() string         { return "rename" }
+func (c *RenameCommand) SourceRange() Range { return c.Range }
+
 // FieldsCommand includes or excludes fields.
 type FieldsCommand struct {
 	Fields  []string

@@ -529,6 +529,60 @@ func TestSchemaKindUnwrapsClickHouseWrappers(t *testing.T) {
 	}
 }
 
+func TestDatabaseTypeNullableRecognizesWholeColumnWrappers(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		databaseType string
+		want         bool
+	}{
+		{"Nullable(String)", true},
+		{"LowCardinality(Nullable(String))", true},
+		{" LowCardinality ( Nullable ( String ) ) ", true},
+		{"String", false},
+		{"LowCardinality(String)", false},
+		{"Array(Nullable(String))", false},
+		{"Tuple(value Nullable(String))", false},
+		{"Nullable(String) trailing", false},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.databaseType, func(t *testing.T) {
+			t.Parallel()
+			if got := databaseTypeNullable(test.databaseType); got != test.want {
+				t.Fatalf("databaseTypeNullable(%q) = %v, want %v", test.databaseType, got, test.want)
+			}
+		})
+	}
+}
+
+func TestExecutorMarksLowCardinalityNullableSchema(t *testing.T) {
+	t.Parallel()
+	rows := &fakeRows{
+		columns: []string{"service"},
+		types: []driver.ColumnType{
+			fakeColumnType{
+				name:         "service",
+				databaseType: "LowCardinality(Nullable(String))",
+				scanType:     reflect.TypeOf((*string)(nil)),
+				nullable:     false,
+			},
+		},
+		data: [][]any{{nil}},
+	}
+	sink := &fakeSink{}
+	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
+	query := clickhouse.CompiledQuery{SQL: "SELECT service", OutputFields: []string{"service"}}
+	if err := executor.Execute(context.Background(), query, sink); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(sink.schema.Columns) != 1 || !sink.schema.Columns[0].Nullable {
+		t.Fatalf("schema = %#v, want nullable service", sink.schema)
+	}
+	if len(sink.rows) != 1 || len(sink.rows[0]) != 1 || !sink.rows[0][0].IsNull() {
+		t.Fatalf("rows = %#v, want one null service value", sink.rows)
+	}
+}
+
 func TestExecutorRejectsColumnDriftAndPropagatesSinkLimit(t *testing.T) {
 	t.Parallel()
 	rows := &fakeRows{

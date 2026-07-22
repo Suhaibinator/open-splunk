@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -134,6 +135,37 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 				if index+1 < len(operator.Assignments) {
 					aliasSequence++
 					alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+				}
+			}
+		case *plan.Rename:
+			if len(operator.Assignments) == 0 {
+				return CompiledQuery{}, errors.New("compile ClickHouse rename: no assignments")
+			}
+			seenSources := make(map[string]struct{}, len(operator.Assignments))
+			seenDestinations := make(map[string]struct{}, len(operator.Assignments))
+			for index, assignment := range operator.Assignments {
+				if assignment.Source.Name == assignment.Destination.Name {
+					return CompiledQuery{}, errors.New("compile ClickHouse rename: source and destination must differ")
+				}
+				if _, duplicate := seenSources[assignment.Source.Name]; duplicate {
+					return CompiledQuery{}, errors.New("compile ClickHouse rename: source field is repeated")
+				}
+				if _, duplicate := seenDestinations[assignment.Destination.Name]; duplicate {
+					return CompiledQuery{}, errors.New("compile ClickHouse rename: destination field is repeated")
+				}
+				seenSources[assignment.Source.Name] = struct{}{}
+				seenDestinations[assignment.Destination.Name] = struct{}{}
+				if index > 0 {
+					aliasSequence++
+					alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+				}
+				projection, nextState, changed, compileErr := compileRenameAssignment(assignment, state)
+				if compileErr != nil {
+					return CompiledQuery{}, compileErr
+				}
+				state = nextState
+				if changed {
+					fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + alias
 				}
 			}
 		case *plan.Aggregate:
@@ -498,6 +530,7 @@ type compileState struct {
 	allowDynamic            bool
 	eventRows               bool
 	blocked                 map[string]struct{}
+	blockedPrefixes         map[string]struct{}
 	order                   []compiledSortKey
 	tieBreakers             []compiledSortKey
 	preAggregateColumns     []string
@@ -592,11 +625,12 @@ func compileScan(database, table string, scan *plan.Scan) (string, compileState,
 		visible[field] = canonicalState(field)
 	}
 	state := compileState{
-		visible:      visible,
-		publicOrder:  append([]string(nil), defaultPublicFields...),
-		allowDynamic: true,
-		eventRows:    true,
-		blocked:      make(map[string]struct{}),
+		visible:         visible,
+		publicOrder:     append([]string(nil), defaultPublicFields...),
+		allowDynamic:    true,
+		eventRows:       true,
+		blocked:         make(map[string]struct{}),
+		blockedPrefixes: make(map[string]struct{}),
 		tieBreakers: []compiledSortKey{
 			{valueSQL: quoteIdentifier(internalSortIDColumn), descending: true},
 		},
@@ -862,6 +896,7 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 	}
 	next.publicOrder = append([]string(nil), state.publicOrder...)
 	next.blocked = cloneSet(state.blocked)
+	next.blockedPrefixes = cloneSet(state.blockedPrefixes)
 	delete(next.blocked, output.Name)
 	if !slices.Contains(next.publicOrder, output.Name) {
 		next.publicOrder = append(next.publicOrder, output.Name)
@@ -880,6 +915,211 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 	}
 	next.visible[output.Name] = field
 	return next
+}
+
+func compileRenameAssignment(assignment plan.RenameAssignment, state compileState) ([]string, compileState, bool, error) {
+	if assignment.Source.Name == "" || assignment.Destination.Name == "" || assignment.Source.Name == assignment.Destination.Name {
+		return nil, compileState{}, false, errors.New("compile ClickHouse rename: assignment is invalid")
+	}
+	openEventSchema := state.eventRows && state.allowDynamic
+	if openEventSchema && (assignment.Source.Name == "fields" || assignment.Destination.Name == "fields") {
+		return nil, compileState{}, false, &plan.Diagnostic{
+			Code:    "SPL_AMBIGUOUS_RENAME_FIELD",
+			Message: "rename cannot use the event result's reserved fields payload without an exact upstream schema",
+			Range:   assignment.Range,
+		}
+	}
+	if openEventSchema && ((!assignment.Source.Canonical && len(assignment.Source.Path) != 1) ||
+		(!assignment.Destination.Canonical && len(assignment.Destination.Path) != 1)) {
+		return nil, compileState{}, false, &plan.Diagnostic{
+			Code:        "SPL_UNSUPPORTED_RENAME_PATH",
+			Message:     "rename on an open event schema currently supports top-level exact fields only",
+			Range:       assignment.Range,
+			Suggestions: []string{"select an exact schema with table before renaming a dotted output field"},
+		}
+	}
+	source, sourceExists, err := resolveCompiledField(assignment.Source, state)
+	if err != nil {
+		return nil, compileState{}, false, err
+	}
+	_, destinationExists, err := resolveCompiledField(assignment.Destination, state)
+	if err != nil {
+		return nil, compileState{}, false, err
+	}
+	if !sourceExists && !destinationExists {
+		// With a closed schema, missing-to-missing is an exact no-op. An open
+		// event schema resolves dynamic sources above and preserves per-row
+		// missingness through the source existence expression.
+		return nil, state, false, nil
+	}
+	if !sourceExists {
+		source = fieldState{
+			valueSQL:  "CAST(NULL AS Nullable(String))",
+			existsSQL: "0",
+			kind:      fieldKindString,
+		}
+	}
+
+	next := cloneCompileState(state)
+	delete(next.visible, assignment.Source.Name)
+	delete(next.visible, assignment.Destination.Name)
+	next.blocked[assignment.Source.Name] = struct{}{}
+	next.blockedPrefixes[assignment.Source.Name] = struct{}{}
+	next.blockedPrefixes[assignment.Destination.Name] = struct{}{}
+	delete(next.blocked, assignment.Destination.Name)
+	next.publicOrder = renamePublicOrder(
+		state.publicOrder,
+		assignment.Source.Name,
+		assignment.Destination.Name,
+		sourceExists && state.visible[assignment.Source.Name].valueSQL != "",
+	)
+	if exposesRawFieldsPayload(state) {
+		// The public fields object is an Open Splunk convenience representation,
+		// not a native SPL field. Publishing its immutable storage copy after a
+		// rename would expose the old name and any overwritten destination. Drop
+		// only that public convenience column; keep both private columns unchanged
+		// so unrelated dynamic fields remain available to downstream SPL.
+		next.publicOrder = slices.DeleteFunc(next.publicOrder, func(name string) bool { return name == "fields" })
+	}
+
+	destination := projectedRenameField(source, assignment.Destination.Name)
+	next.visible[assignment.Destination.Name] = destination
+	projection := renameProjection(state, next, assignment.Destination.Name, source)
+	if len(projection) == 0 {
+		return nil, compileState{}, false, errors.New("compile ClickHouse rename: projection has no fields")
+	}
+	return projection, next, true, nil
+}
+
+func cloneCompileState(state compileState) compileState {
+	next := state
+	next.visible = make(map[string]fieldState, len(state.visible)+1)
+	for name, field := range state.visible {
+		next.visible[name] = field
+	}
+	next.publicOrder = append([]string(nil), state.publicOrder...)
+	next.blocked = cloneSet(state.blocked)
+	next.blockedPrefixes = cloneSet(state.blockedPrefixes)
+	next.order = append([]compiledSortKey(nil), state.order...)
+	next.tieBreakers = append([]compiledSortKey(nil), state.tieBreakers...)
+	next.preAggregateColumns = append([]string(nil), state.preAggregateColumns...)
+	next.postAggregateColumns = append([]string(nil), state.postAggregateColumns...)
+	next.postAggregatePredicates = append([]string(nil), state.postAggregatePredicates...)
+	return next
+}
+
+func renamePublicOrder(current []string, source, destination string, sourceIsPublic bool) []string {
+	result := make([]string, 0, len(current)+1)
+	if sourceIsPublic && slices.Contains(current, source) {
+		for _, name := range current {
+			switch name {
+			case source:
+				result = append(result, destination)
+			case destination:
+			default:
+				result = append(result, name)
+			}
+		}
+		return result
+	}
+	result = append(result, current...)
+	if !slices.Contains(result, destination) {
+		result = append(result, destination)
+	}
+	return result
+}
+
+func projectedRenameField(source fieldState, destination string) fieldState {
+	value := quoteIdentifier(destination)
+	result := fieldState{
+		valueSQL:       value,
+		existsSQL:      rewriteExistenceForProjection(source, destination),
+		existsArgs:     append([]any(nil), source.existsArgs...),
+		descendantSQL:  source.descendantSQL,
+		descendantArgs: append([]any(nil), source.descendantArgs...),
+		kind:           source.kind,
+		// A field renamed to index is calculated pipeline data, not the
+		// authorization-constrained physical index selector.
+		caseSensitive: false,
+		numberType:    source.numberType,
+		numericSort:   source.numericSort,
+	}
+	if source.kind == fieldKindDynamic {
+		result.dynamicTypeSQL = "dynamicType(" + value + ")"
+	}
+	return result
+}
+
+func exposesRawFieldsPayload(state compileState) bool {
+	if !state.eventRows || !state.allowDynamic || !slices.Contains(state.publicOrder, "fields") {
+		return false
+	}
+	_, explicitlyVisible := state.visible["fields"]
+	return !explicitlyVisible
+}
+
+func renameProjection(state, next compileState, destination string, source fieldState) []string {
+	names := make([]string, 0, len(next.visible))
+	seen := make(map[string]struct{}, len(next.visible))
+	appendVisible := func(name string) {
+		if _, duplicate := seen[name]; duplicate {
+			return
+		}
+		if _, visible := next.visible[name]; !visible {
+			return
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	for _, name := range next.publicOrder {
+		appendVisible(name)
+	}
+	for _, name := range canonicalColumnNames {
+		appendVisible(name)
+	}
+	extra := make([]string, 0, len(next.visible)-len(names))
+	for name := range next.visible {
+		if _, included := seen[name]; !included {
+			extra = append(extra, name)
+		}
+	}
+	sort.Strings(extra)
+	for _, name := range extra {
+		appendVisible(name)
+	}
+
+	projection := make([]string, 0, len(names)+4+len(state.order)+len(state.tieBreakers))
+	for _, name := range names {
+		field := state.visible[name]
+		if name == destination {
+			field = source
+		}
+		publicName := quoteIdentifier(name)
+		if field.valueSQL == publicName {
+			projection = append(projection, publicName)
+		} else {
+			projection = append(projection, field.valueSQL+" AS "+publicName)
+		}
+	}
+	privateColumns := make([]string, 0, 4+len(state.order)+len(state.tieBreakers))
+	if state.eventRows {
+		privateColumns = append(privateColumns,
+			quoteIdentifier(internalFieldsColumn), quoteIdentifier(internalFieldNamesColumn),
+			quoteIdentifier(internalSortTimeColumn), quoteIdentifier(internalSortIDColumn),
+		)
+	}
+	for _, key := range state.order {
+		privateColumns = append(privateColumns, key.valueSQL)
+	}
+	for _, key := range state.tieBreakers {
+		privateColumns = append(privateColumns, key.valueSQL)
+	}
+	for _, column := range privateColumns {
+		if !slices.Contains(projection, column) {
+			projection = append(projection, column)
+		}
+	}
+	return projection
 }
 
 func compileEvalComparison(expression *plan.EvalComparisonExpression, state compileState) (string, []any, error) {
@@ -1355,6 +1595,11 @@ func resolveCompiledField(field plan.FieldRef, state compileState) (fieldState, 
 	if _, blocked := state.blocked[field.Name]; blocked || field.Canonical || !state.allowDynamic {
 		return fieldState{}, false, nil
 	}
+	for prefix := range state.blockedPrefixes {
+		if field.Name == prefix || strings.HasPrefix(field.Name, prefix+".") {
+			return fieldState{}, false, nil
+		}
+	}
 	if len(field.Path) == 0 {
 		return fieldState{}, false, fmt.Errorf("compile ClickHouse field %q: dynamic path is empty", field.Name)
 	}
@@ -1379,12 +1624,13 @@ func resolveCompiledField(field plan.FieldRef, state compileState) (fieldState, 
 
 func compileProjection(operator *plan.Project, state compileState) ([]string, compileState, []any, error) {
 	next := compileState{
-		visible:      make(map[string]fieldState),
-		allowDynamic: operator.Mode == plan.ProjectModeExclude && state.allowDynamic,
-		eventRows:    state.eventRows,
-		blocked:      cloneSet(state.blocked),
-		order:        append([]compiledSortKey(nil), state.order...),
-		tieBreakers:  append([]compiledSortKey(nil), state.tieBreakers...),
+		visible:         make(map[string]fieldState),
+		allowDynamic:    operator.Mode == plan.ProjectModeExclude && state.allowDynamic,
+		eventRows:       state.eventRows,
+		blocked:         cloneSet(state.blocked),
+		blockedPrefixes: cloneSet(state.blockedPrefixes),
+		order:           append([]compiledSortKey(nil), state.order...),
+		tieBreakers:     append([]compiledSortKey(nil), state.tieBreakers...),
 	}
 	var names []string
 	switch operator.Mode {
