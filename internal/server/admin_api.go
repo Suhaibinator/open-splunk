@@ -143,7 +143,11 @@ func (handler *apiHandler) validateBrowserAPIRequest(request *http.Request) erro
 	if origin == "" {
 		return nil
 	}
-	if strings.ContainsAny(origin, " \t\r\n,") || strings.EqualFold(origin, "null") {
+	// Validate the serialized Origin as well as url.Parse's semantic fields.
+	// url.Parse intentionally discards an empty fragment delimiter and records
+	// an empty query delimiter only through ForceQuery; neither serialization is
+	// a valid browser trust-boundary value for this API.
+	if strings.ContainsAny(origin, " \t\r\n,?#") || strings.EqualFold(origin, "null") {
 		return errors.New("request origin is invalid")
 	}
 	parsed, err := url.Parse(origin)
@@ -151,7 +155,8 @@ func (handler *apiHandler) validateBrowserAPIRequest(request *http.Request) erro
 	if request.TLS != nil {
 		expectedScheme = "https"
 	}
-	if err != nil || parsed.Scheme != expectedScheme || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil || parsed.Scheme != expectedScheme || parsed.User != nil || parsed.Path != "" || parsed.RawPath != "" ||
+		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.Opaque != "" {
 		return errors.New("request origin is invalid")
 	}
 	originHost, originPort, err := canonicalHTTPAuthority(parsed.Host)
@@ -163,7 +168,7 @@ func (handler *apiHandler) validateBrowserAPIRequest(request *http.Request) erro
 
 func canonicalHTTPAuthority(input string) (string, string, error) {
 	input = strings.TrimSpace(input)
-	if input == "" || strings.ContainsAny(input, "\x00/\\@?#") {
+	if input == "" || strings.ContainsAny(input, "\x00/\\@?#") || strings.HasSuffix(input, ":") {
 		return "", "", errors.New("HTTP authority is invalid")
 	}
 	host, port, err := net.SplitHostPort(input)

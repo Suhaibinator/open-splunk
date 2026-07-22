@@ -6,6 +6,7 @@ require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.46.0
 	github.com/Suhaibinator/SRouter v1.5.1
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/shopspring/decimal v1.4.0
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/sys v0.46.0

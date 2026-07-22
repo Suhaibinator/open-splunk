@@ -27,6 +27,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchws"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"github.com/Suhaibinator/open-splunk/migrations"
@@ -243,8 +244,29 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("open embedded web UI: %w", err)
 	}
+	searchWebSocket, err := searchws.New(searchws.Config{
+		Searches: jobs,
+		Exports:  exports,
+		Access: searchjobs.AccessScope{
+			TenantID: config.tenantID,
+			OwnerID:  defaultOwnerID,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("create search websocket service: %w", err)
+	}
+	// This safety close executes before export/search manager defers. Normal
+	// runtime shutdown closes the same service through server.Handler first.
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := searchWebSocket.Close(ctx); err != nil {
+			log.Printf("close search websocket service: %v", err)
+		}
+	}()
 	handler, err := server.NewHandler(server.Config{
 		SearchJobs:                 jobs,
+		SearchWebSocket:            searchWebSocket,
 		Exports:                    exports,
 		Indexes:                    controlDB,
 		IngestionTokens:            tokenStore,
@@ -299,7 +321,7 @@ func run() error {
 		}
 		log.Printf("collector gRPC server listening on %s (%s)", collectorListener.Addr(), transport)
 	}
-	return serveRuntime(shutdownContext, httpServer, requests, collectorServer, collectorListener, shutdownTimeout)
+	return serveRuntime(shutdownContext, httpServer, requests, handler, collectorServer, collectorListener, shutdownTimeout)
 }
 
 func parseFlags() options {

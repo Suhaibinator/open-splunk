@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -51,14 +52,38 @@ type shutdownServer interface {
 	Close() error
 }
 
+type webSocketShutdown interface {
+	Close(context.Context) error
+}
+
+func isNilWebSocketShutdown(value webSocketShutdown) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}
+
 // shutdownHTTPServer first permits graceful completion, then force-closes
 // connections at the deadline. In either case it waits for every handler to
 // return before run() closes the search manager or its databases.
-func shutdownHTTPServer(server shutdownServer, requests *trackedHandler, timeout time.Duration) error {
+func shutdownHTTPServer(server shutdownServer, requests *trackedHandler, webSockets webSocketShutdown, timeout time.Duration) error {
+	if isNilWebSocketShutdown(webSockets) {
+		return errors.New("shutdown HTTP server: websocket service is required")
+	}
 	requests.stopAccepting()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	var webSocketErr error
+	if err := webSockets.Close(ctx); err != nil {
+		webSocketErr = fmt.Errorf("close search websocket service: %w", err)
+	}
 	shutdownErr := server.Shutdown(ctx)
 	if shutdownErr != nil {
 		closeErr := server.Close()
@@ -70,5 +95,5 @@ func shutdownHTTPServer(server shutdownServer, requests *trackedHandler, timeout
 		shutdownErr = errors.Join(fmt.Errorf("graceful HTTP shutdown: %w", shutdownErr), closeErr)
 	}
 	requests.wait()
-	return shutdownErr
+	return errors.Join(webSocketErr, shutdownErr)
 }

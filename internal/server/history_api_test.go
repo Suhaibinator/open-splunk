@@ -417,6 +417,63 @@ func TestSearchHistoryErrorMappingDoesNotLeakStorageDetails(t *testing.T) {
 	}
 }
 
+func TestCommittedSearchHistoryMutationsWinContextCancellationRace(t *testing.T) {
+	tests := []struct {
+		name string
+		stub func(*fakeSearchHistory, context.CancelFunc)
+		call func(*apiHandler, *http.Request) error
+	}{
+		{
+			name: "delete",
+			stub: func(store *fakeSearchHistory, cancel context.CancelFunc) {
+				store.deleteFn = func(context.Context, searchhistory.AccessScope, string) error {
+					cancel()
+					return nil
+				}
+			},
+			call: func(handler *apiHandler, request *http.Request) error {
+				response, err := handler.deleteSearchHistoryEntry(request, &opensplunkv1.DeleteSearchHistoryEntryRequest{SearchJobId: "job-1"})
+				if err == nil && response.GetSearchJobId() != "job-1" {
+					t.Fatalf("delete response = %+v", response)
+				}
+				return err
+			},
+		},
+		{
+			name: "clear",
+			stub: func(store *fakeSearchHistory, cancel context.CancelFunc) {
+				store.clearFn = func(context.Context, searchhistory.AccessScope, searchhistory.Filter) (uint64, error) {
+					cancel()
+					return 7, nil
+				}
+			},
+			call: func(handler *apiHandler, request *http.Request) error {
+				response, err := handler.clearSearchHistory(request, &opensplunkv1.ClearSearchHistoryRequest{Confirmation: clearSearchHistoryConfirmation})
+				if err == nil && response.GetDeletedCount() != 7 {
+					t.Fatalf("clear response = %+v", response)
+				}
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			store := &fakeSearchHistory{}
+			test.stub(store, cancel)
+			handler := &apiHandler{searchHistory: store, ownerID: "owner-1", tenantID: "tenant-1"}
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/search/history/"+test.name, nil).WithContext(ctx)
+			if err := test.call(handler, request); err != nil {
+				t.Fatalf("committed %s returned error = %v", test.name, err)
+			}
+			if !errors.Is(ctx.Err(), context.Canceled) {
+				t.Fatalf("request context error = %v, want context.Canceled", ctx.Err())
+			}
+		})
+	}
+}
+
 func TestSearchHistoryRoutesAreExactAndConditional(t *testing.T) {
 	store := &fakeSearchHistory{getFn: func(context.Context, searchhistory.AccessScope, string) (*opensplunkv1.SearchHistoryEntry, error) {
 		return historyEntry("job-1", testNow, "", "", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED), nil

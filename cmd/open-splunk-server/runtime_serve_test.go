@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,10 +15,11 @@ func TestServeRuntimeCancellationStopsBothTransports(t *testing.T) {
 	t.Parallel()
 	httpServer := newFakeRuntimeHTTPServer()
 	collectorServer := newFakeRuntimeGRPCServer()
+	webSockets := &fakeWebSocketShutdown{}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- serveRuntime(ctx, httpServer, newTrackedHandler(http.NotFoundHandler()), collectorServer, fakeRuntimeListener{}, time.Second)
+		done <- serveRuntime(ctx, httpServer, newTrackedHandler(http.NotFoundHandler()), webSockets, collectorServer, fakeRuntimeListener{}, time.Second)
 	}()
 	<-httpServer.started
 	<-collectorServer.started
@@ -25,7 +27,7 @@ func TestServeRuntimeCancellationStopsBothTransports(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if !httpServer.wasShutdown() || !collectorServer.wasGracefullyStopped() {
+	if !webSockets.wasClosed() || !httpServer.wasShutdown() || !collectorServer.wasGracefullyStopped() {
 		t.Fatal("cancellation did not stop both transports")
 	}
 }
@@ -35,12 +37,13 @@ func TestServeRuntimeHTTPFailureStopsCollector(t *testing.T) {
 	httpServer := newFakeRuntimeHTTPServer()
 	httpServer.serveErr = errors.New("bind failed")
 	collectorServer := newFakeRuntimeGRPCServer()
-	err := serveRuntime(context.Background(), httpServer, newTrackedHandler(http.NotFoundHandler()), collectorServer, fakeRuntimeListener{}, time.Second)
+	webSockets := &fakeWebSocketShutdown{}
+	err := serveRuntime(context.Background(), httpServer, newTrackedHandler(http.NotFoundHandler()), webSockets, collectorServer, fakeRuntimeListener{}, time.Second)
 	if !errors.Is(err, httpServer.serveErr) {
 		t.Fatalf("serveRuntime error = %v, want HTTP failure", err)
 	}
-	if !collectorServer.wasGracefullyStopped() {
-		t.Fatal("HTTP failure did not stop collector transport")
+	if !webSockets.wasClosed() || !collectorServer.wasGracefullyStopped() {
+		t.Fatal("HTTP failure did not stop websocket and collector transports")
 	}
 }
 
@@ -49,12 +52,27 @@ func TestServeRuntimeCollectorFailureStopsHTTP(t *testing.T) {
 	httpServer := newFakeRuntimeHTTPServer()
 	collectorServer := newFakeRuntimeGRPCServer()
 	collectorServer.serveErr = errors.New("accept failed")
-	err := serveRuntime(context.Background(), httpServer, newTrackedHandler(http.NotFoundHandler()), collectorServer, fakeRuntimeListener{}, time.Second)
+	webSockets := &fakeWebSocketShutdown{}
+	err := serveRuntime(context.Background(), httpServer, newTrackedHandler(http.NotFoundHandler()), webSockets, collectorServer, fakeRuntimeListener{}, time.Second)
 	if !errors.Is(err, collectorServer.serveErr) {
 		t.Fatalf("serveRuntime error = %v, want collector failure", err)
 	}
-	if !httpServer.wasShutdown() {
-		t.Fatal("collector failure did not stop HTTP transport")
+	if !webSockets.wasClosed() || !httpServer.wasShutdown() {
+		t.Fatal("collector failure did not stop websocket and HTTP transports")
+	}
+}
+
+func TestServeRuntimeRejectsNilWebSocketService(t *testing.T) {
+	t.Parallel()
+	httpServer := newFakeRuntimeHTTPServer()
+	err := serveRuntime(context.Background(), httpServer, newTrackedHandler(http.NotFoundHandler()), nil, nil, nil, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "websocket service") {
+		t.Fatalf("nil websocket error = %v", err)
+	}
+	var typedNil *fakeWebSocketShutdown
+	err = serveRuntime(context.Background(), httpServer, newTrackedHandler(http.NotFoundHandler()), typedNil, nil, nil, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "websocket service") {
+		t.Fatalf("typed-nil websocket error = %v", err)
 	}
 }
 

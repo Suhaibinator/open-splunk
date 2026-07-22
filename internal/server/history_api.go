@@ -176,9 +176,6 @@ func (handler *apiHandler) deleteSearchHistoryEntry(request *http.Request, input
 	if err := handler.searchHistory.Delete(request.Context(), handler.searchHistoryScope(), searchJobID); err != nil {
 		return nil, mapSearchHistoryCallError(request.Context(), err)
 	}
-	if err := searchHistoryRequestContextError(request.Context()); err != nil {
-		return nil, err
-	}
 	return &opensplunkv1.DeleteSearchHistoryEntryResponse{SearchJobId: searchJobID}, nil
 }
 
@@ -195,9 +192,6 @@ func (handler *apiHandler) clearSearchHistory(request *http.Request, input *open
 	}
 	deleted, err := handler.searchHistory.Clear(request.Context(), handler.searchHistoryScope(), filter)
 	if err := mapSearchHistoryCallError(request.Context(), err); err != nil {
-		return nil, err
-	}
-	if err := searchHistoryRequestContextError(request.Context()); err != nil {
 		return nil, err
 	}
 	return &opensplunkv1.ClearSearchHistoryResponse{DeletedCount: deleted}, nil

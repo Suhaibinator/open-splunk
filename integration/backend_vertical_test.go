@@ -11,6 +11,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/loggen"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
+	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
@@ -50,8 +52,9 @@ const (
 // collection of in-process components:
 //
 //	HTTP protobuf provisioning -> collector file/WAL/gRPC -> ClickHouse ->
-//	SPL job execution -> HTTP protobuf typed results -> bounded export
-//	re-execution -> one-time raw artifact download.
+//	SPL job creation -> binary protobuf WebSocket progress/terminal events ->
+//	HTTP protobuf typed results -> bounded export re-execution -> one-time raw
+//	artifact download.
 //
 // It is opt-in because it builds two binaries and starts a pinned Docker image.
 func TestBackendVertical(t *testing.T) {
@@ -66,6 +69,8 @@ func TestBackendVertical(t *testing.T) {
 	defer cancel()
 	repository := repositoryRoot(t)
 	work := t.TempDir()
+	buildDir := t.TempDir()
+	serverRuntimeDir := t.TempDir()
 
 	image := os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE")
 	clickhouse, err := testsupport.StartClickHouse(ctx, image)
@@ -80,15 +85,16 @@ func TestBackendVertical(t *testing.T) {
 		}
 	})
 
-	serverBinary := filepath.Join(work, "open-splunk-server")
-	collectorBinary := filepath.Join(work, "open-splunk-collector")
+	serverBinary := filepath.Join(buildDir, "open-splunk-server")
+	collectorBinary := filepath.Join(buildDir, "open-splunk-collector")
 	buildBinary(t, ctx, repository, serverBinary, "./cmd/open-splunk-server")
 	buildBinary(t, ctx, repository, collectorBinary, "./cmd/open-splunk-collector")
 
 	httpAddress := unusedLoopbackAddress(t)
 	collectorAddress := unusedLoopbackAddress(t)
 	controlDBPath := filepath.Join(work, "control.sqlite")
-	serverProcess := startProcess(t, repository, []string{
+	assertEmptyDirectory(t, serverRuntimeDir)
+	serverProcess := startProcess(t, serverRuntimeDir, []string{
 		serverBinary,
 		"-http-address=" + httpAddress,
 		"-control-db=" + controlDBPath,
@@ -103,6 +109,7 @@ func TestBackendVertical(t *testing.T) {
 	baseURL := "http://" + httpAddress
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	waitForHealth(t, ctx, httpClient, baseURL, serverProcess)
+	assertStandaloneServerSurface(t, ctx, httpClient, baseURL)
 
 	var createdIndex opensplunkv1.CreateIndexResponse
 	postProto(t, ctx, httpClient, baseURL+"/api/v1/indexes/create", &opensplunkv1.CreateIndexRequest{
@@ -207,6 +214,67 @@ func TestBackendVertical(t *testing.T) {
 type completedSearch struct {
 	jobID   string
 	results *opensplunkv1.GetSearchResultsResponse
+}
+
+func assertEmptyDirectory(t *testing.T, directory string) {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatalf("read standalone server working directory: %v", err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, len(entries))
+		for index, entry := range entries {
+			names[index] = entry.Name()
+		}
+		t.Fatalf("standalone server working directory is not empty: %v", names)
+	}
+}
+
+func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *http.Client, baseURL string) {
+	t.Helper()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("load embedded UI: %v", err)
+	}
+	const maximumHTMLBytes = int64(2 << 20)
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, maximumHTMLBytes+1))
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		t.Fatalf("read embedded UI: %v", readErr)
+	}
+	if closeErr != nil {
+		t.Fatalf("close embedded UI response: %v", closeErr)
+	}
+	bodyPreview := body[:min(len(body), 512)]
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("embedded UI status = %d body prefix = %q", response.StatusCode, bodyPreview)
+	}
+	if int64(len(body)) > maximumHTMLBytes {
+		t.Fatalf("embedded UI exceeded %d bytes", maximumHTMLBytes)
+	}
+	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || mediaType != "text/html" {
+		t.Fatalf("embedded UI Content-Type = %q (parse error %v)", response.Header.Get("Content-Type"), err)
+	}
+	if !bytes.Contains(body, []byte("<title>Home | Open Splunk</title>")) {
+		t.Fatalf("embedded UI did not contain the expected title; body prefix = %q", bodyPreview)
+	}
+
+	var bootstrap opensplunkv1.GetSystemBootstrapResponse
+	postProto(t, ctx, client, baseURL+"/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{}, &bootstrap)
+	limits := bootstrap.GetLimits()
+	if bootstrap.GetServerVersion() != "dev" || bootstrap.GetApiVersion() != "v1" ||
+		bootstrap.GetSplCompatibilityVersion() != splCompatibilityVersionForTest ||
+		bootstrap.GetSearchWebsocketPath() != "/api/v1/search/ws" ||
+		limits.GetMaximumPreviewRows() != 0 || limits.GetMaximumWebsocketSubscriptions() == 0 ||
+		limits.GetMaximumWebsocketFrameBytes() < 1<<10 || limits.GetMaximumWebsocketFrameBytes() > 1<<20 {
+		t.Fatalf("standalone bootstrap response = %+v", &bootstrap)
+	}
 }
 
 func waitForHealth(t *testing.T, ctx context.Context, client *http.Client, baseURL string, process *managedProcess) {
@@ -923,40 +991,227 @@ func runSearch(t *testing.T, ctx context.Context, client *http.Client, baseURL s
 	if jobID == "" {
 		t.Fatalf("created search job = %+v", created.GetSearchJob())
 	}
-	deadline := time.NewTimer(20 * time.Second)
-	defer deadline.Stop()
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		var got opensplunkv1.GetSearchJobResponse
-		postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{SearchJobId: jobID}, &got)
-		state := got.GetSearchJob().GetState()
-		switch state {
-		case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED:
-			t.Logf("completed search scope: indexes=%v range=%v cutoff=%v rows=%d",
-				got.GetSearchJob().GetEffectiveIndexScope(), got.GetSearchJob().GetResolvedTimeRange(),
-				got.GetSearchJob().GetIndexTimeCutoff(), got.GetSearchJob().GetProgress().GetProducedRows())
-			pageSize := uint32(100)
-			var results opensplunkv1.GetSearchResultsResponse
-			postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/results", &opensplunkv1.GetSearchResultsRequest{
-				SearchJobId: jobID,
-				Page:        &opensplunkv1.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
-			}, &results)
-			waitForTerminalHistory(t, ctx, client, baseURL, jobID)
-			return completedSearch{jobID: jobID, results: &results}
-		case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED,
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED,
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED:
-			t.Fatalf("search job terminated in %s: %+v", state, got.GetSearchJob().GetFailure())
+	terminal := observeCompletedSearchWebSocket(t, ctx, baseURL, jobID)
+
+	// WebSocket events are sequenced notifications, not the source of truth.
+	// Read the authoritative terminal snapshot and full results over HTTP.
+	var got opensplunkv1.GetSearchJobResponse
+	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{SearchJobId: jobID}, &got)
+	job := got.GetSearchJob()
+	if job.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
+		job.GetStateVersion() != terminal.GetStateVersion() ||
+		job.GetProgress().GetProducedRows() != terminal.GetFinalProgress().GetProducedRows() {
+		t.Fatalf("authoritative search job = %+v, websocket terminal = %+v", job, terminal)
+	}
+	t.Logf("completed search scope: indexes=%v range=%v cutoff=%v rows=%d",
+		job.GetEffectiveIndexScope(), job.GetResolvedTimeRange(), job.GetIndexTimeCutoff(), job.GetProgress().GetProducedRows())
+
+	pageSize := uint32(100)
+	var results opensplunkv1.GetSearchResultsResponse
+	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/results", &opensplunkv1.GetSearchResultsRequest{
+		SearchJobId: jobID,
+		Page:        &opensplunkv1.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
+	}, &results)
+	waitForTerminalHistory(t, ctx, client, baseURL, jobID)
+	return completedSearch{jobID: jobID, results: &results}
+}
+
+func observeCompletedSearchWebSocket(
+	t *testing.T,
+	ctx context.Context,
+	baseURL, jobID string,
+) *opensplunkv1.SearchJobTerminal {
+	t.Helper()
+	watchContext, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	endpoint, err := url.Parse(baseURL)
+	if err != nil {
+		t.Fatalf("parse backend URL for search websocket: %v", err)
+	}
+	switch endpoint.Scheme {
+	case "http":
+		endpoint.Scheme = "ws"
+	case "https":
+		endpoint.Scheme = "wss"
+	default:
+		t.Fatalf("unsupported backend URL scheme %q", endpoint.Scheme)
+	}
+	endpoint.Path = "/api/v1/search/ws"
+	endpoint.RawPath = ""
+	endpoint.RawQuery = ""
+	endpoint.Fragment = ""
+
+	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
+	connection, response, err := dialer.DialContext(watchContext, endpoint.String(), http.Header{
+		"Origin":         []string{baseURL},
+		"Sec-Fetch-Site": []string{"same-origin"},
+	})
+	if err != nil {
+		status := 0
+		if response != nil {
+			status = response.StatusCode
+			_ = response.Body.Close()
 		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("wait for search: %v", ctx.Err())
-		case <-deadline.C:
-			t.Fatal("wait for search: timed out")
-		case <-ticker.C:
+		t.Fatalf("connect search websocket: %v (status %d)", err, status)
+	}
+	if response == nil || response.StatusCode != http.StatusSwitchingProtocols {
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		_ = connection.Close()
+		t.Fatalf("search websocket upgrade response = %#v", response)
+	}
+	_ = response.Body.Close()
+	defer func() {
+		_ = connection.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "integration observation complete"),
+			time.Now().Add(time.Second),
+		)
+		_ = connection.Close()
+	}()
+	connection.SetReadLimit(1 << 20)
+
+	deadline, ok := watchContext.Deadline()
+	if !ok {
+		t.Fatal("search websocket observation has no deadline")
+	}
+	if err := connection.SetWriteDeadline(deadline); err != nil {
+		t.Fatalf("set search websocket write deadline: %v", err)
+	}
+	command := &opensplunkv1.SearchWebSocketCommand{
+		RequestId: "backend-vertical-subscribe",
+		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{
+			Subscriptions: []*opensplunkv1.SearchSubscription{{
+				SubscriptionId: "backend-vertical-search",
+				Target: &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_SearchJobId{
+					SearchJobId: jobID,
+				}},
+				// Zero deliberately accepts the current terminal snapshot when this
+				// four-row query finishes before the upgrade completes.
+				AfterSequence: 0,
+			}},
+		}},
+	}
+	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(command)
+	if err != nil {
+		t.Fatalf("marshal search websocket subscription: %v", err)
+	}
+	if err := connection.WriteMessage(websocket.BinaryMessage, wire); err != nil {
+		t.Fatalf("write search websocket subscription: %v", err)
+	}
+	if err := connection.SetReadDeadline(deadline); err != nil {
+		t.Fatalf("set search websocket read deadline: %v", err)
+	}
+
+	first := readBackendSearchWebSocketEvent(t, connection)
+	acknowledgment := first.GetSubscriptionAcknowledged()
+	if acknowledgment == nil {
+		t.Fatalf("first search websocket event is not an explicit subscription acknowledgment: %+v", first)
+	}
+	if first.GetSequence() != 0 || acknowledgment.GetRequestId() != command.GetRequestId() ||
+		acknowledgment.GetSubscriptionId() != "backend-vertical-search" ||
+		acknowledgment.GetTarget().GetSearchJobId() != jobID {
+		t.Fatalf("search websocket acknowledgment = %+v, sequence = %d", acknowledgment, first.GetSequence())
+	}
+
+	var (
+		lastSequence     uint64
+		lastStateVersion uint64
+		lastProducedRows uint64
+		lastResultBytes  uint64
+		sawState         bool
+		sawProgress      bool
+	)
+	for frame := 0; frame < 256; frame++ {
+		event := readBackendSearchWebSocketEvent(t, connection)
+		if event.GetSubscriptionAcknowledged() != nil {
+			t.Fatalf("duplicate search websocket acknowledgment: %+v", event)
+		}
+		if event.GetProtocolError() != nil {
+			t.Fatalf("search websocket protocol error: %+v", event.GetProtocolError())
+		}
+		if event.GetResynchronizationRequired() != nil {
+			t.Fatalf("fresh search websocket subscription required resynchronization: %+v", event.GetResynchronizationRequired())
+		}
+		if event.GetSubscriptionId() != "backend-vertical-search" || event.GetTarget().GetSearchJobId() != jobID {
+			t.Fatalf("search websocket target routing = %+v", event)
+		}
+		if event.GetSequence() == 0 || event.GetSequence() <= lastSequence {
+			t.Fatalf("search websocket target sequence = %d after %d", event.GetSequence(), lastSequence)
+		}
+		lastSequence = event.GetSequence()
+		if event.GetOccurredAt() == nil || event.GetOccurredAt().CheckValid() != nil {
+			t.Fatalf("search websocket event has invalid occurrence time: %+v", event)
+		}
+
+		switch {
+		case event.GetResultPreview() != nil:
+			t.Fatalf("search websocket delivered unrequested result preview: %+v", event.GetResultPreview())
+		case event.GetSearchStateChanged() != nil:
+			state := event.GetSearchStateChanged()
+			if state.GetSearchJobId() != jobID || state.GetState() == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED ||
+				state.GetStateVersion() == 0 || state.GetStateVersion() < lastStateVersion {
+				t.Fatalf("search websocket state event = %+v after version %d", state, lastStateVersion)
+			}
+			switch state.GetState() {
+			case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED,
+				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED,
+				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED:
+				t.Fatalf("search websocket reported terminal state %s before successful completion", state.GetState())
+			}
+			lastStateVersion = state.GetStateVersion()
+			sawState = true
+		case event.GetSearchProgress() != nil:
+			progress := event.GetSearchProgress()
+			if progress.GetPhase() == opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_UNSPECIFIED ||
+				progress.GetUpdatedAt() == nil || progress.GetUpdatedAt().CheckValid() != nil ||
+				progress.GetProducedRows() < lastProducedRows || progress.GetResultBytes() < lastResultBytes {
+				t.Fatalf("search websocket progress event = %+v after rows=%d bytes=%d",
+					progress, lastProducedRows, lastResultBytes)
+			}
+			lastProducedRows = progress.GetProducedRows()
+			lastResultBytes = progress.GetResultBytes()
+			sawProgress = true
+		case event.GetSearchTerminal() != nil:
+			terminal := event.GetSearchTerminal()
+			if !sawState || !sawProgress || terminal.GetSearchJobId() != jobID ||
+				terminal.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
+				terminal.GetStateVersion() == 0 || terminal.GetStateVersion() != lastStateVersion ||
+				terminal.GetFinalProgress().GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
+				terminal.GetFinalProgress().GetProducedRows() != verticalEventCount ||
+				terminal.GetFinalProgress().GetProducedRows() != lastProducedRows ||
+				terminal.GetFinalProgress().GetResultBytes() != lastResultBytes || terminal.GetFailure() != nil ||
+				terminal.GetResultsExpireAt() == nil || terminal.GetResultsExpireAt().CheckValid() != nil {
+				t.Fatalf("search websocket terminal event = %+v (state=%t progress=%t last version=%d)",
+					terminal, sawState, sawProgress, lastStateVersion)
+			}
+			return terminal
+		case event.GetResultSchemaAvailable() != nil, event.GetWarning() != nil:
+			// Metadata notifications may appear between progress and terminal.
+		default:
+			t.Fatalf("unexpected search websocket event: %+v", event)
 		}
 	}
+	t.Fatal("search websocket exceeded the bounded event count before completion")
+	return nil
+}
+
+func readBackendSearchWebSocketEvent(t *testing.T, connection *websocket.Conn) *opensplunkv1.SearchWebSocketEvent {
+	t.Helper()
+	messageType, wire, err := connection.ReadMessage()
+	if err != nil {
+		t.Fatalf("read search websocket event: %v", err)
+	}
+	if messageType != websocket.BinaryMessage {
+		t.Fatalf("search websocket message type = %d, want binary", messageType)
+	}
+	event := new(opensplunkv1.SearchWebSocketEvent)
+	if err := proto.Unmarshal(wire, event); err != nil {
+		t.Fatalf("decode search websocket event: %v", err)
+	}
+	return event
 }
 
 func waitForTerminalHistory(t *testing.T, ctx context.Context, client *http.Client, baseURL, jobID string) {

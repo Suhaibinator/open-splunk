@@ -461,12 +461,15 @@ func TestAdministrativeRoutesRejectDNSRebindingAndCrossOriginBrowsers(t *testing
 	}}
 
 	for name, headers := range map[string]map[string]string{
-		"dns rebinding host": {"Host": "attacker.example", "Origin": "http://attacker.example"},
-		"foreign origin":     {"Host": "example.com", "Origin": "http://attacker.example"},
-		"cross-site fetch":   {"Host": "example.com", "Origin": "http://example.com", "Sec-Fetch-Site": "cross-site"},
-		"opaque origin":      {"Host": "example.com", "Origin": "null"},
-		"different port":     {"Host": "example.com", "Origin": "http://example.com:8080"},
-		"different scheme":   {"Host": "example.com", "Origin": "https://example.com"},
+		"dns rebinding host":    {"Host": "attacker.example", "Origin": "http://attacker.example"},
+		"foreign origin":        {"Host": "example.com", "Origin": "http://attacker.example"},
+		"cross-site fetch":      {"Host": "example.com", "Origin": "http://example.com", "Sec-Fetch-Site": "cross-site"},
+		"opaque origin":         {"Host": "example.com", "Origin": "null"},
+		"different port":        {"Host": "example.com", "Origin": "http://example.com:8080"},
+		"different scheme":      {"Host": "example.com", "Origin": "https://example.com"},
+		"empty query delimiter": {"Host": "example.com", "Origin": "http://example.com?"},
+		"empty fragment":        {"Host": "example.com", "Origin": "http://example.com#"},
+		"empty port":            {"Host": "example.com:", "Origin": "http://example.com:"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			response := postProtoHeaders(t, handler, "/api/v1/ingestion-tokens/create", requestMessage, headers)

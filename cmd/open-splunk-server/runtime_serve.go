@@ -29,12 +29,13 @@ func serveRuntime(
 	ctx context.Context,
 	httpServer runtimeHTTPServer,
 	requests *trackedHandler,
+	webSockets webSocketShutdown,
 	collectorServer runtimeGRPCServer,
 	collectorListener net.Listener,
 	timeout time.Duration,
 ) error {
-	if ctx == nil || httpServer == nil || requests == nil {
-		return errors.New("serve runtime: context, HTTP server, and request tracker are required")
+	if ctx == nil || httpServer == nil || requests == nil || isNilWebSocketShutdown(webSockets) {
+		return errors.New("serve runtime: context, HTTP server, request tracker, and websocket service are required")
 	}
 	if timeout <= 0 {
 		return errors.New("serve runtime: shutdown timeout must be positive")
@@ -69,7 +70,7 @@ func serveRuntime(
 	shutdownWG.Add(1)
 	go func() {
 		defer shutdownWG.Done()
-		httpShutdown <- shutdownHTTPServer(httpServer, requests, timeout)
+		httpShutdown <- shutdownHTTPServer(httpServer, requests, webSockets, timeout)
 	}()
 	var collectorShutdown chan error
 	if collectorServer != nil {

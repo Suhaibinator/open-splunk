@@ -29,6 +29,7 @@ import (
 )
 
 const (
+	searchWebSocketPath               = "/api/v1/search/ws"
 	defaultMaximumRequestBytes        = int64(128 << 10)
 	defaultMaximumPageSize            = uint32(1_000)
 	defaultMaximumConcurrentRequests  = 64
@@ -45,6 +46,9 @@ const (
 	maximumConcurrentDownloads        = 256
 	maximumIdentityBytes              = 255
 	maximumBootstrapApps              = 256
+	maximumWebSocketSubscriptions     = uint32(256)
+	minimumWebSocketFrameBytes        = uint64(1 << 10)
+	maximumWebSocketFrameBytes        = uint64(1 << 20)
 )
 
 // SearchJobs is the scoped search-job surface exposed to the browser API.
@@ -119,6 +123,44 @@ type Exports interface {
 	RedeemDownload(context.Context, string) (exportjobs.ArtifactDownload, error)
 }
 
+// SearchWebSocket is the independently lifecycle-managed progress transport.
+// Its advertised limits are read from the same service that enforces them so
+// bootstrap metadata cannot drift from the live route.
+type SearchWebSocket interface {
+	http.Handler
+	MaximumSubscriptions() uint32
+	MaximumFrameBytes() uint64
+	// Close must stop admission and hard-close every upgraded connection before
+	// returning, even when ctx expires. An error may report that graceful close
+	// timed out, but no handler may remain dependent on search/export services.
+	Close(context.Context) error
+}
+
+// Handler owns the browser HTTP surface and the exact long-lived WebSocket
+// service routed through it. Close therefore cannot accidentally target a
+// different service than ServeHTTP upgraded.
+type Handler struct {
+	next            http.Handler
+	searchWebSocket SearchWebSocket
+}
+
+func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	if handler == nil || handler.next == nil {
+		http.NotFound(response, request)
+		return
+	}
+	handler.next.ServeHTTP(response, request)
+}
+
+// Close terminates every upgraded progress connection. Ordinary HTTP
+// connection shutdown remains owned by cmd/open-splunk-server.
+func (handler *Handler) Close(ctx context.Context) error {
+	if handler == nil || handler.searchWebSocket == nil {
+		return nil
+	}
+	return handler.searchWebSocket.Close(ctx)
+}
+
 // BootstrapConfig contains build information and static workspace summaries.
 // Index summaries are always loaded from IndexCatalog so authorization and the
 // UI bootstrap cannot drift apart.
@@ -151,6 +193,7 @@ type Config struct {
 	SavedSearches              SavedSearches
 	SearchHistory              SearchHistory
 	Exports                    Exports
+	SearchWebSocket            SearchWebSocket
 	WebUI                      fs.FS
 	Bootstrap                  BootstrapConfig
 	OwnerID                    string
@@ -176,6 +219,7 @@ type apiHandler struct {
 	savedSearches       SavedSearches
 	searchHistory       SearchHistory
 	exports             Exports
+	searchWebSocket     SearchWebSocket
 	ownerID             string
 	tenantID            string
 	maximumPageSize     uint32
@@ -191,7 +235,7 @@ type apiHandler struct {
 // NewHandler constructs the complete HTTP handler. API paths are dispatched
 // before the SPA handler, including unknown API paths, so frontend fallback can
 // never conceal an unavailable or misspelled backend route.
-func NewHandler(config Config) (http.Handler, error) {
+func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(config.SearchJobs) {
 		return nil, errors.New("create server handler: search job service is required")
 	}
@@ -220,6 +264,10 @@ func NewHandler(config Config) (http.Handler, error) {
 	exportService := config.Exports
 	if isNilDependency(exportService) {
 		exportService = nil
+	}
+	searchWebSocket := config.SearchWebSocket
+	if isNilDependency(searchWebSocket) {
+		searchWebSocket = nil
 	}
 	if config.WebUI == nil {
 		return nil, errors.New("create server handler: web UI filesystem is required")
@@ -285,6 +333,23 @@ func NewHandler(config Config) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
+	bootstrap.SearchWebSocketPath = ""
+	bootstrap.MaximumSubscriptions = 0
+	bootstrap.MaximumWebSocketBytes = 0
+	bootstrap.MaximumPreviewRows = 0
+	if searchWebSocket != nil {
+		maximumSubscriptions := searchWebSocket.MaximumSubscriptions()
+		maximumFrameBytes := searchWebSocket.MaximumFrameBytes()
+		if maximumSubscriptions == 0 || maximumSubscriptions > maximumWebSocketSubscriptions {
+			return nil, fmt.Errorf("create server handler: websocket subscriptions must be between 1 and %d", maximumWebSocketSubscriptions)
+		}
+		if maximumFrameBytes < minimumWebSocketFrameBytes || maximumFrameBytes > maximumWebSocketFrameBytes {
+			return nil, fmt.Errorf("create server handler: websocket frame bytes must be between %d and %d", minimumWebSocketFrameBytes, maximumWebSocketFrameBytes)
+		}
+		bootstrap.SearchWebSocketPath = searchWebSocketPath
+		bootstrap.MaximumSubscriptions = maximumSubscriptions
+		bootstrap.MaximumWebSocketBytes = maximumFrameBytes
+	}
 	bootstrap.Features = featuresForServices(bootstrap.Features, indexAdmin != nil, ingestionTokens != nil, searchHistoryService != nil, exportService != nil)
 	browserAllowedHosts, err := normalizeBrowserAllowedHosts(config.AdministrativeAllowedHosts)
 	if err != nil {
@@ -309,6 +374,7 @@ func NewHandler(config Config) (http.Handler, error) {
 		savedSearches:       config.SavedSearches,
 		searchHistory:       searchHistoryService,
 		exports:             exportService,
+		searchWebSocket:     searchWebSocket,
 		ownerID:             ownerID,
 		tenantID:            tenantID,
 		maximumPageSize:     pageSize,
@@ -376,6 +442,9 @@ func NewHandler(config Config) (http.Handler, error) {
 		}
 		apiRoutes[exportDownloadPath] = http.MethodGet
 	}
+	if api.searchWebSocket != nil {
+		apiRoutes[searchWebSocketPath] = http.MethodGet
+	}
 	apiBoundary := exactAPIRoutes(api.protectBrowserAPIRoutes(apiRouter), apiRoutes)
 
 	mux := http.NewServeMux()
@@ -390,7 +459,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.Handle("/api", apiBoundary)
 	mux.Handle("/api/", apiBoundary)
 	mux.Handle("/", spa)
-	return mux, nil
+	return &Handler{next: mux, searchWebSocket: searchWebSocket}, nil
 }
 
 func isNilDependency(value any) bool {
@@ -491,8 +560,13 @@ func featuresForServices(features []opensplunkv1.ServerFeature, _, _, historyEna
 	hasCSVExport := false
 	hasJSONLinesExport := false
 	for _, feature := range features {
-		if feature != opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN &&
+		if feature != opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW &&
+			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY &&
+			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE &&
+			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN &&
 			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN &&
+			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN &&
+			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION &&
 			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY || historyEnabled) &&
 			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV || exportsEnabled) &&
 			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES || exportsEnabled) {
@@ -606,7 +680,6 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 			}),
 		)
 	}
-
 	subRouters := []router.SubRouterConfig{{
 		PathPrefix:  "/api/v1",
 		AuthLevel:   &noAuth,
@@ -624,6 +697,20 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 				AuthLevel:      &noAuth,
 				DisableTimeout: true,
 				Handler:        handler.downloadExport,
+			}},
+		})
+	}
+	if handler.searchWebSocket != nil {
+		subRouters = append(subRouters, router.SubRouterConfig{
+			PathPrefix:  "/api/v1",
+			AuthLevel:   &noAuth,
+			Middlewares: []sroutercommon.Middleware{disableAPICaching},
+			Routes: []router.RouteDefinition{router.RouteConfigBase{
+				Path:           "/search/ws",
+				Methods:        []router.HttpMethod{router.MethodGet},
+				AuthLevel:      &noAuth,
+				DisableTimeout: true,
+				Handler:        handler.searchWebSocket.ServeHTTP,
 			}},
 		})
 	}

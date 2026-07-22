@@ -45,6 +45,32 @@ type fakeSearchJobs struct {
 	cancelID       string
 }
 
+// cancelOnSuccessfulSearchJobs simulates the request being canceled in the
+// narrow window after a mutation committed but before its handler returned.
+// Successful mutations remain authoritative even though the response write
+// may subsequently fail at the transport boundary.
+type cancelOnSuccessfulSearchJobs struct {
+	*fakeSearchJobs
+	cancelCreate context.CancelFunc
+	cancelJob    context.CancelFunc
+}
+
+func (jobs *cancelOnSuccessfulSearchJobs) Create(ctx context.Context, request searchjobs.CreateRequest) (searchjobs.Job, error) {
+	job, err := jobs.fakeSearchJobs.Create(ctx, request)
+	if err == nil && jobs.cancelCreate != nil {
+		jobs.cancelCreate()
+	}
+	return job, err
+}
+
+func (jobs *cancelOnSuccessfulSearchJobs) CancelFor(scope searchjobs.AccessScope, id string) error {
+	err := jobs.fakeSearchJobs.CancelFor(scope, id)
+	if err == nil && jobs.cancelJob != nil {
+		jobs.cancelJob()
+	}
+	return err
+}
+
 func (jobs *fakeSearchJobs) Create(_ context.Context, request searchjobs.CreateRequest) (searchjobs.Job, error) {
 	jobs.mu.Lock()
 	defer jobs.mu.Unlock()
@@ -81,6 +107,46 @@ func (jobs *fakeSearchJobs) CancelFor(scope searchjobs.AccessScope, id string) e
 type fakeIndexCatalog struct {
 	indexes []control.Index
 	err     error
+}
+
+type fakeSearchWebSocket struct {
+	mu                   sync.Mutex
+	calls                int
+	maximumSubscriptions uint32
+	maximumFrameBytes    uint64
+	closed               bool
+}
+
+func (socket *fakeSearchWebSocket) ServeHTTP(response http.ResponseWriter, _ *http.Request) {
+	socket.mu.Lock()
+	socket.calls++
+	socket.mu.Unlock()
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func (socket *fakeSearchWebSocket) MaximumSubscriptions() uint32 {
+	return socket.maximumSubscriptions
+}
+
+func (socket *fakeSearchWebSocket) MaximumFrameBytes() uint64 { return socket.maximumFrameBytes }
+
+func (socket *fakeSearchWebSocket) callCount() int {
+	socket.mu.Lock()
+	defer socket.mu.Unlock()
+	return socket.calls
+}
+
+func (socket *fakeSearchWebSocket) Close(context.Context) error {
+	socket.mu.Lock()
+	socket.closed = true
+	socket.mu.Unlock()
+	return nil
+}
+
+func (socket *fakeSearchWebSocket) wasClosed() bool {
+	socket.mu.Lock()
+	defer socket.mu.Unlock()
+	return socket.closed
 }
 
 type blockingResultJobs struct {
@@ -204,6 +270,155 @@ func TestBootstrapUsesProtobufAndLiveIndexes(t *testing.T) {
 	unmarshalResponse(t, response, &decoded)
 	if decoded.GetApps()[0].GetDisplayName() != "Main" {
 		t.Fatalf("app alias leaked: %+v", decoded.GetApps()[0])
+	}
+}
+
+func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
+	socket := &fakeSearchWebSocket{maximumSubscriptions: 32, maximumFrameBytes: 64 << 10}
+	handler := newTestHandler(t, Config{
+		SearchJobs:      &fakeSearchJobs{},
+		SearchWebSocket: socket,
+		Indexes:         fakeIndexCatalog{},
+		WebUI:           testUI(),
+		Bootstrap: BootstrapConfig{Features: []opensplunkv1.ServerFeature{
+			opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
+			opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW,
+			opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
+			opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE,
+			opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
+		}},
+	})
+
+	bootstrapResponse := postProto(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
+	if bootstrapResponse.Code != http.StatusOK {
+		t.Fatalf("bootstrap status = %d, body = %s", bootstrapResponse.Code, bootstrapResponse.Body.String())
+	}
+	var bootstrap opensplunkv1.GetSystemBootstrapResponse
+	unmarshalResponse(t, bootstrapResponse, &bootstrap)
+	if bootstrap.GetSearchWebsocketPath() != searchWebSocketPath {
+		t.Fatalf("websocket path = %q, want %q", bootstrap.GetSearchWebsocketPath(), searchWebSocketPath)
+	}
+	if bootstrap.GetLimits().GetMaximumWebsocketSubscriptions() != socket.MaximumSubscriptions() ||
+		bootstrap.GetLimits().GetMaximumWebsocketFrameBytes() != socket.MaximumFrameBytes() {
+		t.Fatalf("websocket limits = %+v", bootstrap.GetLimits())
+	}
+	if bootstrap.GetLimits().GetMaximumPreviewRows() != 0 {
+		t.Fatalf("unsupported preview was advertised: %+v", &bootstrap)
+	}
+	for _, unsupported := range []opensplunkv1.ServerFeature{
+		opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW,
+		opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
+		opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE,
+		opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
+	} {
+		if slices.Contains(bootstrap.GetFeatures(), unsupported) {
+			t.Fatalf("unsupported feature %s was advertised", unsupported)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet, searchWebSocketPath, nil)
+	request.Host = "example.com"
+	request.Header.Set("Origin", "http://example.com")
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || socket.callCount() != 1 {
+		t.Fatalf("websocket response = %d calls = %d", response.Code, socket.callCount())
+	}
+	// This fake raw handler returns an ordinary HTTP response, so the assertion
+	// covers the route's non-upgrade cache boundary. Gorilla writes a successful
+	// 101 after hijacking; 101 responses are not cacheable and do not promise
+	// these ordinary-response headers.
+	if response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("websocket cache policy = %q", response.Header().Get("Cache-Control"))
+	}
+
+	for name, authority := range map[string]string{
+		"foreign origin": "http://attacker.example",
+		"empty query":    "http://example.com?",
+		"empty fragment": "http://example.com#",
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, searchWebSocketPath, nil)
+			request.Host = "example.com"
+			request.Header.Set("Origin", authority)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusForbidden || socket.callCount() != 1 {
+				t.Fatalf("untrusted-origin response = %d calls = %d", response.Code, socket.callCount())
+			}
+		})
+	}
+	request = httptest.NewRequest(http.MethodGet, searchWebSocketPath, nil)
+	request.Host = "example.com:"
+	request.Header.Set("Origin", "http://example.com:")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || socket.callCount() != 1 {
+		t.Fatalf("empty-port response = %d calls = %d", response.Code, socket.callCount())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, searchWebSocketPath, nil)
+	request.Host = "example.com"
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodGet || socket.callCount() != 1 {
+		t.Fatalf("wrong-method response = %d allow = %q calls = %d", response.Code, response.Header().Get("Allow"), socket.callCount())
+	}
+	if err := handler.Close(context.Background()); err != nil || !socket.wasClosed() {
+		t.Fatalf("handler close error = %v, socket closed = %v", err, socket.wasClosed())
+	}
+}
+
+func TestSearchWebSocketLimitsAreValidated(t *testing.T) {
+	tests := []struct {
+		name   string
+		socket *fakeSearchWebSocket
+		want   string
+	}{
+		{name: "zero subscriptions", socket: &fakeSearchWebSocket{maximumFrameBytes: 1}, want: "websocket subscriptions"},
+		{name: "too many subscriptions", socket: &fakeSearchWebSocket{maximumSubscriptions: maximumWebSocketSubscriptions + 1, maximumFrameBytes: 1}, want: "websocket subscriptions"},
+		{name: "zero frame bytes", socket: &fakeSearchWebSocket{maximumSubscriptions: 1}, want: "websocket frame bytes"},
+		{name: "unusable frame bytes", socket: &fakeSearchWebSocket{maximumSubscriptions: 1, maximumFrameBytes: minimumWebSocketFrameBytes - 1}, want: "websocket frame bytes"},
+		{name: "too many frame bytes", socket: &fakeSearchWebSocket{maximumSubscriptions: 1, maximumFrameBytes: maximumWebSocketFrameBytes + 1}, want: "websocket frame bytes"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewHandler(Config{
+				SearchJobs: &fakeSearchJobs{}, SearchWebSocket: test.socket, Indexes: fakeIndexCatalog{},
+				SavedSearches: &fakeSavedSearches{}, WebUI: testUI(), AdministrativeAllowedHosts: []string{"example.com"},
+			})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("NewHandler error = %v, want %q", err, test.want)
+			}
+		})
+	}
+
+	var typedNil *fakeSearchWebSocket
+	if _, err := NewHandler(Config{
+		SearchJobs: &fakeSearchJobs{}, SearchWebSocket: typedNil, Indexes: fakeIndexCatalog{},
+		SavedSearches: &fakeSavedSearches{}, WebUI: testUI(),
+	}); err != nil {
+		t.Fatalf("typed-nil websocket should be disabled: %v", err)
+	}
+}
+
+func TestSearchWebSocketIsNotAdvertisedOrRoutedWithoutService(t *testing.T) {
+	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, WebUI: testUI()})
+	bootstrapResponse := postProto(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
+	var bootstrap opensplunkv1.GetSystemBootstrapResponse
+	unmarshalResponse(t, bootstrapResponse, &bootstrap)
+	if bootstrap.GetSearchWebsocketPath() != "" || bootstrap.GetLimits().GetMaximumWebsocketSubscriptions() != 0 ||
+		bootstrap.GetLimits().GetMaximumWebsocketFrameBytes() != 0 {
+		t.Fatalf("disabled websocket was advertised: %+v", &bootstrap)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, searchWebSocketPath, nil)
+	request.Host = "example.com"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("disabled websocket status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 
@@ -568,6 +783,86 @@ func TestCancelUsesScopedJobAndReturnsSnapshot(t *testing.T) {
 	}
 }
 
+func TestCommittedSearchMutationsWinContextCancellationRace(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		jobs := &cancelOnSuccessfulSearchJobs{
+			fakeSearchJobs: &fakeSearchJobs{createJob: completeJob("job-create")},
+			cancelCreate:   cancel,
+		}
+		handler := &apiHandler{
+			jobs: jobs,
+			indexes: fakeIndexCatalog{indexes: []control.Index{{
+				ID: "idx-main", Definition: control.IndexDefinition{Name: "main", SearchEnabled: true}, State: control.IndexStateActive,
+			}}},
+			ownerID:  "owner-1",
+			tenantID: "tenant-1",
+			now:      func() time.Time { return testNow },
+		}
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/search/jobs/create", nil).WithContext(ctx)
+		response, err := handler.createSearchJob(request, createRequest(
+			"2026-07-22T11:00:00Z", "2026-07-22T12:00:00Z", "main",
+		))
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			t.Fatalf("request context error = %v, want context.Canceled", ctx.Err())
+		}
+		if err != nil {
+			t.Fatalf("committed create returned error = %v", err)
+		}
+		if response.GetSearchJob().GetSearchJobId() != "job-create" {
+			t.Fatalf("created response = %+v", response)
+		}
+	})
+
+	t.Run("cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		jobs := &cancelOnSuccessfulSearchJobs{
+			fakeSearchJobs: &fakeSearchJobs{getJob: completeJob("job-cancel")},
+			cancelJob:      cancel,
+		}
+		handler := &apiHandler{
+			jobs:     jobs,
+			ownerID:  "owner-1",
+			tenantID: "tenant-1",
+			now:      func() time.Time { return testNow },
+		}
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/search/jobs/cancel", nil).WithContext(ctx)
+		response, err := handler.cancelSearchJob(request, &opensplunkv1.CancelSearchJobRequest{SearchJobId: "job-cancel"})
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			t.Fatalf("request context error = %v, want context.Canceled", ctx.Err())
+		}
+		if err != nil {
+			t.Fatalf("committed cancellation returned error = %v", err)
+		}
+		if response.GetSearchJob().GetSearchJobId() != "job-cancel" {
+			t.Fatalf("canceled response = %+v", response)
+		}
+	})
+}
+
+func TestSearchCancellationRejectsAlreadyCanceledRequestBeforeMutation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	jobs := &fakeSearchJobs{getJob: completeJob("job-cancel")}
+	handler := &apiHandler{
+		jobs:     jobs,
+		ownerID:  "owner-1",
+		tenantID: "tenant-1",
+		now:      func() time.Time { return testNow },
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/search/jobs/cancel", nil).WithContext(ctx)
+	response, err := handler.cancelSearchJob(request, &opensplunkv1.CancelSearchJobRequest{SearchJobId: "job-cancel"})
+	if !errors.Is(err, context.Canceled) || response != nil {
+		t.Fatalf("cancel response/error = %+v / %v, want context.Canceled", response, err)
+	}
+	jobs.mu.Lock()
+	canceledID := jobs.cancelID
+	jobs.mu.Unlock()
+	if canceledID != "" {
+		t.Fatalf("already-canceled request mutated job %q", canceledID)
+	}
+}
+
 func TestResultSerializationConcurrencyIsBounded(t *testing.T) {
 	base := &fakeSearchJobs{resultsPage: searchjobs.ResultPage{
 		Schema:   searchjobs.Schema{Columns: []searchjobs.Column{{Name: "message", Kind: searchjobs.ValueKindString}}},
@@ -737,7 +1032,7 @@ func TestSPAFallbackNeverShadowsAPI(t *testing.T) {
 	}
 }
 
-func newTestHandler(t *testing.T, config Config) http.Handler {
+func newTestHandler(t *testing.T, config Config) *Handler {
 	t.Helper()
 	if config.SavedSearches == nil {
 		config.SavedSearches = &fakeSavedSearches{}

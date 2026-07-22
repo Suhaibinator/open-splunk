@@ -122,18 +122,15 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 		Earliest:          earliest,
 		Latest:            latest,
 	})
-	if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
-		return nil, contextErr
-	}
 	if err != nil {
+		if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
+			return nil, contextErr
+		}
 		return nil, mapSearchJobError(err)
 	}
 	converted, err := searchJobToProto(job, handler.now())
 	if err != nil {
 		return nil, internalError()
-	}
-	if err := request.Context().Err(); err != nil {
-		return nil, err
 	}
 	return &opensplunkv1.CreateSearchJobResponse{SearchJob: converted}, nil
 }
@@ -233,28 +230,26 @@ func (handler *apiHandler) cancelSearchJob(request *http.Request, input *openspl
 	if strings.TrimSpace(input.GetReason()) != "" {
 		return nil, badRequestError("cancellation reasons are not supported")
 	}
+	// CancelFor has no context parameter, so reject a request that is already
+	// canceled before crossing the mutation boundary. Once CancelFor returns
+	// nil, the cancellation is authoritative and must not be rewritten as a
+	// timeout by a context cancellation racing after the commit point.
+	if err := request.Context().Err(); err != nil {
+		return nil, err
+	}
 	if err := handler.jobs.CancelFor(handler.accessScope(), id); err != nil {
 		if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
 			return nil, contextErr
 		}
 		return nil, mapSearchJobError(err)
 	}
-	if err := request.Context().Err(); err != nil {
-		return nil, err
-	}
 	job, err := handler.jobs.GetFor(handler.accessScope(), id)
-	if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
-		return nil, contextErr
-	}
 	if err != nil {
 		return nil, mapSearchJobError(err)
 	}
 	converted, err := searchJobToProto(job, handler.now())
 	if err != nil {
 		return nil, internalError()
-	}
-	if err := request.Context().Err(); err != nil {
-		return nil, err
 	}
 	return &opensplunkv1.CancelSearchJobResponse{SearchJob: converted}, nil
 }

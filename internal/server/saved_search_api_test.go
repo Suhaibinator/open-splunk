@@ -165,8 +165,7 @@ func TestSavedSearchRoutesRoundTripProtobuf(t *testing.T) {
 	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: store, WebUI: testUI(), OwnerID: ownerID})
 
 	definition := savedSearchDefinition(ownerID, appID, "Errors")
-	emptyRequestID := ""
-	response := postProto(t, handler, "/api/v1/saved-searches/create", &opensplunkv1.CreateSavedSearchRequest{Definition: definition, ClientRequestId: &emptyRequestID})
+	response := postProto(t, handler, "/api/v1/saved-searches/create", &opensplunkv1.CreateSavedSearchRequest{Definition: definition})
 	assertSavedSearchResponse(t, response, &opensplunkv1.CreateSavedSearchResponse{}, "saved-1", 1)
 	if definition.GetName() != "Errors" {
 		t.Fatalf("service mutation escaped cloned create input: %q", definition.GetName())
@@ -223,10 +222,117 @@ func TestSavedSearchRoutesRoundTripProtobuf(t *testing.T) {
 	}
 }
 
+func TestCommittedSavedSearchMutationsWinContextCancellationRace(t *testing.T) {
+	const (
+		ownerID = "owner-1"
+		appID   = "app-main"
+	)
+	definition := savedSearchDefinition(ownerID, appID, "Errors")
+	created := savedSearchRecord("saved-1", 1, ownerID, appID, "Errors")
+	updated := savedSearchRecord("saved-1", 2, ownerID, appID, "Errors Updated")
+	duplicated := savedSearchRecord("saved-2", 1, ownerID, appID, "Errors Copy")
+
+	tests := []struct {
+		name string
+		call func(*apiHandler, *http.Request) error
+		stub func(*fakeSavedSearches, context.CancelFunc)
+	}{
+		{
+			name: "create",
+			stub: func(store *fakeSavedSearches, cancel context.CancelFunc) {
+				store.createFn = func(context.Context, savedobjects.AccessScope, *opensplunkv1.SavedSearchDefinition) (*opensplunkv1.SavedSearch, error) {
+					cancel()
+					return created, nil
+				}
+			},
+			call: func(handler *apiHandler, request *http.Request) error {
+				response, err := handler.createSavedSearch(request, &opensplunkv1.CreateSavedSearchRequest{Definition: definition})
+				if err == nil && response.GetSavedSearch().GetSavedSearchId() != created.GetSavedSearchId() {
+					t.Fatalf("create response = %+v", response)
+				}
+				return err
+			},
+		},
+		{
+			name: "update",
+			stub: func(store *fakeSavedSearches, cancel context.CancelFunc) {
+				store.updateFn = func(context.Context, savedobjects.AccessScope, string, uint64, *opensplunkv1.SavedSearchDefinition, *fieldmaskpb.FieldMask) (*opensplunkv1.SavedSearch, error) {
+					cancel()
+					return updated, nil
+				}
+			},
+			call: func(handler *apiHandler, request *http.Request) error {
+				response, err := handler.updateSavedSearch(request, &opensplunkv1.UpdateSavedSearchRequest{
+					SavedSearchId: "saved-1", ExpectedVersion: 1,
+					Definition: savedSearchDefinition(ownerID, appID, "Errors Updated"),
+				})
+				if err == nil && response.GetSavedSearch().GetVersion() != updated.GetVersion() {
+					t.Fatalf("update response = %+v", response)
+				}
+				return err
+			},
+		},
+		{
+			name: "duplicate",
+			stub: func(store *fakeSavedSearches, cancel context.CancelFunc) {
+				store.duplicateFn = func(context.Context, savedobjects.AccessScope, string, string, *string) (*opensplunkv1.SavedSearch, error) {
+					cancel()
+					return duplicated, nil
+				}
+			},
+			call: func(handler *apiHandler, request *http.Request) error {
+				response, err := handler.duplicateSavedSearch(request, &opensplunkv1.DuplicateSavedSearchRequest{
+					SavedSearchId: "saved-1", NewName: "Errors Copy",
+				})
+				if err == nil && response.GetSavedSearch().GetSavedSearchId() != duplicated.GetSavedSearchId() {
+					t.Fatalf("duplicate response = %+v", response)
+				}
+				return err
+			},
+		},
+		{
+			name: "delete",
+			stub: func(store *fakeSavedSearches, cancel context.CancelFunc) {
+				store.deleteFn = func(context.Context, savedobjects.AccessScope, string, uint64) error {
+					cancel()
+					return nil
+				}
+			},
+			call: func(handler *apiHandler, request *http.Request) error {
+				response, err := handler.deleteSavedSearch(request, &opensplunkv1.DeleteSavedSearchRequest{
+					SavedSearchId: "saved-1", ExpectedVersion: 1,
+				})
+				if err == nil && response.GetSavedSearchId() != "saved-1" {
+					t.Fatalf("delete response = %+v", response)
+				}
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			store := &fakeSavedSearches{}
+			test.stub(store, cancel)
+			handler := &apiHandler{savedSearches: store, ownerID: ownerID}
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/saved-searches/"+test.name, nil).WithContext(ctx)
+			err := test.call(handler, request)
+			if !errors.Is(ctx.Err(), context.Canceled) {
+				t.Fatalf("request context error = %v, want context.Canceled", ctx.Err())
+			}
+			if err != nil {
+				t.Fatalf("committed %s returned error = %v", test.name, err)
+			}
+		})
+	}
+}
+
 func TestSavedSearchRoutesRejectInvalidAndUntrustedInputs(t *testing.T) {
 	ownerID := "owner-1"
 	validDefinition := savedSearchDefinition(ownerID, "app-main", "Errors")
 	clientRequestID := "not-durable"
+	emptyClientRequestID := ""
 	oversizedPage := uint32(11)
 	store := &fakeSavedSearches{}
 	handler := newTestHandler(t, Config{
@@ -241,6 +347,7 @@ func TestSavedSearchRoutesRejectInvalidAndUntrustedInputs(t *testing.T) {
 		{name: "create missing definition", path: "/api/v1/saved-searches/create", request: &opensplunkv1.CreateSavedSearchRequest{}},
 		{name: "create forged owner", path: "/api/v1/saved-searches/create", request: &opensplunkv1.CreateSavedSearchRequest{Definition: savedSearchDefinition("other-owner", "app-main", "Errors")}},
 		{name: "create unsupported idempotency", path: "/api/v1/saved-searches/create", request: &opensplunkv1.CreateSavedSearchRequest{Definition: validDefinition, ClientRequestId: &clientRequestID}},
+		{name: "create empty unsupported idempotency", path: "/api/v1/saved-searches/create", request: &opensplunkv1.CreateSavedSearchRequest{Definition: validDefinition, ClientRequestId: &emptyClientRequestID}},
 		{name: "get missing ID", path: "/api/v1/saved-searches/get", request: &opensplunkv1.GetSavedSearchRequest{}},
 		{name: "list oversized page", path: "/api/v1/saved-searches/list", request: &opensplunkv1.ListSavedSearchesRequest{Page: &opensplunkv1.PageRequest{PageSize: &oversizedPage}}},
 		{name: "list invalid scope", path: "/api/v1/saved-searches/list", request: &opensplunkv1.ListSavedSearchesRequest{SharingScopeFilters: []opensplunkv1.SharingScope{opensplunkv1.SharingScope_SHARING_SCOPE_UNSPECIFIED}}},
@@ -249,6 +356,7 @@ func TestSavedSearchRoutesRejectInvalidAndUntrustedInputs(t *testing.T) {
 		{name: "update unsupported path", path: "/api/v1/saved-searches/update", request: &opensplunkv1.UpdateSavedSearchRequest{SavedSearchId: "saved-1", ExpectedVersion: 1, Definition: validDefinition, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"version"}}}},
 		{name: "duplicate blank name", path: "/api/v1/saved-searches/duplicate", request: &opensplunkv1.DuplicateSavedSearchRequest{SavedSearchId: "saved-1", NewName: "   "}},
 		{name: "duplicate unsupported idempotency", path: "/api/v1/saved-searches/duplicate", request: &opensplunkv1.DuplicateSavedSearchRequest{SavedSearchId: "saved-1", NewName: "copy", ClientRequestId: &clientRequestID}},
+		{name: "duplicate empty unsupported idempotency", path: "/api/v1/saved-searches/duplicate", request: &opensplunkv1.DuplicateSavedSearchRequest{SavedSearchId: "saved-1", NewName: "copy", ClientRequestId: &emptyClientRequestID}},
 		{name: "delete zero version", path: "/api/v1/saved-searches/delete", request: &opensplunkv1.DeleteSavedSearchRequest{SavedSearchId: "saved-1"}},
 	}
 	for _, test := range tests {

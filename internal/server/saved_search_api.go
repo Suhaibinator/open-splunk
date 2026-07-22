@@ -49,7 +49,7 @@ var savedSearchUpdatePaths = map[string]struct{}{
 }
 
 func (handler *apiHandler) createSavedSearch(request *http.Request, input *opensplunkv1.CreateSavedSearchRequest) (*opensplunkv1.CreateSavedSearchResponse, error) {
-	if input.ClientRequestId != nil && input.GetClientRequestId() != "" {
+	if input.ClientRequestId != nil {
 		return nil, badRequestError("client request idempotency is not supported")
 	}
 	definition, err := handler.savedSearchDefinition(input.GetDefinition())
@@ -66,9 +66,6 @@ func (handler *apiHandler) createSavedSearch(request *http.Request, input *opens
 	}
 	if converted.GetVersion() != 1 {
 		return nil, internalError()
-	}
-	if err := savedSearchRequestContextError(request.Context()); err != nil {
-		return nil, err
 	}
 	return &opensplunkv1.CreateSavedSearchResponse{SavedSearch: converted}, nil
 }
@@ -231,14 +228,11 @@ func (handler *apiHandler) updateSavedSearch(request *http.Request, input *opens
 	if converted.GetSavedSearchId() != id || converted.GetVersion() != input.GetExpectedVersion()+1 {
 		return nil, internalError()
 	}
-	if err := savedSearchRequestContextError(request.Context()); err != nil {
-		return nil, err
-	}
 	return &opensplunkv1.UpdateSavedSearchResponse{SavedSearch: converted}, nil
 }
 
 func (handler *apiHandler) duplicateSavedSearch(request *http.Request, input *opensplunkv1.DuplicateSavedSearchRequest) (*opensplunkv1.DuplicateSavedSearchResponse, error) {
-	if input.ClientRequestId != nil && input.GetClientRequestId() != "" {
+	if input.ClientRequestId != nil {
 		return nil, badRequestError("client request idempotency is not supported")
 	}
 	id, err := savedSearchID(input.GetSavedSearchId())
@@ -270,9 +264,6 @@ func (handler *apiHandler) duplicateSavedSearch(request *http.Request, input *op
 	if destinationAppID != nil && savedSearchAppID(converted) != *destinationAppID {
 		return nil, internalError()
 	}
-	if err := savedSearchRequestContextError(request.Context()); err != nil {
-		return nil, err
-	}
 	return &opensplunkv1.DuplicateSavedSearchResponse{SavedSearch: converted}, nil
 }
 
@@ -286,9 +277,6 @@ func (handler *apiHandler) deleteSavedSearch(request *http.Request, input *opens
 	}
 	err = handler.savedSearches.Delete(request.Context(), handler.savedSearchScope(), id, input.GetExpectedVersion())
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
-		return nil, err
-	}
-	if err := savedSearchRequestContextError(request.Context()); err != nil {
 		return nil, err
 	}
 	return &opensplunkv1.DeleteSavedSearchResponse{SavedSearchId: id}, nil
