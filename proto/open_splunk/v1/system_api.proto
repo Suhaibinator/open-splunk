@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/app.proto";
+import "open_splunk/v1/index.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+enum ServerFeature {
+  SERVER_FEATURE_UNSPECIFIED = 0;
+  SERVER_FEATURE_SEARCH = 1;
+  SERVER_FEATURE_SEARCH_PREVIEW = 2;
+  SERVER_FEATURE_FIELD_DISCOVERY = 3;
+  SERVER_FEATURE_TIMELINE = 4;
+  SERVER_FEATURE_SAVED_SEARCHES = 5;
+  SERVER_FEATURE_SEARCH_HISTORY = 6;
+  SERVER_FEATURE_EXPORT_CSV = 7;
+  SERVER_FEATURE_EXPORT_JSON_LINES = 8;
+  SERVER_FEATURE_COLLECTOR_ADMIN = 9;
+  SERVER_FEATURE_INDEX_ADMIN = 10;
+  SERVER_FEATURE_APP_ADMIN = 11;
+  SERVER_FEATURE_PLAN_INSPECTION = 12;
+}
+
+message BrowserApiLimits {
+  uint32 maximum_page_size = 1;
+  uint32 maximum_preview_rows = 2;
+  uint32 maximum_websocket_subscriptions = 3;
+  uint64 maximum_websocket_frame_bytes = 4;
+  uint64 maximum_export_rows = 5;
+  uint64 maximum_export_bytes = 6;
+  google.protobuf.Duration default_search_timeout = 7;
+  google.protobuf.Duration search_result_retention = 8;
+}
+
+// POST /api/v1/system/bootstrap
+message GetSystemBootstrapRequest {
+  optional string preferred_app_id = 1;
+}
+
+message GetSystemBootstrapResponse {
+  string server_version = 1;
+  string api_version = 2;
+  string spl_compatibility_version = 3;
+  string search_websocket_path = 4;
+  repeated ServerFeature features = 5;
+  BrowserApiLimits limits = 6;
+  repeated AppSummary apps = 7;
+  repeated IndexSummary indexes = 8;
+  optional string selected_app_id = 9;
+  google.protobuf.Timestamp server_time = 10;
+}

@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/common.proto";
+import "open_splunk/v1/result.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+enum SearchResultTab {
+  SEARCH_RESULT_TAB_UNSPECIFIED = 0;
+  SEARCH_RESULT_TAB_EVENTS = 1;
+  SEARCH_RESULT_TAB_STATISTICS = 2;
+  SEARCH_RESULT_TAB_VISUALIZATION = 3;
+}
+
+// SearchDefinition is reusable user intent. It contains SPL and relative time
+// expressions, never generated SQL or resolved authorization state.
+message SearchDefinition {
+  string spl = 1;
+  TimeRangeSpec time_range = 2;
+  optional string app_id = 3;
+  repeated string index_scope = 4;
+  SearchResultTab preferred_result_tab = 5;
+  repeated string selected_fields = 6;
+  optional VisualizationSpec visualization = 7;
+}
+
+enum SearchJobOrigin {
+  SEARCH_JOB_ORIGIN_UNSPECIFIED = 0;
+  SEARCH_JOB_ORIGIN_AD_HOC = 1;
+  SEARCH_JOB_ORIGIN_SAVED_SEARCH = 2;
+  SEARCH_JOB_ORIGIN_HISTORY_RERUN = 3;
+  SEARCH_JOB_ORIGIN_DASHBOARD = 4;
+  SEARCH_JOB_ORIGIN_API = 5;
+}
+
+message SearchJobSource {
+  SearchJobOrigin origin = 1;
+  optional string saved_search_id = 2;
+  optional string history_search_id = 3;
+  optional string dashboard_id = 4;
+}
+
+enum SearchJobState {
+  SEARCH_JOB_STATE_UNSPECIFIED = 0;
+  SEARCH_JOB_STATE_QUEUED = 1;
+  SEARCH_JOB_STATE_PARSING = 2;
+  SEARCH_JOB_STATE_PLANNING = 3;
+  SEARCH_JOB_STATE_RUNNING = 4;
+  SEARCH_JOB_STATE_FINALIZING = 5;
+  SEARCH_JOB_STATE_COMPLETED = 6;
+  SEARCH_JOB_STATE_FAILED = 7;
+  SEARCH_JOB_STATE_CANCELED = 8;
+  SEARCH_JOB_STATE_EXPIRED = 9;
+}
+
+enum SearchExecutionPhase {
+  SEARCH_EXECUTION_PHASE_UNSPECIFIED = 0;
+  SEARCH_EXECUTION_PHASE_WAITING_FOR_SLOT = 1;
+  SEARCH_EXECUTION_PHASE_PARSING = 2;
+  SEARCH_EXECUTION_PHASE_SEMANTIC_ANALYSIS = 3;
+  SEARCH_EXECUTION_PHASE_OPTIMIZING = 4;
+  SEARCH_EXECUTION_PHASE_EXECUTING = 5;
+  SEARCH_EXECUTION_PHASE_MATERIALIZING_RESULTS = 6;
+  SEARCH_EXECUTION_PHASE_COMPLETE = 7;
+}
+
+message SearchProgress {
+  SearchExecutionPhase phase = 1;
+  uint64 scanned_rows = 2;
+  uint64 scanned_bytes = 3;
+  uint64 matched_events = 4;
+  uint64 produced_rows = 5;
+  uint64 result_bytes = 6;
+  optional double percent_complete = 7;
+  google.protobuf.Duration elapsed = 8;
+  google.protobuf.Duration queue_wait = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  bool counters_are_estimates = 11;
+}
+
+enum SearchFailureCode {
+  SEARCH_FAILURE_CODE_UNSPECIFIED = 0;
+  SEARCH_FAILURE_CODE_INVALID_SPL = 1;
+  SEARCH_FAILURE_CODE_UNSUPPORTED_SPL = 2;
+  SEARCH_FAILURE_CODE_INVALID_TIME_RANGE = 3;
+  SEARCH_FAILURE_CODE_INDEX_NOT_FOUND = 4;
+  SEARCH_FAILURE_CODE_INDEX_FORBIDDEN = 5;
+  SEARCH_FAILURE_CODE_RESOURCE_LIMIT = 6;
+  SEARCH_FAILURE_CODE_TIMEOUT = 7;
+  SEARCH_FAILURE_CODE_STORAGE_UNAVAILABLE = 8;
+  SEARCH_FAILURE_CODE_EXECUTION = 9;
+  SEARCH_FAILURE_CODE_INTERNAL = 10;
+  SEARCH_FAILURE_CODE_RESULT_EXPIRED = 11;
+}
+
+message SearchFailure {
+  SearchFailureCode code = 1;
+  string message = 2;
+  bool retryable = 3;
+  repeated Diagnostic diagnostics = 4;
+}
+
+message SearchPlanStage {
+  uint32 stage_index = 1;
+  string operator = 2;
+  repeated string input_fields = 3;
+  repeated string output_fields = 4;
+  optional SourceRange source_range = 5;
+}
+
+// SearchPlanSummary is safe logical-plan information. generated_sql is only
+// populated when an authorized diagnostic request explicitly asks for it.
+message SearchPlanSummary {
+  repeated SearchPlanStage stages = 1;
+  repeated string effective_predicates = 2;
+  optional string generated_sql = 3;
+  optional string clickhouse_query_id = 4;
+}
+
+message SearchJobOptions {
+  bool enable_preview = 1;
+  bool enable_field_discovery = 2;
+  bool enable_timeline = 3;
+  optional uint32 preview_row_limit = 4;
+}
+
+// SearchJob is a transient, immutable-snapshot execution record. state_version
+// increases whenever state or terminal metadata changes.
+message SearchJob {
+  string search_job_id = 1;
+  uint64 state_version = 2;
+  SearchDefinition definition = 3;
+  SearchJobSource source = 4;
+  optional string normalized_spl = 5;
+  string compiler_version = 6;
+  repeated string effective_index_scope = 7;
+  optional ResolvedTimeRange resolved_time_range = 8;
+  google.protobuf.Timestamp index_time_cutoff = 9;
+  SearchJobState state = 10;
+  ResultSetKind result_kind = 11;
+  optional ResultSchema result_schema = 12;
+  SearchProgress progress = 13;
+  repeated ApiWarning warnings = 14;
+  repeated Diagnostic diagnostics = 15;
+  optional SearchFailure failure = 16;
+  google.protobuf.Timestamp created_at = 17;
+  google.protobuf.Timestamp started_at = 18;
+  google.protobuf.Timestamp finished_at = 19;
+  google.protobuf.Timestamp expires_at = 20;
+  optional SearchPlanSummary plan = 21;
+}

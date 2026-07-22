@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	opensplunk "github.com/Suhaibinator/open-splunk"
 )
@@ -26,8 +27,9 @@ func main() {
 	mux.Handle("/", http.FileServerFS(webUI))
 
 	server := &http.Server{
-		Addr:    *address,
-		Handler: mux,
+		Addr:              *address,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	log.Printf("open-splunk server listening on %s", *address)

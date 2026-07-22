@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/common.proto";
+import "open_splunk/v1/export.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+// POST /api/v1/search/exports/create
+message CreateExportJobRequest {
+  ExportDefinition definition = 1;
+  optional string client_request_id = 2;
+}
+
+message CreateExportJobResponse {
+  ExportJob export_job = 1;
+}
+
+// ExportDownloadGrant is a short-lived, single-purpose capability. It must not
+// be logged or persisted by clients. The token is never part of ExportJob.
+message ExportDownloadGrant {
+  string download_path = 1;
+  string download_token = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+// POST /api/v1/search/exports/get
+message GetExportJobRequest {
+  string export_job_id = 1;
+  bool issue_download_grant = 2;
+}
+
+message GetExportJobResponse {
+  ExportJob export_job = 1;
+  optional ExportDownloadGrant download_grant = 2;
+}
+
+// POST /api/v1/search/exports/list
+message ListExportJobsRequest {
+  PageRequest page = 1;
+  repeated ExportJobState state_filters = 2;
+  optional string search_job_id_filter = 3;
+}
+
+message ListExportJobsResponse {
+  repeated ExportJob export_jobs = 1;
+  PageResponse page = 2;
+}
+
+// POST /api/v1/search/exports/cancel
+message CancelExportJobRequest {
+  string export_job_id = 1;
+  optional string reason = 2;
+}
+
+message CancelExportJobResponse {
+  ExportJob export_job = 1;
+}

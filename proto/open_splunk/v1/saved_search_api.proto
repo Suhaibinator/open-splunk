@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/field_mask.proto";
+import "open_splunk/v1/common.proto";
+import "open_splunk/v1/saved_search.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+// POST /api/v1/saved-searches/create
+message CreateSavedSearchRequest {
+  SavedSearchDefinition definition = 1;
+  optional string client_request_id = 2;
+}
+
+message CreateSavedSearchResponse {
+  SavedSearch saved_search = 1;
+}
+
+// POST /api/v1/saved-searches/get
+message GetSavedSearchRequest {
+  string saved_search_id = 1;
+}
+
+message GetSavedSearchResponse {
+  SavedSearch saved_search = 1;
+}
+
+enum SavedSearchSortBy {
+  SAVED_SEARCH_SORT_BY_UNSPECIFIED = 0;
+  SAVED_SEARCH_SORT_BY_NAME = 1;
+  SAVED_SEARCH_SORT_BY_CREATED_AT = 2;
+  SAVED_SEARCH_SORT_BY_UPDATED_AT = 3;
+}
+
+// POST /api/v1/saved-searches/list
+message ListSavedSearchesRequest {
+  PageRequest page = 1;
+  optional string app_id_filter = 2;
+  optional string text_filter = 3;
+  repeated SharingScope sharing_scope_filters = 4;
+  SavedSearchSortBy sort_by = 5;
+  SortDirection sort_direction = 6;
+}
+
+message ListSavedSearchesResponse {
+  repeated SavedSearch saved_searches = 1;
+  PageResponse page = 2;
+}
+
+// POST /api/v1/saved-searches/update
+message UpdateSavedSearchRequest {
+  string saved_search_id = 1;
+  uint64 expected_version = 2;
+  SavedSearchDefinition definition = 3;
+  google.protobuf.FieldMask update_mask = 4;
+}
+
+message UpdateSavedSearchResponse {
+  SavedSearch saved_search = 1;
+}
+
+// POST /api/v1/saved-searches/duplicate
+message DuplicateSavedSearchRequest {
+  string saved_search_id = 1;
+  string new_name = 2;
+  optional string destination_app_id = 3;
+  optional string client_request_id = 4;
+}
+
+message DuplicateSavedSearchResponse {
+  SavedSearch saved_search = 1;
+}
+
+// POST /api/v1/saved-searches/delete
+message DeleteSavedSearchRequest {
+  string saved_search_id = 1;
+  uint64 expected_version = 2;
+}
+
+message DeleteSavedSearchResponse {
+  string saved_search_id = 1;
+}

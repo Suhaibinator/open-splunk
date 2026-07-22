@@ -1,0 +1,288 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/common.proto";
+import "open_splunk/v1/event.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+// CollectorIngestService is the native ingestion surface. The collector sends
+// its bearer token in gRPC metadata, never in a protobuf message. The first
+// request on every stream must be CollectorHello.
+service CollectorIngestService {
+  rpc Collect(stream CollectRequest) returns (stream CollectResponse);
+}
+
+enum CollectorCapability {
+  COLLECTOR_CAPABILITY_UNSPECIFIED = 0;
+  COLLECTOR_CAPABILITY_FILE_INPUT = 1;
+  COLLECTOR_CAPABILITY_DURABLE_QUEUE = 2;
+  COLLECTOR_CAPABILITY_PARTIAL_EVENT_REJECTION = 3;
+  COLLECTOR_CAPABILITY_GZIP = 4;
+  COLLECTOR_CAPABILITY_MULTILINE = 5;
+  COLLECTOR_CAPABILITY_TYPED_FIELDS = 6;
+}
+
+enum CollectorInputType {
+  COLLECTOR_INPUT_TYPE_UNSPECIFIED = 0;
+  COLLECTOR_INPUT_TYPE_FILE = 1;
+}
+
+enum CollectorInputState {
+  COLLECTOR_INPUT_STATE_UNSPECIFIED = 0;
+  COLLECTOR_INPUT_STATE_STARTING = 1;
+  COLLECTOR_INPUT_STATE_HEALTHY = 2;
+  COLLECTOR_INPUT_STATE_MISSING = 3;
+  COLLECTOR_INPUT_STATE_UNREADABLE = 4;
+  COLLECTOR_INPUT_STATE_PAUSED = 5;
+  COLLECTOR_INPUT_STATE_ERROR = 6;
+}
+
+message CollectorInputRegistration {
+  string input_id = 1;
+  CollectorInputType input_type = 2;
+  string index_name = 3;
+  optional string source = 4;
+  optional string sourcetype = 5;
+}
+
+message CollectorHello {
+  string collector_id = 1;
+  string instance_id = 2;
+  uint32 protocol_major = 3;
+  uint32 protocol_minor = 4;
+  string collector_version = 5;
+  string hostname = 6;
+  string operating_system = 7;
+  string architecture = 8;
+  google.protobuf.Timestamp started_at = 9;
+  repeated CollectorCapability capabilities = 10;
+  repeated CollectorInputRegistration inputs = 11;
+  optional uint64 last_acknowledged_batch_sequence = 12;
+}
+
+// EventBatch is one durable queue unit. batch_id and batch_sequence remain
+// stable across reconnects and retries. event_ids_sha256 is SHA-256 over each
+// UTF-8 event_id prefixed by its unsigned 32-bit big-endian byte length.
+message EventBatch {
+  string collector_id = 1;
+  string batch_id = 2;
+  uint64 batch_sequence = 3;
+  google.protobuf.Timestamp created_at = 4;
+  repeated LogEvent events = 5;
+  uint64 uncompressed_size_bytes = 6;
+  bytes event_ids_sha256 = 7;
+  uint32 protocol_major = 8;
+  uint32 protocol_minor = 9;
+}
+
+message CollectorQueueStats {
+  uint64 queued_events = 1;
+  uint64 queued_bytes = 2;
+  optional google.protobuf.Duration oldest_event_age = 3;
+  uint64 sent_events_total = 4;
+  uint64 acknowledged_events_total = 5;
+  uint64 retried_batches_total = 6;
+  uint64 rejected_events_total = 7;
+  uint64 dropped_events_total = 8;
+}
+
+message CollectorInputHealth {
+  string input_id = 1;
+  CollectorInputState state = 2;
+  string status_message = 3;
+  uint64 discovered_sources = 4;
+  uint64 active_sources = 5;
+  uint64 events_read_total = 6;
+  uint64 bytes_read_total = 7;
+  google.protobuf.Timestamp last_event_at = 8;
+  google.protobuf.Timestamp last_error_at = 9;
+}
+
+message CollectorHeartbeat {
+  string collector_id = 1;
+  string instance_id = 2;
+  google.protobuf.Timestamp observed_at = 3;
+  CollectorQueueStats queue = 4;
+  repeated CollectorInputHealth inputs = 5;
+  optional uint64 last_sent_batch_sequence = 6;
+  optional uint64 last_acknowledged_batch_sequence = 7;
+  uint64 process_resident_memory_bytes = 8;
+  double process_cpu_percent = 9;
+}
+
+enum CollectorGoodbyeReason {
+  COLLECTOR_GOODBYE_REASON_UNSPECIFIED = 0;
+  COLLECTOR_GOODBYE_REASON_SHUTDOWN = 1;
+  COLLECTOR_GOODBYE_REASON_RESTART = 2;
+  COLLECTOR_GOODBYE_REASON_CONFIGURATION_RELOAD = 3;
+}
+
+message CollectorGoodbye {
+  CollectorGoodbyeReason reason = 1;
+  optional string message = 2;
+}
+
+// CollectRequest.stream_sequence starts at 1 for each connection and must
+// increase by one. It is independent of durable EventBatch.batch_sequence.
+message CollectRequest {
+  uint64 stream_sequence = 1;
+  google.protobuf.Timestamp sent_at = 2;
+
+  oneof payload {
+    CollectorHello hello = 10;
+    EventBatch batch = 11;
+    CollectorHeartbeat heartbeat = 12;
+    CollectorGoodbye goodbye = 13;
+  }
+}
+
+enum AckDurability {
+  ACK_DURABILITY_UNSPECIFIED = 0;
+  ACK_DURABILITY_CLICKHOUSE_COMMITTED = 1;
+}
+
+// CollectorReady completes stream negotiation and declares hard server limits.
+message CollectorReady {
+  string stream_id = 1;
+  string server_instance_id = 2;
+  string server_version = 3;
+  uint32 protocol_major = 4;
+  uint32 protocol_minor = 5;
+  google.protobuf.Timestamp server_time = 6;
+  google.protobuf.Duration heartbeat_interval = 7;
+  uint32 max_in_flight_batches = 8;
+  uint32 max_batch_events = 9;
+  uint64 max_batch_bytes = 10;
+  uint64 max_event_bytes = 11;
+  repeated string authorized_indexes = 12;
+  AckDurability acknowledgment_durability = 13;
+  optional uint64 resume_after_batch_sequence = 14;
+}
+
+enum EventRejectionCode {
+  EVENT_REJECTION_CODE_UNSPECIFIED = 0;
+  EVENT_REJECTION_CODE_INVALID_EVENT_ID = 1;
+  EVENT_REJECTION_CODE_INVALID_INDEX = 2;
+  EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX = 3;
+  EVENT_REJECTION_CODE_INVALID_TIMESTAMP = 4;
+  EVENT_REJECTION_CODE_EVENT_TOO_LARGE = 5;
+  EVENT_REJECTION_CODE_TOO_MANY_FIELDS = 6;
+  EVENT_REJECTION_CODE_FIELD_NAME_INVALID = 7;
+  EVENT_REJECTION_CODE_NESTING_TOO_DEEP = 8;
+  EVENT_REJECTION_CODE_VALUE_INVALID = 9;
+  EVENT_REJECTION_CODE_REDACTION_POLICY = 10;
+}
+
+message EventRejection {
+  uint32 event_index = 1;
+  string event_id = 2;
+  EventRejectionCode code = 3;
+  string message = 4;
+  repeated FieldViolation violations = 5;
+}
+
+// BatchAck is terminal for the batch. Rejected events must be dead-lettered;
+// accepted and duplicate events may be removed from the durable queue.
+message BatchAck {
+  string batch_id = 1;
+  uint64 batch_sequence = 2;
+  optional uint64 acknowledged_through_batch_sequence = 3;
+  AckDurability durability = 4;
+  uint32 accepted_event_count = 5;
+  uint32 duplicate_event_count = 6;
+  repeated EventRejection rejected_events = 7;
+  google.protobuf.Timestamp committed_at = 8;
+}
+
+enum BatchRejectionCode {
+  BATCH_REJECTION_CODE_UNSPECIFIED = 0;
+  BATCH_REJECTION_CODE_INVALID_BATCH_ID = 1;
+  BATCH_REJECTION_CODE_SEQUENCE_CONFLICT = 2;
+  BATCH_REJECTION_CODE_BATCH_TOO_LARGE = 3;
+  BATCH_REJECTION_CODE_TOO_MANY_EVENTS = 4;
+  BATCH_REJECTION_CODE_EVENT_ID_DIGEST_MISMATCH = 5;
+  BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH = 6;
+  BATCH_REJECTION_CODE_PROTOCOL_VIOLATION = 7;
+  BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS = 8;
+}
+
+// BatchReject is a permanent, terminal rejection of the complete batch.
+message BatchReject {
+  string batch_id = 1;
+  uint64 batch_sequence = 2;
+  BatchRejectionCode code = 3;
+  string message = 4;
+  repeated FieldViolation violations = 5;
+}
+
+enum RetryBatchReason {
+  RETRY_BATCH_REASON_UNSPECIFIED = 0;
+  RETRY_BATCH_REASON_SERVER_BUSY = 1;
+  RETRY_BATCH_REASON_STORAGE_UNAVAILABLE = 2;
+  RETRY_BATCH_REASON_RATE_LIMITED = 3;
+  RETRY_BATCH_REASON_SHUTTING_DOWN = 4;
+}
+
+// RetryBatch is non-terminal. The collector must retain and resend the exact
+// same durable batch after at least retry_after.
+message RetryBatch {
+  string batch_id = 1;
+  uint64 batch_sequence = 2;
+  RetryBatchReason reason = 3;
+  google.protobuf.Duration retry_after = 4;
+  optional string message = 5;
+}
+
+enum ThrottleReason {
+  THROTTLE_REASON_UNSPECIFIED = 0;
+  THROTTLE_REASON_SERVER_LOAD = 1;
+  THROTTLE_REASON_STORAGE_LOAD = 2;
+  THROTTLE_REASON_TOKEN_QUOTA = 3;
+  THROTTLE_REASON_INDEX_QUOTA = 4;
+}
+
+// Throttle applies to subsequent sends until effective_until or another
+// throttle message. Zero limits mean the previously negotiated limit remains.
+message Throttle {
+  ThrottleReason reason = 1;
+  google.protobuf.Duration minimum_send_delay = 2;
+  google.protobuf.Timestamp effective_until = 3;
+  uint32 max_in_flight_batches = 4;
+  uint32 max_batch_events = 5;
+  uint64 max_batch_bytes = 6;
+  optional string message = 7;
+}
+
+enum ServerNoticeType {
+  SERVER_NOTICE_TYPE_UNSPECIFIED = 0;
+  SERVER_NOTICE_TYPE_INFORMATION = 1;
+  SERVER_NOTICE_TYPE_MAINTENANCE = 2;
+  SERVER_NOTICE_TYPE_SHUTTING_DOWN = 3;
+}
+
+message ServerNotice {
+  ServerNoticeType type = 1;
+  string code = 2;
+  string message = 3;
+  optional google.protobuf.Duration reconnect_after = 4;
+}
+
+// CollectResponse.stream_sequence is connection-local and monotonically
+// increasing. Responses may arrive independently of collector requests.
+message CollectResponse {
+  uint64 stream_sequence = 1;
+  google.protobuf.Timestamp sent_at = 2;
+
+  oneof payload {
+    CollectorReady ready = 10;
+    BatchAck batch_ack = 11;
+    BatchReject batch_reject = 12;
+    RetryBatch retry_batch = 13;
+    Throttle throttle = 14;
+    ServerNotice notice = 15;
+  }
+}

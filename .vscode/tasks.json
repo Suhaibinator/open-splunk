@@ -1,0 +1,27 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Generate protobufs (Go, gRPC, TypeScript)",
+      "type": "shell",
+      "command": "make",
+      "args": ["proto"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": ["$tsc"],
+      "detail": "Formats and lints the schemas, then generates Go messages, Go gRPC stubs, and TypeScript codecs via make proto."
+    }
+  ]
+}

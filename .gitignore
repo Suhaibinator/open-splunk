@@ -1,5 +1,6 @@
 # Go
 /build/
+/.cache/
 coverage.out
 
 # Next.js / Node
@@ -29,4 +30,6 @@ npm-debug.log*
 # Editor / OS
 .DS_Store
 .idea/
-.vscode/
+.vscode/*
+!.vscode/tasks.json
+*.log

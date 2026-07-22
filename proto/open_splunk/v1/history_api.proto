@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/common.proto";
+import "open_splunk/v1/history.proto";
+import "open_splunk/v1/search.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+// POST /api/v1/search/history/get
+message GetSearchHistoryEntryRequest {
+  string search_job_id = 1;
+}
+
+message GetSearchHistoryEntryResponse {
+  SearchHistoryEntry history_entry = 1;
+}
+
+enum SearchHistorySortBy {
+  SEARCH_HISTORY_SORT_BY_UNSPECIFIED = 0;
+  SEARCH_HISTORY_SORT_BY_CREATED_AT = 1;
+  SEARCH_HISTORY_SORT_BY_FINISHED_AT = 2;
+  SEARCH_HISTORY_SORT_BY_DURATION = 3;
+  SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS = 4;
+}
+
+message SearchHistoryFilter {
+  optional string app_id = 1;
+  repeated SearchJobState state_filters = 2;
+  optional string text = 3;
+  optional string saved_search_id = 4;
+  optional google.protobuf.Timestamp created_after = 5;
+  optional google.protobuf.Timestamp created_before = 6;
+}
+
+// POST /api/v1/search/history/list
+message ListSearchHistoryRequest {
+  PageRequest page = 1;
+  SearchHistoryFilter filter = 2;
+  SearchHistorySortBy sort_by = 3;
+  SortDirection sort_direction = 4;
+}
+
+message ListSearchHistoryResponse {
+  repeated SearchHistoryEntry history_entries = 1;
+  PageResponse page = 2;
+}
+
+// POST /api/v1/search/history/delete
+message DeleteSearchHistoryEntryRequest {
+  string search_job_id = 1;
+}
+
+message DeleteSearchHistoryEntryResponse {
+  string search_job_id = 1;
+}
+
+// POST /api/v1/search/history/clear
+message ClearSearchHistoryRequest {
+  SearchHistoryFilter filter = 1;
+  string confirmation = 2;
+}
+
+message ClearSearchHistoryResponse {
+  uint64 deleted_count = 1;
+}

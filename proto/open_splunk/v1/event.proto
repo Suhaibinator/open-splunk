@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/value.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+enum LogSeverity {
+  LOG_SEVERITY_UNSPECIFIED = 0;
+  LOG_SEVERITY_TRACE = 1;
+  LOG_SEVERITY_DEBUG = 2;
+  LOG_SEVERITY_INFO = 3;
+  LOG_SEVERITY_WARN = 4;
+  LOG_SEVERITY_ERROR = 5;
+  LOG_SEVERITY_FATAL = 6;
+}
+
+enum RawEncoding {
+  RAW_ENCODING_UNSPECIFIED = 0;
+  RAW_ENCODING_UTF8 = 1;
+  RAW_ENCODING_BINARY = 2;
+}
+
+enum EventTimeSource {
+  EVENT_TIME_SOURCE_UNSPECIFIED = 0;
+  EVENT_TIME_SOURCE_PARSED = 1;
+  EVENT_TIME_SOURCE_COLLECTED_AT_FALLBACK = 2;
+  EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK = 3;
+}
+
+// EventOrigin identifies the collector input and durable source position that
+// produced an event. It is diagnostic metadata, not a server-side checkpoint.
+message EventOrigin {
+  string input_id = 1;
+  optional string file_identity = 2;
+  optional uint64 start_offset = 3;
+  optional uint64 end_offset = 4;
+  optional uint64 line_number = 5;
+}
+
+// LogEvent is the canonical collector-to-server event envelope. event_id must
+// be stable across retries. The server derives tenant and index-time metadata;
+// collectors cannot set those security-sensitive values.
+message LogEvent {
+  string event_id = 1;
+  string index_name = 2;
+  google.protobuf.Timestamp event_time = 3;
+  google.protobuf.Timestamp collected_at = 4;
+  EventTimeSource event_time_source = 5;
+  string host = 6;
+  string source = 7;
+  string sourcetype = 8;
+  optional string service = 9;
+  LogSeverity severity = 10;
+  optional string level = 11;
+  optional string message = 12;
+  bytes raw = 13;
+  RawEncoding raw_encoding = 14;
+  optional string trace_id = 15;
+  optional string span_id = 16;
+  TypedObject fields = 17;
+  EventOrigin origin = 18;
+}

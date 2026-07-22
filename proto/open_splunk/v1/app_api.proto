@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/field_mask.proto";
+import "open_splunk/v1/app.proto";
+import "open_splunk/v1/common.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+// POST /api/v1/apps/create
+message CreateAppRequest {
+  AppDefinition definition = 1;
+  optional string client_request_id = 2;
+}
+
+message CreateAppResponse {
+  AppWorkspace app = 1;
+}
+
+// POST /api/v1/apps/get
+message GetAppRequest {
+  AppSelector selector = 1;
+}
+
+message GetAppResponse {
+  AppWorkspace app = 1;
+}
+
+enum AppSortBy {
+  APP_SORT_BY_UNSPECIFIED = 0;
+  APP_SORT_BY_DISPLAY_NAME = 1;
+  APP_SORT_BY_CREATED_AT = 2;
+  APP_SORT_BY_UPDATED_AT = 3;
+}
+
+// POST /api/v1/apps/list
+message ListAppsRequest {
+  PageRequest page = 1;
+  repeated AppState state_filters = 2;
+  optional string text_filter = 3;
+  AppSortBy sort_by = 4;
+  SortDirection sort_direction = 5;
+}
+
+message ListAppsResponse {
+  repeated AppWorkspace apps = 1;
+  PageResponse page = 2;
+}
+
+// POST /api/v1/apps/update
+message UpdateAppRequest {
+  AppSelector selector = 1;
+  uint64 expected_version = 2;
+  AppDefinition definition = 3;
+  google.protobuf.FieldMask update_mask = 4;
+}
+
+message UpdateAppResponse {
+  AppWorkspace app = 1;
+}
+
+// POST /api/v1/apps/state/set
+message SetAppStateRequest {
+  AppSelector selector = 1;
+  uint64 expected_version = 2;
+  AppState state = 3;
+}
+
+message SetAppStateResponse {
+  AppWorkspace app = 1;
+}
+
+// POST /api/v1/apps/delete
+message DeleteAppRequest {
+  AppSelector selector = 1;
+  uint64 expected_version = 2;
+  string confirmation_slug = 3;
+}
+
+message DeleteAppResponse {
+  string app_id = 1;
+}

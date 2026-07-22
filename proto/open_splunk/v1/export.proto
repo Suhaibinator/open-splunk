@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+enum ExportFormat {
+  EXPORT_FORMAT_UNSPECIFIED = 0;
+  EXPORT_FORMAT_CSV = 1;
+  EXPORT_FORMAT_JSON_LINES = 2;
+}
+
+enum CsvHeaderMode {
+  CSV_HEADER_MODE_UNSPECIFIED = 0;
+  CSV_HEADER_MODE_FIELD_NAMES = 1;
+  CSV_HEADER_MODE_DISPLAY_NAMES = 2;
+  CSV_HEADER_MODE_NONE = 3;
+}
+
+message CsvExportOptions {
+  CsvHeaderMode header_mode = 1;
+  // Formula-injection protection is always enabled and cannot be disabled by a
+  // browser request.
+}
+
+enum JsonIntegerEncoding {
+  JSON_INTEGER_ENCODING_UNSPECIFIED = 0;
+  JSON_INTEGER_ENCODING_NUMBER_WHEN_SAFE = 1;
+  JSON_INTEGER_ENCODING_STRING = 2;
+}
+
+message JsonLinesExportOptions {
+  JsonIntegerEncoding integer_encoding = 1;
+  bool include_type_metadata = 2;
+}
+
+message ExportDefinition {
+  string search_job_id = 1;
+  repeated string columns = 2;
+  optional uint64 row_limit = 3;
+  optional uint64 byte_limit = 4;
+
+  oneof format_options {
+    CsvExportOptions csv = 10;
+    JsonLinesExportOptions json_lines = 11;
+  }
+}
+
+enum ExportJobState {
+  EXPORT_JOB_STATE_UNSPECIFIED = 0;
+  EXPORT_JOB_STATE_QUEUED = 1;
+  EXPORT_JOB_STATE_RUNNING = 2;
+  EXPORT_JOB_STATE_COMPLETED = 3;
+  EXPORT_JOB_STATE_FAILED = 4;
+  EXPORT_JOB_STATE_CANCELED = 5;
+  EXPORT_JOB_STATE_EXPIRED = 6;
+}
+
+enum ExportFailureCode {
+  EXPORT_FAILURE_CODE_UNSPECIFIED = 0;
+  EXPORT_FAILURE_CODE_SEARCH_NOT_FOUND = 1;
+  EXPORT_FAILURE_CODE_SEARCH_NOT_READY = 2;
+  EXPORT_FAILURE_CODE_SEARCH_EXPIRED = 3;
+  EXPORT_FAILURE_CODE_INVALID_COLUMNS = 4;
+  EXPORT_FAILURE_CODE_ROW_LIMIT = 5;
+  EXPORT_FAILURE_CODE_BYTE_LIMIT = 6;
+  EXPORT_FAILURE_CODE_STORAGE_UNAVAILABLE = 7;
+  EXPORT_FAILURE_CODE_INTERNAL = 8;
+}
+
+message ExportFailure {
+  ExportFailureCode code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+message ExportProgress {
+  uint64 rows_written = 1;
+  uint64 bytes_written = 2;
+  optional double percent_complete = 3;
+  google.protobuf.Duration elapsed = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+message ExportArtifact {
+  string file_name = 1;
+  string media_type = 2;
+  uint64 size_bytes = 3;
+  uint64 row_count = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+message ExportJob {
+  string export_job_id = 1;
+  uint64 state_version = 2;
+  ExportDefinition definition = 3;
+  ExportFormat format = 4;
+  ExportJobState state = 5;
+  ExportProgress progress = 6;
+  optional ExportArtifact artifact = 7;
+  optional ExportFailure failure = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp started_at = 10;
+  google.protobuf.Timestamp finished_at = 11;
+  google.protobuf.Timestamp expires_at = 12;
+}

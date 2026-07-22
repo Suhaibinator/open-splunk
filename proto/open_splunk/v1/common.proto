@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+// PageRequest uses an opaque server cursor. page_token must only be replayed
+// with the same endpoint and filter/sort parameters that produced it.
+message PageRequest {
+  optional uint32 page_size = 1;
+  optional string page_token = 2;
+  bool include_total_size = 3;
+}
+
+message PageResponse {
+  optional string next_page_token = 1;
+  optional uint64 total_size = 2;
+  bool total_size_exact = 3;
+}
+
+enum SortDirection {
+  SORT_DIRECTION_UNSPECIFIED = 0;
+  SORT_DIRECTION_ASCENDING = 1;
+  SORT_DIRECTION_DESCENDING = 2;
+}
+
+// TimeRangeSpec preserves user-entered SPL time expressions. earliest and
+// latest may be absolute timestamps or relative expressions such as -24h and
+// now. The server default applies when a field is absent.
+message TimeRangeSpec {
+  optional string earliest = 1;
+  optional string latest = 2;
+  optional string timezone = 3;
+}
+
+// ResolvedTimeRange is an absolute half-open interval [earliest, latest).
+message ResolvedTimeRange {
+  google.protobuf.Timestamp earliest = 1;
+  google.protobuf.Timestamp latest = 2;
+  string timezone = 3;
+}
+
+// SourcePosition is one UTF-8 source location. byte_offset is zero-based;
+// line and column are one-based when known and zero otherwise.
+message SourcePosition {
+  uint64 byte_offset = 1;
+  uint32 line = 2;
+  uint32 column = 3;
+}
+
+message SourceRange {
+  SourcePosition start = 1;
+  SourcePosition end = 2;
+}
+
+enum DiagnosticSeverity {
+  DIAGNOSTIC_SEVERITY_UNSPECIFIED = 0;
+  DIAGNOSTIC_SEVERITY_INFO = 1;
+  DIAGNOSTIC_SEVERITY_WARNING = 2;
+  DIAGNOSTIC_SEVERITY_ERROR = 3;
+}
+
+// Diagnostic is a source-located SPL parse, semantic, or planning message.
+// code is stable and intended for programmatic handling; message is for users.
+message Diagnostic {
+  string code = 1;
+  DiagnosticSeverity severity = 2;
+  string message = 3;
+  optional SourceRange source_range = 4;
+  repeated string suggestions = 5;
+}
+
+// ApiWarning is a non-fatal, stable-code warning attached to a job or event.
+message ApiWarning {
+  string code = 1;
+  string message = 2;
+  optional SourceRange source_range = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+}
+
+enum SharingScope {
+  SHARING_SCOPE_UNSPECIFIED = 0;
+  SHARING_SCOPE_PRIVATE = 1;
+  SHARING_SCOPE_APP = 2;
+  SHARING_SCOPE_GLOBAL = 3;
+}
+
+// FieldViolation identifies one invalid field without coupling transport errors
+// to a human-readable message.
+message FieldViolation {
+  string field_path = 1;
+  string code = 2;
+  string message = 3;
+}

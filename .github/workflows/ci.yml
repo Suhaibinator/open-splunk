@@ -1,0 +1,238 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  protobuf:
+    name: Protobuf contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends protobuf-compiler
+
+      - name: Install protobuf generators
+        run: make proto-tools
+
+      - name: Format, lint, and generate contracts
+        run: make proto
+
+      - name: Check API compatibility
+        if: github.event_name == 'pull_request'
+        run: >-
+          npx --no-install buf breaking
+          --against ".git#branch=${{ github.base_ref }}"
+          --error-format github-actions
+
+      - name: Verify generated code is current
+        run: |
+          proto_changes="$(git status --porcelain --untracked-files=all -- proto gen)"
+          if [[ -n "${proto_changes}" ]]; then
+            echo "::error::Generated protobuf code is stale. Run 'make proto' and commit the result."
+            git status --short -- proto gen
+            git diff -- proto gen
+            exit 1
+          fi
+
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Cache Next.js
+        uses: actions/cache@v5
+        with:
+          path: .next/cache
+          key: ${{ runner.os }}-next-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**', 'next.config.ts', 'tsconfig.json') }}
+          restore-keys: |
+            ${{ runner.os }}-next-${{ hashFiles('package-lock.json') }}-
+            ${{ runner.os }}-next-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Build static UI
+        run: npm run build
+
+  go-lint:
+    name: Go lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
+  go-test:
+    name: Go tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Verify module files are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Test with race detection and coverage
+        run: >-
+          go test
+          -race
+          -shuffle=on
+          -covermode=atomic
+          -coverprofile=coverage.out
+          ./...
+
+      - name: Upload Go coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: go-coverage
+          path: coverage.out
+          if-no-files-found: error
+          retention-days: 14
+
+  go-vulnerability:
+    name: Go vulnerability scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Scan reachable Go code
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+          go-package: ./...
+
+  build:
+    name: Production binaries
+    needs:
+      - frontend
+      - go-lint
+      - go-test
+      - go-vulnerability
+      - protobuf
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Restore Next.js cache
+        uses: actions/cache@v5
+        with:
+          path: .next/cache
+          key: ${{ runner.os }}-next-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**', 'next.config.ts', 'tsconfig.json') }}
+          restore-keys: |
+            ${{ runner.os }}-next-${{ hashFiles('package-lock.json') }}-
+            ${{ runner.os }}-next-
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends protobuf-compiler
+
+      - name: Install build tools
+        run: make proto-tools
+
+      - name: Build server, collector, and log generator
+        run: make build build-loggen
+
+      - name: Package binaries
+        run: tar -C build -czf open-splunk-linux-amd64.tar.gz .
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: open-splunk-linux-amd64
+          path: open-splunk-linux-amd64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+          archive: false

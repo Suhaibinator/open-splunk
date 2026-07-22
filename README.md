@@ -39,6 +39,7 @@ The root TypeScript files (`package.json`, `next.config.ts`, and `tsconfig.json`
 
 ```sh
 npm ci
+make proto
 npm run build
 go test ./...
 go build -o build/open-splunk-server ./cmd/open-splunk-server
@@ -47,6 +48,12 @@ go build -o build/open-splunk-collector ./cmd/open-splunk-collector
 
 `make build` performs the UI export before compiling the server, ensuring the resulting server binary contains the current frontend.
 
-The current commands are scaffolding only; the SRouter API, protobuf generation, gRPC collector service, SQLite control plane, and ClickHouse implementation will be added in subsequent slices.
+`make proto` compiles every schema under `proto/` into Go protobuf/gRPC code in `gen/go` and `ts-proto` codecs in `gen/ts`. Run `make proto-tools` once to install the pinned Go generators and JavaScript dependencies; `protoc` must also be available on `PATH`.
+
+`make proto-lint` runs the schema compatibility/style linter without regenerating code. `make proto` runs it automatically before generation.
+
+In VS Code, **Run Build Task** (`Cmd+Shift+B` on macOS or `Ctrl+Shift+B` elsewhere) runs the default **Generate protobufs (Go, gRPC, TypeScript)** task, which delegates to `make proto`.
+
+The current commands are scaffolding only; the SRouter contracts, gRPC collector service, SQLite control plane, and ClickHouse implementation will be added in subsequent slices.
 
 See [the product and architecture plan](docs/product-architecture-plan.md) for the complete design.

@@ -1,0 +1,132 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/common.proto";
+import "open_splunk/v1/value.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+enum ResultSetKind {
+  RESULT_SET_KIND_UNSPECIFIED = 0;
+  RESULT_SET_KIND_EVENTS = 1;
+  RESULT_SET_KIND_STATISTICS = 2;
+  RESULT_SET_KIND_TIME_SERIES = 3;
+}
+
+enum ColumnSemanticType {
+  COLUMN_SEMANTIC_TYPE_UNSPECIFIED = 0;
+  COLUMN_SEMANTIC_TYPE_EVENT_TIME = 1;
+  COLUMN_SEMANTIC_TYPE_INDEX_TIME = 2;
+  COLUMN_SEMANTIC_TYPE_RAW = 3;
+  COLUMN_SEMANTIC_TYPE_INDEX = 4;
+  COLUMN_SEMANTIC_TYPE_HOST = 5;
+  COLUMN_SEMANTIC_TYPE_SOURCE = 6;
+  COLUMN_SEMANTIC_TYPE_SOURCETYPE = 7;
+  COLUMN_SEMANTIC_TYPE_LEVEL = 8;
+  COLUMN_SEMANTIC_TYPE_MESSAGE = 9;
+  COLUMN_SEMANTIC_TYPE_TRACE_ID = 10;
+  COLUMN_SEMANTIC_TYPE_SPAN_ID = 11;
+  COLUMN_SEMANTIC_TYPE_METRIC = 12;
+  COLUMN_SEMANTIC_TYPE_DIMENSION = 13;
+}
+
+message ResultColumn {
+  string field_name = 1;
+  string display_name = 2;
+  ValueType value_type = 3;
+  ColumnSemanticType semantic_type = 4;
+  bool nullable = 5;
+  bool multivalue = 6;
+  bool hidden_by_default = 7;
+}
+
+// ResultSchema is versioned independently from a job because preview schemas
+// may evolve while a transforming search is still executing.
+message ResultSchema {
+  string schema_id = 1;
+  uint64 revision = 2;
+  ResultSetKind result_kind = 3;
+  repeated ResultColumn columns = 4;
+}
+
+// ResultRow cells correspond positionally to ResultSchema.columns. row_id is an
+// opaque stable identifier within one search snapshot.
+message ResultRow {
+  string row_id = 1;
+  uint64 ordinal = 2;
+  repeated TypedValue cells = 3;
+}
+
+message ResultPage {
+  ResultSchema schema = 1;
+  repeated ResultRow rows = 2;
+  PageResponse page = 3;
+  bool snapshot_complete = 4;
+}
+
+message FieldValueCount {
+  TypedValue value = 1;
+  uint64 count = 2;
+  bool count_is_approximate = 3;
+}
+
+message FieldProfile {
+  string field_name = 1;
+  string display_name = 2;
+  ValueType value_type = 3;
+  repeated ValueType observed_value_types = 4;
+  uint64 event_count = 5;
+  uint64 null_count = 6;
+  uint64 missing_count = 7;
+  optional uint64 distinct_count = 8;
+  bool distinct_count_is_approximate = 9;
+  bool selected = 10;
+  bool interesting = 11;
+}
+
+message FieldSummary {
+  FieldProfile profile = 1;
+  repeated FieldValueCount top_values = 2;
+  bool top_values_are_approximate = 3;
+}
+
+message TimelineBucket {
+  google.protobuf.Timestamp earliest = 1;
+  google.protobuf.Timestamp latest = 2;
+  uint64 event_count = 3;
+  bool partial = 4;
+}
+
+enum VisualizationType {
+  VISUALIZATION_TYPE_UNSPECIFIED = 0;
+  VISUALIZATION_TYPE_TABLE = 1;
+  VISUALIZATION_TYPE_LINE = 2;
+  VISUALIZATION_TYPE_AREA = 3;
+  VISUALIZATION_TYPE_COLUMN = 4;
+  VISUALIZATION_TYPE_BAR = 5;
+  VISUALIZATION_TYPE_PIE = 6;
+  VISUALIZATION_TYPE_SINGLE_VALUE = 7;
+  VISUALIZATION_TYPE_SCATTER = 8;
+}
+
+enum VisualizationStackMode {
+  VISUALIZATION_STACK_MODE_UNSPECIFIED = 0;
+  VISUALIZATION_STACK_MODE_NONE = 1;
+  VISUALIZATION_STACK_MODE_STACKED = 2;
+  VISUALIZATION_STACK_MODE_STACKED_100_PERCENT = 3;
+}
+
+message VisualizationSpec {
+  VisualizationType type = 1;
+  optional string title = 2;
+  optional string x_field = 3;
+  repeated string y_fields = 4;
+  optional string series_field = 5;
+  VisualizationStackMode stack_mode = 6;
+  bool show_legend = 7;
+  bool show_data_labels = 8;
+  optional google.protobuf.Duration time_bucket_width = 9;
+}

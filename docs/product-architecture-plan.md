@@ -293,10 +293,10 @@ The native contract should use a bidirectional stream so one connection carries 
 
 ```proto
 service CollectorIngestService {
-  rpc Collect(stream CollectorRequest) returns (stream CollectorResponse);
+  rpc Collect(stream CollectRequest) returns (stream CollectResponse);
 }
 
-message CollectorRequest {
+message CollectRequest {
   oneof payload {
     CollectorHello hello = 1;
     EventBatch batch = 2;
@@ -304,7 +304,7 @@ message CollectorRequest {
   }
 }
 
-message CollectorResponse {
+message CollectResponse {
   oneof payload {
     CollectorReady ready = 1;
     BatchAck batch_ack = 2;

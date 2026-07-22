@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+message IndexSelector {
+  oneof selector {
+    string index_id = 1;
+    string index_name = 2;
+  }
+}
+
+enum IndexState {
+  INDEX_STATE_UNSPECIFIED = 0;
+  INDEX_STATE_ACTIVE = 1;
+  INDEX_STATE_ARCHIVED = 2;
+  INDEX_STATE_DELETING = 3;
+}
+
+enum IndexAccessState {
+  INDEX_ACCESS_STATE_UNSPECIFIED = 0;
+  INDEX_ACCESS_STATE_ENABLED = 1;
+  INDEX_ACCESS_STATE_DISABLED = 2;
+}
+
+message IndexLimits {
+  optional uint64 max_event_bytes = 1;
+  optional uint32 max_field_count = 2;
+  optional uint32 max_nesting_depth = 3;
+  optional google.protobuf.Duration maximum_future_skew = 4;
+  optional google.protobuf.Duration maximum_event_age = 5;
+}
+
+message IndexDefinition {
+  // name is immutable after creation because it is part of SPL and collector
+  // configuration. Use display_name for operator-facing renames.
+  string name = 1;
+  string display_name = 2;
+  optional string description = 3;
+  optional google.protobuf.Duration retention_period = 4;
+  IndexAccessState ingestion_access = 5;
+  IndexAccessState search_access = 6;
+  optional string default_sourcetype = 7;
+  IndexLimits limits = 8;
+}
+
+message Index {
+  string index_id = 1;
+  uint64 version = 2;
+  IndexDefinition definition = 3;
+  IndexState state = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message IndexStats {
+  string index_id = 1;
+  uint64 event_count = 2;
+  uint64 storage_bytes = 3;
+  google.protobuf.Timestamp earliest_event_time = 4;
+  google.protobuf.Timestamp latest_event_time = 5;
+  google.protobuf.Timestamp measured_at = 6;
+  bool estimates = 7;
+}
+
+message IndexSummary {
+  string index_id = 1;
+  string name = 2;
+  string display_name = 3;
+  IndexState state = 4;
+  IndexAccessState ingestion_access = 5;
+  IndexAccessState search_access = 6;
+}

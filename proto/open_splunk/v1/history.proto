@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/common.proto";
+import "open_splunk/v1/search.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+// SearchHistoryEntry stores execution metadata only; result rows and generated
+// SQL are intentionally excluded. Relative time expressions remain in
+// definition while resolved_time_range records what the original run used.
+message SearchHistoryEntry {
+  string search_job_id = 1;
+  SearchDefinition definition = 2;
+  SearchJobSource source = 3;
+  repeated string effective_index_scope = 4;
+  optional ResolvedTimeRange resolved_time_range = 5;
+  SearchJobState final_state = 6;
+  uint64 matched_events = 7;
+  uint64 scanned_rows = 8;
+  uint64 scanned_bytes = 9;
+  uint64 produced_rows = 10;
+  google.protobuf.Duration duration = 11;
+  repeated ApiWarning warnings = 12;
+  optional SearchFailure failure = 13;
+  string compiler_version = 14;
+  google.protobuf.Timestamp created_at = 15;
+  google.protobuf.Timestamp started_at = 16;
+  google.protobuf.Timestamp finished_at = 17;
+}

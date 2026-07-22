@@ -1,0 +1,140 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/collector_admin.proto";
+import "open_splunk/v1/common.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+enum CollectorSortBy {
+  COLLECTOR_SORT_BY_UNSPECIFIED = 0;
+  COLLECTOR_SORT_BY_DISPLAY_NAME = 1;
+  COLLECTOR_SORT_BY_HOSTNAME = 2;
+  COLLECTOR_SORT_BY_LAST_SEEN_AT = 3;
+  COLLECTOR_SORT_BY_QUEUE_BYTES = 4;
+}
+
+// POST /api/v1/collectors/list
+message ListCollectorsRequest {
+  PageRequest page = 1;
+  repeated CollectorConnectionState state_filters = 2;
+  optional string index_name_filter = 3;
+  optional string text_filter = 4;
+  CollectorSortBy sort_by = 5;
+  SortDirection sort_direction = 6;
+}
+
+message ListCollectorsResponse {
+  repeated CollectorRecord collectors = 1;
+  PageResponse page = 2;
+}
+
+// POST /api/v1/collectors/get
+message GetCollectorRequest {
+  string collector_id = 1;
+}
+
+message GetCollectorResponse {
+  CollectorRecord collector = 1;
+}
+
+// POST /api/v1/collectors/update
+message UpdateCollectorRequest {
+  string collector_id = 1;
+  uint64 expected_version = 2;
+  optional string display_name = 3;
+  google.protobuf.FieldMask update_mask = 4;
+}
+
+message UpdateCollectorResponse {
+  CollectorRecord collector = 1;
+}
+
+// POST /api/v1/collectors/state/set
+message SetCollectorEnabledRequest {
+  string collector_id = 1;
+  uint64 expected_version = 2;
+  CollectorAdministrativeState administrative_state = 3;
+}
+
+message SetCollectorEnabledResponse {
+  CollectorRecord collector = 1;
+}
+
+message IngestionTokenDefinition {
+  string name = 1;
+  optional string description = 2;
+  IngestionTokenConstraints constraints = 3;
+  optional google.protobuf.Timestamp expires_at = 4;
+}
+
+// POST /api/v1/ingestion-tokens/create
+message CreateIngestionTokenRequest {
+  IngestionTokenDefinition definition = 1;
+  optional string client_request_id = 2;
+}
+
+// plaintext_token is shown exactly once and must never be logged or persisted
+// by the frontend.
+message CreateIngestionTokenResponse {
+  IngestionToken ingestion_token = 1;
+  string plaintext_token = 2;
+}
+
+// POST /api/v1/ingestion-tokens/get
+message GetIngestionTokenRequest {
+  string ingestion_token_id = 1;
+}
+
+message GetIngestionTokenResponse {
+  IngestionToken ingestion_token = 1;
+}
+
+enum IngestionTokenSortBy {
+  INGESTION_TOKEN_SORT_BY_UNSPECIFIED = 0;
+  INGESTION_TOKEN_SORT_BY_NAME = 1;
+  INGESTION_TOKEN_SORT_BY_CREATED_AT = 2;
+  INGESTION_TOKEN_SORT_BY_LAST_USED_AT = 3;
+  INGESTION_TOKEN_SORT_BY_EXPIRES_AT = 4;
+}
+
+// POST /api/v1/ingestion-tokens/list
+message ListIngestionTokensRequest {
+  PageRequest page = 1;
+  repeated IngestionTokenState state_filters = 2;
+  optional string index_name_filter = 3;
+  optional string text_filter = 4;
+  IngestionTokenSortBy sort_by = 5;
+  SortDirection sort_direction = 6;
+}
+
+message ListIngestionTokensResponse {
+  repeated IngestionToken ingestion_tokens = 1;
+  PageResponse page = 2;
+}
+
+// POST /api/v1/ingestion-tokens/update
+message UpdateIngestionTokenRequest {
+  string ingestion_token_id = 1;
+  uint64 expected_version = 2;
+  IngestionTokenDefinition definition = 3;
+  google.protobuf.FieldMask update_mask = 4;
+}
+
+message UpdateIngestionTokenResponse {
+  IngestionToken ingestion_token = 1;
+}
+
+// POST /api/v1/ingestion-tokens/revoke
+message RevokeIngestionTokenRequest {
+  string ingestion_token_id = 1;
+  uint64 expected_version = 2;
+  optional string reason = 3;
+}
+
+message RevokeIngestionTokenResponse {
+  IngestionToken ingestion_token = 1;
+}

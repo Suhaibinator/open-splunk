@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/collector.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+enum CollectorConnectionState {
+  COLLECTOR_CONNECTION_STATE_UNSPECIFIED = 0;
+  COLLECTOR_CONNECTION_STATE_ONLINE = 1;
+  COLLECTOR_CONNECTION_STATE_STALE = 2;
+  COLLECTOR_CONNECTION_STATE_OFFLINE = 3;
+  COLLECTOR_CONNECTION_STATE_DISABLED = 4;
+}
+
+enum CollectorAdministrativeState {
+  COLLECTOR_ADMINISTRATIVE_STATE_UNSPECIFIED = 0;
+  COLLECTOR_ADMINISTRATIVE_STATE_ENABLED = 1;
+  COLLECTOR_ADMINISTRATIVE_STATE_DISABLED = 2;
+}
+
+message CollectorRecord {
+  string collector_id = 1;
+  uint64 version = 2;
+  optional string display_name = 3;
+  CollectorConnectionState connection_state = 4;
+  optional string active_instance_id = 5;
+  optional string collector_version = 6;
+  optional string hostname = 7;
+  optional string operating_system = 8;
+  optional string architecture = 9;
+  repeated CollectorCapability capabilities = 10;
+  repeated string authorized_indexes = 11;
+  CollectorQueueStats queue = 12;
+  repeated CollectorInputHealth inputs = 13;
+  google.protobuf.Timestamp first_seen_at = 14;
+  google.protobuf.Timestamp connected_at = 15;
+  google.protobuf.Timestamp last_seen_at = 16;
+  google.protobuf.Timestamp disconnected_at = 17;
+  CollectorAdministrativeState administrative_state = 18;
+}
+
+enum IngestionTokenState {
+  INGESTION_TOKEN_STATE_UNSPECIFIED = 0;
+  INGESTION_TOKEN_STATE_ACTIVE = 1;
+  INGESTION_TOKEN_STATE_DISABLED = 2;
+  INGESTION_TOKEN_STATE_REVOKED = 3;
+  INGESTION_TOKEN_STATE_EXPIRED = 4;
+}
+
+message IngestionTokenConstraints {
+  repeated string allowed_index_names = 1;
+  // Regexes use Go/RE2 syntax and must match the complete host/source value.
+  repeated string allowed_host_regexes = 2;
+  repeated string allowed_source_regexes = 3;
+  optional string bound_collector_id = 4;
+}
+
+// IngestionToken never contains the secret or its hash. token_prefix is a safe
+// short identifier for operator recognition.
+message IngestionToken {
+  string ingestion_token_id = 1;
+  uint64 version = 2;
+  string name = 3;
+  optional string description = 4;
+  string token_prefix = 5;
+  IngestionTokenState state = 6;
+  IngestionTokenConstraints constraints = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+  google.protobuf.Timestamp last_used_at = 10;
+  google.protobuf.Timestamp expires_at = 11;
+  google.protobuf.Timestamp revoked_at = 12;
+}

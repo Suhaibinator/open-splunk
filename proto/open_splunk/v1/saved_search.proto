@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/common.proto";
+import "open_splunk/v1/search.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+message SavedSearchDefinition {
+  string name = 1;
+  optional string description = 2;
+  SearchDefinition search = 3;
+  SharingScope sharing_scope = 4;
+  optional string owner_id = 5;
+}
+
+// SavedSearch is a deliberately persisted reusable definition. version is an
+// optimistic concurrency token and increases on every successful update.
+message SavedSearch {
+  string saved_search_id = 1;
+  uint64 version = 2;
+  SavedSearchDefinition definition = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}

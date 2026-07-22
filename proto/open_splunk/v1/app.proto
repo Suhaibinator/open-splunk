@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/common.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+message AppSelector {
+  oneof selector {
+    string app_id = 1;
+    string slug = 2;
+  }
+}
+
+enum AppState {
+  APP_STATE_UNSPECIFIED = 0;
+  APP_STATE_ACTIVE = 1;
+  APP_STATE_ARCHIVED = 2;
+}
+
+message AppDefinition {
+  // slug is immutable after creation and safe for durable navigation links.
+  string slug = 1;
+  string display_name = 2;
+  optional string description = 3;
+  repeated string default_index_names = 4;
+  TimeRangeSpec default_time_range = 5;
+}
+
+// AppWorkspace is a UI/knowledge-object scope and is deliberately independent
+// from physical storage indexes.
+message AppWorkspace {
+  string app_id = 1;
+  uint64 version = 2;
+  AppDefinition definition = 3;
+  AppState state = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message AppSummary {
+  string app_id = 1;
+  string slug = 2;
+  string display_name = 3;
+  repeated string default_index_names = 4;
+  AppState state = 5;
+}

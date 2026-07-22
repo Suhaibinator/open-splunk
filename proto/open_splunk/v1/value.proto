@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+// ValueType is the logical type of a TypedValue or result column.
+enum ValueType {
+  VALUE_TYPE_UNSPECIFIED = 0;
+  VALUE_TYPE_NULL = 1;
+  VALUE_TYPE_STRING = 2;
+  VALUE_TYPE_SINT64 = 3;
+  VALUE_TYPE_UINT64 = 4;
+  VALUE_TYPE_DOUBLE = 5;
+  VALUE_TYPE_BOOL = 6;
+  VALUE_TYPE_BYTES = 7;
+  VALUE_TYPE_TIMESTAMP = 8;
+  VALUE_TYPE_DURATION = 9;
+  VALUE_TYPE_LIST = 10;
+  VALUE_TYPE_OBJECT = 11;
+  VALUE_TYPE_DECIMAL = 12;
+  VALUE_TYPE_MIXED = 13;
+  VALUE_TYPE_MISSING = 14;
+}
+
+// NullValue distinguishes an explicit null from an absent TypedValue message.
+enum NullValue {
+  NULL_VALUE_UNSPECIFIED = 0;
+  NULL_VALUE_NULL = 1;
+}
+
+// MissingValue represents a field that does not exist on a particular event or
+// row. It is distinct from an explicitly present null.
+enum MissingValue {
+  MISSING_VALUE_UNSPECIFIED = 0;
+  MISSING_VALUE_MISSING = 1;
+}
+
+// DecimalValue preserves a number that cannot be represented losslessly by the
+// integer or IEEE-754 alternatives. value must be a canonical base-10 number.
+message DecimalValue {
+  string value = 1;
+}
+
+// TypedValue preserves exact scalar types and recursively represents lists and
+// objects. Consumers must reject a message whose kind is not set.
+message TypedValue {
+  oneof kind {
+    NullValue null_value = 1;
+    string string_value = 2;
+    sint64 sint64_value = 3;
+    uint64 uint64_value = 4;
+    double double_value = 5;
+    bool bool_value = 6;
+    bytes bytes_value = 7;
+    google.protobuf.Timestamp timestamp_value = 8;
+    google.protobuf.Duration duration_value = 9;
+    TypedValueList list_value = 10;
+    TypedObject object_value = 11;
+    DecimalValue decimal_value = 12;
+    MissingValue missing_value = 13;
+  }
+}
+
+message TypedValueList {
+  repeated TypedValue values = 1;
+}
+
+// TypedObject uses an ordered field list instead of a protobuf map so result
+// rendering and canonical hashing do not depend on map iteration order.
+message TypedObject {
+  repeated TypedObjectField fields = 1;
+}
+
+message TypedObjectField {
+  // Duplicate names in one TypedObject are invalid.
+  string name = 1;
+  TypedValue value = 2;
+}

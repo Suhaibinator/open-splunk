@@ -1,0 +1,192 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/common.proto";
+import "open_splunk/v1/export.proto";
+import "open_splunk/v1/result.proto";
+import "open_splunk/v1/search.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+// JobTarget identifies the independent sequence space to subscribe to.
+message JobTarget {
+  oneof target {
+    string search_job_id = 1;
+    string export_job_id = 2;
+  }
+}
+
+message SearchSubscription {
+  string subscription_id = 1;
+  JobTarget target = 2;
+  // The server sends events strictly after this per-target sequence. Zero asks
+  // for current state followed by live events.
+  uint64 after_sequence = 3;
+  bool include_previews = 4;
+  optional uint32 preview_row_limit = 5;
+}
+
+message SubscribeSearchJobsCommand {
+  repeated SearchSubscription subscriptions = 1;
+}
+
+message UnsubscribeSearchJobsCommand {
+  repeated string subscription_ids = 1;
+}
+
+message SearchWebSocketPing {
+  string nonce = 1;
+}
+
+// SearchWebSocketCommand is encoded as one binary WebSocket frame. request_id
+// correlates command acknowledgments and protocol errors.
+message SearchWebSocketCommand {
+  string request_id = 1;
+
+  oneof payload {
+    SubscribeSearchJobsCommand subscribe = 10;
+    UnsubscribeSearchJobsCommand unsubscribe = 11;
+    SearchWebSocketPing ping = 12;
+  }
+}
+
+message SubscriptionAcknowledged {
+  string request_id = 1;
+  string subscription_id = 2;
+  JobTarget target = 3;
+  uint64 earliest_available_sequence = 4;
+  uint64 latest_sequence = 5;
+  bool replay_will_follow = 6;
+}
+
+message SubscriptionRemoved {
+  string request_id = 1;
+  string subscription_id = 2;
+}
+
+message SearchJobStateChanged {
+  string search_job_id = 1;
+  SearchJobState state = 2;
+  uint64 state_version = 3;
+}
+
+message ResultSchemaAvailable {
+  string search_job_id = 1;
+  ResultSchema schema = 2;
+}
+
+enum PreviewUpdateMode {
+  PREVIEW_UPDATE_MODE_UNSPECIFIED = 0;
+  PREVIEW_UPDATE_MODE_RESET = 1;
+  PREVIEW_UPDATE_MODE_APPEND = 2;
+}
+
+// ResultPreview is bounded and disposable. Durable/full pages are fetched via
+// GetSearchResults; a client may drop previews under backpressure.
+message ResultPreview {
+  string search_job_id = 1;
+  string schema_id = 2;
+  uint64 preview_revision = 3;
+  PreviewUpdateMode update_mode = 4;
+  repeated ResultRow rows = 5;
+  bool truncated = 6;
+}
+
+message SearchJobTerminal {
+  string search_job_id = 1;
+  SearchJobState state = 2;
+  uint64 state_version = 3;
+  SearchProgress final_progress = 4;
+  optional SearchFailure failure = 5;
+  google.protobuf.Timestamp results_expire_at = 6;
+}
+
+message ExportJobStateChanged {
+  string export_job_id = 1;
+  ExportJobState state = 2;
+  uint64 state_version = 3;
+}
+
+message ExportJobTerminal {
+  string export_job_id = 1;
+  ExportJobState state = 2;
+  uint64 state_version = 3;
+  ExportProgress final_progress = 4;
+  optional ExportFailure failure = 5;
+  optional ExportArtifact artifact = 6;
+}
+
+message SearchWebSocketWarning {
+  JobTarget target = 1;
+  ApiWarning warning = 2;
+}
+
+enum ResynchronizationReason {
+  RESYNCHRONIZATION_REASON_UNSPECIFIED = 0;
+  RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED = 1;
+  RESYNCHRONIZATION_REASON_SERVER_RESTARTED = 2;
+  RESYNCHRONIZATION_REASON_SLOW_CONSUMER = 3;
+  RESYNCHRONIZATION_REASON_STATE_DIVERGED = 4;
+}
+
+message ResynchronizationRequired {
+  string subscription_id = 1;
+  JobTarget target = 2;
+  ResynchronizationReason reason = 3;
+  uint64 earliest_available_sequence = 4;
+  uint64 latest_sequence = 5;
+  string recovery_path = 6;
+}
+
+message SearchWebSocketPong {
+  string nonce = 1;
+  google.protobuf.Timestamp server_time = 2;
+}
+
+enum SearchWebSocketProtocolErrorCode {
+  SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_UNSPECIFIED = 0;
+  SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND = 1;
+  SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_UNSUPPORTED_COMMAND = 2;
+  SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_TARGET = 3;
+  SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND = 4;
+  SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS = 5;
+  SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_FRAME_TOO_LARGE = 6;
+  SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_FORBIDDEN = 7;
+}
+
+message SearchWebSocketProtocolError {
+  string request_id = 1;
+  SearchWebSocketProtocolErrorCode code = 2;
+  string message = 3;
+  repeated FieldViolation violations = 4;
+  bool connection_will_close = 5;
+}
+
+// SearchWebSocketEvent is one server-to-browser binary frame. sequence is
+// monotonically increasing per JobTarget. Control events not tied to a target
+// use sequence zero.
+message SearchWebSocketEvent {
+  uint64 sequence = 1;
+  google.protobuf.Timestamp occurred_at = 2;
+  optional string subscription_id = 3;
+  optional JobTarget target = 4;
+
+  oneof payload {
+    SubscriptionAcknowledged subscription_acknowledged = 10;
+    SubscriptionRemoved subscription_removed = 11;
+    SearchJobStateChanged search_state_changed = 12;
+    SearchProgress search_progress = 13;
+    ResultSchemaAvailable result_schema_available = 14;
+    ResultPreview result_preview = 15;
+    SearchJobTerminal search_terminal = 16;
+    ExportJobStateChanged export_state_changed = 17;
+    ExportProgress export_progress = 18;
+    ExportJobTerminal export_terminal = 19;
+    SearchWebSocketWarning warning = 20;
+    ResynchronizationRequired resynchronization_required = 21;
+    SearchWebSocketPong pong = 22;
+    SearchWebSocketProtocolError protocol_error = 23;
+  }
+}
