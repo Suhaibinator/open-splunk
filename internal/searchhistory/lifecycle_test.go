@@ -3,6 +3,7 @@ package searchhistory
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -150,6 +151,73 @@ func TestRecoverInterruptedFinalizesPendingAttempts(t *testing.T) {
 	}
 	if second, err := store.RecoverInterrupted(ctx, scope); err != nil || second != 0 {
 		t.Fatalf("second RecoverInterrupted() = (%d,%v)", second, err)
+	}
+}
+
+func TestRecoverInterruptedPreservesProvenanceAndExactRangeAcrossRestart(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := time.Date(2026, time.March, 8, 19, 0, 0, 987654321, time.UTC)
+	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	databasePath := filepath.Join(t.TempDir(), "control.sqlite")
+	database, err := control.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	store, err := New(database, Options{Clock: func() time.Time { return now }, CursorKey: testCursorKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	appID := "search-app"
+	savedID := "saved-restart"
+	timezone := "America/Los_Angeles"
+	pending := pendingHistoryEntry("job-restart-provenance", "index=main | table message", now.Add(-time.Minute))
+	pending.Definition.AppId = &appID
+	pending.Definition.TimeRange = &opensplunkv1.TimeRangeSpec{
+		Earliest: stringPointer("-1d"), Latest: stringPointer("now"), Timezone: &timezone,
+	}
+	pending.Source = &opensplunkv1.SearchJobSource{
+		Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH, SavedSearchId: &savedID,
+	}
+	pending.ResolvedTimeRange = &opensplunkv1.ResolvedTimeRange{
+		Earliest: timestamppb.New(now.Add(-23 * time.Hour)), Latest: timestamppb.New(now), Timezone: timezone,
+	}
+	if _, err := store.BeginAttempt(ctx, scope, pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := control.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopenedStore, err := New(reopened, Options{Clock: func() time.Time { return now }, CursorKey: testCursorKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered, err := reopenedStore.RecoverInterrupted(ctx, scope); err != nil || recovered != 1 {
+		t.Fatalf("RecoverInterrupted() = (%d, %v), want (1, nil)", recovered, err)
+	}
+	got, err := reopenedStore.Get(ctx, scope, pending.GetSearchJobId())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetFinalState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED ||
+		got.GetDefinition().GetSpl() != pending.GetDefinition().GetSpl() || got.GetDefinition().GetAppId() != appID ||
+		got.GetDefinition().GetTimeRange().GetEarliest() != "-1d" || got.GetDefinition().GetTimeRange().GetLatest() != "now" ||
+		got.GetDefinition().GetTimeRange().GetTimezone() != timezone ||
+		got.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+		got.GetSource().GetSavedSearchId() != savedID ||
+		!got.GetResolvedTimeRange().GetEarliest().AsTime().Equal(pending.GetResolvedTimeRange().GetEarliest().AsTime()) ||
+		!got.GetResolvedTimeRange().GetLatest().AsTime().Equal(pending.GetResolvedTimeRange().GetLatest().AsTime()) ||
+		got.GetResolvedTimeRange().GetTimezone() != timezone {
+		t.Fatalf("recovered provenance = %+v", got)
 	}
 }
 

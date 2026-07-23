@@ -31,14 +31,15 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 		Now:             clock.Now,
 		NewID:           sequenceIDs("execution-snapshot"),
 	})
+	earliest := time.Date(2026, time.July, 20, 1, 2, 3, 4, time.FixedZone("east", 2*60*60))
+	latest := time.Date(2026, time.July, 21, 5, 6, 7, 8, time.FixedZone("east", 2*60*60))
 	request := CreateRequest{
 		SPL:               " index=alpha | table message ",
 		OwnerID:           "snapshot-owner",
 		TenantID:          "snapshot-tenant",
 		AuthorizedIndexes: []string{"beta", "alpha"},
 		RequestedIndexes:  []string{"alpha"},
-		Earliest:          time.Date(2026, time.July, 20, 1, 2, 3, 4, time.FixedZone("east", 2*60*60)),
-		Latest:            time.Date(2026, time.July, 21, 5, 6, 7, 8, time.FixedZone("east", 2*60*60)),
+		TimeRange:         mustAbsoluteTimeRange(earliest, latest),
 	}
 	job, err := manager.Create(context.Background(), request)
 	if err != nil {
@@ -57,8 +58,8 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 		TenantID:         request.TenantID,
 		SPL:              request.SPL,
 		EffectiveIndexes: []string{"alpha"},
-		Earliest:         request.Earliest.UTC(),
-		Latest:           request.Latest.UTC(),
+		Earliest:         earliest.UTC(),
+		Latest:           latest.UTC(),
 		IndexTimeCutoff:  now.UTC(),
 		VisibilityCutoff: 91,
 		FinishedAt:       now.UTC(),

@@ -283,12 +283,12 @@ func validateResolvedRange(value *opensplunkv1.ResolvedTimeRange) error {
 	if value == nil {
 		return nil
 	}
-	earliest, normalizedEarliest, err := normalizedTimestamp("resolved earliest", value.Earliest)
+	earliest, normalizedEarliest, err := normalizedResolvedTimestamp("resolved earliest", value.Earliest)
 	if err != nil {
 		return err
 	}
 	value.Earliest = normalizedEarliest
-	latest, normalizedLatest, err := normalizedTimestamp("resolved latest", value.Latest)
+	latest, normalizedLatest, err := normalizedResolvedTimestamp("resolved latest", value.Latest)
 	if err != nil {
 		return err
 	}
@@ -366,6 +366,14 @@ func normalizedTimestamp(name string, value *timestamppb.Timestamp) (time.Time, 
 		return time.Time{}, nil, invalid(name + " is required and must be a valid timestamp")
 	}
 	normalized := time.UnixMicro(value.AsTime().UnixMicro()).UTC()
+	return normalized, timestamppb.New(normalized), nil
+}
+
+func normalizedResolvedTimestamp(name string, value *timestamppb.Timestamp) (time.Time, *timestamppb.Timestamp, error) {
+	if value == nil || value.CheckValid() != nil {
+		return time.Time{}, nil, invalid(name + " is required and must be a valid timestamp")
+	}
+	normalized := value.AsTime().Round(0).UTC()
 	return normalized, timestamppb.New(normalized), nil
 }
 

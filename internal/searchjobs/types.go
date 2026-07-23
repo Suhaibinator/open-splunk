@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unsafe"
+
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
 // State is the lifecycle state of one asynchronous search job.
@@ -92,17 +94,41 @@ type Failure struct {
 	Diagnostics []Diagnostic
 }
 
-// CreateRequest is user intent plus server-resolved authorization. Earliest
-// and Latest must already be absolute; the manager resolves IndexTimeCutoff
-// from its clock when the immutable job snapshot is created.
+// JobOrigin identifies the authoritative product surface that launched a
+// search. IDs are retained separately so history can reopen the originating
+// object without trusting a client-selected tenant or owner.
+type JobOrigin uint8
+
+const (
+	JobOriginInvalid JobOrigin = iota
+	JobOriginAdHoc
+	JobOriginSavedSearch
+	JobOriginHistoryRerun
+	JobOriginDashboard
+	JobOriginAPI
+)
+
+// JobSource is normalized provenance for one search attempt. ObjectID is
+// required for saved-search, history-rerun, and dashboard origins and must be
+// empty for ad-hoc and API origins.
+type JobSource struct {
+	Origin   JobOrigin
+	ObjectID string
+}
+
+// CreateRequest is user intent plus server-resolved authorization. TimeRange
+// is an indivisible, resolver-produced value so reusable intent cannot diverge
+// from the absolute interval used for execution and audit history. The manager
+// resolves IndexTimeCutoff from its clock when the immutable job is created.
 type CreateRequest struct {
 	SPL               string
 	OwnerID           string
 	TenantID          string
 	AuthorizedIndexes []string
 	RequestedIndexes  []string
-	Earliest          time.Time
-	Latest            time.Time
+	TimeRange         searchtime.Range
+	AppID             string
+	Source            JobSource
 }
 
 // AccessScope is the authenticated tenant and owner boundary used by the
@@ -124,6 +150,9 @@ type Job struct {
 	TenantID         string
 	RequestedIndexes []string
 	EffectiveIndexes []string
+	TimeRange        searchtime.Intent
+	AppID            string
+	Source           JobSource
 	Earliest         time.Time
 	Latest           time.Time
 	IndexTimeCutoff  time.Time
@@ -556,9 +585,30 @@ const (
 )
 
 func retainedJobMetadataReservation(id string, request CreateRequest) (uint64, error) {
-	total := uint64(unsafe.Sizeof(jobEntry{})) + metadataContextAllowance + metadataDiagnosticAllowance
+	normalizedRequest, err := normalizeCreateRequest(request)
+	if err != nil {
+		return 0, err
+	}
+	return retainedNormalizedJobMetadataReservation(id, normalizedRequest)
+}
+
+// retainedNormalizedJobMetadataReservation measures a request after its one
+// canonicalization pass. Callers admitting a job must not normalize it again.
+func retainedNormalizedJobMetadataReservation(id string, request CreateRequest) (uint64, error) {
 	var err error
-	for _, value := range []string{id, request.OwnerID, request.TenantID, request.SPL} {
+	intent := request.TimeRange.Intent()
+	total := uint64(unsafe.Sizeof(jobEntry{})) + metadataContextAllowance + metadataDiagnosticAllowance
+	for _, value := range []string{
+		id,
+		request.OwnerID,
+		request.TenantID,
+		request.SPL,
+		intent.Earliest,
+		intent.Latest,
+		intent.Timezone,
+		request.AppID,
+		request.Source.ObjectID,
+	} {
 		total, err = checkedAdd(total, uint64(len(value)))
 		if err != nil {
 			return 0, err

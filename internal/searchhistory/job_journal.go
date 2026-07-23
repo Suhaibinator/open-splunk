@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -73,23 +74,27 @@ func (journal *JobJournal) entry(job searchjobs.Job, terminal bool) (*opensplunk
 		return nil, invalid("search job must be queued at history admission")
 	}
 
-	earliestText := job.Earliest.UTC().Format(time.RFC3339Nano)
-	latestText := job.Latest.UTC().Format(time.RFC3339Nano)
-	timezone := "UTC"
+	timeRange, timezone, err := searchjobproto.TimeRange(job)
+	if err != nil {
+		return nil, invalid("search job time-range intent is invalid")
+	}
+	definition := &opensplunkv1.SearchDefinition{
+		Spl:        job.SPL,
+		IndexScope: slices.Clone(job.RequestedIndexes),
+		TimeRange:  timeRange,
+	}
+	if job.AppID != "" {
+		appID := job.AppID
+		definition.AppId = &appID
+	}
+	source, err := searchjobproto.Source(job.Source)
+	if err != nil {
+		return nil, invalid("search job source metadata is invalid")
+	}
 	entry := &opensplunkv1.SearchHistoryEntry{
 		SearchJobId: job.ID,
-		Definition: &opensplunkv1.SearchDefinition{
-			Spl:        job.SPL,
-			IndexScope: slices.Clone(job.RequestedIndexes),
-			TimeRange: &opensplunkv1.TimeRangeSpec{
-				Earliest: &earliestText,
-				Latest:   &latestText,
-				Timezone: &timezone,
-			},
-		},
-		Source: &opensplunkv1.SearchJobSource{
-			Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC,
-		},
+		Definition:  definition,
+		Source:      source,
 		ResolvedTimeRange: &opensplunkv1.ResolvedTimeRange{
 			Earliest: timestamppb.New(job.Earliest),
 			Latest:   timestamppb.New(job.Latest),

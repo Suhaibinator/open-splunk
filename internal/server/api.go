@@ -12,9 +12,9 @@ import (
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
-	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -87,9 +87,13 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 	if err := rejectUnsupportedCreateFields(input, definition); err != nil {
 		return nil, badRequestError(err.Error())
 	}
-	earliest, latest, err := absoluteTimeRange(definition.GetTimeRange())
+	resolvedRange, err := resolveSearchTimeRange(definition.GetTimeRange(), handler.now())
 	if err != nil {
 		return nil, badRequestError(err.Error())
+	}
+	appID, source, err := handler.resolveSearchJobSource(request.Context(), definition.GetAppId(), input.GetSource())
+	if err != nil {
+		return nil, err
 	}
 	requestedIndexes, err := normalizeRequestedIndexes(definition.GetIndexScope())
 	if err != nil {
@@ -117,8 +121,9 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 		// deployment and could exceed the manager's metadata bound.
 		AuthorizedIndexes: slices.Clone(requestedIndexes),
 		RequestedIndexes:  requestedIndexes,
-		Earliest:          earliest,
-		Latest:            latest,
+		TimeRange:         resolvedRange,
+		AppID:             appID,
+		Source:            source,
 	})
 	if err != nil {
 		if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
@@ -288,13 +293,10 @@ func rejectUnsupportedCreateFields(input *opensplunkv1.CreateSearchJobRequest, d
 	if input.ClientRequestId != nil {
 		return errors.New("client request idempotency is not supported")
 	}
-	if source := input.GetSource(); source != nil && (source.GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_UNSPECIFIED || source.SavedSearchId != nil || source.HistorySearchId != nil || source.DashboardId != nil) {
-		return errors.New("search job source metadata is not supported")
-	}
 	if options := input.GetOptions(); options != nil && (options.GetEnablePreview() || options.GetEnableFieldDiscovery() || options.GetEnableTimeline() || options.PreviewRowLimit != nil) {
 		return errors.New("search previews, field discovery, and timelines are not supported")
 	}
-	if definition.AppId != nil || definition.GetPreferredResultTab() != opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED || len(definition.GetSelectedFields()) != 0 || definition.GetVisualization() != nil {
+	if definition.GetPreferredResultTab() != opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED || len(definition.GetSelectedFields()) != 0 || definition.GetVisualization() != nil {
 		return errors.New("search presentation metadata is not supported")
 	}
 	return nil
@@ -321,35 +323,58 @@ func (handler *apiHandler) pageRequest(page *opensplunkv1.PageRequest) (int, str
 	return int(pageSize), pageToken, page.GetIncludeTotalSize(), nil
 }
 
-func absoluteTimeRange(spec *opensplunkv1.TimeRangeSpec) (time.Time, time.Time, error) {
+func resolveSearchTimeRange(spec *opensplunkv1.TimeRangeSpec, now time.Time) (searchtime.Range, error) {
 	if spec == nil || spec.Earliest == nil || spec.Latest == nil {
-		return time.Time{}, time.Time{}, errors.New("absolute earliest and latest times are required")
+		return searchtime.Range{}, errors.New("earliest and latest time expressions are required")
 	}
-	earliestText := strings.TrimSpace(spec.GetEarliest())
-	latestText := strings.TrimSpace(spec.GetLatest())
-	if earliestText == "" || latestText == "" {
-		return time.Time{}, time.Time{}, errors.New("absolute earliest and latest times are required")
+	return searchtime.Resolve(spec.GetEarliest(), spec.GetLatest(), spec.Timezone, now)
+}
+
+func (handler *apiHandler) resolveSearchJobSource(
+	ctx context.Context,
+	requestedAppID string,
+	input *opensplunkv1.SearchJobSource,
+) (string, searchjobs.JobSource, error) {
+	appID := strings.TrimSpace(requestedAppID)
+	if err := validateBoundedIdentifier(appID, maximumSavedSearchAppIDBytes, true); err != nil {
+		return "", searchjobs.JobSource{}, badRequestError("search app ID is invalid")
 	}
-	earliest, err := time.Parse(time.RFC3339Nano, earliestText)
-	if err != nil {
-		return time.Time{}, time.Time{}, errors.New("earliest must be an absolute RFC 3339 timestamp")
+	if input == nil || input.GetOrigin() == opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_UNSPECIFIED &&
+		input.SavedSearchId == nil && input.HistorySearchId == nil && input.DashboardId == nil {
+		return appID, searchjobs.JobSource{Origin: searchjobs.JobOriginAdHoc}, nil
 	}
-	latest, err := time.Parse(time.RFC3339Nano, latestText)
-	if err != nil {
-		return time.Time{}, time.Time{}, errors.New("latest must be an absolute RFC 3339 timestamp")
-	}
-	if !earliest.Before(latest) {
-		return time.Time{}, time.Time{}, errors.New("earliest must be before latest")
-	}
-	if !clickhouse.SupportsSearchTimeRange(earliest, latest) {
-		return time.Time{}, time.Time{}, errors.New("time range is outside the supported ClickHouse DateTime64 range")
-	}
-	if timezone := strings.TrimSpace(spec.GetTimezone()); timezone != "" {
-		if _, err := time.LoadLocation(timezone); err != nil {
-			return time.Time{}, time.Time{}, errors.New("timezone is invalid")
+	if input.GetOrigin() == opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC {
+		if input.SavedSearchId != nil || input.HistorySearchId != nil || input.DashboardId != nil {
+			return "", searchjobs.JobSource{}, badRequestError("ad-hoc search source cannot include an object ID")
 		}
+		return appID, searchjobs.JobSource{Origin: searchjobs.JobOriginAdHoc}, nil
 	}
-	return earliest.Round(0).UTC(), latest.Round(0).UTC(), nil
+	if input.GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+		input.SavedSearchId == nil || input.HistorySearchId != nil || input.DashboardId != nil {
+		return "", searchjobs.JobSource{}, badRequestError("search job source metadata is invalid or unsupported")
+	}
+	savedSearchID, err := savedSearchID(input.GetSavedSearchId())
+	if err != nil {
+		return "", searchjobs.JobSource{}, badRequestError(err.Error())
+	}
+	record, err := handler.savedSearches.Get(ctx, handler.savedSearchScope(), savedSearchID)
+	if mapped := mapSavedSearchCallError(ctx, err); mapped != nil {
+		return "", searchjobs.JobSource{}, mapped
+	}
+	trustedRecord, err := handler.cloneSavedSearch(record)
+	if err != nil || trustedRecord.GetSavedSearchId() != savedSearchID {
+		return "", searchjobs.JobSource{}, internalError()
+	}
+	savedAppID := savedSearchAppID(trustedRecord)
+	if appID == "" {
+		appID = savedAppID
+	} else if appID != savedAppID {
+		return "", searchjobs.JobSource{}, badRequestError("search app ID does not match the saved search")
+	}
+	return appID, searchjobs.JobSource{
+		Origin:   searchjobs.JobOriginSavedSearch,
+		ObjectID: savedSearchID,
+	}, nil
 }
 
 func normalizeRequestedIndexes(input []string) ([]string, error) {

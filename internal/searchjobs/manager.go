@@ -11,10 +11,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -54,6 +56,8 @@ const (
 	maximumJobs               = 100_000
 	maximumMetadataBytes      = 1 << 30
 	capacityCleanupThrottle   = 250 * time.Millisecond
+	maximumJobAppIDBytes      = 255
+	maximumJobSourceIDBytes   = 128
 )
 
 var (
@@ -488,6 +492,11 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	if err := manager.validateRequestSize(request); err != nil {
 		return Job{}, err
 	}
+	normalizedRequest, err := normalizeCreateRequest(request)
+	if err != nil {
+		return Job{}, err
+	}
+	request = normalizedRequest
 	if err := manager.beginCreate(); err != nil {
 		return Job{}, err
 	}
@@ -507,7 +516,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 		return Job{}, err
 	}
 	defer manager.releaseJobID(id)
-	metadataBytes, err := retainedJobMetadataReservation(id, request)
+	metadataBytes, err := retainedNormalizedJobMetadataReservation(id, request)
 	if err != nil || metadataBytes > manager.maxMetadataBytes {
 		return Job{}, ErrCapacity
 	}
@@ -527,6 +536,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	now := manager.nowUTC()
 	jobContext, cancel := context.WithCancel(manager.ctx)
 	sourceSPL := strings.Clone(request.SPL)
+	timeIntent := request.TimeRange.Intent()
 	entry := &jobEntry{
 		job: Job{
 			ID:               id,
@@ -536,8 +546,11 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 			NormalizedSPL:    strings.TrimSpace(sourceSPL),
 			TenantID:         strings.Clone(request.TenantID),
 			RequestedIndexes: cloneStrings(request.RequestedIndexes),
-			Earliest:         canonicalTime(request.Earliest),
-			Latest:           canonicalTime(request.Latest),
+			TimeRange:        timeIntent,
+			AppID:            request.AppID,
+			Source:           request.Source,
+			Earliest:         request.TimeRange.Earliest(),
+			Latest:           request.TimeRange.Latest(),
 			IndexTimeCutoff:  now,
 			VisibilityCutoff: visibilityCutoff,
 			State:            StateQueued,
@@ -823,6 +836,30 @@ func (manager *Manager) validateRequestSize(request CreateRequest) error {
 	if len(request.OwnerID) > defaultMaxIdentityBytes || len(request.TenantID) > defaultMaxIdentityBytes {
 		return fmt.Errorf("%w: owner or tenant identity exceeds %d bytes", ErrRequestTooLarge, defaultMaxIdentityBytes)
 	}
+	intent := request.TimeRange.Intent()
+	if len(intent.Earliest) > searchtime.MaximumExpressionBytes || len(intent.Latest) > searchtime.MaximumExpressionBytes {
+		return fmt.Errorf("%w: time expression exceeds %d bytes", ErrRequestTooLarge, searchtime.MaximumExpressionBytes)
+	}
+	if len(intent.Timezone) > searchtime.MaximumTimezoneBytes {
+		return fmt.Errorf("%w: timezone exceeds %d bytes", ErrRequestTooLarge, searchtime.MaximumTimezoneBytes)
+	}
+	if len(request.AppID) > maximumJobAppIDBytes {
+		return fmt.Errorf("%w: app ID exceeds %d bytes", ErrRequestTooLarge, maximumJobAppIDBytes)
+	}
+	if len(request.Source.ObjectID) > maximumJobSourceIDBytes {
+		return fmt.Errorf("%w: source object ID exceeds %d bytes", ErrRequestTooLarge, maximumJobSourceIDBytes)
+	}
+	for _, value := range []string{
+		intent.Earliest,
+		intent.Latest,
+		intent.Timezone,
+		request.AppID,
+		request.Source.ObjectID,
+	} {
+		if len(value) > defaultMaxIdentityBytes || !utf8.ValidString(value) {
+			return fmt.Errorf("%w: search intent metadata exceeds %d bytes", ErrRequestTooLarge, defaultMaxIdentityBytes)
+		}
+	}
 	if len(request.AuthorizedIndexes) > manager.maxScopeIndexes || len(request.RequestedIndexes) > manager.maxScopeIndexes-len(request.AuthorizedIndexes) {
 		return fmt.Errorf("%w: index scope exceeds %d entries", ErrRequestTooLarge, manager.maxScopeIndexes)
 	}
@@ -834,6 +871,61 @@ func (manager *Manager) validateRequestSize(request CreateRequest) error {
 		}
 	}
 	return nil
+}
+
+func normalizeCreateRequest(request CreateRequest) (CreateRequest, error) {
+	if !request.TimeRange.Valid() {
+		return CreateRequest{}, errors.New("create search job: resolved time range is required")
+	}
+	request.AppID = strings.Clone(request.AppID)
+	if !canonicalJobMetadataIdentifier(request.AppID, maximumJobAppIDBytes, true) {
+		return CreateRequest{}, errors.New("create search job: app ID is invalid")
+	}
+
+	source, err := CanonicalJobSource(request.Source)
+	if err != nil {
+		return CreateRequest{}, errors.New("create search job: source metadata is invalid")
+	}
+	source.ObjectID = strings.Clone(source.ObjectID)
+	request.Source = source
+	return request, nil
+}
+
+// CanonicalJobSource applies the legacy zero-value default and validates the
+// origin/object relationship. It performs no allocation, so trusted retained
+// values can be checked again at serialization boundaries without copying.
+func CanonicalJobSource(source JobSource) (JobSource, error) {
+	if source.Origin == JobOriginInvalid && source.ObjectID == "" {
+		source.Origin = JobOriginAdHoc
+	}
+	requiresObject := false
+	switch source.Origin {
+	case JobOriginAdHoc, JobOriginAPI:
+	case JobOriginSavedSearch, JobOriginHistoryRerun, JobOriginDashboard:
+		requiresObject = true
+	default:
+		return JobSource{}, errors.New("search job source origin is invalid")
+	}
+	if requiresObject != (source.ObjectID != "") {
+		return JobSource{}, errors.New("search job source object ID does not match its origin")
+	}
+	if source.ObjectID != "" && !canonicalJobMetadataIdentifier(source.ObjectID, maximumJobSourceIDBytes, false) {
+		return JobSource{}, errors.New("search job source object ID is invalid")
+	}
+	return source, nil
+}
+
+func canonicalJobMetadataIdentifier(value string, maximumBytes int, allowEmpty bool) bool {
+	if (!allowEmpty && value == "") || len(value) > maximumBytes || !utf8.ValidString(value) ||
+		strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
 }
 
 // Get returns a deep metadata copy for trusted administrative callers. API

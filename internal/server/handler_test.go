@@ -17,6 +17,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -531,7 +532,7 @@ func TestProtobufUnknownFieldsRemainForwardCompatible(t *testing.T) {
 	}
 }
 
-func TestCreateSearchValidatesAbsoluteTimeAndIndexScope(t *testing.T) {
+func TestCreateSearchResolvesTimeIntentAndValidatesIndexScope(t *testing.T) {
 	created := completeJob("job-1")
 	jobs := &fakeSearchJobs{createJob: created}
 	handler := newTestHandler(t, Config{
@@ -564,8 +565,23 @@ func TestCreateSearchValidatesAbsoluteTimeAndIndexScope(t *testing.T) {
 	if captured.SPL != valid.Definition.Spl {
 		t.Fatalf("captured SPL = %q, want original %q", captured.SPL, valid.Definition.Spl)
 	}
-	if !captured.Earliest.Equal(time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)) {
-		t.Fatalf("earliest = %s", captured.Earliest)
+	if !captured.TimeRange.Earliest().Equal(time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("earliest = %s", captured.TimeRange.Earliest())
+	}
+
+	relative := createRequest(" -24h ", " now ", "main")
+	response = postProto(t, handler, "/api/v1/search/jobs/create", relative)
+	if response.Code != http.StatusOK {
+		t.Fatalf("relative create status = %d, body = %s", response.Code, response.Body.String())
+	}
+	jobs.mu.Lock()
+	captured = jobs.createRequest
+	jobs.mu.Unlock()
+	intent := captured.TimeRange.Intent()
+	if intent.Earliest != "-24h" || intent.Latest != "now" ||
+		intent.Timezone != "UTC" || !intent.TimezoneSpecified ||
+		!captured.TimeRange.Earliest().Equal(testNow.Add(-24*time.Hour)) || !captured.TimeRange.Latest().Equal(testNow) {
+		t.Fatalf("relative request = intent %+v resolved [%s, %s)", intent, captured.TimeRange.Earliest(), captured.TimeRange.Latest())
 	}
 
 	tests := []struct {
@@ -573,7 +589,6 @@ func TestCreateSearchValidatesAbsoluteTimeAndIndexScope(t *testing.T) {
 		request    *opensplunkv1.CreateSearchJobRequest
 		wantStatus int
 	}{
-		{name: "relative time", request: createRequest("-24h", "2026-07-22T13:00:00Z", "main"), wantStatus: http.StatusBadRequest},
 		{name: "inverted time", request: createRequest("2026-07-22T14:00:00Z", "2026-07-22T13:00:00Z", "main"), wantStatus: http.StatusBadRequest},
 		{name: "outside storage range", request: createRequest("1500-01-01T00:00:00Z", "2026-07-22T13:00:00Z", "main"), wantStatus: http.StatusBadRequest},
 		{name: "no index", request: createRequest("2026-07-22T12:00:00Z", "2026-07-22T13:00:00Z"), wantStatus: http.StatusBadRequest},
@@ -589,17 +604,115 @@ func TestCreateSearchValidatesAbsoluteTimeAndIndexScope(t *testing.T) {
 	}
 }
 
+func TestCreateSearchPreservesScopedSavedSearchProvenance(t *testing.T) {
+	t.Parallel()
+
+	const (
+		ownerID = "owner-1"
+		appID   = "app-main"
+		savedID = "saved-1"
+	)
+	store := &fakeSavedSearches{getFn: func(_ context.Context, scope savedobjects.AccessScope, id string) (*opensplunkv1.SavedSearch, error) {
+		if scope.OwnerID != ownerID || id != savedID {
+			t.Fatalf("saved-search lookup = scope %+v ID %q", scope, id)
+		}
+		return savedSearchRecord(savedID, 1, ownerID, appID, "Errors"), nil
+	}}
+	jobs := &fakeSearchJobs{createJob: completeJob("job-saved")}
+	handler := newTestHandler(t, Config{
+		SearchJobs: jobs,
+		Indexes: fakeIndexCatalog{indexes: []control.Index{{
+			ID: "idx-main", Definition: control.IndexDefinition{Name: "main", SearchEnabled: true}, State: control.IndexStateActive,
+		}}},
+		SavedSearches: store,
+		WebUI:         testUI(),
+		OwnerID:       ownerID,
+		TenantID:      "tenant-1",
+		Now:           func() time.Time { return testNow },
+	})
+
+	request := createRequest("-24h", "now", "main")
+	request.Source = &opensplunkv1.SearchJobSource{
+		Origin:        opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+		SavedSearchId: stringPointer(savedID),
+	}
+	response := postProto(t, handler, "/api/v1/search/jobs/create", request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("saved-source create status = %d, body = %s", response.Code, response.Body.String())
+	}
+	jobs.mu.Lock()
+	captured := jobs.createRequest
+	createCalls := jobs.createCalls
+	jobs.mu.Unlock()
+	intent := captured.TimeRange.Intent()
+	if createCalls != 1 || captured.AppID != appID || captured.Source.Origin != searchjobs.JobOriginSavedSearch ||
+		captured.Source.ObjectID != savedID || intent.Earliest != "-24h" || intent.Latest != "now" {
+		t.Fatalf("captured saved-source request = %+v", captured)
+	}
+
+	mismatch := createRequest("-24h", "now", "main")
+	mismatch.Definition.AppId = stringPointer("other-app")
+	mismatch.Source = request.Source
+	response = postProto(t, handler, "/api/v1/search/jobs/create", mismatch)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("cross-app source status = %d, body = %s", response.Code, response.Body.String())
+	}
+	jobs.mu.Lock()
+	createCalls = jobs.createCalls
+	jobs.mu.Unlock()
+	if createCalls != 1 {
+		t.Fatalf("cross-app source created %d jobs, want 1 prior successful call", createCalls)
+	}
+}
+
+func TestCreateSearchRejectsNoncanonicalSavedSearchProvenance(t *testing.T) {
+	t.Parallel()
+
+	record := savedSearchRecord("saved-1", 1, "owner-1", "app-main", "Errors")
+	record.Definition.Search.AppId = stringPointer(" app-main ")
+	store := &fakeSavedSearches{getFn: func(context.Context, savedobjects.AccessScope, string) (*opensplunkv1.SavedSearch, error) {
+		return record, nil
+	}}
+	jobs := &fakeSearchJobs{createJob: completeJob("job-never-created")}
+	handler := newTestHandler(t, Config{
+		SearchJobs: jobs,
+		Indexes: fakeIndexCatalog{indexes: []control.Index{{
+			ID: "idx-main", Definition: control.IndexDefinition{Name: "main", SearchEnabled: true}, State: control.IndexStateActive,
+		}}},
+		SavedSearches: store,
+		WebUI:         testUI(),
+		OwnerID:       "owner-1",
+		TenantID:      "tenant-1",
+		Now:           func() time.Time { return testNow },
+	})
+	request := createRequest("-24h", "now", "main")
+	request.Source = &opensplunkv1.SearchJobSource{
+		Origin:        opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+		SavedSearchId: stringPointer("saved-1"),
+	}
+	response := postProto(t, handler, "/api/v1/search/jobs/create", request)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	jobs.mu.Lock()
+	createCalls := jobs.createCalls
+	jobs.mu.Unlock()
+	if createCalls != 0 {
+		t.Fatalf("malformed provenance created %d jobs", createCalls)
+	}
+}
+
 func TestCreateSearchRejectsUnsupportedSemanticsBeforeCreatingJob(t *testing.T) {
 	tests := []struct {
 		name   string
 		mutate func(*opensplunkv1.CreateSearchJobRequest)
 	}{
 		{name: "client request ID", mutate: func(request *opensplunkv1.CreateSearchJobRequest) { request.ClientRequestId = stringPointer("") }},
-		{name: "source origin", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-			request.Source = &opensplunkv1.SearchJobSource{Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC}
+		{name: "source ID without origin", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
+			request.Source = &opensplunkv1.SearchJobSource{SavedSearchId: stringPointer("saved-1")}
 		}},
-		{name: "saved search source", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-			request.Source = &opensplunkv1.SearchJobSource{SavedSearchId: stringPointer("")}
+		{name: "saved search without ID", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
+			request.Source = &opensplunkv1.SearchJobSource{Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH}
 		}},
 		{name: "history source", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
 			request.Source = &opensplunkv1.SearchJobSource{HistorySearchId: stringPointer("")}
@@ -620,7 +733,6 @@ func TestCreateSearchRejectsUnsupportedSemanticsBeforeCreatingJob(t *testing.T) 
 			limit := uint32(0)
 			request.Options = &opensplunkv1.SearchJobOptions{PreviewRowLimit: &limit}
 		}},
-		{name: "app", mutate: func(request *opensplunkv1.CreateSearchJobRequest) { request.Definition.AppId = stringPointer("") }},
 		{name: "preferred result tab", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
 			request.Definition.PreferredResultTab = opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_EVENTS
 		}},

@@ -10,6 +10,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
 func journalJob(id string, state searchjobs.State, now time.Time) searchjobs.Job {
@@ -17,7 +18,12 @@ func journalJob(id string, state searchjobs.State, now time.Time) searchjobs.Job
 		ID: id, OwnerID: "owner", TenantID: "tenant",
 		SPL:              " \nindex=main | head 1\t",
 		RequestedIndexes: []string{"main"},
-		Earliest:         now.Add(-time.Hour), Latest: now,
+		TimeRange: searchtime.Intent{
+			Earliest: "-1h", Latest: "now", Timezone: "America/Los_Angeles", TimezoneSpecified: true,
+		},
+		AppID:    "search-app",
+		Source:   searchjobs.JobSource{Origin: searchjobs.JobOriginSavedSearch, ObjectID: "saved-1"},
+		Earliest: now.Add(-time.Hour), Latest: now,
 		State: state, CreatedAt: now.Add(-time.Minute),
 	}
 }
@@ -56,13 +62,24 @@ func TestJobJournalAdmitsAndFinalizesDetachedSearchMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Definition.GetSpl() != " \nindex=main | head 1\t" || got.Definition.GetTimeRange().GetEarliest() != terminal.Earliest.Format(time.RFC3339Nano) ||
+	if got.Definition.GetSpl() != " \nindex=main | head 1\t" || got.Definition.GetTimeRange().GetEarliest() != "-1h" ||
+		got.Definition.GetTimeRange().GetLatest() != "now" || got.Definition.GetTimeRange().GetTimezone() != "America/Los_Angeles" ||
+		got.Definition.GetAppId() != "search-app" || got.Source.GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+		got.Source.GetSavedSearchId() != "saved-1" || !got.ResolvedTimeRange.GetEarliest().AsTime().Equal(terminal.Earliest) ||
+		!got.ResolvedTimeRange.GetLatest().AsTime().Equal(terminal.Latest) || got.ResolvedTimeRange.GetTimezone() != "America/Los_Angeles" ||
 		got.FinalState != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED || got.ProducedRows != 7 ||
 		got.Duration.AsDuration() != 20*time.Second || got.CompilerVersion != "tier-1-test" || len(got.EffectiveIndexScope) != 1 {
 		t.Fatalf("terminal history = %+v", got)
 	}
 	if got.MatchedEvents != 0 || got.ScannedRows != 0 || got.ScannedBytes != 0 {
 		t.Fatalf("unavailable counters were invented: %+v", got)
+	}
+	var indexedAppID, indexedSavedSearchID string
+	if err := database.SQLDB().QueryRow(`SELECT app_id, saved_search_id FROM search_history WHERE search_job_id = ?`, terminal.ID).Scan(&indexedAppID, &indexedSavedSearchID); err != nil {
+		t.Fatal(err)
+	}
+	if indexedAppID != "search-app" || indexedSavedSearchID != "saved-1" {
+		t.Fatalf("indexed provenance = app %q saved search %q", indexedAppID, indexedSavedSearchID)
 	}
 }
 
@@ -119,5 +136,10 @@ func TestJobJournalRejectsInvalidConstructionAndTransitions(t *testing.T) {
 	}
 	if err := journal.Finalize(context.Background(), journalJob("queued", searchjobs.StateQueued, now)); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Finalize(queued) error = %v", err)
+	}
+	malformedIntent := journalJob("malformed-intent", searchjobs.StateQueued, now)
+	malformedIntent.TimeRange = searchtime.Intent{TimezoneSpecified: true}
+	if err := journal.Admit(context.Background(), malformedIntent); !errors.Is(err, control.ErrInvalidArgument) {
+		t.Fatalf("Admit(malformed timezone presence) error = %v", err)
 	}
 }

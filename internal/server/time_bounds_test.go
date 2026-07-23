@@ -17,12 +17,12 @@ func TestAbsoluteTimeRangeUsesPracticalClickHouseNanosecondBounds(t *testing.T) 
 		Earliest: stringPointer(minimum.Format(time.RFC3339Nano)),
 		Latest:   stringPointer(maximum.Format(time.RFC3339Nano)),
 	}
-	earliest, latest, err := absoluteTimeRange(exact)
+	resolved, err := resolveSearchTimeRange(exact, time.Time{})
 	if err != nil {
-		t.Fatalf("absoluteTimeRange(exact bounds) error = %v", err)
+		t.Fatalf("resolveSearchTimeRange(exact bounds) error = %v", err)
 	}
-	if !earliest.Equal(minimum) || !latest.Equal(maximum) {
-		t.Fatalf("absoluteTimeRange(exact bounds) = [%v, %v), want [%v, %v)", earliest, latest, minimum, maximum)
+	if !resolved.Earliest().Equal(minimum) || !resolved.Latest().Equal(maximum) {
+		t.Fatalf("resolveSearchTimeRange(exact bounds) = [%v, %v), want [%v, %v)", resolved.Earliest(), resolved.Latest(), minimum, maximum)
 	}
 
 	for _, test := range []struct {
@@ -39,8 +39,8 @@ func TestAbsoluteTimeRangeUsesPracticalClickHouseNanosecondBounds(t *testing.T) 
 				Earliest: stringPointer(test.earliest.Format(time.RFC3339Nano)),
 				Latest:   stringPointer(test.latest.Format(time.RFC3339Nano)),
 			}
-			if _, _, err := absoluteTimeRange(spec); err == nil {
-				t.Fatal("absoluteTimeRange() error = nil")
+			if _, err := resolveSearchTimeRange(spec, time.Time{}); err == nil {
+				t.Fatal("resolveSearchTimeRange() error = nil")
 			}
 		})
 	}

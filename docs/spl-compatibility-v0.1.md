@@ -27,6 +27,31 @@ The executor applies a 1 MiB ClickHouse `max_query_size` ceiling after bound
 arguments are expanded, in addition to its time, memory, scan, group, and result
 budgets.
 
+## Search time range
+
+Job creation requires both earliest and latest expressions. Version 0.1 accepts
+only these executable forms:
+
+- strict RFC 3339 timestamps with an explicit `Z` or numeric offset and up to
+  nine fractional digits;
+- the exact keyword `now`; and
+- negative integer offsets `-N[s|m|h|d]`, where `N` is greater than zero.
+
+Both endpoints resolve from one captured `now` anchor and form a half-open
+`[earliest, latest)` interval. Seconds, minutes, and hours are elapsed durations.
+Days are calendar days in the effective IANA timezone, so `-1d` and `-24h` can
+differ across daylight-saving transitions, as they do in Splunk. An omitted
+timezone means UTC. The original normalized expressions and optional timezone
+presence are retained separately from the resolved UTC nanosecond timestamps,
+including in search history.
+
+Expressions outside ClickHouse's supported `DateTime64(9)` range, empty or
+inverted intervals, invalid timezone names, and arithmetic overflow fail before
+job admission. Splunk forms not listed above—including implied-one offsets such
+as `-h`, positive offsets, snap expressions such as `@d` or `-1d@d`, aliases,
+chained modifiers, and week/month/quarter/year units—are explicitly rejected in
+version 0.1 rather than approximated.
+
 ## Search expressions
 
 Base search and pipeline `search` support:
@@ -452,5 +477,6 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`percentile functions`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/9.4/statistical-and-charting-functions/aggregate-functions),
 [`top`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.0/search-commands/top),
 [`rare`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.4/search-commands/rare),
-and [`timechart`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/timechart)
+[`timechart`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/timechart),
+and [`time modifiers`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.4/specify-time-ranges/specify-time-modifiers-in-your-search)
 documentation.

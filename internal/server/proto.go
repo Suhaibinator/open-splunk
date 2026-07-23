@@ -10,6 +10,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/proto"
@@ -35,20 +36,36 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 	if err != nil {
 		return nil, err
 	}
+	timeRange, timezone, err := searchjobproto.TimeRange(job)
+	if err != nil {
+		return nil, errors.New("search job contains invalid time-range intent")
+	}
+	source, err := searchjobproto.Source(job.Source)
+	if err != nil {
+		return nil, errors.New("search job contains invalid source metadata")
+	}
+	if err := validateBoundedIdentifier(job.AppID, maximumSavedSearchAppIDBytes, true); err != nil {
+		return nil, errors.New("search job contains an invalid app ID")
+	}
+	definition := &opensplunkv1.SearchDefinition{
+		Spl:        job.SPL,
+		TimeRange:  timeRange,
+		IndexScope: slices.Clone(job.RequestedIndexes),
+	}
+	if job.AppID != "" {
+		definition.AppId = stringPointer(job.AppID)
+	}
 	result := &opensplunkv1.SearchJob{
-		SearchJobId:  job.ID,
-		StateVersion: job.Version,
-		Definition: &opensplunkv1.SearchDefinition{
-			Spl:        job.SPL,
-			TimeRange:  absoluteTimeRangeToProto(job.Earliest, job.Latest),
-			IndexScope: slices.Clone(job.RequestedIndexes),
-		},
+		SearchJobId:         job.ID,
+		StateVersion:        job.Version,
+		Definition:          definition,
+		Source:              source,
 		NormalizedSpl:       optionalString(job.NormalizedSPL),
 		EffectiveIndexScope: slices.Clone(job.EffectiveIndexes),
 		ResolvedTimeRange: &opensplunkv1.ResolvedTimeRange{
 			Earliest: earliest,
 			Latest:   latest,
-			Timezone: "UTC",
+			Timezone: timezone,
 		},
 		IndexTimeCutoff:  indexTimeCutoff,
 		State:            searchStateToProto(job.State),
@@ -569,13 +586,6 @@ func timestampToProto(input time.Time) (*timestamppb.Timestamp, error) {
 		return nil, errors.New("timestamp is outside protobuf range")
 	}
 	return result, nil
-}
-
-func absoluteTimeRangeToProto(earliest, latest time.Time) *opensplunkv1.TimeRangeSpec {
-	earliestText := earliest.UTC().Format(time.RFC3339Nano)
-	latestText := latest.UTC().Format(time.RFC3339Nano)
-	timezone := "UTC"
-	return &opensplunkv1.TimeRangeSpec{Earliest: &earliestText, Latest: &latestText, Timezone: &timezone}
 }
 
 func cloneApps(input []*opensplunkv1.AppSummary) []*opensplunkv1.AppSummary {

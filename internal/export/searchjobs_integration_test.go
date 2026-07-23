@@ -15,6 +15,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
 type integrationSearchExecutor func(context.Context, clickhouse.CompiledQuery, searchjobs.ResultSink) error
@@ -160,14 +161,17 @@ func TestManagerExportsPinnedSearchJobSnapshotAcrossSourceExpiry(t *testing.T) {
 		}
 	})
 
+	resolvedRange, err := searchtime.NewAbsoluteRange(clock.Now().Add(-time.Hour), clock.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
 	searchJob, err := searchManager.Create(context.Background(), searchjobs.CreateRequest{
 		SPL:               "index=main | table message payload",
 		OwnerID:           access.OwnerID,
 		TenantID:          access.TenantID,
 		AuthorizedIndexes: []string{"main"},
 		RequestedIndexes:  []string{"main"},
-		Earliest:          clock.Now().Add(-time.Hour),
-		Latest:            clock.Now(),
+		TimeRange:         resolvedRange,
 	})
 	if err != nil {
 		t.Fatal(err)

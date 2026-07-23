@@ -18,6 +18,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -455,8 +456,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			TenantID:          "tenant",
 			AuthorizedIndexes: []string{"main"},
 			RequestedIndexes:  []string{"main"},
-			Earliest:          now.Add(-time.Hour),
-			Latest:            now.Add(time.Hour),
+			TimeRange:         queryIntegrationTimeRange(t, now.Add(-time.Hour), now.Add(time.Hour)),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -503,8 +503,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			TenantID:          "tenant",
 			AuthorizedIndexes: []string{"main"},
 			RequestedIndexes:  []string{"main"},
-			Earliest:          now.Add(-time.Hour),
-			Latest:            now.Add(time.Hour),
+			TimeRange:         queryIntegrationTimeRange(t, now.Add(-time.Hour), now.Add(time.Hour)),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -1488,8 +1487,7 @@ func queryIntegrationRunSearchRangeForIndex(
 		TenantID:          "tenant",
 		AuthorizedIndexes: []string{indexName},
 		RequestedIndexes:  []string{indexName},
-		Earliest:          earliest,
-		Latest:            latest,
+		TimeRange:         queryIntegrationTimeRange(t, earliest, latest),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1503,6 +1501,15 @@ func queryIntegrationRunSearchRangeForIndex(
 		t.Fatal(err)
 	}
 	return terminal, page
+}
+
+func queryIntegrationTimeRange(t *testing.T, earliest, latest time.Time) searchtime.Range {
+	t.Helper()
+	resolved, err := searchtime.NewAbsoluteRange(earliest, latest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
 }
 
 func queryIntegrationAssertColumns(t *testing.T, page searchjobs.ResultPage, want []string) {

@@ -13,6 +13,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
 var testCursorKey = []byte("0123456789abcdef0123456789abcdef")
@@ -83,14 +84,20 @@ func TestManagerLifecycleUsesImmutableAuthorizedSnapshot(t *testing.T) {
 
 	earliest := time.Date(2026, time.July, 20, 1, 2, 3, 4, time.FixedZone("west", -8*60*60))
 	latest := earliest.Add(2 * time.Hour)
+	timezone := "America/Los_Angeles"
+	resolvedRange, err := searchtime.Resolve("-2h", "now", &timezone, latest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request := CreateRequest{
 		SPL:               " index=alpha | table message ",
 		OwnerID:           "owner-1",
 		TenantID:          "tenant-1",
 		AuthorizedIndexes: []string{"beta", "alpha"},
 		RequestedIndexes:  []string{"alpha"},
-		Earliest:          earliest,
-		Latest:            latest,
+		TimeRange:         resolvedRange,
+		AppID:             "search-app",
+		Source:            JobSource{Origin: JobOriginSavedSearch, ObjectID: "saved-errors"},
 	}
 	created, err := manager.Create(context.Background(), request)
 	if err != nil {
@@ -102,6 +109,9 @@ func TestManagerLifecycleUsesImmutableAuthorizedSnapshot(t *testing.T) {
 	visibilityCutoff.Store(99)
 	request.AuthorizedIndexes[0] = "attacker-controlled"
 	request.RequestedIndexes[0] = "attacker-controlled"
+	request.TimeRange = searchtime.Range{}
+	request.AppID = "attacker-controlled"
+	request.Source.ObjectID = "attacker-controlled"
 
 	var compiled clickhouse.CompiledQuery
 	select {
@@ -132,6 +142,12 @@ func TestManagerLifecycleUsesImmutableAuthorizedSnapshot(t *testing.T) {
 	}
 	if got, want := running.EffectiveIndexes, []string{"alpha"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("effective indexes = %v, want %v", got, want)
+	}
+	if running.TimeRange.Earliest != "-2h" || running.TimeRange.Latest != "now" ||
+		running.TimeRange.Timezone != "America/Los_Angeles" || !running.TimeRange.TimezoneSpecified ||
+		running.AppID != "search-app" || running.Source.Origin != JobOriginSavedSearch ||
+		running.Source.ObjectID != "saved-errors" {
+		t.Fatalf("retained search intent = range %+v app %q source %+v", running.TimeRange, running.AppID, running.Source)
 	}
 
 	close(release)
@@ -394,6 +410,8 @@ func TestTypedResultsPagingDeepCopiesAndAuthenticatesCursors(t *testing.T) {
 	})
 	request := validRequest()
 	request.SPL = "index=main | table string signed unsigned double bool bytes time null list object duration decimal"
+	request.AppID = "search-app"
+	request.Source = JobSource{Origin: JobOriginSavedSearch, ObjectID: "saved-typed"}
 	firstJob, err := manager.Create(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -497,8 +515,16 @@ func TestTypedResultsPagingDeepCopiesAndAuthenticatesCursors(t *testing.T) {
 			if listCopy[i].SPL != "" || listCopy[i].NormalizedSPL != "" || listCopy[i].RequestedIndexes != nil || listCopy[i].EffectiveIndexes != nil || listCopy[i].Schema != nil {
 				t.Fatalf("List() returned non-summary fields: %#v", listCopy[i])
 			}
+			if listCopy[i].TimeRange != firstJob.TimeRange || listCopy[i].AppID != "search-app" ||
+				listCopy[i].Source != (JobSource{Origin: JobOriginSavedSearch, ObjectID: "saved-typed"}) {
+				t.Fatalf("List() dropped bounded provenance metadata: %#v", listCopy[i])
+			}
 			listCopy[i].OwnerID = "also-mutated"
 		}
+	}
+	scoped := manager.ListFor(AccessScope{TenantID: "tenant", OwnerID: "owner"})
+	if len(scoped) != 2 || scoped[0].AppID != "search-app" || scoped[0].Source.ObjectID != "saved-typed" || scoped[0].TimeRange != firstJob.TimeRange {
+		t.Fatalf("ListFor() provenance summaries = %#v", scoped)
 	}
 	freshJob, err := manager.Get(firstJob.ID)
 	if err != nil {
@@ -1215,6 +1241,40 @@ func TestCreateRejectsOversizedMetadataAndInvalidGeneratedID(t *testing.T) {
 		t.Fatalf("rejected request retained %d jobs", len(jobs))
 	}
 
+	metadataManager := newTestManager(t, Config{
+		Executor:        executor,
+		CleanupInterval: -1,
+		NewID:           sequenceIDs("oversized-metadata"),
+	})
+	for _, test := range []struct {
+		name   string
+		mutate func(*CreateRequest)
+	}{
+		{
+			name: "app ID",
+			mutate: func(request *CreateRequest) {
+				request.AppID = strings.Repeat("x", maximumJobAppIDBytes+1)
+			},
+		},
+		{
+			name: "source object ID",
+			mutate: func(request *CreateRequest) {
+				request.Source = JobSource{
+					Origin:   JobOriginSavedSearch,
+					ObjectID: strings.Repeat("x", maximumJobSourceIDBytes+1),
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := validRequest()
+			test.mutate(&request)
+			if _, err := metadataManager.Create(context.Background(), request); !errors.Is(err, ErrRequestTooLarge) {
+				t.Fatalf("Create() error = %v, want ErrRequestTooLarge", err)
+			}
+		})
+	}
+
 	invalidIDManager := newTestManager(t, Config{
 		Executor:        executor,
 		CleanupInterval: -1,
@@ -1222,6 +1282,47 @@ func TestCreateRejectsOversizedMetadataAndInvalidGeneratedID(t *testing.T) {
 	})
 	if _, err := invalidIDManager.Create(context.Background(), validRequest()); err == nil {
 		t.Fatal("Create(invalid UTF-8 ID) unexpectedly succeeded")
+	}
+}
+
+func TestCreateRejectsNoncanonicalSearchIntentAndProvenance(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t, Config{
+		Executor:        executorFunc(func(context.Context, clickhouse.CompiledQuery, ResultSink) error { return nil }),
+		CleanupInterval: -1,
+		NewID:           sequenceIDs("canonical-metadata"),
+	})
+	tests := []struct {
+		name   string
+		mutate func(*CreateRequest)
+	}{
+		{name: "missing resolved time range", mutate: func(request *CreateRequest) {
+			request.TimeRange = searchtime.Range{}
+		}},
+		{name: "oversized app", mutate: func(request *CreateRequest) { request.AppID = strings.Repeat("a", maximumJobAppIDBytes+1) }},
+		{name: "app control character", mutate: func(request *CreateRequest) { request.AppID = "app\nmain" }},
+		{name: "padded source ID", mutate: func(request *CreateRequest) {
+			request.Source = JobSource{Origin: JobOriginSavedSearch, ObjectID: " saved-1 "}
+		}},
+		{name: "oversized source ID", mutate: func(request *CreateRequest) {
+			request.Source = JobSource{Origin: JobOriginSavedSearch, ObjectID: strings.Repeat("s", maximumJobSourceIDBytes+1)}
+		}},
+		{name: "ID does not match origin", mutate: func(request *CreateRequest) {
+			request.Source = JobSource{Origin: JobOriginAdHoc, ObjectID: "saved-1"}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := validRequest()
+			test.mutate(&request)
+			if _, err := manager.Create(context.Background(), request); err == nil {
+				t.Fatal("Create() unexpectedly succeeded")
+			}
+		})
+	}
+	if jobs := manager.List(); len(jobs) != 0 {
+		t.Fatalf("rejected metadata retained %d jobs", len(jobs))
 	}
 }
 
@@ -1353,16 +1454,6 @@ func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 			executorErr: fmt.Errorf("server max_bytes_to_read contained secret: %w", ErrExecutionLimit),
 			wantCode:    FailureResourceLimit,
 			wantText:    "configured execution resource limit",
-		},
-		{
-			name: "time",
-			request: func() CreateRequest {
-				request := validRequest()
-				request.Earliest = request.Latest
-				return request
-			}(),
-			wantCode: FailureInvalidTimeRange,
-			wantText: "time range",
 		},
 	}
 	for _, test := range tests {
@@ -2081,15 +2172,24 @@ func newTestManager(t *testing.T, config Config) *Manager {
 }
 
 func validRequest() CreateRequest {
+	earliest := time.Date(2026, time.July, 20, 0, 0, 0, 0, time.UTC)
+	latest := time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC)
 	return CreateRequest{
 		SPL:               "index=main | table message",
 		OwnerID:           "owner",
 		TenantID:          "tenant",
 		AuthorizedIndexes: []string{"main"},
 		RequestedIndexes:  []string{"main"},
-		Earliest:          time.Date(2026, time.July, 20, 0, 0, 0, 0, time.UTC),
-		Latest:            time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC),
+		TimeRange:         mustAbsoluteTimeRange(earliest, latest),
 	}
+}
+
+func mustAbsoluteTimeRange(earliest, latest time.Time) searchtime.Range {
+	resolved, err := searchtime.NewAbsoluteRange(earliest, latest)
+	if err != nil {
+		panic(err)
+	}
+	return resolved
 }
 
 func withSPL(request CreateRequest, source string) CreateRequest {

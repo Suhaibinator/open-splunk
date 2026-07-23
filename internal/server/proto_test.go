@@ -9,6 +9,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
 func TestValueToProtoPreservesEverySupportedKind(t *testing.T) {
@@ -236,6 +237,34 @@ func TestSearchJobAndResultPageExposeRetainedResultTruncation(t *testing.T) {
 	}
 	if !complete.GetSnapshotComplete() || !complete.GetPage().GetTotalSizeExact() {
 		t.Fatalf("complete page metadata = %+v", complete)
+	}
+}
+
+func TestSearchJobToProtoPreservesIntentProvenanceAndResolvedRange(t *testing.T) {
+	t.Parallel()
+
+	job := completeJob("job-intent")
+	job.TimeRange = searchtime.Intent{
+		Earliest: "-24h", Latest: "now", Timezone: "America/Los_Angeles", TimezoneSpecified: true,
+	}
+	job.AppID = "search-app"
+	job.Source = searchjobs.JobSource{Origin: searchjobs.JobOriginSavedSearch, ObjectID: "saved-1"}
+	converted, err := searchJobToProto(job, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if converted.GetDefinition().GetTimeRange().GetEarliest() != "-24h" ||
+		converted.GetDefinition().GetTimeRange().GetLatest() != "now" ||
+		converted.GetDefinition().GetTimeRange().GetTimezone() != "America/Los_Angeles" ||
+		converted.GetDefinition().GetAppId() != "search-app" ||
+		converted.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+		converted.GetSource().GetSavedSearchId() != "saved-1" {
+		t.Fatalf("converted intent/provenance = %+v", converted)
+	}
+	if !converted.GetResolvedTimeRange().GetEarliest().AsTime().Equal(job.Earliest) ||
+		!converted.GetResolvedTimeRange().GetLatest().AsTime().Equal(job.Latest) ||
+		converted.GetResolvedTimeRange().GetTimezone() != "America/Los_Angeles" {
+		t.Fatalf("converted resolved range = %+v", converted.GetResolvedTimeRange())
 	}
 }
 

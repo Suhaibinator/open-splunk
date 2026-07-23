@@ -310,7 +310,9 @@ func (handler *apiHandler) cloneSavedSearch(input *opensplunkv1.SavedSearch) (*o
 	if definition.OwnerId == nil || definition.GetOwnerId() != handler.ownerID {
 		return nil, errors.New("saved search service returned a record outside the authenticated owner scope")
 	}
-	if validateBoundedIdentifier(definition.GetName(), maximumSavedSearchNameBytes, false) != nil || definition.GetSearch() == nil || validateBoundedIdentifier(definition.GetSearch().GetAppId(), maximumSavedSearchAppIDBytes, true) != nil {
+	if validateBoundedIdentifier(definition.GetName(), maximumSavedSearchNameBytes, false) != nil || definition.GetSearch() == nil ||
+		validateBoundedIdentifier(definition.GetSearch().GetAppId(), maximumSavedSearchAppIDBytes, true) != nil ||
+		strings.TrimSpace(definition.GetSearch().GetAppId()) != definition.GetSearch().GetAppId() {
 		return nil, errors.New("saved search service returned an invalid definition")
 	}
 	switch definition.GetSharingScope() {
