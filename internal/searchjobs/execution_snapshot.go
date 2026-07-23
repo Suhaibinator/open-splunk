@@ -35,6 +35,9 @@ func (manager *Manager) CompletedExecutionSnapshotFor(ctx context.Context, acces
 	if err := ctx.Err(); err != nil {
 		return ExecutionSnapshot{}, err
 	}
+	if !validAccessScope(access) {
+		return ExecutionSnapshot{}, ErrNotFound
+	}
 
 	// Retain manager.mu until entry.mu is acquired so shutdown and tombstone
 	// removal are ordered with this read. This is the manager -> entry lock

@@ -302,6 +302,11 @@ func (x *GetSearchJobResponse) GetSearchJob() *SearchJob {
 }
 
 // POST /api/v1/search/jobs/list
+// Lists the caller's retained transient jobs in created_at DESC,
+// search_job_id DESC order. Pagination fixes the admission high-water mark,
+// but job states remain live between calls; total_size_exact describes only
+// the individual request that produced it. app_id_filter is exact, while
+// text_filter matches source SPL with ASCII case folding.
 type ListSearchJobsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Page          *PageRequest           `protobuf:"bytes,1,opt,name=page,proto3" json:"page,omitempty"`
@@ -371,9 +376,11 @@ func (x *ListSearchJobsRequest) GetTextFilter() string {
 }
 
 type ListSearchJobsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SearchJobs    []*SearchJob           `protobuf:"bytes,1,rep,name=search_jobs,json=searchJobs,proto3" json:"search_jobs,omitempty"`
-	Page          *PageResponse          `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// List summaries retain source SPL and safe lifecycle metadata, omit result
+	// schemas and failure diagnostics, and bound failure messages to 4 KiB.
+	SearchJobs    []*SearchJob  `protobuf:"bytes,1,rep,name=search_jobs,json=searchJobs,proto3" json:"search_jobs,omitempty"`
+	Page          *PageResponse `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

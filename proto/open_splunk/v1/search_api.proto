@@ -33,6 +33,11 @@ message GetSearchJobResponse {
 }
 
 // POST /api/v1/search/jobs/list
+// Lists the caller's retained transient jobs in created_at DESC,
+// search_job_id DESC order. Pagination fixes the admission high-water mark,
+// but job states remain live between calls; total_size_exact describes only
+// the individual request that produced it. app_id_filter is exact, while
+// text_filter matches source SPL with ASCII case folding.
 message ListSearchJobsRequest {
   PageRequest page = 1;
   repeated SearchJobState state_filters = 2;
@@ -41,6 +46,8 @@ message ListSearchJobsRequest {
 }
 
 message ListSearchJobsResponse {
+  // List summaries retain source SPL and safe lifecycle metadata, omit result
+  // schemas and failure diagnostics, and bound failure messages to 4 KiB.
   repeated SearchJob search_jobs = 1;
   PageResponse page = 2;
 }

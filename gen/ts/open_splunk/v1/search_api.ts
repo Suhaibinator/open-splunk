@@ -113,7 +113,14 @@ export interface GetSearchJobResponse {
   searchJob: SearchJob | undefined;
 }
 
-/** POST /api/v1/search/jobs/list */
+/**
+ * POST /api/v1/search/jobs/list
+ * Lists the caller's retained transient jobs in created_at DESC,
+ * search_job_id DESC order. Pagination fixes the admission high-water mark,
+ * but job states remain live between calls; total_size_exact describes only
+ * the individual request that produced it. app_id_filter is exact, while
+ * text_filter matches source SPL with ASCII case folding.
+ */
 export interface ListSearchJobsRequest {
   page: PageRequest | undefined;
   stateFilters: SearchJobState[];
@@ -122,6 +129,10 @@ export interface ListSearchJobsRequest {
 }
 
 export interface ListSearchJobsResponse {
+  /**
+   * List summaries retain source SPL and safe lifecycle metadata, omit result
+   * schemas and failure diagnostics, and bound failure messages to 4 KiB.
+   */
   searchJobs: SearchJob[];
   page: PageResponse | undefined;
 }

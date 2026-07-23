@@ -41,6 +41,12 @@ type fakeSearchJobs struct {
 	resultsScope   searchjobs.AccessScope
 	resultsID      string
 	resultsRequest searchjobs.PageRequest
+	listPage       searchjobs.JobListPage
+	listErr        error
+	listScope      searchjobs.AccessScope
+	listRequest    searchjobs.JobListRequest
+	listCalls      int
+	listFn         func(context.Context, searchjobs.AccessScope, searchjobs.JobListRequest) (searchjobs.JobListPage, error)
 	cancelErr      error
 	cancelScope    searchjobs.AccessScope
 	cancelID       string
@@ -95,6 +101,20 @@ func (jobs *fakeSearchJobs) ResultsFor(scope searchjobs.AccessScope, id string, 
 	jobs.resultsID = id
 	jobs.resultsRequest = request
 	return jobs.resultsPage, jobs.resultsErr
+}
+
+func (jobs *fakeSearchJobs) ListPageFor(ctx context.Context, scope searchjobs.AccessScope, request searchjobs.JobListRequest) (searchjobs.JobListPage, error) {
+	jobs.mu.Lock()
+	jobs.listCalls++
+	jobs.listScope = scope
+	jobs.listRequest = request
+	fn := jobs.listFn
+	page, err := jobs.listPage, jobs.listErr
+	jobs.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, scope, request)
+	}
+	return page, err
 }
 
 func (jobs *fakeSearchJobs) CancelFor(scope searchjobs.AccessScope, id string) error {

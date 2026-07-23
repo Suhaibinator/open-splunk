@@ -365,6 +365,9 @@ func optionalBoundedString(input *string, maximumBytes int, name string) (*strin
 	if input == nil {
 		return nil, nil
 	}
+	if len(*input) > maximumBytes {
+		return nil, fmt.Errorf("%s is invalid", name)
+	}
 	value := strings.TrimSpace(*input)
 	if err := validateBoundedIdentifier(value, maximumBytes, true); err != nil {
 		return nil, fmt.Errorf("%s is invalid", name)

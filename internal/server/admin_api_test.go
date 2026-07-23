@@ -502,15 +502,23 @@ func TestAdministrativeRoutesRejectDNSRebindingAndCrossOriginBrowsers(t *testing
 	}
 }
 
-func TestHandlerRejectsTenantIdentityBeyondDurableStorageLimit(t *testing.T) {
+func TestHandlerRejectsInvalidTenantIdentity(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewHandler(Config{
-		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: &fakeSavedSearches{},
-		WebUI: testUI(), TenantID: strings.Repeat("t", maximumIdentityBytes+1),
-	})
-	if err == nil || !strings.Contains(err.Error(), "identity is invalid") {
-		t.Fatalf("NewHandler oversized tenant error = %v", err)
+	for name, tenantID := range map[string]string{
+		"oversized":     strings.Repeat("t", maximumIdentityBytes+1),
+		"control":       "tenant\x00boundary",
+		"invalid UTF-8": string([]byte{0xff}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := NewHandler(Config{
+				SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: &fakeSavedSearches{},
+				WebUI: testUI(), TenantID: tenantID,
+			})
+			if err == nil || !strings.Contains(err.Error(), "identity is invalid") {
+				t.Fatalf("NewHandler tenant error = %v", err)
+			}
+		})
 	}
 }
 

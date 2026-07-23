@@ -69,6 +69,9 @@ func (manager *Manager) AcquireResultsFor(ctx context.Context, access AccessScop
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if !validAccessScope(access) {
+		return nil, ErrNotFound
+	}
 
 	// Holding manager.mu until entry.mu is acquired makes admission atomic
 	// with manager shutdown and tombstone removal. This follows the existing
@@ -296,6 +299,7 @@ func (manager *Manager) removeExpiredEntry(entry *jobEntry, now time.Time) {
 		manager.mu.Unlock()
 		return
 	}
+	manager.removeJobListEntryLocked(entry)
 	delete(manager.jobs, entry.job.ID)
 	metadataBytes := entry.metadataBytes
 	entry.mu.Unlock()

@@ -71,6 +71,10 @@ func (runtimeSearchJobs) GetFor(searchjobs.AccessScope, string) (searchjobs.Job,
 	return searchjobs.Job{}, searchjobs.ErrNotFound
 }
 
+func (runtimeSearchJobs) ListPageFor(context.Context, searchjobs.AccessScope, searchjobs.JobListRequest) (searchjobs.JobListPage, error) {
+	return searchjobs.JobListPage{}, nil
+}
+
 func (runtimeSearchJobs) ResultsFor(searchjobs.AccessScope, string, searchjobs.PageRequest) (searchjobs.ResultPage, error) {
 	return searchjobs.ResultPage{}, searchjobs.ErrNotFound
 }

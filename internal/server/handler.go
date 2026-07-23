@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
@@ -32,6 +31,8 @@ import (
 
 const (
 	apiV1PathPrefix                   = "/api/v1"
+	searchJobsListRoute               = "/search/jobs/list"
+	searchJobsListPath                = apiV1PathPrefix + searchJobsListRoute
 	searchFieldsListRoute             = "/search/jobs/fields/list"
 	searchFieldsListPath              = apiV1PathPrefix + searchFieldsListRoute
 	searchFieldSummaryRoute           = "/search/jobs/field-summary"
@@ -69,6 +70,7 @@ const (
 type SearchJobs interface {
 	Create(context.Context, searchjobs.CreateRequest) (searchjobs.Job, error)
 	GetFor(searchjobs.AccessScope, string) (searchjobs.Job, error)
+	ListPageFor(context.Context, searchjobs.AccessScope, searchjobs.JobListRequest) (searchjobs.JobListPage, error)
 	ResultsFor(searchjobs.AccessScope, string, searchjobs.PageRequest) (searchjobs.ResultPage, error)
 	CancelFor(searchjobs.AccessScope, string) error
 }
@@ -401,7 +403,7 @@ func NewHandler(config Config) (*Handler, error) {
 	if tenantID == "" {
 		tenantID = "default"
 	}
-	if validateBoundedIdentifier(ownerID, maximumSavedSearchOwnerBytes, false) != nil || len(tenantID) > maximumIdentityBytes || !utf8.ValidString(tenantID) {
+	if validateBoundedIdentifier(ownerID, maximumSavedSearchOwnerBytes, false) != nil || validateBoundedIdentifier(tenantID, maximumIdentityBytes, false) != nil {
 		return nil, errors.New("create server handler: owner or tenant identity is invalid")
 	}
 	bootstrap, err := normalizeBootstrap(config.Bootstrap)
@@ -477,6 +479,7 @@ func NewHandler(config Config) (*Handler, error) {
 		"/api/v1/system/bootstrap",
 		"/api/v1/search/jobs/create",
 		"/api/v1/search/jobs/get",
+		searchJobsListPath,
 		"/api/v1/search/jobs/results",
 		"/api/v1/search/jobs/cancel",
 		"/api/v1/saved-searches/create",
@@ -730,6 +733,11 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 			Path: "/search/jobs/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.GetSearchJobRequest, *opensplunkv1.GetSearchJobResponse](), Handler: handler.getSearchJob,
 			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.GetSearchJobRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+		}),
+		router.NewGenericRouteDefinition[*opensplunkv1.ListSearchJobsRequest, *serializedSearchJobListResponse, string, struct{}](router.RouteConfig[*opensplunkv1.ListSearchJobsRequest, *serializedSearchJobListResponse]{
+			Path: searchJobsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: newSerializedSearchJobListCodec(), Handler: handler.listSearchJobs,
+			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.ListSearchJobsRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 		router.NewGenericRouteDefinition[*opensplunkv1.GetSearchResultsRequest, *serializedSearchResultsResponse, string, struct{}](router.RouteConfig[*opensplunkv1.GetSearchResultsRequest, *serializedSearchResultsResponse]{
 			Path: "/search/jobs/results", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,

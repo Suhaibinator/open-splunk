@@ -139,6 +139,67 @@ type AccessScope struct {
 	OwnerID  string
 }
 
+// JobListRequest selects one bounded, owner-scoped page of retained transient
+// jobs. PageToken is opaque and may only be replayed with the same access scope
+// and canonical filters. PageSize and IncludeTotal may change between pages.
+type JobListRequest struct {
+	PageSize     int
+	PageToken    string
+	IncludeTotal bool
+	StateFilters []State
+	AppIDFilter  *string
+	TextFilter   *string
+}
+
+// JobListItem is the detached, explicit allowlist used for retained-job list
+// responses. It keeps query, scope, progress, and lifecycle metadata, but has
+// no field through which result schema or detailed failure diagnostics can be
+// exposed. New Job fields therefore remain absent until deliberately added.
+type JobListItem struct {
+	ID               string
+	Version          uint64
+	OwnerID          string
+	TenantID         string
+	SPL              string
+	NormalizedSPL    string
+	RequestedIndexes []string
+	EffectiveIndexes []string
+	TimeRange        searchtime.Intent
+	AppID            string
+	Source           JobSource
+	Earliest         time.Time
+	Latest           time.Time
+	IndexTimeCutoff  time.Time
+	State            State
+	RowCount         uint64
+	ResultBytes      uint64
+	ResultsTruncated bool
+	Failure          *JobListFailure
+	CreatedAt        time.Time
+	StartedAt        time.Time
+	FinishedAt       time.Time
+	ExpiresAt        time.Time
+}
+
+// JobListFailure is the diagnostics-free failure summary exposed by retained
+// job lists. Detailed parser/planner diagnostics remain available only from a
+// single-job read.
+type JobListFailure struct {
+	Code      FailureCode
+	Message   string
+	Retryable bool
+}
+
+// JobListPage is exact for the individual manager read that produced it.
+// Retained job state may change between page requests, while the cursor's
+// admission high-water mark prevents newly admitted jobs entering a traversal.
+type JobListPage struct {
+	Jobs           []JobListItem
+	NextPageToken  string
+	TotalSize      *uint64
+	TotalSizeExact bool
+}
+
 // Job is a detached snapshot of job metadata. Every slice, failure, and schema
 // returned by Manager is a deep copy and may be changed by the caller.
 type Job struct {

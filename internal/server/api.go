@@ -407,6 +407,8 @@ func mapSearchJobError(err error) error {
 		return router.NewHTTPError(http.StatusConflict, "search results are not ready")
 	case errors.Is(err, searchjobs.ErrResultsUnavailable):
 		return router.NewHTTPError(http.StatusConflict, "search results are unavailable")
+	case errors.Is(err, searchjobs.ErrInvalidListFilter):
+		return badRequestError("search job list filter is invalid")
 	case errors.Is(err, searchjobs.ErrInvalidCursor):
 		return badRequestError("page token is invalid")
 	case errors.Is(err, searchjobs.ErrPageSize):

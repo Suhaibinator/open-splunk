@@ -23,6 +23,7 @@ import (
 const (
 	defaultMaxConcurrent          = 4
 	defaultMaxConcurrentReads     = 8
+	defaultMaxConcurrentLists     = 4
 	defaultMaxConcurrentSnapshots = 4
 	defaultMaxResultLeases        = 256
 	defaultMaxResultLeasesPerJob  = 16
@@ -82,11 +83,13 @@ var (
 	// ErrResultsUnavailable means a failed or canceled job has no result page.
 	ErrResultsUnavailable = errors.New("search job results are unavailable")
 	// ErrInvalidCursor intentionally covers malformed, tampered, stale, and
-	// cross-job cursors without revealing which check failed.
-	ErrInvalidCursor = errors.New("invalid search result cursor")
-	// ErrPageSize means a requested page is negative or exceeds the configured
-	// maximum.
-	ErrPageSize = errors.New("invalid search result page size")
+	// cross-scope pagination cursors without revealing which check failed.
+	ErrInvalidCursor = errors.New("invalid search pagination cursor")
+	// ErrInvalidListFilter means a job-list access scope or filter is malformed.
+	ErrInvalidListFilter = errors.New("invalid search job list filter")
+	// ErrPageSize means a requested search page is negative or exceeds its
+	// configured maximum.
+	ErrPageSize = errors.New("invalid search page size")
 	// ErrRowLimit is returned to an executor at the first row that would exceed
 	// the configured retained-result row bound.
 	ErrRowLimit = errors.New("search result row limit exceeded")
@@ -189,6 +192,7 @@ type Config struct {
 type Manager struct {
 	mu                  sync.RWMutex
 	jobs                map[string]*jobEntry
+	jobsByScope         map[AccessScope]*jobListIndexNode
 	reservedIDs         map[string]struct{}
 	closed              bool
 	nextGeneration      uint64
@@ -221,7 +225,9 @@ type Manager struct {
 	newID                 func() string
 	cursorKey             []byte
 	cursorScope           string
+	listCursorEpoch       string
 	readGate              chan struct{}
+	listGate              chan struct{}
 	snapshotGate          chan struct{}
 
 	ctx               context.Context
@@ -424,10 +430,15 @@ func New(config Config) (*Manager, error) {
 	if cursorScope == "" || len(cursorScope) > 256 || !utf8.ValidString(cursorScope) {
 		return nil, errors.New("create search job manager: cursor scope is invalid")
 	}
+	listCursorEpoch := randomJobID()
+	if listCursorEpoch == "" {
+		return nil, errors.New("create search job manager: generate transient list cursor epoch")
+	}
 
 	managerContext, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
 		jobs:                  make(map[string]*jobEntry),
+		jobsByScope:           make(map[AccessScope]*jobListIndexNode),
 		reservedIDs:           make(map[string]struct{}),
 		executor:              config.Executor,
 		snapshotter:           config.Snapshotter,
@@ -457,7 +468,9 @@ func New(config Config) (*Manager, error) {
 		newID:                 newID,
 		cursorKey:             cursorKey,
 		cursorScope:           cursorScope,
+		listCursorEpoch:       listCursorEpoch,
 		readGate:              make(chan struct{}, maxConcurrentReads),
+		listGate:              make(chan struct{}, defaultMaxConcurrentLists),
 		snapshotGate:          make(chan struct{}, maxConcurrentSnapshots),
 		ctx:                   managerContext,
 		cancel:                cancel,
@@ -611,6 +624,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	manager.nextGeneration++
 	entry.generation = manager.nextGeneration
 	manager.jobs[id] = entry
+	manager.insertJobListEntryLocked(entry)
 	manager.enqueueLocked(entry)
 	metadataCommitted = true
 	memoryCommitted = true
@@ -877,6 +891,9 @@ func normalizeCreateRequest(request CreateRequest) (CreateRequest, error) {
 	if !request.TimeRange.Valid() {
 		return CreateRequest{}, errors.New("create search job: resolved time range is required")
 	}
+	if !validAccessScope(AccessScope{TenantID: request.TenantID, OwnerID: request.OwnerID}) {
+		return CreateRequest{}, errors.New("create search job: owner or tenant identity is invalid")
+	}
 	request.AppID = strings.Clone(request.AppID)
 	if !canonicalJobMetadataIdentifier(request.AppID, maximumJobAppIDBytes, true) {
 		return CreateRequest{}, errors.New("create search job: app ID is invalid")
@@ -928,6 +945,22 @@ func canonicalJobMetadataIdentifier(value string, maximumBytes int, allowEmpty b
 	return true
 }
 
+func validAccessScope(access AccessScope) bool {
+	return validAccessIdentity(access.TenantID) && validAccessIdentity(access.OwnerID)
+}
+
+func validAccessIdentity(value string) bool {
+	if value == "" || len(value) > defaultMaxIdentityBytes || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
 // Get returns a deep metadata copy for trusted administrative callers. API
 // handlers serving an end user should call GetFor.
 func (manager *Manager) Get(id string) (Job, error) {
@@ -941,6 +974,9 @@ func (manager *Manager) Get(id string) (Job, error) {
 // GetFor returns a deep copy only when the authenticated access scope owns the
 // job.
 func (manager *Manager) GetFor(access AccessScope, id string) (Job, error) {
+	if !validAccessScope(access) {
+		return Job{}, ErrNotFound
+	}
 	entry := manager.lookup(id)
 	if entry == nil || !entry.matches(access) {
 		return Job{}, ErrNotFound
@@ -967,6 +1003,9 @@ func (manager *Manager) List() []Job {
 
 // ListFor returns deterministic summary copies owned by access.
 func (manager *Manager) ListFor(access AccessScope) []Job {
+	if !validAccessScope(access) {
+		return nil
+	}
 	return manager.list(&access)
 }
 
@@ -1024,6 +1063,9 @@ func (manager *Manager) ResultsFor(access AccessScope, id string, request PageRe
 	}
 	if limit < 0 || limit > manager.maxPageSize {
 		return ResultPage{}, ErrPageSize
+	}
+	if !validAccessScope(access) {
+		return ResultPage{}, ErrNotFound
 	}
 	entry := manager.lookup(id)
 	if entry == nil || !entry.matches(access) {
@@ -1104,6 +1146,9 @@ func (manager *Manager) Cancel(id string) error {
 
 // CancelFor cancels a job only when access owns it.
 func (manager *Manager) CancelFor(access AccessScope, id string) error {
+	if !validAccessScope(access) {
+		return ErrNotFound
+	}
 	entry := manager.lookup(id)
 	if entry == nil || !entry.matches(access) {
 		return ErrNotFound
@@ -1161,6 +1206,7 @@ func (manager *Manager) cleanup() int {
 			removed := false
 			manager.mu.Lock()
 			if manager.jobs[retained.id] == entry {
+				manager.removeJobListEntryLocked(entry)
 				delete(manager.jobs, retained.id)
 				changed++
 				removed = true

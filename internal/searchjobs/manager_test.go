@@ -1326,6 +1326,50 @@ func TestCreateRejectsNoncanonicalSearchIntentAndProvenance(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsInvalidAccessIdentityBeforeSnapshot(t *testing.T) {
+	t.Parallel()
+
+	var snapshotCalls atomic.Int32
+	manager := newTestManager(t, Config{
+		Executor: executorFunc(func(context.Context, clickhouse.CompiledQuery, ResultSink) error { return nil }),
+		Snapshotter: snapshotterFunc(func(context.Context) (uint64, error) {
+			snapshotCalls.Add(1)
+			return 1, nil
+		}),
+		CleanupInterval: -1,
+		NewID:           sequenceIDs("invalid-access"),
+	})
+	invalidUTF8 := string([]byte{0xff})
+	tests := []struct {
+		name   string
+		mutate func(*CreateRequest)
+	}{
+		{name: "empty owner", mutate: func(request *CreateRequest) { request.OwnerID = "" }},
+		{name: "empty tenant", mutate: func(request *CreateRequest) { request.TenantID = "" }},
+		{name: "padded owner", mutate: func(request *CreateRequest) { request.OwnerID = " owner " }},
+		{name: "padded tenant", mutate: func(request *CreateRequest) { request.TenantID = " tenant " }},
+		{name: "control owner", mutate: func(request *CreateRequest) { request.OwnerID = "own\ner" }},
+		{name: "control tenant", mutate: func(request *CreateRequest) { request.TenantID = "ten\x00ant" }},
+		{name: "invalid UTF-8 owner", mutate: func(request *CreateRequest) { request.OwnerID = invalidUTF8 }},
+		{name: "invalid UTF-8 tenant", mutate: func(request *CreateRequest) { request.TenantID = invalidUTF8 }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := validRequest()
+			test.mutate(&request)
+			if _, err := manager.Create(context.Background(), request); err == nil {
+				t.Fatal("Create() unexpectedly succeeded")
+			}
+		})
+	}
+	if got := snapshotCalls.Load(); got != 0 {
+		t.Fatalf("visibility snapshot calls = %d, want 0", got)
+	}
+	if jobs := manager.List(); len(jobs) != 0 {
+		t.Fatalf("rejected identities retained %d jobs", len(jobs))
+	}
+}
+
 func TestNewRejectsUnsafeResourceConfiguration(t *testing.T) {
 	t.Parallel()
 
