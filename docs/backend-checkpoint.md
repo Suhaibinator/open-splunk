@@ -8,8 +8,9 @@ pulling `origin/main`.
 
 1. Run `git status --short --branch` before editing anything.
 2. Preserve any pre-existing frontend work in `app/search-workspace.tsx` and
-   `app/search-workspace/live-preview.ts`; those files were being changed
-   independently and were intentionally excluded from this backend checkpoint.
+   under `app/search-workspace/` (especially `live-preview.ts` and the panel
+   components); those files were being changed independently and were
+   intentionally excluded from this backend checkpoint.
 3. Run `git pull --ff-only origin main` only when doing so will not disturb
    local work.
 4. Read `docs/product-architecture-plan.md` and
@@ -63,10 +64,11 @@ npm run build
 OPEN_SPLUNK_BACKEND_INTEGRATION=1 go test ./integration -run '^TestBackendVertical$' -count=1 -timeout=3m
 ```
 
-`npm run lint` currently also examines the independent, incomplete live-preview
-workspace UI edits named above and reports unused state/imports there. Do not
-"fix" that by deleting or overwriting those edits. The backend-owned TypeScript
-client and generated bindings pass type checking and scoped linting.
+`npm run lint` also examines the independent live-preview workspace UI edits
+named above. During this checkpoint it reported incomplete wiring while those
+files were actively changing. Do not "fix" that by deleting or overwriting
+those edits. The backend-owned TypeScript client and generated bindings pass
+type checking and scoped linting.
 
 ## Remaining work, in priority order
 
