@@ -26,7 +26,10 @@ const (
 	// Timechart physical columns are an executor-only transport. Runtime series
 	// names are data, never SQL identifiers, and are expanded into the public
 	// wide schema only after the complete bounded result has been validated.
-	TimechartBucketColumn  = "__os_timechart_bucket"
+	// The zero-based ordinal keeps epoch-aligned bucket starts out of
+	// DateTime64 conversions: the first bucket may precede ClickHouse's
+	// practical lower bound even though every selected event is representable.
+	TimechartOrdinalColumn = "__os_timechart_ordinal"
 	TimechartNamesColumn   = "__os_timechart_names"
 	TimechartCountsColumn  = "__os_timechart_counts"
 	TimechartInvalidColumn = "__os_timechart_invalid"
@@ -402,6 +405,10 @@ func compileTimechart(
 	if spanSeconds <= 0 || operator.FirstBucket.Unix()%spanSeconds != 0 {
 		return CompiledQuery{}, errors.New("compile ClickHouse timechart: first bucket is not epoch aligned")
 	}
+	firstBucketNumber, gridOK := ordinalGridFirstBucketNumber(operator.FirstBucket.Unix(), spanSeconds, operator.BucketCount)
+	if !gridOK {
+		return CompiledQuery{}, errors.New("compile ClickHouse timechart: bucket grid overflows")
+	}
 	if !state.eventRows {
 		return CompiledQuery{}, &plan.Diagnostic{
 			Code:    "SPL_UNSUPPORTED_TIMECHART_INPUT",
@@ -482,7 +489,7 @@ func compileTimechart(
 	valueType := q("__os_tc_value_type")
 	ticks := q("__os_tc_ticks")
 	label := q("__os_tc_label")
-	bucket := q("__os_tc_bucket")
+	bucketNumber := q("__os_tc_bucket_number")
 	kind := q("__os_tc_kind")
 	frequency := q("__os_tc_count")
 	encoded := q("__os_tc_encoded")
@@ -490,11 +497,10 @@ func compileTimechart(
 	sortLabel := q("__os_tc_sort_label")
 	countMap := q("__os_tc_count_map")
 	invalid := q("__os_tc_invalid")
+	ordinal := q(TimechartOrdinalColumn)
 
 	spanNanoseconds := int64(operator.Span)
-	bucketNumber := "intDiv(" + ticks + ", " + strconv.FormatInt(spanNanoseconds, 10) + ")" +
-		" - if(" + ticks + " < 0 AND " + ticks + " % " + strconv.FormatInt(spanNanoseconds, 10) + " != 0, 1, 0)"
-	bucketSQL := "fromUnixTimestamp64Nano((" + bucketNumber + ") * " + strconv.FormatInt(spanNanoseconds, 10) + ", 'UTC')"
+	bucketNumberExpression := epochFloorBucketNumberSQL(ticks)
 	validLabel := "isValidUTF8(" + label + ") AND length(" + label + ") BETWEEN 1 AND " +
 		strconv.Itoa(maxTimechartLabelBytes) + " AND " + label + " NOT IN ('NULL', 'OTHER')"
 
@@ -527,18 +533,18 @@ func compileTimechart(
 	sql.WriteString(" FROM " + source + "), ")
 
 	sql.WriteString(classified)
-	sql.WriteString(" AS (SELECT " + bucketSQL + " AS " + bucket + ", ")
+	sql.WriteString(" AS (SELECT " + bucketNumberExpression + " AS " + bucketNumber + ", ")
 	sql.WriteString("multiIf(" + descendant + " != 0, toUInt8(3), " + present + " = 0 OR isNull(" + value + ") OR " + valueType + " = 'None', toUInt8(1), ")
 	sql.WriteString(valueType + " != 'String', toUInt8(3), NOT (" + validLabel + "), toUInt8(3), toUInt8(0)) AS " + kind + ", " + label)
 	sql.WriteString(" FROM " + prepared + "), ")
 
 	sql.WriteString(canonicalized)
-	sql.WriteString(" AS (SELECT " + bucket + ", " + kind + ", if(" + kind + " = 0, " + label + ", CAST('' AS String)) AS " + label)
+	sql.WriteString(" AS (SELECT " + bucketNumber + ", " + kind + ", if(" + kind + " = 0, " + label + ", CAST('' AS String)) AS " + label)
 	sql.WriteString(" FROM " + classified + "), ")
 
 	sql.WriteString(counts)
-	sql.WriteString(" AS MATERIALIZED (SELECT " + bucket + ", " + kind + ", " + label + ", count() AS " + frequency)
-	sql.WriteString(" FROM " + canonicalized + " GROUP BY " + bucket + ", " + kind + ", " + label + "), ")
+	sql.WriteString(" AS MATERIALIZED (SELECT " + bucketNumber + ", " + kind + ", " + label + ", count() AS " + frequency)
+	sql.WriteString(" FROM " + canonicalized + " GROUP BY " + bucketNumber + ", " + kind + ", " + label + "), ")
 
 	sql.WriteString(top)
 	sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", sum(" + frequency + ") AS " + frequency + " FROM " + counts)
@@ -547,9 +553,9 @@ func compileTimechart(
 	sql.WriteString("), ")
 
 	sql.WriteString(collapsed)
-	sql.WriteString(" AS (SELECT " + bucket + ", multiIf(" + kind + " = 1, '1:', ")
+	sql.WriteString(" AS (SELECT " + bucketNumber + ", multiIf(" + kind + " = 1, '1:', ")
 	sql.WriteString(label + " IN (SELECT " + label + " FROM " + top + "), concat('0:', " + label + "), '2:') AS " + encoded + ", ")
-	sql.WriteString("sum(" + frequency + ") AS " + frequency + " FROM " + counts + " WHERE " + kind + " IN (0, 1) GROUP BY " + bucket + ", " + encoded + "), ")
+	sql.WriteString("sum(" + frequency + ") AS " + frequency + " FROM " + counts + " WHERE " + kind + " IN (0, 1) GROUP BY " + bucketNumber + ", " + encoded + "), ")
 
 	sql.WriteString(domainRows)
 	sql.WriteString(" AS (SELECT toUInt8(0) AS sort_kind, if(startsWith(" + label + ", '_'), concat('VALUE', " + label + "), " + label + ") AS " + sortLabel + ", concat('0:', " + label + ") AS " + encoded + " FROM " + top)
@@ -564,23 +570,21 @@ func compileTimechart(
 	sql.WriteString(" FROM " + counts + " WHERE " + kind + " = 0 GROUP BY " + normalized + " HAVING uniqExact(" + label + ") > 1 LIMIT 1), ")
 
 	sql.WriteString(bucketMaps)
-	sql.WriteString(" AS (SELECT " + bucket + ", mapFromArrays(groupArray(" + encoded + "), groupArray(" + frequency + ")) AS " + countMap)
-	sql.WriteString(" FROM " + collapsed + " GROUP BY " + bucket + "), ")
+	sql.WriteString(" AS (SELECT " + bucketNumber + ", mapFromArrays(groupArray(" + encoded + "), groupArray(" + frequency + ")) AS " + countMap)
+	sql.WriteString(" FROM " + collapsed + " GROUP BY " + bucketNumber + "), ")
 
 	sql.WriteString(validation)
 	sql.WriteString(" AS (SELECT toUInt8(sumIf(" + frequency + ", " + kind + " = 3) > 0 OR ifNull((SELECT count() FROM " + collisions + "), toUInt64(0)) > 0) AS " + invalid + " FROM " + counts + "), ")
 
 	sql.WriteString(grid)
-	sql.WriteString(" AS (SELECT parseDateTime64BestEffort(?, 9, 'UTC') + toIntervalSecond(toInt64(number) * ")
-	sql.WriteString(strconv.FormatInt(spanSeconds, 10))
-	sql.WriteString(") AS " + bucket + " FROM numbers(?)) ")
+	sql.WriteString(" AS (" + ordinalGridSQL(ordinal, bucketNumber) + ") ")
 
-	sql.WriteString("SELECT " + grid + "." + bucket + " AS " + q(TimechartBucketColumn) + ", " + domain + ".names AS " + q(TimechartNamesColumn) + ", ")
+	sql.WriteString("SELECT " + grid + "." + ordinal + " AS " + ordinal + ", " + domain + ".names AS " + q(TimechartNamesColumn) + ", ")
 	sql.WriteString("arrayMap(name -> ifNull(" + bucketMaps + "." + countMap + "[name], toUInt64(0)), " + domain + ".names) AS " + q(TimechartCountsColumn) + ", ")
 	sql.WriteString(validation + "." + invalid + " AS " + q(TimechartInvalidColumn) + " FROM " + grid + " CROSS JOIN " + domain + " CROSS JOIN " + validation)
-	sql.WriteString(" LEFT JOIN " + bucketMaps + " ON " + bucketMaps + "." + bucket + " = " + grid + "." + bucket + " ORDER BY " + grid + "." + bucket + " ASC")
+	sql.WriteString(" LEFT JOIN " + bucketMaps + " ON " + bucketMaps + "." + bucketNumber + " = " + grid + "." + bucketNumber + " ORDER BY " + grid + "." + ordinal + " ASC")
 
-	args = append(args, formatDateTime64Nanoseconds(operator.FirstBucket), operator.BucketCount)
+	args = appendOrdinalGridArgs(args, spanNanoseconds, firstBucketNumber, operator.BucketCount)
 	return CompiledQuery{
 		SQL:          sql.String(),
 		Args:         args,

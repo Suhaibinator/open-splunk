@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"math"
 	"os"
 	"reflect"
 	"slices"
@@ -557,7 +558,7 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 		`arrayMap(item -> item.3`,
 		`mapFromArrays(`,
 		`FROM numbers(?)`,
-		`AS "` + TimechartBucketColumn + `"`,
+		`AS "` + TimechartOrdinalColumn + `"`,
 		`AS "` + TimechartNamesColumn + `"`,
 		`AS "` + TimechartCountsColumn + `"`,
 		`AS "` + TimechartInvalidColumn + `"`,
@@ -575,11 +576,12 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 	if got := compiled.Args[0]; got != "path" {
 		t.Fatalf("dynamic exact-presence argument = %#v, want path before nested scan", got)
 	}
-	if got := compiled.Args[len(compiled.Args)-3]; got != "path." {
+	if got := compiled.Args[len(compiled.Args)-5]; got != "path." {
 		t.Fatalf("dynamic descendant argument = %#v, want path. after nested scan", got)
 	}
-	wantTail := []any{"2026-07-21 00:00:00.000000000", uint64(288)}
-	if got := compiled.Args[len(compiled.Args)-2:]; !reflect.DeepEqual(got, wantTail) {
+	spanNanoseconds := int64(5 * time.Minute)
+	wantTail := []any{spanNanoseconds, spanNanoseconds, int64(5_948_640), uint64(288)}
+	if got := compiled.Args[len(compiled.Args)-4:]; !reflect.DeepEqual(got, wantTail) {
 		t.Fatalf("grid arguments = %#v, want %#v", got, wantTail)
 	}
 }
@@ -609,18 +611,93 @@ func TestCompileTimechartUsesMathematicalPreEpochFloor(t *testing.T) {
 	}
 	for _, required := range []string{
 		`reinterpretAsInt64("__os_tc_event_time")`,
-		`"__os_tc_ticks" < 0 AND "__os_tc_ticks" % 300000000000 != 0`,
-		`fromUnixTimestamp64Nano(`,
+		`intDiv("__os_tc_ticks", ?) - if("__os_tc_ticks" < 0 AND "__os_tc_ticks" % ? != 0, 1, 0)`,
+		`AS "__os_tc_bucket_number"`,
+		`toUInt64(number) AS "` + TimechartOrdinalColumn + `"`,
+		`toInt64(?) + toInt64(number) AS "__os_tc_bucket_number"`,
+		`LEFT JOIN "__os_timechart_bucket_maps" ON "__os_timechart_bucket_maps"."__os_tc_bucket_number" = "__os_timechart_grid"."__os_tc_bucket_number"`,
+		`ORDER BY "__os_timechart_grid"."` + TimechartOrdinalColumn + `" ASC`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("pre-epoch SQL missing %q:\n%s", required, compiled.SQL)
 		}
 	}
-	if strings.Contains(compiled.SQL, "toStartOfInterval") {
-		t.Fatalf("timechart used origin-restricted bucketing:\n%s", compiled.SQL)
+	if strings.Contains(compiled.SQL, "toStartOfInterval") || strings.Contains(compiled.SQL, "fromUnixTimestamp64Nano") {
+		t.Fatalf("timechart converted bucket transport through DateTime64:\n%s", compiled.SQL)
 	}
 	if compiled.Timechart == nil || compiled.Timechart.FirstBucket != time.Date(1969, 12, 31, 23, 55, 0, 0, time.UTC) || compiled.Timechart.BucketCount != 2 {
 		t.Fatalf("pre-epoch metadata = %#v", compiled.Timechart)
+	}
+	wantTail := []any{int64(5 * time.Minute), int64(5 * time.Minute), int64(-1), uint64(2)}
+	if got := compiled.Args[len(compiled.Args)-4:]; !reflect.DeepEqual(got, wantTail) {
+		t.Fatalf("pre-epoch bucket arguments = %#v, want %#v", got, wantTail)
+	}
+}
+
+func TestCompileTimechartKeepsAlignedBucketBeforeDateTime64MinimumAsInteger(t *testing.T) {
+	t.Parallel()
+
+	parsed, err := spl.Parse(`index=gradethis | timechart span=5h count by level`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	earliest := MinimumSearchTime()
+	visibility := uint64(1)
+	logical, err := plan.Build(parsed, plan.Scope{
+		TenantID:          "tenant-1",
+		AuthorizedIndexes: []string{"gradethis"},
+		Earliest:          earliest,
+		Latest:            earliest.Add(time.Second),
+		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
+		VisibilityCutoff:  &visibility,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	compiled, err := (Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.Timechart == nil || !compiled.Timechart.FirstBucket.Before(MinimumSearchTime()) {
+		t.Fatalf("first bucket = %#v, want aligned bucket before DateTime64 minimum", compiled.Timechart)
+	}
+	if strings.Contains(compiled.SQL, "fromUnixTimestamp64Nano") ||
+		strings.Contains(compiled.SQL, `parseDateTime64BestEffort(?)`) {
+		t.Fatalf("timechart transported an aligned bucket through DateTime64:\n%s", compiled.SQL)
+	}
+	firstBucketNumber := compiled.Timechart.FirstBucket.Unix() / int64((5*time.Hour)/time.Second)
+	wantTail := []any{int64(5 * time.Hour), int64(5 * time.Hour), firstBucketNumber, uint64(1)}
+	if got := compiled.Args[len(compiled.Args)-4:]; !reflect.DeepEqual(got, wantTail) {
+		t.Fatalf("lower-bound bucket arguments = %#v, want %#v", got, wantTail)
+	}
+}
+
+func TestCompileTimechartRejectsSignedBucketGridOverflow(t *testing.T) {
+	t.Parallel()
+
+	logical := buildPlan(t, `index=gradethis | timechart span=5m count by level`)
+	operator := logical.Operators[len(logical.Operators)-1].(*plan.Timechart)
+	operator.Span = time.Second
+	operator.FirstBucket = time.Unix(math.MaxInt64, 0).UTC()
+	operator.BucketCount = 2
+
+	if _, err := (Compiler{}).Compile(logical); err == nil || !strings.Contains(err.Error(), "bucket grid overflows") {
+		t.Fatalf("Compile() error = %v, want signed bucket-grid overflow rejection", err)
+	}
+}
+
+func TestCompileTimechartRejectsUnixGridEndOverflow(t *testing.T) {
+	t.Parallel()
+
+	logical := buildPlan(t, `index=gradethis | timechart span=5m count by level`)
+	operator := logical.Operators[len(logical.Operators)-1].(*plan.Timechart)
+	const spanSeconds = int64((5 * time.Minute) / time.Second)
+	operator.FirstBucket = time.Unix(math.MaxInt64-math.MaxInt64%spanSeconds, 0).UTC()
+	operator.BucketCount = 2
+
+	if _, err := (Compiler{}).Compile(logical); err == nil || !strings.Contains(err.Error(), "bucket grid overflows") {
+		t.Fatalf("Compile() error = %v, want Unix grid-end overflow rejection", err)
 	}
 }
 

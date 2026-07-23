@@ -838,6 +838,23 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("timechart reconstructs a bucket before the DateTime64 storage minimum", func(t *testing.T) {
+		earliest := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
+		job, page := queryIntegrationRunSearchRange(
+			t, ctx, executor, timechartIndexTime, "queryexec-timechart-storage-floor",
+			`index=main source="timechart-storage-floor" | timechart span=7h count by level`,
+			earliest, earliest.Add(time.Hour),
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("lower-bound timechart state = %v, failure=%#v", job.State, job.Failure)
+		}
+		queryIntegrationAssertTimechartMatrix(t, page,
+			time.Date(1899, time.December, 31, 19, 0, 0, 0, time.UTC),
+			7*time.Hour,
+			map[string][]uint64{"ERROR": {1}},
+		)
+	})
+
 	t.Run("timechart dynamic top ten null other and lexical ties", func(t *testing.T) {
 		job, page := queryIntegrationRunSearchRange(
 			t, ctx, executor, timechartIndexTime, "queryexec-timechart-top",
@@ -988,7 +1005,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
     GROUP BY bucket_number
 )
 SELECT
-    fromUnixTimestamp64Nano(toInt64(grid.number) * 1000000000, 'UTC') AS "__os_timechart_bucket",
+    toUInt64(grid.number) AS "__os_timechart_ordinal",
     ` + names + ` AS "__os_timechart_names",
     arrayMap(series -> ifNull("__os_dense_maps".series_counts[series], toUInt64(0)), ` + names + `) AS "__os_timechart_counts",
     toUInt8(0) AS "__os_timechart_invalid"
@@ -1326,6 +1343,12 @@ func queryIntegrationInsertTimechartEvents(t *testing.T, ctx context.Context, co
 		visibility uint64
 	}
 	events := []fixtureEvent{
+		{
+			id:     "storage-floor",
+			source: "timechart-storage-floor",
+			at:     time.Date(1900, time.January, 1, 0, 30, 0, 0, time.UTC),
+			level:  &errorLevel,
+		},
 		{id: "before", source: "timechart-level", at: base.Add(2*time.Minute - time.Nanosecond), level: &outsideLevel},
 		{id: "error-start", source: "timechart-level", at: base.Add(2 * time.Minute), level: &errorLevel},
 		{id: "error-end", source: "timechart-level", at: base.Add(5*time.Minute - time.Nanosecond), level: &errorLevel},

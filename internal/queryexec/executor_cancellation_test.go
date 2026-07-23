@@ -11,7 +11,7 @@ import (
 
 func TestExecutorRejectsPreCanceledContextBeforeQuery(t *testing.T) {
 	first := time.Unix(0, 0).UTC()
-	rows := timechartFakeRows(first, 5*time.Minute, []string{"0:ERROR"}, [][]uint64{{1}})
+	rows := timechartOrdinalRows([]string{"0:ERROR"}, [][]uint64{{1}})
 	connection := &fakeQueryConnection{rows: rows}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -27,7 +27,7 @@ func TestExecutorRejectsPreCanceledContextBeforeQuery(t *testing.T) {
 
 func TestExecutorTimechartCancellationOnCloseIsAtomic(t *testing.T) {
 	first := time.Unix(0, 0).UTC()
-	baseRows := timechartFakeRows(first, 5*time.Minute, []string{"0:ERROR"}, [][]uint64{{1}, {2}})
+	baseRows := timechartOrdinalRows([]string{"0:ERROR"}, [][]uint64{{1}, {2}})
 	ctx, cancel := context.WithCancel(context.Background())
 	rows := &cancelOnCloseTimechartRows{fakeRows: baseRows, cancel: cancel}
 	sink := &fakeSink{}
@@ -46,7 +46,7 @@ func TestExecutorTimechartCancellationOnCloseIsAtomic(t *testing.T) {
 
 func TestExecutorTimechartCancellationDuringAddRowStopsBeforeNextRow(t *testing.T) {
 	first := time.Unix(0, 0).UTC()
-	rows := timechartFakeRows(first, 5*time.Minute, []string{"0:ERROR"}, [][]uint64{{1}, {2}, {3}})
+	rows := timechartOrdinalRows([]string{"0:ERROR"}, [][]uint64{{1}, {2}, {3}})
 	ctx, cancel := context.WithCancel(context.Background())
 	sink := &cancelOnFirstAddSink{cancel: cancel}
 

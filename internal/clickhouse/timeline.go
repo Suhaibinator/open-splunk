@@ -83,10 +83,7 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 	ordinal := q(TimelineOrdinalColumn)
 	count := q(TimelineCountColumn)
 
-	// ClickHouse integer division truncates toward zero. Subtracting one for a
-	// negative non-multiple implements mathematical floor, matching timechart
-	// and ensuring pre-epoch events land in the correct epoch-aligned bucket.
-	bucketNumberExpression := "intDiv(" + ticks + ", ?) - if(" + ticks + " < 0 AND " + ticks + " % ? != 0, 1, 0)"
+	bucketNumberExpression := epochFloorBucketNumberSQL(ticks)
 
 	var sql strings.Builder
 	sql.Grow(len(ordinary.SQL) + 1_536)
@@ -125,11 +122,9 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 	sql.WriteString("), ")
 
 	sql.WriteString(grid)
-	sql.WriteString(" AS (SELECT toUInt64(number) AS ")
-	sql.WriteString(ordinal)
-	sql.WriteString(", toInt64(?) + toInt64(number) AS ")
-	sql.WriteString(bucketNumber)
-	sql.WriteString(" FROM numbers(?)) ")
+	sql.WriteString(" AS (")
+	sql.WriteString(ordinalGridSQL(ordinal, bucketNumber))
+	sql.WriteString(") ")
 
 	sql.WriteString("SELECT ")
 	sql.WriteString(grid)
@@ -169,15 +164,13 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 		}
 	}
 
-	firstBucketNumber := spec.FirstBucket.Unix() / spec.SpanSeconds
+	firstBucketNumber, gridOK := ordinalGridFirstBucketNumber(spec.FirstBucket.Unix(), spec.SpanSeconds, spec.BucketCount)
+	if !gridOK {
+		return CompiledTimeline{}, errors.New("compile ClickHouse timeline: grid bucket number overflows")
+	}
 	args := make([]any, 0, len(ordinary.Args)+4)
 	args = append(args, ordinary.Args...)
-	args = append(args,
-		spanNanoseconds,
-		spanNanoseconds,
-		firstBucketNumber,
-		spec.BucketCount,
-	)
+	args = appendOrdinalGridArgs(args, spanNanoseconds, firstBucketNumber, spec.BucketCount)
 	return CompiledTimeline{SQL: sql.String(), Args: args, Spec: spec}, nil
 }
 
@@ -220,9 +213,7 @@ func validateTimelineSpec(spec TimelineSpec) (int64, error) {
 	if !spec.Latest.After(lastBucketStart) || spec.Latest.After(gridEnd) {
 		return 0, errors.New("compile ClickHouse timeline: latest must be inside the final bucket cover")
 	}
-	firstBucketNumber := firstSecond / spec.SpanSeconds
-	lastBucketOffset := bucketCount - 1
-	if firstBucketNumber > math.MaxInt64-lastBucketOffset {
+	if _, ok := ordinalGridFirstBucketNumber(firstSecond, spec.SpanSeconds, spec.BucketCount); !ok {
 		return 0, errors.New("compile ClickHouse timeline: grid bucket number overflows")
 	}
 

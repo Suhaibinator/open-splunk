@@ -680,6 +680,23 @@ func TestBuildTimechartBucketsPreEpochWithHalfOpenLatest(t *testing.T) {
 	}
 }
 
+func TestBuildTimechartBucketsAtStorageLowerBoundWithSevenHourSpan(t *testing.T) {
+	t.Parallel()
+
+	scope := testScope([]string{"gradethis"}, nil)
+	scope.Earliest = time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
+	scope.Latest = time.Date(1900, 1, 1, 1, 0, 0, 0, time.UTC)
+	logical, err := Build(mustParse(t, `index=gradethis | timechart span=7h count by level`), scope)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	operator := logical.Operators[len(logical.Operators)-1].(*Timechart)
+	wantFirstBucket := time.Date(1899, 12, 31, 19, 0, 0, 0, time.UTC)
+	if !operator.FirstBucket.Equal(wantFirstBucket) || operator.BucketCount != 1 {
+		t.Fatalf("bucket start/count = %v/%d, want %v/1", operator.FirstBucket, operator.BucketCount, wantFirstBucket)
+	}
+}
+
 func TestBuildTimechartBoundsFixedRangeBucketCount(t *testing.T) {
 	t.Parallel()
 

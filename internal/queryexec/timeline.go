@@ -124,7 +124,7 @@ func (executor *Executor) ExecuteTimeline(ctx context.Context, query clickhouse.
 		if ordinal != expectedOrdinal {
 			return nil, fmt.Errorf("%w: ClickHouse timeline bucket sequence is invalid", searchjobs.ErrInvalidResult)
 		}
-		expectedUnix, ok := checkedTimelineBoundary(query.Spec.FirstBucket.Unix(), query.Spec.SpanSeconds, expectedOrdinal)
+		expectedUnix, ok := checkedBucketBoundary(query.Spec.FirstBucket.Unix(), query.Spec.SpanSeconds, expectedOrdinal)
 		if !ok {
 			return nil, fmt.Errorf("%w: compiled timeline bucket arithmetic overflowed", searchjobs.ErrInvalidResult)
 		}
@@ -168,9 +168,9 @@ func validateCompiledTimeline(query clickhouse.CompiledTimeline) error {
 	if firstUnix%spec.SpanSeconds != 0 {
 		return fmt.Errorf("%w: compiled timeline bucket origin is not epoch-aligned", searchjobs.ErrInvalidResult)
 	}
-	secondUnix, secondOK := checkedTimelineBoundary(firstUnix, spec.SpanSeconds, 1)
-	lastUnix, lastOK := checkedTimelineBoundary(firstUnix, spec.SpanSeconds, spec.BucketCount-1)
-	endUnix, endOK := checkedTimelineBoundary(firstUnix, spec.SpanSeconds, spec.BucketCount)
+	secondUnix, secondOK := checkedBucketBoundary(firstUnix, spec.SpanSeconds, 1)
+	lastUnix, lastOK := checkedBucketBoundary(firstUnix, spec.SpanSeconds, spec.BucketCount-1)
+	endUnix, endOK := checkedBucketBoundary(firstUnix, spec.SpanSeconds, spec.BucketCount)
 	if !secondOK || !lastOK || !endOK {
 		return fmt.Errorf("%w: compiled timeline bucket arithmetic overflowed", searchjobs.ErrInvalidResult)
 	}
@@ -184,7 +184,7 @@ func validateCompiledTimeline(query clickhouse.CompiledTimeline) error {
 	return nil
 }
 
-func checkedTimelineBoundary(first, span int64, multiplier uint64) (int64, bool) {
+func checkedBucketBoundary(first, span int64, multiplier uint64) (int64, bool) {
 	if span <= 0 || multiplier > uint64(^uint64(0)>>1)/uint64(span) {
 		return 0, false
 	}

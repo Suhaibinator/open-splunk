@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"math/big"
 	"net"
 	"reflect"
@@ -84,9 +85,12 @@ func TestExecutorStreamsTypedRowsAndExactSchema(t *testing.T) {
 func TestExecutorBuffersAndPublishesRuntimeWideTimechart(t *testing.T) {
 	t.Parallel()
 
-	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	// The public bucket timestamp is reconstructed from trusted metadata, so
+	// valid ranges are not constrained by ClickHouse's DateTime64 transport
+	// epoch.
+	first := time.Date(1899, time.December, 31, 23, 45, 0, 0, time.UTC)
 	names := []string{"0:_audit", "0:Z", "1:", "2:"}
-	rows := timechartFakeRows(first, 5*time.Minute, names, [][]uint64{
+	rows := timechartOrdinalRows(names, [][]uint64{
 		{2, 1, 0, 3},
 		{0, 4, 1, 0},
 		{5, 0, 0, 2},
@@ -130,7 +134,7 @@ func TestExecutorSuppressesEmptyTimechartGrid(t *testing.T) {
 	t.Parallel()
 
 	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
-	rows := timechartFakeRows(first, 5*time.Minute, nil, [][]uint64{{}, {}, {}})
+	rows := timechartOrdinalRows(nil, [][]uint64{{}, {}, {}})
 	sink := &fakeSink{}
 	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
 	if err := executor.Execute(context.Background(), timechartQuery(first, 3), sink); err != nil {
@@ -156,28 +160,31 @@ func TestExecutorRejectsMalformedTimechartAtomically(t *testing.T) {
 		{name: "column type name drift", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
 			rows.types[1] = fakeColumnType{name: "wrong", databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})}
 		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
-		{name: "wrapped bucket type", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
-			rows.types[0] = fakeColumnType{name: clickhouse.TimechartBucketColumn, databaseType: "Nullable(DateTime64(9, 'UTC'))", scanType: reflect.TypeOf(time.Time{})}
+		{name: "typed nil ordinal type", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+			var columnType *fakeColumnType
+			rows.types[0] = columnType
 		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
-		{name: "wrong bucket precision", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
-			rows.types[0] = fakeColumnType{name: clickhouse.TimechartBucketColumn, databaseType: "DateTime64(6, 'UTC')", scanType: reflect.TypeOf(time.Time{})}
+		{name: "wrapped ordinal type", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+			rows.types[0] = fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "Nullable(UInt64)", scanType: reflect.TypeOf(uint64(0))}
 		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
-		{name: "wrong bucket timezone", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
-			rows.types[0] = fakeColumnType{name: clickhouse.TimechartBucketColumn, databaseType: "DateTime64(9, 'America/Los_Angeles')", scanType: reflect.TypeOf(time.Time{})}
+		{name: "wrong ordinal width", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+			rows.types[0] = fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt32", scanType: reflect.TypeOf(uint32(0))}
+		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "wrong native ordinal", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+			rows.types[0] = fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(int64(0))}
+			rows.data[0][0] = int64(0)
 		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "wrong array type", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
 			rows.types[2] = fakeColumnType{name: clickhouse.TimechartCountsColumn, databaseType: "Array(UInt32)", scanType: reflect.TypeOf([]uint64{})}
 		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
-		{name: "wrong native bucket", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
-			rows.types[0] = fakeColumnType{name: clickhouse.TimechartBucketColumn, databaseType: "DateTime64(9, 'UTC')", scanType: reflect.TypeOf((*any)(nil)).Elem()}
-			rows.data[0][0] = "not time"
-		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "too few buckets", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data = rows.data[:1] }, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "too many buckets", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
-			rows.data = append(rows.data, []any{first.Add(10 * time.Minute), []string{"0:a"}, []uint64{3}, uint8(0)})
+			rows.data = append(rows.data, []any{uint64(2), []string{"0:a"}, []uint64{3}, uint8(0)})
 		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
-		{name: "wrong first bucket", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[0][0] = first.Add(time.Minute) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
-		{name: "bucket gap", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[1][0] = first.Add(10 * time.Minute) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "wrong first ordinal", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[0][0] = uint64(1) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "ordinal gap", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[1][0] = uint64(2) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "duplicate ordinal", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[1][0] = uint64(0) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
+		{name: "out of range ordinal", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[1][0] = uint64(math.MaxUint64) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "count length mismatch", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[0][2] = []uint64{} }, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "series changed", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[1][1] = []string{"0:b"} }, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "series out of order", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { setTimechartNames(rows, []string{"0:b", "0:a"}) }, want: searchjobs.ErrInvalidResult, queryIssued: true},
@@ -212,6 +219,10 @@ func TestExecutorRejectsMalformedTimechartAtomically(t *testing.T) {
 		{name: "unaligned origin", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
 			query.Timechart.FirstBucket = first.Add(time.Minute)
 		}, want: searchjobs.ErrInvalidResult},
+		{name: "bucket timestamp overflow", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
+			const spanSeconds = int64((5 * time.Minute) / time.Second)
+			query.Timechart.FirstBucket = time.Unix(math.MaxInt64-math.MaxInt64%spanSeconds, 0).UTC()
+		}, want: searchjobs.ErrInvalidResult},
 		{name: "excessive bucket count", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
 			query.Timechart.BucketCount = maximumTimechartBuckets + 1
 		}, want: searchjobs.ErrInvalidResult},
@@ -224,7 +235,7 @@ func TestExecutorRejectsMalformedTimechartAtomically(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rows := timechartFakeRows(first, 5*time.Minute, []string{"0:a"}, [][]uint64{{1}, {2}})
+			rows := timechartOrdinalRows([]string{"0:a"}, [][]uint64{{1}, {2}})
 			query := timechartQuery(first, 2)
 			test.mutate(rows, &query)
 			connection := &fakeQueryConnection{rows: rows}
@@ -254,16 +265,16 @@ func timechartQuery(first time.Time, bucketCount uint64) clickhouse.CompiledQuer
 	}
 }
 
-func timechartFakeRows(first time.Time, span time.Duration, names []string, counts [][]uint64) *fakeRows {
+func timechartOrdinalRows(names []string, counts [][]uint64) *fakeRows {
 	rows := &fakeRows{
 		columns: []string{
-			clickhouse.TimechartBucketColumn,
+			clickhouse.TimechartOrdinalColumn,
 			clickhouse.TimechartNamesColumn,
 			clickhouse.TimechartCountsColumn,
 			clickhouse.TimechartInvalidColumn,
 		},
 		types: []driver.ColumnType{
-			fakeColumnType{name: clickhouse.TimechartBucketColumn, databaseType: "DateTime64(9, 'UTC')", scanType: reflect.TypeOf(time.Time{})},
+			fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
 			fakeColumnType{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
 			fakeColumnType{name: clickhouse.TimechartCountsColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeOf([]uint64{})},
 			fakeColumnType{name: clickhouse.TimechartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
@@ -271,7 +282,7 @@ func timechartFakeRows(first time.Time, span time.Duration, names []string, coun
 		data: make([][]any, len(counts)),
 	}
 	for index, values := range counts {
-		rows.data[index] = []any{first.Add(time.Duration(index) * span), slices.Clone(names), slices.Clone(values), uint8(0)}
+		rows.data[index] = []any{uint64(index), slices.Clone(names), slices.Clone(values), uint8(0)}
 	}
 	return rows
 }

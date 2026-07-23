@@ -374,6 +374,12 @@ unmodified canonical `_time`; removing, replacing, or transforming it is a
 source-located error. A completely empty input returns an `_time`-only schema
 and zero rows.
 
+Aligned bucket starts are not constrained to ClickHouse's timestamp storage
+range. For example, a supported search beginning at `1900-01-01T00:00:00Z`
+with `span=7h` retains the partial bucket beginning at
+`1899-12-31T19:00:00Z`; the executor reconstructs public bucket timestamps from
+bounded integer ordinals rather than round-tripping them through `DateTime64`.
+
 The public result is wide: `_time` is a non-null timestamp followed by
 non-null unsigned count columns. The ten ordinary string series with the
 highest total count across the complete range are retained; equal scores use

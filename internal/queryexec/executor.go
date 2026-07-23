@@ -50,8 +50,7 @@ const (
 )
 
 var (
-	extendedDecimalPattern     = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?$`)
-	timechartDateTime64Pattern = regexp.MustCompile(`^DateTime64\(9,\s*'UTC'\)$`)
+	extendedDecimalPattern = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?$`)
 )
 
 // Config bounds every ClickHouse query independently of the search-job sink.
@@ -310,8 +309,12 @@ func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 		return fmt.Errorf("%w: compiled timechart output contract is invalid", searchjobs.ErrInvalidResult)
 	}
 	first := output.FirstBucket
-	if first.Location() != time.UTC || first.Nanosecond() != 0 || first.Unix()%int64(output.Span/time.Second) != 0 {
+	spanSeconds := int64(output.Span / time.Second)
+	if first.Location() != time.UTC || first.Nanosecond() != 0 || first.Unix()%spanSeconds != 0 {
 		return fmt.Errorf("%w: compiled timechart bucket origin is invalid", searchjobs.ErrInvalidResult)
+	}
+	if _, ok := checkedBucketBoundary(first.Unix(), spanSeconds, output.BucketCount); !ok {
+		return fmt.Errorf("%w: compiled timechart bucket arithmetic overflowed", searchjobs.ErrInvalidResult)
 	}
 	return nil
 }
@@ -321,7 +324,7 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 		return bufferedTimechart{}, err
 	}
 	expectedColumns := []string{
-		clickhouse.TimechartBucketColumn,
+		clickhouse.TimechartOrdinalColumn,
 		clickhouse.TimechartNamesColumn,
 		clickhouse.TimechartCountsColumn,
 		clickhouse.TimechartInvalidColumn,
@@ -329,10 +332,17 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 	if len(columnTypes) != len(expectedColumns) || !slices.Equal(columns, expectedColumns) {
 		return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart columns do not match the compiled output", searchjobs.ErrInvalidResult)
 	}
-	expectedTypes := []string{"DateTime64", "Array(String)", "Array(UInt64)", "UInt8"}
+	expectedTypes := []string{"UInt64", "Array(String)", "Array(UInt64)", "UInt8"}
+	expectedScanTypes := []reflect.Type{
+		reflect.TypeOf(uint64(0)),
+		reflect.TypeOf([]string{}),
+		reflect.TypeOf([]uint64{}),
+		reflect.TypeOf(uint8(0)),
+	}
 	for index, columnType := range columnTypes {
-		if columnType == nil || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
-			!matchesTimechartPhysicalType(columnType.DatabaseTypeName(), expectedTypes[index]) {
+		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
+			strings.TrimSpace(columnType.DatabaseTypeName()) != expectedTypes[index] ||
+			columnType.ScanType() != expectedScanTypes[index] {
 			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart column %q has an invalid type", searchjobs.ErrInvalidResult, expectedColumns[index])
 		}
 	}
@@ -353,7 +363,7 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 		if err := rows.Scan(destinations...); err != nil {
 			return bufferedTimechart{}, classifyQueryError(ctx, fmt.Errorf("scan ClickHouse timechart result row: %w", err))
 		}
-		bucket, names, counts, invalid, err := scannedTimechartRow(destinations)
+		ordinal, names, counts, invalid, err := scannedTimechartRow(destinations)
 		if err != nil {
 			return bufferedTimechart{}, err
 		}
@@ -361,10 +371,14 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart series arrays are invalid", searchjobs.ErrInvalidResult)
 		}
 		rowIndex := len(buffered.rows)
-		expectedBucket := output.FirstBucket.Add(time.Duration(rowIndex) * output.Span)
-		if !bucket.Equal(expectedBucket) {
-			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart bucket sequence is invalid", searchjobs.ErrInvalidResult)
+		if ordinal >= output.BucketCount || ordinal != uint64(rowIndex) {
+			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart ordinal sequence is invalid", searchjobs.ErrInvalidResult)
 		}
+		bucketUnix, ok := checkedBucketBoundary(output.FirstBucket.Unix(), int64(output.Span/time.Second), ordinal)
+		if !ok {
+			return bufferedTimechart{}, fmt.Errorf("%w: compiled timechart bucket arithmetic overflowed", searchjobs.ErrInvalidResult)
+		}
+		bucket := time.Unix(bucketUnix, 0).UTC()
 		if rowIndex == 0 {
 			publicColumns, validateErr := decodeTimechartNames(names, output.MaxLabelBytes)
 			if validateErr != nil {
@@ -392,26 +406,18 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 	return buffered, nil
 }
 
-func matchesTimechartPhysicalType(databaseType, expected string) bool {
-	databaseType = strings.TrimSpace(databaseType)
-	if expected != "DateTime64" {
-		return databaseType == expected
-	}
-	return timechartDateTime64Pattern.MatchString(databaseType)
-}
-
-func scannedTimechartRow(destinations []any) (time.Time, []string, []uint64, uint8, error) {
+func scannedTimechartRow(destinations []any) (uint64, []string, []uint64, uint8, error) {
 	if len(destinations) != 4 {
-		return time.Time{}, nil, nil, 0, fmt.Errorf("%w: ClickHouse timechart row has an invalid width", searchjobs.ErrInvalidResult)
+		return 0, nil, nil, 0, fmt.Errorf("%w: ClickHouse timechart row has an invalid width", searchjobs.ErrInvalidResult)
 	}
-	bucket, bucketOK := scannedValue(destinations[0]).(time.Time)
+	ordinal, ordinalOK := scannedValue(destinations[0]).(uint64)
 	names, namesOK := scannedValue(destinations[1]).([]string)
 	counts, countsOK := scannedValue(destinations[2]).([]uint64)
 	invalid, invalidOK := scannedValue(destinations[3]).(uint8)
-	if !bucketOK || !namesOK || !countsOK || !invalidOK {
-		return time.Time{}, nil, nil, 0, fmt.Errorf("%w: ClickHouse timechart row has invalid native values", searchjobs.ErrInvalidResult)
+	if !ordinalOK || !namesOK || !countsOK || !invalidOK {
+		return 0, nil, nil, 0, fmt.Errorf("%w: ClickHouse timechart row has invalid native values", searchjobs.ErrInvalidResult)
 	}
-	return bucket, names, counts, invalid, nil
+	return ordinal, names, counts, invalid, nil
 }
 
 func decodeTimechartNames(encoded []string, maxLabelBytes uint16) ([]string, error) {
