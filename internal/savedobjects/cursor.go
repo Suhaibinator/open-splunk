@@ -1,18 +1,10 @@
 package savedobjects
 
 import (
-	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"strconv"
-	"strings"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/cursorcodec"
 )
 
 const (
@@ -30,37 +22,19 @@ type listCursor struct {
 
 func encodeListCursor(key []byte, cursor listCursor) (string, error) {
 	cursor.Version = savedSearchCursorVersion
-	payload, err := json.Marshal(cursor)
+	token, err := cursorcodec.Encode(key, "saved-search-list-cursor", savedSearchCursorVersion, maximumCursorBytes, cursor)
 	if err != nil {
 		return "", fmt.Errorf("encode saved-search cursor: %w", err)
 	}
-	signature := signListCursor(key, payload)
-	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(signature), nil
+	return token, nil
 }
 
 func decodeListCursor(key []byte, token, filterHash string, stringSort bool) (listCursor, error) {
 	invalid := func() (listCursor, error) {
 		return listCursor{}, fmt.Errorf("%w: page token is invalid or does not match the request", control.ErrInvalidArgument)
 	}
-	if token == "" || len(token) > maximumCursorBytes || strings.Count(token, ".") != 1 {
-		return invalid()
-	}
-	parts := strings.SplitN(token, ".", 2)
-	payload, err := decodeCanonicalBase64(parts[0])
-	if err != nil {
-		return invalid()
-	}
-	signature, err := decodeCanonicalBase64(parts[1])
-	if err != nil || len(signature) != sha256.Size || !hmac.Equal(signature, signListCursor(key, payload)) {
-		return invalid()
-	}
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
 	var cursor listCursor
-	if err := decoder.Decode(&cursor); err != nil {
-		return invalid()
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+	if err := cursorcodec.Decode(key, "saved-search-list-cursor", savedSearchCursorVersion, maximumCursorBytes, token, &cursor); err != nil {
 		return invalid()
 	}
 	if cursor.Version != savedSearchCursorVersion || cursor.FilterHash != filterHash || cursor.SavedSearch == "" {
@@ -74,22 +48,4 @@ func decodeListCursor(key []byte, token, filterHash string, stringSort bool) (li
 		return invalid()
 	}
 	return cursor, nil
-}
-
-func decodeCanonicalBase64(value string) ([]byte, error) {
-	if value == "" {
-		return nil, errors.New("empty base64 value")
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil || base64.RawURLEncoding.EncodeToString(decoded) != value {
-		return nil, errors.New("non-canonical base64 value")
-	}
-	return decoded, nil
-}
-
-func signListCursor(key, payload []byte) []byte {
-	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write([]byte("open-splunk/saved-search-list-cursor/v" + strconv.Itoa(savedSearchCursorVersion) + "\x00"))
-	_, _ = mac.Write(payload)
-	return mac.Sum(nil)
 }

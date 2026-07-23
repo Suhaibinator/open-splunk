@@ -18,7 +18,6 @@ import (
 )
 
 const (
-	maximumFieldCatalogFields    = uint32(10_000)
 	maximumFieldCatalogNameBytes = eventfields.MaximumNormalizedFieldNameBytes
 	maximumFieldCatalogBytes     = uint64(32 << 20)
 )
@@ -217,14 +216,14 @@ func (executor *Executor) ExecuteFieldCatalog(ctx context.Context, query clickho
 }
 
 func validateCompiledFieldCatalog(query clickhouse.CompiledFieldCatalog) error {
-	if strings.TrimSpace(query.SQL) == "" || query.Spec.MaximumFields == 0 || query.Spec.MaximumFields > maximumFieldCatalogFields {
+	if strings.TrimSpace(query.SQL) == "" || query.Spec.MaximumFields == 0 || query.Spec.MaximumFields > clickhouse.MaximumFieldCatalogFields {
 		return invalidFieldCatalogResult("compiled field catalog is invalid")
 	}
 	return nil
 }
 
 func settingsForFieldCatalog(base clickhousedriver.Settings, maximumFields uint32) (clickhousedriver.Settings, error) {
-	if maximumFields == 0 || maximumFields > maximumFieldCatalogFields {
+	if maximumFields == 0 || maximumFields > clickhouse.MaximumFieldCatalogFields {
 		return nil, errors.New("execute ClickHouse field catalog: field limit is invalid")
 	}
 	if base == nil || base["readonly"] != uint8(2) {

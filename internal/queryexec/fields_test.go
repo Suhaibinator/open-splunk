@@ -292,7 +292,7 @@ func TestExecutorExecuteFieldCatalogValidatesStateAndCompiledQueryBeforeExecutio
 		{name: "typed nil connection", executor: &Executor{connection: typedNilConnection}, query: validCompiledFieldCatalog(1)},
 		{name: "blank SQL", executor: mustExecutor(t, &fakeQueryConnection{rows: fieldCatalogFakeRows(0)}), query: clickhouse.CompiledFieldCatalog{SQL: " \n", Spec: clickhouse.FieldCatalogSpec{MaximumFields: 1}}},
 		{name: "zero maximum", executor: mustExecutor(t, &fakeQueryConnection{rows: fieldCatalogFakeRows(0)}), query: validCompiledFieldCatalog(0)},
-		{name: "oversized maximum", executor: mustExecutor(t, &fakeQueryConnection{rows: fieldCatalogFakeRows(0)}), query: validCompiledFieldCatalog(maximumFieldCatalogFields + 1)},
+		{name: "oversized maximum", executor: mustExecutor(t, &fakeQueryConnection{rows: fieldCatalogFakeRows(0)}), query: validCompiledFieldCatalog(clickhouse.MaximumFieldCatalogFields + 1)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -423,7 +423,7 @@ func TestSettingsForFieldCatalogRejectsInvalidBaseSettings(t *testing.T) {
 	if _, err := settingsForFieldCatalog(base, 0); err == nil {
 		t.Fatal("zero maximum fields unexpectedly accepted")
 	}
-	if _, err := settingsForFieldCatalog(base, maximumFieldCatalogFields+1); err == nil {
+	if _, err := settingsForFieldCatalog(base, clickhouse.MaximumFieldCatalogFields+1); err == nil {
 		t.Fatal("oversized maximum fields unexpectedly accepted")
 	}
 }

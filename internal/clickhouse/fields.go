@@ -11,6 +11,11 @@ import (
 )
 
 const (
+	// MaximumFieldCatalogFields is the hard cross-layer bound for one complete
+	// field catalog. Callers may configure a lower limit, but the compiler,
+	// executor, and analysis service must all reject larger contracts.
+	MaximumFieldCatalogFields uint32 = 10_000
+
 	FieldCatalogRowKindColumn       = "__os_field_catalog_row_kind"
 	FieldCatalogNameColumn          = "__os_field_catalog_name"
 	FieldCatalogObservedTypesColumn = "__os_field_catalog_observed_types"
@@ -37,8 +42,10 @@ type CompiledFieldCatalog struct {
 
 // CompileFieldCatalog compiles an exact catalog over the final event relation.
 func (c Compiler) CompileFieldCatalog(query *plan.Query, spec FieldCatalogSpec) (CompiledFieldCatalog, error) {
-	if spec.MaximumFields == 0 || spec.MaximumFields > 10_000 {
-		return CompiledFieldCatalog{}, errors.New("compile ClickHouse field catalog: MaximumFields must be between 1 and 10000")
+	if spec.MaximumFields == 0 || spec.MaximumFields > MaximumFieldCatalogFields {
+		return CompiledFieldCatalog{}, fmt.Errorf(
+			"compile ClickHouse field catalog: MaximumFields must be between 1 and %d", MaximumFieldCatalogFields,
+		)
 	}
 	compiled, err := c.compileEventAnalysis(query, func(
 		fragment string,
