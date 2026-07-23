@@ -6,18 +6,32 @@ export interface DemoEvent {
   timeLabel: string;
   raw: string;
   fields: Record<string, DemoScalar>;
+  /** False when a backend typed value cannot be represented losslessly in v0.1 SPL. */
+  pivotableFields?: Record<string, boolean>;
 }
 
 export interface DemoFieldValue {
   value: DemoScalar;
+  /** Finite coordinate used to size the top-value bar. */
   count: number;
+  /** Exact uint64 text retained when `count` is outside the safe integer range. */
+  exactCount?: string;
+  /** The backend reports this frequency as an estimate. */
+  countIsApproximate?: boolean;
+  pivotable?: boolean;
+  /** Stable server type identity retained when multiple typed values display alike. */
+  typedIdentity?: string;
+  typeLabel?: string;
 }
 
 export interface DemoField {
   name: string;
   displayName: string;
-  distinctCount: number;
+  distinctCount: number | null;
+  distinctCountExact?: string;
+  distinctCountIsApproximate?: boolean;
   eventCount: number;
+  eventCountExact?: string;
   selected: boolean;
   interesting: boolean;
   type: "string" | "number" | "boolean";
@@ -31,6 +45,7 @@ export interface DemoSavedSearch {
   query: string;
   earliest: string;
   latest: string;
+  timezone?: string;
   updatedAt: string;
   owner: string;
 }
@@ -41,8 +56,14 @@ export interface DemoHistoryEntry {
   timeRange: string;
   earliest?: string;
   latest?: string;
-  state: "Completed" | "Canceled" | "Failed";
+  timezone?: string;
+  appId?: string;
+  sourceLabel?: string;
+  resolvedTimeRange?: string;
+  compilerVersion?: string;
+  state: "Completed" | "Canceled" | "Failed" | "Expired";
   events: number;
+  eventsExact?: string;
   duration: string;
   ranAt: string;
 }
@@ -50,9 +71,19 @@ export interface DemoHistoryEntry {
 export interface TimelinePoint {
   id: string;
   label: string;
+  /**
+   * Finite JavaScript coordinate used to lay out the chart. When
+   * `coordinateApproximate` is true, use the exact text fields for labels.
+   */
   count: number;
   /** Transforming searches can return one numeric value per split-by series. */
   series?: Record<string, number>;
+  /** Exact server value retained when `count` cannot represent it losslessly. */
+  exactCount?: string;
+  /** Exact server values retained for split-by coordinates that are approximate. */
+  exactSeries?: Record<string, string>;
+  /** At least one plotted coordinate was projected from a non-lossless server value. */
+  coordinateApproximate?: boolean;
   /** Absolute boundaries are populated by the backend adapter. */
   earliest?: string;
   latest?: string;

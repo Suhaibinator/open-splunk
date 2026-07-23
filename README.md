@@ -54,7 +54,7 @@ The search workspace uses deterministic demo fixtures by default. Build the embe
 OPEN_SPLUNK_DATA_MODE=backend make build-server
 ```
 
-The resulting `build/open-splunk-server` serves the UI and protobuf API from the same origin. Omit the variable (or set it to `demo`) to restore fixture mode. `OPEN_SPLUNK_API_BASE_URL` is available for controlled test builds that need a non-default API origin; it is also resolved at build time and is not a browser setting.
+The resulting `build/open-splunk-server` serves the UI and protobuf API from the same origin. Omit the variable (or set it to `demo`) to restore fixture mode. `OPEN_SPLUNK_API_BASE_URL` is a build-time test override, not a browser setting. The production Go server intentionally requires browser HTTP and WebSocket traffic to remain same-origin. Use the serving origin with API routes exposed at their advertised root paths, or a test double with an explicit trusted-origin policy; a cross-origin URL or arbitrary path prefix is not supported by the Go server.
 
 `make proto` compiles every schema under `proto/` into Go protobuf/gRPC code in `gen/go` and `ts-proto` codecs in `gen/ts`. Run `make proto-tools` once to install the pinned Go generators and JavaScript dependencies; `protoc` must also be available on `PATH`.
 

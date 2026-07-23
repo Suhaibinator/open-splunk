@@ -1,5 +1,7 @@
 import * as ExportApi from "@/gen/ts/open_splunk/v1/export_api";
 import * as HistoryApi from "@/gen/ts/open_splunk/v1/history_api";
+import * as IndexApi from "@/gen/ts/open_splunk/v1/index_api";
+import * as CollectorAdminApi from "@/gen/ts/open_splunk/v1/collector_admin_api";
 import * as SavedSearchApi from "@/gen/ts/open_splunk/v1/saved_search_api";
 import * as SearchApi from "@/gen/ts/open_splunk/v1/search_api";
 import * as SystemApi from "@/gen/ts/open_splunk/v1/system_api";
@@ -17,6 +19,62 @@ export const systemRoutes = {
     "/api/v1/system/bootstrap",
     SystemApi.GetSystemBootstrapRequest,
     SystemApi.GetSystemBootstrapResponse,
+  ),
+} as const;
+
+export const indexRoutes = {
+  create: defineProtobufRoute(
+    "/api/v1/indexes/create",
+    IndexApi.CreateIndexRequest,
+    IndexApi.CreateIndexResponse,
+  ),
+  get: defineProtobufRoute(
+    "/api/v1/indexes/get",
+    IndexApi.GetIndexRequest,
+    IndexApi.GetIndexResponse,
+  ),
+  list: defineProtobufRoute(
+    "/api/v1/indexes/list",
+    IndexApi.ListIndexesRequest,
+    IndexApi.ListIndexesResponse,
+  ),
+  update: defineProtobufRoute(
+    "/api/v1/indexes/update",
+    IndexApi.UpdateIndexRequest,
+    IndexApi.UpdateIndexResponse,
+  ),
+  setState: defineProtobufRoute(
+    "/api/v1/indexes/state/set",
+    IndexApi.SetIndexStateRequest,
+    IndexApi.SetIndexStateResponse,
+  ),
+} as const;
+
+export const ingestionTokenRoutes = {
+  create: defineProtobufRoute(
+    "/api/v1/ingestion-tokens/create",
+    CollectorAdminApi.CreateIngestionTokenRequest,
+    CollectorAdminApi.CreateIngestionTokenResponse,
+  ),
+  get: defineProtobufRoute(
+    "/api/v1/ingestion-tokens/get",
+    CollectorAdminApi.GetIngestionTokenRequest,
+    CollectorAdminApi.GetIngestionTokenResponse,
+  ),
+  list: defineProtobufRoute(
+    "/api/v1/ingestion-tokens/list",
+    CollectorAdminApi.ListIngestionTokensRequest,
+    CollectorAdminApi.ListIngestionTokensResponse,
+  ),
+  update: defineProtobufRoute(
+    "/api/v1/ingestion-tokens/update",
+    CollectorAdminApi.UpdateIngestionTokenRequest,
+    CollectorAdminApi.UpdateIngestionTokenResponse,
+  ),
+  revoke: defineProtobufRoute(
+    "/api/v1/ingestion-tokens/revoke",
+    CollectorAdminApi.RevokeIngestionTokenRequest,
+    CollectorAdminApi.RevokeIngestionTokenResponse,
   ),
 } as const;
 
@@ -60,16 +118,6 @@ export const searchRoutes = {
     "/api/v1/search/jobs/cancel",
     SearchApi.CancelSearchJobRequest,
     SearchApi.CancelSearchJobResponse,
-  ),
-  validate: defineProtobufRoute(
-    "/api/v1/search/validate",
-    SearchApi.ValidateSearchRequest,
-    SearchApi.ValidateSearchResponse,
-  ),
-  suggestions: defineProtobufRoute(
-    "/api/v1/search/suggestions",
-    SearchApi.GetSearchSuggestionsRequest,
-    SearchApi.GetSearchSuggestionsResponse,
   ),
 } as const;
 
@@ -140,11 +188,6 @@ export const exportRoutes = {
     ExportApi.GetExportJobRequest,
     ExportApi.GetExportJobResponse,
   ),
-  list: defineProtobufRoute(
-    "/api/v1/search/exports/list",
-    ExportApi.ListExportJobsRequest,
-    ExportApi.ListExportJobsResponse,
-  ),
   cancel: defineProtobufRoute(
     "/api/v1/search/exports/cancel",
     ExportApi.CancelExportJobRequest,
@@ -154,6 +197,8 @@ export const exportRoutes = {
 
 export const openSplunkRoutes = {
   system: systemRoutes,
+  indexes: indexRoutes,
+  ingestionTokens: ingestionTokenRoutes,
   search: searchRoutes,
   savedSearches: savedSearchRoutes,
   history: historyRoutes,

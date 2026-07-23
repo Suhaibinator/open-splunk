@@ -3,9 +3,11 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { PageHeading } from "../_components/product-shell";
+import { BackendReportsConsole } from "./backend-reports-console";
 import styles from "./reports.module.css";
 
 type ReportScope = "all" | "mine" | "scheduled" | "favorites";
@@ -46,8 +48,8 @@ const REPORTS: ReportDefinition[] = [
   {
     id: "api-latency-p95",
     name: "API latency — p95 by route",
-    description: "Slow endpoints across the public GradeThis API.",
-    query: "index=gradethis duration_ms=* | timechart span=30m p95(duration_ms) by path",
+    description: "Request volume across endpoints in the public GradeThis API.",
+    query: "index=gradethis path=* | timechart span=30m count by path",
     owner: "Administrator",
     type: "chart",
     status: "Scheduled",
@@ -152,7 +154,17 @@ function compareReports(left: ReportDefinition, right: ReportDefinition, sort: S
   return left.modifiedMinutes - right.modifiedMinutes;
 }
 
-export function ReportsConsole() {
+interface ReportsConsoleProps {
+  dataMode: SearchDataMode;
+  apiBaseUrl: string;
+}
+
+export function ReportsConsole({ dataMode, apiBaseUrl }: ReportsConsoleProps) {
+  if (dataMode === "backend") return <BackendReportsConsole apiBaseUrl={apiBaseUrl} />;
+  return <DemoReportsConsole />;
+}
+
+function DemoReportsConsole() {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<ReportScope>("all");
   const [type, setType] = useState<ReportType>("all");

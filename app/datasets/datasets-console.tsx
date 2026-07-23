@@ -3,9 +3,11 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { PageHeading } from "../_components/product-shell";
+import { BackendDatasetsConsole } from "./backend-datasets-console";
 
 const DATASETS = [
   { name: "gradethis", description: "GradeThis application and request logs", events: "18.6M", sources: 4, fields: 42, size: "284 GB", retention: "30 days", color: "green", status: "Active" },
@@ -24,7 +26,17 @@ const COMMON_FIELDS = [
   ["environment", "100%", "2 values"],
 ] as const;
 
-export function DatasetsConsole() {
+interface DatasetsConsoleProps {
+  dataMode: SearchDataMode;
+  apiBaseUrl: string;
+}
+
+export function DatasetsConsole({ dataMode, apiBaseUrl }: DatasetsConsoleProps) {
+  if (dataMode === "backend") return <BackendDatasetsConsole apiBaseUrl={apiBaseUrl} />;
+  return <DemoDatasetsConsole />;
+}
+
+function DemoDatasetsConsole() {
   const [filter, setFilter] = useState("");
   const [view, setView] = useState<"cards" | "table">("cards");
   const visible = useMemo(

@@ -5,24 +5,36 @@ import { type Dispatch, type KeyboardEvent, type PointerEvent, type SetStateActi
 import type { DemoEvent, DemoField, DemoScalar, TimelinePoint } from "@/lib/demo/search-data";
 import type { PivotMode } from "@/lib/search/query-pivots";
 
+import { installModalSurface } from "../../_components/modal-surface";
 import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
+import { formatExactInteger, formatExactNumericText } from "../formatters";
 import type { EventDisplay, MenuName, TimelineDisplay } from "../model";
 import { formatFieldValue, highlightedRaw } from "../workspace-utils";
 
 interface EventsPanelProps {
   activeField: string | null;
   backendEnabled: boolean;
+  backendHasNextPage: boolean;
+  backendResultTotalExact: boolean;
+  backendResultTotalRows: number | null;
+  defaultQuery: string;
   draggingTimeline: boolean;
   eventDisplay: EventDisplay;
   eventPage: number;
   eventPageCount: number;
-  eventPageSize: 10 | 20 | 50;
+  eventPageSize: number;
   eventSortDirection: "asc" | "desc";
   expandedEvents: Set<string>;
   fieldFilter: string;
+  fieldSummaryError: string | null;
+  fieldSummaryLoading: boolean;
   fields: DemoField[];
   fieldsCollapsed: boolean;
+  fieldsHasMore: boolean;
+  fieldsLoading: boolean;
+  fieldsLoadingMore: boolean;
   menu: MenuName | null;
+  maximumEventPageSize: number | null;
   pagedResultEvents: DemoEvent[];
   resultEvents: DemoEvent[];
   showAllFields: boolean;
@@ -30,15 +42,17 @@ interface EventsPanelProps {
   timelineDisplay: TimelineDisplay;
   timelinePoints: TimelinePoint[];
   timelineSelection: readonly [number, number] | null;
+  timelineSelectionZoomable: boolean;
   wrapEvents: boolean;
   applyPivot: (field: string, value: DemoScalar, mode: PivotMode, runImmediately?: boolean) => void;
   copyText: (text: string, message: string) => Promise<void> | void;
   endTimelineDrag: (event: PointerEvent<HTMLDivElement>) => void;
   moveTimelineDrag: (event: PointerEvent<HTMLDivElement>) => void;
+  onLoadMoreFields: () => void;
   setActiveField: Dispatch<SetStateAction<string | null>>;
   setEventDisplay: Dispatch<SetStateAction<EventDisplay>>;
   setEventPage: Dispatch<SetStateAction<number>>;
-  setEventPageSize: Dispatch<SetStateAction<10 | 20 | 50>>;
+  setEventPageSize: (size: number) => void;
   setEventSortDirection: Dispatch<SetStateAction<"asc" | "desc">>;
   setFieldFilter: Dispatch<SetStateAction<string>>;
   setFieldsCollapsed: Dispatch<SetStateAction<boolean>>;
@@ -58,9 +72,58 @@ interface EventsPanelProps {
   canZoomOut: boolean;
 }
 
+function scalarIdentity(value: DemoScalar): string {
+  if (value === null) return "null";
+  if (typeof value === "number") {
+    if (Number.isNaN(value)) return "number:NaN";
+    if (Object.is(value, -0)) return "number:-0";
+  }
+  return `${typeof value}:${JSON.stringify(value)}`;
+}
+
+function scalarTypeLabel(value: DemoScalar): string {
+  return value === null ? "null" : typeof value;
+}
+
+function formatTimelineCount(point: TimelinePoint): string {
+  return point.exactCount === undefined
+    ? NUMBER_FORMAT.format(point.count)
+    : formatExactNumericText(point.exactCount);
+}
+
+function formatProjectedCount(
+  coordinate: number,
+  exact: string | undefined,
+  approximate = false,
+  compact = false,
+): string {
+  const formatter = compact ? COMPACT_NUMBER_FORMAT : NUMBER_FORMAT;
+  const formattedExact = exact === undefined ? null : formatExactInteger(exact, compact);
+  const formatted = formattedExact ?? formatter.format(coordinate);
+  return `${approximate ? "≈" : ""}${formatted}`;
+}
+
+function projectedCountTitle(
+  label: string,
+  coordinate: number,
+  exact: string | undefined,
+  approximate = false,
+): string {
+  const formatted = formatProjectedCount(coordinate, exact, approximate);
+  const qualifiers = [
+    approximate ? "Backend estimate" : null,
+    exact === undefined ? null : "Full uint64 retained; visual scale uses an approximate browser coordinate",
+  ].filter((qualifier): qualifier is string => qualifier !== null);
+  return qualifiers.length === 0 ? `${label}: ${formatted}` : `${label}: ${formatted}\n${qualifiers.join(". ")}`;
+}
+
 export function EventsPanel({
   activeField,
   backendEnabled,
+  backendHasNextPage,
+  backendResultTotalExact,
+  backendResultTotalRows,
+  defaultQuery,
   draggingTimeline,
   eventDisplay,
   eventPage,
@@ -69,9 +132,15 @@ export function EventsPanel({
   eventSortDirection,
   expandedEvents,
   fieldFilter,
+  fieldSummaryError,
+  fieldSummaryLoading,
   fields,
   fieldsCollapsed,
+  fieldsHasMore,
+  fieldsLoading,
+  fieldsLoadingMore,
   menu,
+  maximumEventPageSize,
   pagedResultEvents,
   resultEvents,
   showAllFields,
@@ -79,11 +148,13 @@ export function EventsPanel({
   timelineDisplay,
   timelinePoints,
   timelineSelection,
+  timelineSelectionZoomable,
   wrapEvents,
   applyPivot,
   copyText,
   endTimelineDrag,
   moveTimelineDrag,
+  onLoadMoreFields,
   setActiveField,
   setEventDisplay,
   setEventPage,
@@ -116,7 +187,30 @@ export function EventsPanel({
   const matchingInterestingFields = interestingFields.filter((field) => field.name.toLowerCase().includes(fieldFilter.toLowerCase()));
   const visibleInterestingFields = showAllFields || fieldFilter.trim().length > 0 ? matchingInterestingFields : matchingInterestingFields.slice(0, 8);
   const activeFieldData = fields.find((field) => field.name === activeField) ?? null;
+  const firstPivotableFieldValue = activeFieldData?.values.find((value) => value.pivotable !== false);
+  const eventPageSizeOptions = [...new Set([
+    10,
+    20,
+    50,
+    ...(maximumEventPageSize === null ? [] : [maximumEventPageSize]),
+    eventPageSize,
+  ])].filter((size) => size > 0).toSorted((left, right) => left - right);
+  const ambiguousTopValueLabels = useMemo(() => {
+    const identitiesByLabel = new Map<string, Set<string>>();
+    for (const item of activeFieldData?.values ?? []) {
+      const label = formatFieldValue(item.value);
+      const identities = identitiesByLabel.get(label) ?? new Set<string>();
+      identities.add(item.typedIdentity ?? scalarIdentity(item.value));
+      identitiesByLabel.set(label, identities);
+    }
+    return new Set(
+      [...identitiesByLabel.entries()]
+        .filter(([, identities]) => identities.size > 1)
+        .map(([label]) => label),
+    );
+  }, [activeFieldData?.values]);
   const maxTimelineCount = Math.max(1, ...timelinePoints.map((point) => point.count));
+  const hasApproximateTimelineCoordinates = timelinePoints.some((point) => point.coordinateApproximate === true);
   const timelineAxisLabels = useMemo(() => {
     if (timelinePoints.length === 0) return [];
     const indexes = [0, Math.round((timelinePoints.length - 1) * 0.25), Math.round((timelinePoints.length - 1) * 0.5), Math.round((timelinePoints.length - 1) * 0.75), timelinePoints.length - 1];
@@ -138,49 +232,13 @@ export function EventsPanel({
   useEffect(() => {
     if (fieldsCollapsed || !window.matchMedia("(max-width: 760px)").matches) return;
     const rail = fieldsRailRef.current;
-    const previousOverflow = document.body.style.overflow;
-    const inertedElements: HTMLElement[] = [];
-    document.body.style.overflow = "hidden";
-    let current = rail;
-    while (current !== null && current.parentElement !== null && current !== document.body) {
-      const parent = current.parentElement;
-      for (const sibling of parent.children) {
-        if (sibling !== current
-          && sibling instanceof HTMLElement
-          && !sibling.classList.contains("fields-mobile-dismiss")
-          && !sibling.inert) {
-          sibling.inert = true;
-          inertedElements.push(sibling);
-        }
-      }
-      current = parent;
-    }
-    window.requestAnimationFrame(() => rail?.querySelector<HTMLElement>("button, input")?.focus());
-    function handleKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") {
-        setFieldsCollapsed(true);
-        return;
-      }
-      if (event.key !== "Tab" || rail === null) return;
-      const controls = Array.from(rail.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])'));
-      const first = controls[0];
-      const last = controls.at(-1);
-      if (first === undefined || last === undefined) return;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      for (const element of inertedElements) element.inert = false;
-      document.removeEventListener("keydown", handleKeyDown);
-      window.requestAnimationFrame(() => fieldsReturnFocusRef.current?.focus());
-    };
+    if (rail === null) return;
+    return installModalSurface({
+      container: rail,
+      excludedSiblingClassNames: ["fields-mobile-dismiss"],
+      onEscape: () => setFieldsCollapsed(true),
+      returnFocus: fieldsReturnFocusRef.current,
+    });
   }, [fieldsCollapsed, setFieldsCollapsed]);
 
   function handleTimelineKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -240,10 +298,18 @@ export function EventsPanel({
                 ) : null}
               </div>
               <button type="button" disabled={!canZoomOut} onClick={zoomOutTimeline}>− Zoom Out</button>
-              <button type="button" disabled={timelineSelection === null} onClick={zoomTimeline}>＋ Zoom to Selection</button>
+              <button
+                type="button"
+                disabled={!timelineSelectionZoomable}
+                title={timelineSelection !== null && !timelineSelectionZoomable ? "This bucket does not include an authoritative end boundary." : undefined}
+                onClick={zoomTimeline}
+              >＋ Zoom to Selection</button>
               <button type="button" disabled={timelineSelection === null} onClick={() => { setTimelineStart(null); setTimelineEnd(null); }}>× Deselect</button>
             </div>
-            <span>{timelineSelection === null ? (backendEnabled ? "Automatic time span" : "20 minutes per column") : `${timelinePoints[timelineSelection[0]]?.label ?? ""} – ${timelinePoints[timelineSelection[1]]?.label ?? ""}`}</span>
+            <span>
+              {timelineSelection === null ? (backendEnabled ? "Automatic time span" : "20 minutes per column") : `${timelinePoints[timelineSelection[0]]?.label ?? ""} – ${timelinePoints[timelineSelection[1]]?.label ?? ""}`}
+              {hasApproximateTimelineCoordinates ? " · ≈ scale; exact counts on hover" : ""}
+            </span>
           </div>
           <div
             className={`timeline-chart timeline-${timelineDisplay.toLowerCase()}${draggingTimeline ? " dragging" : ""}`}
@@ -253,7 +319,9 @@ export function EventsPanel({
             aria-valuemin={0}
             aria-valuemax={Math.max(0, timelinePoints.length - 1)}
             aria-valuenow={Math.min(timelineKeyboardIndex, Math.max(0, timelinePoints.length - 1))}
-            aria-valuetext={timelinePoints[timelineKeyboardIndex] === undefined ? "No timeline data" : `${timelinePoints[timelineKeyboardIndex].label}, ${NUMBER_FORMAT.format(timelinePoints[timelineKeyboardIndex].count)} events`}
+            aria-valuetext={timelinePoints[timelineKeyboardIndex] === undefined
+              ? "No timeline data"
+              : `${timelinePoints[timelineKeyboardIndex].label}, ${formatTimelineCount(timelinePoints[timelineKeyboardIndex])} events${timelinePoints[timelineKeyboardIndex].coordinateApproximate ? ", chart position approximate" : ""}`}
             onPointerDown={startTimelineDrag}
             onPointerMove={moveTimelineDrag}
             onPointerUp={endTimelineDrag}
@@ -268,7 +336,7 @@ export function EventsPanel({
                   <span
                     className={selected ? "selected" : ""}
                     data-timeline-index={index}
-                    title={`${point.label}\n${NUMBER_FORMAT.format(point.count)} events`}
+                    title={`${point.label}\n${formatTimelineCount(point)} events${point.coordinateApproximate ? "\nChart position is approximate" : ""}`}
                     key={point.id}
                     style={{ height: `${Math.max(4, (point.count / maxTimelineCount) * 100)}%` }}
                   />
@@ -303,13 +371,20 @@ export function EventsPanel({
                   <span aria-hidden="true">⌕</span>
                   <input aria-label="Filter fields" placeholder="Filter fields" value={fieldFilter} onChange={(event) => setFieldFilter(event.target.value)} />
                 </label>
+                {fieldsLoading ? <p className="field-loading" role="status">Loading server fields…</p> : null}
+                {!fieldsLoading && fields.length === 0
+                  ? <p className="field-loading">No authoritative fields were returned.</p>
+                  : null}
                 <div className="field-group">
                   <h2>Selected Fields <span>{selectedFields.length}</span></h2>
                   <div className="field-list">
                     {selectedFields.filter((field) => field.name.toLowerCase().includes(fieldFilter.toLowerCase())).map((field) => (
                       <button type="button" key={field.name} data-field-name={field.name} className={activeField === field.name ? "active" : ""} onClick={() => activeField === field.name ? closeFieldInspector() : setActiveField(field.name)}>
                         <span className={`field-type type-${field.type}`}>{field.type === "number" ? "#" : field.type === "boolean" ? "✓" : "a"}</span>
-                        <span>{field.displayName}</span><b>{COMPACT_NUMBER_FORMAT.format(field.distinctCount)}</b>
+                        <span>{field.displayName}</span>
+                        <b title={field.distinctCount === null ? "Distinct count unavailable" : projectedCountTitle("Distinct values", field.distinctCount, field.distinctCountExact, field.distinctCountIsApproximate)}>
+                          {field.distinctCount === null ? "—" : formatProjectedCount(field.distinctCount, field.distinctCountExact, field.distinctCountIsApproximate, true)}
+                        </b>
                       </button>
                     ))}
                   </div>
@@ -320,11 +395,28 @@ export function EventsPanel({
                     {visibleInterestingFields.map((field) => (
                       <button type="button" key={field.name} data-field-name={field.name} className={activeField === field.name ? "active" : ""} onClick={() => activeField === field.name ? closeFieldInspector() : setActiveField(field.name)}>
                         <span className={`field-type type-${field.type}`}>{field.type === "number" ? "#" : field.type === "boolean" ? "✓" : "a"}</span>
-                        <span>{field.displayName}</span><b>{COMPACT_NUMBER_FORMAT.format(field.distinctCount)}</b>
+                        <span>{field.displayName}</span>
+                        <b title={field.distinctCount === null ? "Distinct count unavailable" : projectedCountTitle("Distinct values", field.distinctCount, field.distinctCountExact, field.distinctCountIsApproximate)}>
+                          {field.distinctCount === null ? "—" : formatProjectedCount(field.distinctCount, field.distinctCountExact, field.distinctCountIsApproximate, true)}
+                        </b>
                       </button>
                     ))}
                   </div>
-                  {!showAllFields && fieldFilter.trim().length === 0 && interestingFields.length > 8 ? <button className="more-fields" type="button" onClick={() => setShowAllFields(true)}>Show {interestingFields.length - 8} more fields</button> : null}
+                  {!showAllFields && fieldFilter.trim().length === 0 && interestingFields.length > 8 ? <button className="more-fields" type="button" onClick={() => setShowAllFields(true)}>Show {interestingFields.length - 8} more loaded fields</button> : null}
+                  {fieldsHasMore ? (
+                    <button
+                      className="more-fields"
+                      type="button"
+                      aria-busy={fieldsLoadingMore}
+                      disabled={fieldsLoadingMore}
+                      onClick={() => {
+                        setShowAllFields(true);
+                        onLoadMoreFields();
+                      }}
+                    >
+                      {fieldsLoadingMore ? "Loading more fields…" : "Load more server fields"}
+                    </button>
+                  ) : null}
                 </div>
               </>
             )}
@@ -335,24 +427,55 @@ export function EventsPanel({
                   <button className="icon-button" type="button" aria-label="Close field summary" onClick={closeFieldInspector}>×</button>
                 </header>
                 <div className="field-summary-meta">
-                  <span><strong>{NUMBER_FORMAT.format(activeFieldData.eventCount)}</strong> events</span>
-                  <span><strong>{NUMBER_FORMAT.format(activeFieldData.distinctCount)}</strong> values</span>
+                  <span title={projectedCountTitle("Events", activeFieldData.eventCount, activeFieldData.eventCountExact)}>
+                    <strong>{formatProjectedCount(activeFieldData.eventCount, activeFieldData.eventCountExact)}</strong> events
+                  </span>
+                  <span title={activeFieldData.distinctCount === null ? "Distinct count unavailable" : projectedCountTitle("Distinct values", activeFieldData.distinctCount, activeFieldData.distinctCountExact, activeFieldData.distinctCountIsApproximate)}>
+                    <strong>{activeFieldData.distinctCount === null ? "Unknown" : formatProjectedCount(activeFieldData.distinctCount, activeFieldData.distinctCountExact, activeFieldData.distinctCountIsApproximate)}</strong> values
+                  </span>
                 </div>
                 <label className="select-field-checkbox"><input type="checkbox" checked={activeFieldData.selected} onChange={() => toggleField(activeFieldData.name)} /> Selected field</label>
                 <h3>Top values</h3>
                 <div className="top-values">
+                  {fieldSummaryLoading ? <p className="field-loading" role="status">Loading top values…</p> : null}
+                  {fieldSummaryError === null ? null : <p className="field-loading" role="alert">{fieldSummaryError}</p>}
                   {activeFieldData.values.map((item) => {
-                    const percent = Math.max(2, (item.count / activeFieldData.eventCount) * 100);
+                    const percent = activeFieldData.eventCount <= 0
+                      ? 0
+                      : item.count <= 0
+                        ? 0
+                        : Math.min(100, Math.max(2, (item.count / activeFieldData.eventCount) * 100));
+                    const pivotable = item.pivotable !== false;
+                    const formattedValue = formatFieldValue(item.value);
+                    const countTitle = projectedCountTitle("Frequency", item.count, item.exactCount, item.countIsApproximate);
                     return (
-                      <div className="top-value" key={formatFieldValue(item.value)}>
-                        <button type="button" title="Include this value" onClick={() => applyPivot(activeFieldData.name, item.value, "include")}><span>{formatFieldValue(item.value)}</span><b>{NUMBER_FORMAT.format(item.count)}</b></button>
-                        <span className="value-bar" style={{ width: `${percent}%` }} />
-                        <div><button type="button" onClick={() => applyPivot(activeFieldData.name, item.value, "include")} aria-label={`Include ${formatFieldValue(item.value)}`}>＋</button><button type="button" onClick={() => applyPivot(activeFieldData.name, item.value, "exclude")} aria-label={`Exclude ${formatFieldValue(item.value)}`}>−</button></div>
+                      <div className="top-value" key={item.typedIdentity ?? scalarIdentity(item.value)}>
+                        <button type="button" disabled={!pivotable} title={`${pivotable ? "Include this value" : "This typed value cannot be represented losslessly in SPL"}\n${countTitle}`} onClick={() => applyPivot(activeFieldData.name, item.value, "include")}><span>{formattedValue}{ambiguousTopValueLabels.has(formattedValue) ? <small className="top-value-type">{item.typeLabel ?? scalarTypeLabel(item.value)}</small> : null}</span><b>{formatProjectedCount(item.count, item.exactCount, item.countIsApproximate)}</b></button>
+                        <span
+                          className="value-bar"
+                          title={item.countIsApproximate
+                            ? "Bar width uses the backend’s estimated frequency."
+                            : item.exactCount !== undefined || activeFieldData.eventCountExact !== undefined
+                              ? "Bar width uses an approximate browser coordinate; displayed counts retain their full uint64 values."
+                              : undefined}
+                          style={{ width: `${percent}%` }}
+                        />
+                        <div><button type="button" disabled={!pivotable} onClick={() => applyPivot(activeFieldData.name, item.value, "include")} aria-label={`Include ${formattedValue} (${scalarTypeLabel(item.value)})`}>＋</button><button type="button" disabled={!pivotable} onClick={() => applyPivot(activeFieldData.name, item.value, "exclude")} aria-label={`Exclude ${formattedValue} (${scalarTypeLabel(item.value)})`}>−</button></div>
                       </div>
                     );
                   })}
+                  {!fieldSummaryLoading && fieldSummaryError === null && activeFieldData.values.length === 0
+                    ? <p className="field-loading">No top values were returned for this field.</p>
+                    : null}
                 </div>
-                <footer><span>Showing top {activeFieldData.values.length} values</span><button type="button" onClick={() => applyPivot(activeFieldData.name, activeFieldData.values[0]?.value ?? "*", "new", true)}>New search</button></footer>
+                <footer>
+                  <span>Showing top {activeFieldData.values.length} values</span>
+                  <button type="button" disabled={firstPivotableFieldValue === undefined} onClick={() => {
+                    if (firstPivotableFieldValue !== undefined) {
+                      applyPivot(activeFieldData.name, firstPivotableFieldValue.value, "new", true);
+                    }
+                  }}>New search</button>
+                </footer>
               </section>
             )}
           </aside>
@@ -377,21 +500,64 @@ export function EventsPanel({
                   <button type="button" aria-haspopup="menu" aria-expanded={menu === "event-page-size"} onClick={() => setMenu(menu === "event-page-size" ? null : "event-page-size")}>{eventPageSize} Per Page <span aria-hidden="true">▾</span></button>
                   {menu === "event-page-size" ? (
                     <div className="floating-menu result-control-menu page-size-menu" role="menu" aria-label="Events per page">
-                      {([10, 20, 50] as const).map((size) => <button role="menuitemradio" aria-checked={eventPageSize === size} type="button" key={size} onClick={() => { setEventPageSize(size); setEventPage(1); setMenu(null); }}>{eventPageSize === size ? "✓" : ""}<span><strong>{size} events</strong></span></button>)}
+                      {eventPageSizeOptions.map((size) => {
+                        const unavailable = maximumEventPageSize !== null && size > maximumEventPageSize;
+                        return (
+                          <button
+                            role="menuitemradio"
+                            aria-checked={eventPageSize === size}
+                            type="button"
+                            disabled={unavailable}
+                            title={unavailable ? `The server allows at most ${maximumEventPageSize} results per page.` : undefined}
+                            key={size}
+                            onClick={() => {
+                              setEventPageSize(size);
+                              setMenu(null);
+                            }}
+                          >
+                            {eventPageSize === size ? "✓" : ""}
+                            <span>
+                              <strong>{size} events</strong>
+                              {unavailable ? <small>Above server limit</small> : null}
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
                   ) : null}
                 </div>
               </div>
               <nav aria-label="Event pages">
                 <button type="button" disabled={eventPage === 1} onClick={() => setEventPage((current) => Math.max(1, current - 1))}>‹ Prev</button>
-                {[1, 2, 3].filter((page) => page <= eventPageCount).map((page) => <button className={eventPage === page ? "active" : ""} aria-current={eventPage === page ? "page" : undefined} type="button" key={page} onClick={() => setEventPage(page)}>{page}</button>)}
-                {eventPage > 3 && eventPage < eventPageCount ? <><span>…</span><button className="active" aria-current="page" type="button">{NUMBER_FORMAT.format(eventPage)}</button></> : null}
-                {eventPageCount > 4 ? <span>…</span> : null}
-                {eventPageCount > 3 ? <button className={eventPage === eventPageCount ? "active" : ""} aria-current={eventPage === eventPageCount ? "page" : undefined} type="button" onClick={() => setEventPage(eventPageCount)}>{NUMBER_FORMAT.format(eventPageCount)}</button> : null}
-                <button type="button" disabled={eventPage === eventPageCount} onClick={() => setEventPage((current) => Math.min(eventPageCount, current + 1))}>Next ›</button>
+                {backendEnabled ? (
+                  <span aria-current="page">
+                    Page {NUMBER_FORMAT.format(eventPage)}
+                    {backendResultTotalRows === null
+                      ? ""
+                      : ` · ${backendResultTotalExact ? "" : "at least "}${NUMBER_FORMAT.format(backendResultTotalRows)} results`}
+                  </span>
+                ) : (
+                  <>
+                    {[1, 2, 3].filter((page) => page <= eventPageCount).map((page) => <button className={eventPage === page ? "active" : ""} aria-current={eventPage === page ? "page" : undefined} type="button" key={page} onClick={() => setEventPage(page)}>{page}</button>)}
+                    {eventPage > 3 && eventPage < eventPageCount ? <><span>…</span><button className="active" aria-current="page" type="button">{NUMBER_FORMAT.format(eventPage)}</button></> : null}
+                    {eventPageCount > 4 ? <span>…</span> : null}
+                    {eventPageCount > 3 ? <button className={eventPage === eventPageCount ? "active" : ""} aria-current={eventPage === eventPageCount ? "page" : undefined} type="button" onClick={() => setEventPage(eventPageCount)}>{NUMBER_FORMAT.format(eventPageCount)}</button> : null}
+                  </>
+                )}
+                <button
+                  type="button"
+                  disabled={backendEnabled ? !backendHasNextPage : eventPage === eventPageCount}
+                  onClick={() => setEventPage((current) => backendEnabled ? current + 1 : Math.min(eventPageCount, current + 1))}
+                >Next ›</button>
               </nav>
             </div>
-            <div className="event-head"><span /><button type="button" aria-label={`Sort by time, ${eventSortDirection === "desc" ? "ascending" : "descending"}`} onClick={() => { setEventSortDirection((current) => current === "desc" ? "asc" : "desc"); setEventPage(1); }}>Time <span aria-hidden="true">{eventSortDirection === "desc" ? "↓" : "↑"}</span></button><span>Event</span></div>
+            <div className="event-head">
+              <span />
+              {backendEnabled
+                ? <span title="Server cursor order; add SPL sort for global ordering">Time · server order</span>
+                : <button type="button" aria-label={`Sort by time, ${eventSortDirection === "desc" ? "ascending" : "descending"}`} onClick={() => { setEventSortDirection((current) => current === "desc" ? "asc" : "desc"); setEventPage(1); }}>Time <span aria-hidden="true">{eventSortDirection === "desc" ? "↓" : "↑"}</span></button>}
+              <span>Event</span>
+            </div>
             <div className="event-list" data-testid="event-list">
               {pagedResultEvents.map((event) => {
                 const expanded = expandedEvents.has(event.id);
@@ -403,8 +569,10 @@ export function EventsPanel({
                     <div className="event-content">
                       <button className="event-raw" type="button" aria-label={`${expanded ? "Collapse" : "Expand"} event details`} onClick={() => toggleEvent(event.id)}>{highlightedRaw(event.raw, submittedQuery)}</button>
                       <div className="event-chips">
-                        {["host", "source", "sourcetype"].map((fieldName) => (
-                          <button type="button" key={fieldName} onClick={() => openFieldInspector(fieldName)}><span>{fieldName}</span> = {formatFieldValue(event.fields[fieldName] ?? "")}</button>
+                        {["host", "source", "sourcetype"]
+                          .filter((fieldName) => Object.hasOwn(event.fields, fieldName))
+                          .map((fieldName) => (
+                          <button type="button" key={fieldName} onClick={() => openFieldInspector(fieldName)}><span>{fieldName}</span> = {formatFieldValue(event.fields[fieldName] ?? null)}</button>
                         ))}
                       </div>
                       {expanded ? (
@@ -417,9 +585,9 @@ export function EventsPanel({
                                 <span className={`value-type value-${fieldValue === null ? "null" : typeof fieldValue}`}>{fieldValue === null ? "null" : typeof fieldValue}</span>
                                 <code>{formatFieldValue(fieldValue)}</code>
                                 <div className="event-field-actions">
-                                  <button type="button" title="Include in current search" aria-label={`Include ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "include")}>＋</button>
-                                  <button type="button" title="Exclude from current search" aria-label={`Exclude ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "exclude")}>−</button>
-                                  <button type="button" title="Open as new search" aria-label={`New search for ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "new", true)}>⌕</button>
+                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Include in current search"} aria-label={`Include ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "include")}>＋</button>
+                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Exclude from current search"} aria-label={`Exclude ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "exclude")}>−</button>
+                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Open as new search"} aria-label={`New search for ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "new", true)}>⌕</button>
                                 </div>
                               </div>
                             ))}
@@ -430,7 +598,7 @@ export function EventsPanel({
                   </article>
                 );
               })}
-              {resultEvents.length === 0 ? <div className="empty-state event-empty"><strong>No events found</strong><span>Widen the time range or remove a field filter.</span><button className="button secondary compact" type="button" onClick={() => setQuery("index=gradethis")}>Reset search</button></div> : null}
+              {resultEvents.length === 0 ? <div className="empty-state event-empty"><strong>No events found</strong><span>Widen the time range or remove a field filter.</span><button className="button secondary compact" type="button" onClick={() => setQuery(defaultQuery)}>Reset search</button></div> : null}
             </div>
           </section>
         </div>

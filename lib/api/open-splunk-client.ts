@@ -6,6 +6,8 @@ import {
 import {
   exportRoutes,
   historyRoutes,
+  indexRoutes,
+  ingestionTokenRoutes,
   savedSearchRoutes,
   searchRoutes,
   systemRoutes,
@@ -19,6 +21,52 @@ export class OpenSplunkApiClient {
       request: RouteRequest<typeof systemRoutes.bootstrap>,
       options?: ProtobufRequestOptions,
     ) => this.transport.post(systemRoutes.bootstrap, request, options),
+  };
+
+  public readonly indexes = {
+    create: (
+      request: RouteRequest<typeof indexRoutes.create>,
+      options?: ProtobufRequestOptions,
+    ) => this.transport.post(indexRoutes.create, request, options),
+    get: (
+      request: RouteRequest<typeof indexRoutes.get>,
+      options?: ProtobufRequestOptions,
+    ) => this.transport.post(indexRoutes.get, request, options),
+    list: (
+      request: RouteRequest<typeof indexRoutes.list>,
+      options?: ProtobufRequestOptions,
+    ) => this.transport.post(indexRoutes.list, request, options),
+    update: (
+      request: RouteRequest<typeof indexRoutes.update>,
+      options?: ProtobufRequestOptions,
+    ) => this.transport.post(indexRoutes.update, request, options),
+    setState: (
+      request: RouteRequest<typeof indexRoutes.setState>,
+      options?: ProtobufRequestOptions,
+    ) => this.transport.post(indexRoutes.setState, request, options),
+  };
+
+  public readonly ingestionTokens = {
+    create: (
+      request: RouteRequest<typeof ingestionTokenRoutes.create>,
+      options?: ProtobufRequestOptions,
+    ) => this.transport.post(ingestionTokenRoutes.create, request, options),
+    get: (
+      request: RouteRequest<typeof ingestionTokenRoutes.get>,
+      options?: ProtobufRequestOptions,
+    ) => this.transport.post(ingestionTokenRoutes.get, request, options),
+    list: (
+      request: RouteRequest<typeof ingestionTokenRoutes.list>,
+      options?: ProtobufRequestOptions,
+    ) => this.transport.post(ingestionTokenRoutes.list, request, options),
+    update: (
+      request: RouteRequest<typeof ingestionTokenRoutes.update>,
+      options?: ProtobufRequestOptions,
+    ) => this.transport.post(ingestionTokenRoutes.update, request, options),
+    revoke: (
+      request: RouteRequest<typeof ingestionTokenRoutes.revoke>,
+      options?: ProtobufRequestOptions,
+    ) => this.transport.post(ingestionTokenRoutes.revoke, request, options),
   };
 
   public readonly search = {
@@ -54,14 +102,6 @@ export class OpenSplunkApiClient {
       request: RouteRequest<typeof searchRoutes.cancel>,
       options?: ProtobufRequestOptions,
     ) => this.transport.post(searchRoutes.cancel, request, options),
-    validate: (
-      request: RouteRequest<typeof searchRoutes.validate>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(searchRoutes.validate, request, options),
-    suggestions: (
-      request: RouteRequest<typeof searchRoutes.suggestions>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(searchRoutes.suggestions, request, options),
   };
 
   public readonly savedSearches = {
@@ -119,10 +159,6 @@ export class OpenSplunkApiClient {
       request: RouteRequest<typeof exportRoutes.get>,
       options?: ProtobufRequestOptions,
     ) => this.transport.post(exportRoutes.get, request, options),
-    list: (
-      request: RouteRequest<typeof exportRoutes.list>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(exportRoutes.list, request, options),
     cancel: (
       request: RouteRequest<typeof exportRoutes.cancel>,
       options?: ProtobufRequestOptions,

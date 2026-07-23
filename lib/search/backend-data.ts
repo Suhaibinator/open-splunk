@@ -15,8 +15,16 @@ import type {
 export type SearchDataMode = "backend" | "demo";
 
 export interface WorkspaceStatistic {
+  id?: string;
   level: string;
+  /** Typed server value used for drilldown; the display label may be formatted. */
+  pivotValue?: DemoScalar;
+  pivotable?: boolean;
+  /** Finite coordinate used by compact charts. */
   count: number;
+  /** Exact server value retained when the chart coordinate is non-lossless. */
+  exactCount?: string;
+  coordinateApproximate?: boolean;
   percent: string;
   avgDuration: number;
   /** The server-provided aggregation represented by `count` in categorical charts. */
@@ -46,6 +54,7 @@ export type WorkspaceStatisticsValue =
 export interface WorkspaceStatisticsRow {
   id: string;
   values: Record<string, WorkspaceStatisticsValue>;
+  pivotValues: Record<string, DemoScalar | undefined>;
 }
 
 export interface WorkspaceStatisticsTable {
@@ -81,10 +90,6 @@ function safeNumber(value: bigint): DemoScalar {
   return Number.isSafeInteger(number) ? number : value.toString();
 }
 
-function durationSeconds(seconds: bigint, nanos: number): number {
-  return Number(seconds) + nanos / 1_000_000_000;
-}
-
 function typedValueToJSON(value: TypedValue | undefined): WorkspaceStatisticsValue {
   switch (value?.kind?.$case) {
     case "nullValue":
@@ -99,8 +104,15 @@ function typedValueToJSON(value: TypedValue | undefined): WorkspaceStatisticsVal
       return safeNumber(value.kind.value);
     case "timestampValue":
       return value.kind.value.toISOString();
-    case "durationValue":
-      return durationSeconds(value.kind.value.seconds, value.kind.value.nanos);
+    case "durationValue": {
+      const exact = exactDurationNumericText(value.kind.value.seconds, value.kind.value.nanos);
+      const coordinate = Number(exact);
+      return Number.isFinite(coordinate)
+        && decimalCoordinateIsProvablyExact(exact, coordinate)
+        && (!Number.isInteger(coordinate) || Number.isSafeInteger(coordinate))
+        ? coordinate
+        : exact;
+    }
     case "decimalValue":
       return value.kind.value.value;
     case "bytesValue":
@@ -116,6 +128,22 @@ function typedValueToJSON(value: TypedValue | undefined): WorkspaceStatisticsVal
 
 function typedValueToScalar(value: TypedValue | undefined): DemoScalar {
   return jsonToScalar(typedValueToJSON(value));
+}
+
+function typedValueIsPivotable(value: TypedValue | undefined): boolean {
+  switch (value?.kind?.$case) {
+    case "nullValue":
+    case "stringValue":
+    case "boolValue":
+      return true;
+    case "doubleValue":
+      return Number.isFinite(value.kind.value);
+    case "sint64Value":
+    case "uint64Value":
+      return Number.isSafeInteger(Number(value.kind.value));
+    default:
+      return false;
+  }
 }
 
 function jsonToScalar(decoded: unknown): DemoScalar {
@@ -144,25 +172,33 @@ function formatEventTime(value: DemoScalar): { iso: string; label: string } {
   };
 }
 
-function rowFields(schema: ResultSchema, row: ResultRow): Record<string, DemoScalar> {
+function rowFields(
+  schema: ResultSchema,
+  row: ResultRow,
+): { fields: Record<string, DemoScalar>; pivotableFields: Record<string, boolean> } {
   const fields: Record<string, DemoScalar> = {};
+  const pivotableFields: Record<string, boolean> = {};
   schema.columns.forEach((column, index) => {
     const value = row.cells[index];
     const decoded = typedValueToJSON(value);
     if (column.fieldName === "fields" && typeof decoded === "object" && decoded !== null && !Array.isArray(decoded)) {
-      Object.entries(decoded).forEach(([name, nestedValue]) => {
-        fields[name] = jsonToScalar(nestedValue);
-      });
+      if (value?.kind?.$case === "objectValue") {
+        value.kind.value.fields.forEach((field) => {
+          fields[field.name] = typedValueToScalar(field.value);
+          pivotableFields[field.name] = typedValueIsPivotable(field.value);
+        });
+      }
       return;
     }
     fields[column.fieldName] = typedValueToScalar(value);
+    pivotableFields[column.fieldName] = typedValueIsPivotable(value);
   });
-  return fields;
+  return { fields, pivotableFields };
 }
 
 function rowsToEvents(schema: ResultSchema, rows: ResultRow[]): DemoEvent[] {
   return rows.map((row) => {
-    const fields = rowFields(schema, row);
+    const { fields, pivotableFields } = rowFields(schema, row);
     const eventTime = formatEventTime(fields["_time"] ?? fields.timestamp ?? null);
     const rawValue = fields["_raw"];
     return {
@@ -171,6 +207,7 @@ function rowsToEvents(schema: ResultSchema, rows: ResultRow[]): DemoEvent[] {
       timeLabel: eventTime.label,
       raw: typeof rawValue === "string" ? rawValue : JSON.stringify(fields),
       fields,
+      pivotableFields,
     };
   });
 }
@@ -212,16 +249,136 @@ export function deriveFields(events: DemoEvent[]): DemoField[] {
     });
 }
 
-function numberField(fields: Record<string, DemoScalar>, candidates: string[]): number | null {
-  for (const candidate of candidates) {
-    const value = fields[candidate];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value === "string" && value.trim().length > 0) {
-      const parsed = Number(value);
-      if (Number.isFinite(parsed)) return parsed;
-    }
+interface ChartNumericValue {
+  coordinate: number;
+  /** Exact source text when the coordinate is only an approximation. */
+  exactText?: string;
+  /** Available for exact aggregation even when each individual integer is safe. */
+  exactInteger?: bigint;
+  approximate: boolean;
+}
+
+function integerText(value: string): bigint | undefined {
+  if (!/^[+-]?\d+$/.test(value.trim())) return undefined;
+  try {
+    return BigInt(value.trim());
+  } catch {
+    return undefined;
   }
-  return null;
+}
+
+interface ExactRational {
+  numerator: bigint;
+  denominator: bigint;
+}
+
+function decimalRational(value: string): ExactRational | null {
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i.exec(value.trim());
+  if (match === null) return null;
+  const combinedDigits = `${match[2]}${match[3] ?? ""}`;
+  if (/^0+$/.test(combinedDigits)) return { numerator: 0n, denominator: 1n };
+  if (combinedDigits.length > 768) return null;
+  const exponent = Number(match[4] ?? "0");
+  if (!Number.isSafeInteger(exponent)) return null;
+  const scale = (match[3]?.length ?? 0) - exponent;
+  if (Math.abs(scale) > 768) return null;
+  const sign = match[1] === "-" ? -1n : 1n;
+  const digits = BigInt(combinedDigits);
+  return scale >= 0
+    ? { numerator: sign * digits, denominator: 10n ** BigInt(scale) }
+    : { numerator: sign * digits * (10n ** BigInt(-scale)), denominator: 1n };
+}
+
+function numberRational(value: number): ExactRational | null {
+  if (!Number.isFinite(value)) return null;
+  if (value === 0) return { numerator: 0n, denominator: 1n };
+  const bytes = new ArrayBuffer(8);
+  const view = new DataView(bytes);
+  view.setFloat64(0, value, false);
+  const high = view.getUint32(0, false);
+  const low = view.getUint32(4, false);
+  const negative = (high >>> 31) === 1;
+  const exponentBits = (high >>> 20) & 0x7ff;
+  const fraction = (BigInt(high & 0x000f_ffff) << 32n) | BigInt(low);
+  const significand = exponentBits === 0 ? fraction : (1n << 52n) | fraction;
+  const exponent = exponentBits === 0 ? -1074 : exponentBits - 1023 - 52;
+  const signedSignificand = negative ? -significand : significand;
+  return exponent >= 0
+    ? { numerator: signedSignificand << BigInt(exponent), denominator: 1n }
+    : { numerator: signedSignificand, denominator: 1n << BigInt(-exponent) };
+}
+
+function decimalCoordinateIsProvablyExact(source: string, coordinate: number): boolean {
+  const decimal = decimalRational(source);
+  const binary = numberRational(coordinate);
+  return decimal !== null
+    && binary !== null
+    && decimal.numerator * binary.denominator === binary.numerator * decimal.denominator;
+}
+
+export function exactDurationNumericText(seconds: bigint, nanos: number): string {
+  const totalNanos = seconds * 1_000_000_000n + BigInt(nanos);
+  const negative = totalNanos < 0n;
+  const absoluteNanos = negative ? -totalNanos : totalNanos;
+  const wholeSeconds = absoluteNanos / 1_000_000_000n;
+  const fractionalNanos = absoluteNanos % 1_000_000_000n;
+  return `${negative ? "-" : ""}${wholeSeconds.toString()}.${fractionalNanos.toString().padStart(9, "0")}`;
+}
+
+function numericTextValue(source: string): ChartNumericValue | null {
+  const trimmed = source.trim();
+  if (trimmed.length === 0 || decimalRational(trimmed) === null) return null;
+  const coordinate = Number(trimmed);
+  if (!Number.isFinite(coordinate)) return null;
+  const exactInteger = integerText(trimmed);
+  const approximate = !decimalCoordinateIsProvablyExact(trimmed, coordinate)
+    || (Number.isInteger(coordinate) && !Number.isSafeInteger(coordinate));
+  return {
+    coordinate,
+    exactText: approximate ? trimmed : undefined,
+    exactInteger,
+    approximate,
+  };
+}
+
+/**
+ * Convert a typed server value into a finite plotting coordinate without
+ * discarding its authoritative representation. Tables continue to use
+ * `typedValueToJSON`, so large integer cells remain exact strings.
+ */
+function chartNumericValue(value: TypedValue | undefined): ChartNumericValue | null {
+  switch (value?.kind?.$case) {
+    case "sint64Value":
+    case "uint64Value": {
+      const coordinate = Number(value.kind.value);
+      if (!Number.isFinite(coordinate)) return null;
+      const approximate = !Number.isSafeInteger(coordinate);
+      return {
+        coordinate,
+        exactText: approximate ? value.kind.value.toString() : undefined,
+        exactInteger: value.kind.value,
+        approximate,
+      };
+    }
+    case "doubleValue":
+      return Number.isFinite(value.kind.value)
+        ? { coordinate: value.kind.value, approximate: false }
+        : null;
+    case "decimalValue": {
+      return numericTextValue(value.kind.value.value);
+    }
+    case "stringValue": {
+      return numericTextValue(value.kind.value);
+    }
+    case "durationValue": {
+      const source = exactDurationNumericText(value.kind.value.seconds, value.kind.value.nanos);
+      const numeric = numericTextValue(source);
+      if (numeric === null) return null;
+      return numeric;
+    }
+    default:
+      return null;
+  }
 }
 
 function numericValueType(valueType: ValueType): boolean {
@@ -242,6 +399,7 @@ function numericCell(value: TypedValue | undefined): boolean {
 
 function statisticsTableFromRows(schema: ResultSchema, rows: ResultRow[]): WorkspaceStatisticsTable | null {
   if (schema.columns.length === 0) return null;
+  const metricIndex = preferredMetricIndex(schema, rows);
   const keyCounts = new Map<string, number>();
   const columns = schema.columns.map((column, sourceIndex) => {
     const fieldName = column.fieldName || `column_${sourceIndex + 1}`;
@@ -265,7 +423,9 @@ function statisticsTableFromRows(schema: ResultSchema, rows: ResultRow[]): Works
       valueType: column.valueType,
       semanticType: column.semanticType,
       numeric,
-      pivotable: !numeric
+      pivotable: sourceIndex !== metricIndex
+        && column.semanticType !== ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC
+        && !AGGREGATE_FIELD_NAME.test(fieldName)
         && !timeLike
         && column.valueType !== ValueType.VALUE_TYPE_LIST
         && column.valueType !== ValueType.VALUE_TYPE_OBJECT
@@ -278,6 +438,10 @@ function statisticsTableFromRows(schema: ResultSchema, rows: ResultRow[]): Works
     rows: rows.map((row, rowIndex) => ({
       id: `${row.rowId || `row-${row.ordinal.toString()}`}-${rowIndex}`,
       values: Object.fromEntries(columns.map((column) => [column.key, typedValueToJSON(row.cells[column.sourceIndex])])),
+      pivotValues: Object.fromEntries(columns.map((column) => {
+        const value = row.cells[column.sourceIndex];
+        return [column.key, typedValueIsPivotable(value) ? typedValueToScalar(value) : undefined];
+      })),
     })),
   };
 }
@@ -349,21 +513,21 @@ function statisticsFromRows(schema: ResultSchema, rows: ResultRow[]): { rows: Wo
     /^avg(?:erage)?\(/i.test(column.fieldName) || /avg.*duration/i.test(column.fieldName),
   );
   const chartRows = rows.flatMap((row) => {
-    const count = numberField(
-      { metric: typedValueToScalar(row.cells[metricIndex]) },
-      ["metric"],
-    );
-    if (count === null || count < 0) return [];
+    const metric = chartNumericValue(row.cells[metricIndex]);
+    if (metric === null || metric.coordinate < 0) return [];
     const dimensionValue = typedValueToJSON(row.cells[dimensionIndex]);
     if (Array.isArray(dimensionValue) || (typeof dimensionValue === "object" && dimensionValue !== null)) return [];
-    const average = averageIndex < 0
-      ? Number.NaN
-      : numberField({ average: typedValueToScalar(row.cells[averageIndex]) }, ["average"]) ?? Number.NaN;
+    const average = averageIndex < 0 ? null : chartNumericValue(row.cells[averageIndex]);
     return [{
+      id: row.rowId || `category-${row.ordinal.toString()}`,
       level: dimensionValue === null ? "(none)" : String(dimensionValue),
-      count,
+      pivotValue: typedValueToScalar(row.cells[dimensionIndex]),
+      pivotable: typedValueIsPivotable(row.cells[dimensionIndex]),
+      count: metric.coordinate,
+      exactCount: metric.exactText,
+      coordinateApproximate: metric.approximate || undefined,
       percent: "0.0%",
-      avgDuration: average,
+      avgDuration: average?.coordinate ?? Number.NaN,
       measureLabel: metricColumn.displayName || metricColumn.fieldName,
     } satisfies WorkspaceStatistic];
   });
@@ -400,46 +564,83 @@ function statisticsFromEvents(events: DemoEvent[]): WorkspaceStatistic[] {
   }));
 }
 
-function timelineFromRows(schema: ResultSchema, rows: ResultRow[]): TimelinePoint[] {
-  const timeName = schema.columns.find((column) => /^_?time$/i.test(column.fieldName))?.fieldName;
-  const countName = schema.columns.find((column) => /^(?:count|count\(.+\))$/i.test(column.fieldName))?.fieldName;
-  if (!timeName) return [];
-  const decodedRows = rows.map((row) => rowFields(schema, row));
-  const numericNames = countName === undefined
-    ? schema.columns
-      .map((column) => column.fieldName)
-      .filter((name) => name !== timeName && decodedRows.some((fields) => numberField(fields, [name]) !== null))
-    : [countName];
-  if (numericNames.length === 0) return [];
+function timelineFromRows(
+  schema: ResultSchema,
+  rows: ResultRow[],
+  knownBucketWidthMs?: number,
+): TimelinePoint[] {
+  const timeIndex = schema.columns.findIndex((column) => /^_?time$/i.test(column.fieldName));
+  if (timeIndex < 0) return [];
+  const timeName = schema.columns[timeIndex].fieldName;
+  const countIndex = schema.columns.findIndex((column) => /^(?:count|count\(.+\))$/i.test(column.fieldName));
+  const decodedRows = rows.map((row) => rowFields(schema, row).fields);
+  const numericIndexes = countIndex < 0
+    ? schema.columns.flatMap((column, index) =>
+      index !== timeIndex && rows.some((row) => chartNumericValue(row.cells[index]) !== null)
+        ? [index]
+        : [],
+    )
+    : [countIndex];
+  if (numericIndexes.length === 0) return [];
   const points = rows.flatMap((row, index) => {
     const fields = decodedRows[index];
     const rawTime = fields[timeName];
     const date = typeof rawTime === "string" || typeof rawTime === "number" ? new Date(rawTime) : new Date(Number.NaN);
-    const series = Object.fromEntries(numericNames.flatMap((name) => {
-      const value = numberField(fields, [name]);
-      return value === null ? [] : [[name, value]];
-    }));
-    const values = Object.values(series);
-    if (Number.isNaN(date.valueOf()) || values.length === 0) return [];
+    const chartValues = numericIndexes.flatMap((sourceIndex) => {
+      const value = chartNumericValue(row.cells[sourceIndex]);
+      return value === null
+        ? []
+        : [{ name: schema.columns[sourceIndex].fieldName, value }];
+    });
+    if (Number.isNaN(date.valueOf()) || chartValues.length === 0) return [];
+    const series = Object.fromEntries(chartValues.map(({ name, value }) => [name, value.coordinate]));
+    const exactSeries = Object.fromEntries(chartValues.flatMap(({ name, value }) =>
+      value.exactText === undefined ? [] : [[name, value.exactText]],
+    ));
+    const count = chartValues.reduce((sum, item) => sum + item.value.coordinate, 0);
+    if (!Number.isFinite(count)) return [];
+    const exactIntegers = chartValues.map((item) => item.value.exactInteger);
+    const exactIntegerTotal = exactIntegers.every((value) => value !== undefined)
+      ? exactIntegers.reduce((sum, value) => sum + (value ?? 0n), 0n)
+      : undefined;
+    const coordinateApproximate = chartValues.some((item) => item.value.approximate)
+      || (exactIntegerTotal !== undefined && !Number.isSafeInteger(count));
     return [{
       id: row.rowId || `bucket-${index}`,
       label: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(date),
-      count: values.reduce((sum, value) => sum + value, 0),
+      count,
       series,
+      exactCount: coordinateApproximate && exactIntegerTotal !== undefined
+        ? exactIntegerTotal.toString()
+        : coordinateApproximate && chartValues.length === 1
+          ? chartValues[0].value.exactText
+          : undefined,
+      exactSeries: Object.keys(exactSeries).length > 0 ? exactSeries : undefined,
+      coordinateApproximate: coordinateApproximate || undefined,
       earliest: date.toISOString(),
     } satisfies TimelinePoint];
   });
   return points.map((point, index) => {
     const currentTime = point.earliest ? new Date(point.earliest).valueOf() : Number.NaN;
     const previousTime = points[index - 1]?.earliest ? new Date(points[index - 1].earliest as string).valueOf() : Number.NaN;
-    const inferredWidth = Number.isFinite(currentTime - previousTime) ? currentTime - previousTime : 60_000;
+    const inferredWidth = Number.isFinite(currentTime - previousTime)
+      ? currentTime - previousTime
+      : knownBucketWidthMs;
+    const nextEarliest = points[index + 1]?.earliest;
     return {
       id: point.id,
       label: point.label,
       count: point.count,
       series: point.series,
+      exactCount: point.exactCount,
+      exactSeries: point.exactSeries,
+      coordinateApproximate: point.coordinateApproximate,
       earliest: point.earliest,
-      latest: points[index + 1]?.earliest ?? new Date(currentTime + Math.max(1, inferredWidth)).toISOString(),
+      latest: nextEarliest ?? (
+        inferredWidth !== undefined && Number.isFinite(inferredWidth) && inferredWidth > 0
+          ? new Date(currentTime + inferredWidth).toISOString()
+          : undefined
+      ),
     };
   });
 }
@@ -485,15 +686,37 @@ export function timechartRowsForExport(points: TimelinePoint[]): Record<string, 
     _time: point.earliest ?? point.label,
     ...Object.fromEntries(fields.map((field) => [
       field,
-      hasExplicitSeries ? point.series?.[field] ?? null : point.count,
+      hasExplicitSeries
+        ? point.exactSeries?.[field] ?? point.series?.[field] ?? null
+        : point.exactCount ?? point.count,
     ])),
   }));
 }
 
-export function adaptSearchResults(schema: ResultSchema, rows: ResultRow[], timechart: boolean): AdaptedSearchResults {
+export function timechartSpanMilliseconds(spl: string): number | null {
+  const match = /(?:^|\|)\s*timechart\s+span\s*=\s*(\d+)(s|m|h)\b/i.exec(spl);
+  if (match === null) return null;
+  const magnitude = Number(match[1]);
+  const multiplier = match[2].toLowerCase() === "s"
+    ? 1_000
+    : match[2].toLowerCase() === "m"
+      ? 60_000
+      : 3_600_000;
+  const milliseconds = magnitude * multiplier;
+  return Number.isSafeInteger(milliseconds) && milliseconds > 0 ? milliseconds : null;
+}
+
+export function adaptSearchResults(
+  schema: ResultSchema,
+  rows: ResultRow[],
+  timechart: boolean,
+  timechartBucketWidthMs?: number,
+): AdaptedSearchResults {
   const events = rowsToEvents(schema, rows);
   const transformedStatistics = statisticsFromRows(schema, rows);
-  const timeline = timechart ? timelineFromRows(schema, rows) : timelineFromEvents(events);
+  const timeline = timechart
+    ? timelineFromRows(schema, rows, timechartBucketWidthMs)
+    : timelineFromEvents(events);
   const hasRawEventColumn = schema.columns.some((column) => column.semanticType === ColumnSemanticType.COLUMN_SEMANTIC_TYPE_RAW || column.fieldName === "_raw");
   const statisticsTable = !timechart
     && schema.resultKind !== ResultSetKind.RESULT_SET_KIND_EVENTS
@@ -559,6 +782,14 @@ function compareNumericValues(left: WorkspaceStatisticsValue, right: WorkspaceSt
   const rightNumber = Number(right);
   if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) return leftNumber - rightNumber;
   return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
+}
+
+/** Compare lossless numeric text without first coercing it to IEEE-754. */
+export function compareWorkspaceNumericValues(
+  left: WorkspaceStatisticsValue,
+  right: WorkspaceStatisticsValue,
+): number {
+  return compareNumericValues(left, right);
 }
 
 /** Compare typed statistics cells without coercing lossless 64-bit or decimal strings to IEEE-754 numbers. */

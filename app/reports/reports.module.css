@@ -134,6 +134,20 @@
   padding: 2px 5px;
 }
 
+.loadedCountLabel {
+  font-size: 8px;
+  font-weight: 600;
+}
+
+.loadedOnlyNote {
+  background: #f8f9f9;
+  border-bottom: 1px solid #d9dee0;
+  color: #68767e;
+  font-size: 9px;
+  margin: 0;
+  padding: 6px 10px;
+}
+
 .toolbar {
   align-items: end;
   background: #f8f9f9;
@@ -142,6 +156,10 @@
   gap: 8px;
   grid-template-columns: minmax(260px, 1fr) 145px 145px 174px;
   padding: 9px 10px;
+}
+
+.backendToolbar {
+  grid-template-columns: minmax(260px, 1fr) 174px;
 }
 
 .searchField {
@@ -237,6 +255,13 @@
 .table th:nth-child(5) { width: 90px; }
 .table th:nth-child(6) { width: 82px; }
 .table th:last-child { width: 116px; }
+
+.backendTable th:first-child { width: 42%; }
+.backendTable th:nth-child(2) { width: 92px; }
+.backendTable th:nth-child(3) { width: 130px; }
+.backendTable th:nth-child(4) { width: 210px; }
+.backendTable th:nth-child(5) { width: 150px; }
+.backendTable th:last-child { width: 116px; }
 
 .table td {
   border-bottom: 1px solid #e0e5e7;
@@ -444,17 +469,23 @@
   margin: 5px 0 12px;
 }
 
-.empty button {
+.empty button,
+.empty a {
   background: transparent;
   border: 0;
   color: #28769c;
   font-size: 10px;
   font-weight: 700;
+  text-decoration: none;
 }
 
 @media (max-width: 980px) {
   .toolbar {
     grid-template-columns: minmax(240px, 1fr) repeat(3, minmax(120px, 0.55fr));
+  }
+
+  .backendToolbar {
+    grid-template-columns: minmax(240px, 1fr) 174px;
   }
 
   .table th:nth-child(3),
@@ -476,6 +507,10 @@
   .toolbar {
     align-items: stretch;
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .backendToolbar {
+    grid-template-columns: 1fr;
   }
 
   .searchField {
@@ -522,7 +557,23 @@
   }
 
   .table thead {
-    display: none;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
+
+  .table thead tr {
+    border: 0;
+    display: table-row;
+    padding: 0;
+  }
+
+  .table thead th:nth-child(3) {
+    display: table-cell;
   }
 
   .table tbody {
@@ -568,6 +619,15 @@
     border-bottom: 1px solid #e3e7e9 !important;
     grid-column: 1 / -1;
     padding: 3px 48px 11px 4px !important;
+  }
+
+  .backendTable .reportColumn {
+    padding-right: 4px !important;
+  }
+
+  .backendTable td code {
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .reportCell a {

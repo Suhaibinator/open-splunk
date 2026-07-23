@@ -1,3 +1,9 @@
+import {
+  isSplOffsetInDoubleQuotedValue,
+  isSupportedSplPipelineCommand,
+  scanSplStructure,
+} from "./spl-syntax";
+
 export type DiagnosticKind = "empty" | "unsupported" | "unclosed-quote";
 
 export interface SplDiagnostic {
@@ -20,47 +26,6 @@ export interface CompletionContext {
   followsPipeline: boolean;
 }
 
-interface SplStructure {
-  pipes: number[];
-  unclosedQuote: { character: '"' | "'"; offset: number } | null;
-}
-
-const UNSUPPORTED_COMMANDS = new Set(["join", "map", "subsearch", "transaction"]);
-
-function scanStructure(spl: string): SplStructure {
-  const pipes: number[] = [];
-  let quote: '"' | "'" | null = null;
-  let quoteOffset = -1;
-  let escaped = false;
-
-  for (let offset = 0; offset < spl.length; offset += 1) {
-    const character = spl[offset];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (quote !== null) {
-      if (character === quote) quote = null;
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      quoteOffset = offset;
-      continue;
-    }
-    if (character === "|") pipes.push(offset);
-  }
-
-  return {
-    pipes,
-    unclosedQuote: quote === null ? null : { character: quote, offset: quoteOffset },
-  };
-}
-
 function sourceLocation(spl: string, offset: number): { line: number; column: number } {
   const before = spl.slice(0, Math.max(0, offset));
   const lines = before.split("\n");
@@ -68,6 +33,14 @@ function sourceLocation(spl: string, offset: number): { line: number; column: nu
     line: lines.length,
     column: Array.from(lines.at(-1) ?? "").length + 1,
   };
+}
+
+function pipelineCommandToken(stage: string): { token: string; offset: number } | null {
+  const match = /^(\p{White_Space}*)([^\p{White_Space}|(),=!<>"]+)/u.exec(stage);
+  const token = match?.[2];
+  return token === undefined
+    ? null
+    : { token: token.toLowerCase(), offset: match?.[1].length ?? 0 };
 }
 
 export function getQueryDiagnostic(spl: string): SplDiagnostic | null {
@@ -82,43 +55,43 @@ export function getQueryDiagnostic(spl: string): SplDiagnostic | null {
     };
   }
 
-  const structure = scanStructure(spl);
+  const structure = scanSplStructure(spl);
   if (structure.unclosedQuote !== null) {
-    const { character, offset } = structure.unclosedQuote;
+    const { offset } = structure.unclosedQuote;
     const location = sourceLocation(spl, offset);
     return {
       kind: "unclosed-quote",
-      token: character,
-      message: `Expected a closing ${character === '"' ? "double" : "single"} quotation mark.`,
+      token: '"',
+      message: "Expected a closing double quotation mark.",
       line: location.line,
       column: location.column,
       suggestion: "Close the quoted value before running the search.",
-      actionLabel: `Add closing ${character}`,
-      quote: character,
+      actionLabel: 'Add closing "',
+      quote: '"',
     };
   }
 
   const boundaries = [-1, ...structure.pipes, spl.length];
-  for (let stageIndex = 0; stageIndex < boundaries.length - 1; stageIndex += 1) {
+  // The source before the first pipe is a search expression, not a command.
+  // Validate every actual pipeline stage against the backend parser's command
+  // switch so the editor never advertises or locally accepts a stale command.
+  for (let stageIndex = 1; stageIndex < boundaries.length - 1; stageIndex += 1) {
     const pipeBefore = boundaries[stageIndex];
     const stageEnd = boundaries[stageIndex + 1];
     const contentStart = pipeBefore + 1;
     const stage = spl.slice(contentStart, stageEnd);
-    const commandMatch = /^\s*([A-Za-z][A-Za-z0-9_-]*)(?=\s|$)/.exec(stage);
-    const token = commandMatch?.[1]?.toLowerCase();
-    if (token === undefined || !UNSUPPORTED_COMMANDS.has(token)) continue;
+    const command = pipelineCommandToken(stage);
+    if (command === null || isSupportedSplPipelineCommand(command.token)) continue;
 
-    const tokenOffset = contentStart + (commandMatch?.[0].lastIndexOf(commandMatch[1]) ?? 0);
+    const tokenOffset = contentStart + command.offset;
     const location = sourceLocation(spl, tokenOffset);
     return {
       kind: "unsupported",
-      token,
-      message: `Unsupported command “${token}” at pipeline stage ${stageIndex + 1}.`,
+      token: command.token,
+      message: `Unsupported command “${command.token}” at pipeline stage ${stageIndex}.`,
       line: location.line,
       column: location.column,
-      suggestion: token === "transaction"
-        ? "Use stats count by a correlation field, then inspect matching events."
-        : "Remove this stage or use a supported transforming command.",
+      suggestion: unsupportedCommandSuggestion(command.token),
       actionLabel: "Remove stage",
       removeStart: pipeBefore < 0 ? 0 : pipeBefore,
       removeEnd: stageEnd,
@@ -126,6 +99,16 @@ export function getQueryDiagnostic(spl: string): SplDiagnostic | null {
   }
 
   return null;
+}
+
+function unsupportedCommandSuggestion(command: string): string {
+  if (command === "transaction") {
+    return "Use stats count by a correlation field, then inspect matching events.";
+  }
+  if (command === "chart") {
+    return "Use stats for aggregate tables or timechart for count-over-time series.";
+  }
+  return "Remove this stage or use a supported command such as search, stats, top, rare, or timechart.";
 }
 
 export function applyDiagnosticFix(spl: string, diagnostic: SplDiagnostic): string {
@@ -147,7 +130,7 @@ export function applyDiagnosticFix(spl: string, diagnostic: SplDiagnostic): stri
 export function completionContextAt(spl: string, cursor: number): CompletionContext | null {
   const safeCursor = Math.max(0, Math.min(cursor, spl.length));
   const prefix = spl.slice(0, safeCursor);
-  const structure = scanStructure(prefix);
+  const structure = scanSplStructure(prefix);
   if (structure.unclosedQuote !== null) return null;
 
   const lastPipe = structure.pipes.at(-1) ?? -1;
@@ -165,6 +148,5 @@ export function completionContextAt(spl: string, cursor: number): CompletionCont
 }
 
 export function isCursorInQuotedValue(spl: string, cursor: number): boolean {
-  const safeCursor = Math.max(0, Math.min(cursor, spl.length));
-  return scanStructure(spl.slice(0, safeCursor)).unclosedQuote !== null;
+  return isSplOffsetInDoubleQuotedValue(spl, cursor);
 }

@@ -3,21 +3,33 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 
+import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { PageHeading } from "../_components/product-shell";
+import { BackendActivityConsole } from "./backend-activity-console";
 
 type ActivityFilter = "all" | "running" | "completed" | "failed";
 
 const JOBS = [
   { id: "scheduler_admin_search_147", spl: "index=gradethis level=ERROR | stats count by service", status: "completed", owner: "Administrator", runtime: "1.82 s", events: "1,432", started: "7 min ago" },
-  { id: "scheduler_admin_search_146", spl: "index=gradethis | timechart span=5m p95(duration_ms)", status: "running", owner: "Administrator", runtime: "8.34 s", events: "9,812", started: "Now" },
+  { id: "scheduler_admin_search_146", spl: "index=gradethis | timechart span=5m count by level", status: "running", owner: "Administrator", runtime: "8.34 s", events: "9,812", started: "Now" },
   { id: "scheduler_admin_search_145", spl: "index=platform logger=notification-worker retry_count>0", status: "completed", owner: "Administrator", runtime: "0.94 s", events: "391", started: "34 min ago" },
   { id: "scheduler_admin_search_144", spl: "index=payments trace_id=\"8e1c71a2\"", status: "failed", owner: "Administrator", runtime: "0.12 s", events: "0", started: "Yesterday" },
   { id: "scheduler_admin_search_143", spl: "index=gradethis status>=500 | top path", status: "completed", owner: "Administrator", runtime: "2.17 s", events: "812", started: "Yesterday" },
 ];
 
-export function ActivityConsole() {
+interface ActivityConsoleProps {
+  dataMode: SearchDataMode;
+  apiBaseUrl: string;
+}
+
+export function ActivityConsole({ dataMode, apiBaseUrl }: ActivityConsoleProps) {
+  if (dataMode === "backend") return <BackendActivityConsole apiBaseUrl={apiBaseUrl} />;
+  return <DemoActivityConsole />;
+}
+
+function DemoActivityConsole() {
   const [filter, setFilter] = useState<ActivityFilter>("all");
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -46,7 +58,7 @@ export function ActivityConsole() {
       <section className="suite-card activity-jobs-card">
         <header className="activity-tabs-row">
           <div className="activity-filter-group" aria-label="Job status filter">{(["all", "running", "completed", "failed"] as const).map((item) => <button className={`activity-filter-button${filter === item ? " active" : ""}`} aria-pressed={filter === item} type="button" onClick={() => setFilter(item)} key={item}>{item[0].toUpperCase() + item.slice(1)}{item === "running" ? <span>1</span> : null}</button>)}</div>
-          <label><span className="sr-only">Filter activity</span><i>⌕</i><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter SPL or job ID" /></label>
+          <label><span className="sr-only">Filter activity</span><i aria-hidden="true">⌕</i><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter SPL or job ID" /></label>
         </header>
         <div className="responsive-table-wrap"><table className="product-table activity-table"><thead><tr><th scope="col">Search</th><th scope="col">Status</th><th scope="col">Owner</th><th scope="col">Runtime</th><th scope="col">Events</th><th scope="col">Started</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{filtered.map((job) => <tr key={job.id}><td><Link href={searchLaunchHref(job.spl)} aria-label={`Open search job ${job.id}`}><strong>{job.spl}</strong><code>{job.id}</code></Link></td><td><span className={`status-label status-label--${job.status === "completed" ? "complete" : job.status}`}><i />{job.status[0].toUpperCase() + job.status.slice(1)}</span></td><td>{job.owner}</td><td>{job.runtime}</td><td className="numeric-data">{job.events}</td><td>{job.started}</td><td><Link className="table-action" href={searchLaunchHref(job.spl)}>Open ›</Link></td></tr>)}</tbody></table></div>
         {filtered.length === 0 ? <div className="product-empty-state"><span>⌕</span><strong>No matching activity</strong><p>Try another status or clear the filter.</p><button type="button" onClick={() => { setFilter("all"); setQuery(""); }}>Clear filters</button></div> : null}

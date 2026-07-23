@@ -4,10 +4,12 @@ import type { FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
+import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../search-workspace/modal";
+import { BackendAdminConsole } from "./backend-admin-console";
 
 type AdminSection = "overview" | "indexes" | "collectors" | "access" | "server";
 
@@ -34,7 +36,17 @@ const NAV_ITEMS: Array<{ key: AdminSection; label: string; detail: string; icon:
   { key: "server", label: "Server settings", detail: "Limits and preferences", icon: "⚙" },
 ];
 
-export function AdminConsole() {
+interface AdminConsoleProps {
+  dataMode: SearchDataMode;
+  apiBaseUrl: string;
+}
+
+export function AdminConsole({ dataMode, apiBaseUrl }: AdminConsoleProps) {
+  if (dataMode === "backend") return <BackendAdminConsole apiBaseUrl={apiBaseUrl} />;
+  return <DemoAdminConsole />;
+}
+
+function DemoAdminConsole() {
   const [section, setSection] = useState<AdminSection>("overview");
   const [indexes, setIndexes] = useState(INITIAL_INDEXES);
   const [filter, setFilter] = useState("");

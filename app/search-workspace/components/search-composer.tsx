@@ -13,8 +13,10 @@ import { useEffect, useRef, useState } from "react";
 import { resolveAbsoluteTimeRange } from "@/lib/search/backend-data";
 import type { SplDiagnostic } from "@/lib/search/spl-editor";
 
+import { installModalSurface } from "../../_components/modal-surface";
 import { TIME_PRESETS } from "../constants";
 import type { ModalName, TimePickerSection, TimeRange } from "../model";
+import { serverTimeRangeValidationError } from "../time-range";
 import { syntaxTokens } from "../workspace-utils";
 
 interface CompletionItem {
@@ -27,6 +29,7 @@ interface SearchComposerProps {
   absoluteEnd: string;
   absoluteStart: string;
   absoluteTimeInvalid: boolean;
+  backendTimeSyntax: boolean;
   completionIndex: number;
   completionOpen: boolean;
   diagnostic: SplDiagnostic | null;
@@ -38,10 +41,12 @@ interface SearchComposerProps {
   gutterLinesRef: RefObject<HTMLDivElement | null>;
   highlightRef: RefObject<HTMLPreElement | null>;
   isRunning: boolean;
+  launchPending: boolean;
   modal: ModalName | null;
   query: string;
   relativeAmount: number;
   relativeUnit: "m" | "h" | "d";
+  runDisabledReason: string | null;
   timePickerRef: RefObject<HTMLDivElement | null>;
   timePickerSection: TimePickerSection;
   timeRange: TimeRange;
@@ -71,6 +76,7 @@ export function SearchComposer({
   absoluteEnd,
   absoluteStart,
   absoluteTimeInvalid,
+  backendTimeSyntax,
   completionIndex,
   completionOpen,
   diagnostic,
@@ -82,10 +88,12 @@ export function SearchComposer({
   gutterLinesRef,
   highlightRef,
   isRunning,
+  launchPending,
   modal,
   query,
   relativeAmount,
   relativeUnit,
+  runDisabledReason,
   timePickerRef,
   timePickerSection,
   timeRange,
@@ -114,12 +122,21 @@ export function SearchComposer({
   const [mobileTimePicker, setMobileTimePicker] = useState(false);
   const [localTimeZone, setLocalTimeZone] = useState("Local browser time");
   closeTimePickerRef.current = onCloseTimePicker;
-  let draftTimeRangeInvalid = false;
-  try {
-    resolveAbsoluteTimeRange(draftTimeRange.earliest, draftTimeRange.latest);
-  } catch {
-    draftTimeRangeInvalid = true;
+  let draftTimeRangeInvalid = backendTimeSyntax
+    ? serverTimeRangeValidationError(draftTimeRange) !== null
+    : false;
+  if (!backendTimeSyntax) {
+    try {
+      resolveAbsoluteTimeRange(draftTimeRange.earliest, draftTimeRange.latest);
+    } catch {
+      draftTimeRangeInvalid = true;
+    }
   }
+  const availablePresets = backendTimeSyntax
+    ? TIME_PRESETS.filter((preset) =>
+      serverTimeRangeValidationError(preset) === null
+    )
+    : TIME_PRESETS;
 
   useEffect(() => {
     const phoneViewport = window.matchMedia("(max-width: 760px)");
@@ -133,58 +150,19 @@ export function SearchComposer({
   useEffect(() => {
     if (modal !== "time" || !mobileTimePicker) return;
     const dialog = document.querySelector<HTMLElement>("[data-testid='time-picker-dialog']");
+    if (dialog === null) return;
     const trigger = document.querySelector<HTMLButtonElement>("[data-testid='time-range-button']");
-    const previousBodyOverflow = document.body.style.overflow;
-    const inertedElements: HTMLElement[] = [];
-    document.body.style.overflow = "hidden";
-    let current = dialog;
-    while (current !== null && current.parentElement !== null && current !== document.body) {
-      const parent = current.parentElement;
-      for (const sibling of parent.children) {
-        if (sibling !== current
-          && sibling instanceof HTMLElement
-          && !sibling.classList.contains("time-picker-mobile-backdrop")
-          && !sibling.inert) {
-          sibling.inert = true;
-          inertedElements.push(sibling);
-        }
-      }
-      current = parent;
-    }
-    window.requestAnimationFrame(() => dialog?.querySelector<HTMLElement>("button, input, select")?.focus());
-
-    function trapDialogFocus(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeTimePickerRef.current();
-        return;
-      }
-      if (event.key !== "Tab" || dialog === null) return;
-      const controls = Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])'));
-      const first = controls[0];
-      const last = controls.at(-1);
-      if (first === undefined || last === undefined) return;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
-
-    document.addEventListener("keydown", trapDialogFocus);
-    return () => {
-      document.body.style.overflow = previousBodyOverflow;
-      for (const element of inertedElements) element.inert = false;
-      document.removeEventListener("keydown", trapDialogFocus);
-      trigger?.focus();
-    };
+    return installModalSurface({
+      container: dialog,
+      excludedSiblingClassNames: ["time-picker-mobile-backdrop"],
+      onEscape: () => closeTimePickerRef.current(),
+      returnFocus: trigger,
+    });
   }, [mobileTimePicker, modal]);
 
   return (
     <>
-      <section className="search-composer" aria-label="SPL search">
+      <section className="search-composer" aria-label="SPL search" aria-busy={launchPending}>
         <div
           className={`spl-editor${editorFocused ? " focused" : ""}${diagnostic === null ? "" : " has-error"}`}
         >
@@ -206,6 +184,7 @@ export function SearchComposer({
             aria-controls={completionOpen ? "spl-completion-list" : undefined}
             aria-activedescendant={completionOpen && filteredCompletions.length > 0 ? `spl-completion-${completionIndex}` : undefined}
             value={query}
+            disabled={launchPending}
             rows={2}
             spellCheck={false}
             autoCapitalize="off"
@@ -262,6 +241,7 @@ export function SearchComposer({
             aria-haspopup="dialog"
             aria-expanded={modal === "time"}
             aria-controls={modal === "time" ? "time-range-popover" : undefined}
+            disabled={launchPending}
             onClick={() => {
               onCompletionOpenChange(false);
               if (modal === "time") {
@@ -305,7 +285,7 @@ export function SearchComposer({
                 </aside>
                 <div className="time-picker-content">
                   {timePickerSection === "presets" ? (
-                    <><h3>Common time ranges</h3><div className="preset-grid">{TIME_PRESETS.map((preset) => (
+                    <><h3>Common time ranges</h3><div className="preset-grid">{availablePresets.map((preset) => (
                       <button className={draftTimeRange.label === preset.label ? "selected" : ""} type="button" key={preset.label} onClick={() => onDraftTimeRangeChange(preset)}><span>{preset.label}</span>{draftTimeRange.label === preset.label ? <span aria-hidden="true">✓</span> : null}</button>
                     ))}</div></>
                   ) : null}
@@ -331,12 +311,16 @@ export function SearchComposer({
                   ) : null}
                   {timePickerSection === "advanced" ? (
                     <div className="time-form-section">
-                      <h3>Advanced time modifiers</h3><p>Enter SPL relative modifiers or ISO timestamps.</p>
+                      <h3>Advanced time modifiers</h3><p>{backendTimeSyntax
+                        ? "Enter RFC 3339 timestamps, now, or a fixed -N[s|m|h|d] offset."
+                        : "Enter SPL relative modifiers or ISO timestamps."}</p>
                       <div className="absolute-time-row">
                         <label><span>Earliest</span><input value={draftTimeRange.earliest} onChange={(event) => onDraftTimeRangeChange({ ...draftTimeRange, label: "Custom time range", earliest: event.target.value })} /></label>
                         <label><span>Latest</span><input value={draftTimeRange.latest} onChange={(event) => onDraftTimeRangeChange({ ...draftTimeRange, label: "Custom time range", latest: event.target.value })} /></label>
                       </div>
-                      {draftTimeRangeInvalid ? <p className="time-validation" role="alert">Enter valid time modifiers and make earliest precede latest.</p> : null}
+                      {draftTimeRangeInvalid ? <p className="time-validation" role="alert">{backendTimeSyntax
+                        ? serverTimeRangeValidationError(draftTimeRange)
+                        : "Enter valid time modifiers and make earliest precede latest."}</p> : null}
                     </div>
                   ) : null}
                 </div>
@@ -356,10 +340,12 @@ export function SearchComposer({
           ) : null}
         </div>
         <button
-          className={`run-button${isRunning ? " cancel" : ""}`}
+          className={`run-button${isRunning && !launchPending ? " cancel" : ""}`}
           data-testid="run-search"
           type="button"
-          aria-label={isRunning ? "Cancel search" : "Run search"}
+          aria-label={launchPending ? "Opening persisted search" : isRunning ? "Cancel search" : "Run search"}
+          disabled={launchPending || (!isRunning && runDisabledReason !== null)}
+          title={!isRunning && runDisabledReason !== null ? runDisabledReason : undefined}
           onClick={(event) => {
             if (isRunning) {
               if (event.detail > 1) return;
@@ -368,7 +354,10 @@ export function SearchComposer({
               onRunSearch();
             }
           }}
-        ><span aria-hidden="true">{isRunning ? "■" : "⌕"}</span><strong>{isRunning ? "Cancel" : "Search"}</strong></button>
+        >
+          <span aria-hidden="true">{launchPending ? "…" : isRunning ? "■" : "⌕"}</span>
+          <strong>{launchPending ? "Opening" : isRunning ? "Cancel" : "Search"}</strong>
+        </button>
       </section>
 
       {diagnostic === null ? null : (

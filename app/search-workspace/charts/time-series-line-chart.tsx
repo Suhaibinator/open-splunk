@@ -11,6 +11,7 @@ import {
 import type { TimelinePoint } from "@/lib/demo/search-data";
 
 import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
+import { formatExactNumericText } from "../formatters";
 
 const VIEWBOX_WIDTH = 1000;
 const VIEWBOX_HEIGHT = 300;
@@ -21,9 +22,9 @@ interface TimeSeriesLineChartProps {
   seriesLabel?: string;
 }
 
-function niceStep(maximum: number, targetIntervals = 4): number {
-  if (maximum <= 0) return 1;
-  const roughStep = maximum / targetIntervals;
+function niceStep(span: number, targetIntervals = 4): number {
+  if (!Number.isFinite(span) || span <= 0) return 1;
+  const roughStep = span / targetIntervals;
   const power = 10 ** Math.floor(Math.log10(roughStep));
   const fraction = roughStep / power;
   const niceFraction = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
@@ -44,13 +45,41 @@ function pointSeriesValue(point: TimelinePoint, name: string, fallbackLabel: str
   return point.series?.[name] ?? (name === fallbackLabel ? point.count : 0);
 }
 
-function axisScale(points: TimelinePoint[], seriesNames: string[], fallbackLabel: string): { maximum: number; ticks: number[] } {
-  const dataMaximum = Math.max(0, ...points.flatMap((point) => seriesNames.map((name) => pointSeriesValue(point, name, fallbackLabel))));
-  const step = niceStep(dataMaximum);
-  const maximum = Math.max(step, Math.ceil(dataMaximum / step) * step);
-  const ticks: number[] = [];
-  for (let value = maximum; value >= 0; value -= step) ticks.push(value);
-  return { maximum, ticks };
+export function formatTimelineSeriesValue(
+  point: TimelinePoint,
+  name: string,
+  fallbackLabel = "Events",
+  compact = false,
+): string {
+  const exact = point.exactSeries?.[name]
+    ?? (name === fallbackLabel ? point.exactCount : undefined);
+  return exact === undefined
+    ? (compact ? COMPACT_NUMBER_FORMAT : NUMBER_FORMAT).format(pointSeriesValue(point, name, fallbackLabel))
+    : formatExactNumericText(exact, { compact, compactSuffix: "s" });
+}
+
+function axisScale(
+  points: TimelinePoint[],
+  seriesNames: string[],
+  fallbackLabel: string,
+): { minimum: number; maximum: number; ticks: number[] } {
+  const values = points
+    .flatMap((point) => seriesNames.map((name) => pointSeriesValue(point, name, fallbackLabel)))
+    .filter(Number.isFinite);
+  const dataMinimum = values.length === 0 ? 0 : Math.min(...values);
+  const dataMaximum = values.length === 0 ? 0 : Math.max(...values);
+  const rawMinimum = Math.min(0, dataMinimum);
+  const rawMaximum = Math.max(0, dataMaximum);
+  const scaleSpan = rawMaximum === rawMinimum ? 1 : rawMaximum - rawMinimum;
+  const step = niceStep(scaleSpan);
+  const minimum = Math.floor(rawMinimum / step) * step;
+  const maximum = Math.max(minimum + step, Math.ceil(rawMaximum / step) * step);
+  const intervalCount = Math.max(1, Math.round((maximum - minimum) / step));
+  const ticks = Array.from({ length: intervalCount + 1 }, (_, index) => {
+    const value = maximum - (index * step);
+    return Math.abs(value) < step / 1_000_000 ? 0 : value;
+  });
+  return { minimum, maximum, ticks };
 }
 
 function tickIndices(length: number, targetCount: number): number[] {
@@ -70,7 +99,12 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
   const [plotWidth, setPlotWidth] = useState(900);
   const [keyboardActive, setKeyboardActive] = useState(false);
   const seriesNames = useMemo(() => timelineSeriesNames(points, seriesLabel), [points, seriesLabel]);
-  const { maximum, ticks } = useMemo(() => axisScale(points, seriesNames, seriesLabel), [points, seriesLabel, seriesNames]);
+  const { minimum, maximum, ticks } = useMemo(
+    () => axisScale(points, seriesNames, seriesLabel),
+    [points, seriesLabel, seriesNames],
+  );
+  const axisRange = maximum - minimum;
+  const hasApproximateCoordinates = points.some((point) => point.coordinateApproximate === true);
 
   useEffect(() => {
     const plot = plotRef.current;
@@ -88,11 +122,15 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
 
   const seriesCoordinates = useMemo(() => seriesNames.map((name) => ({
     name,
-    points: points.map((point, index) => ({
-      x: points.length <= 1 ? VIEWBOX_WIDTH / 2 : (index / (points.length - 1)) * VIEWBOX_WIDTH,
-      y: VIEWBOX_HEIGHT - (pointSeriesValue(point, name, seriesLabel) / maximum) * VIEWBOX_HEIGHT,
-    })),
-  })), [maximum, points, seriesLabel, seriesNames]);
+    points: points.map((point, index) => {
+      const value = pointSeriesValue(point, name, seriesLabel);
+      const projectedValue = Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : 0;
+      return {
+        x: points.length <= 1 ? VIEWBOX_WIDTH / 2 : (index / (points.length - 1)) * VIEWBOX_WIDTH,
+        y: VIEWBOX_HEIGHT - ((projectedValue - minimum) / axisRange) * VIEWBOX_HEIGHT,
+      };
+    }),
+  })), [axisRange, maximum, minimum, points, seriesLabel, seriesNames]);
   const xTicks = tickIndices(points.length, plotWidth < 520 ? 3 : plotWidth < 820 ? 4 : 5);
   const activePoint = activeIndex === null ? null : points[activeIndex] ?? null;
   const activeCoordinates = activeIndex === null ? [] : seriesCoordinates.flatMap((series, seriesIndex) => {
@@ -139,19 +177,28 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
   const tooltipVertical = activeYPercent < 28 ? "below" : "above";
   const activeDescription = activePoint === null
     ? `Inspect ${seriesLabel.toLowerCase()} over time. Use Left and Right arrow keys to move between time buckets.`
-    : `${activePoint.label}, ${seriesNames.map((name) => `${timelineSeriesDisplayName(name)} ${NUMBER_FORMAT.format(pointSeriesValue(activePoint, name, seriesLabel))}`).join(", ")}`;
+    : `${activePoint.label}, ${seriesNames.map((name) => `${timelineSeriesDisplayName(name)} ${formatTimelineSeriesValue(activePoint, name, seriesLabel)}`).join(", ")}${activePoint.coordinateApproximate ? ". Chart position is approximate; displayed values are exact." : ""}`;
 
   return (
     <div className="time-series-chart" data-testid="line-chart">
       <div className="time-series-chart__y-axis" aria-hidden="true">
-        {ticks.map((tick) => <span key={tick}>{COMPACT_NUMBER_FORMAT.format(tick)}</span>)}
+        {ticks.map((tick) => <span key={tick}>{hasApproximateCoordinates ? "≈" : ""}{COMPACT_NUMBER_FORMAT.format(tick)}</span>)}
       </div>
       <div className="time-series-chart__plot" ref={plotRef}>
         <svg viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`} preserveAspectRatio="none" aria-hidden="true">
           <g className="time-series-chart__grid">
             {ticks.map((tick) => {
-              const y = VIEWBOX_HEIGHT - (tick / maximum) * VIEWBOX_HEIGHT;
-              return <line key={tick} x1="0" x2={VIEWBOX_WIDTH} y1={y} y2={y} />;
+              const y = VIEWBOX_HEIGHT - ((tick - minimum) / axisRange) * VIEWBOX_HEIGHT;
+              return (
+                <line
+                  className={tick === 0 ? "is-zero" : undefined}
+                  key={tick}
+                  x1="0"
+                  x2={VIEWBOX_WIDTH}
+                  y1={y}
+                  y2={y}
+                />
+              );
             })}
           </g>
           {seriesCoordinates.map((series, seriesIndex) => (
@@ -206,7 +253,7 @@ export function TimeSeriesLineChart({ points, seriesLabel = "Events" }: TimeSeri
                 <span key={name}>
                   <i aria-hidden="true" style={{ backgroundColor: TIME_SERIES_COLORS[seriesIndex % TIME_SERIES_COLORS.length] }} />
                   <span>{timelineSeriesDisplayName(name)}</span>
-                  <b>{NUMBER_FORMAT.format(pointSeriesValue(activePoint, name, seriesLabel))}</b>
+                  <b>{formatTimelineSeriesValue(activePoint, name, seriesLabel)}</b>
                 </span>
               ))}
             </div>

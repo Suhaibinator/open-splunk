@@ -7,7 +7,7 @@ export function SignInScreen() {
         <Link className="signin-wordmark" href="/" aria-label="Open Splunk home"><span>open</span><b>&gt;</b><span>splunk</span></Link>
         <div className="signin-story-copy">
           <span className="signin-kicker">FRONTEND PREVIEW</span>
-          <h2>Explore the Open Splunk workspace.</h2>
+          <h1>Explore the Open Splunk workspace.</h1>
           <p>Review the SPL workflow, operational pages, and responsive interface with deterministic sample data.</p>
           <div className="signin-capabilities">
             <span><i>⌕</i><b>Event-first search</b><small>Investigate raw events and pivot instantly.</small></span>

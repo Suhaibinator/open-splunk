@@ -1,3 +1,5 @@
+import { SPL_PIPELINE_COMMANDS } from "@/lib/search/spl-syntax";
+
 import type { ResultTab, TimeRange } from "./model";
 
 export const DEFAULT_QUERY = "index=gradethis\n| sort -_time";
@@ -19,13 +21,11 @@ export const TIME_PRESETS: TimeRange[] = [
   { label: "All time", earliest: "0", latest: "now" },
 ];
 
-export const COMPLETIONS = [
-  { label: "stats", insertion: "stats count by level", detail: "Calculate aggregate statistics." },
-  { label: "timechart", insertion: "timechart span=5m count by level", detail: "Create a time-series result." },
-  { label: "table", insertion: "table _time level logger message trace_id", detail: "Keep fields in the listed order." },
-  { label: "sort", insertion: "sort -_time", detail: "Sort newest events first." },
-  { label: "where", insertion: "where status >= 500", detail: "Filter with an evaluated expression." },
-];
+export const COMPLETIONS = SPL_PIPELINE_COMMANDS.map(({ name, insertion, detail }) => ({
+  label: name,
+  insertion,
+  detail,
+}));
 
 export const EVENT_EXPORT_FIELDS = ["_time", "level", "logger", "message", "trace_id"];
 export const EXPORT_FIELDS_BY_TAB: Record<ResultTab, string[]> = {

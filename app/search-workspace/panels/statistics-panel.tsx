@@ -5,6 +5,7 @@ import { type Dispatch, type SetStateAction, useState } from "react";
 import { ValueType } from "@/gen/ts/open_splunk/v1/value";
 import type { DemoScalar, TimelinePoint } from "@/lib/demo/search-data";
 import {
+  compareWorkspaceNumericValues,
   timechartValueFields,
   type WorkspaceStatistic,
   type WorkspaceStatisticsColumn,
@@ -15,6 +16,7 @@ import {
 } from "@/lib/search/backend-data";
 
 import { NUMBER_FORMAT } from "../constants";
+import { formatGroupedNumericText } from "../formatters";
 import type { MenuName, StatsDensity } from "../model";
 
 type StatsSort = { key: keyof WorkspaceStatistic; direction: "asc" | "desc" };
@@ -27,6 +29,10 @@ interface StatisticsPanelProps {
   genericStatsSort: WorkspaceStatisticsSort | null;
   isTimechartResult: boolean;
   menu: MenuName | null;
+  pageNumber: number;
+  pageStart: number | null;
+  resultTotalExact: boolean;
+  resultTotalRows: number | null;
   sortedGenericStatisticsRows: WorkspaceStatisticsRow[];
   sortedStatistics: WorkspaceStatistic[];
   sortedTimechartRows: TimelinePoint[];
@@ -46,12 +52,6 @@ interface StatisticsPanelProps {
 }
 
 const GENERIC_NUMBER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 });
-
-function groupedNumericString(value: string): string {
-  const match = /^([+-]?)(\d+)(\.\d+)?$/.exec(value.trim());
-  if (match === null) return value;
-  return `${match[1]}${match[2].replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${match[3] ?? ""}`;
-}
 
 function serializedGenericValue(value: WorkspaceStatisticsValue): string {
   return typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
@@ -75,14 +75,40 @@ function formatGenericValue(value: WorkspaceStatisticsValue, column: WorkspaceSt
   if (column.numeric) {
     return typeof value === "number" && Number.isFinite(value)
       ? GENERIC_NUMBER_FORMAT.format(value)
-      : groupedNumericString(serializedGenericValue(value));
+      : formatGroupedNumericText(serializedGenericValue(value));
   }
   return serializedGenericValue(value);
 }
 
-function timechartSeriesValue(point: TimelinePoint, seriesName: string, hasExplicitSeries: boolean): number | null {
-  if (!hasExplicitSeries) return point.count;
-  return point.series?.[seriesName] ?? null;
+interface TimechartSeriesCell {
+  displayValue: number | string;
+  coordinateApproximate: boolean;
+}
+
+function timechartSeriesCell(
+  point: TimelinePoint,
+  seriesName: string,
+  hasExplicitSeries: boolean,
+): TimechartSeriesCell | null {
+  if (!hasExplicitSeries) {
+    return {
+      displayValue: point.exactCount ?? point.count,
+      coordinateApproximate: point.coordinateApproximate === true,
+    };
+  }
+  const coordinate = point.series?.[seriesName];
+  if (coordinate === undefined) return null;
+  const exact = point.exactSeries?.[seriesName];
+  return {
+    displayValue: exact ?? coordinate,
+    coordinateApproximate: exact !== undefined,
+  };
+}
+
+function formatTimechartSeriesCell(cell: TimechartSeriesCell): string {
+  return typeof cell.displayValue === "string"
+    ? formatGroupedNumericText(cell.displayValue)
+    : NUMBER_FORMAT.format(cell.displayValue);
 }
 
 export function StatisticsPanel({
@@ -91,6 +117,10 @@ export function StatisticsPanel({
   genericStatsSort,
   isTimechartResult,
   menu,
+  pageNumber,
+  pageStart,
+  resultTotalExact,
+  resultTotalRows,
   sortedGenericStatisticsRows,
   sortedStatistics,
   sortedTimechartRows,
@@ -120,23 +150,46 @@ export function StatisticsPanel({
     ? timechartSeriesSort
     : null;
   const displayedTimechartRows = activeTimechartSeriesSort === null
-    ? sortedTimechartRows
+    ? timechartSort.key === "time"
+      ? sortedTimechartRows
+      : timelinePoints.toSorted((left, right) => {
+        const leftValue = timechartSeriesCell(left, "count", false);
+        const rightValue = timechartSeriesCell(right, "count", false);
+        if (leftValue === null) return rightValue === null ? 0 : 1;
+        if (rightValue === null) return -1;
+        const comparison = compareWorkspaceNumericValues(leftValue.displayValue, rightValue.displayValue);
+        return timechartSort.direction === "desc" ? -comparison : comparison;
+      })
     : timelinePoints.toSorted((left, right) => {
-      const leftValue = timechartSeriesValue(left, activeTimechartSeriesSort.key, true);
-      const rightValue = timechartSeriesValue(right, activeTimechartSeriesSort.key, true);
+      const leftValue = timechartSeriesCell(left, activeTimechartSeriesSort.key, true);
+      const rightValue = timechartSeriesCell(right, activeTimechartSeriesSort.key, true);
       if (leftValue === null) return rightValue === null ? 0 : 1;
       if (rightValue === null) return -1;
-      const comparison = leftValue - rightValue;
+      const comparison = compareWorkspaceNumericValues(leftValue.displayValue, rightValue.displayValue);
       return activeTimechartSeriesSort.direction === "desc" ? -comparison : comparison;
     });
   const displayedRowCount = isTimechartResult
     ? timelinePoints.length
     : genericStatisticsTable?.rows.length ?? statisticsRows.length;
+  const firstDisplayedRow = displayedRowCount === 0 ? 0 : pageStart;
+  const lastDisplayedRow = firstDisplayedRow === null || displayedRowCount === 0
+    ? null
+    : firstDisplayedRow + displayedRowCount - 1;
+  const totalDescription = resultTotalRows === null
+    ? "total unavailable"
+    : resultTotalExact
+      ? `${NUMBER_FORMAT.format(resultTotalRows)} rows`
+      : `at least ${NUMBER_FORMAT.format(resultTotalRows)} rows`;
+  const displayedRange = displayedRowCount === 0
+    ? "Showing 0 rows"
+    : firstDisplayedRow === null || lastDisplayedRow === null
+      ? `Server page ${NUMBER_FORMAT.format(pageNumber)} · ${NUMBER_FORMAT.format(displayedRowCount)} rows on this page`
+      : `Showing ${NUMBER_FORMAT.format(firstDisplayedRow)}–${NUMBER_FORMAT.format(lastDisplayedRow)}`;
 
   return (
     <section id="panel-statistics" role="tabpanel" aria-labelledby="tab-statistics" className="statistics-panel">
       <header className="result-view-header">
-        <div><h2>Statistics</h2><p>{displayedRowCount} rows · completed in {elapsed}</p></div>
+        <div><h2>Statistics</h2><p>{totalDescription} · completed in {elapsed}</p></div>
         <div>
           <button className="button secondary compact" type="button" onClick={onExport}>⇩ Export</button>
           <div className="header-menu-wrap result-menu-wrap">
@@ -220,8 +273,26 @@ export function StatisticsPanel({
                   <tr key={row.id}>
                     <td><time dateTime={row.earliest}>{row.label}</time></td>
                     {timechartSeries.map((seriesName) => {
-                      const value = timechartSeriesValue(row, seriesName, hasExplicitTimechartSeries);
-                      return <td className="numeric-cell" key={seriesName}>{value === null ? "—" : NUMBER_FORMAT.format(value)}</td>;
+                      const cell = timechartSeriesCell(row, seriesName, hasExplicitTimechartSeries);
+                      return (
+                        <td
+                          className="numeric-cell"
+                          key={seriesName}
+                          title={cell?.coordinateApproximate ? "Exact server value; the chart coordinate is approximate." : undefined}
+                        >
+                          {cell === null ? "—" : (
+                            <>
+                              {formatTimechartSeriesCell(cell)}
+                              {cell.coordinateApproximate ? (
+                                <>
+                                  <span className="numeric-unit" aria-hidden="true"> ≈ chart</span>
+                                  <span className="sr-only">; chart coordinate approximate</span>
+                                </>
+                              ) : null}
+                            </>
+                          )}
+                        </td>
+                      );
                     })}
                   </tr>
                 ))}
@@ -263,7 +334,7 @@ export function StatisticsPanel({
                     {genericStatisticsTable.columns.map((column) => {
                       const value = row.values[column.key] ?? null;
                       const formatted = formatGenericValue(value, column);
-                      const pivotableValue = typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+                      const pivotValue = row.pivotValues[column.key];
                       return (
                         <td
                           className={column.numeric ? "numeric-cell" : undefined}
@@ -271,12 +342,12 @@ export function StatisticsPanel({
                           title={value === null ? "Null" : serializedGenericValue(value)}
                           style={{ maxWidth: 420, overflowWrap: "anywhere", whiteSpace: column.numeric ? "nowrap" : undefined }}
                         >
-                          {column.pivotable && pivotableValue ? (
+                          {column.pivotable && pivotValue !== undefined ? (
                             <button
                               className="statistics-value-link"
                               type="button"
                               title={`Add ${column.fieldName}=${serializedGenericValue(value)} to the draft search`}
-                              onClick={() => onApplyPivot(column.fieldName, value)}
+                              onClick={() => onApplyPivot(column.fieldName, pivotValue)}
                             >
                               {formatted}
                             </button>
@@ -308,8 +379,8 @@ export function StatisticsPanel({
               </thead>
               <tbody>
                 {sortedStatistics.map((row) => (
-                  <tr key={row.level}>
-                    <td><button className="statistics-value-link" type="button" title={`Add ${statisticsDimension}=${row.level} to the draft search`} onClick={() => onApplyPivot(statisticsDimension, row.level)}><span className={`severity-dot severity-${row.level.toLowerCase()}`} />{row.level}</button></td>
+                  <tr key={row.id ?? row.level}>
+                    <td>{row.pivotable === false ? row.level : <button className="statistics-value-link" type="button" title={`Add ${statisticsDimension}=${row.level} to the draft search`} onClick={() => onApplyPivot(statisticsDimension, row.pivotValue !== undefined ? row.pivotValue : row.level)}><span className={`severity-dot severity-${row.level.toLowerCase()}`} />{row.level}</button>}</td>
                     <td className="numeric-cell">{NUMBER_FORMAT.format(row.count)}</td>
                     <td className="numeric-cell">{row.percent}</td>
                     <td className="numeric-cell">{Number.isFinite(row.avgDuration) ? <>{row.avgDuration.toFixed(1)} <span className="numeric-unit">ms</span></> : "—"}</td>
@@ -322,10 +393,10 @@ export function StatisticsPanel({
         <span className="statistics-scroll-hint" aria-hidden="true">More columns <b>→</b></span>
       </div>
       <footer className="statistics-footer">{isTimechartResult
-        ? <><span>Showing {timelinePoints.length === 0 ? "0" : `1–${timelinePoints.length}`} of {timelinePoints.length} rows</span><span>Sorted by {activeTimechartSeriesSort?.key ?? (timechartSort.key === "time" ? "_time" : "count")} · {(activeTimechartSeriesSort?.direction ?? timechartSort.direction) === "desc" ? "descending" : "ascending"}</span></>
+        ? <><span>{displayedRange} · {totalDescription}</span><span>Sorted by {activeTimechartSeriesSort?.key ?? (timechartSort.key === "time" ? "_time" : "count")} · {(activeTimechartSeriesSort?.direction ?? timechartSort.direction) === "desc" ? "descending" : "ascending"}</span></>
         : genericStatisticsTable !== null
-          ? <><span>Showing {genericStatisticsTable.rows.length === 0 ? "0" : `1–${genericStatisticsTable.rows.length}`} of {genericStatisticsTable.rows.length} rows</span><span>{genericStatsSort === null ? "Server-provided row order" : `Sorted by ${genericStatisticsTable.columns.find((column) => column.key === genericStatsSort.key)?.label ?? genericStatsSort.key} · ${genericStatsSort.direction === "desc" ? "descending" : "ascending"}`} · values retain server types</span></>
-          : <><span>Showing 1–{statisticsRows.length} of {statisticsRows.length} rows</span><span>Sorted by {statsSort.key === "avgDuration" ? "avg(duration_ms)" : statsSort.key === "level" ? statisticsDimension : statsSort.key} · {statsSort.direction === "desc" ? "descending" : "ascending"}</span></>}
+          ? <><span>{displayedRange} · {totalDescription}</span><span>{genericStatsSort === null ? "Server-provided row order" : `Sorted by ${genericStatisticsTable.columns.find((column) => column.key === genericStatsSort.key)?.label ?? genericStatsSort.key} · ${genericStatsSort.direction === "desc" ? "descending" : "ascending"}`} · values retain server types</span></>
+          : <><span>{displayedRange} · {totalDescription}</span><span>Sorted by {statsSort.key === "avgDuration" ? "avg(duration_ms)" : statsSort.key === "level" ? statisticsDimension : statsSort.key} · {statsSort.direction === "desc" ? "descending" : "ascending"}</span></>}
       </footer>
     </section>
   );

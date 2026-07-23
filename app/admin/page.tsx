@@ -1,15 +1,17 @@
 import type { Metadata } from "next";
 
+import { getFrontendRuntimeConfig } from "@/lib/frontend-runtime-config";
+
 import { ProductShell } from "../_components/product-shell";
 import { AdminConsole } from "./admin-console";
 
 export const metadata: Metadata = { title: "Administration" };
 
 export default function AdminPage() {
-  const dataMode = process.env.OPEN_SPLUNK_DATA_MODE === "backend" ? "backend" : "demo";
+  const { apiBaseUrl, dataMode } = getFrontendRuntimeConfig();
   return (
     <ProductShell activeSection="admin" appName="Settings" dataMode={dataMode}>
-      <AdminConsole />
+      <AdminConsole dataMode={dataMode} apiBaseUrl={apiBaseUrl} />
     </ProductShell>
   );
 }

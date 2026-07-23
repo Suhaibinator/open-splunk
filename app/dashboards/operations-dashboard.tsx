@@ -199,7 +199,11 @@ function VolumeBarChart({ points }: VolumeBarChartProps) {
   );
 }
 
-export function OperationsDashboard() {
+interface OperationsDashboardProps {
+  dataMode: "backend" | "demo";
+}
+
+export function OperationsDashboard({ dataMode }: OperationsDashboardProps) {
   const [rangeValue, setRangeValue] = useState<RangeValue>("24h");
   const range = RANGE_OPTIONS.find((option) => option.value === rangeValue) ?? RANGE_OPTIONS[0];
   const latency = useMemo(() => timelinePoints(range), [range]);
@@ -209,7 +213,18 @@ export function OperationsDashboard() {
   const latestLatency = latency.at(-1)?.count ?? 438;
   const previousLatency = latency.at(-2)?.count ?? latestLatency;
   const latencyDelta = latestLatency - previousLatency;
-  const searchOptions = { earliest: range.earliest, latest: "now", label: range.label };
+  const searchOptions = {
+    earliest: range.earliest,
+    latest: "now",
+    label: dataMode === "backend" ? `${range.label} example draft` : range.label,
+    run: dataMode !== "backend",
+  };
+  const fixtureSearchHref = (spl: string) => searchLaunchHref(
+    dataMode === "backend"
+      ? spl.replace(/\bindex=(?:gradethis|payments)\b/g, "index=*")
+      : spl,
+    searchOptions,
+  );
 
   return (
     <div className="suite-page dashboard-page">
@@ -245,7 +260,7 @@ export function OperationsDashboard() {
         <section className="suite-card dashboard-panel dashboard-panel--wide">
           <header className="suite-card-header">
             <div><h2>API latency</h2><p>p95 response duration over time</p></div>
-            <Link href={searchLaunchHref(`index=gradethis | timechart span=${range.searchSpan} p95(duration_ms)`, searchOptions)}>Open in Search</Link>
+            <Link href={fixtureSearchHref("index=gradethis duration_ms=* | stats p95(duration_ms) AS p95_ms BY path | sort -p95_ms")}>{dataMode === "backend" ? "Open example draft" : "Open in Search"}</Link>
           </header>
           <div className={styles.lineChart}>
             <span className={styles.chartUnit}>milliseconds</span>
@@ -257,7 +272,7 @@ export function OperationsDashboard() {
         <section className="suite-card dashboard-panel">
           <header className="suite-card-header">
             <div><h2>Event volume</h2><p>{range.bucketDescription}</p></div>
-            <Link href={searchLaunchHref(`index=gradethis | timechart span=${range.searchSpan} count`, searchOptions)}>Inspect</Link>
+            <Link href={fixtureSearchHref(`index=gradethis | timechart span=${range.searchSpan} count BY level`)}>{dataMode === "backend" ? "Inspect draft" : "Inspect"}</Link>
           </header>
           <VolumeBarChart points={volume} />
         </section>
@@ -265,7 +280,7 @@ export function OperationsDashboard() {
         <section className="suite-card dashboard-panel">
           <header className="suite-card-header">
             <div><h2>Errors by service</h2><p>Share of {NUMBER_FORMAT.format(errorEvents)} errors</p></div>
-            <Link href={searchLaunchHref("index=gradethis level=ERROR | stats count by service", searchOptions)}>View events</Link>
+            <Link href={fixtureSearchHref("index=gradethis level=ERROR | stats count by service")}>{dataMode === "backend" ? "Open example draft" : "View events"}</Link>
           </header>
           <div className="service-breakdown">
             <figure className={`donut-chart ${styles.donutFigure}`}><figcaption className="sr-only">Errors by service: gradethis-api 48.2%, notification-worker 27.4%, realtime-hub 16.1%, other 8.3%</figcaption><span><strong>{NUMBER_FORMAT.format(errorEvents)}</strong><small>errors</small></span></figure>
@@ -283,7 +298,7 @@ export function OperationsDashboard() {
               <thead><tr><th scope="col">Service</th><th scope="col">Status</th><th scope="col">Requests</th><th scope="col">Error rate</th><th scope="col">p95 latency</th><th scope="col">Trend</th></tr></thead>
               <tbody>{SERVICES.map(([service, status, requests, errors, serviceLatency, trend]) => (
                 <tr key={service}>
-                  <td><Link className={styles.serviceLink} href={searchLaunchHref(`index=gradethis service="${service}" | stats count p95(duration_ms) as p95_ms`, searchOptions)}>{service}</Link></td>
+                  <td><Link className={styles.serviceLink} href={fixtureSearchHref(`index=gradethis service="${service}" | stats count p95(duration_ms) as p95_ms`)}>{service}</Link></td>
                   <td><span className={`status-label status-label--${status === "Healthy" ? "complete" : "warning"}`}><i />{status}</span></td>
                   <td>{requests}</td><td>{errors}</td><td>{serviceLatency}</td><td><span className={status === "Healthy" ? "sparkline-good" : "sparkline-warn"}>{trend}</span></td>
                 </tr>
@@ -295,13 +310,13 @@ export function OperationsDashboard() {
         <section className="suite-card dashboard-panel">
           <header className="suite-card-header">
             <div><h2>Recent notable events</h2><p>Errors and elevated warnings</p></div>
-            <Link href={searchLaunchHref("index=gradethis (level=ERROR OR level=WARN) | sort -_time", searchOptions)}>All events</Link>
+            <Link href={fixtureSearchHref("index=gradethis (level=ERROR OR level=WARN) | sort -_time")}>{dataMode === "backend" ? "Open example draft" : "All events"}</Link>
           </header>
           <ol className={`notable-events ${styles.notableList}`}>
             {NOTABLE_EVENTS.map((event) => (
               <li key={event.message}>
                 <span className={`severity-badge severity-badge--${event.severity === "ERROR" ? "error" : "warn"}`}>{event.severity}</span>
-                <div><Link href={searchLaunchHref(event.query, searchOptions)}>{event.message}</Link><small>{event.source}</small></div>
+                <div><Link href={fixtureSearchHref(event.query)}>{event.message}</Link><small>{event.source}</small></div>
               </li>
             ))}
           </ol>

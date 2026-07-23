@@ -2,48 +2,34 @@ import type { PointerEvent, ReactNode } from "react";
 
 import { SearchJobState, type SearchJob } from "@/gen/ts/open_splunk/v1/search";
 import { DEMO_EVENTS, type DemoEvent, type DemoScalar } from "@/lib/demo/search-data";
+import {
+  isSplOffsetInDoubleQuotedValue,
+  isSupportedSplPipelineCommand,
+  SPL_PIPELINE_COMMANDS,
+  splitSplPipeline,
+  UNSUPPORTED_SPL_PIPELINE_COMMANDS,
+} from "@/lib/search/spl-syntax";
 
+import { formatBinaryBytes } from "./formatters";
 import type { JobPhase, ResultTab } from "./model";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function pipelineStages(query: string): string[] {
-  const stages: string[] = [];
-  let stageStart = 0;
-  let quote: '"' | "'" | null = null;
-  let escaped = false;
-
-  for (let offset = 0; offset < query.length; offset += 1) {
-    const character = query[offset];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (quote !== null) {
-      if (character === quote) quote = null;
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      continue;
-    }
-    if (character !== "|") continue;
-    stages.push(query.slice(stageStart, offset));
-    stageStart = offset + 1;
-  }
-  stages.push(query.slice(stageStart));
-  return stages;
-}
+const PIPELINE_COMMAND_PATTERN = [
+  ...SPL_PIPELINE_COMMANDS.map((command) => command.name),
+  ...UNSUPPORTED_SPL_PIPELINE_COMMANDS,
+].map(escapeRegExp).join("|");
+const SYNTAX_TOKEN_PATTERN = new RegExp(
+  `(\\b(?:index|host|source|sourcetype|level|status|trace_id|message|path)\\b(?=\\s*=)|\\b(?:${PIPELINE_COMMAND_PATTERN})\\b|\\b(?:count|p95|sum|avg|tonumber|replace)\\b|\\b(?:AND|OR|NOT|AS|BY)\\b|"(?:\\\\.|[^"\\\\])*"|\\|)`,
+  "gi",
+);
+const UNSUPPORTED_PIPELINE_COMMAND_SET = new Set<string>(UNSUPPORTED_SPL_PIPELINE_COMMANDS);
 
 export function hasPipelineCommand(query: string, commands: string | readonly string[]): boolean {
   const allowed = new Set((typeof commands === "string" ? [commands] : commands).map((command) => command.toLowerCase()));
-  return pipelineStages(query).slice(1).some((stage) => {
+  return splitSplPipeline(query).slice(1).some((stage) => {
     const command = /^\s*([A-Za-z][A-Za-z0-9_-]*)\b/.exec(stage)?.[1]?.toLowerCase();
     return command !== undefined && allowed.has(command);
   });
@@ -56,36 +42,19 @@ interface DemoFieldPredicate {
 }
 
 function offsetIsOutsideQuotes(query: string, targetOffset: number): boolean {
-  let quote: '"' | "'" | null = null;
-  let escaped = false;
-  for (let offset = 0; offset < targetOffset; offset += 1) {
-    const character = query[offset];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (quote !== null) {
-      if (character === quote) quote = null;
-    } else if (character === '"' || character === "'") {
-      quote = character;
-    }
-  }
-  return quote === null;
+  return !isSplOffsetInDoubleQuotedValue(query, targetOffset);
 }
 
 function demoFieldPredicates(query: string): DemoFieldPredicate[] {
   const predicates: DemoFieldPredicate[] = [];
-  const pattern = /\b(NOT\s+)?(level|trace_id)\s*(!=|=)\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|([A-Za-z0-9_.*:-]+))/gi;
+  const pattern = /\b(NOT\s+)?(level|trace_id)\s*(!=|=)\s*(?:"((?:\\.|[^"\\])*)"|([^\s()|,=!<>"]+))/gi;
   for (const match of query.matchAll(pattern)) {
     const offset = match.index ?? 0;
     if (!offsetIsOutsideQuotes(query, offset)) continue;
     const field = match[2]?.toLowerCase();
     if (field !== "level" && field !== "trace_id") continue;
-    const value = (match[4] ?? match[5] ?? match[6] ?? "").replace(/\\([\\"'])/g, "$1").toLowerCase();
+    const quotedValue = match[4];
+    const value = (quotedValue === undefined ? match[5] ?? "" : decodeDoubleQuotedSpl(quotedValue)).toLowerCase();
     if (value.length === 0) continue;
     predicates.push({
       field,
@@ -96,6 +65,19 @@ function demoFieldPredicates(query: string): DemoFieldPredicate[] {
   return predicates;
 }
 
+function decodeDoubleQuotedSpl(value: string): string {
+  return value.replace(/\\(.)/gs, (_match, escaped: string) => {
+    switch (escaped) {
+      case '"': return '"';
+      case "\\": return "\\";
+      case "n": return "\n";
+      case "r": return "\r";
+      case "t": return "\t";
+      default: return `\\${escaped}`;
+    }
+  });
+}
+
 function matchesDemoValue(actualValue: unknown, queryValue: string): boolean {
   const actual = String(actualValue ?? "").toLowerCase();
   if (!queryValue.includes("*")) return actual === queryValue;
@@ -104,9 +86,7 @@ function matchesDemoValue(actualValue: unknown, queryValue: string): boolean {
 }
 
 export function syntaxTokens(query: string): ReactNode[] {
-  const tokenPattern = /(\b(?:index|host|source|sourcetype|level|status|trace_id|message|path)\b(?=\s*=)|\b(?:sort|stats|timechart|table|where|eval|fields|rename|head|top|rare|rex|spath|bin|transaction|join|map|subsearch)\b|\b(?:count|avg|sum|min|max|p95|dc|values|tonumber|replace)\b|\b(?:AND|OR|NOT)\b|"(?:\\.|[^"\\])*"|\|)/gi;
-  const unsupported = new Set(["transaction", "join", "map", "subsearch"]);
-  const parts = query.split(tokenPattern).filter((part) => part !== undefined && part.length > 0);
+  const parts = query.split(SYNTAX_TOKEN_PATTERN).filter((part) => part !== undefined && part.length > 0);
 
   let sourceOffset = 0;
   return parts.map((part) => {
@@ -115,11 +95,11 @@ export function syntaxTokens(query: string): ReactNode[] {
     let className = "spl-plain";
     if (part === "|") className = "spl-pipe";
     else if (part.startsWith('"')) className = "spl-string";
-    else if (["and", "or", "not"].includes(lower)) className = "spl-boolean";
-    else if (unsupported.has(lower)) className = "spl-error-token";
-    else if (/^(sort|stats|timechart|table|where|eval|fields|rename|head|top|rare|rex|spath|bin)$/i.test(part)) {
+    else if (["and", "or", "not", "as", "by"].includes(lower)) className = "spl-boolean";
+    else if (UNSUPPORTED_PIPELINE_COMMAND_SET.has(lower)) className = "spl-error-token";
+    else if (isSupportedSplPipelineCommand(lower)) {
       className = "spl-command";
-    } else if (/^(count|avg|sum|min|max|p95|dc|values|tonumber|replace)$/i.test(part)) {
+    } else if (/^(count|p95|sum|avg|tonumber|replace)$/i.test(part)) {
       className = "spl-function";
     } else if (/^(index|host|source|sourcetype|level|status|trace_id|message|path)$/i.test(part)) {
       className = "spl-field";
@@ -186,8 +166,8 @@ export function filteredDemoEvents(query: string): DemoEvent[] {
 }
 
 export function resultTabForQuery(query: string): ResultTab {
-  if (hasPipelineCommand(query, ["timechart", "chart"])) return "visualization";
-  if (hasPipelineCommand(query, ["stats", "top", "rare"])) return "statistics";
+  if (hasPipelineCommand(query, "timechart")) return "visualization";
+  if (hasPipelineCommand(query, ["table", "stats", "top", "rare"])) return "statistics";
   return "events";
 }
 
@@ -209,7 +189,7 @@ export function highlightedRaw(raw: string, query: string): ReactNode[] {
 export function queryForPattern(baseQuery: string, signature: string): string {
   const normalized = signature.replace(/\*+/g, "*").replaceAll('"', '\\"');
   const boundedPattern = normalized.replace(/^\*+|\*+$/g, "");
-  const sourceClause = pipelineStages(baseQuery)[0]?.trim() || "index=gradethis";
+  const sourceClause = splitSplPipeline(baseQuery)[0]?.trim() || "index=gradethis";
   return `${sourceClause}\n| search _raw="*${boundedPattern}*"`;
 }
 
@@ -228,12 +208,14 @@ export function phaseLabel(phase: JobPhase): string {
     case "completed": return "Completed";
     case "failed": return "Failed";
     case "canceled": return "Canceled";
+    case "expired": return "Expired";
   }
 }
 
 export function stateClass(phase: JobPhase): string {
   if (phase === "completed") return "state-success";
   if (phase === "failed") return "state-error";
+  if (phase === "expired") return "state-muted";
   if (phase === "canceled") return "state-muted";
   return "state-running";
 }
@@ -247,9 +229,8 @@ export function backendJobPhase(state: SearchJobState): JobPhase {
     case SearchJobState.SEARCH_JOB_STATE_FINALIZING: return "finalizing";
     case SearchJobState.SEARCH_JOB_STATE_COMPLETED: return "completed";
     case SearchJobState.SEARCH_JOB_STATE_CANCELED: return "canceled";
-    case SearchJobState.SEARCH_JOB_STATE_FAILED:
-    case SearchJobState.SEARCH_JOB_STATE_EXPIRED:
-      return "failed";
+    case SearchJobState.SEARCH_JOB_STATE_FAILED: return "failed";
+    case SearchJobState.SEARCH_JOB_STATE_EXPIRED: return "expired";
     default:
       return "queued";
   }
@@ -262,16 +243,13 @@ export function formatDuration(duration: { seconds: bigint; nanos: number } | un
 }
 
 export function formatBytes(value: bigint): string {
-  const bytes = Number(value);
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const unit = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-  const scaled = bytes / 1024 ** unit;
-  return `${scaled >= 10 || unit === 0 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[unit]}`;
+  return formatBinaryBytes(value);
 }
 
 export function jobEventCount(job: SearchJob): number {
-  const count = job.progress?.matchedEvents ?? job.progress?.producedRows ?? 0n;
+  const count = job.progress === undefined
+    ? 0n
+    : job.progress.matchedEvents || job.progress.producedRows;
   return Math.min(Number.MAX_SAFE_INTEGER, Number(count));
 }
 

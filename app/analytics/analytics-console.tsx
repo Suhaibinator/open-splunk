@@ -94,10 +94,10 @@ const QUERY_INSIGHTS: QueryInsight[] = [
   },
   {
     title: "Repeated latency pipeline",
-    detail: "Three similar searches can share a single timechart result with a service split.",
+    detail: "Three similar searches can share one grouped p95 result by service.",
     impact: "3 queries → 1",
     severity: "low",
-    query: "index=gradethis duration_ms=* | timechart span=15m p95(duration_ms) by service",
+    query: "index=gradethis duration_ms=* | stats p95(duration_ms) AS p95_ms BY service | sort -p95_ms",
     signal: "Runs every 15 min",
   },
 ];
@@ -268,7 +268,11 @@ function fieldMatchesCoverage(field: FieldProfile, filter: CoverageFilter) {
   return true;
 }
 
-export function AnalyticsConsole() {
+interface AnalyticsConsoleProps {
+  dataMode: "backend" | "demo";
+}
+
+export function AnalyticsConsole({ dataMode }: AnalyticsConsoleProps) {
   const [rangeKey, setRangeKey] = useState<RangeKey>("24h");
   const [environmentKey, setEnvironmentKey] = useState<EnvironmentKey>("all");
   const [fieldQuery, setFieldQuery] = useState("");
@@ -277,7 +281,18 @@ export function AnalyticsConsole() {
 
   const range = RANGE_OPTIONS.find((option) => option.value === rangeKey) ?? RANGE_OPTIONS[1];
   const environment = ENVIRONMENT_OPTIONS.find((option) => option.value === environmentKey) ?? ENVIRONMENT_OPTIONS[0];
-  const searchOptions = { earliest: range.earliest, latest: "now", label: range.label };
+  const searchOptions = {
+    earliest: range.earliest,
+    latest: "now",
+    label: dataMode === "backend" ? `${range.label} example draft` : range.label,
+    run: dataMode !== "backend",
+  };
+  const fixtureSearchHref = (spl: string) => searchLaunchHref(
+    dataMode === "backend"
+      ? spl.replace(/\bindex=(?:gradethis|payments)\b/g, "index=*")
+      : spl,
+    searchOptions,
+  );
   const environmentSPL = environmentKey === "all" ? "" : ` environment=${environmentKey}`;
   const scale = range.multiplier * environment.multiplier;
   const searchCount = Math.max(18, Math.round(2_841 * scale));
@@ -326,7 +341,7 @@ export function AnalyticsConsole() {
           <>
             <output className={styles.updateStatus} data-testid="analytics-updated">Static preview snapshot</output>
             <button className="suite-button" data-testid="analytics-refresh" disabled title="Analytics uses a static preview snapshot." type="button">Static preview</button>
-            <Link className="suite-button suite-button--primary" href={searchLaunchHref(`index=gradethis${environmentSPL}`, searchOptions)}>Open Search</Link>
+            <Link className="suite-button suite-button--primary" href={fixtureSearchHref(`index=gradethis${environmentSPL}`)}>{dataMode === "backend" ? "Open example draft" : "Open Search"}</Link>
           </>
         )}
       />
@@ -351,16 +366,16 @@ export function AnalyticsConsole() {
       </section>
 
       <section className={styles.metricGrid} aria-label="Search analytics summary">
-        <Link title="Open a representative grouped search" href={searchLaunchHref(`index=gradethis${environmentSPL} | stats count by service | sort -count`, searchOptions)}>
+        <Link title="Open a representative grouped search" href={fixtureSearchHref(`index=gradethis${environmentSPL} | stats count by service | sort -count`)}>
           <span>Searches run</span><strong>{NUMBER_FORMAT.format(searchCount)}</strong><small>↑ 8.4% from prior period</small><i aria-hidden="true">↗</i>
         </Link>
-        <Link title="Open a representative success-status search" href={searchLaunchHref(`index=gradethis${environmentSPL} (status=200 OR status=201) | stats count by status`, searchOptions)}>
+        <Link title="Open a representative success-status search" href={fixtureSearchHref(`index=gradethis${environmentSPL} (status=200 OR status=201) | stats count by status`)}>
           <span>Success rate</span><strong>99.4%</strong><small>{NUMBER_FORMAT.format(failedSearches)} failed searches</small><i aria-hidden="true">↗</i>
         </Link>
-        <Link title="Open a representative latency search" href={searchLaunchHref(`index=gradethis${environmentSPL} duration_ms=* | stats p95(duration_ms) as p95_ms`, searchOptions)}>
+        <Link title="Open a representative latency search" href={fixtureSearchHref(`index=gradethis${environmentSPL} duration_ms=* | stats p95(duration_ms) as p95_ms`)}>
           <span>Median runtime</span><strong>1.18 s</strong><small>p95 is {trendValues.at(-1)?.toFixed(2)} s</small><i aria-hidden="true">↗</i>
         </Link>
-        <Link href={searchLaunchHref(`index=gradethis${environmentSPL} | stats count by sourcetype | sort -count`, searchOptions)}>
+        <Link href={fixtureSearchHref(`index=gradethis${environmentSPL} | stats count by sourcetype | sort -count`)}>
           <span>Events scanned</span><strong>{scannedEvents >= 1_000_000 ? `${DECIMAL_FORMAT.format(scannedEvents / 1_000_000)}M` : `${DECIMAL_FORMAT.format(scannedEvents / 1_000)}K`}</strong><small>21.8 scanned per result</small><i aria-hidden="true">↗</i>
         </Link>
       </section>
@@ -376,7 +391,7 @@ export function AnalyticsConsole() {
             <div><span>Fastest</span><strong>{Math.min(...trendValues).toFixed(2)} s</strong></div>
             <div><span>Typical p95</span><strong>{(trendValues.reduce((sum, value) => sum + value, 0) / trendValues.length).toFixed(2)} s</strong></div>
             <div><span>Slowest</span><strong>{Math.max(...trendValues).toFixed(2)} s</strong></div>
-            <Link href={searchLaunchHref(`index=gradethis${environmentSPL} duration_ms=* | timechart span=${rangeKey === "1h" ? "5m" : rangeKey === "7d" ? "12h" : "2h"} p95(duration_ms)`, searchOptions)}>Investigate trend →</Link>
+            <Link href={fixtureSearchHref(`index=gradethis${environmentSPL} duration_ms=* | stats p95(duration_ms) AS p95_ms BY service | sort -p95_ms`)}>Investigate latency →</Link>
           </footer>
         </section>
 
@@ -394,7 +409,7 @@ export function AnalyticsConsole() {
                 </div>
                 <h3>{insight.title}</h3>
                 <p>{insight.detail}</p>
-                <footer><strong>{insight.impact}</strong><Link href={searchLaunchHref(insight.query, searchOptions)}>Inspect SPL →</Link></footer>
+                <footer><strong>{insight.impact}</strong><Link href={fixtureSearchHref(insight.query)}>Inspect SPL →</Link></footer>
               </li>
             ))}
           </ol>
@@ -448,7 +463,7 @@ export function AnalyticsConsole() {
                     </div>
                     <span className={styles.cardinality}>{formatCardinality(field.cardinality)}</span>
                     <code className={styles.example}>{field.example}</code>
-                    <Link aria-label={`Analyze ${field.name} in Search`} href={searchLaunchHref(`index=gradethis${environmentSPL} ${field.name}=* | stats count by ${field.name} | sort -count`, searchOptions)}>Analyze →</Link>
+                    <Link aria-label={`Analyze ${field.name} in Search`} href={fixtureSearchHref(`index=gradethis${environmentSPL} ${field.name}=* | stats count by ${field.name} | sort -count`)}>Analyze →</Link>
                   </li>
                 ))}
               </ul>
@@ -465,7 +480,7 @@ export function AnalyticsConsole() {
               <li key={search.name}>
                 <span className={styles.rank}>{index + 1}</span>
                 <div className={styles.searchDetail}>
-                  <Link href={searchLaunchHref(search.query, searchOptions)}>{search.name}</Link>
+                  <Link href={fixtureSearchHref(search.query)}>{search.name}</Link>
                   <small>{search.owner} · {search.scan} scanned</small>
                   <span className={styles.durationTrack}><i style={{ width: `${(search.duration / SLOW_SEARCHES[0].duration) * 100}%` }} /></span>
                 </div>
@@ -475,7 +490,7 @@ export function AnalyticsConsole() {
           </ol>
           <footer className={styles.slowestFooter}>
             <span>Ordered by average runtime</span>
-            <Link href={searchLaunchHref(`index=gradethis${environmentSPL} duration_ms=* | stats p95(duration_ms) as p95_ms count by service | sort -p95_ms`, searchOptions)}>View complete workload →</Link>
+            <Link href={fixtureSearchHref(`index=gradethis${environmentSPL} duration_ms=* | stats p95(duration_ms) as p95_ms count by service | sort -p95_ms`)}>View complete workload →</Link>
           </footer>
         </section>
       </div>

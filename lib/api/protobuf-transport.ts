@@ -26,7 +26,10 @@ export interface ProtobufRequestOptions {
 export interface ProtobufTransportOptions {
   /**
    * Empty by default so the embedded static export calls its serving origin.
-   * A full origin can be supplied for local frontend development.
+   * Test builds may supply another base. The production Go API itself enforces
+   * same-origin browser traffic and advertises root-absolute WebSocket/export
+   * paths, so cross-origin or arbitrary-prefix development needs a compatible
+   * trusted test double.
    */
   readonly baseUrl?: string;
   readonly timeoutMs?: number;

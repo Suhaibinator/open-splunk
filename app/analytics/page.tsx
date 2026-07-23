@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 
+import { getFrontendRuntimeConfig } from "@/lib/frontend-runtime-config";
+
 import { ProductShell } from "../_components/product-shell";
 import { AnalyticsConsole } from "./analytics-console";
 
@@ -9,11 +11,11 @@ export const metadata: Metadata = {
 };
 
 export default function AnalyticsPage() {
-  const dataMode = process.env.OPEN_SPLUNK_DATA_MODE === "backend" ? "backend" : "demo";
+  const { dataMode } = getFrontendRuntimeConfig();
 
   return (
     <ProductShell activeSection="analytics" appName="Analytics" dataMode={dataMode}>
-      <AnalyticsConsole />
+      <AnalyticsConsole dataMode={dataMode} />
     </ProductShell>
   );
 }
