@@ -116,6 +116,56 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	eventIndexTime := queryIntegrationInsertEvent(t, ctx, connection)
 	timechartBase, timechartIndexTime := queryIntegrationInsertTimechartEvents(t, ctx, connection)
 	gradeThisBase, gradeThisIndexTime, gradeThisTraceID := queryIntegrationInsertGradeThisEvents(t, ctx, connection)
+	t.Run("timeline compiler and executor preserve exact event selection", func(t *testing.T) {
+		earliest := gradeThisBase.Add(2 * time.Minute)
+		latest := gradeThisBase.Add(12 * time.Minute)
+		spec := clickhouse.TimelineSpec{
+			FirstBucket: gradeThisBase,
+			SpanSeconds: int64((5 * time.Minute) / time.Second),
+			BucketCount: 3,
+			Earliest:    earliest,
+			Latest:      latest,
+		}
+		tests := []struct {
+			name       string
+			source     string
+			wantCounts []uint64
+		}{
+			{
+				name:       "half-open search boundaries",
+				source:     `index=gradethis`,
+				wantCounts: []uint64{2, 3, 1},
+			},
+			{
+				name:       "sort and head pipeline with zero fill",
+				source:     `index=gradethis | sort 0 -_time | head 4`,
+				wantCounts: []uint64{0, 3, 1},
+			},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				compiled := queryIntegrationCompileTimeline(
+					t, test.source, "gradethis", gradeThisIndexTime, spec,
+				)
+				buckets, err := executor.ExecuteTimeline(ctx, compiled)
+				if err != nil {
+					t.Fatalf("ExecuteTimeline() error = %v", err)
+				}
+				if len(buckets) != len(test.wantCounts) {
+					t.Fatalf("timeline buckets = %#v, want %d buckets", buckets, len(test.wantCounts))
+				}
+				for index, wantCount := range test.wantCounts {
+					wantStart := gradeThisBase.Add(time.Duration(index) * 5 * time.Minute)
+					if !buckets[index].AlignedStart.Equal(wantStart) || buckets[index].Count != wantCount {
+						t.Fatalf(
+							"timeline bucket %d = {%v, %d}, want {%v, %d}",
+							index, buckets[index].AlignedStart, buckets[index].Count, wantStart, wantCount,
+						)
+					}
+				}
+			})
+		}
+	})
 	t.Run("GradeThis product plan compatibility corpus", func(t *testing.T) {
 		tests := []struct {
 			name        string
@@ -1542,6 +1592,37 @@ func queryIntegrationCompileSearchRange(
 		t.Fatal(err)
 	}
 	compiled, err := (clickhouse.Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiled
+}
+
+func queryIntegrationCompileTimeline(
+	t *testing.T,
+	source, indexName string,
+	indexTime time.Time,
+	spec clickhouse.TimelineSpec,
+) clickhouse.CompiledTimeline {
+	t.Helper()
+	parsed, err := spl.Parse(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visibility := uint64(1)
+	logical, err := plan.Build(parsed, plan.Scope{
+		TenantID:          "tenant",
+		AuthorizedIndexes: []string{indexName},
+		RequestedIndexes:  []string{indexName},
+		Earliest:          spec.Earliest,
+		Latest:            spec.Latest,
+		IndexTimeCutoff:   indexTime.Add(500 * time.Microsecond),
+		VisibilityCutoff:  &visibility,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := (clickhouse.Compiler{}).CompileTimeline(logical, spec)
 	if err != nil {
 		t.Fatal(err)
 	}

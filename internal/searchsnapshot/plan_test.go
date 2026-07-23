@@ -2,6 +2,7 @@ package searchsnapshot
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -51,6 +52,34 @@ func TestBuildPlanPreservesEmptyVisibilitySnapshot(t *testing.T) {
 	}
 	if got := logical.Operators[0].(*plan.Scan).VisibilityCutoff; got != 0 {
 		t.Fatalf("visibility cutoff = %d, want 0", got)
+	}
+}
+
+func TestBuildExecutionPlanMatchesCompletedJobPlan(t *testing.T) {
+	job := testJob()
+	fromJob, err := BuildPlan(job)
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	fromSnapshot, err := BuildExecutionPlan(searchjobs.ExecutionSnapshot{
+		ID:               job.ID,
+		OwnerID:          job.OwnerID,
+		TenantID:         job.TenantID,
+		SPL:              job.SPL,
+		EffectiveIndexes: slices.Clone(job.EffectiveIndexes),
+		Earliest:         job.Earliest,
+		Latest:           job.Latest,
+		IndexTimeCutoff:  job.IndexTimeCutoff,
+		VisibilityCutoff: job.VisibilityCutoff,
+	})
+	if err != nil {
+		t.Fatalf("BuildExecutionPlan() error = %v", err)
+	}
+	jobScan := fromJob.Operators[0].(*plan.Scan)
+	snapshotScan := fromSnapshot.Operators[0].(*plan.Scan)
+	if !slices.Equal(fromSnapshot.EffectiveIndexes, fromJob.EffectiveIndexes) ||
+		!reflect.DeepEqual(snapshotScan, jobScan) {
+		t.Fatalf("execution snapshot plan differs: job=%+v snapshot=%+v", fromJob, fromSnapshot)
 	}
 }
 
