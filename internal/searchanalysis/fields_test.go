@@ -1250,6 +1250,11 @@ func (clock *fieldTestClock) Advance(delta time.Duration) {
 
 func newFieldTestService(t *testing.T, config FieldConfig) *FieldService {
 	t.Helper()
+	if config.Clock == nil {
+		// Keep fixed-date lifecycle fixtures independent of the machine clock.
+		now := time.Date(2026, 7, 21, 9, 2, 0, 0, time.UTC)
+		config.Clock = func() time.Time { return now }
+	}
 	if config.CursorKey == nil {
 		config.CursorKey = fieldTestCursorKey
 	}
