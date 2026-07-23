@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"maps"
 	"math"
-	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -84,7 +83,7 @@ func (executor *Executor) ExecuteFieldSummary(
 	if ctx == nil {
 		return FieldSummaryResult{}, errors.New("execute ClickHouse field summary: context is nil")
 	}
-	if executor == nil || isNilFieldSummaryValue(executor.connection) {
+	if executor == nil || isNilDriverValue(executor.connection) {
 		return FieldSummaryResult{}, errors.New("execute ClickHouse field summary: executor connection is required")
 	}
 	if executor.newQueryID == nil {
@@ -120,7 +119,7 @@ func (executor *Executor) ExecuteFieldSummary(
 	if err != nil {
 		return FieldSummaryResult{}, classifyQueryError(ctx, fmt.Errorf("query ClickHouse field summary: %w", err))
 	}
-	if isNilFieldSummaryValue(rows) {
+	if isNilDriverValue(rows) {
 		return FieldSummaryResult{}, invalidFieldSummaryResult("returned no result stream")
 	}
 
@@ -314,7 +313,11 @@ func (executor *Executor) ExecuteFieldSummary(
 		if valueType == uint8(eventfields.StoredValueTypeNull) {
 			continue
 		}
-		if _, ok := groupedKinds[searchjobs.ValueKind(valueType)]; !ok {
+		kind, ok := fieldSummaryValueKind(valueType)
+		if !ok {
+			return FieldSummaryResult{}, invalidFieldSummaryResult("observed value kind is invalid")
+		}
+		if _, ok := groupedKinds[kind]; !ok {
 			return FieldSummaryResult{}, invalidFieldSummaryResult("observed value kind has no value group")
 		}
 	}
@@ -425,7 +428,7 @@ func validateFieldSummaryColumns(columns []string, columnTypes []driver.ColumnTy
 		"UInt8", "String", "UInt64", "UInt8", "UInt8", "UInt8",
 	}
 	for index, columnType := range columnTypes {
-		if isNilFieldSummaryValue(columnType) || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
+		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
 			columnType.DatabaseTypeName() != expectedTypes[index] {
 			return invalidFieldSummaryResult(fmt.Sprintf("column %q has an invalid type", expectedColumns[index]))
 		}
@@ -463,10 +466,44 @@ func validateFieldSummaryHeader(header fieldSummaryHeader, query clickhouse.Comp
 }
 
 func fieldSummaryObservedType(observed []uint8, kind searchjobs.ValueKind) bool {
-	if kind < searchjobs.ValueKindString || kind > searchjobs.ValueKindDecimal {
-		return false
+	for _, valueType := range observed {
+		observedKind, ok := fieldSummaryValueKind(valueType)
+		if ok && observedKind == kind {
+			return true
+		}
 	}
-	return slices.Contains(observed, uint8(kind))
+	return false
+}
+
+func fieldSummaryValueKind(valueType uint8) (searchjobs.ValueKind, bool) {
+	switch eventfields.StoredValueType(valueType) {
+	case eventfields.StoredValueTypeNull:
+		return searchjobs.ValueKindNull, true
+	case eventfields.StoredValueTypeString:
+		return searchjobs.ValueKindString, true
+	case eventfields.StoredValueTypeSint64:
+		return searchjobs.ValueKindSigned, true
+	case eventfields.StoredValueTypeUint64:
+		return searchjobs.ValueKindUnsigned, true
+	case eventfields.StoredValueTypeDouble:
+		return searchjobs.ValueKindDouble, true
+	case eventfields.StoredValueTypeBool:
+		return searchjobs.ValueKindBool, true
+	case eventfields.StoredValueTypeBytes:
+		return searchjobs.ValueKindBytes, true
+	case eventfields.StoredValueTypeTimestamp:
+		return searchjobs.ValueKindTime, true
+	case eventfields.StoredValueTypeDuration:
+		return searchjobs.ValueKindDuration, true
+	case eventfields.StoredValueTypeList:
+		return searchjobs.ValueKindList, true
+	case eventfields.StoredValueTypeObject:
+		return searchjobs.ValueKindObject, true
+	case eventfields.StoredValueTypeDecimal:
+		return searchjobs.ValueKindDecimal, true
+	default:
+		return searchjobs.ValueKindInvalid, false
+	}
 }
 
 func decodeFieldSummaryValue(
@@ -638,17 +675,4 @@ func fieldSummaryRetainedValueBytes(value canonicalFieldSummaryValue, encoded st
 
 func invalidFieldSummaryResult(message string) error {
 	return fmt.Errorf("%w: ClickHouse field summary %s", searchjobs.ErrInvalidResult, message)
-}
-
-func isNilFieldSummaryValue(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }

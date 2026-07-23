@@ -425,7 +425,12 @@ func NewHandler(config Config) (*Handler, error) {
 		bootstrap.MaximumSubscriptions = maximumSubscriptions
 		bootstrap.MaximumWebSocketBytes = maximumFrameBytes
 	}
-	bootstrap.Features = featuresForServices(bootstrap.Features, indexAdmin != nil, ingestionTokens != nil, searchHistoryService != nil, exportService != nil, timelineService != nil, fieldService != nil)
+	bootstrap.Features = featuresForServices(bootstrap.Features, serviceCapabilities{
+		history:        searchHistoryService != nil,
+		exports:        exportService != nil,
+		timeline:       timelineService != nil,
+		fieldDiscovery: fieldService != nil,
+	})
 	browserAllowedHosts, err := normalizeBrowserAllowedHosts(config.AdministrativeAllowedHosts)
 	if err != nil {
 		return nil, fmt.Errorf("create server handler: %w", err)
@@ -639,7 +644,14 @@ func normalizeBootstrap(config BootstrapConfig) (BootstrapConfig, error) {
 	return result, nil
 }
 
-func featuresForServices(features []opensplunkv1.ServerFeature, _, _, historyEnabled, exportsEnabled, timelineEnabled, fieldDiscoveryEnabled bool) []opensplunkv1.ServerFeature {
+type serviceCapabilities struct {
+	history        bool
+	exports        bool
+	timeline       bool
+	fieldDiscovery bool
+}
+
+func featuresForServices(features []opensplunkv1.ServerFeature, capabilities serviceCapabilities) []opensplunkv1.ServerFeature {
 	// The current handlers intentionally expose only the clean-install
 	// provisioning subset of these API families. Do not advertise either broad
 	// capability until every route in the corresponding proto family exists.
@@ -651,14 +663,14 @@ func featuresForServices(features []opensplunkv1.ServerFeature, _, _, historyEna
 	hasFieldDiscovery := false
 	for _, feature := range features {
 		if feature == opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE {
-			if timelineEnabled && !hasTimeline {
+			if capabilities.timeline && !hasTimeline {
 				result = append(result, feature)
 				hasTimeline = true
 			}
 			continue
 		}
 		if feature == opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY {
-			if fieldDiscoveryEnabled && !hasFieldDiscovery {
+			if capabilities.fieldDiscovery && !hasFieldDiscovery {
 				result = append(result, feature)
 				hasFieldDiscovery = true
 			}
@@ -669,28 +681,28 @@ func featuresForServices(features []opensplunkv1.ServerFeature, _, _, historyEna
 			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN &&
 			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN &&
 			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION &&
-			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY || historyEnabled) &&
-			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV || exportsEnabled) &&
-			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES || exportsEnabled) {
+			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY || capabilities.history) &&
+			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV || capabilities.exports) &&
+			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES || capabilities.exports) {
 			result = append(result, feature)
 			hasHistory = hasHistory || feature == opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY
 			hasCSVExport = hasCSVExport || feature == opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV
 			hasJSONLinesExport = hasJSONLinesExport || feature == opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES
 		}
 	}
-	if historyEnabled && !hasHistory {
+	if capabilities.history && !hasHistory {
 		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY)
 	}
-	if exportsEnabled && !hasCSVExport {
+	if capabilities.exports && !hasCSVExport {
 		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV)
 	}
-	if exportsEnabled && !hasJSONLinesExport {
+	if capabilities.exports && !hasJSONLinesExport {
 		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES)
 	}
-	if timelineEnabled && !hasTimeline {
+	if capabilities.timeline && !hasTimeline {
 		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE)
 	}
-	if fieldDiscoveryEnabled && !hasFieldDiscovery {
+	if capabilities.fieldDiscovery && !hasFieldDiscovery {
 		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY)
 	}
 	return result

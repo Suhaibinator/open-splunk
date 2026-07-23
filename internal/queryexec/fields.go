@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"reflect"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -48,7 +47,7 @@ func (executor *Executor) ExecuteFieldCatalog(ctx context.Context, query clickho
 	if ctx == nil {
 		return FieldCatalogResult{}, errors.New("execute ClickHouse field catalog: context is nil")
 	}
-	if executor == nil || isNilFieldCatalogValue(executor.connection) {
+	if executor == nil || isNilDriverValue(executor.connection) {
 		return FieldCatalogResult{}, errors.New("execute ClickHouse field catalog: executor connection is required")
 	}
 	if executor.newQueryID == nil {
@@ -83,7 +82,7 @@ func (executor *Executor) ExecuteFieldCatalog(ctx context.Context, query clickho
 	if err != nil {
 		return FieldCatalogResult{}, classifyQueryError(ctx, fmt.Errorf("query ClickHouse field catalog: %w", err))
 	}
-	if isNilFieldCatalogValue(rows) {
+	if isNilDriverValue(rows) {
 		return FieldCatalogResult{}, fmt.Errorf("%w: ClickHouse field catalog returned no result stream", searchjobs.ErrInvalidResult)
 	}
 
@@ -274,7 +273,7 @@ func validateFieldCatalogColumns(columns []string, columnTypes []driver.ColumnTy
 	}
 	expectedTypes := []string{"UInt8", "String", "Array(UInt8)", "UInt64", "UInt64", "UInt64", "UInt64", "UInt8"}
 	for index, columnType := range columnTypes {
-		if isNilFieldCatalogValue(columnType) || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
+		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
 			columnType.DatabaseTypeName() != expectedTypes[index] {
 			return invalidFieldCatalogResult(fmt.Sprintf("column %q has an invalid type", expectedColumns[index]))
 		}
@@ -325,17 +324,4 @@ func storedValueTypes(codes []uint8) []eventfields.StoredValueType {
 
 func invalidFieldCatalogResult(message string) error {
 	return fmt.Errorf("%w: ClickHouse field catalog %s", searchjobs.ErrInvalidResult, message)
-}
-
-func isNilFieldCatalogValue(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }

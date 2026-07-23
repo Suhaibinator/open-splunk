@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"math"
-	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -39,7 +38,7 @@ func (executor *Executor) ExecuteTimeline(ctx context.Context, query clickhouse.
 	if ctx == nil {
 		return nil, errors.New("execute ClickHouse timeline: context is nil")
 	}
-	if executor == nil || isNilTimelineValue(executor.connection) {
+	if executor == nil || isNilDriverValue(executor.connection) {
 		return nil, errors.New("execute ClickHouse timeline: executor connection is required")
 	}
 	if executor.newQueryID == nil {
@@ -74,7 +73,7 @@ func (executor *Executor) ExecuteTimeline(ctx context.Context, query clickhouse.
 	if err != nil {
 		return nil, classifyQueryError(ctx, fmt.Errorf("query ClickHouse timeline: %w", err))
 	}
-	if isNilTimelineValue(rows) {
+	if isNilDriverValue(rows) {
 		return nil, fmt.Errorf("%w: ClickHouse timeline returned no result stream", searchjobs.ErrInvalidResult)
 	}
 
@@ -221,23 +220,10 @@ func validateTimelineColumns(columns []string, columnTypes []driver.ColumnType) 
 	}
 	expectedTypes := []string{timelineOrdinalDatabaseType, timelineCountDatabaseType}
 	for index, columnType := range columnTypes {
-		if isNilTimelineValue(columnType) || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
+		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
 			columnType.DatabaseTypeName() != expectedTypes[index] {
 			return fmt.Errorf("%w: ClickHouse timeline column %q has an invalid type", searchjobs.ErrInvalidResult, expectedColumns[index])
 		}
 	}
 	return nil
-}
-
-func isNilTimelineValue(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }

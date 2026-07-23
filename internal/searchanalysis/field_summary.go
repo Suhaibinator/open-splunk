@@ -745,47 +745,16 @@ func cloneFieldSummaryPrefix(source FieldSummary, maximum uint32) FieldSummary {
 	for index := range count {
 		item := source.TopValues[index]
 		result.TopValues[index] = FieldValueCount{
-			Value:              cloneFieldSummaryValue(item.Value),
+			// Value payloads are immutable: variable-width storage is private and
+			// every public accessor returns a clone. A direct assignment therefore
+			// avoids copying bytes again on every cache hit without exposing the
+			// cached value to mutation.
+			Value:              item.Value,
 			Count:              item.Count,
 			CountIsApproximate: item.CountIsApproximate,
 		}
 	}
 	return result
-}
-
-func cloneFieldSummaryValue(source searchjobs.Value) searchjobs.Value {
-	switch source.Kind() {
-	case searchjobs.ValueKindString:
-		value, _ := source.String()
-		return searchjobs.StringValue(value)
-	case searchjobs.ValueKindSigned:
-		value, _ := source.Signed()
-		return searchjobs.SignedValue(value)
-	case searchjobs.ValueKindUnsigned:
-		value, _ := source.Unsigned()
-		return searchjobs.UnsignedValue(value)
-	case searchjobs.ValueKindDouble:
-		value, _ := source.Double()
-		return searchjobs.DoubleValue(value)
-	case searchjobs.ValueKindBool:
-		value, _ := source.Bool()
-		return searchjobs.BoolValue(value)
-	case searchjobs.ValueKindBytes:
-		value, _ := source.Bytes()
-		return searchjobs.BytesValue(value)
-	case searchjobs.ValueKindTime:
-		value, _ := source.Time()
-		return searchjobs.TimeValue(value)
-	case searchjobs.ValueKindDuration:
-		value, _ := source.Duration()
-		return searchjobs.DurationValue(value)
-	case searchjobs.ValueKindDecimal:
-		value, _ := source.Decimal()
-		result, _ := searchjobs.DecimalValue(value)
-		return result
-	default:
-		return searchjobs.Value{}
-	}
 }
 
 func (service *FieldService) liveSummaryCacheEntryLocked(

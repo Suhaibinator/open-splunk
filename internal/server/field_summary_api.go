@@ -15,8 +15,12 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"google.golang.org/protobuf/proto"
 )
+
+type searchFieldSummaryValueIdentity struct {
+	kind      searchjobs.ValueKind
+	canonical string
+}
 
 func (handler *apiHandler) getSearchFieldSummary(request *http.Request, input *opensplunkv1.GetSearchFieldSummaryRequest) (*serializedSearchFieldSummaryResponse, error) {
 	if input == nil {
@@ -144,7 +148,7 @@ func searchFieldSummaryToProto(
 		return nil, errors.New("search field summary observed types exceed its distinct values")
 	}
 	topValues := make([]*opensplunkv1.FieldValueCount, len(summary.TopValues))
-	seen := make(map[string]struct{}, len(summary.TopValues))
+	seen := make(map[searchFieldSummaryValueIdentity]struct{}, len(summary.TopValues))
 	topKinds := make(map[searchjobs.ValueKind]struct{}, len(summary.TopValues))
 	var exactCountTotal uint64
 	var previousCount uint64 = math.MaxUint64
@@ -174,18 +178,15 @@ func searchFieldSummaryToProto(
 			(display < previousDisplay || display == previousDisplay && kind <= previousKind) {
 			return nil, errors.New("search field summary values are not deterministically ordered")
 		}
+		identity := searchFieldSummaryValueIdentity{kind: kind, canonical: display}
+		if _, duplicate := seen[identity]; duplicate {
+			return nil, errors.New("search field summary contains duplicate values")
+		}
+		seen[identity] = struct{}{}
 		converted, err := valueToProto(ctx, item.Value)
 		if err != nil {
 			return nil, err
 		}
-		key, err := proto.MarshalOptions{Deterministic: true}.Marshal(converted)
-		if err != nil {
-			return nil, err
-		}
-		if _, duplicate := seen[string(key)]; duplicate {
-			return nil, errors.New("search field summary contains duplicate values")
-		}
-		seen[string(key)] = struct{}{}
 		topKinds[kind] = struct{}{}
 		if item.CountIsApproximate {
 			return nil, errors.New("approximate search field summary value is unsupported")

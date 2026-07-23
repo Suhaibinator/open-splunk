@@ -784,6 +784,22 @@ func convertValue(value any) (searchjobs.Value, error) {
 	}
 }
 
+// isNilDriverValue recognizes typed nils returned through driver interfaces.
+// Keeping this at the package boundary ensures every specialized executor
+// rejects them consistently before invoking a driver method.
+func isNilDriverValue(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}
+
 // convertExtendedValue reverses the lossless representation used when an
 // ingestion value has no native ClickHouse Dynamic alternative. Only the
 // exact reserved two-entry map is treated as an envelope; ordinary maps that
