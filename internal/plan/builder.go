@@ -18,7 +18,7 @@ const (
 	// Ingestion permits a leaf below 16 nested objects: 17 path segments of 256
 	// bytes each. Dots and backslashes require one escape byte in SPL, so the
 	// full query spelling can be at most 17*(2*256)+16 separators.
-	maxFieldNameBytes        = 8720
+	maxFieldNameBytes        = eventfields.MaximumNormalizedFieldNameBytes
 	maxFieldPathSegments     = 17
 	maxFieldPathSegmentBytes = 256
 	maxTimechartBuckets      = 10_000

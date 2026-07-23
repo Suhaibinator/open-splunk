@@ -10,6 +10,12 @@ const (
 	// CurrentFieldMetadataVersion is written when field_names and field_types
 	// carry the complete, aligned metadata contract defined in this package.
 	CurrentFieldMetadataVersion uint8 = 1
+	// MaximumStoredFieldsPerEvent is the durable hard ceiling for aligned leaf
+	// metadata. Ingestion may configure a lower limit but cannot write more.
+	MaximumStoredFieldsPerEvent = 1_024
+	// MaximumNormalizedFieldNameBytes includes the escaping required to retain
+	// literal dots and backslashes in one unambiguous stored dotted path.
+	MaximumNormalizedFieldNameBytes = 8_720
 
 	StoredValueTypeNull      StoredValueType = 1
 	StoredValueTypeString    StoredValueType = 2

@@ -79,6 +79,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	queryIntegrationTestFieldCatalog(t, ctx, connection, executor)
 	t.Run("native typed scan types", func(t *testing.T) {
 		sink := &fakeSink{}
 		err := executor.Execute(ctx, clickhouse.CompiledQuery{

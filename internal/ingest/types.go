@@ -8,6 +8,7 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 )
 
 const (
@@ -19,7 +20,7 @@ const (
 	HardMaxBatchEvents       uint32 = 1_000
 	HardMaxBatchBytes        uint64 = 8 << 20
 	HardMaxEventBytes        uint64 = 1 << 20
-	HardMaxFields            uint32 = 1_024
+	HardMaxFields            uint32 = eventfields.MaximumStoredFieldsPerEvent
 	HardMaxNestingDepth      uint32 = 16
 	HardMaxFieldNameBytes    uint32 = 256
 	HardMaxIDBytes           uint32 = 128
