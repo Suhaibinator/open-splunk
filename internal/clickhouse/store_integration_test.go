@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -146,6 +147,9 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = queryConnection.Close() })
+	t.Run("ambiguous committed insert recovers after server restart", func(t *testing.T) {
+		testAmbiguousCommittedInsertRecovery(t, ctx, config, queryConnection, indexTime)
+	})
 	var count uint64
 	if err := queryConnection.QueryRow(ctx, "SELECT count() FROM open_splunk.events WHERE event_id = ?", "native-event").Scan(&count); err != nil {
 		t.Fatalf("query dedup count: %v", err)
@@ -227,6 +231,235 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	}
 
 	testCompiledQueriesAgainstClickHouse(t, ctx, store, queryConnection, indexTime)
+}
+
+func testAmbiguousCommittedInsertRecovery(
+	t *testing.T,
+	ctx context.Context,
+	config Config,
+	queryConnection clickhousedriver.Conn,
+	indexTime time.Time,
+) {
+	t.Helper()
+
+	controlPath := filepath.Join(t.TempDir(), "restart-control.sqlite")
+	firstControl, err := control.Open(ctx, controlPath)
+	if err != nil {
+		t.Fatalf("open first visibility control database: %v", err)
+	}
+	firstControlOpen := true
+	defer func() {
+		if firstControlOpen {
+			_ = firstControl.Close()
+		}
+	}()
+	firstSequencer, err := visibility.NewSQLite(ctx, firstControl)
+	if err != nil {
+		t.Fatalf("create first visibility sequencer: %v", err)
+	}
+	options, normalized, err := config.clickHouseOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstNative, err := clickhousedriver.Open(options)
+	if err != nil {
+		t.Fatalf("open first native ClickHouse connection: %v", err)
+	}
+	firstStore, err := newStore(
+		&commitThenErrorStoreConnection{delegate: &nativeStoreConnection{connection: firstNative}},
+		normalized.Database,
+		normalized.Table,
+		fixedRetention(30*24*time.Hour),
+		firstSequencer,
+		time.Now,
+		normalized.RetryAfter,
+	)
+	if err != nil {
+		_ = firstNative.Close()
+		t.Fatalf("create first store: %v", err)
+	}
+	firstStoreOpen := true
+	defer func() {
+		if firstStoreOpen {
+			_ = firstStore.Close()
+		}
+	}()
+
+	event := testStoredEvent("ambiguous-restart-event", "main", indexTime.Add(time.Second))
+	event.CollectorID = "restart-collector"
+	event.BatchID = "ambiguous-restart-batch"
+	batch := ingest.StoreBatch{
+		TenantID: "tenant", CollectorID: "restart-collector",
+		BatchID: "ambiguous-restart-batch", BatchSequence: 1, OriginalEventCount: 1,
+		SourceBatchSHA256: testSourceBatchDigest("ambiguous-restart-batch"),
+		ReceivedAt:        indexTime.Add(time.Second),
+		Events:            []*ingest.StoredEvent{event},
+	}
+	result, storeErr := firstStore.Store(ctx, batch)
+	if !isTransient(storeErr) ||
+		result.Accepted != 0 || result.Duplicate != 0 || result.AcknowledgedThrough != nil ||
+		!result.CommittedAt.IsZero() || result.OriginalEventCount != 0 || len(result.RejectedEvents) != 0 {
+		t.Fatalf("outcome-ambiguous Store = (%+v, %v), want zero result and transient error", result, storeErr)
+	}
+	if !errors.Is(storeErr, io.ErrUnexpectedEOF) {
+		t.Fatalf("outcome-ambiguous Store error = %v, want wrapped %v", storeErr, io.ErrUnexpectedEOF)
+	}
+	digest, err := storePayloadDigest(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, found, err := firstSequencer.Lookup(
+		ctx,
+		deduplicationToken(batch),
+		sequenceIdentityKey(batch),
+		digest,
+	)
+	if err != nil || !found || pending.AlreadyCommitted || !pending.MayHaveReachedStorage ||
+		pending.Sequence != 1 || len(pending.Outbox) == 0 || !pending.CommittedAt.IsZero() {
+		t.Fatalf("ambiguous reservation before restart = %+v, found=%v, error=%v", pending, found, err)
+	}
+	if cutoff, cutoffErr := firstStore.VisibilityCutoff(ctx); cutoffErr != nil || cutoff != 0 {
+		t.Fatalf("visibility cutoff before restart = %d, error = %v, want 0", cutoff, cutoffErr)
+	}
+	if err := firstStore.Close(); err != nil {
+		t.Fatalf("close first store: %v", err)
+	}
+	firstStoreOpen = false
+	if err := firstControl.Close(); err != nil {
+		t.Fatalf("close first visibility control database: %v", err)
+	}
+	firstControlOpen = false
+
+	var count uint64
+	if err := queryConnection.QueryRow(ctx,
+		"SELECT count() FROM open_splunk.events WHERE event_id = ?",
+		event.Event.GetEventId(),
+	).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("committed row before restart recovery = %d, error = %v, want 1", count, err)
+	}
+
+	secondControl, err := control.Open(ctx, controlPath)
+	if err != nil {
+		t.Fatalf("reopen visibility control database: %v", err)
+	}
+	defer func() { _ = secondControl.Close() }()
+	secondSequencer, err := visibility.NewSQLite(ctx, secondControl)
+	if err != nil {
+		t.Fatalf("create restarted visibility sequencer: %v", err)
+	}
+	secondStore, err := Open(config, fixedRetention(30*24*time.Hour), secondSequencer)
+	if err != nil {
+		t.Fatalf("open restarted store: %v", err)
+	}
+	defer func() { _ = secondStore.Close() }()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		cutoff, cutoffErr := secondStore.VisibilityCutoff(ctx)
+		if cutoffErr != nil {
+			t.Fatalf("read recovered visibility cutoff: %v", cutoffErr)
+		}
+		if cutoff == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("restart reconciliation did not advance visibility cutoff: got %d, want 1", cutoff)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	reservation, found, err := secondSequencer.Lookup(
+		ctx,
+		deduplicationToken(batch),
+		sequenceIdentityKey(batch),
+		digest,
+	)
+	if err != nil || !found || !reservation.AlreadyCommitted || reservation.Sequence != 1 || len(reservation.Outbox) != 0 {
+		t.Fatalf("recovered reservation = %+v, found=%v, error=%v", reservation, found, err)
+	}
+	result, err = secondStore.Store(ctx, batch)
+	if err != nil || result.Accepted != 0 || result.Duplicate != 1 || result.OriginalEventCount != 1 {
+		t.Fatalf("collector retry after restart = (%+v, %v), want one duplicate", result, err)
+	}
+	if err := queryConnection.QueryRow(ctx,
+		"SELECT count() FROM open_splunk.events WHERE event_id = ?",
+		event.Event.GetEventId(),
+	).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("row count after replay and collector retry = %d, error = %v, want 1", count, err)
+	}
+
+	nextEvent := testStoredEvent("ambiguous-restart-next", "main", indexTime.Add(2*time.Second))
+	nextEvent.CollectorID = "restart-collector"
+	nextEvent.BatchID = "ambiguous-restart-next-batch"
+	nextBatch := ingest.StoreBatch{
+		TenantID: "tenant", CollectorID: "restart-collector",
+		BatchID: "ambiguous-restart-next-batch", BatchSequence: 2, OriginalEventCount: 1,
+		SourceBatchSHA256: testSourceBatchDigest("ambiguous-restart-next-batch"),
+		ReceivedAt:        indexTime.Add(2 * time.Second),
+		Events:            []*ingest.StoredEvent{nextEvent},
+	}
+	result, err = secondStore.Store(ctx, nextBatch)
+	if err != nil || result.Accepted != 1 || result.Duplicate != 0 {
+		t.Fatalf("post-recovery Store = (%+v, %v), want one accepted event", result, err)
+	}
+	if cutoff, cutoffErr := secondStore.VisibilityCutoff(ctx); cutoffErr != nil || cutoff != 2 {
+		t.Fatalf("post-recovery visibility cutoff = %d, error = %v, want 2", cutoff, cutoffErr)
+	}
+	nextDigest, err := storePayloadDigest(nextBatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextReservation, found, err := secondSequencer.Lookup(
+		ctx,
+		deduplicationToken(nextBatch),
+		sequenceIdentityKey(nextBatch),
+		nextDigest,
+	)
+	if err != nil || !found || !nextReservation.AlreadyCommitted ||
+		nextReservation.Sequence != 2 || len(nextReservation.Outbox) != 0 {
+		t.Fatalf("post-recovery reservation = %+v, found=%v, error=%v", nextReservation, found, err)
+	}
+	if err := queryConnection.QueryRow(ctx,
+		"SELECT count() FROM open_splunk.events WHERE event_id = ?",
+		nextEvent.Event.GetEventId(),
+	).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("post-recovery row count = %d, error = %v, want 1", count, err)
+	}
+}
+
+type commitThenErrorStoreConnection struct {
+	delegate storeConnection
+}
+
+func (connection *commitThenErrorStoreConnection) prepare(
+	ctx context.Context,
+	query string,
+	settings clickhousedriver.Settings,
+) (writeBatch, error) {
+	batch, err := connection.delegate.prepare(ctx, query, settings)
+	if err != nil {
+		return nil, err
+	}
+	return &commitThenErrorWriteBatch{writeBatch: batch}, nil
+}
+
+func (connection *commitThenErrorStoreConnection) Ping(ctx context.Context) error {
+	return connection.delegate.Ping(ctx)
+}
+
+func (connection *commitThenErrorStoreConnection) Close() error {
+	return connection.delegate.Close()
+}
+
+type commitThenErrorWriteBatch struct {
+	writeBatch
+}
+
+func (batch *commitThenErrorWriteBatch) Send() error {
+	if err := batch.writeBatch.Send(); err != nil {
+		return err
+	}
+	return io.ErrUnexpectedEOF
 }
 
 func testCompiledQueriesAgainstClickHouse(
