@@ -46,9 +46,14 @@ func TestNewNormalizesHardBoundsAndReportsBootstrapLimits(t *testing.T) {
 	if service.MaximumFrameBytes() < minimumFrameBytes {
 		t.Fatalf("MaximumFrameBytes() = %d, want at least %d", service.MaximumFrameBytes(), minimumFrameBytes)
 	}
+	if service.MaximumPreviewRows() == 0 {
+		t.Fatal("MaximumPreviewRows() = 0")
+	}
 	limits := service.Limits()
-	if limits.MaximumSubscriptions != service.MaximumSubscriptions() || limits.MaximumFrameBytes != service.MaximumFrameBytes() {
-		t.Fatalf("Limits() = %+v, methods = (%d, %d)", limits, service.MaximumSubscriptions(), service.MaximumFrameBytes())
+	if limits.MaximumSubscriptions != service.MaximumSubscriptions() ||
+		limits.MaximumPreviewRows != service.MaximumPreviewRows() ||
+		limits.MaximumFrameBytes != service.MaximumFrameBytes() {
+		t.Fatalf("Limits() = %+v, methods = (%d, %d, %d)", limits, service.MaximumSubscriptions(), service.MaximumPreviewRows(), service.MaximumFrameBytes())
 	}
 }
 
@@ -72,6 +77,7 @@ func TestNewRejectsMissingDependenciesUnsafeScopeAndUnusableLimits(t *testing.T)
 			config.MaximumQueuedBytes = 2048
 		}},
 		{name: "replay count", mutate: func(config *Config) { config.MaximumReplayEvents = maximumReplayEventsCeiling + 1 }},
+		{name: "preview rows", mutate: func(config *Config) { config.MaximumPreviewRows = maximumPreviewRowsCeiling + 1 }},
 		{name: "global replay", mutate: func(config *Config) { config.MaximumTotalReplayBytes = maximumTotalReplayBytesCeiling + 1 }},
 		{name: "ping not below pong", mutate: func(config *Config) {
 			config.PingInterval = time.Second

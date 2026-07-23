@@ -84,12 +84,11 @@ func TestIncompleteRetentionHasTruthfulBoundsAndNeverPublishesUnreplayableEvents
 	subscription := &subscription{id: "incomplete", target: target, connection: fakeConnection, active: true}
 	target.publishMu.Lock()
 	target.mu.Lock()
-	target.subscriptions[subscription] = struct{}{}
-	target.subscriberCount.Add(1)
+	target.addSubscriptionLocked(subscription)
 	target.mu.Unlock()
 	target.publishMu.Unlock()
 
-	projection, err := service.loadProjection(context.Background(), target.key)
+	projection, err := service.loadProjection(context.Background(), target.key, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,8 +112,7 @@ func TestIncompleteRetentionHasTruthfulBoundsAndNeverPublishesUnreplayableEvents
 	subscription.active = false
 	subscription.mu.Unlock()
 	target.mu.Lock()
-	delete(target.subscriptions, subscription)
-	target.subscriberCount.Add(-1)
+	target.removeSubscriptionLocked(subscription)
 	target.mu.Unlock()
 	target.publishMu.Unlock()
 }

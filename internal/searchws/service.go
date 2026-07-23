@@ -29,6 +29,7 @@ type Service struct {
 	connectionWG      sync.WaitGroup
 	targetWG          sync.WaitGroup
 	loadWG            sync.WaitGroup
+	projectionGate    chan struct{}
 
 	replayBudgetMu sync.Mutex
 	replayBytes    uint64
@@ -46,6 +47,7 @@ func New(config Config) (*Service, error) {
 	return &Service{
 		config: normalized, ctx: ctx, cancel: cancel, done: make(chan struct{}),
 		connections: make(map[*connection]struct{}), targets: make(map[targetKey]*targetState), loads: make(map[targetKey]*targetLoad),
+		projectionGate: make(chan struct{}, normalized.maximumConcurrentProjections),
 	}, nil
 }
 
@@ -69,6 +71,15 @@ func (service *Service) MaximumSubscriptions() uint32 {
 	return service.config.maximumSubscriptions
 }
 
+// MaximumPreviewRows returns the per-subscription live preview row bound
+// advertised by the browser bootstrap response.
+func (service *Service) MaximumPreviewRows() uint32 {
+	if service == nil {
+		return 0
+	}
+	return service.config.maximumPreviewRows
+}
+
 // MaximumFrameBytes returns the binary application-frame bound advertised by
 // the browser bootstrap response.
 func (service *Service) MaximumFrameBytes() uint64 {
@@ -83,7 +94,11 @@ func (service *Service) Limits() Limits {
 	if service == nil {
 		return Limits{}
 	}
-	return Limits{MaximumSubscriptions: service.config.maximumSubscriptions, MaximumFrameBytes: service.config.maximumFrameBytes}
+	return Limits{
+		MaximumSubscriptions: service.config.maximumSubscriptions,
+		MaximumPreviewRows:   service.config.maximumPreviewRows,
+		MaximumFrameBytes:    service.config.maximumFrameBytes,
+	}
 }
 
 // ServeHTTP is implemented in connection.go.
@@ -198,7 +213,8 @@ func (service *Service) releaseReplayBytes(amount uint64) {
 func (service *Service) reserveQueuedBytes(amount uint64) bool {
 	service.queueBudgetMu.Lock()
 	defer service.queueBudgetMu.Unlock()
-	if amount > service.config.maximumTotalQueuedBytes-service.queuedBytes {
+	if service.queuedBytes > service.config.maximumTotalQueuedBytes ||
+		amount > service.config.maximumTotalQueuedBytes-service.queuedBytes {
 		return false
 	}
 	service.queuedBytes += amount

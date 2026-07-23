@@ -279,8 +279,12 @@ type SearchSubscription struct {
 	Target         *JobTarget             `protobuf:"bytes,2,opt,name=target,proto3" json:"target,omitempty"`
 	// The server sends events strictly after this per-target sequence. Zero asks
 	// for current state followed by live events.
-	AfterSequence   uint64  `protobuf:"varint,3,opt,name=after_sequence,json=afterSequence,proto3" json:"after_sequence,omitempty"`
-	IncludePreviews bool    `protobuf:"varint,4,opt,name=include_previews,json=includePreviews,proto3" json:"include_previews,omitempty"`
+	AfterSequence uint64 `protobuf:"varint,3,opt,name=after_sequence,json=afterSequence,proto3" json:"after_sequence,omitempty"`
+	// Preview policy is per subscription while sequence numbers are per target.
+	// When false, a subscriber receives zero-row RESET continuity markers for
+	// canonical preview sequences so later target events remain contiguous.
+	IncludePreviews bool `protobuf:"varint,4,opt,name=include_previews,json=includePreviews,proto3" json:"include_previews,omitempty"`
+	// Requires include_previews. Omission selects the advertised server maximum.
 	PreviewRowLimit *uint32 `protobuf:"varint,5,opt,name=preview_row_limit,json=previewRowLimit,proto3,oneof" json:"preview_row_limit,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -840,7 +844,9 @@ func (x *ResultSchemaAvailable) GetSchema() *ResultSchema {
 }
 
 // ResultPreview is bounded and disposable. Durable/full pages are fetched via
-// GetSearchResults; a client may drop previews under backpressure.
+// GetSearchResults; a client may drop previews under backpressure. A zero-row
+// RESET with truncated=true can be a continuity marker for an opted-out or
+// more tightly bounded subscription and contains no result cells.
 type ResultPreview struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	SearchJobId     string                 `protobuf:"bytes,1,opt,name=search_job_id,json=searchJobId,proto3" json:"search_job_id,omitempty"`

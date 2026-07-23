@@ -272,17 +272,22 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 	postProto(t, ctx, client, baseURL+"/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{}, &bootstrap)
 	limits := bootstrap.GetLimits()
 	timelineFeatures := 0
+	previewFeatures := 0
 	for _, feature := range bootstrap.GetFeatures() {
-		if feature == opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE {
+		switch feature {
+		case opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE:
 			timelineFeatures++
+		case opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW:
+			previewFeatures++
 		}
 	}
 	if bootstrap.GetServerVersion() != "dev" || bootstrap.GetApiVersion() != "v1" ||
 		bootstrap.GetSplCompatibilityVersion() != splCompatibilityVersionForTest ||
 		bootstrap.GetSearchWebsocketPath() != "/api/v1/search/ws" ||
-		limits.GetMaximumPreviewRows() != 0 || limits.GetMaximumWebsocketSubscriptions() == 0 ||
+		limits.GetMaximumPreviewRows() == 0 || limits.GetMaximumWebsocketSubscriptions() == 0 ||
 		limits.GetMaximumWebsocketFrameBytes() < 1<<10 || limits.GetMaximumWebsocketFrameBytes() > 1<<20 ||
-		timelineFeatures != 1 || limits.GetMaximumTimelineBuckets() != verticalTimelineMaximumBuckets {
+		timelineFeatures != 1 || previewFeatures != 1 ||
+		limits.GetMaximumTimelineBuckets() != verticalTimelineMaximumBuckets {
 		t.Fatalf("standalone bootstrap response = %+v", &bootstrap)
 	}
 }
@@ -1192,6 +1197,7 @@ func observeCompletedSearchWebSocket(
 	if err := connection.SetWriteDeadline(deadline); err != nil {
 		t.Fatalf("set search websocket write deadline: %v", err)
 	}
+	previewRowLimit := uint32(2)
 	command := &opensplunkv1.SearchWebSocketCommand{
 		RequestId: "backend-vertical-subscribe",
 		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{
@@ -1202,7 +1208,9 @@ func observeCompletedSearchWebSocket(
 				}},
 				// Zero deliberately accepts the current terminal snapshot when this
 				// four-row query finishes before the upgrade completes.
-				AfterSequence: 0,
+				AfterSequence:   0,
+				IncludePreviews: true,
+				PreviewRowLimit: &previewRowLimit,
 			}},
 		}},
 	}
@@ -1233,8 +1241,13 @@ func observeCompletedSearchWebSocket(
 		lastStateVersion uint64
 		lastProducedRows uint64
 		lastResultBytes  uint64
+		lastPreview      uint64
+		schemaID         string
+		schemaColumns    int
 		sawState         bool
 		sawProgress      bool
+		sawSchema        bool
+		sawPreview       bool
 	)
 	for frame := 0; frame < 256; frame++ {
 		event := readBackendSearchWebSocketEvent(t, connection)
@@ -1260,7 +1273,32 @@ func observeCompletedSearchWebSocket(
 
 		switch {
 		case event.GetResultPreview() != nil:
-			t.Fatalf("search websocket delivered unrequested result preview: %+v", event.GetResultPreview())
+			preview := event.GetResultPreview()
+			if !sawSchema || preview.GetSearchJobId() != jobID || preview.GetSchemaId() != schemaID ||
+				preview.GetPreviewRevision() == 0 || preview.GetPreviewRevision() < lastPreview ||
+				preview.GetUpdateMode() != opensplunkv1.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET ||
+				len(preview.GetRows()) == 0 || len(preview.GetRows()) > int(previewRowLimit) ||
+				!preview.GetTruncated() {
+				t.Fatalf("search websocket preview = %+v (schema=%q columns=%d revision=%d)",
+					preview, schemaID, schemaColumns, lastPreview)
+			}
+			for rowIndex, row := range preview.GetRows() {
+				if row.GetRowId() == "" || len(row.GetCells()) != schemaColumns {
+					t.Fatalf("search websocket preview row %d = %+v, schema columns = %d",
+						rowIndex, row, schemaColumns)
+				}
+				rowWire, err := proto.MarshalOptions{Deterministic: true}.Marshal(row)
+				if err != nil {
+					t.Fatalf("marshal search websocket preview row %d: %v", rowIndex, err)
+				}
+				for _, sentinel := range []string{redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel} {
+					if bytes.Contains(rowWire, []byte(sentinel)) {
+						t.Fatalf("search websocket preview row %d leaked protected input", rowIndex)
+					}
+				}
+			}
+			lastPreview = preview.GetPreviewRevision()
+			sawPreview = true
 		case event.GetSearchStateChanged() != nil:
 			state := event.GetSearchStateChanged()
 			if state.GetSearchJobId() != jobID || state.GetState() == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED ||
@@ -1288,7 +1326,7 @@ func observeCompletedSearchWebSocket(
 			sawProgress = true
 		case event.GetSearchTerminal() != nil:
 			terminal := event.GetSearchTerminal()
-			if !sawState || !sawProgress || terminal.GetSearchJobId() != jobID ||
+			if !sawState || !sawProgress || !sawSchema || !sawPreview || terminal.GetSearchJobId() != jobID ||
 				terminal.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
 				terminal.GetStateVersion() == 0 || terminal.GetStateVersion() != lastStateVersion ||
 				terminal.GetFinalProgress().GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
@@ -1296,12 +1334,22 @@ func observeCompletedSearchWebSocket(
 				terminal.GetFinalProgress().GetProducedRows() != lastProducedRows ||
 				terminal.GetFinalProgress().GetResultBytes() != lastResultBytes || terminal.GetFailure() != nil ||
 				terminal.GetResultsExpireAt() == nil || terminal.GetResultsExpireAt().CheckValid() != nil {
-				t.Fatalf("search websocket terminal event = %+v (state=%t progress=%t last version=%d)",
-					terminal, sawState, sawProgress, lastStateVersion)
+				t.Fatalf("search websocket terminal event = %+v (state=%t progress=%t schema=%t preview=%t last version=%d)",
+					terminal, sawState, sawProgress, sawSchema, sawPreview, lastStateVersion)
 			}
 			return terminal
-		case event.GetResultSchemaAvailable() != nil, event.GetWarning() != nil:
-			// Metadata notifications may appear between progress and terminal.
+		case event.GetResultSchemaAvailable() != nil:
+			available := event.GetResultSchemaAvailable()
+			schema := available.GetSchema()
+			if available.GetSearchJobId() != jobID || schema.GetSchemaId() == "" ||
+				schema.GetRevision() == 0 || len(schema.GetColumns()) == 0 {
+				t.Fatalf("search websocket result schema = %+v", available)
+			}
+			schemaID = schema.GetSchemaId()
+			schemaColumns = len(schema.GetColumns())
+			sawSchema = true
+		case event.GetWarning() != nil:
+			// Warnings may appear between progress and terminal.
 		default:
 			t.Fatalf("unexpected search websocket event: %+v", event)
 		}

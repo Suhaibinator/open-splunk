@@ -22,11 +22,13 @@ import (
 const (
 	defaultMaximumConnections      = 128
 	defaultMaximumSubscriptions    = uint32(64)
+	defaultMaximumPreviewRows      = uint32(100)
 	defaultMaximumFrameBytes       = uint64(1 << 20)
 	defaultMaximumQueuedFrames     = 512
 	defaultMaximumQueuedBytes      = uint64(2 << 20)
 	defaultMaximumTotalQueuedBytes = uint64(64 << 20)
 	defaultMaximumTargets          = 1_024
+	defaultMaximumProjections      = 16
 	defaultMaximumReplayEvents     = 256
 	defaultMaximumReplayBytes      = uint64(4 << 20)
 	defaultMaximumTotalReplayBytes = uint64(64 << 20)
@@ -36,14 +38,16 @@ const (
 	defaultPingInterval            = 20 * time.Second
 
 	minimumFrameBytes              = uint64(1 << 10)
-	minimumQueuedFrames            = 6
+	minimumQueuedFrames            = 7
 	maximumConnectionsCeiling      = 4_096
 	maximumSubscriptionsCeiling    = uint32(256)
+	maximumPreviewRowsCeiling      = uint32(1_000)
 	maximumFrameBytesCeiling       = uint64(1 << 20)
 	maximumQueuedFramesCeiling     = 4_096
 	maximumQueuedBytesCeiling      = uint64(64 << 20)
 	maximumTotalQueuedBytesCeiling = uint64(4 << 30)
 	maximumTargetsCeiling          = 100_000
+	maximumProjectionsCeiling      = 256
 	maximumReplayEventsCeiling     = 10_000
 	maximumReplayBytesCeiling      = uint64(64 << 20)
 	maximumTotalReplayBytesCeiling = uint64(4 << 30)
@@ -65,6 +69,8 @@ const (
 // searchjobs.ErrNotFound.
 type SearchSnapshots interface {
 	GetFor(searchjobs.AccessScope, string) (searchjobs.Job, error)
+	PreviewForBytes(searchjobs.AccessScope, string, int, uint64) (searchjobs.PreviewSnapshot, error)
+	MaximumPreviewRows() uint32
 }
 
 // ExportSnapshots is the only export-job capability used by Service. Manager
@@ -76,6 +82,7 @@ type ExportSnapshots interface {
 // Limits is the drift-free subset advertised by the browser bootstrap API.
 type Limits struct {
 	MaximumSubscriptions uint32
+	MaximumPreviewRows   uint32
 	MaximumFrameBytes    uint64
 }
 
@@ -90,16 +97,18 @@ type Config struct {
 	// Origin and otherwise requires Origin.Host to equal request.Host.
 	CheckOrigin func(*http.Request) bool
 
-	MaximumConnections      int
-	MaximumSubscriptions    uint32
-	MaximumFrameBytes       uint64
-	MaximumQueuedFrames     int
-	MaximumQueuedBytes      uint64
-	MaximumTotalQueuedBytes uint64
-	MaximumTargets          int
-	MaximumReplayEvents     int
-	MaximumReplayBytes      uint64
-	MaximumTotalReplayBytes uint64
+	MaximumConnections           int
+	MaximumSubscriptions         uint32
+	MaximumPreviewRows           uint32
+	MaximumFrameBytes            uint64
+	MaximumQueuedFrames          int
+	MaximumQueuedBytes           uint64
+	MaximumTotalQueuedBytes      uint64
+	MaximumTargets               int
+	MaximumConcurrentProjections int
+	MaximumReplayEvents          int
+	MaximumReplayBytes           uint64
+	MaximumTotalReplayBytes      uint64
 
 	PollInterval time.Duration
 	WriteTimeout time.Duration
@@ -115,16 +124,18 @@ type normalizedConfig struct {
 
 	checkOrigin func(*http.Request) bool
 
-	maximumConnections      int
-	maximumSubscriptions    uint32
-	maximumFrameBytes       uint64
-	maximumQueuedFrames     int
-	maximumQueuedBytes      uint64
-	maximumTotalQueuedBytes uint64
-	maximumTargets          int
-	maximumReplayEvents     int
-	maximumReplayBytes      uint64
-	maximumTotalReplayBytes uint64
+	maximumConnections           int
+	maximumSubscriptions         uint32
+	maximumPreviewRows           uint32
+	maximumFrameBytes            uint64
+	maximumQueuedFrames          int
+	maximumQueuedBytes           uint64
+	maximumTotalQueuedBytes      uint64
+	maximumTargets               int
+	maximumConcurrentProjections int
+	maximumReplayEvents          int
+	maximumReplayBytes           uint64
+	maximumTotalReplayBytes      uint64
 
 	pollInterval time.Duration
 	writeTimeout time.Duration
@@ -155,6 +166,16 @@ func normalizeConfig(config Config) (normalizedConfig, error) {
 	if err != nil {
 		return normalizedConfig{}, err
 	}
+	backingMaximum := config.Searches.MaximumPreviewRows()
+	if backingMaximum == 0 {
+		return normalizedConfig{}, errors.New("create search websocket: search snapshot reader has no preview row capacity")
+	}
+	previewRowsCeiling := min(maximumPreviewRowsCeiling, backingMaximum)
+	previewRowsDefault := min(defaultMaximumPreviewRows, previewRowsCeiling)
+	previewRows, err := boundedUint32(config.MaximumPreviewRows, previewRowsDefault, previewRowsCeiling, "preview row")
+	if err != nil {
+		return normalizedConfig{}, err
+	}
 	frameBytes, err := boundedBytes(config.MaximumFrameBytes, defaultMaximumFrameBytes, minimumFrameBytes, maximumFrameBytesCeiling, "frame")
 	if err != nil {
 		return normalizedConfig{}, err
@@ -178,6 +199,16 @@ func normalizeConfig(config Config) (normalizedConfig, error) {
 	if err != nil {
 		return normalizedConfig{}, err
 	}
+	projections, err := boundedInt(
+		config.MaximumConcurrentProjections,
+		defaultMaximumProjections,
+		maximumProjectionsCeiling,
+		"concurrent projection",
+	)
+	if err != nil {
+		return normalizedConfig{}, err
+	}
+	projections = min(projections, targets)
 	replayEvents, err := boundedInt(config.MaximumReplayEvents, defaultMaximumReplayEvents, maximumReplayEventsCeiling, "replay event")
 	if err != nil {
 		return normalizedConfig{}, err
@@ -230,10 +261,11 @@ func normalizeConfig(config Config) (normalizedConfig, error) {
 			OwnerID:  strings.Clone(config.Access.OwnerID),
 		},
 		checkOrigin:        checkOrigin,
-		maximumConnections: connections, maximumSubscriptions: subscriptions,
+		maximumConnections: connections, maximumSubscriptions: subscriptions, maximumPreviewRows: previewRows,
 		maximumFrameBytes: frameBytes, maximumQueuedFrames: queuedFrames, maximumQueuedBytes: queuedBytes,
 		maximumTotalQueuedBytes: totalQueuedBytes,
-		maximumTargets:          targets, maximumReplayEvents: replayEvents, maximumReplayBytes: replayBytes,
+		maximumTargets:          targets, maximumConcurrentProjections: projections,
+		maximumReplayEvents: replayEvents, maximumReplayBytes: replayBytes,
 		maximumTotalReplayBytes: totalReplayBytes,
 		pollInterval:            pollInterval, writeTimeout: writeTimeout, pongTimeout: pongTimeout, pingInterval: pingInterval,
 		now: now,

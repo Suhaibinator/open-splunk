@@ -49,11 +49,13 @@ func TestNormalizeConfigDefaultsAndInjectedFunctions(t *testing.T) {
 	}
 	if normalized.maximumConnections != defaultMaximumConnections ||
 		normalized.maximumSubscriptions != defaultMaximumSubscriptions ||
+		normalized.maximumPreviewRows != defaultMaximumPreviewRows ||
 		normalized.maximumFrameBytes != defaultMaximumFrameBytes ||
 		normalized.maximumQueuedFrames != defaultMaximumQueuedFrames ||
 		normalized.maximumQueuedBytes != defaultMaximumQueuedBytes ||
 		normalized.maximumTotalQueuedBytes != defaultMaximumTotalQueuedBytes ||
 		normalized.maximumTargets != defaultMaximumTargets ||
+		normalized.maximumConcurrentProjections != defaultMaximumProjections ||
 		normalized.maximumReplayEvents != defaultMaximumReplayEvents ||
 		normalized.maximumReplayBytes != defaultMaximumReplayBytes ||
 		normalized.maximumTotalReplayBytes != defaultMaximumTotalReplayBytes ||
@@ -81,6 +83,49 @@ func TestNormalizeConfigDefaultsAndInjectedFunctions(t *testing.T) {
 	}
 	if !normalized.checkOrigin(originRequest("injected.example", false)) || originCalls != 1 {
 		t.Fatalf("injected CheckOrigin result/calls = (false, %d)", originCalls)
+	}
+}
+
+type previewLimitedSearchSnapshots struct {
+	configTestSearchSnapshots
+	maximum uint32
+}
+
+func (reader previewLimitedSearchSnapshots) MaximumPreviewRows() uint32 { return reader.maximum }
+
+func TestNormalizeConfigAlignsPreviewRowsWithBackingReader(t *testing.T) {
+	config := Config{
+		Searches: previewLimitedSearchSnapshots{maximum: 3},
+		Exports:  configTestExportSnapshots{},
+		Access:   searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"},
+	}
+	normalized, err := normalizeConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.maximumPreviewRows != 3 {
+		t.Fatalf("default maximum preview rows = %d, want backing limit 3", normalized.maximumPreviewRows)
+	}
+	config.MaximumPreviewRows = 4
+	if _, err := normalizeConfig(config); err == nil || !strings.Contains(err.Error(), "preview row") {
+		t.Fatalf("normalizeConfig(over backing preview limit) = %v", err)
+	}
+}
+
+func TestBoundedFrameBatchStopsAtConfiguredCapacity(t *testing.T) {
+	service := &Service{config: normalizedConfig{
+		maximumQueuedFrames:     2,
+		maximumQueuedBytes:      10,
+		maximumFrameBytes:       8,
+		maximumTotalQueuedBytes: 10,
+	}}
+	batch := newBoundedFrameBatch(service, 4)
+	defer batch.release()
+	if batch.append(make([]byte, 6)) != queueAccepted ||
+		batch.append(make([]byte, 5)) != queueIntrinsicLimit ||
+		batch.append(make([]byte, 4)) != queueAccepted ||
+		batch.append([]byte{1}) != queueIntrinsicLimit {
+		t.Fatalf("bounded frame batch = frames:%d bytes:%d", len(batch.frames), batch.bytes)
 	}
 }
 
@@ -159,6 +204,13 @@ func TestNormalizeConfigCountBounds(t *testing.T) {
 		{name: "targets/ceiling", mutate: func(config *Config) { config.MaximumTargets = maximumTargetsCeiling }, read: func(config normalizedConfig) int64 { return int64(config.maximumTargets) }, want: maximumTargetsCeiling},
 		{name: "targets/negative", mutate: func(config *Config) { config.MaximumTargets = -1 }, wantErr: true},
 		{name: "targets/over ceiling", mutate: func(config *Config) { config.MaximumTargets = maximumTargetsCeiling + 1 }, wantErr: true},
+
+		{name: "projections/zero uses default", mutate: func(config *Config) { config.MaximumConcurrentProjections = 0 }, read: func(config normalizedConfig) int64 { return int64(config.maximumConcurrentProjections) }, want: defaultMaximumProjections},
+		{name: "projections/minimum", mutate: func(config *Config) { config.MaximumConcurrentProjections = 1 }, read: func(config normalizedConfig) int64 { return int64(config.maximumConcurrentProjections) }, want: 1},
+		{name: "projections/ceiling", mutate: func(config *Config) { config.MaximumConcurrentProjections = maximumProjectionsCeiling }, read: func(config normalizedConfig) int64 { return int64(config.maximumConcurrentProjections) }, want: maximumProjectionsCeiling},
+		{name: "projections/clamped to targets", mutate: func(config *Config) { config.MaximumTargets = 1 }, read: func(config normalizedConfig) int64 { return int64(config.maximumConcurrentProjections) }, want: 1},
+		{name: "projections/negative", mutate: func(config *Config) { config.MaximumConcurrentProjections = -1 }, wantErr: true},
+		{name: "projections/over ceiling", mutate: func(config *Config) { config.MaximumConcurrentProjections = maximumProjectionsCeiling + 1 }, wantErr: true},
 
 		{name: "replay events/zero uses default", mutate: func(config *Config) { config.MaximumReplayEvents = 0 }, read: func(config normalizedConfig) int64 { return int64(config.maximumReplayEvents) }, want: defaultMaximumReplayEvents},
 		{name: "replay events/explicit default", mutate: func(config *Config) { config.MaximumReplayEvents = defaultMaximumReplayEvents }, read: func(config normalizedConfig) int64 { return int64(config.maximumReplayEvents) }, want: defaultMaximumReplayEvents},

@@ -76,18 +76,19 @@ func adversarialNewTarget(service *Service, id string) *targetState {
 	key := targetKey{kind: targetKindSearch, id: id}
 	ctx, cancel := context.WithCancel(service.ctx)
 	target := &targetState{
-		service:       service,
-		key:           key,
-		target:        key.protobuf(),
-		ctx:           ctx,
-		cancel:        cancel,
-		epochStart:    adversarialSequenceBase + 1,
-		latest:        adversarialSequenceBase,
-		fingerprints:  make(map[eventCategory][sha256.Size]byte),
-		expected:      make(map[eventCategory]struct{}),
-		current:       make(map[eventCategory]*storedEvent),
-		retained:      make(map[uint64]*storedEvent),
-		subscriptions: make(map[*subscription]struct{}),
+		service:         service,
+		key:             key,
+		target:          key.protobuf(),
+		ctx:             ctx,
+		cancel:          cancel,
+		epochStart:      adversarialSequenceBase + 1,
+		latest:          adversarialSequenceBase,
+		fingerprints:    make(map[eventCategory][sha256.Size]byte),
+		expected:        make(map[eventCategory]struct{}),
+		current:         make(map[eventCategory]*storedEvent),
+		retained:        make(map[uint64]*storedEvent),
+		subscriptions:   make(map[*subscription]struct{}),
+		pendingPreviews: make(map[*subscription]uint32),
 	}
 	service.mu.Lock()
 	service.targets[key] = target
@@ -163,8 +164,7 @@ func adversarialDrain(t *testing.T, connection *connection) []*opensplunkv1.Sear
 func adversarialAttach(target *targetState, connection *connection, id string) *subscription {
 	subscription := &subscription{id: id, target: target, connection: connection, active: true}
 	target.mu.Lock()
-	target.subscriptions[subscription] = struct{}{}
-	target.subscriberCount.Add(1)
+	target.addSubscriptionLocked(subscription)
 	target.mu.Unlock()
 	connection.subscriptions[id] = subscription
 	return subscription
@@ -176,10 +176,7 @@ func adversarialDetach(subscription *subscription) {
 	subscription.mu.Unlock()
 	target := subscription.target
 	target.mu.Lock()
-	if _, exists := target.subscriptions[subscription]; exists {
-		delete(target.subscriptions, subscription)
-		target.subscriberCount.Add(-1)
-	}
+	target.removeSubscriptionLocked(subscription)
 	if len(target.subscriptions) == 0 {
 		target.stopPollingLocked()
 	}
@@ -401,13 +398,11 @@ func TestAdversarialResolverAndSubscriberPinsPreventEviction(t *testing.T) {
 			pin: func(_ *testing.T, _ *Service, target *targetState) func() {
 				subscription := &subscription{id: "pin", target: target, active: true}
 				target.mu.Lock()
-				target.subscriptions[subscription] = struct{}{}
-				target.subscriberCount.Add(1)
+				target.addSubscriptionLocked(subscription)
 				target.mu.Unlock()
 				return func() {
 					target.mu.Lock()
-					delete(target.subscriptions, subscription)
-					target.subscriberCount.Add(-1)
+					target.removeSubscriptionLocked(subscription)
 					target.mu.Unlock()
 				}
 			},
@@ -496,7 +491,7 @@ func TestAdversarialUnsubscribeMakesLateDeliveryNoOpSuccess(t *testing.T) {
 	connection.queueMu.Lock()
 	queuedFrames, queuedBytes := len(connection.queue), connection.queuedBytes
 	connection.queueMu.Unlock()
-	if !subscription.deliver([]byte("not protobuf")) {
+	if !subscription.deliverCanonical([]byte("not protobuf"), false, false) {
 		t.Fatal("late inactive data delivery reported failure")
 	}
 	if !subscription.deliverControl(resynchronizationEvent(
@@ -518,6 +513,51 @@ func TestAdversarialUnsubscribeMakesLateDeliveryNoOpSuccess(t *testing.T) {
 	}
 	if target.subscriberCount.Load() != 0 {
 		t.Fatalf("subscriber count = %d, want 0", target.subscriberCount.Load())
+	}
+}
+
+func TestAdversarialStaleSameIncarnationProjectionIsIgnored(t *testing.T) {
+	service := adversarialNewService(t, nil)
+	target := adversarialNewTarget(service, "stale-projection")
+	newer := adversarialProjection(
+		11, adversarialNow.Add(-time.Hour), false,
+		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING, 11, true,
+	)
+	adversarialApply(t, target, newer, true)
+	target.mu.Lock()
+	latest := target.latest
+	target.mu.Unlock()
+
+	stale := adversarialProjection(
+		10, adversarialNow.Add(-time.Hour), false,
+		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING, 10, true,
+	)
+	adversarialApply(t, target, stale, false)
+	target.mu.Lock()
+	version, after, incomplete := target.version, target.latest, target.currentIncomplete
+	target.mu.Unlock()
+	if version != 11 || after != latest || incomplete {
+		t.Fatalf("stale projection changed target = version:%d latest:%d/%d incomplete:%t",
+			version, after, latest, incomplete)
+	}
+}
+
+func TestPreviewQueuePressureSkipsSubscriptionSpecificCopy(t *testing.T) {
+	service := adversarialNewService(t, func(config *Config) {
+		config.MaximumQueuedBytes = minimumFrameBytes
+		config.MaximumTotalQueuedBytes = minimumFrameBytes
+	})
+	connection := newConnection(service, nil)
+	defer connection.cancel()
+	if !connection.enqueue(make([]byte, minimumFrameBytes-32)) {
+		t.Fatal("failed to seed the bounded connection queue")
+	}
+	before := connection.queuedBytes
+	if result := connection.enqueueCanonicalPreview(make([]byte, 64), "preview"); result != queuePressure {
+		t.Fatalf("enqueueCanonicalPreview() = %v, want queuePressure", result)
+	}
+	if connection.queuedBytes != before {
+		t.Fatalf("preview pressure changed queued bytes = %d, want %d", connection.queuedBytes, before)
 	}
 }
 

@@ -1,5 +1,5 @@
-// Package searchjobproto projects retained search-job intent and provenance
-// into the protobuf representation shared by live-search and history APIs.
+// Package searchjobproto projects search-job metadata and typed results into
+// the protobuf representation shared by HTTP and live-search APIs.
 package searchjobproto
 
 import (
@@ -9,9 +9,29 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// ResultKindForSPL classifies the result shape from the final transforming
+// command while preserving event semantics for non-transforming pipelines.
+func ResultKindForSPL(source string) opensplunkv1.ResultSetKind {
+	query, err := spl.Parse(source)
+	if err != nil {
+		return opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED
+	}
+	result := opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS
+	for _, command := range query.Commands {
+		switch command.(type) {
+		case *spl.TimechartCommand:
+			return opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES
+		case *spl.TableCommand, *spl.StatsCommand, *spl.TopCommand, *spl.RareCommand:
+			result = opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS
+		}
+	}
+	return result
+}
 
 // Progress projects the authoritative counters and timing shared by HTTP and
 // WebSocket search representations. Scan counters are exact reported work;

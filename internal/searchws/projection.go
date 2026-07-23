@@ -1,31 +1,39 @@
 package searchws
 
 import (
+	"context"
 	"errors"
 	"math"
 	"slices"
 	"time"
-	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type targetProjection struct {
-	version     uint64
-	incarnation time.Time
-	terminal    bool
-	refreshAt   time.Time
-	events      []*opensplunkv1.SearchWebSocketEvent
+	version            uint64
+	incarnation        time.Time
+	previewRows        uint32
+	invalidatesPreview bool
+	terminal           bool
+	refreshAt          time.Time
+	events             []*opensplunkv1.SearchWebSocketEvent
 }
 
 func projectSearch(job searchjobs.Job, now time.Time) (targetProjection, error) {
+	return projectSearchWithPreview(context.Background(), job, nil, 0, now)
+}
+
+func projectSearchWithPreview(ctx context.Context, job searchjobs.Job, preview *searchjobs.PreviewSnapshot, requestedPreviewRows uint32, now time.Time) (targetProjection, error) {
+	if ctx == nil {
+		return targetProjection{}, errors.New("search websocket projection: context is required")
+	}
 	if job.ID == "" || job.Version == 0 || job.CreatedAt.IsZero() {
 		return targetProjection{}, errors.New("search websocket projection: search snapshot is incomplete")
 	}
@@ -47,12 +55,28 @@ func projectSearch(job searchjobs.Job, now time.Time) (targetProjection, error) 
 		{Payload: &opensplunkv1.SearchWebSocketEvent_SearchProgress{SearchProgress: progress}},
 	}
 	if job.Schema != nil {
-		schema, schemaErr := schemaToProto(job.ID, *job.Schema, resultKindForSPL(job.SPL))
+		schema, schemaErr := schemaToProto(job.ID, *job.Schema, searchjobproto.ResultKindForSPL(job.SPL))
 		if schemaErr != nil {
 			return targetProjection{}, schemaErr
 		}
 		events = append(events, &opensplunkv1.SearchWebSocketEvent{Payload: &opensplunkv1.SearchWebSocketEvent_ResultSchemaAvailable{
 			ResultSchemaAvailable: &opensplunkv1.ResultSchemaAvailable{SearchJobId: job.ID, Schema: schema},
+		}})
+	}
+	if preview != nil {
+		if preview.Revision == 0 || preview.Job.ID != job.ID || preview.Job.Version != job.Version || job.Schema == nil {
+			return targetProjection{}, errors.New("search websocket projection: preview snapshot is inconsistent")
+		}
+		rows, rowsErr := searchjobproto.Rows(ctx, job.ID, *job.Schema, preview.Rows, int(requestedPreviewRows))
+		if rowsErr != nil {
+			return targetProjection{}, rowsErr
+		}
+		events = append(events, &opensplunkv1.SearchWebSocketEvent{Payload: &opensplunkv1.SearchWebSocketEvent_ResultPreview{
+			ResultPreview: &opensplunkv1.ResultPreview{
+				SearchJobId: job.ID, SchemaId: job.ID, PreviewRevision: preview.Revision,
+				UpdateMode: opensplunkv1.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET,
+				Rows:       rows, Truncated: preview.Truncated,
+			},
 		}})
 	}
 	if job.ResultsTruncated {
@@ -98,7 +122,12 @@ func projectSearch(job searchjobs.Job, now time.Time) (targetProjection, error) 
 	if terminal && !job.ExpiresAt.IsZero() && job.ExpiresAt.After(now) {
 		refreshAt = canonicalTime(job.ExpiresAt)
 	}
-	return targetProjection{version: job.Version, incarnation: canonicalTime(job.CreatedAt), terminal: terminal, refreshAt: refreshAt, events: events}, nil
+	invalidatesPreview := job.State == searchjobs.StateFailed ||
+		job.State == searchjobs.StateCanceled || job.State == searchjobs.StateExpired
+	return targetProjection{
+		version: job.Version, incarnation: canonicalTime(job.CreatedAt), previewRows: requestedPreviewRows,
+		invalidatesPreview: invalidatesPreview, terminal: terminal, refreshAt: refreshAt, events: events,
+	}, nil
 }
 
 func projectExport(job exportjobs.Job, now time.Time) (targetProjection, error) {
@@ -186,47 +215,7 @@ func exportProgressToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.Exp
 }
 
 func schemaToProto(id string, schema searchjobs.Schema, resultKind opensplunkv1.ResultSetKind) (*opensplunkv1.ResultSchema, error) {
-	columns := make([]*opensplunkv1.ResultColumn, len(schema.Columns))
-	seen := make(map[string]struct{}, len(schema.Columns))
-	for index, column := range schema.Columns {
-		if column.Name == "" || !utf8.ValidString(column.Name) {
-			return nil, errors.New("search websocket projection: schema contains an invalid column")
-		}
-		if _, exists := seen[column.Name]; exists {
-			return nil, errors.New("search websocket projection: schema contains duplicate columns")
-		}
-		seen[column.Name] = struct{}{}
-		kind := valueKindToProto(column.Kind)
-		if kind == opensplunkv1.ValueType_VALUE_TYPE_UNSPECIFIED {
-			return nil, errors.New("search websocket projection: schema contains an invalid type")
-		}
-		semantic := semanticType(column.Name)
-		if resultKind == opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES && index > 0 {
-			semantic = opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC
-		}
-		columns[index] = &opensplunkv1.ResultColumn{
-			FieldName: column.Name, DisplayName: column.Name, ValueType: kind, SemanticType: semantic,
-			Nullable: column.Nullable, Multivalue: column.Multivalue,
-		}
-	}
-	return &opensplunkv1.ResultSchema{SchemaId: id, Revision: 1, ResultKind: resultKind, Columns: columns}, nil
-}
-
-func resultKindForSPL(source string) opensplunkv1.ResultSetKind {
-	query, err := spl.Parse(source)
-	if err != nil {
-		return opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED
-	}
-	result := opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS
-	for _, command := range query.Commands {
-		switch command.(type) {
-		case *spl.TimechartCommand:
-			return opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES
-		case *spl.TableCommand, *spl.StatsCommand, *spl.TopCommand, *spl.RareCommand:
-			result = opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS
-		}
-	}
-	return result
+	return searchjobproto.Schema(id, schema, resultKind)
 }
 
 func searchStateToProto(state searchjobs.State) opensplunkv1.SearchJobState {
@@ -331,68 +320,6 @@ func exportFailureCodeToProto(code exportjobs.FailureCode) opensplunkv1.ExportFa
 		return opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_INTERNAL
 	default:
 		return opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_UNSPECIFIED
-	}
-}
-
-func valueKindToProto(kind searchjobs.ValueKind) opensplunkv1.ValueType {
-	switch kind {
-	case searchjobs.ValueKindNull:
-		return opensplunkv1.ValueType_VALUE_TYPE_NULL
-	case searchjobs.ValueKindString:
-		return opensplunkv1.ValueType_VALUE_TYPE_STRING
-	case searchjobs.ValueKindSigned:
-		return opensplunkv1.ValueType_VALUE_TYPE_SINT64
-	case searchjobs.ValueKindUnsigned:
-		return opensplunkv1.ValueType_VALUE_TYPE_UINT64
-	case searchjobs.ValueKindDouble:
-		return opensplunkv1.ValueType_VALUE_TYPE_DOUBLE
-	case searchjobs.ValueKindBool:
-		return opensplunkv1.ValueType_VALUE_TYPE_BOOL
-	case searchjobs.ValueKindBytes:
-		return opensplunkv1.ValueType_VALUE_TYPE_BYTES
-	case searchjobs.ValueKindTime:
-		return opensplunkv1.ValueType_VALUE_TYPE_TIMESTAMP
-	case searchjobs.ValueKindDuration:
-		return opensplunkv1.ValueType_VALUE_TYPE_DURATION
-	case searchjobs.ValueKindList:
-		return opensplunkv1.ValueType_VALUE_TYPE_LIST
-	case searchjobs.ValueKindObject:
-		return opensplunkv1.ValueType_VALUE_TYPE_OBJECT
-	case searchjobs.ValueKindDecimal:
-		return opensplunkv1.ValueType_VALUE_TYPE_DECIMAL
-	case searchjobs.ValueKindMixed:
-		return opensplunkv1.ValueType_VALUE_TYPE_MIXED
-	default:
-		return opensplunkv1.ValueType_VALUE_TYPE_UNSPECIFIED
-	}
-}
-
-func semanticType(field string) opensplunkv1.ColumnSemanticType {
-	switch field {
-	case "_time":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME
-	case "_indextime":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_INDEX_TIME
-	case "_raw":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_RAW
-	case "index":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_INDEX
-	case "host":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_HOST
-	case "source":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SOURCE
-	case "sourcetype":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SOURCETYPE
-	case "level":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_LEVEL
-	case "message", "body":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_MESSAGE
-	case "trace_id":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_TRACE_ID
-	case "span_id":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SPAN_ID
-	default:
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_UNSPECIFIED
 	}
 }
 

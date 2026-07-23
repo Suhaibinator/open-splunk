@@ -24,7 +24,11 @@ message SearchSubscription {
   // The server sends events strictly after this per-target sequence. Zero asks
   // for current state followed by live events.
   uint64 after_sequence = 3;
+  // Preview policy is per subscription while sequence numbers are per target.
+  // When false, a subscriber receives zero-row RESET continuity markers for
+  // canonical preview sequences so later target events remain contiguous.
   bool include_previews = 4;
+  // Requires include_previews. Omission selects the advertised server maximum.
   optional uint32 preview_row_limit = 5;
 }
 
@@ -84,7 +88,9 @@ enum PreviewUpdateMode {
 }
 
 // ResultPreview is bounded and disposable. Durable/full pages are fetched via
-// GetSearchResults; a client may drop previews under backpressure.
+// GetSearchResults; a client may drop previews under backpressure. A zero-row
+// RESET with truncated=true can be a continuity marker for an opted-out or
+// more tightly bounded subscription and contains no result cells.
 message ResultPreview {
   string search_job_id = 1;
   string schema_id = 2;

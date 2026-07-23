@@ -418,6 +418,13 @@ export interface SearchPlanSummary {
 }
 
 export interface SearchJobOptions {
+  /**
+   * Deprecated policy hint. Live preview selection and row limits belong to
+   * SearchSubscription so reconnects and concurrent consumers remain
+   * independently bounded; servers reject this field when true.
+   *
+   * @deprecated
+   */
   enablePreview: boolean;
   /**
    * Reserved for future eager or in-progress analysis. Version 0.1 exposes
@@ -426,6 +433,11 @@ export interface SearchJobOptions {
    */
   enableFieldDiscovery: boolean;
   enableTimeline: boolean;
+  /**
+   * Deprecated with enable_preview; use SearchSubscription.preview_row_limit.
+   *
+   * @deprecated
+   */
   previewRowLimit?: number | undefined;
 }
 

@@ -488,7 +488,7 @@ func TestWebSocketReplayRestartExpirationAndDivergence(t *testing.T) {
 	}
 }
 
-func TestWebSocketCommandsAreAtomicAndRejectPreviewOptions(t *testing.T) {
+func TestWebSocketCommandsAreAtomic(t *testing.T) {
 	job := scopedSearchJob("search-commands")
 	reader := newMutableSearchSnapshots(job)
 	fixture := newWebSocketFixture(t, reader, func(config *Config) {
@@ -506,15 +506,6 @@ func TestWebSocketCommandsAreAtomicAndRejectPreviewOptions(t *testing.T) {
 	writeCommand(t, client, missingBatch)
 	if got := readEvent(t, client).GetProtocolError(); got == nil || got.GetCode() != opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND {
 		t.Fatalf("batch error = %+v", got)
-	}
-
-	previewLimit := uint32(10)
-	preview := subscribeCommand("preview", "preview", job.ID, 0)
-	preview.GetSubscribe().Subscriptions[0].IncludePreviews = true
-	preview.GetSubscribe().Subscriptions[0].PreviewRowLimit = &previewLimit
-	writeCommand(t, client, preview)
-	if got := readEvent(t, client).GetProtocolError(); got == nil || got.GetCode() != opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_UNSUPPORTED_COMMAND {
-		t.Fatalf("preview error = %+v", got)
 	}
 
 	writeCommand(t, client, subscribeCommand("valid", "valid", job.ID, 0))

@@ -94,6 +94,35 @@ func (jobs *fakeSearchJobs) GetFor(scope searchjobs.AccessScope, id string) (sea
 	return jobs.getJob, jobs.getErr
 }
 
+func (jobs *fakeSearchJobs) PreviewFor(scope searchjobs.AccessScope, id string, limit int) (searchjobs.PreviewSnapshot, error) {
+	jobs.mu.Lock()
+	defer jobs.mu.Unlock()
+	jobs.getScope = scope
+	jobs.getID = id
+	if jobs.getErr != nil {
+		return searchjobs.PreviewSnapshot{}, jobs.getErr
+	}
+	if jobs.getJob.Schema == nil {
+		return searchjobs.PreviewSnapshot{}, searchjobs.ErrResultsNotReady
+	}
+	rows := jobs.resultsPage.Rows
+	truncated := jobs.getJob.ResultsTruncated
+	if limit <= 0 {
+		return searchjobs.PreviewSnapshot{}, searchjobs.ErrPageSize
+	}
+	if len(rows) > limit {
+		rows = rows[:limit:limit]
+		truncated = true
+	}
+	return searchjobs.PreviewSnapshot{Job: jobs.getJob, Rows: rows, Revision: jobs.getJob.Version, Truncated: truncated}, nil
+}
+
+func (jobs *fakeSearchJobs) PreviewForBytes(scope searchjobs.AccessScope, id string, limit int, _ uint64) (searchjobs.PreviewSnapshot, error) {
+	return jobs.PreviewFor(scope, id, limit)
+}
+
+func (*fakeSearchJobs) MaximumPreviewRows() uint32 { return 100 }
+
 func (jobs *fakeSearchJobs) ResultsFor(scope searchjobs.AccessScope, id string, request searchjobs.PageRequest) (searchjobs.ResultPage, error) {
 	jobs.mu.Lock()
 	defer jobs.mu.Unlock()
@@ -134,6 +163,7 @@ type fakeSearchWebSocket struct {
 	mu                   sync.Mutex
 	calls                int
 	maximumSubscriptions uint32
+	maximumPreviewRows   uint32
 	maximumFrameBytes    uint64
 	closed               bool
 }
@@ -148,6 +178,8 @@ func (socket *fakeSearchWebSocket) ServeHTTP(response http.ResponseWriter, _ *ht
 func (socket *fakeSearchWebSocket) MaximumSubscriptions() uint32 {
 	return socket.maximumSubscriptions
 }
+
+func (socket *fakeSearchWebSocket) MaximumPreviewRows() uint32 { return socket.maximumPreviewRows }
 
 func (socket *fakeSearchWebSocket) MaximumFrameBytes() uint64 { return socket.maximumFrameBytes }
 
@@ -295,7 +327,7 @@ func TestBootstrapUsesProtobufAndLiveIndexes(t *testing.T) {
 }
 
 func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
-	socket := &fakeSearchWebSocket{maximumSubscriptions: 32, maximumFrameBytes: 64 << 10}
+	socket := &fakeSearchWebSocket{maximumSubscriptions: 32, maximumPreviewRows: 100, maximumFrameBytes: 64 << 10}
 	handler := newTestHandler(t, Config{
 		SearchJobs:      &fakeSearchJobs{},
 		SearchWebSocket: socket,
@@ -320,14 +352,14 @@ func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
 		t.Fatalf("websocket path = %q, want %q", bootstrap.GetSearchWebsocketPath(), searchWebSocketPath)
 	}
 	if bootstrap.GetLimits().GetMaximumWebsocketSubscriptions() != socket.MaximumSubscriptions() ||
+		bootstrap.GetLimits().GetMaximumPreviewRows() != socket.MaximumPreviewRows() ||
 		bootstrap.GetLimits().GetMaximumWebsocketFrameBytes() != socket.MaximumFrameBytes() {
 		t.Fatalf("websocket limits = %+v", bootstrap.GetLimits())
 	}
-	if bootstrap.GetLimits().GetMaximumPreviewRows() != 0 {
-		t.Fatalf("unsupported preview was advertised: %+v", &bootstrap)
+	if !slices.Contains(bootstrap.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW) {
+		t.Fatalf("bootstrap features = %v, want search preview", bootstrap.GetFeatures())
 	}
 	for _, unsupported := range []opensplunkv1.ServerFeature{
-		opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW,
 		opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
 		opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE,
 		opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
@@ -397,11 +429,13 @@ func TestSearchWebSocketLimitsAreValidated(t *testing.T) {
 		socket *fakeSearchWebSocket
 		want   string
 	}{
-		{name: "zero subscriptions", socket: &fakeSearchWebSocket{maximumFrameBytes: 1}, want: "websocket subscriptions"},
-		{name: "too many subscriptions", socket: &fakeSearchWebSocket{maximumSubscriptions: maximumWebSocketSubscriptions + 1, maximumFrameBytes: 1}, want: "websocket subscriptions"},
-		{name: "zero frame bytes", socket: &fakeSearchWebSocket{maximumSubscriptions: 1}, want: "websocket frame bytes"},
-		{name: "unusable frame bytes", socket: &fakeSearchWebSocket{maximumSubscriptions: 1, maximumFrameBytes: minimumWebSocketFrameBytes - 1}, want: "websocket frame bytes"},
-		{name: "too many frame bytes", socket: &fakeSearchWebSocket{maximumSubscriptions: 1, maximumFrameBytes: maximumWebSocketFrameBytes + 1}, want: "websocket frame bytes"},
+		{name: "zero subscriptions", socket: &fakeSearchWebSocket{maximumPreviewRows: 1, maximumFrameBytes: 1}, want: "websocket subscriptions"},
+		{name: "too many subscriptions", socket: &fakeSearchWebSocket{maximumSubscriptions: maximumWebSocketSubscriptions + 1, maximumPreviewRows: 1, maximumFrameBytes: 1}, want: "websocket subscriptions"},
+		{name: "zero preview rows", socket: &fakeSearchWebSocket{maximumSubscriptions: 1, maximumFrameBytes: minimumWebSocketFrameBytes}, want: "preview rows"},
+		{name: "too many preview rows", socket: &fakeSearchWebSocket{maximumSubscriptions: 1, maximumPreviewRows: maximumSearchPreviewRows + 1, maximumFrameBytes: minimumWebSocketFrameBytes}, want: "preview rows"},
+		{name: "zero frame bytes", socket: &fakeSearchWebSocket{maximumSubscriptions: 1, maximumPreviewRows: 1}, want: "websocket frame bytes"},
+		{name: "unusable frame bytes", socket: &fakeSearchWebSocket{maximumSubscriptions: 1, maximumPreviewRows: 1, maximumFrameBytes: minimumWebSocketFrameBytes - 1}, want: "websocket frame bytes"},
+		{name: "too many frame bytes", socket: &fakeSearchWebSocket{maximumSubscriptions: 1, maximumPreviewRows: 1, maximumFrameBytes: maximumWebSocketFrameBytes + 1}, want: "websocket frame bytes"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

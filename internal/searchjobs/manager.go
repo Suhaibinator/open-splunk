@@ -277,6 +277,7 @@ type jobEntry struct {
 	rows                   []ResultRow
 	history                []State
 	resultGeneration       uint64
+	resultRevision         uint64
 	resultPins             int
 	generation             uint64
 	retainedBytes          uint64
@@ -1120,33 +1121,39 @@ func (manager *Manager) resultsEntry(id string, entry *jobEntry, limit int, curs
 	if offset > total {
 		return ResultPage{}, ErrInvalidCursor
 	}
-	end := offset
-	pageBytes := entry.schemaBytes
-	for end < total && end-offset < uint64(limit) {
-		nextPageBytes, err := checkedAdd(pageBytes, entry.rows[int(end)].retainedBytes)
-		if err != nil || nextPageBytes > manager.maxPageBytes {
-			break
-		}
-		pageBytes = nextPageBytes
-		end++
-	}
-	if end == offset && end < total {
+	start := int(offset)
+	end := boundedResultRowEnd(entry.rows, start, limit, entry.schemaBytes, manager.maxPageBytes)
+	if end == start && end < len(entry.rows) {
 		return ResultPage{}, ErrByteLimit
 	}
 	page := ResultPage{
 		Schema:    cloneSchema(*entry.resultSchema),
-		Rows:      cloneRows(entry.rows[int(offset):int(end)]),
+		Rows:      cloneRows(entry.rows[start:end]),
 		TotalRows: total,
-		Complete:  end == total,
+		Complete:  end == len(entry.rows),
 	}
-	if end < total {
-		cursor, err := encodeCursor(manager.cursorKey, manager.cursorScope, id, entry.resultGeneration, end)
+	if end < len(entry.rows) {
+		cursor, err := encodeCursor(manager.cursorKey, manager.cursorScope, id, entry.resultGeneration, uint64(end))
 		if err != nil {
 			return ResultPage{}, errors.New("encode search result cursor")
 		}
 		page.NextCursor = cursor
 	}
 	return page, nil
+}
+
+func boundedResultRowEnd(rows []ResultRow, start, limit int, initialBytes, maximumBytes uint64) int {
+	end := start
+	bytes := initialBytes
+	for end < len(rows) && end-start < limit {
+		next, err := checkedAdd(bytes, rows[end].retainedBytes)
+		if err != nil || next > maximumBytes {
+			break
+		}
+		bytes = next
+		end++
+	}
+	return end
 }
 
 func (manager *Manager) acquireRead() { manager.readGate <- struct{}{} }
@@ -1553,6 +1560,9 @@ func (manager *Manager) finishCompleted(entry *jobEntry, now time.Time, resultsT
 			incrementJobVersion(&entry.job)
 			entry.job.FinishedAt = now
 			entry.job.ExpiresAt = now.Add(manager.retentionTTL)
+			if resultsTruncated && !entry.job.ResultsTruncated {
+				incrementResultRevision(entry)
+			}
 			entry.job.ResultsTruncated = resultsTruncated
 			entry.resultGeneration = entry.generation
 			entry.history = append(entry.history, StateCompleted)
@@ -1647,6 +1657,14 @@ func incrementJobVersion(job *Job) {
 	}
 }
 
+// incrementResultRevision applies the same saturation policy as Job.Version
+// to the result-specific revision consumed by live preview subscribers.
+func incrementResultRevision(entry *jobEntry) {
+	if entry.resultRevision != ^uint64(0) {
+		entry.resultRevision++
+	}
+}
+
 // reserveRetainedLocked accounts for memory before allocating or retaining it.
 // The caller holds entry.mu; budgetMu is never acquired before an entry lock.
 func (manager *Manager) reserveRetainedLocked(entry *jobEntry, amount uint64) error {
@@ -1723,12 +1741,16 @@ func (manager *Manager) clearResultsLocked(entry *jobEntry) {
 	if entry.resultPins != 0 {
 		return
 	}
+	hadResults := entry.resultSchema != nil || entry.job.Schema != nil || len(entry.rows) != 0
 	amount := entry.retainedBytes
 	entry.retainedBytes = 0
 	entry.schemaBytes = 0
 	entry.job.Schema = nil
 	entry.resultSchema = nil
 	entry.rows = nil
+	if hadResults {
+		incrementResultRevision(entry)
+	}
 	if amount == 0 {
 		return
 	}
@@ -1882,7 +1904,7 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 	if schemaErr != nil {
 		return sink.rememberLocked(schemaErr)
 	}
-	if err := sink.requireIncrementableVersionLocked(); err != nil {
+	if err := sink.requireIncrementableResultRevisionLocked(); err != nil {
 		return err
 	}
 	retainedBytes, err := retainedSchemaSize(schema)
@@ -1900,6 +1922,7 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 	entry.job.Schema = entry.resultSchema
 	entry.schemaBytes = retainedBytes
 	incrementJobVersion(&entry.job)
+	incrementResultRevision(entry)
 	sink.receivedSchema = true
 	return nil
 }
@@ -1917,7 +1940,7 @@ func (sink *resultSink) AddRow(values []Value) error {
 	if len(values) != len(entry.job.Schema.Columns) {
 		return sink.rememberLocked(fmt.Errorf("%w: row has %d cells for %d columns", ErrInvalidResult, len(values), len(entry.job.Schema.Columns)))
 	}
-	if err := sink.requireIncrementableVersionLocked(); err != nil {
+	if err := sink.requireIncrementableResultRevisionLocked(); err != nil {
 		return err
 	}
 	var payloadBytes uint64
@@ -1991,6 +2014,7 @@ func (sink *resultSink) AddRow(values []Value) error {
 	entry.job.RowCount++
 	entry.job.ResultBytes = nextBytes
 	incrementJobVersion(&entry.job)
+	incrementResultRevision(entry)
 	return nil
 }
 
@@ -2013,6 +2037,16 @@ func (sink *resultSink) readyLocked() error {
 func (sink *resultSink) requireIncrementableVersionLocked() error {
 	if sink.entry.job.Version == ^uint64(0) {
 		return sink.rememberLocked(fmt.Errorf("%w: search job version space is exhausted", ErrInvalidResult))
+	}
+	return nil
+}
+
+func (sink *resultSink) requireIncrementableResultRevisionLocked() error {
+	if err := sink.requireIncrementableVersionLocked(); err != nil {
+		return err
+	}
+	if sink.entry.resultRevision == ^uint64(0) {
+		return sink.rememberLocked(fmt.Errorf("%w: search result revision space is exhausted", ErrInvalidResult))
 	}
 	return nil
 }

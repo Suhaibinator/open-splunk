@@ -293,8 +293,13 @@ func rejectUnsupportedCreateFields(input *opensplunkv1.CreateSearchJobRequest, d
 	if input.ClientRequestId != nil {
 		return errors.New("client request idempotency is not supported")
 	}
-	if options := input.GetOptions(); options != nil && (options.GetEnablePreview() || options.GetEnableFieldDiscovery() || options.GetEnableTimeline() || options.PreviewRowLimit != nil) {
-		return errors.New("search previews, field discovery, and timelines are not supported")
+	if options := input.GetOptions(); options != nil {
+		if options.GetEnablePreview() || options.PreviewRowLimit != nil {
+			return errors.New("job-level preview options are not supported; request bounded previews on the WebSocket search subscription")
+		}
+		if options.GetEnableFieldDiscovery() || options.GetEnableTimeline() {
+			return errors.New("eager field discovery and timeline options are not supported; request those analyses through their dedicated APIs")
+		}
 	}
 	if definition.GetPreferredResultTab() != opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED || len(definition.GetSelectedFields()) != 0 || definition.GetVisualization() != nil {
 		return errors.New("search presentation metadata is not supported")

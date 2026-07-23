@@ -33,9 +33,16 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 	job.Version = 7
 	job.RowCount = 42
 	job.ResultBytes = 4_096
+	job.Schema = &searchjobs.Schema{Columns: []searchjobs.Column{{Name: "message", Kind: searchjobs.ValueKindString}}}
 	job.FinishedAt = time.Time{}
 	job.ExpiresAt = time.Time{}
-	searches := &fakeSearchJobs{getJob: job}
+	searches := &fakeSearchJobs{
+		getJob: job,
+		resultsPage: searchjobs.ResultPage{
+			Schema: *job.Schema,
+			Rows:   []searchjobs.ResultRow{{Ordinal: 0, Values: []searchjobs.Value{searchjobs.StringValue("typed preview")}}},
+		},
+	}
 	exports := &fakeExports{getFn: func(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error) {
 		return exportjobs.Job{}, exportjobs.ErrNotFound
 	}}
@@ -127,7 +134,7 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 				SubscriptionId: "subscription-1",
 				Target: &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_SearchJobId{
 					SearchJobId: jobID,
-				}},
+				}}, IncludePreviews: true, PreviewRowLimit: uint32Pointer(1),
 			}},
 		}},
 	}
@@ -145,8 +152,10 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 
 	sawState := false
 	sawProgress := false
+	sawSchema := false
+	sawPreview := false
 	var lastTargetSequence uint64
-	for frames := 0; frames < 11 && (!sawState || !sawProgress); frames++ {
+	for frames := 0; frames < 11 && (!sawState || !sawProgress || !sawSchema || !sawPreview); frames++ {
 		event := readSearchWebSocketEvent(t, connection)
 		if event.GetSubscriptionAcknowledged() != nil {
 			t.Fatalf("duplicate subscription acknowledgment: %+v", event)
@@ -172,9 +181,22 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 			}
 			sawProgress = true
 		}
+		if schema := event.GetResultSchemaAvailable(); schema != nil {
+			if schema.GetSchema().GetSchemaId() != jobID || len(schema.GetSchema().GetColumns()) != 1 {
+				t.Fatalf("search schema event = %+v", schema)
+			}
+			sawSchema = true
+		}
+		if preview := event.GetResultPreview(); preview != nil {
+			if !sawSchema || preview.GetUpdateMode() != opensplunkv1.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET ||
+				len(preview.GetRows()) != 1 || preview.GetRows()[0].GetCells()[0].GetStringValue() != "typed preview" {
+				t.Fatalf("search preview event = %+v (schema seen %t)", preview, sawSchema)
+			}
+			sawPreview = true
+		}
 	}
-	if !sawState || !sawProgress {
-		t.Fatalf("current events received: state=%v progress=%v", sawState, sawProgress)
+	if !sawState || !sawProgress || !sawSchema || !sawPreview {
+		t.Fatalf("current events received: state=%v progress=%v schema=%v preview=%v", sawState, sawProgress, sawSchema, sawPreview)
 	}
 	searches.mu.Lock()
 	gotScope, gotID := searches.getScope, searches.getID
@@ -249,6 +271,8 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 				t.Fatalf("completed search terminal event = %+v", terminal)
 			}
 			sawTerminal = true
+		case event.GetResultPreview() != nil:
+			t.Fatalf("unchanged completed preview was redundantly republished: %+v", event.GetResultPreview())
 		default:
 			t.Fatalf("unexpected completed target event = %+v", event)
 		}
@@ -335,6 +359,7 @@ func assertSearchWebSocketBootstrapLimits(t *testing.T, client *http.Client, ser
 	}
 	if bootstrap.GetSearchWebsocketPath() != searchWebSocketPath ||
 		bootstrap.GetLimits().GetMaximumWebsocketSubscriptions() != service.MaximumSubscriptions() ||
+		bootstrap.GetLimits().GetMaximumPreviewRows() != service.MaximumPreviewRows() ||
 		bootstrap.GetLimits().GetMaximumWebsocketFrameBytes() != service.MaximumFrameBytes() {
 		t.Fatalf("bootstrap websocket metadata = %+v service limits = %+v", &bootstrap, service.Limits())
 	}

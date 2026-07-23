@@ -60,6 +60,7 @@ const (
 	// transport's independent 32 MiB fail-closed cap.
 	maximumSearchFieldPageSize    = uint32(1_000)
 	maximumSearchTimelineBuckets  = uint32(10_000)
+	maximumSearchPreviewRows      = uint32(1_000)
 	maximumWebSocketSubscriptions = uint32(256)
 	minimumWebSocketFrameBytes    = uint64(1 << 10)
 	maximumWebSocketFrameBytes    = uint64(1 << 20)
@@ -163,6 +164,7 @@ type SearchFields interface {
 type SearchWebSocket interface {
 	http.Handler
 	MaximumSubscriptions() uint32
+	MaximumPreviewRows() uint32
 	MaximumFrameBytes() uint64
 	// Close must stop admission and hard-close every upgraded connection before
 	// returning, even when ctx expires. An error may report that graceful close
@@ -416,6 +418,7 @@ func NewHandler(config Config) (*Handler, error) {
 	bootstrap.MaximumPreviewRows = 0
 	if searchWebSocket != nil {
 		maximumSubscriptions := searchWebSocket.MaximumSubscriptions()
+		maximumPreviewRows := searchWebSocket.MaximumPreviewRows()
 		maximumFrameBytes := searchWebSocket.MaximumFrameBytes()
 		if maximumSubscriptions == 0 || maximumSubscriptions > maximumWebSocketSubscriptions {
 			return nil, fmt.Errorf("create server handler: websocket subscriptions must be between 1 and %d", maximumWebSocketSubscriptions)
@@ -423,8 +426,12 @@ func NewHandler(config Config) (*Handler, error) {
 		if maximumFrameBytes < minimumWebSocketFrameBytes || maximumFrameBytes > maximumWebSocketFrameBytes {
 			return nil, fmt.Errorf("create server handler: websocket frame bytes must be between %d and %d", minimumWebSocketFrameBytes, maximumWebSocketFrameBytes)
 		}
+		if maximumPreviewRows == 0 || maximumPreviewRows > maximumSearchPreviewRows {
+			return nil, fmt.Errorf("create server handler: preview rows must be between 1 and %d", maximumSearchPreviewRows)
+		}
 		bootstrap.SearchWebSocketPath = searchWebSocketPath
 		bootstrap.MaximumSubscriptions = maximumSubscriptions
+		bootstrap.MaximumPreviewRows = maximumPreviewRows
 		bootstrap.MaximumWebSocketBytes = maximumFrameBytes
 	}
 	bootstrap.Features = featuresForServices(bootstrap.Features, serviceCapabilities{
@@ -432,6 +439,7 @@ func NewHandler(config Config) (*Handler, error) {
 		exports:        exportService != nil,
 		timeline:       timelineService != nil,
 		fieldDiscovery: fieldService != nil,
+		previews:       searchWebSocket != nil,
 	})
 	browserAllowedHosts, err := normalizeBrowserAllowedHosts(config.AdministrativeAllowedHosts)
 	if err != nil {
@@ -652,61 +660,55 @@ type serviceCapabilities struct {
 	exports        bool
 	timeline       bool
 	fieldDiscovery bool
+	previews       bool
 }
 
 func featuresForServices(features []opensplunkv1.ServerFeature, capabilities serviceCapabilities) []opensplunkv1.ServerFeature {
 	// The current handlers intentionally expose only the clean-install
 	// provisioning subset of these API families. Do not advertise either broad
 	// capability until every route in the corresponding proto family exists.
-	result := make([]opensplunkv1.ServerFeature, 0, len(features)+5)
-	hasHistory := false
-	hasCSVExport := false
-	hasJSONLinesExport := false
-	hasTimeline := false
-	hasFieldDiscovery := false
+	managed := []struct {
+		feature opensplunkv1.ServerFeature
+		enabled bool
+	}{
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY, capabilities.history},
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV, capabilities.exports},
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES, capabilities.exports},
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE, capabilities.timeline},
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY, capabilities.fieldDiscovery},
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW, capabilities.previews},
+	}
+	enabled := make(map[opensplunkv1.ServerFeature]bool, len(managed))
+	for _, item := range managed {
+		enabled[item.feature] = item.enabled
+	}
+	unsupported := map[opensplunkv1.ServerFeature]struct{}{
+		opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN:     {},
+		opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN: {},
+		opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN:       {},
+		opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION: {},
+	}
+	result := make([]opensplunkv1.ServerFeature, 0, len(features)+len(managed))
+	seen := make(map[opensplunkv1.ServerFeature]struct{}, len(managed))
 	for _, feature := range features {
-		if feature == opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE {
-			if capabilities.timeline && !hasTimeline {
-				result = append(result, feature)
-				hasTimeline = true
+		if _, blocked := unsupported[feature]; blocked {
+			continue
+		}
+		if available, controlled := enabled[feature]; controlled {
+			if available {
+				if _, duplicate := seen[feature]; !duplicate {
+					result = append(result, feature)
+					seen[feature] = struct{}{}
+				}
 			}
 			continue
 		}
-		if feature == opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY {
-			if capabilities.fieldDiscovery && !hasFieldDiscovery {
-				result = append(result, feature)
-				hasFieldDiscovery = true
-			}
-			continue
+		result = append(result, feature)
+	}
+	for _, item := range managed {
+		if _, present := seen[item.feature]; item.enabled && !present {
+			result = append(result, item.feature)
 		}
-		if feature != opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW &&
-			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN &&
-			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN &&
-			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN &&
-			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION &&
-			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY || capabilities.history) &&
-			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV || capabilities.exports) &&
-			(feature != opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES || capabilities.exports) {
-			result = append(result, feature)
-			hasHistory = hasHistory || feature == opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY
-			hasCSVExport = hasCSVExport || feature == opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV
-			hasJSONLinesExport = hasJSONLinesExport || feature == opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES
-		}
-	}
-	if capabilities.history && !hasHistory {
-		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_HISTORY)
-	}
-	if capabilities.exports && !hasCSVExport {
-		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV)
-	}
-	if capabilities.exports && !hasJSONLinesExport {
-		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES)
-	}
-	if capabilities.timeline && !hasTimeline {
-		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE)
-	}
-	if capabilities.fieldDiscovery && !hasFieldDiscovery {
-		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY)
 	}
 	return result
 }

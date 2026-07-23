@@ -122,13 +122,17 @@ message SearchPlanSummary {
 }
 
 message SearchJobOptions {
-  bool enable_preview = 1;
+  // Deprecated policy hint. Live preview selection and row limits belong to
+  // SearchSubscription so reconnects and concurrent consumers remain
+  // independently bounded; servers reject this field when true.
+  bool enable_preview = 1 [deprecated = true];
   // Reserved for future eager or in-progress analysis. Version 0.1 exposes
   // on-demand completed-job field analysis when the server advertises it and
   // rejects this option when set.
   bool enable_field_discovery = 2;
   bool enable_timeline = 3;
-  optional uint32 preview_row_limit = 4;
+  // Deprecated with enable_preview; use SearchSubscription.preview_row_limit.
+  optional uint32 preview_row_limit = 4 [deprecated = true];
 }
 
 // SearchJob is a transient, immutable-snapshot execution record. state_version

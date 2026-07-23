@@ -45,6 +45,7 @@ type requestedSubscription struct {
 	id               string
 	key              targetKey
 	afterSequence    uint64
+	previewRows      uint32
 	target           *targetState
 	subscription     *subscription
 	initialFrames    [][]byte
@@ -66,6 +67,65 @@ const (
 	queuePressure
 	queueClosed
 )
+
+type boundedFrameBatch struct {
+	service       *Service
+	frames        [][]byte
+	bytes         uint64
+	maximumFrames int
+	maximumBytes  uint64
+	maximumFrame  uint64
+}
+
+func newBoundedFrameBatch(service *Service, capacity int) *boundedFrameBatch {
+	return &boundedFrameBatch{
+		service: service, frames: make([][]byte, 0, capacity), maximumFrames: service.config.maximumQueuedFrames,
+		maximumBytes: service.config.maximumQueuedBytes, maximumFrame: service.config.maximumFrameBytes,
+	}
+}
+
+func (batch *boundedFrameBatch) append(frame []byte) queueResult {
+	frameBytes := uint64(len(frame))
+	if len(batch.frames) >= batch.maximumFrames || frameBytes > batch.maximumFrame ||
+		batch.bytes > batch.maximumBytes || frameBytes > batch.maximumBytes-batch.bytes {
+		return queueIntrinsicLimit
+	}
+	if !batch.service.reserveQueuedBytes(frameBytes) {
+		return queuePressure
+	}
+	batch.frames = append(batch.frames, frame)
+	batch.bytes += frameBytes
+	return queueAccepted
+}
+
+// appendReserved retains a frame whose conservative service-wide reservation
+// was acquired before an expensive transformation. It transfers the actual
+// frame bytes to the batch and releases any conservative excess.
+func (batch *boundedFrameBatch) appendReserved(frame []byte, reservedBytes uint64) queueResult {
+	frameBytes := uint64(len(frame))
+	if reservedBytes < frameBytes || len(batch.frames) >= batch.maximumFrames ||
+		frameBytes > batch.maximumFrame || batch.bytes > batch.maximumBytes ||
+		frameBytes > batch.maximumBytes-batch.bytes {
+		batch.service.releaseQueuedBytes(reservedBytes)
+		return queueIntrinsicLimit
+	}
+	batch.frames = append(batch.frames, frame)
+	batch.bytes += frameBytes
+	batch.service.releaseQueuedBytes(reservedBytes - frameBytes)
+	return queueAccepted
+}
+
+func (batch *boundedFrameBatch) release() {
+	if batch == nil {
+		return
+	}
+	if batch.bytes != 0 {
+		batch.service.releaseQueuedBytes(batch.bytes)
+		batch.bytes = 0
+	}
+	clear(batch.frames)
+	batch.frames = nil
+}
 
 func (failure *commandFailure) Error() string { return failure.message }
 
@@ -247,14 +307,23 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		if failure != nil {
 			return failure
 		}
-		if input.GetIncludePreviews() || input.PreviewRowLimit != nil {
-			return &commandFailure{
-				code:       opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_UNSUPPORTED_COMMAND,
-				message:    "preview streaming is not implemented",
-				violations: []*opensplunkv1.FieldViolation{fieldViolation(path+".include_previews", "UNSUPPORTED", "preview streaming is not implemented")},
+		previewRows := uint32(0)
+		if input.PreviewRowLimit != nil && !input.GetIncludePreviews() {
+			return invalidCommand("preview_row_limit requires include_previews", fieldViolation(path+".preview_row_limit", "INVALID", "preview_row_limit requires include_previews"))
+		}
+		if input.GetIncludePreviews() {
+			if key.kind != targetKindSearch {
+				return invalidCommand("previews require a search target", fieldViolation(path+".include_previews", "INVALID", "previews require a search target"))
+			}
+			previewRows = connection.service.config.maximumPreviewRows
+			if input.PreviewRowLimit != nil {
+				previewRows = input.GetPreviewRowLimit()
+			}
+			if previewRows == 0 || previewRows > connection.service.config.maximumPreviewRows {
+				return invalidCommand("preview_row_limit is outside the configured bound", fieldViolation(path+".preview_row_limit", "RESOURCE_LIMIT", fmt.Sprintf("preview_row_limit must be between 1 and %d", connection.service.config.maximumPreviewRows)))
 			}
 		}
-		requests = append(requests, requestedSubscription{id: id, key: key, afterSequence: input.GetAfterSequence()})
+		requests = append(requests, requestedSubscription{id: id, key: key, afterSequence: input.GetAfterSequence(), previewRows: previewRows})
 	}
 
 	for index := range requests {
@@ -275,7 +344,68 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 			pinned[target] = struct{}{}
 		}
 		requests[index].target = target
-		requests[index].subscription = &subscription{id: requests[index].id, target: target, connection: connection}
+		requests[index].subscription = &subscription{id: requests[index].id, target: target, connection: connection, previewRows: requests[index].previewRows}
+	}
+
+	// Materialize preview demand before taking current-state snapshots. The
+	// target refresh singleflight also creates a contiguous snapshot barrier
+	// when a retained category head has moved ahead of its peers.
+	type targetRefreshRequest struct {
+		previewRows     uint32
+		currentSnapshot bool
+	}
+	refreshByTarget := make(map[*targetState]targetRefreshRequest, len(resolved))
+	for index := range requests {
+		refresh := refreshByTarget[requests[index].target]
+		refresh.previewRows = max(refresh.previewRows, requests[index].previewRows)
+		refresh.currentSnapshot = refresh.currentSnapshot || requests[index].afterSequence == 0
+		refreshByTarget[requests[index].target] = refresh
+	}
+	refreshedTargets := make(map[*targetState]struct{})
+	refreshCommitted := false
+	defer func() {
+		if refreshCommitted {
+			return
+		}
+		for target := range refreshedTargets {
+			target.mu.Lock()
+			if target.projectedPreviews != target.maximumPreviewRowsLocked() {
+				target.stopPollingLocked()
+				target.startPollingLocked()
+			}
+			target.mu.Unlock()
+		}
+	}()
+	for index := range requests {
+		request := &requests[index]
+		if request.previewRows == 0 {
+			continue
+		}
+		request.target.mu.Lock()
+		if request.target.pendingPreviews == nil {
+			request.target.pendingPreviews = make(map[*subscription]uint32)
+		}
+		request.target.addPendingPreviewLocked(request.subscription)
+		request.target.mu.Unlock()
+	}
+	defer func() {
+		for index := range requests {
+			request := &requests[index]
+			if request.previewRows == 0 {
+				continue
+			}
+			request.target.mu.Lock()
+			request.target.removePendingPreviewLocked(request.subscription)
+			request.target.mu.Unlock()
+		}
+	}()
+	for target, refresh := range refreshByTarget {
+		if _, err := target.refreshForSubscription(
+			connection.ctx, refresh.previewRows, refresh.currentSnapshot,
+		); err != nil {
+			return &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND, message: "job was not found"}
+		}
+		refreshedTargets[target] = struct{}{}
 	}
 
 	targets := uniqueSortedTargets(requests)
@@ -288,7 +418,34 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		}
 	}()
 
-	frames := make([][]byte, 0, len(requests)*2)
+	batch := newBoundedFrameBatch(connection.service, len(requests)*2)
+	defer batch.release()
+	batchTooLarge := func() *commandFailure {
+		return &commandFailure{
+			code:    opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS,
+			message: "subscription response exceeds the configured queue capacity",
+		}
+	}
+	handleAppend := func(result queueResult) (bool, *commandFailure) {
+		switch result {
+		case queueAccepted:
+			return true, nil
+		case queueIntrinsicLimit:
+			return false, batchTooLarge()
+		default:
+			connection.hardClose()
+			return false, nil
+		}
+	}
+	appendFrame := func(frame []byte) (bool, *commandFailure) {
+		return handleAppend(batch.append(frame))
+	}
+	type initialDelivery struct {
+		request   *requestedSubscription
+		canonical []byte
+		sequence  uint64
+	}
+	deliveries := make([]initialDelivery, 0, len(requests)*2)
 	for index := range requests {
 		request := &requests[index]
 		request.target.mu.Lock()
@@ -301,7 +458,7 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		now := canonicalTime(connection.service.config.now())
 		overdueTerminal := request.target.terminal && !request.target.refreshAt.IsZero() && !request.target.refreshAt.After(now)
 		if request.afterSequence == 0 {
-			if request.target.currentIncomplete || overdueTerminal {
+			if request.target.currentIncomplete || overdueTerminal || !request.target.currentEventsContinuousLocked() {
 				reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
 			} else {
 				request.initialFrames = request.target.currentEventsLocked()
@@ -329,26 +486,95 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		if err != nil {
 			return &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not encode subscription acknowledgment"}
 		}
-		frames = append(frames, ack)
+		if accepted, failure := appendFrame(ack); !accepted {
+			return failure
+		}
 		if reason != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_UNSPECIFIED {
 			resync, err := marshalEvent(resynchronizationEvent(request.id, request.key, reason, request.earliest, request.latest, connection.service.config.now()), connection.service.config.maximumFrameBytes)
 			if err != nil {
 				return &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not encode resynchronization event"}
 			}
-			frames = append(frames, resync)
+			if accepted, failure := appendFrame(resync); !accepted {
+				return failure
+			}
 			continue
 		}
 		for _, canonical := range request.initialFrames {
-			stamped, err := stampSubscriptionID(canonical, request.id, connection.service.config.maximumFrameBytes)
+			sequence, err := canonicalEventSequence(canonical)
 			if err != nil {
-				return &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not encode initial target state"}
+				return &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not read initial target state"}
 			}
-			frames = append(frames, stamped)
+			deliveries = append(deliveries, initialDelivery{request: request, canonical: canonical, sequence: sequence})
 		}
 	}
-	switch connection.enqueueBatchResult(frames) {
+	// Group identical target/sequence/row-limit deliveries so a large canonical
+	// preview is unmarshaled and tailored once, regardless of how many legal
+	// subscription IDs share it. Sequences remain ordered within every group.
+	sort.Slice(deliveries, func(left, right int) bool {
+		leftRequest, rightRequest := deliveries[left].request, deliveries[right].request
+		if leftRequest.key.kind != rightRequest.key.kind {
+			return leftRequest.key.kind < rightRequest.key.kind
+		}
+		if leftRequest.key.id != rightRequest.key.id {
+			return leftRequest.key.id < rightRequest.key.id
+		}
+		if leftRequest.previewRows != rightRequest.previewRows {
+			return leftRequest.previewRows < rightRequest.previewRows
+		}
+		if deliveries[left].sequence != deliveries[right].sequence {
+			return deliveries[left].sequence < deliveries[right].sequence
+		}
+		return leftRequest.id < rightRequest.id
+	})
+	stageGroup := func(group []initialDelivery) (bool, *commandFailure) {
+		canonical := group[0].canonical
+		preview, err := hasPreviewPayload(canonical)
+		if err != nil {
+			return false, &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not read initial target state"}
+		}
+		var workBytes uint64
+		if preview {
+			workBytes = uint64(len(canonical))
+			if !connection.service.reserveQueuedBytes(workBytes) {
+				connection.hardClose()
+				return false, nil
+			}
+			canonical, err = tailorPreviewEvent(canonical, group[0].request.previewRows)
+			if err != nil || uint64(len(canonical)) > workBytes {
+				connection.service.releaseQueuedBytes(workBytes)
+				return false, &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not encode initial target state"}
+			}
+			connection.service.releaseQueuedBytes(workBytes - uint64(len(canonical)))
+			workBytes = uint64(len(canonical))
+			defer connection.service.releaseQueuedBytes(workBytes)
+		}
+		for _, delivery := range group {
+			result, stageErr := connection.stagePreparedCanonicalFrame(batch, canonical, delivery.request.id)
+			if stageErr != nil {
+				return false, &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not encode initial target state"}
+			}
+			if accepted, failure := handleAppend(result); !accepted {
+				return false, failure
+			}
+		}
+		return true, nil
+	}
+	for start := 0; start < len(deliveries); {
+		end := start + 1
+		for end < len(deliveries) &&
+			deliveries[end].request.target == deliveries[start].request.target &&
+			deliveries[end].request.previewRows == deliveries[start].request.previewRows &&
+			deliveries[end].sequence == deliveries[start].sequence {
+			end++
+		}
+		if staged, failure := stageGroup(deliveries[start:end]); !staged {
+			return failure
+		}
+		start = end
+	}
+	switch connection.enqueueReservedBatchResult(batch) {
 	case queueIntrinsicLimit:
-		return &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS, message: "subscription response exceeds the configured queue capacity"}
+		return batchTooLarge()
 	case queuePressure, queueClosed:
 		connection.hardClose()
 		return nil
@@ -360,16 +586,42 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		subscription.active = true
 		subscription.mu.Unlock()
 		request.target.mu.Lock()
-		request.target.subscriptions[subscription] = struct{}{}
-		request.target.subscriberCount.Add(1)
+		previousPreviewRows := request.target.maximumPreviewRowsLocked()
+		request.target.removePendingPreviewLocked(subscription)
+		request.target.addSubscriptionLocked(subscription)
 		if request.afterSequence == 0 {
 			request.target.epochEstablished = true
+		}
+		if request.target.maximumPreviewRowsLocked() != previousPreviewRows && request.target.polling {
+			request.target.stopPollingLocked()
 		}
 		request.target.startPollingLocked()
 		request.target.mu.Unlock()
 		connection.subscriptions[request.id] = subscription
 	}
+	refreshCommitted = true
 	return nil
+}
+
+func (connection *connection) stagePreparedCanonicalFrame(
+	batch *boundedFrameBatch,
+	canonical []byte,
+	subscriptionID string,
+) (queueResult, error) {
+	reservedBytes, err := stampedFrameSize(len(canonical), subscriptionID)
+	if err != nil || reservedBytes > connection.service.config.maximumFrameBytes ||
+		reservedBytes > connection.service.config.maximumQueuedBytes {
+		return queueIntrinsicLimit, errors.New("search websocket initial event exceeds its configured bound")
+	}
+	if !connection.service.reserveQueuedBytes(reservedBytes) {
+		return queuePressure, nil
+	}
+	stamped, err := stampCanonicalSubscriptionID(canonical, subscriptionID, connection.service.config.maximumFrameBytes)
+	if err != nil {
+		connection.service.releaseQueuedBytes(reservedBytes)
+		return queueIntrinsicLimit, err
+	}
+	return batch.appendReserved(stamped, reservedBytes), nil
 }
 
 func (connection *connection) unsubscribe(requestID string, command *opensplunkv1.UnsubscribeSearchJobsCommand) *commandFailure {
@@ -418,12 +670,14 @@ func (connection *connection) unsubscribe(requestID string, command *opensplunkv
 			subscription.mu.Unlock()
 			target := subscription.target
 			target.mu.Lock()
-			if _, exists := target.subscriptions[subscription]; exists {
-				delete(target.subscriptions, subscription)
-				target.subscriberCount.Add(-1)
-			}
-			if len(target.subscriptions) == 0 {
+			previousPreviewRows := target.maximumPreviewRowsLocked()
+			target.removeSubscriptionLocked(subscription)
+			previewRowsChanged := target.maximumPreviewRowsLocked() != previousPreviewRows
+			if len(target.subscriptions) == 0 || (previewRowsChanged && target.polling) {
 				target.stopPollingLocked()
+			}
+			if len(target.subscriptions) != 0 {
+				target.startPollingLocked()
 			}
 			target.mu.Unlock()
 			delete(connection.subscriptions, id)
@@ -450,10 +704,7 @@ func (connection *connection) removeAllSubscriptions() {
 		subscription.mu.Unlock()
 		target := subscription.target
 		target.mu.Lock()
-		if _, exists := target.subscriptions[subscription]; exists {
-			delete(target.subscriptions, subscription)
-			target.subscriberCount.Add(-1)
-		}
+		target.removeSubscriptionLocked(subscription)
 		if len(target.subscriptions) == 0 {
 			target.stopPollingLocked()
 		}
@@ -467,6 +718,66 @@ func (connection *connection) removeAllSubscriptions() {
 
 func (connection *connection) enqueue(data []byte) bool {
 	return connection.enqueueBatchResult([][]byte{data}) == queueAccepted
+}
+
+// enqueueCanonicalPreview reserves all queue budgets before allocating the
+// subscription-specific frame. Disposable previews therefore cost no large
+// copy when a slow connection is already under pressure.
+func (connection *connection) enqueueCanonicalPreview(data []byte, subscriptionID string) queueResult {
+	frameBytes, err := stampedFrameSize(len(data), subscriptionID)
+	if err != nil || frameBytes > connection.service.config.maximumFrameBytes ||
+		frameBytes > connection.service.config.maximumQueuedBytes {
+		return queueIntrinsicLimit
+	}
+	connection.queueMu.Lock()
+	defer connection.queueMu.Unlock()
+	if connection.hardClosed || connection.gracefulClosing {
+		return queueClosed
+	}
+	usedFrames := len(connection.queue) - connection.queueHead + connection.inFlightFrames
+	usedBytes := connection.queuedBytes + connection.inFlightBytes
+	if usedFrames >= connection.service.config.maximumQueuedFrames ||
+		usedBytes > connection.service.config.maximumQueuedBytes ||
+		frameBytes > connection.service.config.maximumQueuedBytes-usedBytes ||
+		!connection.service.reserveQueuedBytes(frameBytes) {
+		return queuePressure
+	}
+	stamped, err := stampCanonicalSubscriptionID(data, subscriptionID, connection.service.config.maximumFrameBytes)
+	if err != nil {
+		connection.service.releaseQueuedBytes(frameBytes)
+		return queueIntrinsicLimit
+	}
+	connection.compactQueueLocked(1)
+	connection.queue = append(connection.queue, stamped)
+	connection.queuedBytes += frameBytes
+	connection.signalWriterLocked()
+	return queueAccepted
+}
+
+// previewQueueMayAccept is a cheap, advisory admission check used before
+// tailoring a disposable canonical preview for a subscriber group. The final
+// enqueue repeats every check and owns the actual reservation.
+func (connection *connection) previewQueueMayAccept(frameBytes uint64) bool {
+	if frameBytes > connection.service.config.maximumFrameBytes ||
+		frameBytes > connection.service.config.maximumQueuedBytes {
+		return false
+	}
+	connection.queueMu.Lock()
+	defer connection.queueMu.Unlock()
+	if connection.hardClosed || connection.gracefulClosing {
+		return false
+	}
+	usedFrames := len(connection.queue) - connection.queueHead + connection.inFlightFrames
+	usedBytes := connection.queuedBytes + connection.inFlightBytes
+	if usedFrames >= connection.service.config.maximumQueuedFrames ||
+		usedBytes > connection.service.config.maximumQueuedBytes ||
+		frameBytes > connection.service.config.maximumQueuedBytes-usedBytes {
+		return false
+	}
+	connection.service.queueBudgetMu.Lock()
+	defer connection.service.queueBudgetMu.Unlock()
+	return connection.service.queuedBytes <= connection.service.config.maximumTotalQueuedBytes &&
+		frameBytes <= connection.service.config.maximumTotalQueuedBytes-connection.service.queuedBytes
 }
 
 func (connection *connection) enqueueBatch(frames [][]byte) bool {
@@ -519,6 +830,39 @@ func (connection *connection) enqueueBatchResult(frames [][]byte) queueResult {
 	connection.compactQueueLocked(len(frames))
 	connection.queue = append(connection.queue, frames...)
 	connection.queuedBytes += bytes
+	connection.signalWriterLocked()
+	return queueAccepted
+}
+
+// enqueueReservedBatchResult transfers a bounded staging reservation to the
+// connection queue without charging the service-wide byte budget twice.
+func (connection *connection) enqueueReservedBatchResult(batch *boundedFrameBatch) queueResult {
+	if batch == nil || len(batch.frames) == 0 {
+		return queueAccepted
+	}
+	if batch.service != connection.service || batch.bytes == 0 {
+		return queueIntrinsicLimit
+	}
+	if result := connection.preflightBatch(batch.frames); result != queueAccepted {
+		return queueIntrinsicLimit
+	}
+	connection.queueMu.Lock()
+	defer connection.queueMu.Unlock()
+	if connection.hardClosed || connection.gracefulClosing {
+		return queueClosed
+	}
+	usedFrames := len(connection.queue) - connection.queueHead + connection.inFlightFrames
+	usedBytes := connection.queuedBytes + connection.inFlightBytes
+	if usedFrames > connection.service.config.maximumQueuedFrames ||
+		len(batch.frames) > connection.service.config.maximumQueuedFrames-usedFrames ||
+		usedBytes > connection.service.config.maximumQueuedBytes ||
+		batch.bytes > connection.service.config.maximumQueuedBytes-usedBytes {
+		return queuePressure
+	}
+	connection.compactQueueLocked(len(batch.frames))
+	connection.queue = append(connection.queue, batch.frames...)
+	connection.queuedBytes += batch.bytes
+	batch.bytes = 0
 	connection.signalWriterLocked()
 	return queueAccepted
 }

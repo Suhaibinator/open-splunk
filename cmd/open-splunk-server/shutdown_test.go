@@ -225,6 +225,16 @@ func (shutdownSearchSnapshots) GetFor(searchjobs.AccessScope, string) (searchjob
 	return searchjobs.Job{}, searchjobs.ErrNotFound
 }
 
+func (shutdownSearchSnapshots) PreviewFor(searchjobs.AccessScope, string, int) (searchjobs.PreviewSnapshot, error) {
+	return searchjobs.PreviewSnapshot{}, searchjobs.ErrNotFound
+}
+
+func (jobs shutdownSearchSnapshots) PreviewForBytes(scope searchjobs.AccessScope, id string, limit int, _ uint64) (searchjobs.PreviewSnapshot, error) {
+	return jobs.PreviewFor(scope, id, limit)
+}
+
+func (shutdownSearchSnapshots) MaximumPreviewRows() uint32 { return 100 }
+
 type shutdownExportSnapshots struct{}
 
 func (shutdownExportSnapshots) Get(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error) {

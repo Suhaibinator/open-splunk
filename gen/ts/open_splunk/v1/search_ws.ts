@@ -193,7 +193,13 @@ export interface SearchSubscription {
    * for current state followed by live events.
    */
   afterSequence: bigint;
+  /**
+   * Preview policy is per subscription while sequence numbers are per target.
+   * When false, a subscriber receives zero-row RESET continuity markers for
+   * canonical preview sequences so later target events remain contiguous.
+   */
   includePreviews: boolean;
+  /** Requires include_previews. Omission selects the advertised server maximum. */
   previewRowLimit?: number | undefined;
 }
 
@@ -249,7 +255,9 @@ export interface ResultSchemaAvailable {
 
 /**
  * ResultPreview is bounded and disposable. Durable/full pages are fetched via
- * GetSearchResults; a client may drop previews under backpressure.
+ * GetSearchResults; a client may drop previews under backpressure. A zero-row
+ * RESET with truncated=true can be a continuity marker for an opted-out or
+ * more tightly bounded subscription and contains no result cells.
  */
 export interface ResultPreview {
   searchJobId: string;
