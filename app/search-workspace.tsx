@@ -38,6 +38,7 @@ import {
   type TimelinePoint,
 } from "@/lib/demo/search-data";
 import {
+  ResultSchema as ResultSchemaCodec,
   ResultSetKind,
   VisualizationStackMode,
   VisualizationType,
@@ -53,7 +54,11 @@ import {
   type SearchJob,
   type SearchProgress,
 } from "@/gen/ts/open_splunk/v1/search";
-import type { SearchWebSocketEvent } from "@/gen/ts/open_splunk/v1/search_ws";
+import {
+  SearchWebSocketProtocolErrorCode,
+  type ResultPreview,
+  type SearchWebSocketEvent,
+} from "@/gen/ts/open_splunk/v1/search_ws";
 import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
 import {
   SearchWebSocketClient,
@@ -78,6 +83,7 @@ import {
   timechartSpanMilliseconds,
   timechartRowsForExport,
   timechartValueFields,
+  type AdaptedSearchResults,
   type WorkspaceStatistic,
   type WorkspaceStatisticsSort,
   type WorkspaceStatisticsTable,
@@ -151,6 +157,11 @@ import type {
   ToastState,
 } from "./search-workspace/model";
 import { serverTimeRangeValidationError } from "./search-workspace/time-range";
+import {
+  applyLiveResultPreview,
+  validateLivePreviewSchema,
+  type LivePreviewSnapshot,
+} from "./search-workspace/live-preview";
 import { EventsPanel } from "./search-workspace/panels/events-panel";
 import { PatternsPanel } from "./search-workspace/panels/patterns-panel";
 import { StatisticsPanel } from "./search-workspace/panels/statistics-panel";
@@ -201,6 +212,22 @@ interface BackendResultPage {
   totalSize?: number;
   totalSizeExact: boolean;
   snapshotComplete: boolean;
+}
+
+type BackendPreviewStatus =
+  | "disabled"
+  | "waiting"
+  | "live"
+  | "paused"
+  | "resyncing"
+  | "limited"
+  | "finalizing"
+  | "finalization-error";
+
+interface BackendPreviewDisplay {
+  schema: ResultSchema;
+  snapshot: LivePreviewSnapshot;
+  adapted: AdaptedSearchResults;
 }
 
 interface SavedWorkspaceBaseline {
@@ -337,6 +364,13 @@ function searchJobIdForWebSocketEvent(event: SearchWebSocketEvent): string | nul
 
 function uniqueMessages(messages: Array<string | undefined>): string[] {
   return [...new Set(messages.map((message) => message?.trim()).filter((message): message is string => Boolean(message)))];
+}
+
+function equalResultSchemas(left: ResultSchema, right: ResultSchema): boolean {
+  const leftBytes = ResultSchemaCodec.encode(left).finish();
+  const rightBytes = ResultSchemaCodec.encode(right).finish();
+  return leftBytes.length === rightBytes.length
+    && leftBytes.every((value, index) => value === rightBytes[index]);
 }
 
 type SavedSearchConflictKind = "name" | "version" | "unknown";
@@ -541,6 +575,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [backendPrimaryCountPrefix, setBackendPrimaryCountPrefix] = useState<"" | "≈" | "≥">("");
   const [backendResultKind, setBackendResultKind] = useState(ResultSetKind.RESULT_SET_KIND_UNSPECIFIED);
   const [backendResultSchema, setBackendResultSchema] = useState<ResultSchema | null>(null);
+  const [backendPreviewDisplay, setBackendPreviewDisplay] = useState<BackendPreviewDisplay | null>(null);
+  const [backendPreviewStatus, setBackendPreviewStatus] = useState<BackendPreviewStatus>("disabled");
+  const [backendPreviewAnnouncement, setBackendPreviewAnnouncement] = useState("");
+  const [backendAuthoritativeResultsReady, setBackendAuthoritativeResultsReady] = useState(!backendEnabled);
   const [backendResultTotalRows, setBackendResultTotalRows] = useState<number | null>(null);
   const [backendResultTotalExact, setBackendResultTotalExact] = useState(false);
   const [backendHasNextPage, setBackendHasNextPage] = useState(false);
@@ -647,6 +685,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const backendJobRef = useRef<SearchJob | null>(null);
   const backendJobVersionRef = useRef(0n);
   const backendSocketRef = useRef<SearchWebSocketClient | null>(null);
+  const backendPreviewRef = useRef<LivePreviewSnapshot | null>(null);
+  const backendPreviewSchemasRef = useRef<Map<string, ResultSchema>>(new Map());
+  const backendPreviewRowLimitRef = useRef(0);
+  const backendPreviewStatusRef = useRef<BackendPreviewStatus>("disabled");
   const backendCancelPendingRef = useRef(false);
   const backendCancelRequestedRef = useRef(false);
   const backendBootstrapRef = useRef<BackendBootstrapState | null>(null);
@@ -708,6 +750,14 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const backendHasNoSearchableIndexes = backendEnabled
     && backendBootstrapModel !== null
     && !backendBootstrapModel.indexes.some((index) => index.searchable);
+  const backendPreviewFeatureSupported = backendEnabled
+    && backendBootstrapModel !== null
+    && backendBootstrapModel.searchWebsocketPath !== null
+    && backendBootstrapModel.limits.maximumPreviewRows > 0
+    && supportsServerFeature(
+      backendBootstrapModel,
+      ServerFeature.SERVER_FEATURE_SEARCH_PREVIEW,
+    );
   const runDisabledReason = !isRunning && backendEnabled && backendConnectionState === "loading"
     ? "Search is disabled while the backend connection is loading."
     : !isRunning && backendEnabled && backendConnectionState === "error"
@@ -717,9 +767,18 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         : !isRunning && query.trim().length === 0
           ? "Enter an SPL search before running."
           : null;
+  const backendDisplayingPreview = backendEnabled
+    && !backendAuthoritativeResultsReady
+    && backendPreviewDisplay !== null;
+  const backendPreviewHasRows = backendDisplayingPreview
+    && backendPreviewDisplay.snapshot.rows.length > 0;
   const hasResultData = !searchIsClosed
     && (backendEnabled
-      ? phase === "completed" && !backendResultsExpired
+      ? !backendResultsExpired
+        && (backendAuthoritativeResultsReady || backendPreviewHasRows)
+        && phase !== "failed"
+        && phase !== "canceled"
+        && phase !== "expired"
       : phase !== "failed" && phase !== "canceled");
   const diagnostic = useMemo(() => query.trim().length === 0 ? null : getQueryDiagnostic(query), [query]);
   const editorDiagnostic = useMemo(() => {
@@ -741,24 +800,51 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       ? COMPLETIONS
       : COMPLETIONS.filter((completion) => completion.label.startsWith(prefix));
   }, [completionContext]);
+  const displayedBackendResults = backendDisplayingPreview
+    ? backendPreviewDisplay.adapted
+    : null;
   const resultEvents = useMemo(
-    () => searchIsClosed ? [] : backendEnabled ? backendEvents : filteredDemoEvents(submittedQuery),
-    [backendEnabled, backendEvents, searchIsClosed, submittedQuery],
+    () => searchIsClosed
+      ? []
+      : backendEnabled
+        ? displayedBackendResults?.events ?? backendEvents
+        : filteredDemoEvents(submittedQuery),
+    [backendEnabled, backendEvents, displayedBackendResults?.events, searchIsClosed, submittedQuery],
   );
-  const timelinePoints = backendEnabled ? backendTimeline : DEMO_TIMELINE;
+  const timelinePoints = useMemo(() => backendEnabled
+    ? backendDisplayingPreview
+      ? backendResultKind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES
+        ? displayedBackendResults?.timeline ?? []
+        : []
+      : backendTimeline
+    : DEMO_TIMELINE, [
+    backendDisplayingPreview,
+    backendEnabled,
+    backendResultKind,
+    backendTimeline,
+    displayedBackendResults?.timeline,
+  ]);
   const timechartValueColumns = useMemo(() => timechartValueFields(timelinePoints), [timelinePoints]);
-  const statisticsRows: WorkspaceStatistic[] = backendEnabled ? backendStatistics : DEMO_STATISTICS;
+  const statisticsRows: WorkspaceStatistic[] = backendEnabled
+    ? displayedBackendResults?.statistics ?? backendStatistics
+    : DEMO_STATISTICS;
   const isTimechartResult = backendEnabled
     ? backendResultKind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES
     : hasPipelineCommand(submittedQuery, "timechart");
-  const genericStatisticsTable = backendEnabled && !isTimechartResult ? backendStatisticsTable : null;
+  const genericStatisticsTable = backendEnabled && !isTimechartResult
+    ? displayedBackendResults?.statisticsTable ?? backendStatisticsTable
+    : null;
   const statisticsRowCount = backendEnabled
+    && backendDisplayingPreview
+    ? backendPreviewDisplay.snapshot.rows.length
+    : backendEnabled
     && backendResultKind !== ResultSetKind.RESULT_SET_KIND_EVENTS
     && backendResultTotalRows !== null
     ? backendResultTotalRows
     : genericStatisticsTable?.rows.length ?? (isTimechartResult ? timelinePoints.length : statisticsRows.length);
   const backendStatisticsPageStart = (() => {
     if (!backendEnabled) return 1;
+    if (backendDisplayingPreview) return 1;
     return backendResultPagesRef.current.has(`${backendResultPageSize}:${eventPage}`)
       ? backendPageStartsRef.current.get(`${backendResultPageSize}:${eventPage}`) ?? null
       : null;
@@ -954,6 +1040,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       : exportSourceTab === "statistics" || exportSourceTab === "visualization";
     const jobReady = phase === "completed"
       && backendJobRef.current !== null
+      && backendAuthoritativeResultsReady
       && !backendResultsExpired
       && exportSourceTab !== "patterns"
       && resultMatchesSource;
@@ -1050,10 +1137,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         update: { status: "idle" },
       },
       liveResultPreviews: {
-        supported: false,
-        enabled: false,
+        supported: backendPreviewFeatureSupported,
+        enabled: backendPreviewFeatureSupported,
         configurable: false,
-        detail: "This frontend subscribes to job progress but renders only completed result snapshots.",
+        detail: backendPreviewFeatureSupported
+          ? `The server streams up to ${NUMBER_FORMAT.format(backendBootstrapModel?.limits.maximumPreviewRows ?? 0)} provisional rows while a search runs. Completed results are always replaced from the authoritative REST snapshot.`
+          : "This server does not advertise bounded live result previews. Job progress remains live and completed results load over REST.",
         update: { status: "idle" },
       },
       eventSampling: {
@@ -1144,6 +1233,60 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     backendSnapshotComplete,
     eventPage,
   ]);
+  const backendPreviewStatusPresentation = (() => {
+    const rowCount = backendPreviewDisplay?.snapshot.rows.length ?? 0;
+    const bounded = backendPreviewDisplay?.snapshot.truncated === true;
+    switch (backendPreviewStatus) {
+      case "waiting":
+        return {
+          title: "Live preview",
+          detail: "Waiting for the first displayable result rows.",
+          tone: "active",
+        };
+      case "live":
+        return {
+          title: "Live preview",
+          detail: bounded
+            ? `Showing the first ${NUMBER_FORMAT.format(rowCount)} provisional rows. Values and order may change until the search completes.`
+            : `${NUMBER_FORMAT.format(rowCount)} provisional rows shown. Values and order may change until the search completes.`,
+          tone: "active",
+        };
+      case "paused":
+        return {
+          title: "Preview paused",
+          detail: `Reconnecting to live updates. The last ${NUMBER_FORMAT.format(rowCount)} provisional rows remain visible.`,
+          tone: "paused",
+        };
+      case "resyncing":
+        return {
+          title: "Resynchronizing preview",
+          detail: "Provisional rows were cleared to avoid displaying a discontinuous result set.",
+          tone: "paused",
+        };
+      case "limited":
+        return {
+          title: "Live preview is bounded",
+          detail: "A complete row did not fit within the negotiated preview limit. Authoritative results will appear when the search completes.",
+          tone: "paused",
+        };
+      case "finalizing":
+        return {
+          title: "Finalizing results",
+          detail: rowCount > 0
+            ? `${NUMBER_FORMAT.format(rowCount)} preview rows remain provisional while the authoritative snapshot loads.`
+            : "Loading the authoritative result snapshot.",
+          tone: "active",
+        };
+      case "finalization-error":
+        return {
+          title: "Preview only",
+          detail: "The search completed, but authoritative results could not be loaded. These provisional rows cannot be paged or exported.",
+          tone: "warning",
+        };
+      case "disabled":
+        return null;
+    }
+  })();
 
   useEffect(() => {
     const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
@@ -1591,6 +1734,24 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     ]));
   }
 
+  function updateBackendPreviewStatus(
+    status: BackendPreviewStatus,
+    announcement?: string,
+  ) {
+    backendPreviewStatusRef.current = status;
+    setBackendPreviewStatus(status);
+    if (announcement !== undefined) setBackendPreviewAnnouncement(announcement);
+  }
+
+  function clearBackendPreview(
+    status: BackendPreviewStatus = "disabled",
+    announcement?: string,
+  ) {
+    backendPreviewRef.current = null;
+    setBackendPreviewDisplay(null);
+    updateBackendPreviewStatus(status, announcement);
+  }
+
   function resetBackendResultState() {
     backendResultPagesRef.current.clear();
     backendPageTokensRef.current.clear();
@@ -1618,6 +1779,14 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setBackendFieldSummaryError(null);
     setBackendResultKind(ResultSetKind.RESULT_SET_KIND_UNSPECIFIED);
     setBackendResultSchema(null);
+    backendPreviewRef.current = null;
+    backendPreviewSchemasRef.current.clear();
+    backendPreviewRowLimitRef.current = 0;
+    setBackendPreviewDisplay(null);
+    backendPreviewStatusRef.current = "disabled";
+    setBackendPreviewStatus("disabled");
+    setBackendPreviewAnnouncement("");
+    setBackendAuthoritativeResultsReady(false);
     setBackendResultTotalRows(null);
     setBackendResultTotalExact(false);
     setBackendHasNextPage(false);
@@ -1862,6 +2031,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     }).catch((error: unknown) => {
       if (controller.signal.aborted) return;
       if (isHttpStatus(error, 410)) {
+        clearBackendPreview("disabled", "Search results expired. Live preview rows were discarded.");
+        setBackendAuthoritativeResultsReady(false);
         setBackendResultsExpired(true);
         setPhase("expired");
         setBackendFieldSummaryError("These retained field results have expired.");
@@ -2265,6 +2436,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         backendJobRef.current?.definition?.spl ?? submittedQuery,
       ) ?? undefined,
     );
+    clearBackendPreview("disabled", "Authoritative search results loaded.");
+    setBackendAuthoritativeResultsReady(true);
     setBackendEvents(adapted.events);
     if (!backendAuthoritativeFieldsRef.current && page.schema.resultKind !== ResultSetKind.RESULT_SET_KIND_EVENTS) {
       setFields([]);
@@ -2630,12 +2803,185 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     return response.searchJob;
   }
 
+  function registerBackendPreviewSchema(
+    schema: ResultSchema | undefined,
+    generation: number,
+    searchJobId: string,
+  ): boolean {
+    if (
+      schema === undefined
+      || generationRef.current !== generation
+      || backendJobIdRef.current !== searchJobId
+    ) return false;
+
+    const validationError = validateLivePreviewSchema(schema);
+    if (validationError !== null) {
+      clearBackendPreview(
+        "resyncing",
+        "The live result preview was discarded because its schema was invalid.",
+      );
+      setBackendNotices((current) => uniqueMessages([
+        ...current,
+        `${validationError} Waiting for authoritative results.`,
+      ]));
+      return false;
+    }
+
+    const existing = backendPreviewSchemasRef.current.get(schema.schemaId);
+    if (
+      backendPreviewRef.current !== null
+      && backendPreviewRef.current.schemaId !== schema.schemaId
+    ) {
+      clearBackendPreview(
+        "waiting",
+        "The live result schema changed. Waiting for a fresh preview snapshot.",
+      );
+    }
+    if (existing !== undefined) {
+      if (schema.revision < existing.revision) return false;
+      if (schema.revision === existing.revision) {
+        if (equalResultSchemas(existing, schema)) return true;
+        clearBackendPreview(
+          "resyncing",
+          "The live result preview was discarded because its schema changed unexpectedly.",
+        );
+        setBackendNotices((current) => uniqueMessages([
+          ...current,
+          "The server changed a preview schema without advancing its revision. Waiting for authoritative results.",
+        ]));
+        return false;
+      }
+      if (backendPreviewRef.current?.schemaId === schema.schemaId) {
+        clearBackendPreview(
+          "waiting",
+          "The live result schema changed. Waiting for a fresh preview snapshot.",
+        );
+      }
+    }
+
+    backendPreviewSchemasRef.current.set(schema.schemaId, schema);
+    setBackendResultSchema(schema);
+    setBackendResultKind(schema.resultKind);
+    return true;
+  }
+
+  function applyBackendResultPreview(
+    preview: ResultPreview,
+    generation: number,
+    searchJobId: string,
+  ) {
+    if (
+      generationRef.current !== generation
+      || backendJobIdRef.current !== searchJobId
+      || preview.searchJobId !== searchJobId
+    ) return;
+
+    const schema = backendPreviewSchemasRef.current.get(preview.schemaId);
+    if (schema === undefined) {
+      clearBackendPreview(
+        "resyncing",
+        "The live result preview was discarded because its schema was unavailable.",
+      );
+      setBackendNotices((current) => uniqueMessages([
+        ...current,
+        "The server sent preview rows before their result schema. Waiting for authoritative results.",
+      ]));
+      return;
+    }
+
+    const previous = backendPreviewRef.current;
+    const applied = applyLiveResultPreview(
+      previous,
+      schema,
+      preview,
+      backendPreviewRowLimitRef.current,
+    );
+    if (applied.status === "ignored") return;
+    if (applied.status === "invalid") {
+      clearBackendPreview(
+        "resyncing",
+        "The live result preview was discarded because it failed validation.",
+      );
+      setBackendNotices((current) => uniqueMessages([
+        ...current,
+        `${applied.message} Waiting for authoritative results.`,
+      ]));
+      return;
+    }
+
+    backendPreviewRef.current = applied.snapshot;
+    if (applied.snapshot.rows.length === 0) {
+      setBackendPreviewDisplay(null);
+      updateBackendPreviewStatus(
+        applied.snapshot.truncated ? "limited" : "waiting",
+        applied.snapshot.truncated
+          ? "The bounded live preview could not include a complete row. Waiting for authoritative results."
+          : "Live preview is waiting for result rows.",
+      );
+      return;
+    }
+
+    try {
+      const adapted = adaptSearchResults(
+        schema,
+        applied.snapshot.rows,
+        schema.resultKind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+        timechartSpanMilliseconds(
+          backendJobRef.current?.definition?.spl ?? submittedQuery,
+        ) ?? undefined,
+      );
+      setBackendPreviewDisplay({ schema, snapshot: applied.snapshot, adapted });
+      setBackendResultSchema(schema);
+      setBackendResultKind(schema.resultKind);
+      setActiveTab((current) => resultTabCompatibleWithKind(current, schema.resultKind)
+        ? current
+        : resultTabForBackendKind(schema.resultKind));
+      const firstVisibleSnapshot = previous === null || previous.rows.length === 0;
+      updateBackendPreviewStatus(
+        "live",
+        firstVisibleSnapshot
+          ? `Live preview available with ${NUMBER_FORMAT.format(applied.snapshot.rows.length)} provisional rows.`
+          : undefined,
+      );
+    } catch (error) {
+      clearBackendPreview(
+        "resyncing",
+        "The live result preview was discarded because it could not be displayed safely.",
+      );
+      setBackendNotices((current) => uniqueMessages([
+        ...current,
+        `${error instanceof Error ? error.message : "The preview result could not be adapted."} Waiting for authoritative results.`,
+      ]));
+    }
+  }
+
   function monitorBackendJob(
     initialJob: SearchJob,
     bootstrap: BackendBootstrapState,
     signal: AbortSignal,
     generation: number,
   ): Promise<SearchJob> {
+    const maximumPreviewRows = bootstrap.response.limits.maximumPreviewRows;
+    let previewsEnabled = bootstrap.response.searchWebsocketPath !== null
+      && maximumPreviewRows > 0
+      && supportsServerFeature(
+        bootstrap.response,
+        ServerFeature.SERVER_FEATURE_SEARCH_PREVIEW,
+      );
+    const negotiatedPreviewRows = previewsEnabled
+      ? Math.min(maximumPreviewRows, Math.max(1, backendPageSizeRef.current))
+      : 0;
+    backendPreviewRowLimitRef.current = negotiatedPreviewRows;
+    if (previewsEnabled) {
+      updateBackendPreviewStatus(
+        "waiting",
+        "Live preview enabled. Waiting for result rows.",
+      );
+      registerBackendPreviewSchema(initialJob.resultSchema, generation, initialJob.searchJobId);
+    } else {
+      updateBackendPreviewStatus("disabled");
+    }
+
     return new Promise<SearchJob>((resolve, reject) => {
       let latestPhase = backendJobPhase(initialJob.state);
       let settled = false;
@@ -2644,6 +2990,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       let recoveryRequest: Promise<SearchJob> | null = null;
       let subscriptionId: string | null = null;
       let sequenceGapPending = false;
+      let previewSubscriptionPending = previewsEnabled;
+      let previewFallbackAttempted = false;
       const cleanups: Array<() => void> = [];
       const websocketPath = bootstrap.response.searchWebsocketPath;
       const socket = websocketPath === null
@@ -2745,7 +3093,19 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
       backendSocketRef.current = socket;
       cleanups.push(socket.onEvent((event) => {
-        if (settled || searchJobIdForWebSocketEvent(event) !== initialJob.searchJobId) return;
+        if (settled) return;
+        if (event.payload?.$case === "subscriptionAcknowledged") {
+          const acknowledgedTarget = event.payload.value.target?.target;
+          if (
+            acknowledgedTarget?.$case === "searchJobId"
+            && acknowledgedTarget.value === initialJob.searchJobId
+            && event.payload.value.subscriptionId === subscriptionId
+          ) {
+            previewSubscriptionPending = false;
+          }
+          return;
+        }
+        if (searchJobIdForWebSocketEvent(event) !== initialJob.searchJobId) return;
         refreshWatchdog();
         switch (event.payload?.$case) {
           case "searchProgress":
@@ -2761,12 +3121,34 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             break;
           }
           case "resultSchemaAvailable": {
-            const kind = event.payload.value.schema?.resultKind;
-            if (kind !== undefined && kind !== ResultSetKind.RESULT_SET_KIND_UNSPECIFIED) {
-              setBackendResultKind(kind);
+            const schema = event.payload.value.schema;
+            if (previewsEnabled) {
+              registerBackendPreviewSchema(
+                schema,
+                generation,
+                initialJob.searchJobId,
+              );
+            } else if (schema !== undefined) {
+              setBackendResultSchema(schema);
+              if (schema.resultKind !== ResultSetKind.RESULT_SET_KIND_UNSPECIFIED) {
+                setBackendResultKind(schema.resultKind);
+              }
             }
             break;
           }
+          case "resultPreview":
+            // Opted-out subscriptions still receive zero-row continuity
+            // markers so target sequences remain contiguous. They are not
+            // displayable previews and must not be validated against the zero
+            // negotiated row limit.
+            if (previewsEnabled) {
+              applyBackendResultPreview(
+                event.payload.value,
+                generation,
+                initialJob.searchJobId,
+              );
+            }
+            break;
           case "warning": {
             const message = event.payload.value.warning?.message;
             if (message) setBackendNotices((current) => uniqueMessages([...current, message]));
@@ -2779,17 +3161,87 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
               latestPhase,
               generation,
             );
+            if (backendPreviewRef.current !== null) {
+              updateBackendPreviewStatus(
+                "finalizing",
+                "Search complete. Replacing the live preview with authoritative results.",
+              );
+            }
             scheduleRecovery(0);
             break;
         }
       }));
-      cleanups.push(socket.onError(() => scheduleRecovery(0)));
+      cleanups.push(socket.onConnectionStateChange((state) => {
+        if (settled || !previewsEnabled) return;
+        if (state === "reconnecting" || state === "closed") {
+          if (backendPreviewRef.current?.rows.length) {
+            updateBackendPreviewStatus(
+              "paused",
+              "Live preview paused while the connection is restored. The last provisional rows remain visible.",
+            );
+          }
+          return;
+        }
+        if (state === "open" && backendPreviewStatusRef.current === "paused") {
+          updateBackendPreviewStatus(
+            backendPreviewRef.current?.rows.length ? "live" : "waiting",
+            "Live preview connection restored.",
+          );
+        }
+      }));
+      cleanups.push(socket.onError(() => {
+        if (previewsEnabled && backendPreviewRef.current?.rows.length) {
+          updateBackendPreviewStatus(
+            "paused",
+            "Live preview paused while the connection is restored. The last provisional rows remain visible.",
+          );
+        }
+        scheduleRecovery(0);
+      }));
       cleanups.push(socket.onProtocolError((error) => {
+        const previewRejected = previewsEnabled
+          && previewSubscriptionPending
+          && !previewFallbackAttempted
+          && (
+            error.code === SearchWebSocketProtocolErrorCode.SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND
+            || error.code === SearchWebSocketProtocolErrorCode.SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_UNSUPPORTED_COMMAND
+          );
+        if (previewRejected) {
+          previewFallbackAttempted = true;
+          previewSubscriptionPending = false;
+          previewsEnabled = false;
+          backendPreviewRowLimitRef.current = 0;
+          clearBackendPreview(
+            "disabled",
+            "This server declined live previews. Search progress remains connected.",
+          );
+          setBackendNotices((current) => uniqueMessages([
+            ...current,
+            "This server declined live result previews; complete results will still load normally.",
+          ]));
+          try {
+            subscriptionId = socket.subscribe(
+              searchJobTarget(initialJob.searchJobId),
+              { includePreviews: false },
+            );
+          } catch {
+            scheduleRecovery(0);
+          }
+          return;
+        }
         setBackendNotices((current) => uniqueMessages([...current, `Live job updates failed: ${error.message}`]));
         scheduleRecovery(0);
       }));
-      cleanups.push(socket.onSequenceGap(() => {
+      cleanups.push(socket.onSequenceGap((gap) => {
+        if (
+          gap.target.target?.$case !== "searchJobId"
+          || gap.target.target.value !== initialJob.searchJobId
+        ) return;
         sequenceGapPending = true;
+        clearBackendPreview(
+          previewsEnabled ? "resyncing" : "disabled",
+          "Live preview was cleared while job updates are resynchronized.",
+        );
         setBackendNotices((current) => uniqueMessages([...current, "Live job updates skipped a sequence; resynchronizing from the server…"]));
         scheduleRecovery(0);
       }));
@@ -2797,13 +3249,41 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         if (notice.target.target?.$case !== "searchJobId"
           || notice.target.target.value !== initialJob.searchJobId
           || settled) return;
+        clearBackendPreview(
+          previewsEnabled ? "resyncing" : "disabled",
+          "Live preview was cleared while job updates are resynchronized.",
+        );
+        backendPreviewSchemasRef.current.clear();
         const job = await fetchAuthoritative();
         latestPhase = backendJobPhase(job.state);
+        const schemaReady = !previewsEnabled
+          || job.resultSchema === undefined
+          || registerBackendPreviewSchema(
+            job.resultSchema,
+            generation,
+            initialJob.searchJobId,
+          );
         notice.acknowledge();
         if (!ACTIVE_PHASES.has(backendJobPhase(job.state))) finish(job);
-        else refreshWatchdog();
+        else {
+          if (previewsEnabled && schemaReady) {
+            updateBackendPreviewStatus(
+              "waiting",
+              "Job updates resynchronized. Waiting for a fresh live preview.",
+            );
+          }
+          refreshWatchdog();
+        }
       }));
-      subscriptionId = socket.subscribe(searchJobTarget(initialJob.searchJobId), { includePreviews: false });
+      subscriptionId = socket.subscribe(
+        searchJobTarget(initialJob.searchJobId),
+        previewsEnabled
+          ? {
+              includePreviews: true,
+              previewRowLimit: negotiatedPreviewRows,
+            }
+          : { includePreviews: false },
+      );
       scheduleRecovery();
     });
   }
@@ -2818,7 +3298,62 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (terminalPhase === "completed") {
       setPhase("finalizing");
       setProgress(96);
-      await fetchInitialBackendResults(job, bootstrap, signal, generation);
+      if (backendPreviewRef.current !== null) {
+        updateBackendPreviewStatus(
+          "finalizing",
+          "Search complete. Replacing the live preview with authoritative results.",
+        );
+      }
+      try {
+        await fetchInitialBackendResults(job, bootstrap, signal, generation);
+      } catch (error) {
+        if (
+          signal.aborted
+          || generationRef.current !== generation
+          || backendJobIdRef.current !== job.searchJobId
+        ) throw error;
+        if (isHttpStatus(error, 410)) {
+          clearBackendPreview(
+            "disabled",
+            "Search results expired. Live preview rows were discarded.",
+          );
+          setBackendAuthoritativeResultsReady(false);
+          setBackendResultsExpired(true);
+          setPhase("expired");
+          setProgress(100);
+          setBackendNotices((current) => uniqueMessages([
+            ...current,
+            "These retained search results have expired. Run the search again to refresh them.",
+          ]));
+          showToast("Search results expired. Run the search again.", "warning");
+          void refreshBackendHistory(bootstrap);
+          return;
+        }
+        setPhase("completed");
+        setProgress(100);
+        const message = error instanceof Error
+          ? error.message
+          : "The authoritative result snapshot could not be loaded.";
+        if (backendPreviewRef.current !== null) {
+          updateBackendPreviewStatus(
+            "finalization-error",
+            "Search completed, but authoritative results could not be loaded. The visible rows remain provisional.",
+          );
+          setBackendNotices((current) => uniqueMessages([
+            ...current,
+            `Authoritative results could not be loaded: ${message} The visible preview remains provisional and cannot be exported.`,
+          ]));
+        } else {
+          updateBackendPreviewStatus("disabled");
+          setBackendNotices((current) => uniqueMessages([
+            ...current,
+            `Search completed, but authoritative results could not be loaded: ${message}`,
+          ]));
+        }
+        showToast("Search completed, but its authoritative results could not be loaded.", "warning");
+        void refreshBackendHistory(bootstrap);
+        return;
+      }
       if (generationRef.current !== generation || backendJobIdRef.current !== job.searchJobId) return;
       setPhase("completed");
       setProgress(100);
@@ -2848,17 +3383,23 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       }
       void fetchAuthoritativeBackendMetadata(job, bootstrap, generation);
     } else if (terminalPhase === "failed") {
+      clearBackendPreview("disabled", "Search failed. Live preview rows were discarded.");
+      setBackendAuthoritativeResultsReady(false);
       pendingSavedPreferredTabRef.current = null;
       pendingSavedSelectedFieldsRef.current = null;
       pendingSavedVisualizationRef.current = undefined;
       preservedSavedVisualizationRef.current = null;
       showToast(job.failure?.message || "The backend search failed.", "warning");
     } else if (terminalPhase === "canceled") {
+      clearBackendPreview("disabled", "Search canceled. Live preview rows were discarded.");
+      setBackendAuthoritativeResultsReady(false);
       pendingSavedPreferredTabRef.current = null;
       pendingSavedSelectedFieldsRef.current = null;
       pendingSavedVisualizationRef.current = undefined;
       showToast("Search canceled.", "warning");
     } else if (terminalPhase === "expired") {
+      clearBackendPreview("disabled", "Search expired. Live preview rows were discarded.");
+      setBackendAuthoritativeResultsReady(false);
       pendingSavedPreferredTabRef.current = null;
       pendingSavedSelectedFieldsRef.current = null;
       pendingSavedVisualizationRef.current = undefined;
@@ -3061,6 +3602,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         return;
       }
       if (isHttpStatus(error, 410)) {
+        clearBackendPreview(
+          "disabled",
+          "Search results expired. Live preview rows were discarded.",
+        );
+        setBackendAuthoritativeResultsReady(false);
         setBackendResultsExpired(true);
         setPhase("expired");
         setProgress(100);
@@ -3071,6 +3617,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         showToast("Search results expired. Run the search again.", "warning");
         return;
       }
+      clearBackendPreview("disabled", "Search updates failed. Live preview rows were discarded.");
+      setBackendAuthoritativeResultsReady(false);
       setPhase("failed");
       setProgress(100);
       showToast(error instanceof Error ? error.message : "Unable to run the backend search.", "warning");
@@ -4406,6 +4954,14 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   }
 
   function openExportDialog(sourceTab: ResultTab = activeTab) {
+    if (
+      backendEnabled
+      && !backendAuthoritativeResultsReady
+      && exportStage === "configure"
+    ) {
+      showToast("Wait for authoritative results before exporting.", "warning");
+      return;
+    }
     if (exportStage === "pending" || exportStage === "ready") {
       setMenu(null);
       setModal("export");
@@ -4975,6 +5531,18 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         title: "Start a new search",
         detail: "Enter SPL, choose a time range, and run the search to inspect events and statistics.",
       }
+    : backendEnabled && backendPreviewStatus === "limited"
+      ? {
+          icon: "…",
+          title: "Live preview is bounded",
+          detail: "A complete row did not fit the preview limit. The authoritative result snapshot will appear when the search completes.",
+        }
+    : backendEnabled && backendPreviewStatus === "resyncing"
+      ? {
+          icon: "↻",
+          title: "Resynchronizing live results",
+          detail: "Provisional rows were cleared after an update discontinuity. A fresh preview or the authoritative result snapshot will replace them.",
+        }
     : isRunning
     ? {
         icon: "…",
@@ -5177,11 +5745,18 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
               ) : null}
             </div>
             <button type="button" onClick={() => setModal("history")}><span aria-hidden="true">↶</span> History</button>
-            <button type="button" onClick={() => openExportDialog()}><span aria-hidden="true">⇩</span> Export</button>
+            <button
+              type="button"
+              disabled={backendEnabled && !backendAuthoritativeResultsReady}
+              title={backendEnabled && !backendAuthoritativeResultsReady
+                ? "Authoritative results are required before export"
+                : undefined}
+              onClick={() => openExportDialog()}
+            ><span aria-hidden="true">⇩</span> Export</button>
             <button className="close-search" type="button" onClick={closeSearchWorkspace}>Close</button>
             <div className="header-menu-wrap mobile-search-actions">
               <button type="button" aria-haspopup="menu" aria-expanded={menu === "search-actions"} onClick={() => setMenu(menu === "search-actions" ? null : "search-actions")}>More <span aria-hidden="true">▾</span></button>
-              {menu === "search-actions" ? <div className="floating-menu mobile-search-menu" role="menu"><button role="menuitem" type="button" onClick={() => { setModal("open"); setMenu(null); }}>⌕ <span>Open saved search</span></button><button role="menuitem" type="button" onClick={() => openSaveDialog(null, true)}>＋ <span>Save as new</span></button><button role="menuitem" type="button" onClick={() => { setModal("history"); setMenu(null); }}>↶ <span>Search history</span></button><button role="menuitem" type="button" onClick={() => { openExportDialog(); setMenu(null); }}>⇩ <span>Export results</span></button><Link role="menuitem" href="/activity/">ⓘ <span>View activity</span></Link><button role="menuitem" type="button" onClick={closeSearchWorkspace}>× <span>Close search</span></button></div> : null}
+              {menu === "search-actions" ? <div className="floating-menu mobile-search-menu" role="menu"><button role="menuitem" type="button" onClick={() => { setModal("open"); setMenu(null); }}>⌕ <span>Open saved search</span></button><button role="menuitem" type="button" onClick={() => openSaveDialog(null, true)}>＋ <span>Save as new</span></button><button role="menuitem" type="button" onClick={() => { setModal("history"); setMenu(null); }}>↶ <span>Search history</span></button><button role="menuitem" type="button" disabled={backendEnabled && !backendAuthoritativeResultsReady} title={backendEnabled && !backendAuthoritativeResultsReady ? "Authoritative results are required before export" : undefined} onClick={() => { openExportDialog(); setMenu(null); }}>⇩ <span>Export results</span></button><Link role="menuitem" href="/activity/">ⓘ <span>View activity</span></Link><button role="menuitem" type="button" onClick={closeSearchWorkspace}>× <span>Close search</span></button></div> : null}
             </div>
           </div>
         </header>
@@ -5327,6 +5902,24 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           </output>
         )}
 
+        {backendEnabled ? (
+          <output className="sr-only" aria-live="polite" aria-atomic="true">
+            {backendPreviewAnnouncement}
+          </output>
+        ) : null}
+        {backendPreviewStatusPresentation === null || searchIsClosed ? null : (
+          <section
+            className={`backend-preview-status status-${backendPreviewStatus} is-${backendPreviewStatusPresentation.tone}`}
+            aria-label="Live result preview status"
+            data-status={backendPreviewStatus}
+            data-testid="backend-preview-status"
+          >
+            <span className="backend-preview-status__pulse" aria-hidden="true" />
+            <strong>{backendPreviewStatusPresentation.title}</strong>
+            <span>{backendPreviewStatusPresentation.detail}</span>
+          </section>
+        )}
+
         {backendEnabled
         && hasResultData
         && backendResultKind !== ResultSetKind.RESULT_SET_KIND_EVENTS
@@ -5353,7 +5946,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             ["statistics", "Statistics", backendEnabled && backendResultKind === ResultSetKind.RESULT_SET_KIND_EVENTS
               ? "0"
               : hasResultData
-                ? `${backendEnabled && !backendResultTotalExact ? "≥" : ""}${NUMBER_FORMAT.format(statisticsRowCount)}`
+                ? `${backendDisplayingPreview
+                  ? backendPreviewDisplay?.snapshot.truncated ? "≥" : ""
+                  : backendEnabled && !backendResultTotalExact ? "≥" : ""}${NUMBER_FORMAT.format(statisticsRowCount)}`
                 : "0"],
             ["visualization", "Visualization", ""],
           ] as const).map(([id, label, count]) => (
@@ -5427,11 +6022,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             fieldsHasMore={backendEnabled && backendFieldsHasMore}
             fieldsLoading={backendEnabled && backendFieldsLoading}
             fieldsLoadingMore={backendEnabled && backendFieldsLoadingMore}
+            isPreview={backendDisplayingPreview}
             menu={menu}
             maximumEventPageSize={backendEnabled && backendBootstrapRef.current !== null
               ? backendMaximumPageSize(backendBootstrapRef.current)
               : null}
             pagedResultEvents={pagedResultEvents}
+            previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
             resultEvents={resultEvents}
             showAllFields={showAllFields}
             submittedQuery={submittedQuery}
@@ -5491,12 +6088,18 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             elapsed={elapsed}
             genericStatisticsTable={genericStatisticsTable}
             genericStatsSort={genericStatsSort}
+            isPreview={backendDisplayingPreview}
             isTimechartResult={isTimechartResult}
             menu={menu}
             pageNumber={backendEnabled ? eventPage : 1}
             pageStart={backendStatisticsPageStart}
-            resultTotalExact={!backendEnabled || backendResultTotalExact}
-            resultTotalRows={backendEnabled ? backendResultTotalRows : statisticsRowCount}
+            previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
+            resultTotalExact={backendDisplayingPreview
+              ? backendPreviewDisplay?.snapshot.truncated !== true
+              : !backendEnabled || backendResultTotalExact}
+            resultTotalRows={backendDisplayingPreview
+              ? backendPreviewDisplay?.snapshot.rows.length ?? 0
+              : backendEnabled ? backendResultTotalRows : statisticsRowCount}
             sortedGenericStatisticsRows={sortedGenericStatisticsRows}
             sortedStatistics={sortedStatistics}
             sortedTimechartRows={sortedTimechartRows}
@@ -5520,9 +6123,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           <VisualizationPanel
             chartStyle={chartStyle}
             chartTitle={chartTitle}
+            isPreview={backendDisplayingPreview}
             isTimechartResult={isTimechartResult}
             legendPosition={legendPosition}
             showDataLabels={showDataLabels}
+            previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
             statisticsDimension={statisticsDimension}
             statisticsRows={statisticsRows}
             timelinePoints={timelinePoints}

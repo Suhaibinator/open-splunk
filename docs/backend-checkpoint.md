@@ -7,10 +7,8 @@ pulling `origin/main`.
 ## Safe resume procedure
 
 1. Run `git status --short --branch` before editing anything.
-2. Preserve any pre-existing frontend work in `app/search-workspace.tsx` and
-   under `app/search-workspace/` (especially `live-preview.ts` and the panel
-   components); those files were being changed independently and were
-   intentionally excluded from this backend checkpoint.
+2. Preserve any unexpected local changes; this checkpoint is intended to be
+   clean on `main`, so investigate a dirty worktree before editing it.
 3. Run `git pull --ff-only origin main` only when doing so will not disturb
    local work.
 4. Read `docs/product-architecture-plan.md` and
@@ -47,6 +45,11 @@ pulling `origin/main`.
     failures, and does not retry server-rejected subscriptions forever; and
   - deprecated create-time preview options are marked deprecated in protobuf
     metadata while preview policy remains subscription-scoped.
+- The browser workspace consumes those previews defensively: it validates
+  schemas and typed rows, applies revisioned reset/append snapshots, clears
+  discontinuous data, distinguishes provisional from authoritative results,
+  disables paging/export and authoritative-only field interactions during a
+  preview, and replaces previews with the completed REST snapshot.
 
 ## Validation for the checkpoint
 
@@ -59,23 +62,23 @@ go test -race ./internal/searchjobs ./internal/searchjobproto ./internal/searchw
 go vet ./...
 go build ./...
 npm run typecheck
-npx oxlint lib/api/search-websocket.ts gen/ts/open_splunk/v1/search.ts gen/ts/open_splunk/v1/search_ws.ts
+npm run lint
+npm run test:frontend
 npm run build
 OPEN_SPLUNK_BACKEND_INTEGRATION=1 go test ./integration -run '^TestBackendVertical$' -count=1 -timeout=3m
 ```
 
-`npm run lint` also examines the independent live-preview workspace UI edits
-named above. During this checkpoint it reported incomplete wiring while those
-files were actively changing. Do not "fix" that by deleting or overwriting
-those edits. The backend-owned TypeScript client and generated bindings pass
-type checking and scoped linting.
+The dependency-free frontend unit runner covers preview schema validation,
+RESET/APPEND application, duplicate/stale revisions, monotonic truncation, and
+malformed-row rejection. Component-level WebSocket lifecycle behavior is still
+covered by type/lint/build plus the Go contract tests rather than a browser test
+harness.
 
 ## Remaining work, in priority order
 
-1. Finish and test the browser workspace's live-preview integration. Add a
-   frontend behavioral test runner so reconnect rejection, stale-frame fencing,
-   resynchronization, and preview-to-authoritative-result replacement have
-   deterministic tests instead of only type/lint coverage.
+1. Add a frontend component/browser test harness so reconnect rejection,
+   stale-frame fencing, resynchronization, expiration, and
+   preview-to-authoritative-result replacement have deterministic UI tests.
 2. Continue the explicitly unsupported SPL surface in small conformance-first
    slices. The current contract lists `rex`, `spath`, `bin`/`bucket`, `chart`,
    `eventstats`, and `streamstats`; `rex` is a useful next vertical slice.
@@ -89,6 +92,9 @@ type checking and scoped linting.
 5. Run and record the performance harness against the plan's sustained 1,000
    events/second target, including slow-consumer WebSockets, concurrent preview
    subscriptions, ClickHouse scan limits, and collector offline recovery.
+   Profile browser preview adaptation as part of this: preview snapshots are
+   strictly bounded (100 rows by default, 1,000 maximum), but each update is
+   currently adapted as a complete bounded snapshot rather than incrementally.
 6. Continue Phase 3/4 product hardening: per-index permissions/retention UI,
    token and collector fleet operations, RBAC/audit search, backup/restore,
    migration upgrade tests, fair query scheduling, packaging, and upgrades.
@@ -101,4 +107,6 @@ actionable findings were fixed before this checkpoint, including stale
 bootstrap exclusivity, projection lifecycle gating, replayable preview clears,
 duplicate-target bootstrap transformation amplification, quadratic preview
 demand scans, over-retained tailoring reservations, reconnect batch coupling,
-stale subscription frames, and failed-send recovery.
+stale subscription frames, failed-send recovery, continuity-marker fallback,
+schema reseeding after resynchronization, expired-preview cleanup, monotonic
+APPEND truncation, and keyboard-accessible provisional event controls.

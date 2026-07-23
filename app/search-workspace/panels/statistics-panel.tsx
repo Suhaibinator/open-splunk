@@ -27,12 +27,14 @@ interface StatisticsPanelProps {
   elapsed: string;
   genericStatisticsTable: WorkspaceStatisticsTable | null;
   genericStatsSort: WorkspaceStatisticsSort | null;
+  isPreview: boolean;
   isTimechartResult: boolean;
   menu: MenuName | null;
   pageNumber: number;
   pageStart: number | null;
   resultTotalExact: boolean;
   resultTotalRows: number | null;
+  previewTruncated: boolean;
   sortedGenericStatisticsRows: WorkspaceStatisticsRow[];
   sortedStatistics: WorkspaceStatistic[];
   sortedTimechartRows: TimelinePoint[];
@@ -115,12 +117,14 @@ export function StatisticsPanel({
   elapsed,
   genericStatisticsTable,
   genericStatsSort,
+  isPreview,
   isTimechartResult,
   menu,
   pageNumber,
   pageStart,
   resultTotalExact,
   resultTotalRows,
+  previewTruncated,
   sortedGenericStatisticsRows,
   sortedStatistics,
   sortedTimechartRows,
@@ -175,11 +179,13 @@ export function StatisticsPanel({
   const lastDisplayedRow = firstDisplayedRow === null || displayedRowCount === 0
     ? null
     : firstDisplayedRow + displayedRowCount - 1;
-  const totalDescription = resultTotalRows === null
-    ? "total unavailable"
-    : resultTotalExact
-      ? `${NUMBER_FORMAT.format(resultTotalRows)} rows`
-      : `at least ${NUMBER_FORMAT.format(resultTotalRows)} rows`;
+  const totalDescription = isPreview
+    ? `${NUMBER_FORMAT.format(displayedRowCount)} provisional ${displayedRowCount === 1 ? "row" : "rows"}`
+    : resultTotalRows === null
+      ? "total unavailable"
+      : resultTotalExact
+        ? `${NUMBER_FORMAT.format(resultTotalRows)} rows`
+        : `at least ${NUMBER_FORMAT.format(resultTotalRows)} rows`;
   const displayedRange = displayedRowCount === 0
     ? "Showing 0 rows"
     : firstDisplayedRow === null || lastDisplayedRow === null
@@ -189,9 +195,17 @@ export function StatisticsPanel({
   return (
     <section id="panel-statistics" role="tabpanel" aria-labelledby="tab-statistics" className="statistics-panel">
       <header className="result-view-header">
-        <div><h2>Statistics</h2><p>{totalDescription} · completed in {elapsed}</p></div>
         <div>
-          <button className="button secondary compact" type="button" onClick={onExport}>⇩ Export</button>
+          <div className="result-title-line">
+            <h2>Statistics</h2>
+            {isPreview ? <span className="preview-context-badge"><i aria-hidden="true" /> Live preview</span> : null}
+          </div>
+          <p>{isPreview
+            ? `${totalDescription} · values and row order may change while the search runs${previewTruncated ? " · preview limit reached" : ""}`
+            : `${totalDescription} · completed in ${elapsed}`}</p>
+        </div>
+        <div>
+          <button className="button secondary compact" type="button" disabled={isPreview} title={isPreview ? "Export becomes available after authoritative results load." : undefined} onClick={onExport}>⇩ Export</button>
           <div className="header-menu-wrap result-menu-wrap">
             <button className="button secondary compact" type="button" aria-haspopup="menu" aria-expanded={menu === "stats-format"} onClick={() => onMenuChange(menu === "stats-format" ? null : "stats-format")}>Format <span aria-hidden="true">▾</span></button>
             {menu === "stats-format" ? (
@@ -210,7 +224,7 @@ export function StatisticsPanel({
             <table
               className={`statistics-table timechart-table density-${statsDensity}`}
               style={{ minWidth: `${Math.max(520, 260 + timechartSeries.length * 150)}px`, tableLayout: "auto" }}
-              aria-label="Timechart statistics"
+              aria-label={isPreview ? "Live preview timechart statistics" : "Timechart statistics"}
             >
               <colgroup>
                 <col style={{ minWidth: 220, width: `${Math.max(35, 70 - timechartSeries.length * 5)}%` }} />
@@ -302,7 +316,7 @@ export function StatisticsPanel({
             <table
               className={`statistics-table density-${statsDensity}`}
               style={{ minWidth: `${Math.max(640, genericStatisticsTable.columns.length * 160)}px`, tableLayout: "auto" }}
-              aria-label="Backend search statistics"
+              aria-label={isPreview ? "Live preview search statistics" : "Backend search statistics"}
             >
               <thead>
                 <tr>
@@ -360,7 +374,7 @@ export function StatisticsPanel({
               </tbody>
             </table>
           ) : (
-            <table className={`statistics-table density-${statsDensity}`} aria-label="Search statistics">
+            <table className={`statistics-table density-${statsDensity}`} aria-label={isPreview ? "Live preview search statistics" : "Search statistics"}>
               <colgroup><col className="statistics-col-level" /><col className="statistics-col-count" /><col className="statistics-col-percent" /><col className="statistics-col-average" /></colgroup>
               <thead>
                 <tr>
@@ -392,7 +406,12 @@ export function StatisticsPanel({
         </div>
         <span className="statistics-scroll-hint" aria-hidden="true">More columns <b>→</b></span>
       </div>
-      <footer className="statistics-footer">{isTimechartResult
+      <footer className={`statistics-footer${isPreview ? " statistics-footer--preview" : ""}`}>{isPreview
+        ? <>
+          <span>Showing {NUMBER_FORMAT.format(displayedRowCount)} provisional {displayedRowCount === 1 ? "row" : "rows"}</span>
+          <span>{previewTruncated ? "Preview limit reached · final results may contain additional rows" : "Live rows refresh as the search produces results · final totals arrive on completion"}</span>
+        </>
+        : isTimechartResult
         ? <><span>{displayedRange} · {totalDescription}</span><span>Sorted by {activeTimechartSeriesSort?.key ?? (timechartSort.key === "time" ? "_time" : "count")} · {(activeTimechartSeriesSort?.direction ?? timechartSort.direction) === "desc" ? "descending" : "ascending"}</span></>
         : genericStatisticsTable !== null
           ? <><span>{displayedRange} · {totalDescription}</span><span>{genericStatsSort === null ? "Server-provided row order" : `Sorted by ${genericStatisticsTable.columns.find((column) => column.key === genericStatsSort.key)?.label ?? genericStatsSort.key} · ${genericStatsSort.direction === "desc" ? "descending" : "ascending"}`} · values retain server types</span></>

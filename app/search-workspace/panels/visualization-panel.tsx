@@ -20,6 +20,7 @@ import styles from "./visualization-panel.module.css";
 interface VisualizationPanelProps {
   chartStyle: ChartStyle;
   chartTitle: string;
+  isPreview: boolean;
   isTimechartResult: boolean;
   legendPosition: LegendPosition;
   showDataLabels: boolean;
@@ -33,6 +34,7 @@ interface VisualizationPanelProps {
   onShowDataLabelsChange: (show: boolean) => void;
   onVisualizationEdited: () => void;
   onShowToast: (message: string) => void;
+  previewTruncated: boolean;
 }
 
 function timeAxisLabels(points: TimelinePoint[]): TimelinePoint[] {
@@ -64,6 +66,7 @@ function formatExactNumeric(value: string | undefined, coordinate: number, compa
 export function VisualizationPanel({
   chartStyle,
   chartTitle,
+  isPreview,
   isTimechartResult,
   legendPosition,
   showDataLabels,
@@ -77,6 +80,7 @@ export function VisualizationPanel({
   onShowDataLabelsChange,
   onVisualizationEdited,
   onShowToast,
+  previewTruncated,
 }: VisualizationPanelProps) {
   const displayedStatisticsRows = statisticsRows.length > 8
     ? statisticsRows.toSorted((left, right) => right.count - left.count).slice(0, 8)
@@ -113,17 +117,26 @@ export function VisualizationPanel({
   }
 
   return (
-    <section id="panel-visualization" role="tabpanel" aria-labelledby="tab-visualization" className="visualization-panel">
+    <section id="panel-visualization" role="tabpanel" aria-labelledby="tab-visualization" className={`visualization-panel${isPreview ? " visualization-panel--preview" : ""}`}>
       <header className="result-view-header">
         <div>
-          <h2>{resolvedChartTitle.trim() || "Untitled visualization"}</h2>
-          <p>{isTimechartResult
-            ? `Timechart across the submitted search range.${hasApproximateCoordinates ? " The plotted scale is approximate for values beyond the browser’s exact integer range; hover or focus a point for its exact server value." : ""}`
-            : hasCategoricalChart
-              ? backendCategoricalResult
-                ? `${statisticsMeasure} grouped by ${statisticsDimension}.${statisticsRows.length > displayedStatisticsRows.length ? ` Showing the top ${displayedStatisticsRows.length} of ${statisticsRows.length} categories.` : ""}${hasApproximateCoordinates ? " The plotted scale is approximate for values beyond the browser’s exact integer range; exact server values appear on hover or focus." : ""}`
-                : "Aggregation of the displayed event set."
-              : "This result shape cannot be represented faithfully as a categorical chart."}</p>
+          <div className="result-title-line">
+            <h2>{resolvedChartTitle.trim() || "Untitled visualization"}</h2>
+            {isPreview ? <span className="preview-context-badge"><i aria-hidden="true" /> Live preview</span> : null}
+          </div>
+          <p>{isPreview
+            ? `${isTimechartResult
+              ? "The chart updates as time-series rows arrive. Its scale and values may change until completion."
+              : hasCategoricalChart
+                ? "The chart updates as result rows arrive. Categories, values, and ordering remain provisional."
+                : "Waiting for a preview result shape that can be charted."}${previewTruncated ? " The preview limit was reached; the final chart may include additional data." : ""}`
+            : isTimechartResult
+              ? `Timechart across the submitted search range.${hasApproximateCoordinates ? " The plotted scale is approximate for values beyond the browser’s exact integer range; hover or focus a point for its exact server value." : ""}`
+              : hasCategoricalChart
+                ? backendCategoricalResult
+                  ? `${statisticsMeasure} grouped by ${statisticsDimension}.${statisticsRows.length > displayedStatisticsRows.length ? ` Showing the top ${displayedStatisticsRows.length} of ${statisticsRows.length} categories.` : ""}${hasApproximateCoordinates ? " The plotted scale is approximate for values beyond the browser’s exact integer range; exact server values appear on hover or focus." : ""}`
+                  : "Aggregation of the displayed event set."
+                : "This result shape cannot be represented faithfully as a categorical chart."}</p>
         </div>
         <fieldset className="chart-toggle">
           <legend className="sr-only">Chart style</legend>
@@ -133,12 +146,14 @@ export function VisualizationPanel({
           <button type="button" onClick={() => onShowToast("Area and scatter charts become available for compatible result shapes.")}>More…</button>
         </fieldset>
       </header>
-      <div className={`visualization-canvas chart-${effectiveChartStyle} legend-${legendPosition}${isLineChart ? " visualization-canvas--line" : ""}`} data-testid="visualization-chart">
+      <div className={`visualization-canvas chart-${effectiveChartStyle} legend-${legendPosition}${isLineChart ? " visualization-canvas--line" : ""}${isPreview ? " visualization-canvas--preview" : ""}`} data-testid="visualization-chart">
         {!hasCategoricalChart ? (
           <output className={styles.emptyState}>
             <span className={styles.emptyStateIcon} aria-hidden="true"><span /><span /><span /></span>
             <strong>No compatible chart for these results</strong>
-            <p>Return one categorical dimension and one non-negative numeric measure, or use a timechart for a time-series visualization. The complete server result remains available in Statistics.</p>
+            <p>{isPreview
+              ? "The live preview has not produced a chart-compatible result shape yet. Statistics will update if compatible provisional rows arrive."
+              : "Return one categorical dimension and one non-negative numeric measure, or use a timechart for a time-series visualization. The complete server result remains available in Statistics."}</p>
           </output>
         ) : isLineChart ? (
           <TimeSeriesLineChart points={timelinePoints} />

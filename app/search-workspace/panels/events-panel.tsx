@@ -33,9 +33,11 @@ interface EventsPanelProps {
   fieldsHasMore: boolean;
   fieldsLoading: boolean;
   fieldsLoadingMore: boolean;
+  isPreview: boolean;
   menu: MenuName | null;
   maximumEventPageSize: number | null;
   pagedResultEvents: DemoEvent[];
+  previewTruncated: boolean;
   resultEvents: DemoEvent[];
   showAllFields: boolean;
   submittedQuery: string;
@@ -139,9 +141,11 @@ export function EventsPanel({
   fieldsHasMore,
   fieldsLoading,
   fieldsLoadingMore,
+  isPreview,
   menu,
   maximumEventPageSize,
   pagedResultEvents,
+  previewTruncated,
   resultEvents,
   showAllFields,
   submittedQuery,
@@ -284,8 +288,19 @@ export function EventsPanel({
 
   return (
       <section id="panel-events" role="tabpanel" aria-labelledby="tab-events" className="events-panel">
-        <section className="timeline-section" data-testid="timeline" aria-label="Event timeline">
-          <div className="timeline-toolbar">
+        <section className={`timeline-section${isPreview ? " timeline-section--preview" : ""}`} data-testid="timeline" aria-label={isPreview ? "Event timeline pending final results" : "Event timeline"}>
+          {isPreview ? (
+            <div className="preview-metadata-placeholder">
+              <span className="preview-placeholder-icon" aria-hidden="true"><i /><i /><i /><i /></span>
+              <span>
+                <strong>Timeline available after completion</strong>
+                <small>Live rows are provisional; authoritative time buckets and zoom controls appear with the completed result set.</small>
+              </span>
+              <span className="preview-context-badge"><i aria-hidden="true" /> Live preview</span>
+            </div>
+          ) : (
+            <>
+              <div className="timeline-toolbar">
             <div>
               <div className="header-menu-wrap result-menu-wrap">
                 <button type="button" aria-haspopup="menu" aria-expanded={menu === "timeline-format"} onClick={() => setMenu(menu === "timeline-format" ? null : "timeline-format")}>Format Timeline <span aria-hidden="true">▾</span></button>
@@ -354,17 +369,25 @@ export function EventsPanel({
               />
             )}
           </div>
-          <div className="timeline-axis" aria-hidden="true">{timelineAxisLabels.map((label) => <span key={label}>{label}</span>)}</div>
+              <div className="timeline-axis" aria-hidden="true">{timelineAxisLabels.map((label) => <span key={label}>{label}</span>)}</div>
+            </>
+          )}
         </section>
 
         <div className={`events-layout${fieldsCollapsed ? " fields-collapsed" : ""}`}>
           <aside ref={fieldsRailRef} className="fields-rail" data-testid="fields-rail" role={mobileFieldsMode && !fieldsCollapsed ? "dialog" : undefined} aria-modal={mobileFieldsMode && !fieldsCollapsed ? "true" : undefined} aria-label="Search fields">
             <div className="fields-topbar">
               <button type="button" onClick={() => setFieldsCollapsed(!fieldsCollapsed)}><span aria-hidden="true">{fieldsCollapsed ? "»" : "‹"}</span>{fieldsCollapsed ? null : "Hide Fields"}</button>
-              {fieldsCollapsed ? null : <button type="button" onClick={() => setShowAllFields(true)}>▦ All Fields</button>}
+              {fieldsCollapsed || isPreview ? null : <button type="button" onClick={() => setShowAllFields(true)}>▦ All Fields</button>}
             </div>
             {fieldsCollapsed ? (
               <button className="vertical-fields-label" type="button" onClick={() => setFieldsCollapsed(false)}>Fields</button>
+            ) : isPreview ? (
+              <div className="preview-fields-placeholder">
+                <span className="preview-fields-placeholder__icon" aria-hidden="true">a</span>
+                <strong>Fields load with final results</strong>
+                <p>Field coverage, distinct counts, and top values require the authoritative result set.</p>
+              </div>
             ) : (
               <>
                 <label className="field-filter">
@@ -420,7 +443,7 @@ export function EventsPanel({
                 </div>
               </>
             )}
-            {activeFieldData === null || fieldsCollapsed ? null : (
+            {isPreview || activeFieldData === null || fieldsCollapsed ? null : (
               <section className="field-inspector" data-testid="field-inspector" aria-label={`${activeFieldData.displayName} field summary`}>
                 <header>
                   <div><span className={`field-type type-${activeFieldData.type}`}>{activeFieldData.type === "number" ? "#" : "a"}</span><strong>{activeFieldData.displayName}</strong></div>
@@ -496,7 +519,7 @@ export function EventsPanel({
                   ) : null}
                 </div>
                 <button type="button" aria-pressed={wrapEvents} title={wrapEvents ? "Turn event wrapping off" : "Wrap long event text"} onClick={() => setWrapEvents((current) => !current)}><span aria-hidden="true">✎</span> {wrapEvents ? "Wrap on" : "Wrap off"}</button>
-                <div className="header-menu-wrap result-menu-wrap">
+                {isPreview ? null : <div className="header-menu-wrap result-menu-wrap">
                   <button type="button" aria-haspopup="menu" aria-expanded={menu === "event-page-size"} onClick={() => setMenu(menu === "event-page-size" ? null : "event-page-size")}>{eventPageSize} Per Page <span aria-hidden="true">▾</span></button>
                   {menu === "event-page-size" ? (
                     <div className="floating-menu result-control-menu page-size-menu" role="menu" aria-label="Events per page">
@@ -525,9 +548,15 @@ export function EventsPanel({
                       })}
                     </div>
                   ) : null}
-                </div>
+                </div>}
               </div>
-              <nav aria-label="Event pages">
+              {isPreview ? (
+                <span className="event-preview-count" aria-label={`${resultEvents.length} provisional ${resultEvents.length === 1 ? "row" : "rows"} shown`}>
+                  <i aria-hidden="true" />
+                  {NUMBER_FORMAT.format(resultEvents.length)} {resultEvents.length === 1 ? "row" : "rows"} shown
+                  {previewTruncated ? <b>Preview limit reached</b> : null}
+                </span>
+              ) : <nav aria-label="Event pages">
                 <button type="button" disabled={eventPage === 1} onClick={() => setEventPage((current) => Math.max(1, current - 1))}>‹ Prev</button>
                 {backendEnabled ? (
                   <span aria-current="page">
@@ -549,30 +578,32 @@ export function EventsPanel({
                   disabled={backendEnabled ? !backendHasNextPage : eventPage === eventPageCount}
                   onClick={() => setEventPage((current) => backendEnabled ? current + 1 : Math.min(eventPageCount, current + 1))}
                 >Next ›</button>
-              </nav>
+              </nav>}
             </div>
             <div className="event-head">
               <span />
-              {backendEnabled
+              {isPreview
+                ? <span title="Preview arrival order; final order is established when the search completes">Time · provisional order</span>
+                : backendEnabled
                 ? <span title="Server cursor order; add SPL sort for global ordering">Time · server order</span>
                 : <button type="button" aria-label={`Sort by time, ${eventSortDirection === "desc" ? "ascending" : "descending"}`} onClick={() => { setEventSortDirection((current) => current === "desc" ? "asc" : "desc"); setEventPage(1); }}>Time <span aria-hidden="true">{eventSortDirection === "desc" ? "↓" : "↑"}</span></button>}
-              <span>Event</span>
+              <span>{isPreview ? "Event · live preview" : "Event"}</span>
             </div>
             <div className="event-list" data-testid="event-list">
               {pagedResultEvents.map((event) => {
-                const expanded = expandedEvents.has(event.id);
+                const expanded = !isPreview && expandedEvents.has(event.id);
                 const level = String(event.fields.level ?? "INFO").toLowerCase();
                 return (
-                  <article className={`event-row level-${level}${expanded ? " expanded" : ""}`} data-testid={`event-row-${event.id}`} key={event.id}>
-                    <button className="event-expander" type="button" aria-label={`${expanded ? "Collapse" : "Expand"} event`} aria-expanded={expanded} onClick={() => toggleEvent(event.id)}>{expanded ? "⌄" : "›"}</button>
-                    <button className="event-time" type="button" title="Find nearby events" onClick={() => showToast("Choose a nearby interval from the time range picker.")}><span>{event.timeLabel.split(", ")[0]}</span><strong>{event.timeLabel.split(", ").slice(1).join(", ")}</strong></button>
+                  <article className={`event-row level-${level}${expanded ? " expanded" : ""}${isPreview ? " event-row--preview" : ""}`} data-testid={`event-row-${event.id}`} key={event.id}>
+                    <button className="event-expander" type="button" aria-disabled={isPreview} title={isPreview ? "Event details become available with final results." : undefined} aria-label={isPreview ? "Event details unavailable during live preview" : `${expanded ? "Collapse" : "Expand"} event`} aria-expanded={expanded} onClick={() => { if (!isPreview) toggleEvent(event.id); }}>{expanded ? "⌄" : "›"}</button>
+                    <button className="event-time" type="button" aria-disabled={isPreview} title={isPreview ? "Nearby-event navigation becomes available with final results." : "Find nearby events"} aria-label={isPreview ? `${event.timeLabel}; nearby-event navigation unavailable during live preview` : undefined} onClick={() => { if (!isPreview) showToast("Choose a nearby interval from the time range picker."); }}><span>{event.timeLabel.split(", ")[0]}</span><strong>{event.timeLabel.split(", ").slice(1).join(", ")}</strong></button>
                     <div className="event-content">
-                      <button className="event-raw" type="button" aria-label={`${expanded ? "Collapse" : "Expand"} event details`} onClick={() => toggleEvent(event.id)}>{highlightedRaw(event.raw, submittedQuery)}</button>
+                      <button className="event-raw" type="button" aria-disabled={isPreview} title={isPreview ? "This row may change until the search completes." : undefined} aria-label={isPreview ? "Provisional event row; details unavailable until completion" : `${expanded ? "Collapse" : "Expand"} event details`} onClick={() => { if (!isPreview) toggleEvent(event.id); }}>{highlightedRaw(event.raw, submittedQuery)}</button>
                       <div className="event-chips">
                         {["host", "source", "sourcetype"]
                           .filter((fieldName) => Object.hasOwn(event.fields, fieldName))
                           .map((fieldName) => (
-                          <button type="button" key={fieldName} onClick={() => openFieldInspector(fieldName)}><span>{fieldName}</span> = {formatFieldValue(event.fields[fieldName] ?? null)}</button>
+                          <button type="button" aria-disabled={isPreview} title={isPreview ? "Authoritative field summaries load after completion." : undefined} key={fieldName} onClick={() => { if (!isPreview) openFieldInspector(fieldName); }}><span>{fieldName}</span> = {formatFieldValue(event.fields[fieldName] ?? null)}</button>
                         ))}
                       </div>
                       {expanded ? (
