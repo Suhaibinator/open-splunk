@@ -2,10 +2,12 @@ package collector
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 )
 
 func TestNDJSONDecoderExtractsCanonicalFieldsAndPreservesTypes(t *testing.T) {
@@ -141,6 +143,58 @@ func TestDecoderPreventsPayloadMetadataOverrideAndConstantsWin(t *testing.T) {
 		if _, exists := fields[reserved]; exists {
 			t.Fatalf("reserved field %q leaked into dynamic fields", reserved)
 		}
+	}
+}
+
+func TestCollectorRejectsSharedReservedRootsAndSourceAliases(t *testing.T) {
+	t.Parallel()
+
+	names := append(eventfields.ReservedDynamicRootNames(),
+		"__Os_Private", "timestamp", "ts", "time", "@timestamp", "severity_text", "msg", "traceId", "spanId",
+	)
+	for _, canonical := range names {
+		for _, name := range []string{canonical, strings.ToUpper(canonical)} {
+			name := name
+			t.Run(name, func(t *testing.T) {
+				dynamic, err := dynamicFields(jsonObject{{name: name, value: "forged"}})
+				if err != nil {
+					t.Fatalf("dynamicFields: %v", err)
+				}
+				if len(dynamic) != 0 {
+					t.Fatalf("reserved field escaped into dynamic output: %#v", dynamic)
+				}
+				_, err = cloneAndValidateConstants(&opensplunkv1.TypedObject{Fields: []*opensplunkv1.TypedObjectField{{
+					Name: name, Value: stringValue("forged"),
+				}}})
+				if err == nil || !strings.Contains(err.Error(), "reserved canonical metadata") {
+					t.Fatalf("cloneAndValidateConstants(%q) error = %v", name, err)
+				}
+			})
+		}
+	}
+}
+
+func TestDecoderPreservesCollectorAliasExtraction(t *testing.T) {
+	t.Parallel()
+
+	decoder := newTestDecoder(t, DecodeConfig{Format: InputFormatNDJSON})
+	event, err := decoder.Decode(
+		[]byte(`{"@timestamp":"2026-01-02T03:04:05.000000006Z","severity_text":"WARN","msg":"aliased","traceId":"trace","spanId":"span"}`),
+		SourcePosition{FileIdentity: "id"},
+		time.Date(2026, time.January, 2, 3, 4, 7, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if got := event.GetEventTime().AsTime(); !got.Equal(time.Date(2026, time.January, 2, 3, 4, 5, 6, time.UTC)) {
+		t.Fatalf("event time = %s", got)
+	}
+	if event.GetLevel() != "WARN" || event.GetSeverity() != opensplunkv1.LogSeverity_LOG_SEVERITY_WARN ||
+		event.GetMessage() != "aliased" || event.GetTraceId() != "trace" || event.GetSpanId() != "span" {
+		t.Fatalf("alias extraction = %#v", event)
+	}
+	if len(event.GetFields().GetFields()) != 0 {
+		t.Fatalf("aliases leaked into dynamic fields: %#v", event.GetFields())
 	}
 }
 

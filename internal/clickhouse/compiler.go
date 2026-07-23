@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
 )
@@ -71,8 +73,35 @@ type TimechartOutput struct {
 
 // Compile compiles one plan without mutating it.
 func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
+	return c.compileWithFinalizer(query, finalizeOrdinaryQuery, true)
+}
+
+type queryFinalizer func(
+	fragment string,
+	state compileState,
+	args []any,
+	scan *plan.Scan,
+	aliasSequence int,
+) (CompiledQuery, error)
+
+// compileEventAnalysis proves that the final relation still consists of
+// individual events before exposing it to an analysis-specific projection.
+func (c Compiler) compileEventAnalysis(query *plan.Query, finalize queryFinalizer) (CompiledQuery, error) {
+	if err := plan.ValidateFieldAnalysisEligibility(query); err != nil {
+		return CompiledQuery{}, err
+	}
+	return c.compileWithFinalizer(query, finalize, false)
+}
+
+// compileWithFinalizer lowers every logical operator once, then delegates the
+// final projection. permitTerminalTimechart is reserved for ordinary search
+// compilation; event analyses must consume only the proven event relation.
+func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalizer, permitTerminalTimechart bool) (CompiledQuery, error) {
 	if query == nil || len(query.Operators) == 0 {
 		return CompiledQuery{}, errors.New("compile ClickHouse query: logical plan is empty")
+	}
+	if finalize == nil {
+		return CompiledQuery{}, errors.New("compile ClickHouse query: finalizer is required")
 	}
 	database := c.Database
 	if database == "" {
@@ -84,6 +113,9 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 	}
 	if !physicalIdentifier.MatchString(database) || !physicalIdentifier.MatchString(table) {
 		return CompiledQuery{}, errors.New("compile ClickHouse query: database and table must be simple identifiers")
+	}
+	if isNilPlanOperator(query.Operators[0]) {
+		return CompiledQuery{}, errors.New("compile ClickHouse query: first operator must be a non-nil Scan")
 	}
 	scan, ok := query.Operators[0].(*plan.Scan)
 	if !ok {
@@ -97,6 +129,9 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 	aliasSequence := 0
 	remainingOperators := query.Operators[1:]
 	for operatorIndex, operator := range remainingOperators {
+		if isNilPlanOperator(operator) {
+			return CompiledQuery{}, fmt.Errorf("compile ClickHouse query: operator %d is nil", operatorIndex+1)
+		}
 		aliasSequence++
 		alias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 		switch operator := operator.(type) {
@@ -212,6 +247,9 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 			args = append(args, aggregateArgs...)
 			state = nextState
 		case *plan.Timechart:
+			if !permitTerminalTimechart {
+				return CompiledQuery{}, errors.New("compile ClickHouse query: timechart is unavailable for event analysis")
+			}
 			if operatorIndex+1 != len(remainingOperators) {
 				return CompiledQuery{}, errors.New("compile ClickHouse timechart: operator must be terminal")
 			}
@@ -282,12 +320,41 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 		}
 	}
 
-	finalProjection, outputFields, err := finalProjection(state)
+	compiled, err := finalize(fragment, state, args, scan, aliasSequence)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
+	if len(compiled.SQL) > maxCompiledQueryBytes {
+		return CompiledQuery{}, &plan.Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("compiled query exceeds %d bytes", maxCompiledQueryBytes),
+			Range:   scan.Range,
+		}
+	}
+	return compiled, nil
+}
+
+func isNilPlanOperator(operator plan.Operator) bool {
+	if operator == nil {
+		return true
+	}
+	value := reflect.ValueOf(operator)
+	return value.Kind() == reflect.Pointer && value.IsNil()
+}
+
+func finalizeOrdinaryQuery(
+	fragment string,
+	state compileState,
+	args []any,
+	scan *plan.Scan,
+	aliasSequence int,
+) (CompiledQuery, error) {
+	projection, outputFields, err := finalProjection(state)
 	if err != nil {
 		return CompiledQuery{}, err
 	}
 	aliasSequence++
-	fragment = "SELECT " + strings.Join(finalProjection, ", ") + " FROM (" + fragment + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+	fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 	finalOrder := defaultCompiledOrder(state)
 	if len(finalOrder) > 0 {
 		order, orderErr := compileMaterializedOrder(finalOrder, false)
@@ -295,13 +362,6 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 			return CompiledQuery{}, orderErr
 		}
 		fragment += " ORDER BY " + order
-	}
-	if len(fragment) > maxCompiledQueryBytes {
-		return CompiledQuery{}, &plan.Diagnostic{
-			Code:    "SPL_QUERY_TOO_COMPLEX",
-			Message: fmt.Sprintf("compiled query exceeds %d bytes", maxCompiledQueryBytes),
-			Range:   scan.Range,
-		}
 	}
 	return CompiledQuery{SQL: fragment, Args: args, OutputFields: outputFields}, nil
 }
@@ -656,10 +716,7 @@ func formatDateTime64Milliseconds(value time.Time) string {
 	return value.UTC().Truncate(time.Millisecond).Format("2006-01-02 15:04:05.000")
 }
 
-var canonicalColumnNames = []string{
-	"event_id", "index", "_time", "_indextime", "host", "source", "sourcetype",
-	"service", "severity", "level", "message", "_raw", "trace_id", "span_id", "collector_id", "batch_id",
-}
+var canonicalColumnNames = eventfields.CanonicalSPLFieldNames()
 
 var defaultPublicFields = []string{
 	"_time", "_raw", "index", "host", "source", "sourcetype", "service", "level", "message", "trace_id", "span_id", "event_id", "_indextime", "fields",

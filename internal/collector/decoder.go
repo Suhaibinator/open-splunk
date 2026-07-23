@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -358,7 +359,7 @@ func (p *jsonParser) value(depth int) (any, error) {
 func dynamicFields(object jsonObject) ([]*opensplunkv1.TypedObjectField, error) {
 	fields := make([]*opensplunkv1.TypedObjectField, 0, len(object))
 	for _, field := range object {
-		if _, reserved := reservedPayloadFields[strings.ToLower(field.name)]; reserved {
+		if eventfields.IsCollectorReservedRoot(field.name) {
 			continue
 		}
 		value, err := typedJSONValue(field.value)
@@ -632,8 +633,7 @@ func cloneAndValidateConstants(object *opensplunkv1.TypedObject) ([]*opensplunkv
 		if !utf8.ValidString(field.GetName()) || strings.TrimSpace(field.GetName()) != field.GetName() {
 			return nil, fmt.Errorf("field %d has an invalid name", i)
 		}
-		lowerName := strings.ToLower(field.GetName())
-		if _, reserved := reservedPayloadFields[lowerName]; reserved {
+		if eventfields.IsCollectorReservedRoot(field.GetName()) {
 			return nil, fmt.Errorf("field %q is reserved canonical metadata", field.GetName())
 		}
 		if _, duplicate := seen[field.GetName()]; duplicate {
@@ -643,15 +643,4 @@ func cloneAndValidateConstants(object *opensplunkv1.TypedObject) ([]*opensplunkv
 		result = append(result, proto.Clone(field).(*opensplunkv1.TypedObjectField))
 	}
 	return result, nil
-}
-
-var reservedPayloadFields = map[string]struct{}{
-	"_time": {}, "_indextime": {}, "_raw": {},
-	"event_id": {}, "event_time": {}, "event_time_source": {}, "collected_at": {},
-	"index": {}, "index_name": {}, "tenant_id": {}, "collector_id": {}, "batch_id": {},
-	"host": {}, "source": {}, "sourcetype": {}, "service": {},
-	"level": {}, "severity": {}, "severity_text": {},
-	"message": {}, "msg": {}, "body": {},
-	"timestamp": {}, "ts": {}, "time": {}, "@timestamp": {},
-	"trace_id": {}, "traceid": {}, "span_id": {}, "spanid": {},
 }

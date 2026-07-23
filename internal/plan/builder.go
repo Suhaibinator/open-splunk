@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -40,25 +41,6 @@ type Scope struct {
 	// job starts. A pointer distinguishes an empty-table cutoff of zero from a
 	// caller that forgot to establish an immutable snapshot.
 	VisibilityCutoff *uint64
-}
-
-var canonicalFields = map[string]struct{}{
-	"event_id":     {},
-	"index":        {},
-	"_time":        {},
-	"_indextime":   {},
-	"host":         {},
-	"source":       {},
-	"sourcetype":   {},
-	"service":      {},
-	"severity":     {},
-	"level":        {},
-	"message":      {},
-	"_raw":         {},
-	"trace_id":     {},
-	"span_id":      {},
-	"collector_id": {},
-	"batch_id":     {},
 }
 
 // Build performs semantic analysis and emits a security-constrained plan.
@@ -973,7 +955,7 @@ func convertFields(names []string, sourceRange spl.Range) ([]FieldRef, error) {
 // ResolveField parses deterministic dotted dynamic access. A backslash escapes
 // a literal dot or backslash within one path segment.
 func ResolveField(name string, sourceRange spl.Range) (FieldRef, error) {
-	if _, ok := canonicalFields[name]; ok {
+	if eventfields.IsCanonicalSPLField(name) {
 		return FieldRef{Name: name, Canonical: true, Range: sourceRange}, nil
 	}
 	if name == "" || !utf8.ValidString(name) {

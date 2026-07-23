@@ -1591,6 +1591,82 @@ func TestCompiledPlaceholderCountMatchesArguments(t *testing.T) {
 	}
 }
 
+func TestCompileRejectsTypedNilOperatorsWithoutPanicking(t *testing.T) {
+	t.Parallel()
+
+	var (
+		nilScan        *plan.Scan
+		nilFilter      *plan.Filter
+		nilProject     *plan.Project
+		nilExtend      *plan.Extend
+		nilRename      *plan.Rename
+		nilAggregate   *plan.Aggregate
+		nilTimechart   *plan.Timechart
+		nilWindow      *plan.Window
+		nilSort        *plan.Sort
+		nilDeduplicate *plan.Deduplicate
+		nilLimit       *plan.Limit
+	)
+	tests := []struct {
+		name     string
+		operator plan.Operator
+		first    bool
+	}{
+		{name: "scan", operator: nilScan, first: true},
+		{name: "filter", operator: nilFilter},
+		{name: "project", operator: nilProject},
+		{name: "extend", operator: nilExtend},
+		{name: "rename", operator: nilRename},
+		{name: "aggregate", operator: nilAggregate},
+		{name: "timechart", operator: nilTimechart},
+		{name: "window", operator: nilWindow},
+		{name: "sort", operator: nilSort},
+		{name: "deduplicate", operator: nilDeduplicate},
+		{name: "limit", operator: nilLimit},
+	}
+	base := buildPlan(t, `index=gradethis`)
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			operators := []plan.Operator{base.Operators[0], test.operator}
+			if test.first {
+				operators = []plan.Operator{test.operator}
+			}
+			if _, err := (Compiler{}).Compile(&plan.Query{Operators: operators}); err == nil {
+				t.Fatal("Compile() accepted a typed-nil operator")
+			}
+		})
+	}
+}
+
+func TestAnalysisFinalizerCannotBypassTerminalTimechart(t *testing.T) {
+	t.Parallel()
+
+	logical := buildPlan(t, `index=gradethis | timechart span=5m count BY level`)
+	called := false
+	_, err := (Compiler{}).compileWithFinalizer(logical, func(string, compileState, []any, *plan.Scan, int) (CompiledQuery, error) {
+		called = true
+		return CompiledQuery{}, nil
+	}, false)
+	if err == nil || called {
+		t.Fatalf("compileWithFinalizer() error = %v, finalizer called = %t", err, called)
+	}
+}
+
+func TestAnalysisFinalizerCannotBypassCompiledQueryByteLimit(t *testing.T) {
+	t.Parallel()
+
+	logical := buildPlan(t, `index=gradethis`)
+	_, err := (Compiler{}).compileEventAnalysis(logical, func(string, compileState, []any, *plan.Scan, int) (CompiledQuery, error) {
+		return CompiledQuery{SQL: strings.Repeat("x", maxCompiledQueryBytes+1)}, nil
+	})
+	diagnostic, ok := err.(*plan.Diagnostic)
+	if !ok || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
+		t.Fatalf("compileEventAnalysis() error = %#v, want SPL_QUERY_TOO_COMPLEX", err)
+	}
+}
+
 func compileSPL(t *testing.T, source string) CompiledQuery {
 	t.Helper()
 	logical := buildPlan(t, source)

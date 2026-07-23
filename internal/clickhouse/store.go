@@ -28,6 +28,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"google.golang.org/protobuf/proto"
@@ -858,6 +859,9 @@ func flattenTypedObject(
 		}
 		if err := validateStorageFieldName(field.GetName()); err != nil {
 			return fmt.Errorf("typed object field %d: %w", i, err)
+		}
+		if len(logicalPrefix) == 0 && eventfields.IsReservedDynamicRoot(field.GetName()) {
+			return fmt.Errorf("typed object root field %q is reserved event metadata", field.GetName())
 		}
 		if _, duplicate := seen[field.GetName()]; duplicate {
 			return fmt.Errorf("typed object field %q is duplicated", field.GetName())

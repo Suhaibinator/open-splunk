@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -833,6 +834,33 @@ func TestResolveFieldRejectsCompilerPrivateNamespace(t *testing.T) {
 
 	_, err := ResolveField(`__os_sort_time`, spl.Range{})
 	assertDiagnosticCode(t, err, "SPL_RESERVED_FIELD")
+}
+
+func TestResolveFieldUsesEveryCanonicalSPLField(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range eventfields.CanonicalSPLFieldNames() {
+		field, err := ResolveField(name, spl.Range{})
+		if err != nil {
+			t.Errorf("ResolveField(%q): %v", name, err)
+			continue
+		}
+		if !field.Canonical || field.Name != name || field.Path != nil {
+			t.Errorf("ResolveField(%q) = %#v, want exact canonical reference", name, field)
+		}
+		variant := strings.ToUpper(name)
+		if variant == name {
+			continue
+		}
+		caseVariant, err := ResolveField(variant, spl.Range{})
+		if err != nil {
+			t.Errorf("ResolveField(%q): %v", variant, err)
+			continue
+		}
+		if caseVariant.Canonical {
+			t.Errorf("ResolveField(%q) became canonical; SPL field names are case-sensitive", variant)
+		}
+	}
 }
 
 func TestResolveFieldSupportsNestedAndEscapedDot(t *testing.T) {

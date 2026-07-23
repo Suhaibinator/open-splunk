@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -31,21 +32,6 @@ func DurationFitsResultRange(value *durationpb.Duration) bool {
 	converted := value.AsDuration()
 	roundTrip := durationpb.New(converted)
 	return roundTrip.GetSeconds() == value.GetSeconds() && roundTrip.GetNanos() == value.GetNanos()
-}
-
-var canonicalDynamicFields = map[string]struct{}{
-	"_time":        {},
-	"_indextime":   {},
-	"_raw":         {},
-	"index":        {},
-	"index_name":   {},
-	"host":         {},
-	"source":       {},
-	"sourcetype":   {},
-	"event_id":     {},
-	"tenant_id":    {},
-	"collector_id": {},
-	"batch_id":     {},
 }
 
 // Validator performs deterministic, storage-independent event validation and
@@ -228,13 +214,11 @@ func (v *Validator) validateObject(object *opensplunkv1.TypedObject, path string
 			)
 		}
 		seen[field.GetName()] = struct{}{}
-		if root {
-			if _, reserved := canonicalDynamicFields[strings.ToLower(field.GetName())]; reserved {
-				return eventFailure(
-					opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_FIELD_NAME_INVALID,
-					"dynamic field cannot override canonical event metadata", fieldPath, "canonical_field_reserved",
-				)
-			}
+		if root && eventfields.IsReservedDynamicRoot(field.GetName()) {
+			return eventFailure(
+				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_FIELD_NAME_INVALID,
+				"dynamic field cannot override canonical event metadata", fieldPath, "canonical_field_reserved",
+			)
 		}
 		*count++
 		if *count > v.limits.MaxFields {

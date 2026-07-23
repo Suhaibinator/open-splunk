@@ -11,6 +11,7 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -47,14 +48,45 @@ func TestValidateAndNormalizeEventDoesNotMutateInput(t *testing.T) {
 }
 
 func TestValidateAndNormalizeEventRejectsCanonicalFieldInjection(t *testing.T) {
+	t.Parallel()
+
+	v := newTestValidator(t, DefaultLimits())
+	names := append(eventfields.ReservedDynamicRootNames(), "__Os_Private")
+	for _, canonical := range names {
+		for _, name := range []string{canonical, strings.ToUpper(canonical)} {
+			name := name
+			t.Run(name, func(t *testing.T) {
+				event := validTestEvent("event-1", "main")
+				event.Fields.Fields = append(event.Fields.Fields, stringField(name, "forged"))
+
+				_, rejection := v.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
+				assertEventRejectionCode(t, rejection, opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_FIELD_NAME_INVALID)
+				if len(rejection.Violations) == 0 || rejection.Violations[0].FieldPath != "fields."+name ||
+					rejection.Violations[0].Code != "canonical_field_reserved" {
+					t.Fatalf("violations = %#v", rejection.Violations)
+				}
+			})
+		}
+	}
+}
+
+func TestValidateAndNormalizeEventKeepsCollectorOnlyAliasesDynamic(t *testing.T) {
+	t.Parallel()
+
 	v := newTestValidator(t, DefaultLimits())
 	event := validTestEvent("event-1", "main")
-	event.Fields.Fields = append(event.Fields.Fields, stringField("_InDeXtImE", "forged"))
+	event.Fields.Fields = append(event.Fields.Fields,
+		stringField("timestamp", "application timestamp"),
+		stringField("msg", "application message"),
+		stringField("severity_text", "application severity"),
+	)
 
-	_, rejection := v.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
-	assertEventRejectionCode(t, rejection, opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_FIELD_NAME_INVALID)
-	if len(rejection.Violations) == 0 || rejection.Violations[0].FieldPath != "fields._InDeXtImE" {
-		t.Fatalf("violations = %#v", rejection.Violations)
+	stored, rejection := v.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
+	if rejection != nil {
+		t.Fatalf("ValidateAndNormalizeEvent() rejection = %v", rejection)
+	}
+	if got := len(stored.Event.GetFields().GetFields()); got != len(event.GetFields().GetFields()) {
+		t.Fatalf("stored dynamic field count = %d, want %d", got, len(event.GetFields().GetFields()))
 	}
 }
 

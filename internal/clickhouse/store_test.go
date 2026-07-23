@@ -19,6 +19,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -1030,6 +1031,31 @@ func TestStoreRejectsInvalidInputsBeforePrepare(t *testing.T) {
 				t.Fatalf("prepare calls = %d", conn.prepareCalls)
 			}
 		})
+	}
+}
+
+func TestStoreRejectsReservedDynamicRootsFromDirectStoredEvents(t *testing.T) {
+	t.Parallel()
+
+	store := mustTestStore(t, &fakeStoreConnection{}, fixedRetention(time.Hour))
+	names := append(eventfields.ReservedDynamicRootNames(), "__Os_Private")
+	for _, canonical := range names {
+		for _, name := range []string{canonical, strings.ToUpper(canonical)} {
+			name := name
+			t.Run(name, func(t *testing.T) {
+				batch := validStoreBatch()
+				batch.Events[0].Event.Fields = typedObjectValue(typedField(name, typedString("forged")))
+				if _, err := store.rowsForBatch(context.Background(), batch, nil); err == nil || !strings.Contains(err.Error(), "reserved event metadata") {
+					t.Fatalf("rowsForBatch(%q) error = %v", name, err)
+				}
+			})
+		}
+	}
+
+	batch := validStoreBatch()
+	batch.Events[0].Event.Fields = typedObjectValue(typedField("nested", typedObject(typedField("service", typedString("allowed")))))
+	if _, err := store.rowsForBatch(context.Background(), batch, nil); err != nil {
+		t.Fatalf("nested canonical spelling must remain an ordinary dynamic path: %v", err)
 	}
 }
 

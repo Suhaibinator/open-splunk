@@ -31,7 +31,7 @@ func ValidateTimelineEligibility(query *Query) error {
 	}
 
 	for index, operator := range query.Operators {
-		if operator == nil || isNilTimelineOperator(operator) {
+		if operator == nil || isNilOperator(operator) {
 			return timelinePipelineDiagnostic(operatorRange(operator))
 		}
 		switch operator := operator.(type) {
@@ -81,13 +81,13 @@ func containsTimelineTime(fields []FieldRef) bool {
 	return slices.ContainsFunc(fields, func(field FieldRef) bool { return field.Name == "_time" })
 }
 
-func isNilTimelineOperator(operator Operator) bool {
+func isNilOperator(operator Operator) bool {
 	value := reflect.ValueOf(operator)
 	return value.Kind() == reflect.Pointer && value.IsNil()
 }
 
 func operatorRange(operator Operator) spl.Range {
-	if operator == nil || isNilTimelineOperator(operator) {
+	if operator == nil || isNilOperator(operator) {
 		return spl.Range{}
 	}
 	return operator.SourceRange()
