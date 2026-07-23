@@ -38,6 +38,10 @@ message EventOrigin {
   optional uint64 start_offset = 3;
   optional uint64 end_offset = 4;
   optional uint64 line_number = 5;
+  // source_path and file_fingerprint_length let a collector reconstruct the
+  // exact input checkpoint from a durable WAL batch after process restart.
+  optional string source_path = 6;
+  optional uint32 file_fingerprint_length = 7;
 }
 
 // LogEvent is the canonical collector-to-server event envelope. event_id must

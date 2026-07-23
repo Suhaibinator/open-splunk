@@ -42,9 +42,10 @@
 // On open the queue replays segments in order, validating each record's CRC. A
 // record that fails validation, or a truncated trailing record from a crash
 // during append, terminates replay of that segment; the unreadable tail is
-// renamed to a .corrupt sibling ([ErrCorruptSegment]) and recovery continues
-// with the batches that were intact. A new segment is started when the current
-// one reaches Options.SegmentMaxBytes.
+// renamed to a .corrupt sibling ([ErrCorruptSegment]). Every later segment is
+// quarantined as well, so acknowledgments can never jump a missing source
+// coordinate; recovery continues only with the globally intact prefix. A new
+// segment is started when the current one reaches Options.SegmentMaxBytes.
 //
 // # Durability and reclamation
 //

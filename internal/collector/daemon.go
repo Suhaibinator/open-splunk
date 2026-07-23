@@ -75,10 +75,11 @@ const (
 // One goroutine per input reads [input.RawEvent]s, maps each SourceRef to a
 // [SourcePosition], decodes it, runs the shared processor [Pipeline], and hands
 // the result to a single batcher goroutine over an unbuffered channel. The
-// batcher accumulates events and flushes them to [wal.Queue.Append]; after a
-// flush returns durably it advances the per-file checkpoint to the highest
-// EndOffset the batch covered. The unbuffered channel plus a single batcher is
-// what makes backpressure free: when Append reports [wal.ErrQueueFull] the
+// batcher accumulates events and flushes them to [wal.Queue.Append]. The sender
+// advances per-file checkpoints only after a terminal server disposition makes
+// the corresponding WAL prefix cumulative. The unbuffered channel plus a
+// single batcher is what makes backpressure free: when Append reports
+// [wal.ErrQueueFull] the
 // batcher stops draining the channel, which stalls the input readers, which
 // stalls the tailers — no event is ever dropped, and the source files persist.
 //
@@ -310,6 +311,9 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		Backoff:     sender.BackoffPolicy{Initial: time.Second, Max: 30 * time.Second, Multiplier: 2, Jitter: 0.2},
 		Logger:      logger,
 		InputHealth: func() []*opensplunkv1.CollectorInputHealth { return inputHealthSnapshot(inputs) },
+		OnTerminalMarks: func(marks []wal.SourceCheckpointMark) error {
+			return commitTerminalCheckpoints(checkpoints, marks)
+		},
 	}
 
 	snd, err := sender.New(senderOpts, queue, deadLetter, nil)

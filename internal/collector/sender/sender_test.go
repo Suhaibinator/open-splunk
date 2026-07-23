@@ -38,10 +38,11 @@ type fakeQueue struct {
 	acked    uint64                     // highest acked sequence
 	nextSeq  uint64
 	ackCalls []uint64
+	terminal map[uint64]struct{}
 }
 
 func newFakeQueue(batches ...*opensplunkv1.EventBatch) *fakeQueue {
-	q := &fakeQueue{batches: batches}
+	q := &fakeQueue{batches: batches, terminal: make(map[uint64]struct{})}
 	q.cond = sync.NewCond(&q.mu)
 	if len(batches) > 0 {
 		q.nextSeq = batches[len(batches)-1].GetBatchSequence() + 1
@@ -91,13 +92,123 @@ func (q *fakeQueue) Ack(batchSequence uint64) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.ackCalls = append(q.ackCalls, batchSequence)
-	if batchSequence > q.acked {
-		q.acked = batchSequence
+	if batchSequence <= q.acked {
+		return nil
+	}
+	if !q.hasSequenceLocked(batchSequence) {
+		return wal.ErrInvalidAck
+	}
+	q.terminal[batchSequence] = struct{}{}
+	for _, batch := range q.batches {
+		sequence := batch.GetBatchSequence()
+		if sequence <= q.acked {
+			continue
+		}
+		if _, ok := q.terminal[sequence]; !ok {
+			break
+		}
+		q.acked = sequence
+		delete(q.terminal, sequence)
 	}
 	return nil
 }
 
-func (q *fakeQueue) AckThrough(batchSequence uint64) error { return q.Ack(batchSequence) }
+func (q *fakeQueue) PrepareAck(batchSequence uint64) (wal.AckPreview, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.prepareAckLocked(batchSequence, false)
+}
+
+func (q *fakeQueue) AckThrough(batchSequence uint64) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.ackCalls = append(q.ackCalls, batchSequence)
+	if batchSequence <= q.acked {
+		return nil
+	}
+	if !q.hasSequenceLocked(batchSequence) {
+		return wal.ErrInvalidAck
+	}
+	for _, batch := range q.batches {
+		sequence := batch.GetBatchSequence()
+		if sequence > q.acked && sequence <= batchSequence {
+			q.terminal[sequence] = struct{}{}
+			q.acked = sequence
+			delete(q.terminal, sequence)
+		}
+	}
+	return nil
+}
+
+func (q *fakeQueue) PrepareAckThrough(batchSequence uint64) (wal.AckPreview, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.prepareAckLocked(batchSequence, true)
+}
+
+func (q *fakeQueue) prepareAckLocked(batchSequence uint64, cumulative bool) (wal.AckPreview, error) {
+	if batchSequence <= q.acked {
+		return wal.AckPreview{}, nil
+	}
+	if !q.hasSequenceLocked(batchSequence) {
+		return wal.AckPreview{}, wal.ErrInvalidAck
+	}
+	preview := wal.AckPreview{}
+	byIdentity := make(map[string]wal.SourceCheckpointMark)
+	for _, batch := range q.batches {
+		sequence := batch.GetBatchSequence()
+		if sequence <= q.acked {
+			continue
+		}
+		_, terminal := q.terminal[sequence]
+		if cumulative && sequence <= batchSequence {
+			terminal = true
+		}
+		if sequence == batchSequence {
+			terminal = true
+		}
+		if !terminal {
+			break
+		}
+		preview.BatchCount++
+		preview.ThroughBatchSequence = sequence
+		for _, mark := range fakeSourceMarks(batch) {
+			byIdentity[mark.FileIdentity] = mark
+		}
+	}
+	for _, mark := range byIdentity {
+		preview.Marks = append(preview.Marks, mark)
+	}
+	return preview, nil
+}
+
+func fakeSourceMarks(batch *opensplunkv1.EventBatch) []wal.SourceCheckpointMark {
+	var marks []wal.SourceCheckpointMark
+	for index, event := range batch.GetEvents() {
+		origin := event.GetOrigin()
+		if origin == nil || origin.FileIdentity == nil {
+			continue
+		}
+		marks = append(marks, wal.SourceCheckpointMark{
+			BatchSequence: batch.GetBatchSequence(), EventIndex: uint32(index),
+			FileIdentity: origin.GetFileIdentity(), SourcePath: origin.GetSourcePath(),
+			EndOffset: origin.GetEndOffset(), LineNumber: origin.GetLineNumber(),
+			FingerprintLength: origin.GetFileFingerprintLength(),
+			HasSourcePath:     origin.SourcePath != nil, HasEndOffset: origin.EndOffset != nil,
+			HasFingerprintLength: origin.FileFingerprintLength != nil,
+		})
+	}
+	return marks
+}
+
+func (q *fakeQueue) hasSequenceLocked(sequence uint64) bool {
+	for _, batch := range q.batches {
+		if batch.GetBatchSequence() == sequence {
+			return true
+		}
+	}
+	return false
+}
 
 func (q *fakeQueue) Stats() wal.Stats {
 	q.mu.Lock()
@@ -128,6 +239,12 @@ func (q *fakeQueue) ackedSeq() uint64 {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.acked
+}
+
+func (q *fakeQueue) ackCallsSnapshot() []uint64 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return append([]uint64(nil), q.ackCalls...)
 }
 
 var _ wal.Queue = (*fakeQueue)(nil)
@@ -218,14 +335,15 @@ func newFakeServer() *fakeServer {
 
 func defaultReady() *opensplunkv1.CollectorReady {
 	return &opensplunkv1.CollectorReady{
-		StreamId:           "stream-x",
-		ProtocolMajor:      1,
-		ProtocolMinor:      0,
-		HeartbeatInterval:  durationpb.New(time.Hour),
-		MaxInFlightBatches: 1,
-		MaxBatchEvents:     1000,
-		MaxBatchBytes:      8 << 20,
-		MaxEventBytes:      1 << 20,
+		StreamId:                 "stream-x",
+		ProtocolMajor:            1,
+		ProtocolMinor:            0,
+		HeartbeatInterval:        durationpb.New(time.Hour),
+		MaxInFlightBatches:       1,
+		MaxBatchEvents:           1000,
+		MaxBatchBytes:            8 << 20,
+		MaxEventBytes:            1 << 20,
+		AcknowledgmentDurability: opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
 	}
 }
 
@@ -316,6 +434,7 @@ func (fs *fakeServer) ackBatch(seq uint64, accepted, duplicate uint32, rejected 
 		Payload: &opensplunkv1.CollectResponse_BatchAck{BatchAck: &opensplunkv1.BatchAck{
 			BatchId:             batch.GetBatchId(),
 			BatchSequence:       seq,
+			Durability:          opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
 			AcceptedEventCount:  accepted,
 			DuplicateEventCount: duplicate,
 			RejectedEvents:      rejected,
@@ -501,6 +620,58 @@ func TestSenderHelloBatchAckWalAck(t *testing.T) {
 	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run returned %v", err)
 	}
+}
+
+func TestSenderCheckpointCallbackFailureLeavesBatchReplayable(t *testing.T) {
+	t.Parallel()
+	batch := fakeBatch(1, makeEvent("e1", "main"))
+	batch.Events[0].Origin = &opensplunkv1.EventOrigin{
+		FileIdentity: proto.String("dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)),
+		EndOffset:    proto.Uint64(1),
+	}
+	q := newFakeQueue(batch)
+	callbackErr := errors.New("checkpoint disk unavailable")
+	opts := testOptions()
+	opts.OnTerminalMarks = func(marks []wal.SourceCheckpointMark) error {
+		if len(marks) != 1 || marks[0].BatchSequence != 1 {
+			t.Fatalf("callback marks = %v, want batch 1", markSequencesForTest(marks))
+		}
+		return callbackErr
+	}
+	s, err := New(opts, q, &memSink{}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	c := s.newConn(context.Background(), func() {}, func() {}, nil)
+	c.inflight[1] = batch
+	c.inflightN = 1
+
+	err = c.handleAck(&opensplunkv1.BatchAck{
+		BatchId:            batch.GetBatchId(),
+		BatchSequence:      1,
+		Durability:         opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+		AcceptedEventCount: 1,
+	})
+	if !errors.Is(err, callbackErr) {
+		t.Fatalf("handleAck error = %v, want callback error", err)
+	}
+	if got := q.Stats(); got.LastAckedBatchSequence != 0 || got.QueuedBatches != 1 {
+		t.Fatalf("callback failure consumed replayable batch: %+v", got)
+	}
+	if got := q.ackCallsSnapshot(); len(got) != 0 {
+		t.Fatalf("queue Ack calls = %v, want none after callback failure", got)
+	}
+	if c.lookupInflight(1) == nil {
+		t.Fatal("callback failure released in-flight batch")
+	}
+}
+
+func markSequencesForTest(marks []wal.SourceCheckpointMark) []uint64 {
+	sequences := make([]uint64, 0, len(marks))
+	for _, mark := range marks {
+		sequences = append(sequences, mark.BatchSequence)
+	}
+	return sequences
 }
 
 func TestSenderStreamSequenceStrictlyIncrements(t *testing.T) {
@@ -711,6 +882,242 @@ func TestSenderRetryResendsIdenticalBytes(t *testing.T) {
 	})
 	cancel()
 	<-done
+}
+
+func TestSenderTerminalAckCancelsScheduledRetry(t *testing.T) {
+	t.Parallel()
+	fs := newFakeServer()
+	var once sync.Once
+	fs.onBatch = func(fs *fakeServer, batch *opensplunkv1.EventBatch) {
+		once.Do(func() {
+			_ = fs.send(&opensplunkv1.CollectResponse{
+				Payload: &opensplunkv1.CollectResponse_RetryBatch{RetryBatch: &opensplunkv1.RetryBatch{
+					BatchId: batch.GetBatchId(), BatchSequence: batch.GetBatchSequence(),
+					Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+					RetryAfter: durationpb.New(150 * time.Millisecond),
+				}},
+			})
+			fs.ackBatch(batch.GetBatchSequence(), 1, 0)
+		})
+	}
+	conn := startServer(t, fs)
+	q := newFakeQueue(fakeBatch(1, makeEvent("e1", "main")))
+	s := newTestSender(t, testOptions(), q, &memSink{}, nil, conn)
+	cancel, done := runSender(t, s)
+
+	waitFor(t, "batch acked before retry delay", func() bool { return q.ackedSeq() == 1 })
+	time.Sleep(250 * time.Millisecond)
+	if got := len(fs.receivedBatches()); got != 1 {
+		t.Fatalf("server received %d batches, want only the original after terminal ack", got)
+	}
+	cancel()
+	<-done
+}
+
+func TestSenderTerminalAckCancelsRetryBeforeCheckpointCommit(t *testing.T) {
+	t.Parallel()
+	fs := newFakeServer()
+	var responses sync.Once
+	fs.onBatch = func(fs *fakeServer, batch *opensplunkv1.EventBatch) {
+		responses.Do(func() {
+			_ = fs.send(&opensplunkv1.CollectResponse{
+				Payload: &opensplunkv1.CollectResponse_RetryBatch{RetryBatch: &opensplunkv1.RetryBatch{
+					BatchId: batch.GetBatchId(), BatchSequence: batch.GetBatchSequence(),
+					Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+					RetryAfter: durationpb.New(20 * time.Millisecond),
+				}},
+			})
+			fs.ackBatch(batch.GetBatchSequence(), 1, 0)
+		})
+	}
+
+	batch := fakeBatch(1, makeEvent("e1", "main"))
+	batch.Events[0].Origin = &opensplunkv1.EventOrigin{
+		FileIdentity: proto.String("dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)),
+		EndOffset:    proto.Uint64(1),
+	}
+	q := newFakeQueue(batch)
+	commitStarted := make(chan struct{})
+	allowCommit := make(chan struct{})
+	var allowCommitOnce sync.Once
+	t.Cleanup(func() { allowCommitOnce.Do(func() { close(allowCommit) }) })
+	opts := testOptions()
+	opts.OnTerminalMarks = func([]wal.SourceCheckpointMark) error {
+		close(commitStarted)
+		<-allowCommit
+		return nil
+	}
+	s := newTestSender(t, opts, q, &memSink{}, nil, startServer(t, fs))
+	cancel, done := runSender(t, s)
+
+	select {
+	case <-commitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("terminal checkpoint callback did not start")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := len(fs.receivedBatches()); got != 1 {
+		t.Fatalf("server received %d batches while terminal checkpoint commit was pending, want only original", got)
+	}
+	allowCommitOnce.Do(func() { close(allowCommit) })
+	waitFor(t, "batch acked after checkpoint commit", func() bool { return q.ackedSeq() == 1 })
+	cancel()
+	<-done
+}
+
+func TestReleaseInflightPromptlyCancelsLongScheduledRetry(t *testing.T) {
+	t.Parallel()
+	batch := fakeBatch(1, makeEvent("e1", "main"))
+	q := newFakeQueue(batch)
+	s, err := New(testOptions(), q, &memSink{}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	c := s.newConn(ctx, cancel, func() {}, nil)
+	c.inflight[1] = batch
+	c.inflightN = 1
+
+	if err := c.handleRetry(&opensplunkv1.RetryBatch{
+		BatchId:       batch.GetBatchId(),
+		BatchSequence: 1,
+		Reason:        opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+		RetryAfter:    durationpb.New(time.Hour),
+	}); err != nil {
+		t.Fatalf("handleRetry: %v", err)
+	}
+	c.mu.Lock()
+	retry := c.pendingRetry[1]
+	c.mu.Unlock()
+	if retry == nil {
+		t.Fatal("long retry was not scheduled")
+	}
+
+	c.releaseInflight(1)
+	select {
+	case <-retry.done:
+	case <-time.After(time.Second):
+		t.Fatal("terminal release did not promptly stop long retry")
+	}
+	c.mu.Lock()
+	_, stillScheduled := c.pendingRetry[1]
+	_, stillInflight := c.inflight[1]
+	c.mu.Unlock()
+	if stillScheduled || stillInflight {
+		t.Fatalf("terminal release retained retry=%t inflight=%t", stillScheduled, stillInflight)
+	}
+}
+
+func TestSenderCumulativeAckCommitsCheckpointAndCancelsEarlierRetry(t *testing.T) {
+	t.Parallel()
+	fs := newFakeServer()
+	fs.readyFn = func() *opensplunkv1.CollectorReady {
+		ready := defaultReady()
+		ready.MaxInFlightBatches = 2
+		return ready
+	}
+	fs.onBatch = func(fs *fakeServer, batch *opensplunkv1.EventBatch) {
+		switch batch.GetBatchSequence() {
+		case 1:
+			_ = fs.send(&opensplunkv1.CollectResponse{
+				Payload: &opensplunkv1.CollectResponse_RetryBatch{RetryBatch: &opensplunkv1.RetryBatch{
+					BatchId: batch.GetBatchId(), BatchSequence: 1,
+					Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+					RetryAfter: durationpb.New(150 * time.Millisecond),
+				}},
+			})
+		case 2:
+			through := uint64(2)
+			_ = fs.send(&opensplunkv1.CollectResponse{
+				Payload: &opensplunkv1.CollectResponse_BatchAck{BatchAck: &opensplunkv1.BatchAck{
+					BatchId:                          batch.GetBatchId(),
+					BatchSequence:                    2,
+					AcknowledgedThroughBatchSequence: &through,
+					Durability:                       opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+					AcceptedEventCount:               1,
+				}},
+			})
+		}
+	}
+
+	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)
+	batch1 := fakeBatch(1, makeEvent("e1", "main"))
+	batch1.Events[0].Origin = &opensplunkv1.EventOrigin{
+		FileIdentity: &identity,
+		EndOffset:    proto.Uint64(1),
+	}
+	batch2 := fakeBatch(2, makeEvent("e2", "main"))
+	batch2.Events[0].Origin = &opensplunkv1.EventOrigin{
+		FileIdentity: &identity,
+		EndOffset:    proto.Uint64(2),
+	}
+	q := newFakeQueue(batch1, batch2)
+
+	var marksMu sync.Mutex
+	var committed []wal.SourceCheckpointMark
+	opts := testOptions()
+	opts.OnTerminalMarks = func(marks []wal.SourceCheckpointMark) error {
+		marksMu.Lock()
+		committed = append(committed[:0], marks...)
+		marksMu.Unlock()
+		return nil
+	}
+	s := newTestSender(t, opts, q, &memSink{}, nil, startServer(t, fs))
+	cancel, done := runSender(t, s)
+
+	waitFor(t, "cumulative ack through batch 2", func() bool { return q.ackedSeq() == 2 })
+	marksMu.Lock()
+	gotMarks := append([]wal.SourceCheckpointMark(nil), committed...)
+	marksMu.Unlock()
+	if len(gotMarks) != 1 || gotMarks[0].BatchSequence != 2 || gotMarks[0].EndOffset != 2 {
+		t.Fatalf("committed checkpoint marks = %+v, want coalesced batch 2 offset 2", gotMarks)
+	}
+
+	time.Sleep(250 * time.Millisecond)
+	deliveriesOfOne := 0
+	for _, batch := range fs.receivedBatches() {
+		if batch.GetBatchSequence() == 1 {
+			deliveriesOfOne++
+		}
+	}
+	if deliveriesOfOne != 1 {
+		t.Fatalf("batch 1 deliveries = %d, want only the original after cumulative ack", deliveriesOfOne)
+	}
+	cancel()
+	<-done
+}
+
+func TestSenderRejectsCumulativeAckBeyondSentHighWater(t *testing.T) {
+	t.Parallel()
+	batch1 := fakeBatch(1, makeEvent("e1", "main"))
+	q := newFakeQueue(batch1, fakeBatch(2, makeEvent("e2", "main")))
+	s, err := New(testOptions(), q, &memSink{}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	c := s.newConn(context.Background(), func() {}, func() {}, nil)
+	c.inflight[1] = batch1
+	c.inflightN = 1
+	c.highestSentBatchSequence = 1
+	through := uint64(2)
+
+	err = c.handleAck(&opensplunkv1.BatchAck{
+		BatchId:                          batch1.GetBatchId(),
+		BatchSequence:                    1,
+		AcknowledgedThroughBatchSequence: &through,
+		Durability:                       opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+		AcceptedEventCount:               1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "exceeds highest batch sequence sent") {
+		t.Fatalf("handleAck error = %v, want sent-high-water validation error", err)
+	}
+	if got := q.Stats(); got.LastAckedBatchSequence != 0 || got.QueuedBatches != 2 {
+		t.Fatalf("invalid cumulative ack mutated queue: %+v", got)
+	}
+	if c.lookupInflight(1) == nil {
+		t.Fatal("invalid cumulative ack released in-flight batch")
+	}
 }
 
 func TestSenderThrottleAppliesSendDelay(t *testing.T) {
@@ -1140,6 +1547,9 @@ func TestSenderRedeliversOrphanedInflightAfterReconnect(t *testing.T) {
 type invalidResumeQueue struct{ *fakeQueue }
 
 func (q *invalidResumeQueue) AckThrough(uint64) error { return wal.ErrInvalidAck }
+func (q *invalidResumeQueue) PrepareAckThrough(uint64) (wal.AckPreview, error) {
+	return wal.AckPreview{}, wal.ErrInvalidAck
+}
 
 // TestSenderContinuesWhenResumePointUnknown covers the fresh-state-dir edge: a
 // server Ready carrying resume_after_batch_sequence ahead of anything the local

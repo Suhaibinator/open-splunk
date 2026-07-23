@@ -19,14 +19,6 @@ const checkpointFileName = "checkpoints.json"
 // change can be detected on load.
 const checkpointFormatVersion = 1
 
-// defaultCheckpointRetention bounds how long a checkpoint for a vanished file
-// is kept. Hosts that rotate to fresh inodes accumulate one entry per rotated
-// file; without pruning the store grows without bound and every Set rewrites an
-// ever-larger document. Entries older than this are dropped when the store is
-// opened. Seven days comfortably exceeds any plausible collector downtime while
-// keeping the store bounded by the number of files active within the window.
-const defaultCheckpointRetention = 7 * 24 * time.Hour
-
 // checkpointDoc is the on-disk shape of the checkpoint store.
 type checkpointDoc struct {
 	Version     int          `json:"version"`
@@ -40,8 +32,9 @@ type fileCheckpointStore struct {
 	dir  string
 	path string
 
-	mu      sync.Mutex
-	entries map[string]Checkpoint // keyed by FileIdentity.TrackingKey()
+	mu              sync.Mutex
+	entries         map[string]Checkpoint // keyed by FileIdentity.TrackingKey()
+	persistSnapshot func([]Checkpoint) error
 }
 
 // NewCheckpointStore opens or creates the checkpoint store rooted at dir. A
@@ -63,33 +56,11 @@ func NewCheckpointStore(dir string) (CheckpointStore, error) {
 		path:    filepath.Join(dir, checkpointFileName),
 		entries: make(map[string]Checkpoint),
 	}
+	s.persistSnapshot = s.writeSnapshot
 	if err := s.load(); err != nil {
 		return nil, err
 	}
-	if _, err := s.pruneOlderThan(defaultCheckpointRetention); err != nil {
-		return nil, err
-	}
 	return s, nil
-}
-
-// pruneOlderThan drops entries whose UpdatedAt is older than retention and
-// persists the result when anything was removed, returning the removed count.
-// Entries with a zero UpdatedAt (a format predating the field) are kept.
-func (s *fileCheckpointStore) pruneOlderThan(retention time.Duration) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	cutoff := time.Now().UTC().Add(-retention)
-	removed := 0
-	for key, cp := range s.entries {
-		if !cp.UpdatedAt.IsZero() && cp.UpdatedAt.Before(cutoff) {
-			delete(s.entries, key)
-			removed++
-		}
-	}
-	if removed == 0 {
-		return 0, nil
-	}
-	return removed, s.persistLocked()
 }
 
 // load reads the store file into memory. A missing file yields an empty store.
@@ -119,25 +90,57 @@ func (s *fileCheckpointStore) Get(id FileIdentity) (Checkpoint, bool, error) {
 	return cp, ok, nil
 }
 
-// Set atomically persists cp (temp file + fsync + rename over the target). If
-// cp.UpdatedAt is unset it is stamped with the current time.
+// Set atomically persists cp by delegating to SetMany.
 func (s *fileCheckpointStore) Set(cp Checkpoint) error {
-	if cp.UpdatedAt.IsZero() {
-		cp.UpdatedAt = time.Now().UTC()
+	return s.SetMany([]Checkpoint{cp})
+}
+
+// SetMany atomically persists all effective checkpoint advances with one temp
+// file + fsync + rename. The in-memory snapshot is not published until that
+// persistence succeeds.
+func (s *fileCheckpointStore) SetMany(checkpoints []Checkpoint) error {
+	if len(checkpoints) == 0 {
+		return nil
 	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := cp.Identity.TrackingKey()
-	if current, ok := s.entries[key]; ok {
-		switch {
-		case cp.Identity.Generation < current.Identity.Generation:
-			return nil // a delayed old-generation batch must not undo truncation
-		case cp.Identity.Generation == current.Identity.Generation && cp.Offset < current.Offset:
-			return nil // offsets are monotonic within one generation
+
+	next := cloneCheckpoints(s.entries)
+	now := time.Now().UTC()
+	changed := false
+	for _, cp := range checkpoints {
+		key := cp.Identity.TrackingKey()
+		if current, ok := next[key]; ok {
+			switch {
+			case cp.Identity.Generation < current.Identity.Generation:
+				continue // a delayed old-generation batch must not undo truncation
+			case cp.Identity.Generation == current.Identity.Generation && cp.Offset < current.Offset:
+				continue // offsets are monotonic within one generation
+			case cp.Identity.Generation == current.Identity.Generation && cp.Offset == current.Offset &&
+				checkpointPositionEqual(cp, current):
+				continue
+			}
 		}
+		if cp.UpdatedAt.IsZero() {
+			cp.UpdatedAt = now
+		}
+		next[key] = cp
+		changed = true
 	}
-	s.entries[key] = cp
-	return s.persistLocked()
+	if !changed {
+		return nil
+	}
+	if err := s.persistEntriesLocked(next); err != nil {
+		return err
+	}
+	s.entries = next
+	return nil
+}
+
+func checkpointPositionEqual(left, right Checkpoint) bool {
+	return left.Identity == right.Identity && left.Path == right.Path &&
+		left.Offset == right.Offset && left.LineNumber == right.LineNumber
 }
 
 // Delete removes the checkpoint for id, if any, and persists the result.
@@ -148,8 +151,13 @@ func (s *fileCheckpointStore) Delete(id FileIdentity) error {
 	if _, ok := s.entries[key]; !ok {
 		return nil
 	}
-	delete(s.entries, key)
-	return s.persistLocked()
+	next := cloneCheckpoints(s.entries)
+	delete(next, key)
+	if err := s.persistEntriesLocked(next); err != nil {
+		return err
+	}
+	s.entries = next
+	return nil
 }
 
 // List returns all persisted checkpoints, ordered by identity for determinism.
@@ -165,8 +173,12 @@ func (s *fileCheckpointStore) Close() error { return nil }
 
 // snapshotLocked returns the entries as an identity-sorted slice.
 func (s *fileCheckpointStore) snapshotLocked() []Checkpoint {
-	out := make([]Checkpoint, 0, len(s.entries))
-	for _, cp := range s.entries {
+	return checkpointSnapshot(s.entries)
+}
+
+func checkpointSnapshot(entries map[string]Checkpoint) []Checkpoint {
+	out := make([]Checkpoint, 0, len(entries))
+	for _, cp := range entries {
 		out = append(out, cp)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -175,12 +187,25 @@ func (s *fileCheckpointStore) snapshotLocked() []Checkpoint {
 	return out
 }
 
-// persistLocked writes the whole store atomically: marshal, write a temp file
+func cloneCheckpoints(entries map[string]Checkpoint) map[string]Checkpoint {
+	cloned := make(map[string]Checkpoint, len(entries))
+	for key, cp := range entries {
+		cloned[key] = cp
+	}
+	return cloned
+}
+
+// persistEntriesLocked persists entries in deterministic identity order.
+func (s *fileCheckpointStore) persistEntriesLocked(entries map[string]Checkpoint) error {
+	return s.persistSnapshot(checkpointSnapshot(entries))
+}
+
+// writeSnapshot writes the whole store atomically: marshal, write a temp file
 // in the same directory, fsync it, rename over the target, then fsync the
 // directory so the rename itself is durable. A crash leaves either the old or
 // the new complete file, never a torn one.
-func (s *fileCheckpointStore) persistLocked() error {
-	doc := checkpointDoc{Version: checkpointFormatVersion, Checkpoints: s.snapshotLocked()}
+func (s *fileCheckpointStore) writeSnapshot(checkpoints []Checkpoint) error {
+	doc := checkpointDoc{Version: checkpointFormatVersion, Checkpoints: checkpoints}
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return fmt.Errorf("collector/input: marshal checkpoints: %w", err)

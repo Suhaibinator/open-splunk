@@ -165,7 +165,15 @@ export interface EventOrigin {
   fileIdentity?: string | undefined;
   startOffset?: bigint | undefined;
   endOffset?: bigint | undefined;
-  lineNumber?: bigint | undefined;
+  lineNumber?:
+    | bigint
+    | undefined;
+  /**
+   * source_path and file_fingerprint_length let a collector reconstruct the
+   * exact input checkpoint from a durable WAL batch after process restart.
+   */
+  sourcePath?: string | undefined;
+  fileFingerprintLength?: number | undefined;
 }
 
 /**
@@ -195,7 +203,15 @@ export interface LogEvent {
 }
 
 function createBaseEventOrigin(): EventOrigin {
-  return { inputId: "", fileIdentity: undefined, startOffset: undefined, endOffset: undefined, lineNumber: undefined };
+  return {
+    inputId: "",
+    fileIdentity: undefined,
+    startOffset: undefined,
+    endOffset: undefined,
+    lineNumber: undefined,
+    sourcePath: undefined,
+    fileFingerprintLength: undefined,
+  };
 }
 
 export const EventOrigin: MessageFns<EventOrigin> = {
@@ -223,6 +239,12 @@ export const EventOrigin: MessageFns<EventOrigin> = {
         throw new globalThis.Error("value provided for field message.lineNumber of type uint64 too large");
       }
       writer.uint32(40).uint64(message.lineNumber);
+    }
+    if (message.sourcePath !== undefined) {
+      writer.uint32(50).string(message.sourcePath);
+    }
+    if (message.fileFingerprintLength !== undefined) {
+      writer.uint32(56).uint32(message.fileFingerprintLength);
     }
     return writer;
   },
@@ -274,6 +296,22 @@ export const EventOrigin: MessageFns<EventOrigin> = {
           message.lineNumber = reader.uint64() as bigint;
           continue;
         }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.sourcePath = reader.string();
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.fileFingerprintLength = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -310,6 +348,16 @@ export const EventOrigin: MessageFns<EventOrigin> = {
         : isSet(object.line_number)
         ? BigInt(object.line_number)
         : undefined,
+      sourcePath: isSet(object.sourcePath)
+        ? globalThis.String(object.sourcePath)
+        : isSet(object.source_path)
+        ? globalThis.String(object.source_path)
+        : undefined,
+      fileFingerprintLength: isSet(object.fileFingerprintLength)
+        ? globalThis.Number(object.fileFingerprintLength)
+        : isSet(object.file_fingerprint_length)
+        ? globalThis.Number(object.file_fingerprint_length)
+        : undefined,
     };
   },
 
@@ -330,6 +378,12 @@ export const EventOrigin: MessageFns<EventOrigin> = {
     if (message.lineNumber !== undefined) {
       obj.lineNumber = message.lineNumber.toString();
     }
+    if (message.sourcePath !== undefined) {
+      obj.sourcePath = message.sourcePath;
+    }
+    if (message.fileFingerprintLength !== undefined) {
+      obj.fileFingerprintLength = Math.round(message.fileFingerprintLength);
+    }
     return obj;
   },
 
@@ -349,6 +403,8 @@ export const EventOrigin: MessageFns<EventOrigin> = {
     message.lineNumber = (object.lineNumber !== undefined && object.lineNumber !== null)
       ? BigInt(object.lineNumber)
       : undefined;
+    message.sourcePath = object.sourcePath ?? undefined;
+    message.fileFingerprintLength = object.fileFingerprintLength ?? undefined;
     return message;
   },
 };

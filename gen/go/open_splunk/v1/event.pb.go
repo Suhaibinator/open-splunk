@@ -187,14 +187,18 @@ func (EventTimeSource) EnumDescriptor() ([]byte, []int) {
 // EventOrigin identifies the collector input and durable source position that
 // produced an event. It is diagnostic metadata, not a server-side checkpoint.
 type EventOrigin struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InputId       string                 `protobuf:"bytes,1,opt,name=input_id,json=inputId,proto3" json:"input_id,omitempty"`
-	FileIdentity  *string                `protobuf:"bytes,2,opt,name=file_identity,json=fileIdentity,proto3,oneof" json:"file_identity,omitempty"`
-	StartOffset   *uint64                `protobuf:"varint,3,opt,name=start_offset,json=startOffset,proto3,oneof" json:"start_offset,omitempty"`
-	EndOffset     *uint64                `protobuf:"varint,4,opt,name=end_offset,json=endOffset,proto3,oneof" json:"end_offset,omitempty"`
-	LineNumber    *uint64                `protobuf:"varint,5,opt,name=line_number,json=lineNumber,proto3,oneof" json:"line_number,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	InputId      string                 `protobuf:"bytes,1,opt,name=input_id,json=inputId,proto3" json:"input_id,omitempty"`
+	FileIdentity *string                `protobuf:"bytes,2,opt,name=file_identity,json=fileIdentity,proto3,oneof" json:"file_identity,omitempty"`
+	StartOffset  *uint64                `protobuf:"varint,3,opt,name=start_offset,json=startOffset,proto3,oneof" json:"start_offset,omitempty"`
+	EndOffset    *uint64                `protobuf:"varint,4,opt,name=end_offset,json=endOffset,proto3,oneof" json:"end_offset,omitempty"`
+	LineNumber   *uint64                `protobuf:"varint,5,opt,name=line_number,json=lineNumber,proto3,oneof" json:"line_number,omitempty"`
+	// source_path and file_fingerprint_length let a collector reconstruct the
+	// exact input checkpoint from a durable WAL batch after process restart.
+	SourcePath            *string `protobuf:"bytes,6,opt,name=source_path,json=sourcePath,proto3,oneof" json:"source_path,omitempty"`
+	FileFingerprintLength *uint32 `protobuf:"varint,7,opt,name=file_fingerprint_length,json=fileFingerprintLength,proto3,oneof" json:"file_fingerprint_length,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *EventOrigin) Reset() {
@@ -258,6 +262,20 @@ func (x *EventOrigin) GetEndOffset() uint64 {
 func (x *EventOrigin) GetLineNumber() uint64 {
 	if x != nil && x.LineNumber != nil {
 		return *x.LineNumber
+	}
+	return 0
+}
+
+func (x *EventOrigin) GetSourcePath() string {
+	if x != nil && x.SourcePath != nil {
+		return *x.SourcePath
+	}
+	return ""
+}
+
+func (x *EventOrigin) GetFileFingerprintLength() uint32 {
+	if x != nil && x.FileFingerprintLength != nil {
+		return *x.FileFingerprintLength
 	}
 	return 0
 }
@@ -449,7 +467,7 @@ var File_open_splunk_v1_event_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_event_proto_rawDesc = "" +
 	"\n" +
-	"\x1aopen_splunk/v1/event.proto\x12\x0eopen_splunk.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1aopen_splunk/v1/value.proto\"\x86\x02\n" +
+	"\x1aopen_splunk/v1/event.proto\x12\x0eopen_splunk.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1aopen_splunk/v1/value.proto\"\x95\x03\n" +
 	"\vEventOrigin\x12\x19\n" +
 	"\binput_id\x18\x01 \x01(\tR\ainputId\x12(\n" +
 	"\rfile_identity\x18\x02 \x01(\tH\x00R\ffileIdentity\x88\x01\x01\x12&\n" +
@@ -457,11 +475,16 @@ const file_open_splunk_v1_event_proto_rawDesc = "" +
 	"\n" +
 	"end_offset\x18\x04 \x01(\x04H\x02R\tendOffset\x88\x01\x01\x12$\n" +
 	"\vline_number\x18\x05 \x01(\x04H\x03R\n" +
-	"lineNumber\x88\x01\x01B\x10\n" +
+	"lineNumber\x88\x01\x01\x12$\n" +
+	"\vsource_path\x18\x06 \x01(\tH\x04R\n" +
+	"sourcePath\x88\x01\x01\x12;\n" +
+	"\x17file_fingerprint_length\x18\a \x01(\rH\x05R\x15fileFingerprintLength\x88\x01\x01B\x10\n" +
 	"\x0e_file_identityB\x0f\n" +
 	"\r_start_offsetB\r\n" +
 	"\v_end_offsetB\x0e\n" +
-	"\f_line_number\"\x9e\x06\n" +
+	"\f_line_numberB\x0e\n" +
+	"\f_source_pathB\x1a\n" +
+	"\x18_file_fingerprint_length\"\x9e\x06\n" +
 	"\bLogEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1d\n" +
 	"\n" +

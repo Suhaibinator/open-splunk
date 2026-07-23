@@ -4,8 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 )
 
 // defaultFingerprintBytes is the number of leading bytes hashed into a file
@@ -88,4 +91,69 @@ func NewFileIdentity(path string, fingerprintBytes int) (FileIdentity, error) {
 		return FileIdentity{}, err
 	}
 	return identityFor(f, fi, fingerprintBytes)
+}
+
+// ParseFileIdentity parses the canonical representation emitted by
+// [FileIdentity.String]. It intentionally rejects legacy, reordered,
+// non-canonical, and malformed values: checkpoint reconstruction from a WAL
+// event must never silently reinterpret an ambiguous source identity.
+//
+// FingerprintLength is not encoded in the historical identity string. Callers
+// reconstructing a checkpoint must restore it from EventOrigin's separate
+// file_fingerprint_length field.
+func ParseFileIdentity(value string) (FileIdentity, error) {
+	parts := strings.Split(value, ";")
+	if len(parts) != 4 {
+		return FileIdentity{}, fmt.Errorf("collector/input: invalid file identity %q: want four fields", value)
+	}
+	parseUint := func(part, prefix string) (uint64, error) {
+		if !strings.HasPrefix(part, prefix) {
+			return 0, fmt.Errorf("collector/input: invalid file identity %q: want %s field", value, strings.TrimSuffix(prefix, "="))
+		}
+		raw := strings.TrimPrefix(part, prefix)
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("collector/input: invalid file identity %q: parse %s: %w", value, strings.TrimSuffix(prefix, "="), err)
+		}
+		// FileIdentity.String emits canonical base-10 without leading zeroes.
+		if strconv.FormatUint(parsed, 10) != raw {
+			return 0, fmt.Errorf("collector/input: invalid file identity %q: non-canonical %s", value, strings.TrimSuffix(prefix, "="))
+		}
+		return parsed, nil
+	}
+	device, err := parseUint(parts[0], "dev=")
+	if err != nil {
+		return FileIdentity{}, err
+	}
+	inode, err := parseUint(parts[1], "ino=")
+	if err != nil {
+		return FileIdentity{}, err
+	}
+	generation, err := parseUint(parts[2], "gen=")
+	if err != nil {
+		return FileIdentity{}, err
+	}
+	if generation == 0 {
+		return FileIdentity{}, fmt.Errorf("collector/input: invalid file identity %q: generation must be positive", value)
+	}
+	if !strings.HasPrefix(parts[3], "fp=") {
+		return FileIdentity{}, fmt.Errorf("collector/input: invalid file identity %q: want fp field", value)
+	}
+	fingerprint := strings.TrimPrefix(parts[3], "fp=")
+	if len(fingerprint) != sha256.Size*2 || strings.ToLower(fingerprint) != fingerprint {
+		return FileIdentity{}, fmt.Errorf("collector/input: invalid file identity %q: fingerprint must be canonical SHA-256 hex", value)
+	}
+	if _, err := hex.DecodeString(fingerprint); err != nil {
+		return FileIdentity{}, fmt.Errorf("collector/input: invalid file identity %q: parse fingerprint: %w", value, err)
+	}
+	id := FileIdentity{
+		Device:      device,
+		Inode:       inode,
+		Generation:  generation,
+		Fingerprint: fingerprint,
+	}
+	if id.String() != value {
+		return FileIdentity{}, fmt.Errorf("collector/input: invalid non-canonical file identity %q", value)
+	}
+	return id, nil
 }

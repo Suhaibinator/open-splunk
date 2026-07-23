@@ -31,6 +31,41 @@ func TestFileIdentityString(t *testing.T) {
 	}
 }
 
+func TestParseFileIdentityStrictRoundTrip(t *testing.T) {
+	t.Parallel()
+	id := FileIdentity{
+		Device:      17,
+		Inode:       29,
+		Generation:  3,
+		Fingerprint: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	}
+	got, err := ParseFileIdentity(id.String())
+	if err != nil {
+		t.Fatalf("ParseFileIdentity: %v", err)
+	}
+	if got != id {
+		t.Fatalf("parsed identity = %+v, want %+v", got, id)
+	}
+}
+
+func TestParseFileIdentityRejectsNonCanonicalOrIncompleteValues(t *testing.T) {
+	t.Parallel()
+	validFP := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	for _, raw := range []string{
+		"",
+		"dev=1;ino=2;fp=" + validFP,
+		"dev=1;ino=2;gen=0;fp=" + validFP,
+		"dev=01;ino=2;gen=1;fp=" + validFP,
+		"dev=1;ino=2;gen=1;fp=xyz",
+		"dev=1;ino=2;gen=1;fp=" + validFP + ";extra=1",
+		"ino=2;dev=1;gen=1;fp=" + validFP,
+	} {
+		if _, err := ParseFileIdentity(raw); err == nil {
+			t.Errorf("ParseFileIdentity(%q) succeeded, want error", raw)
+		}
+	}
+}
+
 func TestIdentityStableAcrossRename(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

@@ -36,6 +36,12 @@ type conn struct {
 
 	// sendMu serializes all stream.Send calls (batch, heartbeat, retry, goodbye)
 	// and guards the outgoing stream sequence. gRPC permits one concurrent Send.
+	//
+	// Lock ordering: code that needs both locks must acquire sendMu before mu.
+	// No code may acquire sendMu while holding mu, and mu is always released
+	// before the potentially blocking stream.Send call. This lets terminal
+	// release linearize with a retry's final eligibility check without holding
+	// the general connection-state lock across gRPC flow control.
 	sendMu    sync.Mutex
 	streamSeq uint64
 	recvSeq   uint64
@@ -47,10 +53,16 @@ type conn struct {
 	// ack can map event indices back to events.
 	inflight  map[uint64]*opensplunkv1.EventBatch
 	inflightN int
+	// highestSentBatchSequence bounds cumulative acknowledgments to data this
+	// connection has actually dispatched. The WAL may already contain newer
+	// batches, but a buggy or compromised server must not be able to burn them.
+	highestSentBatchSequence uint64
 	// pendingRetry tracks batch sequences with a resend already scheduled, so a
 	// flood of RetryBatch messages for one sequence coalesces to a single resend
-	// goroutine instead of spawning one per message.
-	pendingRetry map[uint64]struct{}
+	// goroutine instead of spawning one per message. Each entry is independently
+	// cancellable so a terminal disposition promptly releases its goroutine and
+	// retained EventBatch instead of waiting out a server-controlled delay.
+	pendingRetry map[uint64]*scheduledRetry
 
 	maxInFlight    int
 	maxBatchEvents uint32
@@ -69,6 +81,11 @@ type conn struct {
 	serverReconnectDur time.Duration
 }
 
+type scheduledRetry struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
 func (s *Sender) newConn(ctx context.Context, cancel, streamCancel context.CancelFunc, stream opensplunkv1.CollectorIngestService_CollectClient) *conn {
 	c := &conn{
 		s:            s,
@@ -77,7 +94,7 @@ func (s *Sender) newConn(ctx context.Context, cancel, streamCancel context.Cance
 		cancel:       cancel,
 		streamCancel: streamCancel,
 		inflight:     make(map[uint64]*opensplunkv1.EventBatch),
-		pendingRetry: make(map[uint64]struct{}),
+		pendingRetry: make(map[uint64]*scheduledRetry),
 	}
 	c.cond = sync.NewCond(&c.mu)
 	return c
@@ -223,6 +240,12 @@ func (c *conn) awaitReady() error {
 			"collector/sender: server protocol major %d is incompatible with %d",
 			ready.GetProtocolMajor(), c.s.opts.ProtocolMajor)}
 	}
+	if ready.GetAcknowledgmentDurability() != opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED {
+		return &fatalError{err: fmt.Errorf(
+			"collector/sender: server acknowledgment durability %s cannot safely advance source checkpoints",
+			ready.GetAcknowledgmentDurability().String(),
+		)}
+	}
 	c.ready = ready
 
 	c.mu.Lock()
@@ -239,9 +262,10 @@ func (c *conn) awaitReady() error {
 	// unacked batch.
 	if ready.ResumeAfterBatchSequence != nil {
 		resume := ready.GetResumeAfterBatchSequence()
-		switch err := c.s.queue.AckThrough(resume); {
+		through, err := c.s.commitTerminal(resume, true)
+		switch {
 		case err == nil:
-			c.s.markAcked(resume, 0)
+			c.s.markAcked(through, 0)
 		case errors.Is(err, wal.ErrInvalidAck):
 			// The server remembers a durability point this queue does not know —
 			// typically a fresh or quarantined state directory behind an older
@@ -263,6 +287,11 @@ func (c *conn) awaitReady() error {
 func (c *conn) send(req *opensplunkv1.CollectRequest) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	return c.sendLocked(req)
+}
+
+// sendLocked stamps and transmits req while the caller holds sendMu.
+func (c *conn) sendLocked(req *opensplunkv1.CollectRequest) error {
 	c.streamSeq++
 	req.StreamSequence = c.streamSeq
 	req.SentAt = timestamppb.New(c.s.now().UTC())
@@ -313,11 +342,13 @@ func (c *conn) pumpLoop() {
 				c.fail(err)
 				return
 			}
-			if err := c.s.queue.Ack(batch.GetBatchSequence()); err != nil {
+			through, err := c.s.commitTerminal(batch.GetBatchSequence(), false)
+			if err != nil {
 				c.fail(err)
 				return
 			}
 			c.s.markDropped(uint64(len(batch.GetEvents())))
+			c.s.markAcked(through, 0)
 			continue
 		}
 
@@ -335,6 +366,9 @@ func (c *conn) pumpLoop() {
 		c.mu.Lock()
 		c.inflightN++
 		c.inflight[batch.GetBatchSequence()] = batch
+		if batch.GetBatchSequence() > c.highestSentBatchSequence {
+			c.highestSentBatchSequence = batch.GetBatchSequence()
+		}
 		c.mu.Unlock()
 
 		if err := c.send(&opensplunkv1.CollectRequest{
@@ -537,6 +571,12 @@ func (c *conn) validateResponse(resp *opensplunkv1.CollectResponse) error {
 // still acked (the ack is terminal).
 func (c *conn) handleAck(ack *opensplunkv1.BatchAck) error {
 	seq := ack.GetBatchSequence()
+	if ack.GetDurability() != opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED {
+		return fmt.Errorf(
+			"collector/sender: ack for batch sequence %d has unsafe durability %s",
+			seq, ack.GetDurability().String(),
+		)
+	}
 	batch := c.lookupInflight(seq)
 	if batch == nil {
 		return fmt.Errorf("collector/sender: ack for unknown batch sequence %d", seq)
@@ -544,13 +584,36 @@ func (c *conn) handleAck(ack *opensplunkv1.BatchAck) error {
 	if ack.GetBatchId() != batch.GetBatchId() {
 		return fmt.Errorf("collector/sender: ack batch id %q does not match sequence %d", ack.GetBatchId(), seq)
 	}
-	if ack.AcknowledgedThroughBatchSequence != nil && ack.GetAcknowledgedThroughBatchSequence() < seq {
-		return fmt.Errorf("collector/sender: acknowledged-through %d precedes batch %d", ack.GetAcknowledgedThroughBatchSequence(), seq)
+	target := seq
+	cumulative := ack.AcknowledgedThroughBatchSequence != nil
+	if cumulative {
+		target = ack.GetAcknowledgedThroughBatchSequence()
+		if target < seq {
+			return fmt.Errorf("collector/sender: acknowledged-through %d precedes batch %d", target, seq)
+		}
+		c.mu.Lock()
+		highestSent := c.highestSentBatchSequence
+		c.mu.Unlock()
+		if target > highestSent {
+			return fmt.Errorf(
+				"collector/sender: acknowledged-through %d exceeds highest batch sequence sent on this connection %d",
+				target, highestSent,
+			)
+		}
 	}
 
 	accounted := uint64(ack.GetAcceptedEventCount()) + uint64(ack.GetDuplicateEventCount()) + uint64(len(ack.GetRejectedEvents()))
 	if accounted != uint64(len(batch.GetEvents())) {
 		return fmt.Errorf("collector/sender: ack accounts for %d of %d events in batch %d", accounted, len(batch.GetEvents()), seq)
+	}
+	// A terminal response supersedes any pending retry. Serialize cancellation
+	// with retry Send before performing durable local side effects; if a later
+	// validation or persistence step fails, the stream is torn down and the WAL
+	// batch is replayed on the next connection.
+	if cumulative {
+		c.cancelRetriesThrough(target)
+	} else {
+		c.cancelRetry(seq)
 	}
 	if rejected := ack.GetRejectedEvents(); len(rejected) > 0 {
 		records := make([]DeadLetterRecord, 0, len(rejected))
@@ -581,13 +644,18 @@ func (c *conn) handleAck(ack *opensplunkv1.BatchAck) error {
 		if err := c.s.writeDeadLetter(records); err != nil {
 			return err
 		}
-		c.s.markRejected(uint64(len(records)))
 	}
-	if err := c.s.queue.Ack(seq); err != nil {
-		return fmt.Errorf("collector/sender: queue ack %d: %w", seq, err)
+	through, err := c.s.commitTerminal(target, cumulative)
+	if err != nil {
+		return fmt.Errorf("collector/sender: queue ack through %d: %w", target, err)
 	}
-	c.s.markAcked(c.s.queue.Stats().LastAckedBatchSequence, uint64(ack.GetAcceptedEventCount())+uint64(ack.GetDuplicateEventCount()))
-	c.releaseInflight(seq)
+	c.s.markRejected(uint64(len(ack.GetRejectedEvents())))
+	c.s.markAcked(through, uint64(ack.GetAcceptedEventCount())+uint64(ack.GetDuplicateEventCount()))
+	if cumulative {
+		c.releaseInflightThrough(target)
+	} else {
+		c.releaseInflight(seq)
+	}
 	return nil
 }
 
@@ -602,6 +670,7 @@ func (c *conn) handleReject(reject *opensplunkv1.BatchReject) error {
 	if reject.GetBatchId() != batch.GetBatchId() {
 		return fmt.Errorf("collector/sender: reject batch id %q does not match sequence %d", reject.GetBatchId(), seq)
 	}
+	c.cancelRetry(seq)
 	records := make([]DeadLetterRecord, 0, len(batch.GetEvents()))
 	now := c.s.now()
 	for _, event := range batch.GetEvents() {
@@ -617,11 +686,12 @@ func (c *conn) handleReject(reject *opensplunkv1.BatchReject) error {
 	if err := c.s.writeDeadLetter(records); err != nil {
 		return err
 	}
-	c.s.markDropped(uint64(len(records)))
-	if err := c.s.queue.Ack(seq); err != nil {
+	through, err := c.s.commitTerminal(seq, false)
+	if err != nil {
 		return fmt.Errorf("collector/sender: queue ack %d: %w", seq, err)
 	}
-	c.s.markAcked(c.s.queue.Stats().LastAckedBatchSequence, 0)
+	c.s.markDropped(uint64(len(records)))
+	c.s.markAcked(through, 0)
 	c.releaseInflight(seq)
 	return nil
 }
@@ -646,32 +716,64 @@ func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) error {
 		c.mu.Unlock()
 		return nil
 	}
-	c.pendingRetry[seq] = struct{}{}
+	retryCtx, cancelRetry := context.WithCancel(c.ctx)
+	scheduled := &scheduledRetry{cancel: cancelRetry, done: make(chan struct{})}
+	c.pendingRetry[seq] = scheduled
 	c.mu.Unlock()
 
 	c.s.markRetried()
 	delay := retry.GetRetryAfter().AsDuration()
-	go func() {
+	go func(state *scheduledRetry) {
+		defer close(state.done)
+		defer state.cancel()
 		defer func() {
 			c.mu.Lock()
-			delete(c.pendingRetry, seq)
+			if c.pendingRetry[seq] == state {
+				delete(c.pendingRetry, seq)
+			}
 			c.mu.Unlock()
 		}()
 		if delay > 0 {
-			if !c.s.sleep(c.ctx, delay) {
+			if !c.s.sleep(retryCtx, delay) {
 				return
 			}
 		}
-		if c.ctx.Err() != nil {
+		if retryCtx.Err() != nil {
 			return
 		}
-		if err := c.send(&opensplunkv1.CollectRequest{
+		sent, err := c.sendRetryIfCurrent(seq, batch, state, &opensplunkv1.CollectRequest{
 			Payload: &opensplunkv1.CollectRequest_Batch{Batch: batch},
-		}); err != nil {
+		})
+		if sent && err != nil {
 			c.fail(err)
 		}
-	}()
+	}(scheduled)
 	return nil
+}
+
+// sendRetryIfCurrent serializes with terminal retry cancellation using the
+// sendMu -> mu lock order. Acquiring sendMu before the final state check removes
+// the old check-then-wait window: once cancellation returns, no not-yet-started
+// retry can subsequently reach stream.Send. If this function wins first, the
+// retry is linearized before terminal release and remains a safe at-least-once
+// duplicate. mu is released before the potentially blocking send.
+func (c *conn) sendRetryIfCurrent(
+	seq uint64,
+	batch *opensplunkv1.EventBatch,
+	state *scheduledRetry,
+	req *opensplunkv1.CollectRequest,
+) (bool, error) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+
+	c.mu.Lock()
+	current := c.inflight[seq]
+	eligible := current == batch && c.pendingRetry[seq] == state && state != nil && c.ctx.Err() == nil
+	c.mu.Unlock()
+	if !eligible {
+		return false, nil
+	}
+	return true, c.sendLocked(req)
 }
 
 // handleThrottle applies the pacing and in-flight limits until effective_until
@@ -720,28 +822,64 @@ func (c *conn) lookupInflight(seq uint64) *opensplunkv1.EventBatch {
 	return c.inflight[seq]
 }
 
+// cancelRetry serializes terminal cancellation with the retry send path. The
+// sendMu -> mu order is shared with sendRetryIfCurrent; cancellation never
+// waits for gRPC while holding mu.
+func (c *conn) cancelRetry(seq uint64) {
+	c.sendMu.Lock()
+	c.mu.Lock()
+	c.cancelRetryLocked(seq)
+	c.mu.Unlock()
+	c.sendMu.Unlock()
+}
+
+func (c *conn) cancelRetriesThrough(seq uint64) {
+	c.sendMu.Lock()
+	c.mu.Lock()
+	for key := range c.pendingRetry {
+		if key <= seq {
+			c.cancelRetryLocked(key)
+		}
+	}
+	c.mu.Unlock()
+	c.sendMu.Unlock()
+}
+
+// cancelRetryLocked removes and wakes one scheduled retry. The caller holds
+// both sendMu and mu, in that order.
+func (c *conn) cancelRetryLocked(seq uint64) {
+	if retry := c.pendingRetry[seq]; retry != nil {
+		delete(c.pendingRetry, seq)
+		retry.cancel()
+	}
+}
+
 func (c *conn) releaseInflight(seq uint64) {
+	c.sendMu.Lock()
 	c.mu.Lock()
 	if _, ok := c.inflight[seq]; ok {
+		c.cancelRetryLocked(seq)
 		delete(c.inflight, seq)
-		delete(c.pendingRetry, seq)
 		c.inflightN--
 		c.cond.Broadcast()
 	}
 	c.mu.Unlock()
+	c.sendMu.Unlock()
 }
 
 func (c *conn) releaseInflightThrough(seq uint64) {
+	c.sendMu.Lock()
 	c.mu.Lock()
 	for key := range c.inflight {
 		if key <= seq {
+			c.cancelRetryLocked(key)
 			delete(c.inflight, key)
-			delete(c.pendingRetry, key)
 			c.inflightN--
 		}
 	}
 	c.cond.Broadcast()
 	c.mu.Unlock()
+	c.sendMu.Unlock()
 }
 
 func (c *conn) deadLetterWholeBatch(batch *opensplunkv1.EventBatch, code, reason string) error {

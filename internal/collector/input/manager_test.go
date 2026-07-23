@@ -241,6 +241,44 @@ func TestManagerResumeFromCheckpoint(t *testing.T) {
 	h.waitForTexts([]string{"second"})
 }
 
+func TestManagerStartAtEndResumesFromStaleCheckpointAfterReopen(t *testing.T) {
+	t.Parallel()
+	sourceDir := t.TempDir()
+	p := filepath.Join(sourceDir, "app.log")
+	writeFileT(t, p, "first\nsecond\nthird\n")
+
+	checkpointDir := t.TempDir()
+	store, err := NewCheckpointStore(checkpointDir)
+	if err != nil {
+		t.Fatalf("NewCheckpointStore: %v", err)
+	}
+	id, err := NewFileIdentity(p, 0)
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	if err := store.Set(Checkpoint{
+		Identity: id, Path: p, Offset: uint64(len("first\n")), LineNumber: 1,
+		UpdatedAt: time.Now().UTC().Add(-staleCheckpointAge),
+	}); err != nil {
+		t.Fatalf("seed stale checkpoint: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close checkpoint store: %v", err)
+	}
+
+	reopened, err := NewCheckpointStore(checkpointDir)
+	if err != nil {
+		t.Fatalf("reopen checkpoint store: %v", err)
+	}
+	h := startManager(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtEnd,
+	}, reopened)
+
+	// start_at=end applies only to truly new sources. A previously tracked source
+	// must resume at its durable position even when its last ack is old.
+	h.waitForTexts([]string{"second", "third"})
+}
+
 func TestManagerRenameRotationContinuity(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

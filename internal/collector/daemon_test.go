@@ -105,10 +105,11 @@ func TestDaemonStateDirectoryHasSingleOwner(t *testing.T) {
 	}
 }
 
-// TestDaemonFileToWALAndCheckpoint exercises the full path: a file is discovered,
-// tailed, decoded, batched, appended durably, and its checkpoint advances only
-// after the append returns.
-func TestDaemonFileToWALAndCheckpoint(t *testing.T) {
+// TestDaemonFileToWALWithheldAckKeepsDiscoveryCheckpoint exercises the full
+// local path while the server is unreachable. WAL append is durable, but no
+// terminal server disposition exists, so the checkpoint must remain at its
+// discovery offset.
+func TestDaemonFileToWALWithheldAckKeepsDiscoveryCheckpoint(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
 	logDir := t.TempDir()
@@ -136,14 +137,14 @@ func TestDaemonFileToWALAndCheckpoint(t *testing.T) {
 		return d.queue.Stats().QueuedEvents == 3
 	})
 
-	// The checkpoint advances to the end of the file (all bytes consumed) only
-	// because the batch was appended durably first.
-	waitFor(t, 2*time.Second, "checkpoint at end of file", func() bool {
+	// The input manager wrote the discovery checkpoint before reading, but WAL
+	// append alone must not move it forward.
+	waitFor(t, 2*time.Second, "discovery checkpoint remains at zero", func() bool {
 		cps, err := d.checkpoints.List()
 		if err != nil || len(cps) != 1 {
 			return false
 		}
-		return cps[0].Offset == uint64(len(lines))
+		return cps[0].Offset == 0
 	})
 
 	cancel()
@@ -178,9 +179,9 @@ func TestDaemonFileToWALAndCheckpoint(t *testing.T) {
 	}
 }
 
-// TestDaemonDecodeFailurePolicy confirms a malformed line is skipped and counted
-// while the valid lines around it are delivered, and the checkpoint still
-// advances past the bad line (covered by a later durable event).
+// TestDaemonDecodeFailurePolicy confirms a malformed line is skipped and
+// counted while valid lines around it are durably queued. With acknowledgments
+// withheld, even a later valid event must not advance the discovery checkpoint.
 func TestDaemonDecodeFailurePolicy(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
@@ -211,10 +212,9 @@ func TestDaemonDecodeFailurePolicy(t *testing.T) {
 	waitFor(t, 2*time.Second, "1 decode failure counted", func() bool {
 		return d.DecodeFailures() == 1
 	})
-	// A later valid event covers the malformed line's position.
-	waitFor(t, 2*time.Second, "checkpoint past malformed line", func() bool {
+	waitFor(t, 2*time.Second, "checkpoint stays at discovery offset", func() bool {
 		cps, err := d.checkpoints.List()
-		return err == nil && len(cps) == 1 && cps[0].Offset == uint64(len(lines))
+		return err == nil && len(cps) == 1 && cps[0].Offset == 0
 	})
 
 	cancel()
@@ -309,15 +309,18 @@ func TestDaemonBackpressureNoDrop(t *testing.T) {
 		}
 	}
 
-	// First event fits and is appended durably; its checkpoint advances.
+	if err := cps.Set(input.Checkpoint{Identity: identity, Path: "/x.log", Offset: 0}); err != nil {
+		t.Fatalf("seed discovery checkpoint: %v", err)
+	}
+
+	// First event fits and is appended durably; its checkpoint does not advance.
 	processed <- mk(0, 100, 1)
 	waitFor(t, time.Second, "first batch appended", func() bool {
 		return q.Stats().QueuedBatches == 1
 	})
-	waitFor(t, time.Second, "checkpoint at 100", func() bool {
-		cp, ok, _ := cps.Get(identity)
-		return ok && cp.Offset == 100
-	})
+	if cp, ok, _ := cps.Get(identity); !ok || cp.Offset != 0 {
+		t.Fatalf("checkpoint after first append = %+v (ok=%t), want discovery offset 0", cp, ok)
+	}
 
 	// Second event is handed to the batcher, which now blocks on ErrQueueFull.
 	processed <- mk(100, 200, 2)
@@ -329,27 +332,133 @@ func TestDaemonBackpressureNoDrop(t *testing.T) {
 		t.Fatal("expected backpressure: send should block while queue is full")
 	case <-time.After(150 * time.Millisecond):
 	}
-	// The queue did not grow and the second event's checkpoint did not advance.
+	// The queue did not grow and no unacknowledged source coordinate advanced.
 	if got := q.Stats().QueuedBatches; got != 1 {
 		t.Fatalf("QueuedBatches while full = %d, want 1", got)
 	}
-	if cp, _, _ := cps.Get(identity); cp.Offset != 100 {
-		t.Fatalf("checkpoint advanced to %d during backpressure, want 100", cp.Offset)
+	if cp, _, _ := cps.Get(identity); cp.Offset != 0 {
+		t.Fatalf("checkpoint advanced to %d without terminal ack, want 0", cp.Offset)
 	}
 
-	// Free space: the stuck batch is now appended and its checkpoint advances.
+	// Free space: the stuck batch is now appended, but direct WAL Ack is not the
+	// sender's terminal transaction and therefore still cannot move checkpoints.
 	if err := q.Ack(1); err != nil {
 		t.Fatalf("Ack: %v", err)
 	}
 	waitFor(t, time.Second, "second batch appended after ack", func() bool {
-		cp, ok, _ := cps.Get(identity)
-		return ok && cp.Offset == 200
+		return q.Stats().QueuedBatches == 1 && q.Stats().NextBatchSequence == 3
 	})
+	if cp, ok, _ := cps.Get(identity); !ok || cp.Offset != 0 {
+		t.Fatalf("checkpoint after second append = %+v (ok=%t), want discovery offset 0", cp, ok)
+	}
 
 	// Closing the stream (not ctx) is how the batcher terminates, mirroring the
 	// daemon where the input readers close the processed channel on shutdown.
 	close(processed)
 	<-batcherDone
+}
+
+func TestDaemonTerminalAckAdvancesCheckpointOnlyAfterDisposition(t *testing.T) {
+	t.Parallel()
+	d, identity := newTerminalCheckpointTestDaemon(t)
+	if err := d.flush(context.Background(), terminalPendingBatch(identity, 0, 100, 1)); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if cp, ok, _ := d.checkpoints.Get(identity); !ok || cp.Offset != 0 {
+		t.Fatalf("checkpoint after withheld ack = %+v (ok=%t), want 0", cp, ok)
+	}
+
+	prepared, err := d.queue.PrepareAck(1)
+	if err != nil {
+		t.Fatalf("PrepareAck: %v", err)
+	}
+	if err := commitTerminalCheckpoints(d.checkpoints, prepared.Marks); err != nil {
+		t.Fatalf("commitTerminalCheckpoints: %v", err)
+	}
+	if err := d.queue.Ack(1); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+	if cp, ok, _ := d.checkpoints.Get(identity); !ok || cp.Offset != 100 {
+		t.Fatalf("checkpoint after terminal ack = %+v (ok=%t), want 100", cp, ok)
+	}
+}
+
+func TestDaemonOutOfOrderTerminalAckDoesNotAdvancePastGap(t *testing.T) {
+	t.Parallel()
+	d, identity := newTerminalCheckpointTestDaemon(t)
+	for sequence, bounds := range [][2]uint64{{0, 100}, {100, 200}} {
+		if err := d.flush(context.Background(), terminalPendingBatch(identity, bounds[0], bounds[1], uint64(sequence+1))); err != nil {
+			t.Fatalf("flush batch %d: %v", sequence+1, err)
+		}
+	}
+
+	prepared, err := d.queue.PrepareAck(2)
+	if err != nil {
+		t.Fatalf("PrepareAck(2): %v", err)
+	}
+	if len(prepared.Marks) != 0 {
+		t.Fatalf("out-of-order PrepareAck(2) returned %d marks, want none", len(prepared.Marks))
+	}
+	if err := d.queue.Ack(2); err != nil {
+		t.Fatalf("Ack(2): %v", err)
+	}
+	if cp, _, _ := d.checkpoints.Get(identity); cp.Offset != 0 {
+		t.Fatalf("out-of-order ack advanced checkpoint to %d, want 0", cp.Offset)
+	}
+
+	prepared, err = d.queue.PrepareAck(1)
+	if err != nil {
+		t.Fatalf("PrepareAck(1): %v", err)
+	}
+	if len(prepared.Marks) != 1 {
+		t.Fatalf("PrepareAck(1) returned %d marks, want one coalesced source", len(prepared.Marks))
+	}
+	if err := commitTerminalCheckpoints(d.checkpoints, prepared.Marks); err != nil {
+		t.Fatalf("commitTerminalCheckpoints: %v", err)
+	}
+	if err := d.queue.Ack(1); err != nil {
+		t.Fatalf("Ack(1): %v", err)
+	}
+	if cp, ok, _ := d.checkpoints.Get(identity); !ok || cp.Offset != 200 {
+		t.Fatalf("checkpoint after gap closure = %+v (ok=%t), want 200", cp, ok)
+	}
+}
+
+func newTerminalCheckpointTestDaemon(t *testing.T) (*Daemon, input.FileIdentity) {
+	t.Helper()
+	q, err := wal.Open(wal.Options{
+		Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "cid", ProtocolMajor: protocolMajor,
+	})
+	if err != nil {
+		t.Fatalf("wal.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+	cps, err := input.NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCheckpointStore: %v", err)
+	}
+	t.Cleanup(func() { _ = cps.Close() })
+	identity := input.FileIdentity{
+		Device: 1, Inode: 2, Generation: 1,
+		Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 128,
+	}
+	if err := cps.Set(input.Checkpoint{Identity: identity, Path: "/x.log", Offset: 0}); err != nil {
+		t.Fatalf("seed discovery checkpoint: %v", err)
+	}
+	return &Daemon{
+		log: discardLogger(), now: time.Now, queue: q, checkpoints: cps,
+		lastOffsets: make(map[string]uint64),
+	}, identity
+}
+
+func terminalPendingBatch(identity input.FileIdentity, start, end, line uint64) *pendingBatch {
+	event := checkpointBatch(0, identity, "/x.log", start, end, line).GetEvents()[0]
+	batch := &pendingBatch{}
+	batch.add(processedEvent{
+		event: event, identity: identity, path: "/x.log",
+		endOffset: end, lineNumber: line, size: proto.Size(event),
+	})
+	return batch
 }
 
 type appendFailQueue struct{ wal.Queue }
@@ -460,8 +569,8 @@ func TestDaemonGracefulShutdownFlushesPartialBatch(t *testing.T) {
 	if got := q.Stats().QueuedEvents; got != 1 {
 		t.Fatalf("QueuedEvents after shutdown flush = %d, want 1", got)
 	}
-	if cp, ok, _ := cps.Get(identity); !ok || cp.Offset != 42 {
-		t.Fatalf("checkpoint after flush = %+v, want offset 42", cp)
+	if _, ok, _ := cps.Get(identity); ok {
+		t.Fatal("shutdown WAL flush advanced a checkpoint without terminal acknowledgment")
 	}
 }
 

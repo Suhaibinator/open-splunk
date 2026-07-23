@@ -38,7 +38,8 @@ type FileIdentity struct {
 }
 
 // String returns the stable identity string passed to the decoder as
-// SourcePosition.FileIdentity (for example "dev=1;ino=2;fp=ab12").
+// SourcePosition.FileIdentity (for example
+// "dev=1;ino=2;gen=3;fp=<lowercase-sha256-hex>").
 func (id FileIdentity) String() string {
 	return "dev=" + strconv.FormatUint(id.Device, 10) +
 		";ino=" + strconv.FormatUint(id.Inode, 10) +
@@ -90,14 +91,19 @@ type Checkpoint struct {
 	UpdatedAt  time.Time
 }
 
-// CheckpointStore persists per-file read offsets durably. Set must be atomic:
-// a crash at any point leaves either the old or the new checkpoint, never a
-// torn one. Implementations must be safe for concurrent use.
+// CheckpointStore persists per-file read offsets durably. Set and SetMany must
+// be atomic: a crash at any point leaves either the old or the new checkpoint
+// snapshot, never a torn or partially applied one. Implementations must be safe
+// for concurrent use.
 type CheckpointStore interface {
 	// Get returns the checkpoint for id and whether one exists.
 	Get(id FileIdentity) (Checkpoint, bool, error)
 	// Set atomically persists cp (temp file + fsync + rename).
 	Set(cp Checkpoint) error
+	// SetMany atomically persists every effective checkpoint advance with one
+	// temp-file rewrite. Stale generations, regressing offsets, and positions
+	// already persisted are ignored.
+	SetMany(checkpoints []Checkpoint) error
 	// Delete removes the checkpoint for id, if any.
 	Delete(id FileIdentity) error
 	// List returns all persisted checkpoints (used for reconciliation).
@@ -145,7 +151,7 @@ type Config struct {
 
 // Manager discovers and tails the files for one input, emitting RawEvents until
 // its context is cancelled. It reads initial offsets from the CheckpointStore
-// but never advances them; the daemon owns advancement after WAL durability.
+// but never advances them; the daemon owns advancement after terminal delivery.
 type Manager interface {
 	// Run blocks tailing until ctx is cancelled or a fatal setup error occurs.
 	// Per-file read errors are surfaced through Health, not returned.

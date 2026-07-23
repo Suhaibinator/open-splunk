@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -20,17 +21,36 @@ import (
 // batch record is written. Production code never sets the hook.
 var errSimulatedCrash = errors.New("collector/wal: simulated crash after meta write")
 
+// errSimulatedRecoveryCrash is returned by the recovery-ordering test hook
+// after successor segments are durably quarantined but before the triggering
+// corrupt segment is repaired. Production code never enables the hook.
+var errSimulatedRecoveryCrash = errors.New("collector/wal: simulated crash during corruption recovery")
+
 // batchDesc locates one unacked batch record on disk and caches the cheap
 // bookkeeping the queue needs without holding the marshaled batch in memory.
 type batchDesc struct {
-	seq        uint64
-	segName    string
-	payloadOff int64
-	payloadLen uint32
-	crc        uint32
-	eventCount uint64
-	sizeOnDisk uint64 // recordHeaderSize + payloadLen
-	createdAt  time.Time
+	seq         uint64
+	segName     string
+	payloadOff  int64
+	payloadLen  uint32
+	crc         uint32
+	eventCount  uint64
+	sizeOnDisk  uint64 // recordHeaderSize + payloadLen
+	createdAt   time.Time
+	sourceMarks []SourceCheckpointMark
+}
+
+// ackMarkGroup is an immutable view of one batch's cached source marks.
+// PrepareAck copies only these small slice headers while holding q.mu; hash
+// aggregation and sorting happen after the queue is unlocked.
+type ackMarkGroup struct {
+	marks []SourceCheckpointMark
+}
+
+type ackPlan struct {
+	throughBatchSequence uint64
+	batchCount           uint64
+	markGroups           []ackMarkGroup
 }
 
 // segInfo tracks a segment file's sequence span and seal state for reclamation.
@@ -52,10 +72,15 @@ type queue struct {
 	nextSeq   uint64
 	lastAcked uint64
 
-	unacked      []batchDesc
-	deliverIdx   int
-	liveBytes    uint64
-	queuedEvents uint64
+	unacked []batchDesc
+	// unackedHeadWaste counts descriptors cleared from the front since the
+	// current backing array was allocated. It triggers geometric compaction so
+	// repeated single-batch acknowledgments are amortized O(n), while old mark
+	// references and oversized backing arrays are still released promptly.
+	unackedHeadWaste int
+	deliverIdx       int
+	liveBytes        uint64
+	queuedEvents     uint64
 	// terminal contains exact out-of-order acknowledgments not yet representable
 	// by the persisted cumulative high-water mark. It is intentionally volatile:
 	// losing it on crash only causes safe at-least-once replay.
@@ -80,6 +105,8 @@ type queue struct {
 	// the record is written, modeling a crash at that instant. Never set in
 	// production.
 	crashAfterMetaWrite bool
+	// crashAfterSuccessorQuarantine is a test-only recovery ordering hook.
+	crashAfterSuccessorQuarantine bool
 }
 
 // openQueue implements Open: it creates or recovers the on-disk state under
@@ -138,20 +165,70 @@ func openQueue(opts Options) (Queue, error) {
 }
 
 // recover scans existing segments in ascending order, quarantines corrupt
-// tails, and rebuilds the unacked index and segment list.
+// tails, and rebuilds the unacked index and segment list. Once corruption
+// removes an unknown record, every later segment is quarantined too: retaining
+// a later source offset would let checkpoint advancement jump across bytes that
+// now exist in neither the WAL nor the server.
 func (q *queue) recover() error {
 	names, err := listSegments(q.dir)
 	if err != nil {
 		return err
 	}
 	var maxSeq uint64
-	for _, name := range names {
+	for nameIndex, name := range names {
 		firstSeq, _ := parseSegmentName(name)
+		if firstSeq > maxSeq {
+			maxSeq = firstSeq
+		}
 		res, err := scanSegment(filepath.Join(q.dir, name))
 		if err != nil {
 			return err
 		}
+		// Even records behind the barrier contribute only to the defensive next
+		// sequence calculation. They are never made live again.
+		for _, rec := range res.records {
+			if seq := rec.batch.GetBatchSequence(); seq > maxSeq {
+				maxSeq = seq
+			}
+		}
+		stopAfterSegment := res.corrupt
 		if res.corrupt {
+			// Discover the full allocated sequence floor before mutating any
+			// successor. This preserves non-reuse even if meta.json was missing and
+			// recovery crashes partway through quarantine.
+			for _, successor := range names[nameIndex+1:] {
+				successorFirst, _ := parseSegmentName(successor)
+				if successorFirst > maxSeq {
+					maxSeq = successorFirst
+				}
+				successorScan, scanErr := scanSegment(filepath.Join(q.dir, successor))
+				if scanErr != nil {
+					return scanErr
+				}
+				for _, record := range successorScan.records {
+					if seq := record.batch.GetBatchSequence(); seq > maxSeq {
+						maxSeq = seq
+					}
+				}
+			}
+			if err := q.persistRecoveredSequenceFloorLocked(maxSeq); err != nil {
+				return err
+			}
+
+			// Quarantine and fsync every successor while the triggering corrupt
+			// record is still live. Any crash or error in this loop leaves that
+			// record discoverable on the next Open, so the barrier cannot vanish.
+			for _, successor := range names[nameIndex+1:] {
+				if err := quarantineTail(q.dir, successor, 0); err != nil {
+					return fmt.Errorf("collector/wal: quarantine segment after corrupt gap %s: %w", successor, err)
+				}
+				q.quarantined++
+			}
+			if q.crashAfterSuccessorQuarantine {
+				return errSimulatedRecoveryCrash
+			}
+			// Repair the triggering segment last. Once its corrupt marker is no
+			// longer visible, no live successor remains that could cross the gap.
 			if err := quarantineTail(q.dir, name, res.badOffset); err != nil {
 				return fmt.Errorf("collector/wal: quarantine %s: %w", name, err)
 			}
@@ -160,15 +237,15 @@ func (q *queue) recover() error {
 		if len(res.records) == 0 {
 			// Whole segment was garbage (badOffset==0): the live file no longer
 			// exists after quarantine, so there is nothing to track.
+			if stopAfterSegment {
+				break
+			}
 			continue
 		}
 		seg := &segInfo{name: name, firstSeq: firstSeq, sealed: true}
 		for _, rec := range res.records {
 			seq := rec.batch.GetBatchSequence()
 			seg.lastSeq = seq
-			if seq > maxSeq {
-				maxSeq = seq
-			}
 			if seq <= q.lastAcked {
 				// Already acknowledged before the crash; not part of the queue.
 				continue
@@ -178,24 +255,38 @@ func (q *queue) recover() error {
 				createdAt = ts.AsTime()
 			}
 			d := batchDesc{
-				seq:        seq,
-				segName:    name,
-				payloadOff: rec.payloadOff,
-				payloadLen: rec.payloadLen,
-				crc:        rec.crc,
-				eventCount: uint64(len(rec.batch.GetEvents())),
-				sizeOnDisk: uint64(recordHeaderSize) + uint64(rec.payloadLen),
-				createdAt:  createdAt,
+				seq:         seq,
+				segName:     name,
+				payloadOff:  rec.payloadOff,
+				payloadLen:  rec.payloadLen,
+				crc:         rec.crc,
+				eventCount:  uint64(len(rec.batch.GetEvents())),
+				sizeOnDisk:  uint64(recordHeaderSize) + uint64(rec.payloadLen),
+				createdAt:   createdAt,
+				sourceMarks: checkpointMarksForBatch(seq, rec.batch.GetEvents()),
 			}
-			q.unacked = append(q.unacked, d)
+			q.appendUnackedLocked(d)
 			q.liveBytes += d.sizeOnDisk
 			q.queuedEvents += d.eventCount
 		}
 		q.segments = append(q.segments, seg)
+		if stopAfterSegment {
+			break
+		}
 	}
 	// Defensive: never hand out a sequence that a recovered record already used.
-	if maxSeq+1 > q.nextSeq {
-		q.nextSeq = maxSeq + 1
+	if err := q.persistRecoveredSequenceFloorLocked(maxSeq); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (q *queue) persistRecoveredSequenceFloorLocked(maxSeq uint64) error {
+	if maxSeq == ^uint64(0) {
+		return errors.New("collector/wal: recovered batch sequence exhausted uint64")
+	}
+	if next := maxSeq + 1; next > q.nextSeq {
+		q.nextSeq = next
 		if err := q.persistMetaLocked(); err != nil {
 			return err
 		}
@@ -268,16 +359,17 @@ func (q *queue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatc
 	}
 
 	d := batchDesc{
-		seq:        seq,
-		segName:    segName,
-		payloadOff: payloadOff,
-		payloadLen: uint32(len(payload)),
-		crc:        crc32c(payload),
-		eventCount: uint64(len(events)),
-		sizeOnDisk: recordSize,
-		createdAt:  batch.GetCreatedAt().AsTime(),
+		seq:         seq,
+		segName:     segName,
+		payloadOff:  payloadOff,
+		payloadLen:  uint32(len(payload)),
+		crc:         crc32c(payload),
+		eventCount:  uint64(len(events)),
+		sizeOnDisk:  recordSize,
+		createdAt:   batch.GetCreatedAt().AsTime(),
+		sourceMarks: checkpointMarksForBatch(seq, events),
 	}
-	q.unacked = append(q.unacked, d)
+	q.appendUnackedLocked(d)
 	q.liveBytes += recordSize
 	q.queuedEvents += d.eventCount
 	q.signalLocked()
@@ -409,6 +501,17 @@ func (q *queue) Ack(batchSequence uint64) error {
 	return q.advanceTerminalLocked()
 }
 
+// PrepareAck implements Queue.PrepareAck.
+func (q *queue) PrepareAck(batchSequence uint64) (AckPreview, error) {
+	q.mu.Lock()
+	plan, err := q.prepareAckPlanLocked(batchSequence, false)
+	q.mu.Unlock()
+	if err != nil {
+		return AckPreview{}, err
+	}
+	return aggregateAckPlan(plan), nil
+}
+
 // AckThrough implements Queue.AckThrough for a server's explicit cumulative
 // durable claim. Validation prevents a corrupt/malicious future resume value
 // from burning batches that have not even been appended yet.
@@ -433,6 +536,182 @@ func (q *queue) AckThrough(batchSequence uint64) error {
 	return q.advanceTerminalLocked()
 }
 
+// PrepareAckThrough implements Queue.PrepareAckThrough.
+func (q *queue) PrepareAckThrough(batchSequence uint64) (AckPreview, error) {
+	q.mu.Lock()
+	plan, err := q.prepareAckPlanLocked(batchSequence, true)
+	q.mu.Unlock()
+	if err != nil {
+		return AckPreview{}, err
+	}
+	return aggregateAckPlan(plan), nil
+}
+
+// prepareAckPlanLocked validates a hypothetical exact or cumulative ack and
+// snapshots immutable source-mark slice headers for its newly contiguous
+// prefix. It deliberately does not mutate q.terminal or persisted state.
+func (q *queue) prepareAckPlanLocked(batchSequence uint64, cumulative bool) (ackPlan, error) {
+	if q.closed {
+		return ackPlan{}, ErrClosed
+	}
+	if batchSequence <= q.lastAcked {
+		return ackPlan{}, nil
+	}
+	if !q.hasSequenceLocked(batchSequence) {
+		kind := "sequence"
+		if cumulative {
+			kind = "cumulative sequence"
+		}
+		return ackPlan{}, fmt.Errorf("%w: %s %d is not queued", ErrInvalidAck, kind, batchSequence)
+	}
+
+	var plan ackPlan
+	prefixLength := 0
+	markGroupCount := 0
+	for descriptorIndex, d := range q.unacked {
+		_, alreadyTerminal := q.terminal[d.seq]
+		hypotheticallyTerminal := alreadyTerminal || d.seq == batchSequence
+		if cumulative && d.seq <= batchSequence {
+			hypotheticallyTerminal = true
+		}
+		if !hypotheticallyTerminal {
+			break
+		}
+		plan.throughBatchSequence = d.seq
+		plan.batchCount++
+		prefixLength = descriptorIndex + 1
+		if len(d.sourceMarks) > 0 {
+			markGroupCount++
+		}
+	}
+	if markGroupCount == 0 {
+		return plan, nil
+	}
+	// Size the immutable header snapshot exactly. Geometric append growth for a
+	// 100K-batch prefix otherwise allocates and copies tens of megabytes while
+	// holding q.mu even when the final checkpoint set coalesces to one identity.
+	plan.markGroups = make([]ackMarkGroup, 0, markGroupCount)
+	for _, d := range q.unacked[:prefixLength] {
+		if len(d.sourceMarks) > 0 {
+			plan.markGroups = append(plan.markGroups, ackMarkGroup{
+				marks: d.sourceMarks,
+			})
+		}
+	}
+	return plan, nil
+}
+
+// aggregateAckPlan performs the potentially expensive identity hash
+// aggregation and deterministic sort without holding the queue mutex. The mark
+// arrays are immutable after Append/recovery, so a concurrent ack may discard
+// its descriptor without invalidating this snapshot.
+func aggregateAckPlan(plan ackPlan) AckPreview {
+	var byIdentity map[string]SourceCheckpointMark
+	for _, group := range plan.markGroups {
+		if byIdentity == nil {
+			byIdentity = make(map[string]SourceCheckpointMark)
+		}
+		for _, mark := range group.marks {
+			// Preserve the first malformed mark verbatim so the daemon fails
+			// closed without retaining every malformed event in a hostile WAL.
+			if mark.FileIdentity == "" || !mark.HasEndOffset || mark.ConflictingMetadata {
+				return AckPreview{
+					ThroughBatchSequence: plan.throughBatchSequence,
+					BatchCount:           plan.batchCount,
+					Marks:                []SourceCheckpointMark{mark},
+				}
+			}
+			current, ok := byIdentity[mark.FileIdentity]
+			if ok && current.HasFingerprintLength && mark.HasFingerprintLength &&
+				current.FingerprintLength != mark.FingerprintLength {
+				mark.ConflictingMetadata = true
+				return AckPreview{
+					ThroughBatchSequence: plan.throughBatchSequence,
+					BatchCount:           plan.batchCount,
+					Marks:                []SourceCheckpointMark{mark},
+				}
+			}
+			if !ok || mark.EndOffset > current.EndOffset ||
+				(mark.EndOffset == current.EndOffset && mark.BatchSequence >= current.BatchSequence) {
+				byIdentity[mark.FileIdentity] = mark
+			}
+		}
+	}
+	marks := make([]SourceCheckpointMark, 0, len(byIdentity))
+	for _, mark := range byIdentity {
+		marks = append(marks, mark)
+	}
+	sort.Slice(marks, func(i, j int) bool {
+		return marks[i].FileIdentity < marks[j].FileIdentity
+	})
+	return AckPreview{
+		ThroughBatchSequence: plan.throughBatchSequence,
+		BatchCount:           plan.batchCount,
+		Marks:                marks,
+	}
+}
+
+// checkpointMarksForBatch extracts a compact high-water mark per exact file
+// identity while the EventBatch is already resident (Append or recovery).
+// Invalid file origins retain one representative mark so acknowledgment later
+// fails closed instead of silently dropping source coordinates.
+func checkpointMarksForBatch(batchSequence uint64, events []*opensplunkv1.LogEvent) []SourceCheckpointMark {
+	byIdentity := make(map[string]SourceCheckpointMark)
+	var invalid *SourceCheckpointMark
+	for eventIndex, event := range events {
+		if event == nil || event.GetOrigin() == nil || event.GetOrigin().FileIdentity == nil {
+			continue
+		}
+		origin := event.GetOrigin()
+		mark := SourceCheckpointMark{
+			BatchSequence:        batchSequence,
+			EventIndex:           uint32(eventIndex),
+			FileIdentity:         origin.GetFileIdentity(),
+			SourcePath:           origin.GetSourcePath(),
+			EndOffset:            origin.GetEndOffset(),
+			LineNumber:           origin.GetLineNumber(),
+			FingerprintLength:    origin.GetFileFingerprintLength(),
+			HasSourcePath:        origin.SourcePath != nil,
+			HasEndOffset:         origin.EndOffset != nil,
+			HasFingerprintLength: origin.FileFingerprintLength != nil,
+		}
+		if mark.FileIdentity == "" || !mark.HasEndOffset {
+			if invalid == nil {
+				copy := mark
+				invalid = &copy
+			}
+			continue
+		}
+		current, ok := byIdentity[mark.FileIdentity]
+		if ok && current.ConflictingMetadata {
+			continue
+		}
+		if ok && current.HasFingerprintLength && mark.HasFingerprintLength &&
+			current.FingerprintLength != mark.FingerprintLength {
+			mark.ConflictingMetadata = true
+			byIdentity[mark.FileIdentity] = mark
+			continue
+		}
+		if !ok || mark.EndOffset >= current.EndOffset {
+			byIdentity[mark.FileIdentity] = mark
+		}
+	}
+	marks := make([]SourceCheckpointMark, 0, len(byIdentity)+1)
+	if invalid != nil {
+		marks = append(marks, *invalid)
+	}
+	for _, mark := range byIdentity {
+		marks = append(marks, mark)
+	}
+	sort.Slice(marks, func(i, j int) bool {
+		if marks[i].FileIdentity == marks[j].FileIdentity {
+			return marks[i].EventIndex < marks[j].EventIndex
+		}
+		return marks[i].FileIdentity < marks[j].FileIdentity
+	})
+	return marks
+}
+
 func (q *queue) hasSequenceLocked(sequence uint64) bool {
 	for _, d := range q.unacked {
 		if d.seq == sequence {
@@ -443,6 +722,15 @@ func (q *queue) hasSequenceLocked(sequence uint64) bool {
 		}
 	}
 	return false
+}
+
+func (q *queue) appendUnackedLocked(descriptor batchDesc) {
+	// append reallocates exactly when len == cap. Any inaccessible consumed
+	// prefix belongs to the old allocation and can no longer cause retention.
+	if len(q.unacked) == cap(q.unacked) {
+		q.unackedHeadWaste = 0
+	}
+	q.unacked = append(q.unacked, descriptor)
 }
 
 func (q *queue) advanceTerminalLocked() error {
@@ -472,8 +760,30 @@ func (q *queue) advanceTerminalLocked() error {
 		q.liveBytes -= d.sizeOnDisk
 		q.queuedEvents -= d.eventCount
 		delete(q.terminal, d.seq)
+		q.unacked[i] = batchDesc{}
 	}
-	q.unacked = append(q.unacked[:0], q.unacked[removed:]...)
+	remaining := len(q.unacked) - removed
+	q.unackedHeadWaste += removed
+	switch {
+	case remaining == 0:
+		// Retain only a small empty buffer for the common short drain/refill
+		// cycle. Let a large backing array go once the queue becomes empty.
+		if cap(q.unacked) <= 256 {
+			q.unacked = q.unacked[:0]
+		} else {
+			q.unacked = nil
+		}
+		q.unackedHeadWaste = 0
+	case q.unackedHeadWaste >= remaining:
+		// At least half of the backing storage is consumed. One geometric copy
+		// here prevents both O(n²) per-ack shifts and unbounded head retention.
+		compacted := make([]batchDesc, remaining)
+		copy(compacted, q.unacked[removed:])
+		q.unacked = compacted
+		q.unackedHeadWaste = 0
+	default:
+		q.unacked = q.unacked[removed:]
+	}
 	q.deliverIdx -= removed
 	if q.deliverIdx < 0 {
 		q.deliverIdx = 0

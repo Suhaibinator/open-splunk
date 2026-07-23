@@ -233,8 +233,8 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 
 // resolveStart chooses both the durable generation identity and initial offset.
 // A discovery checkpoint is written before any bytes are emitted. This small
-// write is what makes a crash after WAL append but before the first ordinary
-// checkpoint reproduce the same event IDs on restart.
+// write is what makes a crash after WAL append but before the first terminal
+// delivery checkpoint reproduce the same event IDs on restart.
 func (m *manager) resolveStart(id FileIdentity, path string, size uint64, initial bool, f *os.File) (FileIdentity, uint64, error) {
 	cp, ok, err := m.checkpoints.Get(id)
 	if err != nil {

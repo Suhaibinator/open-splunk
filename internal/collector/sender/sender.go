@@ -77,6 +77,12 @@ type Options struct {
 	// InputHealth is a nil-safe provider of per-input health for heartbeats. The
 	// daemon wires it after construction; a nil provider yields no input health.
 	InputHealth func() []*opensplunkv1.CollectorInputHealth
+
+	// OnTerminalMarks durably commits source checkpoints for the newly
+	// contiguous terminal WAL prefix. The sender invokes it after any required
+	// dead-letter write but before Ack/AckThrough mutates the queue. Returning an
+	// error tears down the stream and leaves the batches replayable.
+	OnTerminalMarks func([]wal.SourceCheckpointMark) error
 }
 
 // DeadLetterRecord is one rejected event and why it was rejected, serialized as
@@ -153,6 +159,12 @@ type Sender struct {
 
 	mu    sync.Mutex
 	stats Stats
+
+	// terminalMu serializes PrepareAck -> OnTerminalMarks -> Ack transactions
+	// across the receive loop and the pump's negotiated-limit dead-letter path.
+	// Without this barrier, a concurrent queue mutation could invalidate the
+	// read-only prefix preview before its checkpoint callback commits.
+	terminalMu sync.Mutex
 }
 
 // New constructs a Sender that consumes from queue, dead-letters permanent
@@ -393,6 +405,40 @@ func (s *Sender) writeDeadLetter(records []DeadLetterRecord) error {
 		return fmt.Errorf("collector/sender: persist dead letter: %w", err)
 	}
 	return nil
+}
+
+// commitTerminal makes one exact or cumulative terminal disposition durable.
+// The queue preview is intentionally read-only; source checkpoints are
+// persisted first, and only then is the WAL high-water allowed to advance. A
+// callback failure therefore preserves every affected batch for replay.
+func (s *Sender) commitTerminal(batchSequence uint64, cumulative bool) (uint64, error) {
+	s.terminalMu.Lock()
+	defer s.terminalMu.Unlock()
+
+	var preview wal.AckPreview
+	var err error
+	if cumulative {
+		preview, err = s.queue.PrepareAckThrough(batchSequence)
+	} else {
+		preview, err = s.queue.PrepareAck(batchSequence)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if len(preview.Marks) > 0 && s.opts.OnTerminalMarks != nil {
+		if err := s.opts.OnTerminalMarks(preview.Marks); err != nil {
+			return 0, fmt.Errorf("collector/sender: commit source checkpoints through batch %d: %w", batchSequence, err)
+		}
+	}
+	if cumulative {
+		err = s.queue.AckThrough(batchSequence)
+	} else {
+		err = s.queue.Ack(batchSequence)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return s.queue.Stats().LastAckedBatchSequence, nil
 }
 
 func (s *Sender) buildHeartbeat() *opensplunkv1.CollectorHeartbeat {

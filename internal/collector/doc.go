@@ -23,6 +23,8 @@
 // The queue (collector/wal) is the durability boundary: events are appended and
 // fsynced before transmission, batch identity is minted once at append and is
 // stable across retries, and file checkpoints (collector/input) advance only
-// after the covering events are durable. Delivery is at-least-once; the server
-// deduplicates by stable event ID.
+// after the server returns a terminal disposition with its negotiated
+// ClickHouse-committed durability and the entire earlier WAL prefix is
+// terminal. Delivery is at-least-once; the server deduplicates by stable event
+// ID.
 package collector

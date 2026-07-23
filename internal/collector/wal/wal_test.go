@@ -286,6 +286,156 @@ func TestCorruptCRCQuarantine(t *testing.T) {
 	}
 }
 
+func TestRecoveryQuarantinesEverySegmentAfterCorruptGap(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	opts := defaultOpts(dir)
+	// Force one record per segment so corruption in sequence 2 leaves later,
+	// individually valid segment files for sequences 3 and 4.
+	opts.SegmentMaxBytes = 1
+	q, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for sequence := 1; sequence <= 4; sequence++ {
+		if _, err := q.Append(makeEvents("event-" + itoaForTest(uint64(sequence)))); err != nil {
+			t.Fatalf("Append %d: %v", sequence, err)
+		}
+	}
+	if err := q.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	segments := listWALFiles(t, dir)
+	if len(segments) != 4 {
+		t.Fatalf("live segments = %v, want one per sequence", segments)
+	}
+	secondPath := filepath.Join(dir, segments[1])
+	second, err := scanSegment(secondPath)
+	if err != nil {
+		t.Fatalf("scan second segment: %v", err)
+	}
+	if len(second.records) != 1 {
+		t.Fatalf("second segment records = %d, want 1", len(second.records))
+	}
+	data, err := os.ReadFile(secondPath)
+	if err != nil {
+		t.Fatalf("read second segment: %v", err)
+	}
+	data[second.records[0].payloadOff] ^= 0xff
+	if err := os.WriteFile(secondPath, data, 0o600); err != nil {
+		t.Fatalf("corrupt second segment: %v", err)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen after corruption: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	stats := reopened.Stats()
+	if stats.QuarantinedSegments != 3 {
+		t.Fatalf("QuarantinedSegments = %d, want corrupt segment and both successors", stats.QuarantinedSegments)
+	}
+	if stats.QueuedBatches != 1 {
+		t.Fatalf("QueuedBatches = %d, want only sequence 1 before the corrupt gap", stats.QueuedBatches)
+	}
+	if live := listWALFiles(t, dir); len(live) != 1 || live[0] != segments[0] {
+		t.Fatalf("live segments = %v, want only %s", live, segments[0])
+	}
+	if _, err := reopened.PrepareAckThrough(4); !errors.Is(err, ErrInvalidAck) {
+		t.Fatalf("PrepareAckThrough(4) = %v, want ErrInvalidAck after quarantine barrier", err)
+	}
+	appended, err := reopened.Append(makeEvents("reread-after-gap"))
+	if err != nil {
+		t.Fatalf("Append after quarantine: %v", err)
+	}
+	if appended.GetBatchSequence() != 5 {
+		t.Fatalf("sequence after quarantine = %d, want burned high-water sequence 5", appended.GetBatchSequence())
+	}
+}
+
+func TestRecoveryCrashCannotForgetCorruptGap(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	opts := defaultOpts(dir)
+	opts.SegmentMaxBytes = 1
+	q, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for sequence := 1; sequence <= 4; sequence++ {
+		if _, err := q.Append(makeEvents("event-" + itoaForTest(uint64(sequence)))); err != nil {
+			t.Fatalf("Append %d: %v", sequence, err)
+		}
+	}
+	if err := q.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	segments := listWALFiles(t, dir)
+	secondPath := filepath.Join(dir, segments[1])
+	second, err := scanSegment(secondPath)
+	if err != nil {
+		t.Fatalf("scan second segment: %v", err)
+	}
+	data, err := os.ReadFile(secondPath)
+	if err != nil {
+		t.Fatalf("read second segment: %v", err)
+	}
+	data[second.records[0].payloadOff] ^= 0xff
+	if err := os.WriteFile(secondPath, data, 0o600); err != nil {
+		t.Fatalf("corrupt second segment: %v", err)
+	}
+
+	meta, ok, err := readMeta(dir)
+	if err != nil || !ok {
+		t.Fatalf("readMeta: ok=%v err=%v", ok, err)
+	}
+	crashing := &queue{
+		opts: opts, dir: dir,
+		nextSeq: meta.NextBatchSequence, lastAcked: meta.LastAckedBatchSequence,
+		terminal: make(map[uint64]struct{}), crashAfterSuccessorQuarantine: true,
+	}
+	if err := crashing.recover(); !errors.Is(err, errSimulatedRecoveryCrash) {
+		t.Fatalf("recover with crash hook = %v, want errSimulatedRecoveryCrash", err)
+	}
+	// Successors are already durable quarantine artifacts, while the triggering
+	// corrupt segment intentionally remains live so the next Open rediscovers it.
+	if live := listWALFiles(t, dir); len(live) != 2 || live[0] != segments[0] || live[1] != segments[1] {
+		t.Fatalf("live segments at crash point = %v, want intact first plus corrupt trigger", live)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open after simulated recovery crash: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	stats := reopened.Stats()
+	if stats.QueuedBatches != 1 {
+		t.Fatalf("QueuedBatches after recovery retry = %d, want only sequence 1", stats.QueuedBatches)
+	}
+	if live := listWALFiles(t, dir); len(live) != 1 || live[0] != segments[0] {
+		t.Fatalf("live segments after recovery retry = %v, want only %s", live, segments[0])
+	}
+	if _, err := reopened.PrepareAckThrough(4); !errors.Is(err, ErrInvalidAck) {
+		t.Fatalf("PrepareAckThrough(4) = %v, want ErrInvalidAck after recovery retry", err)
+	}
+}
+
+func itoaForTest(value uint64) string {
+	if value == 0 {
+		return "0"
+	}
+	var digits [20]byte
+	index := len(digits)
+	for value > 0 {
+		index--
+		digits[index] = byte('0' + value%10)
+		value /= 10
+	}
+	return string(digits[index:])
+}
+
 func TestTruncatedTail(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -397,6 +547,190 @@ func TestAckOutOfOrderDoesNotDeleteRetryablePrefix(t *testing.T) {
 	}
 	if got := q.Stats(); got.LastAckedBatchSequence != 2 || got.QueuedBatches != 1 {
 		t.Fatalf("contiguous terminal prefix not advanced: %+v", got)
+	}
+}
+
+func TestPrepareAckReportsOnlyNewlyContiguousBatchesWithoutMutation(t *testing.T) {
+	t.Parallel()
+	q, err := Open(defaultOpts(t.TempDir()))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+	for i := 1; i <= 3; i++ {
+		if _, err := q.Append(makeEvents("event-" + string(rune('0'+i)))); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+
+	prepared, err := q.PrepareAck(2)
+	if err != nil {
+		t.Fatalf("PrepareAck(2): %v", err)
+	}
+	if prepared.BatchCount != 0 || prepared.ThroughBatchSequence != 0 {
+		t.Fatalf("PrepareAck(2) = %+v, want empty preview before gap closes", prepared)
+	}
+	if got := q.Stats(); got.LastAckedBatchSequence != 0 || got.QueuedBatches != 3 {
+		t.Fatalf("PrepareAck mutated queue: %+v", got)
+	}
+	if err := q.Ack(2); err != nil {
+		t.Fatalf("Ack(2): %v", err)
+	}
+
+	prepared, err = q.PrepareAck(1)
+	if err != nil {
+		t.Fatalf("PrepareAck(1): %v", err)
+	}
+	if prepared.BatchCount != 2 || prepared.ThroughBatchSequence != 2 {
+		t.Fatalf("PrepareAck(1) = %+v, want two batches through sequence 2", prepared)
+	}
+	if got := q.Stats(); got.LastAckedBatchSequence != 0 || got.QueuedBatches != 3 {
+		t.Fatalf("PrepareAck mutated queue after gap closed hypothetically: %+v", got)
+	}
+	if err := q.Ack(1); err != nil {
+		t.Fatalf("Ack(1): %v", err)
+	}
+	if got := q.Stats(); got.LastAckedBatchSequence != 2 || got.QueuedBatches != 1 {
+		t.Fatalf("Ack(1) did not commit prepared prefix: %+v", got)
+	}
+}
+
+func TestPrepareAckThroughReconstructsBatchesAfterRestart(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	q, err := Open(defaultOpts(dir))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for i := 1; i <= 3; i++ {
+		if _, err := q.Append(makeEvents("event-" + string(rune('0'+i)))); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+	if err := q.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(defaultOpts(dir))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	prepared, err := reopened.PrepareAckThrough(2)
+	if err != nil {
+		t.Fatalf("PrepareAckThrough(2): %v", err)
+	}
+	if prepared.BatchCount != 2 || prepared.ThroughBatchSequence != 2 {
+		t.Fatalf("prepared preview after restart = %+v, want two batches through sequence 2", prepared)
+	}
+	if got := reopened.Stats(); got.LastAckedBatchSequence != 0 || got.QueuedBatches != 3 {
+		t.Fatalf("PrepareAckThrough mutated reopened queue: %+v", got)
+	}
+}
+
+func TestPrepareAckCachesAndCoalescesSourceMarksAcrossRecovery(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	q, err := Open(defaultOpts(dir))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	identity := "dev=7;ino=9;gen=3;fp=" + strings.Repeat("ab", 32)
+	for sequence, end := range []uint64{100, 200, 350} {
+		event := makeEvents("event")[0]
+		event.Raw = []byte(strings.Repeat("x", 64<<10))
+		event.Origin = &opensplunkv1.EventOrigin{
+			FileIdentity: proto.String(identity), SourcePath: proto.String("/logs/app.log"),
+			EndOffset: proto.Uint64(end), LineNumber: proto.Uint64(uint64(sequence + 1)),
+			FileFingerprintLength: proto.Uint32(1024),
+		}
+		if _, err := q.Append([]*opensplunkv1.LogEvent{event}); err != nil {
+			t.Fatalf("Append %d: %v", sequence+1, err)
+		}
+	}
+	before, err := q.PrepareAckThrough(3)
+	if err != nil {
+		t.Fatalf("PrepareAckThrough before restart: %v", err)
+	}
+	if before.BatchCount != 3 || before.ThroughBatchSequence != 3 || len(before.Marks) != 1 {
+		t.Fatalf("preview before restart = %+v, want 3 batches and one source mark", before)
+	}
+	mark := before.Marks[0]
+	if mark.FileIdentity != identity || mark.SourcePath != "/logs/app.log" || mark.EndOffset != 350 ||
+		mark.LineNumber != 3 || mark.FingerprintLength != 1024 ||
+		!mark.HasSourcePath || !mark.HasEndOffset || !mark.HasFingerprintLength {
+		t.Fatalf("coalesced mark before restart = %+v", mark)
+	}
+	if err := q.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(defaultOpts(dir))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	after, err := reopened.PrepareAckThrough(3)
+	if err != nil {
+		t.Fatalf("PrepareAckThrough after restart: %v", err)
+	}
+	if before.Marks[0] != after.Marks[0] || before.BatchCount != after.BatchCount ||
+		before.ThroughBatchSequence != after.ThroughBatchSequence {
+		t.Fatalf("recovered preview = %+v, want %+v", after, before)
+	}
+}
+
+func TestCheckpointMarksKeepFingerprintConflictSticky(t *testing.T) {
+	t.Parallel()
+	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("cd", 32)
+	events := make([]*opensplunkv1.LogEvent, 0, 3)
+	for index, length := range []uint32{10, 20, 20} {
+		event := makeEvents("event")[0]
+		event.Origin = &opensplunkv1.EventOrigin{
+			FileIdentity: proto.String(identity), SourcePath: proto.String("/x.log"),
+			EndOffset: proto.Uint64(uint64(index + 1)), FileFingerprintLength: proto.Uint32(length),
+		}
+		events = append(events, event)
+	}
+	marks := checkpointMarksForBatch(1, events)
+	if len(marks) != 1 || !marks[0].ConflictingMetadata {
+		t.Fatalf("marks = %+v, want one sticky metadata conflict", marks)
+	}
+}
+
+func TestAckClearsRemovedDescriptorReferences(t *testing.T) {
+	t.Parallel()
+	opened, err := Open(defaultOpts(t.TempDir()))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = opened.Close() })
+	q := opened.(*queue)
+	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ef", 32)
+	for sequence := 1; sequence <= 3; sequence++ {
+		event := makeEvents("event")[0]
+		event.Origin = &opensplunkv1.EventOrigin{
+			FileIdentity: proto.String(identity), SourcePath: proto.String("/x.log"),
+			EndOffset: proto.Uint64(uint64(sequence)), FileFingerprintLength: proto.Uint32(64),
+		}
+		if _, err := q.Append([]*opensplunkv1.LogEvent{event}); err != nil {
+			t.Fatalf("Append %d: %v", sequence, err)
+		}
+	}
+	if err := q.AckThrough(2); err != nil {
+		t.Fatalf("AckThrough: %v", err)
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.unacked) != 1 || q.unacked[0].seq != 3 {
+		t.Fatalf("unacked = %+v, want only sequence 3", q.unacked)
+	}
+	backing := q.unacked[:cap(q.unacked)]
+	for index := len(q.unacked); index < len(backing); index++ {
+		if backing[index].segName != "" || backing[index].sourceMarks != nil {
+			t.Fatalf("removed descriptor %d retained references: %+v", index, backing[index])
+		}
 	}
 }
 

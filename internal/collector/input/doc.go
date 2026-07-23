@@ -18,11 +18,12 @@
 // identity. Persistence is atomic (write a temp file, fsync, rename over the
 // target) so a crash never leaves a torn checkpoint. The [Manager] reads
 // checkpoints at discovery to resume; it does NOT advance them. Checkpoint
-// advancement is owned by the root daemon, which calls CheckpointStore.Set only
-// after the covering events are durable in the WAL. This ordering (frame ->
-// decode -> WAL append -> checkpoint) is what makes file re-reads after a crash
-// safe: unadvanced checkpoints cause at-most a bounded duplicate re-read, which
-// the server deduplicates by stable event ID.
+// advancement is owned by the root daemon, which calls CheckpointStore.SetMany
+// only after the covering batches have a durable terminal disposition and the
+// entire earlier WAL prefix is terminal. This ordering (frame -> decode -> WAL
+// append -> durable server acknowledgment -> checkpoint) makes file re-reads
+// after a crash safe: unadvanced checkpoints cause at most a bounded duplicate
+// re-read, which the server deduplicates by stable event ID.
 //
 // # Tailing behavior
 //

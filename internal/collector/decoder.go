@@ -54,10 +54,12 @@ type DecodeConfig struct {
 
 // SourcePosition is the durable origin of one framed event.
 type SourcePosition struct {
-	FileIdentity string
-	StartOffset  uint64
-	EndOffset    uint64
-	LineNumber   uint64
+	FileIdentity          string
+	SourcePath            string
+	FileFingerprintLength uint32
+	StartOffset           uint64
+	EndOffset             uint64
+	LineNumber            uint64
 }
 
 // Decoder converts framed source bytes to canonical protobuf events.
@@ -583,6 +585,10 @@ func sourceOrigin(inputID string, position SourcePosition) *opensplunkv1.EventOr
 	origin := &opensplunkv1.EventOrigin{InputId: inputID}
 	if position.FileIdentity != "" {
 		origin.FileIdentity = proto.String(position.FileIdentity)
+		origin.FileFingerprintLength = proto.Uint32(position.FileFingerprintLength)
+	}
+	if position.SourcePath != "" {
+		origin.SourcePath = proto.String(position.SourcePath)
 	}
 	origin.StartOffset = proto.Uint64(position.StartOffset)
 	origin.EndOffset = proto.Uint64(position.EndOffset)

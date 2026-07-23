@@ -5,10 +5,12 @@ import (
 	"time"
 )
 
-// TestCheckpointStorePrunesStaleEntriesAtOpen covers the unbounded-growth fix:
-// entries for files not seen within the retention window are dropped when the
-// store reopens, while fresh and legacy (zero UpdatedAt) entries survive.
-func TestCheckpointStorePrunesStaleEntriesAtOpen(t *testing.T) {
+const staleCheckpointAge = 8 * 24 * time.Hour
+
+// TestCheckpointStorePreservesStaleEntriesAtOpen prevents age alone from
+// discarding a resume position. UpdatedAt records acknowledgment activity, not
+// whether a source or unacknowledged source bytes still exist.
+func TestCheckpointStorePreservesStaleEntriesAtOpen(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	s, err := NewCheckpointStore(dir)
@@ -20,7 +22,7 @@ func TestCheckpointStorePrunesStaleEntriesAtOpen(t *testing.T) {
 		Identity:  FileIdentity{Device: 1, Inode: 10, Generation: 1, Fingerprint: "aa", FingerprintLength: 2},
 		Path:      "/log/rotated-away.log",
 		Offset:    100,
-		UpdatedAt: time.Now().UTC().Add(-defaultCheckpointRetention - time.Hour),
+		UpdatedAt: time.Now().UTC().Add(-staleCheckpointAge),
 	}
 	fresh := Checkpoint{
 		Identity:  FileIdentity{Device: 1, Inode: 11, Generation: 1, Fingerprint: "bb", FingerprintLength: 2},
@@ -39,8 +41,6 @@ func TestCheckpointStorePrunesStaleEntriesAtOpen(t *testing.T) {
 			t.Fatalf("Set(%s): %v", cp.Path, err)
 		}
 	}
-	// Set stamps zero UpdatedAt values; rewrite the legacy entry on disk shape by
-	// asserting against what reopen actually prunes: only the stale entry.
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -51,21 +51,21 @@ func TestCheckpointStorePrunesStaleEntriesAtOpen(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
 
-	if _, ok, _ := reopened.Get(stale.Identity); ok {
-		t.Fatal("stale checkpoint survived reopen; retention prune did not run")
+	if got, ok, getErr := reopened.Get(stale.Identity); getErr != nil || !ok || got.Offset != stale.Offset {
+		t.Fatalf("stale checkpoint after reopen = (%+v, %t, %v), want preserved offset %d", got, ok, getErr, stale.Offset)
 	}
 	if _, ok, _ := reopened.Get(fresh.Identity); !ok {
-		t.Fatal("fresh checkpoint was wrongly pruned")
+		t.Fatal("fresh checkpoint was lost")
 	}
 	if _, ok, _ := reopened.Get(legacy.Identity); !ok {
-		t.Fatal("legacy checkpoint (stamped at Set time) was wrongly pruned")
+		t.Fatal("legacy checkpoint was lost")
 	}
 
 	list, err := reopened.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(list) != 2 {
-		t.Fatalf("entries after prune = %d, want 2", len(list))
+	if len(list) != 3 {
+		t.Fatalf("entries after reopen = %d, want 3", len(list))
 	}
 }

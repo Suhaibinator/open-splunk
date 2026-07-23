@@ -13,9 +13,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// processedEvent is one decoded, processed event ready to be batched, carrying
-// the durable source coordinates the batcher needs to advance checkpoints once
-// the covering batch is durable.
+// processedEvent is one decoded, processed event ready to be batched. Its
+// source coordinates are already encoded in EventOrigin for acknowledgment-
+// coupled checkpointing; the explicit fields remain for the local terminal
+// path when one oversized event cannot enter the WAL.
 type processedEvent struct {
 	event      *opensplunkv1.LogEvent
 	identity   input.FileIdentity
@@ -25,8 +26,8 @@ type processedEvent struct {
 	size       int
 }
 
-// checkpointMark is the highest durable position seen for one file identity
-// within a single pending batch.
+// checkpointMark is the highest source position seen for one file identity
+// within a pending batch that may need local oversized-event disposition.
 type checkpointMark struct {
 	identity   input.FileIdentity
 	path       string
@@ -34,9 +35,10 @@ type checkpointMark struct {
 	lineNumber uint64
 }
 
-// pendingBatch accumulates processed events and, per file identity, the highest
-// EndOffset the batch covers so checkpoints can advance atomically after the
-// batch is durable.
+// pendingBatch accumulates processed events and compact source marks. Ordinary
+// queued events advance from WAL-cached EventOrigin metadata after terminal
+// acknowledgment; these marks serve only splitting and local dead-lettering of
+// an event too large to enter even an empty queue.
 type pendingBatch struct {
 	items  []processedEvent
 	events []*opensplunkv1.LogEvent
@@ -89,10 +91,12 @@ func (b *pendingBatch) split() (*pendingBatch, *pendingBatch) {
 func (d *Daemon) readInput(ctx context.Context, ir *inputRuntime, processed chan<- processedEvent) {
 	for raw := range ir.manager.Events() {
 		pos := SourcePosition{
-			FileIdentity: raw.Source.Identity.String(),
-			StartOffset:  raw.Source.StartOffset,
-			EndOffset:    raw.Source.EndOffset,
-			LineNumber:   raw.Source.LineNumber,
+			FileIdentity:          raw.Source.Identity.String(),
+			SourcePath:            raw.Source.Path,
+			FileFingerprintLength: raw.Source.Identity.FingerprintLength,
+			StartOffset:           raw.Source.StartOffset,
+			EndOffset:             raw.Source.EndOffset,
+			LineNumber:            raw.Source.LineNumber,
 		}
 		event, err := ir.decoder.Decode(raw.Bytes, pos, d.now())
 		if err != nil {
@@ -195,11 +199,11 @@ func (d *Daemon) runBatcher(ctx context.Context, processed <-chan processedEvent
 	}
 }
 
-// flush appends the pending batch to the durable queue and, on success, advances
-// the covered checkpoints. ErrQueueFull is transient backpressure and is
-// retried; ErrBatchTooLarge is split (or durably dead-lettered when it contains
-// one event). Any other append error is fatal and stops the daemon. Continuing
-// after an IO/marshal failure would hide that data is not becoming durable.
+// flush appends the pending batch to the durable queue. A successful append
+// deliberately does not advance source checkpoints: the sender owns that step
+// after a terminal server disposition. ErrQueueFull is transient backpressure
+// and is retried; ErrBatchTooLarge is split (or durably dead-lettered when it
+// contains one event). Any other append error is fatal and stops the daemon.
 func (d *Daemon) flush(ctx context.Context, b *pendingBatch) error {
 	if b.empty() {
 		return nil
@@ -208,7 +212,6 @@ func (d *Daemon) flush(ctx context.Context, b *pendingBatch) error {
 	for {
 		batch, err := d.queue.Append(b.events)
 		if err == nil {
-			d.advanceCheckpoints(b)
 			d.log.Debug("collector: batch appended",
 				"batch_sequence", batch.GetBatchSequence(), "events", len(b.events), "bytes", b.bytes)
 			b.reset()
@@ -268,7 +271,9 @@ func (d *Daemon) flushTooLarge(ctx context.Context, b *pendingBatch) error {
 	if err := d.deadLetterOversized(b); err != nil {
 		return err
 	}
-	d.advanceCheckpoints(b)
+	if err := d.advanceCheckpoints(b); err != nil {
+		return err
+	}
 	b.reset()
 	return nil
 }
@@ -306,10 +311,10 @@ func minDuration(a, b time.Duration) time.Duration {
 	return b
 }
 
-// advanceCheckpoints persists, for every file identity the just-durable batch
-// covered, the highest EndOffset in that batch. Offsets are monotonic per
-// identity: a mark that does not advance the last persisted offset is skipped.
-func (d *Daemon) advanceCheckpoints(b *pendingBatch) {
+// advanceCheckpoints is reserved for oversized-at-append records that cannot
+// enter the WAL and become terminal through their durable local dead-letter
+// write. Ordinary queued batches advance only via commitTerminalCheckpoints.
+func (d *Daemon) advanceCheckpoints(b *pendingBatch) error {
 	for _, m := range b.marks {
 		generationKey := m.identity.String()
 		if last, ok := d.lastOffsets[generationKey]; ok && m.offset <= last {
@@ -322,10 +327,12 @@ func (d *Daemon) advanceCheckpoints(b *pendingBatch) {
 			LineNumber: m.lineNumber,
 		}
 		if err := d.checkpoints.Set(cp); err != nil {
-			d.log.Error("collector: checkpoint persist failed",
-				"file_identity", generationKey, "offset", m.offset, "error", err.Error())
-			continue
+			return fmt.Errorf(
+				"collector: persist terminal oversized-event checkpoint for %s at offset %d: %w",
+				generationKey, m.offset, err,
+			)
 		}
 		d.lastOffsets[generationKey] = m.offset
 	}
+	return nil
 }

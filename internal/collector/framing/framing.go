@@ -32,8 +32,8 @@ const readChunkSize = 4096
 // Next; a caller that retains it must copy. StartOffset is the byte offset of
 // the first byte of the record; EndOffset is the offset one past the last byte
 // consumed for this record, including its delimiter, and is the value an input
-// checkpoints once the frame is durably persisted. LineNumber is the 1-based
-// line of the record's first line.
+// checkpoints once the covering durable batch receives a terminal server
+// disposition. LineNumber is the 1-based line of the record's first line.
 type Frame struct {
 	Bytes       []byte
 	StartOffset uint64

@@ -23,8 +23,9 @@ var (
 	// is distinct from ErrQueueFull (which is transient backpressure).
 	ErrBatchTooLarge = errors.New("collector/wal: batch record exceeds max_queue_bytes")
 
-	// ErrCorruptSegment reports that a segment failed CRC validation during
-	// recovery and its unreadable tail was quarantined. Recovery continues.
+	// ErrCorruptSegment reports that a segment failed validation during recovery.
+	// Its unreadable tail and all successor segments are quarantined; recovery
+	// continues only from the globally intact prefix.
 	ErrCorruptSegment = errors.New("collector/wal: corrupt segment quarantined")
 
 	// ErrClosed is returned once the queue has been closed.
@@ -81,14 +82,45 @@ type Stats struct {
 	NextBatchSequence      uint64
 	LastAckedBatchSequence uint64
 
-	// QuarantinedSegments counts segment tails that failed CRC/length validation
-	// during recovery and were renamed to a .wal.corrupt sibling. It is the
+	// QuarantinedSegments counts corrupt segments and successors quarantined
+	// behind the first recovery gap and renamed to .wal.corrupt siblings. It is the
 	// documented mechanism by which a non-fatal [ErrCorruptSegment] event is
 	// surfaced: Open never fails hard on corruption, so callers observe it here.
 	//
 	// This field is an additive extension to the frozen contract Stats struct;
 	// existing callers that only read the queue-depth fields are unaffected.
 	QuarantinedSegments uint64
+}
+
+// SourceCheckpointMark is the compact source coordinate retained alongside a
+// durable batch descriptor. It contains no event payload, so planning a large
+// cumulative acknowledgment is bounded by the number of distinct file
+// generations rather than the byte size of the WAL.
+//
+// Presence bits are deliberate. Older WAL records predate source_path and
+// file_fingerprint_length and can be reconciled against their discovery
+// checkpoint, while a malformed new record must not be mistaken for a valid
+// zero value.
+type SourceCheckpointMark struct {
+	BatchSequence        uint64
+	EventIndex           uint32
+	FileIdentity         string
+	SourcePath           string
+	EndOffset            uint64
+	LineNumber           uint64
+	FingerprintLength    uint32
+	HasSourcePath        bool
+	HasEndOffset         bool
+	HasFingerprintLength bool
+	ConflictingMetadata  bool
+}
+
+// AckPreview is a read-only plan for the newly contiguous terminal WAL prefix.
+// Marks are coalesced to the highest source coordinate per exact file identity.
+type AckPreview struct {
+	ThroughBatchSequence uint64
+	BatchCount           uint64
+	Marks                []SourceCheckpointMark
 }
 
 // Queue is the durable, at-least-once batch queue.
@@ -114,10 +146,19 @@ type Queue interface {
 	// with ErrInvalidAck. Replaying an already-durable ack is a no-op.
 	Ack(batchSequence uint64) error
 
+	// PrepareAck returns compact source marks for the batches that would newly
+	// become part of the durable cumulative terminal prefix if batchSequence
+	// were acknowledged now. It is read-only: queue contents, terminal state,
+	// and the persisted high-water mark are unchanged.
+	PrepareAck(batchSequence uint64) (AckPreview, error)
+
 	// AckThrough applies an explicitly cumulative acknowledgment from the
 	// protocol handshake or acknowledged_through field. The endpoint sequence
 	// must identify a real queued batch; unknown/future values fail closed.
 	AckThrough(batchSequence uint64) error
+
+	// PrepareAckThrough is the read-only cumulative counterpart to AckThrough.
+	PrepareAckThrough(batchSequence uint64) (AckPreview, error)
 
 	// Rewind restarts delivery so NextBatch re-yields every unacked batch,
 	// beginning again from the lowest unacked sequence. The sender must call it
@@ -136,11 +177,11 @@ type Queue interface {
 }
 
 // Open opens or creates the durable queue described by opts, replaying and
-// validating existing segments (quarantining any corrupt tail).
+// validating existing segments.
 //
-// Corruption discovered during replay is non-fatal: the unreadable tail is
-// quarantined, recovery continues with the intact prefix, and the count is
-// reported via Stats.QuarantinedSegments rather than an Open error.
+// Corruption discovered during replay is non-fatal: the unreadable tail and
+// every successor segment are quarantined, recovery continues with the global
+// intact prefix, and the count is reported via Stats.QuarantinedSegments.
 func Open(opts Options) (Queue, error) {
 	return openQueue(opts)
 }
