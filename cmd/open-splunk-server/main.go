@@ -25,7 +25,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
-	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchws"
@@ -240,6 +239,23 @@ func run() error {
 			log.Printf("close exports: %v", err)
 		}
 	}()
+	analysis, err := newRuntimeSearchAnalysis(runtimeSearchAnalysisConfig{
+		Searches:         jobs,
+		Compiler:         compiler,
+		Executor:         executor,
+		FieldCursorScope: "open-splunk-server/search-fields",
+	})
+	if err != nil {
+		return fmt.Errorf("create search analysis services: %w", err)
+	}
+	// Registered after exports and jobs so LIFO shutdown cancels and joins all
+	// detached field-catalog workers before either borrowed dependency closes.
+	// The later WebSocket safety close still runs first.
+	defer func() {
+		if err := analysis.Close(); err != nil {
+			log.Printf("close search analysis services: %v", err)
+		}
+	}()
 
 	webUI, err := opensplunk.WebUI()
 	if err != nil {
@@ -284,11 +300,7 @@ func run() error {
 			MaximumExportRows:       exportSettings.maximumRowLimit,
 			MaximumExportBytes:      exportSettings.maximumByteLimit,
 		},
-	}, searchanalysis.Config{
-		Searches: jobs,
-		Compiler: compiler,
-		Executor: executor,
-	})
+	}, analysis)
 	if err != nil {
 		return fmt.Errorf("create HTTP handler: %w", err)
 	}

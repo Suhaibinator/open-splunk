@@ -19,6 +19,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
@@ -30,6 +31,9 @@ import (
 )
 
 const (
+	apiV1PathPrefix                   = "/api/v1"
+	searchFieldsListRoute             = "/search/jobs/fields/list"
+	searchFieldsListPath              = apiV1PathPrefix + searchFieldsListRoute
 	searchTimelinePath                = "/api/v1/search/jobs/timeline"
 	searchWebSocketPath               = "/api/v1/search/ws"
 	defaultMaximumRequestBytes        = int64(128 << 10)
@@ -48,10 +52,14 @@ const (
 	maximumConcurrentDownloads        = 256
 	maximumIdentityBytes              = 255
 	maximumBootstrapApps              = 256
-	maximumSearchTimelineBuckets      = uint32(10_000)
-	maximumWebSocketSubscriptions     = uint32(256)
-	minimumWebSocketFrameBytes        = uint64(1 << 10)
-	maximumWebSocketFrameBytes        = uint64(1 << 20)
+	// A field profile may contain two 8,720-byte names. Keeping pages at 1,000
+	// guarantees even the worst valid protobuf response remains below the
+	// transport's independent 32 MiB fail-closed cap.
+	maximumSearchFieldPageSize    = uint32(1_000)
+	maximumSearchTimelineBuckets  = uint32(10_000)
+	maximumWebSocketSubscriptions = uint32(256)
+	minimumWebSocketFrameBytes    = uint64(1 << 10)
+	maximumWebSocketFrameBytes    = uint64(1 << 20)
 )
 
 // SearchJobs is the scoped search-job surface exposed to the browser API.
@@ -134,6 +142,15 @@ type SearchTimelines interface {
 	MaximumBuckets() uint32
 }
 
+// SearchFields is the bounded, owner-scoped field-catalog surface. The
+// handler snapshots both enforced limits during construction so transport
+// validation cannot drift from the service contract while requests are live.
+type SearchFields interface {
+	ListFields(context.Context, searchjobs.AccessScope, searchanalysis.ListFieldsRequest) (searchanalysis.FieldPage, error)
+	MaximumFields() uint32
+	MaximumPageSize() uint32
+}
+
 // SearchWebSocket is the independently lifecycle-managed progress transport.
 // Its advertised limits are read from the same service that enforces them so
 // bootstrap metadata cannot drift from the live route.
@@ -205,6 +222,7 @@ type Config struct {
 	SearchHistory              SearchHistory
 	Exports                    Exports
 	SearchTimelines            SearchTimelines
+	SearchFields               SearchFields
 	SearchWebSocket            SearchWebSocket
 	WebUI                      fs.FS
 	Bootstrap                  BootstrapConfig
@@ -224,26 +242,29 @@ type Config struct {
 }
 
 type apiHandler struct {
-	jobs                   SearchJobs
-	indexes                IndexCatalog
-	indexAdmin             IndexAdministration
-	ingestionTokens        IngestionTokenAdministration
-	savedSearches          SavedSearches
-	searchHistory          SearchHistory
-	exports                Exports
-	searchTimelines        SearchTimelines
-	searchWebSocket        SearchWebSocket
-	ownerID                string
-	tenantID               string
-	maximumPageSize        uint32
-	maximumTimelineBuckets uint32
-	bootstrap              BootstrapConfig
-	now                    func() time.Time
-	requestGate            chan struct{}
-	serializationGate      chan struct{}
-	downloadGate           chan struct{}
-	adminCursorKey         [32]byte
-	browserAllowedHosts    map[string]struct{}
+	jobs                      SearchJobs
+	indexes                   IndexCatalog
+	indexAdmin                IndexAdministration
+	ingestionTokens           IngestionTokenAdministration
+	savedSearches             SavedSearches
+	searchHistory             SearchHistory
+	exports                   Exports
+	searchTimelines           SearchTimelines
+	searchFields              SearchFields
+	searchWebSocket           SearchWebSocket
+	ownerID                   string
+	tenantID                  string
+	maximumPageSize           uint32
+	maximumTimelineBuckets    uint32
+	maximumFieldPageSize      uint32
+	maximumFieldCatalogFields uint32
+	bootstrap                 BootstrapConfig
+	now                       func() time.Time
+	requestGate               chan struct{}
+	serializationGate         chan struct{}
+	downloadGate              chan struct{}
+	adminCursorKey            [32]byte
+	browserAllowedHosts       map[string]struct{}
 }
 
 // NewHandler constructs the complete HTTP handler. API paths are dispatched
@@ -290,6 +311,22 @@ func NewHandler(config Config) (*Handler, error) {
 			return nil, fmt.Errorf("create server handler: timeline maximum buckets must be between 1 and %d", maximumSearchTimelineBuckets)
 		}
 	}
+	fieldService := config.SearchFields
+	if isNilDependency(fieldService) {
+		fieldService = nil
+	}
+	maximumFieldCatalogFields := uint32(0)
+	maximumFieldPageSize := uint32(0)
+	if fieldService != nil {
+		maximumFieldCatalogFields = fieldService.MaximumFields()
+		maximumFieldPageSize = fieldService.MaximumPageSize()
+		if maximumFieldCatalogFields == 0 || maximumFieldCatalogFields > clickhouse.MaximumFieldCatalogFields {
+			return nil, fmt.Errorf("create server handler: field catalog maximum fields must be between 1 and %d", clickhouse.MaximumFieldCatalogFields)
+		}
+		if maximumFieldPageSize == 0 || maximumFieldPageSize > maximumFieldCatalogFields || maximumFieldPageSize > maximumSearchFieldPageSize {
+			return nil, fmt.Errorf("create server handler: field catalog maximum page size must be between 1 and %d and cannot exceed maximum fields", maximumSearchFieldPageSize)
+		}
+	}
 	searchWebSocket := config.SearchWebSocket
 	if isNilDependency(searchWebSocket) {
 		searchWebSocket = nil
@@ -310,6 +347,9 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 	if pageSize > maximumTransportPageSize {
 		return nil, fmt.Errorf("create server handler: maximum page size cannot exceed %d", maximumTransportPageSize)
+	}
+	if maximumFieldPageSize > pageSize {
+		return nil, errors.New("create server handler: field catalog maximum page size cannot exceed browser maximum page size")
 	}
 	concurrentResponses := config.MaximumConcurrentResponses
 	if concurrentResponses < 0 || concurrentResponses > maximumConcurrentResponses {
@@ -392,26 +432,29 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 
 	api := &apiHandler{
-		jobs:                   config.SearchJobs,
-		indexes:                config.Indexes,
-		indexAdmin:             indexAdmin,
-		ingestionTokens:        ingestionTokens,
-		savedSearches:          config.SavedSearches,
-		searchHistory:          searchHistoryService,
-		exports:                exportService,
-		searchTimelines:        timelineService,
-		searchWebSocket:        searchWebSocket,
-		ownerID:                ownerID,
-		tenantID:               tenantID,
-		maximumPageSize:        pageSize,
-		maximumTimelineBuckets: maximumTimelineBuckets,
-		bootstrap:              bootstrap,
-		now:                    now,
-		requestGate:            make(chan struct{}, concurrentRequests),
-		serializationGate:      make(chan struct{}, concurrentResponses),
-		downloadGate:           make(chan struct{}, concurrentDownloads),
-		adminCursorKey:         adminCursorKey,
-		browserAllowedHosts:    browserAllowedHosts,
+		jobs:                      config.SearchJobs,
+		indexes:                   config.Indexes,
+		indexAdmin:                indexAdmin,
+		ingestionTokens:           ingestionTokens,
+		savedSearches:             config.SavedSearches,
+		searchHistory:             searchHistoryService,
+		exports:                   exportService,
+		searchTimelines:           timelineService,
+		searchFields:              fieldService,
+		searchWebSocket:           searchWebSocket,
+		ownerID:                   ownerID,
+		tenantID:                  tenantID,
+		maximumPageSize:           pageSize,
+		maximumTimelineBuckets:    maximumTimelineBuckets,
+		maximumFieldPageSize:      maximumFieldPageSize,
+		maximumFieldCatalogFields: maximumFieldCatalogFields,
+		bootstrap:                 bootstrap,
+		now:                       now,
+		requestGate:               make(chan struct{}, concurrentRequests),
+		serializationGate:         make(chan struct{}, concurrentResponses),
+		downloadGate:              make(chan struct{}, concurrentDownloads),
+		adminCursorKey:            adminCursorKey,
+		browserAllowedHosts:       browserAllowedHosts,
 	}
 	apiRouter := api.newRouter(requestBytes, routeTimeout)
 	apiRoutes := postAPIRoutes(
@@ -471,6 +514,9 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 	if api.searchTimelines != nil {
 		apiRoutes[searchTimelinePath] = http.MethodPost
+	}
+	if api.searchFields != nil {
+		apiRoutes[searchFieldsListPath] = http.MethodPost
 	}
 	if api.searchWebSocket != nil {
 		apiRoutes[searchWebSocketPath] = http.MethodGet
@@ -704,6 +750,9 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	if handler.searchTimelines != nil {
 		routes = append(routes, handler.searchTimelineRoutes(noAuth, smallRequestBytes)...)
 	}
+	if handler.searchFields != nil {
+		routes = append(routes, handler.searchFieldRoutes(noAuth, smallRequestBytes)...)
+	}
 	if handler.exports != nil {
 		routes = append(routes,
 			router.NewGenericRouteDefinition[*opensplunkv1.CreateExportJobRequest, *opensplunkv1.CreateExportJobResponse, string, struct{}](router.RouteConfig[*opensplunkv1.CreateExportJobRequest, *opensplunkv1.CreateExportJobResponse]{
@@ -724,7 +773,7 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 		)
 	}
 	subRouters := []router.SubRouterConfig{{
-		PathPrefix:  "/api/v1",
+		PathPrefix:  apiV1PathPrefix,
 		AuthLevel:   &noAuth,
 		Middlewares: []sroutercommon.Middleware{disableAPICaching, protobufMiddleware, requestMiddleware, deadlineMiddleware},
 		Routes:      routes,

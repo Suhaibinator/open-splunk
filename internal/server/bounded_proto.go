@@ -21,6 +21,8 @@ type boundedProtoCodecOptions struct {
 	stateError   string
 	messageError string
 	contextError func(context.Context) error
+	maximumBytes int
+	sizeError    string
 }
 
 // boundedProtoCodec delegates request decoding to the ordinary protobuf codec
@@ -64,6 +66,13 @@ func (bounded *boundedProtoCodec[Request, Message]) Encode(response http.Respons
 	payload, err := proto.Marshal(result.message)
 	if err != nil {
 		return err
+	}
+	if bounded.options.maximumBytes > 0 && len(payload) > bounded.options.maximumBytes {
+		message := bounded.options.sizeError
+		if message == "" {
+			message = "protobuf response exceeds its byte limit"
+		}
+		return errors.New(message)
 	}
 	if err := bounded.contextError(result.ctx); err != nil {
 		return err
