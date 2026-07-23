@@ -100,6 +100,28 @@ func TestVisibilitySequenceMigrationContract(t *testing.T) {
 	}
 }
 
+func TestFieldMetadataMigrationContract(t *testing.T) {
+	t.Parallel()
+	sql := readFile(t, "0003_add_field_metadata.sql")
+	for _, fragment := range []string{
+		"ADD COLUMN IF NOT EXISTS `field_types` Array(UInt8) DEFAULT []",
+		"AFTER `field_names`",
+		"ADD COLUMN IF NOT EXISTS `field_metadata_version` UInt8 DEFAULT 0",
+		"AFTER `field_types`",
+		"ADD CONSTRAINT IF NOT EXISTS field_metadata_version_is_supported",
+		"CHECK `field_metadata_version` IN (0, 1)",
+		"ADD CONSTRAINT IF NOT EXISTS field_metadata_is_aligned",
+		"length(`field_names`) = length(`field_types`)",
+		"arrayAll(code -> code BETWEEN 1 AND 12, `field_types`)",
+		"SELECT 3, 'add_field_metadata'",
+		"WHERE `version` = 3",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("field metadata migration is missing contract fragment %q", fragment)
+		}
+	}
+}
+
 func TestComposeIsPinnedAndLoopbackOnly(t *testing.T) {
 	compose := readFile(t, filepath.Join("..", "..", "deploy", "docker-compose.yaml"))
 
@@ -191,7 +213,8 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 		FORMAT TSVRaw`)
 	for _, name := range []string{
 		"event_id", "tenant_id", "index_name", "event_time", "index_time", "raw",
-		"fields", "field_names", "collector_id", "batch_id", "visibility_seq", "expires_at",
+		"fields", "field_names", "field_types", "field_metadata_version", "collector_id", "batch_id",
+		"visibility_seq", "expires_at",
 	} {
 		if !strings.Contains(columns, name) {
 			t.Errorf("live events schema is missing column %q; columns: %s", name, columns)
@@ -203,7 +226,8 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 		(
 			event_id, tenant_id, index_name, event_time, index_time,
 			host, source, sourcetype, severity, raw, raw_encoding,
-			fields, field_names, collector_id, batch_id, batch_sequence, expires_at, visibility_seq
+			fields, field_names, field_types, field_metadata_version,
+			collector_id, batch_id, batch_sequence, expires_at, visibility_seq
 		)
 		SETTINGS
 			insert_deduplication_token = 'migration-smoke-batch',
@@ -214,7 +238,7 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 			input_format_try_infer_dates = 0,
 			input_format_try_infer_datetimes = 0
 		FORMAT JSONEachRow
-		{"event_id":"event-1","tenant_id":"tenant-1","index_name":"main","event_time":"2026-07-21 03:04:05.123456789","index_time":"2026-07-21 03:04:06.123","host":"host-1","source":"app.log","sourcetype":"go:zap:json","severity":3,"raw":"{\"message\":\"hello\"}","raw_encoding":1,"fields":{"big":9007199254740993,"unsigned":18446744073709551615,"negative":-9223372036854775808,"ratio":1.25,"ok":true,"nothing":null,"mixed":[1,"two",true],"nested":{"label":"kept"}},"field_names":["big","mixed","negative","nested.label","nothing","ok","ratio","unsigned"],"collector_id":"collector-1","batch_id":"batch-1","batch_sequence":1,"expires_at":"2099-02-01 03:04:06.123","visibility_seq":1}`
+		{"event_id":"event-1","tenant_id":"tenant-1","index_name":"main","event_time":"2026-07-21 03:04:05.123456789","index_time":"2026-07-21 03:04:06.123","host":"host-1","source":"app.log","sourcetype":"go:zap:json","severity":3,"raw":"{\"message\":\"hello\"}","raw_encoding":1,"fields":{"big":9007199254740993,"unsigned":18446744073709551615,"negative":-9223372036854775808,"ratio":1.25,"ok":true,"nothing":null,"mixed":[1,"two",true],"nested":{"label":"kept"}},"field_names":["big","mixed","negative","nested.label","nothing","ok","ratio","unsigned"],"field_types":[3,10,3,2,1,6,5,4],"field_metadata_version":1,"collector_id":"collector-1","batch_id":"batch-1","batch_sequence":1,"expires_at":"2099-02-01 03:04:06.123","visibility_seq":1}`
 
 	// A retry must contain the exact same accepted rows in the same order and
 	// reuse the exact token. The non-replicated MergeTree window then drops it.
@@ -229,9 +253,33 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 	if legacyVisibility != "0" {
 		t.Fatalf("pre-migration row visibility = %q, want migration default 0", legacyVisibility)
 	}
+	legacyMetadata := clickHouseQuery(t, ctx, container, password, `
+		SELECT concat(toString(field_metadata_version), ':', toJSONString(field_types))
+		FROM open_splunk.events
+		WHERE event_id = 'legacy-event'
+		FORMAT TSVRaw`)
+	if legacyMetadata != "0:[]" {
+		t.Fatalf("pre-migration row field metadata = %q, want version-zero empty types", legacyMetadata)
+	}
 	legacyError := clickHouseQueryError(t, ctx, container, password, strings.Replace(legacyInsert, "legacy-event", "post-upgrade-legacy-event", 1))
 	if !strings.Contains(legacyError, "visibility_seq_is_positive") {
 		t.Fatalf("legacy writer omission did not fail the visibility constraint: %s", legacyError)
+	}
+	invalidMetadataPrefix := `
+		INSERT INTO open_splunk.events
+		(event_id, tenant_id, index_name, event_time, index_time, expires_at, visibility_seq,
+		 field_names, field_types, field_metadata_version)
+		VALUES `
+	for name, values := range map[string]string{
+		"unsupported-version": "('unsupported-version', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1, ['x'], [2], 2)",
+		"misaligned":          "('misaligned', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1, ['x'], [], 1)",
+		"invalid-type":        "('invalid-type', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1, ['x'], [13], 1)",
+		"typed-legacy":        "('typed-legacy', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1, ['x'], [2], 0)",
+	} {
+		errorText := clickHouseQueryError(t, ctx, container, password, invalidMetadataPrefix+values)
+		if !strings.Contains(errorText, "field_metadata_") {
+			t.Errorf("invalid field metadata case %q was not rejected by metadata constraint: %s", name, errorText)
+		}
 	}
 
 	rowCount := clickHouseQuery(t, ctx, container, password, `
@@ -265,6 +313,14 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 	if want := "Int64\t9007199254740993\tUInt64\t18446744073709551615\tInt64\t-9223372036854775808\tFloat64\t1.25\tBool\ttrue\tNone\tArray(Dynamic)\tkept"; got != want {
 		t.Fatalf("typed JSON contract mismatch\n got: %q\nwant: %q", got, want)
 	}
+	metadata := clickHouseQuery(t, ctx, container, password, `
+		SELECT concat(toString(field_metadata_version), ':', toJSONString(field_types))
+		FROM open_splunk.events
+		WHERE event_id = 'event-1'
+		FORMAT TSVRaw`)
+	if metadata != "1:[3,10,3,2,1,6,5,4]" {
+		t.Fatalf("field metadata contract = %q", metadata)
+	}
 
 	versions := clickHouseQuery(t, ctx, container, password, `
 		SELECT groupArray((version, count))
@@ -276,7 +332,7 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 			ORDER BY version
 		)
 		FORMAT TSVRaw`)
-	if versions != "[(1,1),(2,1)]" {
+	if versions != "[(1,1),(2,1),(3,1)]" {
 		t.Fatalf("migration ledger = %q, want one row for each version", versions)
 	}
 }

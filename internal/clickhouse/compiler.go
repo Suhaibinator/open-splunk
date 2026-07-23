@@ -17,10 +17,12 @@ import (
 )
 
 const (
-	internalFieldsColumn     = "__os_fields"
-	internalFieldNamesColumn = "__os_field_names"
-	internalSortTimeColumn   = "__os_sort_time"
-	internalSortIDColumn     = "__os_sort_event_id"
+	internalFieldsColumn               = "__os_fields"
+	internalFieldNamesColumn           = "__os_field_names"
+	internalFieldTypesColumn           = "__os_field_types"
+	internalFieldMetadataVersionColumn = "__os_field_metadata_version"
+	internalSortTimeColumn             = "__os_sort_time"
+	internalSortIDColumn               = "__os_sort_event_id"
 	// Timechart physical columns are an executor-only transport. Runtime series
 	// names are data, never SQL identifiers, and are expanded into the public
 	// wide schema only after the complete bounded result has been validated.
@@ -661,6 +663,8 @@ func compileScan(database, table string, scan *plan.Scan) (string, compileState,
 		aliasPhysical("batch_id", "batch_id"),
 		aliasPhysical("fields", internalFieldsColumn),
 		aliasPhysical("field_names", internalFieldNamesColumn),
+		aliasPhysical("field_types", internalFieldTypesColumn),
+		aliasPhysical("field_metadata_version", internalFieldMetadataVersionColumn),
 		aliasPhysical("event_time", internalSortTimeColumn),
 		aliasPhysical("event_id", internalSortIDColumn),
 	}
@@ -1162,7 +1166,7 @@ func renameProjection(state, next compileState, destination string, source field
 		appendVisible(name)
 	}
 
-	projection := make([]string, 0, len(names)+4+len(state.order)+len(state.tieBreakers))
+	projection := make([]string, 0, len(names)+6+len(state.order)+len(state.tieBreakers))
 	for _, name := range names {
 		field := state.visible[name]
 		if name == destination {
@@ -1175,11 +1179,24 @@ func renameProjection(state, next compileState, destination string, source field
 			projection = append(projection, field.valueSQL+" AS "+publicName)
 		}
 	}
-	privateColumns := make([]string, 0, 4+len(state.order)+len(state.tieBreakers))
+	return appendPrivateEventProjection(projection, state)
+}
+
+// appendPrivateEventProjection keeps the immutable source document, its
+// aligned leaf metadata, and deterministic ordering state available to later
+// event-preserving operators. Explicit projections must never expose these
+// columns publicly, but they also must not discard them before an event
+// analysis finalizer consumes the relation.
+func appendPrivateEventProjection(projection []string, state compileState) []string {
+	privateColumns := make([]string, 0, 6+len(state.order)+len(state.tieBreakers))
 	if state.eventRows {
 		privateColumns = append(privateColumns,
-			quoteIdentifier(internalFieldsColumn), quoteIdentifier(internalFieldNamesColumn),
-			quoteIdentifier(internalSortTimeColumn), quoteIdentifier(internalSortIDColumn),
+			quoteIdentifier(internalFieldsColumn),
+			quoteIdentifier(internalFieldNamesColumn),
+			quoteIdentifier(internalFieldTypesColumn),
+			quoteIdentifier(internalFieldMetadataVersionColumn),
+			quoteIdentifier(internalSortTimeColumn),
+			quoteIdentifier(internalSortIDColumn),
 		)
 	}
 	for _, key := range state.order {
@@ -1739,7 +1756,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		return nil, compileState{}, nil, errors.New("compile ClickHouse projection: invalid mode")
 	}
 
-	projection := make([]string, 0, len(names)+4)
+	projection := make([]string, 0, len(names)+6)
 	args := make([]any, 0)
 	for _, name := range names {
 		var ref plan.FieldRef
@@ -1788,25 +1805,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		}
 		next.publicOrder = append(next.publicOrder, name)
 	}
-	privateColumns := make([]string, 0, 4+len(state.order)+len(state.tieBreakers))
-	if state.eventRows {
-		privateColumns = append(privateColumns,
-			quoteIdentifier(internalFieldsColumn), quoteIdentifier(internalFieldNamesColumn),
-			quoteIdentifier(internalSortTimeColumn), quoteIdentifier(internalSortIDColumn),
-		)
-	}
-	for _, key := range state.order {
-		privateColumns = append(privateColumns, key.valueSQL)
-	}
-	for _, key := range state.tieBreakers {
-		privateColumns = append(privateColumns, key.valueSQL)
-	}
-	for _, column := range privateColumns {
-		if !slices.Contains(projection, column) {
-			projection = append(projection, column)
-		}
-	}
-	return projection, next, args, nil
+	return appendPrivateEventProjection(projection, state), next, args, nil
 }
 
 func rewriteExistenceForProjection(field fieldState, name string) string {

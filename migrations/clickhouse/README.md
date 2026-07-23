@@ -24,7 +24,13 @@ idempotent DDL first and writes its `schema_migrations` ledger row last.
   dedicated paths and 16 physical types per dynamic path. Overflow remains
   queryable through ClickHouse shared-data serialization instead of creating an
   unbounded number of files. `field_names` is a sorted, unique list of
-  normalized dotted paths for field discovery.
+  normalized dotted paths for field discovery. `field_types` is a
+  positionally-aligned array of stable protobuf logical type codes, including
+  explicit null and extended bytes/timestamp/duration/decimal types that
+  ClickHouse's physical JSON type cannot recover. `field_metadata_version = 1`
+  identifies complete metadata emitted by the current writer; historical rows
+  retain version zero and an empty type array so analysis can fail closed rather
+  than infer incorrect types.
 - Bloom filters accelerate exact event/trace/span lookups. The GA native text
   index covers case-folded raw text and the normalized field-name array. The
   query corpus and load generator must benchmark these before changing their
@@ -97,6 +103,10 @@ contract. `field_names` also carries semantic information: ingestion must
 derive sorted, unique normalized paths recursively, including explicitly-null
 paths, so SPL can distinguish a present null from a missing path. Literal dots
 in source field names require one canonical escaping/collision policy.
+`field_types` must be derived from the original protobuf `TypedValue`, sorted in
+the exact same operation as `field_names`, and written with metadata version
+one. Non-empty objects are recursively flattened; empty objects and all lists
+remain typed leaves.
 
 ## Retry and deduplication contract
 

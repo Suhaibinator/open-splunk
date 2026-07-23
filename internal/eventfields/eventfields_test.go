@@ -41,8 +41,8 @@ func TestReservedDynamicRootsCoverPhysicalSecurityAndContainers(t *testing.T) {
 
 	for _, name := range []string{
 		"tenant_id", "index_name", "event_time", "index_time", "collected_at", "event_time_source",
-		"body", "raw", "raw_encoding", "fields", "field_names", "batch_sequence", "expires_at",
-		"visibility_seq",
+		"body", "raw", "raw_encoding", "fields", "field_names", "field_types", "field_metadata_version",
+		"batch_sequence", "expires_at", "visibility_seq",
 	} {
 		if !IsReservedDynamicRoot(name) || !IsReservedDynamicRoot(strings.ToUpper(name)) {
 			t.Errorf("reserved root %q or its case variant was not recognized", name)
@@ -73,6 +73,39 @@ func TestReservedDynamicRootsCoverPhysicalSecurityAndContainers(t *testing.T) {
 	for _, name := range CanonicalSPLFieldNames() {
 		if _, ok := seen[name]; !ok {
 			t.Errorf("canonical field %q is absent from ReservedDynamicRootNames", name)
+		}
+	}
+}
+
+func TestStoredValueTypeCodesMatchWireLeafTypes(t *testing.T) {
+	t.Parallel()
+
+	types := []StoredValueType{
+		StoredValueTypeNull,
+		StoredValueTypeString,
+		StoredValueTypeSint64,
+		StoredValueTypeUint64,
+		StoredValueTypeDouble,
+		StoredValueTypeBool,
+		StoredValueTypeBytes,
+		StoredValueTypeTimestamp,
+		StoredValueTypeDuration,
+		StoredValueTypeList,
+		StoredValueTypeObject,
+		StoredValueTypeDecimal,
+	}
+	for index, valueType := range types {
+		want := uint8(index + 1)
+		if got := uint8(valueType); got != want {
+			t.Errorf("stored type %d has code %d, want %d", index, got, want)
+		}
+		if !IsStoredValueType(want) {
+			t.Errorf("IsStoredValueType(%d) = false", want)
+		}
+	}
+	for _, invalid := range []uint8{0, 13, 14, 255} {
+		if IsStoredValueType(invalid) {
+			t.Errorf("IsStoredValueType(%d) = true", invalid)
 		}
 	}
 }

@@ -106,6 +106,15 @@ func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
 	if got := conn.batch.rows[0][24]; got != uint64(1) {
 		t.Fatalf("visibility_seq = %#v, want 1", got)
 	}
+	if got, ok := conn.batch.rows[0][25].([]uint8); !ok || !slices.Equal(got, []uint8{uint8(eventfields.StoredValueTypeUint64)}) {
+		t.Fatalf("field_types = %#v (%T), want [uint64]", conn.batch.rows[0][25], conn.batch.rows[0][25])
+	}
+	if got := conn.batch.rows[0][26]; got != eventfields.CurrentFieldMetadataVersion {
+		t.Fatalf("field_metadata_version = %#v, want 1", got)
+	}
+	if got := eventInsertColumns[24:]; !slices.Equal(got, []string{"visibility_seq", "field_types", "field_metadata_version"}) {
+		t.Fatalf("appended insert columns = %#v", got)
+	}
 	if conn.batch.sendCalls != 1 || conn.batch.abortCalls != 0 || conn.batch.closeCalls != 1 {
 		t.Fatalf("batch lifecycle send=%d abort=%d close=%d", conn.batch.sendCalls, conn.batch.abortCalls, conn.batch.closeCalls)
 	}
@@ -707,17 +716,41 @@ func TestConvertTypedObjectPreservesTypesTagsAndEscapedNames(t *testing.T) {
 		typedField("timestamp", typedTimestamp(timestamp)),
 		typedField("duration", typedDuration(3*time.Second+4*time.Nanosecond)),
 		typedField("decimal", typedDecimal("-12345678901234567890.00100e+12")),
+		typedField("empty_list", typedList()),
+		typedField("empty_object", typedObject()),
 	)
-	document, names, err := convertTypedObject(object)
+	document, names, types, err := convertTypedObject(object)
 	if err != nil {
 		t.Fatalf("convertTypedObject: %v", err)
 	}
 	wantNames := []string{
-		"bytes", "decimal", "duration", "literal\\.dot", "mixed", "nested.nil", "nested.slash\\\\key",
+		"bytes", "decimal", "duration", "empty_list", "empty_object", "literal\\.dot", "mixed", "nested.nil", "nested.slash\\\\key",
 		"nothing", "ok", "percent%2Ekey", "ratio", "signed", "text", "timestamp", "unsigned",
 	}
 	if !slices.IsSorted(names) || !slices.Equal(names, wantNames) {
 		t.Fatalf("field_names = %#v, want %#v", names, wantNames)
+	}
+	wantTypes := []uint8{
+		uint8(eventfields.StoredValueTypeBytes),
+		uint8(eventfields.StoredValueTypeDecimal),
+		uint8(eventfields.StoredValueTypeDuration),
+		uint8(eventfields.StoredValueTypeList),
+		uint8(eventfields.StoredValueTypeObject),
+		uint8(eventfields.StoredValueTypeString),
+		uint8(eventfields.StoredValueTypeList),
+		uint8(eventfields.StoredValueTypeNull),
+		uint8(eventfields.StoredValueTypeString),
+		uint8(eventfields.StoredValueTypeNull),
+		uint8(eventfields.StoredValueTypeBool),
+		uint8(eventfields.StoredValueTypeString),
+		uint8(eventfields.StoredValueTypeDouble),
+		uint8(eventfields.StoredValueTypeSint64),
+		uint8(eventfields.StoredValueTypeString),
+		uint8(eventfields.StoredValueTypeTimestamp),
+		uint8(eventfields.StoredValueTypeUint64),
+	}
+	if !slices.Equal(types, wantTypes) {
+		t.Fatalf("field_types = %#v, want %#v for field_names %#v", types, wantTypes, names)
 	}
 	assertJSONPath(t, document, "signed", int64(-1<<63))
 	assertJSONPath(t, document, "unsigned", ^uint64(0))
@@ -752,6 +785,8 @@ func TestConvertTypedObjectPreservesTypesTagsAndEscapedNames(t *testing.T) {
 	assertTagged(t, document, "timestamp", "timestamp/v1", "2026-07-21T03:04:05.123456789Z")
 	assertTagged(t, document, "duration", "duration/v1", "3:4")
 	assertTagged(t, document, "decimal", "decimal/v1", "-12345678901234567890.00100e+12")
+	assertDynamicType(t, document, "empty_list", "Array(Dynamic)")
+	assertDynamicType(t, document, "empty_object", "Map(String, Dynamic)")
 
 	nativeColumn, err := column.Type("JSON(max_dynamic_paths=256, max_dynamic_types=16)").Column("fields", &column.ServerContext{
 		VersionMajor: 26, VersionMinor: 3, VersionPatch: 17, Timezone: time.UTC,
@@ -761,6 +796,42 @@ func TestConvertTypedObjectPreservesTypesTagsAndEscapedNames(t *testing.T) {
 	}
 	if err := nativeColumn.AppendRow(document); err != nil {
 		t.Fatalf("native JSON driver rejected converted value: %v", err)
+	}
+}
+
+func TestStoredValueTypeCodesMatchProtobufValueType(t *testing.T) {
+	t.Parallel()
+
+	pairs := []struct {
+		stored eventfields.StoredValueType
+		wire   opensplunkv1.ValueType
+	}{
+		{eventfields.StoredValueTypeNull, opensplunkv1.ValueType_VALUE_TYPE_NULL},
+		{eventfields.StoredValueTypeString, opensplunkv1.ValueType_VALUE_TYPE_STRING},
+		{eventfields.StoredValueTypeSint64, opensplunkv1.ValueType_VALUE_TYPE_SINT64},
+		{eventfields.StoredValueTypeUint64, opensplunkv1.ValueType_VALUE_TYPE_UINT64},
+		{eventfields.StoredValueTypeDouble, opensplunkv1.ValueType_VALUE_TYPE_DOUBLE},
+		{eventfields.StoredValueTypeBool, opensplunkv1.ValueType_VALUE_TYPE_BOOL},
+		{eventfields.StoredValueTypeBytes, opensplunkv1.ValueType_VALUE_TYPE_BYTES},
+		{eventfields.StoredValueTypeTimestamp, opensplunkv1.ValueType_VALUE_TYPE_TIMESTAMP},
+		{eventfields.StoredValueTypeDuration, opensplunkv1.ValueType_VALUE_TYPE_DURATION},
+		{eventfields.StoredValueTypeList, opensplunkv1.ValueType_VALUE_TYPE_LIST},
+		{eventfields.StoredValueTypeObject, opensplunkv1.ValueType_VALUE_TYPE_OBJECT},
+		{eventfields.StoredValueTypeDecimal, opensplunkv1.ValueType_VALUE_TYPE_DECIMAL},
+	}
+	for _, pair := range pairs {
+		if uint8(pair.stored) != uint8(pair.wire) {
+			t.Errorf("stored type %d != wire type %d", pair.stored, pair.wire)
+		}
+	}
+}
+
+func TestConvertNilTypedObjectReturnsVersionableEmptyMetadata(t *testing.T) {
+	t.Parallel()
+
+	document, names, types, err := convertTypedObject(nil)
+	if err != nil || document == nil || names == nil || types == nil || len(names) != 0 || len(types) != 0 {
+		t.Fatalf("convertTypedObject(nil) document=%#v names=%#v types=%#v err=%v", document, names, types, err)
 	}
 }
 
@@ -782,7 +853,7 @@ func TestConvertTypedObjectAvoidsDottedPathCollisions(t *testing.T) {
 		typedField("a%2Eb", typedString("escape-looking")),
 		typedField("a", typedObject(typedField("b", typedString("nested")))),
 	)
-	document, names, err := convertTypedObject(object)
+	document, names, types, err := convertTypedObject(object)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -791,6 +862,9 @@ func TestConvertTypedObjectAvoidsDottedPathCollisions(t *testing.T) {
 	assertJSONPath(t, document, "a.b", "nested")
 	if !slices.Equal(names, []string{"a%2Eb", "a.b", "a\\.b"}) {
 		t.Fatalf("field_names = %#v", names)
+	}
+	if !slices.Equal(types, []uint8{2, 2, 2}) {
+		t.Fatalf("field_types = %#v", types)
 	}
 }
 
@@ -1366,6 +1440,14 @@ func assertTagged(t *testing.T, document *clickhousedriver.JSON, path, wantType,
 	tag, ok := dynamic.Any().(map[string]string)
 	if !ok || len(tag) != 2 || tag[extendedTypeKey] != wantType || tag[extendedValueKey] != wantValue {
 		t.Fatalf("tag %q payload = %#v", path, dynamic.Any())
+	}
+}
+func assertDynamicType(t *testing.T, document *clickhousedriver.JSON, path, want string) {
+	t.Helper()
+	value, ok := document.ValueAtPath(path)
+	dynamic, dynamicOK := value.(clickhousedriver.Dynamic)
+	if !ok || !dynamicOK || dynamic.Type() != want {
+		t.Fatalf("dynamic type at %q = %#v (%T), want %q", path, value, value, want)
 	}
 }
 func assertTransient(t *testing.T, err error, reason opensplunkv1.RetryBatchReason) {

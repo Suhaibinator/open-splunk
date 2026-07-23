@@ -41,6 +41,8 @@ var additionalReservedDynamicRootNames = []string{
 	"raw_encoding",
 	"fields",
 	"field_names",
+	"field_types",
+	"field_metadata_version",
 	"batch_sequence",
 	"expires_at",
 	"visibility_seq",

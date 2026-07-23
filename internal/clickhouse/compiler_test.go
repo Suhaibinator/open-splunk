@@ -1572,6 +1572,81 @@ func TestProjectionDoesNotExposeInternalColumns(t *testing.T) {
 	}
 }
 
+func TestCompileScanAliasesPersistedFieldMetadataWithoutPublicExposure(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis`)
+	for _, alias := range []string{
+		`"field_types" AS "__os_field_types"`,
+		`"field_metadata_version" AS "__os_field_metadata_version"`,
+	} {
+		if strings.Count(compiled.SQL, alias) != 1 {
+			t.Fatalf("compiled SQL must contain one scan alias %q:\n%s", alias, compiled.SQL)
+		}
+	}
+	for _, output := range compiled.OutputFields {
+		if output == internalFieldTypesColumn || output == internalFieldMetadataVersionColumn {
+			t.Fatalf("persisted field metadata leaked into public outputs: %v", compiled.OutputFields)
+		}
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d: %#v\n%s", got, want, compiled.Args, compiled.SQL)
+	}
+}
+
+func TestEventPipelinesPreservePersistedFieldMetadataForAnalysis(t *testing.T) {
+	t.Parallel()
+
+	const explicitPrivateProjection = `"__os_fields", "__os_field_names", "__os_field_types", "__os_field_metadata_version", "__os_sort_time", "__os_sort_event_id"`
+	tests := []struct {
+		name          string
+		source        string
+		stageFragment string
+	}{
+		{name: "include", source: `index=gradethis | fields status`, stageFragment: explicitPrivateProjection},
+		{name: "exclude", source: `index=gradethis | fields - trace_id`, stageFragment: explicitPrivateProjection},
+		{name: "table", source: `index=gradethis | table status`, stageFragment: explicitPrivateProjection},
+		{name: "rename", source: `index=gradethis | rename status AS code`, stageFragment: explicitPrivateProjection},
+		{name: "eval", source: `index=gradethis | eval code=status`, stageFragment: `SELECT *, "__os_fields"."status" AS "code"`},
+		{name: "dedup", source: `index=gradethis | dedup status`, stageFragment: `SELECT *, toUInt8(`},
+		{name: "head", source: `index=gradethis | head 5`, stageFragment: `SELECT * FROM (`},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			logical := buildPlan(t, test.source)
+			compiled, err := (Compiler{}).compileEventAnalysis(logical, func(
+				fragment string,
+				_ compileState,
+				args []any,
+				_ *plan.Scan,
+				_ int,
+			) (CompiledQuery, error) {
+				return CompiledQuery{
+					SQL: "SELECT " + quoteIdentifier(internalFieldTypesColumn) + ", " +
+						quoteIdentifier(internalFieldMetadataVersionColumn) + " FROM (" + fragment + ") AS " +
+						quoteIdentifier("__os_metadata_probe"),
+					Args: args,
+				}, nil
+			})
+			if err != nil {
+				t.Fatalf("compileEventAnalysis: %v", err)
+			}
+			if !strings.Contains(compiled.SQL, test.stageFragment) {
+				t.Fatalf("compiled SQL does not preserve metadata through %s stage; missing %q:\n%s", test.name, test.stageFragment, compiled.SQL)
+			}
+			if !strings.HasPrefix(compiled.SQL, `SELECT "__os_field_types", "__os_field_metadata_version" FROM (`) {
+				t.Fatalf("analysis finalizer cannot address persisted metadata after %s:\n%s", test.name, compiled.SQL)
+			}
+			if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+				t.Fatalf("placeholder count = %d, args = %d: %#v\n%s", got, want, compiled.Args, compiled.SQL)
+			}
+		})
+	}
+}
+
 func TestCompiledPlaceholderCountMatchesArguments(t *testing.T) {
 	t.Parallel()
 

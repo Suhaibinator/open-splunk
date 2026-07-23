@@ -187,17 +187,19 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 		bytesType, literalDot, nestedValue            string
 		servicePresent, serviceEmpty, levelMissing    bool
 		fieldNames                                    []string
+		fieldTypes                                    []uint8
+		fieldMetadataVersion                          uint8
 		expiresAt                                     time.Time
 	)
 	query := "SELECT raw, dynamicType(fields.signed), dynamicType(fields.unsigned), " +
 		"dynamicType(fields.nothing), dynamicType(fields.mixed), dynamicType(fields.bytes), " +
 		"fields.`literal%2Edot`.:String, fields.nested.value.:String, " +
-		"isNotNull(service), service = '', isNull(level), field_names, expires_at " +
+		"isNotNull(service), service = '', isNull(level), field_names, field_types, field_metadata_version, expires_at " +
 		"FROM open_splunk.events WHERE event_id = ? LIMIT 1"
 	if err := queryConnection.QueryRow(ctx, query, "native-event").Scan(
 		&raw, &signedType, &unsignedType, &nullType, &mixedType, &bytesType,
 		&literalDot, &nestedValue, &servicePresent, &serviceEmpty, &levelMissing,
-		&fieldNames, &expiresAt,
+		&fieldNames, &fieldTypes, &fieldMetadataVersion, &expiresAt,
 	); err != nil {
 		t.Fatalf("query stored event: %v", err)
 	}
@@ -215,6 +217,10 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	wantNames := []string{"bytes", "literal\\.dot", "mixed", "nested.value", "nothing", "signed", "unsigned"}
 	if strings.Join(fieldNames, "\n") != strings.Join(wantNames, "\n") {
 		t.Fatalf("field_names = %#v, want %#v", fieldNames, wantNames)
+	}
+	wantTypes := []uint8{7, 2, 10, 2, 1, 3, 4}
+	if !slices.Equal(fieldTypes, wantTypes) || fieldMetadataVersion != 1 {
+		t.Fatalf("field metadata = version %d types %#v, want version 1 types %#v", fieldMetadataVersion, fieldTypes, wantTypes)
 	}
 	if want := indexTime.Truncate(time.Millisecond).Add(30 * 24 * time.Hour); !expiresAt.Equal(want) {
 		t.Fatalf("expires_at = %v, want %v", expiresAt, want)

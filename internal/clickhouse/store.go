@@ -53,6 +53,7 @@ var (
 		"service", "severity", "level", "body", "raw", "raw_encoding",
 		"trace_id", "span_id", "fields", "field_names", "collector_id",
 		"batch_id", "batch_sequence", "expires_at", "visibility_seq",
+		"field_types", "field_metadata_version",
 	}
 	eventsInsertSQL = buildEventsInsertSQL(defaultDatabase, defaultTable)
 )
@@ -780,7 +781,7 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 			retentionByIndex[event.GetIndexName()] = period
 		}
 
-		fields, fieldNames, conversionErr := convertTypedObject(event.GetFields())
+		fields, fieldNames, fieldTypes, conversionErr := convertTypedObject(event.GetFields())
 		if conversionErr != nil {
 			return nil, fmt.Errorf("convert fields for event %d (%q): %w", i, event.GetEventId(), conversionErr)
 		}
@@ -819,34 +820,40 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 			batch.BatchSequence,
 			expiresAt,
 			uint64(0), // Filled under the visibility commit lock immediately before insert.
+			fieldTypes,
+			eventfields.CurrentFieldMetadataVersion,
 		})
 	}
 	return rows, nil
 }
 
-func convertTypedObject(object *opensplunkv1.TypedObject) (*clickhousedriver.JSON, []string, error) {
+func convertTypedObject(object *opensplunkv1.TypedObject) (*clickhousedriver.JSON, []string, []uint8, error) {
 	document := clickhousedriver.NewJSON()
 	if object == nil {
-		return document, []string{}, nil
+		return document, []string{}, []uint8{}, nil
 	}
-	fieldNames := make(map[string]struct{})
+	fieldTypes := make(map[string]eventfields.StoredValueType)
 	physicalPaths := make(map[string]string)
-	if err := flattenTypedObject(document, object, nil, nil, fieldNames, physicalPaths); err != nil {
-		return nil, nil, err
+	if err := flattenTypedObject(document, object, nil, nil, fieldTypes, physicalPaths); err != nil {
+		return nil, nil, nil, err
 	}
-	names := make([]string, 0, len(fieldNames))
-	for name := range fieldNames {
+	names := make([]string, 0, len(fieldTypes))
+	for name := range fieldTypes {
 		names = append(names, name)
 	}
 	slices.Sort(names)
-	return document, names, nil
+	types := make([]uint8, len(names))
+	for index, name := range names {
+		types[index] = uint8(fieldTypes[name])
+	}
+	return document, names, types, nil
 }
 
 func flattenTypedObject(
 	document *clickhousedriver.JSON,
 	object *opensplunkv1.TypedObject,
 	logicalPrefix, physicalPrefix []string,
-	fieldNames map[string]struct{},
+	fieldTypes map[string]eventfields.StoredValueType,
 	physicalPaths map[string]string,
 ) error {
 	if object == nil {
@@ -878,7 +885,7 @@ func flattenTypedObject(
 				return fmt.Errorf("typed object field %q has a nil object", field.GetName())
 			}
 			if len(nested.ObjectValue.GetFields()) != 0 {
-				if err := flattenTypedObject(document, nested.ObjectValue, logicalPath, physicalPath, fieldNames, physicalPaths); err != nil {
+				if err := flattenTypedObject(document, nested.ObjectValue, logicalPath, physicalPath, fieldTypes, physicalPaths); err != nil {
 					return err
 				}
 				continue
@@ -903,9 +910,47 @@ func flattenTypedObject(
 		// wrapper the driver's per-path type reuse can coerce a later integral
 		// Float64 into an existing Int64 subcolumn, destroying type intent.
 		document.SetValueAtPath(physicalName, dynamic)
-		fieldNames[logicalName] = struct{}{}
+		fieldType, err := storedValueType(field.GetValue())
+		if err != nil {
+			return fmt.Errorf("typed object field %q: %w", field.GetName(), err)
+		}
+		fieldTypes[logicalName] = fieldType
 	}
 	return nil
+}
+
+func storedValueType(value *opensplunkv1.TypedValue) (eventfields.StoredValueType, error) {
+	if value == nil || value.GetKind() == nil {
+		return 0, errors.New("typed value kind is required")
+	}
+	switch value.GetKind().(type) {
+	case *opensplunkv1.TypedValue_NullValue:
+		return eventfields.StoredValueTypeNull, nil
+	case *opensplunkv1.TypedValue_StringValue:
+		return eventfields.StoredValueTypeString, nil
+	case *opensplunkv1.TypedValue_Sint64Value:
+		return eventfields.StoredValueTypeSint64, nil
+	case *opensplunkv1.TypedValue_Uint64Value:
+		return eventfields.StoredValueTypeUint64, nil
+	case *opensplunkv1.TypedValue_DoubleValue:
+		return eventfields.StoredValueTypeDouble, nil
+	case *opensplunkv1.TypedValue_BoolValue:
+		return eventfields.StoredValueTypeBool, nil
+	case *opensplunkv1.TypedValue_BytesValue:
+		return eventfields.StoredValueTypeBytes, nil
+	case *opensplunkv1.TypedValue_TimestampValue:
+		return eventfields.StoredValueTypeTimestamp, nil
+	case *opensplunkv1.TypedValue_DurationValue:
+		return eventfields.StoredValueTypeDuration, nil
+	case *opensplunkv1.TypedValue_ListValue:
+		return eventfields.StoredValueTypeList, nil
+	case *opensplunkv1.TypedValue_ObjectValue:
+		return eventfields.StoredValueTypeObject, nil
+	case *opensplunkv1.TypedValue_DecimalValue:
+		return eventfields.StoredValueTypeDecimal, nil
+	default:
+		return 0, errors.New("typed value kind is unsupported")
+	}
 }
 
 func typedValueToNative(value *opensplunkv1.TypedValue) (any, error) {
@@ -1379,7 +1424,7 @@ func applyReservation(rows [][]any, reservation visibility.Reservation) error {
 		}
 		row[4] = indexTime
 		row[23] = expiresAt
-		row[len(row)-1] = reservation.Sequence
+		row[24] = reservation.Sequence
 	}
 	return nil
 }
