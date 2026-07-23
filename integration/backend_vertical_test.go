@@ -34,12 +34,13 @@ const (
 	verticalIndexName              = "vertical"
 	verticalTenantID               = "vertical-tenant"
 	verticalEventCount             = uint64(4)
+	verticalTimelineMaximumBuckets = uint32(1_000)
 	bulkIndexName                  = "vertical-bulk"
 	bulkEventCount                 = uint64(10_001)
 	redactionAPIKeySentinel        = "vertical-api-key-must-not-survive"
 	redactionCookieSentinel        = "vertical-cookie-must-not-survive"
 	redactionPrivateKeySentinel    = "vertical-private-key-must-not-survive"
-	verticalSearchSPL              = " \nindex=vertical | table message status duration_ms api_key _raw\t"
+	verticalSearchSPL              = " \nindex=vertical | table _time message status duration_ms api_key _raw\t"
 	bulkSearchSPL                  = "index=vertical-bulk | table event_id"
 	splCompatibilityVersionForTest = "tier-1-dev"
 	clickHouseEventInsertSQL       = "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
@@ -182,8 +183,10 @@ func TestBackendVertical(t *testing.T) {
 	}
 	assertProcessLogsDoNotLeak(t, collectorProcess.Logs(), plaintextToken,
 		redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel)
+	insertTimelineExclusiveBoundaryEvent(t, ctx, storage, fixtureStart.Add(5500*time.Millisecond), visibilityCutoff)
 
 	search := runSearch(t, ctx, httpClient, baseURL, fixtureStart)
+	assertCompletedTimeline(t, ctx, httpClient, baseURL, search.jobID, fixtureStart)
 	assertTypedRedactedResults(t, search.results)
 	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(search.results)
 	if err != nil {
@@ -268,11 +271,18 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 	var bootstrap opensplunkv1.GetSystemBootstrapResponse
 	postProto(t, ctx, client, baseURL+"/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{}, &bootstrap)
 	limits := bootstrap.GetLimits()
+	timelineFeatures := 0
+	for _, feature := range bootstrap.GetFeatures() {
+		if feature == opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE {
+			timelineFeatures++
+		}
+	}
 	if bootstrap.GetServerVersion() != "dev" || bootstrap.GetApiVersion() != "v1" ||
 		bootstrap.GetSplCompatibilityVersion() != splCompatibilityVersionForTest ||
 		bootstrap.GetSearchWebsocketPath() != "/api/v1/search/ws" ||
 		limits.GetMaximumPreviewRows() != 0 || limits.GetMaximumWebsocketSubscriptions() == 0 ||
-		limits.GetMaximumWebsocketFrameBytes() < 1<<10 || limits.GetMaximumWebsocketFrameBytes() > 1<<20 {
+		limits.GetMaximumWebsocketFrameBytes() < 1<<10 || limits.GetMaximumWebsocketFrameBytes() > 1<<20 ||
+		timelineFeatures != 1 || limits.GetMaximumTimelineBuckets() != verticalTimelineMaximumBuckets {
 		t.Fatalf("standalone bootstrap response = %+v", &bootstrap)
 	}
 }
@@ -704,6 +714,47 @@ func assertStoredEventBounds(t *testing.T, ctx context.Context, connection click
 	return maximumVisibility
 }
 
+func insertTimelineExclusiveBoundaryEvent(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	eventTime time.Time,
+	visibilityCutoff uint64,
+) {
+	t.Helper()
+	if eventTime.Nanosecond() == 0 || visibilityCutoff == 0 {
+		t.Fatalf("invalid timeline boundary fixture: event_time=%s visibility=%d", eventTime, visibilityCutoff)
+	}
+	const eventID = "vertical-timeline-exclusive-boundary"
+	message := "timeline latest-exclusive boundary event"
+	document := clickhousedriver.NewJSON()
+	batch, err := connection.PrepareBatch(ctx, clickHouseEventInsertSQL)
+	if err != nil {
+		t.Fatalf("prepare timeline boundary event: %v", err)
+	}
+	if err := batch.Append(
+		eventID, verticalTenantID, verticalIndexName, eventTime, eventTime,
+		nil, uint8(1), "vertical-host", "timeline-boundary.log", "integration", nil, uint8(1), nil,
+		&message, []byte(message), uint8(1), nil, nil, document, []string(nil), "integration-direct",
+		"vertical-timeline-boundary", uint64(1), eventTime.Add(24*time.Hour), visibilityCutoff,
+	); err != nil {
+		t.Fatalf("append timeline boundary event: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("insert timeline boundary event: %v", err)
+	}
+	var storedTime time.Time
+	if err := connection.QueryRow(ctx,
+		"SELECT event_time FROM open_splunk.events WHERE tenant_id = ? AND event_id = ?",
+		verticalTenantID, eventID,
+	).Scan(&storedTime); err != nil {
+		t.Fatalf("read timeline boundary event: %v", err)
+	}
+	if !storedTime.Equal(eventTime) {
+		t.Fatalf("stored timeline boundary event time = %s, want %s", storedTime, eventTime)
+	}
+}
+
 func insertBulkEvents(t *testing.T, ctx context.Context, connection clickhousedriver.Conn, visibilityCutoff uint64) time.Time {
 	t.Helper()
 	if visibilityCutoff == 0 {
@@ -972,8 +1023,8 @@ func forEachJSONLine(t *testing.T, artifact []byte, visit func(int, map[string]a
 
 func runSearch(t *testing.T, ctx context.Context, client *http.Client, baseURL string, fixtureStart time.Time) completedSearch {
 	t.Helper()
-	earliest := fixtureStart.Add(-time.Minute).Format(time.RFC3339Nano)
-	latest := time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano)
+	earliest := fixtureStart.Format(time.RFC3339Nano)
+	latest := fixtureStart.Add(5500 * time.Millisecond).Format(time.RFC3339Nano)
 	timezone := "UTC"
 	var created opensplunkv1.CreateSearchJobResponse
 	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/create", &opensplunkv1.CreateSearchJobRequest{
@@ -1014,6 +1065,67 @@ func runSearch(t *testing.T, ctx context.Context, client *http.Client, baseURL s
 	}, &results)
 	waitForTerminalHistory(t, ctx, client, baseURL, jobID)
 	return completedSearch{jobID: jobID, results: &results}
+}
+
+func assertCompletedTimeline(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL, searchJobID string,
+	fixtureStart time.Time,
+) {
+	t.Helper()
+	maximumBuckets := uint32(10)
+	var timeline opensplunkv1.GetSearchTimelineResponse
+	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/timeline", &opensplunkv1.GetSearchTimelineRequest{
+		SearchJobId:          searchJobID,
+		MaxBuckets:           &maximumBuckets,
+		PreferredBucketWidth: durationpb.New(time.Second),
+	}, &timeline)
+
+	if !timeline.GetComplete() || timeline.GetBucketWidth() == nil ||
+		timeline.GetBucketWidth().AsDuration() != time.Second {
+		t.Fatalf("completed timeline metadata = %+v", &timeline)
+	}
+	wantCounts := []uint64{1, 1, 1, 1, 0, 0}
+	buckets := timeline.GetBuckets()
+	if len(buckets) != len(wantCounts) {
+		t.Fatalf("completed timeline bucket count = %d, want %d: %+v", len(buckets), len(wantCounts), &timeline)
+	}
+	wantSearchLatest := fixtureStart.Add(5500 * time.Millisecond)
+	var total uint64
+	for index, bucket := range buckets {
+		if bucket.GetEarliest() == nil || bucket.GetLatest() == nil {
+			t.Fatalf("timeline bucket %d is missing a boundary: %+v", index, bucket)
+		}
+		if err := bucket.GetEarliest().CheckValid(); err != nil {
+			t.Fatalf("timeline bucket %d earliest is invalid: %v", index, err)
+		}
+		if err := bucket.GetLatest().CheckValid(); err != nil {
+			t.Fatalf("timeline bucket %d latest is invalid: %v", index, err)
+		}
+		wantEarliest := fixtureStart.Add(time.Duration(index) * time.Second)
+		wantLatest := wantEarliest.Add(time.Second)
+		wantPartial := false
+		if wantLatest.After(wantSearchLatest) {
+			wantLatest = wantSearchLatest
+			wantPartial = true
+		}
+		if !bucket.GetEarliest().AsTime().Equal(wantEarliest) ||
+			!bucket.GetLatest().AsTime().Equal(wantLatest) ||
+			bucket.GetEventCount() != wantCounts[index] || bucket.GetPartial() != wantPartial {
+			t.Fatalf("timeline bucket %d = %+v, want [%s,%s) count=%d partial=%t", index, bucket,
+				wantEarliest.Format(time.RFC3339Nano), wantLatest.Format(time.RFC3339Nano), wantCounts[index], wantPartial)
+		}
+		total += bucket.GetEventCount()
+	}
+	// The fixture has a stored event exactly at each search boundary. The first
+	// is counted and the direct latest-boundary event is excluded, proving the
+	// search's half-open [earliest, latest) contract through real SQL execution.
+	if total != verticalEventCount || buckets[0].GetEventCount() != 1 || buckets[len(buckets)-1].GetEventCount() != 0 {
+		t.Fatalf("completed timeline total = %d, first=%d last=%d, want %d/1/0",
+			total, buckets[0].GetEventCount(), buckets[len(buckets)-1].GetEventCount(), verticalEventCount)
+	}
 }
 
 func observeCompletedSearchWebSocket(

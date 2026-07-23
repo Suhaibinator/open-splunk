@@ -34,6 +34,7 @@ message BrowserApiLimits {
   uint64 maximum_export_bytes = 6;
   google.protobuf.Duration default_search_timeout = 7;
   google.protobuf.Duration search_result_retention = 8;
+  uint32 maximum_timeline_buckets = 9;
 }
 
 // POST /api/v1/system/bootstrap

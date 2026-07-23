@@ -22,6 +22,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
+	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
@@ -29,6 +30,7 @@ import (
 )
 
 const (
+	searchTimelinePath                = "/api/v1/search/jobs/timeline"
 	searchWebSocketPath               = "/api/v1/search/ws"
 	defaultMaximumRequestBytes        = int64(128 << 10)
 	defaultMaximumPageSize            = uint32(1_000)
@@ -46,6 +48,7 @@ const (
 	maximumConcurrentDownloads        = 256
 	maximumIdentityBytes              = 255
 	maximumBootstrapApps              = 256
+	maximumSearchTimelineBuckets      = uint32(10_000)
 	maximumWebSocketSubscriptions     = uint32(256)
 	minimumWebSocketFrameBytes        = uint64(1 << 10)
 	maximumWebSocketFrameBytes        = uint64(1 << 20)
@@ -123,6 +126,14 @@ type Exports interface {
 	RedeemDownload(context.Context, string) (exportjobs.ArtifactDownload, error)
 }
 
+// SearchTimelines is the bounded, owner-scoped on-demand analysis surface.
+// The maximum is read when the handler is constructed so request validation
+// and the service's enforced limit cannot silently drift within one handler.
+type SearchTimelines interface {
+	Get(context.Context, searchjobs.AccessScope, searchanalysis.Request) (searchanalysis.Result, error)
+	MaximumBuckets() uint32
+}
+
 // SearchWebSocket is the independently lifecycle-managed progress transport.
 // Its advertised limits are read from the same service that enforces them so
 // bootstrap metadata cannot drift from the live route.
@@ -193,6 +204,7 @@ type Config struct {
 	SavedSearches              SavedSearches
 	SearchHistory              SearchHistory
 	Exports                    Exports
+	SearchTimelines            SearchTimelines
 	SearchWebSocket            SearchWebSocket
 	WebUI                      fs.FS
 	Bootstrap                  BootstrapConfig
@@ -212,24 +224,26 @@ type Config struct {
 }
 
 type apiHandler struct {
-	jobs                SearchJobs
-	indexes             IndexCatalog
-	indexAdmin          IndexAdministration
-	ingestionTokens     IngestionTokenAdministration
-	savedSearches       SavedSearches
-	searchHistory       SearchHistory
-	exports             Exports
-	searchWebSocket     SearchWebSocket
-	ownerID             string
-	tenantID            string
-	maximumPageSize     uint32
-	bootstrap           BootstrapConfig
-	now                 func() time.Time
-	requestGate         chan struct{}
-	serializationGate   chan struct{}
-	downloadGate        chan struct{}
-	adminCursorKey      [32]byte
-	browserAllowedHosts map[string]struct{}
+	jobs                   SearchJobs
+	indexes                IndexCatalog
+	indexAdmin             IndexAdministration
+	ingestionTokens        IngestionTokenAdministration
+	savedSearches          SavedSearches
+	searchHistory          SearchHistory
+	exports                Exports
+	searchTimelines        SearchTimelines
+	searchWebSocket        SearchWebSocket
+	ownerID                string
+	tenantID               string
+	maximumPageSize        uint32
+	maximumTimelineBuckets uint32
+	bootstrap              BootstrapConfig
+	now                    func() time.Time
+	requestGate            chan struct{}
+	serializationGate      chan struct{}
+	downloadGate           chan struct{}
+	adminCursorKey         [32]byte
+	browserAllowedHosts    map[string]struct{}
 }
 
 // NewHandler constructs the complete HTTP handler. API paths are dispatched
@@ -264,6 +278,17 @@ func NewHandler(config Config) (*Handler, error) {
 	exportService := config.Exports
 	if isNilDependency(exportService) {
 		exportService = nil
+	}
+	timelineService := config.SearchTimelines
+	if isNilDependency(timelineService) {
+		timelineService = nil
+	}
+	maximumTimelineBuckets := uint32(0)
+	if timelineService != nil {
+		maximumTimelineBuckets = timelineService.MaximumBuckets()
+		if maximumTimelineBuckets == 0 || maximumTimelineBuckets > maximumSearchTimelineBuckets {
+			return nil, fmt.Errorf("create server handler: timeline maximum buckets must be between 1 and %d", maximumSearchTimelineBuckets)
+		}
 	}
 	searchWebSocket := config.SearchWebSocket
 	if isNilDependency(searchWebSocket) {
@@ -350,7 +375,7 @@ func NewHandler(config Config) (*Handler, error) {
 		bootstrap.MaximumSubscriptions = maximumSubscriptions
 		bootstrap.MaximumWebSocketBytes = maximumFrameBytes
 	}
-	bootstrap.Features = featuresForServices(bootstrap.Features, indexAdmin != nil, ingestionTokens != nil, searchHistoryService != nil, exportService != nil)
+	bootstrap.Features = featuresForServices(bootstrap.Features, indexAdmin != nil, ingestionTokens != nil, searchHistoryService != nil, exportService != nil, timelineService != nil)
 	browserAllowedHosts, err := normalizeBrowserAllowedHosts(config.AdministrativeAllowedHosts)
 	if err != nil {
 		return nil, fmt.Errorf("create server handler: %w", err)
@@ -367,24 +392,26 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 
 	api := &apiHandler{
-		jobs:                config.SearchJobs,
-		indexes:             config.Indexes,
-		indexAdmin:          indexAdmin,
-		ingestionTokens:     ingestionTokens,
-		savedSearches:       config.SavedSearches,
-		searchHistory:       searchHistoryService,
-		exports:             exportService,
-		searchWebSocket:     searchWebSocket,
-		ownerID:             ownerID,
-		tenantID:            tenantID,
-		maximumPageSize:     pageSize,
-		bootstrap:           bootstrap,
-		now:                 now,
-		requestGate:         make(chan struct{}, concurrentRequests),
-		serializationGate:   make(chan struct{}, concurrentResponses),
-		downloadGate:        make(chan struct{}, concurrentDownloads),
-		adminCursorKey:      adminCursorKey,
-		browserAllowedHosts: browserAllowedHosts,
+		jobs:                   config.SearchJobs,
+		indexes:                config.Indexes,
+		indexAdmin:             indexAdmin,
+		ingestionTokens:        ingestionTokens,
+		savedSearches:          config.SavedSearches,
+		searchHistory:          searchHistoryService,
+		exports:                exportService,
+		searchTimelines:        timelineService,
+		searchWebSocket:        searchWebSocket,
+		ownerID:                ownerID,
+		tenantID:               tenantID,
+		maximumPageSize:        pageSize,
+		maximumTimelineBuckets: maximumTimelineBuckets,
+		bootstrap:              bootstrap,
+		now:                    now,
+		requestGate:            make(chan struct{}, concurrentRequests),
+		serializationGate:      make(chan struct{}, concurrentResponses),
+		downloadGate:           make(chan struct{}, concurrentDownloads),
+		adminCursorKey:         adminCursorKey,
+		browserAllowedHosts:    browserAllowedHosts,
 	}
 	apiRouter := api.newRouter(requestBytes, routeTimeout)
 	apiRoutes := postAPIRoutes(
@@ -441,6 +468,9 @@ func NewHandler(config Config) (*Handler, error) {
 			apiRoutes[path] = http.MethodPost
 		}
 		apiRoutes[exportDownloadPath] = http.MethodGet
+	}
+	if api.searchTimelines != nil {
+		apiRoutes[searchTimelinePath] = http.MethodPost
 	}
 	if api.searchWebSocket != nil {
 		apiRoutes[searchWebSocketPath] = http.MethodGet
@@ -551,18 +581,25 @@ func normalizeBootstrap(config BootstrapConfig) (BootstrapConfig, error) {
 	return result, nil
 }
 
-func featuresForServices(features []opensplunkv1.ServerFeature, _, _, historyEnabled, exportsEnabled bool) []opensplunkv1.ServerFeature {
+func featuresForServices(features []opensplunkv1.ServerFeature, _, _, historyEnabled, exportsEnabled, timelineEnabled bool) []opensplunkv1.ServerFeature {
 	// The current handlers intentionally expose only the clean-install
 	// provisioning subset of these API families. Do not advertise either broad
 	// capability until every route in the corresponding proto family exists.
-	result := make([]opensplunkv1.ServerFeature, 0, len(features)+3)
+	result := make([]opensplunkv1.ServerFeature, 0, len(features)+4)
 	hasHistory := false
 	hasCSVExport := false
 	hasJSONLinesExport := false
+	hasTimeline := false
 	for _, feature := range features {
+		if feature == opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE {
+			if timelineEnabled && !hasTimeline {
+				result = append(result, feature)
+				hasTimeline = true
+			}
+			continue
+		}
 		if feature != opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW &&
 			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY &&
-			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE &&
 			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN &&
 			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN &&
 			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN &&
@@ -584,6 +621,9 @@ func featuresForServices(features []opensplunkv1.ServerFeature, _, _, historyEna
 	}
 	if exportsEnabled && !hasJSONLinesExport {
 		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES)
+	}
+	if timelineEnabled && !hasTimeline {
+		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE)
 	}
 	return result
 }
@@ -660,6 +700,9 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	}
 	if handler.searchHistory != nil {
 		routes = append(routes, handler.searchHistoryRoutes(noAuth, smallRequestBytes)...)
+	}
+	if handler.searchTimelines != nil {
+		routes = append(routes, handler.searchTimelineRoutes(noAuth, smallRequestBytes)...)
 	}
 	if handler.exports != nil {
 		routes = append(routes,
@@ -804,59 +847,16 @@ func writeBusyResponse(response http.ResponseWriter, message string) {
 // protobuf marshaling and the response write bounds both detached result pages
 // and wire buffers, while acquiring it after request decoding means slow
 // uploads cannot starve normal result readers.
-type serializedSearchResultsResponse struct {
-	message *opensplunkv1.GetSearchResultsResponse
-	ctx     context.Context
-	release func()
-}
+type serializedSearchResultsResponse = boundedProtoResponse[*opensplunkv1.GetSearchResultsResponse]
 
-type serializedSearchResultsCodec struct {
-	inner codec.Codec[*opensplunkv1.GetSearchResultsRequest, *opensplunkv1.GetSearchResultsResponse]
-}
+type serializedSearchResultsCodec = boundedProtoCodec[*opensplunkv1.GetSearchResultsRequest, *opensplunkv1.GetSearchResultsResponse]
 
 func newSerializedSearchResultsCodec() *serializedSearchResultsCodec {
-	return &serializedSearchResultsCodec{
-		inner: codec.NewProtoCodec[*opensplunkv1.GetSearchResultsRequest, *opensplunkv1.GetSearchResultsResponse](),
-	}
-}
-
-func (codec *serializedSearchResultsCodec) NewRequest() *opensplunkv1.GetSearchResultsRequest {
-	return codec.inner.NewRequest()
-}
-
-func (codec *serializedSearchResultsCodec) Decode(request *http.Request) (*opensplunkv1.GetSearchResultsRequest, error) {
-	return codec.inner.Decode(request)
-}
-
-func (codec *serializedSearchResultsCodec) DecodeBytes(data []byte) (*opensplunkv1.GetSearchResultsRequest, error) {
-	return codec.inner.DecodeBytes(data)
-}
-
-func (codec *serializedSearchResultsCodec) Encode(response http.ResponseWriter, result *serializedSearchResultsResponse) error {
-	if result == nil || result.release == nil {
-		return errors.New("search result serialization permit is missing")
-	}
-	defer result.release()
-	if result.message == nil {
-		return errors.New("search result response is missing")
-	}
-	if result.ctx != nil {
-		if err := result.ctx.Err(); err != nil {
-			return err
-		}
-	}
-	payload, err := proto.Marshal(result.message)
-	if err != nil {
-		return err
-	}
-	// Marshal can be the most expensive remaining step for a maximum-size
-	// page. Re-check the synchronous deadline before committing a 200 response.
-	if result.ctx != nil {
-		if err := result.ctx.Err(); err != nil {
-			return err
-		}
-	}
-	response.Header().Set("Content-Type", "application/x-protobuf")
-	_, err = response.Write(payload)
-	return err
+	return newBoundedProtoCodec(
+		codec.NewProtoCodec[*opensplunkv1.GetSearchResultsRequest, *opensplunkv1.GetSearchResultsResponse](),
+		boundedProtoCodecOptions{
+			stateError:   "search result serialization permit is missing",
+			messageError: "search result response is missing",
+		},
+	)
 }

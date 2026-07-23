@@ -119,6 +119,7 @@ export interface BrowserApiLimits {
   maximumExportBytes: bigint;
   defaultSearchTimeout: Duration | undefined;
   searchResultRetention: Duration | undefined;
+  maximumTimelineBuckets: number;
 }
 
 /** POST /api/v1/system/bootstrap */
@@ -149,6 +150,7 @@ function createBaseBrowserApiLimits(): BrowserApiLimits {
     maximumExportBytes: 0n,
     defaultSearchTimeout: undefined,
     searchResultRetention: undefined,
+    maximumTimelineBuckets: 0,
   };
 }
 
@@ -188,6 +190,9 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
     }
     if (message.searchResultRetention !== undefined) {
       Duration.encode(message.searchResultRetention, writer.uint32(66).fork()).join();
+    }
+    if (message.maximumTimelineBuckets !== 0) {
+      writer.uint32(72).uint32(message.maximumTimelineBuckets);
     }
     return writer;
   },
@@ -263,6 +268,14 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
           message.searchResultRetention = Duration.decode(reader, reader.uint32());
           continue;
         }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.maximumTimelineBuckets = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -314,6 +327,11 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
         : isSet(object.search_result_retention)
         ? Duration.fromJSON(object.search_result_retention)
         : undefined,
+      maximumTimelineBuckets: isSet(object.maximumTimelineBuckets)
+        ? globalThis.Number(object.maximumTimelineBuckets)
+        : isSet(object.maximum_timeline_buckets)
+        ? globalThis.Number(object.maximum_timeline_buckets)
+        : 0,
     };
   },
 
@@ -343,6 +361,9 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
     if (message.searchResultRetention !== undefined) {
       obj.searchResultRetention = Duration.toJSON(message.searchResultRetention);
     }
+    if (message.maximumTimelineBuckets !== 0) {
+      obj.maximumTimelineBuckets = Math.round(message.maximumTimelineBuckets);
+    }
     return obj;
   },
 
@@ -371,6 +392,7 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
       (object.searchResultRetention !== undefined && object.searchResultRetention !== null)
         ? Duration.fromPartial(object.searchResultRetention)
         : undefined;
+    message.maximumTimelineBuckets = object.maximumTimelineBuckets ?? 0;
     return message;
   },
 };

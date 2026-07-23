@@ -12,6 +12,7 @@ import (
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -19,11 +20,6 @@ import (
 )
 
 const maximumRequestedIndexes = 128
-
-var (
-	minimumSearchTime = time.Date(1678, 1, 1, 0, 0, 0, 0, time.UTC)
-	maximumSearchTime = time.Date(2262, 1, 1, 0, 0, 0, 0, time.UTC)
-)
 
 func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *opensplunkv1.GetSystemBootstrapRequest) (*opensplunkv1.GetSystemBootstrapResponse, error) {
 	indexes, err := handler.indexes.ListIndexes(request.Context())
@@ -60,6 +56,7 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 			MaximumExportBytes:            handler.bootstrap.MaximumExportBytes,
 			DefaultSearchTimeout:          durationpb.New(handler.bootstrap.DefaultSearchTimeout),
 			SearchResultRetention:         durationpb.New(handler.bootstrap.SearchResultRetention),
+			MaximumTimelineBuckets:        handler.maximumTimelineBuckets,
 		},
 		Apps:       apps,
 		Indexes:    indexSummaries,
@@ -343,7 +340,7 @@ func absoluteTimeRange(spec *opensplunkv1.TimeRangeSpec) (time.Time, time.Time, 
 	if !earliest.Before(latest) {
 		return time.Time{}, time.Time{}, errors.New("earliest must be before latest")
 	}
-	if earliest.Before(minimumSearchTime) || latest.After(maximumSearchTime) {
+	if !clickhouse.SupportsSearchTimeRange(earliest, latest) {
 		return time.Time{}, time.Time{}, errors.New("time range is outside the supported ClickHouse DateTime64 range")
 	}
 	if timezone := strings.TrimSpace(spec.GetTimezone()); timezone != "" {

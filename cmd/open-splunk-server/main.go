@@ -25,6 +25,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
+	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchws"
@@ -264,7 +265,7 @@ func run() error {
 			log.Printf("close search websocket service: %v", err)
 		}
 	}()
-	handler, err := server.NewHandler(server.Config{
+	handler, err := newRuntimeHTTPHandler(server.Config{
 		SearchJobs:                 jobs,
 		SearchWebSocket:            searchWebSocket,
 		Exports:                    exports,
@@ -283,6 +284,10 @@ func run() error {
 			MaximumExportRows:       exportSettings.maximumRowLimit,
 			MaximumExportBytes:      exportSettings.maximumByteLimit,
 		},
+	}, searchanalysis.Config{
+		Searches: jobs,
+		Compiler: compiler,
+		Executor: executor,
 	})
 	if err != nil {
 		return fmt.Errorf("create HTTP handler: %w", err)
