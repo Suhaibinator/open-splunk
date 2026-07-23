@@ -9,6 +9,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/proto"
@@ -35,7 +36,7 @@ func projectSearch(job searchjobs.Job, now time.Time) (targetProjection, error) 
 	if state == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED {
 		return targetProjection{}, errors.New("search websocket projection: search state is invalid")
 	}
-	progress, err := searchProgressToProto(job, now)
+	progress, err := searchjobproto.Progress(job, now)
 	if err != nil {
 		return targetProjection{}, err
 	}
@@ -161,29 +162,6 @@ func projectExport(job exportjobs.Job, now time.Time) (targetProjection, error) 
 	return targetProjection{version: job.Version, incarnation: canonicalTime(job.CreatedAt), terminal: terminal, refreshAt: refreshAt, events: events}, nil
 }
 
-func searchProgressToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchProgress, error) {
-	updatedAt := canonicalTime(now)
-	if !job.FinishedAt.IsZero() {
-		updatedAt = canonicalTime(job.FinishedAt)
-	}
-	updated, err := timestampToProto(updatedAt)
-	if err != nil {
-		return nil, err
-	}
-	elapsed := time.Duration(0)
-	if !job.StartedAt.IsZero() && updatedAt.After(job.StartedAt) {
-		elapsed = updatedAt.Sub(job.StartedAt)
-	}
-	queueWait := time.Duration(0)
-	if !job.StartedAt.IsZero() && job.StartedAt.After(job.CreatedAt) {
-		queueWait = job.StartedAt.Sub(job.CreatedAt)
-	}
-	return &opensplunkv1.SearchProgress{
-		Phase: searchPhaseToProto(job.State), ProducedRows: job.RowCount, ResultBytes: job.ResultBytes,
-		Elapsed: durationpb.New(elapsed), QueueWait: durationpb.New(queueWait), UpdatedAt: updated,
-	}, nil
-}
-
 func exportProgressToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportProgress, error) {
 	updatedAt := job.Progress.UpdatedAt
 	if updatedAt.IsZero() {
@@ -271,23 +249,6 @@ func searchStateToProto(state searchjobs.State) opensplunkv1.SearchJobState {
 		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED
 	default:
 		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED
-	}
-}
-
-func searchPhaseToProto(state searchjobs.State) opensplunkv1.SearchExecutionPhase {
-	switch state {
-	case searchjobs.StateQueued:
-		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_WAITING_FOR_SLOT
-	case searchjobs.StateParsing:
-		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_PARSING
-	case searchjobs.StatePlanning:
-		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_OPTIMIZING
-	case searchjobs.StateRunning:
-		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_EXECUTING
-	case searchjobs.StateCompleted, searchjobs.StateFailed, searchjobs.StateCanceled, searchjobs.StateExpired:
-		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE
-	default:
-		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_UNSPECIFIED
 	}
 }
 

@@ -25,6 +25,8 @@ func TestSearchJobListRouteRoundTripScopeFiltersAndSafeProjection(t *testing.T) 
 	failed.SPL = "index=main ERROR failed"
 	failed.NormalizedSPL = "index=main error failed"
 	failed.AppID = "app-main"
+	failed.ScannedRows = 500
+	failed.ScannedBytes = 50_000
 	failed.Failure = &searchjobs.Failure{
 		Code:      searchjobs.FailureExecution,
 		Message:   "search execution failed",
@@ -106,6 +108,10 @@ func TestSearchJobListRouteRoundTripScopeFiltersAndSafeProjection(t *testing.T) 
 	}
 	if first.GetPlan() != nil || first.GetResultSchema() != nil || len(first.GetDiagnostics()) != 0 {
 		t.Fatalf("list projection exposed plan, schema, or diagnostics: %+v", first)
+	}
+	if progress := first.GetProgress(); progress.GetScannedRows() != failed.ScannedRows ||
+		progress.GetScannedBytes() != failed.ScannedBytes || progress.GetCountersAreEstimates() {
+		t.Fatalf("list progress = %+v", progress)
 	}
 }
 
@@ -732,6 +738,8 @@ func listItem(job searchjobs.Job) searchjobs.JobListItem {
 		Latest:           job.Latest,
 		IndexTimeCutoff:  job.IndexTimeCutoff,
 		State:            job.State,
+		ScannedRows:      job.ScannedRows,
+		ScannedBytes:     job.ScannedBytes,
 		RowCount:         job.RowCount,
 		ResultBytes:      job.ResultBytes,
 		ResultsTruncated: job.ResultsTruncated,

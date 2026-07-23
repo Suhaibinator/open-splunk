@@ -80,6 +80,7 @@ type Executor struct {
 	settings                  clickhousedriver.Settings
 	expandTimechartGroupLimit bool
 	newQueryID                func() (string, error)
+	withProgress              func(func(*clickhousedriver.Progress)) clickhousedriver.QueryOption
 }
 
 type queryConnection interface {
@@ -104,6 +105,7 @@ func New(connection driver.Conn, config Config) (*Executor, error) {
 		settings:                  settings,
 		expandTimechartGroupLimit: expandTimechartGroupLimit,
 		newQueryID:                randomQueryID,
+		withProgress:              clickhousedriver.WithProgress,
 	}, nil
 }
 
@@ -187,13 +189,27 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if err != nil {
 		return fmt.Errorf("execute ClickHouse search: create query ID: %w", err)
 	}
-	queryContext := clickhousedriver.Context(ctx,
+	withProgress := executor.withProgress
+	if withProgress == nil {
+		withProgress = clickhousedriver.WithProgress
+	}
+	executionContext, progressReporter, progressOption := startExecutionProgressWith(ctx, sink, withProgress)
+	if progressReporter != nil {
+		defer func() {
+			resultErr = progressReporter.finish(ctx, resultErr)
+		}()
+	}
+	queryOptions := []clickhousedriver.QueryOption{
 		clickhousedriver.WithQueryID(queryID),
 		clickhousedriver.WithSettings(executor.settingsFor(query)),
-	)
+	}
+	if progressOption != nil {
+		queryOptions = append(queryOptions, progressOption)
+	}
+	queryContext := clickhousedriver.Context(executionContext, queryOptions...)
 	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
 	if err != nil {
-		return classifyQueryError(ctx, fmt.Errorf("query ClickHouse: %w", err))
+		return classifyQueryError(executionContext, fmt.Errorf("query ClickHouse: %w", err))
 	}
 	rowsClosed := false
 	defer func() {
@@ -201,23 +217,23 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 			return
 		}
 		if closeErr := rows.Close(); resultErr == nil && closeErr != nil {
-			resultErr = classifyQueryError(ctx, fmt.Errorf("close ClickHouse result stream: %w", closeErr))
+			resultErr = classifyQueryError(executionContext, fmt.Errorf("close ClickHouse result stream: %w", closeErr))
 		}
 	}()
 
 	columnTypes := rows.ColumnTypes()
 	columns := rows.Columns()
 	if query.Timechart != nil {
-		buffered, err := readTimechartRows(ctx, rows, columns, columnTypes, *query.Timechart)
+		buffered, err := readTimechartRows(executionContext, rows, columns, columnTypes, *query.Timechart)
 		if err != nil {
 			return err
 		}
 		closeErr := rows.Close()
 		rowsClosed = true
 		if closeErr != nil {
-			return classifyQueryError(ctx, fmt.Errorf("close ClickHouse timechart result stream: %w", closeErr))
+			return classifyQueryError(executionContext, fmt.Errorf("close ClickHouse timechart result stream: %w", closeErr))
 		}
-		return publishTimechart(ctx, sink, buffered)
+		return publishTimechart(executionContext, sink, buffered)
 	}
 	if len(columns) != len(query.OutputFields) || len(columnTypes) != len(columns) || !slices.Equal(columns, query.OutputFields) {
 		return fmt.Errorf("%w: ClickHouse result columns do not match the compiled output", searchjobs.ErrInvalidResult)
@@ -232,7 +248,7 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 			Multivalue: multivalue,
 		}
 	}
-	if err := ctx.Err(); err != nil {
+	if err := executionContext.Err(); err != nil {
 		return err
 	}
 	if err := sink.SetSchema(schema); err != nil {
@@ -240,7 +256,7 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	}
 
 	for rows.Next() {
-		if err := ctx.Err(); err != nil {
+		if err := executionContext.Err(); err != nil {
 			return err
 		}
 		destinations, err := scanDestinations(columnTypes)
@@ -248,7 +264,7 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 			return fmt.Errorf("%w: prepare ClickHouse row scan: %v", searchjobs.ErrInvalidResult, err)
 		}
 		if err := rows.Scan(destinations...); err != nil {
-			return classifyQueryError(ctx, fmt.Errorf("scan ClickHouse result row: %w", err))
+			return classifyQueryError(executionContext, fmt.Errorf("scan ClickHouse result row: %w", err))
 		}
 		values := make([]searchjobs.Value, len(destinations))
 		for index, destination := range destinations {
@@ -263,9 +279,9 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return classifyQueryError(ctx, fmt.Errorf("iterate ClickHouse results: %w", err))
+		return classifyQueryError(executionContext, fmt.Errorf("iterate ClickHouse results: %w", err))
 	}
-	return ctx.Err()
+	return executionContext.Err()
 }
 
 func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {

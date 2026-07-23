@@ -159,6 +159,8 @@ func searchJobListItemAsJob(item searchjobs.JobListItem) searchjobs.Job {
 		Latest:           item.Latest,
 		IndexTimeCutoff:  item.IndexTimeCutoff,
 		State:            item.State,
+		ScannedRows:      item.ScannedRows,
+		ScannedBytes:     item.ScannedBytes,
 		RowCount:         item.RowCount,
 		ResultBytes:      item.ResultBytes,
 		ResultsTruncated: item.ResultsTruncated,

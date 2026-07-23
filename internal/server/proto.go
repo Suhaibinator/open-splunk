@@ -44,6 +44,10 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 	if err != nil {
 		return nil, errors.New("search job contains invalid source metadata")
 	}
+	progress, err := searchjobproto.Progress(job, now)
+	if err != nil {
+		return nil, errors.New("search job contains invalid progress metadata")
+	}
 	if err := validateBoundedIdentifier(job.AppID, maximumSavedSearchAppIDBytes, true); err != nil {
 		return nil, errors.New("search job contains an invalid app ID")
 	}
@@ -71,7 +75,7 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 		State:            searchStateToProto(job.State),
 		ResultKind:       resultKind,
 		ResultsTruncated: job.ResultsTruncated,
-		Progress:         searchProgressToProto(job, now),
+		Progress:         progress,
 		CreatedAt:        createdAt,
 	}
 	if job.Schema != nil {
@@ -118,24 +122,6 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 		}
 	}
 	return result, nil
-}
-
-func searchProgressToProto(job searchjobs.Job, now time.Time) *opensplunkv1.SearchProgress {
-	end := now.Round(0).UTC()
-	if !job.FinishedAt.IsZero() {
-		end = job.FinishedAt
-	}
-	elapsed := time.Duration(0)
-	if !job.StartedAt.IsZero() && end.After(job.StartedAt) {
-		elapsed = end.Sub(job.StartedAt)
-	}
-	return &opensplunkv1.SearchProgress{
-		Phase:        searchPhaseToProto(job.State),
-		ProducedRows: job.RowCount,
-		ResultBytes:  job.ResultBytes,
-		Elapsed:      durationpb.New(elapsed),
-		UpdatedAt:    timestamppb.New(end),
-	}
 }
 
 func resultPageToProto(ctx context.Context, jobID string, page searchjobs.ResultPage, resultKind opensplunkv1.ResultSetKind, includeTotal, resultsTruncated bool) (*opensplunkv1.ResultPage, error) {
@@ -436,23 +422,6 @@ func searchStateToProto(state searchjobs.State) opensplunkv1.SearchJobState {
 		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED
 	default:
 		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED
-	}
-}
-
-func searchPhaseToProto(state searchjobs.State) opensplunkv1.SearchExecutionPhase {
-	switch state {
-	case searchjobs.StateQueued:
-		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_WAITING_FOR_SLOT
-	case searchjobs.StateParsing:
-		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_PARSING
-	case searchjobs.StatePlanning:
-		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_OPTIMIZING
-	case searchjobs.StateRunning:
-		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_EXECUTING
-	case searchjobs.StateCompleted, searchjobs.StateFailed, searchjobs.StateCanceled, searchjobs.StateExpired:
-		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE
-	default:
-		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_UNSPECIFIED
 	}
 }
 

@@ -249,25 +249,32 @@ func retainedJobListSnapshot(entry *jobEntry) retainedJobListEntry {
 	return retainedJobListEntry{
 		entry:      entry,
 		generation: entry.generation,
-		key: jobListBoundary{
-			createdAt: entry.job.CreatedAt,
-			id:        entry.job.ID,
-		},
+		key:        jobListKey(entry),
 	}
 }
 
-func jobListIndexComesBefore(left, right Job) bool {
-	if left.CreatedAt.Equal(right.CreatedAt) {
-		return left.ID < right.ID
-	}
-	return left.CreatedAt.Before(right.CreatedAt)
+// jobListEntriesComeBefore reads only immutable admission fields. It must not
+// accept Job values: copying a whole Job would race with execution updates to
+// unrelated mutable fields. Reading these fields directly also avoids adding
+// entry locks inside Manager.mu-protected tree traversal, preserving the
+// manager's existing lock scope and O(log N) mutation cost.
+func jobListEntriesComeBefore(left, right *jobEntry) bool {
+	return jobListKeyComesBefore(jobListKey(left), jobListKey(right))
 }
 
 func jobListEntryComesBeforeBoundary(entry *jobEntry, boundary jobListBoundary) bool {
-	if entry.job.CreatedAt.Equal(boundary.createdAt) {
-		return entry.job.ID < boundary.id
+	return jobListKeyComesBefore(jobListKey(entry), boundary)
+}
+
+func jobListKey(entry *jobEntry) jobListBoundary {
+	return jobListBoundary{createdAt: entry.job.CreatedAt, id: entry.job.ID}
+}
+
+func jobListKeyComesBefore(left, right jobListBoundary) bool {
+	if left.createdAt.Equal(right.createdAt) {
+		return left.id < right.id
 	}
-	return entry.job.CreatedAt.Before(boundary.createdAt)
+	return left.createdAt.Before(right.createdAt)
 }
 
 func normalizeJobListRequest(access AccessScope, request JobListRequest) (AccessScope, normalizedJobListRequest, error) {
@@ -409,6 +416,8 @@ func cloneJobListItem(source Job) JobListItem {
 		Latest:           source.Latest,
 		IndexTimeCutoff:  source.IndexTimeCutoff,
 		State:            source.State,
+		ScannedRows:      source.ScannedRows,
+		ScannedBytes:     source.ScannedBytes,
 		RowCount:         source.RowCount,
 		ResultBytes:      source.ResultBytes,
 		ResultsTruncated: source.ResultsTruncated,

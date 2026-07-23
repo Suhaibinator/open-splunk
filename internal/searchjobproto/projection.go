@@ -9,7 +9,58 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// Progress projects the authoritative counters and timing shared by HTTP and
+// WebSocket search representations. Scan counters are exact reported work;
+// no matched-event estimate or completion percentage is inferred.
+func Progress(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchProgress, error) {
+	updatedAt := now.Round(0).UTC()
+	if !job.FinishedAt.IsZero() {
+		updatedAt = job.FinishedAt.Round(0).UTC()
+	}
+	updated := timestamppb.New(updatedAt)
+	if err := updated.CheckValid(); err != nil {
+		return nil, errors.New("invalid search-job progress timestamp")
+	}
+	elapsed := time.Duration(0)
+	if !job.StartedAt.IsZero() && updatedAt.After(job.StartedAt) {
+		elapsed = updatedAt.Sub(job.StartedAt)
+	}
+	queueWait := time.Duration(0)
+	if !job.StartedAt.IsZero() && job.StartedAt.After(job.CreatedAt) {
+		queueWait = job.StartedAt.Sub(job.CreatedAt)
+	}
+	return &opensplunkv1.SearchProgress{
+		Phase:        executionPhase(job.State),
+		ScannedRows:  job.ScannedRows,
+		ScannedBytes: job.ScannedBytes,
+		ProducedRows: job.RowCount,
+		ResultBytes:  job.ResultBytes,
+		Elapsed:      durationpb.New(elapsed),
+		QueueWait:    durationpb.New(queueWait),
+		UpdatedAt:    updated,
+	}, nil
+}
+
+func executionPhase(state searchjobs.State) opensplunkv1.SearchExecutionPhase {
+	switch state {
+	case searchjobs.StateQueued:
+		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_WAITING_FOR_SLOT
+	case searchjobs.StateParsing:
+		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_PARSING
+	case searchjobs.StatePlanning:
+		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_OPTIMIZING
+	case searchjobs.StateRunning:
+		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_EXECUTING
+	case searchjobs.StateCompleted, searchjobs.StateFailed, searchjobs.StateCanceled, searchjobs.StateExpired:
+		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE
+	default:
+		return opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_UNSPECIFIED
+	}
+}
 
 // TimeRange preserves reusable time intent while returning its effective
 // timezone for the separately resolved execution interval.

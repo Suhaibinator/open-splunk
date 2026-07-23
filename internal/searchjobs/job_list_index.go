@@ -36,7 +36,7 @@ func jobListIndexInsert(root, inserted *jobListIndexNode) *jobListIndexNode {
 	if root == nil {
 		return inserted
 	}
-	if jobListIndexComesBefore(inserted.entry.job, root.entry.job) {
+	if jobListEntriesComeBefore(inserted.entry, root.entry) {
 		root.left = jobListIndexInsert(root.left, inserted)
 		if root.left.priority > root.priority {
 			root = jobListIndexRotateRight(root)
@@ -58,7 +58,7 @@ func jobListIndexRemove(root *jobListIndexNode, entry *jobEntry) *jobListIndexNo
 	if root.entry == entry {
 		return jobListIndexMerge(root.left, root.right)
 	}
-	if jobListIndexComesBefore(entry.job, root.entry.job) {
+	if jobListEntriesComeBefore(entry, root.entry) {
 		root.left = jobListIndexRemove(root.left, entry)
 	} else {
 		root.right = jobListIndexRemove(root.right, entry)

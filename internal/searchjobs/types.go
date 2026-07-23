@@ -171,6 +171,10 @@ type JobListItem struct {
 	Latest           time.Time
 	IndexTimeCutoff  time.Time
 	State            State
+	// ScannedRows and ScannedBytes are the exact executor-reported progress
+	// received so far. They are not inferred from retained result rows.
+	ScannedRows      uint64
+	ScannedBytes     uint64
 	RowCount         uint64
 	ResultBytes      uint64
 	ResultsTruncated bool
@@ -220,8 +224,13 @@ type Job struct {
 	VisibilityCutoff uint64
 	State            State
 	Schema           *Schema
-	RowCount         uint64
-	ResultBytes      uint64
+	// ScannedRows and ScannedBytes are the exact executor-reported progress
+	// received so far. A terminal job may contain only the prefix reported
+	// before cancellation or failure; the manager never extrapolates a total.
+	ScannedRows  uint64
+	ScannedBytes uint64
+	RowCount     uint64
+	ResultBytes  uint64
 	// ResultsTruncated reports that the retained immutable snapshot contains
 	// exactly the configured row limit and the executor attempted to emit at
 	// least one additional row. It is never inferred from an executor error.

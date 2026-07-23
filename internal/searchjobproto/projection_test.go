@@ -9,6 +9,44 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
+func TestProgressProjectsSharedExactCountersAndTiming(t *testing.T) {
+	t.Parallel()
+
+	created := time.Date(2026, time.July, 23, 12, 0, 0, 123, time.UTC)
+	job := searchjobs.Job{
+		State:        searchjobs.StateCompleted,
+		ScannedRows:  123,
+		ScannedBytes: 4_567,
+		RowCount:     8,
+		ResultBytes:  901,
+		CreatedAt:    created,
+		StartedAt:    created.Add(2 * time.Second),
+		FinishedAt:   created.Add(11 * time.Second),
+	}
+	got, err := Progress(job, created.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
+		got.GetScannedRows() != job.ScannedRows || got.GetScannedBytes() != job.ScannedBytes ||
+		got.GetProducedRows() != job.RowCount || got.GetResultBytes() != job.ResultBytes ||
+		got.GetMatchedEvents() != 0 || got.GetCountersAreEstimates() {
+		t.Fatalf("Progress() counters = %+v", got)
+	}
+	if got.GetElapsed().AsDuration() != 9*time.Second || got.GetQueueWait().AsDuration() != 2*time.Second ||
+		!got.GetUpdatedAt().AsTime().Equal(job.FinishedAt) {
+		t.Fatalf("Progress() timing = %+v", got)
+	}
+}
+
+func TestProgressRejectsInvalidUpdatedTimestamp(t *testing.T) {
+	t.Parallel()
+
+	if _, err := Progress(searchjobs.Job{State: searchjobs.StateRunning}, time.Date(10_000, 1, 1, 0, 0, 0, 0, time.UTC)); err == nil {
+		t.Fatal("Progress() error = nil")
+	}
+}
+
 func TestTimeRangePreservesIntentAndLegacyFallback(t *testing.T) {
 	t.Parallel()
 

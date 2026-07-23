@@ -109,6 +109,8 @@ func (journal *JobJournal) entry(job searchjobs.Job, terminal bool) (*opensplunk
 	}
 
 	entry.EffectiveIndexScope = slices.Clone(job.EffectiveIndexes)
+	entry.ScannedRows = job.ScannedRows
+	entry.ScannedBytes = job.ScannedBytes
 	entry.ProducedRows = job.RowCount
 	entry.FinishedAt = timestamppb.New(job.FinishedAt)
 	duration := time.Duration(0)

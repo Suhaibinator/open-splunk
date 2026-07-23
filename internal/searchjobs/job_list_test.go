@@ -105,6 +105,8 @@ func TestListPageForFiltersAndReturnsDetachedSafeSummaries(t *testing.T) {
 		EffectiveIndexes: []string{"main", "archive"},
 		AppID:            "search",
 		State:            StateFailed,
+		ScannedRows:      123,
+		ScannedBytes:     4567,
 		Schema:           &Schema{Columns: []Column{{Name: "message", Kind: ValueKindString}}},
 		Failure: &Failure{
 			Code:        FailureExecution,
@@ -146,7 +148,8 @@ func TestListPageForFiltersAndReturnsDetachedSafeSummaries(t *testing.T) {
 	item := &page.Jobs[0]
 	if item.SPL != matching.SPL || item.NormalizedSPL != matching.NormalizedSPL ||
 		!reflect.DeepEqual(item.RequestedIndexes, matching.RequestedIndexes) ||
-		!reflect.DeepEqual(item.EffectiveIndexes, matching.EffectiveIndexes) {
+		!reflect.DeepEqual(item.EffectiveIndexes, matching.EffectiveIndexes) ||
+		item.ScannedRows != matching.ScannedRows || item.ScannedBytes != matching.ScannedBytes {
 		t.Fatalf("list summary lost query/scope metadata: %#v", item)
 	}
 	if item.Failure == nil || item.Failure.Message != "safe summary" {

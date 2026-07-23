@@ -81,6 +81,38 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	queryIntegrationTestFieldCatalog(t, ctx, connection, executor)
+	t.Run("native progress reports exact generated scan", func(t *testing.T) {
+		const generatedRows = uint64(262_144)
+		sink := &recordingProgressSink{}
+		err := executor.Execute(ctx, clickhouse.CompiledQuery{
+			SQL: "SELECT sum(cityHash64(number)) AS checksum FROM numbers(262144)",
+			OutputFields: []string{
+				"checksum",
+			},
+		}, sink)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		deltas := sink.snapshotDeltas()
+		var scannedRows, scannedBytes uint64
+		for _, delta := range deltas {
+			if ^scannedRows < delta.ScannedRows || ^scannedBytes < delta.ScannedBytes {
+				t.Fatalf("native progress overflowed: %#v", deltas)
+			}
+			scannedRows += delta.ScannedRows
+			scannedBytes += delta.ScannedBytes
+		}
+		if scannedRows != generatedRows {
+			t.Fatalf("scanned rows = %d, want exactly %d; packets=%#v", scannedRows, generatedRows, deltas)
+		}
+		if scannedBytes != generatedRows*8 {
+			t.Fatalf("scanned bytes = %d, want exactly %d; packets=%#v", scannedBytes, generatedRows*8, deltas)
+		}
+		if sink.setCalls != 1 || len(sink.rows) != 1 {
+			t.Fatalf("result publication = schema calls %d, rows %d", sink.setCalls, len(sink.rows))
+		}
+	})
 	t.Run("native typed scan types", func(t *testing.T) {
 		sink := &fakeSink{}
 		err := executor.Execute(ctx, clickhouse.CompiledQuery{
@@ -464,6 +496,13 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		completed := queryIntegrationWaitForTerminal(t, manager, job.ID)
 		if completed.State != searchjobs.StateCompleted {
 			t.Fatalf("job state = %v, failure=%#v", completed.State, completed.Failure)
+		}
+		if completed.ScannedRows == 0 || completed.ScannedBytes == 0 {
+			t.Fatalf(
+				"completed job progress = %d rows, %d bytes; want nonzero native scan counters",
+				completed.ScannedRows,
+				completed.ScannedBytes,
+			)
 		}
 		page, err := manager.Results(job.ID, searchjobs.PageRequest{Limit: 10})
 		if err != nil {

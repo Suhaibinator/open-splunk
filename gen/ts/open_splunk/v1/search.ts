@@ -431,7 +431,7 @@ export interface SearchJobOptions {
 
 /**
  * SearchJob is a transient, immutable-snapshot execution record. state_version
- * increases whenever state or terminal metadata changes.
+ * increases whenever observable state, progress, or result metadata changes.
  */
 export interface SearchJob {
   searchJobId: string;

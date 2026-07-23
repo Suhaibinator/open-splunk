@@ -132,7 +132,7 @@ message SearchJobOptions {
 }
 
 // SearchJob is a transient, immutable-snapshot execution record. state_version
-// increases whenever state or terminal metadata changes.
+// increases whenever observable state, progress, or result metadata changes.
 message SearchJob {
   string search_job_id = 1;
   uint64 state_version = 2;

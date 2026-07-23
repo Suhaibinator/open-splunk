@@ -55,6 +55,8 @@ func TestJobJournalAdmitsAndFinalizesDetachedSearchMetadata(t *testing.T) {
 	terminal.FinishedAt = now.Add(-10 * time.Second)
 	terminal.RowCount = 7
 	terminal.ResultBytes = 1024
+	terminal.ScannedRows = 70
+	terminal.ScannedBytes = 7_000
 	if err := journal.Finalize(context.Background(), terminal); err != nil {
 		t.Fatalf("Finalize() error = %v", err)
 	}
@@ -67,12 +69,13 @@ func TestJobJournalAdmitsAndFinalizesDetachedSearchMetadata(t *testing.T) {
 		got.Definition.GetAppId() != "search-app" || got.Source.GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
 		got.Source.GetSavedSearchId() != "saved-1" || !got.ResolvedTimeRange.GetEarliest().AsTime().Equal(terminal.Earliest) ||
 		!got.ResolvedTimeRange.GetLatest().AsTime().Equal(terminal.Latest) || got.ResolvedTimeRange.GetTimezone() != "America/Los_Angeles" ||
-		got.FinalState != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED || got.ProducedRows != 7 ||
+		got.FinalState != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED || got.ScannedRows != 70 ||
+		got.ScannedBytes != 7_000 || got.ProducedRows != 7 ||
 		got.Duration.AsDuration() != 20*time.Second || got.CompilerVersion != "tier-1-test" || len(got.EffectiveIndexScope) != 1 {
 		t.Fatalf("terminal history = %+v", got)
 	}
-	if got.MatchedEvents != 0 || got.ScannedRows != 0 || got.ScannedBytes != 0 {
-		t.Fatalf("unavailable counters were invented: %+v", got)
+	if got.MatchedEvents != 0 {
+		t.Fatalf("matched-events counter was invented: %+v", got)
 	}
 	var indexedAppID, indexedSavedSearchID string
 	if err := database.SQLDB().QueryRow(`SELECT app_id, saved_search_id FROM search_history WHERE search_job_id = ?`, terminal.ID).Scan(&indexedAppID, &indexedSavedSearchID); err != nil {

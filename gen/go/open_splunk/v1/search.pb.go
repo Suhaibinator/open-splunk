@@ -915,7 +915,7 @@ func (x *SearchJobOptions) GetPreviewRowLimit() uint32 {
 }
 
 // SearchJob is a transient, immutable-snapshot execution record. state_version
-// increases whenever state or terminal metadata changes.
+// increases whenever observable state, progress, or result metadata changes.
 type SearchJob struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	SearchJobId         string                 `protobuf:"bytes,1,opt,name=search_job_id,json=searchJobId,proto3" json:"search_job_id,omitempty"`

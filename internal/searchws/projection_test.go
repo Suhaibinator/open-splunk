@@ -75,6 +75,8 @@ func TestProjectSearchProgressUsesAuthoritativeTimingAndCounters(t *testing.T) {
 	job.StartedAt = job.CreatedAt.Add(2 * time.Second)
 	job.RowCount = 17
 	job.ResultBytes = 4097
+	job.ScannedRows = 170
+	job.ScannedBytes = 40_970
 	now := job.CreatedAt.Add(11*time.Second + 321*time.Millisecond)
 
 	projection, err := projectSearch(job, now)
@@ -82,8 +84,9 @@ func TestProjectSearchProgressUsesAuthoritativeTimingAndCounters(t *testing.T) {
 		t.Fatal(err)
 	}
 	progress := projection.events[1].GetSearchProgress()
-	if progress.GetProducedRows() != job.RowCount || progress.GetResultBytes() != job.ResultBytes {
-		t.Fatalf("counters = (%d, %d)", progress.GetProducedRows(), progress.GetResultBytes())
+	if progress.GetScannedRows() != job.ScannedRows || progress.GetScannedBytes() != job.ScannedBytes ||
+		progress.GetProducedRows() != job.RowCount || progress.GetResultBytes() != job.ResultBytes || progress.GetCountersAreEstimates() {
+		t.Fatalf("counters = %+v", progress)
 	}
 	if got := progress.GetElapsed().AsDuration(); got != now.Sub(job.StartedAt) {
 		t.Fatalf("elapsed = %s, want %s", got, now.Sub(job.StartedAt))
@@ -108,7 +111,9 @@ func TestProjectSearchProgressUsesAuthoritativeTimingAndCounters(t *testing.T) {
 	if got := progress.GetUpdatedAt().AsTime(); !got.Equal(job.FinishedAt) {
 		t.Fatalf("terminal updated at = %s, want %s", got, job.FinishedAt)
 	}
-	if terminal := projection.events[len(projection.events)-1].GetSearchTerminal(); terminal.GetFinalProgress() == nil || terminal.GetFinalProgress().GetProducedRows() != job.RowCount {
+	if terminal := projection.events[len(projection.events)-1].GetSearchTerminal(); terminal.GetFinalProgress() == nil ||
+		terminal.GetFinalProgress().GetScannedRows() != job.ScannedRows || terminal.GetFinalProgress().GetScannedBytes() != job.ScannedBytes ||
+		terminal.GetFinalProgress().GetProducedRows() != job.RowCount {
 		t.Fatalf("terminal progress = %+v", terminal.GetFinalProgress())
 	}
 }

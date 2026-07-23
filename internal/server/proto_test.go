@@ -240,6 +240,27 @@ func TestSearchJobAndResultPageExposeRetainedResultTruncation(t *testing.T) {
 	}
 }
 
+func TestSearchJobToProtoExposesExactExecutionProgress(t *testing.T) {
+	t.Parallel()
+
+	job := completeJob("job-progress")
+	job.ScannedRows = 123_456
+	job.ScannedBytes = 98_765_432
+	job.RowCount = 42
+	job.ResultBytes = 4_096
+	converted, err := searchJobToProto(job, testNow.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress := converted.GetProgress()
+	if progress.GetScannedRows() != job.ScannedRows || progress.GetScannedBytes() != job.ScannedBytes ||
+		progress.GetProducedRows() != job.RowCount || progress.GetResultBytes() != job.ResultBytes ||
+		progress.GetMatchedEvents() != 0 || progress.GetCountersAreEstimates() ||
+		progress.GetQueueWait().AsDuration() != job.StartedAt.Sub(job.CreatedAt) {
+		t.Fatalf("progress = %+v", progress)
+	}
+}
+
 func TestSearchJobToProtoPreservesIntentProvenanceAndResolvedRange(t *testing.T) {
 	t.Parallel()
 

@@ -125,6 +125,21 @@ type ResultSink interface {
 	AddRow([]Value) error
 }
 
+// ExecutionProgressDelta is one non-cumulative storage progress packet.
+// ScannedRows and ScannedBytes are exact values reported by the executor; the
+// manager never derives either counter from retained result rows.
+type ExecutionProgressDelta struct {
+	ScannedRows  uint64
+	ScannedBytes uint64
+}
+
+// ProgressSink is the optional progress-reporting capability implemented by
+// the manager's result sink. Executors should type-assert this interface and
+// stop execution when ReportProgress returns an error.
+type ProgressSink interface {
+	ReportProgress(ExecutionProgressDelta) error
+}
+
 // Executor streams a compiled, fully scoped ClickHouse query into sink. It must
 // observe ctx cancellation and return promptly; errors may wrap
 // ErrStorageUnavailable when retrying against storage could succeed, or
@@ -1460,7 +1475,7 @@ func (manager *Manager) advance(entry *jobEntry, from, to State, update func(*Jo
 			return false
 		}
 		entry.job.State = to
-		entry.job.Version++
+		incrementJobVersion(&entry.job)
 		entry.history = append(entry.history, to)
 		if to == StateParsing && entry.job.StartedAt.IsZero() {
 			entry.job.StartedAt = manager.nowUTC()
@@ -1512,7 +1527,7 @@ func (manager *Manager) failOrCancel(entry *jobEntry, failure Failure, now time.
 			manager.finishCanceledLocked(entry, now)
 		} else {
 			entry.job.State = StateFailed
-			entry.job.Version++
+			incrementJobVersion(&entry.job)
 			entry.job.Failure = &failure
 			entry.job.FinishedAt = now
 			entry.job.ExpiresAt = now.Add(manager.retentionTTL)
@@ -1535,7 +1550,7 @@ func (manager *Manager) finishCompleted(entry *jobEntry, now time.Time, resultsT
 			manager.finishCanceledLocked(entry, now)
 		} else {
 			entry.job.State = StateCompleted
-			entry.job.Version++
+			incrementJobVersion(&entry.job)
 			entry.job.FinishedAt = now
 			entry.job.ExpiresAt = now.Add(manager.retentionTTL)
 			entry.job.ResultsTruncated = resultsTruncated
@@ -1570,7 +1585,7 @@ func (manager *Manager) finishCanceledAndClaim(entry *jobEntry, now time.Time) (
 
 func (manager *Manager) finishCanceledLocked(entry *jobEntry, now time.Time) {
 	entry.job.State = StateCanceled
-	entry.job.Version++
+	incrementJobVersion(&entry.job)
 	entry.job.FinishedAt = now
 	entry.job.ExpiresAt = now.Add(manager.retentionTTL)
 	manager.clearResultsLocked(entry)
@@ -1608,7 +1623,7 @@ func canExpireLocked(entry *jobEntry, now time.Time) bool {
 
 func (manager *Manager) expireLocked(entry *jobEntry, now time.Time) {
 	entry.job.State = StateExpired
-	entry.job.Version++
+	incrementJobVersion(&entry.job)
 	// Expiration is immediately visible to callers even while an existing
 	// immutable-result lease pins the backing schema and rows. New readers are
 	// denied by StateExpired; the final lease release reclaims the storage.
@@ -1619,6 +1634,17 @@ func (manager *Manager) expireLocked(entry *jobEntry, now time.Time) {
 	entry.resultGeneration = 0
 	entry.expiredAt = now
 	entry.history = append(entry.history, StateExpired)
+}
+
+// incrementJobVersion applies the manager-wide saturation policy. A uint64 at
+// its maximum has no representable successor; retaining the maximum is safer
+// than wrapping to zero and violating every consumer's monotonicity contract.
+// Result-stream updates preflight this condition so they never mutate data
+// without publishing a newer version.
+func incrementJobVersion(job *Job) {
+	if job.Version != ^uint64(0) {
+		job.Version++
+	}
 }
 
 // reserveRetainedLocked accounts for memory before allocating or retaining it.
@@ -1813,6 +1839,30 @@ func (*retainedRowLimitError) Error() string { return ErrRowLimit.Error() }
 
 func (*retainedRowLimitError) Unwrap() error { return ErrRowLimit }
 
+func (sink *resultSink) ReportProgress(delta ExecutionProgressDelta) error {
+	entry := sink.entry
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if err := sink.readyLocked(); err != nil {
+		return err
+	}
+	if delta.ScannedRows == 0 && delta.ScannedBytes == 0 {
+		return nil
+	}
+	if err := sink.requireIncrementableVersionLocked(); err != nil {
+		return err
+	}
+	nextRows, rowsErr := checkedAdd(entry.job.ScannedRows, delta.ScannedRows)
+	nextBytes, bytesErr := checkedAdd(entry.job.ScannedBytes, delta.ScannedBytes)
+	if rowsErr != nil || bytesErr != nil {
+		return sink.rememberLocked(fmt.Errorf("%w: execution progress metadata overflow", ErrInvalidResult))
+	}
+	entry.job.ScannedRows = nextRows
+	entry.job.ScannedBytes = nextBytes
+	incrementJobVersion(&entry.job)
+	return nil
+}
+
 func (sink *resultSink) SetSchema(schema Schema) error {
 	entry := sink.entry
 	entry.mu.Lock()
@@ -1832,6 +1882,9 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 	if schemaErr != nil {
 		return sink.rememberLocked(schemaErr)
 	}
+	if err := sink.requireIncrementableVersionLocked(); err != nil {
+		return err
+	}
 	retainedBytes, err := retainedSchemaSize(schema)
 	if err != nil {
 		return sink.rememberLocked(ErrByteLimit)
@@ -1846,7 +1899,7 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 	entry.resultSchema = &cloned
 	entry.job.Schema = entry.resultSchema
 	entry.schemaBytes = retainedBytes
-	entry.job.Version++
+	incrementJobVersion(&entry.job)
 	sink.receivedSchema = true
 	return nil
 }
@@ -1863,6 +1916,9 @@ func (sink *resultSink) AddRow(values []Value) error {
 	}
 	if len(values) != len(entry.job.Schema.Columns) {
 		return sink.rememberLocked(fmt.Errorf("%w: row has %d cells for %d columns", ErrInvalidResult, len(values), len(entry.job.Schema.Columns)))
+	}
+	if err := sink.requireIncrementableVersionLocked(); err != nil {
+		return err
 	}
 	var payloadBytes uint64
 	var retainedBytes uint64
@@ -1934,7 +1990,7 @@ func (sink *resultSink) AddRow(values []Value) error {
 	entry.rows = append(entry.rows, ResultRow{Ordinal: uint64(len(entry.rows)), Values: cloned, retainedBytes: rowPageBytes})
 	entry.job.RowCount++
 	entry.job.ResultBytes = nextBytes
-	entry.job.Version++
+	incrementJobVersion(&entry.job)
 	return nil
 }
 
@@ -1950,6 +2006,13 @@ func (sink *resultSink) readyLocked() error {
 	}
 	if sink.entry.job.State != StateRunning {
 		return ErrStreamClosed
+	}
+	return nil
+}
+
+func (sink *resultSink) requireIncrementableVersionLocked() error {
+	if sink.entry.job.Version == ^uint64(0) {
+		return sink.rememberLocked(fmt.Errorf("%w: search job version space is exhausted", ErrInvalidResult))
 	}
 	return nil
 }
