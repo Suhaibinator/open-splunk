@@ -29,6 +29,11 @@ func (handler *apiHandler) searchFieldRoutes(noAuth router.AuthLevel, smallReque
 			Codec: newSerializedSearchFieldsCodec(), Handler: handler.listSearchFields,
 			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.ListSearchFieldsRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
+		router.NewGenericRouteDefinition[*opensplunkv1.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse, string, struct{}](router.RouteConfig[*opensplunkv1.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse]{
+			Path: searchFieldSummaryRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: newSerializedSearchFieldSummaryCodec(), Handler: handler.getSearchFieldSummary,
+			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.GetSearchFieldSummaryRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+		}),
 	}
 }
 
@@ -290,6 +295,8 @@ func mapSearchFieldsCallError(ctx context.Context, operationErr error) error {
 		return badRequestError("search field request is invalid")
 	case errors.Is(operationErr, searchanalysis.ErrInvalidFieldCursor):
 		return badRequestError("page token is invalid")
+	case errors.Is(operationErr, searchanalysis.ErrFieldNotFound):
+		return router.NewHTTPError(http.StatusNotFound, "search field not found")
 	case errors.Is(operationErr, searchjobs.ErrNotFound):
 		return router.NewHTTPError(http.StatusNotFound, "search job not found")
 	case errors.Is(operationErr, searchjobs.ErrResultsNotReady):

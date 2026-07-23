@@ -113,6 +113,7 @@ type BrowserApiLimits struct {
 	DefaultSearchTimeout          *durationpb.Duration   `protobuf:"bytes,7,opt,name=default_search_timeout,json=defaultSearchTimeout,proto3" json:"default_search_timeout,omitempty"`
 	SearchResultRetention         *durationpb.Duration   `protobuf:"bytes,8,opt,name=search_result_retention,json=searchResultRetention,proto3" json:"search_result_retention,omitempty"`
 	MaximumTimelineBuckets        uint32                 `protobuf:"varint,9,opt,name=maximum_timeline_buckets,json=maximumTimelineBuckets,proto3" json:"maximum_timeline_buckets,omitempty"`
+	MaximumFieldSummaryValues     uint32                 `protobuf:"varint,10,opt,name=maximum_field_summary_values,json=maximumFieldSummaryValues,proto3" json:"maximum_field_summary_values,omitempty"`
 	unknownFields                 protoimpl.UnknownFields
 	sizeCache                     protoimpl.SizeCache
 }
@@ -206,6 +207,13 @@ func (x *BrowserApiLimits) GetSearchResultRetention() *durationpb.Duration {
 func (x *BrowserApiLimits) GetMaximumTimelineBuckets() uint32 {
 	if x != nil {
 		return x.MaximumTimelineBuckets
+	}
+	return 0
+}
+
+func (x *BrowserApiLimits) GetMaximumFieldSummaryValues() uint32 {
+	if x != nil {
+		return x.MaximumFieldSummaryValues
 	}
 	return 0
 }
@@ -375,7 +383,7 @@ var File_open_splunk_v1_system_api_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_system_api_proto_rawDesc = "" +
 	"\n" +
-	"\x1fopen_splunk/v1/system_api.proto\x12\x0eopen_splunk.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x18open_splunk/v1/app.proto\x1a\x1aopen_splunk/v1/index.proto\"\xbb\x04\n" +
+	"\x1fopen_splunk/v1/system_api.proto\x12\x0eopen_splunk.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x18open_splunk/v1/app.proto\x1a\x1aopen_splunk/v1/index.proto\"\xfc\x04\n" +
 	"\x10BrowserApiLimits\x12*\n" +
 	"\x11maximum_page_size\x18\x01 \x01(\rR\x0fmaximumPageSize\x120\n" +
 	"\x14maximum_preview_rows\x18\x02 \x01(\rR\x12maximumPreviewRows\x12F\n" +
@@ -385,7 +393,9 @@ const file_open_splunk_v1_system_api_proto_rawDesc = "" +
 	"\x14maximum_export_bytes\x18\x06 \x01(\x04R\x12maximumExportBytes\x12O\n" +
 	"\x16default_search_timeout\x18\a \x01(\v2\x19.google.protobuf.DurationR\x14defaultSearchTimeout\x12Q\n" +
 	"\x17search_result_retention\x18\b \x01(\v2\x19.google.protobuf.DurationR\x15searchResultRetention\x128\n" +
-	"\x18maximum_timeline_buckets\x18\t \x01(\rR\x16maximumTimelineBuckets\"_\n" +
+	"\x18maximum_timeline_buckets\x18\t \x01(\rR\x16maximumTimelineBuckets\x12?\n" +
+	"\x1cmaximum_field_summary_values\x18\n" +
+	" \x01(\rR\x19maximumFieldSummaryValues\"_\n" +
 	"\x19GetSystemBootstrapRequest\x12-\n" +
 	"\x10preferred_app_id\x18\x01 \x01(\tH\x00R\x0epreferredAppId\x88\x01\x01B\x13\n" +
 	"\x11_preferred_app_id\"\xaf\x04\n" +

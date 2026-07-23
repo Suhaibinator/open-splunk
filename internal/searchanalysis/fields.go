@@ -107,14 +107,17 @@ type FieldPage struct {
 
 type fieldCompiler interface {
 	CompileFieldCatalog(*plan.Query, clickhouse.FieldCatalogSpec) (clickhouse.CompiledFieldCatalog, error)
+	CompileFieldSummary(*plan.Query, clickhouse.FieldSummarySpec) (clickhouse.CompiledFieldSummary, error)
 }
 
 type fieldExecutor interface {
 	ExecuteFieldCatalog(context.Context, clickhouse.CompiledFieldCatalog) (queryexec.FieldCatalogResult, error)
+	ExecuteFieldSummary(context.Context, clickhouse.CompiledFieldSummary) (queryexec.FieldSummaryResult, error)
 }
 
-// FieldConfig controls catalog execution, pagination integrity, and the
-// complete-catalog cache. Zero numeric values select conservative defaults.
+// FieldConfig controls catalog and exact-summary execution, pagination
+// integrity, and their independent caches. Zero numeric values select
+// conservative defaults.
 type FieldConfig struct {
 	Searches completedSearches
 	Compiler fieldCompiler
@@ -133,6 +136,12 @@ type FieldConfig struct {
 	MaxCacheEntries int
 	MaxCacheBytes   uint64
 	CacheTTL        time.Duration
+
+	DefaultSummaryValues   uint32
+	MaximumSummaryValues   uint32
+	MaxSummaryCacheEntries int
+	MaxSummaryCacheBytes   uint64
+	SummaryCacheTTL        time.Duration
 }
 
 // FieldService owns bounded, coalesced analyses of immutable completed jobs.
@@ -155,18 +164,30 @@ type FieldService struct {
 	maxCacheBytes      uint64
 	gate               chan struct{}
 
-	mu             sync.Mutex
-	closed         bool
-	cache          map[fieldCacheKey]*fieldCacheEntry
-	lru            list.List
-	cacheBytes     uint64
-	flights        map[fieldCacheKey]*fieldFlight
-	expirations    fieldExpiryHeap
-	nextGeneration uint64
-	operations     sync.WaitGroup
-	workers        sync.WaitGroup
-	shutdownOnce   sync.Once
-	shutdownDone   chan struct{}
+	defaultSummaryValues   uint32
+	maximumSummaryValues   uint32
+	summaryCacheTTL        time.Duration
+	maxSummaryCacheEntries int
+	maxSummaryCacheBytes   uint64
+
+	mu                    sync.Mutex
+	closed                bool
+	cache                 map[fieldCacheKey]*fieldCacheEntry
+	lru                   list.List
+	cacheBytes            uint64
+	flights               map[fieldCacheKey]*fieldFlight
+	expirations           fieldExpiryHeap
+	nextGeneration        uint64
+	summaryCache          map[fieldSummaryCacheKey]*fieldSummaryCacheEntry
+	summaryLRU            list.List
+	summaryCacheBytes     uint64
+	summaryFlights        map[fieldSummaryCacheKey]*fieldSummaryFlight
+	summaryExpirations    fieldSummaryExpiryHeap
+	nextSummaryGeneration uint64
+	operations            sync.WaitGroup
+	workers               sync.WaitGroup
+	shutdownOnce          sync.Once
+	shutdownDone          chan struct{}
 }
 
 type fieldCacheKey struct {
@@ -309,6 +330,48 @@ func NewFieldService(config FieldConfig) (*FieldService, error) {
 	if config.CacheTTL == 0 {
 		config.CacheTTL = defaultFieldCacheTTL
 	}
+	if config.MaximumSummaryValues == 0 {
+		config.MaximumSummaryValues = defaultMaximumFieldSummaryValues
+	}
+	if config.MaximumSummaryValues > clickhouse.MaximumFieldSummaryValues {
+		return nil, fmt.Errorf(
+			"create search field service: maximum summary values cannot exceed %d",
+			clickhouse.MaximumFieldSummaryValues,
+		)
+	}
+	if config.DefaultSummaryValues == 0 {
+		config.DefaultSummaryValues = min(defaultFieldSummaryValues, config.MaximumSummaryValues)
+	}
+	if config.DefaultSummaryValues > config.MaximumSummaryValues {
+		return nil, errors.New("create search field service: default summary values exceeds maximum summary values")
+	}
+	if config.MaxSummaryCacheEntries < 0 || config.MaxSummaryCacheEntries > maximumFieldSummaryCacheEntries {
+		return nil, fmt.Errorf(
+			"create search field service: summary cache entries cannot exceed %d",
+			maximumFieldSummaryCacheEntries,
+		)
+	}
+	if config.MaxSummaryCacheEntries == 0 {
+		config.MaxSummaryCacheEntries = defaultFieldSummaryCacheEntries
+	}
+	if config.MaxSummaryCacheBytes > maximumFieldSummaryCacheBytes {
+		return nil, fmt.Errorf(
+			"create search field service: summary cache bytes cannot exceed %d",
+			maximumFieldSummaryCacheBytes,
+		)
+	}
+	if config.MaxSummaryCacheBytes == 0 {
+		config.MaxSummaryCacheBytes = defaultFieldSummaryCacheBytes
+	}
+	if config.SummaryCacheTTL < 0 || config.SummaryCacheTTL > maximumFieldSummaryCacheTTL {
+		return nil, fmt.Errorf(
+			"create search field service: summary cache TTL must not exceed %s",
+			maximumFieldSummaryCacheTTL,
+		)
+	}
+	if config.SummaryCacheTTL == 0 {
+		config.SummaryCacheTTL = defaultFieldSummaryCacheTTL
+	}
 
 	cursorKey := slices.Clone(config.CursorKey)
 	if cursorKey == nil {
@@ -350,8 +413,14 @@ func NewFieldService(config FieldConfig) (*FieldService, error) {
 		maximumFields: config.MaximumFields, defaultPageSize: config.DefaultPageSize,
 		maximumPageSize: config.MaximumPageSize, maxRuntime: config.MaxRuntime,
 		cacheTTL: config.CacheTTL, maxCacheEntries: config.MaxCacheEntries, maxCacheBytes: config.MaxCacheBytes,
-		gate: make(chan struct{}, config.MaxConcurrent), cache: make(map[fieldCacheKey]*fieldCacheEntry),
-		flights: make(map[fieldCacheKey]*fieldFlight), shutdownDone: make(chan struct{}),
+		defaultSummaryValues: config.DefaultSummaryValues, maximumSummaryValues: config.MaximumSummaryValues,
+		summaryCacheTTL: config.SummaryCacheTTL, maxSummaryCacheEntries: config.MaxSummaryCacheEntries,
+		maxSummaryCacheBytes: config.MaxSummaryCacheBytes,
+		gate:                 make(chan struct{}, config.MaxConcurrent), cache: make(map[fieldCacheKey]*fieldCacheEntry),
+		flights:        make(map[fieldCacheKey]*fieldFlight),
+		summaryCache:   make(map[fieldSummaryCacheKey]*fieldSummaryCacheEntry),
+		summaryFlights: make(map[fieldSummaryCacheKey]*fieldSummaryFlight),
+		shutdownDone:   make(chan struct{}),
 	}, nil
 }
 
@@ -371,9 +440,18 @@ func (service *FieldService) MaximumPageSize() uint32 {
 	return service.maximumPageSize
 }
 
-// Close stops in-flight catalog workers, invalidates every cached cursor, and
-// waits for compiler/executor use to finish. It is safe to call concurrently
-// and repeatedly. A timed-out caller may call Close again to keep waiting.
+// MaximumSummaryValues returns the independent per-response top-value bound.
+func (service *FieldService) MaximumSummaryValues() uint32 {
+	if service == nil {
+		return 0
+	}
+	return service.maximumSummaryValues
+}
+
+// Close stops in-flight catalog and summary workers, invalidates both caches
+// (and therefore every catalog cursor), and waits for compiler/executor use to
+// finish. It is safe to call concurrently and repeatedly. A timed-out caller
+// may call Close again to keep waiting.
 func (service *FieldService) Close(ctx context.Context) error {
 	if service == nil {
 		return nil
@@ -388,9 +466,17 @@ func (service *FieldService) Close(ctx context.Context) error {
 		for _, flight := range service.flights {
 			flight.cancel()
 		}
+		for _, flight := range service.summaryFlights {
+			flight.cancel()
+		}
 		for element := service.lru.Back(); element != nil; {
 			previous := element.Prev()
 			service.removeCacheEntryLocked(element.Value.(*fieldCacheEntry))
+			element = previous
+		}
+		for element := service.summaryLRU.Back(); element != nil; {
+			previous := element.Prev()
+			service.removeSummaryCacheEntryLocked(element.Value.(*fieldSummaryCacheEntry))
 			element = previous
 		}
 	}
@@ -470,6 +556,7 @@ func (service *FieldService) ListFields(ctx context.Context, access searchjobs.A
 	// check and removes only entries whose own capped deadline has passed.
 	service.mu.Lock()
 	service.expireCacheLocked(service.clock())
+	service.expireSummaryCacheLocked(service.clock())
 	service.mu.Unlock()
 	if err != nil {
 		return FieldPage{}, err

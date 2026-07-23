@@ -22,11 +22,15 @@ import (
 )
 
 type fakeSearchFields struct {
-	mu            sync.Mutex
-	maximumFields uint32
-	maximumPage   uint32
-	listFn        func(context.Context, searchjobs.AccessScope, searchanalysis.ListFieldsRequest) (searchanalysis.FieldPage, error)
-	calls         int
+	mu                  sync.Mutex
+	maximumFields       uint32
+	maximumPage         uint32
+	maximumSummary      uint32
+	forceSummaryMaximum bool
+	listFn              func(context.Context, searchjobs.AccessScope, searchanalysis.ListFieldsRequest) (searchanalysis.FieldPage, error)
+	summaryFn           func(context.Context, searchjobs.AccessScope, searchanalysis.GetFieldSummaryRequest) (searchanalysis.FieldSummary, error)
+	calls               int
+	summaryCalls        int
 }
 
 func (service *fakeSearchFields) MaximumFields() uint32 {
@@ -35,6 +39,13 @@ func (service *fakeSearchFields) MaximumFields() uint32 {
 
 func (service *fakeSearchFields) MaximumPageSize() uint32 {
 	return service.maximumPage
+}
+
+func (service *fakeSearchFields) MaximumSummaryValues() uint32 {
+	if service.maximumSummary == 0 && !service.forceSummaryMaximum {
+		return 10
+	}
+	return service.maximumSummary
 }
 
 func (service *fakeSearchFields) ListFields(ctx context.Context, scope searchjobs.AccessScope, request searchanalysis.ListFieldsRequest) (searchanalysis.FieldPage, error) {
@@ -48,10 +59,27 @@ func (service *fakeSearchFields) ListFields(ctx context.Context, scope searchjob
 	return fn(ctx, scope, request)
 }
 
+func (service *fakeSearchFields) GetFieldSummary(ctx context.Context, scope searchjobs.AccessScope, request searchanalysis.GetFieldSummaryRequest) (searchanalysis.FieldSummary, error) {
+	service.mu.Lock()
+	service.summaryCalls++
+	fn := service.summaryFn
+	service.mu.Unlock()
+	if fn == nil {
+		return searchanalysis.FieldSummary{}, errors.New("unexpected search field summary request")
+	}
+	return fn(ctx, scope, request)
+}
+
 func (service *fakeSearchFields) callCount() int {
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	return service.calls
+}
+
+func (service *fakeSearchFields) summaryCallCount() int {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	return service.summaryCalls
 }
 
 func TestSearchFieldsRoundTripPreservesScopeRequestAndProfiles(t *testing.T) {
@@ -184,8 +212,8 @@ func TestSearchFieldsRouteFeatureAndTrustBoundary(t *testing.T) {
 			count++
 		}
 	}
-	if count != 0 {
-		t.Fatalf("incomplete field-discovery family was advertised in %v", bootstrap.GetFeatures())
+	if count != 1 || bootstrap.GetLimits().GetMaximumFieldSummaryValues() != service.MaximumSummaryValues() {
+		t.Fatalf("field discovery feature/limit = %v/%d", bootstrap.GetFeatures(), bootstrap.GetLimits().GetMaximumFieldSummaryValues())
 	}
 
 	response := postProto(t, handler, searchFieldsListPath+"/extra", &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job"})

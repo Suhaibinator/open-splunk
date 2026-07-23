@@ -57,6 +57,7 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 			DefaultSearchTimeout:          durationpb.New(handler.bootstrap.DefaultSearchTimeout),
 			SearchResultRetention:         durationpb.New(handler.bootstrap.SearchResultRetention),
 			MaximumTimelineBuckets:        handler.maximumTimelineBuckets,
+			MaximumFieldSummaryValues:     handler.maximumFieldSummaryValues,
 		},
 		Apps:       apps,
 		Indexes:    indexSummaries,

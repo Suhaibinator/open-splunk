@@ -419,6 +419,11 @@ export interface SearchPlanSummary {
 
 export interface SearchJobOptions {
   enablePreview: boolean;
+  /**
+   * Reserved for future eager or in-progress analysis. Version 0.1 exposes
+   * on-demand completed-job field analysis when the server advertises it and
+   * rejects this option when set.
+   */
   enableFieldDiscovery: boolean;
   enableTimeline: boolean;
   previewRowLimit?: number | undefined;

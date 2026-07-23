@@ -372,6 +372,40 @@ requested bucket count to at most 130,000 states. Domains with enough distinct
 raw values to exceed that budget fail atomically with an execution-limit error;
 an explicitly configured lower group cap remains authoritative.
 
+## Completed-job field analysis
+
+Field discovery re-executes an immutable completed-job snapshot with the same
+tenant, authorized indexes, half-open event-time range, index-time cutoff, and
+visibility cutoff as the original search. It analyzes the final event relation,
+so `search`, `where`, `eval`, `rename`, `fields`, `table`, `sort`, `head`,
+`tail`, and `dedup` affect the catalog and summaries exactly as they affect
+event results. Transforming final relations are rejected explicitly.
+
+`POST /api/v1/search/jobs/fields/list` returns a bounded, case-sensitive field
+catalog. Presence, explicit null, and missing counts are separate, and observed
+types retain stored scalar/container identity. Catalog pages do not claim a
+distinct count; page tokens are scoped to the caller and immutable snapshot.
+
+`POST /api/v1/search/jobs/field-summary` returns an exact frequency summary for
+one catalog spelling. Missing and explicit-null values are excluded from the
+distinct count and top values. Scalar type is part of value identity, so the
+integer `500` and string `"500"` remain distinct. Equivalent decimal spellings
+are canonicalized before counting. Ties order by canonical display value and
+then type, making prefixes deterministic.
+
+Version 0.1 returns at most 100 values and reads at most 10,000 raw typed scalar
+encodings before canonicalizing equivalent values. The exact semantic distinct
+count is therefore also limited to 10,000. A search with more than 10,000 raw
+encodings can fail its execution limit even when equivalent decimal spellings
+would collapse below that limit; it is never sampled or reported as exact.
+An encoded or canonical value above 256 KiB also fails the summary. Lists and
+objects fail the whole summary as unsupported; the server does not silently
+stringify, sample, or approximate them. Both catalog and summary execution,
+coalescing, caches, response bytes, and detached worker lifecycle are bounded.
+The `enable_field_discovery` create option remains reserved for future eager or
+in-progress analysis; completed-job analysis is available on demand whenever
+the bootstrap advertises field discovery.
+
 ## Current GradeThis corpus
 
 All ten of the product plan's initial searches compile in v0.1, and their

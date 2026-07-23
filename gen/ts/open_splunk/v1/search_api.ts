@@ -152,10 +152,17 @@ export interface ListSearchFieldsResponse {
   page: PageResponse | undefined;
 }
 
-/** POST /api/v1/search/jobs/field-summary */
+/**
+ * POST /api/v1/search/jobs/field-summary
+ * Returns an exact, bounded summary of one scalar field in the completed
+ * job's final event relation. Field names are case-sensitive catalog names;
+ * missing and explicit null values are excluded from top_values and distinct
+ * count, while their profile counters remain explicit.
+ */
 export interface GetSearchFieldSummaryRequest {
   searchJobId: string;
   fieldName: string;
+  /** Omission uses the server default. Explicit zero is invalid. */
   maxValues?: number | undefined;
 }
 

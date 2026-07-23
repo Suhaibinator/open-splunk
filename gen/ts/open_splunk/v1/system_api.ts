@@ -120,6 +120,7 @@ export interface BrowserApiLimits {
   defaultSearchTimeout: Duration | undefined;
   searchResultRetention: Duration | undefined;
   maximumTimelineBuckets: number;
+  maximumFieldSummaryValues: number;
 }
 
 /** POST /api/v1/system/bootstrap */
@@ -151,6 +152,7 @@ function createBaseBrowserApiLimits(): BrowserApiLimits {
     defaultSearchTimeout: undefined,
     searchResultRetention: undefined,
     maximumTimelineBuckets: 0,
+    maximumFieldSummaryValues: 0,
   };
 }
 
@@ -193,6 +195,9 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
     }
     if (message.maximumTimelineBuckets !== 0) {
       writer.uint32(72).uint32(message.maximumTimelineBuckets);
+    }
+    if (message.maximumFieldSummaryValues !== 0) {
+      writer.uint32(80).uint32(message.maximumFieldSummaryValues);
     }
     return writer;
   },
@@ -276,6 +281,14 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
           message.maximumTimelineBuckets = reader.uint32();
           continue;
         }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.maximumFieldSummaryValues = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -332,6 +345,11 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
         : isSet(object.maximum_timeline_buckets)
         ? globalThis.Number(object.maximum_timeline_buckets)
         : 0,
+      maximumFieldSummaryValues: isSet(object.maximumFieldSummaryValues)
+        ? globalThis.Number(object.maximumFieldSummaryValues)
+        : isSet(object.maximum_field_summary_values)
+        ? globalThis.Number(object.maximum_field_summary_values)
+        : 0,
     };
   },
 
@@ -364,6 +382,9 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
     if (message.maximumTimelineBuckets !== 0) {
       obj.maximumTimelineBuckets = Math.round(message.maximumTimelineBuckets);
     }
+    if (message.maximumFieldSummaryValues !== 0) {
+      obj.maximumFieldSummaryValues = Math.round(message.maximumFieldSummaryValues);
+    }
     return obj;
   },
 
@@ -393,6 +414,7 @@ export const BrowserApiLimits: MessageFns<BrowserApiLimits> = {
         ? Duration.fromPartial(object.searchResultRetention)
         : undefined;
     message.maximumTimelineBuckets = object.maximumTimelineBuckets ?? 0;
+    message.maximumFieldSummaryValues = object.maximumFieldSummaryValues ?? 0;
     return message;
   },
 };

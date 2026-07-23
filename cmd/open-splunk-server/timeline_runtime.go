@@ -30,11 +30,13 @@ type runtimeAnalysisSearches interface {
 type runtimeAnalysisCompiler interface {
 	CompileTimeline(*plan.Query, clickhouse.TimelineSpec) (clickhouse.CompiledTimeline, error)
 	CompileFieldCatalog(*plan.Query, clickhouse.FieldCatalogSpec) (clickhouse.CompiledFieldCatalog, error)
+	CompileFieldSummary(*plan.Query, clickhouse.FieldSummarySpec) (clickhouse.CompiledFieldSummary, error)
 }
 
 type runtimeAnalysisExecutor interface {
 	ExecuteTimeline(context.Context, clickhouse.CompiledTimeline) ([]queryexec.TimelineBucket, error)
 	ExecuteFieldCatalog(context.Context, clickhouse.CompiledFieldCatalog) (queryexec.FieldCatalogResult, error)
+	ExecuteFieldSummary(context.Context, clickhouse.CompiledFieldSummary) (queryexec.FieldSummaryResult, error)
 }
 
 // runtimeSearchAnalysisConfig names each borrowed dependency once. Timeline

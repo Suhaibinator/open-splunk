@@ -34,6 +34,8 @@ const (
 	apiV1PathPrefix                   = "/api/v1"
 	searchFieldsListRoute             = "/search/jobs/fields/list"
 	searchFieldsListPath              = apiV1PathPrefix + searchFieldsListRoute
+	searchFieldSummaryRoute           = "/search/jobs/field-summary"
+	searchFieldSummaryPath            = apiV1PathPrefix + searchFieldSummaryRoute
 	searchTimelinePath                = "/api/v1/search/jobs/timeline"
 	searchWebSocketPath               = "/api/v1/search/ws"
 	defaultMaximumRequestBytes        = int64(128 << 10)
@@ -147,8 +149,10 @@ type SearchTimelines interface {
 // validation cannot drift from the service contract while requests are live.
 type SearchFields interface {
 	ListFields(context.Context, searchjobs.AccessScope, searchanalysis.ListFieldsRequest) (searchanalysis.FieldPage, error)
+	GetFieldSummary(context.Context, searchjobs.AccessScope, searchanalysis.GetFieldSummaryRequest) (searchanalysis.FieldSummary, error)
 	MaximumFields() uint32
 	MaximumPageSize() uint32
+	MaximumSummaryValues() uint32
 }
 
 // SearchWebSocket is the independently lifecycle-managed progress transport.
@@ -258,6 +262,7 @@ type apiHandler struct {
 	maximumTimelineBuckets    uint32
 	maximumFieldPageSize      uint32
 	maximumFieldCatalogFields uint32
+	maximumFieldSummaryValues uint32
 	bootstrap                 BootstrapConfig
 	now                       func() time.Time
 	requestGate               chan struct{}
@@ -317,14 +322,19 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 	maximumFieldCatalogFields := uint32(0)
 	maximumFieldPageSize := uint32(0)
+	maximumFieldSummaryValues := uint32(0)
 	if fieldService != nil {
 		maximumFieldCatalogFields = fieldService.MaximumFields()
 		maximumFieldPageSize = fieldService.MaximumPageSize()
+		maximumFieldSummaryValues = fieldService.MaximumSummaryValues()
 		if maximumFieldCatalogFields == 0 || maximumFieldCatalogFields > clickhouse.MaximumFieldCatalogFields {
 			return nil, fmt.Errorf("create server handler: field catalog maximum fields must be between 1 and %d", clickhouse.MaximumFieldCatalogFields)
 		}
 		if maximumFieldPageSize == 0 || maximumFieldPageSize > maximumFieldCatalogFields || maximumFieldPageSize > maximumSearchFieldPageSize {
 			return nil, fmt.Errorf("create server handler: field catalog maximum page size must be between 1 and %d and cannot exceed maximum fields", maximumSearchFieldPageSize)
+		}
+		if maximumFieldSummaryValues == 0 || maximumFieldSummaryValues > clickhouse.MaximumFieldSummaryValues {
+			return nil, fmt.Errorf("create server handler: field summary maximum values must be between 1 and %d", clickhouse.MaximumFieldSummaryValues)
 		}
 	}
 	searchWebSocket := config.SearchWebSocket
@@ -415,7 +425,7 @@ func NewHandler(config Config) (*Handler, error) {
 		bootstrap.MaximumSubscriptions = maximumSubscriptions
 		bootstrap.MaximumWebSocketBytes = maximumFrameBytes
 	}
-	bootstrap.Features = featuresForServices(bootstrap.Features, indexAdmin != nil, ingestionTokens != nil, searchHistoryService != nil, exportService != nil, timelineService != nil)
+	bootstrap.Features = featuresForServices(bootstrap.Features, indexAdmin != nil, ingestionTokens != nil, searchHistoryService != nil, exportService != nil, timelineService != nil, fieldService != nil)
 	browserAllowedHosts, err := normalizeBrowserAllowedHosts(config.AdministrativeAllowedHosts)
 	if err != nil {
 		return nil, fmt.Errorf("create server handler: %w", err)
@@ -448,6 +458,7 @@ func NewHandler(config Config) (*Handler, error) {
 		maximumTimelineBuckets:    maximumTimelineBuckets,
 		maximumFieldPageSize:      maximumFieldPageSize,
 		maximumFieldCatalogFields: maximumFieldCatalogFields,
+		maximumFieldSummaryValues: maximumFieldSummaryValues,
 		bootstrap:                 bootstrap,
 		now:                       now,
 		requestGate:               make(chan struct{}, concurrentRequests),
@@ -517,6 +528,7 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 	if api.searchFields != nil {
 		apiRoutes[searchFieldsListPath] = http.MethodPost
+		apiRoutes[searchFieldSummaryPath] = http.MethodPost
 	}
 	if api.searchWebSocket != nil {
 		apiRoutes[searchWebSocketPath] = http.MethodGet
@@ -627,15 +639,16 @@ func normalizeBootstrap(config BootstrapConfig) (BootstrapConfig, error) {
 	return result, nil
 }
 
-func featuresForServices(features []opensplunkv1.ServerFeature, _, _, historyEnabled, exportsEnabled, timelineEnabled bool) []opensplunkv1.ServerFeature {
+func featuresForServices(features []opensplunkv1.ServerFeature, _, _, historyEnabled, exportsEnabled, timelineEnabled, fieldDiscoveryEnabled bool) []opensplunkv1.ServerFeature {
 	// The current handlers intentionally expose only the clean-install
 	// provisioning subset of these API families. Do not advertise either broad
 	// capability until every route in the corresponding proto family exists.
-	result := make([]opensplunkv1.ServerFeature, 0, len(features)+4)
+	result := make([]opensplunkv1.ServerFeature, 0, len(features)+5)
 	hasHistory := false
 	hasCSVExport := false
 	hasJSONLinesExport := false
 	hasTimeline := false
+	hasFieldDiscovery := false
 	for _, feature := range features {
 		if feature == opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE {
 			if timelineEnabled && !hasTimeline {
@@ -644,8 +657,14 @@ func featuresForServices(features []opensplunkv1.ServerFeature, _, _, historyEna
 			}
 			continue
 		}
+		if feature == opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY {
+			if fieldDiscoveryEnabled && !hasFieldDiscovery {
+				result = append(result, feature)
+				hasFieldDiscovery = true
+			}
+			continue
+		}
 		if feature != opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW &&
-			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY &&
 			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN &&
 			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN &&
 			feature != opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN &&
@@ -670,6 +689,9 @@ func featuresForServices(features []opensplunkv1.ServerFeature, _, _, historyEna
 	}
 	if timelineEnabled && !hasTimeline {
 		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE)
+	}
+	if fieldDiscoveryEnabled && !hasFieldDiscovery {
+		result = append(result, opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY)
 	}
 	return result
 }

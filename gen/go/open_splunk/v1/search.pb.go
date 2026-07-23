@@ -844,11 +844,14 @@ func (x *SearchPlanSummary) GetClickhouseQueryId() string {
 }
 
 type SearchJobOptions struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	EnablePreview        bool                   `protobuf:"varint,1,opt,name=enable_preview,json=enablePreview,proto3" json:"enable_preview,omitempty"`
-	EnableFieldDiscovery bool                   `protobuf:"varint,2,opt,name=enable_field_discovery,json=enableFieldDiscovery,proto3" json:"enable_field_discovery,omitempty"`
-	EnableTimeline       bool                   `protobuf:"varint,3,opt,name=enable_timeline,json=enableTimeline,proto3" json:"enable_timeline,omitempty"`
-	PreviewRowLimit      *uint32                `protobuf:"varint,4,opt,name=preview_row_limit,json=previewRowLimit,proto3,oneof" json:"preview_row_limit,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EnablePreview bool                   `protobuf:"varint,1,opt,name=enable_preview,json=enablePreview,proto3" json:"enable_preview,omitempty"`
+	// Reserved for future eager or in-progress analysis. Version 0.1 exposes
+	// on-demand completed-job field analysis when the server advertises it and
+	// rejects this option when set.
+	EnableFieldDiscovery bool    `protobuf:"varint,2,opt,name=enable_field_discovery,json=enableFieldDiscovery,proto3" json:"enable_field_discovery,omitempty"`
+	EnableTimeline       bool    `protobuf:"varint,3,opt,name=enable_timeline,json=enableTimeline,proto3" json:"enable_timeline,omitempty"`
+	PreviewRowLimit      *uint32 `protobuf:"varint,4,opt,name=preview_row_limit,json=previewRowLimit,proto3,oneof" json:"preview_row_limit,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }

@@ -16,6 +16,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
@@ -42,6 +43,10 @@ func (runtimeTimelineCompiler) CompileFieldCatalog(_ *plan.Query, spec clickhous
 	return clickhouse.CompiledFieldCatalog{SQL: "SELECT field catalog", Spec: spec}, nil
 }
 
+func (runtimeTimelineCompiler) CompileFieldSummary(_ *plan.Query, spec clickhouse.FieldSummarySpec) (clickhouse.CompiledFieldSummary, error) {
+	return clickhouse.CompiledFieldSummary{SQL: "SELECT field summary", Spec: spec}, nil
+}
+
 type runtimeTimelineExecutor struct{}
 
 func (runtimeTimelineExecutor) ExecuteTimeline(context.Context, clickhouse.CompiledTimeline) ([]queryexec.TimelineBucket, error) {
@@ -50,6 +55,10 @@ func (runtimeTimelineExecutor) ExecuteTimeline(context.Context, clickhouse.Compi
 
 func (runtimeTimelineExecutor) ExecuteFieldCatalog(context.Context, clickhouse.CompiledFieldCatalog) (queryexec.FieldCatalogResult, error) {
 	return queryexec.FieldCatalogResult{}, nil
+}
+
+func (runtimeTimelineExecutor) ExecuteFieldSummary(context.Context, clickhouse.CompiledFieldSummary) (queryexec.FieldSummaryResult, error) {
+	return queryexec.FieldSummaryResult{}, nil
 }
 
 type runtimeSearchJobs struct{}
@@ -134,6 +143,16 @@ func TestRuntimeHTTPHandlerAdvertisesEnforcedTimelineService(t *testing.T) {
 	if decoded.GetLimits().GetMaximumTimelineBuckets() != 1_000 {
 		t.Fatalf("maximum timeline buckets = %d, want enforcing service default 1000", decoded.GetLimits().GetMaximumTimelineBuckets())
 	}
+	if !slices.Contains(decoded.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY) {
+		t.Fatalf("bootstrap features = %v, want field discovery", decoded.GetFeatures())
+	}
+	if decoded.GetLimits().GetMaximumFieldSummaryValues() != clickhouse.MaximumFieldSummaryValues {
+		t.Fatalf(
+			"maximum field summary values = %d, want enforcing service default %d",
+			decoded.GetLimits().GetMaximumFieldSummaryValues(),
+			clickhouse.MaximumFieldSummaryValues,
+		)
+	}
 }
 
 func TestRuntimeHTTPHandlerServesConfiguredFieldCatalog(t *testing.T) {
@@ -178,6 +197,60 @@ func TestRuntimeHTTPHandlerServesConfiguredFieldCatalog(t *testing.T) {
 	if len(decoded.GetFields()) != 0 || decoded.GetPage() == nil || decoded.GetPage().TotalSize == nil ||
 		decoded.GetPage().GetTotalSize() != 0 || !decoded.GetPage().GetTotalSizeExact() {
 		t.Fatalf("field-list response = %+v", &decoded)
+	}
+}
+
+func TestRuntimeHTTPHandlerServesConfiguredFieldSummary(t *testing.T) {
+	snapshot := runtimeFieldExecutionSnapshot()
+	analysis, err := newRuntimeSearchAnalysis(runtimeSearchAnalysisConfig{
+		Searches: runtimeSnapshotSearches{snapshot: snapshot},
+		Compiler: runtimeFieldSummaryCompiler{},
+		Executor: runtimeFieldSummaryExecutor{},
+	})
+	if err != nil {
+		t.Fatalf("newRuntimeSearchAnalysis: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := analysis.Close(); err != nil {
+			t.Errorf("analysis.Close: %v", err)
+		}
+	})
+	config := runtimeServerConfig()
+	config.OwnerID = snapshot.OwnerID
+	config.TenantID = snapshot.TenantID
+	handler, err := newRuntimeHTTPHandler(config, analysis)
+	if err != nil {
+		t.Fatalf("newRuntimeHTTPHandler: %v", err)
+	}
+
+	maximumValues := uint32(2)
+	payload, err := proto.Marshal(&opensplunkv1.GetSearchFieldSummaryRequest{
+		SearchJobId: snapshot.ID,
+		FieldName:   "level",
+		MaxValues:   &maximumValues,
+	})
+	if err != nil {
+		t.Fatalf("marshal field summary request: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/v1/search/jobs/field-summary", bytes.NewReader(payload))
+	request.Header.Set("Content-Type", "application/x-protobuf")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("field-summary status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var decoded opensplunkv1.GetSearchFieldSummaryResponse
+	if err := proto.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("unmarshal field summary response: %v", err)
+	}
+	summary := decoded.GetFieldSummary()
+	if summary == nil || summary.GetProfile().GetFieldName() != "level" ||
+		summary.GetProfile().GetDistinctCount() != 2 || len(summary.GetTopValues()) != 2 ||
+		summary.GetTopValues()[0].GetValue().GetStringValue() != "error" ||
+		summary.GetTopValues()[0].GetCount() != 2 ||
+		summary.GetTopValues()[1].GetValue().GetStringValue() != "info" ||
+		summary.GetTopValues()[1].GetCount() != 1 {
+		t.Fatalf("field-summary response = %+v", summary)
 	}
 }
 
@@ -351,6 +424,64 @@ func TestRuntimeSearchAnalysisCloseWaitsForBlockedFieldWorker(t *testing.T) {
 	}
 }
 
+func TestRuntimeSearchAnalysisCloseWaitsForBlockedFieldSummaryWorker(t *testing.T) {
+	snapshot := runtimeFieldExecutionSnapshot()
+	executor := &runtimeBlockingFieldSummaryExecutor{
+		entered: make(chan struct{}),
+		exited:  make(chan struct{}),
+	}
+	analysis, err := newRuntimeSearchAnalysis(runtimeSearchAnalysisConfig{
+		Searches: runtimeSnapshotSearches{snapshot: snapshot},
+		Compiler: runtimeFieldSummaryCompiler{},
+		Executor: executor,
+	})
+	if err != nil {
+		t.Fatalf("newRuntimeSearchAnalysis: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := analysis.Close(); err != nil {
+			t.Errorf("analysis.Close cleanup: %v", err)
+		}
+	})
+
+	summaryResult := make(chan error, 1)
+	go func() {
+		_, err := analysis.fields.GetFieldSummary(context.Background(), searchjobs.AccessScope{
+			TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID,
+		}, searchanalysis.GetFieldSummaryRequest{SearchJobID: snapshot.ID, FieldName: "level"})
+		summaryResult <- err
+	}()
+	select {
+	case <-executor.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("field-summary worker did not enter the executor")
+	}
+
+	closeResult := make(chan error, 1)
+	go func() { closeResult <- analysis.Close() }()
+	select {
+	case err := <-closeResult:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not wait for the cancellation-aware field-summary worker")
+	}
+	select {
+	case <-executor.exited:
+	default:
+		t.Fatal("Close returned before the field-summary worker exited")
+	}
+	select {
+	case err := <-summaryResult:
+		if !errors.Is(err, searchjobs.ErrClosed) {
+			t.Fatalf("GetFieldSummary error = %v, want ErrClosed", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("GetFieldSummary did not return after analysis close")
+	}
+}
+
 type runtimeConfiguredTimelines struct{}
 
 func (*runtimeConfiguredTimelines) MaximumBuckets() uint32 { return 1 }
@@ -361,11 +492,16 @@ func (*runtimeConfiguredTimelines) Get(context.Context, searchjobs.AccessScope, 
 
 type runtimeConfiguredFields struct{}
 
-func (*runtimeConfiguredFields) MaximumFields() uint32   { return 1 }
-func (*runtimeConfiguredFields) MaximumPageSize() uint32 { return 1 }
+func (*runtimeConfiguredFields) MaximumFields() uint32        { return 1 }
+func (*runtimeConfiguredFields) MaximumPageSize() uint32      { return 1 }
+func (*runtimeConfiguredFields) MaximumSummaryValues() uint32 { return 1 }
 
 func (*runtimeConfiguredFields) ListFields(context.Context, searchjobs.AccessScope, searchanalysis.ListFieldsRequest) (searchanalysis.FieldPage, error) {
 	return searchanalysis.FieldPage{}, nil
+}
+
+func (*runtimeConfiguredFields) GetFieldSummary(context.Context, searchjobs.AccessScope, searchanalysis.GetFieldSummaryRequest) (searchanalysis.FieldSummary, error) {
+	return searchanalysis.FieldSummary{}, nil
 }
 
 type runtimeSnapshotSearches struct {
@@ -401,6 +537,41 @@ func (executor *runtimeBlockingFieldExecutor) ExecuteFieldCatalog(ctx context.Co
 	<-ctx.Done()
 	close(executor.exited)
 	return queryexec.FieldCatalogResult{}, ctx.Err()
+}
+
+type runtimeFieldSummaryCompiler struct{ runtimeTimelineCompiler }
+
+func (runtimeFieldSummaryCompiler) CompileFieldSummary(_ *plan.Query, spec clickhouse.FieldSummarySpec) (clickhouse.CompiledFieldSummary, error) {
+	return clickhouse.CompiledFieldSummary{SQL: "SELECT field summary", Spec: spec, FieldKnown: true}, nil
+}
+
+type runtimeFieldSummaryExecutor struct{ runtimeTimelineExecutor }
+
+func (runtimeFieldSummaryExecutor) ExecuteFieldSummary(_ context.Context, compiled clickhouse.CompiledFieldSummary) (queryexec.FieldSummaryResult, error) {
+	return queryexec.FieldSummaryResult{
+		FieldName:     compiled.Spec.FieldName,
+		ObservedTypes: []eventfields.StoredValueType{eventfields.StoredValueTypeString},
+		EventCount:    3,
+		DistinctCount: 2,
+		TopValues: []queryexec.FieldValueCountRow{
+			{Value: searchjobs.StringValue("error"), Count: 2},
+			{Value: searchjobs.StringValue("info"), Count: 1},
+		},
+	}, nil
+}
+
+type runtimeBlockingFieldSummaryExecutor struct {
+	runtimeTimelineExecutor
+	entered chan struct{}
+	exited  chan struct{}
+	once    sync.Once
+}
+
+func (executor *runtimeBlockingFieldSummaryExecutor) ExecuteFieldSummary(ctx context.Context, _ clickhouse.CompiledFieldSummary) (queryexec.FieldSummaryResult, error) {
+	executor.once.Do(func() { close(executor.entered) })
+	<-ctx.Done()
+	close(executor.exited)
+	return queryexec.FieldSummaryResult{}, ctx.Err()
 }
 
 func newRuntimeSearchAnalysisForTest(t *testing.T) *runtimeSearchAnalysis {

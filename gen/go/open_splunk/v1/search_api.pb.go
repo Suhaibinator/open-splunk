@@ -665,11 +665,16 @@ func (x *ListSearchFieldsResponse) GetPage() *PageResponse {
 }
 
 // POST /api/v1/search/jobs/field-summary
+// Returns an exact, bounded summary of one scalar field in the completed
+// job's final event relation. Field names are case-sensitive catalog names;
+// missing and explicit null values are excluded from top_values and distinct
+// count, while their profile counters remain explicit.
 type GetSearchFieldSummaryRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SearchJobId   string                 `protobuf:"bytes,1,opt,name=search_job_id,json=searchJobId,proto3" json:"search_job_id,omitempty"`
-	FieldName     string                 `protobuf:"bytes,2,opt,name=field_name,json=fieldName,proto3" json:"field_name,omitempty"`
-	MaxValues     *uint32                `protobuf:"varint,3,opt,name=max_values,json=maxValues,proto3,oneof" json:"max_values,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	SearchJobId string                 `protobuf:"bytes,1,opt,name=search_job_id,json=searchJobId,proto3" json:"search_job_id,omitempty"`
+	FieldName   string                 `protobuf:"bytes,2,opt,name=field_name,json=fieldName,proto3" json:"field_name,omitempty"`
+	// Omission uses the server default. Explicit zero is invalid.
+	MaxValues     *uint32 `protobuf:"varint,3,opt,name=max_values,json=maxValues,proto3,oneof" json:"max_values,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

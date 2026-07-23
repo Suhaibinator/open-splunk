@@ -123,6 +123,9 @@ message SearchPlanSummary {
 
 message SearchJobOptions {
   bool enable_preview = 1;
+  // Reserved for future eager or in-progress analysis. Version 0.1 exposes
+  // on-demand completed-job field analysis when the server advertises it and
+  // rejects this option when set.
   bool enable_field_discovery = 2;
   bool enable_timeline = 3;
   optional uint32 preview_row_limit = 4;

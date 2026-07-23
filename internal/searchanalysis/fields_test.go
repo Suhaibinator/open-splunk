@@ -1066,8 +1066,14 @@ func TestNewFieldServiceValidatesConfigurationAndExposesLimits(t *testing.T) {
 	if _, err := NewFieldService(FieldConfig{}); err == nil {
 		t.Fatal("NewFieldService(empty) error = nil")
 	}
-	var typedNil *fakeFieldExecutor
+	var typedNilCompiler *fakeFieldCompiler
 	invalid := valid
+	invalid.Compiler = typedNilCompiler
+	if _, err := NewFieldService(invalid); err == nil {
+		t.Fatal("NewFieldService(typed nil compiler) error = nil")
+	}
+	var typedNil *fakeFieldExecutor
+	invalid = valid
 	invalid.Executor = typedNil
 	if _, err := NewFieldService(invalid); err == nil {
 		t.Fatal("NewFieldService(typed nil executor) error = nil")
@@ -1082,6 +1088,16 @@ func TestNewFieldServiceValidatesConfigurationAndExposesLimits(t *testing.T) {
 		func(config *FieldConfig) { config.CacheTTL = -time.Second },
 		func(config *FieldConfig) { config.MaxCacheEntries = -1 },
 		func(config *FieldConfig) { config.MaxCacheBytes = ^uint64(0) },
+		func(config *FieldConfig) {
+			config.MaximumSummaryValues = clickhouse.MaximumFieldSummaryValues + 1
+		},
+		func(config *FieldConfig) {
+			config.DefaultSummaryValues = 2
+			config.MaximumSummaryValues = 1
+		},
+		func(config *FieldConfig) { config.SummaryCacheTTL = -time.Second },
+		func(config *FieldConfig) { config.MaxSummaryCacheEntries = -1 },
+		func(config *FieldConfig) { config.MaxSummaryCacheBytes = ^uint64(0) },
 	} {
 		candidate := valid
 		mutate(&candidate)
@@ -1092,9 +1108,18 @@ func TestNewFieldServiceValidatesConfigurationAndExposesLimits(t *testing.T) {
 	valid.MaximumFields = 27
 	valid.MaximumPageSize = 13
 	valid.DefaultPageSize = 7
+	valid.MaximumSummaryValues = 9
+	valid.DefaultSummaryValues = 4
 	service := newFieldTestService(t, valid)
-	if service.MaximumFields() != 27 || service.MaximumPageSize() != 13 {
-		t.Fatalf("limits = fields %d page %d", service.MaximumFields(), service.MaximumPageSize())
+	if service.MaximumFields() != 27 ||
+		service.MaximumPageSize() != 13 ||
+		service.MaximumSummaryValues() != 9 {
+		t.Fatalf(
+			"limits = fields %d page %d summary %d",
+			service.MaximumFields(),
+			service.MaximumPageSize(),
+			service.MaximumSummaryValues(),
+		)
 	}
 	wantKeyByte := service.cursorKey[0]
 	localCursorKey[0] ^= 0xff
@@ -1147,6 +1172,13 @@ func (compiler *fakeFieldCompiler) CompileFieldCatalog(query *plan.Query, spec c
 	return clickhouse.CompiledFieldCatalog{SQL: "SELECT field catalog", Spec: spec}, compiler.err
 }
 
+func (*fakeFieldCompiler) CompileFieldSummary(
+	_ *plan.Query,
+	spec clickhouse.FieldSummarySpec,
+) (clickhouse.CompiledFieldSummary, error) {
+	return clickhouse.CompiledFieldSummary{SQL: "SELECT field summary", Spec: spec, FieldKnown: true}, nil
+}
+
 func (compiler *fakeFieldCompiler) Calls() int {
 	compiler.mu.Lock()
 	defer compiler.mu.Unlock()
@@ -1184,6 +1216,13 @@ func (executor *fakeFieldExecutor) ExecuteFieldCatalog(ctx context.Context, quer
 		return execute(ctx, query)
 	}
 	return result, err
+}
+
+func (*fakeFieldExecutor) ExecuteFieldSummary(
+	_ context.Context,
+	_ clickhouse.CompiledFieldSummary,
+) (queryexec.FieldSummaryResult, error) {
+	return queryexec.FieldSummaryResult{}, nil
 }
 
 func (executor *fakeFieldExecutor) Calls() int {
