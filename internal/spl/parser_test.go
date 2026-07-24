@@ -963,6 +963,141 @@ func TestParseTimechartFixedSpanCountByField(t *testing.T) {
 	}
 }
 
+func TestParseBinFixedTimeSpan(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		source      string
+		commandText string
+		commandName string
+		magnitude   uint64
+		unit        TimeSpanUnit
+	}{
+		{
+			name:        "field before span",
+			source:      `index=main | bin _time span=5m`,
+			commandText: `bin _time span=5m`,
+			commandName: "bin",
+			magnitude:   5,
+			unit:        TimeSpanUnitMinute,
+		},
+		{
+			name:        "span before field with case insensitive syntax",
+			source:      `index=main | BIN SPAN = 30S _time`,
+			commandText: `BIN SPAN = 30S _time`,
+			commandName: "bin",
+			magnitude:   30,
+			unit:        TimeSpanUnitSecond,
+		},
+		{
+			name:        "bucket alias",
+			source:      `index=main | BuCkEt _time SpAn=2h`,
+			commandText: `BuCkEt _time SpAn=2h`,
+			commandName: "bucket",
+			magnitude:   2,
+			unit:        TimeSpanUnitHour,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if len(query.Commands) != 1 {
+				t.Fatalf("command count = %d, want 1", len(query.Commands))
+			}
+			command, ok := query.Commands[0].(*BinCommand)
+			if !ok {
+				t.Fatalf("command = %T, want *BinCommand", query.Commands[0])
+			}
+			if command.Name() != test.commandName {
+				t.Fatalf("command name = %q, want %q", command.Name(), test.commandName)
+			}
+			if command.Field != "_time" {
+				t.Fatalf("field = %q, want _time", command.Field)
+			}
+			if command.Span.Magnitude != test.magnitude || command.Span.Unit != test.unit {
+				t.Fatalf("span = %#v", command.Span)
+			}
+			if got := test.source[command.FieldRange.Start.Offset:command.FieldRange.End.Offset]; got != "_time" {
+				t.Fatalf("field source = %q, want _time", got)
+			}
+			if got := test.source[command.Span.Range.Start.Offset:command.Span.Range.End.Offset]; !strings.EqualFold(got, strconv.FormatUint(test.magnitude, 10)+command.Span.Unit.String()) {
+				t.Fatalf("span source = %q", got)
+			}
+			if got := test.source[command.Range.Start.Offset:command.Range.End.Offset]; got != test.commandText {
+				t.Fatalf("command source = %q, want %q", got, test.commandText)
+			}
+		})
+	}
+}
+
+func TestParseBinRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		source    string
+		code      string
+		locatedAt string
+	}{
+		{"missing arguments", `index=main | bin`, "SPL_UNSUPPORTED_BIN_SYNTAX", "bin"},
+		{"missing span", `index=main | bin _time`, "SPL_UNSUPPORTED_BIN_SYNTAX", "_time"},
+		{"missing field", `index=main | bin span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "5m"},
+		{"other field", `index=main | bin host span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "host"},
+		{"numeric field", `index=main | bin 300 span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "300"},
+		{"field case is exact", `index=main | bin _TIME span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "_TIME"},
+		{"quoted field", `index=main | bin "_time" span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", `"_time"`},
+		{"wildcard field", `index=main | bin _time* span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "_time*"},
+		{"as output", `index=main | bin _time span=5m AS bucket_time`, "SPL_UNSUPPORTED_BIN_SYNTAX", "AS"},
+		{"bins option", `index=main | bin bins=10 _time`, "SPL_UNSUPPORTED_BIN_SYNTAX", "bins"},
+		{"minspan option", `index=main | bin _time minspan=1m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "minspan"},
+		{"start option", `index=main | bin start=0 _time span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "start"},
+		{"end option", `index=main | bin end=100 _time span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "end"},
+		{"aligntime option", `index=main | bin _time span=5m aligntime=earliest`, "SPL_UNSUPPORTED_BIN_SYNTAX", "aligntime"},
+		{"duplicate span", `index=main | bin span=5m _time span=10m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "span"},
+		{"duplicate field", `index=main | bin _time span=5m _time`, "SPL_UNSUPPORTED_BIN_SYNTAX", "_time"},
+		{"second field", `index=main | bin _time host span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "host"},
+		{"comma separated fields", `index=main | bin _time, host span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "host"},
+		{"missing equal", `index=main | bin _time span 5m`, "SPL_EXPECTED_EQUAL", "span"},
+		{"missing span value", `index=main | bin _time span=`, "SPL_INVALID_ARGUMENT", "span"},
+		{"quoted span", `index=main | bin _time span="5m"`, "SPL_INVALID_ARGUMENT", `"5m"`},
+		{"zero span", `index=main | bin _time span=0m`, "SPL_INVALID_ARGUMENT", "0m"},
+		{"negative span", `index=main | bin _time span=-5m`, "SPL_INVALID_ARGUMENT", "-5m"},
+		{"fractional span", `index=main | bin _time span=1.5m`, "SPL_INVALID_ARGUMENT", "1.5m"},
+		{"compound span", `index=main | bin _time span=1h30m`, "SPL_INVALID_ARGUMENT", "1h30m"},
+		{"calendar span", `index=main | bin _time span=1d`, "SPL_UNSUPPORTED_BIN_SYNTAX", "1d"},
+		{"subsecond span", `index=main | bin _time span=500ms`, "SPL_UNSUPPORTED_BIN_SYNTAX", "500ms"},
+		{"log span", `index=main | bin _time span=2log10`, "SPL_UNSUPPORTED_BIN_SYNTAX", "2log10"},
+		{"duration overflow", `index=main | bin _time span=2562048h`, "SPL_NUMBER_OUT_OF_RANGE", "2562048h"},
+		{"integer overflow", `index=main | bucket span=18446744073709551616s _time`, "SPL_NUMBER_OUT_OF_RANGE", "18446744073709551616s"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Parse(test.source)
+			if err == nil {
+				t.Fatal("Parse succeeded")
+			}
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != test.code {
+				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
+			}
+			got := test.source[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset]
+			if got != test.locatedAt {
+				t.Fatalf("diagnostic source = %q, want %q", got, test.locatedAt)
+			}
+		})
+	}
+}
+
 func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 	t.Parallel()
 
@@ -981,6 +1116,7 @@ func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{"integer overflow", `index=main | timechart span=18446744073709551616s count by level`, "SPL_NUMBER_OUT_OF_RANGE", "18446744073709551616s"},
 		{"calendar day", `index=main | timechart span=1d count by level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "1d"},
 		{"subsecond", `index=main | timechart span=5ms count by level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "5ms"},
+		{"log span keeps legacy diagnostic", `index=main | timechart span=2log10 count by level`, "SPL_INVALID_ARGUMENT", "2log10"},
 		{"compound span", `index=main | timechart span=1h30m count by level`, "SPL_INVALID_ARGUMENT", "1h30m"},
 		{"missing aggregate", `index=main | timechart span=5m`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", ""},
 		{"unsupported aggregate", `index=main | timechart span=5m p95(duration) by level`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", "p95"},

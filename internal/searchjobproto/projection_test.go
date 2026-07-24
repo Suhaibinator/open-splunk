@@ -9,6 +9,17 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
+func TestResultKindForSPLKeepsTimeBinAsEvents(t *testing.T) {
+	t.Parallel()
+
+	if got := ResultKindForSPL(`index=main | bin _time span=5m`); got != opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS {
+		t.Fatalf("bin-only result kind = %v, want events", got)
+	}
+	if got := ResultKindForSPL(`index=main | bucket span=5m _time | stats count BY _time`); got != opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS {
+		t.Fatalf("bin plus stats result kind = %v, want statistics", got)
+	}
+}
+
 func TestProgressProjectsSharedExactCountersAndTiming(t *testing.T) {
 	t.Parallel()
 

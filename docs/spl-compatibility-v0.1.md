@@ -417,6 +417,47 @@ Only one exact field and a limit are accepted. Multiple fields, `BY`, wildcards,
 rejected. A field named `count` or `percent` is rejected because it collides with
 the fixed output schema.
 
+### `bin` / `bucket`
+
+```spl
+| bin _time span=5m
+| bin span=5m _time
+| bucket _time span=1h
+| bin _time span=5m | stats count BY _time
+```
+
+`bucket` is an exact alias for `bin`. The initial streaming slice accepts one
+exact, unquoted canonical `_time` field and one explicit positive fixed `s`,
+`m`, or `h` span from one second up to, but not including, 24 hours. The field
+and `span` option may appear in either documented order. The command replaces
+`_time` with the UTC Unix-epoch-aligned start of its interval without changing
+row cardinality, event identity, sparse fields, or established event order.
+Downstream filters, projections, sorts, and aggregations consume the binned
+timestamp.
+
+Alignment uses mathematical floor division, including for timestamps before
+1970 and values one nanosecond below a boundary. A bin result remains an Events
+relation, and completed-job field analysis observes the binned timestamp.
+Because `_time` no longer represents the original event timestamp, a second
+`bin`, `timechart`, or timeline request is rejected with a source-located
+canonical-time diagnostic.
+
+ClickHouse must materialize each public bin boundary as `DateTime64(9)`.
+Consequently a search beginning at the supported `1900-01-01T00:00:00Z` lower
+bound with an epoch-aligned span such as `7h` is rejected when its first
+possible bin would be `1899-12-31T19:00:00Z`; the value is never clamped or
+wrapped. This differs deliberately from `timechart`, whose private integer
+ordinal transport can represent a partial bucket before the timestamp storage
+minimum.
+
+Numeric fields, omitted `span`, automatic `bins`/`minspan`, `start`, `end`,
+`aligntime`, `AS`, logarithmic spans, calendar/subsecond units, wildcards,
+quoted fields, and multiple fields are not yet supported. Spans of one day or
+more are also rejected because Splunk aligns them to midnight in the user's
+timezone, including daylight-saving transitions, while the current logical
+plan does not carry that alignment context. Each unsupported form fails
+explicitly rather than falling back to an approximate or data-dependent bin.
+
 ### `timechart`
 
 ```spl
@@ -471,7 +512,7 @@ an explicitly configured lower group cap remains authoritative.
 Field discovery re-executes an immutable completed-job snapshot with the same
 tenant, authorized indexes, half-open event-time range, index-time cutoff, and
 visibility cutoff as the original search. It analyzes the final event relation,
-so `search`, `where`, `eval`, `rex`, `rename`, `fields`, `table`, `sort`,
+so `search`, `where`, `eval`, `rex`, `bin`, `rename`, `fields`, `table`, `sort`,
 `head`, `tail`, and `dedup` affect the catalog and summaries exactly as they
 affect event results. Transforming final relations are rejected explicitly.
 
@@ -521,7 +562,7 @@ storage/execution primitives have pinned ClickHouse integration coverage:
 The following planned commands are not implemented in this version:
 
 ```text
-spath, bin, bucket, chart, eventstats, streamstats
+spath, chart, eventstats, streamstats
 ```
 
 All `stats` functions other than argument-free `count`, `p95(field)`,
@@ -546,6 +587,8 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`percentile functions`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/9.4/statistical-and-charting-functions/aggregate-functions),
 [`top`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.0/search-commands/top),
 [`rare`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.4/search-commands/rare),
+[`bin`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/search-commands/bin),
+[`bucket`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/search-commands/bucket),
 [`timechart`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/timechart),
 [`time modifiers`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.4/specify-time-ranges/specify-time-modifiers-in-your-search),
 ClickHouse's [`extractGroups`](https://clickhouse.com/docs/sql-reference/functions/string-search-functions),

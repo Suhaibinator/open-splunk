@@ -460,9 +460,9 @@ func (*StatsCommand) command()             {}
 func (*StatsCommand) Name() string         { return "stats" }
 func (c *StatsCommand) SourceRange() Range { return c.Range }
 
-// TimeSpanUnit identifies the fixed-duration units supported by the initial
-// timechart compatibility slice. Calendar and subsecond spans require separate
-// alignment semantics and are rejected rather than approximated.
+// TimeSpanUnit identifies the fixed-duration units shared by the initial bin
+// and timechart compatibility slices. Calendar and subsecond spans require
+// separate alignment semantics and are rejected rather than approximated.
 type TimeSpanUnit uint8
 
 const (
@@ -492,6 +492,22 @@ type TimeSpan struct {
 	Unit      TimeSpanUnit
 	Range     Range
 }
+
+// BinCommand replaces _time with a fixed-duration bucket boundary. The
+// deliberately bounded initial slice requires an explicit seconds, minutes,
+// or hours span. CommandName preserves whether the user selected bin or its
+// bucket alias while normalizing command spelling to lower case.
+type BinCommand struct {
+	CommandName string
+	Field       string
+	FieldRange  Range
+	Span        TimeSpan
+	Range       Range
+}
+
+func (*BinCommand) command()             {}
+func (c *BinCommand) Name() string       { return c.CommandName }
+func (c *BinCommand) SourceRange() Range { return c.Range }
 
 // TimechartCommand produces a runtime-wide count series over fixed _time
 // buckets. The initial compatibility slice supports one split field and is a

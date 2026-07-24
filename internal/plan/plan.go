@@ -100,6 +100,20 @@ func (*Extend) operator()                 {}
 func (*Extend) LogicalName() string       { return "Extend" }
 func (op *Extend) SourceRange() spl.Range { return op.Range }
 
+// TimeBucket replaces the canonical event time with the UTC Unix-epoch-aligned
+// start of its fixed-duration interval. It preserves row cardinality, event
+// identity, and established ordering, but the resulting _time no longer has
+// original canonical-time provenance.
+type TimeBucket struct {
+	Field FieldRef
+	Span  time.Duration
+	Range spl.Range
+}
+
+func (*TimeBucket) operator()                 {}
+func (*TimeBucket) LogicalName() string       { return "TimeBucket" }
+func (op *TimeBucket) SourceRange() spl.Range { return op.Range }
+
 // ExtractCapture maps one named regular-expression output to its one-based
 // group index. Unnamed capture groups remain part of the numeric sequence.
 type ExtractCapture struct {

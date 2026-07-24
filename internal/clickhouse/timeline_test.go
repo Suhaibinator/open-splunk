@@ -141,6 +141,7 @@ func TestCompileTimelineRejectsIneligibleOperatorMatrix(t *testing.T) {
 		{`index=gradethis | rex "(?<_time>\d+)"`, "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD"},
 		{`index=gradethis | rename _time AS observed_at`, "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD"},
 		{`index=gradethis | rename observed_at AS _time`, "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD"},
+		{`index=gradethis | bin _time span=5m`, "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD"},
 		{`index=gradethis | fields - _time | table _time`, "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD"},
 		{`index=gradethis | stats count`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
 		{`index=gradethis | top level`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},

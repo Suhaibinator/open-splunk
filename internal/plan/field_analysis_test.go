@@ -21,6 +21,7 @@ func TestValidateFieldAnalysisEligibilityAcceptsFinalEventRelations(t *testing.T
 		&Project{Mode: ProjectModeInclude, Fields: []FieldRef{{Name: "host"}}},
 		&Project{Mode: ProjectModeExclude, Fields: []FieldRef{{Name: "trace_id"}}},
 		&Project{Mode: ProjectModeTable, Fields: []FieldRef{{Name: "host"}, {Name: "status"}}},
+		&TimeBucket{Field: FieldRef{Name: "_time", Canonical: true}},
 		&Sort{},
 		&Deduplicate{},
 		&Limit{},

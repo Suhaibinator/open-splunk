@@ -189,6 +189,20 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 					alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 				}
 			}
+		case *plan.TimeBucket:
+			bucketed, nextState, prefixArgs, compileErr := compileTimeBucket(
+				fragment,
+				state,
+				scan,
+				operator,
+				alias,
+			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			fragment = bucketed
+			args = prependArguments(prefixArgs, args)
+			state = nextState
 		case *plan.Extract:
 			extracted, nextState, prefixArgs, additionalAliases, compileErr := compileExtract(
 				fragment,
@@ -402,6 +416,94 @@ func prependArguments(prefix, existing []any) []any {
 	return append(result, existing...)
 }
 
+func compileTimeBucket(
+	fragment string,
+	state compileState,
+	scan *plan.Scan,
+	operator *plan.TimeBucket,
+	alias string,
+) (string, compileState, []any, error) {
+	if operator == nil {
+		return "", compileState{}, nil, errors.New("compile ClickHouse time bucket: operator is nil")
+	}
+	resolved, err := plan.ResolveField(operator.Field.Name, operator.Field.Range)
+	if err != nil {
+		return "", compileState{}, nil, fmt.Errorf("compile ClickHouse time bucket: invalid field: %w", err)
+	}
+	if resolved.Name != operator.Field.Name || resolved.Canonical != operator.Field.Canonical ||
+		!slices.Equal(resolved.Path, operator.Field.Path) {
+		return "", compileState{}, nil, errors.New("compile ClickHouse time bucket: field metadata is not canonical")
+	}
+	if operator.Field.Name != "_time" || !operator.Field.Canonical {
+		return "", compileState{}, nil, errors.New("compile ClickHouse time bucket: canonical _time field is required")
+	}
+	if operator.Span < time.Second || operator.Span >= 24*time.Hour || operator.Span%time.Second != 0 {
+		return "", compileState{}, nil, errors.New("compile ClickHouse time bucket: fixed span must be at least one second and shorter than 24 hours")
+	}
+	if !state.eventRows {
+		return "", compileState{}, nil, &plan.Diagnostic{
+			Code:    "SPL_UNSUPPORTED_BIN_INPUT",
+			Message: "bin requires source event rows",
+			Range:   operator.Range,
+		}
+	}
+	field, ok, err := resolveCompiledField(operator.Field, state)
+	if err != nil {
+		return "", compileState{}, nil, err
+	}
+	if !ok || field.kind != fieldKindTime || !field.canonicalTime {
+		return "", compileState{}, nil, &plan.Diagnostic{
+			Code:        "SPL_UNSUPPORTED_BIN_TIME_FIELD",
+			Message:     "bin requires the unmodified canonical _time field",
+			Range:       operator.Range,
+			Suggestions: []string{"run bin before removing, replacing, transforming, or previously binning _time"},
+		}
+	}
+	if scan == nil || !SupportsSearchTimeRange(scan.Earliest, scan.Latest) {
+		return "", compileState{}, nil, errors.New("compile ClickHouse time bucket: scan range is invalid")
+	}
+	spanNanoseconds := int64(operator.Span)
+	firstBucketTicks := floorBucketTicks(scan.Earliest.UnixNano(), spanNanoseconds)
+	if firstBucketTicks < MinimumSearchTime().UnixNano() {
+		return "", compileState{}, nil, &plan.Diagnostic{
+			Code:    "SPL_UNSUPPORTED_BIN_TIME_RANGE",
+			Message: "the first epoch-aligned bin falls before the supported timestamp range",
+			Range:   operator.Range,
+			Suggestions: []string{
+				"use a smaller fixed span",
+				"move the search earliest time forward",
+			},
+		}
+	}
+
+	ticks := "reinterpretAsInt64(" + field.valueSQL + ")"
+	bucketTicks := "(" + epochFloorBucketNumberSQL(ticks) + ") * ?"
+	value := "fromUnixTimestamp64Nano(" + bucketTicks + ", 'UTC')"
+	output := quoteIdentifier(operator.Field.Name)
+	fragment = "SELECT * REPLACE (" + value + " AS " + output + ") FROM (" + fragment + ") AS " + alias
+
+	next := state
+	next.visible = make(map[string]fieldState, len(state.visible))
+	for name, existing := range state.visible {
+		next.visible[name] = existing
+	}
+	field.valueSQL = output
+	field.existsSQL = "1"
+	field.existsArgs = nil
+	field.kind = fieldKindTime
+	field.canonicalTime = false
+	next.visible[operator.Field.Name] = field
+	return fragment, next, []any{spanNanoseconds, spanNanoseconds, spanNanoseconds}, nil
+}
+
+func floorBucketTicks(value, span int64) int64 {
+	quotient := value / span
+	if value%span < 0 {
+		quotient--
+	}
+	return quotient * span
+}
+
 func compileTimechart(
 	fragment string,
 	state compileState,
@@ -442,7 +544,7 @@ func compileTimechart(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	if !ok || operator.Time.Name != "_time" || timeField.kind != fieldKindTime {
+	if !ok || operator.Time.Name != "_time" || timeField.kind != fieldKindTime || !timeField.canonicalTime {
 		return CompiledQuery{}, &plan.Diagnostic{
 			Code:    "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD",
 			Message: "timechart requires the unmodified canonical _time field",
@@ -661,6 +763,7 @@ type fieldState struct {
 	caseSensitive  bool
 	numberType     string
 	numericSort    bool
+	canonicalTime  bool
 }
 
 type compiledSortKey struct {
@@ -770,6 +873,9 @@ func canonicalState(field string) fieldState {
 	state := fieldState{valueSQL: value, existsSQL: "1", kind: kind, caseSensitive: field == "index"}
 	if field == "severity" {
 		state.numberType = "UInt8"
+	}
+	if field == "_time" {
+		state.canonicalTime = true
 	}
 	return state
 }
@@ -2176,6 +2282,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 			caseSensitive:  compiled.caseSensitive,
 			numberType:     compiled.numberType,
 			numericSort:    compiled.numericSort,
+			canonicalTime:  compiled.canonicalTime,
 		}
 		next.publicOrder = append(next.publicOrder, name)
 	}

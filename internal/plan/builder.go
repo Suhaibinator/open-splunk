@@ -199,6 +199,37 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				Captures: captures,
 				Range:    command.Range,
 			})
+		case *spl.BinCommand:
+			if command.Field != "_time" {
+				return nil, &Diagnostic{
+					Code:        "SPL_UNSUPPORTED_BIN_TIME_FIELD",
+					Message:     "bin currently supports only the exact canonical _time field",
+					Range:       command.FieldRange,
+					Suggestions: []string{"bin _time span=5m"},
+				}
+			}
+			if !canonicalTimeAvailable {
+				return nil, &Diagnostic{
+					Code:        "SPL_UNSUPPORTED_BIN_TIME_FIELD",
+					Message:     "bin requires the unmodified canonical _time field",
+					Range:       command.FieldRange,
+					Suggestions: []string{"run bin before removing, replacing, transforming, or previously binning _time"},
+				}
+			}
+			field, fieldErr := ResolveField(command.Field, command.FieldRange)
+			if fieldErr != nil {
+				return nil, fieldErr
+			}
+			span, spanErr := fixedBinSpan(command.Span)
+			if spanErr != nil {
+				return nil, spanErr
+			}
+			result.Operators = append(result.Operators, &TimeBucket{
+				Field: field,
+				Span:  span,
+				Range: command.Range,
+			})
+			canonicalTimeAvailable = false
 		case *spl.RenameCommand:
 			assignments, renameErr := convertRenameAssignments(command)
 			if renameErr != nil {
@@ -522,6 +553,48 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 }
 
 func fixedTimechartSpan(span spl.TimeSpan) (time.Duration, error) {
+	duration, err := fixedDurationSpan(
+		span,
+		"SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+		"timechart",
+	)
+	if err != nil {
+		return 0, err
+	}
+	if duration > maxTimechartSpan {
+		return 0, &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+			Message:     "timechart spans greater than 24 hours are not supported",
+			Range:       span.Range,
+			Suggestions: []string{"use a fixed span from 1s through 24h"},
+		}
+	}
+	return duration, nil
+}
+
+func fixedBinSpan(span spl.TimeSpan) (time.Duration, error) {
+	duration, err := fixedDurationSpan(
+		span,
+		"SPL_UNSUPPORTED_BIN_SYNTAX",
+		"bin",
+	)
+	if err != nil {
+		return 0, err
+	}
+	if duration >= 24*time.Hour {
+		return 0, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_BIN_SYNTAX",
+			Message: "bin spans of one day or more require timezone-aware alignment",
+			Range:   span.Range,
+			Suggestions: []string{
+				"use a fixed span shorter than 24 hours",
+			},
+		}
+	}
+	return duration, nil
+}
+
+func fixedDurationSpan(span spl.TimeSpan, syntaxCode, commandName string) (time.Duration, error) {
 	var unit time.Duration
 	switch span.Unit {
 	case spl.TimeSpanUnitSecond:
@@ -532,28 +605,19 @@ func fixedTimechartSpan(span spl.TimeSpan) (time.Duration, error) {
 		unit = time.Hour
 	default:
 		return 0, &Diagnostic{
-			Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
-			Message: "unsupported timechart span unit",
+			Code:    syntaxCode,
+			Message: "unsupported " + commandName + " span unit",
 			Range:   span.Range,
 		}
 	}
 	if span.Magnitude == 0 || span.Magnitude > uint64(math.MaxInt64/int64(unit)) {
 		return 0, &Diagnostic{
 			Code:    "SPL_NUMBER_OUT_OF_RANGE",
-			Message: "timechart span is outside the supported duration range",
+			Message: commandName + " span is outside the supported duration range",
 			Range:   span.Range,
 		}
 	}
-	duration := time.Duration(span.Magnitude) * unit
-	if duration > maxTimechartSpan {
-		return 0, &Diagnostic{
-			Code:        "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
-			Message:     "timechart spans greater than 24 hours are not supported",
-			Range:       span.Range,
-			Suggestions: []string{"use a fixed span from 1s through 24h"},
-		}
-	}
-	return duration, nil
+	return time.Duration(span.Magnitude) * unit, nil
 }
 
 func fixedTimechartBuckets(earliest, latest time.Time, span time.Duration, sourceRange spl.Range) (time.Time, uint64, error) {

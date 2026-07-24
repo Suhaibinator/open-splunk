@@ -159,6 +159,8 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseTopCommand(nameToken)
 	case "rare":
 		return p.parseRareCommand(nameToken)
+	case "bin", "bucket":
+		return p.parseBinCommand(nameToken)
 	case "timechart":
 		return p.parseTimechartCommand(nameToken)
 	default:
@@ -425,6 +427,119 @@ func (p *parser) parseRenameCommand(name token) (Command, error) {
 	return command, nil
 }
 
+func (p *parser) parseBinCommand(name token) (Command, error) {
+	commandName := strings.ToLower(name.text)
+	var (
+		fieldSeen bool
+		field     token
+		spanSeen  bool
+		span      TimeSpan
+		spanValue token
+		end       = name.range_.End
+	)
+
+	for !p.atCommandEnd() {
+		current := p.current()
+		if current.kind == tokenWord && strings.EqualFold(current.text, "span") {
+			if spanSeen {
+				return nil, p.unsupportedBinSyntax(current, "bin span may be specified only once")
+			}
+			option := current
+			p.advance()
+			if !p.match(tokenEqual) {
+				return nil, &Diagnostic{
+					Code:        "SPL_EXPECTED_EQUAL",
+					Message:     "bin span must be followed by '='",
+					Range:       option.range_,
+					Suggestions: []string{"bin _time span=5m"},
+				}
+			}
+			value := p.current()
+			if value.kind != tokenWord {
+				if value.kind == tokenEOF || value.kind == tokenPipe {
+					value = option
+				}
+				return nil, invalidFixedTimeSpan(value, binTimeSpanConfig)
+			}
+			parsed, err := parseFixedTimeSpan(value, binTimeSpanConfig)
+			if err != nil {
+				return nil, err
+			}
+			spanSeen = true
+			span = parsed
+			spanValue = value
+			end = value.range_.End
+			p.advance()
+			continue
+		}
+
+		if current.kind == tokenWord {
+			switch strings.ToLower(current.text) {
+			case "bins", "minspan", "start", "end", "aligntime":
+				return nil, p.unsupportedBinSyntax(
+					current,
+					fmt.Sprintf("bin option %q is not supported; use one explicit fixed span", current.text),
+				)
+			case "as":
+				return nil, p.unsupportedBinSyntax(current, "bin AS output fields are not supported")
+			}
+		}
+		if current.kind == tokenComma {
+			located := current
+			if p.index+1 < len(p.tokens) {
+				next := p.tokens[p.index+1]
+				if next.kind != tokenEOF && next.kind != tokenPipe {
+					located = next
+				}
+			}
+			return nil, p.unsupportedBinSyntax(located, "bin supports exactly one field")
+		}
+		if current.kind != tokenWord {
+			return nil, p.unsupportedBinSyntax(current, "bin requires the exact unquoted _time field")
+		}
+		if fieldSeen {
+			return nil, p.unsupportedBinSyntax(current, "bin supports exactly one field")
+		}
+		if current.text != "_time" {
+			if strings.Contains(current.text, "*") {
+				return nil, p.unsupportedBinSyntax(current, "wildcard bin fields are not supported")
+			}
+			return nil, p.unsupportedBinSyntax(current, "bin currently supports only the exact _time field")
+		}
+		fieldSeen = true
+		field = current
+		end = current.range_.End
+		p.advance()
+	}
+
+	if !fieldSeen {
+		located := name
+		if spanSeen {
+			located = spanValue
+		}
+		return nil, p.unsupportedBinSyntax(located, "bin requires exactly one unquoted _time field")
+	}
+	if !spanSeen {
+		return nil, p.unsupportedBinSyntax(field, "bin requires one explicit span=<positive integer><s|m|h>")
+	}
+	return &BinCommand{
+		CommandName: commandName,
+		Field:       field.text,
+		FieldRange:  field.range_,
+		Span:        span,
+		Range:       Range{Start: name.range_.Start, End: end},
+	}, nil
+}
+
+func (p *parser) unsupportedBinSyntax(tok token, message string) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_BIN_SYNTAX",
+		Message:     message,
+		Range:       tok.range_,
+		Suggestions: []string{"bin _time span=5m"},
+	}
+}
+
 func (p *parser) parseTimechartCommand(name token) (Command, error) {
 	if !p.isKeyword("SPAN") {
 		return nil, p.unsupportedTimechartSyntax(p.current(), "timechart requires span=<positive integer><s|m|h> before count")
@@ -490,17 +605,45 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 }
 
 func parseTimechartSpan(tok token) (TimeSpan, error) {
+	return parseFixedTimeSpan(tok, timechartTimeSpanConfig)
+}
+
+type fixedTimeSpanParserConfig struct {
+	commandName        string
+	syntaxCode         string
+	suggestion         string
+	logSpanUnsupported bool
+}
+
+var (
+	binTimeSpanConfig = fixedTimeSpanParserConfig{
+		commandName:        "bin",
+		syntaxCode:         "SPL_UNSUPPORTED_BIN_SYNTAX",
+		suggestion:         "bin _time span=5m",
+		logSpanUnsupported: true,
+	}
+	timechartTimeSpanConfig = fixedTimeSpanParserConfig{
+		commandName: "timechart",
+		syntaxCode:  "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+		suggestion:  "timechart span=5m count by field",
+	}
+)
+
+func parseFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) (TimeSpan, error) {
 	digitEnd := 0
 	for digitEnd < len(tok.text) && tok.text[digitEnd] >= '0' && tok.text[digitEnd] <= '9' {
 		digitEnd++
 	}
 	if digitEnd == 0 || digitEnd == len(tok.text) {
-		return TimeSpan{}, invalidTimechartSpan(tok)
+		return TimeSpan{}, invalidFixedTimeSpan(tok, config)
 	}
 	unitText := tok.text[digitEnd:]
+	if config.logSpanUnsupported && strings.Contains(strings.ToLower(unitText), "log") {
+		return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
+	}
 	for index := range len(unitText) {
 		if unitText[index] >= '0' && unitText[index] <= '9' {
-			return TimeSpan{}, invalidTimechartSpan(tok)
+			return TimeSpan{}, invalidFixedTimeSpan(tok, config)
 		}
 	}
 	var unit TimeSpanUnit
@@ -516,41 +659,45 @@ func parseTimechartSpan(tok token) (TimeSpan, error) {
 		unit = TimeSpanUnitHour
 		unitNanoseconds = 60 * 60 * 1_000_000_000
 	default:
-		return TimeSpan{}, &Diagnostic{
-			Code:        "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
-			Message:     fmt.Sprintf("timechart span unit in %q is unsupported; use fixed seconds, minutes, or hours", tok.text),
-			Range:       tok.range_,
-			Suggestions: []string{"timechart span=5m count by field"},
-		}
+		return TimeSpan{}, unsupportedFixedTimeSpanUnit(tok, config)
 	}
 	magnitude, err := strconv.ParseUint(tok.text[:digitEnd], 10, 64)
 	if err != nil {
 		return TimeSpan{}, &Diagnostic{
 			Code:    "SPL_NUMBER_OUT_OF_RANGE",
-			Message: "timechart span is outside the supported 64-bit range",
+			Message: config.commandName + " span is outside the supported 64-bit range",
 			Range:   tok.range_,
 		}
 	}
 	if magnitude == 0 {
-		return TimeSpan{}, invalidTimechartSpan(tok)
+		return TimeSpan{}, invalidFixedTimeSpan(tok, config)
 	}
 	const maxDurationNanoseconds = uint64(1<<63 - 1)
 	if magnitude > maxDurationNanoseconds/unitNanoseconds {
 		return TimeSpan{}, &Diagnostic{
 			Code:    "SPL_NUMBER_OUT_OF_RANGE",
-			Message: "timechart span is outside the supported duration range",
+			Message: config.commandName + " span is outside the supported duration range",
 			Range:   tok.range_,
 		}
 	}
 	return TimeSpan{Magnitude: magnitude, Unit: unit, Range: tok.range_}, nil
 }
 
-func invalidTimechartSpan(tok token) *Diagnostic {
+func invalidFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) *Diagnostic {
 	return &Diagnostic{
 		Code:        "SPL_INVALID_ARGUMENT",
-		Message:     "timechart span must be a positive integer followed by s, m, or h",
+		Message:     config.commandName + " span must be a positive integer followed by s, m, or h",
 		Range:       tok.range_,
-		Suggestions: []string{"timechart span=5m count by field"},
+		Suggestions: []string{config.suggestion},
+	}
+}
+
+func unsupportedFixedTimeSpanUnit(tok token, config fixedTimeSpanParserConfig) *Diagnostic {
+	return &Diagnostic{
+		Code:        config.syntaxCode,
+		Message:     fmt.Sprintf("%s span unit in %q is unsupported; use fixed seconds, minutes, or hours", config.commandName, tok.text),
+		Range:       tok.range_,
+		Suggestions: []string{config.suggestion},
 	}
 }
 

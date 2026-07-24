@@ -1420,6 +1420,105 @@ func testCompiledQueriesAgainstClickHouse(
 		t.Fatalf("close tail rows: %v", err)
 	}
 
+	timeBin := compileIntegrationSPL(t,
+		`index=compiler | bucket span=5m _time | stats count BY _time`,
+		indexTime.Add(10*time.Second),
+		visibilityCutoff,
+	)
+	var bucketStart time.Time
+	var bucketCount uint64
+	if err := connection.QueryRow(ctx, timeBin.SQL, timeBin.Args...).Scan(&bucketStart, &bucketCount); err != nil {
+		t.Fatalf("execute time bin: %v\nSQL: %s\nargs: %#v", err, timeBin.SQL, timeBin.Args)
+	}
+	wantBucketStart := time.Date(2026, 7, 20, 22, 0, 0, 0, time.UTC)
+	if !bucketStart.Equal(wantBucketStart) || bucketStart.Location() != time.UTC || bucketCount != 4 {
+		t.Fatalf("time bin = %v/%d, want %v/4", bucketStart, bucketCount, wantBucketStart)
+	}
+
+	timeBinAnalysisPlan := buildIntegrationPlan(
+		t,
+		`index=compiler event_id=n-one | bin _time span=5m | table _time`,
+		indexTime.Add(10*time.Second),
+		visibilityCutoff,
+	)
+	timeBinCatalog, err := (Compiler{}).CompileFieldCatalog(
+		timeBinAnalysisPlan,
+		FieldCatalogSpec{MaximumFields: 10},
+	)
+	if err != nil {
+		t.Fatalf("compile time-bin field catalog: %v", err)
+	}
+	timeBinCatalogControl := "SELECT count(), countIf(" +
+		quoteIdentifier(FieldCatalogRowKindColumn) + " = 1 AND " +
+		quoteIdentifier(FieldCatalogNameColumn) + " = '_time' AND has(" +
+		quoteIdentifier(FieldCatalogObservedTypesColumn) + ", toUInt8(" +
+		fmt.Sprint(uint8(eventfields.StoredValueTypeTimestamp)) + ")) AND " +
+		quoteIdentifier(FieldCatalogEventCountColumn) + " = 1 AND " +
+		quoteIdentifier(FieldCatalogNullCountColumn) + " = 0 AND " +
+		quoteIdentifier(FieldCatalogMissingCountColumn) + " = 0), max(" +
+		quoteIdentifier(FieldCatalogInvalidColumn) + ") FROM (" + timeBinCatalog.SQL + ")"
+	var timeBinCatalogRows, timeBinTimestampProfiles uint64
+	var timeBinCatalogInvalid uint8
+	if err := connection.QueryRow(ctx, timeBinCatalogControl, timeBinCatalog.Args...).Scan(
+		&timeBinCatalogRows,
+		&timeBinTimestampProfiles,
+		&timeBinCatalogInvalid,
+	); err != nil {
+		t.Fatalf("execute time-bin field catalog: %v\nSQL: %s\nargs: %#v", err, timeBinCatalog.SQL, timeBinCatalog.Args)
+	}
+	if timeBinCatalogRows != 2 || timeBinTimestampProfiles != 1 || timeBinCatalogInvalid != 0 {
+		t.Fatalf(
+			"time-bin field catalog = rows:%d timestamp_profiles:%d invalid:%d, want 2/1/0",
+			timeBinCatalogRows,
+			timeBinTimestampProfiles,
+			timeBinCatalogInvalid,
+		)
+	}
+
+	if err := connection.Exec(ctx, `
+		INSERT INTO open_splunk.events
+			(event_id, tenant_id, index_name, event_time, index_time, expires_at, visibility_seq)
+		SELECT ?, ?, ?,
+			parseDateTime64BestEffort(?, 9, 'UTC'),
+			parseDateTime64BestEffort(?, 3, 'UTC'),
+			parseDateTime64BestEffort(?, 3, 'UTC'),
+			toUInt64(?)`,
+		"bin-pre-epoch", "tenant", "compiler",
+		"1969-12-31 23:59:59.999999999",
+		indexTime.UTC().Format("2006-01-02 15:04:05.000"),
+		"2099-01-01 00:00:00.000",
+		uint64(1),
+	); err != nil {
+		t.Fatalf("insert pre-epoch time-bin fixture: %v", err)
+	}
+	parsed, err := spl.Parse(`index=compiler event_id=bin-pre-epoch | bin _time span=5m | table _time`)
+	if err != nil {
+		t.Fatalf("parse pre-epoch time bin: %v", err)
+	}
+	preEpochPlan, err := plan.Build(parsed, plan.Scope{
+		TenantID:          "tenant",
+		AuthorizedIndexes: []string{"compiler"},
+		Earliest:          time.Date(1969, 12, 31, 23, 55, 0, 0, time.UTC),
+		Latest:            time.Date(1970, 1, 1, 0, 0, 0, 1, time.UTC),
+		IndexTimeCutoff:   indexTime.Add(10 * time.Second),
+		VisibilityCutoff:  uint64PointerForIntegration(visibilityCutoff),
+	})
+	if err != nil {
+		t.Fatalf("build pre-epoch time bin: %v", err)
+	}
+	preEpochQuery, err := (Compiler{}).Compile(preEpochPlan)
+	if err != nil {
+		t.Fatalf("compile pre-epoch time bin: %v", err)
+	}
+	var preEpochBucket time.Time
+	if err := connection.QueryRow(ctx, preEpochQuery.SQL, preEpochQuery.Args...).Scan(&preEpochBucket); err != nil {
+		t.Fatalf("execute pre-epoch time bin: %v\nSQL: %s\nargs: %#v", err, preEpochQuery.SQL, preEpochQuery.Args)
+	}
+	wantPreEpoch := time.Date(1969, 12, 31, 23, 55, 0, 0, time.UTC)
+	if !preEpochBucket.Equal(wantPreEpoch) {
+		t.Fatalf("pre-epoch time bin = %v, want %v", preEpochBucket, wantPreEpoch)
+	}
+
 	testStatsSumAndAverageAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testDedupAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testRexAgainstClickHouse(t, ctx, store, connection, indexTime)

@@ -28,7 +28,7 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 			if index != 0 {
 				return fieldAnalysisPipelineDiagnostic(operator.Range)
 			}
-		case *Filter, *Extend, *Extract, *Rename, *Sort, *Deduplicate, *Limit:
+		case *Filter, *Extend, *Extract, *Rename, *TimeBucket, *Sort, *Deduplicate, *Limit:
 			// These preserve source-event identity while changing the final
 			// relation, schema, values, or order consumed by field analysis.
 		case *Project:

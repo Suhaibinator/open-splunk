@@ -59,6 +59,11 @@ func ValidateTimelineEligibility(query *Query) error {
 					return timelineTimeDiagnostic(assignment.Range)
 				}
 			}
+		case *TimeBucket:
+			if operator.Field.Name != "_time" {
+				return timelinePipelineDiagnostic(operator.Range)
+			}
+			return timelineTimeDiagnostic(operator.Range)
 		case *Project:
 			switch operator.Mode {
 			case ProjectModeInclude:

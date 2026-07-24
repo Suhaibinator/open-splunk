@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"errors"
 	"math"
 	"os"
 	"reflect"
@@ -525,6 +526,177 @@ func TestCompileStatsCountUsesTransformingSchemaAndSplunkNullGrouping(t *testing
 		strings.Contains(grouped.SQL, `IN ('None',`) ||
 		strings.Contains(grouped.SQL, `throwIf(CAST(dynamicType(`) {
 		t.Fatalf("dynamic stats group is not guarded as scalar-only:\n%s", grouped.SQL)
+	}
+}
+
+func TestCompileTimeBinUsesOneStreamingProjection(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis message="Request metrics" | bin _time span=5m | table _time message`)
+	if compiled.Timechart != nil {
+		t.Fatalf("bin unexpectedly produced timechart metadata: %#v", compiled.Timechart)
+	}
+	if !slices.Equal(compiled.OutputFields, []string{"_time", "message"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, required := range []string{
+		`SELECT * REPLACE (fromUnixTimestamp64Nano(`,
+		`intDiv(reinterpretAsInt64("_time"), ?) - if(reinterpretAsInt64("_time") < 0 AND reinterpretAsInt64("_time") % ? != 0, 1, 0)`,
+		`) * ?`,
+		`AS "_time") FROM (`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("bin SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
+		t.Fatalf("scoped storage scan occurs %d times, want once:\n%s", got, compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, " GROUP BY ") || strings.Contains(compiled.SQL, " MATERIALIZED ") {
+		t.Fatalf("streaming bin introduced transforming/materialized work:\n%s", compiled.SQL)
+	}
+	span := int64(5 * time.Minute)
+	if got := compiled.Args[:3]; !reflect.DeepEqual(got, []any{span, span, span}) {
+		t.Fatalf("bin prefix args = %#v, want three nanosecond spans; all=%#v", got, compiled.Args)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+}
+
+func TestCompileBucketAliasMatchesBin(t *testing.T) {
+	t.Parallel()
+
+	bin := compileSPL(t, `index=gradethis | bin _time span=5m | stats count BY _time`)
+	bucket := compileSPL(t, `index=gradethis | bucket span=5m _time | stats count BY _time`)
+	if bin.SQL != bucket.SQL || !reflect.DeepEqual(bin.Args, bucket.Args) ||
+		!slices.Equal(bin.OutputFields, bucket.OutputFields) {
+		t.Fatalf("bucket alias diverged\nbin: %#v\nbucket: %#v", bin, bucket)
+	}
+}
+
+func TestCompileProjectionPreservesCanonicalTimeProvenance(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | fields message | bin _time span=5m`,
+		`index=gradethis | fields - host | bin _time span=5m`,
+		`index=gradethis | table _time message | bin _time span=5m`,
+		`index=gradethis | fields level | timechart span=5m count BY level`,
+		`index=gradethis | fields - host | timechart span=5m count BY level`,
+		`index=gradethis | table _time level | timechart span=5m count BY level`,
+	} {
+		if compiled := compileSPL(t, source); compiled.SQL == "" {
+			t.Fatalf("projected canonical time did not compile for %q", source)
+		}
+	}
+}
+
+func TestCompileTimeBinUsesMathematicalPreEpochFloor(t *testing.T) {
+	t.Parallel()
+
+	parsed, err := spl.Parse(`index=gradethis | bucket span=5m _time | table _time`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visibility := uint64(1)
+	logical, err := plan.Build(parsed, plan.Scope{
+		TenantID:          "tenant-1",
+		AuthorizedIndexes: []string{"gradethis"},
+		Earliest:          time.Date(1969, 12, 31, 23, 59, 59, 999999999, time.UTC),
+		Latest:            time.Date(1970, 1, 1, 0, 0, 0, 1, time.UTC),
+		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
+		VisibilityCutoff:  &visibility,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := (Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(compiled.SQL,
+		`intDiv(reinterpretAsInt64("_time"), ?) - if(reinterpretAsInt64("_time") < 0 AND reinterpretAsInt64("_time") % ? != 0, 1, 0)`) {
+		t.Fatalf("pre-epoch floor correction is missing:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileTimeBinRejectsBucketBeforeDateTime64Minimum(t *testing.T) {
+	t.Parallel()
+
+	parsed, err := spl.Parse(`index=gradethis | bin _time span=7h`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	earliest := MinimumSearchTime()
+	visibility := uint64(1)
+	logical, err := plan.Build(parsed, plan.Scope{
+		TenantID:          "tenant-1",
+		AuthorizedIndexes: []string{"gradethis"},
+		Earliest:          earliest,
+		Latest:            earliest.Add(time.Second),
+		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
+		VisibilityCutoff:  &visibility,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = (Compiler{}).Compile(logical)
+	var diagnostic *plan.Diagnostic
+	if !errors.As(err, &diagnostic) || diagnostic.Code != "SPL_UNSUPPORTED_BIN_TIME_RANGE" {
+		t.Fatalf("Compile() error = %v, want lower-bound bin diagnostic", err)
+	}
+}
+
+func TestCompileTimeBinRejectsForgedPlans(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(*plan.TimeBucket)
+	}{
+		{name: "zero span", mutate: func(bucket *plan.TimeBucket) { bucket.Span = 0 }},
+		{name: "subsecond span", mutate: func(bucket *plan.TimeBucket) { bucket.Span = time.Millisecond }},
+		{name: "day span", mutate: func(bucket *plan.TimeBucket) { bucket.Span = 24 * time.Hour }},
+		{name: "oversized span", mutate: func(bucket *plan.TimeBucket) { bucket.Span = 25 * time.Hour }},
+		{name: "wrong field", mutate: func(bucket *plan.TimeBucket) {
+			bucket.Field = plan.FieldRef{Name: "status", Path: []string{"status"}}
+		}},
+		{name: "forged metadata", mutate: func(bucket *plan.TimeBucket) {
+			bucket.Field.Path = []string{"forged"}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logical := buildPlan(t, `index=gradethis | bin _time span=5m`)
+			bucket := logical.Operators[len(logical.Operators)-1].(*plan.TimeBucket)
+			test.mutate(bucket)
+			if _, err := (Compiler{}).Compile(logical); err == nil {
+				t.Fatal("Compile() succeeded for forged time bucket")
+			}
+		})
+	}
+
+	transformed := buildPlan(t, `index=gradethis | stats count`)
+	timeField, err := plan.ResolveField("_time", spl.Range{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transformed.Operators = append(transformed.Operators, &plan.TimeBucket{
+		Field: timeField,
+		Span:  5 * time.Minute,
+	})
+	if _, err := (Compiler{}).Compile(transformed); err == nil {
+		t.Fatal("Compile() accepted a time bucket after transformed rows")
+	}
+
+	bucketed := buildPlan(t, `index=gradethis | bin _time span=5m`)
+	timechart := buildPlan(t, `index=gradethis | timechart span=5m count BY level`)
+	bucketed.Operators = append(bucketed.Operators, timechart.Operators[len(timechart.Operators)-1])
+	bucketed.DynamicOutput = timechart.DynamicOutput
+	bucketed.OutputFields = nil
+	if _, err := (Compiler{}).Compile(bucketed); err == nil {
+		t.Fatal("Compile() accepted timechart after binned canonical time")
 	}
 }
 

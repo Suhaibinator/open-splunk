@@ -108,3 +108,18 @@ func TestRexCompatibilityCorpus(t *testing.T) {
 		}
 	}
 }
+
+func TestBinCompatibilityCorpus(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | bin _time span=5m | stats count BY _time`,
+		`index=gradethis | bucket span=1h _time | table _time message`,
+	} {
+		compiled := compileSPL(t, source)
+		if compiled.SQL == "" || len(compiled.OutputFields) == 0 ||
+			!strings.Contains(compiled.SQL, "fromUnixTimestamp64Nano(") {
+			t.Fatalf("bin corpus query is incomplete for %q: %#v", source, compiled)
+		}
+	}
+}

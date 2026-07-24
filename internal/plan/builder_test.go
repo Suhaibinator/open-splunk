@@ -755,6 +755,95 @@ func TestBuildRareLimitZeroAndGeneratedOutputCollisions(t *testing.T) {
 	}
 }
 
+func TestBuildTimeBinProducesStreamingTimeBucket(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | bucket span=5m _time | stats count BY _time`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(logical.Operators) != 4 {
+		t.Fatalf("operator count = %d, want Scan, Filter, TimeBucket, Aggregate", len(logical.Operators))
+	}
+	bucket, ok := logical.Operators[2].(*TimeBucket)
+	if !ok {
+		t.Fatalf("operator 2 = %T, want *TimeBucket", logical.Operators[2])
+	}
+	if bucket.Field.Name != "_time" || !bucket.Field.Canonical ||
+		bucket.Span != 5*time.Minute {
+		t.Fatalf("time bucket = %#v", bucket)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"_time", "count"}) || logical.DynamicOutput != nil {
+		t.Fatalf("output = %v dynamic=%#v, want [_time count] and static schema", logical.OutputFields, logical.DynamicOutput)
+	}
+}
+
+func TestBuildTimeBinRequiresUnmodifiedCanonicalTime(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | fields - _time | bin _time span=5m`,
+		`index=gradethis | table level | bin _time span=5m`,
+		`index=gradethis | eval _time=1 | bin _time span=5m`,
+		`index=gradethis | rex "(?<_time>\d+)" | bin _time span=5m`,
+		`index=gradethis | rename _time AS observed_at | bin _time span=5m`,
+		`index=gradethis | stats count BY _time | bin _time span=5m`,
+		`index=gradethis | bin _time span=5m | bin _time span=5m`,
+	} {
+		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_BIN_TIME_FIELD")
+	}
+}
+
+func TestBuildTimeBinInvalidatesCanonicalTimeForTimechart(t *testing.T) {
+	t.Parallel()
+
+	_, err := Build(
+		mustParse(t, `index=gradethis | bin _time span=5m | timechart span=5m count BY level`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD")
+}
+
+func TestBuildTimeBinBoundsFixedSpan(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | bin _time span=86399s`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build(maximum sub-day span): %v", err)
+	}
+	if got := logical.Operators[len(logical.Operators)-1].(*TimeBucket).Span; got != 86_399*time.Second {
+		t.Fatalf("maximum sub-day span = %v, want 86399s", got)
+	}
+
+	for _, source := range []string{
+		`index=gradethis | bin _time span=86400s`,
+		`index=gradethis | bin _time span=1440m`,
+		`index=gradethis | bin _time span=24h`,
+		`index=gradethis | bin _time span=86401s`,
+		`index=gradethis | bucket span=25h _time`,
+	} {
+		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_BIN_SYNTAX")
+	}
+}
+
+func TestBuildRejectsForgedTimeBinAST(t *testing.T) {
+	t.Parallel()
+
+	parsed := mustParse(t, `index=gradethis | bin _time span=5m`)
+	command := parsed.Commands[0].(*spl.BinCommand)
+	command.Field = "status"
+	_, err := Build(parsed, testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_BIN_TIME_FIELD")
+}
+
 func TestBuildTimechartProducesBoundedRuntimeWideSchema(t *testing.T) {
 	t.Parallel()
 

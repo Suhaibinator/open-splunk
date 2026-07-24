@@ -48,6 +48,26 @@ pulling `origin/main`.
     boundaries; and
   - result classification, field catalogs, field summaries, timelines, index
     scope, and downstream SPL consume the extracted schema consistently.
+- This checkpoint adds the first bounded streaming `bin`/`bucket` slice:
+  - both aliases accept an explicit fixed `s`, `m`, or `h` span before or after
+    the exact canonical `_time` field;
+  - spans are bounded from one second up to, but not including, 24 hours and
+    lower through one row-preserving ClickHouse projection with no
+    aggregation/materialization fence; day-or-longer spans remain rejected
+    until timezone-aware midnight alignment is represented;
+  - bucket starts use nanosecond-safe mathematical floor division on the Unix
+    epoch, including timestamps before 1970 and values immediately below a
+    boundary;
+  - `bucket` compiles identically to `bin`, and `bin ... | stats count BY
+    _time` has pinned ClickHouse execution coverage;
+  - a first aligned bucket below ClickHouse's `DateTime64(9)` storage minimum
+    fails during planning instead of clamping or wrapping;
+  - binned `_time` remains a timestamp in an Events result and in completed-job
+    field analysis, while a second `bin`, `timechart`, and timeline correctly
+    reject its modified canonical-time provenance; and
+  - numeric fields, automatic/data-dependent bins, `AS`, custom alignment,
+    calendar/subsecond/log spans, wildcards, and multiple fields remain
+    explicit compatibility errors.
 - The binary protobuf Search WebSocket supports bounded target journals,
   replay/resynchronization, connection and global queue limits, terminal
   delivery, application/transport ping-pong, and graceful shutdown.
@@ -73,7 +93,7 @@ pulling `origin/main`.
 
 ## Validation for the checkpoint
 
-The following backend commands passed for the `rex` checkpoint:
+The following backend commands passed for the `bin`/`bucket` checkpoint:
 
 ```sh
 go test ./... -count=1 -timeout=3m
@@ -90,6 +110,10 @@ types, zero-width matches, strict versus multiline end anchors, consecutive
 stages, mixed destination types, flattened object preservation, field
 catalogs/summaries, the cumulative byte guard, and an `EXPLAIN actions=1`
 assertion that sees exactly one physical `extractGroups` action for a stage.
+The `bin` fixture covers alias lowering, fixed timestamp result typing,
+composition with `stats`, completed-job field-catalog typing, UTC epoch
+alignment, and the compiled projection over a stored timestamp one nanosecond
+before the Unix epoch.
 
 If a later environment cannot run Docker, keep the unit suite green and record
 the integration omission explicitly; do not silently treat a skipped opt-in
@@ -97,11 +121,19 @@ test as database validation.
 
 ## Remaining work, in priority order
 
-1. Continue the explicitly unsupported SPL surface in conformance-first,
-   test-driven slices. `spath`, `bin`/`bucket`, and `chart` are the next Phase 2
-   commands; select one slice, write parser/plan/compiler tests first, then add
-   a pinned ClickHouse execution fixture.
-2. Extend `rex` only behind new compatibility tests. Still unsupported are
+1. Extend `bin`/`bucket` in a separate precision-focused slice before building
+   `chart`. Numeric explicit spans need executable decisions for numeric
+   strings, mixed signed/unsigned/float/decimal rows, non-finite values,
+   negative mathematical floor, overflow, sparse presence, containers,
+   multivalue data, and `AS` collisions. Automatic `bins`/`minspan`,
+   `start`/`end`, `aligntime`, calendar/subsecond spans, and logarithmic spans
+   remain separate whole-input/alignment features and must not be
+   approximated.
+2. Implement `chart` after numeric binning, then `spath`, in conformance-first,
+   test-driven slices with pinned ClickHouse fixtures. A meaningful two-field
+   `chart` is a bounded runtime-wide pivot, not a `stats` alias; reuse the
+   hardened timechart series transport and the new discretization contract.
+3. Extend `rex` only behind new compatibility tests. Still unsupported are
    `max_match=0`, `max_match>1`, `offset_field`, sed mode, quoted/wildcard field
    names, and PCRE-only constructs such as lookaround and backreferences.
    Optional nonparticipating captures currently become `""`, the behavior
@@ -112,23 +144,23 @@ test as database validation.
    `EXPLAIN` regression to pin metadata action counts. ClickHouse currently
    common-subexpression-eliminates identical probes, and the 64-output/1,024-
    stored-field limits keep this from blocking the checkpoint.
-3. Expand aggregate compatibility beyond `count`, `sum`, `avg`, and `p95`:
+4. Expand aggregate compatibility beyond `count`, `sum`, `avg`, and `p95`:
    `dc`, `values`, `list`, `min`, `max`, `earliest`, `latest`, and the remaining
    documented percentile forms all need parser, plan, SQL, semantic, and
    ClickHouse integration tests.
-4. Add a frontend component/browser test harness so reconnect rejection,
+5. Add a frontend component/browser test harness so reconnect rejection,
    stale-frame fencing, resynchronization, expiration, and
    preview-to-authoritative-result replacement have deterministic UI tests.
-5. Add the full browser-visible end-to-end test: generated log -> collector
+6. Add the full browser-visible end-to-end test: generated log -> collector
    durable acknowledgment -> ingestion -> ClickHouse -> SPL job -> WebSocket
    preview/progress -> authoritative paged result rendered by the UI.
-6. Run and record the performance harness against the plan's sustained 1,000
+7. Run and record the performance harness against the plan's sustained 1,000
    events/second target, including slow-consumer WebSockets, concurrent preview
    subscriptions, ClickHouse scan limits, and collector offline recovery.
    Profile browser preview adaptation as part of this: preview snapshots are
    strictly bounded (100 rows by default, 1,000 maximum), but each update is
    currently adapted as a complete bounded snapshot rather than incrementally.
-7. Continue Phase 3/4 product hardening: per-index permissions/retention UI,
+8. Continue Phase 3/4 product hardening: per-index permissions/retention UI,
    token and collector fleet operations, RBAC/audit search, backup/restore,
    migration upgrade tests, fair query scheduling, packaging, and upgrades.
 
@@ -141,7 +173,12 @@ index-scope analysis, revalidating forged field references at the compiler
 boundary, accepting and diagnosing option order consistently, short-circuiting
 ineligible rows, adding the query-wide byte budget, proving physical
 single-extraction with ClickHouse `EXPLAIN`, pruning stale helper columns, and
-preserving flattened object-parent presence and type.
+preserving flattened object-parent presence and type. The `bin` review also
+caught canonical-time provenance being dropped across projections, rejected
+day-or-longer UTC approximation in favor of future timezone-aware alignment,
+preserved the prior `timechart` logarithmic-span diagnostic, and upgraded the
+pinned database test from an isolated arithmetic expression to a stored
+pre-epoch event executed through the compiled projection.
 
 No live Splunk instance was available for a differential oracle. RE2/PCRE
 differences and optional-group behavior therefore remain explicit,
