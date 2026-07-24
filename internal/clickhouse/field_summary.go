@@ -505,7 +505,7 @@ func writeFieldSummaryResult(sql *strings.Builder) {
 	sql.WriteString(" ASC")
 }
 
-type fieldSummaryDynamicEnvelopeSQL struct {
+type dynamicEnvelopeSQL struct {
 	mapSQL         string
 	typeKey        string
 	envelope       string
@@ -516,7 +516,7 @@ type fieldSummaryDynamicEnvelopeSQL struct {
 	decimalValid   string
 }
 
-func newFieldSummaryDynamicEnvelopeSQL(valueSQL, typeSQL string) fieldSummaryDynamicEnvelopeSQL {
+func newDynamicEnvelopeSQL(valueSQL, typeSQL string) dynamicEnvelopeSQL {
 	mapSQL := "dynamicElement(" + valueSQL + ", 'Map(String, String)')"
 	typeKey := "concat(char(0), 'open_splunk_type')"
 	valueKey := "concat(char(0), 'open_splunk_value')"
@@ -525,7 +525,7 @@ func newFieldSummaryDynamicEnvelopeSQL(valueSQL, typeSQL string) fieldSummaryDyn
 		" AND mapContains(" + mapSQL + ", " + typeKey + ")" +
 		" AND mapContains(" + mapSQL + ", " + valueKey + "))"
 	payload := mapSQL + "[" + valueKey + "]"
-	return fieldSummaryDynamicEnvelopeSQL{
+	return dynamicEnvelopeSQL{
 		mapSQL:   mapSQL,
 		typeKey:  typeKey,
 		envelope: envelope,
@@ -557,7 +557,7 @@ func fieldSummaryScalarExpressions(field fieldState) (agreement, encoded string)
 	}
 
 	physicalType := quoteIdentifier(fieldSummaryPhysicalType)
-	tagged := newFieldSummaryDynamicEnvelopeSQL(value, physicalType)
+	tagged := newDynamicEnvelopeSQL(value, physicalType)
 
 	agreement = "multiIf(" +
 		storedType + " = toUInt8(" + fmt.Sprint(uint8(eventfields.StoredValueTypeNull)) + "), " + physicalType + " = 'None', " +
@@ -599,7 +599,7 @@ func fieldSummaryScalarExpressions(field fieldState) (agreement, encoded string)
 func fieldSummaryRuntimeDynamicExpressions(storedType, value string) (agreement, encoded string) {
 	physicalType := quoteIdentifier(fieldSummaryPhysicalType)
 	stringSQL := "dynamicElement(" + value + ", 'String')"
-	tagged := newFieldSummaryDynamicEnvelopeSQL(value, physicalType)
+	tagged := newDynamicEnvelopeSQL(value, physicalType)
 	code := func(value eventfields.StoredValueType) string {
 		return "toUInt8(" + fmt.Sprint(uint8(value)) + ")"
 	}

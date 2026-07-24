@@ -60,15 +60,43 @@ pulling `origin/main`.
     sanitized unsupported-value marker;
   - finite `Float64` values retain double semantics, normalize negative zero,
     and reject non-finite input or output;
-  - direct Dynamic fields, strings, Booleans, timestamps, tagged decimals,
-    containers, and multivalue values remain explicit type errors rather than
-    being guessed or converted through `Float64`;
+  - fixed strings, Booleans, and other non-numeric fixed types stay compile-time
+    type errors, while a runtime-typed event field is classified per row from
+    its stored semantic type and its runtime scalar type with one bounded
+    metadata lookup;
+  - numeric text becomes the number it spells, so the bucket stays visible to
+    later numeric filters and converges with its numeric twin: integral text
+    buckets through exact widened arithmetic into a signed or unsigned number,
+    fractional or exponent text buckets through `Float64` inside the exactly
+    representable range, and the output carries a matching semantic type;
+  - a numeric spelling is canonicalized before it is classified, so leading
+    zeros and an explicit `+` in the significand or the exponent never change
+    the bucket and never push an ordinary integer off the exact path; this also
+    keeps padded text away from ClickHouse's bounded text-to-double
+    significant-digit window, which otherwise reads `000000000000000000021.5`
+    as `0.5`;
+  - the sanitized unsupported-value marker is guarded by the classifier's own
+    row-wise coverage rather than by a constant, so a downstream `sort` key or
+    `search` relational predicate that forces the runtime-typed destination to
+    materialize cannot fail a search whose rows are all supported; the `rex`
+    capture-limit guard is written the same way;
+  - every other String keeps its exact text, including non-numeric text,
+    `NaN`/`inf` spellings, overflowing exponents, invalid UTF-8, and spellings
+    whose exact bucket start is unrepresentable, so one anomalous text value can
+    never fail an otherwise successful search; Booleans, timestamps, durations,
+    and bytes likewise keep their value, while tagged decimals, containers, and
+    multivalue values remain sanitized runtime errors;
+  - rows written before the current aligned field metadata existed are never
+    interpreted heuristically and pass through unbinned instead of failing the
+    search with a misclassified value error;
   - numeric binning works after transforming commands, including `stats count`,
     and stays row-preserving with one scoped scan and no aggregate, window, or
     materialization fence;
   - `AS` retains the source, overwrites an existing destination, updates exact
     result/analysis typing, and suppresses the immutable public `fields`
-    convenience payload when it could expose a stale shadowed value;
+    convenience payload when it could expose a stale shadowed value; an event
+    without the source keeps the destination's prior value, semantic type, and
+    sparse presence;
   - unitless `_time` spans mean seconds; explicit fixed `s`, `m`, or `h` spans
     remain bounded from one second up to, but not including, 24 hours;
   - `_time AS bucket_time` retains the original canonical clock for later
@@ -76,9 +104,9 @@ pulling `origin/main`.
     provenance;
   - timestamp buckets retain nanosecond-safe pre-epoch floor behavior and
     reject an aligned boundary below ClickHouse's `DateTime64(9)` minimum; and
-  - automatic/data-dependent bins, numeric Dynamic/string coercion, custom
-    alignment, calendar/subsecond/log spans, wildcards, and multiple fields
-    remain explicit compatibility boundaries.
+  - automatic/data-dependent bins, custom alignment, calendar/subsecond/log
+    spans, wildcards, and multiple fields remain explicit compatibility
+    boundaries.
 - The binary protobuf Search WebSocket supports bounded target journals,
   replay/resynchronization, connection and global queue limits, terminal
   delivery, application/transport ping-pong, and graceful shutdown.
@@ -104,17 +132,30 @@ pulling `origin/main`.
 
 ## Validation for the checkpoint
 
-The following backend commands passed for the numeric `bin`/`bucket`
+The following backend commands passed for the runtime Dynamic `bin`/`bucket`
 checkpoint:
 
 ```sh
-go test ./... -count=1 -timeout=3m
+go test ./... -count=1 -timeout=5m
 go test -race ./internal/splregex ./internal/spl ./internal/plan ./internal/clickhouse ./internal/queryexec -count=1 -timeout=5m
 go vet ./...
 go build ./...
-OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/clickhouse -count=1 -timeout=15m
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/queryexec -run '^TestExecutorAndManagerAgainstClickHouse$' -count=1 -timeout=6m
 ```
+
+The unrestricted `internal/clickhouse` integration run now includes three
+dedicated Dynamic-bin edge suites that each start their own pinned container
+and write fixtures through the store writer:
+`bin_edge_numeric_integration_test.go` (numeric-text spellings compared against
+their numerically stored twins, width/padding canonicalization, the exact
+Int256 arm at and beyond `2^53`, pass-through of `NaN`/`inf`/overflow text),
+`bin_edge_metadata_integration_test.go` (missing versus explicit-null versus
+present, rex/eval-made destinations, tagged envelopes, containers, catalogs and
+summaries over binned output), and `bin_edge_pipeline_integration_test.go`
+(long chained pipelines, `sort`/`search`/`where` over a binned destination, the
+default in-place form, fixed-versus-Dynamic convergence, and streaming-shape
+assertions).
 
 The pinned Docker test uses `clickhouse/clickhouse-server:26.3.17.4`. Its `rex`
 fixture covers ordinary and Unicode extraction, simultaneous captures,
@@ -137,11 +178,12 @@ test as database validation.
 
 ## Remaining work, in priority order
 
-1. Extend `bin`/`bucket` to runtime Dynamic event fields before claiming broad
-   numeric-field compatibility. The next slice needs exact presence/type
-   metadata and executable decisions for numeric strings, mixed
-   signed/unsigned/float rows, tagged decimals, containers, and multivalue
-   data. Automatic `bins`/`minspan`, `start`/`end`, `aligntime`,
+1. Runtime Dynamic `bin`/`bucket` now covers exact presence/type metadata,
+   numeric strings, mixed signed/unsigned/float rows, tagged decimals,
+   containers, and multivalue data. What remains is an exact bucket for stored
+   tagged decimals and for integer text whose bucket start falls outside
+   `Int64`/`UInt64`, which currently keep their value rather than being
+   approximated. Automatic `bins`/`minspan`, `start`/`end`, `aligntime`,
    calendar/subsecond spans, and logarithmic spans remain separate
    whole-input/alignment features and must not be approximated.
 2. Implement `chart` after numeric binning, then `spath`, in conformance-first,

@@ -119,6 +119,7 @@ func TestBinCompatibilityCorpus(t *testing.T) {
 		{`index=gradethis | bin _time span=5m | stats count BY _time`, "fromUnixTimestamp64Nano("},
 		{`index=gradethis | bucket span=1h _time AS hour | table _time hour message`, "fromUnixTimestamp64Nano("},
 		{`index=gradethis | bin severity span=10 | stats count BY severity`, `toUInt64("severity")`},
+		{`index=gradethis | bin duration_ms span=10 AS band | stats count BY band`, "arrayFirstIndex("},
 		{`index=gradethis | eval latency=-11.5 | bucket span=10 latency AS band | table latency band`, UnsupportedNumericBinValueMarker},
 		{`index=gradethis | stats count | bin count span=10`, `toUInt64("count")`},
 	} {

@@ -645,6 +645,221 @@ func TestCompileNumericBinUsesExactStreamingArithmetic(t *testing.T) {
 	}
 }
 
+func TestCompileDynamicNumericBinDispatchesByStoredAndRuntimeType(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | bin metric span=10 AS band | table event_id metric band`)
+	if !slices.Equal(compiled.OutputFields, []string{"event_id", "metric", "band"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, required := range []string{
+		`dynamicType("__os_fields"."metric")`,
+		`dynamicElement("__os_fields"."metric", 'Int64')`,
+		`dynamicElement("__os_fields"."metric", 'UInt64')`,
+		`dynamicElement("__os_fields"."metric", 'Float64')`,
+		`dynamicElement("__os_fields"."metric", 'String')`,
+		`accurateCastOrNull(`,
+		`toInt128(`,
+		`toInt256(`,
+		`intDiv(`,
+		`floor(`,
+		`trimBoth(`,
+		`toFloat64OrNull(`,
+		`'^([+]|-|)[0-9]+$'`,
+		`'bytes/v1'`,
+		`'timestamp/v1'`,
+		`'duration/v1'`,
+		UnsupportedNumericBinValueMarker,
+		`AS "__os_numeric_bin_exists_2"`,
+		`AS "__os_numeric_bin_type_2"`,
+		`AS "__os_numeric_bin_output_exists_2"`,
+		`AS "__os_numeric_bin_output_type_2"`,
+		`toUInt8("__os_field_metadata_version" = ?) AS "__os_numeric_bin_metadata_version_2"`,
+		// Stored metadata written before the current aligned version is never
+		// interpreted heuristically, so those rows keep their value instead of
+		// failing the search as an out-of-range numeric one.
+		`"__os_numeric_bin_metadata_version_2" = 0, CAST("__os_fields"."metric" AS Dynamic)`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("Dynamic numeric bin SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, `'decimal/v1' IN (`) {
+		t.Fatalf("tagged decimal was admitted as a pass-through type:\n%s", compiled.SQL)
+	}
+	// Numeric text becomes the number it spells. A bucket written back as text
+	// would be invisible to every downstream numeric predicate.
+	if strings.Contains(compiled.SQL, `CAST(toString(`) {
+		t.Fatalf("numeric-string bucket was written back as text:\n%s", compiled.SQL)
+	}
+	// Ordinary text spelled 'NaN' or 'inf' is not force-classified as numeric
+	// so that it can never fail an otherwise successful search.
+	if strings.Contains(compiled.SQL, `'infinity'`) {
+		t.Fatalf("non-finite spellings were pulled into the numeric-string context:\n%s", compiled.SQL)
+	}
+	// The driver reads a `{name:type}` sequence as a native query parameter, so
+	// generated expressions must not introduce braces of their own.
+	if strings.ContainsAny(compiled.SQL, "{}") {
+		t.Fatalf("Dynamic numeric bin SQL introduced a brace the driver can bind:\n%s", compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
+		t.Fatalf("scoped storage scan occurs %d times, want once:\n%s", got, compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, "arrayFirstIndex("); got != 1 {
+		t.Fatalf("Dynamic metadata position is calculated %d times, want once:\n%s", got, compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, `dynamicType("__os_fields"."metric")`); got != 1 {
+		t.Fatalf("Dynamic physical type is calculated %d times, want once:\n%s", got, compiled.SQL)
+	}
+	for _, forbidden := range []string{" GROUP BY ", " MATERIALIZED ", " OVER (", " JOIN "} {
+		if strings.Contains(compiled.SQL, forbidden) {
+			t.Fatalf("streaming Dynamic numeric bin introduced %q:\n%s", forbidden, compiled.SQL)
+		}
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+	if got := countArgument(compiled.Args, uint64(10)); got != 1 {
+		t.Fatalf("span argument count = %d, want 1: %#v", got, compiled.Args)
+	}
+}
+
+func TestCompileDynamicNumericBinCarriesSparseMetadataDownstream(t *testing.T) {
+	t.Parallel()
+
+	openSchema := compileSPL(t, `index=gradethis | bin metric span=10 AS band`)
+	if !slices.Contains(openSchema.OutputFields, "metric") ||
+		!slices.Contains(openSchema.OutputFields, "band") ||
+		slices.Contains(openSchema.OutputFields, "fields") {
+		t.Fatalf(
+			"open-schema Dynamic bin fields = %v, want retained source/alias without stale fields payload",
+			openSchema.OutputFields,
+		)
+	}
+	if strings.Contains(openSchema.SQL, `"__os_fields" AS "fields"`) {
+		t.Fatalf("Dynamic numeric bin exposed a stale immutable fields payload:\n%s", openSchema.SQL)
+	}
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | bin metric span=10 AS band | where band>=20 | table metric band`,
+	)
+	for _, required := range []string{
+		`"__os_numeric_bin_output_exists_2"`,
+		`"__os_numeric_bin_output_type_2"`,
+		`dynamicType("band")`,
+		`AS "band"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("downstream Dynamic numeric bin SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if !slices.Equal(compiled.OutputFields, []string{"metric", "band"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, output := range compiled.OutputFields {
+		if strings.HasPrefix(output, "__os_numeric_bin_") {
+			t.Fatalf("private Dynamic bin metadata leaked into output: %v", compiled.OutputFields)
+		}
+	}
+
+	collision := compileSPL(
+		t,
+		`index=gradethis | eval band="stale" | bin metric span=10 AS band | table metric band`,
+	)
+	if !strings.Contains(collision.SQL, `REPLACE (`) ||
+		!strings.Contains(collision.SQL, `AS "band"`) {
+		t.Fatalf("Dynamic numeric bin did not overwrite its AS destination:\n%s", collision.SQL)
+	}
+}
+
+func TestCompileDynamicNumericBinKeepsPriorDestinationWithoutASource(t *testing.T) {
+	t.Parallel()
+
+	calculated := compileSPL(
+		t,
+		`index=gradethis | eval band="stale" | bin metric span=10 AS band | table metric band`,
+	)
+	for _, required := range []string{
+		// An event without the source keeps the destination's prior value,
+		// semantic type, and presence instead of losing them to a null write.
+		`"__os_numeric_bin_exists_3" = 0 AND "__os_numeric_bin_parent_3" = 0 AND ` +
+			`"__os_numeric_bin_physical_type_3" = 'None', CAST("band" AS Dynamic)`,
+		`if("__os_numeric_bin_exists_3" != 0, 1, ifNull(1, 0))) AS "__os_numeric_bin_output_exists_3"`,
+	} {
+		if !strings.Contains(calculated.SQL, required) {
+			t.Fatalf("Dynamic numeric bin destroyed its prior destination, missing %q:\n%s", required, calculated.SQL)
+		}
+	}
+
+	stored := compileSPL(t, `index=gradethis | bin metric span=10 AS band | table metric band`)
+	if !strings.Contains(stored.SQL, `= 'None', CAST("__os_fields"."band" AS Dynamic)`) {
+		t.Fatalf("Dynamic numeric bin discarded a stored destination value:\n%s", stored.SQL)
+	}
+	if got, want := strings.Count(stored.SQL, "?"), len(stored.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, stored.SQL, stored.Args)
+	}
+
+	replaced := compileSPL(t, `index=gradethis | bin metric span=10 | table metric`)
+	if !strings.Contains(replaced.SQL, `= 'None', CAST(NULL AS Dynamic)`) {
+		t.Fatalf("source-replacing Dynamic numeric bin did not stay sparse:\n%s", replaced.SQL)
+	}
+}
+
+func TestCompileDynamicNumericBinClassifiesFromCurrentStageMetadata(t *testing.T) {
+	t.Parallel()
+
+	// A stored descendant probe describes the immutable document, so a field
+	// that a later stage overwrote with a scalar must not be classified as a
+	// flattened object parent.
+	compiled := compileSPL(
+		t,
+		`index=gradethis | rex field=_raw "(?<cap>[0-9]+)" | bin cap span=10 AS band | table event_id cap band`,
+	)
+	if !strings.Contains(
+		compiled.SQL,
+		`toUInt8("__os_numeric_bin_type_4" = toUInt8(11)) AS "__os_numeric_bin_parent_4"`,
+	) {
+		t.Fatalf("Dynamic numeric bin did not derive its container decision from the stage type:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, `"__os_field_names") AS "__os_numeric_bin_parent_4"`) {
+		t.Fatalf("Dynamic numeric bin reused a stale stored descendant probe:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+}
+
+func TestCompileConsecutiveDynamicNumericBinsKeepPrivateStateStageLocal(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | bin left span=10 AS first | bin right span=7 AS second | table first second`,
+	)
+	for _, required := range []string{
+		`"__os_numeric_bin_exists_2"`,
+		`"__os_numeric_bin_type_2"`,
+		`"__os_numeric_bin_span_2"`,
+		`"__os_numeric_bin_span_3"`,
+		`"__os_numeric_bin_exists_3"`,
+		`"__os_numeric_bin_type_3"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("consecutive Dynamic numeric bins are missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if got := countArgument(compiled.Args, uint64(10)); got != 1 {
+		t.Fatalf("span 10 argument count = %d, want 1: %#v", got, compiled.Args)
+	}
+	if got := countArgument(compiled.Args, uint64(7)); got != 1 {
+		t.Fatalf("span 7 argument count = %d, want 1: %#v", got, compiled.Args)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+}
+
 func TestCompileNumericBinPreservesSourceAndOutputSchemaWithAS(t *testing.T) {
 	t.Parallel()
 
@@ -719,7 +934,6 @@ func TestCompileNumericBinRejectsUnsupportedFieldKinds(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
-		`index=gradethis | bin latency span=10`,
 		`index=gradethis | bin host span=10`,
 		`index=gradethis | eval enabled=true | bin enabled span=10`,
 	} {

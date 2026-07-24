@@ -432,16 +432,20 @@ the fixed output schema.
 unquoted field, one explicit positive span, and optional `AS <exact output>`.
 The field and `span` option may appear in either order; `AS` is final. The
 command replaces its source by default. With `AS`, the source is retained and
-the destination is added or overwritten. Row cardinality, event identity, and
-established order do not change, and downstream filters, projections, sorts,
-aggregations, field catalogs, and field summaries consume the bucketed value.
+the destination is added or overwritten. An event without the source field is
+not binned at all: an existing destination keeps its prior value, semantic
+type, and sparse presence, exactly as `rex` does on no match. Row cardinality,
+event identity, and established order do not change, and downstream filters,
+projections, sorts, aggregations, field catalogs, and field summaries consume
+the bucketed value.
 
 A unitless span is a base-10 integer from 1 through `9007199254740991`
-(`2^53-1`). For a non-time field it is an absolute numeric width. The current
-precision-focused slice accepts only a field whose pipeline type is already a
-fixed integer or `Float64`: promoted numeric columns such as `severity`,
-numeric `eval` outputs, and numeric `stats` outputs qualify. A direct dynamic
-event field, string, Boolean, timestamp, or container is rejected with
+(`2^53-1`). For a non-time field it is an absolute numeric width. A field whose
+pipeline type is already a fixed integer or `Float64` qualifies—promoted
+numeric columns such as `severity`, numeric `eval` outputs, and numeric `stats`
+outputs—as does a runtime-typed event field, whose per-row semantic type
+decides the bucket. A fixed string, Boolean, or other non-numeric pipeline type
+is known before execution and is still rejected with
 `SPL_UNSUPPORTED_BIN_FIELD_TYPE`; use the supported `eval`/`tonumber` or
 `stats` surface to establish a fixed numeric field first.
 
@@ -453,9 +457,33 @@ A boundary whose bucket start cannot be represented by that type—for example,
 unsupported-value error rather than wrapping or widening. `Float64` values use
 finite double-precision floor semantics, retain `Float64`, normalize negative
 zero, and fail the search if the input or result is not finite. Explicit null
-remains null. Numeric-looking strings, mixed runtime Dynamic values, tagged
-decimals, and multivalue numeric fields are outside this fixed-type slice and
-are not approximated.
+remains null. Tagged decimals, containers, and multivalue values are explicit
+runtime errors carrying that same sanitized marker.
+
+A runtime-typed event field is classified per row from its stored semantic type
+and its runtime scalar type. Numeric text becomes the number it spells, so the
+bucket participates in later numeric filters and still groups with its numeric
+twin: text that spells an integer buckets through exact widened arithmetic and
+becomes a signed or unsigned number, and fractional or exponent text buckets
+through `Float64` within the exactly representable range. Leading zeros and an
+explicit `+` belong to the spelling rather than to the value, so a zero-padded
+fixed-width numeric field—an account or order identifier, a mainframe-style
+log—buckets exactly as its unpadded twin does, in the significand and in the
+exponent alike. Every other String keeps its exact text—non-numeric text,
+surrounding whitespace, `NaN`/`inf` spellings, an overflowing exponent, invalid
+UTF-8, and any spelling whose exact bucket start is unrepresentable—so one
+anomalous text value never fails an otherwise successful search. Boolean,
+timestamp, duration, and bytes values also keep their value: `bin` discretizes
+numbers and leaves other scalars alone. Rows written before the current aligned
+field metadata existed carry no readable semantic type; their values are never
+interpreted heuristically and pass through unbinned instead of failing the
+search.
+
+The sanitized unsupported-value error is a property of one row's value, never
+of the pipeline that reads it. A bucket that is supported stays supported under
+every downstream consumer, so `sort <destination>`, `search <destination> >=
+<literal>`, and the equivalent `where <destination> >= <literal>` all agree with
+one another and with the same query without the `bin` stage.
 
 For exact canonical `_time`, a unitless span means seconds. Explicit `s`, `m`,
 or `h` spans are also accepted from one second up to, but not including, 24

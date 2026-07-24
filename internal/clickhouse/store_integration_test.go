@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -487,6 +488,20 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("brace{x:y}", typedString("group")),
 		typedField("mixed_by", typedString("scalar")),
 		typedField("tenant_probe", typedString("visible")),
+		typedField("bin_metric", typedSint(-11)),
+		typedField("bin_sparse", typedSint(25)),
+		typedField("bin_numeric_string", typedString("not-a-number")),
+		typedField("bin_string_exponent", typedString("1e3")),
+		typedField("bin_string_negative_zero", typedString("-0")),
+		typedField("bin_string_whitespace", typedString(" 21")),
+		typedField("bin_string_nonfinite", typedString("NaN")),
+		typedField("bin_string_overflow", typedString("1e9999")),
+		typedField("bin_string_wide", typedString("9007199254740999")),
+		typedField("bin_string_unsigned", typedString("18446744073709551615")),
+		typedField("bin_string_underflow", typedString("-9223372036854775808")),
+		typedField("bin_mixed", typedSint(25)),
+		typedField("bin_scope", typedSint(25)),
+		typedField("bin_underflow", typedSint(math.MinInt64)),
 		typedField("sort_value", typedString("10")),
 		typedField("literal.dot", typedString("needle")),
 		typedField("category", typedString("alpha")),
@@ -504,6 +519,9 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("right", typedSint(10)),
 		typedField("wide_sort", typedSint(-9_007_199_254_740_992)),
 		typedField("latency", typedString("200")),
+		typedField("bin_metric", typedUint(^uint64(0))),
+		typedField("bin_numeric_string", typedString("21.5")),
+		typedField("bin_mixed", typedString("25")),
 		typedField("sort_value", typedString("2")),
 		typedField("category", typedString("alpha")),
 		typedField("category_nullable", typedString("alpha")),
@@ -515,6 +533,9 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("ratio", typedNull()),
 		typedField("n", typedNull()),
 		typedField("nothing", typedNull()),
+		typedField("bin_metric", typedDouble(-11.5)),
+		typedField("bin_sparse", typedNull()),
+		typedField("bin_numeric_string", typedNull()),
 		typedField("category", typedString("beta")),
 		typedField("category_nullable", typedNull()),
 		typedField("path", typedString("/fast")),
@@ -529,6 +550,7 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("timestamp_value", typedTimestamp(extendedTimestamp)),
 		typedField("duration_value", typedDuration(3*time.Second+4*time.Nanosecond)),
 		typedField("decimal_value", typedDecimal("123.4500")),
+		typedField("bin_metric", typedNull()),
 		typedField("latency", typedString("100")),
 		typedField("sort_value", typedString("text")),
 		typedField("object_value", typedObject()),
@@ -550,6 +572,7 @@ func testCompiledQueriesAgainstClickHouse(
 	}
 	foreign := compilerIntegrationEvent("foreign-complex", "foreign", "must remain out of scope", indexTime,
 		typedField("tenant_probe", typedList(typedString("hidden"))),
+		typedField("bin_scope", typedList(typedString("hidden"))),
 	)
 	foreign.TenantID = "other-tenant"
 	foreign.BatchID = "foreign-compiler-batch"
@@ -582,6 +605,16 @@ func testCompiledQueriesAgainstClickHouse(
 		if gotType != wantType {
 			t.Fatalf("ratio type for %s = %q, want %q", eventID, gotType, wantType)
 		}
+	}
+	var foreignBinScopeType string
+	if err := connection.QueryRow(ctx,
+		"SELECT dynamicType(fields.bin_scope) FROM open_splunk.events WHERE event_id = ?",
+		"foreign-complex",
+	).Scan(&foreignBinScopeType); err != nil {
+		t.Fatalf("query foreign Dynamic-bin poison type: %v", err)
+	}
+	if foreignBinScopeType != "Array(Dynamic)" {
+		t.Fatalf("foreign Dynamic-bin poison type = %q, want Array(Dynamic)", foreignBinScopeType)
 	}
 
 	for source, want := range map[string]uint64{
@@ -1606,6 +1639,478 @@ func testNumericBinAgainstClickHouse(
 			exception.Code != 395 ||
 			!strings.Contains(exception.Message, UnsupportedNumericBinValueMarker) {
 			t.Fatalf("numeric-bin underflow error = %v, want guarded ClickHouse exception", queryErr)
+		}
+
+		dynamic := compileIntegrationSPL(
+			t,
+			`index=compiler
+| bin bin_metric span=10 AS band
+| table event_id bin_metric band`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		rows, err := connection.Query(ctx,
+			`SELECT event_id,
+				dynamicType(bin_metric),
+				if(dynamicType(bin_metric) = 'None', '<none>', toString(bin_metric)),
+				dynamicType(band),
+				if(dynamicType(band) = 'None', '<none>', toString(band))
+			FROM (`+dynamic.SQL+`) ORDER BY event_id`,
+			dynamic.Args...,
+		)
+		if err != nil {
+			t.Fatalf("execute mixed Dynamic numeric bin: %v\nSQL: %s\nargs: %#v", err, dynamic.SQL, dynamic.Args)
+		}
+		type dynamicBinRow struct {
+			eventID, sourceType, sourceValue, outputType, outputValue string
+		}
+		var gotDynamic []dynamicBinRow
+		for rows.Next() {
+			var row dynamicBinRow
+			if err := rows.Scan(
+				&row.eventID,
+				&row.sourceType,
+				&row.sourceValue,
+				&row.outputType,
+				&row.outputValue,
+			); err != nil {
+				_ = rows.Close()
+				t.Fatalf("scan mixed Dynamic numeric bin: %v", err)
+			}
+			gotDynamic = append(gotDynamic, row)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			t.Fatalf("iterate mixed Dynamic numeric bin: %v", err)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatalf("close mixed Dynamic numeric-bin rows: %v", err)
+		}
+		wantDynamic := []dynamicBinRow{
+			{eventID: "n-complex", sourceType: "None", sourceValue: "<none>", outputType: "None", outputValue: "<none>"},
+			{eventID: "n-null", sourceType: "Float64", sourceValue: "-11.5", outputType: "Float64", outputValue: "-20"},
+			{eventID: "n-one", sourceType: "Int64", sourceValue: "-11", outputType: "Int64", outputValue: "-20"},
+			{
+				eventID: "n-two", sourceType: "UInt64", sourceValue: "18446744073709551615",
+				outputType: "UInt64", outputValue: "18446744073709551610",
+			},
+		}
+		if !reflect.DeepEqual(gotDynamic, wantDynamic) {
+			t.Fatalf("mixed Dynamic numeric bins = %#v, want %#v", gotDynamic, wantDynamic)
+		}
+
+		repeated := compileIntegrationSPL(
+			t,
+			`index=compiler event_id=n-one
+| bin bin_metric span=10 AS first
+| bin first span=6 AS second
+| table first second`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		var firstType, firstValue, secondType, secondValue string
+		if err := connection.QueryRow(ctx,
+			`SELECT dynamicType(first), toString(first), dynamicType(second), toString(second)
+			FROM (`+repeated.SQL+`)`,
+			repeated.Args...,
+		).Scan(&firstType, &firstValue, &secondType, &secondValue); err != nil {
+			t.Fatalf("execute repeated Dynamic numeric bins: %v\nSQL: %s\nargs: %#v", err, repeated.SQL, repeated.Args)
+		}
+		if firstType != "Int64" || firstValue != "-20" ||
+			secondType != "Int64" || secondValue != "-24" {
+			t.Fatalf(
+				"repeated Dynamic numeric bins = %s/%q %s/%q, want Int64/-20 Int64/-24",
+				firstType,
+				firstValue,
+				secondType,
+				secondValue,
+			)
+		}
+
+		grouped := compileIntegrationSPL(
+			t,
+			`index=compiler
+| bin bin_metric span=10 AS band
+| where band=-20
+| stats count BY band`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		var groupedBand string
+		var groupedCount uint64
+		if err := connection.QueryRow(ctx, grouped.SQL, grouped.Args...).Scan(
+			&groupedBand,
+			&groupedCount,
+		); err != nil {
+			t.Fatalf("execute grouped Dynamic numeric bin: %v\nSQL: %s\nargs: %#v", err, grouped.SQL, grouped.Args)
+		}
+		if groupedBand != "-20" || groupedCount != 2 {
+			t.Fatalf("grouped Dynamic numeric bin = %q/%d, want -20/2", groupedBand, groupedCount)
+		}
+
+		for _, test := range []struct {
+			name, eventID, field, wantType, wantValue string
+		}{
+			{
+				name: "fractional numeric string", eventID: "n-two", field: "bin_numeric_string",
+				wantType: "Float64", wantValue: "20",
+			},
+			{
+				name: "nonnumeric string", eventID: "n-one", field: "bin_numeric_string",
+				wantType: "String", wantValue: "not-a-number",
+			},
+			{
+				name: "explicit string null", eventID: "n-null", field: "bin_numeric_string",
+				wantType: "None", wantValue: "<none>",
+			},
+			{
+				name: "missing string", eventID: "n-complex", field: "bin_numeric_string",
+				wantType: "None", wantValue: "<none>",
+			},
+			{
+				name: "exponent string", eventID: "n-one", field: "bin_string_exponent",
+				wantType: "Float64", wantValue: "1000",
+			},
+			{
+				name: "negative zero string", eventID: "n-one", field: "bin_string_negative_zero",
+				wantType: "Int64", wantValue: "0",
+			},
+			{
+				name: "surrounding whitespace string", eventID: "n-one", field: "bin_string_whitespace",
+				wantType: "String", wantValue: " 21",
+			},
+			{
+				// The same digits bucket identically whether ingestion typed
+				// them as a number or as text, including beyond 2^53.
+				name: "wide integer string buckets exactly", eventID: "n-one", field: "bin_string_wide",
+				wantType: "Int64", wantValue: "9007199254740990",
+			},
+			{
+				name: "unsigned integer string buckets exactly", eventID: "n-one", field: "bin_string_unsigned",
+				wantType: "UInt64", wantValue: "18446744073709551610",
+			},
+			{
+				// The exact bucket start is unrepresentable, so the text is
+				// kept instead of being approximated into a wrong number.
+				name: "unrepresentable integer string keeps its text", eventID: "n-one", field: "bin_string_underflow",
+				wantType: "String", wantValue: "-9223372036854775808",
+			},
+			{
+				name: "nonfinite string keeps its text", eventID: "n-one", field: "bin_string_nonfinite",
+				wantType: "String", wantValue: "NaN",
+			},
+			{
+				name: "overflowing string keeps its text", eventID: "n-one", field: "bin_string_overflow",
+				wantType: "String", wantValue: "1e9999",
+			},
+		} {
+			test := test
+			t.Run(test.name, func(t *testing.T) {
+				stringBin := compileIntegrationSPL(
+					t,
+					`index=compiler event_id=`+test.eventID+
+						` | bin `+test.field+` span=10 AS band | table band`,
+					indexTime.Add(10*time.Second),
+					visibilityCutoff,
+				)
+				var gotType, gotValue string
+				if err := connection.QueryRow(ctx,
+					`SELECT dynamicType(band),
+						if(dynamicType(band) = 'None', '<none>', toString(band))
+					FROM (`+stringBin.SQL+`)`,
+					stringBin.Args...,
+				).Scan(&gotType, &gotValue); err != nil {
+					t.Fatalf("execute Dynamic string bin: %v\nSQL: %s\nargs: %#v", err, stringBin.SQL, stringBin.Args)
+				}
+				if gotType != test.wantType || gotValue != test.wantValue {
+					t.Fatalf("Dynamic string bin = %s/%q, want %s/%q", gotType, gotValue, test.wantType, test.wantValue)
+				}
+			})
+		}
+
+		// One anomalous text value must never fail an otherwise successful
+		// search for every other event in scope.
+		text := compileIntegrationSPL(
+			t,
+			`index=compiler | bin bin_string_nonfinite span=10 AS band | table event_id band`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		var textRows, textPreserved uint64
+		if err := connection.QueryRow(ctx,
+			`SELECT count(), countIf(dynamicType(band) = 'String' AND toString(band) = 'NaN')
+			FROM (`+text.SQL+`)`,
+			text.Args...,
+		).Scan(&textRows, &textPreserved); err != nil {
+			t.Fatalf("execute Dynamic text bin: %v\nSQL: %s\nargs: %#v", err, text.SQL, text.Args)
+		}
+		if textRows != 4 || textPreserved != 1 {
+			t.Fatalf("Dynamic text bin = rows:%d preserved:%d, want 4/1", textRows, textPreserved)
+		}
+
+		// A bucketed numeric string is the number it spells, so it survives a
+		// numeric filter and still groups with its integer twin.
+		mixed := compileIntegrationSPL(
+			t,
+			`index=compiler
+| bin bin_mixed span=10 AS band
+| where band>=20
+| stats count BY band`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		var mixedBand string
+		var mixedCount uint64
+		if err := connection.QueryRow(ctx, mixed.SQL, mixed.Args...).Scan(&mixedBand, &mixedCount); err != nil {
+			t.Fatalf("execute mixed numeric-string bin: %v\nSQL: %s\nargs: %#v", err, mixed.SQL, mixed.Args)
+		}
+		if mixedBand != "20" || mixedCount != 2 {
+			t.Fatalf("mixed numeric-string bin = %q/%d, want 20/2", mixedBand, mixedCount)
+		}
+
+		// An event without the source keeps the destination it already had.
+		preserved := compileIntegrationSPL(
+			t,
+			`index=compiler | eval band="keep" | bin bin_sparse span=10 AS band | table event_id band`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		preservedRows, err := connection.Query(ctx,
+			`SELECT event_id, dynamicType(band), if(dynamicType(band) = 'None', '<none>', toString(band))
+			FROM (`+preserved.SQL+`) ORDER BY event_id`,
+			preserved.Args...,
+		)
+		if err != nil {
+			t.Fatalf("execute preserved Dynamic bin destination: %v\nSQL: %s\nargs: %#v", err, preserved.SQL, preserved.Args)
+		}
+		type preservedRow struct{ eventID, outputType, outputValue string }
+		var gotPreserved []preservedRow
+		for preservedRows.Next() {
+			var row preservedRow
+			if err := preservedRows.Scan(&row.eventID, &row.outputType, &row.outputValue); err != nil {
+				_ = preservedRows.Close()
+				t.Fatalf("scan preserved Dynamic bin destination: %v", err)
+			}
+			gotPreserved = append(gotPreserved, row)
+		}
+		if err := preservedRows.Err(); err != nil {
+			_ = preservedRows.Close()
+			t.Fatalf("iterate preserved Dynamic bin destination: %v", err)
+		}
+		if err := preservedRows.Close(); err != nil {
+			t.Fatalf("close preserved Dynamic bin destination rows: %v", err)
+		}
+		wantPreserved := []preservedRow{
+			{eventID: "n-complex", outputType: "String", outputValue: "keep"},
+			{eventID: "n-null", outputType: "None", outputValue: "<none>"},
+			{eventID: "n-one", outputType: "Int64", outputValue: "20"},
+			{eventID: "n-two", outputType: "String", outputValue: "keep"},
+		}
+		if !reflect.DeepEqual(gotPreserved, wantPreserved) {
+			t.Fatalf("preserved Dynamic bin destination = %#v, want %#v", gotPreserved, wantPreserved)
+		}
+
+		boolean := compileIntegrationSPL(
+			t,
+			`index=compiler event_id=n-one | bin dynamic_flag span=10 AS band | table dynamic_flag band`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		var boolSourceType, boolOutputType, boolOutput string
+		if err := connection.QueryRow(ctx,
+			`SELECT dynamicType(dynamic_flag), dynamicType(band), toString(band) FROM (`+boolean.SQL+`)`,
+			boolean.Args...,
+		).Scan(&boolSourceType, &boolOutputType, &boolOutput); err != nil {
+			t.Fatalf("execute Dynamic Bool pass-through: %v\nSQL: %s\nargs: %#v", err, boolean.SQL, boolean.Args)
+		}
+		if boolSourceType != "Bool" || boolOutputType != "Bool" || boolOutput != "true" {
+			t.Fatalf("Dynamic Bool pass-through = %s/%s/%q, want Bool/Bool/true", boolSourceType, boolOutputType, boolOutput)
+		}
+
+		for _, field := range []string{"bytes_value", "timestamp_value", "duration_value"} {
+			field := field
+			t.Run("extended "+field, func(t *testing.T) {
+				extended := compileIntegrationSPL(
+					t,
+					`index=compiler event_id=n-complex | bin `+field+` span=10 AS band | table `+field+` band`,
+					indexTime.Add(10*time.Second),
+					visibilityCutoff,
+				)
+				var outputType string
+				var equal uint8
+				if err := connection.QueryRow(ctx,
+					`SELECT dynamicType(band), toUInt8(toString(band) = toString(`+quoteIdentifier(field)+`))
+					FROM (`+extended.SQL+`)`,
+					extended.Args...,
+				).Scan(&outputType, &equal); err != nil {
+					t.Fatalf("execute extended pass-through: %v\nSQL: %s\nargs: %#v", err, extended.SQL, extended.Args)
+				}
+				if outputType != "Map(String, String)" || equal != 1 {
+					t.Fatalf("extended pass-through = %s/equal:%d, want Map(String, String)/1", outputType, equal)
+				}
+			})
+		}
+
+		for _, field := range []string{
+			"decimal_value",
+			"multi",
+			"object_value",
+			"object_parent",
+		} {
+			field := field
+			t.Run("unsupported "+field, func(t *testing.T) {
+				unsupported := compileIntegrationSPL(
+					t,
+					`index=compiler event_id=n-complex | bin `+field+` span=10 | table `+field,
+					indexTime.Add(10*time.Second),
+					visibilityCutoff,
+				)
+				queryErr := executeCompiledExpectingNoRows(ctx, connection, unsupported)
+				var exception *clickhousedriver.Exception
+				if !errors.As(queryErr, &exception) ||
+					exception.Code != 395 ||
+					!strings.Contains(exception.Message, UnsupportedNumericBinValueMarker) {
+					t.Fatalf("unsupported Dynamic bin error = %v, want guarded ClickHouse exception", queryErr)
+				}
+			})
+		}
+
+		dynamicUnderflow := compileIntegrationSPL(
+			t,
+			`index=compiler event_id=n-one | bin bin_underflow span=10 | table bin_underflow`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		queryErr = executeCompiledExpectingNoRows(ctx, connection, dynamicUnderflow)
+		exception = nil
+		if !errors.As(queryErr, &exception) ||
+			exception.Code != 395 ||
+			!strings.Contains(exception.Message, UnsupportedNumericBinValueMarker) {
+			t.Fatalf("Dynamic numeric-bin underflow error = %v, want guarded ClickHouse exception", queryErr)
+		}
+
+		tenantScoped := compileIntegrationSPL(
+			t,
+			`index=compiler bin_scope=* | bin bin_scope span=10 AS band | table event_id band`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		var scopedID, scopedType, scopedValue string
+		if err := connection.QueryRow(ctx,
+			`SELECT event_id, dynamicType(band), toString(band) FROM (`+tenantScoped.SQL+`)`,
+			tenantScoped.Args...,
+		).Scan(&scopedID, &scopedType, &scopedValue); err != nil {
+			t.Fatalf("execute tenant-scoped Dynamic bin: %v\nSQL: %s\nargs: %#v", err, tenantScoped.SQL, tenantScoped.Args)
+		}
+		if scopedID != "n-one" || scopedType != "Int64" || scopedValue != "20" {
+			t.Fatalf("tenant-scoped Dynamic bin = %q/%s/%q, want n-one/Int64/20", scopedID, scopedType, scopedValue)
+		}
+
+		filteredContainer := compileIntegrationSPL(
+			t,
+			`index=compiler event_id=n-one | bin multi span=10 AS band | table event_id band`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		var filteredID string
+		if err := connection.QueryRow(ctx,
+			`SELECT event_id FROM (`+filteredContainer.SQL+`)`,
+			filteredContainer.Args...,
+		).Scan(&filteredID); err != nil {
+			t.Fatalf("execute pre-bin-filtered container query: %v\nSQL: %s\nargs: %#v", err, filteredContainer.SQL, filteredContainer.Args)
+		}
+		if filteredID != "n-one" {
+			t.Fatalf("pre-bin-filtered container event = %q, want n-one", filteredID)
+		}
+
+		sparsePlan := buildIntegrationPlan(
+			t,
+			`index=compiler | bin bin_sparse span=10 AS sparse_band`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		sparseCatalog, err := (Compiler{}).CompileFieldCatalog(
+			sparsePlan,
+			FieldCatalogSpec{MaximumFields: 64},
+		)
+		if err != nil {
+			t.Fatalf("compile sparse Dynamic-bin field catalog: %v", err)
+		}
+		sparseControl := `SELECT countIf(
+				` + quoteIdentifier(FieldCatalogRowKindColumn) + ` = 1 AND
+				` + quoteIdentifier(FieldCatalogNameColumn) + ` = 'sparse_band' AND
+				has(` + quoteIdentifier(FieldCatalogObservedTypesColumn) + `, toUInt8(` +
+			fmt.Sprint(uint8(eventfields.StoredValueTypeSint64)) + `)) AND
+				has(` + quoteIdentifier(FieldCatalogObservedTypesColumn) + `, toUInt8(` +
+			fmt.Sprint(uint8(eventfields.StoredValueTypeNull)) + `)) AND
+				` + quoteIdentifier(FieldCatalogEventCountColumn) + ` = 2 AND
+				` + quoteIdentifier(FieldCatalogNullCountColumn) + ` = 1 AND
+				` + quoteIdentifier(FieldCatalogMissingCountColumn) + ` = 2),
+			max(` + quoteIdentifier(FieldCatalogInvalidColumn) + `)
+			FROM (` + sparseCatalog.SQL + `)`
+		var sparseProfiles uint64
+		var sparseInvalid uint8
+		if err := connection.QueryRow(ctx, sparseControl, sparseCatalog.Args...).Scan(
+			&sparseProfiles,
+			&sparseInvalid,
+		); err != nil {
+			t.Fatalf(
+				"execute sparse Dynamic-bin field catalog: %v\nSQL: %s\nargs: %#v",
+				err,
+				sparseCatalog.SQL,
+				sparseCatalog.Args,
+			)
+		}
+		if sparseProfiles != 1 || sparseInvalid != 0 {
+			t.Fatalf("sparse Dynamic-bin catalog = profiles:%d invalid:%d, want 1/0", sparseProfiles, sparseInvalid)
+		}
+
+		sparseSummary, err := (Compiler{}).CompileFieldSummary(
+			sparsePlan,
+			FieldSummarySpec{
+				FieldName:             "sparse_band",
+				MaximumValues:         10,
+				MaximumDistinctValues: 100,
+				MaximumValueBytes:     4_096,
+			},
+		)
+		if err != nil {
+			t.Fatalf("compile sparse Dynamic-bin field summary: %v", err)
+		}
+		summaryControl := `SELECT count(),
+				max(` + quoteIdentifier(FieldSummaryMetadataInvalidColumn) + `),
+				max(` + quoteIdentifier(FieldSummaryUnsupportedColumn) + `),
+				countIf(
+					` + quoteIdentifier(FieldSummaryRowKindColumn) + ` = 1 AND
+					` + quoteIdentifier(FieldSummaryValueTypeColumn) + ` = toUInt8(` +
+			fmt.Sprint(uint8(eventfields.StoredValueTypeSint64)) + `) AND
+					` + quoteIdentifier(FieldSummaryEncodedValueColumn) + ` = '20' AND
+					` + quoteIdentifier(FieldSummaryValueCountColumn) + ` = 1)
+			FROM (` + sparseSummary.SQL + `)`
+		var sparseSummaryRows, sparseValueRows uint64
+		var sparseSummaryInvalid, sparseSummaryUnsupported uint8
+		if err := connection.QueryRow(ctx, summaryControl, sparseSummary.Args...).Scan(
+			&sparseSummaryRows,
+			&sparseSummaryInvalid,
+			&sparseSummaryUnsupported,
+			&sparseValueRows,
+		); err != nil {
+			t.Fatalf(
+				"execute sparse Dynamic-bin field summary: %v\nSQL: %s\nargs: %#v",
+				err,
+				sparseSummary.SQL,
+				sparseSummary.Args,
+			)
+		}
+		if sparseSummaryRows != 2 || sparseSummaryInvalid != 0 ||
+			sparseSummaryUnsupported != 0 || sparseValueRows != 1 {
+			t.Fatalf(
+				"sparse Dynamic-bin summary = rows:%d invalid:%d unsupported:%d values:%d, want 2/0/0/1",
+				sparseSummaryRows,
+				sparseSummaryInvalid,
+				sparseSummaryUnsupported,
+				sparseValueRows,
+			)
 		}
 	})
 }
