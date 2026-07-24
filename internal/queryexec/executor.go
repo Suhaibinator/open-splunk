@@ -44,6 +44,22 @@ const (
 	maximumTimechartBuckets = uint64(10_000)
 	maximumTimechartSeries  = uint16(12)
 	maximumTimechartLabel   = uint16(256)
+	maximumChartRows        = uint64(10_000)
+	maximumChartSeries      = uint16(12)
+	maximumChartLabel       = uint16(256)
+	// maximumChartResultBytes bounds the buffered pivot. Unlike timechart,
+	// whose buffered row is a fixed-width bucket plus at most 13 counts, a
+	// chart row carries a runtime row value with no length ceiling, and the
+	// whole pivot is materialized before the first sink call. Without an
+	// explicit budget the only remaining ceiling is the server's
+	// max_result_bytes, which sits above the search-job byte limits the sink
+	// would otherwise enforce incrementally. The guard trips on the offending
+	// row, so at most one row beyond the ceiling is ever resident.
+	maximumChartResultBytes = uint64(48 << 20)
+	// chartRowOverheadBytes approximates the fixed Go cost of one retained
+	// pivot row: the row value header, the counts slice header, and the
+	// chartRow struct itself.
+	chartRowOverheadBytes = uint64(96)
 
 	extendedTypeKey  = "\x00open_splunk_type"
 	extendedValueKey = "\x00open_splunk_value"
@@ -66,10 +82,11 @@ type Config struct {
 	// zero, ordinary queries follow MaxResultRows (including a caller-supplied
 	// value); bounded timecharts may receive a larger per-query default.
 	MaxRowsToGroupBy uint64
-	// ExpandTimechartGroupLimit permits only validated timechart queries to
-	// raise MaxRowsToGroupBy to BucketCount*(MaxSeries+1), which is bounded at
-	// 130,000. It leaves the ordinary GROUP BY cap unchanged. The expansion is
-	// enabled automatically when MaxRowsToGroupBy is left at zero.
+	// ExpandTimechartGroupLimit permits only validated bounded runtime-wide
+	// queries to raise MaxRowsToGroupBy to rows*(MaxSeries+1), which is bounded
+	// at 130,000 for both timechart (BucketCount) and chart (RowLimit). It
+	// leaves the ordinary GROUP BY cap unchanged. The expansion is enabled
+	// automatically when MaxRowsToGroupBy is left at zero.
 	ExpandTimechartGroupLimit bool
 	MaxThreads                uint64
 }
@@ -177,8 +194,16 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if strings.TrimSpace(query.SQL) == "" || len(query.OutputFields) == 0 {
 		return errors.New("execute ClickHouse search: compiled query is incomplete")
 	}
+	if query.Timechart != nil && query.Chart != nil {
+		return fmt.Errorf("%w: compiled query declares two wide result contracts", searchjobs.ErrInvalidResult)
+	}
 	if query.Timechart != nil {
 		if err := validateTimechartOutput(query); err != nil {
+			return err
+		}
+	}
+	if query.Chart != nil {
+		if err := validateChartOutput(query); err != nil {
 			return err
 		}
 	}
@@ -235,6 +260,20 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 		}
 		return publishTimechart(executionContext, sink, buffered)
 	}
+	if query.Chart != nil {
+		// The column domain is only known after the complete scan, so the
+		// bounded pivot is buffered and published as one schema-then-rows unit.
+		buffered, err := readChartRows(executionContext, rows, columns, columnTypes, *query.Chart)
+		if err != nil {
+			return err
+		}
+		closeErr := rows.Close()
+		rowsClosed = true
+		if closeErr != nil {
+			return classifyQueryError(executionContext, fmt.Errorf("close ClickHouse chart result stream: %w", closeErr))
+		}
+		return publishChart(executionContext, sink, *query.Chart, buffered)
+	}
 	if len(columns) != len(query.OutputFields) || len(columnTypes) != len(columns) || !slices.Equal(columns, query.OutputFields) {
 		return fmt.Errorf("%w: ClickHouse result columns do not match the compiled output", searchjobs.ErrInvalidResult)
 	}
@@ -285,15 +324,27 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 }
 
 func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {
-	if query.Timechart == nil || !executor.expandTimechartGroupLimit {
+	if !executor.expandTimechartGroupLimit {
 		return executor.settings
 	}
-	// The first timechart aggregation has one state per non-empty
-	// (bucket, series) pair. Reserve room for every public series plus one
-	// canonical invalid-value state per bucket. This remains bounded at 130k
-	// groups for the validated 10k-bucket/12-series contract. The base setting
-	// continues to govern every non-timechart query.
-	required := query.Timechart.BucketCount * (uint64(query.Timechart.MaxSeries) + 1)
+	// The row-keyed aggregation of a bounded runtime-wide query has one state
+	// per non-empty (row, series) pair. Reserve room for every public series
+	// plus one canonical invalid-value state per row. Both operators declare a
+	// constant row ceiling, so this stays bounded at 130k groups. The same
+	// budget also caps the preceding one-dimensional label aggregate, whose
+	// state count is the number of distinct raw split values; a domain with
+	// more distinct raw values than that fails atomically on the server's GROUP
+	// BY overflow rather than growing with the data. The base setting continues
+	// to govern every ordinary query.
+	var required uint64
+	switch {
+	case query.Timechart != nil:
+		required = query.Timechart.BucketCount * (uint64(query.Timechart.MaxSeries) + 1)
+	case query.Chart != nil:
+		required = query.Chart.RowLimit * (uint64(query.Chart.MaxSeries) + 1)
+	default:
+		return executor.settings
+	}
 	current, ok := executor.settings["max_rows_to_group_by"].(uint64)
 	if !ok || current >= required {
 		return executor.settings
@@ -396,7 +447,7 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 		}
 		bucket := time.Unix(bucketUnix, 0).UTC()
 		if rowIndex == 0 {
-			publicColumns, validateErr := decodeTimechartNames(names, output.MaxLabelBytes)
+			publicColumns, validateErr := decodeSeriesNames(names, output.MaxLabelBytes, "_time")
 			if validateErr != nil {
 				return bufferedTimechart{}, validateErr
 			}
@@ -436,31 +487,34 @@ func scannedTimechartRow(destinations []any) (uint64, []string, []uint64, uint8,
 	return ordinal, names, counts, invalid, nil
 }
 
-func decodeTimechartNames(encoded []string, maxLabelBytes uint16) ([]string, error) {
+// decodeSeriesNames validates and decodes the wide transport's encoded series
+// array. fixedColumn seeds the public collision domain: no runtime series may
+// take the name of the result's first, plan-time column.
+func decodeSeriesNames(encoded []string, maxLabelBytes uint16, fixedColumn string) ([]string, error) {
 	public := make([]string, len(encoded))
 	seenEncoded := make(map[string]struct{}, len(encoded))
 	seenPublic := make(map[string]string, len(encoded)+1)
-	seenPublic["_time"] = ""
+	seenPublic[fixedColumn] = ""
 	lastOrdinary := ""
 	haveOrdinary := false
 	phase := uint8(0) // ordinary, optional NULL, optional OTHER
 	for index, name := range encoded {
 		if !utf8.ValidString(name) {
-			return nil, fmt.Errorf("%w: ClickHouse timechart series encoding is invalid", searchjobs.ErrInvalidResult)
+			return nil, fmt.Errorf("%w: ClickHouse wide-result series encoding is invalid", searchjobs.ErrInvalidResult)
 		}
 		if _, exists := seenEncoded[name]; exists {
-			return nil, fmt.Errorf("%w: ClickHouse timechart series is duplicated", searchjobs.ErrInvalidResult)
+			return nil, fmt.Errorf("%w: ClickHouse wide-result series is duplicated", searchjobs.ErrInvalidResult)
 		}
 		seenEncoded[name] = struct{}{}
 		var decoded string
 		switch {
 		case strings.HasPrefix(name, "0:"):
 			if phase != 0 {
-				return nil, fmt.Errorf("%w: ClickHouse timechart series ordering is invalid", searchjobs.ErrInvalidResult)
+				return nil, fmt.Errorf("%w: ClickHouse wide-result series ordering is invalid", searchjobs.ErrInvalidResult)
 			}
 			raw := name[2:]
 			if raw == "" || len(raw) > int(maxLabelBytes) || raw == "NULL" || raw == "OTHER" {
-				return nil, fmt.Errorf("%w: ClickHouse timechart series label is invalid", searchjobs.ErrInvalidResult)
+				return nil, fmt.Errorf("%w: ClickHouse wide-result series label is invalid", searchjobs.ErrInvalidResult)
 			}
 			decoded = raw
 			if strings.HasPrefix(decoded, "_") {
@@ -472,32 +526,32 @@ func decodeTimechartNames(encoded []string, maxLabelBytes uint16) ([]string, err
 					// leading-underscore normalization.
 					return nil, searchjobs.ErrUnsupportedValue
 				}
-				return nil, fmt.Errorf("%w: ClickHouse timechart series is duplicated", searchjobs.ErrInvalidResult)
+				return nil, fmt.Errorf("%w: ClickHouse wide-result series is duplicated", searchjobs.ErrInvalidResult)
 			}
 			if haveOrdinary && lastOrdinary >= decoded {
-				return nil, fmt.Errorf("%w: ClickHouse timechart series ordering is invalid", searchjobs.ErrInvalidResult)
+				return nil, fmt.Errorf("%w: ClickHouse wide-result series ordering is invalid", searchjobs.ErrInvalidResult)
 			}
 			lastOrdinary, haveOrdinary = decoded, true
 		case name == "1:":
 			if phase != 0 {
-				return nil, fmt.Errorf("%w: ClickHouse timechart series ordering is invalid", searchjobs.ErrInvalidResult)
+				return nil, fmt.Errorf("%w: ClickHouse wide-result series ordering is invalid", searchjobs.ErrInvalidResult)
 			}
 			decoded = "NULL"
 			phase = 1
 		case name == "2:":
 			if phase == 2 {
-				return nil, fmt.Errorf("%w: ClickHouse timechart series ordering is invalid", searchjobs.ErrInvalidResult)
+				return nil, fmt.Errorf("%w: ClickHouse wide-result series ordering is invalid", searchjobs.ErrInvalidResult)
 			}
 			decoded = "OTHER"
 			phase = 2
 		default:
-			return nil, fmt.Errorf("%w: ClickHouse timechart series encoding is invalid", searchjobs.ErrInvalidResult)
+			return nil, fmt.Errorf("%w: ClickHouse wide-result series encoding is invalid", searchjobs.ErrInvalidResult)
 		}
 		if prior, exists := seenPublic[decoded]; exists {
 			if prior != name && strings.HasPrefix(name, "0:") {
 				return nil, searchjobs.ErrUnsupportedValue
 			}
-			return nil, fmt.Errorf("%w: ClickHouse timechart public series is duplicated", searchjobs.ErrInvalidResult)
+			return nil, fmt.Errorf("%w: ClickHouse wide-result public series is duplicated", searchjobs.ErrInvalidResult)
 		}
 		seenPublic[decoded] = name
 		public[index] = decoded
@@ -526,6 +580,253 @@ func publishTimechart(ctx context.Context, sink searchjobs.ResultSink, buffered 
 		}
 		values := make([]searchjobs.Value, len(row.counts)+1)
 		values[0] = searchjobs.TimeValue(row.bucket)
+		for index, count := range row.counts {
+			values[index+1] = searchjobs.UnsignedValue(count)
+		}
+		if err := sink.AddRow(values); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
+
+type chartRow struct {
+	value  searchjobs.Value
+	counts []uint64
+}
+
+type bufferedChart struct {
+	columns []string
+	rows    []chartRow
+}
+
+// chartRowValueKind maps the compiler's declared row kind onto the public
+// result kind. Both axes of a chart are runtime data, so the first column's
+// kind is contract metadata rather than something re-derived from ClickHouse.
+func chartRowValueKind(kind clickhouse.ChartRowKind) (searchjobs.ValueKind, bool) {
+	switch kind {
+	case clickhouse.ChartRowKindString:
+		return searchjobs.ValueKindString, true
+	case clickhouse.ChartRowKindSigned:
+		return searchjobs.ValueKindSigned, true
+	case clickhouse.ChartRowKindUnsigned:
+		return searchjobs.ValueKindUnsigned, true
+	case clickhouse.ChartRowKindDouble:
+		return searchjobs.ValueKindDouble, true
+	case clickhouse.ChartRowKindBool:
+		return searchjobs.ValueKindBool, true
+	case clickhouse.ChartRowKindTime:
+		return searchjobs.ValueKindTime, true
+	case clickhouse.ChartRowKindMixed:
+		return searchjobs.ValueKindMixed, true
+	default:
+		return searchjobs.ValueKindInvalid, false
+	}
+}
+
+func validateChartOutput(query clickhouse.CompiledQuery) error {
+	output := query.Chart
+	if output == nil {
+		return nil
+	}
+	if output.RowField == "" || !utf8.ValidString(output.RowField) ||
+		!slices.Equal(query.OutputFields, []string{output.RowField}) ||
+		output.RowLimit == 0 || output.RowLimit > maximumChartRows ||
+		output.MaxSeries == 0 || output.MaxSeries > maximumChartSeries ||
+		output.MaxLabelBytes == 0 || output.MaxLabelBytes > maximumChartLabel ||
+		strings.TrimSpace(output.RowDatabaseType) == "" {
+		return fmt.Errorf("%w: compiled chart output contract is invalid", searchjobs.ErrInvalidResult)
+	}
+	if _, ok := chartRowValueKind(output.RowKind); !ok {
+		return fmt.Errorf("%w: compiled chart row kind is invalid", searchjobs.ErrInvalidResult)
+	}
+	return nil
+}
+
+// readChartRows buffers the bounded pivot. The row count is runtime data, so
+// the invariants replace timechart's fixed-axis equalities: at most RowLimit
+// rows, ordinals dense and ascending from zero in the server's declared order,
+// and one stable column domain for every row.
+func readChartRows(
+	ctx context.Context,
+	rows driver.Rows,
+	columns []string,
+	columnTypes []driver.ColumnType,
+	output clickhouse.ChartOutput,
+) (bufferedChart, error) {
+	if err := ctx.Err(); err != nil {
+		return bufferedChart{}, err
+	}
+	expectedColumns := []string{
+		clickhouse.ChartOrdinalColumn,
+		clickhouse.ChartRowColumn,
+		clickhouse.ChartNamesColumn,
+		clickhouse.ChartCountsColumn,
+		clickhouse.ChartInvalidColumn,
+	}
+	if len(columnTypes) != len(expectedColumns) || !slices.Equal(columns, expectedColumns) {
+		return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart columns do not match the compiled output", searchjobs.ErrInvalidResult)
+	}
+	expectedTypes := []string{"UInt64", output.RowDatabaseType, "Array(String)", "Array(UInt64)", "UInt8"}
+	// Only the row column's physical type varies, and the compiler declares it.
+	// Every transport column keeps timechart's exact scan-type pinning.
+	expectedScanTypes := []reflect.Type{
+		reflect.TypeOf(uint64(0)),
+		nil,
+		reflect.TypeOf([]string{}),
+		reflect.TypeOf([]uint64{}),
+		reflect.TypeOf(uint8(0)),
+	}
+	for index, columnType := range columnTypes {
+		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
+			strings.TrimSpace(columnType.DatabaseTypeName()) != expectedTypes[index] || columnType.ScanType() == nil ||
+			(expectedScanTypes[index] != nil && columnType.ScanType() != expectedScanTypes[index]) {
+			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart column %q has an invalid type", searchjobs.ErrInvalidResult, expectedColumns[index])
+		}
+	}
+	rowKind, ok := chartRowValueKind(output.RowKind)
+	if !ok {
+		return bufferedChart{}, fmt.Errorf("%w: compiled chart row kind is invalid", searchjobs.ErrInvalidResult)
+	}
+
+	buffered := bufferedChart{}
+	var encodedNames []string
+	var retainedBytes uint64
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return bufferedChart{}, err
+		}
+		if uint64(len(buffered.rows)) >= output.RowLimit {
+			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart returned too many rows", searchjobs.ErrExecutionLimit)
+		}
+		destinations, err := scanDestinations(columnTypes)
+		if err != nil {
+			return bufferedChart{}, fmt.Errorf("%w: prepare ClickHouse chart row scan: %v", searchjobs.ErrInvalidResult, err)
+		}
+		if err := rows.Scan(destinations...); err != nil {
+			return bufferedChart{}, classifyQueryError(ctx, fmt.Errorf("scan ClickHouse chart result row: %w", err))
+		}
+		ordinal, rowValue, names, counts, invalid, err := scannedChartRow(destinations, rowKind)
+		if err != nil {
+			return bufferedChart{}, err
+		}
+		if len(names) != len(counts) || len(names) > int(output.MaxSeries) {
+			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart series arrays are invalid", searchjobs.ErrInvalidResult)
+		}
+		if ordinal != uint64(len(buffered.rows)) {
+			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart ordinal sequence is invalid", searchjobs.ErrInvalidResult)
+		}
+		if len(buffered.rows) == 0 {
+			publicColumns, validateErr := decodeSeriesNames(names, output.MaxLabelBytes, output.RowField)
+			if validateErr != nil {
+				return bufferedChart{}, validateErr
+			}
+			encodedNames = slices.Clone(names)
+			buffered.columns = publicColumns
+		} else if !slices.Equal(names, encodedNames) {
+			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart series changed between rows", searchjobs.ErrInvalidResult)
+		}
+		if invalid != 0 {
+			return bufferedChart{}, searchjobs.ErrUnsupportedValue
+		}
+		rowBytes := chartRowRetainedBytes(scannedValue(destinations[1]), len(counts))
+		if rowBytes > maximumChartResultBytes-retainedBytes {
+			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart row values exceeded the supported result size", searchjobs.ErrExecutionLimit)
+		}
+		retainedBytes += rowBytes
+		buffered.rows = append(buffered.rows, chartRow{value: rowValue, counts: slices.Clone(counts)})
+	}
+	if err := rows.Err(); err != nil {
+		return bufferedChart{}, classifyQueryError(ctx, fmt.Errorf("iterate ClickHouse chart results: %w", err))
+	}
+	if err := ctx.Err(); err != nil {
+		return bufferedChart{}, err
+	}
+	return buffered, nil
+}
+
+// chartRowRetainedBytes is the Go heap a single buffered pivot row holds. Only
+// the row value is unbounded; every other component is fixed by the compiled
+// series bound. It measures the scanned transport value so accounting never
+// copies the payload it is sizing.
+func chartRowRetainedBytes(scanned any, seriesCount int) uint64 {
+	payload := uint64(0)
+	switch typed := scanned.(type) {
+	case string:
+		payload = uint64(len(typed))
+	case []byte:
+		payload = uint64(len(typed))
+	}
+	return payload + uint64(seriesCount)*8 + chartRowOverheadBytes
+}
+
+func scannedChartRow(destinations []any, rowKind searchjobs.ValueKind) (uint64, searchjobs.Value, []string, []uint64, uint8, error) {
+	invalidResult := func(message string) (uint64, searchjobs.Value, []string, []uint64, uint8, error) {
+		return 0, searchjobs.Value{}, nil, nil, 0, fmt.Errorf("%w: %s", searchjobs.ErrInvalidResult, message)
+	}
+	if len(destinations) != 5 {
+		return invalidResult("ClickHouse chart row has an invalid width")
+	}
+	ordinal, ordinalOK := scannedValue(destinations[0]).(uint64)
+	names, namesOK := scannedValue(destinations[2]).([]string)
+	counts, countsOK := scannedValue(destinations[3]).([]uint64)
+	invalid, invalidOK := scannedValue(destinations[4]).(uint8)
+	if !ordinalOK || !namesOK || !countsOK || !invalidOK {
+		return invalidResult("ClickHouse chart row has invalid native values")
+	}
+	scanned := scannedValue(destinations[1])
+	if scanned == nil {
+		return invalidResult("ClickHouse chart row value is null")
+	}
+	value, err := convertValue(scanned)
+	if err != nil {
+		return invalidResult("ClickHouse chart row value cannot be converted")
+	}
+	if rowKind == searchjobs.ValueKindMixed {
+		// The Mixed row column is the String transport stats BY publishes for
+		// _raw, whose bytes may not be valid UTF-8. Those are exactly the two
+		// cell kinds a String column can produce, and nothing else.
+		if kind := value.Kind(); kind != searchjobs.ValueKindString && kind != searchjobs.ValueKindBytes {
+			return invalidResult("ClickHouse chart row value does not match the compiled row kind")
+		}
+	} else if value.Kind() != rowKind {
+		return invalidResult("ClickHouse chart row value does not match the compiled row kind")
+	}
+	return ordinal, value, names, counts, invalid, nil
+}
+
+func publishChart(ctx context.Context, sink searchjobs.ResultSink, output clickhouse.ChartOutput, buffered bufferedChart) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	rowKind, ok := chartRowValueKind(output.RowKind)
+	if !ok {
+		return fmt.Errorf("%w: compiled chart row kind is invalid", searchjobs.ErrInvalidResult)
+	}
+	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(buffered.columns)+1)}
+	// A Mixed row column mirrors the ordinary result path, which declares every
+	// Mixed column nullable so the same field publishes one schema either way.
+	schema.Columns[0] = searchjobs.Column{
+		Name:     output.RowField,
+		Kind:     rowKind,
+		Nullable: rowKind == searchjobs.ValueKindMixed,
+	}
+	for index, name := range buffered.columns {
+		schema.Columns[index+1] = searchjobs.Column{Name: name, Kind: searchjobs.ValueKindUnsigned}
+	}
+	if err := sink.SetSchema(schema); err != nil {
+		return err
+	}
+	if len(buffered.columns) == 0 {
+		// A chart with no eligible input publishes only its declared row column.
+		return ctx.Err()
+	}
+	for _, row := range buffered.rows {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		values := make([]searchjobs.Value, len(row.counts)+1)
+		values[0] = row.value
 		for index, count := range row.counts {
 			values[index+1] = searchjobs.UnsignedValue(count)
 		}
@@ -1002,6 +1303,9 @@ func classifyQueryError(ctx context.Context, err error) error {
 	if errors.As(err, &exception) {
 		if exception.Code == 395 && strings.Contains(exception.Message, clickhouse.RexCaptureLimitMarker) {
 			return fmt.Errorf("%w: rex capture bytes exceeded the per-row limit", searchjobs.ErrExecutionLimit)
+		}
+		if exception.Code == 395 && strings.Contains(exception.Message, clickhouse.ChartRowLimitMarker) {
+			return fmt.Errorf("%w: chart row values exceeded the supported limit", searchjobs.ErrExecutionLimit)
 		}
 		if exception.Code == 395 && (strings.Contains(exception.Message, clickhouse.UnsupportedStatsByValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedDedupValueMarker) ||

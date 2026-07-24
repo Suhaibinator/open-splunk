@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1219,6 +1220,286 @@ func TestBuildTimechartResolvesNestedSplitField(t *testing.T) {
 	operator := logical.Operators[len(logical.Operators)-1].(*Timechart)
 	if !slices.Equal(operator.SplitBy.Path, []string{"http", "route"}) {
 		t.Fatalf("split path = %v", operator.SplitBy.Path)
+	}
+}
+
+func TestBuildChartProducesBoundedRuntimeWidePivot(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | chart count over path by status_class`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(logical.Operators) != 3 {
+		t.Fatalf("operator count = %d, want Scan, Filter, Chart", len(logical.Operators))
+	}
+	operator, ok := logical.Operators[2].(*Chart)
+	if !ok {
+		t.Fatalf("last operator = %T, want *Chart", logical.Operators[2])
+	}
+	if operator.Over.Name != "path" || operator.Over.Canonical || operator.SplitBy.Name != "status_class" ||
+		operator.Function != AggregateFunctionCountRows || operator.RowLimit != maxChartRows ||
+		operator.SeriesLimit != chartSeriesLimit || !operator.IncludeNull || operator.NullLabel != "NULL" ||
+		!operator.IncludeOther || operator.OtherLabel != "OTHER" {
+		t.Fatalf("chart = %#v", operator)
+	}
+	if operator.LogicalName() != "Chart" || operator.SourceRange() != operator.Range {
+		t.Fatalf("operator identity = %q/%#v", operator.LogicalName(), operator.SourceRange())
+	}
+	if len(logical.OutputFields) != 0 {
+		t.Fatalf("static output fields = %v, want runtime schema", logical.OutputFields)
+	}
+	if logical.DynamicOutput == nil || !slices.Equal(logical.DynamicOutput.FixedFields, []string{"path"}) ||
+		logical.DynamicOutput.MaxSeries != maxChartSeries {
+		t.Fatalf("dynamic output = %#v", logical.DynamicOutput)
+	}
+}
+
+func TestBuildChartBoundsAreDerivedFromDocumentedDefaults(t *testing.T) {
+	t.Parallel()
+
+	if maxChartSeries != chartSeriesLimit+2 {
+		t.Fatalf("series bound = %d, want the documented top-10 limit plus NULL and OTHER", maxChartSeries)
+	}
+	if maxChartRows != 10_000 {
+		t.Fatalf("row bound = %d, want the 10,000-row resource policy", maxChartRows)
+	}
+}
+
+func TestBuildChartSpellingsProduceIdenticalPlans(t *testing.T) {
+	t.Parallel()
+
+	overForm, err := Build(
+		mustParse(t, `index=gradethis | chart count over path by level`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build(OVER form): %v", err)
+	}
+	byForm, err := Build(
+		mustParse(t, `index=gradethis | chart count by path, level`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build(BY form): %v", err)
+	}
+	// Both spellings must lower to the same executable pivot; only source
+	// provenance is allowed to differ.
+	stripRanges := func(operator *Chart) *Chart {
+		stripped := *operator
+		stripped.Range = spl.Range{}
+		stripped.Over.Range = spl.Range{}
+		stripped.SplitBy.Range = spl.Range{}
+		return &stripped
+	}
+	over := stripRanges(overForm.Operators[len(overForm.Operators)-1].(*Chart))
+	by := stripRanges(byForm.Operators[len(byForm.Operators)-1].(*Chart))
+	if !reflect.DeepEqual(over, by) {
+		t.Fatalf("chart operators differ:\n%#v\n%#v", over, by)
+	}
+	if !slices.Equal(overForm.DynamicOutput.FixedFields, byForm.DynamicOutput.FixedFields) ||
+		overForm.DynamicOutput.MaxSeries != byForm.DynamicOutput.MaxSeries {
+		t.Fatalf("dynamic output differs: %#v vs %#v", overForm.DynamicOutput, byForm.DynamicOutput)
+	}
+}
+
+func TestBuildRequiresChartToBeTerminal(t *testing.T) {
+	t.Parallel()
+
+	query := mustParse(t, `index=gradethis | chart count over path by level | head 5`)
+	_, err := Build(query, testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_CHART_PIPELINE")
+	diagnostic := err.(*Diagnostic)
+	if got := query.Commands[1].SourceRange(); diagnostic.Range != got {
+		t.Fatalf("diagnostic range = %#v, want next command %#v", diagnostic.Range, got)
+	}
+	if !slices.Contains(diagnostic.Suggestions, "move chart to the final pipeline stage") {
+		t.Fatalf("suggestions = %v", diagnostic.Suggestions)
+	}
+}
+
+func TestBuildRejectsChartCombinedWithOtherWideCommands(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		source string
+		code   string
+	}{
+		{`index=gradethis | chart count over path by level | chart count over path by level`, "SPL_UNSUPPORTED_CHART_PIPELINE"},
+		{`index=gradethis | chart count over path by level | timechart span=5m count by level`, "SPL_UNSUPPORTED_CHART_PIPELINE"},
+		{`index=gradethis | chart count over path by level | stats count`, "SPL_UNSUPPORTED_CHART_PIPELINE"},
+		{`index=gradethis | timechart span=5m count by level | chart count over path by level`, "SPL_UNSUPPORTED_TIMECHART_PIPELINE"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			_, err := Build(mustParse(t, test.source), testScope([]string{"gradethis"}, nil))
+			assertDiagnosticCode(t, err, test.code)
+		})
+	}
+}
+
+func TestBuildChartRejectsReservedSeriesNamesAndConvenienceColumn(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | chart count over NULL by level`,
+		`index=gradethis | chart count over path by NULL`,
+		`index=gradethis | chart count over OTHER by level`,
+		`index=gradethis | chart count over path by OTHER`,
+		`index=gradethis | chart count by NULL, OTHER`,
+		`index=gradethis | chart count over fields by level`,
+		`index=gradethis | chart count over path by fields`,
+	} {
+		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		diagnostic, ok := err.(*Diagnostic)
+		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_FIELD_TYPE" {
+			t.Errorf("Build(%q) error = %#v, want SPL_UNSUPPORTED_CHART_FIELD_TYPE", source, err)
+		}
+	}
+}
+
+func TestBuildChartAcceptsLowerCaseReservedSpellingsAndClosedFieldsColumn(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | chart count over null by other`,
+		`index=gradethis | table fields level | chart count over fields by level`,
+		`index=gradethis | stats count by fields, level | chart count over fields by level`,
+	} {
+		if _, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil)); err != nil {
+			t.Errorf("Build(%q): %v", source, err)
+		}
+	}
+}
+
+func TestBuildChartDoesNotRequireCanonicalTime(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | stats count by path, level | chart count over path by level`,
+		`index=gradethis | bin severity span=10 | chart count over severity by level`,
+		`index=gradethis | bin _time span=5m | chart count over _time by level`,
+		`index=gradethis | bin _time span=5m AS bucket_time | chart count over bucket_time by level`,
+		`index=gradethis | fields - _time | chart count over path by level`,
+		`index=gradethis | table path level | chart count over path by level`,
+		`index=gradethis | top level | chart count over level by count`,
+	} {
+		logical, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		if err != nil {
+			t.Errorf("Build(%q): %v", source, err)
+			continue
+		}
+		if _, ok := logical.Operators[len(logical.Operators)-1].(*Chart); !ok {
+			t.Errorf("Build(%q) last operator = %T, want *Chart", source, logical.Operators[len(logical.Operators)-1])
+		}
+	}
+}
+
+func TestBuildChartResolvesNestedDottedFields(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | chart count over http.route by http.status_class`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	operator := logical.Operators[len(logical.Operators)-1].(*Chart)
+	if !slices.Equal(operator.Over.Path, []string{"http", "route"}) ||
+		!slices.Equal(operator.SplitBy.Path, []string{"http", "status_class"}) {
+		t.Fatalf("resolved paths = %v/%v", operator.Over.Path, operator.SplitBy.Path)
+	}
+}
+
+func TestBuildChartRejectsPrivateAndOversizedFieldNames(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		source string
+		code   string
+	}{
+		{`index=gradethis | chart count over __os_chart_row by level`, "SPL_RESERVED_FIELD"},
+		{`index=gradethis | chart count over path by __os_chart_names`, "SPL_RESERVED_FIELD"},
+		{
+			source: `index=gradethis | chart count over path by ` + strings.Repeat("a", maxFieldPathSegmentBytes+1),
+			code:   "SPL_QUERY_TOO_COMPLEX",
+		},
+	}
+	for _, test := range tests {
+		_, err := Build(mustParse(t, test.source), testScope([]string{"gradethis"}, nil))
+		assertDiagnosticCode(t, err, test.code)
+	}
+}
+
+func TestBuildRevalidatesForgedChartCommands(t *testing.T) {
+	t.Parallel()
+
+	base := mustParse(t, `index=gradethis`)
+	tests := []struct {
+		name    string
+		command *spl.ChartCommand
+		code    string
+	}{
+		{
+			name: "repeated axis field",
+			command: &spl.ChartCommand{
+				Function: spl.AggregateFunctionCount,
+				Over:     spl.StatsGroupField{Name: "path"},
+				SplitBy:  spl.StatsGroupField{Name: "path"},
+			},
+			code: "SPL_DUPLICATE_FIELD",
+		},
+		{
+			name: "unsupported aggregate",
+			command: &spl.ChartCommand{
+				Function: spl.AggregateFunctionSum,
+				Over:     spl.StatsGroupField{Name: "path"},
+				SplitBy:  spl.StatsGroupField{Name: "level"},
+			},
+			code: "SPL_UNSUPPORTED_CHART_AGGREGATE",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query := &spl.Query{Search: base.Search, Commands: []spl.Command{test.command}, Range: base.Range}
+			_, err := Build(query, testScope([]string{"gradethis"}, nil))
+			assertDiagnosticCode(t, err, test.code)
+		})
+	}
+}
+
+func TestBuildPostChartIndexFieldDoesNotChangeInputScope(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | chart count over path by level`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.EffectiveIndexes, []string{"gradethis"}) {
+		t.Fatalf("effective indexes = %v", logical.EffectiveIndexes)
+	}
+	// Chart is transforming, so index-scope inference must stop at it even
+	// though the terminality rule already rejects the whole pipeline.
+	for _, source := range []string{
+		`index=gradethis | chart count over path by level | search index=not-an-index`,
+		`index=gradethis | chart count over path by level | search index=not-an-index OR index=other`,
+	} {
+		if references := positiveIndexReferences(mustParse(t, source), nil); len(references) != 1 {
+			t.Fatalf("positiveIndexReferences(%q) = %d references, want only the leading base search", source, len(references))
+		}
+		_, buildErr := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		assertDiagnosticCode(t, buildErr, "SPL_UNSUPPORTED_CHART_PIPELINE")
 	}
 }
 

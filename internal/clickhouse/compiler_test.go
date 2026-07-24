@@ -2542,6 +2542,504 @@ func TestAnalysisFinalizerCannotBypassTerminalTimechart(t *testing.T) {
 	}
 }
 
+func TestAnalysisFinalizerCannotBypassTerminalChart(t *testing.T) {
+	t.Parallel()
+
+	logical := buildPlan(t, `index=gradethis | chart count OVER path BY level`)
+	called := false
+	_, err := (Compiler{}).compileWithFinalizer(logical, func(string, compileState, []any, *plan.Scan, int) (CompiledQuery, error) {
+		called = true
+		return CompiledQuery{}, nil
+	}, false)
+	if err == nil || called {
+		t.Fatalf("compileWithFinalizer() error = %v, finalizer called = %t", err, called)
+	}
+}
+
+func TestCompileChartUsesOneScopedScanAndBoundedPivotTransport(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis message="Request metrics" | chart count OVER path BY status_class`)
+	if !slices.Equal(compiled.OutputFields, []string{"path"}) {
+		t.Fatalf("public fixed fields = %v, want the row field only", compiled.OutputFields)
+	}
+	if compiled.Timechart != nil {
+		t.Fatalf("chart declared a timechart contract: %#v", compiled.Timechart)
+	}
+	if compiled.Chart == nil {
+		t.Fatal("compiled chart metadata is missing")
+	}
+	want := ChartOutput{
+		RowField: "path", RowKind: ChartRowKindString, RowDatabaseType: "String",
+		RowLimit: 10_000, MaxSeries: 12, MaxLabelBytes: 256,
+	}
+	if *compiled.Chart != want {
+		t.Fatalf("compiled chart metadata = %#v, want %#v", *compiled.Chart, want)
+	}
+	for _, required := range []string{
+		`"__os_chart_source" AS (`,
+		`"__os_chart_prepared" AS (SELECT *, toUInt8((("__os_ch_row_exact" != 0 AND isNotNull("__os_ch_row_value")) OR arrayExists(`,
+		`"__os_chart_kinded" AS (SELECT *, multiIf(`,
+		`"__os_chart_classified" AS (`,
+		`FROM "__os_chart_kinded")`,
+		`"__os_chart_canonicalized" AS (`,
+		`"__os_chart_label_totals" AS MATERIALIZED`,
+		`"__os_chart_group_counts" AS MATERIALIZED`,
+		`WHERE "__os_ch_row_eligible" != 0 GROUP BY "__os_ch_row", "__os_ch_kind", "__os_ch_encoded"`,
+		`"__os_chart_top" AS MATERIALIZED`,
+		`"__os_chart_row_domain" AS MATERIALIZED`,
+		`"__os_chart_normalization_collisions" AS (`,
+		`"__os_chart_column_check" AS (`,
+		`ORDER BY "__os_ch_count" DESC, "__os_ch_label" ASC LIMIT 10`,
+		`maxOrDefault("__os_ch_kind" = 3)`,
+		`max("__os_ch_row_invalid") > 0`,
+		`HAVING uniqExact("__os_ch_label") > 1`,
+		`concat('VALUE', "__os_ch_label")`,
+		`"__os_ch_sort_label"`,
+		`arrayMap(item -> item.3`,
+		`mapFromArrays(`,
+		`row_number() OVER (ORDER BY`,
+		`AS "` + ChartOrdinalColumn + `"`,
+		`AS "` + ChartRowColumn + `"`,
+		`AS "` + ChartNamesColumn + `"`,
+		`AS "` + ChartCountsColumn + `"`,
+		`AS "` + ChartInvalidColumn + `"`,
+		`WHERE throwIf("__os_chart_row_domain"."` + ChartOrdinalColumn + `" >= 10000, '` + ChartRowLimitMarker + `') = 0`,
+		`ORDER BY "__os_chart_row_domain"."` + ChartOrdinalColumn + `" ASC`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("chart SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	// Chart has no fixed axis, so it must never borrow timechart's grid.
+	for _, forbidden := range []string{"FROM numbers(", "__os_timechart", "__os_tc_"} {
+		if strings.Contains(compiled.SQL, forbidden) {
+			t.Fatalf("chart SQL contains %q:\n%s", forbidden, compiled.SQL)
+		}
+	}
+	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
+		t.Fatalf("scoped storage scan occurs %d times, want once:\n%s", got, compiled.SQL)
+	}
+	// Exactly two aggregations read the scanned rows: the one-dimensional label
+	// aggregate that chooses the column domain, then the row-keyed aggregate
+	// whose column axis is already collapsed to it. Every later stage reads one
+	// of those materialized aggregates instead of the events again.
+	if got := strings.Count(compiled.SQL, `FROM "__os_chart_canonicalized"`); got != 2 {
+		t.Fatalf("row-level aggregation occurs %d times, want twice:\n%s", got, compiled.SQL)
+	}
+	// A scalar subquery over a materialized CTE is evaluated during analysis,
+	// before the temporary table exists, so each occurrence re-runs the whole
+	// scoped scan. Every reference must be an ordinary relation reference.
+	for _, materialized := range []string{
+		`"__os_chart_label_totals"`,
+		`"__os_chart_group_counts"`,
+		`"__os_chart_top"`,
+		`"__os_chart_normalization_collisions"`,
+		`"__os_chart_column_check"`,
+		`"__os_chart_row_domain"`,
+	} {
+		for _, scalar := range []string{
+			"(SELECT count() FROM " + materialized,
+			"(SELECT count() FROM (SELECT 1 FROM " + materialized,
+		} {
+			if strings.Contains(compiled.SQL, scalar) {
+				t.Fatalf("chart SQL evaluates %s through a scalar subquery:\n%s", materialized, compiled.SQL)
+			}
+		}
+	}
+	// The row-keyed aggregation groups on the already-encoded column domain, so
+	// its state count is rows x public series rather than rows x raw labels.
+	if strings.Contains(compiled.SQL, `count() AS "__os_ch_count" FROM "__os_chart_canonicalized" WHERE "__os_ch_row_eligible" != 0 GROUP BY "__os_ch_row", "__os_ch_kind", "__os_ch_label"`) {
+		t.Fatalf("chart SQL groups the row axis on the raw column label:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+	if got := compiled.Args[0]; got != "path" {
+		t.Fatalf("row exact-presence argument = %#v, want path before nested scan", got)
+	}
+	if got := compiled.Args[1]; got != "status_class" {
+		t.Fatalf("column exact-presence argument = %#v, want status_class before nested scan", got)
+	}
+	tail := compiled.Args[len(compiled.Args)-3:]
+	if !reflect.DeepEqual(tail, []any{"path.", "status_class.", "path"}) {
+		t.Fatalf("trailing arguments = %#v, want descendant probes then the reserved row-column name", tail)
+	}
+}
+
+// TestCompileChartClassifiesColumnValuesIndependentOfRowPresence pins the
+// atomic column-axis rejection against its own presence, the same rule
+// compileAggregate applies to every BY key: an unsupported column value must
+// fail the whole command even when the same input row omits the row field.
+func TestCompileChartClassifiesColumnValuesIndependentOfRowPresence(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | chart count OVER path BY status_class`)
+	// The kind is computed over the unfiltered prepared relation ...
+	if !strings.Contains(compiled.SQL, `AS "__os_ch_kind" FROM "__os_chart_prepared")`) {
+		t.Fatalf("column classification is not row-independent:\n%s", compiled.SQL)
+	}
+	// ... and no stage between the scan and the kind expression drops rows.
+	if strings.Contains(compiled.SQL, `FROM "__os_chart_prepared" WHERE`) {
+		t.Fatalf("the classification input is filtered by row eligibility:\n%s", compiled.SQL)
+	}
+	// The atomic flag reads a signal derived from every classified input row,
+	// not only from the row-keyed aggregate.
+	for _, required := range []string{
+		`"__os_chart_column_check" AS (SELECT toUInt8(maxOrDefault("__os_ch_kind" = 3)) AS "__os_ch_column_invalid" FROM "__os_chart_label_totals")`,
+		`"__os_chart_column_check"."__os_ch_column_invalid" != 0`,
+		`CROSS JOIN "__os_chart_column_check"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("chart SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d", got, want)
+	}
+}
+
+// TestCompileChartOverAndByFormsAreIdentical pins S2: the two accepted
+// spellings are the same pivot, so they must compile byte for byte.
+func TestCompileChartOverAndByFormsAreIdentical(t *testing.T) {
+	t.Parallel()
+
+	over := compileSPL(t, `index=gradethis | chart count OVER path BY level`)
+	by := compileSPL(t, `index=gradethis | chart count BY path, level`)
+	if over.SQL != by.SQL || !reflect.DeepEqual(over.Args, by.Args) || !reflect.DeepEqual(over.Chart, by.Chart) {
+		t.Fatalf("OVER and BY forms diverge:\n%s\n%s", over.SQL, by.SQL)
+	}
+}
+
+// TestCompileChartRowColumnMatchesStatsGroupColumn pins R1/D5/D6: the first
+// output column is exactly the group column stats BY publishes for the same
+// field, including the deliberate asymmetry that numeric values are legal row
+// labels but fatal column labels.
+func TestCompileChartRowColumnMatchesStatsGroupColumn(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name         string
+		source       string
+		kind         ChartRowKind
+		databaseType string
+		required     string
+	}{
+		{
+			name:         "fixed string column",
+			source:       `index=gradethis | chart count OVER level BY path`,
+			kind:         ChartRowKindString,
+			databaseType: "String",
+			required:     `CAST(assumeNotNull("__os_ch_row_value") AS String) AS "__os_ch_row"`,
+		},
+		{
+			name:         "runtime typed event field",
+			source:       `index=gradethis | chart count OVER path BY level`,
+			kind:         ChartRowKindString,
+			databaseType: "String",
+			// Runtime scalars converge on the same lexical key that stats BY uses,
+			// so integer 500 and string "500" are one row.
+			required: `dynamicElement("__os_ch_row_value", 'Map(String, String)')[concat(char(0), 'open_splunk_value')]`,
+		},
+		{
+			name:         "fixed numeric column keeps its own scalar type",
+			source:       `index=gradethis | bin severity span=10 | chart count OVER severity BY level`,
+			kind:         ChartRowKindUnsigned,
+			databaseType: "UInt8",
+			required:     `CAST(assumeNotNull("__os_ch_row_value") AS UInt8) AS "__os_ch_row"`,
+		},
+		{
+			name:         "binned timestamp column",
+			source:       `index=gradethis | bin _time span=5m AS bucket_time | chart count OVER bucket_time BY level`,
+			kind:         ChartRowKindTime,
+			databaseType: "DateTime64(9, 'UTC')",
+			required:     `CAST(assumeNotNull("__os_ch_row_value") AS DateTime64(9, 'UTC')) AS "__os_ch_row"`,
+		},
+		{
+			name:         "numeric stats output",
+			source:       `index=gradethis | stats count BY level | chart count OVER count BY level`,
+			kind:         ChartRowKindUnsigned,
+			databaseType: "UInt64",
+			required:     `CAST(assumeNotNull("__os_ch_row_value") AS UInt64) AS "__os_ch_row"`,
+		},
+		{
+			// stats count BY _raw publishes a Mixed, nullable column because
+			// _raw may carry non-UTF-8 bytes, so the pivot's first column
+			// declares the same kind over the same String transport.
+			name:         "canonical raw column is the Mixed group column",
+			source:       `index=gradethis | chart count OVER _raw BY level`,
+			kind:         ChartRowKindMixed,
+			databaseType: "String",
+			required:     `CAST(assumeNotNull("__os_ch_row_value") AS String) AS "__os_ch_row"`,
+		},
+		{
+			// A statically null column is the String group column stats BY
+			// publishes: no present, non-null value, so no rows — never an
+			// unclassified planning failure.
+			name:         "static null literal row axis",
+			source:       `index=gradethis | eval n=null | chart count OVER n BY level`,
+			kind:         ChartRowKindString,
+			databaseType: "String",
+			required:     `CAST(assumeNotNull("__os_ch_row_value") AS String) AS "__os_ch_row"`,
+		},
+		{
+			name:         "boolean row axis",
+			source:       `index=gradethis | eval flag=true | chart count OVER flag BY level`,
+			kind:         ChartRowKindBool,
+			databaseType: "Bool",
+			required:     `CAST(assumeNotNull("__os_ch_row_value") AS Bool) AS "__os_ch_row"`,
+		},
+		{
+			name:         "signed row axis",
+			source:       `index=gradethis | eval offset=-3 | chart count OVER offset BY level`,
+			kind:         ChartRowKindSigned,
+			databaseType: "Int64",
+			required:     `CAST(assumeNotNull("__os_ch_row_value") AS Int64) AS "__os_ch_row"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			compiled := compileSPL(t, test.source)
+			if compiled.Chart == nil || compiled.Chart.RowKind != test.kind || compiled.Chart.RowDatabaseType != test.databaseType {
+				t.Fatalf("chart row contract = %#v, want kind %d type %q", compiled.Chart, test.kind, test.databaseType)
+			}
+			if !strings.Contains(compiled.SQL, test.required) {
+				t.Fatalf("chart SQL missing %q:\n%s", test.required, compiled.SQL)
+			}
+		})
+	}
+}
+
+// TestCompileChartOrdersRowsLikeAutomaticSort pins O1: rows follow the exact
+// order sort 0 +<row field> produces on the published column, so a lexical
+// row axis is ordered numerically first and a fixed numeric axis is not.
+// TestCompileWideOperatorsDeclareMaterializedCTEs pins the execution
+// requirement the bounded runtime-wide lowerings take on by reading their
+// aggregates through CTEs declared AS MATERIALIZED. ClickHouse honors that
+// declaration only while enable_materialized_cte is on; with it off it inlines
+// every reference, re-running the whole scoped scan once per reference and
+// exposing an analyzer defect that drops a column whenever a search predicate
+// shares expressions with the operator's own projections — for instance a
+// comparison on the field that also names the column axis. Carrying the setting
+// in the query text keeps the SQL correct on any connection.
+func TestCompileWideOperatorsDeclareMaterializedCTEs(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | chart count OVER path BY level`,
+		`index=gradethis level="error" | chart count OVER path BY level`,
+		`index=gradethis | timechart span=5m count BY level`,
+		`index=gradethis level="error" | timechart span=5m count BY level`,
+	} {
+		compiled := compileSPL(t, source)
+		if !strings.Contains(compiled.SQL, " AS MATERIALIZED (") {
+			t.Fatalf("Compile(%q) has no materialized aggregate:\n%s", source, compiled.SQL)
+		}
+		if !strings.HasSuffix(compiled.SQL, " SETTINGS enable_materialized_cte = 1") {
+			t.Fatalf("Compile(%q) does not declare the materialized-CTE requirement:\n%s", source, compiled.SQL)
+		}
+	}
+}
+
+func TestCompileChartOrdersRowsLikeAutomaticSort(t *testing.T) {
+	t.Parallel()
+
+	lexical := compileSPL(t, `index=gradethis | chart count OVER path BY level`)
+	if !strings.Contains(lexical.SQL, `row_number() OVER (ORDER BY tuple(if(isNull("__os_ch_row")`) ||
+		!strings.Contains(lexical.SQL, `accurateCastOrNull(toString("__os_ch_row"), 'Int256')`) {
+		t.Fatalf("runtime-typed row axis is not ordered numerically:\n%s", lexical.SQL)
+	}
+	fixed := compileSPL(t, `index=gradethis | bin severity span=10 | chart count OVER severity BY level`)
+	if !strings.Contains(fixed.SQL, `row_number() OVER (ORDER BY "__os_ch_row" ASC)`) {
+		t.Fatalf("fixed numeric row axis is not ordered by its own value:\n%s", fixed.SQL)
+	}
+}
+
+// TestCompileChartRejectsNonStringColumnFields pins C2 and the D6 asymmetry:
+// the same field type is a legal row axis and a rejected column axis.
+func TestCompileChartRejectsNonStringColumnFields(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | chart count OVER level BY severity`,
+		`index=gradethis | bin severity span=10 | chart count OVER level BY severity`,
+		`index=gradethis | bin _time span=5m AS bucket_time | chart count OVER level BY bucket_time`,
+		`index=gradethis | stats count BY level | chart count OVER level BY count`,
+	} {
+		_, err := (Compiler{}).Compile(buildPlan(t, source))
+		diagnostic, ok := err.(*plan.Diagnostic)
+		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_FIELD_TYPE" ||
+			diagnostic.Message != "chart column fields currently support strings plus missing and null values" ||
+			!slices.Contains(diagnostic.Suggestions, "convert the column field to a string before chart") {
+			t.Fatalf("Compile(%q) error = %#v, want a located chart column-type diagnostic", source, err)
+		}
+		if diagnostic.Range.Start.Offset == 0 {
+			t.Fatalf("Compile(%q) diagnostic is not located at the column field: %#v", source, diagnostic.Range)
+		}
+	}
+
+	// The same fields are legal row axes.
+	for _, source := range []string{
+		`index=gradethis | bin severity span=10 | chart count OVER severity BY level`,
+		`index=gradethis | bin _time span=5m AS bucket_time | chart count OVER bucket_time BY level`,
+	} {
+		if compiled := compileSPL(t, source); compiled.Chart == nil {
+			t.Fatalf("Compile(%q) did not produce a chart contract", source)
+		}
+	}
+}
+
+// TestCompileChartRejectsReservedConvenienceColumn pins S8 for an open event
+// schema, where the fields payload is not an ordinary field. The planner
+// rejects it first; the compiler repeats the check so a forged plan cannot
+// reach the pivot transport with an ambiguous axis.
+func TestCompileChartRejectsReservedConvenienceColumn(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | chart count OVER fields BY level`,
+		`index=gradethis | chart count OVER level BY fields`,
+	} {
+		parsed, err := spl.Parse(source)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", source, err)
+		}
+		_, err = plan.Build(parsed, testChartScope())
+		diagnostic, ok := err.(*plan.Diagnostic)
+		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_FIELD_TYPE" ||
+			!strings.Contains(diagnostic.Message, "reserved fields payload") {
+			t.Fatalf("Build(%q) error = %#v, want the reserved-payload rejection", source, err)
+		}
+	}
+
+	// The compiler repeats every reserved-name rule against a plan that never
+	// saw them, so a forged plan cannot publish a colliding public schema.
+	for _, forged := range []struct {
+		name    string
+		axis    string
+		message string
+	}{
+		{"reserved payload", "fields", "reserved fields payload"},
+		{"reserved null series", "NULL", "reserved chart series names"},
+		{"reserved other series", "OTHER", "reserved chart series names"},
+	} {
+		t.Run(forged.name, func(t *testing.T) {
+			t.Parallel()
+			logical := buildPlan(t, `index=gradethis | chart count OVER path BY level`)
+			chart := logical.Operators[len(logical.Operators)-1].(*plan.Chart)
+			chart.Over = plan.FieldRef{Name: forged.axis, Path: []string{forged.axis}}
+			logical.DynamicOutput.FixedFields = []string{forged.axis}
+			_, err := (Compiler{}).Compile(logical)
+			diagnostic, ok := err.(*plan.Diagnostic)
+			if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_FIELD_TYPE" ||
+				!strings.Contains(diagnostic.Message, forged.message) {
+				t.Fatalf("Compile() error = %#v, want %q", err, forged.message)
+			}
+		})
+	}
+
+	// A closed upstream schema that declares an ordinary fields column may use it.
+	compiled := compileSPL(t, `index=gradethis | stats count BY level, path | rename level AS fields | chart count OVER fields BY path`)
+	if compiled.Chart == nil || compiled.Chart.RowField != "fields" {
+		t.Fatalf("closed-schema fields column was rejected: %#v", compiled.Chart)
+	}
+}
+
+// TestCompileChartMissingAxesFollowStatsSemantics pins I2 and I3: a removed
+// column field becomes the documented NULL series, and a removed row field
+// emits the declared one-column schema with no groups.
+func TestCompileChartMissingAxesFollowStatsSemantics(t *testing.T) {
+	t.Parallel()
+
+	missingColumn := compileSPL(t, `index=gradethis | table path level | fields - level | chart count OVER path BY status`)
+	if !strings.Contains(missingColumn.SQL, `CAST(NULL AS Nullable(String)) AS "__os_ch_value"`) ||
+		!strings.Contains(missingColumn.SQL, `toUInt8(0) AS "__os_ch_present"`) {
+		t.Fatalf("removed column field did not become a typed NULL series:\n%s", missingColumn.SQL)
+	}
+	missingRow := compileSPL(t, `index=gradethis | table path level | fields - path | chart count OVER path BY level`)
+	if !strings.Contains(missingRow.SQL, `CAST(NULL AS Nullable(String)) AS "__os_ch_row_value"`) ||
+		!strings.Contains(missingRow.SQL, `toUInt8(0) AS "__os_ch_row_exact"`) {
+		t.Fatalf("removed row field did not become an empty group domain:\n%s", missingRow.SQL)
+	}
+	if !slices.Equal(missingRow.OutputFields, []string{"path"}) {
+		t.Fatalf("removed row field changed the declared schema: %v", missingRow.OutputFields)
+	}
+}
+
+// TestCompileChartRevalidatesTheBoundedContract proves the backend does not
+// trust a forged plan: every bound the planner carries as data is re-checked
+// before any SQL is emitted.
+func TestCompileChartRevalidatesTheBoundedContract(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		corrupt func(*plan.Query, *plan.Chart)
+		want    string
+	}{
+		{"row limit raised", func(_ *plan.Query, chart *plan.Chart) { chart.RowLimit = 10_001 }, "bounded defaults are invalid"},
+		{"row limit removed", func(_ *plan.Query, chart *plan.Chart) { chart.RowLimit = 0 }, "bounded defaults are invalid"},
+		{"series limit raised", func(_ *plan.Query, chart *plan.Chart) { chart.SeriesLimit = 11 }, "bounded defaults are invalid"},
+		{"usenull disabled", func(_ *plan.Query, chart *plan.Chart) { chart.IncludeNull = false }, "bounded defaults are invalid"},
+		{"useother disabled", func(_ *plan.Query, chart *plan.Chart) { chart.IncludeOther = false }, "bounded defaults are invalid"},
+		{"null label renamed", func(_ *plan.Query, chart *plan.Chart) { chart.NullLabel = "none" }, "bounded defaults are invalid"},
+		{"axes collapsed", func(_ *plan.Query, chart *plan.Chart) { chart.SplitBy = chart.Over }, "bounded defaults are invalid"},
+		{
+			"aggregate replaced",
+			func(_ *plan.Query, chart *plan.Chart) { chart.Function = plan.AggregateFunctionSum },
+			"count operator is required",
+		},
+		{
+			"declared schema widened",
+			func(query *plan.Query, _ *plan.Chart) { query.DynamicOutput.MaxSeries = 24 },
+			"bounded defaults are invalid",
+		},
+		{
+			"declared prefix renamed",
+			func(query *plan.Query, _ *plan.Chart) { query.DynamicOutput.FixedFields = []string{"_time"} },
+			"dynamic output contract is invalid",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			logical := buildPlan(t, `index=gradethis | chart count OVER path BY level`)
+			chart := logical.Operators[len(logical.Operators)-1].(*plan.Chart)
+			test.corrupt(logical, chart)
+			if _, err := (Compiler{}).Compile(logical); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Compile() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestCompileChartRejectsNonTerminalOperator(t *testing.T) {
+	t.Parallel()
+
+	logical := buildPlan(t, `index=gradethis | chart count OVER path BY level`)
+	logical.Operators = append(logical.Operators, &plan.Limit{Count: 5})
+	if _, err := (Compiler{}).Compile(logical); err == nil || !strings.Contains(err.Error(), "operator must be terminal") {
+		t.Fatalf("Compile() error = %v, want terminal-operator rejection", err)
+	}
+}
+
+// TestCompileChartStaysInsideTheCompiledByteCeiling proves the extra pivot
+// stages do not silently push a realistic pipeline past the expansion budget.
+func TestCompileChartStaysInsideTheCompiledByteCeiling(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis message="Request metrics" status>=500
+| rex field=path "^/api/v1/(?<area>[^/?]+)"
+| eval duration_ms=tonumber(replace(duration, "ms$", ""))
+| bin duration_ms span=100 AS latency_band
+| chart count OVER latency_band BY area`)
+	if len(compiled.SQL) > maxCompiledQueryBytes {
+		t.Fatalf("compiled chart pipeline is %d bytes, ceiling is %d", len(compiled.SQL), maxCompiledQueryBytes)
+	}
+	if compiled.Chart == nil {
+		t.Fatal("deep chart pipeline lost its chart contract")
+	}
+}
+
 func TestAnalysisFinalizerCannotBypassCompiledQueryByteLimit(t *testing.T) {
 	t.Parallel()
 
@@ -2571,18 +3069,22 @@ func buildPlan(t *testing.T, source string) *plan.Query {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	logical, err := plan.Build(parsed, plan.Scope{
+	logical, err := plan.Build(parsed, testChartScope())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return logical
+}
+
+func testChartScope() plan.Scope {
+	return plan.Scope{
 		TenantID:          "tenant-1",
 		AuthorizedIndexes: []string{"gradethis"},
 		Earliest:          time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC),
 		Latest:            time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 1, 0, time.UTC),
 		VisibilityCutoff:  uint64Pointer(73),
-	})
-	if err != nil {
-		t.Fatalf("Build: %v", err)
 	}
-	return logical
 }
 
 func uint64Pointer(value uint64) *uint64 { return &value }

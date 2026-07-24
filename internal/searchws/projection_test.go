@@ -322,6 +322,10 @@ func TestProjectSearchSchemaMatchesHTTPResultClassification(t *testing.T) {
 		name string
 		spl  string
 		want opensplunkv1.ResultSetKind
+		// runtimeNamed marks the wide relations whose columns after the first
+		// are named from data, so those columns are published as metrics
+		// rather than as the event metadata their names may resemble.
+		runtimeNamed bool
 	}{
 		{name: "events", spl: "index=main", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS},
 		{name: "rex events", spl: `index=main | rex "(?<request_id>request_id=\w+)"`, want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS},
@@ -329,7 +333,12 @@ func TestProjectSearchSchemaMatchesHTTPResultClassification(t *testing.T) {
 		{name: "stats", spl: "index=main | stats count by level", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS},
 		{name: "top", spl: "index=main | top limit=20 message", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS},
 		{name: "rare", spl: "index=main | rare limit=20 message", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS},
-		{name: "timechart wins after table", spl: "index=main | table _time level | timechart span=5m count by level", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES},
+		{name: "timechart wins after table", spl: "index=main | table _time level | timechart span=5m count by level", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES, runtimeNamed: true},
+		// A chart is a categorical pivot: its first column is a runtime row
+		// value, so it is statistics rather than a time series. Its remaining
+		// columns are still named from runtime split values.
+		{name: "chart pivot", spl: "index=main | chart count OVER path BY level", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS, runtimeNamed: true},
+		{name: "chart over binned time", spl: "index=main | bin _time span=5m AS bucket_time | chart count OVER bucket_time BY level", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS, runtimeNamed: true},
 		{name: "invalid SPL", spl: "index=main | unsupported", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED},
 	}
 	for _, test := range tests {
@@ -358,7 +367,7 @@ func TestProjectSearchSchemaMatchesHTTPResultClassification(t *testing.T) {
 				t.Fatalf("_time semantic = %v", schema.Columns[0].GetSemanticType())
 			}
 			wantSecondSemantic := opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_UNSPECIFIED
-			if test.want == opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES {
+			if test.runtimeNamed {
 				wantSecondSemantic = opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC
 			}
 			second := schema.Columns[1]

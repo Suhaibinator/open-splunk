@@ -1081,6 +1081,112 @@ func TestValidateTimechartSchemaEnforcesRuntimeWideContract(t *testing.T) {
 	}
 }
 
+func TestValidateChartSchemaEnforcesBoundedPivotContract(t *testing.T) {
+	t.Parallel()
+
+	output := clickhouse.ChartOutput{
+		RowField: "path", RowKind: clickhouse.ChartRowKindString,
+		RowDatabaseType: "String", RowLimit: 10_000, MaxSeries: 3, MaxLabelBytes: 256,
+	}
+	valid := Schema{Columns: []Column{
+		{Name: "path", Kind: ValueKindString},
+		{Name: "api", Kind: ValueKindUnsigned},
+		{Name: "NULL", Kind: ValueKindUnsigned},
+		{Name: "OTHER", Kind: ValueKindUnsigned},
+	}}
+	if err := validateChartSchema(valid, []string{"path"}, output); err != nil {
+		t.Fatalf("valid chart schema: %v", err)
+	}
+	// A chart over zero eligible rows publishes only its declared row column.
+	if err := validateChartSchema(Schema{Columns: []Column{{Name: "path", Kind: ValueKindString}}}, []string{"path"}, output); err != nil {
+		t.Fatalf("empty chart schema: %v", err)
+	}
+	// The row column keeps the compiler's declared scalar kind.
+	timeOutput := output
+	timeOutput.RowField = "bucket_time"
+	timeOutput.RowKind = clickhouse.ChartRowKindTime
+	if err := validateChartSchema(Schema{Columns: []Column{
+		{Name: "bucket_time", Kind: ValueKindTime},
+		{Name: "api", Kind: ValueKindUnsigned},
+	}}, []string{"bucket_time"}, timeOutput); err != nil {
+		t.Fatalf("time-kinded chart row column: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		schema   Schema
+		expected []string
+		output   clickhouse.ChartOutput
+	}{
+		{name: "missing row column", schema: Schema{}, expected: []string{"path"}, output: output},
+		{name: "wrong fixed prefix", schema: valid, expected: []string{"wrong"}, output: output},
+		{name: "wrong row name", schema: Schema{Columns: []Column{{Name: "route", Kind: ValueKindString}}}, expected: []string{"path"}, output: output},
+		{name: "wrong row kind", schema: Schema{Columns: []Column{{Name: "path", Kind: ValueKindTime}}}, expected: []string{"path"}, output: output},
+		{name: "nullable row", schema: Schema{Columns: []Column{{Name: "path", Kind: ValueKindString, Nullable: true}}}, expected: []string{"path"}, output: output},
+		{name: "multivalue row", schema: Schema{Columns: []Column{{Name: "path", Kind: ValueKindString, Multivalue: true}}}, expected: []string{"path"}, output: output},
+		{
+			name: "too many series",
+			schema: Schema{Columns: []Column{
+				{Name: "path", Kind: ValueKindString}, {Name: "a", Kind: ValueKindUnsigned},
+				{Name: "b", Kind: ValueKindUnsigned}, {Name: "c", Kind: ValueKindUnsigned}, {Name: "d", Kind: ValueKindUnsigned},
+			}},
+			expected: []string{"path"}, output: output,
+		},
+		{
+			// A runtime series may not take the row column's public name.
+			name:     "series collides with the row column",
+			schema:   Schema{Columns: []Column{{Name: "path", Kind: ValueKindString}, {Name: "path", Kind: ValueKindUnsigned}}},
+			expected: []string{"path"}, output: output,
+		},
+		{
+			name:     "duplicate series",
+			schema:   Schema{Columns: []Column{{Name: "path", Kind: ValueKindString}, {Name: "a", Kind: ValueKindUnsigned}, {Name: "a", Kind: ValueKindUnsigned}}},
+			expected: []string{"path"}, output: output,
+		},
+		{
+			name:     "invalid UTF-8",
+			schema:   Schema{Columns: []Column{{Name: "path", Kind: ValueKindString}, {Name: string([]byte{0xff}), Kind: ValueKindUnsigned}}},
+			expected: []string{"path"}, output: output,
+		},
+		{
+			name:     "private-looking series",
+			schema:   Schema{Columns: []Column{{Name: "path", Kind: ValueKindString}, {Name: "_hidden", Kind: ValueKindUnsigned}}},
+			expected: []string{"path"}, output: output,
+		},
+		{
+			name:     "oversized series",
+			schema:   Schema{Columns: []Column{{Name: "path", Kind: ValueKindString}, {Name: strings.Repeat("x", 257), Kind: ValueKindUnsigned}}},
+			expected: []string{"path"}, output: output,
+		},
+		{
+			name:     "wrong series kind",
+			schema:   Schema{Columns: []Column{{Name: "path", Kind: ValueKindString}, {Name: "a", Kind: ValueKindSigned}}},
+			expected: []string{"path"}, output: output,
+		},
+		{
+			name:     "nullable series",
+			schema:   Schema{Columns: []Column{{Name: "path", Kind: ValueKindString}, {Name: "a", Kind: ValueKindUnsigned, Nullable: true}}},
+			expected: []string{"path"}, output: output,
+		},
+		{
+			name:     "unset row kind",
+			schema:   valid,
+			expected: []string{"path"},
+			output: clickhouse.ChartOutput{
+				RowField: "path", RowDatabaseType: "String", RowLimit: 10_000, MaxSeries: 3, MaxLabelBytes: 256,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateChartSchema(test.schema, test.expected, test.output); !errors.Is(err, ErrInvalidResult) {
+				t.Fatalf("validateChartSchema() = %v, want ErrInvalidResult", err)
+			}
+		})
+	}
+}
+
 func TestManagerBoundsAggregateRetainedJobsAndBytes(t *testing.T) {
 	t.Parallel()
 

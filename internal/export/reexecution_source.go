@@ -465,12 +465,35 @@ func schemaColumnNames(schema searchjobs.Schema) []string {
 }
 
 func schemaMatchesCompiledQuery(schema searchjobs.Schema, compiled clickhouse.CompiledQuery) bool {
-	if compiled.Timechart == nil {
+	if compiled.Timechart != nil && compiled.Chart != nil {
+		return false
+	}
+	if compiled.Timechart == nil && compiled.Chart == nil {
 		return len(schema.Columns) > 0 && slices.Equal(compiled.OutputFields, schemaColumnNames(schema))
 	}
-	output := *compiled.Timechart
-	if !slices.Equal(compiled.OutputFields, []string{"_time"}) || len(schema.Columns) == 0 ||
-		len(schema.Columns)-1 > int(output.MaxSeries) {
+	// Both bounded runtime-wide operators publish the same wide shape: one
+	// fixed, plan-time column followed by at most MaxSeries unsigned count
+	// columns whose names came from runtime values.
+	fixedName := "_time"
+	fixedKind := searchjobs.ValueKindString
+	var maxSeries int
+	var maxLabelBytes int
+	if compiled.Timechart != nil {
+		fixedKind = searchjobs.ValueKindTime
+		maxSeries = int(compiled.Timechart.MaxSeries)
+		maxLabelBytes = int(compiled.Timechart.MaxLabelBytes)
+	} else {
+		kind, ok := chartRowExportKind(compiled.Chart.RowKind)
+		if !ok || compiled.Chart.RowField == "" {
+			return false
+		}
+		fixedName = compiled.Chart.RowField
+		fixedKind = kind
+		maxSeries = int(compiled.Chart.MaxSeries)
+		maxLabelBytes = int(compiled.Chart.MaxLabelBytes)
+	}
+	if !slices.Equal(compiled.OutputFields, []string{fixedName}) || len(schema.Columns) == 0 ||
+		len(schema.Columns)-1 > maxSeries {
 		return false
 	}
 	seen := make(map[string]struct{}, len(schema.Columns))
@@ -483,12 +506,15 @@ func schemaMatchesCompiledQuery(schema searchjobs.Schema, compiled clickhouse.Co
 		}
 		seen[column.Name] = struct{}{}
 		if index == 0 {
-			if column.Name != "_time" || column.Kind != searchjobs.ValueKindTime || column.Nullable {
+			// A Mixed chart row column is nullable, matching the column the
+			// ordinary result path publishes for the same field.
+			if column.Name != fixedName || column.Kind != fixedKind ||
+				column.Nullable != (fixedKind == searchjobs.ValueKindMixed) {
 				return false
 			}
 			continue
 		}
-		maximumNameBytes := int(output.MaxLabelBytes)
+		maximumNameBytes := maxLabelBytes
 		if strings.HasPrefix(column.Name, "VALUE_") {
 			maximumNameBytes += len("VALUE")
 		}
@@ -498,4 +524,25 @@ func schemaMatchesCompiledQuery(schema searchjobs.Schema, compiled clickhouse.Co
 		}
 	}
 	return true
+}
+
+func chartRowExportKind(kind clickhouse.ChartRowKind) (searchjobs.ValueKind, bool) {
+	switch kind {
+	case clickhouse.ChartRowKindString:
+		return searchjobs.ValueKindString, true
+	case clickhouse.ChartRowKindSigned:
+		return searchjobs.ValueKindSigned, true
+	case clickhouse.ChartRowKindUnsigned:
+		return searchjobs.ValueKindUnsigned, true
+	case clickhouse.ChartRowKindDouble:
+		return searchjobs.ValueKindDouble, true
+	case clickhouse.ChartRowKindBool:
+		return searchjobs.ValueKindBool, true
+	case clickhouse.ChartRowKindTime:
+		return searchjobs.ValueKindTime, true
+	case clickhouse.ChartRowKindMixed:
+		return searchjobs.ValueKindMixed, true
+	default:
+		return searchjobs.ValueKindInvalid, false
+	}
 }

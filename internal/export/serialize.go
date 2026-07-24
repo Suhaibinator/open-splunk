@@ -139,12 +139,23 @@ func protectSpreadsheetText(value string) string {
 	return value
 }
 
+// needsSpreadsheetProtection reports whether a text cell must be prefixed with
+// an apostrophe so a spreadsheet reads it as text rather than a formula.
+//
+// A leading apostrophe is itself in the set even though it is not a formula
+// lead-in. Prefixing only the formula characters is not injective: a chart
+// names every column after the first from a runtime field value, so the two
+// distinct, legal labels "'-a" and "-a" would both encode as the single header
+// cell "'-a" and the exported pivot would carry two indistinguishable count
+// columns. Escaping a leading apostrophe as well makes the encoding injective
+// (an unprotected result can never begin with an apostrophe), so distinct
+// labels stay distinct cells.
 func needsSpreadsheetProtection(value string) bool {
 	if value == "" {
 		return false
 	}
 	switch value[0] {
-	case '=', '+', '-', '@', '\t', '\r', '\n':
+	case '=', '+', '-', '@', '\t', '\r', '\n', '\'':
 		return true
 	default:
 		return false

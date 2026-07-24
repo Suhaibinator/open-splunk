@@ -15,7 +15,7 @@ import (
 )
 
 func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJob, error) {
-	resultKind := resultKindForSPL(job.SPL)
+	resultShape := resultShapeForSPL(job.SPL)
 	earliest, err := validTimestamp(job.Earliest)
 	if err != nil {
 		return nil, err
@@ -69,13 +69,13 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 		},
 		IndexTimeCutoff:  indexTimeCutoff,
 		State:            searchStateToProto(job.State),
-		ResultKind:       resultKind,
+		ResultKind:       resultShape.Kind,
 		ResultsTruncated: job.ResultsTruncated,
 		Progress:         progress,
 		CreatedAt:        createdAt,
 	}
 	if job.Schema != nil {
-		result.ResultSchema, err = schemaToProto(job.ID, *job.Schema, resultKind)
+		result.ResultSchema, err = schemaToProto(job.ID, *job.Schema, resultShape)
 		if err != nil {
 			return nil, err
 		}
@@ -120,16 +120,16 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 	return result, nil
 }
 
-func resultPageToProto(ctx context.Context, jobID string, page searchjobs.ResultPage, resultKind opensplunkv1.ResultSetKind, includeTotal, resultsTruncated bool) (*opensplunkv1.ResultPage, error) {
-	return searchjobproto.ResultPage(ctx, jobID, page, resultKind, includeTotal, resultsTruncated)
+func resultPageToProto(ctx context.Context, jobID string, page searchjobs.ResultPage, shape searchjobproto.ResultShape, includeTotal, resultsTruncated bool) (*opensplunkv1.ResultPage, error) {
+	return searchjobproto.ResultPage(ctx, jobID, page, shape, includeTotal, resultsTruncated)
 }
 
-func schemaToProto(schemaID string, schema searchjobs.Schema, resultKind opensplunkv1.ResultSetKind) (*opensplunkv1.ResultSchema, error) {
-	return searchjobproto.Schema(schemaID, schema, resultKind)
+func schemaToProto(schemaID string, schema searchjobs.Schema, shape searchjobproto.ResultShape) (*opensplunkv1.ResultSchema, error) {
+	return searchjobproto.Schema(schemaID, schema, shape)
 }
 
-func resultKindForSPL(source string) opensplunkv1.ResultSetKind {
-	return searchjobproto.ResultKindForSPL(source)
+func resultShapeForSPL(source string) searchjobproto.ResultShape {
+	return searchjobproto.ResultShapeForSPL(source)
 }
 
 func valueToProto(ctx context.Context, value searchjobs.Value) (*opensplunkv1.TypedValue, error) {

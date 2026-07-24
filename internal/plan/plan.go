@@ -233,6 +233,35 @@ func (*Timechart) operator()                 {}
 func (*Timechart) LogicalName() string       { return "Timechart" }
 func (op *Timechart) SourceRange() spl.Range { return op.Range }
 
+// Chart transforms rows into a bounded runtime-wide pivot. Unlike Timechart,
+// both axes are runtime data: Over supplies one row per distinct present,
+// non-null value using the stats BY group-key semantics, and SplitBy supplies
+// the runtime series names. Neither axis is discretized here; bin/bucket is
+// the only discretizer, so a numeric or timestamp row axis must already have
+// been bucketed upstream.
+//
+// The operator carries the complete bounding contract as data so the backend
+// can revalidate it: RowLimit rows at most (exceeded is a deterministic,
+// non-truncating failure), SeriesLimit ordinary series, plus the documented
+// usenull/useother series named by NullLabel and OtherLabel.
+type Chart struct {
+	Over     FieldRef
+	SplitBy  FieldRef
+	Function AggregateFunction
+
+	RowLimit     uint32
+	SeriesLimit  uint16
+	IncludeNull  bool
+	IncludeOther bool
+	NullLabel    string
+	OtherLabel   string
+	Range        spl.Range
+}
+
+func (*Chart) operator()                 {}
+func (*Chart) LogicalName() string       { return "Chart" }
+func (op *Chart) SourceRange() spl.Range { return op.Range }
+
 // WindowFunction identifies a row-preserving calculation over the complete
 // input relation.
 type WindowFunction uint8

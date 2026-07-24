@@ -38,7 +38,7 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 			default:
 				return fieldAnalysisPipelineDiagnostic(operator.Range)
 			}
-		case *Aggregate, *Timechart, *Window:
+		case *Aggregate, *Timechart, *Chart, *Window:
 			return fieldAnalysisPipelineDiagnostic(operator.SourceRange())
 		default:
 			return fieldAnalysisPipelineDiagnostic(operator.SourceRange())

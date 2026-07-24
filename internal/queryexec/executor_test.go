@@ -130,6 +130,320 @@ func TestExecutorBuffersAndPublishesRuntimeWideTimechart(t *testing.T) {
 	}
 }
 
+func TestExecutorBuffersAndPublishesBoundedChartPivot(t *testing.T) {
+	t.Parallel()
+
+	// The row axis is runtime data, so the first public column is named and
+	// typed from the row field rather than from canonical time.
+	names := []string{"0:_audit", "0:Z", "1:", "2:"}
+	rows := chartPivotRows("String", reflect.TypeOf(""), names,
+		[]any{"/a", "/b", "/c"},
+		[][]uint64{{2, 1, 0, 3}, {0, 4, 1, 0}, {5, 0, 0, 2}})
+	sink := &fakeSink{}
+	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
+	if err := executor.Execute(context.Background(), chartQuery("path", clickhouse.ChartRowKindString, "String"), sink); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if sink.setCalls != 1 || !rows.closed {
+		t.Fatalf("schema calls=%d rows closed=%v", sink.setCalls, rows.closed)
+	}
+	wantColumns := []searchjobs.Column{
+		{Name: "path", Kind: searchjobs.ValueKindString},
+		{Name: "VALUE_audit", Kind: searchjobs.ValueKindUnsigned},
+		{Name: "Z", Kind: searchjobs.ValueKindUnsigned},
+		{Name: "NULL", Kind: searchjobs.ValueKindUnsigned},
+		{Name: "OTHER", Kind: searchjobs.ValueKindUnsigned},
+	}
+	if !reflect.DeepEqual(sink.schema.Columns, wantColumns) {
+		t.Fatalf("schema = %#v, want %#v", sink.schema.Columns, wantColumns)
+	}
+	if len(sink.rows) != 3 {
+		t.Fatalf("published rows = %d, want 3", len(sink.rows))
+	}
+	for index, row := range sink.rows {
+		label, ok := row[0].String()
+		if !ok || label != rows.data[index][1].(string) {
+			t.Fatalf("row %d label = %q, %v", index, label, ok)
+		}
+		for seriesIndex, want := range rows.data[index][3].([]uint64) {
+			got, ok := row[seriesIndex+1].Unsigned()
+			if !ok || got != want {
+				t.Fatalf("row %d series %d = %d, %v, want %d", index, seriesIndex, got, ok, want)
+			}
+		}
+	}
+}
+
+// TestExecutorPublishesEveryChartRowKind proves the pivot's first column keeps
+// the exact scalar kind the compiler declared, including a binned timestamp.
+func TestExecutorPublishesEveryChartRowKind(t *testing.T) {
+	t.Parallel()
+
+	bucket := time.Date(2026, time.July, 22, 12, 5, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name         string
+		rowKind      clickhouse.ChartRowKind
+		databaseType string
+		scanType     reflect.Type
+		value        any
+		want         searchjobs.ValueKind
+	}{
+		{"string", clickhouse.ChartRowKindString, "String", reflect.TypeOf(""), "/a", searchjobs.ValueKindString},
+		{"unsigned", clickhouse.ChartRowKindUnsigned, "UInt8", reflect.TypeOf(uint8(0)), uint8(10), searchjobs.ValueKindUnsigned},
+		{"signed", clickhouse.ChartRowKindSigned, "Int64", reflect.TypeOf(int64(0)), int64(-20), searchjobs.ValueKindSigned},
+		{"double", clickhouse.ChartRowKindDouble, "Float64", reflect.TypeOf(float64(0)), 1.5, searchjobs.ValueKindDouble},
+		{"bool", clickhouse.ChartRowKindBool, "Bool", reflect.TypeOf(false), true, searchjobs.ValueKindBool},
+		{"time", clickhouse.ChartRowKindTime, "DateTime64(9, 'UTC')", reflect.TypeOf(time.Time{}), bucket, searchjobs.ValueKindTime},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			rows := chartPivotRows(test.databaseType, test.scanType, []string{"0:INFO"}, []any{test.value}, [][]uint64{{4}})
+			sink := &fakeSink{}
+			executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
+			query := chartQuery("band", test.rowKind, test.databaseType)
+			if err := executor.Execute(context.Background(), query, sink); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if sink.schema.Columns[0].Kind != test.want || sink.schema.Columns[0].Nullable {
+				t.Fatalf("row column = %#v, want kind %v", sink.schema.Columns[0], test.want)
+			}
+			if len(sink.rows) != 1 || sink.rows[0][0].Kind() != test.want {
+				t.Fatalf("published row value = %#v", sink.rows)
+			}
+		})
+	}
+}
+
+// TestExecutorPublishesRawChartRowLikeStatsGroupColumn pins the row-axis
+// parity clause for _raw, the one field whose ordinary group column is Mixed
+// and nullable because ingest deliberately accepts non-UTF-8 raw bytes. The
+// chart row column must publish the same schema and the same cell values, not
+// fail the job with an internal invalid-result error.
+func TestExecutorPublishesRawChartRowLikeStatsGroupColumn(t *testing.T) {
+	t.Parallel()
+
+	binary := string([]byte{0x61, 0xff, 0xfe, 0x62})
+	rows := chartPivotRows("String", reflect.TypeOf(""), []string{"0:INFO"},
+		[]any{"plain", binary}, [][]uint64{{2}, {3}})
+	sink := &fakeSink{}
+	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
+	query := chartQuery("_raw", clickhouse.ChartRowKindMixed, "String")
+	if err := executor.Execute(context.Background(), query, sink); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	want := searchjobs.Column{Name: "_raw", Kind: searchjobs.ValueKindMixed, Nullable: true}
+	if sink.setCalls != 1 || sink.schema.Columns[0] != want {
+		t.Fatalf("row column = %#v, want %#v", sink.schema.Columns[0], want)
+	}
+	if len(sink.rows) != 2 {
+		t.Fatalf("published rows = %d, want 2", len(sink.rows))
+	}
+	if text, ok := sink.rows[0][0].String(); !ok || text != "plain" {
+		t.Fatalf("utf-8 row value = %q, %v", text, ok)
+	}
+	raw, ok := sink.rows[1][0].Bytes()
+	if !ok || string(raw) != binary {
+		t.Fatalf("binary row value = %v, %v", raw, ok)
+	}
+}
+
+// TestExecutorRejectsOversizedChartResultAtomically pins the buffered pivot's
+// byte ceiling. A chart row value has no length ceiling and the whole pivot is
+// materialized before the first sink call, so the executor must fail with a
+// deterministic execution-limit error and publish nothing rather than letting
+// the sink's incremental byte back-pressure arrive too late.
+func TestExecutorRejectsOversizedChartResultAtomically(t *testing.T) {
+	t.Parallel()
+
+	// One shared 1 MiB backing string keeps the fixture cheap; the guard
+	// accounts each row's own length regardless.
+	wide := strings.Repeat("w", 1<<20)
+	const rowCount = 64
+	rowValues := make([]any, rowCount)
+	counts := make([][]uint64, rowCount)
+	for index := range rowValues {
+		rowValues[index] = wide
+		counts[index] = []uint64{1}
+	}
+	rows := chartPivotRows("String", reflect.TypeOf(""), []string{"0:INFO"}, rowValues, counts)
+	sink := &fakeSink{}
+	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
+	err := executor.Execute(context.Background(), chartQuery("_raw", clickhouse.ChartRowKindString, "String"), sink)
+	if !errors.Is(err, searchjobs.ErrExecutionLimit) {
+		t.Fatalf("Execute error = %v, want an execution limit", err)
+	}
+	if sink.setCalls != 0 || len(sink.rows) != 0 {
+		t.Fatalf("partial publication: schema calls=%d rows=%d", sink.setCalls, len(sink.rows))
+	}
+
+	// The same shape well inside the ceiling still publishes normally.
+	narrow := chartPivotRows("String", reflect.TypeOf(""), []string{"0:INFO"},
+		[]any{wide, wide}, [][]uint64{{1}, {1}})
+	narrowSink := &fakeSink{}
+	narrowExecutor := mustExecutor(t, &fakeQueryConnection{rows: narrow})
+	if err := narrowExecutor.Execute(context.Background(),
+		chartQuery("_raw", clickhouse.ChartRowKindString, "String"), narrowSink); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if narrowSink.setCalls != 1 || len(narrowSink.rows) != 2 {
+		t.Fatalf("bounded pivot schema calls=%d rows=%d", narrowSink.setCalls, len(narrowSink.rows))
+	}
+}
+
+func TestExecutorSuppressesEmptyChartPivot(t *testing.T) {
+	t.Parallel()
+
+	rows := chartPivotRows("String", reflect.TypeOf(""), nil, nil, nil)
+	sink := &fakeSink{}
+	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
+	if err := executor.Execute(context.Background(), chartQuery("path", clickhouse.ChartRowKindString, "String"), sink); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if sink.setCalls != 1 || len(sink.schema.Columns) != 1 || sink.schema.Columns[0].Name != "path" || len(sink.rows) != 0 {
+		t.Fatalf("empty chart schema=%#v rows=%d calls=%d", sink.schema, len(sink.rows), sink.setCalls)
+	}
+}
+
+func TestExecutorRejectsMalformedChartAtomically(t *testing.T) {
+	tests := []struct {
+		name        string
+		mutate      func(*fakeRows, *clickhouse.CompiledQuery)
+		want        error
+		queryIssued bool
+	}{
+		{
+			name:   "wrong physical columns",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.columns[1] = "wrong" },
+			want:   searchjobs.ErrInvalidResult, queryIssued: true,
+		},
+		{
+			name: "row column type drift",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+				rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))}
+			},
+			want: searchjobs.ErrInvalidResult, queryIssued: true,
+		},
+		{
+			name: "nullable row column",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+				rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "String", scanType: reflect.TypeOf(""), nullable: true}
+			},
+			want: searchjobs.ErrInvalidResult, queryIssued: true,
+		},
+		{
+			// The declared public kind is authoritative: a String transport
+			// column can never publish an unsigned row label.
+			name: "row value kind disagrees with the compiled contract",
+			mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
+				query.Chart.RowKind = clickhouse.ChartRowKindUnsigned
+			},
+			want: searchjobs.ErrInvalidResult, queryIssued: true,
+		},
+		{
+			// The Mixed row column admits exactly the two kinds a String
+			// transport can produce and nothing else, so it never becomes an
+			// escape hatch for a drifting transport type.
+			name: "mixed row column over a non-string transport",
+			mutate: func(rows *fakeRows, query *clickhouse.CompiledQuery) {
+				query.Chart.RowKind = clickhouse.ChartRowKindMixed
+				query.Chart.RowDatabaseType = "UInt64"
+				rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))}
+				for index, row := range rows.data {
+					row[1] = uint64(index)
+				}
+			},
+			want: searchjobs.ErrInvalidResult, queryIssued: true,
+		},
+		{
+			name:   "sparse ordinal sequence",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[1][0] = uint64(5) },
+			want:   searchjobs.ErrInvalidResult, queryIssued: true,
+		},
+		{
+			name: "series change between rows",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+				rows.data[1][2] = []string{"0:OTHERWISE"}
+				rows.data[1][3] = []uint64{1}
+			},
+			want: searchjobs.ErrInvalidResult, queryIssued: true,
+		},
+		{
+			name:   "series exceed the declared bound",
+			mutate: func(rows *fakeRows, query *clickhouse.CompiledQuery) { query.Chart.MaxSeries = 1 },
+			want:   searchjobs.ErrInvalidResult, queryIssued: true,
+		},
+		{
+			// A runtime value must never take the row column's public name.
+			name: "series collides with the row column",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+				for _, row := range rows.data {
+					row[2] = []string{"0:path"}
+					row[3] = []uint64{1}
+				}
+			},
+			want: searchjobs.ErrUnsupportedValue, queryIssued: true,
+		},
+		{
+			name:   "unsupported value flag",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data[1][4] = uint8(1) },
+			want:   searchjobs.ErrUnsupportedValue, queryIssued: true,
+		},
+		{
+			name:   "more rows than the declared ceiling",
+			mutate: func(rows *fakeRows, query *clickhouse.CompiledQuery) { query.Chart.RowLimit = 2 },
+			want:   searchjobs.ErrExecutionLimit, queryIssued: true,
+		},
+		{
+			name:   "row ceiling above the executor bound",
+			mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) { query.Chart.RowLimit = maximumChartRows + 1 },
+			want:   searchjobs.ErrInvalidResult,
+		},
+		{
+			name:   "declared prefix does not name the row column",
+			mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) { query.OutputFields = []string{"_time"} },
+			want:   searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "row kind is unset",
+			mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
+				query.Chart.RowKind = clickhouse.ChartRowKindInvalid
+			},
+			want: searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "two wide contracts",
+			mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
+				query.Timechart = &clickhouse.TimechartOutput{
+					FirstBucket: time.Unix(0, 0).UTC(), Span: time.Minute, BucketCount: 1, MaxSeries: 12, MaxLabelBytes: 256,
+				}
+			},
+			want: searchjobs.ErrInvalidResult,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			rows := chartPivotRows("String", reflect.TypeOf(""), []string{"0:INFO", "1:"},
+				[]any{"/a", "/b", "/c"},
+				[][]uint64{{1, 0}, {0, 2}, {3, 0}})
+			query := chartQuery("path", clickhouse.ChartRowKindString, "String")
+			test.mutate(rows, &query)
+			connection := &fakeQueryConnection{rows: rows}
+			sink := &fakeSink{}
+			err := mustExecutor(t, connection).Execute(context.Background(), query, sink)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Execute() error = %v, want %v", err, test.want)
+			}
+			if got := connection.query != ""; got != test.queryIssued {
+				t.Fatalf("query issued = %v, want %v", got, test.queryIssued)
+			}
+			if sink.setCalls != 0 || len(sink.rows) != 0 {
+				t.Fatalf("malformed chart published schema=%d rows=%d", sink.setCalls, len(sink.rows))
+			}
+		})
+	}
+}
+
 func TestExecutorSuppressesEmptyTimechartGrid(t *testing.T) {
 	t.Parallel()
 
@@ -283,6 +597,41 @@ func timechartOrdinalRows(names []string, counts [][]uint64) *fakeRows {
 	}
 	for index, values := range counts {
 		rows.data[index] = []any{uint64(index), slices.Clone(names), slices.Clone(values), uint8(0)}
+	}
+	return rows
+}
+
+func chartQuery(rowField string, rowKind clickhouse.ChartRowKind, rowDatabaseType string) clickhouse.CompiledQuery {
+	return clickhouse.CompiledQuery{
+		SQL:          "SELECT bounded_chart",
+		OutputFields: []string{rowField},
+		Chart: &clickhouse.ChartOutput{
+			RowField: rowField, RowKind: rowKind, RowDatabaseType: rowDatabaseType,
+			RowLimit: 10_000, MaxSeries: 12, MaxLabelBytes: 256,
+		},
+	}
+}
+
+func chartPivotRows(rowDatabaseType string, rowScanType reflect.Type, names []string, rowValues []any, counts [][]uint64) *fakeRows {
+	rows := &fakeRows{
+		columns: []string{
+			clickhouse.ChartOrdinalColumn,
+			clickhouse.ChartRowColumn,
+			clickhouse.ChartNamesColumn,
+			clickhouse.ChartCountsColumn,
+			clickhouse.ChartInvalidColumn,
+		},
+		types: []driver.ColumnType{
+			fakeColumnType{name: clickhouse.ChartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+			fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: rowDatabaseType, scanType: rowScanType},
+			fakeColumnType{name: clickhouse.ChartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
+			fakeColumnType{name: clickhouse.ChartCountsColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeOf([]uint64{})},
+			fakeColumnType{name: clickhouse.ChartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+		},
+		data: make([][]any, len(counts)),
+	}
+	for index, values := range counts {
+		rows.data[index] = []any{uint64(index), rowValues[index], slices.Clone(names), slices.Clone(values), uint8(0)}
 	}
 	return rows
 }
@@ -736,6 +1085,26 @@ func TestExecutorExpandsOnlyOptedInTimechartGroupBudget(t *testing.T) {
 	if got := customExpanded.settingsFor(clickhouse.CompiledQuery{SQL: "SELECT ordinary"})["max_rows_to_group_by"]; got != uint64(7) {
 		t.Fatalf("opted-in ordinary group cap = %v, want 7", got)
 	}
+
+	// A chart's first aggregation is keyed on two runtime domains, so the
+	// budget comes from its declared row ceiling rather than from the data.
+	pivot := chartQuery("path", clickhouse.ChartRowKindString, "String")
+	if got, want := executor.settingsFor(pivot)["max_rows_to_group_by"], uint64(130_000); got != want {
+		t.Fatalf("chart group cap = %v, want %d", got, want)
+	}
+	// A pivot whose bound already fits inside the base cap never widens it.
+	narrow := chartQuery("path", clickhouse.ChartRowKindString, "String")
+	narrow.Chart.RowLimit = 500
+	narrow.Chart.MaxSeries = 2
+	if got := executor.settingsFor(narrow)["max_rows_to_group_by"]; got != defaultMaxResultRows {
+		t.Fatalf("narrow chart group cap = %v, want the unchanged base cap %d", got, defaultMaxResultRows)
+	}
+	if got := custom.settingsFor(pivot)["max_rows_to_group_by"]; got != uint64(7) {
+		t.Fatalf("explicit chart group cap = %v, want 7", got)
+	}
+	if got := settings["max_rows_to_group_by"]; got != defaultMaxResultRows {
+		t.Fatalf("base settings were mutated by chart: cap=%v", got)
+	}
 }
 
 func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
@@ -777,6 +1146,15 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 	if err := classifyQueryError(context.Background(), rexLimit); !errors.Is(err, searchjobs.ErrExecutionLimit) ||
 		strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), clickhouse.RexCaptureLimitMarker) {
 		t.Fatalf("rex capture limit classification = %v", err)
+	}
+	chartRows := &clickhousedriver.Exception{
+		Code:    395,
+		Name:    "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
+		Message: clickhouse.ChartRowLimitMarker + "; generated SQL contained secret",
+	}
+	if err := classifyQueryError(context.Background(), chartRows); !errors.Is(err, searchjobs.ErrExecutionLimit) ||
+		strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), clickhouse.ChartRowLimitMarker) {
+		t.Fatalf("chart row-limit classification = %v", err)
 	}
 	for _, marker := range []string{
 		clickhouse.UnsupportedStatsByValueMarker,

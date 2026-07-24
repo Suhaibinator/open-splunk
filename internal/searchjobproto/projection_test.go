@@ -17,15 +17,17 @@ func TestResultKindForSPLKeepsTimeBinAsEvents(t *testing.T) {
 		`index=main | bin severity span=10`,
 		`index=main | bucket span=10 severity AS band`,
 	} {
-		if got := ResultKindForSPL(source); got != opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS {
+		if got := ResultShapeForSPL(source).Kind; got != opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS {
 			t.Fatalf("%q result kind = %v, want events", source, got)
 		}
 	}
 	for _, source := range []string{
 		`index=main | bucket span=5m _time | stats count BY _time`,
 		`index=main | stats count | bin count span=10`,
+		`index=main | chart count OVER path BY level`,
+		`index=main | bin _time span=5m AS bucket_time | chart count OVER bucket_time BY level`,
 	} {
-		if got := ResultKindForSPL(source); got != opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS {
+		if got := ResultShapeForSPL(source).Kind; got != opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS {
 			t.Fatalf("%q result kind = %v, want statistics", source, got)
 		}
 	}

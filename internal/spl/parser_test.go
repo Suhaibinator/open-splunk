@@ -1,6 +1,7 @@
 package spl
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1275,6 +1276,363 @@ func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestParseChartAcceptsBothTwoFieldPivotSpellings(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		source      string
+		over        string
+		splitBy     string
+		overSpelled bool
+	}{
+		{
+			name:        "over then by",
+			source:      `index=gradethis | chart count over path by status_class`,
+			over:        "path",
+			splitBy:     "status_class",
+			overSpelled: true,
+		},
+		{
+			name:        "by with comma",
+			source:      `index=gradethis | chart count by path, status_class`,
+			over:        "path",
+			splitBy:     "status_class",
+			overSpelled: false,
+		},
+		{
+			name:        "by with whitespace only",
+			source:      `index=gradethis | chart count by path status_class`,
+			over:        "path",
+			splitBy:     "status_class",
+			overSpelled: false,
+		},
+		{
+			name:        "by with comma and whitespace",
+			source:      `index=gradethis | chart count by path , status_class`,
+			over:        "path",
+			splitBy:     "status_class",
+			overSpelled: false,
+		},
+		{
+			name:        "keyword and aggregate case insensitivity",
+			source:      `index=gradethis | CHART COUNT OVER path BY level`,
+			over:        "path",
+			splitBy:     "level",
+			overSpelled: true,
+		},
+		{
+			name:        "dotted dynamic paths",
+			source:      `index=gradethis | chart count over http.route by http.status_class`,
+			over:        "http.route",
+			splitBy:     "http.status_class",
+			overSpelled: true,
+		},
+		{
+			name:        "binned numeric row axis",
+			source:      `index=gradethis | bin severity span=10 | chart count over severity by level`,
+			over:        "severity",
+			splitBy:     "level",
+			overSpelled: true,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command, ok := query.Commands[len(query.Commands)-1].(*ChartCommand)
+			if !ok {
+				t.Fatalf("last command = %T, want *ChartCommand", query.Commands[len(query.Commands)-1])
+			}
+			if command.Function != AggregateFunctionCount || command.Over.Name != test.over ||
+				command.SplitBy.Name != test.splitBy || command.OverSpelledOver != test.overSpelled {
+				t.Fatalf("chart = %#v", command)
+			}
+			if aggregateText := test.source[command.AggregateRange.Start.Offset:command.AggregateRange.End.Offset]; !strings.EqualFold(aggregateText, "count") {
+				t.Fatalf("aggregate source = %q", aggregateText)
+			}
+			if overText := test.source[command.Over.Range.Start.Offset:command.Over.Range.End.Offset]; overText != test.over {
+				t.Fatalf("row field source = %q, want %q", overText, test.over)
+			}
+			if splitText := test.source[command.SplitBy.Range.Start.Offset:command.SplitBy.Range.End.Offset]; splitText != test.splitBy {
+				t.Fatalf("column field source = %q, want %q", splitText, test.splitBy)
+			}
+			commandText := test.source[command.Range.Start.Offset:command.Range.End.Offset]
+			if !strings.HasPrefix(strings.ToLower(commandText), "chart") ||
+				!strings.HasSuffix(commandText, test.splitBy) {
+				t.Fatalf("command source = %q", commandText)
+			}
+			if command.Name() != "chart" {
+				t.Fatalf("command name = %q", command.Name())
+			}
+			if command.SourceRange() != command.Range {
+				t.Fatalf("source range = %#v, want %#v", command.SourceRange(), command.Range)
+			}
+		})
+	}
+}
+
+func TestParseChartSpellingsProduceIdenticalAxes(t *testing.T) {
+	t.Parallel()
+
+	overForm, err := Parse(`index=gradethis | chart count over path by level`)
+	if err != nil {
+		t.Fatalf("Parse(OVER form): %v", err)
+	}
+	byForm, err := Parse(`index=gradethis | chart count by path, level`)
+	if err != nil {
+		t.Fatalf("Parse(BY form): %v", err)
+	}
+	over := overForm.Commands[0].(*ChartCommand)
+	by := byForm.Commands[0].(*ChartCommand)
+	if over.Function != by.Function || over.Over.Name != by.Over.Name || over.SplitBy.Name != by.SplitBy.Name {
+		t.Fatalf("axes differ: %#v vs %#v", over, by)
+	}
+	if !over.OverSpelledOver || by.OverSpelledOver {
+		t.Fatalf("spelling flags = %v/%v, want true/false", over.OverSpelledOver, by.OverSpelledOver)
+	}
+}
+
+// TestParseChartSpellingsAgreeOnKeywordFieldNames pins that the two documented
+// spellings stay interchangeable for a field whose name happens to be a chart
+// keyword. OVER is only a misplaced keyword where a field cannot begin, so a
+// comma-separated BY list accepts it exactly as the OVER form does.
+func TestParseChartSpellingsAgreeOnKeywordFieldNames(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		over   string
+		by     string
+		row    string
+		column string
+	}{
+		{"OVER as the row field", `chart count over over by level`, `chart count by over, level`, "over", "level"},
+		{"OVER as the column field", `chart count over level by over`, `chart count by level, over`, "level", "over"},
+		{"BY as the column field", `chart count over path by by`, `chart count by path, by`, "path", "by"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			for _, source := range []string{`index=gradethis | ` + test.over, `index=gradethis | ` + test.by} {
+				parsed, err := Parse(source)
+				if err != nil {
+					t.Fatalf("Parse(%q): %v", source, err)
+				}
+				command, ok := parsed.Commands[0].(*ChartCommand)
+				if !ok || command.Over.Name != test.row || command.SplitBy.Name != test.column {
+					t.Fatalf("Parse(%q) axes = %#v, want %q/%q", source, parsed.Commands[0], test.row, test.column)
+				}
+			}
+		})
+	}
+
+	// The genuinely ambiguous whitespace-separated form stays rejected, so the
+	// documented BY-before-OVER boundary is unchanged.
+	for _, source := range []string{
+		`index=gradethis | chart count by path over level`,
+		`index=gradethis | chart count by path over, level`,
+		`index=gradethis | chart count by level over`,
+	} {
+		diagnostic, ok := errorFor(t, source).(*Diagnostic)
+		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_SYNTAX" {
+			t.Fatalf("Parse(%q) diagnostic = %#v", source, diagnostic)
+		}
+	}
+}
+
+func errorFor(t *testing.T, source string) error {
+	t.Helper()
+	_, err := Parse(source)
+	if err == nil {
+		t.Fatalf("Parse(%q) succeeded", source)
+	}
+	return err
+}
+
+func TestParseChartRejectsUnsupportedAggregates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		source    string
+		locatedAt string
+	}{
+		{"missing aggregate", `index=main | chart`, ""},
+		{"sum", `index=main | chart sum(bytes) over path by level`, "sum"},
+		{"average", `index=main | chart avg(bytes) over path by level`, "avg"},
+		{"percentile", `index=main | chart p95(bytes) over path by level`, "p95"},
+		{"count field argument", `index=main | chart count(level) over path by level`, "count"},
+		{"count empty arguments", `index=main | chart count() over path by level`, "count"},
+		{"second aggregate", `index=main | chart count avg(bytes) over path by level`, "avg"},
+		{"comma separated aggregates", `index=main | chart count, sum(bytes) over path by level`, ","},
+		{"sparkline", `index=main | chart sparkline(count) over path by level`, "sparkline"},
+		{"eval aggregate", `index=main | chart eval(count/2) over path by level`, "eval"},
+		{"parenthesized eval expression", `index=main | chart (count/2) over path by level`, "("},
+		{"agg term", `index=main | chart agg=count over path by level`, "agg"},
+		{"distinct count", `index=main | chart dc(level) over path by level`, "dc"},
+		{"aggregate alias", `index=main | chart count AS total over path by level`, "AS"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(test.source)
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_AGGREGATE" {
+				t.Fatalf("diagnostic = %#v, want SPL_UNSUPPORTED_CHART_AGGREGATE", err)
+			}
+			if test.locatedAt != "" {
+				got := test.source[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset]
+				if got != test.locatedAt {
+					t.Fatalf("diagnostic source = %q, want %q", got, test.locatedAt)
+				}
+			}
+		})
+	}
+}
+
+func TestParseChartRejectsEveryOptionIncludingDocumentedDefaults(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		source    string
+		locatedAt string
+	}{
+		{"limit default spelling", `index=main | chart count over path by level limit=10`, "limit"},
+		{"limit top form", `index=main | chart count over path by level limit=top 10`, "limit"},
+		{"useother default", `index=main | chart count over path by level useother=true`, "useother"},
+		{"usenull default", `index=main | chart count over path by level usenull=true`, "usenull"},
+		{"otherstr default", `index=main | chart count over path by level otherstr=OTHER`, "otherstr"},
+		{"nullstr default", `index=main | chart count over path by level nullstr=NULL`, "nullstr"},
+		{"cont default", `index=main | chart count over path by level cont=true`, "cont"},
+		{"bins default", `index=main | chart count over path by level bins=300`, "bins"},
+		{"dedup_splitvals", `index=main | chart count over path by level dedup_splitvals=false`, "dedup_splitvals"},
+		{"span", `index=main | chart span=5m count over _time by level`, "span"},
+		{"start", `index=main | chart count over severity by level start=0`, "start"},
+		{"end", `index=main | chart count over severity by level end=100`, "end"},
+		{"aligntime", `index=main | chart count over _time by level aligntime=earliest`, "aligntime"},
+		{"format", `index=main | chart count over path by level format=$AGG$`, "format"},
+		{"sep", `index=main | chart count over path by level sep=:`, "sep"},
+		{"option before aggregate", `index=main | chart limit=10 count over path by level`, "limit"},
+		{"option between aggregate and over", `index=main | chart count limit=10 over path by level`, "limit"},
+		{"option in place of the row field", `index=main | chart count over limit=10 by level`, "limit"},
+		{"option in place of the column field", `index=main | chart count over path by limit=10`, "limit"},
+		{"option after a BY list", `index=main | chart count by path, level useother=false`, "useother"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(test.source)
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_OPTION" {
+				t.Fatalf("diagnostic = %#v, want SPL_UNSUPPORTED_CHART_OPTION", err)
+			}
+			got := test.source[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset]
+			if got != test.locatedAt {
+				t.Fatalf("diagnostic source = %q, want %q", got, test.locatedAt)
+			}
+		})
+	}
+}
+
+func TestParseChartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		source    string
+		code      string
+		locatedAt string
+	}{
+		{"single OVER split", `index=main | chart count over path`, "SPL_UNSUPPORTED_CHART_SYNTAX", ""},
+		{"single BY split", `index=main | chart count by path`, "SPL_UNSUPPORTED_CHART_SYNTAX", ""},
+		{"no split at all", `index=main | chart count`, "SPL_UNSUPPORTED_CHART_SYNTAX", ""},
+		{"identical OVER and BY fields", `index=main | chart count over path by path`, "SPL_UNSUPPORTED_CHART_SYNTAX", "path"},
+		{"identical BY list fields", `index=main | chart count by path, path`, "SPL_UNSUPPORTED_CHART_SYNTAX", "path"},
+		{"three BY fields", `index=main | chart count by path, level, host`, "SPL_UNSUPPORTED_CHART_SYNTAX", ","},
+		{"three space separated BY fields", `index=main | chart count by path level host`, "SPL_UNSUPPORTED_CHART_SYNTAX", "host"},
+		{"two column splits after OVER", `index=main | chart count over path by level, host`, "SPL_UNSUPPORTED_CHART_SYNTAX", ","},
+		{"BY before OVER", `index=main | chart count by path over level`, "SPL_UNSUPPORTED_CHART_SYNTAX", "over"},
+		{"repeated OVER", `index=main | chart count over path over level`, "SPL_UNSUPPORTED_CHART_SYNTAX", "over"},
+		{"missing OVER or BY", `index=main | chart count path level`, "SPL_UNSUPPORTED_CHART_SYNTAX", "path"},
+		{"wildcard row field", `index=main | chart count over path* by level`, "SPL_UNSUPPORTED_CHART_SYNTAX", "path*"},
+		{"wildcard column field", `index=main | chart count over path by level*`, "SPL_UNSUPPORTED_CHART_SYNTAX", "level*"},
+		{"wildcard BY list field", `index=main | chart count by path, level*`, "SPL_UNSUPPORTED_CHART_SYNTAX", "level*"},
+		{"quoted row field", `index=main | chart count over "path" by level`, "SPL_UNSUPPORTED_CHART_SYNTAX", `"path"`},
+		{"quoted column field", `index=main | chart count over path by "level"`, "SPL_UNSUPPORTED_CHART_SYNTAX", `"level"`},
+		{"trailing where clause", `index=main | chart count over path by level where count > 100`, "SPL_UNSUPPORTED_CHART_SYNTAX", "where"},
+		{"trailing in top clause", `index=main | chart count over path by level in top 5`, "SPL_UNSUPPORTED_CHART_SYNTAX", "in"},
+		{"trailing token", `index=main | chart count by path, level extra`, "SPL_UNSUPPORTED_CHART_SYNTAX", "extra"},
+		{"missing field after OVER", `index=main | chart count over`, "SPL_EXPECTED_FIELD", ""},
+		{"missing field after BY", `index=main | chart count over path by`, "SPL_EXPECTED_FIELD", ""},
+		{"missing field after BY list", `index=main | chart count by`, "SPL_EXPECTED_FIELD", ""},
+		{"trailing comma promises a third field", `index=main | chart count by path, level,`, "SPL_UNSUPPORTED_CHART_SYNTAX", ","},
+		{"trailing comma after one field", `index=main | chart count by path,`, "SPL_EXPECTED_FIELD", ""},
+		{"leading comma", `index=main | chart count by , path`, "SPL_EXPECTED_FIELD", ","},
+		{"empty comma", `index=main | chart count by path,, level`, "SPL_EXPECTED_FIELD", ","},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(test.source)
+			if err == nil {
+				t.Fatal("Parse succeeded")
+			}
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != test.code {
+				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
+			}
+			if test.locatedAt != "" {
+				got := test.source[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset]
+				if got != test.locatedAt {
+					t.Fatalf("diagnostic source = %q, want %q", got, test.locatedAt)
+				}
+			}
+		})
+	}
+}
+
+func TestParseChartSingleSplitSuggestsStats(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=main | chart count over path`,
+		`index=main | chart count by path`,
+		`index=main | chart count`,
+	} {
+		_, err := Parse(source)
+		diagnostic, ok := err.(*Diagnostic)
+		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_SYNTAX" {
+			t.Fatalf("Parse(%q) diagnostic = %#v", source, err)
+		}
+		if !slices.Contains(diagnostic.Suggestions, "stats count BY <field>") {
+			t.Fatalf("Parse(%q) suggestions = %v, want the stats equivalent", source, diagnostic.Suggestions)
+		}
+	}
+}
+
+func TestParseChartCountsAsOnePipelineCommand(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | bin severity span=10 | chart count over severity by level`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(query.Commands) != 2 {
+		t.Fatalf("command count = %d, want bin and chart", len(query.Commands))
+	}
+	if _, ok := query.Commands[1].(*ChartCommand); !ok {
+		t.Fatalf("second command = %T, want *ChartCommand", query.Commands[1])
 	}
 }
 

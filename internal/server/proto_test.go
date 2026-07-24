@@ -8,6 +8,7 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
@@ -180,7 +181,7 @@ func TestMixedSchemaRetainsConcreteCellType(t *testing.T) {
 		Schema:   searchjobs.Schema{Columns: []searchjobs.Column{{Name: "_raw", Kind: searchjobs.ValueKindMixed, Nullable: true}}},
 		Rows:     []searchjobs.ResultRow{{Ordinal: 0, Values: []searchjobs.Value{searchjobs.BytesValue([]byte{0xff})}}},
 		Complete: true,
-	}, opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS, false, false)
+	}, searchjobproto.ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS}, false, false)
 	if err != nil {
 		t.Fatalf("resultPageToProto: %v", err)
 	}
@@ -216,7 +217,7 @@ func TestSearchJobAndResultPageExposeRetainedResultTruncation(t *testing.T) {
 		Rows:      []searchjobs.ResultRow{{Ordinal: 9_999, Values: []searchjobs.Value{searchjobs.UnsignedValue(1)}}},
 		TotalRows: 10_000,
 		Complete:  true,
-	}, opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS, true, true)
+	}, searchjobproto.ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS}, true, true)
 	if err != nil {
 		t.Fatalf("resultPageToProto: %v", err)
 	}
@@ -231,7 +232,7 @@ func TestSearchJobAndResultPageExposeRetainedResultTruncation(t *testing.T) {
 		Schema:    searchjobs.Schema{Columns: []searchjobs.Column{{Name: "count", Kind: searchjobs.ValueKindUnsigned}}},
 		TotalRows: 10_000,
 		Complete:  true,
-	}, opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS, true, false)
+	}, searchjobproto.ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS}, true, false)
 	if err != nil {
 		t.Fatalf("resultPageToProto(complete): %v", err)
 	}
@@ -304,8 +305,8 @@ func TestResultKindForSPLRecognizesTransformingCommands(t *testing.T) {
 		"index=main | unsupported": opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED,
 	}
 	for source, want := range tests {
-		if got := resultKindForSPL(source); got != want {
-			t.Errorf("resultKindForSPL(%q) = %v, want %v", source, got, want)
+		if got := resultShapeForSPL(source).Kind; got != want {
+			t.Errorf("resultShapeForSPL(%q).Kind = %v, want %v", source, got, want)
 		}
 	}
 }
@@ -317,7 +318,7 @@ func TestTimeSeriesSchemaMarksWideSeriesAsMetrics(t *testing.T) {
 		{Name: "_time", Kind: searchjobs.ValueKindTime},
 		{Name: "ERROR", Kind: searchjobs.ValueKindUnsigned},
 		{Name: "NULL", Kind: searchjobs.ValueKindUnsigned},
-	}}, opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES)
+	}}, searchjobproto.ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES, RuntimeNamedColumns: true})
 	if err != nil {
 		t.Fatal(err)
 	}

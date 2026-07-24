@@ -244,6 +244,109 @@ func TestReexecutionSourceAdmitsBoundedDynamicTimechartSchema(t *testing.T) {
 	}
 }
 
+func TestReexecutionSourceAdmitsBoundedDynamicChartSchema(t *testing.T) {
+	t.Parallel()
+	searches, _, access := newReexecutionTestSearches()
+	searches.job.SPL = `index=main | chart count OVER path BY status`
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "path", Kind: searchjobs.ValueKindString},
+		{Name: "api", Kind: searchjobs.ValueKindUnsigned},
+		{Name: "OTHER", Kind: searchjobs.ValueKindUnsigned},
+	}}
+	searches.pin.schema = schema
+	executor := reexecutionTestExecutor(func(_ context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) error {
+		if query.Chart == nil || query.Chart.RowField != "path" {
+			t.Fatalf("re-executed query lost its chart contract: %#v", query.Chart)
+		}
+		if err := sink.SetSchema(schema); err != nil {
+			return err
+		}
+		return sink.AddRow([]searchjobs.Value{
+			searchjobs.StringValue("/a"),
+			searchjobs.UnsignedValue(3),
+			searchjobs.UnsignedValue(1),
+		})
+	})
+	source := newReexecutionTestSource(t, searches, executor, nil)
+	lease, err := source.AcquireResultsFor(context.Background(), access, searches.job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, ok, err := lease.Next(context.Background())
+	if err != nil || !ok || len(row.Values) != len(schema.Columns) {
+		t.Fatalf("Next(chart) = (%#v, %t, %v)", row, ok, err)
+	}
+	if _, ok, err := lease.Next(context.Background()); err != nil || ok {
+		t.Fatalf("terminal Next(chart) = ok %t err %v", ok, err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSchemaMatchesCompiledChartRejectsForeignWideSchemas pins the export-side
+// duplicate of the wide-schema admission rule for the pivot's runtime-named,
+// runtime-typed first column.
+func TestSchemaMatchesCompiledChartRejectsForeignWideSchemas(t *testing.T) {
+	t.Parallel()
+
+	compiled := clickhouse.CompiledQuery{
+		OutputFields: []string{"path"},
+		Chart: &clickhouse.ChartOutput{
+			RowField: "path", RowKind: clickhouse.ChartRowKindString, RowDatabaseType: "String",
+			RowLimit: 10_000, MaxSeries: 2, MaxLabelBytes: 256,
+		},
+	}
+	valid := searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "path", Kind: searchjobs.ValueKindString},
+		{Name: "api", Kind: searchjobs.ValueKindUnsigned},
+	}}
+	if !schemaMatchesCompiledQuery(valid, compiled) {
+		t.Fatal("valid bounded pivot schema was rejected")
+	}
+	for _, test := range []struct {
+		name   string
+		schema searchjobs.Schema
+		mutate func(*clickhouse.CompiledQuery)
+	}{
+		{name: "wrong row name", schema: searchjobs.Schema{Columns: []searchjobs.Column{{Name: "_time", Kind: searchjobs.ValueKindTime}}}},
+		{name: "wrong row kind", schema: searchjobs.Schema{Columns: []searchjobs.Column{{Name: "path", Kind: searchjobs.ValueKindUnsigned}}}},
+		{
+			name: "too many series",
+			schema: searchjobs.Schema{Columns: []searchjobs.Column{
+				{Name: "path", Kind: searchjobs.ValueKindString},
+				{Name: "a", Kind: searchjobs.ValueKindUnsigned},
+				{Name: "b", Kind: searchjobs.ValueKindUnsigned},
+				{Name: "c", Kind: searchjobs.ValueKindUnsigned},
+			}},
+		},
+		{name: "empty schema", schema: searchjobs.Schema{}},
+		{
+			name: "row kind unset", schema: valid,
+			mutate: func(query *clickhouse.CompiledQuery) { query.Chart.RowKind = clickhouse.ChartRowKindInvalid },
+		},
+		{
+			name: "two wide contracts", schema: valid,
+			mutate: func(query *clickhouse.CompiledQuery) {
+				query.Timechart = &clickhouse.TimechartOutput{MaxSeries: 2, MaxLabelBytes: 256}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			candidate := compiled
+			chart := *compiled.Chart
+			candidate.Chart = &chart
+			if test.mutate != nil {
+				test.mutate(&candidate)
+			}
+			if schemaMatchesCompiledQuery(test.schema, candidate) {
+				t.Fatalf("schemaMatchesCompiledQuery admitted %q", test.name)
+			}
+		})
+	}
+}
+
 func TestReexecutionSourceRejectsDescriptorWideningAndReleasesPin(t *testing.T) {
 	t.Parallel()
 	searches, _, access := newReexecutionTestSearches()

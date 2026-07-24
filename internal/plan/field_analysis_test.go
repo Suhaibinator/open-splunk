@@ -72,6 +72,7 @@ func TestValidateFieldAnalysisEligibilityRejectsTransformingAndForgedRelations(t
 		{name: "invalid project", query: &Query{Operators: []Operator{base.Operators[0], &Project{Mode: ProjectModeInvalid}}}},
 		{name: "aggregate", query: &Query{Operators: []Operator{base.Operators[0], &Aggregate{}}}},
 		{name: "timechart", query: &Query{Operators: []Operator{base.Operators[0], &Timechart{}}}},
+		{name: "chart", query: &Query{Operators: []Operator{base.Operators[0], &Chart{}}}},
 		{name: "window", query: &Query{Operators: []Operator{base.Operators[0], &Window{}}}},
 		{name: "future operator", query: &Query{Operators: []Operator{base.Operators[0], &fieldAnalysisFutureOperator{}}}},
 	}
@@ -87,6 +88,25 @@ func TestValidateFieldAnalysisEligibilityRejectsTransformingAndForgedRelations(t
 			var diagnostic *Diagnostic
 			if !errors.As(err, &diagnostic) || diagnostic.Code != "SPL_UNSUPPORTED_FIELD_ANALYSIS_PIPELINE" {
 				t.Fatalf("error = %v, want field-analysis pipeline diagnostic", err)
+			}
+		})
+	}
+}
+
+func TestValidateFieldAnalysisEligibilityRejectsBuiltChartRelations(t *testing.T) {
+	for _, source := range []string{
+		`index=gradethis | chart count OVER path BY level`,
+		`index=gradethis | bin severity span=10 | chart count BY severity, level`,
+	} {
+		t.Run(source, func(t *testing.T) {
+			logical, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			var diagnostic *Diagnostic
+			if !errors.As(ValidateFieldAnalysisEligibility(logical), &diagnostic) ||
+				diagnostic.Code != "SPL_UNSUPPORTED_FIELD_ANALYSIS_PIPELINE" {
+				t.Fatalf("chart relation was admitted for field analysis")
 			}
 		})
 	}

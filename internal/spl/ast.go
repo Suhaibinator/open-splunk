@@ -546,6 +546,31 @@ func (*TimechartCommand) command()             {}
 func (*TimechartCommand) Name() string         { return "timechart" }
 func (c *TimechartCommand) SourceRange() Range { return c.Range }
 
+// ChartCommand produces a bounded runtime-wide pivot: one row per distinct
+// value of the row split and one runtime count series per retained value of
+// the column split. The initial compatibility slice supports exactly one
+// argument-free count and two distinct split fields, and is a terminal
+// transforming command.
+type ChartCommand struct {
+	Function       AggregateFunction
+	AggregateRange Range
+	// Over is Splunk's row-split field: the first output column.
+	Over StatsGroupField
+	// SplitBy is Splunk's column-split field: its runtime values become the
+	// remaining output column names.
+	SplitBy StatsGroupField
+	// OverSpelledOver records whether the user wrote OVER <row> BY <column>
+	// rather than the equivalent BY <row>, <column>. Both spellings describe
+	// the same pivot and must lower to identical plans; the flag exists only
+	// so diagnostics and source round-trips stay exact.
+	OverSpelledOver bool
+	Range           Range
+}
+
+func (*ChartCommand) command()             {}
+func (*ChartCommand) Name() string         { return "chart" }
+func (c *ChartCommand) SourceRange() Range { return c.Range }
+
 // Diagnostic is a stable, source-located parse or compatibility error.
 type Diagnostic struct {
 	Code        string

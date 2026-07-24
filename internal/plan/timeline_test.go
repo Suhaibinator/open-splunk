@@ -58,6 +58,8 @@ func TestValidateTimelineEligibilityRejectsTransformedOrSyntheticTime(t *testing
 		{`index=gradethis | top level`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
 		{`index=gradethis | rare level`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
 		{`index=gradethis | timechart span=5m count BY level`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
+		{`index=gradethis | chart count OVER path BY level`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
+		{`index=gradethis | bin _time span=5m | chart count OVER _time BY level`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
 	}
 	for _, test := range tests {
 		t.Run(test.source, func(t *testing.T) {
@@ -94,6 +96,7 @@ func TestValidateTimelineEligibilityRejectsForgedPlans(t *testing.T) {
 		{name: "unknown", query: &Query{Operators: []Operator{valid.Operators[0], &timelineUnknownOperator{}}}},
 		{name: "dynamic output", query: &Query{Operators: valid.Operators, DynamicOutput: &DynamicSeriesOutput{FixedFields: []string{"_time"}, MaxSeries: 1}}},
 		{name: "invalid project", query: &Query{Operators: []Operator{valid.Operators[0], &Project{Mode: ProjectModeInvalid}}}},
+		{name: "chart without dynamic output", query: &Query{Operators: []Operator{valid.Operators[0], &Chart{}}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

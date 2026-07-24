@@ -26,8 +26,17 @@ const (
 	maxTimechartSpan         = 24 * time.Hour
 	timechartSeriesLimit     = 10
 	maxTimechartSeries       = 12
-	maxDedupFields           = 16
-	maxRexOutputsPerQuery    = 64
+	// Chart's row axis is runtime data rather than a plan-time constant, so
+	// it carries its own explicit ceiling. Splunk truncates at the
+	// installation-configurable maxresultrows; this backend instead fails
+	// atomically, exactly as the timechart bucket ceiling does.
+	maxChartRows = 10_000
+	// Splunk documents chart's column-series defaults as limit=top 10 with
+	// useother=true and usenull=true, so at most twelve series exist.
+	chartSeriesLimit      = 10
+	maxChartSeries        = 12
+	maxDedupFields        = 16
+	maxRexOutputsPerQuery = 64
 )
 
 // Scope is the server-resolved security and snapshot boundary for a search.
@@ -592,6 +601,80 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				IncludePartial: true,
 				Range:          command.Range,
 			})
+		case *spl.ChartCommand:
+			if commandIndex+1 != len(query.Commands) {
+				next := query.Commands[commandIndex+1]
+				return nil, &Diagnostic{
+					Code:        "SPL_UNSUPPORTED_CHART_PIPELINE",
+					Message:     "chart must be the final pipeline command in this compatibility version",
+					Range:       next.SourceRange(),
+					Suggestions: []string{"move chart to the final pipeline stage"},
+				}
+			}
+			if command.Function != spl.AggregateFunctionCount {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_CHART_AGGREGATE",
+					Message: "unsupported chart aggregate",
+					Range:   command.AggregateRange,
+				}
+			}
+			// usenull and useother default to true, so NULL and OTHER are
+			// always reachable public column names. A field spelled like one
+			// of them would collide with a series deterministically.
+			for _, axis := range []spl.StatsGroupField{command.Over, command.SplitBy} {
+				if axis.Name == "NULL" || axis.Name == "OTHER" {
+					return nil, &Diagnostic{
+						Code:        "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
+						Message:     fmt.Sprintf("%q and %q are reserved chart series names", "NULL", "OTHER"),
+						Range:       axis.Range,
+						Suggestions: []string{"rename the field before chart"},
+					}
+				}
+				if !outputSchemaKnown && axis.Name == "fields" {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
+						Message: "chart cannot use the event result's reserved fields payload without an exact upstream schema",
+						Range:   axis.Range,
+						Suggestions: []string{
+							"select an exact ordinary field with table before chart",
+							"produce a closed stats schema before charting fields",
+						},
+					}
+				}
+			}
+			canonicalTimeAvailable = false
+			over, overErr := ResolveField(command.Over.Name, command.Over.Range)
+			if overErr != nil {
+				return nil, overErr
+			}
+			splitBy, splitErr := ResolveField(command.SplitBy.Name, command.SplitBy.Range)
+			if splitErr != nil {
+				return nil, splitErr
+			}
+			if over.Name == splitBy.Name {
+				return nil, &Diagnostic{
+					Code:    "SPL_DUPLICATE_FIELD",
+					Message: fmt.Sprintf("chart row and column field %q is repeated", splitBy.Name),
+					Range:   command.SplitBy.Range,
+				}
+			}
+			result.OutputFields = nil
+			result.DynamicOutput = &DynamicSeriesOutput{
+				FixedFields: []string{over.Name},
+				MaxSeries:   maxChartSeries,
+			}
+			result.Operators = append(result.Operators, &Chart{
+				Over:         over,
+				SplitBy:      splitBy,
+				Function:     AggregateFunctionCountRows,
+				RowLimit:     maxChartRows,
+				SeriesLimit:  chartSeriesLimit,
+				IncludeNull:  true,
+				IncludeOther: true,
+				NullLabel:    "NULL",
+				OtherLabel:   "OTHER",
+				Range:        command.Range,
+			})
 		default:
 			return nil, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_COMMAND",
@@ -977,7 +1060,7 @@ func positiveIndexReferences(
 					return references
 				}
 			}
-		case *spl.StatsCommand, *spl.TopCommand, *spl.RareCommand, *spl.TimechartCommand:
+		case *spl.StatsCommand, *spl.TopCommand, *spl.RareCommand, *spl.TimechartCommand, *spl.ChartCommand:
 			return references
 		}
 		if search, ok := command.(*spl.SearchCommand); ok {

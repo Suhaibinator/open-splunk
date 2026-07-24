@@ -1427,11 +1427,17 @@ func (manager *Manager) run(entry *jobEntry) {
 		cloned := *compiled.Timechart
 		timechart = &cloned
 	}
+	var chart *clickhouse.ChartOutput
+	if compiled.Chart != nil {
+		cloned := *compiled.Chart
+		chart = &cloned
+	}
 	sink := &resultSink{
 		manager:        manager,
 		entry:          entry,
 		expectedFields: cloneStrings(compiled.OutputFields),
 		timechart:      timechart,
+		chart:          chart,
 	}
 	executionContext, cancelExecution := context.WithTimeout(entry.ctx, manager.maxRuntime)
 	defer cancelExecution()
@@ -1846,6 +1852,7 @@ type resultSink struct {
 	ctx            context.Context
 	expectedFields []string
 	timechart      *clickhouse.TimechartOutput
+	chart          *clickhouse.ChartOutput
 	closed         bool
 	receivedSchema bool
 	firstErr       error
@@ -1896,10 +1903,15 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 		return sink.rememberLocked(fmt.Errorf("%w: schema was emitted more than once", ErrInvalidResult))
 	}
 	var schemaErr error
-	if sink.timechart == nil {
-		schemaErr = validateSchema(schema, sink.expectedFields)
-	} else {
+	switch {
+	case sink.timechart != nil && sink.chart != nil:
+		schemaErr = fmt.Errorf("%w: two wide result contracts were declared", ErrInvalidResult)
+	case sink.timechart != nil:
 		schemaErr = validateTimechartSchema(schema, sink.expectedFields, *sink.timechart)
+	case sink.chart != nil:
+		schemaErr = validateChartSchema(schema, sink.expectedFields, *sink.chart)
+	default:
+		schemaErr = validateSchema(schema, sink.expectedFields)
 	}
 	if schemaErr != nil {
 		return sink.rememberLocked(schemaErr)
@@ -2160,6 +2172,67 @@ func validateTimechartSchema(schema Schema, expected []string, output clickhouse
 		if len(column.Name) > maximumPublicBytes || strings.HasPrefix(column.Name, "_") ||
 			column.Kind != ValueKindUnsigned || column.Nullable || column.Multivalue {
 			return fmt.Errorf("%w: timechart schema column %d is invalid", ErrInvalidResult, index)
+		}
+	}
+	return nil
+}
+
+// chartRowSchemaKind maps the compiled pivot's declared row kind onto the
+// public schema kind. Unlike timechart, a chart's first column is named and
+// typed from the row field rather than being the canonical time column.
+func chartRowSchemaKind(kind clickhouse.ChartRowKind) (ValueKind, bool) {
+	switch kind {
+	case clickhouse.ChartRowKindString:
+		return ValueKindString, true
+	case clickhouse.ChartRowKindSigned:
+		return ValueKindSigned, true
+	case clickhouse.ChartRowKindUnsigned:
+		return ValueKindUnsigned, true
+	case clickhouse.ChartRowKindDouble:
+		return ValueKindDouble, true
+	case clickhouse.ChartRowKindBool:
+		return ValueKindBool, true
+	case clickhouse.ChartRowKindTime:
+		return ValueKindTime, true
+	case clickhouse.ChartRowKindMixed:
+		return ValueKindMixed, true
+	default:
+		return ValueKindInvalid, false
+	}
+}
+
+func validateChartSchema(schema Schema, expected []string, output clickhouse.ChartOutput) error {
+	rowKind, ok := chartRowSchemaKind(output.RowKind)
+	if !ok || output.RowField == "" || !slices.Equal(expected, []string{output.RowField}) ||
+		len(schema.Columns) == 0 || len(schema.Columns)-1 > int(output.MaxSeries) {
+		return fmt.Errorf("%w: chart schema exceeds the compiled output", ErrInvalidResult)
+	}
+	seen := make(map[string]struct{}, len(schema.Columns))
+	for index, column := range schema.Columns {
+		if column.Name == "" || !utf8.ValidString(column.Name) {
+			return fmt.Errorf("%w: chart schema column %d has an invalid name", ErrInvalidResult, index)
+		}
+		if _, exists := seen[column.Name]; exists {
+			return fmt.Errorf("%w: chart schema column %q is duplicated", ErrInvalidResult, column.Name)
+		}
+		seen[column.Name] = struct{}{}
+		if index == 0 {
+			// A Mixed row column is the nullable column the ordinary result
+			// path publishes for the same field; every other kind stays
+			// non-nullable by construction.
+			if column.Name != output.RowField || column.Kind != rowKind || column.Multivalue ||
+				column.Nullable != (rowKind == ValueKindMixed) {
+				return fmt.Errorf("%w: chart schema has an invalid row column", ErrInvalidResult)
+			}
+			continue
+		}
+		maximumPublicBytes := int(output.MaxLabelBytes)
+		if strings.HasPrefix(column.Name, "VALUE_") {
+			maximumPublicBytes += len("VALUE")
+		}
+		if len(column.Name) > maximumPublicBytes || strings.HasPrefix(column.Name, "_") ||
+			column.Kind != ValueKindUnsigned || column.Nullable || column.Multivalue {
+			return fmt.Errorf("%w: chart schema column %d is invalid", ErrInvalidResult, index)
 		}
 	}
 	return nil

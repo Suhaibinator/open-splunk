@@ -26,8 +26,43 @@ pulling `origin/main`.
 - The executable SPL v0.1 contract and GradeThis compatibility corpus cover
   base search, field comparisons, Boolean expressions, `fields`, `table`,
   `rename`, `sort`, `head`, `tail`, `dedup`, the documented `eval`/`where`
-  subset, `stats` (`count`, `sum`, `avg`, and `p95`), `top`, `rare`, and
-  `timechart`.
+  subset, `stats` (`count`, `sum`, `avg`, and `p95`), `top`, `rare`,
+  `timechart`, and the two-field `chart` pivot.
+- This checkpoint adds the first `chart` slice, a bounded runtime-wide
+  two-field pivot:
+  - the accepted surface is `chart count OVER <row> BY <col>` and
+    `chart count BY <row>, <col>`, compiling to identical plans and SQL; every
+    other aggregate, option, `WHERE` clause, wildcard, single-split form, and
+    duplicated axis is a source-located diagnostic;
+  - undocumented Splunk behavior became explicit chosen boundaries in the
+    contract (tie-breaks, empty cells, row ordering, reserved `NULL`/`OTHER`
+    series names) rather than guesses;
+  - behavior matches Splunk's documented defaults `limit=top 10`,
+    `useother=true`, and `usenull=true`; the top-ten column domain is selected
+    one-dimensionally before the row-keyed aggregation so the intermediate
+    GROUP BY stays bounded at rows times thirteen;
+  - `chart` is terminal, publishes through the hardened timechart runtime
+    series transport (`MaxSeries` 12, atomic invalid flag, schema before
+    rows), and is rejected by field analysis, field summaries, and timelines;
+  - the row axis reproduces `stats count BY` group semantics for fixed,
+    Dynamic, binned, `_raw` (a Mixed kind tolerating binary), and
+    statically-null fields; column labels are validated for length, UTF-8,
+    reserved names, and VALUE-normalization collisions over all input events;
+  - the pivot is bounded end to end: a 10,000-row ceiling and a 48 MiB
+    executor byte guard both fail atomically with a classified execution-limit
+    error before any publication, and the buffered path has cancellation,
+    mid-stream error, and ceiling tests in every window;
+  - compiled chart and timechart SQL now carry
+    `SETTINGS enable_materialized_cte = 1` so the materialized-CTE single-scan
+    bound holds on any connection, and scalar-subquery references that
+    re-scanned storage were rewritten into relation references for both
+    commands;
+  - runtime-named count columns are published as metric columns through a new
+    protobuf result shape rather than as event metadata, and CSV export
+    header/cell encoding is injective for hostile data-derived column names;
+  - `search` comparisons on charted fields, keyword-shaped field names, both
+    spellings across 18+ upstream command families, and the 64-command/16 KiB
+    budgets are pinned by hostile parser/plan/compiler/integration suites.
 - This checkpoint adds the first bounded extraction-mode `rex` slice:
   - `_raw` is the default source and `field=<exact field>` selects another;
   - the supported surface is the first match, equivalently `max_match=1`;
@@ -132,8 +167,8 @@ pulling `origin/main`.
 
 ## Validation for the checkpoint
 
-The following backend commands passed for the runtime Dynamic `bin`/`bucket`
-checkpoint:
+The following backend commands passed for the `chart` checkpoint (905 and 577
+integration subtests respectively, zero skips):
 
 ```sh
 go test ./... -count=1 -timeout=5m
@@ -141,7 +176,7 @@ go test -race ./internal/splregex ./internal/spl ./internal/plan ./internal/clic
 go vet ./...
 go build ./...
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/clickhouse -count=1 -timeout=15m
-OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/queryexec -run '^TestExecutorAndManagerAgainstClickHouse$' -count=1 -timeout=6m
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/queryexec -count=1 -timeout=10m
 ```
 
 The unrestricted `internal/clickhouse` integration run now includes three
@@ -156,6 +191,17 @@ summaries over binned output), and `bin_edge_pipeline_integration_test.go`
 (long chained pipelines, `sort`/`search`/`where` over a binned destination, the
 default in-place form, fixed-versus-Dynamic convergence, and streaming-shape
 assertions).
+
+The `chart` slice adds its own pinned suites: `chart_edge_integration_test.go`
+and `chart_break_pivot_integration_test.go` in `internal/clickhouse` (hostile
+labels, unicode/normalization collisions, tie-breaks, `OTHER`/`NULL`
+arithmetic reconciled against `stats`, Dynamic and binned axes, ceilings under
+real group budgets), `chart_break_pipeline_*` across `internal/spl`,
+`internal/plan`, and `internal/clickhouse` (keyword-shaped names, spelling
+equivalence over 18 upstream families, budgets, diagnostics), and
+`chart_break_transport_*` across `internal/queryexec`, `internal/searchjobs`,
+`internal/export`, and `internal/searchws` (byte-exact ceilings, cancellation
+in every buffered window, paging, export encoding, protobuf result shape).
 
 The pinned Docker test uses `clickhouse/clickhouse-server:26.3.17.4`. Its `rex`
 fixture covers ordinary and Unicode extraction, simultaneous captures,
@@ -186,10 +232,13 @@ test as database validation.
    approximated. Automatic `bins`/`minspan`, `start`/`end`, `aligntime`,
    calendar/subsecond spans, and logarithmic spans remain separate
    whole-input/alignment features and must not be approximated.
-2. Implement `chart` after numeric binning, then `spath`, in conformance-first,
-   test-driven slices with pinned ClickHouse fixtures. A meaningful two-field
-   `chart` is a bounded runtime-wide pivot, not a `stats` alias; reuse the
-   hardened timechart series transport and the new discretization contract.
+2. Implement `spath` in conformance-first, test-driven slices with pinned
+   ClickHouse fixtures. The two-field `chart` pivot is complete; later chart
+   slices (further aggregates, `limit`/`useother`/`usenull` options, the
+   single-split form, `span` discretization of numeric column axes) should
+   follow the same contract-first pattern and reuse the chart transport. The
+   frontend does not yet render chart results (only `timechart` maps to a
+   visualization mode); wire that when frontend work resumes.
 3. Extend `rex` only behind new compatibility tests. Still unsupported are
    `max_match=0`, `max_match>1`, `offset_field`, sed mode, quoted/wildcard field
    names, and PCRE-only constructs such as lookaround and backreferences.

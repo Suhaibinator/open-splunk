@@ -163,6 +163,8 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseBinCommand(nameToken)
 	case "timechart":
 		return p.parseTimechartCommand(nameToken)
+	case "chart":
+		return p.parseChartCommand(nameToken)
 	default:
 		return nil, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_COMMAND",
@@ -781,6 +783,227 @@ func (p *parser) unsupportedTimechartSyntax(tok token, message string) *Diagnost
 		Message:     message,
 		Range:       tok.range_,
 		Suggestions: []string{"timechart span=5m count by field"},
+	}
+}
+
+// parseChartCommand parses the bounded two-field pivot
+// "chart count OVER <row> BY <column>" and its equivalent spelling
+// "chart count BY <row>, <column>". Chart never discretizes, so no option is
+// accepted; bin/bucket remains the only discretizer.
+func (p *parser) parseChartCommand(name token) (Command, error) {
+	if diagnostic := p.chartOptionDiagnostic(); diagnostic != nil {
+		return nil, diagnostic
+	}
+	aggregate := p.current()
+	if aggregate.kind != tokenWord || !strings.EqualFold(aggregate.text, "count") {
+		return nil, p.unsupportedChartAggregate(aggregate, "only argument-free count is supported by chart")
+	}
+	if p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenLeftParen {
+		return nil, p.unsupportedChartAggregate(aggregate, "count arguments are not supported by chart; use argument-free count")
+	}
+	p.advance()
+	if p.isKeyword("AS") {
+		return nil, p.unsupportedChartAggregate(
+			p.current(),
+			"chart count cannot be renamed with AS because no pivot column can carry the alias",
+		)
+	}
+	if diagnostic := p.chartOptionDiagnostic(); diagnostic != nil {
+		return nil, diagnostic
+	}
+
+	var over, splitBy StatsGroupField
+	overSpelledOver := false
+	switch {
+	case p.isKeyword("OVER"):
+		overSpelledOver = true
+		p.advance()
+		row, rowErr := p.parseChartField("OVER")
+		if rowErr != nil {
+			return nil, rowErr
+		}
+		over = row
+		if p.atCommandEnd() {
+			return nil, p.chartSingleSplitSyntax()
+		}
+		if !p.isKeyword("BY") {
+			return nil, p.chartClauseDiagnostic("chart OVER requires BY followed by one column split field")
+		}
+		p.advance()
+		column, columnErr := p.parseChartField("BY")
+		if columnErr != nil {
+			return nil, columnErr
+		}
+		splitBy = column
+		if !p.atCommandEnd() {
+			return nil, p.chartClauseDiagnostic("chart supports exactly one row split field and one column split field")
+		}
+	case p.isKeyword("BY"):
+		p.advance()
+		row, column, fieldsErr := p.parseChartSplitFields()
+		if fieldsErr != nil {
+			return nil, fieldsErr
+		}
+		over, splitBy = row, column
+	default:
+		if p.atCommandEnd() {
+			return nil, p.chartSingleSplitSyntax()
+		}
+		current := p.current()
+		if current.kind == tokenComma || (current.kind == tokenWord && (supportedStatsAggregateName(current.text) ||
+			(p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenLeftParen))) {
+			return nil, p.unsupportedChartAggregate(current, "only one chart aggregate is supported; use argument-free count")
+		}
+		return nil, p.chartClauseDiagnostic("chart count requires OVER <row> BY <column> or BY <row>, <column>")
+	}
+
+	if over.Name == splitBy.Name {
+		return nil, p.unsupportedChartSyntaxAt(splitBy.Range, "chart row and column fields must be different")
+	}
+	return &ChartCommand{
+		Function:        AggregateFunctionCount,
+		AggregateRange:  aggregate.range_,
+		Over:            over,
+		SplitBy:         splitBy,
+		OverSpelledOver: overSpelledOver,
+		Range:           Range{Start: name.range_.Start, End: splitBy.Range.End},
+	}, nil
+}
+
+// parseChartSplitFields parses exactly two comma-, whitespace-, or
+// comma-and-whitespace-separated split fields, using the stats BY separator
+// rule. A trailing comma and a third field are both rejected.
+func (p *parser) parseChartSplitFields() (StatsGroupField, StatsGroupField, error) {
+	var fields []StatsGroupField
+	wantField := true
+	for !p.atCommandEnd() {
+		tok := p.current()
+		if tok.kind == tokenComma {
+			if wantField {
+				return StatsGroupField{}, StatsGroupField{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", "chart BY requires a split field")
+			}
+			if len(fields) == 2 {
+				return StatsGroupField{}, StatsGroupField{}, p.unsupportedChartSyntax(
+					tok, "chart supports exactly one row split field and one column split field",
+				)
+			}
+			wantField = true
+			p.advance()
+			continue
+		}
+		// OVER is only a misplaced keyword where a field cannot begin: after an
+		// already-parsed field with no separating comma. At the start of the
+		// list or just after a comma it is an ordinary field name, and the two
+		// documented spellings must agree about it.
+		if p.isKeyword("OVER") && !wantField {
+			return StatsGroupField{}, StatsGroupField{}, p.unsupportedChartSyntax(
+				tok, "chart requires OVER before the BY column split field",
+			)
+		}
+		if len(fields) == 2 {
+			return StatsGroupField{}, StatsGroupField{}, p.chartClauseDiagnostic(
+				"chart supports exactly one row split field and one column split field",
+			)
+		}
+		field, err := p.parseChartField("BY")
+		if err != nil {
+			return StatsGroupField{}, StatsGroupField{}, err
+		}
+		fields = append(fields, field)
+		wantField = false
+	}
+	if wantField {
+		return StatsGroupField{}, StatsGroupField{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", "chart BY requires a split field")
+	}
+	if len(fields) != 2 {
+		return StatsGroupField{}, StatsGroupField{}, p.chartSingleSplitSyntax()
+	}
+	return fields[0], fields[1], nil
+}
+
+func (p *parser) parseChartField(clause string) (StatsGroupField, error) {
+	if p.atCommandEnd() {
+		return StatsGroupField{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", "chart "+clause+" requires one split field")
+	}
+	if diagnostic := p.chartOptionDiagnostic(); diagnostic != nil {
+		return StatsGroupField{}, diagnostic
+	}
+	field := p.current()
+	if field.kind == tokenString {
+		return StatsGroupField{}, p.unsupportedChartSyntax(field, "quoted chart field names are not supported")
+	}
+	if field.kind != tokenWord {
+		return StatsGroupField{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", "chart "+clause+" requires one split field")
+	}
+	if strings.Contains(field.text, "*") {
+		return StatsGroupField{}, p.unsupportedChartSyntax(field, "wildcard chart fields are not supported")
+	}
+	p.advance()
+	return StatsGroupField{Name: field.text, Range: field.range_}, nil
+}
+
+// chartOptionDiagnostic rejects every <name>=<value> token, including
+// spellings equal to Splunk's documented defaults, which chart implements
+// without letting them be restated. agg= names the aggregate rather than a
+// rendering option and keeps the aggregate classification.
+func (p *parser) chartOptionDiagnostic() *Diagnostic {
+	option := p.current()
+	if option.kind != tokenWord || p.index+1 >= len(p.tokens) || p.tokens[p.index+1].kind != tokenEqual {
+		return nil
+	}
+	if strings.EqualFold(option.text, "agg") {
+		return p.unsupportedChartAggregate(option, "chart agg= is not supported; only argument-free count is available")
+	}
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_CHART_OPTION",
+		Message:     fmt.Sprintf("chart option %q is not supported", option.text),
+		Range:       option.range_,
+		Suggestions: []string{"chart count OVER row BY column"},
+	}
+}
+
+// chartClauseDiagnostic classifies an unexpected token at a clause boundary:
+// the trailing series filter and every option keep their own codes so the
+// rejected surface stays distinguishable.
+func (p *parser) chartClauseDiagnostic(message string) *Diagnostic {
+	current := p.current()
+	if current.kind == tokenWord && strings.EqualFold(current.text, "WHERE") {
+		return p.unsupportedChartSyntax(current, "chart WHERE series filters are not supported")
+	}
+	if diagnostic := p.chartOptionDiagnostic(); diagnostic != nil {
+		return diagnostic
+	}
+	return p.unsupportedChartSyntax(current, message)
+}
+
+func (p *parser) chartSingleSplitSyntax() *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_CHART_SYNTAX",
+		Message:     "chart requires one row split field and one column split field",
+		Range:       p.current().range_,
+		Suggestions: []string{"stats count BY <field>", "chart count OVER row BY column"},
+	}
+}
+
+func (p *parser) unsupportedChartAggregate(tok token, message string) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_CHART_AGGREGATE",
+		Message:     message,
+		Range:       tok.range_,
+		Suggestions: []string{"chart count OVER row BY column"},
+	}
+}
+
+func (p *parser) unsupportedChartSyntax(tok token, message string) *Diagnostic {
+	return p.unsupportedChartSyntaxAt(tok.range_, message)
+}
+
+func (p *parser) unsupportedChartSyntaxAt(sourceRange Range, message string) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_CHART_SYNTAX",
+		Message:     message,
+		Range:       sourceRange,
+		Suggestions: []string{"chart count OVER row BY column"},
 	}
 }
 

@@ -55,7 +55,7 @@ func projectSearchWithPreview(ctx context.Context, job searchjobs.Job, preview *
 		{Payload: &opensplunkv1.SearchWebSocketEvent_SearchProgress{SearchProgress: progress}},
 	}
 	if job.Schema != nil {
-		schema, schemaErr := schemaToProto(job.ID, *job.Schema, searchjobproto.ResultKindForSPL(job.SPL))
+		schema, schemaErr := schemaToProto(job.ID, *job.Schema, searchjobproto.ResultShapeForSPL(job.SPL))
 		if schemaErr != nil {
 			return targetProjection{}, schemaErr
 		}
@@ -214,8 +214,8 @@ func exportProgressToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.Exp
 	}, nil
 }
 
-func schemaToProto(id string, schema searchjobs.Schema, resultKind opensplunkv1.ResultSetKind) (*opensplunkv1.ResultSchema, error) {
-	return searchjobproto.Schema(id, schema, resultKind)
+func schemaToProto(id string, schema searchjobs.Schema, shape searchjobproto.ResultShape) (*opensplunkv1.ResultSchema, error) {
+	return searchjobproto.Schema(id, schema, shape)
 }
 
 func searchStateToProto(state searchjobs.State) opensplunkv1.SearchJobState {

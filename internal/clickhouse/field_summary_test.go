@@ -435,6 +435,7 @@ func TestCompileFieldSummaryRejectsTransformingFinalRelations(t *testing.T) {
 	for _, source := range []string{
 		`index=gradethis | stats count BY status`,
 		`index=gradethis | timechart span=1m count BY status`,
+		`index=gradethis | chart count OVER path BY status`,
 	} {
 		_, err := (Compiler{}).CompileFieldSummary(
 			buildPlan(t, source),

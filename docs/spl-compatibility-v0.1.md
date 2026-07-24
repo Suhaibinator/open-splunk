@@ -572,6 +572,186 @@ requested bucket count to at most 130,000 states. Domains with enough distinct
 raw values to exceed that budget fail atomically with an execution-limit error;
 an explicitly configured lower group cap remains authoritative.
 
+### `chart`
+
+```spl
+| chart count OVER path BY status_class
+| chart count BY path, status_class
+```
+
+`chart` is a bounded runtime-wide two-field pivot, not a `stats` alias. The
+initial slice accepts exactly one argument-free `count`, exactly one row-split
+field (Splunk's `<row-split>`, the first output column), and exactly one
+column-split field (the `<column-split>` whose values become column names). The
+two spellings above are the only accepted ones and compile to identical plans
+and SQL; in the `BY` form the fields may be separated by a comma, whitespace, or
+both, and a trailing comma is rejected. `OVER`, `BY`, and `count` are
+case-insensitive. A field literally named `over` is charted by either spelling,
+but in the `BY` form it must be comma-separated (`chart count BY over, level`),
+because `chart count BY level over` is indistinguishable from the rejected
+`BY`-before-`OVER` form.
+
+`chart` must be the final pipeline command (`SPL_UNSUPPORTED_CHART_PIPELINE`,
+located at the following command) because every public column except the first
+is named from a runtime field value, so no downstream stage can be resolved
+during planning. Completed-job field analysis and the timeline reject the
+resulting relation as transforming, exactly as they reject `timechart`.
+
+Unlike `timechart`, `chart` does not require event rows and does not require the
+canonical `_time`, so `... | stats count BY path, level | chart count OVER path
+BY level` is legal. `count` counts rows of the input relation, never a sum of an
+upstream `count` column.
+
+#### Row axis
+
+The first output column is exactly the group column `stats count BY <row field>`
+produces for the same field: the same public name, value kind, value rendering,
+and eligibility. Fixed `String`, numeric, `Bool`, and timestamp fields keep
+their own scalar kind; runtime-typed fields converge on the same lexical scalar
+text `stats BY` uses, so the integer `500` and the string `"500"` are one row
+labeled `500`. Rows exist only for present, non-null row values — `usenull` and
+`nullstr` are column-axis options only — and an empty string is a present value
+that produces a row. Lists, objects, and flattened non-empty object parents in
+the row field fail the whole search, the same boundary as `stats BY`. There is
+no length ceiling on an individual row value, which is data rather than a column
+name; the buffered result as a whole is bounded below.
+
+Parity is exact rather than approximate, including its two special cases.
+`_raw` is published as the `Mixed`, nullable column `stats count BY _raw`
+produces, so a search over events ingested with `RAW_ENCODING_BINARY` charts
+their non-UTF-8 bytes rather than failing. A row field that is statically null,
+such as `| eval n=null | chart count OVER n BY level`, is the `String` group
+column `stats count BY n` publishes: it declares its one column and names no
+rows, because no present, non-null value exists.
+
+Rows are ordered ascending using the pipeline's automatic numeric-aware
+ordering, exactly the order `| sort 0 +<row field>` produces on that column.
+Splunk documents no chart row order; this is Open Splunk's own established
+dynamic ordering.
+
+#### Column axis
+
+This version supports string column values plus missing/explicit-null. A field
+that is statically null, such as `| eval n=null | chart count OVER path BY n`,
+is inside that domain and publishes the one `NULL` series `usenull=true`
+describes, exactly as a column field an upstream projection removed does.
+Numeric, Boolean, timestamp, extended, list, and object column values fail the
+whole command atomically before any schema or row is published — Splunk
+documents `bins`/`span`/`start`/`end` discretization for the row split only and
+documents nothing about rendering numeric split values as column names, so no
+approximation is attempted. A compile-time-known non-string column field type is
+rejected earlier with `SPL_UNSUPPORTED_CHART_FIELD_TYPE`. Numeric values are
+therefore legal row labels and fatal column labels, and this version offers no
+remedy that makes one chartable: `bin` discretizes numbers into numeric bucket
+starts and so only converts a working string column axis into a fatal numeric
+one, while `tonumber` produces numbers and `rex` does not match a non-string
+source. A numeric column field must be a string before it reaches `chart`.
+
+A column value is classified on its own presence, independent of whether the
+same input row carries an eligible row value. An unsupported column value on an
+event that omits the row field entirely fails the whole command exactly as it
+would on any other event, so the outcome never depends on which field happens to
+name the row axis. Column values that appear only on row-ineligible events name
+no public column, because no published row could count them.
+
+Behavior equals Splunk's documented defaults `limit=top 10`, `useother=true`,
+`usenull=true`, `otherstr=OTHER`, and `nullstr=NULL`. The ten ordinary values
+with the highest total count across the whole chart are retained — the limit is
+global, not per row — with UTF-8 lexical ascending order of the raw label
+breaking ties. `NULL` exists whenever at least one input row has a missing or
+explicit-null column value and never consumes a top-ten slot; `OTHER` exists
+whenever at least one ordinary value was excluded and carries the per-row sum of
+every excluded value. Column values beginning with `_` receive Splunk's `VALUE`
+prefix (`_audit` becomes `VALUE_audit`). Public columns are the row column
+first, then ordinary columns in UTF-8 lexical ascending order of the published
+name, then `NULL`, then `OTHER`, for at most 13 columns. Cells are non-null
+unsigned counts and an absent (row, column) pair is exactly `0`.
+
+A label fails the whole command atomically when it is empty, invalid UTF-8,
+longer than 256 bytes, exactly `NULL` or `OTHER`, when two distinct labels
+converge after `VALUE` normalization, or when it equals the row column's name.
+Every member of that rule, convergence included, is evaluated over the labels
+the input carries rather than over the columns the pivot publishes: two
+converging labels fail the search whether they lose the top-ten cutoff, fold
+into `OTHER`, or appear only on row-ineligible events.
+
+Because `NULL` and `OTHER` are always available, the column bound can never drop
+an input row: for every published row, the sum of its cells equals exactly the
+count `stats count BY <row field>` reports, and the published row set and order
+equal `stats count BY <row field> | sort 0 +<row field>`.
+
+#### Discretization
+
+`chart` never discretizes anything itself. `bin`/`bucket` is the only
+discretizer and its contract is reused unchanged, so
+`... | bin severity span=10 | chart count OVER severity BY level` charts bucket
+starts, and `... | bin _time span=5m AS bucket_time | chart count OVER
+bucket_time BY level` charts `DateTime64(9)` bucket starts. **Only observed
+buckets appear**: unlike `timechart`, `chart` does not fill empty buckets and
+does not extend the row axis to the search time range. An in-place
+`bin _time span=5m | chart count OVER _time BY level` is legal.
+
+Discretization is a row-axis facility only. A binned field is numeric or a
+timestamp, so naming one as the column split fails: a fixed numeric or time
+field is rejected with `SPL_UNSUPPORTED_CHART_FIELD_TYPE` before execution, and
+a runtime-typed one fails the whole command atomically on its bucket values.
+
+#### Bounds and explicit rejections
+
+Results are bounded to 10,000 distinct row values and 12 runtime series (ten
+ordinary, `NULL`, and `OTHER`). Exceeding the row ceiling fails atomically with
+an execution-limit error and no partial result — never truncation and never an
+`OTHER` row, because Splunk documents no `OTHER` row. This non-truncating
+resource policy intentionally differs from Splunk's installation-configurable
+`maxresultrows` ceiling. With default executor settings the intermediate group
+budget grows to at most 130,000 states, exactly as for `timechart`; an
+explicitly configured lower group cap remains authoritative.
+
+The column axis is collapsed to the published domain before the row-keyed
+aggregation, so that aggregation holds at most one state per (row value, public
+series) pair and a wide column axis never consumes the row budget: 200 distinct
+row values across 1,000 distinct column values publishes 200 rows and 13 columns
+and stays inside the budget. The preceding one-dimensional aggregate that
+chooses the domain holds one state per distinct raw column value, so a column
+field with more than roughly 130,000 distinct raw values still fails atomically
+with an execution-limit error and no partial result. Reducing that raw
+cardinality means re-shaping the column field into a coarser string — `replace`
+is the string-in, string-out surface for it — because `bin` would replace the
+labels with numeric bucket starts, which the column axis rejects.
+
+The whole pivot is buffered before any schema or row is published, because the
+public column names are runtime values. The buffered result therefore carries
+its own total-byte ceiling in addition to the row ceiling: a chart whose
+retained row values exceed it fails atomically with an execution-limit error and
+no partial result, rather than materializing an unbounded result in front of the
+search job's incremental byte limits. Individual row values remain unbounded;
+only their total is capped.
+
+The following fail explicitly rather than being approximated:
+
+- any aggregate other than argument-free `count` — `sum`, `avg`, `p95`,
+  `count(field)`, `dc`, `values`, multiple aggregates, `agg=<term>`, sparkline
+  aggregates, and parenthesized eval-expression aggregates — and `AS <name>` on
+  the aggregate, all with `SPL_UNSUPPORTED_CHART_AGGREGATE`. `AS` is rejected
+  because no output column of the supported pivot could carry the alias;
+- every option other than `agg`, with `SPL_UNSUPPORTED_CHART_OPTION`, including
+  spellings equal to a documented default: `limit`, `useother`, `usenull`,
+  `otherstr`, `nullstr`, `cont`, `sep`, `format`, `bins`, `span`, `start`,
+  `end`, `aligntime`, and `dedup_splitvals`; `agg=` names the aggregate rather
+  than a rendering option and keeps `SPL_UNSUPPORTED_CHART_AGGREGATE` in every
+  position;
+- the trailing `WHERE` series filter (`... BY x WHERE count > 100`,
+  `... in top 5`), with `SPL_UNSUPPORTED_CHART_SYNTAX`;
+- the single-split forms `chart count OVER f` and `chart count BY f`, with
+  `SPL_UNSUPPORTED_CHART_SYNTAX` and a suggestion to use `stats count BY f`;
+- more than two split fields, a duplicated field on both axes, `BY` before
+  `OVER`, wildcard or quoted field names, and any trailing token, all with
+  `SPL_UNSUPPORTED_CHART_SYNTAX`; a missing field token after `OVER`/`BY` is
+  `SPL_EXPECTED_FIELD`;
+- a row or column field named `NULL` or `OTHER`, and the reserved `fields`
+  convenience column on an open event schema, with
+  `SPL_UNSUPPORTED_CHART_FIELD_TYPE`.
+
 ## Completed-job field analysis
 
 Field discovery re-executes an immutable completed-job snapshot with the same
@@ -618,16 +798,23 @@ storage/execution primitives have pinned ClickHouse integration coverage:
 - frequent errors by logger and message;
 - event volume by severity through `timechart`;
 - server errors by route through `timechart`;
-- HTTP response counts by route and status;
+- HTTP response counts by route and status, both as `stats count BY path,
+  status_class` and as the `chart count OVER path BY status_class` pivot;
 - slow routes through `eval`, `p95`, and `where`; and
 - top messages.
+
+The `chart` pivot additionally has pinned ClickHouse coverage for
+`bin severity span=10 | chart count OVER severity BY level`, for
+`chart count OVER path BY level` with both `NULL` and `OTHER` present, and for
+the differential that every published row's cells sum to the count
+`stats count BY path` reports.
 
 ## Explicitly unsupported surface
 
 The following planned commands are not implemented in this version:
 
 ```text
-spath, chart, eventstats, streamstats
+spath, eventstats, streamstats
 ```
 
 All `stats` functions other than argument-free `count`, `p95(field)`,
@@ -655,6 +842,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`bin`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/search-commands/bin),
 [`bucket`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/search-commands/bucket),
 [`timechart`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/timechart),
+[`chart`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/search-commands/chart),
 [`time modifiers`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.4/specify-time-ranges/specify-time-modifiers-in-your-search),
 ClickHouse's [`extractGroups`](https://clickhouse.com/docs/sql-reference/functions/string-search-functions),
 and the [RE2 syntax reference](https://github.com/google/re2/wiki/Syntax)

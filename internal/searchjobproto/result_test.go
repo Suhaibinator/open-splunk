@@ -128,7 +128,7 @@ func TestSchemaPreservesOrderKindsAndSemantics(t *testing.T) {
 		{Name: "ERROR", Kind: searchjobs.ValueKindUnsigned, Nullable: true},
 		{Name: "body", Kind: searchjobs.ValueKindMixed, Multivalue: true},
 	}}
-	converted, err := Schema("schema-1", schema, opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES)
+	converted, err := Schema("schema-1", schema, ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES, RuntimeNamedColumns: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestSchemaRejectsMalformedColumns(t *testing.T) {
 		{Columns: []searchjobs.Column{{Name: "field", Kind: searchjobs.ValueKindInvalid}}},
 	}
 	for _, schema := range tests {
-		if _, err := Schema("schema", schema, opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS); err == nil {
+		if _, err := Schema("schema", schema, ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS}); err == nil {
 			t.Fatalf("Schema(%+v) error = nil", schema)
 		}
 	}
@@ -221,7 +221,7 @@ func TestResultPagePreservesHTTPPagingAndCompleteness(t *testing.T) {
 		NextCursor: "next",
 		TotalRows:  10,
 		Complete:   false,
-	}, opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS, true, true)
+	}, ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS}, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}

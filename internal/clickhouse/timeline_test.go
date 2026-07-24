@@ -147,6 +147,7 @@ func TestCompileTimelineRejectsIneligibleOperatorMatrix(t *testing.T) {
 		{`index=gradethis | top level`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
 		{`index=gradethis | rare level`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
 		{`index=gradethis | timechart span=5m count BY level`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
+		{`index=gradethis | chart count OVER path BY level`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
 	}
 	for _, test := range tests {
 		test := test

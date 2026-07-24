@@ -16,7 +16,7 @@ import (
 // Schema projects an executor result schema into its shared HTTP/WebSocket
 // representation. Column order is preserved because result cells are
 // positional.
-func Schema(schemaID string, schema searchjobs.Schema, resultKind opensplunkv1.ResultSetKind) (*opensplunkv1.ResultSchema, error) {
+func Schema(schemaID string, schema searchjobs.Schema, shape ResultShape) (*opensplunkv1.ResultSchema, error) {
 	columns := make([]*opensplunkv1.ResultColumn, len(schema.Columns))
 	seen := make(map[string]struct{}, len(schema.Columns))
 	for index, column := range schema.Columns {
@@ -32,7 +32,7 @@ func Schema(schemaID string, schema searchjobs.Schema, resultKind opensplunkv1.R
 			return nil, err
 		}
 		semantic := semanticType(column.Name)
-		if resultKind == opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES && index > 0 {
+		if shape.RuntimeNamedColumns && index > 0 {
 			semantic = opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC
 		}
 		columns[index] = &opensplunkv1.ResultColumn{
@@ -47,7 +47,7 @@ func Schema(schemaID string, schema searchjobs.Schema, resultKind opensplunkv1.R
 	return &opensplunkv1.ResultSchema{
 		SchemaId:   schemaID,
 		Revision:   1,
-		ResultKind: resultKind,
+		ResultKind: shape.Kind,
 		Columns:    columns,
 	}, nil
 }
@@ -106,11 +106,11 @@ func ResultPage(
 	ctx context.Context,
 	jobID string,
 	page searchjobs.ResultPage,
-	resultKind opensplunkv1.ResultSetKind,
+	shape ResultShape,
 	includeTotal bool,
 	resultsTruncated bool,
 ) (*opensplunkv1.ResultPage, error) {
-	schema, err := Schema(jobID, page.Schema, resultKind)
+	schema, err := Schema(jobID, page.Schema, shape)
 	if err != nil {
 		return nil, err
 	}

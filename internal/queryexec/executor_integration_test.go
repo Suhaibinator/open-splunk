@@ -7,9 +7,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -150,6 +153,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	eventIndexTime := queryIntegrationInsertEvent(t, ctx, connection)
 	timechartBase, timechartIndexTime := queryIntegrationInsertTimechartEvents(t, ctx, connection)
 	gradeThisBase, gradeThisIndexTime, gradeThisTraceID := queryIntegrationInsertGradeThisEvents(t, ctx, connection)
+	chartBase, chartIndexTime := queryIntegrationInsertChartEvents(t, ctx, connection)
 	t.Run("timeline compiler and executor preserve exact event selection", func(t *testing.T) {
 		earliest := gradeThisBase.Add(2 * time.Minute)
 		latest := gradeThisBase.Add(12 * time.Minute)
@@ -1097,6 +1101,278 @@ ORDER BY grid.number`,
 		}
 	})
 
+	// chart is the bounded runtime-wide pivot. Unlike timechart both of its
+	// axes are runtime data, so the executor decodes the public schema from
+	// the result itself; these cases pin the decoded schema, not the wire.
+	chartRange := func(t *testing.T, id, source string) (searchjobs.Job, searchjobs.ResultPage) {
+		t.Helper()
+		return queryIntegrationRunSearchRange(
+			t, ctx, executor, chartIndexTime, id, source, chartBase, chartBase.Add(30*time.Minute),
+		)
+	}
+
+	t.Run("chart publishes the anchor pivot for both accepted spellings", func(t *testing.T) {
+		wantNames := []string{"path", "ERROR", "INFO", "NULL"}
+		wantCounts := [][]uint64{{1, 2, 0}, {1, 0, 1}}
+		wantRows := []string{"/a", "/b"}
+		for index, source := range []string{
+			`index=main source="chart-r5" | chart count OVER path BY level`,
+			`index=main source="chart-r5" | chart count BY path, level`,
+		} {
+			job, page := chartRange(t, fmt.Sprintf("queryexec-chart-r5-%d", index), source)
+			if job.State != searchjobs.StateCompleted {
+				t.Fatalf("%q state = %v, failure=%#v", source, job.State, job.Failure)
+			}
+			queryIntegrationAssertColumns(t, page, wantNames)
+			for column, name := range wantNames {
+				got := page.Schema.Columns[column]
+				want := searchjobs.ValueKindUnsigned
+				if column == 0 {
+					want = searchjobs.ValueKindString
+				}
+				if got.Kind != want || got.Nullable || got.Multivalue {
+					t.Fatalf("%q column %q = %#v", source, name, got)
+				}
+			}
+			if len(page.Rows) != len(wantCounts) {
+				t.Fatalf("%q rows = %d, want %d", source, len(page.Rows), len(wantCounts))
+			}
+			for rowIndex, counts := range wantCounts {
+				label, ok := page.Rows[rowIndex].Values[0].String()
+				if !ok || label != wantRows[rowIndex] {
+					t.Fatalf("%q row %d label = %q, %v", source, rowIndex, label, ok)
+				}
+				for columnIndex, want := range counts {
+					got, ok := page.Rows[rowIndex].Values[columnIndex+1].Unsigned()
+					if !ok || got != want {
+						t.Fatalf("%q row %d column %q = %d, %v, want %d",
+							source, rowIndex, wantNames[columnIndex+1], got, ok, want)
+					}
+				}
+			}
+		}
+	})
+
+	t.Run("chart bounds the column axis with null and other", func(t *testing.T) {
+		job, page := chartRange(t, "queryexec-chart-c8",
+			`index=main source="chart-c8" | chart count OVER path BY series`)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("bounded chart state = %v, failure=%#v", job.State, job.Failure)
+		}
+		// Exactly thirteen public columns: the row column, the ten retained
+		// ordinary labels, then NULL and OTHER in that order.
+		queryIntegrationAssertColumns(t, page, []string{
+			"path", "c01", "c02", "c03", "c04", "c05", "c06", "c07", "c08", "c09", "c12", "NULL", "OTHER",
+		})
+		wantCounts := [][]uint64{
+			{3, 2, 1, 1, 1, 1, 1, 1, 1, 0, 2, 2},
+			{1, 0, 0, 0, 0, 0, 0, 0, 0, 4, 1, 0},
+			{0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0},
+		}
+		for rowIndex, want := range wantCounts {
+			for columnIndex, count := range want {
+				got, ok := page.Rows[rowIndex].Values[columnIndex+1].Unsigned()
+				if !ok || got != count {
+					t.Fatalf("bounded chart row %d column %d = %d, %v, want %d", rowIndex, columnIndex+1, got, ok, count)
+				}
+			}
+		}
+	})
+
+	t.Run("chart row totals equal stats count by the row field", func(t *testing.T) {
+		// The primary differential: usenull and useother are always on, so the
+		// column bound can never drop an eligible input row.
+		_, pivot := chartRange(t, "queryexec-chart-differential-pivot",
+			`index=main source="chart-c8" | chart count OVER path BY series`)
+		_, grouped := chartRange(t, "queryexec-chart-differential-stats",
+			`index=main source="chart-c8" | stats count BY path | sort 0 +path`)
+		if len(pivot.Rows) != len(grouped.Rows) || len(pivot.Rows) == 0 {
+			t.Fatalf("pivot published %d rows, stats published %d", len(pivot.Rows), len(grouped.Rows))
+		}
+		if pivot.Schema.Columns[0].Name != grouped.Schema.Columns[0].Name ||
+			pivot.Schema.Columns[0].Kind != grouped.Schema.Columns[0].Kind {
+			t.Fatalf("pivot row column = %#v, stats group column = %#v",
+				pivot.Schema.Columns[0], grouped.Schema.Columns[0])
+		}
+		for index, row := range pivot.Rows {
+			pivotLabel, pivotOK := row.Values[0].String()
+			statsLabel, statsOK := grouped.Rows[index].Values[0].String()
+			if !pivotOK || !statsOK || pivotLabel != statsLabel {
+				t.Fatalf("row %d label = %q (%v), stats reports %q (%v)", index, pivotLabel, pivotOK, statsLabel, statsOK)
+			}
+			var total uint64
+			for _, value := range row.Values[1:] {
+				count, ok := value.Unsigned()
+				if !ok {
+					t.Fatalf("row %q published a non-unsigned cell: %#v", pivotLabel, value)
+				}
+				total += count
+			}
+			want, ok := grouped.Rows[index].Values[1].Unsigned()
+			if !ok || total != want {
+				t.Fatalf("row %q cells sum to %d, stats count BY path reports %d (%v)", pivotLabel, total, want, ok)
+			}
+		}
+	})
+
+	t.Run("chart leading underscore column uses the VALUE prefix", func(t *testing.T) {
+		job, page := chartRange(t, "queryexec-chart-underscore",
+			`index=main source="chart-underscore" | chart count OVER path BY series`)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("underscore chart state = %v, failure=%#v", job.State, job.Failure)
+		}
+		// Publication order uses the normalized name, so VALUE_audit follows Z.
+		queryIntegrationAssertColumns(t, page, []string{"path", "VALUE_audit", "Z"})
+	})
+
+	t.Run("chart row column equals the stats group column", func(t *testing.T) {
+		for _, test := range []struct {
+			name     string
+			field    string
+			prefix   string
+			wantKind searchjobs.ValueKind
+		}{
+			{name: "fixed string", field: "host", wantKind: searchjobs.ValueKindString},
+			{name: "runtime typed", field: "path", wantKind: searchjobs.ValueKindString},
+			{name: "fixed numeric", field: "severity", wantKind: searchjobs.ValueKindUnsigned},
+			{
+				name: "binned timestamp", field: "bucket_time",
+				prefix: `| bin _time span=5m AS bucket_time `, wantKind: searchjobs.ValueKindTime,
+			},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				scope := `index=main source="chart-kinds" ` + test.prefix
+				_, pivot := chartRange(t, "queryexec-chart-kind-"+test.field,
+					scope+`| chart count OVER `+test.field+` BY level`)
+				_, grouped := chartRange(t, "queryexec-chart-kind-stats-"+test.field,
+					scope+`| stats count BY `+test.field+` | sort 0 +`+test.field)
+				if len(pivot.Schema.Columns) == 0 || len(grouped.Schema.Columns) == 0 {
+					t.Fatalf("pivot=%#v stats=%#v", pivot.Schema, grouped.Schema)
+				}
+				column := pivot.Schema.Columns[0]
+				if column.Name != test.field || column.Kind != test.wantKind || column.Nullable || column.Multivalue {
+					t.Fatalf("pivot row column = %#v, want %q/%v", column, test.field, test.wantKind)
+				}
+				if column.Kind != grouped.Schema.Columns[0].Kind || column.Name != grouped.Schema.Columns[0].Name {
+					t.Fatalf("pivot row column %#v diverged from the stats group column %#v",
+						column, grouped.Schema.Columns[0])
+				}
+				if len(pivot.Rows) != len(grouped.Rows) || len(pivot.Rows) == 0 {
+					t.Fatalf("pivot rows = %d, stats rows = %d", len(pivot.Rows), len(grouped.Rows))
+				}
+				for index, row := range pivot.Rows {
+					if !queryIntegrationSameValue(row.Values[0], grouped.Rows[index].Values[0]) {
+						t.Fatalf("row %d = %#v, stats reports %#v", index, row.Values[0], grouped.Rows[index].Values[0])
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("chart unsupported axis values fail atomically", func(t *testing.T) {
+		for _, test := range []struct{ name, source string }{
+			{"numeric column value", `index=main source="chart-bad-number" | chart count OVER path BY series`},
+			{"container row value", `index=main source="chart-bad-row-list" | chart count OVER series BY level`},
+			{"label equal to the row column name", `index=main source="chart-bad-rowname" | chart count OVER path BY series`},
+			{"normalization collision", `index=main source="chart-bad-collision" | chart count OVER path BY series`},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				compiled := queryIntegrationCompileSearchRange(
+					t, test.source, chartIndexTime, chartBase, chartBase.Add(30*time.Minute))
+				sink := &fakeSink{}
+				err := executor.Execute(ctx, compiled, sink)
+				// No schema and no row may be published: the pivot is buffered
+				// and validated before publication precisely so this holds.
+				if !errors.Is(err, searchjobs.ErrUnsupportedValue) || sink.setCalls != 0 || len(sink.rows) != 0 {
+					t.Fatalf("execute %q: err=%v schema calls=%d rows=%d", test.source, err, sink.setCalls, len(sink.rows))
+				}
+				job, _ := chartRange(t, "queryexec-chart-atomic-"+strings.ReplaceAll(test.name, " ", "-"), test.source)
+				if job.State != searchjobs.StateFailed || job.Failure == nil ||
+					job.Failure.Code != searchjobs.FailureUnsupportedSPL || job.RowCount != 0 || job.Schema != nil {
+					t.Fatalf("%q job = %#v failure=%+v", test.source, job, job.Failure)
+				}
+				if strings.Contains(job.Failure.Message, "series") || strings.Contains(job.Failure.Message, "path") {
+					t.Fatalf("%q failure message leaked a field value: %q", test.source, job.Failure.Message)
+				}
+			})
+		}
+	})
+
+	t.Run("chart projected and empty relations", func(t *testing.T) {
+		// I2: the column field is gone for every row, so one NULL column
+		// carries each row's whole total.
+		job, page := chartRange(t, "queryexec-chart-projected-column",
+			`index=main source="chart-r5" | fields path | chart count OVER path BY level`)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("projected-column chart state = %v, failure=%#v", job.State, job.Failure)
+		}
+		queryIntegrationAssertColumns(t, page, []string{"path", "NULL"})
+		for index, want := range []uint64{3, 2} {
+			got, ok := page.Rows[index].Values[1].Unsigned()
+			if !ok || got != want {
+				t.Fatalf("projected-column row %d = %d, %v, want %d", index, got, ok, want)
+			}
+		}
+
+		// I3 and I4: without a row value there is no group, so the pivot
+		// publishes its declared one-column schema and no rows at all — a
+		// grouped chart never emits the global row stats count would emit.
+		for _, source := range []string{
+			`index=main source="chart-r5" | fields host | chart count OVER path BY level`,
+			`index=main source="chart-nothing" | chart count OVER path BY level`,
+		} {
+			emptyJob, emptyPage := chartRange(t, "queryexec-chart-empty-"+strconv.Itoa(len(source)), source)
+			if emptyJob.State != searchjobs.StateCompleted {
+				t.Fatalf("%q state = %v, failure=%#v", source, emptyJob.State, emptyJob.Failure)
+			}
+			queryIntegrationAssertColumns(t, emptyPage, []string{"path"})
+			if len(emptyPage.Rows) != 0 || emptyJob.RowCount != 0 {
+				t.Fatalf("%q published %d rows (job reports %d)", source, len(emptyPage.Rows), emptyJob.RowCount)
+			}
+		}
+	})
+
+	t.Run("chart transport is bounded at ten thousand rows", func(t *testing.T) {
+		// The row axis is runtime data, so the executor cannot re-derive it
+		// from the plan: it must accept a dense bounded pivot and reject one
+		// row more without publishing anything.
+		denseChart := func(rows uint64) clickhouse.CompiledQuery {
+			const names = "CAST(['0:a', '1:'], 'Array(String)')"
+			return clickhouse.CompiledQuery{
+				SQL: `SELECT toUInt64(number) AS "__os_chart_ordinal", ` +
+					`CAST(leftPad(toString(number), 8, '0') AS String) AS "__os_chart_row", ` +
+					names + ` AS "__os_chart_names", ` +
+					`CAST([toUInt64(1), toUInt64(0)], 'Array(UInt64)') AS "__os_chart_counts", ` +
+					`toUInt8(0) AS "__os_chart_invalid" FROM numbers(` +
+					strconv.FormatUint(rows, 10) + `) ORDER BY number`,
+				OutputFields: []string{"row_value"},
+				Chart: &clickhouse.ChartOutput{
+					RowField:        "row_value",
+					RowKind:         clickhouse.ChartRowKindString,
+					RowDatabaseType: "String",
+					RowLimit:        10_000,
+					MaxSeries:       12,
+					MaxLabelBytes:   256,
+				},
+			}
+		}
+		sink := &fakeSink{}
+		if err := executor.Execute(ctx, denseChart(10_000), sink); err != nil {
+			t.Fatalf("execute dense chart: %v", err)
+		}
+		if len(sink.rows) != 10_000 || len(sink.schema.Columns) != 3 ||
+			sink.schema.Columns[0].Name != "row_value" || sink.schema.Columns[0].Kind != searchjobs.ValueKindString ||
+			sink.schema.Columns[1].Name != "a" || sink.schema.Columns[2].Name != "NULL" {
+			t.Fatalf("dense chart schema=%#v rows=%d", sink.schema, len(sink.rows))
+		}
+		overflowSink := &fakeSink{}
+		err := executor.Execute(ctx, denseChart(10_001), overflowSink)
+		if !errors.Is(err, searchjobs.ErrExecutionLimit) || overflowSink.setCalls != 0 || len(overflowSink.rows) != 0 {
+			t.Fatalf("dense chart overflow: err=%v schema calls=%d rows=%d",
+				err, overflowSink.setCalls, len(overflowSink.rows))
+		}
+	})
+
 	t.Run("stats aliases retain aggregate types", func(t *testing.T) {
 		for _, alias := range []string{"fields", "_raw"} {
 			job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime, "queryexec-stats-alias-"+alias, `index=main | stats count AS `+alias)
@@ -1483,6 +1759,164 @@ func queryIntegrationInsertTimechartEvents(t *testing.T, ctx context.Context, co
 		t.Fatal(err)
 	}
 	return base, indexTime
+}
+
+// queryIntegrationChartEvent is one chart fixture row. Every chart scenario is
+// separated by source so each case scopes to exactly the rows it reasons about.
+type queryIntegrationChartEvent struct {
+	id       string
+	source   string
+	at       time.Time
+	host     string
+	severity uint8
+	level    *string
+	fields   map[string]any
+}
+
+// queryIntegrationInsertChartEvents writes the pivot fixture. The column axis
+// deliberately carries real values — a fixture whose split field is null on
+// every row cannot prove any column-axis behavior.
+func queryIntegrationInsertChartEvents(t *testing.T, ctx context.Context, connection clickhousedriver.Conn) (time.Time, time.Time) {
+	t.Helper()
+	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
+		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
+		"expires_at, visibility_seq)"
+	batch, err := connection.PrepareBatch(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC().Add(-3 * time.Hour).Truncate(5 * time.Minute)
+	indexTime := time.Now().UTC().Truncate(time.Millisecond)
+	info, failure := "INFO", "ERROR"
+
+	var events []queryIntegrationChartEvent
+	add := func(id, source string, at time.Time, level *string, fields map[string]any) {
+		events = append(events, queryIntegrationChartEvent{
+			id: id, source: source, at: at, level: level, fields: fields,
+		})
+	}
+	path := func(value string) map[string]any { return map[string]any{"path": value} }
+	pathSeries := func(pathValue string, series any) map[string]any {
+		return map[string]any{"path": pathValue, "series": series}
+	}
+
+	// The contract's anchor example.
+	add("r5-a1", "chart-r5", base, &info, path("/a"))
+	add("r5-a2", "chart-r5", base, &info, path("/a"))
+	add("r5-a3", "chart-r5", base, &failure, path("/a"))
+	add("r5-b1", "chart-r5", base, &failure, path("/b"))
+	add("r5-b2", "chart-r5", base, nil, path("/b"))
+
+	// Three rows, twelve column values, an excluded tail, and missing column
+	// values, so the per-row totals must survive the column bound.
+	columns := []struct {
+		row    string
+		series string
+		repeat int
+	}{
+		{"/x", "c01", 3}, {"/x", "c02", 2}, {"/x", "c03", 1}, {"/x", "c04", 1},
+		{"/x", "c05", 1}, {"/x", "c06", 1}, {"/x", "c07", 1}, {"/x", "c08", 1},
+		{"/x", "c09", 1}, {"/x", "c10", 1}, {"/x", "c11", 1}, {"/x", "", 2},
+		{"/y", "c01", 1}, {"/y", "c12", 4}, {"/y", "", 1},
+		{"/z", "c05", 1},
+	}
+	counter := 0
+	for _, column := range columns {
+		for range column.repeat {
+			counter++
+			fields := path(column.row)
+			if column.series != "" {
+				fields = pathSeries(column.row, column.series)
+			}
+			add(fmt.Sprintf("chart-c8-%d", counter), "chart-c8", base, &info, fields)
+		}
+	}
+
+	add("underscore-audit", "chart-underscore", base, &info, pathSeries("/u", "_audit"))
+	add("underscore-z", "chart-underscore", base, &info, pathSeries("/u", "Z"))
+
+	// R1 across every supported row kind: a fixed String column, a runtime
+	// typed event field, a fixed numeric column, and a binned timestamp.
+	events = append(events,
+		queryIntegrationChartEvent{id: "kinds-1", source: "chart-kinds", at: base, host: "alpha", severity: 3, level: &info, fields: path("/a")},
+		queryIntegrationChartEvent{id: "kinds-2", source: "chart-kinds", at: base.Add(2 * time.Minute), host: "beta", severity: 3, level: &failure, fields: path("/b")},
+		queryIntegrationChartEvent{id: "kinds-3", source: "chart-kinds", at: base.Add(7 * time.Minute), host: "alpha", severity: 9, level: &info, fields: path("/a")},
+	)
+
+	// Every atomic unsupported-value boundary the executor must classify.
+	add("bad-number", "chart-bad-number", base, &info, pathSeries("/p", int64(7)))
+	add("bad-row-list", "chart-bad-row-list", base, &info, pathSeries("/p", []string{"a", "b"}))
+	add("bad-rowname", "chart-bad-rowname", base, &info, pathSeries("/p", "path"))
+	add("bad-collision-prefixed", "chart-bad-collision", base, &info, pathSeries("/p", "_x"))
+	add("bad-collision-literal", "chart-bad-collision", base, &info, pathSeries("/p", "VALUE_x"))
+
+	for index, event := range events {
+		message := "chart " + event.id
+		document := clickhousedriver.NewJSON()
+		fieldNames := make([]string, 0, len(event.fields))
+		for _, name := range slices.Sorted(maps.Keys(event.fields)) {
+			document.SetValueAtPath(name, clickhousedriver.NewDynamic(event.fields[name]))
+			fieldNames = append(fieldNames, name)
+		}
+		host := event.host
+		if host == "" {
+			host = "host"
+		}
+		severity := event.severity
+		if severity == 0 {
+			severity = 1
+		}
+		if err := batch.Append(
+			"queryexec-chart-"+event.id, "tenant", "main", event.at, indexTime,
+			nil, uint8(1), host, event.source, "test", nil, severity, event.level, &message, []byte(message),
+			uint8(1), nil, nil, document, fieldNames, "collector", "chart-batch", uint64(index+1),
+			indexTime.Add(24*time.Hour), uint64(1),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatal(err)
+	}
+	return base, indexTime
+}
+
+// queryIntegrationSameValue compares two published scalars without assuming a
+// kind, so a chart's row column can be checked against the stats group column
+// it must reproduce exactly.
+func queryIntegrationSameValue(left, right searchjobs.Value) bool {
+	if left.Kind() != right.Kind() {
+		return false
+	}
+	switch left.Kind() {
+	case searchjobs.ValueKindString:
+		leftValue, leftOK := left.String()
+		rightValue, rightOK := right.String()
+		return leftOK && rightOK && leftValue == rightValue
+	case searchjobs.ValueKindUnsigned:
+		leftValue, leftOK := left.Unsigned()
+		rightValue, rightOK := right.Unsigned()
+		return leftOK && rightOK && leftValue == rightValue
+	case searchjobs.ValueKindSigned:
+		leftValue, leftOK := left.Signed()
+		rightValue, rightOK := right.Signed()
+		return leftOK && rightOK && leftValue == rightValue
+	case searchjobs.ValueKindDouble:
+		leftValue, leftOK := left.Double()
+		rightValue, rightOK := right.Double()
+		return leftOK && rightOK && leftValue == rightValue
+	case searchjobs.ValueKindBool:
+		leftValue, leftOK := left.Bool()
+		rightValue, rightOK := right.Bool()
+		return leftOK && rightOK && leftValue == rightValue
+	case searchjobs.ValueKindTime:
+		leftValue, leftOK := left.Time()
+		rightValue, rightOK := right.Time()
+		return leftOK && rightOK && leftValue.Equal(rightValue)
+	default:
+		return false
+	}
 }
 
 func queryIntegrationExtendedValue(kind, value string) clickhousedriver.Dynamic {

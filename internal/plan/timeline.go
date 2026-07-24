@@ -88,7 +88,7 @@ func ValidateTimelineEligibility(query *Query) error {
 			default:
 				return timelinePipelineDiagnostic(operator.Range)
 			}
-		case *Aggregate, *Timechart, *Window:
+		case *Aggregate, *Timechart, *Chart, *Window:
 			return timelinePipelineDiagnostic(operator.SourceRange())
 		default:
 			return timelinePipelineDiagnostic(operator.SourceRange())

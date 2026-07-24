@@ -14,20 +14,44 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// ResultKindForSPL classifies the result shape from the final transforming
+// ResultShape describes a completed relation's public columns: the result kind
+// clients render, plus whether the columns after the first are named from
+// runtime field values rather than from field identities.
+type ResultShape struct {
+	Kind opensplunkv1.ResultSetKind
+	// RuntimeNamedColumns marks the wide relations — timechart's series and
+	// chart's pivot columns — whose public names after the first come from
+	// data. Such a column carries no event-metadata meaning even when its name
+	// happens to equal one (a chart split value of "host" is an occurrence
+	// count, not a host), so it is published with a metric semantic type.
+	RuntimeNamedColumns bool
+}
+
+// ResultShapeForSPL classifies the result shape from the final transforming
 // command while preserving event semantics for non-transforming pipelines.
-func ResultKindForSPL(source string) opensplunkv1.ResultSetKind {
+func ResultShapeForSPL(source string) ResultShape {
 	query, err := spl.Parse(source)
 	if err != nil {
-		return opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED
+		return ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED}
 	}
-	result := opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS
+	result := ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS}
 	for _, command := range query.Commands {
 		switch command.(type) {
 		case *spl.TimechartCommand:
-			return opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES
+			return ResultShape{
+				Kind:                opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
+				RuntimeNamedColumns: true,
+			}
+		// chart is a categorical pivot rather than a time series: its first
+		// column is a runtime row value, not canonical time. Its remaining
+		// columns are still named from runtime split values.
+		case *spl.ChartCommand:
+			result = ResultShape{
+				Kind:                opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+				RuntimeNamedColumns: true,
+			}
 		case *spl.TableCommand, *spl.StatsCommand, *spl.TopCommand, *spl.RareCommand:
-			result = opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS
+			result = ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS}
 		}
 	}
 	return result

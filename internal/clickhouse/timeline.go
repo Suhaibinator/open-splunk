@@ -62,7 +62,7 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 	if err != nil {
 		return CompiledTimeline{}, err
 	}
-	if ordinary.Timechart != nil || !timelineOutputContainsCanonicalTime(ordinary.OutputFields) {
+	if ordinary.Timechart != nil || ordinary.Chart != nil || !timelineOutputContainsCanonicalTime(ordinary.OutputFields) {
 		return CompiledTimeline{}, &plan.Diagnostic{
 			Code:        "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD",
 			Message:     "timeline requires the unmodified canonical _time field",
