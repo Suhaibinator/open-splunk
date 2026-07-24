@@ -773,11 +773,188 @@ func TestBuildTimeBinProducesStreamingTimeBucket(t *testing.T) {
 		t.Fatalf("operator 2 = %T, want *TimeBucket", logical.Operators[2])
 	}
 	if bucket.Field.Name != "_time" || !bucket.Field.Canonical ||
+		bucket.Output.Name != "_time" || !bucket.Output.Canonical ||
 		bucket.Span != 5*time.Minute {
 		t.Fatalf("time bucket = %#v", bucket)
 	}
 	if !slices.Equal(logical.OutputFields, []string{"_time", "count"}) || logical.DynamicOutput != nil {
 		t.Fatalf("output = %v dynamic=%#v, want [_time count] and static schema", logical.OutputFields, logical.DynamicOutput)
+	}
+}
+
+func TestBuildNumericBinProducesStreamingNumericBucket(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | eval latency=-11.5 | bucket span=10 latency AS band | stats count BY band`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(logical.Operators) != 5 {
+		t.Fatalf("operator count = %d, want Scan, Filter, Extend, NumericBucket, Aggregate", len(logical.Operators))
+	}
+	bucket, ok := logical.Operators[3].(*NumericBucket)
+	if !ok {
+		t.Fatalf("operator 3 = %T, want *NumericBucket", logical.Operators[3])
+	}
+	if bucket.Input.Name != "latency" || bucket.Output.Name != "band" || bucket.Span != 10 {
+		t.Fatalf("numeric bucket = %#v", bucket)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"band", "count"}) || logical.DynamicOutput != nil {
+		t.Fatalf("output = %v dynamic=%#v, want [band count] and static schema", logical.OutputFields, logical.DynamicOutput)
+	}
+}
+
+func TestBuildUnitlessTimeBinUsesSeconds(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | bin _time span=5 AS bucket_time`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	bucket, ok := logical.Operators[len(logical.Operators)-1].(*TimeBucket)
+	if !ok {
+		t.Fatalf("last operator = %T, want *TimeBucket", logical.Operators[len(logical.Operators)-1])
+	}
+	if bucket.Field.Name != "_time" || bucket.Output.Name != "bucket_time" || bucket.Span != 5*time.Second {
+		t.Fatalf("time bucket = %#v", bucket)
+	}
+}
+
+func TestBuildNumericBinSupportsTransformingRowsAndASOutputSchema(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		source string
+		input  string
+		output string
+		fields []string
+	}{
+		{
+			source: `index=gradethis | stats count BY level | bin count span=10`,
+			input:  "count", output: "count", fields: []string{"level", "count"},
+		},
+		{
+			source: `index=gradethis | stats count BY level | bin count span=10 AS band`,
+			input:  "count", output: "band", fields: []string{"level", "count", "band"},
+		},
+		{
+			source: `index=gradethis | stats count BY level | bin count span=10 AS level`,
+			input:  "count", output: "level", fields: []string{"level", "count"},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			logical, err := Build(mustParse(t, test.source), testScope([]string{"gradethis"}, nil))
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			bucket, ok := logical.Operators[len(logical.Operators)-1].(*NumericBucket)
+			if !ok || bucket.Input.Name != test.input || bucket.Output.Name != test.output || bucket.Span != 10 {
+				t.Fatalf("numeric bucket = %#v", logical.Operators[len(logical.Operators)-1])
+			}
+			if !slices.Equal(logical.OutputFields, test.fields) {
+				t.Fatalf("output fields = %v, want %v", logical.OutputFields, test.fields)
+			}
+		})
+	}
+}
+
+func TestBuildNumericBinBoundsExplicitSpan(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | bin severity span=9007199254740991`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build(maximum numeric span): %v", err)
+	}
+	bucket, ok := logical.Operators[len(logical.Operators)-1].(*NumericBucket)
+	if !ok || bucket.Span != MaximumNumericBinSpan {
+		t.Fatalf("numeric bucket = %#v, want span %d", logical.Operators[len(logical.Operators)-1], MaximumNumericBinSpan)
+	}
+
+	_, err = Build(
+		mustParse(t, `index=gradethis | bin severity span=9007199254740992`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	assertDiagnosticCode(t, err, "SPL_NUMBER_OUT_OF_RANGE")
+}
+
+func TestBuildBinRejectsUnsupportedFieldAndSpanCombinations(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | bin severity span=5m`,
+		`index=gradethis | bin fields span=10`,
+		`index=gradethis | bin severity span=10 AS fields`,
+	} {
+		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		if source == `index=gradethis | bin severity span=5m` {
+			assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_BIN_TIME_FIELD")
+		} else {
+			assertDiagnosticCode(t, err, "SPL_AMBIGUOUS_BIN_FIELD")
+		}
+	}
+}
+
+func TestBuildBinAllowsFieldsWithClosedSchema(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | stats count AS fields | bin fields span=10`,
+		`index=gradethis | stats count | bin count span=10 AS fields`,
+	} {
+		logical, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		if err != nil {
+			t.Fatalf("Build(%q): %v", source, err)
+		}
+		if _, ok := logical.Operators[len(logical.Operators)-1].(*NumericBucket); !ok {
+			t.Fatalf("last operator for %q = %T, want *NumericBucket", source, logical.Operators[len(logical.Operators)-1])
+		}
+		if !slices.Contains(logical.OutputFields, "fields") {
+			t.Fatalf("output fields for %q = %v, want fields retained or appended", source, logical.OutputFields)
+		}
+	}
+}
+
+func TestBuildBinASCanonicalTimeProvenance(t *testing.T) {
+	t.Parallel()
+
+	if _, err := Build(
+		mustParse(t, `index=gradethis | bin _time span=5m AS bucket_time | timechart span=5m count BY level`),
+		testScope([]string{"gradethis"}, nil),
+	); err != nil {
+		t.Fatalf("time-bin AS unexpectedly invalidated source _time: %v", err)
+	}
+
+	_, err := Build(
+		mustParse(t, `index=gradethis | bin severity span=10 AS _time | timechart span=5m count BY level`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD")
+}
+
+func TestBuildBinChecksCanonicalTimeOnlyWhenReadingIt(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | eval _time=1 | bin severity span=10 AS band`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build(non-time bin after replacing _time): %v", err)
+	}
+	if _, ok := logical.Operators[len(logical.Operators)-1].(*NumericBucket); !ok {
+		t.Fatalf("last operator = %T, want *NumericBucket", logical.Operators[len(logical.Operators)-1])
 	}
 }
 
@@ -842,6 +1019,57 @@ func TestBuildRejectsForgedTimeBinAST(t *testing.T) {
 	command.Field = "status"
 	_, err := Build(parsed, testScope([]string{"gradethis"}, nil))
 	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_BIN_TIME_FIELD")
+}
+
+func TestBuildRejectsForgedNumericBinAST(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(*spl.BinCommand)
+		code   string
+	}{
+		{
+			name: "zero span",
+			mutate: func(command *spl.BinCommand) {
+				command.Span.Magnitude = 0
+			},
+			code: "SPL_NUMBER_OUT_OF_RANGE",
+		},
+		{
+			name: "span exceeds exact numeric range",
+			mutate: func(command *spl.BinCommand) {
+				command.Span.Magnitude = MaximumNumericBinSpan + 1
+			},
+			code: "SPL_NUMBER_OUT_OF_RANGE",
+		},
+		{
+			name: "numeric span carries time unit",
+			mutate: func(command *spl.BinCommand) {
+				command.Span.Unit = spl.TimeSpanUnitSecond
+			},
+			code: "SPL_UNSUPPORTED_BIN_SYNTAX",
+		},
+		{
+			name: "invalid span kind",
+			mutate: func(command *spl.BinCommand) {
+				command.Span.Kind = spl.BinSpanKindInvalid
+			},
+			code: "SPL_UNSUPPORTED_BIN_SYNTAX",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			parsed := mustParse(t, `index=gradethis | bin severity span=10`)
+			command := parsed.Commands[0].(*spl.BinCommand)
+			test.mutate(command)
+			_, err := Build(parsed, testScope([]string{"gradethis"}, nil))
+			assertDiagnosticCode(t, err, test.code)
+		})
+	}
 }
 
 func TestBuildTimechartProducesBoundedRuntimeWideSchema(t *testing.T) {

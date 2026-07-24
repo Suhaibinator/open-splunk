@@ -60,10 +60,19 @@ func ValidateTimelineEligibility(query *Query) error {
 				}
 			}
 		case *TimeBucket:
-			if operator.Field.Name != "_time" {
+			if operator.Field.Name != "_time" || operator.Output.Name == "" {
 				return timelinePipelineDiagnostic(operator.Range)
 			}
-			return timelineTimeDiagnostic(operator.Range)
+			if operator.Output.Name == "_time" {
+				return timelineTimeDiagnostic(operator.Range)
+			}
+		case *NumericBucket:
+			if operator.Input.Name == "" || operator.Output.Name == "" || operator.Span == 0 {
+				return timelinePipelineDiagnostic(operator.Range)
+			}
+			if operator.Output.Name == "_time" {
+				return timelineTimeDiagnostic(operator.Range)
+			}
 		case *Project:
 			switch operator.Mode {
 			case ProjectModeInclude:

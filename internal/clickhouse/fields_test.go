@@ -309,6 +309,23 @@ func TestCompileFieldCatalogPreservesKnownScalarTypeCodes(t *testing.T) {
 	}
 }
 
+func TestCompileFieldCatalogAnalyzesNumericBinFinalType(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileFieldCatalog(
+		t,
+		buildPlan(t, `index=gradethis | eval signed=-11 | bin signed span=10 AS band | table band`),
+		10,
+	)
+	if !strings.Contains(compiled.SQL, UnsupportedNumericBinValueMarker) ||
+		!containsArgument(compiled.Args, uint8(eventfields.StoredValueTypeSint64)) {
+		t.Fatalf("numeric-bin catalog lost its guarded Int64 final type:\n%s\nargs: %#v", compiled.SQL, compiled.Args)
+	}
+	if known := catalogStringArguments(compiled.Args); !slices.Contains(known, "band") {
+		t.Fatalf("known catalog fields = %v, want band", known)
+	}
+}
+
 func TestCompileFieldCatalogAssignsNullTypeToMissingDynamicEvalInputs(t *testing.T) {
 	t.Parallel()
 

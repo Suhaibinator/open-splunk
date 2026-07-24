@@ -52,6 +52,10 @@ const (
 	// RexCaptureLimitMarker lets the executor map the deliberate throwIf guard
 	// to a stable resource-limit result without exposing generated SQL.
 	RexCaptureLimitMarker = "open-splunk: rex capture bytes exceed the per-row limit"
+	// UnsupportedNumericBinValueMarker is emitted when a mathematically correct
+	// numeric bucket cannot be represented by the input field's fixed type, or
+	// when a floating-point input or result is not finite.
+	UnsupportedNumericBinValueMarker = "open-splunk: numeric bin value is outside the supported range"
 )
 
 var physicalIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -172,12 +176,13 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				if compileErr != nil {
 					return CompiledQuery{}, compileErr
 				}
-				output := quoteIdentifier(assignment.Output.Name)
-				if _, replacing := state.visible[assignment.Output.Name]; replacing {
-					fragment = "SELECT * REPLACE (" + value.valueSQL + " AS " + output + ") FROM (" + fragment + ") AS " + alias
-				} else {
-					fragment = "SELECT *, " + value.valueSQL + " AS " + output + " FROM (" + fragment + ") AS " + alias
-				}
+				fragment = upsertFieldProjectionSQL(
+					fragment,
+					state,
+					assignment.Output.Name,
+					value.valueSQL,
+					alias,
+				)
 				// Extend is emitted in an outer SELECT, so its placeholders occur
 				// before every placeholder already present in the nested fragment.
 				// Sequential assignments add another outer SELECT and therefore
@@ -196,6 +201,20 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				scan,
 				operator,
 				alias,
+			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			fragment = bucketed
+			args = prependArguments(prefixArgs, args)
+			state = nextState
+		case *plan.NumericBucket:
+			bucketed, nextState, prefixArgs, compileErr := compileNumericBucket(
+				fragment,
+				state,
+				operator,
+				alias,
+				aliasSequence,
 			)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
@@ -426,13 +445,11 @@ func compileTimeBucket(
 	if operator == nil {
 		return "", compileState{}, nil, errors.New("compile ClickHouse time bucket: operator is nil")
 	}
-	resolved, err := plan.ResolveField(operator.Field.Name, operator.Field.Range)
-	if err != nil {
-		return "", compileState{}, nil, fmt.Errorf("compile ClickHouse time bucket: invalid field: %w", err)
+	if err := validateCanonicalFieldRef("time bucket", "input", operator.Field); err != nil {
+		return "", compileState{}, nil, err
 	}
-	if resolved.Name != operator.Field.Name || resolved.Canonical != operator.Field.Canonical ||
-		!slices.Equal(resolved.Path, operator.Field.Path) {
-		return "", compileState{}, nil, errors.New("compile ClickHouse time bucket: field metadata is not canonical")
+	if err := validateCanonicalFieldRef("time bucket", "output", operator.Output); err != nil {
+		return "", compileState{}, nil, err
 	}
 	if operator.Field.Name != "_time" || !operator.Field.Canonical {
 		return "", compileState{}, nil, errors.New("compile ClickHouse time bucket: canonical _time field is required")
@@ -479,21 +496,200 @@ func compileTimeBucket(
 	ticks := "reinterpretAsInt64(" + field.valueSQL + ")"
 	bucketTicks := "(" + epochFloorBucketNumberSQL(ticks) + ") * ?"
 	value := "fromUnixTimestamp64Nano(" + bucketTicks + ", 'UTC')"
-	output := quoteIdentifier(operator.Field.Name)
-	fragment = "SELECT * REPLACE (" + value + " AS " + output + ") FROM (" + fragment + ") AS " + alias
-
-	next := state
-	next.visible = make(map[string]fieldState, len(state.visible))
-	for name, existing := range state.visible {
-		next.visible[name] = existing
-	}
-	field.valueSQL = output
-	field.existsSQL = "1"
-	field.existsArgs = nil
-	field.kind = fieldKindTime
-	field.canonicalTime = false
-	next.visible[operator.Field.Name] = field
+	fragment, next := compileBucketProjection(fragment, state, operator.Field.Name, operator.Output, value, field, alias)
 	return fragment, next, []any{spanNanoseconds, spanNanoseconds, spanNanoseconds}, nil
+}
+
+func compileNumericBucket(
+	fragment string,
+	state compileState,
+	operator *plan.NumericBucket,
+	alias string,
+	stage int,
+) (string, compileState, []any, error) {
+	if operator == nil {
+		return "", compileState{}, nil, errors.New("compile ClickHouse numeric bucket: operator is nil")
+	}
+	if err := validateCanonicalFieldRef("numeric bucket", "input", operator.Input); err != nil {
+		return "", compileState{}, nil, err
+	}
+	if err := validateCanonicalFieldRef("numeric bucket", "output", operator.Output); err != nil {
+		return "", compileState{}, nil, err
+	}
+	if operator.Span == 0 || operator.Span > plan.MaximumNumericBinSpan {
+		return "", compileState{}, nil, errors.New("compile ClickHouse numeric bucket: span must be between 1 and 2^53-1")
+	}
+	if operator.Input.Name == "_time" && operator.Input.Canonical {
+		return "", compileState{}, nil, errors.New("compile ClickHouse numeric bucket: canonical _time cannot be a numeric input")
+	}
+
+	field, ok, err := resolveCompiledField(operator.Input, state)
+	if err != nil {
+		return "", compileState{}, nil, err
+	}
+	if !ok || field.kind != fieldKindNumber {
+		return "", compileState{}, nil, unsupportedNumericBinFieldType(operator)
+	}
+
+	// WITH expression aliases can be inherited by nested subqueries in
+	// ClickHouse. Make them stage-unique so consecutive bin operators cannot
+	// capture one another's span or candidate.
+	spanAlias := quoteIdentifier(fmt.Sprintf("__os_numeric_bin_span_%d", stage))
+	candidateAlias := quoteIdentifier(fmt.Sprintf("__os_numeric_bin_candidate_%d", stage))
+	input := field.valueSQL
+	var spanSQL, candidateSQL, valueSQL string
+	if intermediate, ok := signedBucketIntermediateType(field.numberType); ok {
+		wide := "to" + intermediate + "(" + input + ")"
+		spanSQL = "to" + intermediate + "(CAST(? AS UInt64))"
+		bucket := "(intDiv(" + wide + ", " + spanAlias + ") - if(" +
+			wide + " < 0 AND " + wide + " % " + spanAlias + " != 0, 1, 0)) * " + spanAlias
+		candidateSQL = "accurateCastOrNull(" + bucket + ", '" + field.numberType + "')"
+		valueSQL = guardedNumericBucketSQL(input, candidateAlias, field.numberType, "", "")
+	} else if intermediate, ok := unsignedBucketIntermediateType(field.numberType); ok {
+		wide := "to" + intermediate + "(" + input + ")"
+		spanSQL = "to" + intermediate + "(CAST(? AS UInt64))"
+		bucket := "intDiv(" + wide + ", " + spanAlias + ") * " + spanAlias
+		// An unsigned bucket is never larger than its input, so this narrowing
+		// cast is mathematically safe and needs no per-row range guard.
+		candidateSQL = "CAST(" + bucket + " AS " + field.numberType + ")"
+		valueSQL = candidateAlias
+	} else if field.numberType == "Float64" {
+		spanSQL = "toFloat64(CAST(? AS UInt64))"
+		bucket := "floor(toFloat64(" + input + ") / " + spanAlias + ") * " + spanAlias
+		candidateSQL = bucket
+		finite := "isFinite(toFloat64(" + input + ")) AND isFinite(assumeNotNull(" + candidateAlias + "))"
+		normalized := "if(assumeNotNull(" + candidateAlias + ") = toFloat64(0), toFloat64(0), assumeNotNull(" + candidateAlias + "))"
+		valueSQL = guardedNumericBucketSQL(input, candidateAlias, "Float64", finite, normalized)
+	} else {
+		return "", compileState{}, nil, unsupportedNumericBinFieldType(operator)
+	}
+
+	fragment = "WITH " + spanSQL + " AS " + spanAlias + ", " +
+		candidateSQL + " AS " + candidateAlias + " " +
+		upsertFieldProjectionSQL(fragment, state, operator.Output.Name, valueSQL, alias)
+	next := updateBucketCompileState(state, operator.Input.Name, operator.Output, field)
+	return fragment, next, []any{operator.Span}, nil
+}
+
+func guardedNumericBucketSQL(input, candidate, numberType, additionalGuard, normalizedValue string) string {
+	unsupported := "CAST(throwIf(toUInt8(1), '" + UnsupportedNumericBinValueMarker + "') AS " + numberType + ")"
+	value := "assumeNotNull(" + candidate + ")"
+	guard := "isNotNull(" + candidate + ")"
+	if additionalGuard != "" {
+		guard += " AND " + additionalGuard
+	}
+	if normalizedValue != "" {
+		value = normalizedValue
+	}
+	return "if(isNull(" + input + "), " + input + ", if(" + guard + ", " + value + ", " + unsupported + "))"
+}
+
+func signedBucketIntermediateType(numberType string) (string, bool) {
+	// Int256 is intentionally absent. ClickHouse has no wider exact signed
+	// type in which to calculate the bucket below minInt256 before the guarded
+	// cast back to the source type. The compiler never exposes Int256 as a
+	// fixed result field.
+	switch numberType {
+	case "Int8", "Int16", "Int32", "Int64":
+		return "Int128", true
+	case "Int128":
+		return "Int256", true
+	default:
+		return "", false
+	}
+}
+
+func unsignedBucketIntermediateType(numberType string) (string, bool) {
+	switch numberType {
+	case "UInt8", "UInt16", "UInt32", "UInt64":
+		return "UInt64", true
+	case "UInt128":
+		return "UInt128", true
+	case "UInt256":
+		return "UInt256", true
+	default:
+		return "", false
+	}
+}
+
+func unsupportedNumericBinFieldType(operator *plan.NumericBucket) error {
+	return &plan.Diagnostic{
+		Code:    "SPL_UNSUPPORTED_BIN_FIELD_TYPE",
+		Message: "bin with a numeric span requires a known fixed numeric field",
+		Range:   operator.Input.Range,
+		Suggestions: []string{
+			"create a numeric field with eval before bin",
+			"aggregate to a fixed numeric field with stats before bin",
+		},
+	}
+}
+
+func validateCanonicalFieldRef(operation, role string, field plan.FieldRef) error {
+	resolved, err := plan.ResolveField(field.Name, field.Range)
+	if err != nil {
+		return fmt.Errorf("compile ClickHouse %s: invalid %s field: %w", operation, role, err)
+	}
+	if resolved.Name != field.Name || resolved.Canonical != field.Canonical ||
+		!slices.Equal(resolved.Path, field.Path) {
+		return fmt.Errorf("compile ClickHouse %s: %s field metadata is not canonical", operation, role)
+	}
+	return nil
+}
+
+func compileBucketProjection(
+	fragment string,
+	state compileState,
+	inputName string,
+	output plan.FieldRef,
+	value string,
+	source fieldState,
+	alias string,
+) (string, compileState) {
+	return upsertFieldProjectionSQL(fragment, state, output.Name, value, alias),
+		updateBucketCompileState(state, inputName, output, source)
+}
+
+func upsertFieldProjectionSQL(
+	fragment string,
+	state compileState,
+	outputName string,
+	value string,
+	alias string,
+) string {
+	name := quoteIdentifier(outputName)
+	if _, replacing := state.visible[outputName]; replacing {
+		return "SELECT * REPLACE (" + value + " AS " + name + ") FROM (" + fragment + ") AS " + alias
+	}
+	return "SELECT *, " + value + " AS " + name + " FROM (" + fragment + ") AS " + alias
+}
+
+func updateBucketCompileState(state compileState, inputName string, output plan.FieldRef, source fieldState) compileState {
+	next := cloneCompileState(state)
+	if exposesRawFieldsPayload(state) && !output.Canonical {
+		// A calculated top-level field shadows any same-named value still held
+		// in the immutable event payload. Publishing that payload would expose
+		// two contradictory values for one SPL field.
+		next.publicOrder = slices.DeleteFunc(next.publicOrder, func(name string) bool { return name == "fields" })
+	}
+	if inputName != output.Name && !slices.Contains(next.publicOrder, inputName) {
+		next.publicOrder = append(next.publicOrder, inputName)
+	}
+	if !slices.Contains(next.publicOrder, output.Name) {
+		next.publicOrder = append(next.publicOrder, output.Name)
+	}
+	delete(next.blocked, output.Name)
+	next.visible[output.Name] = fieldState{
+		valueSQL:      quoteIdentifier(output.Name),
+		existsSQL:     source.existsSQL,
+		existsArgs:    append([]any(nil), source.existsArgs...),
+		kind:          source.kind,
+		numberType:    source.numberType,
+		numericSort:   source.numericSort,
+		canonicalTime: false,
+		caseSensitive: false,
+	}
+	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
+	return next
 }
 
 func floorBucketTicks(value, span int64) int64 {
@@ -1354,7 +1550,7 @@ func validateExtractOperator(operator *plan.Extract) (splregex.ExtractionPattern
 		!strings.HasPrefix(operator.Pattern, "(?-s)") {
 		return splregex.ExtractionPattern{}, errors.New("compile ClickHouse extract: operator is invalid")
 	}
-	if err := validateExtractFieldRef("input", operator.Input); err != nil {
+	if err := validateCanonicalFieldRef("extract", "input", operator.Input); err != nil {
 		return splregex.ExtractionPattern{}, err
 	}
 	withoutDefaultFlags := strings.TrimPrefix(operator.Pattern, "(?-s)")
@@ -1375,7 +1571,7 @@ func validateExtractOperator(operator *plan.Extract) (splregex.ExtractionPattern
 			capture.Output.Name != expected.Name {
 			return splregex.ExtractionPattern{}, errors.New("compile ClickHouse extract: capture metadata does not match pattern")
 		}
-		if err := validateExtractFieldRef("output", capture.Output); err != nil {
+		if err := validateCanonicalFieldRef("extract", "output", capture.Output); err != nil {
 			return splregex.ExtractionPattern{}, err
 		}
 		if _, duplicate := seen[capture.Output.Name]; duplicate {
@@ -1384,18 +1580,6 @@ func validateExtractOperator(operator *plan.Extract) (splregex.ExtractionPattern
 		seen[capture.Output.Name] = struct{}{}
 	}
 	return validated, nil
-}
-
-func validateExtractFieldRef(role string, field plan.FieldRef) error {
-	resolved, err := plan.ResolveField(field.Name, field.Range)
-	if err != nil {
-		return fmt.Errorf("compile ClickHouse extract: invalid %s field: %w", role, err)
-	}
-	if resolved.Name != field.Name || resolved.Canonical != field.Canonical ||
-		!slices.Equal(resolved.Path, field.Path) {
-		return fmt.Errorf("compile ClickHouse extract: %s field metadata is not canonical", role)
-	}
-	return nil
 }
 
 func compileExtractInput(input plan.FieldRef, state compileState) (valueSQL, eligibleSQL string, args []any, err error) {

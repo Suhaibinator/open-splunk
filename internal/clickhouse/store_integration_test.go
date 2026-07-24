@@ -1519,9 +1519,95 @@ func testCompiledQueriesAgainstClickHouse(
 		t.Fatalf("pre-epoch time bin = %v, want %v", preEpochBucket, wantPreEpoch)
 	}
 
+	testNumericBinAgainstClickHouse(t, ctx, connection, indexTime, visibilityCutoff)
 	testStatsSumAndAverageAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testDedupAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testRexAgainstClickHouse(t, ctx, store, connection, indexTime)
+}
+
+func testNumericBinAgainstClickHouse(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	indexTime time.Time,
+	visibilityCutoff uint64,
+) {
+	t.Helper()
+
+	t.Run("numeric bin", func(t *testing.T) {
+		scalars := compileIntegrationSPL(
+			t,
+			`index=compiler event_id=n-one
+| eval signed=-11,unsigned=18446744073709551615,latency=-11.5,nullable=tonumber("bad")
+| bin signed span=10 AS signed_band
+| bin unsigned span=7 AS unsigned_band
+| bin latency span=4 AS latency_band
+| bin nullable span=10 AS nullable_band
+| table signed signed_band unsigned unsigned_band latency latency_band nullable nullable_band`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		var signedSource, signedBand int64
+		var unsignedSource, unsignedBand uint64
+		var floatingSource, floatingBand float64
+		var nullableSource, nullableBand *float64
+		if err := connection.QueryRow(ctx, scalars.SQL, scalars.Args...).Scan(
+			&signedSource,
+			&signedBand,
+			&unsignedSource,
+			&unsignedBand,
+			&floatingSource,
+			&floatingBand,
+			&nullableSource,
+			&nullableBand,
+		); err != nil {
+			t.Fatalf("execute scalar numeric bins: %v\nSQL: %s\nargs: %#v", err, scalars.SQL, scalars.Args)
+		}
+		if signedSource != -11 || signedBand != -20 ||
+			unsignedSource != ^uint64(0) || unsignedBand != uint64(18_446_744_073_709_551_614) ||
+			floatingSource != -11.5 || floatingBand != -12 ||
+			nullableSource != nil || nullableBand != nil {
+			t.Fatalf(
+				"scalar numeric bins = %d/%d %d/%d %g/%g %v/%v, want -11/-20 max/max-1 -11.5/-12 nil/nil",
+				signedSource,
+				signedBand,
+				unsignedSource,
+				unsignedBand,
+				floatingSource,
+				floatingBand,
+				nullableSource,
+				nullableBand,
+			)
+		}
+
+		transformed := compileIntegrationSPL(
+			t,
+			`index=compiler event_id=n-one | stats count | bin count span=3 AS band | table count band`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		var count, countBand uint64
+		if err := connection.QueryRow(ctx, transformed.SQL, transformed.Args...).Scan(&count, &countBand); err != nil {
+			t.Fatalf("execute transformed numeric bin: %v\nSQL: %s\nargs: %#v", err, transformed.SQL, transformed.Args)
+		}
+		if count != 1 || countBand != 0 {
+			t.Fatalf("transformed numeric bin = %d/%d, want 1/0", count, countBand)
+		}
+
+		underflow := compileIntegrationSPL(
+			t,
+			`index=compiler event_id=n-one | eval signed=-9223372036854775808 | bin signed span=10 | table signed`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		queryErr := executeCompiledExpectingNoRows(ctx, connection, underflow)
+		var exception *clickhousedriver.Exception
+		if !errors.As(queryErr, &exception) ||
+			exception.Code != 395 ||
+			!strings.Contains(exception.Message, UnsupportedNumericBinValueMarker) {
+			t.Fatalf("numeric-bin underflow error = %v, want guarded ClickHouse exception", queryErr)
+		}
+	})
 }
 
 func testRexAgainstClickHouse(

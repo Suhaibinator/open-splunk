@@ -48,26 +48,37 @@ pulling `origin/main`.
     boundaries; and
   - result classification, field catalogs, field summaries, timelines, index
     scope, and downstream SPL consume the extracted schema consistently.
-- This checkpoint adds the first bounded streaming `bin`/`bucket` slice:
-  - both aliases accept an explicit fixed `s`, `m`, or `h` span before or after
-    the exact canonical `_time` field;
-  - spans are bounded from one second up to, but not including, 24 hours and
-    lower through one row-preserving ClickHouse projection with no
-    aggregation/materialization fence; day-or-longer spans remain rejected
-    until timezone-aware midnight alignment is represented;
-  - bucket starts use nanosecond-safe mathematical floor division on the Unix
-    epoch, including timestamps before 1970 and values immediately below a
-    boundary;
-  - `bucket` compiles identically to `bin`, and `bin ... | stats count BY
-    _time` has pinned ClickHouse execution coverage;
-  - a first aligned bucket below ClickHouse's `DateTime64(9)` storage minimum
-    fails during planning instead of clamping or wrapping;
-  - binned `_time` remains a timestamp in an Events result and in completed-job
-    field analysis, while a second `bin`, `timechart`, and timeline correctly
-    reject its modified canonical-time provenance; and
-  - numeric fields, automatic/data-dependent bins, `AS`, custom alignment,
-    calendar/subsecond/log spans, wildcards, and multiple fields remain
-    explicit compatibility errors.
+- This checkpoint extends the bounded streaming `bin`/`bucket` implementation:
+  - both aliases accept one exact field, an explicit span before or after it,
+    and an optional final `AS` destination;
+  - a unitless positive integer span is an absolute numeric width capped at
+    `2^53-1`; fixed known numeric fields include promoted numeric columns,
+    numeric `eval` outputs, and numeric `stats` outputs;
+  - signed and unsigned values bucket through exact widened intermediate
+    arithmetic, retain their physical type, and use mathematical floor for
+    negative values; unrepresentable boundaries fail the search through a
+    sanitized unsupported-value marker;
+  - finite `Float64` values retain double semantics, normalize negative zero,
+    and reject non-finite input or output;
+  - direct Dynamic fields, strings, Booleans, timestamps, tagged decimals,
+    containers, and multivalue values remain explicit type errors rather than
+    being guessed or converted through `Float64`;
+  - numeric binning works after transforming commands, including `stats count`,
+    and stays row-preserving with one scoped scan and no aggregate, window, or
+    materialization fence;
+  - `AS` retains the source, overwrites an existing destination, updates exact
+    result/analysis typing, and suppresses the immutable public `fields`
+    convenience payload when it could expose a stale shadowed value;
+  - unitless `_time` spans mean seconds; explicit fixed `s`, `m`, or `h` spans
+    remain bounded from one second up to, but not including, 24 hours;
+  - `_time AS bucket_time` retains the original canonical clock for later
+    timeline/timechart work, while writing a bucket to `_time` invalidates that
+    provenance;
+  - timestamp buckets retain nanosecond-safe pre-epoch floor behavior and
+    reject an aligned boundary below ClickHouse's `DateTime64(9)` minimum; and
+  - automatic/data-dependent bins, numeric Dynamic/string coercion, custom
+    alignment, calendar/subsecond/log spans, wildcards, and multiple fields
+    remain explicit compatibility boundaries.
 - The binary protobuf Search WebSocket supports bounded target journals,
   replay/resynchronization, connection and global queue limits, terminal
   delivery, application/transport ping-pong, and graceful shutdown.
@@ -93,7 +104,8 @@ pulling `origin/main`.
 
 ## Validation for the checkpoint
 
-The following backend commands passed for the `bin`/`bucket` checkpoint:
+The following backend commands passed for the numeric `bin`/`bucket`
+checkpoint:
 
 ```sh
 go test ./... -count=1 -timeout=3m
@@ -101,6 +113,7 @@ go test -race ./internal/splregex ./internal/spl ./internal/plan ./internal/clic
 go vet ./...
 go build ./...
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/queryexec -run '^TestExecutorAndManagerAgainstClickHouse$' -count=1 -timeout=6m
 ```
 
 The pinned Docker test uses `clickhouse/clickhouse-server:26.3.17.4`. Its `rex`
@@ -110,10 +123,13 @@ types, zero-width matches, strict versus multiline end anchors, consecutive
 stages, mixed destination types, flattened object preservation, field
 catalogs/summaries, the cumulative byte guard, and an `EXPLAIN actions=1`
 assertion that sees exactly one physical `extractGroups` action for a stage.
-The `bin` fixture covers alias lowering, fixed timestamp result typing,
-composition with `stats`, completed-job field-catalog typing, UTC epoch
-alignment, and the compiled projection over a stored timestamp one nanosecond
-before the Unix epoch.
+The `bin` fixture covers alias lowering, signed negative floor, `UInt64`
+maximum-value precision, `Float64`, explicit-null preservation, consecutive
+bins with distinct spans, post-`stats` input, `AS`, classified `Int64`
+underflow, fixed timestamp result typing, completed-job field-catalog typing,
+UTC epoch alignment, and the compiled projection over a stored timestamp one
+nanosecond before the Unix epoch. The executor integration verifies that the
+numeric-bin runtime marker is mapped to a sanitized unsupported-value error.
 
 If a later environment cannot run Docker, keep the unit suite green and record
 the integration omission explicitly; do not silently treat a skipped opt-in
@@ -121,14 +137,13 @@ test as database validation.
 
 ## Remaining work, in priority order
 
-1. Extend `bin`/`bucket` in a separate precision-focused slice before building
-   `chart`. Numeric explicit spans need executable decisions for numeric
-   strings, mixed signed/unsigned/float/decimal rows, non-finite values,
-   negative mathematical floor, overflow, sparse presence, containers,
-   multivalue data, and `AS` collisions. Automatic `bins`/`minspan`,
-   `start`/`end`, `aligntime`, calendar/subsecond spans, and logarithmic spans
-   remain separate whole-input/alignment features and must not be
-   approximated.
+1. Extend `bin`/`bucket` to runtime Dynamic event fields before claiming broad
+   numeric-field compatibility. The next slice needs exact presence/type
+   metadata and executable decisions for numeric strings, mixed
+   signed/unsigned/float rows, tagged decimals, containers, and multivalue
+   data. Automatic `bins`/`minspan`, `start`/`end`, `aligntime`,
+   calendar/subsecond spans, and logarithmic spans remain separate
+   whole-input/alignment features and must not be approximated.
 2. Implement `chart` after numeric binning, then `spath`, in conformance-first,
    test-driven slices with pinned ClickHouse fixtures. A meaningful two-field
    `chart` is a bounded runtime-wide pivot, not a `stats` alias; reuse the
@@ -167,20 +182,21 @@ test as database validation.
 ## Review notes
 
 Independent adversarial passes covered SPL semantics/correctness,
-performance/resource accounting, code reuse, and maintainability. Findings
-fixed before this checkpoint include canonicalizing capture metadata before
-index-scope analysis, revalidating forged field references at the compiler
-boundary, accepting and diagnosing option order consistently, short-circuiting
-ineligible rows, adding the query-wide byte budget, proving physical
-single-extraction with ClickHouse `EXPLAIN`, pruning stale helper columns, and
-preserving flattened object-parent presence and type. The `bin` review also
-caught canonical-time provenance being dropped across projections, rejected
-day-or-longer UTC approximation in favor of future timezone-aware alignment,
-preserved the prior `timechart` logarithmic-span diagnostic, and upgraded the
-pinned database test from an isolated arithmetic expression to a stored
-pre-epoch event executed through the compiled projection.
+ClickHouse arithmetic and query shape, performance/resource accounting, code
+reuse, and maintainability. The numeric-bin review required a discriminated
+numeric/time span AST, compiler-boundary revalidation, a `2^53-1` width bound,
+exact wide-integer arithmetic, finite floating guards, sanitized runtime
+classification, canonical-time output provenance, stale-payload suppression,
+and tests over transforming rows and the unsigned 64-bit boundary.
+Final review also restored the precise missing-`=` parser diagnostic, made
+per-stage ClickHouse aliases collision-proof, narrowed integer intermediates
+without losing exactness, removed redundant runtime casts, and corrected the
+documentation not to promise atomic publication on a late streaming error.
 
-No live Splunk instance was available for a differential oracle. RE2/PCRE
-differences and optional-group behavior therefore remain explicit,
-test-enforced compatibility decisions rather than claims of full Splunk
-equivalence.
+The official Splunk 10.4 container image was downloaded for a possible
+differential oracle, but startup additionally required accepting Splunk's
+current General Terms. No changing legal agreement was accepted on the user's
+behalf; the failed ephemeral container and image were removed. Semantics not
+settled by public documentation—especially Dynamic strings, mixed values,
+decimals, and multivalue fields—therefore remain explicit unsupported
+boundaries instead of compatibility claims.

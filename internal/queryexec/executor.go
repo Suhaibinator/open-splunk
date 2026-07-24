@@ -1004,10 +1004,12 @@ func classifyQueryError(ctx context.Context, err error) error {
 			return fmt.Errorf("%w: rex capture bytes exceeded the per-row limit", searchjobs.ErrExecutionLimit)
 		}
 		if exception.Code == 395 && (strings.Contains(exception.Message, clickhouse.UnsupportedStatsByValueMarker) ||
-			strings.Contains(exception.Message, clickhouse.UnsupportedDedupValueMarker)) {
-			// The compiler deliberately emits stable markers when a scalar-only
-			// operation sees a dynamic non-scalar value. Do not retain any
-			// surrounding ClickHouse message, generated SQL, or storage detail.
+			strings.Contains(exception.Message, clickhouse.UnsupportedDedupValueMarker) ||
+			strings.Contains(exception.Message, clickhouse.UnsupportedNumericBinValueMarker)) {
+			// The compiler deliberately emits stable markers when an operation
+			// encounters a value outside its supported scalar/type/range
+			// contract. Do not retain any surrounding ClickHouse message,
+			// generated SQL, or storage detail.
 			return searchjobs.ErrUnsupportedValue
 		}
 		switch exception.Code {

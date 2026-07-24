@@ -564,6 +564,210 @@ func TestCompileTimeBinUsesOneStreamingProjection(t *testing.T) {
 	}
 }
 
+func TestCompileNumericBinUsesExactStreamingArithmetic(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		output     string
+		numberType string
+		guarded    bool
+		required   []string
+	}{
+		{
+			name:       "signed integer",
+			source:     `index=gradethis | eval latency=-11 | bin latency span=10 | table latency`,
+			output:     "latency",
+			numberType: "Int64",
+			guarded:    true,
+			required: []string{
+				`toInt128("latency")`,
+				`intDiv(`,
+				`%`,
+				`accurateCastOrNull(`,
+				`'Int64'`,
+			},
+		},
+		{
+			name:       "unsigned integer",
+			source:     `index=gradethis | stats count | bin count span=10 | table count`,
+			output:     "count",
+			numberType: "UInt64",
+			required: []string{
+				`toUInt64("count")`,
+				`intDiv(`,
+				` AS UInt64)`,
+			},
+		},
+		{
+			name:       "floating point",
+			source:     `index=gradethis | eval latency=-11.5 | bin latency span=10 | table latency`,
+			output:     "latency",
+			numberType: "Float64",
+			guarded:    true,
+			required: []string{
+				`floor(`,
+				`toFloat64(`,
+				`isFinite(`,
+			},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			compiled := compileSPL(t, test.source)
+			if !slices.Equal(compiled.OutputFields, []string{test.output}) {
+				t.Fatalf("output fields = %v", compiled.OutputFields)
+			}
+			for _, required := range test.required {
+				if !strings.Contains(compiled.SQL, required) {
+					t.Fatalf("%s numeric bin SQL missing %q:\n%s", test.numberType, required, compiled.SQL)
+				}
+			}
+			if got := strings.Contains(compiled.SQL, UnsupportedNumericBinValueMarker); got != test.guarded {
+				t.Fatalf("numeric bin marker present = %t, want %t:\n%s", got, test.guarded, compiled.SQL)
+			}
+			if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
+				t.Fatalf("scoped storage scan occurs %d times, want once:\n%s", got, compiled.SQL)
+			}
+			for _, forbidden := range []string{" GROUP BY ", " MATERIALIZED ", " OVER ("} {
+				if strings.Contains(compiled.SQL, forbidden) {
+					t.Fatalf("streaming numeric bin introduced %q:\n%s", forbidden, compiled.SQL)
+				}
+			}
+			if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+				t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+			}
+		})
+	}
+}
+
+func TestCompileNumericBinPreservesSourceAndOutputSchemaWithAS(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | eval latency=-11 | bin latency span=10 AS band | table latency band`)
+	if !slices.Equal(compiled.OutputFields, []string{"latency", "band"}) {
+		t.Fatalf("output fields = %v, want source and alias", compiled.OutputFields)
+	}
+	if !strings.Contains(compiled.SQL, `SELECT *, `) ||
+		!strings.Contains(compiled.SQL, `AS "band"`) {
+		t.Fatalf("new alias is not emitted as an added projection:\n%s", compiled.SQL)
+	}
+
+	overwritten := compileSPL(t, `index=gradethis | stats count BY level | bin count span=10 AS level | table level count`)
+	if !slices.Equal(overwritten.OutputFields, []string{"level", "count"}) {
+		t.Fatalf("collision output fields = %v", overwritten.OutputFields)
+	}
+	if !strings.Contains(overwritten.SQL, `REPLACE (`) || !strings.Contains(overwritten.SQL, `AS "level"`) {
+		t.Fatalf("existing destination is not overwritten:\n%s", overwritten.SQL)
+	}
+
+	openSchema := compileSPL(t, `index=gradethis | bin severity span=10 AS band`)
+	if slices.Contains(openSchema.OutputFields, "fields") ||
+		!slices.Contains(openSchema.OutputFields, "severity") ||
+		!slices.Contains(openSchema.OutputFields, "band") {
+		t.Fatalf("open-schema output fields = %v, want source/alias without stale fields payload", openSchema.OutputFields)
+	}
+	if strings.Contains(openSchema.SQL, `"__os_fields" AS "fields"`) {
+		t.Fatalf("numeric bin exposed an immutable fields payload after a calculated alias:\n%s", openSchema.SQL)
+	}
+}
+
+func TestCompileConsecutiveNumericBinsKeepStageLocalSpans(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | eval signed=-11,unsigned=18446744073709551615 | bin signed span=10 | bin unsigned span=7 | table signed unsigned`,
+	)
+	if got, want := strings.Count(compiled.SQL, UnsupportedNumericBinValueMarker), 1; got != want {
+		t.Fatalf("numeric bin guard count = %d, want %d:\n%s", got, want, compiled.SQL)
+	}
+	if got := countArgument(compiled.Args, uint64(10)); got != 1 {
+		t.Fatalf("span 10 argument count = %d, want 1: %#v", got, compiled.Args)
+	}
+	if got := countArgument(compiled.Args, uint64(7)); got != 1 {
+		t.Fatalf("span 7 argument count = %d, want 1: %#v", got, compiled.Args)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+}
+
+func TestCompileTimeBinASRetainsCanonicalSource(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | bin _time span=5m AS bucket_time | table _time bucket_time`)
+	if !slices.Equal(compiled.OutputFields, []string{"_time", "bucket_time"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	if !strings.Contains(compiled.SQL, `AS "bucket_time"`) {
+		t.Fatalf("time bin alias is missing:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, `REPLACE (`) {
+		t.Fatalf("time bin alias replaced its canonical source:\n%s", compiled.SQL)
+	}
+	if result := compileSPL(t, `index=gradethis | bin _time span=5m AS bucket_time | timechart span=5m count BY level`); result.Timechart == nil {
+		t.Fatal("time bin AS unexpectedly invalidated the canonical source time")
+	}
+}
+
+func TestCompileNumericBinRejectsUnsupportedFieldKinds(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | bin latency span=10`,
+		`index=gradethis | bin host span=10`,
+		`index=gradethis | eval enabled=true | bin enabled span=10`,
+	} {
+		logical := buildPlan(t, source)
+		_, err := (Compiler{}).Compile(logical)
+		var diagnostic *plan.Diagnostic
+		if !errors.As(err, &diagnostic) || diagnostic.Code != "SPL_UNSUPPORTED_BIN_FIELD_TYPE" {
+			t.Fatalf("Compile(%q) error = %v, want SPL_UNSUPPORTED_BIN_FIELD_TYPE", source, err)
+		}
+	}
+}
+
+func TestCompileNumericBinRejectsForgedPlans(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(*plan.NumericBucket)
+	}{
+		{name: "zero span", mutate: func(bucket *plan.NumericBucket) { bucket.Span = 0 }},
+		{name: "oversized span", mutate: func(bucket *plan.NumericBucket) {
+			bucket.Span = plan.MaximumNumericBinSpan + 1
+		}},
+		{name: "wrong input metadata", mutate: func(bucket *plan.NumericBucket) {
+			bucket.Input.Path = []string{"forged"}
+		}},
+		{name: "wrong output metadata", mutate: func(bucket *plan.NumericBucket) {
+			bucket.Output.Path = []string{"forged"}
+		}},
+		{name: "time input", mutate: func(bucket *plan.NumericBucket) {
+			bucket.Input = plan.FieldRef{Name: "_time", Canonical: true}
+		}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			logical := buildPlan(t, `index=gradethis | eval latency=-11 | bin latency span=10`)
+			bucket := logical.Operators[len(logical.Operators)-1].(*plan.NumericBucket)
+			test.mutate(bucket)
+			if _, err := (Compiler{}).Compile(logical); err == nil {
+				t.Fatal("Compile() succeeded for forged numeric bucket")
+			}
+		})
+	}
+}
+
 func TestCompileBucketAliasMatchesBin(t *testing.T) {
 	t.Parallel()
 
@@ -683,8 +887,9 @@ func TestCompileTimeBinRejectsForgedPlans(t *testing.T) {
 		t.Fatal(err)
 	}
 	transformed.Operators = append(transformed.Operators, &plan.TimeBucket{
-		Field: timeField,
-		Span:  5 * time.Minute,
+		Field:  timeField,
+		Output: timeField,
+		Span:   5 * time.Minute,
 	})
 	if _, err := (Compiler{}).Compile(transformed); err == nil {
 		t.Fatal("Compile() accepted a time bucket after transformed rows")

@@ -112,14 +112,20 @@ func TestRexCompatibilityCorpus(t *testing.T) {
 func TestBinCompatibilityCorpus(t *testing.T) {
 	t.Parallel()
 
-	for _, source := range []string{
-		`index=gradethis | bin _time span=5m | stats count BY _time`,
-		`index=gradethis | bucket span=1h _time | table _time message`,
+	for _, test := range []struct {
+		source   string
+		required string
+	}{
+		{`index=gradethis | bin _time span=5m | stats count BY _time`, "fromUnixTimestamp64Nano("},
+		{`index=gradethis | bucket span=1h _time AS hour | table _time hour message`, "fromUnixTimestamp64Nano("},
+		{`index=gradethis | bin severity span=10 | stats count BY severity`, `toUInt64("severity")`},
+		{`index=gradethis | eval latency=-11.5 | bucket span=10 latency AS band | table latency band`, UnsupportedNumericBinValueMarker},
+		{`index=gradethis | stats count | bin count span=10`, `toUInt64("count")`},
 	} {
-		compiled := compileSPL(t, source)
+		compiled := compileSPL(t, test.source)
 		if compiled.SQL == "" || len(compiled.OutputFields) == 0 ||
-			!strings.Contains(compiled.SQL, "fromUnixTimestamp64Nano(") {
-			t.Fatalf("bin corpus query is incomplete for %q: %#v", source, compiled)
+			!strings.Contains(compiled.SQL, test.required) {
+			t.Fatalf("bin corpus query is incomplete for %q: %#v", test.source, compiled)
 		}
 	}
 }

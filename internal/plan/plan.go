@@ -10,6 +10,11 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
+// MaximumNumericBinSpan is the largest unitless bin width whose integer value
+// remains exact under Splunk's documented double-precision numeric model.
+// Both planning and backend compilation revalidate this boundary.
+const MaximumNumericBinSpan = uint64(1<<53 - 1)
+
 // Query is an ordered logical operator pipeline.
 type Query struct {
 	Operators        []Operator
@@ -100,19 +105,34 @@ func (*Extend) operator()                 {}
 func (*Extend) LogicalName() string       { return "Extend" }
 func (op *Extend) SourceRange() spl.Range { return op.Range }
 
-// TimeBucket replaces the canonical event time with the UTC Unix-epoch-aligned
-// start of its fixed-duration interval. It preserves row cardinality, event
-// identity, and established ordering, but the resulting _time no longer has
-// original canonical-time provenance.
+// TimeBucket replaces or copies the canonical event time with the UTC
+// Unix-epoch-aligned start of its fixed-duration interval. The bucketed output
+// is synthetic; the source retains canonical-time provenance when copied to a
+// different field.
 type TimeBucket struct {
-	Field FieldRef
-	Span  time.Duration
-	Range spl.Range
+	Field  FieldRef
+	Output FieldRef
+	Span   time.Duration
+	Range  spl.Range
 }
 
 func (*TimeBucket) operator()                 {}
 func (*TimeBucket) LogicalName() string       { return "TimeBucket" }
 func (op *TimeBucket) SourceRange() spl.Range { return op.Range }
+
+// NumericBucket replaces or copies one numeric scalar with the
+// zero-aligned start of its fixed-width interval. It preserves row
+// cardinality, event identity, and established order.
+type NumericBucket struct {
+	Input  FieldRef
+	Output FieldRef
+	Span   uint64
+	Range  spl.Range
+}
+
+func (*NumericBucket) operator()                 {}
+func (*NumericBucket) LogicalName() string       { return "NumericBucket" }
+func (op *NumericBucket) SourceRange() spl.Range { return op.Range }
 
 // ExtractCapture maps one named regular-expression output to its one-based
 // group index. Unnamed capture groups remain part of the numeric sequence.

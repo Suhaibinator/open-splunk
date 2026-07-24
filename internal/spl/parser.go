@@ -432,36 +432,42 @@ func (p *parser) parseBinCommand(name token) (Command, error) {
 	var (
 		fieldSeen bool
 		field     token
+		output    token
 		spanSeen  bool
-		span      TimeSpan
+		span      BinSpan
 		spanValue token
 		end       = name.range_.End
 	)
 
 	for !p.atCommandEnd() {
 		current := p.current()
-		if current.kind == tokenWord && strings.EqualFold(current.text, "span") {
+		followedByEqual := current.kind == tokenWord &&
+			p.index+1 < len(p.tokens) &&
+			p.tokens[p.index+1].kind == tokenEqual
+		if fieldSeen && current.kind == tokenWord &&
+			strings.EqualFold(current.text, "span") && !followedByEqual {
+			return nil, &Diagnostic{
+				Code:        "SPL_EXPECTED_EQUAL",
+				Message:     "bin span must be followed by '='",
+				Range:       current.range_,
+				Suggestions: []string{"bin _time span=5m"},
+			}
+		}
+		if followedByEqual && strings.EqualFold(current.text, "span") {
 			if spanSeen {
 				return nil, p.unsupportedBinSyntax(current, "bin span may be specified only once")
 			}
 			option := current
 			p.advance()
-			if !p.match(tokenEqual) {
-				return nil, &Diagnostic{
-					Code:        "SPL_EXPECTED_EQUAL",
-					Message:     "bin span must be followed by '='",
-					Range:       option.range_,
-					Suggestions: []string{"bin _time span=5m"},
-				}
-			}
+			p.advance() // '=' was established by lookahead.
 			value := p.current()
 			if value.kind != tokenWord {
 				if value.kind == tokenEOF || value.kind == tokenPipe {
 					value = option
 				}
-				return nil, invalidFixedTimeSpan(value, binTimeSpanConfig)
+				return nil, invalidBinSpan(value)
 			}
-			parsed, err := parseFixedTimeSpan(value, binTimeSpanConfig)
+			parsed, err := parseBinSpan(value)
 			if err != nil {
 				return nil, err
 			}
@@ -473,16 +479,43 @@ func (p *parser) parseBinCommand(name token) (Command, error) {
 			continue
 		}
 
-		if current.kind == tokenWord {
+		if followedByEqual {
 			switch strings.ToLower(current.text) {
 			case "bins", "minspan", "start", "end", "aligntime":
 				return nil, p.unsupportedBinSyntax(
 					current,
 					fmt.Sprintf("bin option %q is not supported; use one explicit fixed span", current.text),
 				)
-			case "as":
-				return nil, p.unsupportedBinSyntax(current, "bin AS output fields are not supported")
+			default:
+				return nil, p.unsupportedBinSyntax(
+					current,
+					fmt.Sprintf("bin option %q is not supported", current.text),
+				)
 			}
+		}
+		if current.kind == tokenWord && strings.EqualFold(current.text, "as") {
+			if !fieldSeen {
+				return nil, p.unsupportedBinSyntax(current, "bin AS requires a source field first")
+			}
+			asToken := current
+			p.advance()
+			destination := p.current()
+			if destination.kind == tokenEOF || destination.kind == tokenPipe {
+				return nil, p.unsupportedBinSyntax(asToken, "bin AS requires one exact unquoted output field")
+			}
+			if destination.kind != tokenWord {
+				return nil, p.unsupportedBinSyntax(destination, "bin AS requires one exact unquoted output field")
+			}
+			if strings.Contains(destination.text, "*") {
+				return nil, p.unsupportedBinSyntax(destination, "wildcard bin output fields are not supported")
+			}
+			output = destination
+			end = destination.range_.End
+			p.advance()
+			if !p.atCommandEnd() {
+				return nil, p.unsupportedBinSyntax(p.current(), "bin AS output must be the final command argument")
+			}
+			continue
 		}
 		if current.kind == tokenComma {
 			located := current
@@ -495,19 +528,17 @@ func (p *parser) parseBinCommand(name token) (Command, error) {
 			return nil, p.unsupportedBinSyntax(located, "bin supports exactly one field")
 		}
 		if current.kind != tokenWord {
-			return nil, p.unsupportedBinSyntax(current, "bin requires the exact unquoted _time field")
+			return nil, p.unsupportedBinSyntax(current, "bin requires one exact unquoted source field")
 		}
 		if fieldSeen {
 			return nil, p.unsupportedBinSyntax(current, "bin supports exactly one field")
 		}
-		if current.text != "_time" {
-			if strings.Contains(current.text, "*") {
-				return nil, p.unsupportedBinSyntax(current, "wildcard bin fields are not supported")
-			}
-			return nil, p.unsupportedBinSyntax(current, "bin currently supports only the exact _time field")
+		if strings.Contains(current.text, "*") {
+			return nil, p.unsupportedBinSyntax(current, "wildcard bin fields are not supported")
 		}
 		fieldSeen = true
 		field = current
+		output = current
 		end = current.range_.End
 		p.advance()
 	}
@@ -517,15 +548,17 @@ func (p *parser) parseBinCommand(name token) (Command, error) {
 		if spanSeen {
 			located = spanValue
 		}
-		return nil, p.unsupportedBinSyntax(located, "bin requires exactly one unquoted _time field")
+		return nil, p.unsupportedBinSyntax(located, "bin requires exactly one unquoted source field")
 	}
 	if !spanSeen {
-		return nil, p.unsupportedBinSyntax(field, "bin requires one explicit span=<positive integer><s|m|h>")
+		return nil, p.unsupportedBinSyntax(field, "bin requires one explicit positive span")
 	}
 	return &BinCommand{
 		CommandName: commandName,
 		Field:       field.text,
 		FieldRange:  field.range_,
+		Output:      output.text,
+		OutputRange: output.range_,
 		Span:        span,
 		Range:       Range{Start: name.range_.Start, End: end},
 	}, nil
@@ -606,6 +639,47 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 
 func parseTimechartSpan(tok token) (TimeSpan, error) {
 	return parseFixedTimeSpan(tok, timechartTimeSpanConfig)
+}
+
+func parseBinSpan(tok token) (BinSpan, error) {
+	if unsignedIntegerSyntax(tok.text) {
+		magnitude, err := strconv.ParseUint(tok.text, 10, 64)
+		if err != nil {
+			return BinSpan{}, &Diagnostic{
+				Code:    "SPL_NUMBER_OUT_OF_RANGE",
+				Message: "bin span is outside the supported 64-bit range",
+				Range:   tok.range_,
+			}
+		}
+		if magnitude == 0 {
+			return BinSpan{}, invalidBinSpan(tok)
+		}
+		return BinSpan{
+			Kind:      BinSpanKindNumeric,
+			Magnitude: magnitude,
+			Range:     tok.range_,
+		}, nil
+	}
+
+	span, err := parseFixedTimeSpan(tok, binTimeSpanConfig)
+	if err != nil {
+		return BinSpan{}, err
+	}
+	return BinSpan{
+		Kind:      BinSpanKindTime,
+		Magnitude: span.Magnitude,
+		Unit:      span.Unit,
+		Range:     span.Range,
+	}, nil
+}
+
+func invalidBinSpan(tok token) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_INVALID_ARGUMENT",
+		Message:     "bin span must be a positive integer, optionally followed by s, m, or h",
+		Range:       tok.range_,
+		Suggestions: []string{"bin _time span=5m"},
+	}
 }
 
 type fixedTimeSpanParserConfig struct {

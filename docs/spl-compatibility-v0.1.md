@@ -2,7 +2,7 @@
 
 **Status:** executable implementation contract
 **Compatibility version:** `0.1`
-**Last updated:** July 23, 2026
+**Last updated:** July 24, 2026
 
 Open Splunk accepts only the syntax and behavior described here. Unsupported
 commands or forms fail with a source-located diagnostic; the compiler never
@@ -421,26 +421,56 @@ the fixed output schema.
 
 ```spl
 | bin _time span=5m
-| bin span=5m _time
-| bucket _time span=1h
+| bin _time span=5 AS bucket_time
+| bin severity span=10
+| bucket span=10 latency AS latency_band
+| stats count | bin count span=100
 | bin _time span=5m | stats count BY _time
 ```
 
-`bucket` is an exact alias for `bin`. The initial streaming slice accepts one
-exact, unquoted canonical `_time` field and one explicit positive fixed `s`,
-`m`, or `h` span from one second up to, but not including, 24 hours. The field
-and `span` option may appear in either documented order. The command replaces
-`_time` with the UTC Unix-epoch-aligned start of its interval without changing
-row cardinality, event identity, sparse fields, or established event order.
-Downstream filters, projections, sorts, and aggregations consume the binned
-timestamp.
+`bucket` is an exact alias for `bin`. The streaming slice accepts one exact,
+unquoted field, one explicit positive span, and optional `AS <exact output>`.
+The field and `span` option may appear in either order; `AS` is final. The
+command replaces its source by default. With `AS`, the source is retained and
+the destination is added or overwritten. Row cardinality, event identity, and
+established order do not change, and downstream filters, projections, sorts,
+aggregations, field catalogs, and field summaries consume the bucketed value.
 
-Alignment uses mathematical floor division, including for timestamps before
-1970 and values one nanosecond below a boundary. A bin result remains an Events
-relation, and completed-job field analysis observes the binned timestamp.
-Because `_time` no longer represents the original event timestamp, a second
-`bin`, `timechart`, or timeline request is rejected with a source-located
-canonical-time diagnostic.
+A unitless span is a base-10 integer from 1 through `9007199254740991`
+(`2^53-1`). For a non-time field it is an absolute numeric width. The current
+precision-focused slice accepts only a field whose pipeline type is already a
+fixed integer or `Float64`: promoted numeric columns such as `severity`,
+numeric `eval` outputs, and numeric `stats` outputs qualify. A direct dynamic
+event field, string, Boolean, timestamp, or container is rejected with
+`SPL_UNSUPPORTED_BIN_FIELD_TYPE`; use the supported `eval`/`tonumber` or
+`stats` surface to establish a fixed numeric field first.
+
+Integer bucketing uses exact widened intermediate arithmetic and the
+mathematical definition `floor(value / span) * span`, so `-11` with span 10
+becomes `-20`. The original signed or unsigned physical type is retained.
+A boundary whose bucket start cannot be represented by that type—for example,
+`MinInt64` with a non-dividing span—fails the search with a sanitized
+unsupported-value error rather than wrapping or widening. `Float64` values use
+finite double-precision floor semantics, retain `Float64`, normalize negative
+zero, and fail the search if the input or result is not finite. Explicit null
+remains null. Numeric-looking strings, mixed runtime Dynamic values, tagged
+decimals, and multivalue numeric fields are outside this fixed-type slice and
+are not approximated.
+
+For exact canonical `_time`, a unitless span means seconds. Explicit `s`, `m`,
+or `h` spans are also accepted from one second up to, but not including, 24
+hours. A time-unit span on another field is rejected. Time alignment uses
+mathematical floor division on UTC Unix-epoch nanoseconds, including for
+timestamps before 1970 and values one nanosecond below a boundary. The
+bucketed output remains a `DateTime64(9)` timestamp.
+
+A bin result remains an Events relation unless an earlier transforming command
+already made it Statistics. Replacing `_time` makes that field synthetic, so a
+later time `bin`, `timechart`, or timeline request is rejected with a
+source-located canonical-time diagnostic. `bin _time ... AS bucket_time`
+retains the original canonical `_time`, so later timechart and timeline
+analysis remain valid. Conversely, writing any numeric bin `AS _time` replaces
+the canonical clock and invalidates those consumers.
 
 ClickHouse must materialize each public bin boundary as `DateTime64(9)`.
 Consequently a search beginning at the supported `1900-01-01T00:00:00Z` lower
@@ -450,13 +480,20 @@ wrapped. This differs deliberately from `timechart`, whose private integer
 ordinal transport can represent a partial bucket before the timestamp storage
 minimum.
 
-Numeric fields, omitted `span`, automatic `bins`/`minspan`, `start`, `end`,
-`aligntime`, `AS`, logarithmic spans, calendar/subsecond units, wildcards,
-quoted fields, and multiple fields are not yet supported. Spans of one day or
-more are also rejected because Splunk aligns them to midnight in the user's
-timezone, including daylight-saving transitions, while the current logical
-plan does not carry that alignment context. Each unsupported form fails
-explicitly rather than falling back to an approximate or data-dependent bin.
+On an open event schema, `fields` is the reserved whole-payload convenience
+column and cannot be the source or destination; a closed `table` or
+transforming schema may declare an ordinary numeric column with that spelling.
+When an `AS` output could shadow a member of the immutable dynamic payload, the
+public convenience object is omitted while unrelated dynamic fields remain
+available to downstream SPL.
+
+Omitted `span`, automatic `bins`/`minspan`, `start`, `end`, `aligntime`,
+logarithmic spans, calendar/subsecond units, wildcards, quoted fields, and
+multiple fields are not yet supported. Spans of one day or more are also
+rejected because Splunk aligns them to midnight in the user's timezone,
+including daylight-saving transitions, while the current logical plan does
+not carry that alignment context. Each unsupported form fails explicitly
+rather than falling back to an approximate or data-dependent bin.
 
 ### `timechart`
 

@@ -200,36 +200,87 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				Range:    command.Range,
 			})
 		case *spl.BinCommand:
-			if command.Field != "_time" {
+			if !outputSchemaKnown && command.Field == "fields" {
 				return nil, &Diagnostic{
-					Code:        "SPL_UNSUPPORTED_BIN_TIME_FIELD",
-					Message:     "bin currently supports only the exact canonical _time field",
-					Range:       command.FieldRange,
-					Suggestions: []string{"bin _time span=5m"},
+					Code:    "SPL_AMBIGUOUS_BIN_FIELD",
+					Message: "bin cannot read the event result's reserved fields payload without an exact upstream schema",
+					Range:   command.FieldRange,
+					Suggestions: []string{
+						"select an exact ordinary field with table before bin",
+						"produce a closed stats schema before bin fields",
+					},
 				}
 			}
-			if !canonicalTimeAvailable {
+			if !outputSchemaKnown && command.Output == "fields" {
 				return nil, &Diagnostic{
-					Code:        "SPL_UNSUPPORTED_BIN_TIME_FIELD",
-					Message:     "bin requires the unmodified canonical _time field",
-					Range:       command.FieldRange,
-					Suggestions: []string{"run bin before removing, replacing, transforming, or previously binning _time"},
+					Code:    "SPL_AMBIGUOUS_BIN_FIELD",
+					Message: "bin cannot replace the event result's reserved fields payload without an exact upstream schema",
+					Range:   command.OutputRange,
+					Suggestions: []string{
+						"select an exact output schema with table before binning AS fields",
+						"choose another bin output field",
+					},
 				}
 			}
-			field, fieldErr := ResolveField(command.Field, command.FieldRange)
-			if fieldErr != nil {
-				return nil, fieldErr
+			input, inputErr := ResolveField(command.Field, command.FieldRange)
+			if inputErr != nil {
+				return nil, inputErr
 			}
-			span, spanErr := fixedBinSpan(command.Span)
-			if spanErr != nil {
-				return nil, spanErr
+			output, outputErr := ResolveField(command.Output, command.OutputRange)
+			if outputErr != nil {
+				return nil, outputErr
 			}
-			result.Operators = append(result.Operators, &TimeBucket{
-				Field: field,
-				Span:  span,
-				Range: command.Range,
-			})
-			canonicalTimeAvailable = false
+
+			switch command.Span.Kind {
+			case spl.BinSpanKindNumeric, spl.BinSpanKindTime:
+				if command.Field == "_time" {
+					if !canonicalTimeAvailable {
+						return nil, unsupportedBinTimeField(command.FieldRange)
+					}
+					span, spanErr := fixedBinSpan(command.Span)
+					if spanErr != nil {
+						return nil, spanErr
+					}
+					result.Operators = append(result.Operators, &TimeBucket{
+						Field:  input,
+						Output: output,
+						Span:   span,
+						Range:  command.Range,
+					})
+					break
+				}
+				if command.Span.Kind == spl.BinSpanKindTime {
+					return nil, &Diagnostic{
+						Code:        "SPL_UNSUPPORTED_BIN_TIME_FIELD",
+						Message:     "bin spans with time units require the exact canonical _time field",
+						Range:       command.FieldRange,
+						Suggestions: []string{"use a unitless numeric span for non-time fields", "bin _time span=5m"},
+					}
+				}
+				span, spanErr := fixedNumericBinSpan(command.Span)
+				if spanErr != nil {
+					return nil, spanErr
+				}
+				result.Operators = append(result.Operators, &NumericBucket{
+					Input:  input,
+					Output: output,
+					Span:   span,
+					Range:  command.Range,
+				})
+			default:
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_BIN_SYNTAX",
+					Message: "bin span kind is invalid",
+					Range:   command.Span.Range,
+				}
+			}
+
+			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Output) {
+				result.OutputFields = append(result.OutputFields, command.Output)
+			}
+			if command.Output == "_time" {
+				canonicalTimeAvailable = false
+			}
 		case *spl.RenameCommand:
 			assignments, renameErr := convertRenameAssignments(command)
 			if renameErr != nil {
@@ -572,9 +623,47 @@ func fixedTimechartSpan(span spl.TimeSpan) (time.Duration, error) {
 	return duration, nil
 }
 
-func fixedBinSpan(span spl.TimeSpan) (time.Duration, error) {
+func fixedNumericBinSpan(span spl.BinSpan) (uint64, error) {
+	if span.Kind != spl.BinSpanKindNumeric || span.Unit != spl.TimeSpanUnitInvalid {
+		return 0, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_BIN_SYNTAX",
+			Message: "numeric bin spans must be unitless",
+			Range:   span.Range,
+		}
+	}
+	if span.Magnitude == 0 || span.Magnitude > MaximumNumericBinSpan {
+		return 0, &Diagnostic{
+			Code:    "SPL_NUMBER_OUT_OF_RANGE",
+			Message: fmt.Sprintf("numeric bin span must be between 1 and %d", MaximumNumericBinSpan),
+			Range:   span.Range,
+		}
+	}
+	return span.Magnitude, nil
+}
+
+func fixedBinSpan(span spl.BinSpan) (time.Duration, error) {
+	var unit spl.TimeSpanUnit
+	switch span.Kind {
+	case spl.BinSpanKindNumeric:
+		if _, err := fixedNumericBinSpan(span); err != nil {
+			return 0, err
+		}
+		unit = spl.TimeSpanUnitSecond
+	case spl.BinSpanKindTime:
+		unit = span.Unit
+	default:
+		return 0, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_BIN_SYNTAX",
+			Message: "bin span kind is invalid",
+			Range:   span.Range,
+		}
+	}
 	duration, err := fixedDurationSpan(
-		span,
+		spl.TimeSpan{
+			Magnitude: span.Magnitude,
+			Unit:      unit,
+			Range:     span.Range,
+		},
 		"SPL_UNSUPPORTED_BIN_SYNTAX",
 		"bin",
 	)
@@ -592,6 +681,15 @@ func fixedBinSpan(span spl.TimeSpan) (time.Duration, error) {
 		}
 	}
 	return duration, nil
+}
+
+func unsupportedBinTimeField(sourceRange spl.Range) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_BIN_TIME_FIELD",
+		Message:     "bin requires the unmodified canonical _time field",
+		Range:       sourceRange,
+		Suggestions: []string{"run bin before removing, replacing, transforming, or previously binning _time"},
+	}
 }
 
 func fixedDurationSpan(span spl.TimeSpan, syntaxCode, commandName string) (time.Duration, error) {

@@ -755,7 +755,11 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 	if err := classifyQueryError(context.Background(), tooManyGroups); !errors.Is(err, searchjobs.ErrExecutionLimit) || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("group cap error = %v", err)
 	}
-	for _, marker := range []string{clickhouse.UnsupportedStatsByValueMarker, clickhouse.UnsupportedDedupValueMarker} {
+	for _, marker := range []string{
+		clickhouse.UnsupportedStatsByValueMarker,
+		clickhouse.UnsupportedDedupValueMarker,
+		clickhouse.UnsupportedNumericBinValueMarker,
+	} {
 		unsupported := &clickhousedriver.Exception{
 			Code:    395,
 			Name:    "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
@@ -774,9 +778,15 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 		strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), clickhouse.RexCaptureLimitMarker) {
 		t.Fatalf("rex capture limit classification = %v", err)
 	}
-	wrongCode := &clickhousedriver.Exception{Code: 241, Message: clickhouse.UnsupportedStatsByValueMarker}
-	if err := classifyQueryError(context.Background(), wrongCode); !errors.Is(err, searchjobs.ErrExecutionLimit) || errors.Is(err, searchjobs.ErrUnsupportedValue) {
-		t.Fatalf("marker on an unrelated exception = %v", err)
+	for _, marker := range []string{
+		clickhouse.UnsupportedStatsByValueMarker,
+		clickhouse.UnsupportedDedupValueMarker,
+		clickhouse.UnsupportedNumericBinValueMarker,
+	} {
+		wrongCode := &clickhousedriver.Exception{Code: 241, Message: marker}
+		if err := classifyQueryError(context.Background(), wrongCode); !errors.Is(err, searchjobs.ErrExecutionLimit) || errors.Is(err, searchjobs.ErrUnsupportedValue) {
+			t.Fatalf("marker %q on an unrelated exception = %v", marker, err)
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

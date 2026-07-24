@@ -963,7 +963,7 @@ func TestParseTimechartFixedSpanCountByField(t *testing.T) {
 	}
 }
 
-func TestParseBinFixedTimeSpan(t *testing.T) {
+func TestParseBinSpansFieldsAndOutput(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -971,6 +971,10 @@ func TestParseBinFixedTimeSpan(t *testing.T) {
 		source      string
 		commandText string
 		commandName string
+		field       string
+		output      string
+		spanText    string
+		spanKind    BinSpanKind
 		magnitude   uint64
 		unit        TimeSpanUnit
 	}{
@@ -979,6 +983,10 @@ func TestParseBinFixedTimeSpan(t *testing.T) {
 			source:      `index=main | bin _time span=5m`,
 			commandText: `bin _time span=5m`,
 			commandName: "bin",
+			field:       "_time",
+			output:      "_time",
+			spanText:    "5m",
+			spanKind:    BinSpanKindTime,
 			magnitude:   5,
 			unit:        TimeSpanUnitMinute,
 		},
@@ -987,6 +995,10 @@ func TestParseBinFixedTimeSpan(t *testing.T) {
 			source:      `index=main | BIN SPAN = 30S _time`,
 			commandText: `BIN SPAN = 30S _time`,
 			commandName: "bin",
+			field:       "_time",
+			output:      "_time",
+			spanText:    "30S",
+			spanKind:    BinSpanKindTime,
 			magnitude:   30,
 			unit:        TimeSpanUnitSecond,
 		},
@@ -995,8 +1007,79 @@ func TestParseBinFixedTimeSpan(t *testing.T) {
 			source:      `index=main | BuCkEt _time SpAn=2h`,
 			commandText: `BuCkEt _time SpAn=2h`,
 			commandName: "bucket",
+			field:       "_time",
+			output:      "_time",
+			spanText:    "2h",
+			spanKind:    BinSpanKindTime,
 			magnitude:   2,
 			unit:        TimeSpanUnitHour,
+		},
+		{
+			name:        "generic numeric field",
+			source:      `index=main | bin status span=100`,
+			commandText: `bin status span=100`,
+			commandName: "bin",
+			field:       "status",
+			output:      "status",
+			spanText:    "100",
+			spanKind:    BinSpanKindNumeric,
+			magnitude:   100,
+		},
+		{
+			name:        "unitless time span remains discriminated numeric",
+			source:      `index=main | bin _time span=5`,
+			commandText: `bin _time span=5`,
+			commandName: "bin",
+			field:       "_time",
+			output:      "_time",
+			spanText:    "5",
+			spanKind:    BinSpanKindNumeric,
+			magnitude:   5,
+		},
+		{
+			name:        "numeric looking exact field",
+			source:      `index=main | bucket span=25 300`,
+			commandText: `bucket span=25 300`,
+			commandName: "bucket",
+			field:       "300",
+			output:      "300",
+			spanText:    "25",
+			spanKind:    BinSpanKindNumeric,
+			magnitude:   25,
+		},
+		{
+			name:        "case preserving exact field",
+			source:      `index=main | bin _TIME span=5m`,
+			commandText: `bin _TIME span=5m`,
+			commandName: "bin",
+			field:       "_TIME",
+			output:      "_TIME",
+			spanText:    "5m",
+			spanKind:    BinSpanKindTime,
+			magnitude:   5,
+			unit:        TimeSpanUnitMinute,
+		},
+		{
+			name:        "as output",
+			source:      `index=main | bucket span=10 latency AS latency_band`,
+			commandText: `bucket span=10 latency AS latency_band`,
+			commandName: "bucket",
+			field:       "latency",
+			output:      "latency_band",
+			spanText:    "10",
+			spanKind:    BinSpanKindNumeric,
+			magnitude:   10,
+		},
+		{
+			name:        "option keyword as output",
+			source:      `index=main | bin duration span=10 AS span`,
+			commandText: `bin duration span=10 AS span`,
+			commandName: "bin",
+			field:       "duration",
+			output:      "span",
+			spanText:    "10",
+			spanKind:    BinSpanKindNumeric,
+			magnitude:   10,
 		},
 	}
 	for _, test := range tests {
@@ -1018,20 +1101,58 @@ func TestParseBinFixedTimeSpan(t *testing.T) {
 			if command.Name() != test.commandName {
 				t.Fatalf("command name = %q, want %q", command.Name(), test.commandName)
 			}
-			if command.Field != "_time" {
-				t.Fatalf("field = %q, want _time", command.Field)
+			if command.Field != test.field {
+				t.Fatalf("field = %q, want %q", command.Field, test.field)
 			}
-			if command.Span.Magnitude != test.magnitude || command.Span.Unit != test.unit {
+			if command.Output != test.output {
+				t.Fatalf("output = %q, want %q", command.Output, test.output)
+			}
+			if command.Span.Kind != test.spanKind ||
+				command.Span.Magnitude != test.magnitude ||
+				command.Span.Unit != test.unit {
 				t.Fatalf("span = %#v", command.Span)
 			}
-			if got := test.source[command.FieldRange.Start.Offset:command.FieldRange.End.Offset]; got != "_time" {
-				t.Fatalf("field source = %q, want _time", got)
+			if got := test.source[command.FieldRange.Start.Offset:command.FieldRange.End.Offset]; got != test.field {
+				t.Fatalf("field source = %q, want %q", got, test.field)
 			}
-			if got := test.source[command.Span.Range.Start.Offset:command.Span.Range.End.Offset]; !strings.EqualFold(got, strconv.FormatUint(test.magnitude, 10)+command.Span.Unit.String()) {
-				t.Fatalf("span source = %q", got)
+			if got := test.source[command.OutputRange.Start.Offset:command.OutputRange.End.Offset]; got != test.output {
+				t.Fatalf("output source = %q, want %q", got, test.output)
+			}
+			if got := test.source[command.Span.Range.Start.Offset:command.Span.Range.End.Offset]; got != test.spanText {
+				t.Fatalf("span source = %q, want %q", got, test.spanText)
 			}
 			if got := test.source[command.Range.Start.Offset:command.Range.End.Offset]; got != test.commandText {
 				t.Fatalf("command source = %q, want %q", got, test.commandText)
+			}
+		})
+	}
+}
+
+func TestParseBinOptionNamesRemainExactFieldsWithoutEqual(t *testing.T) {
+	t.Parallel()
+
+	for _, field := range []string{"span", "bins", "minspan", "start", "end", "aligntime"} {
+		field := field
+		t.Run(field, func(t *testing.T) {
+			t.Parallel()
+
+			source := "index=main | bin " + field + " span=10"
+			query, err := Parse(source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command := query.Commands[0].(*BinCommand)
+			if command.Field != field || command.Output != field {
+				t.Fatalf("field/output = %q/%q, want %q/%q", command.Field, command.Output, field, field)
+			}
+			if command.Span.Kind != BinSpanKindNumeric || command.Span.Magnitude != 10 {
+				t.Fatalf("span = %#v, want numeric 10", command.Span)
+			}
+			if got := source[command.FieldRange.Start.Offset:command.FieldRange.End.Offset]; got != field {
+				t.Fatalf("field source = %q, want %q", got, field)
+			}
+			if command.OutputRange != command.FieldRange {
+				t.Fatalf("default output range = %#v, want field range %#v", command.OutputRange, command.FieldRange)
 			}
 		})
 	}
@@ -1049,12 +1170,14 @@ func TestParseBinRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{"missing arguments", `index=main | bin`, "SPL_UNSUPPORTED_BIN_SYNTAX", "bin"},
 		{"missing span", `index=main | bin _time`, "SPL_UNSUPPORTED_BIN_SYNTAX", "_time"},
 		{"missing field", `index=main | bin span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "5m"},
-		{"other field", `index=main | bin host span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "host"},
-		{"numeric field", `index=main | bin 300 span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "300"},
-		{"field case is exact", `index=main | bin _TIME span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "_TIME"},
 		{"quoted field", `index=main | bin "_time" span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", `"_time"`},
 		{"wildcard field", `index=main | bin _time* span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "_time*"},
-		{"as output", `index=main | bin _time span=5m AS bucket_time`, "SPL_UNSUPPORTED_BIN_SYNTAX", "AS"},
+		{"as before source field", `index=main | bin AS bucket_time span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "AS"},
+		{"missing as output", `index=main | bin _time span=5m AS`, "SPL_UNSUPPORTED_BIN_SYNTAX", "AS"},
+		{"quoted as output", `index=main | bin _time span=5m AS "bucket_time"`, "SPL_UNSUPPORTED_BIN_SYNTAX", `"bucket_time"`},
+		{"wildcard as output", `index=main | bin _time span=5m AS bucket_*`, "SPL_UNSUPPORTED_BIN_SYNTAX", "bucket_*"},
+		{"duplicate as output", `index=main | bin _time span=5m AS bucket_time AS other`, "SPL_UNSUPPORTED_BIN_SYNTAX", "AS"},
+		{"field after as output", `index=main | bin _time span=5m AS bucket_time host`, "SPL_UNSUPPORTED_BIN_SYNTAX", "host"},
 		{"bins option", `index=main | bin bins=10 _time`, "SPL_UNSUPPORTED_BIN_SYNTAX", "bins"},
 		{"minspan option", `index=main | bin _time minspan=1m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "minspan"},
 		{"start option", `index=main | bin start=0 _time span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "start"},
@@ -1064,18 +1187,23 @@ func TestParseBinRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{"duplicate field", `index=main | bin _time span=5m _time`, "SPL_UNSUPPORTED_BIN_SYNTAX", "_time"},
 		{"second field", `index=main | bin _time host span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "host"},
 		{"comma separated fields", `index=main | bin _time, host span=5m`, "SPL_UNSUPPORTED_BIN_SYNTAX", "host"},
-		{"missing equal", `index=main | bin _time span 5m`, "SPL_EXPECTED_EQUAL", "span"},
+		{"span without equal", `index=main | bin _time span 5m`, "SPL_EXPECTED_EQUAL", "span"},
 		{"missing span value", `index=main | bin _time span=`, "SPL_INVALID_ARGUMENT", "span"},
 		{"quoted span", `index=main | bin _time span="5m"`, "SPL_INVALID_ARGUMENT", `"5m"`},
-		{"zero span", `index=main | bin _time span=0m`, "SPL_INVALID_ARGUMENT", "0m"},
+		{"zero numeric span", `index=main | bin _time span=0`, "SPL_INVALID_ARGUMENT", "0"},
+		{"zero time span", `index=main | bin _time span=0m`, "SPL_INVALID_ARGUMENT", "0m"},
+		{"negative numeric span", `index=main | bin value span=-5`, "SPL_INVALID_ARGUMENT", "-5"},
 		{"negative span", `index=main | bin _time span=-5m`, "SPL_INVALID_ARGUMENT", "-5m"},
 		{"fractional span", `index=main | bin _time span=1.5m`, "SPL_INVALID_ARGUMENT", "1.5m"},
+		{"fractional numeric span", `index=main | bin value span=1.5`, "SPL_INVALID_ARGUMENT", "1.5"},
+		{"exponent numeric span", `index=main | bin value span=1e3`, "SPL_INVALID_ARGUMENT", "1e3"},
 		{"compound span", `index=main | bin _time span=1h30m`, "SPL_INVALID_ARGUMENT", "1h30m"},
 		{"calendar span", `index=main | bin _time span=1d`, "SPL_UNSUPPORTED_BIN_SYNTAX", "1d"},
 		{"subsecond span", `index=main | bin _time span=500ms`, "SPL_UNSUPPORTED_BIN_SYNTAX", "500ms"},
 		{"log span", `index=main | bin _time span=2log10`, "SPL_UNSUPPORTED_BIN_SYNTAX", "2log10"},
 		{"duration overflow", `index=main | bin _time span=2562048h`, "SPL_NUMBER_OUT_OF_RANGE", "2562048h"},
-		{"integer overflow", `index=main | bucket span=18446744073709551616s _time`, "SPL_NUMBER_OUT_OF_RANGE", "18446744073709551616s"},
+		{"time integer overflow", `index=main | bucket span=18446744073709551616s _time`, "SPL_NUMBER_OUT_OF_RANGE", "18446744073709551616s"},
+		{"numeric integer overflow", `index=main | bucket span=18446744073709551616 value`, "SPL_NUMBER_OUT_OF_RANGE", "18446744073709551616"},
 	}
 	for _, test := range tests {
 		test := test

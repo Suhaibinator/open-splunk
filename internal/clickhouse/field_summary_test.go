@@ -210,6 +210,12 @@ func TestCompileFieldSummaryUsesFinalFieldSemantics(t *testing.T) {
 			fragments: []string{"extractGroups(", `"__os_rex_exists_`},
 		},
 		{
+			name:   "numeric bin output",
+			source: `index=gradethis | eval signed=-11 | bin signed span=10 AS band | table band`,
+			field:  "band", wantKnown: true,
+			fragments: []string{UnsupportedNumericBinValueMarker, `accurateCastOrNull(`},
+		},
+		{
 			name: "exclude blocks exact", source: `index=gradethis | fields - status`,
 			field: "status", notFound: true,
 		},

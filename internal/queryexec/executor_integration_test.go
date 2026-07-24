@@ -1137,7 +1137,11 @@ ORDER BY grid.number`,
 	})
 
 	t.Run("non-scalar markers are safely classified", func(t *testing.T) {
-		for _, marker := range []string{clickhouse.UnsupportedStatsByValueMarker, clickhouse.UnsupportedDedupValueMarker} {
+		for _, marker := range []string{
+			clickhouse.UnsupportedStatsByValueMarker,
+			clickhouse.UnsupportedDedupValueMarker,
+			clickhouse.UnsupportedNumericBinValueMarker,
+		} {
 			err := executor.Execute(ctx, clickhouse.CompiledQuery{
 				SQL:          `SELECT throwIf(toUInt8(1), '` + marker + `') AS impossible`,
 				OutputFields: []string{"impossible"},

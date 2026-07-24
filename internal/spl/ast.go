@@ -493,15 +493,37 @@ type TimeSpan struct {
 	Range     Range
 }
 
-// BinCommand replaces _time with a fixed-duration bucket boundary. The
-// deliberately bounded initial slice requires an explicit seconds, minutes,
-// or hours span. CommandName preserves whether the user selected bin or its
-// bucket alias while normalizing command spelling to lower case.
+// BinSpanKind distinguishes unitless numeric widths from fixed-duration
+// widths. The planner can then apply field-aware semantics without recovering
+// information discarded by parsing.
+type BinSpanKind uint8
+
+const (
+	BinSpanKindInvalid BinSpanKind = iota
+	BinSpanKindNumeric
+	BinSpanKindTime
+)
+
+// BinSpan is one source-located positive bin width. Unit is set only for
+// BinSpanKindTime.
+type BinSpan struct {
+	Kind      BinSpanKind
+	Magnitude uint64
+	Unit      TimeSpanUnit
+	Range     Range
+}
+
+// BinCommand buckets one exact field into fixed-width intervals. Output is the
+// source field for in-place binning or the explicit AS destination. CommandName
+// preserves whether the user selected bin or its bucket alias while
+// normalizing command spelling to lower case.
 type BinCommand struct {
 	CommandName string
 	Field       string
 	FieldRange  Range
-	Span        TimeSpan
+	Output      string
+	OutputRange Range
+	Span        BinSpan
 	Range       Range
 }
 

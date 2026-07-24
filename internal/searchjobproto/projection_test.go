@@ -12,11 +12,22 @@ import (
 func TestResultKindForSPLKeepsTimeBinAsEvents(t *testing.T) {
 	t.Parallel()
 
-	if got := ResultKindForSPL(`index=main | bin _time span=5m`); got != opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS {
-		t.Fatalf("bin-only result kind = %v, want events", got)
+	for _, source := range []string{
+		`index=main | bin _time span=5m`,
+		`index=main | bin severity span=10`,
+		`index=main | bucket span=10 severity AS band`,
+	} {
+		if got := ResultKindForSPL(source); got != opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS {
+			t.Fatalf("%q result kind = %v, want events", source, got)
+		}
 	}
-	if got := ResultKindForSPL(`index=main | bucket span=5m _time | stats count BY _time`); got != opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS {
-		t.Fatalf("bin plus stats result kind = %v, want statistics", got)
+	for _, source := range []string{
+		`index=main | bucket span=5m _time | stats count BY _time`,
+		`index=main | stats count | bin count span=10`,
+	} {
+		if got := ResultKindForSPL(source); got != opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS {
+			t.Fatalf("%q result kind = %v, want statistics", source, got)
+		}
 	}
 }
 
