@@ -12,6 +12,11 @@ func TestValidateFieldAnalysisEligibilityAcceptsFinalEventRelations(t *testing.T
 	operators := []Operator{
 		&Filter{},
 		&Extend{Assignments: []ExtendAssignment{{Output: FieldRef{Name: "computed"}}}},
+		&Extract{
+			Input:    FieldRef{Name: "_raw"},
+			Pattern:  `(?-s)(?P<value>x)`,
+			Captures: []ExtractCapture{{Output: FieldRef{Name: "value"}, Group: 1}},
+		},
 		&Rename{Assignments: []RenameAssignment{{Source: FieldRef{Name: "source"}, Destination: FieldRef{Name: "origin"}}}},
 		&Project{Mode: ProjectModeInclude, Fields: []FieldRef{{Name: "host"}}},
 		&Project{Mode: ProjectModeExclude, Fields: []FieldRef{{Name: "trace_id"}}},

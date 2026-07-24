@@ -324,6 +324,7 @@ func TestProjectSearchSchemaMatchesHTTPResultClassification(t *testing.T) {
 		want opensplunkv1.ResultSetKind
 	}{
 		{name: "events", spl: "index=main", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS},
+		{name: "rex events", spl: `index=main | rex "(?<request_id>request_id=\w+)"`, want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS},
 		{name: "table", spl: "index=main | table level count", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS},
 		{name: "stats", spl: "index=main | stats count by level", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS},
 		{name: "top", spl: "index=main | top limit=20 message", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS},

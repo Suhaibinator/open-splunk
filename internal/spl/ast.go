@@ -286,6 +286,22 @@ func (*EvalCommand) command()             {}
 func (*EvalCommand) Name() string         { return "eval" }
 func (c *EvalCommand) SourceRange() Range { return c.Range }
 
+// RexCommand extracts the first match from one current-pipeline string field.
+// Pattern is the user spelling; parser validation guarantees a bounded,
+// RE2-compatible pattern and uniquely named captures.
+type RexCommand struct {
+	Field        string
+	FieldRange   Range
+	Pattern      string
+	PatternRange Range
+	MaxMatch     uint64
+	Range        Range
+}
+
+func (*RexCommand) command()             {}
+func (*RexCommand) Name() string         { return "rex" }
+func (c *RexCommand) SourceRange() Range { return c.Range }
+
 // RenameAssignment moves one exact field name to another. Assignments retain
 // source order because SPL applies multiple rename pairs from left to right.
 type RenameAssignment struct {

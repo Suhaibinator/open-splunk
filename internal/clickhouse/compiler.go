@@ -33,8 +33,13 @@ const (
 	TimechartNamesColumn   = "__os_timechart_names"
 	TimechartCountsColumn  = "__os_timechart_counts"
 	TimechartInvalidColumn = "__os_timechart_invalid"
-	maxCompiledQueryBytes  = 256 << 10
-	maxTimechartLabelBytes = 256
+	// MaximumRexCapturedBytesPerRow bounds the sum of all capture-group bytes
+	// produced by every rex stage for one event. It prevents overlapping named
+	// groups and repeated stages from amplifying a maximum-sized event without
+	// a query-local ceiling.
+	MaximumRexCapturedBytesPerRow = 4 << 20
+	maxCompiledQueryBytes         = 256 << 10
+	maxTimechartLabelBytes        = 256
 
 	// UnsupportedStatsByValueMarker is emitted by the scalar-only stats BY
 	// guard so the executor can classify the ClickHouse exception without
@@ -44,6 +49,9 @@ const (
 	// a runtime list or object. It is intentionally stable for executor-side
 	// classification and is never returned verbatim to clients.
 	UnsupportedDedupValueMarker = "open-splunk: dedup requires scalar fields"
+	// RexCaptureLimitMarker lets the executor map the deliberate throwIf guard
+	// to a stable resource-limit result without exposing generated SQL.
+	RexCaptureLimitMarker = "open-splunk: rex capture bytes exceed the per-row limit"
 )
 
 var physicalIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -181,6 +189,20 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 					alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 				}
 			}
+		case *plan.Extract:
+			extracted, nextState, prefixArgs, additionalAliases, compileErr := compileExtract(
+				fragment,
+				operator,
+				state,
+				aliasSequence,
+			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			fragment = extracted
+			args = prependArguments(prefixArgs, args)
+			state = nextState
+			aliasSequence += additionalAliases
 		case *plan.Rename:
 			if len(operator.Assignments) == 0 {
 				return CompiledQuery{}, errors.New("compile ClickHouse rename: no assignments")
@@ -602,6 +624,8 @@ func compileTimechart(
 type compileState struct {
 	visible                       map[string]fieldState
 	publicOrder                   []string
+	privateColumns                []string
+	rexCapturedBytesSQL           string
 	allowDynamic                  bool
 	eventRows                     bool
 	blocked                       map[string]struct{}
@@ -628,6 +652,7 @@ const (
 type fieldState struct {
 	valueSQL       string
 	dynamicTypeSQL string
+	storedTypeSQL  string
 	existsSQL      string
 	existsArgs     []any
 	descendantSQL  string
@@ -808,6 +833,7 @@ type compiledScalar struct {
 	existsSQL      string
 	existsArgs     []any
 	dynamicTypeSQL string
+	storedTypeSQL  string
 	descendantSQL  string
 	descendantArgs []any
 	kind           fieldKind
@@ -829,16 +855,7 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 				kind:      fieldKindString,
 			}, nil
 		}
-		return compiledScalar{
-			valueSQL:       field.valueSQL,
-			existsSQL:      field.existsSQL,
-			existsArgs:     append([]any(nil), field.existsArgs...),
-			dynamicTypeSQL: field.dynamicTypeSQL,
-			descendantSQL:  field.descendantSQL,
-			descendantArgs: append([]any(nil), field.descendantArgs...),
-			kind:           field.kind,
-			numberType:     field.numberType,
-		}, nil
+		return compiledScalarFromField(field), nil
 	case *plan.ScalarLiteralExpression:
 		value := expression.Value
 		kind := fieldKindString
@@ -985,6 +1002,7 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 		existsSQL:      "1",
 		descendantSQL:  value.descendantSQL,
 		descendantArgs: append([]any(nil), value.descendantArgs...),
+		storedTypeSQL:  value.storedTypeSQL,
 		kind:           value.kind,
 		// An eval output named index is calculated data, not the physical scan
 		// selector. It follows its expression type and ordinary comparison rules.
@@ -995,7 +1013,318 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 		field.dynamicTypeSQL = "dynamicType(" + field.valueSQL + ")"
 	}
 	next.visible[output.Name] = field
+	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
 	return next
+}
+
+type compiledExtractCapture struct {
+	planCapture      plan.ExtractCapture
+	valueSQL         string
+	existsColumn     string
+	existsProjection string
+	typeColumn       string
+	typeProjection   string
+}
+
+func extractPrivateColumns(captures []compiledExtractCapture) []string {
+	columns := make([]string, 0, len(captures)*2)
+	for _, capture := range captures {
+		columns = append(columns, capture.existsColumn, capture.typeColumn)
+	}
+	return columns
+}
+
+func compileExtract(
+	fragment string,
+	operator *plan.Extract,
+	state compileState,
+	stage int,
+) (string, compileState, []any, int, error) {
+	validated, err := validateExtractOperator(operator)
+	if err != nil {
+		return "", compileState{}, nil, 0, err
+	}
+	openEventSchema := state.eventRows && state.allowDynamic
+	if openEventSchema && operator.Input.Name == "fields" {
+		return "", compileState{}, nil, 0, &plan.Diagnostic{
+			Code:    "SPL_AMBIGUOUS_REX_FIELD",
+			Message: "rex cannot read the event result's reserved fields payload without an exact upstream schema",
+			Range:   operator.Range,
+		}
+	}
+
+	inputSQL, eligibleSQL, inputArgs, err := compileExtractInput(operator.Input, state)
+	if err != nil {
+		return "", compileState{}, nil, 0, err
+	}
+	eligibleAlias := quoteIdentifier(fmt.Sprintf("__os_rex_eligible_%d", stage))
+	inputAlias := quoteIdentifier(fmt.Sprintf("__os_rex_input_%d", stage))
+	groupsAlias := quoteIdentifier(fmt.Sprintf("__os_rex_groups_%d", stage))
+	matchedAlias := quoteIdentifier(fmt.Sprintf("__os_rex_matched_%d", stage))
+	capturedBytesAlias := quoteIdentifier(fmt.Sprintf("__os_rex_captured_bytes_%d", stage))
+	innerAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage))
+	inputExpressions := []string{
+		"toUInt8(ifNull(" + eligibleSQL + ", 0)) AS " + eligibleAlias,
+		"if(" + eligibleAlias + " != 0, assumeNotNull(" + inputSQL + "), CAST('' AS String)) AS " + inputAlias,
+	}
+	inputFragment := "SELECT *, " + strings.Join(inputExpressions, ", ") + " FROM (" + fragment + ") AS " + innerAlias
+	groupExpression := "if(" + eligibleAlias + " != 0, extractGroups(" + inputAlias +
+		", ?), CAST([], 'Array(String)')) AS " + groupsAlias
+	groupFragment := "SELECT *, " + groupExpression + " FROM (" + inputFragment + ") AS " +
+		quoteIdentifier(fmt.Sprintf("_rex_input_%d", stage))
+	capturedBytesExpression := "arraySum(value -> toUInt64(length(value)), " + groupsAlias + ")"
+	if state.rexCapturedBytesSQL != "" {
+		capturedBytesExpression = "toUInt64(" + state.rexCapturedBytesSQL + ") + " + capturedBytesExpression
+	}
+	bytesFragment := "SELECT *, " + capturedBytesExpression + " AS " + capturedBytesAlias +
+		" FROM (" + groupFragment + ") AS " + quoteIdentifier(fmt.Sprintf("_rex_groups_%d", stage))
+	matchedExpression := "toUInt8(if(" + capturedBytesAlias + " > toUInt64(" +
+		strconv.FormatUint(MaximumRexCapturedBytesPerRow, 10) + "), " +
+		"throwIf(toUInt8(1), '" + RexCaptureLimitMarker + "') = 0, " +
+		eligibleAlias + " != 0 AND notEmpty(" + groupsAlias + "))) AS " + matchedAlias
+	// Keep the extraction and byte guard streaming. The pinned ClickHouse
+	// integration test uses EXPLAIN actions=1 to prove that common-expression
+	// elimination still executes extractGroups exactly once for all captures.
+	fragment = "SELECT *, " + matchedExpression + " FROM (" + bytesFragment + ") AS " +
+		quoteIdentifier(fmt.Sprintf("_rex_bytes_%d", stage))
+	// The groups SELECT appears textually before its nested input SELECT, so
+	// the pattern placeholder precedes source-presence placeholders.
+	innerArgs := append([]any{validated.Pattern}, inputArgs...)
+
+	next := cloneCompileState(state)
+	next.rexCapturedBytesSQL = capturedBytesAlias
+	if exposesRawFieldsPayload(state) {
+		// The stored convenience object cannot be rewritten cheaply per event.
+		// Drop it once a rex output can shadow one of its immutable members.
+		next.publicOrder = slices.DeleteFunc(next.publicOrder, func(name string) bool { return name == "fields" })
+	}
+	captures := make([]compiledExtractCapture, 0, len(operator.Captures))
+	existenceArgs := make([]any, 0)
+	typeArgs := make([]any, 0)
+	seenOutputs := make(map[string]struct{}, len(operator.Captures))
+	for index, capture := range operator.Captures {
+		if openEventSchema && capture.Output.Name == "fields" {
+			return "", compileState{}, nil, 0, &plan.Diagnostic{
+				Code:    "SPL_AMBIGUOUS_REX_FIELD",
+				Message: "rex cannot replace the event result's reserved fields payload without an exact upstream schema",
+				Range:   operator.Range,
+			}
+		}
+		if _, duplicate := seenOutputs[capture.Output.Name]; duplicate {
+			return "", compileState{}, nil, 0, errors.New("compile ClickHouse extract: output field is repeated")
+		}
+		seenOutputs[capture.Output.Name] = struct{}{}
+		previous, previousKnown, resolveErr := resolveCompiledField(capture.Output, state)
+		if resolveErr != nil {
+			return "", compileState{}, nil, 0, resolveErr
+		}
+
+		capturedValue := "arrayElement(" + groupsAlias + ", " + strconv.Itoa(int(capture.Group)) + ")"
+		valueSQL := ""
+		kind := fieldKindDynamic
+		switch {
+		case !previousKnown:
+			kind = fieldKindString
+			valueSQL = "if(" + matchedAlias + " != 0, " + capturedValue + ", CAST(NULL AS Nullable(String)))"
+		case previous.kind == fieldKindString:
+			kind = fieldKindString
+			valueSQL = "if(" + matchedAlias + " != 0, " + capturedValue + ", " + previous.valueSQL + ")"
+		default:
+			valueSQL = "if(" + matchedAlias + " != 0, CAST(" + capturedValue + " AS Dynamic), CAST(" + previous.valueSQL + " AS Dynamic))"
+		}
+
+		previousExists := "0"
+		if previousKnown {
+			previousExists = previous.existsSQL
+			if previousExists == "" {
+				previousExists = "1"
+			}
+			existenceArgs = append(existenceArgs, previous.existsArgs...)
+			if previous.kind == fieldKindDynamic && previous.descendantSQL != "" {
+				previousExists = "((" + previousExists + ") OR (" + previous.descendantSQL + "))"
+				existenceArgs = append(existenceArgs, previous.descendantArgs...)
+			}
+		}
+		existsName := fmt.Sprintf("__os_rex_exists_%d_%d", stage, index)
+		existsAlias := quoteIdentifier(existsName)
+		existsSQL := "toUInt8(if(" + matchedAlias + " != 0, 1, ifNull(" + previousExists + ", 0))) AS " + existsAlias
+
+		previousTypeSQL := "toUInt8(0)"
+		if previousKnown {
+			var previousTypeArgs []any
+			previousTypeSQL, previousTypeArgs, resolveErr = knownFieldStoredTypeSQL(previous)
+			if resolveErr != nil {
+				return "", compileState{}, nil, 0, fmt.Errorf(
+					"compile ClickHouse extract: resolve prior type for %q: %w",
+					capture.Output.Name,
+					resolveErr,
+				)
+			}
+			typeArgs = append(typeArgs, previousTypeArgs...)
+		}
+		typeName := fmt.Sprintf("__os_rex_type_%d_%d", stage, index)
+		typeAlias := quoteIdentifier(typeName)
+		typeSQL := "toUInt8(if(" + matchedAlias + " != 0, toUInt8(" +
+			strconv.Itoa(int(eventfields.StoredValueTypeString)) + "), " +
+			previousTypeSQL + ")) AS " + typeAlias
+		captures = append(captures, compiledExtractCapture{
+			planCapture:      capture,
+			valueSQL:         valueSQL,
+			existsColumn:     existsAlias,
+			existsProjection: existsSQL,
+			typeColumn:       typeAlias,
+			typeProjection:   typeSQL,
+		})
+
+		delete(next.blocked, capture.Output.Name)
+		if !slices.Contains(next.publicOrder, capture.Output.Name) {
+			next.publicOrder = append(next.publicOrder, capture.Output.Name)
+		}
+		output := quoteIdentifier(capture.Output.Name)
+		field := fieldState{
+			valueSQL:       output,
+			existsSQL:      existsAlias,
+			storedTypeSQL:  typeAlias,
+			descendantSQL:  previous.descendantSQL,
+			descendantArgs: append([]any(nil), previous.descendantArgs...),
+			kind:           kind,
+			// A capture named index is calculated data and never regains the
+			// physical scan selector's case or authorization semantics.
+			caseSensitive: false,
+		}
+		if kind == fieldKindDynamic {
+			field.dynamicTypeSQL = "dynamicType(" + output + ")"
+		}
+		next.visible[capture.Output.Name] = field
+	}
+
+	valueByName := make(map[string]string, len(captures))
+	existenceExpressions := make([]string, 0, len(captures))
+	typeExpressions := make([]string, 0, len(captures))
+	for _, capture := range captures {
+		valueByName[capture.planCapture.Output.Name] = capture.valueSQL
+		existenceExpressions = append(existenceExpressions, capture.existsProjection)
+		typeExpressions = append(typeExpressions, capture.typeProjection)
+	}
+	liveOldPrivateColumns := livePrivateColumns(state.privateColumns, next.visible)
+	next.privateColumns = append(
+		append([]string(nil), liveOldPrivateColumns...),
+		extractPrivateColumns(captures)...,
+	)
+	projection := make([]string, 0, len(next.visible)+len(captures)+8)
+	for _, name := range orderedVisibleNames(next) {
+		publicName := quoteIdentifier(name)
+		if valueSQL, captured := valueByName[name]; captured {
+			projection = append(projection, valueSQL+" AS "+publicName)
+			continue
+		}
+		field, ok := state.visible[name]
+		if !ok {
+			return "", compileState{}, nil, 0, fmt.Errorf("compile ClickHouse extract: field %q has no input value", name)
+		}
+		if field.valueSQL == publicName {
+			projection = append(projection, publicName)
+		} else {
+			projection = append(projection, field.valueSQL+" AS "+publicName)
+		}
+	}
+	projectionState := next
+	projectionState.privateColumns = liveOldPrivateColumns
+	projection = appendPrivateEventProjection(projection, projectionState)
+	projection = append(projection, existenceExpressions...)
+	projection = append(projection, typeExpressions...)
+	outerAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
+	fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + outerAlias
+
+	prefixArgs := make([]any, 0, len(existenceArgs)+len(typeArgs)+len(innerArgs))
+	prefixArgs = append(prefixArgs, existenceArgs...)
+	prefixArgs = append(prefixArgs, typeArgs...)
+	prefixArgs = append(prefixArgs, innerArgs...)
+	return fragment, next, prefixArgs, 1, nil
+}
+
+func validateExtractOperator(operator *plan.Extract) (splregex.ExtractionPattern, error) {
+	if operator == nil || operator.Input.Name == "" || len(operator.Captures) == 0 ||
+		!strings.HasPrefix(operator.Pattern, "(?-s)") {
+		return splregex.ExtractionPattern{}, errors.New("compile ClickHouse extract: operator is invalid")
+	}
+	if err := validateExtractFieldRef("input", operator.Input); err != nil {
+		return splregex.ExtractionPattern{}, err
+	}
+	withoutDefaultFlags := strings.TrimPrefix(operator.Pattern, "(?-s)")
+	validated, err := splregex.CompileExtractionPattern(withoutDefaultFlags)
+	if err != nil || validated.Pattern != operator.Pattern {
+		if err == nil {
+			err = errors.New("pattern is not in canonical form")
+		}
+		return splregex.ExtractionPattern{}, fmt.Errorf("compile ClickHouse extract: invalid pattern: %w", err)
+	}
+	if len(operator.Captures) != len(validated.Captures) {
+		return splregex.ExtractionPattern{}, errors.New("compile ClickHouse extract: capture metadata does not match pattern")
+	}
+	seen := make(map[string]struct{}, len(operator.Captures))
+	for index, capture := range operator.Captures {
+		expected := validated.Captures[index]
+		if capture.Output.Name == "" || capture.Group == 0 || int(capture.Group) != expected.Group ||
+			capture.Output.Name != expected.Name {
+			return splregex.ExtractionPattern{}, errors.New("compile ClickHouse extract: capture metadata does not match pattern")
+		}
+		if err := validateExtractFieldRef("output", capture.Output); err != nil {
+			return splregex.ExtractionPattern{}, err
+		}
+		if _, duplicate := seen[capture.Output.Name]; duplicate {
+			return splregex.ExtractionPattern{}, errors.New("compile ClickHouse extract: output field is repeated")
+		}
+		seen[capture.Output.Name] = struct{}{}
+	}
+	return validated, nil
+}
+
+func validateExtractFieldRef(role string, field plan.FieldRef) error {
+	resolved, err := plan.ResolveField(field.Name, field.Range)
+	if err != nil {
+		return fmt.Errorf("compile ClickHouse extract: invalid %s field: %w", role, err)
+	}
+	if resolved.Name != field.Name || resolved.Canonical != field.Canonical ||
+		!slices.Equal(resolved.Path, field.Path) {
+		return fmt.Errorf("compile ClickHouse extract: %s field metadata is not canonical", role)
+	}
+	return nil
+}
+
+func compileExtractInput(input plan.FieldRef, state compileState) (valueSQL, eligibleSQL string, args []any, err error) {
+	field, ok, err := resolveCompiledField(input, state)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if !ok {
+		return "CAST(NULL AS Nullable(String))", "0", nil, nil
+	}
+	existsSQL := field.existsSQL
+	if existsSQL == "" {
+		existsSQL = "1"
+	}
+	switch field.kind {
+	case fieldKindString:
+		return field.valueSQL,
+			"(" + existsSQL + " AND isNotNull(" + field.valueSQL + ") AND isValidUTF8(" + field.valueSQL + "))",
+			append([]any(nil), field.existsArgs...),
+			nil
+	case fieldKindDynamic:
+		value := "dynamicElement(" + field.valueSQL + ", 'String')"
+		typeSQL := field.dynamicTypeSQL
+		if typeSQL == "" {
+			typeSQL = "dynamicType(" + field.valueSQL + ")"
+		}
+		return value,
+			"(" + existsSQL + " AND " + typeSQL + " = 'String' AND isNotNull(" + field.valueSQL + ") AND isValidUTF8(" + value + "))",
+			append([]any(nil), field.existsArgs...),
+			nil
+	default:
+		// v0.1 does not stringify numeric, Boolean, time, multivalue, or
+		// container sources. They behave exactly like a non-match.
+		return "CAST(NULL AS Nullable(String))", "0", nil, nil
+	}
 }
 
 func compileRenameAssignment(assignment plan.RenameAssignment, state compileState) ([]string, compileState, bool, error) {
@@ -1065,6 +1394,7 @@ func compileRenameAssignment(assignment plan.RenameAssignment, state compileStat
 
 	destination := projectedRenameField(source, assignment.Destination.Name)
 	next.visible[assignment.Destination.Name] = destination
+	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
 	projection := renameProjection(state, next, assignment.Destination.Name, source)
 	if len(projection) == 0 {
 		return nil, compileState{}, false, errors.New("compile ClickHouse rename: projection has no fields")
@@ -1079,6 +1409,7 @@ func cloneCompileState(state compileState) compileState {
 		next.visible[name] = field
 	}
 	next.publicOrder = append([]string(nil), state.publicOrder...)
+	next.privateColumns = append([]string(nil), state.privateColumns...)
 	next.blocked = cloneSet(state.blocked)
 	next.blockedPrefixes = cloneSet(state.blockedPrefixes)
 	next.order = append([]compiledSortKey(nil), state.order...)
@@ -1115,6 +1446,7 @@ func projectedRenameField(source fieldState, destination string) fieldState {
 	value := quoteIdentifier(destination)
 	result := fieldState{
 		valueSQL:       value,
+		storedTypeSQL:  source.storedTypeSQL,
 		existsSQL:      rewriteExistenceForProjection(source, destination),
 		existsArgs:     append([]any(nil), source.existsArgs...),
 		descendantSQL:  source.descendantSQL,
@@ -1141,35 +1473,7 @@ func exposesRawFieldsPayload(state compileState) bool {
 }
 
 func renameProjection(state, next compileState, destination string, source fieldState) []string {
-	names := make([]string, 0, len(next.visible))
-	seen := make(map[string]struct{}, len(next.visible))
-	appendVisible := func(name string) {
-		if _, duplicate := seen[name]; duplicate {
-			return
-		}
-		if _, visible := next.visible[name]; !visible {
-			return
-		}
-		seen[name] = struct{}{}
-		names = append(names, name)
-	}
-	for _, name := range next.publicOrder {
-		appendVisible(name)
-	}
-	for _, name := range canonicalColumnNames {
-		appendVisible(name)
-	}
-	extra := make([]string, 0, len(next.visible)-len(names))
-	for name := range next.visible {
-		if _, included := seen[name]; !included {
-			extra = append(extra, name)
-		}
-	}
-	sort.Strings(extra)
-	for _, name := range extra {
-		appendVisible(name)
-	}
-
+	names := orderedVisibleNames(next)
 	projection := make([]string, 0, len(names)+6+len(state.order)+len(state.tieBreakers))
 	for _, name := range names {
 		field := state.visible[name]
@@ -1183,7 +1487,55 @@ func renameProjection(state, next compileState, destination string, source field
 			projection = append(projection, field.valueSQL+" AS "+publicName)
 		}
 	}
-	return appendPrivateEventProjection(projection, state)
+	return appendPrivateEventProjection(projection, next)
+}
+
+func orderedVisibleNames(state compileState) []string {
+	names := make([]string, 0, len(state.visible))
+	seen := make(map[string]struct{}, len(state.visible))
+	appendVisible := func(name string) {
+		if _, duplicate := seen[name]; duplicate {
+			return
+		}
+		if _, visible := state.visible[name]; !visible {
+			return
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	for _, name := range state.publicOrder {
+		appendVisible(name)
+	}
+	for _, name := range canonicalColumnNames {
+		appendVisible(name)
+	}
+	extra := make([]string, 0, len(state.visible)-len(names))
+	for name := range state.visible {
+		if _, included := seen[name]; !included {
+			extra = append(extra, name)
+		}
+	}
+	sort.Strings(extra)
+	for _, name := range extra {
+		appendVisible(name)
+	}
+	return names
+}
+
+func livePrivateColumns(columns []string, visible map[string]fieldState) []string {
+	if len(columns) == 0 || len(visible) == 0 {
+		return nil
+	}
+	live := make([]string, 0, len(columns))
+	for _, column := range columns {
+		for _, field := range visible {
+			if field.existsSQL == column || field.storedTypeSQL == column {
+				live = append(live, column)
+				break
+			}
+		}
+	}
+	return live
 }
 
 // appendPrivateEventProjection keeps the immutable source document, its
@@ -1192,7 +1544,7 @@ func renameProjection(state, next compileState, destination string, source field
 // columns publicly, but they also must not discard them before an event
 // analysis finalizer consumes the relation.
 func appendPrivateEventProjection(projection []string, state compileState) []string {
-	privateColumns := make([]string, 0, 6+len(state.order)+len(state.tieBreakers))
+	privateColumns := make([]string, 0, 7+len(state.privateColumns)+len(state.order)+len(state.tieBreakers))
 	if state.eventRows {
 		privateColumns = append(privateColumns,
 			quoteIdentifier(internalFieldsColumn),
@@ -1202,6 +1554,10 @@ func appendPrivateEventProjection(projection []string, state compileState) []str
 			quoteIdentifier(internalSortTimeColumn),
 			quoteIdentifier(internalSortIDColumn),
 		)
+	}
+	privateColumns = append(privateColumns, state.privateColumns...)
+	if state.rexCapturedBytesSQL != "" {
+		privateColumns = append(privateColumns, state.rexCapturedBytesSQL)
 	}
 	for _, key := range state.order {
 		privateColumns = append(privateColumns, key.valueSQL)
@@ -1482,6 +1838,14 @@ func compileComparison(expression *plan.ComparisonExpression, field fieldState) 
 			// including explicit null, so it cannot match an event.
 			return "0", nil, nil
 		}
+		if field.kind == fieldKindDynamic {
+			presence := "((" + exists + ") AND isNotNull(" + field.valueSQL + "))"
+			if field.descendantSQL != "" {
+				presence = "(" + presence + " OR (" + field.descendantSQL + "))"
+				args = append(args, field.descendantArgs...)
+			}
+			return presence, args, nil
+		}
 		return "(" + exists + " AND isNotNull(" + field.valueSQL + "))", args, nil
 	}
 
@@ -1597,6 +1961,9 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		existsSQL:      field.existsSQL,
 		existsArgs:     append([]any(nil), field.existsArgs...),
 		dynamicTypeSQL: field.dynamicTypeSQL,
+		storedTypeSQL:  field.storedTypeSQL,
+		descendantSQL:  field.descendantSQL,
+		descendantArgs: append([]any(nil), field.descendantArgs...),
 		kind:           field.kind,
 		numberType:     field.numberType,
 	}
@@ -1719,13 +2086,15 @@ func resolveCompiledField(field plan.FieldRef, state compileState) (fieldState, 
 
 func compileProjection(operator *plan.Project, state compileState) ([]string, compileState, []any, error) {
 	next := compileState{
-		visible:         make(map[string]fieldState),
-		allowDynamic:    operator.Mode == plan.ProjectModeExclude && state.allowDynamic,
-		eventRows:       state.eventRows,
-		blocked:         cloneSet(state.blocked),
-		blockedPrefixes: cloneSet(state.blockedPrefixes),
-		order:           append([]compiledSortKey(nil), state.order...),
-		tieBreakers:     append([]compiledSortKey(nil), state.tieBreakers...),
+		visible:             make(map[string]fieldState),
+		privateColumns:      append([]string(nil), state.privateColumns...),
+		rexCapturedBytesSQL: state.rexCapturedBytesSQL,
+		allowDynamic:        operator.Mode == plan.ProjectModeExclude && state.allowDynamic,
+		eventRows:           state.eventRows,
+		blocked:             cloneSet(state.blocked),
+		blockedPrefixes:     cloneSet(state.blockedPrefixes),
+		order:               append([]compiledSortKey(nil), state.order...),
+		tieBreakers:         append([]compiledSortKey(nil), state.tieBreakers...),
 	}
 	var names []string
 	switch operator.Mode {
@@ -1798,6 +2167,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		}
 		next.visible[name] = fieldState{
 			valueSQL: publicName, dynamicTypeSQL: compiled.dynamicTypeSQL,
+			storedTypeSQL:  compiled.storedTypeSQL,
 			existsSQL:      rewriteExistenceForProjection(compiled, name),
 			existsArgs:     append([]any(nil), compiled.existsArgs...),
 			descendantSQL:  compiled.descendantSQL,
@@ -1809,7 +2179,8 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		}
 		next.publicOrder = append(next.publicOrder, name)
 	}
-	return appendPrivateEventProjection(projection, state), next, args, nil
+	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
+	return appendPrivateEventProjection(projection, next), next, args, nil
 }
 
 func rewriteExistenceForProjection(field fieldState, name string) string {

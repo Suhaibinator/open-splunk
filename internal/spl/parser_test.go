@@ -445,6 +445,117 @@ func TestParseEvalReplacePreservesRegexAndBackreferenceEscapes(t *testing.T) {
 	}
 }
 
+func TestParseRexExtractionOptionsAndNamedCaptures(t *testing.T) {
+	t.Parallel()
+
+	source := `index=gradethis | rex field=duration "^(?:elapsed=)?(?<duration_value>\d+(?:\.\d+)?)(?P<duration_unit>µs|ms)$" max_match=1`
+	query, err := Parse(source)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command, ok := query.Commands[0].(*RexCommand)
+	if !ok {
+		t.Fatalf("command = %T, want *RexCommand", query.Commands[0])
+	}
+	if command.Field != "duration" || command.Pattern != `^(?:elapsed=)?(?<duration_value>\d+(?:\.\d+)?)(?P<duration_unit>µs|ms)$` ||
+		command.MaxMatch != 1 {
+		t.Fatalf("rex command = %#v", command)
+	}
+	if got := source[command.FieldRange.Start.Offset:command.FieldRange.End.Offset]; got != "duration" {
+		t.Fatalf("field source range = %q", got)
+	}
+	if got := source[command.PatternRange.Start.Offset:command.PatternRange.End.Offset]; got !=
+		`"^(?:elapsed=)?(?<duration_value>\d+(?:\.\d+)?)(?P<duration_unit>µs|ms)$"` {
+		t.Fatalf("pattern source range = %q", got)
+	}
+}
+
+func TestParseRexDefaultsToRawAndPreservesRegexEscapes(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=gradethis | rex "method=(?<method>[A-Z]+)\s+path=(?<path>\S+)"`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command := query.Commands[0].(*RexCommand)
+	if command.Field != "_raw" || command.MaxMatch != 1 {
+		t.Fatalf("rex defaults = %#v", command)
+	}
+	if command.Pattern != `method=(?<method>[A-Z]+)\s+path=(?<path>\S+)` {
+		t.Fatalf("pattern = %q", command.Pattern)
+	}
+}
+
+func TestParseRexAcceptsSupportedOptionsBeforePatternInEitherOrder(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | rex field=duration max_match=1 "(?<value>\d+)"`,
+		`index=gradethis | rex max_match=1 field=duration "(?<value>\d+)"`,
+	} {
+		query, err := Parse(source)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", source, err)
+		}
+		command := query.Commands[0].(*RexCommand)
+		if command.Field != "duration" || command.MaxMatch != 1 {
+			t.Fatalf("Parse(%q) rex = %#v", source, command)
+		}
+	}
+}
+
+func TestParseRexRejectsUnsupportedOrMalformedForms(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		source string
+		code   string
+	}{
+		{`index=main | rex`, "SPL_EXPECTED_REX_PATTERN"},
+		{`index=main | rex status=(?<code>\d+)`, "SPL_EXPECTED_REX_PATTERN"},
+		{`index=main | rex field= "(?<code>\d+)"`, "SPL_EXPECTED_FIELD"},
+		{`index=main | rex "status=(\d+)"`, "SPL_UNSUPPORTED_REGEX"},
+		{`index=main | rex "(?<value>x)|(?P<value>y)"`, "SPL_UNSUPPORTED_REGEX"},
+		{`index=main | rex "(?<value>x)(?=y)"`, "SPL_UNSUPPORTED_REGEX"},
+		{`index=main | rex "(?<value>x)\1"`, "SPL_UNSUPPORTED_REGEX"},
+		{`index=main | rex "(?<value>x)" max_match=2`, "SPL_UNSUPPORTED_REX_SYNTAX"},
+		{`index=main | rex "(?<value>x)" max_match=0`, "SPL_UNSUPPORTED_REX_SYNTAX"},
+		{`index=main | rex "(?<value>x)" offset_field=offsets`, "SPL_UNSUPPORTED_REX_SYNTAX"},
+		{`index=main | rex mode=sed "s/x/y/g"`, "SPL_UNSUPPORTED_REX_SYNTAX"},
+		{`index=main | rex field=message mode=sed "s/x/y/g"`, "SPL_UNSUPPORTED_REX_SYNTAX"},
+		{`index=main | rex field=message offset_field=offsets "(?<value>x)"`, "SPL_UNSUPPORTED_REX_SYNTAX"},
+		{`index=main | rex "(?<value>x)" field=message`, "SPL_UNSUPPORTED_REX_SYNTAX"},
+		{`index=main | rex field=message "(?<value>x)" unknown=1`, "SPL_UNSUPPORTED_REX_SYNTAX"},
+	}
+	for _, test := range tests {
+		_, err := Parse(test.source)
+		if err == nil {
+			t.Fatalf("Parse(%q) unexpectedly succeeded", test.source)
+		}
+		diagnostic, ok := err.(*Diagnostic)
+		if !ok || diagnostic.Code != test.code {
+			t.Fatalf("Parse(%q) diagnostic = %#v, want %s", test.source, err, test.code)
+		}
+	}
+}
+
+func TestParseRexBoundsRegexWork(t *testing.T) {
+	t.Parallel()
+
+	tooLong := `index=main | rex "(?<value>` + strings.Repeat("x", 4096) + `)"`
+	assertParseDiagnosticCode(t, tooLong, "SPL_QUERY_TOO_COMPLEX")
+
+	var captures strings.Builder
+	captures.WriteString(`index=main | rex "`)
+	for index := 0; index <= 16; index++ {
+		captures.WriteString("(?<f")
+		captures.WriteString(strconv.Itoa(index))
+		captures.WriteString(">x)")
+	}
+	captures.WriteByte('"')
+	assertParseDiagnosticCode(t, captures.String(), "SPL_QUERY_TOO_COMPLEX")
+}
+
 func TestParseEvalRejectsMalformedOrUnsupportedExpressions(t *testing.T) {
 	t.Parallel()
 

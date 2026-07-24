@@ -139,6 +139,8 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseWhereCommand(nameToken)
 	case "eval":
 		return p.parseEvalCommand(nameToken)
+	case "rex":
+		return p.parseRexCommand(nameToken)
 	case "rename":
 		return p.parseRenameCommand(nameToken)
 	case "fields":
@@ -166,6 +168,158 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 			Range:   nameToken.range_,
 		}
 	}
+}
+
+func (p *parser) parseRexCommand(name token) (Command, error) {
+	command := &RexCommand{
+		Field:      "_raw",
+		FieldRange: name.range_,
+		MaxMatch:   1,
+	}
+	if p.atCommandEnd() {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_REX_PATTERN", "rex requires a quoted extraction regular expression")
+	}
+
+	fieldSeen := false
+	maxMatchSeen := false
+	parseField := func() error {
+		option := p.current()
+		if fieldSeen {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_REX_SYNTAX",
+				Message: "rex field may be specified only once before the pattern",
+				Range:   option.range_,
+			}
+		}
+		fieldSeen = true
+		p.advance()
+		if !p.match(tokenEqual) {
+			return &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_REX_SYNTAX",
+				Message:     "rex field must be written as field=<field>",
+				Range:       option.range_,
+				Suggestions: []string{`rex field=message "(?<value>pattern)"`},
+			}
+		}
+		field := p.current()
+		if field.kind != tokenWord {
+			return p.errorAtCurrent("SPL_EXPECTED_FIELD", "rex field= requires an exact unquoted field")
+		}
+		command.Field = field.text
+		command.FieldRange = field.range_
+		p.advance()
+		return nil
+	}
+	parseMaxMatch := func() (Position, error) {
+		option := p.current()
+		if maxMatchSeen {
+			return Position{}, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_REX_SYNTAX",
+				Message: "rex max_match may be specified only once",
+				Range:   option.range_,
+			}
+		}
+		maxMatchSeen = true
+		p.advance()
+		if !p.match(tokenEqual) || p.current().kind != tokenWord {
+			return Position{}, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_REX_SYNTAX",
+				Message: "rex max_match must be written as max_match=1",
+				Range:   option.range_,
+			}
+		}
+		value := p.current()
+		maxMatch, err := strconv.ParseUint(value.text, 10, 64)
+		if err != nil || maxMatch != 1 {
+			return Position{}, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_REX_SYNTAX",
+				Message:     "rex currently supports only the first match (max_match=1)",
+				Range:       value.range_,
+				Suggestions: []string{"omit max_match or use max_match=1"},
+			}
+		}
+		command.MaxMatch = maxMatch
+		p.advance()
+		return value.range_.End, nil
+	}
+	unsupportedOption := func(message string) error {
+		return &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_REX_SYNTAX",
+			Message:     message,
+			Range:       p.current().range_,
+			Suggestions: []string{`rex field=message max_match=1 "(?<value>pattern)"`},
+		}
+	}
+
+options:
+	for !p.atCommandEnd() && p.current().kind != tokenString {
+		switch {
+		case p.isKeyword("field"):
+			if err := parseField(); err != nil {
+				return nil, err
+			}
+		case p.isKeyword("max_match"):
+			if _, err := parseMaxMatch(); err != nil {
+				return nil, err
+			}
+		case p.isKeyword("mode"):
+			return nil, unsupportedOption("rex sed mode is not supported in compatibility version 0.1")
+		case p.isKeyword("offset_field"):
+			return nil, unsupportedOption("rex offset_field is not supported in compatibility version 0.1")
+		default:
+			break options
+		}
+	}
+
+	pattern := p.current()
+	if pattern.kind != tokenString || !pattern.quoted {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_REX_PATTERN", "rex requires a quoted extraction regular expression")
+	}
+	command.Pattern = pattern.text
+	command.PatternRange = pattern.range_
+	end := pattern.range_.End
+	p.advance()
+
+	if !p.atCommandEnd() {
+		if !p.isKeyword("max_match") {
+			return nil, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_REX_SYNTAX",
+				Message:     fmt.Sprintf("unsupported rex option or syntax at %q", p.current().text),
+				Range:       p.current().range_,
+				Suggestions: []string{`rex field=message max_match=1 "(?<value>pattern)"`},
+			}
+		}
+		var err error
+		end, err = parseMaxMatch()
+		if err != nil {
+			return nil, err
+		}
+		if !p.atCommandEnd() {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_REX_SYNTAX",
+				Message: fmt.Sprintf("unsupported rex option or syntax at %q", p.current().text),
+				Range:   p.current().range_,
+			}
+		}
+	}
+
+	_, err := splregex.CompileExtractionPattern(command.Pattern)
+	if err != nil {
+		code := "SPL_UNSUPPORTED_REGEX"
+		message := "rex regular expression is outside the supported named-capture RE2-compatible subset"
+		if splregex.IsExtractionComplexityError(err) {
+			code = "SPL_QUERY_TOO_COMPLEX"
+			message = "rex regular expression exceeds the supported pattern or capture-group limit"
+		}
+		return nil, &Diagnostic{
+			Code:        code,
+			Message:     message,
+			Range:       command.PatternRange,
+			Suggestions: []string{`use a bounded RE2 pattern with one or more unique named captures such as "(?<value>...)"`},
+		}
+	}
+	command.Range = Range{Start: name.range_.Start, End: end}
+	return command, nil
 }
 
 func (p *parser) parseRenameCommand(name token) (Command, error) {

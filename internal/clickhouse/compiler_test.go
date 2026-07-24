@@ -464,8 +464,9 @@ func TestCompileFieldWildcardExistenceTruthTable(t *testing.T) {
 	t.Parallel()
 
 	present := compileSPL(t, `index=gradethis status=*`)
-	if !strings.Contains(present.SQL, `has("__os_field_names", ?) AND isNotNull("__os_fields"."status")`) {
-		t.Fatalf("field=* does not require a present non-null value:\n%s", present.SQL)
+	if !strings.Contains(present.SQL, `(has("__os_field_names", ?)) AND isNotNull("__os_fields"."status")`) ||
+		!strings.Contains(present.SQL, `OR (arrayExists(name -> startsWith(name, ?), "__os_field_names"))`) {
+		t.Fatalf("field=* does not include non-null leaves and flattened object parents:\n%s", present.SQL)
 	}
 	notPresent := compileSPL(t, `index=gradethis status!=*`)
 	if !strings.Contains(notPresent.SQL, `AND 0`) {
@@ -1311,6 +1312,148 @@ func TestCompileWhereTreatsCanonicalTimeAsEpochSeconds(t *testing.T) {
 	}
 }
 
+func TestCompileRexUsesOneParameterizedExtractionForAllCaptures(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | rex "method=(?<method>[A-Z]+)\s+path=(?P<path>\S+)" | table method, path`)
+	if !slices.Equal(compiled.OutputFields, []string{"method", "path"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	if got := strings.Count(compiled.SQL, "extractGroups("); got != 1 {
+		t.Fatalf("extractGroups calls = %d, want 1:\n%s", got, compiled.SQL)
+	}
+	for _, required := range []string{
+		`isValidUTF8("_raw")`,
+		`CAST([], 'Array(String)')`,
+		`arraySum(value -> toUInt64(length(value)),`,
+		RexCaptureLimitMarker,
+		`arrayElement(`,
+		`AS "method"`,
+		`AS "path"`,
+		`CAST(`,
+		` AS Dynamic)`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("rex SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, `AS MATERIALIZED`) {
+		t.Fatalf("rex introduced a full-relation materialization fence:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, `(?P<`) || strings.Contains(compiled.SQL, `method=(`) {
+		t.Fatalf("regex was interpolated into SQL:\n%s", compiled.SQL)
+	}
+	patterns := 0
+	for _, argument := range compiled.Args {
+		if pattern, ok := argument.(string); ok && strings.HasPrefix(pattern, "(?-s)") &&
+			strings.Contains(pattern, "method") {
+			patterns++
+		}
+	}
+	if patterns != 1 {
+		t.Fatalf("bound normalized regex occurrences = %d, want 1: %#v", patterns, compiled.Args)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+	for _, output := range compiled.OutputFields {
+		if strings.HasPrefix(output, "__os_rex_") {
+			t.Fatalf("private rex helper leaked into output: %v", compiled.OutputFields)
+		}
+	}
+}
+
+func TestCompileRexCarriesQueryWideCaptureBudgetAcrossProjection(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | rex "(?<first>.+)" | table _raw, first | rex "(?<second>.+)" | table first, second`,
+	)
+	if strings.Count(compiled.SQL, "extractGroups(") != 2 ||
+		strings.Contains(compiled.SQL, " AS MATERIALIZED (") ||
+		strings.Count(compiled.SQL, RexCaptureLimitMarker) != 2 ||
+		!strings.Contains(compiled.SQL, `) + arraySum(value -> toUInt64(length(value)),`) {
+		t.Fatalf("rex capture budget was not streamed and accumulated across table:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileRexPreservesDestinationsOnNoMatchAndUpdatesSimultaneously(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | rex field=status "^(?<status>\d+)-(?<source>.*)$" | table status, source`)
+	if strings.Count(compiled.SQL, "extractGroups(") != 1 ||
+		!strings.Contains(compiled.SQL, `"__os_fields"."status"`) ||
+		!strings.Contains(compiled.SQL, `"source"`) ||
+		!strings.Contains(compiled.SQL, `"__os_rex_exists_`) ||
+		!strings.Contains(compiled.SQL, `arrayElement("__os_rex_groups_2", 1)`) ||
+		!strings.Contains(compiled.SQL, `arrayElement("__os_rex_groups_2", 2)`) ||
+		!strings.Contains(compiled.SQL, `"__os_rex_type_2_0"`) ||
+		!strings.Contains(compiled.SQL, `"__os_rex_type_2_1"`) {
+		t.Fatalf("rex collision/simultaneous projection is incomplete:\n%s", compiled.SQL)
+	}
+	if !strings.Contains(compiled.SQL, `notEmpty("__os_rex_groups_`) ||
+		!strings.Contains(compiled.SQL, `if("__os_rex_matched_`) {
+		t.Fatalf("rex output is not conditional on a whole-pattern match:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileRexDoesNotResurrectProjectedSourceAndFeedsDownstreamCommands(t *testing.T) {
+	t.Parallel()
+
+	projected := compileSPL(t, `index=gradethis | table message | rex field=duration "(?<value>\d+)" | table value`)
+	if strings.Contains(projected.SQL, `"__os_fields"."duration"`) ||
+		slices.Contains(projected.Args, "duration") {
+		t.Fatalf("projected source was resurrected:\nSQL: %s\nargs: %#v", projected.SQL, projected.Args)
+	}
+
+	downstream := compileSPL(t, `index=gradethis | rex "method=(?<method>[A-Z]+)" | where method="POST" | stats count BY method`)
+	if !slices.Equal(downstream.OutputFields, []string{"method", "count"}) ||
+		!strings.Contains(downstream.SQL, `dynamicElement("method", 'String')`) {
+		t.Fatalf("downstream rex field was not resolved as current Dynamic data; output=%v\n%s", downstream.OutputFields, downstream.SQL)
+	}
+}
+
+func TestCompileRexRejectsForgedInvalidPlans(t *testing.T) {
+	t.Parallel()
+
+	base := buildPlan(t, `index=gradethis`)
+	raw, err := plan.ResolveField("_raw", spl.Range{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := plan.ResolveField("value", spl.Range{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateOutput := plan.FieldRef{Name: "__os_fields", Path: []string{"__os_fields"}}
+	tests := []plan.Operator{
+		&plan.Extract{},
+		&plan.Extract{Input: raw, Pattern: `(?-s)(?P<value>x)`, Captures: []plan.ExtractCapture{{Output: value, Group: 0}}},
+		&plan.Extract{Input: raw, Pattern: `(?-s)(?P<value>x)`, Captures: []plan.ExtractCapture{{Output: value, Group: 2}}},
+		&plan.Extract{Input: raw, Pattern: `(?=x)`, Captures: []plan.ExtractCapture{{Output: value, Group: 1}}},
+		&plan.Extract{
+			Input: plan.FieldRef{Name: "_raw"}, Pattern: `(?-s)(?P<value>x)`,
+			Captures: []plan.ExtractCapture{{Output: value, Group: 1}},
+		},
+		&plan.Extract{
+			Input: raw, Pattern: `(?-s)(?P<__os_fields>x)`,
+			Captures: []plan.ExtractCapture{{Output: privateOutput, Group: 1}},
+		},
+		&plan.Extract{
+			Input: raw, Pattern: `(?-s)(?P<value>x)`,
+			Captures: []plan.ExtractCapture{{Output: value, Group: 1}, {Output: value, Group: 1}},
+		},
+	}
+	for index, operator := range tests {
+		candidate := *base
+		candidate.Operators = append(append([]plan.Operator(nil), base.Operators...), operator)
+		if _, err := (Compiler{}).Compile(&candidate); err == nil {
+			t.Fatalf("forged rex plan %d unexpectedly compiled", index)
+		}
+	}
+}
+
 func TestCompileEvalReplaceToNumberIsNullableAndParameterized(t *testing.T) {
 	t.Parallel()
 
@@ -1751,6 +1894,7 @@ func TestCompileRejectsTypedNilOperatorsWithoutPanicking(t *testing.T) {
 		nilFilter      *plan.Filter
 		nilProject     *plan.Project
 		nilExtend      *plan.Extend
+		nilExtract     *plan.Extract
 		nilRename      *plan.Rename
 		nilAggregate   *plan.Aggregate
 		nilTimechart   *plan.Timechart
@@ -1768,6 +1912,7 @@ func TestCompileRejectsTypedNilOperatorsWithoutPanicking(t *testing.T) {
 		{name: "filter", operator: nilFilter},
 		{name: "project", operator: nilProject},
 		{name: "extend", operator: nilExtend},
+		{name: "extract", operator: nilExtract},
 		{name: "rename", operator: nilRename},
 		{name: "aggregate", operator: nilAggregate},
 		{name: "timechart", operator: nilTimechart},

@@ -2,7 +2,7 @@
 
 **Status:** executable implementation contract
 **Compatibility version:** `0.1`
-**Last updated:** July 22, 2026
+**Last updated:** July 23, 2026
 
 Open Splunk accepts only the syntax and behavior described here. Unsupported
 commands or forms fail with a source-located diagnostic; the compiler never
@@ -16,16 +16,21 @@ To bound parser, compiler, and ClickHouse AST work, one search may contain at
 most 16 KiB of UTF-8 source, 1,024 syntax tokens, and 64 pipeline commands.
 Scalar expressions may nest 32 levels, with at most 32 `where` comparisons.
 `eval` and `rename` accept at most 64 assignments; `stats` accepts at most 16
-measures and 16 `BY` fields; `dedup` accepts at most 16 key fields. Exceeding a
-general structural limit returns the source-located `SPL_QUERY_TOO_COMPLEX`
-diagnostic before planning or execution. Unsupported `dedup` arity is reported
-as `SPL_UNSUPPORTED_DEDUP_SYNTAX`. Dynamic field
+measures and 16 `BY` fields; `dedup` accepts at most 16 key fields. A `rex`
+pattern and its normalized form are each limited to 4 KiB and 16 total capture
+groups, including unnamed groups; one query may produce at most 64 named `rex`
+outputs. Across all `rex` stages, the total bytes in all capture groups for
+one row may not exceed 4 MiB; exceeding that runtime ceiling fails the query
+with an execution-limit error.
+Exceeding a general structural limit returns the source-located
+`SPL_QUERY_TOO_COMPLEX` diagnostic before planning or execution. Unsupported
+`dedup` arity is reported as `SPL_UNSUPPORTED_DEDUP_SYNTAX`. Dynamic field
 paths align with ingestion's ceiling: 17 dotted segments and 256 unescaped
 UTF-8 bytes per segment. Generated ClickHouse SQL is additionally capped at
 256 KiB; exceeding that internal expansion budget returns the same diagnostic.
 The executor applies a 1 MiB ClickHouse `max_query_size` ceiling after bound
-arguments are expanded, in addition to its time, memory, scan, group, and result
-budgets.
+arguments are expanded, in addition to its time, memory, scan, group, and
+result budgets.
 
 ## Search time range
 
@@ -118,6 +123,64 @@ zero-width match is rejected because ClickHouse does not implement PCRE's
 global zero-width replacement semantics. These differences are explicit.
 The optional `tonumber` base and integer-versus-double result distinction are
 not yet implemented.
+
+### `rex`
+
+```spl
+| rex "method=(?<method>[A-Z]+)\s+status=(?<status>\d+)"
+| rex field=duration max_match=1 "^(?<value>\d+(?:\.\d+)?)(?<unit>ms|µs)$"
+```
+
+Version 0.1 supports extraction mode for the first regular-expression match.
+The source defaults to `_raw`; `field=<exact unquoted field>` selects another
+source. `field` and `max_match=1` may appear in either order before the pattern;
+the supported `max_match=1` spelling is also accepted immediately after it.
+It is otherwise the default. The expression is unanchored unless the pattern
+contains anchors. Sed mode, `offset_field`, `max_match=0`, `max_match` greater
+than one, and other option forms fail with `SPL_UNSUPPORTED_REX_SYNTAX`.
+Quoted and wildcard field names are not accepted.
+
+Every pattern must contain at least one uniquely named capture. Both
+`(?<name>...)` and `(?P<name>...)` are accepted. Unnamed groups are permitted
+and count toward both later capture indexes and the 16-group limit. All named
+captures from the same match are assigned simultaneously, so a capture may
+replace its source field without changing the input seen by another capture.
+On a match, every named output is a present string. Because ClickHouse does not
+distinguish a nonparticipating optional group from a participating empty group,
+both are represented by the empty string in this compatibility version.
+
+A missing, explicit-null, non-string, multivalue, object, binary, or invalid
+UTF-8 source behaves as no match. On no match, an existing destination retains
+its exact prior value and presence, including explicit null; a destination
+that did not exist remains missing. A successful match replaces a prior
+destination even when its old value had another type. Downstream commands see
+the new fields and their exact sparse presence. A capture updates the exact
+destination spelling; separately flattened dotted descendants remain
+available to downstream SPL.
+
+Splunk executes PCRE, while Open Splunk validates and executes RE2 through
+ClickHouse. Lookaround, backreferences, conditionals, duplicate capture names,
+and other constructs outside RE2 are rejected with `SPL_UNSUPPORTED_REGEX`.
+Dot does not match newline by default; an inline `(?s)` can opt in. RE2's `$`
+is a strict end-of-text anchor unless multiline mode is enabled, unlike PCRE's
+default allowance before a final newline. A zero-width first match is
+supported, including an empty named capture; global zero-width iteration is
+outside the supported `max_match=1` surface.
+
+The normalized pattern is passed as a bound argument. Each `rex` stage
+short-circuits ineligible rows and streams one optimizer-shared capture array
+per eligible row before projecting every output; a pinned ClickHouse
+`EXPLAIN actions=1` regression verifies one physical extraction action.
+Capture-group bytes are accumulated across all stages and capped at 4 MiB per
+row. On an open event schema, `fields` is the reserved whole-payload convenience
+column and cannot be the source or a capture name; a prior exact `table` or
+transforming schema may declare an ordinary column with that spelling. The
+convenience payload is omitted after `rex` because it cannot safely reflect
+sparse per-event replacements, while unrelated dynamic fields remain
+available to downstream SPL. Capturing `index` changes only calculated
+pipeline data and cannot widen the already-resolved authorization scope.
+Capturing `_time` makes the pipeline ineligible for `timechart` and timeline
+analysis because the canonical event clock has been replaced.
 
 ### `fields`
 
@@ -408,9 +471,9 @@ an explicitly configured lower group cap remains authoritative.
 Field discovery re-executes an immutable completed-job snapshot with the same
 tenant, authorized indexes, half-open event-time range, index-time cutoff, and
 visibility cutoff as the original search. It analyzes the final event relation,
-so `search`, `where`, `eval`, `rename`, `fields`, `table`, `sort`, `head`,
-`tail`, and `dedup` affect the catalog and summaries exactly as they affect
-event results. Transforming final relations are rejected explicitly.
+so `search`, `where`, `eval`, `rex`, `rename`, `fields`, `table`, `sort`,
+`head`, `tail`, and `dedup` affect the catalog and summaries exactly as they
+affect event results. Transforming final relations are rejected explicitly.
 
 `POST /api/v1/search/jobs/fields/list` returns a bounded, case-sensitive field
 catalog. Presence, explicit null, and missing counts are separate, and observed
@@ -458,8 +521,7 @@ storage/execution primitives have pinned ClickHouse integration coverage:
 The following planned commands are not implemented in this version:
 
 ```text
-rex, spath, bin, bucket, chart,
-eventstats, streamstats
+spath, bin, bucket, chart, eventstats, streamstats
 ```
 
 All `stats` functions other than argument-free `count`, `p95(field)`,
@@ -477,6 +539,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`dedup`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/dedup),
 [`stats`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/stats),
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
+[`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),
 [`replace`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.4.2604/evaluation-functions/text-functions),
 [`tonumber`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/9.0/evaluation-functions/conversion-functions),
 [`rename`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/rename),
@@ -484,5 +547,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`top`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.0/search-commands/top),
 [`rare`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/9.4/search-commands/rare),
 [`timechart`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/timechart),
-and [`time modifiers`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.4/specify-time-ranges/specify-time-modifiers-in-your-search)
+[`time modifiers`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.4/specify-time-ranges/specify-time-modifiers-in-your-search),
+ClickHouse's [`extractGroups`](https://clickhouse.com/docs/sql-reference/functions/string-search-functions),
+and the [RE2 syntax reference](https://github.com/google/re2/wiki/Syntax)
 documentation.

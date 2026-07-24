@@ -214,6 +214,29 @@ func TestCompileFieldCatalogProjectionAndShadowSemantics(t *testing.T) {
 	}
 }
 
+func TestCompileFieldCatalogAnalyzesRexFinalRelationAndPresence(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileFieldCatalog(
+		t,
+		buildPlan(t, `index=gradethis | rex field=duration "^(?<duration_value>\d+)(?<duration_unit>ms|µs)$" | table duration_value, duration_unit`),
+		20,
+	)
+	if strings.Count(compiled.SQL, "extractGroups(") != 1 ||
+		!strings.Contains(compiled.SQL, `"__os_rex_exists_`) {
+		t.Fatalf("field catalog lost rex value or presence semantics:\n%s", compiled.SQL)
+	}
+	known := catalogStringArguments(compiled.Args)
+	for _, field := range []string{"duration_value", "duration_unit"} {
+		if !slices.Contains(known, field) {
+			t.Fatalf("known fields = %v, missing rex output %q", known, field)
+		}
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+}
+
 func TestCompileFieldCatalogBindsEscapedLogicalAndPhysicalNames(t *testing.T) {
 	t.Parallel()
 

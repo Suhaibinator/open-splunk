@@ -47,6 +47,12 @@ func ValidateTimelineEligibility(query *Query) error {
 					return timelineTimeDiagnostic(assignment.Range)
 				}
 			}
+		case *Extract:
+			for _, capture := range operator.Captures {
+				if capture.Output.Name == "_time" {
+					return timelineTimeDiagnostic(operator.Range)
+				}
+			}
 		case *Rename:
 			for _, assignment := range operator.Assignments {
 				if assignment.Source.Name == "_time" || assignment.Destination.Name == "_time" {

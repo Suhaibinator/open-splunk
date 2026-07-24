@@ -1148,6 +1148,18 @@ ORDER BY grid.number`,
 		}
 	})
 
+	t.Run("rex capture limit is safely classified", func(t *testing.T) {
+		err := executor.Execute(ctx, clickhouse.CompiledQuery{
+			SQL: `SELECT throwIf(toUInt8(1), '` + clickhouse.RexCaptureLimitMarker +
+				`') AS impossible`,
+			OutputFields: []string{"impossible"},
+		}, &fakeSink{})
+		if !errors.Is(err, searchjobs.ErrExecutionLimit) ||
+			strings.Contains(err.Error(), clickhouse.RexCaptureLimitMarker) {
+			t.Fatalf("rex capture limit classification = %v", err)
+		}
+	})
+
 	t.Run("group cardinality is bounded before result streaming", func(t *testing.T) {
 		bounded, err := New(connection, Config{MaxRowsToGroupBy: 1})
 		if err != nil {

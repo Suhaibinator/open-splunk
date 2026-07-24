@@ -90,3 +90,21 @@ func TestGradeThisCompatibilityCorpus(t *testing.T) {
 		})
 	}
 }
+
+func TestRexCompatibilityCorpus(t *testing.T) {
+	t.Parallel()
+
+	queries := []string{
+		`index=gradethis | rex "method=(?<raw_method>[A-Z]+)\s+path=(?<raw_path>\S+)\s+status=(?<raw_status>\d+)" | table raw_method raw_path raw_status`,
+		`index=gradethis message="Request summary statistics" | rex field=duration "^(?<duration_value>\d+(?:\.\d+)?)(?<duration_unit>µs|ms)$" | stats count BY duration_unit`,
+		`index=gradethis | rex field=path "^/api/v1/(?<area>[^/?]+)(?:/(?<resource>[^/?]+))?" | stats count BY area, resource | sort -count`,
+		`index=gradethis message="GORM slow query" | rex field=sql "^\s*(?<sql_verb>[A-Za-z]+)\b" | stats count BY sql_verb`,
+	}
+	for _, source := range queries {
+		compiled := compileSPL(t, source)
+		if compiled.SQL == "" || len(compiled.OutputFields) == 0 ||
+			strings.Count(compiled.SQL, "extractGroups(") != 1 {
+			t.Fatalf("rex corpus query is incomplete for %q: %#v", source, compiled)
+		}
+	}
+}

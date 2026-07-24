@@ -12,6 +12,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"github.com/Suhaibinator/open-splunk/internal/splregex"
 )
 
 const (
@@ -26,6 +27,7 @@ const (
 	timechartSeriesLimit     = 10
 	maxTimechartSeries       = 12
 	maxDedupFields           = 16
+	maxRexOutputsPerQuery    = 64
 )
 
 // Scope is the server-resolved security and snapshot boundary for a search.
@@ -48,7 +50,11 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 	if query == nil {
 		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "query is nil"}
 	}
-	indexes, err := resolveIndexes(scope, query)
+	rexPatterns, err := compileRexPatterns(query)
+	if err != nil {
+		return nil, err
+	}
+	indexes, err := resolveIndexes(scope, query, rexPatterns)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +94,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 
 	outputSchemaKnown := false
 	canonicalTimeAvailable := true
+	rexOutputCount := 0
 	for commandIndex, command := range query.Commands {
 		switch command := command.(type) {
 		case *spl.SearchCommand:
@@ -126,6 +133,72 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 			}
 			result.Operators = append(result.Operators, &Extend{Assignments: assignments, Range: command.Range})
+		case *spl.RexCommand:
+			if command.MaxMatch != 1 {
+				return nil, &Diagnostic{
+					Code:        "SPL_UNSUPPORTED_REX_SYNTAX",
+					Message:     "rex currently supports only the first match (max_match=1)",
+					Range:       command.Range,
+					Suggestions: []string{"omit max_match or use max_match=1"},
+				}
+			}
+			compiled, ok := rexPatterns[command]
+			if !ok {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_QUERY",
+					Message: "rex pattern was not prepared",
+					Range:   command.Range,
+				}
+			}
+			rexOutputCount += len(compiled.Captures)
+			if rexOutputCount > maxRexOutputsPerQuery {
+				return nil, &Diagnostic{
+					Code:    "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf("search extracts more than %d rex output fields", maxRexOutputsPerQuery),
+					Range:   command.Range,
+				}
+			}
+			if !outputSchemaKnown && command.Field == "fields" {
+				return nil, &Diagnostic{
+					Code:    "SPL_AMBIGUOUS_REX_FIELD",
+					Message: "rex cannot read the event result's reserved fields payload without an exact upstream schema",
+					Range:   command.FieldRange,
+				}
+			}
+			input, inputErr := ResolveField(command.Field, command.FieldRange)
+			if inputErr != nil {
+				return nil, inputErr
+			}
+			captures := make([]ExtractCapture, 0, len(compiled.Captures))
+			for _, capture := range compiled.Captures {
+				if !outputSchemaKnown && capture.Name == "fields" {
+					return nil, &Diagnostic{
+						Code:    "SPL_AMBIGUOUS_REX_FIELD",
+						Message: "rex cannot replace the event result's reserved fields payload without an exact upstream schema",
+						Range:   command.PatternRange,
+					}
+				}
+				output, outputErr := ResolveField(capture.Name, command.PatternRange)
+				if outputErr != nil {
+					return nil, outputErr
+				}
+				captures = append(captures, ExtractCapture{
+					Output: output,
+					Group:  uint16(capture.Group),
+				})
+				if outputSchemaKnown && !slices.Contains(result.OutputFields, capture.Name) {
+					result.OutputFields = append(result.OutputFields, capture.Name)
+				}
+				if capture.Name == "_time" {
+					canonicalTimeAvailable = false
+				}
+			}
+			result.Operators = append(result.Operators, &Extract{
+				Input:    input,
+				Pattern:  compiled.Pattern,
+				Captures: captures,
+				Range:    command.Range,
+			})
 		case *spl.RenameCommand:
 			assignments, renameErr := convertRenameAssignments(command)
 			if renameErr != nil {
@@ -658,7 +731,11 @@ func convertStatsGroupFields(fields []spl.StatsGroupField) ([]FieldRef, error) {
 	return result, nil
 }
 
-func resolveIndexes(scope Scope, query *spl.Query) ([]string, error) {
+func resolveIndexes(
+	scope Scope,
+	query *spl.Query,
+	rexPatterns map[*spl.RexCommand]splregex.ExtractionPattern,
+) ([]string, error) {
 	authorized := normalizedSet(scope.AuthorizedIndexes)
 	if len(authorized) == 0 {
 		return nil, &Diagnostic{Code: "SPL_INDEX_FORBIDDEN", Message: "search is not authorized for any index", Range: query.Range}
@@ -676,7 +753,8 @@ func resolveIndexes(scope Scope, query *spl.Query) ([]string, error) {
 		}
 	}
 
-	for _, reference := range positiveIndexReferences(query) {
+	references := positiveIndexReferences(query, rexPatterns)
+	for _, reference := range references {
 		if strings.Contains(reference.value, "*") {
 			return nil, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_INDEX_SELECTOR",
@@ -705,7 +783,10 @@ type indexReference struct {
 	range_ spl.Range
 }
 
-func positiveIndexReferences(query *spl.Query) []indexReference {
+func positiveIndexReferences(
+	query *spl.Query,
+	rexPatterns map[*spl.RexCommand]splregex.ExtractionPattern,
+) []indexReference {
 	var references []indexReference
 	collect := func(expression spl.Expr) {
 		collectPositiveIndexReferences(expression, false, &references)
@@ -718,6 +799,13 @@ func positiveIndexReferences(query *spl.Query) []indexReference {
 		case *spl.EvalCommand:
 			for _, assignment := range command.Assignments {
 				if assignment.Field == "index" {
+					return references
+				}
+			}
+		case *spl.RexCommand:
+			compiled := rexPatterns[command]
+			for _, capture := range compiled.Captures {
+				if capture.Name == "index" {
 					return references
 				}
 			}
@@ -735,6 +823,46 @@ func positiveIndexReferences(query *spl.Query) []indexReference {
 		}
 	}
 	return references
+}
+
+func compileRexPatterns(query *spl.Query) (map[*spl.RexCommand]splregex.ExtractionPattern, error) {
+	patterns := make(map[*spl.RexCommand]splregex.ExtractionPattern)
+	for _, command := range query.Commands {
+		rex, ok := command.(*spl.RexCommand)
+		if !ok {
+			continue
+		}
+		compiled, err := compileRexPattern(rex)
+		if err != nil {
+			return nil, err
+		}
+		patterns[rex] = compiled
+	}
+	return patterns, nil
+}
+
+func compileRexPattern(command *spl.RexCommand) (splregex.ExtractionPattern, error) {
+	if command == nil {
+		return splregex.ExtractionPattern{}, &Diagnostic{
+			Code:    "SPL_INVALID_QUERY",
+			Message: "rex command is nil",
+		}
+	}
+	compiled, err := splregex.CompileExtractionPattern(command.Pattern)
+	if err == nil {
+		return compiled, nil
+	}
+	code := "SPL_UNSUPPORTED_REGEX"
+	message := "rex regular expression is outside the supported named-capture RE2-compatible subset"
+	if splregex.IsExtractionComplexityError(err) {
+		code = "SPL_QUERY_TOO_COMPLEX"
+		message = "rex regular expression exceeds the supported pattern or capture-group limit"
+	}
+	return splregex.ExtractionPattern{}, &Diagnostic{
+		Code:    code,
+		Message: message,
+		Range:   command.PatternRange,
+	}
 }
 
 func collectPositiveIndexReferences(expression spl.Expr, negated bool, destination *[]indexReference) {

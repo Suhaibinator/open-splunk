@@ -28,6 +28,26 @@ pulling `origin/main`.
   `rename`, `sort`, `head`, `tail`, `dedup`, the documented `eval`/`where`
   subset, `stats` (`count`, `sum`, `avg`, and `p95`), `top`, `rare`, and
   `timechart`.
+- This checkpoint adds the first bounded extraction-mode `rex` slice:
+  - `_raw` is the default source and `field=<exact field>` selects another;
+  - the supported surface is the first match, equivalently `max_match=1`;
+  - uniquely named `(?<name>...)` and `(?P<name>...)` captures are compiled
+    through the RE2-compatible validator and assigned simultaneously;
+  - no match preserves each destination's prior value, semantic type, and
+    sparse presence, including explicit null and flattened object parents;
+  - separately flattened dotted descendants remain resolvable after an exact
+    destination update;
+  - missing, null, binary, invalid-UTF-8, list, and object sources do not run
+    the regex and behave as no match;
+  - each stage remains streaming while a pinned ClickHouse `EXPLAIN actions=1`
+    regression proves that one physical `extractGroups` action supplies all
+    captures;
+  - capture bytes accumulate across all `rex` stages and fail with a classified
+    execution-limit error above 4 MiB per row;
+  - dead private presence/type aliases are pruned at overwrite and projection
+    boundaries; and
+  - result classification, field catalogs, field summaries, timelines, index
+    scope, and downstream SPL consume the extracted schema consistently.
 - The binary protobuf Search WebSocket supports bounded target journals,
   replay/resynchronization, connection and global queue limits, terminal
   delivery, application/transport ping-pong, and graceful shutdown.
@@ -53,60 +73,77 @@ pulling `origin/main`.
 
 ## Validation for the checkpoint
 
-The following commands passed at this checkpoint:
+The following backend commands passed for the `rex` checkpoint:
 
 ```sh
-make proto
 go test ./... -count=1 -timeout=3m
-go test -race ./internal/searchjobs ./internal/searchjobproto ./internal/searchws ./internal/server ./cmd/open-splunk-server -count=1 -timeout=5m
+go test -race ./internal/splregex ./internal/spl ./internal/plan ./internal/clickhouse ./internal/queryexec -count=1 -timeout=5m
 go vet ./...
 go build ./...
-npm run typecheck
-npm run lint
-npm run test:frontend
-npm run build
-OPEN_SPLUNK_BACKEND_INTEGRATION=1 go test ./integration -run '^TestBackendVertical$' -count=1 -timeout=3m
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m
 ```
 
-The dependency-free frontend unit runner covers preview schema validation,
-RESET/APPEND application, duplicate/stale revisions, monotonic truncation, and
-malformed-row rejection. Component-level WebSocket lifecycle behavior is still
-covered by type/lint/build plus the Go contract tests rather than a browser test
-harness.
+The pinned Docker test uses `clickhouse/clickhouse-server:26.3.17.4`. Its `rex`
+fixture covers ordinary and Unicode extraction, simultaneous captures,
+optional/empty groups, missing and explicit-null destinations, invalid input
+types, zero-width matches, strict versus multiline end anchors, consecutive
+stages, mixed destination types, flattened object preservation, field
+catalogs/summaries, the cumulative byte guard, and an `EXPLAIN actions=1`
+assertion that sees exactly one physical `extractGroups` action for a stage.
+
+If a later environment cannot run Docker, keep the unit suite green and record
+the integration omission explicitly; do not silently treat a skipped opt-in
+test as database validation.
 
 ## Remaining work, in priority order
 
-1. Add a frontend component/browser test harness so reconnect rejection,
-   stale-frame fencing, resynchronization, expiration, and
-   preview-to-authoritative-result replacement have deterministic UI tests.
-2. Continue the explicitly unsupported SPL surface in small conformance-first
-   slices. The current contract lists `rex`, `spath`, `bin`/`bucket`, `chart`,
-   `eventstats`, and `streamstats`; `rex` is a useful next vertical slice.
+1. Continue the explicitly unsupported SPL surface in conformance-first,
+   test-driven slices. `spath`, `bin`/`bucket`, and `chart` are the next Phase 2
+   commands; select one slice, write parser/plan/compiler tests first, then add
+   a pinned ClickHouse execution fixture.
+2. Extend `rex` only behind new compatibility tests. Still unsupported are
+   `max_match=0`, `max_match>1`, `offset_field`, sed mode, quoted/wildcard field
+   names, and PCRE-only constructs such as lookaround and backreferences.
+   Optional nonparticipating captures currently become `""`, the behavior
+   exposed by ClickHouse `extractGroups`; retain this documented v0.1 choice
+   until it can be checked against a live Splunk differential oracle. One
+   bounded performance follow-up remains: derive prior dynamic-field presence
+   and type from one metadata-position alias per destination, then extend the
+   `EXPLAIN` regression to pin metadata action counts. ClickHouse currently
+   common-subexpression-eliminates identical probes, and the 64-output/1,024-
+   stored-field limits keep this from blocking the checkpoint.
 3. Expand aggregate compatibility beyond `count`, `sum`, `avg`, and `p95`:
    `dc`, `values`, `list`, `min`, `max`, `earliest`, `latest`, and the remaining
    documented percentile forms all need parser, plan, SQL, semantic, and
    ClickHouse integration tests.
-4. Add the full browser-visible end-to-end test: generated log -> collector
+4. Add a frontend component/browser test harness so reconnect rejection,
+   stale-frame fencing, resynchronization, expiration, and
+   preview-to-authoritative-result replacement have deterministic UI tests.
+5. Add the full browser-visible end-to-end test: generated log -> collector
    durable acknowledgment -> ingestion -> ClickHouse -> SPL job -> WebSocket
    preview/progress -> authoritative paged result rendered by the UI.
-5. Run and record the performance harness against the plan's sustained 1,000
+6. Run and record the performance harness against the plan's sustained 1,000
    events/second target, including slow-consumer WebSockets, concurrent preview
    subscriptions, ClickHouse scan limits, and collector offline recovery.
    Profile browser preview adaptation as part of this: preview snapshots are
    strictly bounded (100 rows by default, 1,000 maximum), but each update is
    currently adapted as a complete bounded snapshot rather than incrementally.
-6. Continue Phase 3/4 product hardening: per-index permissions/retention UI,
+7. Continue Phase 3/4 product hardening: per-index permissions/retention UI,
    token and collector fleet operations, RBAC/audit search, backup/restore,
    migration upgrade tests, fair query scheduling, packaging, and upgrades.
 
 ## Review notes
 
-Independent adversarial passes were run for concurrency/correctness,
-performance/resource accounting, and TypeScript/protobuf behavior. Their
-actionable findings were fixed before this checkpoint, including stale
-bootstrap exclusivity, projection lifecycle gating, replayable preview clears,
-duplicate-target bootstrap transformation amplification, quadratic preview
-demand scans, over-retained tailoring reservations, reconnect batch coupling,
-stale subscription frames, failed-send recovery, continuity-marker fallback,
-schema reseeding after resynchronization, expired-preview cleanup, monotonic
-APPEND truncation, and keyboard-accessible provisional event controls.
+Independent adversarial passes covered SPL semantics/correctness,
+performance/resource accounting, code reuse, and maintainability. Findings
+fixed before this checkpoint include canonicalizing capture metadata before
+index-scope analysis, revalidating forged field references at the compiler
+boundary, accepting and diagnosing option order consistently, short-circuiting
+ineligible rows, adding the query-wide byte budget, proving physical
+single-extraction with ClickHouse `EXPLAIN`, pruning stale helper columns, and
+preserving flattened object-parent presence and type.
+
+No live Splunk instance was available for a differential oracle. RE2/PCRE
+differences and optional-group behavior therefore remain explicit,
+test-enforced compatibility decisions rather than claims of full Splunk
+equivalence.

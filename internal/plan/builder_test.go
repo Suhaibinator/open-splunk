@@ -521,6 +521,134 @@ func TestBuildEvalWithoutIndexOverwriteRetainsIndexValidation(t *testing.T) {
 	assertDiagnosticCode(t, err, "SPL_INDEX_FORBIDDEN")
 }
 
+func TestBuildRexProducesBackendNeutralExtractPlan(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | table duration | rex field=duration "^(?<value>\d+(?:\.\d+)?)(?P<unit>µs|ms)$"`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(logical.Operators) != 4 {
+		t.Fatalf("operator count = %d, want 4", len(logical.Operators))
+	}
+	extract, ok := logical.Operators[3].(*Extract)
+	if !ok {
+		t.Fatalf("operator = %T, want *Extract", logical.Operators[3])
+	}
+	if extract.Input.Name != "duration" || !strings.HasPrefix(extract.Pattern, "(?-s)") ||
+		len(extract.Captures) != 2 {
+		t.Fatalf("extract = %#v", extract)
+	}
+	if extract.Captures[0].Output.Name != "value" || extract.Captures[0].Group != 1 ||
+		extract.Captures[1].Output.Name != "unit" || extract.Captures[1].Group != 2 {
+		t.Fatalf("captures = %#v", extract.Captures)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"duration", "value", "unit"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+}
+
+func TestBuildRexKnownSchemaOverwritesWithoutDuplicateOutput(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | table duration, value | rex field=duration "(?<value>\d+)"`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"duration", "value"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+}
+
+func TestBuildRexIndexOutputNeverChangesPhysicalScope(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | rex "(?<index>secret)" | search index=secret`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	scan := logical.Operators[0].(*Scan)
+	if !slices.Equal(scan.Indexes, []string{"gradethis"}) ||
+		!slices.Equal(logical.EffectiveIndexes, []string{"gradethis"}) {
+		t.Fatalf("scope changed by rex output: scan=%v effective=%v", scan.Indexes, logical.EffectiveIndexes)
+	}
+	extract := logical.Operators[2].(*Extract)
+	if extract.Captures[0].Output.Name != "index" {
+		t.Fatalf("extract = %#v", extract)
+	}
+}
+
+func TestBuildRexIndexScopeUsesValidatedPattern(t *testing.T) {
+	t.Parallel()
+
+	calculated := mustParse(t, `index=gradethis | rex "(?<index>secret)" | search index=secret`)
+	if _, err := Build(calculated, testScope([]string{"gradethis"}, nil)); err != nil {
+		t.Fatalf("Build(calculated index): %v", err)
+	}
+
+	physical := mustParse(t, `index=gradethis | rex "(?<other>secret)" | search index=secret`)
+	_, err := Build(physical, testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_INDEX_FORBIDDEN")
+}
+
+func TestBuildRexRejectsReservedAndAmbiguousOutputs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		source string
+		code   string
+	}{
+		{`index=gradethis | rex "(?<__os_private>x)"`, "SPL_RESERVED_FIELD"},
+		{`index=gradethis | rex "(?<fields>x)"`, "SPL_AMBIGUOUS_REX_FIELD"},
+	}
+	for _, test := range tests {
+		_, err := Build(mustParse(t, test.source), testScope([]string{"gradethis"}, nil))
+		assertDiagnosticCode(t, err, test.code)
+	}
+
+	if _, err := Build(
+		mustParse(t, `index=gradethis | table fields | rex field=fields "(?<fields>x)"`),
+		testScope([]string{"gradethis"}, nil),
+	); err != nil {
+		t.Fatalf("closed-schema fields capture: %v", err)
+	}
+}
+
+func TestBuildRexTimeCaptureInvalidatesCanonicalTime(t *testing.T) {
+	t.Parallel()
+
+	_, err := Build(
+		mustParse(t, `index=gradethis | rex "(?<_time>\d+)" | timechart span=5m count BY level`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD")
+}
+
+func TestBuildRexBoundsTotalOutputsAcrossPipeline(t *testing.T) {
+	t.Parallel()
+
+	var source strings.Builder
+	source.WriteString("index=gradethis")
+	for command := 0; command < 5; command++ {
+		source.WriteString(` | rex "`)
+		for capture := 0; capture < 16; capture++ {
+			fmt.Fprintf(&source, "(?<r%d_%d>x)", command, capture)
+		}
+		source.WriteByte('"')
+	}
+	_, err := Build(mustParse(t, source.String()), testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_QUERY_TOO_COMPLEX")
+}
+
 func TestBuildTopLowersToAggregateWindowAndDeterministicTopN(t *testing.T) {
 	t.Parallel()
 

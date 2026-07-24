@@ -505,6 +505,43 @@ func writeFieldSummaryResult(sql *strings.Builder) {
 	sql.WriteString(" ASC")
 }
 
+type fieldSummaryDynamicEnvelopeSQL struct {
+	mapSQL         string
+	typeKey        string
+	envelope       string
+	payload        string
+	bytesValid     string
+	timestampValid string
+	durationValid  string
+	decimalValid   string
+}
+
+func newFieldSummaryDynamicEnvelopeSQL(valueSQL, typeSQL string) fieldSummaryDynamicEnvelopeSQL {
+	mapSQL := "dynamicElement(" + valueSQL + ", 'Map(String, String)')"
+	typeKey := "concat(char(0), 'open_splunk_type')"
+	valueKey := "concat(char(0), 'open_splunk_value')"
+	envelope := "(" + typeSQL + " = 'Map(String, String)'" +
+		" AND length(" + mapSQL + ") = 2" +
+		" AND mapContains(" + mapSQL + ", " + typeKey + ")" +
+		" AND mapContains(" + mapSQL + ", " + valueKey + "))"
+	payload := mapSQL + "[" + valueKey + "]"
+	return fieldSummaryDynamicEnvelopeSQL{
+		mapSQL:   mapSQL,
+		typeKey:  typeKey,
+		envelope: envelope,
+		payload:  payload,
+		bytesValid: "match(" + payload +
+			", '^[A-Za-z0-9+/]*$') AND modulo(length(" + payload + "), 4) != 1",
+		timestampValid: "match(" + payload +
+			", '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]([.][0-9]+|)Z$')" +
+			" AND (position(" + payload + ", '.') = 0 OR length(" + payload +
+			") - position(" + payload + ", '.') - 1 BETWEEN 1 AND 9)",
+		durationValid: "match(" + payload + ", '^(-|)(0|[1-9][0-9]*):(-|)(0|[1-9][0-9]*)$')",
+		decimalValid: "match(" + payload +
+			", '^(-|)(0|[1-9][0-9]*)([.][0-9]+|)([eE]([+]|-|)(0|[1-9][0-9]*)|)$')",
+	}
+}
+
 func fieldSummaryScalarExpressions(field fieldState) (agreement, encoded string) {
 	storedType := quoteIdentifier(fieldSummaryStoredType)
 	value := quoteIdentifier(fieldSummaryRawValue)
@@ -515,19 +552,12 @@ func fieldSummaryScalarExpressions(field fieldState) (agreement, encoded string)
 		agreement = storedType + " = toUInt8(" + nullCode + ") OR (" + validType + ")"
 		return agreement, fieldSummaryFixedEncoding(field, storedType, value)
 	}
+	if field.storedTypeSQL != "" {
+		return fieldSummaryRuntimeDynamicExpressions(storedType, value)
+	}
 
 	physicalType := quoteIdentifier(fieldSummaryPhysicalType)
-	mapSQL := "dynamicElement(" + value + ", 'Map(String, String)')"
-	typeKey := "concat(char(0), 'open_splunk_type')"
-	valueKey := "concat(char(0), 'open_splunk_value')"
-	envelope := "(" + physicalType + " = 'Map(String, String)'" +
-		" AND length(" + mapSQL + ") = 2" +
-		" AND mapContains(" + mapSQL + ", " + typeKey + ")" +
-		" AND mapContains(" + mapSQL + ", " + valueKey + "))"
-	payload := mapSQL + "[" + valueKey + "]"
-	timestampShape := "match(" + payload +
-		", '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]([.][0-9]+|)Z$')" +
-		" AND (position(" + payload + ", '.') = 0 OR length(" + payload + ") - position(" + payload + ", '.') - 1 BETWEEN 1 AND 9)"
+	tagged := newFieldSummaryDynamicEnvelopeSQL(value, physicalType)
 
 	agreement = "multiIf(" +
 		storedType + " = toUInt8(" + fmt.Sprint(uint8(eventfields.StoredValueTypeNull)) + "), " + physicalType + " = 'None', " +
@@ -538,18 +568,19 @@ func fieldSummaryScalarExpressions(field fieldState) (agreement, encoded string)
 		storedType + " = toUInt8(" + fmt.Sprint(uint8(eventfields.StoredValueTypeDouble)) + "), " + physicalType + " = 'Float64', " +
 		storedType + " = toUInt8(" + fmt.Sprint(uint8(eventfields.StoredValueTypeBool)) + "), " + physicalType + " = 'Bool', " +
 		storedType + " = toUInt8(" + fmt.Sprint(uint8(eventfields.StoredValueTypeBytes)) + "), " +
-		envelope + " AND " + mapSQL + "[" + typeKey + "] = 'bytes/v1' AND match(" + payload +
-		", '^[A-Za-z0-9+/]*$') AND modulo(length(" + payload + "), 4) != 1, " +
+		tagged.envelope + " AND " + tagged.mapSQL + "[" + tagged.typeKey + "] = 'bytes/v1' AND " +
+		tagged.bytesValid + ", " +
 		storedType + " = toUInt8(" + fmt.Sprint(uint8(eventfields.StoredValueTypeTimestamp)) + "), " +
-		envelope + " AND " + mapSQL + "[" + typeKey + "] = 'timestamp/v1' AND " + timestampShape + ", " +
+		tagged.envelope + " AND " + tagged.mapSQL + "[" + tagged.typeKey + "] = 'timestamp/v1' AND " +
+		tagged.timestampValid + ", " +
 		storedType + " = toUInt8(" + fmt.Sprint(uint8(eventfields.StoredValueTypeDuration)) + "), " +
-		envelope + " AND " + mapSQL + "[" + typeKey + "] = 'duration/v1' AND match(" + payload +
-		", '^(-|)(0|[1-9][0-9]*):(-|)(0|[1-9][0-9]*)$'), " +
+		tagged.envelope + " AND " + tagged.mapSQL + "[" + tagged.typeKey + "] = 'duration/v1' AND " +
+		tagged.durationValid + ", " +
 		storedType + " IN (toUInt8(" + fmt.Sprint(uint8(eventfields.StoredValueTypeList)) + "), toUInt8(" +
 		fmt.Sprint(uint8(eventfields.StoredValueTypeObject)) + ")), 1, " +
 		storedType + " = toUInt8(" + fmt.Sprint(uint8(eventfields.StoredValueTypeDecimal)) + "), " +
-		envelope + " AND " + mapSQL + "[" + typeKey + "] = 'decimal/v1' AND match(" + payload +
-		", '^(-|)(0|[1-9][0-9]*)([.][0-9]+|)([eE]([+]|-|)(0|[1-9][0-9]*)|)$'), " +
+		tagged.envelope + " AND " + tagged.mapSQL + "[" + tagged.typeKey + "] = 'decimal/v1' AND " +
+		tagged.decimalValid + ", " +
 		"0)"
 	encoded = "multiIf(" +
 		storedType + " = toUInt8(" + fmt.Sprint(uint8(eventfields.StoredValueTypeString)) + "), dynamicElement(" + value + ", 'String'), " +
@@ -560,7 +591,60 @@ func fieldSummaryScalarExpressions(field fieldState) (agreement, encoded string)
 		storedType + " IN (toUInt8(" + fmt.Sprint(uint8(eventfields.StoredValueTypeBytes)) + "), toUInt8(" +
 		fmt.Sprint(uint8(eventfields.StoredValueTypeTimestamp)) + "), toUInt8(" +
 		fmt.Sprint(uint8(eventfields.StoredValueTypeDuration)) + "), toUInt8(" +
-		fmt.Sprint(uint8(eventfields.StoredValueTypeDecimal)) + ")), " + payload + ", " +
+		fmt.Sprint(uint8(eventfields.StoredValueTypeDecimal)) + ")), " + tagged.payload + ", " +
+		"CAST('' AS String))"
+	return agreement, encoded
+}
+
+func fieldSummaryRuntimeDynamicExpressions(storedType, value string) (agreement, encoded string) {
+	physicalType := quoteIdentifier(fieldSummaryPhysicalType)
+	stringSQL := "dynamicElement(" + value + ", 'String')"
+	tagged := newFieldSummaryDynamicEnvelopeSQL(value, physicalType)
+	code := func(value eventfields.StoredValueType) string {
+		return "toUInt8(" + fmt.Sprint(uint8(value)) + ")"
+	}
+
+	agreement = "multiIf(" +
+		storedType + " = " + code(eventfields.StoredValueTypeNull) + ", " + physicalType + " = 'None', " +
+		storedType + " = " + code(eventfields.StoredValueTypeString) + ", " +
+		physicalType + " = 'String' AND isValidUTF8(" + stringSQL + "), " +
+		storedType + " = " + code(eventfields.StoredValueTypeSint64) + ", startsWith(" + physicalType + ", 'Int'), " +
+		storedType + " = " + code(eventfields.StoredValueTypeUint64) + ", startsWith(" + physicalType + ", 'UInt'), " +
+		storedType + " = " + code(eventfields.StoredValueTypeDouble) + ", " +
+		"startsWith(" + physicalType + ", 'Float') AND isFinite(toFloat64(" + value + ")), " +
+		storedType + " = " + code(eventfields.StoredValueTypeBool) + ", " + physicalType + " = 'Bool', " +
+		storedType + " = " + code(eventfields.StoredValueTypeBytes) + ", " +
+		"(" + physicalType + " = 'String' AND NOT isValidUTF8(" + stringSQL + ")) OR (" +
+		tagged.envelope + " AND " + tagged.mapSQL + "[" + tagged.typeKey + "] = 'bytes/v1' AND " +
+		tagged.bytesValid + "), " +
+		storedType + " = " + code(eventfields.StoredValueTypeTimestamp) + ", " +
+		"startsWith(" + physicalType + ", 'Date') OR (" + tagged.envelope + " AND " +
+		tagged.mapSQL + "[" + tagged.typeKey + "] = 'timestamp/v1' AND " + tagged.timestampValid + "), " +
+		storedType + " = " + code(eventfields.StoredValueTypeDuration) + ", " +
+		tagged.envelope + " AND " + tagged.mapSQL + "[" + tagged.typeKey + "] = 'duration/v1' AND " +
+		tagged.durationValid + ", " +
+		storedType + " IN (" + code(eventfields.StoredValueTypeList) + ", " +
+		code(eventfields.StoredValueTypeObject) + "), 1, " +
+		storedType + " = " + code(eventfields.StoredValueTypeDecimal) + ", " +
+		"startsWith(" + physicalType + ", 'Decimal') OR (" + tagged.envelope + " AND " +
+		tagged.mapSQL + "[" + tagged.typeKey + "] = 'decimal/v1' AND " + tagged.decimalValid + "), 0)"
+
+	timestamp := "concat(replaceOne(toString(toDateTime64(" + value + ", 9, 'UTC')), ' ', 'T'), 'Z')"
+	encoded = "multiIf(" +
+		storedType + " = " + code(eventfields.StoredValueTypeString) + ", " + stringSQL + ", " +
+		storedType + " = " + code(eventfields.StoredValueTypeSint64) + ", toString(" + value + "), " +
+		storedType + " = " + code(eventfields.StoredValueTypeUint64) + ", toString(" + value + "), " +
+		storedType + " = " + code(eventfields.StoredValueTypeDouble) + ", toString(" + value + "), " +
+		storedType + " = " + code(eventfields.StoredValueTypeBool) + ", " +
+		"if(dynamicElement(" + value + ", 'Bool'), 'true', 'false'), " +
+		storedType + " = " + code(eventfields.StoredValueTypeBytes) + ", " +
+		"if(" + physicalType + " = 'String', replaceRegexpOne(base64Encode(" + stringSQL +
+		"), '=+$', ''), " + tagged.payload + "), " +
+		storedType + " = " + code(eventfields.StoredValueTypeTimestamp) + ", " +
+		"if(startsWith(" + physicalType + ", 'Date'), " + timestamp + ", " + tagged.payload + "), " +
+		storedType + " = " + code(eventfields.StoredValueTypeDuration) + ", " + tagged.payload + ", " +
+		storedType + " = " + code(eventfields.StoredValueTypeDecimal) + ", " +
+		"if(startsWith(" + physicalType + ", 'Decimal'), toString(" + value + "), " + tagged.payload + "), " +
 		"CAST('' AS String))"
 	return agreement, encoded
 }

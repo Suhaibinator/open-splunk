@@ -501,6 +501,9 @@ func writeKnownFieldProfiles(sql *strings.Builder) {
 }
 
 func knownFieldStoredTypeSQL(field fieldState) (string, []any, error) {
+	if field.storedTypeSQL != "" {
+		return field.storedTypeSQL, nil, nil
+	}
 	if field.kind == fieldKindDynamic {
 		path, ok := exactStoredMetadataPath(field)
 		if !ok {

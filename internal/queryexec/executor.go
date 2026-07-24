@@ -1000,6 +1000,9 @@ func classifyQueryError(ctx context.Context, err error) error {
 	}
 	var exception *clickhousedriver.Exception
 	if errors.As(err, &exception) {
+		if exception.Code == 395 && strings.Contains(exception.Message, clickhouse.RexCaptureLimitMarker) {
+			return fmt.Errorf("%w: rex capture bytes exceeded the per-row limit", searchjobs.ErrExecutionLimit)
+		}
 		if exception.Code == 395 && (strings.Contains(exception.Message, clickhouse.UnsupportedStatsByValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedDedupValueMarker)) {
 			// The compiler deliberately emits stable markers when a scalar-only

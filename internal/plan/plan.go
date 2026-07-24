@@ -100,6 +100,27 @@ func (*Extend) operator()                 {}
 func (*Extend) LogicalName() string       { return "Extend" }
 func (op *Extend) SourceRange() spl.Range { return op.Range }
 
+// ExtractCapture maps one named regular-expression output to its one-based
+// group index. Unnamed capture groups remain part of the numeric sequence.
+type ExtractCapture struct {
+	Output FieldRef
+	Group  uint16
+}
+
+// Extract evaluates one bounded regular expression against the current value
+// of Input and conditionally updates every named output simultaneously. It is
+// row- and event-identity-preserving.
+type Extract struct {
+	Input    FieldRef
+	Pattern  string
+	Captures []ExtractCapture
+	Range    spl.Range
+}
+
+func (*Extract) operator()                 {}
+func (*Extract) LogicalName() string       { return "Extract" }
+func (op *Extract) SourceRange() spl.Range { return op.Range }
+
 // RenameAssignment moves one exact logical field to another. Assignments are
 // ordered because SPL evaluates multiple pairs from left to right.
 type RenameAssignment struct {

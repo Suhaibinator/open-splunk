@@ -20,6 +20,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -1421,6 +1422,421 @@ func testCompiledQueriesAgainstClickHouse(
 
 	testStatsSumAndAverageAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testDedupAgainstClickHouse(t, ctx, store, connection, indexTime)
+	testRexAgainstClickHouse(t, ctx, store, connection, indexTime)
+}
+
+func testRexAgainstClickHouse(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	connection clickhousedriver.Conn,
+	indexTime time.Time,
+) {
+	t.Helper()
+	newEvent := func(id, raw string, fields ...*opensplunkv1.TypedObjectField) *ingest.StoredEvent {
+		event := compilerIntegrationEvent(id, "rex-host", raw, indexTime, fields...)
+		event.BatchID = "rex-batch"
+		event.Event.Source = "rex-fixture"
+		return event
+	}
+	events := []*ingest.StoredEvent{
+		newEvent(
+			"rex-match",
+			"method=POST path=/api/v1/search/jobs status=500 duration=600ms",
+			typedField("duration_text", typedString("527.182µs")),
+			typedField("target", typedString("old-match")),
+			typedField("optional_path", typedString("/api/v1/jobs")),
+			typedField("numeric_source", typedSint(500)),
+			typedField("numeric_target", typedSint(42)),
+			typedField("binary_source", typedBytes([]byte{0, 255, 16})),
+			typedField("list_source", typedList(typedString("x"))),
+			typedField("object_source", typedObject(typedField("child", typedString("x")))),
+			typedField("object_target", typedObject(typedField("child", typedString("keep")))),
+		),
+		newEvent(
+			"rex-no-match",
+			"prefix\nsuffix",
+			typedField("duration_text", typedString("bad")),
+			typedField("target", typedString("keep-me")),
+			typedField("area", typedString("keep-area")),
+			typedField("null_source", typedNull()),
+			typedField("nullable_target", typedNull()),
+		),
+		newEvent(
+			"rex-invalid-utf8",
+			string([]byte{'p', 'r', 'e', 'f', 'i', 'x', 0xff, 's', 'u', 'f', 'f', 'i', 'x'}),
+			typedField("target", typedString("keep-invalid")),
+		),
+		newEvent(
+			"rex-large",
+			strings.Repeat("a", 768<<10)+" status=503",
+			typedField("target", typedString("keep-large")),
+		),
+		newEvent("rex-trailing-newline", "status=200\n"),
+	}
+	batch := ingest.StoreBatch{
+		TenantID: "tenant", CollectorID: "collector", BatchID: "rex-batch", BatchSequence: 50,
+		SourceBatchSHA256: testSourceBatchDigest("rex-batch"),
+		ReceivedAt:        indexTime,
+		Events:            events,
+	}
+	if _, err := store.Store(ctx, batch); err != nil {
+		t.Fatalf("store rex fixtures: %v", err)
+	}
+	visibilityCutoff, err := store.VisibilityCutoff(ctx)
+	if err != nil {
+		t.Fatalf("capture rex visibility cutoff: %v", err)
+	}
+	count := func(source string) uint64 {
+		t.Helper()
+		compiled := compileIntegrationSPL(t, source, indexTime.Add(10*time.Second), visibilityCutoff)
+		var got uint64
+		if err := connection.QueryRow(ctx, compiled.SQL, compiled.Args...).Scan(&got); err != nil {
+			t.Fatalf("execute rex SPL %q: %v\nSQL: %s\nargs: %#v", source, err, compiled.SQL, compiled.Args)
+		}
+		return got
+	}
+	base := `index=compiler source="rex-fixture"`
+	explained := compileIntegrationSPL(
+		t,
+		base+` | rex "method=(?<method>[A-Z]+)\s+path=(?<path>\S+)" | table method, path`,
+		indexTime.Add(10*time.Second),
+		visibilityCutoff,
+	)
+	explainRows, err := connection.Query(ctx, "EXPLAIN actions=1 "+explained.SQL, explained.Args...)
+	if err != nil {
+		t.Fatalf("explain rex execution: %v", err)
+	}
+	var explain strings.Builder
+	for explainRows.Next() {
+		var line string
+		if err := explainRows.Scan(&line); err != nil {
+			t.Fatalf("scan rex explain: %v", err)
+		}
+		explain.WriteString(line)
+		explain.WriteByte('\n')
+	}
+	if err := explainRows.Err(); err != nil {
+		t.Fatalf("iterate rex explain: %v", err)
+	}
+	if err := explainRows.Close(); err != nil {
+		t.Fatalf("close rex explain: %v", err)
+	}
+	if calls := strings.Count(explain.String(), "FUNCTION extractGroups("); calls != 1 {
+		t.Fatalf("rex physical explain contains %d extractGroups actions, want 1:\n%s", calls, explain.String())
+	}
+
+	tests := []struct {
+		name   string
+		source string
+		want   uint64
+	}{
+		{
+			name: "default raw simultaneous captures",
+			source: base + ` | rex "method=(?<method>[A-Z]+)\s+path=(?<path>\S+)\s+status=(?<status>\d+)"` +
+				` | where method="POST" AND path="/api/v1/search/jobs" AND status="500" | stats count`,
+			want: 1,
+		},
+		{
+			name: "unicode explicit source",
+			source: base + ` | rex field=duration_text "^(?<duration_value>\d+(?:\.\d+)?)(?<duration_unit>µs|ms)$"` +
+				` | where duration_value="527.182" AND duration_unit="µs" | stats count`,
+			want: 1,
+		},
+		{
+			name:   "new destination remains missing on no match",
+			source: base + ` | rex field=duration_text "^(?<duration_value>\d+)" | search duration_value=* | stats count`,
+			want:   1,
+		},
+		{
+			name:   "existing destination preserved on no match",
+			source: base + ` | rex "method=(?<target>[A-Z]+)" | where target="keep-me" | stats count`,
+			want:   1,
+		},
+		{
+			name:   "matching destination overwritten",
+			source: base + ` | rex "method=(?<target>[A-Z]+)" | where target="POST" | stats count`,
+			want:   1,
+		},
+		{
+			name:   "invalid utf8 source is no match",
+			source: base + ` event_id=rex-invalid-utf8 | rex "prefix(?<target>.)suffix" | where target="keep-invalid" | stats count`,
+			want:   1,
+		},
+		{
+			name:   "numeric source is no match",
+			source: base + ` event_id=rex-match | rex field=numeric_source "^(?<target>\d+)$" | where target="old-match" | stats count`,
+			want:   1,
+		},
+		{
+			name: "explicit null destination remains present",
+			source: base + ` event_id=rex-no-match | rex field=duration_text "^(?<nullable_target>\d+)$"` +
+				` | search nullable_target=null | stats count`,
+			want: 1,
+		},
+		{
+			name: "missing destination remains missing",
+			source: base + ` event_id=rex-large | rex field=duration_text "^(?<fresh_missing>\d+)$"` +
+				` | search fresh_missing=* | stats count`,
+			want: 0,
+		},
+		{
+			name: "optional unmatched capture is present empty string",
+			source: base + ` event_id=rex-match | rex field=optional_path "^/api/v1/(?<area>[^/?]+)(?:/(?<resource>[^/?]+))?"` +
+				` | where area="jobs" AND resource="" | stats count`,
+			want: 1,
+		},
+		{
+			name:   "dot does not cross newline by default",
+			source: base + ` event_id=rex-no-match | rex "prefix(?<gap>.)suffix" | search gap=* | stats count`,
+			want:   0,
+		},
+		{
+			name:   "explicit dotall crosses newline",
+			source: base + ` event_id=rex-no-match | rex "(?s)prefix(?<gap>.)suffix" | search gap=* | stats count`,
+			want:   1,
+		},
+		{
+			name:   "large tail match remains linear and bounded",
+			source: base + ` event_id=rex-large | rex "status=(?<status>\d{3})$" | where status="503" | stats count`,
+			want:   1,
+		},
+		{
+			name:   "source output collision reads old source",
+			source: base + ` event_id=rex-match | rex field=duration_text "^(?<duration_text>\d+)" | where duration_text="527" | stats count`,
+			want:   1,
+		},
+		{
+			name:   "explicit null source is no match",
+			source: base + ` event_id=rex-no-match | rex field=null_source "(?<captured>x)" | search captured=* | stats count`,
+			want:   0,
+		},
+		{
+			name:   "binary source is no match",
+			source: base + ` event_id=rex-match | rex field=binary_source "(?<captured>.)" | search captured=* | stats count`,
+			want:   0,
+		},
+		{
+			name:   "list source is no match",
+			source: base + ` event_id=rex-match | rex field=list_source "(?<captured>.)" | search captured=* | stats count`,
+			want:   0,
+		},
+		{
+			name:   "object source is no match",
+			source: base + ` event_id=rex-match | rex field=object_source "(?<captured>.)" | search captured=* | stats count`,
+			want:   0,
+		},
+		{
+			name:   "zero width first match creates empty capture",
+			source: base + ` event_id=rex-match | rex field=duration_text "^(?<empty>)" | where empty="" | stats count`,
+			want:   1,
+		},
+		{
+			name:   "strict end anchor does not match before trailing newline",
+			source: base + ` event_id=rex-trailing-newline | rex "status=(?<strict_status>\d+)$" | search strict_status=* | stats count`,
+			want:   0,
+		},
+		{
+			name:   "multiline end anchor matches before trailing newline",
+			source: base + ` event_id=rex-trailing-newline | rex "(?m)status=(?<line_status>\d+)$" | where line_status="200" | stats count`,
+			want:   1,
+		},
+		{
+			name: "consecutive rex stages consume the current pipeline value",
+			source: base + ` event_id=rex-match | rex field=duration_text "^(?<first>\d+)"` +
+				` | rex field=first "^(?<second>\d{3})$" | where first="527" AND second="527" | stats count`,
+			want: 1,
+		},
+		{
+			name: "mixed numeric destination is preserved on no match",
+			source: base + ` event_id=rex-match | rex field=duration_text "^never(?<numeric_target>x)$"` +
+				` | where numeric_target=42 | stats count`,
+			want: 1,
+		},
+		{
+			name: "mixed numeric destination is overwritten by a string",
+			source: base + ` event_id=rex-match | rex field=duration_text "^(?<numeric_target>\d+)"` +
+				` | where numeric_target="527" | stats count`,
+			want: 1,
+		},
+		{
+			name: "object parent destination remains present on no match",
+			source: base + ` event_id=rex-match | rex field=duration_text "^never(?<object_target>x)$"` +
+				` | search object_target=* | stats count`,
+			want: 1,
+		},
+		{
+			name: "object destination descendants remain available on no match",
+			source: base + ` event_id=rex-match | rex field=duration_text "^never(?<object_target>x)$"` +
+				` | where object_target.child="keep" | stats count`,
+			want: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run("rex "+test.name, func(t *testing.T) {
+			if got := count(test.source); got != test.want {
+				t.Fatalf("count = %d, want %d", got, test.want)
+			}
+		})
+	}
+
+	oversizedCaptures := compileIntegrationSPL(
+		t,
+		base+` event_id=rex-large | rex "^(?<a>(?<b>(?<c>(?<d>(?<e>(?<f>.*))))))$"`+
+			` | where a!="" | stats count`,
+		indexTime.Add(10*time.Second),
+		visibilityCutoff,
+	)
+	var ignoredCount uint64
+	captureLimitErr := connection.QueryRow(
+		ctx,
+		oversizedCaptures.SQL,
+		oversizedCaptures.Args...,
+	).Scan(&ignoredCount)
+	var captureLimitException *clickhousedriver.Exception
+	if !errors.As(captureLimitErr, &captureLimitException) || captureLimitException.Code != 395 ||
+		!strings.Contains(captureLimitException.Message, RexCaptureLimitMarker) {
+		t.Fatalf("oversized rex captures error = %#v, want guarded code-395 marker", captureLimitErr)
+	}
+
+	analysisPlan := buildIntegrationPlan(
+		t,
+		base+` | rex field=duration_text "^(?<duration_value>\d+)" | table duration_value`,
+		indexTime.Add(10*time.Second),
+		visibilityCutoff,
+	)
+	catalog, err := (Compiler{}).CompileFieldCatalog(analysisPlan, FieldCatalogSpec{MaximumFields: 10})
+	if err != nil {
+		t.Fatalf("compile rex field catalog: %v", err)
+	}
+	var catalogRows uint64
+	if err := connection.QueryRow(ctx, "SELECT count() FROM ("+catalog.SQL+")", catalog.Args...).Scan(&catalogRows); err != nil {
+		t.Fatalf("execute rex field catalog: %v\nSQL: %s\nargs: %#v", err, catalog.SQL, catalog.Args)
+	}
+	if catalogRows != 2 {
+		t.Fatalf("rex field catalog rows = %d, want header plus one field", catalogRows)
+	}
+
+	summary, err := (Compiler{}).CompileFieldSummary(analysisPlan, FieldSummarySpec{
+		FieldName:             "duration_value",
+		MaximumValues:         10,
+		MaximumDistinctValues: 100,
+		MaximumValueBytes:     4_096,
+	})
+	if err != nil {
+		t.Fatalf("compile rex field summary: %v", err)
+	}
+	var summaryRows uint64
+	if err := connection.QueryRow(ctx, "SELECT count() FROM ("+summary.SQL+")", summary.Args...).Scan(&summaryRows); err != nil {
+		t.Fatalf("execute rex field summary: %v\nSQL: %s\nargs: %#v", err, summary.SQL, summary.Args)
+	}
+	if summaryRows != 2 {
+		t.Fatalf("rex field summary rows = %d, want header plus one value", summaryRows)
+	}
+
+	mixedPlan := buildIntegrationPlan(
+		t,
+		base+` | rex field=duration_text "^(?<severity>\d+)" | table severity`,
+		indexTime.Add(10*time.Second),
+		visibilityCutoff,
+	)
+	mixedSummary, err := (Compiler{}).CompileFieldSummary(mixedPlan, FieldSummarySpec{
+		FieldName:             "severity",
+		MaximumValues:         10,
+		MaximumDistinctValues: 100,
+		MaximumValueBytes:     4_096,
+	})
+	if err != nil {
+		t.Fatalf("compile mixed rex field summary: %v", err)
+	}
+	mixedSummaryControlSQL := "SELECT count(), max(" + quoteIdentifier(FieldSummaryMetadataInvalidColumn) +
+		"), max(" + quoteIdentifier(FieldSummaryUnsupportedColumn) + "), countIf(" +
+		quoteIdentifier(FieldSummaryRowKindColumn) + " = 1 AND " +
+		quoteIdentifier(FieldSummaryValueTypeColumn) + " = toUInt8(" +
+		fmt.Sprint(uint8(eventfields.StoredValueTypeString)) + ") AND " +
+		quoteIdentifier(FieldSummaryEncodedValueColumn) + " = '527' AND " +
+		quoteIdentifier(FieldSummaryValueCountColumn) + " = 1), countIf(" +
+		quoteIdentifier(FieldSummaryRowKindColumn) + " = 1 AND " +
+		quoteIdentifier(FieldSummaryValueTypeColumn) + " = toUInt8(" +
+		fmt.Sprint(uint8(eventfields.StoredValueTypeUint64)) + ") AND " +
+		quoteIdentifier(FieldSummaryEncodedValueColumn) + " = '" +
+		fmt.Sprint(int32(opensplunkv1.LogSeverity_LOG_SEVERITY_INFO)) + "' AND " +
+		quoteIdentifier(FieldSummaryValueCountColumn) + " = 4) FROM (" + mixedSummary.SQL + ")"
+	var mixedSummaryRows, capturedProfileRows, preservedProfileRows uint64
+	var metadataInvalid, unsupported uint8
+	if err := connection.QueryRow(ctx, mixedSummaryControlSQL, mixedSummary.Args...).Scan(
+		&mixedSummaryRows,
+		&metadataInvalid,
+		&unsupported,
+		&capturedProfileRows,
+		&preservedProfileRows,
+	); err != nil {
+		t.Fatalf("execute mixed rex field summary: %v\nSQL: %s\nargs: %#v", err, mixedSummary.SQL, mixedSummary.Args)
+	}
+	if mixedSummaryRows != 3 || metadataInvalid != 0 || unsupported != 0 ||
+		capturedProfileRows != 1 || preservedProfileRows != 1 {
+		t.Fatalf(
+			"mixed rex field summary = rows:%d metadata_invalid:%d unsupported:%d captured:%d preserved:%d, want 3/0/0/1/1",
+			mixedSummaryRows,
+			metadataInvalid,
+			unsupported,
+			capturedProfileRows,
+			preservedProfileRows,
+		)
+	}
+
+	objectPlan := buildIntegrationPlan(
+		t,
+		base+` event_id=rex-match | rex field=duration_text "^never(?<object_target>x)$" | table object_target`,
+		indexTime.Add(10*time.Second),
+		visibilityCutoff,
+	)
+	objectCatalog, err := (Compiler{}).CompileFieldCatalog(objectPlan, FieldCatalogSpec{MaximumFields: 10})
+	if err != nil {
+		t.Fatalf("compile object-preserving rex field catalog: %v", err)
+	}
+	objectCatalogControlSQL := "SELECT countIf(" + quoteIdentifier(FieldCatalogRowKindColumn) +
+		" = 1 AND " + quoteIdentifier(FieldCatalogNameColumn) + " = 'object_target' AND " +
+		quoteIdentifier(FieldCatalogEventCountColumn) + " = 1 AND has(" +
+		quoteIdentifier(FieldCatalogObservedTypesColumn) + ", toUInt8(" +
+		fmt.Sprint(uint8(eventfields.StoredValueTypeObject)) + "))) FROM (" + objectCatalog.SQL + ")"
+	var objectCatalogProfiles uint64
+	if err := connection.QueryRow(ctx, objectCatalogControlSQL, objectCatalog.Args...).Scan(
+		&objectCatalogProfiles,
+	); err != nil {
+		t.Fatalf("execute object-preserving rex field catalog: %v\nSQL: %s", err, objectCatalog.SQL)
+	}
+	if objectCatalogProfiles != 1 {
+		t.Fatalf("object-preserving rex field catalog profiles = %d, want 1", objectCatalogProfiles)
+	}
+
+	objectSummary, err := (Compiler{}).CompileFieldSummary(objectPlan, FieldSummarySpec{
+		FieldName:             "object_target",
+		MaximumValues:         10,
+		MaximumDistinctValues: 100,
+		MaximumValueBytes:     4_096,
+	})
+	if err != nil {
+		t.Fatalf("compile object-preserving rex field summary: %v", err)
+	}
+	objectSummaryControlSQL := "SELECT count(), max(" + quoteIdentifier(FieldSummaryMetadataInvalidColumn) +
+		"), max(" + quoteIdentifier(FieldSummaryUnsupportedColumn) + ") FROM (" + objectSummary.SQL + ")"
+	var objectSummaryRows uint64
+	if err := connection.QueryRow(ctx, objectSummaryControlSQL, objectSummary.Args...).Scan(
+		&objectSummaryRows,
+		&metadataInvalid,
+		&unsupported,
+	); err != nil {
+		t.Fatalf("execute object-preserving rex field summary: %v\nSQL: %s", err, objectSummary.SQL)
+	}
+	if objectSummaryRows != 1 || metadataInvalid != 0 || unsupported != 1 {
+		t.Fatalf(
+			"object-preserving rex field summary = rows:%d metadata_invalid:%d unsupported:%d, want 1/0/1",
+			objectSummaryRows,
+			metadataInvalid,
+			unsupported,
+		)
+	}
 }
 
 func testStatsSumAndAverageAgainstClickHouse(
@@ -1870,6 +2286,16 @@ func float64PointerForIntegration(value float64) *float64 { return &value }
 
 func compileIntegrationSPL(t *testing.T, source string, cutoff time.Time, visibilityCutoff uint64) CompiledQuery {
 	t.Helper()
+	logical := buildIntegrationPlan(t, source, cutoff, visibilityCutoff)
+	compiled, err := (Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatalf("compile integration SPL %q: %v", source, err)
+	}
+	return compiled
+}
+
+func buildIntegrationPlan(t *testing.T, source string, cutoff time.Time, visibilityCutoff uint64) *plan.Query {
+	t.Helper()
 	parsed, err := spl.Parse(source)
 	if err != nil {
 		t.Fatalf("parse integration SPL %q: %v", source, err)
@@ -1884,11 +2310,7 @@ func compileIntegrationSPL(t *testing.T, source string, cutoff time.Time, visibi
 	if err != nil {
 		t.Fatalf("build integration SPL %q: %v", source, err)
 	}
-	compiled, err := (Compiler{}).Compile(logical)
-	if err != nil {
-		t.Fatalf("compile integration SPL %q: %v", source, err)
-	}
-	return compiled
+	return logical
 }
 
 func uint64PointerForIntegration(value uint64) *uint64 { return &value }

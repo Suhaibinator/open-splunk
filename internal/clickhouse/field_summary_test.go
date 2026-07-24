@@ -205,6 +205,11 @@ func TestCompileFieldSummaryUsesFinalFieldSemantics(t *testing.T) {
 			field: "status", notFound: true,
 		},
 		{
+			name: "rex output", source: `index=gradethis | rex field=duration "^(?<duration_value>\d+)" | table duration_value`,
+			field: "duration_value", wantKnown: true,
+			fragments: []string{"extractGroups(", `"__os_rex_exists_`},
+		},
+		{
 			name: "exclude blocks exact", source: `index=gradethis | fields - status`,
 			field: "status", notFound: true,
 		},
@@ -245,6 +250,28 @@ func TestCompileFieldSummaryUsesFinalFieldSemantics(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCompileFieldSummaryValidatesPreservedRexDynamicEncodings(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileFieldSummary(
+		t,
+		buildPlan(t, `index=gradethis | rex "status=(?<status>\d+)" | table status`),
+		fieldSummaryTestSpec("status"),
+	)
+	for _, fragment := range []string{
+		`"__os_rex_type_`,
+		`'bytes/v1' AND match(`,
+		`'timestamp/v1' AND match(`,
+		`'duration/v1' AND match(`,
+		`'decimal/v1' AND match(`,
+		`IN (toUInt8(10), toUInt8(11)), 1`,
+	} {
+		if !strings.Contains(compiled.SQL, fragment) {
+			t.Errorf("mixed rex field summary is missing %q:\n%s", fragment, compiled.SQL)
+		}
 	}
 }
 

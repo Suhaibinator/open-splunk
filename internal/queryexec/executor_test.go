@@ -765,6 +765,15 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 			t.Fatalf("unsupported dynamic value marker %q error = %v", marker, err)
 		}
 	}
+	rexLimit := &clickhousedriver.Exception{
+		Code:    395,
+		Name:    "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
+		Message: clickhouse.RexCaptureLimitMarker + "; generated SQL contained secret",
+	}
+	if err := classifyQueryError(context.Background(), rexLimit); !errors.Is(err, searchjobs.ErrExecutionLimit) ||
+		strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), clickhouse.RexCaptureLimitMarker) {
+		t.Fatalf("rex capture limit classification = %v", err)
+	}
 	wrongCode := &clickhousedriver.Exception{Code: 241, Message: clickhouse.UnsupportedStatsByValueMarker}
 	if err := classifyQueryError(context.Background(), wrongCode); !errors.Is(err, searchjobs.ErrExecutionLimit) || errors.Is(err, searchjobs.ErrUnsupportedValue) {
 		t.Fatalf("marker on an unrelated exception = %v", err)
