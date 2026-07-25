@@ -20,15 +20,11 @@ import (
 // This file probes the numeric-string and floating edges of the runtime
 // Dynamic bin path.
 //
-// Four cases currently fail and are left failing on purpose; each is a reported
-// defect, not a wrong expectation. Every spelling longer than 21 bytes leaves
-// the exact Int256 arm (`length(<value>) <= 21`) and is handed to the Float64
-// arm, which has no width bound of its own. ClickHouse's `toFloat64OrNull`
-// silently drops digits once an integer part carries about twenty leading
-// zeros, so those spellings become a fabricated finite bucket — `bin` answers 0
-// for a field that spells 21 — or fall through as text. Both outcomes
-// contradict `docs/spl-compatibility-v0.1.md`, which says numeric text becomes
-// the number it spells and converges with its numeric twin.
+// The padded cases are regressions for a ClickHouse text-to-double edge that
+// once fabricated finite buckets after enough leading zeros. The compiler now
+// canonicalizes a numeric spelling before choosing its exact-integer or
+// bounded-Float64 arm, so padding and an explicit plus sign cannot change the
+// bucket or make the text diverge from its numeric twin.
 //
 // binEdgeNumericCase is one numeric-text spelling of the Dynamic bin path and,
 // when the spelling names a value ingestion could also have typed as a number,
@@ -89,32 +85,28 @@ func binEdgeNumericCases() []binEdgeNumericCase {
 			wantType: "Int64", wantValue: "20",
 		},
 		{
-			// Exactly 21 bytes, the documented width bound.
-			name: "leading zeros at the width guard", field: "pad_21", span: "10",
+			// A 21-byte spelling still canonicalizes to the ordinary integer 21.
+			name: "leading zeros at the former raw-width boundary", field: "pad_21", span: "10",
 			text: "000000000000000000021", number: typedSint(21),
 			wantType: "Int64", wantValue: "20",
 		},
 		{
-			// DEFECT (failing): one byte past the width guard. The spelling
-			// still names an integer whose exact bucket start is
-			// representable, so the contract requires the same signed number
-			// as its twin. Observed: Float64 0.
-			name: "leading zeros past the width guard", field: "pad_22", span: "10",
+			// Regression: padding beyond the former raw-width guard must not
+			// change the exact bucket or its signed result type.
+			name: "leading zeros past the former raw-width boundary", field: "pad_22", span: "10",
 			text: "0000000000000000000021", number: typedSint(21),
 			wantType: "Int64", wantValue: "20",
 		},
 		{
-			// DEFECT (failing): fractional text has no width bound at all, so
-			// the Float64 arm trusts whatever ClickHouse's text-to-double
-			// parser returns. 21.5 is exactly representable and its bucket is
-			// 20. Observed: Float64 0.
+			// Regression: canonicalization must happen before the bounded
+			// Float64 conversion; 21.5 is exactly representable here.
 			name: "padded fractional text", field: "pad_fraction", span: "10",
 			text: "000000000000000000021.5", number: typedDouble(21.5),
 			wantType: "Float64", wantValue: "20",
 		},
 		{
-			// DEFECT (failing): the identical digits without padding bucket
-			// exactly (see the next case). Observed: Float64 9007199254740000.
+			// Regression: padding must not move this wide integer onto the
+			// rounded Float64 path (compare the next case).
 			name: "padded wide integer text", field: "pad_wide", span: "100",
 			text: "0000009007199254740999", number: typedSint(9_007_199_254_740_999),
 			wantType: "Int64", wantValue: "9007199254740900",
@@ -170,8 +162,8 @@ func binEdgeNumericCases() []binEdgeNumericCase {
 			wantType: "UInt64", wantValue: "18446744073709551610",
 		},
 		{
-			// DEFECT (failing): 22 bytes with one pad zero. Observed: the text
-			// is kept, so the bucket never converges with its numeric twin.
+			// Regression: a pad zero must not prevent convergence with the
+			// UInt64 numeric twin.
 			name: "padded unsigned maximum", field: "uint64_max_pad", span: "10",
 			text: "+018446744073709551615", number: typedUint(^uint64(0)),
 			wantType: "UInt64", wantValue: "18446744073709551610",
@@ -476,10 +468,9 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 		}
 	})
 
-	// DEFECT (failing): a bucket is not cosmetic. It is the value every later
-	// numeric predicate and aggregation sees, so a fabricated bucket silently
-	// changes which events a search matches: a field spelling 21 matches
-	// `where band<10`.
+	// A bucket is not cosmetic: it is the value every later numeric predicate
+	// and aggregation sees. Keep the former fabricated-bucket cases pinned
+	// through downstream predicates as well as direct result inspection.
 	t.Run("a bucket never contradicts the value it buckets", func(t *testing.T) {
 		for _, probe := range []struct {
 			name, field, span, filter string

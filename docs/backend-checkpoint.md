@@ -4,6 +4,27 @@ This file is the restart point for backend work. The checkpoint commit is the
 `main` commit that contains this document; confirm it with `git log -1` after
 pulling `origin/main`.
 
+## Pause checkpoint (2026-07-24)
+
+Work is intentionally paused at a clean backend checkpoint. The base restart
+commit before this handoff-only update is `9434629` (`correct backend restart
+handoff`), which was both local `main` and `origin/main` when the pause was
+prepared. The last feature implementation commit is `ef911f9` (`add bounded
+two-field chart pivot backend`). This document and the corrected numeric-edge
+test comments are the only changes made after `9434629`.
+
+Fresh validation at the pause passed:
+
+```sh
+go test ./... -count=1 -timeout=5m
+go vet ./...
+go build ./...
+```
+
+No implementation of the next exact-decimal slice was started. Three
+independent read-only reviews of semantics, ClickHouse lowering, and the test
+matrix completed before this handoff was written.
+
 ## Safe resume procedure
 
 1. Run `git status --short --branch` before editing anything.
@@ -225,10 +246,12 @@ test as database validation.
 ## Remaining work, in priority order
 
 1. Runtime Dynamic `bin`/`bucket` now covers exact presence/type metadata,
-   numeric strings, mixed signed/unsigned/float rows, tagged decimals,
-   containers, and multivalue data. What remains is an exact bucket for stored
-   tagged decimals and for integer text whose bucket start falls outside
-   `Int64`/`UInt64`, which currently keep their value rather than being
+   numeric strings, and mixed signed/unsigned/float rows. It classifies tagged
+   decimals, containers, and multivalue data but deliberately rejects those
+   runtime numeric/container shapes today. What remains first is an exact
+   bucket for stored tagged decimals and for integer text whose bucket start
+   falls outside `Int64`/`UInt64`; the former currently returns the sanitized
+   unsupported-value error and the latter keeps its String rather than being
    approximated. Automatic `bins`/`minspan`, `start`/`end`, `aligntime`,
    calendar/subsecond spans, and logarithmic spans remain separate
    whole-input/alignment features and must not be approximated.
@@ -269,6 +292,104 @@ test as database validation.
 8. Continue Phase 3/4 product hardening: per-index permissions/retention UI,
    token and collector fleet operations, RBAC/audit search, backup/restore,
    migration upgrade tests, fair query scheduling, packaging, and upgrades.
+
+## Exact Dynamic numeric-bin restart packet
+
+This is the next test-driven backend slice. Read this section together with the
+[`bin` / `bucket` contract](spl-compatibility-v0.1.md#bin--bucket) before
+editing the compiler.
+
+### Contract decisions to make first
+
+- A valid stored `decimal/v1` value is numeric. Its result is
+  `floor(value / span) * span`, computed exactly; zero is canonicalized to
+  `0`. A known Decimal must never be silently returned unbinned.
+- Keep the current missing/null/`AS` rules unchanged: a missing source performs
+  no write and preserves a prior destination; explicit null overwrites with a
+  present null; `AS` retains the source; the in-place form replaces it.
+- Never route a wide integer through `Float64`. Ordinary String input outside
+  the declared exact bound should remain the exact String, while a declared
+  Decimal outside that bound should fail with the existing sanitized
+  unsupported-value marker.
+- Publish one explicit exact-arithmetic/resource bound. Signed `Int256` bucket
+  boundaries are the simplest bounded SQL-native contract, but decide this
+  before freezing tests. State the limit in terms of the exact bucket boundary,
+  not an approximate digit count.
+- Choose and document the output representation. One bounded design to test is
+  a hybrid: keep tagged Decimal output as a canonical `decimal/v1` envelope;
+  emit physical `Int256` for wide integer text whose bucket boundary is inside
+  the proposed signed-`Int256` range, with semantic type `Decimal`. The
+  executor has a generic `big.Int` conversion path and current Dynamic
+  comparison lowering has a signed-`Int256` exact arm, but the actual
+  `CAST(Int256 AS Dynamic)` driver/result path still needs the pinned experiment
+  below. Do not extend the representation to `UInt256` above signed-`Int256`
+  maximum without adding exact predicate and sort lowering in the same slice.
+  If all wide results instead use envelopes, exact comparison/sort support for
+  integral Decimal envelopes must also land in the same slice.
+- Tagged Decimal parsing must be lexical and linear in the bounded input. It
+  must compare large exponents before casting and must never materialize an
+  attacker-controlled exponent as a run of zeroes. If a separate
+  digit/exponent-token ceiling is introduced, make it named, public, and
+  covered immediately below, at, and above the boundary.
+- `stats sum`/`avg`/`p95` over Decimal remain a separate compatibility slice;
+  do not silently claim exact aggregate arithmetic while their existing
+  lowering is `Float64`.
+
+### First failing tests
+
+Start with tagged Decimal `123.4500`, span `10`, producing Decimal `120`.
+Then cover:
+
+| Input | Span | Exact bucket |
+| --- | ---: | ---: |
+| String `-9223372036854775808` | 10 | `-9223372036854775810` |
+| String `18446744073709551616` | 10 | `18446744073709551610` |
+| String `9007199254740993.5` | 1 | `9007199254740993` |
+| String `-9007199254740993.5` | 1 | `-9007199254740994` |
+| Decimal `-21.5` | 10 | `-30` |
+| Decimal `1.2345e3` | 10 | `1230` |
+| Decimal `1.2345e-3` | 1 | `0` |
+| Decimal `-1.2345e-3` | 1 | `-1` |
+
+Pin the signed `Int256` maximum and minimum with span `10`, plus max+1 and
+min-1, so ClickHouse casts can never wrap unnoticed. Add malformed-envelope
+poison rows (bad tag/type pairing, missing keys, extra keys, and noncanonical
+payloads) and prove invisible poison cannot affect a valid tenant/index/time/
+visibility-scoped query.
+
+Downstream tests are required in the same slice: adjacent buckets
+`9007199254740992` and `9007199254740993` must remain distinct under `where`,
+`search`, `sort`, and `stats count BY`; equivalent Decimal spellings must
+converge to one canonical group. Field catalogs and summaries must report
+semantic Decimal while preserving missing, null, collision, and in-place
+behavior.
+
+Reuse these fixtures:
+
+- `internal/clickhouse/bin_edge_numeric_integration_test.go`
+- `internal/clickhouse/bin_edge_metadata_integration_test.go`
+- `internal/clickhouse/bin_edge_pipeline_integration_test.go`
+- `internal/clickhouse/bin_edge_numeric_test.go`
+- `internal/clickhouse/bin_edge_metadata_test.go`
+- `internal/clickhouse/bin_edge_pipeline_compiler_test.go`
+
+Before implementation, run small pinned ClickHouse experiments for
+`CAST(Int256 AS Dynamic)`, driver scan types, boundary casts, `multiIf` arm
+unification, and alias expansion. Add `UInt256` experiments only if considering
+a wider unsigned contract. Preserve the current nested single-scan streaming
+shape; avoid repeated `WITH` references because ClickHouse inlines them. If
+wide physical integers use semantic Decimal, extend
+`fieldSummaryRuntimeDynamicExpressions` to accept and encode the selected wide
+physical integer types.
+
+The existing pinned numeric-string edge suite was green at this pause:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+  -run '^TestBinEdgeNumericDynamicStringsAgainstClickHouse$' \
+  -count=1 -timeout=12m
+```
 
 ## Review notes
 
