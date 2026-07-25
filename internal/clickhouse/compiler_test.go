@@ -2262,13 +2262,14 @@ func TestCompileStatsDistinctCountUsesExactStringArraysWithoutRowExpansion(t *te
 		`dynamicElement("__os_fields"."user", 'Array(Dynamic)')`,
 		`AS "__os_measure_strings_0"`,
 		`groupUniqArrayArray(` + sentinel + `)("__os_measure_strings_0")`,
+		`AS "__os_dc_cardinality_0"`,
 		`max(toUInt8("__os_dc_cardinality_0" > toUInt64(`,
 		`OVER () AS "__os_stats_dc_any_overflow"`,
 		`WHERE throwIf(toUInt8("__os_stats_dc_any_overflow" != 0)`,
 		UnsupportedStatsDistinctLimitMarker,
 		UnsupportedStatsMeasureValueMarker,
-		`AS "users"`,
-		`AS "users_again"`,
+		`"__os_dc_cardinality_0" AS "users"`,
+		`"__os_dc_cardinality_0" AS "users_again"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("dc SQL missing %q:\n%s", required, compiled.SQL)
@@ -2323,6 +2324,194 @@ func TestCompileStatsDistinctCountProjectedInputIsZeroAndResultIsUInt64(t *testi
 	}
 }
 
+func TestCompileStatsValuesUsesOneBoundedExactSetWithLexicalPublication(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | stats count values(user) AS users dc(user) AS user_count values(user) AS users_again BY service`,
+	)
+	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "user_count", "users_again"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	sentinel := strconv.FormatUint(MaximumStatsValuesPerGroup+1, 10)
+	maximumBytes := strconv.FormatUint(MaximumStatsValuesBytesPerGroup, 10)
+	for _, required := range []string{
+		`dynamicElement("__os_fields"."user", 'Array(Dynamic)')`,
+		`AS "__os_measure_strings_0"`,
+		`groupUniqArrayArray(` + sentinel + `)("__os_measure_strings_0") AS "__os_exact_strings_0"`,
+		`length("__os_exact_strings_0") > toUInt64(`,
+		`arrayFold((bytes, value) -> bytes + toUInt128(length(value)), "__os_exact_strings_0", toUInt128(0)) > toUInt128(` + maximumBytes + `)`,
+		`arraySort("__os_exact_strings_0") AS "__os_sorted_exact_strings_0"`,
+		`OVER () AS "__os_stats_values_any_overflow"`,
+		`OVER () AS "__os_stats_values_total_elements"`,
+		`OVER () AS "__os_stats_values_bytes_any_overflow"`,
+		`OVER () AS "__os_stats_values_total_bytes"`,
+		`throwIf(toUInt8("__os_stats_values_any_overflow" != 0 OR "__os_stats_values_total_elements" > toUInt128(`,
+		`throwIf(toUInt8("__os_stats_values_bytes_any_overflow" != 0 OR "__os_stats_values_total_bytes" > toUInt128(`,
+		StatsValuesLimitMarker,
+		StatsValuesBytesLimitMarker,
+		`"__os_sorted_exact_strings_0" AS "users"`,
+		`toUInt64(length("__os_exact_strings_0")) AS "user_count"`,
+		`"__os_sorted_exact_strings_0" AS "users_again"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("values SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
+		t.Fatalf("values expanded event rows and would corrupt count:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, "uniqExact") {
+		t.Fatalf("values uses an unbounded distinct aggregate state:\n%s", compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, `groupUniqArrayArray(`+sentinel+`)("__os_measure_strings_0")`); got != 1 {
+		t.Fatalf("values/dc compiled %d exact aggregate states, want one:\n%s", got, compiled.SQL)
+	}
+	if strings.Count(compiled.SQL, `AS "__os_measure_strings_0"`) != 1 ||
+		strings.Contains(compiled.SQL, `__os_measure_strings_1`) {
+		t.Fatalf("values/dc did not reuse one string conversion for the same input:\n%s", compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, `arraySort("__os_exact_strings_0")`); got != 1 {
+		t.Fatalf("values aliases compiled %d lexical sorts, want one:\n%s", got, compiled.SQL)
+	}
+
+	dcOnly := compileSPL(t, `index=gradethis | stats dc(user) AS users`)
+	dcSentinel := strconv.FormatUint(MaximumStatsDistinctValuesPerGroup+1, 10)
+	if !strings.Contains(dcOnly.SQL, `groupUniqArrayArray(`+dcSentinel+`)`) ||
+		!strings.Contains(dcOnly.SQL, `)) AS "__os_dc_cardinality_0"`) ||
+		strings.Contains(dcOnly.SQL, `AS "__os_exact_strings_0"`) ||
+		!strings.Contains(dcOnly.SQL, UnsupportedStatsDistinctLimitMarker) {
+		t.Fatalf("dc-only query lost its scalar exact-cardinality path:\n%s", dcOnly.SQL)
+	}
+}
+
+func TestCompileStatsValuesValidatesEveryGroupBeforeDownstreamLimit(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | stats values(user) AS users BY service | sort 0 +service | head 1`,
+	)
+	valuesWindow := strings.Index(compiled.SQL, `OVER () AS "__os_stats_values_any_overflow"`)
+	bytesWindow := strings.Index(compiled.SQL, `OVER () AS "__os_stats_values_bytes_any_overflow"`)
+	valuesValidation := strings.Index(compiled.SQL, `throwIf(toUInt8("__os_stats_values_any_overflow" != 0 OR`)
+	bytesValidation := strings.Index(compiled.SQL, `throwIf(toUInt8("__os_stats_values_bytes_any_overflow" != 0 OR`)
+	limit := strings.LastIndex(compiled.SQL, "LIMIT ?")
+	if valuesWindow < 0 || bytesWindow < 0 || valuesValidation < 0 || bytesValidation < 0 ||
+		limit < 0 || valuesWindow > valuesValidation || bytesWindow > bytesValidation ||
+		valuesValidation > limit || bytesValidation > limit {
+		t.Fatalf("values group-wide overflow barrier does not precede downstream LIMIT:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsValuesProjectedInputIsEmptyAndCanFeedStringStats(t *testing.T) {
+	t.Parallel()
+
+	projected := compileSPL(t, `index=gradethis | fields service | stats values(user) AS users BY service`)
+	sentinel := strconv.FormatUint(MaximumStatsValuesPerGroup+1, 10)
+	if !strings.Contains(projected.SQL, `groupUniqArrayArray(`+sentinel+`)(CAST([], 'Array(String)'))`) {
+		t.Fatalf("projected values did not remain an empty list:\n%s", projected.SQL)
+	}
+
+	repeated := compileSPL(
+		t,
+		`index=gradethis | stats values(user) AS users | stats dc(users) AS count_values values(users) AS repeated`,
+	)
+	if !slices.Equal(repeated.OutputFields, []string{"count_values", "repeated"}) {
+		t.Fatalf("repeated values output = %v", repeated.OutputFields)
+	}
+	if !strings.Contains(repeated.SQL, `"__os_sorted_exact_strings_0" AS "repeated"`) {
+		t.Fatalf("values result was not accepted as a top-level multivalue stats input:\n%s", repeated.SQL)
+	}
+}
+
+func TestCompileStatsValuesPreservesLogicalMultivalueTypeDownstream(t *testing.T) {
+	t.Parallel()
+
+	search := compileSPL(
+		t,
+		`index=gradethis | stats values(user) AS users | search users=ALICE OR users="a*" OR users!=nobody`,
+	)
+	for _, required := range []string{
+		`arrayExists(element -> isValidUTF8(element) AND lowerUTF8(element) = lowerUTF8(?), "users")`,
+		`arrayExists(element -> isValidUTF8(element) AND match(element, ?), "users")`,
+		`notEmpty("users")`,
+	} {
+		if !strings.Contains(search.SQL, required) {
+			t.Fatalf("multivalue search SQL missing %q:\n%s", required, search.SQL)
+		}
+	}
+
+	renamed := compileSPL(
+		t,
+		`index=gradethis | stats values(user) AS users | rename users AS people | search people=* | table people`,
+	)
+	if !strings.Contains(renamed.SQL, `notEmpty("people")`) ||
+		strings.Contains(renamed.SQL, `notEmpty("users") AND isNotNull("people")`) {
+		t.Fatalf("renamed values presence was not rebound to the public array:\n%s", renamed.SQL)
+	}
+
+	copied := compileSPL(
+		t,
+		`index=gradethis | stats values(user) AS users | eval people=users | search people=* | table people`,
+	)
+	if !strings.Contains(copied.SQL, `notEmpty("people")`) {
+		t.Fatalf("eval-copied values presence was not rebound to the public array:\n%s", copied.SQL)
+	}
+
+	numeric := compileSPL(
+		t,
+		`index=gradethis | stats values(metric) AS metrics | stats sum(metrics) AS total avg(metrics) AS mean`,
+	)
+	if !strings.Contains(
+		numeric.SQL,
+		`arrayMap(element -> ifNotFinite(toFloat64OrNull(element), CAST(NULL AS Nullable(Float64))), "metrics")`,
+	) {
+		t.Fatalf("sum/avg did not flatten a fixed values result:\n%s", numeric.SQL)
+	}
+}
+
+func TestCompileStatsValuesRejectsUnpinnedScalarMultivalueConsumers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		source   string
+		code     string
+		wantText string
+	}{
+		{name: "where", source: `index=gradethis | stats values(user) AS users | where users="alice"`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: `users="alice"`},
+		{name: "ordered search", source: `index=gradethis | stats values(user) AS users | search users>"alice"`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: `users>"alice"`},
+		{name: "sort", source: `index=gradethis | stats values(user) AS users | sort users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
+		{name: "dedup", source: `index=gradethis | stats values(user) AS users | dedup users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
+		{name: "stats BY", source: `index=gradethis | stats values(user) AS users | stats count BY users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
+		{name: "p95", source: `index=gradethis | stats values(user) AS users | stats p95(users)`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
+		{name: "replace", source: `index=gradethis | stats values(user) AS users | eval x=replace(users,"a","b")`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: `replace(users,"a","b")`},
+		{name: "tonumber", source: `index=gradethis | stats values(user) AS users | eval x=tonumber(users)`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "tonumber(users)"},
+		{name: "rex", source: `index=gradethis | stats values(user) AS users | rex field=users "(?<x>.+)"`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
+		{name: "spath", source: `index=gradethis | stats values(user) AS users | spath input=users output=x path=a`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
+		{name: "top", source: `index=gradethis | stats values(user) AS users | top users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
+		{name: "bin", source: `index=gradethis | stats values(user) AS users | bin users span=10`, code: "SPL_UNSUPPORTED_BIN_FIELD_TYPE", wantText: "users"},
+		{name: "chart row", source: `index=gradethis | stats values(user) AS users | chart count OVER users BY missing`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
+		{name: "chart column", source: `index=gradethis | stats values(user) AS users count AS events | chart count OVER events BY users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := (Compiler{}).Compile(buildPlan(t, test.source))
+			diagnostic, ok := err.(*plan.Diagnostic)
+			if !ok || diagnostic.Code != test.code {
+				t.Fatalf("Compile() error = %#v, want source-located %s", err, test.code)
+			}
+			if got := test.source[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset]; got != test.wantText {
+				t.Fatalf("Compile() diagnostic text = %q, want %q (%#v)", got, test.wantText, diagnostic.Range)
+			}
+		})
+	}
+}
+
 func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T) {
 	t.Parallel()
 
@@ -2358,6 +2547,11 @@ func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T)
 			Input:    fields,
 			Output:   "dc_fields",
 		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionValues,
+			Input:    fields,
+			Output:   "values_fields",
+		}}},
 		{GroupBy: []plan.FieldRef{fields}, Measures: []plan.AggregateMeasure{{
 			Function: plan.AggregateFunctionCountRows,
 			Output:   "count",
@@ -2373,6 +2567,16 @@ func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T)
 			Input:      field,
 			Percentile: 0.95,
 			Output:     "dc_user",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function:   plan.AggregateFunctionValues,
+			Input:      field,
+			Percentile: 0.95,
+			Output:     "values_user",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionValues,
+			Output:   "values_user",
 		}}},
 	} {
 		candidate := *base

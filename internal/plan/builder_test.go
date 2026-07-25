@@ -408,11 +408,44 @@ func TestBuildStatsDistinctCountPreservesMeasureOrderAndAliases(t *testing.T) {
 	}
 }
 
+func TestBuildStatsValuesPreservesMeasureOrderAndAliases(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count values(user) values(device) AS devices BY service`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"service", "count", "values(user)", "devices"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+	aggregate, ok := logical.Operators[len(logical.Operators)-1].(*Aggregate)
+	if !ok || len(aggregate.Measures) != 3 {
+		t.Fatalf("aggregate operator = %#v", logical.Operators[len(logical.Operators)-1])
+	}
+	for index, want := range []struct {
+		input  string
+		output string
+	}{
+		{input: "user", output: "values(user)"},
+		{input: "device", output: "devices"},
+	} {
+		measure := aggregate.Measures[index+1]
+		if measure.Function != AggregateFunctionValues ||
+			measure.Input.Name != want.input || measure.Output != want.output {
+			t.Fatalf("measure %d = %#v, want values(%s) AS %s", index+1, measure, want.input, want.output)
+		}
+	}
+}
+
 func TestBuildStatsRejectsReservedOpenSchemaFieldsInputs(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
 		`index=gradethis | stats dc(fields)`,
+		`index=gradethis | stats values(fields)`,
 		`index=gradethis | stats count BY fields`,
 	} {
 		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
@@ -486,6 +519,7 @@ func TestBuildStatsSumAndAverageRequireExactInputFields(t *testing.T) {
 		`index=gradethis | stats sum(request*)`,
 		`index=gradethis | stats avg(request*)`,
 		`index=gradethis | stats dc(request*)`,
+		`index=gradethis | stats values(request*)`,
 	} {
 		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
 		assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_FIELD_PATTERN")

@@ -1024,6 +1024,42 @@ func TestExecutorBuildsStatsCountSchemaFromNativeTypes(t *testing.T) {
 	}
 }
 
+func TestExecutorPublishesStatsValuesAsTypedMultivalueList(t *testing.T) {
+	t.Parallel()
+
+	rows := &fakeRows{
+		columns: []string{"service", "users"},
+		types: []driver.ColumnType{
+			fakeColumnType{name: "service", databaseType: "String", scanType: reflect.TypeOf("")},
+			fakeColumnType{name: "users", databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
+		},
+		data: [][]any{{"api", []string{"10", "2", "Alice", "alice"}}},
+	}
+	sink := &fakeSink{}
+	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
+	if err := executor.Execute(context.Background(), clickhouse.CompiledQuery{
+		SQL:          "SELECT service, values FROM events",
+		OutputFields: []string{"service", "users"},
+	}, sink); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(sink.schema.Columns) != 2 ||
+		sink.schema.Columns[1] != (searchjobs.Column{
+			Name: "users", Kind: searchjobs.ValueKindList, Multivalue: true,
+		}) {
+		t.Fatalf("schema = %#v", sink.schema)
+	}
+	items, ok := sink.rows[0][1].List()
+	if !ok || len(items) != 4 {
+		t.Fatalf("values cell = %#v", sink.rows[0][1])
+	}
+	for index, want := range []string{"10", "2", "Alice", "alice"} {
+		if got, stringOK := items[index].String(); !stringOK || got != want {
+			t.Fatalf("values item %d = %q/%v, want %q", index, got, stringOK, want)
+		}
+	}
+}
+
 func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	t.Parallel()
 	settings, err := querySettings(Config{})
@@ -1182,41 +1218,16 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 			t.Fatalf("unsupported dynamic value marker %q error = %v", marker, err)
 		}
 	}
-	rexLimit := &clickhousedriver.Exception{
-		Code:    395,
-		Name:    "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
-		Message: clickhouse.RexCaptureLimitMarker + "; generated SQL contained secret",
-	}
-	if err := classifyQueryError(context.Background(), rexLimit); !errors.Is(err, searchjobs.ErrExecutionLimit) ||
-		strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), clickhouse.RexCaptureLimitMarker) {
-		t.Fatalf("rex capture limit classification = %v", err)
-	}
-	spathLimit := &clickhousedriver.Exception{
-		Code:    395,
-		Name:    "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
-		Message: clickhouse.SpathInputLimitMarker + "; generated SQL contained secret",
-	}
-	if err := classifyQueryError(context.Background(), spathLimit); !errors.Is(err, searchjobs.ErrExecutionLimit) ||
-		strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), clickhouse.SpathInputLimitMarker) {
-		t.Fatalf("spath input limit classification = %v", err)
-	}
-	chartRows := &clickhousedriver.Exception{
-		Code:    395,
-		Name:    "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
-		Message: clickhouse.ChartRowLimitMarker + "; generated SQL contained secret",
-	}
-	if err := classifyQueryError(context.Background(), chartRows); !errors.Is(err, searchjobs.ErrExecutionLimit) ||
-		strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), clickhouse.ChartRowLimitMarker) {
-		t.Fatalf("chart row-limit classification = %v", err)
-	}
-	statsDistinct := &clickhousedriver.Exception{
-		Code:    395,
-		Name:    "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
-		Message: clickhouse.UnsupportedStatsDistinctLimitMarker + "; generated SQL contained secret",
-	}
-	if err := classifyQueryError(context.Background(), statsDistinct); !errors.Is(err, searchjobs.ErrExecutionLimit) ||
-		strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), clickhouse.UnsupportedStatsDistinctLimitMarker) {
-		t.Fatalf("stats distinct limit classification = %v", err)
+	for _, classified := range executionLimitMarkers {
+		limit := &clickhousedriver.Exception{
+			Code:    395,
+			Name:    "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
+			Message: classified.marker + "; generated SQL contained secret",
+		}
+		if err := classifyQueryError(context.Background(), limit); !errors.Is(err, searchjobs.ErrExecutionLimit) ||
+			strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), classified.marker) {
+			t.Fatalf("execution-limit marker %q classification = %v", classified.marker, err)
+		}
 	}
 	for _, marker := range []string{
 		clickhouse.UnsupportedStatsByValueMarker,

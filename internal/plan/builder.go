@@ -571,7 +571,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 					measure.Function = AggregateFunctionCountRows
 				case spl.AggregateFunctionP95, spl.AggregateFunctionSum,
-					spl.AggregateFunctionAverage, spl.AggregateFunctionDistinctCount:
+					spl.AggregateFunctionAverage, spl.AggregateFunctionDistinctCount,
+					spl.AggregateFunctionValues:
 					input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
 					if inputErr != nil {
 						return nil, inputErr
@@ -587,6 +588,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 						measure.Function = AggregateFunctionAverage
 					case spl.AggregateFunctionDistinctCount:
 						measure.Function = AggregateFunctionDistinctCount
+					case spl.AggregateFunctionValues:
+						measure.Function = AggregateFunctionValues
 					}
 				default:
 					return nil, &Diagnostic{

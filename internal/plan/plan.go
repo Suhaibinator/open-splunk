@@ -201,6 +201,7 @@ const (
 	AggregateFunctionSum
 	AggregateFunctionAverage
 	AggregateFunctionDistinctCount
+	AggregateFunctionValues
 )
 
 // AggregateMeasure is one aggregate output column.

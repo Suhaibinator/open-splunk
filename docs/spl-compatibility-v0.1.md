@@ -443,26 +443,26 @@ the selected rows in reversed order, matching its pipeline semantics.
 | stats count AS events BY field1, field2
 | stats dc(user) AS unique_users BY service
 | stats distinct_count(device) AS devices
+| stats values(user) AS users
 | stats count p95(duration_ms) AS p95_ms BY path
 | stats sum(bytes) AS total_bytes avg(duration_ms) AS mean_ms BY path
 ```
 
 Argument-free `count` plus `dc(field)`/`distinct_count(field)`, `p95(field)`,
-`sum(field)`, and `avg(field)` are supported, including multiple space- or
-comma-separated measures and `AS` aliases. Function names are
-case-insensitive. Both distinct-count spellings use the canonical default
+`values(field)`, `sum(field)`, and `avg(field)` are supported, including
+multiple space- or comma-separated measures and `AS` aliases. Function names
+are case-insensitive. Both distinct-count spellings use the canonical default
 output `dc(field)`; other default names use canonical lowercase spelling such
-as `sum(bytes)`. The command is transforming: output contains only the `BY`
-fields followed by measures in source order. `count` includes every input row
-in a retained group.
+as `values(user)` or `sum(bytes)`. The command is transforming: output
+contains only the `BY` fields followed by measures in source order. `count`
+includes every input row in a retained group.
 
 The current downstream field grammar cannot reference a default aggregate name
-that contains parentheses. Use `AS` when a `dc`, `sum`, `avg`, or `p95` result
-will be consumed by a later `search`, `where`, `sort`, `fields`, or `table`
-command.
+that contains parentheses. Use `AS` when a `dc`, `values`, `sum`, `avg`, or
+`p95` result will be consumed by a later command.
 
-`dc` processes the stored canonical scalar spelling case-sensitively, as a
-string-oriented Splunk aggregate:
+`dc` and `values` process the stored canonical scalar spelling
+case-sensitively, as string-oriented Splunk aggregates:
 
 - missing and explicit-null inputs contribute nothing; an empty String is one
   distinct value;
@@ -493,9 +493,41 @@ relative to Splunk's string-field model.
 
 `dc` returns a non-null `UInt64`. Global aggregation over no rows or with no
 eligible values emits one row containing zero. A retained group with no
-eligible measure value also contains zero; grouped aggregation over no rows
-emits no groups. A projected-away input stays absent and contributes zero
-rather than being recovered from hidden event columns.
+eligible measure value also contains zero.
+
+`values` returns one non-null typed multivalue cell containing the distinct
+canonical strings in raw-byte lexicographic order. It does not apply numeric,
+locale, Unicode-normalization, or case-insensitive ordering. A global or
+retained empty group publishes `[]`; that physical empty list is logically
+absent to downstream SPL presence tests. Grouped aggregation over no rows emits
+no groups. A projected-away input stays absent and contributes zero to `dc` or
+an empty list to `values`, rather than being recovered from hidden event
+columns. Invalid UTF-8 fixed String data is retained as a Bytes child at the
+typed result boundary instead of being replaced or exposed as malformed text.
+
+Equivalent `dc` and `values` measures over the same input share one exact
+canonical set. A values-bearing set retains at most 10,000 strings; a dc-only
+set retains at most 100,000. Every `values` cell and the combined public
+multivalue cells in one row are limited to 10,000 elements and 512 KiB of raw
+lexical payload. Duplicate output aliases count independently. Before any
+downstream filter, projection, sort, or row limit, the complete transforming
+result is also limited to 100,000 elements and 8 MiB across all `values`
+outputs. Crossing any ceiling fails the search atomically with a sanitized
+resource-limit error; results are never truncated or approximated. The
+ClickHouse query-memory ceiling independently bounds the exact aggregate state
+before these post-aggregate publication checks run.
+
+`fields`, `table`, `rename`, `head`, `tail`, and a direct `eval` field copy
+preserve the fixed multivalue type. A later `dc` or `values` flattens its
+members, and `sum`/`avg` parse and flatten finite numeric members. Base-search
+equality and wildcard tests match when any valid-UTF-8 member matches;
+inequality matches only a nonempty list with no equal member, and `field=*`
+matches only a nonempty list. Invalid-UTF-8 Bytes members do not match textual
+equality or wildcard literals. Ordered base-search comparison, `where`, scalar
+`eval` functions, `sort`, `dedup`, `stats ... BY`, `p95`, `rex`, `spath`,
+`bin`, `top`, `rare`, and chart axes reject a known fixed multivalue input
+explicitly until their SPL multivalue behavior is pinned; the compiler never
+silently stringifies the array.
 
 On an open event schema, `fields` is the reserved convenience payload and
 cannot be a `stats` input or `BY` field. A prior transforming command or exact
@@ -507,7 +539,8 @@ null, empty-string, Boolean, bytes, object, nonnumeric, `NaN`, and infinite
 inputs are ignored. For `sum` and `avg`, each finite numeric scalar in a
 top-level multivalue array contributes independently; nonnumeric elements and
 nested containers are ignored without expanding event rows. `p95` retains its
-scalar-only behavior and treats a multivalue input as ineligible.
+scalar-only behavior: a runtime Dynamic event array is ineligible, while a
+known fixed multivalue result from `values` is rejected explicitly.
 
 `sum`, `avg`, and `p95` return nullable `Float64`. A global aggregation over no
 rows still emits one row; an aggregate with no eligible numeric contribution is
@@ -1000,8 +1033,8 @@ eventstats, streamstats
 ```
 
 All `stats` functions other than argument-free `count`,
-`dc(field)`/`distinct_count(field)`, `p95(field)`, `sum(field)`, and
-`avg(field)` are unsupported, including `count(field)`, `values`, `list`,
+`dc(field)`/`distinct_count(field)`, `values(field)`, `p95(field)`,
+`sum(field)`, and `avg(field)` are unsupported, including `count(field)`, `list`,
 `min`, `max`, `earliest`, `latest`, other fixed percentiles, `perc<N>`,
 `upperperc`, and `exactperc`.
 

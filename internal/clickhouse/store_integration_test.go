@@ -2569,6 +2569,16 @@ func testStatsAggregatesAgainstClickHouse(
 				typedString("1.0"),
 				typedNull(),
 			)),
+			typedField("ordering_value", typedList(
+				typedString("10"),
+				typedString("100"),
+				typedString("70"),
+				typedString("9"),
+				typedString("A"),
+				typedString("a"),
+				typedString("e\u0301"),
+				typedString("é"),
+			)),
 			typedField("ignored_metric", typedObject(typedField("child", typedSint(9)))),
 		),
 		newEvent("sum-avg-a-missing", "A",
@@ -2697,6 +2707,56 @@ func testStatsAggregatesAgainstClickHouse(
 		t.Fatalf("grouped dc rows = %#v", gotDistinct)
 	}
 
+	valuesQuery := compile(base + ` | stats count values(distinct_value) AS distinct_values dc(distinct_value) AS distinct_count BY aggregate_group | sort aggregate_group`)
+	valuesRows, err := connection.Query(ctx, valuesQuery.SQL, valuesQuery.Args...)
+	if err != nil {
+		t.Fatalf("execute grouped values: %v\nSQL: %s\nargs: %#v", err, valuesQuery.SQL, valuesQuery.Args)
+	}
+	if types := valuesRows.ColumnTypes(); len(types) != 4 ||
+		types[0].DatabaseTypeName() != "String" ||
+		types[1].DatabaseTypeName() != "UInt64" ||
+		types[2].DatabaseTypeName() != "Array(String)" ||
+		types[3].DatabaseTypeName() != "UInt64" {
+		_ = valuesRows.Close()
+		t.Fatalf("grouped values column types = %#v", types)
+	}
+	type valuesRow struct {
+		group    string
+		count    uint64
+		values   []string
+		distinct uint64
+	}
+	var gotValues []valuesRow
+	for valuesRows.Next() {
+		var row valuesRow
+		if err := valuesRows.Scan(&row.group, &row.count, &row.values, &row.distinct); err != nil {
+			_ = valuesRows.Close()
+			t.Fatalf("scan grouped values: %v", err)
+		}
+		gotValues = append(gotValues, row)
+	}
+	if err := valuesRows.Err(); err != nil {
+		_ = valuesRows.Close()
+		t.Fatalf("iterate grouped values: %v", err)
+	}
+	if err := valuesRows.Close(); err != nil {
+		t.Fatalf("close grouped values: %v", err)
+	}
+	if !reflect.DeepEqual(gotValues, []valuesRow{
+		{group: "A", count: 4, values: []string{"", "01", "1", "1.0", "Case", "case"}, distinct: 6},
+		{group: "B", count: 2, values: []string{"repeat"}, distinct: 1},
+	}) {
+		t.Fatalf("grouped values rows = %#v", gotValues)
+	}
+	orderedValues := compile(base + ` | stats values(ordering_value) AS ordered_values`)
+	var gotOrderedValues []string
+	if err := connection.QueryRow(ctx, orderedValues.SQL, orderedValues.Args...).Scan(&gotOrderedValues); err != nil {
+		t.Fatalf("execute ordered values: %v\nSQL: %s\nargs: %#v", err, orderedValues.SQL, orderedValues.Args)
+	}
+	if want := []string{"10", "100", "70", "9", "A", "a", "e\u0301", "é"}; !reflect.DeepEqual(gotOrderedValues, want) {
+		t.Fatalf("ordered values = %#v, want raw-byte lexical %#v", gotOrderedValues, want)
+	}
+
 	globalDistinct := compile(base + ` | stats distinct_count(distinct_value) AS distinct_values`)
 	var globalDistinctCount uint64
 	if err := connection.QueryRow(ctx, globalDistinct.SQL, globalDistinct.Args...).Scan(&globalDistinctCount); err != nil {
@@ -2720,6 +2780,14 @@ func testStatsAggregatesAgainstClickHouse(
 	}
 	if globalDistinctCount != 0 {
 		t.Fatalf("empty global dc = %d, want 0", globalDistinctCount)
+	}
+	emptyValues := compile(`index=compiler source="sum-avg-absent" | stats values(distinct_value) AS distinct_values`)
+	var emptyValuesResult []string
+	if err := connection.QueryRow(ctx, emptyValues.SQL, emptyValues.Args...).Scan(&emptyValuesResult); err != nil {
+		t.Fatalf("execute empty global values: %v\nSQL: %s\nargs: %#v", err, emptyValues.SQL, emptyValues.Args)
+	}
+	if emptyValuesResult == nil || len(emptyValuesResult) != 0 {
+		t.Fatalf("empty global values = %#v, want non-nil []", emptyValuesResult)
 	}
 	emptyGrouped := compile(`index=compiler source="sum-avg-absent" | stats sum(aggregate_value) BY aggregate_group`)
 	if err := executeCompiledExpectingNoRows(ctx, connection, emptyGrouped); err != nil {
@@ -2794,13 +2862,44 @@ func testStatsAggregatesAgainstClickHouse(
 	if projectedDistinctCount != 2 {
 		t.Fatalf("projected dc rows = %d, want 2", projectedDistinctCount)
 	}
+	projectedValues := compile(base + ` | fields aggregate_group | stats values(distinct_value) AS distinct_values BY aggregate_group | sort aggregate_group`)
+	projectedValuesRows, err := connection.Query(ctx, projectedValues.SQL, projectedValues.Args...)
+	if err != nil {
+		t.Fatalf("execute projected values: %v\nSQL: %s\nargs: %#v", err, projectedValues.SQL, projectedValues.Args)
+	}
+	projectedValuesCount := 0
+	for projectedValuesRows.Next() {
+		var group string
+		var values []string
+		if err := projectedValuesRows.Scan(&group, &values); err != nil {
+			_ = projectedValuesRows.Close()
+			t.Fatalf("scan projected values: %v", err)
+		}
+		if values == nil || len(values) != 0 || (group != "A" && group != "B") {
+			_ = projectedValuesRows.Close()
+			t.Fatalf("projected values row = %q/%#v, want A-or-B/[]", group, values)
+		}
+		projectedValuesCount++
+	}
+	if err := projectedValuesRows.Err(); err != nil {
+		_ = projectedValuesRows.Close()
+		t.Fatalf("iterate projected values: %v", err)
+	}
+	if err := projectedValuesRows.Close(); err != nil {
+		t.Fatalf("close projected values: %v", err)
+	}
+	if projectedValuesCount != 2 {
+		t.Fatalf("projected values rows = %d, want 2", projectedValuesCount)
+	}
 
-	for _, field := range []string{"dc_object", "dc_empty_object", "dc_nested"} {
-		unsupported := compile(base + ` | stats dc(` + field + `) AS distinct_values`)
-		var ignored uint64
-		err := connection.QueryRow(ctx, unsupported.SQL, unsupported.Args...).Scan(&ignored)
-		if err == nil || !strings.Contains(err.Error(), UnsupportedStatsMeasureValueMarker) {
-			t.Fatalf("dc(%s) error = %v, want stable unsupported marker", field, err)
+	for _, function := range []string{"dc", "values"} {
+		for _, field := range []string{"dc_object", "dc_empty_object", "dc_nested"} {
+			unsupported := compile(base + ` | stats ` + function + `(` + field + `) AS distinct_values`)
+			var ignored any
+			err := connection.QueryRow(ctx, unsupported.SQL, unsupported.Args...).Scan(&ignored)
+			if err == nil || !strings.Contains(err.Error(), UnsupportedStatsMeasureValueMarker) {
+				t.Fatalf("%s(%s) error = %v, want stable unsupported marker", function, field, err)
+			}
 		}
 	}
 	ineligiblePoison := compile(base + ` | stats dc(dc_object) AS distinct_values BY absent_group`)
@@ -2867,10 +2966,51 @@ func testStatsAggregatesAgainstClickHouse(
 	if repeatedDistinctCount != 1 {
 		t.Fatalf("repeated dc = %d, want 1", repeatedDistinctCount)
 	}
+	repeatedValues := compile(base + ` | stats values(distinct_value) AS distinct_values | stats dc(distinct_values) AS count_values values(distinct_values) AS repeated sum(distinct_values) AS numeric_sum`)
+	var repeatedValuesCount uint64
+	var repeatedValuesList []string
+	var repeatedValuesSum *float64
+	if err := connection.QueryRow(ctx, repeatedValues.SQL, repeatedValues.Args...).Scan(
+		&repeatedValuesCount,
+		&repeatedValuesList,
+		&repeatedValuesSum,
+	); err != nil {
+		t.Fatalf("execute repeated values: %v\nSQL: %s\nargs: %#v", err, repeatedValues.SQL, repeatedValues.Args)
+	}
+	if repeatedValuesCount != 7 ||
+		!reflect.DeepEqual(repeatedValuesList, []string{"", "01", "1", "1.0", "Case", "case", "repeat"}) ||
+		repeatedValuesSum == nil || math.Abs(*repeatedValuesSum-3) > 1e-12 {
+		t.Fatalf("repeated values = %d/%#v/%v, want 7/sorted values/3", repeatedValuesCount, repeatedValuesList, repeatedValuesSum)
+	}
+	searchedValues := compile(base + ` | stats values(distinct_value) AS distinct_values | search distinct_values=CASE`)
+	if err := connection.QueryRow(ctx, searchedValues.SQL, searchedValues.Args...).Scan(&repeatedValuesList); err != nil {
+		t.Fatalf("execute values any-member search: %v\nSQL: %s\nargs: %#v", err, searchedValues.SQL, searchedValues.Args)
+	}
+	for source, want := range map[string]uint64{
+		base + ` | stats values(distinct_value) AS distinct_values | search distinct_values="ca*"`:                      1,
+		base + ` | stats values(distinct_value) AS distinct_values | search distinct_values!=CASE`:                      0,
+		base + ` | stats values(distinct_value) AS distinct_values | search distinct_values!=absent`:                    1,
+		base + ` | stats values(distinct_value) AS distinct_values | search distinct_values=*`:                          1,
+		base + ` | fields aggregate_group | stats values(distinct_value) AS distinct_values | search distinct_values=*`: 0,
+	} {
+		query := compile(source)
+		var count uint64
+		if err := connection.QueryRow(ctx, "SELECT count() FROM ("+query.SQL+")", query.Args...).Scan(&count); err != nil {
+			t.Fatalf("execute values predicate %q: %v\nSQL: %s\nargs: %#v", source, err, query.SQL, query.Args)
+		}
+		if count != want {
+			t.Fatalf("values predicate %q count = %d, want %d", source, count, want)
+		}
+	}
 	sharedDistinct := compile(base + ` | stats dc(distinct_value) AS first dc(distinct_value) AS second`)
 	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", sharedDistinct)
 	if got := strings.Count(actions, "Function: groupUniqArrayArray("); got != 1 {
 		t.Fatalf("repeated dc has %d physical aggregate states, want one:\n%s", got, actions)
+	}
+	sharedValues := compile(base + ` | stats values(distinct_value) AS first values(distinct_value) AS second dc(distinct_value) AS count_values`)
+	actions = explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", sharedValues)
+	if got := strings.Count(actions, "Function: groupUniqArrayArray("); got != 1 {
+		t.Fatalf("repeated values/dc has %d physical aggregate states, want one:\n%s", got, actions)
 	}
 
 	for _, test := range []struct {
@@ -2965,6 +3105,129 @@ func testStatsAggregatesAgainstClickHouse(
 	err = connection.QueryRow(ctx, hiddenOverflowSQL).Scan(&exactBoundary)
 	if err == nil || !strings.Contains(err.Error(), UnsupportedStatsDistinctLimitMarker) {
 		t.Fatalf("dc overflow hidden behind downstream LIMIT error = %v, want stable limit marker", err)
+	}
+
+	boundedValues := func(source string, outputCount int) compiledRelation {
+		t.Helper()
+		setColumn := quoteIdentifier("__os_exact_strings_0")
+		measures := make([]compiledExactStringMeasure, outputCount)
+		for index := range measures {
+			measures[index] = compiledExactStringMeasure{
+				setColumn:    setColumn,
+				outputColumn: quoteIdentifier(fmt.Sprintf("values_%d", index)),
+				function:     plan.AggregateFunctionValues,
+			}
+		}
+		bounded, _ := compileBoundedExactStringResults(
+			newScanRelation(source, spl.Range{}),
+			measures,
+			nil,
+			spl.Range{},
+			0,
+		)
+		return bounded
+	}
+
+	exactValuesRelation := boundedValues(
+		`SELECT arrayMap(number -> toString(number), range(toUInt64(`+
+			strconv.FormatUint(MaximumStatsValuesPerGroup, 10)+
+			`))) AS "__os_exact_strings_0"`,
+		1,
+	)
+	var exactValues []string
+	if err := connection.QueryRow(ctx, exactValuesRelation.sql).Scan(&exactValues); err != nil {
+		t.Fatalf("execute exact values element boundary: %v\nSQL: %s", err, exactValuesRelation.sql)
+	}
+	if len(exactValues) != MaximumStatsValuesPerGroup {
+		t.Fatalf("exact values element boundary = %d, want %d", len(exactValues), MaximumStatsValuesPerGroup)
+	}
+
+	overflowValuesRelation := boundedValues(
+		`SELECT arrayMap(number -> toString(number), range(toUInt64(`+
+			strconv.FormatUint(MaximumStatsValuesPerGroup+1, 10)+
+			`))) AS "__os_exact_strings_0"`,
+		1,
+	)
+	err = connection.QueryRow(ctx, overflowValuesRelation.sql).Scan(&exactValues)
+	if err == nil || !strings.Contains(err.Error(), StatsValuesLimitMarker) {
+		t.Fatalf("values element overflow error = %v, want stable values marker", err)
+	}
+
+	exactBytesRelation := boundedValues(
+		`SELECT [repeat('x', `+strconv.FormatUint(MaximumStatsValuesBytesPerGroup, 10)+
+			`)] AS "__os_exact_strings_0"`,
+		1,
+	)
+	if err := connection.QueryRow(ctx, exactBytesRelation.sql).Scan(&exactValues); err != nil {
+		t.Fatalf("execute exact values byte boundary: %v\nSQL: %s", err, exactBytesRelation.sql)
+	}
+	if len(exactValues) != 1 || len(exactValues[0]) != MaximumStatsValuesBytesPerGroup {
+		t.Fatalf("exact values byte boundary = %d/%d", len(exactValues), len(exactValues[0]))
+	}
+
+	overflowBytesRelation := boundedValues(
+		`SELECT [repeat('x', `+strconv.FormatUint(MaximumStatsValuesBytesPerGroup+1, 10)+
+			`)] AS "__os_exact_strings_0"`,
+		1,
+	)
+	err = connection.QueryRow(ctx, overflowBytesRelation.sql).Scan(&exactValues)
+	if err == nil || !strings.Contains(err.Error(), StatsValuesBytesLimitMarker) {
+		t.Fatalf("values byte overflow error = %v, want stable byte marker", err)
+	}
+
+	duplicateAliasRelation := boundedValues(
+		`SELECT arrayMap(number -> toString(number), range(toUInt64(6000))) AS "__os_exact_strings_0"`,
+		2,
+	)
+	var duplicateFirst, duplicateSecond []string
+	err = connection.QueryRow(ctx, duplicateAliasRelation.sql).Scan(&duplicateFirst, &duplicateSecond)
+	if err == nil || !strings.Contains(err.Error(), StatsValuesLimitMarker) {
+		t.Fatalf("duplicate values aliases escaped the combined row limit: %v", err)
+	}
+
+	wholeResultElements := boundedValues(
+		`SELECT arrayMap(value -> concat(toString(number), ':', toString(value)), `+
+			`range(toUInt64(if(number < 10, 10000, 1)))) AS "__os_exact_strings_0" FROM numbers(11)`,
+		1,
+	)
+	hiddenWholeResultElementsSQL := `SELECT "values_0" FROM (` + wholeResultElements.sql +
+		`) ORDER BY length("values_0") LIMIT 1`
+	err = executeCompiledExpectingNoRows(ctx, connection, CompiledQuery{
+		SQL:          hiddenWholeResultElementsSQL,
+		OutputFields: []string{"values_0"},
+	})
+	if err == nil || !strings.Contains(err.Error(), StatsValuesLimitMarker) {
+		t.Fatalf("whole-result element overflow hidden behind LIMIT error = %v, want stable values marker", err)
+	}
+
+	wholeResultBytes := boundedValues(
+		`SELECT [repeat('x', `+strconv.FormatUint(MaximumStatsValuesBytesPerGroup, 10)+
+			`)] AS "__os_exact_strings_0" FROM numbers(17)`,
+		1,
+	)
+	hiddenWholeResultBytesSQL := `SELECT "values_0" FROM (` + wholeResultBytes.sql +
+		`) ORDER BY length("values_0") LIMIT 1`
+	err = executeCompiledExpectingNoRows(ctx, connection, CompiledQuery{
+		SQL:          hiddenWholeResultBytesSQL,
+		OutputFields: []string{"values_0"},
+	})
+	if err == nil || !strings.Contains(err.Error(), StatsValuesBytesLimitMarker) {
+		t.Fatalf("whole-result byte overflow hidden behind LIMIT error = %v, want stable byte marker", err)
+	}
+
+	hiddenValuesOverflow := boundedValues(
+		`SELECT 'A' AS "group", ['ok'] AS "__os_exact_strings_0"
+		 UNION ALL
+		 SELECT 'Z' AS "group", arrayMap(number -> toString(number), range(toUInt64(`+
+			strconv.FormatUint(MaximumStatsValuesPerGroup+1, 10)+
+			`))) AS "__os_exact_strings_0"`,
+		1,
+	)
+	hiddenValuesSQL := `SELECT "values_0" FROM (` + hiddenValuesOverflow.sql +
+		`) ORDER BY "group" LIMIT 1`
+	err = connection.QueryRow(ctx, hiddenValuesSQL).Scan(&exactValues)
+	if err == nil || !strings.Contains(err.Error(), StatsValuesLimitMarker) {
+		t.Fatalf("values overflow hidden behind downstream LIMIT error = %v, want stable values marker", err)
 	}
 }
 

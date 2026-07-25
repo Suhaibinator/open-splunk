@@ -462,6 +462,7 @@ const (
 	AggregateFunctionSum
 	AggregateFunctionAverage
 	AggregateFunctionDistinctCount
+	AggregateFunctionValues
 )
 
 // StatsAggregate is one source-located aggregate expression and its public

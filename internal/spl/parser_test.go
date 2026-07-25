@@ -904,6 +904,58 @@ func TestParseStatsDistinctCountAliasesAndFunctionCase(t *testing.T) {
 	}
 }
 
+func TestParseStatsValuesFieldAliasAndFunctionCase(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | stats VaLuEs(user) VALUES(device) AS devices BY service`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command := query.Commands[0].(*StatsCommand)
+	if len(command.Aggregates) != 2 {
+		t.Fatalf("aggregates = %#v", command.Aggregates)
+	}
+	users := command.Aggregates[0]
+	if users.Function != AggregateFunctionValues || users.Input != "user" || users.Alias != "values(user)" {
+		t.Fatalf("values aggregate = %#v", users)
+	}
+	devices := command.Aggregates[1]
+	if devices.Function != AggregateFunctionValues || devices.Input != "device" || devices.Alias != "devices" {
+		t.Fatalf("aliased values aggregate = %#v", devices)
+	}
+	if len(command.GroupBy) != 1 || command.GroupBy[0].Name != "service" {
+		t.Fatalf("group fields = %#v", command.GroupBy)
+	}
+}
+
+func TestParseStatsValuesRequiresExactlyOneField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		code   string
+	}{
+		{name: "missing parentheses", source: `index=main | stats values`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
+		{name: "missing field", source: `index=main | stats values()`, code: "SPL_EXPECTED_FIELD"},
+		{name: "multiple fields", source: `index=main | stats values(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(test.source)
+			if err == nil {
+				t.Fatal("Parse succeeded, want error")
+			}
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != test.code {
+				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
+			}
+		})
+	}
+}
+
 func TestParseStatsDistinctCountRequiresExactlyOneField(t *testing.T) {
 	t.Parallel()
 

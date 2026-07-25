@@ -68,6 +68,20 @@ const (
 	// results at or below the boundary stay exact and larger results fail
 	// atomically instead of becoming approximate.
 	MaximumStatsDistinctValuesPerGroup = 100_000
+	// MaximumStatsValuesPerGroup is lower than the dc ceiling because values
+	// publishes every retained string and the recursive result transport keeps
+	// one typed cell per element.
+	MaximumStatsValuesPerGroup = 10_000
+	// MaximumStatsValuesBytesPerGroup bounds the raw lexical String bytes
+	// published by one values measure in one group. The ClickHouse query memory
+	// limit independently bounds the aggregate state before this post-aggregate
+	// result check runs.
+	MaximumStatsValuesBytesPerGroup = 512 << 10
+	// The result-wide ceilings count every published values alias independently,
+	// even when aggregate state is shared. They bound intermediate transforming
+	// results before a later head/sort limit can hide them.
+	MaximumStatsValuesPerResult      = 100_000
+	MaximumStatsValuesBytesPerResult = 8 << 20
 
 	// UnsupportedStatsByValueMarker is emitted by the scalar-only stats BY
 	// guard so the executor can classify the ClickHouse exception without
@@ -80,6 +94,12 @@ const (
 	// UnsupportedStatsDistinctLimitMarker classifies an exact dc state that
 	// exceeded its per-group, per-measure cardinality ceiling.
 	UnsupportedStatsDistinctLimitMarker = "open-splunk: stats distinct values exceed the supported limit"
+	// StatsValuesBytesLimitMarker classifies an exact values result whose
+	// per-group raw lexical payload exceeded the supported byte ceiling.
+	StatsValuesBytesLimitMarker = "open-splunk: stats values bytes exceed the supported limit"
+	// StatsValuesLimitMarker classifies a values cell or complete transforming
+	// result that exceeded its published element ceiling.
+	StatsValuesLimitMarker = "open-splunk: stats values exceed the supported limit"
 	// UnsupportedDedupValueMarker is emitted when a complete dedup key contains
 	// a runtime list or object. It is intentionally stable for executor-side
 	// classification and is never returned verbatim to clients.
@@ -470,7 +490,19 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				aggregateSQL += " GROUP BY " + strings.Join(groups, ", ")
 			}
 			relation = relation.selectFrom(aggregateSQL, operator.Range)
-			if len(nextState.postAggregateDistinctCounts) > 0 {
+			if len(nextState.postAggregateExactStrings) > 0 {
+				var additionalAliases int
+				relation, additionalAliases = compileBoundedExactStringResults(
+					relation,
+					nextState.postAggregateExactStrings,
+					nextState.postAggregateDistinctCounts,
+					operator.Range,
+					aliasSequence,
+				)
+				aliasSequence += additionalAliases
+				nextState.postAggregateExactStrings = nil
+				nextState.postAggregateDistinctCounts = nil
+			} else if len(nextState.postAggregateDistinctCounts) > 0 {
 				var additionalAliases int
 				relation, additionalAliases = compileBoundedDistinctCountResults(
 					relation,
@@ -2169,6 +2201,9 @@ func compileChart(
 			kind:      fieldKindString,
 		}
 	}
+	if rowField.kind == fieldKindStringArray {
+		return CompiledQuery{}, unsupportedMultivalueUsage("chart row field", operator.Over.Range)
+	}
 	rowDatabaseType, rowKind, err := chartRowColumnType(rowName, rowField)
 	if err != nil {
 		return CompiledQuery{}, err
@@ -2186,6 +2221,9 @@ func compileChart(
 			existsSQL: "0",
 			kind:      fieldKindString,
 		}
+	}
+	if splitField.kind == fieldKindStringArray {
+		return CompiledQuery{}, unsupportedMultivalueUsage("chart column field", operator.SplitBy.Range)
 	}
 	if splitField.kind == fieldKindInvalid {
 		// A statically null column field (eval x=null) is inside the documented
@@ -2546,9 +2584,19 @@ type compileState struct {
 	preAggregateValidationArgs    []any
 	preAggregateColumns           []string
 	preAggregateArgs              []any
+	postAggregateExactStrings     []compiledExactStringMeasure
 	postAggregateDistinctCounts   []compiledDistinctCount
 }
 
+type compiledExactStringMeasure struct {
+	setColumn    string
+	outputColumn string
+	function     plan.AggregateFunction
+}
+
+// compiledDistinctCount carries an already-materialized exact cardinality
+// through the whole-result overflow barrier without retaining the underlying
+// string set beyond the aggregate projection.
 type compiledDistinctCount struct {
 	cardinalityColumn string
 	outputColumn      string
@@ -2563,7 +2611,16 @@ const (
 	fieldKindNumber
 	fieldKindBool
 	fieldKindTime
+	fieldKindStringArray
 )
+
+func unsupportedMultivalueUsage(operation string, sourceRange spl.Range) error {
+	return &plan.Diagnostic{
+		Code:    "SPL_UNSUPPORTED_MULTIVALUE_USAGE",
+		Message: operation + " does not yet support a multivalue field",
+		Range:   sourceRange,
+	}
+}
 
 type fieldState struct {
 	valueSQL                string
@@ -2968,6 +3025,9 @@ func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileSt
 	if err != nil {
 		return compiledScalar{}, err
 	}
+	if input.kind == fieldKindStringArray {
+		return compiledScalar{}, unsupportedMultivalueUsage("replace", expression.Range)
+	}
 	pattern, ok := scalarStringLiteral(expression.Arguments[1])
 	if !ok {
 		return compiledScalar{}, errors.New("compile ClickHouse replace: regular expression must be a string literal")
@@ -2999,6 +3059,9 @@ func compileToNumberScalar(expression *plan.ScalarCallExpression, state compileS
 	input, err := compileScalarValue(expression.Arguments[0], state)
 	if err != nil {
 		return compiledScalar{}, err
+	}
+	if input.kind == fieldKindStringArray {
+		return compiledScalar{}, unsupportedMultivalueUsage("tonumber", expression.Range)
 	}
 	inputSQL, inputArgs := compiledStringScalar(input)
 	return compiledScalar{
@@ -3050,10 +3113,18 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 	if !slices.Contains(next.publicOrder, output.Name) {
 		next.publicOrder = append(next.publicOrder, output.Name)
 	}
+	existsSQL := "1"
+	if value.kind == fieldKindStringArray {
+		// A values() result is physically a non-null array, but SPL treats an
+		// empty multivalue result as absent. Rebind that logical presence check
+		// to the eval output because the source expression lives in the nested
+		// SELECT and is no longer visible at this stage.
+		existsSQL = "notEmpty(" + quoteIdentifier(output.Name) + ")"
+	}
 	field := fieldState{
 		valueSQL:        quoteIdentifier(output.Name),
 		textEligibleSQL: value.textEligibleSQL,
-		existsSQL:       "1",
+		existsSQL:       existsSQL,
 		descendantSQL:   value.descendantSQL,
 		descendantArgs:  append([]any(nil), value.descendantArgs...),
 		storedTypeSQL:   value.storedTypeSQL,
@@ -3432,6 +3503,8 @@ func compileExtractInput(input plan.FieldRef, state compileState) (valueSQL, eli
 				" AND isNotNull(" + field.valueSQL + ") AND isValidUTF8(" + value + "))",
 			append([]any(nil), field.existsArgs...),
 			nil
+	case fieldKindStringArray:
+		return "", "", nil, unsupportedMultivalueUsage("field extraction", input.Range)
 	default:
 		// v0.1 does not stringify numeric, Boolean, time, multivalue, or
 		// container sources. They behave exactly like a non-match.
@@ -3793,6 +3866,10 @@ func cloneCompileState(state compileState) compileState {
 	next.preAggregateValidationArgs = append([]any(nil), state.preAggregateValidationArgs...)
 	next.preAggregateColumns = append([]string(nil), state.preAggregateColumns...)
 	next.preAggregateArgs = append([]any(nil), state.preAggregateArgs...)
+	next.postAggregateExactStrings = append(
+		[]compiledExactStringMeasure(nil),
+		state.postAggregateExactStrings...,
+	)
 	next.postAggregateDistinctCounts = append(
 		[]compiledDistinctCount(nil),
 		state.postAggregateDistinctCounts...,
@@ -3964,6 +4041,9 @@ func compileEvalComparison(expression *plan.EvalComparisonExpression, state comp
 	right, err := compileComparisonScalar(expression.Right, state)
 	if err != nil {
 		return "", nil, err
+	}
+	if left.kind == fieldKindStringArray || right.kind == fieldKindStringArray {
+		return "", nil, unsupportedMultivalueUsage("where comparison", expression.Range)
 	}
 	operator, err := comparisonSQL(expression.Op)
 	if err != nil {
@@ -4379,6 +4459,9 @@ func stringScalarSQL(value compiledScalar) string {
 func compileComparison(expression *plan.ComparisonExpression, field fieldState) (string, []any, error) {
 	exists := field.existsSQL
 	args := append([]any(nil), field.existsArgs...)
+	if field.kind == fieldKindStringArray && expression.Value.Kind == plan.ValueKindNull {
+		return "", nil, unsupportedMultivalueUsage("search null comparison", expression.Range)
+	}
 	if expression.Value.Kind == plan.ValueKindNull {
 		equal := "(" + exists + " AND isNull(" + field.valueSQL + "))"
 		if expression.Op == plan.ComparisonOpEqual {
@@ -4407,6 +4490,10 @@ func compileComparison(expression *plan.ComparisonExpression, field fieldState) 
 			return presence, args, nil
 		}
 		return "(" + exists + " AND isNotNull(" + field.valueSQL + "))", args, nil
+	}
+	if field.kind == fieldKindStringArray &&
+		expression.Op != plan.ComparisonOpEqual && expression.Op != plan.ComparisonOpNotEqual {
+		return "", nil, unsupportedMultivalueUsage("ordered search comparison", expression.Range)
 	}
 
 	operator, err := comparisonSQL(expression.Op)
@@ -4441,6 +4528,12 @@ func compileComparison(expression *plan.ComparisonExpression, field fieldState) 
 
 func equalityPredicate(expression *plan.ComparisonExpression, field fieldState, text string) (string, int) {
 	valueSQL := field.valueSQL
+	if field.kind == fieldKindStringArray {
+		if expression.Value.Kind == plan.ValueKindString && strings.Contains(text, "*") {
+			return "arrayExists(element -> isValidUTF8(element) AND match(element, ?), " + valueSQL + ")", 1
+		}
+		return "arrayExists(element -> isValidUTF8(element) AND lowerUTF8(element) = lowerUTF8(?), " + valueSQL + ")", 1
+	}
 	if expression.Value.Kind == plan.ValueKindString && strings.Contains(text, "*") {
 		return "match(toString(" + valueSQL + "), ?)", 1
 	}
@@ -4753,6 +4846,9 @@ func rewriteExistenceForProjection(field fieldState, name string) string {
 	if field.existsSQL == "1" {
 		return "1"
 	}
+	if field.kind == fieldKindStringArray && strings.HasPrefix(field.existsSQL, "notEmpty(") {
+		return "notEmpty(" + quoteIdentifier(name) + ")"
+	}
 	if strings.HasPrefix(field.existsSQL, "isNotNull(") {
 		return "isNotNull(" + quoteIdentifier(name) + ")"
 	}
@@ -4822,6 +4918,12 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 				kind:      fieldKindString,
 			}
 		}
+		if field.kind == fieldKindStringArray {
+			return nil, nil, nil, compileState{}, nil, unsupportedMultivalueUsage(
+				"stats BY",
+				group.Range,
+			)
+		}
 		valueSQL := field.valueSQL
 		kind := field.kind
 		numericSort := field.numericSort
@@ -4876,6 +4978,14 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 	}
 	numericInputs := make(map[string]string)
 	stringInputs := make(map[string]string)
+	exactStringSets := make(map[string]string)
+	distinctCounts := make(map[string]string)
+	valuesInputs := make(map[string]struct{})
+	for _, measure := range operator.Measures {
+		if measure.Function == plan.AggregateFunctionValues {
+			valuesInputs[measure.Input.Name] = struct{}{}
+		}
+	}
 	for _, measure := range operator.Measures {
 		if _, fieldErr := plan.ResolveField(measure.Output, spl.Range{}); fieldErr != nil {
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf(
@@ -4899,7 +5009,8 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 					measure.Percentile,
 				)
 			}
-		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage, plan.AggregateFunctionDistinctCount:
+		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage,
+			plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues:
 			if measure.Percentile != 0 {
 				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
 					"compile ClickHouse aggregate: function %d contains percentile metadata",
@@ -4941,6 +5052,12 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			}
 			inputSQL := "CAST(NULL AS Nullable(Float64))"
 			if ok {
+				if input.kind == fieldKindStringArray {
+					return nil, nil, nil, compileState{}, nil, unsupportedMultivalueUsage(
+						"p95",
+						measure.Input.Range,
+					)
+				}
 				inputSQL = percentileInputSQL(input)
 			}
 			projection = append(projection, "quantileGKOrNull(100, 0.95)("+inputSQL+") AS "+output)
@@ -4971,7 +5088,7 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			}
 			projection = append(projection, valueSQL+" AS "+output)
 			measureState.numberType = "Float64"
-		case plan.AggregateFunctionDistinctCount:
+		case plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues:
 			inputSQL, cached := stringInputs[measure.Input.Name]
 			if !cached {
 				input, ok, resolveErr := resolveCompiledField(measure.Input, state)
@@ -4988,17 +5105,45 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 					next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
 					inputSQL = inputAlias
 				}
+				stringInputs[measure.Input.Name] = inputSQL
 			}
-			cardinalityColumn := quoteIdentifier(fmt.Sprintf(
-				"__os_dc_cardinality_%d",
-				len(next.postAggregateDistinctCounts),
-			))
-			projection = append(projection, distinctCountCardinalitySQL(inputSQL)+" AS "+cardinalityColumn)
-			next.postAggregateDistinctCounts = append(next.postAggregateDistinctCounts, compiledDistinctCount{
-				cardinalityColumn: cardinalityColumn,
-				outputColumn:      output,
-			})
-			measureState.numberType = "UInt64"
+			_, publishesValues := valuesInputs[measure.Input.Name]
+			if measure.Function == plan.AggregateFunctionDistinctCount && !publishesValues {
+				cardinalityColumn, cached := distinctCounts[measure.Input.Name]
+				if !cached {
+					cardinalityColumn = quoteIdentifier(fmt.Sprintf("__os_dc_cardinality_%d", len(distinctCounts)))
+					distinctCounts[measure.Input.Name] = cardinalityColumn
+					projection = append(projection, distinctCountCardinalitySQL(inputSQL)+" AS "+cardinalityColumn)
+				}
+				next.postAggregateDistinctCounts = append(next.postAggregateDistinctCounts, compiledDistinctCount{
+					cardinalityColumn: cardinalityColumn,
+					outputColumn:      output,
+				})
+				measureState.numberType = "UInt64"
+			} else {
+				setColumn, cached := exactStringSets[measure.Input.Name]
+				if !cached {
+					setColumn = quoteIdentifier(fmt.Sprintf("__os_exact_strings_%d", len(exactStringSets)))
+					exactStringSets[measure.Input.Name] = setColumn
+					projection = append(
+						projection,
+						exactDistinctStringSetSQL(inputSQL, uint64(MaximumStatsValuesPerGroup))+" AS "+setColumn,
+					)
+				}
+				next.postAggregateExactStrings = append(next.postAggregateExactStrings, compiledExactStringMeasure{
+					setColumn:    setColumn,
+					outputColumn: output,
+					function:     measure.Function,
+				})
+				if measure.Function == plan.AggregateFunctionDistinctCount {
+					measureState.numberType = "UInt64"
+				} else {
+					measureState.kind = fieldKindStringArray
+					// The physical result is always a non-null Array(String), but an
+					// empty multivalue has no logical SPL field value.
+					measureState.existsSQL = "notEmpty(" + output + ")"
+				}
+			}
 		default:
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: unsupported function %d", measure.Function)
 		}
@@ -5041,6 +5186,16 @@ func percentileInputSQL(field fieldState) string {
 
 func numericArrayInputSQL(field fieldState) (string, []any) {
 	empty := "CAST([], 'Array(Float64)')"
+	if field.kind == fieldKindStringArray {
+		value := compactNullableArraySQL(
+			"arrayMap(element -> " + finiteFloatOrNullSQL("element") + ", " + field.valueSQL + ")",
+		)
+		if field.existsSQL == "" || field.existsSQL == "1" {
+			return value, nil
+		}
+		return "if(" + field.existsSQL + ", " + value + ", " + empty + ")",
+			append([]any(nil), field.existsArgs...)
+	}
 	scalar := percentileInputSQL(field)
 	scalarArray := compactNullableArraySQL("[" + scalar + "]")
 	value := scalarArray
@@ -5059,6 +5214,13 @@ func numericArrayInputSQL(field fieldState) (string, []any) {
 
 func stringArrayInputSQL(field fieldState) (string, []any) {
 	empty := "CAST([], 'Array(String)')"
+	if field.kind == fieldKindStringArray {
+		if field.existsSQL == "" || field.existsSQL == "1" {
+			return field.valueSQL, nil
+		}
+		return "if(" + field.existsSQL + ", " + field.valueSQL + ", " + empty + ")",
+			append([]any(nil), field.existsArgs...)
+	}
 	scalar := statsScalarStringOrNullSQL(field)
 	scalarArray := compactNullableArraySQL("[" + scalar + "]")
 	value := scalarArray
@@ -5135,8 +5297,199 @@ func boundedDistinctCountSQL(inputSQL string) string {
 }
 
 func distinctCountCardinalitySQL(inputSQL string) string {
-	sentinel := strconv.FormatUint(MaximumStatsDistinctValuesPerGroup+1, 10)
-	return "toUInt64(length(groupUniqArrayArray(" + sentinel + ")(" + inputSQL + ")))"
+	return "toUInt64(length(" + exactDistinctStringSetSQL(
+		inputSQL,
+		uint64(MaximumStatsDistinctValuesPerGroup),
+	) + "))"
+}
+
+func exactDistinctStringSetSQL(inputSQL string, maximum uint64) string {
+	sentinel := strconv.FormatUint(maximum+1, 10)
+	return "groupUniqArrayArray(" + sentinel + ")(" + inputSQL + ")"
+}
+
+func exactStringPayloadBytesSQL(setSQL string) string {
+	return "arrayFold((bytes, value) -> bytes + toUInt128(length(value)), " +
+		setSQL + ", toUInt128(0))"
+}
+
+func compileBoundedExactStringResults(
+	relation compiledRelation,
+	measures []compiledExactStringMeasure,
+	counts []compiledDistinctCount,
+	ownerRange spl.Range,
+	stage int,
+) (compiledRelation, int) {
+	if len(measures) == 0 {
+		return relation, 0
+	}
+
+	setColumns := make([]string, 0, len(measures))
+	valuesMeasures := make([]compiledExactStringMeasure, 0, len(measures))
+	valuesSetColumns := make([]string, 0, len(measures))
+	seenSets := make(map[string]struct{}, len(measures))
+	seenValuesSets := make(map[string]struct{}, len(measures))
+	for _, measure := range measures {
+		if _, seen := seenSets[measure.setColumn]; !seen {
+			seenSets[measure.setColumn] = struct{}{}
+			setColumns = append(setColumns, measure.setColumn)
+		}
+		if measure.function == plan.AggregateFunctionValues {
+			valuesMeasures = append(valuesMeasures, measure)
+			if _, seen := seenValuesSets[measure.setColumn]; !seen {
+				seenValuesSets[measure.setColumn] = struct{}{}
+				valuesSetColumns = append(valuesSetColumns, measure.setColumn)
+			}
+		}
+	}
+
+	windowColumns := make([]string, 0, 7)
+	sortedValuesSets := make(map[string]string, len(valuesSetColumns))
+	sortedSetColumns := make([]string, 0, len(valuesSetColumns))
+	for index, setColumn := range valuesSetColumns {
+		sorted := quoteIdentifier(fmt.Sprintf("__os_sorted_exact_strings_%d", index))
+		sortedValuesSets[setColumn] = sorted
+		sortedSetColumns = append(sortedSetColumns, sorted)
+		windowColumns = append(windowColumns, "arraySort("+setColumn+") AS "+sorted)
+	}
+
+	cardinalityOverflow := ""
+	cardinalityColumns := make([]string, 0, len(counts))
+	seenCardinalities := make(map[string]struct{}, len(counts))
+	for _, count := range counts {
+		if _, seen := seenCardinalities[count.cardinalityColumn]; seen {
+			continue
+		}
+		seenCardinalities[count.cardinalityColumn] = struct{}{}
+		cardinalityColumns = append(cardinalityColumns, count.cardinalityColumn)
+	}
+	if len(cardinalityColumns) > 0 {
+		maximumDistinctValues := strconv.FormatUint(MaximumStatsDistinctValuesPerGroup, 10)
+		cardinalityConditions := make([]string, 0, len(cardinalityColumns))
+		for _, cardinalityColumn := range cardinalityColumns {
+			cardinalityConditions = append(
+				cardinalityConditions,
+				cardinalityColumn+" > toUInt64("+maximumDistinctValues+")",
+			)
+		}
+		cardinalityOverflow = quoteIdentifier("__os_stats_distinct_any_overflow")
+		windowColumns = append(
+			windowColumns,
+			"max(toUInt8("+strings.Join(cardinalityConditions, " OR ")+
+				")) OVER () AS "+cardinalityOverflow,
+		)
+	}
+
+	valuesOverflow := ""
+	valuesTotalElements := ""
+	valuesBytesOverflow := ""
+	valuesTotalBytes := ""
+	if len(valuesSetColumns) > 0 {
+		maximumValues := strconv.FormatUint(MaximumStatsValuesPerGroup, 10)
+		valueConditions := make([]string, 0, len(valuesSetColumns))
+		byteConditions := make([]string, 0, len(valuesSetColumns))
+		for _, setColumn := range valuesSetColumns {
+			valueConditions = append(
+				valueConditions,
+				"length("+setColumn+") > toUInt64("+maximumValues+")",
+			)
+			byteConditions = append(
+				byteConditions,
+				exactStringPayloadBytesSQL(setColumn)+" > toUInt128("+
+					strconv.FormatUint(MaximumStatsValuesBytesPerGroup, 10)+")",
+			)
+		}
+		valuesOverflow = quoteIdentifier("__os_stats_values_any_overflow")
+		valuesTotalElements = quoteIdentifier("__os_stats_values_total_elements")
+		valuesBytesOverflow = quoteIdentifier("__os_stats_values_bytes_any_overflow")
+		valuesTotalBytes = quoteIdentifier("__os_stats_values_total_bytes")
+
+		rowElementTotal := "toUInt128(0)"
+		rowByteTotal := "toUInt128(0)"
+		for _, measure := range valuesMeasures {
+			// Deliberately retain duplicates: two public aliases create two
+			// recursive list cells even when their aggregate state is shared.
+			rowElementTotal += " + toUInt128(length(" + measure.setColumn + "))"
+			rowByteTotal += " + " + exactStringPayloadBytesSQL(measure.setColumn)
+		}
+		windowColumns = append(
+			windowColumns,
+			"max(toUInt8(("+strings.Join(valueConditions, " OR ")+") OR "+rowElementTotal+
+				" > toUInt128("+strconv.FormatUint(MaximumStatsValuesPerGroup, 10)+
+				"))) OVER () AS "+valuesOverflow,
+			"sum("+rowElementTotal+") OVER () AS "+valuesTotalElements,
+			"max(toUInt8(("+strings.Join(byteConditions, " OR ")+") OR "+rowByteTotal+
+				" > toUInt128("+strconv.FormatUint(MaximumStatsValuesBytesPerGroup, 10)+
+				"))) OVER () AS "+valuesBytesOverflow,
+			"sum("+rowByteTotal+") OVER () AS "+valuesTotalBytes,
+		)
+	}
+
+	windowAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
+	windowSQL := "SELECT *, " + strings.Join(windowColumns, ", ") +
+		" FROM (" + relation.sql + ") AS " + windowAlias
+	relation = relation.selectFrom(windowSQL, ownerRange)
+
+	excluded := append([]string(nil), setColumns...)
+	excluded = append(excluded, sortedSetColumns...)
+	excluded = append(excluded, cardinalityColumns...)
+	if cardinalityOverflow != "" {
+		excluded = append(excluded, cardinalityOverflow)
+	}
+	if valuesOverflow != "" {
+		excluded = append(excluded, valuesOverflow, valuesTotalElements)
+	}
+	if valuesBytesOverflow != "" {
+		excluded = append(excluded, valuesBytesOverflow, valuesTotalBytes)
+	}
+	projection := []string{"* EXCEPT (" + strings.Join(excluded, ", ") + ")"}
+	for _, measure := range measures {
+		switch measure.function {
+		case plan.AggregateFunctionDistinctCount:
+			projection = append(
+				projection,
+				"toUInt64(length("+measure.setColumn+")) AS "+measure.outputColumn,
+			)
+		case plan.AggregateFunctionValues:
+			projection = append(
+				projection,
+				sortedValuesSets[measure.setColumn]+" AS "+measure.outputColumn,
+			)
+		}
+	}
+	for _, count := range counts {
+		projection = append(
+			projection,
+			count.cardinalityColumn+" AS "+count.outputColumn,
+		)
+	}
+
+	validations := make([]string, 0, 3)
+	if cardinalityOverflow != "" {
+		validations = append(
+			validations,
+			"throwIf(toUInt8("+cardinalityOverflow+" != 0), '"+
+				UnsupportedStatsDistinctLimitMarker+"') = 0",
+		)
+	}
+	if valuesBytesOverflow != "" {
+		validations = append(
+			validations,
+			"throwIf(toUInt8("+valuesOverflow+" != 0 OR "+valuesTotalElements+
+				" > toUInt128("+strconv.FormatUint(MaximumStatsValuesPerResult, 10)+")), '"+
+				StatsValuesLimitMarker+"') = 0",
+		)
+		validations = append(
+			validations,
+			"throwIf(toUInt8("+valuesBytesOverflow+" != 0 OR "+valuesTotalBytes+
+				" > toUInt128("+strconv.FormatUint(MaximumStatsValuesBytesPerResult, 10)+")), '"+
+				StatsValuesBytesLimitMarker+"') = 0",
+		)
+	}
+	publishAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+2))
+	publishSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql +
+		") AS " + publishAlias + " WHERE " + strings.Join(validations, " AND ")
+	return relation.selectFrom(publishSQL, ownerRange), 2
 }
 
 func compileBoundedDistinctCountResults(
@@ -5151,7 +5504,12 @@ func compileBoundedDistinctCountResults(
 	maximum := strconv.FormatUint(MaximumStatsDistinctValuesPerGroup, 10)
 	cardinalityColumns := make([]string, 0, len(counts))
 	overflowConditions := make([]string, 0, len(counts))
+	seenCardinalities := make(map[string]struct{}, len(counts))
 	for _, count := range counts {
+		if _, seen := seenCardinalities[count.cardinalityColumn]; seen {
+			continue
+		}
+		seenCardinalities[count.cardinalityColumn] = struct{}{}
 		cardinalityColumns = append(cardinalityColumns, count.cardinalityColumn)
 		overflowConditions = append(
 			overflowConditions,
@@ -5251,6 +5609,12 @@ func compileDeduplicate(
 				existsSQL: "0",
 				kind:      fieldKindString,
 			}
+		}
+		if field.kind == fieldKindStringArray {
+			return compiledRelation{}, nil, nil, 0, unsupportedMultivalueUsage(
+				"dedup",
+				key.Range,
+			)
 		}
 
 		presentName := quoteIdentifier(fmt.Sprintf("__os_dedup_present_%d_%d", stage, index))
@@ -5389,6 +5753,9 @@ func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, 
 				existsSQL: "0",
 				kind:      fieldKindString,
 			}
+		}
+		if field.kind == fieldKindStringArray {
+			return nil, nil, "", unsupportedMultivalueUsage("sort", key.Field.Range)
 		}
 		explicitValues[field.valueSQL] = struct{}{}
 		alias := fmt.Sprintf("__os_order_%d_%d", stage, i)

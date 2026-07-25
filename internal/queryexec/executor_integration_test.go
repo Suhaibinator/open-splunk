@@ -1429,6 +1429,92 @@ ORDER BY grid.number`,
 		}
 	})
 
+	t.Run("stats values retains typed multivalue transport", func(t *testing.T) {
+		binaryIndexTime := queryIntegrationInsertBinaryEvent(t, ctx, connection)
+		job, page := queryIntegrationRunSearch(
+			t,
+			ctx,
+			executor,
+			eventIndexTime,
+			"queryexec-stats-values",
+			`index=main | stats values(status) AS statuses`,
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("values state = %v, failure=%#v", job.State, job.Failure)
+		}
+		if len(page.Schema.Columns) != 1 || page.Schema.Columns[0] != (searchjobs.Column{
+			Name: "statuses", Kind: searchjobs.ValueKindList, Multivalue: true,
+		}) {
+			t.Fatalf("values schema = %#v", page.Schema)
+		}
+		if len(page.Rows) != 1 {
+			t.Fatalf("values rows = %d, want 1", len(page.Rows))
+		}
+		values, ok := page.Rows[0].Values[0].List()
+		if !ok || len(values) != 1 {
+			t.Fatalf("values cell = %#v", page.Rows[0].Values[0])
+		}
+		if status, stringOK := values[0].String(); !stringOK || status != "200" {
+			t.Fatalf("values status = %q/%v, want 200", status, stringOK)
+		}
+
+		binaryJob, binaryPage := queryIntegrationRunSearchRangeForIndex(
+			t,
+			ctx,
+			executor,
+			binaryIndexTime,
+			"queryexec-stats-values-binary",
+			`index=binary | stats values(_raw) AS binary_values`,
+			binaryIndexTime.Add(-time.Hour),
+			binaryIndexTime.Add(time.Hour),
+			"binary",
+		)
+		if binaryJob.State != searchjobs.StateCompleted {
+			t.Fatalf("binary values state = %v, failure=%#v", binaryJob.State, binaryJob.Failure)
+		}
+		if len(binaryPage.Schema.Columns) != 1 ||
+			binaryPage.Schema.Columns[0].Kind != searchjobs.ValueKindList ||
+			!binaryPage.Schema.Columns[0].Multivalue ||
+			len(binaryPage.Rows) != 1 {
+			t.Fatalf("binary values transport = schema %#v rows %#v", binaryPage.Schema, binaryPage.Rows)
+		}
+		binaryValues, listOK := binaryPage.Rows[0].Values[0].List()
+		if !listOK || len(binaryValues) != 1 {
+			t.Fatalf("binary values cell = %#v", binaryPage.Rows[0].Values[0])
+		}
+		if raw, bytesOK := binaryValues[0].Bytes(); !bytesOK || !bytes.Equal(raw, []byte{0xff, 0x00}) {
+			t.Fatalf("binary values child = %x/%v", raw, bytesOK)
+		}
+		for _, test := range []struct {
+			name   string
+			filter string
+			rows   int
+		}{
+			{name: "equality", filter: `search binary_values=missing`, rows: 0},
+			{name: "wildcard", filter: `search binary_values="m*"`, rows: 0},
+			{name: "inequality", filter: `search binary_values!=missing`, rows: 1},
+			{name: "presence", filter: `search binary_values=*`, rows: 1},
+		} {
+			test := test
+			t.Run("binary "+test.name, func(t *testing.T) {
+				job, page := queryIntegrationRunSearchRangeForIndex(
+					t,
+					ctx,
+					executor,
+					binaryIndexTime,
+					"queryexec-stats-values-binary-"+test.name,
+					`index=binary | stats values(_raw) AS binary_values | `+test.filter,
+					binaryIndexTime.Add(-time.Hour),
+					binaryIndexTime.Add(time.Hour),
+					"binary",
+				)
+				if job.State != searchjobs.StateCompleted || len(page.Rows) != test.rows {
+					t.Fatalf("%s state = %v, failure=%#v, rows=%d, want %d", test.name, job.State, job.Failure, len(page.Rows), test.rows)
+				}
+			})
+		}
+	})
+
 	t.Run("stats projection boundary retains no hidden dynamic field", func(t *testing.T) {
 		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime, "queryexec-stats-projected", `index=main | fields host | stats count by status`)
 		if job.State != searchjobs.StateCompleted {
@@ -1473,6 +1559,8 @@ ORDER BY grid.number`,
 			clickhouse.RexCaptureLimitMarker,
 			clickhouse.SpathInputLimitMarker,
 			clickhouse.UnsupportedStatsDistinctLimitMarker,
+			clickhouse.StatsValuesBytesLimitMarker,
+			clickhouse.StatsValuesLimitMarker,
 		} {
 			err := executor.Execute(ctx, clickhouse.CompiledQuery{
 				SQL: `SELECT throwIf(toUInt8(1), '` + marker +
@@ -1573,6 +1661,32 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 		uint8(1), nil, nil, document,
 		[]string{"component.child", "duration", "logger.child", "path", "payload", "status", "typed_bytes", "typed_decimal", "typed_duration", "typed_timestamp"},
 		"collector", "batch", uint64(1),
+		now.Add(24*time.Hour), uint64(1),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatal(err)
+	}
+	return now
+}
+
+func queryIntegrationInsertBinaryEvent(t *testing.T, ctx context.Context, connection clickhousedriver.Conn) time.Time {
+	t.Helper()
+	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
+		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
+		"expires_at, visibility_seq)"
+	batch, err := connection.PrepareBatch(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Add(-time.Minute).Truncate(time.Second).Add(987 * time.Millisecond)
+	if err := batch.Append(
+		"queryexec-binary-event", "tenant", "binary", now, now,
+		nil, uint8(1), "host", "binary", "test", nil, uint8(1), nil, nil, []byte{0xff, 0x00},
+		uint8(2), nil, nil, clickhousedriver.NewJSON(), []string{},
+		"collector", "binary-batch", uint64(1),
 		now.Add(24*time.Hour), uint64(1),
 	); err != nil {
 		t.Fatal(err)

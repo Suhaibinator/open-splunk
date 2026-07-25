@@ -1308,6 +1308,18 @@ func randomQueryID() (string, error) {
 	return "open-splunk-search-" + hex.EncodeToString(random[:]), nil
 }
 
+var executionLimitMarkers = [...]struct {
+	marker  string
+	message string
+}{
+	{clickhouse.RexCaptureLimitMarker, "rex capture bytes exceeded the per-row limit"},
+	{clickhouse.SpathInputLimitMarker, "spath input bytes exceeded the per-row limit"},
+	{clickhouse.ChartRowLimitMarker, "chart row values exceeded the supported limit"},
+	{clickhouse.UnsupportedStatsDistinctLimitMarker, "stats distinct values exceeded the supported limit"},
+	{clickhouse.StatsValuesBytesLimitMarker, "stats values bytes exceeded the supported limit"},
+	{clickhouse.StatsValuesLimitMarker, "stats values exceeded the supported limit"},
+}
+
 func classifyQueryError(ctx context.Context, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
@@ -1317,17 +1329,12 @@ func classifyQueryError(ctx context.Context, err error) error {
 	}
 	var exception *clickhousedriver.Exception
 	if errors.As(err, &exception) {
-		if exception.Code == 395 && strings.Contains(exception.Message, clickhouse.RexCaptureLimitMarker) {
-			return fmt.Errorf("%w: rex capture bytes exceeded the per-row limit", searchjobs.ErrExecutionLimit)
-		}
-		if exception.Code == 395 && strings.Contains(exception.Message, clickhouse.SpathInputLimitMarker) {
-			return fmt.Errorf("%w: spath input bytes exceeded the per-row limit", searchjobs.ErrExecutionLimit)
-		}
-		if exception.Code == 395 && strings.Contains(exception.Message, clickhouse.ChartRowLimitMarker) {
-			return fmt.Errorf("%w: chart row values exceeded the supported limit", searchjobs.ErrExecutionLimit)
-		}
-		if exception.Code == 395 && strings.Contains(exception.Message, clickhouse.UnsupportedStatsDistinctLimitMarker) {
-			return fmt.Errorf("%w: stats distinct values exceeded the supported limit", searchjobs.ErrExecutionLimit)
+		if exception.Code == 395 {
+			for _, classified := range executionLimitMarkers {
+				if strings.Contains(exception.Message, classified.marker) {
+					return fmt.Errorf("%w: %s", searchjobs.ErrExecutionLimit, classified.message)
+				}
+			}
 		}
 		if exception.Code == 395 && (strings.Contains(exception.Message, clickhouse.UnsupportedStatsByValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedStatsMeasureValueMarker) ||

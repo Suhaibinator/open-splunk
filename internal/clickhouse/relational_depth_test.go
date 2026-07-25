@@ -125,6 +125,12 @@ func TestCompiledRelationalDepthPinsRepresentativeOperatorCosts(t *testing.T) {
 		{name: "fixed dedup", source: `| dedup host`, depth: 4},
 		{name: "dynamic dedup", source: `| dedup latency`, depth: 5},
 		{name: "dynamic aggregate", source: `| stats count BY latency`, depth: 6},
+		{name: "values aggregate", source: `| stats values(user) AS users`, depth: 6},
+		{
+			name:   "shared dc and values aggregate",
+			source: `| stats dc(user) AS user_count values(user) AS users`,
+			depth:  6,
+		},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
@@ -143,6 +149,39 @@ func TestCompiledRelationalDepthPinsRepresentativeOperatorCosts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStatsValuesRelationalDepthBoundaryIsSourceLocated(t *testing.T) {
+	t.Parallel()
+
+	acceptedSource := relationalDepthEvalPipeline(
+		t,
+		26,
+		64,
+		"stats values(user) AS users",
+	)
+	accepted, err := (Compiler{}).Compile(relationalDepthPlan(t, acceptedSource))
+	if err != nil {
+		t.Fatalf("Compile(values at depth 96): %v", err)
+	}
+	if accepted.relationalDepth != maximumCompiledRelationalDepth {
+		t.Fatalf(
+			"accepted values relational depth = %d, want %d",
+			accepted.relationalDepth,
+			maximumCompiledRelationalDepth,
+		)
+	}
+
+	rejectedSource := relationalDepthEvalPipeline(
+		t,
+		27,
+		64,
+		"stats values(user) AS users",
+	)
+	rejected := relationalDepthPlan(t, rejectedSource)
+	statsRange := rejected.Operators[len(rejected.Operators)-1].SourceRange()
+	_, err = (Compiler{}).Compile(rejected)
+	relationalDepthRequireLimitDiagnostic(t, err, statsRange)
 }
 
 func TestSpathRelationalDepthBoundaryIsSourceLocated(t *testing.T) {
