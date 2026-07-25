@@ -9,15 +9,15 @@ git status --short --branch
 git log -1 --oneline
 ```
 
-## Pause checkpoint: exact Dynamic numeric binning
+## Pause checkpoint: exact Dynamic numeric bin hardening
 
-Date: 2026-07-24
+Date: 2026-07-25
 
 Branch: `main`
 
 Starting commit for this slice:
-`0449a405b210eab77acb17fe45e08507dfbcbbf1`
-(`record exact bin restart checkpoint`)
+`4a6882f88771844db1c5dd7bfd458774a916cb06`
+(`implement exact Dynamic decimal binning`)
 
 Work is intentionally paused after a green, committed, and pushed checkpoint.
 The overall backend goal is still active; this is a safe stopping point, not a
@@ -25,7 +25,35 @@ claim that the product architecture plan is complete.
 
 ## What this slice completed
 
-The previously planned exact-Decimal `bin`/`bucket` slice is implemented.
+The previously planned exact-Decimal `bin`/`bucket` slice is implemented and
+its raw-storage trust boundary is now covered adversarially.
+
+This hardening checkpoint adds direct ClickHouse fixtures that deliberately
+bypass `Store` normalization:
+
+- Current-metadata Decimal envelopes with a missing type key, missing value
+  key, extra key, wrong tag, wrong semantic type, noncanonical numeric text,
+  invalid grammar, an oversized payload, or invalid UTF-8 all fail through the
+  single sanitized unsupported-value marker.
+- The malformed payload is not exposed in the returned database exception.
+- Poison Decimal rows that differ from a valid row only by tenant, authorized
+  index, earliest/latest event time, index-time cutoff, or immutable
+  visibility sequence cannot affect the authorized query.
+- The poison rows deliberately reuse the valid event ID. A forced
+  `OPTIMIZE TABLE ... FINAL` puts valid and poison fixtures in the same sorted
+  part/granule before the query, preventing part pruning from making the test
+  pass accidentally.
+- The authorized result still contains exactly the valid row and publishes
+  the expected semantic Decimal as physical `Int256`.
+
+The adversarial matrix required no production-code correction. The existing
+compiler already classifies the strict two-key `decimal/v1` envelope only
+after the storage scan's tenant/index/time/index-time/visibility fences, and
+the executor already removes ClickHouse SQL and payload details when mapping
+the fixed failure marker.
+
+The exact-Decimal implementation from the preceding checkpoint provides the
+following behavior:
 
 - Runtime numeric String and stored `decimal/v1` inputs use exact lexical
   decimal arithmetic for `floor(value / span) * span`.
@@ -135,6 +163,11 @@ during this slice:
 
 ```sh
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+  -run '^TestBinEdgeNumericDynamicStringsAgainstClickHouse/malformed_Decimal_envelopes_fail_only_inside_the_authorized_snapshot$' \
+  -count=1 -timeout=4m
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
   go test ./internal/queryexec \
   -run '^TestExecutorAndManagerAgainstClickHouse/native_typed_scan_types$' \
   -count=1 -timeout=3m
@@ -181,17 +214,18 @@ bounded exact parser and pinned comparison/sort regression. Re-run adversarial
 review after changing the numeric representation, the analyzer fence, or
 downstream Dynamic comparison logic.
 
+For this hardening checkpoint, reviewers separately audited strict Decimal
+classification, storage normalization, predicate placement, executor error
+sanitization, raw-fixture construction, boundary isolation, and ClickHouse
+part-pruning false positives. Their recommendations produced the full
+malformed-envelope matrix, individual checks for all six scope fences, the
+forced part merge, and the physical-result assertion. No production
+correctness defect was found.
+
 ## Remaining work, in priority order
 
-### 1. Close the exact-bin hardening gaps
+### 1. Finish exact-bin resource hardening
 
-- Add raw malformed Decimal-envelope integration fixtures covering missing
-  keys, extra keys, the wrong tag/type pairing, noncanonical payloads, and
-  invalid payload grammar.
-- Prove malformed or otherwise poisonous rows outside the authorized
-  tenant/index/time/visibility scope cannot affect a valid query. Existing
-  generic Dynamic poison visibility tests are not a substitute for this
-  Decimal-envelope matrix.
 - Add a compiler-tracked generated relational-depth budget. The existing
   generated-SQL byte ceilings remain active, but they do not directly bound
   ClickHouse analyzer depth. Pin the accepted boundary and the
@@ -271,7 +305,8 @@ downstream Dynamic comparison logic.
 2. Read the three documents named above.
 3. Run the non-Docker validation commands.
 4. Check that no stale `open-splunk-*` Docker test containers are running.
-5. Start with Remaining work item 1 and write the failing test before changing
-   the compiler.
+5. Start with the relational-depth budget in Remaining work item 1. Write the
+   accepted-boundary and one-level-over rejection tests before changing the
+   compiler.
 6. Keep working on `main`; commit and push each cohesive green slice.
 7. Preserve unexpected local changes and never reset them away.

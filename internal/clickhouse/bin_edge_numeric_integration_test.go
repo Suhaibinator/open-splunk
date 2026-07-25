@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -1110,6 +1111,381 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 			t.Fatalf("mixed-row bin returned %d rows, want %d", rowCount, len(allEvents))
 		}
 	})
+
+	t.Run("malformed Decimal envelopes fail only inside the authorized snapshot", func(t *testing.T) {
+		const field = "malformed_decimal"
+		typeKey := "\x00open_splunk_type"
+		valueKey := "\x00open_splunk_value"
+		inScope := []binEdgeRawDecimalEnvelope{
+			{
+				eventID: "bin-edge-poison-missing-type",
+				envelope: map[string]string{
+					valueKey: "123",
+				},
+			},
+			{
+				eventID: "bin-edge-poison-missing-value",
+				envelope: map[string]string{
+					typeKey: "decimal/v1",
+				},
+			},
+			{
+				eventID: "bin-edge-poison-extra-key",
+				envelope: map[string]string{
+					typeKey: "decimal/v1", valueKey: "123", "extra": "forbidden",
+				},
+			},
+			{
+				eventID: "bin-edge-poison-wrong-tag",
+				envelope: map[string]string{
+					typeKey: "bytes/v1", valueKey: "MTIz",
+				},
+			},
+			{
+				eventID:   "bin-edge-poison-wrong-semantic-type",
+				fieldType: eventfields.StoredValueTypeString,
+				envelope: map[string]string{
+					typeKey: "decimal/v1", valueKey: "123",
+				},
+			},
+			{
+				eventID: "bin-edge-poison-noncanonical",
+				envelope: map[string]string{
+					typeKey: "decimal/v1", valueKey: "01",
+				},
+			},
+			{
+				eventID: "bin-edge-poison-invalid-grammar",
+				envelope: map[string]string{
+					typeKey: "decimal/v1", valueKey: "malformed-secret-1e",
+				},
+			},
+			{
+				eventID: "bin-edge-poison-oversized",
+				envelope: map[string]string{
+					typeKey:  "decimal/v1",
+					valueKey: strings.Repeat("9", MaximumExactNumericBinTextBytes+1),
+				},
+			},
+			{
+				eventID: "bin-edge-poison-invalid-utf8",
+				envelope: map[string]string{
+					typeKey: "decimal/v1", valueKey: string([]byte{0xff, '1'}),
+				},
+			},
+		}
+		for index := range inScope {
+			inScope[index].tenantID = "tenant"
+			inScope[index].indexName = "compiler"
+			inScope[index].eventTime = indexTime
+			inScope[index].indexTime = indexTime
+			inScope[index].visibilitySeq = visibilityCutoff
+			inScope[index].fieldName = field
+			if inScope[index].fieldType == 0 {
+				inScope[index].fieldType = eventfields.StoredValueTypeDecimal
+			}
+		}
+
+		// Every out-of-scope poison row deliberately reuses the valid event's ID.
+		// The event-id predicate therefore cannot hide it: only one of the
+		// tenant, authorized-index, event-time, index-time, or immutable
+		// visibility fences can remove each row before bin classifies it.
+		scopePoison := map[string]string{
+			typeKey: "decimal/v1", valueKey: "not-a-decimal",
+		}
+		outOfScope := []binEdgeRawDecimalEnvelope{
+			{
+				eventID: binEdgeNumericDecimalBase, tenantID: "other-tenant", indexName: "compiler",
+				eventTime: indexTime, indexTime: indexTime, visibilitySeq: visibilityCutoff,
+			},
+			{
+				eventID: binEdgeNumericDecimalBase, tenantID: "tenant", indexName: "hidden",
+				eventTime: indexTime, indexTime: indexTime, visibilitySeq: visibilityCutoff,
+			},
+			{
+				eventID: binEdgeNumericDecimalBase, tenantID: "tenant", indexName: "compiler",
+				eventTime: time.Date(2026, time.July, 19, 23, 59, 59, 0, time.UTC),
+				indexTime: indexTime, visibilitySeq: visibilityCutoff,
+			},
+			{
+				eventID: binEdgeNumericDecimalBase, tenantID: "tenant", indexName: "compiler",
+				eventTime: time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC),
+				indexTime: indexTime, visibilitySeq: visibilityCutoff,
+			},
+			{
+				eventID: binEdgeNumericDecimalBase, tenantID: "tenant", indexName: "compiler",
+				eventTime: indexTime, indexTime: cutoff.Add(time.Second), visibilitySeq: visibilityCutoff,
+			},
+			{
+				eventID: binEdgeNumericDecimalBase, tenantID: "tenant", indexName: "compiler",
+				eventTime: indexTime, indexTime: indexTime, visibilitySeq: visibilityCutoff + 1,
+			},
+		}
+		for index := range outOfScope {
+			outOfScope[index].fieldName = "decimal_basic"
+			outOfScope[index].fieldType = eventfields.StoredValueTypeDecimal
+			outOfScope[index].envelope = scopePoison
+		}
+		binEdgeInsertRawDecimalEnvelopes(
+			t,
+			ctx,
+			connection,
+			append(inScope, outOfScope...),
+		)
+
+		var rawRows, mapRows, alignedRows uint64
+		if err := connection.QueryRow(ctx,
+			`SELECT count(),
+				countIf(dynamicType(fields.malformed_decimal) = 'Map(String, String)'),
+				countIf(field_metadata_version = ?
+					AND field_names = ['malformed_decimal']
+					AND length(field_types) = 1)
+			FROM open_splunk.events
+			WHERE startsWith(event_id, 'bin-edge-poison-')`,
+			eventfields.CurrentFieldMetadataVersion,
+		).Scan(&rawRows, &mapRows, &alignedRows); err != nil {
+			t.Fatalf("verify raw malformed Decimal fixtures: %v", err)
+		}
+		if want := uint64(len(inScope)); rawRows != want || mapRows != want || alignedRows != want {
+			t.Fatalf(
+				"raw malformed Decimal fixtures = rows:%d maps:%d aligned:%d, want %d/%d/%d",
+				rawRows,
+				mapRows,
+				alignedRows,
+				want,
+				want,
+				want,
+			)
+		}
+
+		var (
+			scopedRows, scopedMaps, scopedMetadata, scopedMalformed uint64
+			foreignTenant, foreignIndex, earlyTime, lateTime        uint64
+			lateIndexTime, futureVisibility                         uint64
+		)
+		scopeControlSQL := fmt.Sprintf(
+			`SELECT countIf(has(field_names, 'decimal_basic')),
+				countIf(has(field_names, 'decimal_basic')
+					AND dynamicType(fields.decimal_basic) = 'Map(String, String)'),
+				countIf(has(field_names, 'decimal_basic')
+					AND field_metadata_version = toUInt8(%d)
+					AND length(field_names) = 1
+					AND length(field_types) = 1
+					AND arrayElement(field_types, 1) = toUInt8(%d)),
+				countIf(has(field_names, 'decimal_basic')
+					AND length(dynamicElement(fields.decimal_basic, 'Map(String, String)')) = 2
+					AND mapContains(
+						dynamicElement(fields.decimal_basic, 'Map(String, String)'),
+						concat(char(0), 'open_splunk_type'))
+					AND mapContains(
+						dynamicElement(fields.decimal_basic, 'Map(String, String)'),
+						concat(char(0), 'open_splunk_value'))
+					AND dynamicElement(
+						fields.decimal_basic,
+						'Map(String, String)')[concat(char(0), 'open_splunk_type')] = 'decimal/v1'
+					AND dynamicElement(
+						fields.decimal_basic,
+						'Map(String, String)')[concat(char(0), 'open_splunk_value')] = 'not-a-decimal'),
+				countIf(has(field_names, 'decimal_basic') AND tenant_id != 'tenant'),
+				countIf(has(field_names, 'decimal_basic') AND index_name != 'compiler'),
+				countIf(has(field_names, 'decimal_basic')
+					AND event_time < parseDateTime64BestEffort('2026-07-20 00:00:00', 9, 'UTC')),
+				countIf(has(field_names, 'decimal_basic')
+					AND event_time >= parseDateTime64BestEffort('2026-07-22 00:00:00', 9, 'UTC')),
+				countIf(has(field_names, 'decimal_basic')
+					AND index_time > parseDateTime64BestEffort(%s, 3, 'UTC')),
+				countIf(has(field_names, 'decimal_basic') AND visibility_seq > toUInt64(%d))
+			FROM open_splunk.events
+			WHERE batch_id = 'poison-batch'`,
+			eventfields.CurrentFieldMetadataVersion,
+			uint8(eventfields.StoredValueTypeDecimal),
+			quoteStringLiteralForBinEdge(cutoff.UTC().Format("2006-01-02 15:04:05.000")),
+			visibilityCutoff,
+		)
+		if err := connection.QueryRow(ctx, scopeControlSQL).Scan(
+			&scopedRows,
+			&scopedMaps,
+			&scopedMetadata,
+			&scopedMalformed,
+			&foreignTenant,
+			&foreignIndex,
+			&earlyTime,
+			&lateTime,
+			&lateIndexTime,
+			&futureVisibility,
+		); err != nil {
+			t.Fatalf("verify raw out-of-scope Decimal fixtures: %v\nSQL: %s", err, scopeControlSQL)
+		}
+		wantScopedRows := uint64(len(outOfScope))
+		if scopedRows != wantScopedRows ||
+			scopedMaps != wantScopedRows ||
+			scopedMetadata != wantScopedRows ||
+			scopedMalformed != wantScopedRows ||
+			foreignTenant != 1 ||
+			foreignIndex != 1 ||
+			earlyTime != 1 ||
+			lateTime != 1 ||
+			lateIndexTime != 1 ||
+			futureVisibility != 1 {
+			t.Fatalf(
+				"raw scope poison = rows/maps/metadata/malformed:%d/%d/%d/%d tenant/index/time:%d/%d/%d/%d index_time/visibility:%d/%d, want %d/%d/%d/%d 1/1/1/1 1/1",
+				scopedRows,
+				scopedMaps,
+				scopedMetadata,
+				scopedMalformed,
+				foreignTenant,
+				foreignIndex,
+				earlyTime,
+				lateTime,
+				lateIndexTime,
+				futureVisibility,
+				wantScopedRows,
+				wantScopedRows,
+				wantScopedRows,
+				wantScopedRows,
+			)
+		}
+		// Force valid and poison fixtures into the same sorted part/granule.
+		// The application query below must therefore rely on row-level scope
+		// predicates rather than merely pruning the direct-insert part.
+		if err := connection.Exec(ctx, "OPTIMIZE TABLE open_splunk.events FINAL"); err != nil {
+			t.Fatalf("merge raw Decimal poison fixtures: %v", err)
+		}
+
+		for _, malformed := range inScope {
+			malformed := malformed
+			t.Run(malformed.eventID, func(t *testing.T) {
+				compiled := compileIntegrationSPL(
+					t,
+					`index=compiler event_id=`+malformed.eventID+
+						` | bin `+field+` span=10 | table event_id `+field,
+					cutoff,
+					visibilityCutoff,
+				)
+				queryErr := executeCompiledExpectingNoRows(ctx, connection, compiled)
+				var exception *clickhousedriver.Exception
+				if !errors.As(queryErr, &exception) ||
+					exception.Code != 395 ||
+					!strings.Contains(exception.Message, UnsupportedNumericBinValueMarker) {
+					t.Fatalf(
+						"malformed Decimal %q error = %v, want the sanitized unsupported marker",
+						malformed.eventID,
+						queryErr,
+					)
+				}
+				if strings.Contains(queryErr.Error(), "malformed-secret") {
+					t.Fatalf("malformed Decimal %q leaked its payload: %v", malformed.eventID, queryErr)
+				}
+			})
+		}
+
+		authorized := compileIntegrationSPL(
+			t,
+			`index=compiler event_id=`+binEdgeNumericDecimalBase+
+				` | bin decimal_basic span=10 AS band | table event_id band`,
+			cutoff,
+			visibilityCutoff,
+		)
+		var authorizedRows uint64
+		var authorizedID, authorizedType, authorizedBand string
+		if err := connection.QueryRow(
+			ctx,
+			"SELECT count(), any(event_id), any(dynamicType(band)), any(toString(band)) FROM ("+
+				authorized.SQL+")",
+			authorized.Args...,
+		).Scan(&authorizedRows, &authorizedID, &authorizedType, &authorizedBand); err != nil {
+			t.Fatalf(
+				"execute authorized Decimal with out-of-scope poison: %v\nSQL: %s\nargs: %#v",
+				err,
+				authorized.SQL,
+				authorized.Args,
+			)
+		}
+		if authorizedRows != 1 ||
+			authorizedID != binEdgeNumericDecimalBase ||
+			authorizedType != "Int256" ||
+			authorizedBand != "120" {
+			t.Fatalf(
+				"authorized Decimal result = rows:%d id:%q type:%q band:%q, want 1/%q/Int256/120",
+				authorizedRows,
+				authorizedID,
+				authorizedType,
+				authorizedBand,
+				binEdgeNumericDecimalBase,
+			)
+		}
+	})
+}
+
+type binEdgeRawDecimalEnvelope struct {
+	eventID       string
+	tenantID      string
+	indexName     string
+	eventTime     time.Time
+	indexTime     time.Time
+	visibilitySeq uint64
+	fieldName     string
+	fieldType     eventfields.StoredValueType
+	envelope      map[string]string
+}
+
+func binEdgeInsertRawDecimalEnvelopes(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	fixtures []binEdgeRawDecimalEnvelope,
+) {
+	t.Helper()
+	insertContext := clickhousedriver.Context(ctx, clickhousedriver.WithSettings(
+		insertSettings("bin-edge-raw-decimal-envelopes"),
+	))
+	batch, err := connection.PrepareBatch(insertContext, eventsInsertSQL)
+	if err != nil {
+		t.Fatalf("prepare raw Decimal envelope batch: %v", err)
+	}
+	defer func() { _ = batch.Close() }()
+
+	for _, fixture := range fixtures {
+		document := clickhousedriver.NewJSON()
+		document.SetValueAtPath(
+			fixture.fieldName,
+			clickhousedriver.NewDynamicWithType(fixture.envelope, "Map(String, String)"),
+		)
+		if err := batch.Append(
+			fixture.eventID,
+			fixture.tenantID,
+			fixture.indexName,
+			fixture.eventTime.UTC(),
+			fixture.indexTime.UTC().Truncate(time.Millisecond),
+			nil,
+			uint8(opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED),
+			"poison-host",
+			"poison-source",
+			"poison",
+			nil,
+			uint8(0),
+			nil,
+			nil,
+			[]byte(fixture.eventID),
+			uint8(opensplunkv1.RawEncoding_RAW_ENCODING_UTF8),
+			nil,
+			nil,
+			document,
+			[]string{fixture.fieldName},
+			"poison-collector",
+			"poison-batch",
+			uint64(1),
+			time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC),
+			fixture.visibilitySeq,
+			[]uint8{uint8(fixture.fieldType)},
+			eventfields.CurrentFieldMetadataVersion,
+		); err != nil {
+			t.Fatalf("append raw Decimal envelope %q: %v", fixture.eventID, err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send raw Decimal envelope batch: %v", err)
+	}
 }
 
 func binEdgeNumericBoundedAnalyzerContext(parent context.Context) (context.Context, context.CancelFunc) {
