@@ -1,11 +1,15 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 
 const workspace = process.cwd();
 const outputDirectory = await mkdtemp(path.join(tmpdir(), "open-splunk-frontend-tests-"));
+const testFiles = [
+  path.join("app", "search-workspace", "live-preview.test.ts"),
+  path.join("lib", "search", "backend-data.test.ts"),
+];
 
 function run(command, arguments_, environment = process.env) {
   return new Promise((resolve, reject) => {
@@ -23,23 +27,39 @@ function run(command, arguments_, environment = process.env) {
 }
 
 try {
+  const compilerConfig = path.join(outputDirectory, "tsconfig.json");
+  await writeFile(compilerConfig, JSON.stringify({
+    extends: path.join(workspace, "tsconfig.json"),
+    compilerOptions: {
+      incremental: false,
+      module: "Node16",
+      moduleResolution: "Node16",
+      noEmit: false,
+      outDir: outputDirectory,
+      plugins: [],
+      rootDir: workspace,
+      target: "ES2023",
+      typeRoots: [path.join(workspace, "node_modules", "@types")],
+      types: ["node"],
+    },
+    files: testFiles.map((file) => path.join(workspace, file)),
+    include: [],
+  }));
   await run(path.join(workspace, "node_modules", ".bin", "tsc"), [
-    "--ignoreConfig",
+    "--project", compilerConfig,
     "--pretty", "false",
-    "--strict", "true",
-    "--skipLibCheck", "true",
-    "--types", "node",
-    "--target", "ES2022",
-    "--module", "Node16",
-    "--moduleResolution", "Node16",
-    "--esModuleInterop", "true",
-    "--rootDir", workspace,
-    "--outDir", outputDirectory,
-    path.join(workspace, "app", "search-workspace", "live-preview.test.ts"),
+  ]);
+
+  const aliasDirectory = path.join(outputDirectory, "node_modules", "@");
+  const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
+  await mkdir(aliasDirectory, { recursive: true });
+  await Promise.all([
+    symlink(path.join(outputDirectory, "gen"), path.join(aliasDirectory, "gen"), directoryLinkType),
+    symlink(path.join(outputDirectory, "lib"), path.join(aliasDirectory, "lib"), directoryLinkType),
   ]);
   await run(process.execPath, [
     "--test",
-    path.join(outputDirectory, "app", "search-workspace", "live-preview.test.js"),
+    ...testFiles.map((file) => path.join(outputDirectory, file.replace(/\.ts$/, ".js"))),
   ], {
     ...process.env,
     NODE_PATH: path.join(workspace, "node_modules"),
