@@ -907,6 +907,11 @@ const (
 	exactNumericBinMinMagnitude     = "57896044618658097711785492504343953926634992332820282019728792003956564819968"
 )
 
+// decimalNumericStringPattern is shared by every command that interprets a
+// complete String as a decimal number. Optional pieces use empty alternatives
+// instead of question marks because generated SQL reserves `?` for arguments.
+const decimalNumericStringPattern = `'^([+]|-|)(([0-9]+([.][0-9]*|))|([.][0-9]+))([eE]([+]|-|)[0-9]+|)$'`
+
 const (
 	exactNumericBinSourceNone uint8 = iota
 	exactNumericBinSourceString
@@ -1170,7 +1175,7 @@ func compileDynamicNumericBucket(
 		field.storedTypeSQL = "tupleElement(" + inputBindingAlias + ", 3)"
 	}
 
-	metadata, err := compileDynamicNumericBinMetadata(field, stage)
+	metadata, err := compileDynamicNumericBinMetadata(field, stage, state.eventRows)
 	if err != nil {
 		return compiledRelation{}, compileState{}, nil, fmt.Errorf(
 			"compile ClickHouse numeric bucket metadata for %q: %w",
@@ -1232,10 +1237,9 @@ func compileDynamicNumericBucket(
 	// Express optional regex components as empty alternatives rather than `?`.
 	// Generated SQL uses `?` exclusively for bound placeholders, which keeps
 	// compiler/executor placeholder accounting exact.
-	decimalStringPattern := `'^([+]|-|)(([0-9]+([.][0-9]*|))|([.][0-9]+))([eE]([+]|-|)[0-9]+|)$'`
 	integerStringPattern := `'^([+]|-|)[0-9]+$'`
 	numericString := "(" + stringBoundedAlias + " = trimBoth(" + stringBoundedAlias + ") AND " +
-		"match(" + stringBoundedAlias + ", " + decimalStringPattern + "))"
+		"match(" + stringBoundedAlias + ", " + decimalNumericStringPattern + "))"
 	exactTextLimit := strconv.Itoa(MaximumExactNumericBinTextBytes)
 
 	with := append([]string(nil), preserveWith...)
@@ -1534,14 +1538,30 @@ func compileDynamicNumericBucket(
 	return relation, next, args, nil
 }
 
-func compileDynamicNumericBinMetadata(field fieldState, stage int) (dynamicNumericBinMetadata, error) {
+func compileDynamicNumericBinMetadata(
+	field fieldState,
+	stage int,
+	metadataVersionAvailable bool,
+) (dynamicNumericBinMetadata, error) {
 	existsAlias := numericBinStageAlias("exists", stage)
 	typeAlias := numericBinStageAlias("type", stage)
 	parentAlias := numericBinStageAlias("parent", stage)
 	versionAlias := numericBinStageAlias("metadata_version", stage)
-	// Every stored type read below is only meaningful at the current aligned
-	// metadata version, exactly as the field catalog and field summary require.
-	versionWith := "toUInt8(" + quoteIdentifier(internalFieldMetadataVersionColumn) + " = ?) AS " + versionAlias
+	// Stored event metadata is meaningful only at the current aligned version.
+	// A transforming aggregate drops the immutable event document and publishes
+	// its own calculated type alias; that alias is authoritative and no longer
+	// has an event-level version column in scope.
+	versionWith := "toUInt8(1) AS " + versionAlias
+	var versionArgs []any
+	if metadataVersionAvailable {
+		versionWith = "toUInt8(" + quoteIdentifier(internalFieldMetadataVersionColumn) + " = ?) AS " + versionAlias
+		versionArgs = append(versionArgs, eventfields.CurrentFieldMetadataVersion)
+	}
+	if !metadataVersionAvailable && field.storedTypeSQL == "" {
+		return dynamicNumericBinMetadata{}, errors.New(
+			"transformed Dynamic field has no calculated semantic type",
+		)
+	}
 
 	// A direct or projected stored path can classify an exact leaf, a
 	// flattened object parent, and a missing path with one bounded metadata
@@ -1572,7 +1592,7 @@ func compileDynamicNumericBinMetadata(field fieldState, stage int) (dynamicNumer
 		}
 		return dynamicNumericBinMetadata{
 			with:         with,
-			args:         []any{eventfields.CurrentFieldMetadataVersion, path},
+			args:         append(versionArgs, path),
 			existsAlias:  existsAlias,
 			typeAlias:    typeAlias,
 			parentAlias:  parentAlias,
@@ -1599,8 +1619,8 @@ func compileDynamicNumericBinMetadata(field fieldState, stage int) (dynamicNumer
 		"toUInt8(" + typeAlias + " = " +
 			"toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeObject)) + ")) AS " + parentAlias,
 	}
-	args := make([]any, 0, 1+len(field.existsArgs)+len(storedTypeArgs))
-	args = append(args, eventfields.CurrentFieldMetadataVersion)
+	args := make([]any, 0, len(versionArgs)+len(field.existsArgs)+len(storedTypeArgs))
+	args = append(args, versionArgs...)
 	args = append(args, field.existsArgs...)
 	args = append(args, storedTypeArgs...)
 	return dynamicNumericBinMetadata{
@@ -4988,6 +5008,27 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			valuesInputs[measure.Input.Name] = struct{}{}
 		}
 	}
+	stringInputFor := func(ref plan.FieldRef) (string, error) {
+		if inputSQL, cached := stringInputs[ref.Name]; cached {
+			return inputSQL, nil
+		}
+		input, ok, resolveErr := resolveCompiledField(ref, state)
+		if resolveErr != nil {
+			return "", resolveErr
+		}
+		inputSQL := "CAST([], 'Array(String)')"
+		if ok {
+			var inputArgs []any
+			inputSQL, inputArgs = stringArrayInputSQL(input)
+			inputAlias := quoteIdentifier(fmt.Sprintf("__os_measure_strings_%d", len(stringInputs)))
+			stringInputs[ref.Name] = inputAlias
+			next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
+			next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
+			inputSQL = inputAlias
+		}
+		stringInputs[ref.Name] = inputSQL
+		return inputSQL, nil
+	}
 	for measureIndex, measure := range operator.Measures {
 		if _, fieldErr := plan.ResolveField(measure.Output, spl.Range{}); fieldErr != nil {
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf(
@@ -5146,19 +5187,9 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 				break
 			}
 
-			stringInputSQL, cached := stringInputs[measure.Input.Name]
-			if !cached {
-				stringInputSQL = "CAST([], 'Array(String)')"
-				if ok {
-					var inputArgs []any
-					stringInputSQL, inputArgs = stringArrayInputSQL(input)
-					inputAlias := quoteIdentifier(fmt.Sprintf("__os_measure_strings_%d", len(stringInputs)))
-					stringInputs[measure.Input.Name] = inputAlias
-					next.preAggregateColumns = append(next.preAggregateColumns, stringInputSQL+" AS "+inputAlias)
-					next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
-					stringInputSQL = inputAlias
-				}
-				stringInputs[measure.Input.Name] = stringInputSQL
+			stringInputSQL, inputErr := stringInputFor(measure.Input)
+			if inputErr != nil {
+				return nil, nil, nil, compileState{}, nil, inputErr
 			}
 			candidates, cached := extremaInputs[measure.Input.Name]
 			if !cached {
@@ -5185,23 +5216,9 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			}
 			next.privateColumns = append(next.privateColumns, typeAlias)
 		case plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues:
-			inputSQL, cached := stringInputs[measure.Input.Name]
-			if !cached {
-				input, ok, resolveErr := resolveCompiledField(measure.Input, state)
-				if resolveErr != nil {
-					return nil, nil, nil, compileState{}, nil, resolveErr
-				}
-				inputSQL = "CAST([], 'Array(String)')"
-				if ok {
-					var inputArgs []any
-					inputSQL, inputArgs = stringArrayInputSQL(input)
-					inputAlias := quoteIdentifier(fmt.Sprintf("__os_measure_strings_%d", len(stringInputs)))
-					stringInputs[measure.Input.Name] = inputAlias
-					next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
-					next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
-					inputSQL = inputAlias
-				}
-				stringInputs[measure.Input.Name] = inputSQL
+			inputSQL, inputErr := stringInputFor(measure.Input)
+			if inputErr != nil {
+				return nil, nil, nil, compileState{}, nil, inputErr
 			}
 			_, publishesValues := valuesInputs[measure.Input.Name]
 			if measure.Function == plan.AggregateFunctionDistinctCount && !publishesValues {
@@ -5422,13 +5439,9 @@ func statsExtremaNumericOrNullSQL(valueSQL string) string {
 	limit := strconv.Itoa(MaximumExactNumericBinTextBytes)
 	bounded := "if(length(" + valueSQL + ") <= " + limit + ", " + valueSQL +
 		", CAST('' AS String))"
-	// Keep the same whole-string decimal grammar as numeric bin. Question
-	// marks are deliberately absent because generated SQL reserves them for
-	// bound arguments.
-	pattern := `'^([+]|-|)(([0-9]+([.][0-9]*|))|([.][0-9]+))([eE]([+]|-|)[0-9]+|)$'`
 	numeric := "isValidUTF8(" + valueSQL + ") AND length(" + valueSQL + ") <= " +
 		limit + " AND " + valueSQL + " = trimBoth(" + valueSQL + ") AND match(" +
-		bounded + ", " + pattern + ")"
+		bounded + ", " + decimalNumericStringPattern + ")"
 	converted := finiteFloatOrNullSQL(canonicalNumericTextSQL(bounded))
 	return "if(" + numeric + ", " + converted + ", CAST(NULL AS Nullable(Float64)))"
 }

@@ -530,6 +530,17 @@ func TestBuildStatsRejectsReservedOpenSchemaFieldsInputs(t *testing.T) {
 	}
 
 	logical, err = Build(
+		mustParse(t, `index=gradethis | stats count AS fields | stats min(fields) AS minimum_count`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build closed-schema min(fields): %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"minimum_count"}) {
+		t.Fatalf("closed-schema min(fields) output fields = %v", logical.OutputFields)
+	}
+
+	logical, err = Build(
 		mustParse(t, `index=gradethis | stats count AS fields | stats count(fields) AS occurrences`),
 		testScope([]string{"gradethis"}, nil),
 	)

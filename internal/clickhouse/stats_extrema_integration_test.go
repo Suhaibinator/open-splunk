@@ -11,6 +11,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // testStatsExtremaAgainstClickHouse pins the runtime min/max contract against
@@ -46,6 +47,9 @@ func testStatsExtremaAgainstClickHouse(
 			typedString("20"), typedString("5"), typedNull(),
 		))),
 		newEvent("extrema-mixed-b", "mixed", typedField("extrema_value", typedString("z"))),
+		newEvent("extrema-symbols", "symbols", typedField("extrema_value", typedList(
+			typedString("2"), typedString("!"), typedString("~"),
+		))),
 		newEvent("extrema-fallback", "fallback", typedField("extrema_value", typedList(
 			typedString("3"), typedString("NaN"), typedString("1e9999"), typedString(" 2"),
 		))),
@@ -68,6 +72,11 @@ func testStatsExtremaAgainstClickHouse(
 			typedField("required_group", typedString("present")),
 			typedField("extrema_incomplete", typedString("7")),
 		),
+	}
+	for eventIndex, event := range events {
+		event.Event.EventTime = timestamppb.New(
+			indexTime.Add(time.Duration(eventIndex) * time.Nanosecond),
+		)
 	}
 	batch := ingest.StoreBatch{
 		TenantID:          "tenant",
@@ -147,6 +156,7 @@ func testStatsExtremaAgainstClickHouse(
 		{group: "mixed", low: float64(5), high: "z"},
 		{group: "numeric", low: float64(1), high: float64(10)},
 		{group: "poison", low: nil, high: nil},
+		{group: "symbols", low: float64(2), high: "~"},
 		{group: "zero", low: float64(0), high: float64(0)},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -231,9 +241,40 @@ func testStatsExtremaAgainstClickHouse(
 	if err := connection.QueryRow(ctx, nativeTime.SQL, nativeTime.Args...).Scan(&earliest, &latest); err != nil {
 		t.Fatalf("execute native time extrema: %v\nSQL: %s", err, nativeTime.SQL)
 	}
-	wantEventTime := events[0].Event.EventTime.AsTime()
-	if !earliest.Equal(wantEventTime) || !latest.Equal(wantEventTime) {
-		t.Fatalf("native time extrema = %s/%s, want %s", earliest, latest, wantEventTime)
+	wantEarliest := events[0].Event.EventTime.AsTime()
+	wantLatest := events[len(events)-1].Event.EventTime.AsTime()
+	if !earliest.Equal(wantEarliest) || !latest.Equal(wantLatest) {
+		t.Fatalf(
+			"native time extrema = %s/%s, want %s/%s",
+			earliest,
+			latest,
+			wantEarliest,
+			wantLatest,
+		)
+	}
+	for _, value := range []bool{false, true} {
+		literal := "false"
+		if value {
+			literal = "true"
+		}
+		nativeBool := compile(
+			base + ` | eval selected=` + literal +
+				` | stats min(selected) AS lowest max(selected) AS highest`,
+		)
+		var lowest, highest bool
+		if err := connection.QueryRow(ctx, nativeBool.SQL, nativeBool.Args...).Scan(&lowest, &highest); err != nil {
+			t.Fatalf("execute native Bool %s extrema: %v\nSQL: %s", literal, err, nativeBool.SQL)
+		}
+		if lowest != value || highest != value {
+			t.Fatalf(
+				"native Bool %s extrema = %t/%t, want %t/%t",
+				literal,
+				lowest,
+				highest,
+				value,
+				value,
+			)
+		}
 	}
 
 	shared := compile(base + ` | stats min(extrema_value) AS low max(extrema_value) AS high min(extrema_value) AS low_again`)

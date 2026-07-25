@@ -500,11 +500,16 @@ This slice accepts exactly one unquoted, exact field inside `count(...)`.
 `count(eval(...))`, quoted fields, and other predicate/expression forms remain
 explicitly unsupported rather than being approximated.
 
-`min` and `max` use the documented Splunk numeric-if-possible ordering. Finite
-numeric candidates sort before lexical candidates; numeric candidates compare
-numerically and lexical candidates compare by raw bytes. Consequently, `min`
-selects a numeric value whenever one is present, while `max` selects a lexical
-value whenever one is present. This is a total, locale-independent order.
+`min` and `max` follow Splunk's documented numeric-if-possible rule for
+ordinary numbers and text. Open Splunk v0.1 makes the mixed-type and symbol
+edges deterministic: finite numeric candidates sort before lexical candidates;
+numeric candidates compare numerically and lexical candidates compare by raw
+bytes. Consequently, `min` selects a numeric value whenever one is present,
+while `max` selects a lexical value whenever one is present. This is a total,
+locale-independent order. Public Splunk documentation does not define a
+standard symbol order and warns that some symbols may precede numbers, so the
+placement of punctuation is an explicit Open Splunk v0.1 boundary pending a
+live differential oracle.
 
 For runtime String and Dynamic values, a candidate is numeric only when it is
 valid UTF-8, no longer than 4 KiB, matches this complete decimal grammar, and
@@ -542,8 +547,8 @@ result row; a retained group with no eligible candidate also contains null;
 grouped aggregation over no rows emits no groups. Projected-away inputs remain
 absent. Repeated extrema over one input share one bounded row-local
 normalization, and `min` plus `max` use separate constant-size aggregate
-states. The lowering uses no `ARRAY JOIN`, row materialization, sorting, or
-unbounded list aggregation.
+states. The lowering uses no `ARRAY JOIN`, row expansion, sorting, or unbounded
+list aggregation.
 
 `min` and `max` accept exactly one unquoted, exact field. Expression/eval
 arguments, wildcards, quoted fields, empty argument lists, and multiple

@@ -2814,6 +2814,15 @@ func TestCompileStatsMinAndMaxShareOneRuntimeNormalization(t *testing.T) {
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
 	}
+
+	withValues := compileSPL(
+		t,
+		`index=gradethis | stats min(metric) AS low values(metric) AS all_values`,
+	)
+	if strings.Count(withValues.SQL, `AS "__os_measure_strings_0"`) != 1 ||
+		strings.Contains(withValues.SQL, `__os_measure_strings_1`) {
+		t.Fatalf("min and values did not share one canonical String input:\n%s", withValues.SQL)
+	}
 }
 
 func TestCompileStatsMinAndMaxUseNativeFixedScalarExtrema(t *testing.T) {
@@ -2851,6 +2860,18 @@ func TestCompileStatsRuntimeExtremaRemainTypedDownstream(t *testing.T) {
 		if !strings.Contains(compiled.SQL, `__os_stats_extrema_type_0`) {
 			t.Fatalf("runtime extrema lost private semantic type in %q:\n%s", source, compiled.SQL)
 		}
+	}
+
+	binned := compileSPL(
+		t,
+		`index=gradethis | stats min(metric) AS low | bin low span=10 | table low`,
+	)
+	if !strings.Contains(binned.SQL, `toUInt8(1) AS "__os_numeric_bin_metadata_version_`) ||
+		strings.Contains(
+			binned.SQL,
+			`toUInt8("__os_field_metadata_version" = ?) AS "__os_numeric_bin_metadata_version_`,
+		) {
+		t.Fatalf("transformed extrema bin reused unavailable event metadata:\n%s", binned.SQL)
 	}
 }
 
