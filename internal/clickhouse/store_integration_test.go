@@ -1555,6 +1555,7 @@ func testCompiledQueriesAgainstClickHouse(
 
 	testNumericBinAgainstClickHouse(t, ctx, connection, indexTime, visibilityCutoff)
 	testStatsAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime)
+	testStatsExtremaAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testDedupAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testRexAgainstClickHouse(t, ctx, store, connection, indexTime)
 }

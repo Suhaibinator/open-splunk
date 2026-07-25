@@ -2726,6 +2726,30 @@ func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T)
 			Function: plan.AggregateFunctionValues,
 			Output:   "values_user",
 		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionMinimum,
+			Input:    fields,
+			Output:   "min_fields",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionMaximum,
+			Output:   "max_user",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function:   plan.AggregateFunctionMinimum,
+			Input:      field,
+			Percentile: 0.95,
+			Output:     "min_user",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionMaximum,
+			Input: plan.FieldRef{
+				Name:      "user",
+				Canonical: true,
+				Path:      []string{"other"},
+			},
+			Output: "max_user",
+		}}},
 	} {
 		candidate := *base
 		candidate.Operators = append(append([]plan.Operator(nil), base.Operators...), aggregate)
@@ -2749,6 +2773,119 @@ func TestCompileStatsNumericInputCachingPreservesPreAggregateArgumentOrder(t *te
 		strings.Count(compiled.SQL, `AS "__os_measure_values_1"`) != 1 ||
 		strings.Contains(compiled.SQL, `__os_measure_values_2`) {
 		t.Fatalf("numeric input cache aliases are not stable:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsMinAndMaxShareOneRuntimeNormalization(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | stats min(metric) AS low max(metric) AS high min(metric) AS low_again`,
+	)
+	if !slices.Equal(compiled.OutputFields, []string{"low", "high", "low_again"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, required := range []string{
+		`AS "__os_measure_strings_0"`,
+		`AS "__os_measure_extrema_0"`,
+		`argMinArray(arrayMap(candidate -> tupleElement(candidate, 1), "__os_measure_extrema_0")`,
+		`argMaxArray(arrayMap(candidate -> tupleElement(candidate, 1), "__os_measure_extrema_0")`,
+		`AS "__os_stats_extrema_type_0"`,
+		`AS "__os_stats_extrema_type_1"`,
+		`AS "__os_stats_extrema_type_2"`,
+		`isValidUTF8(value)`,
+		`length(value) <= ` + strconv.Itoa(MaximumExactNumericBinTextBytes),
+		`ifNotFinite(toFloat64OrNull(`,
+		`'^([+]|-|)(([0-9]+([.][0-9]*|))|([.][0-9]+))([eE]([+]|-|)[0-9]+|)$'`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("min/max SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Count(compiled.SQL, `AS "__os_measure_strings_0"`) != 1 ||
+		strings.Count(compiled.SQL, `AS "__os_measure_extrema_0"`) != 1 ||
+		strings.Contains(compiled.SQL, `__os_measure_extrema_1`) {
+		t.Fatalf("min/max did not share one normalization for the same input:\n%s", compiled.SQL)
+	}
+	if strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
+		t.Fatalf("min/max expanded event rows:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+}
+
+func TestCompileStatsMinAndMaxUseNativeFixedScalarExtrema(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | stats min(severity) AS low max(_time) AS latest max(level) AS highest`,
+	)
+	for _, required := range []string{
+		`minIfOrNull("severity", (1) AND isNotNull("severity")) AS "low"`,
+		`maxIfOrNull("_time", (1) AND isNotNull("_time")) AS "latest"`,
+		`argMaxArray(arrayMap(candidate -> tupleElement(candidate, 1), "__os_measure_extrema_0")`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("fixed min/max SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, `toFloat64("severity")`) ||
+		strings.Contains(compiled.SQL, `toFloat64("_time")`) {
+		t.Fatalf("fixed extrema lost native precision:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsRuntimeExtremaRemainTypedDownstream(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | stats min(metric) AS low | rename low AS first | table first`,
+		`index=gradethis | stats max(metric) AS high | eval copied=high | table copied`,
+		`index=gradethis | stats min(metric) AS low | bin low span=10 | table low`,
+		`index=gradethis | stats max(metric) AS high | stats min(high) AS repeated`,
+	} {
+		compiled := compileSPL(t, source)
+		if !strings.Contains(compiled.SQL, `__os_stats_extrema_type_0`) {
+			t.Fatalf("runtime extrema lost private semantic type in %q:\n%s", source, compiled.SQL)
+		}
+	}
+}
+
+func TestCompileStatsExtremaProjectedInputStaysMissing(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | fields service | stats min(user) AS low max(user) AS high BY service`,
+	)
+	if !strings.Contains(compiled.SQL, `CAST([], 'Array(String)')`) ||
+		!strings.Contains(compiled.SQL, `argMinArray(`) ||
+		!strings.Contains(compiled.SQL, `argMaxArray(`) {
+		t.Fatalf("projected extrema did not aggregate an empty candidate set:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, `"__os_fields"."user"`) {
+		t.Fatalf("projected extrema resurrected the private event field:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsRuntimeExtremaRetainContainerGuard(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | stats min(payload) AS low max(payload) AS high`)
+	for _, required := range []string{
+		UnsupportedStatsMeasureValueMarker,
+		`dynamicElement("__os_fields"."payload", 'Array(Dynamic)')`,
+		`startsWith(name, ?)`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("runtime extrema SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d", got, want)
 	}
 }
 

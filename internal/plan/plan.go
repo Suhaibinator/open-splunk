@@ -203,6 +203,8 @@ const (
 	AggregateFunctionAverage
 	AggregateFunctionDistinctCount
 	AggregateFunctionValues
+	AggregateFunctionMinimum
+	AggregateFunctionMaximum
 )
 
 // AggregateMeasure is one aggregate output column.

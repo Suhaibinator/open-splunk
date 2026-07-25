@@ -662,6 +662,35 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("stats min and max mixed values through manager", func(t *testing.T) {
+		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-stats-min-max",
+			`index=main | stats min(status) AS low max(path) AS high min(absent) AS absent`,
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("min/max state = %v, failure=%#v", job.State, job.Failure)
+		}
+		if len(page.Schema.Columns) != 3 {
+			t.Fatalf("min/max schema = %#v", page.Schema)
+		}
+		for index, name := range []string{"low", "high", "absent"} {
+			column := page.Schema.Columns[index]
+			if column.Name != name || column.Kind != searchjobs.ValueKindMixed ||
+				!column.Nullable || column.Multivalue {
+				t.Fatalf("min/max column %d = %#v, want nullable Mixed %q", index, column, name)
+			}
+		}
+		if len(page.Rows) != 1 || len(page.Rows[0].Values) != 3 {
+			t.Fatalf("min/max rows = %#v, want one three-cell row", page.Rows)
+		}
+		low, lowOK := page.Rows[0].Values[0].Double()
+		high, highOK := page.Rows[0].Values[1].String()
+		if !lowOK || low != 200 || !highOK || high != "/manager" ||
+			!page.Rows[0].Values[2].IsNull() {
+			t.Fatalf("min/max row = %#v, want Double(200)/String(/manager)/null", page.Rows[0])
+		}
+	})
+
 	t.Run("stats count field unsigned transport through manager", func(t *testing.T) {
 		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
 			"queryexec-stats-count-field",
@@ -1513,6 +1542,34 @@ ORDER BY grid.number`,
 		}
 		if raw, bytesOK := binaryValues[0].Bytes(); !bytesOK || !bytes.Equal(raw, []byte{0xff, 0x00}) {
 			t.Fatalf("binary values child = %x/%v", raw, bytesOK)
+		}
+		binaryMaxJob, binaryMaxPage := queryIntegrationRunSearchRangeForIndex(
+			t,
+			ctx,
+			executor,
+			binaryIndexTime,
+			"queryexec-stats-max-binary",
+			`index=binary | stats max(_raw) AS binary_max`,
+			binaryIndexTime.Add(-time.Hour),
+			binaryIndexTime.Add(time.Hour),
+			"binary",
+		)
+		if binaryMaxJob.State != searchjobs.StateCompleted ||
+			len(binaryMaxPage.Schema.Columns) != 1 ||
+			binaryMaxPage.Schema.Columns[0] != (searchjobs.Column{
+				Name: "binary_max", Kind: searchjobs.ValueKindMixed, Nullable: true,
+			}) ||
+			len(binaryMaxPage.Rows) != 1 {
+			t.Fatalf(
+				"binary max transport = state %v failure %#v schema %#v rows %#v",
+				binaryMaxJob.State,
+				binaryMaxJob.Failure,
+				binaryMaxPage.Schema,
+				binaryMaxPage.Rows,
+			)
+		}
+		if raw, bytesOK := binaryMaxPage.Rows[0].Values[0].Bytes(); !bytesOK || !bytes.Equal(raw, []byte{0xff, 0x00}) {
+			t.Fatalf("binary max cell = %x/%v", raw, bytesOK)
 		}
 		for _, test := range []struct {
 			name   string

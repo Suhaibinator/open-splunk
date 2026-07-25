@@ -445,19 +445,21 @@ the selected rows in reversed order, matching its pipeline semantics.
 | stats dc(user) AS unique_users BY service
 | stats distinct_count(device) AS devices
 | stats values(user) AS users
+| stats min(duration_ms) AS fastest max(duration_ms) AS slowest BY path
 | stats count p95(duration_ms) AS p95_ms BY path
 | stats sum(bytes) AS total_bytes avg(duration_ms) AS mean_ms BY path
 ```
 
 Argument-free `count`, `count(field)`, `dc(field)`/`distinct_count(field)`,
-`p95(field)`, `values(field)`, `sum(field)`, and `avg(field)` are supported,
-including multiple space- or comma-separated measures and `AS` aliases.
-Function names are case-insensitive. Both distinct-count spellings use the
-canonical default output `dc(field)`; other default names use canonical
-lowercase spelling such as `count(productId)`, `values(user)`, or `sum(bytes)`.
-The command is transforming: output contains only the `BY` fields followed by
-measures in source order. Argument-free `count` includes every input row in a
-retained group.
+`p95(field)`, `values(field)`, `sum(field)`, `avg(field)`, `min(field)`, and
+`max(field)` are supported, including multiple space- or comma-separated
+measures and `AS` aliases. Function names are case-insensitive. Both
+distinct-count spellings use the canonical default output `dc(field)`; other
+default names use canonical lowercase spelling such as `count(productId)`,
+`values(user)`, `min(duration_ms)`, or `sum(bytes)`. The command is
+transforming: output contains only the `BY` fields followed by measures in
+source order. Argument-free `count` includes every input row in a retained
+group.
 
 `count(field)` counts immediate, non-null field occurrences without
 stringifying values or expanding event rows:
@@ -490,12 +492,62 @@ the published total strictly representable as `UInt64`.
 
 The current downstream field grammar cannot reference a default aggregate name
 that contains parentheses. Use `AS` when a `count(field)`, `dc`, `values`,
-`sum`, `avg`, or `p95` result will be consumed by a later command.
+`min`, `max`, `sum`, `avg`, or `p95` result will be consumed by a later
+command.
 
 This slice accepts exactly one unquoted, exact field inside `count(...)`.
 `count()`, the documented `c(field)` abbreviation, wildcard fields,
 `count(eval(...))`, quoted fields, and other predicate/expression forms remain
 explicitly unsupported rather than being approximated.
+
+`min` and `max` use the documented Splunk numeric-if-possible ordering. Finite
+numeric candidates sort before lexical candidates; numeric candidates compare
+numerically and lexical candidates compare by raw bytes. Consequently, `min`
+selects a numeric value whenever one is present, while `max` selects a lexical
+value whenever one is present. This is a total, locale-independent order.
+
+For runtime String and Dynamic values, a candidate is numeric only when it is
+valid UTF-8, no longer than 4 KiB, matches this complete decimal grammar, and
+converts to a finite `Float64`:
+
+```text
+[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?
+```
+
+Whitespace, `NaN`, infinity spellings, overflowing exponents, invalid UTF-8,
+and longer values remain lexical. Numeric zero is normalized to positive zero,
+and equivalent spellings such as `01`, `1.0`, and `1e0` publish the same
+canonical `Double(1)` result. The runtime comparison key is currently
+`Float64`; distinct very-wide integers or exact decimals that collapse to the
+same `Float64` are an explicit Open Splunk v0.1 precision boundary pending an
+exact decimal comparison key and live Splunk oracle. Statically typed numeric,
+Boolean, and timestamp columns take an exact native ClickHouse path instead,
+preserving their physical width and timestamp precision; non-finite fixed
+floats do not participate.
+
+Missing values, explicit null, an empty multivalue, and null multivalue members
+do not participate. An empty String is a lexical candidate. Every immediate
+member of a top-level multivalue participates independently, without expanding
+event rows. Generic objects, flattened object parents, nested arrays, and
+nested objects fail the live aggregate atomically with the same sanitized
+unsupported-value error as `dc` and `values`. Rows outside the authorized
+tenant/index/time/visibility scope, rows removed by an upstream filter, and
+rows omitted for an incomplete `BY` tuple cannot trigger that error.
+
+A runtime String, Dynamic, or multivalue result is nullable `Mixed`: numeric
+winners are `Double`, lexical winners are String or Bytes, and no winner is
+null. A statically typed scalar result is nullable and retains its numeric,
+Boolean, or timestamp type. A global aggregation over no rows emits one null
+result row; a retained group with no eligible candidate also contains null;
+grouped aggregation over no rows emits no groups. Projected-away inputs remain
+absent. Repeated extrema over one input share one bounded row-local
+normalization, and `min` plus `max` use separate constant-size aggregate
+states. The lowering uses no `ARRAY JOIN`, row materialization, sorting, or
+unbounded list aggregation.
+
+`min` and `max` accept exactly one unquoted, exact field. Expression/eval
+arguments, wildcards, quoted fields, empty argument lists, and multiple
+arguments are rejected explicitly.
 
 `dc` and `values` process the stored canonical scalar spelling
 case-sensitively, as string-oriented Splunk aggregates:
@@ -555,8 +607,9 @@ before these post-aggregate publication checks run.
 
 `fields`, `table`, `rename`, `head`, `tail`, and a direct `eval` field copy
 preserve the fixed multivalue type. A later `dc` or `values` flattens its
-members, and `sum`/`avg` parse and flatten finite numeric members. Base-search
-equality and wildcard tests match when any valid-UTF-8 member matches;
+members; `min`/`max` compare its immediate members; and `sum`/`avg` parse and
+flatten finite numeric members. Base-search equality and wildcard tests match
+when any valid-UTF-8 member matches;
 inequality matches only a nonempty list with no equal member, and `field=*`
 matches only a nonempty list. Invalid-UTF-8 Bytes members do not match textual
 equality or wildcard literals. Ordered base-search comparison, `where`, scalar
@@ -1070,10 +1123,10 @@ eventstats, streamstats
 
 All `stats` functions other than argument-free `count`, exact-field
 `count(field)`, `dc(field)`/`distinct_count(field)`, `values(field)`,
-`p95(field)`, `sum(field)`, and `avg(field)` are unsupported, including `list`,
-`min`, `max`, `earliest`, `latest`, other fixed percentiles, `perc<N>`,
-`upperperc`, and `exactperc`. The broader `count` forms listed in the stats
-section are unsupported too.
+`min(field)`, `max(field)`, `p95(field)`, `sum(field)`, and `avg(field)` are
+unsupported, including `list`, `earliest`, `latest`, other fixed percentiles,
+`perc<N>`, `upperperc`, and `exactperc`. The broader `count` forms listed in
+the stats section are unsupported too.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,
@@ -1085,6 +1138,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`dedup`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/dedup),
 [`stats`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/stats),
 [`stats` multivalue aggregation](https://help.splunk.com/en/splunk-cloud-platform/search/spl2-search-reference/stats-command/stats-command-overview-syntax-and-usage),
+[`min` and `max` aggregate functions](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/statistical-and-charting-functions/aggregate-functions),
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
 [`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),
 [`spath`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.0.2503/search-commands/spath),

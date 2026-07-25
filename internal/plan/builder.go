@@ -586,7 +586,15 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					measure.Input = input
 				case spl.AggregateFunctionP95, spl.AggregateFunctionSum,
 					spl.AggregateFunctionAverage, spl.AggregateFunctionDistinctCount,
-					spl.AggregateFunctionValues:
+					spl.AggregateFunctionValues, spl.AggregateFunctionMinimum,
+					spl.AggregateFunctionMaximum:
+					if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) {
+						return nil, &Diagnostic{
+							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+							Message: "stats aggregate requires one exact input field",
+							Range:   aggregate.Range,
+						}
+					}
 					input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
 					if inputErr != nil {
 						return nil, inputErr
@@ -604,6 +612,10 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 						measure.Function = AggregateFunctionDistinctCount
 					case spl.AggregateFunctionValues:
 						measure.Function = AggregateFunctionValues
+					case spl.AggregateFunctionMinimum:
+						measure.Function = AggregateFunctionMinimum
+					case spl.AggregateFunctionMaximum:
+						measure.Function = AggregateFunctionMaximum
 					}
 				default:
 					return nil, &Diagnostic{

@@ -932,6 +932,32 @@ func TestParseStatsSumAndAvgFieldsAliasesAndFunctionCase(t *testing.T) {
 	}
 }
 
+func TestParseStatsMinAndMaxFieldsAliasesAndFunctionCase(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | stats MiN(amount) MaX(label) AS largest BY service`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command := query.Commands[0].(*StatsCommand)
+	if len(command.Aggregates) != 2 {
+		t.Fatalf("aggregates = %#v", command.Aggregates)
+	}
+	minimum := command.Aggregates[0]
+	if minimum.Function != AggregateFunctionMinimum ||
+		minimum.Input != "amount" || minimum.Alias != "min(amount)" {
+		t.Fatalf("min aggregate = %#v", minimum)
+	}
+	maximum := command.Aggregates[1]
+	if maximum.Function != AggregateFunctionMaximum ||
+		maximum.Input != "label" || maximum.Alias != "largest" {
+		t.Fatalf("max aggregate = %#v", maximum)
+	}
+	if len(command.GroupBy) != 1 || command.GroupBy[0].Name != "service" {
+		t.Fatalf("group fields = %#v", command.GroupBy)
+	}
+}
+
 func TestParseStatsDistinctCountAliasesAndFunctionCase(t *testing.T) {
 	t.Parallel()
 
@@ -1056,6 +1082,35 @@ func TestParseStatsSumAndAvgRequireExactlyOneField(t *testing.T) {
 		{name: "avg missing parentheses", source: `index=main | stats avg`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
 		{name: "sum missing field", source: `index=main | stats sum()`, code: "SPL_EXPECTED_FIELD"},
 		{name: "avg multiple fields", source: `index=main | stats avg(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(test.source)
+			if err == nil {
+				t.Fatal("Parse succeeded, want error")
+			}
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != test.code {
+				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
+			}
+		})
+	}
+}
+
+func TestParseStatsMinAndMaxRequireExactlyOneField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		code   string
+	}{
+		{name: "min missing parentheses", source: `index=main | stats min`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
+		{name: "max missing field", source: `index=main | stats max()`, code: "SPL_EXPECTED_FIELD"},
+		{name: "min multiple fields", source: `index=main | stats min(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
+		{name: "max eval expression", source: `index=main | stats max(eval(status=200))`, code: "SPL_EXPECTED_RIGHT_PAREN"},
+		{name: "min quoted field", source: `index=main | stats min("status")`, code: "SPL_EXPECTED_FIELD"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1820,9 +1875,9 @@ func TestUnsupportedStatsAggregatesAreSourceLocated(t *testing.T) {
 		line   int
 		column int
 	}{
-		{"other function", "index=main\n| stats min(bytes)", "SPL_UNSUPPORTED_STATS_AGGREGATE", 2, 9},
-		{"second aggregate", `* | stats count, min(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 18},
-		{"space-separated aggregate", `* | stats count max(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 17},
+		{"other function", "index=main\n| stats median(bytes)", "SPL_UNSUPPORTED_STATS_AGGREGATE", 2, 9},
+		{"second aggregate", `* | stats count, list(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 18},
+		{"space-separated aggregate", `* | stats count mode(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 17},
 		{"missing AS", `* | stats count total`, "SPL_UNSUPPORTED_STATS_SYNTAX", 1, 17},
 		{"missing group field", `* | stats count by`, "SPL_EXPECTED_FIELD", 1, 19},
 	}
@@ -2036,6 +2091,7 @@ func FuzzParseDoesNotPanic(f *testing.F) {
 		`index=main | stats count AS events by host, service`,
 		`index=main | stats count(productId) AS products by host`,
 		`index=main | stats sum(bytes) by host`,
+		`index=main | stats min(duration_ms) max(duration_ms) AS slowest by path`,
 		`index=main | stats dc(user) distinct_count(device) AS devices by service`,
 		`index=main | top limit=20 message`,
 		`index=main | rare limit=20 message`,

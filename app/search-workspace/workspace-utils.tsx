@@ -22,7 +22,7 @@ const PIPELINE_COMMAND_PATTERN = [
   ...UNSUPPORTED_SPL_PIPELINE_COMMANDS,
 ].map(escapeRegExp).join("|");
 const SYNTAX_TOKEN_PATTERN = new RegExp(
-  `(\\b(?:index|host|source|sourcetype|level|status|trace_id|message|path)\\b(?=\\s*=)|\\b(?:${PIPELINE_COMMAND_PATTERN})\\b|\\b(?:count|p95|sum|avg|tonumber|replace)\\b|\\b(?:AND|OR|NOT|AS|BY)\\b|"(?:\\\\.|[^"\\\\])*"|\\|)`,
+  `(\\b(?:index|host|source|sourcetype|level|status|trace_id|message|path)\\b(?=\\s*=)|\\b(?:${PIPELINE_COMMAND_PATTERN})\\b|\\b(?:count|dc|distinct_count|values|min|max|p95|sum|avg|tonumber|replace)\\b|\\b(?:AND|OR|NOT|AS|BY)\\b|"(?:\\\\.|[^"\\\\])*"|\\|)`,
   "gi",
 );
 const UNSUPPORTED_PIPELINE_COMMAND_SET = new Set<string>(UNSUPPORTED_SPL_PIPELINE_COMMANDS);
@@ -99,7 +99,7 @@ export function syntaxTokens(query: string): ReactNode[] {
     else if (UNSUPPORTED_PIPELINE_COMMAND_SET.has(lower)) className = "spl-error-token";
     else if (isSupportedSplPipelineCommand(lower)) {
       className = "spl-command";
-    } else if (/^(count|p95|sum|avg|tonumber|replace)$/i.test(part)) {
+    } else if (/^(count|dc|distinct_count|values|min|max|p95|sum|avg|tonumber|replace)$/i.test(part)) {
       className = "spl-function";
     } else if (/^(index|host|source|sourcetype|level|status|trace_id|message|path)$/i.test(part)) {
       className = "spl-field";

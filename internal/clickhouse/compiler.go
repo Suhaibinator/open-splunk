@@ -4979,6 +4979,7 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 	numericInputs := make(map[string]string)
 	stringInputs := make(map[string]string)
 	countInputs := make(map[string]string)
+	extremaInputs := make(map[string]string)
 	exactStringSets := make(map[string]string)
 	distinctCounts := make(map[string]string)
 	valuesInputs := make(map[string]struct{})
@@ -4987,7 +4988,7 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			valuesInputs[measure.Input.Name] = struct{}{}
 		}
 	}
-	for _, measure := range operator.Measures {
+	for measureIndex, measure := range operator.Measures {
 		if _, fieldErr := plan.ResolveField(measure.Output, spl.Range{}); fieldErr != nil {
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf(
 				"compile ClickHouse aggregate: invalid output field %q: %w",
@@ -5017,7 +5018,8 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 				)
 			}
 		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage,
-			plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues:
+			plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues,
+			plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum:
 			if measure.Percentile != 0 {
 				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
 					"compile ClickHouse aggregate: function %d contains percentile metadata",
@@ -5117,6 +5119,71 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			}
 			projection = append(projection, valueSQL+" AS "+output)
 			measureState.numberType = "Float64"
+		case plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum:
+			input, ok, resolveErr := resolveCompiledField(measure.Input, state)
+			if resolveErr != nil {
+				return nil, nil, nil, compileState{}, nil, resolveErr
+			}
+			if ok && (input.kind == fieldKindNumber || input.kind == fieldKindTime ||
+				input.kind == fieldKindBool) {
+				existsSQL := input.existsSQL
+				if existsSQL == "" {
+					existsSQL = "1"
+				}
+				eligible := "(" + existsSQL + ") AND isNotNull(" + input.valueSQL + ")"
+				if input.kind == fieldKindNumber && strings.HasPrefix(input.numberType, "Float") {
+					eligible += " AND isFinite(" + input.valueSQL + ")"
+				}
+				function := "minIfOrNull"
+				if measure.Function == plan.AggregateFunctionMaximum {
+					function = "maxIfOrNull"
+				}
+				projection = append(projection, function+"("+input.valueSQL+", "+eligible+") AS "+output)
+				args = append(args, input.existsArgs...)
+				measureState.kind = input.kind
+				measureState.numberType = input.numberType
+				measureState.caseSensitive = input.caseSensitive
+				break
+			}
+
+			stringInputSQL, cached := stringInputs[measure.Input.Name]
+			if !cached {
+				stringInputSQL = "CAST([], 'Array(String)')"
+				if ok {
+					var inputArgs []any
+					stringInputSQL, inputArgs = stringArrayInputSQL(input)
+					inputAlias := quoteIdentifier(fmt.Sprintf("__os_measure_strings_%d", len(stringInputs)))
+					stringInputs[measure.Input.Name] = inputAlias
+					next.preAggregateColumns = append(next.preAggregateColumns, stringInputSQL+" AS "+inputAlias)
+					next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
+					stringInputSQL = inputAlias
+				}
+				stringInputs[measure.Input.Name] = stringInputSQL
+			}
+			candidates, cached := extremaInputs[measure.Input.Name]
+			if !cached {
+				candidates = quoteIdentifier(fmt.Sprintf("__os_measure_extrema_%d", len(extremaInputs)))
+				extremaInputs[measure.Input.Name] = candidates
+				next.preAggregateColumns = append(
+					next.preAggregateColumns,
+					statsExtremaCandidatesSQL(stringInputSQL)+" AS "+candidates,
+				)
+			}
+			extreme := statsExtremaAggregateSQL(measure.Function, candidates)
+			typeAlias := quoteIdentifier(fmt.Sprintf("__os_stats_extrema_type_%d", measureIndex))
+			projection = append(
+				projection,
+				extreme+" AS "+output,
+				statsExtremaStoredTypeSQL(extreme)+" AS "+typeAlias,
+			)
+			measureState = fieldState{
+				valueSQL:       output,
+				dynamicTypeSQL: "dynamicType(" + output + ")",
+				storedTypeSQL:  typeAlias,
+				existsSQL:      "1",
+				kind:           fieldKindDynamic,
+			}
+			next.privateColumns = append(next.privateColumns, typeAlias)
 		case plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues:
 			inputSQL, cached := stringInputs[measure.Input.Name]
 			if !cached {
@@ -5179,7 +5246,12 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		next.visible[measure.Output] = measureState
 		next.publicOrder = append(next.publicOrder, measure.Output)
 		if len(next.order) == 0 {
-			next.order = append(next.order, compiledSortKey{valueSQL: quoteIdentifier(measure.Output)})
+			orderSQL := quoteIdentifier(measure.Output)
+			if measureState.kind == fieldKindDynamic {
+				orderSQL = quoteIdentifier("__os_aggregate_order")
+				projection = append(projection, "toUInt8(0) AS "+orderSQL)
+			}
+			next.order = append(next.order, compiledSortKey{valueSQL: orderSQL})
 		}
 	}
 	if len(dynamicGroupInvalid) > 0 {
@@ -5332,6 +5404,54 @@ func stringArrayInputSQL(field fieldState) (string, []any) {
 		return value, nil
 	}
 	return "if(" + field.existsSQL + ", " + value + ", " + empty + ")", append([]any(nil), field.existsArgs...)
+}
+
+func statsExtremaCandidatesSQL(valuesSQL string) string {
+	number := statsExtremaNumericOrNullSQL("value")
+	normalizedNumber := "if(assumeNotNull(number) = 0, toFloat64(0), assumeNotNull(number))"
+	candidate := "if(isNotNull(number), CAST(" + normalizedNumber +
+		" AS Dynamic), CAST(value AS Dynamic))"
+	key := "tuple(toUInt8(isNull(number)), ifNull(number, toFloat64(0)), " +
+		"if(isNull(number), value, CAST('' AS String)))"
+	bound := "arrayElement(arrayMap(number -> tuple(" + candidate + ", " + key +
+		"), [" + number + "]), 1)"
+	return "arrayMap(value -> " + bound + ", " + valuesSQL + ")"
+}
+
+func statsExtremaNumericOrNullSQL(valueSQL string) string {
+	limit := strconv.Itoa(MaximumExactNumericBinTextBytes)
+	bounded := "if(length(" + valueSQL + ") <= " + limit + ", " + valueSQL +
+		", CAST('' AS String))"
+	// Keep the same whole-string decimal grammar as numeric bin. Question
+	// marks are deliberately absent because generated SQL reserves them for
+	// bound arguments.
+	pattern := `'^([+]|-|)(([0-9]+([.][0-9]*|))|([.][0-9]+))([eE]([+]|-|)[0-9]+|)$'`
+	numeric := "isValidUTF8(" + valueSQL + ") AND length(" + valueSQL + ") <= " +
+		limit + " AND " + valueSQL + " = trimBoth(" + valueSQL + ") AND match(" +
+		bounded + ", " + pattern + ")"
+	converted := finiteFloatOrNullSQL(canonicalNumericTextSQL(bounded))
+	return "if(" + numeric + ", " + converted + ", CAST(NULL AS Nullable(Float64)))"
+}
+
+func statsExtremaAggregateSQL(function plan.AggregateFunction, candidatesSQL string) string {
+	name := "argMinArray"
+	if function == plan.AggregateFunctionMaximum {
+		name = "argMaxArray"
+	}
+	return name + "(arrayMap(candidate -> tupleElement(candidate, 1), " + candidatesSQL +
+		"), arrayMap(candidate -> tupleElement(candidate, 2), " + candidatesSQL + "))"
+}
+
+func statsExtremaStoredTypeSQL(valueSQL string) string {
+	typeSQL := "dynamicType(" + valueSQL + ")"
+	stringSQL := "dynamicElement(" + valueSQL + ", 'String')"
+	return "multiIf(" +
+		typeSQL + " = 'None', toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeNull)) + "), " +
+		typeSQL + " = 'Float64', toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeDouble)) + "), " +
+		typeSQL + " = 'String' AND isValidUTF8(" + stringSQL + "), toUInt8(" +
+		strconv.Itoa(int(eventfields.StoredValueTypeString)) + "), " +
+		typeSQL + " = 'String', toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeBytes)) + "), " +
+		"toUInt8(0))"
 }
 
 func compactNullableArraySQL(valuesSQL string) string {

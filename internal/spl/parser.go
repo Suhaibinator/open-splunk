@@ -1302,7 +1302,7 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 			Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
 			Message:     fmt.Sprintf("unsupported stats syntax at %q; expected another supported aggregate, AS, or BY", current.text),
 			Range:       current.range_,
-			Suggestions: []string{"stats count", "stats dc(field) BY group", "stats sum(field) avg(field) BY group", "stats p95(field) AS p95_value BY group"},
+			Suggestions: []string{"stats count", "stats dc(field) BY group", "stats min(field) max(field) BY group", "stats sum(field) avg(field) BY group", "stats p95(field) AS p95_value BY group"},
 		}
 	}
 
@@ -1335,7 +1335,7 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 	if !supported {
 		return StatsAggregate{}, end, p.unsupportedStatsAggregate(
 			functionToken,
-			fmt.Sprintf("stats aggregate %q is not supported; count, dc, values, p95, sum, and avg are available", functionToken.text),
+			fmt.Sprintf("stats aggregate %q is not supported; count, dc, values, p95, sum, avg, min, and max are available", functionToken.text),
 		)
 	}
 	aggregate.Function = spec.function
@@ -1410,6 +1410,10 @@ func statsAggregateSpecForName(name string) (statsAggregateSpec, bool) {
 		return statsAggregateSpec{function: AggregateFunctionDistinctCount, canonicalName: "dc", requiresInput: true}, true
 	case "values":
 		return statsAggregateSpec{function: AggregateFunctionValues, canonicalName: "values", requiresInput: true}, true
+	case "min":
+		return statsAggregateSpec{function: AggregateFunctionMinimum, canonicalName: "min", requiresInput: true}, true
+	case "max":
+		return statsAggregateSpec{function: AggregateFunctionMaximum, canonicalName: "max", requiresInput: true}, true
 	default:
 		return statsAggregateSpec{}, false
 	}
@@ -1468,7 +1472,7 @@ func (p *parser) unsupportedStatsAggregate(tok token, message string) *Diagnosti
 		Code:        "SPL_UNSUPPORTED_STATS_AGGREGATE",
 		Message:     message,
 		Range:       tok.range_,
-		Suggestions: []string{"stats count", "stats dc(field) BY group", "stats sum(field) avg(field) BY group", "stats p95(field) AS p95_value BY group"},
+		Suggestions: []string{"stats count", "stats dc(field) BY group", "stats min(field) max(field) BY group", "stats sum(field) avg(field) BY group", "stats p95(field) AS p95_value BY group"},
 	}
 }
 
