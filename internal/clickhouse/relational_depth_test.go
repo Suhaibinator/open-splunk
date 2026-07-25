@@ -125,6 +125,7 @@ func TestCompiledRelationalDepthPinsRepresentativeOperatorCosts(t *testing.T) {
 		{name: "fixed dedup", source: `| dedup host`, depth: 4},
 		{name: "dynamic dedup", source: `| dedup latency`, depth: 5},
 		{name: "dynamic aggregate", source: `| stats count BY latency`, depth: 6},
+		{name: "count values aggregate", source: `| stats count(user) AS users`, depth: 4},
 		{name: "values aggregate", source: `| stats values(user) AS users`, depth: 6},
 		{
 			name:   "shared dc and values aggregate",

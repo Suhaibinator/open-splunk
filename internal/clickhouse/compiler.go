@@ -4978,6 +4978,7 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 	}
 	numericInputs := make(map[string]string)
 	stringInputs := make(map[string]string)
+	countInputs := make(map[string]string)
 	exactStringSets := make(map[string]string)
 	distinctCounts := make(map[string]string)
 	valuesInputs := make(map[string]struct{})
@@ -4997,9 +4998,15 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		switch measure.Function {
 		case plan.AggregateFunctionCountRows:
 			if measure.Input.Name != "" || measure.Input.Canonical || len(measure.Input.Path) != 0 ||
-				measure.Percentile != 0 {
+				measure.Input.Range != (spl.Range{}) || measure.Percentile != 0 {
 				return nil, nil, nil, compileState{}, nil, errors.New(
 					"compile ClickHouse aggregate: count contains unsupported input metadata",
+				)
+			}
+		case plan.AggregateFunctionCountValues:
+			if measure.Percentile != 0 {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse aggregate: count(field) contains percentile metadata",
 				)
 			}
 		case plan.AggregateFunctionPercentile:
@@ -5044,6 +5051,28 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		switch measure.Function {
 		case plan.AggregateFunctionCountRows:
 			projection = append(projection, "count() AS "+output)
+			measureState.numberType = "UInt64"
+		case plan.AggregateFunctionCountValues:
+			inputAlias, cached := countInputs[measure.Input.Name]
+			if !cached {
+				input, ok, resolveErr := resolveCompiledField(measure.Input, state)
+				if resolveErr != nil {
+					return nil, nil, nil, compileState{}, nil, resolveErr
+				}
+				inputSQL := "toUInt64(0)"
+				var inputArgs []any
+				if ok {
+					inputSQL, inputArgs = countValueInputSQL(input)
+				}
+				inputAlias = quoteIdentifier(fmt.Sprintf("__os_measure_count_%d", len(countInputs)))
+				countInputs[measure.Input.Name] = inputAlias
+				next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
+				next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
+			}
+			// Aggregate in UInt128 so the intermediate state cannot wrap. The
+			// production 250M-row read ceiling and 1 MiB hard event ceiling make
+			// the final occurrence total strictly smaller than UInt64.
+			projection = append(projection, "toUInt64(sum(toUInt128("+inputAlias+"))) AS "+output)
 			measureState.numberType = "UInt64"
 		case plan.AggregateFunctionPercentile:
 			input, ok, resolveErr := resolveCompiledField(measure.Input, state)
@@ -5166,6 +5195,39 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		}
 	}
 	return projection, predicates, groups, next, args, nil
+}
+
+func countValueInputSQL(field fieldState) (string, []any) {
+	if field.kind == fieldKindStringArray {
+		// A fixed multivalue is physically non-null and its empty representation
+		// has cardinality zero, so its logical presence predicate is unnecessary.
+		return "toUInt64(length(" + field.valueSQL + "))", nil
+	}
+
+	existsSQL := field.existsSQL
+	if existsSQL == "" {
+		existsSQL = "1"
+	}
+	args := append([]any(nil), field.existsArgs...)
+	if field.kind != fieldKindDynamic {
+		return "toUInt64((" + existsSQL + ") AND isNotNull(" + field.valueSQL + "))", args
+	}
+
+	typeSQL := dynamicTypeExpression(field)
+	arrayCount := "toUInt64(arrayCount(element -> dynamicType(element) != 'None', " +
+		"dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)')))"
+	descendantCount := "toUInt64(0)"
+	if field.descendantSQL != "" {
+		// Non-empty typed objects are stored as flattened leaves. The object
+		// parent is still one present field occurrence. Calculated field copies
+		// can retain those descendants while binding an exact Dynamic None, so
+		// descendant presence must also be the None fallback.
+		descendantCount = "if(" + field.descendantSQL + ", toUInt64(1), toUInt64(0))"
+		args = append(args, field.descendantArgs...)
+	}
+	return "if((" + existsSQL + ") AND " + typeSQL + " != 'None', " +
+		"if(" + typeSQL + " = 'Array(Dynamic)', " + arrayCount + ", toUInt64(1)), " +
+		descendantCount + ")", args
 }
 
 func percentileInputSQL(field fieldState) string {

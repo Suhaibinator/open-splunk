@@ -77,8 +77,8 @@ export const SPL_PIPELINE_COMMANDS = [
   },
   {
     name: "stats",
-    insertion: "stats count dc(user) AS user_count values(user) AS users p95(duration_ms) AS p95_ms sum(bytes) AS total_bytes avg(duration_ms) AS avg_ms BY level",
-    detail: "Aggregate with count, dc/distinct_count, values, p95, sum, and avg.",
+    insertion: "stats count count(user) AS user_occurrences dc(user) AS user_count values(user) AS users p95(duration_ms) AS p95_ms sum(bytes) AS total_bytes avg(duration_ms) AS avg_ms BY level",
+    detail: "Aggregate with row/value count, dc/distinct_count, values, p95, sum, and avg.",
   },
   {
     name: "top",

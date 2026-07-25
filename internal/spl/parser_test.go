@@ -810,6 +810,67 @@ func TestParseStatsCountAndGroupedAlias(t *testing.T) {
 	}
 }
 
+func TestParseStatsCountFieldPreservesInputAliasAndFunctionCase(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | stats COUNT(productId) count(action) AS actions count BY host`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command := query.Commands[0].(*StatsCommand)
+	if len(command.Aggregates) != 3 {
+		t.Fatalf("aggregates = %#v", command.Aggregates)
+	}
+	product := command.Aggregates[0]
+	if product.Function != AggregateFunctionCountValues ||
+		product.Input != "productId" || product.Alias != "count(productId)" {
+		t.Fatalf("product count aggregate = %#v", product)
+	}
+	actions := command.Aggregates[1]
+	if actions.Function != AggregateFunctionCountValues ||
+		actions.Input != "action" || actions.Alias != "actions" {
+		t.Fatalf("action count aggregate = %#v", actions)
+	}
+	rows := command.Aggregates[2]
+	if rows.Function != AggregateFunctionCount || rows.Input != "" || rows.Alias != "count" {
+		t.Fatalf("row count aggregate = %#v", rows)
+	}
+	if len(command.GroupBy) != 1 || command.GroupBy[0].Name != "host" {
+		t.Fatalf("group fields = %#v", command.GroupBy)
+	}
+}
+
+func TestParseStatsCountFieldRequiresExactlyOneExactField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		code   string
+	}{
+		{name: "missing field", source: `index=main | stats count()`, code: "SPL_EXPECTED_FIELD"},
+		{name: "multiple fields", source: `index=main | stats count(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
+		{name: "eval expression", source: `index=main | stats count(eval(status=200))`, code: "SPL_EXPECTED_RIGHT_PAREN"},
+		{name: "quoted field", source: `index=main | stats count("status")`, code: "SPL_EXPECTED_FIELD"},
+		{name: "missing right parenthesis", source: `index=main | stats count(status`, code: "SPL_EXPECTED_RIGHT_PAREN"},
+		{name: "abbreviation deferred", source: `index=main | stats c(status)`, code: "SPL_UNSUPPORTED_STATS_AGGREGATE"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(test.source)
+			if err == nil {
+				t.Fatal("Parse succeeded, want error")
+			}
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != test.code {
+				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
+			}
+		})
+	}
+}
+
 func TestParseStatsMultipleMeasuresWithP95(t *testing.T) {
 	t.Parallel()
 
@@ -1760,7 +1821,6 @@ func TestUnsupportedStatsAggregatesAreSourceLocated(t *testing.T) {
 		column int
 	}{
 		{"other function", "index=main\n| stats min(bytes)", "SPL_UNSUPPORTED_STATS_AGGREGATE", 2, 9},
-		{"count argument", `* | stats count(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 16},
 		{"second aggregate", `* | stats count, min(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 18},
 		{"space-separated aggregate", `* | stats count max(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 17},
 		{"missing AS", `* | stats count total`, "SPL_UNSUPPORTED_STATS_SYNTAX", 1, 17},
@@ -1974,6 +2034,7 @@ func FuzzParseDoesNotPanic(f *testing.F) {
 		`index=gradethis (level=ERROR OR level=WARN) | sort -_time | head 20`,
 		`"connection refused" | table _time message`,
 		`index=main | stats count AS events by host, service`,
+		`index=main | stats count(productId) AS products by host`,
 		`index=main | stats sum(bytes) by host`,
 		`index=main | stats dc(user) distinct_count(device) AS devices by service`,
 		`index=main | top limit=20 message`,

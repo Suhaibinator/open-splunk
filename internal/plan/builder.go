@@ -565,11 +565,25 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					if aggregate.Input != "" || aggregate.InputRange != (spl.Range{}) {
 						return nil, &Diagnostic{
 							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
-							Message: "count arguments are not supported; use argument-free count",
+							Message: "argument-free count cannot contain input metadata",
 							Range:   aggregate.Range,
 						}
 					}
 					measure.Function = AggregateFunctionCountRows
+				case spl.AggregateFunctionCountValues:
+					if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) {
+						return nil, &Diagnostic{
+							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+							Message: "count(field) requires one exact input field",
+							Range:   aggregate.Range,
+						}
+					}
+					input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
+					if inputErr != nil {
+						return nil, inputErr
+					}
+					measure.Function = AggregateFunctionCountValues
+					measure.Input = input
 				case spl.AggregateFunctionP95, spl.AggregateFunctionSum,
 					spl.AggregateFunctionAverage, spl.AggregateFunctionDistinctCount,
 					spl.AggregateFunctionValues:

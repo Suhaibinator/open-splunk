@@ -351,6 +351,42 @@ func TestBuildStatsMultipleMeasuresWithP95(t *testing.T) {
 	}
 }
 
+func TestBuildStatsCountValuesPreservesMeasureOrderAndAliases(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count count(user) count(device) AS devices BY service`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"service", "count", "count(user)", "devices"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+	aggregate, ok := logical.Operators[len(logical.Operators)-1].(*Aggregate)
+	if !ok || len(aggregate.Measures) != 3 {
+		t.Fatalf("aggregate operator = %#v", logical.Operators[len(logical.Operators)-1])
+	}
+	if rows := aggregate.Measures[0]; rows.Function != AggregateFunctionCountRows ||
+		rows.Input.Name != "" || rows.Output != "count" {
+		t.Fatalf("row count measure = %#v", rows)
+	}
+	for index, want := range []struct {
+		input  string
+		output string
+	}{
+		{input: "user", output: "count(user)"},
+		{input: "device", output: "devices"},
+	} {
+		measure := aggregate.Measures[index+1]
+		if measure.Function != AggregateFunctionCountValues ||
+			measure.Input.Name != want.input || measure.Output != want.output {
+			t.Fatalf("measure %d = %#v, want count(%s) AS %s", index+1, measure, want.input, want.output)
+		}
+	}
+}
+
 func TestBuildStatsSumAndAveragePreserveMeasureOrder(t *testing.T) {
 	t.Parallel()
 
@@ -444,6 +480,7 @@ func TestBuildStatsRejectsReservedOpenSchemaFieldsInputs(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
+		`index=gradethis | stats count(fields)`,
 		`index=gradethis | stats dc(fields)`,
 		`index=gradethis | stats values(fields)`,
 		`index=gradethis | stats count BY fields`,
@@ -461,6 +498,17 @@ func TestBuildStatsRejectsReservedOpenSchemaFieldsInputs(t *testing.T) {
 	}
 	if !slices.Equal(logical.OutputFields, []string{"distinct_counts"}) {
 		t.Fatalf("closed-schema output fields = %v", logical.OutputFields)
+	}
+
+	logical, err = Build(
+		mustParse(t, `index=gradethis | stats count AS fields | stats count(fields) AS occurrences`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build closed-schema count(fields): %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"occurrences"}) {
+		t.Fatalf("closed-schema count(fields) output fields = %v", logical.OutputFields)
 	}
 
 	_, err = Build(
@@ -495,27 +543,43 @@ func TestBuildRevalidatesForgedStatsBounds(t *testing.T) {
 	}
 }
 
-func TestBuildRejectsForgedStatsCountInput(t *testing.T) {
+func TestBuildRejectsForgedStatsCountMetadata(t *testing.T) {
 	t.Parallel()
 
 	base := mustParse(t, `index=gradethis`)
-	command := &spl.StatsCommand{
-		Aggregates: []spl.StatsAggregate{{
+	fieldRange := spl.Range{
+		Start: spl.Position{Line: 1, Column: 1},
+		End:   spl.Position{Line: 1, Column: 5},
+	}
+	for _, aggregate := range []spl.StatsAggregate{
+		{
 			Function:   spl.AggregateFunctionCount,
 			Input:      "host",
-			InputRange: spl.Range{Start: spl.Position{Line: 1, Column: 1}, End: spl.Position{Line: 1, Column: 5}},
+			InputRange: fieldRange,
 			Alias:      "count",
-		}},
+		},
+		{
+			Function: spl.AggregateFunctionCountValues,
+			Alias:    "count(host)",
+		},
+		{
+			Function:   spl.AggregateFunctionCount,
+			InputRange: fieldRange,
+			Alias:      "count",
+		},
+	} {
+		command := &spl.StatsCommand{Aggregates: []spl.StatsAggregate{aggregate}}
+		query := &spl.Query{Search: base.Search, Commands: []spl.Command{command}, Range: base.Range}
+		_, err := Build(query, testScope([]string{"gradethis"}, nil))
+		assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_STATS_AGGREGATE")
 	}
-	query := &spl.Query{Search: base.Search, Commands: []spl.Command{command}, Range: base.Range}
-	_, err := Build(query, testScope([]string{"gradethis"}, nil))
-	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_STATS_AGGREGATE")
 }
 
 func TestBuildStatsSumAndAverageRequireExactInputFields(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
+		`index=gradethis | stats count(request*)`,
 		`index=gradethis | stats sum(request*)`,
 		`index=gradethis | stats avg(request*)`,
 		`index=gradethis | stats dc(request*)`,

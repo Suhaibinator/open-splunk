@@ -1340,11 +1340,9 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 	}
 	aggregate.Function = spec.function
 	aggregate.Alias = spec.canonicalName
-	if !spec.requiresInput {
-		if p.current().kind == tokenLeftParen {
-			return StatsAggregate{}, end, p.unsupportedStatsAggregate(p.current(), "count arguments are not supported; use argument-free count")
-		}
-	} else {
+	parseInput := spec.requiresInput ||
+		(spec.inputFunction != AggregateFunctionInvalid && p.current().kind == tokenLeftParen)
+	if parseInput {
 		if !p.match(tokenLeftParen) {
 			return StatsAggregate{}, end, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
@@ -1362,6 +1360,9 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 		p.advance()
 		if !p.match(tokenRightParen) {
 			return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' after the "+functionName+" input field")
+		}
+		if spec.inputFunction != AggregateFunctionInvalid {
+			aggregate.Function = spec.inputFunction
 		}
 		end = p.previous().range_.End
 		aggregate.Range.End = end
@@ -1386,6 +1387,7 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 
 type statsAggregateSpec struct {
 	function      AggregateFunction
+	inputFunction AggregateFunction
 	canonicalName string
 	requiresInput bool
 }
@@ -1393,7 +1395,11 @@ type statsAggregateSpec struct {
 func statsAggregateSpecForName(name string) (statsAggregateSpec, bool) {
 	switch strings.ToLower(name) {
 	case "count":
-		return statsAggregateSpec{function: AggregateFunctionCount, canonicalName: "count"}, true
+		return statsAggregateSpec{
+			function:      AggregateFunctionCount,
+			inputFunction: AggregateFunctionCountValues,
+			canonicalName: "count",
+		}, true
 	case "p95":
 		return statsAggregateSpec{function: AggregateFunctionP95, canonicalName: "p95", requiresInput: true}, true
 	case "sum":

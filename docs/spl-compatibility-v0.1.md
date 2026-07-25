@@ -441,6 +441,7 @@ the selected rows in reversed order, matching its pipeline semantics.
 ```spl
 | stats count
 | stats count AS events BY field1, field2
+| stats count(productId) AS products BY host
 | stats dc(user) AS unique_users BY service
 | stats distinct_count(device) AS devices
 | stats values(user) AS users
@@ -448,18 +449,53 @@ the selected rows in reversed order, matching its pipeline semantics.
 | stats sum(bytes) AS total_bytes avg(duration_ms) AS mean_ms BY path
 ```
 
-Argument-free `count` plus `dc(field)`/`distinct_count(field)`, `p95(field)`,
-`values(field)`, `sum(field)`, and `avg(field)` are supported, including
-multiple space- or comma-separated measures and `AS` aliases. Function names
-are case-insensitive. Both distinct-count spellings use the canonical default
-output `dc(field)`; other default names use canonical lowercase spelling such
-as `values(user)` or `sum(bytes)`. The command is transforming: output
-contains only the `BY` fields followed by measures in source order. `count`
-includes every input row in a retained group.
+Argument-free `count`, `count(field)`, `dc(field)`/`distinct_count(field)`,
+`p95(field)`, `values(field)`, `sum(field)`, and `avg(field)` are supported,
+including multiple space- or comma-separated measures and `AS` aliases.
+Function names are case-insensitive. Both distinct-count spellings use the
+canonical default output `dc(field)`; other default names use canonical
+lowercase spelling such as `count(productId)`, `values(user)`, or `sum(bytes)`.
+The command is transforming: output contains only the `BY` fields followed by
+measures in source order. Argument-free `count` includes every input row in a
+retained group.
+
+`count(field)` counts immediate, non-null field occurrences without
+stringifying values or expanding event rows:
+
+- a missing field, explicit null, empty multivalue, or null multivalue member
+  contributes zero;
+- every other scalar contributes one, including an empty String, zero,
+  `false`, Bytes, timestamp, duration, and decimal values;
+- every immediate non-null member of a top-level multivalue contributes one,
+  including duplicates; and
+- a top-level object contributes one. A non-empty object stored as flattened
+  leaves contributes once for its parent, not once per descendant. A nested
+  list or object member likewise contributes once and is not traversed.
+
+The scalar and ordinary multivalue behavior follows Splunk's documented
+occurrence-count behavior. Null members and typed containers are not settled
+by the available Splunk documentation; counting immediate non-null containers
+atomically is the explicit Open Splunk v0.1 typed-data choice pending a live
+differential oracle.
+
+`count(field)` returns a non-null `UInt64`. A global aggregation over no rows or
+with no eligible value emits one row containing zero. A retained group whose
+field is always missing, null, or empty also contains zero; grouped
+aggregation over no rows emits no groups. Projected-away fields remain absent
+and contribute zero rather than being recovered from hidden event columns.
+Repeated `count(field)` measures over the same input share one per-row
+cardinality calculation. The compiler sums that contribution in `UInt128`;
+the production 250-million-row read ceiling and 1 MiB hard event ceiling make
+the published total strictly representable as `UInt64`.
 
 The current downstream field grammar cannot reference a default aggregate name
-that contains parentheses. Use `AS` when a `dc`, `values`, `sum`, `avg`, or
-`p95` result will be consumed by a later command.
+that contains parentheses. Use `AS` when a `count(field)`, `dc`, `values`,
+`sum`, `avg`, or `p95` result will be consumed by a later command.
+
+This slice accepts exactly one unquoted, exact field inside `count(...)`.
+`count()`, the documented `c(field)` abbreviation, wildcard fields,
+`count(eval(...))`, quoted fields, and other predicate/expression forms remain
+explicitly unsupported rather than being approximated.
 
 `dc` and `values` process the stored canonical scalar spelling
 case-sensitively, as string-oriented Splunk aggregates:
@@ -1032,11 +1068,12 @@ The following planned commands are not implemented in this version:
 eventstats, streamstats
 ```
 
-All `stats` functions other than argument-free `count`,
-`dc(field)`/`distinct_count(field)`, `values(field)`, `p95(field)`,
-`sum(field)`, and `avg(field)` are unsupported, including `count(field)`, `list`,
+All `stats` functions other than argument-free `count`, exact-field
+`count(field)`, `dc(field)`/`distinct_count(field)`, `values(field)`,
+`p95(field)`, `sum(field)`, and `avg(field)` are unsupported, including `list`,
 `min`, `max`, `earliest`, `latest`, other fixed percentiles, `perc<N>`,
-`upperperc`, and `exactperc`.
+`upperperc`, and `exactperc`. The broader `count` forms listed in the stats
+section are unsupported too.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,
@@ -1047,6 +1084,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`sort`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/sort),
 [`dedup`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/dedup),
 [`stats`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/stats),
+[`stats` multivalue aggregation](https://help.splunk.com/en/splunk-cloud-platform/search/spl2-search-reference/stats-command/stats-command-overview-syntax-and-usage),
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
 [`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),
 [`spath`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.0.2503/search-commands/spath),

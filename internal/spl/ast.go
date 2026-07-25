@@ -458,6 +458,7 @@ const (
 const (
 	AggregateFunctionInvalid AggregateFunction = iota
 	AggregateFunctionCount
+	AggregateFunctionCountValues
 	AggregateFunctionP95
 	AggregateFunctionSum
 	AggregateFunctionAverage

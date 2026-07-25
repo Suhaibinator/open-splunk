@@ -197,6 +197,7 @@ type AggregateFunction uint8
 const (
 	AggregateFunctionInvalid AggregateFunction = iota
 	AggregateFunctionCountRows
+	AggregateFunctionCountValues
 	AggregateFunctionPercentile
 	AggregateFunctionSum
 	AggregateFunctionAverage

@@ -2548,6 +2548,8 @@ func testStatsAggregatesAgainstClickHouse(
 		newEvent("sum-avg-a-int", "A",
 			typedField("aggregate_value", typedSint(10)),
 			typedField("distinct_value", typedSint(1)),
+			typedField("official_group", typedString("A")),
+			typedField("official_mv", typedSint(1)),
 			typedField("float_metric", typedDouble(1.25)),
 			typedField("overflow_metric", typedDouble(math.MaxFloat64)),
 			typedField("ignored_metric", typedBool(true)),
@@ -2555,6 +2557,8 @@ func testStatsAggregatesAgainstClickHouse(
 		newEvent("sum-avg-a-string", "A",
 			typedField("aggregate_value", typedString("20.5")),
 			typedField("distinct_value", typedString("1")),
+			typedField("official_group", typedString("A")),
+			typedField("official_mv", typedList(typedSint(2), typedSint(3), typedSint(4))),
 			typedField("overflow_metric", typedDouble(math.MaxFloat64)),
 			typedField("ignored_metric", typedBytes([]byte{1, 2, 3})),
 		),
@@ -2583,6 +2587,12 @@ func testStatsAggregatesAgainstClickHouse(
 		),
 		newEvent("sum-avg-a-missing", "A",
 			typedField("decimal_metric", typedDecimal("3.25")),
+			typedField("zero_metric", typedSint(0)),
+			typedField("false_metric", typedBool(false)),
+			typedField("timestamp_metric", typedTimestamp(indexTime)),
+			typedField("duration_metric", typedDuration(0)),
+			typedField("empty_list", typedList()),
+			typedField("null_list", typedList(typedNull())),
 			typedField("nested_metric", typedList(typedSint(5), typedList(typedSint(99)), typedObject(typedField("child", typedSint(100))))),
 			typedField("dc_object", typedObject(typedField("child", typedString("secret")))),
 			typedField("dc_empty_object", typedObject()),
@@ -2593,6 +2603,8 @@ func testStatsAggregatesAgainstClickHouse(
 		newEvent("sum-avg-b-bad", "B",
 			typedField("aggregate_value", typedString("bad")),
 			typedField("distinct_value", typedList(typedString("repeat"), typedString("repeat"), typedNull())),
+			typedField("official_group", typedString("B")),
+			typedField("official_mv", typedList(typedSint(5), typedSint(6), typedSint(7), typedSint(8), typedSint(9))),
 			typedField("ignored_metric", typedString("Inf")),
 		),
 		newEvent("sum-avg-b-null", "B",
@@ -2635,6 +2647,150 @@ func testStatsAggregatesAgainstClickHouse(
 		return compileIntegrationSPL(t, source, indexTime.Add(10*time.Second), visibilityCutoff)
 	}
 	base := `index=compiler source="stats-sum-avg"`
+
+	officialMultivalue := compile(base + ` | stats count count(official_mv) AS occurrences BY official_group | sort official_group`)
+	officialRows, err := connection.Query(ctx, officialMultivalue.SQL, officialMultivalue.Args...)
+	if err != nil {
+		t.Fatalf(
+			"execute documented multivalue count differential: %v\nSQL: %s\nargs: %#v",
+			err,
+			officialMultivalue.SQL,
+			officialMultivalue.Args,
+		)
+	}
+	type officialMultivalueRow struct {
+		group             string
+		rows, occurrences uint64
+	}
+	var gotOfficial []officialMultivalueRow
+	for officialRows.Next() {
+		var row officialMultivalueRow
+		if err := officialRows.Scan(&row.group, &row.rows, &row.occurrences); err != nil {
+			_ = officialRows.Close()
+			t.Fatalf("scan documented multivalue count differential: %v", err)
+		}
+		gotOfficial = append(gotOfficial, row)
+	}
+	if err := officialRows.Err(); err != nil {
+		_ = officialRows.Close()
+		t.Fatalf("iterate documented multivalue count differential: %v", err)
+	}
+	if err := officialRows.Close(); err != nil {
+		t.Fatalf("close documented multivalue count differential: %v", err)
+	}
+	if !reflect.DeepEqual(gotOfficial, []officialMultivalueRow{
+		{group: "A", rows: 2, occurrences: 4},
+		{group: "B", rows: 1, occurrences: 5},
+	}) {
+		t.Fatalf("documented multivalue count differential = %#v", gotOfficial)
+	}
+
+	counted := compile(base + ` | stats count count(aggregate_value) AS aggregate_occurrences count(distinct_value) AS distinct_occurrences count(nested_metric) AS nested_occurrences count(dc_object) AS object_occurrences count(dc_empty_object) AS empty_object_occurrences BY aggregate_group | sort aggregate_group`)
+	countedRows, err := connection.Query(ctx, counted.SQL, counted.Args...)
+	if err != nil {
+		t.Fatalf("execute grouped count(field): %v\nSQL: %s\nargs: %#v", err, counted.SQL, counted.Args)
+	}
+	if types := countedRows.ColumnTypes(); len(types) != 7 ||
+		types[0].DatabaseTypeName() != "String" ||
+		types[1].DatabaseTypeName() != "UInt64" ||
+		types[2].DatabaseTypeName() != "UInt64" ||
+		types[3].DatabaseTypeName() != "UInt64" ||
+		types[4].DatabaseTypeName() != "UInt64" ||
+		types[5].DatabaseTypeName() != "UInt64" ||
+		types[6].DatabaseTypeName() != "UInt64" {
+		_ = countedRows.Close()
+		t.Fatalf("grouped count(field) column types = %#v", types)
+	}
+	type countValuesRow struct {
+		group                                                  string
+		rows, aggregate, distinct, nested, object, emptyObject uint64
+	}
+	var gotCounts []countValuesRow
+	for countedRows.Next() {
+		var row countValuesRow
+		if err := countedRows.Scan(
+			&row.group,
+			&row.rows,
+			&row.aggregate,
+			&row.distinct,
+			&row.nested,
+			&row.object,
+			&row.emptyObject,
+		); err != nil {
+			_ = countedRows.Close()
+			t.Fatalf("scan grouped count(field): %v", err)
+		}
+		gotCounts = append(gotCounts, row)
+	}
+	if err := countedRows.Err(); err != nil {
+		_ = countedRows.Close()
+		t.Fatalf("iterate grouped count(field): %v", err)
+	}
+	if err := countedRows.Close(); err != nil {
+		t.Fatalf("close grouped count(field): %v", err)
+	}
+	if !reflect.DeepEqual(gotCounts, []countValuesRow{
+		{group: "A", rows: 4, aggregate: 5, distinct: 8, nested: 3, object: 1, emptyObject: 1},
+		{group: "B", rows: 2, aggregate: 1, distinct: 2},
+	}) {
+		t.Fatalf("grouped count(field) rows = %#v", gotCounts)
+	}
+
+	copiedObject := compile(base + ` | eval copied=dc_object | stats count(copied) AS occurrences`)
+	var copiedObjectOccurrences uint64
+	if err := connection.QueryRow(ctx, copiedObject.SQL, copiedObject.Args...).Scan(&copiedObjectOccurrences); err != nil {
+		t.Fatalf(
+			"execute count(eval-copied flattened object): %v\nSQL: %s\nargs: %#v",
+			err,
+			copiedObject.SQL,
+			copiedObject.Args,
+		)
+	}
+	if copiedObjectOccurrences != 1 {
+		t.Fatalf("count(eval-copied flattened object) = %d, want 1", copiedObjectOccurrences)
+	}
+
+	scalarKinds := compile(base + ` | stats count(ignored_metric) AS scalar_occurrences count(decimal_metric) AS decimal_occurrences count(zero_metric) AS zero_occurrences count(false_metric) AS false_occurrences count(timestamp_metric) AS timestamp_occurrences count(duration_metric) AS duration_occurrences count(empty_list) AS empty_list_occurrences count(null_list) AS null_list_occurrences BY aggregate_group | sort aggregate_group`)
+	scalarRows, err := connection.Query(ctx, scalarKinds.SQL, scalarKinds.Args...)
+	if err != nil {
+		t.Fatalf("execute typed count(field): %v\nSQL: %s\nargs: %#v", err, scalarKinds.SQL, scalarKinds.Args)
+	}
+	type scalarKindsRow struct {
+		group                                                             string
+		scalar, decimal, zero, boolean, timestamp, duration, empty, nulls uint64
+	}
+	var gotScalarKinds []scalarKindsRow
+	for scalarRows.Next() {
+		var row scalarKindsRow
+		if err := scalarRows.Scan(
+			&row.group,
+			&row.scalar,
+			&row.decimal,
+			&row.zero,
+			&row.boolean,
+			&row.timestamp,
+			&row.duration,
+			&row.empty,
+			&row.nulls,
+		); err != nil {
+			_ = scalarRows.Close()
+			t.Fatalf("scan typed count(field): %v", err)
+		}
+		gotScalarKinds = append(gotScalarKinds, row)
+	}
+	if err := scalarRows.Err(); err != nil {
+		_ = scalarRows.Close()
+		t.Fatalf("iterate typed count(field): %v", err)
+	}
+	if err := scalarRows.Close(); err != nil {
+		t.Fatalf("close typed count(field): %v", err)
+	}
+	if !reflect.DeepEqual(gotScalarKinds, []scalarKindsRow{
+		{group: "A", scalar: 4, decimal: 1, zero: 1, boolean: 1, timestamp: 1, duration: 1},
+		{group: "B", scalar: 2},
+	}) {
+		t.Fatalf("typed count(field) rows = %#v", gotScalarKinds)
+	}
 
 	grouped := compile(base + ` | stats count sum(aggregate_value) AS total avg(aggregate_value) AS mean BY aggregate_group | sort aggregate_group`)
 	groupedRows, err := connection.Query(ctx, grouped.SQL, grouped.Args...)
@@ -2765,6 +2921,23 @@ func testStatsAggregatesAgainstClickHouse(
 	if globalDistinctCount != 7 {
 		t.Fatalf("global dc = %d, want 7", globalDistinctCount)
 	}
+	fixedMultivalueCount := compile(base + ` | stats values(distinct_value) AS distinct_values | stats count(distinct_values) AS occurrences`)
+	var fixedOccurrences uint64
+	if err := connection.QueryRow(
+		ctx,
+		fixedMultivalueCount.SQL,
+		fixedMultivalueCount.Args...,
+	).Scan(&fixedOccurrences); err != nil {
+		t.Fatalf(
+			"execute count(fixed multivalue): %v\nSQL: %s\nargs: %#v",
+			err,
+			fixedMultivalueCount.SQL,
+			fixedMultivalueCount.Args,
+		)
+	}
+	if fixedOccurrences != 7 {
+		t.Fatalf("count(values(distinct_value)) = %d, want 7", fixedOccurrences)
+	}
 
 	emptyGlobal := compile(`index=compiler source="sum-avg-absent" | stats sum(aggregate_value) AS total avg(aggregate_value) AS mean`)
 	var emptyTotal, emptyMean *float64
@@ -2781,6 +2954,26 @@ func testStatsAggregatesAgainstClickHouse(
 	if globalDistinctCount != 0 {
 		t.Fatalf("empty global dc = %d, want 0", globalDistinctCount)
 	}
+	emptyCountValues := compile(`index=compiler source="sum-avg-absent" | stats count(aggregate_value) AS occurrences`)
+	var emptyOccurrences uint64
+	if err := connection.QueryRow(
+		ctx,
+		emptyCountValues.SQL,
+		emptyCountValues.Args...,
+	).Scan(&emptyOccurrences); err != nil {
+		t.Fatalf("execute empty count(field): %v\nSQL: %s\nargs: %#v", err, emptyCountValues.SQL, emptyCountValues.Args)
+	}
+	if emptyOccurrences != 0 {
+		t.Fatalf("empty count(field) = %d, want 0", emptyOccurrences)
+	}
+	countOfZero := compile(`index=compiler source="sum-avg-absent" | stats count(aggregate_value) AS occurrences | stats count(occurrences) AS rows`)
+	var countOfZeroResult uint64
+	if err := connection.QueryRow(ctx, countOfZero.SQL, countOfZero.Args...).Scan(&countOfZeroResult); err != nil {
+		t.Fatalf("execute count of zero aggregate: %v\nSQL: %s\nargs: %#v", err, countOfZero.SQL, countOfZero.Args)
+	}
+	if countOfZeroResult != 1 {
+		t.Fatalf("count(count(empty field)) = %d, want 1", countOfZeroResult)
+	}
 	emptyValues := compile(`index=compiler source="sum-avg-absent" | stats values(distinct_value) AS distinct_values`)
 	var emptyValuesResult []string
 	if err := connection.QueryRow(ctx, emptyValues.SQL, emptyValues.Args...).Scan(&emptyValuesResult); err != nil {
@@ -2792,6 +2985,15 @@ func testStatsAggregatesAgainstClickHouse(
 	emptyGrouped := compile(`index=compiler source="sum-avg-absent" | stats sum(aggregate_value) BY aggregate_group`)
 	if err := executeCompiledExpectingNoRows(ctx, connection, emptyGrouped); err != nil {
 		t.Fatalf("execute empty grouped sum: %v\nSQL: %s\nargs: %#v", err, emptyGrouped.SQL, emptyGrouped.Args)
+	}
+	emptyGroupedCount := compile(`index=compiler source="sum-avg-absent" | stats count(aggregate_value) BY aggregate_group`)
+	if err := executeCompiledExpectingNoRows(ctx, connection, emptyGroupedCount); err != nil {
+		t.Fatalf(
+			"execute empty grouped count(field): %v\nSQL: %s\nargs: %#v",
+			err,
+			emptyGroupedCount.SQL,
+			emptyGroupedCount.Args,
+		)
 	}
 
 	projected := compile(base + ` | fields aggregate_group | stats count sum(aggregate_value) AS total avg(aggregate_value) AS mean BY aggregate_group`)
@@ -3011,6 +3213,17 @@ func testStatsAggregatesAgainstClickHouse(
 	actions = explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", sharedValues)
 	if got := strings.Count(actions, "Function: groupUniqArrayArray("); got != 1 {
 		t.Fatalf("repeated values/dc has %d physical aggregate states, want one:\n%s", got, actions)
+	}
+	sharedCountValues := compile(base + ` | stats count(distinct_value) AS first count(distinct_value) AS second`)
+	actions = explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", sharedCountValues)
+	if got := strings.Count(actions, "FUNCTION arrayCount("); got != 1 {
+		t.Fatalf("repeated count(field) has %d physical array cardinality actions, want one:\n%s", got, actions)
+	}
+	if got := strings.Count(actions, "Function: sum(UInt128)"); got != 1 {
+		t.Fatalf("repeated count(field) has %d physical aggregate states, want one:\n%s", got, actions)
+	}
+	if strings.Contains(actions, "ArrayJoin") {
+		t.Fatalf("count(field) physical plan expands event rows:\n%s", actions)
 	}
 
 	for _, test := range []struct {

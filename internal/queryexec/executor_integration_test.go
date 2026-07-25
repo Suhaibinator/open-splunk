@@ -662,6 +662,35 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("stats count field unsigned transport through manager", func(t *testing.T) {
+		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-stats-count-field",
+			`index=main | stats count count(status) AS statuses count(absent) AS absent`,
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("count(field) state = %v, failure=%#v", job.State, job.Failure)
+		}
+		if len(page.Schema.Columns) != 3 {
+			t.Fatalf("count(field) schema = %#v", page.Schema)
+		}
+		for index, name := range []string{"count", "statuses", "absent"} {
+			column := page.Schema.Columns[index]
+			if column.Name != name || column.Kind != searchjobs.ValueKindUnsigned ||
+				column.Nullable || column.Multivalue {
+				t.Fatalf("count(field) column %d = %#v, want non-null unsigned %q", index, column, name)
+			}
+		}
+		if len(page.Rows) != 1 {
+			t.Fatalf("count(field) rows = %d, want 1", len(page.Rows))
+		}
+		for index, want := range []uint64{1, 1, 0} {
+			got, ok := page.Rows[0].Values[index].Unsigned()
+			if !ok || got != want {
+				t.Fatalf("count(field) value %d = %d, %v, want %d", index, got, ok, want)
+			}
+		}
+	})
+
 	t.Run("rename dynamic field through manager", func(t *testing.T) {
 		defaultJob, defaultPage := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
 			"queryexec-rename-default-output", `index=main | rename path AS route`,

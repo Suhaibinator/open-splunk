@@ -2250,6 +2250,123 @@ func TestCompileStatsSumAndAverageUseBoundedNumericArraysWithoutRowExpansion(t *
 	}
 }
 
+func TestCompileStatsCountValuesUsesSharedCardinalityWithoutRowExpansion(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | stats count count(user) AS users count(user) AS users_again count(other) AS others BY service`,
+	)
+	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "users_again", "others"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, required := range []string{
+		`dynamicElement("__os_fields"."user", 'Array(Dynamic)')`,
+		`arrayCount(element -> dynamicType(element) != 'None'`,
+		`AS "__os_measure_count_0"`,
+		`AS "__os_measure_count_1"`,
+		`toUInt64(sum(toUInt128("__os_measure_count_0"))) AS "users"`,
+		`toUInt64(sum(toUInt128("__os_measure_count_0"))) AS "users_again"`,
+		`toUInt64(sum(toUInt128("__os_measure_count_1"))) AS "others"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("count(field) SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
+		t.Fatalf("count(field) expanded event rows and would corrupt sibling count:\n%s", compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, `AS "__os_measure_count_0"`); got != 1 ||
+		strings.Contains(compiled.SQL, `__os_measure_count_2`) {
+		t.Fatalf("count(field) did not reuse one cardinality conversion per input:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsCountValuesSupportsFixedMultivalueAndProjectedInput(t *testing.T) {
+	t.Parallel()
+
+	fixed := compileSPL(
+		t,
+		`index=gradethis | stats values(user) AS users | stats count(users) AS total`,
+	)
+	if !strings.Contains(fixed.SQL, `toUInt64(length("users")) AS "__os_measure_count_0"`) ||
+		!strings.Contains(fixed.SQL, `toUInt64(sum(toUInt128("__os_measure_count_0"))) AS "total"`) {
+		t.Fatalf("count(field) did not count fixed multivalue members:\n%s", fixed.SQL)
+	}
+
+	projected := compileSPL(
+		t,
+		`index=gradethis | fields service | stats count(user) AS users BY service`,
+	)
+	if !strings.Contains(projected.SQL, `toUInt64(0) AS "__os_measure_count_0"`) ||
+		strings.Contains(projected.SQL, `"__os_fields"."user"`) {
+		t.Fatalf("count(field) resurrected a projected-away input:\n%s", projected.SQL)
+	}
+
+	downstream := compileSPL(
+		t,
+		`index=gradethis | stats count(user) AS users | search users=18446744073709551615`,
+	)
+	if !strings.Contains(downstream.SQL, `toUInt64(sum(toUInt128("__os_measure_count_0"))) AS "users"`) ||
+		!strings.Contains(downstream.SQL, `toInt256("users")`) {
+		t.Fatalf("count(field) did not publish a UInt64 measure downstream:\n%s", downstream.SQL)
+	}
+}
+
+func TestCompileStatsCountValuesCountsFlattenedObjectAsOneOccurrence(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | stats count(object_parent) AS objects`)
+	for _, required := range []string{
+		`has("__os_field_names", ?)`,
+		`arrayExists(name -> startsWith(name, ?), "__os_field_names")`,
+		`AS "__os_measure_count_0"`,
+		`toUInt64(sum(toUInt128("__os_measure_count_0"))) AS "objects"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("count(object parent) SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, UnsupportedStatsMeasureValueMarker) {
+		t.Fatalf("count(field) rejected a present container it can count without interpretation:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+
+	for _, source := range []string{
+		`index=gradethis | eval copied=object_parent | stats count(copied) AS objects`,
+		`index=gradethis | rename object_parent AS copied | stats count(copied) AS objects`,
+	} {
+		propagated := compileSPL(t, source)
+		if !strings.Contains(propagated.SQL, `arrayExists(name -> startsWith(name, ?), "__os_field_names")`) ||
+			!strings.Contains(propagated.SQL, `dynamicType("copied") != 'None'`) ||
+			!strings.Contains(propagated.SQL, `toUInt64(sum(toUInt128("__os_measure_count_0"))) AS "objects"`) ||
+			strings.Contains(propagated.SQL, UnsupportedStatsMeasureValueMarker) {
+			t.Fatalf("%q lost flattened-object occurrence provenance:\n%s", source, propagated.SQL)
+		}
+	}
+}
+
+func TestCompileStatsCountValuesCountsStaticNullAndExactTableBoundaries(t *testing.T) {
+	t.Parallel()
+
+	nullValue := compileSPL(t, `index=gradethis | eval n=null | stats count(n) AS occurrences`)
+	if !strings.Contains(nullValue.SQL, `toUInt64((1) AND isNotNull("n")) AS "__os_measure_count_0"`) ||
+		!strings.Contains(nullValue.SQL, `toUInt64(sum(toUInt128("__os_measure_count_0"))) AS "occurrences"`) {
+		t.Fatalf("count(null) did not retain a zero-valued UInt64 aggregate:\n%s", nullValue.SQL)
+	}
+
+	tabled := compileSPL(
+		t,
+		`index=gradethis | stats count AS existing | table missing | stats count(missing) AS occurrences`,
+	)
+	if !strings.Contains(tabled.SQL, `toUInt64((0) AND isNotNull("missing")) AS "__os_measure_count_0"`) ||
+		strings.Contains(tabled.SQL, `"__os_fields"."missing"`) {
+		t.Fatalf("count(table-projected missing field) resurrected storage:\n%s", tabled.SQL)
+	}
+}
+
 func TestCompileStatsDistinctCountUsesExactStringArraysWithoutRowExpansion(t *testing.T) {
 	t.Parallel()
 
@@ -2552,6 +2669,11 @@ func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T)
 			Input:    fields,
 			Output:   "values_fields",
 		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionCountValues,
+			Input:    fields,
+			Output:   "count_fields",
+		}}},
 		{GroupBy: []plan.FieldRef{fields}, Measures: []plan.AggregateMeasure{{
 			Function: plan.AggregateFunctionCountRows,
 			Output:   "count",
@@ -2561,6 +2683,32 @@ func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T)
 			Input:      field,
 			Percentile: 0.95,
 			Output:     "count",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionCountRows,
+			Input: plan.FieldRef{
+				Range: spl.Range{Start: spl.Position{Offset: 1}},
+			},
+			Output: "count",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionCountValues,
+			Output:   "count_user",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function:   plan.AggregateFunctionCountValues,
+			Input:      field,
+			Percentile: 0.95,
+			Output:     "count_user",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionCountValues,
+			Input: plan.FieldRef{
+				Name:      "user",
+				Canonical: true,
+				Path:      []string{"other"},
+			},
+			Output: "count_user",
 		}}},
 		{Measures: []plan.AggregateMeasure{{
 			Function:   plan.AggregateFunctionDistinctCount,
