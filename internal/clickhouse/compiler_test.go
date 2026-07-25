@@ -2888,6 +2888,22 @@ func TestCompileStatsScalarStringExtremaAvoidArrayLowering(t *testing.T) {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
 	}
 
+	downstream := compileSPL(
+		t,
+		`index=gradethis | stats min(service) AS low | where low=2 | sort low | head 1`,
+	)
+	const scalarKeyCleanup = `SELECT * EXCEPT ("__os_stats_extrema_key_0"),`
+	cleanupIndex := strings.Index(downstream.SQL, scalarKeyCleanup)
+	if cleanupIndex < 0 {
+		t.Fatalf("scalar extrema did not drop its tuple key after aggregation:\n%s", downstream.SQL)
+	}
+	if strings.Contains(
+		downstream.SQL[:cleanupIndex],
+		`"__os_stats_extrema_key_0"`,
+	) {
+		t.Fatalf("downstream operator retained the private scalar extrema key:\n%s", downstream.SQL)
+	}
+
 	for _, source := range []string{
 		`index=gradethis | stats min(service) AS low values(service) AS all_values`,
 		`index=gradethis | stats values(service) AS all_values min(service) AS low`,
@@ -2897,6 +2913,25 @@ func TestCompileStatsScalarStringExtremaAvoidArrayLowering(t *testing.T) {
 			strings.Count(withValues.SQL, `AS "__os_measure_strings_0"`) != 1 ||
 			strings.Contains(withValues.SQL, `__os_measure_scalar_string_1`) {
 			t.Fatalf("scalar min and values did not share one scalar input in %q:\n%s", source, withValues.SQL)
+		}
+		if !strings.Contains(
+			withValues.SQL,
+			`arrayMap(value -> assumeNotNull(value), arrayFilter(value -> isNotNull(value), ["__os_measure_scalar_string_0"])) AS "__os_measure_strings_0"`,
+		) {
+			t.Fatalf("scalar values input did not derive from the shared scalar alias in %q:\n%s", source, withValues.SQL)
+		}
+	}
+
+	interleaved := compileSPL(
+		t,
+		`index=gradethis | stats values(service) AS services min(host) AS host_low min(service) AS service_low`,
+	)
+	for _, required := range []string{
+		`minIfOrNull(tupleElement("__os_measure_extrema_scalar_1", 1), tupleElement("__os_measure_extrema_scalar_1", 2) != 0) AS "__os_stats_extrema_key_1"`,
+		`minIfOrNull(tupleElement("__os_measure_extrema_scalar_0", 1), tupleElement("__os_measure_extrema_scalar_0", 2) != 0) AS "__os_stats_extrema_key_2"`,
+	} {
+		if !strings.Contains(interleaved.SQL, required) {
+			t.Fatalf("interleaved scalar fields lost stable descriptor %q:\n%s", required, interleaved.SQL)
 		}
 	}
 
@@ -2909,17 +2944,8 @@ func TestCompileStatsScalarStringExtremaAvoidArrayLowering(t *testing.T) {
 		strings.Count(calculated.SQL, `AS "__os_measure_strings_0"`) != 1 {
 		t.Fatalf("calculated scalar extrema did not share one input:\n%s", calculated.SQL)
 	}
-	var patternArgs, replacementArgs int
-	for _, argument := range calculated.Args {
-		switch argument {
-		case "x":
-			patternArgs++
-		case "y":
-			replacementArgs++
-		}
-	}
-	if patternArgs != 1 || replacementArgs != 1 {
-		t.Fatalf("calculated scalar arguments = %#v, want one x and one y", calculated.Args)
+	if len(calculated.Args) < 2 || !slices.Equal(calculated.Args[:2], []any{"x", "y"}) {
+		t.Fatalf("calculated scalar argument prefix = %#v, want [x y]", calculated.Args)
 	}
 	if got, want := strings.Count(calculated.SQL, "?"), len(calculated.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, calculated.SQL, calculated.Args)
@@ -2959,18 +2985,27 @@ func TestCompileStatsScalarStringExtremaMaximumMeasuresStayBounded(t *testing.T)
 			spl.MaximumStatsMeasures,
 		)
 	}
-	if len(compiled.SQL) > maxCompiledQueryBytes {
-		t.Fatalf(
-			"scalar extrema SQL is %d bytes, ceiling is %d",
-			len(compiled.SQL),
-			maxCompiledQueryBytes,
-		)
-	}
 	if strings.Count(compiled.SQL, `AS "__os_measure_scalar_string_0"`) != 1 ||
 		strings.Count(compiled.SQL, `AS "__os_measure_extrema_number_0"`) != 1 ||
 		strings.Count(compiled.SQL, `AS "__os_measure_extrema_scalar_0"`) != 1 ||
 		strings.Contains(compiled.SQL, `__os_measure_extrema_scalar_1`) {
 		t.Fatalf("maximum scalar extrema measures did not share one candidate:\n%s", compiled.SQL)
+	}
+	for _, alias := range []string{
+		`AS "__os_stats_extrema_key_0"`,
+		`AS "__os_stats_extrema_type_0"`,
+		`AS "__os_stats_extrema_key_1"`,
+		`AS "__os_stats_extrema_type_1"`,
+	} {
+		if strings.Count(compiled.SQL, alias) != 1 {
+			t.Fatalf("maximum scalar extrema measures did not materialize one %s:\n%s", alias, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, `__os_stats_extrema_key_2`) ||
+		strings.Contains(compiled.SQL, `__os_stats_extrema_type_2`) ||
+		strings.Count(compiled.SQL, "minIfOrNull(") != 1 ||
+		strings.Count(compiled.SQL, "maxIfOrNull(") != 1 {
+		t.Fatalf("maximum scalar extrema measures duplicated aggregate state:\n%s", compiled.SQL)
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d", got, want)

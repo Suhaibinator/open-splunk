@@ -127,7 +127,7 @@ func TestCompiledRelationalDepthPinsRepresentativeOperatorCosts(t *testing.T) {
 		{name: "dynamic aggregate", source: `| stats count BY latency`, depth: 6},
 		{name: "count values aggregate", source: `| stats count(user) AS users`, depth: 4},
 		{name: "fixed extrema aggregate", source: `| stats min(severity) AS low`, depth: 3},
-		{name: "scalar String extrema aggregate", source: `| stats min(service) AS low max(service) AS high`, depth: 4},
+		{name: "scalar String extrema aggregate", source: `| stats min(service) AS low max(service) AS high`, depth: 5},
 		{name: "dynamic extrema aggregate", source: `| stats min(user) AS low max(user) AS high`, depth: 4},
 		{name: "values aggregate", source: `| stats values(user) AS users`, depth: 6},
 		{
@@ -193,7 +193,7 @@ func TestStatsScalarStringExtremaRelationalDepthBoundaryIsSourceLocated(t *testi
 
 	acceptedSource := relationalDepthEvalPipeline(
 		t,
-		28,
+		27,
 		64,
 		"stats min(service) AS low max(service) AS high",
 	)
@@ -211,7 +211,7 @@ func TestStatsScalarStringExtremaRelationalDepthBoundaryIsSourceLocated(t *testi
 
 	rejectedSource := relationalDepthEvalPipeline(
 		t,
-		29,
+		28,
 		64,
 		"stats min(service) AS low max(service) AS high",
 	)

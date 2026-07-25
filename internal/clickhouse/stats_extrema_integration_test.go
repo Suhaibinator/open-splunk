@@ -38,6 +38,7 @@ func testStatsExtremaAgainstClickHouse(
 		event.Event.Service = stringPointer(service)
 		return event
 	}
+	overlongValue := strings.Repeat("9", MaximumExactNumericBinTextBytes+1)
 	events := []*ingest.StoredEvent{
 		withService(newEvent("extrema-numeric-a", "numeric", typedField("extrema_value", typedString("10"))), "10"),
 		withService(newEvent("extrema-numeric-b", "numeric", typedField("extrema_value", typedList(
@@ -67,6 +68,11 @@ func testStatsExtremaAgainstClickHouse(
 		))), "-0"),
 		withService(newEvent("extrema-zero-plus", "zero"), "+0"),
 		withService(newEvent("extrema-zero-decimal", "zero"), "0.0"),
+		withService(newEvent(
+			"extrema-overlong",
+			"overlong",
+			typedField("extrema_value", typedString(overlongValue)),
+		), overlongValue),
 		newEvent("extrema-empty-missing", "empty"),
 		newEvent("extrema-empty-null", "empty", typedField("extrema_value", typedNull())),
 		newEvent("extrema-empty-list", "empty", typedField("extrema_value", typedList(typedNull()))),
@@ -167,6 +173,7 @@ func testStatsExtremaAgainstClickHouse(
 		{group: "lexical", low: "", high: "é"},
 		{group: "mixed", low: float64(5), high: "z"},
 		{group: "numeric", low: float64(1), high: float64(10)},
+		{group: "overlong", low: overlongValue, high: overlongValue},
 		{group: "poison", low: nil, high: nil},
 		{group: "symbols", low: float64(2), high: "~"},
 		{group: "zero", low: float64(0), high: float64(0)},
@@ -175,51 +182,79 @@ func testStatsExtremaAgainstClickHouse(
 		t.Fatalf("grouped min/max = %#v, want %#v", got, want)
 	}
 
-	for _, test := range []struct {
-		group string
-		low   any
-		high  any
-	}{
-		{group: "numeric", low: float64(2), high: float64(10)},
+	scalarGrouped := compile(
+		base + ` | stats min(service) AS low max(service) AS high BY extrema_group | sort extrema_group`,
+	)
+	scalarRows, err := connection.Query(ctx, scalarGrouped.SQL, scalarGrouped.Args...)
+	if err != nil {
+		t.Fatalf(
+			"execute grouped scalar String min/max: %v\nSQL: %s\nargs: %#v",
+			err,
+			scalarGrouped.SQL,
+			scalarGrouped.Args,
+		)
+	}
+	var scalarGot []extremaRow
+	for scalarRows.Next() {
+		var group string
+		var low, high chcol.Dynamic
+		if err := scalarRows.Scan(&group, &low, &high); err != nil {
+			_ = scalarRows.Close()
+			t.Fatalf("scan grouped scalar String min/max: %v", err)
+		}
+		scalarGot = append(scalarGot, extremaRow{group: group, low: low.Any(), high: high.Any()})
+	}
+	if err := scalarRows.Err(); err != nil {
+		_ = scalarRows.Close()
+		t.Fatalf("iterate grouped scalar String min/max: %v", err)
+	}
+	if err := scalarRows.Close(); err != nil {
+		t.Fatalf("close grouped scalar String min/max rows: %v", err)
+	}
+	scalarWant := []extremaRow{
+		{group: "complete", low: float64(7), high: float64(7)},
+		{group: "empty", low: nil, high: nil},
+		{group: "fallback", low: float64(3), high: "NaN"},
+		{group: "ignored", low: float64(-1000), high: float64(-1000)},
 		{group: "lexical", low: "", high: "é"},
 		{group: "mixed", low: float64(5), high: "z"},
+		{group: "numeric", low: float64(2), high: float64(10)},
+		{group: "overlong", low: overlongValue, high: overlongValue},
+		{group: "poison", low: nil, high: nil},
 		{group: "symbols", low: float64(2), high: "~"},
-		{group: "fallback", low: float64(3), high: "NaN"},
 		{group: "zero", low: float64(0), high: float64(0)},
-		{group: "empty", low: nil, high: nil},
-	} {
-		scalar := compile(
-			base + ` extrema_group="` + test.group +
-				`" | stats min(service) AS low max(service) AS high`,
-		)
-		var low, high chcol.Dynamic
-		if err := connection.QueryRow(ctx, scalar.SQL, scalar.Args...).Scan(&low, &high); err != nil {
-			t.Fatalf(
-				"execute %s scalar String min/max: %v\nSQL: %s",
-				test.group,
-				err,
-				scalar.SQL,
-			)
-		}
-		if !reflect.DeepEqual(low.Any(), test.low) || !reflect.DeepEqual(high.Any(), test.high) {
-			t.Fatalf(
-				"%s scalar String min/max = %#v/%#v, want %#v/%#v",
-				test.group,
-				low.Any(),
-				high.Any(),
-				test.low,
-				test.high,
-			)
-		}
+	}
+	if !reflect.DeepEqual(scalarGot, scalarWant) {
+		t.Fatalf("grouped scalar String min/max = %#v, want %#v", scalarGot, scalarWant)
 	}
 	scalar := compile(
 		base + ` extrema_group=numeric | stats min(service) AS low max(service) AS high min(service) AS low_again`,
 	)
+	var scalarLow, scalarHigh, scalarLowAgain chcol.Dynamic
+	if err := connection.QueryRow(ctx, scalar.SQL, scalar.Args...).Scan(
+		&scalarLow,
+		&scalarHigh,
+		&scalarLowAgain,
+	); err != nil {
+		t.Fatalf("execute repeated scalar min/max: %v\nSQL: %s", err, scalar.SQL)
+	}
+	if scalarLow.Any() != float64(2) ||
+		scalarHigh.Any() != float64(10) ||
+		scalarLowAgain.Any() != float64(2) {
+		t.Fatalf(
+			"repeated scalar min/max = %#v/%#v/%#v, want 2/10/2",
+			scalarLow.Any(),
+			scalarHigh.Any(),
+			scalarLowAgain.Any(),
+		)
+	}
 	scalarActions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", scalar)
-	if got := strings.Count(scalarActions, "Function: minOrNullIf("); got != 1 {
+	const scalarMinSignature = "Function: minOrNullIf(Tuple(UInt8, Float64, String), UInt8)"
+	if got := strings.Count(scalarActions, scalarMinSignature); got != 1 {
 		t.Fatalf("repeated scalar min has %d physical aggregate states, want one:\n%s", got, scalarActions)
 	}
-	if got := strings.Count(scalarActions, "Function: maxOrNullIf("); got != 1 {
+	const scalarMaxSignature = "Function: maxOrNullIf(Tuple(UInt8, Float64, String), UInt8)"
+	if got := strings.Count(scalarActions, scalarMaxSignature); got != 1 {
 		t.Fatalf("scalar min/max has %d physical max states, want one:\n%s", got, scalarActions)
 	}
 	if strings.Contains(scalarActions, "Function: argMinArray(") ||
@@ -326,8 +361,8 @@ func testStatsExtremaAgainstClickHouse(
 	if err := connection.QueryRow(ctx, scalarReaggregated.SQL, scalarReaggregated.Args...).Scan(&scalarLargest); err != nil {
 		t.Fatalf("execute downstream scalar min/max reaggregation: %v\nSQL: %s", err, scalarReaggregated.SQL)
 	}
-	if scalarLargest.Any() != "" {
-		t.Fatalf("reaggregated scalar max = %#v, want empty lexical String", scalarLargest.Any())
+	if scalarLargest.Any() != overlongValue {
+		t.Fatalf("reaggregated scalar max = %#v, want overlong lexical String", scalarLargest.Any())
 	}
 
 	for name, source := range map[string]string{
@@ -399,8 +434,8 @@ func testStatsExtremaAgainstClickHouse(
 	if err := connection.QueryRow(ctx, reaggregated.SQL, reaggregated.Args...).Scan(&largest); err != nil {
 		t.Fatalf("execute downstream min/max reaggregation: %v\nSQL: %s", err, reaggregated.SQL)
 	}
-	if largest.Any() != "" {
-		t.Fatalf("reaggregated max = %#v, want empty lexical String", largest.Any())
+	if largest.Any() != overlongValue {
+		t.Fatalf("reaggregated max = %#v, want overlong lexical String", largest.Any())
 	}
 
 	nativeTime := compile(base + ` | stats min(_time) AS earliest max(_time) AS latest`)
