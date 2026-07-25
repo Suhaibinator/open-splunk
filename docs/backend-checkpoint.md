@@ -1,389 +1,294 @@
 # Backend checkpoint handoff
 
-This is the canonical restart point for backend work. The checkpoint is the
-`main` commit containing this document; after a fresh clone or pull, confirm it
-with:
+This is the canonical restart document for backend work. Read it together with:
 
-```sh
-git status --short --branch
-git log -1 --oneline
-```
+- `docs/product-architecture-plan.md`
+- `docs/spl-compatibility-v0.1.md`
+- the latest `main` commit
 
-## Pause checkpoint: bounded relational depth and analyzer-safe predicates
+## Pause checkpoint: bounded explicit-path `spath`
 
 Date: 2026-07-25
 
 Branch: `main`
 
 Starting commit for this slice:
-`05e86f8c37c2fb187987970ad61b9b0a75da5564`
-(`harden exact Decimal poison isolation`)
+`527b4c012662586b98c8ed8cb550ffca323877db`
+(`bound generated relational depth`)
 
-Work is intentionally paused after a green, committed, and pushed checkpoint.
-The overall backend goal is still active; this is a safe stopping point, not a
-claim that the product architecture plan is complete.
+Feature commit for this slice:
+`d1096f51bf3bd6e5a3845b14657cd5774cb5f841`
+(`implement bounded explicit-path spath`)
+
+The overall backend objective remains active. Work is intentionally paused at a
+green, committed, and pushed checkpoint because the user asked for a safe
+break, not because the architecture plan is complete.
 
 ## What this slice completed
 
-The compiler now admits generated relational SQL by its structure as well as
-its byte size:
+Open Splunk now implements a bounded first `spath` slice from SPL source
+through result transport and completed-job analysis.
 
-- The longest generated `SELECT`/`UNION` dependency path is tracked while SQL
-  is lowered and capped at 96 levels. The model uses maximum dependency height,
-  not a textual `SELECT` count or the sum of independent CTE/`UNION` siblings.
-- Every ordinary and terminal compiler path reports its structural depth,
-  including dynamic numeric `bin`, `rex`, fixed and dynamic `dedup`, aggregate
-  validation/preaggregation, `timechart`, `chart`, field catalog, field
-  summary, and timeline lowering.
-- The exact 96-level boundary compiles. The next level fails before execution
-  with source-located `SPL_QUERY_TOO_COMPLEX`; terminal and private-analysis
-  paths have their own 96/97 boundary coverage.
-- Analysis finalizers fail closed when they omit depth evidence. Directly
-  forged `eval` and `rename` plans are also revalidated against the existing
-  64-assignment contract inside the compiler.
-- The executor pins ClickHouse `max_subquery_depth` independently to 100. The
-  server and compiler metrics intentionally are not treated as interchangeable.
-  ClickHouse exception 162 (`TOO_DEEP_SUBQUERIES`) is redacted and classified
-  as a stable execution-limit error.
-- A pinned `clickhouse/clickhouse-server:26.3.17.4` integration test executes
-  the accepted 96-level query under a 30-second execution cap, 256 MiB memory
-  cap, one thread, and a 1 MiB query-size cap.
+### SPL, AST, and plan
 
-The full opt-in database gate exposed and fixed a separate ClickHouse analyzer
-failure in a supported pipeline:
+- `spath` accepts exactly one explicit, constant JSON path:
 
-- `bin <Dynamic> ... | where <bucket> ...`, when wrapped by timeline or another
-  analysis query, let ClickHouse push the predicate back through the large
-  exact-bin projection. The pinned server expanded that graph to roughly
-  6.7 GiB even though the query read only a tiny fixture.
-- The filter now materializes the already calculated row relation and binds
-  only predicate-referenced calculated values through singleton `ARRAY JOIN`
-  aliases. The predicate depends on those aliases, which prevents pushdown
-  into the producer. `SELECT * EXCEPT (...) REPLACE (...)` republishes the
-  identical bound values in their original positions, so the fence is durable
-  across later filters.
-- The fence remains one row per input row, performs one scoped storage scan,
-  preserves value/presence/semantic-type metadata, adds no relational level
-  beyond the filter's existing `SELECT`, and carries its required
-  `enable_materialized_cte` setting in the query text for direct compiler
-  clients.
-- Dependency tracking follows calculated values through projection, rename,
-  `tonumber`, `replace`, fixed numeric re-binning, and `rex` fallback paths.
-  Unrelated predicates do not materialize the relation, multiple affected
-  fields share one fence, and a second predicate over a durably rebound field
-  does not create another temporary table.
-- The formerly failing field-summary/timeline integration case now completes
-  on the pinned server in about three seconds and returns the expected 48
-  buckets with two matching events.
-- Two stale store-integration expectations were corrected to match the already
-  documented exact-bin behavior: a wide negative numeric String produces
-  `Int256`, and a valid stored Decimal buckets exactly instead of being
-  classified as unsupported.
+  ```spl
+  | spath path=request.context.trace_id
+  | spath input=payload output=status path=response.status
+  | spath output=first_sku items{0}.sku
+  ```
 
-The preceding exact-Decimal `bin`/`bucket` slice remains implemented and its
-raw-storage trust boundary is covered adversarially.
+- `input` defaults to `_raw`; `output` defaults to the decoded path spelling.
+  Options are case-insensitive, may appear in any order, and may be quoted.
+- Auto-extraction, XML, wildcards, root arrays, escaped path separators,
+  repeated selectors, dynamic paths, container output, multivalue output, and
+  `spath()` in `eval` remain explicitly unsupported.
+- Parser failures are source-located. Path diagnostics also report the byte
+  offset in the decoded path, and unknown `name=value` options are rejected at
+  the option rather than misread as an unlabelled path.
+- The planner emits a row-preserving `ExtractJSON` operator, revalidates path
+  metadata, protects the open event schema's reserved `fields` payload, and
+  preserves the authorization boundary when the output is named `index`.
+- An output named `_time` invalidates canonical-time provenance, so `timechart`
+  and completed-job timelines fail closed.
+- `rex` captures and `spath` destinations share the existing ceiling of 64
+  calculated extraction outputs. The compiler independently rechecks that
+  ceiling against hand-built plans.
 
-This hardening checkpoint adds direct ClickHouse fixtures that deliberately
-bypass `Store` normalization:
+### Path and runtime bounds
 
-- Current-metadata Decimal envelopes with a missing type key, missing value
-  key, extra key, wrong tag, wrong semantic type, noncanonical numeric text,
-  invalid grammar, an oversized payload, or invalid UTF-8 all fail through the
-  single sanitized unsupported-value marker.
-- The malformed payload is not exposed in the returned database exception.
-- Poison Decimal rows that differ from a valid row only by tenant, authorized
-  index, earliest/latest event time, index-time cutoff, or immutable
-  visibility sequence cannot affect the authorized query.
-- The poison rows deliberately reuse the valid event ID. A forced
-  `OPTIMIZE TABLE ... FINAL` puts valid and poison fixtures in the same sorted
-  part/granule before the query, preventing part pruning from making the test
-  pass accidentally.
-- The authorized result still contains exactly the valid row and publishes
-  the expected semantic Decimal as physical `Int256`.
+- A path has one through 17 object steps, a 4 KiB decoded-size ceiling,
+  256-byte keys, at most four fixed zero-based array selectors, and a maximum
+  index of `2^31-2`.
+- The index ceiling is deliberately below signed `Int32` maximum because the
+  pinned ClickHouse server wraps larger integer path arguments.
+- One input String is limited to 1 MiB per row.
+- Each stage costs three JSON evaluation work units—terminal type inspection,
+  raw extraction, and typed-leaf decoding—plus one unit per selector prefix.
+  A stage therefore costs at most seven units.
+- All `spath` stages in a query share a cumulative ceiling of 32 JSON
+  evaluation work units per row. Both planner and compiler enforce it.
+- The default output is independently subject to ordinary Open Splunk field
+  name limits. For example, a 256-byte key plus `{0}` needs a shorter explicit
+  output because the default spelling exceeds the 256-byte field-segment
+  ceiling.
 
-The adversarial matrix required no production-code correction. The existing
-compiler already classifies the strict two-key `decimal/v1` envelope only
-after the storage scan's tenant/index/time/index-time/visibility fences, and
-the executor already removes ClickHouse SQL and payload details when mapping
-the fixed failure marker.
+### ClickHouse semantics and safety
 
-The exact-Decimal implementation from the preceding checkpoint provides the
-following behavior:
+- Every path key and translated one-based array index is a bound query
+  argument; user path text is never interpolated into SQL.
+- Fixed array selectors first require `JSONType(prefix) = 'Array'`. This is
+  necessary because ClickHouse integer path arguments also index object
+  members positionally.
+- Terminal `JSONType` is checked on the original document before the selected
+  raw value is decoded. This prevents ClickHouse from normalizing
+  `9007199254740993.0`, `1e0`, or `1.5e1` into an apparently integral value.
+- Supported leaves retain typed String, Bool, explicit null, Int64, or UInt64
+  values. Fraction/exponent numbers, objects, and arrays fail through one
+  stable unsupported-value marker.
+- Missing members, malformed JSON, wrong containers, out-of-range indexes, and
+  missing/null/non-string/ineligible inputs are row-local misses.
+- A miss preserves an existing destination's exact value, sparse presence,
+  and stored semantic type. Input equal to output reads the pre-command value.
+- `_raw` eligibility uses the stored `raw_encoding`, not only byte validity.
+  Valid UTF-8 bytes marked BINARY remain ineligible through direct `eval`
+  copies, rename/projection, and miss-preserving `rex`/`spath` overlays.
+- Binary-vs-String semantic type also survives those overlays into field
+  catalog and summary analysis. An inconsistent stored row marked UTF8 but
+  containing invalid bytes fails closed as Bytes.
+- The immutable `fields` convenience object is removed after a potentially
+  shadowing extraction because it cannot represent sparse calculated
+  overwrites.
+- The executor maps the input-limit and unsupported-value markers to stable,
+  redacted public errors without payload or generated-SQL leakage.
+- Calculated outputs consumed by predicates reuse the existing
+  consumer-local materialized-CTE fence. Statically absent or fixed non-string
+  sources do not pay for that fence.
 
-- Runtime numeric String and stored `decimal/v1` inputs use exact lexical
-  decimal arithmetic for `floor(value / span) * span`.
-- Exact input is bounded at 4,096 bytes and the public exact result is bounded
-  to signed `Int256`. The parser compares bounds lexically before any
-  potentially wrapping conversion.
-- Negative fractions use mathematical floor, signed `Int256` minimum is
-  handled through unsigned magnitude and two's-complement conversion, and zero
-  is canonicalized.
-- Exact integral String results retain `Int64` or `UInt64` when possible.
-  Wider integral results become physical `Int256` with semantic type Decimal.
-- Fractional/exponent String results inside `[-2^53, 2^53]` are published as an
-  exactly representable `Float64`; wider exact boundaries use the
-  Decimal/`Int256` representation.
-- Valid stored Decimal envelopes always publish semantic Decimal backed by
-  `Int256`. A calculated Decimal can be binned again.
-- An ordinary String that is nonnumeric, oversized, invalid UTF-8,
-  non-finite-looking, exponent-overflowing, or outside the exact result bound
-  passes through unchanged. A value declared Decimal that is malformed,
-  oversized, or out of range fails with the sanitized unsupported-bin marker.
-- Missing, explicit-null, stale-metadata, `AS`, in-place overwrite, and
-  prior-destination preservation behavior remains unchanged.
-- Mathematically integral preserved Decimal envelopes—including exponent and
-  fractional spellings—and newly produced `Int256` Decimals compare exactly
-  with one another in `search`/`where`, remain distinct in `sort`, and converge
-  correctly in `stats count BY`.
-- Field catalogs and exact field summaries recognize calculated
-  semantic-Decimal/physical-`Int256` values and encode them canonically.
+### Value-realization boundary
 
-The ClickHouse lowering was changed to keep the exact path usable under hostile
-query shapes:
+ClickHouse may prune a `spath` computation whose destination is provably
+unobservable after an exact projection or unconditional overwrite. Therefore
+the input-size and unsupported-value errors are required for a live
+destination: one that is returned, consumed downstream, analyzed, or needed as
+the prior-value fallback of a later extraction. A dead destination may be
+skipped without an error. This is documented and pinned; it is not compiler
+level dead-code elimination.
 
-- Lexical decomposition now uses scalar-local singleton `arrayMap` bindings
-  and only two relational projection layers. The earlier nested projection
-  design caused ClickHouse's analyzer to duplicate a previous bin expression,
-  consuming more than 1.2 GiB and several minutes for one row.
-- A calculated Dynamic value consumed by a later bin is bound once as a
-  singleton `arrayJoin([tuple(value, presence, semantic_type)])`. This is a
-  one-to-one streaming analyzer fence; it prevents recursive alias expansion
-  without an aggregate, join, window, or source rescan.
-- The exact re-bin and recoverable-String retry tests run with a 256 MiB
-  ClickHouse query cap, a 15-second server execution cap, one thread, and a
-  20-second Go context. Both pass.
-- Field-summary lowering materializes its narrow typed projection and appends
-  `SETTINGS enable_materialized_cte = 1`, preventing analyzer duplication of a
-  complex calculated field pipeline.
+### Analysis and UI integration
 
-The result transport now handles real wide Dynamic values:
+- `spath` outputs participate in `search`, `where`, `sort`, `stats`, `dedup`,
+  `bin`, projections, field catalog, exact field summary, and timeline under
+  their existing typed-value contracts.
+- The pinned integration suite executes field catalog checks for Bool,
+  explicit-null presence, and preserved binary `_raw`; it also executes a
+  field summary and 24-bucket timeline.
+- The query executor and search manager transport a concrete typed value from
+  a Dynamic ClickHouse column as a mixed/nullable result column.
+- The editor command catalog now advertises the implemented `spath`, `rex`,
+  `bin`/`bucket`, and `chart` syntax instead of listing those commands as
+  unsupported.
 
-- `clickhouse-go` can advertise `interface{}` as the scan type for a Dynamic
-  column but cannot scan a concrete `Int256` alternative into that destination.
-- The executor now supplies `chcol.Dynamic` for Dynamic/Variant database types,
-  preserving the concrete alternative for the existing typed conversion path.
-- Unit and pinned ClickHouse integration coverage transports
-  `Dynamic(Int256)` through `Executor.Execute` and verifies the exact Decimal
-  result.
+## Adversarial review record
 
-## Current backend state
+Three independent reviewers attacked the complete diff from semantic,
+ClickHouse/performance, and maintainability/test angles. Their concrete
+findings were fixed before this checkpoint:
 
-The backend already includes the following larger slices from earlier
-checkpoints:
+1. Large ClickHouse path indexes wrap instead of reliably missing.
+2. Integer path arguments index object members positionally.
+3. `JSONExtractRaw` normalizes some Double spellings before lexical
+   classification, allowing silent rounding.
+4. Valid UTF-8 bytes marked BINARY were initially accepted because
+   `raw_encoding` was not carried into the compiler.
+5. Binary provenance and semantic Bytes type could be lost through direct
+   copies and miss-preserving calculated overlays.
+6. Input-limit and unsupported-value guards are optimizer-prunable when the
+   destination is dead; the compatibility contract now states that boundary.
+7. Per-stage selector bounds were insufficient without a cumulative query
+   work budget and compiler-side forged-plan defense.
+8. Unknown options could be misparsed as an unlabelled path.
+9. The default output can exceed ordinary field limits even when the path is
+   valid.
+10. Existing integration coverage did not prove exact numeric boundaries,
+    sequential stages, explicit-null presence, binary provenance, or the real
+    byte ceiling.
 
-- durable collector queue/checkpoint and ingestion acknowledgment coupling,
-  scoped ingestion tokens, canonical typed events, and ClickHouse storage;
-- bounded search jobs with cancellation, history, progress, result leases,
-  typed paging, timelines, field catalogs, exact field summaries, and bounded
-  CSV/JSONL exports;
-- binary protobuf WebSocket progress and previews with replay,
-  resynchronization, bounded queues, lifecycle handling, and graceful
-  shutdown;
-- the documented SPL v0.1 subset: base search, comparisons and Boolean
-  expressions, `fields`, `table`, `rename`, `sort`, `head`, `tail`, `dedup`,
-  the documented `eval`/`where` subset, `stats` (`count`, `sum`, `avg`, `p95`),
-  `top`, `rare`, `timechart`, bounded two-field `chart`, extraction-mode
-  `rex`, and explicit-span `bin`/`bucket`;
-- source-located diagnostics and compiler/executor row, byte, time, memory,
-  command-count, generated-SQL byte, and generated relational-depth limits;
-- materialized-CTE single-scan lowering for runtime-wide chart/timechart and
-  the exact field-summary path; and
-- defensive browser preview/result integration from the earlier checkpoints.
-
-Read these documents before changing semantics:
-
-- `docs/product-architecture-plan.md`
-- `docs/spl-compatibility-v0.1.md`
-- this file
+The final reviews found no remaining P0–P2 defect in this slice. One future
+maintainability item remains: `rex` and `spath` duplicate conditional
+extraction-overlay projection mechanics and should share a helper only after
+their different type and resource semantics are captured by tests.
 
 ## Validation evidence
 
-The final non-Docker checkpoint validation is:
+Ordinary focused packages passed after the final fixes:
+
+```sh
+go test ./internal/splpath ./internal/spl ./internal/plan \
+  ./internal/clickhouse ./internal/queryexec -count=1 -timeout=5m
+```
+
+The pinned `clickhouse/clickhouse-server:26.3.17.4` `spath` suite passed:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+  -run '^TestSpathAgainstClickHouse$' \
+  -count=1 -timeout=10m -v
+```
+
+It covers:
+
+- String/empty String, true/false, null, zero/negative zero, signed min/max,
+  the Int64-to-UInt64 boundary, UInt64 max, and zero-based array indexes;
+- duplicate members, missing/malformed/wrong-container/out-of-range behavior,
+  same-field reads, and exact prior-destination preservation;
+- the normalization attacks `1e0`, `1.5e1`, and
+  `9007199254740993.0`;
+- object/array/fraction/exponent unsupported errors;
+- valid-UTF-8 BINARY input through direct access, copy, rename,
+  `spath`-preserve, and `rex`-preserve pipelines;
+- exact 1 MiB acceptance, 1 MiB+1 rejection, and dead-destination pruning;
+- unauthorized-index poison isolation;
+- sequential and independent multi-stage extraction;
+- downstream predicate/stats use;
+- field catalog, field summary, timeline, and bounded physical query shape.
+
+The real manager transport case passed:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse/spath_typed_output_through_manager$' \
+  -count=1 -timeout=5m -v
+```
+
+The final ordinary gate passed:
 
 ```sh
 go test ./... -count=1 -timeout=5m
 go vet ./...
 go build ./...
+npm run build
+git diff --check
 ```
 
-The relational-depth slice passed focused and package unit suites:
-
-```sh
-go test ./internal/clickhouse ./internal/queryexec -count=1
-
-go test ./internal/clickhouse \
-  -run '^(TestCompileBoundsGeneratedRelationalDepth|TestRelationalNodeDepthUsesMaximumDependencyHeight|TestCompiledRelationalDepthPinsRepresentativeOperatorCosts|TestCompiledRelationalDepthPinsTerminalWideOperatorCosts|TestFieldAnalysisRelationalDepthBoundariesIncludePrivateFinalizers|TestCompilerBoundsForgedAssignmentCounts|TestAnalysisFinalizerCannotUnderreportItsRelationalWrapper|TestAnalysisFinalizerMustReportCompiledRelationalDepth|TestBinEdgeCalculatedPredicateUsesOneDurableAnalyzerFence|TestBinEdgeDistinctCalculatedPredicatesUseNestedScopedFences)$' \
-  -count=1
-```
-
-Pinned integration tests use
-`clickhouse/clickhouse-server:26.3.17.4`. The relational-depth boundary passed
-during this slice:
+The complete opt-in database packages also passed serially:
 
 ```sh
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
-  go test ./internal/clickhouse \
-  -run '^TestRelationalDepthBoundaryAgainstClickHouse$' \
-  -count=1 -timeout=4m
+  go test ./internal/clickhouse -count=1 -timeout=20m -parallel=1
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/queryexec -count=1 -timeout=10m -parallel=1
 ```
 
-The complete compiler and query-executor ClickHouse integration packages
-passed serially at the final gate:
+Do not count a skipped opt-in test as database validation.
 
-```sh
-OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
-  go test ./internal/clickhouse \
-  -count=1 -timeout=20m -parallel=1
+## Current backend state
 
-OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
-  go test ./internal/queryexec \
-  -count=1 -timeout=10m -parallel=1
-```
+The backend now includes:
 
-The two defining analyzer regressions were then rerun from the final source
-state. Their test bodies pin one thread, short server/client timeouts, a 1 MiB
-query ceiling, and 256 MiB for the predicate paths (the independent
-field-summary assertion uses 512 MiB, below the executor's 1 GiB default):
-
-```sh
-OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
-  go test ./internal/clickhouse \
-  -run '^TestBinEdgeMetadataAgainstClickHouse$/bin_output_feeds_field_summaries_and_timelines$' \
-  -count=1 -timeout=4m -parallel=1
-
-OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
-  go test ./internal/clickhouse \
-  -run '^TestBinEdgePipelineAgainstClickHouse$/distinct_calculated_predicates_use_nested_bounded_fences$' \
-  -count=1 -timeout=4m -parallel=1
-```
-
-The immediately preceding exact-bin checkpoints also recorded these focused
-runs:
-
-```sh
-OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
-  go test ./internal/clickhouse \
-  -run '^TestBinEdgeNumericDynamicStringsAgainstClickHouse/malformed_Decimal_envelopes_fail_only_inside_the_authorized_snapshot$' \
-  -count=1 -timeout=4m
-
-OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
-  go test ./internal/queryexec \
-  -run '^TestExecutorAndManagerAgainstClickHouse/native_typed_scan_types$' \
-  -count=1 -timeout=3m
-
-OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
-  go test ./internal/clickhouse \
-  -run '^TestBinEdgeNumericDynamicStringsAgainstClickHouse/(published_exact_Decimals_can_be_binned_again|consecutive_bins_retry_recoverable_numeric_text)$' \
-  -count=1 -timeout=3m
-```
-
-Additional pinned groups passed for:
-
-- tagged Decimal exact values, signed `Int256` limits, the 4 KiB lexical
-  ceiling, and declared-Decimal failure behavior;
-- exact downstream `search`, `where`, `sort`, and `stats count BY`;
-- mixed preserved Decimal envelopes and new `Int256` buckets, including
-  exponent/fraction integral forms at signed-`Int256` boundaries;
-- field catalog and field-summary Decimal metadata;
-- missing-source and explicit-null preservation;
-- calculated `rex`/`eval` inputs;
-- consecutive-bin row counts and semantic retry behavior; and
-- the streaming physical-plan assertion.
-
-Do not count a skipped opt-in test as database validation. If Docker is
-unavailable, record the omission explicitly.
-
-## Adversarial review record
-
-Three independent reviewers examined the slice from different angles:
-
-1. SPL and numeric semantics, including negative floor, signed-`Int256`
-   boundaries, chained bins, String retry behavior, and exact-vs-approximate
-   representation.
-2. ClickHouse SQL shape, analyzer alias expansion, streaming/cardinality
-   behavior, memory and execution bounds, and materialized-CTE use.
-3. Test design and transport, including bounded analyzer regressions,
-   `Dynamic(Int256)` driver behavior, and missing complexity guards.
-
-Their concrete findings produced the scalar lambda parser, calculated-Dynamic
-row-local binding, bounded re-bin/retry tests, and real executor transport
-coverage. The final gate also caught an exponent-form Decimal comparison that
-would have collapsed adjacent values above `2^53`; the checkpoint includes its
-bounded exact parser and pinned comparison/sort regression. Re-run adversarial
-review after changing the numeric representation, the analyzer fence, or
-downstream Dynamic comparison logic.
-
-For this hardening checkpoint, reviewers separately audited strict Decimal
-classification, storage normalization, predicate placement, executor error
-sanitization, raw-fixture construction, boundary isolation, and ClickHouse
-part-pruning false positives. Their recommendations produced the full
-malformed-envelope matrix, individual checks for all six scope fences, the
-forced part merge, and the physical-result assertion. No production
-correctness defect was found.
-
-For the relational-depth checkpoint, three reviewers independently mapped the
-generated SQL graph, recalculated exact per-operator and terminal dependency
-heights, and attacked the boundary tests and executor coupling. Their findings
-produced maximum-path rather than sibling-sum accounting, forged-plan
-assignment validation, fail-closed finalizers, an independently pinned
-ClickHouse limit, redaction of server depth failures, and a resource-bounded
-database proof. The final audit found no remaining accounting defect across
-CTEs, scalar subqueries, materialized dependencies, or `UNION` branches.
-
-The full-suite analyzer failure was then reviewed through independent SQL,
-semantic, performance, and test-design attacks. Materialization alone, a
-singleton binding alone, and eager binding inside `bin` all failed. Reviewers
-proved the final consumer-local materialized-CTE plus predicate-dependent
-singleton-binding shape on the pinned server, including two consecutive
-filters, multiple bound fields, null/missing values, field catalog, timeline,
-and exact value/type/presence preservation. Their propagation review also
-caught the initially missing `tonumber`, `replace`, fixed-bin, and `rex`
-dependencies before this checkpoint.
+- durable collector queue/checkpoint and ingestion acknowledgement coupling;
+- scoped ingestion tokens, canonical typed events, and ClickHouse storage;
+- bounded search jobs with cancellation, history, progress, result leases,
+  typed paging, timelines, field catalog, field summary, and CSV/JSONL export;
+- binary protobuf WebSocket previews/progress with replay and resynchronization;
+- the documented SPL v0.1 base search and Boolean/comparison expressions;
+- `fields`, `table`, `rename`, `sort`, `head`, `tail`, `dedup`;
+- the documented `eval`/`where` subset;
+- `stats` with `count`, `sum`, `avg`, and `p95`;
+- `top`, `rare`, `timechart`, bounded two-field `chart`;
+- extraction-mode `rex`, explicit-span exact `bin`/`bucket`, and the bounded
+  explicit-path `spath` slice described above;
+- compiler/executor limits for rows, bytes, time, memory, commands, generated
+  SQL bytes, generated relational depth, extraction outputs, and JSON work;
+- materialized-CTE single-scan lowering for runtime-wide and analyzer-sensitive
+  paths.
 
 ## Remaining work, in priority order
 
-### 1. Finish exact-bin efficiency follow-up
+### 1. Complete the analytical SPL surface
 
-- Consider a direct unsigned-magnitude arithmetic fast path for calculated
-  semantic-Decimal/physical-`Int256` input. The current bounded lexical re-bin
-  is correct and passes its resource test, but converting an already typed
-  `Int256` to text and reparsing it is avoidable work.
-- Preserve and re-run the full opt-in ClickHouse and query-executor integration
-  suites after changing that representation or the analyzer fence, not only
-  focused subtests.
+- Extend `stats` with `dc`, `values`, `list`, `min`, `max`, `earliest`,
+  `latest`, and remaining percentile forms.
+- Decimal `sum`/`avg`/`p95` still use the documented finite-Float64
+  compatibility path; exact Decimal aggregation is separate work.
+- Add later `chart` forms and aggregates while preserving bounded runtime-wide
+  transport.
+- Extend `rex` only behind compatibility tests: multi-match output,
+  `offset_field`, sed mode, wildcard/quoted fields, and supported PCRE gaps.
+- Later `spath` slices are auto-extraction and its 5,000-character discovery
+  cutoff, `{}`/multivalue output, XML, containers, dynamic paths, escaped
+  literal-dot keys, and the `spath()` eval function.
 
-### 2. Complete the first-release analytical SPL surface
+### 2. Improve proven performance without weakening bounds
 
-- Implement `spath` in contract-first, test-driven slices with pinned
-  ClickHouse fixtures.
-- Extend `stats` beyond `count`, `sum`, `avg`, and `p95`: `dc`, `values`,
-  `list`, `min`, `max`, `earliest`, `latest`, and the remaining percentile
-  forms still need parser, plan, compiler, and integration coverage.
-- Decimal `sum`/`avg`/`p95` currently use the documented finite-`Float64`
-  compatibility path. Exact Decimal aggregation is a separate feature and
-  must not be implied by exact `bin`.
-- Later `chart` slices remain: additional aggregates, explicit
-  `limit`/`useother`/`usenull`, the single-split form, and supported axis
-  discretization. Reuse the existing bounded runtime-wide transport.
-- Extend `rex` only behind compatibility tests. Unsupported areas include
-  multi-match output, `offset_field`, sed mode, wildcard/quoted fields, and
-  PCRE-only constructs.
+- Consider a shared, tested conditional-overlay helper for `rex` and `spath`.
+- Add a small frontend regression test that asserts the supported and
+  unsupported SPL editor command catalogs stay aligned with the backend.
+- Centralize the repeated pinned ClickHouse migration/store bootstrap used by
+  the growing command integration suites.
+- Consider multi-path JSON parsing only if the pinned ClickHouse version can
+  preserve current exact type, duplicate-key, array-container, and error
+  behavior.
+- The exact Decimal `bin` path can avoid text round-tripping an already
+  calculated `Int256`; its current implementation is correct and bounded.
+- Run the complete opt-in ClickHouse and query-executor integration packages
+  serially after changing JSON lowering, Dynamic metadata, or analyzer fences.
 
 ### 3. Finish first-release product proof
 
-- Add deterministic frontend component/browser tests for reconnect rejection,
-  stale-frame fencing, resynchronization, expiration, and preview-to-final
-  result replacement.
-- Add the browser-visible end-to-end path:
-  generated log -> collector durable acknowledgment -> ingestion ->
-  ClickHouse -> SPL job -> WebSocket preview/progress -> paged authoritative
-  result rendered in the UI.
-- Exercise the product from an empty working directory using the compiled
-  embedded-UI server binary, as required by the architecture acceptance
-  criteria.
-- Run and record a load/performance harness against the sustained 1,000
-  events/second target, including collector offline recovery, slow WebSocket
-  consumers, concurrent searches/previews, and ClickHouse scan budgets.
+- Add deterministic frontend tests for reconnect rejection, stale-frame
+  fencing, resynchronization, expiration, and preview-to-final replacement.
+- Add the browser-visible path from generated logs through durable collection,
+  ClickHouse, SPL job execution, WebSocket preview/progress, and authoritative
+  paged results.
+- Exercise the compiled embedded-UI server from an empty working directory.
+- Record a load/performance run against the sustained 1,000 events/second
+  target, including offline recovery, slow WebSocket consumers, concurrent
+  searches, and scan budgets.
 
 ### 4. Continue Phase 3 and Phase 4 hardening
 
@@ -393,35 +298,31 @@ dependencies before this checkpoint.
 - Migration upgrade tests, backup/restore and disaster recovery, load
   shedding, fair scheduling, per-user concurrency, alerts/scheduled searches,
   packaging, installers, upgrades, and signed releases.
-- Keep the single-node design excellent; distributed ClickHouse/search/control
-  plane work remains outside the current plan.
+- Keep the single-node design excellent; distributed control/search work
+  remains outside the current plan.
 
 ## Known compatibility boundaries
 
-- `bin` still requires one exact field and an explicit bounded span.
-  Automatic `bins`/`minspan`, `start`/`end`, `aligntime`,
-  calendar/subsecond/logarithmic spans, wildcards, and multiple fields remain
-  unsupported.
-- Exact `bin` does not make all Decimal operations exact. Nonintegral stored
-  Decimal comparisons and numeric aggregates retain their documented
-  finite-`Float64` compatibility behavior unless they consume an exact
-  integral bucket representation.
-- A live licensed Splunk differential oracle is still unavailable. The public
-  Splunk documentation does not settle all numeric-text, Decimal, result-type,
-  or failed-conversion behavior. Keep Open Splunk's chosen behavior explicit
-  in `docs/spl-compatibility-v0.1.md` and do not present it as verified Splunk
+- A live licensed Splunk differential oracle is unavailable. Public Splunk
+  documentation leaves several failure and edge-type behaviors unspecified.
+  Keep Open Splunk's chosen behavior explicit and do not present it as verified
   parity.
+- Duplicate JSON member selection follows the pinned ClickHouse parser's first
+  member behavior.
+- A document containing a number outside ClickHouse's Int64/UInt64 parser
+  domain may be treated as malformed even when another member is selected.
 - Do not accept a changing legal agreement or start a licensed Splunk image on
-  the user's behalf merely to obtain the oracle.
+  the user's behalf merely to obtain an oracle.
 
 ## Safe resume procedure
 
 1. Confirm `main` is clean and matches `origin/main`.
-2. Read the three documents named above.
-3. Run the non-Docker validation commands.
+2. Read the three documents listed at the top.
+3. Run the ordinary validation commands above.
 4. Check that no stale `open-splunk-*` Docker test containers are running.
-5. Resume with the optional exact-`Int256` fast path in Remaining work item 1,
-   or move directly to the contract-first `spath` slice in item 2. Preserve the
-   relational-depth and bounded analyzer tests while changing SQL shape.
-6. Keep working on `main`; commit and push each cohesive green slice.
-7. Preserve unexpected local changes and never reset them away.
+5. Start with Remaining work item 1 unless the user changes priority.
+6. Preserve the `spath` numeric-normalization, wrong-container, binary
+   provenance, work-budget, dead-destination, and manager-transport tests when
+   changing SQL shape.
+7. Keep working on `main`; commit and push each cohesive green slice.
+8. Preserve unexpected local changes and never reset them away.
