@@ -3,16 +3,22 @@ package clickhouse
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 )
@@ -53,6 +59,9 @@ const (
 	binEdgeNumericTextEvent   = "bin-edge-text"
 	binEdgeNumericNumberEvent = "bin-edge-number"
 	binEdgeNumericDoubleEvent = "bin-edge-double"
+	binEdgeNumericDecimalBase = "bin-edge-decimal-base"
+	binEdgeNumericDecimalLow  = "bin-edge-decimal-low"
+	binEdgeNumericDecimalHigh = "bin-edge-decimal-high"
 )
 
 func binEdgeNumericCases() []binEdgeNumericCase {
@@ -169,16 +178,52 @@ func binEdgeNumericCases() []binEdgeNumericCase {
 			wantType: "UInt64", wantValue: "18446744073709551610",
 		},
 		{
-			// An integer bucket that lands outside both Int64 and UInt64 keeps
-			// its text; the twin fails the search, so it is checked separately.
-			name: "integer text whose bucket is unrepresentable", field: "int64_min", span: "10",
+			// The mathematical floor lies below Int64 but remains inside the
+			// bounded signed-Int256 contract.
+			name: "integer text whose bucket is below Int64", field: "int64_min", span: "10",
 			text:     "-9223372036854775808",
-			wantType: "String", wantValue: "-9223372036854775808",
+			wantType: "Decimal", wantValue: "-9223372036854775810",
 		},
 		{
 			name: "integer text above the unsigned maximum", field: "above_uint64", span: "10",
 			text:     "999999999999999999999",
-			wantType: "String", wantValue: "999999999999999999999",
+			wantType: "Decimal", wantValue: "999999999999999999990",
+		},
+		{
+			name: "signed Int256 maximum", field: "int256_max", span: "1",
+			text:     exactNumericBinMaxInt256,
+			wantType: "Decimal", wantValue: exactNumericBinMaxInt256,
+		},
+		{
+			name: "signed Int256 minimum", field: "int256_min", span: "1",
+			text:     "-" + exactNumericBinMinMagnitude,
+			wantType: "Decimal", wantValue: "-" + exactNumericBinMinMagnitude,
+		},
+		{
+			// The input is one above MaxInt256, but its span-ten boundary is
+			// representable. Range validation belongs on the boundary.
+			name: "above Int256 buckets back into range", field: "int256_max_plus_one", span: "10",
+			text:      exactNumericBinMinMagnitude,
+			wantType:  "Decimal",
+			wantValue: "57896044618658097711785492504343953926634992332820282019728792003956564819960",
+		},
+		{
+			name: "minimum with an unrepresentable floor", field: "int256_min_span_ten", span: "10",
+			text:      "-" + exactNumericBinMinMagnitude,
+			wantType:  "String",
+			wantValue: "-" + exactNumericBinMinMagnitude,
+		},
+		{
+			name: "below minimum with an unrepresentable floor", field: "int256_min_minus_one", span: "10",
+			text:      "-57896044618658097711785492504343953926634992332820282019728792003956564819969",
+			wantType:  "String",
+			wantValue: "-57896044618658097711785492504343953926634992332820282019728792003956564819969",
+		},
+		{
+			name: "seventy eight significant digits pass through", field: "coefficient_78", span: "10",
+			text:      strings.Repeat("9", 78),
+			wantType:  "String",
+			wantValue: strings.Repeat("9", 78),
 		},
 		// --- fractional and exponent text ---------------------------------
 		{
@@ -228,22 +273,36 @@ func binEdgeNumericCases() []binEdgeNumericCase {
 			wantType: "Float64", wantValue: "9007199254740992",
 		},
 		{
-			// Above the fence the text is kept, while the stored double is
-			// bucketed: the contract documents that divergence explicitly.
+			// Above the Float64 fence the lexical exact path emits Decimal,
+			// while the genuinely stored double retains Float64.
 			name: "fractional text above the exact fence", field: "fence_above", span: "2",
 			text: "9007199254740994.0", number: typedDouble(9007199254740994),
-			wantType: "String", wantValue: "9007199254740994.0",
+			wantType: "Decimal", wantValue: "9007199254740994",
 			wantTwinType: "Float64", wantTwinValue: "9007199254740994",
 		},
 		{
-			// ClickHouse rounds this spelling to 2^53 while parsing, so the
-			// emitted bucket is one greater than the value being binned. The
-			// documented fence is a magnitude fence and this magnitude is below
-			// it, so the observed double semantics are recorded here rather
-			// than reported as a contract break.
-			name: "fractional text that rounds up onto the fence", field: "fence_round", span: "1",
+			// The result fits exactly in Float64 even though the source
+			// fraction does not. Lexical bucketing avoids rounding the input up
+			// to 2^53 before applying floor.
+			name: "fractional text below the fence avoids input rounding", field: "fence_round", span: "1",
 			text:     "9007199254740991.5",
-			wantType: "Float64", wantValue: "9007199254740992",
+			wantType: "Float64", wantValue: "9007199254740991",
+		},
+		{
+			name: "numeric text just below the byte ceiling", field: "text_bytes_4095", span: "1",
+			text:     "1." + strings.Repeat("0", MaximumExactNumericBinTextBytes-3),
+			wantType: "Float64", wantValue: "1",
+		},
+		{
+			name: "numeric text at the byte ceiling", field: "text_bytes_4096", span: "1",
+			text:     "1." + strings.Repeat("0", MaximumExactNumericBinTextBytes-2),
+			wantType: "Float64", wantValue: "1",
+		},
+		{
+			name: "numeric text above the byte ceiling passes through", field: "text_bytes_4097", span: "1",
+			text:      "1." + strings.Repeat("0", MaximumExactNumericBinTextBytes-1),
+			wantType:  "String",
+			wantValue: "1." + strings.Repeat("0", MaximumExactNumericBinTextBytes-1),
 		},
 		// --- spans --------------------------------------------------------
 		{
@@ -384,7 +443,48 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 	textEvent := binEdgeNumericEvent(binEdgeNumericTextEvent, textFields...)
 	numberEvent := binEdgeNumericEvent(binEdgeNumericNumberEvent, numberFields...)
 	doubleEvent := binEdgeNumericEvent(binEdgeNumericDoubleEvent, typedField("converge", typedDouble(25)))
-	for _, event := range []*ingest.StoredEvent{textEvent, numberEvent, doubleEvent} {
+	decimalBaseEvent := binEdgeNumericEvent(binEdgeNumericDecimalBase,
+		typedField("decimal_basic", typedDecimal("123.4500")),
+		typedField("decimal_negative", typedDecimal("-21.5")),
+		typedField("decimal_max", typedDecimal(exactNumericBinMaxInt256)),
+		typedField("decimal_min", typedDecimal("-"+exactNumericBinMinMagnitude)),
+		typedField("decimal_max_plus_one", typedDecimal(exactNumericBinMinMagnitude)),
+		typedField("decimal_min_minus_one", typedDecimal(
+			"-57896044618658097711785492504343953926634992332820282019728792003956564819969",
+		)),
+		typedField("decimal_78", typedDecimal(strings.Repeat("9", 78))),
+		typedField("decimal_bytes_4095", typedDecimal(
+			"1."+strings.Repeat("0", MaximumExactNumericBinTextBytes-3),
+		)),
+		typedField("decimal_bytes_4096", typedDecimal(
+			"1."+strings.Repeat("0", MaximumExactNumericBinTextBytes-2),
+		)),
+		typedField("decimal_bytes_4097", typedDecimal(
+			"1."+strings.Repeat("0", MaximumExactNumericBinTextBytes-1),
+		)),
+	)
+	decimalLowEvent := binEdgeNumericEvent(binEdgeNumericDecimalLow,
+		typedField("decimal_basic", typedDecimal("129.99")),
+		typedField("decimal_adjacent", typedDecimal("9007199254740992")),
+		// Keep the exponent spelling in its original envelope. A later bin
+		// preserves this destination on the row where its source is missing,
+		// so comparisons and sorting must recognize that it is the exact
+		// integer 2^53 rather than round it together with 2^53+1.
+		typedField("mixed_destination", typedDecimal("9007199254740992e0")),
+	)
+	decimalHighEvent := binEdgeNumericEvent(binEdgeNumericDecimalHigh,
+		typedField("decimal_adjacent", typedDecimal("9007199254740993")),
+		typedField("mixed_source", typedDecimal("9007199254740993")),
+	)
+	allEvents := []*ingest.StoredEvent{
+		textEvent,
+		numberEvent,
+		doubleEvent,
+		decimalBaseEvent,
+		decimalLowEvent,
+		decimalHighEvent,
+	}
+	for _, event := range allEvents {
 		event.IndexTime = indexTime
 		event.BatchID = "bin-edge-numeric-batch"
 	}
@@ -392,7 +492,7 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 		TenantID: "tenant", CollectorID: "collector", BatchID: "bin-edge-numeric-batch", BatchSequence: 1,
 		SourceBatchSHA256: testSourceBatchDigest("bin-edge-numeric-batch"),
 		ReceivedAt:        indexTime,
-		Events:            []*ingest.StoredEvent{textEvent, numberEvent, doubleEvent},
+		Events:            allEvents,
 	}); err != nil {
 		t.Fatalf("store bin edge fixtures: %v", err)
 	}
@@ -435,6 +535,486 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("wide integer text publishes Decimal metadata", func(t *testing.T) {
+		source := `index=compiler event_id=` + binEdgeNumericTextEvent +
+			` | bin above_uint64 span=10 AS band`
+		logical := buildIntegrationPlan(t, source, cutoff, visibilityCutoff)
+		profile := binEdgeMetadataCatalogProfile(t, ctx, connection, logical, "band")
+		wantProfile := binEdgeMetadataProfile{
+			rows: 1, total: 1, events: 1, nulls: 0, missing: 0,
+			types: []uint8{uint8(eventfields.StoredValueTypeDecimal)},
+		}
+		if !reflect.DeepEqual(profile, wantProfile) {
+			t.Fatalf("wide integer catalog profile = %#v, want %#v", profile, wantProfile)
+		}
+
+		invalid, unsupported, encoded := binEdgeMetadataSummaryValues(
+			t,
+			ctx,
+			connection,
+			logical,
+			"band",
+		)
+		wantEncoded := []string{
+			fmt.Sprintf("%d:999999999999999999990:1", uint8(eventfields.StoredValueTypeDecimal)),
+		}
+		if invalid != 0 || unsupported != 0 || !reflect.DeepEqual(encoded, wantEncoded) {
+			t.Fatalf(
+				"wide integer summary = invalid:%d unsupported:%d values:%#v, want %#v",
+				invalid,
+				unsupported,
+				encoded,
+				wantEncoded,
+			)
+		}
+	})
+
+	t.Run("tagged decimals bucket exactly and retain Decimal representation", func(t *testing.T) {
+		for _, testCase := range []struct {
+			name, eventID, field, span, want string
+		}{
+			{
+				name:    "positive fraction",
+				eventID: binEdgeNumericDecimalBase, field: "decimal_basic", span: "10", want: "120",
+			},
+			{
+				name:    "negative floor",
+				eventID: binEdgeNumericDecimalBase, field: "decimal_negative", span: "10", want: "-30",
+			},
+		} {
+			testCase := testCase
+			t.Run(testCase.name, func(t *testing.T) {
+				gotType, gotValue := binEdgeNumericBucket(
+					t, ctx, connection, cutoff, visibilityCutoff,
+					testCase.eventID, testCase.field, testCase.span,
+				)
+				if gotType != "Decimal" || gotValue != testCase.want {
+					t.Fatalf(
+						"bin %s span=%s = %s/%q, want Decimal %q",
+						testCase.field, testCase.span, gotType, gotValue, testCase.want,
+					)
+				}
+			})
+		}
+	})
+
+	t.Run("signed Int256 and lexical ceilings are enforced on declared Decimals", func(t *testing.T) {
+		for _, testCase := range []struct {
+			name, field, span, want string
+		}{
+			{
+				name: "maximum", field: "decimal_max", span: "1",
+				want: exactNumericBinMaxInt256,
+			},
+			{
+				name: "minimum", field: "decimal_min", span: "1",
+				want: "-" + exactNumericBinMinMagnitude,
+			},
+			{
+				name: "above maximum buckets into range", field: "decimal_max_plus_one", span: "10",
+				want: "57896044618658097711785492504343953926634992332820282019728792003956564819960",
+			},
+			{name: "4095 bytes", field: "decimal_bytes_4095", span: "1", want: "1"},
+			{name: "4096 bytes", field: "decimal_bytes_4096", span: "1", want: "1"},
+		} {
+			testCase := testCase
+			t.Run(testCase.name, func(t *testing.T) {
+				compiled := compileIntegrationSPL(
+					t,
+					`index=compiler event_id=`+binEdgeNumericDecimalBase+
+						` | bin `+testCase.field+` span=`+testCase.span+` AS band | table band`,
+					cutoff,
+					visibilityCutoff,
+				)
+				var physicalType, value string
+				if err := connection.QueryRow(ctx,
+					`SELECT dynamicType(band), toString(band) FROM (`+compiled.SQL+`)`,
+					compiled.Args...,
+				).Scan(&physicalType, &value); err != nil {
+					t.Fatalf("execute declared Decimal boundary: %v\nSQL: %s", err, compiled.SQL)
+				}
+				if physicalType != "Int256" || value != testCase.want {
+					t.Fatalf("declared Decimal boundary = %s/%q, want Int256/%q",
+						physicalType, value, testCase.want)
+				}
+			})
+		}
+
+		t.Run("driver transports Dynamic Int256 through its typed wrapper", func(t *testing.T) {
+			compiled := compileIntegrationSPL(
+				t,
+				`index=compiler event_id=`+binEdgeNumericDecimalBase+
+					` | bin decimal_max span=1 AS band | table band`,
+				cutoff,
+				visibilityCutoff,
+			)
+			var scanned chcol.Dynamic
+			if err := connection.QueryRow(ctx, compiled.SQL, compiled.Args...).Scan(&scanned); err != nil {
+				t.Fatalf("scan Dynamic(Int256) through clickhouse-go: %v\nSQL: %s", err, compiled.SQL)
+			}
+			var got string
+			switch value := scanned.Any().(type) {
+			case big.Int:
+				got = value.String()
+			case *big.Int:
+				if value != nil {
+					got = value.String()
+				}
+			default:
+				t.Fatalf("Dynamic(Int256) driver value = %T, want big.Int or *big.Int", scanned.Any())
+			}
+			if got != exactNumericBinMaxInt256 {
+				t.Fatalf("Dynamic(Int256) driver value = %q, want %q", got, exactNumericBinMaxInt256)
+			}
+		})
+
+		for _, testCase := range []struct {
+			name, field string
+		}{
+			{name: "minimum floors out of range", field: "decimal_min"},
+			{name: "below minimum floors out of range", field: "decimal_min_minus_one"},
+			{name: "78 significant digits", field: "decimal_78"},
+			{name: "4097 bytes", field: "decimal_bytes_4097"},
+		} {
+			testCase := testCase
+			t.Run(testCase.name, func(t *testing.T) {
+				compiled := compileIntegrationSPL(
+					t,
+					`index=compiler event_id=`+binEdgeNumericDecimalBase+
+						` | bin `+testCase.field+` span=10 AS band | table band`,
+					cutoff,
+					visibilityCutoff,
+				)
+				binEdgeMetadataRequireMarker(t, ctx, connection, compiled, testCase.name)
+			})
+		}
+	})
+
+	t.Run("published exact Decimals can be binned again", func(t *testing.T) {
+		compiled := compileIntegrationSPL(
+			t,
+			`index=compiler event_id=`+binEdgeNumericDecimalBase+
+				` | bin decimal_basic span=10 AS band | bin band span=7 | table band`,
+			cutoff,
+			visibilityCutoff,
+		)
+		queryContext, cancelQuery := binEdgeNumericBoundedAnalyzerContext(ctx)
+		defer cancelQuery()
+		var gotType, gotValue string
+		if err := connection.QueryRow(queryContext,
+			`SELECT dynamicType(band), toString(band) FROM (`+compiled.SQL+`)`,
+			compiled.Args...,
+		).Scan(&gotType, &gotValue); err != nil {
+			t.Fatalf("execute chained exact Decimal bins: %v\nSQL: %s", err, compiled.SQL)
+		}
+		if gotType != "Int256" || gotValue != "119" {
+			t.Fatalf("chained exact Decimal bin = %s/%q, want Int256/119", gotType, gotValue)
+		}
+	})
+
+	t.Run("consecutive bins retry recoverable numeric text", func(t *testing.T) {
+		for _, testCase := range []struct {
+			name, field, firstSpan, secondSpan, wantType, wantValue string
+		}{
+			{
+				name:       "positive text first outside then inside Int256",
+				field:      "int256_max_plus_one",
+				firstSpan:  "1",
+				secondSpan: "10",
+				wantType:   "Int256",
+				wantValue:  "57896044618658097711785492504343953926634992332820282019728792003956564819960",
+			},
+			{
+				name:       "nonnumeric text remains text",
+				field:      "nan_upper",
+				firstSpan:  "1",
+				secondSpan: "10",
+				wantType:   "String",
+				wantValue:  "NaN",
+			},
+		} {
+			testCase := testCase
+			t.Run(testCase.name, func(t *testing.T) {
+				compiled := compileIntegrationSPL(
+					t,
+					`index=compiler event_id=`+binEdgeNumericTextEvent+
+						` | bin `+testCase.field+` span=`+testCase.firstSpan+
+						` AS band | bin band span=`+testCase.secondSpan+` | table band`,
+					cutoff,
+					visibilityCutoff,
+				)
+				queryContext, cancelQuery := binEdgeNumericBoundedAnalyzerContext(ctx)
+				defer cancelQuery()
+				var gotType, gotValue string
+				if err := connection.QueryRow(
+					queryContext,
+					`SELECT dynamicType(band), toString(band) FROM (`+compiled.SQL+`)`,
+					compiled.Args...,
+				).Scan(&gotType, &gotValue); err != nil {
+					t.Fatalf("execute consecutive numeric-text bins: %v\nSQL: %s", err, compiled.SQL)
+				}
+				if gotType != testCase.wantType || gotValue != testCase.wantValue {
+					t.Fatalf("consecutive bins = %s/%q, want %s/%q",
+						gotType, gotValue, testCase.wantType, testCase.wantValue)
+				}
+			})
+		}
+	})
+
+	t.Run("exact Decimal buckets survive every downstream consumer", func(t *testing.T) {
+		adjacentScope := `index=compiler (event_id=` + binEdgeNumericDecimalLow +
+			` OR event_id=` + binEdgeNumericDecimalHigh + `)`
+		for _, predicate := range []struct {
+			name, command string
+		}{
+			{name: "where", command: `where band>9007199254740992`},
+			{name: "search", command: `search band>9007199254740992`},
+		} {
+			predicate := predicate
+			t.Run(predicate.name, func(t *testing.T) {
+				compiled := compileIntegrationSPL(
+					t,
+					adjacentScope+` | bin decimal_adjacent span=1 AS band | `+
+						predicate.command+` | stats count`,
+					cutoff,
+					visibilityCutoff,
+				)
+				var matched uint64
+				if err := connection.QueryRow(ctx, compiled.SQL, compiled.Args...).Scan(&matched); err != nil {
+					t.Fatalf("execute exact Decimal %s: %v\nSQL: %s", predicate.name, err, compiled.SQL)
+				}
+				if matched != 1 {
+					t.Fatalf("exact Decimal %s matched %d rows, want 1", predicate.name, matched)
+				}
+			})
+		}
+
+		sorted := compileIntegrationSPL(
+			t,
+			adjacentScope+` | bin decimal_adjacent span=1 AS band | sort band | table event_id`,
+			cutoff,
+			visibilityCutoff,
+		)
+		rows, err := connection.Query(ctx, sorted.SQL, sorted.Args...)
+		if err != nil {
+			t.Fatalf("execute exact Decimal sort: %v\nSQL: %s", err, sorted.SQL)
+		}
+		var sortedIDs []string
+		for rows.Next() {
+			var eventID string
+			if err := rows.Scan(&eventID); err != nil {
+				t.Fatalf("scan exact Decimal sort: %v", err)
+			}
+			sortedIDs = append(sortedIDs, eventID)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			t.Fatalf("iterate exact Decimal sort: %v", err)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatalf("close exact Decimal sort: %v", err)
+		}
+		if want := []string{binEdgeNumericDecimalLow, binEdgeNumericDecimalHigh}; !reflect.DeepEqual(sortedIDs, want) {
+			t.Fatalf("exact Decimal sort = %v, want %v", sortedIDs, want)
+		}
+
+		grouped := compileIntegrationSPL(
+			t,
+			adjacentScope+` | bin decimal_adjacent span=1 AS band | stats count BY band`,
+			cutoff,
+			visibilityCutoff,
+		)
+		groupRows, err := connection.Query(ctx, grouped.SQL, grouped.Args...)
+		if err != nil {
+			t.Fatalf("execute exact Decimal grouping: %v\nSQL: %s", err, grouped.SQL)
+		}
+		gotGroups := make(map[string]uint64, 2)
+		for groupRows.Next() {
+			var band string
+			var count uint64
+			if err := groupRows.Scan(&band, &count); err != nil {
+				t.Fatalf("scan exact Decimal group: %v", err)
+			}
+			gotGroups[band] = count
+		}
+		if err := groupRows.Err(); err != nil {
+			_ = groupRows.Close()
+			t.Fatalf("iterate exact Decimal groups: %v", err)
+		}
+		if err := groupRows.Close(); err != nil {
+			t.Fatalf("close exact Decimal groups: %v", err)
+		}
+		wantGroups := map[string]uint64{"9007199254740992": 1, "9007199254740993": 1}
+		if !reflect.DeepEqual(gotGroups, wantGroups) {
+			t.Fatalf("exact Decimal groups = %#v, want %#v", gotGroups, wantGroups)
+		}
+
+		equivalent := compileIntegrationSPL(
+			t,
+			`index=compiler (event_id=`+binEdgeNumericDecimalBase+
+				` OR event_id=`+binEdgeNumericDecimalLow+
+				`) | bin decimal_basic span=10 AS band | stats count BY band`,
+			cutoff,
+			visibilityCutoff,
+		)
+		var band string
+		var count uint64
+		if err := connection.QueryRow(ctx, equivalent.SQL, equivalent.Args...).Scan(&band, &count); err != nil {
+			t.Fatalf("execute equivalent Decimal grouping: %v\nSQL: %s", err, equivalent.SQL)
+		}
+		if band != "120" || count != 2 {
+			t.Fatalf("equivalent Decimal group = %q/%d, want 120/2", band, count)
+		}
+	})
+
+	t.Run("preserved Decimal envelopes compare and sort with new Int256 buckets", func(t *testing.T) {
+		scope := `index=compiler (event_id=` + binEdgeNumericDecimalLow +
+			` OR event_id=` + binEdgeNumericDecimalHigh +
+			`) | bin mixed_source span=1 AS mixed_destination`
+		for _, predicate := range []struct {
+			name, command, wantEventID string
+		}{
+			{
+				name:        "where orders adjacent values exactly",
+				command:     `where mixed_destination<9007199254740993`,
+				wantEventID: binEdgeNumericDecimalLow,
+			},
+			{
+				name:        "search orders adjacent values exactly",
+				command:     `search mixed_destination<9007199254740993`,
+				wantEventID: binEdgeNumericDecimalLow,
+			},
+			{
+				name:        "where equality accepts an integral exponent",
+				command:     `where mixed_destination=9007199254740992`,
+				wantEventID: binEdgeNumericDecimalLow,
+			},
+			{
+				name:        "search equality accepts an integral exponent",
+				command:     `search mixed_destination=9007199254740992`,
+				wantEventID: binEdgeNumericDecimalLow,
+			},
+		} {
+			predicate := predicate
+			t.Run(predicate.name, func(t *testing.T) {
+				compiled := compileIntegrationSPL(
+					t,
+					scope+` | `+predicate.command+` | table event_id`,
+					cutoff,
+					visibilityCutoff,
+				)
+				var eventID string
+				if err := connection.QueryRow(ctx, compiled.SQL, compiled.Args...).Scan(&eventID); err != nil {
+					t.Fatalf(
+						"execute mixed Decimal predicate %q: %v\nSQL: %s",
+						predicate.command,
+						err,
+						compiled.SQL,
+					)
+				}
+				if eventID != predicate.wantEventID {
+					t.Fatalf(
+						"mixed Decimal predicate %q returned %q, want %q",
+						predicate.command,
+						eventID,
+						predicate.wantEventID,
+					)
+				}
+			})
+		}
+
+		sorted := compileIntegrationSPL(
+			t,
+			scope+` | sort mixed_destination | table event_id`,
+			cutoff,
+			visibilityCutoff,
+		)
+		rows, err := connection.Query(ctx, sorted.SQL, sorted.Args...)
+		if err != nil {
+			t.Fatalf("execute mixed Decimal sort: %v\nSQL: %s", err, sorted.SQL)
+		}
+		var got []string
+		for rows.Next() {
+			var eventID string
+			if err := rows.Scan(&eventID); err != nil {
+				t.Fatalf("scan mixed Decimal sort: %v", err)
+			}
+			got = append(got, eventID)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			t.Fatalf("iterate mixed Decimal sort: %v", err)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatalf("close mixed Decimal sort: %v", err)
+		}
+		want := []string{binEdgeNumericDecimalLow, binEdgeNumericDecimalHigh}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("mixed Decimal sort = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("exact Decimal comparison parser handles integral exponent forms", func(t *testing.T) {
+		maxScientific := exactNumericBinMaxInt256[:len(exactNumericBinMaxInt256)-1] + "." +
+			exactNumericBinMaxInt256[len(exactNumericBinMaxInt256)-1:] + "e1"
+		minScientific := "-" +
+			exactNumericBinMinMagnitude[:len(exactNumericBinMinMagnitude)-1] + "." +
+			exactNumericBinMinMagnitude[len(exactNumericBinMinMagnitude)-1:] + "e1"
+		hugeExponent := strings.Repeat("9", 100)
+		want := map[string]string{
+			"9007199254740992e0":        "9007199254740992",
+			"90071992547409920e-1":      "9007199254740992",
+			"9007199254740992.0e0":      "9007199254740992",
+			"1.20e1":                    "12",
+			"1.20e0":                    "<null>",
+			"-21.50e1":                  "-215",
+			maxScientific:               exactNumericBinMaxInt256,
+			minScientific:               "-" + exactNumericBinMinMagnitude,
+			exactNumericBinMinMagnitude: "<null>",
+			"-57896044618658097711785492504343953926634992332820282019728792003956564819969": "<null>",
+			"0e" + hugeExponent: "0",
+			"1e" + hugeExponent: "<null>",
+		}
+		payloads := make([]string, 0, len(want))
+		for payload := range want {
+			payloads = append(payloads, quoteStringLiteralForBinEdge(payload))
+		}
+		envelope := "CAST(map(" +
+			"concat(char(0), 'open_splunk_type'), 'decimal/v1', " +
+			"concat(char(0), 'open_splunk_value'), payload) AS Dynamic)"
+		exact := dynamicTaggedDecimalIntegralSQL(compiledScalar{
+			valueSQL:       envelope,
+			dynamicTypeSQL: "dynamicType(" + envelope + ")",
+			kind:           fieldKindDynamic,
+		})
+		query := "SELECT payload, ifNull(toString(" + exact +
+			"), '<null>') FROM (SELECT arrayJoin([" +
+			strings.Join(payloads, ", ") + "]) AS payload)"
+		rows, err := connection.Query(ctx, query)
+		if err != nil {
+			t.Fatalf("execute exact Decimal comparison parser: %v\nSQL: %s", err, query)
+		}
+		got := make(map[string]string, len(want))
+		for rows.Next() {
+			var payload, exactValue string
+			if err := rows.Scan(&payload, &exactValue); err != nil {
+				_ = rows.Close()
+				t.Fatalf("scan exact Decimal comparison parser: %v", err)
+			}
+			got[payload] = exactValue
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			t.Fatalf("iterate exact Decimal comparison parser: %v", err)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatalf("close exact Decimal comparison parser: %v", err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("exact Decimal comparison parser = %#v, want %#v", got, want)
+		}
+	})
 
 	t.Run("numeric text converges with its numeric twin under stats", func(t *testing.T) {
 		compiled := compileIntegrationSPL(
@@ -526,10 +1106,21 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 		).Scan(&rowCount); err != nil {
 			t.Fatalf("execute mixed-row bin: %v\nSQL: %s\nargs: %#v", err, compiled.SQL, compiled.Args)
 		}
-		if rowCount != 3 {
-			t.Fatalf("mixed-row bin returned %d rows, want 3", rowCount)
+		if rowCount != uint64(len(allEvents)) {
+			t.Fatalf("mixed-row bin returned %d rows, want %d", rowCount, len(allEvents))
 		}
 	})
+}
+
+func binEdgeNumericBoundedAnalyzerContext(parent context.Context) (context.Context, context.CancelFunc) {
+	queryContext := clickhousedriver.Context(parent, clickhousedriver.WithSettings(clickhousedriver.Settings{
+		"max_memory_usage":                  uint64(256 << 20),
+		"max_execution_time":                uint64(15),
+		"timeout_overflow_mode":             "throw",
+		"max_threads":                       uint64(1),
+		"short_circuit_function_evaluation": "enable",
+	}))
+	return context.WithTimeout(queryContext, 20*time.Second)
 }
 
 func binEdgeNumericBucket(
@@ -549,8 +1140,23 @@ func binEdgeNumericBucket(
 	)
 	var gotType, gotValue string
 	if err := connection.QueryRow(ctx,
-		`SELECT dynamicType(band), if(dynamicType(band) = 'None', '<none>', toString(band)) FROM (`+
-			compiled.SQL+`)`,
+		`SELECT multiIf(
+				dynamicType(band) IN ('Int128', 'Int256', 'UInt128', 'UInt256')
+					OR startsWith(dynamicType(band), 'Decimal'),
+				'Decimal',
+				dynamicType(band) = 'Map(String, String)'
+					AND length(dynamicElement(band, 'Map(String, String)')) = 2
+					AND dynamicElement(band, 'Map(String, String)')[concat(char(0), 'open_splunk_type')] = 'decimal/v1',
+				'Decimal',
+				dynamicType(band)),
+			multiIf(
+				dynamicType(band) = 'None', '<none>',
+				dynamicType(band) = 'Map(String, String)'
+					AND length(dynamicElement(band, 'Map(String, String)')) = 2
+					AND dynamicElement(band, 'Map(String, String)')[concat(char(0), 'open_splunk_type')] = 'decimal/v1',
+				dynamicElement(band, 'Map(String, String)')[concat(char(0), 'open_splunk_value')],
+				toString(band))
+		FROM (`+compiled.SQL+`)`,
 		compiled.Args...,
 	).Scan(&gotType, &gotValue); err != nil {
 		t.Fatalf(

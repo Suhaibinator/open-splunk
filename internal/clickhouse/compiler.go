@@ -658,11 +658,233 @@ type dynamicNumericBinMetadata struct {
 	versionAlias string
 }
 
-// exactFloat64BucketBound is 2^53, the largest magnitude at which Float64
-// division, floor, and multiplication remain exact. Numeric text above it is
-// left as text instead of being approximated into a bucket that could fall
-// off the span grid or above the value it buckets.
+// exactFloat64BucketBound is 2^53, the largest integral bucket magnitude that
+// can cross the public boundary as Float64 without losing a bit. Fractional or
+// exponent String input whose exact bucket lies outside this interval is
+// published as semantic Decimal backed by Int256 instead.
 const exactFloat64BucketBound = "9007199254740992"
+
+const (
+	// MaximumExactNumericBinTextBytes bounds the lexical exact-decimal path.
+	// The signed Int256 result contract needs at most 77 significant decimal
+	// digits; 4 KiB leaves ample room for fixed-width padding and exponent
+	// spelling without letting one runtime field amplify the generated string
+	// operations to the configurable event-size ceiling.
+	MaximumExactNumericBinTextBytes = 4 << 10
+	exactNumericBinMaxDigits        = 77
+	exactNumericBinExponentClamp    = 10_000
+	exactNumericBinMaxInt256        = "57896044618658097711785492504343953926634992332820282019728792003956564819967"
+	exactNumericBinMinMagnitude     = "57896044618658097711785492504343953926634992332820282019728792003956564819968"
+)
+
+const (
+	exactNumericBinSourceNone uint8 = iota
+	exactNumericBinSourceString
+	exactNumericBinSourceDecimal
+)
+
+type exactDynamicDecimalBucketSQL struct {
+	layers          [][]string
+	privateAliases  []string
+	sourceModeAlias string
+	candidateAlias  string
+}
+
+// compileExactDynamicDecimalBucketSQL lowers one already-validated numeric
+// spelling to an exact, integral bucket boundary. It parses sign, coefficient,
+// decimal point, and exponent lexically, constructs at most 77 integer digits,
+// and performs the bucket arithmetic as an unsigned magnitude. That avoids
+// ClickHouse's wrapping String-to-Int256 conversions and also represents the
+// magnitude of MinInt256 while applying mathematical floor to negative
+// fractions.
+//
+// sourceModeSQL must be zero for nonnumeric or otherwise ineligible input, and
+// sourceTextSQL must select either canonical numeric String text or a validated
+// decimal/v1 payload. Text above MaximumExactNumericBinTextBytes is replaced by
+// zero before any decomposition. The caller keeps the semantic source
+// classification separately so an ineligible declared Decimal reaches the
+// sanitized unsupported-value arm while ordinary String data passes through.
+func compileExactDynamicDecimalBucketSQL(
+	stage int,
+	spanAlias string,
+	sourceModeSQL string,
+	sourceTextSQL string,
+) exactDynamicDecimalBucketSQL {
+	alias := func(name string) string {
+		return numericBinStageAlias("exact_"+name, stage)
+	}
+	sourceModeAlias := alias("source")
+	rawAlias := alias("raw")
+	candidateAlias := alias("candidate")
+
+	sourceLimit := strconv.Itoa(MaximumExactNumericBinTextBytes)
+	exponentClamp := strconv.Itoa(exactNumericBinExponentClamp)
+	maxDigits := strconv.Itoa(exactNumericBinMaxDigits)
+	spanMagnitude := "toUInt256(" + spanAlias + ")"
+
+	// Lambda parameters are local scalar bindings. Keeping the lexical state
+	// inside one expression avoids ten nested SELECT * projections. Those
+	// projections caused ClickHouse's analyzer to substitute a prior bin's
+	// Dynamic output through every later layer, making a one-row re-bin consume
+	// more than a GiB and minutes of CPU.
+	lambdaVariable := func(name string) string {
+		return fmt.Sprintf("__os_exact_%s_%d", name, stage)
+	}
+	bind := func(parameters, values []string, body string) string {
+		arrays := make([]string, len(values))
+		for index, value := range values {
+			arrays[index] = "[" + value + "]"
+		}
+		return "arrayElement(arrayMap((" + strings.Join(parameters, ", ") + ") -> " +
+			body + ", " + strings.Join(arrays, ", ") + "), 1)"
+	}
+
+	eligible := lambdaVariable("eligible")
+	text := lambdaVariable("text")
+	negative := lambdaVariable("negative")
+	body := lambdaVariable("body")
+	exponentPosition := lambdaVariable("exponent_position")
+	significand := lambdaVariable("significand")
+	exponentText := lambdaVariable("exponent_text")
+	exponentNegative := lambdaVariable("exponent_negative")
+	exponentTrimmed := lambdaVariable("exponent_trimmed")
+	fractionDigits := lambdaVariable("fraction_digits")
+	significant := lambdaVariable("significant")
+	exponent := lambdaVariable("exponent")
+	integerDigits := lambdaVariable("integer_digits")
+	integerTextVariable := lambdaVariable("integer_text")
+	fractional := lambdaVariable("fractional")
+	bucketMagnitudeVariable := lambdaVariable("bucket_magnitude")
+
+	eligibleSQL := "toUInt8(" + sourceModeAlias + " != 0 AND length(" + rawAlias + ") <= " +
+		sourceLimit + ")"
+	textSQL := "if(" + sourceModeAlias + " != 0 AND length(" + rawAlias + ") <= " +
+		sourceLimit + ", " + rawAlias + ", CAST('0' AS String))"
+	signOffset := "if(startsWith(" + text + ", '-') OR startsWith(" + text + ", '+'), 2, 1)"
+	bodySQL := "substring(" + text + ", " + signOffset + ")"
+	exponentPositionSQL := "greatest(position(" + bodySQL + ", 'e'), position(" + bodySQL + ", 'E'))"
+	significandSQL := "if(" + exponentPosition + " = 0, " + body + ", substring(" +
+		body + ", 1, " + exponentPosition + " - 1))"
+	exponentTextSQL := "if(" + exponentPosition + " = 0, CAST('0' AS String), substring(" +
+		body + ", " + exponentPosition + " + 1))"
+	exponentOffset := "if(startsWith(" + exponentText + ", '-') OR startsWith(" +
+		exponentText + ", '+'), 2, 1)"
+	exponentDigits := "substring(" + exponentText + ", " + exponentOffset + ")"
+	exponentMagnitude := "if(length(" + exponentTrimmed + ") <= 4, toInt64OrZero(" +
+		exponentTrimmed + "), toInt64(" + exponentClamp + "))"
+	significantLength := "toInt64(length(" + significant + "))"
+	safePrefixLength := "toUInt64(greatest(least(" + integerDigits + ", " +
+		significantLength + "), 0))"
+	safeZeroCount := "toUInt64(greatest(least(" + integerDigits + " - " +
+		significantLength + ", " + maxDigits + "), 0))"
+	safeFractionStart := "toUInt64(greatest(" + integerDigits + " + 1, 1))"
+	integerText := "multiIf(" +
+		"empty(" + significant + "), '0', " +
+		integerDigits + " <= 0, '0', " +
+		integerDigits + " <= " + maxDigits + " AND " +
+		integerDigits + " <= " + significantLength + ", substring(" +
+		significant + ", 1, " + safePrefixLength + "), " +
+		integerDigits + " <= " + maxDigits + ", concat(" + significant +
+		", repeat('0', " + safeZeroCount + ")), '0')"
+	fractionalSQL := "toUInt8(NOT empty(" + significant + ") AND (" +
+		integerDigits + " <= 0 OR (" + integerDigits + " < " +
+		significantLength + " AND match(substring(" + significant + ", " +
+		safeFractionStart + "), '[1-9]'))))"
+	magnitude := "toUInt256(" + integerTextVariable + ")"
+	remainder := "modulo(" + magnitude + ", " + spanMagnitude + ")"
+	quotient := "intDiv(" + magnitude + ", " + spanMagnitude + ")"
+	negativeCorrection := "if(" + negative + " != 0 AND (" + remainder +
+		" != toUInt256(0) OR " + fractional + " != 0), toUInt256(1), toUInt256(0))"
+	bucketMagnitude := "(" + quotient + " + " + negativeCorrection + ") * " + spanMagnitude
+	fits := eligible + " != 0 AND (empty(" + significant + ") OR " +
+		integerDigits + " <= " + maxDigits + ") AND if(" + negative + " != 0, " +
+		bucketMagnitudeVariable + " <= toUInt256('" + exactNumericBinMinMagnitude + "'), " +
+		bucketMagnitudeVariable + " <= toUInt256('" + exactNumericBinMaxInt256 + "'))"
+	// Two's-complement conversion is the only safe way to produce MinInt256
+	// from its UInt256 magnitude. String and ordinary numeric casts wrap before
+	// reporting range failure on the pinned ClickHouse server.
+	negativeCandidate := "reinterpretAsInt256(bitNot(" + bucketMagnitudeVariable + ") + toUInt256(1))"
+	candidate := "if(" + fits + ", if(" + negative + " != 0, " +
+		negativeCandidate + ", accurateCastOrNull(" + bucketMagnitudeVariable +
+		", 'Int256')), CAST(NULL AS Nullable(Int256)))"
+
+	candidate = bind(
+		[]string{bucketMagnitudeVariable},
+		[]string{bucketMagnitude},
+		candidate,
+	)
+	candidate = bind(
+		[]string{integerTextVariable, fractional},
+		[]string{integerText, fractionalSQL},
+		candidate,
+	)
+	candidate = bind(
+		[]string{integerDigits},
+		[]string{significantLength + " + " + exponent + " - " + fractionDigits},
+		candidate,
+	)
+	candidate = bind(
+		[]string{exponent},
+		[]string{"if(" + exponentNegative + " != 0, -(" + exponentMagnitude + "), " +
+			exponentMagnitude + ")"},
+		candidate,
+	)
+	candidate = bind(
+		[]string{exponentNegative, exponentTrimmed, fractionDigits, significant},
+		[]string{
+			"toUInt8(startsWith(" + exponentText + ", '-'))",
+			"replaceRegexpOne(" + exponentDigits + ", '^0+', '')",
+			"toInt64(if(position(" + significand + ", '.') = 0, 0, length(" +
+				significand + ") - position(" + significand + ", '.')))",
+			"replaceRegexpOne(replaceAll(" + significand + ", '.', ''), '^0+', '')",
+		},
+		candidate,
+	)
+	candidate = bind(
+		[]string{significand, exponentText},
+		[]string{significandSQL, exponentTextSQL},
+		candidate,
+	)
+	candidate = bind(
+		[]string{negative, body, exponentPosition},
+		[]string{
+			"toUInt8(startsWith(" + text + ", '-'))",
+			bodySQL,
+			exponentPositionSQL,
+		},
+		candidate,
+	)
+	candidate = bind(
+		[]string{eligible, text},
+		[]string{eligibleSQL, textSQL},
+		candidate,
+	)
+
+	layers := [][]string{
+		{
+			sourceModeSQL + " AS " + sourceModeAlias,
+			sourceTextSQL + " AS " + rawAlias,
+		},
+		{
+			candidate + " AS " + candidateAlias,
+		},
+	}
+	return exactDynamicDecimalBucketSQL{
+		layers: layers,
+		privateAliases: []string{
+			sourceModeAlias,
+			rawAlias,
+			candidateAlias,
+		},
+		sourceModeAlias: sourceModeAlias,
+		candidateAlias:  candidateAlias,
+	}
+}
+
+func dynamicNumericBinProjectionLayer(fragment string, stage, layer int, expressions []string) string {
+	alias := quoteIdentifier(fmt.Sprintf("__os_numeric_bin_layer_%d_%d", stage, layer))
+	return "SELECT *, " + strings.Join(expressions, ", ") + " FROM (" + fragment + ") AS " + alias
+}
 
 func compileDynamicNumericBucket(
 	fragment string,
@@ -681,19 +903,41 @@ func compileDynamicNumericBucket(
 	floatValueAlias := numericBinStageAlias("float_value", stage)
 	floatCandidateAlias := numericBinStageAlias("float_candidate", stage)
 	stringValueAlias := numericBinStageAlias("string_value", stage)
+	stringBoundedAlias := numericBinStageAlias("string_bounded", stage)
 	stringNumericAlias := numericBinStageAlias("string_numeric", stage)
 	stringCanonicalAlias := numericBinStageAlias("string_canonical", stage)
-	stringIntegerAlias := numericBinStageAlias("string_integer", stage)
-	stringIntegerCandidateAlias := numericBinStageAlias("string_integer_candidate", stage)
 	stringSignedAlias := numericBinStageAlias("string_signed", stage)
 	stringUnsignedAlias := numericBinStageAlias("string_unsigned", stage)
-	stringParsedAlias := numericBinStageAlias("string_parsed", stage)
 	stringCandidateAlias := numericBinStageAlias("string_candidate", stage)
 	stringModeAlias := numericBinStageAlias("string_mode", stage)
 	extendedAlias := numericBinStageAlias("extended", stage)
 	supportedAlias := numericBinStageAlias("supported", stage)
 	outputExistsAlias := numericBinStageAlias("output_exists", stage)
 	outputTypeAlias := numericBinStageAlias("output_type", stage)
+	stateSourceField := field
+
+	// ClickHouse's analyzer substitutes ordinary projection aliases through
+	// later subqueries. A calculated Dynamic value (especially a previous bin
+	// output) is inspected through several dynamicElement alternatives below;
+	// without a scoped column, each inspection recursively duplicates the
+	// complete producing expression. A singleton arrayJoin is a bounded,
+	// one-to-one streaming action that gives value, presence, and semantic type
+	// one shared row-local binding and prevents that multiplicative expansion.
+	inputBindingAlias := ""
+	if field.storedTypeSQL != "" && field.existsSQL != "" && len(field.existsArgs) == 0 &&
+		!strings.Contains(field.existsSQL, "?") && !strings.Contains(field.storedTypeSQL, "?") {
+		inputBindingAlias = numericBinStageAlias("bound", stage)
+		bindingBaseAlias := quoteIdentifier(fmt.Sprintf("__os_numeric_bin_bound_base_%d", stage))
+		binding := "arrayJoin([tuple(CAST(" + field.valueSQL + " AS Dynamic), " +
+			"toUInt8(ifNull(" + field.existsSQL + ", 0)), toUInt8(" + field.storedTypeSQL + "))])"
+		fragment = "SELECT *, " + binding + " AS " + inputBindingAlias +
+			" FROM (" + fragment + ") AS " + bindingBaseAlias
+		field.valueSQL = "tupleElement(" + inputBindingAlias + ", 1)"
+		field.dynamicTypeSQL = "dynamicType(" + field.valueSQL + ")"
+		field.existsSQL = "tupleElement(" + inputBindingAlias + ", 2)"
+		field.existsArgs = nil
+		field.storedTypeSQL = "tupleElement(" + inputBindingAlias + ", 3)"
+	}
 
 	metadata, err := compileDynamicNumericBinMetadata(field, stage)
 	if err != nil {
@@ -712,6 +956,33 @@ func compileDynamicNumericBucket(
 		return "", compileState{}, nil, err
 	}
 	preserve := previousKnown && operator.Output.Name != operator.Input.Name
+	var (
+		preserveWith        []string
+		preserveBaseAliases []string
+		preserveArgs        []any
+		previousExistsAlias string
+		previousTypeAlias   string
+	)
+	if preserve {
+		previousExistsSQL, previousExistsArgs := knownFieldPresenceSQL(previous)
+		previousTypeSQL, previousTypeArgs, typeErr := knownFieldStoredTypeSQL(previous)
+		if typeErr != nil {
+			return "", compileState{}, nil, fmt.Errorf(
+				"compile ClickHouse numeric bucket destination type for %q: %w",
+				operator.Output.Name,
+				typeErr,
+			)
+		}
+		previousExistsAlias = numericBinStageAlias("previous_exists", stage)
+		previousTypeAlias = numericBinStageAlias("previous_type", stage)
+		preserveWith = append(preserveWith,
+			"toUInt8(ifNull("+previousExistsSQL+", 0)) AS "+previousExistsAlias,
+			"toUInt8("+previousTypeSQL+") AS "+previousTypeAlias,
+		)
+		preserveBaseAliases = append(preserveBaseAliases, previousExistsAlias, previousTypeAlias)
+		preserveArgs = append(preserveArgs, previousExistsArgs...)
+		preserveArgs = append(preserveArgs, previousTypeArgs...)
+	}
 
 	signedWide := "toInt128(" + signedValueAlias + ")"
 	signedSpan := "toInt128(" + spanAlias + ")"
@@ -731,43 +1002,13 @@ func compileDynamicNumericBucket(
 	// Generated SQL uses `?` exclusively for bound placeholders, which keeps
 	// compiler/executor placeholder accounting exact.
 	decimalStringPattern := `'^([+]|-|)(([0-9]+([.][0-9]*|))|([.][0-9]+))([eE]([+]|-|)[0-9]+|)$'`
-	// ClickHouse parses out-of-range integer text into a wrapped Int256 instead
-	// of NULL, so the exact path only accepts spellings bounded well inside
-	// that width. Twenty-one bytes covers every signed canonical spelling that
-	// can still produce a `UInt64` bucket, the widest exact result this slice
-	// emits, so the bound costs no value. Bound the width with an explicit
-	// length rather than a repetition count: generated SQL must not contain a
-	// `{...}` sequence that the driver could mistake for a named query
-	// parameter. Measure the canonical spelling so that padding, which
-	// `accurateCastOrNull` reads exactly at any length, never pushes an
-	// ordinary integer off the exact path.
 	integerStringPattern := `'^([+]|-|)[0-9]+$'`
-	integerStringWidth := "length(" + stringCanonicalAlias + ") <= 21"
-	numericString := "(" + stringValueAlias + " = trimBoth(" + stringValueAlias + ") AND " +
-		"match(" + stringValueAlias + ", " + decimalStringPattern + "))"
-	integerStringSpan := "toInt256(" + spanAlias + ")"
-	integerStringBucket := "(intDiv(" + stringIntegerAlias + ", " + integerStringSpan + ") - if(" +
-		stringIntegerAlias + " < 0 AND " + stringIntegerAlias + " % " + integerStringSpan +
-		" != 0, 1, 0)) * " + integerStringSpan
-	stringBucket := "floor(" + stringParsedAlias + " / " + floatSpan + ") * " + floatSpan
+	numericString := "(" + stringBoundedAlias + " = trimBoth(" + stringBoundedAlias + ") AND " +
+		"match(" + stringBoundedAlias + ", " + decimalStringPattern + "))"
+	exactTextLimit := strconv.Itoa(MaximumExactNumericBinTextBytes)
 
-	// A String value is bucketed only when its spelling has an exact bucket:
-	// integral text through Int256, and fractional or exponent text within the
-	// exactly representable Float64 range. Every other String keeps its text.
-	exactFloatBound := "toFloat64(" + exactFloat64BucketBound + ")"
-	integralString := stringNumericAlias + " != 0 AND isNotNull(" + stringIntegerAlias + ")"
-	exactFloatString := stringNumericAlias + " != 0 AND isNull(" + stringIntegerAlias + ") AND ifNull(" +
-		"isFinite(" + stringParsedAlias + ") AND isFinite(" + stringCandidateAlias + ") AND " +
-		"abs(" + stringParsedAlias + ") <= " + exactFloatBound + " AND " +
-		"abs(" + stringCandidateAlias + ") <= " + exactFloatBound + ", 0) != 0"
-	stringMode := "toUInt8(multiIf(" +
-		integralString + " AND isNotNull(" + stringSignedAlias + "), 1, " +
-		integralString + " AND isNotNull(" + stringUnsignedAlias + "), 2, " +
-		exactFloatString + ", 3, 0))"
-
-	with := []string{
-		"CAST(? AS UInt64) AS " + spanAlias,
-	}
+	with := append([]string(nil), preserveWith...)
+	with = append(with, "CAST(? AS UInt64) AS "+spanAlias)
 	with = append(with, metadata.with...)
 	with = append(with,
 		"dynamicType("+field.valueSQL+") AS "+physicalTypeAlias,
@@ -778,19 +1019,11 @@ func compileDynamicNumericBucket(
 		"dynamicElement("+field.valueSQL+", 'Float64') AS "+floatValueAlias,
 		floatBucket+" AS "+floatCandidateAlias,
 		"dynamicElement("+field.valueSQL+", 'String') AS "+stringValueAlias,
-		"toUInt8(ifNull(isValidUTF8("+stringValueAlias+") AND "+numericString+", 0)) AS "+stringNumericAlias,
-		"if("+stringNumericAlias+" != 0, "+canonicalNumericTextSQL(stringValueAlias)+
+		"if(length("+stringValueAlias+") <= "+exactTextLimit+", "+stringValueAlias+
+			", CAST('' AS String)) AS "+stringBoundedAlias,
+		"toUInt8(ifNull(isValidUTF8("+stringBoundedAlias+") AND "+numericString+", 0)) AS "+stringNumericAlias,
+		"if("+stringNumericAlias+" != 0, "+canonicalNumericTextSQL(stringBoundedAlias)+
 			", CAST('' AS String)) AS "+stringCanonicalAlias,
-		"if("+stringNumericAlias+" != 0 AND "+integerStringWidth+" AND match("+stringValueAlias+", "+
-			integerStringPattern+"), accurateCastOrNull("+stringValueAlias+
-			", 'Int256'), CAST(NULL AS Nullable(Int256))) AS "+stringIntegerAlias,
-		integerStringBucket+" AS "+stringIntegerCandidateAlias,
-		"accurateCastOrNull("+stringIntegerCandidateAlias+", 'Int64') AS "+stringSignedAlias,
-		"accurateCastOrNull("+stringIntegerCandidateAlias+", 'UInt64') AS "+stringUnsignedAlias,
-		"if("+stringNumericAlias+" != 0, toFloat64OrNull("+stringCanonicalAlias+
-			"), CAST(NULL AS Nullable(Float64))) AS "+stringParsedAlias,
-		stringBucket+" AS "+stringCandidateAlias,
-		stringMode+" AS "+stringModeAlias,
 	)
 
 	code := func(value eventfields.StoredValueType) string {
@@ -826,10 +1059,6 @@ func compileDynamicNumericBucket(
 	stringBaseCondition := present + " AND " + noParent + " AND " +
 		storedType + " = " + code(eventfields.StoredValueTypeString) + " AND " +
 		physicalType + " = 'String'"
-	stringSignedCondition := stringBaseCondition + " AND " + stringModeAlias + " = 1"
-	stringUnsignedCondition := stringBaseCondition + " AND " + stringModeAlias + " = 2"
-	stringFloatCondition := stringBaseCondition + " AND " + stringModeAlias + " = 3"
-	stringPassThroughCondition := stringBaseCondition
 	boolCondition := present + " AND " + noParent + " AND " +
 		storedType + " = " + code(eventfields.StoredValueTypeBool) + " AND " + physicalType + " = 'Bool'"
 
@@ -839,14 +1068,130 @@ func compileDynamicNumericBucket(
 			storedType + " = " + code(stored) + " AND " + tagged.envelope + " AND " +
 			tagged.mapSQL + "[" + tagged.typeKey + "] = '" + tag + "' AND " + payloadValid + ")"
 	}
+	boundedDecimalValidSQL := func(payload string) string {
+		bounded := "if(length(" + payload + ") <= " + exactTextLimit +
+			", " + payload + ", CAST('' AS String))"
+		return "length(" + payload + ") <= " + exactTextLimit +
+			" AND match(" + bounded + ", " + dynamicDecimalPayloadPattern + ")"
+	}
+	decimalEnvelopeCondition := taggedCondition(
+		eventfields.StoredValueTypeDecimal,
+		"decimal/v1",
+		boundedDecimalValidSQL(tagged.payload),
+	)
+	// Exact decimal buckets are published as Dynamic(Int256) with calculated
+	// Decimal metadata. Treat that representation as a first-class Decimal
+	// input so consecutive bins remain composable instead of accepting only
+	// the map envelope written by ingestion.
+	decimalInt256Condition := "0"
+	if field.storedTypeSQL != "" {
+		decimalInt256Condition = "(" + present + " AND " + noParent + " AND " +
+			storedType + " = " + code(eventfields.StoredValueTypeDecimal) + " AND " +
+			physicalType + " = 'Int256')"
+	}
+	decimalBaseCondition := "(" + decimalEnvelopeCondition + " OR " + decimalInt256Condition + ")"
+	stringNumericCondition := "(" + stringBaseCondition + " AND " + stringNumericAlias + " != 0)"
+	exactSourceMode := "toUInt8(multiIf(" +
+		decimalBaseCondition + ", " + strconv.Itoa(int(exactNumericBinSourceDecimal)) + ", " +
+		stringNumericCondition + ", " + strconv.Itoa(int(exactNumericBinSourceString)) + ", " +
+		strconv.Itoa(int(exactNumericBinSourceNone)) + "))"
+	exactSourceText := "multiIf(" +
+		decimalEnvelopeCondition + ", " + tagged.payload + ", " +
+		decimalInt256Condition + ", toString(dynamicElement(" + input + ", 'Int256')), " +
+		stringNumericCondition + ", " + stringCanonicalAlias + ", CAST('0' AS String))"
+	exact := compileExactDynamicDecimalBucketSQL(
+		stage,
+		spanAlias,
+		exactSourceMode,
+		exactSourceText,
+	)
+	baseAliases := []string{
+		spanAlias,
+		metadata.existsAlias,
+		metadata.typeAlias,
+		metadata.parentAlias,
+		metadata.versionAlias,
+		physicalTypeAlias,
+		signedCandidateAlias,
+		unsignedCandidateAlias,
+		floatValueAlias,
+		floatCandidateAlias,
+		stringValueAlias,
+		stringBoundedAlias,
+		stringNumericAlias,
+		stringCanonicalAlias,
+	}
+	baseAliases = append(baseAliases, preserveBaseAliases...)
+	baseAlias := quoteIdentifier(fmt.Sprintf("__os_numeric_bin_base_%d", stage))
+	fragment = "WITH " + strings.Join(with, ", ") + " SELECT *, " +
+		strings.Join(baseAliases, ", ") + " FROM (" + fragment + ") AS " + baseAlias
+	privateAliases := append([]string(nil), baseAliases...)
+	if inputBindingAlias != "" {
+		privateAliases = append(privateAliases, inputBindingAlias)
+	}
+	layer := 0
+	for _, expressions := range exact.layers {
+		fragment = dynamicNumericBinProjectionLayer(fragment, stage, layer, expressions)
+		layer++
+	}
+	exactDeadAliases := make([]string, 0, len(exact.privateAliases)-2)
+	for _, privateAlias := range exact.privateAliases {
+		if privateAlias != exact.sourceModeAlias && privateAlias != exact.candidateAlias {
+			exactDeadAliases = append(exactDeadAliases, privateAlias)
+		}
+	}
+	exactCleanupAlias := quoteIdentifier(fmt.Sprintf("__os_numeric_bin_exact_cleanup_%d", stage))
+	fragment = "SELECT * EXCEPT (" + strings.Join(exactDeadAliases, ", ") + ") FROM (" +
+		fragment + ") AS " + exactCleanupAlias
+	privateAliases = append(privateAliases, exact.sourceModeAlias, exact.candidateAlias)
+
+	exactStringCondition := exact.sourceModeAlias + " = " +
+		strconv.Itoa(int(exactNumericBinSourceString)) + " AND isNotNull(" + exact.candidateAlias + ")"
+	integralStringCondition := exactStringCondition + " AND match(" +
+		stringBoundedAlias + ", " + integerStringPattern + ")"
+	fractionalStringCondition := exactStringCondition + " AND NOT match(" +
+		stringBoundedAlias + ", " + integerStringPattern + ")"
+	exactFloatLower := "toInt256('-" + exactFloat64BucketBound + "')"
+	exactFloatUpper := "toInt256('" + exactFloat64BucketBound + "')"
+	exactFloatStringCondition := fractionalStringCondition + " AND " +
+		exact.candidateAlias + " BETWEEN " + exactFloatLower + " AND " + exactFloatUpper
+	stringMode := "toUInt8(multiIf(" +
+		integralStringCondition + " AND isNotNull(" + stringSignedAlias + "), 1, " +
+		integralStringCondition + " AND isNotNull(" + stringUnsignedAlias + "), 2, " +
+		exactFloatStringCondition + ", 3, " +
+		exactStringCondition + ", 4, 0))"
+	fragment = dynamicNumericBinProjectionLayer(fragment, stage, layer, []string{
+		"accurateCastOrNull(" + exact.candidateAlias + ", 'Int64') AS " + stringSignedAlias,
+		"accurateCastOrNull(" + exact.candidateAlias + ", 'UInt64') AS " + stringUnsignedAlias,
+		"toFloat64(" + exact.candidateAlias + ") AS " + stringCandidateAlias,
+	})
+	layer++
+	privateAliases = append(privateAliases, stringSignedAlias, stringUnsignedAlias, stringCandidateAlias)
+	fragment = dynamicNumericBinProjectionLayer(fragment, stage, layer, []string{
+		stringMode + " AS " + stringModeAlias,
+	})
+	layer++
+	privateAliases = append(privateAliases, stringModeAlias)
+	decimalCondition := exact.sourceModeAlias + " = " +
+		strconv.Itoa(int(exactNumericBinSourceDecimal)) + " AND isNotNull(" + exact.candidateAlias + ")"
+	stringSignedCondition := stringBaseCondition + " AND " + stringModeAlias + " = 1"
+	stringUnsignedCondition := stringBaseCondition + " AND " + stringModeAlias + " = 2"
+	stringFloatCondition := stringBaseCondition + " AND " + stringModeAlias + " = 3"
+	stringWideCondition := stringBaseCondition + " AND " + stringModeAlias + " = 4"
+	stringPassThroughCondition := stringBaseCondition
+
 	// The three admitted envelopes are classified once into a private alias so
 	// the pass-through arm and the unsupported guard below share one
 	// evaluation instead of restating the envelope grammar twice.
-	with = append(with, "toUInt8(ifNull("+strings.Join([]string{
-		taggedCondition(eventfields.StoredValueTypeBytes, "bytes/v1", tagged.bytesValid),
-		taggedCondition(eventfields.StoredValueTypeTimestamp, "timestamp/v1", tagged.timestampValid),
-		taggedCondition(eventfields.StoredValueTypeDuration, "duration/v1", tagged.durationValid),
-	}, " OR ")+", 0)) AS "+extendedAlias)
+	fragment = dynamicNumericBinProjectionLayer(fragment, stage, layer, []string{
+		"toUInt8(ifNull(" + strings.Join([]string{
+			taggedCondition(eventfields.StoredValueTypeBytes, "bytes/v1", tagged.bytesValid),
+			taggedCondition(eventfields.StoredValueTypeTimestamp, "timestamp/v1", tagged.timestampValid),
+			taggedCondition(eventfields.StoredValueTypeDuration, "duration/v1", tagged.durationValid),
+		}, " OR ") + ", 0)) AS " + extendedAlias,
+	})
+	layer++
+	privateAliases = append(privateAliases, extendedAlias)
 	extendedCondition := extendedAlias + " != 0"
 
 	// Whether the row reaches any classifier arm at all. Only the sanitized
@@ -854,7 +1199,7 @@ func compileDynamicNumericBucket(
 	// the three narrower String arms are covered by their shared base
 	// condition. An arm added here but not below would let an unclassified
 	// value escape as the guard's own result instead of failing the search.
-	with = append(with, "toUInt8(ifNull("+strings.Join([]string{
+	supportedSQL := "toUInt8(ifNull(" + strings.Join([]string{
 		"(" + missingCondition + ")",
 		"(" + staleMetadataCondition + ")",
 		"(" + nullCondition + ")",
@@ -862,50 +1207,37 @@ func compileDynamicNumericBucket(
 		"(" + unsignedCondition + ")",
 		"(" + floatCondition + ")",
 		"(" + stringPassThroughCondition + ")",
+		"(" + decimalCondition + ")",
 		"(" + boolCondition + ")",
 		"(" + extendedCondition + ")",
-	}, " OR ")+", 0)) AS "+supportedAlias)
+	}, " OR ") + ", 0))"
 
 	// A bucketed String becomes the number it spells, so the destination stays
 	// visible to numeric predicates and still converges with its integer twin
 	// under the lexical stats BY key. The output's semantic type follows the
 	// value it now holds rather than the source's stored type.
-	bucketTypeSQL := "multiIf(" + storedType + " != " + code(eventfields.StoredValueTypeString) + ", " + storedType + ", " +
+	bucketTypeSQL := "multiIf(" +
+		decimalCondition + ", " + code(eventfields.StoredValueTypeDecimal) + ", " +
+		storedType + " != " + code(eventfields.StoredValueTypeString) + ", " + storedType + ", " +
 		stringModeAlias + " = 1, " + code(eventfields.StoredValueTypeSint64) + ", " +
 		stringModeAlias + " = 2, " + code(eventfields.StoredValueTypeUint64) + ", " +
-		stringModeAlias + " = 3, " + code(eventfields.StoredValueTypeDouble) + ", " + storedType + ")"
+		stringModeAlias + " = 3, " + code(eventfields.StoredValueTypeDouble) + ", " +
+		stringModeAlias + " = 4, " + code(eventfields.StoredValueTypeDecimal) + ", " + storedType + ")"
 	missingValue := "CAST(NULL AS Dynamic)"
 	outputExistsSQL := metadata.existsAlias
 	outputTypeSQL := bucketTypeSQL
-	var preserveArgs []any
 	if preserve {
-		previousExists := previous.existsSQL
-		if previousExists == "" {
-			previousExists = "1"
-		}
-		previousExistsArgs := append([]any(nil), previous.existsArgs...)
-		if previous.kind == fieldKindDynamic && previous.descendantSQL != "" {
-			previousExists = "((" + previousExists + ") OR (" + previous.descendantSQL + "))"
-			previousExistsArgs = append(previousExistsArgs, previous.descendantArgs...)
-		}
-		previousTypeSQL, previousTypeArgs, typeErr := knownFieldStoredTypeSQL(previous)
-		if typeErr != nil {
-			return "", compileState{}, nil, fmt.Errorf(
-				"compile ClickHouse numeric bucket destination type for %q: %w",
-				operator.Output.Name,
-				typeErr,
-			)
-		}
 		missingValue = "CAST(" + previous.valueSQL + " AS Dynamic)"
-		outputExistsSQL = "if(" + metadata.existsAlias + " != 0, 1, ifNull(" + previousExists + ", 0))"
-		outputTypeSQL = "if(" + metadata.existsAlias + " != 0, " + bucketTypeSQL + ", " + previousTypeSQL + ")"
-		preserveArgs = append(preserveArgs, previousExistsArgs...)
-		preserveArgs = append(preserveArgs, previousTypeArgs...)
+		outputExistsSQL = "if(" + metadata.existsAlias + " != 0, 1, " + previousExistsAlias + ")"
+		outputTypeSQL = "if(" + metadata.existsAlias + " != 0, " + bucketTypeSQL + ", " + previousTypeAlias + ")"
 	}
-	with = append(with,
-		"toUInt8("+outputExistsSQL+") AS "+outputExistsAlias,
-		"toUInt8("+outputTypeSQL+") AS "+outputTypeAlias,
-	)
+	fragment = dynamicNumericBinProjectionLayer(fragment, stage, layer, []string{
+		supportedSQL + " AS " + supportedAlias,
+		"toUInt8(" + outputExistsSQL + ") AS " + outputExistsAlias,
+		"toUInt8(" + outputTypeSQL + ") AS " + outputTypeAlias,
+	})
+	layer++
+	privateAliases = append(privateAliases, supportedAlias)
 
 	normalizedFloat := "if(" + floatCandidateAlias + " = toFloat64(0), toFloat64(0), " + floatCandidateAlias + ")"
 	normalizedString := "if(" + stringCandidateAlias + " = toFloat64(0), toFloat64(0), " + stringCandidateAlias + ")"
@@ -927,9 +1259,11 @@ func compileDynamicNumericBucket(
 		signedCondition + ", CAST(assumeNotNull(" + signedCandidateAlias + ") AS Dynamic), " +
 		unsignedCondition + ", CAST(" + unsignedCandidateAlias + " AS Dynamic), " +
 		floatCondition + ", CAST(" + normalizedFloat + " AS Dynamic), " +
+		decimalCondition + ", CAST(assumeNotNull(" + exact.candidateAlias + ") AS Dynamic), " +
 		stringSignedCondition + ", CAST(assumeNotNull(" + stringSignedAlias + ") AS Dynamic), " +
 		stringUnsignedCondition + ", CAST(assumeNotNull(" + stringUnsignedAlias + ") AS Dynamic), " +
 		stringFloatCondition + ", CAST(" + normalizedString + " AS Dynamic), " +
+		stringWideCondition + ", CAST(assumeNotNull(" + exact.candidateAlias + ") AS Dynamic), " +
 		stringPassThroughCondition + ", " + dynamicInput + ", " +
 		boolCondition + ", " + dynamicInput + ", " +
 		"(" + extendedCondition + "), " + dynamicInput + ", " +
@@ -940,22 +1274,23 @@ func compileDynamicNumericBucket(
 	if _, replacing := state.visible[operator.Output.Name]; replacing {
 		projection = "* REPLACE (" + valueSQL + " AS " + output + ")"
 	}
-	projection += ", " + outputExistsAlias + ", " + outputTypeAlias
-	fragment = "WITH " + strings.Join(with, ", ") + " SELECT " + projection +
-		" FROM (" + fragment + ") AS " + alias
+	fragment = "SELECT " + projection + " FROM (" + fragment + ") AS " + alias
+	cleanupAlias := quoteIdentifier(fmt.Sprintf("__os_numeric_bin_cleanup_%d", stage))
+	fragment = "SELECT * EXCEPT (" + strings.Join(privateAliases, ", ") + ") FROM (" +
+		fragment + ") AS " + cleanupAlias
 
 	next := updateDynamicBucketCompileState(
 		state,
 		operator.Input.Name,
 		operator.Output,
-		field,
+		stateSourceField,
 		outputExistsAlias,
 		outputTypeAlias,
 	)
 	args := make([]any, 0, 1+len(metadata.args)+len(preserveArgs))
+	args = append(args, preserveArgs...)
 	args = append(args, operator.Span)
 	args = append(args, metadata.args...)
-	args = append(args, preserveArgs...)
 	return fragment, next, args, nil
 }
 
@@ -1060,9 +1395,10 @@ func numericBinStageAlias(name string, stage int) string {
 // Keep the alias holding this expression sparsely referenced. `WITH` aliases
 // are inlined at every use, and the field summary embeds a whole bin fragment
 // in a repeatedly referenced CTE, so one more chained alias read four times is
-// enough to exhaust the server's memory on the pinned image. Only the width
-// bound and the double parse need the canonical spelling; the exact integer
-// arm reads padded and `+`-signed text correctly from the raw value.
+// enough to exhaust the server's memory on the pinned image. Both the exact
+// lexical parser and the bounded Float64 publication arm read this canonical
+// spelling; the original 4 KiB resource bound is applied before
+// canonicalization so padding cannot bypass it.
 func canonicalNumericTextSQL(value string) string {
 	significand := "replaceRegexpOne(" + value + `, '^([+]|-|)0*([0-9])', '\\1\\2')`
 	return "replaceRegexpOne(" + significand + `, '([eE])([+]|-|)0*([0-9])', '\\1\\2\\3')`
@@ -2941,7 +3277,8 @@ func dynamicEvalComparisonCore(left, right compiledScalar, operator string) (str
 	if leftDynamic && rightDynamic {
 		leftType := dynamicScalarTypeSQL(left)
 		rightType := dynamicScalarTypeSQL(right)
-		integerCondition := "(" + dynamicIntegerTypePredicate(leftType) + " AND " + dynamicIntegerTypePredicate(rightType) + ")"
+		integerCondition := "(" + dynamicExactIntegerPredicate(left, leftType) + " AND " +
+			dynamicExactIntegerPredicate(right, rightType) + ")"
 		numericCondition := "(" + dynamicNumericValuePredicate(left) + " AND " + dynamicNumericValuePredicate(right) + ")"
 		stringCondition := "(" + leftType + " = 'String' AND " + rightType + " = 'String')"
 		boolCondition := "(" + leftType + " = 'Bool' AND " + rightType + " = 'Bool')"
@@ -2981,7 +3318,7 @@ func dynamicEvalComparisonCore(left, right compiledScalar, operator string) (str
 		if fixedNumberTypeIsInteger(fixed.numberType) {
 			integer := comparison(numericScalarSQL(dynamic, true), numericScalarSQL(fixed, true))
 			floating := comparison(numericScalarSQL(dynamic, false), numericScalarSQL(fixed, false))
-			result := "multiIf(" + dynamicIntegerTypePredicate(typeSQL) + ", " + integer + ", " +
+			result := "multiIf(" + dynamicExactIntegerPredicate(dynamic, typeSQL) + ", " + integer + ", " +
 				dynamicNumericValuePredicate(dynamic) + ", " + floating + ", " + nullBool + ")"
 			args := comparisonValueArgs(left, right)
 			return result, append(args, comparisonValueArgs(left, right)...)
@@ -3035,6 +3372,16 @@ func dynamicNumericValuePredicate(value compiledScalar) string {
 	return "(" + dynamicNumericTypePredicate(dynamicScalarTypeSQL(value)) + " OR " + dynamicTaggedDecimalCondition(value) + ")"
 }
 
+func dynamicExactIntegerPredicate(value compiledScalar, typeSQL string) string {
+	return "(" + dynamicIntegerTypePredicate(typeSQL) + " OR isNotNull(" +
+		dynamicTaggedDecimalIntegralSQL(value) + "))"
+}
+
+func dynamicExactIntegerSQL(value compiledScalar) string {
+	physical := "accurateCastOrNull(toString(" + value.valueSQL + "), 'Int256')"
+	return "coalesce(" + dynamicTaggedDecimalIntegralSQL(value) + ", " + physical + ")"
+}
+
 func dynamicTaggedDecimalCondition(value compiledScalar) string {
 	typeSQL := dynamicScalarTypeSQL(value)
 	mapSQL := dynamicTaggedMapSQL(value)
@@ -3056,6 +3403,169 @@ func dynamicTaggedDecimalFloatSQL(value compiledScalar) string {
 	return finiteFloatOrNullSQL(dynamicTaggedMapSQL(value) + "[" + valueKey + "]")
 }
 
+// dynamicTaggedDecimalIntegralSQL extracts the exact signed-Int256 value of
+// every bounded decimal/v1 payload whose mathematical value is integral.
+// Decimal points and exponents are decomposed lexically: the expression never
+// expands an attacker-controlled exponent and never routes a wide integer
+// through Float64. Nonintegral or out-of-range values retain the established
+// Float64 compatibility path. ClickHouse's signed String conversions wrap on
+// overflow, so the final conversion uses a lexically bounded UInt256 magnitude
+// and explicit two's-complement construction.
+func dynamicTaggedDecimalIntegralSQL(value compiledScalar) string {
+	typeVariable := "__os_tagged_exact_type"
+	mapVariable := "__os_tagged_exact_map"
+	payloadVariable := "__os_tagged_exact_payload"
+	eligibleVariable := "__os_tagged_exact_eligible"
+	textVariable := "__os_tagged_exact_text"
+	negativeVariable := "__os_tagged_exact_negative"
+	bodyVariable := "__os_tagged_exact_body"
+	exponentPositionVariable := "__os_tagged_exact_exponent_position"
+	significandVariable := "__os_tagged_exact_significand"
+	exponentTextVariable := "__os_tagged_exact_exponent_text"
+	exponentNegativeVariable := "__os_tagged_exact_exponent_negative"
+	exponentTrimmedVariable := "__os_tagged_exact_exponent_trimmed"
+	fractionDigitsVariable := "__os_tagged_exact_fraction_digits"
+	significantVariable := "__os_tagged_exact_significant"
+	exponentVariable := "__os_tagged_exact_exponent"
+	integerDigitsVariable := "__os_tagged_exact_integer_digits"
+	trimmedSignificantVariable := "__os_tagged_exact_trimmed_significant"
+	integerTextVariable := "__os_tagged_exact_integer_text"
+	magnitudeVariable := "__os_tagged_exact_magnitude"
+	bind := func(parameters, values []string, body string) string {
+		arrays := make([]string, len(values))
+		for index, value := range values {
+			arrays[index] = "[" + value + "]"
+		}
+		return "arrayElement(arrayMap((" + strings.Join(parameters, ", ") + ") -> " +
+			body + ", " + strings.Join(arrays, ", ") + "), 1)"
+	}
+
+	typeKey := "concat(char(0), 'open_splunk_type')"
+	valueKey := "concat(char(0), 'open_splunk_value')"
+	limit := strconv.Itoa(MaximumExactNumericBinTextBytes)
+	maxDigits := strconv.Itoa(exactNumericBinMaxDigits)
+	exponentClamp := strconv.Itoa(exactNumericBinExponentClamp)
+	envelopeValid := typeVariable + " = 'Map(String, String)'" +
+		" AND length(" + mapVariable + ") = 2" +
+		" AND mapContains(" + mapVariable + ", " + typeKey + ")" +
+		" AND mapContains(" + mapVariable + ", " + valueKey + ")" +
+		" AND " + mapVariable + "[" + typeKey + "] = 'decimal/v1'" +
+		" AND length(" + payloadVariable + ") <= " + limit +
+		" AND match(if(length(" + payloadVariable + ") <= " + limit + ", " +
+		payloadVariable + ", CAST('' AS String)), " + dynamicDecimalPayloadPattern + ")"
+	eligibleSQL := "toUInt8(" + envelopeValid + ")"
+	textSQL := "if(" + envelopeValid + ", " + payloadVariable + ", CAST('0' AS String))"
+	signOffset := "if(startsWith(" + textVariable + ", '-'), 2, 1)"
+	bodySQL := "substring(" + textVariable + ", " + signOffset + ")"
+	exponentPositionSQL := "greatest(position(" + bodySQL + ", 'e'), position(" + bodySQL + ", 'E'))"
+	significandSQL := "if(" + exponentPositionVariable + " = 0, " + bodyVariable +
+		", substring(" + bodyVariable + ", 1, " + exponentPositionVariable + " - 1))"
+	exponentTextSQL := "if(" + exponentPositionVariable + " = 0, CAST('0' AS String), substring(" +
+		bodyVariable + ", " + exponentPositionVariable + " + 1))"
+	exponentOffset := "if(startsWith(" + exponentTextVariable + ", '-') OR startsWith(" +
+		exponentTextVariable + ", '+'), 2, 1)"
+	exponentDigits := "substring(" + exponentTextVariable + ", " + exponentOffset + ")"
+	exponentMagnitude := "if(length(" + exponentTrimmedVariable + ") <= 4, toInt64OrZero(" +
+		exponentTrimmedVariable + "), toInt64(" + exponentClamp + "))"
+	significantLength := "toInt64(length(" + significantVariable + "))"
+	safePrefixLength := "toUInt64(greatest(least(" + integerDigitsVariable + ", " +
+		significantLength + "), 0))"
+	safeZeroCount := "toUInt64(greatest(least(" + integerDigitsVariable + " - " +
+		significantLength + ", " + maxDigits + "), 0))"
+	integerTextSQL := "multiIf(" +
+		"empty(" + significantVariable + "), '0', " +
+		integerDigitsVariable + " <= 0, '0', " +
+		integerDigitsVariable + " <= " + maxDigits + " AND " +
+		integerDigitsVariable + " <= " + significantLength + ", substring(" +
+		significantVariable + ", 1, " + safePrefixLength + "), " +
+		integerDigitsVariable + " <= " + maxDigits + ", concat(" + significantVariable +
+		", repeat('0', " + safeZeroCount + ")), '0')"
+	integralNonzero := integerDigitsVariable + " > 0 AND " + integerDigitsVariable +
+		" >= toInt64(length(" + trimmedSignificantVariable + "))"
+	withinBound := "(length(" + integerTextVariable + ") < " + maxDigits +
+		" OR (length(" + integerTextVariable + ") = " + maxDigits +
+		" AND " + integerTextVariable + " <= if(" + negativeVariable + ", '" +
+		exactNumericBinMinMagnitude + "', '" + exactNumericBinMaxInt256 + "')))"
+	fits := eligibleVariable + " != 0 AND (empty(" + significantVariable + ") OR ((" +
+		integralNonzero + ") AND " + integerDigitsVariable + " <= " + maxDigits + ")) AND " +
+		withinBound
+	negativeCandidate := "reinterpretAsInt256(bitNot(" + magnitudeVariable + ") + toUInt256(1))"
+	candidate := "if(" + fits + ", if(" + negativeVariable + " AND " +
+		magnitudeVariable + " != toUInt256(0), " + negativeCandidate +
+		", accurateCastOrNull(" + magnitudeVariable +
+		", 'Int256')), CAST(NULL AS Nullable(Int256)))"
+
+	candidate = bind(
+		[]string{magnitudeVariable},
+		[]string{"toUInt256(" + integerTextVariable + ")"},
+		candidate,
+	)
+	candidate = bind(
+		[]string{integerTextVariable},
+		[]string{integerTextSQL},
+		candidate,
+	)
+	candidate = bind(
+		[]string{integerDigitsVariable, trimmedSignificantVariable},
+		[]string{
+			significantLength + " + " + exponentVariable + " - " + fractionDigitsVariable,
+			"replaceRegexpOne(" + significantVariable + ", '0+$', '')",
+		},
+		candidate,
+	)
+	candidate = bind(
+		[]string{exponentVariable},
+		[]string{"if(" + exponentNegativeVariable + " != 0, -(" + exponentMagnitude +
+			"), " + exponentMagnitude + ")"},
+		candidate,
+	)
+	candidate = bind(
+		[]string{
+			exponentNegativeVariable,
+			exponentTrimmedVariable,
+			fractionDigitsVariable,
+			significantVariable,
+		},
+		[]string{
+			"toUInt8(startsWith(" + exponentTextVariable + ", '-'))",
+			"replaceRegexpOne(" + exponentDigits + ", '^0+', '')",
+			"toInt64(if(position(" + significandVariable + ", '.') = 0, 0, length(" +
+				significandVariable + ") - position(" + significandVariable + ", '.')))",
+			"replaceRegexpOne(replaceAll(" + significandVariable + ", '.', ''), '^0+', '')",
+		},
+		candidate,
+	)
+	candidate = bind(
+		[]string{significandVariable, exponentTextVariable},
+		[]string{significandSQL, exponentTextSQL},
+		candidate,
+	)
+	candidate = bind(
+		[]string{negativeVariable, bodyVariable, exponentPositionVariable},
+		[]string{
+			"toUInt8(startsWith(" + textVariable + ", '-'))",
+			bodySQL,
+			exponentPositionSQL,
+		},
+		candidate,
+	)
+	candidate = bind(
+		[]string{eligibleVariable, textVariable},
+		[]string{eligibleSQL, textSQL},
+		candidate,
+	)
+	candidate = bind(
+		[]string{payloadVariable},
+		[]string{mapVariable + "[" + valueKey + "]"},
+		candidate,
+	)
+	return bind(
+		[]string{typeVariable, mapVariable},
+		[]string{dynamicScalarTypeSQL(value), dynamicTaggedMapSQL(value)},
+		candidate,
+	)
+}
+
 func dynamicStringScalarSQL(value compiledScalar) string {
 	return "dynamicElement(" + value.valueSQL + ", 'String')"
 }
@@ -3074,6 +3584,9 @@ func scalarIntegerComparison(left, right compiledScalar) bool {
 
 func numericScalarSQL(value compiledScalar, integer bool) string {
 	if integer {
+		if value.kind == fieldKindDynamic {
+			return dynamicExactIntegerSQL(value)
+		}
 		if fixedNumberTypeIsInteger(value.numberType) {
 			if value.literal != nil {
 				return "accurateCastOrNull(" + value.valueSQL + ", 'Int256')"
@@ -3193,9 +3706,9 @@ func equalityPredicate(expression *plan.ComparisonExpression, field fieldState, 
 	typeSQL := dynamicScalarTypeSQL(dynamic)
 	guard := dynamicLiteralGuard(typeSQL, expression.Value.Kind)
 	if expression.Value.Kind == plan.ValueKindInt64 || expression.Value.Kind == plan.ValueKindUint64 {
-		exact := "accurateCastOrNull(toString(" + valueSQL + "), 'Int256') = accurateCastOrNull(?, 'Int256')"
+		exact := dynamicExactIntegerSQL(dynamic) + " = accurateCastOrNull(?, 'Int256')"
 		decimal := dynamicTaggedDecimalFloatSQL(dynamic) + " = toFloat64OrNull(?)"
-		return "multiIf(" + dynamicIntegerTypePredicate(typeSQL) + ", " + exact + ", " +
+		return "multiIf(" + dynamicExactIntegerPredicate(dynamic, typeSQL) + ", " + exact + ", " +
 			dynamicTaggedDecimalCondition(dynamic) + ", " + decimal + ", 0)", 2
 	} else if expression.Value.Kind == plan.ValueKindFloat64 {
 		guard = "(" + guard + " OR " + dynamicTaggedDecimalCondition(dynamic) + ")"
@@ -3234,9 +3747,10 @@ func relationalPredicate(expression *plan.ComparisonExpression, field fieldState
 	if field.kind == fieldKindDynamic &&
 		(expression.Value.Kind == plan.ValueKindInt64 || expression.Value.Kind == plan.ValueKindUint64) {
 		typeSQL := dynamicTypeExpression(field)
-		exact := "accurateCastOrNull(toString(" + field.valueSQL + "), 'Int256') " + operator + " accurateCastOrNull(?, 'Int256')"
-		fallback := numericScalarSQL(compiledScalarFromField(field), false) + " " + operator + " toFloat64OrNull(?)"
-		return "multiIf(" + dynamicIntegerTypePredicate(typeSQL) + ", " + exact + ", " + fallback + ")", 2, nil
+		dynamic := compiledScalarFromField(field)
+		exact := dynamicExactIntegerSQL(dynamic) + " " + operator + " accurateCastOrNull(?, 'Int256')"
+		fallback := numericScalarSQL(dynamic, false) + " " + operator + " toFloat64OrNull(?)"
+		return "multiIf(" + dynamicExactIntegerPredicate(dynamic, typeSQL) + ", " + exact + ", " + fallback + ")", 2, nil
 	}
 	if field.kind == fieldKindDynamic {
 		return numericScalarSQL(compiledScalarFromField(field), false) + " " + operator + " toFloat64OrNull(?)", 1, nil
@@ -3712,7 +4226,8 @@ func statsByScalarExpressions(field fieldState) (supported, lexical string) {
 	// None is excluded deliberately. Missing and explicit-null leaves are
 	// removed before aggregation, while a flattened object parent reads as None
 	// at its literal path and must set the unsupported-container flag.
-	supported = "(" + typeSQL + " IN ('String', 'Int64', 'UInt64', 'Float64', 'Bool') OR " + extended + ")"
+	supported = "(" + typeSQL + " IN ('String', 'Float64', 'Bool') OR " +
+		dynamicIntegerTypePredicate(typeSQL) + " OR " + extended + ")"
 	lexical = "if(" + typeSQL + " = 'Map(String, String)', " + mapSQL + "[" + valueKey + "], toString(" + field.valueSQL + "))"
 	return supported, lexical
 }
@@ -3942,6 +4457,14 @@ func dynamicSortValue(valueSQL string, dynamicValue bool) string {
 		number = "ifNotFinite(" + numericScalarSQL(dynamic, false) + ", CAST(NULL AS Nullable(Float64)))"
 	}
 	integer := "accurateCastOrNull(" + text + ", 'Int256')"
+	if dynamicValue {
+		dynamic := compiledScalar{
+			valueSQL:       valueSQL,
+			dynamicTypeSQL: "dynamicType(" + valueSQL + ")",
+			kind:           fieldKindDynamic,
+		}
+		integer = dynamicExactIntegerSQL(dynamic)
+	}
 	// Dynamic itself is intentionally forbidden in ClickHouse ORDER BY. A
 	// fixed tuple also gives SPL-like numeric ordering for numeric values and
 	// strings. The Int256 tie-break preserves adjacent integral values that

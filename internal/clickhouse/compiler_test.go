@@ -111,8 +111,9 @@ func TestCompileDynamicNumericComparisonUsesFailureFreeNumericCoercion(t *testin
 
 	compiled := compileSPL(t, `index=gradethis status>=500`)
 	for _, required := range []string{
-		`has("__os_field_names", ?) AND ifNull(multiIf(dynamicType("__os_fields"."status") IN (`,
-		`accurateCastOrNull(toString("__os_fields"."status"), 'Int256') >= accurateCastOrNull(?, 'Int256')`,
+		`has("__os_field_names", ?) AND ifNull(multiIf((dynamicType("__os_fields"."status") IN (`,
+		`accurateCastOrNull(toString("__os_fields"."status"), 'Int256')) >= accurateCastOrNull(?, 'Int256')`,
+		`reinterpretAsInt256(bitNot(`,
 		`'decimal/v1'`,
 		`toFloat64OrNull(?)`,
 	} {
@@ -122,6 +123,31 @@ func TestCompileDynamicNumericComparisonUsesFailureFreeNumericCoercion(t *testin
 	}
 	if got := compiled.Args[len(compiled.Args)-2:]; !reflect.DeepEqual(got, []any{"500", "500"}) {
 		t.Fatalf("numeric argument occurrences = %#v, want source strings", got)
+	}
+}
+
+func TestDynamicTaggedDecimalExactIntegerLoweringHandlesExponentSyntax(t *testing.T) {
+	t.Parallel()
+
+	exact := dynamicTaggedDecimalIntegralSQL(compiledScalar{
+		valueSQL:       `"value"`,
+		dynamicTypeSQL: `dynamicType("value")`,
+		kind:           fieldKindDynamic,
+	})
+	// Integral exponent spellings are ordinary exact Decimals, not a Float64
+	// compatibility case. In particular, 9007199254740992e0 must remain
+	// distinct from an adjacent Dynamic(Int256) bucket above 2^53.
+	exponentAware := strings.Contains(exact, "[eE]") ||
+		strings.Contains(exact, "positionCaseInsensitive") ||
+		(strings.Contains(exact, "lowerUTF8") && strings.Contains(exact, "'e'")) ||
+		(strings.Contains(exact, "'e'") && strings.Contains(exact, "'E'"))
+	if !exponentAware {
+		t.Fatalf("exact tagged-Decimal integer lowering has no exponent path:\n%s", exact)
+	}
+	for _, bound := range []string{exactNumericBinMaxInt256, exactNumericBinMinMagnitude} {
+		if !strings.Contains(exact, bound) {
+			t.Fatalf("exact tagged-Decimal integer lowering lost signed Int256 bound %q:\n%s", bound, exact)
+		}
 	}
 }
 
@@ -177,7 +203,7 @@ func TestCompileFieldNotEqualRequiresExistence(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis status!=500`)
-	if !strings.Contains(compiled.SQL, `has("__os_field_names", ?) AND NOT ifNull(multiIf(dynamicType("__os_fields"."status") IN (`) {
+	if !strings.Contains(compiled.SQL, `has("__os_field_names", ?) AND NOT ifNull(multiIf((dynamicType("__os_fields"."status") IN (`) {
 		t.Fatalf("!= does not enforce presence:\n%s", compiled.SQL)
 	}
 }
@@ -186,7 +212,7 @@ func TestCompileNOTComparisonIncludesMissingField(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis NOT status=500`)
-	if !strings.Contains(compiled.SQL, `NOT ((has("__os_field_names", ?) AND ifNull(multiIf(dynamicType("__os_fields"."status") IN (`) {
+	if !strings.Contains(compiled.SQL, `NOT ((has("__os_field_names", ?) AND ifNull(multiIf((dynamicType("__os_fields"."status") IN (`) {
 		t.Fatalf("NOT comparison grouping is unsafe:\n%s", compiled.SQL)
 	}
 }
@@ -664,8 +690,10 @@ func TestCompileDynamicNumericBinDispatchesByStoredAndRuntimeType(t *testing.T) 
 		`intDiv(`,
 		`floor(`,
 		`trimBoth(`,
-		`toFloat64OrNull(`,
+		`toUInt256(`,
+		`reinterpretAsInt256(`,
 		`'^([+]|-|)[0-9]+$'`,
+		`'decimal/v1'`,
 		`'bytes/v1'`,
 		`'timestamp/v1'`,
 		`'duration/v1'`,
@@ -785,7 +813,9 @@ func TestCompileDynamicNumericBinKeepsPriorDestinationWithoutASource(t *testing.
 		// semantic type, and presence instead of losing them to a null write.
 		`"__os_numeric_bin_exists_3" = 0 AND "__os_numeric_bin_parent_3" = 0 AND ` +
 			`"__os_numeric_bin_physical_type_3" = 'None', CAST("band" AS Dynamic)`,
-		`if("__os_numeric_bin_exists_3" != 0, 1, ifNull(1, 0))) AS "__os_numeric_bin_output_exists_3"`,
+		`toUInt8(ifNull(1, 0)) AS "__os_numeric_bin_previous_exists_3"`,
+		`toUInt8(if("__os_numeric_bin_exists_3" != 0, 1, "__os_numeric_bin_previous_exists_3"))` +
+			` AS "__os_numeric_bin_output_exists_3"`,
 	} {
 		if !strings.Contains(calculated.SQL, required) {
 			t.Fatalf("Dynamic numeric bin destroyed its prior destination, missing %q:\n%s", required, calculated.SQL)
@@ -1865,8 +1895,10 @@ func TestCompileWhereUsesRuntimeDynamicTypesAndOccurrenceOrderedArguments(t *tes
 
 	compiled := compileSPL(t, `index=gradethis | where unsigned>18446744073709551614`)
 	for _, required := range []string{
-		`multiIf(dynamicType("__os_fields"."unsigned") IN (`,
-		`accurateCastOrNull(toString("__os_fields"."unsigned"), 'Int256') > accurateCastOrNull(CAST(? AS UInt64), 'Int256')`,
+		`multiIf((dynamicType("__os_fields"."unsigned") IN (`,
+		`reinterpretAsInt256(bitNot(`,
+		`coalesce(`,
+		`accurateCastOrNull(toString("__os_fields"."unsigned"), 'Int256')) > accurateCastOrNull(CAST(? AS UInt64), 'Int256')`,
 		`'decimal/v1'`,
 		`toFloat64(CAST(? AS UInt64))`,
 	} {
@@ -1888,7 +1920,8 @@ func TestCompileWhereUsesRuntimeDynamicTypesAndOccurrenceOrderedArguments(t *tes
 	}
 
 	fieldToField := compileSPL(t, `index=gradethis | where left>right`)
-	if !strings.Contains(fieldToField.SQL, `accurateCastOrNull(toString("__os_fields"."left"), 'Int256') > accurateCastOrNull(toString("__os_fields"."right"), 'Int256')`) ||
+	if !strings.Contains(fieldToField.SQL, `accurateCastOrNull(toString("__os_fields"."left"), 'Int256')) > coalesce(`) ||
+		!strings.Contains(fieldToField.SQL, `accurateCastOrNull(toString("__os_fields"."right"), 'Int256'))`) ||
 		!strings.Contains(fieldToField.SQL, `dynamicElement("__os_fields"."left", 'String') > dynamicElement("__os_fields"."right", 'String')`) {
 		t.Fatalf("dynamic field comparison is not runtime typed:\n%s", fieldToField.SQL)
 	}

@@ -74,9 +74,11 @@ a numeric literal also accept numeric-looking dynamic strings; failed numeric
 conversion does not match. `field!=value` excludes a missing field, while `NOT
 field=value` includes it. `field=*` requires a present, non-null value. Canonical
 `index` comparisons are case-sensitive; ordinary string comparisons are
-case-insensitive. Extended decimal values compare through finite `Float64`, so
-distinct values beyond `Float64` precision can compare as equal in compatibility
-version 0.1.
+case-insensitive. Mathematically integral `decimal/v1` values inside signed
+`Int256`, including fractional/exponent spellings and exact Decimal results
+produced by `bin`, use the exact integer comparison path. Other extended
+decimal values compare through finite `Float64`, so distinct values beyond
+`Float64` precision can compare as equal in compatibility version 0.1.
 
 ### `where`
 
@@ -95,8 +97,9 @@ Missing, null, container, or failed numeric operands do not pass the filter.
 Dynamic values compare through their runtime scalar types: integer pairs retain
 full 64-bit precision, numeric pairs compare numerically, and string pairs
 compare lexically. Canonical `_time` and `_indextime` use Unix epoch seconds in
-numeric comparisons. Extended decimals have the same `Float64` precision caveat
-as base-search comparisons.
+numeric comparisons. Mathematically integral extended decimals inside signed
+`Int256` use the exact integer path; other extended decimals have the same
+`Float64` precision caveat as base-search comparisons.
 
 ## Pipeline commands
 
@@ -457,27 +460,39 @@ A boundary whose bucket start cannot be represented by that type—for example,
 unsupported-value error rather than wrapping or widening. `Float64` values use
 finite double-precision floor semantics, retain `Float64`, normalize negative
 zero, and fail the search if the input or result is not finite. Explicit null
-remains null. Tagged decimals, containers, and multivalue values are explicit
-runtime errors carrying that same sanitized marker.
+remains null.
 
 A runtime-typed event field is classified per row from its stored semantic type
 and its runtime scalar type. Numeric text becomes the number it spells, so the
 bucket participates in later numeric filters and still groups with its numeric
-twin: text that spells an integer buckets through exact widened arithmetic and
-becomes a signed or unsigned number, and fractional or exponent text buckets
-through `Float64` within the exactly representable range. Leading zeros and an
+twin. The exact lexical path is limited to 4,096 input bytes and to a signed
+`Int256` bucket boundary. Integral text becomes `Int64` or `UInt64` when the
+boundary fits, otherwise it becomes semantic Decimal backed by `Int256`.
+Fractional or exponent text is also bucketed exactly; a boundary in
+`[-2^53, 2^53]` is published as an exactly representable `Float64`, while a
+wider boundary uses that Decimal/`Int256` representation. Leading zeros and an
 explicit `+` belong to the spelling rather than to the value, so a zero-padded
 fixed-width numeric field—an account or order identifier, a mainframe-style
 log—buckets exactly as its unpadded twin does, in the significand and in the
-exponent alike. Every other String keeps its exact text—non-numeric text,
-surrounding whitespace, `NaN`/`inf` spellings, an overflowing exponent, invalid
-UTF-8, and any spelling whose exact bucket start is unrepresentable—so one
-anomalous text value never fails an otherwise successful search. Boolean,
-timestamp, duration, and bytes values also keep their value: `bin` discretizes
-numbers and leaves other scalars alone. Rows written before the current aligned
-field metadata existed carry no readable semantic type; their values are never
-interpreted heuristically and pass through unbinned instead of failing the
-search.
+exponent alike.
+
+A valid stored `decimal/v1` value follows the same exact lexical arithmetic and
+is always published as semantic Decimal backed by `Int256`; a later `bin` can
+bucket that calculated value again without changing its semantic type. The
+result is exact only when its signed `Int256` boundary is representable. An
+oversized, malformed, or out-of-range value that is declared Decimal fails with
+the sanitized unsupported-value error instead of passing through or wrapping.
+Containers and multivalue values are the same explicit runtime error.
+
+Every other String keeps its exact text—non-numeric text, surrounding
+whitespace, `NaN`/`inf` spellings, an overflowing exponent, invalid UTF-8, text
+above the 4,096-byte exact-parser ceiling, and any spelling whose exact bucket
+start is outside signed `Int256`—so one anomalous text value never fails an
+otherwise successful search. Boolean, timestamp, duration, and bytes values
+also keep their value: `bin` discretizes numbers and leaves other scalars
+alone. Rows written before the current aligned field metadata existed carry no
+readable semantic type; their values are never interpreted heuristically and
+pass through unbinned instead of failing the search.
 
 The sanitized unsupported-value error is a property of one row's value, never
 of the pipeline that reads it. A bucket that is supported stays supported under

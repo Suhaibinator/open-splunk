@@ -25,17 +25,22 @@ import (
 func TestExecutorStreamsTypedRowsAndExactSchema(t *testing.T) {
 	t.Parallel()
 	timestamp := time.Date(2026, time.July, 21, 3, 4, 5, 123000000, time.UTC)
+	wideInteger, ok := new(big.Int).SetString("999999999999999999990", 10)
+	if !ok {
+		t.Fatal("parse wide Dynamic integer fixture")
+	}
 	rows := &fakeRows{
 		columns: []string{"_time", "message", "status", "_raw"},
 		types: []driver.ColumnType{
 			fakeColumnType{name: "_time", databaseType: "DateTime64(9, 'UTC')", scanType: reflect.TypeOf(time.Time{})},
 			fakeColumnType{name: "message", databaseType: "Nullable(String)", scanType: reflect.TypeOf((*string)(nil)), nullable: true},
-			fakeColumnType{name: "status", databaseType: "Dynamic", scanType: reflect.TypeOf(chcol.Dynamic{})},
+			fakeColumnType{name: "status", databaseType: "Dynamic", scanType: reflect.TypeOf((*any)(nil)).Elem()},
 			fakeColumnType{name: "_raw", databaseType: "String", scanType: reflect.TypeOf("")},
 		},
 		data: [][]any{
 			{timestamp, "hello", chcol.NewDynamicWithType(int64(500), "Int64"), "valid"},
 			{timestamp.Add(time.Second), nil, chcol.NewDynamicWithType("500", "String"), string([]byte{0xff, 0x00})},
+			{timestamp.Add(2 * time.Second), "wide", chcol.NewDynamicWithType(wideInteger, "Int256"), "valid"},
 		},
 	}
 	connection := &fakeQueryConnection{rows: rows}
@@ -62,7 +67,7 @@ func TestExecutorStreamsTypedRowsAndExactSchema(t *testing.T) {
 	if !sink.schema.Columns[1].Nullable || !sink.schema.Columns[2].Nullable || !sink.schema.Columns[3].Nullable {
 		t.Fatalf("nullable schema = %+v", sink.schema.Columns)
 	}
-	if len(sink.rows) != 2 || !rows.closed {
+	if len(sink.rows) != 3 || !rows.closed {
 		t.Fatalf("rows=%d closed=%v", len(sink.rows), rows.closed)
 	}
 	if value, ok := sink.rows[0][1].String(); !ok || value != "hello" {
@@ -77,8 +82,32 @@ func TestExecutorStreamsTypedRowsAndExactSchema(t *testing.T) {
 	if value, ok := sink.rows[1][2].String(); !ok || value != "500" {
 		t.Fatalf("string Dynamic = %#v", sink.rows[1][2])
 	}
+	if value, ok := sink.rows[2][2].Decimal(); !ok || value != wideInteger.String() {
+		t.Fatalf("Int256 Dynamic = %#v", sink.rows[2][2])
+	}
 	if value, ok := sink.rows[1][3].Bytes(); !ok || !slices.Equal(value, []byte{0xff, 0}) {
 		t.Fatalf("binary raw = %#v", sink.rows[1][3])
+	}
+}
+
+func TestScanDestinationsOverridesGenericDynamicScanType(t *testing.T) {
+	t.Parallel()
+
+	destinations, err := scanDestinations([]driver.ColumnType{
+		fakeColumnType{
+			name:         "band",
+			databaseType: "LowCardinality(Nullable(Dynamic(max_types=32)))",
+			scanType:     reflect.TypeOf((*any)(nil)).Elem(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("scanDestinations: %v", err)
+	}
+	if len(destinations) != 1 {
+		t.Fatalf("destinations = %d, want 1", len(destinations))
+	}
+	if _, ok := destinations[0].(*chcol.Dynamic); !ok {
+		t.Fatalf("Dynamic destination = %T, want *chcol.Dynamic", destinations[0])
 	}
 }
 

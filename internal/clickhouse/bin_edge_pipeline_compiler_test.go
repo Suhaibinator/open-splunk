@@ -242,8 +242,11 @@ func TestBinEdgeDynamicBinUsesOneMetadataLookupPerStoredSource(t *testing.T) {
 	// never be reclassified from stale metadata.
 	chained := compileSPL(t, `index=gradethis | bin metric span=10 | bin metric span=7`)
 	for _, required := range []string{
-		`toUInt8(ifNull("__os_numeric_bin_output_exists_2", 0)) AS "__os_numeric_bin_exists_3"`,
-		`toUInt8("__os_numeric_bin_output_type_2") AS "__os_numeric_bin_type_3"`,
+		`arrayJoin([tuple(CAST("metric" AS Dynamic), ` +
+			`toUInt8(ifNull("__os_numeric_bin_output_exists_2", 0)), ` +
+			`toUInt8("__os_numeric_bin_output_type_2"))]) AS "__os_numeric_bin_bound_3"`,
+		`toUInt8(ifNull(tupleElement("__os_numeric_bin_bound_3", 2), 0)) AS "__os_numeric_bin_exists_3"`,
+		`toUInt8(tupleElement("__os_numeric_bin_bound_3", 3)) AS "__os_numeric_bin_type_3"`,
 	} {
 		if !strings.Contains(chained.SQL, required) {
 			t.Fatalf("chained Dynamic bin is missing %q:\n%s", required, chained.SQL)
@@ -301,7 +304,7 @@ func TestBinEdgeDynamicBinPrunesDeadAliasesWhenProjectedAway(t *testing.T) {
 	retained := compileSPL(t, `index=gradethis | bin metric span=10 AS band | table event_id band`)
 	retainedExists := strings.Count(retained.SQL, `"__os_numeric_bin_output_exists_2"`)
 	retainedType := strings.Count(retained.SQL, `"__os_numeric_bin_output_type_2"`)
-	if retainedExists < 3 || retainedType < 3 {
+	if retainedExists < 2 || retainedType < 2 {
 		t.Fatalf(
 			"retained destination lost its metadata aliases: exists=%d type=%d\n%s",
 			retainedExists, retainedType, retained.SQL,

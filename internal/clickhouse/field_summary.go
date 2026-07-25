@@ -188,11 +188,13 @@ func finalizeFieldSummary(
 	sql.WriteString("), ")
 
 	// Keep the heterogeneous value out of GROUP BY: ClickHouse Dynamic has no
-	// safe cross-type grouping contract. The single-use source, typed, and
-	// encoded stages remain inline; rows is the shared materialization consumed
-	// by both totals and groups.
+	// safe cross-type grouping contract. Materialize the already-narrow typed
+	// projection before agreement and encoding: those expressions reuse the
+	// Dynamic value and would otherwise make ClickHouse's analyzer clone a
+	// complex final event pipeline. Rows remains the shared materialization
+	// consumed by both totals and groups.
 	sql.WriteString(q(fieldSummaryTypedCTE))
-	sql.WriteString(" AS (SELECT toUInt8(ifNull(")
+	sql.WriteString(" AS MATERIALIZED (SELECT toUInt8(ifNull(")
 	sql.WriteString(presenceSQL)
 	sql.WriteString(", 0)) AS ")
 	sql.WriteString(q(fieldSummaryPresent))
@@ -341,6 +343,7 @@ func finalizeFieldSummary(
 	sql.WriteString(") ")
 
 	writeFieldSummaryResult(&sql)
+	sql.WriteString(materializedCTESettingsSQL)
 	args = append(args, spec.FieldName)
 
 	return CompiledQuery{SQL: sql.String(), Args: args}, nil
@@ -516,6 +519,8 @@ type dynamicEnvelopeSQL struct {
 	decimalValid   string
 }
 
+const dynamicDecimalPayloadPattern = `'^(-|)(0|[1-9][0-9]*)([.][0-9]+|)([eE]([+]|-|)(0|[1-9][0-9]*)|)$'`
+
 func newDynamicEnvelopeSQL(valueSQL, typeSQL string) dynamicEnvelopeSQL {
 	mapSQL := "dynamicElement(" + valueSQL + ", 'Map(String, String)')"
 	typeKey := "concat(char(0), 'open_splunk_type')"
@@ -537,8 +542,7 @@ func newDynamicEnvelopeSQL(valueSQL, typeSQL string) dynamicEnvelopeSQL {
 			" AND (position(" + payload + ", '.') = 0 OR length(" + payload +
 			") - position(" + payload + ", '.') - 1 BETWEEN 1 AND 9)",
 		durationValid: "match(" + payload + ", '^(-|)(0|[1-9][0-9]*):(-|)(0|[1-9][0-9]*)$')",
-		decimalValid: "match(" + payload +
-			", '^(-|)(0|[1-9][0-9]*)([.][0-9]+|)([eE]([+]|-|)(0|[1-9][0-9]*)|)$')",
+		decimalValid:  "match(" + payload + ", " + dynamicDecimalPayloadPattern + ")",
 	}
 }
 
@@ -600,6 +604,8 @@ func fieldSummaryRuntimeDynamicExpressions(storedType, value string) (agreement,
 	physicalType := quoteIdentifier(fieldSummaryPhysicalType)
 	stringSQL := "dynamicElement(" + value + ", 'String')"
 	tagged := newDynamicEnvelopeSQL(value, physicalType)
+	decimalPhysical := "(startsWith(" + physicalType + ", 'Decimal') OR " +
+		physicalType + " = 'Int256')"
 	code := func(value eventfields.StoredValueType) string {
 		return "toUInt8(" + fmt.Sprint(uint8(value)) + ")"
 	}
@@ -626,7 +632,7 @@ func fieldSummaryRuntimeDynamicExpressions(storedType, value string) (agreement,
 		storedType + " IN (" + code(eventfields.StoredValueTypeList) + ", " +
 		code(eventfields.StoredValueTypeObject) + "), 1, " +
 		storedType + " = " + code(eventfields.StoredValueTypeDecimal) + ", " +
-		"startsWith(" + physicalType + ", 'Decimal') OR (" + tagged.envelope + " AND " +
+		decimalPhysical + " OR (" + tagged.envelope + " AND " +
 		tagged.mapSQL + "[" + tagged.typeKey + "] = 'decimal/v1' AND " + tagged.decimalValid + "), 0)"
 
 	timestamp := "concat(replaceOne(toString(toDateTime64(" + value + ", 9, 'UTC')), ' ', 'T'), 'Z')"
@@ -644,7 +650,7 @@ func fieldSummaryRuntimeDynamicExpressions(storedType, value string) (agreement,
 		"if(startsWith(" + physicalType + ", 'Date'), " + timestamp + ", " + tagged.payload + "), " +
 		storedType + " = " + code(eventfields.StoredValueTypeDuration) + ", " + tagged.payload + ", " +
 		storedType + " = " + code(eventfields.StoredValueTypeDecimal) + ", " +
-		"if(startsWith(" + physicalType + ", 'Decimal'), toString(" + value + "), " + tagged.payload + "), " +
+		"if(" + decimalPhysical + ", toString(" + value + "), " + tagged.payload + "), " +
 		"CAST('' AS String))"
 	return agreement, encoded
 }

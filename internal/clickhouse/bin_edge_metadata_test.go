@@ -45,21 +45,24 @@ func TestBinEdgeMetadataPreservesEvalDestinationSemanticType(t *testing.T) {
 		// The value branch reads the prior destination column, never the source.
 		`= 'None', CAST("band" AS Dynamic)`,
 		// Presence and type both fall back to the destination's own metadata.
-		`if("__os_numeric_bin_exists_3" != 0, 1, ifNull(1, 0))) AS "__os_numeric_bin_output_exists_3"`,
-		`multiIf(isNull("band"), CAST(? AS UInt8), isValidUTF8("band"), CAST(? AS UInt8), CAST(? AS UInt8))))`+
-			` AS "__os_numeric_bin_output_type_3"`,
+		`toUInt8(ifNull(1, 0)) AS "__os_numeric_bin_previous_exists_3"`,
+		`multiIf(isNull("band"), CAST(? AS UInt8), isValidUTF8("band"), CAST(? AS UInt8), CAST(? AS UInt8)))`+
+			` AS "__os_numeric_bin_previous_type_3"`,
+		`toUInt8(if("__os_numeric_bin_exists_3" != 0, 1, "__os_numeric_bin_previous_exists_3"))`+
+			` AS "__os_numeric_bin_output_exists_3"`,
+		`"__os_numeric_bin_previous_type_3")) AS "__os_numeric_bin_output_type_3"`,
 	)
 	binEdgeMetadataRequireBindable(t, compiled.SQL, compiled.Args, "eval-made destination")
 	// The destination's fixed String classification is bound exactly and in
 	// occurrence order, so a preserved value is never reported with the
 	// bucket's numeric type.
 	wantPrefix := []any{
-		uint64(10),
-		eventfields.CurrentFieldMetadataVersion,
-		"metric",
 		uint8(eventfields.StoredValueTypeNull),
 		uint8(eventfields.StoredValueTypeString),
 		uint8(eventfields.StoredValueTypeBytes),
+		uint64(10),
+		eventfields.CurrentFieldMetadataVersion,
+		"metric",
 	}
 	if len(compiled.Args) < len(wantPrefix) || !reflect.DeepEqual(compiled.Args[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("Dynamic bin argument prefix = %#v, want %#v", compiled.Args, wantPrefix)
@@ -78,9 +81,11 @@ func TestBinEdgeMetadataPreservesRexDestinationPrivateAliases(t *testing.T) {
 	)
 	binEdgeMetadataRequire(t, compiled.SQL, "rex-made destination",
 		`= 'None', CAST("band" AS Dynamic)`,
-		`ifNull((("__os_rex_exists_2_0") OR (arrayExists(name -> startsWith(name, ?), "__os_field_names"))), 0)))`+
-			` AS "__os_numeric_bin_output_exists_4"`,
-		`"__os_rex_type_2_0")) AS "__os_numeric_bin_output_type_4"`,
+		`toUInt8(ifNull((("__os_rex_exists_2_0") OR (arrayExists(name -> startsWith(name, ?), "__os_field_names"))), 0))`+
+			` AS "__os_numeric_bin_previous_exists_4"`,
+		`toUInt8("__os_rex_type_2_0") AS "__os_numeric_bin_previous_type_4"`,
+		`"__os_numeric_bin_previous_exists_4")) AS "__os_numeric_bin_output_exists_4"`,
+		`"__os_numeric_bin_previous_type_4")) AS "__os_numeric_bin_output_type_4"`,
 	)
 	binEdgeMetadataRequireBindable(t, compiled.SQL, compiled.Args, "rex-made destination")
 	// The rex stage's own private columns must still be defined by that stage
@@ -102,13 +107,15 @@ func TestBinEdgeMetadataAfterRexClassifiesFromRexPrivateMetadata(t *testing.T) {
 
 	compiled := compileSPL(t, `index=gradethis | rex field=_raw "(?<cap>[0-9]+)" | bin cap span=10 | table cap`)
 	binEdgeMetadataRequire(t, compiled.SQL, "bin after rex",
-		`toUInt8(ifNull("__os_rex_exists_2_0", 0)) AS "__os_numeric_bin_exists_4"`,
-		`toUInt8("__os_rex_type_2_0") AS "__os_numeric_bin_type_4"`,
+		`arrayJoin([tuple(CAST("cap" AS Dynamic), toUInt8(ifNull("__os_rex_exists_2_0", 0)), `+
+			`toUInt8("__os_rex_type_2_0"))]) AS "__os_numeric_bin_bound_4"`,
+		`toUInt8(ifNull(tupleElement("__os_numeric_bin_bound_4", 2), 0)) AS "__os_numeric_bin_exists_4"`,
+		`toUInt8(tupleElement("__os_numeric_bin_bound_4", 3)) AS "__os_numeric_bin_type_4"`,
 		`toUInt8("__os_numeric_bin_type_4" = `+binEdgeMetadataStoredTypeCode(eventfields.StoredValueTypeObject)+
 			`) AS "__os_numeric_bin_parent_4"`,
 		// The bucketed value still reads the rex output column, not the
 		// immutable stored document the capture shadowed.
-		`dynamicType("cap") AS "__os_numeric_bin_physical_type_4"`,
+		`dynamicType(tupleElement("__os_numeric_bin_bound_4", 1)) AS "__os_numeric_bin_physical_type_4"`,
 	)
 	// The sorted-array position probe belongs to the direct stored path only.
 	if strings.Contains(compiled.SQL, "arrayFirstIndex(") {
@@ -156,8 +163,10 @@ func TestBinEdgeMetadataChainedDestinationsReusePriorBinMetadata(t *testing.T) {
 	compiled := compileSPL(t, `index=gradethis | bin left span=10 AS band | bin right span=7 AS band | table band`)
 	binEdgeMetadataRequire(t, compiled.SQL, "chained bin destinations",
 		`= 'None', CAST("band" AS Dynamic)`,
-		`ifNull("__os_numeric_bin_output_exists_2", 0))) AS "__os_numeric_bin_output_exists_3"`,
-		`"__os_numeric_bin_output_type_2")) AS "__os_numeric_bin_output_type_3"`,
+		`toUInt8(ifNull("__os_numeric_bin_output_exists_2", 0)) AS "__os_numeric_bin_previous_exists_3"`,
+		`toUInt8("__os_numeric_bin_output_type_2") AS "__os_numeric_bin_previous_type_3"`,
+		`"__os_numeric_bin_previous_exists_3")) AS "__os_numeric_bin_output_exists_3"`,
+		`"__os_numeric_bin_previous_type_3")) AS "__os_numeric_bin_output_type_3"`,
 	)
 	binEdgeMetadataRequireBindable(t, compiled.SQL, compiled.Args, "chained bin destinations")
 	// Each stage owns its span so one bin can never capture the other's WITH
@@ -256,20 +265,20 @@ func TestBinEdgeMetadataRejectsFixedNonNumericDestinationsAndSources(t *testing.
 	}
 }
 
-// TestBinEdgeMetadataNeverAdmitsATaggedDecimalArm replaces a weak
-// existing check. Asserting only that one particular `IN (...)` spelling is
-// absent would still pass if the tagged-decimal envelope were admitted through
-// any other syntax, so assert the tag and its semantic code are absent outright
-// while the three genuinely admitted envelopes are each classified once.
-func TestBinEdgeMetadataNeverAdmitsATaggedDecimalArm(t *testing.T) {
+// TestBinEdgeMetadataAdmitsAnExactTaggedDecimalArm is the first red test for
+// exact Decimal binning. A stored decimal is declared numeric, so the runtime
+// classifier must recognize both its envelope tag and aligned semantic type;
+// leaving it to the generic unsupported fallback would silently keep the
+// implementation at the previous compatibility boundary.
+func TestBinEdgeMetadataAdmitsAnExactTaggedDecimalArm(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis | bin metric span=10 AS band | table metric band`)
-	if strings.Contains(compiled.SQL, "decimal/v1") {
-		t.Fatalf("tagged decimal envelope reached the Dynamic bin classifier:\n%s", compiled.SQL)
+	if !strings.Contains(compiled.SQL, "decimal/v1") {
+		t.Fatalf("tagged decimal envelope is absent from the Dynamic bin classifier:\n%s", compiled.SQL)
 	}
-	if strings.Contains(compiled.SQL, binEdgeMetadataStoredTypeCode(eventfields.StoredValueTypeDecimal)) {
-		t.Fatalf("tagged decimal semantic code reached the Dynamic bin classifier:\n%s", compiled.SQL)
+	if !strings.Contains(compiled.SQL, binEdgeMetadataStoredTypeCode(eventfields.StoredValueTypeDecimal)) {
+		t.Fatalf("tagged decimal semantic code is absent from the Dynamic bin classifier:\n%s", compiled.SQL)
 	}
 	for _, admitted := range []struct {
 		tag  string
@@ -294,4 +303,26 @@ func TestBinEdgeMetadataNeverAdmitsATaggedDecimalArm(t *testing.T) {
 	if got := strings.Count(compiled.SQL, UnsupportedNumericBinValueMarker); got != 1 {
 		t.Fatalf("sanitized marker appears %d times, want exactly one fallback:\n%s", got, compiled.SQL)
 	}
+}
+
+// TestBinEdgeMetadataRebinsPublishedExactDecimals keeps the output contract
+// composable: the first bin publishes an exact Decimal as Dynamic(Int256), so a
+// later bin must recognize that physical representation together with its
+// calculated semantic type instead of accepting only the original map
+// envelope used by ingestion.
+func TestBinEdgeMetadataRebinsPublishedExactDecimals(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | bin metric span=10 AS band | bin band span=7 | table band`,
+	)
+	binEdgeMetadataRequire(t, compiled.SQL, "rebinned exact Decimal",
+		`arrayJoin([tuple(CAST("band" AS Dynamic), toUInt8(ifNull("__os_numeric_bin_output_exists_2", 0)), `+
+			`toUInt8("__os_numeric_bin_output_type_2"))]) AS "__os_numeric_bin_bound_3"`,
+		`"__os_numeric_bin_type_3" = `+binEdgeMetadataStoredTypeCode(eventfields.StoredValueTypeDecimal)+
+			` AND "__os_numeric_bin_physical_type_3" = 'Int256'`,
+		`dynamicElement(tupleElement("__os_numeric_bin_bound_3", 1), 'Int256')`,
+	)
+	binEdgeMetadataRequireBindable(t, compiled.SQL, compiled.Args, "rebinned exact Decimal")
 }

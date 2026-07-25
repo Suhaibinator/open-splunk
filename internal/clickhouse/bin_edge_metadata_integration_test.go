@@ -90,6 +90,7 @@ func TestBinEdgeMetadataAgainstClickHouse(t *testing.T) {
 			typedField("edge_src", typedNull()),
 			typedField("edge_dst", typedSint(3)),
 			typedField("edge_cap", typedNull()),
+			typedField("edge_decimal", typedNull()),
 		),
 		// Raw text without a lowercase letter leaves a rex-made destination
 		// absent, which is the only way to observe a rex destination that never
@@ -432,7 +433,7 @@ func TestBinEdgeMetadataAgainstClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("a tagged decimal destination is never read by a missing source", func(t *testing.T) {
+	t.Run("tagged decimal metadata follows exact bin and missing-source semantics", func(t *testing.T) {
 		compiled := compile(t, `index=compiler | bin edge_src span=10 AS edge_decimal | table event_id edge_decimal`)
 		var preserved, replaced uint64
 		if err := connection.QueryRow(ctx,
@@ -447,9 +448,54 @@ func TestBinEdgeMetadataAgainstClickHouse(t *testing.T) {
 			t.Fatalf("decimal destination = preserved:%d replaced:%d, want 1/1", preserved, replaced)
 		}
 
-		// The same value is an explicit runtime error the moment bin reads it.
-		asSource := compile(t, `index=compiler event_id=m-miss | bin edge_decimal span=10 | table edge_decimal`)
-		binEdgeMetadataRequireMarker(t, ctx, connection, asSource, "tagged decimal source")
+		// Reading the declared numeric value buckets it exactly and publishes
+		// semantic Decimal. Explicit null remains present null and absent
+		// sources remain sparse.
+		asSource := compile(t, `index=compiler | bin edge_decimal span=10 AS band | table event_id band`)
+		got := binEdgeMetadataSemanticScan(t, ctx, connection, asSource, "band")
+		want := []binEdgeMetadataRow{
+			{"m-int", "Decimal", "120"},
+			{"m-miss", "Decimal", "120"},
+			{"m-null", "None", "<none>"},
+			{"m-obj", "None", "<none>"},
+			{"m-text", "None", "<none>"},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("exact tagged Decimal bin = %#v, want %#v", got, want)
+		}
+
+		profile := binEdgeMetadataCatalogProfile(t, ctx, connection,
+			build(t, `index=compiler | bin edge_decimal span=10 AS band`), "band")
+		wantProfile := binEdgeMetadataProfile{
+			rows: 1, total: 5, events: 3, nulls: 1, missing: 2,
+			types: []uint8{
+				uint8(eventfields.StoredValueTypeNull),
+				uint8(eventfields.StoredValueTypeDecimal),
+			},
+		}
+		if !reflect.DeepEqual(profile, wantProfile) {
+			t.Fatalf("exact tagged Decimal catalog profile = %#v, want %#v", profile, wantProfile)
+		}
+
+		invalid, unsupported, encoded := binEdgeMetadataSummaryValues(
+			t,
+			ctx,
+			connection,
+			build(t, `index=compiler | bin edge_decimal span=10 AS band`),
+			"band",
+		)
+		wantEncoded := []string{
+			fmt.Sprintf("%d:120:2", uint8(eventfields.StoredValueTypeDecimal)),
+		}
+		if invalid != 0 || unsupported != 0 || !reflect.DeepEqual(encoded, wantEncoded) {
+			t.Fatalf(
+				"exact tagged Decimal summary = invalid:%d unsupported:%d values:%#v, want %#v",
+				invalid,
+				unsupported,
+				encoded,
+				wantEncoded,
+			)
+		}
 	})
 
 	t.Run("containers abort with the classified marker", func(t *testing.T) {
@@ -1055,6 +1101,56 @@ func binEdgeMetadataScan(
 	return result
 }
 
+// binEdgeMetadataSemanticScan reports the public numeric identity of a Dynamic
+// result without pinning its physical representation. A bounded exact Decimal
+// may be carried efficiently as a wide integer or as a canonical decimal/v1
+// envelope; field catalogs and summaries separately prove the semantic type.
+func binEdgeMetadataSemanticScan(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	compiled CompiledQuery,
+	column string,
+) []binEdgeMetadataRow {
+	t.Helper()
+	name := quoteIdentifier(column)
+	dynamicMap := `dynamicElement(` + name + `, 'Map(String, String)')`
+	decimalEnvelope := `dynamicType(` + name + `) = 'Map(String, String)'
+		AND length(` + dynamicMap + `) = 2
+		AND ` + dynamicMap + `[concat(char(0), 'open_splunk_type')] = 'decimal/v1'`
+	semanticType := `multiIf(
+		dynamicType(` + name + `) IN ('Int128', 'Int256', 'UInt128', 'UInt256')
+			OR startsWith(dynamicType(` + name + `), 'Decimal'),
+		'Decimal',
+		` + decimalEnvelope + `,
+		'Decimal',
+		dynamicType(` + name + `))`
+	value := `multiIf(
+		dynamicType(` + name + `) = 'None', '<none>',
+		` + decimalEnvelope + `,
+		` + dynamicMap + `[concat(char(0), 'open_splunk_value')],
+		toString(` + name + `))`
+	query := `SELECT event_id, ` + semanticType + `, ` + value +
+		` FROM (` + compiled.SQL + `) ORDER BY event_id`
+	rows, err := connection.Query(ctx, query, compiled.Args...)
+	if err != nil {
+		t.Fatalf("execute semantic bin edge query: %v\nSQL: %s\nargs: %#v", err, compiled.SQL, compiled.Args)
+	}
+	defer func() { _ = rows.Close() }()
+	result := make([]binEdgeMetadataRow, 0, 8)
+	for rows.Next() {
+		var row binEdgeMetadataRow
+		if err := rows.Scan(&row.eventID, &row.valueType, &row.value); err != nil {
+			t.Fatalf("scan semantic bin edge row: %v", err)
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate semantic bin edge rows: %v", err)
+	}
+	return result
+}
+
 // binEdgeMetadataCatalogProfile reads exactly one field's catalog profile so an
 // assertion can prove presence, nullness, and observed semantic types together.
 func binEdgeMetadataCatalogProfile(
@@ -1093,6 +1189,43 @@ func binEdgeMetadataCatalogProfile(
 		t.Fatalf("execute bin edge field catalog: %v\nSQL: %s", err, catalog.SQL)
 	}
 	return profile
+}
+
+func binEdgeMetadataSummaryValues(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	logical *plan.Query,
+	field string,
+) (uint8, uint8, []string) {
+	t.Helper()
+	summary, err := (Compiler{}).CompileFieldSummary(logical, FieldSummarySpec{
+		FieldName:             field,
+		MaximumValues:         10,
+		MaximumDistinctValues: 100,
+		MaximumValueBytes:     4_096,
+	})
+	if err != nil {
+		t.Fatalf("CompileFieldSummary: %v", err)
+	}
+	q := quoteIdentifier
+	control := `SELECT max(` + q(FieldSummaryMetadataInvalidColumn) + `),
+			max(` + q(FieldSummaryUnsupportedColumn) + `),
+			arraySort(groupArrayIf(concat(toString(` + q(FieldSummaryValueTypeColumn) + `), ':',
+				` + q(FieldSummaryEncodedValueColumn) + `, ':',
+				toString(` + q(FieldSummaryValueCountColumn) + `)),
+				` + q(FieldSummaryRowKindColumn) + ` = 1))
+		FROM (` + summary.SQL + `)`
+	var invalid, unsupported uint8
+	var encoded []string
+	if err := connection.QueryRow(ctx, control, summary.Args...).Scan(
+		&invalid,
+		&unsupported,
+		&encoded,
+	); err != nil {
+		t.Fatalf("execute bin edge field summary: %v\nSQL: %s", err, summary.SQL)
+	}
+	return invalid, unsupported, encoded
 }
 
 func binEdgeMetadataRequireMarker(

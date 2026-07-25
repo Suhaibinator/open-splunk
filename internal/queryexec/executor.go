@@ -840,6 +840,16 @@ func publishChart(ctx context.Context, sink searchjobs.ResultSink, output clickh
 func scanDestinations(columnTypes []driver.ColumnType) ([]any, error) {
 	destinations := make([]any, len(columnTypes))
 	for index, columnType := range columnTypes {
+		base := unwrapType(columnType.DatabaseTypeName())
+		if strings.HasPrefix(base, "Dynamic") || strings.HasPrefix(base, "Variant") {
+			// clickhouse-go reports interface{} as the scan type for Dynamic,
+			// then delegates a concrete alternative directly to that
+			// interface destination. Int256/UInt256 do not support that path.
+			// The explicit wrapper accepts every Dynamic alternative and
+			// preserves its physical type for convertValue.
+			destinations[index] = new(chcol.Dynamic)
+			continue
+		}
 		scanType := columnType.ScanType()
 		if scanType == nil {
 			return nil, fmt.Errorf("column %q has no scan type", columnType.Name())

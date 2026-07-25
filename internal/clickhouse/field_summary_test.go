@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -135,6 +136,7 @@ func TestCompileFieldSummaryFixedTransportAndExactGroups(t *testing.T) {
 		}
 	}
 	for _, name := range []string{
+		fieldSummaryTypedCTE,
 		fieldSummaryRowsCTE,
 		fieldSummaryTotalsCTE,
 	} {
@@ -144,7 +146,6 @@ func TestCompileFieldSummaryFixedTransportAndExactGroups(t *testing.T) {
 	}
 	for _, name := range []string{
 		fieldSummarySourceCTE,
-		fieldSummaryTypedCTE,
 		fieldSummaryEncodedCTE,
 		fieldSummaryGroupsCTE,
 	} {
@@ -154,6 +155,9 @@ func TestCompileFieldSummaryFixedTransportAndExactGroups(t *testing.T) {
 		if fragment := quoteIdentifier(name) + " AS ("; !strings.Contains(compiled.SQL, fragment) {
 			t.Errorf("single-use summary CTE %q is missing", name)
 		}
+	}
+	if !strings.HasSuffix(compiled.SQL, materializedCTESettingsSQL) {
+		t.Fatalf("field summary does not declare the materialized-CTE requirement:\n%s", compiled.SQL)
 	}
 	if strings.Contains(compiled.SQL, " LIMIT ") {
 		t.Fatalf("field summary added SQL truncation instead of emitting every exact group:\n%s", compiled.SQL)
@@ -277,6 +281,26 @@ func TestCompileFieldSummaryValidatesPreservedRexDynamicEncodings(t *testing.T) 
 	} {
 		if !strings.Contains(compiled.SQL, fragment) {
 			t.Errorf("mixed rex field summary is missing %q:\n%s", fragment, compiled.SQL)
+		}
+	}
+}
+
+func TestCompileFieldSummaryAcceptsCalculatedInt256Decimal(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileFieldSummary(
+		t,
+		buildPlan(t, `index=gradethis | bin metric span=10 AS band`),
+		fieldSummaryTestSpec("band"),
+	)
+	for _, fragment := range []string{
+		quoteIdentifier(fieldSummaryStoredType) + " = toUInt8(" +
+			fmt.Sprint(uint8(eventfields.StoredValueTypeDecimal)) + ")",
+		quoteIdentifier(fieldSummaryPhysicalType) + " = 'Int256'",
+		"toString(" + quoteIdentifier(fieldSummaryRawValue) + ")",
+	} {
+		if !strings.Contains(compiled.SQL, fragment) {
+			t.Fatalf("calculated Int256 Decimal summary is missing %q:\n%s", fragment, compiled.SQL)
 		}
 	}
 }

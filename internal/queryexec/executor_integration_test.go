@@ -121,15 +121,17 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		err := executor.Execute(ctx, clickhouse.CompiledQuery{
 			SQL: "SELECT toDecimal128('123.4500', 4) AS amount, " +
 				"CAST('12:34:56.123456' AS Time64(6)) AS elapsed, " +
-				"CAST(42 AS Dynamic) AS choice, CAST('{\"name\":\"alice\",\"count\":2}' AS JSON) AS payload",
-			OutputFields: []string{"amount", "elapsed", "choice", "payload"},
+				"CAST(42 AS Dynamic) AS choice, " +
+				"CAST(toInt256('999999999999999999990') AS Dynamic) AS wide_choice, " +
+				"CAST('{\"name\":\"alice\",\"count\":2}' AS JSON) AS payload",
+			OutputFields: []string{"amount", "elapsed", "choice", "wide_choice", "payload"},
 		}, sink)
 		if err != nil {
 			t.Fatal(err)
 		}
 		wantKinds := []searchjobs.ValueKind{
 			searchjobs.ValueKindDecimal, searchjobs.ValueKindDuration,
-			searchjobs.ValueKindMixed, searchjobs.ValueKindObject,
+			searchjobs.ValueKindMixed, searchjobs.ValueKindMixed, searchjobs.ValueKindObject,
 		}
 		for index, want := range wantKinds {
 			if sink.schema.Columns[index].Kind != want {
@@ -145,8 +147,11 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		if got, ok := sink.rows[0][2].Unsigned(); !ok || got != 42 {
 			t.Fatalf("dynamic = %d, %v", got, ok)
 		}
-		if fields, ok := sink.rows[0][3].Object(); !ok || len(fields) != 2 {
-			t.Fatalf("JSON = %#v", sink.rows[0][3])
+		if got, ok := sink.rows[0][3].Decimal(); !ok || got != "999999999999999999990" {
+			t.Fatalf("Dynamic(Int256) = %q, %v", got, ok)
+		}
+		if fields, ok := sink.rows[0][4].Object(); !ok || len(fields) != 2 {
+			t.Fatalf("JSON = %#v", sink.rows[0][4])
 		}
 	})
 
