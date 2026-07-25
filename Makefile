@@ -3,11 +3,12 @@
 PROTOC_GEN_GO_VERSION := v1.36.11
 PROTOC_GEN_GO_GRPC_VERSION := v1.6.2
 PROTO_LINT_CACHE := $(CURDIR)/.cache/buf
+OPEN_SPLUNK_DATA_MODE ?= backend
 
 build: build-server build-collector
 
 build-ui:
-	npm run build
+	env OPEN_SPLUNK_DATA_MODE="$(OPEN_SPLUNK_DATA_MODE)" npm run build
 	test -f out/index.html
 
 build-server: proto build-ui

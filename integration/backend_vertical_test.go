@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -22,6 +23,8 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/collector/input"
+	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"github.com/Suhaibinator/open-splunk/internal/loggen"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/gorilla/websocket"
@@ -72,6 +75,7 @@ func TestBackendVertical(t *testing.T) {
 	work := t.TempDir()
 	buildDir := t.TempDir()
 	serverRuntimeDir := t.TempDir()
+	buildBackendFrontend(t, ctx, repository)
 
 	image := os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE")
 	clickhouse, err := testsupport.StartClickHouse(ctx, image)
@@ -106,7 +110,7 @@ func TestBackendVertical(t *testing.T) {
 		"-collector-grpc-address=" + collectorAddress,
 		"-collector-grpc-insecure",
 		"-tenant-id=" + verticalTenantID,
-	}, append(os.Environ(), "OPEN_SPLUNK_CLICKHOUSE_PASSWORD="+clickhouse.Password))
+	}, environmentWithValue(os.Environ(), "OPEN_SPLUNK_CLICKHOUSE_PASSWORD", clickhouse.Password))
 	baseURL := "http://" + httpAddress
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	waitForHealth(t, ctx, httpClient, baseURL, serverProcess)
@@ -152,8 +156,9 @@ func TestBackendVertical(t *testing.T) {
 	writeFixture(t, logPath, fixtureStart)
 	tokenPath := filepath.Join(work, "collector.token")
 	writePrivateFile(t, tokenPath, []byte(plaintextToken+"\n"))
+	collectorStateDir := filepath.Join(work, "collector-state")
 	collectorConfig := filepath.Join(work, "collector.yaml")
-	writePrivateFile(t, collectorConfig, []byte(collectorYAML(collectorAddress, tokenPath, filepath.Join(work, "collector-state"), logPath)))
+	writePrivateFile(t, collectorConfig, []byte(collectorYAML(collectorAddress, tokenPath, collectorStateDir, logPath)))
 
 	collectorProcess := startProcess(t, repository, []string{
 		collectorBinary, "run", "-config", collectorConfig,
@@ -173,6 +178,7 @@ func TestBackendVertical(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 	waitForStoredEvents(t, ctx, storage, collectorProcess, plaintextToken)
+	waitForDurableCollectorAcknowledgment(t, ctx, collectorStateDir, logPath, collectorProcess, plaintextToken)
 	visibilityCutoff := assertStoredEventBounds(t, ctx, storage, fixtureStart)
 
 	if err := collectorProcess.Interrupt(15 * time.Second); err != nil {
@@ -181,6 +187,7 @@ func TestBackendVertical(t *testing.T) {
 			redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
 		))
 	}
+	assertDurableCollectorState(t, collectorStateDir, uint64(mustFileSize(t, logPath)))
 	assertProcessLogsDoNotLeak(t, collectorProcess.Logs(), plaintextToken,
 		redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel)
 	insertTimelineExclusiveBoundaryEvent(t, ctx, storage, fixtureStart.Add(5500*time.Millisecond), visibilityCutoff)
@@ -266,6 +273,10 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 	}
 	if !bytes.Contains(body, []byte("<title>Home | Open Splunk</title>")) {
 		t.Fatalf("embedded UI did not contain the expected title; body prefix = %q", bodyPreview)
+	}
+	if !bytes.Contains(body, []byte("Backend mode selected")) ||
+		bytes.Contains(body, []byte("Demo workspace ready")) {
+		t.Fatal("embedded release UI is not configured for backend data")
 	}
 
 	var bootstrap opensplunkv1.GetSystemBootstrapResponse
@@ -683,6 +694,109 @@ func waitForStoredEvents(t *testing.T, ctx context.Context, connection clickhous
 		case <-ticker.C:
 		}
 	}
+}
+
+func waitForDurableCollectorAcknowledgment(
+	t *testing.T,
+	ctx context.Context,
+	stateDir, logPath string,
+	process *managedProcess,
+	plaintextToken string,
+) {
+	t.Helper()
+	info, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatalf("stat collector fixture: %v", err)
+	}
+	if info.Size() <= 0 {
+		t.Fatalf("collector fixture size = %d", info.Size())
+	}
+	wantOffset := uint64(info.Size())
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	var (
+		lastOffset uint64
+		lastCount  int
+		lastErr    error
+	)
+	for {
+		checkpoints, openErr := input.NewCheckpointStore(filepath.Join(stateDir, "checkpoints"))
+		if openErr == nil {
+			list, listErr := checkpoints.List()
+			closeErr := checkpoints.Close()
+			lastErr = errors.Join(listErr, closeErr)
+			lastCount = len(list)
+			if listErr == nil && len(list) == 1 {
+				lastOffset = list[0].Offset
+				if lastOffset == wantOffset {
+					return
+				}
+				if lastOffset > wantOffset {
+					t.Fatalf("durable collector checkpoint offset = %d, want %d", lastOffset, wantOffset)
+				}
+			}
+		} else {
+			lastErr = openErr
+		}
+		if process.Exited() {
+			t.Fatalf("collector exited before durable acknowledgment: %v, checkpoints=%d offset=%d error=%v\nlogs:\n%s",
+				process.Err(), lastCount, lastOffset, lastErr,
+				redactForFailure(process.Logs(), plaintextToken,
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for durable collector acknowledgment: %v, checkpoints=%d offset=%d error=%v",
+				ctx.Err(), lastCount, lastOffset, lastErr)
+		case <-deadline.C:
+			t.Fatalf("wait for durable collector acknowledgment: timed out, checkpoints=%d offset=%d want=%d error=%v",
+				lastCount, lastOffset, wantOffset, lastErr)
+		case <-ticker.C:
+		}
+	}
+}
+
+func assertDurableCollectorState(t *testing.T, stateDir string, wantOffset uint64) {
+	t.Helper()
+	checkpoints, err := input.NewCheckpointStore(filepath.Join(stateDir, "checkpoints"))
+	if err != nil {
+		t.Fatalf("reopen collector checkpoint store: %v", err)
+	}
+	list, listErr := checkpoints.List()
+	closeErr := checkpoints.Close()
+	if err := errors.Join(listErr, closeErr); err != nil {
+		t.Fatalf("read durable collector checkpoints: %v", err)
+	}
+	if len(list) != 1 || list[0].Offset != wantOffset {
+		t.Fatalf("durable collector checkpoints = %+v, want one checkpoint at offset %d", list, wantOffset)
+	}
+
+	queue, err := wal.Open(wal.Options{
+		Dir:  filepath.Join(stateDir, "wal"),
+		Sync: wal.SyncAlways,
+	})
+	if err != nil {
+		t.Fatalf("reopen collector WAL: %v", err)
+	}
+	stats := queue.Stats()
+	if err := queue.Close(); err != nil {
+		t.Fatalf("close reopened collector WAL: %v", err)
+	}
+	if stats.QueuedBatches != 0 || stats.QueuedEvents != 0 || stats.QueuedBytes != 0 ||
+		stats.LastAckedBatchSequence == 0 {
+		t.Fatalf("durable collector WAL state = %+v, want drained queue with a terminal acknowledgment", stats)
+	}
+}
+
+func mustFileSize(t *testing.T, path string) int64 {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return info.Size()
 }
 
 func assertStoredEventBounds(t *testing.T, ctx context.Context, connection clickhousedriver.Conn, fixtureStart time.Time) uint64 {

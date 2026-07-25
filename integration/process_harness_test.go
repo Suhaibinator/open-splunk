@@ -25,6 +25,14 @@ func TestRedactForFailure(t *testing.T) {
 	}
 }
 
+func TestEnvironmentWithValueReplacesEveryExistingValue(t *testing.T) {
+	got := environmentWithValue([]string{"PATH=/bin", "MODE=demo", "OTHER=value", "MODE=stale"}, "MODE", "backend")
+	want := []string{"PATH=/bin", "OTHER=value", "MODE=backend"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("environmentWithValue() = %q, want %q", got, want)
+	}
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	directory, err := os.Getwd()
@@ -52,6 +60,31 @@ func buildBinary(t *testing.T, ctx context.Context, repository, output, pkg stri
 	if err != nil {
 		t.Fatalf("build %s: %v\n%s", pkg, err, combined)
 	}
+}
+
+func buildBackendFrontend(t *testing.T, ctx context.Context, repository string) {
+	t.Helper()
+	command := exec.CommandContext(ctx, "npm", "run", "build")
+	command.Dir = repository
+	command.Env = environmentWithValue(os.Environ(), "OPEN_SPLUNK_DATA_MODE", "backend")
+	combined, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build backend frontend: %v\n%s", err, combined)
+	}
+	if _, err := os.Stat(filepath.Join(repository, "out", "search", "index.html")); err != nil {
+		t.Fatalf("backend frontend export is incomplete: %v", err)
+	}
+}
+
+func environmentWithValue(environment []string, name, value string) []string {
+	prefix := name + "="
+	result := make([]string, 0, len(environment)+1)
+	for _, entry := range environment {
+		if !strings.HasPrefix(entry, prefix) {
+			result = append(result, entry)
+		}
+	}
+	return append(result, prefix+value)
 }
 
 func unusedLoopbackAddress(t *testing.T) string {

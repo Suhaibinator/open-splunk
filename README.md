@@ -46,15 +46,26 @@ go build -o build/open-splunk-server ./cmd/open-splunk-server
 go build -o build/open-splunk-collector ./cmd/open-splunk-collector
 ```
 
-`make build` performs the UI export before compiling the server, ensuring the resulting server binary contains the current frontend.
+`make build` performs a backend-mode UI export before compiling the server,
+ensuring the resulting server binary contains the current frontend and connects
+to the same-origin protobuf API.
 
-The search workspace uses deterministic demo fixtures by default. Build the embedded UI against real backend search jobs with one build-time switch:
+For frontend-only design work, build the deterministic demo workspace
+explicitly:
 
 ```sh
-OPEN_SPLUNK_DATA_MODE=backend make build-server
+OPEN_SPLUNK_DATA_MODE=demo npm run build
 ```
 
-The resulting `build/open-splunk-server` serves the UI and protobuf API from the same origin. Omit the variable (or set it to `demo`) to restore fixture mode. `OPEN_SPLUNK_API_BASE_URL` is a build-time test override, not a browser setting. The production Go server intentionally requires browser HTTP and WebSocket traffic to remain same-origin. Use the serving origin with API routes exposed at their advertised root paths, or a test double with an explicit trusted-origin policy; a cross-origin URL or arbitrary path prefix is not supported by the Go server.
+`OPEN_SPLUNK_DATA_MODE=demo make build-server` is also available for a
+self-contained demonstration binary. The normal `make build` and
+`make build-server` targets intentionally default to backend mode.
+`OPEN_SPLUNK_API_BASE_URL` is a build-time test override, not a browser
+setting. The production Go server intentionally requires browser HTTP and
+WebSocket traffic to remain same-origin. Use the serving origin with API routes
+exposed at their advertised root paths, or a test double with an explicit
+trusted-origin policy; a cross-origin URL or arbitrary path prefix is not
+supported by the Go server.
 
 `make proto` compiles every schema under `proto/` into Go protobuf/gRPC code in `gen/go` and `ts-proto` codecs in `gen/ts`. Run `make proto-tools` once to install the pinned Go generators and JavaScript dependencies; `protoc` must also be available on `PATH`.
 
