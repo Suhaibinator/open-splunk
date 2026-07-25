@@ -7,20 +7,20 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Pause checkpoint: typed `stats min` and `stats max`
+## Pause checkpoint: optimized scalar-String `stats min` and `stats max`
 
 Date: 2026-07-25
 
 Branch: `main`
 
 Starting checkpoint:
-`a3dcb61` (`record stats count field checkpoint`)
+`e1d2898` (`record typed extrema backend checkpoint`)
 
 Feature commit:
-`b4c795b` (`implement typed stats min and max`)
+`f2bace6` (`optimize scalar string extrema`)
 
 Adversarial-hardening commit:
-`0a995d7` (`harden typed extrema pipelines`)
+`90f7bbe` (`harden scalar string extrema lowering`)
 
 This document is committed immediately after the hardening commit. Use the
 current `main` HEAD as the document commit rather than copying an older hash
@@ -36,9 +36,11 @@ break. The product architecture plan is not complete.
 
 ## What this slice completed
 
-Open Splunk now implements typed `stats min(field)` and `stats max(field)` from
-SPL parsing through ClickHouse execution, downstream calculated-field use,
-search-job transport, documentation, and editor support.
+Open Splunk already implemented typed `stats min(field)` and
+`stats max(field)` from SPL parsing through ClickHouse execution, downstream
+calculated-field use, search-job transport, documentation, and editor support.
+This slice removed the known singleton-Array overhead for fields proven
+statically scalar String while retaining the guarded multivalue path.
 
 ### SPL, AST, and plan contract
 
@@ -89,12 +91,23 @@ chosen numeric-before-lexical/raw-byte behavior cannot drift silently.
 
 ### Efficient ClickHouse lowering
 
-- Repeated extrema over the same runtime input share one canonical
-  `Array(String)` input alias and one candidate alias.
-- `min` and `max` use separate constant-size aggregate states; repeated
-  identical measures are physically shared by ClickHouse.
-- `min`/`max` and `values` over the same input share the canonical String
-  materialization.
+- A proven scalar String field now materializes one nullable String alias, one
+  bounded finite-`Float64` classifier alias, and one
+  `(class, numeric-key, lexical-key)` tuple candidate.
+- Scalar extrema use conditional `minIfOrNull` / `maxIfOrNull` tuple
+  aggregation. Dynamic and `StringArray` inputs retain the guarded Array path,
+  including unsupported-container validation.
+- One stable per-field descriptor coordinates `min`/`max`, `values`, and
+  `dc`, including interleaved fields and either measure order.
+- Repeated identical extrema share one physical aggregate key and one stored
+  type. An immediate post-aggregate projection reconstructs every public
+  `Mixed` alias and drops the tuple key before any downstream
+  `SELECT *`, filter, sort, or limit can widen rows.
+- `min`/`max` and `values` over the same scalar input share the original String
+  materialization while values alone retains exact, bounded Array semantics.
+- Both paths use the same numeric normalization, tuple ordering, and
+  Null/Double/String/Bytes stored-type mapping helpers, preventing subtle
+  command or lowering drift.
 - The lowering performs no `ARRAY JOIN`, row expansion, sorting, or unbounded
   list aggregation.
 - The numeric text grammar is shared with `bin`, preventing command semantics
@@ -136,16 +149,34 @@ The final reviewer verdict reported no remaining stop-ship correctness,
 security, argument-ordering, relational-depth, optimizer-sharing, or
 unbounded-state issue.
 
-One nonblocking performance opportunity remains: statically scalar String
-fields such as `host`, `source`, and `service` currently use the same bounded
-array/candidate lowering as multivalue-capable inputs. A dedicated scalar
-candidate alias with conditional scalar aggregates could remove several
-row-local singleton arrays and Dynamic boxes. Preserve numeric-before-lexical
-semantics and prove the physical plan before changing this path.
+The scalar optimization received a second three-agent adversarial pass. It
+found and resolved:
+
+1. **Per-field/result cache drift.** Independent ordinals and repeated
+   expressions were replaced with stable field descriptors and one cached
+   result per `(input, function)`. Tests pin interleaved `host`/`service`
+   wiring, exact calculated-argument order, and the 64-measure ceiling.
+2. **Private tuple-key retention.** The first cache revision could carry a
+   winning String twice through downstream `SELECT *` stages. Reconstruction
+   now happens in an immediate cleanup projection that excludes every tuple
+   key, and the added relational level is explicitly pinned.
+3. **Coverage and fixture cost.** Eight filtered scalar queries became one
+   grouped result comparison. Repeated aliases are executed and scanned as
+   well as explained. A 4-KiB-plus-one String pins the lexical length boundary
+   through both scalar and Dynamic paths and downstream re-aggregation.
+4. **Reproducible performance evidence.** An opt-in benchmark now uses the
+   production classifier/ordering helpers, a generated two-million-row corpus,
+   the pinned server, one thread, disabled query cache, fixed samples, and
+   `system.query_log` memory/duration. Its documentation explicitly limits the
+   claim to helper-level lowering; compiler shape is covered by assertions and
+   pinned `EXPLAIN`.
+
+All three reviewers reported no remaining concrete correctness, efficiency,
+or code-quality finding after those fixes.
 
 ## Validation evidence
 
-The full ordinary backend suite passed after the hardening changes:
+The full ordinary backend suite passed after commit `90f7bbe`:
 
 ```sh
 go test ./... -count=1 -timeout=5m
@@ -175,8 +206,8 @@ The extrema coverage in that suite includes:
 
 - numeric-only, lexical-only, mixed, punctuation, zero, null, missing, and
   multivalue groups;
-- whitespace, `NaN`, overflowing exponents, empty String, and UTF-8 lexical
-  fallback behavior;
+- whitespace, `NaN`, overflowing exponents, empty String, invalid UTF-8, and
+  overlong lexical fallback behavior;
 - nested/container and flattened-object guards;
 - incomplete `BY` eligibility, projected-away input, global/grouped empties,
   and tenant-scope poison isolation;
@@ -197,8 +228,32 @@ go test ./internal/queryexec \
 This pins parser-to-manager nullable `Mixed` transport, including numeric,
 String, null, and binary `_raw` extrema results.
 
-The focused post-review compiler tests and `git diff --check` also passed. Do
-not count a skipped opt-in test as database validation.
+The opt-in lowering benchmark passed against ClickHouse `26.3.17.4` from
+`clickhouse/clickhouse-server:26.3.17.4`. The locally resolved arm64 repository
+digest was
+`sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49`.
+With 2,000,000 generated rows, seven measured queries, `max_threads=1`, and
+`use_query_cache=0`, it reported:
+
+| Lowering | Client time/op | Server median | Average memory | Peak memory | Rows/s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Guarded Array | 360.2 ms | 359 ms | 8,320,064 B | 9,081,959 B | 5,571,031 |
+| Scalar tuple | 333.3 ms | 331 ms | 6,860,420 B | 6,860,964 B | 6,042,296 |
+
+For this corpus, the scalar helper was about 7.8% lower in server median,
+17.5% lower in average memory, and 8.5% higher in rows/second. These are
+checkpoint observations, not timing assertions or universal workload claims.
+Reproduce them with:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_BENCHMARK=1 \
+go test ./internal/clickhouse -run '^$' \
+  -bench '^BenchmarkStatsExtremaLowering$' -benchtime=7x -count=1 -v
+```
+
+The focused post-review compiler/depth tests and `git diff --check` also
+passed. No `open-splunk-*` test container remained at the checkpoint. Do not
+count a skipped opt-in test as database validation.
 
 ## Current backend state
 
@@ -226,22 +281,31 @@ The backend now includes:
 
 ## Remaining work, in priority order
 
-### 1. Continue TDD on aggregate correctness and efficiency
+### 1. Finish the first-release product proof
 
-Start with the deferred scalar-String extrema optimization because it is a
-concrete adversarial performance finding and the user emphasized efficiency:
+This is the recommended next slice unless the user explicitly prioritizes
+broader SPL. It closes named acceptance criteria rather than adding more
+surface area:
 
-- write compiler and pinned `EXPLAIN actions=1` tests first;
-- introduce one scalar candidate/classification alias shared by repeated
-  `min`/`max`;
-- avoid singleton `Array(String)` and candidate-array construction only for
-  fields proven statically scalar;
-- retain the existing Array path for Dynamic and `StringArray` inputs;
-- preserve numeric-before-lexical selection, null behavior, private result
-  type, placeholder order, downstream use, and sanitized guards; and
-- benchmark both forms over a generated corpus before claiming improvement.
+- Add one browser-visible end-to-end test that starts the stack, writes a
+  generated log, waits for durable collector acknowledgment, searches it,
+  observes protobuf WebSocket progress/preview, and verifies authoritative
+  paged results.
+- Exercise the compiled embedded-UI server from an empty working directory,
+  without Node.js or external frontend assets.
+- Add deterministic frontend/server tests for reconnect rejection,
+  stale-frame fencing, resynchronization, expiration, and preview-to-final
+  replacement.
+- Record a load/performance run at sustained 1,000 events/second, including
+  collector offline recovery, slow WebSocket consumers, concurrent searches,
+  high-cardinality exact aggregates, and scan budgets.
+- Use the existing log generator and sanitized fixtures; `app.log` is suitable
+  local test input when its contents pass the fixture secret scan.
 
-After that, choose one bounded aggregate contract at a time:
+### 2. Continue TDD on aggregate correctness and efficiency
+
+The scalar-String extrema optimization is complete. If SPL expansion is the
+chosen next priority, implement one bounded aggregate contract at a time:
 
 - `list(field)` must be order-sensitive, duplicate-preserving, and explicitly
   bounded; do not adapt unordered `values`;
@@ -260,23 +324,6 @@ Extend `chart`, `rex`, or `spath` only behind compatibility and pinned
 ClickHouse tests. Deferred `spath` surface includes auto-extraction, `{}`
 multivalue output, XML, terminal containers, escaped literal-dot keys, and the
 `spath()` eval function.
-
-### 2. Finish the first-release product proof
-
-- Add one browser-visible end-to-end test that starts the stack, writes a
-  generated log, waits for durable collector acknowledgment, searches it,
-  observes protobuf WebSocket progress/preview, and verifies authoritative
-  paged results.
-- Exercise the compiled embedded-UI server from an empty working directory,
-  without Node.js or external frontend assets.
-- Add deterministic frontend/server tests for reconnect rejection,
-  stale-frame fencing, resynchronization, expiration, and preview-to-final
-  replacement.
-- Record a load/performance run at sustained 1,000 events/second, including
-  collector offline recovery, slow WebSocket consumers, concurrent searches,
-  high-cardinality exact aggregates, and scan budgets.
-- Use the existing log generator and sanitized fixtures; `app.log` is suitable
-  local test input when its contents pass the fixture secret scan.
 
 ### 3. Improve compiler maintainability
 
@@ -339,16 +386,20 @@ Do not guess those decisions if they materially affect the implementation.
 ## Safe resume procedure
 
 1. Confirm `main` is clean and exactly matches `origin/main`.
-2. Read the three documents listed at the top and inspect commits `b4c795b`
-   and `0a995d7`.
+2. Read the three documents listed at the top and inspect commits `f2bace6`
+   and `90f7bbe`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
 4. Run the ordinary Go/frontend gates above. Run both opt-in pinned ClickHouse
    suites before changing extrema/bin metadata behavior.
-5. Begin with tests for the statically scalar String extrema optimization
-   unless the user changes priority. Preserve the Dynamic/StringArray path.
-6. Preserve numeric grammar sharing, punctuation/UTF-8/zero boundaries,
+5. Unless the user changes priority, begin with a test-first first-release
+   vertical proof: collector write and durable acknowledgment through search,
+   protobuf preview/progress, authoritative paging, and browser-visible result.
+6. If extending aggregates instead, start with an explicit bounded contract
+   for `list(field)`; do not reuse unordered `values`.
+7. Preserve scalar/Dynamic path separation, numeric grammar sharing,
+   punctuation/UTF-8/zero/overlong boundaries,
    native timestamp precision, private calculated types, downstream `bin`,
    re-aggregation, scope poison, binary transport, physical state sharing, and
    relational-depth regressions.
-7. Keep working on `main`; commit and push every cohesive green slice.
-8. Preserve unexpected local changes and never reset them away.
+8. Keep working on `main`; commit and push every cohesive green slice.
+9. Preserve unexpected local changes and never reset them away.
