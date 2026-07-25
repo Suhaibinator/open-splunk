@@ -129,6 +129,21 @@ func TestSpathCompatibilityCorpus(t *testing.T) {
 	}
 }
 
+func TestStatsDistinctCountCompatibilityCorpus(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | stats count dc(trace_id) AS unique_traces distinct_count(logger) AS unique_loggers BY level`,
+	)
+	if compiled.SQL == "" ||
+		!slices.Equal(compiled.OutputFields, []string{"level", "count", "unique_traces", "unique_loggers"}) ||
+		!strings.Contains(compiled.SQL, "groupUniqArrayArray(") ||
+		strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
+		t.Fatalf("dc corpus query is incomplete or row-expanding: %#v", compiled)
+	}
+}
+
 func TestBinCompatibilityCorpus(t *testing.T) {
 	t.Parallel()
 

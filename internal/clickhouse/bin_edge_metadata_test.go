@@ -81,7 +81,7 @@ func TestBinEdgeMetadataPreservesRexDestinationPrivateAliases(t *testing.T) {
 	)
 	binEdgeMetadataRequire(t, compiled.SQL, "rex-made destination",
 		`= 'None', CAST("band" AS Dynamic)`,
-		`toUInt8(ifNull((("__os_rex_exists_2_0") OR (arrayExists(name -> startsWith(name, ?), "__os_field_names"))), 0))`+
+		`toUInt8(ifNull((("__os_rex_exists_2_0") OR ("__os_rex_descendant_2_0")), 0))`+
 			` AS "__os_numeric_bin_previous_exists_4"`,
 		`toUInt8("__os_rex_type_2_0") AS "__os_numeric_bin_previous_type_4"`,
 		`"__os_numeric_bin_previous_exists_4")) AS "__os_numeric_bin_output_exists_4"`,
@@ -91,7 +91,11 @@ func TestBinEdgeMetadataPreservesRexDestinationPrivateAliases(t *testing.T) {
 	// The rex stage's own private columns must still be defined by that stage
 	// and read again by the bin stage; a pruned alias would make the query
 	// reference a column the inner relation no longer projects.
-	for _, alias := range []string{`"__os_rex_exists_2_0"`, `"__os_rex_type_2_0"`} {
+	for _, alias := range []string{
+		`"__os_rex_exists_2_0"`,
+		`"__os_rex_type_2_0"`,
+		`"__os_rex_descendant_2_0"`,
+	} {
 		if got := strings.Count(compiled.SQL, alias); got < 2 {
 			t.Fatalf("rex private alias %s occurs %d times, want a definition and a bin-stage read:\n%s",
 				alias, got, compiled.SQL)

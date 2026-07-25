@@ -1168,6 +1168,7 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 	}
 	for _, marker := range []string{
 		clickhouse.UnsupportedStatsByValueMarker,
+		clickhouse.UnsupportedStatsMeasureValueMarker,
 		clickhouse.UnsupportedDedupValueMarker,
 		clickhouse.UnsupportedNumericBinValueMarker,
 		clickhouse.UnsupportedSpathValueMarker,
@@ -1208,8 +1209,18 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 		strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), clickhouse.ChartRowLimitMarker) {
 		t.Fatalf("chart row-limit classification = %v", err)
 	}
+	statsDistinct := &clickhousedriver.Exception{
+		Code:    395,
+		Name:    "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
+		Message: clickhouse.UnsupportedStatsDistinctLimitMarker + "; generated SQL contained secret",
+	}
+	if err := classifyQueryError(context.Background(), statsDistinct); !errors.Is(err, searchjobs.ErrExecutionLimit) ||
+		strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), clickhouse.UnsupportedStatsDistinctLimitMarker) {
+		t.Fatalf("stats distinct limit classification = %v", err)
+	}
 	for _, marker := range []string{
 		clickhouse.UnsupportedStatsByValueMarker,
+		clickhouse.UnsupportedStatsMeasureValueMarker,
 		clickhouse.UnsupportedDedupValueMarker,
 		clickhouse.UnsupportedNumericBinValueMarker,
 		clickhouse.UnsupportedSpathValueMarker,

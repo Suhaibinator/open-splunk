@@ -16,8 +16,6 @@ const (
 	maxPipelineCommands   = 64
 	maxEvalAssignments    = 64
 	maxRenameAssignments  = 64
-	maxStatsAggregates    = 16
-	maxStatsGroupFields   = 16
 	maxDedupFields        = 16
 	maxWhereComparisons   = 32
 	maxScalarNestingDepth = 32
@@ -1273,10 +1271,10 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 	aggregates := make([]StatsAggregate, 0, 4)
 	end := name.range_.End
 	for {
-		if len(aggregates) >= maxStatsAggregates {
+		if len(aggregates) >= MaximumStatsMeasures {
 			return nil, &Diagnostic{
 				Code:    "SPL_QUERY_TOO_COMPLEX",
-				Message: fmt.Sprintf("stats contains more than %d aggregate measures", maxStatsAggregates),
+				Message: fmt.Sprintf("stats contains more than %d aggregate measures", MaximumStatsMeasures),
 				Range:   p.current().range_,
 			}
 		}
@@ -1304,7 +1302,7 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 			Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
 			Message:     fmt.Sprintf("unsupported stats syntax at %q; expected another supported aggregate, AS, or BY", current.text),
 			Range:       current.range_,
-			Suggestions: []string{"stats count", "stats sum(field) avg(field) BY group", "stats p95(field) AS p95_value BY group"},
+			Suggestions: []string{"stats count", "stats dc(field) BY group", "stats sum(field) avg(field) BY group", "stats p95(field) AS p95_value BY group"},
 		}
 	}
 
@@ -1332,23 +1330,21 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 	p.advance()
 	aggregate := StatsAggregate{Range: functionToken.range_, AliasRange: functionToken.range_}
 	end := functionToken.range_.End
-	switch strings.ToLower(functionToken.text) {
-	case "count":
-		aggregate.Function = AggregateFunctionCount
-		aggregate.Alias = "count"
+	functionName := strings.ToLower(functionToken.text)
+	spec, supported := statsAggregateSpecForName(functionName)
+	if !supported {
+		return StatsAggregate{}, end, p.unsupportedStatsAggregate(
+			functionToken,
+			fmt.Sprintf("stats aggregate %q is not supported; count, dc, p95, sum, and avg are available", functionToken.text),
+		)
+	}
+	aggregate.Function = spec.function
+	aggregate.Alias = spec.canonicalName
+	if !spec.requiresInput {
 		if p.current().kind == tokenLeftParen {
 			return StatsAggregate{}, end, p.unsupportedStatsAggregate(p.current(), "count arguments are not supported; use argument-free count")
 		}
-	case "p95", "sum", "avg":
-		functionName := strings.ToLower(functionToken.text)
-		switch functionName {
-		case "p95":
-			aggregate.Function = AggregateFunctionP95
-		case "sum":
-			aggregate.Function = AggregateFunctionSum
-		case "avg":
-			aggregate.Function = AggregateFunctionAverage
-		}
+	} else {
 		if !p.match(tokenLeftParen) {
 			return StatsAggregate{}, end, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
@@ -1369,13 +1365,8 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 		}
 		end = p.previous().range_.End
 		aggregate.Range.End = end
-		aggregate.Alias = functionName + "(" + input.text + ")"
+		aggregate.Alias = spec.canonicalName + "(" + input.text + ")"
 		aggregate.AliasRange = Range{Start: functionToken.range_.Start, End: end}
-	default:
-		return StatsAggregate{}, end, p.unsupportedStatsAggregate(
-			functionToken,
-			fmt.Sprintf("stats aggregate %q is not supported; count, p95, sum, and avg are available", functionToken.text),
-		)
 	}
 
 	if p.isKeyword("AS") {
@@ -1393,9 +1384,32 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 	return aggregate, end, nil
 }
 
+type statsAggregateSpec struct {
+	function      AggregateFunction
+	canonicalName string
+	requiresInput bool
+}
+
+func statsAggregateSpecForName(name string) (statsAggregateSpec, bool) {
+	switch strings.ToLower(name) {
+	case "count":
+		return statsAggregateSpec{function: AggregateFunctionCount, canonicalName: "count"}, true
+	case "p95":
+		return statsAggregateSpec{function: AggregateFunctionP95, canonicalName: "p95", requiresInput: true}, true
+	case "sum":
+		return statsAggregateSpec{function: AggregateFunctionSum, canonicalName: "sum", requiresInput: true}, true
+	case "avg":
+		return statsAggregateSpec{function: AggregateFunctionAverage, canonicalName: "avg", requiresInput: true}, true
+	case "dc", "distinct_count":
+		return statsAggregateSpec{function: AggregateFunctionDistinctCount, canonicalName: "dc", requiresInput: true}, true
+	default:
+		return statsAggregateSpec{}, false
+	}
+}
+
 func supportedStatsAggregateName(name string) bool {
-	return strings.EqualFold(name, "count") || strings.EqualFold(name, "p95") ||
-		strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg")
+	_, supported := statsAggregateSpecForName(name)
+	return supported
 }
 
 func (p *parser) parseStatsGroupFields() ([]StatsGroupField, Position, error) {
@@ -1423,10 +1437,10 @@ func (p *parser) parseStatsGroupFields() ([]StatsGroupField, Position, error) {
 				Suggestions: []string{"stats count AS total BY field"},
 			}
 		}
-		if len(fields) >= maxStatsGroupFields {
+		if len(fields) >= MaximumStatsGroupFields {
 			return nil, end, &Diagnostic{
 				Code:    "SPL_QUERY_TOO_COMPLEX",
-				Message: fmt.Sprintf("stats BY contains more than %d grouping fields", maxStatsGroupFields),
+				Message: fmt.Sprintf("stats BY contains more than %d grouping fields", MaximumStatsGroupFields),
 				Range:   tok.range_,
 			}
 		}
@@ -1446,7 +1460,7 @@ func (p *parser) unsupportedStatsAggregate(tok token, message string) *Diagnosti
 		Code:        "SPL_UNSUPPORTED_STATS_AGGREGATE",
 		Message:     message,
 		Range:       tok.range_,
-		Suggestions: []string{"stats count", "stats sum(field) avg(field) BY group", "stats p95(field) AS p95_value BY group"},
+		Suggestions: []string{"stats count", "stats dc(field) BY group", "stats sum(field) avg(field) BY group", "stats p95(field) AS p95_value BY group"},
 	}
 }
 

@@ -298,6 +298,18 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 				},
 			},
 			{
+				name:        "distinct loggers",
+				source:      `index=gradethis | stats distinct_count(logger) AS unique_loggers`,
+				wantColumns: []string{"unique_loggers"},
+				wantRows:    1,
+				assert: func(t *testing.T, page searchjobs.ResultPage) {
+					distinct, ok := page.Rows[0].Values[0].Unsigned()
+					if !ok || distinct != 5 {
+						t.Fatalf("distinct loggers = %d (%v), want unsigned 5", distinct, ok)
+					}
+				},
+			},
+			{
 				name: "frequent errors",
 				source: `index=gradethis level=ERROR
 | stats count by logger, message
@@ -1441,6 +1453,7 @@ ORDER BY grid.number`,
 	t.Run("non-scalar markers are safely classified", func(t *testing.T) {
 		for _, marker := range []string{
 			clickhouse.UnsupportedStatsByValueMarker,
+			clickhouse.UnsupportedStatsMeasureValueMarker,
 			clickhouse.UnsupportedDedupValueMarker,
 			clickhouse.UnsupportedNumericBinValueMarker,
 			clickhouse.UnsupportedSpathValueMarker,
@@ -1455,10 +1468,11 @@ ORDER BY grid.number`,
 		}
 	})
 
-	t.Run("calculated extraction limits are safely classified", func(t *testing.T) {
+	t.Run("runtime resource limits are safely classified", func(t *testing.T) {
 		for _, marker := range []string{
 			clickhouse.RexCaptureLimitMarker,
 			clickhouse.SpathInputLimitMarker,
+			clickhouse.UnsupportedStatsDistinctLimitMarker,
 		} {
 			err := executor.Execute(ctx, clickhouse.CompiledQuery{
 				SQL: `SELECT throwIf(toUInt8(1), '` + marker +
@@ -1467,7 +1481,7 @@ ORDER BY grid.number`,
 			}, &fakeSink{})
 			if !errors.Is(err, searchjobs.ErrExecutionLimit) ||
 				strings.Contains(err.Error(), marker) {
-				t.Fatalf("calculated extraction limit %q classification = %v", marker, err)
+				t.Fatalf("runtime resource limit %q classification = %v", marker, err)
 			}
 		}
 	})

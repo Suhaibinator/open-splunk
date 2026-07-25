@@ -376,12 +376,116 @@ func TestBuildStatsSumAndAveragePreserveMeasureOrder(t *testing.T) {
 	}
 }
 
+func TestBuildStatsDistinctCountPreservesMeasureOrderAndAliases(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count dc(user) distinct_count(device) AS devices BY service`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"service", "count", "dc(user)", "devices"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+	aggregate, ok := logical.Operators[len(logical.Operators)-1].(*Aggregate)
+	if !ok || len(aggregate.Measures) != 3 {
+		t.Fatalf("aggregate operator = %#v", logical.Operators[len(logical.Operators)-1])
+	}
+	for index, want := range []struct {
+		input  string
+		output string
+	}{
+		{input: "user", output: "dc(user)"},
+		{input: "device", output: "devices"},
+	} {
+		measure := aggregate.Measures[index+1]
+		if measure.Function != AggregateFunctionDistinctCount ||
+			measure.Input.Name != want.input || measure.Output != want.output {
+			t.Fatalf("measure %d = %#v, want dc(%s) AS %s", index+1, measure, want.input, want.output)
+		}
+	}
+}
+
+func TestBuildStatsRejectsReservedOpenSchemaFieldsInputs(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | stats dc(fields)`,
+		`index=gradethis | stats count BY fields`,
+	} {
+		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		assertDiagnosticCode(t, err, "SPL_AMBIGUOUS_STATS_FIELD")
+	}
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count AS fields | stats dc(fields) AS distinct_counts`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build closed schema: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"distinct_counts"}) {
+		t.Fatalf("closed-schema output fields = %v", logical.OutputFields)
+	}
+
+	_, err = Build(
+		mustParse(t, `index=gradethis | stats dc(user) distinct_count(user)`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	assertDiagnosticCode(t, err, "SPL_DUPLICATE_FIELD")
+}
+
+func TestBuildRevalidatesForgedStatsBounds(t *testing.T) {
+	t.Parallel()
+
+	base := mustParse(t, `index=gradethis`)
+	tooManyMeasures := make([]spl.StatsAggregate, spl.MaximumStatsMeasures+1)
+	for index := range tooManyMeasures {
+		tooManyMeasures[index] = spl.StatsAggregate{
+			Function: spl.AggregateFunctionCount,
+			Alias:    fmt.Sprintf("count_%d", index),
+		}
+	}
+	tooManyGroups := make([]spl.StatsGroupField, spl.MaximumStatsGroupFields+1)
+	for index := range tooManyGroups {
+		tooManyGroups[index] = spl.StatsGroupField{Name: fmt.Sprintf("group_%d", index)}
+	}
+	for _, command := range []*spl.StatsCommand{
+		{Aggregates: tooManyMeasures},
+		{Aggregates: []spl.StatsAggregate{{Function: spl.AggregateFunctionCount, Alias: "count"}}, GroupBy: tooManyGroups},
+	} {
+		query := &spl.Query{Search: base.Search, Commands: []spl.Command{command}, Range: base.Range}
+		_, err := Build(query, testScope([]string{"gradethis"}, nil))
+		assertDiagnosticCode(t, err, "SPL_QUERY_TOO_COMPLEX")
+	}
+}
+
+func TestBuildRejectsForgedStatsCountInput(t *testing.T) {
+	t.Parallel()
+
+	base := mustParse(t, `index=gradethis`)
+	command := &spl.StatsCommand{
+		Aggregates: []spl.StatsAggregate{{
+			Function:   spl.AggregateFunctionCount,
+			Input:      "host",
+			InputRange: spl.Range{Start: spl.Position{Line: 1, Column: 1}, End: spl.Position{Line: 1, Column: 5}},
+			Alias:      "count",
+		}},
+	}
+	query := &spl.Query{Search: base.Search, Commands: []spl.Command{command}, Range: base.Range}
+	_, err := Build(query, testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_STATS_AGGREGATE")
+}
+
 func TestBuildStatsSumAndAverageRequireExactInputFields(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
 		`index=gradethis | stats sum(request*)`,
 		`index=gradethis | stats avg(request*)`,
+		`index=gradethis | stats dc(request*)`,
 	} {
 		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
 		assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_FIELD_PATTERN")
@@ -1369,7 +1473,7 @@ func TestBuildChartAcceptsLowerCaseReservedSpellingsAndClosedFieldsColumn(t *tes
 	for _, source := range []string{
 		`index=gradethis | chart count over null by other`,
 		`index=gradethis | table fields level | chart count over fields by level`,
-		`index=gradethis | stats count by fields, level | chart count over fields by level`,
+		`index=gradethis | table fields level | stats count by fields, level | chart count over fields by level`,
 	} {
 		if _, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil)); err != nil {
 			t.Errorf("Build(%q): %v", source, err)

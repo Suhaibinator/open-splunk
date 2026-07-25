@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1553,7 +1554,7 @@ func testCompiledQueriesAgainstClickHouse(
 	}
 
 	testNumericBinAgainstClickHouse(t, ctx, connection, indexTime, visibilityCutoff)
-	testStatsSumAndAverageAgainstClickHouse(t, ctx, store, connection, indexTime)
+	testStatsAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testDedupAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testRexAgainstClickHouse(t, ctx, store, connection, indexTime)
 }
@@ -2210,27 +2211,9 @@ func testRexAgainstClickHouse(
 		indexTime.Add(10*time.Second),
 		visibilityCutoff,
 	)
-	explainRows, err := connection.Query(ctx, "EXPLAIN actions=1 "+explained.SQL, explained.Args...)
-	if err != nil {
-		t.Fatalf("explain rex execution: %v", err)
-	}
-	var explain strings.Builder
-	for explainRows.Next() {
-		var line string
-		if err := explainRows.Scan(&line); err != nil {
-			t.Fatalf("scan rex explain: %v", err)
-		}
-		explain.WriteString(line)
-		explain.WriteByte('\n')
-	}
-	if err := explainRows.Err(); err != nil {
-		t.Fatalf("iterate rex explain: %v", err)
-	}
-	if err := explainRows.Close(); err != nil {
-		t.Fatalf("close rex explain: %v", err)
-	}
-	if calls := strings.Count(explain.String(), "FUNCTION extractGroups("); calls != 1 {
-		t.Fatalf("rex physical explain contains %d extractGroups actions, want 1:\n%s", calls, explain.String())
+	explain := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", explained)
+	if calls := strings.Count(explain, "FUNCTION extractGroups("); calls != 1 {
+		t.Fatalf("rex physical explain contains %d extractGroups actions, want 1:\n%s", calls, explain)
 	}
 
 	tests := []struct {
@@ -2546,7 +2529,7 @@ func testRexAgainstClickHouse(
 	}
 }
 
-func testStatsSumAndAverageAgainstClickHouse(
+func testStatsAggregatesAgainstClickHouse(
 	t *testing.T,
 	ctx context.Context,
 	store *Store,
@@ -2564,30 +2547,47 @@ func testStatsSumAndAverageAgainstClickHouse(
 	events := []*ingest.StoredEvent{
 		newEvent("sum-avg-a-int", "A",
 			typedField("aggregate_value", typedSint(10)),
+			typedField("distinct_value", typedSint(1)),
 			typedField("float_metric", typedDouble(1.25)),
 			typedField("overflow_metric", typedDouble(math.MaxFloat64)),
 			typedField("ignored_metric", typedBool(true)),
 		),
 		newEvent("sum-avg-a-string", "A",
 			typedField("aggregate_value", typedString("20.5")),
+			typedField("distinct_value", typedString("1")),
 			typedField("overflow_metric", typedDouble(math.MaxFloat64)),
 			typedField("ignored_metric", typedBytes([]byte{1, 2, 3})),
 		),
 		newEvent("sum-avg-a-array", "A",
 			typedField("aggregate_value", typedList(typedSint(1), typedString("2.5"), typedString("bad"), typedNull())),
+			typedField("distinct_value", typedList(
+				typedString("1.0"),
+				typedString("01"),
+				typedString(""),
+				typedString("Case"),
+				typedString("case"),
+				typedString("1.0"),
+				typedNull(),
+			)),
 			typedField("ignored_metric", typedObject(typedField("child", typedSint(9)))),
 		),
 		newEvent("sum-avg-a-missing", "A",
 			typedField("decimal_metric", typedDecimal("3.25")),
 			typedField("nested_metric", typedList(typedSint(5), typedList(typedSint(99)), typedObject(typedField("child", typedSint(100))))),
+			typedField("dc_object", typedObject(typedField("child", typedString("secret")))),
+			typedField("dc_empty_object", typedObject()),
+			typedField("dc_nested", typedList(typedString("ok"), typedList(typedString("secret")))),
+			typedField("replacement_json", typedString(`{"replacement":"new"}`)),
 			typedField("ignored_metric", typedString("NaN")),
 		),
 		newEvent("sum-avg-b-bad", "B",
 			typedField("aggregate_value", typedString("bad")),
+			typedField("distinct_value", typedList(typedString("repeat"), typedString("repeat"), typedNull())),
 			typedField("ignored_metric", typedString("Inf")),
 		),
 		newEvent("sum-avg-b-null", "B",
 			typedField("aggregate_value", typedNull()),
+			typedField("distinct_value", typedNull()),
 			typedField("ignored_metric", typedString("")),
 		),
 	}
@@ -2600,7 +2600,12 @@ func testStatsSumAndAverageAgainstClickHouse(
 	if _, err := store.Store(ctx, batch); err != nil {
 		t.Fatalf("store sum/avg fixtures: %v", err)
 	}
-	foreign := newEvent("sum-avg-foreign", "A", typedField("aggregate_value", typedList(typedSint(999999))))
+	foreign := newEvent(
+		"sum-avg-foreign",
+		"A",
+		typedField("aggregate_value", typedList(typedSint(999999))),
+		typedField("distinct_value", typedObject(typedField("secret", typedString("must-remain-out-of-scope")))),
+	)
 	foreign.TenantID = "other-tenant"
 	foreign.BatchID = "stats-sum-avg-foreign-batch"
 	foreignBatch := ingest.StoreBatch{
@@ -2659,6 +2664,48 @@ func testStatsSumAndAverageAgainstClickHouse(
 		t.Fatalf("grouped sum/avg rows = %#v", got)
 	}
 
+	distinct := compile(base + ` | stats count dc(distinct_value) AS distinct_values BY aggregate_group | sort aggregate_group`)
+	distinctRows, err := connection.Query(ctx, distinct.SQL, distinct.Args...)
+	if err != nil {
+		t.Fatalf("execute grouped dc: %v\nSQL: %s\nargs: %#v", err, distinct.SQL, distinct.Args)
+	}
+	type distinctRow struct {
+		group    string
+		count    uint64
+		distinct uint64
+	}
+	var gotDistinct []distinctRow
+	for distinctRows.Next() {
+		var row distinctRow
+		if err := distinctRows.Scan(&row.group, &row.count, &row.distinct); err != nil {
+			_ = distinctRows.Close()
+			t.Fatalf("scan grouped dc: %v", err)
+		}
+		gotDistinct = append(gotDistinct, row)
+	}
+	if err := distinctRows.Err(); err != nil {
+		_ = distinctRows.Close()
+		t.Fatalf("iterate grouped dc: %v", err)
+	}
+	if err := distinctRows.Close(); err != nil {
+		t.Fatalf("close grouped dc: %v", err)
+	}
+	if !reflect.DeepEqual(gotDistinct, []distinctRow{
+		{group: "A", count: 4, distinct: 6},
+		{group: "B", count: 2, distinct: 1},
+	}) {
+		t.Fatalf("grouped dc rows = %#v", gotDistinct)
+	}
+
+	globalDistinct := compile(base + ` | stats distinct_count(distinct_value) AS distinct_values`)
+	var globalDistinctCount uint64
+	if err := connection.QueryRow(ctx, globalDistinct.SQL, globalDistinct.Args...).Scan(&globalDistinctCount); err != nil {
+		t.Fatalf("execute global dc: %v\nSQL: %s\nargs: %#v", err, globalDistinct.SQL, globalDistinct.Args)
+	}
+	if globalDistinctCount != 7 {
+		t.Fatalf("global dc = %d, want 7", globalDistinctCount)
+	}
+
 	emptyGlobal := compile(`index=compiler source="sum-avg-absent" | stats sum(aggregate_value) AS total avg(aggregate_value) AS mean`)
 	var emptyTotal, emptyMean *float64
 	if err := connection.QueryRow(ctx, emptyGlobal.SQL, emptyGlobal.Args...).Scan(&emptyTotal, &emptyMean); err != nil {
@@ -2666,6 +2713,13 @@ func testStatsSumAndAverageAgainstClickHouse(
 	}
 	if emptyTotal != nil || emptyMean != nil {
 		t.Fatalf("empty global sum/avg = %v/%v, want null/null", emptyTotal, emptyMean)
+	}
+	emptyDistinct := compile(`index=compiler source="sum-avg-absent" | stats dc(distinct_value) AS distinct_values`)
+	if err := connection.QueryRow(ctx, emptyDistinct.SQL, emptyDistinct.Args...).Scan(&globalDistinctCount); err != nil {
+		t.Fatalf("execute empty global dc: %v\nSQL: %s\nargs: %#v", err, emptyDistinct.SQL, emptyDistinct.Args)
+	}
+	if globalDistinctCount != 0 {
+		t.Fatalf("empty global dc = %d, want 0", globalDistinctCount)
 	}
 	emptyGrouped := compile(`index=compiler source="sum-avg-absent" | stats sum(aggregate_value) BY aggregate_group`)
 	if err := executeCompiledExpectingNoRows(ctx, connection, emptyGrouped); err != nil {
@@ -2711,6 +2765,75 @@ func testStatsSumAndAverageAgainstClickHouse(
 		t.Fatalf("projected sum/avg groups = %v, missing B", projectedGroups)
 	}
 
+	projectedDistinct := compile(base + ` | fields aggregate_group | stats dc(distinct_value) AS distinct_values BY aggregate_group | sort aggregate_group`)
+	projectedDistinctRows, err := connection.Query(ctx, projectedDistinct.SQL, projectedDistinct.Args...)
+	if err != nil {
+		t.Fatalf("execute projected dc: %v\nSQL: %s\nargs: %#v", err, projectedDistinct.SQL, projectedDistinct.Args)
+	}
+	projectedDistinctCount := 0
+	for projectedDistinctRows.Next() {
+		var group string
+		var count uint64
+		if err := projectedDistinctRows.Scan(&group, &count); err != nil {
+			_ = projectedDistinctRows.Close()
+			t.Fatalf("scan projected dc: %v", err)
+		}
+		if count != 0 || (group != "A" && group != "B") {
+			_ = projectedDistinctRows.Close()
+			t.Fatalf("projected dc row = %q/%d, want A-or-B/0", group, count)
+		}
+		projectedDistinctCount++
+	}
+	if err := projectedDistinctRows.Err(); err != nil {
+		_ = projectedDistinctRows.Close()
+		t.Fatalf("iterate projected dc: %v", err)
+	}
+	if err := projectedDistinctRows.Close(); err != nil {
+		t.Fatalf("close projected dc: %v", err)
+	}
+	if projectedDistinctCount != 2 {
+		t.Fatalf("projected dc rows = %d, want 2", projectedDistinctCount)
+	}
+
+	for _, field := range []string{"dc_object", "dc_empty_object", "dc_nested"} {
+		unsupported := compile(base + ` | stats dc(` + field + `) AS distinct_values`)
+		var ignored uint64
+		err := connection.QueryRow(ctx, unsupported.SQL, unsupported.Args...).Scan(&ignored)
+		if err == nil || !strings.Contains(err.Error(), UnsupportedStatsMeasureValueMarker) {
+			t.Fatalf("dc(%s) error = %v, want stable unsupported marker", field, err)
+		}
+	}
+	ineligiblePoison := compile(base + ` | stats dc(dc_object) AS distinct_values BY absent_group`)
+	if err := executeCompiledExpectingNoRows(ctx, connection, ineligiblePoison); err != nil {
+		t.Fatalf("incomplete dc group exposed measure poison: %v\nSQL: %s\nargs: %#v", err, ineligiblePoison.SQL, ineligiblePoison.Args)
+	}
+	for _, test := range []struct {
+		name   string
+		source string
+	}{
+		{
+			name: "rex",
+			source: base + ` event_id="sum-avg-a-missing"` +
+				` | rex "(?<dc_object>sum)" | stats dc(dc_object) AS distinct_values`,
+		},
+		{
+			name: "spath",
+			source: base + ` event_id="sum-avg-a-missing"` +
+				` | spath input=replacement_json output=dc_object path=replacement` +
+				` | stats dc(dc_object) AS distinct_values`,
+		},
+	} {
+		overwritten := compile(test.source)
+		var count uint64
+		if err := connection.QueryRow(ctx, overwritten.SQL, overwritten.Args...).Scan(&count); err != nil {
+			t.Fatalf("execute %s object overwrite before dc: %v\nSQL: %s\nargs: %#v",
+				test.name, err, overwritten.SQL, overwritten.Args)
+		}
+		if count != 1 {
+			t.Fatalf("%s object overwrite dc = %d, want 1", test.name, count)
+		}
+	}
+
 	downstream := compile(base + ` | stats sum(aggregate_value) AS total BY aggregate_group | where total>30`)
 	var downstreamGroup string
 	var downstreamTotal *float64
@@ -2728,6 +2851,26 @@ func testStatsSumAndAverageAgainstClickHouse(
 	}
 	if repeatedMean == nil || math.Abs(*repeatedMean-34) > 1e-12 {
 		t.Fatalf("repeated sum/avg = %v, want 34", repeatedMean)
+	}
+	downstreamDistinct := compile(base + ` | stats dc(distinct_value) AS distinct_values | where distinct_values=7`)
+	if err := connection.QueryRow(ctx, downstreamDistinct.SQL, downstreamDistinct.Args...).Scan(&globalDistinctCount); err != nil {
+		t.Fatalf("execute downstream dc: %v\nSQL: %s\nargs: %#v", err, downstreamDistinct.SQL, downstreamDistinct.Args)
+	}
+	if globalDistinctCount != 7 {
+		t.Fatalf("downstream dc = %d, want 7", globalDistinctCount)
+	}
+	repeatedDistinct := compile(base + ` | stats dc(distinct_value) AS distinct_values | stats dc(distinct_values) AS count_values`)
+	var repeatedDistinctCount uint64
+	if err := connection.QueryRow(ctx, repeatedDistinct.SQL, repeatedDistinct.Args...).Scan(&repeatedDistinctCount); err != nil {
+		t.Fatalf("execute repeated dc: %v\nSQL: %s\nargs: %#v", err, repeatedDistinct.SQL, repeatedDistinct.Args)
+	}
+	if repeatedDistinctCount != 1 {
+		t.Fatalf("repeated dc = %d, want 1", repeatedDistinctCount)
+	}
+	sharedDistinct := compile(base + ` | stats dc(distinct_value) AS first dc(distinct_value) AS second`)
+	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", sharedDistinct)
+	if got := strings.Count(actions, "Function: groupUniqArrayArray("); got != 1 {
+		t.Fatalf("repeated dc has %d physical aggregate states, want one:\n%s", got, actions)
 	}
 
 	for _, test := range []struct {
@@ -2774,6 +2917,54 @@ func testStatsSumAndAverageAgainstClickHouse(
 	wantTime := float64(time.Date(2026, 7, 21, 3, 4, 5, 123456789, time.FixedZone("event-offset", 5*60*60)).UnixNano()) / 1e9
 	if meanTime == nil || math.Abs(*meanTime-wantTime) > 1e-6 {
 		t.Fatalf("canonical time average = %v, want %g", meanTime, wantTime)
+	}
+
+	exactBoundarySQL := "SELECT " + boundedDistinctCountSQL(
+		fmt.Sprintf(
+			"arrayMap(number -> toString(number), range(%d))",
+			MaximumStatsDistinctValuesPerGroup,
+		),
+	)
+	var exactBoundary uint64
+	if err := connection.QueryRow(ctx, exactBoundarySQL).Scan(&exactBoundary); err != nil {
+		t.Fatalf("execute exact dc boundary: %v\nSQL: %s", err, exactBoundarySQL)
+	}
+	if exactBoundary != MaximumStatsDistinctValuesPerGroup {
+		t.Fatalf("exact dc boundary = %d, want %d", exactBoundary, MaximumStatsDistinctValuesPerGroup)
+	}
+	overflowBoundarySQL := "SELECT " + boundedDistinctCountSQL(
+		fmt.Sprintf(
+			"arrayMap(number -> toString(number), range(%d))",
+			MaximumStatsDistinctValuesPerGroup+1,
+		),
+	)
+	err = connection.QueryRow(ctx, overflowBoundarySQL).Scan(&exactBoundary)
+	if err == nil || !strings.Contains(err.Error(), UnsupportedStatsDistinctLimitMarker) {
+		t.Fatalf("overflow dc boundary error = %v, want stable limit marker", err)
+	}
+
+	groupCardinalities := newScanRelation(
+		`SELECT 'A' AS "group", toUInt64(1) AS "__os_dc_cardinality_0"
+		 UNION ALL
+		 SELECT 'B' AS "group", toUInt64(`+
+			strconv.FormatUint(MaximumStatsDistinctValuesPerGroup+1, 10)+
+			`) AS "__os_dc_cardinality_0"`,
+		spl.Range{},
+	)
+	boundedGroups, _ := compileBoundedDistinctCountResults(
+		groupCardinalities,
+		[]compiledDistinctCount{{
+			cardinalityColumn: quoteIdentifier("__os_dc_cardinality_0"),
+			outputColumn:      quoteIdentifier("distinct_values"),
+		}},
+		spl.Range{},
+		0,
+	)
+	hiddenOverflowSQL := `SELECT "distinct_values" FROM (` + boundedGroups.sql +
+		`) ORDER BY "group" LIMIT 1`
+	err = connection.QueryRow(ctx, hiddenOverflowSQL).Scan(&exactBoundary)
+	if err == nil || !strings.Contains(err.Error(), UnsupportedStatsDistinctLimitMarker) {
+		t.Fatalf("dc overflow hidden behind downstream LIMIT error = %v, want stable limit marker", err)
 	}
 }
 

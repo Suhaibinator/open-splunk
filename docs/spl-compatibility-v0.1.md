@@ -34,6 +34,14 @@ executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
 expanded, in addition to its time, memory, scan, group, and result budgets.
 
+One `dc` measure retains at most 100,000 exact distinct scalar spellings in
+one group. The 100,001st distinct value fails the search atomically with an
+execution-limit error; it is never truncated or approximated. ClickHouse's
+per-query memory limit remains an independent bound on retained string bytes,
+the sum of all groups, and multiple distinct-count measures. A whole-result
+validation barrier runs before later pipeline commands, so `head`, filtering,
+or projection cannot hide an overflowing group.
+
 ## Search time range
 
 Job creation requires both earliest and latest expressions. Version 0.1 accepts
@@ -433,20 +441,65 @@ the selected rows in reversed order, matching its pipeline semantics.
 ```spl
 | stats count
 | stats count AS events BY field1, field2
+| stats dc(user) AS unique_users BY service
+| stats distinct_count(device) AS devices
 | stats count p95(duration_ms) AS p95_ms BY path
 | stats sum(bytes) AS total_bytes avg(duration_ms) AS mean_ms BY path
 ```
 
-Argument-free `count` plus `p95(field)`, `sum(field)`, and `avg(field)` are
-supported, including multiple space- or comma-separated measures and `AS`
-aliases. Function names are case-insensitive; default output names use canonical
-lowercase spelling such as `sum(bytes)`. The command is transforming: output
-contains only the `BY` fields followed by measures in source order. `count`
-includes every input row in a retained group.
+Argument-free `count` plus `dc(field)`/`distinct_count(field)`, `p95(field)`,
+`sum(field)`, and `avg(field)` are supported, including multiple space- or
+comma-separated measures and `AS` aliases. Function names are
+case-insensitive. Both distinct-count spellings use the canonical default
+output `dc(field)`; other default names use canonical lowercase spelling such
+as `sum(bytes)`. The command is transforming: output contains only the `BY`
+fields followed by measures in source order. `count` includes every input row
+in a retained group.
 
 The current downstream field grammar cannot reference a default aggregate name
-that contains parentheses. Use `AS` when a `sum`, `avg`, or `p95` result will be
-consumed by a later `search`, `where`, `sort`, `fields`, or `table` command.
+that contains parentheses. Use `AS` when a `dc`, `sum`, `avg`, or `p95` result
+will be consumed by a later `search`, `where`, `sort`, `fields`, or `table`
+command.
+
+`dc` processes the stored canonical scalar spelling case-sensitively, as a
+string-oriented Splunk aggregate:
+
+- missing and explicit-null inputs contribute nothing; an empty String is one
+  distinct value;
+- every scalar element of a top-level multivalue input contributes
+  independently, null elements are ignored, and duplicates within or across
+  events collapse;
+- integer `1` and String `"1"` converge, while stored Strings `"1.0"` and
+  `"01"` remain distinct;
+- Bool `true` and String `"true"` converge; and
+- Bytes, timestamps, durations, and decimals use their deterministic stored
+  lexical encodings.
+
+Generic objects, nested arrays, and object or nested-container multivalue
+elements have no supported scalar spelling and fail the live aggregate
+atomically with a sanitized unsupported-value error. A row removed by an
+upstream filter or by an incomplete `BY` tuple cannot contribute to the
+measure and does not trigger that measure error. Unsupported `BY` keys retain
+their stricter whole-input validation described below. A successful `rex` or
+`spath` scalar overwrite replaces an older container for this purpose; a
+failed extraction that preserves the older container still fails.
+
+Collector JSON decoding does not preserve every original numeric token
+spelling. For example, an exactly representable JSON `1.0` is stored as
+Float64 and has canonical lexical spelling `"1"` at search time. `dc` is exact
+over the stored typed value and its canonical spelling, not over source bytes
+that ingestion no longer retains. This is an explicit Open Splunk boundary
+relative to Splunk's string-field model.
+
+`dc` returns a non-null `UInt64`. Global aggregation over no rows or with no
+eligible values emits one row containing zero. A retained group with no
+eligible measure value also contains zero; grouped aggregation over no rows
+emits no groups. A projected-away input stays absent and contributes zero
+rather than being recovered from hidden event columns.
+
+On an open event schema, `fields` is the reserved convenience payload and
+cannot be a `stats` input or `BY` field. A prior transforming command or exact
+`table` may close the schema and declare an ordinary field named `fields`.
 
 The numeric aggregates accept finite integers, floats, numeric strings, tagged
 decimals, and canonical timestamps converted to Unix epoch seconds. Missing,
@@ -946,10 +999,11 @@ The following planned commands are not implemented in this version:
 eventstats, streamstats
 ```
 
-All `stats` functions other than argument-free `count`, `p95(field)`,
-`sum(field)`, and `avg(field)` are unsupported, including `count(field)`, `dc`,
-`values`, `list`, `min`, `max`, `earliest`, `latest`, other fixed percentiles,
-`perc<N>`, `upperperc`, and `exactperc`.
+All `stats` functions other than argument-free `count`,
+`dc(field)`/`distinct_count(field)`, `p95(field)`, `sum(field)`, and
+`avg(field)` are unsupported, including `count(field)`, `values`, `list`,
+`min`, `max`, `earliest`, `latest`, other fixed percentiles, `perc<N>`,
+`upperperc`, and `exactperc`.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,

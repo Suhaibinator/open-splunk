@@ -560,14 +560,14 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 		compiled := compile(t, `index=spath-edge
 | spath output=selected path=payload.text
 | table event_id selected`)
-		actions := spathExplain(t, ctx, connection, "EXPLAIN actions=1 ", compiled)
+		actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", compiled)
 		if got := strings.Count(actions, "FUNCTION JSONExtractRaw("); got != 1 {
 			t.Fatalf("physical plan has %d raw JSON function actions, want one:\n%s", got, actions)
 		}
 		if got := strings.Count(actions, "FUNCTION JSONType("); got != 1 {
 			t.Fatalf("physical plan has %d JSON type actions, want one for a non-indexed path:\n%s", got, actions)
 		}
-		planText := spathExplain(t, ctx, connection, "EXPLAIN ", compiled)
+		planText := explainCompiledQuery(t, ctx, connection, "EXPLAIN ", compiled)
 		for _, blockingStep := range []string{"Aggregating", "Join", "Window", "MergingAggregated"} {
 			if strings.Contains(planText, blockingStep) {
 				t.Fatalf("streaming spath pipeline introduced a %s step:\n%s", blockingStep, planText)
@@ -786,7 +786,7 @@ func spathQueryError(
 	return rows.Err()
 }
 
-func spathExplain(
+func explainCompiledQuery(
 	t *testing.T,
 	ctx context.Context,
 	connection clickhousedriver.Conn,
@@ -796,20 +796,20 @@ func spathExplain(
 	t.Helper()
 	rows, err := connection.Query(ctx, prefix+compiled.SQL, compiled.Args...)
 	if err != nil {
-		t.Fatalf("explain spath query: %v\nSQL: %s", err, compiled.SQL)
+		t.Fatalf("explain compiled query: %v\nSQL: %s", err, compiled.SQL)
 	}
 	defer func() { _ = rows.Close() }()
 	var explain strings.Builder
 	for rows.Next() {
 		var line string
 		if err := rows.Scan(&line); err != nil {
-			t.Fatalf("scan spath explain: %v", err)
+			t.Fatalf("scan query explain: %v", err)
 		}
 		explain.WriteString(line)
 		explain.WriteByte('\n')
 	}
 	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate spath explain: %v", err)
+		t.Fatalf("iterate query explain: %v", err)
 	}
 	return explain.String()
 }

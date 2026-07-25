@@ -645,7 +645,7 @@ func TestParseBoundsQueryComplexity(t *testing.T) {
 
 	var measures strings.Builder
 	measures.WriteString("index=main | stats ")
-	for index := 0; index <= maxStatsAggregates; index++ {
+	for index := 0; index <= MaximumStatsMeasures; index++ {
 		if index > 0 {
 			measures.WriteByte(' ')
 		}
@@ -655,14 +655,14 @@ func TestParseBoundsQueryComplexity(t *testing.T) {
 		measures.WriteString(strconv.Itoa(index))
 	}
 	assertParseDiagnosticCode(t, measures.String(), "SPL_QUERY_TOO_COMPLEX")
-	lastMeasure := " p95(f" + strconv.Itoa(maxStatsAggregates) + ") AS p" + strconv.Itoa(maxStatsAggregates)
+	lastMeasure := " p95(f" + strconv.Itoa(MaximumStatsMeasures) + ") AS p" + strconv.Itoa(MaximumStatsMeasures)
 	if _, err := Parse(strings.TrimSuffix(measures.String(), lastMeasure)); err != nil {
 		t.Fatalf("Parse(exact stats measure limit): %v", err)
 	}
 
 	var groups strings.Builder
 	groups.WriteString("index=main | stats count BY ")
-	for index := 0; index <= maxStatsGroupFields; index++ {
+	for index := 0; index <= MaximumStatsGroupFields; index++ {
 		if index > 0 {
 			groups.WriteByte(' ')
 		}
@@ -670,7 +670,7 @@ func TestParseBoundsQueryComplexity(t *testing.T) {
 		groups.WriteString(strconv.Itoa(index))
 	}
 	assertParseDiagnosticCode(t, groups.String(), "SPL_QUERY_TOO_COMPLEX")
-	lastGroup := " f" + strconv.Itoa(maxStatsGroupFields)
+	lastGroup := " f" + strconv.Itoa(MaximumStatsGroupFields)
 	if _, err := Parse(strings.TrimSuffix(groups.String(), lastGroup)); err != nil {
 		t.Fatalf("Parse(exact stats BY field limit): %v", err)
 	}
@@ -868,6 +868,66 @@ func TestParseStatsSumAndAvgFieldsAliasesAndFunctionCase(t *testing.T) {
 	}
 	if len(command.GroupBy) != 1 || command.GroupBy[0].Name != "service" {
 		t.Fatalf("group fields = %#v", command.GroupBy)
+	}
+}
+
+func TestParseStatsDistinctCountAliasesAndFunctionCase(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | stats DC(user) distinct_COUNT(device) AS devices BY service`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command := query.Commands[0].(*StatsCommand)
+	if len(command.Aggregates) != 2 {
+		t.Fatalf("aggregates = %#v", command.Aggregates)
+	}
+	users := command.Aggregates[0]
+	if users.Function != AggregateFunctionDistinctCount || users.Input != "user" || users.Alias != "dc(user)" {
+		t.Fatalf("dc aggregate = %#v", users)
+	}
+	devices := command.Aggregates[1]
+	if devices.Function != AggregateFunctionDistinctCount || devices.Input != "device" || devices.Alias != "devices" {
+		t.Fatalf("distinct_count aggregate = %#v", devices)
+	}
+	if len(command.GroupBy) != 1 || command.GroupBy[0].Name != "service" {
+		t.Fatalf("group fields = %#v", command.GroupBy)
+	}
+
+	canonical, err := Parse(`index=main | stats distinct_count(product)`)
+	if err != nil {
+		t.Fatalf("Parse distinct_count: %v", err)
+	}
+	aggregate := canonical.Commands[0].(*StatsCommand).Aggregates[0]
+	if aggregate.Function != AggregateFunctionDistinctCount || aggregate.Alias != "dc(product)" {
+		t.Fatalf("distinct_count default alias = %#v, want dc(product)", aggregate)
+	}
+}
+
+func TestParseStatsDistinctCountRequiresExactlyOneField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		code   string
+	}{
+		{name: "missing parentheses", source: `index=main | stats dc`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
+		{name: "missing field", source: `index=main | stats distinct_count()`, code: "SPL_EXPECTED_FIELD"},
+		{name: "multiple fields", source: `index=main | stats dc(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(test.source)
+			if err == nil {
+				t.Fatal("Parse succeeded, want error")
+			}
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != test.code {
+				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
+			}
+		})
 	}
 }
 
@@ -1477,6 +1537,7 @@ func TestParseChartRejectsUnsupportedAggregates(t *testing.T) {
 		{"parenthesized eval expression", `index=main | chart (count/2) over path by level`, "("},
 		{"agg term", `index=main | chart agg=count over path by level`, "agg"},
 		{"distinct count", `index=main | chart dc(level) over path by level`, "dc"},
+		{"distinct count alias", `index=main | chart distinct_count(level) over path by level`, "distinct_count"},
 		{"aggregate alias", `index=main | chart count AS total over path by level`, "AS"},
 	}
 	for _, test := range tests {
@@ -1648,8 +1709,8 @@ func TestUnsupportedStatsAggregatesAreSourceLocated(t *testing.T) {
 	}{
 		{"other function", "index=main\n| stats min(bytes)", "SPL_UNSUPPORTED_STATS_AGGREGATE", 2, 9},
 		{"count argument", `* | stats count(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 16},
-		{"second aggregate", `* | stats count, dc(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 18},
-		{"space-separated aggregate", `* | stats count dc(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 17},
+		{"second aggregate", `* | stats count, min(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 18},
+		{"space-separated aggregate", `* | stats count max(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 17},
 		{"missing AS", `* | stats count total`, "SPL_UNSUPPORTED_STATS_SYNTAX", 1, 17},
 		{"missing group field", `* | stats count by`, "SPL_EXPECTED_FIELD", 1, 19},
 	}
@@ -1862,6 +1923,7 @@ func FuzzParseDoesNotPanic(f *testing.F) {
 		`"connection refused" | table _time message`,
 		`index=main | stats count AS events by host, service`,
 		`index=main | stats sum(bytes) by host`,
+		`index=main | stats dc(user) distinct_count(device) AS devices by service`,
 		`index=main | top limit=20 message`,
 		`index=main | rare limit=20 message`,
 		"index=x\n| transaction trace_id",

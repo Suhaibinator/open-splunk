@@ -446,11 +446,22 @@ func (c *RareCommand) SourceRange() Range { return c.Range }
 type AggregateFunction uint8
 
 const (
+	// MaximumStatsMeasures is revalidated by every layer that accepts an AST or
+	// logical plan so hand-built inputs cannot bypass the parser's resource
+	// ceiling.
+	MaximumStatsMeasures = 16
+	// MaximumStatsGroupFields is the corresponding ceiling for one stats BY
+	// tuple.
+	MaximumStatsGroupFields = 16
+)
+
+const (
 	AggregateFunctionInvalid AggregateFunction = iota
 	AggregateFunctionCount
 	AggregateFunctionP95
 	AggregateFunctionSum
 	AggregateFunctionAverage
+	AggregateFunctionDistinctCount
 )
 
 // StatsAggregate is one source-located aggregate expression and its public

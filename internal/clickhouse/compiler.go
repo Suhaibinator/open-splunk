@@ -63,11 +63,23 @@ const (
 	// deliberate resource policy rather than Splunk's configurable
 	// maxresultrows truncation: exceeding it fails the whole search.
 	maxChartRowValues = 10_000
+	// MaximumStatsDistinctValuesPerGroup bounds the exact string set retained
+	// by one dc measure in one group. MAX+1 is used as an overflow sentinel so
+	// results at or below the boundary stay exact and larger results fail
+	// atomically instead of becoming approximate.
+	MaximumStatsDistinctValuesPerGroup = 100_000
 
 	// UnsupportedStatsByValueMarker is emitted by the scalar-only stats BY
 	// guard so the executor can classify the ClickHouse exception without
 	// exposing generated SQL or storage details.
 	UnsupportedStatsByValueMarker = "open-splunk: stats BY requires a scalar field"
+	// UnsupportedStatsMeasureValueMarker is emitted when a string-oriented
+	// stats measure encounters an object or nested container that has no
+	// scalar SPL representation.
+	UnsupportedStatsMeasureValueMarker = "open-splunk: stats measure requires scalar values"
+	// UnsupportedStatsDistinctLimitMarker classifies an exact dc state that
+	// exceeded its per-group, per-measure cardinality ceiling.
+	UnsupportedStatsDistinctLimitMarker = "open-splunk: stats distinct values exceed the supported limit"
 	// UnsupportedDedupValueMarker is emitted when a complete dedup key contains
 	// a runtime list or object. It is intentionally stable for executor-side
 	// classification and is never returned verbatim to clients.
@@ -458,6 +470,17 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				aggregateSQL += " GROUP BY " + strings.Join(groups, ", ")
 			}
 			relation = relation.selectFrom(aggregateSQL, operator.Range)
+			if len(nextState.postAggregateDistinctCounts) > 0 {
+				var additionalAliases int
+				relation, additionalAliases = compileBoundedDistinctCountResults(
+					relation,
+					nextState.postAggregateDistinctCounts,
+					operator.Range,
+					aliasSequence,
+				)
+				aliasSequence += additionalAliases
+				nextState.postAggregateDistinctCounts = nil
+			}
 			args = append(args, aggregateArgs...)
 			state = nextState
 		case *plan.Timechart:
@@ -2523,6 +2546,12 @@ type compileState struct {
 	preAggregateValidationArgs    []any
 	preAggregateColumns           []string
 	preAggregateArgs              []any
+	postAggregateDistinctCounts   []compiledDistinctCount
+}
+
+type compiledDistinctCount struct {
+	cardinalityColumn string
+	outputColumn      string
 }
 
 type fieldKind uint8
@@ -3044,22 +3073,27 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 }
 
 type compiledExtractCapture struct {
-	planCapture      plan.ExtractCapture
-	valueSQL         string
-	existsColumn     string
-	existsProjection string
-	typeColumn       string
-	typeProjection   string
-	textColumn       string
-	textProjection   string
+	planCapture          plan.ExtractCapture
+	valueSQL             string
+	existsColumn         string
+	existsProjection     string
+	typeColumn           string
+	typeProjection       string
+	textColumn           string
+	textProjection       string
+	descendantColumn     string
+	descendantProjection string
 }
 
 func extractPrivateColumns(captures []compiledExtractCapture) []string {
-	columns := make([]string, 0, len(captures)*3)
+	columns := make([]string, 0, len(captures)*4)
 	for _, capture := range captures {
 		columns = append(columns, capture.existsColumn, capture.typeColumn)
 		if capture.textColumn != "" {
 			columns = append(columns, capture.textColumn)
+		}
+		if capture.descendantColumn != "" {
+			columns = append(columns, capture.descendantColumn)
 		}
 	}
 	return columns
@@ -3142,6 +3176,7 @@ func compileExtract(
 	captures := make([]compiledExtractCapture, 0, len(operator.Captures))
 	existenceArgs := make([]any, 0)
 	typeArgs := make([]any, 0)
+	descendantArgs := make([]any, 0)
 	seenOutputs := make(map[string]struct{}, len(operator.Captures))
 	for index, capture := range operator.Captures {
 		if openEventSchema && capture.Output.Name == "fields" {
@@ -3215,15 +3250,25 @@ func compileExtract(
 			textProjection = "toUInt8(if(" + matchedAlias + " != 0, 1, ifNull(" +
 				previous.textEligibleSQL + ", 0))) AS " + textColumn
 		}
+		descendantColumn := ""
+		descendantProjection := ""
+		if previousKnown && previous.descendantSQL != "" {
+			descendantColumn = quoteIdentifier(fmt.Sprintf("__os_rex_descendant_%d_%d", stage, index))
+			descendantProjection = "toUInt8(" + matchedAlias + " = 0 AND (" +
+				previous.descendantSQL + ")) AS " + descendantColumn
+			descendantArgs = append(descendantArgs, previous.descendantArgs...)
+		}
 		captures = append(captures, compiledExtractCapture{
-			planCapture:      capture,
-			valueSQL:         valueSQL,
-			existsColumn:     existsAlias,
-			existsProjection: existsSQL,
-			typeColumn:       typeAlias,
-			typeProjection:   typeSQL,
-			textColumn:       textColumn,
-			textProjection:   textProjection,
+			planCapture:          capture,
+			valueSQL:             valueSQL,
+			existsColumn:         existsAlias,
+			existsProjection:     existsSQL,
+			typeColumn:           typeAlias,
+			typeProjection:       typeSQL,
+			textColumn:           textColumn,
+			textProjection:       textProjection,
+			descendantColumn:     descendantColumn,
+			descendantProjection: descendantProjection,
 		})
 
 		delete(next.blocked, capture.Output.Name)
@@ -3236,8 +3281,7 @@ func compileExtract(
 			textEligibleSQL: textColumn,
 			existsSQL:       existsAlias,
 			storedTypeSQL:   typeAlias,
-			descendantSQL:   previous.descendantSQL,
-			descendantArgs:  append([]any(nil), previous.descendantArgs...),
+			descendantSQL:   descendantColumn,
 			kind:            kind,
 			// A capture named index is calculated data and never regains the
 			// physical scan selector's case or authorization semantics.
@@ -3257,12 +3301,16 @@ func compileExtract(
 	existenceExpressions := make([]string, 0, len(captures))
 	typeExpressions := make([]string, 0, len(captures))
 	textExpressions := make([]string, 0, len(captures))
+	descendantExpressions := make([]string, 0, len(captures))
 	for _, capture := range captures {
 		valueByName[capture.planCapture.Output.Name] = capture.valueSQL
 		existenceExpressions = append(existenceExpressions, capture.existsProjection)
 		typeExpressions = append(typeExpressions, capture.typeProjection)
 		if capture.textProjection != "" {
 			textExpressions = append(textExpressions, capture.textProjection)
+		}
+		if capture.descendantProjection != "" {
+			descendantExpressions = append(descendantExpressions, capture.descendantProjection)
 		}
 	}
 	liveOldPrivateColumns := livePrivateColumns(state.privateColumns, next.visible)
@@ -3293,13 +3341,15 @@ func compileExtract(
 	projection = append(projection, existenceExpressions...)
 	projection = append(projection, typeExpressions...)
 	projection = append(projection, textExpressions...)
+	projection = append(projection, descendantExpressions...)
 	outerAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
 	outputFragment := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql + ") AS " + outerAlias
 	relation = relation.selectFrom(outputFragment, operator.Range)
 
-	prefixArgs := make([]any, 0, len(existenceArgs)+len(typeArgs)+len(innerArgs))
+	prefixArgs := make([]any, 0, len(existenceArgs)+len(typeArgs)+len(descendantArgs)+len(innerArgs))
 	prefixArgs = append(prefixArgs, existenceArgs...)
 	prefixArgs = append(prefixArgs, typeArgs...)
+	prefixArgs = append(prefixArgs, descendantArgs...)
 	prefixArgs = append(prefixArgs, innerArgs...)
 	return relation, next, prefixArgs, 1, nil
 }
@@ -3511,6 +3561,15 @@ func compileExtractJSON(
 		textEligibleProjection = "toUInt8(if(" + matchedAlias + " != 0, 1, ifNull(" +
 			previous.textEligibleSQL + ", 0))) AS " + textEligibleAlias
 	}
+	descendantAlias := ""
+	descendantProjection := ""
+	var descendantArgs []any
+	if previousKnown && previous.descendantSQL != "" {
+		descendantAlias = quoteIdentifier(fmt.Sprintf("__os_spath_descendant_%d", stage))
+		descendantProjection = "toUInt8(" + matchedAlias + " = 0 AND (" +
+			previous.descendantSQL + ")) AS " + descendantAlias
+		descendantArgs = append(descendantArgs, previous.descendantArgs...)
+	}
 	outputValue := "if(" + matchedAlias + " != 0, " + valueAlias + ", " + previousValue + ")"
 
 	next := cloneCompileState(state)
@@ -3528,8 +3587,7 @@ func compileExtractJSON(
 		dynamicTypeSQL:          "dynamicType(" + outputName + ")",
 		storedTypeSQL:           typeAlias,
 		existsSQL:               existsAlias,
-		descendantSQL:           previous.descendantSQL,
-		descendantArgs:          append([]any(nil), previous.descendantArgs...),
+		descendantSQL:           descendantAlias,
 		kind:                    fieldKindDynamic,
 		caseSensitive:           false,
 		materializeForPredicate: sourceMayExtract || previous.materializeForPredicate,
@@ -3539,6 +3597,9 @@ func compileExtractJSON(
 	next.privateColumns = append(append([]string(nil), liveOldPrivateColumns...), existsAlias, typeAlias)
 	if textEligibleAlias != "" {
 		next.privateColumns = append(next.privateColumns, textEligibleAlias)
+	}
+	if descendantAlias != "" {
+		next.privateColumns = append(next.privateColumns, descendantAlias)
 	}
 	projection := make([]string, 0, len(next.visible)+8)
 	for _, name := range orderedVisibleNames(next) {
@@ -3567,16 +3628,20 @@ func compileExtractJSON(
 	if textEligibleProjection != "" {
 		projection = append(projection, textEligibleProjection)
 	}
+	if descendantProjection != "" {
+		projection = append(projection, descendantProjection)
+	}
 	outputFragment := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
 		relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
 	relation = relation.selectFrom(outputFragment, operator.Range)
 
 	prefixArgs := make([]any, 0,
-		len(existenceArgs)+len(typeArgs)+len(arrayGuardArgs)+
+		len(existenceArgs)+len(typeArgs)+len(descendantArgs)+len(arrayGuardArgs)+
 			len(typePathArgs)+len(rawPathArgs)+len(inputArgs),
 	)
 	prefixArgs = append(prefixArgs, existenceArgs...)
 	prefixArgs = append(prefixArgs, typeArgs...)
+	prefixArgs = append(prefixArgs, descendantArgs...)
 	prefixArgs = append(prefixArgs, arrayGuardArgs...)
 	prefixArgs = append(prefixArgs, typePathArgs...)
 	prefixArgs = append(prefixArgs, rawPathArgs...)
@@ -3728,6 +3793,10 @@ func cloneCompileState(state compileState) compileState {
 	next.preAggregateValidationArgs = append([]any(nil), state.preAggregateValidationArgs...)
 	next.preAggregateColumns = append([]string(nil), state.preAggregateColumns...)
 	next.preAggregateArgs = append([]any(nil), state.preAggregateArgs...)
+	next.postAggregateDistinctCounts = append(
+		[]compiledDistinctCount(nil),
+		state.postAggregateDistinctCounts...,
+	)
 	return next
 }
 
@@ -3842,7 +3911,7 @@ func livePrivateColumns(columns []string, visible map[string]fieldState) []strin
 	for _, column := range columns {
 		for _, field := range visible {
 			if field.existsSQL == column || field.storedTypeSQL == column ||
-				field.textEligibleSQL == column {
+				field.textEligibleSQL == column || field.descendantSQL == column {
 				live = append(live, column)
 				break
 			}
@@ -4701,6 +4770,18 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 	if operator == nil || len(operator.Measures) == 0 {
 		return nil, nil, nil, compileState{}, nil, errors.New("compile ClickHouse aggregate: no measures")
 	}
+	if len(operator.Measures) > spl.MaximumStatsMeasures {
+		return nil, nil, nil, compileState{}, nil, fmt.Errorf(
+			"compile ClickHouse aggregate: more than %d measures",
+			spl.MaximumStatsMeasures,
+		)
+	}
+	if len(operator.GroupBy) > spl.MaximumStatsGroupFields {
+		return nil, nil, nil, compileState{}, nil, fmt.Errorf(
+			"compile ClickHouse aggregate: more than %d group fields",
+			spl.MaximumStatsGroupFields,
+		)
+	}
 	next = compileState{
 		visible:      make(map[string]fieldState, len(operator.GroupBy)+len(operator.Measures)),
 		allowDynamic: false,
@@ -4711,6 +4792,16 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 	dynamicGroupInvalid := make([]string, 0, len(operator.GroupBy))
 	var dynamicGroupInvalidArgs []any
 	for _, group := range operator.GroupBy {
+		if err := validateCanonicalFieldRef("aggregate", "group", group); err != nil {
+			return nil, nil, nil, compileState{}, nil, err
+		}
+		if state.eventRows && state.allowDynamic && group.Name == "fields" {
+			return nil, nil, nil, compileState{}, nil, &plan.Diagnostic{
+				Code:    "SPL_AMBIGUOUS_STATS_FIELD",
+				Message: "stats cannot group by the event result's reserved fields payload without an exact upstream schema",
+				Range:   group.Range,
+			}
+		}
 		if _, duplicate := seen[group.Name]; duplicate {
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: output field %q is duplicated", group.Name)
 		}
@@ -4784,7 +4875,55 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		next.tieBreakers = append(next.tieBreakers, compiledSortKey{valueSQL: privateGroup})
 	}
 	numericInputs := make(map[string]string)
+	stringInputs := make(map[string]string)
 	for _, measure := range operator.Measures {
+		if _, fieldErr := plan.ResolveField(measure.Output, spl.Range{}); fieldErr != nil {
+			return nil, nil, nil, compileState{}, nil, fmt.Errorf(
+				"compile ClickHouse aggregate: invalid output field %q: %w",
+				measure.Output,
+				fieldErr,
+			)
+		}
+		switch measure.Function {
+		case plan.AggregateFunctionCountRows:
+			if measure.Input.Name != "" || measure.Input.Canonical || len(measure.Input.Path) != 0 ||
+				measure.Percentile != 0 {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse aggregate: count contains unsupported input metadata",
+				)
+			}
+		case plan.AggregateFunctionPercentile:
+			if measure.Percentile != 0.95 {
+				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
+					"compile ClickHouse aggregate: unsupported percentile %g",
+					measure.Percentile,
+				)
+			}
+		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage, plan.AggregateFunctionDistinctCount:
+			if measure.Percentile != 0 {
+				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
+					"compile ClickHouse aggregate: function %d contains percentile metadata",
+					measure.Function,
+				)
+			}
+		default:
+			return nil, nil, nil, compileState{}, nil, fmt.Errorf(
+				"compile ClickHouse aggregate: unsupported function %d",
+				measure.Function,
+			)
+		}
+		if measure.Function != plan.AggregateFunctionCountRows {
+			if err := validateCanonicalFieldRef("aggregate", "input", measure.Input); err != nil {
+				return nil, nil, nil, compileState{}, nil, err
+			}
+			if state.eventRows && state.allowDynamic && measure.Input.Name == "fields" {
+				return nil, nil, nil, compileState{}, nil, &plan.Diagnostic{
+					Code:    "SPL_AMBIGUOUS_STATS_FIELD",
+					Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
+					Range:   measure.Input.Range,
+				}
+			}
+		}
 		if _, duplicate := seen[measure.Output]; duplicate {
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: output field %q is duplicated", measure.Output)
 		}
@@ -4796,9 +4935,6 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			projection = append(projection, "count() AS "+output)
 			measureState.numberType = "UInt64"
 		case plan.AggregateFunctionPercentile:
-			if measure.Percentile != 0.95 {
-				return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: unsupported percentile %g", measure.Percentile)
-			}
 			input, ok, resolveErr := resolveCompiledField(measure.Input, state)
 			if resolveErr != nil {
 				return nil, nil, nil, compileState{}, nil, resolveErr
@@ -4835,6 +4971,34 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			}
 			projection = append(projection, valueSQL+" AS "+output)
 			measureState.numberType = "Float64"
+		case plan.AggregateFunctionDistinctCount:
+			inputSQL, cached := stringInputs[measure.Input.Name]
+			if !cached {
+				input, ok, resolveErr := resolveCompiledField(measure.Input, state)
+				if resolveErr != nil {
+					return nil, nil, nil, compileState{}, nil, resolveErr
+				}
+				inputSQL = "CAST([], 'Array(String)')"
+				if ok {
+					var inputArgs []any
+					inputSQL, inputArgs = stringArrayInputSQL(input)
+					inputAlias := quoteIdentifier(fmt.Sprintf("__os_measure_strings_%d", len(stringInputs)))
+					stringInputs[measure.Input.Name] = inputAlias
+					next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
+					next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
+					inputSQL = inputAlias
+				}
+			}
+			cardinalityColumn := quoteIdentifier(fmt.Sprintf(
+				"__os_dc_cardinality_%d",
+				len(next.postAggregateDistinctCounts),
+			))
+			projection = append(projection, distinctCountCardinalitySQL(inputSQL)+" AS "+cardinalityColumn)
+			next.postAggregateDistinctCounts = append(next.postAggregateDistinctCounts, compiledDistinctCount{
+				cardinalityColumn: cardinalityColumn,
+				outputColumn:      output,
+			})
+			measureState.numberType = "UInt64"
 		default:
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: unsupported function %d", measure.Function)
 		}
@@ -4878,18 +5042,138 @@ func percentileInputSQL(field fieldState) string {
 func numericArrayInputSQL(field fieldState) (string, []any) {
 	empty := "CAST([], 'Array(Float64)')"
 	scalar := percentileInputSQL(field)
-	scalarArray := "arrayMap(value -> assumeNotNull(value), arrayFilter(value -> isNotNull(value), [" + scalar + "]))"
+	scalarArray := compactNullableArraySQL("[" + scalar + "]")
 	value := scalarArray
 	if field.kind == fieldKindDynamic {
 		element := dynamicFiniteFloatOrNullSQL("element", "dynamicType(element)")
-		array := "arrayMap(value -> assumeNotNull(value), arrayFilter(value -> isNotNull(value), " +
-			"arrayMap(element -> " + element + ", dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)'))))"
+		array := compactNullableArraySQL(
+			"arrayMap(element -> " + element + ", dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)'))",
+		)
 		value = "if(" + dynamicTypeExpression(field) + " = 'Array(Dynamic)', " + array + ", " + scalarArray + ")"
 	}
 	if field.existsSQL == "" || field.existsSQL == "1" {
 		return value, nil
 	}
 	return "if(" + field.existsSQL + ", " + value + ", " + empty + ")", append([]any(nil), field.existsArgs...)
+}
+
+func stringArrayInputSQL(field fieldState) (string, []any) {
+	empty := "CAST([], 'Array(String)')"
+	scalar := statsScalarStringOrNullSQL(field)
+	scalarArray := compactNullableArraySQL("[" + scalar + "]")
+	value := scalarArray
+	if field.kind == fieldKindDynamic {
+		typeSQL := dynamicTypeExpression(field)
+		element := fieldState{
+			valueSQL:       "element",
+			dynamicTypeSQL: "dynamicType(element)",
+			kind:           fieldKindDynamic,
+		}
+		elementSupported, elementLexical := statsByScalarExpressions(element)
+		elementType := dynamicTypeExpression(element)
+		nullString := "CAST(NULL AS Nullable(String))"
+		elementValue := "if(" + elementType + " = 'None', " + nullString +
+			", if(throwIf(toUInt8(NOT (" + elementSupported + ")), '" +
+			UnsupportedStatsMeasureValueMarker + "') = 0, " + elementLexical + ", " + nullString + "))"
+		array := compactNullableArraySQL(
+			"arrayMap(element -> " + elementValue +
+				", dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)'))",
+		)
+		value = "if(" + typeSQL + " = 'Array(Dynamic)', " + array + ", " + scalarArray + ")"
+
+		scalarSupported, _ := statsByScalarExpressions(field)
+		existsSQL := field.existsSQL
+		if existsSQL == "" {
+			existsSQL = "1"
+		}
+		lambdaParameters := []string{"field_present"}
+		lambdaArguments := []string{"[toUInt8(" + existsSQL + ")]"}
+		args := append([]any(nil), field.existsArgs...)
+		descendantPresent := "0"
+		if field.descendantSQL != "" {
+			lambdaParameters = append(lambdaParameters, "descendant_present")
+			lambdaArguments = append(lambdaArguments, "[toUInt8("+field.descendantSQL+")]")
+			args = append(args, field.descendantArgs...)
+			descendantPresent = "descendant_present"
+		}
+		topLevelUnsupported := "(field_present != 0 AND " + typeSQL +
+			" != 'None' AND " + typeSQL + " != 'Array(Dynamic)' AND NOT (" + scalarSupported + "))"
+		invalid := "(" + topLevelUnsupported + " OR " + descendantPresent + " != 0)"
+		body := "if(throwIf(toUInt8(" + invalid + "), '" + UnsupportedStatsMeasureValueMarker +
+			"') = 0, if(field_present != 0, " + value + ", " + empty + "), " + empty + ")"
+		return "arrayElement(arrayMap((" + strings.Join(lambdaParameters, ", ") + ") -> " + body +
+			", " + strings.Join(lambdaArguments, ", ") + "), 1)", args
+	}
+	if field.existsSQL == "" || field.existsSQL == "1" {
+		return value, nil
+	}
+	return "if(" + field.existsSQL + ", " + value + ", " + empty + ")", append([]any(nil), field.existsArgs...)
+}
+
+func compactNullableArraySQL(valuesSQL string) string {
+	return "arrayMap(value -> assumeNotNull(value), arrayFilter(value -> isNotNull(value), " + valuesSQL + "))"
+}
+
+func statsScalarStringOrNullSQL(field fieldState) string {
+	nullString := "CAST(NULL AS Nullable(String))"
+	switch field.kind {
+	case fieldKindDynamic:
+		supported, lexical := statsByScalarExpressions(field)
+		return "if(" + supported + ", " + lexical + ", " + nullString + ")"
+	case fieldKindString, fieldKindNumber, fieldKindBool, fieldKindTime:
+		return "CAST(toString(" + field.valueSQL + ") AS Nullable(String))"
+	default:
+		return nullString
+	}
+}
+
+func boundedDistinctCountSQL(inputSQL string) string {
+	maximum := strconv.FormatUint(MaximumStatsDistinctValuesPerGroup, 10)
+	cardinality := distinctCountCardinalitySQL(inputSQL)
+	return "arrayElement(arrayMap(cardinality -> cardinality + toUInt64(throwIf(toUInt8(cardinality > " +
+		maximum + "), '" + UnsupportedStatsDistinctLimitMarker + "')), [" + cardinality + "]), 1)"
+}
+
+func distinctCountCardinalitySQL(inputSQL string) string {
+	sentinel := strconv.FormatUint(MaximumStatsDistinctValuesPerGroup+1, 10)
+	return "toUInt64(length(groupUniqArrayArray(" + sentinel + ")(" + inputSQL + ")))"
+}
+
+func compileBoundedDistinctCountResults(
+	relation compiledRelation,
+	counts []compiledDistinctCount,
+	ownerRange spl.Range,
+	stage int,
+) (compiledRelation, int) {
+	if len(counts) == 0 {
+		return relation, 0
+	}
+	maximum := strconv.FormatUint(MaximumStatsDistinctValuesPerGroup, 10)
+	cardinalityColumns := make([]string, 0, len(counts))
+	overflowConditions := make([]string, 0, len(counts))
+	for _, count := range counts {
+		cardinalityColumns = append(cardinalityColumns, count.cardinalityColumn)
+		overflowConditions = append(
+			overflowConditions,
+			count.cardinalityColumn+" > toUInt64("+maximum+")",
+		)
+	}
+	overflowColumn := quoteIdentifier("__os_stats_dc_any_overflow")
+	windowAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
+	windowSQL := "SELECT *, max(toUInt8(" + strings.Join(overflowConditions, " OR ") +
+		")) OVER () AS " + overflowColumn + " FROM (" + relation.sql + ") AS " + windowAlias
+	relation = relation.selectFrom(windowSQL, ownerRange)
+
+	excluded := append(cardinalityColumns, overflowColumn)
+	projection := []string{"* EXCEPT (" + strings.Join(excluded, ", ") + ")"}
+	for _, count := range counts {
+		projection = append(projection, count.cardinalityColumn+" AS "+count.outputColumn)
+	}
+	publishAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+2))
+	publishSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql +
+		") AS " + publishAlias + " WHERE throwIf(toUInt8(" + overflowColumn +
+		" != 0), '" + UnsupportedStatsDistinctLimitMarker + "') = 0"
+	return relation.selectFrom(publishSQL, ownerRange), 2
 }
 
 func dynamicFiniteFloatOrNullSQL(valueSQL, typeSQL string) string {

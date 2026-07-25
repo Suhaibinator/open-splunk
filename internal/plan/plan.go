@@ -200,6 +200,7 @@ const (
 	AggregateFunctionPercentile
 	AggregateFunctionSum
 	AggregateFunctionAverage
+	AggregateFunctionDistinctCount
 )
 
 // AggregateMeasure is one aggregate output column.

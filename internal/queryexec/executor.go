@@ -1326,7 +1326,11 @@ func classifyQueryError(ctx context.Context, err error) error {
 		if exception.Code == 395 && strings.Contains(exception.Message, clickhouse.ChartRowLimitMarker) {
 			return fmt.Errorf("%w: chart row values exceeded the supported limit", searchjobs.ErrExecutionLimit)
 		}
+		if exception.Code == 395 && strings.Contains(exception.Message, clickhouse.UnsupportedStatsDistinctLimitMarker) {
+			return fmt.Errorf("%w: stats distinct values exceeded the supported limit", searchjobs.ErrExecutionLimit)
+		}
 		if exception.Code == 395 && (strings.Contains(exception.Message, clickhouse.UnsupportedStatsByValueMarker) ||
+			strings.Contains(exception.Message, clickhouse.UnsupportedStatsMeasureValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedDedupValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedNumericBinValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedSpathValueMarker)) {

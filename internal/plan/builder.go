@@ -495,6 +495,47 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			result.Operators = append(result.Operators, &Limit{Count: command.Count, FromEnd: command.Name() == "tail", Range: command.Range})
 		case *spl.StatsCommand:
 			canonicalTimeAvailable = false
+			if len(command.Aggregates) == 0 {
+				return nil, &Diagnostic{
+					Code:    "SPL_EXPECTED_AGGREGATE",
+					Message: "stats requires an aggregate function",
+					Range:   command.Range,
+				}
+			}
+			if len(command.Aggregates) > spl.MaximumStatsMeasures {
+				return nil, &Diagnostic{
+					Code:    "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf("stats contains more than %d aggregate measures", spl.MaximumStatsMeasures),
+					Range:   command.Range,
+				}
+			}
+			if len(command.GroupBy) > spl.MaximumStatsGroupFields {
+				return nil, &Diagnostic{
+					Code:    "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf("stats BY contains more than %d grouping fields", spl.MaximumStatsGroupFields),
+					Range:   command.Range,
+				}
+			}
+			if !outputSchemaKnown {
+				for _, aggregate := range command.Aggregates {
+					if aggregate.Input == "fields" {
+						return nil, &Diagnostic{
+							Code:    "SPL_AMBIGUOUS_STATS_FIELD",
+							Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
+							Range:   aggregate.InputRange,
+						}
+					}
+				}
+				for _, group := range command.GroupBy {
+					if group.Name == "fields" {
+						return nil, &Diagnostic{
+							Code:    "SPL_AMBIGUOUS_STATS_FIELD",
+							Message: "stats cannot group by the event result's reserved fields payload without an exact upstream schema",
+							Range:   group.Range,
+						}
+					}
+				}
+			}
 			groupBy, groupErr := convertStatsGroupFields(command.GroupBy)
 			if groupErr != nil {
 				return nil, groupErr
@@ -521,25 +562,31 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				measure := AggregateMeasure{Output: aggregate.Alias}
 				switch aggregate.Function {
 				case spl.AggregateFunctionCount:
+					if aggregate.Input != "" || aggregate.InputRange != (spl.Range{}) {
+						return nil, &Diagnostic{
+							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+							Message: "count arguments are not supported; use argument-free count",
+							Range:   aggregate.Range,
+						}
+					}
 					measure.Function = AggregateFunctionCountRows
-				case spl.AggregateFunctionP95:
-					input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
-					if inputErr != nil {
-						return nil, inputErr
-					}
-					measure.Function = AggregateFunctionPercentile
-					measure.Input = input
-					measure.Percentile = 0.95
-				case spl.AggregateFunctionSum, spl.AggregateFunctionAverage:
+				case spl.AggregateFunctionP95, spl.AggregateFunctionSum,
+					spl.AggregateFunctionAverage, spl.AggregateFunctionDistinctCount:
 					input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
 					if inputErr != nil {
 						return nil, inputErr
 					}
 					measure.Input = input
-					if aggregate.Function == spl.AggregateFunctionSum {
+					switch aggregate.Function {
+					case spl.AggregateFunctionP95:
+						measure.Function = AggregateFunctionPercentile
+						measure.Percentile = 0.95
+					case spl.AggregateFunctionSum:
 						measure.Function = AggregateFunctionSum
-					} else {
+					case spl.AggregateFunctionAverage:
 						measure.Function = AggregateFunctionAverage
+					case spl.AggregateFunctionDistinctCount:
+						measure.Function = AggregateFunctionDistinctCount
 					}
 				default:
 					return nil, &Diagnostic{

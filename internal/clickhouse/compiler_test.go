@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"reflect"
@@ -2246,6 +2247,139 @@ func TestCompileStatsSumAndAverageUseBoundedNumericArraysWithoutRowExpansion(t *
 	if strings.Count(compiled.SQL, `dynamicElement("__os_fields"."amount", 'Array(Dynamic)')`) != 1 ||
 		strings.Contains(compiled.SQL, `__os_measure_values_1`) {
 		t.Fatalf("sum/avg did not reuse one numeric conversion for the same input:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsDistinctCountUsesExactStringArraysWithoutRowExpansion(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | stats count dc(user) AS users distinct_count(user) AS users_again BY service`)
+	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "users_again"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	sentinel := strconv.FormatUint(MaximumStatsDistinctValuesPerGroup+1, 10)
+	for _, required := range []string{
+		`dynamicElement("__os_fields"."user", 'Array(Dynamic)')`,
+		`AS "__os_measure_strings_0"`,
+		`groupUniqArrayArray(` + sentinel + `)("__os_measure_strings_0")`,
+		`max(toUInt8("__os_dc_cardinality_0" > toUInt64(`,
+		`OVER () AS "__os_stats_dc_any_overflow"`,
+		`WHERE throwIf(toUInt8("__os_stats_dc_any_overflow" != 0)`,
+		UnsupportedStatsDistinctLimitMarker,
+		UnsupportedStatsMeasureValueMarker,
+		`AS "users"`,
+		`AS "users_again"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("dc SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
+		t.Fatalf("dc expanded event rows and would corrupt count:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, "uniqExact") {
+		t.Fatalf("dc uses an unbounded distinct aggregate state:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, "arrayExists(element -> dynamicType(element)") {
+		t.Fatalf("dc scans each multivalue separately for conversion and validation:\n%s", compiled.SQL)
+	}
+	if strings.Count(compiled.SQL, `AS "__os_measure_strings_0"`) != 1 ||
+		strings.Contains(compiled.SQL, `__os_measure_strings_1`) {
+		t.Fatalf("dc did not reuse one string conversion for the same input:\n%s", compiled.SQL)
+	}
+	if strings.Index(compiled.SQL, `OVER () AS "__os_stats_dc_any_overflow"`) >
+		strings.Index(compiled.SQL, `WHERE throwIf(toUInt8("__os_stats_dc_any_overflow" != 0)`) {
+		t.Fatalf("dc overflow validation is not materialized before publication:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsDistinctCountValidatesAllGroupsBeforeDownstreamLimit(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | stats dc(user) AS users BY service | sort 0 +service | head 1`,
+	)
+	window := strings.Index(compiled.SQL, `OVER () AS "__os_stats_dc_any_overflow"`)
+	validation := strings.Index(compiled.SQL, `WHERE throwIf(toUInt8("__os_stats_dc_any_overflow" != 0)`)
+	limit := strings.LastIndex(compiled.SQL, "LIMIT ?")
+	if window < 0 || validation < 0 || limit < 0 || window > validation || validation > limit {
+		t.Fatalf("dc group-wide overflow barrier does not precede downstream LIMIT:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsDistinctCountProjectedInputIsZeroAndResultIsUInt64(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(t, `index=gradethis | fields service | stats dc(user) AS users BY service | where users>0`)
+	sentinel := strconv.FormatUint(MaximumStatsDistinctValuesPerGroup+1, 10)
+	for _, required := range []string{
+		`groupUniqArrayArray(` + sentinel + `)(CAST([], 'Array(String)'))`,
+		`toInt256("users") > accurateCastOrNull(CAST(? AS Int64), 'Int256')`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("projected dc SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+}
+
+func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T) {
+	t.Parallel()
+
+	base := buildPlan(t, `index=gradethis`)
+	field, err := plan.ResolveField("user", spl.Range{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, err := plan.ResolveField("fields", spl.Range{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	measures := make([]plan.AggregateMeasure, spl.MaximumStatsMeasures+1)
+	for index := range measures {
+		measures[index] = plan.AggregateMeasure{
+			Function: plan.AggregateFunctionDistinctCount,
+			Input:    field,
+			Output:   fmt.Sprintf("dc_%d", index),
+		}
+	}
+	groups := make([]plan.FieldRef, spl.MaximumStatsGroupFields+1)
+	for index := range groups {
+		groups[index], err = plan.ResolveField(fmt.Sprintf("group_%d", index), spl.Range{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, aggregate := range []*plan.Aggregate{
+		{Measures: measures},
+		{GroupBy: groups, Measures: []plan.AggregateMeasure{{Function: plan.AggregateFunctionCountRows, Output: "count"}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionDistinctCount,
+			Input:    fields,
+			Output:   "dc_fields",
+		}}},
+		{GroupBy: []plan.FieldRef{fields}, Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionCountRows,
+			Output:   "count",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function:   plan.AggregateFunctionCountRows,
+			Input:      field,
+			Percentile: 0.95,
+			Output:     "count",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function:   plan.AggregateFunctionDistinctCount,
+			Input:      field,
+			Percentile: 0.95,
+			Output:     "dc_user",
+		}}},
+	} {
+		candidate := *base
+		candidate.Operators = append(append([]plan.Operator(nil), base.Operators...), aggregate)
+		if _, err := (Compiler{}).Compile(&candidate); err == nil {
+			t.Fatalf("Compile accepted forged aggregate %#v", aggregate)
+		}
 	}
 }
 
