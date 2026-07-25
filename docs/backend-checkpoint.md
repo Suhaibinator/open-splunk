@@ -283,11 +283,18 @@ Final review also restored the precise missing-`=` parser diagnostic, made
 per-stage ClickHouse aliases collision-proof, narrowed integer intermediates
 without losing exactness, removed redundant runtime casts, and corrected the
 documentation not to promise atomic publication on a late streaming error.
+Later adversarial passes for Dynamic binning and chart are reflected in the
+completion and validation sections above rather than duplicated here.
 
 The official Splunk 10.4 container image was downloaded for a possible
 differential oracle, but startup additionally required accepting Splunk's
 current General Terms. No changing legal agreement was accepted on the user's
-behalf; the failed ephemeral container and image were removed. Semantics not
-settled by public documentation—especially Dynamic strings, mixed values,
-decimals, and multivalue fields—therefore remain explicit unsupported
-boundaries instead of compatibility claims.
+behalf; the failed ephemeral container and image were removed. Public
+documentation describes numerical binning but does not settle coercion of
+numeric-looking text, result typing, failed conversion, decimals, or
+multivalue fields. Open Splunk's implemented choices and executable coverage
+are explicit in the [`bin` / `bucket`
+contract](spl-compatibility-v0.1.md#bin--bucket), while the unfinished exact
+decimal and wide-integer cases remain in Remaining work item 1. These choices
+still need live Splunk differential validation rather than being presented as
+hidden compatibility claims.

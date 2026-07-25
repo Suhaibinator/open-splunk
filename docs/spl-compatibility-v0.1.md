@@ -824,8 +824,8 @@ All `stats` functions other than argument-free `count`, `p95(field)`,
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,
-and type edges remain conservative and must gain executable tests before they
-are declared compatible.
+and type edges remain conservative and must gain oracle-backed differential
+coverage before they are declared compatible.
 
 Reference behavior is compared against Splunk's official [`search`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/search),
 [`sort`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/sort),
