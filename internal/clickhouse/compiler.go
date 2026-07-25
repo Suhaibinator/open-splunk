@@ -4998,15 +4998,42 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 	}
 	numericInputs := make(map[string]string)
 	stringInputs := make(map[string]string)
+	scalarStringInputs := make(map[string]string)
 	countInputs := make(map[string]string)
 	extremaInputs := make(map[string]string)
+	scalarExtremaInputs := make(map[string]string)
 	exactStringSets := make(map[string]string)
 	distinctCounts := make(map[string]string)
 	valuesInputs := make(map[string]struct{})
+	extremaMeasureInputs := make(map[string]struct{})
 	for _, measure := range operator.Measures {
 		if measure.Function == plan.AggregateFunctionValues {
 			valuesInputs[measure.Input.Name] = struct{}{}
 		}
+		if measure.Function == plan.AggregateFunctionMinimum ||
+			measure.Function == plan.AggregateFunctionMaximum {
+			extremaMeasureInputs[measure.Input.Name] = struct{}{}
+		}
+	}
+	scalarStringInputFor := func(ref plan.FieldRef, input fieldState) (string, error) {
+		if input.kind != fieldKindString {
+			return "", fmt.Errorf(
+				"compile ClickHouse aggregate: scalar String cache received field kind %d",
+				input.kind,
+			)
+		}
+		if inputSQL, cached := scalarStringInputs[ref.Name]; cached {
+			return inputSQL, nil
+		}
+		inputSQL, inputArgs := statsScalarStringInputSQL(input)
+		inputAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_measure_scalar_string_%d",
+			len(scalarStringInputs),
+		))
+		scalarStringInputs[ref.Name] = inputAlias
+		next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
+		next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
+		return inputAlias, nil
 	}
 	stringInputFor := func(ref plan.FieldRef) (string, error) {
 		if inputSQL, cached := stringInputs[ref.Name]; cached {
@@ -5019,7 +5046,16 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		inputSQL := "CAST([], 'Array(String)')"
 		if ok {
 			var inputArgs []any
-			inputSQL, inputArgs = stringArrayInputSQL(input)
+			if _, sharesScalar := extremaMeasureInputs[ref.Name]; sharesScalar &&
+				input.kind == fieldKindString {
+				scalarInputSQL, scalarErr := scalarStringInputFor(ref, input)
+				if scalarErr != nil {
+					return "", scalarErr
+				}
+				inputSQL = compactNullableArraySQL("[" + scalarInputSQL + "]")
+			} else {
+				inputSQL, inputArgs = stringArrayInputSQL(input)
+			}
 			inputAlias := quoteIdentifier(fmt.Sprintf("__os_measure_strings_%d", len(stringInputs)))
 			stringInputs[ref.Name] = inputAlias
 			next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
@@ -5184,6 +5220,48 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 				measureState.kind = input.kind
 				measureState.numberType = input.numberType
 				measureState.caseSensitive = input.caseSensitive
+				break
+			}
+
+			if ok && input.kind == fieldKindString {
+				candidate, cached := scalarExtremaInputs[measure.Input.Name]
+				if !cached {
+					scalarInput, scalarErr := scalarStringInputFor(measure.Input, input)
+					if scalarErr != nil {
+						return nil, nil, nil, compileState{}, nil, scalarErr
+					}
+					inputIndex := len(scalarExtremaInputs)
+					numberAlias := quoteIdentifier(fmt.Sprintf(
+						"__os_measure_extrema_number_%d",
+						inputIndex,
+					))
+					candidate = quoteIdentifier(fmt.Sprintf(
+						"__os_measure_extrema_scalar_%d",
+						inputIndex,
+					))
+					scalarExtremaInputs[measure.Input.Name] = candidate
+					next.preAggregateColumns = append(
+						next.preAggregateColumns,
+						statsExtremaScalarNumberSQL(scalarInput)+" AS "+numberAlias,
+						statsExtremaScalarCandidateSQL(scalarInput, numberAlias)+" AS "+candidate,
+					)
+				}
+				extremeKey := statsExtremaScalarAggregateKeySQL(measure.Function, candidate)
+				extreme := statsExtremaScalarValueSQL(extremeKey)
+				typeAlias := quoteIdentifier(fmt.Sprintf("__os_stats_extrema_type_%d", measureIndex))
+				projection = append(
+					projection,
+					extreme+" AS "+output,
+					statsExtremaScalarStoredTypeSQL(extremeKey)+" AS "+typeAlias,
+				)
+				measureState = fieldState{
+					valueSQL:       output,
+					dynamicTypeSQL: "dynamicType(" + output + ")",
+					storedTypeSQL:  typeAlias,
+					existsSQL:      "1",
+					kind:           fieldKindDynamic,
+				}
+				next.privateColumns = append(next.privateColumns, typeAlias)
 				break
 			}
 
@@ -5421,6 +5499,65 @@ func stringArrayInputSQL(field fieldState) (string, []any) {
 		return value, nil
 	}
 	return "if(" + field.existsSQL + ", " + value + ", " + empty + ")", append([]any(nil), field.existsArgs...)
+}
+
+func statsScalarStringInputSQL(field fieldState) (string, []any) {
+	value := statsScalarStringOrNullSQL(field)
+	if field.existsSQL == "" || field.existsSQL == "1" {
+		return value, nil
+	}
+	return "if(" + field.existsSQL + ", " + value +
+		", CAST(NULL AS Nullable(String)))", append([]any(nil), field.existsArgs...)
+}
+
+func statsExtremaScalarNumberSQL(valueSQL string) string {
+	value := "ifNull(" + valueSQL + ", CAST('' AS String))"
+	return "if(isNotNull(" + valueSQL + "), " + statsExtremaNumericOrNullSQL(value) +
+		", CAST(NULL AS Nullable(Float64)))"
+}
+
+func statsExtremaScalarCandidateSQL(valueSQL, numberSQL string) string {
+	value := "ifNull(" + valueSQL + ", CAST('' AS String))"
+	normalizedNumber := "if(assumeNotNull(" + numberSQL +
+		") = 0, toFloat64(0), assumeNotNull(" + numberSQL + "))"
+	key := "tuple(toUInt8(isNull(" + numberSQL + ")), if(isNotNull(" + numberSQL +
+		"), " + normalizedNumber + ", toFloat64(0)), if(isNull(" + numberSQL +
+		"), " + value + ", CAST('' AS String)))"
+	return "tuple(" + key + ", toUInt8(isNotNull(" + valueSQL + ")))"
+}
+
+func statsExtremaScalarAggregateKeySQL(
+	function plan.AggregateFunction,
+	candidateSQL string,
+) string {
+	name := "minIfOrNull"
+	if function == plan.AggregateFunctionMaximum {
+		name = "maxIfOrNull"
+	}
+	key := "tupleElement(" + candidateSQL + ", 1)"
+	eligible := "tupleElement(" + candidateSQL + ", 2) != 0"
+	return name + "(" + key + ", " + eligible + ")"
+}
+
+func statsExtremaScalarValueSQL(extremeKeySQL string) string {
+	nonNull := "assumeNotNull(" + extremeKeySQL + ")"
+	return "if(isNull(" + extremeKeySQL + "), CAST(NULL AS Dynamic), if(tupleElement(" +
+		nonNull + ", 1) = 0, CAST(tupleElement(" + nonNull +
+		", 2) AS Dynamic), CAST(tupleElement(" + nonNull + ", 3) AS Dynamic)))"
+}
+
+func statsExtremaScalarStoredTypeSQL(extremeKeySQL string) string {
+	nonNull := "assumeNotNull(" + extremeKeySQL + ")"
+	class := "tupleElement(" + nonNull + ", 1)"
+	lexical := "tupleElement(" + nonNull + ", 3)"
+	return "multiIf(" +
+		"isNull(" + extremeKeySQL + "), toUInt8(" +
+		strconv.Itoa(int(eventfields.StoredValueTypeNull)) + "), " +
+		class + " = 0, toUInt8(" +
+		strconv.Itoa(int(eventfields.StoredValueTypeDouble)) + "), " +
+		"isValidUTF8(" + lexical + "), toUInt8(" +
+		strconv.Itoa(int(eventfields.StoredValueTypeString)) + "), toUInt8(" +
+		strconv.Itoa(int(eventfields.StoredValueTypeBytes)) + "))"
 }
 
 func statsExtremaCandidatesSQL(valuesSQL string) string {

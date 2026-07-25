@@ -34,28 +34,39 @@ func testStatsExtremaAgainstClickHouse(
 		event.Event.Source = "stats-extrema"
 		return event
 	}
+	withService := func(event *ingest.StoredEvent, service string) *ingest.StoredEvent {
+		event.Event.Service = stringPointer(service)
+		return event
+	}
 	events := []*ingest.StoredEvent{
-		newEvent("extrema-numeric-a", "numeric", typedField("extrema_value", typedString("10"))),
-		newEvent("extrema-numeric-b", "numeric", typedField("extrema_value", typedList(
+		withService(newEvent("extrema-numeric-a", "numeric", typedField("extrema_value", typedString("10"))), "10"),
+		withService(newEvent("extrema-numeric-b", "numeric", typedField("extrema_value", typedList(
 			typedString("2"), typedString("01"), typedString("1.0"), typedNull(),
-		))),
-		newEvent("extrema-lexical-a", "lexical", typedField("extrema_value", typedString(""))),
-		newEvent("extrema-lexical-b", "lexical", typedField("extrema_value", typedList(
+		))), "2"),
+		withService(newEvent("extrema-lexical-a", "lexical", typedField("extrema_value", typedString(""))), ""),
+		withService(newEvent("extrema-lexical-b", "lexical", typedField("extrema_value", typedList(
 			typedString("A"), typedString("a"), typedString("é"),
-		))),
-		newEvent("extrema-mixed-a", "mixed", typedField("extrema_value", typedList(
+		))), "é"),
+		withService(newEvent("extrema-mixed-a", "mixed", typedField("extrema_value", typedList(
 			typedString("20"), typedString("5"), typedNull(),
-		))),
-		newEvent("extrema-mixed-b", "mixed", typedField("extrema_value", typedString("z"))),
-		newEvent("extrema-symbols", "symbols", typedField("extrema_value", typedList(
+		))), "5"),
+		withService(newEvent("extrema-mixed-b", "mixed", typedField("extrema_value", typedString("z"))), "z"),
+		withService(newEvent("extrema-symbols", "symbols", typedField("extrema_value", typedList(
 			typedString("2"), typedString("!"), typedString("~"),
-		))),
-		newEvent("extrema-fallback", "fallback", typedField("extrema_value", typedList(
+		))), "2"),
+		withService(newEvent("extrema-symbols-a", "symbols"), "!"),
+		withService(newEvent("extrema-symbols-b", "symbols"), "~"),
+		withService(newEvent("extrema-fallback", "fallback", typedField("extrema_value", typedList(
 			typedString("3"), typedString("NaN"), typedString("1e9999"), typedString(" 2"),
-		))),
-		newEvent("extrema-zero", "zero", typedField("extrema_value", typedList(
+		))), "3"),
+		withService(newEvent("extrema-fallback-nan", "fallback"), "NaN"),
+		withService(newEvent("extrema-fallback-overflow", "fallback"), "1e9999"),
+		withService(newEvent("extrema-fallback-space", "fallback"), " 2"),
+		withService(newEvent("extrema-zero", "zero", typedField("extrema_value", typedList(
 			typedString("-0"), typedString("+0"), typedString("0.0"),
-		))),
+		))), "-0"),
+		withService(newEvent("extrema-zero-plus", "zero"), "+0"),
+		withService(newEvent("extrema-zero-decimal", "zero"), "0.0"),
 		newEvent("extrema-empty-missing", "empty"),
 		newEvent("extrema-empty-null", "empty", typedField("extrema_value", typedNull())),
 		newEvent("extrema-empty-list", "empty", typedField("extrema_value", typedList(typedNull()))),
@@ -65,13 +76,13 @@ func testStatsExtremaAgainstClickHouse(
 		newEvent("extrema-poison-nested", "poison", typedField(
 			"extrema_nested", typedList(typedString("safe"), typedList(typedString("secret"))),
 		)),
-		newEvent("extrema-incomplete-by", "ignored", typedField(
+		withService(newEvent("extrema-incomplete-by", "ignored", typedField(
 			"extrema_incomplete", typedObject(typedField("child", typedString("secret"))),
-		)),
-		newEvent("extrema-complete-by", "complete",
+		)), "-1000"),
+		withService(newEvent("extrema-complete-by", "complete",
 			typedField("required_group", typedString("present")),
 			typedField("extrema_incomplete", typedString("7")),
-		),
+		), "7"),
 	}
 	for eventIndex, event := range events {
 		event.Event.EventTime = timestamppb.New(
@@ -98,6 +109,7 @@ func testStatsExtremaAgainstClickHouse(
 	)
 	foreign.TenantID = "other-tenant"
 	foreign.BatchID = "stats-extrema-foreign-batch"
+	foreign.Event.Service = stringPointer("-999999")
 	foreignBatch := ingest.StoreBatch{
 		TenantID:          "other-tenant",
 		CollectorID:       "collector",
@@ -161,6 +173,161 @@ func testStatsExtremaAgainstClickHouse(
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("grouped min/max = %#v, want %#v", got, want)
+	}
+
+	for _, test := range []struct {
+		group string
+		low   any
+		high  any
+	}{
+		{group: "numeric", low: float64(2), high: float64(10)},
+		{group: "lexical", low: "", high: "é"},
+		{group: "mixed", low: float64(5), high: "z"},
+		{group: "symbols", low: float64(2), high: "~"},
+		{group: "fallback", low: float64(3), high: "NaN"},
+		{group: "zero", low: float64(0), high: float64(0)},
+		{group: "empty", low: nil, high: nil},
+	} {
+		scalar := compile(
+			base + ` extrema_group="` + test.group +
+				`" | stats min(service) AS low max(service) AS high`,
+		)
+		var low, high chcol.Dynamic
+		if err := connection.QueryRow(ctx, scalar.SQL, scalar.Args...).Scan(&low, &high); err != nil {
+			t.Fatalf(
+				"execute %s scalar String min/max: %v\nSQL: %s",
+				test.group,
+				err,
+				scalar.SQL,
+			)
+		}
+		if !reflect.DeepEqual(low.Any(), test.low) || !reflect.DeepEqual(high.Any(), test.high) {
+			t.Fatalf(
+				"%s scalar String min/max = %#v/%#v, want %#v/%#v",
+				test.group,
+				low.Any(),
+				high.Any(),
+				test.low,
+				test.high,
+			)
+		}
+	}
+	scalar := compile(
+		base + ` extrema_group=numeric | stats min(service) AS low max(service) AS high min(service) AS low_again`,
+	)
+	scalarActions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", scalar)
+	if got := strings.Count(scalarActions, "Function: minOrNullIf("); got != 1 {
+		t.Fatalf("repeated scalar min has %d physical aggregate states, want one:\n%s", got, scalarActions)
+	}
+	if got := strings.Count(scalarActions, "Function: maxOrNullIf("); got != 1 {
+		t.Fatalf("scalar min/max has %d physical max states, want one:\n%s", got, scalarActions)
+	}
+	if strings.Contains(scalarActions, "Function: argMinArray(") ||
+		strings.Contains(scalarActions, "Function: argMaxArray(") ||
+		strings.Contains(scalarActions, "ArrayJoin") {
+		t.Fatalf("scalar String min/max retained array work:\n%s", scalarActions)
+	}
+
+	scalarValues := compile(
+		base + ` extrema_group=numeric | stats min(service) AS low values(service) AS all_values`,
+	)
+	var scalarValuesLow chcol.Dynamic
+	var scalarValueList []string
+	if err := connection.QueryRow(ctx, scalarValues.SQL, scalarValues.Args...).Scan(
+		&scalarValuesLow,
+		&scalarValueList,
+	); err != nil {
+		t.Fatalf("execute shared scalar min/values: %v\nSQL: %s", err, scalarValues.SQL)
+	}
+	if scalarValuesLow.Any() != float64(2) ||
+		!reflect.DeepEqual(scalarValueList, []string{"10", "2"}) {
+		t.Fatalf(
+			"shared scalar min/values = %#v/%#v, want 2/[10 2]",
+			scalarValuesLow.Any(),
+			scalarValueList,
+		)
+	}
+
+	scalarGlobalEmpty := compile(
+		base + ` event_id=does-not-exist | stats min(service) AS low max(service) AS high`,
+	)
+	var scalarEmptyLow, scalarEmptyHigh chcol.Dynamic
+	if err := connection.QueryRow(ctx, scalarGlobalEmpty.SQL, scalarGlobalEmpty.Args...).Scan(
+		&scalarEmptyLow,
+		&scalarEmptyHigh,
+	); err != nil {
+		t.Fatalf("execute scalar global empty min/max: %v\nSQL: %s", err, scalarGlobalEmpty.SQL)
+	}
+	if scalarEmptyLow.Any() != nil || scalarEmptyHigh.Any() != nil {
+		t.Fatalf(
+			"scalar global empty min/max = %#v/%#v, want null/null",
+			scalarEmptyLow.Any(),
+			scalarEmptyHigh.Any(),
+		)
+	}
+	scalarGroupedEmpty := compile(
+		base + ` event_id=does-not-exist | stats min(service) AS low BY extrema_group`,
+	)
+	var scalarGroupedCount uint64
+	if err := connection.QueryRow(
+		ctx,
+		"SELECT count() FROM ("+scalarGroupedEmpty.SQL+")",
+		scalarGroupedEmpty.Args...,
+	).Scan(&scalarGroupedCount); err != nil {
+		t.Fatalf("execute scalar grouped empty min: %v\nSQL: %s", err, scalarGroupedEmpty.SQL)
+	}
+	if scalarGroupedCount != 0 {
+		t.Fatalf("scalar grouped empty min rows = %d, want 0", scalarGroupedCount)
+	}
+
+	scalarEligible := compile(
+		base + ` (event_id=extrema-incomplete-by OR event_id=extrema-complete-by)` +
+			` | stats min(service) AS low BY required_group`,
+	)
+	var scalarRequiredGroup string
+	var scalarEligibleLow chcol.Dynamic
+	if err := connection.QueryRow(ctx, scalarEligible.SQL, scalarEligible.Args...).Scan(
+		&scalarRequiredGroup,
+		&scalarEligibleLow,
+	); err != nil {
+		t.Fatalf("execute incomplete-BY scalar min guard: %v\nSQL: %s", err, scalarEligible.SQL)
+	}
+	if scalarRequiredGroup != "present" || scalarEligibleLow.Any() != float64(7) {
+		t.Fatalf(
+			"incomplete-BY scalar min = %q/%#v, want present/7",
+			scalarRequiredGroup,
+			scalarEligibleLow.Any(),
+		)
+	}
+
+	scalarScoped := compile(base + ` event_id=extrema-foreign-poison | stats min(service) AS low`)
+	var scalarScopedLow chcol.Dynamic
+	if err := connection.QueryRow(ctx, scalarScoped.SQL, scalarScoped.Args...).Scan(&scalarScopedLow); err != nil {
+		t.Fatalf("execute cross-tenant scalar min: %v\nSQL: %s", err, scalarScoped.SQL)
+	}
+	if scalarScopedLow.Any() != nil {
+		t.Fatalf("cross-tenant scalar min = %#v, want null", scalarScopedLow.Any())
+	}
+
+	scalarBinned := compile(
+		base + ` extrema_group=numeric | stats min(service) AS low | bin low span=2 | table low`,
+	)
+	var scalarBinnedLow chcol.Dynamic
+	if err := connection.QueryRow(ctx, scalarBinned.SQL, scalarBinned.Args...).Scan(&scalarBinnedLow); err != nil {
+		t.Fatalf("execute downstream scalar min bin: %v\nSQL: %s", err, scalarBinned.SQL)
+	}
+	if scalarBinnedLow.Any() != float64(2) {
+		t.Fatalf("downstream binned scalar min = %#v, want 2", scalarBinnedLow.Any())
+	}
+	scalarReaggregated := compile(
+		base + ` | stats min(service) AS low BY extrema_group | stats max(low) AS largest`,
+	)
+	var scalarLargest chcol.Dynamic
+	if err := connection.QueryRow(ctx, scalarReaggregated.SQL, scalarReaggregated.Args...).Scan(&scalarLargest); err != nil {
+		t.Fatalf("execute downstream scalar min/max reaggregation: %v\nSQL: %s", err, scalarReaggregated.SQL)
+	}
+	if scalarLargest.Any() != "" {
+		t.Fatalf("reaggregated scalar max = %#v, want empty lexical String", scalarLargest.Any())
 	}
 
 	for name, source := range map[string]string{

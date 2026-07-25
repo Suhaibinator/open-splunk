@@ -2835,7 +2835,7 @@ func TestCompileStatsMinAndMaxUseNativeFixedScalarExtrema(t *testing.T) {
 	for _, required := range []string{
 		`minIfOrNull("severity", (1) AND isNotNull("severity")) AS "low"`,
 		`maxIfOrNull("_time", (1) AND isNotNull("_time")) AS "latest"`,
-		`argMaxArray(arrayMap(candidate -> tupleElement(candidate, 1), "__os_measure_extrema_0")`,
+		`maxIfOrNull(tupleElement("__os_measure_extrema_scalar_0", 1), tupleElement("__os_measure_extrema_scalar_0", 2) != 0)`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("fixed min/max SQL missing %q:\n%s", required, compiled.SQL)
@@ -2844,6 +2844,136 @@ func TestCompileStatsMinAndMaxUseNativeFixedScalarExtrema(t *testing.T) {
 	if strings.Contains(compiled.SQL, `toFloat64("severity")`) ||
 		strings.Contains(compiled.SQL, `toFloat64("_time")`) {
 		t.Fatalf("fixed extrema lost native precision:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsScalarStringExtremaAvoidArrayLowering(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | stats min(service) AS low max(service) AS high min(service) AS low_again`,
+	)
+	for _, required := range []string{
+		`AS "__os_measure_scalar_string_0"`,
+		`AS "__os_measure_extrema_number_0"`,
+		`AS "__os_measure_extrema_scalar_0"`,
+		`minIfOrNull(tupleElement("__os_measure_extrema_scalar_0", 1), tupleElement("__os_measure_extrema_scalar_0", 2) != 0)`,
+		`maxIfOrNull(tupleElement("__os_measure_extrema_scalar_0", 1), tupleElement("__os_measure_extrema_scalar_0", 2) != 0)`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("scalar String extrema SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	for _, forbidden := range []string{
+		`AS "__os_measure_strings_`,
+		`AS "__os_measure_extrema_0"`,
+		`argMinArray(`,
+		`argMaxArray(`,
+		`arrayMap(number -> tuple(`,
+		`arrayMap(candidate ->`,
+	} {
+		if strings.Contains(compiled.SQL, forbidden) {
+			t.Fatalf("scalar String extrema retained array lowering %q:\n%s", forbidden, compiled.SQL)
+		}
+	}
+	if strings.Count(compiled.SQL, `AS "__os_measure_scalar_string_0"`) != 1 ||
+		strings.Count(compiled.SQL, `AS "__os_measure_extrema_number_0"`) != 1 ||
+		strings.Count(compiled.SQL, `AS "__os_measure_extrema_scalar_0"`) != 1 ||
+		strings.Contains(compiled.SQL, `__os_measure_scalar_string_1`) ||
+		strings.Contains(compiled.SQL, `__os_measure_extrema_scalar_1`) {
+		t.Fatalf("scalar String extrema did not share one normalization:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+
+	for _, source := range []string{
+		`index=gradethis | stats min(service) AS low values(service) AS all_values`,
+		`index=gradethis | stats values(service) AS all_values min(service) AS low`,
+	} {
+		withValues := compileSPL(t, source)
+		if strings.Count(withValues.SQL, `AS "__os_measure_scalar_string_0"`) != 1 ||
+			strings.Count(withValues.SQL, `AS "__os_measure_strings_0"`) != 1 ||
+			strings.Contains(withValues.SQL, `__os_measure_scalar_string_1`) {
+			t.Fatalf("scalar min and values did not share one scalar input in %q:\n%s", source, withValues.SQL)
+		}
+	}
+
+	calculated := compileSPL(
+		t,
+		`index=gradethis | eval label=replace(service,"x","y") | stats values(label) AS labels min(label) AS low max(label) AS high`,
+	)
+	if strings.Count(calculated.SQL, `AS "__os_measure_scalar_string_0"`) != 1 ||
+		strings.Count(calculated.SQL, `AS "__os_measure_extrema_scalar_0"`) != 1 ||
+		strings.Count(calculated.SQL, `AS "__os_measure_strings_0"`) != 1 {
+		t.Fatalf("calculated scalar extrema did not share one input:\n%s", calculated.SQL)
+	}
+	var patternArgs, replacementArgs int
+	for _, argument := range calculated.Args {
+		switch argument {
+		case "x":
+			patternArgs++
+		case "y":
+			replacementArgs++
+		}
+	}
+	if patternArgs != 1 || replacementArgs != 1 {
+		t.Fatalf("calculated scalar arguments = %#v, want one x and one y", calculated.Args)
+	}
+	if got, want := strings.Count(calculated.SQL, "?"), len(calculated.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, calculated.SQL, calculated.Args)
+	}
+
+	fixedMultivalue := compileSPL(
+		t,
+		`index=gradethis | stats values(service) AS services | stats min(services) AS low max(services) AS high`,
+	)
+	if !strings.Contains(fixedMultivalue.SQL, `argMinArray(`) ||
+		!strings.Contains(fixedMultivalue.SQL, `argMaxArray(`) ||
+		strings.Contains(fixedMultivalue.SQL, `__os_measure_extrema_scalar_`) {
+		t.Fatalf("fixed multivalue extrema left the guarded Array path:\n%s", fixedMultivalue.SQL)
+	}
+}
+
+func TestCompileStatsScalarStringExtremaMaximumMeasuresStayBounded(t *testing.T) {
+	t.Parallel()
+
+	var source strings.Builder
+	source.WriteString(`index=gradethis | stats `)
+	for measure := 0; measure < spl.MaximumStatsMeasures; measure++ {
+		if measure > 0 {
+			source.WriteByte(' ')
+		}
+		function := "min"
+		if measure%2 != 0 {
+			function = "max"
+		}
+		fmt.Fprintf(&source, "%s(service) AS result_%d", function, measure)
+	}
+	compiled := compileSPL(t, source.String())
+	if len(compiled.OutputFields) != spl.MaximumStatsMeasures {
+		t.Fatalf(
+			"scalar extrema output fields = %d, want %d",
+			len(compiled.OutputFields),
+			spl.MaximumStatsMeasures,
+		)
+	}
+	if len(compiled.SQL) > maxCompiledQueryBytes {
+		t.Fatalf(
+			"scalar extrema SQL is %d bytes, ceiling is %d",
+			len(compiled.SQL),
+			maxCompiledQueryBytes,
+		)
+	}
+	if strings.Count(compiled.SQL, `AS "__os_measure_scalar_string_0"`) != 1 ||
+		strings.Count(compiled.SQL, `AS "__os_measure_extrema_number_0"`) != 1 ||
+		strings.Count(compiled.SQL, `AS "__os_measure_extrema_scalar_0"`) != 1 ||
+		strings.Contains(compiled.SQL, `__os_measure_extrema_scalar_1`) {
+		t.Fatalf("maximum scalar extrema measures did not share one candidate:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d", got, want)
 	}
 }
 

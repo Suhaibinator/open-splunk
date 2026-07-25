@@ -547,8 +547,15 @@ result row; a retained group with no eligible candidate also contains null;
 grouped aggregation over no rows emits no groups. Projected-away inputs remain
 absent. Repeated extrema over one input share one bounded row-local
 normalization, and `min` plus `max` use separate constant-size aggregate
-states. The lowering uses no `ARRAY JOIN`, row expansion, sorting, or unbounded
-list aggregation.
+states. A statically known scalar String uses one nullable input alias, one
+numeric-classification alias, and one non-null ordering tuple; ClickHouse
+aggregates that tuple with conditional scalar `min`/`max` and constructs the
+nullable `Mixed` winner only after aggregation. This avoids row-local
+singleton arrays and per-row Dynamic boxing. Dynamic and fixed multivalue
+inputs retain the guarded Array-combinator path. Scalar extrema and
+`dc`/`values` over the same input share the nullable scalar materialization.
+Neither path uses `ARRAY JOIN`, row expansion, sorting, or unbounded list
+aggregation.
 
 `min` and `max` accept exactly one unquoted, exact field. Expression/eval
 arguments, wildcards, quoted fields, empty argument lists, and multiple
