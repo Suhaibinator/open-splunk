@@ -9,15 +9,15 @@ git status --short --branch
 git log -1 --oneline
 ```
 
-## Pause checkpoint: exact Dynamic numeric bin hardening
+## Pause checkpoint: bounded relational depth and analyzer-safe predicates
 
 Date: 2026-07-25
 
 Branch: `main`
 
 Starting commit for this slice:
-`4a6882f88771844db1c5dd7bfd458774a916cb06`
-(`implement exact Dynamic decimal binning`)
+`05e86f8c37c2fb187987970ad61b9b0a75da5564`
+(`harden exact Decimal poison isolation`)
 
 Work is intentionally paused after a green, committed, and pushed checkpoint.
 The overall backend goal is still active; this is a safe stopping point, not a
@@ -25,8 +25,63 @@ claim that the product architecture plan is complete.
 
 ## What this slice completed
 
-The previously planned exact-Decimal `bin`/`bucket` slice is implemented and
-its raw-storage trust boundary is now covered adversarially.
+The compiler now admits generated relational SQL by its structure as well as
+its byte size:
+
+- The longest generated `SELECT`/`UNION` dependency path is tracked while SQL
+  is lowered and capped at 96 levels. The model uses maximum dependency height,
+  not a textual `SELECT` count or the sum of independent CTE/`UNION` siblings.
+- Every ordinary and terminal compiler path reports its structural depth,
+  including dynamic numeric `bin`, `rex`, fixed and dynamic `dedup`, aggregate
+  validation/preaggregation, `timechart`, `chart`, field catalog, field
+  summary, and timeline lowering.
+- The exact 96-level boundary compiles. The next level fails before execution
+  with source-located `SPL_QUERY_TOO_COMPLEX`; terminal and private-analysis
+  paths have their own 96/97 boundary coverage.
+- Analysis finalizers fail closed when they omit depth evidence. Directly
+  forged `eval` and `rename` plans are also revalidated against the existing
+  64-assignment contract inside the compiler.
+- The executor pins ClickHouse `max_subquery_depth` independently to 100. The
+  server and compiler metrics intentionally are not treated as interchangeable.
+  ClickHouse exception 162 (`TOO_DEEP_SUBQUERIES`) is redacted and classified
+  as a stable execution-limit error.
+- A pinned `clickhouse/clickhouse-server:26.3.17.4` integration test executes
+  the accepted 96-level query under a 30-second execution cap, 256 MiB memory
+  cap, one thread, and a 1 MiB query-size cap.
+
+The full opt-in database gate exposed and fixed a separate ClickHouse analyzer
+failure in a supported pipeline:
+
+- `bin <Dynamic> ... | where <bucket> ...`, when wrapped by timeline or another
+  analysis query, let ClickHouse push the predicate back through the large
+  exact-bin projection. The pinned server expanded that graph to roughly
+  6.7 GiB even though the query read only a tiny fixture.
+- The filter now materializes the already calculated row relation and binds
+  only predicate-referenced calculated values through singleton `ARRAY JOIN`
+  aliases. The predicate depends on those aliases, which prevents pushdown
+  into the producer. `SELECT * EXCEPT (...) REPLACE (...)` republishes the
+  identical bound values in their original positions, so the fence is durable
+  across later filters.
+- The fence remains one row per input row, performs one scoped storage scan,
+  preserves value/presence/semantic-type metadata, adds no relational level
+  beyond the filter's existing `SELECT`, and carries its required
+  `enable_materialized_cte` setting in the query text for direct compiler
+  clients.
+- Dependency tracking follows calculated values through projection, rename,
+  `tonumber`, `replace`, fixed numeric re-binning, and `rex` fallback paths.
+  Unrelated predicates do not materialize the relation, multiple affected
+  fields share one fence, and a second predicate over a durably rebound field
+  does not create another temporary table.
+- The formerly failing field-summary/timeline integration case now completes
+  on the pinned server in about three seconds and returns the expected 48
+  buckets with two matching events.
+- Two stale store-integration expectations were corrected to match the already
+  documented exact-bin behavior: a wide negative numeric String produces
+  `Int256`, and a valid stored Decimal buckets exactly instead of being
+  classified as unsupported.
+
+The preceding exact-Decimal `bin`/`bucket` slice remains implemented and its
+raw-storage trust boundary is covered adversarially.
 
 This hardening checkpoint adds direct ClickHouse fixtures that deliberately
 bypass `Store` normalization:
@@ -130,7 +185,7 @@ checkpoints:
   `top`, `rare`, `timechart`, bounded two-field `chart`, extraction-mode
   `rex`, and explicit-span `bin`/`bucket`;
 - source-located diagnostics and compiler/executor row, byte, time, memory,
-  command-count, and generated-SQL limits;
+  command-count, generated-SQL byte, and generated relational-depth limits;
 - materialized-CTE single-scan lowering for runtime-wide chart/timechart and
   the exact field-summary path; and
 - defensive browser preview/result integration from the earlier checkpoints.
@@ -151,15 +206,59 @@ go vet ./...
 go build ./...
 ```
 
-The exact slice also passed focused unit suites repeatedly:
+The relational-depth slice passed focused and package unit suites:
 
 ```sh
 go test ./internal/clickhouse ./internal/queryexec -count=1
+
+go test ./internal/clickhouse \
+  -run '^(TestCompileBoundsGeneratedRelationalDepth|TestRelationalNodeDepthUsesMaximumDependencyHeight|TestCompiledRelationalDepthPinsRepresentativeOperatorCosts|TestCompiledRelationalDepthPinsTerminalWideOperatorCosts|TestFieldAnalysisRelationalDepthBoundariesIncludePrivateFinalizers|TestCompilerBoundsForgedAssignmentCounts|TestAnalysisFinalizerCannotUnderreportItsRelationalWrapper|TestAnalysisFinalizerMustReportCompiledRelationalDepth|TestBinEdgeCalculatedPredicateUsesOneDurableAnalyzerFence|TestBinEdgeDistinctCalculatedPredicatesUseNestedScopedFences)$' \
+  -count=1
 ```
 
 Pinned integration tests use
-`clickhouse/clickhouse-server:26.3.17.4`. The following focused runs passed
+`clickhouse/clickhouse-server:26.3.17.4`. The relational-depth boundary passed
 during this slice:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+  -run '^TestRelationalDepthBoundaryAgainstClickHouse$' \
+  -count=1 -timeout=4m
+```
+
+The complete compiler and query-executor ClickHouse integration packages
+passed serially at the final gate:
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+  -count=1 -timeout=20m -parallel=1
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/queryexec \
+  -count=1 -timeout=10m -parallel=1
+```
+
+The two defining analyzer regressions were then rerun from the final source
+state. Their test bodies pin one thread, short server/client timeouts, a 1 MiB
+query ceiling, and 256 MiB for the predicate paths (the independent
+field-summary assertion uses 512 MiB, below the executor's 1 GiB default):
+
+```sh
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+  -run '^TestBinEdgeMetadataAgainstClickHouse$/bin_output_feeds_field_summaries_and_timelines$' \
+  -count=1 -timeout=4m -parallel=1
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+  -run '^TestBinEdgePipelineAgainstClickHouse$/distinct_calculated_predicates_use_nested_bounded_fences$' \
+  -count=1 -timeout=4m -parallel=1
+```
+
+The immediately preceding exact-bin checkpoints also recorded these focused
+runs:
 
 ```sh
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
@@ -222,20 +321,36 @@ malformed-envelope matrix, individual checks for all six scope fences, the
 forced part merge, and the physical-result assertion. No production
 correctness defect was found.
 
+For the relational-depth checkpoint, three reviewers independently mapped the
+generated SQL graph, recalculated exact per-operator and terminal dependency
+heights, and attacked the boundary tests and executor coupling. Their findings
+produced maximum-path rather than sibling-sum accounting, forged-plan
+assignment validation, fail-closed finalizers, an independently pinned
+ClickHouse limit, redaction of server depth failures, and a resource-bounded
+database proof. The final audit found no remaining accounting defect across
+CTEs, scalar subqueries, materialized dependencies, or `UNION` branches.
+
+The full-suite analyzer failure was then reviewed through independent SQL,
+semantic, performance, and test-design attacks. Materialization alone, a
+singleton binding alone, and eager binding inside `bin` all failed. Reviewers
+proved the final consumer-local materialized-CTE plus predicate-dependent
+singleton-binding shape on the pinned server, including two consecutive
+filters, multiple bound fields, null/missing values, field catalog, timeline,
+and exact value/type/presence preservation. Their propagation review also
+caught the initially missing `tonumber`, `replace`, fixed-bin, and `rex`
+dependencies before this checkpoint.
+
 ## Remaining work, in priority order
 
-### 1. Finish exact-bin resource hardening
+### 1. Finish exact-bin efficiency follow-up
 
-- Add a compiler-tracked generated relational-depth budget. The existing
-  generated-SQL byte ceilings remain active, but they do not directly bound
-  ClickHouse analyzer depth. Pin the accepted boundary and the
-  `SPL_QUERY_TOO_COMPLEX` rejection immediately above it.
 - Consider a direct unsigned-magnitude arithmetic fast path for calculated
   semantic-Decimal/physical-`Int256` input. The current bounded lexical re-bin
   is correct and passes its resource test, but converting an already typed
   `Int256` to text and reparsing it is avoidable work.
-- Run the full opt-in ClickHouse and query-executor integration suites after
-  those changes, not only focused subtests.
+- Preserve and re-run the full opt-in ClickHouse and query-executor integration
+  suites after changing that representation or the analyzer fence, not only
+  focused subtests.
 
 ### 2. Complete the first-release analytical SPL surface
 
@@ -305,8 +420,8 @@ correctness defect was found.
 2. Read the three documents named above.
 3. Run the non-Docker validation commands.
 4. Check that no stale `open-splunk-*` Docker test containers are running.
-5. Start with the relational-depth budget in Remaining work item 1. Write the
-   accepted-boundary and one-level-over rejection tests before changing the
-   compiler.
+5. Resume with the optional exact-`Int256` fast path in Remaining work item 1,
+   or move directly to the contract-first `spath` slice in item 2. Preserve the
+   relational-depth and bounded analyzer tests while changing SQL shape.
 6. Keep working on `main`; commit and push each cohesive green slice.
 7. Preserve unexpected local changes and never reset them away.

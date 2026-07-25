@@ -6,6 +6,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -775,7 +776,7 @@ func TestCompileDynamicNumericBinCarriesSparseMetadataDownstream(t *testing.T) {
 	for _, required := range []string{
 		`"__os_numeric_bin_output_exists_2"`,
 		`"__os_numeric_bin_output_type_2"`,
-		`dynamicType("band")`,
+		`dynamicType("__os_filter_bound_3_1")`,
 		`AS "band"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
@@ -2405,6 +2406,116 @@ func TestCompileRejectsOversizedGeneratedSQL(t *testing.T) {
 	}
 }
 
+func TestCompileBoundsGeneratedRelationalDepth(t *testing.T) {
+	t.Parallel()
+
+	evalPipeline := func(finalAssignments int) string {
+		var source strings.Builder
+		for command := 0; command < 62; command++ {
+			if command > 0 {
+				source.WriteByte(' ')
+			}
+			source.WriteString("| eval f")
+			source.WriteString(strconv.Itoa(command))
+			source.WriteString("=1")
+		}
+		source.WriteString(" | eval ")
+		for assignment := 0; assignment < finalAssignments; assignment++ {
+			if assignment > 0 {
+				source.WriteByte(',')
+			}
+			source.WriteString("tail")
+			source.WriteString(strconv.Itoa(assignment))
+			source.WriteString("=1")
+		}
+		if source.Len() >= 16<<10 {
+			t.Fatalf("relational-depth fixture is %d bytes, want it below the parser ceiling", source.Len())
+		}
+		return source.String()
+	}
+
+	t.Run("exact boundary", func(t *testing.T) {
+		source := evalPipeline(32)
+		parsed, err := spl.Parse(source)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		if len(parsed.Commands) != 63 {
+			t.Fatalf("pipeline commands = %d, want 63", len(parsed.Commands))
+		}
+		logical, err := plan.Build(parsed, testChartScope())
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		compiled, err := (Compiler{}).Compile(logical)
+		if err != nil {
+			t.Fatalf("Compile(exact relational-depth boundary): %v", err)
+		}
+		if compiled.relationalDepth != maximumCompiledRelationalDepth {
+			t.Fatalf(
+				"reported relational depth = %d, want %d",
+				compiled.relationalDepth,
+				maximumCompiledRelationalDepth,
+			)
+		}
+		if depth := strings.Count(compiled.SQL, "SELECT "); depth != maximumCompiledRelationalDepth {
+			t.Fatalf("generated relational depth = %d, want %d", depth, maximumCompiledRelationalDepth)
+		}
+	})
+
+	t.Run("one over is source located", func(t *testing.T) {
+		source := evalPipeline(33)
+		parsed, err := spl.Parse(source)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		overflowRange := parsed.Commands[len(parsed.Commands)-1].SourceRange()
+		logical, err := plan.Build(parsed, testChartScope())
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		_, err = (Compiler{}).Compile(logical)
+		var diagnostic *plan.Diagnostic
+		if !errors.As(err, &diagnostic) || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
+			t.Fatalf("Compile(one over relational-depth boundary) error = %#v, want SPL_QUERY_TOO_COMPLEX", err)
+		}
+		if diagnostic.Range != overflowRange {
+			t.Fatalf("relational-depth diagnostic range = %#v, want final eval range %#v", diagnostic.Range, overflowRange)
+		}
+		if !strings.Contains(diagnostic.Message, "96 relational levels") {
+			t.Fatalf("relational-depth diagnostic message = %q, want it to name 96 relational levels", diagnostic.Message)
+		}
+	})
+
+	t.Run("full parser command budget remains compatible", func(t *testing.T) {
+		var source strings.Builder
+		for command := 0; command < 64; command++ {
+			if command > 0 {
+				source.WriteByte(' ')
+			}
+			source.WriteString("| head 1")
+		}
+		parsed, err := spl.Parse(source.String())
+		if err != nil {
+			t.Fatalf("Parse(64-command pipeline): %v", err)
+		}
+		if len(parsed.Commands) != 64 {
+			t.Fatalf("pipeline commands = %d, want the full 64-command budget", len(parsed.Commands))
+		}
+		logical, err := plan.Build(parsed, testChartScope())
+		if err != nil {
+			t.Fatalf("Build(64-command pipeline): %v", err)
+		}
+		compiled, err := (Compiler{}).Compile(logical)
+		if err != nil {
+			t.Fatalf("Compile(64-command pipeline): %v", err)
+		}
+		if depth := strings.Count(compiled.SQL, "SELECT "); depth != 66 {
+			t.Fatalf("64-command generated relational depth = %d, want 66", depth)
+		}
+	})
+}
+
 func TestProjectionDoesNotExposeInternalColumns(t *testing.T) {
 	t.Parallel()
 
@@ -2462,18 +2573,20 @@ func TestEventPipelinesPreservePersistedFieldMetadataForAnalysis(t *testing.T) {
 			t.Parallel()
 			logical := buildPlan(t, test.source)
 			compiled, err := (Compiler{}).compileEventAnalysis(logical, func(
-				fragment string,
+				relation compiledRelation,
 				_ compileState,
 				args []any,
 				_ *plan.Scan,
 				_ int,
 			) (CompiledQuery, error) {
-				return CompiledQuery{
-					SQL: "SELECT " + quoteIdentifier(internalFieldTypesColumn) + ", " +
-						quoteIdentifier(internalFieldMetadataVersionColumn) + " FROM (" + fragment + ") AS " +
-						quoteIdentifier("__os_metadata_probe"),
+				probeSQL := "SELECT " + quoteIdentifier(internalFieldTypesColumn) + ", " +
+					quoteIdentifier(internalFieldMetadataVersionColumn) + " FROM (" + relation.sql + ") AS " +
+					quoteIdentifier("__os_metadata_probe")
+				relation = relation.selectFrom(probeSQL, relation.ownerRange)
+				return withCompiledRelationalDepth(CompiledQuery{
+					SQL:  relation.sql,
 					Args: args,
-				}, nil
+				}, relation.depth, relation.ownerRange), nil
 			})
 			if err != nil {
 				t.Fatalf("compileEventAnalysis: %v", err)
@@ -2566,7 +2679,7 @@ func TestAnalysisFinalizerCannotBypassTerminalTimechart(t *testing.T) {
 
 	logical := buildPlan(t, `index=gradethis | timechart span=5m count BY level`)
 	called := false
-	_, err := (Compiler{}).compileWithFinalizer(logical, func(string, compileState, []any, *plan.Scan, int) (CompiledQuery, error) {
+	_, err := (Compiler{}).compileWithFinalizer(logical, func(compiledRelation, compileState, []any, *plan.Scan, int) (CompiledQuery, error) {
 		called = true
 		return CompiledQuery{}, nil
 	}, false)
@@ -2580,7 +2693,7 @@ func TestAnalysisFinalizerCannotBypassTerminalChart(t *testing.T) {
 
 	logical := buildPlan(t, `index=gradethis | chart count OVER path BY level`)
 	called := false
-	_, err := (Compiler{}).compileWithFinalizer(logical, func(string, compileState, []any, *plan.Scan, int) (CompiledQuery, error) {
+	_, err := (Compiler{}).compileWithFinalizer(logical, func(compiledRelation, compileState, []any, *plan.Scan, int) (CompiledQuery, error) {
 		called = true
 		return CompiledQuery{}, nil
 	}, false)
@@ -3077,12 +3190,28 @@ func TestAnalysisFinalizerCannotBypassCompiledQueryByteLimit(t *testing.T) {
 	t.Parallel()
 
 	logical := buildPlan(t, `index=gradethis`)
-	_, err := (Compiler{}).compileEventAnalysis(logical, func(string, compileState, []any, *plan.Scan, int) (CompiledQuery, error) {
-		return CompiledQuery{SQL: strings.Repeat("x", maxCompiledQueryBytes+1)}, nil
+	_, err := (Compiler{}).compileEventAnalysis(logical, func(relation compiledRelation, _ compileState, _ []any, _ *plan.Scan, _ int) (CompiledQuery, error) {
+		return withCompiledRelationalDepth(
+			CompiledQuery{SQL: strings.Repeat("x", maxCompiledQueryBytes+1)},
+			relation.depth+1,
+			relation.ownerRange,
+		), nil
 	})
 	diagnostic, ok := err.(*plan.Diagnostic)
 	if !ok || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
 		t.Fatalf("compileEventAnalysis() error = %#v, want SPL_QUERY_TOO_COMPLEX", err)
+	}
+}
+
+func TestAnalysisFinalizerMustReportCompiledRelationalDepth(t *testing.T) {
+	t.Parallel()
+
+	logical := buildPlan(t, `index=gradethis`)
+	_, err := (Compiler{}).compileEventAnalysis(logical, func(compiledRelation, compileState, []any, *plan.Scan, int) (CompiledQuery, error) {
+		return CompiledQuery{SQL: "SELECT 1"}, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "relational depth was not reported") {
+		t.Fatalf("compileEventAnalysis() error = %v, want missing relational-depth evidence", err)
 	}
 }
 

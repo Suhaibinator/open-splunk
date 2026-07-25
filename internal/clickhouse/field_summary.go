@@ -106,14 +106,14 @@ func (c Compiler) CompileFieldSummary(query *plan.Query, spec FieldSummarySpec) 
 
 	fieldKnown := false
 	compiled, err := c.compileEventAnalysis(query, func(
-		fragment string,
+		relation compiledRelation,
 		state compileState,
 		args []any,
-		_ *plan.Scan,
+		scan *plan.Scan,
 		_ int,
 	) (CompiledQuery, error) {
 		_, fieldKnown = state.visible[spec.FieldName]
-		return finalizeFieldSummary(fragment, state, args, ref, spec)
+		return finalizeFieldSummary(relation, state, args, ref, spec, scan.Range)
 	})
 	if err != nil {
 		return CompiledFieldSummary{}, err
@@ -152,11 +152,12 @@ func validateFieldSummarySpec(spec FieldSummarySpec) error {
 }
 
 func finalizeFieldSummary(
-	fragment string,
+	relation compiledRelation,
 	state compileState,
 	args []any,
 	ref plan.FieldRef,
 	spec FieldSummarySpec,
+	ownerRange spl.Range,
 ) (CompiledQuery, error) {
 	if !state.eventRows {
 		return CompiledQuery{}, errors.New("compile ClickHouse field summary: final relation is not an event relation")
@@ -180,11 +181,11 @@ func finalizeFieldSummary(
 
 	q := quoteIdentifier
 	var sql strings.Builder
-	sql.Grow(len(fragment) + 12_288)
+	sql.Grow(len(relation.sql) + 12_288)
 	sql.WriteString("WITH ")
 	sql.WriteString(q(fieldSummarySourceCTE))
 	sql.WriteString(" AS (")
-	sql.WriteString(fragment)
+	sql.WriteString(relation.sql)
 	sql.WriteString("), ")
 
 	// Keep the heterogeneous value out of GROUP BY: ClickHouse Dynamic has no
@@ -346,7 +347,18 @@ func finalizeFieldSummary(
 	sql.WriteString(materializedCTESettingsSQL)
 	args = append(args, spec.FieldName)
 
-	return CompiledQuery{SQL: sql.String(), Args: args}, nil
+	typedDepth := relationalNodeDepth(relation.depth)
+	encodedDepth := relationalNodeDepth(typedDepth)
+	rowsDepth := relationalNodeDepth(encodedDepth)
+	totalsDepth := relationalNodeDepth(rowsDepth)
+	groupsDepth := relationalNodeDepth(rowsDepth)
+	headerDepth := relationalNodeDepth(totalsDepth)
+	valueRowsDepth := relationalNodeDepth(groupsDepth, totalsDepth)
+	outputUnionDepth := relationalNodeDepth(headerDepth, valueRowsDepth)
+	resultDepth := relationalNodeDepth(outputUnionDepth)
+
+	compiled := CompiledQuery{SQL: sql.String(), Args: args}
+	return withCompiledRelationalDepth(compiled, resultDepth, ownerRange), nil
 }
 
 func writeFieldSummaryTotals(sql *strings.Builder) {

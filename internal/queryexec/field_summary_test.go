@@ -696,6 +696,7 @@ func TestSettingsForFieldSummaryRejectsInvalidBaseAndSummarySettings(t *testing.
 		"max_rows_to_group_by",
 		"max_threads",
 		"max_query_size",
+		"max_subquery_depth",
 	} {
 		t.Run(name+" missing", func(t *testing.T) {
 			malformed := cloneFieldSummarySettings(base)

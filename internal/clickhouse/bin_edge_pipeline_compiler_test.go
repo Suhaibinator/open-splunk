@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -152,16 +153,17 @@ func TestBinEdgePipelineShapesBalancePlaceholdersAndArguments(t *testing.T) {
 	}
 }
 
-// TestBinEdgeStreamingBinPipelinesStayScanShaped pins the streaming contract:
-// a bin stage adds no aggregate, window, join, or materialization fence, and
-// never introduces a second scoped scan of the storage table.
+// TestBinEdgeStreamingBinPipelinesStayScanShaped pins the ordinary streaming
+// contract: unless a predicate consumes a calculated Dynamic result, a bin
+// stage adds no aggregate, window, join, or materialization fence and never
+// introduces a second scoped scan of the storage table.
 func TestBinEdgeStreamingBinPipelinesStayScanShaped(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
 		`index=gradethis | bin metric span=10`,
 		`index=gradethis | bin metric span=10 AS band`,
-		`index=gradethis | bin metric span=10 AS band | where band>=20`,
+		`index=gradethis | bin metric span=10 AS band | where metric>=20 AND severity>=2`,
 		`index=gradethis | bin metric span=10 AS band | table event_id band`,
 		`index=gradethis | bin metric span=10 | bin metric span=7`,
 		`index=gradethis | bin left span=10 AS a | bin right span=7 AS b`,
@@ -183,6 +185,171 @@ func TestBinEdgeStreamingBinPipelinesStayScanShaped(t *testing.T) {
 				t.Fatalf("scoped storage scan occurs %d times, want once:\n%s", got, compiled.SQL)
 			}
 		})
+	}
+}
+
+func TestBinEdgeCalculatedPredicateUsesOneDurableAnalyzerFence(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name              string
+		source            string
+		wantFenceStage    int
+		wantBoundFields   []string
+		forbiddenFenceIDs []int
+	}{
+		{
+			name:            "direct consumer",
+			source:          `index=gradethis | bin metric span=10 AS band | where band>=20`,
+			wantFenceStage:  3,
+			wantBoundFields: []string{"band"},
+		},
+		{
+			name:            "search consumer",
+			source:          `index=gradethis | bin metric span=10 AS band | search band>=20`,
+			wantFenceStage:  3,
+			wantBoundFields: []string{"band"},
+		},
+		{
+			name:              "unrelated predicate",
+			source:            `index=gradethis | bin metric span=10 AS band | where severity>=2`,
+			forbiddenFenceIDs: []int{3},
+		},
+		{
+			name:              "unrelated then consumer",
+			source:            `index=gradethis | bin metric span=10 AS band | where severity>=2 | where band>=20`,
+			wantFenceStage:    4,
+			wantBoundFields:   []string{"band"},
+			forbiddenFenceIDs: []int{3},
+		},
+		{
+			name:              "durable across a second consumer",
+			source:            `index=gradethis | bin metric span=10 AS band | where band>=20 | where band<100`,
+			wantFenceStage:    3,
+			wantBoundFields:   []string{"band"},
+			forbiddenFenceIDs: []int{4},
+		},
+		{
+			name:            "both calculated inputs",
+			source:          `index=gradethis | bin left span=10 AS a | bin right span=7 AS b | where a>=20 AND b<100`,
+			wantFenceStage:  4,
+			wantBoundFields: []string{"a", "b"},
+		},
+		{
+			name:            "tonumber dependency",
+			source:          `index=gradethis | bin metric span=10 AS band | eval number=tonumber(band) | where number>=20`,
+			wantFenceStage:  4,
+			wantBoundFields: []string{"number"},
+		},
+		{
+			name: "fixed rebin dependency",
+			source: `index=gradethis | bin metric span=10 AS band | eval number=tonumber(band)` +
+				` | bin number span=7 AS second | where second>=20`,
+			wantFenceStage:  5,
+			wantBoundFields: []string{"second"},
+		},
+		{
+			name:            "replace dependency",
+			source:          `index=gradethis | bin metric span=10 AS band | eval text=replace(band,"0","x") | where text="2x"`,
+			wantFenceStage:  4,
+			wantBoundFields: []string{"text"},
+		},
+		{
+			name:            "rex fallback dependency",
+			source:          `index=gradethis | bin metric span=10 AS band | rex field=_raw "value=(?<band>[0-9]+)" | where band>=20`,
+			wantFenceStage:  5,
+			wantBoundFields: []string{"band"},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			compiled := compileSPL(t, test.source)
+			if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
+				t.Fatalf("scoped storage scan occurs %d times, want once:\n%s", got, compiled.SQL)
+			}
+			if got := strings.Count(compiled.SQL, "?"); got != len(compiled.Args) {
+				t.Fatalf("placeholder count = %d, args = %d", got, len(compiled.Args))
+			}
+
+			wantFences := 0
+			if test.wantFenceStage != 0 {
+				wantFences = 1
+			}
+			if got := strings.Count(compiled.SQL, " AS MATERIALIZED ("); got != wantFences {
+				t.Fatalf("materialized analyzer fences = %d, want %d:\n%s", got, wantFences, compiled.SQL)
+			}
+			if got := strings.Count(compiled.SQL, materializedCTESettingsSQL); got != wantFences {
+				t.Fatalf("materialized CTE settings = %d, want %d:\n%s", got, wantFences, compiled.SQL)
+			}
+			if got := strings.Count(compiled.SQL, " ARRAY JOIN "); got != wantFences {
+				t.Fatalf("predicate row bindings = %d, want %d:\n%s", got, wantFences, compiled.SQL)
+			}
+			for _, stage := range test.forbiddenFenceIDs {
+				if strings.Contains(compiled.SQL, fmt.Sprintf(`"__os_filter_input_%d"`, stage)) {
+					t.Fatalf("unexpected stage-%d analyzer fence:\n%s", stage, compiled.SQL)
+				}
+			}
+			if wantFences == 0 {
+				return
+			}
+
+			input := quoteIdentifier(fmt.Sprintf("__os_filter_input_%d", test.wantFenceStage))
+			if !strings.Contains(compiled.SQL, "WITH "+input+" AS MATERIALIZED (") {
+				t.Fatalf("missing stage-%d materialized input:\n%s", test.wantFenceStage, compiled.SQL)
+			}
+			for index, name := range test.wantBoundFields {
+				bound := quoteIdentifier(fmt.Sprintf(
+					"__os_filter_bound_%d_%d",
+					test.wantFenceStage,
+					index+1,
+				))
+				public := quoteIdentifier(name)
+				if !strings.Contains(compiled.SQL, bound+" AS "+public) {
+					t.Fatalf("missing durable %s replacement for %s:\n%s", bound, public, compiled.SQL)
+				}
+				if !strings.Contains(compiled.SQL, "] AS "+bound) {
+					t.Fatalf("missing singleton binding for %s:\n%s", bound, compiled.SQL)
+				}
+			}
+		})
+	}
+}
+
+func TestBinEdgeDistinctCalculatedPredicatesUseNestedScopedFences(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis
+		| bin left span=10 AS a
+		| bin right span=7 AS b
+		| where a>=20
+		| where b<100`,
+	)
+	for _, required := range []string{
+		`WITH "__os_filter_input_4" AS MATERIALIZED (`,
+		`"__os_filter_bound_4_1" AS "a"`,
+		`WITH "__os_filter_input_5" AS MATERIALIZED (`,
+		`"__os_filter_bound_5_1" AS "b"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("nested calculated predicate SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	for fragment, want := range map[string]int{
+		`FROM "open_splunk"."events"`: 1,
+		` AS MATERIALIZED (`:          2,
+		` ARRAY JOIN `:                2,
+		materializedCTESettingsSQL:    2,
+	} {
+		if got := strings.Count(compiled.SQL, fragment); got != want {
+			t.Fatalf("%q count = %d, want %d:\n%s", fragment, got, want, compiled.SQL)
+		}
+	}
+	if got := strings.Count(compiled.SQL, "?"); got != len(compiled.Args) {
+		t.Fatalf("placeholder count = %d, args = %d", got, len(compiled.Args))
 	}
 }
 
@@ -441,8 +608,8 @@ func TestBinEdgeBinnedOutputStaysVisibleToNumericPredicates(t *testing.T) {
 			t.Parallel()
 			compiled := compileSPL(t, test.source)
 			for _, required := range []string{
-				`dynamicType("band")`,
-				`accurateCastOrNull(toString("band"), 'Int256')`,
+				`dynamicType("__os_filter_bound_3_1")`,
+				`accurateCastOrNull(toString("__os_filter_bound_3_1"), 'Int256')`,
 			} {
 				if !strings.Contains(compiled.SQL, required) {
 					t.Fatalf("numeric predicate over a bucket is missing %q:\n%s", required, compiled.SQL)

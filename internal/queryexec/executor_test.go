@@ -1032,7 +1032,8 @@ func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	}
 	for _, name := range []string{
 		"readonly", "max_execution_time", "max_memory_usage", "max_rows_to_read", "max_bytes_to_read",
-		"max_result_rows", "max_result_bytes", "max_rows_to_group_by", "max_threads", "max_query_size", "enable_materialized_cte",
+		"max_result_rows", "max_result_bytes", "max_rows_to_group_by", "max_threads", "max_query_size",
+		"max_subquery_depth", "enable_materialized_cte",
 		"short_circuit_function_evaluation",
 	} {
 		if _, exists := settings[name]; !exists {
@@ -1048,6 +1049,13 @@ func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	}
 	if settings["max_query_size"] != defaultMaxQueryBytes {
 		t.Fatalf("default query cap = %v, want %d", settings["max_query_size"], defaultMaxQueryBytes)
+	}
+	if settings["max_subquery_depth"] != defaultMaxSubqueryDepth {
+		t.Fatalf(
+			"subquery depth setting = %v, want %d",
+			settings["max_subquery_depth"],
+			defaultMaxSubqueryDepth,
+		)
 	}
 	if settings["enable_materialized_cte"] != uint8(1) {
 		t.Fatalf("materialized CTE setting = %v, want 1", settings["enable_materialized_cte"])
@@ -1152,6 +1160,11 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 	tooManyGroups := &clickhousedriver.Exception{Code: 158, Name: "TOO_MANY_ROWS", Message: "secret query detail"}
 	if err := classifyQueryError(context.Background(), tooManyGroups); !errors.Is(err, searchjobs.ErrExecutionLimit) || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("group cap error = %v", err)
+	}
+	tooDeep := &clickhousedriver.Exception{Code: 162, Name: "TOO_DEEP_SUBQUERIES", Message: "secret generated SQL"}
+	if err := classifyQueryError(context.Background(), tooDeep); !errors.Is(err, searchjobs.ErrExecutionLimit) ||
+		strings.Contains(err.Error(), "secret") {
+		t.Fatalf("subquery-depth error = %v", err)
 	}
 	for _, marker := range []string{
 		clickhouse.UnsupportedStatsByValueMarker,

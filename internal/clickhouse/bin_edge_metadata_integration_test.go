@@ -553,6 +553,24 @@ func TestBinEdgeMetadataAgainstClickHouse(t *testing.T) {
 	})
 
 	t.Run("bin output feeds field summaries and timelines", func(t *testing.T) {
+		// Keep this as an analyzer-resource regression, not only a value test.
+		// Predicate pushdown through the exact Dynamic bin projection once made
+		// this tiny fixture consume roughly 6.7 GiB during analysis.
+		boundedAnalysisContext := func(maximumMemory uint64) context.Context {
+			return clickhousedriver.Context(
+				ctx,
+				clickhousedriver.WithSettings(clickhousedriver.Settings{
+					"max_execution_time":                uint64(15),
+					"timeout_overflow_mode":             "throw",
+					"max_memory_usage":                  maximumMemory,
+					"max_threads":                       uint64(1),
+					"max_subquery_depth":                uint64(100),
+					"max_query_size":                    uint64(1 << 20),
+					"enable_materialized_cte":           uint8(1),
+					"short_circuit_function_evaluation": "enable",
+				}),
+			)
+		}
 		logical := build(t, `index=compiler | bin edge_src span=10 AS edge_dst`)
 		summary, err := (Compiler{}).CompileFieldSummary(logical, FieldSummarySpec{
 			FieldName:             "edge_dst",
@@ -574,9 +592,18 @@ func TestBinEdgeMetadataAgainstClickHouse(t *testing.T) {
 		var summaryRows uint64
 		var summaryInvalid, summaryUnsupported uint8
 		var encoded []string
-		if err := connection.QueryRow(ctx, control, summary.Args...).Scan(
+		// The production executor allows 1 GiB; 512 MiB keeps this separate
+		// field-summary assertion bounded without conflating it with the
+		// 256 MiB predicate-pushdown regression below.
+		summaryContext, summaryCancel := context.WithTimeout(
+			boundedAnalysisContext(uint64(512<<20)),
+			20*time.Second,
+		)
+		err = connection.QueryRow(summaryContext, control, summary.Args...).Scan(
 			&summaryRows, &summaryInvalid, &summaryUnsupported, &encoded,
-		); err != nil {
+		)
+		summaryCancel()
+		if err != nil {
 			t.Fatalf("execute Dynamic bin field summary: %v\nSQL: %s", err, summary.SQL)
 		}
 		wantEncoded := []string{
@@ -589,6 +616,28 @@ func TestBinEdgeMetadataAgainstClickHouse(t *testing.T) {
 				"Dynamic bin field summary = rows:%d invalid:%d unsupported:%d values:%#v, want values %#v",
 				summaryRows, summaryInvalid, summaryUnsupported, encoded, wantEncoded,
 			)
+		}
+
+		ordinary := compile(
+			t,
+			`index=compiler | bin edge_src span=10 AS edge_dst | where edge_dst>=7 | table event_id`,
+		)
+		var ordinaryCount uint64
+		ordinaryContext, ordinaryCancel := context.WithTimeout(
+			boundedAnalysisContext(uint64(256<<20)),
+			20*time.Second,
+		)
+		err = connection.QueryRow(
+			ordinaryContext,
+			`SELECT count() FROM (`+ordinary.SQL+`)`,
+			ordinary.Args...,
+		).Scan(&ordinaryCount)
+		ordinaryCancel()
+		if err != nil {
+			t.Fatalf("execute bounded Dynamic bin predicate: %v\nSQL: %s", err, ordinary.SQL)
+		}
+		if ordinaryCount != 2 {
+			t.Fatalf("bounded Dynamic bin predicate count = %d, want 2", ordinaryCount)
 		}
 
 		timeline, err := (Compiler{}).CompileTimeline(
@@ -605,10 +654,16 @@ func TestBinEdgeMetadataAgainstClickHouse(t *testing.T) {
 			t.Fatalf("CompileTimeline: %v", err)
 		}
 		var buckets, counted uint64
-		if err := connection.QueryRow(ctx,
+		timelineContext, timelineCancel := context.WithTimeout(
+			boundedAnalysisContext(uint64(256<<20)),
+			20*time.Second,
+		)
+		err = connection.QueryRow(timelineContext,
 			`SELECT count(), sum(`+quoteIdentifier(TimelineCountColumn)+`) FROM (`+timeline.SQL+`)`,
 			timeline.Args...,
-		).Scan(&buckets, &counted); err != nil {
+		).Scan(&buckets, &counted)
+		timelineCancel()
+		if err != nil {
 			t.Fatalf("execute Dynamic bin timeline: %v\nSQL: %s", err, timeline.SQL)
 		}
 		// Only the preserved 7 and the bucketed numeric text 20 clear the

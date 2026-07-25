@@ -2,7 +2,7 @@
 
 **Status:** executable implementation contract
 **Compatibility version:** `0.1`
-**Last updated:** July 24, 2026
+**Last updated:** July 25, 2026
 
 Open Splunk accepts only the syntax and behavior described here. Unsupported
 commands or forms fail with a source-located diagnostic; the compiler never
@@ -27,10 +27,12 @@ Exceeding a general structural limit returns the source-located
 `dedup` arity is reported as `SPL_UNSUPPORTED_DEDUP_SYNTAX`. Dynamic field
 paths align with ingestion's ceiling: 17 dotted segments and 256 unescaped
 UTF-8 bytes per segment. Generated ClickHouse SQL is additionally capped at
-256 KiB; exceeding that internal expansion budget returns the same diagnostic.
-The executor applies a 1 MiB ClickHouse `max_query_size` ceiling after bound
-arguments are expanded, in addition to its time, memory, scan, group, and
-result budgets.
+256 KiB. Its longest generated `SELECT`/`UNION` dependency path is capped at
+96 relational levels; independent sibling branches do not add to that path.
+Exceeding either internal expansion budget returns the same diagnostic. The
+executor also pins ClickHouse's independently measured `max_subquery_depth`
+to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
+expanded, in addition to its time, memory, scan, group, and result budgets.
 
 ## Search time range
 

@@ -156,6 +156,14 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 	sql.WriteString(ordinal)
 	sql.WriteString(" ASC")
 
+	sourceDepth := relationalNodeDepth(ordinary.relationalDepth)
+	preparedDepth := relationalNodeDepth(sourceDepth)
+	countsDepth := relationalNodeDepth(preparedDepth)
+	gridDepth := relationalNodeDepth()
+	resultDepth := relationalNodeDepth(gridDepth, countsDepth)
+	if err := validateRelationalDepth(resultDepth, scan.Range); err != nil {
+		return CompiledTimeline{}, err
+	}
 	if sql.Len() > maxCompiledQueryBytes {
 		return CompiledTimeline{}, &plan.Diagnostic{
 			Code:    "SPL_QUERY_TOO_COMPLEX",

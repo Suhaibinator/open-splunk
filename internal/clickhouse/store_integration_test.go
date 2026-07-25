@@ -1790,10 +1790,10 @@ func testNumericBinAgainstClickHouse(
 				wantType: "UInt64", wantValue: "18446744073709551610",
 			},
 			{
-				// The exact bucket start is unrepresentable, so the text is
-				// kept instead of being approximated into a wrong number.
-				name: "unrepresentable integer string keeps its text", eventID: "n-one", field: "bin_string_underflow",
-				wantType: "String", wantValue: "-9223372036854775808",
+				// The exact bucket start is below Int64 but remains exactly
+				// representable by the public Decimal/Int256 path.
+				name: "wide negative integer string becomes exact decimal", eventID: "n-one", field: "bin_string_underflow",
+				wantType: "Int256", wantValue: "-9223372036854775810",
 			},
 			{
 				name: "nonfinite string keeps its text", eventID: "n-one", field: "bin_string_nonfinite",
@@ -1951,8 +1951,25 @@ func testNumericBinAgainstClickHouse(
 			})
 		}
 
+		decimal := compileIntegrationSPL(
+			t,
+			`index=compiler event_id=n-complex | bin decimal_value span=10 AS band | table band`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		var decimalType, decimalValue string
+		if err := connection.QueryRow(
+			ctx,
+			`SELECT dynamicType(band), toString(band) FROM (`+decimal.SQL+`)`,
+			decimal.Args...,
+		).Scan(&decimalType, &decimalValue); err != nil {
+			t.Fatalf("execute exact Decimal bin: %v\nSQL: %s\nargs: %#v", err, decimal.SQL, decimal.Args)
+		}
+		if decimalType != "Int256" || decimalValue != "120" {
+			t.Fatalf("exact Decimal bin = %s/%q, want Int256/120", decimalType, decimalValue)
+		}
+
 		for _, field := range []string{
-			"decimal_value",
 			"multi",
 			"object_value",
 			"object_parent",

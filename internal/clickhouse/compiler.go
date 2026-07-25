@@ -13,6 +13,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
 )
 
@@ -48,6 +49,7 @@ const (
 	// a query-local ceiling.
 	MaximumRexCapturedBytesPerRow = 4 << 20
 	maxCompiledQueryBytes         = 256 << 10
+	maxCompiledAssignments        = 64
 	maxTimechartLabelBytes        = 256
 	// maxChartRowValues bounds the chart pivot's runtime row axis. It is a
 	// deliberate resource policy rather than Splunk's configurable
@@ -115,6 +117,13 @@ type CompiledQuery struct {
 	OutputFields []string
 	Timechart    *TimechartOutput
 	Chart        *ChartOutput
+
+	// relationalDepth is compiler evidence, not part of the execution
+	// contract. Keeping it private prevents callers from treating the guard as
+	// a tunable query option while allowing terminal analysis compilers to
+	// extend an already validated event relation without reparsing SQL.
+	relationalDepth      int
+	relationalDepthRange spl.Range
 }
 
 // ChartOutput describes the bounded runtime-wide pivot contract. Both axes are
@@ -146,7 +155,7 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 }
 
 type queryFinalizer func(
-	fragment string,
+	relation compiledRelation,
 	state compileState,
 	args []any,
 	scan *plan.Scan,
@@ -195,6 +204,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	relation := newScanRelation(fragment, scan.Range)
 
 	aliasSequence := 0
 	remainingOperators := query.Operators[1:]
@@ -206,36 +216,72 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 		alias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 		switch operator := operator.(type) {
 		case *plan.Filter:
-			predicate, predicateArgs, compileErr := compileExpression(operator.Expression, state)
+			materializedFields := predicateMaterializationFields(operator.Expression, state)
+			predicateState := state
+			nextState := state
+			var excludedColumns, replacements, bindings []string
+			if len(materializedFields) > 0 {
+				predicateState, nextState, excludedColumns, replacements, bindings = bindMaterializedPredicateFields(
+					state,
+					materializedFields,
+					aliasSequence,
+				)
+			}
+			predicate, predicateArgs, compileErr := compileExpression(operator.Expression, predicateState)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			fragment = "SELECT * FROM (" + fragment + ") AS " + alias + " WHERE " + predicate
+			filterSQL := "SELECT * FROM (" + relation.sql + ") AS " + alias + " WHERE " + predicate
+			if len(materializedFields) > 0 {
+				materialized := quoteIdentifier(fmt.Sprintf("__os_filter_input_%d", aliasSequence))
+				filterSQL = "WITH " + materialized + " AS MATERIALIZED (" + relation.sql + ") " +
+					"SELECT * EXCEPT (" + strings.Join(excludedColumns, ", ") + ") REPLACE (" +
+					strings.Join(replacements, ", ") + ") FROM " + materialized + " AS " +
+					alias + " ARRAY JOIN " +
+					strings.Join(bindings, ", ") + " WHERE " + predicate +
+					materializedCTESettingsSQL
+			}
+			relation = relation.selectFrom(filterSQL, operator.Range)
 			args = append(args, predicateArgs...)
+			state = nextState
 		case *plan.Project:
 			projection, nextState, projectionArgs, compileErr := compileProjection(operator, state)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + alias
+			relation = relation.selectFrom(
+				"SELECT "+strings.Join(projection, ", ")+" FROM ("+relation.sql+") AS "+alias,
+				operator.Range,
+			)
 			args = append(args, projectionArgs...)
 			state = nextState
 		case *plan.Extend:
 			if len(operator.Assignments) == 0 {
 				return CompiledQuery{}, errors.New("compile ClickHouse extend: no assignments")
 			}
+			if len(operator.Assignments) > maxCompiledAssignments {
+				return CompiledQuery{}, &plan.Diagnostic{
+					Code:    "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf("eval contains more than %d assignments", maxCompiledAssignments),
+					Range:   operator.Range,
+				}
+			}
 			for index, assignment := range operator.Assignments {
 				value, compileErr := compileScalarValue(assignment.Expression, state)
 				if compileErr != nil {
 					return CompiledQuery{}, compileErr
 				}
-				fragment = upsertFieldProjectionSQL(
-					fragment,
+				nextSQL := upsertFieldProjectionSQL(
+					relation.sql,
 					state,
 					assignment.Output.Name,
 					value.valueSQL,
 					alias,
 				)
+				relation = relation.selectFrom(nextSQL, operator.Range)
+				if err := validateRelationalDepth(relation.depth, relation.ownerRange); err != nil {
+					return CompiledQuery{}, err
+				}
 				// Extend is emitted in an outer SELECT, so its placeholders occur
 				// before every placeholder already present in the nested fragment.
 				// Sequential assignments add another outer SELECT and therefore
@@ -249,7 +295,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			}
 		case *plan.TimeBucket:
 			bucketed, nextState, prefixArgs, compileErr := compileTimeBucket(
-				fragment,
+				relation,
 				state,
 				scan,
 				operator,
@@ -258,12 +304,12 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			fragment = bucketed
+			relation = bucketed
 			args = prependArguments(prefixArgs, args)
 			state = nextState
 		case *plan.NumericBucket:
 			bucketed, nextState, prefixArgs, compileErr := compileNumericBucket(
-				fragment,
+				relation,
 				state,
 				operator,
 				alias,
@@ -272,12 +318,12 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			fragment = bucketed
+			relation = bucketed
 			args = prependArguments(prefixArgs, args)
 			state = nextState
 		case *plan.Extract:
 			extracted, nextState, prefixArgs, additionalAliases, compileErr := compileExtract(
-				fragment,
+				relation,
 				operator,
 				state,
 				aliasSequence,
@@ -285,13 +331,20 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			fragment = extracted
+			relation = extracted
 			args = prependArguments(prefixArgs, args)
 			state = nextState
 			aliasSequence += additionalAliases
 		case *plan.Rename:
 			if len(operator.Assignments) == 0 {
 				return CompiledQuery{}, errors.New("compile ClickHouse rename: no assignments")
+			}
+			if len(operator.Assignments) > maxCompiledAssignments {
+				return CompiledQuery{}, &plan.Diagnostic{
+					Code:    "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf("rename contains more than %d assignments", maxCompiledAssignments),
+					Range:   operator.Range,
+				}
 			}
 			seenSources := make(map[string]struct{}, len(operator.Assignments))
 			seenDestinations := make(map[string]struct{}, len(operator.Assignments))
@@ -317,7 +370,13 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				}
 				state = nextState
 				if changed {
-					fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + alias
+					relation = relation.selectFrom(
+						"SELECT "+strings.Join(projection, ", ")+" FROM ("+relation.sql+") AS "+alias,
+						operator.Range,
+					)
+					if err := validateRelationalDepth(relation.depth, relation.ownerRange); err != nil {
+						return CompiledQuery{}, err
+					}
 				}
 			}
 		case *plan.Aggregate:
@@ -329,7 +388,10 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				// Materialize whole-input validation windows before filtering incomplete
 				// group tuples. Otherwise a missing sibling key could hide an
 				// unsupported container value.
-				fragment = "SELECT *, " + strings.Join(nextState.preAggregateValidationColumns, ", ") + " FROM (" + fragment + ") AS " + alias
+				relation = relation.selectFrom(
+					"SELECT *, "+strings.Join(nextState.preAggregateValidationColumns, ", ")+" FROM ("+relation.sql+") AS "+alias,
+					operator.Range,
+				)
 				args = prependArguments(nextState.preAggregateValidationArgs, args)
 				aliasSequence++
 				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
@@ -339,24 +401,31 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			if len(predicates) > 0 {
 				// Keep validation and missing/null elimination in a distinct
 				// pre-aggregation scope after whole-input flags are materialized.
-				fragment = "SELECT * FROM (" + fragment + ") AS " + alias + " WHERE " + strings.Join(predicates, " AND ")
+				relation = relation.selectFrom(
+					"SELECT * FROM ("+relation.sql+") AS "+alias+" WHERE "+strings.Join(predicates, " AND "),
+					operator.Range,
+				)
 				aliasSequence++
 				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 			}
 			if len(nextState.preAggregateColumns) > 0 {
 				// Materialize grouping keys and numeric measure inputs only after
 				// sparse group tuples have been discarded.
-				fragment = "SELECT *, " + strings.Join(nextState.preAggregateColumns, ", ") + " FROM (" + fragment + ") AS " + alias
+				relation = relation.selectFrom(
+					"SELECT *, "+strings.Join(nextState.preAggregateColumns, ", ")+" FROM ("+relation.sql+") AS "+alias,
+					operator.Range,
+				)
 				args = prependArguments(nextState.preAggregateArgs, args)
 				aliasSequence++
 				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 				nextState.preAggregateColumns = nil
 				nextState.preAggregateArgs = nil
 			}
-			fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + alias
+			aggregateSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql + ") AS " + alias
 			if len(groups) > 0 {
-				fragment += " GROUP BY " + strings.Join(groups, ", ")
+				aggregateSQL += " GROUP BY " + strings.Join(groups, ", ")
 			}
+			relation = relation.selectFrom(aggregateSQL, operator.Range)
 			args = append(args, aggregateArgs...)
 			state = nextState
 		case *plan.Timechart:
@@ -366,8 +435,11 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			if operatorIndex+1 != len(remainingOperators) {
 				return CompiledQuery{}, errors.New("compile ClickHouse timechart: operator must be terminal")
 			}
-			compiled, compileErr := compileTimechart(fragment, state, args, operator, query.DynamicOutput, alias)
+			compiled, compileErr := compileTimechart(relation, state, args, operator, query.DynamicOutput, alias)
 			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			if compileErr = validateCompiledRelationalDepth(compiled); compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
 			if len(compiled.SQL) > maxCompiledQueryBytes {
@@ -385,8 +457,11 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			if operatorIndex+1 != len(remainingOperators) {
 				return CompiledQuery{}, errors.New("compile ClickHouse chart: operator must be terminal")
 			}
-			compiled, compileErr := compileChart(fragment, state, args, operator, query.DynamicOutput, alias)
+			compiled, compileErr := compileChart(relation, state, args, operator, query.DynamicOutput, alias)
 			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			if compileErr = validateCompiledRelationalDepth(compiled); compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
 			if len(compiled.SQL) > maxCompiledQueryBytes {
@@ -402,25 +477,29 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			fragment = "SELECT *, " + expression + " AS " + quoteIdentifier(operator.Output) + " FROM (" + fragment + ") AS " + alias
+			relation = relation.selectFrom(
+				"SELECT *, "+expression+" AS "+quoteIdentifier(operator.Output)+" FROM ("+relation.sql+") AS "+alias,
+				operator.Range,
+			)
 			state = nextState
 		case *plan.Sort:
 			materialized, sortKeys, order, compileErr := compileSort(operator.Keys, state, aliasSequence)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			fragment = "SELECT *, " + strings.Join(materialized, ", ") + " FROM (" + fragment + ") AS " + alias + " ORDER BY " + order
+			sortSQL := "SELECT *, " + strings.Join(materialized, ", ") + " FROM (" + relation.sql + ") AS " + alias + " ORDER BY " + order
 			if operator.Limit > 0 {
-				fragment += " LIMIT ?"
+				sortSQL += " LIMIT ?"
 				args = append(args, operator.Limit)
 			}
+			relation = relation.selectFrom(sortSQL, operator.Range)
 			state.order = sortKeys
 		case *plan.Deduplicate:
-			deduplicated, prefixArgs, currentOrder, additionalAliases, compileErr := compileDeduplicate(fragment, operator, state, aliasSequence)
+			deduplicated, prefixArgs, currentOrder, additionalAliases, compileErr := compileDeduplicate(relation, operator, state, aliasSequence)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			fragment = deduplicated
+			relation = deduplicated
 			args = prependArguments(prefixArgs, args)
 			args = append(args, operator.Count)
 			state.order = currentOrder
@@ -435,7 +514,10 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				if compileErr != nil {
 					return CompiledQuery{}, compileErr
 				}
-				fragment = "SELECT * FROM (" + fragment + ") AS " + alias + " ORDER BY " + reversed + " LIMIT ?"
+				relation = relation.selectFrom(
+					"SELECT * FROM ("+relation.sql+") AS "+alias+" ORDER BY "+reversed+" LIMIT ?",
+					operator.Range,
+				)
 				args = append(args, operator.Count)
 				state.order = reverseCompiledSortKeys(keys)
 			} else {
@@ -443,17 +525,26 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				if compileErr != nil {
 					return CompiledQuery{}, compileErr
 				}
-				fragment = "SELECT * FROM (" + fragment + ") AS " + alias + " ORDER BY " + order + " LIMIT ?"
+				relation = relation.selectFrom(
+					"SELECT * FROM ("+relation.sql+") AS "+alias+" ORDER BY "+order+" LIMIT ?",
+					operator.Range,
+				)
 				args = append(args, operator.Count)
 				state.order = append([]compiledSortKey(nil), keys...)
 			}
 		default:
 			return CompiledQuery{}, fmt.Errorf("compile ClickHouse query: unsupported logical operator %T", operator)
 		}
+		if err := validateRelationalDepth(relation.depth, relation.ownerRange); err != nil {
+			return CompiledQuery{}, err
+		}
 	}
 
-	compiled, err := finalize(fragment, state, args, scan, aliasSequence)
+	compiled, err := finalize(relation, state, args, scan, aliasSequence)
 	if err != nil {
+		return CompiledQuery{}, err
+	}
+	if err := validateFinalizedRelationalDepth(relation, compiled); err != nil {
 		return CompiledQuery{}, err
 	}
 	if len(compiled.SQL) > maxCompiledQueryBytes {
@@ -475,7 +566,7 @@ func isNilPlanOperator(operator plan.Operator) bool {
 }
 
 func finalizeOrdinaryQuery(
-	fragment string,
+	relation compiledRelation,
 	state compileState,
 	args []any,
 	scan *plan.Scan,
@@ -486,7 +577,7 @@ func finalizeOrdinaryQuery(
 		return CompiledQuery{}, err
 	}
 	aliasSequence++
-	fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+	fragment := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 	finalOrder := defaultCompiledOrder(state)
 	if len(finalOrder) > 0 {
 		order, orderErr := compileMaterializedOrder(finalOrder, false)
@@ -495,7 +586,12 @@ func finalizeOrdinaryQuery(
 		}
 		fragment += " ORDER BY " + order
 	}
-	return CompiledQuery{SQL: fragment, Args: args, OutputFields: outputFields}, nil
+	relation = relation.selectFrom(fragment, relation.ownerRange)
+	return withCompiledRelationalDepth(
+		CompiledQuery{SQL: relation.sql, Args: args, OutputFields: outputFields},
+		relation.depth,
+		relation.ownerRange,
+	), nil
 }
 
 func prependArguments(prefix, existing []any) []any {
@@ -508,29 +604,29 @@ func prependArguments(prefix, existing []any) []any {
 }
 
 func compileTimeBucket(
-	fragment string,
+	relation compiledRelation,
 	state compileState,
 	scan *plan.Scan,
 	operator *plan.TimeBucket,
 	alias string,
-) (string, compileState, []any, error) {
+) (compiledRelation, compileState, []any, error) {
 	if operator == nil {
-		return "", compileState{}, nil, errors.New("compile ClickHouse time bucket: operator is nil")
+		return compiledRelation{}, compileState{}, nil, errors.New("compile ClickHouse time bucket: operator is nil")
 	}
 	if err := validateCanonicalFieldRef("time bucket", "input", operator.Field); err != nil {
-		return "", compileState{}, nil, err
+		return compiledRelation{}, compileState{}, nil, err
 	}
 	if err := validateCanonicalFieldRef("time bucket", "output", operator.Output); err != nil {
-		return "", compileState{}, nil, err
+		return compiledRelation{}, compileState{}, nil, err
 	}
 	if operator.Field.Name != "_time" || !operator.Field.Canonical {
-		return "", compileState{}, nil, errors.New("compile ClickHouse time bucket: canonical _time field is required")
+		return compiledRelation{}, compileState{}, nil, errors.New("compile ClickHouse time bucket: canonical _time field is required")
 	}
 	if operator.Span < time.Second || operator.Span >= 24*time.Hour || operator.Span%time.Second != 0 {
-		return "", compileState{}, nil, errors.New("compile ClickHouse time bucket: fixed span must be at least one second and shorter than 24 hours")
+		return compiledRelation{}, compileState{}, nil, errors.New("compile ClickHouse time bucket: fixed span must be at least one second and shorter than 24 hours")
 	}
 	if !state.eventRows {
-		return "", compileState{}, nil, &plan.Diagnostic{
+		return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
 			Code:    "SPL_UNSUPPORTED_BIN_INPUT",
 			Message: "bin requires source event rows",
 			Range:   operator.Range,
@@ -538,10 +634,10 @@ func compileTimeBucket(
 	}
 	field, ok, err := resolveCompiledField(operator.Field, state)
 	if err != nil {
-		return "", compileState{}, nil, err
+		return compiledRelation{}, compileState{}, nil, err
 	}
 	if !ok || field.kind != fieldKindTime || !field.canonicalTime {
-		return "", compileState{}, nil, &plan.Diagnostic{
+		return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
 			Code:        "SPL_UNSUPPORTED_BIN_TIME_FIELD",
 			Message:     "bin requires the unmodified canonical _time field",
 			Range:       operator.Range,
@@ -549,12 +645,12 @@ func compileTimeBucket(
 		}
 	}
 	if scan == nil || !SupportsSearchTimeRange(scan.Earliest, scan.Latest) {
-		return "", compileState{}, nil, errors.New("compile ClickHouse time bucket: scan range is invalid")
+		return compiledRelation{}, compileState{}, nil, errors.New("compile ClickHouse time bucket: scan range is invalid")
 	}
 	spanNanoseconds := int64(operator.Span)
 	firstBucketTicks := floorBucketTicks(scan.Earliest.UnixNano(), spanNanoseconds)
 	if firstBucketTicks < MinimumSearchTime().UnixNano() {
-		return "", compileState{}, nil, &plan.Diagnostic{
+		return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
 			Code:    "SPL_UNSUPPORTED_BIN_TIME_RANGE",
 			Message: "the first epoch-aligned bin falls before the supported timestamp range",
 			Range:   operator.Range,
@@ -568,45 +664,46 @@ func compileTimeBucket(
 	ticks := "reinterpretAsInt64(" + field.valueSQL + ")"
 	bucketTicks := "(" + epochFloorBucketNumberSQL(ticks) + ") * ?"
 	value := "fromUnixTimestamp64Nano(" + bucketTicks + ", 'UTC')"
-	fragment, next := compileBucketProjection(fragment, state, operator.Field.Name, operator.Output, value, field, alias)
-	return fragment, next, []any{spanNanoseconds, spanNanoseconds, spanNanoseconds}, nil
+	fragment, next := compileBucketProjection(relation.sql, state, operator.Field.Name, operator.Output, value, field, alias)
+	relation = relation.selectFrom(fragment, operator.Range)
+	return relation, next, []any{spanNanoseconds, spanNanoseconds, spanNanoseconds}, nil
 }
 
 func compileNumericBucket(
-	fragment string,
+	relation compiledRelation,
 	state compileState,
 	operator *plan.NumericBucket,
 	alias string,
 	stage int,
-) (string, compileState, []any, error) {
+) (compiledRelation, compileState, []any, error) {
 	if operator == nil {
-		return "", compileState{}, nil, errors.New("compile ClickHouse numeric bucket: operator is nil")
+		return compiledRelation{}, compileState{}, nil, errors.New("compile ClickHouse numeric bucket: operator is nil")
 	}
 	if err := validateCanonicalFieldRef("numeric bucket", "input", operator.Input); err != nil {
-		return "", compileState{}, nil, err
+		return compiledRelation{}, compileState{}, nil, err
 	}
 	if err := validateCanonicalFieldRef("numeric bucket", "output", operator.Output); err != nil {
-		return "", compileState{}, nil, err
+		return compiledRelation{}, compileState{}, nil, err
 	}
 	if operator.Span == 0 || operator.Span > plan.MaximumNumericBinSpan {
-		return "", compileState{}, nil, errors.New("compile ClickHouse numeric bucket: span must be between 1 and 2^53-1")
+		return compiledRelation{}, compileState{}, nil, errors.New("compile ClickHouse numeric bucket: span must be between 1 and 2^53-1")
 	}
 	if operator.Input.Name == "_time" && operator.Input.Canonical {
-		return "", compileState{}, nil, errors.New("compile ClickHouse numeric bucket: canonical _time cannot be a numeric input")
+		return compiledRelation{}, compileState{}, nil, errors.New("compile ClickHouse numeric bucket: canonical _time cannot be a numeric input")
 	}
 
 	field, ok, err := resolveCompiledField(operator.Input, state)
 	if err != nil {
-		return "", compileState{}, nil, err
+		return compiledRelation{}, compileState{}, nil, err
 	}
 	if !ok {
-		return "", compileState{}, nil, unsupportedNumericBinFieldType(operator)
+		return compiledRelation{}, compileState{}, nil, unsupportedNumericBinFieldType(operator)
 	}
 	if field.kind == fieldKindDynamic {
-		return compileDynamicNumericBucket(fragment, state, operator, field, alias, stage)
+		return compileDynamicNumericBucket(relation, state, operator, field, alias, stage)
 	}
 	if field.kind != fieldKindNumber {
-		return "", compileState{}, nil, unsupportedNumericBinFieldType(operator)
+		return compiledRelation{}, compileState{}, nil, unsupportedNumericBinFieldType(operator)
 	}
 
 	// WITH expression aliases can be inherited by nested subqueries in
@@ -639,14 +736,15 @@ func compileNumericBucket(
 		normalized := "if(assumeNotNull(" + candidateAlias + ") = toFloat64(0), toFloat64(0), assumeNotNull(" + candidateAlias + "))"
 		valueSQL = guardedNumericBucketSQL(input, candidateAlias, "Float64", finite, normalized)
 	} else {
-		return "", compileState{}, nil, unsupportedNumericBinFieldType(operator)
+		return compiledRelation{}, compileState{}, nil, unsupportedNumericBinFieldType(operator)
 	}
 
-	fragment = "WITH " + spanSQL + " AS " + spanAlias + ", " +
+	fragment := "WITH " + spanSQL + " AS " + spanAlias + ", " +
 		candidateSQL + " AS " + candidateAlias + " " +
-		upsertFieldProjectionSQL(fragment, state, operator.Output.Name, valueSQL, alias)
+		upsertFieldProjectionSQL(relation.sql, state, operator.Output.Name, valueSQL, alias)
+	relation = relation.selectFrom(fragment, operator.Range)
 	next := updateBucketCompileState(state, operator.Input.Name, operator.Output, field)
-	return fragment, next, []any{operator.Span}, nil
+	return relation, next, []any{operator.Span}, nil
 }
 
 type dynamicNumericBinMetadata struct {
@@ -887,13 +985,13 @@ func dynamicNumericBinProjectionLayer(fragment string, stage, layer int, express
 }
 
 func compileDynamicNumericBucket(
-	fragment string,
+	relation compiledRelation,
 	state compileState,
 	operator *plan.NumericBucket,
 	field fieldState,
 	alias string,
 	stage int,
-) (string, compileState, []any, error) {
+) (compiledRelation, compileState, []any, error) {
 	spanAlias := numericBinStageAlias("span", stage)
 	physicalTypeAlias := numericBinStageAlias("physical_type", stage)
 	signedValueAlias := numericBinStageAlias("signed_value", stage)
@@ -930,8 +1028,9 @@ func compileDynamicNumericBucket(
 		bindingBaseAlias := quoteIdentifier(fmt.Sprintf("__os_numeric_bin_bound_base_%d", stage))
 		binding := "arrayJoin([tuple(CAST(" + field.valueSQL + " AS Dynamic), " +
 			"toUInt8(ifNull(" + field.existsSQL + ", 0)), toUInt8(" + field.storedTypeSQL + "))])"
-		fragment = "SELECT *, " + binding + " AS " + inputBindingAlias +
-			" FROM (" + fragment + ") AS " + bindingBaseAlias
+		boundSQL := "SELECT *, " + binding + " AS " + inputBindingAlias +
+			" FROM (" + relation.sql + ") AS " + bindingBaseAlias
+		relation = relation.selectFrom(boundSQL, operator.Range)
 		field.valueSQL = "tupleElement(" + inputBindingAlias + ", 1)"
 		field.dynamicTypeSQL = "dynamicType(" + field.valueSQL + ")"
 		field.existsSQL = "tupleElement(" + inputBindingAlias + ", 2)"
@@ -941,7 +1040,7 @@ func compileDynamicNumericBucket(
 
 	metadata, err := compileDynamicNumericBinMetadata(field, stage)
 	if err != nil {
-		return "", compileState{}, nil, fmt.Errorf(
+		return compiledRelation{}, compileState{}, nil, fmt.Errorf(
 			"compile ClickHouse numeric bucket metadata for %q: %w",
 			operator.Input.Name,
 			err,
@@ -953,7 +1052,7 @@ func compileDynamicNumericBucket(
 	// sparse presence exactly as rex does on no match.
 	previous, previousKnown, err := resolveCompiledField(operator.Output, state)
 	if err != nil {
-		return "", compileState{}, nil, err
+		return compiledRelation{}, compileState{}, nil, err
 	}
 	preserve := previousKnown && operator.Output.Name != operator.Input.Name
 	var (
@@ -967,7 +1066,7 @@ func compileDynamicNumericBucket(
 		previousExistsSQL, previousExistsArgs := knownFieldPresenceSQL(previous)
 		previousTypeSQL, previousTypeArgs, typeErr := knownFieldStoredTypeSQL(previous)
 		if typeErr != nil {
-			return "", compileState{}, nil, fmt.Errorf(
+			return compiledRelation{}, compileState{}, nil, fmt.Errorf(
 				"compile ClickHouse numeric bucket destination type for %q: %w",
 				operator.Output.Name,
 				typeErr,
@@ -1123,15 +1222,17 @@ func compileDynamicNumericBucket(
 	}
 	baseAliases = append(baseAliases, preserveBaseAliases...)
 	baseAlias := quoteIdentifier(fmt.Sprintf("__os_numeric_bin_base_%d", stage))
-	fragment = "WITH " + strings.Join(with, ", ") + " SELECT *, " +
-		strings.Join(baseAliases, ", ") + " FROM (" + fragment + ") AS " + baseAlias
+	baseSQL := "WITH " + strings.Join(with, ", ") + " SELECT *, " +
+		strings.Join(baseAliases, ", ") + " FROM (" + relation.sql + ") AS " + baseAlias
+	relation = relation.selectFrom(baseSQL, operator.Range)
 	privateAliases := append([]string(nil), baseAliases...)
 	if inputBindingAlias != "" {
 		privateAliases = append(privateAliases, inputBindingAlias)
 	}
 	layer := 0
 	for _, expressions := range exact.layers {
-		fragment = dynamicNumericBinProjectionLayer(fragment, stage, layer, expressions)
+		layerSQL := dynamicNumericBinProjectionLayer(relation.sql, stage, layer, expressions)
+		relation = relation.selectFrom(layerSQL, operator.Range)
 		layer++
 	}
 	exactDeadAliases := make([]string, 0, len(exact.privateAliases)-2)
@@ -1141,8 +1242,9 @@ func compileDynamicNumericBucket(
 		}
 	}
 	exactCleanupAlias := quoteIdentifier(fmt.Sprintf("__os_numeric_bin_exact_cleanup_%d", stage))
-	fragment = "SELECT * EXCEPT (" + strings.Join(exactDeadAliases, ", ") + ") FROM (" +
-		fragment + ") AS " + exactCleanupAlias
+	exactCleanupSQL := "SELECT * EXCEPT (" + strings.Join(exactDeadAliases, ", ") + ") FROM (" +
+		relation.sql + ") AS " + exactCleanupAlias
+	relation = relation.selectFrom(exactCleanupSQL, operator.Range)
 	privateAliases = append(privateAliases, exact.sourceModeAlias, exact.candidateAlias)
 
 	exactStringCondition := exact.sourceModeAlias + " = " +
@@ -1160,16 +1262,18 @@ func compileDynamicNumericBucket(
 		integralStringCondition + " AND isNotNull(" + stringUnsignedAlias + "), 2, " +
 		exactFloatStringCondition + ", 3, " +
 		exactStringCondition + ", 4, 0))"
-	fragment = dynamicNumericBinProjectionLayer(fragment, stage, layer, []string{
+	stringCastSQL := dynamicNumericBinProjectionLayer(relation.sql, stage, layer, []string{
 		"accurateCastOrNull(" + exact.candidateAlias + ", 'Int64') AS " + stringSignedAlias,
 		"accurateCastOrNull(" + exact.candidateAlias + ", 'UInt64') AS " + stringUnsignedAlias,
 		"toFloat64(" + exact.candidateAlias + ") AS " + stringCandidateAlias,
 	})
+	relation = relation.selectFrom(stringCastSQL, operator.Range)
 	layer++
 	privateAliases = append(privateAliases, stringSignedAlias, stringUnsignedAlias, stringCandidateAlias)
-	fragment = dynamicNumericBinProjectionLayer(fragment, stage, layer, []string{
+	stringModeSQL := dynamicNumericBinProjectionLayer(relation.sql, stage, layer, []string{
 		stringMode + " AS " + stringModeAlias,
 	})
+	relation = relation.selectFrom(stringModeSQL, operator.Range)
 	layer++
 	privateAliases = append(privateAliases, stringModeAlias)
 	decimalCondition := exact.sourceModeAlias + " = " +
@@ -1183,13 +1287,14 @@ func compileDynamicNumericBucket(
 	// The three admitted envelopes are classified once into a private alias so
 	// the pass-through arm and the unsupported guard below share one
 	// evaluation instead of restating the envelope grammar twice.
-	fragment = dynamicNumericBinProjectionLayer(fragment, stage, layer, []string{
+	extendedSQL := dynamicNumericBinProjectionLayer(relation.sql, stage, layer, []string{
 		"toUInt8(ifNull(" + strings.Join([]string{
 			taggedCondition(eventfields.StoredValueTypeBytes, "bytes/v1", tagged.bytesValid),
 			taggedCondition(eventfields.StoredValueTypeTimestamp, "timestamp/v1", tagged.timestampValid),
 			taggedCondition(eventfields.StoredValueTypeDuration, "duration/v1", tagged.durationValid),
 		}, " OR ") + ", 0)) AS " + extendedAlias,
 	})
+	relation = relation.selectFrom(extendedSQL, operator.Range)
 	layer++
 	privateAliases = append(privateAliases, extendedAlias)
 	extendedCondition := extendedAlias + " != 0"
@@ -1231,11 +1336,12 @@ func compileDynamicNumericBucket(
 		outputExistsSQL = "if(" + metadata.existsAlias + " != 0, 1, " + previousExistsAlias + ")"
 		outputTypeSQL = "if(" + metadata.existsAlias + " != 0, " + bucketTypeSQL + ", " + previousTypeAlias + ")"
 	}
-	fragment = dynamicNumericBinProjectionLayer(fragment, stage, layer, []string{
+	supportedProjectionSQL := dynamicNumericBinProjectionLayer(relation.sql, stage, layer, []string{
 		supportedSQL + " AS " + supportedAlias,
 		"toUInt8(" + outputExistsSQL + ") AS " + outputExistsAlias,
 		"toUInt8(" + outputTypeSQL + ") AS " + outputTypeAlias,
 	})
+	relation = relation.selectFrom(supportedProjectionSQL, operator.Range)
 	layer++
 	privateAliases = append(privateAliases, supportedAlias)
 
@@ -1274,10 +1380,12 @@ func compileDynamicNumericBucket(
 	if _, replacing := state.visible[operator.Output.Name]; replacing {
 		projection = "* REPLACE (" + valueSQL + " AS " + output + ")"
 	}
-	fragment = "SELECT " + projection + " FROM (" + fragment + ") AS " + alias
+	outputSQL := "SELECT " + projection + " FROM (" + relation.sql + ") AS " + alias
+	relation = relation.selectFrom(outputSQL, operator.Range)
 	cleanupAlias := quoteIdentifier(fmt.Sprintf("__os_numeric_bin_cleanup_%d", stage))
-	fragment = "SELECT * EXCEPT (" + strings.Join(privateAliases, ", ") + ") FROM (" +
-		fragment + ") AS " + cleanupAlias
+	cleanupSQL := "SELECT * EXCEPT (" + strings.Join(privateAliases, ", ") + ") FROM (" +
+		relation.sql + ") AS " + cleanupAlias
+	relation = relation.selectFrom(cleanupSQL, operator.Range)
 
 	next := updateDynamicBucketCompileState(
 		state,
@@ -1291,7 +1399,7 @@ func compileDynamicNumericBucket(
 	args = append(args, preserveArgs...)
 	args = append(args, operator.Span)
 	args = append(args, metadata.args...)
-	return fragment, next, args, nil
+	return relation, next, args, nil
 }
 
 func compileDynamicNumericBinMetadata(field fieldState, stage int) (dynamicNumericBinMetadata, error) {
@@ -1499,14 +1607,15 @@ func upsertFieldProjectionSQL(
 func updateBucketCompileState(state compileState, inputName string, output plan.FieldRef, source fieldState) compileState {
 	next := prepareBucketCompileState(state, inputName, output)
 	next.visible[output.Name] = fieldState{
-		valueSQL:      quoteIdentifier(output.Name),
-		existsSQL:     source.existsSQL,
-		existsArgs:    append([]any(nil), source.existsArgs...),
-		kind:          source.kind,
-		numberType:    source.numberType,
-		numericSort:   source.numericSort,
-		canonicalTime: false,
-		caseSensitive: false,
+		valueSQL:                quoteIdentifier(output.Name),
+		existsSQL:               source.existsSQL,
+		existsArgs:              append([]any(nil), source.existsArgs...),
+		kind:                    source.kind,
+		numberType:              source.numberType,
+		numericSort:             source.numericSort,
+		canonicalTime:           false,
+		caseSensitive:           false,
+		materializeForPredicate: source.materializeForPredicate,
 	}
 	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
 	return next
@@ -1527,12 +1636,13 @@ func updateDynamicBucketCompileState(
 	}
 	outputName := quoteIdentifier(output.Name)
 	next.visible[output.Name] = fieldState{
-		valueSQL:       outputName,
-		dynamicTypeSQL: "dynamicType(" + outputName + ")",
-		storedTypeSQL:  typeAlias,
-		existsSQL:      existsAlias,
-		kind:           fieldKindDynamic,
-		caseSensitive:  false,
+		valueSQL:                outputName,
+		dynamicTypeSQL:          "dynamicType(" + outputName + ")",
+		storedTypeSQL:           typeAlias,
+		existsSQL:               existsAlias,
+		kind:                    fieldKindDynamic,
+		caseSensitive:           false,
+		materializeForPredicate: true,
 	}
 	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
 	next.privateColumns = append(next.privateColumns, existsAlias, typeAlias)
@@ -1566,7 +1676,7 @@ func floorBucketTicks(value, span int64) int64 {
 }
 
 func compileTimechart(
-	fragment string,
+	relation compiledRelation,
 	state compileState,
 	args []any,
 	operator *plan.Timechart,
@@ -1691,7 +1801,7 @@ func compileTimechart(
 		strconv.Itoa(maxTimechartLabelBytes) + " AND " + label + " NOT IN ('NULL', 'OTHER')"
 
 	var sql strings.Builder
-	sql.Grow(len(fragment) + 8_192)
+	sql.Grow(len(relation.sql) + 8_192)
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
 	sql.WriteString(" AS (SELECT ")
@@ -1703,7 +1813,7 @@ func compileTimechart(
 		sql.WriteString(", " + q(internalFieldNamesColumn))
 	}
 	sql.WriteString(" FROM (")
-	sql.WriteString(fragment)
+	sql.WriteString(relation.sql)
 	sql.WriteString(") AS " + alias + "), ")
 
 	sql.WriteString(prepared)
@@ -1791,7 +1901,40 @@ func compileTimechart(
 	sql.WriteString(materializedCTESettingsSQL)
 
 	args = appendOrdinalGridArgs(args, spanNanoseconds, firstBucketNumber, operator.BucketCount)
-	return CompiledQuery{
+	sourceDepth := relationalNodeDepth(relation.depth)
+	preparedDepth := relationalNodeDepth(sourceDepth)
+	classifiedDepth := relationalNodeDepth(preparedDepth)
+	canonicalizedDepth := relationalNodeDepth(classifiedDepth)
+	countsDepth := relationalNodeDepth(canonicalizedDepth)
+	topDepth := relationalNodeDepth(countsDepth)
+	topMembershipDepth := relationalNodeDepth(topDepth)
+	collapsedDepth := relationalNodeDepth(countsDepth, topMembershipDepth)
+
+	domainTopBranchDepth := relationalNodeDepth(topDepth)
+	domainNullInputDepth := relationalNodeDepth(countsDepth)
+	domainNullBranchDepth := relationalNodeDepth(domainNullInputDepth)
+	domainOtherInputDepth := relationalNodeDepth(countsDepth, topMembershipDepth)
+	domainOtherBranchDepth := relationalNodeDepth(domainOtherInputDepth)
+	domainRowsDepth := relationalNodeDepth(
+		domainTopBranchDepth,
+		domainNullBranchDepth,
+		domainOtherBranchDepth,
+	)
+	domainDepth := relationalNodeDepth(domainRowsDepth)
+	collisionInputDepth := relationalNodeDepth(countsDepth)
+	collisionsDepth := relationalNodeDepth(collisionInputDepth)
+	bucketMapsDepth := relationalNodeDepth(collapsedDepth)
+	validationDepth := relationalNodeDepth(countsDepth)
+	gridDepth := relationalNodeDepth()
+	resultDepth := relationalNodeDepth(
+		gridDepth,
+		domainDepth,
+		validationDepth,
+		collisionsDepth,
+		bucketMapsDepth,
+	)
+
+	compiled := CompiledQuery{
 		SQL:          sql.String(),
 		Args:         args,
 		OutputFields: slices.Clone(dynamic.FixedFields),
@@ -1802,7 +1945,8 @@ func compileTimechart(
 			MaxSeries:     dynamic.MaxSeries,
 			MaxLabelBytes: maxTimechartLabelBytes,
 		},
-	}, nil
+	}
+	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
 }
 
 // splunkSeriesLabelSQL applies Splunk's leading-underscore VALUE prefix. Series
@@ -1871,7 +2015,7 @@ const materializedCTESettingsSQL = " SETTINGS enable_materialized_cte = 1"
 // never through a scalar subquery, which ClickHouse evaluates during analysis
 // and would therefore re-run the whole scoped scan.
 func compileChart(
-	fragment string,
+	relation compiledRelation,
 	state compileState,
 	args []any,
 	operator *plan.Chart,
@@ -2079,7 +2223,7 @@ func compileChart(
 	}
 
 	var sql strings.Builder
-	sql.Grow(len(fragment) + 8_192)
+	sql.Grow(len(relation.sql) + 8_192)
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
 	sql.WriteString(" AS (SELECT ")
@@ -2095,7 +2239,7 @@ func compileChart(
 		sql.WriteString(", " + q(internalFieldNamesColumn))
 	}
 	sql.WriteString(" FROM (")
-	sql.WriteString(fragment)
+	sql.WriteString(relation.sql)
 	sql.WriteString(") AS " + alias + "), ")
 
 	sql.WriteString(prepared)
@@ -2233,7 +2377,45 @@ func compileChart(
 	sql.WriteString(" ORDER BY " + rowDomain + "." + ordinal + " ASC")
 	sql.WriteString(materializedCTESettingsSQL)
 
-	return CompiledQuery{
+	sourceDepth := relationalNodeDepth(relation.depth)
+	preparedDepth := relationalNodeDepth(sourceDepth)
+	kindedDepth := relationalNodeDepth(preparedDepth)
+	classifiedDepth := relationalNodeDepth(kindedDepth)
+	canonicalizedDepth := relationalNodeDepth(classifiedDepth)
+	labelTotalsDepth := relationalNodeDepth(canonicalizedDepth)
+	topDepth := relationalNodeDepth(labelTotalsDepth)
+	topMembershipDepth := relationalNodeDepth(topDepth)
+	countsDepth := relationalNodeDepth(canonicalizedDepth, topMembershipDepth)
+	collapsedDepth := relationalNodeDepth(countsDepth)
+
+	domainTopBranchDepth := relationalNodeDepth(topDepth)
+	domainNullInputDepth := relationalNodeDepth(labelTotalsDepth)
+	domainNullBranchDepth := relationalNodeDepth(domainNullInputDepth)
+	domainOtherInputDepth := relationalNodeDepth(labelTotalsDepth, topMembershipDepth)
+	domainOtherBranchDepth := relationalNodeDepth(domainOtherInputDepth)
+	domainRowsDepth := relationalNodeDepth(
+		domainTopBranchDepth,
+		domainNullBranchDepth,
+		domainOtherBranchDepth,
+	)
+	domainDepth := relationalNodeDepth(domainRowsDepth)
+	collisionInputDepth := relationalNodeDepth(labelTotalsDepth)
+	collisionsDepth := relationalNodeDepth(collisionInputDepth)
+	columnCheckDepth := relationalNodeDepth(labelTotalsDepth)
+	rowMapsDepth := relationalNodeDepth(collapsedDepth)
+	validationDepth := relationalNodeDepth(countsDepth)
+	rowDomainInputDepth := relationalNodeDepth(countsDepth)
+	rowDomainDepth := relationalNodeDepth(rowDomainInputDepth)
+	resultDepth := relationalNodeDepth(
+		rowDomainDepth,
+		domainDepth,
+		validationDepth,
+		collisionsDepth,
+		columnCheckDepth,
+		rowMapsDepth,
+	)
+
+	compiled := CompiledQuery{
 		SQL:          sql.String(),
 		Args:         args,
 		OutputFields: slices.Clone(dynamic.FixedFields),
@@ -2245,7 +2427,8 @@ func compileChart(
 			MaxSeries:       dynamic.MaxSeries,
 			MaxLabelBytes:   maxTimechartLabelBytes,
 		},
-	}, nil
+	}
+	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
 }
 
 type compileState struct {
@@ -2277,18 +2460,19 @@ const (
 )
 
 type fieldState struct {
-	valueSQL       string
-	dynamicTypeSQL string
-	storedTypeSQL  string
-	existsSQL      string
-	existsArgs     []any
-	descendantSQL  string
-	descendantArgs []any
-	kind           fieldKind
-	caseSensitive  bool
-	numberType     string
-	numericSort    bool
-	canonicalTime  bool
+	valueSQL                string
+	dynamicTypeSQL          string
+	storedTypeSQL           string
+	existsSQL               string
+	existsArgs              []any
+	descendantSQL           string
+	descendantArgs          []any
+	kind                    fieldKind
+	caseSensitive           bool
+	numberType              string
+	numericSort             bool
+	canonicalTime           bool
+	materializeForPredicate bool
 }
 
 type compiledSortKey struct {
@@ -2458,18 +2642,141 @@ func compileExpression(expression plan.Expression, state compileState) (string, 
 	}
 }
 
+// predicateMaterializationFields returns calculated columns that still depend
+// on a complex Dynamic projection and must be row-bound before ClickHouse
+// analyzes this predicate. The server otherwise pushes the predicate through
+// that producer and can expand its expression graph without a practical bound.
+// Preserve first-reference order so generated SQL is deterministic.
+func predicateMaterializationFields(expression plan.Expression, state compileState) []string {
+	var fields []string
+	seen := make(map[string]struct{})
+	add := func(name string) {
+		if !fieldNeedsPredicateMaterialization(name, state) {
+			return
+		}
+		if _, exists := seen[name]; exists {
+			return
+		}
+		seen[name] = struct{}{}
+		fields = append(fields, name)
+	}
+
+	var visitScalar func(plan.ScalarExpression)
+	visitScalar = func(expression plan.ScalarExpression) {
+		switch expression := expression.(type) {
+		case *plan.ScalarFieldExpression:
+			if expression != nil {
+				add(expression.Field.Name)
+			}
+		case *plan.ScalarCallExpression:
+			if expression == nil {
+				return
+			}
+			for _, argument := range expression.Arguments {
+				visitScalar(argument)
+			}
+		}
+	}
+
+	var visit func(plan.Expression)
+	visit = func(expression plan.Expression) {
+		switch expression := expression.(type) {
+		case *plan.BooleanExpression:
+			if expression != nil {
+				visit(expression.Left)
+				visit(expression.Right)
+			}
+		case *plan.NotExpression:
+			if expression != nil {
+				visit(expression.Operand)
+			}
+		case *plan.TextExpression:
+			if expression != nil {
+				add("_raw")
+			}
+		case *plan.ComparisonExpression:
+			if expression != nil {
+				add(expression.Field.Name)
+			}
+		case *plan.EvalComparisonExpression:
+			if expression != nil {
+				visitScalar(expression.Left)
+				visitScalar(expression.Right)
+			}
+		}
+	}
+	visit(expression)
+	return fields
+}
+
+// bindMaterializedPredicateFields builds a predicate state whose selected
+// calculated values refer to singleton ARRAY JOIN aliases. The enclosing
+// materialized CTE freezes the producer, while the alias dependency prevents
+// ClickHouse from pushing the predicate back into that producer. Replacing the
+// public columns with those identical bound values makes the fence durable for
+// later filters, so only the fields consumed here clear their marker.
+func bindMaterializedPredicateFields(
+	state compileState,
+	fields []string,
+	stage int,
+) (compileState, compileState, []string, []string, []string) {
+	predicateState := cloneCompileState(state)
+	outputState := cloneCompileState(state)
+	excludedColumns := make([]string, 0, len(fields))
+	replacements := make([]string, 0, len(fields))
+	bindings := make([]string, 0, len(fields))
+	for index, name := range fields {
+		field := state.visible[name]
+		public := quoteIdentifier(name)
+		bound := quoteIdentifier(fmt.Sprintf("__os_filter_bound_%d_%d", stage, index+1))
+		boundValue := field.valueSQL
+		if field.kind == fieldKindDynamic {
+			boundValue = "CAST(" + boundValue + " AS Dynamic)"
+		}
+		bindings = append(
+			bindings,
+			"["+boundValue+"] AS "+bound,
+		)
+		excludedColumns = append(excludedColumns, bound)
+		replacements = append(replacements, bound+" AS "+public)
+
+		predicateField := field
+		predicateField.valueSQL = bound
+		if predicateField.kind == fieldKindDynamic {
+			predicateField.dynamicTypeSQL = "dynamicType(" + bound + ")"
+		}
+		predicateField.materializeForPredicate = false
+		predicateState.visible[name] = predicateField
+
+		outputField := field
+		outputField.valueSQL = public
+		if outputField.kind == fieldKindDynamic {
+			outputField.dynamicTypeSQL = "dynamicType(" + public + ")"
+		}
+		outputField.materializeForPredicate = false
+		outputState.visible[name] = outputField
+	}
+	return predicateState, outputState, excludedColumns, replacements, bindings
+}
+
+func fieldNeedsPredicateMaterialization(name string, state compileState) bool {
+	field, ok := state.visible[name]
+	return ok && field.materializeForPredicate
+}
+
 type compiledScalar struct {
-	valueSQL       string
-	valueArgs      []any
-	existsSQL      string
-	existsArgs     []any
-	dynamicTypeSQL string
-	storedTypeSQL  string
-	descendantSQL  string
-	descendantArgs []any
-	kind           fieldKind
-	numberType     string
-	literal        *plan.Value
+	valueSQL                string
+	valueArgs               []any
+	existsSQL               string
+	existsArgs              []any
+	dynamicTypeSQL          string
+	storedTypeSQL           string
+	descendantSQL           string
+	descendantArgs          []any
+	kind                    fieldKind
+	numberType              string
+	literal                 *plan.Value
+	materializeForPredicate bool
 }
 
 func compileScalarValue(expression plan.ScalarExpression, state compileState) (compiledScalar, error) {
@@ -2564,10 +2871,11 @@ func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileSt
 	}
 	inputSQL, inputArgs := compiledStringScalar(input)
 	return compiledScalar{
-		valueSQL:  "replaceRegexpAll(" + inputSQL + ", ?, ?)",
-		valueArgs: append(inputArgs, pattern, replacement),
-		existsSQL: "1",
-		kind:      fieldKindString,
+		valueSQL:                "replaceRegexpAll(" + inputSQL + ", ?, ?)",
+		valueArgs:               append(inputArgs, pattern, replacement),
+		existsSQL:               "1",
+		kind:                    fieldKindString,
+		materializeForPredicate: input.materializeForPredicate,
 	}, nil
 }
 
@@ -2581,11 +2889,12 @@ func compileToNumberScalar(expression *plan.ScalarCallExpression, state compileS
 	}
 	inputSQL, inputArgs := compiledStringScalar(input)
 	return compiledScalar{
-		valueSQL:   "ifNotFinite(toFloat64OrNull(" + inputSQL + "), CAST(NULL AS Nullable(Float64)))",
-		valueArgs:  inputArgs,
-		existsSQL:  "1",
-		kind:       fieldKindNumber,
-		numberType: "Float64",
+		valueSQL:                "ifNotFinite(toFloat64OrNull(" + inputSQL + "), CAST(NULL AS Nullable(Float64)))",
+		valueArgs:               inputArgs,
+		existsSQL:               "1",
+		kind:                    fieldKindNumber,
+		numberType:              "Float64",
+		materializeForPredicate: input.materializeForPredicate,
 	}, nil
 }
 
@@ -2637,8 +2946,9 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 		kind:           value.kind,
 		// An eval output named index is calculated data, not the physical scan
 		// selector. It follows its expression type and ordinary comparison rules.
-		caseSensitive: false,
-		numberType:    value.numberType,
+		caseSensitive:           false,
+		numberType:              value.numberType,
+		materializeForPredicate: value.materializeForPredicate,
 	}
 	if value.kind == fieldKindDynamic {
 		field.dynamicTypeSQL = "dynamicType(" + field.valueSQL + ")"
@@ -2666,18 +2976,18 @@ func extractPrivateColumns(captures []compiledExtractCapture) []string {
 }
 
 func compileExtract(
-	fragment string,
+	relation compiledRelation,
 	operator *plan.Extract,
 	state compileState,
 	stage int,
-) (string, compileState, []any, int, error) {
+) (compiledRelation, compileState, []any, int, error) {
 	validated, err := validateExtractOperator(operator)
 	if err != nil {
-		return "", compileState{}, nil, 0, err
+		return compiledRelation{}, compileState{}, nil, 0, err
 	}
 	openEventSchema := state.eventRows && state.allowDynamic
 	if openEventSchema && operator.Input.Name == "fields" {
-		return "", compileState{}, nil, 0, &plan.Diagnostic{
+		return compiledRelation{}, compileState{}, nil, 0, &plan.Diagnostic{
 			Code:    "SPL_AMBIGUOUS_REX_FIELD",
 			Message: "rex cannot read the event result's reserved fields payload without an exact upstream schema",
 			Range:   operator.Range,
@@ -2686,7 +2996,7 @@ func compileExtract(
 
 	inputSQL, eligibleSQL, inputArgs, err := compileExtractInput(operator.Input, state)
 	if err != nil {
-		return "", compileState{}, nil, 0, err
+		return compiledRelation{}, compileState{}, nil, 0, err
 	}
 	eligibleAlias := quoteIdentifier(fmt.Sprintf("__os_rex_eligible_%d", stage))
 	inputAlias := quoteIdentifier(fmt.Sprintf("__os_rex_input_%d", stage))
@@ -2698,17 +3008,20 @@ func compileExtract(
 		"toUInt8(ifNull(" + eligibleSQL + ", 0)) AS " + eligibleAlias,
 		"if(" + eligibleAlias + " != 0, assumeNotNull(" + inputSQL + "), CAST('' AS String)) AS " + inputAlias,
 	}
-	inputFragment := "SELECT *, " + strings.Join(inputExpressions, ", ") + " FROM (" + fragment + ") AS " + innerAlias
+	inputFragment := "SELECT *, " + strings.Join(inputExpressions, ", ") + " FROM (" + relation.sql + ") AS " + innerAlias
+	relation = relation.selectFrom(inputFragment, operator.Range)
 	groupExpression := "if(" + eligibleAlias + " != 0, extractGroups(" + inputAlias +
 		", ?), CAST([], 'Array(String)')) AS " + groupsAlias
-	groupFragment := "SELECT *, " + groupExpression + " FROM (" + inputFragment + ") AS " +
+	groupFragment := "SELECT *, " + groupExpression + " FROM (" + relation.sql + ") AS " +
 		quoteIdentifier(fmt.Sprintf("_rex_input_%d", stage))
+	relation = relation.selectFrom(groupFragment, operator.Range)
 	capturedBytesExpression := "arraySum(value -> toUInt64(length(value)), " + groupsAlias + ")"
 	if state.rexCapturedBytesSQL != "" {
 		capturedBytesExpression = "toUInt64(" + state.rexCapturedBytesSQL + ") + " + capturedBytesExpression
 	}
 	bytesFragment := "SELECT *, " + capturedBytesExpression + " AS " + capturedBytesAlias +
-		" FROM (" + groupFragment + ") AS " + quoteIdentifier(fmt.Sprintf("_rex_groups_%d", stage))
+		" FROM (" + relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_rex_groups_%d", stage))
+	relation = relation.selectFrom(bytesFragment, operator.Range)
 	// The limit branch is guarded by its own condition rather than a constant.
 	// A downstream expression that forces this column to materialize makes
 	// ClickHouse evaluate both branches for every row, and a constant `1` would
@@ -2722,8 +3035,9 @@ func compileExtract(
 	// Keep the extraction and byte guard streaming. The pinned ClickHouse
 	// integration test uses EXPLAIN actions=1 to prove that common-expression
 	// elimination still executes extractGroups exactly once for all captures.
-	fragment = "SELECT *, " + matchedExpression + " FROM (" + bytesFragment + ") AS " +
+	matchedFragment := "SELECT *, " + matchedExpression + " FROM (" + relation.sql + ") AS " +
 		quoteIdentifier(fmt.Sprintf("_rex_bytes_%d", stage))
+	relation = relation.selectFrom(matchedFragment, operator.Range)
 	// The groups SELECT appears textually before its nested input SELECT, so
 	// the pattern placeholder precedes source-presence placeholders.
 	innerArgs := append([]any{validated.Pattern}, inputArgs...)
@@ -2741,19 +3055,19 @@ func compileExtract(
 	seenOutputs := make(map[string]struct{}, len(operator.Captures))
 	for index, capture := range operator.Captures {
 		if openEventSchema && capture.Output.Name == "fields" {
-			return "", compileState{}, nil, 0, &plan.Diagnostic{
+			return compiledRelation{}, compileState{}, nil, 0, &plan.Diagnostic{
 				Code:    "SPL_AMBIGUOUS_REX_FIELD",
 				Message: "rex cannot replace the event result's reserved fields payload without an exact upstream schema",
 				Range:   operator.Range,
 			}
 		}
 		if _, duplicate := seenOutputs[capture.Output.Name]; duplicate {
-			return "", compileState{}, nil, 0, errors.New("compile ClickHouse extract: output field is repeated")
+			return compiledRelation{}, compileState{}, nil, 0, errors.New("compile ClickHouse extract: output field is repeated")
 		}
 		seenOutputs[capture.Output.Name] = struct{}{}
 		previous, previousKnown, resolveErr := resolveCompiledField(capture.Output, state)
 		if resolveErr != nil {
-			return "", compileState{}, nil, 0, resolveErr
+			return compiledRelation{}, compileState{}, nil, 0, resolveErr
 		}
 
 		capturedValue := "arrayElement(" + groupsAlias + ", " + strconv.Itoa(int(capture.Group)) + ")"
@@ -2791,7 +3105,7 @@ func compileExtract(
 			var previousTypeArgs []any
 			previousTypeSQL, previousTypeArgs, resolveErr = knownFieldStoredTypeSQL(previous)
 			if resolveErr != nil {
-				return "", compileState{}, nil, 0, fmt.Errorf(
+				return compiledRelation{}, compileState{}, nil, 0, fmt.Errorf(
 					"compile ClickHouse extract: resolve prior type for %q: %w",
 					capture.Output.Name,
 					resolveErr,
@@ -2828,6 +3142,10 @@ func compileExtract(
 			// A capture named index is calculated data and never regains the
 			// physical scan selector's case or authorization semantics.
 			caseSensitive: false,
+			materializeForPredicate: fieldNeedsPredicateMaterialization(
+				operator.Input.Name,
+				state,
+			) || previous.materializeForPredicate,
 		}
 		if kind == fieldKindDynamic {
 			field.dynamicTypeSQL = "dynamicType(" + output + ")"
@@ -2857,7 +3175,7 @@ func compileExtract(
 		}
 		field, ok := state.visible[name]
 		if !ok {
-			return "", compileState{}, nil, 0, fmt.Errorf("compile ClickHouse extract: field %q has no input value", name)
+			return compiledRelation{}, compileState{}, nil, 0, fmt.Errorf("compile ClickHouse extract: field %q has no input value", name)
 		}
 		if field.valueSQL == publicName {
 			projection = append(projection, publicName)
@@ -2871,13 +3189,14 @@ func compileExtract(
 	projection = append(projection, existenceExpressions...)
 	projection = append(projection, typeExpressions...)
 	outerAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
-	fragment = "SELECT " + strings.Join(projection, ", ") + " FROM (" + fragment + ") AS " + outerAlias
+	outputFragment := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql + ") AS " + outerAlias
+	relation = relation.selectFrom(outputFragment, operator.Range)
 
 	prefixArgs := make([]any, 0, len(existenceArgs)+len(typeArgs)+len(innerArgs))
 	prefixArgs = append(prefixArgs, existenceArgs...)
 	prefixArgs = append(prefixArgs, typeArgs...)
 	prefixArgs = append(prefixArgs, innerArgs...)
-	return fragment, next, prefixArgs, 1, nil
+	return relation, next, prefixArgs, 1, nil
 }
 
 func validateExtractOperator(operator *plan.Extract) (splregex.ExtractionPattern, error) {
@@ -3079,9 +3398,10 @@ func projectedRenameField(source fieldState, destination string) fieldState {
 		kind:           source.kind,
 		// A field renamed to index is calculated pipeline data, not the
 		// authorization-constrained physical index selector.
-		caseSensitive: false,
-		numberType:    source.numberType,
-		numericSort:   source.numericSort,
+		caseSensitive:           false,
+		numberType:              source.numberType,
+		numericSort:             source.numericSort,
+		materializeForPredicate: source.materializeForPredicate,
 	}
 	if source.kind == fieldKindDynamic {
 		result.dynamicTypeSQL = "dynamicType(" + value + ")"
@@ -3760,15 +4080,16 @@ func relationalPredicate(expression *plan.ComparisonExpression, field fieldState
 
 func compiledScalarFromField(field fieldState) compiledScalar {
 	return compiledScalar{
-		valueSQL:       field.valueSQL,
-		existsSQL:      field.existsSQL,
-		existsArgs:     append([]any(nil), field.existsArgs...),
-		dynamicTypeSQL: field.dynamicTypeSQL,
-		storedTypeSQL:  field.storedTypeSQL,
-		descendantSQL:  field.descendantSQL,
-		descendantArgs: append([]any(nil), field.descendantArgs...),
-		kind:           field.kind,
-		numberType:     field.numberType,
+		valueSQL:                field.valueSQL,
+		existsSQL:               field.existsSQL,
+		existsArgs:              append([]any(nil), field.existsArgs...),
+		dynamicTypeSQL:          field.dynamicTypeSQL,
+		storedTypeSQL:           field.storedTypeSQL,
+		descendantSQL:           field.descendantSQL,
+		descendantArgs:          append([]any(nil), field.descendantArgs...),
+		kind:                    field.kind,
+		numberType:              field.numberType,
+		materializeForPredicate: field.materializeForPredicate,
 	}
 }
 
@@ -3970,16 +4291,17 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		}
 		next.visible[name] = fieldState{
 			valueSQL: publicName, dynamicTypeSQL: compiled.dynamicTypeSQL,
-			storedTypeSQL:  compiled.storedTypeSQL,
-			existsSQL:      rewriteExistenceForProjection(compiled, name),
-			existsArgs:     append([]any(nil), compiled.existsArgs...),
-			descendantSQL:  compiled.descendantSQL,
-			descendantArgs: append([]any(nil), compiled.descendantArgs...),
-			kind:           compiled.kind,
-			caseSensitive:  compiled.caseSensitive,
-			numberType:     compiled.numberType,
-			numericSort:    compiled.numericSort,
-			canonicalTime:  compiled.canonicalTime,
+			storedTypeSQL:           compiled.storedTypeSQL,
+			existsSQL:               rewriteExistenceForProjection(compiled, name),
+			existsArgs:              append([]any(nil), compiled.existsArgs...),
+			descendantSQL:           compiled.descendantSQL,
+			descendantArgs:          append([]any(nil), compiled.descendantArgs...),
+			kind:                    compiled.kind,
+			caseSensitive:           compiled.caseSensitive,
+			numberType:              compiled.numberType,
+			numericSort:             compiled.numericSort,
+			canonicalTime:           compiled.canonicalTime,
+			materializeForPredicate: compiled.materializeForPredicate,
 		}
 		next.publicOrder = append(next.publicOrder, name)
 	}
@@ -4233,13 +4555,13 @@ func statsByScalarExpressions(field fieldState) (supported, lexical string) {
 }
 
 func compileDeduplicate(
-	fragment string,
+	relation compiledRelation,
 	operator *plan.Deduplicate,
 	state compileState,
 	stage int,
-) (deduplicated string, prefixArgs []any, currentOrder []compiledSortKey, additionalAliases int, err error) {
+) (deduplicated compiledRelation, prefixArgs []any, currentOrder []compiledSortKey, additionalAliases int, err error) {
 	if operator == nil || operator.Count == 0 || len(operator.Keys) == 0 || len(operator.Keys) > 16 {
-		return "", nil, nil, 0, errors.New("compile ClickHouse deduplicate: positive count and 1 through 16 keys are required")
+		return compiledRelation{}, nil, nil, 0, errors.New("compile ClickHouse deduplicate: positive count and 1 through 16 keys are required")
 	}
 
 	materialized := make([]string, 0, len(operator.Keys)*3)
@@ -4250,20 +4572,20 @@ func compileDeduplicate(
 	seen := make(map[string]struct{}, len(operator.Keys))
 	for index, key := range operator.Keys {
 		if state.eventRows && state.allowDynamic && key.Name == "fields" {
-			return "", nil, nil, 0, &plan.Diagnostic{
+			return compiledRelation{}, nil, nil, 0, &plan.Diagnostic{
 				Code:    "SPL_AMBIGUOUS_DEDUP_FIELD",
 				Message: "dedup cannot use the event result's reserved fields payload without an exact upstream schema",
 				Range:   key.Range,
 			}
 		}
 		if _, duplicate := seen[key.Name]; duplicate {
-			return "", nil, nil, 0, fmt.Errorf("compile ClickHouse deduplicate: key %q is duplicated", key.Name)
+			return compiledRelation{}, nil, nil, 0, fmt.Errorf("compile ClickHouse deduplicate: key %q is duplicated", key.Name)
 		}
 		seen[key.Name] = struct{}{}
 
 		field, exists, resolveErr := resolveCompiledField(key, state)
 		if resolveErr != nil {
-			return "", nil, nil, 0, resolveErr
+			return compiledRelation{}, nil, nil, 0, resolveErr
 		}
 		if !exists {
 			// A prior projection is authoritative. Keep a typed missing key so the
@@ -4315,7 +4637,8 @@ func compileDeduplicate(
 	}
 
 	preparedAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage))
-	deduplicated = "SELECT *, " + strings.Join(materialized, ", ") + " FROM (" + fragment + ") AS " + preparedAlias
+	preparedSQL := "SELECT *, " + strings.Join(materialized, ", ") + " FROM (" + relation.sql + ") AS " + preparedAlias
+	deduplicated = relation.selectFrom(preparedSQL, operator.Range)
 	eligible := make([]string, 0, len(presentColumns))
 	for _, present := range presentColumns {
 		eligible = append(eligible, present+" != 0")
@@ -4328,8 +4651,9 @@ func compileDeduplicate(
 		anyUnsupported := quoteIdentifier(fmt.Sprintf("__os_dedup_any_unsupported_%d", stage))
 		helperColumns = append(helperColumns, anyUnsupported)
 		invalid := "(" + strings.Join(invalidValues, ") OR (") + ")"
-		deduplicated = "SELECT *, max(CAST(" + invalid + " AS UInt8)) OVER () AS " + anyUnsupported +
-			" FROM (" + deduplicated + ") AS " + validationAlias
+		validationSQL := "SELECT *, max(CAST(" + invalid + " AS UInt8)) OVER () AS " + anyUnsupported +
+			" FROM (" + deduplicated.sql + ") AS " + validationAlias
+		deduplicated = deduplicated.selectFrom(validationSQL, operator.Range)
 		// Put validation and eligibility in the two branches of one predicate.
 		// The window flag is computed over the complete scoped input first, so an
 		// unsupported key cannot be hidden by a missing value in another key.
@@ -4338,16 +4662,17 @@ func compileDeduplicate(
 
 	currentOrder = defaultCompiledOrder(state)
 	if len(currentOrder) == 0 {
-		return "", nil, nil, 0, errors.New("compile ClickHouse deduplicate: input has no deterministic order")
+		return compiledRelation{}, nil, nil, 0, errors.New("compile ClickHouse deduplicate: input has no deterministic order")
 	}
 	order, orderErr := compileMaterializedOrder(currentOrder, false)
 	if orderErr != nil {
-		return "", nil, nil, 0, orderErr
+		return compiledRelation{}, nil, nil, 0, orderErr
 	}
 	additionalAliases++
 	dedupAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+additionalAliases))
-	deduplicated = "SELECT * EXCEPT (" + strings.Join(helperColumns, ", ") + ") FROM (" + deduplicated + ") AS " + dedupAlias + " WHERE " + predicate +
+	dedupSQL := "SELECT * EXCEPT (" + strings.Join(helperColumns, ", ") + ") FROM (" + deduplicated.sql + ") AS " + dedupAlias + " WHERE " + predicate +
 		" ORDER BY " + order + " LIMIT ? BY " + strings.Join(keyColumns, ", ")
+	deduplicated = deduplicated.selectFrom(dedupSQL, operator.Range)
 	return deduplicated, prefixArgs, currentOrder, additionalAliases, nil
 }
 

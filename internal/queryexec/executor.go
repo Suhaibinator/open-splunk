@@ -41,6 +41,11 @@ const (
 	defaultMaxResultBytes   = uint64(128 << 20)
 	defaultMaxThreads       = uint64(4)
 	defaultMaxQueryBytes    = uint64(1 << 20)
+	// Keep the pinned ClickHouse analyzer ceiling above the compiler's
+	// conservative 96-level SELECT/UNION dependency limit. The compiler and
+	// server count relational structure differently, so this remains an
+	// independent, fixed defense-in-depth setting rather than a derived value.
+	defaultMaxSubqueryDepth = uint64(100)
 	maximumTimechartBuckets = uint64(10_000)
 	maximumTimechartSeries  = uint16(12)
 	maximumTimechartLabel   = uint16(256)
@@ -176,6 +181,7 @@ func querySettings(config Config) (clickhousedriver.Settings, error) {
 		"group_by_overflow_mode":            "throw",
 		"max_threads":                       config.MaxThreads,
 		"max_query_size":                    defaultMaxQueryBytes,
+		"max_subquery_depth":                defaultMaxSubqueryDepth,
 		"enable_materialized_cte":           uint8(1),
 		"short_circuit_function_evaluation": "enable",
 		"async_insert":                      uint8(0),
@@ -1329,7 +1335,7 @@ func classifyQueryError(ctx context.Context, err error) error {
 		switch exception.Code {
 		case 159: // TIMEOUT_EXCEEDED
 			return fmt.Errorf("%w: ClickHouse execution timeout", context.DeadlineExceeded)
-		case 158, 229, 241, 396: // TOO_MANY_ROWS, QUERY_IS_TOO_LARGE, MEMORY_LIMIT_EXCEEDED, TOO_MANY_ROWS_OR_BYTES
+		case 158, 162, 229, 241, 396: // TOO_MANY_ROWS, TOO_DEEP_SUBQUERIES, QUERY_IS_TOO_LARGE, MEMORY_LIMIT_EXCEEDED, TOO_MANY_ROWS_OR_BYTES
 			return fmt.Errorf("%w: ClickHouse resource limit", searchjobs.ErrExecutionLimit)
 		case 202, 203, 209, 210, 225, 242, 243, 279, 285, 286, 319, 341, 999:
 			return fmt.Errorf("%w: %v", searchjobs.ErrStorageUnavailable, err)

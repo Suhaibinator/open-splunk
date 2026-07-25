@@ -8,6 +8,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 const (
@@ -48,13 +49,13 @@ func (c Compiler) CompileFieldCatalog(query *plan.Query, spec FieldCatalogSpec) 
 		)
 	}
 	compiled, err := c.compileEventAnalysis(query, func(
-		fragment string,
+		relation compiledRelation,
 		state compileState,
 		args []any,
-		_ *plan.Scan,
+		scan *plan.Scan,
 		_ int,
 	) (CompiledQuery, error) {
-		return finalizeFieldCatalog(fragment, state, args, spec)
+		return finalizeFieldCatalog(relation, state, args, spec, scan.Range)
 	})
 	if err != nil {
 		return CompiledFieldCatalog{}, err
@@ -99,7 +100,13 @@ type compiledKnownField struct {
 	typeArgs     []any
 }
 
-func finalizeFieldCatalog(fragment string, state compileState, args []any, spec FieldCatalogSpec) (CompiledQuery, error) {
+func finalizeFieldCatalog(
+	relation compiledRelation,
+	state compileState,
+	args []any,
+	spec FieldCatalogSpec,
+	ownerRange spl.Range,
+) (CompiledQuery, error) {
 	if !state.eventRows {
 		return CompiledQuery{}, errors.New("compile ClickHouse field catalog: final relation is not an event relation")
 	}
@@ -130,11 +137,11 @@ func finalizeFieldCatalog(fragment string, state compileState, args []any, spec 
 
 	q := quoteIdentifier
 	var sql strings.Builder
-	sql.Grow(len(fragment) + 8_192 + len(knownNames)*768)
+	sql.Grow(len(relation.sql) + 8_192 + len(knownNames)*768)
 	sql.WriteString("WITH ")
 	sql.WriteString(q(fieldCatalogSourceCTE))
 	sql.WriteString(" AS MATERIALIZED (")
-	sql.WriteString(fragment)
+	sql.WriteString(relation.sql)
 	sql.WriteString("), ")
 	if len(knownFields) > 0 {
 		writeKnownFieldRows(&sql, knownFields)
@@ -278,7 +285,30 @@ func finalizeFieldCatalog(fragment string, state compileState, args []any, spec 
 	sql.WriteString(q(FieldCatalogNameColumn))
 	sql.WriteString(" ASC")
 
-	return CompiledQuery{SQL: sql.String(), Args: args}, nil
+	sourceDepth := relation.depth
+	var totalsDepth, profilesDepth int
+	if len(knownFields) > 0 {
+		knownRowsDepth := relationalNodeDepth(sourceDepth)
+		totalsDepth = relationalNodeDepth(knownRowsDepth)
+		totalsScalarDepth := relationalNodeDepth(totalsDepth)
+		dynamicLeavesDepth := relationalNodeDepth(sourceDepth, totalsScalarDepth)
+		dynamicProfilesDepth := relationalNodeDepth(dynamicLeavesDepth, totalsDepth)
+		knownProfilesDepth := relationalNodeDepth(totalsDepth)
+		profilesDepth = relationalNodeDepth(dynamicProfilesDepth, knownProfilesDepth)
+	} else {
+		totalsDepth = relationalNodeDepth(sourceDepth)
+		totalsScalarDepth := relationalNodeDepth(totalsDepth)
+		dynamicLeavesDepth := relationalNodeDepth(sourceDepth, totalsScalarDepth)
+		profilesDepth = relationalNodeDepth(dynamicLeavesDepth, totalsDepth)
+	}
+	limitedDepth := relationalNodeDepth(profilesDepth)
+	headerDepth := relationalNodeDepth(totalsDepth)
+	profileRowsDepth := relationalNodeDepth(limitedDepth)
+	outputUnionDepth := relationalNodeDepth(headerDepth, profileRowsDepth)
+	resultDepth := relationalNodeDepth(outputUnionDepth)
+
+	compiled := CompiledQuery{SQL: sql.String(), Args: args}
+	return withCompiledRelationalDepth(compiled, resultDepth, ownerRange), nil
 }
 
 func writeDynamicFieldProfiles(sql *strings.Builder) {

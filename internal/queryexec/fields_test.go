@@ -380,6 +380,7 @@ func TestSettingsForFieldCatalogRejectsInvalidBaseSettings(t *testing.T) {
 	for _, name := range []string{
 		"max_execution_time", "max_memory_usage", "max_rows_to_read", "max_bytes_to_read",
 		"max_result_rows", "max_result_bytes", "max_rows_to_group_by", "max_threads", "max_query_size",
+		"max_subquery_depth",
 	} {
 		t.Run(name+" missing", func(t *testing.T) {
 			malformed := cloneFieldCatalogSettings(base)

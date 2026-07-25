@@ -158,6 +158,65 @@ func TestBinEdgePipelineAgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("distinct calculated predicates use nested bounded fences", func(t *testing.T) {
+		compiled := compile(`index=binedge
+			| bin metric span=10 AS metric_band
+			| bin text_metric span=10 AS text_band
+			| where metric_band>=-20
+			| where metric_band<=20
+			| where text_band>=20`)
+		if got := strings.Count(compiled.SQL, " AS MATERIALIZED ("); got != 2 {
+			t.Fatalf("nested predicate materializations = %d, want 2:\n%s", got, compiled.SQL)
+		}
+		if got := strings.Count(compiled.SQL, materializedCTESettingsSQL); got != 2 {
+			t.Fatalf("nested predicate materialized settings = %d, want 2:\n%s", got, compiled.SQL)
+		}
+
+		bounded := clickhousedriver.Context(ctx, clickhousedriver.WithSettings(clickhousedriver.Settings{
+			"max_execution_time":                uint64(15),
+			"timeout_overflow_mode":             "throw",
+			"max_memory_usage":                  uint64(256 << 20),
+			"max_threads":                       uint64(1),
+			"max_subquery_depth":                uint64(100),
+			"max_query_size":                    uint64(1 << 20),
+			"enable_materialized_cte":           uint8(1),
+			"short_circuit_function_evaluation": "enable",
+		}))
+		executeCount := func(name string, query CompiledQuery) uint64 {
+			t.Helper()
+			queryContext, queryCancel := context.WithTimeout(bounded, 20*time.Second)
+			defer queryCancel()
+			var count uint64
+			if err := connection.QueryRow(
+				queryContext,
+				"SELECT count() FROM ("+query.SQL+")",
+				query.Args...,
+			).Scan(&count); err != nil {
+				t.Fatalf("execute %s: %v\nSQL: %s", name, err, query.SQL)
+			}
+			return count
+		}
+
+		if count := executeCount("nested calculated predicates", compiled); count != 2 {
+			t.Fatalf("nested calculated predicates matched %d rows, want 2", count)
+		}
+
+		fixedRebin := compile(`index=binedge
+			| bin metric span=10 AS band
+			| eval number=tonumber(band)
+			| bin number span=7 AS second
+			| where second>=20`)
+		if got := strings.Count(fixedRebin.SQL, " AS MATERIALIZED ("); got != 1 {
+			t.Fatalf("fixed re-bin predicate materializations = %d, want 1:\n%s", got, fixedRebin.SQL)
+		}
+		if got := strings.Count(fixedRebin.SQL, materializedCTESettingsSQL); got != 1 {
+			t.Fatalf("fixed re-bin materialized settings = %d, want 1:\n%s", got, fixedRebin.SQL)
+		}
+		if count := executeCount("fixed re-bin calculated predicate", fixedRebin); count != 0 {
+			t.Fatalf("fixed re-bin calculated predicate matched %d rows, want 0", count)
+		}
+	})
+
 	t.Run("long chained pipeline", func(t *testing.T) {
 		compiled := compile(`index=binedge
 | rex field=_raw "latency=(?<latency_text>[0-9]+)"

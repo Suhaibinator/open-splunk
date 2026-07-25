@@ -385,6 +385,7 @@ func settingsForFieldSummary(
 		"max_rows_to_group_by",
 		"max_threads",
 		"max_query_size",
+		"max_subquery_depth",
 	} {
 		value, ok := base[name].(uint64)
 		if !ok || value == 0 {
