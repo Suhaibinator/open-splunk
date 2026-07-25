@@ -187,6 +187,118 @@ pipeline data and cannot widen the already-resolved authorization scope.
 Capturing `_time` makes the pipeline ineligible for `timechart` and timeline
 analysis because the canonical event clock has been replaced.
 
+### `spath`
+
+```spl
+| spath path=request.context.trace_id
+| spath input=payload output=status path=response.status
+| spath input=payload output=first_sku path=items{0}.sku
+| spath output=server_name server.name
+```
+
+Version 0.1 supports row-preserving extraction of one typed scalar from one
+explicit, constant JSON path:
+
+```text
+spath [input=<exact field>] [output=<exact field>]
+      (path=<datapath> | <datapath>)
+```
+
+Option names are case-insensitive, may appear in any order, and may each occur
+once. Field and path values may be quoted or unquoted. The input defaults to
+`_raw`; the output defaults to the decoded path spelling. A path is always
+required. Omitting it is rejected rather than silently entering Splunk's
+runtime-schema-generating auto-extract mode.
+
+A supported path contains one through 17 case-sensitive object steps separated
+by dots. Each step has a nonempty UTF-8 key of at most 256 bytes and may end in
+one fixed array selector. At most four steps may have selectors:
+
+```text
+step  := key [ "{" index "}" ]
+path  := step ("." step)*
+index := "0" | [1-9][0-9]*
+```
+
+The complete decoded path is limited to 4 KiB. Dots delimit steps; literal-dot
+escapes, backslashes, braces inside keys, control characters, `*`, the `{}`
+array wildcard, XML `{@attribute}` selectors, negative indexes, root-array
+selectors, and repeated selectors such as `a{0}{1}` are unsupported. Fixed
+array indexes are zero-based, matching Splunk; the compiler translates them to
+ClickHouse's one-based extraction arguments. The maximum accepted index is
+`2^31-2`; the pinned server wraps larger integer path arguments rather than
+reliably treating them as out of range.
+
+The default output spelling is validated independently as an Open Splunk field
+name. In particular, adding an index suffix to a 256-byte key can exceed the
+256-byte field-segment ceiling even though the JSON path itself is valid; use a
+shorter explicit `output` in that case.
+
+The input must be a present, non-null, valid-UTF-8 String containing one
+well-formed JSON document. Missing, null, non-string, binary, malformed, or
+projected-away inputs produce no extraction for that row. A missing member, an
+out-of-range array index, or a path step applied to the wrong JSON container
+also produces no extraction. The latter is an explicit conservative Open
+Splunk behavior; Splunk's documentation says an inappropriate array selector
+is erroneous but does not define row-versus-job failure precisely.
+
+On a successful extraction, JSON String, Boolean, null, `Int64`, and `UInt64`
+leaves retain those types. Explicit JSON null is present but null, so it remains
+distinct from a missing path. Fractional or exponent-form numbers produce a
+sanitized unsupported-value error in this first slice rather than being
+silently rounded to `Float64`; exact Decimal parity with ingestion is reserved
+for a later slice. A terminal array or object likewise produces that error
+instead of being stringified or exposed as a partially supported container.
+JSON documents containing numbers outside ClickHouse's bounded
+`Int64`/`UInt64` parser domain may be treated as malformed by the pinned server,
+even when the selected member is unrelated. This is documented as an
+unverified compatibility boundary, not Splunk parity.
+
+A successful extraction replaces an existing destination, including replacing
+it with explicit null. When extraction does not match, an existing destination
+retains its exact value, semantic type, and sparse presence; a destination that
+did not exist remains missing. Reading and writing the same field reads the
+pre-command input value. The command preserves row count, event identity, and
+established ordering. Its typed output participates in downstream `search`,
+`where`, `sort`, `stats`, `dedup`, `bin`, projections, field discovery, field
+summaries, and timelines under their existing value contracts.
+
+One source String is limited to 1 MiB per row. An oversized calculated input
+produces a sanitized execution-limit error rather than exposing payload bytes.
+`rex` captures and `spath` destinations share a limit of 64 calculated
+extraction outputs per query. Each stage binds every user path component as a
+ClickHouse argument; no path text is interpolated into SQL. It performs one
+terminal type inspection, one raw-value extraction, one typed-leaf decode, and
+one additional array-container inspection per fixed selector. The
+four-selector ceiling therefore bounds a stage to at most seven JSON parser
+invocations. Across all `spath` stages, a query may use at most 32 of these
+evaluation work units per row; the planner and compiler independently enforce
+that cumulative ceiling.
+
+The input-size and unsupported-value errors are part of evaluating a live
+destination. A destination is live when it is returned, consumed downstream,
+used by field analysis, or needed as the prior-value fallback of a later
+extraction. If an exact later projection or unconditional overwrite makes the
+destination provably unobservable, the pinned ClickHouse optimizer may prune
+the extraction and no error is required. This is a value-realization boundary,
+not a promise of compiler-level dead-code elimination.
+
+On an open event schema, `fields` is the reserved whole-payload convenience
+column and cannot be the input or output; a prior closed transforming schema
+may declare an ordinary field with that spelling. After any successful-capable
+`spath` stage, the immutable convenience payload is omitted because it cannot
+represent sparse calculated overwrites. An output named `index` changes only
+pipeline data and cannot widen the resolved physical index scope. An output
+named `_time` replaces canonical-time provenance and makes the pipeline
+ineligible for `timechart` and completed-job timeline analysis.
+
+The following remain explicit future slices: auto-extract and its configurable
+5,000-character discovery cutoff, `{}` and multivalue output, XML, container
+output, dynamic paths supplied by another field, and the `spath()` eval
+function. Duplicate JSON member selection follows the pinned ClickHouse parser's
+first-member behavior; Splunk's public documentation does not define that edge,
+so it must remain pinned by integration coverage.
+
 ### `fields`
 
 ```spl
@@ -831,7 +943,7 @@ the differential that every published row's cells sum to the count
 The following planned commands are not implemented in this version:
 
 ```text
-spath, eventstats, streamstats
+eventstats, streamstats
 ```
 
 All `stats` functions other than argument-free `count`, `p95(field)`,
@@ -850,6 +962,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`stats`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/stats),
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
 [`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),
+[`spath`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.0.2503/search-commands/spath),
 [`replace`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.4.2604/evaluation-functions/text-functions),
 [`tonumber`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/9.0/evaluation-functions/conversion-functions),
 [`rename`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/rename),

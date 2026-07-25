@@ -14,6 +14,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
 )
 
@@ -22,8 +23,10 @@ const (
 	internalFieldNamesColumn           = "__os_field_names"
 	internalFieldTypesColumn           = "__os_field_types"
 	internalFieldMetadataVersionColumn = "__os_field_metadata_version"
+	internalRawEncodingColumn          = "__os_raw_encoding"
 	internalSortTimeColumn             = "__os_sort_time"
 	internalSortIDColumn               = "__os_sort_event_id"
+	rawEncodingUTF8                    = 1
 	// Timechart physical columns are an executor-only transport. Runtime series
 	// names are data, never SQL identifiers, and are expanded into the public
 	// wide schema only after the complete bounded result has been validated.
@@ -48,9 +51,14 @@ const (
 	// groups and repeated stages from amplifying a maximum-sized event without
 	// a query-local ceiling.
 	MaximumRexCapturedBytesPerRow = 4 << 20
-	maxCompiledQueryBytes         = 256 << 10
-	maxCompiledAssignments        = 64
-	maxTimechartLabelBytes        = 256
+	// MaximumSpathInputBytes bounds one current-pipeline JSON source. Native
+	// ingestion already caps complete events at the same size; this independent
+	// guard also covers calculated Strings amplified by earlier commands.
+	MaximumSpathInputBytes       = 1 << 20
+	maxCompiledQueryBytes        = 256 << 10
+	maxCompiledAssignments       = 64
+	maxCompiledExtractionOutputs = 64
+	maxTimechartLabelBytes       = 256
 	// maxChartRowValues bounds the chart pivot's runtime row axis. It is a
 	// deliberate resource policy rather than Splunk's configurable
 	// maxresultrows truncation: exceeding it fails the whole search.
@@ -67,6 +75,13 @@ const (
 	// RexCaptureLimitMarker lets the executor map the deliberate throwIf guard
 	// to a stable resource-limit result without exposing generated SQL.
 	RexCaptureLimitMarker = "open-splunk: rex capture bytes exceed the per-row limit"
+	// SpathInputLimitMarker classifies an oversized calculated JSON source as a
+	// resource limit without retaining source bytes or generated SQL.
+	SpathInputLimitMarker = "open-splunk: spath input bytes exceed the per-row limit"
+	// UnsupportedSpathValueMarker is emitted when an explicitly selected JSON
+	// leaf is a container or a number that this compatibility slice cannot
+	// publish without losing information.
+	UnsupportedSpathValueMarker = "open-splunk: spath selected value is outside the supported scalar domain"
 	// UnsupportedNumericBinValueMarker is emitted when a mathematically correct
 	// numeric bucket cannot be represented by the input field's fixed type, or
 	// when a floating-point input or result is not finite.
@@ -200,6 +215,9 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	if !ok {
 		return CompiledQuery{}, errors.New("compile ClickHouse query: first operator must be Scan")
 	}
+	if err := validateCompiledExtractionBudgets(query.Operators[1:]); err != nil {
+		return CompiledQuery{}, err
+	}
 	fragment, state, args, err := compileScan(database, table, scan)
 	if err != nil {
 		return CompiledQuery{}, err
@@ -323,6 +341,20 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			state = nextState
 		case *plan.Extract:
 			extracted, nextState, prefixArgs, additionalAliases, compileErr := compileExtract(
+				relation,
+				operator,
+				state,
+				aliasSequence,
+			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			relation = extracted
+			args = prependArguments(prefixArgs, args)
+			state = nextState
+			aliasSequence += additionalAliases
+		case *plan.ExtractJSON:
+			extracted, nextState, prefixArgs, additionalAliases, compileErr := compileExtractJSON(
 				relation,
 				operator,
 				state,
@@ -555,6 +587,51 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 		}
 	}
 	return compiled, nil
+}
+
+func validateCompiledExtractionBudgets(operators []plan.Operator) error {
+	outputs := 0
+	spathWorkUnits := 0
+	for _, operator := range operators {
+		switch operator := operator.(type) {
+		case *plan.Extract:
+			if operator == nil {
+				continue
+			}
+			outputs += len(operator.Captures)
+		case *plan.ExtractJSON:
+			if operator == nil {
+				continue
+			}
+			steps, err := validateExtractJSONOperator(operator)
+			if err != nil {
+				return err
+			}
+			outputs++
+			spathWorkUnits += splpath.EvaluationWorkUnits(steps)
+			if spathWorkUnits > splpath.MaximumEvaluationWorkUnits {
+				return &plan.Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"spath stages require more than %d JSON evaluation work units per row",
+						splpath.MaximumEvaluationWorkUnits,
+					),
+					Range: operator.Range,
+				}
+			}
+		}
+		if outputs > maxCompiledExtractionOutputs {
+			return &plan.Diagnostic{
+				Code: "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf(
+					"search creates more than %d extraction output fields",
+					maxCompiledExtractionOutputs,
+				),
+				Range: operator.SourceRange(),
+			}
+		}
+	}
+	return nil
 }
 
 func isNilPlanOperator(operator plan.Operator) bool {
@@ -2461,6 +2538,7 @@ const (
 
 type fieldState struct {
 	valueSQL                string
+	textEligibleSQL         string
 	dynamicTypeSQL          string
 	storedTypeSQL           string
 	existsSQL               string
@@ -2498,6 +2576,7 @@ func compileScan(database, table string, scan *plan.Scan) (string, compileState,
 		aliasPhysical("level", "level"),
 		aliasPhysical("body", "message"),
 		aliasPhysical("raw", "_raw"),
+		aliasPhysical("raw_encoding", internalRawEncodingColumn),
 		aliasPhysical("trace_id", "trace_id"),
 		aliasPhysical("span_id", "span_id"),
 		aliasPhysical("collector_id", "collector_id"),
@@ -2585,6 +2664,10 @@ func canonicalState(field string) fieldState {
 	}
 	if field == "_time" {
 		state.canonicalTime = true
+	}
+	if field == "_raw" {
+		state.textEligibleSQL = quoteIdentifier(internalRawEncodingColumn) + " = " +
+			strconv.Itoa(rawEncodingUTF8)
 	}
 	return state
 }
@@ -2769,6 +2852,7 @@ type compiledScalar struct {
 	valueArgs               []any
 	existsSQL               string
 	existsArgs              []any
+	textEligibleSQL         string
 	dynamicTypeSQL          string
 	storedTypeSQL           string
 	descendantSQL           string
@@ -2938,12 +3022,13 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 		next.publicOrder = append(next.publicOrder, output.Name)
 	}
 	field := fieldState{
-		valueSQL:       quoteIdentifier(output.Name),
-		existsSQL:      "1",
-		descendantSQL:  value.descendantSQL,
-		descendantArgs: append([]any(nil), value.descendantArgs...),
-		storedTypeSQL:  value.storedTypeSQL,
-		kind:           value.kind,
+		valueSQL:        quoteIdentifier(output.Name),
+		textEligibleSQL: value.textEligibleSQL,
+		existsSQL:       "1",
+		descendantSQL:   value.descendantSQL,
+		descendantArgs:  append([]any(nil), value.descendantArgs...),
+		storedTypeSQL:   value.storedTypeSQL,
+		kind:            value.kind,
 		// An eval output named index is calculated data, not the physical scan
 		// selector. It follows its expression type and ordinary comparison rules.
 		caseSensitive:           false,
@@ -2965,12 +3050,17 @@ type compiledExtractCapture struct {
 	existsProjection string
 	typeColumn       string
 	typeProjection   string
+	textColumn       string
+	textProjection   string
 }
 
 func extractPrivateColumns(captures []compiledExtractCapture) []string {
-	columns := make([]string, 0, len(captures)*2)
+	columns := make([]string, 0, len(captures)*3)
 	for _, capture := range captures {
 		columns = append(columns, capture.existsColumn, capture.typeColumn)
+		if capture.textColumn != "" {
+			columns = append(columns, capture.textColumn)
+		}
 	}
 	return columns
 }
@@ -3118,6 +3208,13 @@ func compileExtract(
 		typeSQL := "toUInt8(if(" + matchedAlias + " != 0, toUInt8(" +
 			strconv.Itoa(int(eventfields.StoredValueTypeString)) + "), " +
 			previousTypeSQL + ")) AS " + typeAlias
+		textColumn := ""
+		textProjection := ""
+		if previousKnown && previous.textEligibleSQL != "" {
+			textColumn = quoteIdentifier(fmt.Sprintf("__os_rex_text_eligible_%d_%d", stage, index))
+			textProjection = "toUInt8(if(" + matchedAlias + " != 0, 1, ifNull(" +
+				previous.textEligibleSQL + ", 0))) AS " + textColumn
+		}
 		captures = append(captures, compiledExtractCapture{
 			planCapture:      capture,
 			valueSQL:         valueSQL,
@@ -3125,6 +3222,8 @@ func compileExtract(
 			existsProjection: existsSQL,
 			typeColumn:       typeAlias,
 			typeProjection:   typeSQL,
+			textColumn:       textColumn,
+			textProjection:   textProjection,
 		})
 
 		delete(next.blocked, capture.Output.Name)
@@ -3133,12 +3232,13 @@ func compileExtract(
 		}
 		output := quoteIdentifier(capture.Output.Name)
 		field := fieldState{
-			valueSQL:       output,
-			existsSQL:      existsAlias,
-			storedTypeSQL:  typeAlias,
-			descendantSQL:  previous.descendantSQL,
-			descendantArgs: append([]any(nil), previous.descendantArgs...),
-			kind:           kind,
+			valueSQL:        output,
+			textEligibleSQL: textColumn,
+			existsSQL:       existsAlias,
+			storedTypeSQL:   typeAlias,
+			descendantSQL:   previous.descendantSQL,
+			descendantArgs:  append([]any(nil), previous.descendantArgs...),
+			kind:            kind,
 			// A capture named index is calculated data and never regains the
 			// physical scan selector's case or authorization semantics.
 			caseSensitive: false,
@@ -3156,10 +3256,14 @@ func compileExtract(
 	valueByName := make(map[string]string, len(captures))
 	existenceExpressions := make([]string, 0, len(captures))
 	typeExpressions := make([]string, 0, len(captures))
+	textExpressions := make([]string, 0, len(captures))
 	for _, capture := range captures {
 		valueByName[capture.planCapture.Output.Name] = capture.valueSQL
 		existenceExpressions = append(existenceExpressions, capture.existsProjection)
 		typeExpressions = append(typeExpressions, capture.typeProjection)
+		if capture.textProjection != "" {
+			textExpressions = append(textExpressions, capture.textProjection)
+		}
 	}
 	liveOldPrivateColumns := livePrivateColumns(state.privateColumns, next.visible)
 	next.privateColumns = append(
@@ -3188,6 +3292,7 @@ func compileExtract(
 	projection = appendPrivateEventProjection(projection, projectionState)
 	projection = append(projection, existenceExpressions...)
 	projection = append(projection, typeExpressions...)
+	projection = append(projection, textExpressions...)
 	outerAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
 	outputFragment := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql + ") AS " + outerAlias
 	relation = relation.selectFrom(outputFragment, operator.Range)
@@ -3250,8 +3355,12 @@ func compileExtractInput(input plan.FieldRef, state compileState) (valueSQL, eli
 	}
 	switch field.kind {
 	case fieldKindString:
+		textEligible := ""
+		if field.textEligibleSQL != "" {
+			textEligible = "(" + field.textEligibleSQL + ") AND "
+		}
 		return field.valueSQL,
-			"(" + existsSQL + " AND isNotNull(" + field.valueSQL + ") AND isValidUTF8(" + field.valueSQL + "))",
+			"(" + existsSQL + " AND " + textEligible + "isNotNull(" + field.valueSQL + ") AND isValidUTF8(" + field.valueSQL + "))",
 			append([]any(nil), field.existsArgs...),
 			nil
 	case fieldKindDynamic:
@@ -3260,8 +3369,17 @@ func compileExtractInput(input plan.FieldRef, state compileState) (valueSQL, eli
 		if typeSQL == "" {
 			typeSQL = "dynamicType(" + field.valueSQL + ")"
 		}
+		textEligible := ""
+		if field.textEligibleSQL != "" {
+			textEligible += " AND (" + field.textEligibleSQL + ")"
+		}
+		if field.storedTypeSQL != "" {
+			textEligible += " AND " + field.storedTypeSQL + " = toUInt8(" +
+				strconv.Itoa(int(eventfields.StoredValueTypeString)) + ")"
+		}
 		return value,
-			"(" + existsSQL + " AND " + typeSQL + " = 'String' AND isNotNull(" + field.valueSQL + ") AND isValidUTF8(" + value + "))",
+			"(" + existsSQL + " AND " + typeSQL + " = 'String'" + textEligible +
+				" AND isNotNull(" + field.valueSQL + ") AND isValidUTF8(" + value + "))",
 			append([]any(nil), field.existsArgs...),
 			nil
 	default:
@@ -3269,6 +3387,254 @@ func compileExtractInput(input plan.FieldRef, state compileState) (valueSQL, eli
 		// container sources. They behave exactly like a non-match.
 		return "CAST(NULL AS Nullable(String))", "0", nil, nil
 	}
+}
+
+func compileExtractJSON(
+	relation compiledRelation,
+	operator *plan.ExtractJSON,
+	state compileState,
+	stage int,
+) (compiledRelation, compileState, []any, int, error) {
+	steps, err := validateExtractJSONOperator(operator)
+	if err != nil {
+		return compiledRelation{}, compileState{}, nil, 0, err
+	}
+	openEventSchema := state.eventRows && state.allowDynamic
+	if openEventSchema && (operator.Input.Name == "fields" || operator.Output.Name == "fields") {
+		return compiledRelation{}, compileState{}, nil, 0, &plan.Diagnostic{
+			Code:    "SPL_AMBIGUOUS_SPATH_FIELD",
+			Message: "spath cannot use the event result's reserved fields payload without an exact upstream schema",
+			Range:   operator.Range,
+		}
+	}
+
+	inputSQL, sourceEligibleSQL, inputArgs, err := compileExtractInput(operator.Input, state)
+	if err != nil {
+		return compiledRelation{}, compileState{}, nil, 0, err
+	}
+	inputField, inputKnown, err := resolveCompiledField(operator.Input, state)
+	if err != nil {
+		return compiledRelation{}, compileState{}, nil, 0, err
+	}
+	sourceMayExtract := inputKnown &&
+		(inputField.kind == fieldKindString || inputField.kind == fieldKindDynamic)
+	sourceEligibleAlias := quoteIdentifier(fmt.Sprintf("__os_spath_source_eligible_%d", stage))
+	inputAlias := quoteIdentifier(fmt.Sprintf("__os_spath_input_%d", stage))
+	eligibleAlias := quoteIdentifier(fmt.Sprintf("__os_spath_eligible_%d", stage))
+	pathEligibleAlias := quoteIdentifier(fmt.Sprintf("__os_spath_path_eligible_%d", stage))
+	jsonTypeAlias := quoteIdentifier(fmt.Sprintf("__os_spath_json_type_%d", stage))
+	rawAlias := quoteIdentifier(fmt.Sprintf("__os_spath_raw_%d", stage))
+	matchedAlias := quoteIdentifier(fmt.Sprintf("__os_spath_matched_%d", stage))
+	valueAlias := quoteIdentifier(fmt.Sprintf("__os_spath_value_%d", stage))
+
+	sourceExpressions := []string{
+		"toUInt8(ifNull(" + sourceEligibleSQL + ", 0)) AS " + sourceEligibleAlias,
+		"if(" + sourceEligibleAlias + " != 0, assumeNotNull(" + inputSQL +
+			"), CAST('' AS String)) AS " + inputAlias,
+	}
+	sourceFragment := "SELECT *, " + strings.Join(sourceExpressions, ", ") +
+		" FROM (" + relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", stage))
+	relation = relation.selectFrom(sourceFragment, operator.Range)
+
+	overInputLimit := sourceEligibleAlias + " != 0 AND length(" + inputAlias + ") > " +
+		strconv.Itoa(MaximumSpathInputBytes)
+	boundedEligible := "toUInt8(if(" + overInputLimit + ", throwIf(toUInt8(" +
+		overInputLimit + "), '" + SpathInputLimitMarker + "') = 0, " +
+		sourceEligibleAlias + " != 0)) AS " + eligibleAlias
+	arrayGuardSQL, arrayGuardArgs := spathArrayGuardSQL(inputAlias, steps)
+	pathEligible := eligibleAlias + " != 0"
+	if arrayGuardSQL != "" {
+		pathEligible += " AND " + arrayGuardSQL
+	}
+	pathEligibleExpression := "toUInt8(" + pathEligible + ") AS " + pathEligibleAlias
+	typePathSQL, typePathArgs := spathPathSQL(steps)
+	jsonTypeExpression := "if(" + pathEligibleAlias + " != 0, toString(JSONType(" +
+		inputAlias + ", " + typePathSQL + ")), CAST('' AS String)) AS " + jsonTypeAlias
+	rawPathSQL, rawPathArgs := spathPathSQL(steps)
+	rawExpression := "if(" + pathEligibleAlias + " != 0, JSONExtractRaw(" + inputAlias +
+		", " + rawPathSQL + "), CAST('' AS String)) AS " + rawAlias
+	rawFragment := "SELECT *, " + boundedEligible + ", " + pathEligibleExpression +
+		", " + jsonTypeExpression + ", " + rawExpression +
+		" FROM (" + relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_spath_source_%d", stage))
+	relation = relation.selectFrom(rawFragment, operator.Range)
+
+	supportedType := jsonTypeAlias + " IN ('Null', 'String', 'Bool', 'Int64', 'UInt64')"
+	unsupportedRaw := "notEmpty(" + rawAlias + ") AND NOT (" + supportedType + ")"
+	matchedExpression := "toUInt8(if(" + unsupportedRaw + ", throwIf(toUInt8(" +
+		unsupportedRaw + "), '" + UnsupportedSpathValueMarker + "') = 0, notEmpty(" +
+		rawAlias + "))) AS " + matchedAlias
+	valueExpression := "if(" + matchedAlias + " != 0, JSONExtract(" + rawAlias +
+		", 'Dynamic'), CAST(NULL AS Dynamic)) AS " + valueAlias
+	valueFragment := "SELECT *, " + matchedExpression + ", " + valueExpression +
+		" FROM (" + relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_spath_raw_%d", stage))
+	relation = relation.selectFrom(valueFragment, operator.Range)
+
+	previous, previousKnown, err := resolveCompiledField(operator.Output, state)
+	if err != nil {
+		return compiledRelation{}, compileState{}, nil, 0, err
+	}
+	previousValue := "CAST(NULL AS Dynamic)"
+	previousExists := "0"
+	var existenceArgs, typeArgs []any
+	previousTypeSQL := "toUInt8(0)"
+	if previousKnown {
+		previousValue = "CAST(" + previous.valueSQL + " AS Dynamic)"
+		previousExists, existenceArgs = knownFieldPresenceSQL(previous)
+		previousTypeSQL, typeArgs, err = knownFieldStoredTypeSQL(previous)
+		if err != nil {
+			return compiledRelation{}, compileState{}, nil, 0, fmt.Errorf(
+				"compile ClickHouse spath: resolve prior type for %q: %w",
+				operator.Output.Name,
+				err,
+			)
+		}
+	}
+
+	existsAlias := quoteIdentifier(fmt.Sprintf("__os_spath_exists_%d", stage))
+	typeAlias := quoteIdentifier(fmt.Sprintf("__os_spath_type_%d", stage))
+	existsProjection := "toUInt8(if(" + matchedAlias + " != 0, 1, ifNull(" +
+		previousExists + ", 0))) AS " + existsAlias
+	dynamicType := "dynamicType(" + valueAlias + ")"
+	selectedType := "multiIf(" +
+		dynamicType + " = 'None', toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeNull)) + "), " +
+		dynamicType + " = 'String', toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeString)) + "), " +
+		"startsWith(" + dynamicType + ", 'Int'), toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeSint64)) + "), " +
+		"startsWith(" + dynamicType + ", 'UInt'), toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeUint64)) + "), " +
+		dynamicType + " = 'Bool', toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeBool)) + "), " +
+		"toUInt8(0))"
+	typeProjection := "toUInt8(if(" + matchedAlias + " != 0, " + selectedType +
+		", " + previousTypeSQL + ")) AS " + typeAlias
+	textEligibleAlias := ""
+	textEligibleProjection := ""
+	if previousKnown && previous.textEligibleSQL != "" {
+		textEligibleAlias = quoteIdentifier(fmt.Sprintf("__os_spath_text_eligible_%d", stage))
+		textEligibleProjection = "toUInt8(if(" + matchedAlias + " != 0, 1, ifNull(" +
+			previous.textEligibleSQL + ", 0))) AS " + textEligibleAlias
+	}
+	outputValue := "if(" + matchedAlias + " != 0, " + valueAlias + ", " + previousValue + ")"
+
+	next := cloneCompileState(state)
+	if sourceMayExtract && exposesRawFieldsPayload(state) {
+		next.publicOrder = slices.DeleteFunc(next.publicOrder, func(name string) bool { return name == "fields" })
+	}
+	delete(next.blocked, operator.Output.Name)
+	if !slices.Contains(next.publicOrder, operator.Output.Name) {
+		next.publicOrder = append(next.publicOrder, operator.Output.Name)
+	}
+	outputName := quoteIdentifier(operator.Output.Name)
+	next.visible[operator.Output.Name] = fieldState{
+		valueSQL:                outputName,
+		textEligibleSQL:         textEligibleAlias,
+		dynamicTypeSQL:          "dynamicType(" + outputName + ")",
+		storedTypeSQL:           typeAlias,
+		existsSQL:               existsAlias,
+		descendantSQL:           previous.descendantSQL,
+		descendantArgs:          append([]any(nil), previous.descendantArgs...),
+		kind:                    fieldKindDynamic,
+		caseSensitive:           false,
+		materializeForPredicate: sourceMayExtract || previous.materializeForPredicate,
+	}
+
+	liveOldPrivateColumns := livePrivateColumns(state.privateColumns, next.visible)
+	next.privateColumns = append(append([]string(nil), liveOldPrivateColumns...), existsAlias, typeAlias)
+	if textEligibleAlias != "" {
+		next.privateColumns = append(next.privateColumns, textEligibleAlias)
+	}
+	projection := make([]string, 0, len(next.visible)+8)
+	for _, name := range orderedVisibleNames(next) {
+		publicName := quoteIdentifier(name)
+		if name == operator.Output.Name {
+			projection = append(projection, outputValue+" AS "+publicName)
+			continue
+		}
+		field, ok := state.visible[name]
+		if !ok {
+			return compiledRelation{}, compileState{}, nil, 0, fmt.Errorf(
+				"compile ClickHouse spath: field %q has no input value",
+				name,
+			)
+		}
+		if field.valueSQL == publicName {
+			projection = append(projection, publicName)
+		} else {
+			projection = append(projection, field.valueSQL+" AS "+publicName)
+		}
+	}
+	projectionState := next
+	projectionState.privateColumns = liveOldPrivateColumns
+	projection = appendPrivateEventProjection(projection, projectionState)
+	projection = append(projection, existsProjection, typeProjection)
+	if textEligibleProjection != "" {
+		projection = append(projection, textEligibleProjection)
+	}
+	outputFragment := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
+		relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
+	relation = relation.selectFrom(outputFragment, operator.Range)
+
+	prefixArgs := make([]any, 0,
+		len(existenceArgs)+len(typeArgs)+len(arrayGuardArgs)+
+			len(typePathArgs)+len(rawPathArgs)+len(inputArgs),
+	)
+	prefixArgs = append(prefixArgs, existenceArgs...)
+	prefixArgs = append(prefixArgs, typeArgs...)
+	prefixArgs = append(prefixArgs, arrayGuardArgs...)
+	prefixArgs = append(prefixArgs, typePathArgs...)
+	prefixArgs = append(prefixArgs, rawPathArgs...)
+	prefixArgs = append(prefixArgs, inputArgs...)
+	return relation, next, prefixArgs, 1, nil
+}
+
+func validateExtractJSONOperator(operator *plan.ExtractJSON) ([]splpath.Step, error) {
+	if operator == nil || operator.Input.Name == "" || operator.Output.Name == "" || operator.Path == "" {
+		return nil, errors.New("compile ClickHouse spath: operator is invalid")
+	}
+	if err := validateCanonicalFieldRef("spath", "input", operator.Input); err != nil {
+		return nil, err
+	}
+	if err := validateCanonicalFieldRef("spath", "output", operator.Output); err != nil {
+		return nil, err
+	}
+	steps, err := splpath.ParseJSON(operator.Path)
+	if err != nil {
+		return nil, fmt.Errorf("compile ClickHouse spath: invalid path: %w", err)
+	}
+	if !slices.Equal(steps, operator.Steps) {
+		return nil, errors.New("compile ClickHouse spath: path metadata does not match source")
+	}
+	return steps, nil
+}
+
+func spathPathSQL(steps []splpath.Step) (string, []any) {
+	placeholders := make([]string, 0, len(steps)*2)
+	args := make([]any, 0, len(steps)*2)
+	for _, step := range steps {
+		placeholders = append(placeholders, "?")
+		args = append(args, step.Key)
+		if step.HasIndex {
+			placeholders = append(placeholders, "?")
+			args = append(args, int64(step.Index)+1)
+		}
+	}
+	return strings.Join(placeholders, ", "), args
+}
+
+func spathArrayGuardSQL(inputSQL string, steps []splpath.Step) (string, []any) {
+	pathSQL := make([]string, 0, len(steps)*2)
+	pathArgs := make([]any, 0, len(steps)*2)
+	guards := make([]string, 0, len(steps))
+	args := make([]any, 0, len(steps)*len(steps))
+	for _, step := range steps {
+		pathSQL = append(pathSQL, "?")
+		pathArgs = append(pathArgs, step.Key)
+		if step.HasIndex {
+			guards = append(guards, "toString(JSONType("+inputSQL+", "+
+				strings.Join(pathSQL, ", ")+")) = 'Array'")
+			args = append(args, pathArgs...)
+			pathSQL = append(pathSQL, "?")
+			pathArgs = append(pathArgs, int64(step.Index)+1)
+		}
+	}
+	return strings.Join(guards, " AND "), args
 }
 
 func compileRenameAssignment(assignment plan.RenameAssignment, state compileState) ([]string, compileState, bool, error) {
@@ -3389,13 +3755,14 @@ func renamePublicOrder(current []string, source, destination string, sourceIsPub
 func projectedRenameField(source fieldState, destination string) fieldState {
 	value := quoteIdentifier(destination)
 	result := fieldState{
-		valueSQL:       value,
-		storedTypeSQL:  source.storedTypeSQL,
-		existsSQL:      rewriteExistenceForProjection(source, destination),
-		existsArgs:     append([]any(nil), source.existsArgs...),
-		descendantSQL:  source.descendantSQL,
-		descendantArgs: append([]any(nil), source.descendantArgs...),
-		kind:           source.kind,
+		valueSQL:        value,
+		textEligibleSQL: source.textEligibleSQL,
+		storedTypeSQL:   source.storedTypeSQL,
+		existsSQL:       rewriteExistenceForProjection(source, destination),
+		existsArgs:      append([]any(nil), source.existsArgs...),
+		descendantSQL:   source.descendantSQL,
+		descendantArgs:  append([]any(nil), source.descendantArgs...),
+		kind:            source.kind,
 		// A field renamed to index is calculated pipeline data, not the
 		// authorization-constrained physical index selector.
 		caseSensitive:           false,
@@ -3474,7 +3841,8 @@ func livePrivateColumns(columns []string, visible map[string]fieldState) []strin
 	live := make([]string, 0, len(columns))
 	for _, column := range columns {
 		for _, field := range visible {
-			if field.existsSQL == column || field.storedTypeSQL == column {
+			if field.existsSQL == column || field.storedTypeSQL == column ||
+				field.textEligibleSQL == column {
 				live = append(live, column)
 				break
 			}
@@ -3496,6 +3864,7 @@ func appendPrivateEventProjection(projection []string, state compileState) []str
 			quoteIdentifier(internalFieldNamesColumn),
 			quoteIdentifier(internalFieldTypesColumn),
 			quoteIdentifier(internalFieldMetadataVersionColumn),
+			quoteIdentifier(internalRawEncodingColumn),
 			quoteIdentifier(internalSortTimeColumn),
 			quoteIdentifier(internalSortIDColumn),
 		)
@@ -4083,6 +4452,7 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		valueSQL:                field.valueSQL,
 		existsSQL:               field.existsSQL,
 		existsArgs:              append([]any(nil), field.existsArgs...),
+		textEligibleSQL:         field.textEligibleSQL,
 		dynamicTypeSQL:          field.dynamicTypeSQL,
 		storedTypeSQL:           field.storedTypeSQL,
 		descendantSQL:           field.descendantSQL,
@@ -4290,7 +4660,8 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 			projection = append(projection, compiled.valueSQL+" AS "+publicName)
 		}
 		next.visible[name] = fieldState{
-			valueSQL: publicName, dynamicTypeSQL: compiled.dynamicTypeSQL,
+			valueSQL: publicName, textEligibleSQL: compiled.textEligibleSQL,
+			dynamicTypeSQL:          compiled.dynamicTypeSQL,
 			storedTypeSQL:           compiled.storedTypeSQL,
 			existsSQL:               rewriteExistenceForProjection(compiled, name),
 			existsArgs:              append([]any(nil), compiled.existsArgs...),

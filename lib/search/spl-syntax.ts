@@ -46,6 +46,26 @@ export const SPL_PIPELINE_COMMANDS = [
     detail: "Keep the first row for each exact key.",
   },
   {
+    name: "rex",
+    insertion: 'rex field=_raw "(?<request_id>request_id=[^ ]+)"',
+    detail: "Extract named fields with the supported RE2 subset.",
+  },
+  {
+    name: "spath",
+    insertion: "spath input=payload output=status path=response.status",
+    detail: "Extract one typed scalar from an explicit JSON path.",
+  },
+  {
+    name: "bin",
+    insertion: "bin duration_ms span=100 AS duration_bucket",
+    detail: "Bucket one numeric or canonical time field with an explicit span.",
+  },
+  {
+    name: "bucket",
+    insertion: "bucket _time span=5m",
+    detail: "Alias of bin with an explicit span.",
+  },
+  {
     name: "head",
     insertion: "head 20",
     detail: "Keep the first rows.",
@@ -75,14 +95,14 @@ export const SPL_PIPELINE_COMMANDS = [
     insertion: "timechart span=5m count BY level",
     detail: "Chart count over fixed time buckets.",
   },
+  {
+    name: "chart",
+    insertion: "chart count OVER status BY level",
+    detail: "Build a bounded two-dimensional aggregate table.",
+  },
 ] as const satisfies readonly SplPipelineCommandDefinition[];
 
 export const UNSUPPORTED_SPL_PIPELINE_COMMANDS = [
-  "chart",
-  "rex",
-  "spath",
-  "bin",
-  "bucket",
   "eventstats",
   "streamstats",
   "transaction",

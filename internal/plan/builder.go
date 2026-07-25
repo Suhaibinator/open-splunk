@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
 )
 
@@ -33,10 +35,10 @@ const (
 	maxChartRows = 10_000
 	// Splunk documents chart's column-series defaults as limit=top 10 with
 	// useother=true and usenull=true, so at most twelve series exist.
-	chartSeriesLimit      = 10
-	maxChartSeries        = 12
-	maxDedupFields        = 16
-	maxRexOutputsPerQuery = 64
+	chartSeriesLimit             = 10
+	maxChartSeries               = 12
+	maxDedupFields               = 16
+	maxExtractionOutputsPerQuery = 64
 )
 
 // Scope is the server-resolved security and snapshot boundary for a search.
@@ -103,7 +105,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 
 	outputSchemaKnown := false
 	canonicalTimeAvailable := true
-	rexOutputCount := 0
+	extractionOutputCount := 0
+	spathEvaluationWorkUnits := 0
 	for commandIndex, command := range query.Commands {
 		switch command := command.(type) {
 		case *spl.SearchCommand:
@@ -159,11 +162,11 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Range:   command.Range,
 				}
 			}
-			rexOutputCount += len(compiled.Captures)
-			if rexOutputCount > maxRexOutputsPerQuery {
+			extractionOutputCount += len(compiled.Captures)
+			if extractionOutputCount > maxExtractionOutputsPerQuery {
 				return nil, &Diagnostic{
 					Code:    "SPL_QUERY_TOO_COMPLEX",
-					Message: fmt.Sprintf("search extracts more than %d rex output fields", maxRexOutputsPerQuery),
+					Message: fmt.Sprintf("search creates more than %d extraction output fields", maxExtractionOutputsPerQuery),
 					Range:   command.Range,
 				}
 			}
@@ -208,6 +211,85 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				Captures: captures,
 				Range:    command.Range,
 			})
+		case *spl.SpathCommand:
+			if command == nil {
+				return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "spath command is nil"}
+			}
+			steps, pathErr := splpath.ParseJSON(command.Path)
+			if pathErr != nil {
+				code := "SPL_INVALID_QUERY"
+				var bounded *splpath.Error
+				if errors.As(pathErr, &bounded) && bounded.Kind == splpath.ErrorKindTooComplex {
+					code = "SPL_QUERY_TOO_COMPLEX"
+				}
+				return nil, &Diagnostic{
+					Code:    code,
+					Message: "spath path metadata is invalid",
+					Range:   command.PathRange,
+				}
+			}
+			if !slices.Equal(steps, command.Steps) {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_QUERY",
+					Message: "spath path metadata does not match its source",
+					Range:   command.PathRange,
+				}
+			}
+			spathEvaluationWorkUnits += splpath.EvaluationWorkUnits(steps)
+			if spathEvaluationWorkUnits > splpath.MaximumEvaluationWorkUnits {
+				return nil, &Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"spath stages require more than %d JSON evaluation work units per row",
+						splpath.MaximumEvaluationWorkUnits,
+					),
+					Range: command.Range,
+				}
+			}
+			extractionOutputCount++
+			if extractionOutputCount > maxExtractionOutputsPerQuery {
+				return nil, &Diagnostic{
+					Code:    "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf("search creates more than %d extraction output fields", maxExtractionOutputsPerQuery),
+					Range:   command.Range,
+				}
+			}
+			if !outputSchemaKnown && (command.Input == "fields" || command.Output == "fields") {
+				fieldRange := command.InputRange
+				if command.Output == "fields" {
+					fieldRange = command.OutputRange
+				}
+				return nil, &Diagnostic{
+					Code:    "SPL_AMBIGUOUS_SPATH_FIELD",
+					Message: "spath cannot use the event result's reserved fields payload without an exact upstream schema",
+					Range:   fieldRange,
+					Suggestions: []string{
+						"select an exact ordinary field with table before spath",
+						"produce a closed stats schema before using a field named fields",
+					},
+				}
+			}
+			input, inputErr := ResolveField(command.Input, command.InputRange)
+			if inputErr != nil {
+				return nil, inputErr
+			}
+			output, outputErr := ResolveField(command.Output, command.OutputRange)
+			if outputErr != nil {
+				return nil, outputErr
+			}
+			result.Operators = append(result.Operators, &ExtractJSON{
+				Input:  input,
+				Output: output,
+				Path:   command.Path,
+				Steps:  slices.Clone(steps),
+				Range:  command.Range,
+			})
+			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Output) {
+				result.OutputFields = append(result.OutputFields, command.Output)
+			}
+			if command.Output == "_time" {
+				canonicalTimeAvailable = false
+			}
 		case *spl.BinCommand:
 			if !outputSchemaKnown && command.Field == "fields" {
 				return nil, &Diagnostic{
@@ -1053,6 +1135,10 @@ func positiveIndexReferences(
 				if capture.Name == "index" {
 					return references
 				}
+			}
+		case *spl.SpathCommand:
+			if command != nil && command.Output == "index" {
+				return references
 			}
 		case *spl.RenameCommand:
 			for _, assignment := range command.Assignments {

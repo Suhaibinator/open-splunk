@@ -110,6 +110,25 @@ func TestRexCompatibilityCorpus(t *testing.T) {
 	}
 }
 
+func TestSpathCompatibilityCorpus(t *testing.T) {
+	t.Parallel()
+
+	queries := []string{
+		`index=gradethis | spath path=request.context.trace_id | table request.context.trace_id`,
+		`index=gradethis | spath input=payload output=status path=response.status | stats count BY status`,
+		`index=gradethis | spath input=payload output=first_sku path=items{0}.sku | search first_sku=*`,
+		`index=gradethis | spath output=server_name server.name | sort server_name`,
+	}
+	for _, source := range queries {
+		compiled := compileSPL(t, source)
+		if compiled.SQL == "" || len(compiled.OutputFields) == 0 ||
+			strings.Count(compiled.SQL, "JSONExtractRaw(") != 1 ||
+			strings.Count(compiled.SQL, "JSONExtract(") != 1 {
+			t.Fatalf("spath corpus query is incomplete for %q: %#v", source, compiled)
+		}
+	}
+}
+
 func TestBinCompatibilityCorpus(t *testing.T) {
 	t.Parallel()
 

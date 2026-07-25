@@ -1170,6 +1170,7 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 		clickhouse.UnsupportedStatsByValueMarker,
 		clickhouse.UnsupportedDedupValueMarker,
 		clickhouse.UnsupportedNumericBinValueMarker,
+		clickhouse.UnsupportedSpathValueMarker,
 	} {
 		unsupported := &clickhousedriver.Exception{
 			Code:    395,
@@ -1189,6 +1190,15 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 		strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), clickhouse.RexCaptureLimitMarker) {
 		t.Fatalf("rex capture limit classification = %v", err)
 	}
+	spathLimit := &clickhousedriver.Exception{
+		Code:    395,
+		Name:    "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
+		Message: clickhouse.SpathInputLimitMarker + "; generated SQL contained secret",
+	}
+	if err := classifyQueryError(context.Background(), spathLimit); !errors.Is(err, searchjobs.ErrExecutionLimit) ||
+		strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), clickhouse.SpathInputLimitMarker) {
+		t.Fatalf("spath input limit classification = %v", err)
+	}
 	chartRows := &clickhousedriver.Exception{
 		Code:    395,
 		Name:    "FUNCTION_THROW_IF_VALUE_IS_NON_ZERO",
@@ -1202,6 +1212,7 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 		clickhouse.UnsupportedStatsByValueMarker,
 		clickhouse.UnsupportedDedupValueMarker,
 		clickhouse.UnsupportedNumericBinValueMarker,
+		clickhouse.UnsupportedSpathValueMarker,
 	} {
 		wrongCode := &clickhousedriver.Exception{Code: 241, Message: marker}
 		if err := classifyQueryError(context.Background(), wrongCode); !errors.Is(err, searchjobs.ErrExecutionLimit) || errors.Is(err, searchjobs.ErrUnsupportedValue) {

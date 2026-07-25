@@ -604,6 +604,27 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("spath typed output through manager", func(t *testing.T) {
+		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-spath-pipeline",
+			`index=main | spath input=payload output=first_sku path=items{0}.sku | where first_sku="sku-1" | table first_sku`,
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("spath state = %v, failure=%#v", job.State, job.Failure)
+		}
+		if len(page.Schema.Columns) != 1 || page.Schema.Columns[0].Name != "first_sku" ||
+			page.Schema.Columns[0].Kind != searchjobs.ValueKindMixed ||
+			!page.Schema.Columns[0].Nullable || page.Schema.Columns[0].Multivalue {
+			t.Fatalf("spath schema = %#v", page.Schema)
+		}
+		if len(page.Rows) != 1 {
+			t.Fatalf("spath rows = %d, want 1", len(page.Rows))
+		}
+		if sku, ok := page.Rows[0].Values[0].String(); !ok || sku != "sku-1" {
+			t.Fatalf("spath first_sku = %q, %v", sku, ok)
+		}
+	})
+
 	t.Run("stats sum and average nullable doubles through manager", func(t *testing.T) {
 		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
 			"queryexec-stats-sum-average",
@@ -1422,6 +1443,7 @@ ORDER BY grid.number`,
 			clickhouse.UnsupportedStatsByValueMarker,
 			clickhouse.UnsupportedDedupValueMarker,
 			clickhouse.UnsupportedNumericBinValueMarker,
+			clickhouse.UnsupportedSpathValueMarker,
 		} {
 			err := executor.Execute(ctx, clickhouse.CompiledQuery{
 				SQL:          `SELECT throwIf(toUInt8(1), '` + marker + `') AS impossible`,
@@ -1433,15 +1455,20 @@ ORDER BY grid.number`,
 		}
 	})
 
-	t.Run("rex capture limit is safely classified", func(t *testing.T) {
-		err := executor.Execute(ctx, clickhouse.CompiledQuery{
-			SQL: `SELECT throwIf(toUInt8(1), '` + clickhouse.RexCaptureLimitMarker +
-				`') AS impossible`,
-			OutputFields: []string{"impossible"},
-		}, &fakeSink{})
-		if !errors.Is(err, searchjobs.ErrExecutionLimit) ||
-			strings.Contains(err.Error(), clickhouse.RexCaptureLimitMarker) {
-			t.Fatalf("rex capture limit classification = %v", err)
+	t.Run("calculated extraction limits are safely classified", func(t *testing.T) {
+		for _, marker := range []string{
+			clickhouse.RexCaptureLimitMarker,
+			clickhouse.SpathInputLimitMarker,
+		} {
+			err := executor.Execute(ctx, clickhouse.CompiledQuery{
+				SQL: `SELECT throwIf(toUInt8(1), '` + marker +
+					`') AS impossible`,
+				OutputFields: []string{"impossible"},
+			}, &fakeSink{})
+			if !errors.Is(err, searchjobs.ErrExecutionLimit) ||
+				strings.Contains(err.Error(), marker) {
+				t.Fatalf("calculated extraction limit %q classification = %v", marker, err)
+			}
 		}
 	})
 
@@ -1518,6 +1545,7 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 	document := clickhousedriver.NewJSON()
 	document.SetValueAtPath("status", clickhousedriver.NewDynamic("200"))
 	document.SetValueAtPath("path", clickhousedriver.NewDynamic("/manager"))
+	document.SetValueAtPath("payload", clickhousedriver.NewDynamic(`{"items":[{"sku":"sku-1"}]}`))
 	document.SetValueAtPath("duration", clickhousedriver.NewDynamic("650ms"))
 	document.SetValueAtPath("logger.child", clickhousedriver.NewDynamic("stored-source-child"))
 	document.SetValueAtPath("typed_bytes", queryIntegrationExtendedValue("bytes/v1", "AP8"))
@@ -1529,7 +1557,7 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 		"queryexec-event", "tenant", "main", now, now,
 		nil, uint8(1), "host", "source", "test", nil, uint8(1), nil, &message, []byte(message),
 		uint8(1), nil, nil, document,
-		[]string{"component.child", "duration", "logger.child", "path", "status", "typed_bytes", "typed_decimal", "typed_duration", "typed_timestamp"},
+		[]string{"component.child", "duration", "logger.child", "path", "payload", "status", "typed_bytes", "typed_decimal", "typed_duration", "typed_timestamp"},
 		"collector", "batch", uint64(1),
 		now.Add(24*time.Hour), uint64(1),
 	); err != nil {

@@ -1,6 +1,10 @@
 package spl
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/Suhaibinator/open-splunk/internal/splpath"
+)
 
 // Position identifies a UTF-8 source position. Offset is zero-based while
 // Line and Column are one-based.
@@ -301,6 +305,24 @@ type RexCommand struct {
 func (*RexCommand) command()             {}
 func (*RexCommand) Name() string         { return "rex" }
 func (c *RexCommand) SourceRange() Range { return c.Range }
+
+// SpathCommand extracts one explicitly addressed JSON value from a current
+// pipeline String field. Steps are the validated, constant location path;
+// Input defaults to _raw and Output defaults to the decoded Path spelling.
+type SpathCommand struct {
+	Input       string
+	InputRange  Range
+	Output      string
+	OutputRange Range
+	Path        string
+	PathRange   Range
+	Steps       []splpath.Step
+	Range       Range
+}
+
+func (*SpathCommand) command()             {}
+func (*SpathCommand) Name() string         { return "spath" }
+func (c *SpathCommand) SourceRange() Range { return c.Range }
 
 // RenameAssignment moves one exact field name to another. Assignments retain
 // source order because SPL applies multiple rename pairs from left to right.

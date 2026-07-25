@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
 )
 
@@ -141,6 +142,8 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseEvalCommand(nameToken)
 	case "rex":
 		return p.parseRexCommand(nameToken)
+	case "spath":
+		return p.parseSpathCommand(nameToken)
 	case "rename":
 		return p.parseRenameCommand(nameToken)
 	case "fields":
@@ -172,6 +175,154 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 			Range:   nameToken.range_,
 		}
 	}
+}
+
+func (p *parser) parseSpathCommand(name token) (Command, error) {
+	command := &SpathCommand{
+		Input:      "_raw",
+		InputRange: name.range_,
+	}
+	var inputSeen, outputSeen, pathSeen bool
+	end := name.range_.End
+
+	if p.atCommandEnd() {
+		return nil, &Diagnostic{
+			Code:        "SPL_UNSUPPORTED_SPATH_SYNTAX",
+			Message:     "spath auto-extraction is not supported; provide one explicit JSON path",
+			Range:       name.range_,
+			Suggestions: []string{"spath path=server.name", "spath output=value path=server.name"},
+		}
+	}
+
+	parseFieldOption := func(optionName string, seen *bool, destination *string, sourceRange *Range) error {
+		option := p.current()
+		if *seen {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_SPATH_SYNTAX",
+				Message: fmt.Sprintf("spath %s may be specified only once", optionName),
+				Range:   option.range_,
+			}
+		}
+		*seen = true
+		p.advance()
+		if !p.match(tokenEqual) {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_SPATH_SYNTAX",
+				Message: fmt.Sprintf("spath %s must be written as %s=<field>", optionName, optionName),
+				Range:   option.range_,
+			}
+		}
+		value := p.current()
+		if (value.kind != tokenWord && value.kind != tokenString) || value.text == "" {
+			return p.errorAtCurrent("SPL_EXPECTED_FIELD", fmt.Sprintf("spath %s requires one exact field", optionName))
+		}
+		*destination = value.text
+		*sourceRange = value.range_
+		end = value.range_.End
+		p.advance()
+		return nil
+	}
+
+	parsePath := func(labelled bool) error {
+		option := p.current()
+		if pathSeen {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_SPATH_SYNTAX",
+				Message: "spath path may be specified only once",
+				Range:   option.range_,
+			}
+		}
+		pathSeen = true
+		if labelled {
+			p.advance()
+			if !p.match(tokenEqual) {
+				return &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_SPATH_SYNTAX",
+					Message: "spath path must be written as path=<datapath>",
+					Range:   option.range_,
+				}
+			}
+		}
+		value := p.current()
+		if (value.kind != tokenWord && value.kind != tokenString) || value.text == "" {
+			return p.errorAtCurrent("SPL_EXPECTED_SPATH_PATH", "spath requires one explicit JSON path")
+		}
+		steps, err := splpath.ParseJSON(value.text)
+		if err != nil {
+			pathErr, ok := err.(*splpath.Error)
+			if !ok {
+				return err
+			}
+			code := "SPL_INVALID_SPATH_PATH"
+			if pathErr.Kind == splpath.ErrorKindUnsupported {
+				code = "SPL_UNSUPPORTED_SPATH_PATH"
+			} else if pathErr.Kind == splpath.ErrorKindTooComplex {
+				code = "SPL_QUERY_TOO_COMPLEX"
+			}
+			return &Diagnostic{
+				Code:        code,
+				Message:     fmt.Sprintf("%s at decoded path byte %d", pathErr.Message, pathErr.Offset),
+				Range:       value.range_,
+				Suggestions: []string{"use a bounded case-sensitive JSON path such as items{0}.name"},
+			}
+		}
+		command.Path = value.text
+		command.PathRange = value.range_
+		command.Steps = append([]splpath.Step(nil), steps...)
+		end = value.range_.End
+		p.advance()
+		return nil
+	}
+
+	for !p.atCommandEnd() {
+		switch {
+		case p.isKeyword("input") && p.nextIs(tokenEqual):
+			if err := parseFieldOption("input", &inputSeen, &command.Input, &command.InputRange); err != nil {
+				return nil, err
+			}
+		case p.isKeyword("output") && p.nextIs(tokenEqual):
+			if err := parseFieldOption("output", &outputSeen, &command.Output, &command.OutputRange); err != nil {
+				return nil, err
+			}
+		case p.isKeyword("path") && p.nextIs(tokenEqual):
+			if err := parsePath(true); err != nil {
+				return nil, err
+			}
+		case !pathSeen && !p.nextIs(tokenEqual) &&
+			(p.current().kind == tokenWord || p.current().kind == tokenString):
+			if err := parsePath(false); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_SPATH_SYNTAX",
+				Message:     fmt.Sprintf("unsupported spath option or syntax at %q", p.current().text),
+				Range:       p.current().range_,
+				Suggestions: []string{"spath input=payload output=value path=server.name"},
+			}
+		}
+	}
+
+	if !pathSeen {
+		code := "SPL_UNSUPPORTED_SPATH_SYNTAX"
+		message := "spath auto-extraction is not supported; provide one explicit JSON path"
+		if outputSeen {
+			code = "SPL_EXPECTED_SPATH_PATH"
+			message = "spath output requires one explicit JSON path"
+		}
+		return nil, &Diagnostic{
+			Code:        code,
+			Message:     message,
+			Range:       name.range_,
+			Suggestions: []string{"spath path=server.name"},
+		}
+	}
+	if !outputSeen {
+		command.Output = command.Path
+		command.OutputRange = command.PathRange
+	}
+	command.Range = Range{Start: name.range_.Start, End: end}
+	return command, nil
 }
 
 func (p *parser) parseRexCommand(name token) (Command, error) {
@@ -2125,6 +2276,10 @@ func (p *parser) advance() {
 
 func (p *parser) current() token {
 	return p.tokens[p.index]
+}
+
+func (p *parser) nextIs(kind tokenKind) bool {
+	return p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == kind
 }
 
 func (p *parser) previous() token {

@@ -2552,7 +2552,7 @@ func TestCompileScanAliasesPersistedFieldMetadataWithoutPublicExposure(t *testin
 func TestEventPipelinesPreservePersistedFieldMetadataForAnalysis(t *testing.T) {
 	t.Parallel()
 
-	const explicitPrivateProjection = `"__os_fields", "__os_field_names", "__os_field_types", "__os_field_metadata_version", "__os_sort_time", "__os_sort_event_id"`
+	const explicitPrivateProjection = `"__os_fields", "__os_field_names", "__os_field_types", "__os_field_metadata_version", "__os_raw_encoding", "__os_sort_time", "__os_sort_event_id"`
 	tests := []struct {
 		name          string
 		source        string

@@ -566,8 +566,13 @@ func knownFieldStoredTypeSQL(field fieldState) (string, []any, error) {
 		return "CAST(? AS UInt8)", []any{uint8(eventfields.StoredValueTypeNull)}, nil
 	}
 	if field.kind == fieldKindString {
-		return "multiIf(isNull(" + field.valueSQL + "), CAST(? AS UInt8), isValidUTF8(" + field.valueSQL +
-				"), CAST(? AS UInt8), CAST(? AS UInt8))", []any{
+		stringEligible := "isValidUTF8(" + field.valueSQL + ")"
+		if field.textEligibleSQL != "" {
+			stringEligible = "(" + field.textEligibleSQL + ") AND isValidUTF8(" +
+				field.valueSQL + ")"
+		}
+		return "multiIf(isNull(" + field.valueSQL + "), CAST(? AS UInt8), " + stringEligible +
+				", CAST(? AS UInt8), CAST(? AS UInt8))", []any{
 				uint8(eventfields.StoredValueTypeNull),
 				uint8(eventfields.StoredValueTypeString),
 				uint8(eventfields.StoredValueTypeBytes),

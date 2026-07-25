@@ -378,7 +378,8 @@ func TestCompileFieldCatalogDistinguishesBinaryRawFromUTF8String(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileFieldCatalog(t, buildPlan(t, `index=gradethis | table _raw`), 10)
-	if !strings.Contains(compiled.SQL, `isValidUTF8("_raw")`) ||
+	if !strings.Contains(compiled.SQL, `("__os_raw_encoding" = 1)`) ||
+		!strings.Contains(compiled.SQL, `isValidUTF8("_raw")`) ||
 		!containsArgument(compiled.Args, uint8(eventfields.StoredValueTypeBytes)) {
 		t.Fatalf("_raw semantic type does not distinguish binary bytes:\n%s\nargs: %#v", compiled.SQL, compiled.Args)
 	}

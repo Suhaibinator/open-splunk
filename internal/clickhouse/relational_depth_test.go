@@ -121,6 +121,7 @@ func TestCompiledRelationalDepthPinsRepresentativeOperatorCosts(t *testing.T) {
 			depth:  23,
 		},
 		{name: "rex", source: `| rex field=_raw "(?<word>[a-z]+)"`, depth: 7},
+		{name: "spath", source: `| spath output=value path=payload.value`, depth: 6},
 		{name: "fixed dedup", source: `| dedup host`, depth: 4},
 		{name: "dynamic dedup", source: `| dedup latency`, depth: 5},
 		{name: "dynamic aggregate", source: `| stats count BY latency`, depth: 6},
@@ -142,6 +143,35 @@ func TestCompiledRelationalDepthPinsRepresentativeOperatorCosts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSpathRelationalDepthBoundaryIsSourceLocated(t *testing.T) {
+	t.Parallel()
+
+	acceptedSource := relationalDepthEvalPipeline(
+		t,
+		26,
+		64,
+		"spath output=value path=payload.value",
+	)
+	accepted, err := (Compiler{}).Compile(relationalDepthPlan(t, acceptedSource))
+	if err != nil {
+		t.Fatalf("Compile(spath at depth 96): %v", err)
+	}
+	if accepted.relationalDepth != 96 {
+		t.Fatalf("accepted spath relational depth = %d, want 96", accepted.relationalDepth)
+	}
+
+	rejectedSource := relationalDepthEvalPipeline(
+		t,
+		27,
+		64,
+		"spath output=value path=payload.value",
+	)
+	rejected := relationalDepthPlan(t, rejectedSource)
+	spathRange := rejected.Operators[len(rejected.Operators)-1].SourceRange()
+	_, err = (Compiler{}).Compile(rejected)
+	relationalDepthRequireLimitDiagnostic(t, err, spathRange)
 }
 
 func TestCalculatedDynamicPredicateFencePinsOrdinaryDepth(t *testing.T) {

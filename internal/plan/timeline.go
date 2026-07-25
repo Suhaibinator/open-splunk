@@ -53,6 +53,10 @@ func ValidateTimelineEligibility(query *Query) error {
 					return timelineTimeDiagnostic(operator.Range)
 				}
 			}
+		case *ExtractJSON:
+			if operator.Output.Name == "_time" {
+				return timelineTimeDiagnostic(operator.Range)
+			}
 		case *Rename:
 			for _, assignment := range operator.Assignments {
 				if assignment.Source.Name == "_time" || assignment.Destination.Name == "_time" {

@@ -1320,12 +1320,16 @@ func classifyQueryError(ctx context.Context, err error) error {
 		if exception.Code == 395 && strings.Contains(exception.Message, clickhouse.RexCaptureLimitMarker) {
 			return fmt.Errorf("%w: rex capture bytes exceeded the per-row limit", searchjobs.ErrExecutionLimit)
 		}
+		if exception.Code == 395 && strings.Contains(exception.Message, clickhouse.SpathInputLimitMarker) {
+			return fmt.Errorf("%w: spath input bytes exceeded the per-row limit", searchjobs.ErrExecutionLimit)
+		}
 		if exception.Code == 395 && strings.Contains(exception.Message, clickhouse.ChartRowLimitMarker) {
 			return fmt.Errorf("%w: chart row values exceeded the supported limit", searchjobs.ErrExecutionLimit)
 		}
 		if exception.Code == 395 && (strings.Contains(exception.Message, clickhouse.UnsupportedStatsByValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedDedupValueMarker) ||
-			strings.Contains(exception.Message, clickhouse.UnsupportedNumericBinValueMarker)) {
+			strings.Contains(exception.Message, clickhouse.UnsupportedNumericBinValueMarker) ||
+			strings.Contains(exception.Message, clickhouse.UnsupportedSpathValueMarker)) {
 			// The compiler deliberately emits stable markers when an operation
 			// encounters a value outside its supported scalar/type/range
 			// contract. Do not retain any surrounding ClickHouse message,

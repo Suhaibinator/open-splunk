@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"github.com/Suhaibinator/open-splunk/internal/splpath"
 )
 
 // MaximumNumericBinSpan is the largest unitless bin width whose integer value
@@ -154,6 +155,21 @@ type Extract struct {
 func (*Extract) operator()                 {}
 func (*Extract) LogicalName() string       { return "Extract" }
 func (op *Extract) SourceRange() spl.Range { return op.Range }
+
+// ExtractJSON reads one explicit, constant JSON path from Input and
+// conditionally replaces Output with the typed scalar leaf. It preserves row
+// cardinality, event identity, and established ordering.
+type ExtractJSON struct {
+	Input  FieldRef
+	Output FieldRef
+	Path   string
+	Steps  []splpath.Step
+	Range  spl.Range
+}
+
+func (*ExtractJSON) operator()                 {}
+func (*ExtractJSON) LogicalName() string       { return "ExtractJSON" }
+func (op *ExtractJSON) SourceRange() spl.Range { return op.Range }
 
 // RenameAssignment moves one exact logical field to another. Assignments are
 // ordered because SPL evaluates multiple pairs from left to right.
