@@ -6,19 +6,19 @@ This is the canonical restart document for backend work. Read it together with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Pause checkpoint: bounded exact `stats values`
+## Pause checkpoint: exact `stats count(field)`
 
 Date: 2026-07-25
 
 Branch: `main`
 
 Starting commit for this slice:
-`d736396e780dc065769bdb9ae85392b2df19d0b5`
-(`record distinct count backend checkpoint`)
+`de29117d68e330b3b7d4d02482fcc59cf944c955`
+(`record stats values backend checkpoint`)
 
 Feature commit for this slice:
-`6d6d5d145a7a7b58a03793b4e21edf1d41fe0c69`
-(`implement bounded stats values`)
+`59173ff4ac97a3ade9f1724fc0750cda0193d04c`
+(`implement stats count field`)
 
 The overall backend objective remains active. Work is intentionally paused at
 a green, committed, and pushed checkpoint because the user requested a safe
@@ -26,129 +26,104 @@ break. The product architecture plan is not complete.
 
 ## What this slice completed
 
-Open Splunk now implements exact, bounded `stats values(field)` from SPL source
-through ClickHouse execution, search-job paging, and typed result transport.
+Open Splunk now implements exact `stats count(field)` from SPL source through
+ClickHouse execution, search-job paging, and typed UInt64 result transport.
+Argument-free `count` remains the distinct row-count operation.
 
 ### SPL, AST, plan, and editor contract
 
-- `values(field)` is case-insensitive and requires exactly one unquoted exact
-  field.
-- Its default output is the canonical lowercase spelling `values(field)`;
-  explicit `AS` aliases are supported and recommended for downstream use.
-- Parser, planner, and compiler revalidate measure count, exact fields,
-  reserved open-schema `fields`, output uniqueness, forged function metadata,
-  and relational-depth limits.
-- The search editor advertises `values` in the supported `stats` surface.
-- The public behavior and conservative multivalue boundaries are recorded in
+- `count(field)` is case-insensitive and requires exactly one unquoted exact
+  field. Its default output is canonical `count(field)`; explicit `AS` aliases
+  are supported and needed for downstream use with the current field grammar.
+- `count()`, `c(field)`, wildcard and quoted fields, multiple inputs, and
+  `count(eval(...))` fail explicitly rather than being approximated.
+- Separate AST and plan enum values keep argument-free row count distinct from
+  field-occurrence count.
+- Parser, planner, and compiler revalidate exact fields, reserved open-schema
+  `fields`, output uniqueness, forged input/range/percentile metadata, and
+  relational-depth limits.
+- The search editor advertises both row and field count in the supported
+  `stats` surface.
+- The public behavior and typed-container boundary are recorded in
   `docs/spl-compatibility-v0.1.md`.
 
-### Exact value semantics
+### Exact occurrence semantics
 
-- `values` reuses the exact canonical scalar spelling used by `dc`:
-  - missing and explicit null contribute nothing;
-  - empty String is retained;
-  - a top-level multivalue input is flattened one level;
-  - null members are ignored and duplicates collapse;
-  - integer `1` and String `"1"` converge;
-  - Strings `"01"` and `"1.0"` remain distinct;
-  - Bool and equivalent String spellings converge; and
-  - Bytes, timestamps, durations, and decimals use deterministic stored
-    lexical payloads.
-- Generic objects, empty objects, nested arrays, and nested container members
-  fail the scoped search atomically with a sanitized unsupported-value error.
-- Results are sorted by raw String bytes. There is no numeric, locale,
-  case-insensitive, or Unicode-normalized ordering.
-- Global aggregation over no rows and retained groups with no eligible values
-  publish a non-null typed `[]`. Grouped aggregation over no rows publishes no
-  rows.
-- A physical empty list is logically absent for downstream `field=*`.
-- Invalid-UTF-8 fixed String values cross the typed boundary as Bytes children.
-  Text equality and wildcard matching explicitly exclude those members.
+- Missing, explicit null, an empty multivalue, and null multivalue members
+  contribute zero.
+- Every other scalar contributes one, including empty String, zero, `false`,
+  Bytes, timestamp, duration, and decimal values.
+- A top-level multivalue contributes its number of immediate non-null members.
+  Duplicates count; nested lists and objects count atomically and are not
+  traversed.
+- A top-level object contributes one. A non-empty object stored as flattened
+  leaves contributes once for its parent, not once per descendant. Direct,
+  renamed, projected, `eval`-copied, and extraction-preserved object
+  provenance is retained.
+- The ordinary scalar/multivalue contract follows Splunk's documented
+  occurrence behavior. Null multivalue members and typed containers are
+  explicit Open Splunk v0.1 choices because public Splunk documentation does
+  not pin those cases.
+- Global aggregation over no rows and retained groups with no occurrences
+  publish non-null UInt64 zero. Grouped aggregation over no rows publishes no
+  groups.
+- Projected-away fields remain absent and contribute zero rather than being
+  recovered from hidden event columns.
 
-### Shared lowering and resource bounds
+### Efficient ClickHouse lowering and bounds
 
-- `values(x)` and `dc(x)` in the same aggregate share one normalized input and
-  one exact ClickHouse set.
-- Repeated `values(x)` aliases share one aggregate state and one lexical sort.
-- A values-bearing set uses `groupUniqArrayArray(10001)`. A dc-only input keeps
-  the larger `100001` sentinel and publishes only a scalar cardinality through
-  the validation window, avoiding a post-aggregate array regression.
+- Each distinct input has one cached per-row UInt64 occurrence expression.
+  Repeated aliases reuse it.
 - No `ARRAY JOIN` is used, so sibling counts and numeric aggregates cannot be
   multiplied by multivalue expansion.
-- Publication limits are exact and fail rather than truncate:
-  - 10,000 elements and 512 KiB raw lexical payload per `values` cell;
-  - the same combined element/byte ceilings per public row across all values
-    aliases, counting duplicate aliases independently; and
-  - 100,000 elements and 8 MiB across the complete pre-downstream result.
-- UInt128 streaming folds and scalar additions account bytes/elements without
-  temporary per-element accounting arrays.
-- A whole-result window barrier validates every group before later
-  projection, filter, sort, `head`, or SQL `LIMIT`. A valid first row cannot
-  hide a later per-cell or total-only overflow.
-- ClickHouse query memory remains an independent bound on exact aggregate
-  state before the post-aggregate publication checks run.
-- Stable element and byte markers map to redacted search-job resource-limit
-  failures.
-
-### Typed downstream behavior
-
-- ClickHouse `Array(String)` becomes `ValueKindList` with
-  `Column.Multivalue=true`; valid text members are String children and invalid
-  UTF-8 members are Bytes children.
-- `fields`, `table`, `rename`, `head`, `tail`, and direct `eval` field copies
-  preserve the fixed multivalue type and empty-list presence rule.
-- A later `dc` or `values` flattens the list. `sum` and `avg` parse and flatten
-  finite numeric members.
-- Base-search equality and wildcard use any-valid-text-member matching.
-  Inequality requires a nonempty list with no equal member; `field=*` requires
-  a nonempty list.
-- Known fixed multivalue use is rejected explicitly for ordered search,
-  `where`, scalar `eval` functions, `sort`, `dedup`, `stats ... BY`, `p95`,
-  `rex`, `spath`, `bin`, `top`, `rare`, and chart axes. The compiler never
-  silently applies ClickHouse array stringification.
+- Dynamic arrays use one `arrayCount` over immediate members; fixed
+  `Array(String)` results use `length`; fixed nullable scalars use their
+  presence and null predicates; and absent compiled fields lower to literal
+  zero.
+- Dynamic `None` falls back to descendant presence so a copied flattened
+  object counts once while an explicit null remains zero.
+- Contributions sum in UInt128 and publish as UInt64. The shipped 250-million
+  source-row read ceiling, 1 MiB hard event ceiling, absence of row expansion,
+  and separate fixed-list bounds make the final cast safe.
+- The generated relation adds no wrapper, and the existing relational-depth
+  limit remains exact.
 
 ## Adversarial review record
 
 Independent agents reviewed SPL semantics, ClickHouse correctness, optimizer
-behavior, bounds, transport, test coverage, code reuse, maintainability, and
-efficiency. Concrete findings fixed before the checkpoint included:
+behavior, overflow safety, transport, test coverage, code reuse,
+maintainability, and efficiency. Concrete findings and design changes before
+the checkpoint included:
 
-1. Direct `eval copied=values_result` initially treated physical `[]` as
-   logically present.
-2. Invalid-UTF-8 members reached Unicode and regex functions without an
-   explicit validity guard.
-3. The first transport probe bypassed parser, compiler, storage, and the job
-   manager instead of proving real `stats values(_raw)` paging.
-4. Whole-result total-only overflows needed regressions behind an outer
-   `ORDER BY ... LIMIT 1`.
-5. Downstream rejection diagnostics only asserted a nonzero range; they now
-   pin the exact source text, including bin and both chart axes.
-6. Forged `values` plans and reserved/wildcard inputs needed parity with the
-   existing `dc` defenses.
-7. Generalizing the exact-set barrier caused dc-only queries to carry up to
-   100,001 strings past aggregation. The scalar-cardinality path was restored,
-   while mixed values/dc queries retain one shared two-stage barrier.
-8. Byte/row accounting allocated temporary UInt128 arrays; it now uses a
-   streaming `arrayFold` and scalar totals.
-9. Repeated code-395 resource-marker classification was replaced by one
-   ordered marker table.
-10. A frontend aggregate-name heuristic did not need to include `values`
-    because the real result is already typed as a list; that unnecessary
-    widening was removed.
+1. Row count and occurrence count needed distinct AST/plan enum values rather
+   than inferring semantics from optional input metadata.
+2. Forged argument-free count plans could carry a source range; the compiler
+   now rejects that metadata alongside names, paths, canonical flags, and
+   percentiles.
+3. A UInt64 aggregate state can wrap in ClickHouse. Occurrence contributions
+   now sum in UInt128, with the production row/event bounds documenting why
+   UInt64 publication is exact.
+4. Container behavior is not fully specified by public Splunk documentation.
+   The atomic typed-container behavior is labeled an Open Splunk v0.1 boundary
+   instead of an unverified parity claim.
+5. Repeated measures needed proof that lowering shares one input computation
+   and one physical sum without `ARRAY JOIN`; the pinned `EXPLAIN actions=1`
+   regression now enforces this.
+6. The first flattened-object compiler test only checked that descendant SQL
+   existed. An adversarial reviewer showed `eval copied=object_parent` still
+   returned zero because exact Dynamic `None` masked descendant presence. The
+   lowering now uses descendants as the None/missing fallback, and an executed
+   ClickHouse regression pins the result at one.
 
-The final reviewers reported no remaining correctness blocker. Deferred
-maintainability ideas, not required for correctness, include moving transient
-post-aggregate work out of `compileState`, introducing an explicit presence
-policy instead of recognizing presence SQL text, and splitting the large
-ClickHouse aggregate integration helper into smaller reusable fixtures.
+The final semantic, ClickHouse, and code-quality re-reviews reported no
+remaining blocker and no concrete simplification worth making.
 
 ## Validation evidence
 
-Focused packages passed:
+The full ordinary Go suite passed after the final adversarial fix:
 
 ```sh
-go test ./internal/spl ./internal/plan ./internal/clickhouse \
-  ./internal/queryexec -count=1
+go test ./... -count=1 -timeout=5m
 ```
 
 The pinned `clickhouse/clickhouse-server:26.3.17.4` store suite passed:
@@ -160,18 +135,16 @@ go test ./internal/clickhouse \
   -run '^TestStoreAgainstClickHouse$' -count=1
 ```
 
-Its values coverage includes:
+Its new count coverage includes:
 
-- canonical scalar convergence, empty String, missing/null, top-level list
-  flattening, duplicate collapse, raw-byte ordering, case, and Unicode;
-- global/grouped empties and projected-away inputs;
-- scoped object/nested-container poison and calculated overwrite behavior;
-- exact element and byte boundaries;
-- duplicate-alias row totals and complete-result element/byte totals;
-- per-cell and total-only overflow hidden behind downstream `LIMIT`;
-- repeated `dc`/`values`, numeric-member aggregation, and any-member search;
-- shared physical aggregate state under `EXPLAIN actions=1`; and
-- preservation of the larger, scalar dc-only path.
+- the documented Splunk multivalue differential where two rows contain four
+  field occurrences;
+- missing/null, empty String, zero, false, Bytes, timestamp, duration,
+  decimal, empty/null-only lists, nested members, objects, and duplicates;
+- direct and `eval`-copied flattened objects;
+- global/grouped empties, projected-away inputs, and fixed multivalue output;
+- tenant scope, exact UInt64 results, and one shared physical lowering under
+  `EXPLAIN actions=1` with no `ARRAY JOIN`.
 
 The full query executor and manager suite passed:
 
@@ -182,17 +155,16 @@ go test ./internal/queryexec \
   -run '^TestExecutorAndManagerAgainstClickHouse$' -count=1
 ```
 
-This includes a real invalid-UTF-8 event stored in a separate index and queried
-through `stats values(_raw)`, the search-job manager, and paged results. It
-pins Bytes-child transport plus equality, wildcard, inequality, and presence
-behavior.
+This pins parser-to-manager transport of non-null UInt64 occurrence counts for
+present and absent fields.
 
 The final ordinary gates passed:
 
 ```sh
-go test ./... -count=1 -timeout=5m
 go vet ./...
 go build ./...
+npm run lint
+npm run typecheck
 npm run build
 npm run test:frontend
 git diff --check
@@ -212,8 +184,8 @@ The backend now includes:
 - the documented SPL v0.1 base search and Boolean/comparison expressions;
 - `fields`, `table`, `rename`, `sort`, `head`, `tail`, and `dedup`;
 - the documented `eval`/`where` subset;
-- `stats` with `count`, `dc`/`distinct_count`, `values`, `sum`, `avg`, and
-  `p95`;
+- `stats` with row `count`, exact `count(field)`, `dc`/`distinct_count`,
+  `values`, `sum`, `avg`, and `p95`;
 - `top`, `rare`, `timechart`, and bounded two-field `chart`;
 - extraction-mode `rex`, explicit-span exact `bin`/`bucket`, and bounded
   explicit-path `spath`;
@@ -228,7 +200,10 @@ The backend now includes:
 ### 1. Continue the analytical SPL surface with tests first
 
 - Choose and pin the next aggregate contract before implementation. The
-  lowest-risk useful candidates are `count(field)`, `min`, and `max`.
+  lowest-risk useful candidates are `min` and `max`.
+- Broaden count only behind separate contracts and differential tests for
+  `c(field)`, wildcards, predicates, and `count(eval(...))`; do not interpret
+  those unsupported forms as exact-field count.
 - Treat `list(field)` as a separate order-sensitive, duplicate-preserving,
   bounded multivalue design; do not implement it by adapting unordered
   `values`.
@@ -284,6 +259,10 @@ The backend now includes:
   documentation leaves several multivalue, null, binary, and error behaviors
   unspecified; keep Open Splunk choices explicit rather than claiming verified
   parity.
+- Public Splunk documentation establishes the row-versus-multivalue occurrence
+  distinction for `count(field)`, but does not pin null multivalue members or
+  typed containers. Open Splunk counts immediate non-null containers
+  atomically as an explicit v0.1 extension.
 - Collector decoding does not preserve every original numeric token spelling.
   Exact string-oriented stats operate on stored canonical values.
 - Default aggregate names containing parentheses cannot be referenced by the
@@ -306,11 +285,12 @@ The backend now includes:
 3. Run the ordinary gates above.
 4. Confirm no stale `open-splunk-*` Docker test containers are running.
 5. Pick the next bounded aggregate contract and write parser/planner/compiler
-   tests before implementation; prefer `count(field)`, `min`, or `max` unless
-   the user changes priority.
+   tests before implementation; prefer `min` or `max` unless the user changes
+   priority.
 6. Preserve the 10,000/10,001 values boundary, 100,000/100,001 dc-only
    boundary, raw-byte sorting, binary transport, later-group and total-only
-   `LIMIT` barriers, physical state sharing, scope poison, calculated
-   overwrite, and relational-depth regressions.
+   `LIMIT` barriers, count input sharing and UInt128 accumulation, flattened
+   object fallback, scope poison, calculated overwrite, and relational-depth
+   regressions.
 7. Keep working on `main`; commit and push each cohesive green slice.
 8. Preserve unexpected local changes and never reset them away.
