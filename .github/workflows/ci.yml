@@ -168,6 +168,51 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  backend-vertical:
+    name: Backend vertical
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend and browser dependencies
+        run: |
+          npm ci
+          npx --no-install playwright install --with-deps chromium
+
+      - name: Test collector-to-browser vertical
+        env:
+          OPEN_SPLUNK_BACKEND_INTEGRATION: "1"
+        run: >-
+          go test ./integration
+          -run '^TestBackendVertical$'
+          -count=1
+          -v
+
+      - name: Upload browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-vertical-browser-failure
+          path: test-results/backend-vertical
+          if-no-files-found: ignore
+          retention-days: 14
+
   go-vulnerability:
     name: Go vulnerability scan
     runs-on: ubuntu-latest
@@ -184,6 +229,7 @@ jobs:
   build:
     name: Production binaries
     needs:
+      - backend-vertical
       - frontend
       - go-lint
       - go-test

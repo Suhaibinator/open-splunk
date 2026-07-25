@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -54,6 +55,7 @@ func repositoryRoot(t *testing.T) string {
 func buildBinary(t *testing.T, ctx context.Context, repository, output, pkg string) {
 	t.Helper()
 	command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", output, pkg)
+	configureProcessGroup(command)
 	command.Dir = repository
 	command.Env = append(os.Environ(), "CGO_ENABLED=0")
 	combined, err := command.CombinedOutput()
@@ -65,8 +67,10 @@ func buildBinary(t *testing.T, ctx context.Context, repository, output, pkg stri
 func buildBackendFrontend(t *testing.T, ctx context.Context, repository string) {
 	t.Helper()
 	command := exec.CommandContext(ctx, "npm", "run", "build")
+	configureProcessGroup(command)
 	command.Dir = repository
 	command.Env = environmentWithValue(os.Environ(), "OPEN_SPLUNK_DATA_MODE", "backend")
+	command.Env = environmentWithValue(command.Env, "OPEN_SPLUNK_API_BASE_URL", "")
 	combined, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("build backend frontend: %v\n%s", err, combined)
@@ -85,6 +89,20 @@ func environmentWithValue(environment []string, name, value string) []string {
 		}
 	}
 	return append(result, prefix+value)
+}
+
+func configureProcessGroup(command *exec.Cmd) {
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		// Playwright handles SIGTERM by closing its separately grouped browser
+		// process. A hard kill here would bypass that cleanup and orphan Chrome.
+		err := syscall.Kill(-command.Process.Pid, syscall.SIGTERM)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	command.WaitDelay = 5 * time.Second
 }
 
 func unusedLoopbackAddress(t *testing.T) string {

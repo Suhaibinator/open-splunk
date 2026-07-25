@@ -43,7 +43,9 @@ const (
 	redactionAPIKeySentinel        = "vertical-api-key-must-not-survive"
 	redactionCookieSentinel        = "vertical-cookie-must-not-survive"
 	redactionPrivateKeySentinel    = "vertical-private-key-must-not-survive"
+	verticalSentinelMessage        = "typed redaction sentinel"
 	verticalSearchSPL              = " \nindex=vertical | table _time message status duration_ms api_key _raw\t"
+	browserVerticalSearchSPL       = "index=vertical"
 	bulkSearchSPL                  = "index=vertical-bulk | table event_id"
 	splCompatibilityVersionForTest = "tier-1-dev"
 	clickHouseEventInsertSQL       = "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
@@ -57,16 +59,17 @@ const (
 //
 //	HTTP protobuf provisioning -> collector file/WAL/gRPC -> ClickHouse ->
 //	SPL job creation -> binary protobuf WebSocket progress/terminal events ->
-//	HTTP protobuf typed results -> bounded export re-execution -> one-time raw
-//	artifact download.
+//	opaque HTTP protobuf result pages -> compiled browser UI -> bounded export
+//	re-execution -> one-time raw artifact download.
 //
-// It is opt-in because it builds two binaries and starts a pinned Docker image.
+// It is opt-in because it builds the frontend and two binaries, starts a pinned
+// Docker image, and launches a real browser.
 func TestBackendVertical(t *testing.T) {
 	if os.Getenv(backendIntegrationFlag) != "1" {
 		t.Skip("set " + backendIntegrationFlag + "=1 to run the backend vertical integration test")
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("docker CLI is unavailable: %v", err)
+		t.Fatalf("docker CLI is required when %s=1: %v", backendIntegrationFlag, err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Minute)
@@ -99,6 +102,12 @@ func TestBackendVertical(t *testing.T) {
 	collectorAddress := unusedLoopbackAddress(t)
 	controlDBPath := filepath.Join(work, "control.sqlite")
 	assertEmptyDirectory(t, serverRuntimeDir)
+	serverEnvironment := environmentWithValue(os.Environ(), "OPEN_SPLUNK_CLICKHOUSE_PASSWORD", clickhouse.Password)
+	serverEnvironment = environmentWithValue(
+		serverEnvironment,
+		"PATH",
+		filepath.Join(serverRuntimeDir, "no-external-runtime"),
+	)
 	serverProcess := startProcess(t, serverRuntimeDir, []string{
 		serverBinary,
 		"-http-address=" + httpAddress,
@@ -110,7 +119,7 @@ func TestBackendVertical(t *testing.T) {
 		"-collector-grpc-address=" + collectorAddress,
 		"-collector-grpc-insecure",
 		"-tenant-id=" + verticalTenantID,
-	}, environmentWithValue(os.Environ(), "OPEN_SPLUNK_CLICKHOUSE_PASSWORD", clickhouse.Password))
+	}, serverEnvironment)
 	baseURL := "http://" + httpAddress
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	waitForHealth(t, ctx, httpClient, baseURL, serverProcess)
@@ -153,7 +162,7 @@ func TestBackendVertical(t *testing.T) {
 
 	fixtureStart := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
 	logPath := filepath.Join(work, "app.log")
-	writeFixture(t, logPath, fixtureStart)
+	createEmptyFixture(t, logPath)
 	tokenPath := filepath.Join(work, "collector.token")
 	writePrivateFile(t, tokenPath, []byte(plaintextToken+"\n"))
 	collectorStateDir := filepath.Join(work, "collector-state")
@@ -163,6 +172,8 @@ func TestBackendVertical(t *testing.T) {
 	collectorProcess := startProcess(t, repository, []string{
 		collectorBinary, "run", "-config", collectorConfig,
 	}, os.Environ())
+	waitForCollectorDiscovery(t, ctx, collectorStateDir, logPath, collectorProcess, plaintextToken)
+	appendPrimerFixture(t, logPath, fixtureStart)
 
 	storage, err := clickhousedriver.Open(&clickhousedriver.Options{
 		Addr: []string{clickhouse.Address},
@@ -177,7 +188,10 @@ func TestBackendVertical(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = storage.Close() })
-	waitForStoredEvents(t, ctx, storage, collectorProcess, plaintextToken)
+	waitForStoredEventCount(t, ctx, storage, collectorProcess, plaintextToken, 1)
+	waitForDurableCollectorAcknowledgment(t, ctx, collectorStateDir, logPath, collectorProcess, plaintextToken)
+	appendRemainingFixture(t, logPath, fixtureStart)
+	waitForStoredEventCount(t, ctx, storage, collectorProcess, plaintextToken, verticalEventCount)
 	waitForDurableCollectorAcknowledgment(t, ctx, collectorStateDir, logPath, collectorProcess, plaintextToken)
 	visibilityCutoff := assertStoredEventBounds(t, ctx, storage, fixtureStart)
 
@@ -195,13 +209,12 @@ func TestBackendVertical(t *testing.T) {
 	search := runSearch(t, ctx, httpClient, baseURL, fixtureStart)
 	assertCompletedTimeline(t, ctx, httpClient, baseURL, search.jobID, fixtureStart)
 	assertTypedRedactedResults(t, search.results)
-	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(search.results)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, sentinel := range []string{redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel} {
-		if bytes.Contains(wire, []byte(sentinel)) {
-			t.Fatalf("HTTP protobuf search response leaked sentinel %q", sentinel)
+	assertBrowserVisibleResults(t, ctx, repository, baseURL, fixtureStart)
+	for pageIndex, wire := range search.results.responseWire {
+		for _, sentinel := range []string{redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel} {
+			if bytes.Contains(wire, []byte(sentinel)) {
+				t.Fatalf("HTTP protobuf search response page %d leaked sentinel %q", pageIndex+1, sentinel)
+			}
 		}
 	}
 	completedExport, artifact, downloadToken := exportAndDownloadJSONLines(t, ctx, httpClient, baseURL, search.jobID,
@@ -223,7 +236,13 @@ func TestBackendVertical(t *testing.T) {
 
 type completedSearch struct {
 	jobID   string
-	results *opensplunkv1.GetSearchResultsResponse
+	results *collectedVerticalSearchResults
+}
+
+type collectedVerticalSearchResults struct {
+	schema       *opensplunkv1.ResultSchema
+	rows         []*opensplunkv1.ResultRow
+	responseWire [][]byte
 }
 
 func assertEmptyDirectory(t *testing.T, directory string) {
@@ -238,6 +257,47 @@ func assertEmptyDirectory(t *testing.T, directory string) {
 			names[index] = entry.Name()
 		}
 		t.Fatalf("standalone server working directory is not empty: %v", names)
+	}
+}
+
+func assertBrowserVisibleResults(
+	t *testing.T,
+	ctx context.Context,
+	repository, baseURL string,
+	fixtureStart time.Time,
+) {
+	t.Helper()
+	browserContext, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	command := exec.CommandContext(
+		browserContext,
+		filepath.Join(repository, "node_modules", ".bin", "playwright"),
+		"test",
+		"integration/browser_vertical.spec.ts",
+		"--workers=1",
+		"--reporter=line",
+		"--output="+filepath.Join(repository, "test-results", "backend-vertical"),
+	)
+	configureProcessGroup(command)
+	command.Dir = repository
+	environment := os.Environ()
+	for name, value := range map[string]string{
+		"OPEN_SPLUNK_E2E_BASE_URL":      baseURL,
+		"OPEN_SPLUNK_E2E_SPL":           browserVerticalSearchSPL,
+		"OPEN_SPLUNK_E2E_EARLIEST":      fixtureStart.Format(time.RFC3339Nano),
+		"OPEN_SPLUNK_E2E_LATEST":        fixtureStart.Add(4 * time.Second).Format(time.RFC3339Nano),
+		"OPEN_SPLUNK_E2E_EXPECTED_TEXT": verticalSentinelMessage,
+		"OPEN_SPLUNK_E2E_EXPECTED_ROWS": strconv.FormatUint(verticalEventCount, 10),
+	} {
+		environment = environmentWithValue(environment, name, value)
+	}
+	command.Env = environment
+	logs := &lockedBuffer{maximum: 1 << 20}
+	command.Stdout = logs
+	command.Stderr = logs
+	err := command.Run()
+	if err != nil {
+		t.Fatalf("verify browser-visible backend result: %v\n%s", err, logs.String())
 	}
 }
 
@@ -569,7 +629,7 @@ func assertDownloadedRedactedResults(t *testing.T, completed *opensplunkv1.Expor
 			}
 		}
 		rowCount++
-		if row["message"] != "typed redaction sentinel" {
+		if row["message"] != verticalSentinelMessage {
 			return
 		}
 		found = true
@@ -586,27 +646,45 @@ func assertDownloadedRedactedResults(t *testing.T, completed *opensplunkv1.Expor
 	}
 }
 
-func writeFixture(t *testing.T, path string, start time.Time) {
+func createEmptyFixture(t *testing.T, path string) {
 	t.Helper()
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := loggen.DefaultConfig()
-	config.Format = loggen.FormatZapJSON
-	config.Seed = 20260722
-	config.Start = start
-	config.Interval = time.Second
-	config.Service = "vertical-service"
-	config.Environment = "integration"
-	config.Host = "vertical-host"
-	if err := loggen.Generate(context.Background(), file, config, verticalEventCount-1); err != nil {
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func appendPrimerFixture(t *testing.T, path string, start time.Time) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := verticalLogGeneratorConfig(start, 20260722)
+	if err := loggen.Generate(context.Background(), file, config, 1); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	syncAndCloseFixture(t, file)
+}
+
+func appendRemainingFixture(t *testing.T, path string, start time.Time) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := verticalLogGeneratorConfig(start.Add(time.Second), 20260723)
+	if err := loggen.Generate(context.Background(), file, config, verticalEventCount-2); err != nil {
 		_ = file.Close()
 		t.Fatal(err)
 	}
 	sentinelLine := fmt.Sprintf(
-		`{"timestamp":%q,"level":"INFO","message":"typed redaction sentinel","status":201,"duration_ms":12.5,"api_key":%q,"note_one":%q,"note_two":%q}`+"\n",
-		start.Add(3*time.Second).Format(time.RFC3339Nano), redactionAPIKeySentinel,
+		`{"timestamp":%q,"level":"INFO","message":%q,"status":201,"duration_ms":12.5,"api_key":%q,"note_one":%q,"note_two":%q}`+"\n",
+		start.Add(3*time.Second).Format(time.RFC3339Nano), verticalSentinelMessage, redactionAPIKeySentinel,
 		"Cookie: sid="+redactionCookieSentinel+"; csrf="+redactionCookieSentinel,
 		"private_key=-----BEGIN PRIVATE KEY----- "+redactionPrivateKeySentinel,
 	)
@@ -614,6 +692,23 @@ func writeFixture(t *testing.T, path string, start time.Time) {
 		_ = file.Close()
 		t.Fatal(err)
 	}
+	syncAndCloseFixture(t, file)
+}
+
+func verticalLogGeneratorConfig(start time.Time, seed int64) loggen.Config {
+	config := loggen.DefaultConfig()
+	config.Format = loggen.FormatZapJSON
+	config.Seed = seed
+	config.Start = start
+	config.Interval = time.Second
+	config.Service = "vertical-service"
+	config.Environment = "integration"
+	config.Host = "vertical-host"
+	return config
+}
+
+func syncAndCloseFixture(t *testing.T, file *os.File) {
+	t.Helper()
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
 		t.Fatal(err)
@@ -659,7 +754,14 @@ inputs:
 `, address, tokenPath, statePath, logPath, verticalIndexName)
 }
 
-func waitForStoredEvents(t *testing.T, ctx context.Context, connection clickhousedriver.Conn, process *managedProcess, plaintextToken string) {
+func waitForStoredEventCount(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	process *managedProcess,
+	plaintextToken string,
+	wantCount uint64,
+) {
 	t.Helper()
 	deadline := time.NewTimer(30 * time.Second)
 	defer deadline.Stop()
@@ -671,11 +773,11 @@ func waitForStoredEvents(t *testing.T, ctx context.Context, connection clickhous
 			"SELECT count() FROM open_splunk.events WHERE tenant_id = ? AND index_name = ?",
 			verticalTenantID, verticalIndexName,
 		).Scan(&lastCount)
-		if err == nil && lastCount == verticalEventCount {
+		if err == nil && lastCount == wantCount {
 			return
 		}
-		if err == nil && lastCount > verticalEventCount {
-			t.Fatalf("stored event count = %d, want %d", lastCount, verticalEventCount)
+		if err == nil && lastCount > wantCount {
+			t.Fatalf("stored event count = %d, want %d", lastCount, wantCount)
 		}
 		if process.Exited() {
 			t.Fatalf("collector exited before ingestion completed: %v, count=%d\nlogs:\n%s", process.Err(), lastCount,
@@ -722,13 +824,11 @@ func waitForDurableCollectorAcknowledgment(
 		lastErr    error
 	)
 	for {
-		checkpoints, openErr := input.NewCheckpointStore(filepath.Join(stateDir, "checkpoints"))
-		if openErr == nil {
-			list, listErr := checkpoints.List()
-			closeErr := checkpoints.Close()
-			lastErr = errors.Join(listErr, closeErr)
+		list, readErr := readCollectorCheckpoints(stateDir)
+		lastErr = readErr
+		if readErr == nil {
 			lastCount = len(list)
-			if listErr == nil && len(list) == 1 {
+			if len(list) == 1 {
 				lastOffset = list[0].Offset
 				if lastOffset == wantOffset {
 					return
@@ -737,8 +837,6 @@ func waitForDurableCollectorAcknowledgment(
 					t.Fatalf("durable collector checkpoint offset = %d, want %d", lastOffset, wantOffset)
 				}
 			}
-		} else {
-			lastErr = openErr
 		}
 		if process.Exited() {
 			t.Fatalf("collector exited before durable acknowledgment: %v, checkpoints=%d offset=%d error=%v\nlogs:\n%s",
@@ -758,15 +856,65 @@ func waitForDurableCollectorAcknowledgment(
 	}
 }
 
-func assertDurableCollectorState(t *testing.T, stateDir string, wantOffset uint64) {
+func waitForCollectorDiscovery(
+	t *testing.T,
+	ctx context.Context,
+	stateDir, logPath string,
+	process *managedProcess,
+	plaintextToken string,
+) {
 	t.Helper()
+	deadline := time.NewTimer(15 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	var (
+		lastCount int
+		lastErr   error
+	)
+	for {
+		list, readErr := readCollectorCheckpoints(stateDir)
+		lastErr = readErr
+		if readErr == nil {
+			lastCount = len(list)
+			if len(list) == 1 {
+				checkpoint := list[0]
+				if checkpoint.Path != logPath || checkpoint.Offset != 0 ||
+					checkpoint.LineNumber != 0 || checkpoint.Identity.FingerprintLength != 0 {
+					t.Fatalf("empty collector discovery checkpoint = %+v, want %s at offset zero", checkpoint, logPath)
+				}
+				return
+			}
+		}
+		if process.Exited() {
+			t.Fatalf("collector exited before empty-file discovery: %v, checkpoints=%d error=%v\nlogs:\n%s",
+				process.Err(), lastCount, lastErr,
+				redactForFailure(process.Logs(), plaintextToken,
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for empty-file discovery: %v, checkpoints=%d error=%v", ctx.Err(), lastCount, lastErr)
+		case <-deadline.C:
+			t.Fatalf("wait for empty-file discovery: timed out, checkpoints=%d error=%v", lastCount, lastErr)
+		case <-ticker.C:
+		}
+	}
+}
+
+func readCollectorCheckpoints(stateDir string) ([]input.Checkpoint, error) {
 	checkpoints, err := input.NewCheckpointStore(filepath.Join(stateDir, "checkpoints"))
 	if err != nil {
-		t.Fatalf("reopen collector checkpoint store: %v", err)
+		return nil, err
 	}
 	list, listErr := checkpoints.List()
-	closeErr := checkpoints.Close()
-	if err := errors.Join(listErr, closeErr); err != nil {
+	return list, errors.Join(listErr, checkpoints.Close())
+}
+
+func assertDurableCollectorState(t *testing.T, stateDir string, wantOffset uint64) {
+	t.Helper()
+	list, err := readCollectorCheckpoints(stateDir)
+	if err != nil {
 		t.Fatalf("read durable collector checkpoints: %v", err)
 	}
 	if len(list) != 1 || list[0].Offset != wantOffset {
@@ -1176,14 +1324,88 @@ func runSearch(t *testing.T, ctx context.Context, client *http.Client, baseURL s
 	t.Logf("completed search scope: indexes=%v range=%v cutoff=%v rows=%d",
 		job.GetEffectiveIndexScope(), job.GetResolvedTimeRange(), job.GetIndexTimeCutoff(), job.GetProgress().GetProducedRows())
 
-	pageSize := uint32(100)
-	var results opensplunkv1.GetSearchResultsResponse
-	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/results", &opensplunkv1.GetSearchResultsRequest{
-		SearchJobId: jobID,
-		Page:        &opensplunkv1.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
-	}, &results)
+	results := fetchAllVerticalSearchResults(t, ctx, client, baseURL, jobID)
 	waitForTerminalHistory(t, ctx, client, baseURL, jobID)
-	return completedSearch{jobID: jobID, results: &results}
+	return completedSearch{jobID: jobID, results: results}
+}
+
+func fetchAllVerticalSearchResults(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL, jobID string,
+) *collectedVerticalSearchResults {
+	t.Helper()
+	pageSize := uint32(2)
+	var (
+		schema     *opensplunkv1.ResultSchema
+		rows       []*opensplunkv1.ResultRow
+		nextToken  string
+		pageCount  int
+		seenTokens = make(map[string]struct{})
+		seenRowIDs = make(map[string]struct{})
+		pageWire   [][]byte
+	)
+	for {
+		requestPage := &opensplunkv1.PageRequest{
+			PageSize:         &pageSize,
+			IncludeTotalSize: true,
+		}
+		if nextToken != "" {
+			requestPage.PageToken = &nextToken
+		}
+		var current opensplunkv1.GetSearchResultsResponse
+		wire := postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/results", &opensplunkv1.GetSearchResultsRequest{
+			SearchJobId: jobID,
+			Page:        requestPage,
+		}, &current)
+		pageWire = append(pageWire, bytes.Clone(wire))
+		pageCount++
+		page := current.GetResultPage()
+		if current.GetSearchJobId() != jobID || page == nil || page.GetSchema() == nil || page.GetPage() == nil {
+			t.Fatalf("search result page %d = %+v", pageCount, &current)
+		}
+		if !page.GetSnapshotComplete() ||
+			!page.GetPage().GetTotalSizeExact() || page.GetPage().GetTotalSize() != verticalEventCount ||
+			len(page.GetRows()) == 0 || len(page.GetRows()) > int(pageSize) {
+			t.Fatalf("search result page %d metadata = %+v", pageCount, page)
+		}
+		if schema == nil {
+			schema = proto.Clone(page.GetSchema()).(*opensplunkv1.ResultSchema)
+		} else if !proto.Equal(schema, page.GetSchema()) {
+			t.Fatalf("search result schema changed on page %d: first=%+v current=%+v", pageCount, schema, page.GetSchema())
+		}
+		for _, row := range page.GetRows() {
+			if row.GetRowId() == "" {
+				t.Fatalf("search result page %d contains an empty row ID", pageCount)
+			}
+			if _, duplicate := seenRowIDs[row.GetRowId()]; duplicate {
+				t.Fatalf("search result row ID %q repeated across cursor pages", row.GetRowId())
+			}
+			if row.GetOrdinal() != uint64(len(rows)) {
+				t.Fatalf("search result row %q ordinal = %d, want %d", row.GetRowId(), row.GetOrdinal(), len(rows))
+			}
+			seenRowIDs[row.GetRowId()] = struct{}{}
+			rows = append(rows, proto.Clone(row).(*opensplunkv1.ResultRow))
+		}
+
+		returnedToken := page.GetPage().GetNextPageToken()
+		if returnedToken == "" {
+			break
+		}
+		if _, repeated := seenTokens[returnedToken]; repeated {
+			t.Fatalf("search result cursor repeated on page %d", pageCount)
+		}
+		seenTokens[returnedToken] = struct{}{}
+		nextToken = returnedToken
+		if pageCount > int(verticalEventCount) {
+			t.Fatalf("search result cursor exceeded %d bounded pages", verticalEventCount)
+		}
+	}
+	if pageCount != 2 || uint64(len(rows)) != verticalEventCount {
+		t.Fatalf("collected search results: pages=%d rows=%d", pageCount, len(rows))
+	}
+	return &collectedVerticalSearchResults{schema: schema, rows: rows, responseWire: pageWire}
 }
 
 func assertCompletedTimeline(
@@ -1540,35 +1762,33 @@ func waitForTerminalHistory(t *testing.T, ctx context.Context, client *http.Clie
 	}
 }
 
-func assertTypedRedactedResults(t *testing.T, response *opensplunkv1.GetSearchResultsResponse) {
+func assertTypedRedactedResults(t *testing.T, results *collectedVerticalSearchResults) {
 	t.Helper()
-	page := response.GetResultPage()
-	if page == nil || !page.GetSnapshotComplete() || page.GetPage().GetTotalSize() != verticalEventCount ||
-		uint64(len(page.GetRows())) != verticalEventCount {
-		t.Fatalf("result page = %+v", page)
+	if results == nil || results.schema == nil || uint64(len(results.rows)) != verticalEventCount {
+		t.Fatalf("collected typed results = %+v", results)
 	}
-	columns := make(map[string]int, len(page.GetSchema().GetColumns()))
-	for index, column := range page.GetSchema().GetColumns() {
+	columns := make(map[string]int, len(results.schema.GetColumns()))
+	for index, column := range results.schema.GetColumns() {
 		columns[column.GetFieldName()] = index
 	}
 	for _, name := range []string{"message", "status", "duration_ms", "api_key", "_raw"} {
 		if _, ok := columns[name]; !ok {
-			t.Fatalf("result schema is missing %q: %+v", name, page.GetSchema())
+			t.Fatalf("result schema is missing %q: %+v", name, results.schema)
 		}
 	}
-	if page.GetSchema().GetColumns()[columns["status"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED ||
-		page.GetSchema().GetColumns()[columns["duration_ms"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED {
-		t.Fatalf("dynamic numeric schema did not retain mixed typing: %+v", page.GetSchema())
+	if results.schema.GetColumns()[columns["status"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED ||
+		results.schema.GetColumns()[columns["duration_ms"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED {
+		t.Fatalf("dynamic numeric schema did not retain mixed typing: %+v", results.schema)
 	}
 	var sentinel *opensplunkv1.ResultRow
-	for _, row := range page.GetRows() {
-		if row.GetCells()[columns["message"]].GetStringValue() == "typed redaction sentinel" {
+	for _, row := range results.rows {
+		if row.GetCells()[columns["message"]].GetStringValue() == verticalSentinelMessage {
 			sentinel = row
 			break
 		}
 	}
 	if sentinel == nil {
-		t.Fatal("typed redaction sentinel row was not returned")
+		t.Fatalf("%q row was not returned", verticalSentinelMessage)
 	}
 	status := sentinel.GetCells()[columns["status"]]
 	if _, ok := status.GetKind().(*opensplunkv1.TypedValue_Sint64Value); !ok || status.GetSint64Value() != 201 {

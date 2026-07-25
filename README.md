@@ -77,12 +77,18 @@ The backend includes the protobuf HTTP API, authenticated gRPC ingestion,
 collector WAL and file tailing, the SQLite control plane, ClickHouse storage,
 bounded search jobs, and the executable SPL subset documented in
 [`docs/spl-compatibility-v0.1.md`](docs/spl-compatibility-v0.1.md). The default
-Go test suite is self-contained. The pinned ClickHouse and full collector-to-search
-tests are opt-in because they start ephemeral Docker containers:
+Go test suite is self-contained. The pinned ClickHouse and full
+collector-to-browser tests are opt-in because they start ephemeral Docker
+containers; the browser vertical also requires the pinned Playwright browser:
 
 ```sh
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/queryexec -run TestExecutorAndManagerAgainstClickHouse
+npm ci
+npx --no-install playwright install chromium
 OPEN_SPLUNK_BACKEND_INTEGRATION=1 go test ./integration -run TestBackendVertical
 ```
+
+See [`integration/README.md`](integration/README.md) for the exact vertical
+coverage and browser override.
 
 See [the product and architecture plan](docs/product-architecture-plan.md) for the complete design.
