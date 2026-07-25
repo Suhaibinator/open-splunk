@@ -1114,8 +1114,9 @@ storage/execution primitives have pinned ClickHouse integration coverage:
 - frequent errors by logger and message;
 - event volume by severity through `timechart`;
 - server errors by route through `timechart`;
-- HTTP response counts by route and status, both as `stats count BY path,
-  status_class` and as the `chart count OVER path BY status_class` pivot;
+- HTTP response counts by route and status as the product-plan
+  `stats count BY path, status` search, with additional pivot coverage through
+  `chart count OVER path BY status_class`;
 - slow routes through `eval`, `p95`, and `where`; and
 - top messages.
 

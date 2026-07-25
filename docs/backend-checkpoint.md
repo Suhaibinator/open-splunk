@@ -7,7 +7,7 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Pause checkpoint: collector-to-browser release acceptance gate
+## Pause checkpoint: collector-to-browser gate and GradeThis corpus audit
 
 Date: 2026-07-25
 
@@ -33,6 +33,12 @@ must continue on `main`.
 The overall backend objective remains active. Work is intentionally paused at
 a green, committed, and pushed checkpoint because the user requested a safe
 break. The product architecture plan is not complete.
+
+Immediately before this pause, three read-only agents audited the product
+plan's ten GradeThis searches, the current fixtures, and the compile and
+ClickHouse integration coverage. Their conclusions and the exact next
+test-driven slice are recorded below so a new conversation does not need to
+repeat that investigation.
 
 ## What the latest slice completed
 
@@ -419,6 +425,93 @@ The backend now includes:
 - materialized-CTE single-scan lowering for runtime-wide and
   analyzer-sensitive paths.
 
+## GradeThis corpus audit at this pause
+
+All ten exact searches in `docs/product-architecture-plan.md` are already
+implemented. `internal/clickhouse/compatibility_corpus_test.go` sends them
+through parse, plan, and compile in the ordinary test suite.
+`internal/queryexec/executor_integration_test.go` sends them through parse,
+plan, compile, a real pinned ClickHouse server, the executor, and the
+search-job manager. Do not start the next slice by adding another SPL feature
+or by duplicating these searches again.
+
+The first-release acceptance item is nevertheless **not complete**. The
+existing coverage is a useful smoke test, not yet a versioned, exact corpus:
+
+- query text is duplicated between the compiler and executor tests;
+- the fixture uses `time.Now`, is declared inline, and is inserted directly
+  into ClickHouse rather than being decoded from a committed sanitized log;
+- the named executor corpus includes an unrelated eleventh
+  `distinct_count(logger)` case;
+- schema checks usually cover names but not value kind, nullability, or
+  multivalue shape;
+- several cases inspect only the first row or one cell, while map comparisons
+  conceal result ordering and ties;
+- `p95` is checked only as greater than 500, and `top` does not pin percentages
+  or tied-row order;
+- the helper requests only ten rows even though the `top` search requests
+  twenty, and it does not prove full cursor exhaustion; and
+- the real-ClickHouse executor suite is opt-in rather than a required focused
+  CI corpus gate.
+
+Use one shared `v0.1` manifest for the exact ten query strings. Both the
+ordinary compiler test and the ClickHouse executor test must consume it.
+Keep the executor case inside `TestExecutorAndManagerAgainstClickHouse` so all
+ten small queries reuse one ephemeral container. Move the distinct-count
+extension outside the named corpus. Assert every public
+`Column{Name, Kind, Nullable, Multivalue}`, every ordered row and typed cell,
+row ordinals, null versus missing, total row count, completion, and an empty
+terminal cursor.
+
+The preferred fixture is a committed, deterministic, synthetic
+GradeThis-shaped NDJSON corpus with a fixed UTC base. A compact 20-event shape
+with unique aggregate counts avoids ambiguous order:
+
+- 11 `INFO`, 6 `ERROR`, and 3 `WARN` events;
+- ten exact `Request metrics` events: seven
+  `/api/v1/assessments` requests at `800ms` and three
+  `/api/v1/submissions` requests at `300ms`;
+- assessment statuses `200` four times and `503` three times; submission
+  statuses `200` twice and `500` once;
+- four `Heartbeat`, three `Dependency retry scheduled`, two
+  `Database request failed`, and one `Request started` message; and
+- one two-event synthetic trace, with only its database error containing
+  `connection refused`.
+
+This produces deterministic high-level results: severity counts
+`INFO=11, ERROR=6, WARN=3`; response counts `assessments/200=4`,
+`assessments/503=3`, `submissions/200=2`, `submissions/500=1`; the slow-route
+result `assessments, count=7, p95_ms=800`; and top-message percentages
+`50%, 20%, 15%, 10%, 5%`. Derive NDJSON emission and expected typed rows from
+one fixture profile rather than maintaining a hand-written ClickHouse fixture
+beside a separate log file. Fixed historical rows need a far-future test
+expiry so ClickHouse TTL does not erase them.
+
+The fixture must contain only synthetic IDs, relative callers, TEST-NET IPs,
+and reserved example domains. Add a scanner that rejects secret-like keys,
+email/user/session identifiers, SQL, stack traces, absolute paths, and
+non-documentation IP addresses. The local root `app.log` is large, ignored,
+and contains user IDs, network metadata, SQL, stack traces, absolute paths,
+and secret-like fields; never copy or commit it.
+
+Two compatibility facts must remain explicit:
+
+- current local GradeThis request logs use `Request summary statistics`,
+  whereas the product plan and exact v0.1 corpus use `Request metrics`; and
+- real durations include microseconds, milliseconds, and seconds, whereas the
+  plan's literal `replace(duration, "ms$", "")` query covers milliseconds
+  only.
+
+The corpus should pin documented Open Splunk v0.1 behavior, including the
+current approximate `p95`; it must not claim live Splunk oracle parity.
+
+After the backend corpus is exact, add a frontend adapter regression for
+`top message`. `lib/search/backend-data.ts` currently fails to classify
+`percent` as an aggregate field, so the result can appear to have more than
+one dimension and lose its categorical visualization. Then reuse the corpus
+through protobuf/server and one browser session rather than launching ten
+independent stacks.
+
 ## Resume checklist
 
 1. Work only from `main`; fast-forward it from `origin/main` and confirm the
@@ -435,9 +528,10 @@ The backend now includes:
    go test ./integration -run '^TestBackendVertical$' -count=1 -v
    ```
 
-5. Start with the first remaining slice below unless the user explicitly
-   changes priority. Add tests before implementation, run three read-only
-   adversarial reviews, fix concrete findings, then commit and push `main`.
+5. Start with the exact GradeThis corpus hardening described above unless the
+   user explicitly changes priority. Add tests before implementation, run
+   three read-only adversarial reviews, fix concrete findings, then commit and
+   push `main`.
 
 ## Remaining work, in priority order
 
@@ -447,11 +541,11 @@ The collector-to-browser acceptance gate is complete. The recommended next
 slice is now the remaining named first-release acceptance matrix, not another
 ad hoc SPL feature:
 
-- Turn the ten GradeThis searches in
-  `docs/product-architecture-plan.md` into a versioned compatibility corpus
-  over deterministic, sanitized GradeThis-shaped fixtures. Require exact
-  documented schemas/order/null behavior and source-located errors for any
-  intentionally unsupported expression instead of silently weakening a query.
+- Harden the existing ten-search GradeThis smoke coverage into the versioned,
+  shared, deterministic, sanitized, fully typed and ordered compatibility
+  corpus specified in the audit above. Make its focused pinned-ClickHouse
+  execution a required CI gate and then cover its protobuf/frontend result
+  adaptation.
 - Add a process-restart vertical that proves acknowledged events survive both
   collector and server restarts. Existing component tests cover retry,
   checkpoint, WAL, and file-rotation mechanics; the release criterion needs
@@ -583,9 +677,9 @@ Do not guess those decisions if they materially affect the implementation.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
 4. Run the ordinary Go/frontend gates above. Run both opt-in pinned ClickHouse
    suites before changing extrema/bin metadata behavior.
-5. Unless the user changes priority, begin with a test-first first-release
-   vertical proof: collector write and durable acknowledgment through search,
-   protobuf preview/progress, authoritative paging, and browser-visible result.
+5. Unless the user changes priority, begin with the test-first GradeThis v0.1
+   corpus hardening described in this document. The uninterrupted
+   collector-to-browser vertical is already complete.
 6. If extending aggregates instead, start with an explicit bounded contract
    for `list(field)`; do not reuse unordered `values`.
 7. Preserve scalar/Dynamic path separation, numeric grammar sharing,
