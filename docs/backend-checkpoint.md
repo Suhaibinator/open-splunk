@@ -7,34 +7,101 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Pause checkpoint: optimized scalar-String `stats min` and `stats max`
+## Pause checkpoint: collector-to-browser release acceptance gate
 
 Date: 2026-07-25
 
 Branch: `main`
 
 Starting checkpoint:
-`e1d2898` (`record typed extrema backend checkpoint`)
+`d0949e8` (`record scalar extrema backend checkpoint`)
 
-Feature commit:
-`f2bace6` (`optimize scalar string extrema`)
+Durable-ingestion commit:
+`5b99c83` (`prove durable backend vertical ingestion`)
 
-Adversarial-hardening commit:
-`90f7bbe` (`harden scalar string extrema lowering`)
+Collector-to-browser gate:
+`cf37bd7` (`add collector to browser acceptance gate`)
 
-This document is committed immediately after the hardening commit. Use the
-current `main` HEAD as the document commit rather than copying an older hash
-from this file.
+This document is committed immediately after the acceptance-gate commit. Use
+the current `main` HEAD as the document commit rather than copying an older
+hash from this file.
 
-The earlier branch repair is complete: the work is on `main`, the feature and
-hardening commits were pushed directly to `origin/main`, and subsequent work
+The earlier branch repair is complete: the work is on `main`, all current
+checkpoint commits were pushed directly to `origin/main`, and subsequent work
 must continue on `main`.
 
 The overall backend objective remains active. Work is intentionally paused at
 a green, committed, and pushed checkpoint because the user requested a safe
 break. The product architecture plan is not complete.
 
-## What this slice completed
+## What the latest slice completed
+
+### Deterministic self-contained server build
+
+- `make build` and `make build-server` now compile the static frontend in
+  backend mode by default.
+- The release-path integration test explicitly clears any ambient API base URL
+  and rebuilds the frontend before compiling the Go server.
+- The compiled server starts from an empty temporary working directory with a
+  deliberately nonexistent `PATH`, proving it does not need Node.js,
+  repository files, or another executable runtime.
+- The test checks the embedded HTML is the backend workspace, exercises the
+  protobuf bootstrap route, and then uses that same compiled server for every
+  protocol and browser assertion.
+
+### Live collector durability proof
+
+- The vertical starts the collector against an empty `app.log` and waits for
+  the exact zero-offset discovery checkpoint before writing data.
+- It appends and fsyncs one generated primer event, waits for the ClickHouse row
+  and a checkpoint at that file boundary, then appends and fsyncs the remaining
+  fixture. This proves real tailing after discovery and after a durable
+  acknowledgment rather than ingesting a file that was already complete.
+- The final checkpoint must reach the exact synced EOF. After a clean collector
+  shutdown, the WAL must be drained and retain a positive acknowledged
+  sequence high-water mark.
+- The server still provisions the index and scoped ingestion token over
+  protobuf HTTP, and secret values are checked against collector/server logs,
+  typed result pages, and downloaded export bytes.
+
+### Protocol, paging, and real-browser proof
+
+- The Go protocol client creates a search, observes an acknowledged binary
+  protobuf WebSocket subscription with monotonic state/progress/terminal
+  sequences, and fetches the four authoritative results over exactly two
+  opaque cursor pages.
+- Cursor tokens and row IDs cannot repeat, ordinals must be globally
+  contiguous, schemas must remain stable, total size must be exact, and the
+  retained snapshot must be complete.
+- A pinned Playwright test launches Chromium against the UI embedded in the
+  compiled Go server. The browser creates its own search through same-origin
+  protobuf HTTP, receives binary WebSocket traffic, renders the timeline, and
+  ends with four authoritative non-preview rows containing the fixture
+  sentinel.
+- The browser observer uses the repository's generated TypeScript protobuf
+  codecs. It correlates the create response, outgoing subscription, positive
+  sequence `search_progress` frame, results response, and rendered UI to the
+  same browser-created job.
+- A recorded `live` or `finalizing` preview transition proves the application
+  applied live preview traffic before replacing it with authoritative results;
+  paused, resynchronizing, and finalization-error states fail the test.
+- Browser errors, failed same-origin API requests, external HTTP(S) resources,
+  and foreign WebSockets are bounded and rejected. Playwright output is capped,
+  failure screenshots/traces are retained, and timeout cancellation gives
+  Playwright a bounded graceful shutdown before a hard-kill fallback.
+- The existing timeline, typed redaction, one-time JSONL export, and 10,001-row
+  bounded export re-execution checks remain in the same release-path test.
+
+### Required CI gate
+
+- CI installs the pinned Playwright dependency and Chromium build, runs the
+  opt-in Docker collector-to-browser test as a required `backend-vertical`
+  job, and uploads browser failure artifacts.
+- Production binary packaging now depends on that gate.
+- Local setup and the exact opt-in command are documented in the root and
+  integration READMEs.
+
+## Previous checkpoint reference: optimized scalar-String `stats min` and `stats max`
 
 Open Splunk already implemented typed `stats min(field)` and
 `stats max(field)` from SPL parsing through ClickHouse execution, downstream
@@ -122,6 +189,45 @@ chosen numeric-before-lexical/raw-byte behavior cannot drift silently.
 
 ## Adversarial review record
 
+Three independent agents reviewed the collector-to-browser change for
+correctness, protocol semantics, reliability/performance, and reuse/code
+quality. A second read-only pass reviewed the hardened result. Findings and
+resolutions:
+
+1. **A completed file was not a sufficient tailing proof.** The test now starts
+   with an empty discovered file, appends a primer, waits for its durable
+   checkpoint, and only then appends the remainder.
+2. **Binary traffic alone could belong to another job.** The Playwright
+   observer now decodes generated protobuf messages and requires an outgoing
+   subscription plus a positive-sequence `search_progress` event for the exact
+   job ID decoded from the browser's create response.
+3. **Wire arrival alone did not prove UI application.** A mutation recorder
+   requires the preview UI to enter `live` or `finalizing`, rejects recovery
+   error states/notices, and then requires final non-preview rows.
+4. **Manual field-number parsing duplicated generated code.** The browser spec
+   is strict TypeScript and uses the checked-in generated codecs for create,
+   results, WebSocket command, and WebSocket event messages.
+5. **Failure-path promises could reject before their normal await.** Response
+   waiters and the protocol completion are marked handled immediately, the
+   original promises remain authoritative, and protocol listeners/timers are
+   disposed in `finally`.
+6. **Resource and cleanup paths were unbounded.** Browser recorders, child
+   output, subscriptions, and progress events are capped. Context cancellation
+   first signals the Playwright process group so it can close Chromium, then
+   uses the standard bounded hard-kill fallback.
+7. **Paging checks had assembled synthetic response metadata.** Each real
+   protobuf page is retained and inspected directly; only stable schema and
+   cloned rows are collected for cross-page assertions.
+8. **Opt-in CI could silently skip without Docker.** Setting the integration
+   flag now makes a missing Docker CLI fatal.
+
+The final correctness and quality re-audits reported no remaining concrete
+blocker. The performance review reported no checkpoint blocker; its remaining
+harness and CI optimizations are recorded below as follow-up work rather than
+weakening the release-path proof.
+
+### Previous scalar-extrema reviews
+
 Three independent post-implementation agents reviewed correctness and SPL
 semantics, ClickHouse execution/performance, and reuse/maintainability. Their
 concrete findings were handled as follows:
@@ -174,7 +280,41 @@ found and resolved:
 All three reviewers reported no remaining concrete correctness, efficiency,
 or code-quality finding after those fixes.
 
-## Validation evidence
+## Latest validation evidence
+
+The complete release-path test passed twice after adversarial hardening. The
+final run completed in 19 seconds:
+
+```sh
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+go test ./integration -run '^TestBackendVertical$' -count=1 -v
+```
+
+The browser override is optional when Playwright's pinned Chromium is
+installed. The test itself builds the backend-mode frontend and both Go
+binaries, starts pinned ClickHouse, runs the collector/server/browser flow,
+and removes its ephemeral container and processes.
+
+The ordinary backend and frontend gates passed against the final code:
+
+```sh
+go test ./...
+npm run test:frontend
+npm run typecheck
+npm run lint
+```
+
+The production frontend build also passed inside each vertical run. Playwright
+test discovery found the TypeScript browser test, the GitHub Actions YAML
+parsed successfully, and `git diff --check` was clean.
+
+The latest three-agent re-audit reported no remaining correctness,
+performance, or code-quality checkpoint blocker after the generated-code,
+exact-job/progress, UI transition, promise-lifecycle, external-resource,
+bounded-output, and cleanup fixes.
+
+### Previous scalar-extrema validation evidence
 
 The full ordinary backend suite passed after commit `90f7bbe`:
 
@@ -279,28 +419,80 @@ The backend now includes:
 - materialized-CTE single-scan lowering for runtime-wide and
   analyzer-sensitive paths.
 
+## Resume checklist
+
+1. Work only from `main`; fast-forward it from `origin/main` and confirm the
+   worktree is clean.
+2. Read this file, `docs/product-architecture-plan.md`, and
+   `docs/spl-compatibility-v0.1.md`.
+3. Run `npm ci`, `go test ./...`, `npm run test:frontend`,
+   `npm run typecheck`, and `npm run lint`.
+4. If the next change touches the release path, install the pinned browser with
+   `npx --no-install playwright install chromium` and run:
+
+   ```sh
+   OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+   go test ./integration -run '^TestBackendVertical$' -count=1 -v
+   ```
+
+5. Start with the first remaining slice below unless the user explicitly
+   changes priority. Add tests before implementation, run three read-only
+   adversarial reviews, fix concrete findings, then commit and push `main`.
+
 ## Remaining work, in priority order
 
 ### 1. Finish the first-release product proof
 
-This is the recommended next slice unless the user explicitly prioritizes
-broader SPL. It closes named acceptance criteria rather than adding more
-surface area:
+The collector-to-browser acceptance gate is complete. The recommended next
+slice is now the remaining named first-release acceptance matrix, not another
+ad hoc SPL feature:
 
-- Add one browser-visible end-to-end test that starts the stack, writes a
-  generated log, waits for durable collector acknowledgment, searches it,
-  observes protobuf WebSocket progress/preview, and verifies authoritative
-  paged results.
-- Exercise the compiled embedded-UI server from an empty working directory,
-  without Node.js or external frontend assets.
-- Add deterministic frontend/server tests for reconnect rejection,
-  stale-frame fencing, resynchronization, expiration, and preview-to-final
-  replacement.
+- Turn the ten GradeThis searches in
+  `docs/product-architecture-plan.md` into a versioned compatibility corpus
+  over deterministic, sanitized GradeThis-shaped fixtures. Require exact
+  documented schemas/order/null behavior and source-located errors for any
+  intentionally unsupported expression instead of silently weakening a query.
+- Add a process-restart vertical that proves acknowledged events survive both
+  collector and server restarts. Existing component tests cover retry,
+  checkpoint, WAL, and file-rotation mechanics; the release criterion needs
+  one explicit cross-process proof.
+- Add deterministic browser/server integration for disconnect-and-resume,
+  replay-window expiration and authoritative resynchronization, stale-frame
+  fencing, job/result expiration, cancellation, and preview-to-final
+  replacement. Unit coverage exists for much of the protocol, but the normal
+  browser vertical currently proves only the uninterrupted path.
+- Exercise a sanitized real GradeThis log/config migration: collector to the
+  `gradethis` index with no OpenTelemetry component in the log path, then run
+  trace-ID, severity, request-status, path, duration, and top-message
+  investigations.
 - Record a load/performance run at sustained 1,000 events/second, including
   collector offline recovery, slow WebSocket consumers, concurrent searches,
-  high-cardinality exact aggregates, and scan budgets.
-- Use the existing log generator and sanitized fixtures; `app.log` is suitable
-  local test input when its contents pass the fixture secret scan.
+  high-cardinality exact aggregates, ClickHouse part count, scan budgets, and
+  browser rendering cost. Acceptance thresholds still require the hardware,
+  retention/event-size, and concurrency decisions listed below.
+- Verify release revision consistency across embedded UI, server, protobuf
+  schema, and migrations, plus byte-identical embedded frontend assets for
+  Linux and macOS builds from the same source revision.
+- Keep `app.log` only as local test input after a fixture secret scan. Do not
+  commit unsanitized GradeThis production logs.
+
+CI currently rebuilds the frontend in the frontend, vertical, and packaging
+jobs. A follow-up should cache the vertical's Next.js work or, preferably,
+build the backend-mode UI/server/collector once and pass the exact tested
+artifacts to packaging without making the acceptance test depend on stale
+outputs. Cache the pinned Playwright browser download where the CI environment
+supports it.
+
+The browser child output and observation counts are bounded, but build-command
+failure output still uses `CombinedOutput`. Complete the harness hardening with
+the same capped buffer, cap each recorded diagnostic's byte length, and bound
+the number of simultaneously observed matching WebSockets.
+
+At this checkpoint, `npm audit --omit=dev --audit-level=critical` exits
+successfully but reports three high-severity findings in Next.js's transitive
+PostCSS/Sharp chain. npm's offered force-fix would install the breaking
+`next@9.3.3` downgrade; do not apply it blindly. Re-evaluate a safe Next.js,
+PostCSS, or Sharp upgrade/override with the complete frontend and browser gates.
 
 ### 2. Continue TDD on aggregate correctness and efficiency
 
