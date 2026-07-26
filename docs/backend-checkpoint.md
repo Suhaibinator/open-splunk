@@ -7,7 +7,85 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: crash-safe collector and server process restarts
+## Latest checkpoint: resumable WebSocket recovery
+
+Date: 2026-07-25
+
+Implementation commit:
+`86d4dd8` (`complete resumable websocket recovery`)
+
+Starting checkpoint:
+`510c2e0` (`harden websocket resume recovery`)
+
+This slice completes the in-memory protocol and first-party client contract
+needed before a deterministic real-browser disruption test:
+
+1. A connection establishing a new server epoch may resume from any retained
+   sequence between the epoch start and the latest published frame. The server
+   verifies that the entire retained suffix is continuous before replaying it.
+   An out-of-range checkpoint still reports `SERVER_RESTARTED`; an incomplete,
+   overdue, or gapped suffix reports `SEQUENCE_EXPIRED`.
+2. Resynchronization is a commit protocol. A recovery listener must call the
+   supplied acknowledgement before the client advances its checkpoint.
+   Rejected and resolved-but-unacknowledged handlers retain the old checkpoint
+   and reconnect. A same-epoch checkpoint regression is rejected, while an
+   explicit `SERVER_RESTARTED` response may establish a lower new-epoch
+   boundary.
+3. Successful sequenced work establishes connection stability. Subscription
+   acknowledgement alone arms only a delayed stability timer, and that timer
+   is not armed until all generic event listeners finish successfully. This
+   prevents repeated recovery failures or a slow/rejecting acknowledgement
+   listener from collapsing exponential reconnect backoff.
+4. Every subscription identifier is single-use for the lifetime of a
+   connection, including after unsubscribe. The exact 256-identifier ceiling
+   is bounded. A 257th unique identifier receives
+   `TOO_MANY_SUBSCRIPTIONS` with `connectionWillClose=true`; the server closes
+   with retry semantics and the first-party client preserves and retries the
+   rejected local subscription on a fresh connection.
+5. Positive unknown future protobuf event variants are target-fenced, exposed
+   only to generic listeners, and allowed to advance the sequence checkpoint.
+   Malformed or mismatched frames cannot advance it.
+6. An authoritative zero-row preview or invalidating terminal projection
+   removes all retained preview state and exact replay accounting. Expiration
+   can therefore never resurrect older row-bearing preview frames.
+7. Expired terminal targets with active subscribers continue bounded
+   tombstone polling. A missing first read at or after expiry retires the
+   target; later tombstone deletion does the same. Retirement removes the
+   exact cached target and closes existing sockets so reconnect observes
+   `JOB_NOT_FOUND` rather than remaining stranded on stale state.
+
+The implementation adds focused Go and frontend tests for every boundary
+above, including a fresh-epoch lagging replay, zero-row preview expiration,
+first-expiry tombstone deletion, active-subscriber retirement, identifier
+reuse and exact exhaustion, unacknowledged resync, epoch regression, lower
+restart epochs, unknown future variants, repeated recovery failure backoff,
+and slow acknowledgement listeners.
+
+Final validation passed:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/searchws -count=1
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
+git diff --check
+```
+
+The frontend suite contains 29 passing protocol tests. Independent backend,
+frontend, correctness, performance, and reuse/quality reviews found no
+remaining checkpoint blocker after their findings were fixed. The last
+focused reviewers reran the first-expiry and identifier-exhaustion boundaries
+20 times and rechecked the delayed-listener race and reconnect retry contract.
+
+The next release-path slice is a dedicated real-browser disruption harness.
+It must prove retained replay and authoritative resynchronization through a
+real application, HTTP API, binary WebSocket, and job manager rather than only
+through unit transports. The exact test order is recorded under
+**Remaining work, in priority order**. The overall backend goal remains active.
+
+## Previous checkpoint: crash-safe collector and server process restarts
 
 Date: 2026-07-25
 
@@ -80,9 +158,10 @@ race suite passed after these fixes. The ordinary, frontend, build,
 browser/Docker vertical, generated-protobuf, and cleanliness gates are recorded
 under **Latest validation evidence**.
 
-The next recommended release-path slice is deterministic browser
-disconnect/resume and replay-window-expiration coverage. The overall backend
-goal remains active; this is a safe pause, not completion of the product plan.
+The next recommended release-path slice at that checkpoint was deterministic
+browser disconnect/resume and replay-window-expiration coverage. The overall
+backend goal remains active; it was a safe pause, not completion of the
+product plan.
 
 ## Previous checkpoint: exact GradeThis v0.1 compatibility corpus
 
@@ -434,6 +513,36 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Resumable WebSocket checkpoint validation
+
+The final implementation passed the full ordinary Go suite, the WebSocket
+package under the race detector, all 29 frontend protocol tests, TypeScript
+type checking, lint, the production frontend build, and patch cleanliness:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/searchws -count=1
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
+git diff --check
+```
+
+The final focused backend regressions were:
+
+```sh
+go test ./internal/searchws \
+  -run '^(TestCompletedTargetRemovedAtFirstExpiryPollRetiresTarget|TestWebSocketSubscriptionIdentityLimitRequiresReconnect)$' \
+  -count=1
+```
+
+The first-expiry and identifier-exhaustion tests also passed 20 repeated runs
+under the focused adversarial review. A full repository race run had passed
+before the last two small boundary fixes; the final changed Go package then
+passed its complete race suite. No real-browser disruption claim is made by
+this checkpoint: that is deliberately the next test-first slice.
+
 ### Crash-restart checkpoint validation
 
 The real collector/server restart vertical passed twice on the final restart
@@ -634,7 +743,9 @@ The backend now includes:
 - bounded search jobs with cancellation, history, progress, typed paging,
   result leases, timelines, field catalog/summary, and CSV/JSONL export;
 - binary protobuf WebSocket preview/progress with replay and
-  resynchronization;
+  explicit resynchronization acknowledgement, epoch recovery, bounded
+  single-use subscription identities, expiration retirement, and reconnect
+  backoff;
 - the documented SPL v0.1 base search and Boolean/comparison expressions;
 - `fields`, `table`, `rename`, `sort`, `head`, `tail`, and `dedup`;
 - the documented `eval`/`where` subset;
@@ -751,7 +862,7 @@ independent stacks.
    go test ./integration -run '^TestBackendVertical$' -count=1 -v
    ```
 
-5. Start with the browser disconnect/resume vertical below unless the user
+5. Start with the dedicated browser recovery spec below unless the user
    explicitly changes priority. Add tests before implementation, run
    read-only adversarial reviews, fix concrete findings, then commit and push
    `main`.
@@ -760,16 +871,43 @@ independent stacks.
 
 ### 1. Finish the first-release product proof
 
-The uninterrupted collector-to-browser gate, exact GradeThis v0.1 corpus, and
-collector/server process-restart proof are complete. The recommended next slice
-is browser disconnect/resume and replay expiration, not another ad hoc SPL
-feature:
+The uninterrupted collector-to-browser gate, exact GradeThis v0.1 corpus,
+collector/server process-restart proof, and unit-level resumable WebSocket
+contract are complete. The next slice is a dedicated
+`integration/browser_recovery.spec.ts` (or equivalently isolated recovery
+fixture), not another ad hoc SPL feature. Use Playwright's WebSocket routing
+or a bounded local disruption proxy and add these tests in order:
 
-- Add deterministic browser/server integration for disconnect-and-resume,
-  replay-window expiration and authoritative resynchronization, stale-frame
-  fencing, job/result expiration, cancellation, and preview-to-final
-  replacement. Unit coverage exists for much of the protocol, but the normal
-  browser vertical currently proves only the uninterrupted path.
+1. Forward preview sequence `K`, sever the socket, and require the same
+   browser-created job and subscription to reconnect with
+   `after_sequence=K`. Verify ordered retained replay, no duplicate applied
+   frames, and final authoritative rows replacing the preview.
+2. Configure a one-frame replay window, force `SEQUENCE_EXPIRED`, serve the
+   authoritative HTTP recovery snapshot, and require retry without creating a
+   second job or invoking the executor twice.
+3. Make the first recovery GET fail transiently, then require the next
+   reconnect to retain checkpoint `K` and eventually commit the recovery.
+4. Drop `K+1` while forwarding `K+2` to prove gap detection and replay.
+5. Request cancellation while the socket is unavailable with a blocking,
+   counting executor and prove exactly-once terminal cancellation after
+   reconnect.
+6. Exercise terminal job/result/export expiration and tombstone removal while
+   subscribed, including preview-to-final release and absence of stale-frame,
+   socket, timer, or diagnostic leaks.
+
+Prefer a dedicated in-process Go integration server with a blocking/counting
+executor and explicit WebSocket configuration over test-only production
+environment switches. The current server WebSocket integration uses a fake
+service and the broad backend vertical resumes only from zero, so add one
+manager + HTTP + real WebSocket integration layer for the same transitions.
+Keep proxy logs, recorded diagnostics, matching sockets, and timeout output
+strictly bounded.
+
+After that real-browser slice:
+
+- Complete cancellation, job/result/export expiration, and preview-to-final
+  resource-release coverage that is not naturally exercised by the recovery
+  fixture.
 - Exercise a sanitized real GradeThis log/config migration: collector to the
   `gradethis` index with no OpenTelemetry component in the log path, then run
   trace-ID, severity, request-status, path, duration, and top-message
@@ -904,10 +1042,10 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. Unless the user changes priority, begin with the test-first browser
-   disconnect/resume and replay-window-expiration vertical. The uninterrupted
-   collector-to-browser path, exact GradeThis corpus, and collector/server
-   process-restart proof are already complete.
+5. Unless the user changes priority, begin with the ordered test-first browser
+   recovery matrix above. The uninterrupted collector-to-browser path, exact
+   GradeThis corpus, collector/server process-restart proof, and protocol unit
+   contract are already complete.
 6. If extending aggregates instead, start with an explicit bounded contract
    for `list(field)`; do not reuse unordered `values`.
 7. Preserve scalar/Dynamic path separation, numeric grammar sharing,
