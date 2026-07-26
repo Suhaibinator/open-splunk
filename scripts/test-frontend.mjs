@@ -8,6 +8,7 @@ const workspace = process.cwd();
 const outputDirectory = await mkdtemp(path.join(tmpdir(), "open-splunk-frontend-tests-"));
 const testFiles = [
   path.join("app", "search-workspace", "live-preview.test.ts"),
+  path.join("lib", "api", "search-websocket.test.ts"),
   path.join("lib", "search", "backend-data.test.ts"),
 ];
 

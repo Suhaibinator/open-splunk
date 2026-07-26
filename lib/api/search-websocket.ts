@@ -11,6 +11,7 @@ export const DEFAULT_SEARCH_WEBSOCKET_PATH = "/api/v1/search/ws";
 
 const SOCKET_CONNECTING = 0;
 const SOCKET_OPEN = 1;
+const MAXIMUM_UINT64 = (1n << 64n) - 1n;
 
 export type SearchWebSocketConnectionState =
   | "idle"
@@ -171,6 +172,76 @@ function isSubscriptionScopedEvent(event: SearchWebSocketEvent): boolean {
   }
 }
 
+function validateEventEnvelope(event: SearchWebSocketEvent): string | undefined {
+  const payload = event.payload?.$case;
+  if (payload === undefined) {
+    return "Search WebSocket event payload is missing or unsupported";
+  }
+  if (isSubscriptionScopedEvent(event)) {
+    if (payload === "resynchronizationRequired") {
+      return event.sequence === 0n
+        ? undefined
+        : "Search WebSocket resynchronization control event has a target sequence";
+    }
+    return event.sequence > 0n
+      ? undefined
+      : "Search WebSocket target event has no positive sequence";
+  }
+  return event.sequence === 0n
+    ? undefined
+    : "Search WebSocket control event has an unexpected target sequence";
+}
+
+function payloadTarget(event: SearchWebSocketEvent): JobTarget | undefined {
+  switch (event.payload?.$case) {
+    case "searchStateChanged":
+      return searchJobTarget(event.payload.value.searchJobId);
+    case "resultSchemaAvailable":
+      return searchJobTarget(event.payload.value.searchJobId);
+    case "resultPreview":
+      return searchJobTarget(event.payload.value.searchJobId);
+    case "searchTerminal":
+      return searchJobTarget(event.payload.value.searchJobId);
+    case "exportStateChanged":
+      return exportJobTarget(event.payload.value.exportJobId);
+    case "exportTerminal":
+      return exportJobTarget(event.payload.value.exportJobId);
+    case "warning":
+      return event.payload.value.target;
+    case "resynchronizationRequired":
+      return event.payload.value.target;
+    default:
+      return undefined;
+  }
+}
+
+function eventMatchesSubscriptionTarget(
+  event: SearchWebSocketEvent,
+  subscription: ActiveSubscription,
+): boolean {
+  const expected = searchWebSocketTargetKey(subscription.target);
+  const candidates = [event.target, payloadTarget(event)].filter(
+    (target): target is JobTarget => target !== undefined,
+  );
+  // Progress messages carry no embedded ID, so their outer target is the only
+  // routing proof. Other payloads are checked against both when both exist.
+  if (candidates.length === 0) return false;
+  try {
+    return candidates.every((target) => searchWebSocketTargetKey(target) === expected);
+  } catch {
+    return false;
+  }
+}
+
+function assertUint64Sequence(sequence: bigint): void {
+  if (sequence < 0n) {
+    throw new RangeError("Search WebSocket sequence must not be negative");
+  }
+  if (sequence > MAXIMUM_UINT64) {
+    throw new RangeError("Search WebSocket sequence must fit protobuf uint64");
+  }
+}
+
 export function resolveSearchWebSocketUrl(path: string, baseUrl?: string): string {
   if (/^wss?:\/\//i.test(path)) {
     return path;
@@ -313,7 +384,9 @@ export class SearchWebSocketClient {
         if (this.socket !== socket) {
           return;
         }
-        this.reconnectAttempt = 0;
+        if (this.subscriptions.size === 0) {
+          this.reconnectAttempt = 0;
+        }
         this.connectionPromise = undefined;
         this.connectionSocket = undefined;
         this.rejectConnection = undefined;
@@ -330,6 +403,7 @@ export class SearchWebSocketClient {
           .then(() => this.handleMessage(message.data, socket))
           .catch((error: unknown) => {
             this.emitError(normalizeError(error, "Unable to process a Search WebSocket frame"));
+            this.restartForReplay(socket);
           });
       });
 
@@ -460,10 +534,15 @@ export class SearchWebSocketClient {
   }
 
   public unsubscribe(subscriptionId: string): boolean {
-    const existed = this.subscriptions.delete(subscriptionId);
-    if (!existed) {
+    const subscription = this.subscriptions.get(subscriptionId);
+    if (subscription === undefined) {
       return false;
     }
+    this.subscriptions.delete(subscriptionId);
+    // A recovery callback for this subscription may still be in flight. Its
+    // completion is fenced by object identity; clear the target suspension so
+    // a replacement subscription can replay from the last committed sequence.
+    this.suspendedTargets.delete(searchWebSocketTargetKey(subscription.target));
     if (this.connected) {
       if (!this.sendCommand({
         requestId: this.nextIdentifier("unsubscribe"),
@@ -484,9 +563,7 @@ export class SearchWebSocketClient {
 
   /** Seeds or advances a replay checkpoint; checkpoints are never allowed to move backward. */
   public setLastSequence(target: JobTarget, sequence: bigint): void {
-    if (sequence < 0n) {
-      throw new RangeError("Search WebSocket sequence must not be negative");
-    }
+    assertUint64Sequence(sequence);
     const key = searchWebSocketTargetKey(target);
     const previous = this.lastSequences.get(key) ?? 0n;
     if (sequence < previous) {
@@ -557,6 +634,12 @@ export class SearchWebSocketClient {
       return;
     }
     const event = SearchWebSocketEventCodec.decode(bytes);
+    const envelopeError = validateEventEnvelope(event);
+    if (envelopeError !== undefined) {
+      this.emitError(new Error(envelopeError));
+      this.restartForReplay(sourceSocket);
+      return;
+    }
     this.reconcileSubscriptionCommand(event);
     let routedSubscription: ActiveSubscription | undefined;
     if (isSubscriptionScopedEvent(event)) {
@@ -568,6 +651,13 @@ export class SearchWebSocketClient {
       }
       routedSubscription = this.subscriptions.get(subscriptionId);
       if (!routedSubscription) {
+        return;
+      }
+      if (!eventMatchesSubscriptionTarget(event, routedSubscription)) {
+        this.emitError(
+          new Error("Search WebSocket event does not match its subscription target"),
+        );
+        this.restartForReplay(sourceSocket);
         return;
       }
     }
@@ -606,7 +696,10 @@ export class SearchWebSocketClient {
         return;
       }
 
-      await this.emitEvent(event);
+      if (!await this.emitEvent(event)) {
+        this.restartForReplay(sourceSocket);
+        return;
+      }
       if (
         this.socket !== sourceSocket
         || (routedSubscription
@@ -619,7 +712,10 @@ export class SearchWebSocketClient {
         this.lastSequences.set(targetKey, event.sequence);
       }
     } else {
-      await this.emitEvent(event);
+      if (!await this.emitEvent(event)) {
+        this.restartForReplay(sourceSocket);
+        return;
+      }
       if (
         routedSubscription
         && this.subscriptions.get(routedSubscription.subscriptionId) !== routedSubscription
@@ -639,19 +735,28 @@ export class SearchWebSocketClient {
     }
 
     if (resynchronization) {
-      await this.emitResynchronization(event, resynchronization, target, routedSubscription);
+      await this.emitResynchronization(
+        event,
+        resynchronization,
+        target,
+        routedSubscription,
+        sourceSocket,
+      );
     }
   }
 
-  private async emitEvent(event: SearchWebSocketEvent): Promise<void> {
+  private async emitEvent(event: SearchWebSocketEvent): Promise<boolean> {
     const outcomes = await Promise.allSettled(
       Array.from(this.eventListeners, async (listener) => listener(event)),
     );
+    let delivered = true;
     for (const outcome of outcomes) {
       if (outcome.status === "rejected") {
+        delivered = false;
         this.emitError(normalizeError(outcome.reason, "Search WebSocket event listener failed"));
       }
     }
+    return delivered;
   }
 
   private async emitResynchronization(
@@ -659,6 +764,7 @@ export class SearchWebSocketClient {
     required: ResynchronizationRequired,
     resolvedTarget: JobTarget | undefined,
     routedSubscription: ActiveSubscription | undefined,
+    sourceSocket: WebSocket,
   ): Promise<void> {
     const target = required.target ?? resolvedTarget;
     if (!target) {
@@ -671,6 +777,7 @@ export class SearchWebSocketClient {
     this.suspendedTargets.add(targetKey);
     let acknowledgedSequence: bigint | undefined;
     const acknowledge = (sequence = required.latestSequence) => {
+      assertUint64Sequence(sequence);
       if (sequence < required.latestSequence) {
         throw new RangeError(
           `Resynchronization checkpoint for ${targetKey} cannot precede the server's latest sequence`,
@@ -709,14 +816,19 @@ export class SearchWebSocketClient {
         this.emitError(normalizeError(outcome.reason, "Search WebSocket resynchronization handler failed"));
       }
     }
-    if (recoveryFailed) {
+    if (
+      this.socket !== sourceSocket
+      || (routedSubscription
+        && this.subscriptions.get(routedSubscription.subscriptionId) !== routedSubscription)
+    ) {
       return;
     }
-
-    if (
-      routedSubscription
-      && this.subscriptions.get(routedSubscription.subscriptionId) !== routedSubscription
-    ) {
+    if (recoveryFailed) {
+      // Keep the old checkpoint and establish a fresh subscription. The server
+      // will replay the same resynchronization requirement, which gives a
+      // transient authoritative GET failure another bounded reconnect attempt
+      // instead of leaving this target suspended forever on a live socket.
+      this.restartForReplay(sourceSocket);
       return;
     }
 
@@ -726,9 +838,7 @@ export class SearchWebSocketClient {
 
   /** A server restart may establish a new sequence epoch, so recovery can move this boundary backward. */
   private commitResynchronization(target: JobTarget, sequence: bigint): void {
-    if (sequence < 0n) {
-      throw new RangeError("Search WebSocket sequence must not be negative");
-    }
+    assertUint64Sequence(sequence);
     const targetKey = searchWebSocketTargetKey(target);
     this.lastSequences.set(targetKey, sequence);
     this.suspendedTargets.delete(targetKey);
@@ -818,6 +928,12 @@ export class SearchWebSocketClient {
       } else {
         this.pendingSubscribeRequests.set(acknowledged.requestId, remaining);
       }
+      if (this.pendingSubscribeRequests.size === 0) {
+        // An open TCP/WebSocket handshake is not enough to declare a reconnect
+        // stable. Preserve exponential backoff until every active subscription
+        // has been accepted by the application protocol.
+        this.reconnectAttempt = 0;
+      }
       return;
     }
     if (event.payload?.$case !== "protocolError") {
@@ -833,12 +949,15 @@ export class SearchWebSocketClient {
         this.subscriptions.delete(subscription.subscriptionId);
       }
     }
+    if (this.pendingSubscribeRequests.size === 0) {
+      this.reconnectAttempt = 0;
+    }
   }
 
   /** Drops the current generation without advancing checkpoints so retained events can replay. */
-  private restartForReplay(): void {
+  private restartForReplay(expectedSocket?: WebSocket): void {
     const socket = this.socket;
-    if (!socket) {
+    if (!socket || (expectedSocket !== undefined && socket !== expectedSocket)) {
       return;
     }
     this.socket = undefined;

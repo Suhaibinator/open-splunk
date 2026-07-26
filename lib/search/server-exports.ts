@@ -262,6 +262,7 @@ function waitForServerExportWebSocket(
     const cleanups: Array<() => void> = [];
 
     function publish(nextJob: ExportJob) {
+      if (nextJob.stateVersion < job.stateVersion) return;
       job = nextJob;
       options.onUpdate?.(nextJob);
     }
@@ -278,7 +279,7 @@ function waitForServerExportWebSocket(
       settled = true;
       publish(nextJob);
       cleanup();
-      resolve(nextJob);
+      resolve(job);
     }
 
     function fail(error: unknown) {
@@ -306,7 +307,10 @@ function waitForServerExportWebSocket(
       return recoveryRequest;
     }
 
-    async function recoverFromRest(onRecovered?: () => void) {
+    async function recoverFromRest(
+      onRecovered?: () => void,
+      propagateFailure = false,
+    ) {
       try {
         const recovered = await fetchAuthoritative();
         if (settled || signal?.aborted) return;
@@ -317,6 +321,7 @@ function waitForServerExportWebSocket(
       } catch (error) {
         if (signal?.aborted) {
           fail(abortError(signal));
+          if (propagateFailure) throw error;
           return;
         }
         if (
@@ -327,9 +332,11 @@ function waitForServerExportWebSocket(
           && error.status !== 429
         ) {
           fail(error);
+          if (propagateFailure) throw error;
           return;
         }
         scheduleRecovery();
+        if (propagateFailure) throw error;
       }
     }
 
@@ -389,7 +396,7 @@ function waitForServerExportWebSocket(
         || notice.target.target.value !== initialJob.exportJobId
         || settled
       ) return;
-      await recoverFromRest(() => notice.acknowledge());
+      await recoverFromRest(() => notice.acknowledge(), true);
     }));
     subscriptionId = socket.subscribe(target, { includePreviews: false });
     scheduleRecovery(0);
