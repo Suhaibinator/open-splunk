@@ -7,7 +7,52 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: shutdown-safe export artifact removal
+## Latest checkpoint: load-generator pacing and live-output foundation
+
+Date: 2026-07-26
+
+Implementation/proof commit:
+`860acac` (`harden log generator for sustained load`)
+
+This slice makes `open-splunk-loggen` a trustworthy source for the next
+real-process load proof:
+
+1. Rate limiting now uses a reusable timer and absolute ordinal deadlines, so
+   event generation, encoding, and ordinary writes do not accumulate as extra
+   inter-event sleep. The schedule begins on the first event rather than
+   before output setup.
+2. A long scheduler or I/O stall cannot create an unbounded replay burst.
+   Catch-up debt is capped at the smaller of 100 events or 100 milliseconds;
+   the CLI describes `-rate` as a target rate with bounded catch-up rather than
+   claiming a strict instantaneous maximum.
+3. Invalid floating-point rates, sub-nanosecond and unrepresentably slow
+   intervals, and ordinal/deadline overflow fail before output is opened.
+   Context cancellation works both before a wait and while the reused timer is
+   armed.
+4. `-flush-events` gives a live tailer bounded user-space visibility without
+   imposing a flush syscall on every unpaced fixture. `-append` uses
+   `O_APPEND`, preserves complete existing records, and rejects a nonempty
+   file whose trailing record lacks a newline.
+5. Every post-open exit now flushes buffered bytes, syncs file output, and
+   closes it while preserving all error causes. The command suppresses only
+   error trees composed entirely of cancellation, so a shutdown-time
+   flush/sync/close failure cannot be hidden as an ordinary interrupt.
+6. A pre-canceled run returns before creating or truncating its output. Tests
+   also force cancellation with a delimiter still buffered and an injected
+   final-flush failure, proving the durability failure remains visible.
+7. The controlled red suite reproduced relative-pacing drift, unbounded
+   catch-up, cancellation-masked finalization failure, pre-cancellation
+   truncation, and incomplete-record append corruption. Three independent
+   adversarial reviewers then traced the timing, timer, overflow, I/O,
+   cancellation, and file-lifecycle paths and reported the final patch clean.
+
+The exact validation record is under **Latest validation evidence**. The next
+priority is the opt-in, pinned-ClickHouse sustained-load integration harness
+described under **Remaining work, in priority order**. This commit is the load
+source foundation, not itself an ingestion-capacity claim. The overall backend
+goal remains active.
+
+## Previous checkpoint: shutdown-safe export artifact removal
 
 Date: 2026-07-26
 
@@ -1044,6 +1089,48 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Load-generator pacing and live-output foundation
+
+The exact implementation at `860acac` passed:
+
+```sh
+go test ./... -count=1
+go vet ./...
+go build ./...
+go test ./internal/loggen ./cmd/open-splunk-loggen -count=50
+go test -race ./internal/loggen ./cmd/open-splunk-loggen -count=10
+git diff --cached --check
+```
+
+The focused suites passed 50 ordinary repetitions and 10 race-enabled
+repetitions after the final reviewer-requested assertion. Independent
+reviewers additionally ran the focused suites 100 times and the race-enabled
+suites 20 times, plus vet and diff checks.
+
+A compiler-free scheduling observation used the built binary:
+
+```sh
+/usr/bin/time -p /private/tmp/open-splunk-loggen-rate \
+  -count=10000 -format=cardinality-json \
+  -rate=1000 -interval=1ms -flush-events=100 -output=- >/dev/null
+```
+
+It emitted 10,000 high-cardinality events in 10.00 seconds on the checkpoint
+machine. This is a reproducibility observation, not a cross-hardware
+acceptance threshold. Before the absolute scheduler, the same cardinality
+workload had taken 11.88 seconds (about 842 events/second) because per-event
+generation and write time accumulated on top of every relative sleep.
+
+The exact staged patch had SHA-256
+`94c9ad171e414118cfab3bcd337eceb4eae298059e6aeeabdb9087de53339b1f`.
+The final timing reviewer found deadline arithmetic, overflow guards, bounded
+rebasing, cancellation priority, and timer reuse sound. The I/O reviewer
+found all Flush/Sync/Close, append, pre-cancellation, stdout, and error-tree
+paths clean under the documented single-writer file contract. The test and
+performance reviewer found the generator suitable for the next 1,000 EPS
+live-tail harness when it explicitly uses `-interval=1ms` and a finite
+`-flush-events` value such as 100.
+
 ### Shutdown-safe export artifact removal
 
 The exact implementation at `961cba2` passed:
@@ -1743,6 +1830,9 @@ count a skipped opt-in test as database validation.
 The backend now includes:
 
 - durable collector queue/checkpoint and ingestion acknowledgement coupling;
+- a deterministic load generator with absolute target-rate pacing, bounded
+  catch-up, live periodic flushing, safe append boundaries, and durable
+  cancellation finalization;
 - scoped ingestion tokens, canonical typed events, and ClickHouse storage;
 - logically authoritative per-index event retention at one immutable search
   cutoff, independent of asynchronous physical TTL cleanup;
@@ -1884,9 +1974,10 @@ independent stacks.
      -count=1 -timeout=15m -v
    ```
 
-5. Start with the measured sustained-load proof unless the user explicitly
-   changes priority. The current preview-to-final resource-release audit pass
-   is complete at `961cba2`, the sanitized current GradeThis collector/config
+5. Start with the real-process sustained-load integration proof unless the
+   user explicitly changes priority. Its log-generator foundation is complete
+   at `860acac`; the current preview-to-final resource-release audit pass is
+   complete at `961cba2`, the sanitized current GradeThis collector/config
    migration at `c576e85`, logical event retention at `458c8b4`, clock-driven
    job/result/export expiration at `b2b2839`, and stale-duplicate injection at
    `b80bf0a`. Add a red unit or integration test before implementation, run
@@ -1947,11 +2038,29 @@ to shutdown without manager-wide lock/I/O coupling.
 
 Continue the release proof in this order:
 
-- Record a load/performance run at sustained 1,000 events/second, including
-  collector offline recovery, slow WebSocket consumers, concurrent searches,
-  high-cardinality exact aggregates, ClickHouse part count, scan budgets, and
-  browser rendering cost. Acceptance thresholds still require the hardware,
-  retention/event-size, and concurrency decisions listed below.
+- Add an opt-in `OPEN_SPLUNK_BACKEND_LOAD=1` integration test that reuses the
+  pinned ClickHouse and managed-process helpers and runs the real server,
+  collector, and `open-splunk-loggen` binaries. Start with a 30–60 second,
+  1,000 events/second high-cardinality workload using `-interval=1ms`,
+  `-flush-events=100`, and a dedicated sanitized temporary file; do not use
+  the repository-root `app.log` as formal evidence without a secret scan.
+- Make the first load test correctness-gated: record exact generated, stored,
+  and distinct event identities; require the source EOF checkpoint, drained
+  acknowledged WAL, zero rejection/dead-letter paths, and exact public
+  `stats count dc(...)` results. Include a short server outage and prove the
+  collector backlog drains without loss or duplication after recovery.
+- Record generated/accepted events per second, raw bytes per second,
+  source-to-storage backlog and recovery-drain time, ClickHouse active part
+  count and compressed/uncompressed/on-disk bytes, scan rows/bytes, and cold,
+  warm, and concurrent search latency. Treat timings as checkpoint evidence,
+  not universal pass/fail thresholds, until target hardware, retention/event
+  size, concurrent-search load, and latency decisions are made.
+- Extend that harness with a deterministic bounded-queue slow WebSocket
+  consumer and concurrent searches after the core ingest/outage proof is
+  stable. Measure browser rendering separately with a fixed 1,000-result
+  payload, stable-DOM plus two-animation-frame completion, and browser
+  performance metrics. Do not use a default-config black-hole socket as a
+  timing assertion.
 - During high-source-count collector profiling, replace the pre-existing
   per-poll `time.After` allocation with a safely reused timer if it is material;
   preserve cancellation and copy-truncate behavior with race coverage.
@@ -2087,9 +2196,10 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `961cba2`, `c576e85`, `458c8b4`, `b2b2839`, `b80bf0a`,
-   `cdb60df`, `787a7f9`, and `522b0ac`; the preceding progress/recovery
-   foundations are `b5502a3`, `f72f184`, `ed28182`, and `d1286a4`.
+   commits, especially `860acac`, `961cba2`, `c576e85`, `458c8b4`, `b2b2839`,
+   `b80bf0a`, `cdb60df`, `787a7f9`, and `522b0ac`; the preceding
+   progress/recovery foundations are `b5502a3`, `f72f184`, `ed28182`, and
+   `d1286a4`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
 4. Run the ordinary Go/frontend gates above and the focused exact corpus:
 
@@ -2102,9 +2212,10 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. Unless the user changes priority, begin with the sustained-load proof. The
-   current preview-to-final resource-release audit pass, sanitized current
-   GradeThis collector/config migration, logical event retention,
+5. Unless the user changes priority, begin with the real-process sustained-load
+   integration proof using the generator foundation at `860acac`. The current
+   preview-to-final resource-release audit pass, sanitized current GradeThis
+   collector/config migration, logical event retention,
    clock-driven job/result/export expiration,
    recovered-socket stale-duplicate fencing, authoritative browser
    cancellation, versioned
