@@ -173,10 +173,33 @@ func (executor *browserRecoveryExecutor) command(
 type browserRecoveryController struct {
 	token     string
 	executor  *browserRecoveryExecutor
+	searches  *searchjobs.Manager
 	total     atomic.Uint32
 	progress  atomic.Uint32
 	appendRow atomic.Uint32
 	complete  atomic.Uint32
+}
+
+func (controller *browserRecoveryController) waitForCompletion(ctx context.Context) error {
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		job, err := controller.searches.Get(browserSequenceExpiredJobID)
+		if err != nil {
+			return err
+		}
+		if job.State == searchjobs.StateCompleted {
+			return nil
+		}
+		if job.State.Terminal() {
+			return errors.New("browser recovery job reached unexpected state " + job.State.String())
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (controller *browserRecoveryController) ServeHTTP(
@@ -211,12 +234,48 @@ func (controller *browserRecoveryController) ServeHTTP(
 		http.Error(response, "browser recovery command failed", http.StatusConflict)
 		return
 	}
+	if kind == browserRecoveryCommandComplete {
+		if err := controller.waitForCompletion(ctx); err != nil {
+			http.Error(response, "browser recovery completion failed", http.StatusConflict)
+			return
+		}
+	}
 	response.Header().Set("Content-Type", "application/json")
 	response.WriteHeader(http.StatusOK)
 	_, _ = response.Write([]byte("{}\n"))
 }
 
+type browserRecoveryBrowserSpec struct {
+	grepPattern     string
+	outputDirectory string
+	environmentFlag string
+	failureName     string
+}
+
 func TestBrowserSequenceExpiredRecovery(t *testing.T) {
+	runBrowserRecoveryFixture(t, 1, browserRecoveryBrowserSpec{
+		grepPattern:     "real sequence expiration",
+		outputDirectory: "browser-sequence-expired",
+		environmentFlag: "OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST",
+		failureName:     "sequence-expiration",
+	})
+}
+
+func TestBrowserSequenceGapRecovery(t *testing.T) {
+	runBrowserRecoveryFixture(t, 8, browserRecoveryBrowserSpec{
+		grepPattern:     "real sequence gap",
+		outputDirectory: "browser-sequence-gap",
+		environmentFlag: "OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST",
+		failureName:     "sequence-gap",
+	})
+}
+
+func runBrowserRecoveryFixture(
+	t *testing.T,
+	maximumReplayEvents int,
+	spec browserRecoveryBrowserSpec,
+) {
+	t.Helper()
 	if os.Getenv(backendIntegrationFlag) != "1" {
 		t.Skip("set " + backendIntegrationFlag + "=1 to run the browser recovery integration test")
 	}
@@ -278,7 +337,7 @@ func TestBrowserSequenceExpiredRecovery(t *testing.T) {
 		Access:               searchjobs.AccessScope{TenantID: browserSequenceExpiredTenant, OwnerID: browserSequenceExpiredOwner},
 		MaximumSubscriptions: 8,
 		MaximumFrameBytes:    64 << 10,
-		MaximumReplayEvents:  1,
+		MaximumReplayEvents:  maximumReplayEvents,
 		PollInterval:         10 * time.Millisecond,
 		PingInterval:         3 * time.Second,
 		PongTimeout:          5 * time.Second,
@@ -328,11 +387,12 @@ func TestBrowserSequenceExpiredRecovery(t *testing.T) {
 	controller := &browserRecoveryController{
 		token:    hex.EncodeToString(tokenBytes),
 		executor: executor,
+		searches: manager,
 	}
 	controlServer := newIPv4LoopbackTestServer(t, controller)
 	t.Cleanup(controlServer.Close)
 
-	runBrowserSequenceExpiredSpec(
+	runBrowserRecoverySpec(
 		t,
 		ctx,
 		repository,
@@ -340,6 +400,7 @@ func TestBrowserSequenceExpiredRecovery(t *testing.T) {
 		controlServer.URL,
 		controller.token,
 		anchor,
+		spec,
 	)
 	waitForAtomicValue(t, &executor.exits, 1, "browser recovery executor exit")
 	if calls := executor.calls.Load(); calls != 1 {
@@ -359,11 +420,12 @@ func TestBrowserSequenceExpiredRecovery(t *testing.T) {
 	}
 }
 
-func runBrowserSequenceExpiredSpec(
+func runBrowserRecoverySpec(
 	t *testing.T,
 	ctx context.Context,
 	repository, baseURL, controlURL, controlToken string,
 	anchor time.Time,
+	spec browserRecoveryBrowserSpec,
 ) {
 	t.Helper()
 	browserContext, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -375,23 +437,23 @@ func runBrowserSequenceExpiredSpec(
 		"integration/browser_vertical.spec.ts",
 		"--workers=1",
 		"--reporter=line",
-		"--grep=real sequence expiration",
-		"--output="+filepath.Join(repository, "test-results", "browser-sequence-expired"),
+		"--grep="+spec.grepPattern,
+		"--output="+filepath.Join(repository, "test-results", spec.outputDirectory),
 	)
 	configureProcessGroup(command)
 	command.Dir = repository
 	environment := os.Environ()
 	for name, value := range map[string]string{
-		"OPEN_SPLUNK_E2E_BASE_URL":                 baseURL,
-		"OPEN_SPLUNK_E2E_SPL":                      "index=main | table message",
-		"OPEN_SPLUNK_E2E_EARLIEST":                 anchor.Add(-time.Hour).Format(time.RFC3339Nano),
-		"OPEN_SPLUNK_E2E_LATEST":                   anchor.Format(time.RFC3339Nano),
-		"OPEN_SPLUNK_E2E_EXPECTED_TEXT":            browserSequenceExpiredRecoveredRow,
-		"OPEN_SPLUNK_E2E_EXPECTED_ROWS":            "2",
-		"OPEN_SPLUNK_E2E_RECOVERY_CONTROL_URL":     controlURL,
-		"OPEN_SPLUNK_E2E_RECOVERY_CONTROL_TOKEN":   controlToken,
-		"OPEN_SPLUNK_E2E_RECOVERY_INITIAL_TEXT":    browserSequenceExpiredInitialRow,
-		"OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST": "1",
+		"OPEN_SPLUNK_E2E_BASE_URL":               baseURL,
+		"OPEN_SPLUNK_E2E_SPL":                    "index=main | table message",
+		"OPEN_SPLUNK_E2E_EARLIEST":               anchor.Add(-time.Hour).Format(time.RFC3339Nano),
+		"OPEN_SPLUNK_E2E_LATEST":                 anchor.Format(time.RFC3339Nano),
+		"OPEN_SPLUNK_E2E_EXPECTED_TEXT":          browserSequenceExpiredRecoveredRow,
+		"OPEN_SPLUNK_E2E_EXPECTED_ROWS":          "2",
+		"OPEN_SPLUNK_E2E_RECOVERY_CONTROL_URL":   controlURL,
+		"OPEN_SPLUNK_E2E_RECOVERY_CONTROL_TOKEN": controlToken,
+		"OPEN_SPLUNK_E2E_RECOVERY_INITIAL_TEXT":  browserSequenceExpiredInitialRow,
+		spec.environmentFlag:                     "1",
 	} {
 		environment = environmentWithValue(environment, name, value)
 	}
@@ -400,7 +462,7 @@ func runBrowserSequenceExpiredSpec(
 	command.Stdout = logs
 	command.Stderr = logs
 	if err := command.Run(); err != nil {
-		t.Fatalf("verify browser sequence-expiration recovery: %v\n%s", err, logs.String())
+		t.Fatalf("verify browser %s recovery: %v\n%s", spec.failureName, err, logs.String())
 	}
 }
 

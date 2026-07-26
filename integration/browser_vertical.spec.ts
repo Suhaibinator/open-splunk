@@ -13,6 +13,7 @@ import {
   GetSearchJobResponse,
   GetSearchResultsResponse,
 } from "../gen/ts/open_splunk/v1/search_api";
+import { SearchJobState } from "../gen/ts/open_splunk/v1/search";
 import {
   ResynchronizationReason,
   SearchWebSocketCommand,
@@ -30,6 +31,7 @@ const recoveryControlURL = optionalLoopbackURL(process.env.OPEN_SPLUNK_E2E_RECOV
 const recoveryControlToken = process.env.OPEN_SPLUNK_E2E_RECOVERY_CONTROL_TOKEN?.trim();
 const recoveryInitialText = process.env.OPEN_SPLUNK_E2E_RECOVERY_INITIAL_TEXT?.trim();
 const sequenceExpirationTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST === "1";
+const sequenceGapTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST === "1";
 const origin = validatedOrigin(baseURL);
 const timeout = 45_000;
 
@@ -429,6 +431,226 @@ test("live preview recovers from real sequence expiration and a transient snapsh
   assertBrowserSafety(safety);
 });
 
+test("live preview recovers from a real sequence gap", async ({ page }) => {
+  test.skip(
+    !sequenceGapTest
+      || recoveryControlURL === undefined
+      || !recoveryControlToken
+      || !recoveryInitialText,
+    "the deterministic sequence-gap fixture is not enabled",
+  );
+  test.setTimeout(60_000);
+  const safety = observeBrowserSafety(page);
+  const gap = await interceptSequenceGap(page, origin, timeout);
+  let allowFirstAuthoritativeFetch!: () => void;
+  const firstAuthoritativeFetchGate = new Promise<void>((resolve) => {
+    allowFirstAuthoritativeFetch = resolve;
+  });
+  let allowSecondAuthoritativeFetch!: () => void;
+  const secondAuthoritativeFetchGate = new Promise<void>((resolve) => {
+    allowSecondAuthoritativeFetch = resolve;
+  });
+  let releaseFirstAuthoritativeResponse!: () => void;
+  const firstAuthoritativeResponseGate = new Promise<void>((resolve) => {
+    releaseFirstAuthoritativeResponse = resolve;
+  });
+  let releaseSecondAuthoritativeResponse!: () => void;
+  const secondAuthoritativeResponseGate = new Promise<void>((resolve) => {
+    releaseSecondAuthoritativeResponse = resolve;
+  });
+  let releaseThirdAuthoritativeResponse!: () => void;
+  const thirdAuthoritativeResponseGate = new Promise<void>((resolve) => {
+    releaseThirdAuthoritativeResponse = resolve;
+  });
+  let authoritativeJobRequests = 0;
+  let fulfilledAuthoritativeJobRequests = 0;
+  const authoritativeSnapshots: GetSearchJobResponse[] = [];
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/get",
+    async (route) => {
+      authoritativeJobRequests += 1;
+      const requestOrdinal = authoritativeJobRequests;
+      if (requestOrdinal > 3) {
+        await route.abort("blockedbyclient");
+        return;
+      }
+      if (requestOrdinal === 1) await firstAuthoritativeFetchGate;
+      if (requestOrdinal === 2) await secondAuthoritativeFetchGate;
+      const upstream = await route.fetch();
+      if (
+        upstream.status() !== 200
+        || upstream.headers()["content-type"] !== "application/x-protobuf"
+      ) {
+        throw new Error(`sequence-gap authoritative GET ${requestOrdinal} was not protobuf success`);
+      }
+      const response = GetSearchJobResponse.decode(await upstream.body());
+      if (response.searchJob === undefined) {
+        throw new Error(`sequence-gap authoritative GET ${requestOrdinal} returned no search job`);
+      }
+      authoritativeSnapshots.push(response);
+      if (requestOrdinal === 1) await firstAuthoritativeResponseGate;
+      if (requestOrdinal === 2) await secondAuthoritativeResponseGate;
+      if (requestOrdinal === 3) await thirdAuthoritativeResponseGate;
+      await route.fulfill({
+        response: upstream,
+        body: Buffer.from(GetSearchJobResponse.encode(response).finish()),
+      });
+      fulfilledAuthoritativeJobRequests += 1;
+    },
+  );
+  const runSearch = await openSearchWorkspace(page);
+  const { createResponsePromise, resultsResponsePromise } = waitForSearchResponses(page);
+
+  try {
+    await runSearch.click();
+    const createResponse = await createResponsePromise;
+    assertProtobufResponse(createResponse);
+    const createdJob = CreateSearchJobResponse.decode(await createResponse.body()).searchJob;
+    if (createdJob === undefined || !createdJob.searchJobId.trim()) {
+      throw new Error("CreateSearchJobResponse.search_job is empty");
+    }
+    const browserSearchJobID = createdJob.searchJobId;
+    await gap.waitForCheckpoint(browserSearchJobID);
+    await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+      "data-status",
+      "live",
+      { timeout },
+    );
+    await expect(
+      page.getByRole("table", { name: "Live preview search statistics" }),
+    ).toContainText(recoveryInitialText!, { timeout });
+
+    await sendBrowserRecoveryControl("progress");
+    await expect.poll(() => gap.droppedFrameCount(), { timeout }).toBe(1);
+    await expect(page.getByLabel("Job metrics")).toContainText("0 rows", { timeout });
+
+    await sendBrowserRecoveryControl("progress");
+    await gap.waitForReplayReady();
+    allowFirstAuthoritativeFetch();
+    await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(1);
+    const preReplaySnapshot = authoritativeSnapshots[0].searchJob;
+    expect(preReplaySnapshot?.searchJobId, "pre-replay authoritative job ID").toBe(browserSearchJobID);
+    expect(preReplaySnapshot?.progress?.scannedRows, "pre-replay authoritative rows").toBe(2n);
+    expect(fulfilledAuthoritativeJobRequests, "authoritative responses before replay").toBe(0);
+    expect(gap.connectionCount(), "sequence-gap WebSocket connections").toBe(2);
+    await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+      "data-status",
+      "resyncing",
+      { timeout },
+    );
+    await expect(
+      page.getByRole("table", { name: "Live preview search statistics" }),
+    ).toHaveCount(0);
+    await expect(page.getByText(recoveryInitialText!, { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Job metrics")).toContainText("0 rows", { timeout });
+    await expect(page.locator("body")).toContainText(
+      /Live job updates skipped a sequence; resynchronizing from the server/i,
+      { timeout },
+    );
+
+    const firstReplaySequence = gap.releaseNextReplayFrame();
+    await expect(page.getByLabel("Job metrics")).toContainText("1 rows", { timeout });
+    expect(fulfilledAuthoritativeJobRequests, "responses after replay K+1").toBe(0);
+    const secondReplaySequence = gap.releaseNextReplayFrame();
+    expect(secondReplaySequence, "contiguous replay sequence").toBe(firstReplaySequence + 1n);
+    await expect(page.getByLabel("Job metrics")).toContainText("2 rows", { timeout });
+    expect(fulfilledAuthoritativeJobRequests, "responses after replay K+2").toBe(0);
+
+    await sendBrowserRecoveryControl("progress");
+    await expect(page.getByLabel("Job metrics")).toContainText("3 rows", { timeout });
+    expect(gap.connectionCount(), "connections after live K+3").toBe(2);
+    await sendBrowserRecoveryControl("progress");
+    await expect(page.getByLabel("Job metrics")).toContainText("4 rows", { timeout });
+    await sendBrowserRecoveryControl("progress");
+    await expect(page.getByLabel("Job metrics")).toContainText("5 rows", { timeout });
+
+    // Progress frames advance the live-update epoch without advancing the job's
+    // state version, so this stale running snapshot isolates the epoch fence.
+    releaseFirstAuthoritativeResponse();
+    await expect.poll(() => authoritativeJobRequests, { timeout }).toBe(2);
+    expect(fulfilledAuthoritativeJobRequests, "stale authoritative responses").toBe(1);
+    await expect(page.getByLabel("Job metrics")).toContainText("5 rows", { timeout });
+
+    await sendBrowserRecoveryControl("append");
+    await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+      "data-status",
+      "live",
+      { timeout },
+    );
+    await expect(
+      page.getByRole("table", { name: "Live preview search statistics" }),
+    ).toContainText(expectedText, { timeout });
+    await sendBrowserRecoveryControl("complete");
+    await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+      "data-status",
+      "finalizing",
+      { timeout },
+    );
+    await expect(page.getByTestId("job-strip")).toContainText("Completed", { timeout });
+    expect(fulfilledAuthoritativeJobRequests, "responses before terminal replay proof").toBe(1);
+
+    allowSecondAuthoritativeFetch();
+    await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(2);
+    const staleTerminalSnapshot = authoritativeSnapshots[1].searchJob;
+    expect(staleTerminalSnapshot?.searchJobId, "in-flight terminal job ID").toBe(browserSearchJobID);
+    expect(staleTerminalSnapshot?.state, "in-flight terminal job state").toBe(
+      SearchJobState.SEARCH_JOB_STATE_COMPLETED,
+    );
+    expect(staleTerminalSnapshot?.progress?.scannedRows, "in-flight terminal rows").toBe(5n);
+    releaseSecondAuthoritativeResponse();
+
+    await expect.poll(() => authoritativeJobRequests, { timeout }).toBe(3);
+    await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(3);
+    const recoveredSnapshot = authoritativeSnapshots[2].searchJob;
+    expect(recoveredSnapshot?.searchJobId, "post-gap authoritative job ID").toBe(browserSearchJobID);
+    expect(recoveredSnapshot?.state, "post-gap authoritative job state").toBe(
+      SearchJobState.SEARCH_JOB_STATE_COMPLETED,
+    );
+    expect(recoveredSnapshot?.progress?.scannedRows, "post-gap authoritative rows").toBe(5n);
+    expect(fulfilledAuthoritativeJobRequests, "responses before final recovery").toBe(2);
+    releaseThirdAuthoritativeResponse();
+
+    const resultsResponse = await resultsResponsePromise;
+    assertProtobufResponse(resultsResponse);
+    expect(decodeSearchResultsJobID(await resultsResponse.body())).toBe(browserSearchJobID);
+    await gap.waitForTerminalClose();
+
+    await expect.poll(() => fulfilledAuthoritativeJobRequests, { timeout }).toBe(3);
+    const jobStrip = page.getByTestId("job-strip");
+    await expect(jobStrip).toHaveAttribute("aria-busy", "false", { timeout });
+    await expect(jobStrip).toContainText("Completed", { timeout });
+    await expect(jobStrip).toContainText("2 rows", { timeout });
+    const finalTable = page.getByRole("table", { name: "Backend search statistics" });
+    await expect(finalTable.locator("tbody tr")).toHaveCount(expectedRows, { timeout });
+    await expect(finalTable).toContainText(expectedText, { timeout });
+    await expect(
+      page.getByRole("table", { name: "Live preview search statistics" }),
+    ).toHaveCount(0);
+    await expect(page.locator("body")).toContainText(
+      /resynchronized from the server after a sequence gap/i,
+      { timeout },
+    );
+
+    const previewStatuses = await collectPreviewStatuses(page);
+    expect(previewStatuses, "UI preview status transitions").toContain("live");
+    expect(previewStatuses, "UI preview status transitions").toContain("resyncing");
+    expect(previewStatuses, "UI preview status transitions").toContain("finalizing");
+    expect(gap.connectionCount(), "search WebSocket connections").toBe(2);
+    expect(gap.liveFrameCount(), "post-replay live target frames").toBeGreaterThan(0);
+    gap.assertHealthy();
+    expect(safety.createRequests(), "browser search create requests").toBe(1);
+    expect(authoritativeJobRequests, "authoritative job GETs").toBe(3);
+    assertBrowserSafety(safety);
+  } finally {
+    allowFirstAuthoritativeFetch();
+    allowSecondAuthoritativeFetch();
+    releaseFirstAuthoritativeResponse();
+    releaseSecondAuthoritativeResponse();
+    releaseThirdAuthoritativeResponse();
+    gap.dispose();
+  }
+});
+
 function requiredEnvironment(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required`);
@@ -663,6 +885,32 @@ interface ObservedSubscription {
   previewRowLimit: number | undefined;
 }
 
+function assertRetainedSubscription(
+  candidate: ObservedSubscription,
+  initial: ObservedSubscription,
+  expectedAfterSequence: bigint,
+  context: string,
+): void {
+  if (
+    candidate.subscriptionID === initial.subscriptionID
+    && candidate.searchJobID === initial.searchJobID
+    && candidate.afterSequence === expectedAfterSequence
+    && candidate.includePreviews === initial.includePreviews
+    && candidate.previewRowLimit === initial.previewRowLimit
+  ) {
+    return;
+  }
+  throw new Error(
+    `${context} subscription = ${JSON.stringify({
+      subscriptionID: candidate.subscriptionID,
+      searchJobID: candidate.searchJobID,
+      afterSequence: candidate.afterSequence.toString(),
+      includePreviews: candidate.includePreviews,
+      previewRowLimit: candidate.previewRowLimit,
+    })}; expected the original subscription after ${expectedAfterSequence.toString()}`,
+  );
+}
+
 interface ObservedProgress {
   sequence: bigint;
   subscriptionID: string;
@@ -702,6 +950,18 @@ interface SequenceExpirationObservation {
   dispose(): void;
 }
 
+interface SequenceGapObservation {
+  waitForCheckpoint(searchJobID: string): Promise<void>;
+  droppedFrameCount(): number;
+  waitForReplayReady(): Promise<void>;
+  releaseNextReplayFrame(): bigint;
+  waitForTerminalClose(): Promise<void>;
+  connectionCount(): number;
+  liveFrameCount(): number;
+  assertHealthy(): void;
+  dispose(): void;
+}
+
 interface ObservedSubscribeCommand {
   requestID: string;
   subscriptions: ObservedSubscription[];
@@ -734,6 +994,462 @@ async function sendBrowserRecoveryControl(
 }
 
 const browserRecoveryControlTokenHeader = "X-Open-Splunk-Test-Token";
+
+async function interceptSequenceGap(
+  page: Page,
+  expectedOrigin: string,
+  timeoutMilliseconds: number,
+): Promise<SequenceGapObservation> {
+  let expectedJobID: string | undefined;
+  let routedJobID: string | undefined;
+  let subscriptionID: string | undefined;
+  let checkpoint: bigint | undefined;
+  let initialSubscription: ObservedSubscription | undefined;
+  let reconnectRequestID: string | undefined;
+  let reconnectAcknowledged = false;
+  let secondClient: WebSocketRoute | undefined;
+  let lastUpstreamSequence: bigint | undefined;
+  let matchingConnectionCount = 0;
+  let subscribeCommandCount = 0;
+  let clientFrameCount = 0;
+  let serverFrameCount = 0;
+  let gapCloseCount = 0;
+  let gapCloseEchoCount = 0;
+  let terminalCloseCount = 0;
+  let terminalCloseEchoCount = 0;
+  let gapCloseForwardCompleted = false;
+  let terminalCloseForwardCompleted = false;
+  let replayReleaseCount = 0;
+  let liveTargetFrameCount = 0;
+  let gapStimulusSent = false;
+  let disposed = false;
+  let failure: Error | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const forwardedCloseConnections = new Set<number>();
+  const originalFrames = new Map<bigint, Buffer>();
+  const replayFrames = new Map<bigint, Buffer>();
+  const connectionOneDeliveredSequences: bigint[] = [];
+  let checkpointSettled = false;
+  let replayReadySettled = false;
+  let gapCloseSettled = false;
+  let terminalCloseSettled = false;
+  let resolveCheckpoint!: () => void;
+  let rejectCheckpoint!: (reason: Error) => void;
+  let resolveReplayReady!: () => void;
+  let rejectReplayReady!: (reason: Error) => void;
+  let resolveGapClose!: () => void;
+  let rejectGapClose!: (reason: Error) => void;
+  let resolveTerminalClose!: () => void;
+  let rejectTerminalClose!: (reason: Error) => void;
+  const checkpointReady = new Promise<void>((resolve, reject) => {
+    resolveCheckpoint = resolve;
+    rejectCheckpoint = reject;
+  });
+  const replayReady = new Promise<void>((resolve, reject) => {
+    resolveReplayReady = resolve;
+    rejectReplayReady = reject;
+  });
+  const gapCloseReady = new Promise<void>((resolve, reject) => {
+    resolveGapClose = resolve;
+    rejectGapClose = reject;
+  });
+  const terminalCloseReady = new Promise<void>((resolve, reject) => {
+    resolveTerminalClose = resolve;
+    rejectTerminalClose = reject;
+  });
+  void checkpointReady.catch(() => undefined);
+  void replayReady.catch(() => undefined);
+  void gapCloseReady.catch(() => undefined);
+  void terminalCloseReady.catch(() => undefined);
+
+  const fail = (error: unknown): void => {
+    const normalized = normalizeError(error);
+    failure ??= normalized;
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    if (!checkpointSettled) {
+      checkpointSettled = true;
+      rejectCheckpoint(normalized);
+    }
+    if (!replayReadySettled) {
+      replayReadySettled = true;
+      rejectReplayReady(normalized);
+    }
+    if (!gapCloseSettled) {
+      gapCloseSettled = true;
+      rejectGapClose(normalized);
+    }
+    if (!terminalCloseSettled) {
+      terminalCloseSettled = true;
+      rejectTerminalClose(normalized);
+    }
+  };
+  const routeMatchesSearchSocket = (url: URL): boolean =>
+    httpOriginForWebSocket(url) === expectedOrigin && url.pathname === "/api/v1/search/ws";
+
+  await page.routeWebSocket(routeMatchesSearchSocket, (client) => {
+    matchingConnectionCount += 1;
+    const connectionOrdinal = matchingConnectionCount;
+    const server = client.connectToServer();
+    if (connectionOrdinal === 2) secondClient = client;
+    if (connectionOrdinal > 2) {
+      fail(new Error(`sequence-gap recovery opened ${connectionOrdinal} matching connections`));
+      return;
+    }
+
+    client.onMessage((message) => {
+      try {
+        clientFrameCount += 1;
+        if (clientFrameCount > 32) {
+          throw new Error("sequence-gap WebSocket sent more than 32 routed command frames");
+        }
+        if (typeof message === "string") throw new Error("sequence-gap WebSocket sent a text frame");
+        const subscribe = decodeSearchSubscribeCommand(message);
+        if (subscribe !== undefined && subscribe.subscriptions.length !== 1) {
+          throw new Error("sequence-gap WebSocket sent a non-singleton subscribe command");
+        }
+        const subscription = subscribe?.subscriptions[0];
+        if (subscription !== undefined) {
+          subscribeCommandCount += 1;
+          if (connectionOrdinal === 1) {
+            if (initialSubscription !== undefined || subscription.afterSequence !== 0n) {
+              throw new Error("sequence-gap initial subscription was duplicated or resumed");
+            }
+            initialSubscription = subscription;
+            subscriptionID = subscription.subscriptionID;
+            routedJobID = subscription.searchJobID;
+          } else {
+            if (
+              checkpoint === undefined
+              || subscriptionID === undefined
+              || routedJobID === undefined
+              || initialSubscription === undefined
+              || reconnectRequestID !== undefined
+              || subscribe === undefined
+            ) {
+              throw new Error("sequence-gap reconnect preceded its exact checkpoint");
+            }
+            assertRetainedSubscription(
+              subscription,
+              initialSubscription,
+              checkpoint,
+              "sequence-gap reconnect",
+            );
+            reconnectRequestID = subscribe.requestID;
+          }
+        }
+        server.send(message);
+      } catch (error) {
+        fail(error);
+      }
+    });
+
+    client.onClose((code, reason) => {
+      if (disposed) {
+        if (!forwardedCloseConnections.has(connectionOrdinal)) {
+          forwardedCloseConnections.add(connectionOrdinal);
+          void server.close({ code, reason }).catch(() => undefined);
+        }
+        return;
+      }
+      try {
+        if (
+          connectionOrdinal === 2
+          && code === 1000
+          && (reason === undefined || reason === "" || reason === "Client disposed")
+        ) {
+          if (terminalCloseCount === 0) {
+            terminalCloseCount = 1;
+            forwardedCloseConnections.add(connectionOrdinal);
+            void server.close({ code, reason })
+              .then(() => {
+                terminalCloseForwardCompleted = true;
+                if (timer !== undefined) {
+                  clearTimeout(timer);
+                  timer = undefined;
+                }
+                if (!terminalCloseSettled) {
+                  terminalCloseSettled = true;
+                  resolveTerminalClose();
+                }
+              })
+              .catch(fail);
+            return;
+          }
+          if (terminalCloseEchoCount !== 0) {
+            throw new Error("sequence-gap terminal close produced more than one forwarded echo");
+          }
+          terminalCloseEchoCount = 1;
+          return;
+        }
+        if (connectionOrdinal === 1 && gapCloseCount === 1 && code === 4000) {
+          if (gapCloseEchoCount !== 0) {
+            throw new Error("sequence-gap close produced more than one forwarded echo");
+          }
+          gapCloseEchoCount += 1;
+          return;
+        }
+        if (
+          connectionOrdinal !== 1
+          || gapCloseCount !== 0
+          || !gapStimulusSent
+          || code !== 4000
+          || (
+            reason !== undefined
+            && reason !== ""
+            && reason !== "Sequence gap; replay required"
+          )
+        ) {
+          throw new Error(
+            `unexpected sequence-gap client close on connection ${connectionOrdinal}: ${String(code)} ${JSON.stringify(reason)}`,
+          );
+        }
+        gapCloseCount += 1;
+        forwardedCloseConnections.add(connectionOrdinal);
+        void server.close({ code, reason })
+          .then(() => {
+            gapCloseForwardCompleted = true;
+            if (!gapCloseSettled) {
+              gapCloseSettled = true;
+              resolveGapClose();
+            }
+          })
+          .catch(fail);
+      } catch (error) {
+        fail(error);
+      }
+    });
+
+    server.onMessage((message) => {
+      try {
+        serverFrameCount += 1;
+        if (serverFrameCount > 128) {
+          throw new Error("sequence-gap WebSocket received more than 128 routed event frames");
+        }
+        if (typeof message === "string") throw new Error("sequence-gap WebSocket received a text frame");
+        const frame = Buffer.from(message);
+        const event = SearchWebSocketEvent.decode(frame);
+        const target = event.target?.target;
+        const matchesSubscription = event.sequence > 0n
+          && subscriptionID !== undefined
+          && routedJobID !== undefined
+          && event.subscriptionId === subscriptionID
+          && target?.$case === "searchJobId"
+          && target.value === routedJobID;
+
+        if (connectionOrdinal === 1) {
+          if (matchesSubscription && checkpoint !== undefined) {
+            if (originalFrames.size >= 2) {
+              throw new Error("sequence-gap connection published more than K+1 and K+2 before reconnect");
+            }
+            const expectedSequence = checkpoint + BigInt(originalFrames.size + 1);
+            const expectedProgressRows = BigInt(originalFrames.size + 1);
+            if (
+              event.sequence !== expectedSequence
+              || event.payload?.$case !== "searchProgress"
+              || event.payload.value.scannedRows !== expectedProgressRows
+            ) {
+              throw new Error(
+                `sequence-gap stimulus ${event.sequence.toString()} was not progress ${expectedProgressRows.toString()} at ${expectedSequence.toString()}`,
+              );
+            }
+            originalFrames.set(event.sequence, frame);
+            if (originalFrames.size === 1) return;
+            gapStimulusSent = true;
+            connectionOneDeliveredSequences.push(event.sequence);
+            client.send(message);
+            return;
+          }
+          client.send(message);
+          if (
+            matchesSubscription
+            && event.payload?.$case === "resultPreview"
+            && event.payload.value.rows.length > 0
+          ) {
+            checkpoint = event.sequence;
+            if (!checkpointSettled) {
+              checkpointSettled = true;
+              resolveCheckpoint();
+            }
+          }
+          return;
+        }
+
+        if (event.payload?.$case === "resynchronizationRequired") {
+          throw new Error(
+            `sequence gap unexpectedly required authoritative resynchronization: ${event.payload.value.reason}`,
+          );
+        }
+        if (event.payload?.$case === "protocolError") {
+          throw new Error(`sequence-gap subscription received protocol error ${event.payload.value.code}`);
+        }
+        if (event.payload?.$case === "subscriptionAcknowledged") {
+          const acknowledgment = event.payload.value;
+          if (
+            reconnectAcknowledged
+            || reconnectRequestID === undefined
+            || checkpoint === undefined
+            || subscriptionID === undefined
+            || routedJobID === undefined
+            || event.sequence !== 0n
+            || event.subscriptionId !== subscriptionID
+            || acknowledgment.requestId !== reconnectRequestID
+            || acknowledgment.subscriptionId !== subscriptionID
+            || acknowledgment.target?.target?.$case !== "searchJobId"
+            || acknowledgment.target.target.value !== routedJobID
+            || !acknowledgment.replayWillFollow
+            || acknowledgment.earliestAvailableSequence > checkpoint + 1n
+            || acknowledgment.latestSequence !== checkpoint + 2n
+          ) {
+            throw new Error("sequence-gap reconnect acknowledgment was invalid");
+          }
+          reconnectAcknowledged = true;
+          client.send(message);
+          return;
+        }
+        if (matchesSubscription) {
+          if (checkpoint === undefined || !reconnectAcknowledged) {
+            throw new Error("sequence-gap reconnect delivered a target frame before acknowledgment");
+          }
+          if (replayFrames.size < 2) {
+            const expectedSequence = checkpoint + BigInt(replayFrames.size + 1);
+            const original = originalFrames.get(expectedSequence);
+            if (
+              event.sequence !== expectedSequence
+              || original === undefined
+              || !frame.equals(original)
+            ) {
+              throw new Error(
+                `sequence-gap replay frame ${event.sequence.toString()} was not the byte-identical ${expectedSequence.toString()} frame`,
+              );
+            }
+            replayFrames.set(event.sequence, frame);
+            lastUpstreamSequence = event.sequence;
+            if (replayFrames.size === 2 && !replayReadySettled) {
+              replayReadySettled = true;
+              resolveReplayReady();
+            }
+            return;
+          }
+          if (replayReleaseCount !== 2 || lastUpstreamSequence === undefined) {
+            throw new Error("sequence-gap live target frame arrived before replay release completed");
+          }
+          if (event.sequence !== lastUpstreamSequence + 1n) {
+            throw new Error(
+              `sequence-gap live sequence = ${event.sequence.toString()}, want ${(lastUpstreamSequence + 1n).toString()}`,
+            );
+          }
+          lastUpstreamSequence = event.sequence;
+          liveTargetFrameCount += 1;
+        }
+        client.send(message);
+      } catch (error) {
+        fail(error);
+      }
+    });
+  });
+
+  timer = setTimeout(
+    () => fail(new Error("timed out waiting for deterministic sequence-gap replay")),
+    timeoutMilliseconds,
+  );
+  return {
+    waitForCheckpoint(searchJobID) {
+      if (expectedJobID !== undefined) throw new Error("sequence-gap browser job was already selected");
+      expectedJobID = searchJobID;
+      if (routedJobID !== undefined && routedJobID !== expectedJobID) {
+        fail(
+          new Error(
+            `sequence-gap routed job ${routedJobID} did not match created job ${expectedJobID}`,
+          ),
+        );
+      }
+      return checkpointReady;
+    },
+    droppedFrameCount() {
+      return originalFrames.size;
+    },
+    waitForReplayReady() {
+      if (failure !== undefined) return Promise.reject(failure);
+      return Promise.all([gapCloseReady, replayReady]).then(() => undefined);
+    },
+    releaseNextReplayFrame() {
+      if (failure !== undefined) throw failure;
+      if (
+        checkpoint === undefined
+        || secondClient === undefined
+        || replayFrames.size !== 2
+        || replayReleaseCount >= 2
+      ) {
+        throw new Error("sequence-gap replay is not ready for staged release");
+      }
+      const sequence = checkpoint + BigInt(replayReleaseCount + 1);
+      const frame = replayFrames.get(sequence);
+      if (frame === undefined) throw new Error(`sequence-gap replay ${sequence.toString()} is missing`);
+      replayReleaseCount += 1;
+      secondClient.send(frame);
+      return sequence;
+    },
+    waitForTerminalClose() {
+      if (failure !== undefined) return Promise.reject(failure);
+      return terminalCloseReady;
+    },
+    connectionCount() {
+      return matchingConnectionCount;
+    },
+    liveFrameCount() {
+      return liveTargetFrameCount;
+    },
+    assertHealthy() {
+      if (failure !== undefined) throw failure;
+      if (
+        expectedJobID === undefined
+        || routedJobID !== expectedJobID
+        || checkpoint === undefined
+        || subscribeCommandCount !== 2
+        || matchingConnectionCount !== 2
+        || originalFrames.size !== 2
+        || connectionOneDeliveredSequences.length !== 1
+        || connectionOneDeliveredSequences[0] !== checkpoint + 2n
+        || !gapStimulusSent
+        || gapCloseCount !== 1
+        || gapCloseEchoCount > 1
+        || !gapCloseForwardCompleted
+        || terminalCloseCount !== 1
+        || terminalCloseEchoCount > 1
+        || !terminalCloseForwardCompleted
+        || !reconnectAcknowledged
+        || replayFrames.size !== 2
+        || replayReleaseCount !== 2
+        || liveTargetFrameCount === 0
+      ) {
+        throw new Error("sequence-gap observation did not complete its exact contract");
+      }
+    },
+    dispose() {
+      disposed = true;
+      if (timer !== undefined) clearTimeout(timer);
+      if (!checkpointSettled) {
+        checkpointSettled = true;
+        resolveCheckpoint();
+      }
+      if (!replayReadySettled) {
+        replayReadySettled = true;
+        resolveReplayReady();
+      }
+      if (!gapCloseSettled) {
+        gapCloseSettled = true;
+        resolveGapClose();
+      }
+      if (!terminalCloseSettled) {
+        terminalCloseSettled = true;
+        resolveTerminalClose();
+      }
+    },
+  };
+}
 
 async function interceptSequenceExpiration(
   page: Page,
@@ -850,17 +1566,12 @@ async function interceptSequenceExpiration(
                 `expiration connection ${connectionOrdinal} sent more than one subscribe command`,
               );
             }
-            if (
-              subscription.subscriptionID !== subscriptionID
-              || subscription.searchJobID !== routedJobID
-              || subscription.afterSequence !== checkpoint
-              || subscription.includePreviews !== initialSubscription.includePreviews
-              || subscription.previewRowLimit !== initialSubscription.previewRowLimit
-            ) {
-              throw new Error(
-                `expiration reconnect did not retain the original subscription after ${checkpoint.toString()}`,
-              );
-            }
+            assertRetainedSubscription(
+              subscription,
+              initialSubscription,
+              checkpoint,
+              `expiration connection ${connectionOrdinal}`,
+            );
             reconnectRequestIDs.set(connectionOrdinal, subscribe.requestID);
           }
         }
@@ -1221,23 +1932,12 @@ async function interceptOneRetainedReplay(
             if (reconnectRequestID !== undefined) {
               throw new Error("reconnect WebSocket sent more than one subscribe command");
             }
-            if (
-              subscription.subscriptionID !== subscriptionID
-              || subscription.searchJobID !== routedJobID
-              || subscription.afterSequence !== checkpoint
-              || subscription.includePreviews !== initialSubscription.includePreviews
-              || subscription.previewRowLimit !== initialSubscription.previewRowLimit
-            ) {
-              throw new Error(
-                `reconnect subscription = ${JSON.stringify({
-                  subscriptionID: subscription.subscriptionID,
-                  searchJobID: subscription.searchJobID,
-                  afterSequence: subscription.afterSequence.toString(),
-                  includePreviews: subscription.includePreviews,
-                  previewRowLimit: subscription.previewRowLimit,
-                })}; expected the original subscription after ${checkpoint.toString()}`,
-              );
-            }
+            assertRetainedSubscription(
+              subscription,
+              initialSubscription,
+              checkpoint,
+              "retained replay reconnect",
+            );
             reconnectRequestID = subscribe.requestID;
             lastReplaySequence = checkpoint;
           }
