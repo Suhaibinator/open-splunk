@@ -78,7 +78,7 @@ func TestBackendVertical(t *testing.T) {
 	work := t.TempDir()
 	buildDir := t.TempDir()
 	serverRuntimeDir := t.TempDir()
-	buildBackendFrontend(t, ctx, repository)
+	stagedBackendRepository := buildBackendFrontend(t, ctx, repository)
 
 	image := os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE")
 	clickhouse, err := testsupport.StartClickHouse(ctx, image)
@@ -95,7 +95,7 @@ func TestBackendVertical(t *testing.T) {
 
 	serverBinary := filepath.Join(buildDir, "open-splunk-server")
 	collectorBinary := filepath.Join(buildDir, "open-splunk-collector")
-	buildBinary(t, ctx, repository, serverBinary, "./cmd/open-splunk-server")
+	buildBinary(t, ctx, stagedBackendRepository, serverBinary, "./cmd/open-splunk-server")
 	buildBinary(t, ctx, repository, collectorBinary, "./cmd/open-splunk-collector")
 
 	httpAddress := unusedLoopbackAddress(t)

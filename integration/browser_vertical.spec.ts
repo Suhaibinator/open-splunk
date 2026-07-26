@@ -10,9 +10,11 @@ import {
 
 import {
   CreateSearchJobResponse,
+  GetSearchJobResponse,
   GetSearchResultsResponse,
 } from "../gen/ts/open_splunk/v1/search_api";
 import {
+  ResynchronizationReason,
   SearchWebSocketCommand,
   SearchWebSocketEvent,
 } from "../gen/ts/open_splunk/v1/search_ws";
@@ -24,6 +26,10 @@ const latest = requiredEnvironment("OPEN_SPLUNK_E2E_LATEST");
 const expectedText = requiredEnvironment("OPEN_SPLUNK_E2E_EXPECTED_TEXT");
 const expectedRows = parsePositiveInteger(requiredEnvironment("OPEN_SPLUNK_E2E_EXPECTED_ROWS"));
 const browserExecutable = process.env.OPEN_SPLUNK_BROWSER_EXECUTABLE?.trim();
+const recoveryControlURL = optionalLoopbackURL(process.env.OPEN_SPLUNK_E2E_RECOVERY_CONTROL_URL);
+const recoveryControlToken = process.env.OPEN_SPLUNK_E2E_RECOVERY_CONTROL_TOKEN?.trim();
+const recoveryInitialText = process.env.OPEN_SPLUNK_E2E_RECOVERY_INITIAL_TEXT?.trim();
+const sequenceExpirationTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST === "1";
 const origin = validatedOrigin(baseURL);
 const timeout = 45_000;
 
@@ -148,10 +154,260 @@ test("live preview resumes from the exact retained WebSocket sequence", async ({
   assertBrowserSafety(safety);
 });
 
+test("live preview recovers from real sequence expiration", async ({ page }) => {
+  test.skip(
+    !sequenceExpirationTest
+      || recoveryControlURL === undefined
+      || !recoveryControlToken
+      || !recoveryInitialText,
+    "the deterministic sequence-expiration fixture is not enabled",
+  );
+  test.setTimeout(60_000);
+  const safety = observeBrowserSafety(page);
+  const expiration = await interceptSequenceExpiration(page, origin, timeout);
+  let releaseStaleRecovery!: () => void;
+  const staleRecoveryGate = new Promise<void>((resolve) => {
+    releaseStaleRecovery = resolve;
+  });
+  let releaseFreshRecovery!: () => void;
+  const freshRecoveryGate = new Promise<void>((resolve) => {
+    releaseFreshRecovery = resolve;
+  });
+  let releaseDelayedWatchdog!: () => void;
+  const delayedWatchdogGate = new Promise<void>((resolve) => {
+    releaseDelayedWatchdog = resolve;
+  });
+  let releasePostWatchdogRecovery!: () => void;
+  const postWatchdogRecoveryGate = new Promise<void>((resolve) => {
+    releasePostWatchdogRecovery = resolve;
+  });
+  let authoritativeJobRequests = 0;
+  let fulfilledAuthoritativeJobRequests = 0;
+  let initialJobStateVersion: bigint | undefined;
+  const authoritativeSnapshots: GetSearchJobResponse[] = [];
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/get",
+    async (route) => {
+      authoritativeJobRequests += 1;
+      const requestOrdinal = authoritativeJobRequests;
+      if (requestOrdinal > 6) {
+        await route.abort("blockedbyclient");
+        return;
+      }
+      if (requestOrdinal === 1) await staleRecoveryGate;
+      if (requestOrdinal === 2) await freshRecoveryGate;
+      if (requestOrdinal === 4) await postWatchdogRecoveryGate;
+      const upstream = await route.fetch();
+      if (
+        upstream.status() !== 200
+        || upstream.headers()["content-type"] !== "application/x-protobuf"
+      ) {
+        throw new Error(`authoritative recovery GET ${requestOrdinal} was not protobuf success`);
+      }
+      const response = GetSearchJobResponse.decode(await upstream.body());
+      if (response.searchJob === undefined) {
+        throw new Error(`authoritative recovery GET ${requestOrdinal} returned no search job`);
+      }
+      if (requestOrdinal === 1) {
+        if (initialJobStateVersion === undefined || initialJobStateVersion === 0n) {
+          throw new Error("the created search job did not establish a positive state version");
+        }
+        response.searchJob.stateVersion = 0n;
+      }
+      authoritativeSnapshots.push(response);
+      if (requestOrdinal === 3) await delayedWatchdogGate;
+      await route.fulfill({
+        response: upstream,
+        body: Buffer.from(GetSearchJobResponse.encode(response).finish()),
+      });
+      fulfilledAuthoritativeJobRequests += 1;
+    },
+  );
+  const runSearch = await openSearchWorkspace(page);
+  const { createResponsePromise, resultsResponsePromise } = waitForSearchResponses(page);
+
+  try {
+    await runSearch.click();
+    const createResponse = await createResponsePromise;
+    assertProtobufResponse(createResponse);
+    const createdJob = CreateSearchJobResponse.decode(await createResponse.body()).searchJob;
+    if (createdJob === undefined || !createdJob.searchJobId.trim()) {
+      throw new Error("CreateSearchJobResponse.search_job is empty");
+    }
+    const browserSearchJobID = createdJob.searchJobId;
+    initialJobStateVersion = createdJob.stateVersion;
+    expect(initialJobStateVersion, "created search job state version").toBeGreaterThan(0n);
+    await expiration.waitForCheckpoint(browserSearchJobID);
+    await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+      "data-status",
+      "live",
+      { timeout },
+    );
+    await expect(
+      page.getByRole("table", { name: "Live preview search statistics" }),
+    ).toContainText(recoveryInitialText!, { timeout });
+
+    await sendBrowserRecoveryControl("progress");
+    await expect.poll(() => expiration.withheldFrameCount(), { timeout }).toBe(1);
+    await sendBrowserRecoveryControl("progress");
+    await expect.poll(() => expiration.withheldFrameCount(), { timeout }).toBe(2);
+    await expiration.disconnect();
+    await expiration.waitForResynchronizations(1);
+
+    await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+      "data-status",
+      "resyncing",
+      { timeout },
+    );
+    await expect(
+      page.getByRole("table", { name: "Live preview search statistics" }),
+    ).toHaveCount(0);
+    await expect(page.getByText(recoveryInitialText!, { exact: true })).toHaveCount(0);
+    expect(authoritativeJobRequests, "authoritative GETs before recovery release").toBe(1);
+
+    await sendBrowserRecoveryControl("progress");
+    await expect.poll(() => expiration.heldRecoveryFrameCount(), { timeout }).toBe(1);
+    expect(authoritativeJobRequests, "authoritative GET while target update is queued").toBe(1);
+    await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+      "data-status",
+      "resyncing",
+      { timeout },
+    );
+    await expect(
+      page.getByRole("table", { name: "Live preview search statistics" }),
+    ).toHaveCount(0);
+    await expect(page.getByLabel("Job metrics")).toContainText("0 rows", { timeout });
+    const statusCountBeforeStaleRecovery = (await snapshotPreviewStatuses(page)).length;
+
+    releaseStaleRecovery();
+    await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(1);
+    const staleJob = authoritativeSnapshots[0].searchJob;
+    expect(staleJob?.stateVersion, "deliberately stale authoritative state version").toBe(0n);
+    expect(staleJob?.progress?.scannedRows, "stale recovery scanned rows").toBe(3n);
+    await expiration.waitForResynchronizations(2);
+    await expect.poll(() => authoritativeJobRequests, { timeout }).toBe(2);
+    expect(expiration.connectionCount(), "reconnect after stale authoritative snapshot").toBe(3);
+    await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+      "data-status",
+      "resyncing",
+      { timeout },
+    );
+    await expect(
+      page.getByRole("table", { name: "Live preview search statistics" }),
+    ).toHaveCount(0);
+    await expect(page.getByLabel("Job metrics")).toContainText("0 rows", { timeout });
+    expect(
+      (await snapshotPreviewStatuses(page)).slice(statusCountBeforeStaleRecovery),
+      "preview statuses while the stale snapshot is rejected",
+    ).not.toContain("waiting");
+
+    await sendBrowserRecoveryControl("progress");
+    await expect.poll(() => expiration.postRecoveryFrameCount(), { timeout }).toBe(1);
+    await expect(page.getByLabel("Job metrics")).toContainText("0 rows", { timeout });
+    expect(
+      (await snapshotPreviewStatuses(page)).slice(statusCountBeforeStaleRecovery),
+      "preview statuses while fresh authoritative recovery is blocked",
+    ).not.toContain("waiting");
+
+    releaseFreshRecovery();
+    await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(2);
+    const recoveredJob = authoritativeSnapshots[1].searchJob;
+    expect(recoveredJob?.searchJobId, "authoritative recovery job ID").toBe(browserSearchJobID);
+    expect(recoveredJob?.stateVersion, "fresh authoritative state version")
+      .toBeGreaterThan(createdJob.stateVersion);
+    expect(recoveredJob?.progress?.scannedRows, "authoritative recovered scanned rows").toBe(4n);
+    await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+      "data-status",
+      "waiting",
+      { timeout },
+    );
+    await expect(page.getByLabel("Job metrics")).toContainText("4 rows", { timeout });
+
+    await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(3);
+    const delayedWatchdogJob = authoritativeSnapshots[2].searchJob;
+    expect(delayedWatchdogJob?.progress?.scannedRows, "delayed watchdog scanned rows").toBe(4n);
+    await sendBrowserRecoveryControl("progress");
+    await expect.poll(() => expiration.postRecoveryFrameCount(), { timeout }).toBe(2);
+    await expect(page.getByLabel("Job metrics")).toContainText("5 rows", { timeout });
+    releaseDelayedWatchdog();
+    await expect.poll(() => authoritativeJobRequests, { timeout }).toBe(4);
+    await expect(page.getByLabel("Job metrics")).toContainText("5 rows", { timeout });
+    releasePostWatchdogRecovery();
+    await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(4);
+    expect(
+      authoritativeSnapshots[3].searchJob?.progress?.scannedRows,
+      "post-watchdog recovery scanned rows",
+    ).toBe(5n);
+    await expect.poll(() => fulfilledAuthoritativeJobRequests, { timeout }).toBeGreaterThanOrEqual(4);
+
+    await sendBrowserRecoveryControl("append");
+    await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+      "data-status",
+      "live",
+      { timeout },
+    );
+    await expect(
+      page.getByRole("table", { name: "Live preview search statistics" }),
+    ).toContainText(expectedText, { timeout });
+    await sendBrowserRecoveryControl("complete");
+
+    const resultsResponse = await resultsResponsePromise;
+    assertProtobufResponse(resultsResponse);
+    expect(decodeSearchResultsJobID(await resultsResponse.body())).toBe(browserSearchJobID);
+  } finally {
+    releaseStaleRecovery();
+    releaseFreshRecovery();
+    releaseDelayedWatchdog();
+    releasePostWatchdogRecovery();
+    expiration.dispose();
+  }
+
+  const jobStrip = page.getByTestId("job-strip");
+  await expect(jobStrip).toHaveAttribute("aria-busy", "false", { timeout });
+  await expect(jobStrip).toContainText("Completed", { timeout });
+  await expect(jobStrip).toContainText("2 rows", { timeout });
+  const finalTable = page.getByRole("table", { name: "Backend search statistics" });
+  await expect(finalTable.locator("tbody tr")).toHaveCount(expectedRows, { timeout });
+  await expect(finalTable).toContainText(expectedText, { timeout });
+  await expect(
+    page.getByRole("table", { name: "Live preview search statistics" }),
+  ).toHaveCount(0);
+
+  const previewStatuses = await collectPreviewStatuses(page);
+  expect(previewStatuses, "UI preview status transitions").toContain("live");
+  expect(previewStatuses, "UI preview status transitions").toContain("resyncing");
+  expect(previewStatuses, "UI preview status transitions").toContain("waiting");
+  expect(expiration.connectionCount(), "search WebSocket connections").toBe(3);
+  expect(expiration.heldRecoveryFrameCount(), "target frames ignored during held recovery").toBe(1);
+  expect(expiration.postRecoveryFrameCount(), "post-recovery target frames").toBeGreaterThan(0);
+  expiration.assertHealthy();
+  expect(safety.createRequests(), "browser search create requests").toBe(1);
+  expect(authoritativeJobRequests, "bounded authoritative job GETs").toBeLessThanOrEqual(5);
+  assertBrowserSafety(safety);
+});
+
 function requiredEnvironment(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required`);
   return value;
+}
+
+function optionalLoopbackURL(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  const parsed = new URL(trimmed);
+  if (
+    parsed.protocol !== "http:"
+    || (parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost")
+    || parsed.username
+    || parsed.password
+    || parsed.pathname !== "/"
+    || parsed.search
+    || parsed.hash
+  ) {
+    throw new Error("the browser recovery control URL must contain only a loopback HTTP origin");
+  }
+  return parsed.origin;
 }
 
 function parsePositiveInteger(value: string): number {
@@ -349,6 +605,13 @@ async function collectPreviewStatuses(page: Page): Promise<string[]> {
   });
 }
 
+async function snapshotPreviewStatuses(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const recorder = (window as PreviewRecorderWindow).openSplunkE2EPreviewRecorder;
+    return recorder === undefined ? [] : [...recorder.statuses];
+  });
+}
+
 interface ObservedSubscription {
   subscriptionID: string;
   searchJobID: string;
@@ -384,9 +647,422 @@ interface RetainedReplayObservation {
   dispose(): void;
 }
 
+interface SequenceExpirationObservation {
+  waitForCheckpoint(searchJobID: string): Promise<void>;
+  withheldFrameCount(): number;
+  disconnect(): Promise<void>;
+  waitForResynchronizations(count: number): Promise<void>;
+  heldRecoveryFrameCount(): number;
+  connectionCount(): number;
+  postRecoveryFrameCount(): number;
+  assertHealthy(): void;
+  dispose(): void;
+}
+
 interface ObservedSubscribeCommand {
   requestID: string;
   subscriptions: ObservedSubscription[];
+}
+
+async function sendBrowserRecoveryControl(
+  action: "progress" | "append" | "complete",
+): Promise<void> {
+  if (recoveryControlURL === undefined || !recoveryControlToken) {
+    throw new Error("the browser recovery control endpoint is unavailable");
+  }
+  const response = await fetch(new URL(`/${action}`, recoveryControlURL), {
+    method: "POST",
+    headers: {
+      [browserRecoveryControlTokenHeader]: recoveryControlToken,
+    },
+  });
+  const body = new Uint8Array(await response.arrayBuffer());
+  if (body.byteLength > 1_024) {
+    throw new Error(`browser recovery control ${action} response exceeded 1024 bytes`);
+  }
+  if (!response.ok) {
+    throw new Error(
+      `browser recovery control ${action} failed with status ${response.status}`,
+    );
+  }
+  if (response.headers.get("content-type") !== "application/json") {
+    throw new Error(`browser recovery control ${action} returned a non-JSON response`);
+  }
+}
+
+const browserRecoveryControlTokenHeader = "X-Open-Splunk-Test-Token";
+
+async function interceptSequenceExpiration(
+  page: Page,
+  expectedOrigin: string,
+  timeoutMilliseconds: number,
+): Promise<SequenceExpirationObservation> {
+  let expectedJobID: string | undefined;
+  let routedJobID: string | undefined;
+  let subscriptionID: string | undefined;
+  let checkpoint: bigint | undefined;
+  let initialSubscription: ObservedSubscription | undefined;
+  let latestTargetSequence: bigint | undefined;
+  let firstServer: WebSocketRoute | undefined;
+  const reconnectRequestIDs = new Map<number, string>();
+  const acknowledgedConnections = new Set<number>();
+  const resynchronizedConnections = new Set<number>();
+  const lastConnectionSequences = new Map<number, bigint>();
+  let matchingConnectionCount = 0;
+  let clientFrameCount = 0;
+  let serverFrameCount = 0;
+  let heldRecoveryTargetFrames = 0;
+  let recoveredTargetFrames = 0;
+  let failure: Error | undefined;
+  let checkpointSettled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const withheldFrames = new Map<bigint, Buffer>();
+  let resolveCheckpoint!: () => void;
+  let rejectCheckpoint!: (reason: Error) => void;
+  const checkpointReady = new Promise<void>((resolve, reject) => {
+    resolveCheckpoint = resolve;
+    rejectCheckpoint = reject;
+  });
+  void checkpointReady.catch(() => undefined);
+  const resynchronizationWaiters = new Set<{
+    count: number;
+    resolve: () => void;
+    reject: (reason: Error) => void;
+  }>();
+
+  const settleResynchronizationWaiters = (): void => {
+    for (const waiter of resynchronizationWaiters) {
+      if (resynchronizedConnections.size < waiter.count) continue;
+      resynchronizationWaiters.delete(waiter);
+      waiter.resolve();
+    }
+  };
+
+  const fail = (error: unknown): void => {
+    const normalized = normalizeError(error);
+    failure ??= normalized;
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    if (!checkpointSettled) {
+      checkpointSettled = true;
+      rejectCheckpoint(normalized);
+    }
+    for (const waiter of resynchronizationWaiters) {
+      waiter.reject(normalized);
+    }
+    resynchronizationWaiters.clear();
+  };
+  const routeMatchesSearchSocket = (url: URL): boolean =>
+    httpOriginForWebSocket(url) === expectedOrigin && url.pathname === "/api/v1/search/ws";
+
+  await page.routeWebSocket(routeMatchesSearchSocket, (client) => {
+    matchingConnectionCount += 1;
+    const connectionOrdinal = matchingConnectionCount;
+    const server = client.connectToServer();
+    if (connectionOrdinal === 1) firstServer = server;
+    if (connectionOrdinal > 3) {
+      fail(new Error(`search WebSocket opened ${connectionOrdinal} matching connections`));
+      return;
+    }
+
+    client.onMessage((message) => {
+      try {
+        clientFrameCount += 1;
+        if (clientFrameCount > 32) {
+          throw new Error("search WebSocket sent more than 32 routed command frames");
+        }
+        if (typeof message === "string") throw new Error("search WebSocket sent a text frame");
+        const subscribe = decodeSearchSubscribeCommand(message);
+        if (subscribe !== undefined && subscribe.subscriptions.length !== 1) {
+          throw new Error("search WebSocket sent a non-singleton subscribe command");
+        }
+        const subscription = subscribe?.subscriptions[0];
+        if (subscription !== undefined) {
+          if (connectionOrdinal === 1) {
+            if (initialSubscription !== undefined) {
+              throw new Error("initial WebSocket sent more than one subscribe command");
+            }
+            if (subscription.afterSequence !== 0n) {
+              throw new Error(
+                `initial subscription started after sequence ${subscription.afterSequence.toString()}`,
+              );
+            }
+            initialSubscription = subscription;
+            subscriptionID = subscription.subscriptionID;
+            routedJobID = subscription.searchJobID;
+          } else {
+            if (
+              checkpoint === undefined
+              || subscriptionID === undefined
+              || routedJobID === undefined
+              || initialSubscription === undefined
+              || subscribe === undefined
+            ) {
+              throw new Error("expiration reconnect preceded its browser checkpoint");
+            }
+            if (reconnectRequestIDs.has(connectionOrdinal)) {
+              throw new Error(
+                `expiration connection ${connectionOrdinal} sent more than one subscribe command`,
+              );
+            }
+            if (
+              subscription.subscriptionID !== subscriptionID
+              || subscription.searchJobID !== routedJobID
+              || subscription.afterSequence !== checkpoint
+              || subscription.includePreviews !== initialSubscription.includePreviews
+              || subscription.previewRowLimit !== initialSubscription.previewRowLimit
+            ) {
+              throw new Error(
+                `expiration reconnect did not retain the original subscription after ${checkpoint.toString()}`,
+              );
+            }
+            reconnectRequestIDs.set(connectionOrdinal, subscribe.requestID);
+          }
+        }
+        server.send(message);
+      } catch (error) {
+        fail(error);
+      }
+    });
+
+    server.onMessage((message) => {
+      try {
+        serverFrameCount += 1;
+        if (serverFrameCount > 128) {
+          throw new Error("search WebSocket received more than 128 routed event frames");
+        }
+        if (typeof message === "string") throw new Error("search WebSocket received a text frame");
+        const frame = Buffer.from(message);
+        const event = SearchWebSocketEvent.decode(frame);
+        const target = event.target?.target;
+        const matchesSubscription = event.sequence > 0n
+          && subscriptionID !== undefined
+          && routedJobID !== undefined
+          && event.subscriptionId === subscriptionID
+          && target?.$case === "searchJobId"
+          && target.value === routedJobID;
+
+        if (connectionOrdinal === 1) {
+          if (matchesSubscription && checkpoint !== undefined) {
+            const previous = Array.from(withheldFrames.keys()).at(-1) ?? checkpoint;
+            if (event.sequence !== previous + 1n) {
+              throw new Error(
+                `withheld expiration sequence = ${event.sequence.toString()}, want ${(previous + 1n).toString()}`,
+              );
+            }
+            const expectedScannedRows = BigInt(withheldFrames.size + 1);
+            if (
+              event.payload?.$case !== "searchProgress"
+              || event.payload.value.scannedRows !== expectedScannedRows
+            ) {
+              throw new Error(
+                `withheld expiration frame ${event.sequence.toString()} was not progress ${expectedScannedRows.toString()}`,
+              );
+            }
+            withheldFrames.set(event.sequence, frame);
+            latestTargetSequence = event.sequence;
+            return;
+          }
+          client.send(message);
+          if (
+            matchesSubscription
+            && event.payload?.$case === "resultPreview"
+            && event.payload.value.rows.length > 0
+          ) {
+            checkpoint = event.sequence;
+            latestTargetSequence = event.sequence;
+            if (!checkpointSettled) {
+              checkpointSettled = true;
+              resolveCheckpoint();
+            }
+          }
+          return;
+        }
+
+        const reconnectRequestID = reconnectRequestIDs.get(connectionOrdinal);
+        const expectedLatestSequence = latestTargetSequence;
+        if (event.payload?.$case === "subscriptionAcknowledged") {
+          const acknowledgment = event.payload.value;
+          if (
+            acknowledgedConnections.has(connectionOrdinal)
+            || reconnectRequestID === undefined
+            || subscriptionID === undefined
+            || routedJobID === undefined
+            || expectedLatestSequence === undefined
+            || event.sequence !== 0n
+            || event.subscriptionId !== subscriptionID
+            || acknowledgment.requestId !== reconnectRequestID
+            || acknowledgment.subscriptionId !== subscriptionID
+            || acknowledgment.target?.target?.$case !== "searchJobId"
+            || acknowledgment.target.target.value !== routedJobID
+            || acknowledgment.replayWillFollow
+            || acknowledgment.earliestAvailableSequence !== expectedLatestSequence
+            || acknowledgment.latestSequence !== expectedLatestSequence
+          ) {
+            throw new Error(
+              `expiration connection ${connectionOrdinal} acknowledgment was invalid`,
+            );
+          }
+          acknowledgedConnections.add(connectionOrdinal);
+        } else if (event.payload?.$case === "resynchronizationRequired") {
+          const required = event.payload.value;
+          if (
+            !acknowledgedConnections.has(connectionOrdinal)
+            || resynchronizedConnections.has(connectionOrdinal)
+            || subscriptionID === undefined
+            || routedJobID === undefined
+            || expectedLatestSequence === undefined
+            || event.sequence !== 0n
+            || event.subscriptionId !== subscriptionID
+            || event.target?.target?.$case !== "searchJobId"
+            || event.target.target.value !== routedJobID
+            || required.subscriptionId !== subscriptionID
+            || required.target?.target?.$case !== "searchJobId"
+            || required.target.target.value !== routedJobID
+            || required.reason
+              !== ResynchronizationReason.RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
+            || required.earliestAvailableSequence !== expectedLatestSequence
+            || required.latestSequence !== expectedLatestSequence
+            || required.recoveryPath !== "/api/v1/search/jobs/get"
+          ) {
+            throw new Error(
+              `expiration connection ${connectionOrdinal} resynchronization frame was invalid`,
+            );
+          }
+          resynchronizedConnections.add(connectionOrdinal);
+          lastConnectionSequences.set(connectionOrdinal, expectedLatestSequence);
+        } else if (matchesSubscription) {
+          const previousSequence = lastConnectionSequences.get(connectionOrdinal);
+          if (
+            !resynchronizedConnections.has(connectionOrdinal)
+            || previousSequence === undefined
+          ) {
+            throw new Error(
+              `expiration connection ${connectionOrdinal} delivered a target frame before resynchronization`,
+            );
+          }
+          if (
+            event.sequence !== previousSequence + 1n
+            || latestTargetSequence === undefined
+            || event.sequence !== latestTargetSequence + 1n
+          ) {
+            throw new Error(
+              `expiration connection ${connectionOrdinal} sequence = ${event.sequence.toString()}, want ${(previousSequence + 1n).toString()}`,
+            );
+          }
+          lastConnectionSequences.set(connectionOrdinal, event.sequence);
+          latestTargetSequence = event.sequence;
+          if (connectionOrdinal === 2) {
+            if (
+              event.payload?.$case !== "searchProgress"
+              || event.payload.value.scannedRows !== 3n
+            ) {
+              throw new Error("the held-recovery target frame was not progress for three rows");
+            }
+            heldRecoveryTargetFrames += 1;
+          }
+          if (connectionOrdinal === 3) recoveredTargetFrames += 1;
+        }
+        client.send(message);
+        if (event.payload?.$case === "resynchronizationRequired") {
+          if (
+            expectedJobID !== undefined
+            && routedJobID !== expectedJobID
+          ) {
+            throw new Error(
+              `routed WebSocket job ${routedJobID} did not match created job ${expectedJobID}`,
+            );
+          }
+          settleResynchronizationWaiters();
+        }
+      } catch (error) {
+        fail(error);
+      }
+    });
+  });
+
+  timer = setTimeout(
+    () => fail(new Error("timed out waiting for real WebSocket sequence expiration")),
+    timeoutMilliseconds,
+  );
+  return {
+    waitForCheckpoint(searchJobID) {
+      if (expectedJobID !== undefined) throw new Error("browser search job was already selected");
+      expectedJobID = searchJobID;
+      if (routedJobID !== undefined && routedJobID !== expectedJobID) {
+        fail(
+          new Error(
+            `routed WebSocket job ${routedJobID} did not match created job ${expectedJobID}`,
+          ),
+        );
+      }
+      return checkpointReady;
+    },
+    withheldFrameCount() {
+      return withheldFrames.size;
+    },
+    async disconnect() {
+      if (
+        firstServer === undefined
+        || checkpoint === undefined
+        || withheldFrames.size !== 2
+        || Array.from(withheldFrames.keys())[0] !== checkpoint + 1n
+        || Array.from(withheldFrames.keys())[1] !== checkpoint + 2n
+      ) {
+        throw new Error("sequence-expiration disruption did not capture exactly K+1 and K+2");
+      }
+      await firstServer.close({
+        code: 4000,
+        reason: "deterministic sequence-expiration checkpoint",
+      });
+    },
+    waitForResynchronizations(count) {
+      if (!Number.isSafeInteger(count) || count < 1 || count > 2) {
+        return Promise.reject(new RangeError("resynchronization count must be between 1 and 2"));
+      }
+      if (failure !== undefined) return Promise.reject(failure);
+      if (resynchronizedConnections.size >= count) return Promise.resolve();
+      return new Promise<void>((resolve, reject) => {
+        resynchronizationWaiters.add({ count, resolve, reject });
+      });
+    },
+    heldRecoveryFrameCount() {
+      return heldRecoveryTargetFrames;
+    },
+    connectionCount() {
+      return matchingConnectionCount;
+    },
+    postRecoveryFrameCount() {
+      return recoveredTargetFrames;
+    },
+    assertHealthy() {
+      if (failure !== undefined) throw failure;
+      if (
+        reconnectRequestIDs.size !== 2
+        || acknowledgedConnections.size !== 2
+        || resynchronizedConnections.size !== 2
+        || matchingConnectionCount !== 3
+        || withheldFrames.size !== 2
+        || heldRecoveryTargetFrames !== 1
+        || recoveredTargetFrames < 1
+      ) {
+        throw new Error("sequence-expiration observation did not complete its exact contract");
+      }
+    },
+    dispose() {
+      if (timer !== undefined) clearTimeout(timer);
+      if (!checkpointSettled) {
+        checkpointSettled = true;
+        resolveCheckpoint();
+      }
+      for (const waiter of resynchronizationWaiters) {
+        waiter.resolve();
+      }
+      resynchronizationWaiters.clear();
+    },
+  };
 }
 
 async function interceptOneRetainedReplay(

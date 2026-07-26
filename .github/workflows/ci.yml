@@ -226,8 +226,9 @@ jobs:
           OPEN_SPLUNK_BACKEND_INTEGRATION: "1"
         run: >-
           go test ./integration
-          -run '^TestBackendVertical$'
+          -run '^Test(BackendVertical|BrowserSequenceExpiredRecovery)$'
           -count=1
+          -timeout=12m
           -v
 
       - name: Upload browser failure artifacts
@@ -235,7 +236,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: backend-vertical-browser-failure
-          path: test-results/backend-vertical
+          path: |
+            test-results/backend-vertical
+            test-results/browser-sequence-expired
           if-no-files-found: ignore
           retention-days: 14
 

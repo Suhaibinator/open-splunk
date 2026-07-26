@@ -684,6 +684,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const backendJobIdRef = useRef<string | null>(null);
   const backendJobRef = useRef<SearchJob | null>(null);
   const backendJobVersionRef = useRef(0n);
+  const backendLiveUpdateEpochRef = useRef(0n);
   const backendSocketRef = useRef<SearchWebSocketClient | null>(null);
   const backendPreviewRef = useRef<LivePreviewSnapshot | null>(null);
   const backendPreviewSchemasRef = useRef<Map<string, ResultSchema>>(new Map());
@@ -2790,6 +2791,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     signal: AbortSignal,
     generation: number,
   ): Promise<SearchJob> {
+    const liveUpdateEpoch = backendLiveUpdateEpochRef.current;
     const response = await apiClient.search.get({
       searchJobId,
       includePlan: false,
@@ -2798,8 +2800,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (generationRef.current !== generation || backendJobIdRef.current !== searchJobId) {
       throw new DOMException("Search was superseded.", "AbortError");
     }
+    if (backendLiveUpdateEpochRef.current !== liveUpdateEpoch) {
+      throw new Error("Live job updates advanced while the authoritative snapshot was loading.");
+    }
     if (response.searchJob === undefined) throw new Error("The server returned an empty search job response.");
-    applyBackendJob(response.searchJob, generation);
+    if (!applyBackendJob(response.searchJob, generation)) {
+      throw new Error("The authoritative search job snapshot was older than the applied live state.");
+    }
     return response.searchJob;
   }
 
@@ -3106,6 +3113,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           return;
         }
         if (searchJobIdForWebSocketEvent(event) !== initialJob.searchJobId) return;
+        if (event.sequence > 0n) backendLiveUpdateEpochRef.current += 1n;
         refreshWatchdog();
         switch (event.payload?.$case) {
           case "searchProgress":
@@ -3437,6 +3445,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     backendJobIdRef.current = null;
     backendJobRef.current = null;
     backendJobVersionRef.current = 0n;
+    backendLiveUpdateEpochRef.current = 0n;
     backendCancelPendingRef.current = false;
     backendCancelRequestedRef.current = false;
     setCancelError(null);
@@ -4476,6 +4485,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     backendJobIdRef.current = null;
     backendJobRef.current = null;
     backendJobVersionRef.current = 0n;
+    backendLiveUpdateEpochRef.current = 0n;
     resetBackendResultState();
     resetExport();
     setSubmittedQuery("");

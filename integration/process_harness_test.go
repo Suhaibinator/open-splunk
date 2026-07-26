@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -17,6 +19,17 @@ import (
 	"testing"
 	"time"
 )
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if err := cleanupBackendFrontendStage(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "clean backend frontend integration stage: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
+	}
+	os.Exit(code)
+}
 
 func TestRedactForFailure(t *testing.T) {
 	const secret = "protected-value"
@@ -89,20 +102,258 @@ func buildBinary(t *testing.T, ctx context.Context, repository, output, pkg stri
 	}
 }
 
-func buildBackendFrontend(t *testing.T, ctx context.Context, repository string) {
+const backendFrontendStagePrefix = "open-splunk-backend-frontend-"
+
+var backendFrontendBuild struct {
+	once       sync.Once
+	sourceRoot string
+	stageRoot  string
+	err        error
+	logs       string
+}
+
+var backendFrontendStageRootFiles = []string{
+	"go.mod",
+	"go.sum",
+	"next-env.d.ts",
+	"next.config.ts",
+	"package-lock.json",
+	"package.json",
+	"tsconfig.json",
+	"webui.go",
+}
+
+var backendFrontendStageDirectories = []string{
+	"app",
+	filepath.Join("cmd", "open-splunk-server"),
+	filepath.Join("gen", "go"),
+	filepath.Join("gen", "ts"),
+	"internal",
+	"lib",
+	"migrations",
+	"public",
+}
+
+func buildBackendFrontend(t *testing.T, ctx context.Context, repository string) string {
 	t.Helper()
-	command := exec.CommandContext(ctx, "npm", "run", "build")
+	sourceRoot, err := canonicalDirectory(repository)
+	if err != nil {
+		t.Fatalf("resolve backend frontend source repository: %v", err)
+	}
+	backendFrontendBuild.once.Do(func() {
+		backendFrontendBuild.sourceRoot = sourceRoot
+		backendFrontendBuild.stageRoot, backendFrontendBuild.logs, backendFrontendBuild.err =
+			stageBackendFrontend(ctx, sourceRoot)
+	})
+	if backendFrontendBuild.sourceRoot != sourceRoot {
+		t.Fatalf(
+			"backend frontend was staged from %q and cannot be reused for %q",
+			backendFrontendBuild.sourceRoot,
+			sourceRoot,
+		)
+	}
+	if backendFrontendBuild.err != nil {
+		t.Fatalf("build isolated backend frontend: %v\n%s", backendFrontendBuild.err, backendFrontendBuild.logs)
+	}
+	return backendFrontendBuild.stageRoot
+}
+
+func stageBackendFrontend(ctx context.Context, sourceRoot string) (string, string, error) {
+	if ctx == nil {
+		return "", "", errors.New("backend frontend build context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	stageRoot, err := os.MkdirTemp(os.TempDir(), backendFrontendStagePrefix)
+	if err != nil {
+		return "", "", fmt.Errorf("create isolated repository: %w", err)
+	}
+	if err := copyBackendFrontendStageSources(ctx, sourceRoot, stageRoot); err != nil {
+		return stageRoot, "", err
+	}
+	nodeModules, err := canonicalDirectory(filepath.Join(sourceRoot, "node_modules"))
+	if err != nil {
+		return stageRoot, "", fmt.Errorf("resolve frontend dependencies: %w", err)
+	}
+	if err := os.Symlink(nodeModules, filepath.Join(stageRoot, "node_modules")); err != nil {
+		return stageRoot, "", fmt.Errorf("link frontend dependencies: %w", err)
+	}
+
+	// Turbopack rejects node_modules symlinks whose targets are outside its
+	// project root. The isolated stage intentionally uses such a symlink so it
+	// can reuse immutable installed dependencies without copying hundreds of
+	// megabytes. Webpack follows the same production Next build path without
+	// imposing that filesystem-root restriction.
+	command := exec.CommandContext(ctx, "npm", "run", "build", "--", "--webpack")
 	configureProcessGroup(command)
-	command.Dir = repository
+	command.Dir = stageRoot
 	command.Env = environmentWithValue(os.Environ(), "OPEN_SPLUNK_DATA_MODE", "backend")
 	command.Env = environmentWithValue(command.Env, "OPEN_SPLUNK_API_BASE_URL", "")
-	combined, err := command.CombinedOutput()
+	command.Env = environmentWithValue(command.Env, "NEXT_TELEMETRY_DISABLED", "1")
+	logs := &lockedBuffer{maximum: 1 << 20}
+	command.Stdout = logs
+	command.Stderr = logs
+	if err := command.Run(); err != nil {
+		return stageRoot, logs.String(), fmt.Errorf("build staged frontend: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(stageRoot, "out", "search", "index.html")); err != nil {
+		return stageRoot, logs.String(), fmt.Errorf("staged backend frontend export is incomplete: %w", err)
+	}
+	return stageRoot, logs.String(), nil
+}
+
+func copyBackendFrontendStageSources(ctx context.Context, sourceRoot, stageRoot string) error {
+	for _, relativePath := range backendFrontendStageRootFiles {
+		if err := copyStageFile(
+			ctx,
+			filepath.Join(sourceRoot, relativePath),
+			filepath.Join(stageRoot, relativePath),
+		); err != nil {
+			return fmt.Errorf("stage %q: %w", relativePath, err)
+		}
+	}
+	for _, relativePath := range backendFrontendStageDirectories {
+		if err := copyStageTree(
+			ctx,
+			filepath.Join(sourceRoot, relativePath),
+			filepath.Join(stageRoot, relativePath),
+		); err != nil {
+			return fmt.Errorf("stage %q: %w", relativePath, err)
+		}
+	}
+	return nil
+}
+
+func copyStageTree(
+	ctx context.Context,
+	sourceRoot string,
+	destinationRoot string,
+) error {
+	return filepath.WalkDir(sourceRoot, func(sourcePath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		relativePath, err := filepath.Rel(sourceRoot, sourcePath)
+		if err != nil {
+			return err
+		}
+		if relativePath == "." {
+			return os.MkdirAll(destinationRoot, 0o755)
+		}
+		destinationPath := filepath.Join(destinationRoot, relativePath)
+		if entry.IsDir() {
+			return os.MkdirAll(destinationPath, 0o755)
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("source %q is a symbolic link", sourcePath)
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("source %q is not a regular file", sourcePath)
+		}
+		return copyStageFile(ctx, sourcePath, destinationPath)
+	})
+}
+
+func copyStageFile(ctx context.Context, sourcePath, destinationPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	source, err := os.Open(sourcePath)
 	if err != nil {
-		t.Fatalf("build backend frontend: %v\n%s", err, combined)
+		return err
 	}
-	if _, err := os.Stat(filepath.Join(repository, "out", "search", "index.html")); err != nil {
-		t.Fatalf("backend frontend export is incomplete: %v", err)
+	sourceInfo, err := source.Stat()
+	if err != nil {
+		_ = source.Close()
+		return err
 	}
+	if !sourceInfo.Mode().IsRegular() {
+		_ = source.Close()
+		return fmt.Errorf("source is not a regular file")
+	}
+	if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
+		_ = source.Close()
+		return err
+	}
+	destination, err := os.OpenFile(
+		destinationPath,
+		os.O_CREATE|os.O_EXCL|os.O_WRONLY,
+		sourceInfo.Mode().Perm(),
+	)
+	if err != nil {
+		_ = source.Close()
+		return err
+	}
+	reader := &contextReader{ctx: ctx, reader: source}
+	_, copyErr := io.CopyBuffer(destination, reader, make([]byte, 128<<10))
+	closeDestinationErr := destination.Close()
+	closeSourceErr := source.Close()
+	if err := errors.Join(copyErr, closeDestinationErr, closeSourceErr); err != nil {
+		_ = os.Remove(destinationPath)
+		return err
+	}
+	return nil
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (reader *contextReader) Read(buffer []byte) (int, error) {
+	select {
+	case <-reader.ctx.Done():
+		return 0, reader.ctx.Err()
+	default:
+	}
+	return reader.reader.Read(buffer)
+}
+
+func canonicalDirectory(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	canonical, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(canonical)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%q is not a directory", path)
+	}
+	return canonical, nil
+}
+
+func cleanupBackendFrontendStage() error {
+	stageRoot := backendFrontendBuild.stageRoot
+	if stageRoot == "" {
+		return nil
+	}
+	temporaryRoot, err := filepath.Abs(os.TempDir())
+	if err != nil {
+		return fmt.Errorf("resolve temporary directory: %w", err)
+	}
+	stageRoot, err = filepath.Abs(stageRoot)
+	if err != nil {
+		return fmt.Errorf("resolve stage directory: %w", err)
+	}
+	if filepath.Dir(stageRoot) != temporaryRoot ||
+		!strings.HasPrefix(filepath.Base(stageRoot), backendFrontendStagePrefix) {
+		return fmt.Errorf("refuse to remove unsafe stage path %q", stageRoot)
+	}
+	if err := os.RemoveAll(stageRoot); err != nil {
+		return fmt.Errorf("remove %q: %w", stageRoot, err)
+	}
+	backendFrontendBuild.stageRoot = ""
+	return nil
 }
 
 func environmentWithValue(environment []string, name, value string) []string {

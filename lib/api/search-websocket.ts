@@ -687,6 +687,24 @@ export class SearchWebSocketClient {
     const resynchronization = event.payload?.$case === "resynchronizationRequired"
       ? event.payload.value
       : undefined;
+    if (
+      resynchronization !== undefined
+      && resynchronization.subscriptionId !== event.subscriptionId
+    ) {
+      this.emitError(
+        new Error("Search WebSocket resynchronization payload has a mismatched subscription ID"),
+      );
+      this.restartForReplay(sourceSocket);
+      return;
+    }
+    if (
+      resynchronization !== undefined
+      && resynchronization.earliestAvailableSequence > resynchronization.latestSequence
+    ) {
+      this.emitError(new Error("Search WebSocket resynchronization replay bounds are inverted"));
+      this.restartForReplay(sourceSocket);
+      return;
+    }
 
     if (target && event.sequence > 0n && !resynchronization) {
       this.clearApplicationStabilityTimer();

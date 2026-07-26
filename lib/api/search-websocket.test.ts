@@ -359,6 +359,57 @@ test("failed authoritative resynchronization retries without advancing or perman
   assert.ok(errors.some((message) => message.includes("transient authoritative GET failure")));
 });
 
+test("an acknowledgment remains provisional until asynchronous recovery finishes", async (t) => {
+  const { client, sockets } = clientFixture();
+  t.after(() => client.dispose());
+  const target = searchJobTarget("search-provisional-acknowledgment");
+  const received: bigint[] = [];
+  let recoveryStarted = false;
+  let releaseRecovery!: () => void;
+  const recovery = new Promise<void>((resolve) => {
+    releaseRecovery = resolve;
+  });
+  client.onEvent((event) => {
+    if (event.payload?.$case === "searchStateChanged") received.push(event.sequence);
+  });
+  client.onResynchronizationRequired(async (notice) => {
+    notice.acknowledge();
+    recoveryStarted = true;
+    await recovery;
+  });
+
+  client.subscribe(target, {
+    subscriptionId: "provisional-acknowledgment",
+    includePreviews: false,
+  });
+  await waitFor(() => sockets.length === 1, "provisional-acknowledgment WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "provisional-acknowledgment subscription");
+  sockets[0].receive(stateEvent(
+    "provisional-acknowledgment",
+    "search-provisional-acknowledgment",
+    601n,
+  ));
+  await waitFor(() => client.getLastSequence(target) === 601n, "pre-recovery checkpoint");
+  sockets[0].receive(resynchronizationEvent(
+    "provisional-acknowledgment",
+    "search-provisional-acknowledgment",
+    610n,
+  ));
+  await waitFor(() => recoveryStarted, "provisional acknowledgment");
+  sockets[0].receive(stateEvent(
+    "provisional-acknowledgment",
+    "search-provisional-acknowledgment",
+    611n,
+  ));
+
+  assert.equal(client.getLastSequence(target), 601n);
+  assert.deepEqual(received, [601n]);
+  releaseRecovery();
+  await waitFor(() => client.getLastSequence(target) === 611n, "post-recovery checkpoint");
+  assert.deepEqual(received, [601n, 611n]);
+});
+
 test("a resolved but unacknowledged recovery listener cannot advance the checkpoint", async (t) => {
   const { client, sockets } = clientFixture();
   t.after(() => client.dispose());
@@ -431,6 +482,92 @@ test("a same-epoch resynchronization cannot regress its processed checkpoint", a
   assert.equal(client.getLastSequence(target), 900n);
   assert.equal(recoveries, 0);
   assert.ok(errors.some((message) => message.includes("cannot regress")));
+});
+
+test("a resynchronization payload cannot name a different subscription", async (t) => {
+  const { client, sockets } = clientFixture();
+  t.after(() => client.dispose());
+  const target = searchJobTarget("search-resynchronization-subscription-fence");
+  const errors: string[] = [];
+  let recoveries = 0;
+  client.onError((error) => errors.push(error.message));
+  client.onResynchronizationRequired((notice) => {
+    recoveries += 1;
+    notice.acknowledge();
+  });
+  client.subscribe(target, {
+    subscriptionId: "resynchronization-subscription-fence",
+    includePreviews: false,
+  });
+  await waitFor(() => sockets.length === 1, "subscription-fence WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "subscription-fence subscription");
+  sockets[0].receive(stateEvent(
+    "resynchronization-subscription-fence",
+    "search-resynchronization-subscription-fence",
+    41n,
+  ));
+  await waitFor(() => client.getLastSequence(target) === 41n, "subscription-fence checkpoint");
+
+  const malformed = resynchronizationEvent(
+    "resynchronization-subscription-fence",
+    "search-resynchronization-subscription-fence",
+    45n,
+  );
+  assert.equal(malformed.payload?.$case, "resynchronizationRequired");
+  if (malformed.payload?.$case !== "resynchronizationRequired") {
+    throw new Error("expected resynchronization event");
+  }
+  malformed.payload.value.subscriptionId = "different-subscription";
+  sockets[0].receive(malformed);
+
+  await waitFor(() => sockets.length === 2, "subscription-fence replay");
+  assert.equal(client.getLastSequence(target), 41n);
+  assert.equal(recoveries, 0);
+  assert.ok(errors.some((message) => message.includes("subscription ID")));
+});
+
+test("a resynchronization envelope rejects inverted replay bounds", async (t) => {
+  const { client, sockets } = clientFixture();
+  t.after(() => client.dispose());
+  const target = searchJobTarget("search-resynchronization-bounds");
+  const errors: string[] = [];
+  let recoveries = 0;
+  client.onError((error) => errors.push(error.message));
+  client.onResynchronizationRequired((notice) => {
+    recoveries += 1;
+    notice.acknowledge();
+  });
+  client.subscribe(target, {
+    subscriptionId: "resynchronization-bounds",
+    includePreviews: false,
+  });
+  await waitFor(() => sockets.length === 1, "resynchronization-bounds WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "resynchronization-bounds subscription");
+  sockets[0].receive(stateEvent(
+    "resynchronization-bounds",
+    "search-resynchronization-bounds",
+    51n,
+  ));
+  await waitFor(() => client.getLastSequence(target) === 51n, "resynchronization-bounds checkpoint");
+
+  const malformed = resynchronizationEvent(
+    "resynchronization-bounds",
+    "search-resynchronization-bounds",
+    55n,
+  );
+  assert.equal(malformed.payload?.$case, "resynchronizationRequired");
+  if (malformed.payload?.$case !== "resynchronizationRequired") {
+    throw new Error("expected resynchronization event");
+  }
+  malformed.payload.value.earliestAvailableSequence = 56n;
+  sockets[0].receive(malformed);
+
+  await waitFor(() => sockets.length === 2, "resynchronization-bounds replay");
+  assert.equal(client.getLastSequence(target), 51n);
+  assert.equal(recoveries, 0);
+  assert.ok(errors.some((message) => message.includes("replay bounds")));
 });
 
 test("a server restart may establish a lower sequence epoch after authoritative recovery", async (t) => {
