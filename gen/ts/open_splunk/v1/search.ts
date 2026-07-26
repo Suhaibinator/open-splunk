@@ -389,6 +389,12 @@ export interface SearchProgress {
   queueWait: Duration | undefined;
   updatedAt: Date | undefined;
   countersAreEstimates: boolean;
+  /**
+   * Version of the authoritative SearchJob snapshot used to project this
+   * progress. It shares SearchJob.state_version's per-job monotonic domain;
+   * zero means unavailable from a legacy sender.
+   */
+  stateVersion: bigint;
 }
 
 export interface SearchFailure {
@@ -797,6 +803,7 @@ function createBaseSearchProgress(): SearchProgress {
     queueWait: undefined,
     updatedAt: undefined,
     countersAreEstimates: false,
+    stateVersion: 0n,
   };
 }
 
@@ -849,6 +856,12 @@ export const SearchProgress: MessageFns<SearchProgress> = {
     }
     if (message.countersAreEstimates !== false) {
       writer.uint32(88).bool(message.countersAreEstimates);
+    }
+    if (message.stateVersion !== 0n) {
+      if (BigInt.asUintN(64, message.stateVersion) !== message.stateVersion) {
+        throw new globalThis.Error("value provided for field message.stateVersion of type uint64 too large");
+      }
+      writer.uint32(96).uint64(message.stateVersion);
     }
     return writer;
   },
@@ -948,6 +961,14 @@ export const SearchProgress: MessageFns<SearchProgress> = {
           message.countersAreEstimates = reader.bool();
           continue;
         }
+        case 12: {
+          if (tag !== 96) {
+            break;
+          }
+
+          message.stateVersion = reader.uint64() as bigint;
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1006,6 +1027,11 @@ export const SearchProgress: MessageFns<SearchProgress> = {
         : isSet(object.counters_are_estimates)
         ? globalThis.Boolean(object.counters_are_estimates)
         : false,
+      stateVersion: isSet(object.stateVersion)
+        ? BigInt(object.stateVersion)
+        : isSet(object.state_version)
+        ? BigInt(object.state_version)
+        : 0n,
     };
   },
 
@@ -1044,6 +1070,9 @@ export const SearchProgress: MessageFns<SearchProgress> = {
     if (message.countersAreEstimates !== false) {
       obj.countersAreEstimates = message.countersAreEstimates;
     }
+    if (message.stateVersion !== 0n) {
+      obj.stateVersion = message.stateVersion.toString();
+    }
     return obj;
   },
 
@@ -1077,6 +1106,9 @@ export const SearchProgress: MessageFns<SearchProgress> = {
       : undefined;
     message.updatedAt = object.updatedAt ?? undefined;
     message.countersAreEstimates = object.countersAreEstimates ?? false;
+    message.stateVersion = (object.stateVersion !== undefined && object.stateVersion !== null)
+      ? BigInt(object.stateVersion)
+      : 0n;
     return message;
   },
 };

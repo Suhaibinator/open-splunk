@@ -7,6 +7,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestResultKindForSPLKeepsTimeBinAsEvents(t *testing.T) {
@@ -38,6 +39,7 @@ func TestProgressProjectsSharedExactCountersAndTiming(t *testing.T) {
 
 	created := time.Date(2026, time.July, 23, 12, 0, 0, 123, time.UTC)
 	job := searchjobs.Job{
+		Version:      37,
 		State:        searchjobs.StateCompleted,
 		ScannedRows:  123,
 		ScannedBytes: 4_567,
@@ -52,6 +54,7 @@ func TestProgressProjectsSharedExactCountersAndTiming(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
+		got.GetStateVersion() != job.Version ||
 		got.GetScannedRows() != job.ScannedRows || got.GetScannedBytes() != job.ScannedBytes ||
 		got.GetProducedRows() != job.RowCount || got.GetResultBytes() != job.ResultBytes ||
 		got.GetMatchedEvents() != 0 || got.GetCountersAreEstimates() {
@@ -60,6 +63,19 @@ func TestProgressProjectsSharedExactCountersAndTiming(t *testing.T) {
 	if got.GetElapsed().AsDuration() != 9*time.Second || got.GetQueueWait().AsDuration() != 2*time.Second ||
 		!got.GetUpdatedAt().AsTime().Equal(job.FinishedAt) {
 		t.Fatalf("Progress() timing = %+v", got)
+	}
+}
+
+func TestProgressDecodesLegacyWireWithoutStateVersion(t *testing.T) {
+	t.Parallel()
+
+	var got opensplunkv1.SearchProgress
+	if err := proto.Unmarshal([]byte{0x08, 0x05}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_EXECUTING ||
+		got.GetStateVersion() != 0 {
+		t.Fatalf("legacy progress = %+v", &got)
 	}
 }
 

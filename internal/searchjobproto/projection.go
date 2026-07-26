@@ -78,6 +78,7 @@ func Progress(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchProgress, 
 		queueWait = job.StartedAt.Sub(job.CreatedAt)
 	}
 	return &opensplunkv1.SearchProgress{
+		StateVersion: job.Version,
 		Phase:        executionPhase(job.State),
 		ScannedRows:  job.ScannedRows,
 		ScannedBytes: job.ScannedBytes,

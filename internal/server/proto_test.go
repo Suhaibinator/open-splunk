@@ -254,7 +254,9 @@ func TestSearchJobToProtoExposesExactExecutionProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	progress := converted.GetProgress()
-	if progress.GetScannedRows() != job.ScannedRows || progress.GetScannedBytes() != job.ScannedBytes ||
+	if progress.GetStateVersion() != job.Version ||
+		progress.GetStateVersion() != converted.GetStateVersion() ||
+		progress.GetScannedRows() != job.ScannedRows || progress.GetScannedBytes() != job.ScannedBytes ||
 		progress.GetProducedRows() != job.RowCount || progress.GetResultBytes() != job.ResultBytes ||
 		progress.GetMatchedEvents() != 0 || progress.GetCountersAreEstimates() ||
 		progress.GetQueueWait().AsDuration() != job.StartedAt.Sub(job.CreatedAt) {

@@ -8,6 +8,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestProjectSearchMapsEveryLifecycleState(t *testing.T) {
@@ -54,12 +55,17 @@ func TestProjectSearchMapsEveryLifecycleState(t *testing.T) {
 				t.Fatalf("state event = %+v", state)
 			}
 			progress := projection.events[1].GetSearchProgress()
-			if progress == nil || progress.GetPhase() != test.phase {
+			if progress == nil || progress.GetPhase() != test.phase ||
+				progress.GetStateVersion() != job.Version {
 				t.Fatalf("progress event = %+v, want phase %v", progress, test.phase)
 			}
 			if test.terminal {
 				terminal := projection.events[2].GetSearchTerminal()
-				if terminal == nil || terminal.GetSearchJobId() != job.ID || terminal.GetState() != test.want || terminal.GetStateVersion() != job.Version || terminal.GetFinalProgress() == nil {
+				if terminal == nil || terminal.GetSearchJobId() != job.ID || terminal.GetState() != test.want ||
+					terminal.GetStateVersion() != job.Version || terminal.GetFinalProgress() == nil ||
+					terminal.GetFinalProgress().GetStateVersion() != job.Version ||
+					terminal.GetFinalProgress() == progress ||
+					!proto.Equal(terminal.GetFinalProgress(), progress) {
 					t.Fatalf("terminal event = %+v", terminal)
 				}
 			}

@@ -80,6 +80,10 @@ message SearchProgress {
   google.protobuf.Duration queue_wait = 9;
   google.protobuf.Timestamp updated_at = 10;
   bool counters_are_estimates = 11;
+  // Version of the authoritative SearchJob snapshot used to project this
+  // progress. It shares SearchJob.state_version's per-job monotonic domain;
+  // zero means unavailable from a legacy sender.
+  uint64 state_version = 12;
 }
 
 enum SearchFailureCode {

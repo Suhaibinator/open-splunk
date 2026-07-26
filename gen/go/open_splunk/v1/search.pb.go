@@ -518,8 +518,12 @@ type SearchProgress struct {
 	QueueWait            *durationpb.Duration   `protobuf:"bytes,9,opt,name=queue_wait,json=queueWait,proto3" json:"queue_wait,omitempty"`
 	UpdatedAt            *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	CountersAreEstimates bool                   `protobuf:"varint,11,opt,name=counters_are_estimates,json=countersAreEstimates,proto3" json:"counters_are_estimates,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Version of the authoritative SearchJob snapshot used to project this
+	// progress. It shares SearchJob.state_version's per-job monotonic domain;
+	// zero means unavailable from a legacy sender.
+	StateVersion  uint64 `protobuf:"varint,12,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SearchProgress) Reset() {
@@ -627,6 +631,13 @@ func (x *SearchProgress) GetCountersAreEstimates() bool {
 		return x.CountersAreEstimates
 	}
 	return false
+}
+
+func (x *SearchProgress) GetStateVersion() uint64 {
+	if x != nil {
+		return x.StateVersion
+	}
+	return 0
 }
 
 type SearchFailure struct {
@@ -1164,7 +1175,7 @@ const file_open_splunk_v1_search_proto_rawDesc = "" +
 	"\fdashboard_id\x18\x04 \x01(\tH\x02R\vdashboardId\x88\x01\x01B\x12\n" +
 	"\x10_saved_search_idB\x14\n" +
 	"\x12_history_search_idB\x0f\n" +
-	"\r_dashboard_id\"\xa8\x04\n" +
+	"\r_dashboard_id\"\xcd\x04\n" +
 	"\x0eSearchProgress\x12:\n" +
 	"\x05phase\x18\x01 \x01(\x0e2$.open_splunk.v1.SearchExecutionPhaseR\x05phase\x12!\n" +
 	"\fscanned_rows\x18\x02 \x01(\x04R\vscannedRows\x12#\n" +
@@ -1179,7 +1190,8 @@ const file_open_splunk_v1_search_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\n" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x124\n" +
-	"\x16counters_are_estimates\x18\v \x01(\bR\x14countersAreEstimatesB\x13\n" +
+	"\x16counters_are_estimates\x18\v \x01(\bR\x14countersAreEstimates\x12#\n" +
+	"\rstate_version\x18\f \x01(\x04R\fstateVersionB\x13\n" +
 	"\x11_percent_complete\"\xbc\x01\n" +
 	"\rSearchFailure\x125\n" +
 	"\x04code\x18\x01 \x01(\x0e2!.open_splunk.v1.SearchFailureCodeR\x04code\x12\x18\n" +

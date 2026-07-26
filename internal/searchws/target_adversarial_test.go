@@ -208,6 +208,76 @@ func adversarialWait(t *testing.T, timeout time.Duration, condition func() bool,
 	t.Fatalf("timed out waiting for %s", description)
 }
 
+func TestAdversarialSearchProgressStateVersionPreventsTerminalFingerprintCollapse(t *testing.T) {
+	service := adversarialNewService(t, nil)
+	target := adversarialNewTarget(service, "terminal-progress-version")
+	connection := newConnection(service, nil)
+	defer connection.cancel()
+	subscription := adversarialAttach(target, connection, "terminal-progress-version")
+	defer adversarialDetach(subscription)
+
+	completed := scopedSearchJob(target.key.id)
+	completed.Version = 29
+	completed.State = searchjobs.StateCompleted
+	completed.FinishedAt = completed.StartedAt.Add(3 * time.Second)
+	completed.ExpiresAt = completed.FinishedAt.Add(time.Hour)
+	completed.ScannedRows = 50
+	completed.ScannedBytes = 500
+	completed.RowCount = 5
+	completed.ResultBytes = 75
+	projectionTime := completed.FinishedAt.Add(time.Minute)
+
+	completedProjection, err := projectSearch(completed, projectionTime)
+	if err != nil {
+		t.Fatalf("project completed search: %v", err)
+	}
+	adversarialApply(t, target, completedProjection, false)
+	completedEvents := adversarialDrain(t, connection)
+	if len(completedEvents) != 3 ||
+		completedEvents[0].GetSearchStateChanged() == nil ||
+		completedEvents[1].GetSearchProgress() == nil ||
+		completedEvents[2].GetSearchTerminal() == nil {
+		t.Fatalf("completed projection events = %+v", completedEvents)
+	}
+	completedProgress := completedEvents[1].GetSearchProgress()
+	if completedProgress.GetStateVersion() != completed.Version {
+		t.Fatalf("completed progress version = %d, want %d", completedProgress.GetStateVersion(), completed.Version)
+	}
+
+	expired := cloneSearchSnapshot(completed)
+	expired.Version++
+	expired.State = searchjobs.StateExpired
+	expiredProjection, err := projectSearch(expired, projectionTime)
+	if err != nil {
+		t.Fatalf("project expired search: %v", err)
+	}
+	adversarialApply(t, target, expiredProjection, false)
+	expiredEvents := adversarialDrain(t, connection)
+	if len(expiredEvents) != 3 ||
+		expiredEvents[0].GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED ||
+		expiredEvents[1].GetSearchProgress() == nil ||
+		expiredEvents[2].GetSearchTerminal().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED {
+		t.Fatalf("expired projection events = %+v", expiredEvents)
+	}
+	expiredProgress := expiredEvents[1].GetSearchProgress()
+	if expiredProgress.GetStateVersion() != expired.Version ||
+		expiredEvents[1].GetSequence() <= completedEvents[2].GetSequence() {
+		t.Fatalf(
+			"expired progress = version:%d sequence:%d, want version:%d after sequence:%d",
+			expiredProgress.GetStateVersion(), expiredEvents[1].GetSequence(),
+			expired.Version, completedEvents[2].GetSequence(),
+		)
+	}
+	completedAtExpiredVersion := proto.Clone(completedProgress).(*opensplunkv1.SearchProgress)
+	completedAtExpiredVersion.StateVersion = expired.Version
+	if !proto.Equal(completedAtExpiredVersion, expiredProgress) {
+		t.Fatalf(
+			"terminal progress changed beyond state version: completed=%+v expired=%+v",
+			completedProgress, expiredProgress,
+		)
+	}
+}
+
 func TestAdversarialReplayRingKeepsContiguousCurrentOnlyTail(t *testing.T) {
 	service := adversarialNewService(t, func(config *Config) { config.MaximumReplayEvents = 1 })
 	target := adversarialNewTarget(service, "replay-one")

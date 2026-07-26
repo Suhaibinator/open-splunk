@@ -632,6 +632,7 @@ func TestSearchWebSocketRealManagerReplaysOneEventThenExpiresSequence(t *testing
 	firstProgress := readSearchWebSocketEvent(t, initial)
 	if firstProgress.GetSearchProgress().GetScannedRows() != 10 ||
 		firstProgress.GetSearchProgress().GetScannedBytes() != 100 ||
+		firstProgress.GetSearchProgress().GetStateVersion() == 0 ||
 		firstProgress.GetSequence() != checkpoint+1 {
 		t.Fatalf("first progress = %+v", firstProgress)
 	}
@@ -653,7 +654,8 @@ func TestSearchWebSocketRealManagerReplaysOneEventThenExpiresSequence(t *testing
 	if replayed.GetSearchProgress().GetScannedRows() != 10 ||
 		replayed.GetSearchProgress().GetScannedBytes() != 100 ||
 		replayed.GetSequence() != firstProgress.GetSequence() ||
-		replayed.GetSubscriptionId() != subscriptionID {
+		replayed.GetSubscriptionId() != subscriptionID ||
+		!proto.Equal(replayed.GetSearchProgress(), firstProgress.GetSearchProgress()) {
 		t.Fatalf("replayed progress = %+v", replayed)
 	}
 
@@ -661,6 +663,7 @@ func TestSearchWebSocketRealManagerReplaysOneEventThenExpiresSequence(t *testing
 	secondProgress := readSearchWebSocketEvent(t, replay)
 	if secondProgress.GetSearchProgress().GetScannedRows() != 15 ||
 		secondProgress.GetSearchProgress().GetScannedBytes() != 150 ||
+		secondProgress.GetSearchProgress().GetStateVersion() <= firstProgress.GetSearchProgress().GetStateVersion() ||
 		secondProgress.GetSequence() != replayed.GetSequence()+1 {
 		t.Fatalf("second progress projection = %+v", secondProgress)
 	}
@@ -688,6 +691,8 @@ func TestSearchWebSocketRealManagerReplaysOneEventThenExpiresSequence(t *testing
 	if authoritative.GetSearchJob().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
 		authoritative.GetSearchJob().GetProgress().GetScannedRows() != 15 ||
 		authoritative.GetSearchJob().GetProgress().GetScannedBytes() != 150 ||
+		authoritative.GetSearchJob().GetProgress().GetStateVersion() != secondProgress.GetSearchProgress().GetStateVersion() ||
+		authoritative.GetSearchJob().GetStateVersion() != secondProgress.GetSearchProgress().GetStateVersion() ||
 		fixture.executor.calls.Load() != 1 {
 		t.Fatalf("authoritative running search = %+v calls=%d", authoritative.GetSearchJob(), fixture.executor.calls.Load())
 	}
@@ -725,7 +730,10 @@ func TestSearchWebSocketRealManagerReplaysCancellationAfterOfflineSocket(t *test
 
 	var canceled opensplunkv1.CancelSearchJobResponse
 	fixture.post("/api/v1/search/jobs/cancel", &opensplunkv1.CancelSearchJobRequest{SearchJobId: jobID}, &canceled)
-	if canceled.GetSearchJob().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED {
+	cancellationVersion := canceled.GetSearchJob().GetStateVersion()
+	if canceled.GetSearchJob().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+		cancellationVersion == 0 ||
+		canceled.GetSearchJob().GetProgress().GetStateVersion() != cancellationVersion {
 		t.Fatalf("cancel response = %+v", canceled.GetSearchJob())
 	}
 	timer := time.NewTimer(2 * time.Second)
@@ -743,8 +751,13 @@ func TestSearchWebSocketRealManagerReplaysCancellationAfterOfflineSocket(t *test
 	publishedProgress := readSearchWebSocketEvent(t, keeper)
 	publishedTerminal := readSearchWebSocketEvent(t, keeper)
 	if publishedState.GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+		publishedState.GetSearchStateChanged().GetStateVersion() != cancellationVersion ||
 		publishedProgress.GetSearchProgress().GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
+		publishedProgress.GetSearchProgress().GetStateVersion() != cancellationVersion ||
 		publishedTerminal.GetSearchTerminal().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+		publishedTerminal.GetSearchTerminal().GetStateVersion() != cancellationVersion ||
+		publishedTerminal.GetSearchTerminal().GetFinalProgress().GetStateVersion() != cancellationVersion ||
+		!proto.Equal(publishedTerminal.GetSearchTerminal().GetFinalProgress(), publishedProgress.GetSearchProgress()) ||
 		publishedTerminal.GetSearchTerminal().GetFailure() != nil ||
 		publishedTerminal.GetSearchTerminal().GetResultsExpireAt() == nil ||
 		publishedState.GetSequence() != checkpoint+1 ||
@@ -790,8 +803,10 @@ func TestSearchWebSocketRealManagerReplaysCancellationAfterOfflineSocket(t *test
 	var authoritative opensplunkv1.GetSearchJobResponse
 	fixture.post("/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{SearchJobId: jobID}, &authoritative)
 	if authoritative.GetSearchJob().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
-		authoritative.GetSearchJob().GetStateVersion() != canceled.GetSearchJob().GetStateVersion() ||
-		terminal.GetSearchTerminal().GetStateVersion() != canceled.GetSearchJob().GetStateVersion() ||
+		authoritative.GetSearchJob().GetStateVersion() != cancellationVersion ||
+		authoritative.GetSearchJob().GetProgress().GetStateVersion() != cancellationVersion ||
+		terminal.GetSearchTerminal().GetStateVersion() != cancellationVersion ||
+		!proto.Equal(authoritative.GetSearchJob().GetProgress(), publishedProgress.GetSearchProgress()) ||
 		fixture.executor.calls.Load() != 1 || fixture.executor.exits.Load() != 1 {
 		t.Fatalf(
 			"authoritative canceled search = %+v cancel=%+v terminal=%+v calls=%d exits=%d",
