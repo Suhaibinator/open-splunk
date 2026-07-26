@@ -2,9 +2,35 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  assertBrowserResultPageBounds,
+  MAXIMUM_BROWSER_RESULT_COLUMNS,
   pruneCursorChainFrom,
   recordNextPageToken,
 } from "./pagination";
+
+test("browser result pages enforce requested rows and a documented column bound", () => {
+  assert.doesNotThrow(() => assertBrowserResultPageBounds({
+    columnCount: MAXIMUM_BROWSER_RESULT_COLUMNS,
+    pageSize: 1_000,
+    rowCount: 1_000,
+  }));
+  assert.throws(
+    () => assertBrowserResultPageBounds({
+      columnCount: 2,
+      pageSize: 20,
+      rowCount: 1_000,
+    }),
+    /1000 rows.*page size of 20/,
+  );
+  assert.throws(
+    () => assertBrowserResultPageBounds({
+      columnCount: MAXIMUM_BROWSER_RESULT_COLUMNS + 1,
+      pageSize: 1_000,
+      rowCount: 1,
+    }),
+    /65 columns.*supports 1–64/,
+  );
+});
 
 test("cursor divergence removes every downstream token, start, cache entry, and seen token", () => {
   const pages = new Map([

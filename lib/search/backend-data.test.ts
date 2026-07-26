@@ -54,6 +54,22 @@ function row(rowId: string, ordinal: bigint, cells: TypedValue[]): ResultRow {
   return { rowId, ordinal, cells };
 }
 
+test("result adaptation rejects schemas wider than the browser contract", () => {
+  const schema: ResultSchema = {
+    schemaId: "too-wide-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: Array.from(
+      { length: 65 },
+      (_, index) => column(`field_${index}`, ValueType.VALUE_TYPE_UINT64),
+    ),
+  };
+  assert.throws(
+    () => adaptSearchResults(schema, [], false),
+    /65 columns.*supports 1–64/,
+  );
+});
+
 test("top message results retain count and percent as categorical series", () => {
   const schema: ResultSchema = {
     schemaId: "top-message-v1",

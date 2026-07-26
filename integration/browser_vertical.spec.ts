@@ -1,6 +1,11 @@
+import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+
 import {
   expect,
   test,
+  type CDPSession,
   type Locator,
   type Page,
   type Response,
@@ -12,6 +17,7 @@ import {
   CancelSearchJobResponse,
   CreateSearchJobResponse,
   GetSearchJobResponse,
+  GetSearchResultsRequest,
   GetSearchResultsResponse,
 } from "../gen/ts/open_splunk/v1/search_api";
 import {
@@ -19,11 +25,13 @@ import {
   SearchJobState,
   type SearchProgress,
 } from "../gen/ts/open_splunk/v1/search";
+import type { ResultRow } from "../gen/ts/open_splunk/v1/result";
 import {
   ResynchronizationReason,
   SearchWebSocketCommand,
   SearchWebSocketEvent,
 } from "../gen/ts/open_splunk/v1/search_ws";
+import { MAXIMUM_BROWSER_RESULT_COLUMNS } from "../lib/api/pagination";
 
 const baseURL = requiredEnvironment("OPEN_SPLUNK_E2E_BASE_URL");
 const searchSPL = requiredEnvironment("OPEN_SPLUNK_E2E_SPL");
@@ -36,6 +44,11 @@ const recoveryControlURL = optionalLoopbackURL(process.env.OPEN_SPLUNK_E2E_RECOV
 const recoveryControlToken = process.env.OPEN_SPLUNK_E2E_RECOVERY_CONTROL_TOKEN?.trim();
 const recoveryInitialText = process.env.OPEN_SPLUNK_E2E_RECOVERY_INITIAL_TEXT?.trim();
 const cancellationTest = process.env.OPEN_SPLUNK_E2E_CANCELLATION_TEST === "1";
+const renderingTest = process.env.OPEN_SPLUNK_E2E_RENDERING_TEST === "1";
+const renderingArtifactDirectory =
+  process.env.OPEN_SPLUNK_E2E_RENDERING_ARTIFACT_DIRECTORY?.trim();
+const renderingMetricsPath = process.env.OPEN_SPLUNK_E2E_RENDERING_METRICS_PATH?.trim();
+const browserRenderingJobID = "browser-fixed-result-rendering";
 const sequenceExpirationTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST === "1";
 const sequenceGapTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST === "1";
 const sequenceGapRESTTerminalTest =
@@ -44,6 +57,9 @@ const sequenceGapRESTFirstProgressTest =
   process.env.OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_FIRST_PROGRESS_TEST === "1";
 const origin = validatedOrigin(baseURL);
 const timeout = 45_000;
+const maximumMaterializedRows = 32;
+const maximumSpacerRows = 2;
+const maximumTableBodyRows = maximumMaterializedRows + maximumSpacerRows;
 
 test.use({
   launchOptions: browserExecutable ? { executablePath: browserExecutable } : {},
@@ -99,6 +115,355 @@ test("collector event is visible through the compiled backend UI", async ({ page
     /Live job updates failed|Live job updates skipped a sequence|resynchronizing from the server/i,
   );
   assertBrowserSafety(safety);
+});
+
+test("renders a fixed 1,000-row statistics result with bounded browser work", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !renderingTest || !renderingArtifactDirectory || !renderingMetricsPath,
+    "the deterministic fixed-result rendering fixture is not enabled",
+  );
+  test.setTimeout(60_000);
+  await mkdir(renderingArtifactDirectory!, { recursive: true });
+  await page.setViewportSize({ width: 1_600, height: 900 });
+  const renderingViewport = page.viewportSize();
+  if (renderingViewport === null) {
+    throw new Error("fixed-result rendering viewport is unavailable");
+  }
+  const safety = observeBrowserSafety(page);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Performance.enable");
+  let baselineCDPMetrics: Map<string, number> | undefined;
+  let responseBytes = 0;
+  let responseSHA256 = "";
+  let resultColumnCount = 0;
+  let routeFailure: Error | undefined;
+  let settleResultsRoute!: () => void;
+  const resultsRouteSettled = new Promise<void>((resolve) => {
+    settleResultsRoute = resolve;
+  });
+  const fixedResultsRouteMatcher = (url: URL): boolean =>
+    url.origin === origin && url.pathname === "/api/v1/search/jobs/results";
+  await page.route(
+    fixedResultsRouteMatcher,
+    async (route) => {
+      try {
+        const requestPayload = route.request().postDataBuffer();
+        if (requestPayload === null) {
+          throw new Error("fixed-result request had no protobuf body");
+        }
+        const request = GetSearchResultsRequest.decode(requestPayload);
+        expect(request.page?.pageSize, "fixed-result request page size").toBe(expectedRows);
+        expect(request.page?.includeTotalSize, "fixed-result request exact total").toBe(true);
+        expect(request.page?.pageToken ?? "", "fixed-result request page token").toBe("");
+        expect(request.allowPartialResults, "fixed-result partial-result request").toBe(false);
+
+        const upstream = await route.fetch();
+        if (
+          upstream.status() !== 200
+          || upstream.headers()["content-type"] !== "application/x-protobuf"
+        ) {
+          throw new Error("fixed-result route was not a protobuf success");
+        }
+        const body = await upstream.body();
+        const decoded = GetSearchResultsResponse.decode(body);
+        const resultPage = decoded.resultPage;
+        if (resultPage?.schema === undefined || resultPage.page === undefined) {
+          throw new Error("fixed-result response omitted schema or page metadata");
+        }
+        expect(decoded.searchJobId).toBe(browserRenderingJobID);
+        expect(resultPage.rows).toHaveLength(expectedRows);
+        const resultColumnNames = resultPage.schema.columns.map(
+          (column) => column.fieldName,
+        );
+        expect(resultColumnNames).toHaveLength(MAXIMUM_BROWSER_RESULT_COLUMNS);
+        expect(resultColumnNames.slice(0, 2)).toEqual(["group", "count"]);
+        expect(resultColumnNames.at(-1)).toBe("metric_63");
+        expect(resultPage.page.totalSize).toBe(BigInt(expectedRows));
+        expect(resultPage.page.totalSizeExact).toBe(true);
+        expect(resultPage.page.nextPageToken ?? "").toBe("");
+        expect(resultPage.snapshotComplete).toBe(true);
+        expect(
+          resultPage.rows.map((row) => row.ordinal),
+          "fixed-result row ordinals",
+        ).toEqual(Array.from({ length: expectedRows }, (_, index) => BigInt(index)));
+        expect(new Set(resultPage.rows.map((row) => row.rowId)).size).toBe(expectedRows);
+        expect(requiredStringCell(resultPage.rows[0], 0)).toBe("render-row-0000");
+        expect(requiredStringCell(resultPage.rows.at(-1), 0)).toBe(expectedText);
+
+        responseBytes = body.byteLength;
+        responseSHA256 = createHash("sha256").update(body).digest("hex");
+        resultColumnCount = resultPage.schema.columns.length;
+        baselineCDPMetrics = await readCDPMetrics(cdp);
+        await beginFixedResultRenderingObservation(page);
+        await route.fulfill({ response: upstream, body });
+      } catch (error) {
+        routeFailure = normalizeError(error);
+        await route.abort("failed").catch(() => undefined);
+      } finally {
+        settleResultsRoute();
+      }
+    },
+  );
+
+  try {
+    await verifySameTaskMaterializedRowPeak(page);
+    const runSearch = await openSearchWorkspace(page);
+    const { createResponsePromise, resultsResponsePromise } = waitForSearchResponses(page);
+    await runSearch.click();
+
+    const createResponse = await createResponsePromise;
+    assertProtobufResponse(createResponse);
+    expect(decodeCreateSearchJobID(await createResponse.body())).toBe(browserRenderingJobID);
+    await resultsRouteSettled;
+    if (routeFailure !== undefined) throw routeFailure;
+    const resultsResponse = await resultsResponsePromise;
+    assertProtobufResponse(resultsResponse);
+    expect(decodeSearchResultsJobID(await resultsResponse.body())).toBe(browserRenderingJobID);
+
+    const initialStability = await waitForStableDOM(
+      page,
+      '[data-testid="search-workspace"]',
+      [
+        '[data-testid="job-strip"][aria-busy="false"]',
+        '[aria-label="Backend search statistics"][data-total-rows="1000"]',
+        '[data-virtualized="true"]',
+      ],
+    );
+    const renderingObservation = await finishFixedResultRenderingObservation(page);
+    const finalCDPMetrics = await readCDPMetrics(cdp);
+    if (baselineCDPMetrics === undefined) {
+      throw new Error("fixed-result CDP baseline was not captured");
+    }
+    await beginFixedResultRenderingObservation(page, false);
+    const jobStrip = page.getByTestId("job-strip");
+    await expect(jobStrip).toHaveAttribute("aria-busy", "false", { timeout });
+    await expect(jobStrip).toContainText("Completed", { timeout });
+    await expect(jobStrip).toContainText("1,000 rows", { timeout });
+    const shell = page.getByRole("region", { name: "Scrollable statistics table" });
+    await expect(shell).toHaveAttribute("data-virtualized", "true", { timeout });
+    const table = page.getByRole("table", { name: "Backend search statistics" });
+    await expect(table).toHaveAttribute("data-total-rows", "1000", { timeout });
+    await expect(table).toHaveAttribute("aria-rowcount", "1001", { timeout });
+    const materializedRows = table.locator("tbody tr:not(.virtual-table-spacer)");
+    const spacerRows = table.locator("tbody tr.virtual-table-spacer");
+    const tableBodyRows = table.locator("tbody tr");
+    const materializedCells = table.locator(
+      "thead th, tbody tr:not(.virtual-table-spacer) td",
+    );
+    await expect.poll(() => materializedRows.count(), { timeout }).toBeGreaterThan(0);
+    await expect.poll(
+      () => materializedRows.count(),
+      { timeout },
+    ).toBeLessThanOrEqual(maximumMaterializedRows);
+    await expect.poll(
+      () => spacerRows.count(),
+      { timeout },
+    ).toBeLessThanOrEqual(maximumSpacerRows);
+    await expect.poll(
+      () => tableBodyRows.count(),
+      { timeout },
+    ).toBeLessThanOrEqual(maximumTableBodyRows);
+    await expect.poll(
+      () => materializedCells.count(),
+      { timeout },
+    ).toBeLessThanOrEqual(
+      MAXIMUM_BROWSER_RESULT_COLUMNS * (maximumMaterializedRows + 1),
+    );
+    await expect(
+      materializedRows.filter({ hasText: "render-row-0000" }),
+    ).toHaveCount(1);
+    await expect(
+      materializedRows.filter({ hasText: expectedText }),
+    ).toHaveCount(0);
+    await expect(
+      materializedRows.filter({ hasText: "render-row-0000" }),
+    ).toHaveAttribute("aria-rowindex", "2");
+    await expect(page.getByText("Showing 1–1,000 · 1,000 rows", { exact: true })).toBeVisible();
+
+    const initialMaterializedRows = await materializedRows.count();
+    const initialSpacerRows = await spacerRows.count();
+    const initialTableBodyRows = await tableBodyRows.count();
+    const initialMaterializedCells = await materializedCells.count();
+    expect(await table.evaluate((element) => getComputedStyle(element).tableLayout))
+      .toBe("fixed");
+    const tableScrollWidth = await table.evaluate((element) => element.scrollWidth);
+    expect(tableScrollWidth).toBeLessThanOrEqual(MAXIMUM_BROWSER_RESULT_COLUMNS * 168);
+    expect(renderingObservation.maximumMaterializedRows)
+      .toBeLessThanOrEqual(maximumMaterializedRows);
+    expect(renderingObservation.maximumTableBodyRows)
+      .toBeLessThanOrEqual(maximumTableBodyRows);
+    const topScreenshot = await page.screenshot({
+      animations: "disabled",
+      path: path.join(renderingArtifactDirectory!, "statistics-top.png"),
+    });
+    await testInfo.attach("fixed-result-top", {
+      body: topScreenshot,
+      contentType: "image/png",
+    });
+
+    await shell.focus();
+    await beginScrollTiming(page);
+    await shell.press("End");
+    const bottomStability = await waitForStableDOM(
+      page,
+      '[aria-label="Backend search statistics"]',
+      [`[aria-rowindex="1001"]`],
+    );
+    const bottomStableMilliseconds = await finishScrollTiming(
+      page,
+      bottomStability.stableAt,
+    );
+    await expect(
+      materializedRows.filter({ hasText: expectedText }),
+    ).toHaveCount(1, { timeout });
+    await expect(
+      materializedRows.filter({ hasText: expectedText }),
+    ).toHaveAttribute("aria-rowindex", "1001");
+    await expect(
+      materializedRows.filter({ hasText: "render-row-0000" }),
+    ).toHaveCount(0);
+    await expect.poll(
+      () => materializedRows.count(),
+      { timeout },
+    ).toBeLessThanOrEqual(maximumMaterializedRows);
+    await expect.poll(
+      () => spacerRows.count(),
+      { timeout },
+    ).toBeLessThanOrEqual(maximumSpacerRows);
+    await expect.poll(
+      () => tableBodyRows.count(),
+      { timeout },
+    ).toBeLessThanOrEqual(maximumTableBodyRows);
+    const shellBoxAtBottom = await shell.boundingBox();
+    const stickyHeaderBox = await table.locator("thead th").first().boundingBox();
+    if (shellBoxAtBottom === null || stickyHeaderBox === null) {
+      throw new Error("fixed-result table or sticky header has no bounding box");
+    }
+    expect(Math.abs(stickyHeaderBox.y - shellBoxAtBottom.y)).toBeLessThanOrEqual(2);
+    const bottomScreenshot = await page.screenshot({
+      animations: "disabled",
+      path: path.join(renderingArtifactDirectory!, "statistics-bottom.png"),
+    });
+    await testInfo.attach("fixed-result-bottom", {
+      body: bottomScreenshot,
+      contentType: "image/png",
+    });
+
+    const ascendingCountSort = page.getByRole("button", {
+      name: "Sort by count, ascending",
+    });
+    await ascendingCountSort.click();
+    await expect(
+      materializedRows.filter({ hasText: "render-row-0000" }),
+    ).toHaveCount(1, { timeout });
+    await expect(
+      materializedRows.filter({ hasText: "render-row-0000" }),
+    ).toHaveAttribute("aria-rowindex", "2");
+    await waitForStableDOM(page, '[aria-label="Backend search statistics"]');
+    await page.getByRole("button", { name: "Sort by count, descending" }).click();
+    await expect(
+      materializedRows.filter({ hasText: expectedText }),
+    ).toHaveCount(1, { timeout });
+    await expect(
+      materializedRows.filter({ hasText: expectedText }),
+    ).toHaveAttribute("aria-rowindex", "2");
+    await waitForStableDOM(page, '[aria-label="Backend search statistics"]');
+
+    await page.getByRole("button", { name: /^Format/ }).click();
+    await page.getByRole("menuitemradio", { name: /Standard rows/ }).click();
+    await expect(table).toHaveClass(/density-standard/);
+    const standardRowHeight = await requiredBoundingHeight(
+      materializedRows.filter({ hasText: expectedText }),
+    );
+    await page.getByRole("button", { name: /^Format/ }).click();
+    await page.getByRole("menuitemradio", { name: /Compact rows/ }).click();
+    await expect(table).toHaveClass(/density-compact/);
+    const compactRowHeight = await requiredBoundingHeight(
+      materializedRows.filter({ hasText: expectedText }),
+    );
+    expect(standardRowHeight).toBeGreaterThan(compactRowHeight);
+    await page.setViewportSize({ width: 1_024, height: 768 });
+    await waitForStableDOM(page, '[aria-label="Backend search statistics"]');
+    const compactViewportShellBox = await shell.boundingBox();
+    if (compactViewportShellBox === null) {
+      throw new Error("fixed-result table shell has no compact-viewport bounding box");
+    }
+    expect(compactViewportShellBox.x).toBeGreaterThanOrEqual(0);
+    expect(compactViewportShellBox.x + compactViewportShellBox.width).toBeLessThanOrEqual(1_024);
+    const compactViewportScreenshot = await page.screenshot({
+      animations: "disabled",
+      path: path.join(renderingArtifactDirectory!, "statistics-compact-1024x768.png"),
+    });
+    await testInfo.attach("fixed-result-compact-1024x768", {
+      body: compactViewportScreenshot,
+      contentType: "image/png",
+    });
+    await expect.poll(
+      () => spacerRows.count(),
+      { timeout },
+    ).toBeLessThanOrEqual(maximumSpacerRows);
+    await expect.poll(
+      () => tableBodyRows.count(),
+      { timeout },
+    ).toBeLessThanOrEqual(maximumTableBodyRows);
+    const interactionDOMObservation = await finishFixedResultDOMObservation(page);
+    expect(interactionDOMObservation.maximumMaterializedRows)
+      .toBeLessThanOrEqual(maximumMaterializedRows);
+    expect(interactionDOMObservation.maximumTableBodyRows)
+      .toBeLessThanOrEqual(maximumTableBodyRows);
+    expect(safety.createRequests(), "fixed-result browser create requests").toBe(1);
+    expect(safety.resultsRequests(), "fixed-result browser results requests").toBe(1);
+    assertBrowserSafety(safety);
+
+    const metrics = {
+      version: 1,
+      rowCount: expectedRows,
+      columnCount: resultColumnCount,
+      responseBytes,
+      responseSHA256,
+      materializedRows: initialMaterializedRows,
+      spacerRows: initialSpacerRows,
+      tableBodyRows: initialTableBodyRows,
+      materializedCells: initialMaterializedCells,
+      tableScrollWidth,
+      maximumMaterializedRows: Math.max(
+        renderingObservation.maximumMaterializedRows,
+        interactionDOMObservation.maximumMaterializedRows,
+      ),
+      maximumTableBodyRows: Math.max(
+        renderingObservation.maximumTableBodyRows,
+        interactionDOMObservation.maximumTableBodyRows,
+      ),
+      stableRenderMilliseconds: renderingObservation.stableRenderMilliseconds,
+      firstMutationMilliseconds: renderingObservation.firstMutationMilliseconds,
+      bottomStableMilliseconds,
+      mutationCallbacks: renderingObservation.mutationCallbacks,
+      mutationRecords: renderingObservation.mutationRecords,
+      addedNodes: renderingObservation.addedNodes,
+      stabilityRetries: initialStability.retries,
+      longTasks: renderingObservation.longTasks,
+      layoutShifts: renderingObservation.layoutShifts,
+      cdp: renderingCDPMetrics(baselineCDPMetrics, finalCDPMetrics),
+      browserVersion: page.context().browser()?.version() ?? "unknown",
+      viewport: renderingViewport,
+      devicePixelRatio: await page.evaluate(() => window.devicePixelRatio),
+      hardwareConcurrency: await page.evaluate(() => navigator.hardwareConcurrency),
+    };
+    assertFiniteMetricNumbers(metrics);
+    const encodedMetrics = `${JSON.stringify(metrics, null, 2)}\n`;
+    expect(Buffer.byteLength(encodedMetrics), "fixed-result metrics bytes").toBeLessThanOrEqual(64 << 10);
+    await writeFile(renderingMetricsPath!, encodedMetrics, { encoding: "utf8" });
+    await testInfo.attach("fixed-result-rendering-metrics", {
+      body: Buffer.from(encodedMetrics),
+      contentType: "application/json",
+    });
+  } finally {
+    await discardFixedResultRenderingObservation(page).catch(() => undefined);
+    await page.unroute(fixedResultsRouteMatcher).catch(() => undefined);
+    await cdp.detach().catch(() => undefined);
+  }
 });
 
 test("browser cancellation is authoritative and does not reconnect", async ({ page }) => {
@@ -1153,6 +1518,635 @@ async function waitForBrowserRender(page: Page): Promise<void> {
       }, 0);
     }),
   );
+}
+
+interface FixedResultRenderingObservation {
+  collectPerformanceMetrics: boolean;
+  startedAt: number;
+  stableAt: number | null;
+  firstMutationAt: number | null;
+  mutationCallbacks: number;
+  mutationRecords: number;
+  addedNodes: number;
+  maximumMaterializedRows: number;
+  maximumTableBodyRows: number;
+  materializedTables: Set<Element>;
+  materializedTableBodies: Set<Element>;
+  tableBodyRows: Set<Element>;
+  materializedRows: Set<Element>;
+  longTaskEntries: Array<{ startTime: number; duration: number }>;
+  longTaskOverflow: number;
+  layoutShiftEntries: Array<{ startTime: number; value: number }>;
+  layoutShiftOverflow: number;
+  layoutShiftSupported: boolean;
+  mutationObserver: MutationObserver | null;
+  longTaskObserver: PerformanceObserver | null;
+  layoutShiftObserver: PerformanceObserver | null;
+  processMutationRecords(records: MutationRecord[]): void;
+  processLongTaskEntries(entries: PerformanceEntry[]): void;
+  processLayoutShiftEntries(entries: PerformanceEntry[]): void;
+}
+
+interface FixedResultRenderingSnapshot {
+  firstMutationMilliseconds: number | null;
+  stableRenderMilliseconds: number;
+  mutationCallbacks: number;
+  mutationRecords: number;
+  addedNodes: number;
+  maximumMaterializedRows: number;
+  maximumTableBodyRows: number;
+  longTasks: {
+    supported: boolean;
+    count: number;
+    totalMilliseconds: number;
+    maximumMilliseconds: number;
+    overflow: number;
+  };
+  layoutShifts: {
+    supported: boolean;
+    count: number;
+    cumulativeValue: number;
+    overflow: number;
+  };
+}
+
+interface FixedResultDOMSnapshot {
+  maximumMaterializedRows: number;
+  maximumTableBodyRows: number;
+}
+
+type FixedResultRenderingWindow = Window & {
+  openSplunkFixedResultRendering?: FixedResultRenderingObservation;
+};
+
+type ScrollTimingWindow = Window & {
+  openSplunkScrollStartedAt?: number;
+};
+
+async function beginFixedResultRenderingObservation(
+  page: Page,
+  collectPerformanceMetrics = true,
+): Promise<void> {
+  await page.evaluate((collectMetrics) => {
+    const observedWindow = window as FixedResultRenderingWindow;
+    if (observedWindow.openSplunkFixedResultRendering !== undefined) {
+      throw new Error("fixed-result rendering observation is already active");
+    }
+    const root = document.querySelector<HTMLElement>('[data-testid="search-workspace"]');
+    if (root === null) throw new Error("search workspace is unavailable for rendering observation");
+    const supportedEntryTypes = new Set(PerformanceObserver.supportedEntryTypes ?? []);
+    if (collectMetrics) {
+      performance.clearResourceTimings();
+      performance.setResourceTimingBufferSize(1_024);
+    }
+    const statisticsTableSelector = 'table[aria-label="Backend search statistics"]';
+    const tableBodyRowSelector = "tr";
+    const materializedRowSelector = "tr:not(.virtual-table-spacer)";
+    const observation: FixedResultRenderingObservation = {
+      collectPerformanceMetrics: collectMetrics,
+      startedAt: performance.now(),
+      stableAt: null,
+      firstMutationAt: null,
+      mutationCallbacks: 0,
+      mutationRecords: 0,
+      addedNodes: 0,
+      maximumMaterializedRows: 0,
+      maximumTableBodyRows: 0,
+      materializedTables: new Set(),
+      materializedTableBodies: new Set(),
+      tableBodyRows: new Set(),
+      materializedRows: new Set(),
+      longTaskEntries: [],
+      longTaskOverflow: 0,
+      layoutShiftEntries: [],
+      layoutShiftOverflow: 0,
+      layoutShiftSupported: collectMetrics && supportedEntryTypes.has("layout-shift"),
+      mutationObserver: null,
+      longTaskObserver: null,
+      layoutShiftObserver: null,
+      processMutationRecords: () => undefined,
+      processLongTaskEntries: () => undefined,
+      processLayoutShiftEntries: () => undefined,
+    };
+    // This helper must be defined inside the evaluated browser realm.
+    // oxlint-disable-next-line unicorn/consistent-function-scoping
+    const matchingElements = (node: Node, selector: string): Element[] => {
+      if (!(node instanceof Element)) return [];
+      return [
+        ...(node.matches(selector) ? [node] : []),
+        ...node.querySelectorAll(selector),
+      ];
+    };
+    const addMaterializedRow = (row: Element): void => {
+      observation.materializedRows.add(row);
+      observation.maximumMaterializedRows = Math.max(
+        observation.maximumMaterializedRows,
+        observation.materializedRows.size,
+      );
+    };
+    const addTableBodyRow = (row: Element): void => {
+      observation.tableBodyRows.add(row);
+      observation.maximumTableBodyRows = Math.max(
+        observation.maximumTableBodyRows,
+        observation.tableBodyRows.size,
+      );
+      if (row.matches(materializedRowSelector)) addMaterializedRow(row);
+    };
+    const addRows = (node: Node): void => {
+      for (const row of matchingElements(node, tableBodyRowSelector)) {
+        addTableBodyRow(row);
+      }
+    };
+    const removeRows = (node: Node): void => {
+      for (const row of matchingElements(node, tableBodyRowSelector)) {
+        observation.tableBodyRows.delete(row);
+        observation.materializedRows.delete(row);
+      }
+    };
+    const targetBelongsToTrackedTable = (target: Node): boolean =>
+      [...observation.materializedTables].some(
+        (table) => table === target || table.contains(target),
+      );
+    const targetBelongsToTrackedTableBody = (target: Node): boolean =>
+      [...observation.materializedTableBodies].some(
+        (body) => body === target || body.contains(target),
+      );
+    const sampleMaterializedRows = (): void => {
+      observation.materializedTables = new Set(
+        root.querySelectorAll(statisticsTableSelector),
+      );
+      observation.materializedTableBodies = new Set(
+        root.querySelectorAll(`${statisticsTableSelector} tbody`),
+      );
+      observation.tableBodyRows = new Set(
+        root.querySelectorAll(`${statisticsTableSelector} tbody tr`),
+      );
+      observation.materializedRows = new Set(
+        root.querySelectorAll(
+          `${statisticsTableSelector} tbody ${materializedRowSelector}`,
+        ),
+      );
+      observation.maximumMaterializedRows = Math.max(
+        observation.maximumMaterializedRows,
+        observation.materializedRows.size,
+      );
+      observation.maximumTableBodyRows = Math.max(
+        observation.maximumTableBodyRows,
+        observation.tableBodyRows.size,
+      );
+    };
+    observation.processMutationRecords = (records) => {
+      const now = performance.now();
+      observation.firstMutationAt ??= now;
+      observation.mutationCallbacks += 1;
+      observation.mutationRecords += records.length;
+      for (const record of records) {
+        observation.addedNodes += record.addedNodes.length;
+        const targetWasInTrackedTable = targetBelongsToTrackedTable(record.target);
+        const targetWasInTrackedTableBody =
+          targetBelongsToTrackedTableBody(record.target);
+        for (const removedNode of record.removedNodes) {
+          if (targetWasInTrackedTableBody) removeRows(removedNode);
+          for (const body of observation.materializedTableBodies) {
+            if (body !== removedNode && !removedNode.contains(body)) continue;
+            removeRows(body);
+            observation.materializedTableBodies.delete(body);
+          }
+          for (const table of observation.materializedTables) {
+            if (table !== removedNode && !removedNode.contains(table)) continue;
+            observation.materializedTables.delete(table);
+          }
+        }
+        for (const addedNode of record.addedNodes) {
+          for (const table of matchingElements(addedNode, statisticsTableSelector)) {
+            observation.materializedTables.add(table);
+            for (const body of table.querySelectorAll("tbody")) {
+              observation.materializedTableBodies.add(body);
+              addRows(body);
+            }
+          }
+          if (targetWasInTrackedTable) {
+            for (const body of matchingElements(addedNode, "tbody")) {
+              observation.materializedTableBodies.add(body);
+              addRows(body);
+            }
+          }
+          if (targetWasInTrackedTableBody) addRows(addedNode);
+        }
+        if (record.type === "attributes" && record.target instanceof Element) {
+          if (record.target.matches(tableBodyRowSelector)) {
+            if (targetBelongsToTrackedTableBody(record.target)) {
+              addTableBodyRow(record.target);
+            } else {
+              observation.tableBodyRows.delete(record.target);
+              observation.materializedRows.delete(record.target);
+            }
+          }
+        }
+      }
+      sampleMaterializedRows();
+    };
+    observation.mutationObserver = new MutationObserver(
+      observation.processMutationRecords,
+    );
+    observation.mutationObserver.observe(root, {
+      attributes: true,
+      attributeFilter: ["aria-busy", "aria-rowcount", "class", "data-total-rows", "data-virtualized"],
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+    observation.processLongTaskEntries = (entries) => {
+      for (const entry of entries) {
+        if (entry.startTime < observation.startedAt) continue;
+        if (observation.longTaskEntries.length < 256) {
+          observation.longTaskEntries.push({
+            startTime: entry.startTime,
+            duration: entry.duration,
+          });
+        } else {
+          observation.longTaskOverflow += 1;
+        }
+      }
+    };
+    if (collectMetrics && supportedEntryTypes.has("longtask")) {
+      observation.longTaskObserver = new PerformanceObserver((entries) => {
+        observation.processLongTaskEntries(entries.getEntries());
+      });
+      observation.longTaskObserver.observe({ type: "longtask", buffered: true });
+    }
+    observation.processLayoutShiftEntries = (entries) => {
+      for (const entry of entries) {
+        if (entry.startTime < observation.startedAt) continue;
+        const layoutShift = entry as PerformanceEntry & {
+          hadRecentInput?: boolean;
+          value?: number;
+        };
+        if (layoutShift.hadRecentInput !== true && typeof layoutShift.value === "number") {
+          if (observation.layoutShiftEntries.length < 256) {
+            observation.layoutShiftEntries.push({
+              startTime: entry.startTime,
+              value: layoutShift.value,
+            });
+          } else {
+            observation.layoutShiftOverflow += 1;
+          }
+        }
+      }
+    };
+    if (observation.layoutShiftSupported) {
+      observation.layoutShiftObserver = new PerformanceObserver((entries) => {
+        observation.processLayoutShiftEntries(entries.getEntries());
+      });
+      observation.layoutShiftObserver.observe({ type: "layout-shift", buffered: true });
+    }
+    observedWindow.openSplunkFixedResultRendering = observation;
+    sampleMaterializedRows();
+  }, collectPerformanceMetrics);
+}
+
+async function verifySameTaskMaterializedRowPeak(page: Page): Promise<void> {
+  const proofPage = await page.context().newPage();
+  try {
+    await proofPage.setContent(`
+      <main data-testid="search-workspace">
+        <table data-testid="materialized-row-peak-fixture"
+               aria-label="Backend search statistics"><tbody></tbody></table>
+      </main>
+    `);
+    await beginFixedResultRenderingObservation(proofPage, false);
+    try {
+      const peaks = await exerciseSameTaskRowPeak(proofPage, false);
+      expect(peaks.materialized, "same-task materialized-row peak").toBe(1_000);
+      expect(peaks.tableBody, "same-task table-body-row peak").toBe(1_000);
+    } finally {
+      await discardFixedResultRenderingObservation(proofPage);
+    }
+    await proofPage.locator("tbody").evaluate((body) => body.replaceChildren());
+    await beginFixedResultRenderingObservation(proofPage, false);
+    try {
+      const peaks = await exerciseSameTaskRowPeak(proofPage, true);
+      expect(peaks.materialized, "same-task spacer materialized-row peak").toBe(0);
+      expect(peaks.tableBody, "same-task spacer table-body-row peak").toBe(1_000);
+    } finally {
+      await discardFixedResultRenderingObservation(proofPage);
+    }
+  } finally {
+    await proofPage.close();
+  }
+}
+
+async function exerciseSameTaskRowPeak(
+  page: Page,
+  spacerRows: boolean,
+): Promise<{ materialized: number; tableBody: number }> {
+  return page.evaluate((useSpacerRows) => {
+    const table = document.querySelector<HTMLTableElement>(
+      '[data-testid="materialized-row-peak-fixture"]',
+    );
+    const body = table?.tBodies.item(0);
+    const observation =
+      (window as FixedResultRenderingWindow).openSplunkFixedResultRendering;
+    if (body === undefined || body === null || observation === undefined) {
+      throw new Error("materialized-row peak fixture is unavailable");
+    }
+    const rows = Array.from({ length: 1_000 }, () => {
+      const row = document.createElement("tr");
+      if (useSpacerRows) row.className = "virtual-table-spacer";
+      row.append(document.createElement("td"));
+      return row;
+    });
+    body.append(...rows);
+    for (let index = 0; index < 984; index += 1) rows[index]?.remove();
+    const pendingRecords = observation.mutationObserver?.takeRecords() ?? [];
+    observation.processMutationRecords(pendingRecords);
+    return {
+      materialized: observation.maximumMaterializedRows,
+      tableBody: observation.maximumTableBodyRows,
+    };
+  }, spacerRows);
+}
+
+async function finishFixedResultDOMObservation(
+  page: Page,
+): Promise<FixedResultDOMSnapshot> {
+  return page.evaluate(() => {
+    const observedWindow = window as FixedResultRenderingWindow;
+    const observation = observedWindow.openSplunkFixedResultRendering;
+    if (observation === undefined || observation.collectPerformanceMetrics) {
+      throw new Error("fixed-result interaction DOM observation is not active");
+    }
+    const pendingMutations = observation.mutationObserver?.takeRecords() ?? [];
+    if (pendingMutations.length > 0) {
+      observation.processMutationRecords(pendingMutations);
+    }
+    observation.mutationObserver?.disconnect();
+    observation.longTaskObserver?.disconnect();
+    observation.layoutShiftObserver?.disconnect();
+    delete observedWindow.openSplunkFixedResultRendering;
+    return {
+      maximumMaterializedRows: observation.maximumMaterializedRows,
+      maximumTableBodyRows: observation.maximumTableBodyRows,
+    };
+  });
+}
+
+async function finishFixedResultRenderingObservation(
+  page: Page,
+): Promise<FixedResultRenderingSnapshot> {
+  const snapshot = await stopFixedResultRenderingObservation(page, true);
+  if (snapshot === null) {
+    throw new Error("fixed-result rendering observation is not active");
+  }
+  return snapshot;
+}
+
+async function discardFixedResultRenderingObservation(page: Page): Promise<void> {
+  await stopFixedResultRenderingObservation(page, false);
+}
+
+async function stopFixedResultRenderingObservation(
+  page: Page,
+  required: boolean,
+): Promise<FixedResultRenderingSnapshot | null> {
+  return page.evaluate((observationRequired) => {
+    const observedWindow = window as FixedResultRenderingWindow;
+    const observation = observedWindow.openSplunkFixedResultRendering;
+    if (observation === undefined) {
+      if (observationRequired) {
+        throw new Error("fixed-result rendering observation is not active");
+      }
+      return null;
+    }
+    const pendingMutations = observation.mutationObserver?.takeRecords() ?? [];
+    if (pendingMutations.length > 0) {
+      observation.processMutationRecords(pendingMutations);
+    }
+    observation.processLongTaskEntries(observation.longTaskObserver?.takeRecords() ?? []);
+    observation.processLayoutShiftEntries(
+      observation.layoutShiftObserver?.takeRecords() ?? [],
+    );
+    observation.mutationObserver?.disconnect();
+    observation.longTaskObserver?.disconnect();
+    observation.layoutShiftObserver?.disconnect();
+    delete observedWindow.openSplunkFixedResultRendering;
+    if (!observationRequired) return null;
+    if (!observation.collectPerformanceMetrics) {
+      throw new Error("fixed-result rendering metrics observation is not active");
+    }
+    if (observation.stableAt === null) {
+      throw new Error("fixed-result rendering observation stopped before DOM stability");
+    }
+    const resultResource = performance.getEntriesByType("resource")
+      .findLast((entry) => {
+        try {
+          return new URL(entry.name).pathname === "/api/v1/search/jobs/results";
+        } catch {
+          return false;
+        }
+      }) as PerformanceResourceTiming | undefined;
+    const responseEnd = resultResource?.responseEnd;
+    if (
+      responseEnd === undefined
+      || !Number.isFinite(responseEnd)
+      || responseEnd <= 0
+      || responseEnd > observation.stableAt
+    ) {
+      throw new Error("fixed-result resource responseEnd is unavailable or invalid");
+    }
+    const longTasks = observation.longTaskEntries.filter(
+      (entry) => entry.startTime >= responseEnd && entry.startTime <= observation.stableAt!,
+    );
+    const layoutShifts = observation.layoutShiftEntries.filter(
+      (entry) => entry.startTime >= responseEnd && entry.startTime <= observation.stableAt!,
+    );
+    return {
+      firstMutationMilliseconds: observation.firstMutationAt === null
+        ? null
+        : Math.max(0, observation.firstMutationAt - responseEnd),
+      stableRenderMilliseconds: observation.stableAt - responseEnd,
+      mutationCallbacks: observation.mutationCallbacks,
+      mutationRecords: observation.mutationRecords,
+      addedNodes: observation.addedNodes,
+      maximumMaterializedRows: observation.maximumMaterializedRows,
+      maximumTableBodyRows: observation.maximumTableBodyRows,
+      longTasks: {
+        supported: observation.longTaskObserver !== null,
+        count: longTasks.length,
+        totalMilliseconds: longTasks.reduce((total, entry) => total + entry.duration, 0),
+        maximumMilliseconds: longTasks.reduce(
+          (maximum, entry) => Math.max(maximum, entry.duration),
+          0,
+        ),
+        overflow: observation.longTaskOverflow,
+      },
+      layoutShifts: {
+        supported: observation.layoutShiftSupported,
+        count: layoutShifts.length,
+        cumulativeValue: layoutShifts.reduce((total, entry) => total + entry.value, 0),
+        overflow: observation.layoutShiftOverflow,
+      },
+    };
+  }, required);
+}
+
+interface StableDOMResult {
+  retries: number;
+  stableAt: number;
+}
+
+async function waitForStableDOM(
+  page: Page,
+  selector: string,
+  readySelectors: string[] = [],
+): Promise<StableDOMResult> {
+  return page.evaluate(async ({
+    requiredSelectors,
+    targetSelector,
+    timeoutMilliseconds,
+  }) => {
+    const target = document.querySelector(targetSelector);
+    if (target === null) throw new Error(`stable DOM target is missing: ${targetSelector}`);
+    let generation = 0;
+    const observer = new MutationObserver(() => {
+      generation += 1;
+    });
+    observer.observe(target, {
+      attributes: true,
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+    try {
+      const deadline = performance.now() + timeoutMilliseconds;
+      for (let retry = 0; performance.now() <= deadline; retry += 1) {
+        const readyBefore = requiredSelectors.every(
+          (requiredSelector) => document.querySelector(requiredSelector) !== null,
+        );
+        const before = generation;
+        // Stability retries intentionally observe consecutive event-loop turns.
+        // oxlint-disable-next-line eslint/no-await-in-loop
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        // oxlint-disable-next-line eslint/no-await-in-loop
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+        const readyAfter = requiredSelectors.every(
+          (requiredSelector) => document.querySelector(requiredSelector) !== null,
+        );
+        if (readyBefore && readyAfter && generation === before) {
+          const stableAt = performance.now();
+          const renderingObservation =
+            (window as FixedResultRenderingWindow).openSplunkFixedResultRendering;
+          if (renderingObservation !== undefined && renderingObservation.stableAt === null) {
+            renderingObservation.stableAt = stableAt;
+          }
+          return { retries: retry, stableAt };
+        }
+      }
+      throw new Error(`DOM did not become stable across two animation frames: ${targetSelector}`);
+    } finally {
+      observer.disconnect();
+    }
+  }, {
+    requiredSelectors: readySelectors,
+    targetSelector: selector,
+    timeoutMilliseconds: timeout,
+  });
+}
+
+async function beginScrollTiming(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const timingWindow = window as ScrollTimingWindow;
+    delete timingWindow.openSplunkScrollStartedAt;
+    const shell = document.querySelector<HTMLElement>(
+      '[aria-label="Scrollable statistics table"]',
+    );
+    if (shell === null) throw new Error("statistics table shell is unavailable for scroll timing");
+    shell.addEventListener("scroll", () => {
+      timingWindow.openSplunkScrollStartedAt ??= performance.now();
+    }, { once: true });
+  });
+}
+
+async function finishScrollTiming(page: Page, stableAt: number): Promise<number> {
+  return page.evaluate((renderingStableAt) => {
+    const timingWindow = window as ScrollTimingWindow;
+    const startedAt = timingWindow.openSplunkScrollStartedAt;
+    delete timingWindow.openSplunkScrollStartedAt;
+    if (
+      startedAt === undefined
+      || !Number.isFinite(startedAt)
+      || !Number.isFinite(renderingStableAt)
+      || renderingStableAt < startedAt
+    ) {
+      throw new Error("statistics bottom-scroll timing is unavailable or invalid");
+    }
+    return renderingStableAt - startedAt;
+  }, stableAt);
+}
+
+function requiredStringCell(row: ResultRow | undefined, cellIndex: number): string {
+  const cell = row?.cells[cellIndex]?.kind;
+  if (cell?.$case !== "stringValue") {
+    throw new Error(`fixed-result row cell ${cellIndex} is not a string`);
+  }
+  return cell.value;
+}
+
+async function requiredBoundingHeight(locator: Locator): Promise<number> {
+  await expect(locator).toHaveCount(1, { timeout });
+  const box = await locator.boundingBox();
+  if (box === null || !Number.isFinite(box.height) || box.height <= 0) {
+    throw new Error("fixed-result row has no positive finite bounding height");
+  }
+  return box.height;
+}
+
+async function readCDPMetrics(session: CDPSession): Promise<Map<string, number>> {
+  const response = await session.send("Performance.getMetrics") as {
+    metrics: Array<{ name: string; value: number }>;
+  };
+  return new Map(response.metrics.map((metric) => [metric.name, metric.value]));
+}
+
+function renderingCDPMetrics(
+  baseline: Map<string, number>,
+  final: Map<string, number>,
+): Record<string, number> {
+  const absolute = (name: string): number => final.get(name) ?? 0;
+  const delta = (name: string): number =>
+    Math.max(0, absolute(name) - (baseline.get(name) ?? 0));
+  return {
+    taskDuration: delta("TaskDuration"),
+    scriptDuration: delta("ScriptDuration"),
+    layoutDuration: delta("LayoutDuration"),
+    recalcStyleDuration: delta("RecalcStyleDuration"),
+    layoutCount: delta("LayoutCount"),
+    recalcStyleCount: delta("RecalcStyleCount"),
+    nodes: absolute("Nodes"),
+    documents: absolute("Documents"),
+    eventListeners: absolute("JSEventListeners"),
+    jsHeapUsedBytes: absolute("JSHeapUsedSize"),
+    jsHeapTotalBytes: absolute("JSHeapTotalSize"),
+  };
+}
+
+function assertFiniteMetricNumbers(value: unknown, metricPath = "metrics"): void {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error(`${metricPath} is not finite`);
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      assertFiniteMetricNumbers(item, `${metricPath}[${index}]`),
+    );
+    return;
+  }
+  for (const [key, item] of Object.entries(value)) {
+    assertFiniteMetricNumbers(item, `${metricPath}.${key}`);
+  }
 }
 
 async function beginStaleDuplicateDOMObservation(

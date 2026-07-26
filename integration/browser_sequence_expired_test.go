@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"sync/atomic"
@@ -556,51 +555,23 @@ func runBrowserRecoverySpec(
 	spec browserRecoveryBrowserSpec,
 ) {
 	t.Helper()
-	browserContext, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-	command := exec.CommandContext(
-		browserContext,
-		filepath.Join(repository, "node_modules", ".bin", "playwright"),
-		"test",
-		"integration/browser_vertical.spec.ts",
-		"--workers=1",
-		"--reporter=line",
-		"--grep="+spec.grepPattern,
-		"--output="+filepath.Join(repository, "test-results", spec.outputDirectory),
-	)
-	configureProcessGroup(command)
-	command.Dir = repository
-	environment := os.Environ()
-	for _, flag := range []string{
-		"OPEN_SPLUNK_E2E_CANCELLATION_TEST",
-		"OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST",
-		"OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST",
-		"OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_FIRST_PROGRESS_TEST",
-		"OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_TERMINAL_TEST",
-	} {
-		environment = environmentWithValue(environment, flag, "0")
-	}
-	for name, value := range map[string]string{
-		"OPEN_SPLUNK_E2E_BASE_URL":               baseURL,
-		"OPEN_SPLUNK_E2E_SPL":                    "index=main | table message",
-		"OPEN_SPLUNK_E2E_EARLIEST":               anchor.Add(-time.Hour).Format(time.RFC3339Nano),
-		"OPEN_SPLUNK_E2E_LATEST":                 anchor.Format(time.RFC3339Nano),
-		"OPEN_SPLUNK_E2E_EXPECTED_TEXT":          spec.expectedText,
-		"OPEN_SPLUNK_E2E_EXPECTED_ROWS":          strconv.Itoa(spec.expectedRows),
-		"OPEN_SPLUNK_E2E_RECOVERY_CONTROL_URL":   controlURL,
-		"OPEN_SPLUNK_E2E_RECOVERY_CONTROL_TOKEN": controlToken,
-		"OPEN_SPLUNK_E2E_RECOVERY_INITIAL_TEXT":  browserSequenceExpiredInitialRow,
-	} {
-		environment = environmentWithValue(environment, name, value)
-	}
-	environment = environmentWithValue(environment, spec.environmentFlag, "1")
-	command.Env = environment
-	logs := &lockedBuffer{maximum: 1 << 20}
-	command.Stdout = logs
-	command.Stderr = logs
-	if err := command.Run(); err != nil {
-		t.Fatalf("verify browser %s recovery: %v\n%s", spec.failureName, err, logs.String())
-	}
+	runBrowserVerticalSpec(t, ctx, repository, browserVerticalSpecConfig{
+		grepPattern:        spec.grepPattern,
+		outputDirectory:    spec.outputDirectory,
+		failureDescription: "verify browser " + spec.failureName + " recovery",
+		environment: map[string]string{
+			"OPEN_SPLUNK_E2E_BASE_URL":               baseURL,
+			"OPEN_SPLUNK_E2E_SPL":                    "index=main | table message",
+			"OPEN_SPLUNK_E2E_EARLIEST":               anchor.Add(-time.Hour).Format(time.RFC3339Nano),
+			"OPEN_SPLUNK_E2E_LATEST":                 anchor.Format(time.RFC3339Nano),
+			"OPEN_SPLUNK_E2E_EXPECTED_TEXT":          spec.expectedText,
+			"OPEN_SPLUNK_E2E_EXPECTED_ROWS":          strconv.Itoa(spec.expectedRows),
+			"OPEN_SPLUNK_E2E_RECOVERY_CONTROL_URL":   controlURL,
+			"OPEN_SPLUNK_E2E_RECOVERY_CONTROL_TOKEN": controlToken,
+			"OPEN_SPLUNK_E2E_RECOVERY_INITIAL_TEXT":  browserSequenceExpiredInitialRow,
+			spec.environmentFlag:                     "1",
+		},
+	})
 }
 
 func waitForAtomicValue(

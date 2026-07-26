@@ -11,6 +11,7 @@ import type {
   DemoScalar,
   TimelinePoint,
 } from "@/lib/demo/search-data";
+import { assertBrowserResultColumnCount } from "@/lib/api/pagination";
 
 export type SearchDataMode = "backend" | "demo";
 
@@ -782,6 +783,7 @@ export function adaptSearchResults(
   timechart: boolean,
   timechartBucketWidthMs?: number,
 ): AdaptedSearchResults {
+  assertBrowserResultColumnCount(schema.columns.length);
   const events = rowsToEvents(schema, rows);
   const transformedStatistics = statisticsFromRows(schema, rows);
   const timeline = timechart

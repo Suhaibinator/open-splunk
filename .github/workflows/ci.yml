@@ -197,7 +197,7 @@ jobs:
   backend-vertical:
     name: Backend vertical
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -226,9 +226,9 @@ jobs:
           OPEN_SPLUNK_BACKEND_INTEGRATION: "1"
         run: >-
           go test ./integration
-          -run '^Test(BackendVertical|Browser(SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
+          -run '^Test(BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
           -count=1
-          -timeout=15m
+          -timeout=25m
           -v
 
       - name: Upload browser failure artifacts
@@ -243,6 +243,15 @@ jobs:
             test-results/browser-sequence-gap
             test-results/browser-sequence-gap-rest-first-progress
             test-results/browser-sequence-gap-rest-terminal
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload browser rendering measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-fixed-result-rendering
+          path: test-results/browser-fixed-result-rendering
           if-no-files-found: ignore
           retention-days: 14
 

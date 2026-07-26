@@ -5,6 +5,44 @@ export class RepeatedPageCursorError extends Error {
   }
 }
 
+export const MAXIMUM_BROWSER_RESULT_COLUMNS = 64;
+
+export function validateBrowserResultColumnCount(columnCount: number): string | null {
+  if (
+    !Number.isSafeInteger(columnCount)
+    || columnCount <= 0
+    || columnCount > MAXIMUM_BROWSER_RESULT_COLUMNS
+  ) {
+    return `Search results returned ${columnCount} columns; the browser supports 1–${MAXIMUM_BROWSER_RESULT_COLUMNS}.`;
+  }
+  return null;
+}
+
+export function assertBrowserResultColumnCount(columnCount: number): void {
+  const validationError = validateBrowserResultColumnCount(columnCount);
+  if (validationError !== null) throw new RangeError(validationError);
+}
+
+export function assertBrowserResultPageBounds({
+  columnCount,
+  pageSize,
+  rowCount,
+}: {
+  columnCount: number;
+  pageSize: number;
+  rowCount: number;
+}): void {
+  if (!Number.isSafeInteger(pageSize) || pageSize <= 0) {
+    throw new RangeError("Search result page size must be a positive safe integer.");
+  }
+  if (!Number.isSafeInteger(rowCount) || rowCount < 0 || rowCount > pageSize) {
+    throw new RangeError(
+      `Search results returned ${rowCount} rows for a requested page size of ${pageSize}.`,
+    );
+  }
+  assertBrowserResultColumnCount(columnCount);
+}
+
 export function recordNextPageToken(
   seenTokens: Set<string>,
   nextPageToken: string | null | undefined,

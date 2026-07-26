@@ -472,6 +472,62 @@ func environmentWithValue(environment []string, name, value string) []string {
 	return append(result, prefix+value)
 }
 
+var browserE2EModeFlags = []string{
+	"OPEN_SPLUNK_E2E_CANCELLATION_TEST",
+	"OPEN_SPLUNK_E2E_RENDERING_TEST",
+	"OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST",
+	"OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST",
+	"OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_FIRST_PROGRESS_TEST",
+	"OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_TERMINAL_TEST",
+}
+
+type browserVerticalSpecConfig struct {
+	grepPattern        string
+	outputDirectory    string
+	failureDescription string
+	environment        map[string]string
+}
+
+func runBrowserVerticalSpec(
+	t *testing.T,
+	ctx context.Context,
+	repository string,
+	config browserVerticalSpecConfig,
+) {
+	t.Helper()
+	browserContext, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	command := exec.CommandContext(
+		browserContext,
+		filepath.Join(repository, "node_modules", ".bin", "playwright"),
+		"test",
+		"integration/browser_vertical.spec.ts",
+		"--workers=1",
+		"--reporter=line",
+		"--grep="+config.grepPattern,
+		"--output="+filepath.Join(repository, "test-results", config.outputDirectory),
+	)
+	configureProcessGroup(command)
+	command.Dir = repository
+	environment := os.Environ()
+	for _, flag := range browserE2EModeFlags {
+		environment = environmentWithValue(environment, flag, "0")
+	}
+	for name, value := range config.environment {
+		environment = environmentWithValue(environment, name, value)
+	}
+	command.Env = environment
+	logs := &lockedBuffer{maximum: 1 << 20}
+	command.Stdout = logs
+	command.Stderr = logs
+	if err := command.Run(); err != nil {
+		t.Fatalf("%s: %v\n%s", config.failureDescription, err, logs.String())
+	}
+	if logs.Truncated() {
+		t.Fatalf("%s logs exceeded 1 MiB", config.failureDescription)
+	}
+}
+
 func configureProcessGroup(command *exec.Cmd) {
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	command.Cancel = func() error {

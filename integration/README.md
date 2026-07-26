@@ -70,3 +70,29 @@ instead of Playwright's pinned download.
 
 The default image is `clickhouse/clickhouse-server:26.3.17.4`. Set
 `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` to exercise another image deliberately.
+
+## Fixed-result browser rendering
+
+`browser_rendering_test.go` isolates browser rendering from ClickHouse and
+query latency. It runs the compiled backend UI and production protobuf HTTP
+handler against a deterministic executor that returns exactly 1,000 statistics
+rows at the browser's 64-column boundary. The test verifies the decoded
+response, exact total and page contract, bounded virtualized rows and cells at
+the first and last rows, fixed table width, ARIA row positions, sorting, table
+density changes, and browser/API safety.
+The browser rejects a result page that exceeds its requested row count or the
+explicit 64-column interactive-table limit before adapting or rendering it.
+
+Run it with the same pinned Chromium installation:
+
+```sh
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 go test ./integration -run '^TestBrowserFixedResultRendering$' -count=1 -v
+```
+
+The test waits for semantic completion, a mutation-free turn, and two animation
+frames before recording rendering measurements. Durations, long tasks, layout
+work, heap use, and DOM counts are observational metrics, not machine-dependent
+latency acceptance thresholds. Exact payload semantics and the maximum number
+of materialized rows remain correctness gates. Metrics and top/bottom
+screenshots are written beneath
+`test-results/browser-fixed-result-rendering/visual`.

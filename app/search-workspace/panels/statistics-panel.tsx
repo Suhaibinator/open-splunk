@@ -1,6 +1,14 @@
 /* oxlint-disable jsx-a11y/prefer-tag-over-role */
 
-import { type Dispatch, type SetStateAction, useState } from "react";
+import {
+  type CSSProperties,
+  type Dispatch,
+  type SetStateAction,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { ValueType } from "@/gen/ts/open_splunk/v1/value";
 import type { DemoScalar, TimelinePoint } from "@/lib/demo/search-data";
@@ -18,6 +26,12 @@ import {
 import { NUMBER_FORMAT } from "../constants";
 import { formatGroupedNumericText } from "../formatters";
 import type { MenuName, StatsDensity } from "../model";
+import {
+  calculateVirtualTableWindow,
+  maximumVirtualTableScrollTop,
+  VIRTUAL_TABLE_VIEWPORT_HEIGHT,
+  type VirtualTableWindow,
+} from "../virtual-table";
 
 type StatsSort = { key: keyof WorkspaceStatistic; direction: "asc" | "desc" };
 type TimechartSort = { key: "time" | "count"; direction: "asc" | "desc" };
@@ -35,6 +49,7 @@ interface StatisticsPanelProps {
   resultTotalExact: boolean;
   resultTotalRows: number | null;
   previewTruncated: boolean;
+  resultIdentity: number;
   sortedGenericStatisticsRows: WorkspaceStatisticsRow[];
   sortedStatistics: WorkspaceStatistic[];
   sortedTimechartRows: TimelinePoint[];
@@ -54,6 +69,22 @@ interface StatisticsPanelProps {
 }
 
 const GENERIC_NUMBER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 });
+const GENERIC_TIMESTAMP_FORMAT = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+});
+const COMPACT_STATISTICS_ROW_HEIGHT = 42;
+const STANDARD_STATISTICS_ROW_HEIGHT = 52;
+const STATISTICS_HEADER_HEIGHT = 37;
+
+interface StatisticsTableShellStyle extends CSSProperties {
+  "--statistics-header-height": string;
+  "--statistics-row-height": string;
+}
 
 function serializedGenericValue(value: WorkspaceStatisticsValue): string {
   return typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
@@ -64,14 +95,7 @@ function formatGenericValue(value: WorkspaceStatisticsValue, column: WorkspaceSt
   if (column.valueType === ValueType.VALUE_TYPE_TIMESTAMP) {
     const date = new Date(serializedGenericValue(value));
     if (!Number.isNaN(date.valueOf())) {
-      return new Intl.DateTimeFormat("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        second: "2-digit",
-      }).format(date);
+      return GENERIC_TIMESTAMP_FORMAT.format(date);
     }
   }
   if (column.numeric) {
@@ -113,6 +137,29 @@ function formatTimechartSeriesCell(cell: TimechartSeriesCell): string {
     : NUMBER_FORMAT.format(cell.displayValue);
 }
 
+function VirtualTableSpacer({
+  columnCount,
+  height,
+}: {
+  columnCount: number;
+  height: number;
+}) {
+  if (height <= 0) return null;
+  return (
+    <tr className="virtual-table-spacer" aria-hidden="true">
+      {/* The hidden cell exists only to preserve native table geometry. */}
+      {/* oxlint-disable-next-line jsx-a11y/control-has-associated-label */}
+      <td colSpan={Math.max(1, columnCount)}>
+        <span style={{ height }}> </span>
+      </td>
+    </tr>
+  );
+}
+
+function visibleRows<Row>(rows: Row[], window: VirtualTableWindow): Row[] {
+  return window.virtualized ? rows.slice(window.startIndex, window.endIndex) : rows;
+}
+
 export function StatisticsPanel({
   elapsed,
   genericStatisticsTable,
@@ -125,6 +172,7 @@ export function StatisticsPanel({
   resultTotalExact,
   resultTotalRows,
   previewTruncated,
+  resultIdentity,
   sortedGenericStatisticsRows,
   sortedStatistics,
   sortedTimechartRows,
@@ -143,9 +191,17 @@ export function StatisticsPanel({
   onTimechartSortChange,
 }: StatisticsPanelProps) {
   const [hasScrolled, setHasScrolled] = useState(false);
+  const [verticalScrollTop, setVerticalScrollTop] = useState(0);
+  const [tableViewportHeight, setTableViewportHeight] = useState(
+    VIRTUAL_TABLE_VIEWPORT_HEIGHT - STATISTICS_HEADER_HEIGHT,
+  );
   const [timechartSeriesSort, setTimechartSeriesSort] = useState<TimechartSeriesSort | null>(null);
-  const explicitTimechartSeries = timechartValueFields(timelinePoints).filter((field) =>
-    timelinePoints.some((point) => Object.hasOwn(point.series ?? {}, field)),
+  const tableShellRef = useRef<HTMLDivElement>(null);
+  const explicitTimechartSeries = useMemo(
+    () => timechartValueFields(timelinePoints).filter((field) =>
+      timelinePoints.some((point) => Object.hasOwn(point.series ?? {}, field)),
+    ),
+    [timelinePoints],
   );
   const hasExplicitTimechartSeries = explicitTimechartSeries.length > 0;
   const timechartSeries = hasExplicitTimechartSeries ? explicitTimechartSeries : ["count"];
@@ -153,7 +209,7 @@ export function StatisticsPanel({
     && explicitTimechartSeries.includes(timechartSeriesSort.key)
     ? timechartSeriesSort
     : null;
-  const displayedTimechartRows = activeTimechartSeriesSort === null
+  const displayedTimechartRows = useMemo(() => activeTimechartSeriesSort === null
     ? timechartSort.key === "time"
       ? sortedTimechartRows
       : timelinePoints.toSorted((left, right) => {
@@ -161,7 +217,10 @@ export function StatisticsPanel({
         const rightValue = timechartSeriesCell(right, "count", false);
         if (leftValue === null) return rightValue === null ? 0 : 1;
         if (rightValue === null) return -1;
-        const comparison = compareWorkspaceNumericValues(leftValue.displayValue, rightValue.displayValue);
+        const comparison = compareWorkspaceNumericValues(
+          leftValue.displayValue,
+          rightValue.displayValue,
+        );
         return timechartSort.direction === "desc" ? -comparison : comparison;
       })
     : timelinePoints.toSorted((left, right) => {
@@ -169,12 +228,47 @@ export function StatisticsPanel({
       const rightValue = timechartSeriesCell(right, activeTimechartSeriesSort.key, true);
       if (leftValue === null) return rightValue === null ? 0 : 1;
       if (rightValue === null) return -1;
-      const comparison = compareWorkspaceNumericValues(leftValue.displayValue, rightValue.displayValue);
+      const comparison = compareWorkspaceNumericValues(
+        leftValue.displayValue,
+        rightValue.displayValue,
+      );
       return activeTimechartSeriesSort.direction === "desc" ? -comparison : comparison;
-    });
+    }), [
+    activeTimechartSeriesSort,
+    sortedTimechartRows,
+    timechartSort,
+    timelinePoints,
+  ]);
   const displayedRowCount = isTimechartResult
     ? timelinePoints.length
     : genericStatisticsTable?.rows.length ?? statisticsRows.length;
+  const displayedColumnCount = isTimechartResult
+    ? timechartSeries.length + 1
+    : genericStatisticsTable?.columns.length ?? 4;
+  const statisticsRowHeight = statsDensity === "compact"
+    ? COMPACT_STATISTICS_ROW_HEIGHT
+    : STANDARD_STATISTICS_ROW_HEIGHT;
+  const virtualWindow = useMemo(() => calculateVirtualTableWindow({
+    columnCount: displayedColumnCount,
+    rowCount: displayedRowCount,
+    rowHeight: statisticsRowHeight,
+    scrollTop: verticalScrollTop,
+    viewportHeight: tableViewportHeight,
+  }), [
+    displayedColumnCount,
+    displayedRowCount,
+    statisticsRowHeight,
+    tableViewportHeight,
+    verticalScrollTop,
+  ]);
+  const visibleTimechartRows = visibleRows(displayedTimechartRows, virtualWindow);
+  const visibleGenericStatisticsRows = visibleRows(sortedGenericStatisticsRows, virtualWindow);
+  const visibleStatistics = visibleRows(sortedStatistics, virtualWindow);
+  const tableShellStyle: StatisticsTableShellStyle = {
+    "--statistics-header-height": `${STATISTICS_HEADER_HEIGHT}px`,
+    "--statistics-row-height": `${statisticsRowHeight}px`,
+    ...(virtualWindow.virtualized ? { maxHeight: VIRTUAL_TABLE_VIEWPORT_HEIGHT } : {}),
+  };
   const firstDisplayedRow = displayedRowCount === 0 ? 0 : pageStart;
   const lastDisplayedRow = firstDisplayedRow === null || displayedRowCount === 0
     ? null
@@ -191,6 +285,56 @@ export function StatisticsPanel({
     : firstDisplayedRow === null || lastDisplayedRow === null
       ? `Server page ${NUMBER_FORMAT.format(pageNumber)} · ${NUMBER_FORMAT.format(displayedRowCount)} rows on this page`
       : `Showing ${NUMBER_FORMAT.format(firstDisplayedRow)}–${NUMBER_FORMAT.format(lastDisplayedRow)}`;
+
+  useEffect(() => {
+    const shell = tableShellRef.current;
+    if (shell === null || !virtualWindow.virtualized) return;
+    const updateViewportHeight = (): void => {
+      setTableViewportHeight(Math.max(1, shell.clientHeight - STATISTICS_HEADER_HEIGHT));
+    };
+    updateViewportHeight();
+    const observer = new ResizeObserver(updateViewportHeight);
+    observer.observe(shell);
+    return () => observer.disconnect();
+  }, [virtualWindow.virtualized]);
+
+  useEffect(() => {
+    const shell = tableShellRef.current;
+    if (shell !== null) shell.scrollTop = 0;
+    setVerticalScrollTop(0);
+  }, [
+    genericStatsSort,
+    pageNumber,
+    resultIdentity,
+    statsDensity,
+    statsSort,
+    timechartSeriesSort,
+    timechartSort,
+  ]);
+
+  useEffect(() => {
+    const maximumScrollTop = maximumVirtualTableScrollTop({
+      columnCount: displayedColumnCount,
+      rowCount: displayedRowCount,
+      rowHeight: statisticsRowHeight,
+      viewportHeight: tableViewportHeight,
+    });
+    setVerticalScrollTop((currentScrollTop) => {
+      const nextScrollTop = Math.min(currentScrollTop, maximumScrollTop);
+      const shell = tableShellRef.current;
+      if (shell !== null && nextScrollTop !== currentScrollTop) {
+        shell.scrollTop = nextScrollTop === 0
+          ? 0
+          : nextScrollTop + STATISTICS_HEADER_HEIGHT;
+      }
+      return nextScrollTop;
+    });
+  }, [
+    displayedColumnCount,
+    displayedRowCount,
+    statisticsRowHeight,
+    tableViewportHeight,
+  ]);
 
   return (
     <section id="panel-statistics" role="tabpanel" aria-labelledby="tab-statistics" className="statistics-panel">
@@ -219,12 +363,54 @@ export function StatisticsPanel({
         </div>
       </header>
       <div className={`statistics-table-frame${hasScrolled ? " has-scrolled" : ""}`}>
-        <div className="statistics-table-shell" role="region" aria-label="Scrollable statistics table" onScroll={(event) => { if (event.currentTarget.scrollLeft > 12) setHasScrolled(true); }}>
+        <div
+          className={`statistics-table-shell${virtualWindow.virtualized ? " statistics-table-shell--virtualized" : ""}`}
+          role="region"
+          aria-label="Scrollable statistics table"
+          ref={tableShellRef}
+          // A focusable named region lets keyboard users scroll a virtualized table.
+          // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+          tabIndex={virtualWindow.virtualized ? 0 : undefined}
+          data-virtualized={virtualWindow.virtualized ? "true" : "false"}
+          data-density={statsDensity}
+          style={tableShellStyle}
+          onScroll={(event) => {
+            if (event.currentTarget.scrollLeft > 12) setHasScrolled(true);
+            const nextScrollTop = Math.max(
+              0,
+              event.currentTarget.scrollTop - STATISTICS_HEADER_HEIGHT,
+            );
+            setVerticalScrollTop((currentScrollTop) => {
+              const currentWindow = calculateVirtualTableWindow({
+                columnCount: displayedColumnCount,
+                rowCount: displayedRowCount,
+                rowHeight: statisticsRowHeight,
+                scrollTop: currentScrollTop,
+                viewportHeight: tableViewportHeight,
+              });
+              const nextWindow = calculateVirtualTableWindow({
+                columnCount: displayedColumnCount,
+                rowCount: displayedRowCount,
+                rowHeight: statisticsRowHeight,
+                scrollTop: nextScrollTop,
+                viewportHeight: tableViewportHeight,
+              });
+              return currentWindow.startIndex === nextWindow.startIndex
+                && currentWindow.endIndex === nextWindow.endIndex
+                ? currentScrollTop
+                : nextScrollTop;
+            });
+          }}
+        >
           {isTimechartResult ? (
             <table
-              className={`statistics-table timechart-table density-${statsDensity}`}
-              style={{ minWidth: `${Math.max(520, 260 + timechartSeries.length * 150)}px`, tableLayout: "auto" }}
+              className={`statistics-table statistics-table--fixed timechart-table density-${statsDensity}`}
+              style={{
+                minWidth: `${Math.max(520, 260 + timechartSeries.length * 150)}px`,
+              }}
               aria-label={isPreview ? "Live preview timechart statistics" : "Timechart statistics"}
+              aria-rowcount={virtualWindow.virtualized ? displayedRowCount + 1 : undefined}
+              data-total-rows={displayedRowCount}
             >
               <colgroup>
                 <col style={{ minWidth: 220, width: `${Math.max(35, 70 - timechartSeries.length * 5)}%` }} />
@@ -283,8 +469,17 @@ export function StatisticsPanel({
                 </tr>
               </thead>
               <tbody>
-                {displayedTimechartRows.map((row) => (
-                  <tr key={row.id}>
+                <VirtualTableSpacer
+                  columnCount={timechartSeries.length + 1}
+                  height={virtualWindow.paddingTop}
+                />
+                {visibleTimechartRows.map((row, visibleIndex) => (
+                  <tr
+                    key={row.id}
+                    aria-rowindex={virtualWindow.virtualized
+                      ? virtualWindow.startIndex + visibleIndex + 2
+                      : undefined}
+                  >
                     <td><time dateTime={row.earliest}>{row.label}</time></td>
                     {timechartSeries.map((seriesName) => {
                       const cell = timechartSeriesCell(row, seriesName, hasExplicitTimechartSeries);
@@ -310,13 +505,21 @@ export function StatisticsPanel({
                     })}
                   </tr>
                 ))}
+                <VirtualTableSpacer
+                  columnCount={timechartSeries.length + 1}
+                  height={virtualWindow.paddingBottom}
+                />
               </tbody>
             </table>
           ) : genericStatisticsTable !== null ? (
             <table
-              className={`statistics-table density-${statsDensity}`}
-              style={{ minWidth: `${Math.max(640, genericStatisticsTable.columns.length * 160)}px`, tableLayout: "auto" }}
+              className={`statistics-table statistics-table--fixed density-${statsDensity}`}
+              style={{
+                minWidth: `${Math.max(640, genericStatisticsTable.columns.length * 160)}px`,
+              }}
               aria-label={isPreview ? "Live preview search statistics" : "Backend search statistics"}
+              aria-rowcount={virtualWindow.virtualized ? displayedRowCount + 1 : undefined}
+              data-total-rows={displayedRowCount}
             >
               <thead>
                 <tr>
@@ -343,38 +546,65 @@ export function StatisticsPanel({
               <tbody>
                 {sortedGenericStatisticsRows.length === 0 ? (
                   <tr><td colSpan={Math.max(1, genericStatisticsTable.columns.length)} style={{ textAlign: "center" }}>No statistics rows were returned.</td></tr>
-                ) : sortedGenericStatisticsRows.map((row) => (
-                  <tr key={row.id}>
-                    {genericStatisticsTable.columns.map((column) => {
-                      const value = row.values[column.key] ?? null;
-                      const formatted = formatGenericValue(value, column);
-                      const pivotValue = row.pivotValues[column.key];
-                      return (
-                        <td
-                          className={column.numeric ? "numeric-cell" : undefined}
-                          key={column.key}
-                          title={value === null ? "Null" : serializedGenericValue(value)}
-                          style={{ maxWidth: 420, overflowWrap: "anywhere", whiteSpace: column.numeric ? "nowrap" : undefined }}
-                        >
-                          {column.pivotable && pivotValue !== undefined ? (
-                            <button
-                              className="statistics-value-link"
-                              type="button"
-                              title={`Add ${column.fieldName}=${serializedGenericValue(value)} to the draft search`}
-                              onClick={() => onApplyPivot(column.fieldName, pivotValue)}
+                ) : (
+                  <>
+                    <VirtualTableSpacer
+                      columnCount={genericStatisticsTable.columns.length}
+                      height={virtualWindow.paddingTop}
+                    />
+                    {visibleGenericStatisticsRows.map((row, visibleIndex) => (
+                      <tr
+                        key={row.id}
+                        aria-rowindex={virtualWindow.virtualized
+                          ? virtualWindow.startIndex + visibleIndex + 2
+                          : undefined}
+                      >
+                        {genericStatisticsTable.columns.map((column) => {
+                          const value = row.values[column.key] ?? null;
+                          const formatted = formatGenericValue(value, column);
+                          const pivotValue = row.pivotValues[column.key];
+                          return (
+                            <td
+                              className={column.numeric ? "numeric-cell" : undefined}
+                              key={column.key}
+                              title={value === null ? "Null" : serializedGenericValue(value)}
+                              style={{
+                                maxWidth: 420,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
                             >
-                              {formatted}
-                            </button>
-                          ) : formatted}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                              {column.pivotable && pivotValue !== undefined ? (
+                                <button
+                                  className="statistics-value-link"
+                                  type="button"
+                                  title={`Add ${column.fieldName}=${serializedGenericValue(value)} to the draft search`}
+                                  onClick={() => onApplyPivot(column.fieldName, pivotValue)}
+                                >
+                                  {formatted}
+                                </button>
+                              ) : formatted}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                    <VirtualTableSpacer
+                      columnCount={genericStatisticsTable.columns.length}
+                      height={virtualWindow.paddingBottom}
+                    />
+                  </>
+                )}
               </tbody>
             </table>
           ) : (
-            <table className={`statistics-table density-${statsDensity}`} aria-label={isPreview ? "Live preview search statistics" : "Search statistics"}>
+            <table
+              className={`statistics-table density-${statsDensity}`}
+              aria-label={isPreview ? "Live preview search statistics" : "Search statistics"}
+              aria-rowcount={virtualWindow.virtualized ? displayedRowCount + 1 : undefined}
+              data-total-rows={displayedRowCount}
+            >
               <colgroup><col className="statistics-col-level" /><col className="statistics-col-count" /><col className="statistics-col-percent" /><col className="statistics-col-average" /></colgroup>
               <thead>
                 <tr>
@@ -392,14 +622,21 @@ export function StatisticsPanel({
                 </tr>
               </thead>
               <tbody>
-                {sortedStatistics.map((row) => (
-                  <tr key={row.id ?? row.level}>
+                <VirtualTableSpacer columnCount={4} height={virtualWindow.paddingTop} />
+                {visibleStatistics.map((row, visibleIndex) => (
+                  <tr
+                    key={row.id ?? row.level}
+                    aria-rowindex={virtualWindow.virtualized
+                      ? virtualWindow.startIndex + visibleIndex + 2
+                      : undefined}
+                  >
                     <td>{row.pivotable === false ? row.level : <button className="statistics-value-link" type="button" title={`Add ${statisticsDimension}=${row.level} to the draft search`} onClick={() => onApplyPivot(statisticsDimension, row.pivotValue !== undefined ? row.pivotValue : row.level)}><span className={`severity-dot severity-${row.level.toLowerCase()}`} />{row.level}</button>}</td>
                     <td className="numeric-cell">{NUMBER_FORMAT.format(row.count)}</td>
                     <td className="numeric-cell">{row.percent}</td>
                     <td className="numeric-cell">{Number.isFinite(row.avgDuration) ? <>{row.avgDuration.toFixed(1)} <span className="numeric-unit">ms</span></> : "—"}</td>
                   </tr>
                 ))}
+                <VirtualTableSpacer columnCount={4} height={virtualWindow.paddingBottom} />
               </tbody>
             </table>
           )}

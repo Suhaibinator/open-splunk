@@ -2756,6 +2756,33 @@ pre {
   position: relative;
 }
 
+.statistics-table-shell--virtualized {
+  overscroll-behavior: contain;
+  overflow: auto;
+}
+
+.statistics-table-shell--virtualized:focus-visible {
+  outline: 2px solid #2e7191;
+  outline-offset: 2px;
+}
+
+.statistics-table-shell--virtualized .statistics-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.statistics-table--fixed {
+  table-layout: fixed;
+}
+
+.statistics-table--fixed th,
+.statistics-table--fixed td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .statistics-scroll-hint {
   display: none;
 }
@@ -2817,7 +2844,7 @@ pre {
   color: #4a5962;
   font-size: 11px;
   font-weight: 700;
-  height: 37px;
+  height: var(--statistics-header-height, 37px);
   text-align: left;
 }
 
@@ -2865,11 +2892,11 @@ pre {
   color: #27353d;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  height: 42px;
+  height: var(--statistics-row-height, 42px);
 }
 
 .statistics-table.density-standard td {
-  height: 52px;
+  height: var(--statistics-row-height, 52px);
 }
 
 .statistics-table tbody tr:last-child td {
@@ -2878,6 +2905,25 @@ pre {
 
 .statistics-table tbody tr:hover td {
   background: #f7fafb;
+}
+
+.statistics-table .virtual-table-spacer,
+.statistics-table .virtual-table-spacer:hover {
+  background: transparent;
+}
+
+.statistics-table .virtual-table-spacer > td,
+.statistics-table .virtual-table-spacer:hover > td {
+  background: transparent;
+  border: 0;
+  height: 0;
+  padding: 0;
+}
+
+.statistics-table .virtual-table-spacer > td > span {
+  display: block;
+  pointer-events: none;
+  width: 1px;
 }
 
 .statistics-value-link {
@@ -2889,7 +2935,11 @@ pre {
   font-size: 12px;
   gap: 9px;
   min-height: 30px;
+  max-width: 100%;
+  overflow: hidden;
   padding: 0 3px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .statistics-value-link:hover {

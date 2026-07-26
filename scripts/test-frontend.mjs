@@ -10,6 +10,7 @@ const testFiles = [
   path.join("app", "search-workspace", "live-preview.test.ts"),
   path.join("app", "search-workspace", "progress-revision.test.ts"),
   path.join("app", "search-workspace", "categorical-interaction.test.ts"),
+  path.join("app", "search-workspace", "virtual-table.test.ts"),
   path.join("lib", "api", "pagination.test.ts"),
   path.join("lib", "api", "search-websocket.test.ts"),
   path.join("lib", "search", "backend-data.test.ts"),

@@ -14,6 +14,7 @@ import {
   ValueType,
   type TypedValue,
 } from "../../gen/ts/open_splunk/v1/value";
+import { validateBrowserResultColumnCount } from "../../lib/api/pagination";
 
 export interface LivePreviewSnapshot {
   schemaId: string;
@@ -224,7 +225,8 @@ export function validateLivePreviewSchema(schema: ResultSchema): string | null {
   if (!VALID_RESULT_KINDS.has(schema.resultKind)) {
     return "The preview schema has an unsupported result kind.";
   }
-  if (schema.columns.length === 0) return "The preview schema does not contain any columns.";
+  const columnCountError = validateBrowserResultColumnCount(schema.columns.length);
+  if (columnCountError !== null) return columnCountError;
 
   const fieldNames = new Set<string>();
   for (const column of schema.columns) {

@@ -53,9 +53,13 @@ export {
 } from "./optional-feature";
 
 export {
+  assertBrowserResultColumnCount,
+  assertBrowserResultPageBounds,
+  MAXIMUM_BROWSER_RESULT_COLUMNS,
   pruneCursorChainFrom,
   recordNextPageToken,
   RepeatedPageCursorError,
+  validateBrowserResultColumnCount,
 } from "./pagination";
 export type {
   OptionalFeatureResult,

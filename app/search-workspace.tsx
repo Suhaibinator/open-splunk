@@ -61,6 +61,7 @@ import {
 } from "@/gen/ts/open_splunk/v1/search_ws";
 import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
 import {
+  assertBrowserResultPageBounds,
   SearchWebSocketClient,
   createOpenSplunkApiClient,
   getSystemBootstrap,
@@ -2548,6 +2549,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (schema.schemaId.trim().length === 0 || schema.revision <= 0n) {
       throw new Error("The search result page returned an invalid schema identity or revision.");
     }
+    assertBrowserResultPageBounds({
+      columnCount: schema.columns.length,
+      pageSize,
+      rowCount: resultPage.rows.length,
+    });
     const expectedSchema = backendAuthoritativeResultSchemaRef.current ?? job.resultSchema;
     if (expectedSchema !== undefined && expectedSchema !== null) {
       if (
@@ -6321,6 +6327,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             pageNumber={backendEnabled ? eventPage : 1}
             pageStart={backendStatisticsPageStart}
             previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
+            resultIdentity={generationRef.current}
             resultTotalExact={backendDisplayingPreview
               ? backendPreviewDisplay?.snapshot.truncated !== true
               : !backendEnabled || backendResultTotalExact}

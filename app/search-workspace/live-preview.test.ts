@@ -18,6 +18,7 @@ import {
   ValueType,
   type TypedValue,
 } from "../../gen/ts/open_splunk/v1/value";
+import { MAXIMUM_BROWSER_RESULT_COLUMNS } from "../../lib/api/pagination";
 import {
   applyLiveResultPreview,
   validateLivePreviewSchema,
@@ -120,6 +121,12 @@ test("validates schema identity, revision, columns, and supported types", () => 
   assert.match(validateLivePreviewSchema(schema({
     columns: [schema().columns[0], schema().columns[0]],
   })) ?? "", /repeats column/);
+  assert.match(validateLivePreviewSchema(schema({
+    columns: Array.from(
+      { length: MAXIMUM_BROWSER_RESULT_COLUMNS + 1 },
+      (_, index) => column({ fieldName: `field-${index}` }),
+    ),
+  })) ?? "", /65 columns.*supports 1–64/);
 });
 
 test("schema and object field names preserve whitespace but reject empty names", () => {
