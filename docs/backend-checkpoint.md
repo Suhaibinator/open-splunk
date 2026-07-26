@@ -7,7 +7,68 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: clock-driven expiration and tombstone cleanup
+## Latest checkpoint: logical event retention before physical TTL cleanup
+
+Date: 2026-07-26
+
+Implementation/proof commit:
+`458c8b4` (`enforce logical event retention`)
+
+Lifecycle foundation:
+`b2b2839` (`prove clock-driven expiration cleanup`)
+
+This slice makes per-index retention an immediate query-visibility boundary
+instead of relying on asynchronous ClickHouse TTL merges:
+
+1. The common compiled ClickHouse scan now requires
+   `expires_at > IndexTimeCutoff` alongside tenant, index, event-time,
+   index-time, and visibility predicates. The cutoff is the immutable search
+   snapshot, not ClickHouse `now()`, so preview, final results, retries,
+   timelines, field APIs, and export re-execution see one retention boundary.
+2. Compiler tests pin the SQL and argument order. Exact millisecond equality
+   is expired, one millisecond after the cutoff is visible, and a
+   sub-millisecond search cutoff is canonicalized once to DateTime64(3)
+   precision and bound identically to the index-time and expiry predicates.
+3. One pinned ClickHouse fixture inserts three still-physical rows around the
+   artificial cutoff. Raw queries prove all three remain stored and that two
+   are logically expired before and after the assertions. Only the
+   just-after row can appear through direct execution, a real manager's
+   preview/results, export re-execution, timeline, field catalog, or field
+   summary; expired-only fields cannot leak through discovery.
+4. The runtime default and resolved Store retention must be positive whole
+   milliseconds; persisted control-plane/admin policies may also use zero as
+   the deployment-default sentinel. This matches the native DateTime64(3)
+   storage boundary and prevents positive retention from being silently
+   shortened by driver truncation.
+5. Event expiration is bounded to the timestamp interval that the pinned
+   native Go driver can encode safely. A real-driver integration test writes
+   and reads the upper supported boundary, while unit tests reject timestamps
+   just outside either bound.
+6. Reservation metadata is version 4 for new batches and records the strict
+   millisecond contract. Version 3 remains decodable and preserves its legacy
+   pre-driver nanosecond calculation so an ambiguous old batch can be retried,
+   deduplicated, and advance contiguous visibility rather than wedge
+   ingestion. The compatibility path is proven through the real native
+   connection and storage.
+7. SQLite migration `0009` canonicalizes preexisting retention values:
+   positive sub-millisecond values become 1 ms, larger unaligned values are
+   floored to the old native-storage result, and zero retains its default
+   sentinel meaning. Durable insert and update triggers reject future
+   unaligned values.
+8. Controlled red tests first exposed the missing scan predicate, accepted
+   sub-millisecond policies, unsafe driver range, incompatible legacy replay,
+   and absent migration. Final correctness, architecture/performance, and
+   code-quality reviewers found no remaining issue after fixes; the final
+   reviewer separately verified real-driver v3 replay, both SQLite triggers,
+   and every named event-row position.
+
+The exact validation record is under **Latest validation evidence**. The next
+release-path priority is a sanitized real GradeThis collector/config
+migration, followed by resource-release coverage and measured load work as
+ordered under **Remaining work, in priority order**. The overall backend goal
+remains active.
+
+## Previous checkpoint: clock-driven expiration and tombstone cleanup
 
 Date: 2026-07-26
 
@@ -66,13 +127,9 @@ This slice closes the remaining first-release lifecycle proof:
    and the tombstone lost-wakeup race. Final frozen-diff correctness,
    architecture, and efficiency rereviews reported no findings.
 
-The exact validation record is under **Latest validation evidence**. The
-first-release lifecycle matrix is complete. The next correctness priority is
-to make per-index event retention logically authoritative in compiled
-ClickHouse scans even before background TTL merges physically remove rows.
-That task and the remaining product/performance work are ordered under
-**Remaining work, in priority order**. The overall backend goal remains
-active.
+The exact validation record is under **Latest validation evidence**. At that
+checkpoint, logically authoritative per-index event retention was next; it is
+now complete at `458c8b4`.
 
 ## Previous checkpoint: recovered-socket stale-duplicate fencing
 
@@ -856,6 +913,51 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Logical event retention before physical TTL cleanup
+
+The exact implementation at `458c8b4` passed:
+
+```sh
+go test ./... -count=1
+go vet ./...
+go build ./...
+go test -race \
+  ./internal/clickhouse ./internal/queryexec ./internal/export \
+  ./internal/searchjobs ./internal/control ./internal/server \
+  ./cmd/open-splunk-server -count=1
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m -v
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$' \
+  -count=1 -timeout=6m -v
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+go test ./integration \
+  -run '^Test(BackendVertical|Browser(SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=15m -v
+git diff --check
+```
+
+The final pinned Store suite completed in 35.32 seconds and included the real
+native-driver upper timestamp round trip plus an ambiguous version-3
+reservation retry through storage and visibility completion. The pinned
+executor/manager suite completed in 11.323 seconds. The exact six-case
+Docker/ClickHouse plus browser release gate completed in 47.729 seconds. A
+read-only Docker check showed no Open Splunk test container afterward.
+
+The retention fixture is deliberately non-vacuous: all three rows remain
+physically present, two have expired relative to the immutable artificial
+cutoff, and only the just-after-boundary row is visible through every
+read path. Controlled red/green evidence covered the common predicate, native
+timestamp range, policy precision, metadata compatibility, and migration.
+The final frozen staged diff had SHA-256
+`579dfcce5a4f8c9c179fd8bc7e2bd1936d45af1eccf1605309ab3ef3d465f5b9`;
+independent correctness, architecture/performance, and quality reviews
+reported no remaining finding.
+
 ### Clock-driven expiration and tombstone cleanup
 
 The proof at `b2b2839` passed:
@@ -1417,6 +1519,8 @@ The backend now includes:
 
 - durable collector queue/checkpoint and ingestion acknowledgement coupling;
 - scoped ingestion tokens, canonical typed events, and ClickHouse storage;
+- logically authoritative per-index event retention at one immutable search
+  cutoff, independent of asynchronous physical TTL cleanup;
 - bounded search jobs with cancellation, history, progress, typed paging,
   result leases, timelines, field catalog/summary, and CSV/JSONL export;
 - binary protobuf WebSocket preview/progress with job-state revisions, replay,
@@ -1436,6 +1540,18 @@ The backend now includes:
   publication; and
 - materialized-CTE single-scan lowering for runtime-wide and
   analyzer-sensitive paths.
+
+Event retention is evaluated against each search job's immutable
+`IndexTimeCutoff`. An event with `expires_at` equal to that cutoff is not
+visible; an event one stored millisecond later is visible. Physical
+ClickHouse TTL cleanup remains asynchronous best-effort physical reclamation,
+and direct ClickHouse reads outside compiled Open Splunk query paths may still
+expose expired physical rows. New persisted policies are nonnegative whole
+milliseconds, with zero meaning the deployment default; resolved retention is
+positive.
+Legacy version-3 reservation metadata may retain historical sub-millisecond
+intent solely to finish or deduplicate an already durable batch; version 4
+and all new control-plane writes use the strict contract.
 
 ## GradeThis v0.1 corpus completion
 
@@ -1541,10 +1657,10 @@ independent stacks.
      -count=1 -timeout=15m -v
    ```
 
-5. Start with logical `expires_at > IndexTimeCutoff` filtering in the common
-   ClickHouse scan, unless the user explicitly changes priority. Clock-driven
-   job/result/export expiration is complete at `b2b2839`; stale-duplicate
-   injection is complete at `b80bf0a`. Add the pinned ClickHouse red test
+5. Start with the sanitized real GradeThis collector/config migration unless
+   the user explicitly changes priority. Logical event retention is complete
+   at `458c8b4`, clock-driven job/result/export expiration at `b2b2839`, and
+   stale-duplicate injection at `b80bf0a`. Add a red unit or integration test
    before implementation, run read-only adversarial reviews, fix concrete
    findings, then commit and push `main`.
 
@@ -1579,39 +1695,25 @@ boundaries, preview and artifact invalidation, pinned leases, tombstone
 retirement, socket closure, timer release, and polling quiescence are proven
 through real managers and the production HTTP/WebSocket handler.
 
-Before adding another ad hoc SPL feature, close the remaining event-retention
-correctness gap:
+Logical event retention is complete at `458c8b4`. The common scan enforces
+`expires_at > IndexTimeCutoff`, and the pinned non-vacuous integration fixture
+proves exact-boundary exclusion across direct search, real-manager
+preview/results, export re-execution, timeline, field discovery, and field
+summary while the rows are still physically stored. Whole-millisecond policy,
+native-driver timestamp range, version-3 reservation replay, version-4
+metadata, and legacy SQLite migration boundaries are also pinned. ClickHouse
+TTL remains merge-driven physical reclamation rather than the visibility
+contract.
 
-1. Add a pinned ClickHouse integration test which inserts an event whose
-   `expires_at` is at or before the immutable search `IndexTimeCutoff`. Keep
-   that expiry in the ClickHouse server's future while choosing a still-later
-   artificial search cutoff, and use a raw ClickHouse query to prove the row
-   physically exists immediately before the compiled-scan assertions. Then
-   prove it cannot appear in search, preview, export re-execution, timeline,
-   field discovery, or field-summary paths.
-2. Make the common compiled scan predicate require
-   `expires_at > IndexTimeCutoff`, alongside the existing tenant, index,
-   event-time, index-time, and visibility cutoffs. Use the immutable job cutoff
-   rather than ClickHouse `now()` so retries, previews, results, and exports
-   retain one snapshot. Pin exact-millisecond equality and just-after-boundary
-   behavior.
-3. Rerun every pinned ClickHouse compiler/executor suite and the exact
-   collector-to-browser gate. Confirm the predicate remains visible in
-   generated SQL/arguments and cannot be removed by later SPL stages.
+Continue the release proof in this order:
 
-ClickHouse table TTL deletion is merge-driven physical reclamation; it is not
-an immediate authorization/visibility boundary. Until the explicit predicate
-above is implemented, an expired physical row may remain searchable between
-its retention deadline and a background merge.
-
-After that retention fix:
-
-- Close any remaining preview-to-final resource-release coverage that is not
-  naturally exercised by the cancellation, recovery, and expiration fixtures.
 - Exercise a sanitized real GradeThis log/config migration: collector to the
   `gradethis` index with no OpenTelemetry component in the log path, then run
   trace-ID, severity, request-status, path, duration, and top-message
-  investigations.
+  investigations. Derive committed fixtures from a manifest or generator;
+  never copy the ignored local `app.log` or any secret/user/network/path data.
+- Close any remaining preview-to-final resource-release coverage that is not
+  naturally exercised by the cancellation, recovery, and expiration fixtures.
 - Record a load/performance run at sustained 1,000 events/second, including
   collector offline recovery, slow WebSocket consumers, concurrent searches,
   high-cardinality exact aggregates, ClickHouse part count, scan budgets, and
@@ -1745,9 +1847,9 @@ Do not guess those decisions if they materially affect the implementation.
 
 1. Confirm `main` is clean and exactly matches `origin/main`.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `b2b2839`, `b80bf0a`, `cdb60df`, `787a7f9`, and
-   `522b0ac`; the preceding progress/recovery foundations are `b5502a3`,
-   `f72f184`, `ed28182`, and `d1286a4`.
+   commits, especially `458c8b4`, `b2b2839`, `b80bf0a`, `cdb60df`,
+   `787a7f9`, and `522b0ac`; the preceding progress/recovery foundations are
+   `b5502a3`, `f72f184`, `ed28182`, and `d1286a4`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
 4. Run the ordinary Go/frontend gates above and the focused exact corpus:
 
@@ -1760,17 +1862,17 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. Unless the user changes priority, begin with the pinned ClickHouse
-   logical-retention test and common `expires_at > IndexTimeCutoff` scan
-   predicate described above. Clock-driven job/result/export expiration,
-   recovered-socket stale-duplicate fencing, authoritative browser
-   cancellation, versioned REST-first/replay-later progress, recovery-cycle
-   coalescing, REST-only and accepted-WebSocket terminal discovery after a
-   sequence gap, explicit browser sequence-gap recovery, browser
-   `SEQUENCE_EXPIRED`, transient recovery-GET failure, retained replay,
-   real-manager expiration/cancellation, the uninterrupted collector-to-browser
-   path, exact GradeThis corpus, collector/server process-restart proof, and
-   the protocol unit contract are already complete.
+5. Unless the user changes priority, begin with the sanitized real GradeThis
+   collector/config migration described above. Logical event retention,
+   clock-driven job/result/export expiration, recovered-socket stale-duplicate
+   fencing, authoritative browser cancellation, versioned
+   REST-first/replay-later progress, recovery-cycle coalescing, REST-only and
+   accepted-WebSocket terminal discovery after a sequence gap, explicit
+   browser sequence-gap recovery, browser `SEQUENCE_EXPIRED`, transient
+   recovery-GET failure, retained replay, real-manager
+   expiration/cancellation, the uninterrupted collector-to-browser path,
+   exact GradeThis corpus, collector/server process-restart proof, and the
+   protocol unit contract are already complete.
 6. If extending aggregates instead, start with an explicit bounded contract
    for `list(field)`; do not reuse unordered `values`.
 7. Preserve scalar/Dynamic path separation, numeric grammar sharing,
