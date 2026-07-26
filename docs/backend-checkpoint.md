@@ -7,7 +7,79 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: sustained-load outage and restart correctness
+## Latest checkpoint: concurrent SPL searches during live recovery
+
+Date: 2026-07-26
+
+Implementation/proof commit: `9898b41`
+
+This slice extends the real-process sustained-load proof with deterministic
+public SPL searches while the collector is actively recovering:
+
+1. Each concurrent cohort contains eight ready-gated goroutines. All workers
+   reach the gate, signal readiness, and wait on one closed channel before
+   constructing and admitting their protobuf HTTP searches. Admission errors
+   are returned through a fully buffered channel and drained by the parent;
+   worker goroutines never call `testing.T` methods.
+2. The harness runs rolling cohorts rather than one isolated burst. Cheap
+   source and physical-row samples gate up to three waves, and the proof
+   requires at least two. Source records and publicly visible results must
+   both advance strictly while the generator and collector remain alive.
+   Every result in a later cohort must expose at least the maximum visible
+   prefix from the preceding cohort, preventing a single high result from
+   hiding regressions in its peers.
+3. Each result proves an exact contiguous source prefix through public SPL:
+   `count`, distinct event/request/user/timestamp counts, and minimum/maximum
+   timestamps. The event, request, and timestamp cardinalities must agree;
+   the first timestamp is the fixture start and the last is exactly
+   `start + (events - 1)ms`. Schema, nullability, public job metadata,
+   completion state, truncation state, scan counters, and unique job IDs are
+   pinned as well.
+4. Raw ClickHouse row counts are deliberately only a later observational
+   upper bound. The collector calls `prepared.Send()` before its SQLite
+   visibility transaction commits, so physical storage cannot safely be used
+   as a lower-bound proxy for the public searchable prefix.
+5. A liveness timer is derived from the remaining paced source window with
+   one-second/flush headroom. It bounds only the cheap progress-poll phase,
+   is created after a fresh sample, and is canceled before a search cohort.
+   Search requests retain their separate 60-second deadline, and cohort count
+   is independently capped at three.
+6. Timing remains observational. The harness records server-internal
+   `[CreatedAt, FinishedAt)` lifecycle duration, client monotonic whole-window
+   wall time, scan rows/bytes, queue wait, and half-open
+   `[StartedAt, FinishedAt)` maximum active overlap. It imposes no latency or
+   overlap threshold and does not compare concurrent results with a final
+   search over a different data set.
+7. The protobuf HTTP harness now has a shared error-returning request helper;
+   the existing fatal test wrapper delegates to it. Pure tests pin rejection
+   of gapped timestamp prefixes, every-member cohort regression, half-open
+   overlap arithmetic, and the sustained-load plan's derived liveness window.
+8. Controlled reds first captured the missing validator, then showed that a
+   plausible count/unique-ID result with a gapped timestamp range was wrongly
+   accepted. Review iterations removed unsafe physical-row lower bounds,
+   mixed-clock comparisons, weak cohort advancement, hidden latency
+   thresholds, retry amplification, misleading overlap claims, and a timer
+   that could outlive polling.
+9. The exact final Docker run completed in 46.14 seconds. Its two cohorts
+   admitted 16 public jobs while source records advanced from 11,200 to
+   11,400, physical rows from 6,500 to 7,700, and exact searchable prefixes
+   from 6,500 to 7,100. Client wall time was 208.172 ms, lifecycle span
+   202.901 ms, and observed maximum active overlap four. The searches scanned
+   108,800 rows and 61,881,298 bytes; lifecycle
+   min/median/p95/max was 20.653/48.652/103.556/103.556 ms, maximum queue wait
+   was 84.823 ms, and all final 30,000-event outage/restart assertions
+   remained green.
+10. Three independent final reviewers recomputed staged patch SHA-256
+    `71d19acf2990b12db60e53cc50ecb0dc6c2abec063ceb5cdf69c7fb8845bc4fb`
+    and reported no remaining correctness, determinism, concurrency,
+    efficiency, performance, metrics, or code-quality finding.
+
+The exact validation record is under **Latest validation evidence**. The next
+load slice is a deterministic bounded-queue slow WebSocket consumer, followed
+by separate browser rendering measurements for a fixed 1,000-result payload.
+The overall backend goal remains active.
+
+## Previous checkpoint: sustained-load outage and restart correctness
 
 Date: 2026-07-26
 
@@ -88,10 +160,10 @@ the collector restart defect that proof exposed:
 The exact validation record is under **Latest validation evidence**. The
 delivery contract remains at-least-once: identical durable batch retries are
 server-deduplicated, while unavoidable crash-boundary source rereads retain
-stable event IDs for explicit logical `dedup event_id`. The next load slice is
-concurrent search plus a deterministic slow WebSocket consumer, followed by
-separate browser rendering measurements. The overall backend goal remains
-active.
+stable event IDs for explicit logical `dedup event_id`. Concurrent search is
+now complete in the latest checkpoint above. The next load slice is a
+deterministic slow WebSocket consumer, followed by separate browser rendering
+measurements. The overall backend goal remains active.
 
 ## Previous checkpoint: load-generator pacing and live-output foundation
 
@@ -1175,6 +1247,63 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Concurrent SPL searches during live recovery
+
+The exact implementation at `9898b41` passed:
+
+```sh
+go test ./integration \
+  -run '^(TestBackendLoadConcurrentSearchValidationRejectsInconsistentSnapshots|TestMaximumBackendLoadSearchActiveOverlapUsesHalfOpenIntervals|TestValidateBackendLoadCohortVisibilityRejectsAnyRegression|TestBackendLoadPlanPinsSustainedOutageWindow)$' \
+  -count=100
+go test -race ./integration \
+  -run '^(TestBackendLoadConcurrentSearchValidationRejectsInconsistentSnapshots|TestMaximumBackendLoadSearchActiveOverlapUsesHalfOpenIntervals|TestValidateBackendLoadCohortVisibilityRejectsAnyRegression|TestBackendLoadPlanPinsSustainedOutageWindow)$' \
+  -count=20
+go test ./... -count=1
+go vet ./...
+go build ./...
+go test -race ./integration -count=1
+OPEN_SPLUNK_BACKEND_LOAD=1 \
+go test ./integration -run '^TestBackendSustainedLoad$' -count=1 -v
+git diff --cached --check
+```
+
+The exact final Docker run completed in 46.14 seconds and the package in
+46.527 seconds. It generated all 30,000 events and 12,531,099 source bytes in
+30.253 seconds, or 991.6 generated events/second and 414,209.2 bytes/second.
+The accepted window was 31.028 seconds, or 966.9 events/second. Its backend
+outage lasted 6.170 seconds, the durable backlog health gate covered 6,000
+events, recovery first advanced 264.803 ms after health, and post-generation
+drain took 340.382 ms.
+
+The concurrent recovery window ran two eight-job cohorts. While all processes
+remained alive, source records advanced 11,200 to 11,400, physical rows 6,500
+to 7,700, and every public result in the second cohort retained the first
+cohort's maximum prefix while the exact public prefix advanced 6,500 to
+7,100. The 16 jobs scanned 108,800 rows and 61,881,298 bytes. Their client
+wall was 208.172 ms, lifecycle span 202.901 ms, and observational maximum
+active overlap four. Lifecycle min/median/p95/max was
+20.653/48.652/103.556/103.556 ms; elapsed
+min/median/p95/max was 18.624/19.893/38.340/38.340 ms; maximum queue wait was
+84.823 ms.
+
+Final convergence still required exactly 30,000 physical and distinct rows,
+exact source/storage/raw-field equality, one terminal checkpoint, an empty
+acknowledged WAL, no quarantines, and an empty owner-only dead-letter file.
+ClickHouse reported three active parts, 7,303,879 compressed bytes,
+34,495,468 uncompressed bytes, and 11,501,962 bytes on disk. Final public SPL
+search lifecycle measurements were 41.655 ms and 35.116 ms.
+
+Controlled reds and successive adversarial reviews found and fixed an
+insufficient prefix validator, unsafe physical-row lower bounds, zero-delta
+progress, mixed client/server clocks, timing-dependent overlap requirements,
+cross-dataset ratios, a hidden three-second SLA, retry amplification, weak
+cohort-wide monotonicity, and a polling timer that could remain live during
+queries. Three independent final reviewers recomputed frozen staged patch
+SHA-256
+`71d19acf2990b12db60e53cc50ecb0dc6c2abec063ceb5cdf69c7fb8845bc4fb`
+and reported it clean. The implementation is committed and pushed on `main`
+at `9898b41`.
+
 ### Sustained-load outage and restart correctness
 
 The implementation/proof checkpoint passed:
@@ -2133,13 +2262,13 @@ independent stacks.
    ```
 
 5. The core real-process sustained-load/outage/restart proof is complete at
-   `59b8f7c`, on top of the log-generator foundation at
-   `860acac`. Unless the user changes priority, extend it with concurrent
-   searches and a deterministic slow WebSocket consumer, then measure browser
-   rendering separately. The current preview-to-final resource-release audit
-   pass is complete at `961cba2`, the sanitized current GradeThis
-   collector/config migration at `c576e85`, logical event retention at
-   `458c8b4`, clock-driven job/result/export expiration at `b2b2839`, and
+   `59b8f7c`, and its concurrent-search-during-recovery extension is complete
+   at `9898b41`, on top of the log-generator foundation at `860acac`. Unless
+   the user changes priority, add a deterministic slow WebSocket consumer,
+   then measure browser rendering separately. The current preview-to-final
+   resource-release audit pass is complete at `961cba2`, the sanitized current
+   GradeThis collector/config migration at `c576e85`, logical event retention
+   at `458c8b4`, clock-driven job/result/export expiration at `b2b2839`, and
    stale-duplicate injection at `b80bf0a`. Add a red unit or integration test
    before implementation, run read-only adversarial reviews, fix concrete
    findings, then commit and push `main`.
@@ -2203,22 +2332,20 @@ headroom; crash-restarts the collector from intact pending WAL; and requires
 exact source, storage,
 event-ID, raw/extracted-field, checkpoint, dead-letter, WAL, and public SPL
 results. Its controlled red exposed and drove the pending-WAL resume fix.
+The concurrent-search extension is complete at `9898b41`: ready-gated
+eight-job waves prove an exact contiguous public source prefix, cohort-wide
+monotonic visibility, strict source and searchable-prefix advancement, process
+liveness, unique job identity, and public result metadata during live
+recovery. Scan, queue, lifecycle, wall, and overlap measurements remain
+observational until hardware and capacity decisions are made.
 
 Continue the release proof in this order:
 
-- Extend the load harness with concurrent searches and retain generated and
-  accepted events/second, raw bytes/second, backlog, recovery-drain time,
-  ClickHouse part/byte metrics, scan rows/bytes, and first/repeated/concurrent
-  search latency. The current polling and searches affect caches and compete
-  with ingestion, so treat all timings as observational checkpoint evidence,
-  not universal pass/fail thresholds, until target hardware, retention/event
-  size, concurrent-search load, and latency decisions are made.
 - Add a deterministic bounded-queue slow WebSocket consumer after the
-  concurrent-search load path is stable. Measure browser rendering separately
-  with a fixed 1,000-result
-  payload, stable-DOM plus two-animation-frame completion, and browser
-  performance metrics. Do not use a default-config black-hole socket as a
-  timing assertion.
+  now-complete concurrent-search load path. Measure browser rendering
+  separately with a fixed 1,000-result payload, stable DOM plus two animation
+  frames, and browser performance metrics. Do not use a default-config
+  black-hole socket as a timing assertion.
 - During high-source-count collector profiling, replace the pre-existing
   per-poll `time.After` allocation with a safely reused timer if it is material;
   preserve cancellation and copy-truncate behavior with race coverage.
@@ -2360,7 +2487,7 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `59b8f7c`, `860acac`, `961cba2`,
+   commits, especially `9898b41`, `59b8f7c`, `860acac`, `961cba2`,
    `c576e85`, `458c8b4`, `b2b2839`, `b80bf0a`, `cdb60df`, `787a7f9`, and
    `522b0ac`; the preceding progress/recovery foundations are `b5502a3`,
    `f72f184`, `ed28182`, and `d1286a4`.
@@ -2377,7 +2504,7 @@ Do not guess those decisions if they materially affect the implementation.
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
 5. Unless the user changes priority, extend the completed real-process
-   sustained-load/outage/restart proof with concurrent searches and a
+   sustained-load/outage/restart and concurrent-search proof with a
    deterministic slow WebSocket consumer, then measure browser rendering
    separately. The generator foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
