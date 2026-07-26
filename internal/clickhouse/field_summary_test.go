@@ -426,6 +426,7 @@ func TestCompileFieldSummaryArgumentTypesAreFixed(t *testing.T) {
 		"2026-07-21 00:00:00.000000000",
 		"2026-07-22 00:00:00.000000000",
 		"2026-07-22 00:00:01.000",
+		"2026-07-22 00:00:01.000",
 		uint64(73),
 		"gradethis",
 		"status",

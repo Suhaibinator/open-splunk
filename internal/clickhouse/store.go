@@ -43,6 +43,14 @@ const (
 
 	extendedTypeKey  = "\x00open_splunk_type"
 	extendedValueKey = "\x00open_splunk_value"
+
+	eventIndexNameColumn          = 2
+	eventIndexTimeColumn          = 4
+	eventExpiresAtColumn          = 23
+	eventVisibilitySequenceColumn = 24
+
+	legacyReservationMetadataVersion = byte(3)
+	reservationMetadataVersion       = byte(4)
 )
 
 var (
@@ -721,12 +729,14 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 	}
 
 	retentionByIndex := make(map[string]time.Duration)
+	metadataVersion := reservationMetadataVersion
 	if prior != nil {
 		metadata, err := decodeReservationMetadata(prior.Metadata)
 		if err != nil {
 			return nil, fmt.Errorf("decode persisted retention policy: %w", err)
 		}
 		retentionByIndex = metadata.RetentionByIndex
+		metadataVersion = metadata.Version
 	}
 	rows := make([][]any, 0, len(batch.Events))
 	for i, stored := range batch.Events {
@@ -775,9 +785,6 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 			if retentionErr != nil {
 				return nil, fmt.Errorf("resolve retention for index %q: %w", event.GetIndexName(), retentionErr)
 			}
-			if period <= 0 {
-				return nil, fmt.Errorf("resolve retention for index %q: duration must be positive", event.GetIndexName())
-			}
 			retentionByIndex[event.GetIndexName()] = period
 		}
 
@@ -786,9 +793,9 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 			return nil, fmt.Errorf("convert fields for event %d (%q): %w", i, event.GetEventId(), conversionErr)
 		}
 		indexTime := eventStoreMillis(stored.IndexTime)
-		expiresAt := indexTime.Add(period)
-		if !expiresAt.After(indexTime) {
-			return nil, fmt.Errorf("resolve retention for event %d: expiration overflow", i)
+		expiresAt, expirationErr := eventExpirationForMetadata(indexTime, period, metadataVersion)
+		if expirationErr != nil {
+			return nil, fmt.Errorf("resolve retention for event %d: %w", i, expirationErr)
 		}
 		var collectedAt any
 		if event.GetCollectedAt() != nil {
@@ -1112,6 +1119,53 @@ func eventStoreMillis(value time.Time) time.Time {
 	return value.UTC().Truncate(time.Millisecond)
 }
 
+func eventExpiration(indexTime time.Time, retention time.Duration) (time.Time, error) {
+	if retention <= 0 {
+		return time.Time{}, errors.New("duration must be positive")
+	}
+	if retention%time.Millisecond != 0 {
+		return time.Time{}, errors.New("duration must use whole milliseconds")
+	}
+	indexTime = eventStoreMillis(indexTime)
+	// The pinned native client encodes DateTime64 through time.UnixNano even
+	// at millisecond precision. Use the conservative nanosecond-safe range,
+	// which is narrower than ClickHouse's DateTime64(3) server range.
+	if indexTime.Before(MinimumSearchTime()) || indexTime.After(MaximumSearchTime()) {
+		return time.Time{}, errors.New("index time is outside the supported timestamp range")
+	}
+	expiresAt := indexTime.Add(retention)
+	if expiresAt.After(MaximumSearchTime()) {
+		return time.Time{}, errors.New("expiration is outside the supported timestamp range")
+	}
+	return expiresAt, nil
+}
+
+func eventExpirationForMetadata(
+	indexTime time.Time,
+	retention time.Duration,
+	metadataVersion byte,
+) (time.Time, error) {
+	if metadataVersion == reservationMetadataVersion {
+		return eventExpiration(indexTime, retention)
+	}
+	if metadataVersion != legacyReservationMetadataVersion {
+		return time.Time{}, errors.New("unsupported retention metadata version")
+	}
+	// Version 3 admitted arbitrary positive nanosecond durations and relied on
+	// the native DateTime64(3) encoder to truncate them. Preserve that exact
+	// pre-upgrade replay contract so an ambiguous reservation cannot wedge the
+	// contiguous visibility cutoff. New reservations always use version 4.
+	if retention <= 0 {
+		return time.Time{}, errors.New("duration must be positive")
+	}
+	indexTime = eventStoreMillis(indexTime)
+	expiresAt := indexTime.Add(retention)
+	if !expiresAt.After(indexTime) {
+		return time.Time{}, errors.New("expiration overflows")
+	}
+	return expiresAt, nil
+}
+
 func cloneOptionalString(value *string) any {
 	if value == nil {
 		return nil
@@ -1204,6 +1258,7 @@ func storePayloadDigest(batch ingest.StoreBatch) ([sha256.Size]byte, error) {
 }
 
 type reservationMetadata struct {
+	Version            byte
 	RetentionByIndex   map[string]time.Duration
 	BatchSequence      uint64
 	OriginalEventCount uint32
@@ -1216,14 +1271,15 @@ func encodeReservationMetadata(rows [][]any, batch ingest.StoreBatch) ([]byte, e
 		if len(row) != len(eventInsertColumns) {
 			return nil, fmt.Errorf("store ClickHouse batch: row %d has an invalid storage shape", rowIndex)
 		}
-		index, indexOK := row[2].(string)
-		indexTime, timeOK := row[4].(time.Time)
-		expiresAt, expiryOK := row[23].(time.Time)
+		index, indexOK := row[eventIndexNameColumn].(string)
+		indexTime, timeOK := row[eventIndexTimeColumn].(time.Time)
+		expiresAt, expiryOK := row[eventExpiresAtColumn].(time.Time)
 		if !indexOK || !timeOK || !expiryOK || index == "" || len(index) > 255 || !utf8.ValidString(index) {
 			return nil, fmt.Errorf("store ClickHouse batch: row %d has invalid retention metadata", rowIndex)
 		}
 		retention := expiresAt.Sub(indexTime)
-		if retention <= 0 {
+		canonicalExpiresAt, retentionErr := eventExpiration(indexTime, retention)
+		if retentionErr != nil || !canonicalExpiresAt.Equal(expiresAt) {
 			return nil, fmt.Errorf("store ClickHouse batch: row %d has invalid retention duration", rowIndex)
 		}
 		if previous, exists := retentionByIndex[index]; exists && previous != retention {
@@ -1254,7 +1310,7 @@ func encodeReservationMetadata(rows [][]any, batch ingest.StoreBatch) ([]byte, e
 		seenRejections[rejection.GetEventIndex()] = struct{}{}
 	}
 	var metadata bytes.Buffer
-	_, _ = metadata.Write([]byte{'O', 'S', 'V', 'M', 3})
+	_, _ = metadata.Write([]byte{'O', 'S', 'V', 'M', reservationMetadataVersion})
 	var number [8]byte
 	binary.BigEndian.PutUint64(number[:], uint64(len(indexes)))
 	_, _ = metadata.Write(number[:])
@@ -1305,9 +1361,12 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 	}
 	reader := bytes.NewReader(payload)
 	header := make([]byte, 5)
-	if _, err := io.ReadFull(reader, header); err != nil || !bytes.Equal(header, []byte{'O', 'S', 'V', 'M', 3}) {
+	if _, err := io.ReadFull(reader, header); err != nil ||
+		!bytes.Equal(header[:4], []byte{'O', 'S', 'V', 'M'}) ||
+		(header[4] != legacyReservationMetadataVersion && header[4] != reservationMetadataVersion) {
 		return reservationMetadata{}, errors.New("visibility reservation metadata has an invalid version")
 	}
+	version := header[4]
 	readUint64 := func() (uint64, error) {
 		var number [8]byte
 		if _, err := io.ReadFull(reader, number[:]); err != nil {
@@ -1330,7 +1389,8 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 			return reservationMetadata{}, errors.New("visibility reservation metadata is truncated")
 		}
 		duration, err := readUint64()
-		if err != nil || duration == 0 || duration > math.MaxInt64 {
+		if err != nil || duration == 0 || duration > math.MaxInt64 ||
+			(version == reservationMetadataVersion && time.Duration(duration)%time.Millisecond != 0) {
 			return reservationMetadata{}, errors.New("visibility reservation metadata has an invalid retention duration")
 		}
 		index := string(name)
@@ -1387,6 +1447,7 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 		return reservationMetadata{}, errors.New("visibility reservation metadata has trailing bytes")
 	}
 	return reservationMetadata{
+		Version:            version,
 		RetentionByIndex:   retentionByIndex,
 		BatchSequence:      batchSequence,
 		OriginalEventCount: originalEventCount,
@@ -1404,7 +1465,7 @@ func applyReservation(rows [][]any, reservation visibility.Reservation) error {
 	}
 	indexTime := eventStoreMillis(reservation.IndexTime)
 	for rowIndex, row := range rows {
-		index, ok := row[2].(string)
+		index, ok := row[eventIndexNameColumn].(string)
 		if !ok {
 			return fmt.Errorf("store ClickHouse batch: row %d has an invalid index", rowIndex)
 		}
@@ -1412,13 +1473,13 @@ func applyReservation(rows [][]any, reservation visibility.Reservation) error {
 		if !exists {
 			return fmt.Errorf("visibility reservation has no retention for index %q", index)
 		}
-		expiresAt := indexTime.Add(retention)
-		if !expiresAt.After(indexTime) {
-			return fmt.Errorf("visibility reservation retention overflows for index %q", index)
+		expiresAt, expirationErr := eventExpirationForMetadata(indexTime, retention, metadata.Version)
+		if expirationErr != nil {
+			return fmt.Errorf("visibility reservation retention for index %q: %w", index, expirationErr)
 		}
-		row[4] = indexTime
-		row[23] = expiresAt
-		row[24] = reservation.Sequence
+		row[eventIndexTimeColumn] = indexTime
+		row[eventExpiresAtColumn] = expiresAt
+		row[eventVisibilitySequenceColumn] = reservation.Sequence
 	}
 	return nil
 }

@@ -37,6 +37,7 @@ func TestCompileFieldCatalogPreservesImmutableScanScope(t *testing.T) {
 		`"event_time" >= parseDateTime64BestEffort(?, 9, 'UTC')`,
 		`"event_time" < parseDateTime64BestEffort(?, 9, 'UTC')`,
 		`"index_time" <= parseDateTime64BestEffort(?, 3, 'UTC')`,
+		`"expires_at" > parseDateTime64BestEffort(?, 3, 'UTC')`,
 		`"visibility_seq" <= ?`,
 	} {
 		if strings.Count(compiled.SQL, predicate) != 1 {
@@ -51,6 +52,7 @@ func TestCompileFieldCatalogPreservesImmutableScanScope(t *testing.T) {
 		"gradethis",
 		"2026-07-21 00:00:00.000000000",
 		"2026-07-22 00:00:00.000000000",
+		"2026-07-22 00:00:01.000",
 		"2026-07-22 00:00:01.000",
 		uint64(73),
 	}

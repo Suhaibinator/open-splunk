@@ -24,6 +24,9 @@ func normalizeRuntimeOptions(config *options) error {
 	if config.indexRetention <= 0 {
 		return errors.New("default index retention must be positive")
 	}
+	if config.indexRetention%time.Millisecond != 0 {
+		return errors.New("default index retention must use whole milliseconds")
+	}
 	config.exportArtifactDir = strings.TrimSpace(config.exportArtifactDir)
 	if config.exportArtifactDir == "" {
 		controlDBPath := strings.TrimSpace(config.controlDBPath)

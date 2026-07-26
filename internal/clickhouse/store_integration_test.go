@@ -153,6 +153,9 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	t.Run("ambiguous committed insert recovers after server restart", func(t *testing.T) {
 		testAmbiguousCommittedInsertRecovery(t, ctx, config, queryConnection, indexTime)
 	})
+	t.Run("legacy v3 unaligned retention replays through native encoder", func(t *testing.T) {
+		testLegacyUnalignedRetentionNativeReplay(t, ctx, store.connection, queryConnection, indexTime)
+	})
 	var count uint64
 	if err := queryConnection.QueryRow(ctx, "SELECT count() FROM open_splunk.events WHERE event_id = ?", "native-event").Scan(&count); err != nil {
 		t.Fatalf("query dedup count: %v", err)
@@ -233,7 +236,141 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 		t.Fatalf("expires_at = %v, want %v", expiresAt, want)
 	}
 
+	t.Run("native DateTime64 upper boundary round trips", func(t *testing.T) {
+		const retention = 30 * 24 * time.Hour
+		boundaryIndexTime := MaximumSearchTime().Add(-retention)
+		boundaryEvent := testStoredEvent("native-datetime64-boundary", "main", boundaryIndexTime)
+		boundaryEvent.CollectorID = "native-datetime64-boundary-collector"
+		boundaryEvent.BatchID = "native-datetime64-boundary-batch"
+		if _, err := store.Store(ctx, ingest.StoreBatch{
+			TenantID:      "tenant",
+			CollectorID:   boundaryEvent.CollectorID,
+			BatchID:       boundaryEvent.BatchID,
+			BatchSequence: 3,
+			SourceBatchSHA256: testSourceBatchDigest(
+				"native-datetime64-boundary-batch",
+			),
+			ReceivedAt: boundaryIndexTime,
+			Events:     []*ingest.StoredEvent{boundaryEvent},
+		}); err != nil {
+			t.Fatalf("store native DateTime64 boundary: %v", err)
+		}
+		var storedExpiry time.Time
+		if err := queryConnection.QueryRow(
+			ctx,
+			"SELECT expires_at FROM open_splunk.events WHERE event_id = ?",
+			boundaryEvent.Event.GetEventId(),
+		).Scan(&storedExpiry); err != nil {
+			t.Fatalf("read native DateTime64 boundary: %v", err)
+		}
+		if !storedExpiry.Equal(MaximumSearchTime()) {
+			t.Fatalf("native DateTime64 boundary = %v, want %v", storedExpiry, MaximumSearchTime())
+		}
+	})
+
 	testCompiledQueriesAgainstClickHouse(t, ctx, store, queryConnection, indexTime)
+}
+
+func testLegacyUnalignedRetentionNativeReplay(
+	t *testing.T,
+	ctx context.Context,
+	nativeConnection storeConnection,
+	queryConnection clickhousedriver.Conn,
+	indexTime time.Time,
+) {
+	t.Helper()
+
+	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "legacy-retention-control.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlDB.Close()
+	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyIndexTime := indexTime.Add(2 * time.Second)
+	event := testStoredEvent("native-legacy-retention", "main", legacyIndexTime)
+	event.CollectorID = "native-legacy-retention-collector"
+	event.BatchID = "native-legacy-retention-batch"
+	batch := ingest.StoreBatch{
+		TenantID:          "tenant",
+		CollectorID:       event.CollectorID,
+		BatchID:           event.BatchID,
+		BatchSequence:     1,
+		SourceBatchSHA256: testSourceBatchDigest(event.BatchID),
+		ReceivedAt:        legacyIndexTime,
+		Events:            []*ingest.StoredEvent{event},
+	}
+	first, err := newStore(
+		&fakeStoreConnection{batch: &fakeWriteBatch{sendErr: io.ErrUnexpectedEOF}},
+		"open_splunk",
+		"events",
+		fixedRetention(time.Millisecond),
+		sequencer,
+		time.Now,
+		time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Store(ctx, batch); !isTransient(err) {
+		t.Fatalf("initial legacy replay setup error = %v, want transient", err)
+	}
+	var metadata []byte
+	if err := controlDB.SQLDB().QueryRowContext(ctx, `
+		SELECT metadata
+		FROM ingest_visibility_reservations
+		WHERE sequence = 1`).Scan(&metadata); err != nil {
+		t.Fatalf("read legacy replay metadata: %v", err)
+	}
+	metadata = rewriteSingleIndexReservationMetadata(
+		t,
+		metadata,
+		legacyReservationMetadataVersion,
+		1500*time.Microsecond,
+	)
+	if _, err := controlDB.SQLDB().ExecContext(ctx, `
+		UPDATE ingest_visibility_reservations
+		SET metadata = ?
+		WHERE sequence = 1`, metadata); err != nil {
+		t.Fatalf("install legacy replay metadata: %v", err)
+	}
+
+	unavailablePolicy := &fakeRetentionProvider{err: errors.New("legacy native replay consulted live policy")}
+	replay, err := newStore(
+		nativeConnection,
+		"open_splunk",
+		"events",
+		unavailablePolicy,
+		sequencer,
+		time.Now,
+		time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := replay.Store(ctx, batch); err != nil {
+		t.Fatalf("native legacy retention replay: %v", err)
+	}
+	if len(unavailablePolicy.calls) != 0 {
+		t.Fatalf("native legacy replay consulted live retention: %v", unavailablePolicy.calls)
+	}
+	var storedExpiry time.Time
+	if err := queryConnection.QueryRow(
+		ctx,
+		"SELECT expires_at FROM open_splunk.events WHERE event_id = ?",
+		event.Event.GetEventId(),
+	).Scan(&storedExpiry); err != nil {
+		t.Fatalf("read native legacy expiry: %v", err)
+	}
+	wantExpiry := eventStoreMillis(legacyIndexTime).Add(time.Millisecond)
+	if !storedExpiry.Equal(wantExpiry) {
+		t.Fatalf("native legacy expiry = %v, want truncated %v", storedExpiry, wantExpiry)
+	}
+	if cutoff, err := replay.VisibilityCutoff(ctx); err != nil || cutoff != 1 {
+		t.Fatalf("legacy replay visibility cutoff = %d, %v; want 1", cutoff, err)
+	}
 }
 
 func testAmbiguousCommittedInsertRecovery(

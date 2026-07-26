@@ -228,6 +228,11 @@ func TestIndexValidationAndNotFoundErrors(t *testing.T) {
 	if _, err := db.CreateIndex(ctx, definition); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("oversized CreateIndex() error = %v, want ErrInvalidArgument", err)
 	}
+	subMillisecond := enabledIndex("sub-millisecond-retention")
+	subMillisecond.RetentionPeriod = time.Nanosecond
+	if _, err := db.CreateIndex(ctx, subMillisecond); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("sub-millisecond CreateIndex() error = %v, want ErrInvalidArgument", err)
+	}
 	if _, err := db.GetIndex(ctx, "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetIndex(missing) error = %v, want ErrNotFound", err)
 	}

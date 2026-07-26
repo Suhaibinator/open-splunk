@@ -779,7 +779,8 @@ func indexToProto(record control.Index) (*opensplunkv1.Index, error) {
 		validateAdminText(record.Definition.DisplayName, maximumDisplayNameBytes, false, false) != nil ||
 		validateAdminText(record.Definition.Description, maximumDescriptionBytes, true, true) != nil ||
 		validateAdminText(record.Definition.DefaultSourcetype, maximumSourcetypeBytes, true, false) != nil ||
-		record.Definition.DefaultSourcetype != "" || record.Definition.RetentionPeriod < 0 || record.Definition.Limits != (control.IndexLimits{}) ||
+		record.Definition.DefaultSourcetype != "" || record.Definition.RetentionPeriod < 0 ||
+		record.Definition.RetentionPeriod%time.Millisecond != 0 || record.Definition.Limits != (control.IndexLimits{}) ||
 		indexStateToProto(record.State) == opensplunkv1.IndexState_INDEX_STATE_UNSPECIFIED ||
 		record.CreatedAt.IsZero() || record.UpdatedAt.Before(record.CreatedAt) {
 		return nil, errors.New("invalid index record")

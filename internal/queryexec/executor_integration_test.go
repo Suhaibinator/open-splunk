@@ -86,6 +86,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	queryIntegrationTestFieldCatalog(t, ctx, connection, executor)
+	queryIntegrationTestLogicalRetention(t, ctx, connection, executor)
 	t.Run("native progress reports exact generated scan", func(t *testing.T) {
 		const generatedRows = uint64(262_144)
 		sink := &recordingProgressSink{}

@@ -384,6 +384,15 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 			status: http.StatusBadRequest,
 		},
 		{
+			name: "sub-millisecond index retention", path: "/api/v1/indexes/create",
+			request: func() proto.Message {
+				definition := adminTestIndexProto("sub-millisecond-retention")
+				definition.RetentionPeriod = durationpb.New(time.Nanosecond)
+				return &opensplunkv1.CreateIndexRequest{Definition: definition}
+			}(),
+			status: http.StatusBadRequest,
+		},
+		{
 			name: "unsupported token constraints", path: "/api/v1/ingestion-tokens/create",
 			request: &opensplunkv1.CreateIngestionTokenRequest{Definition: &opensplunkv1.IngestionTokenDefinition{
 				Name: "bad", Constraints: &opensplunkv1.IngestionTokenConstraints{AllowedIndexNames: []string{"main"}, AllowedHostRegexes: []string{".*"}},

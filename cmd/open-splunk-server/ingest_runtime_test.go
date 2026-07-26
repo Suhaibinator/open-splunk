@@ -22,11 +22,12 @@ func TestNormalizeRuntimeOptionsCanonicalizesAndBoundsTenantIdentity(t *testing.
 		t.Fatalf("normalized tenant ID = %q, want tenant", config.tenantID)
 	}
 	for name, candidate := range map[string]options{
-		"nil retention": {httpAddress: "127.0.0.1:8080", tenantID: "tenant"},
-		"empty tenant":  {httpAddress: "127.0.0.1:8080", tenantID: " \t", indexRetention: time.Hour},
-		"oversized":     {httpAddress: "127.0.0.1:8080", tenantID: strings.Repeat("t", maximumDurableTenantIDBytes+1), indexRetention: time.Hour},
-		"invalid UTF-8": {httpAddress: "127.0.0.1:8080", tenantID: string([]byte{0xff}), indexRetention: time.Hour},
-		"embedded NUL":  {httpAddress: "127.0.0.1:8080", tenantID: "tenant\x00other", indexRetention: time.Hour},
+		"nil retention":             {httpAddress: "127.0.0.1:8080", tenantID: "tenant"},
+		"sub-millisecond retention": {httpAddress: "127.0.0.1:8080", tenantID: "tenant", indexRetention: time.Nanosecond},
+		"empty tenant":              {httpAddress: "127.0.0.1:8080", tenantID: " \t", indexRetention: time.Hour},
+		"oversized":                 {httpAddress: "127.0.0.1:8080", tenantID: strings.Repeat("t", maximumDurableTenantIDBytes+1), indexRetention: time.Hour},
+		"invalid UTF-8":             {httpAddress: "127.0.0.1:8080", tenantID: string([]byte{0xff}), indexRetention: time.Hour},
+		"embedded NUL":              {httpAddress: "127.0.0.1:8080", tenantID: "tenant\x00other", indexRetention: time.Hour},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := normalizeRuntimeOptions(&candidate); err == nil {

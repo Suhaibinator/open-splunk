@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -112,8 +113,21 @@ func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
 	if got := conn.batch.rows[0][26]; got != eventfields.CurrentFieldMetadataVersion {
 		t.Fatalf("field_metadata_version = %#v, want 1", got)
 	}
-	if got := eventInsertColumns[24:]; !slices.Equal(got, []string{"visibility_seq", "field_types", "field_metadata_version"}) {
+	if got := eventInsertColumns[eventVisibilitySequenceColumn:]; !slices.Equal(got, []string{"visibility_seq", "field_types", "field_metadata_version"}) {
 		t.Fatalf("appended insert columns = %#v", got)
+	}
+	for _, position := range []struct {
+		index int
+		name  string
+	}{
+		{index: eventIndexNameColumn, name: "index_name"},
+		{index: eventIndexTimeColumn, name: "index_time"},
+		{index: eventExpiresAtColumn, name: "expires_at"},
+		{index: eventVisibilitySequenceColumn, name: "visibility_seq"},
+	} {
+		if got := eventInsertColumns[position.index]; got != position.name {
+			t.Errorf("event insert column %d = %q, want %q", position.index, got, position.name)
+		}
 	}
 	if conn.batch.sendCalls != 1 || conn.batch.abortCalls != 0 || conn.batch.closeCalls != 1 {
 		t.Fatalf("batch lifecycle send=%d abort=%d close=%d", conn.batch.sendCalls, conn.batch.abortCalls, conn.batch.closeCalls)
@@ -698,6 +712,75 @@ func TestStoreRetryUsesPersistedRetentionBeforeLivePolicy(t *testing.T) {
 	}
 }
 
+func TestStoreRetryReplaysLegacyUnalignedRetentionMetadata(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = controlDB.Close() })
+	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := validStoreBatch()
+	first := mustTestStoreWithVisibility(t, &fakeStoreConnection{batch: &fakeWriteBatch{
+		sendErr: io.ErrUnexpectedEOF,
+	}}, fixedRetention(time.Millisecond), sequencer)
+	if _, err := first.Store(ctx, batch); !isTransient(err) {
+		t.Fatalf("initial ambiguous Store error = %v, want transient", err)
+	}
+
+	var current []byte
+	if err := controlDB.SQLDB().QueryRowContext(ctx, `
+		SELECT metadata
+		FROM ingest_visibility_reservations
+		WHERE sequence = 1`).Scan(&current); err != nil {
+		t.Fatalf("read current reservation metadata: %v", err)
+	}
+	if len(current) < 5 || current[4] != reservationMetadataVersion {
+		t.Fatalf("new reservation metadata version = %v, want %d", current, reservationMetadataVersion)
+	}
+	unalignedV4 := rewriteSingleIndexReservationMetadata(
+		t,
+		current,
+		reservationMetadataVersion,
+		1500*time.Microsecond,
+	)
+	if _, err := decodeReservationMetadata(unalignedV4); err == nil ||
+		!strings.Contains(err.Error(), "retention duration") {
+		t.Fatalf("unaligned v4 metadata error = %v, want invalid retention duration", err)
+	}
+	legacy := rewriteSingleIndexReservationMetadata(
+		t,
+		current,
+		legacyReservationMetadataVersion,
+		1500*time.Microsecond,
+	)
+	if _, err := controlDB.SQLDB().ExecContext(ctx, `
+		UPDATE ingest_visibility_reservations
+		SET metadata = ?
+		WHERE sequence = 1`, legacy); err != nil {
+		t.Fatalf("install legacy reservation metadata: %v", err)
+	}
+
+	unavailablePolicy := &fakeRetentionProvider{err: errors.New("legacy retry consulted live policy")}
+	retryConnection := &fakeStoreConnection{batch: &fakeWriteBatch{}}
+	retry := mustTestStoreWithVisibility(t, retryConnection, unavailablePolicy, sequencer)
+	if _, err := retry.Store(ctx, batch); err != nil {
+		t.Fatalf("retry legacy unaligned reservation: %v", err)
+	}
+	if len(unavailablePolicy.calls) != 0 {
+		t.Fatalf("legacy retry consulted live retention: %v", unavailablePolicy.calls)
+	}
+	wantExpiry := eventStoreMillis(batch.ReceivedAt).Add(1500 * time.Microsecond)
+	if got := retryConnection.batch.rows[0][eventExpiresAtColumn]; got != wantExpiry {
+		t.Fatalf("legacy retry expires_at = %v, want exact pre-driver value %v", got, wantExpiry)
+	}
+}
+
 func TestConvertTypedObjectPreservesTypesTagsAndEscapedNames(t *testing.T) {
 	t.Parallel()
 	timestamp := time.Date(2026, 7, 21, 3, 4, 5, 123456789, time.UTC)
@@ -981,9 +1064,9 @@ func TestReservationMetadataBoundsMatchIndexScope(t *testing.T) {
 	for index := range rows {
 		name := fmt.Sprintf("%03d-%s", index, strings.Repeat("x", 251))
 		row := make([]any, len(eventInsertColumns))
-		row[2] = name
-		row[4] = base
-		row[23] = base.Add(time.Hour)
+		row[eventIndexNameColumn] = name
+		row[eventIndexTimeColumn] = base
+		row[eventExpiresAtColumn] = base.Add(time.Hour)
 		rows[index] = row
 	}
 	metadata, err := encodeReservationMetadata(rows, ingest.StoreBatch{
@@ -1089,7 +1172,16 @@ func TestStoreRejectsInvalidInputsBeforePrepare(t *testing.T) {
 		{name: "missing tenant", batch: ingest.StoreBatch{CollectorID: "collector", BatchID: "batch", Events: []*ingest.StoredEvent{testStoredEvent("e", "main", time.Now())}}, retention: fixedRetention(time.Hour)},
 		{name: "nil event", batch: ingest.StoreBatch{TenantID: "tenant", CollectorID: "collector", BatchID: "batch", Events: []*ingest.StoredEvent{nil}}, retention: fixedRetention(time.Hour)},
 		{name: "zero retention", batch: validStoreBatch(), retention: fixedRetention(0)},
+		{name: "sub-millisecond retention", batch: validStoreBatch(), retention: fixedRetention(time.Nanosecond)},
 	}
+	outOfRangeExpiry := validStoreBatch()
+	outOfRangeExpiry.ReceivedAt = MaximumSearchTime()
+	outOfRangeExpiry.Events[0].IndexTime = outOfRangeExpiry.ReceivedAt
+	tests = append(tests, struct {
+		name      string
+		batch     ingest.StoreBatch
+		retention RetentionProvider
+	}{name: "out-of-range expiration", batch: outOfRangeExpiry, retention: fixedRetention(time.Millisecond)})
 	mismatch := validStoreBatch()
 	mismatch.Events[0].TenantID = "other"
 	tests = append(tests, struct {
@@ -1110,6 +1202,103 @@ func TestStoreRejectsInvalidInputsBeforePrepare(t *testing.T) {
 				t.Fatalf("prepare calls = %d", conn.prepareCalls)
 			}
 		})
+	}
+}
+
+func TestEventExpirationEnforcesStoragePrecisionAndRange(t *testing.T) {
+	t.Parallel()
+
+	offset := time.FixedZone("event-expiration", -7*60*60)
+	indexTime := time.Date(2026, 7, 26, 1, 2, 3, 987_654_321, offset)
+	want := indexTime.UTC().Truncate(time.Millisecond).Add(time.Millisecond)
+	got, err := eventExpiration(indexTime, time.Millisecond)
+	if err != nil || !got.Equal(want) || got.Location() != time.UTC {
+		t.Fatalf("eventExpiration() = %v, %v; want %v in UTC", got, err, want)
+	}
+
+	got, err = eventExpiration(MinimumSearchTime(), time.Millisecond)
+	if err != nil || !got.Equal(MinimumSearchTime().Add(time.Millisecond)) {
+		t.Fatalf(
+			"eventExpiration(minimum) = %v, %v; want %v",
+			got,
+			err,
+			MinimumSearchTime().Add(time.Millisecond),
+		)
+	}
+
+	got, err = eventExpiration(MaximumSearchTime().Add(-time.Millisecond), time.Millisecond)
+	if err != nil || !got.Equal(MaximumSearchTime()) {
+		t.Fatalf("eventExpiration(maximum) = %v, %v; want %v", got, err, MaximumSearchTime())
+	}
+
+	tests := []struct {
+		name      string
+		indexTime time.Time
+		retention time.Duration
+	}{
+		{name: "zero retention", indexTime: indexTime, retention: 0},
+		{name: "negative retention", indexTime: indexTime, retention: -time.Millisecond},
+		{name: "sub-millisecond retention", indexTime: indexTime, retention: time.Nanosecond},
+		{name: "index time below range", indexTime: MinimumSearchTime().Add(-time.Millisecond), retention: time.Millisecond},
+		{name: "index time above range", indexTime: MaximumSearchTime().Add(time.Millisecond), retention: time.Millisecond},
+		{name: "expiration above range", indexTime: MaximumSearchTime(), retention: time.Millisecond},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := eventExpiration(test.indexTime, test.retention); err == nil {
+				t.Fatal("eventExpiration succeeded")
+			}
+		})
+	}
+}
+
+func rewriteSingleIndexReservationMetadata(
+	t *testing.T,
+	metadata []byte,
+	version byte,
+	retention time.Duration,
+) []byte {
+	t.Helper()
+
+	rewritten := slices.Clone(metadata)
+	payloadLength := len(rewritten) - sha256.Size
+	if payloadLength < 5+8+8+8 || string(rewritten[:4]) != "OSVM" {
+		t.Fatalf("reservation metadata shape = %x", rewritten)
+	}
+	if count := binary.BigEndian.Uint64(rewritten[5:13]); count != 1 {
+		t.Fatalf("reservation metadata index count = %d, want 1", count)
+	}
+	nameLength := binary.BigEndian.Uint64(rewritten[13:21])
+	retentionOffset := uint64(21) + nameLength
+	if retentionOffset+8 > uint64(payloadLength) {
+		t.Fatalf("reservation metadata name length = %d exceeds payload", nameLength)
+	}
+	rewritten[4] = version
+	binary.BigEndian.PutUint64(
+		rewritten[int(retentionOffset):int(retentionOffset)+8],
+		uint64(retention),
+	)
+	checksum := sha256.Sum256(rewritten[:payloadLength])
+	copy(rewritten[payloadLength:], checksum[:])
+	return rewritten
+}
+
+func TestReservationMetadataRejectsSubMillisecondRetention(t *testing.T) {
+	t.Parallel()
+
+	indexTime := time.Date(2026, 7, 26, 1, 2, 3, 0, time.UTC)
+	row := make([]any, len(eventInsertColumns))
+	row[eventIndexNameColumn] = "main"
+	row[eventIndexTimeColumn] = indexTime
+	row[eventExpiresAtColumn] = indexTime.Add(time.Nanosecond)
+	_, err := encodeReservationMetadata([][]any{row}, ingest.StoreBatch{
+		BatchSequence:      1,
+		OriginalEventCount: 1,
+	})
+	if err == nil {
+		t.Fatal("encodeReservationMetadata accepted sub-millisecond retention")
 	}
 }
 

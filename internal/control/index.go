@@ -333,7 +333,7 @@ func scanIndex(row rowScanner) (Index, error) {
 	if err != nil {
 		return Index{}, err
 	}
-	if version < 1 || retention < 0 || maxEventBytes < 0 || maxFieldCount < 0 || maxFieldCount > math.MaxUint32 || maxNestingDepth < 0 || maxNestingDepth > math.MaxUint32 || maximumFutureSkew < 0 || maximumEventAge < 0 || (ingestionEnabled != 0 && ingestionEnabled != 1) || (searchEnabled != 0 && searchEnabled != 1) || !validIndexState(index.State) {
+	if version < 1 || retention < 0 || retention%int64(time.Millisecond) != 0 || maxEventBytes < 0 || maxFieldCount < 0 || maxFieldCount > math.MaxUint32 || maxNestingDepth < 0 || maxNestingDepth > math.MaxUint32 || maximumFutureSkew < 0 || maximumEventAge < 0 || (ingestionEnabled != 0 && ingestionEnabled != 1) || (searchEnabled != 0 && searchEnabled != 1) || !validIndexState(index.State) {
 		return Index{}, errors.New("invalid index record in control-plane database")
 	}
 	index.Version = uint64(version)
@@ -365,6 +365,9 @@ func validateIndexDefinition(definition IndexDefinition) (IndexDefinition, error
 	definition.DefaultSourcetype = strings.TrimSpace(definition.DefaultSourcetype)
 	if definition.RetentionPeriod < 0 || definition.Limits.MaximumFutureSkew < 0 || definition.Limits.MaximumEventAge < 0 {
 		return IndexDefinition{}, fmt.Errorf("%w: index durations cannot be negative", ErrInvalidArgument)
+	}
+	if definition.RetentionPeriod%time.Millisecond != 0 {
+		return IndexDefinition{}, fmt.Errorf("%w: index retention must use whole milliseconds", ErrInvalidArgument)
 	}
 	if definition.Limits.MaxEventBytes > math.MaxInt64 {
 		return IndexDefinition{}, fmt.Errorf("%w: max event bytes exceeds SQLite integer range", ErrInvalidArgument)

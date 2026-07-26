@@ -143,8 +143,22 @@ func TestReexecutionSourceIsLazyScopedAndStreamsBeyondRetainedPreview(t *testing
 	if calls.Load() != 1 {
 		t.Fatalf("executor calls = %d, want 1", calls.Load())
 	}
-	if !strings.Contains(captured.SQL, `"visibility_seq" <= ?`) || len(captured.Args) == 0 {
+	if !strings.Contains(captured.SQL, `"expires_at" > parseDateTime64BestEffort(?, 3, 'UTC')`) ||
+		!strings.Contains(captured.SQL, `"visibility_seq" <= ?`) {
 		t.Fatalf("compiled query did not retain snapshot predicates: %s / %#v", captured.SQL, captured.Args)
+	}
+	cutoff := searches.job.IndexTimeCutoff.UTC().Truncate(time.Millisecond).Format("2006-01-02 15:04:05.000")
+	wantScope := []any{
+		searches.job.TenantID,
+		"main",
+		searches.job.Earliest.UTC().Format("2006-01-02 15:04:05.000000000"),
+		searches.job.Latest.UTC().Format("2006-01-02 15:04:05.000000000"),
+		cutoff,
+		cutoff,
+		searches.job.VisibilityCutoff,
+	}
+	if len(captured.Args) < len(wantScope) || !slices.Equal(captured.Args[:len(wantScope)], wantScope) {
+		t.Fatalf("compiled export scope = %#v, want prefix %#v", captured.Args, wantScope)
 	}
 	if err := lease.Close(); err != nil {
 		t.Fatal(err)

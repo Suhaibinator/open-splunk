@@ -2738,22 +2738,25 @@ func compileScan(database, table string, scan *plan.Scan) (string, compileState,
 		quoteIdentifier("event_time") + " >= parseDateTime64BestEffort(?, 9, 'UTC')",
 		quoteIdentifier("event_time") + " < parseDateTime64BestEffort(?, 9, 'UTC')",
 		quoteIdentifier("index_time") + " <= parseDateTime64BestEffort(?, 3, 'UTC')",
+		quoteIdentifier("expires_at") + " > parseDateTime64BestEffort(?, 3, 'UTC')",
 		quoteIdentifier("visibility_seq") + " <= ?",
 	}
-	args := make([]any, 0, len(scan.Indexes)+5)
+	args := make([]any, 0, len(scan.Indexes)+6)
 	args = append(args, scan.TenantID)
 	for _, index := range scan.Indexes {
 		args = append(args, index)
 	}
 	// clickhouse-go infers a bare time.Time placeholder as DateTime, which has
-	// only second precision. Bind canonical text and parse it explicitly so a
-	// DateTime64(3) cutoff cannot exclude rows committed earlier in the same
-	// second. Text also avoids UnixNano overflow for supported pre-epoch and
-	// upper-bound DateTime64 values.
+	// only second precision. Bind canonical text and parse it explicitly so the
+	// index-time and retention predicates share the exact immutable
+	// DateTime64(3) snapshot. Text also avoids UnixNano overflow for supported
+	// pre-epoch and upper-bound DateTime64 values.
+	indexTimeCutoff := formatDateTime64Milliseconds(scan.IndexTimeCutoff)
 	args = append(args,
 		formatDateTime64Nanoseconds(scan.Earliest),
 		formatDateTime64Nanoseconds(scan.Latest),
-		formatDateTime64Milliseconds(scan.IndexTimeCutoff),
+		indexTimeCutoff,
+		indexTimeCutoff,
 		scan.VisibilityCutoff,
 	)
 

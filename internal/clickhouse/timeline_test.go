@@ -35,6 +35,7 @@ func TestCompileTimelinePreservesEligibleEventPipeline(t *testing.T) {
 		`"event_time" >= parseDateTime64BestEffort(?, 9, 'UTC')`,
 		`"event_time" < parseDateTime64BestEffort(?, 9, 'UTC')`,
 		`"index_time" <= parseDateTime64BestEffort(?, 3, 'UTC')`,
+		`"expires_at" > parseDateTime64BestEffort(?, 3, 'UTC')`,
 		`"visibility_seq" <= ?`,
 		`toFloat64OrNull`,
 		`LIMIT ? BY`,

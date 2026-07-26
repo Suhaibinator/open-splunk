@@ -125,6 +125,7 @@ func TestManagerLifecycleUsesImmutableAuthorizedSnapshot(t *testing.T) {
 		earliest.UTC().Format("2006-01-02 15:04:05.000000000"),
 		latest.UTC().Format("2006-01-02 15:04:05.000000000"),
 		now.UTC().Truncate(time.Millisecond).Format("2006-01-02 15:04:05.000"),
+		now.UTC().Truncate(time.Millisecond).Format("2006-01-02 15:04:05.000"),
 		uint64(41),
 	}
 	if len(compiled.Args) < len(wantPrefix) || !reflect.DeepEqual(compiled.Args[:len(wantPrefix)], wantPrefix) {

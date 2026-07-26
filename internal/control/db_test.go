@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -35,8 +36,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 8 {
-		t.Fatalf("schema migration count = %d, want 8", migrationCount)
+	if migrationCount != 9 {
+		t.Fatalf("schema migration count = %d, want 9", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -84,8 +85,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 8 {
-		t.Fatalf("schema migration count after reopen = %d, want 8", migrationCount)
+	if migrationCount != 9 {
+		t.Fatalf("schema migration count after reopen = %d, want 9", migrationCount)
 	}
 }
 
@@ -175,9 +176,103 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 8 {
-		t.Fatalf("schema migration count = %d, want 8", count)
+	if count != 9 {
+		t.Fatalf("schema migration count = %d, want 9", count)
 	}
+}
+
+func TestIndexRetentionPrecisionMigrationCanonicalizesLegacyRows(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "retention-upgrade.sqlite")+"?_txlock=immediate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+
+	legacy := migrationsBefore(t, "0009_")
+	if err := ApplyMigrations(ctx, raw, legacy); err != nil {
+		t.Fatalf("apply pre-retention migrations: %v", err)
+	}
+	for index, retention := range []int64{0, 1, 1_000_000, 1_500_000, 2_000_001} {
+		name := fmt.Sprintf("legacy-retention-%d", index)
+		if _, err := raw.ExecContext(ctx, `
+			INSERT INTO indexes (
+				index_id, version, name, display_name, retention_nanoseconds,
+				ingestion_enabled, search_enabled, state,
+				created_at_unix_micro, updated_at_unix_micro
+			) VALUES (?, 1, ?, ?, ?, 1, 1, 'active', 1, 1)`,
+			"index-"+name, name, name, retention,
+		); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+		t.Fatalf("apply retention precision migration: %v", err)
+	}
+	rows, err := raw.QueryContext(ctx, `
+		SELECT retention_nanoseconds
+		FROM indexes
+		ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []int64
+	for rows.Next() {
+		var retention int64
+		if err := rows.Scan(&retention); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, retention)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := []int64{0, 1_000_000, 1_000_000, 1_000_000, 2_000_000}
+	if !slices.Equal(got, want) {
+		t.Fatalf("canonical legacy retention = %v, want %v", got, want)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		UPDATE indexes
+		SET retention_nanoseconds = 1500000
+		WHERE name = 'legacy-retention-0'`); err == nil ||
+		!strings.Contains(err.Error(), "whole milliseconds") {
+		t.Fatalf("unaligned post-migration update error = %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO indexes (
+			index_id, version, name, display_name, retention_nanoseconds,
+			ingestion_enabled, search_enabled, state,
+			created_at_unix_micro, updated_at_unix_micro
+		) VALUES (
+			'index-unaligned-insert', 1, 'unaligned-insert', 'unaligned-insert',
+			1500000, 1, 1, 'active', 1, 1
+		)`); err == nil || !strings.Contains(err.Error(), "whole milliseconds") {
+		t.Fatalf("unaligned post-migration insert error = %v", err)
+	}
+}
+
+func migrationsBefore(t *testing.T, cutoff string) fstest.MapFS {
+	t.Helper()
+
+	result := fstest.MapFS{}
+	entries, err := fs.ReadDir(migrations.SQLite(), ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() >= cutoff {
+			continue
+		}
+		data, err := fs.ReadFile(migrations.SQLite(), entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		result[entry.Name()] = &fstest.MapFile{Data: data}
+	}
+	return result
 }
 
 func TestVisibilityPhaseMigrationUpgradesDrainedDatabase(t *testing.T) {

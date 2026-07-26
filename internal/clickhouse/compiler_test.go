@@ -27,6 +27,7 @@ func TestCompileGradeThisEventSearchIsScopedAndParameterized(t *testing.T) {
 		`"event_time" >= parseDateTime64BestEffort(?, 9, 'UTC')`,
 		`"event_time" < parseDateTime64BestEffort(?, 9, 'UTC')`,
 		`"index_time" <= parseDateTime64BestEffort(?, 3, 'UTC')`,
+		`"expires_at" > parseDateTime64BestEffort(?, 3, 'UTC')`,
 		`"visibility_seq" <= ?`,
 		`ORDER BY "__os_order_`,
 		`ASC NULLS LAST`,
@@ -121,6 +122,7 @@ func TestCompileTimeBoundsUseExplicitDateTime64StringParameters(t *testing.T) {
 		"gradethis",
 		"1960-01-01 17:34:05.123456789",
 		"2262-04-11 23:47:16.854775807",
+		"2026-07-22 02:17:38.687",
 		"2026-07-22 02:17:38.687",
 		uint64(73),
 		"gradethis",
@@ -1519,6 +1521,7 @@ func TestCompileRenameKeepsCanonicalScanPredicatesAuthoritative(t *testing.T) {
 		`"event_time" >= parseDateTime64BestEffort(?, 9, 'UTC')`,
 		`"event_time" < parseDateTime64BestEffort(?, 9, 'UTC')`,
 		`"index_time" <= parseDateTime64BestEffort(?, 3, 'UTC')`,
+		`"expires_at" > parseDateTime64BestEffort(?, 3, 'UTC')`,
 		`"visibility_seq" <= ?`,
 	} {
 		if !strings.Contains(calculatedIndex.SQL, predicate) {

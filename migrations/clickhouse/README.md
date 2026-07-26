@@ -15,9 +15,12 @@ idempotent DDL first and writes its `schema_migrations` ledger row last.
   `event_id`.
 - `event_time` preserves event nanoseconds and `index_time` records server
   acceptance time. The ingestion service resolves per-index retention into
-  `expires_at`; table TTL removes expired rows during background merges. We
-  intentionally do not enable `ttl_only_drop_parts`, because a shared partition
-  may contain indexes with different expiry times.
+  `expires_at`. Retention uses whole milliseconds, and the writer validates
+  both timestamps against the safe intersection of the pinned server and
+  native Go driver's ranges before insertion. Table TTL removes expired rows
+  during background merges. We intentionally do not enable
+  `ttl_only_drop_parts`, because a shared partition may contain indexes with
+  different expiry times.
 - Promoted columns cover the Splunk event model and common filters. Optional
   promoted strings remain nullable so absent and empty are distinguishable.
 - `fields` uses ClickHouse's production native `JSON` type with at most 256
@@ -52,12 +55,18 @@ committed; failures known to occur before `Send` mark it safely skipped; an
 ambiguous `Send` result remains reserved and holds the visible cutoff at the gap
 until an identical retry resolves it.
 
-Search jobs capture that O(1) committed cutoff and the compiler always adds
-`visibility_seq <= ?`. Historical rows added before migration read as sequence
-zero and remain visible, while an insert-time constraint rejects post-upgrade
-writers that omit a positive sequence. Single-node mode requires one ClickHouse
-address and all server writer instances to share the same SQLite control DB.
-The SQLite and ClickHouse data therefore form one backup/restore unit.
+Search jobs capture that O(1) committed cutoff and one immutable millisecond
+index-time cutoff. Every compiled event scan applies `index_time <= cutoff`,
+`expires_at > cutoff`, and `visibility_seq <= sequence`; expiration equality is
+therefore already invisible even if an asynchronous TTL merge has not removed
+the row. Historical rows added before migration read as sequence zero and remain
+visible, while an insert-time constraint rejects post-upgrade writers that omit
+a positive sequence. A later export re-execution uses the same logical cutoff,
+but cannot recover a row that physical TTL has already removed.
+
+Single-node mode requires one ClickHouse address and all server writer instances
+to share the same SQLite control DB. The SQLite and ClickHouse data therefore
+form one backup/restore unit.
 
 The schema targets `clickhouse/clickhouse-server:26.3.17.4`, the concrete patch
 of the current 26.3 LTS line used by local deployment. Native JSON has been
