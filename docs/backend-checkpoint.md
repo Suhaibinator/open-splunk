@@ -7,7 +7,67 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded browser statistics rendering
+## Latest checkpoint: high-source-count collector polling
+
+Date: 2026-07-26
+
+Implementation/proof commit: `f41720e0f868354fafd535022b445b12ddaff99b`
+
+This slice removes the material per-source steady-poll allocation costs and
+pins collector behavior at the races most likely to lose or delay data:
+
+1. Each tailer now owns and safely reuses one `time.Timer` for all three poll
+   waits. Polling remains fixed-delay-after-work, cancellation is prompt, stale
+   ticks are consumed before reset, and the steady wait path allocates zero
+   bytes.
+2. A clean-EOF fast path avoids rebuilding a framer and its 4-KiB source
+   scratch buffer when the file size still equals the tailer's current read
+   offset. Drain requests deliberately bypass that shortcut so an append racing
+   with the preceding `Stat` is reframed and cannot be skipped.
+3. Guard fingerprints now reuse per-tailer scratch and a raw SHA-256 digest.
+   Persisted file-identity fingerprints remain hexadecimal and unchanged,
+   while the in-memory guard's steady fingerprint path allocates zero bytes.
+4. Multi-glob discovery now sorts the deduplicated result with the
+   standard-library `slices.Sort` rather than quadratic insertion sort. A
+   direct 10,000-path comparison improved from roughly 50 ms to 0.52 ms on the
+   checkpoint machine.
+5. A same-size copy-truncate rewrite now resets the multiline inactivity
+   clock. Without that reset, a newly rewritten partial multiline event could
+   inherit the old file's inactivity age and flush too early.
+6. Manager construction rejects multiline input without a line-start pattern.
+   This validates the configuration before a clean-EOF shortcut could defer
+   the error until data later arrived.
+7. Controlled regressions pin timer rearming and cancellation, zero-allocation
+   guard reuse, clean EOF, append-after-`Stat` drain, same-size copy-truncate,
+   repeated append waves and source coordinates, sorted/deduplicated globs,
+   and multiline configuration validation. The pre-existing `start_at=end`
+   test now waits for its exact discovery checkpoint instead of a weaker
+   discovered-source count, removing a test synchronization race.
+8. In an actual 1,000-empty-file, 10-ms-poll, approximately 1.5-second profile,
+   allocations fell from 2,054,808 mallocs and 760,255,248 bytes to 1,357,072
+   mallocs and 149,706,432 bytes: 34.0% fewer allocations and 80.3% fewer
+   allocated bytes. A corresponding nonempty-file run converged to essentially
+   the same result. Remaining polling cost is dominated by filesystem
+   discovery and `Stat` work across the manager and tailers; the tailer timer,
+   framer, and guard hot paths no longer allocate in steady state.
+9. The complete ordinary and race-enabled Go suites, vet, build, the exact
+   Docker-backed vertical, and the 30,000-event sustained-load/outage/restart
+   proof all passed. The load proof stored exactly 30,000 distinct event,
+   request, and timestamp identities and drained a 5,700-event durable backlog
+   after the outage.
+10. Three independent final reviewers recomputed staged patch SHA-256
+    `944048bc19bb28af667fd59dcce49f6c73cebcd2b6ee9eb2eea31d27d9f3d7a3`.
+    After adversarial review of timer lifecycle, drain races, copy-truncate,
+    multiline and oversized records, guard ownership, allocation evidence,
+    and test synchronization, all three reported the frozen patch clean.
+
+The exact validation record is under **Latest validation evidence**.
+High-source-count collector polling is complete at this checkpoint. The next
+priority is differential coverage for a composite configured pre-WAL
+redaction resolver, as ordered under **Remaining work**. The overall backend
+goal remains active.
+
+## Previous checkpoint: bounded browser statistics rendering
 
 Date: 2026-07-26
 
@@ -1387,6 +1447,61 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### High-source-count collector polling
+
+The exact implementation at `f41720e0f868354fafd535022b445b12ddaff99b`
+passed:
+
+```sh
+go test ./internal/collector/input \
+  -run '^(TestNewManagerRejectsMultilineWithoutLineStartPattern|TestTailerPollTimerRearmsWithoutAllocating|TestTailerPollTimerDropsConsumedTickAndHonorsCancellation|TestTailerGuardFingerprintReusesScratchWithoutAllocating|TestTailerSameSizeCopyTruncateResetsInactivityClock|TestTailerDrainReframesAfterAppendRacesWithEOFStat|TestManagerAppendWhileTailing|TestManagerMatchPathsSortsAndDeduplicatesIncludeGlobs)$' \
+  -count=20
+go test ./internal/collector/input -run '^TestManagerStartAtEnd$' -count=100
+go test ./internal/collector/input -count=20
+go test -race ./internal/collector/input -count=1
+go test ./internal/collector/input -run '^$' \
+  -bench '^(BenchmarkTailerPollTimer|BenchmarkTailerGuardFingerprint|BenchmarkTailerCleanEOFTracking|BenchmarkMatchPathsHighSourceCount)$' \
+  -benchmem -count=3
+go test ./... -count=1
+go test -race ./... -count=1
+go vet ./...
+go build ./...
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+go test ./integration -run '^TestBackendVertical$' -count=1 -timeout=15m -v
+OPEN_SPLUNK_BACKEND_LOAD=1 \
+go test ./integration -run '^TestBackendSustainedLoad$' -count=1 -timeout=15m -v
+git diff --cached --check
+```
+
+The isolated reusable timer and guard-fingerprint benchmarks both reported
+zero bytes and zero allocations per operation. Clean-EOF tracking reported
+208 bytes and one allocation per poll, attributable to `File.Stat`.
+Multi-glob matching over 1,000 sources took approximately 0.64–0.84 ms in the
+committed benchmark. In the direct 10,000-path sort comparison, the previous
+insertion sort took approximately 49.9–50.6 ms and `slices.Sort` took
+approximately 0.518–0.526 ms.
+
+The 1,000-empty-file profile reduced the baseline 2,054,808 mallocs and
+760,255,248 allocated bytes to 1,357,072 mallocs and 149,706,432 bytes. A
+1-KiB-per-file `start_at=end` profile measured 1,356,972 mallocs and
+149,485,312 bytes, confirming that unchanged nonempty sources do not recreate
+the old per-poll guard/framer costs.
+
+The Docker-backed vertical stored exactly four distinct events and replayed
+none, and all six current GradeThis SPL searches passed. The sustained-load
+proof generated and stored exactly 30,000 events, including exact event,
+request, and timestamp cardinalities; recovered a 5,700-event durable backlog
+after a 6.17-second outage; and ran two eight-search concurrent cohorts. It
+completed in 47.11 seconds on the checkpoint machine. Throughput, recovery
+latency, query timing, and concurrency measurements are observational
+checkpoint-machine evidence, not release acceptance thresholds.
+
+Three independent reviewers verified the exact staged binary diff hash
+`944048bc19bb28af667fd59dcce49f6c73cebcd2b6ee9eb2eea31d27d9f3d7a3`
+and reported no remaining correctness, data-loss, race, timer-lifecycle,
+allocation, performance, efficiency, determinism, reuse, or code-quality
+finding.
+
 ### Bounded browser statistics rendering
 
 The exact implementation at `9d6acc11f2626f92d5ddd2b4e608a1268cc0c9e3`
@@ -2500,10 +2615,13 @@ independent stacks.
    at `9898b41`, on top of the log-generator foundation at `860acac`. The
    deterministic bounded-queue slow WebSocket consumer and browser inbound
    backpressure slice is complete at `4c4003f`; bounded fixed-payload browser
-   rendering is complete at `9d6acc1`. Unless the user changes priority,
-   profile the collector with a high source count and replace its pre-existing
-   per-poll `time.After` allocation only if measurement shows it is material.
-   The current preview-to-final resource-release audit pass is complete at
+   rendering is complete at `9d6acc1`; high-source-count collector polling,
+   reusable timers, clean-EOF framing, guard reuse, and scalable path sorting
+   are complete at `f41720e`. Unless the user changes priority, next add
+   differential tests for the composite configured pre-WAL redaction resolver,
+   followed by the harness-output, adapter, formatter, and release-revision
+   items below. The current preview-to-final resource-release audit pass is
+   complete at
    `961cba2`, the sanitized current GradeThis collector/config migration at
    `c576e85`, logical event retention at `458c8b4`, clock-driven
    job/result/export expiration at `b2b2839`, and stale-duplicate injection at
@@ -2583,9 +2701,10 @@ Continue the release proof in this order:
   path is complete at `4c4003f`. The separate fixed 1,000-row by 64-column
   browser rendering proof, including stable-DOM/two-animation-frame gates and
   interaction-wide DOM bounds, is complete at `9d6acc1`.
-- During high-source-count collector profiling, replace the pre-existing
-  per-poll `time.After` allocation with a safely reused timer if it is material;
-  preserve cancellation and copy-truncate behavior with race coverage.
+- High-source-count collector profiling is complete at `f41720e`. Reusable
+  poll timers, clean-EOF framing avoidance, allocation-free steady guard
+  fingerprints, scalable path sorting, and copy-truncate/drain race coverage
+  are pinned.
 - Replace one-pass-per-distinct-marker configured pre-WAL redaction with a
   composite resolver only after differential tests pin ambiguous encoded
   keys/values, prose-wrapped embedded JSON, duplicate-key canonicalization,
@@ -2735,7 +2854,7 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `9d6acc1`, `4c4003f`, `9898b41`, `59b8f7c`,
+   commits, especially `f41720e`, `9d6acc1`, `4c4003f`, `9898b41`, `59b8f7c`,
    `860acac`, `961cba2`, `c576e85`, `458c8b4`, `b2b2839`, `b80bf0a`,
    `cdb60df`, `787a7f9`, and `522b0ac`; the preceding progress/recovery
    foundations are `b5502a3`, `f72f184`, `ed28182`, and `d1286a4`.
@@ -2751,11 +2870,12 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. The fixed-payload browser rendering measurement is complete at `9d6acc1`.
-   Unless the user changes priority, proceed to high-source-count collector
-   profiling and its pre-existing per-poll timer allocation, followed by the
-   ordered redaction, harness-output, adapter, formatter, and release-revision
-   items above. The generator foundation, current preview-to-final
+5. The fixed-payload browser rendering measurement is complete at `9d6acc1`,
+   and high-source-count collector profiling and polling are complete at
+   `f41720e`. Unless the user changes priority, proceed to differential tests
+   for the composite configured pre-WAL redaction resolver, followed by the
+   harness-output, adapter, formatter, and release-revision items above. The
+   generator foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
    clock-driven job/result/export expiration,
