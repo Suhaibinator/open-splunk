@@ -154,7 +154,7 @@ test("live preview resumes from the exact retained WebSocket sequence", async ({
   assertBrowserSafety(safety);
 });
 
-test("live preview recovers from real sequence expiration", async ({ page }) => {
+test("live preview recovers from real sequence expiration and a transient snapshot failure", async ({ page }) => {
   test.skip(
     !sequenceExpirationTest
       || recoveryControlURL === undefined
@@ -165,6 +165,10 @@ test("live preview recovers from real sequence expiration", async ({ page }) => 
   test.setTimeout(60_000);
   const safety = observeBrowserSafety(page);
   const expiration = await interceptSequenceExpiration(page, origin, timeout);
+  let releaseTransientRecoveryFailure!: () => void;
+  const transientRecoveryFailureGate = new Promise<void>((resolve) => {
+    releaseTransientRecoveryFailure = resolve;
+  });
   let releaseStaleRecovery!: () => void;
   const staleRecoveryGate = new Promise<void>((resolve) => {
     releaseStaleRecovery = resolve;
@@ -183,6 +187,7 @@ test("live preview recovers from real sequence expiration", async ({ page }) => 
   });
   let authoritativeJobRequests = 0;
   let fulfilledAuthoritativeJobRequests = 0;
+  let transientRecoveryFailures = 0;
   let initialJobStateVersion: bigint | undefined;
   const authoritativeSnapshots: GetSearchJobResponse[] = [];
   await page.route(
@@ -190,13 +195,22 @@ test("live preview recovers from real sequence expiration", async ({ page }) => 
     async (route) => {
       authoritativeJobRequests += 1;
       const requestOrdinal = authoritativeJobRequests;
-      if (requestOrdinal > 6) {
+      if (requestOrdinal > 7) {
         await route.abort("blockedbyclient");
         return;
       }
-      if (requestOrdinal === 1) await staleRecoveryGate;
-      if (requestOrdinal === 2) await freshRecoveryGate;
-      if (requestOrdinal === 4) await postWatchdogRecoveryGate;
+      if (requestOrdinal === 1) {
+        await transientRecoveryFailureGate;
+        transientRecoveryFailures += 1;
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "transient authoritative recovery failure" }),
+        });
+        return;
+      }
+      if (requestOrdinal === 2) await staleRecoveryGate;
+      if (requestOrdinal === 5) await postWatchdogRecoveryGate;
       const upstream = await route.fetch();
       if (
         upstream.status() !== 200
@@ -208,14 +222,15 @@ test("live preview recovers from real sequence expiration", async ({ page }) => 
       if (response.searchJob === undefined) {
         throw new Error(`authoritative recovery GET ${requestOrdinal} returned no search job`);
       }
-      if (requestOrdinal === 1) {
+      if (requestOrdinal === 2) {
         if (initialJobStateVersion === undefined || initialJobStateVersion === 0n) {
           throw new Error("the created search job did not establish a positive state version");
         }
         response.searchJob.stateVersion = 0n;
       }
       authoritativeSnapshots.push(response);
-      if (requestOrdinal === 3) await delayedWatchdogGate;
+      if (requestOrdinal === 3) await freshRecoveryGate;
+      if (requestOrdinal === 4) await delayedWatchdogGate;
       await route.fulfill({
         response: upstream,
         body: Buffer.from(GetSearchJobResponse.encode(response).finish()),
@@ -277,16 +292,37 @@ test("live preview recovers from real sequence expiration", async ({ page }) => 
       page.getByRole("table", { name: "Live preview search statistics" }),
     ).toHaveCount(0);
     await expect(page.getByLabel("Job metrics")).toContainText("0 rows", { timeout });
-    const statusCountBeforeStaleRecovery = (await snapshotPreviewStatuses(page)).length;
+    const statusCountBeforeTransientFailure = (await snapshotPreviewStatuses(page)).length;
 
+    releaseTransientRecoveryFailure();
+    await expiration.waitForResynchronizations(2);
+    await expect.poll(() => authoritativeJobRequests, { timeout }).toBe(2);
+    expect(transientRecoveryFailures, "transient authoritative GET failures").toBe(1);
+    expect(authoritativeSnapshots, "snapshots after transient recovery failure").toEqual([]);
+    expect(expiration.connectionCount(), "reconnect after transient authoritative failure").toBe(3);
+    await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+      "data-status",
+      "resyncing",
+      { timeout },
+    );
+    await expect(page.getByLabel("Job metrics")).toContainText("0 rows", { timeout });
+    expect(
+      (await snapshotPreviewStatuses(page)).slice(statusCountBeforeTransientFailure),
+      "preview statuses while the transient failure is retried",
+    ).not.toContain("waiting");
+
+    const statusCountBeforeStaleRecovery = (await snapshotPreviewStatuses(page)).length;
     releaseStaleRecovery();
-    await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(1);
+    await expect.poll(
+      () => authoritativeSnapshots.length,
+      { timeout },
+    ).toBeGreaterThanOrEqual(1);
     const staleJob = authoritativeSnapshots[0].searchJob;
     expect(staleJob?.stateVersion, "deliberately stale authoritative state version").toBe(0n);
     expect(staleJob?.progress?.scannedRows, "stale recovery scanned rows").toBe(3n);
-    await expiration.waitForResynchronizations(2);
-    await expect.poll(() => authoritativeJobRequests, { timeout }).toBe(2);
-    expect(expiration.connectionCount(), "reconnect after stale authoritative snapshot").toBe(3);
+    await expiration.waitForResynchronizations(3);
+    await expect.poll(() => authoritativeJobRequests, { timeout }).toBe(3);
+    expect(expiration.connectionCount(), "reconnect after stale authoritative snapshot").toBe(4);
     await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
       "data-status",
       "resyncing",
@@ -301,6 +337,16 @@ test("live preview recovers from real sequence expiration", async ({ page }) => 
       "preview statuses while the stale snapshot is rejected",
     ).not.toContain("waiting");
 
+    await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(2);
+    const recoveredJob = authoritativeSnapshots[1].searchJob;
+    expect(recoveredJob?.searchJobId, "authoritative recovery job ID").toBe(browserSearchJobID);
+    expect(recoveredJob?.stateVersion, "fresh authoritative state version")
+      .toBeGreaterThan(createdJob.stateVersion);
+    expect(
+      recoveredJob?.progress?.scannedRows,
+      "authoritative recovery rows captured before the queued live update",
+    ).toBe(3n);
+
     await sendBrowserRecoveryControl("progress");
     await expect.poll(() => expiration.postRecoveryFrameCount(), { timeout }).toBe(1);
     await expect(page.getByLabel("Job metrics")).toContainText("0 rows", { timeout });
@@ -310,12 +356,7 @@ test("live preview recovers from real sequence expiration", async ({ page }) => 
     ).not.toContain("waiting");
 
     releaseFreshRecovery();
-    await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(2);
-    const recoveredJob = authoritativeSnapshots[1].searchJob;
-    expect(recoveredJob?.searchJobId, "authoritative recovery job ID").toBe(browserSearchJobID);
-    expect(recoveredJob?.stateVersion, "fresh authoritative state version")
-      .toBeGreaterThan(createdJob.stateVersion);
-    expect(recoveredJob?.progress?.scannedRows, "authoritative recovered scanned rows").toBe(4n);
+    await expect.poll(() => fulfilledAuthoritativeJobRequests, { timeout }).toBeGreaterThanOrEqual(2);
     await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
       "data-status",
       "waiting",
@@ -330,7 +371,7 @@ test("live preview recovers from real sequence expiration", async ({ page }) => 
     await expect.poll(() => expiration.postRecoveryFrameCount(), { timeout }).toBe(2);
     await expect(page.getByLabel("Job metrics")).toContainText("5 rows", { timeout });
     releaseDelayedWatchdog();
-    await expect.poll(() => authoritativeJobRequests, { timeout }).toBe(4);
+    await expect.poll(() => authoritativeJobRequests, { timeout }).toBe(5);
     await expect(page.getByLabel("Job metrics")).toContainText("5 rows", { timeout });
     releasePostWatchdogRecovery();
     await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(4);
@@ -355,6 +396,7 @@ test("live preview recovers from real sequence expiration", async ({ page }) => 
     assertProtobufResponse(resultsResponse);
     expect(decodeSearchResultsJobID(await resultsResponse.body())).toBe(browserSearchJobID);
   } finally {
+    releaseTransientRecoveryFailure();
     releaseStaleRecovery();
     releaseFreshRecovery();
     releaseDelayedWatchdog();
@@ -377,12 +419,13 @@ test("live preview recovers from real sequence expiration", async ({ page }) => 
   expect(previewStatuses, "UI preview status transitions").toContain("live");
   expect(previewStatuses, "UI preview status transitions").toContain("resyncing");
   expect(previewStatuses, "UI preview status transitions").toContain("waiting");
-  expect(expiration.connectionCount(), "search WebSocket connections").toBe(3);
+  expect(expiration.connectionCount(), "search WebSocket connections").toBe(4);
   expect(expiration.heldRecoveryFrameCount(), "target frames ignored during held recovery").toBe(1);
   expect(expiration.postRecoveryFrameCount(), "post-recovery target frames").toBeGreaterThan(0);
   expiration.assertHealthy();
   expect(safety.createRequests(), "browser search create requests").toBe(1);
-  expect(authoritativeJobRequests, "bounded authoritative job GETs").toBeLessThanOrEqual(5);
+  expect(transientRecoveryFailures, "transient authoritative GET failures").toBe(1);
+  expect(authoritativeJobRequests, "bounded authoritative job GETs").toBeLessThanOrEqual(6);
   assertBrowserSafety(safety);
 });
 
@@ -762,7 +805,7 @@ async function interceptSequenceExpiration(
     const connectionOrdinal = matchingConnectionCount;
     const server = client.connectToServer();
     if (connectionOrdinal === 1) firstServer = server;
-    if (connectionOrdinal > 3) {
+    if (connectionOrdinal > 4) {
       fail(new Error(`search WebSocket opened ${connectionOrdinal} matching connections`));
       return;
     }
@@ -963,7 +1006,7 @@ async function interceptSequenceExpiration(
             }
             heldRecoveryTargetFrames += 1;
           }
-          if (connectionOrdinal === 3) recoveredTargetFrames += 1;
+          if (connectionOrdinal === 4) recoveredTargetFrames += 1;
         }
         client.send(message);
         if (event.payload?.$case === "resynchronizationRequired") {
@@ -1019,8 +1062,8 @@ async function interceptSequenceExpiration(
       });
     },
     waitForResynchronizations(count) {
-      if (!Number.isSafeInteger(count) || count < 1 || count > 2) {
-        return Promise.reject(new RangeError("resynchronization count must be between 1 and 2"));
+      if (!Number.isSafeInteger(count) || count < 1 || count > 3) {
+        return Promise.reject(new RangeError("resynchronization count must be between 1 and 3"));
       }
       if (failure !== undefined) return Promise.reject(failure);
       if (resynchronizedConnections.size >= count) return Promise.resolve();
@@ -1040,10 +1083,10 @@ async function interceptSequenceExpiration(
     assertHealthy() {
       if (failure !== undefined) throw failure;
       if (
-        reconnectRequestIDs.size !== 2
-        || acknowledgedConnections.size !== 2
-        || resynchronizedConnections.size !== 2
-        || matchingConnectionCount !== 3
+        reconnectRequestIDs.size !== 3
+        || acknowledgedConnections.size !== 3
+        || resynchronizedConnections.size !== 3
+        || matchingConnectionCount !== 4
         || withheldFrames.size !== 2
         || heldRecoveryTargetFrames !== 1
         || recoveredTargetFrames < 1
