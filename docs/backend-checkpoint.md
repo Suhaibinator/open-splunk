@@ -7,7 +7,74 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: recovered-socket stale-duplicate fencing
+## Latest checkpoint: clock-driven expiration and tombstone cleanup
+
+Date: 2026-07-26
+
+Implementation/proof commit:
+`b2b2839` (`prove clock-driven expiration cleanup`)
+
+Recovery foundation:
+`b80bf0a` (`prove recovered socket stale-frame fencing`)
+
+This slice closes the remaining first-release lifecycle proof:
+
+1. Search WebSocket polling now accepts a context-aware wait function. The
+   production default remains a stoppable real timer; tests can drive every
+   refresh from one deterministic clock without sleeping or creating a
+   goroutine per wait.
+2. A real-manager HTTP/WebSocket fixture uses the production search manager,
+   export manager, handler, upgraded sockets, controlled executor, active
+   result lease, active artifact-download lease, and an unredeemed grant. It
+   proves running preview, successful search completion, a real CSV artifact,
+   and an invalid-SPL diagnostic failure before advancing time.
+3. At exactly one nanosecond before expiry, completed/failed jobs and the
+   export artifact remain available and all three sockets answer application
+   pings. At the exact expiry boundary, the search/result, diagnostic, export,
+   download-grant, and new-lease manager calls all switch to their expired
+   contracts, while subscribed WebSockets publish the corresponding state.
+4. The subscribed retained-result projection is required to be exactly four
+   ordered frames: EXPIRED state, progress, one empty non-truncated RESET, and
+   EXPIRED terminal. Every additional or row-bearing preview is rejected.
+   Existing result and download leases remain readable while preventing any
+   new lease or grant.
+5. Expiring an export purges every retained completed terminal containing
+   artifact metadata before installing the artifact-free EXPIRED terminal.
+   Reconnecting from the old completed checkpoint must therefore receive
+   `SEQUENCE_EXPIRED`, never a replay that can briefly restore a stale
+   download-capable artifact.
+6. Export tombstone retention is measured from the actual transition to
+   EXPIRED, matching search behavior. A deliberately late first cleanup can no
+   longer expire and immediately delete the tombstone in one pass.
+7. The unpinned diagnostic tombstone retires first and closes its socket.
+   Result/download leases pin the expired search/export tombstones and backing
+   resources. Closing the final result lease synchronously removes the overdue
+   search tombstone and rows. Closing the final download lease removes the
+   artifact; the ensuing cleanup removes the export tombstone. All remaining
+   sockets then close without another application frame.
+8. The fixture proves all manual waiters are released, WebSocket poll reads
+   quiesce, and the executor is invoked/exits exactly once. Its cleanup
+   choreography advances the clock without waking registered pollers, mutates
+   both managers, and only then releases those pollers, eliminating a
+   stress-reproduced lost wakeup.
+9. Controlled red tests exposed both production defects: stale completed
+   export replay originally acknowledged `replay_will_follow=true`, and a late
+   first export cleanup originally returned `ErrNotFound` immediately.
+   Adversarial reviews also found and drove fixes for an assertion in the
+   wrong lifecycle table, a socket-timeout false pass, duplicated fixture
+   machinery, unordered stale-preview acceptance, completion/poller ordering,
+   and the tombstone lost-wakeup race. Final frozen-diff correctness,
+   architecture, and efficiency rereviews reported no findings.
+
+The exact validation record is under **Latest validation evidence**. The
+first-release lifecycle matrix is complete. The next correctness priority is
+to make per-index event retention logically authoritative in compiled
+ClickHouse scans even before background TTL merges physically remove rows.
+That task and the remaining product/performance work are ordered under
+**Remaining work, in priority order**. The overall backend goal remains
+active.
+
+## Previous checkpoint: recovered-socket stale-duplicate fencing
 
 Date: 2026-07-26
 
@@ -61,10 +128,9 @@ already-correct production WebSocket client:
    correctness, efficiency, and fixture-quality rereviews reported no
    remaining concrete finding.
 
-The exact validation record is under **Latest validation evidence**. The next
-checkpoint is clock-driven terminal job/result/export expiration and tombstone
-removal. Its ordered acceptance criteria are under **Remaining work, in
-priority order**. The overall backend goal remains active.
+The exact validation record is under **Latest validation evidence**. At that
+checkpoint, clock-driven terminal job/result/export expiration and tombstone
+removal was next; it is now complete at `b2b2839`.
 
 ## Previous checkpoint: authoritative browser cancellation
 
@@ -119,9 +185,8 @@ executor-exit counter, shared WebSocket URL matcher, and guarded response
 waiter. Final correctness, efficiency, reuse, and fixture-quality reviews
 reported no remaining blocker.
 
-At that checkpoint, stale-duplicate injection across a real recovery boundary
-was next. It is now complete at `b80bf0a`; clock-driven terminal
-job/result/export expiration remains the current priority.
+At that checkpoint, stale-duplicate injection and clock-driven expiration were
+next. They are now complete at `b80bf0a` and `b2b2839`, respectively.
 
 ## Previous checkpoint: versioned progress and coalesced browser recovery
 
@@ -190,8 +255,9 @@ flag ambiguity, a potentially batched false-pass, an incorrect DOM regex, and
 observer/listener cleanup. Final semantics, efficiency, reuse, and
 browser-fixture reviews reported no remaining blocker.
 
-At that checkpoint, honest browser cancellation was next, followed by
-stale-duplicate injection and clock-driven job/result/export expiration.
+At that checkpoint, browser cancellation, stale-duplicate injection, and
+clock-driven expiration were next. They are now complete at `787a7f9`,
+`b80bf0a`, and `b2b2839`, respectively.
 
 ## Previous checkpoint: browser sequence-expiration and transient recovery
 
@@ -789,6 +855,51 @@ All three reviewers reported no remaining concrete correctness, efficiency,
 or code-quality finding after those fixes.
 
 ## Latest validation evidence
+
+### Clock-driven expiration and tombstone cleanup
+
+The proof at `b2b2839` passed:
+
+```sh
+go test ./... -count=1
+go vet ./...
+go test -race ./internal/export ./internal/searchws ./internal/server -count=1
+go test ./internal/server \
+  -run '^TestSearchWebSocketRealManagersExpireLeasedResultsArtifactsAndTombstones$' \
+  -count=200
+go test -race ./internal/server \
+  -run '^TestSearchWebSocketRealManagersExpireLeasedResultsArtifactsAndTombstones$' \
+  -count=50
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
+git diff --check
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+go test ./integration \
+  -run '^Test(BackendVertical|Browser(SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=15m -v
+```
+
+All 42 frontend tests passed. The exact six-case Docker/ClickHouse plus
+Playwright gate completed in 49.937 seconds:
+`TestBackendVertical` in 22.04 seconds,
+`TestBrowserSequenceExpiredRecovery` in 11.71 seconds,
+`TestBrowserSequenceGapRecovery` in 5.11 seconds,
+`TestBrowserSequenceGapRESTTerminalRecovery` in 5.07 seconds,
+`TestBrowserSequenceGapRESTFirstProgressRecovery` in 4.23 seconds, and
+`TestBrowserSearchCancellation` in 1.25 seconds. A read-only Docker check
+showed no Open Splunk or ClickHouse test container afterward.
+
+The final lifecycle fixture passed 200 consecutive ordinary runs and 50
+consecutive race-enabled runs locally. Independent reviewers additionally ran
+up to 100 ordinary repetitions, up to 60 semantic repetitions, and repeated
+race-enabled affected-package suites. Controlled red/green evidence covered
+artifact-terminal replay and late-cleanup tombstone retention. Reviewers then
+found two false-pass assertions and two deterministic-clock races; each was
+reproduced, fixed, stress-tested, and rereviewed on the final frozen staged
+diff. Final correctness, architecture/determinism, and efficiency/leak
+rereviews reported no remaining finding.
 
 ### Recovered-socket stale-duplicate fencing
 
@@ -1430,11 +1541,12 @@ independent stacks.
      -count=1 -timeout=15m -v
    ```
 
-5. Start with clock-driven terminal job/result/export expiration and tombstone
-   removal, unless the user explicitly changes priority. Stale-duplicate
-   injection across the recovered browser socket is complete at `b80bf0a`.
-   Add tests before implementation, run read-only adversarial reviews, fix
-   concrete findings, then commit and push `main`.
+5. Start with logical `expires_at > IndexTimeCutoff` filtering in the common
+   ClickHouse scan, unless the user explicitly changes priority. Clock-driven
+   job/result/export expiration is complete at `b2b2839`; stale-duplicate
+   injection is complete at `b80bf0a`. Add the pinned ClickHouse red test
+   before implementation, run read-only adversarial reviews, fix concrete
+   findings, then commit and push `main`.
 
 ## Remaining work, in priority order
 
@@ -1461,21 +1573,38 @@ authoritative canceled presentation, and zero post-cancel reconnects.
 Recovered-socket stale-duplicate fencing is complete as well: the browser
 receives exact old preview and RUNNING frames after contiguous recovery, never
 regresses preview or terminal presentation, accepts subsequent live frames,
-and neither reconnects nor issues an extra authoritative GET. Complete the one
-remaining release-path proof before adding another ad hoc SPL feature:
+and neither reconnects nor issues an extra authoritative GET. Clock-driven
+terminal job/result/export expiration is now complete too: exact expiry
+boundaries, preview and artifact invalidation, pinned leases, tombstone
+retirement, socket closure, timer release, and polling quiescence are proven
+through real managers and the production HTTP/WebSocket handler.
 
-1. Exercise terminal job/result/export expiration and tombstone removal under
-   a clock-driven fixture while subscribed, including preview-to-final
-   release and absence of stale frames, sockets, timers, retained snapshots,
-   leases, exports, or diagnostics.
+Before adding another ad hoc SPL feature, close the remaining event-retention
+correctness gap:
 
-Reuse the real manager + HTTP + WebSocket fixture in
-`internal/server/search_ws_integration_test.go` for server-side transitions.
-For browser-only fault control, prefer a dedicated in-process server over
-test-only production environment switches. Keep proxy logs, diagnostics,
-matching sockets, frame counts, and timeout output strictly bounded.
+1. Add a pinned ClickHouse integration test which inserts an event whose
+   `expires_at` is at or before the immutable search `IndexTimeCutoff`. Keep
+   that expiry in the ClickHouse server's future while choosing a still-later
+   artificial search cutoff, and use a raw ClickHouse query to prove the row
+   physically exists immediately before the compiled-scan assertions. Then
+   prove it cannot appear in search, preview, export re-execution, timeline,
+   field discovery, or field-summary paths.
+2. Make the common compiled scan predicate require
+   `expires_at > IndexTimeCutoff`, alongside the existing tenant, index,
+   event-time, index-time, and visibility cutoffs. Use the immutable job cutoff
+   rather than ClickHouse `now()` so retries, previews, results, and exports
+   retain one snapshot. Pin exact-millisecond equality and just-after-boundary
+   behavior.
+3. Rerun every pinned ClickHouse compiler/executor suite and the exact
+   collector-to-browser gate. Confirm the predicate remains visible in
+   generated SQL/arguments and cannot be removed by later SPL stages.
 
-After that remaining release-path proof:
+ClickHouse table TTL deletion is merge-driven physical reclamation; it is not
+an immediate authorization/visibility boundary. Until the explicit predicate
+above is implemented, an expired physical row may remain searchable between
+its retention deadline and a background merge.
+
+After that retention fix:
 
 - Close any remaining preview-to-final resource-release coverage that is not
   naturally exercised by the cancellation, recovery, and expiration fixtures.
@@ -1564,6 +1693,22 @@ multivalue output, XML, terminal containers, escaped literal-dot keys, and the
 - Keep the first release single-node; distributed control/search remains
   outside the current plan.
 
+Resource/lifecycle audit findings to retain in the backlog:
+
+- Bound or physically prune ingestion-token tombstones so token listing does
+  not remain O(all historical tokens).
+- Move export artifact filesystem deletion outside the manager-wide read lock,
+  surface background deletion failures, and let admission perform due cleanup
+  before reporting capacity exhaustion.
+- Physically prune idle search-history owner rows and replace the
+  process-global SQLite visibility lease registry with ownership that cannot
+  retain closed database pointers indefinitely.
+- Finish the deleting-index lifecycle instead of leaving indexes permanently
+  in an intermediate state.
+- Give WebSocket service shutdown a bounded dependency contract; `Close`
+  currently relies on snapshot providers honoring cancellation before its
+  ownership barrier can complete.
+
 The architecture plan still requires product decisions for capacity-planning
 retention/event size, target hardware, concurrent search load, immediate
 Windows collector support, and whether dashboards are first-release scope.
@@ -1600,9 +1745,9 @@ Do not guess those decisions if they materially affect the implementation.
 
 1. Confirm `main` is clean and exactly matches `origin/main`.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `b80bf0a`, `cdb60df`, `787a7f9`, and `522b0ac`; the
-   preceding progress/recovery foundations are `b5502a3`, `f72f184`,
-   `ed28182`, and `d1286a4`.
+   commits, especially `b2b2839`, `b80bf0a`, `cdb60df`, `787a7f9`, and
+   `522b0ac`; the preceding progress/recovery foundations are `b5502a3`,
+   `f72f184`, `ed28182`, and `d1286a4`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
 4. Run the ordinary Go/frontend gates above and the focused exact corpus:
 
@@ -1615,9 +1760,10 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. Unless the user changes priority, begin with clock-driven terminal
-   job/result/export expiration and tombstone removal in the ordered matrix
-   above. Recovered-socket stale-duplicate fencing, authoritative browser
+5. Unless the user changes priority, begin with the pinned ClickHouse
+   logical-retention test and common `expires_at > IndexTimeCutoff` scan
+   predicate described above. Clock-driven job/result/export expiration,
+   recovered-socket stale-duplicate fencing, authoritative browser
    cancellation, versioned REST-first/replay-later progress, recovery-cycle
    coalescing, REST-only and accepted-WebSocket terminal discovery after a
    sequence gap, explicit browser sequence-gap recovery, browser
