@@ -7,7 +7,78 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: concurrent SPL searches during live recovery
+## Latest checkpoint: bounded WebSocket consumers and replay recovery
+
+Date: 2026-07-26
+
+Implementation/proof commit: `4c4003f`
+
+This slice makes slow WebSocket consumers deterministic, bounded, isolated,
+and recoverable on both sides of the transport:
+
+1. A real-server integration fixture wraps exactly one accepted TCP
+   connection with a test-only write gate. With the production minimum
+   seven-frame queue, the first progress frame is held in flight, the next six
+   remain queued, and the eighth new progress frame closes only that slow
+   connection. The test does not depend on kernel-buffer timing or impose a
+   performance threshold.
+2. A healthy sibling receives every progress sequence contiguously while the
+   slow writer is blocked. Authoritative REST state advances throughout and
+   the search executor is admitted exactly once, proving that transport
+   backpressure cannot stall or repeat search execution.
+3. The abandoned checkpoint deliberately falls outside the retained replay
+   suffix. Reconnection receives exact `SEQUENCE_EXPIRED` bounds and recovery
+   path, performs authoritative REST recovery, reconnects at the server's
+   latest sequence, receives subsequent live progress, and converges with the
+   healthy sibling on identical terminal state. The executor still runs once
+   and the deterministic clock finishes with no poll waiters.
+4. Server preview pressure no longer reports an undelivered disposable
+   preview as success. The pressured connection is closed for replay, the
+   canonical event remains retained, and healthy siblings continue. Both live
+   publication and initial subscribe/replay tailoring use a dedicated,
+   cancellation-aware bounded-work gate rather than charging temporary
+   canonical copies to the connection queue budget; only final stamped frames
+   consume queue capacity.
+5. The browser client now owns a client-wide inbound bound, including the
+   active listener and every pending generation: 64 frames and 4 MiB by
+   default, with validated positive safe-integer overrides. Direct
+   `ArrayBuffer` values and all views are copied into exact-size owned storage,
+   preventing caller mutation and oversized backing-buffer retention; immutable
+   `Blob` values are charged by size.
+6. Inbound overflow closes the originating socket with application code 4000
+   and requests replay without advancing the checkpoint. Listener work is
+   serialized globally across socket generations, so a stale callback
+   completes before replacement-generation callbacks. Automatic reconnect is
+   deferred while that callback is active, while intentional disconnect
+   cancels the deferred reconnect.
+7. Every callback-triggered restart is fenced to its originating socket and,
+   after awaited callbacks, to the same subscription object. Delayed close,
+   sequence-gap, send-error, disconnect/reconnect, and unsubscribe/resubscribe
+   races therefore cannot close a replacement socket or commit a stale
+   checkpoint.
+8. The browser queue uses a logical head and periodically compacts only after
+   at least 64 consumed entries and proportional progress. This removes
+   repeated `Array.shift()` work and bounds physical slot retention with
+   amortized linear processing under a sustained nonempty backlog.
+9. Controlled reds reproduced the exact server defect: with unrelated queued
+   data leaving room for the final acknowledgment plus one-row preview, the
+   old initial replay path closed the healthy subscriber because it charged
+   the larger two-row canonical scratch copy. Browser regressions likewise
+   pinned active-plus-pending frame/byte bounds, mutable buffer ownership,
+   stale-listener ordering, replacement-socket fencing, delayed close, and
+   queue compaction.
+10. Three independent final reviewers recomputed staged patch SHA-256
+    `887f03b62962c1aacb45b992f0481b1a7c5f04b6cc408f1d81fa5dc648c9670c`
+    and reported no remaining correctness, replay/sequence, concurrency,
+    accounting, leak, deadlock, efficiency, performance, determinism, reuse,
+    or code-quality finding.
+
+The exact validation record is under **Latest validation evidence**. No Docker
+fixture was launched for this slice. The next priority is a separate browser
+rendering measurement for a fixed 1,000-result payload with stable-DOM and
+animation-frame gates. The overall backend goal remains active.
+
+## Previous checkpoint: concurrent SPL searches during live recovery
 
 Date: 2026-07-26
 
@@ -1247,6 +1318,56 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Bounded WebSocket consumers and replay recovery
+
+The exact implementation at `4c4003f` passed:
+
+```sh
+go test ./internal/searchws ./internal/server \
+  -run '^Test(PreviewQueuePressureSkipsSubscriptionSpecificCopy|DisposablePreviewPressureClosesAndRetainsReplay|PreviewTailoringWorkDoesNotConsumeConnectionQueueBudget|InitialPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget|TerminalPreviewInvalidationRemainsAuthoritativeUnderPressure|BoundedInitialFrameStagingOwnsGlobalQueueReservation|SearchWebSocketSlowConsumerIsBoundedAndRecoversWithoutBlockingSearch)$' \
+  -count=20
+go test -race ./internal/searchws ./internal/server \
+  -run '^Test(PreviewQueuePressureSkipsSubscriptionSpecificCopy|DisposablePreviewPressureClosesAndRetainsReplay|PreviewTailoringWorkDoesNotConsumeConnectionQueueBudget|InitialPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget|TerminalPreviewInvalidationRemainsAuthoritativeUnderPressure|BoundedInitialFrameStagingOwnsGlobalQueueReservation|SearchWebSocketSlowConsumerIsBoundedAndRecoversWithoutBlockingSearch)$' \
+  -count=5
+go test -race ./internal/searchws \
+  -run '^TestInitialPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget$' \
+  -count=100
+go test ./... -count=1
+go test -race ./internal/searchws ./internal/server -count=1
+go vet ./...
+go build ./...
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
+git diff --cached --check
+```
+
+The frontend suite passed all 80 tests. The production Next.js build compiled,
+typechecked, and generated all 11 static pages. The focused preview-pressure,
+initial-staging, and gated-writer cases passed 20 ordinary repetitions and
+five race-enabled repetitions across `internal/searchws` and
+`internal/server`; the deterministic initial subscribe/replay boundary also
+passed 100 race-enabled repetitions. Final reviewers independently reran the
+frontend suite and up to three complete race-enabled repetitions of both
+affected Go packages.
+
+The controlled server red failed at the intended boundary: the old initial
+subscribe/replay path hard-closed the connection with zero queued bytes when
+the exact final 342-byte batch fit. The fixed path queues that batch, preserves
+the unrelated reservation exactly, emits a replay acknowledgment plus the
+correct truncated one-row preview, and releases its tailoring permit. The
+real-server fixture separately proves one blocked in-flight frame plus six
+queued frames remain open and the eighth new frame triggers isolated closure.
+
+Three independent reviewers verified the exact staged binary diff hash
+`887f03b62962c1aacb45b992f0481b1a7c5f04b6cc408f1d81fa5dc648c9670c`.
+They traced queue and in-flight ownership, tailoring permits, cancellation and
+lock ordering, browser frame accounting and backing-buffer ownership,
+amortized compaction, stale-generation fencing, sequence/replay behavior, and
+the integration fixture's transport determinism. All three reported the
+frozen patch clean. This slice launched no Docker fixture.
+
 ### Concurrent SPL searches during live recovery
 
 The exact implementation at `9898b41` passed:
@@ -2127,8 +2248,10 @@ The backend now includes:
   result leases, timelines, field catalog/summary, and CSV/JSONL export;
 - binary protobuf WebSocket preview/progress with job-state revisions, replay,
   explicit resynchronization acknowledgement, coalesced REST recovery, bounded
-  single-use subscription identities, expiration retirement, and reconnect
-  backoff;
+  single-use subscription identities, expiration retirement, bounded
+  server-side slow-consumer eviction, independently bounded preview-tailoring
+  work, client-wide inbound frame/byte bounds, replay-on-pressure, serialized
+  cross-generation listeners, and reconnect backoff;
 - the documented SPL v0.1 base search and Boolean/comparison expressions;
 - `fields`, `table`, `rename`, `sort`, `head`, `tail`, and `dedup`;
 - the documented `eval`/`where` subset;
@@ -2263,12 +2386,14 @@ independent stacks.
 
 5. The core real-process sustained-load/outage/restart proof is complete at
    `59b8f7c`, and its concurrent-search-during-recovery extension is complete
-   at `9898b41`, on top of the log-generator foundation at `860acac`. Unless
-   the user changes priority, add a deterministic slow WebSocket consumer,
-   then measure browser rendering separately. The current preview-to-final
-   resource-release audit pass is complete at `961cba2`, the sanitized current
-   GradeThis collector/config migration at `c576e85`, logical event retention
-   at `458c8b4`, clock-driven job/result/export expiration at `b2b2839`, and
+   at `9898b41`, on top of the log-generator foundation at `860acac`. The
+   deterministic bounded-queue slow WebSocket consumer and browser inbound
+   backpressure slice is complete at `4c4003f`. Unless the user changes
+   priority, measure browser rendering separately with the fixed 1,000-result
+   payload described below. The current preview-to-final resource-release
+   audit pass is complete at `961cba2`, the sanitized current GradeThis
+   collector/config migration at `c576e85`, logical event retention at
+   `458c8b4`, clock-driven job/result/export expiration at `b2b2839`, and
    stale-duplicate injection at `b80bf0a`. Add a red unit or integration test
    before implementation, run read-only adversarial reviews, fix concrete
    findings, then commit and push `main`.
@@ -2341,11 +2466,11 @@ observational until hardware and capacity decisions are made.
 
 Continue the release proof in this order:
 
-- Add a deterministic bounded-queue slow WebSocket consumer after the
-  now-complete concurrent-search load path. Measure browser rendering
-  separately with a fixed 1,000-result payload, stable DOM plus two animation
-  frames, and browser performance metrics. Do not use a default-config
-  black-hole socket as a timing assertion.
+- The deterministic bounded-queue slow WebSocket consumer and replay recovery
+  path is complete at `4c4003f`. Next, measure browser rendering separately
+  with a fixed 1,000-result payload, stable DOM plus two animation frames, and
+  browser performance metrics. Do not use a default-config black-hole socket
+  as a timing assertion.
 - During high-source-count collector profiling, replace the pre-existing
   per-poll `time.After` allocation with a safely reused timer if it is material;
   preserve cancellation and copy-truncate behavior with race coverage.
@@ -2487,10 +2612,10 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `9898b41`, `59b8f7c`, `860acac`, `961cba2`,
-   `c576e85`, `458c8b4`, `b2b2839`, `b80bf0a`, `cdb60df`, `787a7f9`, and
-   `522b0ac`; the preceding progress/recovery foundations are `b5502a3`,
-   `f72f184`, `ed28182`, and `d1286a4`.
+   commits, especially `4c4003f`, `9898b41`, `59b8f7c`, `860acac`,
+   `961cba2`, `c576e85`, `458c8b4`, `b2b2839`, `b80bf0a`, `cdb60df`,
+   `787a7f9`, and `522b0ac`; the preceding progress/recovery foundations are
+   `b5502a3`, `f72f184`, `ed28182`, and `d1286a4`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
 4. Run the ordinary Go/frontend gates above and the focused exact corpus:
 
@@ -2504,9 +2629,10 @@ Do not guess those decisions if they materially affect the implementation.
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
 5. Unless the user changes priority, extend the completed real-process
-   sustained-load/outage/restart and concurrent-search proof with a
-   deterministic slow WebSocket consumer, then measure browser rendering
-   separately. The generator foundation, current preview-to-final
+   sustained-load/outage/restart and concurrent-search proof from the
+   now-complete deterministic slow WebSocket checkpoint at `4c4003f` into the
+   separate fixed-payload browser rendering measurement. The generator
+   foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
    clock-driven job/result/export expiration,
