@@ -7,11 +7,14 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: browser sequence-expiration recovery
+## Latest checkpoint: browser sequence-expiration and transient recovery
 
 Date: 2026-07-25
 
-Implementation commit:
+Transient-failure proof:
+`ad4a77b` (`prove transient browser recovery failure`)
+
+Sequence-expiration implementation:
 `8f6d569` (`prove browser sequence expiration recovery`)
 
 Preceding real-recovery checkpoint:
@@ -31,26 +34,33 @@ manager:
    responds with `SEQUENCE_EXPIRED`; the fixture validates the routed
    subscription, target, checkpoint, earliest/latest bounds, and
    acknowledgement before recovery may proceed.
-3. While recovery is suspended, real progress `K+3` and `K+4` arrive. A
-   deliberately stale authoritative response with `state_version=0` is
-   rejected, no provisional progress leaks into the UI, and the next
-   reconnect still resumes from exact `K`. A fresh authoritative snapshot then
-   atomically establishes four processed rows.
-4. A watchdog race captures an authoritative GET at four rows, delivers live
+3. The first authoritative recovery GET is held while real progress `K+3`
+   arrives, then returns an actual HTTP 503. No snapshot or queued progress is
+   applied, the UI remains `resyncing` at zero rows, and the next connection
+   again subscribes from exact `K` with the original identity and options.
+4. A deliberately stale second response with `state_version=0` is also
+   rejected without advancing the checkpoint. The fourth connection again
+   resumes from exact `K`. Its fresh authoritative snapshot is captured at
+   three rows and held while real `K+4` arrives; the UI remains at zero until
+   the three-row response is successfully applied and acknowledged, after
+   which the queued WebSocket event is required to establish four rows.
+5. A watchdog race captures an authoritative GET at four rows, delivers live
    WebSocket progress `K+5`, and only then releases the older response. The
    production live-update epoch fence rejects that in-flight snapshot, so the
    visible five-row state cannot regress even when its numeric state version
    is otherwise acceptable.
-5. The same recovered connection accepts a fresh preview and terminal result.
+6. The same recovered connection accepts a fresh preview and terminal result.
    The final authoritative two-row projection replaces preview state. The
    executor is invoked once and exits once; job creation, sockets, recovery
    GETs, frames, commands, diagnostics, and waits are all bounded.
-6. The client now rejects a resynchronization payload whose subscription does
+7. The client now rejects a resynchronization payload whose subscription does
    not match its routed envelope and rejects inverted replay bounds. Recovery
    acknowledgement remains provisional until the asynchronous recovery
    handler resolves; queued events and the checkpoint stay suspended in the
-   meantime.
-7. Integration builds use a unique staged repository per Go test process,
+   meantime. That commit-protocol property is pinned directly by the unit
+   suite, while the browser fixture proves the application handler does not
+   acknowledge a failed authoritative request.
+8. Integration builds use a unique staged repository per Go test process,
    with shared immutable output only inside that process. Raw frontend builds
    and parallel integration processes no longer collide through `.next` or
    `out`. Cleanup validates its exact temporary target. CI runs both real
@@ -70,24 +80,26 @@ OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
 OPEN_SPLUNK_BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
 go test ./integration \
   -run '^Test(BackendVertical|BrowserSequenceExpiredRecovery)$' \
-  -count=1 -v
+  -count=1 -timeout=12m -v
 git diff --check
 ```
 
-The frontend suite contains 32 passing protocol tests. The combined final
-Docker/ClickHouse and Chrome gate completed in about 33 seconds. The real
+The frontend suite contains 32 passing protocol tests. The latest combined
+Docker/ClickHouse and Chrome gate completed in about 34 seconds. The real
 staged recovery case also passed under the race detector, and repeated harness
 race checks left no staged directory or Docker container behind.
 
 Independent correctness, concurrency/performance, and quality rereviews
-reported no remaining concrete finding. Their identified false-positive
-risks, stale in-flight snapshot race, shared-build collision, and CI package
-timeout were fixed before the implementation commit.
+reported no remaining concrete finding. A follow-up transient-failure review
+found that the first draft fetched its fresh snapshot after `K+4`, which could
+have hidden a dropped queued frame; capturing the snapshot at three rows
+before sending `K+4` closed that false-positive path.
 
-The next recommended slice is a real browser proof of a transient
-authoritative recovery-GET failure, followed by explicit sequence-gap
-injection. The precise remaining matrix is under **Remaining work, in priority
-order**. The overall backend goal remains active.
+The next recommended slice is explicit browser sequence-gap injection:
+forward `K+2` while dropping `K+1`, require the client to reconnect from `K`,
+and prove contiguous replay. The precise remaining matrix is under
+**Remaining work, in priority order**. The overall backend goal remains
+active.
 
 ## Previous checkpoint: resumable WebSocket recovery
 
@@ -596,7 +608,8 @@ or code-quality finding after those fixes.
 
 ### Browser sequence-expiration recovery validation
 
-The exact implementation tree at `8f6d569` passed the complete ordinary suite,
+The exact browser proof at `ad4a77b`, built on the production recovery
+implementation at `8f6d569`, passed the complete ordinary suite,
 affected-package race suite, all 32 frontend tests, static gates, production
 build, the dedicated staged Chrome recovery case, and the combined real
 Docker-backed ClickHouse/Chrome vertical:
@@ -611,27 +624,29 @@ npm run build
 OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
 OPEN_SPLUNK_BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
 go test ./integration \
-  -run '^TestBrowserSequenceExpiredRecovery$' -count=1 -v
+  -run '^TestBrowserSequenceExpiredRecovery$' -count=1 -timeout=12m -v
 OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
 OPEN_SPLUNK_BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
 go test ./integration \
   -run '^Test(BackendVertical|BrowserSequenceExpiredRecovery)$' \
-  -count=1 -v
+  -count=1 -timeout=12m -v
 git diff --check
 ```
 
-The dedicated final case completed in approximately 18 seconds; the combined
-gate completed in approximately 33 seconds. The staged real-browser case also
+The dedicated final case completed in approximately 21 seconds; the combined
+gate completed in approximately 34 seconds. The staged real-browser case also
 passed under `go test -race`, the focused harness race tests passed ten
 repetitions, and the process-isolation review verified that no staged
 repository or raw `.next`/`out` collision remained.
 
 The recovery test proves exact `K` retention across an expired replay,
-rejection of a stale versioned snapshot, suspension while new live events
-arrive, convergence from a fresh snapshot, rejection of an in-flight snapshot
-captured before a live update, and normal preview-to-final operation on the
-recovered connection. Final focused correctness, concurrency/performance, and
-quality reviewers found no remaining concrete issue.
+an actual transient HTTP 503, rejection of a stale versioned snapshot,
+suspension while new live events arrive, queued-frame application only after a
+successful three-row authoritative snapshot, rejection of an in-flight
+snapshot captured before a later live update, and normal preview-to-final
+operation on the recovered connection. Final focused semantics,
+fixture-correctness, and false-positive reviewers found no remaining concrete
+issue after the upstream-snapshot capture order was hardened.
 
 The preceding real-manager replay/expiration and offline-cancellation tests
 had already passed 30 consecutive ordinary runs and five race-enabled
@@ -1012,26 +1027,21 @@ collector/server process-restart proof, resumable WebSocket unit contract,
 real-browser retained replay, real-manager one-event replay expiration, and
 offline cancellation publication/replay are complete. The dedicated real
 browser `SEQUENCE_EXPIRED` fixture now also proves exact checkpoint retention,
-stale-snapshot rejection, live-update fencing, and same-connection
+stale-snapshot rejection, a genuine transient HTTP 503, queued-frame
+suspension/application, live-update fencing, and same-connection
 preview-to-final behavior without re-execution. Continue the remaining
 recovery matrix before adding another ad hoc SPL feature:
 
-1. Make the first authoritative recovery GET fail with a genuine transient
-   HTTP or network error. The following reconnect must retain checkpoint `K`,
-   request recovery again, acknowledge only the successful snapshot, and
-   eventually converge without duplicate application. Do not count the
-   completed stale-`state_version` response case as this transport-failure
-   proof.
-2. Drop `K+1` while forwarding `K+2`. Prove the browser detects the gap,
+1. Drop `K+1` while forwarding `K+2`. Prove the browser detects the gap,
    reconnects from `K`, and consumes the full contiguous replay exactly once.
-3. Add the honest browser cancellation contract. The current UI intentionally
+2. Add the honest browser cancellation contract. The current UI intentionally
    disposes its subscription before sending the cancel POST, so the assertion
    is exactly one cancel request, one executor context cancellation, canceled
    UI from the authoritative response, and zero post-cancel reconnects. Do not
    require a browser reconnect unless the product lifecycle changes.
-4. Inject a stale duplicate after recovery across the real boundary and prove
+3. Inject a stale duplicate after recovery across the real boundary and prove
    it cannot mutate preview, terminal, or checkpoint state.
-5. Exercise terminal job/result/export expiration and tombstone removal under
+4. Exercise terminal job/result/export expiration and tombstone removal under
    a clock-driven fixture while subscribed, including preview-to-final
    release and absence of stale frames, sockets, timers, retained snapshots,
    leases, exports, or diagnostics.
@@ -1181,12 +1191,12 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. Unless the user changes priority, begin with the transient browser
-   recovery-GET transport failure in the ordered matrix above. Browser
-   `SEQUENCE_EXPIRED`, retained replay, real-manager expiration/cancellation,
-   the uninterrupted collector-to-browser path, exact GradeThis corpus,
-   collector/server process-restart proof, and protocol unit contract are
-   already complete.
+5. Unless the user changes priority, begin with explicit browser sequence-gap
+   injection in the ordered matrix above. Browser `SEQUENCE_EXPIRED`,
+   transient recovery-GET failure, retained replay, real-manager
+   expiration/cancellation, the uninterrupted collector-to-browser path,
+   exact GradeThis corpus, collector/server process-restart proof, and
+   protocol unit contract are already complete.
 6. If extending aggregates instead, start with an explicit bounded contract
    for `list(field)`; do not reuse unordered `values`.
 7. Preserve scalar/Dynamic path separation, numeric grammar sharing,
