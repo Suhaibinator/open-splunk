@@ -24,7 +24,7 @@ const defaultPollInterval = 250 * time.Millisecond
 // files, and asks tailers whose file left the discovery set to drain and stop.
 type manager struct {
 	cfg         Config
-	checkpoints CheckpointStore
+	checkpoints ManagerCheckpointStore
 	fpBytes     int
 	poll        time.Duration
 
@@ -52,7 +52,7 @@ type manager struct {
 // offsets at discovery time; the Manager never advances their durable byte
 // positions, though it may enrich a legacy checkpoint with a stable
 // compatibility cursor in one batched discovery write.
-func NewManager(cfg Config, checkpoints CheckpointStore) (Manager, error) {
+func NewManager(cfg Config, checkpoints ManagerCheckpointStore) (Manager, error) {
 	if len(cfg.Include) == 0 {
 		return nil, errors.New("collector/input: at least one include glob is required")
 	}

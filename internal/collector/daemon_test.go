@@ -181,6 +181,81 @@ func TestDaemonFileToWALWithheldAckKeepsDiscoveryCheckpoint(t *testing.T) {
 	}
 }
 
+func TestDaemonRestartDoesNotRequeuePendingWALSourcePrefix(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+	logDir := t.TempDir()
+	logPath := filepath.Join(logDir, "app.log")
+	const firstLines = `{"message":"one","n":1}
+{"message":"two","n":2}
+{"message":"three","n":3}
+`
+	writeFile(t, logPath, firstLines)
+	cfg := newTestConfig(t, stateDir, filepath.Join(logDir, "*.log"), filepath.Join(stateDir, "token"))
+
+	runUntilQueued := func(instanceID string, want uint64) (*Daemon, context.CancelFunc, <-chan error) {
+		t.Helper()
+		daemon, err := New(
+			cfg,
+			WithLogger(discardLogger()),
+			WithCollectorID("cid"),
+			WithInstanceID(instanceID),
+		)
+		if err != nil {
+			t.Fatalf("New(%s): %v", instanceID, err)
+		}
+		daemon.batchLinger = 15 * time.Millisecond
+		daemon.drainWindow = 50 * time.Millisecond
+		ctx, cancel := context.WithCancel(context.Background())
+		runErr := make(chan error, 1)
+		go func() { runErr <- daemon.Run(ctx) }()
+		waitFor(t, 3*time.Second, fmt.Sprintf("%d events queued by %s", want, instanceID), func() bool {
+			return daemon.queue.Stats().QueuedEvents >= want
+		})
+		return daemon, cancel, runErr
+	}
+
+	first, cancelFirst, firstErr := runUntilQueued("iid-1", 3)
+	if got := first.queue.Stats().QueuedEvents; got != 3 {
+		t.Fatalf("first queued events = %d, want 3", got)
+	}
+	cancelFirst()
+	if err := <-firstErr; err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	file, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, writeErr := io.WriteString(file, `{"message":"four","n":4}`+"\n")
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
+		t.Fatalf("append fourth source line: %v", err)
+	}
+
+	second, cancelSecond, secondErr := runUntilQueued("iid-2", 4)
+	if got := second.queue.Stats().QueuedEvents; got != 4 {
+		t.Fatalf(
+			"queued events after collector restart = %d, want the 3 pending WAL events plus only the new source line",
+			got,
+		)
+	}
+	checkpoints, err := second.checkpoints.List()
+	if err != nil || len(checkpoints) != 1 || checkpoints[0].Offset != 0 {
+		t.Fatalf(
+			"pending WAL resume advanced terminal checkpoint before acknowledgment: %+v, %v",
+			checkpoints,
+			err,
+		)
+	}
+	cancelSecond()
+	if err := <-secondErr; err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+}
+
 // TestDaemonRedactsSecretsBeforeOfflineWALAppend proves the edge collector
 // never persists known secret families while the ingestion server is
 // unreachable. Server-side redaction is too late for this trust boundary: the
@@ -1073,7 +1148,7 @@ func TestDaemonTerminalAckAdvancesCheckpointOnlyAfterDisposition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareAck: %v", err)
 	}
-	if err := commitTerminalCheckpoints(d.checkpoints, prepared.Marks); err != nil {
+	if _, err := commitTerminalCheckpoints(d.checkpoints, prepared.Marks); err != nil {
 		t.Fatalf("commitTerminalCheckpoints: %v", err)
 	}
 	if err := d.queue.Ack(1); err != nil {
@@ -1114,7 +1189,7 @@ func TestDaemonOutOfOrderTerminalAckDoesNotAdvancePastGap(t *testing.T) {
 	if len(prepared.Marks) != 1 {
 		t.Fatalf("PrepareAck(1) returned %d marks, want one coalesced source", len(prepared.Marks))
 	}
-	if err := commitTerminalCheckpoints(d.checkpoints, prepared.Marks); err != nil {
+	if _, err := commitTerminalCheckpoints(d.checkpoints, prepared.Marks); err != nil {
 		t.Fatalf("commitTerminalCheckpoints: %v", err)
 	}
 	if err := d.queue.Ack(1); err != nil {

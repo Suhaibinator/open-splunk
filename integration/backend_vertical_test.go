@@ -142,20 +142,14 @@ func TestBackendVertical(t *testing.T) {
 		t.Fatalf("created index = %+v", createdIndex.GetIndex())
 	}
 
-	var createdToken opensplunkv1.CreateIngestionTokenResponse
-	postProto(t, ctx, httpClient, baseURL+"/api/v1/ingestion-tokens/create", &opensplunkv1.CreateIngestionTokenRequest{
-		Definition: &opensplunkv1.IngestionTokenDefinition{
-			Name: "backend-vertical-collector",
-			Constraints: &opensplunkv1.IngestionTokenConstraints{
-				AllowedIndexNames: []string{verticalIndexName},
-			},
-		},
-	}, &createdToken)
-	plaintextToken := createdToken.GetPlaintextToken()
-	if plaintextToken == "" || createdToken.GetIngestionToken().GetVersion() != 1 ||
-		!strings.HasPrefix(plaintextToken, createdToken.GetIngestionToken().GetTokenPrefix()) {
-		t.Fatalf("created ingestion token metadata = %+v, plaintext length = %d", createdToken.GetIngestionToken(), len(plaintextToken))
-	}
+	plaintextToken := createIndexScopedIngestionToken(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		"backend-vertical-collector",
+		verticalIndexName,
+	)
 	serverSecrets := []string{
 		plaintextToken,
 		redactionAPIKeySentinel,
@@ -599,6 +593,36 @@ func createVerticalIndex(t *testing.T, ctx context.Context, client *http.Client,
 	}
 }
 
+func createIndexScopedIngestionToken(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL, name, indexName string,
+) string {
+	t.Helper()
+	var created opensplunkv1.CreateIngestionTokenResponse
+	postProto(t, ctx, client, baseURL+"/api/v1/ingestion-tokens/create", &opensplunkv1.CreateIngestionTokenRequest{
+		Definition: &opensplunkv1.IngestionTokenDefinition{
+			Name: name,
+			Constraints: &opensplunkv1.IngestionTokenConstraints{
+				AllowedIndexNames: []string{indexName},
+			},
+		},
+	}, &created)
+	plaintext := created.GetPlaintextToken()
+	metadata := created.GetIngestionToken()
+	if plaintext == "" || metadata.GetVersion() != 1 ||
+		!strings.HasPrefix(plaintext, metadata.GetTokenPrefix()) {
+		t.Fatalf(
+			"created ingestion token %q metadata = %+v, plaintext length = %d",
+			name,
+			metadata,
+			len(plaintext),
+		)
+	}
+	return plaintext
+}
+
 func assertCurrentGradeThisMigration(
 	t *testing.T,
 	ctx context.Context,
@@ -624,24 +648,14 @@ func assertCurrentGradeThisMigration(
 		"Current GradeThis collector migration",
 	)
 
-	var createdToken opensplunkv1.CreateIngestionTokenResponse
-	postProto(t, ctx, client, baseURL+"/api/v1/ingestion-tokens/create", &opensplunkv1.CreateIngestionTokenRequest{
-		Definition: &opensplunkv1.IngestionTokenDefinition{
-			Name: "gradethis-current-migration",
-			Constraints: &opensplunkv1.IngestionTokenConstraints{
-				AllowedIndexNames: []string{gradethiscorpus.MigrationIndexName},
-			},
-		},
-	}, &createdToken)
-	plaintextToken := createdToken.GetPlaintextToken()
-	if plaintextToken == "" || createdToken.GetIngestionToken().GetVersion() != 1 ||
-		!strings.HasPrefix(plaintextToken, createdToken.GetIngestionToken().GetTokenPrefix()) {
-		t.Fatalf(
-			"created GradeThis ingestion token metadata = %+v, plaintext length = %d",
-			createdToken.GetIngestionToken(),
-			len(plaintextToken),
-		)
-	}
+	plaintextToken := createIndexScopedIngestionToken(
+		t,
+		ctx,
+		client,
+		baseURL,
+		"gradethis-current-migration",
+		gradethiscorpus.MigrationIndexName,
+	)
 
 	logPath := filepath.Join(work, "gradethis-current.log")
 	createEmptyFixture(t, logPath)
@@ -715,6 +729,27 @@ func validateCollectorConfiguration(
 	plaintextToken string,
 ) {
 	t.Helper()
+	validateCollectorConfigurationWithInput(
+		t,
+		ctx,
+		repository,
+		collectorBinary,
+		configPath,
+		environment,
+		plaintextToken,
+		"shipped GradeThis",
+		"gradethis-backend",
+	)
+}
+
+func validateCollectorConfigurationWithInput(
+	t *testing.T,
+	ctx context.Context,
+	repository, collectorBinary, configPath string,
+	environment []string,
+	plaintextToken, description, expectedInputID string,
+) {
+	t.Helper()
 	command := exec.CommandContext(ctx, collectorBinary, "validate", "-config", configPath)
 	configureProcessGroup(command)
 	command.Dir = repository
@@ -724,16 +759,25 @@ func validateCollectorConfiguration(
 	command.Stderr = logs
 	if err := command.Run(); err != nil {
 		t.Fatalf(
-			"validate shipped GradeThis collector configuration: %v\n%s",
+			"validate %s collector configuration: %v\n%s",
+			description,
 			err,
 			redactForFailure(logs.String(), plaintextToken),
 		)
 	}
 	output := logs.String()
-	if !strings.Contains(output, "configuration "+configPath+" is valid") ||
-		!strings.Contains(output, "gradethis-backend: 1 file(s)") {
+	if logs.Truncated() {
 		t.Fatalf(
-			"collector validation output did not prove one GradeThis source:\n%s",
+			"%s collector validation output exceeded the capture limit:\n%s",
+			description,
+			redactForFailure(output, plaintextToken),
+		)
+	}
+	if !strings.Contains(output, "configuration "+configPath+" is valid") ||
+		!strings.Contains(output, expectedInputID+": 1 file(s)") {
+		t.Fatalf(
+			"collector validation output did not prove one %s source:\n%s",
+			description,
 			redactForFailure(output, plaintextToken),
 		)
 	}
@@ -1335,16 +1379,12 @@ func waitForCollectorWALAcknowledgedThroughCurrent(
 		lastErr error
 	)
 	for {
-		data, readErr := os.ReadFile(filepath.Join(stateDir, "wal", "meta.json"))
-		lastErr = readErr
-		if readErr == nil {
-			lastErr = json.Unmarshal(data, &last)
-			if lastErr == nil &&
-				last.LastAckedBatchSequence > 0 &&
-				last.LastAckedBatchSequence < ^uint64(0) &&
-				last.NextBatchSequence == last.LastAckedBatchSequence+1 {
-				return
-			}
+		last, lastErr = readCollectorWALMeta(stateDir)
+		if lastErr == nil &&
+			last.LastAckedBatchSequence > 0 &&
+			last.LastAckedBatchSequence < ^uint64(0) &&
+			last.NextBatchSequence == last.LastAckedBatchSequence+1 {
+			return
 		}
 		if process.Exited() {
 			t.Fatalf(
@@ -1380,6 +1420,18 @@ func waitForCollectorWALAcknowledgedThroughCurrent(
 		case <-ticker.C:
 		}
 	}
+}
+
+func readCollectorWALMeta(stateDir string) (collectorWALMeta, error) {
+	data, err := os.ReadFile(filepath.Join(stateDir, "wal", "meta.json"))
+	if err != nil {
+		return collectorWALMeta{}, err
+	}
+	var meta collectorWALMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return collectorWALMeta{}, err
+	}
+	return meta, nil
 }
 
 func snapshotCollectorWAL(t *testing.T, stateDir string) map[string]int64 {
@@ -1623,8 +1675,22 @@ func assertDurableCollectorState(t *testing.T, stateDir string, wantOffset, want
 		t.Fatalf("close reopened collector WAL: %v", err)
 	}
 	if stats.QueuedBatches != 0 || stats.QueuedEvents != 0 || stats.QueuedBytes != 0 ||
-		stats.LastAckedBatchSequence == 0 {
+		stats.OldestEventAge != 0 ||
+		stats.LastAckedBatchSequence == 0 ||
+		stats.LastAckedBatchSequence == ^uint64(0) ||
+		stats.NextBatchSequence != stats.LastAckedBatchSequence+1 ||
+		stats.QuarantinedSegments != 0 {
 		t.Fatalf("durable collector WAL state = %+v, want drained queue with a terminal acknowledgment", stats)
+	}
+	entries, err := os.ReadDir(filepath.Join(stateDir, "wal"))
+	if err != nil {
+		t.Fatalf("read reopened collector WAL directory: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "segment-") &&
+			strings.Contains(entry.Name(), ".wal.corrupt") {
+			t.Fatalf("durable collector WAL retained quarantined artifact %q", entry.Name())
+		}
 	}
 }
 

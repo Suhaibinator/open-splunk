@@ -32,7 +32,7 @@ func TestCommitTerminalCheckpointsAdvancesFromDurableBatchOrigin(t *testing.T) {
 		checkpointSourceMark(2, identity, "/logs/app.log", 240, 2),
 	}
 
-	if err := commitTerminalCheckpoints(store, marks); err != nil {
+	if _, err := commitTerminalCheckpoints(store, marks); err != nil {
 		t.Fatalf("commitTerminalCheckpoints: %v", err)
 	}
 	got, ok, err := store.Get(identity)
@@ -67,7 +67,7 @@ func TestCommitTerminalCheckpointsFencesDelayedPreCopytruncateGeneration(t *test
 		t.Fatalf("seed new generation checkpoint: %v", err)
 	}
 
-	if err := commitTerminalCheckpoints(store, []wal.SourceCheckpointMark{
+	if _, err := commitTerminalCheckpoints(store, []wal.SourceCheckpointMark{
 		checkpointSourceMark(1, oldIdentity, "/logs/app.log", 900, 90),
 	}); err != nil {
 		t.Fatalf("commit old generation: %v", err)
@@ -101,10 +101,62 @@ func TestCommitTerminalCheckpointsRejectsInvalidNextLine(t *testing.T) {
 	for _, nextLine := range []uint64{0, 5, ^uint64(0)} {
 		mark := checkpointSourceMark(1, identity, "/logs/app.log", 100, 5)
 		mark.NextLineNumber = nextLine
-		if err := commitTerminalCheckpoints(store, []wal.SourceCheckpointMark{mark}); err == nil ||
+		if _, err := commitTerminalCheckpoints(store, []wal.SourceCheckpointMark{mark}); err == nil ||
 			!strings.Contains(err.Error(), "invalid next_line_number") {
 			t.Fatalf("commit next line %d error = %v, want invalid next_line_number", nextLine, err)
 		}
+	}
+}
+
+func TestSourceCheckpointsFromWALRejectsCursorConflictWithDurableCheckpoint(t *testing.T) {
+	t.Parallel()
+	store, err := input.NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCheckpointStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	identity := input.FileIdentity{
+		Device: 1, Inode: 2, Generation: 1,
+		Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 64,
+	}
+	if err := store.Set(input.Checkpoint{
+		Identity: identity, Path: "/logs/app.log", Offset: 100,
+		LineNumber: 9, NextLineNumber: 10,
+	}); err != nil {
+		t.Fatalf("seed durable checkpoint: %v", err)
+	}
+
+	for _, mark := range []wal.SourceCheckpointMark{
+		checkpointSourceMark(1, identity, "/logs/app.log", 200, 8),
+		checkpointSourceMark(1, identity, "/logs/app.log", 100, 10),
+	} {
+		if _, err := sourceCheckpointsFromWAL(store, []wal.SourceCheckpointMark{mark}); err == nil ||
+			!strings.Contains(err.Error(), "line cursor conflicts with durable checkpoint") {
+			t.Fatalf("sourceCheckpointsFromWAL(%+v) error = %v, want durable cursor conflict", mark, err)
+		}
+	}
+}
+
+func TestSourceCheckpointsFromWALRejectsConflictingPendingIdentities(t *testing.T) {
+	t.Parallel()
+	store, err := input.NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCheckpointStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	first := input.FileIdentity{
+		Device: 1, Inode: 2, Generation: 1,
+		Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 64,
+	}
+	second := first
+	second.Fingerprint = strings.Repeat("cd", 32)
+
+	_, err = sourceCheckpointsFromWAL(store, []wal.SourceCheckpointMark{
+		checkpointSourceMark(1, first, "/logs/app.log", 100, 1),
+		checkpointSourceMark(2, second, "/logs/app.log", 200, 2),
+	})
+	if err == nil || !strings.Contains(err.Error(), "conflicts with another source identity") {
+		t.Fatalf("sourceCheckpointsFromWAL conflicting identities error = %v", err)
 	}
 }
 

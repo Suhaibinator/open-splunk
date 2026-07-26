@@ -111,7 +111,7 @@ type queue struct {
 
 // openQueue implements Open: it creates or recovers the on-disk state under
 // opts.Dir, quarantining corrupt tails, and returns a ready queue.
-func openQueue(opts Options) (Queue, error) {
+func openQueue(opts Options) (*queue, error) {
 	if opts.Dir == "" {
 		return nil, errors.New("collector/wal: Options.Dir is required")
 	}
@@ -606,60 +606,78 @@ func (q *queue) prepareAckPlanLocked(batchSequence uint64, cumulative bool) (ack
 // arrays are immutable after Append/recovery, so a concurrent ack may discard
 // its descriptor without invalidating this snapshot.
 func aggregateAckPlan(plan ackPlan) AckPreview {
-	var byIdentity map[string]SourceCheckpointMark
+	var aggregator sourceMarkAggregator
 	for _, group := range plan.markGroups {
-		if byIdentity == nil {
-			byIdentity = make(map[string]SourceCheckpointMark)
-		}
 		for _, mark := range group.marks {
-			// Preserve the first malformed mark verbatim so the daemon fails
-			// closed without retaining every malformed event in a hostile WAL.
-			if mark.FileIdentity == "" || !mark.HasEndOffset || mark.ConflictingMetadata {
+			if !aggregator.add(mark) {
 				return AckPreview{
 					ThroughBatchSequence: plan.throughBatchSequence,
 					BatchCount:           plan.batchCount,
-					Marks:                []SourceCheckpointMark{mark},
+					Marks:                aggregator.marks(),
 				}
-			}
-			current, ok := byIdentity[mark.FileIdentity]
-			if ok && current.HasFingerprintLength && mark.HasFingerprintLength &&
-				current.FingerprintLength != mark.FingerprintLength {
-				mark.ConflictingMetadata = true
-				return AckPreview{
-					ThroughBatchSequence: plan.throughBatchSequence,
-					BatchCount:           plan.batchCount,
-					Marks:                []SourceCheckpointMark{mark},
-				}
-			}
-			if ok && sourceLineCursorsConflict(current, mark) {
-				mark.ConflictingMetadata = true
-				return AckPreview{
-					ThroughBatchSequence: plan.throughBatchSequence,
-					BatchCount:           plan.batchCount,
-					Marks:                []SourceCheckpointMark{mark},
-				}
-			}
-			if !ok || mark.EndOffset > current.EndOffset ||
-				(mark.EndOffset == current.EndOffset &&
-					(mark.HasNextLineNumber && !current.HasNextLineNumber ||
-						mark.HasNextLineNumber == current.HasNextLineNumber &&
-							mark.BatchSequence >= current.BatchSequence)) {
-				byIdentity[mark.FileIdentity] = mark
 			}
 		}
 	}
-	marks := make([]SourceCheckpointMark, 0, len(byIdentity))
-	for _, mark := range byIdentity {
+	return AckPreview{
+		ThroughBatchSequence: plan.throughBatchSequence,
+		BatchCount:           plan.batchCount,
+		Marks:                aggregator.marks(),
+	}
+}
+
+type sourceMarkAggregator struct {
+	byIdentity map[string]SourceCheckpointMark
+	failure    SourceCheckpointMark
+	failed     bool
+}
+
+func (aggregator *sourceMarkAggregator) add(mark SourceCheckpointMark) bool {
+	// Preserve the first malformed mark verbatim so the daemon fails closed
+	// without retaining every malformed event in a hostile WAL.
+	if mark.FileIdentity == "" || !mark.HasEndOffset || mark.ConflictingMetadata {
+		aggregator.failure = mark
+		aggregator.failed = true
+		return false
+	}
+	if aggregator.byIdentity == nil {
+		aggregator.byIdentity = make(map[string]SourceCheckpointMark)
+	}
+	current, ok := aggregator.byIdentity[mark.FileIdentity]
+	if ok && current.HasFingerprintLength && mark.HasFingerprintLength &&
+		current.FingerprintLength != mark.FingerprintLength {
+		mark.ConflictingMetadata = true
+		aggregator.failure = mark
+		aggregator.failed = true
+		return false
+	}
+	if ok && sourceLineCursorsConflict(current, mark) {
+		mark.ConflictingMetadata = true
+		aggregator.failure = mark
+		aggregator.failed = true
+		return false
+	}
+	if !ok || mark.EndOffset > current.EndOffset ||
+		(mark.EndOffset == current.EndOffset &&
+			(mark.HasNextLineNumber && !current.HasNextLineNumber ||
+				mark.HasNextLineNumber == current.HasNextLineNumber &&
+					mark.BatchSequence >= current.BatchSequence)) {
+		aggregator.byIdentity[mark.FileIdentity] = mark
+	}
+	return true
+}
+
+func (aggregator *sourceMarkAggregator) marks() []SourceCheckpointMark {
+	if aggregator.failed {
+		return []SourceCheckpointMark{aggregator.failure}
+	}
+	marks := make([]SourceCheckpointMark, 0, len(aggregator.byIdentity))
+	for _, mark := range aggregator.byIdentity {
 		marks = append(marks, mark)
 	}
 	sort.Slice(marks, func(i, j int) bool {
 		return marks[i].FileIdentity < marks[j].FileIdentity
 	})
-	return AckPreview{
-		ThroughBatchSequence: plan.throughBatchSequence,
-		BatchCount:           plan.batchCount,
-		Marks:                marks,
-	}
+	return marks
 }
 
 // checkpointMarksForBatch extracts a compact high-water mark per exact file
@@ -883,6 +901,26 @@ func (q *queue) Stats() Stats {
 		LastAckedBatchSequence: q.lastAcked,
 		QuarantinedSegments:    q.quarantined,
 	}
+}
+
+// PendingSourceMarks implements ResumeQueue.PendingSourceMarks. Startup is its only
+// production caller, so aggregating under the lock avoids retaining one
+// transient slice header per queued batch without adding runtime contention.
+func (q *queue) PendingSourceMarks() ([]SourceCheckpointMark, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return nil, ErrClosed
+	}
+	var aggregator sourceMarkAggregator
+	for _, descriptor := range q.unacked {
+		for _, mark := range descriptor.sourceMarks {
+			if !aggregator.add(mark) {
+				return aggregator.marks(), nil
+			}
+		}
+	}
+	return aggregator.marks(), nil
 }
 
 // Close implements Queue.Close.

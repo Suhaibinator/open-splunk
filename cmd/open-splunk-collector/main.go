@@ -3,7 +3,8 @@
 //
 // # Subcommands
 //
-//	open-splunk-collector [run] [-config PATH]     start the collector (default)
+//	open-splunk-collector [run] [-config PATH] [-log-level LEVEL]
+//	                                                 start the collector (default)
 //	open-splunk-collector validate [-config PATH]  check the config and exit
 //
 // validate loads and validates the configuration, prints a redacted summary
@@ -28,6 +29,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/Suhaibinator/open-splunk/internal/collector"
@@ -67,11 +69,17 @@ func run(args []string) int {
 func runCollector(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	path := fs.String("config", defaultConfigPath, "path to the collector configuration file")
+	logLevelText := fs.String("log-level", "info", "log level: debug, info, warn, or error")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logLevel, err := parseLogLevel(*logLevelText)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
 
 	cfg, err := config.Load(*path)
 	if err != nil {
@@ -95,6 +103,21 @@ func runCollector(args []string) int {
 	}
 	logger.Info("collector stopped cleanly")
 	return 0
+}
+
+func parseLogLevel(value string) (slog.Level, error) {
+	switch strings.ToLower(value) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("invalid log level %q: choose debug, info, warn, or error", value)
+	}
 }
 
 // validateConfig loads and validates the config, printing a redacted summary and
@@ -156,10 +179,12 @@ func usage(w *os.File) {
 	fmt.Fprint(w, `open-splunk-collector: tail local logs and forward them to the Open Splunk server.
 
 usage:
-  open-splunk-collector [run] [-config PATH]      start the collector (default)
-  open-splunk-collector validate [-config PATH]   validate configuration and exit
+  open-splunk-collector [run] [-config PATH] [-log-level LEVEL]
+                                                   start the collector (default)
+  open-splunk-collector validate [-config PATH]    validate configuration and exit
 
 flags:
-  -config PATH   configuration file (default `+defaultConfigPath+`)
+  -config PATH       configuration file (default `+defaultConfigPath+`)
+  -log-level LEVEL   run log level: debug, info, warn, or error (default info)
 `)
 }

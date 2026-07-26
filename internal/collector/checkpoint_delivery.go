@@ -3,7 +3,6 @@ package collector
 import (
 	"errors"
 	"fmt"
-	"sort"
 
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
@@ -17,17 +16,38 @@ type checkpointDiscovery struct {
 // commitTerminalCheckpoints validates the compact source marks cached beside
 // the durable WAL records that are about to join the cumulative acknowledged
 // prefix. The sender calls this before mutating the WAL, so any error keeps all
-// batches replayable.
-func commitTerminalCheckpoints(store input.CheckpointStore, sourceMarks []wal.SourceCheckpointMark) error {
+// batches replayable. It returns the coalesced durable checkpoints so a
+// startup-only resume overlay can release the positions now covered.
+func commitTerminalCheckpoints(
+	store input.CheckpointStore,
+	sourceMarks []wal.SourceCheckpointMark,
+) ([]input.Checkpoint, error) {
+	ordered, err := sourceCheckpointsFromWAL(store, sourceMarks)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.SetMany(ordered); err != nil {
+		return nil, fmt.Errorf("persist %d terminal checkpoints: %w", len(ordered), err)
+	}
+	return ordered, nil
+}
+
+// sourceCheckpointsFromWAL validates and coalesces source coordinates without
+// persisting them. Terminal delivery commits the result; collector startup uses
+// the same reconstruction as an in-memory resume overlay for pending batches.
+func sourceCheckpointsFromWAL(
+	store input.CheckpointStore,
+	sourceMarks []wal.SourceCheckpointMark,
+) ([]input.Checkpoint, error) {
 	if store == nil {
-		return errors.New("collector: checkpoint store is required")
+		return nil, errors.New("collector: checkpoint store is required")
 	}
 	marks := make(map[string]checkpointMark)
 	discovery := make(map[string]checkpointDiscovery)
 	for _, sourceMark := range sourceMarks {
 		mark, obsolete, err := checkpointMarkFromSource(store, discovery, sourceMark)
 		if err != nil {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"collector: reconstruct checkpoint from batch %d event %d: %w",
 				sourceMark.BatchSequence, sourceMark.EventIndex, err,
 			)
@@ -37,18 +57,33 @@ func commitTerminalCheckpoints(store input.CheckpointStore, sourceMarks []wal.So
 		}
 		key := mark.identity.TrackingKey()
 		current, ok := marks[key]
-		if ok &&
-			mark.identity.Generation == current.identity.Generation &&
-			mark.nextLineNumber != 0 &&
-			current.nextLineNumber != 0 &&
-			((mark.offset == current.offset &&
-				mark.nextLineNumber != current.nextLineNumber) ||
-				(mark.offset > current.offset &&
-					mark.nextLineNumber <= current.nextLineNumber) ||
-				(mark.offset < current.offset &&
-					mark.nextLineNumber >= current.nextLineNumber)) {
-			return fmt.Errorf(
-				"collector: reconstruct checkpoint from batch %d event %d: line cursor does not advance with source offset",
+		if ok && mark.identity.Generation == current.identity.Generation {
+			if mark.identity.String() != current.identity.String() {
+				return nil, fmt.Errorf(
+					"collector: reconstruct checkpoint from batch %d event %d: file origin conflicts with another source identity",
+					sourceMark.BatchSequence,
+					sourceMark.EventIndex,
+				)
+			}
+			if checkpointLineCursorsConflict(
+				mark.offset, mark.nextLineNumber,
+				current.offset, current.nextLineNumber,
+			) {
+				return nil, fmt.Errorf(
+					"collector: reconstruct checkpoint from batch %d event %d: line cursor does not advance with source offset",
+					sourceMark.BatchSequence,
+					sourceMark.EventIndex,
+				)
+			}
+		}
+		if entry := discovery[key]; entry.found &&
+			mark.identity.Generation == entry.checkpoint.Identity.Generation &&
+			checkpointLineCursorsConflict(
+				mark.offset, mark.nextLineNumber,
+				entry.checkpoint.Offset, entry.checkpoint.NextLineNumber,
+			) {
+			return nil, fmt.Errorf(
+				"collector: reconstruct checkpoint from batch %d event %d: line cursor conflicts with durable checkpoint",
 				sourceMark.BatchSequence,
 				sourceMark.EventIndex,
 			)
@@ -68,13 +103,23 @@ func commitTerminalCheckpoints(store input.CheckpointStore, sourceMarks []wal.So
 			NextLineNumber: mark.nextLineNumber,
 		})
 	}
-	sort.Slice(ordered, func(i, j int) bool {
-		return ordered[i].Identity.String() < ordered[j].Identity.String()
-	})
-	if err := store.SetMany(ordered); err != nil {
-		return fmt.Errorf("persist %d terminal checkpoints: %w", len(ordered), err)
+	return ordered, nil
+}
+
+func checkpointLineCursorsConflict(
+	leftOffset, leftNextLine, rightOffset, rightNextLine uint64,
+) bool {
+	if leftNextLine == 0 || rightNextLine == 0 {
+		return false
 	}
-	return nil
+	switch {
+	case leftOffset == rightOffset:
+		return leftNextLine != rightNextLine
+	case leftOffset > rightOffset:
+		return leftNextLine <= rightNextLine
+	default:
+		return leftNextLine >= rightNextLine
+	}
 }
 
 // checkpointMarkFromSource validates one compact file origin.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -61,6 +62,29 @@ func TestRunDispatch(t *testing.T) {
 				t.Fatalf("run(%v) = %d, want %d", tc.args, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseLogLevel(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		value string
+		want  slog.Level
+	}{
+		{value: "debug", want: slog.LevelDebug},
+		{value: "INFO", want: slog.LevelInfo},
+		{value: "warn", want: slog.LevelWarn},
+		{value: "ERROR", want: slog.LevelError},
+	} {
+		if got, err := parseLogLevel(test.value); err != nil || got != test.want {
+			t.Fatalf("parseLogLevel(%q) = %s, %v; want %s", test.value, got, err, test.want)
+		}
+	}
+	if _, err := parseLogLevel("verbose"); err == nil {
+		t.Fatal("parseLogLevel accepted an unsupported level")
+	}
+	if _, err := parseLogLevel("INFO+1"); err == nil {
+		t.Fatal("parseLogLevel accepted an undocumented numeric offset")
 	}
 }
 

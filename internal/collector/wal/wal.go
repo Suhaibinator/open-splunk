@@ -178,13 +178,25 @@ type Queue interface {
 	Close() error
 }
 
+// ResumeQueue is the concrete durable queue capability returned by Open. The
+// narrower Queue interface is sufficient for senders and test doubles; daemon
+// startup additionally needs the recovered source high-water marks.
+type ResumeQueue interface {
+	Queue
+	// PendingSourceMarks returns the highest source coordinate retained by all
+	// currently unacknowledged batches, coalesced per exact file identity. It
+	// is read-only and is intended for startup resume before queue consumers
+	// begin running.
+	PendingSourceMarks() ([]SourceCheckpointMark, error)
+}
+
 // Open opens or creates the durable queue described by opts, replaying and
 // validating existing segments.
 //
 // Corruption discovered during replay is non-fatal: the unreadable tail and
 // every successor segment are quarantined, recovery continues with the global
 // intact prefix, and the count is reported via Stats.QuarantinedSegments.
-func Open(opts Options) (Queue, error) {
+func Open(opts Options) (ResumeQueue, error) {
 	return openQueue(opts)
 }
 

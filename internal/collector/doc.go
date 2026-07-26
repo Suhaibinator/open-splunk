@@ -26,5 +26,9 @@
 // after the server returns a terminal disposition with its negotiated
 // ClickHouse-committed durability and the entire earlier WAL prefix is
 // terminal. Delivery is at-least-once; the server deduplicates by stable event
-// ID.
+// batch identity when retrying the same durable WAL record. On restart, intact
+// pending WAL source coordinates form an ephemeral file-reader cursor so those
+// owned bytes are not ordinarily rebatched. An unavoidable crash-boundary
+// reread retains stable event IDs for explicit logical deduplication, but the
+// delivery contract does not promise exactly-once storage.
 package collector

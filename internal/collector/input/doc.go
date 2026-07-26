@@ -22,8 +22,11 @@
 // only after the covering batches have a durable terminal disposition and the
 // entire earlier WAL prefix is terminal. This ordering (frame -> decode -> WAL
 // append -> durable server acknowledgment -> checkpoint) makes file re-reads
-// after a crash safe: unadvanced checkpoints cause at most a bounded duplicate
-// re-read, which the server deduplicates by stable event ID.
+// after a crash safe. The root collector overlays intact pending-WAL source
+// coordinates as an ephemeral startup cursor to avoid ordinary rebatching.
+// Unavoidable crash-boundary rereads remain bounded and retain stable event IDs
+// for explicit logical deduplication; the server only suppresses retries of the
+// same durable batch identity, so storage remains at-least-once.
 //
 // # Tailing behavior
 //

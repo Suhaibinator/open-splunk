@@ -261,6 +261,15 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		_ = stateLock.Close()
 		return nil, err
 	}
+	pendingSourceMarks, err := queue.PendingSourceMarks()
+	if err != nil {
+		return fail(fmt.Errorf("collector: inspect pending WAL source coordinates: %w", err))
+	}
+	pendingResumeCheckpoints, err := sourceCheckpointsFromWAL(checkpoints, pendingSourceMarks)
+	if err != nil {
+		return fail(fmt.Errorf("collector: reconstruct pending WAL source coordinates: %w", err))
+	}
+	inputCheckpoints, resumeView := newCheckpointResumeView(checkpoints, pendingResumeCheckpoints)
 
 	hostname, herr := os.Hostname()
 	if herr != nil || strings.TrimSpace(hostname) == "" {
@@ -273,7 +282,7 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		anyMultiline  bool
 	)
 	for i := range cfg.Inputs {
-		ir, reg, multi, berr := buildInput(&cfg.Inputs[i], hostname, checkpoints)
+		ir, reg, multi, berr := buildInput(&cfg.Inputs[i], hostname, inputCheckpoints)
 		if berr != nil {
 			return fail(fmt.Errorf("collector: %w", berr))
 		}
@@ -313,7 +322,11 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		Logger:      logger,
 		InputHealth: func() []*opensplunkv1.CollectorInputHealth { return inputHealthSnapshot(inputs) },
 		OnTerminalMarks: func(marks []wal.SourceCheckpointMark) error {
-			return commitTerminalCheckpoints(checkpoints, marks)
+			committed, err := commitTerminalCheckpoints(checkpoints, marks)
+			if err == nil && resumeView != nil {
+				resumeView.pruneCovered(committed)
+			}
+			return err
 		},
 	}
 
@@ -828,7 +841,7 @@ func buildProcessorRuntime(procs []config.ProcessorConfig) (*Pipeline, *durableR
 // buildInput constructs the tailer, decoder, and server-side registration for a
 // single input. defaultHost is used when the input does not set an explicit
 // host. It returns whether the input uses multiline framing.
-func buildInput(in *config.InputConfig, defaultHost string, checkpoints input.CheckpointStore) (*inputRuntime, *opensplunkv1.CollectorInputRegistration, bool, error) {
+func buildInput(in *config.InputConfig, defaultHost string, checkpoints input.ManagerCheckpointStore) (*inputRuntime, *opensplunkv1.CollectorInputRegistration, bool, error) {
 	maxEvent := int(in.MaxEventBytes)
 
 	fo := framing.Options{MaxEventBytes: maxEvent}

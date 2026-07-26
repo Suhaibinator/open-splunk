@@ -297,8 +297,18 @@ func TestRecoveryQuarantinesEverySegmentAfterCorruptGap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)
 	for sequence := 1; sequence <= 4; sequence++ {
-		if _, err := q.Append(makeEvents("event-" + itoaForTest(uint64(sequence)))); err != nil {
+		event := makeEvents("event-" + itoaForTest(uint64(sequence)))[0]
+		event.Origin = &opensplunkv1.EventOrigin{
+			FileIdentity:          proto.String(identity),
+			SourcePath:            proto.String("/logs/app.log"),
+			EndOffset:             proto.Uint64(uint64(sequence * 100)),
+			LineNumber:            proto.Uint64(uint64(sequence)),
+			NextLineNumber:        proto.Uint64(uint64(sequence + 1)),
+			FileFingerprintLength: proto.Uint32(64),
+		}
+		if _, err := q.Append([]*opensplunkv1.LogEvent{event}); err != nil {
 			t.Fatalf("Append %d: %v", sequence, err)
 		}
 	}
@@ -338,6 +348,14 @@ func TestRecoveryQuarantinesEverySegmentAfterCorruptGap(t *testing.T) {
 	}
 	if stats.QueuedBatches != 1 {
 		t.Fatalf("QueuedBatches = %d, want only sequence 1 before the corrupt gap", stats.QueuedBatches)
+	}
+	pending, err := reopened.PendingSourceMarks()
+	if err != nil {
+		t.Fatalf("PendingSourceMarks after corrupt gap: %v", err)
+	}
+	if len(pending) != 1 || pending[0].BatchSequence != 1 ||
+		pending[0].FileIdentity != identity || pending[0].EndOffset != 100 {
+		t.Fatalf("pending marks after corrupt gap = %+v, want intact sequence 1 through offset 100", pending)
 	}
 	if live := listWALFiles(t, dir); len(live) != 1 || live[0] != segments[0] {
 		t.Fatalf("live segments = %v, want only %s", live, segments[0])
@@ -656,6 +674,24 @@ func TestPrepareAckCachesAndCoalescesSourceMarksAcrossRecovery(t *testing.T) {
 	if before.BatchCount != 3 || before.ThroughBatchSequence != 3 || len(before.Marks) != 1 {
 		t.Fatalf("preview before restart = %+v, want 3 batches and one source mark", before)
 	}
+	statsBeforePendingSnapshot := q.Stats()
+	pending, err := q.PendingSourceMarks()
+	if err != nil {
+		t.Fatalf("PendingSourceMarks before restart: %v", err)
+	}
+	if len(pending) != 1 || pending[0] != before.Marks[0] {
+		t.Fatalf("pending source marks before restart = %+v, want %+v", pending, before.Marks)
+	}
+	statsAfterPendingSnapshot := q.Stats()
+	statsBeforePendingSnapshot.OldestEventAge = 0
+	statsAfterPendingSnapshot.OldestEventAge = 0
+	if statsAfterPendingSnapshot != statsBeforePendingSnapshot {
+		t.Fatalf(
+			"PendingSourceMarks mutated queue stats: before=%+v after=%+v",
+			statsBeforePendingSnapshot,
+			statsAfterPendingSnapshot,
+		)
+	}
 	mark := before.Marks[0]
 	if mark.FileIdentity != identity || mark.SourcePath != "/logs/app.log" || mark.EndOffset != 350 ||
 		mark.LineNumber != 3 || mark.NextLineNumber != 4 || mark.FingerprintLength != 1024 ||
@@ -679,6 +715,13 @@ func TestPrepareAckCachesAndCoalescesSourceMarksAcrossRecovery(t *testing.T) {
 	if before.Marks[0] != after.Marks[0] || before.BatchCount != after.BatchCount ||
 		before.ThroughBatchSequence != after.ThroughBatchSequence {
 		t.Fatalf("recovered preview = %+v, want %+v", after, before)
+	}
+	recoveredPending, err := reopened.PendingSourceMarks()
+	if err != nil {
+		t.Fatalf("PendingSourceMarks after restart: %v", err)
+	}
+	if len(recoveredPending) != 1 || recoveredPending[0] != before.Marks[0] {
+		t.Fatalf("pending source marks after restart = %+v, want %+v", recoveredPending, before.Marks)
 	}
 }
 

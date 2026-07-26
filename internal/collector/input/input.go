@@ -98,19 +98,26 @@ type Checkpoint struct {
 	UpdatedAt      time.Time
 }
 
+// ManagerCheckpointStore is the checkpoint view used by file discovery and
+// tailers. The root collector may wrap the durable store with nonterminal
+// resume coordinates already owned by its WAL. Such a view may suppress
+// manager-originated metadata writes at those coordinates until terminal
+// delivery advances the underlying durable checkpoint.
+type ManagerCheckpointStore interface {
+	// Get returns the checkpoint for id and whether one exists.
+	Get(id FileIdentity) (Checkpoint, bool, error)
+	// Set records one discovery, generation, or compatibility-cursor update.
+	Set(cp Checkpoint) error
+	// SetMany records a batch of compatibility-cursor updates.
+	SetMany(checkpoints []Checkpoint) error
+}
+
 // CheckpointStore persists per-file read offsets durably. Set and SetMany must
 // be atomic: a crash at any point leaves either the old or the new checkpoint
 // snapshot, never a torn or partially applied one. Implementations must be safe
 // for concurrent use.
 type CheckpointStore interface {
-	// Get returns the checkpoint for id and whether one exists.
-	Get(id FileIdentity) (Checkpoint, bool, error)
-	// Set atomically persists cp (temp file + fsync + rename).
-	Set(cp Checkpoint) error
-	// SetMany atomically persists every effective checkpoint advance with one
-	// temp-file rewrite. Stale generations, regressing offsets, and positions
-	// already persisted are ignored.
-	SetMany(checkpoints []Checkpoint) error
+	ManagerCheckpointStore
 	// Delete removes the checkpoint for id, if any.
 	Delete(id FileIdentity) error
 	// List returns all persisted checkpoints (used for reconciliation).

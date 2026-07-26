@@ -72,6 +72,63 @@ func TestCollectorWALAdvancedRequiresNewOrGrowingDurableFile(t *testing.T) {
 	}
 }
 
+func TestManagedProcessWaitDistinguishesExitAndTimeout(t *testing.T) {
+	t.Parallel()
+	exitErr := errors.New("process failed")
+	for _, test := range []struct {
+		name    string
+		process *managedProcess
+		timeout time.Duration
+		want    error
+	}{
+		{
+			name:    "clean exit",
+			process: completedManagedProcess(nil),
+			timeout: time.Second,
+		},
+		{
+			name:    "failed exit",
+			process: completedManagedProcess(exitErr),
+			timeout: time.Second,
+			want:    exitErr,
+		},
+		{
+			name:    "timeout",
+			process: &managedProcess{done: make(chan struct{})},
+			timeout: time.Millisecond,
+			want:    errManagedProcessWaitTimeout,
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := test.process.Wait(test.timeout); !errors.Is(err, test.want) {
+				t.Fatalf("Wait() = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLockedBufferReportsTruncation(t *testing.T) {
+	t.Parallel()
+	buffer := &lockedBuffer{maximum: 4}
+	if written, err := buffer.Write([]byte("abcdef")); err != nil || written != 6 {
+		t.Fatalf("Write() = %d, %v", written, err)
+	}
+	if got := buffer.String(); got != "abcd" {
+		t.Fatalf("String() = %q, want %q", got, "abcd")
+	}
+	if !buffer.Truncated() {
+		t.Fatal("Truncated() = false, want true")
+	}
+}
+
+func completedManagedProcess(err error) *managedProcess {
+	process := &managedProcess{done: make(chan struct{}), err: err}
+	close(process.done)
+	return process
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	directory, err := os.Getwd()
@@ -412,6 +469,8 @@ type managedProcess struct {
 	err error
 }
 
+var errManagedProcessWaitTimeout = errors.New("managed process wait timed out")
+
 func startProcess(t *testing.T, directory string, arguments []string, environment []string) *managedProcess {
 	t.Helper()
 	if len(arguments) == 0 {
@@ -462,6 +521,20 @@ func (process *managedProcess) Interrupt(timeout time.Duration) error {
 	}
 }
 
+func (process *managedProcess) Wait(timeout time.Duration) error {
+	if timeout <= 0 {
+		return fmt.Errorf("%w: timeout must be positive", errManagedProcessWaitTimeout)
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-process.done:
+		return process.Err()
+	case <-timer.C:
+		return fmt.Errorf("%w after %s", errManagedProcessWaitTimeout, timeout)
+	}
+}
+
 func (process *managedProcess) Kill(timeout time.Duration) error {
 	select {
 	case <-process.done:
@@ -498,10 +571,27 @@ func (process *managedProcess) Err() error {
 
 func (process *managedProcess) Logs() string { return process.logs.String() }
 
+func assertManagedProcessLogsComplete(
+	t *testing.T,
+	name string,
+	process *managedProcess,
+	secrets ...string,
+) {
+	t.Helper()
+	if process.logs.Truncated() {
+		t.Fatalf(
+			"%s logs exceeded the in-memory capture limit; captured prefix:\n%s",
+			name,
+			redactForFailure(process.Logs(), secrets...),
+		)
+	}
+}
+
 type lockedBuffer struct {
-	mu      sync.Mutex
-	buffer  bytes.Buffer
-	maximum int
+	mu        sync.Mutex
+	buffer    bytes.Buffer
+	maximum   int
+	truncated bool
 }
 
 func (buffer *lockedBuffer) Write(value []byte) (int, error) {
@@ -512,6 +602,9 @@ func (buffer *lockedBuffer) Write(value []byte) (int, error) {
 	if remaining > 0 {
 		_, _ = buffer.buffer.Write(value[:min(len(value), remaining)])
 	}
+	if len(value) > max(remaining, 0) {
+		buffer.truncated = true
+	}
 	return written, nil
 }
 
@@ -519,4 +612,10 @@ func (buffer *lockedBuffer) String() string {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
 	return buffer.buffer.String()
+}
+
+func (buffer *lockedBuffer) Truncated() bool {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.truncated
 }
