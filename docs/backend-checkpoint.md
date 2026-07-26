@@ -29,7 +29,7 @@ the already-correct production lifecycle:
    must synchronously dispose its one search WebSocket while the job remains
    running and the preview remains visible. Playwright then advances the page
    clock two seconds—past the client's 750 ms first reconnect delay—and
-   requires exactly one connection and one clean close.
+   requires exactly one connection and one close with no socket error.
 3. A second discrete Cancel click is issued while the first request remains
    held. This exercises the application's synchronous pending-request guard,
    rather than the DOM double-click filter. Browser-route and server-middleware
@@ -43,7 +43,7 @@ the already-correct production lifecycle:
    presentation is authoritative rather than optimistic.
 5. Releasing the same response bytes must make the job strip non-busy and
    canceled, restore the Run button, remove preview status and provisional
-   rows, and issue no results request. Browser errors, failed same-origin
+   rows, and issue no results POST. Browser errors, failed same-origin
    requests, external resources, and external WebSockets remain empty.
 6. The Go fixture independently requires one executor invocation, one exit
    whose returned error is `context.Canceled`, zero recovery-control commands,
@@ -132,10 +132,8 @@ flag ambiguity, a potentially batched false-pass, an incorrect DOM regex, and
 observer/listener cleanup. Final semantics, efficiency, reuse, and
 browser-fixture reviews reported no remaining blocker.
 
-The next checkpoint is the honest browser cancellation contract, followed by
-stale-duplicate injection and clock-driven job/result/export expiration. The
-ordered acceptance criteria are under **Remaining work, in priority order**.
-The overall backend goal remains active.
+At that checkpoint, honest browser cancellation was next, followed by
+stale-duplicate injection and clock-driven job/result/export expiration.
 
 ## Previous checkpoint: browser sequence-expiration and transient recovery
 
@@ -225,11 +223,9 @@ found that the first draft fetched its fresh snapshot after `K+4`, which could
 have hidden a dropped queued frame; capturing the snapshot at three rows
 before sending `K+4` closed that false-positive path.
 
-The next recommended slice is explicit browser sequence-gap injection:
-forward `K+2` while dropping `K+1`, require the client to reconnect from `K`,
-and prove contiguous replay. The precise remaining matrix is under
-**Remaining work, in priority order**. The overall backend goal remains
-active.
+At that checkpoint, the next recommended slice was explicit browser
+sequence-gap injection: forward `K+2` while dropping `K+1`, require the client
+to reconnect from `K`, and prove contiguous replay.
 
 ## Previous checkpoint: resumable WebSocket recovery
 
