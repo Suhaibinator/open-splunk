@@ -7,7 +7,66 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: authoritative browser cancellation
+## Latest checkpoint: recovered-socket stale-duplicate fencing
+
+Date: 2026-07-26
+
+Implementation/proof commit:
+`b80bf0a` (`prove recovered socket stale-frame fencing`)
+
+Recovery/progress foundation:
+`522b0ac` (`fence search progress by state revision`)
+
+This slice closes the stale-duplicate release boundary without changing the
+already-correct production WebSocket client:
+
+1. The direct client test now establishes a gap at sequence 502, resumes the
+   retained subscription from 501, applies contiguous replay through 503,
+   sends an equal 503 duplicate on the recovered socket, and then applies 504.
+   The final checkpoint and event list are exact; no additional gap, error, or
+   reconnect is allowed.
+2. The ordinary real-Chrome sequence-gap fixture captures a byte-identical
+   nonempty preview frame at checkpoint `K` and the original RUNNING state
+   frame before inducing the existing real `K+1`/`K+2` gap, reconnect, and
+   retained replay.
+3. After replay has advanced the production client to `K+2`, the proxy sends
+   exact old preview frame `K` through the recovered Playwright
+   route-to-page WebSocket boundary. A scoped, byte-exact, bounded page-side
+   recorder proves receipt. The subsequent real `K+3` and `K+4` frames apply,
+   while always-updated DOM latches prove the stale text, preview table, or a
+   non-`resyncing`/missing preview status never appears.
+4. The same recovered socket then accepts the real completed state, final
+   progress, and terminal event. Before the deliberately stale GET2 response
+   is released, the proxy sends the exact old RUNNING state frame again. The
+   fixture requires its sequence to be below the current transport checkpoint
+   and its state revision below the completed revision.
+5. Always-updated DOM latches prove that the job strip never leaves Completed,
+   never returns to Queued/Preparing/Running/Canceling, and that the preview
+   status stays present as `finalizing` with no stale preview rows. Bounded
+   histories remain diagnostics only, so their cap cannot make the correctness
+   oracle vacuously pass.
+6. Both injections leave the recovered connection count at two and do not
+   trigger an extra authoritative GET. The existing stale-GET, final GET,
+   result publication, one terminal close, final table, executor-invocation,
+   and safety assertions still complete normally.
+7. A controlled mutation disabling
+   `event.sequence <= previous` made the Chrome case fail exactly at
+   `stale preview text never resurrected`. Restoring the production fence made
+   the focused, race-enabled, and exact CI-equivalent gates pass.
+8. Reviewers drove replacement of direct synthetic dispatch with the supported
+   recovered `WebSocketRoute.send`, exact receipt evidence at the routed
+   browser boundary, strict sequence/revision staleness checks, scoped and
+   bounded instrumentation, reusable preview-status diagnostics, unbounded
+   regression latches, and explicit no-gap/no-error unit assertions. Final
+   correctness, efficiency, and fixture-quality rereviews reported no
+   remaining concrete finding.
+
+The exact validation record is under **Latest validation evidence**. The next
+checkpoint is clock-driven terminal job/result/export expiration and tombstone
+removal. Its ordered acceptance criteria are under **Remaining work, in
+priority order**. The overall backend goal remains active.
+
+## Previous checkpoint: authoritative browser cancellation
 
 Date: 2026-07-26
 
@@ -60,10 +119,9 @@ executor-exit counter, shared WebSocket URL matcher, and guarded response
 waiter. Final correctness, efficiency, reuse, and fixture-quality reviews
 reported no remaining blocker.
 
-The next checkpoint is stale-duplicate injection across a real recovery
-boundary, followed by clock-driven job/result/export expiration. The ordered
-acceptance criteria are under **Remaining work, in priority order**. The
-overall backend goal remains active.
+At that checkpoint, stale-duplicate injection across a real recovery boundary
+was next. It is now complete at `b80bf0a`; clock-driven terminal
+job/result/export expiration remains the current priority.
 
 ## Previous checkpoint: versioned progress and coalesced browser recovery
 
@@ -732,6 +790,52 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Recovered-socket stale-duplicate fencing
+
+The proof at `b80bf0a` passed:
+
+```sh
+go test ./... -count=1
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
+git diff --check
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+go test -race ./integration \
+  -run '^TestBrowserSequenceGapRecovery$' -count=1 -timeout=8m -v
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+go test ./integration \
+  -run '^Test(BackendVertical|Browser(SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=15m -v
+```
+
+All 42 frontend tests passed. The final focused real-Chrome gap proof completed
+in 14.074 seconds overall, with the browser case itself taking 13.54 seconds.
+The final race-enabled run completed in 15.185 seconds overall, with the
+browser case taking 13.56 seconds. The exact six-case CI-equivalent gate
+completed in 49.920 seconds:
+`TestBackendVertical` in 20.66 seconds,
+`TestBrowserSequenceExpiredRecovery` in 12.02 seconds,
+`TestBrowserSequenceGapRecovery` in 5.43 seconds,
+`TestBrowserSequenceGapRESTTerminalRecovery` in 5.33 seconds,
+`TestBrowserSequenceGapRESTFirstProgressRecovery` in 4.48 seconds, and
+`TestBrowserSearchCancellation` in 1.54 seconds. A read-only Docker check
+showed no Open Splunk or ClickHouse test container afterward.
+
+The controlled-mutation run disabled the production
+`event.sequence <= previous` return and failed at the exact stale-preview
+resurrection assertion. The fence was restored before every green gate and
+before commit. Simplify and adversarial reviewers found and drove fixes for a
+custom synthetic injection path, redundant receipt waits, broad unbounded
+socket/DOM instrumentation, duplicated status recording, insufficient
+sequence/revision proof, bounded correctness histories, missing unit
+gap/error assertions, ambiguous timeout diagnostics, and transient
+preview-status removal. Final frozen-diff reviews reported no remaining
+correctness, performance, determinism, or code-quality finding.
+
 ### Authoritative browser cancellation
 
 The cancellation proof at `787a7f9` passed:
@@ -1326,10 +1430,11 @@ independent stacks.
      -count=1 -timeout=15m -v
    ```
 
-5. Start with stale-duplicate injection across a real recovery boundary, then
-   clock-driven terminal job/result/export expiration, unless the user
-   explicitly changes priority. Add tests before implementation, run read-only
-   adversarial reviews, fix concrete findings, then commit and push `main`.
+5. Start with clock-driven terminal job/result/export expiration and tombstone
+   removal, unless the user explicitly changes priority. Stale-duplicate
+   injection across the recovered browser socket is complete at `b80bf0a`.
+   Add tests before implementation, run read-only adversarial reviews, fix
+   concrete findings, then commit and push `main`.
 
 ## Remaining work, in priority order
 
@@ -1352,12 +1457,14 @@ zero-row finalization behind a gated result response. The browser now
 single-flights the whole REST recovery cycle, so duplicate triggers cannot
 multiply backoff or follow-up scheduling. Honest browser cancellation is also
 complete: it proves exactly one cancel POST, one executor context cancellation,
-authoritative canceled presentation, and zero post-cancel reconnects. Complete
-the remaining release-path proofs before adding another ad hoc SPL feature:
+authoritative canceled presentation, and zero post-cancel reconnects.
+Recovered-socket stale-duplicate fencing is complete as well: the browser
+receives exact old preview and RUNNING frames after contiguous recovery, never
+regresses preview or terminal presentation, accepts subsequent live frames,
+and neither reconnects nor issues an extra authoritative GET. Complete the one
+remaining release-path proof before adding another ad hoc SPL feature:
 
-1. Inject a stale duplicate after recovery across the real boundary and prove
-   it cannot mutate preview, terminal, or checkpoint state.
-2. Exercise terminal job/result/export expiration and tombstone removal under
+1. Exercise terminal job/result/export expiration and tombstone removal under
    a clock-driven fixture while subscribed, including preview-to-final
    release and absence of stale frames, sockets, timers, retained snapshots,
    leases, exports, or diagnostics.
@@ -1368,7 +1475,7 @@ For browser-only fault control, prefer a dedicated in-process server over
 test-only production environment switches. Keep proxy logs, diagnostics,
 matching sockets, frame counts, and timeout output strictly bounded.
 
-After those two remaining release-path proofs:
+After that remaining release-path proof:
 
 - Close any remaining preview-to-final resource-release coverage that is not
   naturally exercised by the cancellation, recovery, and expiration fixtures.
@@ -1493,8 +1600,9 @@ Do not guess those decisions if they materially affect the implementation.
 
 1. Confirm `main` is clean and exactly matches `origin/main`.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `787a7f9`, `522b0ac`, and `b5502a3`; the preceding
-   recovery foundations are `f72f184`, `ed28182`, and `d1286a4`.
+   commits, especially `b80bf0a`, `cdb60df`, `787a7f9`, and `522b0ac`; the
+   preceding progress/recovery foundations are `b5502a3`, `f72f184`,
+   `ed28182`, and `d1286a4`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
 4. Run the ordinary Go/frontend gates above and the focused exact corpus:
 
@@ -1507,15 +1615,16 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. Unless the user changes priority, begin with stale-duplicate injection,
-   then clock-driven expiration in the ordered matrix above. Authoritative
-   browser cancellation, versioned REST-first/replay-later progress,
-   recovery-cycle coalescing, REST-only and accepted-WebSocket terminal
-   discovery after a sequence gap, explicit browser sequence-gap recovery,
-   browser `SEQUENCE_EXPIRED`, transient recovery-GET failure, retained replay,
+5. Unless the user changes priority, begin with clock-driven terminal
+   job/result/export expiration and tombstone removal in the ordered matrix
+   above. Recovered-socket stale-duplicate fencing, authoritative browser
+   cancellation, versioned REST-first/replay-later progress, recovery-cycle
+   coalescing, REST-only and accepted-WebSocket terminal discovery after a
+   sequence gap, explicit browser sequence-gap recovery, browser
+   `SEQUENCE_EXPIRED`, transient recovery-GET failure, retained replay,
    real-manager expiration/cancellation, the uninterrupted collector-to-browser
-   path, exact GradeThis corpus, collector/server process-restart proof, and the
-   protocol unit contract are already complete.
+   path, exact GradeThis corpus, collector/server process-restart proof, and
+   the protocol unit contract are already complete.
 6. If extending aggregates instead, start with an explicit bounded contract
    for `list(field)`; do not reuse unordered `values`.
 7. Preserve scalar/Dynamic path separation, numeric grammar sharing,
