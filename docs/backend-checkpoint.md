@@ -7,7 +7,60 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: sanitized current GradeThis collector migration
+## Latest checkpoint: shutdown-safe export artifact removal
+
+Date: 2026-07-26
+
+Implementation/proof commit:
+`961cba2` (`serialize export artifact removal with shutdown`)
+
+This slice closes the concrete export finding from the remaining
+preview-to-final resource-release audit:
+
+1. Export `Get` and `Cleanup` no longer hold the manager-wide lock while
+   unlinking expired artifacts or partials. A blocked filesystem therefore
+   cannot prevent `Close` from setting `closed`, canceling the manager, and
+   rejecting new admission.
+2. Both paths enroll in the existing admission barrier while `manager.mu`
+   still excludes shutdown, then release the lock before filesystem I/O.
+   `Close` sets `closed` under that same lock before waiting, so no positive
+   `WaitGroup.Add` can race a zero-count `Wait`, and artifact storage cannot be
+   torn down under an admitted remover.
+3. Closing the final download lease had a separate shutdown race: it removed
+   itself from manager accounting before performing a deferred unlink, so
+   `Close` could miss the lease and return while that unlink was still
+   blocked. A pre-shutdown final lease now admits its removal under
+   `manager.mu`; once shutdown has begun it skips lease-side deletion and
+   leaves the artifact to `Manager.Close`.
+4. Worker-side temporary/artifact removal remains owned by `workers.Wait`,
+   and secure redemption-time artifact opening remains covered by the
+   preexisting admission. Per-entry removal flags continue to serialize
+   concurrent cleanup, lookup, and lease-close attempts.
+5. Three deterministic tests block the injected filesystem remover for
+   `Cleanup`, request-triggered expiration through `Get`, and final-download
+   lease close. They prove shutdown begins promptly, cannot return before the
+   admitted remover, and performs exactly one artifact unlink. Bounded
+   completion checks prevent a future deadlock from falling through to a
+   package-wide timeout.
+6. Controlled red runs reproduced both defects: `Get`/`Cleanup` blocked
+   shutdown admission, and final-lease unlink allowed `Manager.Close` to
+   return early. The focused cases then passed 100 ordinary repetitions and
+   20 race-enabled repetitions.
+7. Independent search-job/executor/snapshot review found the existing
+   preview, final-result lease, cancellation, failure, expiration, and
+   shutdown ownership paths clean. Two final export reviewers confirmed the
+   exact staged patch SHA-256
+   `8a63a57ce80fa863be19a296a66c1f1159edd1bd185a0afe0241e1ed8a8bc03c`
+   and reported no remaining correctness, efficiency, deadlock, teardown, or
+   test-determinism finding.
+
+The exact validation record is under **Latest validation evidence**. This
+completes the current release-path resource-release audit pass; the next
+priority is the measured sustained-load proof. Known longer-term lifecycle
+items remain explicitly listed under **Remaining work, in priority order**.
+The overall backend goal remains active.
+
+## Previous checkpoint: sanitized current GradeThis collector migration
 
 Date: 2026-07-26
 
@@ -76,10 +129,10 @@ plan v0.1 corpus:
     marker; a composite resolver is deferred until it can be differential-
     tested against every existing fail-closed encoded/duplicate/depth case.
 
-The exact validation record is under **Latest validation evidence**. The next
-release-path priority is the remaining preview-to-final resource-release audit,
-followed by the measured load work ordered under **Remaining work, in priority
-order**. The overall backend goal remains active.
+The exact validation record is under **Latest validation evidence**. At this
+checkpoint, the next release-path priority was the remaining preview-to-final
+resource-release audit; that pass is now complete at `961cba2`. The overall
+backend goal remains active.
 
 At checkpoint creation, unrelated frontend changes were present in the shared
 worktree and were deliberately neither staged nor committed by this backend
@@ -991,6 +1044,51 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Shutdown-safe export artifact removal
+
+The exact implementation at `961cba2` passed:
+
+```sh
+go test ./... -count=1
+go vet ./...
+go build ./...
+go test -race ./internal/export ./internal/server -count=1
+go test ./internal/export \
+  -run 'TestDownloadLeaseDeferredUnlinkIsAdmittedBeforeManagerClose|TestManager(Cleanup|Get)DeletionDoesNotBlockShutdownAdmission' \
+  -count=100
+go test -race ./internal/export \
+  -run 'TestDownloadLeaseDeferredUnlinkIsAdmittedBeforeManagerClose|TestManager(Cleanup|Get)DeletionDoesNotBlockShutdownAdmission' \
+  -count=20
+go test -race ./internal/server \
+  -run '^TestSearchWebSocketRealManagersExpireLeasedResultsArtifactsAndTombstones$' \
+  -count=1
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+go test ./integration \
+  -run '^Test(BackendVertical|Browser(SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=15m -v
+git diff --cached --check
+```
+
+The full ordinary Go suite, build, vet, complete export/server race suites, and
+the exact real-manager expiration lifecycle all passed. The three new
+shutdown/removal cases passed 100 ordinary repetitions in 7.094 seconds and
+20 race-enabled repetitions in 3.122 seconds.
+
+The six-case Docker/ClickHouse plus browser release gate completed in
+52.492 seconds: `TestBackendVertical` in 24.28 seconds,
+`TestBrowserSequenceExpiredRecovery` in 11.80 seconds,
+`TestBrowserSequenceGapRecovery` in 5.18 seconds,
+`TestBrowserSequenceGapRESTTerminalRecovery` in 5.14 seconds,
+`TestBrowserSequenceGapRESTFirstProgressRecovery` in 4.28 seconds, and
+`TestBrowserSearchCancellation` in 1.31 seconds. All six current GradeThis
+investigations passed inside the vertical. Read-only Docker checks before and
+after the gate showed no `open-splunk-*` test container.
+
+The frozen staged implementation patch had SHA-256
+`8a63a57ce80fa863be19a296a66c1f1159edd1bd185a0afe0241e1ed8a8bc03c`.
+Independent final reviewers confirmed that checksum, traced every artifact
+remover and shutdown interleaving, and reported no remaining finding.
+
 ### Sanitized current GradeThis collector migration
 
 The exact implementation at `c576e85` passed:
@@ -1786,13 +1884,14 @@ independent stacks.
      -count=1 -timeout=15m -v
    ```
 
-5. Start with the remaining preview-to-final resource-release audit unless the
-   user explicitly changes priority. The sanitized current GradeThis
-   collector/config migration is complete at `c576e85`, logical event
-   retention at `458c8b4`, clock-driven job/result/export expiration at
-   `b2b2839`, and stale-duplicate injection at `b80bf0a`. Add a red unit or
-   integration test before implementation, run read-only adversarial reviews,
-   fix concrete findings, then commit and push `main`.
+5. Start with the measured sustained-load proof unless the user explicitly
+   changes priority. The current preview-to-final resource-release audit pass
+   is complete at `961cba2`, the sanitized current GradeThis collector/config
+   migration at `c576e85`, logical event retention at `458c8b4`, clock-driven
+   job/result/export expiration at `b2b2839`, and stale-duplicate injection at
+   `b80bf0a`. Add a red unit or integration test before implementation, run
+   read-only adversarial reviews, fix concrete findings, then commit and push
+   `main`.
 
 ## Remaining work, in priority order
 
@@ -1841,10 +1940,13 @@ trusted metadata, 20-event sanitized manifest, and six representative
 investigations are exercised through the public backend. The separate exact
 v0.1 corpus remains unchanged and green.
 
+The current preview-to-final resource-release audit pass is complete at
+`961cba2`. Search-job, executor, snapshot, and retained-result ownership were
+clean; export lookup, cleanup, and final-download deletion now hand off safely
+to shutdown without manager-wide lock/I/O coupling.
+
 Continue the release proof in this order:
 
-- Close any remaining preview-to-final resource-release coverage that is not
-  naturally exercised by the cancellation, recovery, and expiration fixtures.
 - Record a load/performance run at sustained 1,000 events/second, including
   collector offline recovery, slow WebSocket consumers, concurrent searches,
   high-cardinality exact aggregates, ClickHouse part count, scan budgets, and
@@ -1936,9 +2038,8 @@ Resource/lifecycle audit findings to retain in the backlog:
 
 - Bound or physically prune ingestion-token tombstones so token listing does
   not remain O(all historical tokens).
-- Move export artifact filesystem deletion outside the manager-wide read lock,
-  surface background deletion failures, and let admission perform due cleanup
-  before reporting capacity exhaustion.
+- Surface background export-deletion failures, and let admission perform due
+  cleanup before reporting capacity exhaustion.
 - Physically prune idle search-history owner rows and replace the
   process-global SQLite visibility lease registry with ownership that cannot
   retain closed database pointers indefinitely.
@@ -1986,7 +2087,7 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `c576e85`, `458c8b4`, `b2b2839`, `b80bf0a`,
+   commits, especially `961cba2`, `c576e85`, `458c8b4`, `b2b2839`, `b80bf0a`,
    `cdb60df`, `787a7f9`, and `522b0ac`; the preceding progress/recovery
    foundations are `b5502a3`, `f72f184`, `ed28182`, and `d1286a4`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
@@ -2001,10 +2102,10 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. Unless the user changes priority, begin with the remaining
-   preview-to-final resource-release audit, then record the sustained-load
-   proof. The sanitized current GradeThis collector/config migration, logical
-   event retention, clock-driven job/result/export expiration,
+5. Unless the user changes priority, begin with the sustained-load proof. The
+   current preview-to-final resource-release audit pass, sanitized current
+   GradeThis collector/config migration, logical event retention,
+   clock-driven job/result/export expiration,
    recovered-socket stale-duplicate fencing, authoritative browser
    cancellation, versioned
    REST-first/replay-later progress, recovery-cycle coalescing, REST-only and
