@@ -22,13 +22,40 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil && !errors.Is(err, context.Canceled) {
+	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		if isOnlyCancellation(err) {
+			return
+		}
 		log.Printf("open-splunk-loggen: %v", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+func isOnlyCancellation(err error) bool {
+	if err == context.Canceled {
+		return true
+	}
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() []error }:
+		causes := wrapped.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !isOnlyCancellation(cause) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		cause := wrapped.Unwrap()
+		return cause != nil && isOnlyCancellation(cause)
+	default:
+		return false
+	}
+}
+
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnedErr error) {
 	defaults := loggen.DefaultConfig()
 	flags := flag.NewFlagSet("open-splunk-loggen", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -37,8 +64,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	seed := flags.Int64("seed", defaults.Seed, "deterministic fixture seed")
 	start := flags.String("start", defaults.Start.Format(time.RFC3339Nano), "first event timestamp in RFC3339 format")
 	interval := flags.Duration("interval", defaults.Interval, "timestamp interval between events")
-	rate := flags.Float64("rate", 0, "maximum events per second; 0 emits as fast as possible")
+	rate := flags.Float64("rate", 0, "target events per second with bounded catch-up; 0 emits as fast as possible")
 	output := flags.String("output", "-", "output path, or - for stdout")
+	appendOutput := flags.Bool("append", false, "append to the output file instead of replacing it")
+	flushEvents := flags.Uint64("flush-events", 0, "flush buffered output after this many events; 0 disables event-count flushing")
 	service := flags.String("service", defaults.Service, "service field")
 	environment := flags.String("environment", defaults.Environment, "environment field")
 	host := flags.String("host", defaults.Host, "host field")
@@ -54,6 +83,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	if stdout == nil || stderr == nil {
 		return errors.New("stdout and stderr writers are required")
+	}
+	if *appendOutput && *output == "-" {
+		return errors.New("-append requires a file output path")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	startTime, err := time.Parse(time.RFC3339Nano, *start)
@@ -75,31 +110,47 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	delay, err := rateDelay(*rate)
+	pacer, err := loggen.NewPacer(*rate)
 	if err != nil {
+		return err
+	}
+	defer pacer.Close()
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	writer := stdout
 	var outputFile *os.File
 	if *output != "-" {
-		outputFile, err = os.OpenFile(*output, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		outputFile, err = openOutputFile(*output, *appendOutput)
 		if err != nil {
-			return fmt.Errorf("open output %q: %w", *output, err)
+			return err
 		}
-		defer outputFile.Close()
 		writer = outputFile
 	}
 	buffered := bufio.NewWriterSize(writer, 256*1024)
+	defer func() {
+		var finalizationErr error
+		if err := buffered.Flush(); err != nil {
+			finalizationErr = errors.Join(finalizationErr, fmt.Errorf("flush output: %w", err))
+		}
+		if outputFile != nil {
+			if err := outputFile.Sync(); err != nil {
+				finalizationErr = errors.Join(finalizationErr, fmt.Errorf("sync output %q: %w", *output, err))
+			}
+			if err := outputFile.Close(); err != nil {
+				finalizationErr = errors.Join(finalizationErr, fmt.Errorf("close output %q: %w", *output, err))
+			}
+		}
+		if finalizationErr == nil {
+			return
+		}
+		returnedErr = errors.Join(returnedErr, finalizationErr)
+	}()
 
 	var emitted uint64
 	for *count == 0 || emitted < *count {
-		if emitted > 0 && delay > 0 {
-			if err := wait(ctx, delay); err != nil {
-				_ = buffered.Flush()
-				return err
-			}
-		} else if err := ctx.Err(); err != nil {
+		if err := pacer.Wait(ctx, emitted); err != nil {
 			return err
 		}
 		line, err := generator.Next()
@@ -113,39 +164,38 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("write event %d delimiter: %w", emitted, err)
 		}
 		emitted++
-	}
-	if err := buffered.Flush(); err != nil {
-		return fmt.Errorf("flush output: %w", err)
-	}
-	if outputFile != nil {
-		if err := outputFile.Sync(); err != nil {
-			return fmt.Errorf("sync output %q: %w", *output, err)
+		if *flushEvents > 0 && emitted%*flushEvents == 0 {
+			if err := buffered.Flush(); err != nil {
+				return fmt.Errorf("flush output after event %d: %w", emitted-1, err)
+			}
 		}
 	}
 	return nil
 }
 
-func rateDelay(rate float64) (time.Duration, error) {
-	if rate < 0 {
-		return 0, errors.New("rate cannot be negative")
+func openOutputFile(path string, appendOutput bool) (*os.File, error) {
+	flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	if appendOutput {
+		flags = os.O_CREATE | os.O_RDWR | os.O_APPEND
 	}
-	if rate == 0 {
-		return 0, nil
+	file, err := os.OpenFile(path, flags, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open output %q: %w", path, err)
 	}
-	delay := time.Duration(float64(time.Second) / rate)
-	if delay <= 0 {
-		return 0, errors.New("rate is too large")
+	if !appendOutput {
+		return file, nil
 	}
-	return delay, nil
-}
 
-func wait(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
+	info, err := file.Stat()
+	if err == nil && info.Size() > 0 {
+		var trailing [1]byte
+		_, err = file.ReadAt(trailing[:], info.Size()-1)
+		if err == nil && trailing[0] != '\n' {
+			err = errors.New("existing output has an incomplete trailing record")
+		}
 	}
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("validate append output %q: %w", path, err), file.Close())
+	}
+	return file, nil
 }
