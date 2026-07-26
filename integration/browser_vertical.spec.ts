@@ -1,6 +1,7 @@
 import {
   expect,
   test,
+  type Locator,
   type Page,
   type Response,
   type WebSocket,
@@ -34,59 +35,9 @@ test.use({
 
 test("collector event is visible through the compiled backend UI", async ({ page }) => {
   test.setTimeout(60_000);
-  const pageErrors = boundedRecorder();
-  const failedAPIRequests = boundedRecorder();
-  const externalRequests = boundedRecorder();
-  const externalWebSockets = boundedRecorder();
-  page.on("pageerror", (error) => pageErrors.add(error.message));
-  page.on("requestfailed", (request) => {
-    const requestURL = new URL(request.url());
-    if (requestURL.origin === origin && requestURL.pathname.startsWith("/api/")) {
-      failedAPIRequests.add(`${request.method()} ${requestURL.pathname}: ${request.failure()?.errorText ?? "failed"}`);
-    }
-  });
-  page.on("request", (request) => {
-    const requestURL = new URL(request.url());
-    if ((requestURL.protocol === "http:" || requestURL.protocol === "https:") && requestURL.origin !== origin) {
-      externalRequests.add(`${request.method()} ${requestURL.origin}${requestURL.pathname}`);
-    }
-  });
-  page.on("websocket", (socket) => {
-    const socketURL = new URL(socket.url());
-    if (httpOriginForWebSocket(socketURL) !== origin) {
-      externalWebSockets.add(socket.url());
-    }
-  });
-
-  const launchURL = new URL("/search/", origin);
-  launchURL.search = new URLSearchParams({
-    q: searchSPL,
-    earliest,
-    latest,
-    timezone: "UTC",
-    run: "0",
-  }).toString();
-  await page.goto(launchURL.href, { waitUntil: "domcontentloaded", timeout });
-
-  await expect(page.getByTestId("search-workspace")).toBeVisible({ timeout });
-  await expect(page.getByText("Backend data", { exact: true })).toBeVisible({ timeout });
-  await expect(page.getByTestId("search-input")).toHaveValue(searchSPL);
-  const runSearch = page.getByTestId("run-search");
-  await expect(runSearch).toBeEnabled({ timeout });
-  await installPreviewStatusRecorder(page);
-
-  const createResponsePromise = page.waitForResponse(
-    (response) => matchesAPIResponse(response, origin, "/api/v1/search/jobs/create"),
-    { timeout },
-  );
-  const resultsResponsePromise = page.waitForResponse(
-    (response) => matchesAPIResponse(response, origin, "/api/v1/search/jobs/results"),
-    { timeout },
-  );
-  // Page teardown can reject either waiter before the normal await is reached.
-  // Mark both handled immediately while retaining the original promises.
-  void createResponsePromise.catch(() => undefined);
-  void resultsResponsePromise.catch(() => undefined);
+  const safety = observeBrowserSafety(page);
+  const runSearch = await openSearchWorkspace(page);
+  const { createResponsePromise, resultsResponsePromise } = waitForSearchResponses(page);
   const protocolObservation = observeSearchProtocol(page, origin, timeout);
   try {
     await runSearch.click();
@@ -129,73 +80,26 @@ test("collector event is visible through the compiled backend UI", async ({ page
   await expect(page.locator("body")).not.toContainText(
     /Live job updates failed|Live job updates skipped a sequence|resynchronizing from the server/i,
   );
-  expect(pageErrors.snapshot(), "uncaught browser errors").toEqual([]);
-  expect(failedAPIRequests.snapshot(), "failed same-origin API requests").toEqual([]);
-  expect(externalRequests.snapshot(), "external browser resources").toEqual([]);
-  expect(externalWebSockets.snapshot(), "external browser WebSockets").toEqual([]);
+  assertBrowserSafety(safety);
 });
 
 test("live preview resumes from the exact retained WebSocket sequence", async ({ page }) => {
   test.setTimeout(60_000);
-  const pageErrors = boundedRecorder();
-  const failedAPIRequests = boundedRecorder();
-  const externalRequests = boundedRecorder();
-  const externalWebSockets = boundedRecorder();
-  let createRequests = 0;
-  page.on("pageerror", (error) => pageErrors.add(error.message));
-  page.on("requestfailed", (request) => {
-    const requestURL = new URL(request.url());
-    if (requestURL.origin === origin && requestURL.pathname.startsWith("/api/")) {
-      failedAPIRequests.add(`${request.method()} ${requestURL.pathname}: ${request.failure()?.errorText ?? "failed"}`);
-    }
-  });
-  page.on("request", (request) => {
-    const requestURL = new URL(request.url());
-    if (
-      requestURL.origin === origin
-      && requestURL.pathname === "/api/v1/search/jobs/create"
-      && request.method() === "POST"
-    ) {
-      createRequests += 1;
-    }
-    if ((requestURL.protocol === "http:" || requestURL.protocol === "https:") && requestURL.origin !== origin) {
-      externalRequests.add(`${request.method()} ${requestURL.origin}${requestURL.pathname}`);
-    }
-  });
-  page.on("websocket", (socket) => {
-    const socketURL = new URL(socket.url());
-    if (httpOriginForWebSocket(socketURL) !== origin) {
-      externalWebSockets.add(socket.url());
-    }
-  });
-
+  const safety = observeBrowserSafety(page);
   const replay = await interceptOneRetainedReplay(page, origin, timeout);
-  const launchURL = new URL("/search/", origin);
-  launchURL.search = new URLSearchParams({
-    q: searchSPL,
-    earliest,
-    latest,
-    timezone: "UTC",
-    run: "0",
-  }).toString();
-  await page.goto(launchURL.href, { waitUntil: "domcontentloaded", timeout });
-
-  await expect(page.getByTestId("search-workspace")).toBeVisible({ timeout });
-  await expect(page.getByText("Backend data", { exact: true })).toBeVisible({ timeout });
-  const runSearch = page.getByTestId("run-search");
-  await expect(runSearch).toBeEnabled({ timeout });
-  await installPreviewStatusRecorder(page);
-
-  const createResponsePromise = page.waitForResponse(
-    (response) => matchesAPIResponse(response, origin, "/api/v1/search/jobs/create"),
-    { timeout },
+  let releaseAuthoritativeRecovery!: () => void;
+  const authoritativeRecoveryGate = new Promise<void>((resolve) => {
+    releaseAuthoritativeRecovery = resolve;
+  });
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/get",
+    async (route) => {
+      await authoritativeRecoveryGate;
+      await route.continue();
+    },
   );
-  const resultsResponsePromise = page.waitForResponse(
-    (response) => matchesAPIResponse(response, origin, "/api/v1/search/jobs/results"),
-    { timeout },
-  );
-  void createResponsePromise.catch(() => undefined);
-  void resultsResponsePromise.catch(() => undefined);
+  const runSearch = await openSearchWorkspace(page);
+  const { createResponsePromise, resultsResponsePromise } = waitForSearchResponses(page);
 
   try {
     await runSearch.click();
@@ -207,11 +111,18 @@ test("live preview resumes from the exact retained WebSocket sequence", async ({
     await expect(page.locator(".event-row--preview").first()).toBeVisible({ timeout });
     await replay.disconnect();
     await replay.waitForTerminalReplay();
+    await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+      "data-status",
+      "finalizing",
+      { timeout },
+    );
+    releaseAuthoritativeRecovery();
 
     const resultsResponse = await resultsResponsePromise;
     assertProtobufResponse(resultsResponse);
     expect(decodeSearchResultsJobID(await resultsResponse.body())).toBe(browserSearchJobID);
   } finally {
+    releaseAuthoritativeRecovery();
     replay.dispose();
   }
 
@@ -233,11 +144,8 @@ test("live preview resumes from the exact retained WebSocket sequence", async ({
     previewStatuses.filter((status) => status === "resyncing" || status === "finalization-error"),
     `UI preview status transitions: ${JSON.stringify(previewStatuses)}`,
   ).toEqual([]);
-  expect(createRequests, "browser search create requests").toBe(1);
-  expect(pageErrors.snapshot(), "uncaught browser errors").toEqual([]);
-  expect(failedAPIRequests.snapshot(), "failed same-origin API requests").toEqual([]);
-  expect(externalRequests.snapshot(), "external browser resources").toEqual([]);
-  expect(externalWebSockets.snapshot(), "external browser WebSockets").toEqual([]);
+  expect(safety.createRequests(), "browser search create requests").toBe(1);
+  assertBrowserSafety(safety);
 });
 
 function requiredEnvironment(name: string): string {
@@ -284,6 +192,102 @@ function matchesAPIResponse(response: Response, expectedOrigin: string, pathname
 function assertProtobufResponse(response: Response): void {
   expect(response.status(), `${response.url()} status`).toBe(200);
   expect(response.headers()["content-type"], `${response.url()} Content-Type`).toBe("application/x-protobuf");
+}
+
+interface BrowserSafetyObservation {
+  pageErrors: BoundedRecorder;
+  failedAPIRequests: BoundedRecorder;
+  externalRequests: BoundedRecorder;
+  externalWebSockets: BoundedRecorder;
+  createRequests(): number;
+}
+
+function observeBrowserSafety(page: Page): BrowserSafetyObservation {
+  const pageErrors = boundedRecorder();
+  const failedAPIRequests = boundedRecorder();
+  const externalRequests = boundedRecorder();
+  const externalWebSockets = boundedRecorder();
+  let createRequests = 0;
+  page.on("pageerror", (error) => pageErrors.add(error.message));
+  page.on("requestfailed", (request) => {
+    const requestURL = new URL(request.url());
+    if (requestURL.origin === origin && requestURL.pathname.startsWith("/api/")) {
+      failedAPIRequests.add(`${request.method()} ${requestURL.pathname}: ${request.failure()?.errorText ?? "failed"}`);
+    }
+  });
+  page.on("request", (request) => {
+    const requestURL = new URL(request.url());
+    if (
+      requestURL.origin === origin
+      && requestURL.pathname === "/api/v1/search/jobs/create"
+      && request.method() === "POST"
+    ) {
+      createRequests += 1;
+    }
+    if ((requestURL.protocol === "http:" || requestURL.protocol === "https:") && requestURL.origin !== origin) {
+      externalRequests.add(`${request.method()} ${requestURL.origin}${requestURL.pathname}`);
+    }
+  });
+  page.on("websocket", (socket) => {
+    const socketURL = new URL(socket.url());
+    if (httpOriginForWebSocket(socketURL) !== origin) {
+      externalWebSockets.add(socket.url());
+    }
+  });
+  return {
+    pageErrors,
+    failedAPIRequests,
+    externalRequests,
+    externalWebSockets,
+    createRequests: () => createRequests,
+  };
+}
+
+function assertBrowserSafety(observation: BrowserSafetyObservation): void {
+  expect(observation.pageErrors.snapshot(), "uncaught browser errors").toEqual([]);
+  expect(observation.failedAPIRequests.snapshot(), "failed same-origin API requests").toEqual([]);
+  expect(observation.externalRequests.snapshot(), "external browser resources").toEqual([]);
+  expect(observation.externalWebSockets.snapshot(), "external browser WebSockets").toEqual([]);
+}
+
+async function openSearchWorkspace(page: Page): Promise<Locator> {
+  const launchURL = new URL("/search/", origin);
+  launchURL.search = new URLSearchParams({
+    q: searchSPL,
+    earliest,
+    latest,
+    timezone: "UTC",
+    run: "0",
+  }).toString();
+  await page.goto(launchURL.href, { waitUntil: "domcontentloaded", timeout });
+  await expect(page.getByTestId("search-workspace")).toBeVisible({ timeout });
+  await expect(page.getByText("Backend data", { exact: true })).toBeVisible({ timeout });
+  await expect(page.getByTestId("search-input")).toHaveValue(searchSPL);
+  const runSearch = page.getByTestId("run-search");
+  await expect(runSearch).toBeEnabled({ timeout });
+  await installPreviewStatusRecorder(page);
+  return runSearch;
+}
+
+interface SearchResponseWaiters {
+  createResponsePromise: Promise<Response>;
+  resultsResponsePromise: Promise<Response>;
+}
+
+function waitForSearchResponses(page: Page): SearchResponseWaiters {
+  const createResponsePromise = page.waitForResponse(
+    (response) => matchesAPIResponse(response, origin, "/api/v1/search/jobs/create"),
+    { timeout },
+  );
+  const resultsResponsePromise = page.waitForResponse(
+    (response) => matchesAPIResponse(response, origin, "/api/v1/search/jobs/results"),
+    { timeout },
+  );
+  // Page teardown can reject either waiter before the normal await is reached.
+  // Mark both handled immediately while retaining the original promises.
+  void createResponsePromise.catch(() => undefined);
+  void resultsResponsePromise.catch(() => undefined);
+  return { createResponsePromise, resultsResponsePromise };
 }
 
 interface BoundedRecorder {
@@ -348,6 +352,9 @@ async function collectPreviewStatuses(page: Page): Promise<string[]> {
 interface ObservedSubscription {
   subscriptionID: string;
   searchJobID: string;
+  afterSequence: bigint;
+  includePreviews: boolean;
+  previewRowLimit: number | undefined;
 }
 
 interface ObservedProgress {
@@ -377,10 +384,9 @@ interface RetainedReplayObservation {
   dispose(): void;
 }
 
-interface RoutedSubscription {
-  subscriptionID: string;
-  searchJobID: string;
-  afterSequence: bigint;
+interface ObservedSubscribeCommand {
+  requestID: string;
+  subscriptions: ObservedSubscription[];
 }
 
 async function interceptOneRetainedReplay(
@@ -392,7 +398,11 @@ async function interceptOneRetainedReplay(
   let routedJobID: string | undefined;
   let subscriptionID: string | undefined;
   let checkpoint: bigint | undefined;
-  let withheldFrame: Buffer | undefined;
+  let withheldTerminalSequence: bigint | undefined;
+  let reconnectRequestID: string | undefined;
+  let reconnectAcknowledged = false;
+  let initialSubscription: ObservedSubscription | undefined;
+  const withheldFrames = new Map<bigint, Buffer>();
   let replayVerified = false;
   let terminalReplayed = false;
   let lastReplaySequence: bigint | undefined;
@@ -463,35 +473,53 @@ async function interceptOneRetainedReplay(
         clientFrameCount += 1;
         if (clientFrameCount > 64) throw new Error("search WebSocket sent more than 64 routed command frames");
         if (typeof message === "string") throw new Error("search WebSocket sent a text frame");
-        const subscriptions = decodeRoutedSubscriptions(message);
-        if (subscriptions.length > 1) {
+        const subscribe = decodeSearchSubscribeCommand(message);
+        if (subscribe !== undefined && subscribe.subscriptions.length !== 1) {
           throw new Error("search WebSocket sent more than one subscription in a reconnect command");
         }
-        const subscription = subscriptions[0];
+        const subscription = subscribe?.subscriptions[0];
         if (subscription !== undefined) {
           if (connectionOrdinal === 1) {
+            if (initialSubscription !== undefined) {
+              throw new Error("initial WebSocket sent more than one subscribe command");
+            }
             if (subscription.afterSequence !== 0n) {
               throw new Error(`initial subscription started after sequence ${subscription.afterSequence.toString()}`);
             }
+            initialSubscription = subscription;
             subscriptionID = subscription.subscriptionID;
             routedJobID = subscription.searchJobID;
           } else {
-            if (checkpoint === undefined || subscriptionID === undefined || routedJobID === undefined) {
+            if (
+              checkpoint === undefined
+              || subscriptionID === undefined
+              || routedJobID === undefined
+              || initialSubscription === undefined
+              || subscribe === undefined
+            ) {
               throw new Error("reconnect subscribed before the disruption checkpoint was established");
+            }
+            if (reconnectRequestID !== undefined) {
+              throw new Error("reconnect WebSocket sent more than one subscribe command");
             }
             if (
               subscription.subscriptionID !== subscriptionID
               || subscription.searchJobID !== routedJobID
               || subscription.afterSequence !== checkpoint
+              || subscription.includePreviews !== initialSubscription.includePreviews
+              || subscription.previewRowLimit !== initialSubscription.previewRowLimit
             ) {
               throw new Error(
                 `reconnect subscription = ${JSON.stringify({
                   subscriptionID: subscription.subscriptionID,
                   searchJobID: subscription.searchJobID,
                   afterSequence: subscription.afterSequence.toString(),
+                  includePreviews: subscription.includePreviews,
+                  previewRowLimit: subscription.previewRowLimit,
                 })}; expected the original subscription after ${checkpoint.toString()}`,
               );
             }
+            reconnectRequestID = subscribe.requestID;
             lastReplaySequence = checkpoint;
           }
         }
@@ -517,16 +545,22 @@ async function interceptOneRetainedReplay(
           && target.value === routedJobID;
 
         if (connectionOrdinal === 1) {
-          if (withheldFrame !== undefined) return;
-          if (
-            matchesSubscription
-            && checkpoint !== undefined
-            && event.sequence === checkpoint + 1n
-          ) {
-            withheldFrame = frame;
-            if (!checkpointSettled) {
-              checkpointSettled = true;
-              resolveCheckpoint();
+          if (matchesSubscription && checkpoint !== undefined) {
+            const prior = withheldTerminalSequence
+              ?? Array.from(withheldFrames.keys()).at(-1)
+              ?? checkpoint;
+            if (event.sequence !== prior + 1n) {
+              throw new Error(
+                `withheld sequence = ${event.sequence.toString()}, want ${(prior + 1n).toString()}`,
+              );
+            }
+            withheldFrames.set(event.sequence, frame);
+            if (event.payload?.$case === "searchTerminal") {
+              withheldTerminalSequence = event.sequence;
+              if (!checkpointSettled) {
+                checkpointSettled = true;
+                resolveCheckpoint();
+              }
             }
             return;
           }
@@ -549,16 +583,29 @@ async function interceptOneRetainedReplay(
         if (event.payload?.$case === "subscriptionAcknowledged") {
           const acknowledgment = event.payload.value;
           if (
-            acknowledgment.subscriptionId === subscriptionID
-            && acknowledgment.target?.target?.$case === "searchJobId"
-            && acknowledgment.target.target.value === routedJobID
-            && !acknowledgment.replayWillFollow
+            reconnectAcknowledged
+            || reconnectRequestID === undefined
+            || checkpoint === undefined
+            || withheldTerminalSequence === undefined
+            || acknowledgment.requestId !== reconnectRequestID
+            || acknowledgment.subscriptionId !== subscriptionID
+            || acknowledgment.target?.target?.$case !== "searchJobId"
+            || acknowledgment.target.target.value !== routedJobID
+            || !acknowledgment.replayWillFollow
+            || acknowledgment.earliestAvailableSequence > checkpoint + 1n
+            || acknowledgment.latestSequence !== withheldTerminalSequence
           ) {
-            throw new Error("reconnect acknowledgment did not promise retained replay");
+            throw new Error("reconnect acknowledgment did not describe the withheld retained suffix");
           }
+          reconnectAcknowledged = true;
         }
         if (matchesSubscription) {
-          if (checkpoint === undefined || withheldFrame === undefined) {
+          if (
+            !reconnectAcknowledged
+            || checkpoint === undefined
+            || withheldTerminalSequence === undefined
+            || withheldFrames.size === 0
+          ) {
             throw new Error("reconnect delivered a target frame before the withheld replay was captured");
           }
           const previous = lastReplaySequence ?? checkpoint;
@@ -567,16 +614,18 @@ async function interceptOneRetainedReplay(
               `replay sequence = ${event.sequence.toString()}, want ${(previous + 1n).toString()}`,
             );
           }
-          if (!replayVerified) {
-            if (!frame.equals(withheldFrame)) {
-              throw new Error("first retained replay frame was not byte-identical to the withheld server frame");
-            }
-            replayVerified = true;
+          const withheld = withheldFrames.get(event.sequence);
+          if (withheld === undefined || !frame.equals(withheld)) {
+            throw new Error(`retained replay frame ${event.sequence.toString()} was not byte-identical`);
           }
           lastReplaySequence = event.sequence;
+          replayVerified = event.sequence === withheldTerminalSequence;
         }
         client.send(message);
         if (matchesSubscription && event.payload?.$case === "searchTerminal") {
+          if (!replayVerified || event.sequence !== withheldTerminalSequence) {
+            throw new Error("terminal arrived before the complete retained suffix was replayed");
+          }
           terminalReplayed = true;
           checkCompletion();
         }
@@ -600,7 +649,12 @@ async function interceptOneRetainedReplay(
       return checkpointReady;
     },
     async disconnect() {
-      if (firstServer === undefined || checkpoint === undefined || withheldFrame === undefined) {
+      if (
+        firstServer === undefined
+        || checkpoint === undefined
+        || withheldTerminalSequence === undefined
+        || withheldFrames.size === 0
+      ) {
         throw new Error("retained replay disruption was requested before its checkpoint was ready");
       }
       await firstServer.close({
@@ -674,7 +728,7 @@ function observeSearchProtocol(
       sent: ({ payload }) => {
         try {
           if (typeof payload === "string") throw new Error("search WebSocket sent a text frame");
-          subscriptions.push(...decodeSearchSubscriptions(payload));
+          subscriptions.push(...(decodeSearchSubscribeCommand(payload)?.subscriptions ?? []));
           if (subscriptions.length > 32) throw new Error("search WebSocket sent too many subscriptions");
           checkCompletion();
         } catch (error) {
@@ -732,37 +786,27 @@ function decodeSearchResultsJobID(payload: Uint8Array): string {
   return searchJobID;
 }
 
-function decodeSearchSubscriptions(payload: Uint8Array): ObservedSubscription[] {
+function decodeSearchSubscribeCommand(payload: Uint8Array): ObservedSubscribeCommand | undefined {
   const command = SearchWebSocketCommand.decode(payload);
-  if (command.payload?.$case !== "subscribe") return [];
-  return command.payload.value.subscriptions.map((subscription) => {
-    const target = subscription.target?.target;
-    if (!subscription.subscriptionId) throw new Error("SearchSubscription.subscription_id is empty");
-    if (target?.$case !== "searchJobId" || !target.value) {
-      throw new Error("SearchSubscription.search_job_id is empty");
-    }
-    return {
-      subscriptionID: subscription.subscriptionId,
-      searchJobID: target.value,
-    };
-  });
-}
-
-function decodeRoutedSubscriptions(payload: Uint8Array): RoutedSubscription[] {
-  const command = SearchWebSocketCommand.decode(payload);
-  if (command.payload?.$case !== "subscribe") return [];
-  return command.payload.value.subscriptions.map((subscription) => {
-    const target = subscription.target?.target;
-    if (!subscription.subscriptionId) throw new Error("SearchSubscription.subscription_id is empty");
-    if (target?.$case !== "searchJobId" || !target.value) {
-      throw new Error("SearchSubscription.search_job_id is empty");
-    }
-    return {
-      subscriptionID: subscription.subscriptionId,
-      searchJobID: target.value,
-      afterSequence: subscription.afterSequence,
-    };
-  });
+  if (command.payload?.$case !== "subscribe") return undefined;
+  if (!command.requestId) throw new Error("SearchWebSocketCommand.request_id is empty");
+  return {
+    requestID: command.requestId,
+    subscriptions: command.payload.value.subscriptions.map((subscription) => {
+      const target = subscription.target?.target;
+      if (!subscription.subscriptionId) throw new Error("SearchSubscription.subscription_id is empty");
+      if (target?.$case !== "searchJobId" || !target.value) {
+        throw new Error("SearchSubscription.search_job_id is empty");
+      }
+      return {
+        subscriptionID: subscription.subscriptionId,
+        searchJobID: target.value,
+        afterSequence: subscription.afterSequence,
+        includePreviews: subscription.includePreviews,
+        previewRowLimit: subscription.previewRowLimit,
+      };
+    }),
+  };
 }
 
 function decodeSearchProgress(payload: Uint8Array): ObservedProgress | undefined {

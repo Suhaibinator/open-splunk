@@ -8,10 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchws"
@@ -102,29 +105,12 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 	assertRejectedSearchWebSocketOrigins(t, dialer, httpServer.URL)
 	assertSearchWebSocketWrongMethod(t, httpClient, httpServer.URL)
 
-	connection, response, err := dialer.Dial(
+	connection := dialSearchWebSocket(
+		t,
+		dialer,
 		webSocketURL(httpServer.URL, searchWebSocketPath),
-		http.Header{
-			"Origin":         []string{httpServer.URL},
-			"Sec-Fetch-Site": []string{"same-origin"},
-		},
+		httpServer.URL,
 	)
-	if err != nil {
-		status := 0
-		if response != nil {
-			status = response.StatusCode
-			_ = response.Body.Close()
-		}
-		t.Fatalf("websocket dial: %v (status %d)", err, status)
-	}
-	if response == nil || response.StatusCode != http.StatusSwitchingProtocols {
-		if response != nil {
-			_ = response.Body.Close()
-		}
-		_ = connection.Close()
-		t.Fatalf("upgrade response = %#v", response)
-	}
-	_ = response.Body.Close()
 	defer connection.Close()
 
 	command := &opensplunkv1.SearchWebSocketCommand{
@@ -292,6 +278,526 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 	}
 	if _, _, err := connection.ReadMessage(); err == nil {
 		t.Fatal("open websocket remained readable after Handler.Close")
+	}
+}
+
+type realSearchWebSocketExecutor struct {
+	calls   atomic.Uint32
+	exits   atomic.Uint32
+	entered chan struct{}
+	steps   chan realSearchWebSocketProgressStep
+	exited  chan error
+}
+
+type realSearchWebSocketProgressStep struct {
+	delta searchjobs.ExecutionProgressDelta
+	reply chan error
+}
+
+func newRealSearchWebSocketExecutor() *realSearchWebSocketExecutor {
+	return &realSearchWebSocketExecutor{
+		entered: make(chan struct{}, 1),
+		steps:   make(chan realSearchWebSocketProgressStep),
+		exited:  make(chan error, 1),
+	}
+}
+
+func (executor *realSearchWebSocketExecutor) Execute(
+	ctx context.Context,
+	_ clickhouse.CompiledQuery,
+	sink searchjobs.ResultSink,
+) (returnedErr error) {
+	executor.calls.Add(1)
+	defer func() { executor.recordExit(returnedErr) }()
+	if err := sink.SetSchema(searchjobs.Schema{Columns: []searchjobs.Column{{
+		Name: "message",
+		Kind: searchjobs.ValueKindString,
+	}}}); err != nil {
+		return err
+	}
+	select {
+	case executor.entered <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	progress, ok := sink.(searchjobs.ProgressSink)
+	if !ok {
+		return errors.New("real websocket integration result sink does not report progress")
+	}
+	for {
+		select {
+		case step := <-executor.steps:
+			err := progress.ReportProgress(step.delta)
+			select {
+			case step.reply <- err:
+			case <-ctx.Done():
+				err = ctx.Err()
+			}
+			if err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (executor *realSearchWebSocketExecutor) recordExit(err error) {
+	executor.exits.Add(1)
+	select {
+	case executor.exited <- err:
+	default:
+	}
+}
+
+func (executor *realSearchWebSocketExecutor) step(t *testing.T, delta searchjobs.ExecutionProgressDelta) {
+	t.Helper()
+	step := realSearchWebSocketProgressStep{delta: delta, reply: make(chan error, 1)}
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case executor.steps <- step:
+	case <-timer.C:
+		t.Fatal("timed out sending executor progress step")
+	}
+	select {
+	case err := <-step.reply:
+		if err != nil {
+			t.Fatalf("executor progress step: %v", err)
+		}
+	case <-timer.C:
+		t.Fatal("timed out waiting for executor progress step")
+	}
+}
+
+type realSearchWebSocketFixture struct {
+	t         *testing.T
+	jobID     string
+	anchor    time.Time
+	executor  *realSearchWebSocketExecutor
+	server    *httptest.Server
+	client    *http.Client
+	dialer    *websocket.Dialer
+	socketURL string
+}
+
+func newRealSearchWebSocketFixture(t *testing.T, jobID string, maximumReplayEvents int) *realSearchWebSocketFixture {
+	t.Helper()
+	const (
+		ownerID       = "owner-real-websocket"
+		tenantID      = "tenant-real-websocket"
+		clientTimeout = 3 * time.Second
+	)
+	anchor := time.Date(2026, time.July, 25, 12, 0, 0, 0, time.UTC)
+	clock := &searchJobListIntegrationClock{now: anchor}
+	executor := newRealSearchWebSocketExecutor()
+	manager, err := searchjobs.New(searchjobs.Config{
+		Executor:        executor,
+		Snapshotter:     searchJobListIntegrationSnapshotter(17),
+		MaxConcurrent:   1,
+		RetentionTTL:    time.Hour,
+		CleanupInterval: -1,
+		Now:             clock.Now,
+		NewID:           func() string { return jobID },
+		CursorKey:       []byte("0123456789abcdef0123456789abcdef"),
+	})
+	if err != nil {
+		t.Fatalf("searchjobs.New: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close real websocket search manager: %v", err)
+		}
+	})
+
+	exports := &fakeExports{getFn: func(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error) {
+		return exportjobs.Job{}, exportjobs.ErrNotFound
+	}}
+	socketService, err := searchws.New(searchws.Config{
+		Searches: manager,
+		Exports:  exports,
+		Access:   searchjobs.AccessScope{TenantID: tenantID, OwnerID: ownerID},
+		CheckOrigin: func(*http.Request) bool {
+			return true
+		},
+		MaximumSubscriptions: 8,
+		MaximumFrameBytes:    64 << 10,
+		MaximumReplayEvents:  maximumReplayEvents,
+		PollInterval:         10 * time.Millisecond,
+		PingInterval:         3 * time.Second,
+		PongTimeout:          5 * time.Second,
+		Now:                  clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("searchws.New: %v", err)
+	}
+	handler, err := NewHandler(Config{
+		SearchJobs:      manager,
+		SearchWebSocket: socketService,
+		Indexes: fakeIndexCatalog{indexes: []control.Index{{
+			ID: "index-main",
+			Definition: control.IndexDefinition{
+				Name:          "main",
+				DisplayName:   "Main",
+				SearchEnabled: true,
+			},
+			State: control.IndexStateActive,
+		}}},
+		SavedSearches:              &fakeSavedSearches{},
+		WebUI:                      testUI(),
+		OwnerID:                    ownerID,
+		TenantID:                   tenantID,
+		AdministrativeAllowedHosts: []string{"127.0.0.1"},
+		Now:                        clock.Now,
+	})
+	if err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = socketService.Close(ctx)
+		cancel()
+		t.Fatalf("NewHandler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	client := server.Client()
+	client.Timeout = clientTimeout
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := handler.Close(ctx); err != nil {
+			t.Errorf("close real websocket handler: %v", err)
+		}
+		cancel()
+		server.Close()
+	})
+	return &realSearchWebSocketFixture{
+		t: t, jobID: jobID, anchor: anchor, executor: executor, server: server, client: client,
+		dialer:    &websocket.Dialer{HandshakeTimeout: clientTimeout},
+		socketURL: webSocketURL(server.URL, searchWebSocketPath),
+	}
+}
+
+func (fixture *realSearchWebSocketFixture) post(path string, input, output proto.Message) {
+	fixture.t.Helper()
+	payload, err := proto.Marshal(input)
+	if err != nil {
+		fixture.t.Fatalf("marshal POST %s: %v", path, err)
+	}
+	request, err := http.NewRequest(http.MethodPost, fixture.server.URL+path, bytes.NewReader(payload))
+	if err != nil {
+		fixture.t.Fatalf("create POST %s: %v", path, err)
+	}
+	request.Header.Set("Content-Type", "application/x-protobuf")
+	request.Header.Set("Origin", fixture.server.URL)
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
+	response, err := fixture.client.Do(request)
+	if err != nil {
+		fixture.t.Fatalf("POST %s: %v", path, err)
+	}
+	defer response.Body.Close()
+	const maximumResponseBytes = int64(1 << 20)
+	body, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBytes+1))
+	if err != nil {
+		fixture.t.Fatalf("read POST %s: %v", path, err)
+	}
+	if int64(len(body)) > maximumResponseBytes {
+		fixture.t.Fatalf("POST %s response exceeded %d bytes", path, maximumResponseBytes)
+	}
+	if response.StatusCode != http.StatusOK {
+		fixture.t.Fatalf("POST %s status = %d body = %q", path, response.StatusCode, body)
+	}
+	if contentType := response.Header.Get("Content-Type"); contentType != "application/x-protobuf" {
+		fixture.t.Fatalf("POST %s content type = %q", path, contentType)
+	}
+	if err := proto.Unmarshal(body, output); err != nil {
+		fixture.t.Fatalf("unmarshal POST %s: %v", path, err)
+	}
+}
+
+func (fixture *realSearchWebSocketFixture) createRunningSearch() {
+	fixture.t.Helper()
+	request := createRequest(
+		fixture.anchor.Add(-time.Hour).Format(time.RFC3339Nano),
+		fixture.anchor.Format(time.RFC3339Nano),
+		"main",
+	)
+	request.Definition.Spl = "index=main | table message"
+	var response opensplunkv1.CreateSearchJobResponse
+	fixture.post("/api/v1/search/jobs/create", request, &response)
+	if response.GetSearchJob().GetSearchJobId() != fixture.jobID {
+		fixture.t.Fatalf("created search = %+v", response.GetSearchJob())
+	}
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-fixture.executor.entered:
+	case <-timer.C:
+		fixture.t.Fatal("timed out waiting for real search executor")
+	}
+	if calls := fixture.executor.calls.Load(); calls != 1 {
+		fixture.t.Fatalf("executor calls = %d, want 1", calls)
+	}
+}
+
+func (fixture *realSearchWebSocketFixture) dial() *websocket.Conn {
+	fixture.t.Helper()
+	return dialSearchWebSocket(
+		fixture.t,
+		fixture.dialer,
+		fixture.socketURL,
+		fixture.server.URL,
+	)
+}
+
+func dialSearchWebSocket(t *testing.T, dialer *websocket.Dialer, socketURL, origin string) *websocket.Conn {
+	t.Helper()
+	connection, response, err := dialer.Dial(socketURL, http.Header{
+		"Origin":         []string{origin},
+		"Sec-Fetch-Site": []string{"same-origin"},
+	})
+	if err != nil {
+		status := 0
+		if response != nil {
+			status = response.StatusCode
+			_ = response.Body.Close()
+		}
+		t.Fatalf("websocket dial: %v (status %d)", err, status)
+	}
+	if response == nil || response.StatusCode != http.StatusSwitchingProtocols {
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		_ = connection.Close()
+		t.Fatalf("upgrade response = %#v", response)
+	}
+	_ = response.Body.Close()
+	return connection
+}
+
+func searchWebSocketSubscribeCommand(requestID, subscriptionID, jobID string, afterSequence uint64) *opensplunkv1.SearchWebSocketCommand {
+	return &opensplunkv1.SearchWebSocketCommand{
+		RequestId: requestID,
+		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{
+			Subscriptions: []*opensplunkv1.SearchSubscription{{
+				SubscriptionId: subscriptionID,
+				Target: &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_SearchJobId{
+					SearchJobId: jobID,
+				}},
+				AfterSequence: afterSequence,
+			}},
+		}},
+	}
+}
+
+func establishRealSearchWebSocketEpoch(
+	t *testing.T,
+	connection *websocket.Conn,
+	requestID, subscriptionID, jobID string,
+) (uint64, uint64) {
+	t.Helper()
+	writeSearchWebSocketCommand(t, connection, searchWebSocketSubscribeCommand(requestID, subscriptionID, jobID, 0))
+	ackEvent := readSearchWebSocketEvent(t, connection)
+	ack := ackEvent.GetSubscriptionAcknowledged()
+	if ack == nil || ack.GetRequestId() != requestID || ack.GetSubscriptionId() != subscriptionID ||
+		ack.GetTarget().GetSearchJobId() != jobID || ack.GetReplayWillFollow() {
+		t.Fatalf("initial subscription acknowledgment = %+v", ackEvent)
+	}
+	state := readSearchWebSocketEvent(t, connection)
+	progress := readSearchWebSocketEvent(t, connection)
+	schema := readSearchWebSocketEvent(t, connection)
+	if state.GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
+		progress.GetSearchProgress() == nil || schema.GetResultSchemaAvailable() == nil ||
+		state.GetSubscriptionId() != subscriptionID || progress.GetSubscriptionId() != subscriptionID ||
+		schema.GetSubscriptionId() != subscriptionID ||
+		state.GetSequence() == 0 || progress.GetSequence() != state.GetSequence()+1 ||
+		schema.GetSequence() != progress.GetSequence()+1 {
+		t.Fatalf("initial websocket projection = (%+v, %+v, %+v)", state, progress, schema)
+	}
+	if ack.GetEarliestAvailableSequence() != state.GetSequence() ||
+		ack.GetLatestSequence() != schema.GetSequence() {
+		t.Fatalf("initial replay bounds = [%d,%d], want [%d,%d]",
+			ack.GetEarliestAvailableSequence(), ack.GetLatestSequence(), state.GetSequence(), schema.GetSequence())
+	}
+	return state.GetSequence(), schema.GetSequence()
+}
+
+func TestSearchWebSocketRealManagerReplaysOneEventThenExpiresSequence(t *testing.T) {
+	const (
+		jobID          = "search-ws-real-replay"
+		subscriptionID = "search-ws-real-subscription"
+	)
+	fixture := newRealSearchWebSocketFixture(t, jobID, 1)
+	fixture.createRunningSearch()
+
+	initial := fixture.dial()
+	_, checkpoint := establishRealSearchWebSocketEpoch(t, initial, "initial", subscriptionID, jobID)
+	fixture.executor.step(t, searchjobs.ExecutionProgressDelta{ScannedRows: 10, ScannedBytes: 100})
+	firstProgress := readSearchWebSocketEvent(t, initial)
+	if firstProgress.GetSearchProgress().GetScannedRows() != 10 ||
+		firstProgress.GetSearchProgress().GetScannedBytes() != 100 ||
+		firstProgress.GetSequence() != checkpoint+1 {
+		t.Fatalf("first progress = %+v", firstProgress)
+	}
+	if err := initial.Close(); err != nil {
+		t.Fatalf("close interrupted websocket: %v", err)
+	}
+
+	replay := fixture.dial()
+	defer replay.Close()
+	writeSearchWebSocketCommand(t, replay, searchWebSocketSubscribeCommand("replay", subscriptionID, jobID, checkpoint))
+	replayAckEvent := readSearchWebSocketEvent(t, replay)
+	replayAck := replayAckEvent.GetSubscriptionAcknowledged()
+	if replayAck == nil || !replayAck.GetReplayWillFollow() ||
+		replayAck.GetEarliestAvailableSequence() != checkpoint ||
+		replayAck.GetLatestSequence() != firstProgress.GetSequence() {
+		t.Fatalf("replay acknowledgment = %+v", replayAckEvent)
+	}
+	replayed := readSearchWebSocketEvent(t, replay)
+	if replayed.GetSearchProgress().GetScannedRows() != 10 ||
+		replayed.GetSearchProgress().GetScannedBytes() != 100 ||
+		replayed.GetSequence() != firstProgress.GetSequence() ||
+		replayed.GetSubscriptionId() != subscriptionID {
+		t.Fatalf("replayed progress = %+v", replayed)
+	}
+
+	fixture.executor.step(t, searchjobs.ExecutionProgressDelta{ScannedRows: 5, ScannedBytes: 50})
+	secondProgress := readSearchWebSocketEvent(t, replay)
+	if secondProgress.GetSearchProgress().GetScannedRows() != 15 ||
+		secondProgress.GetSearchProgress().GetScannedBytes() != 150 ||
+		secondProgress.GetSequence() != replayed.GetSequence()+1 {
+		t.Fatalf("second progress projection = %+v", secondProgress)
+	}
+
+	expired := fixture.dial()
+	defer expired.Close()
+	writeSearchWebSocketCommand(t, expired, searchWebSocketSubscribeCommand("expired", "expired-subscription", jobID, checkpoint))
+	expiredAckEvent := readSearchWebSocketEvent(t, expired)
+	expiredAck := expiredAckEvent.GetSubscriptionAcknowledged()
+	if expiredAck == nil || expiredAck.GetReplayWillFollow() ||
+		expiredAck.GetEarliestAvailableSequence() != secondProgress.GetSequence() ||
+		expiredAck.GetLatestSequence() != secondProgress.GetSequence() {
+		t.Fatalf("expired acknowledgment = %+v", expiredAckEvent)
+	}
+	resynchronization := readSearchWebSocketEvent(t, expired).GetResynchronizationRequired()
+	if resynchronization == nil ||
+		resynchronization.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED ||
+		resynchronization.GetEarliestAvailableSequence() != secondProgress.GetSequence() ||
+		resynchronization.GetLatestSequence() != secondProgress.GetSequence() {
+		t.Fatalf("expired resynchronization = %+v", resynchronization)
+	}
+
+	var authoritative opensplunkv1.GetSearchJobResponse
+	fixture.post("/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{SearchJobId: jobID}, &authoritative)
+	if authoritative.GetSearchJob().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
+		authoritative.GetSearchJob().GetProgress().GetScannedRows() != 15 ||
+		authoritative.GetSearchJob().GetProgress().GetScannedBytes() != 150 ||
+		fixture.executor.calls.Load() != 1 {
+		t.Fatalf("authoritative running search = %+v calls=%d", authoritative.GetSearchJob(), fixture.executor.calls.Load())
+	}
+}
+
+func TestSearchWebSocketRealManagerReplaysCancellationAfterOfflineSocket(t *testing.T) {
+	const (
+		jobID          = "search-ws-real-cancel"
+		subscriptionID = "search-ws-cancel-subscription"
+	)
+	fixture := newRealSearchWebSocketFixture(t, jobID, 8)
+	fixture.createRunningSearch()
+
+	offline := fixture.dial()
+	earliest, checkpoint := establishRealSearchWebSocketEpoch(t, offline, "initial", subscriptionID, jobID)
+	keeper := fixture.dial()
+	defer keeper.Close()
+	writeSearchWebSocketCommand(
+		t,
+		keeper,
+		searchWebSocketSubscribeCommand("keeper", "cancellation-journal-keeper", jobID, checkpoint),
+	)
+	keeperAckEvent := readSearchWebSocketEvent(t, keeper)
+	keeperAck := keeperAckEvent.GetSubscriptionAcknowledged()
+	if keeperAck == nil || keeperAck.GetRequestId() != "keeper" ||
+		keeperAck.GetSubscriptionId() != "cancellation-journal-keeper" ||
+		keeperAck.GetTarget().GetSearchJobId() != jobID ||
+		keeperAck.GetEarliestAvailableSequence() != earliest ||
+		keeperAck.GetLatestSequence() != checkpoint || keeperAck.GetReplayWillFollow() {
+		t.Fatalf("cancellation keeper acknowledgment = %+v", keeperAckEvent)
+	}
+	if err := offline.Close(); err != nil {
+		t.Fatalf("close offline websocket: %v", err)
+	}
+
+	var canceled opensplunkv1.CancelSearchJobResponse
+	fixture.post("/api/v1/search/jobs/cancel", &opensplunkv1.CancelSearchJobRequest{SearchJobId: jobID}, &canceled)
+	if canceled.GetSearchJob().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED {
+		t.Fatalf("cancel response = %+v", canceled.GetSearchJob())
+	}
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case err := <-fixture.executor.exited:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("executor exit = %v, want context.Canceled", err)
+		}
+	case <-timer.C:
+		t.Fatal("timed out waiting for canceled executor")
+	}
+
+	publishedState := readSearchWebSocketEvent(t, keeper)
+	publishedProgress := readSearchWebSocketEvent(t, keeper)
+	publishedTerminal := readSearchWebSocketEvent(t, keeper)
+	if publishedState.GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+		publishedProgress.GetSearchProgress().GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
+		publishedTerminal.GetSearchTerminal().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+		publishedTerminal.GetSearchTerminal().GetFailure() != nil ||
+		publishedTerminal.GetSearchTerminal().GetResultsExpireAt() == nil ||
+		publishedState.GetSequence() != checkpoint+1 ||
+		publishedProgress.GetSequence() != publishedState.GetSequence()+1 ||
+		publishedTerminal.GetSequence() != publishedProgress.GetSequence()+1 {
+		t.Fatalf(
+			"published canceled websocket projection = (%+v, %+v, %+v)",
+			publishedState, publishedProgress, publishedTerminal,
+		)
+	}
+	if err := keeper.Close(); err != nil {
+		t.Fatalf("close cancellation journal keeper: %v", err)
+	}
+
+	reconnected := fixture.dial()
+	defer reconnected.Close()
+	writeSearchWebSocketCommand(t, reconnected, searchWebSocketSubscribeCommand("resume", subscriptionID, jobID, checkpoint))
+	ackEvent := readSearchWebSocketEvent(t, reconnected)
+	ack := ackEvent.GetSubscriptionAcknowledged()
+	if ack == nil || ack.GetRequestId() != "resume" || ack.GetSubscriptionId() != subscriptionID ||
+		ack.GetTarget().GetSearchJobId() != jobID ||
+		ack.GetEarliestAvailableSequence() != earliest ||
+		ack.GetLatestSequence() != publishedTerminal.GetSequence() || !ack.GetReplayWillFollow() {
+		t.Fatalf("cancellation resume acknowledgment = %+v", ackEvent)
+	}
+	state := readSearchWebSocketEvent(t, reconnected)
+	progress := readSearchWebSocketEvent(t, reconnected)
+	terminal := readSearchWebSocketEvent(t, reconnected)
+	if state.GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+		progress.GetSearchProgress().GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
+		terminal.GetSearchTerminal().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+		terminal.GetSearchTerminal().GetFailure() != nil ||
+		terminal.GetSearchTerminal().GetResultsExpireAt() == nil ||
+		state.GetSequence() != checkpoint+1 ||
+		progress.GetSequence() != state.GetSequence()+1 ||
+		terminal.GetSequence() != progress.GetSequence()+1 ||
+		!proto.Equal(state.GetSearchStateChanged(), publishedState.GetSearchStateChanged()) ||
+		!proto.Equal(progress.GetSearchProgress(), publishedProgress.GetSearchProgress()) ||
+		!proto.Equal(terminal.GetSearchTerminal(), publishedTerminal.GetSearchTerminal()) {
+		t.Fatalf("canceled websocket projection = (%+v, %+v, %+v)", state, progress, terminal)
+	}
+
+	var authoritative opensplunkv1.GetSearchJobResponse
+	fixture.post("/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{SearchJobId: jobID}, &authoritative)
+	if authoritative.GetSearchJob().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+		authoritative.GetSearchJob().GetStateVersion() != canceled.GetSearchJob().GetStateVersion() ||
+		terminal.GetSearchTerminal().GetStateVersion() != canceled.GetSearchJob().GetStateVersion() ||
+		fixture.executor.calls.Load() != 1 || fixture.executor.exits.Load() != 1 {
+		t.Fatalf(
+			"authoritative canceled search = %+v cancel=%+v terminal=%+v calls=%d exits=%d",
+			authoritative.GetSearchJob(), canceled.GetSearchJob(), terminal.GetSearchTerminal(),
+			fixture.executor.calls.Load(), fixture.executor.exits.Load(),
+		)
 	}
 }
 
