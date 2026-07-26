@@ -294,6 +294,18 @@ func TestBrowserSequenceGapRESTTerminalRecovery(t *testing.T) {
 	})
 }
 
+func TestBrowserSequenceGapRESTFirstProgressRecovery(t *testing.T) {
+	runBrowserRecoveryFixture(t, 8, browserRecoveryBrowserSpec{
+		grepPattern:            "live progress preserves a REST-first snapshot across retained replay",
+		outputDirectory:        "browser-sequence-gap-rest-first-progress",
+		environmentFlag:        "OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_FIRST_PROGRESS_TEST",
+		failureName:            "sequence-gap REST-first progress",
+		appendBeforeCompletion: false,
+		expectedText:           browserSequenceExpiredInitialRow,
+		expectedRows:           1,
+	})
+}
+
 func runBrowserRecoveryFixture(
 	t *testing.T,
 	maximumReplayEvents int,
@@ -476,6 +488,7 @@ func runBrowserRecoverySpec(
 	for _, flag := range []string{
 		"OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST",
 		"OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST",
+		"OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_FIRST_PROGRESS_TEST",
 		"OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_TERMINAL_TEST",
 	} {
 		environment = environmentWithValue(environment, flag, "0")

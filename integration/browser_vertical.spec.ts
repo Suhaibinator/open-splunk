@@ -16,6 +16,7 @@ import {
 import {
   SearchExecutionPhase,
   SearchJobState,
+  type SearchProgress,
 } from "../gen/ts/open_splunk/v1/search";
 import {
   ResynchronizationReason,
@@ -37,6 +38,8 @@ const sequenceExpirationTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_T
 const sequenceGapTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST === "1";
 const sequenceGapRESTTerminalTest =
   process.env.OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_TERMINAL_TEST === "1";
+const sequenceGapRESTFirstProgressTest =
+  process.env.OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_FIRST_PROGRESS_TEST === "1";
 const origin = validatedOrigin(baseURL);
 const timeout = 45_000;
 
@@ -234,6 +237,9 @@ test("live preview recovers from real sequence expiration and a transient snapsh
           throw new Error("the created search job did not establish a positive state version");
         }
         response.searchJob.stateVersion = 0n;
+        if (response.searchJob.progress !== undefined) {
+          response.searchJob.progress.stateVersion = 0n;
+        }
       }
       authoritativeSnapshots.push(response);
       if (requestOrdinal === 3) await freshRecoveryGate;
@@ -440,12 +446,17 @@ for (const sequenceGapScenario of [
   {
     title: "live preview recovers from a real sequence gap",
     enabled: sequenceGapTest,
-    restOnlyTerminal: false,
+    mode: "gap",
   },
   {
     title: "live preview recovers through REST-only completion after a real sequence gap",
     enabled: sequenceGapRESTTerminalTest,
-    restOnlyTerminal: true,
+    mode: "rest-terminal",
+  },
+  {
+    title: "live progress preserves a REST-first snapshot across retained replay",
+    enabled: sequenceGapRESTFirstProgressTest,
+    mode: "rest-first-progress",
   },
 ] as const) {
 test(sequenceGapScenario.title, async ({ page }) => {
@@ -457,12 +468,14 @@ test(sequenceGapScenario.title, async ({ page }) => {
     "the deterministic sequence-gap fixture is not enabled",
   );
   test.setTimeout(60_000);
+  const restOnlyTerminal = sequenceGapScenario.mode === "rest-terminal";
+  const restFirstProgress = sequenceGapScenario.mode === "rest-first-progress";
   const safety = observeBrowserSafety(page);
   const gap = await interceptSequenceGap(
     page,
     origin,
     timeout,
-    sequenceGapScenario.restOnlyTerminal,
+    restOnlyTerminal,
   );
   let releaseAuthoritativeResultsResponse!: () => void;
   const authoritativeResultsResponseGate = new Promise<void>((resolve) => {
@@ -470,7 +483,7 @@ test(sequenceGapScenario.title, async ({ page }) => {
   });
   let authoritativeResultsRequests = 0;
   const authoritativeResultSnapshots: GetSearchResultsResponse[] = [];
-  if (sequenceGapScenario.restOnlyTerminal) {
+  if (restOnlyTerminal) {
     await page.route(
       (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/results",
       async (route) => {
@@ -542,6 +555,28 @@ test(sequenceGapScenario.title, async ({ page }) => {
       if (response.searchJob === undefined) {
         throw new Error(`sequence-gap authoritative GET ${requestOrdinal} returned no search job`);
       }
+      if (restFirstProgress && requestOrdinal === 1) {
+        const replayProgress = gap.replayProgress(2);
+        const authoritativeProgress = response.searchJob.progress;
+        if (
+          authoritativeProgress === undefined
+          || authoritativeProgress.stateVersion !== response.searchJob.stateVersion
+          || authoritativeProgress.stateVersion !== replayProgress.stateVersion
+          || authoritativeProgress.elapsed === undefined
+          || authoritativeProgress.updatedAt === undefined
+          || replayProgress.elapsed === undefined
+          || replayProgress.updatedAt === undefined
+        ) {
+          throw new Error("REST-first progress snapshot did not match retained replay revision K+2");
+        }
+        // Exercise equal-version reconciliation against legitimate projection-time
+        // drift without changing any stable execution counters.
+        authoritativeProgress.elapsed = {
+          seconds: replayProgress.elapsed.seconds + 1n,
+          nanos: replayProgress.elapsed.nanos,
+        };
+        authoritativeProgress.updatedAt = new Date(replayProgress.updatedAt.getTime() + 1_000);
+      }
       authoritativeSnapshots.push(response);
       if (requestOrdinal === 1) await firstAuthoritativeResponseGate;
       if (requestOrdinal === 2) await secondAuthoritativeResponseGate;
@@ -586,6 +621,12 @@ test(sequenceGapScenario.title, async ({ page }) => {
     const preReplaySnapshot = authoritativeSnapshots[0].searchJob;
     expect(preReplaySnapshot?.searchJobId, "pre-replay authoritative job ID").toBe(browserSearchJobID);
     expect(preReplaySnapshot?.progress?.scannedRows, "pre-replay authoritative rows").toBe(2n);
+    expect(preReplaySnapshot?.progress?.stateVersion, "pre-replay progress revision").toBe(
+      preReplaySnapshot?.stateVersion,
+    );
+    expect(preReplaySnapshot?.progress?.stateVersion, "pre-replay K+2 revision").toBe(
+      gap.replayProgress(2).stateVersion,
+    );
     expect(fulfilledAuthoritativeJobRequests, "authoritative responses before replay").toBe(0);
     expect(gap.connectionCount(), "sequence-gap WebSocket connections").toBe(2);
     await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
@@ -603,25 +644,71 @@ test(sequenceGapScenario.title, async ({ page }) => {
       { timeout },
     );
 
-    const firstReplaySequence = gap.releaseNextReplayFrame();
-    await expect(page.getByLabel("Job metrics")).toContainText("1 rows", { timeout });
-    expect(fulfilledAuthoritativeJobRequests, "responses after replay K+1").toBe(0);
-    const secondReplaySequence = gap.releaseNextReplayFrame();
-    expect(secondReplaySequence, "contiguous replay sequence").toBe(firstReplaySequence + 1n);
-    await expect(page.getByLabel("Job metrics")).toContainText("2 rows", { timeout });
-    expect(fulfilledAuthoritativeJobRequests, "responses after replay K+2").toBe(0);
+    if (restFirstProgress) {
+      const replayProgressK1 = gap.replayProgress(1);
+      const replayProgressK2 = gap.replayProgress(2);
+      expect(replayProgressK1.stateVersion, "retained progress revisions").toBeLessThan(
+        replayProgressK2.stateVersion,
+      );
+      expect(preReplaySnapshot?.progress?.updatedAt?.getTime(), "REST projection-time drift").toBe(
+        (replayProgressK2.updatedAt?.getTime() ?? 0) + 1_000,
+      );
+      expect(preReplaySnapshot?.progress?.elapsed?.seconds, "REST elapsed-time drift").toBe(
+        (replayProgressK2.elapsed?.seconds ?? 0n) + 1n,
+      );
+
+      releaseFirstAuthoritativeResponse();
+      await expect.poll(() => fulfilledAuthoritativeJobRequests, { timeout }).toBe(1);
+      await expect(page.getByLabel("Job metrics")).toContainText("2 rows", { timeout });
+      await expect(page.locator("body")).toContainText(
+        /resynchronized from the server after a sequence gap/i,
+        { timeout },
+      );
+      expect(authoritativeJobRequests, "REST-first authoritative job GETs").toBe(1);
+
+      await beginJobMetricsObservation(page);
+      const firstReplaySequence = gap.releaseNextReplayFrame();
+      await gap.waitForReplayFrameReceived(firstReplaySequence);
+      await waitForBrowserRender(page);
+      await expect(page.getByLabel("Job metrics")).toContainText("2 rows", { timeout });
+      const secondReplaySequence = gap.releaseNextReplayFrame();
+      expect(secondReplaySequence, "contiguous replay sequence").toBe(firstReplaySequence + 1n);
+      await gap.waitForReplayFrameReceived(secondReplaySequence);
+      await waitForBrowserRender(page);
+      await expect(page.getByLabel("Job metrics")).toContainText("2 rows", { timeout });
+    } else {
+      const firstReplaySequence = gap.releaseNextReplayFrame();
+      await expect(page.getByLabel("Job metrics")).toContainText("1 rows", { timeout });
+      expect(fulfilledAuthoritativeJobRequests, "responses after replay K+1").toBe(0);
+      const secondReplaySequence = gap.releaseNextReplayFrame();
+      expect(secondReplaySequence, "contiguous replay sequence").toBe(firstReplaySequence + 1n);
+      await expect(page.getByLabel("Job metrics")).toContainText("2 rows", { timeout });
+      expect(fulfilledAuthoritativeJobRequests, "responses after replay K+2").toBe(0);
+    }
 
     await sendBrowserRecoveryControl("progress");
     await expect(page.getByLabel("Job metrics")).toContainText("3 rows", { timeout });
+    if (restFirstProgress) {
+      const observedMetrics = await finishJobMetricsObservation(page);
+      expect(
+        observedMetrics.some((text) => /^(?:≈ )?1 rows$/.test(text)),
+        "stale replay K+1 never rendered, even transiently",
+      ).toBe(false);
+      expect(authoritativeJobRequests, "authoritative GETs through live K+3").toBe(1);
+      await expect(page.locator("body")).not.toContainText(
+        /Live search progress was inconsistent|legacy live progress update could not be ordered/i,
+      );
+    }
     expect(gap.connectionCount(), "connections after live K+3").toBe(2);
     await sendBrowserRecoveryControl("progress");
     await expect(page.getByLabel("Job metrics")).toContainText("4 rows", { timeout });
     await sendBrowserRecoveryControl("progress");
     await expect(page.getByLabel("Job metrics")).toContainText("5 rows", { timeout });
 
-    // Manager progress advances the job version, but progress frames omit that
-    // revision and cannot advance the browser's version fence. This snapshot's
-    // numeric version is acceptable, so the stale response isolates the epoch fence.
+    // The original scenarios keep GET 1 at revision K+2 in flight until live
+    // progress reaches K+5, proving the progress-revision fence rejects it.
+    // The REST-first scenario applied GET 1 at K+2 and waits for the ordinary
+    // active-job poll instead.
     releaseFirstAuthoritativeResponse();
     await expect.poll(() => authoritativeJobRequests, { timeout }).toBe(2);
     expect(fulfilledAuthoritativeJobRequests, "stale authoritative responses").toBe(1);
@@ -636,8 +723,21 @@ test(sequenceGapScenario.title, async ({ page }) => {
     ).toHaveCount(0);
     await expect(page.getByText(recoveryInitialText!, { exact: true })).toHaveCount(0);
 
+    if (!restOnlyTerminal) {
+      // Capture GET 2 before completion so the subsequent terminal revision
+      // deterministically makes this response stale and requires GET 3.
+      allowSecondAuthoritativeFetch();
+      await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(2);
+      const preTerminalSnapshot = authoritativeSnapshots[1].searchJob;
+      expect(preTerminalSnapshot?.searchJobId, "in-flight pre-terminal job ID").toBe(browserSearchJobID);
+      expect(preTerminalSnapshot?.state, "in-flight pre-terminal job state").toBe(
+        SearchJobState.SEARCH_JOB_STATE_RUNNING,
+      );
+      expect(preTerminalSnapshot?.progress?.scannedRows, "in-flight pre-terminal rows").toBe(5n);
+    }
+
     await sendBrowserRecoveryControl("complete");
-    if (sequenceGapScenario.restOnlyTerminal) {
+    if (restOnlyTerminal) {
       await gap.waitForTerminalProjectionWithheld();
       expect(
         gap.withheldTerminalProjectionFrameCount(),
@@ -701,12 +801,10 @@ test(sequenceGapScenario.title, async ({ page }) => {
       await expect(page.getByTestId("job-strip")).toContainText("Completed", { timeout });
       expect(fulfilledAuthoritativeJobRequests, "responses before terminal replay proof").toBe(1);
 
-      allowSecondAuthoritativeFetch();
-      await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(2);
       const staleTerminalSnapshot = authoritativeSnapshots[1].searchJob;
       expect(staleTerminalSnapshot?.searchJobId, "in-flight terminal job ID").toBe(browserSearchJobID);
       expect(staleTerminalSnapshot?.state, "in-flight terminal job state").toBe(
-        SearchJobState.SEARCH_JOB_STATE_COMPLETED,
+        SearchJobState.SEARCH_JOB_STATE_RUNNING,
       );
       expect(staleTerminalSnapshot?.progress?.scannedRows, "in-flight terminal rows").toBe(5n);
       releaseSecondAuthoritativeResponse();
@@ -729,7 +827,7 @@ test(sequenceGapScenario.title, async ({ page }) => {
     await gap.waitForTerminalClose();
 
     await expect.poll(() => fulfilledAuthoritativeJobRequests, { timeout }).toBe(
-      sequenceGapScenario.restOnlyTerminal ? 2 : 3,
+      restOnlyTerminal ? 2 : 3,
     );
     const jobStrip = page.getByTestId("job-strip");
     await expect(jobStrip).toHaveAttribute("aria-busy", "false", { timeout });
@@ -742,10 +840,12 @@ test(sequenceGapScenario.title, async ({ page }) => {
       page.getByRole("table", { name: "Live preview search statistics" }),
     ).toHaveCount(0);
     await expect(page.getByTestId("backend-preview-status")).toHaveCount(0);
-    await expect(page.locator("body")).toContainText(
-      /resynchronized from the server after a sequence gap/i,
-      { timeout },
-    );
+    if (!restFirstProgress) {
+      await expect(page.locator("body")).toContainText(
+        /resynchronized from the server after a sequence gap/i,
+        { timeout },
+      );
+    }
 
     const previewStatuses = await collectPreviewStatuses(page);
     expect(previewStatuses, "UI preview status transitions").toContain("live");
@@ -753,21 +853,20 @@ test(sequenceGapScenario.title, async ({ page }) => {
     expect(previewStatuses, "UI preview status transitions").toContain("finalizing");
     expect(previewStatuses, "UI preview status transitions").not.toContain("finalization-error");
     expect(gap.connectionCount(), "search WebSocket connections").toBe(2);
-    if (sequenceGapScenario.restOnlyTerminal) {
-      expect(gap.liveFrameCount(), "delivered post-replay progress frames").toBe(3);
-    } else {
-      expect(gap.liveFrameCount(), "post-replay live target frames").toBeGreaterThan(0);
-    }
+    expect(gap.liveFrameCount(), "post-replay live target frames").toBe(
+      restOnlyTerminal ? 3 : 6,
+    );
     gap.assertHealthy();
     expect(safety.createRequests(), "browser search create requests").toBe(1);
     expect(authoritativeJobRequests, "authoritative job GETs").toBe(
-      sequenceGapScenario.restOnlyTerminal ? 2 : 3,
+      restOnlyTerminal ? 2 : 3,
     );
     expect(authoritativeResultsRequests, "authoritative results GETs").toBe(
-      sequenceGapScenario.restOnlyTerminal ? 1 : 0,
+      restOnlyTerminal ? 1 : 0,
     );
     assertBrowserSafety(safety);
   } finally {
+    await discardJobMetricsObservation(page).catch(() => undefined);
     allowFirstAuthoritativeFetch();
     allowSecondAuthoritativeFetch();
     releaseFirstAuthoritativeResponse();
@@ -789,6 +888,67 @@ async function expectZeroRowBackendPreviewFinalizing(page: Page): Promise<void> 
   await expect(
     page.getByRole("table", { name: "Live preview search statistics" }),
   ).toHaveCount(0);
+}
+
+async function beginJobMetricsObservation(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const target = document.querySelector('[aria-label="Job metrics"]');
+    if (target === null) throw new Error("job metrics are unavailable for replay observation");
+    const observed: string[] = [];
+    const record = (): void => {
+      const scannedRows = target.querySelector("strong")?.textContent;
+      if (scannedRows === undefined) {
+        throw new Error("scanned rows are unavailable for replay observation");
+      }
+      observed.push(scannedRows);
+    };
+    record();
+    const observer = new MutationObserver(record);
+    observer.observe(target, { childList: true, characterData: true, subtree: true });
+    const observedWindow = window as JobMetricsObservationWindow;
+    if (observedWindow.openSplunkJobMetricsObservation !== undefined) {
+      observer.disconnect();
+      throw new Error("job metrics replay observation is already active");
+    }
+    observedWindow.openSplunkJobMetricsObservation = { observed, observer };
+  });
+}
+
+async function finishJobMetricsObservation(page: Page): Promise<string[]> {
+  return stopJobMetricsObservation(page, true);
+}
+
+async function discardJobMetricsObservation(page: Page): Promise<void> {
+  await stopJobMetricsObservation(page, false);
+}
+
+async function stopJobMetricsObservation(
+  page: Page,
+  required: boolean,
+): Promise<string[]> {
+  return page.evaluate((observationRequired) => {
+    const observedWindow = window as JobMetricsObservationWindow;
+    const observation = observedWindow.openSplunkJobMetricsObservation;
+    if (observation === undefined) {
+      if (observationRequired) {
+        throw new Error("job metrics replay observation was not active");
+      }
+      return [];
+    }
+    observation.observer.disconnect();
+    delete observedWindow.openSplunkJobMetricsObservation;
+    return observation.observed;
+  }, required);
+}
+
+async function waitForBrowserRender(page: Page): Promise<void> {
+  await page.evaluate(
+    () => new Promise<void>((resolve) => {
+      setTimeout(() => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }, 0);
+    }),
+  );
 }
 
 function requiredEnvironment(name: string): string {
@@ -979,6 +1139,15 @@ type PreviewRecorderWindow = Window & {
   openSplunkE2EPreviewRecorder?: PreviewRecorderState;
 };
 
+interface JobMetricsObservation {
+  observed: string[];
+  observer: MutationObserver;
+}
+
+type JobMetricsObservationWindow = Window & {
+  openSplunkJobMetricsObservation?: JobMetricsObservation;
+};
+
 async function installPreviewStatusRecorder(page: Page): Promise<void> {
   await page.evaluate(() => {
     const recorderWindow = window as PreviewRecorderWindow;
@@ -1094,7 +1263,9 @@ interface SequenceGapObservation {
   waitForCheckpoint(searchJobID: string): Promise<void>;
   droppedFrameCount(): number;
   waitForReplayReady(): Promise<void>;
+  replayProgress(index: 1 | 2): SearchProgress;
   releaseNextReplayFrame(): bigint;
+  waitForReplayFrameReceived(sequence: bigint): Promise<void>;
   waitForTerminalProjectionWithheld(): Promise<void>;
   withheldTerminalProjectionFrameCount(): number;
   waitForTerminalClose(): Promise<void>;
@@ -1175,6 +1346,14 @@ async function interceptSequenceGap(
   const originalFrames = new Map<bigint, Buffer>();
   const replayFrames = new Map<bigint, Buffer>();
   const connectionOneDeliveredSequences: bigint[] = [];
+  const replayBrowserFrameReceipts = new Set<bigint>();
+  const replayBrowserFrameWaiters = new Map<
+    bigint,
+    { resolve: () => void; reject: (reason: Error) => void }
+  >();
+  let matchingBrowserSocketCount = 0;
+  let replayBrowserSocket: WebSocket | undefined;
+  let replayBrowserFrameListener: ((event: FrameEvent) => void) | undefined;
   let checkpointSettled = false;
   let replayReadySettled = false;
   let gapCloseSettled = false;
@@ -1243,9 +1422,40 @@ async function interceptSequenceGap(
       terminalCloseSettled = true;
       rejectTerminalClose(normalized);
     }
+    for (const waiter of replayBrowserFrameWaiters.values()) waiter.reject(normalized);
+    replayBrowserFrameWaiters.clear();
   };
   const routeMatchesSearchSocket = (url: URL): boolean =>
     httpOriginForWebSocket(url) === expectedOrigin && url.pathname === "/api/v1/search/ws";
+  const observeBrowserSocket = (socket: WebSocket): void => {
+    const socketURL = new URL(socket.url());
+    if (!routeMatchesSearchSocket(socketURL)) return;
+    matchingBrowserSocketCount += 1;
+    if (matchingBrowserSocketCount !== 2) return;
+    replayBrowserSocket = socket;
+    replayBrowserFrameListener = ({ payload }) => {
+      try {
+        if (typeof payload === "string") {
+          throw new Error("sequence-gap browser received a text replay frame");
+        }
+        const event = SearchWebSocketEvent.decode(payload);
+        if (
+          checkpoint === undefined
+          || event.sequence < checkpoint + 1n
+          || event.sequence > checkpoint + 2n
+        ) {
+          return;
+        }
+        replayBrowserFrameReceipts.add(event.sequence);
+        replayBrowserFrameWaiters.get(event.sequence)?.resolve();
+        replayBrowserFrameWaiters.delete(event.sequence);
+      } catch (error) {
+        fail(error);
+      }
+    };
+    socket.on("framereceived", replayBrowserFrameListener);
+  };
+  page.on("websocket", observeBrowserSocket);
 
   await page.routeWebSocket(routeMatchesSearchSocket, (client) => {
     matchingConnectionCount += 1;
@@ -1408,10 +1618,23 @@ async function interceptSequenceGap(
               event.sequence !== expectedSequence
               || event.payload?.$case !== "searchProgress"
               || event.payload.value.scannedRows !== expectedProgressRows
+              || event.payload.value.stateVersion <= 0n
             ) {
               throw new Error(
                 `sequence-gap stimulus ${event.sequence.toString()} was not progress ${expectedProgressRows.toString()} at ${expectedSequence.toString()}`,
               );
+            }
+            if (originalFrames.size === 1) {
+              const firstFrame = originalFrames.get(checkpoint + 1n);
+              const firstEvent = firstFrame === undefined
+                ? undefined
+                : SearchWebSocketEvent.decode(firstFrame);
+              if (
+                firstEvent?.payload?.$case !== "searchProgress"
+                || event.payload.value.stateVersion !== firstEvent.payload.value.stateVersion + 1n
+              ) {
+                throw new Error("sequence-gap progress revisions K+1 and K+2 were not contiguous");
+              }
             }
             originalFrames.set(event.sequence, frame);
             if (originalFrames.size === 1) return;
@@ -1540,6 +1763,7 @@ async function interceptSequenceGap(
                 !== SearchExecutionPhase.SEARCH_EXECUTION_PHASE_COMPLETE
                 || event.payload.value.scannedRows !== 5n
                 || event.payload.value.producedRows !== 1n
+                || event.payload.value.stateVersion !== withheldTerminalStateVersion
               ) {
                 throw new Error("sequence-gap withheld final progress was invalid");
               }
@@ -1553,6 +1777,8 @@ async function interceptSequenceGap(
                 !== SearchExecutionPhase.SEARCH_EXECUTION_PHASE_COMPLETE
                 || event.payload.value.finalProgress.scannedRows !== 5n
                 || event.payload.value.finalProgress.producedRows !== 1n
+                || event.payload.value.finalProgress.stateVersion
+                !== withheldTerminalStateVersion
               ) {
                 throw new Error("sequence-gap withheld terminal event was invalid");
               }
@@ -1596,6 +1822,22 @@ async function interceptSequenceGap(
       if (failure !== undefined) return Promise.reject(failure);
       return Promise.all([gapCloseReady, replayReady]).then(() => undefined);
     },
+    replayProgress(index) {
+      if (failure !== undefined) throw failure;
+      if (checkpoint === undefined || replayFrames.size !== 2) {
+        throw new Error("sequence-gap replay is not ready for progress inspection");
+      }
+      const sequence = checkpoint + BigInt(index);
+      const frame = replayFrames.get(sequence);
+      if (frame === undefined) {
+        throw new Error(`sequence-gap replay ${sequence.toString()} is missing`);
+      }
+      const event = SearchWebSocketEvent.decode(frame);
+      if (event.payload?.$case !== "searchProgress") {
+        throw new Error(`sequence-gap replay ${sequence.toString()} is not progress`);
+      }
+      return event.payload.value;
+    },
     releaseNextReplayFrame() {
       if (failure !== undefined) throw failure;
       if (
@@ -1612,6 +1854,27 @@ async function interceptSequenceGap(
       replayReleaseCount += 1;
       secondClient.send(frame);
       return sequence;
+    },
+    waitForReplayFrameReceived(sequence) {
+      if (failure !== undefined) return Promise.reject(failure);
+      if (
+        checkpoint === undefined
+        || sequence < checkpoint + 1n
+        || sequence > checkpoint + 2n
+      ) {
+        return Promise.reject(
+          new Error(`sequence-gap replay receipt ${sequence.toString()} is outside K+1..K+2`),
+        );
+      }
+      if (replayBrowserFrameReceipts.has(sequence)) return Promise.resolve();
+      if (replayBrowserFrameWaiters.has(sequence)) {
+        return Promise.reject(
+          new Error(`sequence-gap replay receipt ${sequence.toString()} already has a waiter`),
+        );
+      }
+      return new Promise<void>((resolve, reject) => {
+        replayBrowserFrameWaiters.set(sequence, { resolve, reject });
+      });
     },
     waitForTerminalProjectionWithheld() {
       if (!withholdTerminalProjection) {
@@ -1669,6 +1932,12 @@ async function interceptSequenceGap(
     dispose() {
       disposed = true;
       if (timer !== undefined) clearTimeout(timer);
+      page.off("websocket", observeBrowserSocket);
+      if (replayBrowserSocket !== undefined && replayBrowserFrameListener !== undefined) {
+        replayBrowserSocket.off("framereceived", replayBrowserFrameListener);
+      }
+      for (const waiter of replayBrowserFrameWaiters.values()) waiter.resolve();
+      replayBrowserFrameWaiters.clear();
       if (!checkpointSettled) {
         checkpointSettled = true;
         resolveCheckpoint();

@@ -1771,6 +1771,8 @@ func runSearch(t *testing.T, ctx context.Context, client *http.Client, baseURL s
 	job := got.GetSearchJob()
 	if job.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
 		job.GetStateVersion() != terminal.GetStateVersion() ||
+		job.GetProgress().GetStateVersion() != job.GetStateVersion() ||
+		terminal.GetFinalProgress().GetStateVersion() != terminal.GetStateVersion() ||
 		job.GetProgress().GetProducedRows() != terminal.GetFinalProgress().GetProducedRows() {
 		t.Fatalf("authoritative search job = %+v, websocket terminal = %+v", job, terminal)
 	}
@@ -2026,17 +2028,18 @@ func observeCompletedSearchWebSocket(
 	}
 
 	var (
-		lastSequence     uint64
-		lastStateVersion uint64
-		lastProducedRows uint64
-		lastResultBytes  uint64
-		lastPreview      uint64
-		schemaID         string
-		schemaColumns    int
-		sawState         bool
-		sawProgress      bool
-		sawSchema        bool
-		sawPreview       bool
+		lastSequence        uint64
+		lastStateVersion    uint64
+		lastProgressVersion uint64
+		lastProducedRows    uint64
+		lastResultBytes     uint64
+		lastPreview         uint64
+		schemaID            string
+		schemaColumns       int
+		sawState            bool
+		sawProgress         bool
+		sawSchema           bool
+		sawPreview          bool
 	)
 	for frame := 0; frame < 256; frame++ {
 		event := readBackendSearchWebSocketEvent(t, connection)
@@ -2106,10 +2109,14 @@ func observeCompletedSearchWebSocket(
 			progress := event.GetSearchProgress()
 			if progress.GetPhase() == opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_UNSPECIFIED ||
 				progress.GetUpdatedAt() == nil || progress.GetUpdatedAt().CheckValid() != nil ||
+				progress.GetStateVersion() == 0 ||
+				progress.GetStateVersion() < lastProgressVersion ||
+				progress.GetStateVersion() < lastStateVersion ||
 				progress.GetProducedRows() < lastProducedRows || progress.GetResultBytes() < lastResultBytes {
-				t.Fatalf("search websocket progress event = %+v after rows=%d bytes=%d",
-					progress, lastProducedRows, lastResultBytes)
+				t.Fatalf("search websocket progress event = %+v after version=%d state_version=%d rows=%d bytes=%d",
+					progress, lastProgressVersion, lastStateVersion, lastProducedRows, lastResultBytes)
 			}
+			lastProgressVersion = progress.GetStateVersion()
 			lastProducedRows = progress.GetProducedRows()
 			lastResultBytes = progress.GetResultBytes()
 			sawProgress = true
@@ -2119,6 +2126,8 @@ func observeCompletedSearchWebSocket(
 				terminal.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
 				terminal.GetStateVersion() == 0 || terminal.GetStateVersion() != lastStateVersion ||
 				terminal.GetFinalProgress().GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
+				terminal.GetFinalProgress().GetStateVersion() != terminal.GetStateVersion() ||
+				terminal.GetFinalProgress().GetStateVersion() != lastProgressVersion ||
 				terminal.GetFinalProgress().GetProducedRows() != verticalEventCount ||
 				terminal.GetFinalProgress().GetProducedRows() != lastProducedRows ||
 				terminal.GetFinalProgress().GetResultBytes() != lastResultBytes || terminal.GetFailure() != nil ||

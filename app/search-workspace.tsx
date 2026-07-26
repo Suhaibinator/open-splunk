@@ -162,6 +162,12 @@ import {
   validateLivePreviewSchema,
   type LivePreviewSnapshot,
 } from "./search-workspace/live-preview";
+import {
+  isVersionedSearchRevision,
+  reconcileSearchProgress,
+  type ProgressRevisionState,
+  type SearchProgressSource,
+} from "./search-workspace/progress-revision";
 import { EventsPanel } from "./search-workspace/panels/events-panel";
 import { PatternsPanel } from "./search-workspace/panels/patterns-panel";
 import { StatisticsPanel } from "./search-workspace/panels/statistics-panel";
@@ -174,7 +180,6 @@ import {
   formatDuration,
   formatFieldValue,
   hasPipelineCommand,
-  jobEventCount,
   phaseLabel,
   queryForPattern,
   resultTabForQuery,
@@ -197,6 +202,18 @@ const MAXIMUM_SAVED_SEARCH_NAME_BYTES = 255;
 const MAXIMUM_READABLE_DUPLICATE_NAME_ATTEMPTS = 8;
 const MAXIMUM_RANDOM_DUPLICATE_NAME_ATTEMPTS = 3;
 const REST_RECOVERY_DELAYS_MS = [1_500, 2_500, 5_000, 10_000] as const;
+const MAXIMUM_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+const BACKEND_PHASE_PROGRESS: Record<JobPhase, number> = {
+  queued: 4,
+  parsing: 14,
+  planning: 27,
+  running: 58,
+  finalizing: 94,
+  completed: 100,
+  failed: 100,
+  canceled: 100,
+  expired: 100,
+};
 
 interface BackendBootstrapState {
   response: SystemBootstrapModel;
@@ -364,6 +381,13 @@ function searchJobIdForWebSocketEvent(event: SearchWebSocketEvent): string | nul
 
 function uniqueMessages(messages: Array<string | undefined>): string[] {
   return [...new Set(messages.map((message) => message?.trim()).filter((message): message is string => Boolean(message)))];
+}
+
+function appendUniqueMessage(messages: string[], message: string): string[] {
+  const normalized = message.trim();
+  return normalized.length === 0 || messages.includes(normalized)
+    ? messages
+    : [...messages, normalized];
 }
 
 function equalResultSchemas(left: ResultSchema, right: ResultSchema): boolean {
@@ -684,6 +708,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const backendJobIdRef = useRef<string | null>(null);
   const backendJobRef = useRef<SearchJob | null>(null);
   const backendJobVersionRef = useRef(0n);
+  const backendProgressRevisionRef = useRef<ProgressRevisionState>(null);
   const backendLiveUpdateEpochRef = useRef(0n);
   const backendSocketRef = useRef<SearchWebSocketClient | null>(null);
   const backendPreviewRef = useRef<LivePreviewSnapshot | null>(null);
@@ -1764,6 +1789,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   }
 
   function resetBackendResultState() {
+    backendProgressRevisionRef.current = null;
     backendResultPagesRef.current.clear();
     backendPageTokensRef.current.clear();
     backendPageStartsRef.current.clear();
@@ -2343,98 +2369,96 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     return () => document.removeEventListener("pointerdown", handleOutsidePointer);
   }, [modal]);
 
-  function applyBackendProgress(
-    jobProgress: SearchProgress | undefined,
-    nextPhase: JobPhase,
+  function applyBackendProgressMetrics(
+    jobProgress: SearchProgress,
+    presentationPhase: JobPhase,
     generation: number,
   ) {
     if (generationRef.current !== generation) return;
-    const phaseProgress: Record<JobPhase, number> = {
-      queued: 4,
-      parsing: 14,
-      planning: 27,
-      running: 58,
-      finalizing: 94,
-      completed: 100,
-      failed: 100,
-      canceled: 100,
-      expired: 100,
-    };
-    setPhase(nextPhase);
-    const reportedPercent = jobProgress?.percentComplete;
+    const reportedPercent = jobProgress.percentComplete;
     const effectivePercent = reportedPercent !== undefined && Number.isFinite(reportedPercent)
       ? reportedPercent
-      : phaseProgress[nextPhase];
+      : BACKEND_PHASE_PROGRESS[presentationPhase];
     setProgress(Math.max(0, Math.min(100, effectivePercent)));
-    setElapsed(formatDuration(jobProgress?.elapsed));
-    const reportedScannedRows = jobProgress?.scannedRows ?? 0n;
-    const scannedRowsOverflow = reportedScannedRows > BigInt(Number.MAX_SAFE_INTEGER);
+    setElapsed(formatDuration(jobProgress.elapsed));
+    const reportedScannedRows = jobProgress.scannedRows;
+    const scannedRowsOverflow = reportedScannedRows > MAXIMUM_SAFE_INTEGER_BIGINT;
     setScannedRows(scannedRowsOverflow
       ? Number.MAX_SAFE_INTEGER
       : Number(reportedScannedRows));
-    setScannedRowsApproximate(Boolean(jobProgress?.countersAreEstimates) || scannedRowsOverflow);
+    setScannedRowsApproximate(jobProgress.countersAreEstimates || scannedRowsOverflow);
     setScannedBytes(formatBytes(
       backendEnabled
-        ? jobProgress?.resultBytes ?? 0n
-        : jobProgress?.scannedBytes ?? 0n,
+        ? jobProgress.resultBytes
+        : jobProgress.scannedBytes,
     ));
-    if (jobProgress !== undefined) {
-      const matchedEvents = jobProgress.matchedEvents;
-      const count = matchedEvents || jobProgress.producedRows;
-      const job = backendJobRef.current;
-      const resultKind = job?.resultKind !== undefined
-        && job.resultKind !== ResultSetKind.RESULT_SET_KIND_UNSPECIFIED
-        ? job.resultKind
-        : job?.resultSchema?.resultKind ?? ResultSetKind.RESULT_SET_KIND_UNSPECIFIED;
-      setBackendEventCount(Math.min(Number.MAX_SAFE_INTEGER, Number(count)));
-      setBackendPrimaryCountLabel(
-        matchedEvents > 0n || resultKind === ResultSetKind.RESULT_SET_KIND_EVENTS
-          ? "events"
-          : "rows",
-      );
-      setBackendPrimaryCountPrefix(
-        count > BigInt(Number.MAX_SAFE_INTEGER)
-          ? "≥"
-          : jobProgress.countersAreEstimates
-            ? "≈"
-            : "",
-      );
-    }
+    const matchedEvents = jobProgress.matchedEvents;
+    const count = matchedEvents || jobProgress.producedRows;
+    const job = backendJobRef.current;
+    const resultKind = job?.resultKind !== undefined
+      && job.resultKind !== ResultSetKind.RESULT_SET_KIND_UNSPECIFIED
+      ? job.resultKind
+      : job?.resultSchema?.resultKind ?? ResultSetKind.RESULT_SET_KIND_UNSPECIFIED;
+    setBackendEventCount(Math.min(Number.MAX_SAFE_INTEGER, Number(count)));
+    setBackendPrimaryCountLabel(
+      matchedEvents > 0n || resultKind === ResultSetKind.RESULT_SET_KIND_EVENTS
+        ? "events"
+        : "rows",
+    );
+    setBackendPrimaryCountPrefix(
+      count > MAXIMUM_SAFE_INTEGER_BIGINT
+        ? "≥"
+        : jobProgress.countersAreEstimates
+          ? "≈"
+          : "",
+    );
   }
 
-  function applyBackendJob(job: SearchJob, generation: number): boolean {
-    if (generationRef.current !== generation || backendJobIdRef.current !== job.searchJobId) return false;
-    if (job.stateVersion < backendJobVersionRef.current) return false;
+  function applyBackendJob(job: SearchJob, generation: number) {
+    if (generationRef.current !== generation || backendJobIdRef.current !== job.searchJobId) {
+      throw new DOMException("Search was superseded.", "AbortError");
+    }
+    if (!isVersionedSearchRevision(job.stateVersion)) {
+      throw new Error("The server returned a search job without a valid state revision.");
+    }
+    if (
+      job.stateVersion < backendJobVersionRef.current
+      || (
+        backendProgressRevisionRef.current !== null
+        && job.stateVersion < backendProgressRevisionRef.current.revision
+      )
+    ) {
+      throw new Error("The search job snapshot was older than the applied live state.");
+    }
+    if (job.progress === undefined) {
+      throw new Error("The server returned a search job without progress.");
+    }
+    const progressDecision = reconcileSearchProgress(
+      backendProgressRevisionRef.current,
+      job.progress,
+      { kind: "authoritative", envelopeRevision: job.stateVersion },
+    );
+    if (progressDecision.kind === "ignore") {
+      throw new Error("The search job progress was older than the applied live progress.");
+    }
+    if (progressDecision.kind === "recover") {
+      throw new Error(`The server returned inconsistent search progress (${progressDecision.reason}).`);
+    }
     backendJobVersionRef.current = job.stateVersion;
+    backendProgressRevisionRef.current = progressDecision.state;
     backendJobRef.current = job;
     setResolvedTimeRangeLabel(formatResolvedBackendTimeRange(job.resolvedTimeRange));
     const nextPhase = backendJobPhase(job.state);
-    applyBackendProgress(job.progress, nextPhase, generation);
-    setBackendEventCount(jobEventCount(job));
+    setPhase(nextPhase);
+    applyBackendProgressMetrics(progressDecision.state.progress, nextPhase, generation);
     const kind = job.resultKind !== ResultSetKind.RESULT_SET_KIND_UNSPECIFIED
       ? job.resultKind
       : job.resultSchema?.resultKind ?? ResultSetKind.RESULT_SET_KIND_UNSPECIFIED;
     if (kind !== ResultSetKind.RESULT_SET_KIND_UNSPECIFIED) setBackendResultKind(kind);
-    setBackendPrimaryCountLabel(
-      (job.progress?.matchedEvents ?? 0n) > 0n
-      || kind === ResultSetKind.RESULT_SET_KIND_EVENTS
-        ? "events"
-        : "rows",
-    );
-    const primaryCount = (job.progress?.matchedEvents ?? 0n)
-      || (job.progress?.producedRows ?? 0n);
-    setBackendPrimaryCountPrefix(
-      primaryCount > BigInt(Number.MAX_SAFE_INTEGER)
-        ? "≥"
-        : job.progress?.countersAreEstimates
-          ? "≈"
-          : "",
-    );
     setBackendResultsTruncated(job.resultsTruncated);
     if (nextPhase === "expired") setBackendResultsExpired(true);
     setBackendExpiresAt(job.expiresAt ?? null);
     replaceBackendNotices(job);
-    return true;
   }
 
   function applyBackendResultPage(page: BackendResultPage) {
@@ -2814,9 +2838,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       throw new Error("Live job updates advanced while the authoritative snapshot was loading.");
     }
     if (response.searchJob === undefined) throw new Error("The server returned an empty search job response.");
-    if (!applyBackendJob(response.searchJob, generation)) {
-      throw new Error("The authoritative search job snapshot was older than the applied live state.");
-    }
+    applyBackendJob(response.searchJob, generation);
     return response.searchJob;
   }
 
@@ -3004,7 +3026,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       let settled = false;
       let recoveryAttempt = 0;
       let recoveryTimer: number | null = null;
+      let recoveryTimerImmediate = false;
       let recoveryRequest: Promise<SearchJob> | null = null;
+      let recoveryCycle: Promise<void> | null = null;
+      let immediateRecoveryPending = false;
       let subscriptionId: string | null = null;
       let sequenceGapPending = false;
       let previewSubscriptionPending = previewsEnabled;
@@ -3039,10 +3064,22 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
       function scheduleRecovery(delay?: number) {
         if (settled || signal.aborted || generationRef.current !== generation) return;
-        if (recoveryTimer !== null) window.clearTimeout(recoveryTimer);
+        const immediate = delay === 0;
+        if (recoveryCycle !== null) {
+          if (immediate) immediateRecoveryPending = true;
+          return;
+        }
+        if (recoveryTimer !== null) {
+          // Once an urgent reconciliation is queued, ordinary live traffic
+          // must not postpone it indefinitely.
+          if (recoveryTimerImmediate) return;
+          window.clearTimeout(recoveryTimer);
+        }
         const fallbackDelay = REST_RECOVERY_DELAYS_MS[Math.min(recoveryAttempt, REST_RECOVERY_DELAYS_MS.length - 1)];
+        recoveryTimerImmediate = immediate;
         recoveryTimer = window.setTimeout(() => {
           recoveryTimer = null;
+          recoveryTimerImmediate = false;
           void recoverFromRest();
         }, delay ?? fallbackDelay);
       }
@@ -3056,47 +3093,150 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         return recoveryRequest;
       }
 
-      async function recoverFromRest() {
-        try {
-          const job = await fetchAuthoritative();
-          if (sequenceGapPending) {
-            sequenceGapPending = false;
-            setBackendNotices((current) => uniqueMessages([
-              ...current,
-              "Live job updates were resynchronized from the server after a sequence gap.",
-            ]));
+      function recoverFromRest(): Promise<void> {
+        if (recoveryCycle !== null) return recoveryCycle;
+        let scheduleNext = false;
+        const cycle = (async () => {
+          try {
+            const job = await fetchAuthoritative();
+            if (sequenceGapPending) {
+              sequenceGapPending = false;
+              setBackendNotices((current) => appendUniqueMessage(
+                current,
+                "Live job updates were resynchronized from the server after a sequence gap.",
+              ));
+            }
+            latestPhase = backendJobPhase(job.state);
+            if (!ACTIVE_PHASES.has(backendJobPhase(job.state))) {
+              finish(job);
+              return;
+            }
+            recoveryAttempt = Math.min(recoveryAttempt + 1, REST_RECOVERY_DELAYS_MS.length - 1);
+            scheduleNext = true;
+          } catch (error) {
+            if (signal.aborted || generationRef.current !== generation) {
+              fail(error);
+              return;
+            }
+            if (
+              isHttpError(error)
+              && error.status >= 400
+              && error.status < 500
+              && error.status !== 408
+              && error.status !== 429
+            ) {
+              if (error.status === 410) setBackendResultsExpired(true);
+              fail(error);
+              return;
+            }
+            recoveryAttempt = Math.min(recoveryAttempt + 1, REST_RECOVERY_DELAYS_MS.length - 1);
+            scheduleNext = true;
           }
-          latestPhase = backendJobPhase(job.state);
-          if (!ACTIVE_PHASES.has(backendJobPhase(job.state))) {
-            finish(job);
+        })().finally(() => {
+          if (recoveryCycle === cycle) recoveryCycle = null;
+          if (settled || signal.aborted || generationRef.current !== generation) {
+            immediateRecoveryPending = false;
             return;
           }
-          recoveryAttempt = Math.min(recoveryAttempt + 1, REST_RECOVERY_DELAYS_MS.length - 1);
-          scheduleRecovery();
-        } catch (error) {
-          if (signal.aborted || generationRef.current !== generation) {
-            fail(error);
-            return;
+          if (immediateRecoveryPending) {
+            immediateRecoveryPending = false;
+            scheduleRecovery(0);
+          } else if (scheduleNext) {
+            scheduleRecovery();
           }
-          if (
-            isHttpError(error)
-            && error.status >= 400
-            && error.status < 500
-            && error.status !== 408
-            && error.status !== 429
-          ) {
-            if (error.status === 410) setBackendResultsExpired(true);
-            fail(error);
-            return;
-          }
-          recoveryAttempt = Math.min(recoveryAttempt + 1, REST_RECOVERY_DELAYS_MS.length - 1);
-          scheduleRecovery();
-        }
+        });
+        recoveryCycle = cycle;
+        return cycle;
       }
 
       function refreshWatchdog() {
         recoveryAttempt = 0;
         scheduleRecovery();
+      }
+
+      function requestAuthoritativeJobRecovery(
+        notice: string,
+        previewPolicy: "discard" | "preserve",
+      ) {
+        if (previewPolicy === "discard" && previewsEnabled) {
+          clearBackendPreview(
+            "resyncing",
+            "Live preview was cleared while search progress is reconciled with the server.",
+          );
+        }
+        setBackendNotices((current) => appendUniqueMessage(current, notice));
+        scheduleRecovery(0);
+      }
+
+      function acceptProjectedProgress(
+        projectedProgress: SearchProgress | undefined,
+        source: SearchProgressSource,
+        presentationPhase: JobPhase,
+      ): boolean {
+        if (projectedProgress === undefined) {
+          requestAuthoritativeJobRecovery(
+            "A live job update omitted search progress; refreshing from the server…",
+            "discard",
+          );
+          return false;
+        }
+        const decision = reconcileSearchProgress(
+          backendProgressRevisionRef.current,
+          projectedProgress,
+          source,
+        );
+        if (decision.kind === "apply") {
+          backendProgressRevisionRef.current = decision.state;
+          applyBackendProgressMetrics(
+            decision.state.progress,
+            presentationPhase,
+            generation,
+          );
+          return true;
+        }
+        if (decision.kind === "ignore" && decision.reason !== "unversioned") {
+          return true;
+        }
+        if (decision.kind === "ignore") {
+          requestAuthoritativeJobRecovery(
+            "A legacy live progress update could not be ordered; refreshing from the server…",
+            "preserve",
+          );
+          return false;
+        }
+        requestAuthoritativeJobRecovery(
+          `Live search progress was inconsistent (${decision.reason}); refreshing from the server…`,
+          "discard",
+        );
+        return false;
+      }
+
+      function acceptProjectedState(
+        stateVersion: bigint,
+        nextPhase: JobPhase,
+      ): "accepted" | "stale" | "recovering" {
+        if (!isVersionedSearchRevision(stateVersion)) {
+          requestAuthoritativeJobRecovery(
+            "A live job state had no valid revision; refreshing from the server…",
+            "discard",
+          );
+          return "recovering";
+        }
+        if (stateVersion < backendJobVersionRef.current) return "stale";
+        if (stateVersion === backendJobVersionRef.current) {
+          if (nextPhase !== latestPhase) {
+            requestAuthoritativeJobRecovery(
+              "Live job states conflicted at one revision; refreshing from the server…",
+              "discard",
+            );
+            return "recovering";
+          }
+          return "accepted";
+        }
+        backendJobVersionRef.current = stateVersion;
+        latestPhase = nextPhase;
+        setPhase(latestPhase);
+        return "accepted";
       }
 
       const abortListener = () => fail(signal.reason ?? new DOMException("Search was canceled.", "AbortError"));
@@ -3123,19 +3263,31 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           return;
         }
         if (searchJobIdForWebSocketEvent(event) !== initialJob.searchJobId) return;
-        if (event.sequence > 0n) backendLiveUpdateEpochRef.current += 1n;
-        refreshWatchdog();
+        if (
+          event.sequence > 0n
+          && event.payload?.$case !== "searchProgress"
+          && event.payload?.$case !== "searchStateChanged"
+          && event.payload?.$case !== "searchTerminal"
+        ) {
+          // State and progress have their own monotonic revision fences. Keep
+          // the broader epoch only for versionless schema, preview, warning,
+          // and forward-compatible target updates.
+          backendLiveUpdateEpochRef.current += 1n;
+        }
         switch (event.payload?.$case) {
           case "searchProgress":
-            applyBackendProgress(event.payload.value, latestPhase, generation);
+            if (acceptProjectedProgress(
+              event.payload.value,
+              { kind: "live" },
+              latestPhase,
+            )) refreshWatchdog();
             break;
           case "searchStateChanged": {
             const change = event.payload.value;
-            if (change.stateVersion >= backendJobVersionRef.current) {
-              backendJobVersionRef.current = change.stateVersion;
-              latestPhase = backendJobPhase(change.state);
-              setPhase(latestPhase);
-            }
+            if (acceptProjectedState(
+              change.stateVersion,
+              backendJobPhase(change.state),
+            ) !== "recovering") refreshWatchdog();
             break;
           }
           case "resultSchemaAvailable": {
@@ -3152,6 +3304,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
                 setBackendResultKind(schema.resultKind);
               }
             }
+            refreshWatchdog();
             break;
           }
           case "resultPreview":
@@ -3166,26 +3319,45 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
                 initialJob.searchJobId,
               );
             }
+            refreshWatchdog();
             break;
           case "warning": {
             const message = event.payload.value.warning?.message;
             if (message) setBackendNotices((current) => uniqueMessages([...current, message]));
+            refreshWatchdog();
             break;
           }
-          case "searchTerminal":
-            latestPhase = backendJobPhase(event.payload.value.state);
-            applyBackendProgress(
-              event.payload.value.finalProgress,
-              latestPhase,
-              generation,
+          case "searchTerminal": {
+            const terminal = event.payload.value;
+            const terminalPhase = backendJobPhase(terminal.state);
+            const stateStatus = acceptProjectedState(
+              terminal.stateVersion,
+              terminalPhase,
             );
             if (
-              latestPhase === "completed"
+              stateStatus === "accepted"
+              && terminalPhase === "completed"
               && backendPreviewStatusRef.current !== "disabled"
             ) {
               markBackendPreviewFinalizing();
             }
-            scheduleRecovery(0);
+            if (stateStatus === "accepted") {
+              // Terminal phase presentation is independent from acceptance of
+              // its final metrics. A corrupt nested revision cannot hide a
+              // valid completed state while REST reconciliation is pending.
+              acceptProjectedProgress(
+                terminal.finalProgress,
+                { kind: "terminal", envelopeRevision: terminal.stateVersion },
+                terminalPhase,
+              );
+              scheduleRecovery(0);
+            } else if (stateStatus === "stale") {
+              refreshWatchdog();
+            }
+            break;
+          }
+          default:
+            refreshWatchdog();
             break;
         }
       }));

@@ -226,7 +226,7 @@ jobs:
           OPEN_SPLUNK_BACKEND_INTEGRATION: "1"
         run: >-
           go test ./integration
-          -run '^Test(BackendVertical|BrowserSequence(ExpiredRecovery|Gap(RESTTerminal)?Recovery))$'
+          -run '^Test(BackendVertical|BrowserSequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery))$'
           -count=1
           -timeout=15m
           -v
@@ -240,6 +240,7 @@ jobs:
             test-results/backend-vertical
             test-results/browser-sequence-expired
             test-results/browser-sequence-gap
+            test-results/browser-sequence-gap-rest-first-progress
             test-results/browser-sequence-gap-rest-terminal
           if-no-files-found: ignore
           retention-days: 14
