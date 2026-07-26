@@ -463,9 +463,22 @@ func (lease *DownloadLease) Close() error {
 			manager.downloadsByJob = make(map[string]int)
 		}
 		manager.releaseMetadata(lease.metadataBytes)
-		artifactPath, tempPath := manager.expireLocked(entry, manager.nowUTC())
+		var artifactPath, tempPath string
+		removalAdmitted := false
+		if !manager.closed {
+			artifactPath, tempPath = manager.expireLocked(entry, manager.nowUTC())
+			removalAdmitted = artifactPath != "" || tempPath != ""
+			if removalAdmitted {
+				// Add while Close is excluded by manager.mu. Once shutdown has
+				// begun, Close owns any deferred artifact removal itself.
+				manager.admissions.Add(1)
+			}
+		}
 		entry.mu.Unlock()
 		manager.mu.Unlock()
+		if removalAdmitted {
+			defer manager.admissions.Done()
+		}
 		artifactErr := manager.removeTrackedArtifact(entry, artifactPath)
 		tempErr := manager.removeTrackedTemp(entry, tempPath)
 		if fileErr != nil || artifactErr != nil || tempErr != nil {

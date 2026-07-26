@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -332,6 +333,94 @@ func TestDownloadLeasePinsExpiredArtifactUntilFinalClose(t *testing.T) {
 	manager.budgetMu.Unlock()
 	if retainedBytes != 0 {
 		t.Fatalf("retained artifact bytes after final Close = %d", retainedBytes)
+	}
+}
+
+func TestDownloadLeaseDeferredUnlinkIsAdmittedBeforeManagerClose(t *testing.T) {
+	t.Parallel()
+	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"search": {schema: basicExportSchema(), rows: basicExportRows()},
+	}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.Now = clock.Now
+		config.ArtifactTTL = time.Second
+	})
+	completed := createCompletedDownloadJob(t, manager, "search")
+	grant, err := manager.CreateDownloadGrant(context.Background(), testAccess, completed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := manager.RedeemDownload(context.Background(), grant.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(manager.artifactDir, completed.Artifact.FileName)
+	clock.Advance(time.Second)
+	expired, err := manager.Get(context.Background(), testAccess, completed.ID)
+	if err != nil || expired.State != StateExpired {
+		t.Fatalf("Get(at expiry) = (%#v, %v)", expired, err)
+	}
+
+	removeStarted := make(chan struct{})
+	releaseRemove := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseRemove) }) }
+	defer release()
+	originalRemove := manager.removePath
+	var artifactRemovals atomic.Int32
+	manager.removePath = func(path string) error {
+		if path == artifactPath && artifactRemovals.Add(1) == 1 {
+			close(removeStarted)
+			<-releaseRemove
+		}
+		return originalRemove(path)
+	}
+
+	leaseCloseDone := make(chan error, 1)
+	go func() {
+		leaseCloseDone <- lease.Close()
+	}()
+	select {
+	case <-removeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("final download lease did not reach deferred artifact removal")
+	}
+
+	managerCloseDone := make(chan error, 1)
+	go func() {
+		managerCloseDone <- manager.Close()
+	}()
+	select {
+	case <-manager.ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Manager.Close did not begin")
+	}
+	select {
+	case err := <-managerCloseDone:
+		t.Fatalf("Manager.Close returned before admitted lease removal completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case err := <-leaseCloseDone:
+		if err != nil {
+			t.Fatalf("DownloadLease.Close() = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("DownloadLease.Close did not finish after removal was released")
+	}
+	select {
+	case err := <-managerCloseDone:
+		if err != nil {
+			t.Fatalf("Manager.Close() = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Manager.Close did not finish after removal was released")
+	}
+	if removals := artifactRemovals.Load(); removals != 1 {
+		t.Fatalf("artifact removals = %d, want exactly one", removals)
 	}
 }
 

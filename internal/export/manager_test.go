@@ -1227,6 +1227,107 @@ func TestManagerArtifactTTLAndTombstoneCleanup(t *testing.T) {
 	}
 }
 
+func TestManagerCleanupDeletionDoesNotBlockShutdownAdmission(t *testing.T) {
+	t.Parallel()
+	testManagerExpirationDeletionDoesNotBlockShutdownAdmission(t, func(manager *Manager, _ string) error {
+		return manager.Cleanup(context.Background())
+	})
+}
+
+func TestManagerGetDeletionDoesNotBlockShutdownAdmission(t *testing.T) {
+	t.Parallel()
+	testManagerExpirationDeletionDoesNotBlockShutdownAdmission(t, func(manager *Manager, id string) error {
+		_, err := manager.Get(context.Background(), testAccess, id)
+		return err
+	})
+}
+
+func testManagerExpirationDeletionDoesNotBlockShutdownAdmission(
+	t *testing.T,
+	expire func(*Manager, string) error,
+) {
+	t.Helper()
+	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"search": {schema: basicExportSchema(), rows: basicExportRows()[:1]},
+	}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.ArtifactTTL = time.Minute
+		config.Now = clock.Now
+	})
+	created, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "search",
+		Format:      FormatCSV,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := waitExportState(t, manager, testAccess, created.ID, StateCompleted)
+	artifactPath := filepath.Join(manager.artifactDir, completed.Artifact.FileName)
+
+	removeStarted := make(chan struct{})
+	releaseRemove := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseRemove) }) }
+	defer release()
+	originalRemove := manager.removePath
+	var artifactRemovals atomic.Int32
+	manager.removePath = func(path string) error {
+		if path == artifactPath && artifactRemovals.Add(1) == 1 {
+			close(removeStarted)
+			<-releaseRemove
+		}
+		return originalRemove(path)
+	}
+
+	clock.Advance(time.Minute)
+	operationDone := make(chan error, 1)
+	go func() {
+		operationDone <- expire(manager, created.ID)
+	}()
+	select {
+	case <-removeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("expiration did not reach artifact removal")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- manager.Close()
+	}()
+	select {
+	case <-manager.ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("filesystem deletion blocked Close from rejecting new admission")
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before admitted expiration removal completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case err := <-operationDone:
+		if err != nil {
+			t.Fatalf("expiration operation = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("expiration operation did not finish after deletion was released")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not finish after deletion was released")
+	}
+	if removals := artifactRemovals.Load(); removals != 1 {
+		t.Fatalf("artifact removals = %d, want exactly one", removals)
+	}
+}
+
 func TestManagerDelayedFirstCleanupRetainsExpiredTombstoneForFullRetention(t *testing.T) {
 	t.Parallel()
 	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}

@@ -1092,10 +1092,19 @@ func (manager *Manager) Get(ctx context.Context, access searchjobs.AccessScope, 
 	}
 	artifactPath, tempPath := manager.expireLocked(entry, manager.nowUTC())
 	result := cloneJob(entry.job)
+	removalAdmitted := artifactPath != "" || tempPath != ""
+	if removalAdmitted {
+		// Add while Close is excluded by manager.mu. Shutdown can reject new
+		// work promptly, then waits before tearing down artifact storage.
+		manager.admissions.Add(1)
+	}
 	entry.mu.Unlock()
+	manager.mu.RUnlock()
+	if removalAdmitted {
+		defer manager.admissions.Done()
+	}
 	_ = manager.removeTrackedArtifact(entry, artifactPath)
 	_ = manager.removeTrackedTemp(entry, tempPath)
-	manager.mu.RUnlock()
 	return result, nil
 }
 
@@ -1566,22 +1575,20 @@ func (manager *Manager) Cleanup(ctx context.Context) error {
 		return ErrClosed
 	}
 	manager.purgeExpiredGrantsLocked(now)
-	manager.mu.Unlock()
-	manager.mu.RLock()
-	if manager.closed {
-		manager.mu.RUnlock()
-		return ErrClosed
-	}
 	entries := make([]*jobEntry, 0, len(manager.jobs))
-	var cleanupErr error
 	for _, entry := range manager.jobs {
 		entries = append(entries, entry)
 	}
-	// Hold the read lock through deletion attempts. Close first takes the write
-	// lock, so shutdown cannot race an already-admitted remover.
+	// Add while holding the same lock Close uses to forbid new admission.
+	// Cleanup may now release manager.mu before filesystem I/O while Close
+	// still waits to tear down artifact storage.
+	manager.admissions.Add(1)
+	manager.mu.Unlock()
+	defer manager.admissions.Done()
+
+	var cleanupErr error
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
-			manager.mu.RUnlock()
 			return err
 		}
 		entry.mu.Lock()
@@ -1594,7 +1601,6 @@ func (manager *Manager) Cleanup(ctx context.Context) error {
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove expired export partial: %w", err))
 		}
 	}
-	manager.mu.RUnlock()
 	manager.mu.Lock()
 	for id, entry := range manager.jobs {
 		entry.mu.Lock()
