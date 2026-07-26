@@ -193,8 +193,10 @@ func fakeSourceMarks(batch *opensplunkv1.EventBatch) []wal.SourceCheckpointMark 
 			BatchSequence: batch.GetBatchSequence(), EventIndex: uint32(index),
 			FileIdentity: origin.GetFileIdentity(), SourcePath: origin.GetSourcePath(),
 			EndOffset: origin.GetEndOffset(), LineNumber: origin.GetLineNumber(),
+			NextLineNumber:    origin.GetNextLineNumber(),
 			FingerprintLength: origin.GetFileFingerprintLength(),
 			HasSourcePath:     origin.SourcePath != nil, HasEndOffset: origin.EndOffset != nil,
+			HasNextLineNumber:    origin.NextLineNumber != nil,
 			HasFingerprintLength: origin.FileFingerprintLength != nil,
 		})
 	}

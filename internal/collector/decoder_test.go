@@ -18,7 +18,8 @@ func TestNDJSONDecoderExtractsCanonicalFieldsAndPreservesTypes(t *testing.T) {
 	collectedAt := time.Date(2026, time.June, 29, 19, 10, 0, 0, time.UTC)
 
 	event, err := decoder.Decode(raw, SourcePosition{
-		FileIdentity: "dev=1;ino=2", StartOffset: 10, EndOffset: 10 + uint64(len(raw)), LineNumber: 7,
+		FileIdentity: "dev=1;ino=2", StartOffset: 10, EndOffset: 10 + uint64(len(raw)),
+		LineNumber: 7, NextLineNumber: 8,
 	}, collectedAt)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
@@ -70,6 +71,9 @@ func TestNDJSONDecoderExtractsCanonicalFieldsAndPreservesTypes(t *testing.T) {
 	}
 	if got := event.GetOrigin().GetLineNumber(); got != 7 {
 		t.Fatalf("origin line = %d, want 7", got)
+	}
+	if got := event.GetOrigin().GetNextLineNumber(); got != 8 {
+		t.Fatalf("origin next line = %d, want 8", got)
 	}
 }
 

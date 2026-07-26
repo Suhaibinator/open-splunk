@@ -76,7 +76,8 @@ func TestDaemonOversizedEventDeadLettered(t *testing.T) {
 	processed := make(chan processedEvent, 1)
 	processed <- processedEvent{
 		event:    &opensplunkv1.LogEvent{EventId: "e1", IndexName: "main"},
-		identity: identity, path: "/x.log", endOffset: 42, lineNumber: 1, size: 10,
+		identity: identity, path: "/x.log", endOffset: 42,
+		lineNumber: 1, nextLineNumber: 3, size: 10,
 	}
 	close(processed)
 
@@ -95,8 +96,9 @@ func TestDaemonOversizedEventDeadLettered(t *testing.T) {
 		t.Fatalf("OversizedDrops = %d, want 1", got)
 	}
 	// The checkpoint must advance past the dropped event so it does not strand.
-	if cp, ok, _ := cps.Get(identity); !ok || cp.Offset != 42 {
-		t.Fatalf("checkpoint after oversized drop = %+v (ok=%v), want offset 42", cp, ok)
+	if cp, ok, _ := cps.Get(identity); !ok || cp.Offset != 42 ||
+		cp.LineNumber != 1 || cp.NextLineNumber != 3 {
+		t.Fatalf("checkpoint after oversized drop = %+v (ok=%v), want offset 42 lines [1,3)", cp, ok)
 	}
 	if st := q.Stats(); st.QueuedEvents != 0 {
 		t.Fatalf("queue should be empty after oversized drop, got %+v", st)

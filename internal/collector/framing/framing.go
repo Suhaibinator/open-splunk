@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"math"
 	"regexp"
 )
 
@@ -14,10 +15,21 @@ var (
 	// Framer.Pending) and not consumed; the returned Frame is the zero value.
 	ErrPartialFrame = errors.New("collector/framing: incomplete trailing frame")
 
-	// ErrEventTooLarge is returned when a single record reaches Options.
-	// MaxEventBytes without a delimiter. The returned Frame carries the
-	// truncated bytes and the offsets spanning the oversized record.
+	// ErrEventTooLarge is returned when a delimited record exceeds Options.
+	// MaxEventBytes. The returned Frame carries the truncated bytes and the
+	// offsets spanning the complete oversized record.
 	ErrEventTooLarge = errors.New("collector/framing: event exceeds max size")
+
+	// ErrEventTooLargeIncomplete reports an oversized record whose delimiter
+	// was not observed in the bounded working buffer. The returned Frame spans
+	// bytes safely discarded so far but does not advance NextLineNumber. A
+	// streaming caller must retain discard-through-delimiter state before
+	// framing subsequent bytes.
+	ErrEventTooLargeIncomplete = errors.New("collector/framing: oversized event is still incomplete")
+
+	// ErrLineNumberOverflow prevents a corrupt or exhausted cursor from wrapping
+	// a physical source line back to zero.
+	ErrLineNumberOverflow = errors.New("collector/framing: source line number exhausted")
 )
 
 // defaultMaxEventBytes caps a single frame when Options.MaxEventBytes is zero.
@@ -33,16 +45,25 @@ const readChunkSize = 4096
 // the first byte of the record; EndOffset is the offset one past the last byte
 // consumed for this record, including its delimiter, and is the value an input
 // checkpoints once the covering durable batch receives a terminal server
-// disposition. LineNumber is the 1-based line of the record's first line.
+// disposition. LineNumber is the 1-based line of the record's first physical
+// line. NextLineNumber is the 1-based physical line at EndOffset and can seed a
+// replacement framer without rescanning the source prefix. A frame returned
+// with ErrEventTooLargeIncomplete is not checkpointable: its NextLineNumber is
+// the still-pending physical line rather than a completed boundary.
 type Frame struct {
-	Bytes       []byte
-	StartOffset uint64
-	EndOffset   uint64
-	LineNumber  uint64
+	Bytes          []byte
+	StartOffset    uint64
+	EndOffset      uint64
+	LineNumber     uint64
+	NextLineNumber uint64
 }
 
 // Options configures a Framer.
 type Options struct {
+	// StartLineNumber seeds the 1-based line number at the supplied start
+	// offset. Zero selects line 1.
+	StartLineNumber uint64
+
 	// MaxEventBytes caps a single frame. Zero selects the package default.
 	MaxEventBytes int
 
@@ -58,9 +79,10 @@ type Options struct {
 // Framer splits an underlying reader into Frames.
 //
 // Next returns the next complete frame. It returns io.EOF at a clean record
-// boundary when the reader is exhausted, ErrPartialFrame when the reader is
-// exhausted mid-record, and ErrEventTooLarge when a record exceeds the size
-// cap. Implementations are not required to be safe for concurrent use.
+// boundary when the reader is exhausted, ErrPartialFrame when an in-budget
+// record is incomplete, ErrEventTooLarge for a delimited oversized record, and
+// ErrEventTooLargeIncomplete when an oversized record is still waiting for its
+// delimiter. Implementations are not required to be safe for concurrent use.
 type Framer interface {
 	Next() (Frame, error)
 
@@ -131,7 +153,7 @@ func NewLineFramer(r io.Reader, startOffset uint64, opts Options) (Framer, error
 	}
 	return &lineFramer{
 		source:   source{r: r, off: startOffset},
-		line:     1,
+		line:     normalizedStartLine(opts.StartLineNumber),
 		maxBytes: max,
 	}, nil
 }
@@ -162,8 +184,22 @@ func NewMultilineFramer(r io.Reader, startOffset uint64, opts Options) (Framer, 
 		pattern:    opts.LineStartPattern,
 		maxLines:   opts.MaxLines,
 		maxBytes:   max,
-		nextLineNo: 1,
+		nextLineNo: normalizedStartLine(opts.StartLineNumber),
 	}, nil
+}
+
+func normalizedStartLine(line uint64) uint64 {
+	if line == 0 {
+		return 1
+	}
+	return line
+}
+
+// canAdvanceLineNumber reserves MaxUint64 as an invalid sentinel. Emitting it
+// as a next-line cursor would create an event that ingestion and checkpoint
+// validation can never acknowledge.
+func canAdvanceLineNumber(line uint64) bool {
+	return line < math.MaxUint64-1
 }
 
 // lineFramer implements newline-delimited framing.
@@ -178,15 +214,24 @@ func (f *lineFramer) Next() (Frame, error) {
 	for {
 		i := bytes.IndexByte(f.buf, '\n')
 		// Oversized: the record reaches the cap without a usable delimiter.
-		if (i < 0 && len(f.buf) >= f.maxBytes) || (i > f.maxBytes) {
+		if (i < 0 && len(f.buf) > f.maxBytes) || (i > f.maxBytes) {
+			if !canAdvanceLineNumber(f.line) {
+				return Frame{}, ErrLineNumberOverflow
+			}
 			return f.emitTooLarge()
 		}
 		if i >= 0 {
+			if !canAdvanceLineNumber(f.line) {
+				return Frame{}, ErrLineNumberOverflow
+			}
 			return f.emitLine(i), nil
 		}
 		if f.eof {
 			if len(f.buf) == 0 {
 				return Frame{}, io.EOF
+			}
+			if !canAdvanceLineNumber(f.line) {
+				return Frame{}, ErrLineNumberOverflow
 			}
 			return Frame{}, ErrPartialFrame
 		}
@@ -210,35 +255,42 @@ func (f *lineFramer) emitLine(i int) Frame {
 	f.buf = f.buf[i+1:]
 	f.off = end
 	f.line++
-	return Frame{Bytes: out, StartOffset: start, EndOffset: end, LineNumber: ln}
+	return Frame{
+		Bytes: out, StartOffset: start, EndOffset: end,
+		LineNumber: ln, NextLineNumber: f.line,
+	}
 }
 
-// emitTooLarge returns the truncated oversized record, consuming input up to and
-// including the next '\n' (or EOF) so framing can resume at the next record.
+// emitTooLarge returns a truncated oversized record. It consumes through a
+// delimiter already in the working buffer, or returns
+// ErrEventTooLargeIncomplete after the current bounded buffer so a streaming
+// caller can discard subsequent chunks with cancellation.
 func (f *lineFramer) emitTooLarge() (Frame, error) {
+	if !canAdvanceLineNumber(f.line) {
+		return Frame{}, ErrLineNumberOverflow
+	}
 	start := f.off
 	ln := f.line
 	out := make([]byte, f.maxBytes)
 	copy(out, f.buf[:f.maxBytes])
-	for {
-		if i := bytes.IndexByte(f.buf, '\n'); i >= 0 {
-			end := f.off + uint64(i+1)
-			f.buf = f.buf[i+1:]
-			f.off = end
-			f.line++
-			return Frame{Bytes: out, StartOffset: start, EndOffset: end, LineNumber: ln}, ErrEventTooLarge
-		}
-		// No delimiter in buf: discard it (bounded memory) and read more.
-		f.off += uint64(len(f.buf))
-		f.buf = f.buf[:0]
-		if f.eof {
-			f.line++
-			return Frame{Bytes: out, StartOffset: start, EndOffset: f.off, LineNumber: ln}, ErrEventTooLarge
-		}
-		if err := f.fill(); err != nil {
-			return Frame{}, err
-		}
+	if i := bytes.IndexByte(f.buf, '\n'); i >= 0 {
+		end := f.off + uint64(i+1)
+		f.buf = f.buf[i+1:]
+		f.off = end
+		f.line++
+		return Frame{
+			Bytes: out, StartOffset: start, EndOffset: end,
+			LineNumber: ln, NextLineNumber: f.line,
+		}, ErrEventTooLarge
 	}
+	// No delimiter is currently buffered. Stop after this bounded chunk rather
+	// than blocking inside an arbitrary Reader until a delimiter or EOF.
+	f.off += uint64(len(f.buf))
+	f.buf = f.buf[:0]
+	return Frame{
+		Bytes: out, StartOffset: start, EndOffset: f.off,
+		LineNumber: ln, NextLineNumber: f.line,
+	}, ErrEventTooLargeIncomplete
 }
 
 // Pending implements Framer.
@@ -248,7 +300,7 @@ func (f *lineFramer) Pending() (uint64, int) {
 
 // Flush implements Framer.
 func (f *lineFramer) Flush() (Frame, bool) {
-	if len(f.buf) == 0 {
+	if len(f.buf) == 0 || !canAdvanceLineNumber(f.line) {
 		return Frame{}, false
 	}
 	start := f.off
@@ -266,7 +318,10 @@ func (f *lineFramer) Flush() (Frame, bool) {
 	f.off = end
 	f.buf = f.buf[:0]
 	f.line++
-	return Frame{Bytes: out, StartOffset: start, EndOffset: end, LineNumber: ln}, true
+	return Frame{
+		Bytes: out, StartOffset: start, EndOffset: end,
+		LineNumber: ln, NextLineNumber: f.line,
+	}, true
 }
 
 // pendingFrame is a frame queued for emission by the multiline framer.
@@ -305,8 +360,8 @@ func (m *multilineFramer) Next() (Frame, error) {
 		if i < 0 {
 			if !m.eof {
 				// A single physical line without a delimiter that, together with
-				// the assembled event, reaches the cap is oversized.
-				if len(m.event)+len(m.buf) >= m.maxBytes {
+				// the assembled event, exceeds the cap is oversized.
+				if len(m.event)+len(m.buf) > m.maxBytes {
 					if err := m.emitOversized(); err != nil {
 						return Frame{}, err
 					}
@@ -319,9 +374,15 @@ func (m *multilineFramer) Next() (Frame, error) {
 			}
 			// EOF with no complete physical line buffered.
 			if m.started || len(m.buf) > 0 {
+				if len(m.buf) > 0 && !canAdvanceLineNumber(m.nextLineNo) {
+					return Frame{}, ErrLineNumberOverflow
+				}
 				return Frame{}, ErrPartialFrame
 			}
 			return Frame{}, io.EOF
+		}
+		if !canAdvanceLineNumber(m.nextLineNo) {
+			return Frame{}, ErrLineNumberOverflow
 		}
 
 		content := m.buf[:i] // excludes '\n'
@@ -337,14 +398,18 @@ func (m *multilineFramer) Next() (Frame, error) {
 		if isStart && m.started {
 			m.pending = append(m.pending, pendingFrame{frame: m.finishEvent()})
 			m.beginEvent()
-			m.consumeLine(lineLen, delim)
+			if err := m.consumeLine(lineLen, delim); err != nil {
+				return Frame{}, err
+			}
 			m.checkBounds()
 			continue
 		}
 		if !m.started {
 			m.beginEvent()
 		}
-		m.consumeLine(lineLen, delim)
+		if err := m.consumeLine(lineLen, delim); err != nil {
+			return Frame{}, err
+		}
 		m.checkBounds()
 	}
 }
@@ -361,13 +426,17 @@ func (m *multilineFramer) beginEvent() {
 
 // consumeLine appends buf[:lineLen] (a physical line and its delimiter) to the
 // current event and advances the stream position.
-func (m *multilineFramer) consumeLine(lineLen, delim int) {
+func (m *multilineFramer) consumeLine(lineLen, delim int) error {
+	if !canAdvanceLineNumber(m.nextLineNo) {
+		return ErrLineNumberOverflow
+	}
 	m.event = append(m.event, m.buf[:lineLen]...)
 	m.buf = m.buf[lineLen:]
 	m.off += uint64(lineLen)
 	m.evLines++
 	m.evDelim = delim
 	m.nextLineNo++
+	return nil
 }
 
 // checkBounds emits the current event when it hits the byte or line cap.
@@ -375,7 +444,10 @@ func (m *multilineFramer) checkBounds() {
 	if !m.started {
 		return
 	}
-	if len(m.event) >= m.maxBytes {
+	// Frame.Bytes excludes the final physical-line delimiter, so an event whose
+	// content is exactly at the cap remains valid.
+	contentBytes := len(m.event) - m.evDelim
+	if contentBytes > m.maxBytes {
 		m.pending = append(m.pending, pendingFrame{frame: m.finishEventTruncated(), err: ErrEventTooLarge})
 		return
 	}
@@ -394,10 +466,11 @@ func (m *multilineFramer) finishEvent() Frame {
 	out := make([]byte, n)
 	copy(out, m.event[:n])
 	fr := Frame{
-		Bytes:       out,
-		StartOffset: m.evStart,
-		EndOffset:   m.evStart + uint64(len(m.event)),
-		LineNumber:  m.evLine,
+		Bytes:          out,
+		StartOffset:    m.evStart,
+		EndOffset:      m.evStart + uint64(len(m.event)),
+		LineNumber:     m.evLine,
+		NextLineNumber: m.nextLineNo,
 	}
 	m.resetEvent()
 	return fr
@@ -413,10 +486,11 @@ func (m *multilineFramer) finishEventTruncated() Frame {
 	out := make([]byte, n)
 	copy(out, m.event[:n])
 	fr := Frame{
-		Bytes:       out,
-		StartOffset: m.evStart,
-		EndOffset:   m.evStart + uint64(len(m.event)),
-		LineNumber:  m.evLine,
+		Bytes:          out,
+		StartOffset:    m.evStart,
+		EndOffset:      m.evStart + uint64(len(m.event)),
+		LineNumber:     m.evLine,
+		NextLineNumber: m.nextLineNo,
 	}
 	m.resetEvent()
 	return fr
@@ -431,16 +505,18 @@ func (m *multilineFramer) resetEvent() {
 }
 
 // emitOversized handles an unterminated physical line that, with the assembled
-// event, exceeds the cap. It queues one ErrEventTooLarge frame and skips input
-// up to and including the next '\n' (or EOF).
+// event, exceeds the cap. It consumes only the current bounded buffer and
+// queues ErrEventTooLargeIncomplete so a streaming caller can discard
+// subsequent chunks with cancellation.
 func (m *multilineFramer) emitOversized() error {
+	if !canAdvanceLineNumber(m.nextLineNo) {
+		return ErrLineNumberOverflow
+	}
 	start := m.evStart
 	lineNo := m.evLine
-	consumed := m.evLines
 	if !m.started {
 		start = m.off
 		lineNo = m.nextLineNo
-		consumed = 0
 	}
 	combined := len(m.event) + len(m.buf)
 	tn := m.maxBytes
@@ -456,31 +532,14 @@ func (m *multilineFramer) emitOversized() error {
 	m.off += uint64(len(m.buf))
 	m.buf = m.buf[:0]
 	m.resetEvent()
-	for {
-		if err := m.fill(); err != nil {
-			return err
-		}
-		if i := bytes.IndexByte(m.buf, '\n'); i >= 0 {
-			m.off += uint64(i + 1)
-			m.buf = m.buf[i+1:]
-			m.nextLineNo = lineNo + uint64(consumed) + 1
-			m.pending = append(m.pending, pendingFrame{
-				frame: Frame{Bytes: out, StartOffset: start, EndOffset: m.off, LineNumber: lineNo},
-				err:   ErrEventTooLarge,
-			})
-			return nil
-		}
-		m.off += uint64(len(m.buf))
-		m.buf = m.buf[:0]
-		if m.eof {
-			m.nextLineNo = lineNo + uint64(consumed) + 1
-			m.pending = append(m.pending, pendingFrame{
-				frame: Frame{Bytes: out, StartOffset: start, EndOffset: m.off, LineNumber: lineNo},
-				err:   ErrEventTooLarge,
-			})
-			return nil
-		}
-	}
+	m.pending = append(m.pending, pendingFrame{
+		frame: Frame{
+			Bytes: out, StartOffset: start, EndOffset: m.off,
+			LineNumber: lineNo, NextLineNumber: m.nextLineNo,
+		},
+		err: ErrEventTooLargeIncomplete,
+	})
+	return nil
 }
 
 // Pending implements Framer.
@@ -498,14 +557,14 @@ func (m *multilineFramer) Flush() (Frame, bool) {
 	if !m.started && len(m.buf) == 0 {
 		return Frame{}, false
 	}
+	hasPartialLine := len(m.buf) > 0
+	if hasPartialLine && !canAdvanceLineNumber(m.nextLineNo) {
+		return Frame{}, false
+	}
 	start := m.off - uint64(len(m.event))
 	lineNo := m.nextLineNo
 	if m.started {
 		lineNo = m.evLine
-	}
-	flushedLines := m.evLines
-	if len(m.buf) > 0 {
-		flushedLines++
 	}
 	combined := make([]byte, 0, len(m.event)+len(m.buf))
 	combined = append(combined, m.event...)
@@ -521,6 +580,11 @@ func (m *multilineFramer) Flush() (Frame, bool) {
 	m.buf = m.buf[:0]
 	m.off = end
 	m.resetEvent()
-	m.nextLineNo = lineNo + uint64(flushedLines)
-	return Frame{Bytes: content, StartOffset: start, EndOffset: end, LineNumber: lineNo}, true
+	if hasPartialLine {
+		m.nextLineNo++
+	}
+	return Frame{
+		Bytes: content, StartOffset: start, EndOffset: end,
+		LineNumber: lineNo, NextLineNumber: m.nextLineNo,
+	}, true
 }

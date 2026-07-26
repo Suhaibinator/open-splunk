@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -178,6 +179,20 @@ func TestManagerAppendWhileTailing(t *testing.T) {
 	h.waitForTexts([]string{"a1", "a2"})
 	appendFileT(t, p, "a3\na4\n")
 	h.waitForTexts([]string{"a1", "a2", "a3", "a4"})
+	events := h.col.snapshot()
+	for i, event := range events {
+		wantLine := uint64(i + 1)
+		if event.Source.LineNumber != wantLine || event.Source.NextLineNumber != wantLine+1 {
+			t.Fatalf(
+				"event %d source lines = (%d, %d), want (%d, %d)",
+				i,
+				event.Source.LineNumber,
+				event.Source.NextLineNumber,
+				wantLine,
+				wantLine+1,
+			)
+		}
+	}
 
 	waitFor(t, "healthy state", func() bool {
 		return h.mgr.Health().State == opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_HEALTHY
@@ -200,6 +215,14 @@ func TestManagerStartAtEnd(t *testing.T) {
 	waitFor(t, "file discovered", func() bool { return h.mgr.Health().DiscoveredSources == 1 })
 	appendFileT(t, p, "new1\n")
 	h.waitForTexts([]string{"new1"})
+	event := h.col.snapshot()[0]
+	if event.Source.LineNumber != 1 || event.Source.NextLineNumber != 2 {
+		t.Fatalf(
+			"start-at-end source lines = (%d, %d), want monitored stream (1, 2)",
+			event.Source.LineNumber,
+			event.Source.NextLineNumber,
+		)
+	}
 }
 
 func TestManagerStartAtEndReadsFileCreatedAfterStartup(t *testing.T) {
@@ -229,7 +252,9 @@ func TestManagerResumeFromCheckpoint(t *testing.T) {
 		t.Fatalf("identity: %v", err)
 	}
 	// Checkpoint after "first\n" (6 bytes): resume should skip it.
-	if err := store.Set(Checkpoint{Identity: id, Path: p, Offset: 6, LineNumber: 1}); err != nil {
+	if err := store.Set(Checkpoint{
+		Identity: id, Path: p, Offset: 6, LineNumber: 1, NextLineNumber: 2,
+	}); err != nil {
 		t.Fatalf("seed checkpoint: %v", err)
 	}
 
@@ -239,6 +264,183 @@ func TestManagerResumeFromCheckpoint(t *testing.T) {
 	}, store)
 
 	h.waitForTexts([]string{"second"})
+	event := h.col.snapshot()[0]
+	if event.Source.LineNumber != 2 || event.Source.NextLineNumber != 3 {
+		t.Fatalf(
+			"resumed source lines = (%d, %d), want (2, 3)",
+			event.Source.LineNumber,
+			event.Source.NextLineNumber,
+		)
+	}
+}
+
+func TestManagerKeepsLegacyMultilineCheckpointLineCursorUnknown(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	first := "START first\ncontinuation\n"
+	writeFileT(t, p, first+"START second\nSTART third\n")
+
+	checkpointDir := t.TempDir()
+	store, err := NewCheckpointStore(checkpointDir)
+	if err != nil {
+		t.Fatalf("NewCheckpointStore: %v", err)
+	}
+	id, err := NewFileIdentity(p, 0)
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	// Checkpoints written before NextLineNumber existed retain only the first
+	// physical line of the last acknowledged logical event.
+	if err := store.Set(Checkpoint{
+		Identity: id, Path: p, Offset: uint64(len(first)), LineNumber: 1,
+	}); err != nil {
+		t.Fatalf("seed legacy checkpoint: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close seeded checkpoint store: %v", err)
+	}
+
+	for _, restart := range []string{"upgrade", "reopen"} {
+		t.Run(restart, func(t *testing.T) {
+			reopened, err := NewCheckpointStore(checkpointDir)
+			if err != nil {
+				t.Fatalf("reopen checkpoint store: %v", err)
+			}
+			h := startManager(t, Config{
+				InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+				Multiline: true,
+				Framing:   framing.Options{LineStartPattern: regexp.MustCompile(`^START`)},
+			}, reopened)
+			h.waitForTexts([]string{"START second"})
+			event := h.col.snapshot()[0]
+			if event.Source.LineNumber != 0 || event.Source.NextLineNumber != 0 {
+				t.Fatalf(
+					"legacy resume source lines = (%d, %d), want unknown (0, 0)",
+					event.Source.LineNumber,
+					event.Source.NextLineNumber,
+				)
+			}
+			checkpoint, ok, err := reopened.Get(id)
+			if err != nil || !ok || checkpoint.NextLineNumber != 0 {
+				t.Fatalf(
+					"legacy checkpoint = %+v (ok=%t err=%v), want unknown next line",
+					checkpoint,
+					ok,
+					err,
+				)
+			}
+		})
+	}
+}
+
+func TestManagerBatchesLegacyCheckpointCursorUpgrades(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	paths := []string{
+		filepath.Join(dir, "a.log"),
+		filepath.Join(dir, "b.log"),
+	}
+	store := newStore(t).(*fileCheckpointStore)
+	legacy := make([]Checkpoint, 0, len(paths))
+	for _, path := range paths {
+		writeFileT(t, path, "first\n")
+		id, err := NewFileIdentity(path, 0)
+		if err != nil {
+			t.Fatalf("identity %s: %v", path, err)
+		}
+		legacy = append(legacy, Checkpoint{
+			Identity:   id,
+			Path:       path,
+			Offset:     uint64(len("first\n")),
+			LineNumber: 1,
+		})
+	}
+	if err := store.SetMany(legacy); err != nil {
+		t.Fatalf("seed legacy checkpoints: %v", err)
+	}
+
+	originalPersist := store.persistSnapshot
+	var writes atomic.Uint64
+	store.persistSnapshot = func(checkpoints []Checkpoint) error {
+		writes.Add(1)
+		return originalPersist(checkpoints)
+	}
+
+	h := startManager(t, Config{
+		InputID: "in", Include: []string{filepath.Join(dir, "*.log")},
+		StartAt: StartAtBeginning,
+	}, store)
+	waitFor(t, "legacy cursors persisted", func() bool {
+		for _, checkpoint := range legacy {
+			got, ok, err := store.Get(checkpoint.Identity)
+			if err != nil || !ok || got.NextLineNumber != 2 {
+				return false
+			}
+		}
+		return true
+	})
+	if got := writes.Load(); got != 1 {
+		t.Fatalf("legacy checkpoint persistence writes = %d, want one batched write", got)
+	}
+	if got := h.mgr.Health().DiscoveredSources; got != uint64(len(paths)) {
+		t.Fatalf("discovered sources = %d, want %d", got, len(paths))
+	}
+}
+
+func TestCheckpointNextLineRejectsRegressingOrExhaustedCursor(t *testing.T) {
+	t.Parallel()
+	for _, checkpoint := range []Checkpoint{
+		{LineNumber: 4, NextLineNumber: 4},
+		{LineNumber: 4, NextLineNumber: 3},
+		{LineNumber: ^uint64(0) - 1, NextLineNumber: ^uint64(0)},
+		{LineNumber: ^uint64(0) - 1},
+		{LineNumber: ^uint64(0)},
+	} {
+		if _, _, err := checkpointNextLine(checkpoint, false); err == nil {
+			t.Fatalf("checkpointNextLine(%+v) error = nil", checkpoint)
+		}
+	}
+}
+
+func TestCheckpointNextLineMigratesFlushedLegacyPartial(t *testing.T) {
+	t.Parallel()
+	next, known, err := checkpointNextLine(Checkpoint{
+		Offset: uint64(len("first\npartial")), LineNumber: 2,
+	}, false)
+	if err != nil || next != 3 || !known {
+		t.Fatalf(
+			"flushed legacy partial next line = %d known=%t err=%v, want exact 3",
+			next,
+			known,
+			err,
+		)
+	}
+}
+
+func TestCheckpointNextLineKeepsUnanchoredLegacyCursorUnknown(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		checkpoint Checkpoint
+		multiline  bool
+	}{
+		// The old multiline format retained only the event's starting line.
+		{checkpoint: Checkpoint{Offset: 1 << 40, LineNumber: 42}, multiline: true},
+		// A nonzero legacy discovery offset has no physical-line anchor even for
+		// ordinary line framing.
+		{checkpoint: Checkpoint{Offset: 100}},
+	} {
+		next, known, err := checkpointNextLine(test.checkpoint, test.multiline)
+		if err != nil || next != 1 || known {
+			t.Fatalf(
+				"unanchored legacy cursor %+v = next:%d known:%t err:%v, want internal 1/unknown",
+				test.checkpoint,
+				next,
+				known,
+				err,
+			)
+		}
+	}
 }
 
 func TestManagerStartAtEndResumesFromStaleCheckpointAfterReopen(t *testing.T) {
@@ -350,6 +552,15 @@ func TestManagerCopyTruncate(t *testing.T) {
 	appendFileT(t, p, "x\n")
 
 	h.waitForTexts([]string{"line-one", "line-two", "x"})
+	events := h.col.snapshot()
+	last := events[len(events)-1]
+	if last.Source.LineNumber != 1 || last.Source.NextLineNumber != 2 {
+		t.Fatalf(
+			"copy-truncated source lines = (%d, %d), want new generation (1, 2)",
+			last.Source.LineNumber,
+			last.Source.NextLineNumber,
+		)
+	}
 }
 
 func TestManagerCopyTruncateRewriteLargerBetweenPolls(t *testing.T) {
@@ -421,6 +632,128 @@ func TestManagerDeletionFlushesTrailingPartialLine(t *testing.T) {
 	h.waitForTexts([]string{"done", "partial-no-newline"})
 }
 
+func TestManagerPartialAcrossPollsAdvancesLineOnlyWhenCompleted(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	writeFileT(t, p, "part")
+
+	h := startManager(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+	}, newStore(t))
+	waitFor(t, "partial file discovered", func() bool {
+		return h.mgr.Health().DiscoveredSources == 1
+	})
+	if got := h.col.snapshot(); len(got) != 0 {
+		t.Fatalf("partial input emitted before delimiter: %+v", got)
+	}
+	appendFileT(t, p, "ial\nnext\n")
+	h.waitForTexts([]string{"partial", "next"})
+	events := h.col.snapshot()
+	if events[0].Source.LineNumber != 1 || events[0].Source.NextLineNumber != 2 ||
+		events[1].Source.LineNumber != 2 || events[1].Source.NextLineNumber != 3 {
+		t.Fatalf("completed partial source coordinates = %+v, want consecutive lines 1 and 2", events)
+	}
+}
+
+func TestManagerExactCapLineWaitsForDelimiterAcrossPolls(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	writeFileT(t, p, "abcd")
+
+	h := startManager(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+		Framing: framing.Options{MaxEventBytes: 4},
+	}, newStore(t))
+	waitFor(t, "exact-cap partial discovered", func() bool {
+		return h.mgr.Health().DiscoveredSources == 1
+	})
+	if got := h.col.snapshot(); len(got) != 0 {
+		t.Fatalf("exact-cap partial emitted before delimiter: %+v", got)
+	}
+
+	appendFileT(t, p, "\nok\n")
+	h.waitForTexts([]string{"abcd", "ok"})
+	events := h.col.snapshot()
+	if events[0].Source.LineNumber != 1 || events[0].Source.NextLineNumber != 2 ||
+		events[1].Source.LineNumber != 2 || events[1].Source.NextLineNumber != 3 {
+		t.Fatalf("exact-cap cross-poll source coordinates = %+v", events)
+	}
+}
+
+func TestManagerOversizedPartialDiscardsAppendedSuffix(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	writeFileT(t, p, "abcdefgh")
+
+	h := startManager(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+		Framing: framing.Options{MaxEventBytes: 4},
+	}, newStore(t))
+	waitFor(t, "oversized partial detected", func() bool {
+		return !h.mgr.Health().LastErrorAt.IsZero()
+	})
+	if got := h.col.snapshot(); len(got) != 0 {
+		t.Fatalf("oversized partial emitted before delimiter: %+v", got)
+	}
+
+	appendFileT(t, p, "-suffix\nok\n")
+	h.waitForTexts([]string{"ok"})
+	event := h.col.snapshot()[0]
+	if event.Source.LineNumber != 2 || event.Source.NextLineNumber != 3 {
+		t.Fatalf(
+			"post-oversize source lines = (%d, %d), want (2, 3)",
+			event.Source.LineNumber,
+			event.Source.NextLineNumber,
+		)
+	}
+}
+
+func TestManagerOversizedPartialRestartReplaysFromDurableBoundary(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	writeFileT(t, p, "abcdefgh")
+	checkpointDir := t.TempDir()
+
+	t.Run("stop while delimiter pending", func(t *testing.T) {
+		store, err := NewCheckpointStore(checkpointDir)
+		if err != nil {
+			t.Fatalf("NewCheckpointStore: %v", err)
+		}
+		h := startManager(t, Config{
+			InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+			Framing: framing.Options{MaxEventBytes: 4},
+		}, store)
+		waitFor(t, "oversized partial detected", func() bool {
+			return !h.mgr.Health().LastErrorAt.IsZero()
+		})
+	})
+
+	appendFileT(t, p, "-suffix\nok\n")
+	t.Run("restart", func(t *testing.T) {
+		store, err := NewCheckpointStore(checkpointDir)
+		if err != nil {
+			t.Fatalf("NewCheckpointStore: %v", err)
+		}
+		h := startManager(t, Config{
+			InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+			Framing: framing.Options{MaxEventBytes: 4},
+		}, store)
+		h.waitForTexts([]string{"ok"})
+		event := h.col.snapshot()[0]
+		if event.Source.LineNumber != 2 || event.Source.NextLineNumber != 3 {
+			t.Fatalf(
+				"restart post-oversize source lines = (%d, %d), want (2, 3)",
+				event.Source.LineNumber,
+				event.Source.NextLineNumber,
+			)
+		}
+	})
+}
+
 func TestManagerDelayedCreation(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -481,6 +814,11 @@ func TestManagerOversizedEventSkipped(t *testing.T) {
 
 	// The oversized middle record is skipped; the two small records survive.
 	h.waitForTexts([]string{"ok1", "ok2"})
+	events := h.col.snapshot()
+	if events[0].Source.LineNumber != 1 || events[0].Source.NextLineNumber != 2 ||
+		events[1].Source.LineNumber != 3 || events[1].Source.NextLineNumber != 4 {
+		t.Fatalf("oversized-skip source coordinates = %+v, want lines 1 then 3", events)
+	}
 }
 
 func TestManagerMultilineFlushAfterInactivity(t *testing.T) {
@@ -501,6 +839,13 @@ func TestManagerMultilineFlushAfterInactivity(t *testing.T) {
 	}, newStore(t))
 
 	h.waitForTexts([]string{"START a\ncontinuation line"})
+	appendFileT(t, p, "START b\nsecond continuation\n")
+	h.waitForTexts([]string{"START a\ncontinuation line", "START b\nsecond continuation"})
+	events := h.col.snapshot()
+	if events[0].Source.LineNumber != 1 || events[0].Source.NextLineNumber != 3 ||
+		events[1].Source.LineNumber != 3 || events[1].Source.NextLineNumber != 5 {
+		t.Fatalf("multiline source coordinates = %+v, want lines [1,3) then [3,5)", events)
+	}
 }
 
 func repeatByte(b byte, n int) string {

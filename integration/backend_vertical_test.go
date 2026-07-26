@@ -44,8 +44,8 @@ const (
 	redactionCookieSentinel        = "vertical-cookie-must-not-survive"
 	redactionPrivateKeySentinel    = "vertical-private-key-must-not-survive"
 	verticalSentinelMessage        = "typed redaction sentinel"
-	verticalSearchSPL              = " \nindex=vertical | table _time message status duration_ms api_key _raw\t"
-	browserVerticalSearchSPL       = "index=vertical"
+	verticalSearchSPL              = " \nindex=vertical | dedup event_id | table _time message status duration_ms api_key _raw\t"
+	browserVerticalSearchSPL       = "index=vertical | dedup event_id"
 	bulkSearchSPL                  = "index=vertical-bulk | table event_id"
 	splCompatibilityVersionForTest = "tier-1-dev"
 	clickHouseEventInsertSQL       = "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
@@ -108,7 +108,7 @@ func TestBackendVertical(t *testing.T) {
 		"PATH",
 		filepath.Join(serverRuntimeDir, "no-external-runtime"),
 	)
-	serverProcess := startProcess(t, serverRuntimeDir, []string{
+	serverArguments := []string{
 		serverBinary,
 		"-http-address=" + httpAddress,
 		"-control-db=" + controlDBPath,
@@ -119,7 +119,9 @@ func TestBackendVertical(t *testing.T) {
 		"-collector-grpc-address=" + collectorAddress,
 		"-collector-grpc-insecure",
 		"-tenant-id=" + verticalTenantID,
-	}, serverEnvironment)
+	}
+	serverProcess := startProcess(t, serverRuntimeDir, serverArguments, serverEnvironment)
+	serverProcesses := []*managedProcess{serverProcess}
 	baseURL := "http://" + httpAddress
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	waitForHealth(t, ctx, httpClient, baseURL, serverProcess)
@@ -169,9 +171,11 @@ func TestBackendVertical(t *testing.T) {
 	collectorConfig := filepath.Join(work, "collector.yaml")
 	writePrivateFile(t, collectorConfig, []byte(collectorYAML(collectorAddress, tokenPath, collectorStateDir, logPath)))
 
-	collectorProcess := startProcess(t, repository, []string{
+	collectorArguments := []string{
 		collectorBinary, "run", "-config", collectorConfig,
-	}, os.Environ())
+	}
+	collectorProcess := startProcess(t, repository, collectorArguments, os.Environ())
+	collectorProcesses := []*managedProcess{collectorProcess}
 	waitForCollectorDiscovery(t, ctx, collectorStateDir, logPath, collectorProcess, plaintextToken)
 	appendPrimerFixture(t, logPath, fixtureStart)
 
@@ -189,11 +193,58 @@ func TestBackendVertical(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 	waitForStoredEventCount(t, ctx, storage, collectorProcess, plaintextToken, 1)
-	waitForDurableCollectorAcknowledgment(t, ctx, collectorStateDir, logPath, collectorProcess, plaintextToken)
-	appendRemainingFixture(t, logPath, fixtureStart)
-	waitForStoredEventCount(t, ctx, storage, collectorProcess, plaintextToken, verticalEventCount)
-	waitForDurableCollectorAcknowledgment(t, ctx, collectorStateDir, logPath, collectorProcess, plaintextToken)
-	visibilityCutoff := assertStoredEventBounds(t, ctx, storage, fixtureStart)
+	waitForCollectorCheckpoint(t, ctx, collectorStateDir, logPath, collectorProcess, plaintextToken)
+	primerOffset := uint64(mustFileSize(t, logPath))
+
+	// Crash after the first durable acknowledgment, then reuse the same
+	// checkpoint/WAL directory. The restarted collector must neither replay the
+	// acknowledged line nor skip bytes appended after the restart.
+	t.Log("crash-restarting collector after acknowledged primer")
+	if err := collectorProcess.Kill(10 * time.Second); err != nil {
+		t.Fatalf("crash collector after primer: %v", err)
+	}
+	assertCrashSafeAcknowledgedCollectorState(t, collectorStateDir, logPath, primerOffset)
+	collectorProcess = startProcess(t, repository, collectorArguments, os.Environ())
+	collectorProcesses = append(collectorProcesses, collectorProcess)
+
+	appendGeneratedFixture(t, logPath, fixtureStart)
+	waitForStoredEventCount(t, ctx, storage, collectorProcess, plaintextToken, verticalEventCount-1)
+	waitForCollectorCheckpoint(t, ctx, collectorStateDir, logPath, collectorProcess, plaintextToken)
+	waitForCollectorWALAcknowledgedThroughCurrent(
+		t,
+		ctx,
+		collectorStateDir,
+		collectorProcess,
+		plaintextToken,
+	)
+	preServerRestartOffset := uint64(mustFileSize(t, logPath))
+
+	// Crash the server only after three events are acknowledged. Append the
+	// final event while it is down, wait until that event is durable in the
+	// collector WAL, then crash the collector too. Restarting both processes
+	// must retain the three acknowledged rows and deliver the one unacknowledged
+	// batch exactly once through the stable batch/event IDs.
+	t.Log("crash-restarting server with one offline collector batch")
+	if err := serverProcess.Kill(10 * time.Second); err != nil {
+		t.Fatalf("crash server: %v", err)
+	}
+	walBefore := snapshotCollectorWAL(t, collectorStateDir)
+	appendSentinelFixture(t, logPath, fixtureStart)
+	waitForCollectorWALAppend(t, ctx, collectorStateDir, walBefore, collectorProcess, plaintextToken)
+	if err := collectorProcess.Kill(10 * time.Second); err != nil {
+		t.Fatalf("crash collector with pending batch: %v", err)
+	}
+	assertPendingCollectorState(t, collectorStateDir, logPath, preServerRestartOffset)
+
+	serverProcess = startProcess(t, serverRuntimeDir, serverArguments, serverEnvironment)
+	serverProcesses = append(serverProcesses, serverProcess)
+	waitForHealth(t, ctx, httpClient, baseURL, serverProcess)
+	assertStandaloneServerSurface(t, ctx, httpClient, baseURL)
+
+	collectorProcess = startProcess(t, repository, collectorArguments, os.Environ())
+	collectorProcesses = append(collectorProcesses, collectorProcess)
+	waitForDistinctStoredEventCount(t, ctx, storage, collectorProcess, plaintextToken, verticalEventCount)
+	waitForCollectorCheckpoint(t, ctx, collectorStateDir, logPath, collectorProcess, plaintextToken)
 
 	if err := collectorProcess.Interrupt(15 * time.Second); err != nil {
 		t.Fatalf("stop collector: %v\nlogs:\n%s", err, redactForFailure(
@@ -201,9 +252,13 @@ func TestBackendVertical(t *testing.T) {
 			redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
 		))
 	}
-	assertDurableCollectorState(t, collectorStateDir, uint64(mustFileSize(t, logPath)))
-	assertProcessLogsDoNotLeak(t, collectorProcess.Logs(), plaintextToken,
-		redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel)
+	assertDurableCollectorState(t, collectorStateDir, uint64(mustFileSize(t, logPath)), verticalEventCount)
+	visibilityCutoff := assertStoredEventBounds(t, ctx, storage, fixtureStart)
+	assertRestartDeliveryAccounting(t, ctx, storage)
+	for _, process := range collectorProcesses {
+		assertProcessLogsDoNotLeak(t, process.Logs(), plaintextToken,
+			redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel)
+	}
 	insertTimelineExclusiveBoundaryEvent(t, ctx, storage, fixtureStart.Add(5500*time.Millisecond), visibilityCutoff)
 
 	search := runSearch(t, ctx, httpClient, baseURL, fixtureStart)
@@ -231,7 +286,55 @@ func TestBackendVertical(t *testing.T) {
 	if err := serverProcess.Interrupt(20 * time.Second); err != nil {
 		t.Fatalf("stop server: %v\nlogs:\n%s", err, redactForFailure(serverProcess.Logs(), serverSecrets...))
 	}
-	assertProcessLogsDoNotLeak(t, serverProcess.Logs(), serverSecrets...)
+	for _, process := range serverProcesses {
+		assertProcessLogsDoNotLeak(t, process.Logs(), serverSecrets...)
+	}
+}
+
+func waitForDistinctStoredEventCount(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	process *managedProcess,
+	plaintextToken string,
+	wantCount uint64,
+) {
+	t.Helper()
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	var lastCount, lastDistinct uint64
+	for {
+		err := connection.QueryRow(ctx,
+			`SELECT count(), uniqExact(event_id)
+			 FROM open_splunk.events WHERE tenant_id = ? AND index_name = ?`,
+			verticalTenantID, verticalIndexName,
+		).Scan(&lastCount, &lastDistinct)
+		if err == nil && lastDistinct == wantCount &&
+			lastCount >= wantCount && lastCount <= wantCount+1 {
+			return
+		}
+		if err == nil && (lastDistinct > wantCount || lastCount > wantCount+1) {
+			t.Fatalf("stored restart events = %d distinct=%d, want %d distinct and at most one replay", lastCount, lastDistinct, wantCount)
+		}
+		if process.Exited() {
+			t.Fatalf("collector exited before restart ingestion completed: %v, count=%d distinct=%d\nlogs:\n%s",
+				process.Err(), lastCount, lastDistinct,
+				redactForFailure(process.Logs(), plaintextToken,
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for distinct stored events: %v, count=%d distinct=%d", ctx.Err(), lastCount, lastDistinct)
+		case <-deadline.C:
+			t.Fatalf("wait for distinct stored events: timed out, count=%d distinct=%d\ncollector logs:\n%s",
+				lastCount, lastDistinct,
+				redactForFailure(process.Logs(), plaintextToken,
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+		case <-ticker.C:
+		}
+	}
 }
 
 type completedSearch struct {
@@ -671,7 +774,7 @@ func appendPrimerFixture(t *testing.T, path string, start time.Time) {
 	syncAndCloseFixture(t, file)
 }
 
-func appendRemainingFixture(t *testing.T, path string, start time.Time) {
+func appendGeneratedFixture(t *testing.T, path string, start time.Time) {
 	t.Helper()
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
@@ -680,6 +783,15 @@ func appendRemainingFixture(t *testing.T, path string, start time.Time) {
 	config := verticalLogGeneratorConfig(start.Add(time.Second), 20260723)
 	if err := loggen.Generate(context.Background(), file, config, verticalEventCount-2); err != nil {
 		_ = file.Close()
+		t.Fatal(err)
+	}
+	syncAndCloseFixture(t, file)
+}
+
+func appendSentinelFixture(t *testing.T, path string, start time.Time) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
 		t.Fatal(err)
 	}
 	sentinelLine := fmt.Sprintf(
@@ -798,7 +910,7 @@ func waitForStoredEventCount(
 	}
 }
 
-func waitForDurableCollectorAcknowledgment(
+func waitForCollectorCheckpoint(
 	t *testing.T,
 	ctx context.Context,
 	stateDir, logPath string,
@@ -856,6 +968,248 @@ func waitForDurableCollectorAcknowledgment(
 	}
 }
 
+type collectorWALMeta struct {
+	NextBatchSequence      uint64 `json:"next_batch_sequence"`
+	LastAckedBatchSequence uint64 `json:"last_acked_batch_sequence"`
+}
+
+// waitForCollectorWALAcknowledgedThroughCurrent closes the narrow transaction
+// window after source-checkpoint persistence but before the local WAL
+// high-water advances. Once it returns, any subsequent segment growth after the
+// server stops can only be the deliberately appended offline sentinel batch.
+func waitForCollectorWALAcknowledgedThroughCurrent(
+	t *testing.T,
+	ctx context.Context,
+	stateDir string,
+	process *managedProcess,
+	plaintextToken string,
+) {
+	t.Helper()
+	deadline := time.NewTimer(15 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	var (
+		last    collectorWALMeta
+		lastErr error
+	)
+	for {
+		data, readErr := os.ReadFile(filepath.Join(stateDir, "wal", "meta.json"))
+		lastErr = readErr
+		if readErr == nil {
+			lastErr = json.Unmarshal(data, &last)
+			if lastErr == nil &&
+				last.LastAckedBatchSequence > 0 &&
+				last.LastAckedBatchSequence < ^uint64(0) &&
+				last.NextBatchSequence == last.LastAckedBatchSequence+1 {
+				return
+			}
+		}
+		if process.Exited() {
+			t.Fatalf(
+				"collector exited before WAL acknowledgment settled: %v meta=%+v error=%v\nlogs:\n%s",
+				process.Err(),
+				last,
+				lastErr,
+				redactForFailure(
+					process.Logs(),
+					plaintextToken,
+					redactionAPIKeySentinel,
+					redactionCookieSentinel,
+					redactionPrivateKeySentinel,
+				),
+			)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for collector WAL acknowledgment: %v meta=%+v error=%v", ctx.Err(), last, lastErr)
+		case <-deadline.C:
+			t.Fatalf(
+				"wait for collector WAL acknowledgment: timed out meta=%+v error=%v\nlogs:\n%s",
+				last,
+				lastErr,
+				redactForFailure(
+					process.Logs(),
+					plaintextToken,
+					redactionAPIKeySentinel,
+					redactionCookieSentinel,
+					redactionPrivateKeySentinel,
+				),
+			)
+		case <-ticker.C:
+		}
+	}
+}
+
+func snapshotCollectorWAL(t *testing.T, stateDir string) map[string]int64 {
+	t.Helper()
+	snapshot, err := readCollectorWALSnapshot(stateDir)
+	if err != nil {
+		t.Fatalf("snapshot collector WAL: %v", err)
+	}
+	return snapshot
+}
+
+func readCollectorWALSnapshot(stateDir string) (map[string]int64, error) {
+	entries, err := os.ReadDir(filepath.Join(stateDir, "wal"))
+	if err != nil {
+		return nil, err
+	}
+	snapshot := make(map[string]int64, len(entries))
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "segment-") || !strings.HasSuffix(entry.Name(), ".wal") {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			return nil, infoErr
+		}
+		if info.Mode().IsRegular() {
+			snapshot[entry.Name()] = info.Size()
+		}
+	}
+	return snapshot, nil
+}
+
+func collectorWALAdvanced(before, after map[string]int64) bool {
+	for name, size := range after {
+		previous, existed := before[name]
+		if (!existed && size > 0) || (existed && size > previous) {
+			return true
+		}
+	}
+	return false
+}
+
+func waitForCollectorWALAppend(
+	t *testing.T,
+	ctx context.Context,
+	stateDir string,
+	before map[string]int64,
+	process *managedProcess,
+	plaintextToken string,
+) {
+	t.Helper()
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	var (
+		last    map[string]int64
+		lastErr error
+	)
+	for {
+		last, lastErr = readCollectorWALSnapshot(stateDir)
+		if lastErr == nil && collectorWALAdvanced(before, last) {
+			if syncErr := syncCollectorWALGrowth(stateDir, before, last); syncErr == nil {
+				return
+			} else {
+				lastErr = syncErr
+			}
+		}
+		if process.Exited() {
+			t.Fatalf("collector exited before offline WAL append: %v snapshot=%v error=%v\nlogs:\n%s",
+				process.Err(), last, lastErr, redactForFailure(process.Logs(), plaintextToken,
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for offline collector WAL append: %v snapshot=%v error=%v", ctx.Err(), last, lastErr)
+		case <-deadline.C:
+			t.Fatalf("wait for offline collector WAL append: timed out snapshot=%v error=%v\nlogs:\n%s",
+				last, lastErr, redactForFailure(process.Logs(), plaintextToken,
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+		case <-ticker.C:
+		}
+	}
+}
+
+// syncCollectorWALGrowth establishes the test's hard-crash durability barrier.
+// Queue.Append writes one complete record before its SyncAlways fsync. Once the
+// size growth is visible, syncing that exact segment from a second descriptor
+// guarantees the observed record bytes are stable before the test sends SIGKILL
+// rather than merely racing the collector's own Sync call.
+func syncCollectorWALGrowth(
+	stateDir string,
+	before, after map[string]int64,
+) error {
+	walDir := filepath.Join(stateDir, "wal")
+	for name, size := range after {
+		previous, existed := before[name]
+		if (existed && size <= previous) || (!existed && size == 0) {
+			continue
+		}
+		file, err := os.OpenFile(filepath.Join(walDir, name), os.O_RDWR, 0)
+		if err != nil {
+			return fmt.Errorf("open advanced WAL segment %s: %w", name, err)
+		}
+		info, statErr := file.Stat()
+		if statErr == nil && info.Size() < size {
+			statErr = fmt.Errorf("WAL segment %s shrank from observed size %d to %d", name, size, info.Size())
+		}
+		syncErr := file.Sync()
+		closeErr := file.Close()
+		if err := errors.Join(statErr, syncErr, closeErr); err != nil {
+			return fmt.Errorf("sync advanced WAL segment %s: %w", name, err)
+		}
+	}
+	directory, err := os.Open(walDir)
+	if err != nil {
+		return fmt.Errorf("open WAL directory for sync: %w", err)
+	}
+	return errors.Join(directory.Sync(), directory.Close())
+}
+
+func assertCrashSafeAcknowledgedCollectorState(
+	t *testing.T,
+	stateDir, logPath string,
+	wantOffset uint64,
+) {
+	t.Helper()
+	assertCollectorCheckpoint(t, stateDir, wantOffset, 1)
+
+	queue, err := wal.Open(wal.Options{
+		Dir:  filepath.Join(stateDir, "wal"),
+		Sync: wal.SyncAlways,
+	})
+	if err != nil {
+		t.Fatalf("reopen crash-safe collector WAL: %v", err)
+	}
+	defer func() {
+		if closeErr := queue.Close(); closeErr != nil {
+			t.Errorf("close crash-safe collector WAL: %v", closeErr)
+		}
+	}()
+	stats := queue.Stats()
+	if stats.QueuedBatches == 0 && stats.QueuedEvents == 0 && stats.QueuedBytes == 0 &&
+		stats.LastAckedBatchSequence > 0 {
+		return
+	}
+	// A crash may land after the server acknowledgment advanced the durable
+	// source checkpoint but before the collector advances its own WAL high-water
+	// mark. Retaining that batch is the other valid state: the restart replays
+	// its stable event ID and reconciles it through the server's durable prefix.
+	if stats.QueuedBatches != 1 || stats.QueuedEvents != 1 || stats.QueuedBytes == 0 ||
+		stats.LastAckedBatchSequence != 0 {
+		t.Fatalf("crash-safe collector WAL state = %+v, want drained or one replayable acknowledged batch", stats)
+	}
+	nextContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	batch, err := queue.NextBatch(nextContext)
+	if err != nil {
+		t.Fatalf("read replayable acknowledged collector batch: %v", err)
+	}
+	if len(batch.GetEvents()) != 1 {
+		t.Fatalf("replayable acknowledged collector batch = %+v, want one event", batch)
+	}
+	origin := batch.GetEvents()[0].GetOrigin()
+	if origin.GetSourcePath() != logPath || origin.GetStartOffset() != 0 ||
+		origin.GetEndOffset() != wantOffset || origin.GetLineNumber() != 1 ||
+		origin.GetNextLineNumber() != 2 {
+		t.Fatalf("replayable acknowledged collector event origin = %+v", origin)
+	}
+}
+
 func waitForCollectorDiscovery(
 	t *testing.T,
 	ctx context.Context,
@@ -880,7 +1234,8 @@ func waitForCollectorDiscovery(
 			if len(list) == 1 {
 				checkpoint := list[0]
 				if checkpoint.Path != logPath || checkpoint.Offset != 0 ||
-					checkpoint.LineNumber != 0 || checkpoint.Identity.FingerprintLength != 0 {
+					checkpoint.LineNumber != 0 || checkpoint.NextLineNumber != 1 ||
+					checkpoint.Identity.FingerprintLength != 0 {
 					t.Fatalf("empty collector discovery checkpoint = %+v, want %s at offset zero", checkpoint, logPath)
 				}
 				return
@@ -911,15 +1266,9 @@ func readCollectorCheckpoints(stateDir string) ([]input.Checkpoint, error) {
 	return list, errors.Join(listErr, checkpoints.Close())
 }
 
-func assertDurableCollectorState(t *testing.T, stateDir string, wantOffset uint64) {
+func assertDurableCollectorState(t *testing.T, stateDir string, wantOffset, wantLine uint64) {
 	t.Helper()
-	list, err := readCollectorCheckpoints(stateDir)
-	if err != nil {
-		t.Fatalf("read durable collector checkpoints: %v", err)
-	}
-	if len(list) != 1 || list[0].Offset != wantOffset {
-		t.Fatalf("durable collector checkpoints = %+v, want one checkpoint at offset %d", list, wantOffset)
-	}
+	assertCollectorCheckpoint(t, stateDir, wantOffset, wantLine)
 
 	queue, err := wal.Open(wal.Options{
 		Dir:  filepath.Join(stateDir, "wal"),
@@ -935,6 +1284,79 @@ func assertDurableCollectorState(t *testing.T, stateDir string, wantOffset uint6
 	if stats.QueuedBatches != 0 || stats.QueuedEvents != 0 || stats.QueuedBytes != 0 ||
 		stats.LastAckedBatchSequence == 0 {
 		t.Fatalf("durable collector WAL state = %+v, want drained queue with a terminal acknowledgment", stats)
+	}
+}
+
+func assertCollectorCheckpoint(t *testing.T, stateDir string, wantOffset, wantLine uint64) {
+	t.Helper()
+	list, err := readCollectorCheckpoints(stateDir)
+	if err != nil {
+		t.Fatalf("read durable collector checkpoints: %v", err)
+	}
+	if len(list) != 1 || list[0].Offset != wantOffset ||
+		list[0].LineNumber != wantLine || list[0].NextLineNumber != wantLine+1 {
+		t.Fatalf(
+			"durable collector checkpoints = %+v, want one checkpoint at offset %d lines [%d,%d)",
+			list,
+			wantOffset,
+			wantLine,
+			wantLine+1,
+		)
+	}
+}
+
+func assertPendingCollectorState(t *testing.T, stateDir, logPath string, wantOffset uint64) {
+	t.Helper()
+	list, err := readCollectorCheckpoints(stateDir)
+	if err != nil {
+		t.Fatalf("read pending collector checkpoints: %v", err)
+	}
+	if len(list) != 1 || list[0].Offset != wantOffset ||
+		list[0].LineNumber != verticalEventCount-1 ||
+		list[0].NextLineNumber != verticalEventCount {
+		t.Fatalf(
+			"pending collector checkpoints = %+v, want one checkpoint at offset %d lines [%d,%d)",
+			list,
+			wantOffset,
+			verticalEventCount-1,
+			verticalEventCount,
+		)
+	}
+
+	queue, err := wal.Open(wal.Options{
+		Dir:  filepath.Join(stateDir, "wal"),
+		Sync: wal.SyncAlways,
+	})
+	if err != nil {
+		t.Fatalf("reopen pending collector WAL: %v", err)
+	}
+	defer func() {
+		if closeErr := queue.Close(); closeErr != nil {
+			t.Errorf("close pending collector WAL: %v", closeErr)
+		}
+	}()
+	stats := queue.Stats()
+	if stats.QueuedBatches != 1 || stats.QueuedEvents != 1 || stats.QueuedBytes == 0 ||
+		stats.LastAckedBatchSequence == 0 {
+		t.Fatalf("pending collector WAL state = %+v, want one queued event after an acknowledged prefix", stats)
+	}
+	nextContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	batch, err := queue.NextBatch(nextContext)
+	if err != nil {
+		t.Fatalf("read pending collector WAL batch: %v", err)
+	}
+	if batch.GetBatchSequence() <= stats.LastAckedBatchSequence || len(batch.GetEvents()) != 1 {
+		t.Fatalf("pending collector batch = %+v, acknowledged through %d", batch, stats.LastAckedBatchSequence)
+	}
+	event := batch.GetEvents()[0]
+	origin := event.GetOrigin()
+	if event.GetMessage() != verticalSentinelMessage || event.GetIndexName() != verticalIndexName ||
+		origin.GetSourcePath() != logPath || origin.GetStartOffset() != wantOffset ||
+		origin.GetEndOffset() != uint64(mustFileSize(t, logPath)) ||
+		origin.GetLineNumber() != verticalEventCount ||
+		origin.GetNextLineNumber() != verticalEventCount+1 {
+		t.Fatalf("pending collector event = %+v", event)
 	}
 }
 
@@ -979,6 +1401,37 @@ func assertStoredEventBounds(t *testing.T, ctx context.Context, connection click
 		earliestIndexTime.Format(time.RFC3339Nano), latestIndexTime.Format(time.RFC3339Nano),
 		minimumVisibility, maximumVisibility)
 	return maximumVisibility
+}
+
+func assertRestartDeliveryAccounting(t *testing.T, ctx context.Context, connection clickhousedriver.Conn) {
+	t.Helper()
+	var total, distinct, sentinelRows, sentinelEventIDs, sentinelBatchIDs uint64
+	if err := connection.QueryRow(ctx, `
+		SELECT count(), uniqExact(event_id), countIf(body = ?),
+		       uniqExactIf(event_id, body = ?), uniqExactIf(batch_id, body = ?)
+		FROM open_splunk.events
+		WHERE tenant_id = ? AND index_name = ?`,
+		verticalSentinelMessage,
+		verticalSentinelMessage,
+		verticalSentinelMessage,
+		verticalTenantID,
+		verticalIndexName,
+	).Scan(&total, &distinct, &sentinelRows, &sentinelEventIDs, &sentinelBatchIDs); err != nil {
+		t.Fatalf("read restart delivery accounting: %v", err)
+	}
+	if distinct != verticalEventCount || total < distinct || total > distinct+1 ||
+		sentinelRows != total-distinct+1 || sentinelEventIDs != 1 ||
+		sentinelBatchIDs != sentinelRows {
+		t.Fatalf(
+			"restart delivery accounting = total:%d distinct:%d sentinel_rows:%d sentinel_event_ids:%d sentinel_batch_ids:%d",
+			total,
+			distinct,
+			sentinelRows,
+			sentinelEventIDs,
+			sentinelBatchIDs,
+		)
+	}
+	t.Logf("restart delivery accounting: stored=%d distinct_event_ids=%d replayed=%d", total, distinct, total-distinct)
 }
 
 func insertTimelineExclusiveBoundaryEvent(

@@ -34,6 +34,31 @@ func TestEnvironmentWithValueReplacesEveryExistingValue(t *testing.T) {
 	}
 }
 
+func TestCollectorWALAdvancedRequiresNewOrGrowingDurableFile(t *testing.T) {
+	t.Parallel()
+
+	before := map[string]int64{"segment-1.wal": 128}
+	for _, test := range []struct {
+		name  string
+		after map[string]int64
+		want  bool
+	}{
+		{name: "unchanged", after: map[string]int64{"segment-1.wal": 128}},
+		{name: "only shrank", after: map[string]int64{"segment-1.wal": 100}},
+		{name: "grew", after: map[string]int64{"segment-1.wal": 129}, want: true},
+		{name: "new empty", after: map[string]int64{"segment-2.wal": 0}},
+		{name: "new durable file", after: map[string]int64{"segment-2.wal": 1}, want: true},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := collectorWALAdvanced(before, test.after); got != test.want {
+				t.Fatalf("collectorWALAdvanced() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	directory, err := os.Getwd()

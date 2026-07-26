@@ -37,6 +37,22 @@ func commitTerminalCheckpoints(store input.CheckpointStore, sourceMarks []wal.So
 		}
 		key := mark.identity.TrackingKey()
 		current, ok := marks[key]
+		if ok &&
+			mark.identity.Generation == current.identity.Generation &&
+			mark.nextLineNumber != 0 &&
+			current.nextLineNumber != 0 &&
+			((mark.offset == current.offset &&
+				mark.nextLineNumber != current.nextLineNumber) ||
+				(mark.offset > current.offset &&
+					mark.nextLineNumber <= current.nextLineNumber) ||
+				(mark.offset < current.offset &&
+					mark.nextLineNumber >= current.nextLineNumber)) {
+			return fmt.Errorf(
+				"collector: reconstruct checkpoint from batch %d event %d: line cursor does not advance with source offset",
+				sourceMark.BatchSequence,
+				sourceMark.EventIndex,
+			)
+		}
 		if !ok ||
 			mark.identity.Generation > current.identity.Generation ||
 			(mark.identity.Generation == current.identity.Generation && mark.offset >= current.offset) {
@@ -49,6 +65,7 @@ func commitTerminalCheckpoints(store input.CheckpointStore, sourceMarks []wal.So
 		ordered = append(ordered, input.Checkpoint{
 			Identity: mark.identity, Path: mark.path,
 			Offset: mark.offset, LineNumber: mark.lineNumber,
+			NextLineNumber: mark.nextLineNumber,
 		})
 	}
 	sort.Slice(ordered, func(i, j int) bool {
@@ -82,6 +99,12 @@ func checkpointMarkFromSource(
 	}
 	if !source.HasEndOffset {
 		return checkpointMark{}, false, errors.New("file origin is missing end_offset")
+	}
+	if source.HasNextLineNumber &&
+		(source.LineNumber == 0 || source.NextLineNumber == 0 ||
+			source.NextLineNumber == ^uint64(0) ||
+			source.NextLineNumber <= source.LineNumber) {
+		return checkpointMark{}, false, errors.New("file origin has invalid next_line_number")
 	}
 
 	key := identity.TrackingKey()
@@ -130,5 +153,6 @@ func checkpointMarkFromSource(
 	return checkpointMark{
 		identity: identity, path: path,
 		offset: source.EndOffset, lineNumber: source.LineNumber,
+		nextLineNumber: source.NextLineNumber,
 	}, false, nil
 }

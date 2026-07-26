@@ -631,8 +631,19 @@ func aggregateAckPlan(plan ackPlan) AckPreview {
 					Marks:                []SourceCheckpointMark{mark},
 				}
 			}
+			if ok && sourceLineCursorsConflict(current, mark) {
+				mark.ConflictingMetadata = true
+				return AckPreview{
+					ThroughBatchSequence: plan.throughBatchSequence,
+					BatchCount:           plan.batchCount,
+					Marks:                []SourceCheckpointMark{mark},
+				}
+			}
 			if !ok || mark.EndOffset > current.EndOffset ||
-				(mark.EndOffset == current.EndOffset && mark.BatchSequence >= current.BatchSequence) {
+				(mark.EndOffset == current.EndOffset &&
+					(mark.HasNextLineNumber && !current.HasNextLineNumber ||
+						mark.HasNextLineNumber == current.HasNextLineNumber &&
+							mark.BatchSequence >= current.BatchSequence)) {
 				byIdentity[mark.FileIdentity] = mark
 			}
 		}
@@ -670,9 +681,11 @@ func checkpointMarksForBatch(batchSequence uint64, events []*opensplunkv1.LogEve
 			SourcePath:           origin.GetSourcePath(),
 			EndOffset:            origin.GetEndOffset(),
 			LineNumber:           origin.GetLineNumber(),
+			NextLineNumber:       origin.GetNextLineNumber(),
 			FingerprintLength:    origin.GetFileFingerprintLength(),
 			HasSourcePath:        origin.SourcePath != nil,
 			HasEndOffset:         origin.EndOffset != nil,
+			HasNextLineNumber:    origin.NextLineNumber != nil,
 			HasFingerprintLength: origin.FileFingerprintLength != nil,
 		}
 		if mark.FileIdentity == "" || !mark.HasEndOffset {
@@ -692,7 +705,14 @@ func checkpointMarksForBatch(batchSequence uint64, events []*opensplunkv1.LogEve
 			byIdentity[mark.FileIdentity] = mark
 			continue
 		}
-		if !ok || mark.EndOffset >= current.EndOffset {
+		if ok && sourceLineCursorsConflict(current, mark) {
+			mark.ConflictingMetadata = true
+			byIdentity[mark.FileIdentity] = mark
+			continue
+		}
+		if !ok || mark.EndOffset > current.EndOffset ||
+			(mark.EndOffset == current.EndOffset &&
+				(mark.HasNextLineNumber || !current.HasNextLineNumber)) {
 			byIdentity[mark.FileIdentity] = mark
 		}
 	}
@@ -710,6 +730,23 @@ func checkpointMarksForBatch(batchSequence uint64, events []*opensplunkv1.LogEve
 		return marks[i].FileIdentity < marks[j].FileIdentity
 	})
 	return marks
+}
+
+// sourceLineCursorsConflict reports metadata that cannot describe one
+// forward-only source generation. Equal byte positions require equal cursors;
+// a greater byte position requires a strictly greater next-line cursor.
+func sourceLineCursorsConflict(left, right SourceCheckpointMark) bool {
+	if !left.HasNextLineNumber || !right.HasNextLineNumber {
+		return false
+	}
+	switch {
+	case left.EndOffset == right.EndOffset:
+		return left.NextLineNumber != right.NextLineNumber
+	case left.EndOffset < right.EndOffset:
+		return left.NextLineNumber >= right.NextLineNumber
+	default:
+		return left.NextLineNumber <= right.NextLineNumber
+	}
 }
 
 func (q *queue) hasSequenceLocked(sequence uint64) bool {

@@ -64,15 +64,21 @@ func (id FileIdentity) IsZero() bool {
 	return id.Device == 0 && id.Inode == 0 && id.Generation == 0 && id.Fingerprint == ""
 }
 
-// SourceRef locates one framed event within a file. It is the input-owned
-// analogue of the decoder's SourcePosition; the daemon maps between them so the
-// input package need not import the root collector package.
+// SourceRef locates one framed event within a file. Line numbers are physical
+// lines relative to the collector's initial read position for that file
+// generation; start_at=end therefore begins at line 1 without reading skipped
+// historical bytes. When a legacy checkpoint lacks the ending physical line,
+// LineNumber and NextLineNumber remain zero (unknown) rather than publishing an
+// approximate coordinate. SourceRef is the input-owned analogue of the
+// decoder's SourcePosition; the daemon maps between them so the input package
+// need not import the root collector package.
 type SourceRef struct {
-	Path        string
-	Identity    FileIdentity
-	StartOffset uint64
-	EndOffset   uint64
-	LineNumber  uint64
+	Path           string
+	Identity       FileIdentity
+	StartOffset    uint64
+	EndOffset      uint64
+	LineNumber     uint64
+	NextLineNumber uint64
 }
 
 // RawEvent is one framed, undecoded event emitted by the tailer. Bytes is owned
@@ -84,11 +90,12 @@ type RawEvent struct {
 
 // Checkpoint is the persisted read position for one file identity.
 type Checkpoint struct {
-	Identity   FileIdentity
-	Path       string
-	Offset     uint64
-	LineNumber uint64
-	UpdatedAt  time.Time
+	Identity       FileIdentity
+	Path           string
+	Offset         uint64
+	LineNumber     uint64
+	NextLineNumber uint64
+	UpdatedAt      time.Time
 }
 
 // CheckpointStore persists per-file read offsets durably. Set and SetMany must

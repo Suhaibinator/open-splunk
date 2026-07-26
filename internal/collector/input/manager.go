@@ -1,6 +1,7 @@
 package input
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -17,15 +18,6 @@ import (
 
 // defaultPollInterval is used when Config.PollInterval is unset.
 const defaultPollInterval = 250 * time.Millisecond
-
-// flushableFramer is the tailer's view of the framing.Framer capability the
-// orchestrator added for multiline inactivity flushing: force-emit the buffered
-// partial record as a complete frame. It is consumed via a capability
-// assertion so this package builds regardless of when the framing package adds
-// Flush to its interface.
-type flushableFramer interface {
-	Flush() (framing.Frame, bool)
-}
 
 // manager is the concrete Manager for one file input. It is poll-driven: every
 // PollInterval it re-globs, starts a per-file tailer goroutine for newly seen
@@ -57,7 +49,9 @@ type manager struct {
 }
 
 // NewManager constructs a file input Manager. checkpoints supplies resume
-// offsets at discovery time; the Manager reads but never advances them.
+// offsets at discovery time; the Manager never advances their durable byte
+// positions, though it may enrich a legacy checkpoint with a stable
+// compatibility cursor in one batched discovery write.
 func NewManager(cfg Config, checkpoints CheckpointStore) (Manager, error) {
 	if len(cfg.Include) == 0 {
 		return nil, errors.New("collector/input: at least one include glob is required")
@@ -148,6 +142,7 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 	m.discovered.Store(uint64(len(paths)))
 
 	seen := make(map[string]struct{}, len(paths))
+	var legacyUpgrades []Checkpoint
 	var openErr string
 
 	for _, p := range paths {
@@ -199,14 +194,28 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 			continue
 		}
 
-		id, start, err := m.resolveStart(id, p, uint64(fi2.Size()), initial, f)
+		start, err := m.resolveStart(
+			id, p, uint64(fi2.Size()), initial, f,
+		)
 		if err != nil {
 			_ = f.Close()
 			openErr = fmt.Sprintf("checkpoint %s: %v", p, err)
 			m.lastErrorNs.Store(time.Now().UnixNano())
 			continue
 		}
-		t, err := m.startTailer(ctx, key, p, f, id, start)
+		if start.legacyUpgrade != nil {
+			legacyUpgrades = append(legacyUpgrades, *start.legacyUpgrade)
+		}
+		t, err := m.startTailer(
+			ctx,
+			key,
+			p,
+			f,
+			start.identity,
+			start.offset,
+			start.nextLine,
+			start.lineCursorKnown,
+		)
 		if err != nil {
 			_ = f.Close()
 			openErr = fmt.Sprintf("frame %s: %v", p, err)
@@ -215,6 +224,16 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 		}
 		m.tailers[key] = t
 		seen[key] = struct{}{}
+	}
+
+	// A legacy checkpoint is already a durable, safe resume point. Persist its
+	// reconstructed cursor once per discovery pass rather than rewriting and
+	// fsyncing the complete checkpoint document once per source. Tailers may
+	// advance concurrently; SetMany's monotonic merge makes those older
+	// enrichments harmless if terminal delivery wins the race.
+	if err := m.checkpoints.SetMany(legacyUpgrades); err != nil {
+		openErr = fmt.Sprintf("upgrade legacy checkpoints: %v", err)
+		m.lastErrorNs.Store(time.Now().UnixNano())
 	}
 
 	// Reap finished tailers; ask tailers whose file left the set to drain.
@@ -231,40 +250,110 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 	m.updateState(len(paths), openErr)
 }
 
+type resolvedStart struct {
+	identity        FileIdentity
+	offset          uint64
+	nextLine        uint64
+	lineCursorKnown bool
+	legacyUpgrade   *Checkpoint
+}
+
 // resolveStart chooses both the durable generation identity and initial offset.
 // A discovery checkpoint is written before any bytes are emitted. This small
 // write is what makes a crash after WAL append but before the first terminal
 // delivery checkpoint reproduce the same event IDs on restart.
-func (m *manager) resolveStart(id FileIdentity, path string, size uint64, initial bool, f *os.File) (FileIdentity, uint64, error) {
+func (m *manager) resolveStart(
+	id FileIdentity,
+	path string,
+	size uint64,
+	initial bool,
+	f *os.File,
+) (resolvedStart, error) {
 	cp, ok, err := m.checkpoints.Get(id)
 	if err != nil {
-		return FileIdentity{}, 0, err
+		return resolvedStart{}, err
 	}
 	if ok {
 		sameGeneration := cp.Offset <= size && persistedPrefixMatches(f, cp.Identity)
 		if sameGeneration {
-			return cp.Identity, cp.Offset, nil
+			nextLine, lineCursorKnown, lineErr := checkpointNextLine(cp, m.cfg.Multiline)
+			if lineErr != nil {
+				return resolvedStart{}, lineErr
+			}
+			var legacyUpgrade *Checkpoint
+			if cp.NextLineNumber == 0 && lineCursorKnown {
+				cp.NextLineNumber = nextLine
+				legacyUpgrade = &cp
+			}
+			return resolvedStart{
+				identity:        cp.Identity,
+				offset:          cp.Offset,
+				nextLine:        nextLine,
+				lineCursorKnown: lineCursorKnown,
+				legacyUpgrade:   legacyUpgrade,
+			}, nil
 		}
 		// The same inode was truncated/reused. Burn a new generation before
 		// offsets restart so identical bytes at identical offsets remain distinct.
 		id.Generation = cp.Identity.Generation + 1
 		if id.Generation == 0 { // uint overflow is practically impossible, fail safe
-			return FileIdentity{}, 0, errors.New("file generation exhausted")
+			return resolvedStart{}, errors.New("file generation exhausted")
 		}
-		if err := m.checkpoints.Set(Checkpoint{Identity: id, Path: path, Offset: 0}); err != nil {
-			return FileIdentity{}, 0, err
+		if err := m.checkpoints.Set(Checkpoint{
+			Identity: id, Path: path, Offset: 0, NextLineNumber: 1,
+		}); err != nil {
+			return resolvedStart{}, err
 		}
-		return id, 0, nil
+		return resolvedStart{
+			identity: id, nextLine: 1, lineCursorKnown: true,
+		}, nil
 	}
 
 	start := uint64(0)
 	if initial && m.cfg.StartAt == StartAtEnd {
 		start = size
 	}
-	if err := m.checkpoints.Set(Checkpoint{Identity: id, Path: path, Offset: start}); err != nil {
-		return FileIdentity{}, 0, err
+	nextLine := uint64(1)
+	if err := m.checkpoints.Set(Checkpoint{
+		Identity: id, Path: path, Offset: start, NextLineNumber: nextLine,
+	}); err != nil {
+		return resolvedStart{}, err
 	}
-	return id, start, nil
+	return resolvedStart{
+		identity: id, offset: start, nextLine: nextLine, lineCursorKnown: true,
+	}, nil
+}
+
+func checkpointNextLine(
+	checkpoint Checkpoint,
+	multiline bool,
+) (nextLine uint64, known bool, err error) {
+	if checkpoint.NextLineNumber != 0 {
+		if checkpoint.NextLineNumber == ^uint64(0) ||
+			(checkpoint.LineNumber != 0 && checkpoint.NextLineNumber <= checkpoint.LineNumber) {
+			return 0, false, errors.New("checkpoint has invalid next line number")
+		}
+		return checkpoint.NextLineNumber, true, nil
+	}
+	// The old checkpoint format retained only the first physical line of the
+	// last acknowledged logical event. Advancing that value is exact for line
+	// framing. A legacy multiline event may have consumed continuation lines
+	// that cannot be recovered without an unbounded source-prefix scan, so its
+	// internal framer restarts from one while published line metadata remains
+	// absent. Byte offsets and event IDs remain exact.
+	if checkpoint.LineNumber == 0 {
+		// Offset zero is the exact beginning of a monitored stream. A nonzero
+		// legacy discovery offset (notably start_at=end) has no physical-line
+		// anchor and must remain unknown.
+		return 1, checkpoint.Offset == 0, nil
+	}
+	if multiline {
+		return 1, false, nil
+	}
+	if checkpoint.LineNumber >= ^uint64(0)-1 {
+		return 0, false, errors.New("checkpoint line number exhausted")
+	}
+	return checkpoint.LineNumber + 1, true, nil
 }
 
 // persistedPrefixMatches compares exactly the bytes covered by the persisted
@@ -351,14 +440,23 @@ func (m *manager) excluded(path string) bool {
 // tailer owns f from here on and reframes it from its current offset on every
 // poll (the framing package caches EOF, so a fresh framer per cycle is what lets
 // appended bytes be seen).
-func (m *manager) startTailer(ctx context.Context, key, path string, f *os.File, id FileIdentity, start uint64) (*tailer, error) {
+func (m *manager) startTailer(
+	ctx context.Context,
+	key, path string,
+	f *os.File,
+	id FileIdentity,
+	start, nextLine uint64,
+	lineCursorKnown bool,
+) (*tailer, error) {
 	t := &tailer{
-		m:              m,
-		key:            key,
-		f:              f,
-		id:             id,
-		offset:         start,
-		lastSizeChange: time.Now(),
+		m:               m,
+		key:             key,
+		f:               f,
+		id:              id,
+		offset:          start,
+		nextLineNumber:  nextLine,
+		lineCursorKnown: lineCursorKnown,
+		lastSizeChange:  time.Now(),
 	}
 	if err := t.refreshGuard(); err != nil {
 		return nil, err
@@ -370,11 +468,13 @@ func (m *manager) startTailer(ctx context.Context, key, path string, f *os.File,
 }
 
 // newFramer selects and constructs the framer for a file at the given offset.
-func (m *manager) newFramer(f *os.File, start uint64) (framing.Framer, error) {
+func (m *manager) newFramer(f *os.File, start, nextLine uint64) (framing.Framer, error) {
+	options := m.cfg.Framing
+	options.StartLineNumber = nextLine
 	if m.cfg.Multiline {
-		return framing.NewMultilineFramer(f, start, m.cfg.Framing)
+		return framing.NewMultilineFramer(f, start, options)
 	}
-	return framing.NewLineFramer(f, start, m.cfg.Framing)
+	return framing.NewLineFramer(f, start, options)
 }
 
 // timeFromNanos converts a stored UnixNano (0 = never) to a time.Time.
@@ -421,6 +521,17 @@ type tailer struct {
 	// Owned by the tailer goroutine (read only after it finishes): need no lock.
 	id     FileIdentity
 	offset uint64
+	// nextLineNumber is the 1-based physical line beginning at offset. The
+	// tailer carries it across one-shot framers built for successive polls.
+	nextLineNumber uint64
+	// lineCursorKnown controls whether the internal counter is safe to publish.
+	// Legacy multiline checkpoints lack the ending physical line; zero-valued
+	// origin fields honestly retain that unknown state until a new generation.
+	lineCursorKnown bool
+	// discardingOversize means offset is inside one oversized physical line.
+	// Bytes are skipped incrementally until its delimiter arrives; framing must
+	// not resume early and publish the suffix as a separate event.
+	discardingOversize bool
 
 	// Growth tracking for multiline inactivity flushing.
 	lastSize       uint64
@@ -469,6 +580,30 @@ func (t *tailer) run(ctx context.Context) {
 				return
 			case <-time.After(t.m.poll):
 				continue
+			}
+		}
+
+		if t.discardingOversize {
+			complete, err := t.discardOversizedRemainder(ctx)
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			if err != nil {
+				t.m.setReadError(t.pathStr(), err)
+			}
+			if !complete {
+				if refreshErr := t.refreshGuard(); refreshErr != nil {
+					t.m.setReadError(t.pathStr(), refreshErr)
+				}
+				if t.drainReq.Load() {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(t.m.poll):
+					continue
+				}
 			}
 		}
 
@@ -534,12 +669,17 @@ func (t *tailer) trackGrowthAndTruncate() bool {
 			t.m.setReadError(t.pathStr(), errors.New("file generation exhausted"))
 			return false
 		}
-		if err := t.m.checkpoints.Set(Checkpoint{Identity: next, Path: t.pathStr(), Offset: 0}); err != nil {
+		if err := t.m.checkpoints.Set(Checkpoint{
+			Identity: next, Path: t.pathStr(), Offset: 0, NextLineNumber: 1,
+		}); err != nil {
 			t.m.setReadError(t.pathStr(), err)
 			return false
 		}
 		t.id = next
 		t.offset = 0
+		t.nextLineNumber = 1
+		t.lineCursorKnown = true
+		t.discardingOversize = false
 		t.guardOffset = 0
 		t.guardLength = 0
 		t.guardFingerprint = ""
@@ -549,7 +689,9 @@ func (t *tailer) trackGrowthAndTruncate() bool {
 		next, ierr := identityFor(t.f, fi, t.m.fpBytes)
 		if ierr == nil {
 			next.Generation = t.id.Generation
-			if err := t.m.checkpoints.Set(Checkpoint{Identity: next, Path: t.pathStr(), Offset: 0}); err == nil {
+			if err := t.m.checkpoints.Set(Checkpoint{
+				Identity: next, Path: t.pathStr(), Offset: 0, NextLineNumber: 1,
+			}); err == nil {
 				t.id = next
 			}
 		}
@@ -588,7 +730,46 @@ func (t *tailer) reframe() (framing.Framer, error) {
 	if _, err := t.f.Seek(int64(t.offset), io.SeekStart); err != nil {
 		return nil, err
 	}
-	return t.m.newFramer(t.f, t.offset)
+	return t.m.newFramer(t.f, t.offset, t.nextLineNumber)
+}
+
+// discardOversizedRemainder advances through bytes belonging to an oversized
+// physical line without buffering them. It returns complete only after the
+// delimiter is consumed, at which point framing may safely resume. This state
+// is in-memory only: after a crash the older durable checkpoint replays from a
+// true event boundary and reconstructs the same skip.
+func (t *tailer) discardOversizedRemainder(ctx context.Context) (bool, error) {
+	if _, err := t.f.Seek(int64(t.offset), io.SeekStart); err != nil {
+		return false, err
+	}
+	var buffer [32 << 10]byte
+	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		n, err := t.f.Read(buffer[:])
+		if n > 0 {
+			if delimiter := bytes.IndexByte(buffer[:n], '\n'); delimiter >= 0 {
+				if t.nextLineNumber >= ^uint64(0)-1 {
+					return false, framing.ErrLineNumberOverflow
+				}
+				t.offset += uint64(delimiter + 1)
+				t.nextLineNumber++
+				t.discardingOversize = false
+				return true, nil
+			}
+			t.offset += uint64(n)
+		}
+		if errors.Is(err, io.EOF) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if n == 0 {
+			return false, io.ErrNoProgress
+		}
+	}
 }
 
 // drain reads every complete frame currently available from fr and emits each.
@@ -602,9 +783,18 @@ func (t *tailer) drain(ctx context.Context, fr framing.Framer) (pendingLen int, 
 			if !t.emit(ctx, frame) {
 				return 0, false
 			}
+		case errors.Is(err, framing.ErrEventTooLargeIncomplete):
+			// The current EOF is not a record boundary. Retain an explicit
+			// discard state so later suffix bytes cannot become a new event.
+			t.offset = frame.EndOffset
+			t.nextLineNumber = frame.NextLineNumber
+			t.discardingOversize = true
+			t.m.lastErrorNs.Store(time.Now().UnixNano())
+			return 0, true
 		case errors.Is(err, framing.ErrEventTooLarge):
 			// Oversized event: skip it but advance past it so we do not stall.
 			t.offset = frame.EndOffset
+			t.nextLineNumber = frame.NextLineNumber
 			t.m.lastErrorNs.Store(time.Now().UnixNano())
 		case errors.Is(err, framing.ErrPartialFrame):
 			_, length := fr.Pending()
@@ -627,14 +817,10 @@ func (t *tailer) shouldFlushInactive(pendingLen int) bool {
 	return time.Since(t.lastSizeChange) >= t.m.cfg.FlushAfter
 }
 
-// emitFlush force-emits fr's buffered partial record via the Flush capability.
+// emitFlush force-emits fr's buffered partial record.
 // It returns whether a frame was emitted and whether ctx is still live.
 func (t *tailer) emitFlush(ctx context.Context, fr framing.Framer) (emitted, ctxOK bool) {
-	ff, ok := fr.(flushableFramer)
-	if !ok {
-		return false, true
-	}
-	frame, has := ff.Flush()
+	frame, has := fr.Flush()
 	if !has {
 		return false, true
 	}
@@ -650,14 +836,19 @@ func (t *tailer) emitFlush(ctx context.Context, fr framing.Framer) (emitted, ctx
 func (t *tailer) emit(ctx context.Context, fr framing.Frame) bool {
 	b := make([]byte, len(fr.Bytes))
 	copy(b, fr.Bytes)
+	lineNumber, nextLineNumber := fr.LineNumber, fr.NextLineNumber
+	if !t.lineCursorKnown {
+		lineNumber, nextLineNumber = 0, 0
+	}
 	ev := RawEvent{
 		Bytes: b,
 		Source: SourceRef{
-			Path:        t.pathStr(),
-			Identity:    t.id,
-			StartOffset: fr.StartOffset,
-			EndOffset:   fr.EndOffset,
-			LineNumber:  fr.LineNumber,
+			Path:           t.pathStr(),
+			Identity:       t.id,
+			StartOffset:    fr.StartOffset,
+			EndOffset:      fr.EndOffset,
+			LineNumber:     lineNumber,
+			NextLineNumber: nextLineNumber,
 		},
 	}
 	select {
@@ -666,6 +857,7 @@ func (t *tailer) emit(ctx context.Context, fr framing.Frame) bool {
 		return false
 	}
 	t.offset = fr.EndOffset
+	t.nextLineNumber = fr.NextLineNumber
 	t.m.eventsRead.Add(1)
 	t.m.bytesRead.Add(uint64(len(b)))
 	t.m.lastEventNs.Store(time.Now().UnixNano())

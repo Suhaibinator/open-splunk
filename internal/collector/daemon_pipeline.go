@@ -18,21 +18,23 @@ import (
 // coupled checkpointing; the explicit fields remain for the local terminal
 // path when one oversized event cannot enter the WAL.
 type processedEvent struct {
-	event      *opensplunkv1.LogEvent
-	identity   input.FileIdentity
-	path       string
-	endOffset  uint64
-	lineNumber uint64
-	size       int
+	event          *opensplunkv1.LogEvent
+	identity       input.FileIdentity
+	path           string
+	endOffset      uint64
+	lineNumber     uint64
+	nextLineNumber uint64
+	size           int
 }
 
 // checkpointMark is the highest source position seen for one file identity
 // within a pending batch that may need local oversized-event disposition.
 type checkpointMark struct {
-	identity   input.FileIdentity
-	path       string
-	offset     uint64
-	lineNumber uint64
+	identity       input.FileIdentity
+	path           string
+	offset         uint64
+	lineNumber     uint64
+	nextLineNumber uint64
 }
 
 // pendingBatch accumulates processed events and compact source marks. Ordinary
@@ -57,7 +59,10 @@ func (b *pendingBatch) add(pe processedEvent) {
 	}
 	key := pe.identity.TrackingKey()
 	if m, ok := b.marks[key]; !ok || m.identity.String() != pe.identity.String() || pe.endOffset > m.offset {
-		b.marks[key] = checkpointMark{identity: pe.identity, path: pe.path, offset: pe.endOffset, lineNumber: pe.lineNumber}
+		b.marks[key] = checkpointMark{
+			identity: pe.identity, path: pe.path, offset: pe.endOffset,
+			lineNumber: pe.lineNumber, nextLineNumber: pe.nextLineNumber,
+		}
 	}
 }
 
@@ -97,6 +102,7 @@ func (d *Daemon) readInput(ctx context.Context, ir *inputRuntime, processed chan
 			StartOffset:           raw.Source.StartOffset,
 			EndOffset:             raw.Source.EndOffset,
 			LineNumber:            raw.Source.LineNumber,
+			NextLineNumber:        raw.Source.NextLineNumber,
 		}
 		event, err := ir.decoder.Decode(raw.Bytes, pos, d.now())
 		if err != nil {
@@ -114,12 +120,13 @@ func (d *Daemon) readInput(ctx context.Context, ir *inputRuntime, processed chan
 			continue // dropped by an allow/deny processor
 		}
 		pe := processedEvent{
-			event:      out,
-			identity:   raw.Source.Identity,
-			path:       raw.Source.Path,
-			endOffset:  raw.Source.EndOffset,
-			lineNumber: raw.Source.LineNumber,
-			size:       proto.Size(out),
+			event:          out,
+			identity:       raw.Source.Identity,
+			path:           raw.Source.Path,
+			endOffset:      raw.Source.EndOffset,
+			lineNumber:     raw.Source.LineNumber,
+			nextLineNumber: raw.Source.NextLineNumber,
+			size:           proto.Size(out),
 		}
 		select {
 		case processed <- pe:
@@ -321,10 +328,11 @@ func (d *Daemon) advanceCheckpoints(b *pendingBatch) error {
 			continue
 		}
 		cp := input.Checkpoint{
-			Identity:   m.identity,
-			Path:       m.path,
-			Offset:     m.offset,
-			LineNumber: m.lineNumber,
+			Identity:       m.identity,
+			Path:           m.path,
+			Offset:         m.offset,
+			LineNumber:     m.lineNumber,
+			NextLineNumber: m.nextLineNumber,
 		}
 		if err := d.checkpoints.Set(cp); err != nil {
 			return fmt.Errorf(

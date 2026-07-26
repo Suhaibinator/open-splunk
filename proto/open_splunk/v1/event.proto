@@ -37,11 +37,18 @@ message EventOrigin {
   optional string file_identity = 2;
   optional uint64 start_offset = 3;
   optional uint64 end_offset = 4;
+  // line_number is omitted when a legacy checkpoint lacks an exact physical
+  // line anchor.
   optional uint64 line_number = 5;
   // source_path and file_fingerprint_length let a collector reconstruct the
   // exact input checkpoint from a durable WAL batch after process restart.
   optional string source_path = 6;
   optional uint32 file_fingerprint_length = 7;
+  // next_line_number is the 1-based physical line within the monitored stream
+  // beginning at end_offset. Collectors persist it with terminal checkpoints
+  // so polling and process restarts do not need to rescan the source prefix; it
+  // is omitted together with line_number when that exact cursor is unknown.
+  optional uint64 next_line_number = 8;
 }
 
 // LogEvent is the canonical collector-to-server event envelope. event_id must

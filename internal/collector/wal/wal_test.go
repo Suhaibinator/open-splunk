@@ -642,6 +642,7 @@ func TestPrepareAckCachesAndCoalescesSourceMarksAcrossRecovery(t *testing.T) {
 		event.Origin = &opensplunkv1.EventOrigin{
 			FileIdentity: proto.String(identity), SourcePath: proto.String("/logs/app.log"),
 			EndOffset: proto.Uint64(end), LineNumber: proto.Uint64(uint64(sequence + 1)),
+			NextLineNumber:        proto.Uint64(uint64(sequence + 2)),
 			FileFingerprintLength: proto.Uint32(1024),
 		}
 		if _, err := q.Append([]*opensplunkv1.LogEvent{event}); err != nil {
@@ -657,8 +658,9 @@ func TestPrepareAckCachesAndCoalescesSourceMarksAcrossRecovery(t *testing.T) {
 	}
 	mark := before.Marks[0]
 	if mark.FileIdentity != identity || mark.SourcePath != "/logs/app.log" || mark.EndOffset != 350 ||
-		mark.LineNumber != 3 || mark.FingerprintLength != 1024 ||
-		!mark.HasSourcePath || !mark.HasEndOffset || !mark.HasFingerprintLength {
+		mark.LineNumber != 3 || mark.NextLineNumber != 4 || mark.FingerprintLength != 1024 ||
+		!mark.HasSourcePath || !mark.HasEndOffset || !mark.HasNextLineNumber ||
+		!mark.HasFingerprintLength {
 		t.Fatalf("coalesced mark before restart = %+v", mark)
 	}
 	if err := q.Close(); err != nil {
@@ -695,6 +697,110 @@ func TestCheckpointMarksKeepFingerprintConflictSticky(t *testing.T) {
 	marks := checkpointMarksForBatch(1, events)
 	if len(marks) != 1 || !marks[0].ConflictingMetadata {
 		t.Fatalf("marks = %+v, want one sticky metadata conflict", marks)
+	}
+}
+
+func TestCheckpointMarksPreferPresentNextLineAndKeepConflictSticky(t *testing.T) {
+	t.Parallel()
+	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("de", 32)
+	event := func(next *uint64) *opensplunkv1.LogEvent {
+		return &opensplunkv1.LogEvent{Origin: &opensplunkv1.EventOrigin{
+			FileIdentity:   proto.String(identity),
+			EndOffset:      proto.Uint64(100),
+			LineNumber:     proto.Uint64(7),
+			NextLineNumber: next,
+		}}
+	}
+
+	present := uint64(9)
+	marks := checkpointMarksForBatch(1, []*opensplunkv1.LogEvent{
+		event(nil),
+		event(&present),
+		event(nil),
+	})
+	if len(marks) != 1 || marks[0].ConflictingMetadata ||
+		!marks[0].HasNextLineNumber || marks[0].NextLineNumber != present {
+		t.Fatalf("marks with legacy duplicates = %+v, want present next-line metadata", marks)
+	}
+
+	conflict := uint64(10)
+	marks = checkpointMarksForBatch(1, []*opensplunkv1.LogEvent{
+		event(&present),
+		event(&conflict),
+		event(nil),
+	})
+	if len(marks) != 1 || !marks[0].ConflictingMetadata {
+		t.Fatalf("marks with conflicting next-line metadata = %+v, want one sticky conflict", marks)
+	}
+
+	higherOffsetRegression := event(proto.Uint64(2))
+	higherOffsetRegression.Origin.EndOffset = proto.Uint64(200)
+	higherOffsetRegression.Origin.LineNumber = proto.Uint64(1)
+	marks = checkpointMarksForBatch(1, []*opensplunkv1.LogEvent{
+		event(proto.Uint64(101)),
+		higherOffsetRegression,
+	})
+	if len(marks) != 1 || !marks[0].ConflictingMetadata {
+		t.Fatalf("marks with regressing higher-offset cursor = %+v, want one sticky conflict", marks)
+	}
+}
+
+func TestAggregateAckPlanPrefersPresentNextLineAndRejectsConflict(t *testing.T) {
+	t.Parallel()
+	base := SourceCheckpointMark{
+		BatchSequence: 1, FileIdentity: "dev=1;ino=2;gen=1;fp=aa",
+		EndOffset: 100, HasEndOffset: true, LineNumber: 7,
+	}
+	present := base
+	present.BatchSequence = 2
+	present.NextLineNumber = 9
+	present.HasNextLineNumber = true
+	legacyAfter := base
+	legacyAfter.BatchSequence = 3
+
+	preview := aggregateAckPlan(ackPlan{
+		throughBatchSequence: 3,
+		batchCount:           3,
+		markGroups: []ackMarkGroup{
+			{marks: []SourceCheckpointMark{base}},
+			{marks: []SourceCheckpointMark{present}},
+			{marks: []SourceCheckpointMark{legacyAfter}},
+		},
+	})
+	if len(preview.Marks) != 1 || preview.Marks[0] != present {
+		t.Fatalf("aggregate with legacy duplicates = %+v, want present metadata %+v", preview, present)
+	}
+
+	conflict := present
+	conflict.BatchSequence = 4
+	conflict.NextLineNumber = 10
+	preview = aggregateAckPlan(ackPlan{
+		throughBatchSequence: 4,
+		batchCount:           2,
+		markGroups: []ackMarkGroup{
+			{marks: []SourceCheckpointMark{present}},
+			{marks: []SourceCheckpointMark{conflict}},
+		},
+	})
+	if len(preview.Marks) != 1 || !preview.Marks[0].ConflictingMetadata {
+		t.Fatalf("aggregate with conflicting next-line metadata = %+v, want sticky conflict", preview)
+	}
+
+	higher := present
+	higher.BatchSequence = 5
+	higher.EndOffset = 200
+	higher.LineNumber = 1
+	higher.NextLineNumber = 2
+	preview = aggregateAckPlan(ackPlan{
+		throughBatchSequence: 5,
+		batchCount:           2,
+		markGroups: []ackMarkGroup{
+			{marks: []SourceCheckpointMark{present}},
+			{marks: []SourceCheckpointMark{higher}},
+		},
+	})
+	if len(preview.Marks) != 1 || !preview.Marks[0].ConflictingMetadata {
+		t.Fatalf("aggregate with regressing higher-offset cursor = %+v, want sticky conflict", preview)
 	}
 }
 

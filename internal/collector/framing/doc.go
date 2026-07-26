@@ -24,11 +24,15 @@
 //
 // # Size enforcement
 //
-// [Options.MaxEventBytes] caps a single frame. A record that reaches the cap
-// without a delimiter yields [ErrEventTooLarge]; the frame's offsets still
-// advance past the oversized record so framing can continue, and the truncated
-// bytes are available for dead-lettering. Implementations must not buffer
-// unboundedly while searching for a delimiter.
+// [Options.MaxEventBytes] caps a single frame. A record that exceeds the cap
+// with a delimiter in the current bounded window yields [ErrEventTooLarge];
+// the frame's offsets advance past the oversized record so framing can
+// continue, and the truncated bytes are available for dead-lettering. If no
+// delimiter is currently buffered, [ErrEventTooLargeIncomplete] reports the
+// bounded bytes discarded so far without advancing the physical-line cursor.
+// Streaming callers must continue discarding through the eventual delimiter
+// before framing resumes. Implementations never read or buffer unboundedly
+// while waiting for it.
 //
 // # Dependency direction
 //

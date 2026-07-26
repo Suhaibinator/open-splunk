@@ -52,7 +52,8 @@ type DecodeConfig struct {
 	MaxJSONFields  int
 }
 
-// SourcePosition is the durable origin of one framed event.
+// SourcePosition is the durable origin of one framed event. Both line fields
+// are zero when a legacy checkpoint cannot supply an exact physical cursor.
 type SourcePosition struct {
 	FileIdentity          string
 	SourcePath            string
@@ -60,6 +61,7 @@ type SourcePosition struct {
 	StartOffset           uint64
 	EndOffset             uint64
 	LineNumber            uint64
+	NextLineNumber        uint64
 }
 
 // Decoder converts framed source bytes to canonical protobuf events.
@@ -594,6 +596,9 @@ func sourceOrigin(inputID string, position SourcePosition) *opensplunkv1.EventOr
 	origin.EndOffset = proto.Uint64(position.EndOffset)
 	if position.LineNumber != 0 {
 		origin.LineNumber = proto.Uint64(position.LineNumber)
+	}
+	if position.NextLineNumber != 0 {
+		origin.NextLineNumber = proto.Uint64(position.NextLineNumber)
 	}
 	return origin
 }

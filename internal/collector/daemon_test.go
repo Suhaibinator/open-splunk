@@ -304,7 +304,7 @@ func TestDaemonBackpressureNoDrop(t *testing.T) {
 	mk := func(start, end, line uint64) processedEvent {
 		return processedEvent{
 			event: testEvent(t, dec, start, end, line, raw), identity: identity,
-			path: "/x.log", endOffset: end, lineNumber: line,
+			path: "/x.log", endOffset: end, lineNumber: line, nextLineNumber: line + 1,
 			size: proto.Size(testEvent(t, dec, start, end, line, raw)),
 		}
 	}
@@ -456,7 +456,8 @@ func terminalPendingBatch(identity input.FileIdentity, start, end, line uint64) 
 	batch := &pendingBatch{}
 	batch.add(processedEvent{
 		event: event, identity: identity, path: "/x.log",
-		endOffset: end, lineNumber: line, size: proto.Size(event),
+		endOffset: end, lineNumber: line, nextLineNumber: line + 1,
+		size: proto.Size(event),
 	})
 	return batch
 }
@@ -553,7 +554,7 @@ func TestDaemonGracefulShutdownFlushesPartialBatch(t *testing.T) {
 
 	processed <- processedEvent{
 		event: testEvent(t, dec, 0, 42, 1, `{"k":"v"}`), identity: identity,
-		path: "/x.log", endOffset: 42, lineNumber: 1,
+		path: "/x.log", endOffset: 42, lineNumber: 1, nextLineNumber: 2,
 		size: proto.Size(testEvent(t, dec, 0, 42, 1, `{"k":"v"}`)),
 	}
 

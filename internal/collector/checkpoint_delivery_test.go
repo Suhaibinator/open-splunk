@@ -39,8 +39,9 @@ func TestCommitTerminalCheckpointsAdvancesFromDurableBatchOrigin(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Get = (%+v, %t, %v)", got, ok, err)
 	}
-	if got.Offset != 240 || got.LineNumber != 2 || got.Path != "/logs/app.log" {
-		t.Fatalf("checkpoint = %+v, want offset 240 line 2 with source path", got)
+	if got.Offset != 240 || got.LineNumber != 2 || got.NextLineNumber != 3 ||
+		got.Path != "/logs/app.log" {
+		t.Fatalf("checkpoint = %+v, want offset 240 lines [2,3) with source path", got)
 	}
 	if got.Identity != identity {
 		t.Fatalf("identity = %+v, want full identity %+v", got.Identity, identity)
@@ -80,11 +81,39 @@ func TestCommitTerminalCheckpointsFencesDelayedPreCopytruncateGeneration(t *test
 	}
 }
 
+func TestCommitTerminalCheckpointsRejectsInvalidNextLine(t *testing.T) {
+	t.Parallel()
+	store, err := input.NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCheckpointStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	identity := input.FileIdentity{
+		Device: 1, Inode: 2, Generation: 1,
+		Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 64,
+	}
+	if err := store.Set(input.Checkpoint{
+		Identity: identity, Path: "/logs/app.log", NextLineNumber: 1,
+	}); err != nil {
+		t.Fatalf("seed discovery checkpoint: %v", err)
+	}
+
+	for _, nextLine := range []uint64{0, 5, ^uint64(0)} {
+		mark := checkpointSourceMark(1, identity, "/logs/app.log", 100, 5)
+		mark.NextLineNumber = nextLine
+		if err := commitTerminalCheckpoints(store, []wal.SourceCheckpointMark{mark}); err == nil ||
+			!strings.Contains(err.Error(), "invalid next_line_number") {
+			t.Fatalf("commit next line %d error = %v, want invalid next_line_number", nextLine, err)
+		}
+	}
+}
+
 func checkpointSourceMark(sequence uint64, identity input.FileIdentity, path string, end, line uint64) wal.SourceCheckpointMark {
 	return wal.SourceCheckpointMark{
 		BatchSequence: sequence, FileIdentity: identity.String(),
 		SourcePath: path, HasSourcePath: true,
 		EndOffset: end, HasEndOffset: true, LineNumber: line,
+		NextLineNumber: line + 1, HasNextLineNumber: true,
 		FingerprintLength: identity.FingerprintLength, HasFingerprintLength: true,
 	}
 }
@@ -100,6 +129,7 @@ func checkpointBatch(sequence uint64, identity input.FileIdentity, path string, 
 				StartOffset:           proto.Uint64(start),
 				EndOffset:             proto.Uint64(end),
 				LineNumber:            proto.Uint64(line),
+				NextLineNumber:        proto.Uint64(line + 1),
 				SourcePath:            proto.String(path),
 				FileFingerprintLength: proto.Uint32(identity.FingerprintLength),
 			},

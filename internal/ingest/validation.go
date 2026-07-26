@@ -364,11 +364,23 @@ func validateEventStrings(event *opensplunkv1.LogEvent) *EventError {
 			"severity is invalid", "severity", "invalid_enum",
 		)
 	}
-	if origin := event.GetOrigin(); origin != nil && origin.StartOffset != nil && origin.EndOffset != nil && origin.GetEndOffset() < origin.GetStartOffset() {
-		return eventFailure(
-			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
-			"origin end_offset precedes start_offset", "origin.end_offset", "invalid_range",
-		)
+	if origin := event.GetOrigin(); origin != nil {
+		if origin.StartOffset != nil && origin.EndOffset != nil &&
+			origin.GetEndOffset() < origin.GetStartOffset() {
+			return eventFailure(
+				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
+				"origin end_offset precedes start_offset", "origin.end_offset", "invalid_range",
+			)
+		}
+		if origin.NextLineNumber != nil &&
+			(origin.LineNumber == nil || origin.GetLineNumber() == 0 ||
+				origin.GetNextLineNumber() <= origin.GetLineNumber() ||
+				origin.GetNextLineNumber() == math.MaxUint64) {
+			return eventFailure(
+				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
+				"origin next_line_number is invalid", "origin.next_line_number", "invalid_range",
+			)
+		}
 	}
 	return nil
 }

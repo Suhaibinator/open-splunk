@@ -164,7 +164,13 @@ export interface EventOrigin {
   inputId: string;
   fileIdentity?: string | undefined;
   startOffset?: bigint | undefined;
-  endOffset?: bigint | undefined;
+  endOffset?:
+    | bigint
+    | undefined;
+  /**
+   * line_number is omitted when a legacy checkpoint lacks an exact physical
+   * line anchor.
+   */
   lineNumber?:
     | bigint
     | undefined;
@@ -173,7 +179,16 @@ export interface EventOrigin {
    * exact input checkpoint from a durable WAL batch after process restart.
    */
   sourcePath?: string | undefined;
-  fileFingerprintLength?: number | undefined;
+  fileFingerprintLength?:
+    | number
+    | undefined;
+  /**
+   * next_line_number is the 1-based physical line within the monitored stream
+   * beginning at end_offset. Collectors persist it with terminal checkpoints
+   * so polling and process restarts do not need to rescan the source prefix; it
+   * is omitted together with line_number when that exact cursor is unknown.
+   */
+  nextLineNumber?: bigint | undefined;
 }
 
 /**
@@ -211,6 +226,7 @@ function createBaseEventOrigin(): EventOrigin {
     lineNumber: undefined,
     sourcePath: undefined,
     fileFingerprintLength: undefined,
+    nextLineNumber: undefined,
   };
 }
 
@@ -245,6 +261,12 @@ export const EventOrigin: MessageFns<EventOrigin> = {
     }
     if (message.fileFingerprintLength !== undefined) {
       writer.uint32(56).uint32(message.fileFingerprintLength);
+    }
+    if (message.nextLineNumber !== undefined) {
+      if (BigInt.asUintN(64, message.nextLineNumber) !== message.nextLineNumber) {
+        throw new globalThis.Error("value provided for field message.nextLineNumber of type uint64 too large");
+      }
+      writer.uint32(64).uint64(message.nextLineNumber);
     }
     return writer;
   },
@@ -312,6 +334,14 @@ export const EventOrigin: MessageFns<EventOrigin> = {
           message.fileFingerprintLength = reader.uint32();
           continue;
         }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.nextLineNumber = reader.uint64() as bigint;
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -358,6 +388,11 @@ export const EventOrigin: MessageFns<EventOrigin> = {
         : isSet(object.file_fingerprint_length)
         ? globalThis.Number(object.file_fingerprint_length)
         : undefined,
+      nextLineNumber: isSet(object.nextLineNumber)
+        ? BigInt(object.nextLineNumber)
+        : isSet(object.next_line_number)
+        ? BigInt(object.next_line_number)
+        : undefined,
     };
   },
 
@@ -384,6 +419,9 @@ export const EventOrigin: MessageFns<EventOrigin> = {
     if (message.fileFingerprintLength !== undefined) {
       obj.fileFingerprintLength = Math.round(message.fileFingerprintLength);
     }
+    if (message.nextLineNumber !== undefined) {
+      obj.nextLineNumber = message.nextLineNumber.toString();
+    }
     return obj;
   },
 
@@ -405,6 +443,9 @@ export const EventOrigin: MessageFns<EventOrigin> = {
       : undefined;
     message.sourcePath = object.sourcePath ?? undefined;
     message.fileFingerprintLength = object.fileFingerprintLength ?? undefined;
+    message.nextLineNumber = (object.nextLineNumber !== undefined && object.nextLineNumber !== null)
+      ? BigInt(object.nextLineNumber)
+      : undefined;
     return message;
   },
 };

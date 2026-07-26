@@ -91,6 +91,54 @@ func TestValidateAndNormalizeEventKeepsCollectorOnlyAliasesDynamic(t *testing.T)
 	}
 }
 
+func TestValidateAndNormalizeEventValidatesNextSourceLine(t *testing.T) {
+	t.Parallel()
+
+	validator := newTestValidator(t, DefaultLimits())
+	for _, test := range []struct {
+		name string
+		line *uint64
+		next uint64
+	}{
+		{name: "missing current line", next: 2},
+		{name: "zero current line", line: proto.Uint64(0), next: 2},
+		{name: "regressing", line: proto.Uint64(3), next: 2},
+		{name: "equal", line: proto.Uint64(3), next: 3},
+		{name: "exhausted", line: proto.Uint64(math.MaxUint64 - 1), next: math.MaxUint64},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			event := validTestEvent("event-"+strings.ReplaceAll(test.name, " ", "-"), "main")
+			event.Origin = &opensplunkv1.EventOrigin{
+				LineNumber:     test.line,
+				NextLineNumber: proto.Uint64(test.next),
+			}
+			_, rejection := validator.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
+			assertEventRejectionCode(
+				t,
+				rejection,
+				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
+			)
+			if len(rejection.Violations) != 1 ||
+				rejection.Violations[0].GetFieldPath() != "origin.next_line_number" {
+				t.Fatalf("next-line rejection = %+v", rejection)
+			}
+		})
+	}
+
+	event := validTestEvent("event-valid-next-line", "main")
+	event.Origin = &opensplunkv1.EventOrigin{
+		LineNumber:     proto.Uint64(3),
+		NextLineNumber: proto.Uint64(5),
+	}
+	if _, rejection := validator.ValidateAndNormalizeEvent(
+		event,
+		EventContext{ReceivedAt: validationTestNow},
+	); rejection != nil {
+		t.Fatalf("valid multiline next-line cursor rejection = %+v", rejection)
+	}
+}
+
 func TestTypedObjectValidation(t *testing.T) {
 	tests := []struct {
 		name   string

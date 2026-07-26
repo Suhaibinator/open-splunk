@@ -192,13 +192,20 @@ type EventOrigin struct {
 	FileIdentity *string                `protobuf:"bytes,2,opt,name=file_identity,json=fileIdentity,proto3,oneof" json:"file_identity,omitempty"`
 	StartOffset  *uint64                `protobuf:"varint,3,opt,name=start_offset,json=startOffset,proto3,oneof" json:"start_offset,omitempty"`
 	EndOffset    *uint64                `protobuf:"varint,4,opt,name=end_offset,json=endOffset,proto3,oneof" json:"end_offset,omitempty"`
-	LineNumber   *uint64                `protobuf:"varint,5,opt,name=line_number,json=lineNumber,proto3,oneof" json:"line_number,omitempty"`
+	// line_number is omitted when a legacy checkpoint lacks an exact physical
+	// line anchor.
+	LineNumber *uint64 `protobuf:"varint,5,opt,name=line_number,json=lineNumber,proto3,oneof" json:"line_number,omitempty"`
 	// source_path and file_fingerprint_length let a collector reconstruct the
 	// exact input checkpoint from a durable WAL batch after process restart.
 	SourcePath            *string `protobuf:"bytes,6,opt,name=source_path,json=sourcePath,proto3,oneof" json:"source_path,omitempty"`
 	FileFingerprintLength *uint32 `protobuf:"varint,7,opt,name=file_fingerprint_length,json=fileFingerprintLength,proto3,oneof" json:"file_fingerprint_length,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// next_line_number is the 1-based physical line within the monitored stream
+	// beginning at end_offset. Collectors persist it with terminal checkpoints
+	// so polling and process restarts do not need to rescan the source prefix; it
+	// is omitted together with line_number when that exact cursor is unknown.
+	NextLineNumber *uint64 `protobuf:"varint,8,opt,name=next_line_number,json=nextLineNumber,proto3,oneof" json:"next_line_number,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *EventOrigin) Reset() {
@@ -276,6 +283,13 @@ func (x *EventOrigin) GetSourcePath() string {
 func (x *EventOrigin) GetFileFingerprintLength() uint32 {
 	if x != nil && x.FileFingerprintLength != nil {
 		return *x.FileFingerprintLength
+	}
+	return 0
+}
+
+func (x *EventOrigin) GetNextLineNumber() uint64 {
+	if x != nil && x.NextLineNumber != nil {
+		return *x.NextLineNumber
 	}
 	return 0
 }
@@ -467,7 +481,7 @@ var File_open_splunk_v1_event_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_event_proto_rawDesc = "" +
 	"\n" +
-	"\x1aopen_splunk/v1/event.proto\x12\x0eopen_splunk.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1aopen_splunk/v1/value.proto\"\x95\x03\n" +
+	"\x1aopen_splunk/v1/event.proto\x12\x0eopen_splunk.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1aopen_splunk/v1/value.proto\"\xd9\x03\n" +
 	"\vEventOrigin\x12\x19\n" +
 	"\binput_id\x18\x01 \x01(\tR\ainputId\x12(\n" +
 	"\rfile_identity\x18\x02 \x01(\tH\x00R\ffileIdentity\x88\x01\x01\x12&\n" +
@@ -478,13 +492,15 @@ const file_open_splunk_v1_event_proto_rawDesc = "" +
 	"lineNumber\x88\x01\x01\x12$\n" +
 	"\vsource_path\x18\x06 \x01(\tH\x04R\n" +
 	"sourcePath\x88\x01\x01\x12;\n" +
-	"\x17file_fingerprint_length\x18\a \x01(\rH\x05R\x15fileFingerprintLength\x88\x01\x01B\x10\n" +
+	"\x17file_fingerprint_length\x18\a \x01(\rH\x05R\x15fileFingerprintLength\x88\x01\x01\x12-\n" +
+	"\x10next_line_number\x18\b \x01(\x04H\x06R\x0enextLineNumber\x88\x01\x01B\x10\n" +
 	"\x0e_file_identityB\x0f\n" +
 	"\r_start_offsetB\r\n" +
 	"\v_end_offsetB\x0e\n" +
 	"\f_line_numberB\x0e\n" +
 	"\f_source_pathB\x1a\n" +
-	"\x18_file_fingerprint_length\"\x9e\x06\n" +
+	"\x18_file_fingerprint_lengthB\x13\n" +
+	"\x11_next_line_number\"\x9e\x06\n" +
 	"\bLogEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1d\n" +
 	"\n" +

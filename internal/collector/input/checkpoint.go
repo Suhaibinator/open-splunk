@@ -117,9 +117,22 @@ func (s *fileCheckpointStore) SetMany(checkpoints []Checkpoint) error {
 				continue // a delayed old-generation batch must not undo truncation
 			case cp.Identity.Generation == current.Identity.Generation && cp.Offset < current.Offset:
 				continue // offsets are monotonic within one generation
-			case cp.Identity.Generation == current.Identity.Generation && cp.Offset == current.Offset &&
-				checkpointPositionEqual(cp, current):
-				continue
+			case cp.Identity.Generation == current.Identity.Generation &&
+				cp.Offset > current.Offset &&
+				cp.NextLineNumber != 0 &&
+				current.NextLineNumber != 0 &&
+				cp.NextLineNumber <= current.NextLineNumber:
+				return errors.New("collector/input: next line number does not advance with checkpoint offset")
+			case cp.Identity.Generation == current.Identity.Generation && cp.Offset == current.Offset:
+				switch {
+				case cp.NextLineNumber == 0:
+					cp.NextLineNumber = current.NextLineNumber
+				case current.NextLineNumber != 0 && cp.NextLineNumber != current.NextLineNumber:
+					return errors.New("collector/input: conflicting next line number at the same checkpoint offset")
+				}
+				if checkpointPositionEqual(cp, current) {
+					continue
+				}
 			}
 		}
 		if cp.UpdatedAt.IsZero() {
@@ -140,7 +153,8 @@ func (s *fileCheckpointStore) SetMany(checkpoints []Checkpoint) error {
 
 func checkpointPositionEqual(left, right Checkpoint) bool {
 	return left.Identity == right.Identity && left.Path == right.Path &&
-		left.Offset == right.Offset && left.LineNumber == right.LineNumber
+		left.Offset == right.Offset && left.LineNumber == right.LineNumber &&
+		left.NextLineNumber == right.NextLineNumber
 }
 
 // Delete removes the checkpoint for id, if any, and persists the result.

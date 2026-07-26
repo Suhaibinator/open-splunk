@@ -19,7 +19,11 @@ func TestCheckpointStoreSetGetReopen(t *testing.T) {
 	}
 	id := FileIdentity{Device: 7, Inode: 42, Fingerprint: "deadbeef"}
 	// Use a recent, truncated timestamp so JSON round-tripping is exact.
-	cp := Checkpoint{Identity: id, Path: "/var/log/app.log", Offset: 4096, LineNumber: 12, UpdatedAt: time.Now().UTC().Add(-time.Minute).Truncate(time.Second)}
+	cp := Checkpoint{
+		Identity: id, Path: "/var/log/app.log", Offset: 4096,
+		LineNumber: 12, NextLineNumber: 15,
+		UpdatedAt: time.Now().UTC().Add(-time.Minute).Truncate(time.Second),
+	}
 	if err := store.Set(cp); err != nil {
 		t.Fatalf("set: %v", err)
 	}
@@ -41,7 +45,8 @@ func TestCheckpointStoreSetGetReopen(t *testing.T) {
 	if !ok {
 		t.Fatalf("checkpoint not found after reopen")
 	}
-	if got.Offset != 4096 || got.LineNumber != 12 || got.Path != "/var/log/app.log" {
+	if got.Offset != 4096 || got.LineNumber != 12 || got.NextLineNumber != 15 ||
+		got.Path != "/var/log/app.log" {
 		t.Fatalf("checkpoint round-trip mismatch: %+v", got)
 	}
 	if got.Identity.String() != id.String() {
@@ -142,8 +147,8 @@ func TestCheckpointStoreSetManyNoEffectiveAdvanceDoesNotPersist(t *testing.T) {
 		Identity:   currentID,
 		Path:       "/logs/current.log",
 		Offset:     100,
-		LineNumber: 10,
-		UpdatedAt:  time.Now().UTC().Add(-time.Minute),
+		LineNumber: 10, NextLineNumber: 11,
+		UpdatedAt: time.Now().UTC().Add(-time.Minute),
 	}
 	if err := storeAPI.Set(current); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -181,8 +186,62 @@ func TestCheckpointStoreSetManyNoEffectiveAdvanceDoesNotPersist(t *testing.T) {
 		t.Fatalf("Get current: ok=%v err=%v", ok, err)
 	}
 	if got.Path != current.Path || got.Offset != current.Offset || got.LineNumber != current.LineNumber ||
+		got.NextLineNumber != current.NextLineNumber ||
 		!got.UpdatedAt.Equal(current.UpdatedAt) {
 		t.Fatalf("no-op batch changed checkpoint: got %+v want %+v", got, current)
+	}
+}
+
+func TestCheckpointStoreRejectsConflictingNextLineAtSameOffset(t *testing.T) {
+	t.Parallel()
+	store, err := NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	identity := FileIdentity{Device: 7, Inode: 9, Generation: 3, Fingerprint: "current"}
+	if err := store.Set(Checkpoint{
+		Identity: identity, Path: "/logs/current.log", Offset: 100,
+		LineNumber: 10, NextLineNumber: 11,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := store.Set(Checkpoint{
+		Identity: identity, Path: "/logs/current.log", Offset: 100,
+		LineNumber: 10, NextLineNumber: 12,
+	}); err == nil || !strings.Contains(err.Error(), "conflicting next line number") {
+		t.Fatalf("conflicting same-offset Set error = %v", err)
+	}
+	got, ok, err := store.Get(identity)
+	if err != nil || !ok || got.NextLineNumber != 11 {
+		t.Fatalf("checkpoint after rejected conflict = %+v (ok=%t err=%v)", got, ok, err)
+	}
+}
+
+func TestCheckpointStoreRejectsRegressingNextLineAtGreaterOffset(t *testing.T) {
+	t.Parallel()
+	store, err := NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	identity := FileIdentity{Device: 7, Inode: 9, Generation: 3, Fingerprint: "current"}
+	current := Checkpoint{
+		Identity: identity, Path: "/logs/current.log", Offset: 100,
+		LineNumber: 100, NextLineNumber: 101,
+	}
+	if err := store.Set(current); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := store.Set(Checkpoint{
+		Identity: identity, Path: current.Path, Offset: 200,
+		LineNumber: 1, NextLineNumber: 2,
+	}); err == nil || !strings.Contains(err.Error(), "does not advance") {
+		t.Fatalf("regressing higher-offset Set error = %v", err)
+	}
+	got, ok, err := store.Get(identity)
+	if err != nil || !ok || !checkpointPositionEqual(got, current) {
+		t.Fatalf("checkpoint after rejected regression = %+v (ok=%t err=%v)", got, ok, err)
 	}
 }
 

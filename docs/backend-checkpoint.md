@@ -7,7 +7,84 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: exact GradeThis v0.1 compatibility corpus
+## Latest checkpoint: crash-safe collector and server process restarts
+
+Date: 2026-07-25
+
+Starting checkpoint:
+`21d21cb` (`prove exact GradeThis compatibility corpus`)
+
+Use the current `main` HEAD for the completed restart checkpoint. The commit
+containing this section is created after all gates below pass and is pushed
+directly to `origin/main`.
+
+This slice closes the first release's explicit cross-process durability proof:
+
+1. The backend vertical starts with an empty discovered `app.log`, appends one
+   primer, and waits for its ClickHouse row and durable source checkpoint.
+2. It hard-kills the collector at that transaction boundary, accepts either a
+   drained WAL or the one valid checkpoint-before-local-WAL-ack crash state,
+   reopens the WAL for inspection, and restarts against the same WAL and
+   checkpoint directory.
+3. After two more acknowledged events, it waits for the collector's WAL
+   acknowledgment high-water to settle, hard-kills the server, appends and
+   fsyncs a final sentinel, waits for an actual `segment-*.wal` append, and
+   fsyncs the observed segment from the harness before the deliberate kill.
+4. It hard-kills the collector, reopens its WAL, and requires exactly one
+   pending event with the sentinel's exact byte and physical-line cursor.
+5. The same server SQLite database/master key and collector WAL/checkpoints are
+   reused. Four distinct stable event IDs must become queryable with no loss.
+   The documented at-least-once boundary permits one physical sentinel replay
+   in a second batch, so the acceptance SPL uses `dedup event_id` and still
+   requires exactly four logical results.
+6. A clean final collector shutdown must leave the exact EOF checkpoint and a
+   drained WAL with a positive acknowledged sequence before the existing
+   protobuf HTTP, binary WebSocket, browser, timeline, paging, and export
+   assertions continue.
+
+The acceptance test exposed a real collector bug: each poll constructed a
+one-shot framer whose line counter restarted at one. Byte offsets and stable
+event IDs were safe, but origins and resumed checkpoints regressed their
+physical-line metadata. The fix carries an explicit cursor end to end:
+
+- protobuf `EventOrigin` has additive optional `next_line_number`;
+- every line, multiline, flush, max-lines, and oversized frame reports its
+  half-open physical-line interval;
+- the tailer owns the cursor across polls and resets it only for a new
+  copy-truncate generation;
+- decoder origins, compact WAL marks, recovery, acknowledgment aggregation,
+  local terminal delivery, checkpoint persistence, and server ingestion
+  validation retain and check it;
+- equal or increasing byte offsets cannot carry conflicting or regressing
+  present line cursors, and the reserved `uint64` maximum cannot enter a batch
+  that the server would be unable to acknowledge; and
+- an oversized record that reaches the current EOF retains bounded
+  discard-through-delimiter state, so a later suffix is never published as a
+  separate event. A crash safely reconstructs that state from the older
+  durable byte checkpoint.
+
+`start_at=end` deliberately numbers the newly monitored stream from line one;
+it does not scan skipped historical bytes. Checkpoints written before
+`next_line_number` are handled in O(1). Ordinary line-framing checkpoints can
+derive the exact next line from the prior event and are upgraded in one atomic
+batch per discovery pass. A legacy multiline checkpoint—or a legacy nonzero
+discovery offset with no line anchor—cannot recover its exact ending physical
+line without an unbounded prefix scan. Those sources therefore omit both
+optional line fields instead of publishing an approximation; byte offsets and
+stable event IDs remain exact. A new file generation restores exact line
+metadata. This compatibility boundary avoids both false origin data and
+stranding large existing checkpoints.
+
+Focused collector/input/WAL/ingest/integration tests and the full collector
+race suite passed after these fixes. The ordinary, frontend, build,
+browser/Docker vertical, generated-protobuf, and cleanliness gates are recorded
+under **Latest validation evidence**.
+
+The next recommended release-path slice is deterministic browser
+disconnect/resume and replay-window-expiration coverage. The overall backend
+goal remains active; this is a safe pause, not completion of the product plan.
+
+## Previous checkpoint: exact GradeThis v0.1 compatibility corpus
 
 Date: 2026-07-25
 
@@ -357,6 +434,52 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Crash-restart checkpoint validation
+
+The real collector/server restart vertical passed twice on the final restart
+implementation:
+
+```sh
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+go test ./integration -run '^TestBackendVertical$' -count=1 -v
+```
+
+The runs completed in approximately 24 and 17 seconds. Each hard-killed and
+restarted both processes while reusing the same durable state. The permitted
+checkpoint-before-local-WAL-ack boundary produced five physical ClickHouse
+rows: four distinct stable event IDs and one replay of only the final
+sentinel. `dedup event_id` returned the required four logical rows through the
+query API and browser. The final clean shutdown reached the exact EOF
+checkpoint and drained the collector WAL.
+
+The ordinary, generated-code, race, static, and frontend gates passed on the
+same implementation:
+
+```sh
+go test ./... -count=1 -timeout=5m
+go test -race ./internal/collector/... -count=1 -timeout=5m
+go vet ./...
+go build ./...
+make proto
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
+git diff --check
+```
+
+Focused framing/input tests were rerun after the final formatting pass.
+Independent final correctness and performance rereviews reported no remaining
+checkpoint blocker. The performance review confirmed constant-memory,
+cancellation-aware oversized-record discard, O(1) legacy checkpoint opening,
+an 80-byte compact source mark, and no regression in large acknowledgment
+aggregation. A pre-existing `time.After` allocation on each tailer poll remains
+a later high-source-count profiling improvement; it is not on the crash path.
+No ephemeral `open-splunk-*` container remained after the real verticals.
+
+### Exact GradeThis corpus validation
+
 The exact GradeThis corpus passed against the production-pinned ClickHouse
 image:
 
@@ -628,22 +751,20 @@ independent stacks.
    go test ./integration -run '^TestBackendVertical$' -count=1 -v
    ```
 
-5. Start with the process-restart vertical below unless the user explicitly
-   changes priority. Add tests before implementation, run three read-only
-   adversarial reviews, fix concrete findings, then commit and push `main`.
+5. Start with the browser disconnect/resume vertical below unless the user
+   explicitly changes priority. Add tests before implementation, run
+   read-only adversarial reviews, fix concrete findings, then commit and push
+   `main`.
 
 ## Remaining work, in priority order
 
 ### 1. Finish the first-release product proof
 
-The uninterrupted collector-to-browser gate and exact GradeThis v0.1 corpus
-are complete. The recommended next slice is the process-restart release proof,
-not another ad hoc SPL feature:
+The uninterrupted collector-to-browser gate, exact GradeThis v0.1 corpus, and
+collector/server process-restart proof are complete. The recommended next slice
+is browser disconnect/resume and replay expiration, not another ad hoc SPL
+feature:
 
-- Add a process-restart vertical that proves acknowledged events survive both
-  collector and server restarts. Existing component tests cover retry,
-  checkpoint, WAL, and file-rotation mechanics; the release criterion needs
-  one explicit cross-process proof.
 - Add deterministic browser/server integration for disconnect-and-resume,
   replay-window expiration and authoritative resynchronization, stale-frame
   fencing, job/result expiration, cancellation, and preview-to-final
@@ -658,6 +779,9 @@ not another ad hoc SPL feature:
   high-cardinality exact aggregates, ClickHouse part count, scan budgets, and
   browser rendering cost. Acceptance thresholds still require the hardware,
   retention/event-size, and concurrency decisions listed below.
+- During high-source-count collector profiling, replace the pre-existing
+  per-poll `time.After` allocation with a safely reused timer if it is material;
+  preserve cancellation and copy-truncate behavior with race coverage.
 - Verify release revision consistency across embedded UI, server, protobuf
   schema, and migrations, plus byte-identical embedded frontend assets for
   Linux and macOS builds from the same source revision.
@@ -780,9 +904,10 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. Unless the user changes priority, begin with the test-first process-restart
-   vertical. The uninterrupted collector-to-browser vertical and exact
-   GradeThis corpus are already complete.
+5. Unless the user changes priority, begin with the test-first browser
+   disconnect/resume and replay-window-expiration vertical. The uninterrupted
+   collector-to-browser path, exact GradeThis corpus, and collector/server
+   process-restart proof are already complete.
 6. If extending aggregates instead, start with an explicit bounded contract
    for `list(field)`; do not reuse unordered `values`.
 7. Preserve scalar/Dynamic path separation, numeric grammar sharing,

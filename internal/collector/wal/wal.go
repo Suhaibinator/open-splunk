@@ -97,20 +97,22 @@ type Stats struct {
 // cumulative acknowledgment is bounded by the number of distinct file
 // generations rather than the byte size of the WAL.
 //
-// Presence bits are deliberate. Older WAL records predate source_path and
-// file_fingerprint_length and can be reconciled against their discovery
-// checkpoint, while a malformed new record must not be mistaken for a valid
-// zero value.
+// Presence bits are deliberate. Older WAL records predate source_path,
+// file_fingerprint_length, and next_line_number and can be reconciled against
+// their discovery checkpoint, while a malformed new record must not be
+// mistaken for a valid zero value.
 type SourceCheckpointMark struct {
-	BatchSequence        uint64
-	EventIndex           uint32
 	FileIdentity         string
 	SourcePath           string
+	BatchSequence        uint64
 	EndOffset            uint64
 	LineNumber           uint64
+	NextLineNumber       uint64
+	EventIndex           uint32
 	FingerprintLength    uint32
 	HasSourcePath        bool
 	HasEndOffset         bool
+	HasNextLineNumber    bool
 	HasFingerprintLength bool
 	ConflictingMetadata  bool
 }
