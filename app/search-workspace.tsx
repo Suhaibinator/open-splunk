@@ -1745,6 +1745,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   }
 
   function markBackendPreviewFinalizing() {
+    if (backendPreviewStatusRef.current === "finalizing") return;
     updateBackendPreviewStatus(
       "finalizing",
       backendPreviewRef.current === null
@@ -3315,7 +3316,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (terminalPhase === "completed") {
       setPhase("finalizing");
       setProgress(96);
-      if (backendPreviewRef.current !== null) {
+      if (backendPreviewStatusRef.current !== "disabled") {
         markBackendPreviewFinalizing();
       }
       try {

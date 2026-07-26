@@ -272,10 +272,22 @@ func TestBrowserSequenceExpiredRecovery(t *testing.T) {
 
 func TestBrowserSequenceGapRecovery(t *testing.T) {
 	runBrowserRecoveryFixture(t, 8, browserRecoveryBrowserSpec{
-		grepPattern:            "real sequence gap",
+		grepPattern:            "live preview recovers from a real sequence gap",
 		outputDirectory:        "browser-sequence-gap",
 		environmentFlag:        "OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST",
 		failureName:            "sequence-gap",
+		appendBeforeCompletion: false,
+		expectedText:           browserSequenceExpiredInitialRow,
+		expectedRows:           1,
+	})
+}
+
+func TestBrowserSequenceGapRESTTerminalRecovery(t *testing.T) {
+	runBrowserRecoveryFixture(t, 8, browserRecoveryBrowserSpec{
+		grepPattern:            "live preview recovers through REST-only completion after a real sequence gap",
+		outputDirectory:        "browser-sequence-gap-rest-terminal",
+		environmentFlag:        "OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_TERMINAL_TEST",
+		failureName:            "sequence-gap REST-terminal",
 		appendBeforeCompletion: false,
 		expectedText:           browserSequenceExpiredInitialRow,
 		expectedRows:           1,
@@ -461,6 +473,13 @@ func runBrowserRecoverySpec(
 	configureProcessGroup(command)
 	command.Dir = repository
 	environment := os.Environ()
+	for _, flag := range []string{
+		"OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST",
+		"OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST",
+		"OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_TERMINAL_TEST",
+	} {
+		environment = environmentWithValue(environment, flag, "0")
+	}
 	for name, value := range map[string]string{
 		"OPEN_SPLUNK_E2E_BASE_URL":               baseURL,
 		"OPEN_SPLUNK_E2E_SPL":                    "index=main | table message",
@@ -471,10 +490,10 @@ func runBrowserRecoverySpec(
 		"OPEN_SPLUNK_E2E_RECOVERY_CONTROL_URL":   controlURL,
 		"OPEN_SPLUNK_E2E_RECOVERY_CONTROL_TOKEN": controlToken,
 		"OPEN_SPLUNK_E2E_RECOVERY_INITIAL_TEXT":  browserSequenceExpiredInitialRow,
-		spec.environmentFlag:                     "1",
 	} {
 		environment = environmentWithValue(environment, name, value)
 	}
+	environment = environmentWithValue(environment, spec.environmentFlag, "1")
 	command.Env = environment
 	logs := &lockedBuffer{maximum: 1 << 20}
 	command.Stdout = logs

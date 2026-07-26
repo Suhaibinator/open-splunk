@@ -13,7 +13,10 @@ import {
   GetSearchJobResponse,
   GetSearchResultsResponse,
 } from "../gen/ts/open_splunk/v1/search_api";
-import { SearchJobState } from "../gen/ts/open_splunk/v1/search";
+import {
+  SearchExecutionPhase,
+  SearchJobState,
+} from "../gen/ts/open_splunk/v1/search";
 import {
   ResynchronizationReason,
   SearchWebSocketCommand,
@@ -32,6 +35,8 @@ const recoveryControlToken = process.env.OPEN_SPLUNK_E2E_RECOVERY_CONTROL_TOKEN?
 const recoveryInitialText = process.env.OPEN_SPLUNK_E2E_RECOVERY_INITIAL_TEXT?.trim();
 const sequenceExpirationTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST === "1";
 const sequenceGapTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST === "1";
+const sequenceGapRESTTerminalTest =
+  process.env.OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_TERMINAL_TEST === "1";
 const origin = validatedOrigin(baseURL);
 const timeout = 45_000;
 
@@ -431,9 +436,21 @@ test("live preview recovers from real sequence expiration and a transient snapsh
   assertBrowserSafety(safety);
 });
 
-test("live preview recovers from a real sequence gap", async ({ page }) => {
+for (const sequenceGapScenario of [
+  {
+    title: "live preview recovers from a real sequence gap",
+    enabled: sequenceGapTest,
+    restOnlyTerminal: false,
+  },
+  {
+    title: "live preview recovers through REST-only completion after a real sequence gap",
+    enabled: sequenceGapRESTTerminalTest,
+    restOnlyTerminal: true,
+  },
+] as const) {
+test(sequenceGapScenario.title, async ({ page }) => {
   test.skip(
-    !sequenceGapTest
+    !sequenceGapScenario.enabled
       || recoveryControlURL === undefined
       || !recoveryControlToken
       || !recoveryInitialText,
@@ -441,7 +458,45 @@ test("live preview recovers from a real sequence gap", async ({ page }) => {
   );
   test.setTimeout(60_000);
   const safety = observeBrowserSafety(page);
-  const gap = await interceptSequenceGap(page, origin, timeout);
+  const gap = await interceptSequenceGap(
+    page,
+    origin,
+    timeout,
+    sequenceGapScenario.restOnlyTerminal,
+  );
+  let releaseAuthoritativeResultsResponse!: () => void;
+  const authoritativeResultsResponseGate = new Promise<void>((resolve) => {
+    releaseAuthoritativeResultsResponse = resolve;
+  });
+  let authoritativeResultsRequests = 0;
+  const authoritativeResultSnapshots: GetSearchResultsResponse[] = [];
+  if (sequenceGapScenario.restOnlyTerminal) {
+    await page.route(
+      (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/results",
+      async (route) => {
+        authoritativeResultsRequests += 1;
+        if (authoritativeResultsRequests > 1) {
+          await route.abort("blockedbyclient");
+          return;
+        }
+        const upstream = await route.fetch();
+        if (
+          upstream.status() !== 200
+          || upstream.headers()["content-type"] !== "application/x-protobuf"
+        ) {
+          throw new Error("sequence-gap authoritative results were not protobuf success");
+        }
+        const body = await upstream.body();
+        const response = GetSearchResultsResponse.decode(body);
+        authoritativeResultSnapshots.push(response);
+        await authoritativeResultsResponseGate;
+        await route.fulfill({
+          response: upstream,
+          body,
+        });
+      },
+    );
+  }
   let allowFirstAuthoritativeFetch!: () => void;
   const firstAuthoritativeFetchGate = new Promise<void>((resolve) => {
     allowFirstAuthoritativeFetch = resolve;
@@ -582,52 +637,100 @@ test("live preview recovers from a real sequence gap", async ({ page }) => {
     await expect(page.getByText(recoveryInitialText!, { exact: true })).toHaveCount(0);
 
     await sendBrowserRecoveryControl("complete");
-    const finalizingPreviewStatus = page.getByTestId("backend-preview-status");
-    await expect(finalizingPreviewStatus).toHaveAttribute(
-      "data-status",
-      "finalizing",
-      { timeout },
-    );
-    await expect(finalizingPreviewStatus).toContainText(
-      "Loading the authoritative result snapshot.",
-      { timeout },
-    );
-    await expect(
-      page.getByText("Search complete. Loading authoritative results.", { exact: true }),
-    ).toHaveCount(1);
-    await expect(
-      page.getByRole("table", { name: "Live preview search statistics" }),
-    ).toHaveCount(0);
-    await expect(page.getByTestId("job-strip")).toContainText("Completed", { timeout });
-    expect(fulfilledAuthoritativeJobRequests, "responses before terminal replay proof").toBe(1);
+    if (sequenceGapScenario.restOnlyTerminal) {
+      await gap.waitForTerminalProjectionWithheld();
+      expect(
+        gap.withheldTerminalProjectionFrameCount(),
+        "withheld terminal projection frames",
+      ).toBe(3);
+      await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+        "data-status",
+        "resyncing",
+        { timeout },
+      );
+      await expect(
+        page.getByRole("table", { name: "Live preview search statistics" }),
+      ).toHaveCount(0);
+      await expect(
+        page.getByRole("table", { name: "Backend search statistics" }),
+      ).toHaveCount(0);
+      await expect(page.getByText(recoveryInitialText!, { exact: true })).toHaveCount(0);
+      await expect(page.getByTestId("job-strip")).toHaveAttribute(
+        "aria-busy",
+        "true",
+        { timeout },
+      );
+      await expect(page.getByTestId("job-strip")).not.toContainText("Completed");
+      expect(fulfilledAuthoritativeJobRequests, "responses before REST terminal").toBe(1);
 
-    allowSecondAuthoritativeFetch();
-    await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(2);
-    const staleTerminalSnapshot = authoritativeSnapshots[1].searchJob;
-    expect(staleTerminalSnapshot?.searchJobId, "in-flight terminal job ID").toBe(browserSearchJobID);
-    expect(staleTerminalSnapshot?.state, "in-flight terminal job state").toBe(
-      SearchJobState.SEARCH_JOB_STATE_COMPLETED,
-    );
-    expect(staleTerminalSnapshot?.progress?.scannedRows, "in-flight terminal rows").toBe(5n);
-    releaseSecondAuthoritativeResponse();
+      allowSecondAuthoritativeFetch();
+      await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(2);
+      const restTerminalSnapshot = authoritativeSnapshots[1].searchJob;
+      expect(restTerminalSnapshot?.searchJobId, "REST terminal job ID").toBe(browserSearchJobID);
+      expect(restTerminalSnapshot?.state, "REST terminal job state").toBe(
+        SearchJobState.SEARCH_JOB_STATE_COMPLETED,
+      );
+      expect(restTerminalSnapshot?.progress?.scannedRows, "REST terminal rows").toBe(5n);
+      releaseSecondAuthoritativeResponse();
 
-    await expect.poll(() => authoritativeJobRequests, { timeout }).toBe(3);
-    await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(3);
-    const recoveredSnapshot = authoritativeSnapshots[2].searchJob;
-    expect(recoveredSnapshot?.searchJobId, "post-gap authoritative job ID").toBe(browserSearchJobID);
-    expect(recoveredSnapshot?.state, "post-gap authoritative job state").toBe(
-      SearchJobState.SEARCH_JOB_STATE_COMPLETED,
-    );
-    expect(recoveredSnapshot?.progress?.scannedRows, "post-gap authoritative rows").toBe(5n);
-    expect(fulfilledAuthoritativeJobRequests, "responses before final recovery").toBe(2);
-    releaseThirdAuthoritativeResponse();
+      await expect.poll(() => fulfilledAuthoritativeJobRequests, { timeout }).toBe(2);
+      await expect.poll(() => authoritativeResultSnapshots.length, { timeout }).toBe(1);
+      expect(
+        authoritativeResultSnapshots[0].searchJobId,
+        "gated authoritative results job ID",
+      ).toBe(browserSearchJobID);
+      expect(
+        authoritativeResultSnapshots[0].resultPage?.rows.length,
+        "gated authoritative result rows",
+      ).toBe(expectedRows);
+
+      await expectZeroRowBackendPreviewFinalizing(page);
+      await expect(
+        page.getByRole("table", { name: "Backend search statistics" }),
+      ).toHaveCount(0);
+      await expect(page.getByText(recoveryInitialText!, { exact: true })).toHaveCount(0);
+      await expect(page.getByTestId("job-strip")).toHaveAttribute(
+        "aria-busy",
+        "true",
+        { timeout },
+      );
+      await expect(page.getByTestId("job-strip")).toContainText("Finalizing", { timeout });
+      releaseAuthoritativeResultsResponse();
+    } else {
+      await expectZeroRowBackendPreviewFinalizing(page);
+      await expect(page.getByTestId("job-strip")).toContainText("Completed", { timeout });
+      expect(fulfilledAuthoritativeJobRequests, "responses before terminal replay proof").toBe(1);
+
+      allowSecondAuthoritativeFetch();
+      await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(2);
+      const staleTerminalSnapshot = authoritativeSnapshots[1].searchJob;
+      expect(staleTerminalSnapshot?.searchJobId, "in-flight terminal job ID").toBe(browserSearchJobID);
+      expect(staleTerminalSnapshot?.state, "in-flight terminal job state").toBe(
+        SearchJobState.SEARCH_JOB_STATE_COMPLETED,
+      );
+      expect(staleTerminalSnapshot?.progress?.scannedRows, "in-flight terminal rows").toBe(5n);
+      releaseSecondAuthoritativeResponse();
+
+      await expect.poll(() => authoritativeJobRequests, { timeout }).toBe(3);
+      await expect.poll(() => authoritativeSnapshots.length, { timeout }).toBe(3);
+      const recoveredSnapshot = authoritativeSnapshots[2].searchJob;
+      expect(recoveredSnapshot?.searchJobId, "post-gap authoritative job ID").toBe(browserSearchJobID);
+      expect(recoveredSnapshot?.state, "post-gap authoritative job state").toBe(
+        SearchJobState.SEARCH_JOB_STATE_COMPLETED,
+      );
+      expect(recoveredSnapshot?.progress?.scannedRows, "post-gap authoritative rows").toBe(5n);
+      expect(fulfilledAuthoritativeJobRequests, "responses before final recovery").toBe(2);
+      releaseThirdAuthoritativeResponse();
+    }
 
     const resultsResponse = await resultsResponsePromise;
     assertProtobufResponse(resultsResponse);
     expect(decodeSearchResultsJobID(await resultsResponse.body())).toBe(browserSearchJobID);
     await gap.waitForTerminalClose();
 
-    await expect.poll(() => fulfilledAuthoritativeJobRequests, { timeout }).toBe(3);
+    await expect.poll(() => fulfilledAuthoritativeJobRequests, { timeout }).toBe(
+      sequenceGapScenario.restOnlyTerminal ? 2 : 3,
+    );
     const jobStrip = page.getByTestId("job-strip");
     await expect(jobStrip).toHaveAttribute("aria-busy", "false", { timeout });
     await expect(jobStrip).toContainText("Completed", { timeout });
@@ -650,10 +753,19 @@ test("live preview recovers from a real sequence gap", async ({ page }) => {
     expect(previewStatuses, "UI preview status transitions").toContain("finalizing");
     expect(previewStatuses, "UI preview status transitions").not.toContain("finalization-error");
     expect(gap.connectionCount(), "search WebSocket connections").toBe(2);
-    expect(gap.liveFrameCount(), "post-replay live target frames").toBeGreaterThan(0);
+    if (sequenceGapScenario.restOnlyTerminal) {
+      expect(gap.liveFrameCount(), "delivered post-replay progress frames").toBe(3);
+    } else {
+      expect(gap.liveFrameCount(), "post-replay live target frames").toBeGreaterThan(0);
+    }
     gap.assertHealthy();
     expect(safety.createRequests(), "browser search create requests").toBe(1);
-    expect(authoritativeJobRequests, "authoritative job GETs").toBe(3);
+    expect(authoritativeJobRequests, "authoritative job GETs").toBe(
+      sequenceGapScenario.restOnlyTerminal ? 2 : 3,
+    );
+    expect(authoritativeResultsRequests, "authoritative results GETs").toBe(
+      sequenceGapScenario.restOnlyTerminal ? 1 : 0,
+    );
     assertBrowserSafety(safety);
   } finally {
     allowFirstAuthoritativeFetch();
@@ -661,9 +773,23 @@ test("live preview recovers from a real sequence gap", async ({ page }) => {
     releaseFirstAuthoritativeResponse();
     releaseSecondAuthoritativeResponse();
     releaseThirdAuthoritativeResponse();
+    releaseAuthoritativeResultsResponse();
     gap.dispose();
   }
 });
+}
+
+async function expectZeroRowBackendPreviewFinalizing(page: Page): Promise<void> {
+  const status = page.getByTestId("backend-preview-status");
+  await expect(status).toHaveAttribute("data-status", "finalizing", { timeout });
+  await expect(status).toContainText("Loading the authoritative result snapshot.", { timeout });
+  await expect(
+    page.getByText("Search complete. Loading authoritative results.", { exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    page.getByRole("table", { name: "Live preview search statistics" }),
+  ).toHaveCount(0);
+}
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name]?.trim();
@@ -969,6 +1095,8 @@ interface SequenceGapObservation {
   droppedFrameCount(): number;
   waitForReplayReady(): Promise<void>;
   releaseNextReplayFrame(): bigint;
+  waitForTerminalProjectionWithheld(): Promise<void>;
+  withheldTerminalProjectionFrameCount(): number;
   waitForTerminalClose(): Promise<void>;
   connectionCount(): number;
   liveFrameCount(): number;
@@ -1013,6 +1141,7 @@ async function interceptSequenceGap(
   page: Page,
   expectedOrigin: string,
   timeoutMilliseconds: number,
+  withholdTerminalProjection = false,
 ): Promise<SequenceGapObservation> {
   let expectedJobID: string | undefined;
   let routedJobID: string | undefined;
@@ -1035,6 +1164,9 @@ async function interceptSequenceGap(
   let terminalCloseForwardCompleted = false;
   let replayReleaseCount = 0;
   let liveTargetFrameCount = 0;
+  let withholdingTerminalProjection = false;
+  let withheldTerminalProjectionFrameCount = 0;
+  let withheldTerminalStateVersion: bigint | undefined;
   let gapStimulusSent = false;
   let disposed = false;
   let failure: Error | undefined;
@@ -1046,6 +1178,7 @@ async function interceptSequenceGap(
   let checkpointSettled = false;
   let replayReadySettled = false;
   let gapCloseSettled = false;
+  let terminalProjectionSettled = false;
   let terminalCloseSettled = false;
   let resolveCheckpoint!: () => void;
   let rejectCheckpoint!: (reason: Error) => void;
@@ -1053,6 +1186,8 @@ async function interceptSequenceGap(
   let rejectReplayReady!: (reason: Error) => void;
   let resolveGapClose!: () => void;
   let rejectGapClose!: (reason: Error) => void;
+  let resolveTerminalProjection!: () => void;
+  let rejectTerminalProjection!: (reason: Error) => void;
   let resolveTerminalClose!: () => void;
   let rejectTerminalClose!: (reason: Error) => void;
   const checkpointReady = new Promise<void>((resolve, reject) => {
@@ -1067,6 +1202,10 @@ async function interceptSequenceGap(
     resolveGapClose = resolve;
     rejectGapClose = reject;
   });
+  const terminalProjectionReady = new Promise<void>((resolve, reject) => {
+    resolveTerminalProjection = resolve;
+    rejectTerminalProjection = reject;
+  });
   const terminalCloseReady = new Promise<void>((resolve, reject) => {
     resolveTerminalClose = resolve;
     rejectTerminalClose = reject;
@@ -1074,6 +1213,7 @@ async function interceptSequenceGap(
   void checkpointReady.catch(() => undefined);
   void replayReady.catch(() => undefined);
   void gapCloseReady.catch(() => undefined);
+  void terminalProjectionReady.catch(() => undefined);
   void terminalCloseReady.catch(() => undefined);
 
   const fail = (error: unknown): void => {
@@ -1094,6 +1234,10 @@ async function interceptSequenceGap(
     if (!gapCloseSettled) {
       gapCloseSettled = true;
       rejectGapClose(normalized);
+    }
+    if (!terminalProjectionSettled) {
+      terminalProjectionSettled = true;
+      rejectTerminalProjection(normalized);
     }
     if (!terminalCloseSettled) {
       terminalCloseSettled = true;
@@ -1356,6 +1500,69 @@ async function interceptSequenceGap(
             );
           }
           lastUpstreamSequence = event.sequence;
+          if (
+            withholdTerminalProjection
+            && (
+              withholdingTerminalProjection
+              || (
+                event.payload?.$case === "searchStateChanged"
+                && event.payload.value.state === SearchJobState.SEARCH_JOB_STATE_COMPLETED
+              )
+            )
+          ) {
+            withholdingTerminalProjection = true;
+            const expectedPayloads = [
+              "searchStateChanged",
+              "searchProgress",
+              "searchTerminal",
+            ] as const;
+            const expectedPayload =
+              expectedPayloads[withheldTerminalProjectionFrameCount];
+            if (expectedPayload === undefined || event.payload?.$case !== expectedPayload) {
+              throw new Error(
+                `sequence-gap terminal projection frame ${withheldTerminalProjectionFrameCount + 1} was ${String(event.payload?.$case)}, want ${String(expectedPayload)}`,
+              );
+            }
+            withheldTerminalProjectionFrameCount += 1;
+            if (event.payload.$case === "searchStateChanged") {
+              if (
+                event.payload.value.searchJobId !== routedJobID
+                || event.payload.value.state
+                !== SearchJobState.SEARCH_JOB_STATE_COMPLETED
+                || event.payload.value.stateVersion <= 0n
+              ) {
+                throw new Error("sequence-gap withheld completed state was invalid");
+              }
+              withheldTerminalStateVersion = event.payload.value.stateVersion;
+            } else if (event.payload.$case === "searchProgress") {
+              if (
+                event.payload.value.phase
+                !== SearchExecutionPhase.SEARCH_EXECUTION_PHASE_COMPLETE
+                || event.payload.value.scannedRows !== 5n
+                || event.payload.value.producedRows !== 1n
+              ) {
+                throw new Error("sequence-gap withheld final progress was invalid");
+              }
+            } else if (event.payload.$case === "searchTerminal") {
+              if (
+                event.payload.value.searchJobId !== routedJobID
+                || event.payload.value.state
+                !== SearchJobState.SEARCH_JOB_STATE_COMPLETED
+                || event.payload.value.stateVersion !== withheldTerminalStateVersion
+                || event.payload.value.finalProgress?.phase
+                !== SearchExecutionPhase.SEARCH_EXECUTION_PHASE_COMPLETE
+                || event.payload.value.finalProgress.scannedRows !== 5n
+                || event.payload.value.finalProgress.producedRows !== 1n
+              ) {
+                throw new Error("sequence-gap withheld terminal event was invalid");
+              }
+              if (!terminalProjectionSettled) {
+                terminalProjectionSettled = true;
+                resolveTerminalProjection();
+              }
+            }
+            return;
+          }
           liveTargetFrameCount += 1;
         }
         client.send(message);
@@ -1406,6 +1613,16 @@ async function interceptSequenceGap(
       secondClient.send(frame);
       return sequence;
     },
+    waitForTerminalProjectionWithheld() {
+      if (!withholdTerminalProjection) {
+        return Promise.reject(new Error("sequence-gap terminal projection is not being withheld"));
+      }
+      if (failure !== undefined) return Promise.reject(failure);
+      return terminalProjectionReady;
+    },
+    withheldTerminalProjectionFrameCount() {
+      return withheldTerminalProjectionFrameCount;
+    },
     waitForTerminalClose() {
       if (failure !== undefined) return Promise.reject(failure);
       return terminalCloseReady;
@@ -1438,6 +1655,13 @@ async function interceptSequenceGap(
         || replayFrames.size !== 2
         || replayReleaseCount !== 2
         || liveTargetFrameCount === 0
+        || (
+          withholdTerminalProjection
+            ? withheldTerminalProjectionFrameCount !== 3
+              || !terminalProjectionSettled
+              || withheldTerminalStateVersion === undefined
+            : withheldTerminalProjectionFrameCount !== 0
+        )
       ) {
         throw new Error("sequence-gap observation did not complete its exact contract");
       }
@@ -1456,6 +1680,10 @@ async function interceptSequenceGap(
       if (!gapCloseSettled) {
         gapCloseSettled = true;
         resolveGapClose();
+      }
+      if (!terminalProjectionSettled) {
+        terminalProjectionSettled = true;
+        resolveTerminalProjection();
       }
       if (!terminalCloseSettled) {
         terminalCloseSettled = true;
