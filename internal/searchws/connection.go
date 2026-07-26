@@ -571,21 +571,17 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		if err != nil {
 			return false, &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not read initial target state"}
 		}
-		var workBytes uint64
 		if preview {
-			workBytes = uint64(len(canonical))
-			if !connection.service.reserveQueuedBytes(workBytes) {
+			releaseTailoring, acquireErr := connection.service.acquireTailoring(connection.ctx)
+			if acquireErr != nil {
 				connection.hardClose()
 				return false, nil
 			}
+			defer releaseTailoring()
 			canonical, err = tailorPreviewEvent(canonical, group[0].request.previewRows)
-			if err != nil || uint64(len(canonical)) > workBytes {
-				connection.service.releaseQueuedBytes(workBytes)
+			if err != nil {
 				return false, &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not encode initial target state"}
 			}
-			connection.service.releaseQueuedBytes(workBytes - uint64(len(canonical)))
-			workBytes = uint64(len(canonical))
-			defer connection.service.releaseQueuedBytes(workBytes)
 		}
 		for _, delivery := range group {
 			result, stageErr := connection.stagePreparedCanonicalFrame(batch, canonical, delivery.request.id)
@@ -792,32 +788,6 @@ func (connection *connection) enqueueCanonicalPreview(data []byte, subscriptionI
 	connection.queuedBytes += frameBytes
 	connection.signalWriterLocked()
 	return queueAccepted
-}
-
-// previewQueueMayAccept is a cheap, advisory admission check used before
-// tailoring a disposable canonical preview for a subscriber group. The final
-// enqueue repeats every check and owns the actual reservation.
-func (connection *connection) previewQueueMayAccept(frameBytes uint64) bool {
-	if frameBytes > connection.service.config.maximumFrameBytes ||
-		frameBytes > connection.service.config.maximumQueuedBytes {
-		return false
-	}
-	connection.queueMu.Lock()
-	defer connection.queueMu.Unlock()
-	if connection.hardClosed || connection.gracefulClosing {
-		return false
-	}
-	usedFrames := len(connection.queue) - connection.queueHead + connection.inFlightFrames
-	usedBytes := connection.queuedBytes + connection.inFlightBytes
-	if usedFrames >= connection.service.config.maximumQueuedFrames ||
-		usedBytes > connection.service.config.maximumQueuedBytes ||
-		frameBytes > connection.service.config.maximumQueuedBytes-usedBytes {
-		return false
-	}
-	connection.service.queueBudgetMu.Lock()
-	defer connection.service.queueBudgetMu.Unlock()
-	return connection.service.queuedBytes <= connection.service.config.maximumTotalQueuedBytes &&
-		frameBytes <= connection.service.config.maximumTotalQueuedBytes-connection.service.queuedBytes
 }
 
 func (connection *connection) enqueueBatch(frames [][]byte) bool {

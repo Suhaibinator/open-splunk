@@ -30,6 +30,7 @@ type Service struct {
 	targetWG          sync.WaitGroup
 	loadWG            sync.WaitGroup
 	projectionGate    chan struct{}
+	tailoringGate     chan struct{}
 
 	replayBudgetMu sync.Mutex
 	replayBytes    uint64
@@ -48,6 +49,7 @@ func New(config Config) (*Service, error) {
 		config: normalized, ctx: ctx, cancel: cancel, done: make(chan struct{}),
 		connections: make(map[*connection]struct{}), targets: make(map[targetKey]*targetState), loads: make(map[targetKey]*targetLoad),
 		projectionGate: make(chan struct{}, normalized.maximumConcurrentProjections),
+		tailoringGate:  make(chan struct{}, normalized.maximumConcurrentProjections),
 	}, nil
 }
 

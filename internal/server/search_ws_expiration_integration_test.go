@@ -419,7 +419,7 @@ func waitForExpirationSearchState(
 	state searchjobs.State,
 ) searchjobs.Job {
 	t.Helper()
-	return waitForExpirationState(t, "search "+id, state.String(), func() (searchjobs.Job, string, error) {
+	return waitForIntegrationState(t, "search "+id, state.String(), func() (searchjobs.Job, string, error) {
 		job, err := manager.GetFor(access, id)
 		return job, job.State.String(), err
 	})
@@ -433,13 +433,13 @@ func waitForExpirationExportState(
 	state exportjobs.State,
 ) exportjobs.Job {
 	t.Helper()
-	return waitForExpirationState(t, "export "+id, state.String(), func() (exportjobs.Job, string, error) {
+	return waitForIntegrationState(t, "export "+id, state.String(), func() (exportjobs.Job, string, error) {
 		job, err := manager.Get(context.Background(), access, id)
 		return job, job.State.String(), err
 	})
 }
 
-func waitForExpirationState[T any](
+func waitForIntegrationState[T any](
 	t *testing.T,
 	label string,
 	want string,

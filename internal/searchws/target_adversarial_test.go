@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -561,7 +562,7 @@ func TestAdversarialUnsubscribeMakesLateDeliveryNoOpSuccess(t *testing.T) {
 	connection.queueMu.Lock()
 	queuedFrames, queuedBytes := len(connection.queue), connection.queuedBytes
 	connection.queueMu.Unlock()
-	if !subscription.deliverCanonical([]byte("not protobuf"), false, false) {
+	if !subscription.deliverCanonical([]byte("not protobuf"), false) {
 		t.Fatal("late inactive data delivery reported failure")
 	}
 	if !subscription.deliverControl(resynchronizationEvent(
@@ -628,6 +629,350 @@ func TestPreviewQueuePressureSkipsSubscriptionSpecificCopy(t *testing.T) {
 	}
 	if connection.queuedBytes != before {
 		t.Fatalf("preview pressure changed queued bytes = %d, want %d", connection.queuedBytes, before)
+	}
+}
+
+func TestDisposablePreviewPressureClosesAndRetainsReplay(t *testing.T) {
+	service := adversarialNewService(t, func(config *Config) {
+		config.MaximumQueuedBytes = minimumFrameBytes
+		config.MaximumTotalQueuedBytes = 4 * minimumFrameBytes
+	})
+	target := adversarialNewTarget(service, "slow-preview")
+	incarnation := adversarialNow.Add(-time.Hour)
+	initial := previewEdgeProjection(1, incarnation, "slow-schema", true)
+	adversarialApply(t, target, initial, true)
+	target.mu.Lock()
+	checkpoint := target.latest
+	target.mu.Unlock()
+
+	slow := newConnection(service, nil)
+	defer slow.cancel()
+	slowSubscription := adversarialAttach(target, slow, "slow-preview")
+	slowSubscription.previewRows = 1
+	defer adversarialDetach(slowSubscription)
+	healthy := newConnection(service, nil)
+	defer healthy.cancel()
+	healthySubscription := adversarialAttach(target, healthy, "healthy-preview")
+	healthySubscription.previewRows = 1
+	defer adversarialDetach(healthySubscription)
+	if !slow.enqueue(make([]byte, minimumFrameBytes-32)) {
+		t.Fatal("failed to seed the bounded connection queue")
+	}
+	changed := previewEdgeProjection(2, incarnation, "slow-schema", true)
+	changed.events[len(changed.events)-1].GetResultPreview().Rows[0].RowId = "changed-row"
+	adversarialApply(t, target, changed, false)
+
+	slow.queueMu.Lock()
+	closed := slow.hardClosed
+	queuedFrames, queuedBytes := len(slow.queue)-slow.queueHead, slow.queuedBytes
+	slow.queueMu.Unlock()
+	if !closed || queuedFrames != 0 || queuedBytes != 0 {
+		t.Fatalf(
+			"pressured disposable preview connection = closed:%t frames:%d bytes:%d",
+			closed,
+			queuedFrames,
+			queuedBytes,
+		)
+	}
+	healthyEvents := adversarialDrain(t, healthy)
+	var healthyRows []*opensplunkv1.ResultRow
+	if len(healthyEvents) == 1 {
+		healthyRows = healthyEvents[0].GetResultPreview().GetRows()
+	}
+	if len(healthyEvents) != 1 ||
+		len(healthyRows) != 1 ||
+		healthyRows[0].GetRowId() != "changed-row" {
+		t.Fatalf("healthy disposable preview delivery = %+v", healthyEvents)
+	}
+
+	target.mu.Lock()
+	replay, continuous := target.replayAfterLocked(checkpoint)
+	_, latest := target.replayBoundsLocked()
+	target.mu.Unlock()
+	if !continuous || len(replay) != 1 {
+		t.Fatalf("preview replay after %d = continuous:%t frames:%d", checkpoint, continuous, len(replay))
+	}
+	recovered := newConnection(service, nil)
+	defer recovered.cancel()
+	recoveredSubscription := adversarialAttach(target, recovered, "recovered-preview")
+	recoveredSubscription.previewRows = 1
+	defer adversarialDetach(recoveredSubscription)
+	if !recoveredSubscription.deliverCanonical(replay[0], true) {
+		t.Fatal("retained preview replay was not accepted")
+	}
+	recoveredEvents := adversarialDrain(t, recovered)
+	var recoveredRows []*opensplunkv1.ResultRow
+	if len(recoveredEvents) == 1 {
+		recoveredRows = recoveredEvents[0].GetResultPreview().GetRows()
+	}
+	if len(recoveredEvents) != 1 ||
+		recoveredEvents[0].GetSequence() != latest ||
+		len(recoveredRows) != 1 ||
+		recoveredRows[0].GetRowId() != "changed-row" {
+		t.Fatalf("recovered disposable preview = %+v, latest %d", recoveredEvents, latest)
+	}
+
+	service.queueBudgetMu.Lock()
+	globalQueuedBytes := service.queuedBytes
+	service.queueBudgetMu.Unlock()
+	if globalQueuedBytes != 0 {
+		t.Fatalf("pressured disposable preview retained %d global queued bytes", globalQueuedBytes)
+	}
+}
+
+func TestPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget(t *testing.T) {
+	service := adversarialNewService(t, func(config *Config) {
+		config.MaximumQueuedBytes = minimumFrameBytes
+		config.MaximumTotalQueuedBytes = minimumFrameBytes
+	})
+	target := adversarialNewTarget(service, "tailored-preview-isolation")
+	incarnation := adversarialNow.Add(-time.Hour)
+	initial := previewEdgeProjection(1, incarnation, "tailored-schema", true)
+	initial.previewRows = 2
+	initial.events[len(initial.events)-1].GetResultPreview().Rows = append(
+		initial.events[len(initial.events)-1].GetResultPreview().Rows,
+		&opensplunkv1.ResultRow{RowId: strings.Repeat("large-row-", 64), Ordinal: 1},
+	)
+	adversarialApply(t, target, initial, true)
+
+	healthy := newConnection(service, nil)
+	defer healthy.cancel()
+	healthySubscription := adversarialAttach(target, healthy, "healthy-tailored-preview")
+	healthySubscription.previewRows = 1
+	defer adversarialDetach(healthySubscription)
+
+	changed := previewEdgeProjection(2, incarnation, "tailored-schema", true)
+	changed.previewRows = 2
+	changedPreview := changed.events[len(changed.events)-1].GetResultPreview()
+	changedPreview.Rows[0].RowId = "changed-tailored-row"
+	changedPreview.Rows = append(
+		changedPreview.Rows,
+		&opensplunkv1.ResultRow{RowId: strings.Repeat("large-row-", 64), Ordinal: 1},
+	)
+	target.mu.Lock()
+	nextSequence := target.latest + 1
+	targetProto := proto.Clone(target.target).(*opensplunkv1.JobTarget)
+	target.mu.Unlock()
+	canonicalEvent := proto.Clone(changed.events[len(changed.events)-1]).(*opensplunkv1.SearchWebSocketEvent)
+	canonicalEvent.Sequence = nextSequence
+	canonicalEvent.Target = targetProto
+	occurredAt, err := timestampToProto(adversarialNow)
+	if err != nil {
+		t.Fatalf("encode preview occurrence time: %v", err)
+	}
+	canonicalEvent.OccurredAt = occurredAt
+	canonical, err := proto.MarshalOptions{Deterministic: true}.Marshal(canonicalEvent)
+	if err != nil {
+		t.Fatalf("marshal canonical preview: %v", err)
+	}
+	tailored, err := tailorPreviewEvent(canonical, healthySubscription.previewRows)
+	if err != nil {
+		t.Fatalf("tailor canonical preview: %v", err)
+	}
+	healthyFrameBytes, err := stampedFrameSize(len(tailored), healthySubscription.id)
+	if err != nil || healthyFrameBytes >= minimumFrameBytes || uint64(len(canonical)) <= healthyFrameBytes {
+		t.Fatalf(
+			"preview sizes = canonical:%d tailored-frame:%d err:%v",
+			len(canonical),
+			healthyFrameBytes,
+			err,
+		)
+	}
+
+	unrelated := newConnection(service, nil)
+	defer unrelated.cancel()
+	unrelatedBytes := minimumFrameBytes - healthyFrameBytes
+	if !unrelated.enqueue(make([]byte, int(unrelatedBytes))) {
+		t.Fatal("failed to fill the unrelated connection to the tailored-frame boundary")
+	}
+	adversarialApply(t, target, changed, false)
+
+	healthyEvents := adversarialDrain(t, healthy)
+	var healthyRows []*opensplunkv1.ResultRow
+	if len(healthyEvents) == 1 {
+		healthyRows = healthyEvents[0].GetResultPreview().GetRows()
+	}
+	if len(healthyEvents) != 1 ||
+		len(healthyRows) != 1 ||
+		healthyRows[0].GetRowId() != "changed-tailored-row" {
+		t.Fatalf("healthy tailored preview delivery = %+v", healthyEvents)
+	}
+	unrelated.queueMu.Lock()
+	unrelatedClosed, unrelatedQueuedBytes := unrelated.hardClosed, unrelated.queuedBytes
+	unrelated.queueMu.Unlock()
+	if unrelatedClosed || unrelatedQueuedBytes != unrelatedBytes {
+		t.Fatalf(
+			"unrelated queue = closed:%t bytes:%d, want open with %d",
+			unrelatedClosed,
+			unrelatedQueuedBytes,
+			unrelatedBytes,
+		)
+	}
+}
+
+func TestInitialPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget(t *testing.T) {
+	reader := &adversarialSearchSnapshots{}
+	service := adversarialNewService(t, func(config *Config) {
+		config.Searches = reader
+		config.MaximumQueuedBytes = minimumFrameBytes
+		config.MaximumTotalQueuedBytes = minimumFrameBytes
+		config.MaximumReplayBytes = 8 * minimumFrameBytes
+		config.MaximumTotalReplayBytes = 8 * minimumFrameBytes
+		config.Wait = func(ctx context.Context, _ time.Duration) {
+			<-ctx.Done()
+		}
+	})
+	target := adversarialNewTarget(service, "initial-tailored-preview-isolation")
+	incarnation := adversarialNow.Add(-time.Hour)
+	initial := previewEdgeProjection(1, incarnation, "initial-tailored-schema", true)
+	initial.previewRows = 2
+	initial.events[len(initial.events)-1].GetResultPreview().Rows = append(
+		initial.events[len(initial.events)-1].GetResultPreview().Rows,
+		&opensplunkv1.ResultRow{RowId: strings.Repeat("large-row-", 32), Ordinal: 1},
+	)
+	adversarialApply(t, target, initial, true)
+	target.mu.Lock()
+	checkpoint := target.latest
+	target.mu.Unlock()
+
+	changed := previewEdgeProjection(2, incarnation, "initial-tailored-schema", true)
+	changed.previewRows = 2
+	changedPreview := changed.events[len(changed.events)-1].GetResultPreview()
+	changedPreview.Rows[0].RowId = "changed-initial-tailored-row"
+	changedPreview.Rows = append(
+		changedPreview.Rows,
+		&opensplunkv1.ResultRow{RowId: strings.Repeat("large-row-", 32), Ordinal: 1},
+	)
+	adversarialApply(t, target, changed, false)
+
+	target.mu.Lock()
+	replay, continuous := target.replayAfterLocked(checkpoint)
+	earliest, latest := target.replayBoundsLocked()
+	target.mu.Unlock()
+	if !continuous || len(replay) != 1 {
+		t.Fatalf("initial preview replay after %d = continuous:%t frames:%d", checkpoint, continuous, len(replay))
+	}
+	var canonicalEvent opensplunkv1.SearchWebSocketEvent
+	if err := proto.Unmarshal(replay[0], &canonicalEvent); err != nil {
+		t.Fatalf("decode retained preview: %v", err)
+	}
+	if rows := canonicalEvent.GetResultPreview().GetRows(); len(rows) != 2 {
+		t.Fatalf("retained preview rows = %d, want 2", len(rows))
+	}
+
+	const requestID = "initial-tailoring-request"
+	const subscriptionID = "initial-tailored-preview"
+	previewRows := uint32(1)
+	tailored, err := tailorPreviewEvent(replay[0], previewRows)
+	if err != nil {
+		t.Fatalf("tailor retained preview: %v", err)
+	}
+	previewFrameBytes, err := stampedFrameSize(len(tailored), subscriptionID)
+	if err != nil {
+		t.Fatalf("size tailored preview frame: %v", err)
+	}
+	ack, err := marshalEvent(subscriptionAcknowledgedEvent(requestID, requestedSubscription{
+		id:            subscriptionID,
+		key:           target.key,
+		afterSequence: checkpoint,
+		previewRows:   previewRows,
+		replayFollows: true,
+		earliest:      earliest,
+		latest:        latest,
+	}, adversarialNow), service.config.maximumFrameBytes)
+	if err != nil {
+		t.Fatalf("marshal expected subscription acknowledgment: %v", err)
+	}
+	finalBatchBytes := uint64(len(ack)) + previewFrameBytes
+	if finalBatchBytes >= minimumFrameBytes || uint64(len(replay[0])) <= previewFrameBytes {
+		t.Fatalf(
+			"initial preview sizes = canonical:%d tailored-frame:%d batch:%d",
+			len(replay[0]),
+			previewFrameBytes,
+			finalBatchBytes,
+		)
+	}
+
+	unrelated := newConnection(service, nil)
+	defer unrelated.hardClose()
+	unrelatedBytes := minimumFrameBytes - finalBatchBytes
+	if !unrelated.enqueue(make([]byte, int(unrelatedBytes))) {
+		t.Fatal("failed to fill the unrelated queue to the exact initial-batch boundary")
+	}
+
+	healthy := newConnection(service, nil)
+	defer func() {
+		healthy.removeAllSubscriptions()
+		healthy.hardClose()
+	}()
+	failure := healthy.subscribe(requestID, &opensplunkv1.SubscribeSearchJobsCommand{
+		Subscriptions: []*opensplunkv1.SearchSubscription{{
+			SubscriptionId:  subscriptionID,
+			Target:          target.key.protobuf(),
+			AfterSequence:   checkpoint,
+			IncludePreviews: true,
+			PreviewRowLimit: &previewRows,
+		}},
+	})
+	if failure != nil {
+		t.Fatalf("subscribe() = %v", failure)
+	}
+	healthy.queueMu.Lock()
+	healthyClosed, healthyQueuedBytes := healthy.hardClosed, healthy.queuedBytes
+	healthy.queueMu.Unlock()
+	if healthyClosed || healthyQueuedBytes != finalBatchBytes {
+		t.Fatalf(
+			"initial replay queue = closed:%t bytes:%d, want open with %d",
+			healthyClosed,
+			healthyQueuedBytes,
+			finalBatchBytes,
+		)
+	}
+
+	events := adversarialDrain(t, healthy)
+	var acknowledged *opensplunkv1.SubscriptionAcknowledged
+	var rows []*opensplunkv1.ResultRow
+	if len(events) == 2 {
+		acknowledged = events[0].GetSubscriptionAcknowledged()
+		rows = events[1].GetResultPreview().GetRows()
+	}
+	if len(events) != 2 ||
+		acknowledged == nil ||
+		acknowledged.GetRequestId() != requestID ||
+		acknowledged.GetSubscriptionId() != subscriptionID ||
+		!acknowledged.GetReplayWillFollow() ||
+		acknowledged.GetEarliestAvailableSequence() != earliest ||
+		acknowledged.GetLatestSequence() != latest ||
+		events[1].GetSubscriptionId() != subscriptionID ||
+		events[1].GetSequence() != latest ||
+		!events[1].GetResultPreview().GetTruncated() ||
+		len(rows) != 1 ||
+		rows[0].GetRowId() != "changed-initial-tailored-row" {
+		t.Fatalf("initial tailored replay = %+v", events)
+	}
+
+	unrelated.queueMu.Lock()
+	unrelatedClosed, unrelatedQueuedBytes := unrelated.hardClosed, unrelated.queuedBytes
+	unrelated.queueMu.Unlock()
+	if unrelatedClosed || unrelatedQueuedBytes != unrelatedBytes {
+		t.Fatalf(
+			"unrelated queue = closed:%t bytes:%d, want open with %d",
+			unrelatedClosed,
+			unrelatedQueuedBytes,
+			unrelatedBytes,
+		)
+	}
+	service.queueBudgetMu.Lock()
+	globalQueuedBytes := service.queuedBytes
+	service.queueBudgetMu.Unlock()
+	if globalQueuedBytes != unrelatedBytes {
+		t.Fatalf("global queued bytes = %d, want unrelated reservation %d", globalQueuedBytes, unrelatedBytes)
+	}
+	if permits := len(service.tailoringGate); permits != 0 {
+		t.Fatalf("preview tailoring permits retained after subscribe = %d", permits)
+	}
+	if calls := reader.calls.Load(); calls != 0 {
+		t.Fatalf("subscribe unexpectedly refreshed the already projected preview %d times", calls)
 	}
 }
 

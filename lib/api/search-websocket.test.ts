@@ -11,6 +11,7 @@ import {
 } from "../../gen/ts/open_splunk/v1/search_ws";
 import {
   SearchWebSocketClient,
+  type SearchWebSocketClientOptions,
   searchJobTarget,
 } from "./search-websocket";
 
@@ -18,15 +19,22 @@ const SOCKET_CONNECTING = 0;
 const SOCKET_OPEN = 1;
 const SOCKET_CLOSING = 2;
 const SOCKET_CLOSED = 3;
+const noop = (): void => {};
 
 class FakeWebSocket extends EventTarget {
   public binaryType: BinaryType = "blob";
   public readyState = SOCKET_CONNECTING;
   public readonly sent: Uint8Array[] = [];
   public readonly closes: Array<{ code?: number; reason?: string }> = [];
+  private nextSendError?: Error;
 
   public send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
     if (this.readyState !== SOCKET_OPEN) throw new Error("fake WebSocket is not open");
+    if (this.nextSendError !== undefined) {
+      const error = this.nextSendError;
+      this.nextSendError = undefined;
+      throw error;
+    }
     if (typeof data === "string" || data instanceof Blob) {
       throw new TypeError("test client sent a non-binary frame");
     }
@@ -61,9 +69,23 @@ class FakeWebSocket extends EventTarget {
     this.dispatchEvent(message);
   }
 
+  public failNextSend(error = new Error("injected WebSocket send failure")): void {
+    this.nextSendError = error;
+  }
+
   public serverClose(): void {
     if (this.readyState === SOCKET_CLOSED) return;
+    this.beginServerClose();
+    this.finishClose();
+  }
+
+  public beginServerClose(): void {
+    if (this.readyState === SOCKET_CLOSED) return;
     this.readyState = SOCKET_CLOSING;
+  }
+
+  public finishServerClose(): void {
+    assert.equal(this.readyState, SOCKET_CLOSING);
     this.finishClose();
   }
 
@@ -215,13 +237,16 @@ async function waitFor(
   });
 }
 
-function clientFixture() {
+function clientFixture(
+  options: Omit<SearchWebSocketClientOptions, "webSocketFactory"> = {},
+) {
   const sockets: FakeWebSocket[] = [];
   const client = new SearchWebSocketClient({
     autoReconnect: true,
     reconnectDelayMs: 0,
     maximumReconnectDelayMs: 0,
     baseUrl: "http://127.0.0.1:8080/",
+    ...options,
     webSocketFactory: () => {
       const socket = new FakeWebSocket();
       sockets.push(socket);
@@ -801,6 +826,439 @@ test("checkpoints reject values outside protobuf uint64", () => {
   } finally {
     client.dispose();
   }
+});
+
+test("a bounded inbound backlog waits for stale listener completion before replay", async (t) => {
+  const { client, sockets } = clientFixture({
+    maximumInboundFrames: 3,
+    maximumInboundBytes: 1 << 20,
+  });
+  t.after(() => client.dispose());
+
+  const target = searchJobTarget("search-slow-listener");
+  const deliveryOrder: string[] = [];
+  const errors: string[] = [];
+  let firstListenerStarted = false;
+  let releaseFirstListener!: () => void;
+  const firstListenerGate = new Promise<void>((resolve) => {
+    releaseFirstListener = resolve;
+  });
+  t.after(() => releaseFirstListener());
+  client.onError((error) => errors.push(error.message));
+  client.onEvent(async (event) => {
+    if (event.payload?.$case !== "searchStateChanged") return;
+    deliveryOrder.push(`start:${event.sequence.toString()}`);
+    if (!firstListenerStarted) {
+      firstListenerStarted = true;
+      await firstListenerGate;
+    }
+    deliveryOrder.push(`finish:${event.sequence.toString()}`);
+  });
+
+  client.subscribe(target, {
+    subscriptionId: "slow-listener-subscription",
+    includePreviews: false,
+  });
+  await waitFor(() => sockets.length === 1, "slow-listener WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "slow-listener subscription");
+  sockets[0].receive(stateEvent("slow-listener-subscription", "search-slow-listener", 1n));
+  await waitFor(() => firstListenerStarted, "blocked first listener");
+
+  sockets[0].receive(stateEvent("slow-listener-subscription", "search-slow-listener", 2n));
+  sockets[0].receive(stateEvent("slow-listener-subscription", "search-slow-listener", 3n));
+  assert.equal(sockets.length, 1);
+  assert.equal(client.getLastSequence(target), 0n);
+
+  sockets[0].receive(stateEvent("slow-listener-subscription", "search-slow-listener", 4n));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(sockets.length, 1);
+  assert.equal(client.connectionState, "reconnecting");
+  assert.equal(client.getLastSequence(target), 0n);
+  assert.deepEqual(sockets[0].closes, [{
+    code: 4000,
+    reason: "Inbound backlog exceeded; replay required",
+  }]);
+  assert.ok(errors.some((message) => message.includes("inbound backlog")));
+
+  releaseFirstListener();
+  await waitFor(() => sockets.length === 2, "bounded-backlog replay WebSocket");
+  assert.deepEqual(deliveryOrder, ["start:1", "finish:1"]);
+  sockets[1].open();
+  await waitFor(() => sockets[1].sent.length === 1, "bounded-backlog replay subscription");
+  assert.equal(subscribeCommand(sockets[1]).afterSequence, 0n);
+  for (let sequence = 1n; sequence <= 4n; sequence += 1n) {
+    sockets[1].receive(stateEvent(
+      "slow-listener-subscription",
+      "search-slow-listener",
+      sequence,
+    ));
+    // Feed replay one frame at a time so this assertion is independent of the configured backlog bound.
+    // oxlint-disable-next-line no-await-in-loop
+    await waitFor(
+      () => client.getLastSequence(target) === sequence,
+      `bounded-backlog replay sequence ${sequence.toString()}`,
+    );
+  }
+  assert.equal(client.getLastSequence(target), 4n);
+  assert.deepEqual(deliveryOrder, [
+    "start:1",
+    "finish:1",
+    "start:1",
+    "finish:1",
+    "start:2",
+    "finish:2",
+    "start:3",
+    "finish:3",
+    "start:4",
+    "finish:4",
+  ]);
+});
+
+test("the inbound byte bound includes the active listener and every queued frame", async (t) => {
+  const subscriptionId = "byte-bound-subscription";
+  const searchJobId = "search-byte-bound";
+  const frames = [1n, 2n, 3n, 4n].map((sequence) => (
+    SearchWebSocketEventCodec.encode(stateEvent(subscriptionId, searchJobId, sequence)).finish()
+  ));
+  assert.ok(frames.every((frame) => frame.byteLength === frames[0].byteLength));
+
+  const { client, sockets } = clientFixture({
+    maximumInboundFrames: 10,
+    maximumInboundBytes: frames[0].byteLength * 3,
+  });
+  t.after(() => client.dispose());
+
+  let listenerStarted = false;
+  let releaseListener!: () => void;
+  const listenerGate = new Promise<void>((resolve) => {
+    releaseListener = resolve;
+  });
+  t.after(() => releaseListener());
+  client.onEvent(async (event) => {
+    if (event.payload?.$case !== "searchStateChanged" || listenerStarted) return;
+    listenerStarted = true;
+    await listenerGate;
+  });
+  const target = searchJobTarget(searchJobId);
+  client.subscribe(target, { subscriptionId, includePreviews: false });
+  await waitFor(() => sockets.length === 1, "byte-bound WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "byte-bound subscription");
+
+  sockets[0].receiveRaw(frames[0]);
+  await waitFor(() => listenerStarted, "byte-bound active listener");
+  sockets[0].receiveRaw(frames[1]);
+  sockets[0].receiveRaw(frames[2]);
+  assert.equal(sockets.length, 1);
+  sockets[0].receiveRaw(frames[3]);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(sockets.length, 1);
+  assert.equal(client.getLastSequence(target), 0n);
+  assert.deepEqual(sockets[0].closes, [{
+    code: 4000,
+    reason: "Inbound backlog exceeded; replay required",
+  }]);
+
+  releaseListener();
+  await waitFor(() => sockets.length === 2, "byte-bound replay WebSocket");
+  assert.equal(client.getLastSequence(target), 0n);
+});
+
+test("queued binary frames are copied before their backing storage can change", async (t) => {
+  const subscriptionId = "copied-view-subscription";
+  const searchJobId = "search-copied-view";
+  const firstFrame = SearchWebSocketEventCodec.encode(
+    stateEvent(subscriptionId, searchJobId, 1n),
+  ).finish();
+  const secondFrame = SearchWebSocketEventCodec.encode(
+    stateEvent(subscriptionId, searchJobId, 2n),
+  ).finish();
+  const thirdFrame = SearchWebSocketEventCodec.encode(
+    stateEvent(subscriptionId, searchJobId, 3n),
+  ).finish();
+  const { client, sockets } = clientFixture({
+    maximumInboundFrames: 3,
+    maximumInboundBytes: firstFrame.byteLength + secondFrame.byteLength + thirdFrame.byteLength,
+  });
+  t.after(() => client.dispose());
+
+  const target = searchJobTarget(searchJobId);
+  const errors: string[] = [];
+  let firstListenerStarted = false;
+  let releaseFirstListener!: () => void;
+  const firstListenerGate = new Promise<void>((resolve) => {
+    releaseFirstListener = resolve;
+  });
+  t.after(() => releaseFirstListener());
+  client.onError((error) => errors.push(error.message));
+  client.onEvent(async (event) => {
+    if (event.payload?.$case !== "searchStateChanged") return;
+    if (!firstListenerStarted) {
+      firstListenerStarted = true;
+      await firstListenerGate;
+    }
+  });
+
+  client.subscribe(target, { subscriptionId, includePreviews: false });
+  await waitFor(() => sockets.length === 1, "copied-view WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "copied-view subscription");
+  sockets[0].receiveRaw(firstFrame);
+  await waitFor(() => firstListenerStarted, "copied-view active listener");
+
+  const secondBuffer = secondFrame.slice().buffer as ArrayBuffer;
+  sockets[0].receiveRaw(secondBuffer);
+  new Uint8Array(secondBuffer).fill(0);
+  const offset = 128;
+  const backing = new Uint8Array((1 << 20) + thirdFrame.byteLength);
+  backing.set(thirdFrame, offset);
+  sockets[0].receiveRaw(new DataView(backing.buffer, offset, thirdFrame.byteLength));
+  backing.fill(0, offset, offset + thirdFrame.byteLength);
+  releaseFirstListener();
+
+  await waitFor(() => client.getLastSequence(target) === 3n, "copied-view checkpoint");
+  assert.equal(sockets.length, 1);
+  assert.deepEqual(errors, []);
+});
+
+test("the inbound queue periodically compacts a sustained nonempty backlog", async (t) => {
+  const { client, sockets } = clientFixture({
+    maximumInboundFrames: 3,
+    maximumInboundBytes: 1 << 20,
+  });
+  t.after(() => client.dispose());
+
+  const subscriptionId = "compacted-backlog-subscription";
+  const searchJobId = "search-compacted-backlog";
+  const target = searchJobTarget(searchJobId);
+  let invocations = 0;
+  let releaseListener = noop;
+  client.onEvent(async (event) => {
+    if (event.payload?.$case !== "searchStateChanged") return;
+    invocations += 1;
+    await new Promise<void>((resolve) => {
+      releaseListener = resolve;
+    });
+  });
+  t.after(() => releaseListener());
+
+  client.subscribe(target, { subscriptionId, includePreviews: false });
+  await waitFor(() => sockets.length === 1, "compacted-backlog WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "compacted-backlog subscription");
+  sockets[0].receive(stateEvent(subscriptionId, searchJobId, 1n));
+  await waitFor(() => invocations === 1, "first compacted-backlog listener");
+  sockets[0].receive(stateEvent(subscriptionId, searchJobId, 2n));
+  sockets[0].receive(stateEvent(subscriptionId, searchJobId, 3n));
+
+  for (let sequence = 4n; sequence <= 96n; sequence += 1n) {
+    releaseListener();
+    const expectedInvocations = Number(sequence - 2n);
+    // Keep two queued frames behind the active listener throughout the run.
+    // oxlint-disable-next-line no-await-in-loop
+    await waitFor(
+      () => invocations === expectedInvocations,
+      `compacted-backlog listener ${expectedInvocations.toString()}`,
+    );
+    sockets[0].receive(stateEvent(subscriptionId, searchJobId, sequence));
+  }
+
+  const internal = client as unknown as {
+    inboundGeneration?: { readonly frames: unknown[]; readonly frameHead: number };
+  };
+  const generation = internal.inboundGeneration;
+  assert.ok(generation);
+  assert.equal(generation.frames.length - generation.frameHead, 2);
+  assert.ok(
+    generation.frames.length <= 66,
+    `physical inbound queue retained ${generation.frames.length.toString()} slots`,
+  );
+
+  releaseListener();
+  await waitFor(() => invocations === 95, "penultimate compacted-backlog listener");
+  releaseListener();
+  await waitFor(() => invocations === 96, "final compacted-backlog listener");
+  releaseListener();
+  await waitFor(() => client.getLastSequence(target) === 96n, "compacted-backlog checkpoint");
+  assert.equal(sockets.length, 1);
+});
+
+test("a delayed stale close cannot orphan its queue or invalidate a replacement socket", async (t) => {
+  const { client, sockets } = clientFixture({
+    maximumInboundFrames: 3,
+    maximumInboundBytes: 1 << 20,
+  });
+  t.after(() => client.dispose());
+
+  const subscriptionId = "delayed-close-subscription";
+  const searchJobId = "search-delayed-close";
+  const target = searchJobTarget(searchJobId);
+  const deliveryOrder: string[] = [];
+  let firstListenerStarted = false;
+  let releaseFirstListener!: () => void;
+  const firstListenerGate = new Promise<void>((resolve) => {
+    releaseFirstListener = resolve;
+  });
+  t.after(() => releaseFirstListener());
+  client.onEvent(async (event) => {
+    if (event.payload?.$case !== "searchStateChanged") return;
+    deliveryOrder.push(`start:${event.sequence.toString()}`);
+    if (!firstListenerStarted) {
+      firstListenerStarted = true;
+      await firstListenerGate;
+    }
+    deliveryOrder.push(`finish:${event.sequence.toString()}`);
+  });
+
+  client.subscribe(target, { subscriptionId, includePreviews: false });
+  await waitFor(() => sockets.length === 1, "delayed-close WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "delayed-close subscription");
+  sockets[0].receive(stateEvent(subscriptionId, searchJobId, 1n));
+  await waitFor(() => firstListenerStarted, "delayed-close active listener");
+  sockets[0].receive(stateEvent(subscriptionId, searchJobId, 2n));
+
+  sockets[0].beginServerClose();
+  const replacement = client.connect();
+  assert.equal(sockets.length, 2);
+  sockets[0].finishServerClose();
+  sockets[1].open();
+  await replacement;
+  await waitFor(() => sockets[1].sent.length === 1, "replacement subscription");
+  assert.equal(subscribeCommand(sockets[1]).afterSequence, 0n);
+  sockets[1].receive(stateEvent(subscriptionId, searchJobId, 1n));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(deliveryOrder, ["start:1"]);
+
+  releaseFirstListener();
+  await waitFor(() => client.getLastSequence(target) === 1n, "replacement checkpoint");
+  assert.deepEqual(deliveryOrder, ["start:1", "finish:1", "start:1", "finish:1"]);
+  assert.equal(sockets.length, 2);
+});
+
+test("a sequence-gap callback cannot make the old generation close its replacement", async (t) => {
+  const { client, sockets } = clientFixture();
+  t.after(() => client.dispose());
+
+  const subscriptionId = "reentrant-gap-subscription";
+  const searchJobId = "search-reentrant-gap";
+  const target = searchJobTarget(searchJobId);
+  let replacement!: Promise<void>;
+  let gapCount = 0;
+  client.onSequenceGap(() => {
+    gapCount += 1;
+    client.disconnect();
+    replacement = client.connect();
+  });
+
+  client.subscribe(target, { subscriptionId, includePreviews: false });
+  await waitFor(() => sockets.length === 1, "reentrant-gap WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "reentrant-gap subscription");
+  sockets[0].receive(stateEvent(subscriptionId, searchJobId, 1n));
+  await waitFor(() => client.getLastSequence(target) === 1n, "reentrant-gap checkpoint");
+  sockets[0].receive(stateEvent(subscriptionId, searchJobId, 3n));
+
+  await waitFor(() => sockets.length === 2, "reentrant-gap replacement");
+  assert.equal(gapCount, 1);
+  assert.deepEqual(sockets[1].closes, []);
+  sockets[1].open();
+  await replacement;
+  await waitFor(() => sockets[1].sent.length === 1, "reentrant-gap replay subscription");
+  assert.equal(subscribeCommand(sockets[1]).afterSequence, 1n);
+  assert.deepEqual(sockets[1].closes, []);
+});
+
+test("a send-error callback cannot make the failed sender close its replacement", async (t) => {
+  const { client, sockets } = clientFixture();
+  t.after(() => client.dispose());
+
+  client.subscribe(searchJobTarget("search-send-error-first"), {
+    subscriptionId: "send-error-first-subscription",
+    includePreviews: false,
+  });
+  await waitFor(() => sockets.length === 1, "send-error WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "send-error first subscription");
+
+  let replacement!: Promise<void>;
+  let handled = false;
+  client.onError((error) => {
+    if (handled || !error.message.includes("injected WebSocket send failure")) return;
+    handled = true;
+    client.disconnect();
+    replacement = client.connect();
+  });
+  sockets[0].failNextSend();
+  client.subscribe(searchJobTarget("search-send-error-second"), {
+    subscriptionId: "send-error-second-subscription",
+    includePreviews: false,
+  });
+
+  await waitFor(() => sockets.length === 2, "send-error replacement");
+  assert.equal(handled, true);
+  assert.deepEqual(sockets[1].closes, []);
+  sockets[1].open();
+  await replacement;
+  await waitFor(() => sockets[1].sent.length === 2, "replacement active subscriptions");
+  assert.deepEqual(sockets[1].closes, []);
+});
+
+test("disconnect cancels a replay deferred behind an active listener", async (t) => {
+  const { client, sockets } = clientFixture({
+    maximumInboundFrames: 1,
+    maximumInboundBytes: 1 << 20,
+  });
+  t.after(() => client.dispose());
+
+  const subscriptionId = "disconnect-deferred-subscription";
+  const searchJobId = "search-disconnect-deferred";
+  let listenerStarted = false;
+  let releaseListener!: () => void;
+  const listenerGate = new Promise<void>((resolve) => {
+    releaseListener = resolve;
+  });
+  t.after(() => releaseListener());
+  client.onEvent(async (event) => {
+    if (event.payload?.$case !== "searchStateChanged") return;
+    listenerStarted = true;
+    await listenerGate;
+  });
+
+  client.subscribe(searchJobTarget(searchJobId), { subscriptionId, includePreviews: false });
+  await waitFor(() => sockets.length === 1, "disconnect-deferred WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "disconnect-deferred subscription");
+  sockets[0].receive(stateEvent(subscriptionId, searchJobId, 1n));
+  await waitFor(() => listenerStarted, "disconnect-deferred active listener");
+  sockets[0].receive(stateEvent(subscriptionId, searchJobId, 2n));
+  assert.equal(client.connectionState, "reconnecting");
+
+  client.disconnect();
+  releaseListener();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(client.connectionState, "closed");
+  assert.equal(sockets.length, 1);
+});
+
+test("inbound backlog limits require positive safe integers", () => {
+  const options = {
+    baseUrl: "http://127.0.0.1:8080/",
+    webSocketFactory: () => new FakeWebSocket() as unknown as WebSocket,
+  };
+  assert.throws(
+    () => new SearchWebSocketClient({ ...options, maximumInboundFrames: 0 }),
+    /Maximum inbound frame count must be a positive safe integer/,
+  );
+  assert.throws(
+    () => new SearchWebSocketClient({ ...options, maximumInboundFrames: 1.5 }),
+    /Maximum inbound frame count must be a positive safe integer/,
+  );
+  assert.throws(
+    () => new SearchWebSocketClient({ ...options, maximumInboundBytes: Number.MAX_SAFE_INTEGER + 1 }),
+    /Maximum inbound byte count must be a positive safe integer/,
+  );
 });
 
 test("open-close and unhandled recovery failures retain exponential reconnect backoff", async () => {

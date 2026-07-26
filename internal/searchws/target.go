@@ -287,28 +287,40 @@ func (service *Service) loadProjection(ctx context.Context, key targetKey, previ
 }
 
 func (service *Service) acquireProjection(ctx context.Context) (func(), error) {
+	return service.acquireBoundedWork(ctx, service.projectionGate, "projection")
+}
+
+func (service *Service) acquireTailoring(ctx context.Context) (func(), error) {
+	return service.acquireBoundedWork(ctx, service.tailoringGate, "preview tailoring")
+}
+
+func (service *Service) acquireBoundedWork(
+	ctx context.Context,
+	gate chan struct{},
+	label string,
+) (func(), error) {
 	if ctx == nil {
-		return nil, errors.New("search websocket projection context is required")
+		return nil, fmt.Errorf("search websocket %s context is required", label)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	select {
-	case service.projectionGate <- struct{}{}:
+	case gate <- struct{}{}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-service.ctx.Done():
 		return nil, context.Canceled
 	}
 	if err := ctx.Err(); err != nil {
-		<-service.projectionGate
+		<-gate
 		return nil, err
 	}
 	if err := service.ctx.Err(); err != nil {
-		<-service.projectionGate
+		<-gate
 		return nil, context.Canceled
 	}
-	return func() { <-service.projectionGate }, nil
+	return func() { <-gate }, nil
 }
 
 // loadProjectionWithPermit materializes a bounded detached projection while
@@ -802,12 +814,11 @@ func (target *targetState) applyProjection(projection targetProjection, initial 
 	}
 
 	type prepared struct {
-		category             eventCategory
-		fingerprint          [sha256.Size]byte
-		sequence             uint64
-		data                 []byte
-		previewRows          int
-		authoritativePreview bool
+		category    eventCategory
+		fingerprint [sha256.Size]byte
+		sequence    uint64
+		data        []byte
+		previewRows int
 	}
 	preparedEvents := make([]prepared, 0, len(all))
 	oversized := make(map[eventCategory]struct{})
@@ -841,7 +852,7 @@ func (target *targetState) applyProjection(projection targetProjection, initial 
 		}
 		preparedEvents = append(preparedEvents, prepared{
 			category: item.category, fingerprint: item.fingerprint, sequence: sequence, data: data,
-			previewRows: previewRows, authoritativePreview: item.category == eventCategoryPreview && authoritativePreview,
+			previewRows: previewRows,
 		})
 	}
 
@@ -929,63 +940,35 @@ func (target *targetState) applyProjection(projection targetProjection, initial 
 			}
 			for limit, group := range groups {
 				canonical := item.data
-				var workBytes uint64
+				var releaseTailoring func()
 				if int(limit) < item.previewRows {
-					workBytes = uint64(len(item.data))
-					if !target.service.reserveQueuedBytes(workBytes) {
-						if item.authoritativePreview {
-							for _, subscription := range group {
-								subscription.connection.hardClose()
-							}
-						}
-						continue
-					}
 					var err error
+					releaseTailoring, err = target.service.acquireTailoring(target.ctx)
+					if err != nil {
+						return false, err
+					}
 					canonical, err = tailorPreviewEvent(item.data, limit)
 					if err != nil {
-						target.service.releaseQueuedBytes(workBytes)
+						releaseTailoring()
 						for _, subscription := range group {
 							subscription.connection.hardClose()
 						}
 						continue
-					}
-					tailoredBytes := uint64(len(canonical))
-					if tailoredBytes > workBytes {
-						target.service.releaseQueuedBytes(workBytes)
-						for _, subscription := range group {
-							subscription.connection.hardClose()
-						}
-						continue
-					}
-					target.service.releaseQueuedBytes(workBytes - tailoredBytes)
-					workBytes = tailoredBytes
-					if !item.authoritativePreview {
-						mayAccept := false
-						for _, subscription := range group {
-							if subscription.mayAcceptCanonicalPreview(canonical) {
-								mayAccept = true
-								break
-							}
-						}
-						if !mayAccept {
-							target.service.releaseQueuedBytes(workBytes)
-							continue
-						}
 					}
 				}
 				for _, subscription := range group {
-					if !subscription.deliverCanonical(canonical, true, !item.authoritativePreview) {
+					if !subscription.deliverCanonical(canonical, true) {
 						subscription.connection.hardClose()
 					}
 				}
-				if workBytes != 0 {
-					target.service.releaseQueuedBytes(workBytes)
+				if releaseTailoring != nil {
+					releaseTailoring()
 				}
 			}
 			continue
 		}
 		for _, subscription := range subscribers {
-			if !subscription.deliverCanonical(item.data, false, false) {
+			if !subscription.deliverCanonical(item.data, false) {
 				subscription.connection.hardClose()
 			}
 		}
@@ -1408,31 +1391,20 @@ type subscription struct {
 	active      bool
 }
 
-func (subscription *subscription) deliverCanonical(data []byte, preview, disposable bool) bool {
+func (subscription *subscription) deliverCanonical(data []byte, preview bool) bool {
 	subscription.mu.Lock()
 	defer subscription.mu.Unlock()
 	if !subscription.active {
 		return true
 	}
 	if preview {
-		result := subscription.connection.enqueueCanonicalPreview(data, subscription.id)
-		return result == queueAccepted || (disposable && result == queuePressure)
+		return subscription.connection.enqueueCanonicalPreview(data, subscription.id) == queueAccepted
 	}
 	stamped, err := stampCanonicalSubscriptionID(data, subscription.id, subscription.connection.service.config.maximumFrameBytes)
 	if err != nil {
 		return false
 	}
 	return subscription.connection.enqueue(stamped)
-}
-
-func (subscription *subscription) mayAcceptCanonicalPreview(data []byte) bool {
-	subscription.mu.Lock()
-	defer subscription.mu.Unlock()
-	if !subscription.active {
-		return false
-	}
-	frameBytes, err := stampedFrameSize(len(data), subscription.id)
-	return err == nil && subscription.connection.previewQueueMayAccept(frameBytes)
 }
 
 func (subscription *subscription) deliverControl(event *opensplunkv1.SearchWebSocketEvent) bool {

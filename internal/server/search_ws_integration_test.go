@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -428,6 +429,28 @@ type realSearchWebSocketFixture struct {
 
 func newRealSearchWebSocketFixture(t *testing.T, jobID string, maximumReplayEvents int) *realSearchWebSocketFixture {
 	t.Helper()
+	return newRealSearchWebSocketFixtureWithOptions(
+		t,
+		jobID,
+		maximumReplayEvents,
+		realSearchWebSocketFixtureOptions{},
+	)
+}
+
+type realSearchWebSocketFixtureOptions struct {
+	now                func() time.Time
+	wait               func(context.Context, time.Duration)
+	configureWebSocket func(*searchws.Config)
+	wrapListener       func(net.Listener) net.Listener
+}
+
+func newRealSearchWebSocketFixtureWithOptions(
+	t *testing.T,
+	jobID string,
+	maximumReplayEvents int,
+	options realSearchWebSocketFixtureOptions,
+) *realSearchWebSocketFixture {
+	t.Helper()
 	const (
 		ownerID       = "owner-real-websocket"
 		tenantID      = "tenant-real-websocket"
@@ -435,6 +458,10 @@ func newRealSearchWebSocketFixture(t *testing.T, jobID string, maximumReplayEven
 	)
 	anchor := time.Date(2026, time.July, 25, 12, 0, 0, 0, time.UTC)
 	clock := &searchJobListIntegrationClock{now: anchor}
+	now := clock.Now
+	if options.now != nil {
+		now = options.now
+	}
 	executor := newRealSearchWebSocketExecutor()
 	manager, err := searchjobs.New(searchjobs.Config{
 		Executor:        executor,
@@ -442,7 +469,7 @@ func newRealSearchWebSocketFixture(t *testing.T, jobID string, maximumReplayEven
 		MaxConcurrent:   1,
 		RetentionTTL:    time.Hour,
 		CleanupInterval: -1,
-		Now:             clock.Now,
+		Now:             now,
 		NewID:           func() string { return jobID },
 		CursorKey:       []byte("0123456789abcdef0123456789abcdef"),
 	})
@@ -458,7 +485,7 @@ func newRealSearchWebSocketFixture(t *testing.T, jobID string, maximumReplayEven
 	exports := &fakeExports{getFn: func(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error) {
 		return exportjobs.Job{}, exportjobs.ErrNotFound
 	}}
-	socketService, err := searchws.New(searchws.Config{
+	socketConfig := searchws.Config{
 		Searches: manager,
 		Exports:  exports,
 		Access:   searchjobs.AccessScope{TenantID: tenantID, OwnerID: ownerID},
@@ -471,8 +498,13 @@ func newRealSearchWebSocketFixture(t *testing.T, jobID string, maximumReplayEven
 		PollInterval:         10 * time.Millisecond,
 		PingInterval:         3 * time.Second,
 		PongTimeout:          5 * time.Second,
-		Now:                  clock.Now,
-	})
+		Now:                  now,
+		Wait:                 options.wait,
+	}
+	if options.configureWebSocket != nil {
+		options.configureWebSocket(&socketConfig)
+	}
+	socketService, err := searchws.New(socketConfig)
 	if err != nil {
 		t.Fatalf("searchws.New: %v", err)
 	}
@@ -493,7 +525,7 @@ func newRealSearchWebSocketFixture(t *testing.T, jobID string, maximumReplayEven
 		OwnerID:                    ownerID,
 		TenantID:                   tenantID,
 		AdministrativeAllowedHosts: []string{"127.0.0.1"},
-		Now:                        clock.Now,
+		Now:                        now,
 	})
 	if err != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -501,7 +533,11 @@ func newRealSearchWebSocketFixture(t *testing.T, jobID string, maximumReplayEven
 		cancel()
 		t.Fatalf("NewHandler: %v", err)
 	}
-	server := httptest.NewServer(handler)
+	server := httptest.NewUnstartedServer(handler)
+	if options.wrapListener != nil {
+		server.Listener = options.wrapListener(server.Listener)
+	}
+	server.Start()
 	client := server.Client()
 	client.Timeout = clientTimeout
 	t.Cleanup(func() {

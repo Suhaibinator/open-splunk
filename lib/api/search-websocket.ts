@@ -15,6 +15,9 @@ const SOCKET_CONNECTING = 0;
 const SOCKET_OPEN = 1;
 const MAXIMUM_UINT64 = (1n << 64n) - 1n;
 const APPLICATION_STABILITY_DELAY_MS = 1_000;
+const DEFAULT_MAXIMUM_INBOUND_FRAMES = 64;
+const DEFAULT_MAXIMUM_INBOUND_BYTES = 4 << 20;
+const INBOUND_QUEUE_COMPACTION_HEAD = 64;
 
 export type SearchWebSocketConnectionState =
   | "idle"
@@ -65,6 +68,10 @@ export interface SearchWebSocketClientOptions {
   readonly autoReconnect?: boolean;
   readonly reconnectDelayMs?: number;
   readonly maximumReconnectDelayMs?: number;
+  /** Maximum received frames retained across the active listener and pending backlog. */
+  readonly maximumInboundFrames?: number;
+  /** Maximum received binary bytes retained across the active listener and pending backlog. */
+  readonly maximumInboundBytes?: number;
   readonly webSocketFactory?: WebSocketFactory;
 }
 
@@ -79,6 +86,20 @@ interface ActiveSubscription {
   readonly target: JobTarget;
   readonly includePreviews: boolean;
   readonly previewRowLimit?: number;
+}
+
+type RetainedBinaryFrame = Uint8Array | Blob;
+
+interface InboundFrame {
+  readonly data: RetainedBinaryFrame;
+  readonly bytes: number;
+}
+
+interface InboundGeneration {
+  readonly socket: WebSocket;
+  readonly frames: Array<InboundFrame | undefined>;
+  frameHead: number;
+  invalidated: boolean;
 }
 
 function assertIdentifier(value: string, label: string): void {
@@ -154,6 +175,12 @@ function randomIdentifier(prefix: string, counter: bigint): string {
 function validateReconnectDelay(value: number, label: string): void {
   if (!Number.isFinite(value) || value < 0) {
     throw new RangeError(`${label} must be a non-negative number of milliseconds`);
+  }
+}
+
+function validatePositiveSafeInteger(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError(`${label} must be a positive safe integer`);
   }
 }
 
@@ -294,20 +321,34 @@ export function resolveSearchWebSocketUrl(path: string, baseUrl?: string): strin
   return url.toString();
 }
 
-async function readBinaryFrame(data: unknown): Promise<Uint8Array> {
+function retainBinaryFrame(data: unknown, maximumBytes: number): InboundFrame | undefined {
   if (data instanceof ArrayBuffer) {
-    return new Uint8Array(data);
+    if (data.byteLength > maximumBytes) return undefined;
+    const owned = new Uint8Array(data).slice();
+    return { data: owned, bytes: owned.byteLength };
   }
   if (ArrayBuffer.isView(data)) {
-    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    if (data.byteLength > maximumBytes) return undefined;
+    // A small view can otherwise retain an arbitrarily large or resizable
+    // backing buffer while being charged only for the visible slice.
+    const owned = new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice();
+    return { data: owned, bytes: owned.byteLength };
   }
   if (typeof Blob !== "undefined" && data instanceof Blob) {
-    return new Uint8Array(await data.arrayBuffer());
+    if (data.size > maximumBytes) return undefined;
+    return { data, bytes: data.size };
   }
   if (typeof data === "string") {
     throw new TypeError("Search WebSocket rejected a text frame; binary protobuf is required");
   }
   throw new TypeError("Search WebSocket received an unsupported frame type");
+}
+
+async function readBinaryFrame(data: RetainedBinaryFrame): Promise<Uint8Array> {
+  if (data instanceof Uint8Array) {
+    return data;
+  }
+  return new Uint8Array(await data.arrayBuffer());
 }
 
 /**
@@ -320,6 +361,8 @@ export class SearchWebSocketClient {
   private readonly autoReconnect: boolean;
   private readonly reconnectDelayMs: number;
   private readonly maximumReconnectDelayMs: number;
+  private readonly maximumInboundFrames: number;
+  private readonly maximumInboundBytes: number;
   private readonly webSocketFactory: WebSocketFactory;
 
   private socket?: WebSocket;
@@ -332,7 +375,11 @@ export class SearchWebSocketClient {
   private reconnectAttempt = 0;
   private intentionallyClosed = false;
   private identifierCounter = 0n;
-  private messageChain: Promise<void> = Promise.resolve();
+  private inboundGeneration?: InboundGeneration;
+  private activeInboundGeneration?: InboundGeneration;
+  private retainedInboundFrames = 0;
+  private retainedInboundBytes = 0;
+  private reconnectDeferredForInbound = false;
 
   private readonly subscriptions = new Map<string, ActiveSubscription>();
   private readonly usedSubscriptionIds = new Set<string>();
@@ -352,10 +399,14 @@ export class SearchWebSocketClient {
     this.autoReconnect = options.autoReconnect ?? true;
     this.reconnectDelayMs = options.reconnectDelayMs ?? 750;
     this.maximumReconnectDelayMs = options.maximumReconnectDelayMs ?? 15_000;
+    this.maximumInboundFrames = options.maximumInboundFrames ?? DEFAULT_MAXIMUM_INBOUND_FRAMES;
+    this.maximumInboundBytes = options.maximumInboundBytes ?? DEFAULT_MAXIMUM_INBOUND_BYTES;
     this.webSocketFactory = options.webSocketFactory ?? defaultWebSocketFactory;
 
     validateReconnectDelay(this.reconnectDelayMs, "Reconnect delay");
     validateReconnectDelay(this.maximumReconnectDelayMs, "Maximum reconnect delay");
+    validatePositiveSafeInteger(this.maximumInboundFrames, "Maximum inbound frame count");
+    validatePositiveSafeInteger(this.maximumInboundBytes, "Maximum inbound byte count");
     if (this.maximumReconnectDelayMs < this.reconnectDelayMs) {
       throw new RangeError("Maximum reconnect delay must be greater than or equal to reconnect delay");
     }
@@ -377,6 +428,17 @@ export class SearchWebSocketClient {
       return this.connectionPromise;
     }
 
+    const previousSocket = this.socket;
+    this.invalidateInboundGeneration(this.inboundGeneration);
+    this.socket = undefined;
+    this.connectionPromise = undefined;
+    if (this.connectionSocket === previousSocket && this.rejectConnection) {
+      this.rejectConnection(new Error("Search WebSocket was replaced before connecting"));
+    }
+    this.connectionSocket = undefined;
+    this.rejectConnection = undefined;
+    this.pendingSubscribeRequests.clear();
+    this.clearApplicationStabilityTimer();
     this.intentionallyClosed = false;
     this.clearReconnectTimer();
     this.setState(this.reconnectAttempt > 0 ? "reconnecting" : "connecting");
@@ -394,6 +456,13 @@ export class SearchWebSocketClient {
       this.scheduleReconnect();
       return Promise.reject(normalized);
     }
+    const inboundGeneration: InboundGeneration = {
+      socket,
+      frames: [],
+      frameHead: 0,
+      invalidated: false,
+    };
+    this.inboundGeneration = inboundGeneration;
 
     this.connectionPromise = new Promise<void>((resolve, reject) => {
       this.connectionSocket = socket;
@@ -411,19 +480,14 @@ export class SearchWebSocketClient {
         this.rejectConnection = undefined;
         this.setState("open");
         resolve();
-        this.sendActiveSubscriptions();
+        this.sendActiveSubscriptions(socket);
       });
 
       socket.addEventListener("message", (message) => {
         if (this.socket !== socket) {
           return;
         }
-        this.messageChain = this.messageChain
-          .then(() => this.handleMessage(message.data, socket))
-          .catch((error: unknown) => {
-            this.emitError(normalizeError(error, "Unable to process a Search WebSocket frame"));
-            this.restartForReplay(socket);
-          });
+        this.enqueueInboundFrame(inboundGeneration, message.data);
       });
 
       socket.addEventListener("error", (event) => {
@@ -441,6 +505,7 @@ export class SearchWebSocketClient {
       });
 
       socket.addEventListener("close", () => {
+        this.invalidateInboundGeneration(inboundGeneration);
         if (this.socket !== socket) {
           return;
         }
@@ -467,6 +532,7 @@ export class SearchWebSocketClient {
     this.clearReconnectTimer();
     this.clearApplicationStabilityTimer();
     const socket = this.socket;
+    this.invalidateInboundGeneration(this.inboundGeneration);
     this.socket = undefined;
     this.connectionPromise = undefined;
     if (this.connectionSocket === socket && this.rejectConnection) {
@@ -542,9 +608,10 @@ export class SearchWebSocketClient {
     this.usedSubscriptionIds.add(subscriptionId);
     this.subscriptions.set(subscriptionId, subscription);
 
-    if (this.connected) {
+    const sourceSocket = this.socket;
+    if (sourceSocket?.readyState === SOCKET_OPEN) {
       if (!this.sendSubscriptions([subscription])) {
-        this.restartForReplay();
+        this.restartForReplay(sourceSocket);
       }
     } else {
       void this.connect().catch(() => {
@@ -564,7 +631,8 @@ export class SearchWebSocketClient {
     // completion is fenced by object identity; clear the target suspension so
     // a replacement subscription can replay from the last committed sequence.
     this.suspendedTargets.delete(searchWebSocketTargetKey(subscription.target));
-    if (this.connected) {
+    const sourceSocket = this.socket;
+    if (sourceSocket?.readyState === SOCKET_OPEN) {
       if (!this.sendCommand({
         requestId: this.nextIdentifier("unsubscribe"),
         payload: {
@@ -572,7 +640,7 @@ export class SearchWebSocketClient {
           value: { subscriptionIds: [subscriptionId] },
         },
       })) {
-        this.restartForReplay();
+        this.restartForReplay(sourceSocket);
       }
     }
     return true;
@@ -646,7 +714,127 @@ export class SearchWebSocketClient {
     return () => this.stateListeners.delete(listener);
   }
 
-  private async handleMessage(data: unknown, sourceSocket: WebSocket): Promise<void> {
+  private enqueueInboundFrame(generation: InboundGeneration, data: unknown): void {
+    if (
+      generation.invalidated
+      || this.inboundGeneration !== generation
+      || this.socket !== generation.socket
+    ) {
+      return;
+    }
+    if (this.retainedInboundFrames >= this.maximumInboundFrames) {
+      this.handleInboundPressure(generation.socket);
+      return;
+    }
+    let frame: InboundFrame | undefined;
+    try {
+      frame = retainBinaryFrame(data, this.maximumInboundBytes - this.retainedInboundBytes);
+    } catch (error) {
+      this.emitError(normalizeError(error, "Unable to inspect a Search WebSocket frame"));
+      this.restartForReplay(generation.socket);
+      return;
+    }
+    if (frame === undefined) {
+      this.handleInboundPressure(generation.socket);
+      return;
+    }
+
+    generation.frames.push(frame);
+    this.retainedInboundFrames += 1;
+    this.retainedInboundBytes += frame.bytes;
+    this.scheduleInboundDrain(generation);
+  }
+
+  private handleInboundPressure(socket: WebSocket): void {
+    this.emitError(
+      new Error(
+        `Search WebSocket inbound backlog exceeded ${this.maximumInboundFrames} frames or ${this.maximumInboundBytes} bytes`,
+      ),
+    );
+    this.restartForReplay(socket, "Inbound backlog exceeded; replay required");
+  }
+
+  private scheduleInboundDrain(generation: InboundGeneration): void {
+    if (
+      generation.invalidated
+      || generation.frameHead === generation.frames.length
+      || this.activeInboundGeneration !== undefined
+    ) {
+      return;
+    }
+    this.activeInboundGeneration = generation;
+    void this.drainInboundFrames(generation);
+  }
+
+  private async drainInboundFrames(generation: InboundGeneration): Promise<void> {
+    try {
+      while (!generation.invalidated) {
+        const frame = generation.frames[generation.frameHead];
+        if (frame === undefined) {
+          return;
+        }
+        generation.frames[generation.frameHead] = undefined;
+        generation.frameHead += 1;
+        if (generation.frameHead === generation.frames.length) {
+          generation.frames.length = 0;
+          generation.frameHead = 0;
+        } else if (
+          generation.frameHead >= INBOUND_QUEUE_COMPACTION_HEAD
+          && generation.frameHead * 2 >= generation.frames.length
+        ) {
+          const pending = generation.frames.length - generation.frameHead;
+          generation.frames.copyWithin(0, generation.frameHead);
+          generation.frames.length = pending;
+          generation.frameHead = 0;
+        }
+        try {
+          // Inbound checkpoints require strict wire order; parallel listeners could commit a later frame first.
+          // oxlint-disable-next-line no-await-in-loop
+          await this.handleMessage(frame.data, generation.socket);
+        } catch (error) {
+          this.emitError(normalizeError(error, "Unable to process a Search WebSocket frame"));
+          this.restartForReplay(generation.socket);
+        } finally {
+          this.retainedInboundFrames -= 1;
+          this.retainedInboundBytes -= frame.bytes;
+        }
+      }
+    } finally {
+      if (this.activeInboundGeneration === generation) {
+        this.activeInboundGeneration = undefined;
+      }
+      const current = this.inboundGeneration;
+      if (current !== undefined) {
+        this.reconnectDeferredForInbound = false;
+        this.scheduleInboundDrain(current);
+      } else if (this.reconnectDeferredForInbound) {
+        this.reconnectDeferredForInbound = false;
+        this.scheduleReconnect();
+      }
+    }
+  }
+
+  private invalidateInboundGeneration(generation: InboundGeneration | undefined): void {
+    if (generation === undefined || generation.invalidated) {
+      return;
+    }
+    generation.invalidated = true;
+    for (let index = generation.frameHead; index < generation.frames.length; index += 1) {
+      const frame = generation.frames[index];
+      if (frame !== undefined) {
+        this.retainedInboundFrames -= 1;
+        this.retainedInboundBytes -= frame.bytes;
+        generation.frames[index] = undefined;
+      }
+    }
+    generation.frames.length = 0;
+    generation.frameHead = 0;
+    if (this.inboundGeneration === generation) {
+      this.inboundGeneration = undefined;
+    }
+  }
+
+  private async handleMessage(data: RetainedBinaryFrame, sourceSocket: WebSocket): Promise<void> {
     if (this.socket !== sourceSocket) {
       return;
     }
@@ -666,7 +854,7 @@ export class SearchWebSocketClient {
       const subscriptionId = event.subscriptionId;
       if (!subscriptionId) {
         this.emitError(new Error("Search WebSocket target event is missing its subscription ID"));
-        this.restartForReplay();
+        this.restartForReplay(sourceSocket);
         return;
       }
       routedSubscription = this.subscriptions.get(subscriptionId);
@@ -731,7 +919,7 @@ export class SearchWebSocketClient {
             this.emitError(normalizeError(error, "Search WebSocket sequence-gap listener failed"));
           }
         }
-        this.restartForReplay();
+        this.restartForReplay(sourceSocket);
         return;
       }
 
@@ -739,11 +927,7 @@ export class SearchWebSocketClient {
         this.restartForReplay(sourceSocket);
         return;
       }
-      if (
-        this.socket !== sourceSocket
-        || (routedSubscription
-          && this.subscriptions.get(routedSubscription.subscriptionId) !== routedSubscription)
-      ) {
+      if (!this.isCurrentInboundContext(sourceSocket, routedSubscription)) {
         return;
       }
       const current = this.lastSequences.get(targetKey) ?? 0n;
@@ -756,10 +940,7 @@ export class SearchWebSocketClient {
         this.restartForReplay(sourceSocket);
         return;
       }
-      if (
-        routedSubscription
-        && this.subscriptions.get(routedSubscription.subscriptionId) !== routedSubscription
-      ) {
+      if (!this.isCurrentInboundContext(sourceSocket, routedSubscription)) {
         return;
       }
     }
@@ -798,6 +979,17 @@ export class SearchWebSocketClient {
       }
     }
     return delivered;
+  }
+
+  private isCurrentInboundContext(
+    sourceSocket: WebSocket,
+    routedSubscription: ActiveSubscription | undefined,
+  ): boolean {
+    return this.socket === sourceSocket
+      && (
+        routedSubscription === undefined
+        || this.subscriptions.get(routedSubscription.subscriptionId) === routedSubscription
+      );
   }
 
   private async emitResynchronization(
@@ -871,11 +1063,7 @@ export class SearchWebSocketClient {
         this.emitError(normalizeError(outcome.reason, "Search WebSocket resynchronization handler failed"));
       }
     }
-    if (
-      this.socket !== sourceSocket
-      || (routedSubscription
-        && this.subscriptions.get(routedSubscription.subscriptionId) !== routedSubscription)
-    ) {
+    if (!this.isCurrentInboundContext(sourceSocket, routedSubscription)) {
       return;
     }
     if (recoveryFailed) {
@@ -923,13 +1111,16 @@ export class SearchWebSocketClient {
     return undefined;
   }
 
-  private sendActiveSubscriptions(): void {
+  private sendActiveSubscriptions(sourceSocket: WebSocket): void {
     // Subscribe commands are atomic on the server. Keep reconnect requests
     // isolated so one expired or otherwise rejected target cannot evict every
     // valid local subscription carried in the same command.
     for (const subscription of this.subscriptions.values()) {
+      if (this.socket !== sourceSocket) {
+        return;
+      }
       if (!this.sendSubscriptions([subscription])) {
-        this.restartForReplay();
+        this.restartForReplay(sourceSocket);
         return;
       }
     }
@@ -1025,11 +1216,15 @@ export class SearchWebSocketClient {
   }
 
   /** Drops the current generation without advancing checkpoints so retained events can replay. */
-  private restartForReplay(expectedSocket?: WebSocket): void {
+  private restartForReplay(
+    expectedSocket?: WebSocket,
+    closeReason = "Sequence gap; replay required",
+  ): void {
     const socket = this.socket;
     if (!socket || (expectedSocket !== undefined && socket !== expectedSocket)) {
       return;
     }
+    this.invalidateInboundGeneration(this.inboundGeneration);
     this.socket = undefined;
     this.connectionPromise = undefined;
     this.connectionSocket = undefined;
@@ -1037,7 +1232,7 @@ export class SearchWebSocketClient {
     this.pendingSubscribeRequests.clear();
     this.clearApplicationStabilityTimer();
     try {
-      socket.close(4000, "Sequence gap; replay required");
+      socket.close(4000, closeReason);
     } catch (error) {
       this.emitError(normalizeError(error, "Unable to restart Search WebSocket replay"));
     }
@@ -1047,6 +1242,11 @@ export class SearchWebSocketClient {
 
   private scheduleReconnect(): void {
     if (!this.autoReconnect || this.intentionallyClosed || this.reconnectTimer !== undefined) {
+      return;
+    }
+    if (this.activeInboundGeneration !== undefined) {
+      this.reconnectDeferredForInbound = true;
+      this.setState("reconnecting");
       return;
     }
     const exponent = Math.min(this.reconnectAttempt, 16);
@@ -1062,6 +1262,7 @@ export class SearchWebSocketClient {
   }
 
   private clearReconnectTimer(): void {
+    this.reconnectDeferredForInbound = false;
     if (this.reconnectTimer !== undefined) {
       globalThis.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
