@@ -7,7 +7,85 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: logical event retention before physical TTL cleanup
+## Latest checkpoint: sanitized current GradeThis collector migration
+
+Date: 2026-07-26
+
+Implementation/proof commit:
+`c576e85` (`prove current GradeThis collector migration`)
+
+Retention foundation:
+`458c8b4` (`enforce logical event retention`)
+
+This slice proves the current GradeThis/go-common log source through the real
+collector and public backend search path without changing the exact product
+plan v0.1 corpus:
+
+1. `configs/examples/collector.yaml` is now a runnable environment-substituted
+   GradeThis profile with gzip transport, an explicit application host,
+   trusted `gradethis` index/source/sourcetype/service/environment metadata,
+   compressed-file exclusion, a durable state directory, and no OpenTelemetry
+   component in the path.
+2. A separate sanitized current-source manifest generates 20 deterministic
+   NDJSON events with `Request summary statistics`, INFO/WARN/ERROR selection,
+   Go `µs`/`ms`/`s` durations, UTC and `-07:00` timestamps, sparse root values,
+   a three-layer trace, relative callers, and TEST-NET addresses. The pinned
+   default fixture SHA-256 is
+   `41f8f92f9170192810bdb741ed79fcf7f9f28c7966bb7e5dd9c54925c0f38f88`.
+   Collector-owned metadata is absent from raw JSON.
+3. Six current-source investigations are defined once with their expected row
+   counts: trace following, severity counts, failed 5xx requests, path/status
+   counts, duration-unit extraction with `rex`, and top messages. Ordinary
+   tests keep all six progressing through parse, plan, and compile.
+4. The real backend vertical creates the `gradethis` index and an index-scoped
+   token, validates the committed collector config against exactly one empty
+   source file, starts the actual collector binary, observes its zero
+   checkpoint, appends and fsyncs the generated fixture, and requires exactly
+   20 stored/distinct IDs.
+5. That fixture must reach EOF checkpoint, acknowledged/drained WAL, and clean
+   collector shutdown. ClickHouse assertions require every trusted metadata
+   value and prove those metadata keys never enter raw. The six searches run
+   through the public HTTP protobuf contract with three-row signed-cursor
+   pages, stable schemas/totals/ordinals/row IDs, exact types and ordering,
+   complete scope/range metadata, and no truncation.
+6. The collector's last confidentiality boundary now sanitizes mandatory and
+   configured policies before WAL or dead-letter persistence. Its ordered
+   allow/deny/rename lineage derives from the exact compiled processor
+   instances, is event-specific, preserves collisions and constant-field
+   provenance, fails closed for unknown processor types, and avoids lineage
+   allocation when no ordinary rename source is present.
+7. Direct policies redact structured fields, raw bytes, and canonical messages
+   in place. Same-replacement rules are grouped, final default policies already
+   covered by mandatory names are eliminated, and the shipped GradeThis
+   profile therefore performs exactly one direct pre-WAL sanitizer pass.
+   Batched alias redaction canonicalizes duplicate JSON members even when the
+   last member already equals the replacement, so shadowed secret bytes cannot
+   cross the WAL boundary.
+8. Decode-failure diagnostics no longer include decoder errors because JSON
+   field names are attacker-controlled. Tests cover offline WAL contents,
+   rename declassification, allow/deny order, punctuation and normalized
+   lookalikes, conflicting replacements, constants, duplicate fields, and
+   secret-free logs.
+9. The exact product-plan GradeThis v0.1 corpus remains independent and all ten
+   searches still pass through the decoder, production ClickHouse Store,
+   compiler, executor, manager, and signed-cursor result paging.
+10. Three final read-only adversarial reviews found no correctness,
+    confidentiality, SPL-fidelity, reuse, or checkpoint-blocking performance
+    issue in the frozen artifact. General configurations with multiple
+    distinct custom replacement markers still require one raw/message scan per
+    marker; a composite resolver is deferred until it can be differential-
+    tested against every existing fail-closed encoded/duplicate/depth case.
+
+The exact validation record is under **Latest validation evidence**. The next
+release-path priority is the remaining preview-to-final resource-release audit,
+followed by the measured load work ordered under **Remaining work, in priority
+order**. The overall backend goal remains active.
+
+At checkpoint creation, unrelated frontend changes were present in the shared
+worktree and were deliberately neither staged nor committed by this backend
+slice. Inventory and preserve unexpected local changes before continuing.
+
+## Previous checkpoint: logical event retention before physical TTL cleanup
 
 Date: 2026-07-26
 
@@ -913,6 +991,55 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Sanitized current GradeThis collector migration
+
+The exact implementation at `c576e85` passed:
+
+```sh
+go test ./... -count=1
+go vet ./...
+go build ./...
+go test -race \
+  ./internal/collector ./internal/ingest \
+  ./internal/testsupport/gradethiscorpus -count=1
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/queryexec \
+  -run '^TestGradeThisCompatibilityV0_1AgainstClickHouse$' \
+  -count=1 -timeout=10m -v
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+go test ./integration \
+  -run '^Test(BackendVertical|Browser(SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=15m -v
+git diff --cached --check
+```
+
+The final full Go suite completed in 18.594 seconds. The race-enabled collector,
+ingestion, and migration-corpus packages passed, with the longest package at
+39.558 seconds. The exact ten-search v0.1 ClickHouse corpus completed in
+5.99 seconds.
+
+The final six-case Docker/ClickHouse plus browser release gate completed in
+50.946 seconds: `TestBackendVertical` in 22.63 seconds,
+`TestBrowserSequenceExpiredRecovery` in 11.78 seconds,
+`TestBrowserSequenceGapRecovery` in 5.21 seconds,
+`TestBrowserSequenceGapRESTTerminalRecovery` in 5.19 seconds,
+`TestBrowserSequenceGapRESTFirstProgressRecovery` in 4.37 seconds, and
+`TestBrowserSearchCancellation` in 1.36 seconds. All six current GradeThis
+investigations passed inside the vertical. A read-only Docker check showed no
+remaining `open-splunk-*` test container.
+
+The final frozen staged patch had SHA-256
+`c863964ed3a674b870dbe7861a1cd794b423ca1009422dd2df7200af87109ba3`.
+Adversarial reviewers independently verified that exact checksum. Their
+findings drove shared processor-derived lineage, a unified stored-event poller,
+manifest-owned expected row counts, the no-source lineage fast path, removal
+of redundant grouping state, and duplicate-key alias canonicalization. Final
+correctness/SPL, confidentiality/performance, and reuse/quality rereviews were
+clean. The only retained nonblocking performance backlog is the
+differential-tested composite sanitizer for uncommon configurations with
+multiple distinct custom replacement markers; the shipped profile uses one
+direct pass.
+
 ### Logical event retention before physical TTL cleanup
 
 The exact implementation at `458c8b4` passed:
@@ -1641,8 +1768,10 @@ independent stacks.
 
 ## Resume checklist
 
-1. Work only from `main`; fast-forward it from `origin/main` and confirm the
-   worktree is clean.
+1. Work only from `main`; fast-forward it from `origin/main`. Inventory and
+   preserve unexpected local changes before editing. A shared worktree may
+   contain unrelated frontend work, so do not reset it merely to make it
+   clean.
 2. Read this file, `docs/product-architecture-plan.md`, and
    `docs/spl-compatibility-v0.1.md`.
 3. Run `npm ci`, `go test ./...`, `npm run test:frontend`,
@@ -1657,12 +1786,13 @@ independent stacks.
      -count=1 -timeout=15m -v
    ```
 
-5. Start with the sanitized real GradeThis collector/config migration unless
-   the user explicitly changes priority. Logical event retention is complete
-   at `458c8b4`, clock-driven job/result/export expiration at `b2b2839`, and
-   stale-duplicate injection at `b80bf0a`. Add a red unit or integration test
-   before implementation, run read-only adversarial reviews, fix concrete
-   findings, then commit and push `main`.
+5. Start with the remaining preview-to-final resource-release audit unless the
+   user explicitly changes priority. The sanitized current GradeThis
+   collector/config migration is complete at `c576e85`, logical event
+   retention at `458c8b4`, clock-driven job/result/export expiration at
+   `b2b2839`, and stale-duplicate injection at `b80bf0a`. Add a red unit or
+   integration test before implementation, run read-only adversarial reviews,
+   fix concrete findings, then commit and push `main`.
 
 ## Remaining work, in priority order
 
@@ -1705,13 +1835,14 @@ metadata, and legacy SQLite migration boundaries are also pinned. ClickHouse
 TTL remains merge-driven physical reclamation rather than the visibility
 contract.
 
+The sanitized current GradeThis migration is complete at `c576e85`. The
+committed config, real collector binary, scoped token, checkpoint/WAL path,
+trusted metadata, 20-event sanitized manifest, and six representative
+investigations are exercised through the public backend. The separate exact
+v0.1 corpus remains unchanged and green.
+
 Continue the release proof in this order:
 
-- Exercise a sanitized real GradeThis log/config migration: collector to the
-  `gradethis` index with no OpenTelemetry component in the log path, then run
-  trace-ID, severity, request-status, path, duration, and top-message
-  investigations. Derive committed fixtures from a manifest or generator;
-  never copy the ignored local `app.log` or any secret/user/network/path data.
 - Close any remaining preview-to-final resource-release coverage that is not
   naturally exercised by the cancellation, recovery, and expiration fixtures.
 - Record a load/performance run at sustained 1,000 events/second, including
@@ -1722,6 +1853,12 @@ Continue the release proof in this order:
 - During high-source-count collector profiling, replace the pre-existing
   per-poll `time.After` allocation with a safely reused timer if it is material;
   preserve cancellation and copy-truncate behavior with race coverage.
+- Replace one-pass-per-distinct-marker configured pre-WAL redaction with a
+  composite resolver only after differential tests pin ambiguous encoded
+  keys/values, prose-wrapped embedded JSON, duplicate-key canonicalization,
+  exact-name matching, replacement precedence, and the depth-limit fail-closed
+  behavior. The shipped GradeThis profile already collapses to one direct
+  sanitizer pass.
 - Verify release revision consistency across embedded UI, server, protobuf
   schema, and migrations, plus byte-identical embedded frontend assets for
   Linux and macOS builds from the same source revision.
@@ -1845,11 +1982,13 @@ Do not guess those decisions if they materially affect the implementation.
 
 ## Safe resume procedure
 
-1. Confirm `main` is clean and exactly matches `origin/main`.
+1. Confirm the checked-out branch is `main` and compare it with `origin/main`.
+   Inventory and preserve every unexpected local change; do not reset unrelated
+   work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `458c8b4`, `b2b2839`, `b80bf0a`, `cdb60df`,
-   `787a7f9`, and `522b0ac`; the preceding progress/recovery foundations are
-   `b5502a3`, `f72f184`, `ed28182`, and `d1286a4`.
+   commits, especially `c576e85`, `458c8b4`, `b2b2839`, `b80bf0a`,
+   `cdb60df`, `787a7f9`, and `522b0ac`; the preceding progress/recovery
+   foundations are `b5502a3`, `f72f184`, `ed28182`, and `d1286a4`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
 4. Run the ordinary Go/frontend gates above and the focused exact corpus:
 
@@ -1862,10 +2001,12 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. Unless the user changes priority, begin with the sanitized real GradeThis
-   collector/config migration described above. Logical event retention,
-   clock-driven job/result/export expiration, recovered-socket stale-duplicate
-   fencing, authoritative browser cancellation, versioned
+5. Unless the user changes priority, begin with the remaining
+   preview-to-final resource-release audit, then record the sustained-load
+   proof. The sanitized current GradeThis collector/config migration, logical
+   event retention, clock-driven job/result/export expiration,
+   recovered-socket stale-duplicate fencing, authoritative browser
+   cancellation, versioned
    REST-first/replay-later progress, recovery-cycle coalescing, REST-only and
    accepted-WebSocket terminal discovery after a sequence gap, explicit
    browser sequence-gap recovery, browser `SEQUENCE_EXPIRED`, transient
