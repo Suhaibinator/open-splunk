@@ -346,6 +346,123 @@ func TestValidateAndNormalizeEventRedactsRecursivelyAndSanitizesRawJSON(t *testi
 	}
 }
 
+func TestRedactEventInPlaceUsesAdditionalPolicyWithoutCloning(t *testing.T) {
+	t.Parallel()
+
+	validator, err := NewValidator(DefaultLimits(), RedactionPolicy{
+		AdditionalSensitiveFields: []string{"customer_credential"},
+		Replacement:               "***",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := validTestEvent("event-owned-redaction", "main")
+	message := "customer_credential=message-secret safe=message"
+	event.Message = &message
+	event.Raw = []byte(`{"customer_credential":"raw-secret","safe":"raw"}`)
+	event.Fields = object(
+		stringField("customerCredential", "typed-secret"),
+		stringField("safe", "typed"),
+	)
+
+	got := validator.RedactEventInPlace(event)
+	if got != event {
+		t.Fatal("RedactEventInPlace returned a clone for an exclusively owned event")
+	}
+	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"message-secret", "raw-secret", "typed-secret"} {
+		if bytes.Contains(wire, []byte(secret)) {
+			t.Fatalf("in-place redaction retained %q", secret)
+		}
+	}
+	if got.GetFields().GetFields()[0].GetValue().GetStringValue() != "***" ||
+		!strings.Contains(got.GetMessage(), "***") ||
+		!bytes.Contains(got.GetRaw(), []byte(`"customer_credential":"***"`)) ||
+		!validator.IsSensitiveField("customerCredential") ||
+		validator.IsSensitiveField("ordinary_field") {
+		t.Fatalf("in-place redacted event/policy = event:%+v raw:%q", got, got.GetRaw())
+	}
+}
+
+func TestRedactTopLevelAliasesInPlacePreservesNestedLookalikes(t *testing.T) {
+	t.Parallel()
+
+	event := validTestEvent("event-top-level-alias-redaction", "main")
+	message := "userID=message-secret safe=message"
+	event.Message = &message
+	event.Raw = []byte(
+		`{"userID":"top-secret","nested":{"userID":"nested-safe"},"safe":"raw-safe"}`,
+	)
+	event.Fields = object(
+		stringField("userID", "top-secret"),
+		objectField("nested", object(
+			stringField("userID", "nested-safe"),
+		)),
+		stringField("safe", "typed-safe"),
+	)
+
+	got := RedactTopLevelAliasesInPlace(event, []TopLevelAliasRedaction{{
+		Field: "userID", Replacement: "MASKED",
+	}})
+	if got != event {
+		t.Fatal("RedactTopLevelAliasesInPlace returned a clone")
+	}
+	if got.GetFields().GetFields()[0].GetValue().GetStringValue() != "MASKED" ||
+		got.GetFields().GetFields()[1].GetValue().GetObjectValue().GetFields()[0].GetValue().GetStringValue() != "nested-safe" ||
+		got.GetFields().GetFields()[2].GetValue().GetStringValue() != "typed-safe" ||
+		strings.Contains(got.GetMessage(), "message-secret") ||
+		!strings.Contains(got.GetMessage(), "MASKED") {
+		t.Fatalf("top-level alias structured/message redaction = %+v", got)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(got.GetRaw(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	nested, ok := raw["nested"].(map[string]any)
+	if raw["userID"] != "MASKED" || raw["safe"] != "raw-safe" ||
+		!ok || nested["userID"] != "nested-safe" {
+		t.Fatalf("top-level alias raw redaction = %s", got.GetRaw())
+	}
+}
+
+func TestRedactTopLevelAliasesInPlaceKeepsConstantProvenanceStructuredOnly(t *testing.T) {
+	t.Parallel()
+
+	event := validTestEvent("event-constant-alias-redaction", "main")
+	message := "userID=ordinary-message-data"
+	event.Message = &message
+	event.Raw = []byte(`{"userID":"ordinary-raw-data"}`)
+	event.Fields = object(stringField("userID", "constant-secret"))
+
+	got := RedactTopLevelAliasesInPlace(event, []TopLevelAliasRedaction{{
+		Field: "userID", Replacement: "MASKED", StructuredOnly: true,
+	}})
+	if got.GetFields().GetFields()[0].GetValue().GetStringValue() != "MASKED" ||
+		got.GetMessage() != message ||
+		string(got.GetRaw()) != `{"userID":"ordinary-raw-data"}` {
+		t.Fatalf("structured-only constant alias redaction = %+v", got)
+	}
+}
+
+func TestRedactTopLevelAliasesInPlaceCanonicalizesShadowedSecret(t *testing.T) {
+	t.Parallel()
+
+	event := validTestEvent("event-duplicate-alias-redaction", "main")
+	event.Raw = []byte(`{"userID":"shadow-secret","userID":"MASKED","safe":"kept"}`)
+
+	got := RedactTopLevelAliasesInPlace(event, []TopLevelAliasRedaction{{
+		Field: "userID", Replacement: "MASKED",
+	}})
+	if bytes.Contains(got.GetRaw(), []byte("shadow-secret")) ||
+		bytes.Count(got.GetRaw(), []byte(`"userID"`)) != 1 ||
+		!json.Valid(got.GetRaw()) {
+		t.Fatalf("duplicate alias raw was not safely canonicalized: %s", got.GetRaw())
+	}
+}
+
 func TestValidateAndNormalizeEventSanitizesNonJSONRawKeyValues(t *testing.T) {
 	v := newTestValidator(t, DefaultLimits())
 	event := validTestEvent("event-text", "main")

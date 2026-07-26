@@ -13,9 +13,12 @@
 # source files, which persist) rather than dropping data.
 
 server:
-  address: 127.0.0.1:8443
+  # Set this to the server's collector gRPC listener. The loopback example
+  # intentionally uses plaintext; a remote deployment must enable TLS below.
+  address: "${OPEN_SPLUNK_SERVER_GRPC_ADDRESS}"
   transport: grpc
-  token_file: ./collector.token
+  token_file: "${OPEN_SPLUNK_COLLECTOR_TOKEN_FILE}"
+  compression: gzip
   tls:
     enabled: false # Local development only.
     # DANGER: with tls.enabled=false the bearer token is sent in CLEARTEXT.
@@ -26,14 +29,21 @@ server:
     # allow_insecure_remote: false
 
 state:
-  directory: ./data/collector
+  directory: "${OPEN_SPLUNK_COLLECTOR_STATE_DIRECTORY}"
   max_queue_bytes: 1GiB
 
 inputs:
   - id: gradethis-backend
     type: file
+    # GradeThis development currently writes ../../.logs.tmp/gradethis.log
+    # relative to its be process, while its production profile writes
+    # /var/log/gradethis/app.log. Set GRADETHIS_LOG_PATH to the resolved path
+    # visible to this collector process; do not copy production logs into this
+    # repository.
     include:
-      - ../gradethis/be/.logs.tmp/*.log
+      - "${GRADETHIS_LOG_PATH}"
+    exclude:
+      - "*.gz"
     format: ndjson
     start_at: end
     # index is required (event routing). host defaults to the OS hostname when
@@ -41,10 +51,31 @@ inputs:
     index: gradethis
     source: gradethis-backend
     sourcetype: go:zap:json
+    # Set this explicitly when the collector is a sidecar; otherwise its own
+    # container hostname would be recorded instead of the application host.
+    host: "${GRADETHIS_HOST}"
     # Static fields are attached to every event as trusted metadata. The special
     # key "service" populates the canonical LogEvent.service; all other keys
     # become typed string fields.
     fields:
       service: gradethis
-      environment: development
+      environment: "${GRADETHIS_ENVIRONMENT}"
 
+# These exact names are applied in the ordered structured processor chain and
+# by a durability sanitizer before that chain. The sanitizer covers
+# raw/message/structured data and follows only top-level rename paths that
+# actually execute for an event before WAL append, so processor order cannot
+# rename around a configured confidentiality policy. The ingestion server
+# independently reapplies its mandatory policy before acknowledgment and
+# storage.
+processors:
+  - type: redact
+    fields:
+      - token
+      - authorization
+      - password
+      - session_token
+      - cookie
+      - api_key
+      - private_key
+    replacement: "[REDACTED]"

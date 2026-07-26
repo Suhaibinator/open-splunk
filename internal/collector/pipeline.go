@@ -96,12 +96,11 @@ func NewRenameProcessor(from, to string) (Processor, error) {
 // (scalar, object, or list) is replaced and its former contents are not descended
 // into. A field list must be non-empty and replacement must be non-empty.
 //
-// Scope: redaction here covers STRUCTURED dynamic fields only. It deliberately
-// does NOT scrub the canonical raw body (event.Raw) or event.Message — scrubbing
-// unstructured raw payloads is the decoder/ingest layer's responsibility, and the
-// server enforces its own mandatory redaction. Collector-side redaction is
-// defense in depth over the structured fields, mirroring the server's policy; do
-// not rely on it to sanitize free-form text.
+// Scope: this ordered processor covers STRUCTURED dynamic fields only. The
+// daemon compiles the same configured fields/replacement into a durability
+// sanitizer before this chain. It scrubs raw/message text and follows the
+// actual ordered lineage of top-level renames before WAL append. The ingestion
+// server independently reapplies mandatory redaction as defense in depth.
 func NewRedactProcessor(fields []string, replacement string) (Processor, error) {
 	if len(fields) == 0 {
 		return nil, errors.New("collector: redact processor requires at least one field")
@@ -246,6 +245,10 @@ func (p *redactProcessor) objectNeedsRedact(obj *opensplunkv1.TypedObject) bool 
 	}
 	for _, f := range obj.Fields {
 		if _, ok := p.targets[f.Name]; ok {
+			if current, stringValue := f.GetValue().GetKind().(*opensplunkv1.TypedValue_StringValue); stringValue &&
+				current.StringValue == p.replacement {
+				continue
+			}
 			return true
 		}
 		if p.valueNeedsRedact(f.Value) {

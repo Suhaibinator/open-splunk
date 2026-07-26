@@ -33,7 +33,20 @@
 13. create and poll a JSON Lines export, redeem its one-time bearer grant over
    the raw download route, validate artifact headers/content, and reject grant
    replay;
-14. insert a deterministic 10,001-row fixture into a separately provisioned
+14. provision a separate `gradethis` index and index-scoped token, run the
+   shipped `configs/examples/collector.yaml` through `collector validate`, and
+   start that exact configuration against an empty synthetic GradeThis log;
+15. append and fsync the scanner-validated 20-event current GradeThis profile,
+   then require exact distinct ClickHouse rows, trusted
+   host/source/sourcetype/service/environment metadata, an EOF checkpoint, a
+   drained acknowledged WAL, and no token leakage. The profile is rebased to a
+   recent UTC window so maximum-event-age and logical-retention policy remain
+   active; its default form remains byte-pinned in unit tests;
+16. execute six current-source SPL investigations through protobuf HTTP with
+   exact typed cursor-paged results: trace flow, severity counts, failed
+   requests, path/status counts, mixed Go duration units (`µs`, `ms`, `s`), and
+   top messages. This path starts no OpenTelemetry collector;
+17. insert a deterministic 10,001-row fixture into a separately provisioned
    index, prove the interactive snapshot reports its 10,000-row truncation,
    and prove bounded export re-execution downloads all 10,001 unique rows.
 

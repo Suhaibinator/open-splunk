@@ -27,6 +27,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"github.com/Suhaibinator/open-splunk/internal/loggen"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport/gradethiscorpus"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -243,7 +244,19 @@ func TestBackendVertical(t *testing.T) {
 
 	collectorProcess = startProcess(t, repository, collectorArguments, os.Environ())
 	collectorProcesses = append(collectorProcesses, collectorProcess)
-	waitForDistinctStoredEventCount(t, ctx, storage, collectorProcess, plaintextToken, verticalEventCount)
+	waitForDistinctStoredEventCount(
+		t,
+		ctx,
+		storage,
+		collectorProcess,
+		verticalIndexName,
+		verticalEventCount,
+		1,
+		plaintextToken,
+		redactionAPIKeySentinel,
+		redactionCookieSentinel,
+		redactionPrivateKeySentinel,
+	)
 	waitForCollectorCheckpoint(t, ctx, collectorStateDir, logPath, collectorProcess, plaintextToken)
 
 	if err := collectorProcess.Interrupt(15 * time.Second); err != nil {
@@ -277,6 +290,18 @@ func TestBackendVertical(t *testing.T) {
 	serverSecrets = append(serverSecrets, downloadToken)
 	assertDownloadedRedactedResults(t, completedExport, artifact)
 
+	serverSecrets = append(serverSecrets, assertCurrentGradeThisMigration(
+		t,
+		ctx,
+		repository,
+		collectorBinary,
+		collectorAddress,
+		work,
+		httpClient,
+		baseURL,
+		storage,
+	))
+
 	createVerticalIndex(t, ctx, httpClient, baseURL, bulkIndexName, "Backend vertical bulk export")
 	bulkStart := insertBulkEvents(t, ctx, storage, visibilityCutoff)
 	serverSecrets = append(serverSecrets, assertTruncatedPreviewExportsAllRows(
@@ -296,8 +321,9 @@ func waitForDistinctStoredEventCount(
 	ctx context.Context,
 	connection clickhousedriver.Conn,
 	process *managedProcess,
-	plaintextToken string,
-	wantCount uint64,
+	indexName string,
+	wantDistinct, maximumReplays uint64,
+	secrets ...string,
 ) {
 	t.Helper()
 	deadline := time.NewTimer(30 * time.Second)
@@ -309,29 +335,51 @@ func waitForDistinctStoredEventCount(
 		err := connection.QueryRow(ctx,
 			`SELECT count(), uniqExact(event_id)
 			 FROM open_splunk.events WHERE tenant_id = ? AND index_name = ?`,
-			verticalTenantID, verticalIndexName,
+			verticalTenantID, indexName,
 		).Scan(&lastCount, &lastDistinct)
-		if err == nil && lastDistinct == wantCount &&
-			lastCount >= wantCount && lastCount <= wantCount+1 {
+		maximumCount := wantDistinct + maximumReplays
+		if err == nil && lastDistinct == wantDistinct &&
+			lastCount >= wantDistinct && lastCount <= maximumCount {
 			return
 		}
-		if err == nil && (lastDistinct > wantCount || lastCount > wantCount+1) {
-			t.Fatalf("stored restart events = %d distinct=%d, want %d distinct and at most one replay", lastCount, lastDistinct, wantCount)
+		if err == nil && (lastDistinct > wantDistinct || lastCount > maximumCount ||
+			lastCount < lastDistinct || lastCount-lastDistinct > maximumReplays) {
+			t.Fatalf(
+				"stored %q events = %d distinct=%d, want %d distinct and at most %d replay(s)",
+				indexName,
+				lastCount,
+				lastDistinct,
+				wantDistinct,
+				maximumReplays,
+			)
 		}
 		if process.Exited() {
-			t.Fatalf("collector exited before restart ingestion completed: %v, count=%d distinct=%d\nlogs:\n%s",
-				process.Err(), lastCount, lastDistinct,
-				redactForFailure(process.Logs(), plaintextToken,
-					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+			t.Fatalf(
+				"collector exited before %q ingestion completed: %v, count=%d distinct=%d\nlogs:\n%s",
+				indexName,
+				process.Err(),
+				lastCount,
+				lastDistinct,
+				redactForFailure(process.Logs(), secrets...),
+			)
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("wait for distinct stored events: %v, count=%d distinct=%d", ctx.Err(), lastCount, lastDistinct)
+			t.Fatalf(
+				"wait for distinct %q events: %v, count=%d distinct=%d",
+				indexName,
+				ctx.Err(),
+				lastCount,
+				lastDistinct,
+			)
 		case <-deadline.C:
-			t.Fatalf("wait for distinct stored events: timed out, count=%d distinct=%d\ncollector logs:\n%s",
-				lastCount, lastDistinct,
-				redactForFailure(process.Logs(), plaintextToken,
-					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+			t.Fatalf(
+				"wait for distinct %q events: timed out, count=%d distinct=%d\ncollector logs:\n%s",
+				indexName,
+				lastCount,
+				lastDistinct,
+				redactForFailure(process.Logs(), secrets...),
+			)
 		case <-ticker.C:
 		}
 	}
@@ -549,6 +597,299 @@ func createVerticalIndex(t *testing.T, ctx context.Context, client *http.Client,
 	if created.GetIndex().GetVersion() != 1 || created.GetIndex().GetDefinition().GetName() != name {
 		t.Fatalf("created index %q = %+v", name, created.GetIndex())
 	}
+}
+
+func assertCurrentGradeThisMigration(
+	t *testing.T,
+	ctx context.Context,
+	repository, collectorBinary, collectorAddress, work string,
+	client *http.Client,
+	baseURL string,
+	connection clickhousedriver.Conn,
+) string {
+	t.Helper()
+
+	profile := gradethiscorpus.MigrationFixtureAt(
+		time.Now().UTC().Add(-15 * time.Minute).Truncate(time.Second),
+	)
+	if err := gradethiscorpus.ValidateMigration(profile); err != nil {
+		t.Fatalf("validate current GradeThis migration fixture: %v", err)
+	}
+	createVerticalIndex(
+		t,
+		ctx,
+		client,
+		baseURL,
+		gradethiscorpus.MigrationIndexName,
+		"Current GradeThis collector migration",
+	)
+
+	var createdToken opensplunkv1.CreateIngestionTokenResponse
+	postProto(t, ctx, client, baseURL+"/api/v1/ingestion-tokens/create", &opensplunkv1.CreateIngestionTokenRequest{
+		Definition: &opensplunkv1.IngestionTokenDefinition{
+			Name: "gradethis-current-migration",
+			Constraints: &opensplunkv1.IngestionTokenConstraints{
+				AllowedIndexNames: []string{gradethiscorpus.MigrationIndexName},
+			},
+		},
+	}, &createdToken)
+	plaintextToken := createdToken.GetPlaintextToken()
+	if plaintextToken == "" || createdToken.GetIngestionToken().GetVersion() != 1 ||
+		!strings.HasPrefix(plaintextToken, createdToken.GetIngestionToken().GetTokenPrefix()) {
+		t.Fatalf(
+			"created GradeThis ingestion token metadata = %+v, plaintext length = %d",
+			createdToken.GetIngestionToken(),
+			len(plaintextToken),
+		)
+	}
+
+	logPath := filepath.Join(work, "gradethis-current.log")
+	createEmptyFixture(t, logPath)
+	tokenPath := filepath.Join(work, "gradethis-current.token")
+	writePrivateFile(t, tokenPath, []byte(plaintextToken+"\n"))
+	stateDir := filepath.Join(work, "gradethis-current-state")
+	configPath := filepath.Join(repository, "configs", "examples", "collector.yaml")
+	environment := os.Environ()
+	for name, value := range map[string]string{
+		"OPEN_SPLUNK_SERVER_GRPC_ADDRESS":       collectorAddress,
+		"OPEN_SPLUNK_COLLECTOR_TOKEN_FILE":      tokenPath,
+		"OPEN_SPLUNK_COLLECTOR_STATE_DIRECTORY": stateDir,
+		"GRADETHIS_LOG_PATH":                    logPath,
+		"GRADETHIS_HOST":                        "gradethis-integration-host",
+		"GRADETHIS_ENVIRONMENT":                 "integration",
+	} {
+		environment = environmentWithValue(environment, name, value)
+	}
+
+	validateCollectorConfiguration(
+		t,
+		ctx,
+		repository,
+		collectorBinary,
+		configPath,
+		environment,
+		plaintextToken,
+	)
+	process := startProcess(
+		t,
+		repository,
+		[]string{collectorBinary, "run", "-config", configPath},
+		environment,
+	)
+	waitForCollectorDiscovery(t, ctx, stateDir, logPath, process, plaintextToken)
+	appendSyncedFixture(t, logPath, profile.NDJSON)
+
+	wantRows := uint64(len(profile.Events))
+	waitForDistinctStoredEventCount(
+		t,
+		ctx,
+		connection,
+		process,
+		gradethiscorpus.MigrationIndexName,
+		wantRows,
+		0,
+		plaintextToken,
+	)
+	waitForCollectorCheckpoint(t, ctx, stateDir, logPath, process, plaintextToken)
+	waitForCollectorWALAcknowledgedThroughCurrent(t, ctx, stateDir, process, plaintextToken)
+	if err := process.Interrupt(15 * time.Second); err != nil {
+		t.Fatalf(
+			"stop current GradeThis collector: %v\nlogs:\n%s",
+			err,
+			redactForFailure(process.Logs(), plaintextToken),
+		)
+	}
+	assertDurableCollectorState(t, stateDir, uint64(mustFileSize(t, logPath)), wantRows)
+	assertCurrentGradeThisStoredMetadata(t, ctx, connection, wantRows)
+	assertProcessLogsDoNotLeak(t, process.Logs(), plaintextToken)
+	assertCurrentGradeThisSearches(t, ctx, client, baseURL, profile)
+
+	return plaintextToken
+}
+
+func validateCollectorConfiguration(
+	t *testing.T,
+	ctx context.Context,
+	repository, collectorBinary, configPath string,
+	environment []string,
+	plaintextToken string,
+) {
+	t.Helper()
+	command := exec.CommandContext(ctx, collectorBinary, "validate", "-config", configPath)
+	configureProcessGroup(command)
+	command.Dir = repository
+	command.Env = environment
+	logs := &lockedBuffer{maximum: 1 << 20}
+	command.Stdout = logs
+	command.Stderr = logs
+	if err := command.Run(); err != nil {
+		t.Fatalf(
+			"validate shipped GradeThis collector configuration: %v\n%s",
+			err,
+			redactForFailure(logs.String(), plaintextToken),
+		)
+	}
+	output := logs.String()
+	if !strings.Contains(output, "configuration "+configPath+" is valid") ||
+		!strings.Contains(output, "gradethis-backend: 1 file(s)") {
+		t.Fatalf(
+			"collector validation output did not prove one GradeThis source:\n%s",
+			redactForFailure(output, plaintextToken),
+		)
+	}
+	assertProcessLogsDoNotLeak(t, output, plaintextToken)
+}
+
+func appendSyncedFixture(t *testing.T, path string, contents []byte) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("open collector fixture for append: %v", err)
+	}
+	written, writeErr := file.Write(contents)
+	if writeErr != nil || written != len(contents) {
+		_ = file.Close()
+		t.Fatalf("append collector fixture: wrote %d of %d bytes: %v", written, len(contents), writeErr)
+	}
+	syncAndCloseFixture(t, file)
+}
+
+func assertCurrentGradeThisStoredMetadata(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	wantRows uint64,
+) {
+	t.Helper()
+	var count, distinct, canonicalMismatches, environmentMismatches, rawMetadata uint64
+	err := connection.QueryRow(
+		ctx,
+		`SELECT
+			count(),
+			uniqExact(event_id),
+			countIf(
+				host != ?
+				OR source != ?
+				OR sourcetype != ?
+				OR ifNull(service, '') != ?
+			),
+			countIf(
+				NOT has(field_names, 'environment')
+				OR dynamicType(fields.environment) != 'String'
+				OR dynamicElement(fields.environment, 'String') != ?
+			),
+			countIf(
+				position(raw, '"index":') > 0
+				OR position(raw, '"host":') > 0
+				OR position(raw, '"source":') > 0
+				OR position(raw, '"sourcetype":') > 0
+				OR position(raw, '"service":') > 0
+				OR position(raw, '"environment":') > 0
+			)
+		 FROM open_splunk.events
+		 WHERE tenant_id = ? AND index_name = ?`,
+		"gradethis-integration-host",
+		gradethiscorpus.MigrationSource,
+		gradethiscorpus.MigrationSourcetype,
+		gradethiscorpus.MigrationService,
+		"integration",
+		verticalTenantID,
+		gradethiscorpus.MigrationIndexName,
+	).Scan(&count, &distinct, &canonicalMismatches, &environmentMismatches, &rawMetadata)
+	if err != nil {
+		t.Fatalf("query current GradeThis stored metadata: %v", err)
+	}
+	if count != wantRows || distinct != wantRows || canonicalMismatches != 0 ||
+		environmentMismatches != 0 || rawMetadata != 0 {
+		t.Fatalf(
+			"current GradeThis storage = count:%d distinct:%d canonical_mismatches:%d "+
+				"environment_mismatches:%d raw_metadata:%d, want %d/%d/0/0/0",
+			count,
+			distinct,
+			canonicalMismatches,
+			environmentMismatches,
+			rawMetadata,
+			wantRows,
+			wantRows,
+		)
+	}
+}
+
+func assertCurrentGradeThisSearches(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	profile gradethiscorpus.MigrationProfile,
+) {
+	t.Helper()
+	for _, search := range gradethiscorpus.MigrationSearches() {
+		search := search
+		t.Run("current-gradethis-"+string(search.ID), func(t *testing.T) {
+			source, err := search.Render(profile.TraceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			results := runCurrentGradeThisSearch(
+				t,
+				ctx,
+				client,
+				baseURL,
+				profile.BaseTime,
+				source,
+				search.ExpectedRows,
+			)
+			assertCurrentGradeThisSearchResults(t, search.ID, profile, results)
+		})
+	}
+}
+
+func runCurrentGradeThisSearch(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	baseTime time.Time,
+	source string,
+	wantRows uint64,
+) *collectedVerticalSearchResults {
+	t.Helper()
+	earliest := baseTime.Format(time.RFC3339Nano)
+	latestTime := baseTime.Add(12 * time.Minute)
+	latest := latestTime.Format(time.RFC3339Nano)
+	timezone := "UTC"
+	var created opensplunkv1.CreateSearchJobResponse
+	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/create", &opensplunkv1.CreateSearchJobRequest{
+		Definition: &opensplunkv1.SearchDefinition{
+			Spl: source,
+			TimeRange: &opensplunkv1.TimeRangeSpec{
+				Earliest: &earliest,
+				Latest:   &latest,
+				Timezone: &timezone,
+			},
+			IndexScope: []string{gradethiscorpus.MigrationIndexName},
+		},
+	}, &created)
+	jobID := created.GetSearchJob().GetSearchJobId()
+	if jobID == "" {
+		t.Fatalf("created current GradeThis search job = %+v", created.GetSearchJob())
+	}
+	completed := waitForCompletedSearch(t, ctx, client, baseURL, jobID, 30*time.Second)
+	resolved := completed.GetResolvedTimeRange()
+	if completed.GetDefinition().GetSpl() != source ||
+		completed.GetProgress().GetProducedRows() != wantRows ||
+		completed.GetResultsTruncated() ||
+		len(completed.GetEffectiveIndexScope()) != 1 ||
+		completed.GetEffectiveIndexScope()[0] != gradethiscorpus.MigrationIndexName ||
+		resolved == nil ||
+		resolved.GetEarliest() == nil ||
+		resolved.GetLatest() == nil ||
+		!resolved.GetEarliest().AsTime().Equal(baseTime) ||
+		!resolved.GetLatest().AsTime().Equal(latestTime) ||
+		resolved.GetTimezone() != timezone {
+		t.Fatalf("completed current GradeThis search = %+v", completed)
+	}
+	return fetchAllCompletedSearchResults(t, ctx, client, baseURL, jobID, wantRows, 3)
 }
 
 func exportAndDownloadJSONLines(
@@ -1791,7 +2132,22 @@ func fetchAllVerticalSearchResults(
 	baseURL, jobID string,
 ) *collectedVerticalSearchResults {
 	t.Helper()
-	pageSize := uint32(2)
+	return fetchAllCompletedSearchResults(t, ctx, client, baseURL, jobID, verticalEventCount, 2)
+}
+
+func fetchAllCompletedSearchResults(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL, jobID string,
+	expectedRows uint64,
+	pageSize uint32,
+) *collectedVerticalSearchResults {
+	t.Helper()
+	if expectedRows == 0 || pageSize == 0 {
+		t.Fatalf("completed result paging requires positive rows/page size, got %d/%d", expectedRows, pageSize)
+	}
+	expectedPages := (expectedRows + uint64(pageSize) - 1) / uint64(pageSize)
 	var (
 		schema     *opensplunkv1.ResultSchema
 		rows       []*opensplunkv1.ResultRow
@@ -1821,7 +2177,7 @@ func fetchAllVerticalSearchResults(
 			t.Fatalf("search result page %d = %+v", pageCount, &current)
 		}
 		if !page.GetSnapshotComplete() ||
-			!page.GetPage().GetTotalSizeExact() || page.GetPage().GetTotalSize() != verticalEventCount ||
+			!page.GetPage().GetTotalSizeExact() || page.GetPage().GetTotalSize() != expectedRows ||
 			len(page.GetRows()) == 0 || len(page.GetRows()) > int(pageSize) {
 			t.Fatalf("search result page %d metadata = %+v", pageCount, page)
 		}
@@ -1853,14 +2209,264 @@ func fetchAllVerticalSearchResults(
 		}
 		seenTokens[returnedToken] = struct{}{}
 		nextToken = returnedToken
-		if pageCount > int(verticalEventCount) {
-			t.Fatalf("search result cursor exceeded %d bounded pages", verticalEventCount)
+		if uint64(pageCount) >= expectedPages {
+			t.Fatalf("search result cursor exceeded %d bounded pages", expectedPages)
 		}
 	}
-	if pageCount != 2 || uint64(len(rows)) != verticalEventCount {
-		t.Fatalf("collected search results: pages=%d rows=%d", pageCount, len(rows))
+	if uint64(pageCount) != expectedPages || uint64(len(rows)) != expectedRows {
+		t.Fatalf(
+			"collected search results: pages=%d rows=%d, want pages=%d rows=%d",
+			pageCount,
+			len(rows),
+			expectedPages,
+			expectedRows,
+		)
 	}
 	return &collectedVerticalSearchResults{schema: schema, rows: rows, responseWire: pageWire}
+}
+
+func assertCurrentGradeThisSearchResults(
+	t *testing.T,
+	searchID gradethiscorpus.MigrationSearchID,
+	profile gradethiscorpus.MigrationProfile,
+	results *collectedVerticalSearchResults,
+) {
+	t.Helper()
+	switch searchID {
+	case gradethiscorpus.MigrationSearchFollowTrace:
+		assertCurrentGradeThisColumns(t, results,
+			[]string{"_time", "level", "layer", "logger", "message"},
+			[]opensplunkv1.ValueType{
+				opensplunkv1.ValueType_VALUE_TYPE_TIMESTAMP,
+				opensplunkv1.ValueType_VALUE_TYPE_STRING,
+				opensplunkv1.ValueType_VALUE_TYPE_MIXED,
+				opensplunkv1.ValueType_VALUE_TYPE_MIXED,
+				opensplunkv1.ValueType_VALUE_TYPE_STRING,
+			},
+		)
+		for rowIndex, eventID := range []string{"trace-api", "trace-service", "trace-database"} {
+			event := currentGradeThisEvent(t, profile, eventID)
+			cells := results.rows[rowIndex].GetCells()
+			requireCurrentGradeThisTime(t, cells[0], event.Timestamp)
+			requireCurrentGradeThisString(t, cells[1], event.Level)
+			requireCurrentGradeThisString(t, cells[2], event.Layer)
+			requireCurrentGradeThisString(t, cells[3], event.Logger)
+			requireCurrentGradeThisString(t, cells[4], event.Message)
+		}
+
+	case gradethiscorpus.MigrationSearchSeverityCounts:
+		assertCurrentGradeThisColumns(t, results,
+			[]string{"level", "count"},
+			[]opensplunkv1.ValueType{
+				opensplunkv1.ValueType_VALUE_TYPE_STRING,
+				opensplunkv1.ValueType_VALUE_TYPE_UINT64,
+			},
+		)
+		for rowIndex, expected := range []struct {
+			level string
+			count uint64
+		}{
+			{level: "INFO", count: 10},
+			{level: "WARN", count: 6},
+			{level: "ERROR", count: 4},
+		} {
+			cells := results.rows[rowIndex].GetCells()
+			requireCurrentGradeThisString(t, cells[0], expected.level)
+			requireCurrentGradeThisUnsigned(t, cells[1], expected.count)
+		}
+
+	case gradethiscorpus.MigrationSearchFailedRequests:
+		assertCurrentGradeThisColumns(t, results,
+			[]string{"_time", "level", "path", "status", "duration", "trace_id"},
+			[]opensplunkv1.ValueType{
+				opensplunkv1.ValueType_VALUE_TYPE_TIMESTAMP,
+				opensplunkv1.ValueType_VALUE_TYPE_STRING,
+				opensplunkv1.ValueType_VALUE_TYPE_MIXED,
+				opensplunkv1.ValueType_VALUE_TYPE_MIXED,
+				opensplunkv1.ValueType_VALUE_TYPE_MIXED,
+				opensplunkv1.ValueType_VALUE_TYPE_STRING,
+			},
+		)
+		for rowIndex, eventID := range []string{"assessments-server-error", "submissions-server-error"} {
+			event := currentGradeThisEvent(t, profile, eventID)
+			cells := results.rows[rowIndex].GetCells()
+			requireCurrentGradeThisTime(t, cells[0], event.Timestamp)
+			requireCurrentGradeThisString(t, cells[1], event.Level)
+			requireCurrentGradeThisString(t, cells[2], event.Path)
+			requireCurrentGradeThisSigned(t, cells[3], event.Status)
+			requireCurrentGradeThisString(t, cells[4], event.Duration)
+			requireCurrentGradeThisString(t, cells[5], event.TraceID)
+		}
+
+	case gradethiscorpus.MigrationSearchPathStatus:
+		assertCurrentGradeThisColumns(t, results,
+			[]string{"path", "status", "count"},
+			[]opensplunkv1.ValueType{
+				opensplunkv1.ValueType_VALUE_TYPE_STRING,
+				opensplunkv1.ValueType_VALUE_TYPE_STRING,
+				opensplunkv1.ValueType_VALUE_TYPE_UINT64,
+			},
+		)
+		for rowIndex, expected := range []struct {
+			path   string
+			status string
+			count  uint64
+		}{
+			{path: "/api/v1/assessments", status: "200", count: 2},
+			{path: "/api/v1/submissions", status: "200", count: 2},
+			{path: "/api/v1/assessments", status: "429", count: 1},
+			{path: "/api/v1/assessments", status: "503", count: 1},
+			{path: "/api/v1/reports", status: "200", count: 1},
+			{path: "/api/v1/reports", status: "204", count: 1},
+			{path: "/api/v1/reports", status: "404", count: 1},
+			{path: "/api/v1/submissions", status: "500", count: 1},
+		} {
+			cells := results.rows[rowIndex].GetCells()
+			requireCurrentGradeThisString(t, cells[0], expected.path)
+			requireCurrentGradeThisString(t, cells[1], expected.status)
+			requireCurrentGradeThisUnsigned(t, cells[2], expected.count)
+		}
+
+	case gradethiscorpus.MigrationSearchDurationUnits:
+		assertCurrentGradeThisColumns(t, results,
+			[]string{"duration_unit", "count"},
+			[]opensplunkv1.ValueType{
+				opensplunkv1.ValueType_VALUE_TYPE_STRING,
+				opensplunkv1.ValueType_VALUE_TYPE_UINT64,
+			},
+		)
+		for rowIndex, expected := range []struct {
+			unit  string
+			count uint64
+		}{
+			{unit: "ms", count: 7},
+			{unit: "s", count: 2},
+			{unit: "µs", count: 1},
+		} {
+			cells := results.rows[rowIndex].GetCells()
+			requireCurrentGradeThisString(t, cells[0], expected.unit)
+			requireCurrentGradeThisUnsigned(t, cells[1], expected.count)
+		}
+
+	case gradethiscorpus.MigrationSearchTopMessages:
+		assertCurrentGradeThisColumns(t, results,
+			[]string{"message", "count", "percent"},
+			[]opensplunkv1.ValueType{
+				opensplunkv1.ValueType_VALUE_TYPE_STRING,
+				opensplunkv1.ValueType_VALUE_TYPE_UINT64,
+				opensplunkv1.ValueType_VALUE_TYPE_DOUBLE,
+			},
+		)
+		for rowIndex, expected := range []struct {
+			message string
+			count   uint64
+			percent float64
+		}{
+			{message: "Request summary statistics", count: 10, percent: 50},
+			{message: "Heartbeat", count: 3, percent: 15},
+			{message: "Cache refresh delayed", count: 2, percent: 10},
+		} {
+			cells := results.rows[rowIndex].GetCells()
+			requireCurrentGradeThisString(t, cells[0], expected.message)
+			requireCurrentGradeThisUnsigned(t, cells[1], expected.count)
+			requireCurrentGradeThisDouble(t, cells[2], expected.percent)
+		}
+
+	default:
+		t.Fatalf("unknown current GradeThis search %q", searchID)
+	}
+}
+
+func assertCurrentGradeThisColumns(
+	t *testing.T,
+	results *collectedVerticalSearchResults,
+	names []string,
+	types []opensplunkv1.ValueType,
+) {
+	t.Helper()
+	if results == nil || results.schema == nil || len(names) != len(types) ||
+		len(results.schema.GetColumns()) != len(names) {
+		t.Fatalf("current GradeThis result schema = %+v, want names=%v types=%v", results, names, types)
+	}
+	for index, column := range results.schema.GetColumns() {
+		if column.GetFieldName() != names[index] || column.GetValueType() != types[index] {
+			t.Fatalf(
+				"current GradeThis result column %d = %+v, want name=%q type=%s",
+				index,
+				column,
+				names[index],
+				types[index],
+			)
+		}
+	}
+	for rowIndex, row := range results.rows {
+		if len(row.GetCells()) != len(names) {
+			t.Fatalf(
+				"current GradeThis result row %d has %d cells, want %d",
+				rowIndex,
+				len(row.GetCells()),
+				len(names),
+			)
+		}
+	}
+}
+
+func currentGradeThisEvent(
+	t *testing.T,
+	profile gradethiscorpus.MigrationProfile,
+	eventID string,
+) gradethiscorpus.MigrationEvent {
+	t.Helper()
+	for _, event := range profile.Events {
+		if event.ID == eventID {
+			return event
+		}
+	}
+	t.Fatalf("current GradeThis profile has no event %q", eventID)
+	return gradethiscorpus.MigrationEvent{}
+}
+
+func requireCurrentGradeThisString(t *testing.T, value *opensplunkv1.TypedValue, want string) {
+	t.Helper()
+	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_StringValue); !ok ||
+		value.GetStringValue() != want {
+		t.Fatalf("current GradeThis cell = %+v, want string(%q)", value, want)
+	}
+}
+
+func requireCurrentGradeThisSigned(t *testing.T, value *opensplunkv1.TypedValue, want int64) {
+	t.Helper()
+	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_Sint64Value); !ok ||
+		value.GetSint64Value() != want {
+		t.Fatalf("current GradeThis cell = %+v, want sint64(%d)", value, want)
+	}
+}
+
+func requireCurrentGradeThisUnsigned(t *testing.T, value *opensplunkv1.TypedValue, want uint64) {
+	t.Helper()
+	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_Uint64Value); !ok ||
+		value.GetUint64Value() != want {
+		t.Fatalf("current GradeThis cell = %+v, want uint64(%d)", value, want)
+	}
+}
+
+func requireCurrentGradeThisDouble(t *testing.T, value *opensplunkv1.TypedValue, want float64) {
+	t.Helper()
+	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_DoubleValue); !ok ||
+		value.GetDoubleValue() != want {
+		t.Fatalf("current GradeThis cell = %+v, want double(%v)", value, want)
+	}
+}
+
+func requireCurrentGradeThisTime(t *testing.T, value *opensplunkv1.TypedValue, want time.Time) {
+	t.Helper()
+	timestamp := value.GetTimestampValue()
+	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_TimestampValue); !ok ||
+		timestamp == nil ||
+		timestamp.CheckValid() != nil ||
+		!timestamp.AsTime().Equal(want) {
+		t.Fatalf("current GradeThis cell = %+v, want timestamp(%s)", value, want.Format(time.RFC3339Nano))
+	}
 }
 
 func assertCompletedTimeline(

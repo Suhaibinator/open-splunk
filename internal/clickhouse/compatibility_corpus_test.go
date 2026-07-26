@@ -32,6 +32,30 @@ func TestGradeThisCompatibilityCorpus(t *testing.T) {
 	}
 }
 
+// TestGradeThisCurrentMigrationCorpus keeps the representative current
+// GradeThis/go-common investigations compiling independently from the exact
+// product-plan v0.1 corpus. In particular it pins the current request-summary
+// message and µs/ms/s duration extraction contract.
+func TestGradeThisCurrentMigrationCorpus(t *testing.T) {
+	t.Parallel()
+
+	fixture := gradethiscorpus.MigrationFixture()
+	for _, search := range gradethiscorpus.MigrationSearches() {
+		search := search
+		t.Run(search.Name, func(t *testing.T) {
+			t.Parallel()
+			source, err := search.Render(fixture.TraceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			compiled := compileSPL(t, source)
+			if compiled.SQL == "" || len(compiled.OutputFields) == 0 {
+				t.Fatalf("compiled current-source query is incomplete: %#v", compiled)
+			}
+		})
+	}
+}
+
 func TestRexCompatibilityCorpus(t *testing.T) {
 	t.Parallel()
 

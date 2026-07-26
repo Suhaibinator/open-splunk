@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collector/config"
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
+	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -176,6 +178,705 @@ func TestDaemonFileToWALWithheldAckKeepsDiscoveryCheckpoint(t *testing.T) {
 		if ev.GetHost() != "test-host" {
 			t.Errorf("event host = %q, want test-host", ev.GetHost())
 		}
+	}
+}
+
+// TestDaemonRedactsSecretsBeforeOfflineWALAppend proves the edge collector
+// never persists known secret families while the ingestion server is
+// unreachable. Server-side redaction is too late for this trust boundary: the
+// local WAL must already contain only the sanitized event.
+func TestDaemonRedactsSecretsBeforeOfflineWALAppend(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+	logDir := t.TempDir()
+	logPath := filepath.Join(logDir, "app.log")
+
+	const (
+		structuredSecret       = "offline-structured-secret"
+		messageSecret          = "offline-message-secret"
+		noteSecret             = "offline-note-secret"
+		customStructuredSecret = "offline-custom-structured-secret"
+		customMessageSecret    = "offline-custom-message-secret"
+		renamedSecret          = "offline-rename-to-sensitive-secret"
+	)
+	writeFile(t, logPath,
+		`{"message":"token=`+messageSecret+` customer_credential=`+customMessageSecret+
+			` safe=message-kept","token":"`+structuredSecret+
+			`","customer_credential":"`+customStructuredSecret+
+			`","credential":"`+renamedSecret+
+			`","note":"authorization=Bearer `+noteSecret+` safe=note-kept"}`+"\n")
+
+	cfg := newTestConfig(t, stateDir, filepath.Join(logDir, "*.log"), filepath.Join(stateDir, "token"))
+	cfg.Processors = []config.ProcessorConfig{
+		{
+			Type: "redact", Fields: []string{"customer_credential"}, Replacement: "***",
+		},
+		{
+			Type: "rename", From: "credential", To: "token",
+		},
+	}
+	d, err := New(cfg, WithLogger(discardLogger()), WithCollectorID("cid"), WithInstanceID("iid"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	d.batchLinger = 15 * time.Millisecond
+	d.drainWindow = 50 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+	waitFor(t, 3*time.Second, "redacted event queued", func() bool {
+		return d.queue.Stats().QueuedEvents == 1
+	})
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	queue, err := wal.Open(wal.Options{
+		Dir: filepath.Join(stateDir, walSubdir), Sync: wal.SyncAlways, CollectorID: "cid",
+	})
+	if err != nil {
+		t.Fatalf("reopen queue: %v", err)
+	}
+	defer queue.Close()
+	batch, err := queue.NextBatch(context.Background())
+	if err != nil {
+		t.Fatalf("read pending batch: %v", err)
+	}
+	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(batch)
+	if err != nil {
+		t.Fatalf("marshal pending batch: %v", err)
+	}
+	for _, secret := range []string{
+		structuredSecret,
+		messageSecret,
+		noteSecret,
+		customStructuredSecret,
+		customMessageSecret,
+		renamedSecret,
+	} {
+		if bytes.Contains(wire, []byte(secret)) {
+			t.Fatal("offline collector WAL retained a planted secret")
+		}
+	}
+	event := batch.GetEvents()[0]
+	if !bytes.Contains(event.GetRaw(), []byte("***")) ||
+		!bytes.Contains(event.GetRaw(), []byte("message-kept")) ||
+		!bytes.Contains(event.GetRaw(), []byte("note-kept")) ||
+		!strings.Contains(event.GetMessage(), "***") ||
+		!strings.Contains(event.GetMessage(), "message-kept") {
+		t.Fatalf("offline WAL redaction lost safe data or its replacement: raw=%q message=%q",
+			event.GetRaw(), event.GetMessage())
+	}
+	fields := make(map[string]*opensplunkv1.TypedValue, len(event.GetFields().GetFields()))
+	for _, field := range event.GetFields().GetFields() {
+		fields[field.GetName()] = field.GetValue()
+	}
+	if fields["customer_credential"].GetStringValue() != "***" ||
+		fields["token"].GetStringValue() == renamedSecret {
+		t.Fatalf("offline WAL configured/post-pipeline redaction = %+v", fields)
+	}
+}
+
+func TestDurableRedactorsTraceRenameChainsBackToRawKeys(t *testing.T) {
+	t.Parallel()
+
+	processors := []config.ProcessorConfig{
+		{Type: "rename", From: "original_name", To: "intermediate_name"},
+		{Type: "rename", From: "intermediate_name", To: "customer_credential"},
+		{Type: "redact", Fields: []string{"customer_credential"}, Replacement: "MASKED"},
+	}
+	pipeline, err := buildPipeline(processors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redactor, err := buildDurableRedactor(pipeline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := testEvent(t, testDecoder(t), 0, 64, 1, `{"original_name":"rename-chain-secret","safe":"kept"}`)
+	event = redactor.beforePipeline(event, nil)
+	out, err := pipeline.Process(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(wire, []byte("rename-chain-secret")) ||
+		!bytes.Contains(out.GetRaw(), []byte("MASKED")) ||
+		!bytes.Contains(out.GetRaw(), []byte(`"safe":"kept"`)) {
+		t.Fatalf("durable rename-chain redaction = raw:%q event:%+v", out.GetRaw(), out)
+	}
+	fields := out.GetFields().GetFields()
+	if len(fields) != 2 || fields[0].GetName() != "customer_credential" ||
+		fields[0].GetValue().GetStringValue() != "MASKED" {
+		t.Fatalf("durable rename-chain fields = %+v", fields)
+	}
+}
+
+func TestBuildProcessorRuntimeSharesResolvedProcessorSemantics(t *testing.T) {
+	t.Parallel()
+
+	pipeline, redactor, err := buildProcessorRuntime([]config.ProcessorConfig{{
+		Type: "redact", Fields: []string{"customer_credential"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pipeline.processors) != 1 {
+		t.Fatalf("compiled processors = %d, want 1", len(pipeline.processors))
+	}
+	configured, ok := pipeline.processors[0].(*redactProcessor)
+	if !ok {
+		t.Fatalf("compiled processor type = %T, want *redactProcessor", pipeline.processors[0])
+	}
+	if configured.replacement != ingest.DefaultRedactionReplacement ||
+		redactor.configuredReplacement["customer_credential"] != configured.replacement {
+		t.Fatalf(
+			"resolved replacement drifted: pipeline=%q durable=%q",
+			configured.replacement,
+			redactor.configuredReplacement["customer_credential"],
+		)
+	}
+}
+
+func TestBuildDurableRedactorRejectsUnsupportedProcessor(t *testing.T) {
+	t.Parallel()
+
+	unsupported := pipeFunc{
+		name: "unsupported",
+		fn: func(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+			return event, nil
+		},
+	}
+	if _, err := buildDurableRedactor(NewPipeline(unsupported)); err == nil {
+		t.Fatal("unsupported processor did not fail closed at the durable boundary")
+	}
+}
+
+func TestBuildProcessorRuntimeEmptyPipelineRetainsMandatoryBoundary(t *testing.T) {
+	t.Parallel()
+
+	pipeline, redactor, err := buildProcessorRuntime(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"token":"mandatory-secret","safe":"kept"}`
+	event := testEvent(t, testDecoder(t), 0, uint64(len(raw)), 1, raw)
+	sanitized := redactor.beforePipeline(event, nil)
+	out, err := pipeline.Process(sanitized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != event {
+		t.Fatal("empty processor runtime cloned an exclusively owned event")
+	}
+	if bytes.Contains(out.GetRaw(), []byte("mandatory-secret")) ||
+		!bytes.Contains(out.GetRaw(), []byte(ingest.DefaultRedactionReplacement)) {
+		t.Fatalf("empty processor runtime did not retain mandatory redaction: %q", out.GetRaw())
+	}
+}
+
+func TestDurableRedactorPreventsRenameDeclassification(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		processors  []config.ProcessorConfig
+		raw         string
+		finalField  string
+		replacement string
+	}{
+		{
+			name: "mandatory sensitive source to ordinary destination",
+			processors: []config.ProcessorConfig{
+				{Type: "rename", From: "token", To: "public_value"},
+			},
+			raw:         `{"token":"mandatory-declassification-secret","safe":"kept"}`,
+			finalField:  "public_value",
+			replacement: ingest.DefaultRedactionReplacement,
+		},
+		{
+			name: "transient sensitive name in rename chain",
+			processors: []config.ProcessorConfig{
+				{Type: "rename", From: "credential", To: "token"},
+				{Type: "rename", From: "token", To: "public_value"},
+			},
+			raw:         `{"credential":"transient-declassification-secret","safe":"kept"}`,
+			finalField:  "public_value",
+			replacement: ingest.DefaultRedactionReplacement,
+		},
+		{
+			name: "configured sensitive source renamed before ordered processor",
+			processors: []config.ProcessorConfig{
+				{Type: "rename", From: "customer_credential", To: "public_value"},
+				{Type: "redact", Fields: []string{"customer_credential"}, Replacement: "MASKED"},
+			},
+			raw:         `{"customer_credential":"configured-declassification-secret","safe":"kept"}`,
+			finalField:  "public_value",
+			replacement: "MASKED",
+		},
+		{
+			name: "configured destination reached after ordered processor",
+			processors: []config.ProcessorConfig{
+				{Type: "redact", Fields: []string{"customer_credential"}, Replacement: "MASKED"},
+				{Type: "rename", From: "credential", To: "customer_credential"},
+			},
+			raw:         `{"credential":"configured-destination-declassification-secret","safe":"kept"}`,
+			finalField:  "customer_credential",
+			replacement: "MASKED",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			pipeline, err := buildPipeline(test.processors)
+			if err != nil {
+				t.Fatal(err)
+			}
+			redactor, err := buildDurableRedactor(pipeline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			event := testEvent(t, testDecoder(t), 0, uint64(len(test.raw)), 1, test.raw)
+			event = redactor.beforePipeline(event, nil)
+			out, err := pipeline.Process(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(wire, []byte("declassification-secret")) ||
+				!bytes.Contains(out.GetRaw(), []byte(test.replacement)) ||
+				!bytes.Contains(out.GetRaw(), []byte(`"safe":"kept"`)) {
+				t.Fatalf("durable rename declassification = raw:%q event:%+v", out.GetRaw(), out)
+			}
+			var final *opensplunkv1.TypedValue
+			for _, field := range out.GetFields().GetFields() {
+				if field.GetName() == test.finalField {
+					final = field.GetValue()
+					break
+				}
+			}
+			if final.GetStringValue() != test.replacement {
+				t.Fatalf("durable final field %q = %+v, want %q", test.finalField, final, test.replacement)
+			}
+		})
+	}
+}
+
+func TestDurableRedactorDoesNotRedactNoOpRenameDestination(t *testing.T) {
+	t.Parallel()
+
+	processors := []config.ProcessorConfig{
+		{Type: "rename", From: "token", To: "public_value"},
+	}
+	pipeline, err := buildPipeline(processors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redactor, err := buildDurableRedactor(pipeline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"public_value":"safe-business-data","safe":"kept"}`
+	event := testEvent(t, testDecoder(t), 0, uint64(len(raw)), 1, raw)
+	event = redactor.beforePipeline(event, nil)
+	out, err := pipeline.Process(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Contains(out.GetRaw(), []byte(`"public_value":"safe-business-data"`)) {
+		t.Fatalf("no-op rename corrupted raw destination data: %q", out.GetRaw())
+	}
+	fields := make(map[string]string)
+	for _, field := range out.GetFields().GetFields() {
+		fields[field.GetName()] = field.GetValue().GetStringValue()
+	}
+	if fields["public_value"] != "safe-business-data" || fields["safe"] != "kept" {
+		t.Fatalf("no-op rename corrupted structured destination data: %+v", fields)
+	}
+}
+
+func TestDurableRedactorSkipsLineageWithoutOrdinaryRenameSource(t *testing.T) {
+	t.Parallel()
+
+	pipeline, err := buildPipeline([]config.ProcessorConfig{
+		{Type: "rename", From: "ordinary_source", To: "token"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redactor, err := buildDurableRedactor(pipeline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"unrelated":"safe-business-data"}`
+	event := testEvent(t, testDecoder(t), 0, uint64(len(raw)), 1, raw)
+	if aliases := redactor.activeAliases(event, nil); aliases != nil {
+		t.Fatalf("unrelated event activated rename aliases: %+v", aliases)
+	}
+	if out := redactor.beforePipeline(event, nil); out != event {
+		t.Fatal("in-place durability sanitizer replaced an exclusively owned event")
+	}
+	if !bytes.Equal(event.GetRaw(), []byte(raw)) {
+		t.Fatalf("unrelated event raw changed: %q", event.GetRaw())
+	}
+}
+
+func TestDurableRedactorPreservesOrderedReplacementSemantics(t *testing.T) {
+	t.Parallel()
+
+	processors := []config.ProcessorConfig{
+		{Type: "redact", Fields: []string{"A"}, Replacement: "RA"},
+		{Type: "redact", Fields: []string{"B"}, Replacement: "RB"},
+		{Type: "rename", From: "A", To: "B"},
+	}
+	pipeline, err := buildPipeline(processors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redactor, err := buildDurableRedactor(pipeline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"A":"secret-a","B":"secret-b","safe":"kept"}`
+	event := redactor.beforePipeline(testEvent(t, testDecoder(t), 0, uint64(len(raw)), 1, raw), nil)
+	out, err := pipeline.Process(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := out.GetFields().GetFields()
+	if len(fields) != 2 || fields[0].GetName() != "B" ||
+		fields[0].GetValue().GetStringValue() != "RA" ||
+		fields[1].GetName() != "safe" || fields[1].GetValue().GetStringValue() != "kept" {
+		t.Fatalf("ordered conflicting replacements = %+v", fields)
+	}
+	if !bytes.Contains(out.GetRaw(), []byte(`"A":"RA"`)) ||
+		!bytes.Contains(out.GetRaw(), []byte(`"B":"RB"`)) {
+		t.Fatalf("direct raw replacement policies = %q", out.GetRaw())
+	}
+}
+
+func TestDurableRedactorTracksExactOrderedRenameLineage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		processors []config.ProcessorConfig
+		raw        string
+		wantName   string
+		wantValue  string
+	}{
+		{
+			name: "later source cannot traverse an earlier rename",
+			processors: []config.ProcessorConfig{
+				{Type: "rename", From: "A", To: "B"},
+				{Type: "rename", From: "C", To: "A"},
+				{Type: "redact", Fields: []string{"B"}, Replacement: "MASKED"},
+			},
+			raw:       `{"C":"ordered-safe-data"}`,
+			wantName:  "A",
+			wantValue: "ordered-safe-data",
+		},
+		{
+			name: "denied source cannot reach sensitive destination",
+			processors: []config.ProcessorConfig{
+				{Type: "deny", Fields: []string{"C"}},
+				{Type: "rename", From: "C", To: "token"},
+			},
+			raw:       `{"C":"denied-safe-data"}`,
+			wantValue: "denied-safe-data",
+		},
+		{
+			name: "normalized lookalike is not exact source",
+			processors: []config.ProcessorConfig{
+				{Type: "rename", From: "userID", To: "token"},
+			},
+			raw:       `{"user_id":"lookalike-safe-data","nested":{"userID":"nested-safe-data"}}`,
+			wantName:  "user_id",
+			wantValue: "lookalike-safe-data",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			pipeline, err := buildPipeline(test.processors)
+			if err != nil {
+				t.Fatal(err)
+			}
+			redactor, err := buildDurableRedactor(pipeline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			event := redactor.beforePipeline(
+				testEvent(t, testDecoder(t), 0, uint64(len(test.raw)), 1, test.raw),
+				nil,
+			)
+			out, err := pipeline.Process(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.wantValue != "" && !bytes.Contains(out.GetRaw(), []byte(test.wantValue)) {
+				t.Fatalf("ordered lineage corrupted raw: %q", out.GetRaw())
+			}
+			if test.wantName == "" {
+				if len(out.GetFields().GetFields()) != 0 {
+					t.Fatalf("denied lineage fields = %+v", out.GetFields().GetFields())
+				}
+				return
+			}
+			var got string
+			for _, field := range out.GetFields().GetFields() {
+				if field.GetName() == test.wantName {
+					got = field.GetValue().GetStringValue()
+				}
+			}
+			if got != test.wantValue {
+				t.Fatalf("ordered lineage field %q = %q, want %q", test.wantName, got, test.wantValue)
+			}
+		})
+	}
+}
+
+func TestDurableRedactorHandlesPunctuationAliasAndPreservesNestedLookalike(t *testing.T) {
+	t.Parallel()
+
+	processors := []config.ProcessorConfig{{Type: "rename", From: "---", To: "token"}}
+	pipeline, err := buildPipeline(processors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redactor, err := buildDurableRedactor(pipeline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"---":"punctuation-secret","nested":{"---":"nested-safe"},"safe":"kept"}`
+	event := redactor.beforePipeline(testEvent(t, testDecoder(t), 0, uint64(len(raw)), 1, raw), nil)
+	out, err := pipeline.Process(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(wire, []byte("punctuation-secret")) ||
+		!bytes.Contains(out.GetRaw(), []byte(`"---":"nested-safe"`)) {
+		t.Fatalf("punctuation alias redaction = raw:%q event:%+v", out.GetRaw(), out)
+	}
+	fields := out.GetFields().GetFields()
+	if fields[0].GetName() != "token" ||
+		fields[0].GetValue().GetStringValue() != ingest.DefaultRedactionReplacement ||
+		fields[1].GetValue().GetObjectValue().GetFields()[0].GetValue().GetStringValue() != "nested-safe" {
+		t.Fatalf("punctuation alias fields = %+v", fields)
+	}
+}
+
+func TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance(t *testing.T) {
+	t.Parallel()
+
+	processors := []config.ProcessorConfig{{Type: "rename", From: "userID", To: "token"}}
+	pipeline, err := buildPipeline(processors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redactor, err := buildDurableRedactor(pipeline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		format InputFormat
+		raw    string
+	}{
+		{
+			name:   "raw input",
+			format: InputFormatRaw,
+			raw:    "userID=ordinary-raw-business-data",
+		},
+		{
+			name:   "NDJSON constant override",
+			format: InputFormatNDJSON,
+			raw:    `{"userID":"ordinary-json-business-data","message":"userID=ordinary-message-business-data"}`,
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			decoder, decodeErr := NewDecoder(DecodeConfig{
+				Format: test.format, InputID: "app", IndexName: "main",
+				Source: "s", Sourcetype: "st", Host: "h",
+				ConstantFields: &opensplunkv1.TypedObject{Fields: []*opensplunkv1.TypedObjectField{{
+					Name: "userID",
+					Value: &opensplunkv1.TypedValue{
+						Kind: &opensplunkv1.TypedValue_StringValue{StringValue: "constant-secret"},
+					},
+				}}},
+			})
+			if decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			event, decodeErr := decoder.Decode(
+				[]byte(test.raw),
+				SourcePosition{
+					FileIdentity: "dev=1;ino=2;fp=abc",
+					EndOffset:    uint64(len(test.raw)),
+					LineNumber:   1,
+				},
+				time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			)
+			if decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			event = redactor.beforePipeline(event, decoder.constantNames)
+			out, processErr := pipeline.Process(event)
+			if processErr != nil {
+				t.Fatal(processErr)
+			}
+			wire, marshalErr := proto.MarshalOptions{Deterministic: true}.Marshal(out)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if bytes.Contains(wire, []byte("constant-secret")) ||
+				!bytes.Contains(out.GetRaw(), []byte("ordinary")) ||
+				!strings.Contains(out.GetMessage(), "ordinary") {
+				t.Fatalf("constant alias provenance = raw:%q message:%q event:%+v",
+					out.GetRaw(), out.GetMessage(), out)
+			}
+			fields := out.GetFields().GetFields()
+			if len(fields) != 1 || fields[0].GetName() != "token" ||
+				fields[0].GetValue().GetStringValue() != ingest.DefaultRedactionReplacement {
+				t.Fatalf("constant alias structured fields = %+v", fields)
+			}
+		})
+	}
+}
+
+func TestDurableRedactorPreservesExactConfiguredPoliciesAndDeduplicatesMandatoryDefaults(t *testing.T) {
+	t.Parallel()
+
+	redundantPipeline, err := buildPipeline([]config.ProcessorConfig{{
+		Type: "redact", Fields: []string{"token", "authorization", "private_key"},
+		Replacement: ingest.DefaultRedactionReplacement,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redundant, err := buildDurableRedactor(redundantPipeline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(redundant.configured) != 0 {
+		t.Fatalf("redundant mandatory policy was not eliminated: %+v", redundant)
+	}
+	groupedPipeline, err := buildPipeline([]config.ProcessorConfig{
+		{Type: "redact", Fields: []string{"customer_a"}, Replacement: "MASKED"},
+		{Type: "redact", Fields: []string{"customer_b"}, Replacement: "MASKED"},
+		{Type: "redact", Fields: []string{"customer_c"}, Replacement: "MASKED"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grouped, err := buildDurableRedactor(groupedPipeline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grouped.configured) != 1 {
+		t.Fatalf("same final replacement compiled to %d scans, want 1", len(grouped.configured))
+	}
+
+	processors := []config.ProcessorConfig{
+		{Type: "redact", Fields: []string{"customerCredential"}, Replacement: "CAMEL"},
+		{Type: "redact", Fields: []string{"customer_credential"}, Replacement: "SNAKE"},
+	}
+	pipeline, err := buildPipeline(processors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redactor, err := buildDurableRedactor(pipeline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(redactor.configured) != 2 {
+		t.Fatalf("configured durable policies = %+v", redactor)
+	}
+	event := testEvent(
+		t,
+		testDecoder(t),
+		0,
+		128,
+		1,
+		`{"customerCredential":"camel-secret","customer_credential":"snake-secret","safe":"kept"}`,
+	)
+	event = redactor.beforePipeline(event, nil)
+	out, err := pipeline.Process(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(out.GetRaw(), []byte("camel-secret")) ||
+		bytes.Contains(out.GetRaw(), []byte("snake-secret")) ||
+		!bytes.Contains(out.GetRaw(), []byte(`"customerCredential":"CAMEL"`)) ||
+		!bytes.Contains(out.GetRaw(), []byte(`"customer_credential":"SNAKE"`)) {
+		t.Fatalf("configured raw replacement semantics = %q", out.GetRaw())
+	}
+	fields := make(map[string]string)
+	for _, field := range out.GetFields().GetFields() {
+		fields[field.GetName()] = field.GetValue().GetStringValue()
+	}
+	if fields["customerCredential"] != "CAMEL" ||
+		fields["customer_credential"] != "SNAKE" ||
+		fields["safe"] != "kept" {
+		t.Fatalf("configured structured replacement semantics = %+v", fields)
+	}
+}
+
+func TestDurableRedactorKeepsLastConfiguredReplacementAfterMandatoryPolicy(t *testing.T) {
+	t.Parallel()
+
+	processors := []config.ProcessorConfig{
+		{Type: "redact", Fields: []string{"token"}, Replacement: "CUSTOM"},
+		{Type: "redact", Fields: []string{"token"}, Replacement: ingest.DefaultRedactionReplacement},
+	}
+	pipeline, err := buildPipeline(processors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redactor, err := buildDurableRedactor(pipeline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(redactor.configured) != 0 {
+		t.Fatalf("final mandatory replacement should need no supplemental scan: %d", len(redactor.configured))
+	}
+	raw := `{"message":"token=message-secret","token":"structured-secret","safe":"kept"}`
+	event := redactor.beforePipeline(
+		testEvent(t, testDecoder(t), 0, uint64(len(raw)), 1, raw),
+		nil,
+	)
+	out, err := pipeline.Process(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(wire, []byte("CUSTOM")) ||
+		bytes.Contains(wire, []byte("message-secret")) ||
+		bytes.Contains(wire, []byte("structured-secret")) ||
+		!bytes.Contains(out.GetRaw(), []byte(ingest.DefaultRedactionReplacement)) ||
+		!strings.Contains(out.GetMessage(), ingest.DefaultRedactionReplacement) {
+		t.Fatalf("last configured replacement did not win: raw:%q message:%q event:%+v",
+			out.GetRaw(), out.GetMessage(), out)
 	}
 }
 

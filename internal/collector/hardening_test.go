@@ -197,7 +197,7 @@ func TestDecodeFailureLogNeverLeaksTimestampSecret(t *testing.T) {
 	d.recordDecodeFailure("app", input.SourceRef{
 		Identity:    input.FileIdentity{Device: 1, Inode: 2, Generation: 1, Fingerprint: "abc"},
 		StartOffset: 0, EndOffset: uint64(len(line)), LineNumber: 1,
-	}, len(line), err)
+	}, len(line))
 
 	if logs := cap.String(); strings.Contains(logs, secret) {
 		t.Fatalf("decode-failure log leaked the secret: %s", logs)

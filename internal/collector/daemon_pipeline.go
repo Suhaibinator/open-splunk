@@ -106,9 +106,12 @@ func (d *Daemon) readInput(ctx context.Context, ir *inputRuntime, processed chan
 		}
 		event, err := ir.decoder.Decode(raw.Bytes, pos, d.now())
 		if err != nil {
-			d.recordDecodeFailure(ir.id, raw.Source, len(raw.Bytes), err)
+			d.recordDecodeFailure(ir.id, raw.Source, len(raw.Bytes))
 			continue
 		}
+		// Sanitize direct policies and the exact origins of rename values that
+		// actually reach sensitive names before any local durability boundary.
+		event = d.redactor.beforePipeline(event, ir.decoder.constantNames)
 		out, err := ir.pipeline.Process(event)
 		if err != nil {
 			// A pipeline error is a configuration/logic fault, not a per-event
@@ -137,9 +140,9 @@ func (d *Daemon) readInput(ctx context.Context, ir *inputRuntime, processed chan
 }
 
 // recordDecodeFailure counts and logs a skipped record per the decode-failure
-// policy. The raw payload is never logged (only its length), because a source
-// line may carry secret material.
-func (d *Daemon) recordDecodeFailure(inputID string, src input.SourceRef, n int, err error) {
+// policy. Neither the raw payload nor the decoder error is logged: structural
+// errors can contain attacker-controlled JSON field names.
+func (d *Daemon) recordDecodeFailure(inputID string, src input.SourceRef, n int) {
 	d.decodeFailures.Add(1)
 	d.log.Warn("collector: skipping undecodable record",
 		"input", inputID,
@@ -148,7 +151,7 @@ func (d *Daemon) recordDecodeFailure(inputID string, src input.SourceRef, n int,
 		"end_offset", src.EndOffset,
 		"line", src.LineNumber,
 		"bytes", n,
-		"error", err.Error(),
+		"reason", "decode_error",
 	)
 }
 

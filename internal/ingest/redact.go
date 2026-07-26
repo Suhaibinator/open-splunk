@@ -47,12 +47,22 @@ const (
 	rawSecretPrivateKey
 )
 
-func sensitiveFieldSet(additional []string) map[string]struct{} {
-	result := make(map[string]struct{}, len(mandatorySensitiveFields)+len(additional))
-	for _, name := range mandatorySensitiveFields {
-		result[normalizeSensitiveName(name)] = struct{}{}
+func sensitiveFieldSet(additional []string, mandatory, exact bool) map[string]struct{} {
+	capacity := len(additional)
+	if mandatory {
+		capacity += len(mandatorySensitiveFields)
+	}
+	result := make(map[string]struct{}, capacity)
+	if mandatory {
+		for _, name := range mandatorySensitiveFields {
+			result[normalizeSensitiveName(name)] = struct{}{}
+		}
 	}
 	for _, name := range additional {
+		if exact {
+			result[name] = struct{}{}
+			continue
+		}
 		if normalized := normalizeSensitiveName(name); normalized != "" {
 			result[normalized] = struct{}{}
 		}
@@ -89,11 +99,23 @@ func normalizeSensitiveName(name string) string {
 }
 
 func (v *Validator) isSensitive(name string) bool {
+	if v.exact {
+		_, ok := v.sensitive[name]
+		return ok
+	}
 	normalized := normalizeSensitiveName(name)
 	if _, ok := v.sensitive[normalized]; ok {
 		return true
 	}
-	return hasMandatorySensitiveComponent(strings.Split(normalized, "_"))
+	return v.mandatory && hasMandatorySensitiveComponent(strings.Split(normalized, "_"))
+}
+
+// IsSensitiveField reports whether name is covered by the validator's
+// mandatory or deployment-specific redaction policy. Collectors use it while
+// tracing rename processors backwards so the original raw key is sanitized
+// when a pipeline later gives that value a sensitive name.
+func (v *Validator) IsSensitiveField(name string) bool {
+	return v != nil && v.isSensitive(name)
 }
 
 func hasMandatorySensitiveComponent(components []string) bool {
@@ -131,14 +153,25 @@ func (v *Validator) redactObject(object *opensplunkv1.TypedObject) {
 		if field == nil {
 			continue
 		}
-		if v.isSensitive(field.GetName()) {
-			field.Value = &opensplunkv1.TypedValue{
-				Kind: &opensplunkv1.TypedValue_StringValue{StringValue: v.replacement},
-			}
+		if v.redactFieldByName(field) {
 			continue
 		}
 		v.redactValue(field.GetValue())
 	}
+}
+
+func (v *Validator) redactFieldByName(field *opensplunkv1.TypedObjectField) bool {
+	if !v.isSensitive(field.GetName()) {
+		return false
+	}
+	if current, ok := field.GetValue().GetKind().(*opensplunkv1.TypedValue_StringValue); ok &&
+		current.StringValue == v.replacement {
+		return true
+	}
+	field.Value = &opensplunkv1.TypedValue{
+		Kind: &opensplunkv1.TypedValue_StringValue{StringValue: v.replacement},
+	}
+	return true
 }
 
 func (v *Validator) redactValue(value *opensplunkv1.TypedValue) {
@@ -158,6 +191,76 @@ func (v *Validator) redactValue(value *opensplunkv1.TypedValue) {
 			v.redactValue(item)
 		}
 	}
+}
+
+func redactTopLevelObjectWithReplacements(
+	object *opensplunkv1.TypedObject,
+	replacements map[string]string,
+) {
+	if object == nil {
+		return
+	}
+	for _, field := range object.GetFields() {
+		if field == nil {
+			continue
+		}
+		replacement, sensitive := replacements[field.GetName()]
+		if !sensitive {
+			continue
+		}
+		if current, ok := field.GetValue().GetKind().(*opensplunkv1.TypedValue_StringValue); ok &&
+			current.StringValue == replacement {
+			continue
+		}
+		field.Value = &opensplunkv1.TypedValue{
+			Kind: &opensplunkv1.TypedValue_StringValue{StringValue: replacement},
+		}
+	}
+}
+
+// redactTopLevelJSONWithReplacements replaces only selected members of a root
+// JSON object. parsed distinguishes ordinary non-JSON text from valid unchanged
+// JSON so the caller does not scan nested JSON content as flat key/value text.
+func redactTopLevelJSONWithReplacements(
+	raw []byte,
+	replacements map[string]string,
+) (redacted []byte, parsed bool) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	value, duplicateKey, err := decodeJSONValue(decoder)
+	if err != nil {
+		return raw, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return raw, false
+	}
+	object, isObject := value.(map[string]any)
+	if !isObject {
+		return raw, true
+	}
+	changed := false
+	for name, current := range object {
+		replacement, sensitive := replacements[name]
+		if !sensitive {
+			continue
+		}
+		if text, ok := current.(string); ok && text == replacement {
+			continue
+		}
+		object[name] = replacement
+		changed = true
+	}
+	if !changed && !duplicateKey {
+		return raw, true
+	}
+	encoded, err := json.Marshal(object)
+	if err != nil {
+		// Values decoded by encoding/json plus validated replacement strings are
+		// marshalable. Fail closed if that invariant changes.
+		return []byte(DefaultRedactionReplacement), true
+	}
+	return encoded, true
 }
 
 // redactJSON preserves ordinary JSON without sensitive keys byte-for-byte.
@@ -621,9 +724,13 @@ func rawEscapeLayer(backslashRun int) int {
 
 func (v *Validator) classifyRawSensitiveName(name string, allowComponentMatch bool) rawSecretKind {
 	normalized := normalizeSensitiveName(name)
-	_, exact := v.sensitive[normalized]
+	lookup := normalized
+	if v.exact {
+		lookup = name
+	}
+	_, exact := v.sensitive[lookup]
 	components := strings.Split(normalized, "_")
-	sensitive := exact || allowComponentMatch && hasMandatorySensitiveComponent(components)
+	sensitive := exact || v.mandatory && allowComponentMatch && hasMandatorySensitiveComponent(components)
 	if !sensitive {
 		return rawSecretNone
 	}

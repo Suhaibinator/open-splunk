@@ -62,9 +62,46 @@ func TestDecodeTimestampErrorDoesNotLeakPayload(t *testing.T) {
 		Identity:    input.FileIdentity{Device: 1, Inode: 2, Fingerprint: "abc"},
 		StartOffset: 0, EndOffset: uint64(len(line)), LineNumber: 1,
 	}
-	d.recordDecodeFailure("app", src, len(line), derr)
+	d.recordDecodeFailure("app", src, len(line))
 
 	if got := buf.String(); strings.Contains(got, secret) {
 		t.Fatalf("daemon decode-failure log leaked the payload secret:\n%s", got)
+	}
+}
+
+func TestDecodeFailureLogDoesNotIncludeAttackerControlledFieldName(t *testing.T) {
+	t.Parallel()
+	const secret = "field-name-secret-DO-NOT-LEAK"
+
+	dec, err := NewDecoder(DecodeConfig{
+		Format: InputFormatNDJSON, InputID: "app", IndexName: "main",
+		Source: "s", Sourcetype: "st", Host: "h",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := []byte(`{"password=` + secret + `":1,"password=` + secret + `":2}`)
+	position := SourcePosition{
+		FileIdentity: "dev=1;ino=2;fp=abc",
+		StartOffset:  0,
+		EndOffset:    uint64(len(line)),
+		LineNumber:   1,
+	}
+	_, decodeErr := dec.Decode(line, position, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	if decodeErr == nil {
+		t.Fatal("expected duplicate-field decode error")
+	}
+
+	buffer := &redactionLogBuffer{}
+	daemon := &Daemon{log: slog.New(slog.NewTextHandler(buffer, nil))}
+	daemon.recordDecodeFailure("app", input.SourceRef{
+		Identity:    input.FileIdentity{Device: 1, Inode: 2, Fingerprint: "abc"},
+		StartOffset: 0,
+		EndOffset:   uint64(len(line)),
+		LineNumber:  1,
+	}, len(line))
+	logs := buffer.String()
+	if strings.Contains(logs, secret) || !strings.Contains(logs, "reason=decode_error") {
+		t.Fatalf("decode-failure log was not value-free: %s", logs)
 	}
 }

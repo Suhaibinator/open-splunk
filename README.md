@@ -81,6 +81,14 @@ Go test suite is self-contained. The pinned ClickHouse and full
 collector-to-browser tests are opt-in because they start ephemeral Docker
 containers; the browser vertical also requires the pinned Playwright browser:
 
+The shipped [`configs/examples/collector.yaml`](configs/examples/collector.yaml)
+is the sanitized GradeThis migration profile. It takes the server, private
+token file, durable state directory, resolved GradeThis log path, application
+host, and environment from explicit environment variables. The backend
+vertical validates and runs that exact file through its pre-WAL sanitizer,
+proves trusted metadata, and executes representative current GradeThis
+searches without an OpenTelemetry log collector.
+
 ```sh
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
 go test ./internal/queryexec \

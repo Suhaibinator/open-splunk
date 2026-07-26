@@ -40,9 +40,27 @@ type Validator struct {
 	limits      Limits
 	replacement string
 	sensitive   map[string]struct{}
+	mandatory   bool
+	exact       bool
 }
 
 func NewValidator(limits Limits, policy RedactionPolicy) (*Validator, error) {
+	return newValidator(limits, policy, true, false)
+}
+
+// NewSupplementalRedactor constructs an exact-name redactor for only the
+// supplied deployment-specific fields. It deliberately omits the mandatory
+// built-ins and must be composed with a normal Validator at a trust boundary.
+// The collector uses this to preserve each ordered config rule's matching and
+// replacement semantics while one shared mandatory validator is authoritative.
+func NewSupplementalRedactor(limits Limits, policy RedactionPolicy) (*Validator, error) {
+	if len(policy.AdditionalSensitiveFields) == 0 {
+		return nil, errors.New("supplemental redaction requires at least one field")
+	}
+	return newValidator(limits, policy, false, true)
+}
+
+func newValidator(limits Limits, policy RedactionPolicy, mandatory, exact bool) (*Validator, error) {
 	if err := limits.validate(); err != nil {
 		return nil, fmt.Errorf("invalid ingestion limits: %w", err)
 	}
@@ -56,8 +74,127 @@ func NewValidator(limits Limits, policy RedactionPolicy) (*Validator, error) {
 	return &Validator{
 		limits:      limits,
 		replacement: replacement,
-		sensitive:   sensitiveFieldSet(policy.AdditionalSensitiveFields),
+		sensitive:   sensitiveFieldSet(policy.AdditionalSensitiveFields, mandatory, exact),
+		mandatory:   mandatory,
+		exact:       exact,
 	}, nil
+}
+
+// RedactEvent returns an independent clone with the validator's mandatory and
+// deployment-specific redaction policy applied to structured fields, raw
+// bytes, and the canonical message. It performs no validation and preserves
+// event identity and provenance. Use it when aliases may exist; collectors can
+// use RedactEventInPlace for exclusively owned decoded events.
+func (v *Validator) RedactEvent(event *opensplunkv1.LogEvent) *opensplunkv1.LogEvent {
+	if event == nil {
+		return nil
+	}
+	cloned := proto.Clone(event).(*opensplunkv1.LogEvent)
+	return v.RedactEventInPlace(cloned)
+}
+
+// RedactEventInPlace applies the validator's redaction policy to an event owned
+// exclusively by the caller. It avoids a full protobuf clone at collector
+// durability boundaries, where the decoded or pipeline-produced event has not
+// been shared. Call RedactEvent when aliases may exist.
+func (v *Validator) RedactEventInPlace(event *opensplunkv1.LogEvent) *opensplunkv1.LogEvent {
+	if event == nil {
+		return nil
+	}
+	v.redactObject(event.GetFields())
+	if event.GetRawEncoding() == opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 || utf8.Valid(event.GetRaw()) {
+		event.Raw = v.redactText(event.GetRaw())
+	} else {
+		// Binary payloads can still contain ASCII credentials. The raw scanner
+		// is byte-oriented and preserves unrelated invalid UTF-8 verbatim.
+		event.Raw = v.redactKeyValueText(event.GetRaw())
+	}
+	if event.Message != nil {
+		redactedMessage := string(v.redactText([]byte(event.GetMessage())))
+		event.Message = &redactedMessage
+	}
+	return event
+}
+
+// TopLevelAliasRedaction is one event-specific rename lineage that reached a
+// sensitive name. StructuredOnly marks a configured constant: its value
+// participates in the processor chain, but same-named raw/message content does
+// not share that provenance.
+type TopLevelAliasRedaction struct {
+	Field          string
+	Replacement    string
+	StructuredOnly bool
+}
+
+// RedactTopLevelAliasesInPlace sanitizes all active top-level rename aliases in
+// one structured/raw pass. Exact root-name matching preserves normalized and
+// nested lookalikes. Non-JSON raw text and the canonical message are scanned
+// once per distinct replacement rather than once per alias.
+func RedactTopLevelAliasesInPlace(
+	event *opensplunkv1.LogEvent,
+	policies []TopLevelAliasRedaction,
+) *opensplunkv1.LogEvent {
+	if event == nil || len(policies) == 0 {
+		return event
+	}
+	structured := make(map[string]string, len(policies))
+	raw := make(map[string]string, len(policies))
+	type textGroup struct {
+		fields   map[string]struct{}
+		redactor *Validator
+	}
+	var groups []textGroup
+	groupIndexes := make(map[string]int)
+	for _, policy := range policies {
+		structured[policy.Field] = policy.Replacement
+		if policy.StructuredOnly {
+			continue
+		}
+		raw[policy.Field] = policy.Replacement
+		groupIndex, exists := groupIndexes[policy.Replacement]
+		if !exists {
+			groupIndex = len(groups)
+			groupIndexes[policy.Replacement] = groupIndex
+			fields := make(map[string]struct{})
+			groups = append(groups, textGroup{
+				fields: fields,
+				redactor: &Validator{
+					limits:      DefaultLimits(),
+					replacement: policy.Replacement,
+					sensitive:   fields,
+					exact:       true,
+				},
+			})
+		}
+		groups[groupIndex].fields[policy.Field] = struct{}{}
+	}
+
+	redactTopLevelObjectWithReplacements(event.GetFields(), structured)
+	if len(raw) == 0 {
+		return event
+	}
+	if event.GetRawEncoding() == opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 || utf8.Valid(event.GetRaw()) {
+		if redacted, parsed := redactTopLevelJSONWithReplacements(event.GetRaw(), raw); parsed {
+			event.Raw = redacted
+		} else {
+			for _, group := range groups {
+				event.Raw = group.redactor.redactKeyValueText(event.GetRaw())
+			}
+		}
+	} else {
+		for _, group := range groups {
+			event.Raw = group.redactor.redactKeyValueText(event.GetRaw())
+		}
+	}
+	if event.Message != nil {
+		message := []byte(event.GetMessage())
+		for _, group := range groups {
+			message = group.redactor.redactText(message)
+		}
+		redactedMessage := string(message)
+		event.Message = &redactedMessage
+	}
+	return event
 }
 
 // ValidateAndNormalizeEvent validates a collector event and returns an
@@ -136,19 +273,7 @@ func (v *Validator) ValidateAndNormalizeEvent(event *opensplunkv1.LogEvent, ctx 
 		return nil, err
 	}
 
-	cloned := proto.Clone(event).(*opensplunkv1.LogEvent)
-	v.redactObject(cloned.GetFields())
-	if cloned.GetRawEncoding() == opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 || utf8.Valid(cloned.GetRaw()) {
-		cloned.Raw = v.redactText(cloned.GetRaw())
-	} else {
-		// Binary payloads can still contain ASCII credentials. The raw scanner
-		// is byte-oriented and preserves unrelated invalid UTF-8 verbatim.
-		cloned.Raw = v.redactKeyValueText(cloned.GetRaw())
-	}
-	if cloned.Message != nil {
-		redactedMessage := string(v.redactText([]byte(cloned.GetMessage())))
-		cloned.Message = &redactedMessage
-	}
+	cloned := v.RedactEvent(event)
 	if !storedFieldNamesFit(cloned.GetFields()) {
 		return nil, eventFailure(
 			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,

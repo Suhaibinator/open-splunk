@@ -67,8 +67,9 @@ type SourcePosition struct {
 // Decoder converts framed source bytes to canonical protobuf events.
 // Decoder is immutable and safe for concurrent use.
 type Decoder struct {
-	cfg       DecodeConfig
-	constants []*opensplunkv1.TypedObjectField
+	cfg           DecodeConfig
+	constants     []*opensplunkv1.TypedObjectField
+	constantNames map[string]struct{}
 }
 
 // NewDecoder validates and takes an independent copy of cfg.
@@ -109,8 +110,12 @@ func NewDecoder(cfg DecodeConfig) (*Decoder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("constant fields: %w", err)
 	}
+	constantNames := make(map[string]struct{}, len(constants))
+	for _, field := range constants {
+		constantNames[field.GetName()] = struct{}{}
+	}
 	cfg.ConstantFields = nil
-	return &Decoder{cfg: cfg, constants: constants}, nil
+	return &Decoder{cfg: cfg, constants: constants, constantNames: constantNames}, nil
 }
 
 // Decode converts raw to an independent event. raw must not contain the file

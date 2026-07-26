@@ -1157,9 +1157,17 @@ The slow-route fixture deliberately gives every assessment request the same
 expected result without claiming a live Splunk differential oracle. The
 product-plan query and this v0.1 corpus use the literal message
 `Request metrics` and millisecond durations; current GradeThis deployments
-which emit `Request summary statistics` or microsecond/second duration
-spellings require an explicit migration/profile update rather than an
-undocumented query rewrite.
+emit `Request summary statistics` and may use microsecond/second duration
+spellings. Those differences are covered by a separate `current-source-v1`
+migration profile rather than an undocumented rewrite of the v0.1 manifest.
+Its sanitized 20-event default is scanner-validated and SHA-256 pinned.
+`TestBackendVertical` rebases the same typed semantics to a recent UTC window,
+runs the shipped GradeThis collector configuration through file discovery,
+pre-WAL sanitization, gRPC ingestion, ClickHouse, and public protobuf search
+paging, then proves a three-layer trace, severity counts, 5xx requests,
+route/status counts, `rex` counts for `µs`/`ms`/`s`, and top messages. Trusted
+host/source/sourcetype/service/environment metadata remains outside the raw
+application JSON, and no OpenTelemetry log collector is started.
 
 The `chart` pivot additionally has pinned ClickHouse coverage for
 `bin severity span=10 | chart count OVER severity BY level`, for

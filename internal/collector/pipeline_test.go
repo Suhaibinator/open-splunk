@@ -435,6 +435,16 @@ func TestRedactProcessor(t *testing.T) {
 		}
 	})
 
+	t.Run("existing replacement is a no-op", func(t *testing.T) {
+		t.Parallel()
+		p, _ := NewRedactProcessor([]string{"token"}, "X")
+		in := plEvent(plField("token", stringValue("X")))
+		out := mustProcess(t, p, in)
+		if out != in {
+			t.Fatal("expected an already-redacted event to retain its pointer")
+		}
+	})
+
 	t.Run("does not touch canonical raw or message", func(t *testing.T) {
 		t.Parallel()
 		p, _ := NewRedactProcessor([]string{"token"}, "X")

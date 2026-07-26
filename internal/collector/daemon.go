@@ -22,6 +22,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/sender"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
+	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -108,6 +109,7 @@ type Daemon struct {
 	sender      *sender.Sender
 	inputs      []*inputRuntime
 	pipeline    *Pipeline
+	redactor    *durableRedactor
 
 	// Batching / backpressure / shutdown tunables. Defaulted in New; overridable
 	// in-process (tests) before Run. Not exposed as YAML configuration.
@@ -180,6 +182,10 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("collector: invalid config: %w", err)
+	}
+	pipeline, redactor, err := buildProcessorRuntime(cfg.Processors)
+	if err != nil {
+		return nil, fmt.Errorf("collector: build processors: %w", err)
 	}
 
 	var o daemonOptions
@@ -256,11 +262,6 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		return nil, err
 	}
 
-	pipeline, err := buildPipeline(cfg.Processors)
-	if err != nil {
-		return fail(fmt.Errorf("collector: build processors: %w", err))
-	}
-
 	hostname, herr := os.Hostname()
 	if herr != nil || strings.TrimSpace(hostname) == "" {
 		hostname = "unknown-host"
@@ -335,6 +336,7 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		sender:             snd,
 		inputs:             inputs,
 		pipeline:           pipeline,
+		redactor:           redactor,
 		batchMaxEvents:     defaultBatchMaxEvents,
 		batchLinger:        defaultBatchLinger,
 		batchMaxBytes:      defaultBatchMaxBytes,
@@ -517,6 +519,263 @@ func tokenLoader(path string) func() (string, error) {
 	return func() (string, error) { return config.LoadToken(path) }
 }
 
+// durableRedactor owns the collector's last confidentiality boundary. Direct
+// mandatory/configured policies sanitize recursively, while lineage mirrors
+// the ordered top-level allow/deny/rename operations and identifies only the
+// original fields whose values actually reach a sensitive name. Configured
+// redact names are confidentiality policies across the chain: processor order
+// cannot be used to rename a value around its pre-WAL sanitizer.
+type durableRedactor struct {
+	mandatory             *ingest.Validator
+	configured            []*ingest.Validator
+	configuredReplacement map[string]string
+	lineage               []Processor
+	ordinaryRenameSources map[string]struct{}
+}
+
+type durableLineageField struct {
+	origin          string
+	directSensitive bool
+	constant        bool
+}
+
+func (redactor *durableRedactor) beforePipeline(
+	event *opensplunkv1.LogEvent,
+	constantNames map[string]struct{},
+) *opensplunkv1.LogEvent {
+	if redactor == nil || event == nil {
+		return event
+	}
+	aliases := redactor.activeAliases(event, constantNames)
+	event = redactor.mandatory.RedactEventInPlace(event)
+	for _, configured := range redactor.configured {
+		event = configured.RedactEventInPlace(event)
+	}
+	return ingest.RedactTopLevelAliasesInPlace(event, aliases)
+}
+
+// activeAliases simulates only the field-name effects of the ordered processor
+// chain. An alias is activated when a present top-level value actually moves
+// into a mandatory or configured sensitive name. Removed fields retain an
+// already-recorded alias because their original raw/message bytes still cross
+// the WAL boundary.
+func (redactor *durableRedactor) activeAliases(
+	event *opensplunkv1.LogEvent,
+	constantNames map[string]struct{},
+) []ingest.TopLevelAliasRedaction {
+	if len(redactor.lineage) == 0 || event.GetFields() == nil {
+		return nil
+	}
+	hasOrdinaryRenameSource := false
+	for _, field := range event.GetFields().GetFields() {
+		if field == nil {
+			continue
+		}
+		if _, candidate := redactor.ordinaryRenameSources[field.GetName()]; candidate {
+			hasOrdinaryRenameSource = true
+			break
+		}
+	}
+	if !hasOrdinaryRenameSource {
+		return nil
+	}
+	fields := make(map[string]durableLineageField, len(event.GetFields().GetFields()))
+	for _, field := range event.GetFields().GetFields() {
+		if field == nil {
+			continue
+		}
+		_, directSensitive := redactor.sensitiveReplacement(field.GetName())
+		_, constant := constantNames[field.GetName()]
+		fields[field.GetName()] = durableLineageField{
+			origin:          field.GetName(),
+			directSensitive: directSensitive,
+			constant:        constant,
+		}
+	}
+	type activeAlias struct {
+		replacement    string
+		structuredOnly bool
+	}
+	var active map[string]activeAlias
+	for _, processor := range redactor.lineage {
+		switch concrete := processor.(type) {
+		case *allowProcessor:
+			for name := range fields {
+				if _, ok := concrete.keep[name]; !ok {
+					delete(fields, name)
+				}
+			}
+		case *denyProcessor:
+			for name := range concrete.deny {
+				delete(fields, name)
+			}
+		case *renameProcessor:
+			field, exists := fields[concrete.from]
+			if !exists {
+				continue
+			}
+			delete(fields, concrete.from)
+			delete(fields, concrete.to)
+			fields[concrete.to] = field
+			if !field.directSensitive {
+				if replacement, sensitive := redactor.sensitiveReplacement(concrete.to); sensitive {
+					if active == nil {
+						active = make(map[string]activeAlias)
+					}
+					active[field.origin] = activeAlias{
+						replacement:    replacement,
+						structuredOnly: field.constant,
+					}
+				}
+			}
+		}
+	}
+
+	aliases := make([]ingest.TopLevelAliasRedaction, 0, len(active))
+	for _, field := range event.GetFields().GetFields() {
+		if field == nil {
+			continue
+		}
+		if alias, ok := active[field.GetName()]; ok {
+			aliases = append(aliases, ingest.TopLevelAliasRedaction{
+				Field:          field.GetName(),
+				Replacement:    alias.replacement,
+				StructuredOnly: alias.structuredOnly,
+			})
+		}
+	}
+	return aliases
+}
+
+func (redactor *durableRedactor) sensitiveReplacement(name string) (string, bool) {
+	replacement, configured := redactor.configuredReplacement[name]
+	if configured {
+		return replacement, true
+	}
+	if redactor.mandatory.IsSensitiveField(name) {
+		return ingest.DefaultRedactionReplacement, true
+	}
+	return "", false
+}
+
+// buildDurableRedactor derives direct recursive policies and exact top-level
+// alias sanitizers from the already-compiled processor instances. Sharing the
+// concrete processor maps and order keeps the pre-WAL confidentiality boundary
+// aligned with pipeline matching, collision, and replacement semantics.
+func buildDurableRedactor(pipeline *Pipeline) (*durableRedactor, error) {
+	mandatory, err := ingest.NewValidator(ingest.DefaultLimits(), ingest.RedactionPolicy{})
+	if err != nil {
+		return nil, fmt.Errorf("mandatory policy: %w", err)
+	}
+	result := &durableRedactor{
+		mandatory:             mandatory,
+		configuredReplacement: make(map[string]string),
+	}
+	type configuredFieldPolicy struct {
+		replacement    string
+		processorIndex int
+	}
+	configuredPolicies := make(map[string]configuredFieldPolicy)
+	renameSources := make(map[string]struct{})
+	var processors []Processor
+	if pipeline != nil {
+		processors = pipeline.processors
+	}
+	for processorIndex, proc := range processors {
+		switch concrete := proc.(type) {
+		case *allowProcessor:
+			if concrete == nil {
+				return nil, fmt.Errorf("processor %d (%T) is nil", processorIndex, proc)
+			}
+			result.lineage = append(result.lineage, concrete)
+		case *denyProcessor:
+			if concrete == nil {
+				return nil, fmt.Errorf("processor %d (%T) is nil", processorIndex, proc)
+			}
+			result.lineage = append(result.lineage, concrete)
+		case *renameProcessor:
+			if concrete == nil {
+				return nil, fmt.Errorf("processor %d (%T) is nil", processorIndex, proc)
+			}
+			result.lineage = append(result.lineage, concrete)
+			renameSources[concrete.from] = struct{}{}
+		case *redactProcessor:
+			if concrete == nil {
+				return nil, fmt.Errorf("processor %d (%T) is nil", processorIndex, proc)
+			}
+			for field := range concrete.targets {
+				result.configuredReplacement[field] = concrete.replacement
+				configuredPolicies[field] = configuredFieldPolicy{
+					replacement: concrete.replacement, processorIndex: processorIndex,
+				}
+			}
+		default:
+			return nil, fmt.Errorf("processor %d (%T) has no durable lineage specification", processorIndex, proc)
+		}
+	}
+
+	type configuredGroup struct {
+		replacement string
+		fields      []string
+	}
+	var groups []configuredGroup
+	groupIndexes := make(map[string]int)
+	for processorIndex, proc := range processors {
+		redact, ok := proc.(*redactProcessor)
+		if !ok {
+			continue
+		}
+		for field := range redact.targets {
+			policy := configuredPolicies[field]
+			if policy.processorIndex != processorIndex {
+				continue
+			}
+			if policy.replacement == ingest.DefaultRedactionReplacement &&
+				mandatory.IsSensitiveField(field) {
+				continue
+			}
+			groupIndex, exists := groupIndexes[policy.replacement]
+			if !exists {
+				groupIndex = len(groups)
+				groupIndexes[policy.replacement] = groupIndex
+				groups = append(groups, configuredGroup{replacement: policy.replacement})
+			}
+			groups[groupIndex].fields = append(groups[groupIndex].fields, field)
+		}
+	}
+	for groupIndex, group := range groups {
+		configured, buildErr := ingest.NewSupplementalRedactor(
+			ingest.DefaultLimits(),
+			ingest.RedactionPolicy{
+				AdditionalSensitiveFields: group.fields,
+				Replacement:               group.replacement,
+			},
+		)
+		if buildErr != nil {
+			return nil, fmt.Errorf("configured replacement group %d: %w", groupIndex, buildErr)
+		}
+		result.configured = append(result.configured, configured)
+	}
+
+	if len(renameSources) == 0 {
+		result.lineage = nil
+		return result, nil
+	}
+	for field := range renameSources {
+		if _, direct := result.sensitiveReplacement(field); direct {
+			continue
+		}
+		if result.ordinaryRenameSources == nil {
+			result.ordinaryRenameSources = make(map[string]struct{})
+		}
+		result.ordinaryRenameSources[field] = struct{}{}
+	}
+	if len(result.ordinaryRenameSources) == 0 {
+		result.lineage = nil
+	}
+	return result, nil
+}
+
 // buildPipeline compiles cfg.Processors into an ordered Pipeline shared by every
 // input. An empty processor list yields a pass-through pipeline.
 func buildPipeline(procs []config.ProcessorConfig) (*Pipeline, error) {
@@ -536,7 +795,7 @@ func buildPipeline(procs []config.ProcessorConfig) (*Pipeline, error) {
 		case "redact":
 			replacement := p.Replacement
 			if replacement == "" {
-				replacement = "[REDACTED]"
+				replacement = ingest.DefaultRedactionReplacement
 			}
 			proc, err = NewRedactProcessor(p.Fields, replacement)
 		default:
@@ -548,6 +807,22 @@ func buildPipeline(procs []config.ProcessorConfig) (*Pipeline, error) {
 		processors = append(processors, proc)
 	}
 	return NewPipeline(processors...), nil
+}
+
+// buildProcessorRuntime compiles the configured pipeline once and derives its
+// pre-WAL confidentiality boundary from those exact immutable processor
+// instances. Processor construction therefore completes before the daemon
+// creates or opens any persistent state.
+func buildProcessorRuntime(procs []config.ProcessorConfig) (*Pipeline, *durableRedactor, error) {
+	pipeline, err := buildPipeline(procs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("pipeline: %w", err)
+	}
+	redactor, err := buildDurableRedactor(pipeline)
+	if err != nil {
+		return nil, nil, fmt.Errorf("durable redactor: %w", err)
+	}
+	return pipeline, redactor, nil
 }
 
 // buildInput constructs the tailer, decoder, and server-side registration for a

@@ -473,9 +473,21 @@ func TestStringDoesNotReadTokenFile(t *testing.T) {
 	}
 }
 
-// TestRoundTripExample loads the committed example config unmodified.
-func TestRoundTripExample(t *testing.T) {
-	t.Parallel()
+// TestGradeThisExampleConfiguration pins the committed migration example to
+// the real GradeThis file-log shape while keeping machine-specific paths in
+// environment variables.
+func TestGradeThisExampleConfiguration(t *testing.T) {
+	directory := t.TempDir()
+	tokenPath := filepath.Join(directory, "collector.token")
+	stateDirectory := filepath.Join(directory, "collector-state")
+	logPath := filepath.Join(directory, "gradethis.log")
+	t.Setenv("OPEN_SPLUNK_SERVER_GRPC_ADDRESS", "127.0.0.1:8443")
+	t.Setenv("OPEN_SPLUNK_COLLECTOR_TOKEN_FILE", tokenPath)
+	t.Setenv("OPEN_SPLUNK_COLLECTOR_STATE_DIRECTORY", stateDirectory)
+	t.Setenv("GRADETHIS_LOG_PATH", logPath)
+	t.Setenv("GRADETHIS_HOST", "gradethis-test-host")
+	t.Setenv("GRADETHIS_ENVIRONMENT", "integration")
+
 	path := filepath.FromSlash("../../../configs/examples/collector.yaml")
 	if _, err := os.Stat(path); err != nil {
 		t.Skipf("example config not found at %s: %v", path, err)
@@ -484,10 +496,45 @@ func TestRoundTripExample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load example: %v", err)
 	}
-	if len(cfg.Inputs) == 0 {
-		t.Fatal("example should define inputs")
+	if cfg.Server.Address != "127.0.0.1:8443" ||
+		cfg.Server.TokenFile != tokenPath ||
+		cfg.Server.Transport != "grpc" ||
+		cfg.Server.Compression != "gzip" ||
+		cfg.Server.TLS.Enabled {
+		t.Fatalf("example server configuration = %+v", cfg.Server)
 	}
-	if cfg.State.MaxQueueBytes != 1<<30 {
-		t.Errorf("example max_queue_bytes = %d, want 1GiB", cfg.State.MaxQueueBytes)
+	if cfg.State.Directory != stateDirectory || cfg.State.MaxQueueBytes != 1<<30 {
+		t.Fatalf("example state configuration = %+v", cfg.State)
+	}
+	if len(cfg.Inputs) != 1 {
+		t.Fatalf("example inputs = %+v", cfg.Inputs)
+	}
+	input := cfg.Inputs[0]
+	if input.ID != "gradethis-backend" ||
+		input.Type != "file" ||
+		len(input.Include) != 1 || input.Include[0] != logPath ||
+		len(input.Exclude) != 1 || input.Exclude[0] != "*.gz" ||
+		input.Format != "ndjson" ||
+		input.StartAt != "end" ||
+		input.Index != "gradethis" ||
+		input.Source != "gradethis-backend" ||
+		input.Sourcetype != "go:zap:json" ||
+		input.Host != "gradethis-test-host" ||
+		input.Fields["service"] != "gradethis" ||
+		input.Fields["environment"] != "integration" {
+		t.Fatalf("example GradeThis input = %+v", input)
+	}
+	if len(cfg.Processors) != 1 {
+		t.Fatalf("example processors = %+v", cfg.Processors)
+	}
+	processor := cfg.Processors[0]
+	wantFields := []string{
+		"token", "authorization", "password", "session_token",
+		"cookie", "api_key", "private_key",
+	}
+	if processor.Type != "redact" ||
+		strings.Join(processor.Fields, "\x00") != strings.Join(wantFields, "\x00") ||
+		processor.Replacement != "[REDACTED]" {
+		t.Fatalf("example redaction processor = %+v", processor)
 	}
 }
