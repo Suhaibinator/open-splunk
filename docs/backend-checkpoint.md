@@ -7,7 +7,93 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: load-generator pacing and live-output foundation
+## Latest checkpoint: sustained-load outage and restart correctness
+
+Date: 2026-07-26
+
+Implementation/proof commit: `59b8f7c`
+
+This slice adds the first measured real-process backend load proof and fixes
+the collector restart defect that proof exposed:
+
+1. Opt-in `TestBackendSustainedLoad` builds the real server, collector, and
+   log-generator binaries, starts pinned ephemeral ClickHouse, and writes
+   30,000 high-cardinality NDJSON events at a target 1,000 events/second. The
+   schedule is fixed at 5,000 warm events, 6,000 server-offline events
+   (5,000 required plus 1,000 source headroom), and 19,000 recovery events.
+   It uses 10,000 possible users, one unique request ID per event, 1 ms
+   timestamps, and 100-event output flushes.
+2. The source proof independently scans the complete file, pins the three-phase
+   timestamp and ordinal schedule, requires exact request-ID cardinality and a
+   bounded high user cardinality, and builds a SHA-256 raw-record multiset.
+   Stored rows must reproduce every raw record and its extracted request ID,
+   user ID, ordinal, and event timestamp exactly.
+3. After the warm prefix is stored, checkpointed, and acknowledged, the test
+   kills the server, generates the bounded offline phase, and proves storage
+   and the durable checkpoint cannot advance. The collector runs at debug
+   level only for this proof; each counted append diagnostic is emitted after
+   the `SyncAlways` WAL append returns. The test waits for diagnostics covering
+   at least 5,000 durably appended events before crash-stopping the collector,
+   then cold-reopens the WAL and independently requires a nonempty,
+   unquarantined durable backlog covering the same offline window.
+4. The first stronger controlled red found only 4,800 durable events when the
+   source stopped exactly at the 5,000-event target. Adding 1,000 events of
+   source headroom and synchronizing on post-append evidence made the gate
+   deterministic without assuming the collector tracks source generation
+   instantaneously. The final run crash-retained 5,700 events in 19 WAL
+   batches from the exact 6,000-event offline source phase.
+5. Restarting from that intact WAL originally produced 35,700 physical rows
+   but only 29,700 distinct event IDs. The collector replayed the original
+   durable batches while rereading their source bytes from the older terminal
+   checkpoint; stable event IDs survived, but the reread minted new batch IDs
+   and bypassed server batch-idempotency.
+6. Collector startup now reconstructs the highest source coordinate owned by
+   intact unacknowledged WAL batches and overlays it only on the file manager's
+   resume view. The acknowledged checkpoint remains unchanged until terminal
+   delivery. Manager-derived legacy cursor enrichment at or behind a pending
+   coordinate is suppressed; terminal or newer-generation writes pass through,
+   and acknowledged/superseded overlay entries are pruned. Resume lookup holds
+   the overlay read lock across the durable lookup so a concurrent terminal
+   commit cannot remove the pending coordinate after an old durable cursor was
+   read. Once the overlay drains, it releases the map and switches manager and
+   terminal paths to an atomic inactive fast path.
+7. WAL recovery exposes pending source marks through a compile-time
+   `ResumeQueue` capability. Aggregation is shared with acknowledgment
+   planning, fails closed on metadata/cursor conflicts, stops at the intact
+   prefix before a corrupt gap, and avoids a transient slice header per queued
+   batch. The file manager receives a narrow manager-specific checkpoint
+   interface rather than a proxy pretending to implement durable lifecycle
+   operations.
+8. Deterministic tests reproduce the restart defect as seven queued events
+   where only four should exist, then pin the fixed count, unchanged terminal
+   checkpoint, legacy cursor ephemerality, durable-equal preference,
+   copy-truncate generation fencing, corrupt-gap fallback, and conflicting
+   cursor/identity rejection. A blocking-store concurrency test also pins the
+   exact old-durable-read versus terminal-prune race found by adversarial
+   review.
+9. The final Docker run stored exactly 30,000 rows with 30,000 distinct event
+   IDs and exact raw/extracted values. It generated 12,531,099 source bytes in
+   30.255 seconds, recovered 264 ms after backend health while the separately
+   bounded recovery phase was actively generating, drained after generation
+   in 346 ms, and left one EOF checkpoint, an empty acknowledged WAL, no
+   quarantines, and an empty owner-only dead-letter file. ClickHouse reported
+   three active parts, 7,299,197 compressed bytes, 34,495,468 uncompressed
+   bytes, and 11,496,867 bytes on disk. Public SPL `stats count`/`dc` searches
+   completed in 42.3 ms and 41.5 ms on this checkpoint machine.
+10. Load polling now uses cheap row counts and runs exact distinct counting
+    only at convergence, so the harness does not repeatedly allocate exact
+    distinct state while measuring ingestion. Timings are observational,
+    cache-affected checkpoint evidence, not universal acceptance thresholds.
+
+The exact validation record is under **Latest validation evidence**. The
+delivery contract remains at-least-once: identical durable batch retries are
+server-deduplicated, while unavoidable crash-boundary source rereads retain
+stable event IDs for explicit logical `dedup event_id`. The next load slice is
+concurrent search plus a deterministic slow WebSocket consumer, followed by
+separate browser rendering measurements. The overall backend goal remains
+active.
+
+## Previous checkpoint: load-generator pacing and live-output foundation
 
 Date: 2026-07-26
 
@@ -46,11 +132,11 @@ real-process load proof:
    adversarial reviewers then traced the timing, timer, overflow, I/O,
    cancellation, and file-lifecycle paths and reported the final patch clean.
 
-The exact validation record is under **Latest validation evidence**. The next
-priority is the opt-in, pinned-ClickHouse sustained-load integration harness
-described under **Remaining work, in priority order**. This commit is the load
-source foundation, not itself an ingestion-capacity claim. The overall backend
-goal remains active.
+The exact validation record is under **Latest validation evidence**. At this
+checkpoint the next priority was the opt-in, pinned-ClickHouse sustained-load
+integration harness; that core proof is now complete in the latest checkpoint
+above. This commit remains the load-source foundation, not itself an
+ingestion-capacity claim. The overall backend goal remains active.
 
 ## Previous checkpoint: shutdown-safe export artifact removal
 
@@ -841,7 +927,7 @@ ClickHouse integration coverage. Their conclusions and the exact next
 test-driven slice are recorded below so a new conversation does not need to
 repeat that investigation.
 
-## What the latest slice completed
+## Earlier pause slice: collector-to-browser completion
 
 ### Deterministic self-contained server build
 
@@ -1088,6 +1174,73 @@ All three reviewers reported no remaining concrete correctness, efficiency,
 or code-quality finding after those fixes.
 
 ## Latest validation evidence
+
+### Sustained-load outage and restart correctness
+
+The implementation/proof checkpoint passed:
+
+```sh
+go test ./... -count=1
+go vet ./...
+go build ./...
+go test -race ./internal/collector/... ./integration -count=1
+go test ./internal/collector ./internal/collector/wal ./integration \
+  ./cmd/open-splunk-collector \
+  -run '^(TestDaemonRestartDoesNotRequeuePendingWALSourcePrefix|TestCheckpointResumeView.*|TestPrepareAckCachesAndCoalescesSourceMarksAcrossRecovery|TestRecoveryQuarantinesEverySegmentAfterCorruptGap|TestSourceCheckpointsFromWALRejectsCursorConflictWithDurableCheckpoint|TestSourceCheckpointsFromWALRejectsConflictingPendingIdentities|TestBackendLoad.*|TestManagedProcess.*|TestLockedBuffer.*|TestParseLogLevel)$' \
+  -count=20
+go test -race ./internal/collector ./internal/collector/wal ./integration \
+  ./cmd/open-splunk-collector \
+  -run '^(TestDaemonRestartDoesNotRequeuePendingWALSourcePrefix|TestCheckpointResumeView.*|TestPrepareAckCachesAndCoalescesSourceMarksAcrossRecovery|TestRecoveryQuarantinesEverySegmentAfterCorruptGap|TestSourceCheckpointsFromWALRejectsCursorConflictWithDurableCheckpoint|TestSourceCheckpointsFromWALRejectsConflictingPendingIdentities|TestBackendLoad.*|TestManagedProcess.*|TestLockedBuffer.*|TestParseLogLevel)$' \
+  -count=20
+OPEN_SPLUNK_BACKEND_LOAD=1 \
+go test ./integration -run '^TestBackendSustainedLoad$' \
+  -count=1 -timeout=12m -v
+git diff --cached --check
+```
+
+The exact frozen implementation passed the complete ordinary suite, build,
+vet, collector/integration race suite, and both ordinary and race-enabled
+20-repetition focused regression sets. An earlier candidate also passed a
+separate 20-repetition full integration/collector/WAL stress run; its WAL
+package completed in 294.421 seconds. Its command was
+`go test ./integration ./internal/collector ./internal/collector/wal -count=20`.
+Later adversarial review added the resume-prune production linearization,
+direct durable-depth test synchronization, and reviewer cleanup. Every
+affected path then passed the focused ordinary and race sets 20 times, plus
+the complete ordinary and affected-package race suites. The final real Docker
+run completed in 49.53 seconds, cold-recovered 5,700 durable events from the
+6,000-event offline source phase, and finished with exactly 30,000 physical
+and distinct stored events.
+
+The shared 100,000-batch acknowledgment aggregation benchmarks reported:
+
+```text
+compact identity: 4.85 ms/op, 2,403,077 B/op, 7 allocs/op
+100,000 identities: 27.86 ms/op, 37,681,632 B/op, 537 allocs/op
+```
+
+These are local checkpoint observations. Pending-mark startup aggregation
+reuses the same validated merge logic but aggregates directly under the queue
+lock, avoiding the 100,000 transient group headers; its production caller runs
+before sender and input goroutines start.
+
+Controlled reds first proved that source progress alone did not guarantee the
+requested WAL depth, then exposed the production duplicate replay as
+35,700/29,700 physical/distinct rows and as seven instead of four queued events
+in a deterministic restart test. Neither assertion was weakened. Adversarial
+review added legacy-cursor write suppression, durable-equal preference,
+pending-vs-durable cursor validation, corrupt-gap coverage, acknowledged
+overlay pruning, a manager-specific checkpoint interface, compile-time WAL
+resume capability, immutable raw expectations, lower-cost polling, direct
+durable-WAL-depth synchronization, a health-gated recovery generation phase,
+and atomic lookup versus terminal pruning.
+
+The final frozen staged patch SHA-256 is
+`55f1eb83d0dd12be3660a41860ce30cd56a26f6055679dd0abda5a3fd3d08a64`.
+Three independent reviewers recomputed that exact hash and reported the patch
+clean for crash/restart correctness, WAL/checkpoint consistency, load-test
+determinism, performance, and code quality. The implementation is committed
+and pushed on `main` at `59b8f7c`.
 
 ### Load-generator pacing and live-output foundation
 
@@ -1830,9 +1983,14 @@ count a skipped opt-in test as database validation.
 The backend now includes:
 
 - durable collector queue/checkpoint and ingestion acknowledgement coupling;
+- restart-safe ephemeral input resume from intact pending WAL source
+  coordinates, without advancing the terminal checkpoint;
 - a deterministic load generator with absolute target-rate pacing, bounded
   catch-up, live periodic flushing, safe append boundaries, and durable
   cancellation finalization;
+- an opt-in 30,000-event real server/collector/ClickHouse load proof with
+  server outage, collector crash/restart, exact raw/event-ID checks, public SPL
+  searches, and storage/recovery observations;
 - scoped ingestion tokens, canonical typed events, and ClickHouse storage;
 - logically authoritative per-index event retention at one immutable search
   cutoff, independent of asynchronous physical TTL cleanup;
@@ -1974,15 +2132,17 @@ independent stacks.
      -count=1 -timeout=15m -v
    ```
 
-5. Start with the real-process sustained-load integration proof unless the
-   user explicitly changes priority. Its log-generator foundation is complete
-   at `860acac`; the current preview-to-final resource-release audit pass is
-   complete at `961cba2`, the sanitized current GradeThis collector/config
-   migration at `c576e85`, logical event retention at `458c8b4`, clock-driven
-   job/result/export expiration at `b2b2839`, and stale-duplicate injection at
-   `b80bf0a`. Add a red unit or integration test before implementation, run
-   read-only adversarial reviews, fix concrete findings, then commit and push
-   `main`.
+5. The core real-process sustained-load/outage/restart proof is complete at
+   `59b8f7c`, on top of the log-generator foundation at
+   `860acac`. Unless the user changes priority, extend it with concurrent
+   searches and a deterministic slow WebSocket consumer, then measure browser
+   rendering separately. The current preview-to-final resource-release audit
+   pass is complete at `961cba2`, the sanitized current GradeThis
+   collector/config migration at `c576e85`, logical event retention at
+   `458c8b4`, clock-driven job/result/export expiration at `b2b2839`, and
+   stale-duplicate injection at `b80bf0a`. Add a red unit or integration test
+   before implementation, run read-only adversarial reviews, fix concrete
+   findings, then commit and push `main`.
 
 ## Remaining work, in priority order
 
@@ -2036,28 +2196,26 @@ The current preview-to-final resource-release audit pass is complete at
 clean; export lookup, cleanup, and final-download deletion now hand off safely
 to shutdown without manager-wide lock/I/O coupling.
 
+The core sustained-load proof is complete at `59b8f7c`. It runs 30,000 events
+at a target 1,000 events/second through the real log generator, collector,
+server, and pinned ClickHouse; proves a 5,000-event offline window plus
+headroom; crash-restarts the collector from intact pending WAL; and requires
+exact source, storage,
+event-ID, raw/extracted-field, checkpoint, dead-letter, WAL, and public SPL
+results. Its controlled red exposed and drove the pending-WAL resume fix.
+
 Continue the release proof in this order:
 
-- Add an opt-in `OPEN_SPLUNK_BACKEND_LOAD=1` integration test that reuses the
-  pinned ClickHouse and managed-process helpers and runs the real server,
-  collector, and `open-splunk-loggen` binaries. Start with a 30–60 second,
-  1,000 events/second high-cardinality workload using `-interval=1ms`,
-  `-flush-events=100`, and a dedicated sanitized temporary file; do not use
-  the repository-root `app.log` as formal evidence without a secret scan.
-- Make the first load test correctness-gated: record exact generated, stored,
-  and distinct event identities; require the source EOF checkpoint, drained
-  acknowledged WAL, zero rejection/dead-letter paths, and exact public
-  `stats count dc(...)` results. Include a short server outage and prove the
-  collector backlog drains without loss or duplication after recovery.
-- Record generated/accepted events per second, raw bytes per second,
-  source-to-storage backlog and recovery-drain time, ClickHouse active part
-  count and compressed/uncompressed/on-disk bytes, scan rows/bytes, and cold,
-  warm, and concurrent search latency. Treat timings as checkpoint evidence,
+- Extend the load harness with concurrent searches and retain generated and
+  accepted events/second, raw bytes/second, backlog, recovery-drain time,
+  ClickHouse part/byte metrics, scan rows/bytes, and first/repeated/concurrent
+  search latency. The current polling and searches affect caches and compete
+  with ingestion, so treat all timings as observational checkpoint evidence,
   not universal pass/fail thresholds, until target hardware, retention/event
   size, concurrent-search load, and latency decisions are made.
-- Extend that harness with a deterministic bounded-queue slow WebSocket
-  consumer and concurrent searches after the core ingest/outage proof is
-  stable. Measure browser rendering separately with a fixed 1,000-result
+- Add a deterministic bounded-queue slow WebSocket consumer after the
+  concurrent-search load path is stable. Measure browser rendering separately
+  with a fixed 1,000-result
   payload, stable-DOM plus two-animation-frame completion, and browser
   performance metrics. Do not use a default-config black-hole socket as a
   timing assertion.
@@ -2180,6 +2338,12 @@ Do not guess those decisions if they materially affect the implementation.
   Open Splunk counts immediate non-null containers atomically.
 - Collector decoding does not preserve every original numeric token spelling.
   String-oriented aggregates operate on stored canonical values.
+- Collector checkpoints and WAL source marks are currently keyed by physical
+  file identity rather than `(input_id, file identity)`. Configure at most one
+  file input pipeline for a given inode/path set; overlapping globs or hard
+  links across distinct inputs can otherwise let one input's higher checkpoint
+  skip the other input's logical events. Either enforce non-overlap or carry
+  input identity through checkpoint/WAL keys before claiming that topology.
 - Default aggregate names containing parentheses cannot be referenced by the
   downstream field grammar; use `AS`.
 - The 512 KiB `values` bound is a publication bound, not an aggregate-state
@@ -2196,10 +2360,10 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `860acac`, `961cba2`, `c576e85`, `458c8b4`, `b2b2839`,
-   `b80bf0a`, `cdb60df`, `787a7f9`, and `522b0ac`; the preceding
-   progress/recovery foundations are `b5502a3`, `f72f184`, `ed28182`, and
-   `d1286a4`.
+   commits, especially `59b8f7c`, `860acac`, `961cba2`,
+   `c576e85`, `458c8b4`, `b2b2839`, `b80bf0a`, `cdb60df`, `787a7f9`, and
+   `522b0ac`; the preceding progress/recovery foundations are `b5502a3`,
+   `f72f184`, `ed28182`, and `d1286a4`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
 4. Run the ordinary Go/frontend gates above and the focused exact corpus:
 
@@ -2212,10 +2376,12 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. Unless the user changes priority, begin with the real-process sustained-load
-   integration proof using the generator foundation at `860acac`. The current
-   preview-to-final resource-release audit pass, sanitized current GradeThis
-   collector/config migration, logical event retention,
+5. Unless the user changes priority, extend the completed real-process
+   sustained-load/outage/restart proof with concurrent searches and a
+   deterministic slow WebSocket consumer, then measure browser rendering
+   separately. The generator foundation, current preview-to-final
+   resource-release audit pass, sanitized current GradeThis collector/config
+   migration, logical event retention,
    clock-driven job/result/export expiration,
    recovered-socket stale-duplicate fencing, authoritative browser
    cancellation, versioned
