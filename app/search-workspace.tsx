@@ -1744,6 +1744,15 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (announcement !== undefined) setBackendPreviewAnnouncement(announcement);
   }
 
+  function markBackendPreviewFinalizing() {
+    updateBackendPreviewStatus(
+      "finalizing",
+      backendPreviewRef.current === null
+        ? "Search complete. Loading authoritative results."
+        : "Search complete. Replacing the live preview with authoritative results.",
+    );
+  }
+
   function clearBackendPreview(
     status: BackendPreviewStatus = "disabled",
     announcement?: string,
@@ -3169,11 +3178,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
               latestPhase,
               generation,
             );
-            if (backendPreviewRef.current !== null) {
-              updateBackendPreviewStatus(
-                "finalizing",
-                "Search complete. Replacing the live preview with authoritative results.",
-              );
+            if (
+              latestPhase === "completed"
+              && backendPreviewStatusRef.current !== "disabled"
+            ) {
+              markBackendPreviewFinalizing();
             }
             scheduleRecovery(0);
             break;
@@ -3307,10 +3316,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       setPhase("finalizing");
       setProgress(96);
       if (backendPreviewRef.current !== null) {
-        updateBackendPreviewStatus(
-          "finalizing",
-          "Search complete. Replacing the live preview with authoritative results.",
-        );
+        markBackendPreviewFinalizing();
       }
       try {
         await fetchInitialBackendResults(job, bootstrap, signal, generation);

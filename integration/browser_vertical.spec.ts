@@ -564,28 +564,40 @@ test("live preview recovers from a real sequence gap", async ({ page }) => {
     await sendBrowserRecoveryControl("progress");
     await expect(page.getByLabel("Job metrics")).toContainText("5 rows", { timeout });
 
-    // Progress frames advance the live-update epoch without advancing the job's
-    // state version, so this stale running snapshot isolates the epoch fence.
+    // Manager progress advances the job version, but progress frames omit that
+    // revision and cannot advance the browser's version fence. This snapshot's
+    // numeric version is acceptable, so the stale response isolates the epoch fence.
     releaseFirstAuthoritativeResponse();
     await expect.poll(() => authoritativeJobRequests, { timeout }).toBe(2);
     expect(fulfilledAuthoritativeJobRequests, "stale authoritative responses").toBe(1);
     await expect(page.getByLabel("Job metrics")).toContainText("5 rows", { timeout });
-
-    await sendBrowserRecoveryControl("append");
     await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
       "data-status",
-      "live",
+      "resyncing",
       { timeout },
     );
     await expect(
       page.getByRole("table", { name: "Live preview search statistics" }),
-    ).toContainText(expectedText, { timeout });
+    ).toHaveCount(0);
+    await expect(page.getByText(recoveryInitialText!, { exact: true })).toHaveCount(0);
+
     await sendBrowserRecoveryControl("complete");
-    await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+    const finalizingPreviewStatus = page.getByTestId("backend-preview-status");
+    await expect(finalizingPreviewStatus).toHaveAttribute(
       "data-status",
       "finalizing",
       { timeout },
     );
+    await expect(finalizingPreviewStatus).toContainText(
+      "Loading the authoritative result snapshot.",
+      { timeout },
+    );
+    await expect(
+      page.getByText("Search complete. Loading authoritative results.", { exact: true }),
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole("table", { name: "Live preview search statistics" }),
+    ).toHaveCount(0);
     await expect(page.getByTestId("job-strip")).toContainText("Completed", { timeout });
     expect(fulfilledAuthoritativeJobRequests, "responses before terminal replay proof").toBe(1);
 
@@ -619,13 +631,14 @@ test("live preview recovers from a real sequence gap", async ({ page }) => {
     const jobStrip = page.getByTestId("job-strip");
     await expect(jobStrip).toHaveAttribute("aria-busy", "false", { timeout });
     await expect(jobStrip).toContainText("Completed", { timeout });
-    await expect(jobStrip).toContainText("2 rows", { timeout });
+    await expect(jobStrip).toContainText(`${expectedRows} rows`, { timeout });
     const finalTable = page.getByRole("table", { name: "Backend search statistics" });
     await expect(finalTable.locator("tbody tr")).toHaveCount(expectedRows, { timeout });
     await expect(finalTable).toContainText(expectedText, { timeout });
     await expect(
       page.getByRole("table", { name: "Live preview search statistics" }),
     ).toHaveCount(0);
+    await expect(page.getByTestId("backend-preview-status")).toHaveCount(0);
     await expect(page.locator("body")).toContainText(
       /resynchronized from the server after a sequence gap/i,
       { timeout },
@@ -635,6 +648,7 @@ test("live preview recovers from a real sequence gap", async ({ page }) => {
     expect(previewStatuses, "UI preview status transitions").toContain("live");
     expect(previewStatuses, "UI preview status transitions").toContain("resyncing");
     expect(previewStatuses, "UI preview status transitions").toContain("finalizing");
+    expect(previewStatuses, "UI preview status transitions").not.toContain("finalization-error");
     expect(gap.connectionCount(), "search WebSocket connections").toBe(2);
     expect(gap.liveFrameCount(), "post-replay live target frames").toBeGreaterThan(0);
     gap.assertHealthy();

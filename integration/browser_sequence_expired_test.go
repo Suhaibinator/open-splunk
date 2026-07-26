@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -66,14 +67,16 @@ type browserRecoveryCommand struct {
 }
 
 type browserRecoveryExecutor struct {
-	calls    atomic.Uint32
-	exits    atomic.Uint32
-	commands chan browserRecoveryCommand
+	appendBeforeCompletion bool
+	calls                  atomic.Uint32
+	exits                  atomic.Uint32
+	commands               chan browserRecoveryCommand
 }
 
-func newBrowserRecoveryExecutor() *browserRecoveryExecutor {
+func newBrowserRecoveryExecutor(appendBeforeCompletion bool) *browserRecoveryExecutor {
 	return &browserRecoveryExecutor{
-		commands: make(chan browserRecoveryCommand),
+		appendBeforeCompletion: appendBeforeCompletion,
+		commands:               make(chan browserRecoveryCommand),
 	}
 }
 
@@ -120,7 +123,7 @@ func (executor *browserRecoveryExecutor) Execute(
 					progressSteps++
 				}
 			case browserRecoveryCommandAppend:
-				if progressSteps != 5 || rowAppended {
+				if progressSteps != 5 || rowAppended || !executor.appendBeforeCompletion {
 					commandErr = errors.New("browser recovery append command is out of order")
 					break
 				}
@@ -131,7 +134,7 @@ func (executor *browserRecoveryExecutor) Execute(
 					rowAppended = true
 				}
 			case browserRecoveryCommandComplete:
-				if progressSteps != 5 || !rowAppended {
+				if progressSteps != 5 || rowAppended != executor.appendBeforeCompletion {
 					commandErr = errors.New("browser recovery completion command is out of order")
 					break
 				}
@@ -246,27 +249,36 @@ func (controller *browserRecoveryController) ServeHTTP(
 }
 
 type browserRecoveryBrowserSpec struct {
-	grepPattern     string
-	outputDirectory string
-	environmentFlag string
-	failureName     string
+	grepPattern            string
+	outputDirectory        string
+	environmentFlag        string
+	failureName            string
+	appendBeforeCompletion bool
+	expectedText           string
+	expectedRows           int
 }
 
 func TestBrowserSequenceExpiredRecovery(t *testing.T) {
 	runBrowserRecoveryFixture(t, 1, browserRecoveryBrowserSpec{
-		grepPattern:     "real sequence expiration",
-		outputDirectory: "browser-sequence-expired",
-		environmentFlag: "OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST",
-		failureName:     "sequence-expiration",
+		grepPattern:            "real sequence expiration",
+		outputDirectory:        "browser-sequence-expired",
+		environmentFlag:        "OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST",
+		failureName:            "sequence-expiration",
+		appendBeforeCompletion: true,
+		expectedText:           browserSequenceExpiredRecoveredRow,
+		expectedRows:           2,
 	})
 }
 
 func TestBrowserSequenceGapRecovery(t *testing.T) {
 	runBrowserRecoveryFixture(t, 8, browserRecoveryBrowserSpec{
-		grepPattern:     "real sequence gap",
-		outputDirectory: "browser-sequence-gap",
-		environmentFlag: "OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST",
-		failureName:     "sequence-gap",
+		grepPattern:            "real sequence gap",
+		outputDirectory:        "browser-sequence-gap",
+		environmentFlag:        "OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST",
+		failureName:            "sequence-gap",
+		appendBeforeCompletion: false,
+		expectedText:           browserSequenceExpiredInitialRow,
+		expectedRows:           1,
 	})
 }
 
@@ -310,7 +322,7 @@ func runBrowserRecoveryFixture(
 	}
 
 	anchor := time.Date(2026, time.July, 25, 18, 0, 0, 0, time.UTC)
-	executor := newBrowserRecoveryExecutor()
+	executor := newBrowserRecoveryExecutor(spec.appendBeforeCompletion)
 	manager, err := searchjobs.New(searchjobs.Config{
 		Executor:        executor,
 		Snapshotter:     browserRecoverySnapshotter(17),
@@ -406,9 +418,15 @@ func runBrowserRecoveryFixture(
 	if calls := executor.calls.Load(); calls != 1 {
 		t.Fatalf("browser recovery executor calls = %d, want 1", calls)
 	}
-	if total := controller.total.Load(); total != 7 ||
+	expectedControlCalls := uint32(6)
+	expectedAppendCalls := uint32(0)
+	if spec.appendBeforeCompletion {
+		expectedControlCalls++
+		expectedAppendCalls++
+	}
+	if total := controller.total.Load(); total != expectedControlCalls ||
 		controller.progress.Load() != 5 ||
-		controller.appendRow.Load() != 1 ||
+		controller.appendRow.Load() != expectedAppendCalls ||
 		controller.complete.Load() != 1 {
 		t.Fatalf(
 			"browser recovery control calls = total:%d progress:%d append:%d complete:%d",
@@ -448,8 +466,8 @@ func runBrowserRecoverySpec(
 		"OPEN_SPLUNK_E2E_SPL":                    "index=main | table message",
 		"OPEN_SPLUNK_E2E_EARLIEST":               anchor.Add(-time.Hour).Format(time.RFC3339Nano),
 		"OPEN_SPLUNK_E2E_LATEST":                 anchor.Format(time.RFC3339Nano),
-		"OPEN_SPLUNK_E2E_EXPECTED_TEXT":          browserSequenceExpiredRecoveredRow,
-		"OPEN_SPLUNK_E2E_EXPECTED_ROWS":          "2",
+		"OPEN_SPLUNK_E2E_EXPECTED_TEXT":          spec.expectedText,
+		"OPEN_SPLUNK_E2E_EXPECTED_ROWS":          strconv.Itoa(spec.expectedRows),
 		"OPEN_SPLUNK_E2E_RECOVERY_CONTROL_URL":   controlURL,
 		"OPEN_SPLUNK_E2E_RECOVERY_CONTROL_TOKEN": controlToken,
 		"OPEN_SPLUNK_E2E_RECOVERY_INITIAL_TEXT":  browserSequenceExpiredInitialRow,
