@@ -7,7 +7,65 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: versioned progress and coalesced browser recovery
+## Latest checkpoint: authoritative browser cancellation
+
+Date: 2026-07-26
+
+Implementation/proof commit:
+`787a7f9` (`prove authoritative browser cancellation`)
+
+Progress/recovery foundation:
+`522b0ac` (`fence search progress by state revision`)
+
+This slice closes the honest browser-cancellation boundary without changing
+the already-correct production lifecycle:
+
+1. A dedicated Chrome case reuses the real in-process SQLite control database,
+   SPL parser/planner/compiler, controlled executor, search manager,
+   production HTTP/WebSocket handler, and compiled backend UI. It waits for a
+   real sequenced progress event and visible preview row before cancellation,
+   proving the executor and subscription are active.
+2. The cancel route is held before its request reaches the backend. The UI
+   must synchronously dispose its one search WebSocket while the job remains
+   running and the preview remains visible. Playwright then advances the page
+   clock two seconds—past the client's 750 ms first reconnect delay—and
+   requires exactly one connection and one clean close.
+3. A second discrete Cancel click is issued while the first request remains
+   held. This exercises the application's synchronous pending-request guard,
+   rather than the DOM double-click filter. Browser-route and server-middleware
+   counters independently require exactly one cancel POST; create is also
+   exactly once.
+4. After the request gate opens, the test decodes the real protobuf
+   `CancelSearchJobResponse` and requires the exact job ID, `CANCELED` state,
+   positive job revision, matching progress revision, complete phase, and no
+   failure. A second gate withholds those response bytes from the application,
+   which must still show the running state and preview. This proves canceled
+   presentation is authoritative rather than optimistic.
+5. Releasing the same response bytes must make the job strip non-busy and
+   canceled, restore the Run button, remove preview status and provisional
+   rows, and issue no results request. Browser errors, failed same-origin
+   requests, external resources, and external WebSockets remain empty.
+6. The Go fixture independently requires one executor invocation, one exit
+   whose returned error is `context.Canceled`, zero recovery-control commands,
+   one server create, one server cancel, and a retained manager snapshot in
+   canceled state with a positive version, finish time, and no failure.
+7. CI now includes `TestBrowserSearchCancellation` in the exact
+   Docker/ClickHouse plus Chrome selector and retains
+   `test-results/browser-search-cancellation` on failure.
+
+The exact validation and adversarial review record is under **Latest validation
+evidence**. Reviewers drove the pre-server request gate, second discrete click,
+virtual-time reconnect proof, server-side request counter, explicit canceled
+executor-exit counter, shared WebSocket URL matcher, and guarded response
+waiter. Final correctness, efficiency, reuse, and fixture-quality reviews
+reported no remaining blocker.
+
+The next checkpoint is stale-duplicate injection across a real recovery
+boundary, followed by clock-driven job/result/export expiration. The ordered
+acceptance criteria are under **Remaining work, in priority order**. The
+overall backend goal remains active.
+
+## Previous checkpoint: versioned progress and coalesced browser recovery
 
 Date: 2026-07-26
 
@@ -678,6 +736,50 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Authoritative browser cancellation
+
+The cancellation proof at `787a7f9` passed:
+
+```sh
+go test ./... -count=1
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
+git diff --check
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+go test -race ./integration \
+  -run '^TestBrowserSearchCancellation$' -count=1 -timeout=10m -v
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+go test ./integration \
+  -run '^Test(BackendVertical|Browser(SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=15m -v
+```
+
+All 42 frontend tests passed. The final focused real-Chrome cancellation run
+completed in 9.63 seconds. The race-enabled focused run completed in 11.360
+seconds overall, with the browser case itself taking 9.74 seconds. The exact
+six-case CI-equivalent gate completed in 49.246 seconds:
+`TestBackendVertical` in 19.99 seconds,
+`TestBrowserSequenceExpiredRecovery` in 12.04 seconds,
+`TestBrowserSequenceGapRecovery` in 5.33 seconds,
+`TestBrowserSequenceGapRESTTerminalRecovery` in 5.37 seconds,
+`TestBrowserSequenceGapRESTFirstProgressRecovery` in 4.47 seconds, and
+`TestBrowserSearchCancellation` in 1.53 seconds. A read-only Docker check
+showed no Open Splunk or ClickHouse test container afterward.
+
+The first real run exposed an ambiguous role locator because both the primary
+button and empty-state action contained “Run search”; the proof now uses the
+stable primary-button test ID. Adversarial reviews then drove independent
+pre-server and pre-browser response gates, a second discrete cancel click,
+virtual-time reconnect fencing, browser-route and server-side request counts,
+an explicit canceled-executor-exit count, a shared WebSocket URL matcher, and
+a guarded create-response waiter that cannot reject during teardown. Final
+correctness, quality, efficiency, reuse, and fixture reviews reported no
+remaining blocker.
+
 ### Versioned progress and coalesced recovery
 
 The protocol slice at `b5502a3` passed the focused producer/protocol/server
@@ -1224,11 +1326,12 @@ independent stacks.
    ```sh
    OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
    go test ./integration \
-     -run '^Test(BackendVertical|BrowserSequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery))$' \
+     -run '^Test(BackendVertical|Browser(SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
      -count=1 -timeout=15m -v
    ```
 
-5. Start with the honest browser cancellation contract below unless the user
+5. Start with stale-duplicate injection across a real recovery boundary, then
+   clock-driven terminal job/result/export expiration, unless the user
    explicitly changes priority. Add tests before implementation, run read-only
    adversarial reviews, fix concrete findings, then commit and push `main`.
 
@@ -1251,17 +1354,14 @@ without re-execution. Its REST-only companion withholds the full terminal
 projection, accepts completion only through authoritative polling, and proves
 zero-row finalization behind a gated result response. The browser now
 single-flights the whole REST recovery cycle, so duplicate triggers cannot
-multiply backoff or follow-up scheduling. Complete the remaining release-path
-proofs before adding another ad hoc SPL feature:
+multiply backoff or follow-up scheduling. Honest browser cancellation is also
+complete: it proves exactly one cancel POST, one executor context cancellation,
+authoritative canceled presentation, and zero post-cancel reconnects. Complete
+the remaining release-path proofs before adding another ad hoc SPL feature:
 
-1. Add the honest browser cancellation contract. The current UI intentionally
-   disposes its subscription before sending the cancel POST, so the assertion
-   is exactly one cancel request, one executor context cancellation, canceled
-   UI from the authoritative response, and zero post-cancel reconnects. Do not
-   require a browser reconnect unless the product lifecycle changes.
-2. Inject a stale duplicate after recovery across the real boundary and prove
+1. Inject a stale duplicate after recovery across the real boundary and prove
    it cannot mutate preview, terminal, or checkpoint state.
-3. Exercise terminal job/result/export expiration and tombstone removal under
+2. Exercise terminal job/result/export expiration and tombstone removal under
    a clock-driven fixture while subscribed, including preview-to-final
    release and absence of stale frames, sockets, timers, retained snapshots,
    leases, exports, or diagnostics.
@@ -1272,7 +1372,7 @@ For browser-only fault control, prefer a dedicated in-process server over
 test-only production environment switches. Keep proxy logs, diagnostics,
 matching sockets, frame counts, and timeout output strictly bounded.
 
-After those three release-path proofs:
+After those two remaining release-path proofs:
 
 - Close any remaining preview-to-final resource-release coverage that is not
   naturally exercised by the cancellation, recovery, and expiration fixtures.
@@ -1397,8 +1497,8 @@ Do not guess those decisions if they materially affect the implementation.
 
 1. Confirm `main` is clean and exactly matches `origin/main`.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `b5502a3` and `522b0ac`; the preceding recovery
-   foundations are `f72f184`, `ed28182`, and `d1286a4`.
+   commits, especially `787a7f9`, `522b0ac`, and `b5502a3`; the preceding
+   recovery foundations are `f72f184`, `ed28182`, and `d1286a4`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
 4. Run the ordinary Go/frontend gates above and the focused exact corpus:
 
@@ -1411,15 +1511,15 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. Unless the user changes priority, begin with the honest browser
-   cancellation contract, then stale-duplicate injection and clock-driven
-   expiration in the ordered matrix above. Versioned REST-first/replay-later
-   progress, recovery-cycle coalescing, REST-only and accepted-WebSocket
-   terminal discovery after a sequence gap, explicit browser sequence-gap
-   recovery, browser `SEQUENCE_EXPIRED`, transient recovery-GET failure,
-   retained replay, real-manager expiration/cancellation, the uninterrupted
-   collector-to-browser path, exact GradeThis corpus, collector/server
-   process-restart proof, and the protocol unit contract are already complete.
+5. Unless the user changes priority, begin with stale-duplicate injection,
+   then clock-driven expiration in the ordered matrix above. Authoritative
+   browser cancellation, versioned REST-first/replay-later progress,
+   recovery-cycle coalescing, REST-only and accepted-WebSocket terminal
+   discovery after a sequence gap, explicit browser sequence-gap recovery,
+   browser `SEQUENCE_EXPIRED`, transient recovery-GET failure, retained replay,
+   real-manager expiration/cancellation, the uninterrupted collector-to-browser
+   path, exact GradeThis corpus, collector/server process-restart proof, and the
+   protocol unit contract are already complete.
 6. If extending aggregates instead, start with an explicit bounded contract
    for `list(field)`; do not reuse unordered `values`.
 7. Preserve scalar/Dynamic path separation, numeric grammar sharing,
