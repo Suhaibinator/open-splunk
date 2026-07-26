@@ -7,7 +7,124 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: browser sequence-expiration and transient recovery
+## Latest checkpoint: real browser sequence-gap recovery
+
+Date: 2026-07-25
+
+Implementation commit:
+`f72f184` (`prove real browser sequence gap recovery`)
+
+This slice proves explicit sequence-gap recovery through the production React
+workspace, generated protobuf HTTP/WebSocket transports, real HTTP/WebSocket
+handlers, and a real search manager:
+
+1. The reusable browser-recovery fixture uses a real SQLite control database,
+   SPL parser/planner/compiler, one controlled executor, search manager,
+   eight-event replay ring, production handler, and Chrome. One browser-owned
+   job establishes a real preview checkpoint `K`.
+2. The fault route captures and drops the real progress frame `K+1`, then
+   forwards real `K+2` exactly once. The browser must detect the discontinuity,
+   clear provisional rows, show `resyncing` at zero rows, close the first
+   socket with the sequence-gap contract, and open exactly one replacement
+   socket.
+3. The replacement must retain the exact subscription identifier, job,
+   preview option, row limit, and `after_sequence=K`. The real server
+   acknowledgement must promise replay, name the exact target/subscription,
+   report latest sequence `K+2`, and make `K+1` available.
+4. The fixture captures real replay frames `K+1` and `K+2`, requires each to be
+   byte-identical to its original server frame, and releases them separately.
+   The UI must advance from one to two scanned rows with no authoritative REST
+   response. The same second socket then applies live `K+3`, `K+4`, and `K+5`
+   one at a time without another reconnect.
+5. Authoritative GET1 captures the real running job at two rows before replay
+   and remains held until live progress reaches five. Manager progress does
+   advance the real job version, but `searchProgress` frames carry no
+   `state_version` and therefore do not advance the browser's job-version
+   fence. After GET1 is released, entry into the pre-fetch gate for GET2
+   causally proves the application processed GET1; the UI must remain at five
+   rows. GET1's numeric version is still acceptable to the browser, so the
+   ordinary version guard cannot hide a broken epoch fence.
+6. GET2 captures its epoch at five rows and is held before its upstream fetch.
+   The executor then publishes a fresh preview and completes. The control
+   endpoint waits for the real manager to reach `completed`; the browser must
+   show the fresh row, `finalizing`, and `Completed` before GET2 is released.
+   GET2 obtains a real terminal five-row snapshot, but the intervening live
+   preview/terminal frames make its epoch stale. Entry into gated GET3 proves
+   GET2 was rejected. GET3 supplies the accepted terminal snapshot, after
+   which the real two-row results replace all provisional state.
+7. Exactly one job is created, the executor is called once and exits once,
+   exactly five progress/one append/one complete control commands are
+   accepted, exactly two matching WebSocket connections are opened, and
+   exactly three bounded authoritative job GETs complete. Frame, command,
+   diagnostic, socket, and response counts are bounded.
+8. The proxy now requires both the sequence-gap close and normal terminal
+   client close to finish forwarding before teardown. Routed close echoes are
+   bounded, delayed errors cannot be swallowed by disposal, and cleanup cannot
+   manufacture a passing close count.
+9. CI now runs the Docker/ClickHouse vertical plus both real-browser recovery
+   cases in Playwright Chromium with a 15-minute Go timeout inside a 20-minute
+   job and retains
+   `backend-vertical`, `browser-sequence-expired`, and
+   `browser-sequence-gap` failure artifacts.
+
+Final validation on the exact committed implementation passed:
+
+```sh
+go test ./... -count=1
+go test ./integration -count=1
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+go test -race ./integration \
+  -run '^TestBrowserSequenceGapRecovery$' -count=1 -timeout=6m -v
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+go test ./integration \
+  -run '^TestBrowserSequence(Expired|Gap)Recovery$' \
+  -count=1 -timeout=8m -v
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+go test ./integration \
+  -run '^Test(BackendVertical|BrowserSequence(Expired|Gap)Recovery)$' \
+  -count=1 -timeout=15m -v
+git diff --check
+```
+
+All 32 frontend tests passed. The final dedicated gap case completed
+in about 20.5 seconds including a fresh staged build, its race-enabled run in
+about 22.8 seconds, both recovery cases together in about 33 seconds, and the
+CI-equivalent Docker/ClickHouse plus two-Chrome-case gate in 46.7 seconds.
+The ephemeral ClickHouse container and staged build directories were gone
+afterward.
+
+Three independent final reviewers examined false-positive risk, protocol
+semantics/concurrency, fixture ownership, efficiency, CI, and code quality.
+Their initial findings caught a close-lifecycle false pass, duplicated
+subscription assertions, unnecessary Go callback wrappers, and a non-causal
+REST-response barrier. Those were fixed; the reviewers reported no remaining
+concrete finding on the final diff.
+
+The explicit gap case is complete, but it intentionally does not claim three
+adjacent application boundaries are fixed:
+
+- a terminal event received after a gap with no later preview can leave the
+  preview status at `resyncing`, because terminal handling only selects
+  `finalizing` when a preview snapshot exists;
+- if an authoritative REST job is applied before an older replayed progress
+  frame, the later WebSocket progress has no version/epoch guard and can
+  temporarily regress visible metrics; and
+- terminal recovery and another recovery trigger can await the same
+  `recoveryRequest`; duplicate catch paths can advance backoff more than once.
+
+Pin and fix those boundaries before or alongside the honest browser
+cancellation case. Then continue stale-duplicate injection and clock-driven
+job/result/export expiration. The precise order is under **Remaining work, in
+priority order**. The overall backend goal remains active.
+
+## Previous checkpoint: browser sequence-expiration and transient recovery
 
 Date: 2026-07-25
 
@@ -606,6 +723,41 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Real browser sequence-gap recovery validation
+
+The implementation at `f72f184` passed the full Go suite, all 32 frontend
+tests, TypeScript, lint, the production build, the dedicated real
+Chrome gap case, the gap case under the Go race detector, the combined
+expiration/gap Chrome run, and the CI-equivalent Docker/ClickHouse plus both
+Chrome recovery cases:
+
+```sh
+go test ./... -count=1
+go test ./integration -count=1
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+go test -race ./integration \
+  -run '^TestBrowserSequenceGapRecovery$' -count=1 -timeout=6m -v
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+go test ./integration \
+  -run '^Test(BackendVertical|BrowserSequence(Expired|Gap)Recovery)$' \
+  -count=1 -timeout=15m -v
+git diff --check
+```
+
+The exact final combined gate passed in 46.743 seconds:
+`TestBackendVertical` in 22.70 seconds,
+`TestBrowserSequenceExpiredRecovery` in 12.18 seconds, and
+`TestBrowserSequenceGapRecovery` in 11.22 seconds. A read-only Docker check
+confirmed that no Open Splunk/ClickHouse test container remained. Three final
+adversarial rereviews found no concrete issue after the causal GET2 barrier
+and explicit close-completion promises were added.
+
 ### Browser sequence-expiration recovery validation
 
 The exact browser proof at `ad4a77b`, built on the production recovery
@@ -1009,11 +1161,11 @@ independent stacks.
    ```sh
    OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
    go test ./integration \
-     -run '^Test(BackendVertical|BrowserSequenceExpiredRecovery)$' \
-     -count=1 -timeout=12m -v
+     -run '^Test(BackendVertical|BrowserSequence(Expired|Gap)Recovery)$' \
+     -count=1 -timeout=15m -v
    ```
 
-5. Start with the next incomplete browser recovery case below unless the user
+5. Start with the gap-adjacent correctness boundaries below unless the user
    explicitly changes priority. Add tests before implementation, run
    read-only adversarial reviews, fix concrete findings, then commit and push
    `main`.
@@ -1029,19 +1181,32 @@ offline cancellation publication/replay are complete. The dedicated real
 browser `SEQUENCE_EXPIRED` fixture now also proves exact checkpoint retention,
 stale-snapshot rejection, a genuine transient HTTP 503, queued-frame
 suspension/application, live-update fencing, and same-connection
-preview-to-final behavior without re-execution. Continue the remaining
-recovery matrix before adding another ad hoc SPL feature:
+preview-to-final behavior without re-execution. The explicit sequence-gap
+fixture is also complete: it drops `K+1`, forwards `K+2`, proves exact
+reconnect/replay and live continuation, isolates two live-update epoch fences,
+and requires normal terminal socket cleanup without re-execution. Close the
+remaining recovery boundaries before adding another ad hoc SPL feature:
 
-1. Drop `K+1` while forwarding `K+2`. Prove the browser detects the gap,
-   reconnects from `K`, and consumes the full contiguous replay exactly once.
-2. Add the honest browser cancellation contract. The current UI intentionally
+1. Pin and fix terminal handling when a sequence gap clears preview state and
+   no later preview arrives. A real terminal event must leave `resyncing`,
+   select the correct terminal/finalizing presentation, and cleanly transition
+   to authoritative results.
+2. Pin and prevent REST-first/replay-later metric regression. If an
+   authoritative job snapshot applies before an older retained progress frame,
+   the replay must not overwrite newer visible progress even though WebSocket
+   progress currently has no job-version field.
+3. Coalesce recovery completion/failure bookkeeping. Terminal recovery and
+   another recovery trigger can await the same `recoveryRequest`; exactly one
+   continuation should update retry state so duplicate catch paths cannot
+   inflate exponential backoff or schedule redundant work.
+4. Add the honest browser cancellation contract. The current UI intentionally
    disposes its subscription before sending the cancel POST, so the assertion
    is exactly one cancel request, one executor context cancellation, canceled
    UI from the authoritative response, and zero post-cancel reconnects. Do not
    require a browser reconnect unless the product lifecycle changes.
-3. Inject a stale duplicate after recovery across the real boundary and prove
+5. Inject a stale duplicate after recovery across the real boundary and prove
    it cannot mutate preview, terminal, or checkpoint state.
-4. Exercise terminal job/result/export expiration and tombstone removal under
+6. Exercise terminal job/result/export expiration and tombstone removal under
    a clock-driven fixture while subscribed, including preview-to-final
    release and absence of stale frames, sockets, timers, retained snapshots,
    leases, exports, or diagnostics.
@@ -1178,7 +1343,7 @@ Do not guess those decisions if they materially affect the implementation.
 
 1. Confirm `main` is clean and exactly matches `origin/main`.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, including `430e6ce`.
+   commits, including `f72f184`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
 4. Run the ordinary Go/frontend gates above and the focused exact corpus:
 
@@ -1191,12 +1356,13 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. Unless the user changes priority, begin with explicit browser sequence-gap
-   injection in the ordered matrix above. Browser `SEQUENCE_EXPIRED`,
-   transient recovery-GET failure, retained replay, real-manager
-   expiration/cancellation, the uninterrupted collector-to-browser path,
-   exact GradeThis corpus, collector/server process-restart proof, and
-   protocol unit contract are already complete.
+5. Unless the user changes priority, begin with the terminal-without-preview,
+   REST-first/replay-later, and duplicate-recovery-continuation boundaries in
+   the ordered matrix above. Explicit browser sequence-gap recovery, browser
+   `SEQUENCE_EXPIRED`, transient recovery-GET failure, retained replay,
+   real-manager expiration/cancellation, the uninterrupted
+   collector-to-browser path, exact GradeThis corpus, collector/server
+   process-restart proof, and the protocol unit contract are already complete.
 6. If extending aggregates instead, start with an explicit bounded contract
    for `list(field)`; do not reuse unordered `values`.
 7. Preserve scalar/Dynamic path separation, numeric grammar sharing,
