@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -58,6 +59,9 @@ func NewManager(cfg Config, checkpoints ManagerCheckpointStore) (Manager, error)
 	}
 	if checkpoints == nil {
 		return nil, errors.New("collector/input: checkpoint store is required")
+	}
+	if cfg.Multiline && cfg.Framing.LineStartPattern == nil {
+		return nil, errors.New("collector/input: multiline line-start pattern is required")
 	}
 	poll := cfg.PollInterval
 	if poll <= 0 {
@@ -417,7 +421,7 @@ func (m *manager) matchPaths() []string {
 	for p := range set {
 		out = append(out, p)
 	}
-	sortStrings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -437,9 +441,8 @@ func (m *manager) excluded(path string) bool {
 }
 
 // startTailer launches the tailer goroutine for a newly discovered file. The
-// tailer owns f from here on and reframes it from its current offset on every
-// poll (the framing package caches EOF, so a fresh framer per cycle is what lets
-// appended bytes be seen).
+// tailer owns f from here on and reframes from its current offset whenever
+// growth or pending bytes require reading.
 func (m *manager) startTailer(
 	ctx context.Context,
 	key, path string,
@@ -492,25 +495,14 @@ func max64(a, b int64) int64 {
 	return b
 }
 
-// sortStrings is an allocation-light insertion sort adequate for the small path
-// sets a single input produces; it avoids pulling sort into the hot poll path's
-// import surface beyond what checkpoint.go already needs.
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j-1] > s[j]; j-- {
-			s[j-1], s[j] = s[j], s[j-1]
-		}
-	}
-}
-
 // tailer reads one physical file and emits RawEvents. One tailer goroutine owns
 // its *os.File, offset, and identity; the manager only touches the atomic path
 // pointer, drainReq, and finished flags.
 //
-// Because the framing package caches EOF (once its reader reports io.EOF it will
-// not re-read), the tailer builds a fresh framer over the file on every poll,
-// seeked to the last durable offset. This is what makes appended bytes visible
-// and keeps the tailer decoupled from the framer's one-shot lifecycle.
+// Because the framing package caches EOF (once its reader reports io.EOF it
+// will not re-read), the tailer builds a fresh framer whenever observed bytes
+// require reading, seeked to the last durable offset. This makes appended bytes
+// visible while avoiding a framer and EOF read at a proven clean boundary.
 type tailer struct {
 	m   *manager
 	key string
@@ -542,7 +534,8 @@ type tailer struct {
 	// before the next poll, while costing at most fpBytes of IO per poll.
 	guardOffset      uint64
 	guardLength      uint32
-	guardFingerprint string
+	guardFingerprint fingerprintDigest
+	guardScratch     []byte
 
 	drainReq atomic.Bool
 	finished atomic.Bool
@@ -564,6 +557,44 @@ func (t *tailer) pathStr() string {
 // the file left the discovery set (deletion or rotation out of the glob).
 func (t *tailer) requestDrain() { t.drainReq.Store(true) }
 
+// tailerPollTimer owns the delay between one tailer's poll attempts.
+type tailerPollTimer struct {
+	interval time.Duration
+	timer    *time.Timer
+}
+
+func (timer *tailerPollTimer) wait(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if timer.timer == nil {
+		timer.timer = time.NewTimer(timer.interval)
+	} else {
+		// The previous wait consumed its tick. Reset immediately before this
+		// wait so slow file work cannot accumulate timer debt.
+		timer.timer.Reset(timer.interval)
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.timer.C:
+		return ctx.Err() == nil
+	}
+}
+
+func (timer *tailerPollTimer) stop() {
+	if timer.timer != nil {
+		timer.timer.Stop()
+	}
+}
+
+// canWaitAtCleanBoundary reports whether the last observed file size proves
+// there is no work and no drain handoff to complete. A drain request must
+// reframe even at an observed EOF because a writer can append after Stat.
+func (t *tailer) canWaitAtCleanBoundary(size uint64) bool {
+	return size == t.offset && !t.drainReq.Load()
+}
+
 // run is the tailer goroutine.
 func (t *tailer) run(ctx context.Context) {
 	defer t.m.wg.Done()
@@ -572,15 +603,25 @@ func (t *tailer) run(ctx context.Context) {
 
 	t.m.active.Add(1)
 	defer t.m.active.Add(-1)
+	pollTimer := tailerPollTimer{interval: t.m.poll}
+	defer pollTimer.stop()
 
 	for {
-		if !t.trackGrowthAndTruncate() {
-			select {
-			case <-ctx.Done():
+		size, trackable := t.trackGrowthAndTruncate()
+		if !trackable {
+			if !pollTimer.wait(ctx) {
 				return
-			case <-time.After(t.m.poll):
-				continue
 			}
+			continue
+		}
+		if t.canWaitAtCleanBoundary(size) {
+			// An ordinary partial record retains an offset below size. An
+			// incomplete oversized record may sit exactly at EOF, but its
+			// discard state remains armed and resumes when the file grows.
+			if !pollTimer.wait(ctx) {
+				return
+			}
+			continue
 		}
 
 		if t.discardingOversize {
@@ -598,12 +639,10 @@ func (t *tailer) run(ctx context.Context) {
 				if t.drainReq.Load() {
 					return
 				}
-				select {
-				case <-ctx.Done():
+				if !pollTimer.wait(ctx) {
 					return
-				case <-time.After(t.m.poll):
-					continue
 				}
+				continue
 			}
 		}
 
@@ -635,10 +674,8 @@ func (t *tailer) run(ctx context.Context) {
 			}
 		}
 
-		select {
-		case <-ctx.Done():
+		if !pollTimer.wait(ctx) {
 			return
-		case <-time.After(t.m.poll):
 		}
 	}
 }
@@ -646,34 +683,34 @@ func (t *tailer) run(ctx context.Context) {
 // trackGrowthAndTruncate detects both an observable shrink and a replacement of
 // bytes already consumed. The latter catches truncate-and-rewrite operations
 // whose new file has already reached or exceeded the old offset by the poll.
-func (t *tailer) trackGrowthAndTruncate() bool {
+func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 	fi, err := t.f.Stat()
 	if err != nil {
 		t.m.setReadError(t.pathStr(), err)
-		return false
+		return 0, false
 	}
-	size := uint64(fi.Size())
+	size = uint64(fi.Size())
 	changed := size < t.offset
 	if !changed && t.guardLength > 0 {
-		fp, ferr := computeFingerprintRange(t.f, int64(t.guardOffset), t.guardLength)
+		fp, ferr := t.readGuardFingerprint()
 		changed = ferr != nil || fp != t.guardFingerprint
 	}
 	if changed {
 		next, ierr := identityFor(t.f, fi, t.m.fpBytes)
 		if ierr != nil {
 			t.m.setReadError(t.pathStr(), ierr)
-			return false
+			return 0, false
 		}
 		next.Generation = t.id.Generation + 1
 		if next.Generation == 0 {
 			t.m.setReadError(t.pathStr(), errors.New("file generation exhausted"))
-			return false
+			return 0, false
 		}
 		if err := t.m.checkpoints.Set(Checkpoint{
 			Identity: next, Path: t.pathStr(), Offset: 0, NextLineNumber: 1,
 		}); err != nil {
 			t.m.setReadError(t.pathStr(), err)
-			return false
+			return 0, false
 		}
 		t.id = next
 		t.offset = 0
@@ -682,7 +719,7 @@ func (t *tailer) trackGrowthAndTruncate() bool {
 		t.discardingOversize = false
 		t.guardOffset = 0
 		t.guardLength = 0
-		t.guardFingerprint = ""
+		t.guardFingerprint = fingerprintDigest{}
 	} else if t.offset == 0 && t.id.FingerprintLength == 0 && size > 0 {
 		// A file discovered empty has no distinguishing prefix. Establish one
 		// before its first event is emitted, retaining the same generation number.
@@ -696,11 +733,11 @@ func (t *tailer) trackGrowthAndTruncate() bool {
 			}
 		}
 	}
-	if size != t.lastSize {
+	if changed || size != t.lastSize {
 		t.lastSize = size
 		t.lastSizeChange = time.Now()
 	}
-	return true
+	return size, true
 }
 
 // refreshGuard fingerprints the trailing part of the consumed prefix. It is
@@ -713,15 +750,26 @@ func (t *tailer) refreshGuard() error {
 	t.guardLength = uint32(length)
 	t.guardOffset = t.offset - length
 	if length == 0 {
-		t.guardFingerprint = ""
+		t.guardFingerprint = fingerprintDigest{}
 		return nil
 	}
-	fp, err := computeFingerprintRange(t.f, int64(t.guardOffset), t.guardLength)
+	fp, err := t.readGuardFingerprint()
 	if err != nil {
 		return err
 	}
 	t.guardFingerprint = fp
 	return nil
+}
+
+func (t *tailer) readGuardFingerprint() (fingerprintDigest, error) {
+	length := int(t.guardLength)
+	t.guardScratch = slices.Grow(t.guardScratch[:0], length)[:length]
+	return computeFingerprintRangeDigest(
+		t.f,
+		int64(t.guardOffset),
+		t.guardLength,
+		t.guardScratch,
+	)
 }
 
 // reframe seeks the file to the current offset and returns a fresh framer whose

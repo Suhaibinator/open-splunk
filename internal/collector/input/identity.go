@@ -15,6 +15,8 @@ import (
 // fingerprint when Config.FingerprintBytes is unset.
 const defaultFingerprintBytes = 1024
 
+type fingerprintDigest [sha256.Size]byte
+
 // fingerprintBytesOr returns n when positive, else the package default.
 func fingerprintBytesOr(n int) int {
 	if n <= 0 {
@@ -53,17 +55,36 @@ func computeFingerprintWithLength(f *os.File, fingerprintBytes int) (string, uin
 // already-consumed region has not been replaced.
 func computeFingerprintRange(f *os.File, offset int64, length uint32) (string, error) {
 	buf := make([]byte, int(length))
+	digest, err := computeFingerprintRangeDigest(f, offset, length, buf)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(digest[:]), nil
+}
+
+// computeFingerprintRangeDigest hashes into a raw digest using caller-owned
+// scratch. Tailers retain one bounded scratch buffer across polls so checking a
+// stable nonempty source does not allocate.
+func computeFingerprintRangeDigest(
+	f *os.File,
+	offset int64,
+	length uint32,
+	scratch []byte,
+) (fingerprintDigest, error) {
+	if int(length) > len(scratch) {
+		return fingerprintDigest{}, errors.New("fingerprint scratch is shorter than requested range")
+	}
+	buf := scratch[:int(length)]
 	if length > 0 {
 		n, err := f.ReadAt(buf, offset)
 		if err != nil && !errors.Is(err, io.EOF) {
-			return "", err
+			return fingerprintDigest{}, err
 		}
 		if n != len(buf) {
-			return "", io.ErrUnexpectedEOF
+			return fingerprintDigest{}, io.ErrUnexpectedEOF
 		}
 	}
-	sum := sha256.Sum256(buf)
-	return hex.EncodeToString(sum[:]), nil
+	return sha256.Sum256(buf), nil
 }
 
 // identityFor builds the FileIdentity for an already-open file. dev+inode come

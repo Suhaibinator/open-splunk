@@ -98,7 +98,7 @@ func startManager(t *testing.T, cfg Config, store CheckpointStore) *harness {
 	return &harness{t: t, mgr: mgr, store: store, col: col}
 }
 
-func newStore(t *testing.T) CheckpointStore {
+func newStore(t testing.TB) CheckpointStore {
 	t.Helper()
 	store, err := NewCheckpointStore(t.TempDir())
 	if err != nil {
@@ -151,7 +151,61 @@ func joinq(s []string) string {
 	return out
 }
 
-func appendFileT(t *testing.T, path, content string) {
+func TestTailerPollTimerRearmsWithoutAllocating(t *testing.T) {
+	timer := tailerPollTimer{}
+	defer timer.stop()
+	ctx := context.Background()
+	if !timer.wait(ctx) {
+		t.Fatal("initial poll wait unexpectedly canceled")
+	}
+
+	const waitsPerRun = 32
+	allocations := testing.AllocsPerRun(20, func() {
+		for range waitsPerRun {
+			if !timer.wait(ctx) {
+				panic("poll wait unexpectedly canceled")
+			}
+		}
+	})
+	if allocations != 0 {
+		t.Fatalf(
+			"steady poll waits allocated %.0f objects per %d waits, want 0",
+			allocations,
+			waitsPerRun,
+		)
+	}
+}
+
+func TestTailerPollTimerDropsConsumedTickAndHonorsCancellation(t *testing.T) {
+	timer := tailerPollTimer{}
+	defer timer.stop()
+	if !timer.wait(context.Background()) {
+		t.Fatal("initial immediate poll wait unexpectedly canceled")
+	}
+
+	timer.interval = time.Hour
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if timer.wait(ctx) {
+		t.Fatal("rearmed poll timer consumed a stale tick")
+	}
+	if ctx.Err() != context.DeadlineExceeded {
+		t.Fatalf("poll wait returned before cancellation: %v", ctx.Err())
+	}
+
+	var preCanceled tailerPollTimer
+	preCanceled.interval = time.Hour
+	preCanceledCtx, preCancel := context.WithCancel(context.Background())
+	preCancel()
+	if preCanceled.wait(preCanceledCtx) {
+		t.Fatal("pre-canceled poll wait succeeded")
+	}
+	if preCanceled.timer != nil {
+		t.Fatal("pre-canceled poll wait allocated and armed a timer")
+	}
+}
+
+func appendFileT(t testing.TB, path, content string) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
 	if err != nil {
@@ -164,6 +218,21 @@ func appendFileT(t *testing.T, path, content string) {
 }
 
 // --- tests ----------------------------------------------------------------
+
+func TestNewManagerRejectsMultilineWithoutLineStartPattern(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	t.Cleanup(func() { _ = store.Close() })
+	_, err := NewManager(Config{
+		InputID:   "in",
+		Include:   []string{filepath.Join(t.TempDir(), "*.log")},
+		Multiline: true,
+	}, store)
+	const want = "collector/input: multiline line-start pattern is required"
+	if err == nil || err.Error() != want {
+		t.Fatalf("NewManager error = %v, want %q", err, want)
+	}
+}
 
 func TestManagerAppendWhileTailing(t *testing.T) {
 	t.Parallel()
@@ -179,15 +248,22 @@ func TestManagerAppendWhileTailing(t *testing.T) {
 	h.waitForTexts([]string{"a1", "a2"})
 	appendFileT(t, p, "a3\na4\n")
 	h.waitForTexts([]string{"a1", "a2", "a3", "a4"})
+	appendFileT(t, p, "a5\n")
+	h.waitForTexts([]string{"a1", "a2", "a3", "a4", "a5"})
 	events := h.col.snapshot()
+	wantTexts := []string{"a1", "a2", "a3", "a4", "a5"}
 	for i, event := range events {
 		wantLine := uint64(i + 1)
-		if event.Source.LineNumber != wantLine || event.Source.NextLineNumber != wantLine+1 {
+		if string(event.Bytes) != wantTexts[i] ||
+			event.Source.LineNumber != wantLine ||
+			event.Source.NextLineNumber != wantLine+1 {
 			t.Fatalf(
-				"event %d source lines = (%d, %d), want (%d, %d)",
+				"event %d = %q source lines (%d, %d), want %q at (%d, %d)",
 				i,
+				event.Bytes,
 				event.Source.LineNumber,
 				event.Source.NextLineNumber,
+				wantTexts[i],
 				wantLine,
 				wantLine+1,
 			)
@@ -203,16 +279,25 @@ func TestManagerStartAtEnd(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	p := filepath.Join(dir, "app.log")
-	writeFileT(t, p, "old1\nold2\n")
+	const initial = "old1\nold2\n"
+	writeFileT(t, p, initial)
+	identity, err := NewFileIdentity(p, 0)
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
 
 	h := startManager(t, Config{
 		InputID: "in", Include: []string{filepath.Join(dir, "*.log")},
 		StartAt: StartAtEnd,
 	}, newStore(t))
 
-	// Give the manager time to discover and seek to end; pre-existing content
-	// must not be emitted.
-	waitFor(t, "file discovered", func() bool { return h.mgr.Health().DiscoveredSources == 1 })
+	// DiscoveredSources is published before resolveStart snapshots the initial
+	// EOF. Wait for the exact discovery checkpoint so the append is
+	// unambiguously part of the monitored stream.
+	waitFor(t, "start-at-end discovery checkpoint", func() bool {
+		checkpoint, ok, getErr := h.store.Get(identity)
+		return getErr == nil && ok && checkpoint.Offset == uint64(len(initial))
+	})
 	appendFileT(t, p, "new1\n")
 	h.waitForTexts([]string{"new1"})
 	event := h.col.snapshot()[0]
@@ -588,6 +673,164 @@ func TestManagerCopyTruncateRewriteLargerBetweenPolls(t *testing.T) {
 	}
 }
 
+func newTrackedTailerForTest(
+	t testing.TB,
+	path string,
+	offset uint64,
+	nextLineNumber uint64,
+) (*tailer, FileIdentity) {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open input: %v", err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatalf("stat input: %v", err)
+	}
+	if offset > uint64(info.Size()) {
+		t.Fatalf("tailer offset %d exceeds file size %d", offset, info.Size())
+	}
+	identity, err := identityFor(file, info, defaultFingerprintBytes)
+	if err != nil {
+		t.Fatalf("identify input: %v", err)
+	}
+	store := newStore(t)
+	t.Cleanup(func() { _ = store.Close() })
+	manager := &manager{
+		checkpoints: store,
+		fpBytes:     defaultFingerprintBytes,
+		events:      make(chan RawEvent, 8),
+	}
+	tracked := &tailer{
+		m:               manager,
+		f:               file,
+		id:              identity,
+		offset:          offset,
+		nextLineNumber:  nextLineNumber,
+		lineCursorKnown: true,
+		lastSize:        uint64(info.Size()),
+		lastSizeChange:  time.Now(),
+	}
+	tracked.path.Store(&path)
+	if err := tracked.refreshGuard(); err != nil {
+		t.Fatalf("refresh guard: %v", err)
+	}
+	return tracked, identity
+}
+
+func TestTailerGuardFingerprintReusesScratchWithoutAllocating(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	content := repeatByte('G', defaultFingerprintBytes)
+	writeFileT(t, path, content)
+	tracked, _ := newTrackedTailerForTest(t, path, uint64(len(content)), 2)
+	want := tracked.guardFingerprint
+
+	allocations := testing.AllocsPerRun(50, func() {
+		got, err := tracked.readGuardFingerprint()
+		if err != nil {
+			panic(err)
+		}
+		if got != want {
+			panic("guard fingerprint changed")
+		}
+	})
+	if allocations != 0 {
+		t.Fatalf("steady guard fingerprint allocated %.0f objects, want 0", allocations)
+	}
+}
+
+func TestTailerSameSizeCopyTruncateResetsInactivityClock(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	const original = "old\n"
+	writeFileT(t, path, original)
+
+	before := time.Now().Add(-time.Hour)
+	tracked, identity := newTrackedTailerForTest(t, path, uint64(len(original)), 2)
+	tracked.lastSizeChange = before
+
+	// Rewrite the same inode to the same byte length. Size-only activity
+	// tracking cannot distinguish this from an idle file, but the guard can.
+	rewriteStarted := time.Now()
+	writeFileT(t, path, "new\n")
+	size, trackable := tracked.trackGrowthAndTruncate()
+	if !trackable {
+		t.Fatal("same-size replacement was not trackable")
+	}
+	if size != uint64(len(original)) {
+		t.Fatalf("same-size replacement size = %d, want %d", size, len(original))
+	}
+	if tracked.offset != 0 || tracked.id.Generation != identity.Generation+1 {
+		t.Fatalf(
+			"same-size replacement state = offset %d generation %d, want 0/%d",
+			tracked.offset,
+			tracked.id.Generation,
+			identity.Generation+1,
+		)
+	}
+	if tracked.lastSizeChange.Before(rewriteStarted) {
+		t.Fatalf(
+			"same-size replacement inactivity clock = %v, before rewrite %v",
+			tracked.lastSizeChange,
+			rewriteStarted,
+		)
+	}
+}
+
+func TestTailerDrainReframesAfterAppendRacesWithEOFStat(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	const original = "old\n"
+	const appended = "late\n"
+	writeFileT(t, path, original)
+	tracked, _ := newTrackedTailerForTest(t, path, uint64(len(original)), 2)
+
+	observedSize, trackable := tracked.trackGrowthAndTruncate()
+	if !trackable || observedSize != tracked.offset {
+		t.Fatalf(
+			"initial tracking = size %d offset %d trackable %t, want clean EOF",
+			observedSize,
+			tracked.offset,
+			trackable,
+		)
+	}
+	if !tracked.canWaitAtCleanBoundary(observedSize) {
+		t.Fatal("clean non-draining EOF did not select idle wait")
+	}
+
+	// Model an append to a renamed/unlinked but still-open file after Stat,
+	// followed by the manager's drain request for the departed path.
+	appendFileT(t, path, appended)
+	tracked.requestDrain()
+	if tracked.canWaitAtCleanBoundary(observedSize) {
+		t.Fatal("draining tailer trusted a stale EOF observation")
+	}
+	framer, err := tracked.reframe()
+	if err != nil {
+		t.Fatalf("reframe after stale EOF: %v", err)
+	}
+	pending, continued := tracked.drain(context.Background(), framer)
+	if !continued || pending != 0 {
+		t.Fatalf("drain result = pending %d continued %t, want 0/true", pending, continued)
+	}
+	select {
+	case event := <-tracked.m.events:
+		if string(event.Bytes) != "late" ||
+			event.Source.StartOffset != uint64(len(original)) ||
+			event.Source.EndOffset != uint64(len(original)+len(appended)) ||
+			event.Source.LineNumber != 2 ||
+			event.Source.NextLineNumber != 3 {
+			t.Fatalf("late drain event = %+v", event)
+		}
+	default:
+		t.Fatal("late append was not drained")
+	}
+}
+
 func TestManagerDeletionDrainsAndStops(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -797,6 +1040,35 @@ func TestManagerExcludeGlobs(t *testing.T) {
 	waitFor(t, "one discovered source", func() bool { return h.mgr.Health().DiscoveredSources == 1 })
 	if got := h.col.texts(); len(got) != 1 {
 		t.Fatalf("excluded file leaked events: %v", got)
+	}
+}
+
+func TestManagerMatchPathsSortsAndDeduplicatesIncludeGlobs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	first := filepath.Join(dir, "a.log")
+	second := filepath.Join(dir, "b.log")
+	excluded := filepath.Join(dir, "skip.log")
+	writeFileT(t, second, "")
+	writeFileT(t, excluded, "")
+	writeFileT(t, first, "")
+
+	manager := &manager{cfg: Config{
+		Include: []string{
+			filepath.Join(dir, "*.log"),
+			filepath.Join(dir, "a.*"),
+		},
+		Exclude: []string{"skip.*"},
+	}}
+	got := manager.matchPaths()
+	want := []string{first, second}
+	if len(got) != len(want) {
+		t.Fatalf("matched paths = %v, want %v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("matched paths = %v, want %v", got, want)
+		}
 	}
 }
 
