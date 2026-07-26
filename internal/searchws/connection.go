@@ -38,7 +38,8 @@ type connection struct {
 
 	// Only the reader goroutine mutates this map. Target publishers synchronize
 	// delivery through each subscription and never inspect the map.
-	subscriptions map[string]*subscription
+	subscriptions       map[string]*subscription
+	usedSubscriptionIDs map[string]struct{}
 }
 
 type requestedSubscription struct {
@@ -50,13 +51,15 @@ type requestedSubscription struct {
 	subscription     *subscription
 	initialFrames    [][]byte
 	replayFollows    bool
+	establishEpoch   bool
 	earliest, latest uint64
 }
 
 type commandFailure struct {
-	code       opensplunkv1.SearchWebSocketProtocolErrorCode
-	message    string
-	violations []*opensplunkv1.FieldViolation
+	code                opensplunkv1.SearchWebSocketProtocolErrorCode
+	message             string
+	violations          []*opensplunkv1.FieldViolation
+	connectionWillClose bool
 }
 
 type queueResult uint8
@@ -182,7 +185,8 @@ func newConnection(service *Service, socket *websocket.Conn) *connection {
 	return &connection{
 		service: service, socket: socket, ctx: ctx, cancel: cancel,
 		wake: make(chan struct{}, 1), writerDone: make(chan struct{}),
-		subscriptions: make(map[string]*subscription),
+		subscriptions:       make(map[string]*subscription),
+		usedSubscriptionIDs: make(map[string]struct{}),
 	}
 }
 
@@ -235,8 +239,14 @@ func (connection *connection) readLoop() bool {
 			continue
 		}
 		if failure := connection.handleCommand(requestID, &command); failure != nil {
-			if !connection.sendProtocolError(requestID, failure.code, failure.message, failure.violations, false) {
+			if !connection.sendProtocolError(
+				requestID, failure.code, failure.message, failure.violations, failure.connectionWillClose,
+			) {
 				return false
+			}
+			if failure.connectionWillClose {
+				connection.initiateClose(websocket.CloseTryAgainLater, failure.message)
+				return true
 			}
 		}
 	}
@@ -302,6 +312,9 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		if _, exists := connection.subscriptions[id]; exists {
 			return invalidCommand("subscription_id already exists", fieldViolation(path+".subscription_id", "ALREADY_EXISTS", "subscription_id is already active"))
 		}
+		if _, used := connection.usedSubscriptionIDs[id]; used {
+			return invalidCommand("subscription_id was already used", fieldViolation(path+".subscription_id", "ALREADY_EXISTS", "subscription_id cannot be reused on one connection"))
+		}
 		seenIDs[id] = struct{}{}
 		key, failure := parseTarget(input.GetTarget(), path+".target")
 		if failure != nil {
@@ -324,6 +337,13 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 			}
 		}
 		requests = append(requests, requestedSubscription{id: id, key: key, afterSequence: input.GetAfterSequence(), previewRows: previewRows})
+	}
+	if len(connection.usedSubscriptionIDs)+len(requests) > maximumSubscriptionIDsPerConnection {
+		return &commandFailure{
+			code:                opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS,
+			message:             "connection subscription identity limit exceeded; reconnect before using new subscription IDs",
+			connectionWillClose: true,
+		}
 	}
 
 	for index := range requests {
@@ -457,15 +477,34 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		var reason opensplunkv1.ResynchronizationReason
 		now := canonicalTime(connection.service.config.now())
 		overdueTerminal := request.target.terminal && !request.target.refreshAt.IsZero() && !request.target.refreshAt.After(now)
+		requiresResynchronization := request.target.currentIncomplete || overdueTerminal
 		if request.afterSequence == 0 {
-			if request.target.currentIncomplete || overdueTerminal || !request.target.currentEventsContinuousLocked() {
+			if requiresResynchronization || !request.target.currentEventsContinuousLocked() {
 				reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
 			} else {
 				request.initialFrames = request.target.currentEventsLocked()
 			}
 		} else if !request.target.epochEstablished {
-			reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SERVER_RESTARTED
-		} else if request.target.currentIncomplete || overdueTerminal {
+			if request.afterSequence < request.target.epochStart || request.afterSequence > request.latest {
+				reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SERVER_RESTARTED
+			} else if requiresResynchronization {
+				reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
+			} else {
+				if request.afterSequence < request.latest {
+					var continuous bool
+					request.initialFrames, continuous = request.target.replayAfterLocked(request.afterSequence)
+					if !continuous {
+						reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
+					} else {
+						request.replayFollows = len(request.initialFrames) != 0
+					}
+				}
+				// A boundary inside the random fresh-epoch range can only have
+				// come from this server's preceding restart recovery. Once its
+				// retained suffix is proven continuous, establish ordinary replay.
+				request.establishEpoch = reason == opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_UNSPECIFIED
+			}
+		} else if requiresResynchronization {
 			reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
 		} else if request.afterSequence > request.latest ||
 			(request.target.epochStart > 1 && request.afterSequence < request.target.epochStart) {
@@ -589,7 +628,7 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		previousPreviewRows := request.target.maximumPreviewRowsLocked()
 		request.target.removePendingPreviewLocked(subscription)
 		request.target.addSubscriptionLocked(subscription)
-		if request.afterSequence == 0 {
+		if request.afterSequence == 0 || request.establishEpoch {
 			request.target.epochEstablished = true
 		}
 		if request.target.maximumPreviewRowsLocked() != previousPreviewRows && request.target.polling {
@@ -598,6 +637,7 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		request.target.startPollingLocked()
 		request.target.mu.Unlock()
 		connection.subscriptions[request.id] = subscription
+		connection.usedSubscriptionIDs[request.id] = struct{}{}
 	}
 	refreshCommitted = true
 	return nil
@@ -1014,7 +1054,9 @@ func (connection *connection) hardClose() {
 		connection.signalWriterLocked()
 		connection.queueMu.Unlock()
 		connection.service.releaseQueuedBytes(queuedBytes)
-		_ = connection.socket.UnderlyingConn().Close()
+		if connection.socket != nil {
+			_ = connection.socket.UnderlyingConn().Close()
+		}
 	})
 }
 

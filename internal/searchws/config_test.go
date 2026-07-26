@@ -60,6 +60,7 @@ func TestNormalizeConfigDefaultsAndInjectedFunctions(t *testing.T) {
 		normalized.maximumReplayBytes != defaultMaximumReplayBytes ||
 		normalized.maximumTotalReplayBytes != defaultMaximumTotalReplayBytes ||
 		normalized.pollInterval != defaultPollInterval ||
+		normalized.tombstonePollInterval != defaultTombstonePollInterval ||
 		normalized.writeTimeout != defaultWriteTimeout ||
 		normalized.pongTimeout != defaultPongTimeout ||
 		normalized.pingInterval != defaultPingInterval {
@@ -342,6 +343,11 @@ func TestNormalizeConfigDurationBoundsAndPingPongRelationship(t *testing.T) {
 		{name: "poll/maximum", mutate: func(config *Config) { config.PollInterval = maximumPollInterval }, read: func(config normalizedConfig) time.Duration { return config.pollInterval }, want: maximumPollInterval},
 		{name: "poll/below minimum", mutate: func(config *Config) { config.PollInterval = minimumPollInterval - time.Nanosecond }, wantErr: true},
 		{name: "poll/over maximum", mutate: func(config *Config) { config.PollInterval = maximumPollInterval + time.Nanosecond }, wantErr: true},
+		{name: "tombstone poll/zero uses default", mutate: func(config *Config) { config.TombstonePollInterval = 0 }, read: func(config normalizedConfig) time.Duration { return config.tombstonePollInterval }, want: defaultTombstonePollInterval},
+		{name: "tombstone poll/minimum", mutate: func(config *Config) { config.TombstonePollInterval = minimumPollInterval }, read: func(config normalizedConfig) time.Duration { return config.tombstonePollInterval }, want: minimumPollInterval},
+		{name: "tombstone poll/maximum", mutate: func(config *Config) { config.TombstonePollInterval = maximumPollInterval }, read: func(config normalizedConfig) time.Duration { return config.tombstonePollInterval }, want: maximumPollInterval},
+		{name: "tombstone poll/below minimum", mutate: func(config *Config) { config.TombstonePollInterval = minimumPollInterval - time.Nanosecond }, wantErr: true},
+		{name: "tombstone poll/over maximum", mutate: func(config *Config) { config.TombstonePollInterval = maximumPollInterval + time.Nanosecond }, wantErr: true},
 
 		{name: "write/zero uses default", mutate: func(config *Config) { config.WriteTimeout = 0 }, read: func(config normalizedConfig) time.Duration { return config.writeTimeout }, want: defaultWriteTimeout},
 		{name: "write/explicit default", mutate: func(config *Config) { config.WriteTimeout = defaultWriteTimeout }, read: func(config normalizedConfig) time.Duration { return config.writeTimeout }, want: defaultWriteTimeout},

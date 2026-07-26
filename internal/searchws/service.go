@@ -262,6 +262,20 @@ func (service *Service) releaseResolvedTarget(target *targetState) {
 	}
 }
 
+func (service *Service) retireTarget(target *targetState) {
+	if target == nil {
+		return
+	}
+	service.mu.Lock()
+	if service.targets[target.key] != target {
+		service.mu.Unlock()
+		return
+	}
+	delete(service.targets, target.key)
+	service.mu.Unlock()
+	target.retire()
+}
+
 func (service *Service) unavailable(response http.ResponseWriter) {
 	http.Error(response, "search websocket is unavailable", http.StatusServiceUnavailable)
 }

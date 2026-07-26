@@ -17,13 +17,14 @@ import (
 )
 
 type targetProjection struct {
-	version            uint64
-	incarnation        time.Time
-	previewRows        uint32
-	invalidatesPreview bool
-	terminal           bool
-	refreshAt          time.Time
-	events             []*opensplunkv1.SearchWebSocketEvent
+	version                uint64
+	incarnation            time.Time
+	previewRows            uint32
+	invalidatesPreview     bool
+	terminal               bool
+	refreshAt              time.Time
+	revalidateUntilRemoved bool
+	events                 []*opensplunkv1.SearchWebSocketEvent
 }
 
 func projectSearch(job searchjobs.Job, now time.Time) (targetProjection, error) {
@@ -118,15 +119,13 @@ func projectSearchWithPreview(ctx context.Context, job searchjobs.Job, preview *
 			SearchTerminal: terminalEvent,
 		}})
 	}
-	refreshAt := time.Time{}
-	if terminal && !job.ExpiresAt.IsZero() && job.ExpiresAt.After(now) {
-		refreshAt = canonicalTime(job.ExpiresAt)
-	}
+	refreshAt, revalidateUntilRemoved := terminalRefreshSchedule(terminal, job.ExpiresAt, now)
 	invalidatesPreview := job.State == searchjobs.StateFailed ||
 		job.State == searchjobs.StateCanceled || job.State == searchjobs.StateExpired
 	return targetProjection{
 		version: job.Version, incarnation: canonicalTime(job.CreatedAt), previewRows: requestedPreviewRows,
-		invalidatesPreview: invalidatesPreview, terminal: terminal, refreshAt: refreshAt, events: events,
+		invalidatesPreview: invalidatesPreview, terminal: terminal, refreshAt: refreshAt,
+		revalidateUntilRemoved: revalidateUntilRemoved, events: events,
 	}, nil
 }
 
@@ -184,11 +183,21 @@ func projectExport(job exportjobs.Job, now time.Time) (targetProjection, error) 
 			ExportTerminal: terminalEvent,
 		}})
 	}
-	refreshAt := time.Time{}
-	if terminal && !job.ExpiresAt.IsZero() && job.ExpiresAt.After(now) {
-		refreshAt = canonicalTime(job.ExpiresAt)
+	refreshAt, revalidateUntilRemoved := terminalRefreshSchedule(terminal, job.ExpiresAt, now)
+	return targetProjection{
+		version: job.Version, incarnation: canonicalTime(job.CreatedAt), terminal: terminal,
+		refreshAt: refreshAt, revalidateUntilRemoved: revalidateUntilRemoved, events: events,
+	}, nil
+}
+
+func terminalRefreshSchedule(terminal bool, expiresAt, now time.Time) (time.Time, bool) {
+	if !terminal || expiresAt.IsZero() {
+		return time.Time{}, false
 	}
-	return targetProjection{version: job.Version, incarnation: canonicalTime(job.CreatedAt), terminal: terminal, refreshAt: refreshAt, events: events}, nil
+	if expiresAt.After(now) {
+		return canonicalTime(expiresAt), false
+	}
+	return time.Time{}, true
 }
 
 func exportProgressToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportProgress, error) {

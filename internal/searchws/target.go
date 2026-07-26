@@ -75,36 +75,37 @@ type targetState struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 
-	refreshMu         sync.Mutex
-	publishMu         sync.Mutex
-	mu                sync.Mutex
-	retired           bool
-	initialized       bool
-	version           uint64
-	incarnation       time.Time
-	projectedPreviews uint32
-	terminal          bool
-	refreshAt         time.Time
-	epochStart        uint64
-	latest            uint64
-	fingerprints      map[eventCategory][sha256.Size]byte
-	expected          map[eventCategory]struct{}
-	current           map[eventCategory]*storedEvent
-	replay            []*storedEvent
-	retained          map[uint64]*storedEvent
-	retainedBytes     uint64
-	currentIncomplete bool
-	subscriptions     map[*subscription]struct{}
-	pendingPreviews   map[*subscription]uint32
-	previewDemand     []uint32
-	previewMaximum    uint32
-	subscriberCount   atomic.Int32
-	resolverCount     atomic.Int32
-	lastAccess        atomic.Uint64
-	epochEstablished  bool
-	polling           bool
-	pollGeneration    uint64
-	pollCancel        context.CancelFunc
+	refreshMu              sync.Mutex
+	publishMu              sync.Mutex
+	mu                     sync.Mutex
+	retired                bool
+	initialized            bool
+	version                uint64
+	incarnation            time.Time
+	projectedPreviews      uint32
+	terminal               bool
+	refreshAt              time.Time
+	revalidateUntilRemoved bool
+	epochStart             uint64
+	latest                 uint64
+	fingerprints           map[eventCategory][sha256.Size]byte
+	expected               map[eventCategory]struct{}
+	current                map[eventCategory]*storedEvent
+	replay                 []*storedEvent
+	retained               map[uint64]*storedEvent
+	retainedBytes          uint64
+	currentIncomplete      bool
+	subscriptions          map[*subscription]struct{}
+	pendingPreviews        map[*subscription]uint32
+	previewDemand          []uint32
+	previewMaximum         uint32
+	subscriberCount        atomic.Int32
+	resolverCount          atomic.Int32
+	lastAccess             atomic.Uint64
+	epochEstablished       bool
+	polling                bool
+	pollGeneration         uint64
+	pollCancel             context.CancelFunc
 }
 
 type targetLoad struct {
@@ -446,6 +447,9 @@ func (target *targetState) nextScheduledPollDelay(immediateOverdue bool) time.Du
 	if !target.terminal {
 		return target.service.config.pollInterval
 	}
+	if target.revalidateUntilRemoved {
+		return target.service.config.tombstonePollInterval
+	}
 	now := canonicalTime(target.service.config.now())
 	if target.refreshAt.IsZero() {
 		return -1
@@ -491,7 +495,7 @@ func (target *targetState) notifyPollingFailure() {
 func (target *targetState) startPollingLocked() {
 	previewRefresh := target.projectedPreviews != target.maximumPreviewRowsLocked()
 	if target.retired || target.polling || len(target.subscriptions) == 0 ||
-		(target.terminal && target.refreshAt.IsZero() && !previewRefresh) {
+		(target.terminal && target.refreshAt.IsZero() && !target.revalidateUntilRemoved && !previewRefresh) {
 		return
 	}
 	ctx, cancel := context.WithCancel(target.ctx)
@@ -606,7 +610,8 @@ func (target *targetState) refreshForSubscription(
 	// full broadcast to every existing watcher.
 	exclusiveBootstrap := currentSnapshot && len(target.subscriptions) == 0
 	forceFull := previewRows != target.projectedPreviews ||
-		(exclusiveBootstrap && !target.currentEventsContinuousLocked())
+		(exclusiveBootstrap && !target.currentEventsContinuousLocked()) ||
+		target.revalidateUntilRemoved
 	if !forceFull {
 		terminal := target.terminal
 		target.mu.Unlock()
@@ -621,6 +626,7 @@ func (target *targetState) refreshForSubscription(
 	defer release()
 	projection, err := target.service.loadProjectionWithPermit(ctx, target.key, previewRows)
 	if err != nil {
+		target.retireMissingExpiredTombstone(err)
 		return false, err
 	}
 	return target.applyProjection(projection, exclusiveBootstrap)
@@ -639,9 +645,24 @@ func (target *targetState) refreshCurrentProjection(ctx context.Context) (bool, 
 	defer release()
 	projection, err := target.service.loadProjectionWithPermit(ctx, target.key, previewRows)
 	if err != nil {
+		target.retireMissingExpiredTombstone(err)
 		return false, err
 	}
 	return target.applyProjection(projection, false)
+}
+
+func (target *targetState) retireMissingExpiredTombstone(err error) {
+	if !errors.Is(err, errTargetNotFound) {
+		return
+	}
+	now := canonicalTime(target.service.config.now())
+	target.mu.Lock()
+	expired := target.revalidateUntilRemoved ||
+		(target.terminal && !target.refreshAt.IsZero() && !target.refreshAt.After(now))
+	target.mu.Unlock()
+	if expired {
+		target.service.retireTarget(target)
+	}
 }
 
 func (target *targetState) currentEventsContinuousLocked() bool {
@@ -832,6 +853,13 @@ func (target *targetState) applyProjection(projection targetProjection, initial 
 		target.mu.Unlock()
 		return false, errTargetRetired
 	}
+	if authoritativePreview || projection.invalidatesPreview {
+		// Expiration/failure/cancellation makes every older row-bearing preview
+		// unauthorized disposable state. Purging those frames deliberately
+		// creates a replay gap so an old checkpoint receives resynchronization,
+		// never expired result cells followed by a later clearing tombstone.
+		target.purgeCategoryLocked(eventCategoryPreview)
+	}
 	for category := range target.expected {
 		if _, exists := expected[category]; !exists {
 			target.removeCurrentLocked(category)
@@ -864,6 +892,7 @@ func (target *targetState) applyProjection(projection targetProjection, initial 
 	target.projectedPreviews = projection.previewRows
 	target.terminal = projection.terminal
 	target.refreshAt = projection.refreshAt
+	target.revalidateUntilRemoved = projection.revalidateUntilRemoved
 	subscribers := make([]*subscription, 0, len(target.subscriptions))
 	for subscription := range target.subscriptions {
 		subscribers = append(subscribers, subscription)
@@ -1162,6 +1191,26 @@ func (target *targetState) removeCurrentLocked(category eventCategory) {
 	}
 }
 
+func (target *targetState) purgeCategoryLocked(category eventCategory) {
+	target.removeCurrentLocked(category)
+	filtered := target.replay[:0]
+	for _, event := range target.replay {
+		if event.category == category {
+			event.current = false
+			event.inReplay = false
+			continue
+		}
+		filtered = append(filtered, event)
+	}
+	clear(target.replay[len(filtered):])
+	target.replay = filtered
+	for _, event := range target.retained {
+		if event.category == category {
+			target.releaseEventLocked(event)
+		}
+	}
+}
+
 func (target *targetState) dropOldestUnpinnedReplayLocked() bool {
 	for index, event := range target.replay {
 		if event.current {
@@ -1255,15 +1304,23 @@ func (target *targetState) isRetired() bool {
 
 func (target *targetState) retire() {
 	target.cancel()
+	var connections map[*connection]struct{}
 	target.publishMu.Lock()
 	target.mu.Lock()
 	if !target.retired {
 		target.retired = true
 		target.stopPollingLocked()
 		target.clearProjectionLocked()
+		connections = make(map[*connection]struct{}, len(target.subscriptions))
+		for subscription := range target.subscriptions {
+			connections[subscription.connection] = struct{}{}
+		}
 	}
 	target.mu.Unlock()
 	target.publishMu.Unlock()
+	for connection := range connections {
+		connection.hardClose()
+	}
 }
 
 func categoryForEvent(event *opensplunkv1.SearchWebSocketEvent) (eventCategory, error) {

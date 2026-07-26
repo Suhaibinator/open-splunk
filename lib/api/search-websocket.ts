@@ -1,10 +1,12 @@
 import {
   type JobTarget,
   type ResynchronizationRequired,
+  ResynchronizationReason,
   SearchWebSocketCommand,
   type SearchWebSocketEvent,
   SearchWebSocketEvent as SearchWebSocketEventCodec,
   type SearchWebSocketProtocolError,
+  SearchWebSocketProtocolErrorCode,
 } from "@/gen/ts/open_splunk/v1/search_ws";
 
 export const DEFAULT_SEARCH_WEBSOCKET_PATH = "/api/v1/search/ws";
@@ -12,6 +14,7 @@ export const DEFAULT_SEARCH_WEBSOCKET_PATH = "/api/v1/search/ws";
 const SOCKET_CONNECTING = 0;
 const SOCKET_OPEN = 1;
 const MAXIMUM_UINT64 = (1n << 64n) - 1n;
+const APPLICATION_STABILITY_DELAY_MS = 1_000;
 
 export type SearchWebSocketConnectionState =
   | "idle"
@@ -43,9 +46,9 @@ export interface SearchWebSocketResynchronizationNotice {
   readonly targetKey: string;
   readonly lastSequence: bigint;
   /**
-   * The client commits latestSequence after every recovery listener resolves.
-   * Call this after restoring authoritative state only when that state establishes
-   * a newer explicit sequence boundary.
+   * The client keeps the target suspended until a recovery listener explicitly
+   * acknowledges a safe boundary. Call this only after restoring authoritative
+   * state. Omission preserves the prior checkpoint and retries recovery.
    */
   acknowledge(sequence?: bigint): void;
 }
@@ -172,10 +175,25 @@ function isSubscriptionScopedEvent(event: SearchWebSocketEvent): boolean {
   }
 }
 
+function isUnknownTargetEvent(event: SearchWebSocketEvent): boolean {
+  return event.payload === undefined && event.sequence > 0n;
+}
+
+function isTargetEvent(event: SearchWebSocketEvent): boolean {
+  return isSubscriptionScopedEvent(event) || isUnknownTargetEvent(event);
+}
+
 function validateEventEnvelope(event: SearchWebSocketEvent): string | undefined {
   const payload = event.payload?.$case;
   if (payload === undefined) {
-    return "Search WebSocket event payload is missing or unsupported";
+    // ts-proto intentionally discards unknown oneof fields. Preserve protocol
+    // forward compatibility by treating a positively sequenced, fully routed
+    // unknown variant as target-scoped opaque progress. Sequence-zero unknown
+    // controls are likewise safe for generic observers to ignore.
+    if (!isUnknownTargetEvent(event)) return undefined;
+    return event.subscriptionId && event.target
+      ? undefined
+      : "Search WebSocket unknown target event is missing routing metadata";
   }
   if (isSubscriptionScopedEvent(event)) {
     if (payload === "resynchronizationRequired") {
@@ -310,6 +328,7 @@ export class SearchWebSocketClient {
   private connectionSocket?: WebSocket;
   private rejectConnection?: (reason?: unknown) => void;
   private reconnectTimer?: ReturnType<typeof globalThis.setTimeout>;
+  private applicationStabilityTimer?: ReturnType<typeof globalThis.setTimeout>;
   private reconnectAttempt = 0;
   private intentionallyClosed = false;
   private identifierCounter = 0n;
@@ -425,6 +444,7 @@ export class SearchWebSocketClient {
         if (this.socket !== socket) {
           return;
         }
+        this.clearApplicationStabilityTimer();
         this.socket = undefined;
         this.connectionPromise = undefined;
         if (this.connectionSocket === socket && this.rejectConnection) {
@@ -445,6 +465,7 @@ export class SearchWebSocketClient {
   public disconnect(code = 1000, reason = "Client disconnected"): void {
     this.intentionallyClosed = true;
     this.clearReconnectTimer();
+    this.clearApplicationStabilityTimer();
     const socket = this.socket;
     this.socket = undefined;
     this.connectionPromise = undefined;
@@ -640,9 +661,8 @@ export class SearchWebSocketClient {
       this.restartForReplay(sourceSocket);
       return;
     }
-    this.reconcileSubscriptionCommand(event);
     let routedSubscription: ActiveSubscription | undefined;
-    if (isSubscriptionScopedEvent(event)) {
+    if (isTargetEvent(event)) {
       const subscriptionId = event.subscriptionId;
       if (!subscriptionId) {
         this.emitError(new Error("Search WebSocket target event is missing its subscription ID"));
@@ -669,6 +689,7 @@ export class SearchWebSocketClient {
       : undefined;
 
     if (target && event.sequence > 0n && !resynchronization) {
+      this.clearApplicationStabilityTimer();
       const targetKey = searchWebSocketTargetKey(target);
       if (this.suspendedTargets.has(targetKey)) {
         return;
@@ -711,6 +732,7 @@ export class SearchWebSocketClient {
       if (event.sequence > current) {
         this.lastSequences.set(targetKey, event.sequence);
       }
+      this.markApplicationStable();
     } else {
       if (!await this.emitEvent(event)) {
         this.restartForReplay(sourceSocket);
@@ -724,6 +746,7 @@ export class SearchWebSocketClient {
       }
     }
 
+    this.reconcileSubscriptionCommand(event);
     if (event.payload?.$case === "protocolError") {
       for (const listener of this.protocolErrorListeners) {
         try {
@@ -774,6 +797,19 @@ export class SearchWebSocketClient {
     const normalizedTarget = cloneTarget(target);
     const targetKey = searchWebSocketTargetKey(normalizedTarget);
     const lastSequence = this.lastSequences.get(targetKey) ?? 0n;
+    this.clearApplicationStabilityTimer();
+    if (
+      required.reason !== ResynchronizationReason.RESYNCHRONIZATION_REASON_SERVER_RESTARTED
+      && required.latestSequence < lastSequence
+    ) {
+      this.emitError(
+        new Error(
+          `Search WebSocket resynchronization for ${targetKey} cannot regress checkpoint ${lastSequence.toString()} to ${required.latestSequence.toString()}`,
+        ),
+      );
+      this.restartForReplay(sourceSocket);
+      return;
+    }
     this.suspendedTargets.add(targetKey);
     let acknowledgedSequence: bigint | undefined;
     const acknowledge = (sequence = required.latestSequence) => {
@@ -800,6 +836,7 @@ export class SearchWebSocketClient {
           `Search WebSocket target ${targetKey} requires authoritative resynchronization; register an onResynchronizationRequired handler`,
         ),
       );
+      this.restartForReplay(sourceSocket);
       return;
     }
 
@@ -831,9 +868,15 @@ export class SearchWebSocketClient {
       this.restartForReplay(sourceSocket);
       return;
     }
+    if (acknowledgedSequence === undefined) {
+      this.emitError(
+        new Error(`Search WebSocket recovery listener did not acknowledge ${targetKey}`),
+      );
+      this.restartForReplay(sourceSocket);
+      return;
+    }
 
-    const checkpoint = acknowledgedSequence ?? required.latestSequence;
-    this.commitResynchronization(normalizedTarget, checkpoint);
+    this.commitResynchronization(normalizedTarget, acknowledgedSequence);
   }
 
   /** A server restart may establish a new sequence epoch, so recovery can move this boundary backward. */
@@ -842,6 +885,7 @@ export class SearchWebSocketClient {
     const targetKey = searchWebSocketTargetKey(target);
     this.lastSequences.set(targetKey, sequence);
     this.suspendedTargets.delete(targetKey);
+    this.markApplicationStable();
   }
 
   private resolveEventTarget(event: SearchWebSocketEvent): JobTarget | undefined {
@@ -929,28 +973,36 @@ export class SearchWebSocketClient {
         this.pendingSubscribeRequests.set(acknowledged.requestId, remaining);
       }
       if (this.pendingSubscribeRequests.size === 0) {
-        // An open TCP/WebSocket handshake is not enough to declare a reconnect
-        // stable. Preserve exponential backoff until every active subscription
-        // has been accepted by the application protocol.
-        this.reconnectAttempt = 0;
+        this.scheduleApplicationStabilityReset();
       }
       return;
     }
     if (event.payload?.$case !== "protocolError") {
       return;
     }
-    const rejected = this.pendingSubscribeRequests.get(event.payload.value.requestId);
+    const protocolError = event.payload.value;
+    const rejected = this.pendingSubscribeRequests.get(protocolError.requestId);
     if (!rejected) {
       return;
     }
-    this.pendingSubscribeRequests.delete(event.payload.value.requestId);
+    this.pendingSubscribeRequests.delete(protocolError.requestId);
+    if (
+      protocolError.connectionWillClose
+      && protocolError.code
+        === SearchWebSocketProtocolErrorCode.SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS
+    ) {
+      // The server exhausted its bounded connection-lifetime identity set.
+      // Preserve the rejected local subscription; the required close rotates
+      // the socket and retries it against a fresh identity set.
+      return;
+    }
     for (const subscription of rejected) {
       if (this.subscriptions.get(subscription.subscriptionId) === subscription) {
         this.subscriptions.delete(subscription.subscriptionId);
       }
     }
     if (this.pendingSubscribeRequests.size === 0) {
-      this.reconnectAttempt = 0;
+      this.markApplicationStable();
     }
   }
 
@@ -965,6 +1017,7 @@ export class SearchWebSocketClient {
     this.connectionSocket = undefined;
     this.rejectConnection = undefined;
     this.pendingSubscribeRequests.clear();
+    this.clearApplicationStabilityTimer();
     try {
       socket.close(4000, "Sequence gap; replay required");
     } catch (error) {
@@ -994,6 +1047,32 @@ export class SearchWebSocketClient {
     if (this.reconnectTimer !== undefined) {
       globalThis.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
+    }
+  }
+
+  private scheduleApplicationStabilityReset(): void {
+    this.clearApplicationStabilityTimer();
+    const socket = this.socket;
+    if (!socket || socket.readyState !== SOCKET_OPEN) {
+      return;
+    }
+    this.applicationStabilityTimer = globalThis.setTimeout(() => {
+      this.applicationStabilityTimer = undefined;
+      if (this.socket === socket && socket.readyState === SOCKET_OPEN) {
+        this.reconnectAttempt = 0;
+      }
+    }, APPLICATION_STABILITY_DELAY_MS);
+  }
+
+  private markApplicationStable(): void {
+    this.clearApplicationStabilityTimer();
+    this.reconnectAttempt = 0;
+  }
+
+  private clearApplicationStabilityTimer(): void {
+    if (this.applicationStabilityTimer !== undefined) {
+      globalThis.clearTimeout(this.applicationStabilityTimer);
+      this.applicationStabilityTimer = undefined;
     }
   }
 

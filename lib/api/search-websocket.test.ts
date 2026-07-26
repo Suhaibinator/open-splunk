@@ -7,6 +7,7 @@ import {
   SearchWebSocketCommand,
   type SearchWebSocketEvent,
   SearchWebSocketEvent as SearchWebSocketEventCodec,
+  SearchWebSocketProtocolErrorCode,
 } from "../../gen/ts/open_splunk/v1/search_ws";
 import {
   SearchWebSocketClient,
@@ -99,6 +100,7 @@ function resynchronizationEvent(
   subscriptionId: string,
   searchJobId: string,
   latestSequence: bigint,
+  reason = ResynchronizationReason.RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED,
 ): SearchWebSocketEvent {
   const target = searchJobTarget(searchJobId);
   return {
@@ -111,13 +113,76 @@ function resynchronizationEvent(
       value: {
         subscriptionId,
         target,
-        reason: ResynchronizationReason.RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED,
+        reason,
         earliestAvailableSequence: latestSequence,
         latestSequence,
         recoveryPath: "/api/v1/search/jobs/get",
       },
     },
   };
+}
+
+function subscriptionAcknowledgedEvent(
+  requestId: string,
+  subscriptionId: string,
+  searchJobId: string,
+): SearchWebSocketEvent {
+  return {
+    sequence: 0n,
+    occurredAt: new Date("2026-07-25T00:00:01.000Z"),
+    subscriptionId,
+    target: searchJobTarget(searchJobId),
+    payload: {
+      $case: "subscriptionAcknowledged",
+      value: {
+        requestId,
+        subscriptionId,
+        target: searchJobTarget(searchJobId),
+        earliestAvailableSequence: 1n,
+        latestSequence: 1n,
+        replayWillFollow: false,
+      },
+    },
+  };
+}
+
+function closingSubscriptionLimitEvent(requestId: string): SearchWebSocketEvent {
+  return {
+    sequence: 0n,
+    occurredAt: new Date("2026-07-25T00:00:01.000Z"),
+    subscriptionId: "",
+    target: undefined,
+    payload: {
+      $case: "protocolError",
+      value: {
+        requestId,
+        code: SearchWebSocketProtocolErrorCode.SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS,
+        message: "connection subscription identity limit exceeded",
+        violations: [],
+        connectionWillClose: true,
+      },
+    },
+  };
+}
+
+function unknownSequencedEvent(
+  subscriptionId: string,
+  searchJobId: string,
+  sequence: bigint,
+): Uint8Array {
+  const knownEnvelope = SearchWebSocketEventCodec.encode({
+    sequence,
+    occurredAt: new Date("2026-07-25T00:00:02.000Z"),
+    subscriptionId,
+    target: searchJobTarget(searchJobId),
+    payload: undefined,
+  }).finish();
+  // Future length-delimited oneof field 24 with an empty message. Current
+  // generated code skips it and exposes payload=undefined.
+  const wire = new Uint8Array(knownEnvelope.length + 3);
+  wire.set(knownEnvelope);
+  wire.set([0xc2, 0x01, 0x00], knownEnvelope.length);
+  return wire;
 }
 
 function subscribeCommand(socket: FakeWebSocket, index = 0) {
@@ -294,6 +359,135 @@ test("failed authoritative resynchronization retries without advancing or perman
   assert.ok(errors.some((message) => message.includes("transient authoritative GET failure")));
 });
 
+test("a resolved but unacknowledged recovery listener cannot advance the checkpoint", async (t) => {
+  const { client, sockets } = clientFixture();
+  t.after(() => client.dispose());
+  const target = searchJobTarget("search-unhandled-resynchronization");
+  const errors: string[] = [];
+  client.onError((error) => errors.push(error.message));
+  client.onResynchronizationRequired(() => {
+    // Model a global listener that owns a different target and deliberately
+    // does not acknowledge this notice.
+  });
+
+  client.subscribe(target, {
+    subscriptionId: "unhandled-resynchronization",
+    includePreviews: false,
+  });
+  await waitFor(() => sockets.length === 1, "unhandled-resynchronization WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "unhandled-resynchronization subscription");
+  sockets[0].receive(stateEvent(
+    "unhandled-resynchronization",
+    "search-unhandled-resynchronization",
+    751n,
+  ));
+  await waitFor(() => client.getLastSequence(target) === 751n, "safe pre-recovery checkpoint");
+  sockets[0].receive(resynchronizationEvent(
+    "unhandled-resynchronization",
+    "search-unhandled-resynchronization",
+    760n,
+  ));
+
+  await waitFor(() => sockets.length === 2, "unacknowledged recovery retry");
+  assert.equal(client.getLastSequence(target), 751n);
+  sockets[1].open();
+  await waitFor(() => sockets[1].sent.length === 1, "unacknowledged recovery subscription");
+  assert.equal(subscribeCommand(sockets[1]).afterSequence, 751n);
+  assert.ok(errors.some((message) => message.includes("did not acknowledge")));
+});
+
+test("a same-epoch resynchronization cannot regress its processed checkpoint", async (t) => {
+  const { client, sockets } = clientFixture();
+  t.after(() => client.dispose());
+  const target = searchJobTarget("search-stale-resynchronization");
+  const errors: string[] = [];
+  let recoveries = 0;
+  client.onError((error) => errors.push(error.message));
+  client.onResynchronizationRequired((notice) => {
+    recoveries++;
+    notice.acknowledge();
+  });
+  client.subscribe(target, {
+    subscriptionId: "stale-resynchronization",
+    includePreviews: false,
+  });
+  await waitFor(() => sockets.length === 1, "stale-resynchronization WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "stale-resynchronization subscription");
+  sockets[0].receive(stateEvent(
+    "stale-resynchronization",
+    "search-stale-resynchronization",
+    900n,
+  ));
+  await waitFor(() => client.getLastSequence(target) === 900n, "stale-resynchronization checkpoint");
+
+  sockets[0].receive(resynchronizationEvent(
+    "stale-resynchronization",
+    "search-stale-resynchronization",
+    899n,
+  ));
+  await waitFor(() => sockets.length === 2, "stale-resynchronization replay");
+  assert.equal(client.getLastSequence(target), 900n);
+  assert.equal(recoveries, 0);
+  assert.ok(errors.some((message) => message.includes("cannot regress")));
+});
+
+test("a server restart may establish a lower sequence epoch after authoritative recovery", async (t) => {
+  const { client, sockets } = clientFixture();
+  t.after(() => client.dispose());
+  const target = searchJobTarget("search-restarted-epoch");
+  client.onResynchronizationRequired((notice) => {
+    notice.acknowledge();
+  });
+  client.subscribe(target, {
+    subscriptionId: "restarted-epoch",
+    includePreviews: false,
+  });
+  await waitFor(() => sockets.length === 1, "restarted-epoch WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "restarted-epoch subscription");
+  sockets[0].receive(stateEvent("restarted-epoch", "search-restarted-epoch", 950n));
+  await waitFor(() => client.getLastSequence(target) === 950n, "old epoch checkpoint");
+
+  sockets[0].receive(resynchronizationEvent(
+    "restarted-epoch",
+    "search-restarted-epoch",
+    25n,
+    ResynchronizationReason.RESYNCHRONIZATION_REASON_SERVER_RESTARTED,
+  ));
+  await waitFor(() => client.getLastSequence(target) === 25n, "new epoch checkpoint");
+  assert.equal(sockets.length, 1);
+});
+
+test("a close-required subscription limit preserves the rejected subscription for reconnect", async (t) => {
+  const { client, sockets } = clientFixture();
+  t.after(() => client.dispose());
+  let protocolErrors = 0;
+  client.onProtocolError(() => {
+    protocolErrors++;
+  });
+  client.subscribe(searchJobTarget("search-identity-reconnect"), {
+    subscriptionId: "identity-reconnect",
+    includePreviews: false,
+  });
+  await waitFor(() => sockets.length === 1, "identity-limit WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "identity-limit subscription");
+  const rejected = SearchWebSocketCommand.decode(sockets[0].sent[0]);
+  sockets[0].receive(closingSubscriptionLimitEvent(rejected.requestId));
+  await waitFor(() => protocolErrors === 1, "identity-limit protocol error");
+  sockets[0].serverClose();
+
+  await waitFor(() => sockets.length === 2, "identity-limit reconnect");
+  sockets[1].open();
+  await waitFor(() => sockets[1].sent.length === 1, "identity-limit retry");
+  const retried = subscribeCommand(sockets[1]);
+  assert.equal(retried.subscriptionId, "identity-reconnect");
+  assert.equal(retried.target?.target?.$case, "searchJobId");
+  assert.equal(retried.target?.target?.value, "search-identity-reconnect");
+});
+
 test("a rejected event listener leaves the checkpoint unchanged and replays the event", async (t) => {
   const { client, sockets } = clientFixture();
   t.after(() => client.dispose());
@@ -424,6 +618,33 @@ test("a subscription-scoped event cannot advance another target checkpoint", asy
   assert.ok(errors.some((message) => message.includes("does not match its subscription target")));
 });
 
+test("a future sequenced event variant remains forward compatible and advances its routed checkpoint", async (t) => {
+  const { client, sockets } = clientFixture();
+  t.after(() => client.dispose());
+  const target = searchJobTarget("search-future-event");
+  const observed: SearchWebSocketEvent[] = [];
+  client.onEvent((event) => {
+    observed.push(event);
+  });
+  client.subscribe(target, {
+    subscriptionId: "future-event-subscription",
+    includePreviews: false,
+  });
+  await waitFor(() => sockets.length === 1, "future-event WebSocket");
+  sockets[0].open();
+  await waitFor(() => sockets[0].sent.length === 1, "future-event subscription");
+
+  sockets[0].receiveRaw(unknownSequencedEvent(
+    "future-event-subscription",
+    "search-future-event",
+    1_101n,
+  ));
+  await waitFor(() => client.getLastSequence(target) === 1_101n, "future-event checkpoint");
+  assert.equal(sockets.length, 1);
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].payload, undefined);
+});
+
 test("checkpoints reject values outside protobuf uint64", () => {
   const { client } = clientFixture();
   const target = searchJobTarget("search-sequence-bound");
@@ -437,12 +658,15 @@ test("checkpoints reject values outside protobuf uint64", () => {
   }
 });
 
-test("open-close flapping backs off until the application subscription is acknowledged", () => {
+test("open-close and unhandled recovery failures retain exponential reconnect backoff", async () => {
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
   const delays: number[] = [];
   const callbacks: Array<() => void> = [];
   const canceled = new Set<number>();
+  let holdAcknowledgment = false;
+  let acknowledgmentStarted = false;
+  let releaseAcknowledgment: (() => void) | undefined;
   globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...arguments_: unknown[]) => {
     if (typeof handler !== "function") throw new TypeError("test timer requires a function");
     const id = callbacks.length;
@@ -470,6 +694,14 @@ test("open-close flapping backs off until the application subscription is acknow
     assert.equal(canceled.has(index), false);
     callbacks[index]();
   };
+  client.onEvent(async (event) => {
+    if (!holdAcknowledgment || event.payload?.$case !== "subscriptionAcknowledged") return;
+    acknowledgmentStarted = true;
+    await new Promise<void>((resolve) => {
+      releaseAcknowledgment = resolve;
+    });
+    throw new Error("slow acknowledgment listener rejected");
+  });
   try {
     client.subscribe(searchJobTarget("search-flapping"), {
       subscriptionId: "flapping-subscription",
@@ -491,6 +723,60 @@ test("open-close flapping backs off until the application subscription is acknow
     sockets[2].open();
     sockets[2].serverClose();
     assert.deepEqual(delays, [10, 20, 40]);
+
+    runTimer(2);
+    assert.equal(sockets.length, 4);
+    sockets[3].open();
+    const thirdCommand = SearchWebSocketCommand.decode(sockets[3].sent[0]);
+    sockets[3].receive(subscriptionAcknowledgedEvent(
+      thirdCommand.requestId,
+      "flapping-subscription",
+      "search-flapping",
+    ));
+    sockets[3].receive(resynchronizationEvent(
+      "flapping-subscription",
+      "search-flapping",
+      1n,
+    ));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(canceled.has(3), true);
+    assert.deepEqual(delays, [10, 20, 40, 1_000, 40]);
+
+    runTimer(4);
+    assert.equal(sockets.length, 5);
+    sockets[4].open();
+    const fourthCommand = SearchWebSocketCommand.decode(sockets[4].sent[0]);
+    sockets[4].receive(subscriptionAcknowledgedEvent(
+      fourthCommand.requestId,
+      "flapping-subscription",
+      "search-flapping",
+    ));
+    sockets[4].receive(resynchronizationEvent(
+      "flapping-subscription",
+      "search-flapping",
+      1n,
+    ));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(canceled.has(5), true);
+    assert.deepEqual(delays, [10, 20, 40, 1_000, 40, 1_000, 40]);
+
+    runTimer(6);
+    assert.equal(sockets.length, 6);
+    sockets[5].open();
+    holdAcknowledgment = true;
+    const fifthCommand = SearchWebSocketCommand.decode(sockets[5].sent[0]);
+    sockets[5].receive(subscriptionAcknowledgedEvent(
+      fifthCommand.requestId,
+      "flapping-subscription",
+      "search-flapping",
+    ));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(acknowledgmentStarted, true);
+    assert.deepEqual(delays, [10, 20, 40, 1_000, 40, 1_000, 40]);
+
+    releaseAcknowledgment?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(delays, [10, 20, 40, 1_000, 40, 1_000, 40, 40]);
   } finally {
     client.dispose();
     globalThis.setTimeout = originalSetTimeout;

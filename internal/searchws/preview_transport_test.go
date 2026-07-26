@@ -216,6 +216,12 @@ func (reader *previewSearchSnapshots) set(snapshot searchjobs.PreviewSnapshot) {
 	reader.mu.Unlock()
 }
 
+func (reader *previewSearchSnapshots) delete(id string) {
+	reader.mu.Lock()
+	delete(reader.snapshots, id)
+	reader.mu.Unlock()
+}
+
 func (reader *previewSearchSnapshots) requestedPreviewLimits() []int {
 	reader.mu.Lock()
 	defer reader.mu.Unlock()
@@ -615,6 +621,86 @@ func TestWebSocketCompletedInitialSubscriptionIncludesPreviewBeforeTerminal(t *t
 	}
 	if rows := observation.preview.GetResultPreview().GetRows(); len(rows) != 1 || rows[0].GetCells()[0].GetStringValue() != "complete" {
 		t.Fatalf("completed initial preview = %+v", observation.preview.GetResultPreview())
+	}
+}
+
+func TestExpiredPreviewCannotReplayRowsAndRemovedTombstoneRetiresTarget(t *testing.T) {
+	job := scopedSearchJob("search-preview-expired")
+	job.Version = 9
+	job.State = searchjobs.StateCompleted
+	job.Schema = &searchjobs.Schema{Columns: []searchjobs.Column{{Name: "message", Kind: searchjobs.ValueKindString}}}
+	job.FinishedAt = job.StartedAt.Add(2 * time.Second)
+	job.ExpiresAt = job.FinishedAt.Add(time.Hour)
+	clock := &mutableTestClock{value: job.FinishedAt.Add(time.Second)}
+	reader := newPreviewSearchSnapshots(previewSnapshot(job,
+		searchjobs.ResultRow{Ordinal: 0, Values: []searchjobs.Value{searchjobs.StringValue("must-expire")}},
+	))
+	fixture := newWebSocketFixture(t, reader, func(config *Config) {
+		config.MaximumPreviewRows = 1
+		config.Now = clock.now
+	})
+
+	initial := fixture.dial()
+	writeCommand(t, initial, subscribeWithPreview("initial", "initial", job.ID, 0, 1))
+	observation := readPreviewObservations(t, initial, "initial")["initial"]
+	if rows := observation.preview.GetResultPreview().GetRows(); len(rows) != 1 {
+		t.Fatalf("initial preview = %+v", observation.preview.GetResultPreview())
+	}
+	checkpoint := observation.preview.GetSequence() - 1
+
+	// A normal live projection may replace visible rows with a zero-row RESET
+	// while preview demand remains. The older row-bearing frame is still
+	// replayable until expiration makes every historical result cell invalid.
+	zero := cloneSearchSnapshot(job)
+	zero.Version++
+	reader.set(previewSnapshot(zero))
+	fixture.service.mu.Lock()
+	target := fixture.service.targets[targetKey{kind: targetKindSearch, id: job.ID}]
+	fixture.service.mu.Unlock()
+	if target == nil {
+		t.Fatal("preview target is missing")
+	}
+	if terminal, err := target.refreshCurrentProjection(context.Background()); err != nil || !terminal {
+		t.Fatalf("refresh zero-row projection = terminal:%t error:%v", terminal, err)
+	}
+
+	expired := cloneSearchSnapshot(zero)
+	expired.Version++
+	expired.State = searchjobs.StateExpired
+	expired.Schema = nil
+	clock.set(job.ExpiresAt.Add(time.Second))
+	reader.set(previewSnapshot(expired))
+	if terminal, err := target.refreshCurrentProjection(context.Background()); err != nil || !terminal {
+		t.Fatalf("refresh expired projection = terminal:%t error:%v", terminal, err)
+	}
+
+	replay := fixture.dial()
+	writeCommand(t, replay, subscribeWithPreview("replay", "replay", job.ID, checkpoint, 1))
+	if acknowledgment := readEvent(t, replay).GetSubscriptionAcknowledged(); acknowledgment == nil {
+		t.Fatal("expired replay acknowledgment is missing")
+	}
+	next := readEvent(t, replay)
+	if preview := next.GetResultPreview(); preview != nil && len(preview.GetRows()) != 0 {
+		t.Fatalf("expired replay exposed retained result rows: %+v", preview)
+	}
+	if resynchronization := next.GetResynchronizationRequired(); resynchronization == nil ||
+		resynchronization.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED {
+		t.Fatalf("expired replay event = %+v", next)
+	}
+
+	reader.delete(job.ID)
+	removed := fixture.dial()
+	writeCommand(t, removed, subscribeWithPreview("removed", "removed", job.ID, 0, 1))
+	protocolError := readEvent(t, removed).GetProtocolError()
+	if protocolError == nil ||
+		protocolError.GetCode() != opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND {
+		t.Fatalf("removed tombstone subscription = %+v", protocolError)
+	}
+	fixture.service.mu.Lock()
+	retained := fixture.service.targets[targetKey{kind: targetKindSearch, id: job.ID}]
+	fixture.service.mu.Unlock()
+	if retained != nil {
+		t.Fatal("removed search tombstone retained its WebSocket target")
 	}
 }
 

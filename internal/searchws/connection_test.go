@@ -3,6 +3,7 @@ package searchws
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -438,24 +439,58 @@ func TestWebSocketReplayRestartExpirationAndDivergence(t *testing.T) {
 	if readEvent(t, fresh).GetSubscriptionAcknowledged() == nil {
 		t.Fatal("fresh acknowledgment is missing")
 	}
-	if got := readEvent(t, fresh).GetResynchronizationRequired(); got == nil || got.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SERVER_RESTARTED {
+	freshResynchronization := readEvent(t, fresh).GetResynchronizationRequired()
+	if freshResynchronization == nil || freshResynchronization.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SERVER_RESTARTED {
+		t.Fatalf("fresh resynchronization = %+v", freshResynchronization)
+	}
+
+	// A target can advance while the client restores authoritative HTTP state.
+	// Its previously advertised boundary is still part of this fresh epoch and
+	// must replay continuously rather than demanding SERVER_RESTARTED again.
+	job.Version++
+	job.RowCount = 1
+	reader.set(job)
+	freshUpdate := readEvent(t, fresh)
+	if freshUpdate.GetSearchProgress() == nil ||
+		freshUpdate.GetSequence() != freshResynchronization.GetLatestSequence()+1 {
+		t.Fatalf("fresh epoch update = %+v", freshUpdate)
+	}
+
+	recovered := fixture.dial()
+	writeCommand(t, recovered, subscribeCommand(
+		"recovered", "recovered", job.ID, freshResynchronization.GetLatestSequence(),
+	))
+	recoveredAck := readEvent(t, recovered).GetSubscriptionAcknowledged()
+	if recoveredAck == nil || !recoveredAck.GetReplayWillFollow() {
+		t.Fatalf("recovered acknowledgment = %+v", recoveredAck)
+	}
+	replayedFreshUpdate := readEvent(t, recovered)
+	if replayedFreshUpdate.GetSequence() != freshUpdate.GetSequence() ||
+		replayedFreshUpdate.GetSearchProgress() == nil {
+		t.Fatalf("recovered fresh epoch replay = %+v", replayedFreshUpdate)
+	}
+	writeCommand(t, recovered, &opensplunkv1.SearchWebSocketCommand{
+		RequestId: "recovered-ping",
+		Payload: &opensplunkv1.SearchWebSocketCommand_Ping{Ping: &opensplunkv1.SearchWebSocketPing{
+			Nonce: "recovered",
+		}},
+	})
+	if got := readEvent(t, recovered); got.GetPong() == nil {
 		t.Fatalf("fresh resynchronization = %+v", got)
 	}
 
-	established := fixture.dial()
-	writeCommand(t, established, subscribeCommand("establish", "established", job.ID, 0))
-	_, establishedCurrent := readInitialSearchState(t, established, "established")
-
+	established := recovered
+	establishedLatest := replayedFreshUpdate.GetSequence()
 	job.Version++
 	job.RowCount = 7
 	reader.set(job)
 	update := readEvent(t, established)
-	if update.GetSequence() != establishedCurrent[1].GetSequence()+1 || update.GetSearchProgress() == nil {
+	if update.GetSequence() != establishedLatest+1 || update.GetSearchProgress() == nil {
 		t.Fatalf("update = %+v", update)
 	}
 
 	replay := fixture.dial()
-	writeCommand(t, replay, subscribeCommand("resume", "resume", job.ID, establishedCurrent[1].GetSequence()))
+	writeCommand(t, replay, subscribeCommand("resume", "resume", job.ID, establishedLatest))
 	ack := readEvent(t, replay).GetSubscriptionAcknowledged()
 	if ack == nil || !ack.GetReplayWillFollow() {
 		t.Fatalf("replay acknowledgment = %+v", ack)
@@ -465,7 +500,7 @@ func TestWebSocketReplayRestartExpirationAndDivergence(t *testing.T) {
 	}
 
 	expired := fixture.dial()
-	writeCommand(t, expired, subscribeCommand("expired", "expired", job.ID, establishedCurrent[0].GetSequence()))
+	writeCommand(t, expired, subscribeCommand("expired", "expired", job.ID, freshResynchronization.GetLatestSequence()-1))
 	_ = readEvent(t, expired)
 	if got := readEvent(t, expired).GetResynchronizationRequired(); got == nil || got.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED {
 		t.Fatalf("expired resynchronization = %+v", got)
@@ -486,6 +521,107 @@ func TestWebSocketReplayRestartExpirationAndDivergence(t *testing.T) {
 	if got := readEvent(t, diverged).GetResynchronizationRequired(); got == nil || got.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED {
 		t.Fatalf("resume divergence = %+v", got)
 	}
+}
+
+func TestExpiredTargetPollsUntilBackingTombstoneIsRemoved(t *testing.T) {
+	job := scopedSearchJob("search-expired-retirement")
+	job.Version = 2
+	job.State = searchjobs.StateExpired
+	job.FinishedAt = job.StartedAt.Add(time.Second)
+	job.ExpiresAt = job.FinishedAt.Add(time.Second)
+	reader := newMutableSearchSnapshots(job)
+	fixture := newWebSocketFixture(t, reader, func(config *Config) {
+		config.Now = func() time.Time { return job.ExpiresAt.Add(time.Second) }
+		config.PollInterval = 10 * time.Millisecond
+		config.TombstonePollInterval = 10 * time.Millisecond
+	})
+	client := fixture.dial()
+	writeCommand(t, client, subscribeCommand("expired", "expired", job.ID, 0))
+	_, _ = readInitialSearchState(t, client, "expired")
+
+	reader.delete(job.ID)
+	waitFor(t, time.Second, func() bool {
+		fixture.service.mu.Lock()
+		defer fixture.service.mu.Unlock()
+		return fixture.service.targets[targetKey{kind: targetKindSearch, id: job.ID}] == nil
+	}, "expired target retirement")
+
+	if err := client.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, _, err := client.ReadMessage(); err != nil {
+			break
+		}
+	}
+}
+
+func TestCompletedTargetRemovedAtFirstExpiryPollRetiresTarget(t *testing.T) {
+	job := scopedSearchJob("search-first-expiry-retirement")
+	job.Version = 2
+	job.State = searchjobs.StateCompleted
+	job.FinishedAt = job.StartedAt.Add(time.Second)
+	job.ExpiresAt = job.FinishedAt.Add(time.Hour)
+	clock := &mutableTestClock{value: job.ExpiresAt.Add(-20 * time.Millisecond)}
+	reader := newMutableSearchSnapshots(job)
+	fixture := newWebSocketFixture(t, reader, func(config *Config) {
+		config.Now = clock.now
+		config.PollInterval = 10 * time.Millisecond
+		config.TombstonePollInterval = 10 * time.Millisecond
+	})
+	client := fixture.dial()
+	writeCommand(t, client, subscribeCommand("completed", "completed", job.ID, 0))
+	_, _ = readInitialSearchState(t, client, "completed")
+
+	reader.delete(job.ID)
+	clock.set(job.ExpiresAt.Add(time.Millisecond))
+	waitFor(t, time.Second, func() bool {
+		fixture.service.mu.Lock()
+		defer fixture.service.mu.Unlock()
+		return fixture.service.targets[targetKey{kind: targetKindSearch, id: job.ID}] == nil
+	}, "completed target retirement at its first expiry poll")
+}
+
+func TestWebSocketSubscriptionIdentityLimitRequiresReconnect(t *testing.T) {
+	job := scopedSearchJob("search-subscription-identities")
+	fixture := newWebSocketFixture(t, newMutableSearchSnapshots(job), func(config *Config) {
+		config.MaximumSubscriptions = 1
+	})
+	client := fixture.dial()
+
+	for index := 0; index < maximumSubscriptionIDsPerConnection; index++ {
+		id := fmt.Sprintf("identity-%d", index)
+		writeCommand(t, client, subscribeCommand("subscribe-"+id, id, job.ID, 0))
+		_, _ = readInitialSearchState(t, client, id)
+		writeCommand(t, client, &opensplunkv1.SearchWebSocketCommand{
+			RequestId: "unsubscribe-" + id,
+			Payload: &opensplunkv1.SearchWebSocketCommand_Unsubscribe{
+				Unsubscribe: &opensplunkv1.UnsubscribeSearchJobsCommand{SubscriptionIds: []string{id}},
+			},
+		})
+		if removed := readEvent(t, client).GetSubscriptionRemoved(); removed == nil || removed.GetSubscriptionId() != id {
+			t.Fatalf("removed subscription %d = %+v", index, removed)
+		}
+	}
+
+	exhaustedID := "identity-exhausted"
+	writeCommand(t, client, subscribeCommand("exhausted", exhaustedID, job.ID, 0))
+	exhausted := readEvent(t, client).GetProtocolError()
+	if exhausted == nil ||
+		exhausted.GetCode() != opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS ||
+		!exhausted.GetConnectionWillClose() {
+		t.Fatalf("exhausted subscription identities = %+v", exhausted)
+	}
+	if err := client.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := client.ReadMessage(); err == nil {
+		t.Fatal("identity-exhausted connection remained open")
+	}
+
+	reconnected := fixture.dial()
+	writeCommand(t, reconnected, subscribeCommand("reconnected", exhaustedID, job.ID, 0))
+	_, _ = readInitialSearchState(t, reconnected, exhaustedID)
 }
 
 func TestWebSocketCommandsAreAtomic(t *testing.T) {
@@ -544,6 +680,18 @@ func TestWebSocketCommandsAreAtomic(t *testing.T) {
 		}
 		return target.subscriberCount.Load() == 0
 	}, "subscription removal")
+
+	writeCommand(t, client, subscribeCommand("reuse", "valid", job.ID, 0))
+	reused := readEvent(t, client).GetProtocolError()
+	if reused == nil ||
+		reused.GetCode() != opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND ||
+		len(reused.GetViolations()) != 1 ||
+		reused.GetViolations()[0].GetCode() != "ALREADY_EXISTS" {
+		t.Fatalf("reused subscription ID error = %+v", reused)
+	}
+
+	writeCommand(t, client, subscribeCommand("replacement", "replacement", job.ID, 0))
+	_, _ = readInitialSearchState(t, client, "replacement")
 }
 
 func TestWebSocketMalformedBinaryIsRecoverableAndApplicationPingResponds(t *testing.T) {

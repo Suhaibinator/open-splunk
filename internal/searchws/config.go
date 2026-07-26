@@ -33,35 +33,37 @@ const (
 	defaultMaximumReplayBytes      = uint64(4 << 20)
 	defaultMaximumTotalReplayBytes = uint64(64 << 20)
 	defaultPollInterval            = 250 * time.Millisecond
+	defaultTombstonePollInterval   = time.Minute
 	defaultWriteTimeout            = 10 * time.Second
 	defaultPongTimeout             = 60 * time.Second
 	defaultPingInterval            = 20 * time.Second
 
-	minimumFrameBytes              = uint64(1 << 10)
-	minimumQueuedFrames            = 7
-	maximumConnectionsCeiling      = 4_096
-	maximumSubscriptionsCeiling    = uint32(256)
-	maximumPreviewRowsCeiling      = uint32(1_000)
-	maximumFrameBytesCeiling       = uint64(1 << 20)
-	maximumQueuedFramesCeiling     = 4_096
-	maximumQueuedBytesCeiling      = uint64(64 << 20)
-	maximumTotalQueuedBytesCeiling = uint64(4 << 30)
-	maximumTargetsCeiling          = 100_000
-	maximumProjectionsCeiling      = 256
-	maximumReplayEventsCeiling     = 10_000
-	maximumReplayBytesCeiling      = uint64(64 << 20)
-	maximumTotalReplayBytesCeiling = uint64(4 << 30)
-	maximumIdentityBytes           = 1 << 10
-	maximumPollInterval            = time.Minute
-	maximumTransportTimeout        = 10 * time.Minute
-	minimumPollInterval            = 5 * time.Millisecond
-	minimumWriteTimeout            = 50 * time.Millisecond
-	minimumPongTimeout             = 100 * time.Millisecond
-	minimumPingInterval            = 25 * time.Millisecond
-	maximumRequestIDBytes          = 256
-	maximumSubscriptionIDBytes     = 256
-	maximumTargetIDBytes           = maximumIdentityBytes
-	maximumPingNonceBytes          = 256
+	minimumFrameBytes                   = uint64(1 << 10)
+	minimumQueuedFrames                 = 7
+	maximumConnectionsCeiling           = 4_096
+	maximumSubscriptionsCeiling         = uint32(256)
+	maximumPreviewRowsCeiling           = uint32(1_000)
+	maximumFrameBytesCeiling            = uint64(1 << 20)
+	maximumQueuedFramesCeiling          = 4_096
+	maximumQueuedBytesCeiling           = uint64(64 << 20)
+	maximumTotalQueuedBytesCeiling      = uint64(4 << 30)
+	maximumTargetsCeiling               = 100_000
+	maximumProjectionsCeiling           = 256
+	maximumReplayEventsCeiling          = 10_000
+	maximumReplayBytesCeiling           = uint64(64 << 20)
+	maximumTotalReplayBytesCeiling      = uint64(4 << 30)
+	maximumIdentityBytes                = 1 << 10
+	maximumPollInterval                 = time.Minute
+	maximumTransportTimeout             = 10 * time.Minute
+	minimumPollInterval                 = 5 * time.Millisecond
+	minimumWriteTimeout                 = 50 * time.Millisecond
+	minimumPongTimeout                  = 100 * time.Millisecond
+	minimumPingInterval                 = 25 * time.Millisecond
+	maximumRequestIDBytes               = 256
+	maximumSubscriptionIDBytes          = 256
+	maximumSubscriptionIDsPerConnection = int(maximumSubscriptionsCeiling)
+	maximumTargetIDBytes                = maximumIdentityBytes
+	maximumPingNonceBytes               = 256
 )
 
 // SearchSnapshots is the only search-job capability used by Service. Manager
@@ -111,10 +113,13 @@ type Config struct {
 	MaximumTotalReplayBytes      uint64
 
 	PollInterval time.Duration
-	WriteTimeout time.Duration
-	PongTimeout  time.Duration
-	PingInterval time.Duration
-	Now          func() time.Time
+	// TombstonePollInterval bounds how often an actively subscribed expired
+	// target is checked for backing-store deletion.
+	TombstonePollInterval time.Duration
+	WriteTimeout          time.Duration
+	PongTimeout           time.Duration
+	PingInterval          time.Duration
+	Now                   func() time.Time
 }
 
 type normalizedConfig struct {
@@ -137,11 +142,12 @@ type normalizedConfig struct {
 	maximumReplayBytes           uint64
 	maximumTotalReplayBytes      uint64
 
-	pollInterval time.Duration
-	writeTimeout time.Duration
-	pongTimeout  time.Duration
-	pingInterval time.Duration
-	now          func() time.Time
+	pollInterval          time.Duration
+	tombstonePollInterval time.Duration
+	writeTimeout          time.Duration
+	pongTimeout           time.Duration
+	pingInterval          time.Duration
+	now                   func() time.Time
 }
 
 func normalizeConfig(config Config) (normalizedConfig, error) {
@@ -229,6 +235,16 @@ func normalizeConfig(config Config) (normalizedConfig, error) {
 	if err != nil {
 		return normalizedConfig{}, err
 	}
+	tombstonePollInterval, err := boundedDuration(
+		config.TombstonePollInterval,
+		defaultTombstonePollInterval,
+		minimumPollInterval,
+		maximumPollInterval,
+		"tombstone poll interval",
+	)
+	if err != nil {
+		return normalizedConfig{}, err
+	}
 	writeTimeout, err := boundedDuration(config.WriteTimeout, defaultWriteTimeout, minimumWriteTimeout, maximumTransportTimeout, "write timeout")
 	if err != nil {
 		return normalizedConfig{}, err
@@ -267,7 +283,8 @@ func normalizeConfig(config Config) (normalizedConfig, error) {
 		maximumTargets:          targets, maximumConcurrentProjections: projections,
 		maximumReplayEvents: replayEvents, maximumReplayBytes: replayBytes,
 		maximumTotalReplayBytes: totalReplayBytes,
-		pollInterval:            pollInterval, writeTimeout: writeTimeout, pongTimeout: pongTimeout, pingInterval: pingInterval,
+		pollInterval:            pollInterval, tombstonePollInterval: tombstonePollInterval,
+		writeTimeout: writeTimeout, pongTimeout: pongTimeout, pingInterval: pingInterval,
 		now: now,
 	}, nil
 }
