@@ -600,12 +600,16 @@ test(sequenceGapScenario.title, async ({ page }) => {
   test.setTimeout(60_000);
   const restOnlyTerminal = sequenceGapScenario.mode === "rest-terminal";
   const restFirstProgress = sequenceGapScenario.mode === "rest-first-progress";
+  const staleDuplicateProof = sequenceGapScenario.mode === "gap";
   const safety = observeBrowserSafety(page);
   const gap = await interceptSequenceGap(
     page,
     origin,
     timeout,
-    restOnlyTerminal,
+    {
+      withholdTerminalProjection: restOnlyTerminal,
+      injectStaleDuplicates: staleDuplicateProof,
+    },
   );
   let releaseAuthoritativeResultsResponse!: () => void;
   const authoritativeResultsResponseGate = new Promise<void>((resolve) => {
@@ -816,8 +820,23 @@ test(sequenceGapScenario.title, async ({ page }) => {
       expect(fulfilledAuthoritativeJobRequests, "responses after replay K+2").toBe(0);
     }
 
+    let staleCheckpointSequence: bigint | undefined;
+    let staleCheckpointStatusOffset: number | undefined;
+    if (staleDuplicateProof) {
+      staleCheckpointStatusOffset = (await snapshotPreviewStatuses(page)).length;
+      await beginStaleDuplicateDOMObservation(
+        page,
+        recoveryInitialText!,
+        "resyncing",
+        false,
+      );
+      staleCheckpointSequence = await gap.injectStaleCheckpointDuplicate();
+    }
     await sendBrowserRecoveryControl("progress");
     await expect(page.getByLabel("Job metrics")).toContainText("3 rows", { timeout });
+    if (staleDuplicateProof) {
+      expect(staleCheckpointSequence, "stale preview checkpoint sequence").toBeGreaterThan(0n);
+    }
     if (restFirstProgress) {
       const observedMetrics = await finishJobMetricsObservation(page);
       expect(
@@ -832,6 +851,24 @@ test(sequenceGapScenario.title, async ({ page }) => {
     expect(gap.connectionCount(), "connections after live K+3").toBe(2);
     await sendBrowserRecoveryControl("progress");
     await expect(page.getByLabel("Job metrics")).toContainText("4 rows", { timeout });
+    if (staleDuplicateProof) {
+      const observation = await finishStaleDuplicateDOMObservation(page);
+      const previewStatuses = (await snapshotPreviewStatuses(page))
+        .slice(staleCheckpointStatusOffset);
+      expect(observation.stalePreviewTextSeen, "stale preview text never resurrected").toBe(false);
+      expect(observation.previewTableSeen, "stale preview table never resurrected").toBe(false);
+      expect(
+        observation.unexpectedPreviewStatusSeen,
+        `preview status across stale duplicate: ${JSON.stringify(previewStatuses)}`,
+      ).toBe(false);
+      await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+        "data-status",
+        "resyncing",
+        { timeout },
+      );
+      expect(gap.connectionCount(), "connections after stale checkpoint duplicate").toBe(2);
+      expect(authoritativeJobRequests, "GETs after stale checkpoint duplicate").toBe(1);
+    }
     await sendBrowserRecoveryControl("progress");
     await expect(page.getByLabel("Job metrics")).toContainText("5 rows", { timeout });
 
@@ -930,6 +967,42 @@ test(sequenceGapScenario.title, async ({ page }) => {
       await expectZeroRowBackendPreviewFinalizing(page);
       await expect(page.getByTestId("job-strip")).toContainText("Completed", { timeout });
       expect(fulfilledAuthoritativeJobRequests, "responses before terminal replay proof").toBe(1);
+      if (staleDuplicateProof) {
+        const staleRunningStatusOffset = (await snapshotPreviewStatuses(page)).length;
+        await beginStaleDuplicateDOMObservation(
+          page,
+          recoveryInitialText!,
+          "finalizing",
+          true,
+        );
+        const staleRunningSequence = await gap.injectStaleRunningStateDuplicate();
+        await waitForBrowserRender(page);
+        const observation = await finishStaleDuplicateDOMObservation(page);
+        const previewStatuses = (await snapshotPreviewStatuses(page))
+          .slice(staleRunningStatusOffset);
+        expect(staleRunningSequence, "stale running-state sequence").toBeGreaterThan(0n);
+        expect(observation.stalePreviewTextSeen, "terminal duplicate did not restore preview text")
+          .toBe(false);
+        expect(observation.previewTableSeen, "terminal duplicate did not restore the preview table")
+          .toBe(false);
+        expect(
+          observation.unexpectedPreviewStatusSeen,
+          `preview status across terminal duplicate: ${JSON.stringify(previewStatuses)}`,
+        ).toBe(false);
+        await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+          "data-status",
+          "finalizing",
+          { timeout },
+        );
+        expect(observation.jobStripSnapshots.length, "terminal-state DOM observations")
+          .toBeGreaterThan(0);
+        expect(
+          observation.terminalPhaseRegressionSeen,
+          `terminal-state DOM observations: ${JSON.stringify(observation.jobStripSnapshots)}`,
+        ).toBe(false);
+        expect(gap.connectionCount(), "connections after stale running-state duplicate").toBe(2);
+        expect(authoritativeJobRequests, "GETs after stale running-state duplicate").toBe(2);
+      }
 
       const staleTerminalSnapshot = authoritativeSnapshots[1].searchJob;
       expect(staleTerminalSnapshot?.searchJobId, "in-flight terminal job ID").toBe(browserSearchJobID);
@@ -997,6 +1070,7 @@ test(sequenceGapScenario.title, async ({ page }) => {
     assertBrowserSafety(safety);
   } finally {
     await discardJobMetricsObservation(page).catch(() => undefined);
+    await discardStaleDuplicateDOMObservation(page).catch(() => undefined);
     allowFirstAuthoritativeFetch();
     allowSecondAuthoritativeFetch();
     releaseFirstAuthoritativeResponse();
@@ -1079,6 +1153,178 @@ async function waitForBrowserRender(page: Page): Promise<void> {
       }, 0);
     }),
   );
+}
+
+async function beginStaleDuplicateDOMObservation(
+  page: Page,
+  stalePreviewText: string,
+  expectedPreviewStatus: string,
+  requireTerminalJobPhase: boolean,
+): Promise<void> {
+  await page.evaluate(({
+    expectedStalePreviewText,
+    expectedStatus,
+    terminalJobPhaseRequired,
+  }) => {
+    const observedWindow = window as StaleDuplicateDOMObservationWindow;
+    if (observedWindow.openSplunkStaleDuplicateDOMObservation !== undefined) {
+      throw new Error("stale-duplicate DOM observation is already active");
+    }
+    const root = document.querySelector<HTMLElement>('[data-testid="search-workspace"]');
+    if (root === null) throw new Error("search workspace is unavailable for DOM observation");
+    let observation: StaleDuplicateDOMObservation;
+    const record = (): void => {
+      if (root.textContent?.includes(expectedStalePreviewText)) {
+        observation.stalePreviewTextSeen = true;
+      }
+      if (root.querySelector('[aria-label="Live preview search statistics"]') !== null) {
+        observation.previewTableSeen = true;
+      }
+      const previewStatus = root.querySelector<HTMLElement>(
+        '[data-testid="backend-preview-status"]',
+      )?.dataset.status;
+      if (previewStatus !== expectedStatus) {
+        observation.unexpectedPreviewStatusSeen = true;
+      }
+      const jobStrip = root.querySelector('[data-testid="job-strip"]');
+      const jobSnapshot = jobStrip === null
+        ? "missing"
+        : `${jobStrip.getAttribute("aria-busy") ?? "unset"}:${jobStrip.textContent?.replace(/\s+/g, " ").trim() ?? ""}`;
+      if (
+        terminalJobPhaseRequired
+        && (
+          !jobSnapshot.includes("Completed")
+          || /(?:Queued|Preparing|Running|Canceling)/.test(jobSnapshot)
+        )
+      ) {
+        observation.terminalPhaseRegressionSeen = true;
+      }
+      if (
+        observation.jobStripSnapshots.at(-1) !== jobSnapshot
+        && observation.jobStripSnapshots.length < 32
+      ) {
+        observation.jobStripSnapshots.push(jobSnapshot);
+      }
+    };
+    const observer = new MutationObserver(record);
+    observation = {
+      stalePreviewTextSeen: false,
+      previewTableSeen: false,
+      unexpectedPreviewStatusSeen: false,
+      terminalPhaseRegressionSeen: false,
+      jobStripSnapshots: [],
+      observer,
+    };
+    observer.observe(root, {
+      attributes: true,
+      attributeFilter: ["aria-busy", "data-status"],
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+    observedWindow.openSplunkStaleDuplicateDOMObservation = observation;
+    record();
+  }, {
+    expectedStalePreviewText: stalePreviewText,
+    expectedStatus: expectedPreviewStatus,
+    terminalJobPhaseRequired: requireTerminalJobPhase,
+  });
+}
+
+async function finishStaleDuplicateDOMObservation(
+  page: Page,
+): Promise<StaleDuplicateDOMSnapshot> {
+  return stopStaleDuplicateDOMObservation(page, true);
+}
+
+async function discardStaleDuplicateDOMObservation(page: Page): Promise<void> {
+  await stopStaleDuplicateDOMObservation(page, false);
+}
+
+async function stopStaleDuplicateDOMObservation(
+  page: Page,
+  required: boolean,
+): Promise<StaleDuplicateDOMSnapshot> {
+  return page.evaluate((observationRequired) => {
+    const observedWindow = window as StaleDuplicateDOMObservationWindow;
+    const observation = observedWindow.openSplunkStaleDuplicateDOMObservation;
+    if (observation === undefined) {
+      if (observationRequired) {
+        throw new Error("stale-duplicate DOM observation was not active");
+      }
+      return {
+        stalePreviewTextSeen: false,
+        previewTableSeen: false,
+        unexpectedPreviewStatusSeen: false,
+        terminalPhaseRegressionSeen: false,
+        jobStripSnapshots: [],
+      };
+    }
+    observation.observer.disconnect();
+    delete observedWindow.openSplunkStaleDuplicateDOMObservation;
+    return {
+      stalePreviewTextSeen: observation.stalePreviewTextSeen,
+      previewTableSeen: observation.previewTableSeen,
+      unexpectedPreviewStatusSeen: observation.unexpectedPreviewStatusSeen,
+      terminalPhaseRegressionSeen: observation.terminalPhaseRegressionSeen,
+      jobStripSnapshots: [...observation.jobStripSnapshots],
+    };
+  }, required);
+}
+
+async function installBrowserWebSocketFrameRecorder(
+  page: Page,
+  expectedOrigin: string,
+): Promise<void> {
+  await page.addInitScript((expectedSocketOrigin) => {
+    const recorderWindow = window as BrowserWebSocketFrameRecorderWindow;
+    const frames: string[] = [];
+    let overflow = 0;
+    const record = (bytes: Uint8Array): void => {
+      if (bytes.byteLength > 16_384) {
+        overflow += 1;
+        return;
+      }
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      if (frames.length < 64) frames.push(btoa(binary));
+      else overflow += 1;
+    };
+    const matchesSearchSocket = (url: string): boolean => {
+      const socketURL = new URL(url);
+      const socketHTTPURL = new URL(socketURL);
+      socketHTTPURL.protocol = socketURL.protocol === "wss:" ? "https:" : "http:";
+      return socketHTTPURL.origin === expectedSocketOrigin
+        && socketURL.pathname === "/api/v1/search/ws";
+    };
+    const NativeWebSocket = window.WebSocket;
+    class RecordingWebSocket extends NativeWebSocket {
+      public constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        if (!matchesSearchSocket(this.url)) return;
+        this.addEventListener("message", (event) => {
+          if (event.data instanceof ArrayBuffer) {
+            record(new Uint8Array(event.data));
+          } else if (event.data instanceof Blob) {
+            void event.data.arrayBuffer()
+              .then((buffer) => record(new Uint8Array(buffer)))
+              .catch(() => {
+                overflow += 1;
+              });
+          }
+        });
+      }
+    }
+    Object.defineProperty(window, "WebSocket", {
+      configurable: true,
+      value: RecordingWebSocket,
+      writable: true,
+    });
+    recorderWindow.openSplunkBrowserWebSocketFrameRecorder = {
+      frames,
+      overflow: () => overflow,
+    };
+  }, expectedOrigin);
 }
 
 function requiredEnvironment(name: string): string {
@@ -1405,6 +1651,31 @@ type JobMetricsObservationWindow = Window & {
   openSplunkJobMetricsObservation?: JobMetricsObservation;
 };
 
+interface StaleDuplicateDOMSnapshot {
+  stalePreviewTextSeen: boolean;
+  previewTableSeen: boolean;
+  unexpectedPreviewStatusSeen: boolean;
+  terminalPhaseRegressionSeen: boolean;
+  jobStripSnapshots: string[];
+}
+
+interface StaleDuplicateDOMObservation extends StaleDuplicateDOMSnapshot {
+  observer: MutationObserver;
+}
+
+type StaleDuplicateDOMObservationWindow = Window & {
+  openSplunkStaleDuplicateDOMObservation?: StaleDuplicateDOMObservation;
+};
+
+interface BrowserWebSocketFrameRecorder {
+  frames: string[];
+  overflow(): number;
+}
+
+type BrowserWebSocketFrameRecorderWindow = Window & {
+  openSplunkBrowserWebSocketFrameRecorder?: BrowserWebSocketFrameRecorder;
+};
+
 async function installPreviewStatusRecorder(page: Page): Promise<void> {
   await page.evaluate(() => {
     const recorderWindow = window as PreviewRecorderWindow;
@@ -1523,6 +1794,8 @@ interface SequenceGapObservation {
   replayProgress(index: 1 | 2): SearchProgress;
   releaseNextReplayFrame(): bigint;
   waitForReplayFrameReceived(sequence: bigint): Promise<void>;
+  injectStaleCheckpointDuplicate(): Promise<bigint>;
+  injectStaleRunningStateDuplicate(): Promise<bigint>;
   waitForTerminalProjectionWithheld(): Promise<void>;
   withheldTerminalProjectionFrameCount(): number;
   waitForTerminalClose(): Promise<void>;
@@ -1569,12 +1842,18 @@ async function interceptSequenceGap(
   page: Page,
   expectedOrigin: string,
   timeoutMilliseconds: number,
-  withholdTerminalProjection = false,
+  options: {
+    withholdTerminalProjection: boolean;
+    injectStaleDuplicates: boolean;
+  },
 ): Promise<SequenceGapObservation> {
+  const { withholdTerminalProjection, injectStaleDuplicates } = options;
   let expectedJobID: string | undefined;
   let routedJobID: string | undefined;
   let subscriptionID: string | undefined;
   let checkpoint: bigint | undefined;
+  let checkpointFrame: Buffer | undefined;
+  let runningStateFrame: Buffer | undefined;
   let initialSubscription: ObservedSubscription | undefined;
   let reconnectRequestID: string | undefined;
   let reconnectAcknowledged = false;
@@ -1591,7 +1870,10 @@ async function interceptSequenceGap(
   let gapCloseForwardCompleted = false;
   let terminalCloseForwardCompleted = false;
   let replayReleaseCount = 0;
+  let staleCheckpointInjectionCount = 0;
+  let staleRunningStateInjectionCount = 0;
   let liveTargetFrameCount = 0;
+  let completedStateVersion: bigint | undefined;
   let withholdingTerminalProjection = false;
   let withheldTerminalProjectionFrameCount = 0;
   let withheldTerminalStateVersion: bigint | undefined;
@@ -1603,6 +1885,7 @@ async function interceptSequenceGap(
   const originalFrames = new Map<bigint, Buffer>();
   const replayFrames = new Map<bigint, Buffer>();
   const connectionOneDeliveredSequences: bigint[] = [];
+  const browserFrameDiagnostics: string[] = [];
   const replayBrowserFrameReceipts = new Set<bigint>();
   const replayBrowserFrameWaiters = new Map<
     bigint,
@@ -1696,6 +1979,11 @@ async function interceptSequenceGap(
           throw new Error("sequence-gap browser received a text replay frame");
         }
         const event = SearchWebSocketEvent.decode(payload);
+        if (browserFrameDiagnostics.length < 32) {
+          browserFrameDiagnostics.push(
+            `${event.sequence.toString()}:${String(event.payload?.$case)}:${Buffer.from(payload).byteLength}`,
+          );
+        }
         if (
           checkpoint === undefined
           || event.sequence < checkpoint + 1n
@@ -1865,6 +2153,14 @@ async function interceptSequenceGap(
           && target.value === routedJobID;
 
         if (connectionOrdinal === 1) {
+          if (
+            matchesSubscription
+            && runningStateFrame === undefined
+            && event.payload?.$case === "searchStateChanged"
+            && event.payload.value.state === SearchJobState.SEARCH_JOB_STATE_RUNNING
+          ) {
+            runningStateFrame = frame;
+          }
           if (matchesSubscription && checkpoint !== undefined) {
             if (originalFrames.size >= 2) {
               throw new Error("sequence-gap connection published more than K+1 and K+2 before reconnect");
@@ -1907,6 +2203,7 @@ async function interceptSequenceGap(
             && event.payload.value.rows.length > 0
           ) {
             checkpoint = event.sequence;
+            checkpointFrame = frame;
             if (!checkpointSettled) {
               checkpointSettled = true;
               resolveCheckpoint();
@@ -1981,6 +2278,18 @@ async function interceptSequenceGap(
           }
           lastUpstreamSequence = event.sequence;
           if (
+            event.payload?.$case === "searchStateChanged"
+            && event.payload.value.state === SearchJobState.SEARCH_JOB_STATE_COMPLETED
+          ) {
+            if (
+              completedStateVersion !== undefined
+              || event.payload.value.stateVersion <= 0n
+            ) {
+              throw new Error("sequence-gap completed state revision was invalid");
+            }
+            completedStateVersion = event.payload.value.stateVersion;
+          }
+          if (
             withholdTerminalProjection
             && (
               withholdingTerminalProjection
@@ -2054,11 +2363,65 @@ async function interceptSequenceGap(
       }
     });
   });
+  if (injectStaleDuplicates) {
+    // Register after routeWebSocket so the recorder wraps Playwright's
+    // page-side routed socket rather than its native upstream connection.
+    await installBrowserWebSocketFrameRecorder(page, expectedOrigin);
+  }
 
   timer = setTimeout(
-    () => fail(new Error("timed out waiting for deterministic sequence-gap replay")),
+    () => fail(new Error(
+      "timed out waiting for deterministic sequence-gap replay"
+      + ` (browser_sockets=${matchingBrowserSocketCount}`
+      + ` stale_checkpoint_injected=${staleCheckpointInjectionCount}`
+      + ` stale_running_injected=${staleRunningStateInjectionCount}`
+      + ` browser_frames=${JSON.stringify(browserFrameDiagnostics)})`,
+    )),
     timeoutMilliseconds,
   );
+
+  async function injectStaleBrowserFrame(frame: Buffer, label: string): Promise<void> {
+    const expectedFrame = frame.toString("base64");
+    const baseline = await page.evaluate((expected) => {
+      const recorder =
+        (window as BrowserWebSocketFrameRecorderWindow)
+          .openSplunkBrowserWebSocketFrameRecorder;
+      if (recorder === undefined) {
+        return { matches: -1, overflow: -1 };
+      }
+      return {
+        matches: recorder.frames.filter((candidate) => candidate === expected).length,
+        overflow: recorder.overflow(),
+      };
+    }, expectedFrame);
+    if (
+      baseline.matches < 0
+      || baseline.overflow !== 0
+      || secondClient === undefined
+    ) {
+      throw new Error(
+        `browser ${label} injection was invalid: ${JSON.stringify(baseline)}`,
+      );
+    }
+    secondClient.send(frame);
+    await expect.poll(
+      () => page.evaluate((expected) => {
+        const recorder =
+          (window as BrowserWebSocketFrameRecorderWindow)
+            .openSplunkBrowserWebSocketFrameRecorder;
+        if (recorder === undefined) return { matches: 0, overflow: -1 };
+        return {
+          matches: recorder.frames.filter((candidate) => candidate === expected).length,
+          overflow: recorder.overflow(),
+        };
+      }, expectedFrame),
+      {
+        message: `browser receipt of ${label}`,
+        timeout: Math.min(timeoutMilliseconds, 5_000),
+      },
+    ).toEqual({ matches: baseline.matches + 1, overflow: 0 });
+  }
+
   return {
     waitForCheckpoint(searchJobID) {
       if (expectedJobID !== undefined) throw new Error("sequence-gap browser job was already selected");
@@ -2133,6 +2496,56 @@ async function interceptSequenceGap(
         replayBrowserFrameWaiters.set(sequence, { resolve, reject });
       });
     },
+    async injectStaleCheckpointDuplicate() {
+      if (
+        failure !== undefined
+        || !injectStaleDuplicates
+        || checkpoint === undefined
+        || checkpointFrame === undefined
+        || replayReleaseCount !== 2
+        || lastUpstreamSequence !== checkpoint + 2n
+        || staleCheckpointInjectionCount !== 0
+      ) {
+        throw failure
+          ?? new Error("sequence-gap stale checkpoint duplicate is not ready for injection");
+      }
+      await injectStaleBrowserFrame(
+        checkpointFrame,
+        "stale checkpoint frame",
+      );
+      staleCheckpointInjectionCount = 1;
+      return checkpoint;
+    },
+    async injectStaleRunningStateDuplicate() {
+      if (
+        failure !== undefined
+        || !injectStaleDuplicates
+        || runningStateFrame === undefined
+        || staleCheckpointInjectionCount !== 1
+        || staleRunningStateInjectionCount !== 0
+      ) {
+        throw failure
+          ?? new Error("sequence-gap stale running-state duplicate is not ready for injection");
+      }
+      const event = SearchWebSocketEvent.decode(runningStateFrame);
+      if (
+        event.sequence <= 0n
+        || event.payload?.$case !== "searchStateChanged"
+        || event.payload.value.state !== SearchJobState.SEARCH_JOB_STATE_RUNNING
+        || lastUpstreamSequence === undefined
+        || event.sequence >= lastUpstreamSequence
+        || completedStateVersion === undefined
+        || event.payload.value.stateVersion >= completedStateVersion
+      ) {
+        throw new Error("captured stale running-state frame is invalid");
+      }
+      await injectStaleBrowserFrame(
+        runningStateFrame,
+        "stale running-state frame",
+      );
+      staleRunningStateInjectionCount = 1;
+      return event.sequence;
+    },
     waitForTerminalProjectionWithheld() {
       if (!withholdTerminalProjection) {
         return Promise.reject(new Error("sequence-gap terminal projection is not being withheld"));
@@ -2174,6 +2587,16 @@ async function interceptSequenceGap(
         || !reconnectAcknowledged
         || replayFrames.size !== 2
         || replayReleaseCount !== 2
+        || (
+          injectStaleDuplicates
+          && (
+            checkpointFrame === undefined
+            || runningStateFrame === undefined
+            || staleCheckpointInjectionCount !== 1
+            || staleRunningStateInjectionCount !== 1
+            || completedStateVersion === undefined
+          )
+        )
         || liveTargetFrameCount === 0
         || (
           withholdTerminalProjection

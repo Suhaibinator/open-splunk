@@ -268,12 +268,14 @@ test("reconnect retains one subscription and resumes strictly after its processe
   assert.deepEqual(received, [101n, 102n]);
 });
 
-test("a sequence gap reconnects from the last processed event and applies the contiguous replay", async (t) => {
+test("a sequence gap applies contiguous replay and ignores stale duplicates on the recovered socket", async (t) => {
   const { client, sockets } = clientFixture();
   t.after(() => client.dispose());
   const target = searchJobTarget("search-gap");
   const received: bigint[] = [];
   const gaps: Array<{ expected: bigint; received: bigint }> = [];
+  const errors: string[] = [];
+  client.onError((error) => errors.push(error.message));
   client.onEvent((event) => {
     if (event.payload?.$case === "searchStateChanged") received.push(event.sequence);
   });
@@ -303,7 +305,13 @@ test("a sequence gap reconnects from the last processed event and applies the co
   sockets[1].receive(stateEvent("gap-subscription", "search-gap", 502n));
   sockets[1].receive(stateEvent("gap-subscription", "search-gap", 503n));
   await waitFor(() => client.getLastSequence(target) === 503n, "contiguous replay checkpoint");
-  assert.deepEqual(received, [501n, 502n, 503n]);
+  sockets[1].receive(stateEvent("gap-subscription", "search-gap", 503n));
+  sockets[1].receive(stateEvent("gap-subscription", "search-gap", 504n));
+  await waitFor(() => client.getLastSequence(target) === 504n, "post-duplicate checkpoint");
+  assert.deepEqual(received, [501n, 502n, 503n, 504n]);
+  assert.deepEqual(gaps, [{ expected: 502n, received: 503n }]);
+  assert.deepEqual(errors, []);
+  assert.equal(sockets.length, 2);
 });
 
 test("failed authoritative resynchronization retries without advancing or permanently suspending the target", async (t) => {
