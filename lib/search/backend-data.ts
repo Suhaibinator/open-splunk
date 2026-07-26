@@ -14,6 +14,18 @@ import type {
 
 export type SearchDataMode = "backend" | "demo";
 
+export interface WorkspaceStatisticSeries {
+  /** Stable backend field identity used to align this series across categories. */
+  key: string;
+  /** Server-provided field label shown in legends and value inspectors. */
+  label: string;
+  /** Finite plotting coordinate, or null when this category has no numeric value. */
+  value: number | null;
+  /** Exact server value retained when the plotting coordinate is non-lossless. */
+  exactValue?: string;
+  coordinateApproximate?: boolean;
+}
+
 export interface WorkspaceStatistic {
   id?: string;
   level: string;
@@ -29,6 +41,12 @@ export interface WorkspaceStatistic {
   avgDuration: number;
   /** The server-provided aggregation represented by `count` in categorical charts. */
   measureLabel?: string;
+  /**
+   * Every chartable backend metric in schema order. The legacy scalar fields
+   * above mirror the first series so existing statistics/demo consumers remain
+   * compatible without collapsing multi-series visualizations.
+   */
+  series?: WorkspaceStatisticSeries[];
 }
 
 export interface WorkspaceStatisticsColumn {
@@ -399,7 +417,7 @@ function numericCell(value: TypedValue | undefined): boolean {
 
 function statisticsTableFromRows(schema: ResultSchema, rows: ResultRow[]): WorkspaceStatisticsTable | null {
   if (schema.columns.length === 0) return null;
-  const metricIndex = preferredMetricIndex(schema, rows);
+  const metricIndexes = new Set(preferredMetricIndexes(schema, rows));
   const keyCounts = new Map<string, number>();
   const columns = schema.columns.map((column, sourceIndex) => {
     const fieldName = column.fieldName || `column_${sourceIndex + 1}`;
@@ -423,7 +441,7 @@ function statisticsTableFromRows(schema: ResultSchema, rows: ResultRow[]): Works
       valueType: column.valueType,
       semanticType: column.semanticType,
       numeric,
-      pivotable: sourceIndex !== metricIndex
+      pivotable: !metricIndexes.has(sourceIndex)
         && column.semanticType !== ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC
         && !AGGREGATE_FIELD_NAME.test(fieldName)
         && !timeLike
@@ -463,27 +481,63 @@ function columnIsTimeLike(schema: ResultSchema, index: number): boolean {
     || /^_?time$/i.test(column.fieldName);
 }
 
-function preferredMetricIndex(schema: ResultSchema, rows: ResultRow[]): number | null {
+function preferredMetricIndexes(schema: ResultSchema, rows: ResultRow[]): number[] {
   const numericIndexes = schema.columns.flatMap((column, index) =>
     numericValueType(column.valueType) || columnHasNumericValues(rows, index) ? [index] : [],
   );
-  const explicitMetric = numericIndexes.find((index) =>
+  const explicitMetrics = numericIndexes.filter((index) =>
     schema.columns[index].semanticType === ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC,
   );
-  if (explicitMetric !== undefined) return explicitMetric;
-  const namedAggregate = numericIndexes.find((index) => AGGREGATE_FIELD_NAME.test(schema.columns[index].fieldName));
-  if (namedAggregate !== undefined) return namedAggregate;
+  const namedAggregates = numericIndexes.filter((index) =>
+    AGGREGATE_FIELD_NAME.test(schema.columns[index].fieldName),
+  );
+  if (explicitMetrics.length > 0) {
+    const combined = [...new Set([...explicitMetrics, ...namedAggregates])];
+    const combinedSet = new Set(combined);
+    const remainingScalarColumns = schema.columns.flatMap((column, index) => {
+      if (combinedSet.has(index) || columnIsTimeLike(schema, index)) return [];
+      if (column.valueType === ValueType.VALUE_TYPE_LIST || column.valueType === ValueType.VALUE_TYPE_OBJECT) return [];
+      return [index];
+    });
+    // Preserve an untagged aggregate sibling in a mixed schema only when doing
+    // so still leaves one defensible category. A runtime chart dimension may
+    // itself be named "count", and must not be reclassified as a metric.
+    return remainingScalarColumns.length === 1 ? combined : explicitMetrics;
+  }
+  if (namedAggregates.length > 0) {
+    const firstColumnLooksAggregated = namedAggregates.includes(0);
+    const hasLaterAliasedNumericColumn = numericIndexes.some(
+      (index) => index > 0 && !namedAggregates.includes(index),
+    );
+    // The current backend orders stats grouping fields before measures. A
+    // numeric BY field can legitimately be named "count", while an aliased
+    // measure after it may have no aggregate-looking name. In that shape,
+    // field-name inference would invert the dimension and measure; declining
+    // the chart preserves the authoritative Statistics table instead.
+    if (firstColumnLooksAggregated && hasLaterAliasedNumericColumn) return [];
+    return namedAggregates;
+  }
 
   // A single numeric field paired with another field is an unambiguous value/dimension shape.
-  // With multiple unnamed numeric fields there is no defensible way to choose a measure.
-  return numericIndexes.length === 1 && schema.columns.length > 1 ? numericIndexes[0] : null;
+  if (numericIndexes.length === 1 && schema.columns.length > 1) return numericIndexes;
+
+  // Aliased multi-measure statistics lose aggregate-looking field names. They
+  // remain unambiguous when exactly one other scalar column can be the category.
+  const numericSet = new Set(numericIndexes);
+  const nonNumericDimensions = schema.columns.flatMap((column, index) => {
+    if (numericSet.has(index) || columnIsTimeLike(schema, index)) return [];
+    if (column.valueType === ValueType.VALUE_TYPE_LIST || column.valueType === ValueType.VALUE_TYPE_OBJECT) return [];
+    return [index];
+  });
+  return numericIndexes.length > 1 && nonNumericDimensions.length === 1 ? numericIndexes : [];
 }
 
-function preferredDimensionIndex(schema: ResultSchema, metricIndex: number): number | null {
+function preferredDimensionIndex(schema: ResultSchema, metricIndexes: number[]): number | null {
+  const metricSet = new Set(metricIndexes);
   const candidates = schema.columns.flatMap((column, index) => {
-    if (index === metricIndex || columnIsTimeLike(schema, index)) return [];
+    if (metricSet.has(index) || columnIsTimeLike(schema, index)) return [];
     if (column.valueType === ValueType.VALUE_TYPE_LIST || column.valueType === ValueType.VALUE_TYPE_OBJECT) return [];
-    if (column.semanticType === ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC || AGGREGATE_FIELD_NAME.test(column.fieldName)) return [];
+    if (column.semanticType === ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC) return [];
     return [index];
   });
   const explicitDimension = candidates.find((index) =>
@@ -496,44 +550,56 @@ function preferredDimensionIndex(schema: ResultSchema, metricIndex: number): num
 }
 
 /**
- * Produce the legacy categorical chart rows only when the backend shape has one
- * defensible measure and one dimension. An empty row set deliberately signals
+ * Produce categorical chart rows only when the backend shape has defensible
+ * measures and exactly one dimension. An empty row set deliberately signals
  * that Visualization should explain the incompatible result shape instead of
  * inventing an "event count by level" chart.
  */
 function statisticsFromRows(schema: ResultSchema, rows: ResultRow[]): { rows: WorkspaceStatistic[]; dimension: string } {
-  const metricIndex = preferredMetricIndex(schema, rows);
-  if (metricIndex === null) return { rows: [], dimension: "result" };
-  const dimensionIndex = preferredDimensionIndex(schema, metricIndex);
+  const metricIndexes = preferredMetricIndexes(schema, rows);
+  if (metricIndexes.length === 0) return { rows: [], dimension: "result" };
+  const dimensionIndex = preferredDimensionIndex(schema, metricIndexes);
   if (dimensionIndex === null) return { rows: [], dimension: "result" };
 
-  const metricColumn = schema.columns[metricIndex];
+  const metricColumns = metricIndexes.map((index) => schema.columns[index]);
   const dimensionColumn = schema.columns[dimensionIndex];
   const averageIndex = schema.columns.findIndex((column) =>
     /^avg(?:erage)?\(/i.test(column.fieldName) || /avg.*duration/i.test(column.fieldName),
   );
   const chartRows = rows.flatMap((row) => {
-    const metric = chartNumericValue(row.cells[metricIndex]);
-    if (metric === null || metric.coordinate < 0) return [];
     const dimensionValue = typedValueToJSON(row.cells[dimensionIndex]);
     if (Array.isArray(dimensionValue) || (typeof dimensionValue === "object" && dimensionValue !== null)) return [];
+    const series = metricIndexes.map((metricIndex, index) => {
+      const metric = chartNumericValue(row.cells[metricIndex]);
+      const column = metricColumns[index];
+      return {
+        key: column.fieldName || `metric_${metricIndex + 1}`,
+        label: column.displayName || column.fieldName || `metric ${metricIndex + 1}`,
+        value: metric?.coordinate ?? null,
+        exactValue: metric?.exactText,
+        coordinateApproximate: metric?.approximate || undefined,
+      } satisfies WorkspaceStatisticSeries;
+    });
+    const primaryMetric = series[0];
+    if (primaryMetric === undefined) return [];
     const average = averageIndex < 0 ? null : chartNumericValue(row.cells[averageIndex]);
     return [{
       id: row.rowId || `category-${row.ordinal.toString()}`,
       level: dimensionValue === null ? "(none)" : String(dimensionValue),
       pivotValue: typedValueToScalar(row.cells[dimensionIndex]),
       pivotable: typedValueIsPivotable(row.cells[dimensionIndex]),
-      count: metric.coordinate,
-      exactCount: metric.exactText,
-      coordinateApproximate: metric.approximate || undefined,
+      count: primaryMetric.value ?? 0,
+      exactCount: primaryMetric.exactValue,
+      coordinateApproximate: series.some((metric) => metric.coordinateApproximate) || undefined,
       percent: "0.0%",
       avgDuration: average?.coordinate ?? Number.NaN,
-      measureLabel: metricColumn.displayName || metricColumn.fieldName,
+      measureLabel: primaryMetric.label,
+      series,
     } satisfies WorkspaceStatistic];
   });
-  // Mixed positive/negative measures require a zero-baseline chart, which this
-  // compact Splunk-style visualization intentionally does not pretend to render.
-  if (chartRows.length !== rows.length) return { rows: [], dimension: dimensionColumn.fieldName || "result" };
+  if (chartRows.length !== rows.length) {
+    return { rows: [], dimension: dimensionColumn.fieldName || "result" };
+  }
   const total = chartRows.reduce((sum, row) => sum + row.count, 0);
   for (const row of chartRows) {
     row.percent = total > 0 ? `${((row.count / total) * 100).toFixed(1)}%` : "0.0%";
@@ -572,15 +638,19 @@ function timelineFromRows(
   const timeIndex = schema.columns.findIndex((column) => /^_?time$/i.test(column.fieldName));
   if (timeIndex < 0) return [];
   const timeName = schema.columns[timeIndex].fieldName;
-  const countIndex = schema.columns.findIndex((column) => /^(?:count|count\(.+\))$/i.test(column.fieldName));
   const decodedRows = rows.map((row) => rowFields(schema, row).fields);
-  const numericIndexes = countIndex < 0
-    ? schema.columns.flatMap((column, index) =>
-      index !== timeIndex && rows.some((row) => chartNumericValue(row.cells[index]) !== null)
-        ? [index]
-        : [],
+  // Timechart columns after _time are independent runtime series. A split value
+  // can itself be named "count", so preferring that spelling would discard all
+  // of its siblings.
+  const numericIndexes = schema.columns.flatMap((column, index) =>
+    index !== timeIndex
+    && (
+      numericValueType(column.valueType)
+      || rows.some((row) => chartNumericValue(row.cells[index]) !== null)
     )
-    : [countIndex];
+      ? [index]
+      : [],
+  );
   if (numericIndexes.length === 0) return [];
   const points = rows.flatMap((row, index) => {
     const fields = decodedRows[index];

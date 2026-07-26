@@ -3,11 +3,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-import { IndexAccessState, IndexState } from "@/gen/ts/open_splunk/v1/index";
+import { SortDirection } from "@/gen/ts/open_splunk/v1/common";
+import {
+  IndexAccessState,
+  IndexState,
+  type Index,
+} from "@/gen/ts/open_splunk/v1/index";
+import { IndexSortBy } from "@/gen/ts/open_splunk/v1/index_api";
 import {
   createOpenSplunkApiClient,
   getSystemBootstrap,
+  isOptionalRouteUnavailable,
   type BrowserIndexModel,
+  type OpenSplunkApiClient,
   type SystemBootstrapModel,
 } from "@/lib/api";
 import { searchLaunchHref } from "@/lib/search/launch-url";
@@ -16,6 +24,14 @@ import { PageHeading } from "../_components/product-shell";
 
 interface BackendDatasetsConsoleProps {
   apiBaseUrl: string;
+}
+
+type DefinitionLoadState = "idle" | "loading" | "available" | "unavailable" | "error";
+
+interface AuthorizedIndexDefinitions {
+  state: Exclude<DefinitionLoadState, "idle" | "loading">;
+  definitions: Map<string, Index>;
+  message?: string;
 }
 
 function errorMessage(error: unknown): string {
@@ -37,6 +53,80 @@ function accessLabel(value: IndexAccessState): string {
   return "Unknown";
 }
 
+function retentionLabel(index: Index | undefined): string {
+  const seconds = index?.definition?.retentionPeriod?.seconds;
+  if (seconds === undefined || seconds <= 0n) return "Forever";
+  const days = seconds / 86_400n;
+  if (days > 0n && seconds % 86_400n === 0n) return `${days.toLocaleString()} days`;
+  const hours = seconds / 3_600n;
+  if (hours > 0n && seconds % 3_600n === 0n) return `${hours.toLocaleString()} hours`;
+  return `${seconds.toLocaleString()} seconds`;
+}
+
+function updatedLabel(index: Index | undefined): string {
+  const updatedAt = index?.updatedAt;
+  if (updatedAt === undefined || Number.isNaN(updatedAt.valueOf())) return "Not recorded";
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(updatedAt);
+}
+
+async function loadAuthorizedIndexDefinitions(
+  client: OpenSplunkApiClient,
+  bootstrap: SystemBootstrapModel,
+  signal: AbortSignal,
+): Promise<AuthorizedIndexDefinitions> {
+  const authorizedById = new Map(bootstrap.indexes.map((index) => [index.id, index]));
+  if (authorizedById.size === 0) return { state: "available", definitions: new Map() };
+  const definitions = new Map<string, Index>();
+  const seenPageTokens = new Set<string>();
+  const pageSize = Math.max(1, Math.min(bootstrap.limits.maximumPageSize || 100, 100));
+  let pageToken: string | undefined;
+  try {
+    for (let page = 0; page < 256; page += 1) {
+      // Index cursors are causally ordered and must be traversed sequentially.
+      // eslint-disable-next-line no-await-in-loop
+      const response = await client.indexes.list({
+        page: { pageSize, pageToken, includeTotalSize: false },
+        stateFilters: [],
+        textFilter: undefined,
+        sortBy: IndexSortBy.INDEX_SORT_BY_NAME,
+        sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
+        includeStats: false,
+      }, { signal });
+      for (const item of response.indexes) {
+        const index = item.index;
+        if (index === undefined) continue;
+        const authorized = authorizedById.get(index.indexId);
+        if (authorized === undefined) continue;
+        if (index.definition?.name !== authorized.name) {
+          throw new TypeError(`Index ${index.indexId} did not match its authorized bootstrap identity.`);
+        }
+        const existing = definitions.get(index.indexId);
+        if (existing !== undefined && existing.version !== index.version) {
+          throw new TypeError(`Index ${index.indexId} repeated with conflicting versions.`);
+        }
+        definitions.set(index.indexId, index);
+      }
+      if (definitions.size === authorizedById.size) {
+        return { state: "available", definitions };
+      }
+      const nextPageToken = response.page?.nextPageToken?.trim() || null;
+      if (nextPageToken === null) return { state: "available", definitions };
+      if (seenPageTokens.has(nextPageToken)) {
+        throw new TypeError("The index catalog repeated a page cursor.");
+      }
+      seenPageTokens.add(nextPageToken);
+      pageToken = nextPageToken;
+    }
+    throw new RangeError("The index catalog exceeded the 256-page browser safety limit.");
+  } catch (reason) {
+    if (isOptionalRouteUnavailable(reason)) {
+      return { state: "unavailable", definitions: new Map() };
+    }
+    if (signal.aborted) throw reason;
+    return { state: "error", definitions: new Map(), message: errorMessage(reason) };
+  }
+}
+
 export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsoleProps) {
   const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
   const [bootstrap, setBootstrap] = useState<SystemBootstrapModel | null>(null);
@@ -45,6 +135,9 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
   const [generation, setGeneration] = useState(0);
   const [filter, setFilter] = useState("");
   const [view, setView] = useState<"cards" | "table">("cards");
+  const [definitionState, setDefinitionState] = useState<DefinitionLoadState>("idle");
+  const [definitions, setDefinitions] = useState<Map<string, Index>>(new Map());
+  const [definitionError, setDefinitionError] = useState<string | null>(null);
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
 
   useEffect(() => {
@@ -52,19 +145,30 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
     let current = true;
     setLoading(true);
     setError(null);
-    void getSystemBootstrap(client, undefined, { signal: controller.signal }).then(
-      (response) => {
+    setDefinitionState("idle");
+    setDefinitions(new Map());
+    setDefinitionError(null);
+    void (async () => {
+      try {
+        const response = await getSystemBootstrap(client, undefined, { signal: controller.signal });
         if (!current) return;
         setBootstrap(response);
         setLoading(false);
-      },
-      (reason: unknown) => {
+        setDefinitionState("loading");
+        const loaded = await loadAuthorizedIndexDefinitions(client, response, controller.signal);
+        if (!current) return;
+        setDefinitions(loaded.definitions);
+        setDefinitionError(loaded.message ?? null);
+        setDefinitionState(loaded.state);
+      } catch (reason) {
         if (!current || controller.signal.aborted) return;
         setBootstrap(null);
+        setDefinitions(new Map());
+        setDefinitionState("idle");
         setError(errorMessage(reason));
         setLoading(false);
-      },
-    );
+      }
+    })();
     return () => {
       current = false;
       controller.abort();
@@ -101,6 +205,9 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
               <button className={view === "table" ? "active" : undefined} type="button" aria-pressed={view === "table"} onClick={() => setView("table")}>☷ Table</button>
             </fieldset>
           </div>
+          {definitionState === "loading" ? <output className="dataset-definition-notice">Loading retention and index metadata from the registered administration route…</output> : null}
+          {definitionState === "unavailable" ? <output className="dataset-definition-notice dataset-definition-notice--muted">The optional index-definition route is unavailable. Search authorization and state still come from system bootstrap.</output> : null}
+          {definitionState === "error" ? <div className="backend-inline-error" role="alert">Index details could not be enriched. Bootstrap authorization remains available. {definitionError}</div> : null}
 
           {visible.length === 0 ? (
             <DatasetState
@@ -113,11 +220,12 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
             <div className="dataset-grid backend-dataset-grid">
               {visible.map((index, position) => {
                 const state = stateLabel(index);
+                const detail = definitions.get(index.id);
                 return (
                   <article className="dataset-card" key={index.id}>
                     <header>
                       <span className={`dataset-icon dataset-icon--${position % 3 === 0 ? "green" : position % 3 === 1 ? "blue" : "orange"}`} aria-hidden="true">▦</span>
-                      <div><h2>{index.displayName}</h2><p><code>index={index.name}</code></p></div>
+                      <div><h2>{index.displayName}</h2><p><code>index={index.name}</code></p>{detail?.definition?.description ? <small>{detail.definition.description}</small> : null}</div>
                       <span className={`status-label status-label--${state === "Active" ? "complete" : state === "Deleting" ? "running" : "neutral"}`}><i />{state}</span>
                     </header>
                     <dl>
@@ -126,8 +234,22 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
                       <div><dt>Searchable now</dt><dd>{index.searchable ? "Yes" : "No"}</dd></div>
                       <div><dt>Ingestible now</dt><dd>{index.ingestible ? "Yes" : "No"}</dd></div>
                     </dl>
-                    <div className="dataset-retention backend-dataset-omission">
-                      <small>Event volume, storage, sources, fields, and retention are not included in bootstrap.</small>
+                    <div className={`dataset-retention${detail === undefined ? " backend-dataset-omission" : ""}`}>
+                      {detail === undefined ? (
+                        <small>{definitionState === "loading"
+                          ? "Loading retention and index settings…"
+                          : definitionState === "unavailable"
+                            ? "The optional index-definition route is not registered."
+                            : definitionState === "error"
+                              ? "Index settings could not be loaded; bootstrap access remains authoritative."
+                              : "The server did not return extended settings for this authorized index."}</small>
+                      ) : (
+                        <dl className="dataset-definition-meta">
+                          <div><dt>Retention</dt><dd>{retentionLabel(detail)}</dd></div>
+                          <div><dt>Default source type</dt><dd>{detail.definition?.defaultSourcetype || "Not set"}</dd></div>
+                          <div><dt>Updated</dt><dd>{updatedLabel(detail)}</dd></div>
+                        </dl>
+                      )}
                     </div>
                     <footer>
                       {index.searchable ? <Link href={searchLaunchHref(`index=${index.name} | sort -_time`)}>Search index</Link> : <span className="dataset-action-unavailable">Search unavailable</span>}
@@ -141,8 +263,11 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
             <section className="suite-card">
               <div className="responsive-table-wrap">
                 <table className="product-table">
-                  <thead><tr><th scope="col">Index</th><th scope="col">State</th><th scope="col">Search access</th><th scope="col">Ingestion access</th><th scope="col"><span className="sr-only">Action</span></th></tr></thead>
-                  <tbody>{visible.map((index) => <tr key={index.id}><td><strong>{index.displayName}</strong><small className="table-secondary">index={index.name}</small></td><td>{stateLabel(index)}</td><td>{accessLabel(index.searchAccess)}</td><td>{accessLabel(index.ingestionAccess)}</td><td>{index.searchable ? <Link className="table-action" href={searchLaunchHref(`index=${index.name} | sort -_time`)} aria-label={`Search ${index.name}`}>Search ›</Link> : "Unavailable"}</td></tr>)}</tbody>
+                  <thead><tr><th scope="col">Index</th><th scope="col">State</th><th scope="col">Search access</th><th scope="col">Ingestion access</th><th scope="col">Retention</th><th scope="col">Default source type</th><th scope="col"><span className="sr-only">Action</span></th></tr></thead>
+                  <tbody>{visible.map((index) => {
+                    const detail = definitions.get(index.id);
+                    return <tr key={index.id}><td><strong>{index.displayName}</strong><small className="table-secondary">index={index.name}</small></td><td>{stateLabel(index)}</td><td>{accessLabel(index.searchAccess)}</td><td>{accessLabel(index.ingestionAccess)}</td><td>{detail === undefined ? "Not available" : retentionLabel(detail)}</td><td>{detail === undefined ? "Not available" : detail.definition?.defaultSourcetype || "Not set"}</td><td>{index.searchable ? <Link className="table-action" href={searchLaunchHref(`index=${index.name} | sort -_time`)} aria-label={`Search ${index.name}`}>Search ›</Link> : "Unavailable"}</td></tr>;
+                  })}</tbody>
                 </table>
               </div>
             </section>
@@ -150,7 +275,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
 
           <section className="suite-card backend-unavailable-card">
             <header className="suite-card-header"><div><h2>Field catalog and source profiles</h2><p>Unavailable for index browsing in this server version.</p></div><span aria-hidden="true">i</span></header>
-            <p>The frontend does not call the unregistered index field, statistics, or storage routes. Run an explicit search to inspect fields or source types for a searchable index.</p>
+            <p>Index definitions may provide retention and a default source type. Event volume, storage statistics, discovered fields, and observed source profiles remain unavailable because those routes are not registered. Run an explicit search to inspect data for a searchable index.</p>
           </section>
         </>
       )}

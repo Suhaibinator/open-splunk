@@ -13,17 +13,31 @@ import {
 } from "@/lib/api";
 import { savedSearchLaunchHref } from "@/lib/search/launch-url";
 import {
+  nextDuplicateSavedSearchName,
+  savedSearchNameValidationError,
+} from "@/lib/search/saved-search-names";
+import {
+  deleteServerSavedSearch,
+  duplicateServerSavedSearch,
   listServerSavedSearches,
+  renameServerSavedSearch,
   savedSearchForDisplay,
   type ServerSavedSearch,
 } from "@/lib/search/server-objects";
 
 import { PageHeading } from "../_components/product-shell";
+import { Modal } from "../search-workspace/modal";
 import styles from "./reports.module.css";
 
 type SavedSearchScope = "all" | "private" | "app" | "global";
 type SortOrder = "updated" | "name";
 type LoadState = "loading" | "available" | "unavailable" | "error";
+type SavedSearchAction = "rename" | "duplicate" | "delete";
+
+interface SavedSearchModal {
+  action: SavedSearchAction;
+  target: ServerSavedSearch;
+}
 
 interface BackendReportsConsoleProps {
   apiBaseUrl: string;
@@ -78,11 +92,19 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<SavedSearchScope>("all");
   const [sort, setSort] = useState<SortOrder>("updated");
+  const [modal, setModal] = useState<SavedSearchModal | null>(null);
+  const [actionName, setActionName] = useState("");
+  const [actionPending, setActionPending] = useState<SavedSearchAction | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const bootstrapRef = useRef<SystemBootstrapModel | null>(null);
   const loadMoreAbortRef = useRef<AbortController | null>(null);
+  const actionAbortRef = useRef<AbortController | null>(null);
   const pageTokensSeenRef = useRef<Set<string>>(new Set());
   const hasLoadedRef = useRef(false);
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
+
+  useEffect(() => () => actionAbortRef.current?.abort(), []);
 
   useEffect(() => {
     const retainShell = hasLoadedRef.current;
@@ -237,6 +259,140 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
     ? totalSize.toLocaleString()
     : savedSearches.length.toLocaleString();
   const refreshPending = state === "loading" || refreshing;
+  const controlsPending = refreshPending || actionPending !== null;
+  const actionNameError = savedSearchNameValidationError(actionName);
+
+  function openAction(nextAction: SavedSearchAction, target: ServerSavedSearch) {
+    if (actionPending !== null) return;
+    setActionError(null);
+    setActionName(nextAction === "duplicate"
+      ? nextDuplicateSavedSearchName(target.name, savedSearches.map((candidate) => candidate.name))
+      : target.name);
+    setModal({ action: nextAction, target });
+  }
+
+  function closeAction() {
+    if (actionPending !== null) return;
+    setModal(null);
+    setActionError(null);
+  }
+
+  function invalidatePagingAfterMutation() {
+    pageTokensSeenRef.current.clear();
+    setNextPageToken(null);
+    setComplete(true);
+    setLoadMoreError(null);
+  }
+
+  async function renameSavedSearch() {
+    const currentModal = modal;
+    const bootstrap = bootstrapRef.current;
+    const name = actionName.trim();
+    const validationError = savedSearchNameValidationError(actionName);
+    if (currentModal?.action !== "rename" || bootstrap === null || name === currentModal.target.name) return;
+    if (validationError !== null) {
+      setActionError(validationError);
+      return;
+    }
+    const controller = new AbortController();
+    actionAbortRef.current?.abort();
+    actionAbortRef.current = controller;
+    setActionPending("rename");
+    setActionError(null);
+    try {
+      const result = await renameServerSavedSearch(client, bootstrap, currentModal.target, name, {
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      if (result.status === "unavailable") throw new Error("The saved-search update route is no longer available.");
+      if (result.value.id !== currentModal.target.id) throw new Error("The server returned a different saved search after rename.");
+      setSavedSearches((current) => current.map((item) => item.id === result.value.id ? result.value : item));
+      invalidatePagingAfterMutation();
+      setModal(null);
+      setActionNotice(`Renamed “${currentModal.target.name}” to “${result.value.name}”.`);
+      reload();
+    } catch (reason) {
+      if (!controller.signal.aborted) setActionError(errorMessage(reason));
+    } finally {
+      if (actionAbortRef.current === controller) actionAbortRef.current = null;
+      setActionPending(null);
+    }
+  }
+
+  async function duplicateSavedSearch() {
+    const currentModal = modal;
+    const bootstrap = bootstrapRef.current;
+    const name = actionName.trim();
+    const validationError = savedSearchNameValidationError(actionName);
+    if (currentModal?.action !== "duplicate" || bootstrap === null) return;
+    if (validationError !== null) {
+      setActionError(validationError);
+      return;
+    }
+    const controller = new AbortController();
+    actionAbortRef.current?.abort();
+    actionAbortRef.current = controller;
+    setActionPending("duplicate");
+    setActionError(null);
+    try {
+      const result = await duplicateServerSavedSearch(
+        client,
+        bootstrap,
+        currentModal.target.id,
+        name,
+        currentModal.target.search.appId,
+        { signal: controller.signal },
+      );
+      if (controller.signal.aborted) return;
+      if (result.status === "unavailable") throw new Error("The saved-search duplicate route is no longer available.");
+      if (result.value.id === currentModal.target.id) throw new Error("The server did not return a distinct saved-search copy.");
+      setSavedSearches((current) => [result.value, ...current]);
+      setTotalSize((current) => current === null ? null : current + 1n);
+      invalidatePagingAfterMutation();
+      setModal(null);
+      setActionNotice(`Created “${result.value.name}” from “${currentModal.target.name}”.`);
+      reload();
+    } catch (reason) {
+      if (!controller.signal.aborted) setActionError(errorMessage(reason));
+    } finally {
+      if (actionAbortRef.current === controller) actionAbortRef.current = null;
+      setActionPending(null);
+    }
+  }
+
+  async function deleteSavedSearch() {
+    const currentModal = modal;
+    const bootstrap = bootstrapRef.current;
+    if (currentModal?.action !== "delete" || bootstrap === null) return;
+    const controller = new AbortController();
+    actionAbortRef.current?.abort();
+    actionAbortRef.current = controller;
+    setActionPending("delete");
+    setActionError(null);
+    try {
+      const result = await deleteServerSavedSearch(
+        client,
+        bootstrap,
+        currentModal.target.id,
+        currentModal.target.version,
+        { signal: controller.signal },
+      );
+      if (controller.signal.aborted) return;
+      if (result.status === "unavailable") throw new Error("The saved-search delete route is no longer available.");
+      if (result.value !== currentModal.target.id) throw new Error("The server confirmed deletion for a different saved search.");
+      setSavedSearches((current) => current.filter((item) => item.id !== currentModal.target.id));
+      setTotalSize((current) => current === null || current === 0n ? current : current - 1n);
+      invalidatePagingAfterMutation();
+      setModal(null);
+      setActionNotice(`Deleted “${currentModal.target.name}”. Search history was not changed.`);
+      reload();
+    } catch (reason) {
+      if (!controller.signal.aborted) setActionError(errorMessage(reason));
+    } finally {
+      if (actionAbortRef.current === controller) actionAbortRef.current = null;
+      setActionPending(null);
+    }
+  }
 
   return (
     <div className={`suite-page ${styles.page}`}>
@@ -244,7 +400,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         eyebrow="SEARCH & REPORTING"
         title="Saved searches"
         description="Open reusable search definitions persisted by the connected server."
-        actions={<><Link className="suite-button" href="/search/">Open Search</Link><button className="suite-button suite-button--primary" type="button" aria-busy={refreshPending} aria-disabled={refreshPending} onClick={() => { if (!refreshPending) reload(); }}>{refreshing ? "Refreshing…" : state === "loading" ? "Loading…" : "Refresh"}</button></>}
+        actions={<><Link className="suite-button" href="/search/">Open Search</Link><button className="suite-button suite-button--primary" type="button" aria-busy={refreshPending} aria-disabled={controlsPending} onClick={() => { if (!controlsPending) reload(); }}>{refreshing ? "Refreshing…" : state === "loading" ? "Loading…" : "Refresh"}</button></>}
       />
 
       {state === "loading" ? <SavedSearchState kind="loading" title="Loading saved searches" message="Reading persisted definitions from the server…" /> : null}
@@ -255,6 +411,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         <>
           {refreshing ? <output className="backend-list-notice">Refreshing saved searches. Existing definitions remain visible until the request completes.</output> : null}
           {error === null ? null : <div className="backend-inline-error" role="alert">The latest refresh failed; the previous saved-search snapshot remains visible. {error}</div>}
+          {actionNotice === null ? null : <output className={styles.actionNotice}><span>{actionNotice}</span><button type="button" aria-label="Dismiss saved-search action message" onClick={() => setActionNotice(null)}>×</button></output>}
           <section className={styles.summary} aria-label="Saved search summary">
             <article><span className={styles.metricIcon} aria-hidden="true">▤</span><div><strong>{displayedTotal}</strong><small>{totalSizeExact ? "Saved searches" : "Definitions loaded"}</small></div></article>
             <article><span className={styles.metricIcon} aria-hidden="true">♙</span><div><strong>{counts.private}</strong><small>{complete ? "Private" : "Private loaded"}</small></div></article>
@@ -314,7 +471,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
             ) : (
               <div className={styles.tableWrap}>
                 <table className={`${styles.table} ${styles.backendTable}`}>
-                  <thead><tr><th scope="col">Saved search</th><th scope="col">App</th><th scope="col">Sharing</th><th scope="col">Owner</th><th scope="col">Time range</th><th scope="col">Modified</th><th scope="col"><span className="sr-only">Open</span></th></tr></thead>
+                  <thead><tr><th scope="col">Saved search</th><th scope="col">App</th><th scope="col">Sharing</th><th scope="col">Owner</th><th scope="col">Time range</th><th scope="col">Modified</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>{visible.map((savedSearch) => {
                     const display = savedSearchForDisplay(savedSearch, formatDate);
                     return (
@@ -332,7 +489,12 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
                         <td data-label="Owner">{savedSearch.ownerId || "Current user"}</td>
                         <td data-label="Time range"><code>{savedSearch.search.timeRange?.earliest ?? "Server default"} → {savedSearch.search.timeRange?.latest ?? "Server default"}</code></td>
                         <td data-label="Modified">{display.updatedAt}</td>
-                        <td className={styles.openCell}><Link href={launchHref(savedSearch)} aria-label={`Open ${savedSearch.name} in Search`}>Open in Search <span aria-hidden="true">›</span></Link></td>
+                        <td className={`${styles.openCell} ${styles.actionCell}`}>
+                          <Link href={launchHref(savedSearch)} aria-label={`Open ${savedSearch.name} in Search`}>Open <span aria-hidden="true">›</span></Link>
+                          <button type="button" disabled={controlsPending} onClick={() => openAction("rename", savedSearch)} aria-label={`Rename ${savedSearch.name}`}>Rename</button>
+                          <button type="button" disabled={controlsPending} onClick={() => openAction("duplicate", savedSearch)} aria-label={`Duplicate ${savedSearch.name}`}>Duplicate</button>
+                          <button className={styles.deleteAction} type="button" disabled={controlsPending} onClick={() => openAction("delete", savedSearch)} aria-label={`Delete ${savedSearch.name}`}>Delete</button>
+                        </td>
                       </tr>
                     );
                   })}</tbody>
@@ -346,6 +508,79 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
             <p>The backend persists saved search definitions but does not register report scheduling, execution, or delivery routes. No schedule or last-run status is inferred.</p>
           </section>
         </>
+      ) : null}
+
+      {modal?.action === "rename" ? (
+        <Modal
+          title="Rename saved search"
+          subtitle={`Choose a new name for “${modal.target.name}”. Its SPL, sharing, and app stay unchanged.`}
+          initialFocus="#reports-saved-search-name"
+          dismissible={actionPending === null}
+          onClose={closeAction}
+          footer={(
+            <>
+              <button className="button secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Cancel</button>
+              <button
+                className="button primary"
+                type="submit"
+                form="reports-rename-saved-search"
+                disabled={actionPending !== null || actionNameError !== null || actionName.trim() === modal.target.name}
+                aria-busy={actionPending === "rename"}
+              >
+                {actionPending === "rename" ? "Renaming…" : "Rename"}
+              </button>
+            </>
+          )}
+        >
+          <form className="form-stack" id="reports-rename-saved-search" onSubmit={(event) => { event.preventDefault(); void renameSavedSearch(); }}>
+            {actionError === null && actionNameError === null ? null : <p className={styles.actionError} id="reports-rename-name-error" role="alert">{actionError ?? actionNameError}</p>}
+            <label><span>Name</span><input id="reports-saved-search-name" value={actionName} disabled={actionPending !== null} maxLength={255} autoComplete="off" aria-invalid={actionNameError !== null} aria-describedby={actionError === null && actionNameError === null ? undefined : "reports-rename-name-error"} onChange={(event) => { setActionName(event.target.value); setActionError(null); }} /></label>
+          </form>
+        </Modal>
+      ) : null}
+
+      {modal?.action === "duplicate" ? (
+        <Modal
+          title="Duplicate saved search"
+          subtitle={`Create an independent copy of “${modal.target.name}” in the same app.`}
+          initialFocus="#reports-duplicate-saved-search-name"
+          dismissible={actionPending === null}
+          onClose={closeAction}
+          footer={(
+            <>
+              <button className="button secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Cancel</button>
+              <button className="button primary" type="submit" form="reports-duplicate-saved-search" disabled={actionPending !== null || actionNameError !== null} aria-busy={actionPending === "duplicate"}>
+                {actionPending === "duplicate" ? "Duplicating…" : "Duplicate"}
+              </button>
+            </>
+          )}
+        >
+          <form className="form-stack" id="reports-duplicate-saved-search" onSubmit={(event) => { event.preventDefault(); void duplicateSavedSearch(); }}>
+            {actionError === null && actionNameError === null ? null : <p className={styles.actionError} id="reports-duplicate-name-error" role="alert">{actionError ?? actionNameError}</p>}
+            <label><span>Copy name</span><input id="reports-duplicate-saved-search-name" value={actionName} disabled={actionPending !== null} maxLength={255} autoComplete="off" aria-invalid={actionNameError !== null} aria-describedby={actionError === null && actionNameError === null ? undefined : "reports-duplicate-name-error"} onChange={(event) => { setActionName(event.target.value); setActionError(null); }} /></label>
+            <p className={styles.actionHint}>The copy keeps the current SPL, time range, result preferences, sharing scope, and app. Future edits do not affect the original.</p>
+          </form>
+        </Modal>
+      ) : null}
+
+      {modal?.action === "delete" ? (
+        <Modal
+          title="Delete saved search?"
+          subtitle={`“${modal.target.name}” will be permanently removed.`}
+          dismissible={actionPending === null}
+          onClose={closeAction}
+          footer={(
+            <>
+              <button className="button secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Keep saved search</button>
+              <button className="button danger" type="button" disabled={actionPending !== null} aria-busy={actionPending === "delete"} onClick={() => void deleteSavedSearch()}>
+                {actionPending === "delete" ? "Deleting…" : "Delete saved search"}
+              </button>
+            </>
+          )}
+        >
+          <p>This cannot be undone. Existing search-history entries and their terminal metadata are not removed.</p>
+          {actionError === null ? null : <p className={styles.actionError} role="alert">{actionError}</p>}
+        </Modal>
       ) : null}
     </div>
   );

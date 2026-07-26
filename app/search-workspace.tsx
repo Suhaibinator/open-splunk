@@ -67,6 +67,7 @@ import {
   indexSelectorsFromSPL,
   isHttpError,
   isHttpStatus,
+  pruneCursorChainFrom,
   recordNextPageToken,
   RepeatedPageCursorError,
   resolveExactIndexScope,
@@ -723,6 +724,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const appSwitchEpochRef = useRef(0);
   const backendObjectMutationRef = useRef(false);
   const backendResultPagesRef = useRef<Map<string, BackendResultPage>>(new Map());
+  const backendAuthoritativeResultSchemaRef = useRef<ResultSchema | null>(null);
   const backendPageTokensRef = useRef<Map<string, string | undefined>>(new Map());
   const backendPageStartsRef = useRef<Map<string, number>>(new Map());
   const backendResultPageTokensSeenRef = useRef<Set<string>>(new Set());
@@ -1791,6 +1793,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   function resetBackendResultState() {
     backendProgressRevisionRef.current = null;
     backendResultPagesRef.current.clear();
+    backendAuthoritativeResultSchemaRef.current = null;
     backendPageTokensRef.current.clear();
     backendPageStartsRef.current.clear();
     backendResultPageTokensSeenRef.current.clear();
@@ -2535,10 +2538,29 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (generationRef.current !== generation || backendJobIdRef.current !== job.searchJobId) {
       throw new DOMException("Search was superseded.", "AbortError");
     }
+    if (response.searchJobId !== job.searchJobId) {
+      throw new Error("The search results response belongs to a different search job.");
+    }
     const resultPage = response.resultPage;
     if (resultPage === undefined) throw new Error("The search completed without a result page.");
     const schema = resultPage.schema ?? job.resultSchema;
     if (schema === undefined) throw new Error("The search completed without a result schema.");
+    if (schema.schemaId.trim().length === 0 || schema.revision <= 0n) {
+      throw new Error("The search result page returned an invalid schema identity or revision.");
+    }
+    const expectedSchema = backendAuthoritativeResultSchemaRef.current ?? job.resultSchema;
+    if (expectedSchema !== undefined && expectedSchema !== null) {
+      if (
+        schema.schemaId !== expectedSchema.schemaId
+        || schema.revision !== expectedSchema.revision
+      ) {
+        throw new Error("The search result schema changed while paging through one retained snapshot.");
+      }
+      if (!equalResultSchemas(schema, expectedSchema)) {
+        throw new Error("The search result schema mutated without changing its identity or revision.");
+      }
+    }
+    backendAuthoritativeResultSchemaRef.current = schema;
     const totalSize = resultPage.page?.totalSize;
     let nextPageToken: string | undefined;
     const nextPageKey = `${pageSize}:${pageNumber + 1}`;
@@ -2548,6 +2570,14 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       if (rawNextPageToken === knownNextPageToken) {
         nextPageToken = knownNextPageToken;
       } else {
+        pruneCursorChainFrom(
+          backendResultPagesRef.current,
+          backendPageTokensRef.current,
+          backendPageStartsRef.current,
+          backendResultPageTokensSeenRef.current,
+          pageSize,
+          pageNumber + 1,
+        );
         setBackendNotices((current) => uniqueMessages([
           ...current,
           "The retained result cursor changed while revisiting a page. Further paging was stopped.",
@@ -2561,6 +2591,14 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           "Search results",
         ) ?? undefined;
       } catch (error) {
+        pruneCursorChainFrom(
+          backendResultPagesRef.current,
+          backendPageTokensRef.current,
+          backendPageStartsRef.current,
+          backendResultPageTokensSeenRef.current,
+          pageSize,
+          pageNumber + 1,
+        );
         setBackendNotices((current) => uniqueMessages([
           ...current,
           `${error instanceof Error ? error.message : "Search results returned an invalid page cursor."} Further paging was stopped.`,

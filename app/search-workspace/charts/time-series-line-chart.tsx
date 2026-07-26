@@ -15,7 +15,20 @@ import { formatExactNumericText } from "../formatters";
 
 const VIEWBOX_WIDTH = 1000;
 const VIEWBOX_HEIGHT = 300;
-export const TIME_SERIES_COLORS = ["#5f9f3a", "#2f7fa6", "#e49a2c", "#8b67a8", "#c6534c", "#4d9a8a"] as const;
+export const TIME_SERIES_COLORS = [
+  "#5f9f3a",
+  "#2f7fa6",
+  "#e49a2c",
+  "#8b67a8",
+  "#c6534c",
+  "#4d9a8a",
+  "#c76594",
+  "#6f7fb5",
+  "#a57835",
+  "#4f8f6f",
+  "#8a6d55",
+  "#708f37",
+] as const;
 
 interface TimeSeriesLineChartProps {
   points: TimelinePoint[];

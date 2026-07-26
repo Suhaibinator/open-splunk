@@ -4,6 +4,7 @@ import {
   ExportJobState,
   JsonIntegerEncoding,
   type ExportJob,
+  type ExportProgress,
 } from "@/gen/ts/open_splunk/v1/export";
 import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
 import type { OpenSplunkApiClient } from "@/lib/api/open-splunk-client";
@@ -27,6 +28,219 @@ import {
 } from "@/lib/api/system-bootstrap";
 
 export type ServerExportFormat = "csv" | "json-lines";
+
+const MAXIMUM_UINT64 = (1n << 64n) - 1n;
+const NANOSECONDS_PER_SECOND = 1_000_000_000n;
+
+export type ExportProgressRevisionState = {
+  revision: bigint;
+  epoch: bigint;
+  progress: ExportProgress;
+} | null;
+
+export type ExportProgressSource =
+  | { kind: "authoritative"; envelopeRevision: bigint }
+  | { kind: "live" }
+  | { kind: "terminal"; envelopeRevision: bigint };
+
+export type ExportProgressDecision =
+  | {
+    kind: "apply";
+    state: NonNullable<ExportProgressRevisionState>;
+  }
+  | {
+    kind: "ignore";
+    reason: "duplicate" | "lower";
+    state: ExportProgressRevisionState;
+  }
+  | {
+    kind: "recover";
+    reason: "invalid-revision" | "invalid-watermark" | "unversioned" | "watermark-regression";
+    state: ExportProgressRevisionState;
+  };
+
+interface AuthoritativeExportSnapshot {
+  job: ExportJob;
+  progressRevision: NonNullable<ExportProgressRevisionState>;
+}
+
+function isVersionedExportRevision(revision: bigint): boolean {
+  return typeof revision === "bigint"
+    && revision > 0n
+    && revision <= MAXIMUM_UINT64;
+}
+
+function cloneExportProgress(progress: ExportProgress): ExportProgress {
+  return {
+    ...progress,
+    elapsed: progress.elapsed === undefined ? undefined : { ...progress.elapsed },
+    updatedAt: progress.updatedAt === undefined
+      ? undefined
+      : new Date(progress.updatedAt.getTime()),
+  };
+}
+
+function exportProgressElapsedNanoseconds(progress: ExportProgress): bigint | null {
+  const elapsed = progress.elapsed;
+  if (
+    elapsed === undefined
+    || elapsed.seconds < 0n
+    || elapsed.nanos < 0
+    || elapsed.nanos >= Number(NANOSECONDS_PER_SECOND)
+  ) {
+    return null;
+  }
+  return elapsed.seconds * NANOSECONDS_PER_SECOND + BigInt(elapsed.nanos);
+}
+
+function exportProgressWatermark(progress: ExportProgress): {
+  updatedAt: number;
+  elapsed: bigint;
+} | null {
+  const updatedAt = progress.updatedAt?.valueOf() ?? Number.NaN;
+  const elapsed = exportProgressElapsedNanoseconds(progress);
+  if (!Number.isFinite(updatedAt) || elapsed === null) return null;
+  return { updatedAt, elapsed };
+}
+
+function optionalNumberOrder(left: number | undefined, right: number | undefined): -1 | 0 | 1 {
+  if (Object.is(left, right)) return 0;
+  if (left === undefined) return -1;
+  if (right === undefined) return 1;
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return -1;
+  return left < right ? -1 : 1;
+}
+
+/**
+ * Orders versionless WebSocket export-progress frames by their server timestamp
+ * and monotonic counters. REST/terminal envelopes also carry a state revision;
+ * both domains must advance before a candidate may replace visible progress.
+ */
+export function reconcileExportProgress(
+  current: ExportProgressRevisionState,
+  progress: ExportProgress,
+  source: ExportProgressSource,
+): ExportProgressDecision {
+  const envelopeRevision = source.kind === "live"
+    ? current?.revision
+    : source.envelopeRevision;
+  if (
+    source.kind !== "live"
+    && (
+      envelopeRevision === undefined
+      || !isVersionedExportRevision(envelopeRevision)
+    )
+  ) {
+    return { kind: "recover", reason: "invalid-revision", state: current };
+  }
+  if (source.kind === "live" && current === null) {
+    return { kind: "recover", reason: "unversioned", state: current };
+  }
+  const candidateWatermark = exportProgressWatermark(progress);
+  if (candidateWatermark === null) {
+    return { kind: "recover", reason: "invalid-watermark", state: current };
+  }
+  if (current === null) {
+    return {
+      kind: "apply",
+      state: {
+        revision: envelopeRevision!,
+        epoch: 1n,
+        progress: cloneExportProgress(progress),
+      },
+    };
+  }
+  if (envelopeRevision! < current.revision) {
+    return { kind: "ignore", reason: "lower", state: current };
+  }
+
+  const currentWatermark = exportProgressWatermark(current.progress);
+  if (currentWatermark === null) {
+    return { kind: "recover", reason: "invalid-watermark", state: current };
+  }
+  const percentOrder = optionalNumberOrder(
+    progress.percentComplete,
+    current.progress.percentComplete,
+  );
+  const regressed = candidateWatermark.updatedAt < currentWatermark.updatedAt
+    || progress.rowsWritten < current.progress.rowsWritten
+    || progress.bytesWritten < current.progress.bytesWritten
+    || candidateWatermark.elapsed < currentWatermark.elapsed
+    || percentOrder < 0;
+  if (regressed) {
+    return source.kind === "live"
+      ? { kind: "ignore", reason: "lower", state: current }
+      : { kind: "recover", reason: "watermark-regression", state: current };
+  }
+
+  const stable = candidateWatermark.updatedAt === currentWatermark.updatedAt
+    && progress.rowsWritten === current.progress.rowsWritten
+    && progress.bytesWritten === current.progress.bytesWritten
+    && candidateWatermark.elapsed === currentWatermark.elapsed
+    && percentOrder === 0;
+  if (stable && envelopeRevision === current.revision) {
+    return { kind: "ignore", reason: "duplicate", state: current };
+  }
+  return {
+    kind: "apply",
+    state: {
+      revision: envelopeRevision!,
+      epoch: current.epoch + 1n,
+      progress: cloneExportProgress(progress),
+    },
+  };
+}
+
+function reconcileAuthoritativeExportSnapshot(
+  current: AuthoritativeExportSnapshot | null,
+  candidate: ExportJob,
+  expectedExportJobId: string,
+): AuthoritativeExportSnapshot {
+  if (candidate.exportJobId !== expectedExportJobId) {
+    throw new TypeError("The export snapshot belongs to a different export job.");
+  }
+  if (!isVersionedExportRevision(candidate.stateVersion)) {
+    throw new TypeError("The export snapshot has an invalid state revision.");
+  }
+  if (candidate.progress === undefined) {
+    throw new TypeError("The export snapshot omitted progress.");
+  }
+  if (current !== null) {
+    if (candidate.stateVersion < current.job.stateVersion) {
+      throw new Error("The authoritative export snapshot is older than the applied state.");
+    }
+    if (
+      candidate.stateVersion === current.job.stateVersion
+      && candidate.state !== current.job.state
+    ) {
+      throw new Error("The authoritative export state changed without advancing its revision.");
+    }
+  }
+  const progressDecision = reconcileExportProgress(
+    current?.progressRevision ?? null,
+    candidate.progress,
+    { kind: "authoritative", envelopeRevision: candidate.stateVersion },
+  );
+  if (progressDecision.kind === "recover") {
+    throw new Error(`The authoritative export progress is inconsistent (${progressDecision.reason}).`);
+  }
+  if (progressDecision.kind === "ignore" && progressDecision.reason === "lower") {
+    throw new Error("The authoritative export progress is older than the applied progress.");
+  }
+  const progressRevision = progressDecision.kind === "apply"
+    ? progressDecision.state
+    : current?.progressRevision;
+  if (progressRevision === undefined) {
+    throw new Error("The authoritative export snapshot could not establish progress.");
+  }
+  return {
+    job: {
+      ...candidate,
+      progress: progressRevision.progress,
+    },
+    progressRevision,
+  };
+}
 
 export interface CreateServerExportOptions extends ProtobufRequestOptions {
   searchJobId: string;
@@ -176,7 +390,15 @@ export async function waitForServerExport(
     || supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_EXPORT_JSON_LINES);
   if (!supported) return featureNotAdvertised;
   if (exportJob.exportJobId.trim().length === 0) throw new TypeError("Export job ID is required.");
-  if (exportIsTerminal(exportJob)) return { status: "available", value: exportJob };
+  if (options.signal?.aborted) throw abortError(options.signal);
+  const initialSnapshot = reconcileAuthoritativeExportSnapshot(
+    null,
+    exportJob,
+    exportJob.exportJobId,
+  );
+  if (exportIsTerminal(initialSnapshot.job)) {
+    return { status: "available", value: initialSnapshot.job };
+  }
   const websocketPath = options.websocketPath ?? bootstrap.searchWebsocketPath;
   if (websocketPath?.trim()) {
     const recoveryIntervalMs = options.websocketRecoveryIntervalMs ?? 10_000;
@@ -186,7 +408,7 @@ export async function waitForServerExport(
     try {
       const job = await waitForServerExportWebSocket(
         client,
-        exportJob,
+        initialSnapshot.job,
         websocketPath,
         recoveryIntervalMs,
         options,
@@ -201,24 +423,28 @@ export async function waitForServerExport(
   if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 100) {
     throw new RangeError("Export polling interval must be at least 100 milliseconds.");
   }
-  let job = exportJob;
+  let snapshot = initialSnapshot;
   try {
-    while (!exportIsTerminal(job)) {
+    while (!exportIsTerminal(snapshot.job)) {
       // Export state is sequential; each response determines whether another poll is needed.
       // eslint-disable-next-line no-await-in-loop
       await wait(pollIntervalMs, options.signal);
       // eslint-disable-next-line no-await-in-loop
       const response = await client.exports.get({
-        exportJobId: job.exportJobId,
+        exportJobId: initialSnapshot.job.exportJobId,
         issueDownloadGrant: false,
       }, options);
       if (response.exportJob === undefined) {
         throw new TypeError("The server returned an empty export job.");
       }
-      job = response.exportJob;
-      options.onUpdate?.(job);
+      snapshot = reconcileAuthoritativeExportSnapshot(
+        snapshot,
+        response.exportJob,
+        initialSnapshot.job.exportJobId,
+      );
+      options.onUpdate?.(snapshot.job);
     }
-    return { status: "available", value: job };
+    return { status: "available", value: snapshot.job };
   } catch (error) {
     if (isAdvertisedFeatureRouteUnavailable(error)) return optionalRouteUnavailable;
     throw error;
@@ -255,16 +481,34 @@ function waitForServerExportWebSocket(
       baseUrl: options.websocketBaseUrl,
     });
     let job = initialJob;
+    let progressRevision: ExportProgressRevisionState = null;
+    const initialSnapshot = reconcileAuthoritativeExportSnapshot(
+      null,
+      initialJob,
+      initialJob.exportJobId,
+    );
+    progressRevision = initialSnapshot.progressRevision;
+    job = initialSnapshot.job;
     let settled = false;
     let recoveryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-    let recoveryRequest: Promise<ExportJob> | null = null;
+    let recoveryTimerImmediate = false;
+    let recoveryCycle: Promise<ExportJob> | null = null;
+    let immediateRecoveryPending = false;
     let subscriptionId: string | null = null;
     const cleanups: Array<() => void> = [];
 
-    function publish(nextJob: ExportJob) {
-      if (nextJob.stateVersion < job.stateVersion) return;
-      job = nextJob;
-      options.onUpdate?.(nextJob);
+    function publishAuthoritative(nextJob: ExportJob) {
+      const reconciled = reconcileAuthoritativeExportSnapshot(
+        {
+          job,
+          progressRevision: progressRevision!,
+        },
+        nextJob,
+        initialJob.exportJobId,
+      );
+      progressRevision = reconciled.progressRevision;
+      job = reconciled.job;
+      options.onUpdate?.(job);
     }
 
     function cleanup() {
@@ -274,10 +518,9 @@ function waitForServerExportWebSocket(
       socket.dispose();
     }
 
-    function finish(nextJob: ExportJob) {
+    function finish() {
       if (settled) return;
       settled = true;
-      publish(nextJob);
       cleanup();
       resolve(job);
     }
@@ -291,53 +534,77 @@ function waitForServerExportWebSocket(
 
     function scheduleRecovery(delay = recoveryIntervalMs) {
       if (settled || signal?.aborted) return;
-      if (recoveryTimer !== undefined) globalThis.clearTimeout(recoveryTimer);
+      const immediate = delay === 0;
+      if (recoveryCycle !== null) {
+        if (immediate) immediateRecoveryPending = true;
+        return;
+      }
+      if (recoveryTimer !== undefined) {
+        if (!immediate || recoveryTimerImmediate) return;
+        globalThis.clearTimeout(recoveryTimer);
+      }
+      recoveryTimerImmediate = immediate;
       recoveryTimer = globalThis.setTimeout(() => {
         recoveryTimer = undefined;
-        void recoverFromRest();
+        recoveryTimerImmediate = false;
+        void recoverFromRest().catch(() => undefined);
       }, delay);
     }
 
-    async function fetchAuthoritative(): Promise<ExportJob> {
-      if (recoveryRequest !== null) return recoveryRequest;
-      recoveryRequest = getAuthoritativeExportJob(client, initialJob.exportJobId, options)
-        .finally(() => {
-          recoveryRequest = null;
-        });
-      return recoveryRequest;
-    }
-
-    async function recoverFromRest(
-      onRecovered?: () => void,
-      propagateFailure = false,
-    ) {
-      try {
-        const recovered = await fetchAuthoritative();
-        if (settled || signal?.aborted) return;
-        publish(recovered);
-        onRecovered?.();
-        if (exportIsTerminal(recovered)) finish(recovered);
-        else scheduleRecovery();
-      } catch (error) {
-        if (signal?.aborted) {
-          fail(abortError(signal));
-          if (propagateFailure) throw error;
+    function recoverFromRest(): Promise<ExportJob> {
+      if (recoveryCycle !== null) return recoveryCycle;
+      let scheduleNext = false;
+      const requestedProgressEpoch = progressRevision?.epoch ?? 0n;
+      const cycle = (async () => {
+        try {
+          const recovered = await getAuthoritativeExportJob(
+            client,
+            initialJob.exportJobId,
+            options,
+          );
+          if (settled || signal?.aborted) {
+            throw signal ? abortError(signal) : new DOMException("The operation was aborted.", "AbortError");
+          }
+          if ((progressRevision?.epoch ?? 0n) !== requestedProgressEpoch) {
+            throw new Error("Live export progress advanced while the authoritative snapshot was loading.");
+          }
+          publishAuthoritative(recovered);
+          if (exportIsTerminal(job)) finish();
+          else scheduleNext = true;
+          return recovered;
+        } catch (error) {
+          if (signal?.aborted) {
+            fail(abortError(signal));
+            throw error;
+          }
+          if (
+            error instanceof HttpError
+            && error.status >= 400
+            && error.status < 500
+            && error.status !== 408
+            && error.status !== 429
+          ) {
+            fail(error);
+            throw error;
+          }
+          scheduleNext = true;
+          throw error;
+        }
+      })().finally(() => {
+        if (recoveryCycle === cycle) recoveryCycle = null;
+        if (settled || signal?.aborted) {
+          immediateRecoveryPending = false;
           return;
         }
-        if (
-          error instanceof HttpError
-          && error.status >= 400
-          && error.status < 500
-          && error.status !== 408
-          && error.status !== 429
-        ) {
-          fail(error);
-          if (propagateFailure) throw error;
-          return;
+        if (immediateRecoveryPending) {
+          immediateRecoveryPending = false;
+          scheduleRecovery(0);
+        } else if (scheduleNext) {
+          scheduleRecovery();
         }
-        scheduleRecovery();
-        if (propagateFailure) throw error;
-      }
+      });
+      recoveryCycle = cycle;
+      return cycle;
     }
 
     const abortListener = () => fail(signal ? abortError(signal) : new DOMException("The operation was aborted.", "AbortError"));
@@ -354,14 +621,42 @@ function waitForServerExportWebSocket(
             : null;
       if (settled || eventExportJobId !== initialJob.exportJobId) return;
       switch (event.payload?.$case) {
-        case "exportProgress":
-          publish({ ...job, progress: event.payload.value });
+        case "exportProgress": {
+          const decision = reconcileExportProgress(
+            progressRevision,
+            event.payload.value,
+            { kind: "live" },
+          );
+          if (decision.kind === "apply") {
+            progressRevision = decision.state;
+            job = { ...job, progress: decision.state.progress };
+            options.onUpdate?.(job);
+          } else if (decision.kind === "recover") {
+            scheduleRecovery(0);
+          }
           scheduleRecovery();
           break;
+        }
         case "exportStateChanged": {
           const change = event.payload.value;
-          if (change.stateVersion >= job.stateVersion) {
-            publish({ ...job, state: change.state, stateVersion: change.stateVersion });
+          if (!isVersionedExportRevision(change.stateVersion)) {
+            scheduleRecovery(0);
+            break;
+          }
+          if (change.stateVersion > job.stateVersion) {
+            job = { ...job, state: change.state, stateVersion: change.stateVersion };
+            if (
+              progressRevision !== null
+              && progressRevision.revision < change.stateVersion
+            ) {
+              progressRevision = { ...progressRevision, revision: change.stateVersion };
+            }
+            options.onUpdate?.(job);
+          } else if (
+            change.stateVersion === job.stateVersion
+            && change.state !== job.state
+          ) {
+            scheduleRecovery(0);
           }
           if (exportIsTerminal(job)) scheduleRecovery(0);
           else scheduleRecovery();
@@ -369,15 +664,57 @@ function waitForServerExportWebSocket(
         }
         case "exportTerminal": {
           const terminal = event.payload.value;
+          if (!isVersionedExportRevision(terminal.stateVersion)) {
+            scheduleRecovery(0);
+            break;
+          }
+          if (
+            terminal.stateVersion === job.stateVersion
+            && terminal.state !== job.state
+          ) {
+            scheduleRecovery(0);
+            break;
+          }
           if (terminal.stateVersion >= job.stateVersion) {
-            publish({
+            let terminalProgress = progressRevision?.progress ?? job.progress;
+            if (terminal.finalProgress === undefined) {
+              scheduleRecovery(0);
+              break;
+            }
+            const decision = reconcileExportProgress(
+              progressRevision,
+              terminal.finalProgress,
+              { kind: "terminal", envelopeRevision: terminal.stateVersion },
+            );
+            if (
+              decision.kind === "recover"
+              || (decision.kind === "ignore" && decision.reason === "lower")
+            ) {
+              // Artifact and failure metadata share the terminal envelope with
+              // final progress. If that progress cannot be ordered safely,
+              // publish none of the frame and converge from REST as one unit.
+              scheduleRecovery(0);
+              break;
+            }
+            if (decision.kind === "apply") {
+              progressRevision = decision.state;
+              terminalProgress = decision.state.progress;
+            }
+            if (
+              progressRevision !== null
+              && progressRevision.revision < terminal.stateVersion
+            ) {
+              progressRevision = { ...progressRevision, revision: terminal.stateVersion };
+            }
+            job = {
               ...job,
               state: terminal.state,
               stateVersion: terminal.stateVersion,
-              progress: terminal.finalProgress ?? job.progress,
+              progress: terminalProgress,
               artifact: terminal.artifact,
               failure: terminal.failure,
-            });
+            };
+            options.onUpdate?.(job);
           }
           scheduleRecovery(0);
           break;
@@ -396,7 +733,8 @@ function waitForServerExportWebSocket(
         || notice.target.target.value !== initialJob.exportJobId
         || settled
       ) return;
-      await recoverFromRest(() => notice.acknowledge(), true);
+      await recoverFromRest();
+      notice.acknowledge();
     }));
     subscriptionId = socket.subscribe(target, { includePreviews: false });
     scheduleRecovery(0);

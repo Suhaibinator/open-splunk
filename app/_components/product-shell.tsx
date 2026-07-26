@@ -41,12 +41,16 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
   const mobileTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileDrawerRef = useRef<HTMLDialogElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const localSession = dataMode === "backend";
+  const sessionInitial = localSession ? "L" : "A";
+  const sessionLabel = localSession ? "Local session" : "Administrator";
+  const sessionDetail = localSession ? "Single-user backend mode" : "admin@localhost";
   const backendDisclosure = activeSection === "search"
     ? "Searches and supported search objects use the configured backend."
     : activeSection === "admin"
       ? "Indexes and ingestion tokens use registered backend routes; unavailable administration surfaces are labeled."
       : activeSection === "datasets"
-        ? "The index catalog comes from backend bootstrap; unavailable statistics are omitted."
+        ? "Search authorization comes from backend bootstrap; the registered index route adds available retention and source defaults."
         : activeSection === "activity"
           ? "Activity shows retained transient jobs and separately persisted search history; audit events are unavailable."
           : activeSection === "reports"
@@ -205,14 +209,14 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
             <button type="submit" aria-label="Search">⌕</button>
           </form>
           <div className="suite-menu-anchor">
-            <button className="suite-user-button" type="button" aria-label="Administrator account menu" aria-controls="suite-user-popover" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={(event) => toggleMenu("user", event.currentTarget)} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}>
-              <span>A</span><b>Administrator</b><i aria-hidden="true">▾</i>
+            <button className="suite-user-button" type="button" aria-label={`${sessionLabel} menu`} aria-controls="suite-user-popover" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={(event) => toggleMenu("user", event.currentTarget)} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}>
+              <span>{sessionInitial}</span><b>{sessionLabel}</b><i aria-hidden="true">▾</i>
             </button>
             {menu === "user" ? (
               <div className="suite-popover suite-utility-popover suite-user-popover" id="suite-user-popover" role="menu" data-suite-menu="user">
-                <div className="suite-user-summary"><span>A</span><div><strong>Administrator</strong><small>admin@localhost</small></div></div>
-                <Link role="menuitem" href="/admin/">Account settings</Link>
-                <Link role="menuitem" href="/signin/">Sign out</Link>
+                <div className="suite-user-summary"><span>{sessionInitial}</span><div><strong>{sessionLabel}</strong><small>{sessionDetail}</small></div></div>
+                <Link role="menuitem" href="/admin/">{localSession ? "Server administration" : "Account settings"}</Link>
+                <Link role="menuitem" href="/signin/">{localSession ? "About local access" : "Sign out"}</Link>
               </div>
             ) : null}
           </div>
@@ -239,7 +243,7 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
 
       {mobileOpen ? (
         <dialog ref={mobileDrawerRef} className="suite-mobile-drawer is-open" open aria-modal="true" aria-label="Mobile product navigation">
-          <header><div><span className="suite-user-avatar">A</span><span><strong>Administrator</strong><small>admin@localhost</small></span></div><button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)}>×</button></header>
+          <header><div><span className="suite-user-avatar">{sessionInitial}</span><span><strong>{sessionLabel}</strong><small>{sessionDetail}</small></span></div><button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)}>×</button></header>
           <span className="suite-mobile-label">APPLICATION</span>
           <Link className={activeSection === "home" ? "active" : undefined} aria-current={activeSection === "home" ? "page" : undefined} href="/"><span>⌂</span>Home</Link>
           <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href="/search/"><span>⌕</span>Search &amp; Reporting</Link>
@@ -252,7 +256,7 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
           <Link className={activeSection === "admin" ? "active" : undefined} aria-current={activeSection === "admin" ? "page" : undefined} href="/admin/"><span>⚙</span>Administration</Link>
           <span className="suite-mobile-label">HELP DOCUMENTATION IS NOT INCLUDED IN THIS PREVIEW</span>
           <span className="suite-mobile-rule" />
-          <Link href="/signin/"><span>⇥</span>Sign out</Link>
+          <Link href="/signin/"><span>{localSession ? "i" : "⇥"}</span>{localSession ? "About local access" : "Sign out"}</Link>
         </dialog>
       ) : null}
       {mobileOpen ? <button className="suite-mobile-backdrop" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} /> : null}

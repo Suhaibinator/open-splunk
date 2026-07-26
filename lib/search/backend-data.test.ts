@@ -12,7 +12,11 @@ import {
   ValueType,
   type TypedValue,
 } from "../../gen/ts/open_splunk/v1/value";
-import { adaptSearchResults } from "./backend-data";
+import {
+  adaptSearchResults,
+  timechartValueFields,
+  timechartRowsForExport,
+} from "./backend-data";
 
 function column(
   fieldName: string,
@@ -42,11 +46,15 @@ function doubleValue(value: number): TypedValue {
   return { kind: { $case: "doubleValue", value } };
 }
 
+function timestampValue(value: string): TypedValue {
+  return { kind: { $case: "timestampValue", value: new Date(value) } };
+}
+
 function row(rowId: string, ordinal: bigint, cells: TypedValue[]): ResultRow {
   return { rowId, ordinal, cells };
 }
 
-test("top message results adapt to one categorical message series", () => {
+test("top message results retain count and percent as categorical series", () => {
   const schema: ResultSchema = {
     schemaId: "top-message-v1",
     revision: 1n,
@@ -111,4 +119,257 @@ test("top message results adapt to one categorical message series", () => {
     ],
   );
   assert.equal(adapted.statisticsTable?.rows[0]?.values.percent, 66.66666666666667);
+  assert.deepEqual(
+    adapted.statistics[0]?.series?.map(({ key, label, value }) => ({ key, label, value })),
+    [
+      { key: "count", label: "count", value: 4 },
+      { key: "percent", label: "percent", value: 66.66666666666667 },
+    ],
+  );
+});
+
+test("runtime-wide chart results retain every split series in schema order", () => {
+  const schema: ResultSchema = {
+    schemaId: "chart-path-by-level-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [
+      column("path", ValueType.VALUE_TYPE_STRING),
+      column("ERROR", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+      column("INFO", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+      column("NULL", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+      column("OTHER", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+    ],
+  };
+  const rows: ResultRow[] = [
+    row("grade", 0n, [
+      stringValue("/api/v1/submissions/grade"),
+      uint64Value(4n),
+      uint64Value(18n),
+      uint64Value(0n),
+      uint64Value(2n),
+    ]),
+    row("courses", 1n, [
+      stringValue("/api/v1/courses"),
+      uint64Value(9_007_199_254_740_993n),
+      uint64Value(11n),
+      uint64Value(1n),
+      uint64Value(0n),
+    ]),
+  ];
+
+  const adapted = adaptSearchResults(schema, rows, false);
+
+  assert.equal(adapted.statisticDimension, "path");
+  assert.equal(adapted.statistics.length, 2);
+  assert.deepEqual(
+    adapted.statistics[0]?.series?.map(({ key, value }) => ({ key, value })),
+    [
+      { key: "ERROR", value: 4 },
+      { key: "INFO", value: 18 },
+      { key: "NULL", value: 0 },
+      { key: "OTHER", value: 2 },
+    ],
+  );
+  assert.deepEqual(
+    adapted.statistics[1]?.series?.map(({ key, exactValue, coordinateApproximate }) => ({
+      key,
+      exactValue,
+      coordinateApproximate: coordinateApproximate ?? false,
+    })),
+    [
+      {
+        key: "ERROR",
+        exactValue: "9007199254740993",
+        coordinateApproximate: true,
+      },
+      { key: "INFO", exactValue: undefined, coordinateApproximate: false },
+      { key: "NULL", exactValue: undefined, coordinateApproximate: false },
+      { key: "OTHER", exactValue: undefined, coordinateApproximate: false },
+    ],
+  );
+  assert.deepEqual(
+    adapted.statisticsTable?.columns.map(({ fieldName }) => fieldName),
+    ["path", "ERROR", "INFO", "NULL", "OTHER"],
+  );
+});
+
+test("aliased multi-measure statistics retain every numeric measure including negative values", () => {
+  const schema: ResultSchema = {
+    schemaId: "multi-measure-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [
+      column("level", ValueType.VALUE_TYPE_STRING, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_LEVEL),
+      column("requests", ValueType.VALUE_TYPE_UINT64),
+      column("latency", ValueType.VALUE_TYPE_DOUBLE),
+      column("delta", ValueType.VALUE_TYPE_DOUBLE),
+    ],
+  };
+  const rows: ResultRow[] = [
+    row("info", 0n, [
+      stringValue("INFO"),
+      uint64Value(42n),
+      doubleValue(18.75),
+      doubleValue(-3.5),
+    ]),
+  ];
+
+  const adapted = adaptSearchResults(schema, rows, false);
+
+  assert.equal(adapted.statisticDimension, "level");
+  assert.deepEqual(
+    adapted.statistics[0]?.series?.map(({ label, value }) => ({ label, value })),
+    [
+      { label: "requests", value: 42 },
+      { label: "latency", value: 18.75 },
+      { label: "delta", value: -3.5 },
+    ],
+  );
+});
+
+test("explicit metrics retain an untagged aggregate sibling when one category remains", () => {
+  const schema: ResultSchema = {
+    schemaId: "mixed-metric-semantics-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [
+      column("level", ValueType.VALUE_TYPE_STRING, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_LEVEL),
+      column("count", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+      column("avg(duration_ms)", ValueType.VALUE_TYPE_DOUBLE),
+    ],
+  };
+
+  const adapted = adaptSearchResults(schema, [
+    row("warn", 0n, [stringValue("WARN"), uint64Value(12n), doubleValue(48.5)]),
+  ], false);
+
+  assert.deepEqual(
+    adapted.statistics[0]?.series?.map(({ key, value }) => ({ key, value })),
+    [
+      { key: "count", value: 12 },
+      { key: "avg(duration_ms)", value: 48.5 },
+    ],
+  );
+});
+
+test("multiple grouping dimensions are rejected instead of silently collapsing one", () => {
+  const schema: ResultSchema = {
+    schemaId: "two-dimensions-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [
+      column("host", ValueType.VALUE_TYPE_STRING, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_HOST),
+      column("path", ValueType.VALUE_TYPE_STRING),
+      column("count", ValueType.VALUE_TYPE_UINT64),
+    ],
+  };
+
+  const adapted = adaptSearchResults(schema, [
+    row("host-path", 0n, [stringValue("api-01"), stringValue("/health"), uint64Value(8n)]),
+  ], false);
+
+  assert.deepEqual(adapted.statistics, []);
+  assert.deepEqual(
+    adapted.statisticsTable?.columns.map(({ fieldName }) => fieldName),
+    ["host", "path", "count"],
+  );
+});
+
+test("runtime chart can use a numeric dimension named count without reclassifying it", () => {
+  const schema: ResultSchema = {
+    schemaId: "chart-count-dimension-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [
+      column("count", ValueType.VALUE_TYPE_UINT64),
+      column("ERROR", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+      column("INFO", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+    ],
+  };
+
+  const adapted = adaptSearchResults(schema, [
+    row("count-200", 0n, [uint64Value(200n), uint64Value(4n), uint64Value(12n)]),
+  ], false);
+
+  assert.equal(adapted.statisticDimension, "count");
+  assert.equal(adapted.statistics[0]?.level, "200");
+  assert.deepEqual(
+    adapted.statistics[0]?.series?.map(({ key }) => key),
+    ["ERROR", "INFO"],
+  );
+});
+
+test("numeric stats BY count is rejected instead of inverting an aliased measure", () => {
+  const schema: ResultSchema = {
+    schemaId: "stats-by-count-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [
+      column("count", ValueType.VALUE_TYPE_UINT64),
+      column("events", ValueType.VALUE_TYPE_DOUBLE),
+    ],
+  };
+
+  const adapted = adaptSearchResults(schema, [
+    row("count-200", 0n, [uint64Value(200n), doubleValue(4.5)]),
+  ], false);
+
+  assert.deepEqual(adapted.statistics, []);
+  assert.deepEqual(
+    adapted.statisticsTable?.columns.map(({ fieldName }) => fieldName),
+    ["count", "events"],
+  );
+});
+
+test("ambiguous all-numeric statistics do not invent a dimension or drop a measure", () => {
+  const schema: ResultSchema = {
+    schemaId: "ambiguous-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [
+      column("left", ValueType.VALUE_TYPE_DOUBLE),
+      column("right", ValueType.VALUE_TYPE_DOUBLE),
+    ],
+  };
+
+  const adapted = adaptSearchResults(schema, [
+    row("pair", 0n, [doubleValue(1), doubleValue(2)]),
+  ], false);
+
+  assert.deepEqual(adapted.statistics, []);
+});
+
+test("timechart keeps siblings when a runtime series is named count", () => {
+  const schema: ResultSchema = {
+    schemaId: "timechart-count-sibling-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column("_time", ValueType.VALUE_TYPE_TIMESTAMP, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME),
+      column("count", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+      column("ERROR", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+      column("WARN", ValueType.VALUE_TYPE_UINT64, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC),
+    ],
+  };
+  const rows: ResultRow[] = [
+    row("bucket-1", 0n, [
+      timestampValue("2026-07-21T22:00:00.000Z"),
+      uint64Value(2n),
+      uint64Value(9_007_199_254_740_993n),
+      uint64Value(3n),
+    ]),
+  ];
+
+  const adapted = adaptSearchResults(schema, rows, true, 300_000);
+
+  assert.deepEqual(Object.keys(adapted.timeline[0]?.series ?? {}), ["count", "ERROR", "WARN"]);
+  assert.deepEqual(timechartValueFields(adapted.timeline), ["count", "ERROR", "WARN"]);
+  assert.equal(adapted.timeline[0]?.exactSeries?.ERROR, "9007199254740993");
+  assert.deepEqual(timechartRowsForExport(adapted.timeline), [{
+    _time: "2026-07-21T22:00:00.000Z",
+    count: 2,
+    ERROR: "9007199254740993",
+    WARN: 3,
+  }]);
 });

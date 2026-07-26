@@ -10,6 +10,7 @@ import {
 } from "react";
 import Link from "next/link";
 
+import type { SearchHistoryFilter } from "@/gen/ts/open_splunk/v1/history_api";
 import { SearchJobState } from "@/gen/ts/open_splunk/v1/search";
 import {
   createOpenSplunkApiClient,
@@ -20,12 +21,15 @@ import {
 } from "@/lib/api";
 import { historySearchLaunchHref } from "@/lib/search/launch-url";
 import {
+  clearServerSearchHistory,
+  deleteServerSearchHistoryEntry,
   historyEntryForDisplay,
   listServerSearchHistory,
   type ServerSearchHistoryEntry,
 } from "@/lib/search/server-objects";
 
 import { PageHeading } from "../_components/product-shell";
+import { Modal } from "../search-workspace/modal";
 import {
   ActivityState,
   formatActivityCount,
@@ -39,6 +43,9 @@ import { BackendLiveJobs } from "./backend-live-jobs";
 type ActivityFilter = "all" | "completed" | "failed" | "canceled" | "warnings";
 type ActivityView = "jobs" | "history";
 type LoadState = "loading" | "available" | "unavailable" | "error";
+type HistoryModal =
+  | { action: "delete"; target: ServerSearchHistoryEntry }
+  | { action: "clear" };
 
 interface BackendActivityConsoleProps {
   apiBaseUrl: string;
@@ -52,6 +59,40 @@ function errorMessage(error: unknown): string {
 
 function launchHref(entry: ServerSearchHistoryEntry): string {
   return historySearchLaunchHref(entry.id);
+}
+
+function historyStateFilters(filter: ActivityFilter): SearchJobState[] {
+  if (filter === "completed") return [SearchJobState.SEARCH_JOB_STATE_COMPLETED];
+  if (filter === "failed") {
+    return [
+      SearchJobState.SEARCH_JOB_STATE_FAILED,
+      SearchJobState.SEARCH_JOB_STATE_EXPIRED,
+    ];
+  }
+  if (filter === "canceled") return [SearchJobState.SEARCH_JOB_STATE_CANCELED];
+  return [];
+}
+
+function historyServerFilter(filter: ActivityFilter, text: string): SearchHistoryFilter | undefined {
+  const stateFilters = historyStateFilters(filter);
+  const normalizedText = text.trim();
+  if (stateFilters.length === 0 && normalizedText.length === 0) return undefined;
+  return {
+    appId: undefined,
+    stateFilters,
+    text: normalizedText || undefined,
+    savedSearchId: undefined,
+    createdAfter: undefined,
+    createdBefore: undefined,
+  };
+}
+
+function historyFilterLabel(filter: ActivityFilter): string {
+  if (filter === "completed") return "completed";
+  if (filter === "failed") return "failed or expired";
+  if (filter === "canceled") return "canceled";
+  if (filter === "warnings") return "warning-bearing";
+  return "all";
 }
 
 export function BackendActivityConsole({ apiBaseUrl }: BackendActivityConsoleProps) {
@@ -144,10 +185,23 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
   const [generation, setGeneration] = useState(0);
   const [filter, setFilter] = useState<ActivityFilter>("all");
   const [query, setQuery] = useState("");
+  const [textFilter, setTextFilter] = useState("");
+  const [modal, setModal] = useState<HistoryModal | null>(null);
+  const [actionPending, setActionPending] = useState<"delete" | "clear" | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const bootstrapRef = useRef<SystemBootstrapModel | null>(null);
   const loadMoreAbortRef = useRef<AbortController | null>(null);
+  const actionAbortRef = useRef<AbortController | null>(null);
   const pageTokensSeenRef = useRef<Set<string>>(new Set());
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setTextFilter(query.trim()), 300);
+    return () => window.clearTimeout(timeout);
+  }, [query]);
+
+  useEffect(() => () => actionAbortRef.current?.abort(), []);
 
   useEffect(() => {
     loadMoreAbortRef.current?.abort();
@@ -170,6 +224,8 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
         ));
         const result = await listServerSearchHistory(client, bootstrap, {
           signal: controller.signal,
+          states: historyStateFilters(filter),
+          text: textFilter || undefined,
           pageSize: Math.max(1, Math.min(bootstrap.limits.maximumPageSize || 50, 100)),
           maximumPages: 1,
         });
@@ -202,7 +258,7 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
       loadMoreAbortRef.current?.abort();
       loadMoreAbortRef.current = null;
     };
-  }, [client, generation]);
+  }, [client, filter, generation, textFilter]);
 
   const loadMore = useCallback(async () => {
     const bootstrap = bootstrapRef.current;
@@ -215,6 +271,8 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
     try {
       const result = await listServerSearchHistory(client, bootstrap, {
         signal: controller.signal,
+        states: historyStateFilters(filter),
+        text: textFilter || undefined,
         pageSize: Math.max(1, Math.min(bootstrap.limits.maximumPageSize || 50, 100)),
         pageToken,
         maximumPages: 1,
@@ -258,22 +316,16 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
         setLoadingMore(false);
       }
     }
-  }, [client, nextPageToken]);
+  }, [client, filter, nextPageToken, textFilter]);
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return entries.filter((entry) => {
-      if (filter === "completed" && entry.finalState !== SearchJobState.SEARCH_JOB_STATE_COMPLETED) return false;
-      if (filter === "failed" && entry.finalState !== SearchJobState.SEARCH_JOB_STATE_FAILED && entry.finalState !== SearchJobState.SEARCH_JOB_STATE_EXPIRED) return false;
-      if (filter === "canceled" && entry.finalState !== SearchJobState.SEARCH_JOB_STATE_CANCELED) return false;
       if (filter === "warnings" && entry.warningCount === 0) return false;
-      const display = historyEntryForDisplay(entry);
       return normalized.length === 0
-        || `${entry.search.spl} ${entry.id} ${entry.failureMessage ?? ""} ${entry.search.appId ?? ""} ${appNames[entry.search.appId ?? ""] ?? ""} ${display.sourceLabel ?? ""} ${display.resolvedTimeRange ?? ""}`
-          .toLowerCase()
-          .includes(normalized);
+        || entry.search.spl.toLowerCase().includes(normalized);
     });
-  }, [appNames, entries, filter, query]);
+  }, [entries, filter, query]);
 
   const completed = entries.filter((entry) => entry.finalState === SearchJobState.SEARCH_JOB_STATE_COMPLETED).length;
   const failed = entries.filter((entry) =>
@@ -281,7 +333,98 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
     || entry.finalState === SearchJobState.SEARCH_JOB_STATE_EXPIRED).length;
   const canceled = entries.filter((entry) => entry.finalState === SearchJobState.SEARCH_JOB_STATE_CANCELED).length;
   const warnings = entries.filter((entry) => entry.warningCount > 0).length;
-  const loadedLabel = totalSizeExact && totalSize !== null ? totalSize.toLocaleString() : entries.length.toLocaleString();
+  const loadedLabel = filter === "warnings"
+    ? filtered.length.toLocaleString()
+    : totalSizeExact && totalSize !== null
+      ? totalSize.toLocaleString()
+      : entries.length.toLocaleString();
+  const filtersSettled = query.trim() === textFilter;
+  const hasActiveHistoryFilter = filter !== "all" || query.trim().length > 0;
+  const clearScope = `${filter === "all" ? "all" : historyFilterLabel(filter)} history${textFilter.length > 0 ? ` with SPL containing “${textFilter}”` : ""}`;
+
+  function closeHistoryModal() {
+    if (actionPending !== null) return;
+    setModal(null);
+    setActionError(null);
+  }
+
+  function invalidateHistoryPaging() {
+    pageTokensSeenRef.current.clear();
+    setNextPageToken(null);
+    setComplete(true);
+    setLoadMoreError(null);
+  }
+
+  async function deleteHistoryEntry() {
+    const currentModal = modal;
+    const bootstrap = bootstrapRef.current;
+    if (currentModal?.action !== "delete" || bootstrap === null) return;
+    const controller = new AbortController();
+    actionAbortRef.current?.abort();
+    actionAbortRef.current = controller;
+    setActionPending("delete");
+    setActionError(null);
+    try {
+      const result = await deleteServerSearchHistoryEntry(
+        client,
+        bootstrap,
+        currentModal.target.id,
+        { signal: controller.signal },
+      );
+      if (controller.signal.aborted) return;
+      if (result.status === "unavailable") throw new Error("The search-history delete route is no longer available.");
+      if (result.value !== currentModal.target.id) throw new Error("The server confirmed deletion for a different history entry.");
+      setEntries((current) => current.filter((entry) => entry.id !== currentModal.target.id));
+      setTotalSize((current) => current === null || current === 0n ? current : current - 1n);
+      invalidateHistoryPaging();
+      setModal(null);
+      setActionNotice(`Deleted search-history entry ${currentModal.target.id}.`);
+      reload();
+    } catch (reason) {
+      if (!controller.signal.aborted) setActionError(errorMessage(reason));
+    } finally {
+      if (actionAbortRef.current === controller) actionAbortRef.current = null;
+      setActionPending(null);
+    }
+  }
+
+  async function clearHistory() {
+    const bootstrap = bootstrapRef.current;
+    if (
+      modal?.action !== "clear"
+      || bootstrap === null
+      || filter === "warnings"
+      || !filtersSettled
+    ) return;
+    const controller = new AbortController();
+    actionAbortRef.current?.abort();
+    actionAbortRef.current = controller;
+    setActionPending("clear");
+    setActionError(null);
+    try {
+      const result = await clearServerSearchHistory(
+        client,
+        bootstrap,
+        historyServerFilter(filter, textFilter),
+        "CLEAR SEARCH HISTORY",
+        { signal: controller.signal },
+      );
+      if (controller.signal.aborted) return;
+      if (result.status === "unavailable") throw new Error("The search-history clear route is no longer available.");
+      setEntries([]);
+      setTotalSize(0n);
+      setTotalSizeExact(true);
+      invalidateHistoryPaging();
+      setModal(null);
+      setActionNotice(`Cleared ${result.value.toLocaleString()} ${result.value === 1n ? "history entry" : "history entries"} from the selected server scope.`);
+      reload();
+    } catch (reason) {
+      if (!controller.signal.aborted) setActionError(errorMessage(reason));
+    } finally {
+      if (actionAbortRef.current === controller) actionAbortRef.current = null;
+      setActionPending(null);
+    }
+  }
 
   return (
     <div className="backend-activity-view">
@@ -291,15 +434,27 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
 
       {state === "available" ? (
         <>
+          {actionNotice === null ? null : <output className="history-action-notice"><span>{actionNotice}</span><button type="button" aria-label="Dismiss history action message" onClick={() => setActionNotice(null)}>×</button></output>}
           <output className="live-jobs-snapshot history-snapshot">
             <span><i aria-hidden="true" />This view contains persisted terminal-search metadata, not the transient job list.</span>
-            <button type="button" onClick={reload}>Refresh history</button>
+            <div className="history-snapshot-actions">
+              <button
+                className="history-clear-button"
+                type="button"
+                disabled={actionPending !== null || !filtersSettled || entries.length === 0 || filter === "warnings"}
+                title={filter === "warnings" ? "Warnings are not a server-side clear filter. Choose a final-state scope or All." : undefined}
+                onClick={() => { setActionError(null); setModal({ action: "clear" }); }}
+              >
+                Clear matching…
+              </button>
+              <button type="button" disabled={actionPending !== null} onClick={reload}>Refresh history</button>
+            </div>
           </output>
-          <section className="activity-summary" aria-label="Loaded search history summary">
-            <article><span className="status-dot status-dot--healthy" /><div><strong>{loadedLabel}</strong><small>{totalSizeExact ? "Total history entries" : "Entries loaded"}</small></div></article>
-            <article><span className="status-dot status-dot--healthy" /><div><strong>{completed}</strong><small>{complete ? "Completed" : "Completed loaded"}</small></div></article>
-            <article><span className="status-dot status-dot--warning" /><div><strong>{warnings}</strong><small>{complete ? "With warnings" : "Warnings loaded"}</small></div></article>
-            <article><span className="status-dot status-dot--error" /><div><strong>{failed + canceled}</strong><small>{complete ? "Failed or canceled" : "Failed/canceled loaded"}</small></div></article>
+          <section className="activity-summary" aria-label="Server-filtered search history summary">
+            <article><span className="status-dot status-dot--healthy" /><div><strong>{loadedLabel}</strong><small>{filter === "warnings" ? "Warning matches loaded" : totalSizeExact ? `${historyFilterLabel(filter)} matches` : "Matches loaded"}</small></div></article>
+            <article><span className="status-dot status-dot--healthy" /><div><strong>{completed}</strong><small>Completed loaded</small></div></article>
+            <article><span className="status-dot status-dot--warning" /><div><strong>{warnings}</strong><small>Warnings loaded</small></div></article>
+            <article><span className="status-dot status-dot--error" /><div><strong>{failed + canceled}</strong><small>Failed/canceled loaded</small></div></article>
           </section>
           {!complete ? (
             <output className="backend-list-notice backend-list-notice--action">
@@ -313,23 +468,26 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
           <section className="suite-card activity-jobs-card">
             <header className="activity-tabs-row">
               <fieldset className="activity-filter-group">
-                <legend className="sr-only">Filter loaded history entries by status</legend>
+                <legend className="sr-only">Filter search history on the server by final state</legend>
                 {(["all", "completed", "failed", "canceled", "warnings"] as const).map((item) => (
-                  <button className={`activity-filter-button${filter === item ? " active" : ""}`} aria-pressed={filter === item} type="button" onClick={() => setFilter(item)} key={item}>
+                  <button className={`activity-filter-button${filter === item ? " active" : ""}`} aria-pressed={filter === item} type="button" disabled={actionPending !== null} onClick={() => setFilter(item)} key={item}>
                     {item === "failed" ? "Failed or expired" : item[0].toUpperCase() + item.slice(1)}
-                    {item === "completed" ? <span>{completed}</span> : item === "failed" ? <span>{failed}</span> : item === "canceled" ? <span>{canceled}</span> : item === "warnings" ? <span>{warnings}</span> : null}
                   </button>
                 ))}
               </fieldset>
-              <small className="activity-filter-scope">Loaded entries only</small>
-              <label><span className="sr-only">Filter loaded search history entries</span><i aria-hidden="true">⌕</i><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter loaded SPL, app, source, or ID" /></label>
+              <small className="activity-filter-scope">{filter === "warnings" ? "SPL filter runs on server; warning check applies to loaded matches" : "Final state and SPL filter run on server"}</small>
+              <label><span className="sr-only">Filter search history SPL on the server</span><i aria-hidden="true">⌕</i><input value={query} disabled={actionPending !== null} onChange={(event) => setQuery(event.target.value)} placeholder="Filter SPL on the server" /></label>
             </header>
             {filtered.length === 0 ? (
               <ActivityState
                 kind="empty"
-                title={entries.length === 0 ? "No persisted search history" : "No matching history"}
-                message={entries.length === 0 ? "Completed, failed, or canceled searches will appear here when the backend persists them." : !complete ? "Load more entries or try another status or text filter." : "Try another status or clear the text filter."}
-                action={entries.length > 0 ? <button type="button" onClick={() => { setFilter("all"); setQuery(""); }}>Clear filters</button> : undefined}
+                title={hasActiveHistoryFilter ? "No matching history" : "No persisted search history"}
+                message={hasActiveHistoryFilter
+                  ? !complete
+                    ? "Load more entries or try another final-state or SPL filter."
+                    : "No persisted entries match the selected final-state and SPL filters."
+                  : "Completed, failed, or canceled searches will appear here when the backend persists them."}
+                action={hasActiveHistoryFilter ? <button type="button" onClick={() => { setFilter("all"); setQuery(""); }}>Clear filters</button> : undefined}
               />
             ) : (
               <div className="responsive-table-wrap">
@@ -355,7 +513,12 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
                         <td data-label="Matched events" className="numeric-data">{formatActivityCount(entry.matchedEvents)}</td>
                         <td data-label="Rows" className="numeric-data">{formatActivityCount(entry.producedRows)}</td>
                         <td data-label="Finished">{display.ranAt}</td>
-                        <td data-label="Actions"><Link className="table-action" href={launchHref(entry)} aria-label={`Rerun search ${entry.id}`}>Rerun ›</Link></td>
+                        <td data-label="Actions">
+                          <div className="history-row-actions">
+                            <Link className="table-action" href={launchHref(entry)} aria-label={`Rerun search ${entry.id}`}>Rerun ›</Link>
+                            <button type="button" disabled={actionPending !== null} aria-label={`Delete history entry ${entry.id}`} onClick={() => { setActionError(null); setModal({ action: "delete", target: entry }); }}>Delete</button>
+                          </div>
+                        </td>
                       </tr>
                     );
                   })}</tbody>
@@ -369,6 +532,51 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
             <p>The backend does not register an audit-event route, so this page does not fabricate configuration or collector activity.</p>
           </section>
         </>
+      ) : null}
+
+      {modal?.action === "delete" ? (
+        <Modal
+          title="Delete search-history entry?"
+          subtitle={`Permanently remove terminal metadata for ${modal.target.id}.`}
+          dismissible={actionPending === null}
+          onClose={closeHistoryModal}
+          footer={(
+            <>
+              <button className="button secondary" type="button" disabled={actionPending !== null} onClick={closeHistoryModal}>Keep entry</button>
+              <button className="button danger" type="button" disabled={actionPending !== null} aria-busy={actionPending === "delete"} onClick={() => void deleteHistoryEntry()}>
+                {actionPending === "delete" ? "Deleting…" : "Delete entry"}
+              </button>
+            </>
+          )}
+        >
+          <p>This cannot be undone. The saved-search definition, if one exists, is not changed.</p>
+          <code className="history-confirm-query">{modal.target.search.spl}</code>
+          {actionError === null ? null : <p className="history-action-error" role="alert">{actionError}</p>}
+        </Modal>
+      ) : null}
+
+      {modal?.action === "clear" ? (
+        <Modal
+          title="Clear matching search history?"
+          subtitle={`Permanently remove ${clearScope}.`}
+          dismissible={actionPending === null}
+          onClose={closeHistoryModal}
+          footer={(
+            <>
+              <button className="button secondary" type="button" disabled={actionPending !== null} onClick={closeHistoryModal}>Keep history</button>
+              <button className="button danger" type="button" disabled={actionPending !== null || !filtersSettled || filter === "warnings"} aria-busy={actionPending === "clear"} onClick={() => void clearHistory()}>
+                {actionPending === "clear" ? "Clearing…" : "Clear matching history"}
+              </button>
+            </>
+          )}
+        >
+          <p>This server-side action includes matches that are not loaded in the table. Saved-search definitions and retained transient jobs are not changed.</p>
+          <dl className="history-clear-scope">
+            <div><dt>Final state</dt><dd>{filter === "all" ? "Any terminal state" : historyFilterLabel(filter)}</dd></div>
+            <div><dt>SPL contains</dt><dd>{textFilter || "Any query"}</dd></div>
+          </dl>
+          {actionError === null ? null : <p className="history-action-error" role="alert">{actionError}</p>}
+        </Modal>
       ) : null}
     </div>
   );

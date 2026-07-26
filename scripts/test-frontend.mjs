@@ -9,8 +9,13 @@ const outputDirectory = await mkdtemp(path.join(tmpdir(), "open-splunk-frontend-
 const testFiles = [
   path.join("app", "search-workspace", "live-preview.test.ts"),
   path.join("app", "search-workspace", "progress-revision.test.ts"),
+  path.join("app", "search-workspace", "categorical-interaction.test.ts"),
+  path.join("lib", "api", "pagination.test.ts"),
   path.join("lib", "api", "search-websocket.test.ts"),
   path.join("lib", "search", "backend-data.test.ts"),
+  path.join("lib", "search", "server-exports.test.ts"),
+  path.join("lib", "search", "example-drafts.test.ts"),
+  path.join("lib", "search", "saved-search-names.test.ts"),
 ];
 
 function run(command, arguments_, environment = process.env) {

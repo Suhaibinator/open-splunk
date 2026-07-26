@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 
+import { backendDraftWithoutIndexSelector } from "@/lib/search/example-drafts";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { PageHeading } from "../_components/product-shell";
@@ -289,7 +290,7 @@ export function AnalyticsConsole({ dataMode }: AnalyticsConsoleProps) {
   };
   const fixtureSearchHref = (spl: string) => searchLaunchHref(
     dataMode === "backend"
-      ? spl.replace(/\bindex=(?:gradethis|payments)\b/g, "index=*")
+      ? backendDraftWithoutIndexSelector(spl)
       : spl,
     searchOptions,
   );

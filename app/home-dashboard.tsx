@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { backendDraftWithoutIndexSelector } from "@/lib/search/example-drafts";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 interface HomeDashboardProps {
@@ -14,8 +15,7 @@ const RECENT_SEARCHES = [
 ];
 
 function backendSafeExampleQuery(query: string): string {
-  return query
-    .replace(/^index=(?:gradethis|payments)\b/, "index=*")
+  return backendDraftWithoutIndexSelector(query)
     .replace(/trace_id="[^"]*…[^"]*"/, "trace_id=*");
 }
 
@@ -30,7 +30,7 @@ export function HomeDashboard({ dataMode }: HomeDashboardProps) {
       <header className="home-hero">
         <div>
           <span className="suite-eyebrow">OPEN SPLUNK</span>
-          <h1>Good afternoon, Administrator</h1>
+          <h1>{dataMode === "backend" ? "Welcome to your local workspace" : "Good afternoon, Administrator"}</h1>
           <p>{dataMode === "backend"
             ? "Open Search and the backend-supported resource catalogs; Administration reports connection state."
             : "Explore the deterministic search, administration, and operations preview."}</p>

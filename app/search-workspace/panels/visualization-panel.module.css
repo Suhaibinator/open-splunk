@@ -45,23 +45,464 @@
   max-width: 430px;
 }
 
-.denseBars {
-  gap: clamp(8px, 1.5vw, 20px);
-  justify-content: space-around;
-  padding-inline: 16px;
+.categoricalCanvas {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(360px, 1fr) 40px;
+  padding: 20px 18px 5px 12px;
 }
 
-.denseBars :global(.chart-series) {
+.categoricalCanvas :global(.chart-legend) {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.categoricalCanvas:global(.legend-right) {
+  grid-template-columns: minmax(0, 1fr) 118px;
+  grid-template-rows: minmax(400px, 1fr);
+}
+
+.categoricalCanvas:global(.legend-right) .categoricalChart {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.categoricalCanvas:global(.legend-right) :global(.chart-legend) {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.categoricalCanvas:global(.legend-none) {
+  grid-template-rows: minmax(400px, 1fr);
+}
+
+.categoricalChart {
+  display: grid;
+  grid-column: 1;
+  grid-row: 1;
+  grid-template-columns: 49px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
   min-width: 0;
-  width: 68px;
+  position: relative;
 }
 
-.denseBars :global(.chart-series > button) {
-  width: 58px;
+.categoricalYAxis {
+  color: #6f7c83;
+  display: flex;
+  flex-direction: column;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  justify-content: space-between;
+  line-height: 1;
+  padding: 0 9px 38px 0;
+  text-align: right;
 }
 
-.denseBars :global(.chart-fill) {
-  width: 46px;
+.categoricalScroller {
+  border-bottom: 1px solid #9ba8ae;
+  border-left: 1px solid #9ba8ae;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-color: #aeb8bd transparent;
+  scrollbar-width: thin;
+}
+
+.categoricalSurface {
+  height: 100%;
+  min-height: 292px;
+  position: relative;
+}
+
+.categoricalGrid {
+  inset: 0 0 38px;
+  pointer-events: none;
+  position: absolute;
+}
+
+.categoricalGrid > span {
+  border-top: 1px solid #e2e7e9;
+  left: 0;
+  position: absolute;
+  right: 0;
+}
+
+.categoricalGrid > .zeroGridLine {
+  border-color: #9ba8ae;
+}
+
+.categoricalGroups {
+  bottom: 0;
+  display: grid;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+
+.categoricalGroup {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: crosshair;
+  min-width: 0;
+  padding: 0;
+  position: relative;
+}
+
+.categoricalGroup::after {
+  background: transparent;
+  bottom: 38px;
+  content: "";
+  left: 3px;
+  position: absolute;
+  right: 3px;
+  top: 0;
+  transition: background-color 100ms ease-out;
+}
+
+.categoricalGroup:hover::after,
+.categoricalGroup:focus-visible::after {
+  background: rgb(47 127 166 / 5%);
+}
+
+.categoricalGroup:focus-visible {
+  box-shadow: inset 0 0 0 2px rgb(47 120 158 / 38%);
+  outline: 0;
+  z-index: 4;
+}
+
+.categoricalGroup:hover .verticalBar,
+.categoricalGroup:focus-visible .verticalBar,
+.horizontalGroup:hover .horizontalBar,
+.horizontalGroup:focus-visible .horizontalBar {
+  filter: brightness(0.86);
+}
+
+.categoricalGroup > strong {
+  bottom: 8px;
+  color: #53616a;
+  font-size: 10px;
+  font-weight: 400;
+  left: 5px;
+  overflow: hidden;
+  position: absolute;
+  right: 5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.verticalBars {
+  align-items: stretch;
+  bottom: 38px;
+  display: flex;
+  gap: 2px;
+  left: 9px;
+  position: absolute;
+  right: 9px;
+  top: 0;
+  z-index: 1;
+}
+
+.verticalSlot {
+  flex: 1 1 0;
+  min-width: 4px;
+  position: relative;
+}
+
+.verticalBar {
+  border-radius: 1px 1px 0 0;
+  box-shadow: inset 0 0 0 1px rgb(39 57 65 / 8%);
+  left: 8%;
+  min-height: 1px;
+  position: absolute;
+  right: 8%;
+  transition: filter 90ms ease-out;
+}
+
+.verticalDataLabel {
+  background: rgb(255 255 255 / 88%);
+  color: #3c4b54;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  left: 50%;
+  line-height: 14px;
+  max-width: 72px;
+  overflow: hidden;
+  padding: 0 3px;
+  position: absolute;
+  text-overflow: ellipsis;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  z-index: 3;
+}
+
+.categoricalTooltip {
+  background: #fff;
+  border: 1px solid #9da9af;
+  border-radius: 2px;
+  box-shadow: 0 3px 9px rgb(21 35 43 / 24%);
+  color: #2f3d45;
+  max-height: calc(100% - 24px);
+  min-width: 188px;
+  overscroll-behavior: contain;
+  overflow: auto;
+  padding: 8px 10px;
+  pointer-events: auto;
+  position: absolute;
+  right: 12px;
+  top: 10px;
+  z-index: 8;
+}
+
+.categoricalTooltipHeader {
+  align-items: flex-start;
+  border-bottom: 1px solid #e1e5e7;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin: 0 0 7px;
+  padding: 0 0 5px;
+}
+
+.categoricalTooltipHeader strong {
+  font-size: 10px;
+  font-weight: 600;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.categoricalTooltipHeader button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: #64737b;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 15px;
+  height: 22px;
+  justify-content: center;
+  margin: -5px -6px -2px 0;
+  padding: 0;
+  width: 22px;
+}
+
+.categoricalTooltipHeader button:hover,
+.categoricalTooltipHeader button:focus-visible {
+  background: #edf1f3;
+  color: #263b46;
+}
+
+.categoricalTooltipHeader button:focus-visible,
+.categoricalTooltipAction:focus-visible {
+  outline: 2px solid #3d7f9f;
+  outline-offset: 1px;
+}
+
+.categoricalTooltip > span {
+  align-items: center;
+  display: grid;
+  font-size: 10px;
+  gap: 6px;
+  grid-template-columns: 8px minmax(52px, 1fr) auto;
+}
+
+.categoricalTooltip > span + span {
+  margin-top: 5px;
+}
+
+.categoricalTooltip i {
+  height: 8px;
+  width: 8px;
+}
+
+.categoricalTooltip b {
+  color: #1f2e36;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.categoricalTooltipPrecision,
+.categoricalTooltipUnavailable {
+  color: #67757d;
+  display: block;
+  font-size: 9px;
+  line-height: 1.4;
+  margin-top: 8px;
+}
+
+.categoricalTooltipUnavailable {
+  border-top: 1px solid #e1e5e7;
+  padding-top: 7px;
+}
+
+.categoricalTooltipAction {
+  align-items: center;
+  background: #f2f6f8;
+  border: 1px solid #b8c7ce;
+  color: #286f94;
+  display: flex;
+  font-size: 9px;
+  font-weight: 700;
+  justify-content: space-between;
+  margin-top: 8px;
+  min-height: 29px;
+  padding: 0 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.categoricalTooltipAction:hover {
+  background: #e5f0f5;
+  border-color: #8eabb9;
+}
+
+.categoricalTooltipAction span {
+  font-size: 13px;
+}
+
+.horizontalChart {
+  display: block;
+  overflow: hidden;
+}
+
+.horizontalScroller {
+  height: 100%;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: #aeb8bd transparent;
+  scrollbar-width: thin;
+}
+
+.horizontalSurface {
+  min-height: 100%;
+  padding: 8px 55px 31px 0;
+  position: relative;
+}
+
+.horizontalGrid {
+  bottom: 30px;
+  left: 118px;
+  pointer-events: none;
+  position: absolute;
+  right: 55px;
+  top: 0;
+}
+
+.horizontalGrid > span {
+  border-left: 1px solid #e2e7e9;
+  bottom: 0;
+  position: absolute;
+  top: 0;
+}
+
+.horizontalGrid > .zeroGridLine {
+  border-color: #9ba8ae;
+}
+
+.horizontalGroups {
+  bottom: 31px;
+  display: grid;
+  gap: 5px;
+  left: 0;
+  position: absolute;
+  right: 55px;
+  top: 8px;
+  z-index: 1;
+}
+
+.horizontalGroup {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: crosshair;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 112px minmax(0, 1fr);
+  min-height: 28px;
+  padding: 3px 0;
+  position: relative;
+  text-align: left;
+}
+
+.horizontalGroup:hover,
+.horizontalGroup:focus-visible {
+  background: rgb(47 127 166 / 5%);
+}
+
+.horizontalGroup:focus-visible {
+  box-shadow: inset 0 0 0 2px rgb(47 120 158 / 38%);
+  outline: 0;
+}
+
+.horizontalGroup > strong {
+  align-self: center;
+  color: #53616a;
+  font-size: 10px;
+  font-weight: 400;
+  overflow: hidden;
+  padding-left: 4px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.horizontalBars {
+  display: grid;
+  gap: 3px;
+  grid-auto-rows: 14px;
+  min-width: 0;
+  position: relative;
+}
+
+.horizontalSlot {
+  min-width: 0;
+  position: relative;
+}
+
+.horizontalBar {
+  border-radius: 0 1px 1px 0;
+  box-shadow: inset 0 0 0 1px rgb(39 57 65 / 8%);
+  height: 10px;
+  min-width: 1px;
+  position: absolute;
+  top: 2px;
+  transition: filter 90ms ease-out;
+}
+
+.horizontalDataLabel {
+  color: #3c4b54;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  line-height: 14px;
+  max-width: 66px;
+  overflow: hidden;
+  position: absolute;
+  text-overflow: ellipsis;
+  top: 0;
+  white-space: nowrap;
+}
+
+.horizontalAxis {
+  bottom: 3px;
+  color: #6f7c83;
+  display: flex;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  justify-content: space-between;
+  left: 118px;
+  line-height: 1;
+  position: absolute;
+  right: 55px;
 }
 
 @media (max-width: 760px) {
@@ -70,9 +511,88 @@
     padding: 28px 20px;
   }
 
-  .denseBars {
-    gap: 7px;
+  .categoricalCanvas,
+  .categoricalCanvas:global(.legend-right),
+  .categoricalCanvas:global(.legend-none) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 300px 40px;
+    padding-left: 4px;
+  }
+
+  .categoricalCanvas:global(.legend-right) .categoricalChart,
+  .categoricalCanvas:global(.legend-right) :global(.chart-legend),
+  .categoricalCanvas :global(.chart-legend) {
+    grid-column: 1;
+  }
+
+  .categoricalCanvas:global(.legend-right) .categoricalChart {
+    grid-row: 1;
+  }
+
+  .categoricalCanvas:global(.legend-right) :global(.chart-legend),
+  .categoricalCanvas :global(.chart-legend) {
+    align-items: center;
+    flex-direction: row;
+    grid-row: 2;
     justify-content: flex-start;
     overflow-x: auto;
+    padding: 0 4px 0 48px;
+  }
+
+  .categoricalChart {
+    grid-template-columns: 41px minmax(0, 1fr);
+  }
+
+  .categoricalTooltip {
+    left: 8px;
+    max-width: calc(100% - 16px);
+    min-width: 172px;
+    right: auto;
+  }
+
+  .verticalBars {
+    left: 6px;
+    right: 6px;
+  }
+
+  .horizontalChart {
+    display: block;
+  }
+
+  .horizontalSurface {
+    padding-right: 42px;
+  }
+
+  .horizontalGrid,
+  .horizontalAxis {
+    left: 92px;
+    right: 42px;
+  }
+
+  .horizontalGroups {
+    right: 42px;
+  }
+
+  .horizontalGroup {
+    grid-template-columns: 86px minmax(0, 1fr);
+  }
+
+  .horizontalGroup > strong {
+    font-size: 9px;
+  }
+}
+
+@media (pointer: coarse) {
+  .categoricalGroup,
+  .horizontalGroup {
+    cursor: pointer;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .categoricalGroup::after,
+  .verticalBar,
+  .horizontalBar {
+    transition: none;
   }
 }

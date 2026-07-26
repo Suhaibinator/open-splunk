@@ -53,6 +53,7 @@ export {
 } from "./optional-feature";
 
 export {
+  pruneCursorChainFrom,
   recordNextPageToken,
   RepeatedPageCursorError,
 } from "./pagination";

@@ -11,6 +11,7 @@ import {
 
 import { TimeSeriesLineChart } from "@/app/search-workspace/charts/time-series-line-chart";
 import type { TimelinePoint } from "@/lib/demo/search-data";
+import { backendDraftWithoutIndexSelector } from "@/lib/search/example-drafts";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import styles from "./operations-dashboard.module.css";
@@ -221,7 +222,7 @@ export function OperationsDashboard({ dataMode }: OperationsDashboardProps) {
   };
   const fixtureSearchHref = (spl: string) => searchLaunchHref(
     dataMode === "backend"
-      ? spl.replace(/\bindex=(?:gradethis|payments)\b/g, "index=*")
+      ? backendDraftWithoutIndexSelector(spl)
       : spl,
     searchOptions,
   );

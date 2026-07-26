@@ -261,7 +261,7 @@
 .backendTable th:nth-child(3) { width: 130px; }
 .backendTable th:nth-child(4) { width: 210px; }
 .backendTable th:nth-child(5) { width: 150px; }
-.backendTable th:last-child { width: 116px; }
+.backendTable th:last-child { width: 252px; }
 
 .table td {
   border-bottom: 1px solid #e0e5e7;
@@ -441,6 +441,84 @@
 .openCell a span {
   font-size: 14px;
   margin-left: 2px;
+}
+
+.actionCell {
+  align-items: center;
+  display: flex;
+  gap: 3px;
+  justify-content: flex-end;
+}
+
+.actionCell a,
+.actionCell button {
+  background: transparent;
+  border: 0;
+  color: #28769c;
+  font-size: 9px;
+  font-weight: 700;
+  min-height: 30px;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
+.actionCell button:hover:not(:disabled),
+.actionCell button:focus-visible {
+  background: #e8f1f5;
+  text-decoration: underline;
+}
+
+.actionCell button:focus-visible {
+  outline: 2px solid #4383a4;
+  outline-offset: -2px;
+}
+
+.actionCell button:disabled {
+  color: #8b979d;
+  cursor: wait;
+}
+
+.actionCell .deleteAction {
+  color: #a4433d;
+}
+
+.actionNotice {
+  align-items: center;
+  background: #f1f7ed;
+  border: 1px solid #bdd4ae;
+  color: #466239;
+  display: flex;
+  font-size: 10px;
+  justify-content: space-between;
+  margin: 0 0 10px;
+  min-height: 36px;
+  padding: 7px 8px 7px 11px;
+}
+
+.actionNotice button {
+  background: transparent;
+  border: 0;
+  color: #557149;
+  font-size: 17px;
+  height: 28px;
+  width: 28px;
+}
+
+.actionError {
+  background: #fff2f1;
+  border: 1px solid #dba39f;
+  color: #8f2f2b;
+  font-size: 10px;
+  line-height: 1.5;
+  margin: 0 0 12px;
+  padding: 9px 10px;
+}
+
+.actionHint {
+  color: #68767e;
+  font-size: 10px;
+  line-height: 1.5;
+  margin: 0;
 }
 
 .empty {
@@ -632,6 +710,11 @@
 
   .reportCell a {
     font-size: 12px;
+    line-height: 1.35;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
   }
 
   .reportCell small {
@@ -669,6 +752,11 @@
     margin-top: 2px;
     min-height: 46px !important;
     padding: 5px 3px 0 !important;
+  }
+
+  .actionCell {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .openCell a {
@@ -727,6 +815,7 @@
 @media (pointer: coarse) {
   .scopeBar button,
   .favoriteCell button,
+  .actionCell button,
   .openCell a,
   .empty button {
     min-height: 44px;
