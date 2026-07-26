@@ -22,12 +22,15 @@ import (
 )
 
 const (
-	backendLoadIntegrationFlag = "OPEN_SPLUNK_BACKEND_LOAD"
-	backendLoadWarmSeed        = int64(2026072601)
-	backendLoadMainSeed        = int64(2026072602)
-	backendLoadRecoverySeed    = int64(2026072603)
-	backendLoadMaximumExactDC  = uint64(clickhousequery.MaximumStatsDistinctValuesPerGroup)
-	backendLoadRecoveryLimit   = 15 * time.Second
+	backendLoadIntegrationFlag     = "OPEN_SPLUNK_BACKEND_LOAD"
+	backendLoadWarmSeed            = int64(2026072601)
+	backendLoadMainSeed            = int64(2026072602)
+	backendLoadRecoverySeed        = int64(2026072603)
+	backendLoadMaximumExactDC      = uint64(clickhousequery.MaximumStatsDistinctValuesPerGroup)
+	backendLoadRecoveryLimit       = 15 * time.Second
+	backendLoadConcurrentJobs      = 8
+	backendLoadMaximumSearchWaves  = 3
+	backendLoadSearchRetryInterval = 100 * time.Millisecond
 )
 
 type backendLoadPlan struct {
@@ -176,6 +179,12 @@ func TestBackendLoadPlanPinsSustainedOutageWindow(t *testing.T) {
 	}
 	if plan.recoveryEvents() < plan.WarmEvents {
 		t.Fatalf("load plan leaves no post-recovery generation: %+v", plan)
+	}
+	if got, want := backendLoadSearchProgressTimeout(plan, 11_200), 17_799*time.Millisecond; got != want {
+		t.Fatalf("search progress timeout = %s, want %s", got, want)
+	}
+	if got := backendLoadSearchProgressTimeout(plan, plan.eventCount()-plan.FlushEvents); got != 0 {
+		t.Fatalf("near-EOF search progress timeout = %s, want 0", got)
 	}
 }
 
@@ -547,6 +556,17 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		plan.recoveryTimeout(),
 		plaintextToken,
 	)
+	concurrentSearchWindow := backendLoadConcurrentSearchHarness{
+		storage:       storage,
+		sourceTracker: sourceTracker,
+		collector:     collectorProcess,
+		generator:     recoveryLoggen,
+		client:        httpClient,
+		baseURL:       baseURL,
+		plan:          plan,
+		fixtureStart:  fixtureStart,
+		secret:        plaintextToken,
+	}.run(t, ctx)
 
 	if err := recoveryLoggen.Wait(backendLoadLegTimeout(plan.recoveryEvents(), plan)); err != nil {
 		t.Fatalf("recovery load generator: %v\nlogs:\n%s", err, recoveryLoggen.Logs())
@@ -705,6 +725,7 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 	)
 	logBackendLoadSearchObservation(t, "first", firstSearch)
 	logBackendLoadSearchObservation(t, "repeated", repeatedSearch)
+	logBackendLoadConcurrentSearchWindow(t, concurrentSearchWindow)
 }
 
 func createBackendLoadToken(
@@ -980,6 +1001,277 @@ func backendLoadBacklog(sourceRecords, storedRows uint64) uint64 {
 	return sourceRecords - storedRows
 }
 
+type backendLoadConcurrentSearchHarness struct {
+	storage       clickhousedriver.Conn
+	sourceTracker *backendLoadSourceTracker
+	collector     *managedProcess
+	generator     *managedProcess
+	client        *http.Client
+	baseURL       string
+	plan          backendLoadPlan
+	fixtureStart  time.Time
+	secret        string
+}
+
+func (harness backendLoadConcurrentSearchHarness) run(
+	t *testing.T,
+	ctx context.Context,
+) backendLoadConcurrentSearchWindow {
+	t.Helper()
+	requireBackendLoadProcessRunning(t, "recovery load generator", harness.generator)
+	requireBackendLoadProcessRunning(
+		t,
+		"collector before concurrent searches",
+		harness.collector,
+		harness.secret,
+	)
+	storedBefore, sourceBefore := harness.sample(t, ctx, "before concurrent searches")
+	if sourceBefore.Records >= harness.plan.eventCount() ||
+		storedBefore <= harness.plan.WarmEvents ||
+		storedBefore > sourceBefore.Records {
+		t.Fatalf(
+			"backend load was not actively recovering before concurrent searches: source=%+v stored_rows=%d total_events=%d",
+			sourceBefore,
+			storedBefore,
+			harness.plan.eventCount(),
+		)
+	}
+
+	window := backendLoadConcurrentSearchWindow{
+		SourceBefore: sourceBefore,
+		StoredBefore: storedBefore,
+	}
+	first := runBackendLoadConcurrentSearches(
+		t,
+		ctx,
+		harness.client,
+		harness.baseURL,
+		harness.plan,
+		harness.fixtureStart,
+	)
+	window.Cohorts = append(window.Cohorts, first)
+	previousVisible := maximumBackendLoadCohortEvents(first)
+	baselineVisible := previousVisible
+	candidateStored := storedBefore
+	ticker := time.NewTicker(backendLoadSearchRetryInterval)
+	defer ticker.Stop()
+
+	for len(window.Cohorts) < backendLoadMaximumSearchWaves {
+		storedCandidate := harness.waitForCandidateProgress(
+			t,
+			ctx,
+			ticker,
+			sourceBefore,
+			storedBefore,
+			candidateStored,
+		)
+		candidateStored = storedCandidate
+		next := runBackendLoadConcurrentSearches(
+			t,
+			ctx,
+			harness.client,
+			harness.baseURL,
+			harness.plan,
+			harness.fixtureStart,
+		)
+		nextVisible, err := validateBackendLoadCohortVisibility(previousVisible, next)
+		if err != nil {
+			t.Fatal(err)
+		}
+		window.Cohorts = append(window.Cohorts, next)
+		storedAfter, sourceAfter := harness.sample(t, ctx, "after concurrent search cohort")
+		window.StoredAfter = storedAfter
+		window.SourceAfter = sourceAfter
+		harness.requireActiveState(t, sourceBefore, storedBefore, sourceAfter, storedAfter)
+		for wave, cohort := range window.Cohorts {
+			for slot, search := range cohort.Searches {
+				if search.Events > storedAfter {
+					t.Fatalf(
+						"concurrent backend load search %d/%d snapshot events = %d, want at most later physical rows %d",
+						wave,
+						slot,
+						search.Events,
+						storedAfter,
+					)
+				}
+			}
+		}
+		if sourceAfter.Records > sourceBefore.Records && nextVisible > baselineVisible {
+			return window
+		}
+		previousVisible = nextVisible
+		candidateStored = max(candidateStored, storedAfter)
+	}
+	t.Fatalf(
+		"concurrent backend load searches exhausted %d bounded waves without visible progress: source=%d->%d visible=%d->%d stored=%d->%d",
+		backendLoadMaximumSearchWaves,
+		sourceBefore.Records,
+		window.SourceAfter.Records,
+		baselineVisible,
+		previousVisible,
+		storedBefore,
+		window.StoredAfter,
+	)
+	return backendLoadConcurrentSearchWindow{}
+}
+
+func backendLoadSearchProgressTimeout(plan backendLoadPlan, sourceRecords uint64) time.Duration {
+	if sourceRecords >= plan.eventCount() {
+		return 0
+	}
+	remaining := plan.eventCount() - sourceRecords
+	interval := plan.interval()
+	if remaining < 2 || interval <= 0 ||
+		remaining-1 > uint64(math.MaxInt64)/uint64(interval) {
+		return 0
+	}
+	activeWindow := time.Duration(remaining-1) * interval
+	headroomEvents := plan.FlushEvents
+	if headroomEvents > uint64(math.MaxInt64)/uint64(interval) {
+		return 0
+	}
+	headroom := max(time.Second, time.Duration(headroomEvents)*interval)
+	if activeWindow <= headroom {
+		return 0
+	}
+	return activeWindow - headroom
+}
+
+func (harness backendLoadConcurrentSearchHarness) waitForCandidateProgress(
+	t *testing.T,
+	ctx context.Context,
+	ticker *time.Ticker,
+	sourceBefore backendLoadSourceProgress,
+	storedBefore, candidateStored uint64,
+) uint64 {
+	t.Helper()
+	stored, source := harness.sample(t, ctx, "before waiting for concurrent-search progress")
+	harness.requireActiveState(t, sourceBefore, storedBefore, source, stored)
+	if source.Records > sourceBefore.Records && stored > candidateStored {
+		return stored
+	}
+	progressTimeout := backendLoadSearchProgressTimeout(harness.plan, source.Records)
+	if progressTimeout <= 0 {
+		t.Fatalf(
+			"backend load has insufficient active source window for concurrent-search progress: source=%+v total_events=%d",
+			source,
+			harness.plan.eventCount(),
+		)
+	}
+	progressContext, progressCancel := context.WithTimeout(ctx, progressTimeout)
+	defer progressCancel()
+	for {
+		select {
+		case <-progressContext.Done():
+			t.Fatalf(
+				"concurrent backend load search progress did not arrive before the active source window closed: source=%d->%d stored=%d->%d timeout=%s: %v",
+				sourceBefore.Records,
+				source.Records,
+				storedBefore,
+				stored,
+				progressTimeout,
+				progressContext.Err(),
+			)
+		case <-ticker.C:
+		}
+		stored, source = harness.sample(
+			t,
+			progressContext,
+			"while waiting for concurrent-search progress",
+		)
+		harness.requireActiveState(t, sourceBefore, storedBefore, source, stored)
+		if source.Records > sourceBefore.Records && stored > candidateStored {
+			return stored
+		}
+	}
+}
+
+func (harness backendLoadConcurrentSearchHarness) requireActiveState(
+	t *testing.T,
+	sourceBefore backendLoadSourceProgress,
+	storedBefore uint64,
+	sourceAfter backendLoadSourceProgress,
+	storedAfter uint64,
+) {
+	t.Helper()
+	requireBackendLoadProcessRunning(t, "recovery load generator", harness.generator)
+	requireBackendLoadProcessRunning(
+		t,
+		"collector during concurrent searches",
+		harness.collector,
+		harness.secret,
+	)
+	if sourceAfter.Records < sourceBefore.Records ||
+		sourceAfter.Records >= harness.plan.eventCount() ||
+		storedAfter < storedBefore ||
+		storedAfter > sourceAfter.Records {
+		t.Fatalf(
+			"backend load did not remain active through concurrent searches: source_before=%+v source_after=%+v stored_before=%d stored_after=%d total_events=%d",
+			sourceBefore,
+			sourceAfter,
+			storedBefore,
+			storedAfter,
+			harness.plan.eventCount(),
+		)
+	}
+}
+
+func (harness backendLoadConcurrentSearchHarness) sample(
+	t *testing.T,
+	ctx context.Context,
+	phase string,
+) (uint64, backendLoadSourceProgress) {
+	t.Helper()
+	queryContext, queryCancel := context.WithTimeout(ctx, 5*time.Second)
+	stored, err := readBackendLoadRowCount(
+		queryContext,
+		harness.storage,
+		harness.plan.TenantID,
+		harness.plan.IndexName,
+	)
+	queryCancel()
+	if err != nil {
+		t.Fatalf("read storage %s: %v", phase, err)
+	}
+	source, err := harness.sourceTracker.Poll()
+	if err != nil {
+		t.Fatalf("read source %s: %v", phase, err)
+	}
+	return stored, source
+}
+
+func maximumBackendLoadCohortEvents(cohort backendLoadSearchCohort) uint64 {
+	var maximum uint64
+	for _, search := range cohort.Searches {
+		maximum = max(maximum, search.Events)
+	}
+	return maximum
+}
+
+func validateBackendLoadCohortVisibility(
+	previousMaximum uint64,
+	cohort backendLoadSearchCohort,
+) (uint64, error) {
+	if len(cohort.Searches) == 0 {
+		return 0, errors.New("concurrent backend load cohort has no searches")
+	}
+	minimum := cohort.Searches[0].Events
+	maximum := minimum
+	for _, search := range cohort.Searches[1:] {
+		minimum = min(minimum, search.Events)
+		maximum = max(maximum, search.Events)
+	}
+	if minimum < previousMaximum {
+		return 0, fmt.Errorf(
+			"concurrent backend load visibility regressed from %d to cohort range [%d,%d]",
+			previousMaximum,
+			minimum,
+			maximum,
+		)
+	}
+	return maximum, nil
+}
+
 func logBackendLoadSearchObservation(
 	t *testing.T,
 	name string,
@@ -987,12 +1279,38 @@ func logBackendLoadSearchObservation(
 ) {
 	t.Helper()
 	t.Logf(
-		"backend load %s search: wall=%s elapsed=%s queue_wait=%s scanned_rows=%d scanned_bytes=%d",
+		"backend load %s search: job_id=%s lifecycle=%s elapsed=%s queue_wait=%s events=%d event_ids=%d request_ids=%d user_ids=%d event_times=%d first_event_at=%s last_event_at=%s scanned_rows=%d scanned_bytes=%d",
 		name,
-		observation.WallTime,
+		observation.JobID,
+		observation.LifecycleTime,
 		observation.Elapsed,
 		observation.QueueWait,
+		observation.Events,
+		observation.EventIDs,
+		observation.RequestIDs,
+		observation.UserIDs,
+		observation.EventTimes,
+		observation.FirstEventAt,
+		observation.LastEventAt,
 		observation.ScannedRows,
 		observation.ScannedBytes,
+	)
+}
+
+func requireBackendLoadProcessRunning(
+	t *testing.T,
+	name string,
+	process *managedProcess,
+	secrets ...string,
+) {
+	t.Helper()
+	if !process.Exited() {
+		return
+	}
+	t.Fatalf(
+		"%s exited unexpectedly: %v\nlogs:\n%s",
+		name,
+		process.Err(),
+		redactForFailure(process.Logs(), secrets...),
 	)
 }

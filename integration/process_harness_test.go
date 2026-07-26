@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 )
 
 func TestMain(m *testing.M) {
@@ -29,6 +32,51 @@ func TestMain(m *testing.M) {
 		}
 	}
 	os.Exit(code)
+}
+
+func postProto(t *testing.T, ctx context.Context, client *http.Client, url string, input, output proto.Message) []byte {
+	t.Helper()
+	body, err := postProtoRequest(ctx, client, url, input, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func postProtoRequest(
+	ctx context.Context,
+	client *http.Client,
+	url string,
+	input, output proto.Message,
+) ([]byte, error) {
+	payload, err := proto.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("encode POST %s: %w", url, err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("create POST %s: %w", url, err)
+	}
+	request.Header.Set("Content-Type", "application/x-protobuf")
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("POST %s: %w", url, err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read POST %s: %w", url, err)
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("POST %s status = %d, body = %q", url, response.StatusCode, body)
+	}
+	if contentType := response.Header.Get("Content-Type"); contentType != "application/x-protobuf" {
+		return nil, fmt.Errorf("POST %s content type = %q", url, contentType)
+	}
+	if err := proto.Unmarshal(body, output); err != nil {
+		return nil, fmt.Errorf("decode POST %s: %w", url, err)
+	}
+	return body, nil
 }
 
 func TestRedactForFailure(t *testing.T) {

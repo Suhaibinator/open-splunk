@@ -544,38 +544,6 @@ func waitForHealth(t *testing.T, ctx context.Context, client *http.Client, baseU
 	}
 }
 
-func postProto(t *testing.T, ctx context.Context, client *http.Client, url string, input, output proto.Message) []byte {
-	t.Helper()
-	payload, err := proto.Marshal(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set("Content-Type", "application/x-protobuf")
-	response, err := client.Do(request)
-	if err != nil {
-		t.Fatalf("POST %s: %v", url, err)
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
-	if err != nil {
-		t.Fatalf("read POST %s: %v", url, err)
-	}
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("POST %s status = %d, body = %q", url, response.StatusCode, body)
-	}
-	if contentType := response.Header.Get("Content-Type"); contentType != "application/x-protobuf" {
-		t.Fatalf("POST %s content type = %q", url, contentType)
-	}
-	if err := proto.Unmarshal(body, output); err != nil {
-		t.Fatalf("decode POST %s: %v", url, err)
-	}
-	return body
-}
-
 func createVerticalIndex(t *testing.T, ctx context.Context, client *http.Client, baseURL, name, displayName string) {
 	t.Helper()
 	var created opensplunkv1.CreateIndexResponse
