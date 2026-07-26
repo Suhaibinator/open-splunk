@@ -70,13 +70,32 @@ func TestNormalizeConfigDefaultsAndInjectedFunctions(t *testing.T) {
 		normalized.checkOrigin(originRequest("example.test", false, "https://example.test")) {
 		t.Fatal("nil CheckOrigin did not install the same-origin policy")
 	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	waitReturned := make(chan struct{})
+	go func() {
+		normalized.wait(canceled, time.Hour)
+		close(waitReturned)
+	}()
+	select {
+	case <-waitReturned:
+	case <-time.After(time.Second):
+		t.Fatal("default poll wait did not observe context cancellation")
+	}
 
 	fixedNow := time.Date(2026, 7, 22, 12, 34, 56, 0, time.UTC)
 	originCalls := 0
+	waitCalls := 0
 	config.Now = func() time.Time { return fixedNow }
 	config.CheckOrigin = func(request *http.Request) bool {
 		originCalls++
 		return request.Host == "injected.example"
+	}
+	config.Wait = func(ctx context.Context, delay time.Duration) {
+		if ctx == nil || delay != 7*time.Millisecond {
+			t.Fatalf("injected Wait arguments = (%v, %s)", ctx, delay)
+		}
+		waitCalls++
 	}
 	normalized = mustNormalizeSearchWebSocketConfig(t, config)
 	if got := normalized.now(); !got.Equal(fixedNow) {
@@ -84,6 +103,10 @@ func TestNormalizeConfigDefaultsAndInjectedFunctions(t *testing.T) {
 	}
 	if !normalized.checkOrigin(originRequest("injected.example", false)) || originCalls != 1 {
 		t.Fatalf("injected CheckOrigin result/calls = (false, %d)", originCalls)
+	}
+	normalized.wait(context.Background(), 7*time.Millisecond)
+	if waitCalls != 1 {
+		t.Fatalf("injected Wait calls = %d, want 1", waitCalls)
 	}
 }
 

@@ -21,6 +21,7 @@ type targetProjection struct {
 	incarnation            time.Time
 	previewRows            uint32
 	invalidatesPreview     bool
+	invalidatesArtifact    bool
 	terminal               bool
 	refreshAt              time.Time
 	revalidateUntilRemoved bool
@@ -185,7 +186,8 @@ func projectExport(job exportjobs.Job, now time.Time) (targetProjection, error) 
 	}
 	refreshAt, revalidateUntilRemoved := terminalRefreshSchedule(terminal, job.ExpiresAt, now)
 	return targetProjection{
-		version: job.Version, incarnation: canonicalTime(job.CreatedAt), terminal: terminal,
+		version: job.Version, incarnation: canonicalTime(job.CreatedAt),
+		invalidatesArtifact: job.State == exportjobs.StateExpired, terminal: terminal,
 		refreshAt: refreshAt, revalidateUntilRemoved: revalidateUntilRemoved, events: events,
 	}, nil
 }

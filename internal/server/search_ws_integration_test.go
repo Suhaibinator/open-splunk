@@ -286,6 +286,8 @@ type realSearchWebSocketExecutor struct {
 	exits   atomic.Uint32
 	entered chan struct{}
 	steps   chan realSearchWebSocketProgressStep
+	rows    chan realSearchWebSocketRowStep
+	finish  chan chan error
 	exited  chan error
 }
 
@@ -294,10 +296,17 @@ type realSearchWebSocketProgressStep struct {
 	reply chan error
 }
 
+type realSearchWebSocketRowStep struct {
+	values []searchjobs.Value
+	reply  chan error
+}
+
 func newRealSearchWebSocketExecutor() *realSearchWebSocketExecutor {
 	return &realSearchWebSocketExecutor{
 		entered: make(chan struct{}, 1),
 		steps:   make(chan realSearchWebSocketProgressStep),
+		rows:    make(chan realSearchWebSocketRowStep),
+		finish:  make(chan chan error),
 		exited:  make(chan error, 1),
 	}
 }
@@ -336,6 +345,19 @@ func (executor *realSearchWebSocketExecutor) Execute(
 			if err != nil {
 				return err
 			}
+		case step := <-executor.rows:
+			err := sink.AddRow(step.values)
+			select {
+			case step.reply <- err:
+			case <-ctx.Done():
+				err = ctx.Err()
+			}
+			if err != nil {
+				return err
+			}
+		case reply := <-executor.finish:
+			reply <- nil
+			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -353,20 +375,43 @@ func (executor *realSearchWebSocketExecutor) recordExit(err error) {
 func (executor *realSearchWebSocketExecutor) step(t *testing.T, delta searchjobs.ExecutionProgressDelta) {
 	t.Helper()
 	step := realSearchWebSocketProgressStep{delta: delta, reply: make(chan error, 1)}
+	sendRealSearchWebSocketExecutorCommand(t, executor.steps, step, step.reply, "executor progress step")
+}
+
+func (executor *realSearchWebSocketExecutor) addRow(t *testing.T, values ...searchjobs.Value) {
+	t.Helper()
+	step := realSearchWebSocketRowStep{values: values, reply: make(chan error, 1)}
+	sendRealSearchWebSocketExecutorCommand(t, executor.rows, step, step.reply, "executor result row")
+}
+
+func (executor *realSearchWebSocketExecutor) complete(t *testing.T) {
+	t.Helper()
+	reply := make(chan error, 1)
+	sendRealSearchWebSocketExecutorCommand(t, executor.finish, reply, reply, "executor completion")
+}
+
+func sendRealSearchWebSocketExecutorCommand[T any](
+	t *testing.T,
+	commands chan<- T,
+	command T,
+	reply <-chan error,
+	label string,
+) {
+	t.Helper()
 	timer := time.NewTimer(2 * time.Second)
 	defer timer.Stop()
 	select {
-	case executor.steps <- step:
+	case commands <- command:
 	case <-timer.C:
-		t.Fatal("timed out sending executor progress step")
+		t.Fatalf("timed out sending %s", label)
 	}
 	select {
-	case err := <-step.reply:
+	case err := <-reply:
 		if err != nil {
-			t.Fatalf("executor progress step: %v", err)
+			t.Fatalf("%s: %v", label, err)
 		}
 	case <-timer.C:
-		t.Fatal("timed out waiting for executor progress step")
+		t.Fatalf("timed out waiting for %s", label)
 	}
 }
 
@@ -572,15 +617,35 @@ func dialSearchWebSocket(t *testing.T, dialer *websocket.Dialer, socketURL, orig
 }
 
 func searchWebSocketSubscribeCommand(requestID, subscriptionID, jobID string, afterSequence uint64) *opensplunkv1.SearchWebSocketCommand {
+	return searchWebSocketTargetSubscribeCommand(
+		requestID,
+		subscriptionID,
+		&opensplunkv1.JobTarget{
+			Target: &opensplunkv1.JobTarget_SearchJobId{SearchJobId: jobID},
+		},
+		afterSequence,
+		false,
+		nil,
+	)
+}
+
+func searchWebSocketTargetSubscribeCommand(
+	requestID string,
+	subscriptionID string,
+	target *opensplunkv1.JobTarget,
+	afterSequence uint64,
+	includePreviews bool,
+	previewRowLimit *uint32,
+) *opensplunkv1.SearchWebSocketCommand {
 	return &opensplunkv1.SearchWebSocketCommand{
 		RequestId: requestID,
 		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{
 			Subscriptions: []*opensplunkv1.SearchSubscription{{
-				SubscriptionId: subscriptionID,
-				Target: &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_SearchJobId{
-					SearchJobId: jobID,
-				}},
-				AfterSequence: afterSequence,
+				SubscriptionId:  subscriptionID,
+				Target:          target,
+				AfterSequence:   afterSequence,
+				IncludePreviews: includePreviews,
+				PreviewRowLimit: previewRowLimit,
 			}},
 		}},
 	}

@@ -627,8 +627,19 @@ func TestManagerCanceledQueuedAndRunningJobsWaitForWorkerAcknowledgement(t *test
 	remainingMetadata := manager.totalMetadata
 	remainingArtifacts := manager.totalBytes
 	manager.budgetMu.Unlock()
+	if remainingMetadata == 0 || remainingArtifacts != 0 {
+		t.Fatalf("acknowledged tombstone accounting = metadata %d artifact %d", remainingMetadata, remainingArtifacts)
+	}
+	clock.Advance(time.Nanosecond)
+	if err := manager.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	manager.budgetMu.Lock()
+	remainingMetadata = manager.totalMetadata
+	remainingArtifacts = manager.totalBytes
+	manager.budgetMu.Unlock()
 	if remainingMetadata != 0 || remainingArtifacts != 0 {
-		t.Fatalf("accounting after acknowledged cleanup = metadata %d artifact %d", remainingMetadata, remainingArtifacts)
+		t.Fatalf("accounting after tombstone retention = metadata %d artifact %d", remainingMetadata, remainingArtifacts)
 	}
 	after, err := manager.Create(context.Background(), testAccess, CreateRequest{SearchJobID: "after", Format: FormatCSV})
 	if err != nil {
@@ -1033,6 +1044,16 @@ func TestManagerMetadataBudgetRemainsChargedUntilTombstoneRemoval(t *testing.T) 
 	manager.budgetMu.Lock()
 	remaining := manager.totalMetadata
 	manager.budgetMu.Unlock()
+	if remaining != retainedMetadata {
+		t.Fatalf("metadata during tombstone retention = %d, want %d", remaining, retainedMetadata)
+	}
+	clock.Advance(time.Minute)
+	if err := manager.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	manager.budgetMu.Lock()
+	remaining = manager.totalMetadata
+	manager.budgetMu.Unlock()
 	if remaining != 0 {
 		t.Fatalf("metadata after tombstone deletion = %d, want 0", remaining)
 	}
@@ -1206,6 +1227,52 @@ func TestManagerArtifactTTLAndTombstoneCleanup(t *testing.T) {
 	}
 }
 
+func TestManagerDelayedFirstCleanupRetainsExpiredTombstoneForFullRetention(t *testing.T) {
+	t.Parallel()
+	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"search": {schema: basicExportSchema(), rows: basicExportRows()[:1]},
+	}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.ArtifactTTL = time.Minute
+		config.ExpiredRetention = 2 * time.Minute
+		config.Now = clock.Now
+	})
+	created, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "search",
+		Format:      FormatCSV,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitExportState(t, manager, testAccess, created.ID, StateCompleted)
+
+	clock.Advance(10 * time.Minute)
+	if err := manager.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	expired, err := manager.Get(context.Background(), testAccess, created.ID)
+	if err != nil || expired.State != StateExpired || expired.Artifact != nil {
+		t.Fatalf("Get(after delayed first cleanup) = (%#v, %v), want retained expired tombstone", expired, err)
+	}
+
+	clock.Advance(2*time.Minute - time.Nanosecond)
+	if err := manager.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := manager.Get(context.Background(), testAccess, created.ID); err != nil || got.State != StateExpired {
+		t.Fatalf("Get(one nanosecond before tombstone deadline) = (%#v, %v)", got, err)
+	}
+
+	clock.Advance(time.Nanosecond)
+	if err := manager.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Get(context.Background(), testAccess, created.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get(at tombstone deadline) = %v, want ErrNotFound", err)
+	}
+}
+
 func TestManagerDeletionFailureRetainsRetryHandleAndTombstone(t *testing.T) {
 	t.Parallel()
 	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
@@ -1266,14 +1333,21 @@ func TestManagerDeletionFailureRetainsRetryHandleAndTombstone(t *testing.T) {
 	if err := manager.Cleanup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Get(context.Background(), testAccess, created.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Get(after successful retry) = %v, want ErrNotFound", err)
+	if got, err := manager.Get(context.Background(), testAccess, created.ID); err != nil || got.State != StateExpired {
+		t.Fatalf("Get(after successful retry) = (%#v, %v), want retained tombstone", got, err)
 	}
 	manager.budgetMu.Lock()
 	if manager.totalBytes != 0 {
 		t.Fatalf("bytes after successful deletion = %d", manager.totalBytes)
 	}
 	manager.budgetMu.Unlock()
+	clock.Advance(time.Minute)
+	if err := manager.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Get(context.Background(), testAccess, created.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get(after tombstone retention) = %v, want ErrNotFound", err)
+	}
 }
 
 func TestManagerAtomicPublicationDoesNotReplaceUnexpectedDestination(t *testing.T) {

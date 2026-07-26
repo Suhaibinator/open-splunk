@@ -209,8 +209,17 @@ func TestProjectExportMapsEveryLifecycleState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if projection.version != job.Version || !projection.incarnation.Equal(job.CreatedAt) || projection.terminal != test.terminal {
-				t.Fatalf("projection metadata = {version:%d incarnation:%s terminal:%t}", projection.version, projection.incarnation, projection.terminal)
+			if projection.version != job.Version ||
+				!projection.incarnation.Equal(job.CreatedAt) ||
+				projection.terminal != test.terminal ||
+				projection.invalidatesArtifact != (test.state == exportjobs.StateExpired) {
+				t.Fatalf(
+					"projection metadata = {version:%d incarnation:%s terminal:%t invalidatesArtifact:%t}",
+					projection.version,
+					projection.incarnation,
+					projection.terminal,
+					projection.invalidatesArtifact,
+				)
 			}
 			wantEvents := 2
 			if test.terminal {

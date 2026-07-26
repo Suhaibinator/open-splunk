@@ -391,12 +391,9 @@ func (target *targetState) pollLoop(ctx context.Context, generation uint64) {
 	failures := 0
 	failureNotified := false
 	for {
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			_ = timer.Stop()
+		target.service.config.wait(ctx, delay)
+		if ctx.Err() != nil {
 			return
-		case <-timer.C:
 		}
 		terminal, err := target.refreshCurrentProjection(ctx)
 		if err != nil {
@@ -859,6 +856,14 @@ func (target *targetState) applyProjection(projection targetProjection, initial 
 		// creates a replay gap so an old checkpoint receives resynchronization,
 		// never expired result cells followed by a later clearing tombstone.
 		target.purgeCategoryLocked(eventCategoryPreview)
+	}
+	if projection.invalidatesArtifact {
+		// A completed export terminal contains a download-capable artifact
+		// description. Once the artifact expires, purge every retained terminal
+		// before installing the expired one. The resulting replay gap forces an
+		// old checkpoint to resynchronize instead of briefly restoring stale
+		// artifact metadata.
+		target.purgeCategoryLocked(eventCategoryExportTerminal)
 	}
 	for category := range target.expected {
 		if _, exists := expected[category]; !exists {

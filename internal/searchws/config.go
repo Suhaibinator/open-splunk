@@ -120,6 +120,11 @@ type Config struct {
 	PongTimeout           time.Duration
 	PingInterval          time.Duration
 	Now                   func() time.Time
+	// Wait blocks poll scheduling for delay or until ctx is canceled. Nil uses
+	// a stoppable wall-clock timer. Tests may pair an injected clock with a
+	// deterministic waiter; implementations must return promptly on
+	// cancellation and may be called concurrently.
+	Wait func(context.Context, time.Duration)
 }
 
 type normalizedConfig struct {
@@ -148,6 +153,7 @@ type normalizedConfig struct {
 	pongTimeout           time.Duration
 	pingInterval          time.Duration
 	now                   func() time.Time
+	wait                  func(context.Context, time.Duration)
 }
 
 func normalizeConfig(config Config) (normalizedConfig, error) {
@@ -265,6 +271,10 @@ func normalizeConfig(config Config) (normalizedConfig, error) {
 	if now == nil {
 		now = time.Now
 	}
+	wait := config.Wait
+	if wait == nil {
+		wait = waitForDuration
+	}
 	checkOrigin := config.CheckOrigin
 	if checkOrigin == nil {
 		checkOrigin = sameOrigin
@@ -285,8 +295,17 @@ func normalizeConfig(config Config) (normalizedConfig, error) {
 		maximumTotalReplayBytes: totalReplayBytes,
 		pollInterval:            pollInterval, tombstonePollInterval: tombstonePollInterval,
 		writeTimeout: writeTimeout, pongTimeout: pongTimeout, pingInterval: pingInterval,
-		now: now,
+		now: now, wait: wait,
 	}, nil
+}
+
+func waitForDuration(ctx context.Context, delay time.Duration) {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
 }
 
 func boundedInt(value, fallback, ceiling int, name string) (int, error) {

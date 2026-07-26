@@ -198,6 +198,7 @@ type jobEntry struct {
 	leaseCloseErr     error
 	leaseReleased     bool
 	workerDone        bool
+	expiredAt         time.Time
 	accountedBytes    uint64
 	accountedMetadata uint64
 	tempPath          string
@@ -1600,7 +1601,7 @@ func (manager *Manager) Cleanup(ctx context.Context) error {
 		remove := entry.job.State == StateExpired && entry.artifactPath == "" && entry.tempPath == "" &&
 			!entry.artifactRemoving && !entry.tempRemoving && entry.accountedBytes == 0 &&
 			entry.workerDone && entry.leaseReleased &&
-			!entry.job.ExpiresAt.Add(manager.expiredRetention).After(now)
+			!entry.expiredAt.IsZero() && !entry.expiredAt.Add(manager.expiredRetention).After(now)
 		retainedMetadata := uint64(0)
 		if remove {
 			retainedMetadata = entry.accountedMetadata
@@ -1641,6 +1642,7 @@ func (manager *Manager) expireLocked(entry *jobEntry, now time.Time) (artifactPa
 		entry.job.State = StateExpired
 		entry.job.Version++
 		entry.job.Progress.UpdatedAt = now
+		entry.expiredAt = now
 	}
 	if entry.job.State == StateExpired {
 		if len(entry.downloads) != 0 {
