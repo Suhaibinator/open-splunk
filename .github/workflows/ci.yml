@@ -226,7 +226,7 @@ jobs:
           OPEN_SPLUNK_BACKEND_INTEGRATION: "1"
         run: >-
           go test ./integration
-          -run '^Test(BackendVertical|BrowserSequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery))$'
+          -run '^Test(BackendVertical|Browser(SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
           -count=1
           -timeout=15m
           -v
@@ -238,6 +238,7 @@ jobs:
           name: backend-vertical-browser-failure
           path: |
             test-results/backend-vertical
+            test-results/browser-search-cancellation
             test-results/browser-sequence-expired
             test-results/browser-sequence-gap
             test-results/browser-sequence-gap-rest-first-progress

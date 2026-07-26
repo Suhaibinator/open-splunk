@@ -70,6 +70,7 @@ type browserRecoveryExecutor struct {
 	appendBeforeCompletion bool
 	calls                  atomic.Uint32
 	exits                  atomic.Uint32
+	canceledExits          atomic.Uint32
 	commands               chan browserRecoveryCommand
 }
 
@@ -84,9 +85,14 @@ func (executor *browserRecoveryExecutor) Execute(
 	ctx context.Context,
 	_ clickhouse.CompiledQuery,
 	sink searchjobs.ResultSink,
-) error {
+) (returnedErr error) {
 	executor.calls.Add(1)
-	defer executor.exits.Add(1)
+	defer func() {
+		if errors.Is(returnedErr, context.Canceled) {
+			executor.canceledExits.Add(1)
+		}
+		executor.exits.Add(1)
+	}()
 	if err := sink.SetSchema(searchjobs.Schema{Columns: []searchjobs.Column{{
 		Name: "message",
 		Kind: searchjobs.ValueKindString,
@@ -253,10 +259,18 @@ type browserRecoveryBrowserSpec struct {
 	outputDirectory        string
 	environmentFlag        string
 	failureName            string
+	outcome                browserRecoveryOutcome
 	appendBeforeCompletion bool
 	expectedText           string
 	expectedRows           int
 }
+
+type browserRecoveryOutcome uint8
+
+const (
+	browserRecoveryOutcomeComplete browserRecoveryOutcome = iota + 1
+	browserRecoveryOutcomeCanceled
+)
 
 func TestBrowserSequenceExpiredRecovery(t *testing.T) {
 	runBrowserRecoveryFixture(t, 1, browserRecoveryBrowserSpec{
@@ -264,6 +278,7 @@ func TestBrowserSequenceExpiredRecovery(t *testing.T) {
 		outputDirectory:        "browser-sequence-expired",
 		environmentFlag:        "OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST",
 		failureName:            "sequence-expiration",
+		outcome:                browserRecoveryOutcomeComplete,
 		appendBeforeCompletion: true,
 		expectedText:           browserSequenceExpiredRecoveredRow,
 		expectedRows:           2,
@@ -276,6 +291,7 @@ func TestBrowserSequenceGapRecovery(t *testing.T) {
 		outputDirectory:        "browser-sequence-gap",
 		environmentFlag:        "OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST",
 		failureName:            "sequence-gap",
+		outcome:                browserRecoveryOutcomeComplete,
 		appendBeforeCompletion: false,
 		expectedText:           browserSequenceExpiredInitialRow,
 		expectedRows:           1,
@@ -288,6 +304,7 @@ func TestBrowserSequenceGapRESTTerminalRecovery(t *testing.T) {
 		outputDirectory:        "browser-sequence-gap-rest-terminal",
 		environmentFlag:        "OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_TERMINAL_TEST",
 		failureName:            "sequence-gap REST-terminal",
+		outcome:                browserRecoveryOutcomeComplete,
 		appendBeforeCompletion: false,
 		expectedText:           browserSequenceExpiredInitialRow,
 		expectedRows:           1,
@@ -300,6 +317,20 @@ func TestBrowserSequenceGapRESTFirstProgressRecovery(t *testing.T) {
 		outputDirectory:        "browser-sequence-gap-rest-first-progress",
 		environmentFlag:        "OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_FIRST_PROGRESS_TEST",
 		failureName:            "sequence-gap REST-first progress",
+		outcome:                browserRecoveryOutcomeComplete,
+		appendBeforeCompletion: false,
+		expectedText:           browserSequenceExpiredInitialRow,
+		expectedRows:           1,
+	})
+}
+
+func TestBrowserSearchCancellation(t *testing.T) {
+	runBrowserRecoveryFixture(t, 8, browserRecoveryBrowserSpec{
+		grepPattern:            "browser cancellation is authoritative and does not reconnect",
+		outputDirectory:        "browser-search-cancellation",
+		environmentFlag:        "OPEN_SPLUNK_E2E_CANCELLATION_TEST",
+		failureName:            "search cancellation",
+		outcome:                browserRecoveryOutcomeCanceled,
 		appendBeforeCompletion: false,
 		expectedText:           browserSequenceExpiredInitialRow,
 		expectedRows:           1,
@@ -403,7 +434,11 @@ func runBrowserRecoveryFixture(
 		closeCancel()
 		t.Fatalf("create browser recovery HTTP handler: %v", err)
 	}
-	var applicationServer *httptest.Server
+	var (
+		applicationServer *httptest.Server
+		serverCreateCalls atomic.Uint32
+		serverCancelCalls atomic.Uint32
+	)
 	t.Cleanup(func() {
 		closeContext, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		if err := handler.Close(closeContext); err != nil {
@@ -414,7 +449,19 @@ func runBrowserRecoveryFixture(
 			applicationServer.Close()
 		}
 	})
-	applicationServer = newIPv4LoopbackTestServer(t, handler)
+	applicationServer = newIPv4LoopbackTestServer(t, http.HandlerFunc(
+		func(response http.ResponseWriter, request *http.Request) {
+			if request.Method == http.MethodPost {
+				switch request.URL.Path {
+				case "/api/v1/search/jobs/create":
+					serverCreateCalls.Add(1)
+				case "/api/v1/search/jobs/cancel":
+					serverCancelCalls.Add(1)
+				}
+			}
+			handler.ServeHTTP(response, request)
+		},
+	))
 
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
@@ -442,23 +489,62 @@ func runBrowserRecoveryFixture(
 	if calls := executor.calls.Load(); calls != 1 {
 		t.Fatalf("browser recovery executor calls = %d, want 1", calls)
 	}
-	expectedControlCalls := uint32(6)
-	expectedAppendCalls := uint32(0)
-	if spec.appendBeforeCompletion {
-		expectedControlCalls++
-		expectedAppendCalls++
+	if calls := serverCreateCalls.Load(); calls != 1 {
+		t.Fatalf("browser recovery server create calls = %d, want 1", calls)
 	}
-	if total := controller.total.Load(); total != expectedControlCalls ||
-		controller.progress.Load() != 5 ||
-		controller.appendRow.Load() != expectedAppendCalls ||
-		controller.complete.Load() != 1 {
-		t.Fatalf(
-			"browser recovery control calls = total:%d progress:%d append:%d complete:%d",
-			total,
-			controller.progress.Load(),
-			controller.appendRow.Load(),
-			controller.complete.Load(),
-		)
+	switch spec.outcome {
+	case browserRecoveryOutcomeComplete:
+		expectedControlCalls := uint32(6)
+		expectedAppendCalls := uint32(0)
+		if spec.appendBeforeCompletion {
+			expectedControlCalls++
+			expectedAppendCalls++
+		}
+		if total := controller.total.Load(); total != expectedControlCalls ||
+			controller.progress.Load() != 5 ||
+			controller.appendRow.Load() != expectedAppendCalls ||
+			controller.complete.Load() != 1 ||
+			executor.canceledExits.Load() != 0 ||
+			serverCancelCalls.Load() != 0 {
+			t.Fatalf(
+				"completed browser recovery controls = total:%d progress:%d append:%d complete:%d canceled_exits:%d cancel_requests:%d",
+				total,
+				controller.progress.Load(),
+				controller.appendRow.Load(),
+				controller.complete.Load(),
+				executor.canceledExits.Load(),
+				serverCancelCalls.Load(),
+			)
+		}
+	case browserRecoveryOutcomeCanceled:
+		if total := controller.total.Load(); total != 0 ||
+			controller.progress.Load() != 0 ||
+			controller.appendRow.Load() != 0 ||
+			controller.complete.Load() != 0 ||
+			executor.canceledExits.Load() != 1 ||
+			serverCancelCalls.Load() != 1 {
+			t.Fatalf(
+				"canceled browser recovery controls = total:%d progress:%d append:%d complete:%d canceled_exits:%d cancel_requests:%d",
+				total,
+				controller.progress.Load(),
+				controller.appendRow.Load(),
+				controller.complete.Load(),
+				executor.canceledExits.Load(),
+				serverCancelCalls.Load(),
+			)
+		}
+		job, err := manager.Get(browserSequenceExpiredJobID)
+		if err != nil {
+			t.Fatalf("get canceled browser search: %v", err)
+		}
+		if job.State != searchjobs.StateCanceled ||
+			job.Version == 0 ||
+			job.Failure != nil ||
+			job.FinishedAt.IsZero() {
+			t.Fatalf("authoritative canceled browser search = %+v", job)
+		}
+	default:
+		t.Fatalf("browser recovery outcome = %d", spec.outcome)
 	}
 }
 
@@ -486,6 +572,7 @@ func runBrowserRecoverySpec(
 	command.Dir = repository
 	environment := os.Environ()
 	for _, flag := range []string{
+		"OPEN_SPLUNK_E2E_CANCELLATION_TEST",
 		"OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST",
 		"OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST",
 		"OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_FIRST_PROGRESS_TEST",

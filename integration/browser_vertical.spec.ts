@@ -9,6 +9,7 @@ import {
 } from "@playwright/test";
 
 import {
+  CancelSearchJobResponse,
   CreateSearchJobResponse,
   GetSearchJobResponse,
   GetSearchResultsResponse,
@@ -34,6 +35,7 @@ const browserExecutable = process.env.OPEN_SPLUNK_BROWSER_EXECUTABLE?.trim();
 const recoveryControlURL = optionalLoopbackURL(process.env.OPEN_SPLUNK_E2E_RECOVERY_CONTROL_URL);
 const recoveryControlToken = process.env.OPEN_SPLUNK_E2E_RECOVERY_CONTROL_TOKEN?.trim();
 const recoveryInitialText = process.env.OPEN_SPLUNK_E2E_RECOVERY_INITIAL_TEXT?.trim();
+const cancellationTest = process.env.OPEN_SPLUNK_E2E_CANCELLATION_TEST === "1";
 const sequenceExpirationTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST === "1";
 const sequenceGapTest = process.env.OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST === "1";
 const sequenceGapRESTTerminalTest =
@@ -97,6 +99,134 @@ test("collector event is visible through the compiled backend UI", async ({ page
     /Live job updates failed|Live job updates skipped a sequence|resynchronizing from the server/i,
   );
   assertBrowserSafety(safety);
+});
+
+test("browser cancellation is authoritative and does not reconnect", async ({ page }) => {
+  test.skip(
+    !cancellationTest || !recoveryInitialText,
+    "the deterministic browser-cancellation fixture is not enabled",
+  );
+  test.setTimeout(60_000);
+  await page.clock.install({ time: new Date(latest) });
+  const safety = observeBrowserSafety(page);
+  const sockets = observeCancellationSockets(page, origin, timeout);
+  let releaseCancellationRequest!: () => void;
+  const cancellationRequestGate = new Promise<void>((resolve) => {
+    releaseCancellationRequest = resolve;
+  });
+  let releaseCancellationResponse!: () => void;
+  const cancellationResponseGate = new Promise<void>((resolve) => {
+    releaseCancellationResponse = resolve;
+  });
+  let cancellationRequests = 0;
+  let fulfilledCancellationResponses = 0;
+  const cancellationResponses: CancelSearchJobResponse[] = [];
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/cancel",
+    async (route) => {
+      cancellationRequests += 1;
+      if (cancellationRequests > 1) {
+        await route.abort("blockedbyclient");
+        return;
+      }
+      await cancellationRequestGate;
+      const upstream = await route.fetch();
+      if (
+        upstream.status() !== 200
+        || upstream.headers()["content-type"] !== "application/x-protobuf"
+      ) {
+        throw new Error("browser cancellation was not a protobuf success");
+      }
+      const body = await upstream.body();
+      cancellationResponses.push(CancelSearchJobResponse.decode(body));
+      await cancellationResponseGate;
+      await route.fulfill({ response: upstream, body });
+      fulfilledCancellationResponses += 1;
+    },
+  );
+  const runSearch = await openSearchWorkspace(page);
+  const createResponsePromise = waitForCreateSearchResponse(page);
+  const protocolObservation = observeSearchProtocol(page, origin, timeout);
+
+  try {
+    await runSearch.click();
+    const createResponse = await createResponsePromise;
+    assertProtobufResponse(createResponse);
+    const browserSearchJobID = decodeCreateSearchJobID(await createResponse.body());
+    await protocolObservation.waitForJob(browserSearchJobID);
+    await expect(page.getByTestId("backend-preview-status")).toHaveAttribute(
+      "data-status",
+      "live",
+      { timeout },
+    );
+    await expect(page.getByText(recoveryInitialText!, { exact: true })).toBeVisible({ timeout });
+    expect(sockets.connectionCount(), "search WebSockets before cancellation").toBe(1);
+
+    const cancelSearch = page.getByRole("button", { name: "Cancel search" });
+    await cancelSearch.click();
+    await expect.poll(() => cancellationRequests, { timeout }).toBe(1);
+    await sockets.waitForInitialClose();
+
+    // The request is still blocked before it reaches the server, so this close
+    // can only be the browser's intentional disposal. A second discrete click
+    // exercises the pending-request guard rather than the DOM double-click
+    // filter.
+    await cancelSearch.click();
+    expect(cancellationRequests, "browser cancellation requests while held").toBe(1);
+    const jobStrip = page.getByTestId("job-strip");
+    const expectCancellationPending = async (): Promise<void> => {
+      await expect(jobStrip).toHaveAttribute("aria-busy", "true", { timeout });
+      await expect(jobStrip).not.toContainText("Canceled");
+      await expect(page.getByText(recoveryInitialText!, { exact: true })).toBeVisible({ timeout });
+    };
+    await expectCancellationPending();
+    expect(fulfilledCancellationResponses, "cancel responses before backend release").toBe(0);
+
+    // The first automatic reconnect would be scheduled after 750 ms. Advancing
+    // the browser clock beyond that boundary while the backend is still
+    // untouched proves dispose() canceled the reconnect lifecycle.
+    await page.clock.runFor(2_000);
+    await page.waitForTimeout(100);
+    sockets.assertHealthy();
+
+    releaseCancellationRequest();
+    await expect.poll(() => cancellationResponses.length, { timeout }).toBe(1);
+    const canceledJob = cancellationResponses[0].searchJob;
+    expect(canceledJob?.searchJobId, "canceled search job ID").toBe(browserSearchJobID);
+    expect(canceledJob?.state, "authoritative cancellation state").toBe(
+      SearchJobState.SEARCH_JOB_STATE_CANCELED,
+    );
+    expect(canceledJob?.stateVersion, "authoritative cancellation revision").toBeGreaterThan(0n);
+    expect(canceledJob?.progress?.stateVersion, "authoritative cancellation progress revision").toBe(
+      canceledJob?.stateVersion,
+    );
+    expect(canceledJob?.progress?.phase, "authoritative cancellation phase").toBe(
+      SearchExecutionPhase.SEARCH_EXECUTION_PHASE_COMPLETE,
+    );
+    expect(canceledJob?.failure, "authoritative cancellation failure").toBeUndefined();
+    await expectCancellationPending();
+    expect(fulfilledCancellationResponses, "cancel responses before release").toBe(0);
+
+    releaseCancellationResponse();
+    await expect.poll(() => fulfilledCancellationResponses, { timeout }).toBe(1);
+    await expect(jobStrip).toHaveAttribute("aria-busy", "false", { timeout });
+    await expect(jobStrip).toContainText("Canceled", { timeout });
+    await expect(page.getByTestId("run-search")).toHaveAttribute("aria-label", "Run search", { timeout });
+    await expect(page.getByTestId("run-search")).toBeEnabled({ timeout });
+    await expect(page.getByTestId("backend-preview-status")).toHaveCount(0);
+    await expect(page.locator(".event-row--preview")).toHaveCount(0);
+
+    sockets.assertHealthy();
+    expect(cancellationRequests, "browser cancellation requests").toBe(1);
+    expect(safety.resultsRequests(), "browser search result requests").toBe(0);
+    expect(safety.createRequests(), "browser search create requests").toBe(1);
+    assertBrowserSafety(safety);
+  } finally {
+    releaseCancellationRequest();
+    releaseCancellationResponse();
+    protocolObservation.dispose();
+    sockets.dispose();
+  }
 });
 
 test("live preview resumes from the exact retained WebSocket sequence", async ({ page }) => {
@@ -1003,6 +1133,11 @@ function httpOriginForWebSocket(socketURL: URL): string {
   return httpURL.origin;
 }
 
+function matchesSearchWebSocketURL(socketURL: URL, expectedOrigin: string): boolean {
+  return httpOriginForWebSocket(socketURL) === expectedOrigin
+    && socketURL.pathname === "/api/v1/search/ws";
+}
+
 function matchesAPIResponse(response: Response, expectedOrigin: string, pathname: string): boolean {
   const responseURL = new URL(response.url());
   return responseURL.origin === expectedOrigin
@@ -1021,6 +1156,113 @@ interface BrowserSafetyObservation {
   externalRequests: BoundedRecorder;
   externalWebSockets: BoundedRecorder;
   createRequests(): number;
+  resultsRequests(): number;
+}
+
+interface CancellationSocketObservation {
+  waitForInitialClose(): Promise<void>;
+  connectionCount(): number;
+  assertHealthy(): void;
+  dispose(): void;
+}
+
+interface CancellationSocketListeners {
+  close(): void;
+  error(error: string): void;
+}
+
+function observeCancellationSockets(
+  page: Page,
+  expectedOrigin: string,
+  timeoutMilliseconds: number,
+): CancellationSocketObservation {
+  let matchingConnections = 0;
+  let closedConnections = 0;
+  let initialCloseSettled = false;
+  let failure: Error | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let resolveInitialClose!: () => void;
+  let rejectInitialClose!: (reason: Error) => void;
+  const listeners = new Map<WebSocket, CancellationSocketListeners>();
+  const initialClose = new Promise<void>((resolve, reject) => {
+    resolveInitialClose = resolve;
+    rejectInitialClose = reject;
+  });
+  void initialClose.catch(() => undefined);
+
+  const fail = (error: Error): void => {
+    failure ??= error;
+    if (!initialCloseSettled) {
+      initialCloseSettled = true;
+      rejectInitialClose(error);
+    }
+  };
+  const observeSocket = (socket: WebSocket): void => {
+    const socketURL = new URL(socket.url());
+    if (!matchesSearchWebSocketURL(socketURL, expectedOrigin)) return;
+    matchingConnections += 1;
+    if (matchingConnections > 1) {
+      fail(new Error(`browser cancellation opened ${matchingConnections} search WebSockets`));
+      return;
+    }
+    const socketListeners: CancellationSocketListeners = {
+      close: () => {
+        closedConnections += 1;
+        if (closedConnections > 1) {
+          fail(new Error(`browser cancellation closed ${closedConnections} search WebSockets`));
+          return;
+        }
+        if (!initialCloseSettled) {
+          initialCloseSettled = true;
+          if (timer !== undefined) {
+            clearTimeout(timer);
+            timer = undefined;
+          }
+          resolveInitialClose();
+        }
+      },
+      error: (error) => fail(new Error(`browser cancellation WebSocket failed: ${error}`)),
+    };
+    listeners.set(socket, socketListeners);
+    socket.on("close", socketListeners.close);
+    socket.on("socketerror", socketListeners.error);
+  };
+
+  timer = setTimeout(
+    () => fail(new Error("timed out waiting for browser cancellation to close its search WebSocket")),
+    timeoutMilliseconds,
+  );
+  page.on("websocket", observeSocket);
+  return {
+    waitForInitialClose() {
+      if (failure !== undefined) return Promise.reject(failure);
+      return initialClose;
+    },
+    connectionCount() {
+      return matchingConnections;
+    },
+    assertHealthy() {
+      if (failure !== undefined) throw failure;
+      if (matchingConnections !== 1 || closedConnections !== 1) {
+        throw new Error(
+          `browser cancellation WebSockets = ${matchingConnections} connections/${closedConnections} closes`,
+        );
+      }
+    },
+    dispose() {
+      if (timer !== undefined) clearTimeout(timer);
+      page.off("websocket", observeSocket);
+      for (const [socket, socketListeners] of listeners) {
+        socket.off("close", socketListeners.close);
+        socket.off("socketerror", socketListeners.error);
+      }
+      listeners.clear();
+      if (!initialCloseSettled) {
+        initialCloseSettled = true;
+        resolveInitialClose();
+      }
+    },
+  };
 }
 
 function observeBrowserSafety(page: Page): BrowserSafetyObservation {
@@ -1029,6 +1271,7 @@ function observeBrowserSafety(page: Page): BrowserSafetyObservation {
   const externalRequests = boundedRecorder();
   const externalWebSockets = boundedRecorder();
   let createRequests = 0;
+  let resultsRequests = 0;
   page.on("pageerror", (error) => pageErrors.add(error.message));
   page.on("requestfailed", (request) => {
     const requestURL = new URL(request.url());
@@ -1044,6 +1287,13 @@ function observeBrowserSafety(page: Page): BrowserSafetyObservation {
       && request.method() === "POST"
     ) {
       createRequests += 1;
+    }
+    if (
+      requestURL.origin === origin
+      && requestURL.pathname === "/api/v1/search/jobs/results"
+      && request.method() === "POST"
+    ) {
+      resultsRequests += 1;
     }
     if ((requestURL.protocol === "http:" || requestURL.protocol === "https:") && requestURL.origin !== origin) {
       externalRequests.add(`${request.method()} ${requestURL.origin}${requestURL.pathname}`);
@@ -1061,6 +1311,7 @@ function observeBrowserSafety(page: Page): BrowserSafetyObservation {
     externalRequests,
     externalWebSockets,
     createRequests: () => createRequests,
+    resultsRequests: () => resultsRequests,
   };
 }
 
@@ -1095,18 +1346,24 @@ interface SearchResponseWaiters {
   resultsResponsePromise: Promise<Response>;
 }
 
-function waitForSearchResponses(page: Page): SearchResponseWaiters {
+function waitForCreateSearchResponse(page: Page): Promise<Response> {
   const createResponsePromise = page.waitForResponse(
     (response) => matchesAPIResponse(response, origin, "/api/v1/search/jobs/create"),
     { timeout },
   );
+  // Page teardown can reject the waiter before the normal await is reached.
+  // Mark it handled immediately while retaining the original promise.
+  void createResponsePromise.catch(() => undefined);
+  return createResponsePromise;
+}
+
+function waitForSearchResponses(page: Page): SearchResponseWaiters {
+  const createResponsePromise = waitForCreateSearchResponse(page);
   const resultsResponsePromise = page.waitForResponse(
     (response) => matchesAPIResponse(response, origin, "/api/v1/search/jobs/results"),
     { timeout },
   );
-  // Page teardown can reject either waiter before the normal await is reached.
-  // Mark both handled immediately while retaining the original promises.
-  void createResponsePromise.catch(() => undefined);
+  // Canceled and failed searches may tear the page down before results exist.
   void resultsResponsePromise.catch(() => undefined);
   return { createResponsePromise, resultsResponsePromise };
 }
@@ -1426,7 +1683,7 @@ async function interceptSequenceGap(
     replayBrowserFrameWaiters.clear();
   };
   const routeMatchesSearchSocket = (url: URL): boolean =>
-    httpOriginForWebSocket(url) === expectedOrigin && url.pathname === "/api/v1/search/ws";
+    matchesSearchWebSocketURL(url, expectedOrigin);
   const observeBrowserSocket = (socket: WebSocket): void => {
     const socketURL = new URL(socket.url());
     if (!routeMatchesSearchSocket(socketURL)) return;
@@ -2025,7 +2282,7 @@ async function interceptSequenceExpiration(
     resynchronizationWaiters.clear();
   };
   const routeMatchesSearchSocket = (url: URL): boolean =>
-    httpOriginForWebSocket(url) === expectedOrigin && url.pathname === "/api/v1/search/ws";
+    matchesSearchWebSocketURL(url, expectedOrigin);
 
   await page.routeWebSocket(routeMatchesSearchSocket, (client) => {
     matchingConnectionCount += 1;
@@ -2397,7 +2654,7 @@ async function interceptOneRetainedReplay(
 
   const fail = (error: unknown): void => finish(normalizeError(error));
   const routeMatchesSearchSocket = (url: URL): boolean =>
-    httpOriginForWebSocket(url) === expectedOrigin && url.pathname === "/api/v1/search/ws";
+    matchesSearchWebSocketURL(url, expectedOrigin);
 
   await page.routeWebSocket(routeMatchesSearchSocket, (client) => {
     connectionCount += 1;
@@ -2651,9 +2908,7 @@ function observeSearchProtocol(
 
   const observeSocket = (socket: WebSocket): void => {
     const socketURL = new URL(socket.url());
-    if (httpOriginForWebSocket(socketURL) !== expectedOrigin || socketURL.pathname !== "/api/v1/search/ws") {
-      return;
-    }
+    if (!matchesSearchWebSocketURL(socketURL, expectedOrigin)) return;
     const listeners: SocketListeners = {
       sent: ({ payload }) => {
         try {
