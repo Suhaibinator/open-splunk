@@ -16,6 +16,14 @@ const (
 	// MaximumNormalizedFieldNameBytes includes the escaping required to retain
 	// literal dots and backslashes in one unambiguous stored dotted path.
 	MaximumNormalizedFieldNameBytes = 8_720
+	// MaximumDynamicPathSegments and MaximumDynamicPathSegmentBytes mirror the
+	// durable ingestion bounds for nested object paths.
+	MaximumDynamicPathSegments     = 16
+	MaximumDynamicPathSegmentBytes = 256
+	// MaximumStoredFieldNamesBytes independently bounds one event's aggregate
+	// normalized field-name array. Ingestion enforces it after redaction;
+	// storage and result conversion enforce it again as defensive boundaries.
+	MaximumStoredFieldNamesBytes = 1 << 20
 
 	StoredValueTypeNull      StoredValueType = 1
 	StoredValueTypeString    StoredValueType = 2

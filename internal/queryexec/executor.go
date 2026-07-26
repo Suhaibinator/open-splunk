@@ -27,6 +27,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -213,6 +214,10 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 			return err
 		}
 	}
+	sparseFieldIndex, err := validateSparseFieldsOutput(query)
+	if err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -280,11 +285,24 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 		}
 		return publishChart(executionContext, sink, *query.Chart, buffered)
 	}
-	if len(columns) != len(query.OutputFields) || len(columnTypes) != len(columns) || !slices.Equal(columns, query.OutputFields) {
+	expectedColumns := query.OutputFields
+	if sparseFieldIndex >= 0 {
+		expectedColumns = append(slices.Clone(expectedColumns), clickhouse.SparseEventFieldNamesColumn)
+	}
+	if len(columns) != len(expectedColumns) || len(columnTypes) != len(columns) ||
+		!slices.Equal(columns, expectedColumns) {
 		return fmt.Errorf("%w: ClickHouse result columns do not match the compiled output", searchjobs.ErrInvalidResult)
 	}
-	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(columns))}
-	for index, columnType := range columnTypes {
+	if sparseFieldIndex >= 0 {
+		hiddenType := columnTypes[len(query.OutputFields)]
+		if hiddenType.Nullable() || unwrapType(hiddenType.DatabaseTypeName()) != "Array(String)" ||
+			hiddenType.ScanType() != reflect.TypeOf([]string{}) ||
+			!strings.HasPrefix(unwrapType(columnTypes[sparseFieldIndex].DatabaseTypeName()), "JSON") {
+			return fmt.Errorf("%w: sparse event fields transport has invalid column types", searchjobs.ErrInvalidResult)
+		}
+	}
+	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(query.OutputFields))}
+	for index, columnType := range columnTypes[:len(query.OutputFields)] {
 		kind, multivalue := schemaKind(columns[index], columnType.DatabaseTypeName())
 		schema.Columns[index] = searchjobs.Column{
 			Name:       columns[index],
@@ -311,9 +329,22 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 		if err := rows.Scan(destinations...); err != nil {
 			return classifyQueryError(executionContext, fmt.Errorf("scan ClickHouse result row: %w", err))
 		}
-		values := make([]searchjobs.Value, len(destinations))
-		for index, destination := range destinations {
-			value, err := convertValue(scannedValue(destination))
+		var fieldNames []string
+		if sparseFieldIndex >= 0 {
+			var ok bool
+			fieldNames, ok = scannedValue(destinations[len(query.OutputFields)]).([]string)
+			if !ok {
+				return fmt.Errorf("%w: sparse event fields metadata has an invalid native type", searchjobs.ErrInvalidResult)
+			}
+		}
+		values := make([]searchjobs.Value, len(query.OutputFields))
+		for index, destination := range destinations[:len(query.OutputFields)] {
+			var value searchjobs.Value
+			if index == sparseFieldIndex {
+				value, err = convertSparseEventFields(scannedValue(destination), fieldNames)
+			} else {
+				value, err = convertValue(scannedValue(destination))
+			}
 			if err != nil {
 				return fmt.Errorf("%w: convert ClickHouse column %q: %v", searchjobs.ErrInvalidResult, columns[index], err)
 			}
@@ -327,6 +358,27 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 		return classifyQueryError(executionContext, fmt.Errorf("iterate ClickHouse results: %w", err))
 	}
 	return executionContext.Err()
+}
+
+func validateSparseFieldsOutput(query clickhouse.CompiledQuery) (int, error) {
+	if !query.SparseFields {
+		return -1, nil
+	}
+	fieldIndex := slices.Index(query.OutputFields, "fields")
+	if query.Timechart != nil || query.Chart != nil || fieldIndex < 0 {
+		return -1, fmt.Errorf("%w: compiled sparse event fields contract is invalid", searchjobs.ErrInvalidResult)
+	}
+	seen := make(map[string]struct{}, len(query.OutputFields))
+	for _, field := range query.OutputFields {
+		if field == clickhouse.SparseEventFieldNamesColumn {
+			return -1, fmt.Errorf("%w: compiled sparse event fields contract exposes a private column", searchjobs.ErrInvalidResult)
+		}
+		if _, duplicate := seen[field]; duplicate {
+			return -1, fmt.Errorf("%w: compiled sparse event fields contract has duplicate columns", searchjobs.ErrInvalidResult)
+		}
+		seen[field] = struct{}{}
+	}
+	return fieldIndex, nil
 }
 
 func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {
@@ -1257,47 +1309,121 @@ func convertJSON(document *chcol.JSON) (searchjobs.Value, error) {
 	if document == nil {
 		return searchjobs.NullValue(), nil
 	}
+	values, err := normalizedJSONValues(document)
+	if err != nil {
+		return searchjobs.Value{}, err
+	}
 	root := make(map[string]any)
-	paths := make([]string, 0, len(document.ValuesByPath()))
-	for path := range document.ValuesByPath() {
+	paths := make([]string, 0, len(values))
+	for path := range values {
 		paths = append(paths, path)
 	}
 	slices.Sort(paths)
 	for _, path := range paths {
-		segments := strings.Split(path, ".")
-		current := root
-		for index, physical := range segments {
-			logical := decodePhysicalPathSegment(physical)
-			if logical == "" {
-				return searchjobs.Value{}, errors.New("JSON result contains an empty field name")
-			}
-			if index == len(segments)-1 {
-				if _, exists := current[logical]; exists {
-					return searchjobs.Value{}, fmt.Errorf("JSON result path %q is duplicated", path)
-				}
-				current[logical] = document.ValuesByPath()[path]
-				continue
-			}
-			next, exists := current[logical]
-			if !exists {
-				nested := make(map[string]any)
-				current[logical] = nested
-				current = nested
-				continue
-			}
-			nested, ok := next.(map[string]any)
-			if !ok {
-				return searchjobs.Value{}, fmt.Errorf("JSON result path %q collides with a scalar", path)
-			}
-			current = nested
+		segments, parseErr := eventfields.ParseNormalizedDynamicPath(path)
+		if parseErr != nil || insertResultPath(root, segments, values[path]) != nil {
+			return searchjobs.Value{}, errors.New("JSON result contains invalid field paths")
 		}
 	}
 	return convertValue(root)
 }
 
-func decodePhysicalPathSegment(segment string) string {
-	segment = strings.ReplaceAll(segment, "%2E", ".")
-	return strings.ReplaceAll(segment, "%25", "%")
+func convertSparseEventFields(value any, fieldNames []string) (searchjobs.Value, error) {
+	var document *chcol.JSON
+	switch value := value.(type) {
+	case chcol.JSON:
+		document = &value
+	case *chcol.JSON:
+		document = value
+	default:
+		return searchjobs.Value{}, errors.New("sparse event fields value is not JSON")
+	}
+	if document == nil {
+		return searchjobs.Value{}, errors.New("sparse event fields JSON is nil")
+	}
+	physicalValues, err := normalizedJSONValues(document)
+	if err != nil {
+		return searchjobs.Value{}, errors.New("sparse event fields JSON paths are invalid")
+	}
+	parsedPaths, err := eventfields.ParseStoredFieldNames(fieldNames)
+	if err != nil {
+		return searchjobs.Value{}, errors.New("sparse event fields metadata is invalid")
+	}
+	root := make(map[string]any)
+	for index, name := range fieldNames {
+		fieldValue := any(nil)
+		if stored, exists := physicalValues[name]; exists {
+			fieldValue = stored
+			delete(physicalValues, name)
+		}
+		if insertResultPath(root, parsedPaths[index], fieldValue) != nil {
+			return searchjobs.Value{}, errors.New("sparse event fields metadata paths collide")
+		}
+	}
+	for _, stored := range physicalValues {
+		if !isNullJSONPathValue(stored) {
+			return searchjobs.Value{}, errors.New("sparse event fields metadata does not match its JSON value")
+		}
+	}
+	return convertValue(root)
+}
+
+func normalizedJSONValues(document *chcol.JSON) (map[string]any, error) {
+	values := make(map[string]any, len(document.ValuesByPath()))
+	for physical, value := range document.ValuesByPath() {
+		normalized, err := eventfields.NormalizePhysicalDynamicPath(physical)
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := values[normalized]; duplicate {
+			return nil, errors.New("JSON result paths collide after decoding")
+		}
+		values[normalized] = value
+	}
+	return values, nil
+}
+
+func insertResultPath(root map[string]any, segments []string, value any) error {
+	if len(segments) == 0 {
+		return errors.New("result path is empty")
+	}
+	current := root
+	for index, segment := range segments {
+		if index == len(segments)-1 {
+			if _, exists := current[segment]; exists {
+				return errors.New("result path is duplicated")
+			}
+			current[segment] = value
+			return nil
+		}
+		next, exists := current[segment]
+		if !exists {
+			nested := make(map[string]any)
+			current[segment] = nested
+			current = nested
+			continue
+		}
+		nested, ok := next.(map[string]any)
+		if !ok {
+			return errors.New("result path collides with a scalar")
+		}
+		current = nested
+	}
+	return nil
+}
+
+func isNullJSONPathValue(value any) bool {
+	if isNilDriverValue(value) {
+		return true
+	}
+	switch value := value.(type) {
+	case chcol.Dynamic:
+		return value.Nil()
+	case *chcol.Dynamic:
+		return value.Nil()
+	default:
+		return false
+	}
 }
 
 func randomQueryID() (string, error) {

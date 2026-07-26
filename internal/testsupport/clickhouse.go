@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const DefaultClickHouseImage = "clickhouse/clickhouse-server:26.3.17.4"
+const DefaultClickHouseImage = "clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49"
 
 // ClickHouseContainer is an ephemeral, loopback-only ClickHouse instance.
 // The password is intentionally exposed only as data so callers can connect

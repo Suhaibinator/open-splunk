@@ -21,8 +21,8 @@ const (
 	HardMaxBatchBytes        uint64 = 8 << 20
 	HardMaxEventBytes        uint64 = 1 << 20
 	HardMaxFields            uint32 = eventfields.MaximumStoredFieldsPerEvent
-	HardMaxNestingDepth      uint32 = 16
-	HardMaxFieldNameBytes    uint32 = 256
+	HardMaxNestingDepth      uint32 = eventfields.MaximumDynamicPathSegments
+	HardMaxFieldNameBytes    uint32 = eventfields.MaximumDynamicPathSegmentBytes
 	HardMaxIDBytes           uint32 = 128
 	HardMaxInFlightBatches   uint32 = 64
 	HardMaxStreamsPerSubject uint32 = 16

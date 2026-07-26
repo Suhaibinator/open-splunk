@@ -799,6 +799,25 @@ func TestConvertTypedObjectPreservesTypesTagsAndEscapedNames(t *testing.T) {
 	}
 }
 
+func TestConvertTypedObjectRejectsAggregateFieldMetadataOverLimit(t *testing.T) {
+	t.Parallel()
+
+	parentName := strings.Repeat(".", eventfields.MaximumDynamicPathSegmentBytes)
+	leaves := make([]*opensplunkv1.TypedObjectField, 140)
+	for index := range leaves {
+		leaves[index] = typedField(fmt.Sprintf("leaf%04d", index), typedString("value"))
+	}
+	object := typedObjectValue(leaves...)
+	for depth := 0; depth < eventfields.MaximumDynamicPathSegments-1; depth++ {
+		object = typedObjectValue(typedField(parentName, typedObject(object.Fields...)))
+	}
+
+	if _, _, _, err := convertTypedObject(object); err == nil ||
+		!strings.Contains(err.Error(), "stored field-name metadata") {
+		t.Fatalf("convertTypedObject(amplified metadata) error = %v", err)
+	}
+}
+
 func TestStoredValueTypeCodesMatchProtobufValueType(t *testing.T) {
 	t.Parallel()
 
@@ -865,20 +884,6 @@ func TestConvertTypedObjectAvoidsDottedPathCollisions(t *testing.T) {
 	}
 	if !slices.Equal(types, []uint8{2, 2, 2}) {
 		t.Fatalf("field_types = %#v", types)
-	}
-}
-
-func TestPhysicalJSONPathEncodingContractForCompiler(t *testing.T) {
-	t.Parallel()
-	for source, want := range map[string]string{
-		"plain":       "plain",
-		"literal.dot": "literal%2Edot",
-		"percent%2E":  "percent%252E",
-		"%":           "%25",
-	} {
-		if got := encodePhysicalPathSegment(source); got != want {
-			t.Errorf("encodePhysicalPathSegment(%q) = %q, want %q", source, got, want)
-		}
 	}
 }
 

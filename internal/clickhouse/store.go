@@ -842,6 +842,9 @@ func convertTypedObject(object *opensplunkv1.TypedObject) (*clickhousedriver.JSO
 		names = append(names, name)
 	}
 	slices.Sort(names)
+	if _, err := eventfields.ParseStoredFieldNames(names); err != nil {
+		return nil, nil, nil, fmt.Errorf("stored field-name metadata: %w", err)
+	}
 	types := make([]uint8, len(names))
 	for index, name := range names {
 		types[index] = uint8(fieldTypes[name])
@@ -879,7 +882,7 @@ func flattenTypedObject(
 		}
 
 		logicalPath := appendPath(logicalPrefix, field.GetName())
-		physicalPath := appendPath(physicalPrefix, encodePhysicalPathSegment(field.GetName()))
+		physicalPath := appendPath(physicalPrefix, eventfields.EncodePhysicalPathSegment(field.GetName()))
 		if nested, ok := field.GetValue().GetKind().(*opensplunkv1.TypedValue_ObjectValue); ok {
 			if nested.ObjectValue == nil {
 				return fmt.Errorf("typed object field %q has a nil object", field.GetName())
@@ -900,7 +903,7 @@ func flattenTypedObject(
 		if err != nil {
 			return fmt.Errorf("typed object field %q: %w", field.GetName(), err)
 		}
-		logicalName := normalizedDynamicPath(logicalPath)
+		logicalName := eventfields.NormalizeDynamicPath(logicalPath)
 		physicalName := strings.Join(physicalPath, ".")
 		if prior, collision := physicalPaths[physicalName]; collision && prior != logicalName {
 			return fmt.Errorf("typed fields %q and %q collide in ClickHouse JSON path %q", prior, logicalName, physicalName)
@@ -1096,15 +1099,6 @@ func validateStorageFieldName(name string) error {
 		}
 	}
 	return nil
-}
-
-func encodePhysicalPathSegment(segment string) string {
-	// Keep this transform synchronized with dynamic-path reads in the compiler.
-	// ClickHouse reserves %2E for literal dots when
-	// json_type_escape_dots_in_keys=1; escaping percent first makes the mapping
-	// injective for user keys which already contain escape-looking text.
-	segment = strings.ReplaceAll(segment, "%", "%25")
-	return strings.ReplaceAll(segment, ".", "%2E")
 }
 
 func appendPath(prefix []string, segment string) []string {

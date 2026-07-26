@@ -149,6 +149,14 @@ func (v *Validator) ValidateAndNormalizeEvent(event *opensplunkv1.LogEvent, ctx 
 		redactedMessage := string(v.redactText([]byte(cloned.GetMessage())))
 		cloned.Message = &redactedMessage
 	}
+	if !storedFieldNamesFit(cloned.GetFields()) {
+		return nil, eventFailure(
+			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
+			"flattened field metadata exceeds the durable event limit",
+			"fields",
+			"field_metadata_too_large",
+		)
+	}
 	if uint64(proto.Size(cloned)) > v.limits.MaxEventBytes {
 		return nil, eventFailure(
 			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
@@ -162,6 +170,36 @@ func (v *Validator) ValidateAndNormalizeEvent(event *opensplunkv1.LogEvent, ctx 
 		BatchID:     ctx.BatchID,
 		IndexTime:   ctx.ReceivedAt.UTC(),
 	}, nil
+}
+
+func storedFieldNamesFit(object *opensplunkv1.TypedObject) bool {
+	remaining := eventfields.MaximumStoredFieldNamesBytes
+	return consumeStoredFieldNameBytes(object, 0, &remaining)
+}
+
+func consumeStoredFieldNameBytes(
+	object *opensplunkv1.TypedObject,
+	prefixBytes int,
+	remaining *int,
+) bool {
+	if object == nil {
+		return true
+	}
+	for _, field := range object.GetFields() {
+		pathBytes := eventfields.NormalizedDynamicPathBytes(prefixBytes, field.GetName())
+		if nested, ok := field.GetValue().GetKind().(*opensplunkv1.TypedValue_ObjectValue); ok &&
+			nested.ObjectValue != nil && len(nested.ObjectValue.GetFields()) != 0 {
+			if !consumeStoredFieldNameBytes(nested.ObjectValue, pathBytes, remaining) {
+				return false
+			}
+			continue
+		}
+		if pathBytes > *remaining {
+			return false
+		}
+		*remaining -= pathBytes
+	}
+	return true
 }
 
 func (v *Validator) validateTimestamp(ts *timestamppb.Timestamp, now time.Time) error {

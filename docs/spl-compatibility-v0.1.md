@@ -1104,8 +1104,24 @@ the bootstrap advertises field discovery.
 
 ## Current GradeThis corpus
 
-All ten of the product plan's initial searches compile in v0.1, and their
-storage/execution primitives have pinned ClickHouse integration coverage:
+All ten of the product plan's initial searches are one shared versioned
+manifest. The ordinary suite sends every manifest query through parsing,
+planning, and compilation. A required CI integration test additionally sends
+one deterministic, sanitized 20-event NDJSON fixture through the collector
+decoder, production ClickHouse store, parser, planner, compiler, query
+executor, search-job manager, and owner/tenant-scoped signed-cursor paging
+against the pinned ClickHouse release.
+
+The fixture is generated from one typed profile, has a pinned SHA-256 digest,
+uses only synthetic identifiers and documentation IP addresses, and is scanned
+for secret/PII keys, credential-like values, email-like values, workstation
+paths, production URLs, duplicate keys, and non-documentation IPv4/IPv6
+addresses. Scanner failures never echo rejected key text. The executed
+contract asserts every public column's name, value kind, nullability, and
+multivalue flag; every ordered typed cell and row ordinal; stable schemas and
+totals across three-row pages; and a complete terminal page with no cursor.
+Wrong-owner and wrong-tenant page access returns not found, and a modified
+signed cursor is rejected. It covers:
 
 - trace-ID event investigation;
 - errors/warnings with descending time;
@@ -1119,6 +1135,31 @@ storage/execution primitives have pinned ClickHouse integration coverage:
   `chart count OVER path BY status_class`;
 - slow routes through `eval`, `p95`, and `where`; and
 - top messages.
+
+Ordinary event rows expose a sparse `fields` object, not a part-wide union of
+every dynamic ClickHouse JSON path. The compiler transports per-row presence
+metadata in one bounded private column whenever it exposes the raw public
+`fields` payload. The executor validates and consumes that column but never
+publishes it. A path named as present with no physical JSON value is explicit
+null; an unnamed part-level null path is missing and is omitted. The corpus
+contains both states for `optional_note` and pins them in ordered results.
+Canonical shared path parsing preserves literal dots, backslashes, and percent
+escapes without collisions.
+
+Each durable event may carry at most 1 MiB of aggregate normalized field-name
+metadata in addition to the existing count, depth, segment, and event-size
+bounds. This limit is enforced after mandatory redaction before
+acknowledgement with allocation-free shared encoder accounting, defensively by
+storage, and again by result conversion.
+
+The slow-route fixture deliberately gives every assessment request the same
+`800ms` duration, so the current bounded approximate `p95` has an exact
+expected result without claiming a live Splunk differential oracle. The
+product-plan query and this v0.1 corpus use the literal message
+`Request metrics` and millisecond durations; current GradeThis deployments
+which emit `Request summary statistics` or microsecond/second duration
+spellings require an explicit migration/profile update rather than an
+undocumented query rewrite.
 
 The `chart` pivot additionally has pinned ClickHouse coverage for
 `bin severity span=10 | chart count OVER severity BY level`, for

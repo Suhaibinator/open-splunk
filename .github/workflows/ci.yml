@@ -168,6 +168,32 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  gradethis-corpus:
+    name: GradeThis compatibility corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Execute exact GradeThis corpus against pinned ClickHouse
+        env:
+          OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
+          OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
+        run: >-
+          go test ./internal/queryexec
+          -run '^TestGradeThisCompatibilityV0_1AgainstClickHouse$'
+          -count=1
+          -timeout=6m
+          -v
+
   backend-vertical:
     name: Backend vertical
     runs-on: ubuntu-latest
@@ -231,6 +257,7 @@ jobs:
     needs:
       - backend-vertical
       - frontend
+      - gradethis-corpus
       - go-lint
       - go-test
       - go-vulnerability

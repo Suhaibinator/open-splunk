@@ -3,6 +3,7 @@ package queryexec
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"math/big"
@@ -17,6 +18,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -696,6 +698,148 @@ func TestConvertJSONRestoresLogicalPathsAndNestedTypes(t *testing.T) {
 	}
 }
 
+func TestExecutorReconstructsSparseEventFieldsFromPresenceMetadata(t *testing.T) {
+	t.Parallel()
+
+	document := chcol.NewJSON()
+	document.SetValueAtPath("literal%2Edot", chcol.NewDynamicWithType("literal", "String"))
+	document.SetValueAtPath("nested.value", chcol.NewDynamicWithType(true, "Bool"))
+	document.SetValueAtPath("percent%252Ekey", chcol.NewDynamicWithType(uint64(9), "UInt64"))
+	document.SetValueAtPath(`slash\key`, chcol.NewDynamicWithType("slash", "String"))
+	document.SetValueAtPath("present", chcol.NewDynamicWithType("kept", "String"))
+	// ClickHouse exposes part-wide JSON paths on rows where they are absent.
+	document.SetValueAtPath("phantom", chcol.NewDynamicWithType(nil, ""))
+
+	names := []string{
+		"explicit_null",
+		eventfields.NormalizeDynamicPath([]string{"literal.dot"}),
+		eventfields.NormalizeDynamicPath([]string{"nested", "value"}),
+		eventfields.NormalizeDynamicPath([]string{"percent%2Ekey"}),
+		"present",
+		eventfields.NormalizeDynamicPath([]string{`slash\key`}),
+	}
+	slices.Sort(names)
+	rows := &fakeRows{
+		columns: []string{"fields", clickhouse.SparseEventFieldNamesColumn},
+		types: []driver.ColumnType{
+			fakeColumnType{
+				name: "fields", databaseType: "JSON(max_dynamic_paths=256)",
+				scanType: reflect.TypeOf((*chcol.JSON)(nil)),
+			},
+			fakeColumnType{
+				name:         clickhouse.SparseEventFieldNamesColumn,
+				databaseType: "Array(String)", scanType: reflect.TypeOf([]string{}),
+			},
+		},
+		data: [][]any{{document, names}},
+	}
+	sink := &fakeSink{}
+	err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
+		context.Background(),
+		clickhouse.CompiledQuery{
+			SQL: "SELECT fields, field_names", OutputFields: []string{"fields"},
+			SparseFields: true,
+		},
+		sink,
+	)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(sink.schema.Columns) != 1 || sink.schema.Columns[0].Name != "fields" ||
+		sink.schema.Columns[0].Kind != searchjobs.ValueKindObject ||
+		len(sink.rows) != 1 || len(sink.rows[0]) != 1 {
+		t.Fatalf("public sparse result = schema %#v rows %#v", sink.schema, sink.rows)
+	}
+	fields, ok := sink.rows[0][0].Object()
+	if !ok {
+		t.Fatalf("fields value = %#v, want object", sink.rows[0][0])
+	}
+	byName := make(map[string]searchjobs.Value, len(fields))
+	for _, field := range fields {
+		byName[field.Name] = field.Value
+	}
+	if _, exists := byName["phantom"]; exists {
+		t.Fatalf("missing union path leaked into fields: %#v", fields)
+	}
+	if explicit, exists := byName["explicit_null"]; !exists || !explicit.IsNull() {
+		t.Fatalf("explicit null = %#v, exists %v", explicit, exists)
+	}
+	if literal, exists := byName["literal.dot"]; !exists {
+		t.Fatal("literal-dot field is missing")
+	} else if value, stringOK := literal.String(); !stringOK || value != "literal" {
+		t.Fatalf("literal-dot field = %#v", literal)
+	}
+	if slash, exists := byName[`slash\key`]; !exists {
+		t.Fatal("backslash field is missing")
+	} else if value, stringOK := slash.String(); !stringOK || value != "slash" {
+		t.Fatalf("backslash field = %#v", slash)
+	}
+	nested, exists := byName["nested"]
+	if !exists {
+		t.Fatal("nested field is missing")
+	}
+	nestedFields, nestedOK := nested.Object()
+	if !nestedOK || len(nestedFields) != 1 || nestedFields[0].Name != "value" {
+		t.Fatalf("nested field = %#v", nested)
+	}
+}
+
+func TestConvertSparseEventFieldsRejectsInvalidPresenceMetadata(t *testing.T) {
+	t.Parallel()
+
+	nonempty := chcol.NewJSON()
+	nonempty.SetValueAtPath("stored", chcol.NewDynamicWithType("value", "String"))
+	empty := chcol.NewJSON()
+	tooMany := make([]string, eventfields.MaximumStoredFieldsPerEvent+1)
+	for index := range tooMany {
+		tooMany[index] = fmt.Sprintf("field_%04d", index)
+	}
+	tests := []struct {
+		name     string
+		document *chcol.JSON
+		fields   []string
+	}{
+		{name: "unsorted", document: empty, fields: []string{"b", "a"}},
+		{name: "duplicate", document: empty, fields: []string{"a", "a"}},
+		{name: "reserved root", document: empty, fields: []string{"host"}},
+		{name: "leaf ancestor collision", document: empty, fields: []string{"a", "a.b"}},
+		{name: "invalid escape", document: empty, fields: []string{`bad\q`}},
+		{name: "too many", document: empty, fields: tooMany},
+		{name: "nonnull path missing metadata", document: nonempty},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := convertSparseEventFields(test.document, test.fields); err == nil {
+				t.Fatal("invalid sparse metadata unexpectedly succeeded")
+			}
+		})
+	}
+}
+
+func TestValidateSparseFieldsOutputRejectsForgedContracts(t *testing.T) {
+	t.Parallel()
+
+	tests := []clickhouse.CompiledQuery{
+		{OutputFields: []string{"message"}, SparseFields: true},
+		{OutputFields: []string{"fields", "fields"}, SparseFields: true},
+		{
+			OutputFields: []string{"fields", clickhouse.SparseEventFieldNamesColumn},
+			SparseFields: true,
+		},
+		{
+			OutputFields: []string{"fields"},
+			SparseFields: true,
+			Chart:        &clickhouse.ChartOutput{},
+		},
+	}
+	for index, query := range tests {
+		if _, err := validateSparseFieldsOutput(query); !errors.Is(err, searchjobs.ErrInvalidResult) {
+			t.Errorf("forged contract %d error = %v, want ErrInvalidResult", index, err)
+		}
+	}
+}
+
 func TestConvertExtendedDynamicValuesRestoresExactTypes(t *testing.T) {
 	t.Parallel()
 
@@ -994,6 +1138,22 @@ func TestExecutorRejectsColumnDriftAndPropagatesSinkLimit(t *testing.T) {
 	err = executor.Execute(context.Background(), clickhouse.CompiledQuery{SQL: "SELECT message", OutputFields: []string{"message"}}, sink)
 	if !errors.Is(err, searchjobs.ErrRowLimit) || rows.nextCalls != 1 || !rows.closed {
 		t.Fatalf("sink error=%v next=%d closed=%v", err, rows.nextCalls, rows.closed)
+	}
+}
+
+func TestQueryIntegrationDockerArgsRedactCredentials(t *testing.T) {
+	t.Parallel()
+
+	const firstSecret = "first-secret"
+	const secondSecret = "second-secret"
+	got := queryIntegrationRedactedDockerArgs([]string{
+		"run", "--env", "CLICKHOUSE_PASSWORD=" + firstSecret,
+		"clickhouse-client", "--password", secondSecret, "--multiquery",
+	})
+	if strings.Contains(got, firstSecret) || strings.Contains(got, secondSecret) ||
+		!strings.Contains(got, "CLICKHOUSE_PASSWORD=[REDACTED]") ||
+		!strings.Contains(got, "--password [REDACTED]") {
+		t.Fatalf("redacted Docker args = %q", got)
 	}
 }
 

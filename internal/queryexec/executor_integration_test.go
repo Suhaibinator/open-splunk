@@ -23,9 +23,11 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport/gradethiscorpus"
 )
 
-const queryExecutorIntegrationImage = "clickhouse/clickhouse-server:26.3.17.4"
+const queryExecutorIntegrationImage = testsupport.DefaultClickHouseImage
 
 // TestExecutorAndManagerAgainstClickHouse is opt-in because it starts an
 // ephemeral Docker container and may pull the pinned ClickHouse image.
@@ -209,7 +211,22 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			})
 		}
 	})
-	t.Run("GradeThis product plan compatibility corpus", func(t *testing.T) {
+	t.Run("GradeThis compatibility smoke and distinct-count extension", func(t *testing.T) {
+		sourceFor := func(id gradethiscorpus.SearchID) string {
+			t.Helper()
+			for _, search := range gradethiscorpus.Searches() {
+				if search.ID != id {
+					continue
+				}
+				source, err := search.Render(gradeThisTraceID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return source
+			}
+			t.Fatalf("GradeThis corpus search %q is missing", id)
+			return ""
+		}
 		tests := []struct {
 			name        string
 			source      string
@@ -218,10 +235,8 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			assert      func(*testing.T, searchjobs.ResultPage)
 		}{
 			{
-				name: "follow one request",
-				source: `index=gradethis trace_id="` + gradeThisTraceID + `"
-| sort _time
-| table _time level layer logger message`,
+				name:        "follow one request",
+				source:      sourceFor(gradethiscorpus.SearchFollowTrace),
 				wantColumns: []string{"_time", "level", "layer", "logger", "message"},
 				wantRows:    2,
 				assert: func(t *testing.T, page searchjobs.ResultPage) {
@@ -233,9 +248,8 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 				},
 			},
 			{
-				name: "errors and warnings",
-				source: `index=gradethis (level=ERROR OR level=WARN)
-| sort -_time`,
+				name:     "errors and warnings",
+				source:   sourceFor(gradethiscorpus.SearchErrorsAndWarnings),
 				wantRows: 5,
 				assert: func(t *testing.T, page searchjobs.ResultPage) {
 					timeColumn := queryIntegrationColumnIndex(t, page, "_time")
@@ -262,9 +276,8 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 				},
 			},
 			{
-				name: "known raw error fragment",
-				source: `index=gradethis "connection refused"
-| table _time level logger message trace_id`,
+				name:        "known raw error fragment",
+				source:      sourceFor(gradethiscorpus.SearchRawErrorFragment),
 				wantColumns: []string{"_time", "level", "logger", "message", "trace_id"},
 				wantRows:    1,
 				assert: func(t *testing.T, page searchjobs.ResultPage) {
@@ -276,10 +289,8 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 				},
 			},
 			{
-				name: "severity counts",
-				source: `index=gradethis
-| stats count by level
-| sort -count`,
+				name:        "severity counts",
+				source:      sourceFor(gradethiscorpus.SearchSeverityCounts),
 				wantColumns: []string{"level", "count"},
 				wantRows:    3,
 				assert: func(t *testing.T, page searchjobs.ResultPage) {
@@ -310,11 +321,8 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 				},
 			},
 			{
-				name: "frequent errors",
-				source: `index=gradethis level=ERROR
-| stats count by logger, message
-| sort -count
-| head 20`,
+				name:        "frequent errors",
+				source:      sourceFor(gradethiscorpus.SearchFrequentErrors),
 				wantColumns: []string{"logger", "message", "count"},
 				wantRows:    2,
 				assert: func(t *testing.T, page searchjobs.ResultPage) {
@@ -327,9 +335,8 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 				},
 			},
 			{
-				name: "volume by severity",
-				source: `index=gradethis
-| timechart span=5m count by level`,
+				name:        "volume by severity",
+				source:      sourceFor(gradethiscorpus.SearchVolumeBySeverity),
 				wantColumns: []string{"_time", "ERROR", "INFO", "WARN"},
 				wantRows:    3,
 				assert: func(t *testing.T, page searchjobs.ResultPage) {
@@ -341,9 +348,8 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 				},
 			},
 			{
-				name: "server errors by route",
-				source: `index=gradethis message="Request metrics" status>=500
-| timechart span=5m count by path`,
+				name:        "server errors by route",
+				source:      sourceFor(gradethiscorpus.SearchServerErrors),
 				wantColumns: []string{"_time", "/fast", "/slow"},
 				wantRows:    3,
 				assert: func(t *testing.T, page searchjobs.ResultPage) {
@@ -354,10 +360,8 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 				},
 			},
 			{
-				name: "responses by route and status",
-				source: `index=gradethis message="Request metrics"
-| stats count by path, status
-| sort -count`,
+				name:        "responses by route and status",
+				source:      sourceFor(gradethiscorpus.SearchResponses),
 				wantColumns: []string{"path", "status", "count"},
 				wantRows:    4,
 				assert: func(t *testing.T, page searchjobs.ResultPage) {
@@ -388,11 +392,8 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 				},
 			},
 			{
-				name: "slow routes",
-				source: `index=gradethis message="Request metrics"
-| eval duration_ms=tonumber(replace(duration, "ms$", ""))
-| stats count p95(duration_ms) as p95_ms by path
-| where p95_ms > 500`,
+				name:        "slow routes",
+				source:      sourceFor(gradethiscorpus.SearchSlowRoutes),
 				wantColumns: []string{"path", "count", "p95_ms"},
 				wantRows:    1,
 				assert: func(t *testing.T, page searchjobs.ResultPage) {
@@ -405,9 +406,8 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 				},
 			},
 			{
-				name: "common messages",
-				source: `index=gradethis
-| top limit=20 message`,
+				name:        "common messages",
+				source:      sourceFor(gradethiscorpus.SearchTopMessages),
 				wantColumns: []string{"message", "count", "percent"},
 				wantRows:    5,
 				assert: func(t *testing.T, page searchjobs.ResultPage) {
@@ -1789,7 +1789,7 @@ func queryIntegrationInsertGradeThisEvents(
 	connection clickhousedriver.Conn,
 ) (time.Time, time.Time, string) {
 	t.Helper()
-	const traceID = "trace-gradethis-001"
+	traceID := gradethiscorpus.Fixture().TraceID
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
 		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
@@ -2451,8 +2451,22 @@ func queryIntegrationDocker(t *testing.T, ctx context.Context, stdin *bytes.Read
 	}
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("docker %s: %v\n%s", strings.Join(args, " "), err, output)
+		t.Fatalf("docker %s: %v\n%s", queryIntegrationRedactedDockerArgs(args), err, output)
 	}
+}
+
+func queryIntegrationRedactedDockerArgs(args []string) string {
+	redacted := slices.Clone(args)
+	for index := range redacted {
+		if index > 0 && redacted[index-1] == "--password" {
+			redacted[index] = "[REDACTED]"
+			continue
+		}
+		if strings.HasPrefix(redacted[index], "CLICKHOUSE_PASSWORD=") {
+			redacted[index] = "CLICKHOUSE_PASSWORD=[REDACTED]"
+		}
+	}
+	return strings.Join(redacted, " ")
 }
 
 func queryIntegrationWait(t *testing.T, ctx context.Context, container, password string) {

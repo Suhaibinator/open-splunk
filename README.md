@@ -82,7 +82,13 @@ collector-to-browser tests are opt-in because they start ephemeral Docker
 containers; the browser vertical also requires the pinned Playwright browser:
 
 ```sh
-OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/queryexec -run TestExecutorAndManagerAgainstClickHouse
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/queryexec \
+  -run '^TestGradeThisCompatibilityV0_1AgainstClickHouse$' -count=1 -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/queryexec -run TestExecutorAndManagerAgainstClickHouse
+
 npm ci
 npx --no-install playwright install chromium
 OPEN_SPLUNK_BACKEND_INTEGRATION=1 go test ./integration -run TestBackendVertical

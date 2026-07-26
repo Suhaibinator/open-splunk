@@ -46,6 +46,9 @@ const (
 	ChartNamesColumn   = "__os_chart_names"
 	ChartCountsColumn  = "__os_chart_counts"
 	ChartInvalidColumn = "__os_chart_invalid"
+	// SparseEventFieldNamesColumn carries per-row presence metadata beside the
+	// public raw fields JSON. The executor consumes it and never publishes it.
+	SparseEventFieldNamesColumn = "__os_result_field_names"
 	// MaximumRexCapturedBytesPerRow bounds the sum of all capture-group bytes
 	// produced by every rex stage for one event. It prevents overlapping named
 	// groups and repeated stages from amplifying a maximum-sized event without
@@ -164,6 +167,9 @@ type CompiledQuery struct {
 	OutputFields []string
 	Timechart    *TimechartOutput
 	Chart        *ChartOutput
+	// SparseFields marks ordinary raw-event output whose public fields object
+	// must be reconstructed from the appended private presence column.
+	SparseFields bool
 
 	// relationalDepth is compiler evidence, not part of the execution
 	// contract. Keeping it private prevents callers from treating the guard as
@@ -719,6 +725,16 @@ func finalizeOrdinaryQuery(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	sparseFields := exposesRawFieldsPayload(state)
+	if sparseFields {
+		if !slices.Contains(outputFields, "fields") {
+			return CompiledQuery{}, errors.New("compile ClickHouse query: sparse fields output is invalid")
+		}
+		projection = append(
+			projection,
+			quoteIdentifier(internalFieldNamesColumn)+" AS "+quoteIdentifier(SparseEventFieldNamesColumn),
+		)
+	}
 	aliasSequence++
 	fragment := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 	finalOrder := defaultCompiledOrder(state)
@@ -731,7 +747,10 @@ func finalizeOrdinaryQuery(
 	}
 	relation = relation.selectFrom(fragment, relation.ownerRange)
 	return withCompiledRelationalDepth(
-		CompiledQuery{SQL: relation.sql, Args: args, OutputFields: outputFields},
+		CompiledQuery{
+			SQL: relation.sql, Args: args, OutputFields: outputFields,
+			SparseFields: sparseFields,
+		},
 		relation.depth,
 		relation.ownerRange,
 	), nil
@@ -1818,7 +1837,7 @@ func prepareBucketCompileState(state compileState, inputName string, output plan
 		// A calculated top-level field shadows any same-named value still held
 		// in the immutable event payload. Publishing that payload would expose
 		// two contradictory values for one SPL field.
-		next.publicOrder = slices.DeleteFunc(next.publicOrder, func(name string) bool { return name == "fields" })
+		dropRawFieldsPayload(&next)
 	}
 	if inputName != output.Name && !slices.Contains(next.publicOrder, inputName) {
 		next.publicOrder = append(next.publicOrder, inputName)
@@ -3147,6 +3166,12 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 	next.publicOrder = append([]string(nil), state.publicOrder...)
 	next.blocked = cloneSet(state.blocked)
 	next.blockedPrefixes = cloneSet(state.blockedPrefixes)
+	if exposesRawFieldsPayload(state) && !output.Canonical {
+		// A calculated dynamic-schema output can shadow an immutable member of
+		// the public convenience object. Keep private source metadata available
+		// to later SPL stages, but do not publish two contradictory values.
+		dropRawFieldsPayload(&next)
+	}
 	delete(next.blocked, output.Name)
 	if !slices.Contains(next.publicOrder, output.Name) {
 		next.publicOrder = append(next.publicOrder, output.Name)
@@ -3280,7 +3305,7 @@ func compileExtract(
 	if exposesRawFieldsPayload(state) {
 		// The stored convenience object cannot be rewritten cheaply per event.
 		// Drop it once a rex output can shadow one of its immutable members.
-		next.publicOrder = slices.DeleteFunc(next.publicOrder, func(name string) bool { return name == "fields" })
+		dropRawFieldsPayload(&next)
 	}
 	captures := make([]compiledExtractCapture, 0, len(operator.Captures))
 	existenceArgs := make([]any, 0)
@@ -3685,7 +3710,7 @@ func compileExtractJSON(
 
 	next := cloneCompileState(state)
 	if sourceMayExtract && exposesRawFieldsPayload(state) {
-		next.publicOrder = slices.DeleteFunc(next.publicOrder, func(name string) bool { return name == "fields" })
+		dropRawFieldsPayload(&next)
 	}
 	delete(next.blocked, operator.Output.Name)
 	if !slices.Contains(next.publicOrder, operator.Output.Name) {
@@ -3875,7 +3900,7 @@ func compileRenameAssignment(assignment plan.RenameAssignment, state compileStat
 		// rename would expose the old name and any overwritten destination. Drop
 		// only that public convenience column; keep both private columns unchanged
 		// so unrelated dynamic fields remain available to downstream SPL.
-		next.publicOrder = slices.DeleteFunc(next.publicOrder, func(name string) bool { return name == "fields" })
+		dropRawFieldsPayload(&next)
 	}
 
 	destination := projectedRenameField(source, assignment.Destination.Name)
@@ -3970,6 +3995,13 @@ func exposesRawFieldsPayload(state compileState) bool {
 	}
 	_, explicitlyVisible := state.visible["fields"]
 	return !explicitlyVisible
+}
+
+func dropRawFieldsPayload(state *compileState) {
+	state.publicOrder = slices.DeleteFunc(
+		state.publicOrder,
+		func(name string) bool { return name == "fields" },
+	)
 }
 
 func renameProjection(state, next compileState, destination string, source fieldState) []string {
@@ -4768,16 +4800,16 @@ func resolveCompiledField(field plan.FieldRef, state compileState) (fieldState, 
 		if segment == "" {
 			return fieldState{}, false, fmt.Errorf("compile ClickHouse field %q: dynamic path has empty segment", field.Name)
 		}
-		value += "." + quoteIdentifier(encodePhysicalPathSegment(segment))
+		value += "." + quoteIdentifier(eventfields.EncodePhysicalPathSegment(segment))
 	}
 	return fieldState{
 		valueSQL:       value,
 		dynamicTypeSQL: "dynamicType(" + value + ")",
 		existsSQL:      "has(" + quoteIdentifier(internalFieldNamesColumn) + ", ?)",
-		existsArgs:     []any{normalizedDynamicPath(field.Path)},
+		existsArgs:     []any{eventfields.NormalizeDynamicPath(field.Path)},
 		descendantSQL: "arrayExists(name -> startsWith(name, ?), " +
 			quoteIdentifier(internalFieldNamesColumn) + ")",
-		descendantArgs: []any{normalizedDynamicPath(field.Path) + "."},
+		descendantArgs: []any{eventfields.NormalizeDynamicPath(field.Path) + "."},
 		kind:           fieldKindDynamic,
 	}, true, nil
 }
@@ -6384,16 +6416,6 @@ func quoteIdentifier(identifier string) string {
 	}
 	quoted.WriteByte('"')
 	return quoted.String()
-}
-
-func normalizedDynamicPath(path []string) string {
-	parts := make([]string, len(path))
-	for i, segment := range path {
-		segment = strings.ReplaceAll(segment, `\`, `\\`)
-		segment = strings.ReplaceAll(segment, `.`, `\.`)
-		parts[i] = segment
-	}
-	return strings.Join(parts, ".")
 }
 
 func wildcardRegex(value string, caseInsensitive bool) string {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -155,6 +156,63 @@ func TestTypedObjectValidation(t *testing.T) {
 			_, rejection := v.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
 			assertEventRejectionCode(t, rejection, tt.code)
 		})
+	}
+}
+
+func TestValidateAndNormalizeEventBoundsDurableFlattenedFieldMetadata(t *testing.T) {
+	t.Parallel()
+
+	longParent := strings.Repeat(".", int(HardMaxFieldNameBytes))
+	parentNames := make([]string, 15)
+	for index := range parentNames {
+		parentNames[index] = longParent
+	}
+	event := validTestEvent("event-field-metadata", "main")
+	event.Fields = amplifiedFieldMetadataObject(parentNames, int(HardMaxFields)-len(parentNames))
+	if size := uint64(proto.Size(event)); size > HardMaxEventBytes {
+		t.Fatalf("amplified event protobuf size = %d, hard limit = %d", size, HardMaxEventBytes)
+	}
+
+	validator := newTestValidator(t, DefaultLimits())
+	_, rejection := validator.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
+	assertEventRejectionCode(
+		t,
+		rejection,
+		opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
+	)
+	if len(rejection.Violations) != 1 ||
+		rejection.Violations[0].Code != "field_metadata_too_large" {
+		t.Fatalf("violations = %#v", rejection.Violations)
+	}
+}
+
+func TestValidateAndNormalizeEventBudgetsFieldMetadataAfterRedaction(t *testing.T) {
+	t.Parallel()
+
+	longParent := strings.Repeat(".", int(HardMaxFieldNameBytes))
+	parentNames := make([]string, 15)
+	parentNames[0] = "password"
+	for index := 1; index < len(parentNames); index++ {
+		parentNames[index] = longParent
+	}
+	event := validTestEvent("event-redacted-field-metadata", "main")
+	event.Fields = amplifiedFieldMetadataObject(parentNames, int(HardMaxFields)-len(parentNames))
+	if size := uint64(proto.Size(event)); size > HardMaxEventBytes {
+		t.Fatalf("amplified event protobuf size = %d, hard limit = %d", size, HardMaxEventBytes)
+	}
+
+	validator := newTestValidator(t, DefaultLimits())
+	stored, rejection := validator.ValidateAndNormalizeEvent(
+		event,
+		EventContext{ReceivedAt: validationTestNow},
+	)
+	if rejection != nil {
+		t.Fatalf("ValidateAndNormalizeEvent() rejection = %v", rejection)
+	}
+	fields := stored.Event.GetFields().GetFields()
+	if len(fields) != 1 || fields[0].GetName() != "password" ||
+		fields[0].GetValue().GetStringValue() != DefaultRedactionReplacement {
+		t.Fatalf("durable redacted fields = %#v", fields)
 	}
 }
 
@@ -1155,6 +1213,18 @@ func objectField(name string, value *opensplunkv1.TypedObject) *opensplunkv1.Typ
 			Kind: &opensplunkv1.TypedValue_ObjectValue{ObjectValue: value},
 		},
 	}
+}
+
+func amplifiedFieldMetadataObject(parentNames []string, leafCount int) *opensplunkv1.TypedObject {
+	leaves := make([]*opensplunkv1.TypedObjectField, leafCount)
+	for index := range leaves {
+		leaves[index] = stringField(fmt.Sprintf("f%04d", index), "value")
+	}
+	nested := object(leaves...)
+	for index := len(parentNames) - 1; index >= 0; index-- {
+		nested = object(objectField(parentNames[index], nested))
+	}
+	return nested
 }
 
 func assertEventRejectionCode(t *testing.T, rejection *EventError, want opensplunkv1.EventRejectionCode) {

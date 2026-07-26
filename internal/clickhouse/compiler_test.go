@@ -53,6 +53,42 @@ func TestCompileGradeThisEventSearchIsScopedAndParameterized(t *testing.T) {
 	}
 }
 
+func TestCompileRawEventFieldsCarriesPrivateSparsePresenceMetadata(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis`,
+		`index=gradethis level=ERROR | sort -_time | head 20`,
+	} {
+		compiled := compileSPL(t, source)
+		fieldIndex := slices.Index(compiled.OutputFields, "fields")
+		if fieldIndex < 0 || !compiled.SparseFields {
+			t.Fatalf("%q sparse contract = %#v outputs %v", source, compiled.SparseFields, compiled.OutputFields)
+		}
+		if slices.Contains(compiled.OutputFields, SparseEventFieldNamesColumn) {
+			t.Fatalf("%q exposed private presence metadata: %v", source, compiled.OutputFields)
+		}
+		want := `"__os_field_names" AS "` + SparseEventFieldNamesColumn + `"`
+		if strings.Count(compiled.SQL, want) != 1 {
+			t.Fatalf("%q sparse presence projection count != 1:\n%s", source, compiled.SQL)
+		}
+	}
+
+	for _, source := range []string{
+		`index=gradethis | stats count AS fields`,
+		`index=gradethis | eval copied=logger`,
+		`index=gradethis | rex field=_raw "(?<captured>ok)"`,
+		`index=gradethis | timechart span=5m count BY level`,
+		`index=gradethis | chart count OVER level BY message`,
+	} {
+		compiled := compileSPL(t, source)
+		if compiled.SparseFields ||
+			strings.Contains(compiled.SQL, `AS "`+SparseEventFieldNamesColumn+`"`) {
+			t.Fatalf("%q unexpectedly carries sparse event metadata: %#v\n%s", source, compiled.SparseFields, compiled.SQL)
+		}
+	}
+}
+
 func TestCompileTimeBoundsUseExplicitDateTime64StringParameters(t *testing.T) {
 	t.Parallel()
 
