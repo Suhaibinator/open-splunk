@@ -7,7 +7,76 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded WebSocket consumers and replay recovery
+## Latest checkpoint: bounded browser statistics rendering
+
+Date: 2026-07-26
+
+Implementation/proof commit: `9d6acc11f2626f92d5ddd2b4e608a1268cc0c9e3`
+
+This slice makes large statistics results bounded, usable, and measurable in
+the real compiled browser application:
+
+1. The production statistics table now virtualizes when either row count
+   exceeds 100 or materialized data cells would exceed 2,048. It renders a
+   six-row overscan around the viewport, uses native table spacer rows, and
+   exposes accurate ARIA row counts and indexes.
+2. Generic and timechart result tables use fixed layout, bounded column
+   geometry, clipped cells, a sticky header, and a named keyboard-scrollable
+   region. The table remains horizontally scrollable rather than expanding the
+   page, including at the supported 64-column browser boundary.
+3. Virtual scroll state resets on result generation, page, sort, and density
+   changes; it deliberately survives live-preview growth. Shrink, threshold,
+   column-count, and viewport transitions clamp both the logical window and
+   the physical scroll offset, including transitions back to an unvirtualized
+   table.
+4. Browser result boundaries now reject schemas outside 1–64 columns and REST
+   pages larger than the requested page size. The same width check applies to
+   zero-row live previews and again inside the frontend adapter as a defensive
+   boundary.
+5. A deterministic real-browser fixture loads the production protobuf HTTP
+   handler, search manager, compiler, and compiled backend-mode UI. Its
+   executor returns exactly 1,000 rows by 64 columns with a deterministic
+   schema, checks its width and key names plus every ordinal, first/last
+   sentinels, unique row IDs, and terminal metadata, and records payload hash
+   and size. It does not substitute a mock page or bypass the application
+   adapter.
+6. The browser proof checks the top and bottom sentinels, keyboard `End`,
+   sticky-header behavior, ascending and descending sort, standard and compact
+   density, and a 1024×768 viewport. The current initial DOM contains 18
+   materialized rows, one spacer, 19 total body rows, and 1,216 materialized
+   cells for a 10,240-pixel-wide table.
+7. Independent mutation tracking spans initial render and the complete
+   scroll/sort/density/resize interaction flow. It requires peaks of at most 32
+   materialized rows and 34 total body rows; checkpoint assertions additionally
+   cap spacers at two and materialized cells at 2,112. The final green run
+   observed combined peaks of 25 materialized and 27 total body rows. Self-tests
+   inject both 1,000 ordinary rows and 1,000 spacer rows on a disposable page,
+   proving synchronous transient explosions cannot evade the observer or
+   contaminate measured target-page metrics.
+8. Navigation/resource timing uses the actual result-response end, stable DOM
+   plus two animation frames, a cleared and enlarged resource-timing buffer,
+   drained performance observers, and interval filtering. Render timings and
+   long-task/layout-shift values are explicitly observational rather than
+   release thresholds.
+9. Browser process orchestration now shares one runner, bounds retained child
+   output, cleans process groups, validates finite required metrics, and writes
+   screenshots, metrics, and bounded logs for CI artifacts. The required
+   backend-vertical CI job includes the fixed-rendering proof and has explicit
+   job/package timeouts.
+10. Three independent final reviewers recomputed staged patch SHA-256
+    `3af2a8373ff9900d862415851c84ccbd35b69462bda8325c939054c99792a732`.
+    After adversarial iterations covering row/cell bounds, transient DOM
+    mutation escape hatches, schema/page limits, scroll transitions, observer
+    lifetime, resource timing, isolation, and process cleanup, all three
+    reported the frozen patch clean.
+
+The exact validation record is under **Latest validation evidence**. Browser
+rendering for the fixed first-release payload is complete at this checkpoint.
+The next priority is high-source-count collector profiling and the
+pre-existing per-poll timer allocation described under **Remaining work**.
+The overall backend goal remains active.
+
+## Previous checkpoint: bounded WebSocket consumers and replay recovery
 
 Date: 2026-07-26
 
@@ -1318,6 +1387,48 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Bounded browser statistics rendering
+
+The exact implementation at `9d6acc11f2626f92d5ddd2b4e608a1268cc0c9e3`
+passed:
+
+```sh
+npm run test:frontend
+npm run lint
+npm run typecheck
+npm run build -- --webpack
+go test ./...
+go test -race ./...
+go vet ./...
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+go test ./integration -run '^TestBrowser' -count=1 -v
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+go test ./integration -run '^TestBackendVertical$' -count=1 -v
+git diff --cached --check
+```
+
+All 89 frontend tests passed. The production Next.js build compiled and
+generated all 11 pages. The complete six-case browser matrix, including fixed
+rendering, sequence expiration/gap recovery, REST terminal/first-progress
+recovery, and cancellation, passed in 37.512 seconds. The final Docker-backed
+vertical passed in 21.01 seconds and all six current GradeThis SPL searches
+returned the expected results.
+
+The final 1,000-by-64 response was 424,238 bytes. Initial stabilization took
+74.4 ms and bottom stabilization 174.6 ms on Chromium 151.0.7922.34. The
+initial table held 18 materialized rows, one spacer, 19 total body rows, and
+1,216 materialized cells; interaction-wide mutation peaks were 25
+materialized rows and 27 total body rows. The table was 10,240 pixels wide.
+These timings are observational checkpoint-machine measurements, not
+performance acceptance thresholds.
+
+Screenshots of the top, bottom, and compact states were inspected and showed
+distinct sentinel rows, a stable header, bounded table geometry, and no page
+overflow. Three independent reviewers verified exact staged patch SHA-256
+`3af2a8373ff9900d862415851c84ccbd35b69462bda8325c939054c99792a732`
+and reported no remaining correctness, measurement-integrity, performance,
+efficiency, process-lifecycle, determinism, reuse, or code-quality finding.
+
 ### Bounded WebSocket consumers and replay recovery
 
 The exact implementation at `4c4003f` passed:
@@ -2380,7 +2491,7 @@ independent stacks.
    ```sh
    OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
    go test ./integration \
-     -run '^Test(BackendVertical|Browser(SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+     -run '^(TestBackendVertical|TestBrowser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
      -count=1 -timeout=15m -v
    ```
 
@@ -2388,15 +2499,17 @@ independent stacks.
    `59b8f7c`, and its concurrent-search-during-recovery extension is complete
    at `9898b41`, on top of the log-generator foundation at `860acac`. The
    deterministic bounded-queue slow WebSocket consumer and browser inbound
-   backpressure slice is complete at `4c4003f`. Unless the user changes
-   priority, measure browser rendering separately with the fixed 1,000-result
-   payload described below. The current preview-to-final resource-release
-   audit pass is complete at `961cba2`, the sanitized current GradeThis
-   collector/config migration at `c576e85`, logical event retention at
-   `458c8b4`, clock-driven job/result/export expiration at `b2b2839`, and
-   stale-duplicate injection at `b80bf0a`. Add a red unit or integration test
-   before implementation, run read-only adversarial reviews, fix concrete
-   findings, then commit and push `main`.
+   backpressure slice is complete at `4c4003f`; bounded fixed-payload browser
+   rendering is complete at `9d6acc1`. Unless the user changes priority,
+   profile the collector with a high source count and replace its pre-existing
+   per-poll `time.After` allocation only if measurement shows it is material.
+   The current preview-to-final resource-release audit pass is complete at
+   `961cba2`, the sanitized current GradeThis collector/config migration at
+   `c576e85`, logical event retention at `458c8b4`, clock-driven
+   job/result/export expiration at `b2b2839`, and stale-duplicate injection at
+   `b80bf0a`. Add a red unit or integration test before implementation, run
+   read-only adversarial reviews, fix concrete findings, then commit and push
+   `main`.
 
 ## Remaining work, in priority order
 
@@ -2467,10 +2580,9 @@ observational until hardware and capacity decisions are made.
 Continue the release proof in this order:
 
 - The deterministic bounded-queue slow WebSocket consumer and replay recovery
-  path is complete at `4c4003f`. Next, measure browser rendering separately
-  with a fixed 1,000-result payload, stable DOM plus two animation frames, and
-  browser performance metrics. Do not use a default-config black-hole socket
-  as a timing assertion.
+  path is complete at `4c4003f`. The separate fixed 1,000-row by 64-column
+  browser rendering proof, including stable-DOM/two-animation-frame gates and
+  interaction-wide DOM bounds, is complete at `9d6acc1`.
 - During high-source-count collector profiling, replace the pre-existing
   per-poll `time.After` allocation with a safely reused timer if it is material;
   preserve cancellation and copy-truncate behavior with race coverage.
@@ -2480,6 +2592,18 @@ Continue the release proof in this order:
   exact-name matching, replacement precedence, and the depth-limit fail-closed
   behavior. The shipped GradeThis profile already collapses to one direct
   sanitizer pass.
+- The browser child output and observation counts are bounded, but
+  build-command failure output still uses `CombinedOutput`. Complete the
+  harness hardening with the same capped buffer, cap each recorded
+  diagnostic's byte length, and bound the number of simultaneously observed
+  matching WebSockets.
+- The statistics result adapter still eagerly builds events, derived fields,
+  and a timeline even when a statistics-only view consumes just columns and
+  rows. Specialize or lazily construct those projections before raising
+  browser result limits.
+- The event path constructs an `Intl.DateTimeFormat` inside `formatEventTime`
+  for every valid event timestamp. Hoist or cache it behind a focused
+  correctness test if profiling shows that cost matters.
 - Verify release revision consistency across embedded UI, server, protobuf
   schema, and migrations, plus byte-identical embedded frontend assets for
   Linux and macOS builds from the same source revision.
@@ -2492,11 +2616,6 @@ build the backend-mode UI/server/collector once and pass the exact tested
 artifacts to packaging without making the acceptance test depend on stale
 outputs. Cache the pinned Playwright browser download where the CI environment
 supports it.
-
-The browser child output and observation counts are bounded, but build-command
-failure output still uses `CombinedOutput`. Complete the harness hardening with
-the same capped buffer, cap each recorded diagnostic's byte length, and bound
-the number of simultaneously observed matching WebSockets.
 
 At this checkpoint, `npm audit --omit=dev --audit-level=critical` exits
 successfully but reports three high-severity findings in Next.js's transitive
@@ -2603,6 +2722,10 @@ Do not guess those decisions if they materially affect the implementation.
   post-aggregate check.
 - Duplicate JSON member selection follows the pinned ClickHouse parser's
   first-member behavior.
+- Interactive browser result schemas are deliberately limited to 1–64 columns,
+  and a REST result response may not exceed its requested page size. Supporting
+  broader schemas requires a product decision and column virtualization rather
+  than silently materializing an unbounded row width.
 - Do not accept a changing legal agreement or start a licensed Splunk image on
   the user's behalf merely to obtain an oracle.
 
@@ -2612,10 +2735,10 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `4c4003f`, `9898b41`, `59b8f7c`, `860acac`,
-   `961cba2`, `c576e85`, `458c8b4`, `b2b2839`, `b80bf0a`, `cdb60df`,
-   `787a7f9`, and `522b0ac`; the preceding progress/recovery foundations are
-   `b5502a3`, `f72f184`, `ed28182`, and `d1286a4`.
+   commits, especially `9d6acc1`, `4c4003f`, `9898b41`, `59b8f7c`,
+   `860acac`, `961cba2`, `c576e85`, `458c8b4`, `b2b2839`, `b80bf0a`,
+   `cdb60df`, `787a7f9`, and `522b0ac`; the preceding progress/recovery
+   foundations are `b5502a3`, `f72f184`, `ed28182`, and `d1286a4`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
 4. Run the ordinary Go/frontend gates above and the focused exact corpus:
 
@@ -2628,11 +2751,11 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. Unless the user changes priority, extend the completed real-process
-   sustained-load/outage/restart and concurrent-search proof from the
-   now-complete deterministic slow WebSocket checkpoint at `4c4003f` into the
-   separate fixed-payload browser rendering measurement. The generator
-   foundation, current preview-to-final
+5. The fixed-payload browser rendering measurement is complete at `9d6acc1`.
+   Unless the user changes priority, proceed to high-source-count collector
+   profiling and its pre-existing per-poll timer allocation, followed by the
+   ordered redaction, harness-output, adapter, formatter, and release-revision
+   items above. The generator foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
    clock-driven job/result/export expiration,
