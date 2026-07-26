@@ -14,6 +14,9 @@ Date: 2026-07-25
 Implementation commit:
 `f72f184` (`prove real browser sequence gap recovery`)
 
+Terminal-without-preview follow-up:
+`ed28182` (`finalize gap recovery without preview`)
+
 This slice proves explicit sequence-gap recovery through the production React
 workspace, generated protobuf HTTP/WebSocket transports, real HTTP/WebSocket
 handlers, and a real search manager:
@@ -45,18 +48,22 @@ handlers, and a real search manager:
    rows. GET1's numeric version is still acceptable to the browser, so the
    ordinary version guard cannot hide a broken epoch fence.
 6. GET2 captures its epoch at five rows and is held before its upstream fetch.
-   The executor then publishes a fresh preview and completes. The control
-   endpoint waits for the real manager to reach `completed`; the browser must
-   show the fresh row, `finalizing`, and `Completed` before GET2 is released.
-   GET2 obtains a real terminal five-row snapshot, but the intervening live
-   preview/terminal frames make its epoch stale. Entry into gated GET3 proves
-   GET2 was rejected. GET3 supplies the accepted terminal snapshot, after
-   which the real two-row results replace all provisional state.
+   The executor then completes without publishing another preview. The
+   control endpoint waits for the real manager to reach `completed`; the real
+   WebSocket terminal must move the empty banner from `resyncing` to
+   zero-row `finalizing`, announce that authoritative results are loading,
+   and show `Completed` before GET2 is released. GET2 obtains a real terminal
+   five-row snapshot, but the intervening terminal frame makes its epoch
+   stale. Entry into gated GET3 proves GET2 was rejected. GET3 supplies the
+   accepted terminal snapshot, after which the real one-row result replaces
+   provisional state and removes the preview-status element.
 7. Exactly one job is created, the executor is called once and exits once,
-   exactly five progress/one append/one complete control commands are
-   accepted, exactly two matching WebSocket connections are opened, and
-   exactly three bounded authoritative job GETs complete. Frame, command,
-   diagnostic, socket, and response counts are bounded.
+   exactly five progress/zero append/one complete control commands are
+   accepted in the gap case, exactly two matching WebSocket connections are
+   opened, and exactly three bounded authoritative job GETs complete. The
+   expiration case retains its one append and two final rows. Forbidden gap
+   appends are rejected before mutating the sink. Frame, command, diagnostic,
+   socket, and response counts are bounded.
 8. The proxy now requires both the sequence-gap close and normal terminal
    client close to finish forwarding before teardown. Routed close echoes are
    bounded, delayed errors cannot be swallowed by disposal, and cleanup cannot
@@ -67,7 +74,7 @@ handlers, and a real search manager:
    `backend-vertical`, `browser-sequence-expired`, and
    `browser-sequence-gap` failure artifacts.
 
-Final validation on the exact committed implementation passed:
+Initial validation for `f72f184` passed:
 
 ```sh
 go test ./... -count=1
@@ -93,7 +100,7 @@ go test ./integration \
 git diff --check
 ```
 
-All 32 frontend tests passed. The final dedicated gap case completed
+All 32 frontend tests passed. At that checkpoint, the dedicated gap case completed
 in about 20.5 seconds including a fresh staged build, its race-enabled run in
 about 22.8 seconds, both recovery cases together in about 33 seconds, and the
 CI-equivalent Docker/ClickHouse plus two-Chrome-case gate in 46.7 seconds.
@@ -107,12 +114,16 @@ subscription assertions, unnecessary Go callback wrappers, and a non-causal
 REST-response barrier. Those were fixed; the reviewers reported no remaining
 concrete finding on the final diff.
 
-The explicit gap case is complete, but it intentionally does not claim three
-adjacent application boundaries are fixed:
+The exact `ed28182` validation and 47.198-second combined result are recorded
+under **Latest validation evidence** below.
 
-- a terminal event received after a gap with no later preview can leave the
-  preview status at `resyncing`, because terminal handling only selects
-  `finalizing` when a preview snapshot exists;
+The explicit gap case is complete, and the accepted WebSocket terminal with
+no replacement preview is now fixed. It intentionally does not claim three
+adjacent application boundaries are complete:
+
+- terminal state discovered only through authoritative REST, with the terminal
+  WebSocket frame missing or withheld, still lacks dedicated no-preview
+  browser proof and retains its older row-presence guard;
 - if an authoritative REST job is applied before an older replayed progress
   frame, the later WebSocket progress has no version/epoch guard and can
   temporarily regress visible metrics; and
@@ -758,6 +769,19 @@ confirmed that no Open Splunk/ClickHouse test container remained. Three final
 adversarial rereviews found no concrete issue after the causal GET2 barrier
 and explicit close-completion promises were added.
 
+The `ed28182` follow-up first made the no-post-gap-preview case red: the real
+terminal arrived, but the banner remained `resyncing` for the full assertion
+window. The completed-only status fix then passed the strengthened real Chrome
+case, its race-enabled run, a three-run timing repetition, both recovery cases,
+the full Go/frontend/build gates, and the exact CI-equivalent gate. The final
+combined run completed in 47.198 seconds:
+`TestBackendVertical` in 23.33 seconds,
+`TestBrowserSequenceExpiredRecovery` in 12.17 seconds, and
+`TestBrowserSequenceGapRecovery` in 11.28 seconds. Three blocker-focused
+rereviews found no remaining issue after completed-state gating, exact
+zero-row visible and aria-live copy, immediate forbidden-append rejection, and
+final status removal were pinned.
+
 ### Browser sequence-expiration recovery validation
 
 The exact browser proof at `ad4a77b`, built on the production recovery
@@ -1165,8 +1189,9 @@ independent stacks.
      -count=1 -timeout=15m -v
    ```
 
-5. Start with the gap-adjacent correctness boundaries below unless the user
-   explicitly changes priority. Add tests before implementation, run
+5. Start with the REST-only terminal companion below unless the user
+   explicitly changes priority, then proceed to versioned progress ordering
+   and recovery-cycle coalescing. Add tests before implementation, run
    read-only adversarial reviews, fix concrete findings, then commit and push
    `main`.
 
@@ -1187,18 +1212,40 @@ reconnect/replay and live continuation, isolates two live-update epoch fences,
 and requires normal terminal socket cleanup without re-execution. Close the
 remaining recovery boundaries before adding another ad hoc SPL feature:
 
-1. Pin and fix terminal handling when a sequence gap clears preview state and
-   no later preview arrives. A real terminal event must leave `resyncing`,
-   select the correct terminal/finalizing presentation, and cleanly transition
-   to authoritative results.
+1. Add the REST-only companion to the completed WebSocket-terminal proof:
+   withhold the terminal WebSocket frame after a gap, let authoritative job
+   polling discover completion with no preview snapshot, hold the results
+   response, and require zero-row `finalizing` before the final result clears
+   the status. The accepted WebSocket-terminal path is already fixed and
+   proved by `ed28182`.
 2. Pin and prevent REST-first/replay-later metric regression. If an
    authoritative job snapshot applies before an older retained progress frame,
    the replay must not overwrite newer visible progress even though WebSocket
-   progress currently has no job-version field.
+   progress currently has no job-version field. The exact design is an
+   additive progress `state_version` populated from the real manager job
+   version, plus a browser job-scoped progress revision: acknowledge but do
+   not render lower revisions, treat equal identical revisions as idempotent,
+   recover on equal conflicting payloads, and apply greater revisions.
+   Terminal phase presentation must remain separate from final-progress
+   acceptance. Do not substitute WebSocket sequence/acknowledgement ceilings;
+   REST has no matching journal watermark. Timestamp/counter dominance is only
+   a current-server mitigation because browser timestamp precision, wall-clock
+   rollback, and estimated counters prevent an exact transport contract.
 3. Coalesce recovery completion/failure bookkeeping. Terminal recovery and
    another recovery trigger can await the same `recoveryRequest`; exactly one
    continuation should update retry state so duplicate catch paths cannot
-   inflate exponential backoff or schedule redundant work.
+   inflate exponential backoff or schedule redundant work. Single-flight the
+   whole semantic recovery cycle, not only the GET, and pin strict shared
+   promise identity, one attempt/backoff mutation on rejection, one terminal
+   finish on success, and a fresh cycle after settlement. Use handled
+   fulfillment/rejection cleanup rather than an unobserved `finally`
+   rejection. `onResynchronizationRequired` currently awaits
+   `fetchAuthoritative()` directly; any coalescing change must preserve its
+   preview-schema registration, explicit acknowledgement, and
+   rejection-driven reconnect semantics rather than swallowing or
+   double-processing that shared request. `lib/search/server-exports.ts` has
+   an analogous fetch-only single-flight pattern; audit it separately rather
+   than silently sharing a helper without export-specific tests.
 4. Add the honest browser cancellation contract. The current UI intentionally
    disposes its subscription before sending the cancel POST, so the assertion
    is exactly one cancel request, one executor context cancellation, canceled
@@ -1343,7 +1390,7 @@ Do not guess those decisions if they materially affect the implementation.
 
 1. Confirm `main` is clean and exactly matches `origin/main`.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, including `f72f184`.
+   commits, including `f72f184` and `ed28182`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
 4. Run the ordinary Go/frontend gates above and the focused exact corpus:
 
@@ -1356,13 +1403,15 @@ Do not guess those decisions if they materially affect the implementation.
 
    Run both broader opt-in pinned ClickHouse suites before changing
    extrema/bin metadata behavior.
-5. Unless the user changes priority, begin with the terminal-without-preview,
-   REST-first/replay-later, and duplicate-recovery-continuation boundaries in
-   the ordered matrix above. Explicit browser sequence-gap recovery, browser
-   `SEQUENCE_EXPIRED`, transient recovery-GET failure, retained replay,
-   real-manager expiration/cancellation, the uninterrupted
-   collector-to-browser path, exact GradeThis corpus, collector/server
-   process-restart proof, and the protocol unit contract are already complete.
+5. Unless the user changes priority, begin with the REST-only
+   terminal-without-preview companion, then the versioned-progress
+   REST-first/replay-later contract and duplicate-recovery-continuation
+   boundary in the ordered matrix above. The accepted WebSocket terminal,
+   explicit browser sequence-gap recovery, browser `SEQUENCE_EXPIRED`,
+   transient recovery-GET failure, retained replay, real-manager
+   expiration/cancellation, the uninterrupted collector-to-browser path,
+   exact GradeThis corpus, collector/server process-restart proof, and the
+   protocol unit contract are already complete.
 6. If extending aggregates instead, start with an explicit bounded contract
    for `list(field)`; do not reuse unordered `values`.
 7. Preserve scalar/Dynamic path separation, numeric grammar sharing,
