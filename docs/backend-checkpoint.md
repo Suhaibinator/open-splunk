@@ -17,6 +17,14 @@ Parser and logical-plan checkpoint (committed and pushed):
 ClickHouse compiler and pinned execution checkpoint (committed and pushed):
 `ae24b1c4b83fd18b2641561aaef0b35fab7f1ec5`
 
+Compatibility, editor, and checkpoint update (committed and pushed):
+`f1f2e8348e9034bca8a8a114072f1d745561b1d9`
+
+Repository-wide Go lint cleanup checkpoints (committed and pushed):
+`53a4dccb9ea1606bb203e3d6a498bca3ad410235`,
+`b9c61ed60b9e6538855b560768436850174e8c52`, and
+`caadf3f813be63b06bf9c65662dda397a68a8f37`
+
 This test-first slice implements the bounded ordered conditional selector
 `case(predicate, value, ...)`:
 
@@ -80,35 +88,50 @@ This test-first slice implements the bounded ordered conditional selector
     Editor completion and highlighting advertise case only in function
     position, leaving a field named `case` ordinary.
 
-Validation completed so far on the current implementation:
+Validation completed on the current implementation:
 
 ```sh
 go test ./internal/spl ./internal/plan ./internal/clickhouse -count=1
-golangci-lint run --timeout=5m --new-from-rev=1ee3b7e
+go test ./... -count=1
+go vet ./...
+golangci-lint run --timeout=5m \
+  --max-issues-per-linter=0 --max-same-issues=0
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
   OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4 \
   go test ./internal/clickhouse \
     -run '^TestStoreAgainstClickHouse$' -count=1
+git diff --check
 ```
 
-The focused suites and lint ratchet pass. The final pinned Store/compiler run
-passed in 43.565 seconds. Run the complete repository, frontend, and build
-matrix after merging the concurrent repository-wide lint cleanup.
+All gates pass. The unrestricted repository-wide lint run reports zero issues,
+down from 1,376 at the start of the requested cleanup; no blanket G115
+exclusion was added. The frontend corpus contains 115 application tests and 47
+release/build tests. The production static export generated all 11 pages, and
+the final pinned Store/compiler run passed in 43.264 seconds.
+
+The lint cleanup's independent reuse, quality, and efficiency reviews traced
+the checked-conversion invariants through their producers and consumers. They
+drove a shared precomputed log-generator/pacer ordinal schedule, one validated
+ingest batch count per response, and removal of a redundant outbox length
+conversion. The quality rereview found no remaining concrete correctness or
+maintainability issue.
 
 Immediate resume steps:
 
-1. Confirm `main` and `origin/main` contain `1ee3b7e` and `ae24b1c`, plus the
-   compatibility/editor/checkpoint commit that follows them. Preserve any
-   unexpected local changes.
-2. Run the complete validation matrix after the requested lint cleanup is
-   integrated, then update the validation paragraph above with exact results.
-3. Select the next bounded eval slice from `lower`/`upper`/`len`/`substr` or
+1. Confirm `main` and `origin/main` contain `1ee3b7e`, `ae24b1c`, `f1f2e83`,
+   and the zero-lint cleanup through `caadf3f`. Preserve any unexpected local
+   changes.
+2. Select the next bounded eval slice from `lower`/`upper`/`len`/`substr` or
    `round`/`ceil`/`floor` only after writing its executable type, null,
    Dynamic, multivalue, precision, Unicode, and resource contract.
-4. Keep Dynamic/container `coalesce` and `case` as explicit future typed-union
+3. Keep Dynamic/container `coalesce` and `case` as explicit future typed-union
    slices. They require either bounded object reconstruction or durable
    selected-parent metadata.
-5. Keep `tostring`, heterogeneous conditionals, wildcard count, broader
+4. Keep `tostring`, heterogeneous conditionals, wildcard count, broader
    conditional count names, and `eventstats` as separate reviewed contracts.
 
 ## Previous checkpoint: typed SPL `coalesce`
@@ -817,9 +840,9 @@ SPL work is a bounded compatible Boolean consumer, starting with an explicit
 `if` contract; conditional and wildcard count remain later separate contracts,
 followed by `eventstats` only after the aggregate and Boolean-expression
 libraries are stable.
-The optional direction-aware Dynamic selector optimization and the existing
-inherited lint inventory remain nonblocking cleanup. The overall backend goal
-remains active.
+The optional direction-aware Dynamic selector optimization remains nonblocking
+cleanup. The inherited lint inventory was subsequently eliminated by
+`53a4dcc`, `b9c61ed`, and `caadf3f`. The overall backend goal remains active.
 
 ## Previous checkpoint: cumulative Go lint ratchet and boundary hardening
 
@@ -871,6 +894,10 @@ already clean:
    nonempty retention-overflow coverage, Darwin persisted-key compatibility,
    and removal of six unnecessary command-taint suppressions. They reported no
    remaining blocker.
+
+This historical checkpoint's 1,365-item inventory was later reduced to zero by
+the repository-wide cleanup through `caadf3f`; the adoption baseline remained
+fixed.
 
 The workflow triggered by `4e00428`, GitHub Actions run `30255910487`,
 completed successfully. It passed the cumulative lint ratchet, full
@@ -4315,9 +4342,8 @@ The backend now includes:
   publication; and
 - materialized-CTE single-scan lowering for runtime-wide and
   analyzer-sensitive paths; and
-- a fixed-revision cumulative Go lint ratchet from `327a162`, with zero
-  changed-code findings and a separately measured 1,365-item inherited
-  cleanup inventory.
+- a fixed-revision cumulative Go lint ratchet from `327a162`, plus a clean
+  unrestricted repository-wide lint run with zero findings at `caadf3f`.
 
 Event retention is evaluated against each search job's immutable
 `IndexTimeCutoff`. An event with `expires_at` equal to that cutoff is not
@@ -4425,14 +4451,13 @@ independent stacks.
    clean.
 2. Read this file, `docs/product-architecture-plan.md`, and
    `docs/spl-compatibility-v0.1.md`.
-3. Run `npm ci`, `go test ./...`, `npm run test:frontend`,
-   `npm run typecheck`, and `npm run lint`. Also run the cumulative Go lint
-   gate exactly as CI does:
+3. Run `npm ci`, `go test ./...`, `go vet ./...`,
+   `npm run test:frontend`, `npm run typecheck`, and `npm run lint`. Run the
+   unrestricted repository-wide Go lint gate as well:
 
    ```sh
-   go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
-     run --timeout=5m \
-     --new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102
+   golangci-lint run --timeout=5m \
+     --max-issues-per-linter=0 --max-same-issues=0
    ```
 4. If the next change touches the release path, install the pinned browser with
    `npx --no-install playwright install chromium` and run:
@@ -4465,8 +4490,9 @@ independent stacks.
    complete at `4e2ddb4`, and the preceding run's reachable vulnerability and
    search-history race-fixture failures are repaired at `05c1eaf`. The
    cumulative Go lint ratchet and first boundary-hardening wave are complete at
-   `b0c00f3`, `fbb8997`, and `4e00428`; continue reducing the explicit inherited
-   inventory in separate waves without advancing the baseline. Run
+   `b0c00f3`, `fbb8997`, and `4e00428`; the requested repository-wide cleanup
+   is complete through `53a4dcc`, `b9c61ed`, and `caadf3f`, with the baseline
+   unchanged. Run
    `30255910487` confirms the full workflow and independent release comparison;
    bounded chronological `earliest(field)` / `latest(field)` is complete across
    `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and `f9985a1`; percentile
@@ -4596,11 +4622,11 @@ Release-proof implementation history and remaining confirmation:
   vertical, and pinned GradeThis jobs but skipped the release comparison after
   dependency jobs failed. `05c1eaf` fixes the race fixture and reachable
   vulnerability. The fixed-revision lint ratchet and first cleanup wave are
-  complete at `b0c00f3`, `fbb8997`, and `4e00428`; 1,365 uncapped inherited
-  findings remain visible cleanup debt but no longer prevent cumulative
-  changed-code enforcement. Run `30255910487` passed the entire workflow,
-  including both production builds and their cross-platform canonical-proof
-  comparison.
+  complete at `b0c00f3`, `fbb8997`, and `4e00428`; the full inherited
+  inventory is eliminated through `53a4dcc`, `b9c61ed`, and `caadf3f`
+  without advancing the adoption baseline. Run `30255910487` passed the
+  entire workflow, including both production builds and their cross-platform
+  canonical-proof comparison.
 - Keep `app.log` only as local test input after a fixture secret scan. Do not
   commit unsanitized GradeThis production logs.
 
@@ -4772,8 +4798,9 @@ Do not guess those decisions if they materially affect the implementation.
    proof are locally complete at `5ecd999` and `f68630a`; bounded ordered
    `list(field)` is complete at `4e2ddb4`, with CI vulnerability/race repair at
    `05c1eaf`. The cumulative lint ratchet and first cleanup wave are complete
-   at `b0c00f3`, `fbb8997`, and `4e00428`; keep the baseline fixed while
-   reducing the remaining 1,365-item inherited inventory in separate waves.
+   at `b0c00f3`, `fbb8997`, and `4e00428`; the zero-inventory cleanup is
+   complete through `53a4dcc`, `b9c61ed`, and `caadf3f`, with the baseline
+   fixed.
    Run `30255910487` passed the complete workflow and cross-platform release
    comparison. Bounded chronological `earliest(field)` / `latest(field)` is
    complete across `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and `f9985a1`;
@@ -4782,9 +4809,9 @@ Do not guess those decisions if they materially affect the implementation.
    `isnull`/`isnotnull` predicates are complete at `2d35c66`, as described at
    the top of this file. Typed fixed-scalar `if` is complete across `cfaa75b`,
    `c1ad25b`, and `fed3276`; typed conditional count is complete at `66b2b16`.
-   Continue with an official-source, test-first bounded `coalesce(value, ...)`
-   contract if the user does not change priority. The generator
-   foundation, current preview-to-final
+   Continue with a test-first bounded `lower`/`upper`/`len`/`substr` or
+   `round`/`ceil`/`floor` contract if the user does not change priority. The
+   generator foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
    clock-driven job/result/export expiration,
