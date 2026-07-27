@@ -290,12 +290,12 @@ func (c *Config) Validate() error {
 		}
 		for _, g := range in.Include {
 			if _, err := filepath.Match(g, ""); err != nil {
-				return fmt.Errorf("input %q: invalid include glob %q: %v", id, g, err)
+				return fmt.Errorf("input %q: invalid include glob %q: %w", id, g, err)
 			}
 		}
 		for _, g := range in.Exclude {
 			if _, err := filepath.Match(g, ""); err != nil {
-				return fmt.Errorf("input %q: invalid exclude glob %q: %v", id, g, err)
+				return fmt.Errorf("input %q: invalid exclude glob %q: %w", id, g, err)
 			}
 		}
 		if in.Multiline != nil {
@@ -303,7 +303,7 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("input %q: multiline.line_start_pattern is required", id)
 			}
 			if _, err := regexp.Compile(in.Multiline.LineStartPattern); err != nil {
-				return fmt.Errorf("input %q: multiline.line_start_pattern: %v", id, err)
+				return fmt.Errorf("input %q: multiline.line_start_pattern: %w", id, err)
 			}
 			if in.Multiline.MaxLines < 0 {
 				return fmt.Errorf("input %q: multiline.max_lines must be >= 0", id)

@@ -91,7 +91,7 @@ func (b *pendingBatch) split() (*pendingBatch, *pendingBatch) {
 
 // readInput consumes one input's RawEvents, decoding and processing each and
 // forwarding survivors to the batcher. It returns when the input's Events
-// channel closes (its Manager stopped) or ctx is cancelled. Decode failures and
+// channel closes (its Manager stopped) or ctx is canceled. Decode failures and
 // policy drops are handled here, never propagated as fatal.
 func (d *Daemon) readInput(ctx context.Context, ir *inputRuntime, processed chan<- processedEvent) {
 	for raw := range ir.manager.Events() {
@@ -249,7 +249,7 @@ func (d *Daemon) flush(ctx context.Context, b *pendingBatch) error {
 				b.reset()
 				return nil
 			}
-			// ctx is already cancelled, so a ctx-aware select would fall through
+			// ctx is already canceled, so a ctx-aware select would fall through
 			// instantly and busy-spin re-marshaling; sleep a bounded plain interval.
 			time.Sleep(minDuration(d.queueFullRetry, remaining))
 			continue

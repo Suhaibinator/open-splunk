@@ -69,7 +69,7 @@ func (id FileIdentity) IsZero() bool {
 // generation; start_at=end therefore begins at line 1 without reading skipped
 // historical bytes. When a legacy checkpoint lacks the ending physical line,
 // LineNumber and NextLineNumber remain zero (unknown) rather than publishing an
-// approximate coordinate. SourceRef is the input-owned analogue of the
+// approximate coordinate. SourceRef is the input-owned analog of the
 // decoder's SourcePosition; the daemon maps between them so the input package
 // need not import the root collector package.
 type SourceRef struct {

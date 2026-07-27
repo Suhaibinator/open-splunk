@@ -510,8 +510,8 @@ func testOptions() Options {
 		ProtocolMinor: 0,
 		Hello: HelloInfo{
 			CollectorVersion: "v-test",
-			Hostname:  "host-a",
-			StartedAt: time.Now().Add(-time.Hour),
+			Hostname:         "host-a",
+			StartedAt:        time.Now().Add(-time.Hour),
 		},
 		Backoff: BackoffPolicy{Initial: 5 * time.Millisecond, Max: 20 * time.Millisecond, Multiplier: 2, Jitter: 0.2},
 	}
@@ -1512,7 +1512,7 @@ func (b *syncBuffer) String() string {
 func TestSenderRedeliversOrphanedInflightAfterReconnect(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
-	fs.batchErr = func(fs *fakeServer, b *opensplunkv1.EventBatch) error {
+	fs.batchErr = func(fs *fakeServer, _ *opensplunkv1.EventBatch) error {
 		if fs.calls() == 1 {
 			// First connection: the batch arrives but the stream dies before an
 			// ack, leaving it unacked behind the queue's delivery cursor.

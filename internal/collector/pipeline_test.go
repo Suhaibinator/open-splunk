@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -167,7 +168,7 @@ func TestAllowProcessor(t *testing.T) {
 			if !tt.wantNoop && out == in {
 				t.Fatalf("expected clone, got same pointer")
 			}
-			if got := plFieldNames(out); !equalStrings(got, tt.want) {
+			if got := plFieldNames(out); !slices.Equal(got, tt.want) {
 				t.Fatalf("surviving fields = %v, want %v", got, tt.want)
 			}
 			// Nested-whole check for the relevant case.
@@ -238,7 +239,7 @@ func TestDenyProcessor(t *testing.T) {
 			if !tt.wantNoop && out == in {
 				t.Fatalf("expected clone, got same pointer")
 			}
-			if got := plFieldNames(out); !equalStrings(got, tt.want) {
+			if got := plFieldNames(out); !slices.Equal(got, tt.want) {
 				t.Fatalf("surviving fields = %v, want %v", got, tt.want)
 			}
 		})
@@ -321,7 +322,7 @@ func TestRenameProcessor(t *testing.T) {
 			}
 			if tt.name == "renamed field replaces pre-existing target" {
 				// Position: `dest` is removed, `old` renamed to `dest` in place.
-				if got := plFieldNames(out); !equalStrings(got, []string{"dest", "z"}) {
+				if got := plFieldNames(out); !slices.Equal(got, []string{"dest", "z"}) {
 					t.Fatalf("fields = %v, want [dest z]", got)
 				}
 				if v := plLookup(out, "dest"); v.GetSint64Value() != 7 {
@@ -329,7 +330,7 @@ func TestRenameProcessor(t *testing.T) {
 				}
 				return
 			}
-			if got := plFieldNames(out); !equalStrings(got, tt.want) {
+			if got := plFieldNames(out); !slices.Equal(got, tt.want) {
 				t.Fatalf("fields = %v, want %v", got, tt.want)
 			}
 			if !tt.wantNoop {
@@ -506,7 +507,7 @@ func TestPipelineProcess(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Process: %v", err)
 		}
-		if got := plFieldNames(out); !equalStrings(got, []string{"a"}) {
+		if got := plFieldNames(out); !slices.Equal(got, []string{"a"}) {
 			t.Fatalf("fields = %v, want [a]", got)
 		}
 	})
@@ -622,17 +623,4 @@ func TestRedactionInvariantNoSecretSurvivesMarshaling(t *testing.T) {
 	if !strings.Contains(string(blob), "visible") {
 		t.Fatalf("redaction removed too much; 'visible' missing:\n%s", blob)
 	}
-}
-
-// equalStrings compares two string slices for order-sensitive equality.
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

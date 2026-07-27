@@ -1177,8 +1177,8 @@ func TestDaemonBackpressureNoDrop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	processed := make(chan processedEvent)
-	batcherDone := make(chan struct{})
-	go func() { defer close(batcherDone); d.runBatcher(ctx, processed) }()
+	batcherDone := make(chan error, 1)
+	go func() { batcherDone <- d.runBatcher(ctx, processed) }()
 
 	mk := func(start, end, line uint64) processedEvent {
 		return processedEvent{
@@ -1234,7 +1234,9 @@ func TestDaemonBackpressureNoDrop(t *testing.T) {
 	// Closing the stream (not ctx) is how the batcher terminates, mirroring the
 	// daemon where the input readers close the processed channel on shutdown.
 	close(processed)
-	<-batcherDone
+	if err := <-batcherDone; err != nil {
+		t.Fatalf("runBatcher: %v", err)
+	}
 }
 
 func TestDaemonTerminalAckAdvancesCheckpointOnlyAfterDisposition(t *testing.T) {
@@ -1428,8 +1430,8 @@ func TestDaemonGracefulShutdownFlushesPartialBatch(t *testing.T) {
 
 	ctx := context.Background()
 	processed := make(chan processedEvent)
-	batcherDone := make(chan struct{})
-	go func() { defer close(batcherDone); d.runBatcher(ctx, processed) }()
+	batcherDone := make(chan error, 1)
+	go func() { batcherDone <- d.runBatcher(ctx, processed) }()
 
 	processed <- processedEvent{
 		event: testEvent(t, dec, 0, 42, 1, `{"k":"v"}`), identity: identity,
@@ -1444,7 +1446,9 @@ func TestDaemonGracefulShutdownFlushesPartialBatch(t *testing.T) {
 
 	// Closing the stream triggers the final partial-batch flush.
 	close(processed)
-	<-batcherDone
+	if err := <-batcherDone; err != nil {
+		t.Fatalf("runBatcher: %v", err)
+	}
 
 	if got := q.Stats().QueuedEvents; got != 1 {
 		t.Fatalf("QueuedEvents after shutdown flush = %d, want 1", got)

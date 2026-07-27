@@ -147,14 +147,14 @@ func NewLineFramer(r io.Reader, startOffset uint64, opts Options) (Framer, error
 	if r == nil {
 		return nil, errors.New("collector/framing: nil reader")
 	}
-	max := opts.MaxEventBytes
-	if max <= 0 {
-		max = defaultMaxEventBytes
+	maxBytes := opts.MaxEventBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxEventBytes
 	}
 	return &lineFramer{
 		source:   source{r: r, off: startOffset},
 		line:     normalizedStartLine(opts.StartLineNumber),
-		maxBytes: max,
+		maxBytes: maxBytes,
 	}, nil
 }
 
@@ -175,15 +175,15 @@ func NewMultilineFramer(r io.Reader, startOffset uint64, opts Options) (Framer, 
 	if opts.LineStartPattern == nil {
 		return nil, errors.New("collector/framing: multiline framer requires LineStartPattern")
 	}
-	max := opts.MaxEventBytes
-	if max <= 0 {
-		max = defaultMaxEventBytes
+	maxBytes := opts.MaxEventBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxEventBytes
 	}
 	return &multilineFramer{
 		source:     source{r: r, off: startOffset},
 		pattern:    opts.LineStartPattern,
 		maxLines:   opts.MaxLines,
-		maxBytes:   max,
+		maxBytes:   maxBytes,
 		nextLineNo: normalizedStartLine(opts.StartLineNumber),
 	}, nil
 }
@@ -245,14 +245,15 @@ func (f *lineFramer) Next() (Frame, error) {
 func (f *lineFramer) emitLine(i int) Frame {
 	start := f.off
 	ln := f.line
-	content := f.buf[:i] // excludes '\n'
+	record := f.buf[:i+1]
+	content := record[:len(record)-1] // excludes '\n'
 	if len(content) > 0 && content[len(content)-1] == '\r' {
 		content = content[:len(content)-1]
 	}
 	out := make([]byte, len(content))
 	copy(out, content)
-	end := f.off + uint64(i+1)
-	f.buf = f.buf[i+1:]
+	end := f.off + uint64(len(record))
+	f.buf = f.buf[len(record):]
 	f.off = end
 	f.line++
 	return Frame{
@@ -398,7 +399,7 @@ func (m *multilineFramer) Next() (Frame, error) {
 		if isStart && m.started {
 			m.pending = append(m.pending, pendingFrame{frame: m.finishEvent()})
 			m.beginEvent()
-			if err := m.consumeLine(lineLen, delim); err != nil {
+			if err := m.consumeLine(m.buf[:lineLen], delim); err != nil {
 				return Frame{}, err
 			}
 			m.checkBounds()
@@ -407,7 +408,7 @@ func (m *multilineFramer) Next() (Frame, error) {
 		if !m.started {
 			m.beginEvent()
 		}
-		if err := m.consumeLine(lineLen, delim); err != nil {
+		if err := m.consumeLine(m.buf[:lineLen], delim); err != nil {
 			return Frame{}, err
 		}
 		m.checkBounds()
@@ -424,15 +425,15 @@ func (m *multilineFramer) beginEvent() {
 	m.started = true
 }
 
-// consumeLine appends buf[:lineLen] (a physical line and its delimiter) to the
-// current event and advances the stream position.
-func (m *multilineFramer) consumeLine(lineLen, delim int) error {
+// consumeLine appends a physical line and its delimiter to the current event
+// and advances the stream position.
+func (m *multilineFramer) consumeLine(line []byte, delim int) error {
 	if !canAdvanceLineNumber(m.nextLineNo) {
 		return ErrLineNumberOverflow
 	}
-	m.event = append(m.event, m.buf[:lineLen]...)
-	m.buf = m.buf[lineLen:]
-	m.off += uint64(lineLen)
+	m.event = append(m.event, line...)
+	m.buf = m.buf[len(line):]
+	m.off += uint64(len(line))
 	m.evLines++
 	m.evDelim = delim
 	m.nextLineNo++

@@ -119,7 +119,8 @@ func startIngestServer(t *testing.T, store ingest.EventStore) string {
 	if err != nil {
 		t.Fatalf("ingest.NewService: %v", err)
 	}
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	var listenConfig net.ListenConfig
+	lis, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -191,7 +192,7 @@ func newE2EDaemon(t *testing.T, configPath string) *Daemon {
 // appendFile appends data to path, creating it if necessary.
 func appendFile(t *testing.T, path, data string) {
 	t.Helper()
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatalf("open %s for append: %v", path, err)
 	}

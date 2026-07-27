@@ -198,6 +198,8 @@ func New(opts Options, queue wal.Queue, deadLetter DeadLetterSink, reporter Stat
 		now:          time.Now,
 		drainTimeout: 3 * time.Second,
 	}
+	// #nosec G404 -- this PRNG only jitters reconnect timing; it never generates
+	// tokens, identifiers, or other security-sensitive values.
 	seeded := rand.New(rand.NewSource(time.Now().UnixNano()))
 	s.rand = seeded.Float64
 	s.dial = s.grpcDial

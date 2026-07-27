@@ -20,7 +20,7 @@
 //   - RetryBatch: non-terminal; the exact same durable batch is retained and
 //     resent after retry_after.
 //   - Throttle: adjusts send pacing and in-flight limits until effective_until.
-//   - ServerNotice: informational / maintenance / shutdown signalling.
+//   - ServerNotice: informational / maintenance / shutdown signaling.
 //
 // The token is read from its file at dial time via the Options.Token callback
 // and is never logged or retained beyond the gRPC call credentials.

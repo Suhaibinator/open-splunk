@@ -169,8 +169,8 @@ func TestSequenceNeverReusedAfterCrash(t *testing.T) {
 	// Simulate a crash after the sequence bump is durable but before the record
 	// is written: sequence 2 must be burned, never reused.
 	q.(*queue).crashAfterMetaWrite = true
-	if _, err := q.Append(makeEvents("burned")); err != errSimulatedCrash {
-		t.Fatalf("Append with crash hook = %v, want errSimulatedCrash", err)
+	if _, appendErr := q.Append(makeEvents("burned")); !errors.Is(appendErr, errSimulatedCrash) {
+		t.Fatalf("Append with crash hook = %v, want errSimulatedCrash", appendErr)
 	}
 	if err := q.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -333,6 +333,8 @@ func TestRecoveryQuarantinesEverySegmentAfterCorruptGap(t *testing.T) {
 		t.Fatalf("read second segment: %v", err)
 	}
 	data[second.records[0].payloadOff] ^= 0xff
+	// #nosec G703 -- secondPath is a segment name returned by listSegments for
+	// this test's private temporary directory, not a user-controlled path.
 	if err := os.WriteFile(secondPath, data, 0o600); err != nil {
 		t.Fatalf("corrupt second segment: %v", err)
 	}
@@ -401,6 +403,8 @@ func TestRecoveryCrashCannotForgetCorruptGap(t *testing.T) {
 		t.Fatalf("read second segment: %v", err)
 	}
 	data[second.records[0].payloadOff] ^= 0xff
+	// #nosec G703 -- secondPath is a segment name returned by listSegments for
+	// this test's private temporary directory, not a user-controlled path.
 	if err := os.WriteFile(secondPath, data, 0o600); err != nil {
 		t.Fatalf("corrupt second segment: %v", err)
 	}
@@ -513,7 +517,7 @@ func TestErrQueueFullThenAckFreesSpace(t *testing.T) {
 	appended := 0
 	for {
 		b, err := q.Append(makeEvents("payload-event"))
-		if err == ErrQueueFull {
+		if errors.Is(err, ErrQueueFull) {
 			break
 		}
 		if err != nil {

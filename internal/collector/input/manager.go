@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -744,9 +745,15 @@ func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 // called only by the tailer goroutine, after offset changes.
 func (t *tailer) refreshGuard() error {
 	length := t.offset
+	// fingerprintBytesOr guarantees a positive int before manager construction.
+	// #nosec G115 -- positive int values are exactly representable as uint64.
 	if max := uint64(t.m.fpBytes); length > max {
 		length = max
 	}
+	if length > math.MaxUint32 {
+		return fmt.Errorf("fingerprint guard length %d exceeds uint32", length)
+	}
+	// #nosec G115 -- length is checked against math.MaxUint32 immediately above.
 	t.guardLength = uint32(length)
 	t.guardOffset = t.offset - length
 	if length == 0 {

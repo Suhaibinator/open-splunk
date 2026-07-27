@@ -192,14 +192,14 @@ func TestDecodeFailureLogNeverLeaksTimestampSecret(t *testing.T) {
 		t.Fatalf("decode error itself leaked the secret: %v", err)
 	}
 
-	cap := &logCapture{}
-	d := &Daemon{log: slog.New(slog.NewTextHandler(cap, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	capture := &logCapture{}
+	d := &Daemon{log: slog.New(slog.NewTextHandler(capture, &slog.HandlerOptions{Level: slog.LevelDebug}))}
 	d.recordDecodeFailure("app", input.SourceRef{
 		Identity:    input.FileIdentity{Device: 1, Inode: 2, Generation: 1, Fingerprint: "abc"},
 		StartOffset: 0, EndOffset: uint64(len(line)), LineNumber: 1,
 	}, len(line))
 
-	if logs := cap.String(); strings.Contains(logs, secret) {
+	if logs := capture.String(); strings.Contains(logs, secret) {
 		t.Fatalf("decode-failure log leaked the secret: %s", logs)
 	}
 }

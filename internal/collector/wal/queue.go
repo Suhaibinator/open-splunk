@@ -708,8 +708,8 @@ func checkpointMarksForBatch(batchSequence uint64, events []*opensplunkv1.LogEve
 		}
 		if mark.FileIdentity == "" || !mark.HasEndOffset {
 			if invalid == nil {
-				copy := mark
-				invalid = &copy
+				invalidMark := mark
+				invalid = &invalidMark
 			}
 			continue
 		}

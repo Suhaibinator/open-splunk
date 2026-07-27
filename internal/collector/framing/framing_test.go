@@ -293,8 +293,8 @@ func TestFramersDoNotFlushOrSkipAtExhaustedNextLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLineFramer: %v", err)
 	}
-	if _, err := line.Next(); !errors.Is(err, ErrLineNumberOverflow) {
-		t.Fatalf("line Next error = %v, want ErrLineNumberOverflow", err)
+	if _, lineErr := line.Next(); !errors.Is(lineErr, ErrLineNumberOverflow) {
+		t.Fatalf("line Next error = %v, want ErrLineNumberOverflow", lineErr)
 	}
 	if _, ok := line.Flush(); ok {
 		t.Fatal("line Flush at exhausted cursor emitted an invalid frame")
@@ -673,8 +673,8 @@ func assertContiguous(t *testing.T, got []wantFrame) {
 	var prevEnd uint64
 	haveFirst := false
 	for i, g := range got {
-		if g.err != nil && g.err != ErrEventTooLarge &&
-			g.err != ErrEventTooLargeIncomplete {
+		if g.err != nil && !errors.Is(g.err, ErrEventTooLarge) &&
+			!errors.Is(g.err, ErrEventTooLargeIncomplete) {
 			continue // terminal marker
 		}
 		if g.start > g.end {
@@ -742,8 +742,12 @@ func FuzzLineFramer(f *testing.F) {
 			if errors.Is(err, io.EOF) || errors.Is(err, ErrPartialFrame) {
 				// Pending bytes plus consumed offset must not exceed the stream.
 				start, length := fr.Pending()
-				if start+uint64(length) > total {
-					t.Fatalf("pending end %d > stream length %d", start+uint64(length), total)
+				if length < 0 || length > len(data) {
+					t.Fatalf("pending length %d outside valid range [0, %d]", length, len(data))
+				}
+				pendingLength := uint64(len(data[:length]))
+				if start > total || pendingLength > total-start {
+					t.Fatalf("pending span (%d, %d) exceeds stream length %d", start, length, total)
 				}
 				if errors.Is(err, ErrPartialFrame) && (!haveFrame && start != 0) {
 					// first partial must start at stream origin

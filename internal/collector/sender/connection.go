@@ -117,7 +117,6 @@ func (s *Sender) runConnection(parent context.Context) (connected bool, reconnec
 		return false, 0, fmt.Errorf("collector/sender: read token: %w", err)
 	}
 	stream, err := s.client.Collect(withBearer(streamCtx, token), s.collectCallOptions()...)
-	token = "" // never retain the secret
 	if err != nil {
 		return false, 0, err
 	}

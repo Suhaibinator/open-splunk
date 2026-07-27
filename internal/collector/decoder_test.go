@@ -317,7 +317,7 @@ func FuzzDecoderDoesNotPanic(f *testing.F) {
 		f.Add(seed)
 	}
 	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
-	f.Fuzz(func(t *testing.T, raw []byte) {
+	f.Fuzz(func(_ *testing.T, raw []byte) {
 		_, _ = decoder.Decode(raw, SourcePosition{}, now)
 	})
 }

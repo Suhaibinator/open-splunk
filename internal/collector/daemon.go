@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -142,10 +143,6 @@ type Option func(*daemonOptions)
 
 // daemonOptions holds resolved construction options.
 type daemonOptions struct {
-	// framing carries any framer defaults the daemon applies per input; it keeps
-	// the framing dependency explicit at the orchestration layer.
-	framing framing.Options
-
 	logger      *slog.Logger
 	collectorID string
 	instanceID  string
@@ -205,6 +202,7 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	// The state directory holds raw payloads (WAL segments, dead-letter file), so
 	// tighten it to owner-only even if it pre-existed with looser permissions. A
 	// chmod failure is not fatal: log and continue.
+	// #nosec G302 -- directories require execute permission; 0700 is owner-only.
 	if err := os.Chmod(stateDir, 0o700); err != nil {
 		logger.Warn("collector: could not tighten state directory permissions to 0700",
 			"directory", stateDir, "error", err.Error())
@@ -310,12 +308,12 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		ProtocolMinor: protocolMinor,
 		Hello: sender.HelloInfo{
 			CollectorVersion: identity.DisplayVersion(),
-			Hostname:        hostname,
-			OperatingSystem: runtime.GOOS,
-			Architecture:    runtime.GOARCH,
-			StartedAt:       time.Now().UTC(),
-			Capabilities:    capabilities(cfg, anyMultiline),
-			Inputs:          registrations,
+			Hostname:         hostname,
+			OperatingSystem:  runtime.GOOS,
+			Architecture:     runtime.GOARCH,
+			StartedAt:        time.Now().UTC(),
+			Capabilities:     capabilities(cfg, anyMultiline),
+			Inputs:           registrations,
 		},
 
 		DialTimeout: 10 * time.Second,
@@ -371,7 +369,7 @@ func (d *Daemon) DecodeFailures() uint64 { return d.decodeFailures.Load() }
 func (d *Daemon) OversizedDrops() uint64 { return d.oversizedDrops.Load() }
 
 // Run starts every input, the decode/process/append pipeline, and the sender,
-// blocking until ctx is cancelled and shutdown completes. It returns nil on a
+// blocking until ctx is canceled and shutdown completes. It returns nil on a
 // clean context-cancellation shutdown, or the first non-context error observed
 // (for example a fatal sender dial error or a resource-close error).
 func (d *Daemon) Run(ctx context.Context) error {
@@ -847,6 +845,15 @@ func buildProcessorRuntime(procs []config.ProcessorConfig) (*Pipeline, *durableR
 // single input. defaultHost is used when the input does not set an explicit
 // host. It returns whether the input uses multiline framing.
 func buildInput(in *config.InputConfig, defaultHost string, checkpoints input.ManagerCheckpointStore) (*inputRuntime, *opensplunkv1.CollectorInputRegistration, bool, error) {
+	if in.MaxEventBytes > config.ByteSize(math.MaxInt) {
+		return nil, nil, false, fmt.Errorf(
+			"input %q: max_event_bytes %s exceeds platform limit %d",
+			in.ID,
+			in.MaxEventBytes,
+			math.MaxInt,
+		)
+	}
+	// #nosec G115 -- the upper bound is checked immediately above.
 	maxEvent := int(in.MaxEventBytes)
 
 	fo := framing.Options{MaxEventBytes: maxEvent}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -25,28 +26,29 @@ func fingerprintBytesOr(n int) int {
 	return n
 }
 
-// computeFingerprint returns the hex-encoded SHA-256 over the first
-// min(fingerprintBytes, filesize) bytes of f. It uses ReadAt so it never
-// disturbs f's current read offset, which lets a tailer recompute a fingerprint
-// mid-tail (for example after copy-truncate) without losing its place.
+// computeFingerprintWithLength returns the hex-encoded SHA-256 over the first
+// min(fingerprintBytes, filesize) bytes of f and the number of bytes hashed. It
+// uses ReadAt so it never disturbs f's current read offset, which lets a tailer
+// recompute a fingerprint mid-tail (for example after copy-truncate) without
+// losing its place.
 //
 // A file shorter than fingerprintBytes has a fingerprint that changes as it
 // grows, because fewer than fingerprintBytes bytes are available to hash. File
 // identity therefore prefers the platform dev+inode when available and treats
 // the fingerprint as a secondary signal used to detect copy-truncate and inode
 // reuse rather than as the primary key.
-func computeFingerprint(f *os.File, fingerprintBytes int) (string, error) {
-	fingerprint, _, err := computeFingerprintWithLength(f, fingerprintBytes)
-	return fingerprint, err
-}
-
 func computeFingerprintWithLength(f *os.File, fingerprintBytes int) (string, uint32, error) {
-	buf := make([]byte, fingerprintBytesOr(fingerprintBytes))
+	limit := fingerprintBytesOr(fingerprintBytes)
+	if int64(limit) > int64(math.MaxUint32) {
+		return "", 0, fmt.Errorf("collector/input: fingerprint byte limit %d exceeds uint32", limit)
+	}
+	buf := make([]byte, limit)
 	n, err := f.ReadAt(buf, 0)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", 0, err
 	}
 	sum := sha256.Sum256(buf[:n])
+	// #nosec G115 -- n cannot exceed the buffer limit checked against MaxUint32.
 	return hex.EncodeToString(sum[:]), uint32(n), nil
 }
 
