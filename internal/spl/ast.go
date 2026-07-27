@@ -206,10 +206,17 @@ func (e *ScalarLiteralExpr) SourceRange() Range { return e.Range }
 // ScalarFunction identifies a supported, typed eval function.
 type ScalarFunction uint8
 
-// MaximumCoalesceArguments bounds parser work and generated backend
-// expressions for one coalesce call. This is an Open Splunk resource limit,
-// not a restriction imposed by SPL.
-const MaximumCoalesceArguments = 32
+const (
+	// MaximumCoalesceArguments bounds parser work and generated backend
+	// expressions for one coalesce call. This is an Open Splunk resource
+	// limit, not a restriction imposed by SPL.
+	MaximumCoalesceArguments = 32
+
+	// MaximumCaseBranches bounds predicate work and generated backend
+	// expressions for one case call. This is an Open Splunk resource limit,
+	// not a restriction imposed by SPL.
+	MaximumCaseBranches = 16
+)
 
 const (
 	ScalarFunctionInvalid ScalarFunction = iota
@@ -243,6 +250,23 @@ type ScalarIfExpr struct {
 
 func (*ScalarIfExpr) scalarExpression()    {}
 func (e *ScalarIfExpr) SourceRange() Range { return e.Range }
+
+// ScalarCaseBranch is one ordered condition/value pair in a case expression.
+type ScalarCaseBranch struct {
+	Condition WhereExpr
+	Value     ScalarExpr
+	Range     Range
+}
+
+// ScalarCaseExpr selects the value from the first branch whose condition is
+// true. If no condition is true, the result is null.
+type ScalarCaseExpr struct {
+	Branches []ScalarCaseBranch
+	Range    Range
+}
+
+func (*ScalarCaseExpr) scalarExpression()    {}
+func (e *ScalarCaseExpr) SourceRange() Range { return e.Range }
 
 // WhereExpr is a Boolean eval expression accepted by where.
 type WhereExpr interface {

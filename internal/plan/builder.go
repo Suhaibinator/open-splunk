@@ -1565,6 +1565,8 @@ func nilSPLScalarExpression(expression spl.ScalarExpr) bool {
 		return expression == nil
 	case *spl.ScalarIfExpr:
 		return expression == nil
+	case *spl.ScalarCaseExpr:
+		return expression == nil
 	default:
 		return false
 	}
@@ -1664,6 +1666,24 @@ func (v *splExpressionComplexityValidator) validateScalar(
 			return err
 		}
 		return v.validateScalar(expression.False, depth+1)
+	case *spl.ScalarCaseExpr:
+		if len(expression.Branches) > spl.MaximumCaseBranches {
+			return splExpressionComplexityError(
+				fmt.Sprintf(
+					"case contains more than %d condition/value pairs",
+					spl.MaximumCaseBranches,
+				),
+				expression.Range,
+			)
+		}
+		for _, branch := range expression.Branches {
+			if err := v.validateWhere(branch.Condition, depth+1); err != nil {
+				return err
+			}
+			if err := v.validateScalar(branch.Value, depth+1); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -1746,6 +1766,18 @@ func predicateFieldRange(expression Expression, name string) (spl.Range, bool) {
 				return sourceRange, true
 			}
 			return visitScalar(expression.False)
+		case *ScalarCaseExpression:
+			if expression == nil {
+				return spl.Range{}, false
+			}
+			for _, branch := range expression.Branches {
+				if sourceRange, ok := visitExpression(branch.Condition); ok {
+					return sourceRange, true
+				}
+				if sourceRange, ok := visitScalar(branch.Value); ok {
+					return sourceRange, true
+				}
+			}
 		}
 		return spl.Range{}, false
 	}
@@ -1939,6 +1971,50 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			False:     falseValue,
 			Range:     expression.Range,
 		}, nil
+	case *spl.ScalarCaseExpr:
+		if expression == nil {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "case expression is missing",
+			}
+		}
+		if len(expression.Branches) == 0 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: "case requires one or more condition/value pairs",
+				Range:   expression.Range,
+			}
+		}
+		if len(expression.Branches) > spl.MaximumCaseBranches {
+			return nil, &Diagnostic{
+				Code: "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf(
+					"case contains more than %d condition/value pairs",
+					spl.MaximumCaseBranches,
+				),
+				Range: expression.Range,
+			}
+		}
+		branches := make([]ScalarCaseBranch, 0, len(expression.Branches))
+		for _, branch := range expression.Branches {
+			condition, err := convertWhereExpressionUnchecked(branch.Condition)
+			if err != nil {
+				return nil, err
+			}
+			value, err := convertScalarExpressionUnchecked(branch.Value)
+			if err != nil {
+				return nil, err
+			}
+			branches = append(branches, ScalarCaseBranch{
+				Condition: condition,
+				Value:     value,
+				Range:     branch.Range,
+			})
+		}
+		return &ScalarCaseExpression{
+			Branches: branches,
+			Range:    expression.Range,
+		}, nil
 	default:
 		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EVAL_EXPRESSION", Message: fmt.Sprintf("unsupported scalar expression type %T", expression), Range: expression.SourceRange()}
 	}
@@ -1965,6 +2041,16 @@ func splScalarMayReturnBooleanFunction(expression spl.ScalarExpr) bool {
 		return expression != nil &&
 			(splScalarMayReturnBooleanFunction(expression.True) ||
 				splScalarMayReturnBooleanFunction(expression.False))
+	case *spl.ScalarCaseExpr:
+		if expression == nil {
+			return false
+		}
+		for _, branch := range expression.Branches {
+			if splScalarMayReturnBooleanFunction(branch.Value) {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}
@@ -1990,6 +2076,9 @@ func scalarFunctionReturnsBoolean(expression ScalarExpression) bool {
 		return expression != nil &&
 			scalarFunctionReturnsBoolean(expression.True) &&
 			scalarFunctionReturnsBoolean(expression.False)
+	case *ScalarCaseExpression:
+		return expression != nil &&
+			caseScalarFunctionReturnsBoolean(expression.Branches)
 	default:
 		return false
 	}
@@ -2011,6 +2100,8 @@ func scalarExpressionCanBeDirectPredicate(expression ScalarExpression) bool {
 		}
 	case *ScalarIfExpression:
 		return expression != nil && scalarFunctionReturnsBoolean(expression)
+	case *ScalarCaseExpression:
+		return expression != nil && scalarFunctionReturnsBoolean(expression)
 	default:
 		return false
 	}
@@ -2025,6 +2116,22 @@ func coalesceScalarExpressionReturnsBoolean(arguments []ScalarExpression) bool {
 			continue
 		}
 		if !scalarFunctionReturnsBoolean(argument) {
+			return false
+		}
+		foundBoolean = true
+	}
+	return foundBoolean
+}
+
+func caseScalarFunctionReturnsBoolean(branches []ScalarCaseBranch) bool {
+	foundBoolean := false
+	for _, branch := range branches {
+		if literal, ok := branch.Value.(*ScalarLiteralExpression); ok &&
+			literal != nil &&
+			literal.Value.Kind == ValueKindNull {
+			continue
+		}
+		if !scalarFunctionReturnsBoolean(branch.Value) {
 			return false
 		}
 		foundBoolean = true

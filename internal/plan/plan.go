@@ -531,6 +531,23 @@ type ScalarIfExpression struct {
 func (*ScalarIfExpression) scalarExpression()        {}
 func (e *ScalarIfExpression) SourceRange() spl.Range { return e.Range }
 
+// ScalarCaseBranch is one ordered condition/value pair in a case expression.
+type ScalarCaseBranch struct {
+	Condition Expression
+	Value     ScalarExpression
+	Range     spl.Range
+}
+
+// ScalarCaseExpression selects the value associated with the first true
+// condition. Backends produce null when every condition is false or null.
+type ScalarCaseExpression struct {
+	Branches []ScalarCaseBranch
+	Range    spl.Range
+}
+
+func (*ScalarCaseExpression) scalarExpression()        {}
+func (e *ScalarCaseExpression) SourceRange() spl.Range { return e.Range }
+
 // EvalComparisonExpression compares two scalar expressions using where/eval
 // semantics rather than base-search matching semantics.
 type EvalComparisonExpression struct {

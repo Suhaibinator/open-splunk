@@ -2045,6 +2045,9 @@ func (p *parser) parseScalarExpression() (ScalarExpr, error) {
 		if strings.EqualFold(tok.text, "if") {
 			return p.parseScalarIf(tok)
 		}
+		if strings.EqualFold(tok.text, "case") {
+			return p.parseScalarCase(tok)
+		}
 		return p.parseScalarCall(tok)
 	}
 	kind := classifyLiteral(tok.text, false)
@@ -2123,6 +2126,88 @@ func (p *parser) parseScalarIf(name token) (ScalarExpr, error) {
 		True:      trueValue,
 		False:     falseValue,
 		Range:     Range{Start: name.range_.Start, End: p.previous().range_.End},
+	}, nil
+}
+
+func (p *parser) parseScalarCase(name token) (ScalarExpr, error) {
+	invalidArity := func(sourceRange Range) error {
+		return &Diagnostic{
+			Code:    "SPL_INVALID_EVAL_ARITY",
+			Message: "case requires one or more condition/value pairs",
+			Range:   sourceRange,
+		}
+	}
+	if p.current().kind == tokenRightParen || p.current().kind == tokenComma {
+		return nil, invalidArity(name.range_)
+	}
+
+	branches := make([]ScalarCaseBranch, 0, 2)
+	for {
+		condition, err := p.parseWhereExpression()
+		if err != nil {
+			return nil, err
+		}
+		if !p.match(tokenComma) {
+			if p.current().kind == tokenRightParen || p.atCommandEnd() {
+				return nil, invalidArity(name.range_)
+			}
+			if p.current().kind == tokenWord {
+				return nil, &Diagnostic{
+					Code: "SPL_UNSUPPORTED_WHERE_EXPRESSION",
+					Message: fmt.Sprintf(
+						"unsupported case predicate syntax at %q; explicit AND or OR is required between predicates",
+						p.current().text,
+					),
+					Range:       p.current().range_,
+					Suggestions: []string{`case(first=value AND second=value, "match")`},
+				}
+			}
+			return nil, p.errorAtCurrent(
+				"SPL_EXPECTED_COMMA",
+				"expected ',' after case predicate",
+			)
+		}
+		if p.current().kind == tokenRightParen || p.current().kind == tokenComma {
+			return nil, invalidArity(name.range_)
+		}
+		value, err := p.parseScalarExpression()
+		if err != nil {
+			return nil, err
+		}
+		branches = append(branches, ScalarCaseBranch{
+			Condition: condition,
+			Value:     value,
+			Range: Range{
+				Start: condition.SourceRange().Start,
+				End:   value.SourceRange().End,
+			},
+		})
+		if len(branches) > MaximumCaseBranches {
+			return nil, &Diagnostic{
+				Code: "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf(
+					"case contains more than %d condition/value pairs",
+					MaximumCaseBranches,
+				),
+				Range: name.range_,
+			}
+		}
+		if !p.match(tokenComma) {
+			break
+		}
+		if p.current().kind == tokenRightParen || p.current().kind == tokenComma {
+			return nil, invalidArity(name.range_)
+		}
+	}
+	if !p.match(tokenRightParen) {
+		return nil, p.errorAtCurrent(
+			"SPL_EXPECTED_RIGHT_PAREN",
+			"expected ')' to close case function",
+		)
+	}
+	return &ScalarCaseExpr{
+		Branches: branches,
+		Range:    Range{Start: name.range_.Start, End: p.previous().range_.End},
 	}, nil
 }
 
@@ -2292,6 +2377,9 @@ func scalarExpressionReturnsBoolean(expression ScalarExpr) bool {
 		return expression != nil &&
 			scalarExpressionReturnsBoolean(expression.True) &&
 			scalarExpressionReturnsBoolean(expression.False)
+	case *ScalarCaseExpr:
+		return expression != nil &&
+			caseScalarExpressionReturnsBoolean(expression.Branches)
 	default:
 		return false
 	}
@@ -2312,6 +2400,8 @@ func scalarExpressionCanBeDirectPredicate(expression ScalarExpr) bool {
 			return false
 		}
 	case *ScalarIfExpr:
+		return expression != nil && scalarExpressionReturnsBoolean(expression)
+	case *ScalarCaseExpr:
 		return expression != nil && scalarExpressionReturnsBoolean(expression)
 	default:
 		return false
@@ -2344,6 +2434,16 @@ func scalarExpressionMayReturnBooleanFunction(expression ScalarExpr) bool {
 		return expression != nil &&
 			(scalarExpressionMayReturnBooleanFunction(expression.True) ||
 				scalarExpressionMayReturnBooleanFunction(expression.False))
+	case *ScalarCaseExpr:
+		if expression == nil {
+			return false
+		}
+		for _, branch := range expression.Branches {
+			if scalarExpressionMayReturnBooleanFunction(branch.Value) {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}
@@ -2358,6 +2458,22 @@ func coalesceScalarExpressionReturnsBoolean(arguments []ScalarExpr) bool {
 			continue
 		}
 		if !scalarExpressionReturnsBoolean(argument) {
+			return false
+		}
+		foundBoolean = true
+	}
+	return foundBoolean
+}
+
+func caseScalarExpressionReturnsBoolean(branches []ScalarCaseBranch) bool {
+	foundBoolean := false
+	for _, branch := range branches {
+		if literal, ok := branch.Value.(*ScalarLiteralExpr); ok &&
+			literal != nil &&
+			literal.Value.Kind == LiteralKindNull {
+			continue
+		}
+		if !scalarExpressionReturnsBoolean(branch.Value) {
 			return false
 		}
 		foundBoolean = true
