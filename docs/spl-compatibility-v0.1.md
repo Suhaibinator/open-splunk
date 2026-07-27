@@ -69,6 +69,13 @@ post-repeat program is capped at 4,096 work units, and one query may use at
 most 16,384 total `match` work units. Calculated match inputs have a
 conservative 4 MiB byte ceiling, and each call has the same separate 64 KiB
 generated-SQL ceiling.
+Every `like` call accepts one value and one quoted literal wildcard pattern.
+Both the original and normalized pattern are capped at 4 KiB, one pattern is
+capped at 4,096 wildcard/literal work units, and one query may use at most
+16,384 total `like` work units. Calculated like inputs have a conservative
+4 MiB per-call byte ceiling, and the conservative input bounds across all
+`like` occurrences may total at most 16 MiB of wildcard scanning per row.
+Each call has the same separate 64 KiB generated-SQL ceiling.
 Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
@@ -137,6 +144,7 @@ decimal values compare through finite `Float64`, so distinct values beyond
 | where status=500 OR duration_ms>500 AND level="ERROR"
 | where isnull(optional) OR isnotnull(status)
 | where match(message, "(?i)error|warn")
+| where like(path, "/api/%")
 ```
 
 `where` uses a separate eval-expression grammar: quoted strings are literals,
@@ -149,8 +157,8 @@ with a Boolean literal. Scalar operands may be fields, typed literals, or the
 supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, bounded
 `case`, `lower`, `upper`, `len`, `length`, bounded `substr`, and bounded
 default `tostring`, bounded `round`, `ceil`/`ceiling`, `floor`, and `mvcount`
-calls, plus bounded `match(value, "regex")`
-described below;
+calls, plus bounded `match(value, "regex")` and
+`like(value, "pattern")` described below;
 arithmetic, field quoting, `XOR`, and other eval functions are not yet
 accepted. Missing, null, container, or failed numeric operands do not pass
 ordinary comparisons.
@@ -190,6 +198,7 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval upper_bound=ceil(ratio), lower_bound=floor(ratio)
 | eval recipient_count=mvcount(recipients)
 | eval class=if(match(message, "(?i)error|warn"), "problem", "ok")
+| eval route_class=if(like(path, "/api/%"), "api", "other")
 ```
 
 Assignments are evaluated from left to right, and later assignments may use an
@@ -225,6 +234,8 @@ narrow:
   one for a non-null scalar, or null when there are no values.
 - `match(value, "regex")` returns a Boolean substring-match result for
   predicate and conditional use with a bounded literal RE2 pattern.
+- `like(value, "pattern")` returns a Boolean whole-string wildcard-match result
+  for predicate and conditional use with a bounded literal pattern.
 
 The `if` predicate uses exactly the `where` grammar described above:
 case-sensitive scalar comparisons, direct `isnull` / `isnotnull` predicates,
@@ -793,6 +804,69 @@ calculated value that may exceed 4 MiB is rejected before regex execution.
 Splunk executes PCRE while Open Splunk executes the explicitly validated RE2
 subset through ClickHouse; dialect differences remain a documented
 compatibility boundary.
+
+`like` accepts one value and one quoted literal wildcard pattern:
+
+```spl
+| where like(path, "/api/%")
+| where NOT like(filename, "%.tmp")
+| eval class=if(like(message, "%ERROR%"), "problem", "ok")
+| eval rendered=tostring(like(status, "5__"))
+```
+
+Function names are case-insensitive, and a bare field named `like` remains an
+ordinary field. Any arity other than two fails with
+`SPL_INVALID_EVAL_ARITY`. The pattern cannot be a field or calculated value.
+Both its authored and normalized UTF-8 text are limited to 4 KiB. One pattern
+is limited to 4,096 wildcard/literal work units, and one query is limited to
+16,384 total work units across all `like` occurrences. Invalid UTF-8, an
+embedded NUL, or an unpaired terminal backslash escape fails with
+`SPL_UNSUPPORTED_LIKE_PATTERN`; a byte or work limit fails with
+`SPL_QUERY_TOO_COMPLEX`. Independently, the conservative input byte bounds
+across all occurrences may total at most 16 MiB of wildcard scanning per row,
+so many individually cheap short patterns cannot multiply a large input scan
+without limit.
+
+Matching is case-sensitive and covers the complete input String. `%` matches
+zero or more Unicode code points, including newlines; `_` matches exactly one
+Unicode code point. An empty pattern therefore matches only an empty input,
+while `%` matches every non-null String. No Unicode normalization or case
+folding is implicit. In the decoded SPL string, backslash escapes a literal
+`%`, `_`, or backslash. Before any other character, backslash is itself a
+literal character. These escape, Unicode, and newline edges are pinned against
+ClickHouse 26.3.17.4. Splunk's public documentation specifies whole-string
+matching and the `%`/`_` wildcards but does not fully specify those edges, so
+they are an explicit Open Splunk v0.1 boundary pending a live differential
+oracle.
+
+A fixed String is matched directly. Fixed numeric, Boolean, and canonical-time
+scalars use their supported text spelling before matching. A Dynamic runtime
+String is matched; Dynamic numbers, Booleans, arrays, objects, tagged values,
+null, and missing fields produce nullable Boolean null. Fixed
+`Array(String)` fails with `SPL_UNSUPPORTED_MULTIVALUE_USAGE`. Binary `_raw`
+and other values carrying failed text-eligibility provenance also produce
+null. In predicate position, null behaves as false through the ordinary
+`where`/conditional predicate contract.
+
+`like` is a direct predicate and may be compared explicitly with a Boolean,
+used under `NOT`/`AND`/`OR`, or consumed by `if`, `case`, `mvcount`, and
+default `tostring`. Compatibility version 0.1 retains the established
+search-mode boundary that a Boolean-returning function cannot be assigned
+directly by `eval`; use a conditional or `tostring` when a stored field is
+needed.
+
+The parser, planner, and compiler validate the literal independently.
+Normalization collapses adjacent unescaped `%` wildcards without expanding
+the pattern. The compiler binds that normalized pattern as a query argument,
+references the input once, and lowers directly to ClickHouse `like()` rather
+than generating or executing a compiler-side regular expression. ClickHouse
+optimizes common `%literal%` patterns to substring search. No form expands
+rows. Each call has a 64 KiB generated-SQL ceiling in addition to the 256 KiB
+whole-query ceiling. Stored inputs fit within the 1 MiB ingestion ceiling;
+calculated input that may exceed 4 MiB is rejected before wildcard execution.
+That size metadata remains conservative when `rex` or `spath` can retain a
+prior destination on a miss, and through `stats BY`, `min`, `max`, `earliest`,
+and `latest` when those commands preserve an input value.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
@@ -2032,7 +2106,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`earliest` and `latest` time functions](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/statistical-and-charting-functions/time-functions),
 [`first` and `last` event-order functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/statistical-and-charting-functions/event-order-functions),
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
-[`if`, `coalesce`, `case`, `match`, and conditional functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
+[`if`, `coalesce`, `case`, `match`, `like`, and conditional functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
 [`lower`, `upper`, and text functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/text-functions),
 [SQLite core `substr` semantics](https://www.sqlite.org/lang_corefunc.html),
 [`tostring` and conversion functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/evaluation-functions/conversion-functions),
@@ -2057,7 +2131,7 @@ ClickHouse's [`if` and conditional functions](https://clickhouse.com/docs/refere
 ClickHouse's [`lowerUTF8`, `upperUTF8`, `lengthUTF8`, and String functions](https://clickhouse.com/docs/sql-reference/functions/string-functions),
 ClickHouse's [`toString` and type-conversion functions](https://clickhouse.com/docs/sql-reference/functions/type-conversion-functions),
 ClickHouse's [`round` and rounding functions](https://clickhouse.com/docs/reference/functions/regular-functions/rounding-functions),
-ClickHouse's [`match` and string-search functions](https://clickhouse.com/docs/sql-reference/functions/string-search-functions),
+ClickHouse's [`match`, `like`, and string-search functions](https://clickhouse.com/docs/sql-reference/functions/string-search-functions),
 ClickHouse's [`extractGroups`](https://clickhouse.com/docs/sql-reference/functions/string-search-functions),
 and the [RE2 syntax reference](https://github.com/google/re2/wiki/Syntax)
 documentation.

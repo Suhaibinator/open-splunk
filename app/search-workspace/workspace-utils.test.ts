@@ -174,6 +174,18 @@ test("match highlights only when used as a parenthesized function", () => {
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
+test("like highlights only when used as a parenthesized function", () => {
+  const query = `index=main like=1 | where LiKe(message, "%error%") | table like`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["like"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
 test("eval completion advertises the exact supported scalar signatures", () => {
   const evalCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eval");
   assert.ok(evalCompletion);
@@ -194,6 +206,9 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /no values as null/i);
   assert.match(evalCompletion.detail, /match\(value, "regex"\)/);
   assert.match(evalCompletion.detail, /4 KiB literal RE2 pattern/i);
+  assert.match(evalCompletion.detail, /like\(value, "pattern"\)/);
+  assert.match(evalCompletion.detail, /4 KiB literal wildcard pattern/i);
+  assert.match(evalCompletion.detail, /%.*zero or more.*_.*one Unicode code point/i);
   assert.match(evalCompletion.detail, /literal precision from 0 through 18/i);
   assert.match(evalCompletion.detail, /first non-null fixed value/i);
   assert.match(evalCompletion.detail, /first true predicate/i);
@@ -210,11 +225,13 @@ test("stats completion advertises true-only conditional count with an explicit a
   assert.match(statsCompletion.detail, /true-only count\(eval\(predicate\)\) AS output/);
 });
 
-test("where completion advertises direct bounded match predicates", () => {
+test("where completion advertises direct bounded match and like predicates", () => {
   const whereCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "where");
   assert.ok(whereCompletion);
   assert.match(whereCompletion.detail, /match\(value, "regex"\)/);
   assert.match(whereCompletion.detail, /substring/i);
+  assert.match(whereCompletion.detail, /like\(value, "pattern"\)/);
+  assert.match(whereCompletion.detail, /whole-string/i);
 });
 
 test("nested stats eval highlights as a function without relabeling the eval command", () => {
