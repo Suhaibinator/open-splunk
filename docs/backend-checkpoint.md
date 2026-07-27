@@ -7,6 +7,136 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: typed SQLite-compatible SPL `substr`
+
+Date: 2026-07-27
+
+Parser and logical-plan checkpoint (committed and pushed):
+`264211d3fc7d045846972bdd7f0f1d940fcc9acd`
+
+Initial ClickHouse compiler and integration checkpoint (committed and pushed):
+`c167e5882568611c834ceb2537f947dd59882b0c`
+
+Adversarial reuse, quality, and efficiency checkpoint (committed and pushed):
+`726810fb1be624afd076c264de8263b80951d82b`
+
+Compatibility and editor checkpoint (committed and pushed):
+`1895e3a103d2e458d9be9394137f4b93a2782d64`
+
+Zero-lint cleanup checkpoint (committed and pushed):
+`47db412073f6c50a20dd3d956fbb80fe2f3fb230`
+
+Extreme-unsigned ClickHouse hardening checkpoint (committed and pushed):
+`46ca648871865780da759c0de74c37bfa95ce07d`
+
+This test-first slice implements bounded
+`substr(value, start[, length])`:
+
+1. The parser accepts a case-insensitive call with two or three arguments,
+   preserves its complete source range, supports nesting and predicate use,
+   and leaves a bare field named `substr` ordinary. The start and optional
+   length must be literal integers in compatibility version 0.1; fields,
+   nested expressions, floating-point values, and Booleans fail at their own
+   ranges with `SPL_UNSUPPORTED_SUBSTRING_INDEX`.
+2. A dedicated AST and logical-plan enum carries the operation without
+   stringly backend dispatch. Parser, planner, and compiler trust boundaries
+   independently reject forged arity, invalid enums, missing or typed-nil
+   values and indexes, nonliteral indexes, Boolean null-predicate escape,
+   excessive depth/nodes, and cycles.
+3. Start and length follow the SQLite semantics which Splunk documents:
+   indexes count UTF-8 code points from one, negative starts count from the
+   right, zero is the virtual position before the first code point, omitted
+   length returns through the end, and negative length selects code points
+   immediately preceding start. The half-open interval is clipped rather
+   than approximately delegated to ClickHouse.
+4. The full signed 64-bit range and non-negative unsigned 64-bit range are
+   supported. Interval arithmetic avoids signed negation of `MinInt64` and
+   uses `Int128` before already-clipped offsets are converted to native
+   substring argument types.
+5. Fixed String input produces fixed String output. Dynamic runtime String
+   produces nullable fixed String. Missing, explicit null, and Dynamic
+   numbers, Booleans, arrays, objects, or other containers return null.
+   Fixed numeric, Boolean, and canonical time input fails with
+   `SPL_UNSUPPORTED_SUBSTRING_VALUE_TYPE`.
+6. Fixed `Array(String)` fails with `SPL_UNSUPPORTED_MULTIVALUE_USAGE`;
+   Dynamic arrays return null. Binary-declared `_raw` returns null even for
+   ASCII bytes, `replace(_raw, ...)` preserves that provenance, and no lowering
+   uses `ARRAY JOIN` or changes row cardinality.
+7. Literal intervals which are statically identical to ClickHouse semantics
+   lower directly to `substringUTF8`. Common positive starts, safe omitted
+   lengths, zero lengths, start zero, and negative lengths with non-negative
+   starts avoid a separate `lengthUTF8` scan and higher-order operations.
+8. Negative starts with explicit non-zero length use one source/index binding
+   plus one code-point-count binding. The same fallback handles unsigned
+   native arguments above `MaxInt64`: pinned ClickHouse `26.3.17.4` proves
+   that a native `MaxUint64` offset is otherwise reinterpreted as negative.
+   The fallback computes in `Int128`, references the source once, and contains
+   two singleton `arrayMap` calls rather than the original three.
+9. Every call has a 64 KiB SQL ceiling in addition to the 256 KiB whole-query
+   ceiling. Nested calls grow linearly, bind order remains source/start/length,
+   and generated predicates omit generic Dynamic decimal, numeric, Boolean,
+   and container branches.
+10. Compiler unit coverage pins positive, zero, and negative starts; omitted,
+    positive, zero, and negative lengths; Unicode; null and missing values;
+    fixed and Dynamic types; multivalue rejection; `_raw` provenance; exact
+    source occurrence; native fast paths; generic SQL shape; full-width
+    indexes; bind order; nesting; source-located diagnostics; typed nils; and
+    forged cycles.
+11. The isolated ClickHouse corpus executes the full SQLite interval matrix
+    on `😀abcdef`, including far clipping, `MinInt64`, `MaxUint64`, a
+    `MaxUint64` length, and `MaxInt64+1` paired with `MinInt64`. It also covers
+    unsupported Dynamic variants, canonical fixed String, predicates,
+    binary `_raw`, and `EXPLAIN actions=1` proof of no `ArrayJoin`.
+12. Independent reuse, quality, and efficiency reviewers found eight concrete
+    improvements, all applied: shared text-input validation, shared integer
+    literal recognition, shared forged-plan harnesses, reuse of the existing
+    argument matcher, a real fixed-String integration case, native literal
+    fast paths, removal of one fallback singleton array, and explicit
+    full-width unsigned guarding. The unrestricted linter then found and
+    drove five shadowing cleanups plus two proof-scoped conversion guards.
+13. The compatibility contract cites Splunk, SQLite, and ClickHouse sources.
+    Editor completion advertises the literal-index/SQLite boundary, while
+    syntax highlighting recognizes `substr` only in function position.
+
+Validation completed on the current implementation:
+
+```sh
+go test ./internal/spl ./internal/plan ./internal/clickhouse -count=1
+go test ./... -count=1
+go vet ./...
+golangci-lint run --timeout=5m \
+  --max-issues-per-linter=0 --max-same-issues=0
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1
+git diff --check
+```
+
+All gates pass. The unrestricted repository-wide lint run reports zero
+issues. The frontend corpus contains 118 application tests and 47
+release/build tests. The production static export generated all 11 pages, and
+the final pinned Store/compiler run passed in 43.411 seconds.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `264211d`, `c167e58`, `726810f`,
+   `1895e3a`, `47db412`, and `46ca648`. Preserve unexpected local changes.
+2. Implement bounded scalar `tostring` next only after pinning Splunk's
+   default, `hex`, `commas`, and duration-format contracts; fixed and Dynamic
+   type behavior; canonical time behavior; multivalue rejection; and the
+   exact ClickHouse lowering against the pinned target.
+3. Keep concatenation, field-driven or fractional substring indexes,
+   `mvcount`, implicit String conversion, locale-sensitive case mapping,
+   normalization, and full case folding as separate compatibility slices.
+4. Keep Dynamic/container `coalesce` and `case`, heterogeneous conditionals,
+   wildcard count, broader conditional count names, and `eventstats` as
+   separate reviewed contracts.
+
 ## Latest checkpoint: typed SPL UTF-8 `len` / `length`
 
 Date: 2026-07-27
