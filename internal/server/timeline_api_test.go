@@ -180,13 +180,13 @@ func TestSearchTimelineRouteAndFeatureAreExactAndConditional(t *testing.T) {
 	if response.Code != http.StatusNotFound || service.callCount() != 0 {
 		t.Fatalf("suffix status/calls = %d/%d", response.Code, service.callCount())
 	}
-	request := httptest.NewRequest(http.MethodGet, searchTimelinePath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, searchTimelinePath, nil)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodPost || service.callCount() != 0 {
 		t.Fatalf("method status/allow/calls = %d/%q/%d", response.Code, response.Header().Get("Allow"), service.callCount())
 	}
-	request = httptest.NewRequest(http.MethodPost, searchTimelinePath, strings.NewReader("not protobuf"))
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchTimelinePath, strings.NewReader("not protobuf"))
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -233,7 +233,7 @@ func TestSearchTimelineInheritsBrowserTrustBoundary(t *testing.T) {
 		{name: "foreign origin", host: "example.com", origin: "http://attacker.example"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, searchTimelinePath, bytes.NewReader(payload))
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchTimelinePath, bytes.NewReader(payload))
 			request.Host = test.host
 			request.Header.Set("Content-Type", "application/x-protobuf")
 			if test.origin != "" {
@@ -354,7 +354,7 @@ func TestSearchTimelineCancellationAfterSuccessfulReadReturnsRequestTimeout(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, searchTimelinePath, bytes.NewReader(payload)).WithContext(ctx)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchTimelinePath, bytes.NewReader(payload)).WithContext(ctx)
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -455,7 +455,7 @@ func TestSearchTimelineRetainsSharedSerializationPermitUntilEncode(t *testing.T)
 		searchTimelines: service, maximumTimelineBuckets: 10,
 		ownerID: "owner", tenantID: "tenant", serializationGate: make(chan struct{}, 1),
 	}
-	request := httptest.NewRequest(http.MethodPost, searchTimelinePath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchTimelinePath, nil)
 	first, err := handler.getSearchTimeline(request, &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job"})
 	if err != nil || first == nil || len(handler.serializationGate) != 1 {
 		t.Fatalf("first response/error/gate = %+v/%v/%d", first, err, len(handler.serializationGate))

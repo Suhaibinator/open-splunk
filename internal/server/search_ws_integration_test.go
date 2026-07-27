@@ -561,7 +561,7 @@ func (fixture *realSearchWebSocketFixture) post(path string, input, output proto
 	if err != nil {
 		fixture.t.Fatalf("marshal POST %s: %v", path, err)
 	}
-	request, err := http.NewRequest(http.MethodPost, fixture.server.URL+path, bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, fixture.server.URL+path, bytes.NewReader(payload))
 	if err != nil {
 		fixture.t.Fatalf("create POST %s: %v", path, err)
 	}
@@ -956,7 +956,7 @@ func assertSearchWebSocketBootstrapLimits(t *testing.T, client *http.Client, ser
 	if err != nil {
 		t.Fatalf("marshal bootstrap request: %v", err)
 	}
-	request, err := http.NewRequest(http.MethodPost, serverURL+"/api/v1/system/bootstrap", bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, serverURL+"/api/v1/system/bootstrap", bytes.NewReader(payload))
 	if err != nil {
 		t.Fatalf("create bootstrap request: %v", err)
 	}
@@ -1022,7 +1022,7 @@ func assertRejectedSearchWebSocketOrigins(t *testing.T, dialer *websocket.Dialer
 
 func assertSearchWebSocketWrongMethod(t *testing.T, client *http.Client, serverURL string) {
 	t.Helper()
-	request, err := http.NewRequest(http.MethodPost, serverURL+searchWebSocketPath, nil)
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, serverURL+searchWebSocketPath, nil)
 	if err != nil {
 		t.Fatalf("create wrong-method request: %v", err)
 	}

@@ -451,6 +451,7 @@ func New(config Config) (*Manager, error) {
 		return nil, errors.New("create search job manager: generate transient list cursor epoch")
 	}
 
+	// #nosec G118 -- cancel is retained on Manager and invoked by Close.
 	managerContext, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
 		jobs:                  make(map[string]*jobEntry),
@@ -854,9 +855,9 @@ func (manager *Manager) LastJournalError() error {
 	if manager.lastJournalErr == nil {
 		return nil
 	}
-	copy := *manager.lastJournalErr
-	copy.JobID = strings.Clone(copy.JobID)
-	return &copy
+	cloned := *manager.lastJournalErr
+	cloned.JobID = strings.Clone(cloned.JobID)
+	return &cloned
 }
 
 func (manager *Manager) validateRequestSize(request CreateRequest) error {
@@ -1447,7 +1448,7 @@ func (manager *Manager) run(entry *jobEntry) {
 	executionContextErr := executionContext.Err()
 	sink.close()
 	cancelExecution()
-	sinkErr, truncationErr := sink.outcome()
+	truncationErr, sinkErr := sink.outcome()
 	resultsTruncated := false
 	if executionContextErr != nil {
 		executionErr = executionContextErr
@@ -1862,7 +1863,7 @@ type resultSink struct {
 // retainedRowLimitError is allocated once for the first overflow row of one
 // stream. Its identity lets Manager distinguish a propagated sink boundary
 // from an unrelated executor ErrRowLimit while errors.Is remains compatible.
-type retainedRowLimitError struct{ streamMarker byte }
+type retainedRowLimitError struct{}
 
 func (*retainedRowLimitError) Error() string { return ErrRowLimit.Error() }
 
@@ -1967,7 +1968,7 @@ func (sink *resultSink) AddRow(values []Value) error {
 		}
 		payloadSize, retainedSize, err := measureValue(value, 0)
 		if err != nil {
-			return sink.rememberLocked(fmt.Errorf("%w: cell %d: %v", ErrInvalidResult, index, err))
+			return sink.rememberLocked(fmt.Errorf("%w: cell %d: %w", ErrInvalidResult, index, err))
 		}
 		payloadBytes, err = checkedAdd(payloadBytes, payloadSize)
 		if err != nil {
@@ -2076,10 +2077,10 @@ func (sink *resultSink) close() {
 	sink.entry.mu.Unlock()
 }
 
-func (sink *resultSink) outcome() (error, *retainedRowLimitError) {
+func (sink *resultSink) outcome() (*retainedRowLimitError, error) {
 	sink.entry.mu.RLock()
 	defer sink.entry.mu.RUnlock()
-	return sink.firstErr, sink.truncationErr
+	return sink.truncationErr, sink.firstErr
 }
 
 func (sink *resultSink) schemaReceived() bool {
@@ -2102,6 +2103,10 @@ func errorWrapsOnlyDepth(err, target error, depth int) bool {
 	if depth > 64 {
 		return false
 	}
+	// Compare the current node exactly: recursively inspecting each unwrap branch
+	// is what prevents a joined non-target failure from being mistaken for a
+	// pure propagated sink boundary.
+	//nolint:errorlint
 	if err == target {
 		return true
 	}

@@ -170,7 +170,7 @@ func TestChartBreakTransportJSONLinesKeysSurviveDataDerivedPivotColumns(t *testi
 	t.Parallel()
 
 	names := append([]string{}, chartBreakTransportHostileNames...)
-	names = append(names, "back\\slash", "tab\tseparated", "bell")
+	names = append(names, "back\\slash", "tab\tseparated", "\abell")
 	schema := chartBreakTransportPivotSchema(names...)
 	selection, err := selectColumns(schema, nil)
 	if err != nil {

@@ -335,6 +335,7 @@ func New(config Config) (*Manager, error) {
 	if newID == nil {
 		newID = randomID
 	}
+	// #nosec G118 -- cancel is retained on Manager and invoked by Close.
 	managerContext, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
 		jobs:               make(map[string]*jobEntry),
@@ -412,6 +413,7 @@ func prepareArtifactDirectory(configured string) (*preparedArtifactDirectory, er
 		if err != nil {
 			return nil, fmt.Errorf("create export artifact directory: %w", err)
 		}
+		// #nosec G302 -- path is an artifact directory and is deliberately owner-only.
 		if err := os.Chmod(path, 0o700); err != nil {
 			_ = os.RemoveAll(path)
 			return nil, fmt.Errorf("secure export artifact directory: %w", err)
@@ -457,6 +459,7 @@ func prepareArtifactDirectory(configured string) (*preparedArtifactDirectory, er
 		return nil, errors.Join(fmt.Errorf("create export artifact session: %w", err), prepared.Close())
 	}
 	prepared.session = session
+	// #nosec G302 -- session is an artifact directory and is deliberately owner-only.
 	if err := os.Chmod(session, 0o700); err != nil {
 		return nil, errors.Join(fmt.Errorf("secure export artifact session: %w", err), prepared.Close())
 	}
@@ -468,6 +471,7 @@ func validateArtifactBasePath(base string) error {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("export artifact directory is not a regular directory")
 	}
+	// #nosec G115 -- Unix effective user IDs are non-negative uid_t values.
 	effectiveUID := uint32(os.Geteuid())
 	baseOwner, err := artifactPathOwner(base)
 	if err != nil || baseOwner != effectiveUID {
@@ -510,6 +514,7 @@ func acquireArtifactDirectoryLock(base string) (*artifactDirectoryLock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open export artifact directory lock: %w", err)
 	}
+	// #nosec G115 -- unix.Open succeeded, so fd is a non-negative native file descriptor.
 	file := os.NewFile(uintptr(fd), path)
 	if file == nil {
 		_ = unix.Close(fd)
@@ -517,6 +522,7 @@ func acquireArtifactDirectoryLock(base string) (*artifactDirectoryLock, error) {
 	}
 	var identity unix.Stat_t
 	if err := unix.Fstat(fd, &identity); err != nil || identity.Mode&unix.S_IFMT != unix.S_IFREG ||
+		// #nosec G115 -- Unix effective user IDs are non-negative uid_t values.
 		identity.Nlink != 1 || identity.Uid != uint32(os.Geteuid()) {
 		closeErr := file.Close()
 		return nil, errors.Join(errors.New("export artifact directory lock is not a private regular file"), closeErr)
@@ -589,6 +595,7 @@ func (lock *artifactDirectoryLock) Close() error {
 	}
 	file := lock.file
 	lock.file = nil
+	// #nosec G115 -- os.File descriptors originate as native int descriptors on Unix.
 	unlockErr := unix.Flock(int(file.Fd()), unix.LOCK_UN)
 	closeErr := file.Close()
 	if unlockErr != nil {
@@ -846,11 +853,11 @@ func requestedMetadataBytes(artifactDir string, access searchjobs.AccessScope, s
 		return 0, err
 	}
 	if len(columns) == 0 {
-		total, ok := checkedAddUint64(total, maximumColumnMetadata)
+		updatedTotal, ok := checkedAddUint64(total, maximumColumnMetadata)
 		if !ok {
 			return 0, fmt.Errorf("%w: selected-column metadata is too large", ErrInvalidRequest)
 		}
-		return total, nil
+		return updatedTotal, nil
 	}
 	for _, column := range columns {
 		var ok bool
@@ -1282,6 +1289,7 @@ func (manager *Manager) run(entry *jobEntry) {
 		return
 	}
 	artifactIdentity, err := tempFile.Stat()
+	// #nosec G115 -- the negative-size case is rejected before the conversion.
 	if err != nil || !artifactIdentity.Mode().IsRegular() || artifactIdentity.Size() < 0 || uint64(artifactIdentity.Size()) != limited.written {
 		if err == nil {
 			err = errArtifactStorage
@@ -1298,7 +1306,7 @@ func (manager *Manager) run(entry *jobEntry) {
 	// unlike os.Rename, fails rather than replacing an unexpected destination.
 	// The temporary name is unlinked only after the final name exists.
 	if err := os.Link(tempPath, finalPath); err != nil {
-		fail(fmt.Errorf("%w: %v", errArtifactStorage, err))
+		fail(fmt.Errorf("%w: %w", errArtifactStorage, err))
 		return
 	}
 	entry.mu.Lock()
@@ -1337,6 +1345,7 @@ func (writer *exactLimitWriter) Write(payload []byte) (int, error) {
 		return 0, ErrByteLimit
 	}
 	written, err := writer.output.Write(payload)
+	// #nosec G115 -- io.Writer must return a non-negative count no larger than len(payload).
 	writer.written += uint64(written)
 	if err == nil && written != len(payload) {
 		err = io.ErrShortWrite

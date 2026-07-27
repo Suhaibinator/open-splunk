@@ -729,16 +729,6 @@ func validateValue(value Value, depth int) error {
 	return err
 }
 
-func valuePayloadSize(value Value, depth int) (uint64, error) {
-	payload, _, err := measureValue(value, depth)
-	return payload, err
-}
-
-func retainedValueSize(value Value, depth int) (uint64, error) {
-	_, retained, err := measureValue(value, depth)
-	return retained, err
-}
-
 func measureValue(value Value, depth int) (uint64, uint64, error) {
 	if depth > 32 {
 		return 0, 0, errors.New("search result value exceeds maximum nesting depth")

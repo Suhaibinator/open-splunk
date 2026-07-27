@@ -699,7 +699,8 @@ func validIdentifier(value string, maxBytes uint32) bool {
 		return false
 	}
 	for i, r := range value {
-		if r > unicode.MaxASCII || !(unicode.IsLetter(r) || unicode.IsDigit(r) || (i > 0 && strings.ContainsRune("._:-", r))) {
+		if r > unicode.MaxASCII ||
+			(!unicode.IsLetter(r) && !unicode.IsDigit(r) && (i == 0 || !strings.ContainsRune("._:-", r))) {
 			return false
 		}
 	}

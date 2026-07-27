@@ -2,6 +2,7 @@ package searchws
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -210,9 +211,12 @@ func previewEdgeSocketConnection(t *testing.T, service *Service) *connection {
 		}
 		serverSocket <- socket
 	}))
-	client, _, err := websocket.DefaultDialer.Dial(
+	client, dialResponse, err := websocket.DefaultDialer.Dial(
 		"ws"+strings.TrimPrefix(server.URL, "http"), nil,
 	)
+	if dialResponse != nil {
+		t.Cleanup(func() { _ = dialResponse.Body.Close() })
+	}
 	if err != nil {
 		server.Close()
 		t.Fatalf("dial test WebSocket = %v", err)
@@ -560,7 +564,7 @@ func TestProjectionGateBoundsConcurrencyAndHonorsCancellation(t *testing.T) {
 		cancel()
 		select {
 		case err := <-second:
-			if err != context.Canceled {
+			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("canceled loadProjection() = %v, want context.Canceled", err)
 			}
 		case <-time.After(time.Second):

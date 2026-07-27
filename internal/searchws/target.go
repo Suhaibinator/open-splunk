@@ -1140,8 +1140,11 @@ func boundPreviewEvent(
 func (target *targetState) storeLocked(category eventCategory, sequence uint64, data []byte) bool {
 	target.removeCurrentLocked(category)
 	bytes := uint64(len(data))
-	for (bytes > target.service.config.maximumReplayBytes ||
-		target.retainedBytes > target.service.config.maximumReplayBytes-bytes) && target.dropOldestUnpinnedReplayLocked() {
+	for bytes > target.service.config.maximumReplayBytes ||
+		target.retainedBytes > target.service.config.maximumReplayBytes-bytes {
+		if !target.dropOldestUnpinnedReplayLocked() {
+			break
+		}
 	}
 	if bytes > target.service.config.maximumReplayBytes ||
 		target.retainedBytes > target.service.config.maximumReplayBytes-bytes {
@@ -1158,7 +1161,10 @@ func (target *targetState) storeLocked(category eventCategory, sequence uint64, 
 	target.retained[sequence] = event
 	target.retainedBytes += bytes
 	target.current[category] = event
-	for len(target.replay) >= target.service.config.maximumReplayEvents && target.dropOldestUnpinnedReplayLocked() {
+	for len(target.replay) >= target.service.config.maximumReplayEvents {
+		if !target.dropOldestUnpinnedReplayLocked() {
+			break
+		}
 	}
 	if len(target.replay) < target.service.config.maximumReplayEvents {
 		event.inReplay = true

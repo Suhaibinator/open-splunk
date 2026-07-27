@@ -19,7 +19,7 @@ import (
 const (
 	maximumTimelineResultBuckets = uint64(10_000)
 	maximumTimelineResultBytes   = uint64(1 << 20)
-	maximumTimelineSpanSeconds   = int64(math.MaxInt64 / int64(time.Second))
+	maximumTimelineSpanSeconds   = math.MaxInt64 / int64(time.Second)
 	timelineOrdinalDatabaseType  = "UInt64"
 	timelineCountDatabaseType    = "UInt64"
 )
@@ -185,7 +185,7 @@ func validateCompiledTimeline(query clickhouse.CompiledTimeline) error {
 }
 
 func checkedBucketBoundary(first, span int64, multiplier uint64) (int64, bool) {
-	if span <= 0 || multiplier > uint64(^uint64(0)>>1)/uint64(span) {
+	if span <= 0 || multiplier > (^uint64(0)>>1)/uint64(span) {
 		return 0, false
 	}
 	offset := int64(multiplier * uint64(span))

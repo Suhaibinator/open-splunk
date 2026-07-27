@@ -88,7 +88,7 @@ func TestResultSinkProgressOverflowIsAtomicAndSticky(t *testing.T) {
 			}
 			assertProgressSnapshot(t, entry, test.wantRows, test.wantBytes, 8)
 
-			if err := sink.ReportProgress(ExecutionProgressDelta{ScannedRows: 1}); err != overflowErr {
+			if err := sink.ReportProgress(ExecutionProgressDelta{ScannedRows: 1}); !errors.Is(err, overflowErr) {
 				t.Fatalf("ReportProgress(after overflow) error = %v, want sticky %v", err, overflowErr)
 			}
 			assertProgressSnapshot(t, entry, test.wantRows, test.wantBytes, 8)
@@ -113,7 +113,7 @@ func TestResultSinkProgressVersionOverflowIsAtomic(t *testing.T) {
 		t.Fatalf("ReportProgress(version overflow) error = %v, want ErrInvalidResult", overflowErr)
 	}
 	assertProgressSnapshot(t, entry, 7, 11, math.MaxUint64)
-	if err := sink.ReportProgress(ExecutionProgressDelta{ScannedRows: 1}); err != overflowErr {
+	if err := sink.ReportProgress(ExecutionProgressDelta{ScannedRows: 1}); !errors.Is(err, overflowErr) {
 		t.Fatalf("ReportProgress(after version overflow) error = %v, want sticky %v", err, overflowErr)
 	}
 

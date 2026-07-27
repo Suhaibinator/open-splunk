@@ -90,9 +90,9 @@ func validFixture() fstest.MapFS {
 func cloneFixture(source fstest.MapFS) fstest.MapFS {
 	result := make(fstest.MapFS, len(source))
 	for name, file := range source {
-		copy := *file
-		copy.Data = bytes.Clone(file.Data)
-		result[name] = &copy
+		cloned := *file
+		cloned.Data = bytes.Clone(file.Data)
+		result[name] = &cloned
 	}
 	return result
 }

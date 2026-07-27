@@ -42,7 +42,7 @@ func normalizeAndEncodeDefinition(input *opensplunkv1.SavedSearchDefinition, own
 		return nil, indexedDefinition{}, nil, err
 	}
 	if err := rejectUnknownFields(definition.ProtoReflect()); err != nil {
-		return nil, indexedDefinition{}, nil, fmt.Errorf("%w: %v", control.ErrInvalidArgument, err)
+		return nil, indexedDefinition{}, nil, fmt.Errorf("%w: %w", control.ErrInvalidArgument, err)
 	}
 
 	name, err := normalizeRequiredText("name", definition.Name, 255)

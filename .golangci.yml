@@ -25,6 +25,25 @@ linters:
       - comments
       - common-false-positives
       - std-error-handling
+    rules:
+      # Test helpers conventionally take *testing.T first so callers and helper
+      # diagnostics stay uniform; retain context-first enforcement in runtime code.
+      - path: _test\.go$
+        text: "context-as-argument:"
+        linters:
+          - revive
+      # Scoped `if err := ...` checks are idiomatic and keep each error adjacent
+      # to its handling; the shadow analyzer remains enabled for every other name.
+      - text: 'shadow: declaration of "err"'
+        linters:
+          - govet
+      # Test fixtures deliberately use bounded casts, synthetic credentials,
+      # temporary-file modes, deterministic pseudo-randomness, and controlled
+      # subprocesses. Runtime code remains subject to every gosec rule.
+      - path: _test\.go$
+        text: '^G(101|115|204|301|302|306|404|602|702|703):'
+        linters:
+          - gosec
 
 formatters:
   enable:

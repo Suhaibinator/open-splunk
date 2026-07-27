@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -99,7 +100,7 @@ func TestChartPivotHostileDataAgainstClickHouse(t *testing.T) {
 			t.Errorf("series=* chart = %#v, want %#v", got, want)
 		}
 
-		// The controls: every neighbouring shape executes, so the fixture and
+		// The controls: every neighboring shape executes, so the fixture and
 		// the comparison are both fine.
 		for _, source := range []string{
 			`index=chartbreak source="bp-case" series="alpha" | stats count BY path, series`,
@@ -183,7 +184,7 @@ func TestChartPivotHostileDataAgainstClickHouse(t *testing.T) {
 		gotUnicode := transport(`index=chartbreak source="bp-unicode" | chart count OVER path BY series`)
 		wantUnicode := []chartBreakRow{{
 			ordinal: 0, row: "/u",
-			names:  "0:ab|0:a​b|0:é|0:é|0:ﬀ",
+			names:  "0:ab|0:a\u200bb|0:é|0:é|0:ﬀ",
 			counts: "1|1|1|1|1",
 		}}
 		if !reflect.DeepEqual(gotUnicode, wantUnicode) {
@@ -318,10 +319,10 @@ func TestChartPivotHostileDataAgainstClickHouse(t *testing.T) {
 					t.Fatalf("cell %q is not a count: %v", cells[index], err)
 				}
 				published += cell
-				switch {
-				case name == "2:":
+				switch name {
+				case "2:":
 					other = cell
-				case name == "1:":
+				case "1:":
 					null = cell
 				default:
 					kept += cell
@@ -334,14 +335,14 @@ func TestChartPivotHostileDataAgainstClickHouse(t *testing.T) {
 			if published != total {
 				t.Fatalf("row %q cells sum to %d, stats count BY path reports %d", row.row, published, total)
 			}
-			// Every labelled input count for this row, from stats, split into
+			// Every labeled input count for this row, from stats, split into
 			// the kept domain and the excluded remainder.
-			var labelled, wantOther uint64
+			var labeled, wantOther uint64
 			for pair, count := range perLabel {
 				if pair.row != row.row {
 					continue
 				}
-				labelled += count
+				labeled += count
 				if !chartBreakContains(names, "0:"+pair.label) {
 					wantOther += count
 				}
@@ -349,11 +350,11 @@ func TestChartPivotHostileDataAgainstClickHouse(t *testing.T) {
 			if other != wantOther {
 				t.Fatalf("row %q OTHER = %d, stats says the excluded labels total %d", row.row, other, wantOther)
 			}
-			if kept != labelled-wantOther {
-				t.Fatalf("row %q kept cells = %d, stats says the retained labels total %d", row.row, kept, labelled-wantOther)
+			if kept != labeled-wantOther {
+				t.Fatalf("row %q kept cells = %d, stats says the retained labels total %d", row.row, kept, labeled-wantOther)
 			}
-			if null != total-labelled {
-				t.Fatalf("row %q NULL = %d, stats says %d inputs carried no label", row.row, null, total-labelled)
+			if null != total-labeled {
+				t.Fatalf("row %q NULL = %d, stats says %d inputs carried no label", row.row, null, total-labeled)
 			}
 		}
 	})
@@ -800,7 +801,8 @@ func chartBreakCompileDiagnostic(t *testing.T, source string, cutoff time.Time, 
 	if err == nil {
 		t.Fatalf("chart SPL %q compiled, want a diagnostic", source)
 	}
-	diagnostic, ok := err.(*plan.Diagnostic)
+	diagnostic := &plan.Diagnostic{}
+	ok := errors.As(err, &diagnostic)
 	if !ok {
 		t.Fatalf("chart SPL %q error = %v (%T), want a diagnostic", source, err, err)
 	}
@@ -863,7 +865,7 @@ func chartBreakStoreFixture(t *testing.T, ctx context.Context, store *Store, ind
 	for range 3 {
 		add("bp-case", path("/u"), series("alpha"))
 	}
-	for _, label := range []string{"ab", "a​b", "é", "é", "ﬀ"} {
+	for _, label := range []string{"ab", "a\u200bb", "é", "é", "ﬀ"} {
 		add("bp-unicode", path("/u"), series(label))
 	}
 

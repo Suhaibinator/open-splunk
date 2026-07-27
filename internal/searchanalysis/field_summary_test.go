@@ -179,6 +179,7 @@ func TestFieldServiceSummaryValidatesRequestBeforeLookupAndPreservesExactFieldNa
 	if summary.Profile.FieldName != exactName || compiler.Spec().FieldName != exactName {
 		t.Fatalf("exact field spelling was changed: profile %q spec %q", summary.Profile.FieldName, compiler.Spec().FieldName)
 	}
+	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
 	if _, err := service.GetFieldSummary(nil, access, GetFieldSummaryRequest{
 		SearchJobID: snapshot.ID, FieldName: "host",
 	}); err == nil {

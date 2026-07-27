@@ -2,6 +2,7 @@ package searchjobproto
 
 import (
 	"context"
+	"errors"
 	"math"
 	"reflect"
 	"strings"
@@ -94,12 +95,13 @@ func TestValuePreservesEverySupportedKindAndNestedShape(t *testing.T) {
 func TestValueRejectsInvalidUTF8AndHonorsContext(t *testing.T) {
 	t.Parallel()
 
+	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
 	if _, err := Value(nil, searchjobs.NullValue()); err == nil {
 		t.Fatal("nil context was accepted")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Value(ctx, searchjobs.ListValue(searchjobs.StringValue("value"))); err != context.Canceled {
+	if _, err := Value(ctx, searchjobs.ListValue(searchjobs.StringValue("value"))); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled conversion error = %v, want %v", err, context.Canceled)
 	}
 	if _, err := Value(context.Background(), searchjobs.StringValue(string([]byte{0xff}))); err == nil {

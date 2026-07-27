@@ -400,7 +400,7 @@ func TestExecutorRejectsMalformedChartAtomically(t *testing.T) {
 		},
 		{
 			name:   "series exceed the declared bound",
-			mutate: func(rows *fakeRows, query *clickhouse.CompiledQuery) { query.Chart.MaxSeries = 1 },
+			mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) { query.Chart.MaxSeries = 1 },
 			want:   searchjobs.ErrInvalidResult, queryIssued: true,
 		},
 		{
@@ -421,7 +421,7 @@ func TestExecutorRejectsMalformedChartAtomically(t *testing.T) {
 		},
 		{
 			name:   "more rows than the declared ceiling",
-			mutate: func(rows *fakeRows, query *clickhouse.CompiledQuery) { query.Chart.RowLimit = 2 },
+			mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) { query.Chart.RowLimit = 2 },
 			want:   searchjobs.ErrExecutionLimit, queryIssued: true,
 		},
 		{

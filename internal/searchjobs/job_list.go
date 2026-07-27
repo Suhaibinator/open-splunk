@@ -464,13 +464,6 @@ func safeJobListFailureMessage(failure Failure) string {
 	}
 }
 
-func jobListComesBefore(left, right Job) bool {
-	if left.CreatedAt.Equal(right.CreatedAt) {
-		return left.ID > right.ID
-	}
-	return left.CreatedAt.After(right.CreatedAt)
-}
-
 func jobListFollowsCursor(job Job, cursor jobListCursor) bool {
 	createdAt := cursor.lastCreatedAt()
 	return job.CreatedAt.Before(createdAt) ||

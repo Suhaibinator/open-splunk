@@ -11,8 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
-	_ "time/tzdata"
 	"unicode/utf8"
+
+	_ "time/tzdata" // Embed IANA timezone data for deployments without a system database.
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 )
@@ -293,11 +294,14 @@ func parseRelativeOffset(expression string) (relativeOffset, bool, error) {
 		}
 		return relativeOffset{calendarDays: int(amount)}, true, nil
 	}
-	unitSeconds := uint64(1)
-	if unit == 'm' {
+	var unitSeconds uint64
+	switch unit {
+	case 'm':
 		unitSeconds = 60
-	} else if unit == 'h' {
+	case 'h':
 		unitSeconds = 60 * 60
+	default:
+		unitSeconds = 1
 	}
 	if amount > uint64(math.MaxInt64)/unitSeconds {
 		return relativeOffset{}, true, errors.New("relative offset is outside the supported range")

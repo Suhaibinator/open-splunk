@@ -66,7 +66,7 @@ func (store *Store) BeginAttempt(ctx context.Context, scope AccessScope, input *
 	switch {
 	case err == nil:
 		if _, scopeErr := normalizeScope(AccessScope{TenantID: terminalTenant, OwnerID: terminalOwner}); scopeErr != nil {
-			return nil, fmt.Errorf("persisted terminal search-history scope is invalid: %v", scopeErr)
+			return nil, fmt.Errorf("persisted terminal search-history scope is invalid: %w", scopeErr)
 		}
 		if terminalTenant != scope.TenantID || terminalOwner != scope.OwnerID {
 			return nil, fmt.Errorf("%w: search job ID already exists", control.ErrAlreadyExists)
@@ -343,7 +343,7 @@ func decodePendingEntry(encoded, expectedChecksum []byte) (*opensplunkv1.SearchH
 	}
 	normalizedEntry, normalized, err := normalizePendingEntry(entry)
 	if err != nil {
-		return nil, pendingIndexedEntry{}, fmt.Errorf("validate persisted pending search-history entry: %v", err)
+		return nil, pendingIndexedEntry{}, fmt.Errorf("validate persisted pending search-history entry: %w", err)
 	}
 	if !bytes.Equal(normalized.encoded, encoded) {
 		return nil, pendingIndexedEntry{}, errors.New("persisted pending search-history entry is not canonical")
@@ -367,7 +367,7 @@ func scanPendingAttempt(row rowScanner) (*pendingAttempt, error) {
 	}
 	scope, err := normalizeScope(AccessScope{TenantID: tenantID, OwnerID: ownerID})
 	if err != nil {
-		return nil, fmt.Errorf("persisted pending search-history scope is invalid: %v", err)
+		return nil, fmt.Errorf("persisted pending search-history scope is invalid: %w", err)
 	}
 	entry, indexed, err := decodePendingEntry(encoded, checksum)
 	if err != nil {

@@ -54,7 +54,7 @@ const (
 )
 
 var (
-	decimalValuePattern = regexp.MustCompile("^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?$")
+	decimalValuePattern = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?$`)
 	eventInsertColumns  = []string{
 		"event_id", "tenant_id", "index_name", "event_time", "index_time",
 		"collected_at", "event_time_source", "host", "source", "sourcetype",
@@ -481,6 +481,7 @@ func (s *Store) startReconciler() {
 	if s.closed || s.reconcileCancel != nil {
 		return
 	}
+	// #nosec G118 -- cancel is retained in reconcileCancel and invoked by Close.
 	ctx, cancel := context.WithCancel(context.Background())
 	s.reconcileCancel = cancel
 	s.reconcileWake = make(chan struct{}, 1)

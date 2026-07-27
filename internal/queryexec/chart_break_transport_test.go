@@ -386,7 +386,7 @@ type chartBreakTransportCancelOnRowRows struct {
 
 func (rows *chartBreakTransportCancelOnRowRows) Next() bool {
 	advanced := rows.fakeRows.Next()
-	if advanced && rows.fakeRows.nextCalls == rows.cancelAfter+1 {
+	if advanced && rows.nextCalls == rows.cancelAfter+1 {
 		rows.cancel()
 	}
 	return advanced
@@ -399,7 +399,7 @@ type chartBreakTransportFailingScanRows struct {
 }
 
 func (rows *chartBreakTransportFailingScanRows) Scan(destinations ...any) error {
-	if rows.fakeRows.nextCalls == rows.failAt {
+	if rows.nextCalls == rows.failAt {
 		return rows.failure
 	}
 	return rows.fakeRows.Scan(destinations...)

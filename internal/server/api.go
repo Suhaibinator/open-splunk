@@ -296,7 +296,8 @@ func rejectUnsupportedCreateFields(input *opensplunkv1.CreateSearchJobRequest, d
 		return errors.New("client request idempotency is not supported")
 	}
 	if options := input.GetOptions(); options != nil {
-		if options.GetEnablePreview() || options.PreviewRowLimit != nil {
+		//nolint:staticcheck // Deprecated wire fields must remain rejected while old clients can still send them.
+		if options.EnablePreview || options.PreviewRowLimit != nil {
 			return errors.New("job-level preview options are not supported; request bounded previews on the WebSocket search subscription")
 		}
 		if options.GetEnableFieldDiscovery() || options.GetEnableTimeline() {

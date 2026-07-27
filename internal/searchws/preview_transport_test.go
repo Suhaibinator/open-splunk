@@ -95,7 +95,7 @@ func (reader *adversarialSearchSnapshots) PreviewForBytes(scope searchjobs.Acces
 
 func (*adversarialSearchSnapshots) MaximumPreviewRows() uint32 { return defaultMaximumPreviewRows }
 
-func (reader *mutableSearchSnapshots) PreviewFor(scope searchjobs.AccessScope, id string, limit int) (searchjobs.PreviewSnapshot, error) {
+func (reader *mutableSearchSnapshots) PreviewFor(scope searchjobs.AccessScope, id string, _ int) (searchjobs.PreviewSnapshot, error) {
 	job, err := reader.GetFor(scope, id)
 	if err != nil {
 		return searchjobs.PreviewSnapshot{}, err
@@ -112,7 +112,7 @@ func (reader *mutableSearchSnapshots) PreviewForBytes(scope searchjobs.AccessSco
 
 func (*mutableSearchSnapshots) MaximumPreviewRows() uint32 { return defaultMaximumPreviewRows }
 
-func (reader *blockingSearchSnapshots) PreviewFor(scope searchjobs.AccessScope, id string, limit int) (searchjobs.PreviewSnapshot, error) {
+func (reader *blockingSearchSnapshots) PreviewFor(scope searchjobs.AccessScope, id string, _ int) (searchjobs.PreviewSnapshot, error) {
 	job, err := reader.GetFor(scope, id)
 	if err != nil {
 		return searchjobs.PreviewSnapshot{}, err
@@ -129,7 +129,7 @@ func (reader *blockingSearchSnapshots) PreviewForBytes(scope searchjobs.AccessSc
 
 func (*blockingSearchSnapshots) MaximumPreviewRows() uint32 { return defaultMaximumPreviewRows }
 
-func (reader *stagedTerminalSnapshots) PreviewFor(scope searchjobs.AccessScope, id string, limit int) (searchjobs.PreviewSnapshot, error) {
+func (reader *stagedTerminalSnapshots) PreviewFor(scope searchjobs.AccessScope, id string, _ int) (searchjobs.PreviewSnapshot, error) {
 	job, err := reader.GetFor(scope, id)
 	if err != nil {
 		return searchjobs.PreviewSnapshot{}, err

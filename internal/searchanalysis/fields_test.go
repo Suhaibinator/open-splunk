@@ -240,6 +240,7 @@ func TestFieldServiceValidatesRequestsBeforeLookup(t *testing.T) {
 	if got := searches.Calls(); got != 0 {
 		t.Fatalf("snapshot calls = %d, want 0", got)
 	}
+	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
 	if _, err := service.ListFields(nil, access, ListFieldsRequest{SearchJobID: "job"}); err == nil {
 		t.Fatal("ListFields(nil context) error = nil")
 	}
@@ -534,6 +535,7 @@ func TestFieldServiceCloseCancelsWorkersInvalidatesCacheAndRejectsNewWork(t *tes
 	if err := service.Close(canceled); err != nil {
 		t.Fatalf("idempotent Close(canceled after shutdown) error = %v", err)
 	}
+	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
 	if err := service.Close(nil); err == nil {
 		t.Fatal("Close(nil context) error = nil")
 	}

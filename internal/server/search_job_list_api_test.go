@@ -567,7 +567,7 @@ func TestSearchJobListAcquiresSerializationPermitBeforeService(t *testing.T) {
 		t.Fatal(err)
 	}
 	serve := func() int {
-		request := httptest.NewRequest(http.MethodPost, searchJobsListPath, bytes.NewReader(payload))
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchJobsListPath, bytes.NewReader(payload))
 		request.Header.Set("Content-Type", "application/x-protobuf")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
@@ -610,7 +610,7 @@ func TestSearchJobListCancellationPreventsResponseTransfer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, searchJobsListPath, bytes.NewReader(payload)).WithContext(ctx)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchJobsListPath, bytes.NewReader(payload)).WithContext(ctx)
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -625,7 +625,7 @@ func TestSearchJobListCancellationPreventsResponseTransfer(t *testing.T) {
 func TestSearchJobListRouteIsExactAndPostOnly(t *testing.T) {
 	handler := newSearchJobListTestHandler(t, &fakeSearchJobs{}, Config{})
 
-	request := httptest.NewRequest(http.MethodGet, searchJobsListPath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, searchJobsListPath, nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodPost {

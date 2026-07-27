@@ -164,10 +164,10 @@ type Config struct {
 }
 
 // Manager discovers and tails the files for one input, emitting RawEvents until
-// its context is cancelled. It reads initial offsets from the CheckpointStore
+// its context is canceled. It reads initial offsets from the CheckpointStore
 // but never advances them; the daemon owns advancement after terminal delivery.
 type Manager interface {
-	// Run blocks tailing until ctx is cancelled or a fatal setup error occurs.
+	// Run blocks tailing until ctx is canceled or a fatal setup error occurs.
 	// Per-file read errors are surfaced through Health, not returned.
 	Run(ctx context.Context) error
 	// Events returns the channel of framed raw events. It is closed when Run

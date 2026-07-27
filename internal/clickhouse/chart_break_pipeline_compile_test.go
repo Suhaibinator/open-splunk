@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"errors"
 	"reflect"
 	"slices"
 	"strconv"
@@ -231,8 +232,11 @@ func TestChartBreakPipelineKeywordAndReservedFieldNames(t *testing.T) {
 	}
 	if _, err = plan.Build(parsed, testChartScope()); err == nil {
 		t.Fatal("an 18-segment chart row path was accepted")
-	} else if diagnostic, ok := err.(*plan.Diagnostic); !ok || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
-		t.Fatalf("Build error = %#v, want SPL_QUERY_TOO_COMPLEX", err)
+	} else {
+		diagnostic := &plan.Diagnostic{}
+		if !errors.As(err, &diagnostic) || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
+			t.Fatalf("Build error = %#v, want SPL_QUERY_TOO_COMPLEX", err)
+		}
 	}
 }
 
@@ -252,7 +256,8 @@ func TestChartBreakPipelineRejectsCompilerPrivateAxisNames(t *testing.T) {
 			t.Fatalf("Parse(%q): %v", source, err)
 		}
 		_, err = plan.Build(parsed, testChartScope())
-		diagnostic, ok := err.(*plan.Diagnostic)
+		diagnostic := &plan.Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_RESERVED_FIELD" {
 			t.Fatalf("Build(%q) error = %#v, want SPL_RESERVED_FIELD", source, err)
 		}
@@ -290,7 +295,8 @@ func TestChartBreakPipelineColumnAxisTypeRejectionSurvivesEveryProducer(t *testi
 			t.Parallel()
 			logical := chartBreakPipelineBuild(t, test.source)
 			_, err := (Compiler{}).Compile(logical)
-			diagnostic, ok := err.(*plan.Diagnostic)
+			diagnostic := &plan.Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_FIELD_TYPE" {
 				t.Fatalf("Compile(%q) error = %#v, want SPL_UNSUPPORTED_CHART_FIELD_TYPE", test.source, err)
 			}
@@ -331,7 +337,8 @@ func TestChartBreakPipelineRejectsReservedSeriesNamesFromEveryProducer(t *testin
 			t.Fatalf("Parse(%q): %v", source, err)
 		}
 		_, err = plan.Build(parsed, testChartScope())
-		diagnostic, ok := err.(*plan.Diagnostic)
+		diagnostic := &plan.Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_FIELD_TYPE" {
 			t.Fatalf("Build(%q) error = %#v, want SPL_UNSUPPORTED_CHART_FIELD_TYPE", source, err)
 		}
@@ -387,7 +394,7 @@ func TestChartBreakPipelineReservedFieldsPayloadDependsOnUpstreamSchema(t *testi
 
 // TestChartBreakPipelineProjectionsThatDropAnAxis pins I2/I3 through every
 // projection form: a chart field a projection removed becomes the documented
-// missing-value behaviour rather than resurrecting the private event document.
+// missing-value behavior rather than resurrecting the private event document.
 func TestChartBreakPipelineProjectionsThatDropAnAxis(t *testing.T) {
 	t.Parallel()
 
@@ -559,7 +566,8 @@ func TestChartBreakPipelineIsRejectedBeforeEveryDownstreamCommand(t *testing.T) 
 			t.Fatalf("Parse(%q): %v", source, err)
 		}
 		_, err = plan.Build(parsed, testChartScope())
-		diagnostic, ok := err.(*plan.Diagnostic)
+		diagnostic := &plan.Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_PIPELINE" {
 			t.Fatalf("Build(%q) error = %#v, want SPL_UNSUPPORTED_CHART_PIPELINE", source, err)
 		}
@@ -623,7 +631,8 @@ func TestChartBreakPipelineNarrowsIndexScopeAndStopsAtTheChart(t *testing.T) {
 	// rule ever runs, so a chart cannot be used to smuggle a scope past
 	// resolution.
 	_, err = plan.Build(mustParseChartBreakPipeline(t, `index=forbidden | chart count OVER path BY level`), scope)
-	if diagnostic, ok := err.(*plan.Diagnostic); !ok || diagnostic.Code != "SPL_INDEX_FORBIDDEN" {
+	diagnostic := &plan.Diagnostic{}
+	if !errors.As(err, &diagnostic) || diagnostic.Code != "SPL_INDEX_FORBIDDEN" {
 		t.Fatalf("Build(forbidden index) error = %#v, want SPL_INDEX_FORBIDDEN", err)
 	}
 
@@ -636,7 +645,8 @@ func TestChartBreakPipelineNarrowsIndexScopeAndStopsAtTheChart(t *testing.T) {
 		`index=gradethis | chart count OVER path BY level | search index=internal`,
 	} {
 		_, err := plan.Build(mustParseChartBreakPipeline(t, source), requested)
-		diagnostic, ok := err.(*plan.Diagnostic)
+		diagnostic := &plan.Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_PIPELINE" {
 			t.Fatalf("Build(%q) error = %#v, want SPL_UNSUPPORTED_CHART_PIPELINE", source, err)
 		}

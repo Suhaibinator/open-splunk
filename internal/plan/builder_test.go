@@ -1783,7 +1783,8 @@ func TestBuildTimechartBoundsFixedSpan(t *testing.T) {
 		`index=gradethis | timechart span=25h count by level`,
 	} {
 		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
-		diagnostic, ok := err.(*Diagnostic)
+		diagnostic := &Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_TIMECHART_SYNTAX" {
 			t.Errorf("Build(%q) error = %#v, want bounded-span diagnostic", source, err)
 		}
@@ -1796,7 +1797,11 @@ func TestBuildRequiresTimechartToBeTerminal(t *testing.T) {
 	query := mustParse(t, `index=gradethis | timechart span=5m count by level | search index=secret`)
 	_, err := Build(query, testScope([]string{"gradethis"}, nil))
 	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_TIMECHART_PIPELINE")
-	diagnostic := err.(*Diagnostic)
+	diagnostic := func() *Diagnostic {
+		target := &Diagnostic{}
+		_ = errors.As(err, &target)
+		return target
+	}()
 	if got := query.Commands[1].SourceRange(); diagnostic.Range != got {
 		t.Fatalf("diagnostic range = %#v, want next command %#v", diagnostic.Range, got)
 	}
@@ -1813,7 +1818,8 @@ func TestBuildTimechartRequiresUnmodifiedCanonicalTime(t *testing.T) {
 		`index=gradethis | top level | timechart span=5m count by level`,
 	} {
 		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
-		diagnostic, ok := err.(*Diagnostic)
+		diagnostic := &Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD" {
 			t.Errorf("Build(%q) error = %#v, want canonical-time diagnostic", source, err)
 		}
@@ -1925,7 +1931,11 @@ func TestBuildRequiresChartToBeTerminal(t *testing.T) {
 	query := mustParse(t, `index=gradethis | chart count over path by level | head 5`)
 	_, err := Build(query, testScope([]string{"gradethis"}, nil))
 	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_CHART_PIPELINE")
-	diagnostic := err.(*Diagnostic)
+	diagnostic := func() *Diagnostic {
+		target := &Diagnostic{}
+		_ = errors.As(err, &target)
+		return target
+	}()
 	if got := query.Commands[1].SourceRange(); diagnostic.Range != got {
 		t.Fatalf("diagnostic range = %#v, want next command %#v", diagnostic.Range, got)
 	}
@@ -1969,7 +1979,8 @@ func TestBuildChartRejectsReservedSeriesNamesAndConvenienceColumn(t *testing.T) 
 		`index=gradethis | chart count over path by fields`,
 	} {
 		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
-		diagnostic, ok := err.(*Diagnostic)
+		diagnostic := &Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_FIELD_TYPE" {
 			t.Errorf("Build(%q) error = %#v, want SPL_UNSUPPORTED_CHART_FIELD_TYPE", source, err)
 		}
@@ -2338,7 +2349,8 @@ func assertDiagnosticCode(t *testing.T, err error, code string) {
 	if err == nil {
 		t.Fatalf("error is nil, want %s", code)
 	}
-	diagnostic, ok := err.(*Diagnostic)
+	diagnostic := &Diagnostic{}
+	ok := errors.As(err, &diagnostic)
 	if !ok {
 		t.Fatalf("error = %T, want *Diagnostic", err)
 	}

@@ -175,7 +175,7 @@ func TestManagerBoundsExecutionConcurrency(t *testing.T) {
 	var maximum atomic.Int32
 	started := make(chan struct{}, jobCount)
 	release := make(chan struct{})
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 		current := active.Add(1)
 		defer active.Add(-1)
 		for {
@@ -238,7 +238,7 @@ func TestCancelQueuedAndRunningJobsIsIdempotentAndPropagatesContext(t *testing.T
 	started := make(chan struct{}, 1)
 	contextCanceled := make(chan struct{}, 1)
 	var executions atomic.Int32
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, _ ResultSink) error {
 		executions.Add(1)
 		started <- struct{}{}
 		<-ctx.Done()
@@ -299,7 +299,7 @@ func TestCancelRemovesQueuedJobAndReleasesQueueCapacity(t *testing.T) {
 	t.Parallel()
 
 	started := make(chan struct{}, 1)
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, _ ResultSink) error {
 		started <- struct{}{}
 		<-ctx.Done()
 		return ctx.Err()
@@ -393,7 +393,7 @@ func TestTypedResultsPagingDeepCopiesAndAuthenticatesCursors(t *testing.T) {
 			decimal,
 		}
 	}
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 		if err := sink.SetSchema(schema); err != nil {
 			return err
 		}
@@ -614,7 +614,7 @@ func TestCursorCannotBeReplayedAfterExpiredJobIDIsReused(t *testing.T) {
 	t.Parallel()
 
 	clock := &fakeClock{now: time.Date(2026, time.July, 21, 5, 0, 0, 0, time.UTC)}
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 		if err := sink.SetSchema(messageSchema()); err != nil {
 			return err
 		}
@@ -660,7 +660,7 @@ func TestCursorCannotBeReplayedAfterExpiredJobIDIsReused(t *testing.T) {
 func TestCursorCannotBeReplayedAcrossManagerEpochs(t *testing.T) {
 	t.Parallel()
 
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 		if err := sink.SetSchema(messageSchema()); err != nil {
 			return err
 		}
@@ -714,7 +714,7 @@ func TestResultPagesAreBoundedByRowsAndRetainedBytes(t *testing.T) {
 	}
 	rowBytes := retainedResultRowBase + valueBytes
 	pageBytes := schemaBytes + rowBytes
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 		if err := sink.SetSchema(schema); err != nil {
 			return err
 		}
@@ -763,7 +763,7 @@ func TestRetainedSinkCannotMutateCompletedResults(t *testing.T) {
 	t.Parallel()
 
 	retained := make(chan ResultSink, 1)
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 		if err := sink.SetSchema(messageSchema()); err != nil {
 			return err
 		}
@@ -799,7 +799,7 @@ func TestRetainedSinkCannotMutateCompletedResults(t *testing.T) {
 func TestScopedAccessDoesNotDiscloseCrossTenantOrOwnerJobs(t *testing.T) {
 	t.Parallel()
 
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 		if err := sink.SetSchema(messageSchema()); err != nil {
 			return err
 		}
@@ -880,7 +880,7 @@ func TestResultLimitsDoNotExceedStoredBounds(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			var observed error
-			test.config.Executor = executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+			test.config.Executor = executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 				if err := sink.SetSchema(messageSchema()); err != nil {
 					return err
 				}
@@ -935,7 +935,7 @@ func TestStructuralValuesCannotBypassByteLimit(t *testing.T) {
 	for index := range nulls {
 		nulls[index] = NullValue()
 	}
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 		if err := sink.SetSchema(Schema{Columns: []Column{{Name: "message", Kind: ValueKindList}}}); err != nil {
 			return err
 		}
@@ -1194,7 +1194,7 @@ func TestManagerBoundsAggregateRetainedJobsAndBytes(t *testing.T) {
 	t.Run("job count", func(t *testing.T) {
 		t.Parallel()
 		started := make(chan struct{}, 1)
-		executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+		executor := executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, _ ResultSink) error {
 			started <- struct{}{}
 			<-ctx.Done()
 			return ctx.Err()
@@ -1219,7 +1219,7 @@ func TestManagerBoundsAggregateRetainedJobsAndBytes(t *testing.T) {
 	t.Run("retained bytes", func(t *testing.T) {
 		t.Parallel()
 		clock := &fakeClock{now: time.Date(2026, time.July, 21, 8, 0, 0, 0, time.UTC)}
-		executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+		executor := executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 			if err := sink.SetSchema(messageSchema()); err != nil {
 				return err
 			}
@@ -1333,7 +1333,7 @@ func TestMetadataBudgetRejectsBeforeStorageAndIsReclaimedWithTombstone(t *testin
 func TestCreateRejectsOversizedMetadataAndInvalidGeneratedID(t *testing.T) {
 	t.Parallel()
 
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error { return nil })
+	executor := executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, _ ResultSink) error { return nil })
 	manager := newTestManager(t, Config{
 		Executor:        executor,
 		MaxSPLBytes:     4,
@@ -1517,7 +1517,7 @@ func TestExecutionDeadlinePropagatesAndFailsAsTimeout(t *testing.T) {
 	t.Parallel()
 
 	deadlineObserved := make(chan struct{}, 1)
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 		if err := sink.SetSchema(messageSchema()); err != nil {
 			return err
 		}
@@ -1610,7 +1610,7 @@ func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+			executor := executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 				if test.executorErr != nil {
 					return test.executorErr
 				}
@@ -1847,7 +1847,7 @@ func TestExpiryClearsResultsThenCleansTombstone(t *testing.T) {
 	t.Parallel()
 
 	clock := &fakeClock{now: time.Date(2026, time.July, 21, 1, 0, 0, 0, time.UTC)}
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 		if err := sink.SetSchema(messageSchema()); err != nil {
 			return err
 		}
@@ -1896,7 +1896,7 @@ func TestBackgroundCleanupExpiresResults(t *testing.T) {
 	t.Parallel()
 
 	clock := &fakeClock{now: time.Date(2026, time.July, 21, 9, 0, 0, 0, time.UTC)}
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 		if err := sink.SetSchema(messageSchema()); err != nil {
 			return err
 		}
@@ -1942,7 +1942,7 @@ func TestExecutorPanicBecomesSafeFailureAndWorkerSurvives(t *testing.T) {
 
 	executionContexts := make(chan context.Context, 2)
 	manager := newTestManager(t, Config{
-		Executor: executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+		Executor: executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, _ ResultSink) error {
 			executionContexts <- ctx
 			panic("generated SQL and storage password")
 		}),
@@ -1972,7 +1972,7 @@ func TestCloseCancelsAllWorkAndRejectsCreates(t *testing.T) {
 	t.Parallel()
 
 	started := make(chan struct{}, 2)
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, _ ResultSink) error {
 		started <- struct{}{}
 		<-ctx.Done()
 		return ctx.Err()
@@ -2233,7 +2233,7 @@ func TestConcurrentInspectionPagingAndCancellation(t *testing.T) {
 	t.Parallel()
 
 	const jobCount = 40
-	executor := executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+	executor := executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 		if err := sink.SetSchema(messageSchema()); err != nil {
 			return err
 		}

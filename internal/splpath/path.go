@@ -145,22 +145,22 @@ func parseStep(source string, offset int) (Step, error) {
 	}
 
 	open := strings.IndexByte(source, '{')
-	close := strings.IndexByte(source, '}')
-	if open < 0 && close < 0 {
+	closeIndex := strings.IndexByte(source, '}')
+	if open < 0 && closeIndex < 0 {
 		if len(source) > MaximumKeyBytes {
 			return Step{}, tooComplex(offset, fmt.Sprintf("location-step key exceeds %d UTF-8 bytes", MaximumKeyBytes))
 		}
 		return Step{Key: source}, nil
 	}
-	if open <= 0 || close != len(source)-1 || strings.Count(source, "{") != 1 || strings.Count(source, "}") != 1 {
-		return Step{}, invalid(offset+max(open, close, 0), "array index must be one final {...} suffix")
+	if open <= 0 || closeIndex != len(source)-1 || strings.Count(source, "{") != 1 || strings.Count(source, "}") != 1 {
+		return Step{}, invalid(offset+max(open, closeIndex, 0), "array index must be one final {...} suffix")
 	}
 
 	key := source[:open]
 	if len(key) > MaximumKeyBytes {
 		return Step{}, tooComplex(offset, fmt.Sprintf("location-step key exceeds %d UTF-8 bytes", MaximumKeyBytes))
 	}
-	indexText := source[open+1 : close]
+	indexText := source[open+1 : closeIndex]
 	if indexText == "" || indexText == "*" {
 		return Step{}, unsupported(offset+open, "array wildcard extraction is not supported")
 	}

@@ -323,7 +323,7 @@ func (store *Store) Duplicate(ctx context.Context, scope AccessScope, sourceID, 
 		if idErr != nil {
 			return nil, fmt.Errorf("generate duplicate saved-search ID: %w", idErr)
 		}
-		if idErr := validateObjectID(id); idErr != nil {
+		if validationErr := validateObjectID(id); validationErr != nil {
 			return nil, errors.New("generate duplicate saved-search ID: generator returned an invalid ID")
 		}
 		_, err = tx.ExecContext(ctx, `
@@ -435,7 +435,7 @@ func scanSavedSearch(scanner rowScanner) (*opensplunkv1.SavedSearch, error) {
 		// The definition originated from durable storage, not the active request.
 		// Do not preserve ErrInvalidArgument or the HTTP layer could misclassify
 		// database corruption as a client-side 400 response.
-		return nil, fmt.Errorf("invalid saved-search definition in control-plane database: %v", err)
+		return nil, fmt.Errorf("invalid saved-search definition in control-plane database: %w", err)
 	}
 	if name != indexed.name || appID != indexed.appID || ownerID != indexed.ownerID || sharing != int64(indexed.sharingScope) {
 		return nil, errors.New("saved-search indexed metadata does not match definition in control-plane database")

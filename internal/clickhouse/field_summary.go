@@ -279,7 +279,7 @@ func finalizeFieldSummary(
 	sql.WriteString(" != 0 AND ")
 	sql.WriteString(q(fieldSummaryStoredType))
 	sql.WriteString(" != toUInt8(")
-	sql.WriteString(fmt.Sprint(uint8(eventfields.StoredValueTypeNull)))
+	fmt.Fprint(&sql, uint8(eventfields.StoredValueTypeNull))
 	sql.WriteString(") AND ")
 	sql.WriteString(q(fieldSummaryAgreement))
 	sql.WriteString(" != 0 AND NOT (")
@@ -330,7 +330,7 @@ func finalizeFieldSummary(
 	sql.WriteString(" != 0 AND ")
 	sql.WriteString(q(fieldSummaryStoredType))
 	sql.WriteString(" != toUInt8(")
-	sql.WriteString(fmt.Sprint(uint8(eventfields.StoredValueTypeNull)))
+	fmt.Fprint(&sql, uint8(eventfields.StoredValueTypeNull))
 	sql.WriteString(") AND ")
 	sql.WriteString(q(fieldSummaryRowInvalid))
 	sql.WriteString(" = 0 AND ")
@@ -379,7 +379,7 @@ func writeFieldSummaryTotals(sql *strings.Builder) {
 	sql.WriteString(" != 0 AND ")
 	sql.WriteString(q(fieldSummaryStoredType))
 	sql.WriteString(" = toUInt8(")
-	sql.WriteString(fmt.Sprint(uint8(eventfields.StoredValueTypeNull)))
+	fmt.Fprint(sql, uint8(eventfields.StoredValueTypeNull))
 	sql.WriteString(")) AS ")
 	sql.WriteString(q(fieldSummaryProfileNulls))
 	sql.WriteString(", toUInt64(count() - countIf(")
@@ -670,9 +670,9 @@ func fieldSummaryRuntimeDynamicExpressions(storedType, value string) (agreement,
 func writeFieldSummaryContainerTypePredicate(sql *strings.Builder) {
 	sql.WriteString(quoteIdentifier(fieldSummaryStoredType))
 	sql.WriteString(" IN (toUInt8(")
-	sql.WriteString(fmt.Sprint(uint8(eventfields.StoredValueTypeList)))
+	fmt.Fprint(sql, uint8(eventfields.StoredValueTypeList))
 	sql.WriteString("), toUInt8(")
-	sql.WriteString(fmt.Sprint(uint8(eventfields.StoredValueTypeObject)))
+	fmt.Fprint(sql, uint8(eventfields.StoredValueTypeObject))
 	sql.WriteString("))")
 }
 

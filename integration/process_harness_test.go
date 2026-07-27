@@ -174,7 +174,7 @@ func TestLockedBufferReportsTruncation(t *testing.T) {
 func TestRunCommandWithBoundedOutputCapsCombinedStreams(t *testing.T) {
 	t.Parallel()
 
-	command := exec.Command(os.Args[0], "-test.run=^TestHarnessOutputEmitter$")
+	command := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestHarnessOutputEmitter$")
 	command.Env = environmentWithValue(
 		os.Environ(),
 		"OPEN_SPLUNK_TEST_HARNESS_OUTPUT_EMITTER",
@@ -214,7 +214,7 @@ func TestRunCommandWithBoundedOutputBoundaries(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			command := exec.Command(os.Args[0], "-test.run=^TestHarnessOutputEmitter$")
+			command := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestHarnessOutputEmitter$")
 			command.Env = environmentWithValue(
 				os.Environ(),
 				"OPEN_SPLUNK_TEST_HARNESS_OUTPUT_EMITTER",
@@ -244,7 +244,7 @@ func TestRunCommandWithBoundedOutputBoundaries(t *testing.T) {
 
 	t.Run("start failure", func(t *testing.T) {
 		t.Parallel()
-		command := exec.Command(filepath.Join(t.TempDir(), "missing-command"))
+		command := exec.CommandContext(context.Background(), filepath.Join(t.TempDir(), "missing-command"))
 		output, truncated, err := runCommandWithBoundedOutput(command, maximum)
 		if err == nil {
 			t.Fatal("runCommandWithBoundedOutput() error = nil, want start failure")
@@ -642,11 +642,15 @@ func materializeStageDependencies(ctx context.Context, sourceRoot, destinationRo
 				strings.HasPrefix(relativeTarget, ".."+string(filepath.Separator)) {
 				return fmt.Errorf("dependency symlink %q escapes its source tree", sourcePath)
 			}
+			// #nosec G122 -- sourceRoot is a validated, immutable toolchain tree
+			// and the relative target is checked above before staging the test fixture.
 			return os.Symlink(target, destinationPath)
 		}
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("dependency %q is not a regular file", sourcePath)
 		}
+		// #nosec G122 -- sourceRoot is a validated, immutable toolchain tree used
+		// only to materialize an isolated test-stage dependency.
 		if err := os.Link(sourcePath, destinationPath); err == nil {
 			return nil
 		}
@@ -870,7 +874,7 @@ func configureProcessGroup(command *exec.Cmd) {
 
 func unusedLoopbackAddress(t *testing.T) string {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -907,7 +911,7 @@ func startProcess(t *testing.T, directory string, arguments []string, environmen
 		t.Fatal("process command is required")
 	}
 	logs := &lockedBuffer{maximum: maximumHarnessOutputBytes}
-	command := exec.Command(arguments[0], arguments[1:]...)
+	command := exec.CommandContext(context.Background(), arguments[0], arguments[1:]...)
 	command.Dir = directory
 	command.Env = environment
 	command.Stdout = logs
@@ -947,7 +951,7 @@ func (process *managedProcess) Interrupt(timeout time.Duration) error {
 		return process.Err()
 	case <-timer.C:
 		killErr := process.Kill(5 * time.Second)
-		return fmt.Errorf("graceful shutdown timed out after %s (force cleanup: %v)", timeout, killErr)
+		return fmt.Errorf("graceful shutdown timed out after %s (force cleanup: %w)", timeout, killErr)
 	}
 }
 

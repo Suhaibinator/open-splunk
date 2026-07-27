@@ -423,7 +423,7 @@ func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
 		}
 	}
 
-	request := httptest.NewRequest(http.MethodGet, searchWebSocketPath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, searchWebSocketPath, nil)
 	request.Host = "example.com"
 	request.Header.Set("Origin", "http://example.com")
 	request.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -446,17 +446,17 @@ func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
 		"empty fragment": "http://example.com#",
 	} {
 		t.Run(name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodGet, searchWebSocketPath, nil)
-			request.Host = "example.com"
-			request.Header.Set("Origin", authority)
-			response := httptest.NewRecorder()
-			handler.ServeHTTP(response, request)
-			if response.Code != http.StatusForbidden || socket.callCount() != 1 {
-				t.Fatalf("untrusted-origin response = %d calls = %d", response.Code, socket.callCount())
+			hostileRequest := httptest.NewRequestWithContext(context.Background(), http.MethodGet, searchWebSocketPath, nil)
+			hostileRequest.Host = "example.com"
+			hostileRequest.Header.Set("Origin", authority)
+			hostileResponse := httptest.NewRecorder()
+			handler.ServeHTTP(hostileResponse, hostileRequest)
+			if hostileResponse.Code != http.StatusForbidden || socket.callCount() != 1 {
+				t.Fatalf("untrusted-origin response = %d calls = %d", hostileResponse.Code, socket.callCount())
 			}
 		})
 	}
-	request = httptest.NewRequest(http.MethodGet, searchWebSocketPath, nil)
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, searchWebSocketPath, nil)
 	request.Host = "example.com:"
 	request.Header.Set("Origin", "http://example.com:")
 	response = httptest.NewRecorder()
@@ -465,7 +465,7 @@ func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
 		t.Fatalf("empty-port response = %d calls = %d", response.Code, socket.callCount())
 	}
 
-	request = httptest.NewRequest(http.MethodPost, searchWebSocketPath, nil)
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchWebSocketPath, nil)
 	request.Host = "example.com"
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -522,7 +522,7 @@ func TestSearchWebSocketIsNotAdvertisedOrRoutedWithoutService(t *testing.T) {
 		t.Fatalf("disabled websocket was advertised: %+v", &bootstrap)
 	}
 
-	request := httptest.NewRequest(http.MethodGet, searchWebSocketPath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, searchWebSocketPath, nil)
 	request.Host = "example.com"
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -577,14 +577,14 @@ func TestProtobufMediaTypeMethodAndBodyLimit(t *testing.T) {
 		MaximumRequestBytes: 32,
 	})
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/bootstrap", bytes.NewReader(nil))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/system/bootstrap", bytes.NewReader(nil))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusUnsupportedMediaType {
 		t.Fatalf("wrong media status = %d", response.Code)
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/system/bootstrap", nil)
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/system/bootstrap", nil)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusMethodNotAllowed {
@@ -613,7 +613,7 @@ func TestProtobufMediaTypeMethodAndBodyLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/system/bootstrap", &oneByteReader{data: payload})
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/system/bootstrap", &oneByteReader{data: payload})
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	if request.ContentLength != -1 {
 		t.Fatalf("chunked request ContentLength = %d, want -1", request.ContentLength)
@@ -631,7 +631,7 @@ func TestProtobufUnknownFieldsRemainForwardCompatible(t *testing.T) {
 	})
 	payload := protowire.AppendTag(nil, 2_047, protowire.BytesType)
 	payload = protowire.AppendString(payload, "future-client-field")
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/bootstrap", bytes.NewReader(payload))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/system/bootstrap", bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -1019,7 +1019,7 @@ func TestCommittedSearchMutationsWinContextCancellationRace(t *testing.T) {
 			tenantID: "tenant-1",
 			now:      func() time.Time { return testNow },
 		}
-		request := httptest.NewRequest(http.MethodPost, "/api/v1/search/jobs/create", nil).WithContext(ctx)
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/search/jobs/create", nil).WithContext(ctx)
 		response, err := handler.createSearchJob(request, createRequest(
 			"2026-07-22T11:00:00Z", "2026-07-22T12:00:00Z", "main",
 		))
@@ -1046,7 +1046,7 @@ func TestCommittedSearchMutationsWinContextCancellationRace(t *testing.T) {
 			tenantID: "tenant-1",
 			now:      func() time.Time { return testNow },
 		}
-		request := httptest.NewRequest(http.MethodPost, "/api/v1/search/jobs/cancel", nil).WithContext(ctx)
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/search/jobs/cancel", nil).WithContext(ctx)
 		response, err := handler.cancelSearchJob(request, &opensplunkv1.CancelSearchJobRequest{SearchJobId: "job-cancel"})
 		if !errors.Is(ctx.Err(), context.Canceled) {
 			t.Fatalf("request context error = %v, want context.Canceled", ctx.Err())
@@ -1070,7 +1070,7 @@ func TestSearchCancellationRejectsAlreadyCanceledRequestBeforeMutation(t *testin
 		tenantID: "tenant-1",
 		now:      func() time.Time { return testNow },
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/search/jobs/cancel", nil).WithContext(ctx)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/search/jobs/cancel", nil).WithContext(ctx)
 	response, err := handler.cancelSearchJob(request, &opensplunkv1.CancelSearchJobRequest{SearchJobId: "job-cancel"})
 	if !errors.Is(err, context.Canceled) || response != nil {
 		t.Fatalf("cancel response/error = %+v / %v, want context.Canceled", response, err)
@@ -1099,7 +1099,7 @@ func TestResultSerializationConcurrencyIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	serve := func() int {
-		request := httptest.NewRequest(http.MethodPost, "/api/v1/search/jobs/results", bytes.NewReader(payload))
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/search/jobs/results", bytes.NewReader(payload))
 		request.Header.Set("Content-Type", "application/x-protobuf")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
@@ -1149,7 +1149,7 @@ func TestSlowResultUploadDoesNotConsumeSerializationCapacity(t *testing.T) {
 		MaximumConcurrentResponses: 1,
 	})
 	body := &blockingRequestBody{started: make(chan struct{}), release: make(chan struct{})}
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/search/jobs/results", body)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/search/jobs/results", body)
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	slowDone := make(chan int, 1)
 	go func() {
@@ -1217,7 +1217,7 @@ func TestControlPlaneDeadlineMapsToRequestTimeout(t *testing.T) {
 func TestSPAFallbackNeverShadowsAPI(t *testing.T) {
 	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, WebUI: testUI()})
 
-	request := httptest.NewRequest(http.MethodGet, "/search/jobs/job-1", nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/search/jobs/job-1", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || response.Body.String() != "<html>ui-marker</html>" {
@@ -1227,7 +1227,7 @@ func TestSPAFallbackNeverShadowsAPI(t *testing.T) {
 		t.Fatalf("SPA cache = %q", response.Header().Get("Cache-Control"))
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/not-a-route", nil)
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/not-a-route", nil)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code == http.StatusOK || strings.Contains(response.Body.String(), "ui-marker") {
@@ -1237,14 +1237,14 @@ func TestSPAFallbackNeverShadowsAPI(t *testing.T) {
 		t.Fatalf("unknown API error envelope = headers %v body %q", response.Header(), response.Body.String())
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/_next/static/app.abcdef12.js", nil)
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/_next/static/app.abcdef12.js", nil)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Cache-Control"), "immutable") {
 		t.Fatalf("asset response = %d cache %q", response.Code, response.Header().Get("Cache-Control"))
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/missing.js", nil)
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/missing.js", nil)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusNotFound {
@@ -1280,7 +1280,7 @@ func postProto(t *testing.T, handler http.Handler, path string, message proto.Me
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	request := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(payload))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

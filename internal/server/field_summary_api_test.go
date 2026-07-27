@@ -103,7 +103,7 @@ func TestSearchFieldSummaryInputValidationAndExactRoute(t *testing.T) {
 	if response.Code != http.StatusNotFound || service.summaryCallCount() != 1 {
 		t.Fatalf("suffix status/calls = %d/%d", response.Code, service.summaryCallCount())
 	}
-	request := httptest.NewRequest(http.MethodGet, searchFieldSummaryPath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, searchFieldSummaryPath, nil)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodPost || service.summaryCallCount() != 1 {
@@ -287,7 +287,7 @@ func TestSearchFieldSummarySerializationCapacityIsNonblockingAndAcquiredAfterSer
 		searchFields: service, ownerID: "owner", tenantID: "tenant",
 		maximumFieldSummaryValues: 20, serializationGate: make(chan struct{}, 1),
 	}
-	request := httptest.NewRequest(http.MethodPost, searchFieldSummaryPath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchFieldSummaryPath, nil)
 	input := &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message"}
 	first, err := handler.getSearchFieldSummary(request, input)
 	if err != nil || first == nil || len(handler.serializationGate) != 1 {

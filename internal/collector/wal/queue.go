@@ -121,6 +121,7 @@ func openQueue(opts Options) (*queue, error) {
 	// Tighten an existing directory too: MkdirAll leaves a pre-existing dir's mode
 	// untouched, and the queue holds raw event payloads that must not be
 	// world/group readable.
+	// #nosec G302 -- opts.Dir is a directory and is deliberately owner-only.
 	if err := os.Chmod(opts.Dir, 0o700); err != nil {
 		return nil, fmt.Errorf("collector/wal: secure dir: %w", err)
 	}

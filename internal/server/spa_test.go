@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -52,7 +53,7 @@ func TestSPAStaticServingIsCacheSafeAndNeverListsDirectories(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			request := httptest.NewRequest(http.MethodGet, test.path, nil)
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, test.path, nil)
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
 			if response.Code != test.wantCode {
@@ -81,14 +82,14 @@ func TestSPAHeadAndMethodHandling(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodHead, "/browser-route", nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodHead, "/browser-route", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || response.Body.Len() != 0 || response.Header().Get("Cache-Control") != "no-cache" {
 		t.Fatalf("HEAD response = %d body %q cache %q", response.Code, response.Body.String(), response.Header().Get("Cache-Control"))
 	}
 
-	request = httptest.NewRequest(http.MethodPost, "/", nil)
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", nil)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "GET, HEAD" {

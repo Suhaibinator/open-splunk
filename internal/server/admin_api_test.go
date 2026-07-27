@@ -499,7 +499,7 @@ func TestAdministrativeRoutesRejectDNSRebindingAndCrossOriginBrowsers(t *testing
 	if err != nil {
 		t.Fatalf("marshal duplicate-origin request: %v", err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/ingestion-tokens/create", bytes.NewReader(payload))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/ingestion-tokens/create", bytes.NewReader(payload))
 	request.Host = "example.com"
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	request.Header.Add("Origin", "http://example.com")
@@ -581,7 +581,7 @@ func postProtoHeaders(t *testing.T, handler http.Handler, path string, message p
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	request := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(payload))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	for name, value := range headers {
 		if name == "Host" {

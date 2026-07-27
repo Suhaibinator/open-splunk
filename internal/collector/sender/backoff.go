@@ -18,12 +18,12 @@ func backoffDelay(p BackoffPolicy, attempt int, frac float64) time.Duration {
 	if initial <= 0 {
 		initial = defaultBackoffInitial
 	}
-	max := p.Max
-	if max <= 0 {
-		max = defaultBackoffMax
+	maximum := p.Max
+	if maximum <= 0 {
+		maximum = defaultBackoffMax
 	}
-	if max < initial {
-		max = initial
+	if maximum < initial {
+		maximum = initial
 	}
 	multiplier := p.Multiplier
 	if multiplier < 1 {
@@ -31,7 +31,7 @@ func backoffDelay(p BackoffPolicy, attempt int, frac float64) time.Duration {
 	}
 
 	base := float64(initial)
-	limit := float64(max)
+	limit := float64(maximum)
 	for i := 0; i < attempt; i++ {
 		base *= multiplier
 		if base >= limit {

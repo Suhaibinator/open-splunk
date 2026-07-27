@@ -105,7 +105,7 @@ func (container *ClickHouseContainer) waitReady(ctx context.Context) error {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	stable := 0
-	last := "no health probe completed"
+	var last string
 	for {
 		output, err := docker(ctx, "exec", container.Name, "clickhouse-client",
 			"--user", container.Username, "--password", container.Password,

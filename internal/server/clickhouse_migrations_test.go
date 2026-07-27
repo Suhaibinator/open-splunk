@@ -386,8 +386,8 @@ type fakeClickHouseMigrationConnection struct {
 }
 
 var (
-	fakeLedgerInsert = regexp.MustCompile("(?is)INSERT\\s+INTO\\s+open_splunk\\.schema_migrations\\s*(?:\\([^)]*\\))?\\s*SELECT\\s+([0-9]+)\\s*,\\s*'([a-z0-9_]+)'")
-	fakeTableCreate  = regexp.MustCompile("(?is)CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?open_splunk\\.([a-z0-9_]+)")
+	fakeLedgerInsert = regexp.MustCompile(`(?is)INSERT\s+INTO\s+open_splunk\.schema_migrations\s*(?:\([^)]*\))?\s*SELECT\s+([0-9]+)\s*,\s*'([a-z0-9_]+)'`)
+	fakeTableCreate  = regexp.MustCompile(`(?is)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?open_splunk\.([a-z0-9_]+)`)
 )
 
 func (connection *fakeClickHouseMigrationConnection) Select(_ context.Context, destination any, query string, _ ...any) error {

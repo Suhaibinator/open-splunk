@@ -55,10 +55,10 @@ func TestBeginAttemptIsDurableIdempotentScopedAndNotYetVisible(t *testing.T) {
 	pending.Definition.Spl = "mutated"
 	started.Definition.Spl = "mutated result"
 	var pendingRows, terminalRows int
-	if err := database.SQLDB().QueryRow(`SELECT COUNT(*) FROM search_history_pending`).Scan(&pendingRows); err != nil {
+	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM search_history_pending`).Scan(&pendingRows); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.SQLDB().QueryRow(`SELECT COUNT(*) FROM search_history`).Scan(&terminalRows); err != nil {
+	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM search_history`).Scan(&terminalRows); err != nil {
 		t.Fatal(err)
 	}
 	if pendingRows != 1 || terminalRows != 0 {
@@ -99,10 +99,10 @@ func TestCompleteAttemptAtomicallyMovesPendingToTerminalHistory(t *testing.T) {
 		t.Fatalf("completed state = %v", completed.FinalState)
 	}
 	var pendingRows, terminalRows int
-	if err := database.SQLDB().QueryRow(`SELECT COUNT(*) FROM search_history_pending`).Scan(&pendingRows); err != nil {
+	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM search_history_pending`).Scan(&pendingRows); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.SQLDB().QueryRow(`SELECT COUNT(*) FROM search_history`).Scan(&terminalRows); err != nil {
+	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM search_history`).Scan(&terminalRows); err != nil {
 		t.Fatal(err)
 	}
 	if pendingRows != 0 || terminalRows != 1 {

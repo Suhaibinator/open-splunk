@@ -324,8 +324,8 @@ func TestCheckpointStoreSetManyPersistenceFailureRollsBackMemory(t *testing.T) {
 	if got.Offset != existing.Offset || got.LineNumber != existing.LineNumber || !got.UpdatedAt.Equal(existing.UpdatedAt) {
 		t.Fatalf("existing checkpoint advanced after failure: got %+v want %+v", got, existing)
 	}
-	if _, ok, err := storeAPI.Get(newID); err != nil || ok {
-		t.Fatalf("new checkpoint published after failure: ok=%v err=%v", ok, err)
+	if _, newExists, err := storeAPI.Get(newID); err != nil || newExists {
+		t.Fatalf("new checkpoint published after failure: ok=%v err=%v", newExists, err)
 	}
 
 	reopened, err := NewCheckpointStore(dir)

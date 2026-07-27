@@ -42,7 +42,7 @@ func TestJobJournalAdmitsAndFinalizesDetachedSearchMetadata(t *testing.T) {
 	job.SPL = "mutated"
 	job.RequestedIndexes[0] = "mutated"
 	var pendingRows int
-	if err := database.SQLDB().QueryRow(`SELECT COUNT(*) FROM search_history_pending`).Scan(&pendingRows); err != nil {
+	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM search_history_pending`).Scan(&pendingRows); err != nil {
 		t.Fatal(err)
 	}
 	if pendingRows != 1 {
@@ -78,7 +78,7 @@ func TestJobJournalAdmitsAndFinalizesDetachedSearchMetadata(t *testing.T) {
 		t.Fatalf("matched-events counter was invented: %+v", got)
 	}
 	var indexedAppID, indexedSavedSearchID string
-	if err := database.SQLDB().QueryRow(`SELECT app_id, saved_search_id FROM search_history WHERE search_job_id = ?`, terminal.ID).Scan(&indexedAppID, &indexedSavedSearchID); err != nil {
+	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT app_id, saved_search_id FROM search_history WHERE search_job_id = ?`, terminal.ID).Scan(&indexedAppID, &indexedSavedSearchID); err != nil {
 		t.Fatal(err)
 	}
 	if indexedAppID != "search-app" || indexedSavedSearchID != "saved-1" {

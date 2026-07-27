@@ -34,7 +34,9 @@ func TestExecutionProgressIsOptional(t *testing.T) {
 	if driverContext == parent || reporter == nil || option == nil {
 		t.Fatal("progress sink did not enable a derived context and ClickHouse progress option")
 	}
-	reporter.finish(parent, nil)
+	if err := reporter.finish(parent, nil); err != nil {
+		t.Fatalf("finish() error = %v", err)
+	}
 }
 
 func TestExecutorExecuteAttachesAndForwardsClickHouseProgress(t *testing.T) {

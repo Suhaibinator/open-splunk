@@ -635,11 +635,11 @@ func (v *Validator) redactKeyValueTextChanged(
 			// prose containing {\"password\":\"...\"}). Precisely rewriting one
 			// value would require decoding and re-encoding the surrounding string.
 			// Fail closed at the current string/raw boundary instead.
-			change := boundaryChangedBy(match)
+			boundaryChange := boundaryChangedBy(match)
 			if len(v.ordered) > 0 {
-				return raw, change
+				return raw, boundaryChange
 			}
-			return []byte(match.replacement), change
+			return []byte(match.replacement), boundaryChange
 		}
 
 		valueStart := cursor + 1
@@ -649,17 +649,17 @@ func (v *Validator) redactKeyValueTextChanged(
 		}
 		valueEnd, ambiguousValue := v.rawSecretValueEnd(raw, valueStart, match.kind)
 		if ambiguousValue {
-			change := boundaryChangedBy(match)
+			boundaryChange := boundaryChangedBy(match)
 			if len(v.ordered) > 0 {
-				return raw, change
+				return raw, boundaryChange
 			}
-			return []byte(match.replacement), change
+			return []byte(match.replacement), boundaryChange
 		}
 		if valueEnd < valueStart || (valueEnd == valueStart && match.kind == rawSecretValue) {
 			continue
 		}
 		requiresOrderedFallback := match.order > 0 &&
-			bytes.IndexAny(raw[valueStart:valueEnd], "=:") >= 0
+			bytes.ContainsAny(raw[valueStart:valueEnd], "=:")
 		matchChange := changedBy(match)
 		matchChange.requiresOrderedFallback = requiresOrderedFallback
 		if len(v.ordered) > 0 &&
@@ -1414,11 +1414,11 @@ func (v *Validator) redactJSONValue(
 			if !allowOrderedReplay {
 				return typed, change
 			}
-			redacted, orderedChange := v.redactTextInPolicyOrder(typedBytes)
-			if bytes.Equal(redacted, typedBytes) {
+			replayed, orderedChange := v.redactTextInPolicyOrder(typedBytes)
+			if bytes.Equal(replayed, typedBytes) {
 				return typed, redactionChange{}
 			}
-			return string(redacted), orderedChange
+			return string(replayed), orderedChange
 		}
 		redacted, textChange := v.redactKeyValueTextChanged(
 			embedded,
@@ -1430,11 +1430,11 @@ func (v *Validator) redactJSONValue(
 			if !allowOrderedReplay {
 				return typed, textChange
 			}
-			redacted, orderedChange := v.redactTextInPolicyOrder(typedBytes)
-			if bytes.Equal(redacted, typedBytes) {
+			replayed, orderedChange := v.redactTextInPolicyOrder(typedBytes)
+			if bytes.Equal(replayed, typedBytes) {
 				return typed, redactionChange{}
 			}
-			return string(redacted), orderedChange
+			return string(replayed), orderedChange
 		}
 		if !allowOrderedReplay && textChange.changed {
 			return typed, textChange

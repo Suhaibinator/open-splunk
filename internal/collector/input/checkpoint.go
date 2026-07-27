@@ -48,6 +48,7 @@ func NewCheckpointStore(dir string) (CheckpointStore, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("collector/input: create checkpoint dir %s: %w", dir, err)
 	}
+	// #nosec G302 -- dir is a directory and is deliberately owner-only.
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("collector/input: secure checkpoint dir %s: %w", dir, err)
 	}

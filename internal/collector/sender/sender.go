@@ -206,7 +206,7 @@ func New(opts Options, queue wal.Queue, deadLetter DeadLetterSink, reporter Stat
 	return s, nil
 }
 
-// Run maintains the delivery stream until ctx is cancelled, reconnecting with
+// Run maintains the delivery stream until ctx is canceled, reconnecting with
 // bounded backoff. It sends Goodbye on graceful shutdown.
 func (s *Sender) Run(ctx context.Context) error {
 	if err := s.ensureClient(); err != nil {

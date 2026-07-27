@@ -284,7 +284,7 @@ func queryIntegrationInsertRetentionEvents(
 			document,
 			fieldNames,
 			fieldTypes,
-			uint8(eventfields.CurrentFieldMetadataVersion),
+			eventfields.CurrentFieldMetadataVersion,
 			"collector",
 			"logical-retention-batch",
 			uint64(index+1),

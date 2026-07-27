@@ -181,6 +181,7 @@ func (service *Service) ServeHTTP(response http.ResponseWriter, request *http.Re
 }
 
 func newConnection(service *Service, socket *websocket.Conn) *connection {
+	// #nosec G118 -- cancel is retained on connection and invoked by hardClose.
 	ctx, cancel := context.WithCancel(service.ctx)
 	return &connection{
 		service: service, socket: socket, ctx: ctx, cancel: cancel,
@@ -788,10 +789,6 @@ func (connection *connection) enqueueCanonicalPreview(data []byte, subscriptionI
 	connection.queuedBytes += frameBytes
 	connection.signalWriterLocked()
 	return queueAccepted
-}
-
-func (connection *connection) enqueueBatch(frames [][]byte) bool {
-	return connection.enqueueBatchResult(frames) == queueAccepted
 }
 
 func (connection *connection) preflightBatch(frames [][]byte) queueResult {

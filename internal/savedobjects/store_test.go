@@ -45,13 +45,12 @@ func openTestStore(t *testing.T) (*control.DB, *Store, string) {
 	if err != nil {
 		t.Fatalf("control.Open() error = %v", err)
 	}
+	t.Cleanup(func() { _ = database.Close() })
 	dependencies := new(testDependencies)
 	store, err := New(database, dependencies.options())
 	if err != nil {
-		database.Close()
 		t.Fatalf("New() error = %v", err)
 	}
-	t.Cleanup(func() { _ = database.Close() })
 	return database, store, path
 }
 
@@ -172,7 +171,7 @@ func TestDefinitionPersistenceIsDeterministicAndDefinitionOnly(t *testing.T) {
 	}
 	var encoded []byte
 	var name, appID, ownerID string
-	if err := database.SQLDB().QueryRow(`SELECT definition_proto, name, app_id, owner_id FROM saved_searches WHERE saved_search_id = ?`, created.SavedSearchId).Scan(&encoded, &name, &appID, &ownerID); err != nil {
+	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT definition_proto, name, app_id, owner_id FROM saved_searches WHERE saved_search_id = ?`, created.SavedSearchId).Scan(&encoded, &name, &appID, &ownerID); err != nil {
 		t.Fatalf("read raw definition: %v", err)
 	}
 	if !slices.Equal(encoded, want) || name != "Canonical" || appID != "app" || ownerID != "owner" {
@@ -572,7 +571,7 @@ func TestMalformedStoredProtoAndMetadataAreRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.SQLDB().Exec(`UPDATE saved_searches SET definition_proto = x'ff' WHERE saved_search_id = ?`, created.SavedSearchId); err != nil {
+	if _, err := database.SQLDB().ExecContext(ctx, `UPDATE saved_searches SET definition_proto = x'ff' WHERE saved_search_id = ?`, created.SavedSearchId); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Get(ctx, scope, created.SavedSearchId); err == nil || errors.Is(err, control.ErrNotFound) {
@@ -583,7 +582,7 @@ func TestMalformedStoredProtoAndMetadataAreRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.SQLDB().Exec(`UPDATE saved_searches SET name = 'mismatch' WHERE saved_search_id = ?`, other.SavedSearchId); err != nil {
+	if _, err := database.SQLDB().ExecContext(ctx, `UPDATE saved_searches SET name = 'mismatch' WHERE saved_search_id = ?`, other.SavedSearchId); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Get(ctx, scope, other.SavedSearchId); err == nil {
@@ -598,6 +597,7 @@ func TestCancellationAndBoundedInputs(t *testing.T) {
 	if _, err := store.Create(ctx, AccessScope{OwnerID: "owner"}, savedSearchDefinition("test", "app")); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Create(canceled) error = %v, want context.Canceled", err)
 	}
+	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
 	if _, err := store.Get(nil, AccessScope{OwnerID: "owner"}, "id"); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Get(nil context) error = %v, want ErrInvalidArgument", err)
 	}

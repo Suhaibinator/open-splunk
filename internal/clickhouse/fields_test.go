@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"errors"
 	"reflect"
 	"slices"
 	"strings"
@@ -397,7 +398,8 @@ func TestCompileFieldCatalogRejectsTransformingAndForgedPlans(t *testing.T) {
 	}
 	for _, logical := range tests {
 		_, err := (Compiler{}).CompileFieldCatalog(logical, FieldCatalogSpec{MaximumFields: 10})
-		diagnostic, ok := err.(*plan.Diagnostic)
+		diagnostic := &plan.Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_FIELD_ANALYSIS_PIPELINE" {
 			t.Errorf("CompileFieldCatalog(%#v) error = %#v", logical.Operators, err)
 		}

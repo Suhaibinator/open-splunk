@@ -6,6 +6,7 @@ import (
 )
 
 func TestStartClickHouseRejectsNilContextWithoutCallingDocker(t *testing.T) {
+	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
 	if _, err := StartClickHouse(nil, ""); err == nil || !strings.Contains(err.Error(), "context is required") {
 		t.Fatalf("StartClickHouse(nil) error = %v", err)
 	}

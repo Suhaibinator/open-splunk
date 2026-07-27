@@ -194,7 +194,7 @@ func (service *Service) Get(ctx context.Context, access searchjobs.AccessScope, 
 		return Result{}, fmt.Errorf("rebuild completed search for timeline: %w", err)
 	}
 	if err := plan.ValidateTimelineEligibility(logical); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrTimelineUnsupported, err)
+		return Result{}, fmt.Errorf("%w: %w", ErrTimelineUnsupported, err)
 	}
 	spec := clickhouse.TimelineSpec{
 		FirstBucket: geometry.FirstBucket,
@@ -209,9 +209,9 @@ func (service *Service) Get(ctx context.Context, access searchjobs.AccessScope, 
 		if errors.As(err, &diagnostic) {
 			switch {
 			case diagnostic.Code == "SPL_QUERY_TOO_COMPLEX":
-				return Result{}, fmt.Errorf("%w: compile completed search timeline: %v", searchjobs.ErrExecutionLimit, err)
+				return Result{}, fmt.Errorf("%w: compile completed search timeline: %w", searchjobs.ErrExecutionLimit, err)
 			case strings.HasPrefix(diagnostic.Code, "SPL_UNSUPPORTED_TIMELINE_"):
-				return Result{}, fmt.Errorf("%w: %v", ErrTimelineUnsupported, err)
+				return Result{}, fmt.Errorf("%w: %w", ErrTimelineUnsupported, err)
 			}
 		}
 		return Result{}, fmt.Errorf("compile completed search timeline: %w", err)

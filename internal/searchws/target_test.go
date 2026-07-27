@@ -2,6 +2,7 @@ package searchws
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -152,7 +153,7 @@ func TestResolvedTargetPinClosesEvictionAttachRace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.resolveTarget(context.Background(), targetKey{kind: targetKindSearch, id: secondJob.ID}); err != errTargetCapacity {
+	if _, err := service.resolveTarget(context.Background(), targetKey{kind: targetKindSearch, id: secondJob.ID}); !errors.Is(err, errTargetCapacity) {
 		t.Fatalf("resolve while first target pinned = %v, want capacity", err)
 	}
 	service.releaseResolvedTarget(first)

@@ -559,7 +559,7 @@ func waitForHealth(t *testing.T, ctx context.Context, client *http.Client, baseU
 			if readErr == nil && response.StatusCode == http.StatusOK && string(body) == "ok\n" {
 				return
 			}
-			last = fmt.Errorf("status %d body %q read error %v", response.StatusCode, body, readErr)
+			last = fmt.Errorf("status %d body %q read error %w", response.StatusCode, body, readErr)
 		} else {
 			last = err
 		}

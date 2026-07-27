@@ -196,6 +196,7 @@ func TestExecutorExecuteFieldCatalogReturnsMetadataUnavailableAtomically(t *test
 func TestExecutorExecuteFieldCatalogHonorsContextAtEveryBoundary(t *testing.T) {
 	t.Run("nil", func(t *testing.T) {
 		connection := &fakeQueryConnection{rows: fieldCatalogFakeRows(0)}
+		//nolint:staticcheck // This case explicitly verifies the nil-context guard.
 		got, err := mustExecutor(t, connection).ExecuteFieldCatalog(nil, validCompiledFieldCatalog(1))
 		if err == nil || !reflect.DeepEqual(got, FieldCatalogResult{}) || connection.query != "" {
 			t.Fatalf("ExecuteFieldCatalog(nil) = (%#v, %v), query=%q", got, err, connection.query)

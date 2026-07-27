@@ -432,7 +432,7 @@ func decodeEntry(encoded, expectedChecksum []byte) (*opensplunkv1.SearchHistoryE
 	normalizedEntry, normalized, err := normalizeEntry(entry)
 	if err != nil {
 		// Persisted corruption is an availability failure, never caller input.
-		return nil, indexedEntry{}, fmt.Errorf("validate persisted search-history entry: %v", err)
+		return nil, indexedEntry{}, fmt.Errorf("validate persisted search-history entry: %w", err)
 	}
 	if !bytes.Equal(normalized.encoded, encoded) {
 		return nil, indexedEntry{}, errors.New("persisted search-history entry is not canonical")

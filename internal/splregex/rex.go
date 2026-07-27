@@ -67,7 +67,7 @@ func CompileExtractionPattern(pattern string) (ExtractionPattern, error) {
 
 	parsed, err := syntax.Parse(pattern, syntax.Perl)
 	if err != nil {
-		return ExtractionPattern{}, fmt.Errorf("%w: %v", ErrInvalidExtractionPattern, err)
+		return ExtractionPattern{}, fmt.Errorf("%w: %w", ErrInvalidExtractionPattern, err)
 	}
 	normalized := parsed.String()
 	if len("(?-s)")+len(normalized) > MaximumExtractionPatternBytes {

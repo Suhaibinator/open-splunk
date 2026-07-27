@@ -324,7 +324,7 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 		}
 		destinations, err := scanDestinations(columnTypes)
 		if err != nil {
-			return fmt.Errorf("%w: prepare ClickHouse row scan: %v", searchjobs.ErrInvalidResult, err)
+			return fmt.Errorf("%w: prepare ClickHouse row scan: %w", searchjobs.ErrInvalidResult, err)
 		}
 		if err := rows.Scan(destinations...); err != nil {
 			return classifyQueryError(executionContext, fmt.Errorf("scan ClickHouse result row: %w", err))
@@ -346,7 +346,7 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 				value, err = convertValue(scannedValue(destination))
 			}
 			if err != nil {
-				return fmt.Errorf("%w: convert ClickHouse column %q: %v", searchjobs.ErrInvalidResult, columns[index], err)
+				return fmt.Errorf("%w: convert ClickHouse column %q: %w", searchjobs.ErrInvalidResult, columns[index], err)
 			}
 			values[index] = value
 		}
@@ -483,7 +483,7 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 		}
 		destinations, err := scanDestinations(columnTypes)
 		if err != nil {
-			return bufferedTimechart{}, fmt.Errorf("%w: prepare ClickHouse timechart row scan: %v", searchjobs.ErrInvalidResult, err)
+			return bufferedTimechart{}, fmt.Errorf("%w: prepare ClickHouse timechart row scan: %w", searchjobs.ErrInvalidResult, err)
 		}
 		if err := rows.Scan(destinations...); err != nil {
 			return bufferedTimechart{}, classifyQueryError(ctx, fmt.Errorf("scan ClickHouse timechart result row: %w", err))
@@ -759,7 +759,7 @@ func readChartRows(
 		}
 		destinations, err := scanDestinations(columnTypes)
 		if err != nil {
-			return bufferedChart{}, fmt.Errorf("%w: prepare ClickHouse chart row scan: %v", searchjobs.ErrInvalidResult, err)
+			return bufferedChart{}, fmt.Errorf("%w: prepare ClickHouse chart row scan: %w", searchjobs.ErrInvalidResult, err)
 		}
 		if err := rows.Scan(destinations...); err != nil {
 			return bufferedChart{}, classifyQueryError(ctx, fmt.Errorf("scan ClickHouse chart result row: %w", err))
@@ -1294,7 +1294,7 @@ func decodeExtendedDuration(encoded string) (time.Duration, error) {
 	if (seconds < 0 && nanos > 0) || (seconds > 0 && nanos < 0) {
 		return 0, errors.New("duration components have inconsistent signs")
 	}
-	if seconds > int64(math.MaxInt64/int64(time.Second)) || seconds < int64(math.MinInt64/int64(time.Second)) {
+	if seconds > math.MaxInt64/int64(time.Second) || seconds < math.MinInt64/int64(time.Second) {
 		return 0, errors.New("duration exceeds result range")
 	}
 	result := time.Duration(seconds) * time.Second
@@ -1481,18 +1481,18 @@ func classifyQueryError(ctx context.Context, err error) error {
 		case 158, 162, 229, 241, 396: // TOO_MANY_ROWS, TOO_DEEP_SUBQUERIES, QUERY_IS_TOO_LARGE, MEMORY_LIMIT_EXCEEDED, TOO_MANY_ROWS_OR_BYTES
 			return fmt.Errorf("%w: ClickHouse resource limit", searchjobs.ErrExecutionLimit)
 		case 202, 203, 209, 210, 225, 242, 243, 279, 285, 286, 319, 341, 999:
-			return fmt.Errorf("%w: %v", searchjobs.ErrStorageUnavailable, err)
+			return fmt.Errorf("%w: %w", searchjobs.ErrStorageUnavailable, err)
 		}
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, clickhousedriver.ErrConnectionClosed) ||
 		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) ||
 		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ETIMEDOUT) {
-		return fmt.Errorf("%w: %v", searchjobs.ErrStorageUnavailable, err)
+		return fmt.Errorf("%w: %w", searchjobs.ErrStorageUnavailable, err)
 	}
 	var networkError net.Error
 	if errors.As(err, &networkError) {
-		return fmt.Errorf("%w: %v", searchjobs.ErrStorageUnavailable, err)
+		return fmt.Errorf("%w: %w", searchjobs.ErrStorageUnavailable, err)
 	}
 	return err
 }

@@ -87,6 +87,8 @@ func (handler *spaHandler) serveIndex(response http.ResponseWriter, request *htt
 	response.Header().Set("X-Content-Type-Options", "nosniff")
 	response.WriteHeader(http.StatusOK)
 	if request.Method == http.MethodGet {
+		// #nosec G705 -- index is a trusted embedded build artifact; no request
+		// data is interpolated into the response body.
 		_, _ = response.Write(handler.index)
 	}
 }

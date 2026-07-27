@@ -275,7 +275,8 @@ func TestParseDedupRejectsUnsupportedOrAmbiguousSyntax(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse unexpectedly succeeded")
 			}
-			diagnostic, ok := err.(*Diagnostic)
+			diagnostic := &Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != "SPL_UNSUPPORTED_DEDUP_SYNTAX" {
 				t.Fatalf("diagnostic = %#v, want SPL_UNSUPPORTED_DEDUP_SYNTAX", err)
 			}
@@ -788,7 +789,8 @@ func TestParseRexRejectsUnsupportedOrMalformedForms(t *testing.T) {
 		if err == nil {
 			t.Fatalf("Parse(%q) unexpectedly succeeded", test.source)
 		}
-		diagnostic, ok := err.(*Diagnostic)
+		diagnostic := &Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != test.code {
 			t.Fatalf("Parse(%q) diagnostic = %#v, want %s", test.source, err, test.code)
 		}
@@ -841,7 +843,8 @@ func TestParseEvalRejectsMalformedOrUnsupportedExpressions(t *testing.T) {
 		if err == nil {
 			t.Fatalf("Parse(%q) unexpectedly succeeded", test.source)
 		}
-		diagnostic, ok := err.(*Diagnostic)
+		diagnostic := &Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != test.code {
 			t.Fatalf("Parse(%q) diagnostic = %#v, want %s", test.source, err, test.code)
 		}
@@ -1004,7 +1007,8 @@ func TestUnsupportedCommandHasStageAndLocation(t *testing.T) {
 	if err == nil {
 		t.Fatal("Parse succeeded, want error")
 	}
-	diagnostic, ok := err.(*Diagnostic)
+	diagnostic := &Diagnostic{}
+	ok := errors.As(err, &diagnostic)
 	if !ok {
 		t.Fatalf("error = %T, want *Diagnostic", err)
 	}
@@ -1396,7 +1400,8 @@ func TestParseStatsListRequiresExactlyOneField(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse succeeded, want error")
 			}
-			diagnostic, ok := err.(*Diagnostic)
+			diagnostic := &Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != test.code {
 				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
 			}
@@ -1423,7 +1428,8 @@ func TestParseStatsDistinctCountRequiresExactlyOneField(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse succeeded, want error")
 			}
-			diagnostic, ok := err.(*Diagnostic)
+			diagnostic := &Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != test.code {
 				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
 			}
@@ -1451,7 +1457,8 @@ func TestParseStatsSumAndAvgRequireExactlyOneField(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse succeeded, want error")
 			}
-			diagnostic, ok := err.(*Diagnostic)
+			diagnostic := &Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != test.code {
 				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
 			}
@@ -1480,7 +1487,8 @@ func TestParseStatsMinAndMaxRequireExactlyOneField(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse succeeded, want error")
 			}
-			diagnostic, ok := err.(*Diagnostic)
+			diagnostic := &Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != test.code {
 				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
 			}
@@ -1833,7 +1841,8 @@ func TestParseBinRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse succeeded")
 			}
-			diagnostic, ok := err.(*Diagnostic)
+			diagnostic := &Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != test.code {
 				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
 			}
@@ -1883,7 +1892,8 @@ func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse succeeded")
 			}
-			diagnostic, ok := err.(*Diagnostic)
+			diagnostic := &Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != test.code {
 				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
 			}
@@ -2058,7 +2068,8 @@ func TestParseChartSpellingsAgreeOnKeywordFieldNames(t *testing.T) {
 		`index=gradethis | chart count by path over, level`,
 		`index=gradethis | chart count by level over`,
 	} {
-		diagnostic, ok := errorFor(t, source).(*Diagnostic)
+		diagnostic := &Diagnostic{}
+		ok := errors.As(errorFor(t, source), &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_SYNTAX" {
 			t.Fatalf("Parse(%q) diagnostic = %#v", source, diagnostic)
 		}
@@ -2103,7 +2114,8 @@ func TestParseChartRejectsUnsupportedAggregates(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
-			diagnostic, ok := err.(*Diagnostic)
+			diagnostic := &Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_AGGREGATE" {
 				t.Fatalf("diagnostic = %#v, want SPL_UNSUPPORTED_CHART_AGGREGATE", err)
 			}
@@ -2151,7 +2163,8 @@ func TestParseChartRejectsEveryOptionIncludingDocumentedDefaults(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
-			diagnostic, ok := err.(*Diagnostic)
+			diagnostic := &Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_OPTION" {
 				t.Fatalf("diagnostic = %#v, want SPL_UNSUPPORTED_CHART_OPTION", err)
 			}
@@ -2207,7 +2220,8 @@ func TestParseChartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse succeeded")
 			}
-			diagnostic, ok := err.(*Diagnostic)
+			diagnostic := &Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != test.code {
 				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
 			}
@@ -2230,7 +2244,8 @@ func TestParseChartSingleSplitSuggestsStats(t *testing.T) {
 		`index=main | chart count`,
 	} {
 		_, err := Parse(source)
-		diagnostic, ok := err.(*Diagnostic)
+		diagnostic := &Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_SYNTAX" {
 			t.Fatalf("Parse(%q) diagnostic = %#v", source, err)
 		}
@@ -2282,7 +2297,8 @@ func TestUnsupportedStatsAggregatesAreSourceLocated(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse succeeded, want error")
 			}
-			diagnostic, ok := err.(*Diagnostic)
+			diagnostic := &Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok {
 				t.Fatalf("error = %T, want *Diagnostic", err)
 			}
@@ -2350,7 +2366,8 @@ func TestParseTopRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse succeeded, want error")
 			}
-			diagnostic, ok := err.(*Diagnostic)
+			diagnostic := &Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != test.code {
 				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
 			}
@@ -2369,7 +2386,8 @@ func TestParseTopLocatesUnsupportedOptionAfterLimit(t *testing.T) {
 		if err == nil {
 			t.Fatalf("Parse(%q) succeeded, want error", source)
 		}
-		diagnostic, ok := err.(*Diagnostic)
+		diagnostic := &Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_TOP_SYNTAX" ||
 			!strings.Contains(diagnostic.Message, `option "showperc"`) {
 			t.Fatalf("diagnostic = %#v", err)
@@ -2438,7 +2456,8 @@ func TestParseRareRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse succeeded, want error")
 			}
-			diagnostic, ok := err.(*Diagnostic)
+			diagnostic := &Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != test.code {
 				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
 			}
@@ -2469,7 +2488,11 @@ func TestParseErrorsAreSourceLocated(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse succeeded, want error")
 			}
-			diagnostic := err.(*Diagnostic)
+			diagnostic := func() *Diagnostic {
+				target := &Diagnostic{}
+				_ = errors.As(err, &target)
+				return target
+			}()
 			if diagnostic.Code != test.code || diagnostic.Range.Start.Line != test.line || diagnostic.Range.Start.Column != test.column {
 				t.Fatalf("diagnostic = %#v", diagnostic)
 			}
@@ -2494,7 +2517,7 @@ func FuzzParseDoesNotPanic(f *testing.F) {
 	} {
 		f.Add(seed)
 	}
-	f.Fuzz(func(t *testing.T, source string) {
+	f.Fuzz(func(_ *testing.T, source string) {
 		_, _ = Parse(source)
 	})
 }
@@ -2530,7 +2553,8 @@ func assertParseDiagnosticCode(t *testing.T, source, code string) {
 	if err == nil {
 		t.Fatalf("Parse(%q) unexpectedly succeeded", source)
 	}
-	diagnostic, ok := err.(*Diagnostic)
+	diagnostic := &Diagnostic{}
+	ok := errors.As(err, &diagnostic)
 	if !ok || diagnostic.Code != code {
 		t.Fatalf("Parse(%q) error = %#v, want %s", source, err, code)
 	}

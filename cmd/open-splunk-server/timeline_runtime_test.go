@@ -140,7 +140,7 @@ func TestRuntimeHTTPHandlerAdvertisesEnforcedTimelineService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal bootstrap request: %v", err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/v1/system/bootstrap", bytes.NewReader(payload))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1/api/v1/system/bootstrap", bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -197,7 +197,7 @@ func TestRuntimeHTTPHandlerServesConfiguredFieldCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal field request: %v", err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/v1/search/jobs/fields/list", bytes.NewReader(payload))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1/api/v1/search/jobs/fields/list", bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -246,7 +246,7 @@ func TestRuntimeHTTPHandlerServesConfiguredFieldSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal field summary request: %v", err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/v1/search/jobs/field-summary", bytes.NewReader(payload))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1/api/v1/search/jobs/field-summary", bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

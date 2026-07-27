@@ -117,7 +117,7 @@ func (q *alwaysFullQueue) Append([]*opensplunkv1.LogEvent) (*opensplunkv1.EventB
 	return nil, wal.ErrQueueFull
 }
 
-// TestFlushShutdownDoesNotBusySpin verifies that once ctx is cancelled and the
+// TestFlushShutdownDoesNotBusySpin verifies that once ctx is canceled and the
 // queue stays full, flush sleeps between attempts rather than spinning at 100%
 // CPU: the number of Append attempts over the grace window is bounded to roughly
 // grace/queueFullRetry, not thousands. (FIX 9)
@@ -137,7 +137,7 @@ func TestFlushShutdownDoesNotBusySpin(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled: exercise the shutdown grace path
+	cancel() // already canceled: exercise the shutdown grace path
 
 	done := make(chan struct{})
 	go func() { defer close(done); _ = d.flush(ctx, b) }()

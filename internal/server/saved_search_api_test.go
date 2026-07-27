@@ -316,7 +316,7 @@ func TestCommittedSavedSearchMutationsWinContextCancellationRace(t *testing.T) {
 			store := &fakeSavedSearches{}
 			test.stub(store, cancel)
 			handler := &apiHandler{savedSearches: store, ownerID: ownerID}
-			request := httptest.NewRequest(http.MethodPost, "/api/v1/saved-searches/"+test.name, nil).WithContext(ctx)
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/saved-searches/"+test.name, nil).WithContext(ctx)
 			err := test.call(handler, request)
 			if !errors.Is(ctx.Err(), context.Canceled) {
 				t.Fatalf("request context error = %v, want context.Canceled", ctx.Err())
@@ -458,7 +458,7 @@ func TestSavedSearchListSerializationIsCapacityBounded(t *testing.T) {
 
 func TestSavedSearchListClampsAdvertisedPageSizeToByteSafeRows(t *testing.T) {
 	t.Parallel()
-	requested := uint32(defaultMaximumPageSize)
+	requested := defaultMaximumPageSize
 	store := &fakeSavedSearches{listFn: func(_ context.Context, _ savedobjects.AccessScope, request savedobjects.ListRequest) (savedobjects.ListResult, error) {
 		if request.PageSize != maximumSavedSearchRowsPerResponse {
 			t.Fatalf("store page size = %d, want byte-safe cap %d", request.PageSize, maximumSavedSearchRowsPerResponse)

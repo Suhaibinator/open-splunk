@@ -77,10 +77,10 @@ func TestDownloadGrantRedemptionIsAtomicAndSingleUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.RedeemDownload(context.Background(), "malformed"); err != ErrInvalidDownloadGrant {
+	if _, err := manager.RedeemDownload(context.Background(), "malformed"); !errors.Is(err, ErrInvalidDownloadGrant) {
 		t.Fatalf("RedeemDownload(malformed) = %v, want exact ErrInvalidDownloadGrant", err)
 	}
-	if _, err := manager.RedeemDownload(context.Background(), strings.Repeat("x", 1<<20)); err != ErrInvalidDownloadGrant {
+	if _, err := manager.RedeemDownload(context.Background(), strings.Repeat("x", 1<<20)); !errors.Is(err, ErrInvalidDownloadGrant) {
 		t.Fatalf("RedeemDownload(oversized) = %v, want exact ErrInvalidDownloadGrant", err)
 	}
 	if _, err := manager.CreateDownloadGrant(context.Background(), testAccess, strings.Repeat("x", 1<<20)); !errors.Is(err, ErrNotFound) {
@@ -90,7 +90,7 @@ func TestDownloadGrantRedemptionIsAtomicAndSingleUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.RedeemDownload(context.Background(), unknown); err != ErrInvalidDownloadGrant {
+	if _, err := manager.RedeemDownload(context.Background(), unknown); !errors.Is(err, ErrInvalidDownloadGrant) {
 		t.Fatalf("RedeemDownload(unknown) = %v, want exact ErrInvalidDownloadGrant", err)
 	}
 
@@ -619,7 +619,7 @@ func TestGrantAndArtifactExpiryAreCheckedAfterManagerLockWait(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	clock.Advance(2 * time.Second)
 	manager.mu.Unlock()
-	if err := <-redeemed; err != ErrInvalidDownloadGrant {
+	if err := <-redeemed; !errors.Is(err, ErrInvalidDownloadGrant) {
 		t.Fatalf("RedeemDownload(after lock-delayed expiry) = %v, want exact ErrInvalidDownloadGrant", err)
 	}
 	if err := <-created; !errors.Is(err, ErrSourceExpired) {
@@ -690,7 +690,7 @@ func TestGrantChecksAreRepeatedAfterEntryLockWait(t *testing.T) {
 	if err := <-created; !errors.Is(err, ErrSourceExpired) {
 		t.Fatalf("CreateDownloadGrant(expired behind entry lock) = %v, want ErrSourceExpired", err)
 	}
-	if err := <-redeemed; err != ErrInvalidDownloadGrant {
+	if err := <-redeemed; !errors.Is(err, ErrInvalidDownloadGrant) {
 		t.Fatalf("RedeemDownload(expired behind entry lock) = %v, want exact ErrInvalidDownloadGrant", err)
 	}
 }
@@ -758,7 +758,7 @@ func TestRedeemDownloadRejectsArtifactSubstitutionWithoutExposingPaths(t *testin
 			}
 			artifactPath := filepath.Join(manager.artifactDir, completed.Artifact.FileName)
 			test.tamper(t, artifactPath)
-			if _, err := manager.RedeemDownload(context.Background(), grant.Token); err != ErrArtifactUnavailable {
+			if _, err := manager.RedeemDownload(context.Background(), grant.Token); !errors.Is(err, ErrArtifactUnavailable) {
 				t.Fatalf("RedeemDownload(tampered) = %v, want exact path-free ErrArtifactUnavailable", err)
 			}
 			if _, err := manager.RedeemDownload(context.Background(), grant.Token); !errors.Is(err, ErrInvalidDownloadGrant) {
@@ -796,10 +796,10 @@ func TestCanceledRedeemDoesNotConsumeGrantAndManagerCloseRevokesAndCloses(t *tes
 	if err := manager.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lease.Read(make([]byte, 1)); err != ErrArtifactUnavailable {
+	if _, err := lease.Read(make([]byte, 1)); !errors.Is(err, ErrArtifactUnavailable) {
 		t.Fatalf("Read(after Manager.Close) = %v, want exact ErrArtifactUnavailable", err)
 	}
-	if _, err := manager.RedeemDownload(context.Background(), revoked.Token); err != ErrInvalidDownloadGrant {
+	if _, err := manager.RedeemDownload(context.Background(), revoked.Token); !errors.Is(err, ErrInvalidDownloadGrant) {
 		t.Fatalf("RedeemDownload(revoked) = %v, want exact ErrInvalidDownloadGrant", err)
 	}
 	if _, err := os.Stat(artifactDir); !errors.Is(err, os.ErrNotExist) {

@@ -1,6 +1,7 @@
 package spl
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -34,7 +35,8 @@ func TestChartBreakPipelineAggOptionKeepsAggregateCodeInEveryPosition(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
-			diagnostic, ok := err.(*Diagnostic)
+			diagnostic := &Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_AGGREGATE" {
 				t.Fatalf("Parse(%q) diagnostic = %#v, want SPL_UNSUPPORTED_CHART_AGGREGATE", test.source, err)
 			}
@@ -52,7 +54,8 @@ func TestChartBreakPipelineAggOptionKeepsAggregateCodeInEveryPosition(t *testing
 		`index=main | chart count over path by level bins=10`,
 		`index=main | chart count by path, level bins=10`,
 	} {
-		diagnostic, ok := chartBreakPipelineParseError(t, source).(*Diagnostic)
+		diagnostic := &Diagnostic{}
+		ok := errors.As(chartBreakPipelineParseError(t, source), &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_OPTION" {
 			t.Fatalf("Parse(%q) diagnostic = %#v, want SPL_UNSUPPORTED_CHART_OPTION", source, diagnostic)
 		}
@@ -149,7 +152,8 @@ func TestChartBreakPipelineOverIsTheOnlySeparatorAsymmetry(t *testing.T) {
 		`index=main | chart count by level over`,
 		`index=main | chart count by over over`,
 	} {
-		diagnostic, ok := chartBreakPipelineParseError(t, source).(*Diagnostic)
+		diagnostic := &Diagnostic{}
+		ok := errors.As(chartBreakPipelineParseError(t, source), &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_SYNTAX" {
 			t.Fatalf("Parse(%q) diagnostic = %#v, want SPL_UNSUPPORTED_CHART_SYNTAX", source, diagnostic)
 		}
@@ -232,7 +236,8 @@ func TestChartBreakPipelineSurvivesHostileLayout(t *testing.T) {
 
 	// A trailing pipe after a complete chart is a missing command, not a chart
 	// diagnostic: chart's own clause already closed.
-	diagnostic, ok := chartBreakPipelineParseError(t, `index=main | chart count OVER path BY level |`).(*Diagnostic)
+	diagnostic := &Diagnostic{}
+	ok := errors.As(chartBreakPipelineParseError(t, `index=main | chart count OVER path BY level |`), &diagnostic)
 	if !ok || diagnostic.Code != "SPL_EXPECTED_COMMAND" {
 		t.Fatalf("trailing pipe diagnostic = %#v, want SPL_EXPECTED_COMMAND", diagnostic)
 	}
@@ -253,7 +258,8 @@ func TestChartBreakPipelineQuotedAndNonWordAggregates(t *testing.T) {
 		`index=main | chart counter over path by level`,
 		`index=main | chart countx over path by level`,
 	} {
-		diagnostic, ok := chartBreakPipelineParseError(t, source).(*Diagnostic)
+		diagnostic := &Diagnostic{}
+		ok := errors.As(chartBreakPipelineParseError(t, source), &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_AGGREGATE" {
 			t.Fatalf("Parse(%q) diagnostic = %#v, want SPL_UNSUPPORTED_CHART_AGGREGATE", source, diagnostic)
 		}
@@ -289,7 +295,8 @@ func TestChartBreakPipelineBudgetsCountChartAsOneOrdinaryStage(t *testing.T) {
 		t.Fatal("the budget-filling pipeline lost its terminal chart")
 	}
 
-	diagnostic, ok := chartBreakPipelineParseError(t, build(maxPipelineCommands)).(*Diagnostic)
+	diagnostic := &Diagnostic{}
+	ok := errors.As(chartBreakPipelineParseError(t, build(maxPipelineCommands)), &diagnostic)
 	if !ok || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
 		t.Fatalf("over-budget diagnostic = %#v, want SPL_QUERY_TOO_COMPLEX", diagnostic)
 	}
@@ -302,7 +309,8 @@ func TestChartBreakPipelineBudgetsCountChartAsOneOrdinaryStage(t *testing.T) {
 	if _, err := Parse(fits); err != nil {
 		t.Fatalf("Parse(exactly %d source bytes ending in chart): %v", maxSPLSourceBytes, err)
 	}
-	diagnostic, ok = chartBreakPipelineParseError(t, fits+" ").(*Diagnostic)
+	diagnostic = &Diagnostic{}
+	ok = errors.As(chartBreakPipelineParseError(t, fits+" "), &diagnostic)
 	if !ok || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
 		t.Fatalf("oversized-source diagnostic = %#v, want SPL_QUERY_TOO_COMPLEX", diagnostic)
 	}

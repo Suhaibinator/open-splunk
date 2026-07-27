@@ -238,7 +238,7 @@ func scanHistoryEntry(row rowScanner) (*opensplunkv1.SearchHistoryEntry, error) 
 		return nil, err
 	}
 	if _, err := normalizeScope(AccessScope{TenantID: tenantID, OwnerID: ownerID}); err != nil {
-		return nil, fmt.Errorf("persisted search-history scope is invalid: %v", err)
+		return nil, fmt.Errorf("persisted search-history scope is invalid: %w", err)
 	}
 	entry, indexed, err := decodeEntry(encoded, checksum)
 	if err != nil {

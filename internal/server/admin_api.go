@@ -577,7 +577,7 @@ func (handler *apiHandler) resolveIndex(ctx context.Context, selector *opensplun
 	case *opensplunkv1.IndexSelector_IndexId:
 		id, err := adminObjectID(selected.IndexId, maximumIndexIDBytes, "index ID")
 		if err != nil {
-			return control.Index{}, fmt.Errorf("%w: %v", control.ErrInvalidArgument, err)
+			return control.Index{}, fmt.Errorf("%w: %w", control.ErrInvalidArgument, err)
 		}
 		return handler.indexAdmin.GetIndex(ctx, id)
 	case *opensplunkv1.IndexSelector_IndexName:
@@ -834,13 +834,13 @@ func tokenDefinitionFromProto(input *opensplunkv1.IngestionTokenDefinition) (aut
 	seen := make(map[string]struct{}, len(constraints.GetAllowedIndexNames()))
 	allowedIndexes := make([]string, 0, len(constraints.GetAllowedIndexNames()))
 	for _, inputName := range constraints.GetAllowedIndexNames() {
-		name, err := control.NormalizeIndexName(inputName)
+		normalizedName, err := control.NormalizeIndexName(inputName)
 		if err != nil {
 			return auth.UpdateCollectorTokenRequest{}, errors.New("ingestion token contains an invalid index scope")
 		}
-		if _, exists := seen[name]; !exists {
-			seen[name] = struct{}{}
-			allowedIndexes = append(allowedIndexes, name)
+		if _, exists := seen[normalizedName]; !exists {
+			seen[normalizedName] = struct{}{}
+			allowedIndexes = append(allowedIndexes, normalizedName)
 		}
 	}
 	slices.Sort(allowedIndexes)
@@ -1044,7 +1044,8 @@ func validateAdminText(value string, maximumBytes int, allowEmpty, allowLineBrea
 		return errors.New("text is invalid")
 	}
 	for _, character := range value {
-		if unicode.IsControl(character) && !(allowLineBreaks && (character == '\n' || character == '\r' || character == '\t')) {
+		if unicode.IsControl(character) &&
+			(!allowLineBreaks || (character != '\n' && character != '\r' && character != '\t')) {
 			return errors.New("text is invalid")
 		}
 	}

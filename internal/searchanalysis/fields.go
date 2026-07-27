@@ -402,6 +402,7 @@ func NewFieldService(config FieldConfig) (*FieldService, error) {
 		clock = time.Now
 	}
 
+	// #nosec G118 -- lifecycleCancel is retained on FieldService and invoked by Close.
 	lifecycleContext, lifecycleCancel := context.WithCancel(context.Background())
 	return &FieldService{
 		searches: config.Searches, compiler: config.Compiler, executor: config.Executor,
@@ -759,7 +760,7 @@ func (service *FieldService) buildFieldCatalog(ctx context.Context, key fieldCac
 		return nil, fmt.Errorf("rebuild completed search for field analysis: %w", err)
 	}
 	if err := plan.ValidateFieldAnalysisEligibility(logical); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrFieldAnalysisUnsupported, err)
+		return nil, fmt.Errorf("%w: %w", ErrFieldAnalysisUnsupported, err)
 	}
 	spec := clickhouse.FieldCatalogSpec{MaximumFields: service.maximumFields}
 	compiled, err := service.compiler.CompileFieldCatalog(logical, spec)
@@ -791,9 +792,9 @@ func classifyFieldCompileError(err error) error {
 	if errors.As(err, &diagnostic) {
 		switch {
 		case diagnostic.Code == "SPL_QUERY_TOO_COMPLEX":
-			return fmt.Errorf("%w: compile completed search field catalog: %v", searchjobs.ErrExecutionLimit, err)
+			return fmt.Errorf("%w: compile completed search field catalog: %w", searchjobs.ErrExecutionLimit, err)
 		case strings.HasPrefix(diagnostic.Code, "SPL_UNSUPPORTED_FIELD_ANALYSIS_"):
-			return fmt.Errorf("%w: %v", ErrFieldAnalysisUnsupported, err)
+			return fmt.Errorf("%w: %w", ErrFieldAnalysisUnsupported, err)
 		}
 	}
 	return fmt.Errorf("compile completed search field catalog: %w", err)

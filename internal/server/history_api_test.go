@@ -463,7 +463,7 @@ func TestCommittedSearchHistoryMutationsWinContextCancellationRace(t *testing.T)
 			store := &fakeSearchHistory{}
 			test.stub(store, cancel)
 			handler := &apiHandler{searchHistory: store, ownerID: "owner-1", tenantID: "tenant-1"}
-			request := httptest.NewRequest(http.MethodPost, "/api/v1/search/history/"+test.name, nil).WithContext(ctx)
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/search/history/"+test.name, nil).WithContext(ctx)
 			if err := test.call(handler, request); err != nil {
 				t.Fatalf("committed %s returned error = %v", test.name, err)
 			}
@@ -483,7 +483,7 @@ func TestSearchHistoryRoutesAreExactAndConditional(t *testing.T) {
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("suffix status = %d", response.Code)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/search/history/get", nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/search/history/get", nil)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodPost {

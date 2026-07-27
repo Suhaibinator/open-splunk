@@ -29,7 +29,7 @@ type conn struct {
 	ready  *opensplunkv1.CollectorReady
 	// ctx governs the pump, heartbeat, and retry goroutines; it is derived from
 	// the parent Run context. streamCancel tears down the underlying gRPC stream
-	// and is kept separate so Goodbye can still be sent after ctx is cancelled.
+	// and is kept separate so Goodbye can still be sent after ctx is canceled.
 	ctx          context.Context
 	cancel       context.CancelFunc
 	streamCancel context.CancelFunc
@@ -108,7 +108,7 @@ func (s *Sender) runConnection(parent context.Context) (connected bool, reconnec
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	// The stream lives on an independent context so a Goodbye can be transmitted
-	// after the parent context is cancelled during graceful shutdown.
+	// after the parent context is canceled during graceful shutdown.
 	streamCtx, streamCancel := context.WithCancel(context.Background())
 	defer streamCancel()
 
@@ -329,7 +329,7 @@ func (c *conn) pumpLoop() {
 			var err error
 			batch, err = c.s.queue.NextBatch(c.ctx)
 			if err != nil {
-				return // context cancelled
+				return // context canceled
 			}
 		}
 
@@ -457,7 +457,7 @@ func (c *conn) batchExceedsThrottleLimits(batch *opensplunkv1.EventBatch) bool {
 // waitOutThrottle blocks until the active throttle expires or is lifted, so the
 // held batch can be retried. When the throttle has an effective_until it uses a
 // ctx-aware sleep to that instant; otherwise it waits on cond for the next
-// Throttle or connection state change. It returns false when ctx is cancelled.
+// Throttle or connection state change. It returns false when ctx is canceled.
 func (c *conn) waitOutThrottle() bool {
 	c.mu.Lock()
 	if !c.throttleActiveLocked() {
@@ -715,6 +715,8 @@ func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) error {
 		c.mu.Unlock()
 		return nil
 	}
+	// #nosec G118 -- cancelRetry is retained in pendingRetry and invoked on
+	// acknowledgement, connection shutdown, or superseding retry state.
 	retryCtx, cancelRetry := context.WithCancel(c.ctx)
 	scheduled := &scheduledRetry{cancel: cancelRetry, done: make(chan struct{})}
 	c.pendingRetry[seq] = scheduled

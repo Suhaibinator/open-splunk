@@ -83,7 +83,7 @@ func NewManager(cfg Config, checkpoints ManagerCheckpointStore) (Manager, error)
 // Events returns the channel of framed raw events; closed when Run returns.
 func (m *manager) Events() <-chan RawEvent { return m.events }
 
-// Run blocks tailing until ctx is cancelled. It never returns for a per-file
+// Run blocks tailing until ctx is canceled. It never returns for a per-file
 // read error (those surface through Health); it returns nil once every tailer
 // has drained and the events channel is closed. Run must be called once.
 func (m *manager) Run(ctx context.Context) error {
@@ -653,7 +653,7 @@ func (t *tailer) run(ctx context.Context) {
 		} else {
 			pendingLen, cont := t.drain(ctx, fr)
 			if !cont {
-				return // ctx cancelled mid-emit
+				return // ctx canceled mid-emit
 			}
 			if err := t.refreshGuard(); err != nil {
 				t.m.setReadError(t.pathStr(), err)
@@ -747,8 +747,8 @@ func (t *tailer) refreshGuard() error {
 	length := t.offset
 	// fingerprintBytesOr guarantees a positive int before manager construction.
 	// #nosec G115 -- positive int values are exactly representable as uint64.
-	if max := uint64(t.m.fpBytes); length > max {
-		length = max
+	if maximum := uint64(t.m.fpBytes); length > maximum {
+		length = maximum
 	}
 	if length > math.MaxUint32 {
 		return fmt.Errorf("fingerprint guard length %d exceeds uint32", length)
@@ -887,7 +887,7 @@ func (t *tailer) emitFlush(ctx context.Context, fr framing.Framer) (emitted, ctx
 
 // emit copies the frame bytes (the receiver owns them), tags the event with the
 // tailer's current path and identity, and sends it. It returns false only when
-// ctx is cancelled before the send completes.
+// ctx is canceled before the send completes.
 func (t *tailer) emit(ctx context.Context, fr framing.Frame) bool {
 	b := make([]byte, len(fr.Bytes))
 	copy(b, fr.Bytes)

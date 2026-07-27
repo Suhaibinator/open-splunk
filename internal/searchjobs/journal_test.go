@@ -675,7 +675,8 @@ func TestTerminalJournalFailureIsObservableAndDoesNotChangeJobOutcome(t *testing
 			// Reading manager and entry state from the error hook must not
 			// deadlock either. Panic containment is tested by deliberately
 			// panicking after the error has become observable.
-			if journalErr, ok := err.(*JournalError); ok {
+			journalErr := &JournalError{}
+			if errors.As(err, &journalErr) {
 				if job, getErr := manager.Get(journalErr.JobID); getErr != nil || !job.State.terminal() {
 					t.Errorf("Get() from journal error hook = (%#v, %v)", job, getErr)
 				}

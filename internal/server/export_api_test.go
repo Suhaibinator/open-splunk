@@ -455,19 +455,19 @@ func TestExportRoutesAreExactConditionalAndAdvertised(t *testing.T) {
 	service := &fakeExports{}
 	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI()})
 
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/search/exports/create", nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/search/exports/create", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodPost {
 		t.Fatalf("typed method status/allow = %d / %q", response.Code, response.Header().Get("Allow"))
 	}
-	request = httptest.NewRequest(http.MethodPost, exportDownloadPath, nil)
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, exportDownloadPath, nil)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodGet {
 		t.Fatalf("download method status/allow = %d / %q", response.Code, response.Header().Get("Allow"))
 	}
-	request = httptest.NewRequest(http.MethodGet, exportDownloadPath+"/extra", nil)
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath+"/extra", nil)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusNotFound {
@@ -497,7 +497,7 @@ func TestExportRoutesAreExactConditionalAndAdvertised(t *testing.T) {
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("disabled typed route status = %d", response.Code)
 	}
-	request = httptest.NewRequest(http.MethodGet, exportDownloadPath, nil)
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
 	response = httptest.NewRecorder()
 	disabled.ServeHTTP(response, request)
 	if response.Code != http.StatusNotFound {
@@ -541,7 +541,7 @@ func TestExportDownloadReturnsRawArtifactWithSecureHeaders(t *testing.T) {
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI(), RouteTimeout: time.Millisecond,
 	})
-	request := httptest.NewRequest(http.MethodGet, exportDownloadPath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
 	request.Header.Set("Authorization", "Bearer download-token")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -586,7 +586,7 @@ func TestExportDownloadKeepsDeadlineThroughServerFinalFlush(t *testing.T) {
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI(),
 	})
-	request := httptest.NewRequest(http.MethodGet, exportDownloadPath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
 	request.Header.Set("Authorization", "Bearer download-token")
 	response := &deadlineResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
 	handler.ServeHTTP(response, request)
@@ -614,7 +614,7 @@ func TestExportDownloadFlushesBeforeReleasingArtifactLease(t *testing.T) {
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI(),
 		MaximumConcurrentDownloads: 1,
 	})
-	request := httptest.NewRequest(http.MethodGet, exportDownloadPath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
 	request.Header.Set("Authorization", "Bearer download-token")
 	response := &flushResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
 	response.onFlush = func() {
@@ -667,7 +667,7 @@ func TestExportAPIRoutesRejectDNSRebindingBeforeServiceOrGrantUse(t *testing.T) 
 		t.Fatalf("hostile typed request reached service: create = %d redeem = %d", createCalls, redeemCalls)
 	}
 
-	rawRequest := httptest.NewRequest(http.MethodGet, exportDownloadPath, nil)
+	rawRequest := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
 	rawRequest.Host = "attacker.example"
 	rawRequest.Header.Set("Origin", "http://attacker.example")
 	rawRequest.Header.Set("Authorization", "Bearer still-valid")
@@ -688,7 +688,7 @@ func TestExportAPIRoutesRejectDNSRebindingBeforeServiceOrGrantUse(t *testing.T) 
 		t.Fatalf("allowed typed status = %d, body = %s", allowedTyped.Code, allowedTyped.Body.String())
 	}
 
-	rawRequest = httptest.NewRequest(http.MethodGet, exportDownloadPath, nil)
+	rawRequest = httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
 	rawRequest.Host = "example.com"
 	rawRequest.Header.Set("Origin", "http://example.com")
 	rawRequest.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -729,7 +729,7 @@ func TestSlowDownloadsCannotStarveTypedAPICapacity(t *testing.T) {
 
 	firstResult := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		request := httptest.NewRequest(http.MethodGet, exportDownloadPath, nil)
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
 		request.Header.Set("Authorization", "Bearer first-token")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
@@ -748,7 +748,7 @@ func TestSlowDownloadsCannotStarveTypedAPICapacity(t *testing.T) {
 		t.Fatalf("typed API was starved by slow download: %d %s", bootstrap.Code, bootstrap.Body.String())
 	}
 
-	secondRequest := httptest.NewRequest(http.MethodGet, exportDownloadPath, nil)
+	secondRequest := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
 	secondRequest.Header.Set("Authorization", "Bearer second-token")
 	secondResponse := httptest.NewRecorder()
 	handler.ServeHTTP(secondResponse, secondRequest)
@@ -803,7 +803,7 @@ func TestExportDownloadRejectsMalformedRequestsBeforeRedemption(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodGet, exportDownloadPath, nil)
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
 			if test.wantStatus == 0 {
 				request.Header.Set("Authorization", "Bearer valid-token")
 			}
@@ -844,7 +844,7 @@ func TestExportDownloadGrantIsOneTimeAndFailuresAreNonDisclosing(t *testing.T) {
 	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI()})
 
 	download := func(token string) *httptest.ResponseRecorder {
-		request := httptest.NewRequest(http.MethodGet, exportDownloadPath, nil)
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
 		request.Header.Set("Authorization", "Bearer "+token)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
@@ -892,7 +892,7 @@ func TestExportDownloadRejectsUnsafeArtifactMetadata(t *testing.T) {
 				return download, nil
 			}}
 			handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI()})
-			request := httptest.NewRequest(http.MethodGet, exportDownloadPath, nil)
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
 			request.Header.Set("Authorization", "Bearer one-time-token")
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)

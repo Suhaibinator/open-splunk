@@ -259,7 +259,7 @@ func TestIdleOwnerHistoryIsPrunedOnRead(t *testing.T) {
 		t.Fatalf("expired entries = %v, want none", entryIDs(page.Entries))
 	}
 	var rows int
-	if err := database.SQLDB().QueryRow(`SELECT COUNT(*) FROM search_history WHERE search_job_id = 'idle'`).Scan(&rows); err != nil {
+	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM search_history WHERE search_job_id = 'idle'`).Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
 	if rows != 1 {
@@ -269,7 +269,7 @@ func TestIdleOwnerHistoryIsPrunedOnRead(t *testing.T) {
 	if err != nil || deleted != 1 {
 		t.Fatalf("Prune() = (%d,%v), want (1,nil)", deleted, err)
 	}
-	if err := database.SQLDB().QueryRow(`SELECT COUNT(*) FROM search_history WHERE search_job_id = 'idle'`).Scan(&rows); err != nil {
+	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM search_history WHERE search_job_id = 'idle'`).Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
 	if rows != 0 {
@@ -380,7 +380,7 @@ func TestListFilterQueriesUseCompositeIndexes(t *testing.T) {
 			floor := time.Now().Add(-time.Hour).UnixMicro()
 			normalized.filter.retentionFloor = &floor
 			query, args := listQuery(normalized, listCursor{})
-			rows, err := database.SQLDB().Query(`EXPLAIN QUERY PLAN `+query, args...)
+			rows, err := database.SQLDB().QueryContext(context.Background(), `EXPLAIN QUERY PLAN `+query, args...)
 			if err != nil {
 				t.Fatal(err)
 			}

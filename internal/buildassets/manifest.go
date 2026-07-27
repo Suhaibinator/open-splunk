@@ -366,6 +366,7 @@ func inventoryTree(filesystem fs.FS, root string, options inventoryOptions) (tre
 			_ = file.Close()
 			return treeInventory{}, fmt.Errorf("%q is not a regular file", path.Join(root, relativePath))
 		}
+		// #nosec G115 -- the negative-size case is rejected immediately above.
 		size := uint64(info.Size())
 		if size > maximumTreeBytes || totalBytes > maximumTreeBytes-size {
 			_ = file.Close()
@@ -402,7 +403,8 @@ func inventoryTree(filesystem fs.FS, root string, options inventoryOptions) (tre
 	}
 	return treeInventory{
 		component: ComponentDigest{
-			SHA256:    hex.EncodeToString(aggregate.Sum(nil)),
+			SHA256: hex.EncodeToString(aggregate.Sum(nil)),
+			// #nosec G115 -- paths is bounded by maximumTreeFiles before files is populated.
 			FileCount: uint32(len(files)),
 			ByteCount: totalBytes,
 		},
@@ -470,6 +472,7 @@ func writeFramedPath(writer io.Writer, relativePath string, size uint64) error {
 		return fmt.Errorf("invalid framed path length for %q", relativePath)
 	}
 	var length [4]byte
+	// #nosec G115 -- relativePath is explicitly bounded to at most 1 MiB above.
 	binary.BigEndian.PutUint32(length[:], uint32(len(relativePath)))
 	var byteLength [8]byte
 	binary.BigEndian.PutUint64(byteLength[:], size)
@@ -516,6 +519,7 @@ func inventoryMigrations(filesystem fs.FS, root string) (treeInventory, uint32, 
 			)
 		}
 	}
+	// #nosec G115 -- migration inventory length is bounded by maximumTreeFiles.
 	return inventory, uint32(len(inventory.files)), nil
 }
 
@@ -558,6 +562,7 @@ func readBoundedFile(filesystem fs.FS, name string, maximumBytes uint64) ([]byte
 	if err != nil {
 		return nil, err
 	}
+	// #nosec G115 -- all callers pass manifest limits far below math.MaxInt64.
 	contents, readErr := io.ReadAll(io.LimitReader(file, int64(maximumBytes)+1))
 	closeErr := file.Close()
 	if err := errors.Join(readErr, closeErr); err != nil {

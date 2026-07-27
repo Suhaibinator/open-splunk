@@ -63,7 +63,7 @@ func (q *fakeQueue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.Event
 }
 
 func (q *fakeQueue) NextBatch(ctx context.Context) (*opensplunkv1.EventBatch, error) {
-	// Wake the waiter if ctx is cancelled while blocked.
+	// Wake the waiter if ctx is canceled while blocked.
 	stop := context.AfterFunc(ctx, func() {
 		q.mu.Lock()
 		q.cond.Broadcast()

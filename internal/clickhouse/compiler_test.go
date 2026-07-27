@@ -519,7 +519,8 @@ func TestCompileDedupRejectsDirectPlanWithAmbiguousEventFieldsPayload(t *testing
 		Keys:  []plan.FieldRef{fields},
 	})
 	_, err = (Compiler{}).Compile(logical)
-	diagnostic, ok := err.(*plan.Diagnostic)
+	diagnostic := &plan.Diagnostic{}
+	ok := errors.As(err, &diagnostic)
 	if !ok || diagnostic.Code != "SPL_AMBIGUOUS_DEDUP_FIELD" {
 		t.Fatalf("Compile error = %#v, want SPL_AMBIGUOUS_DEDUP_FIELD", err)
 	}
@@ -3094,7 +3095,8 @@ func TestCompileStatsValuesRejectsUnpinnedScalarMultivalueConsumers(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := (Compiler{}).Compile(buildPlan(t, test.source))
-			diagnostic, ok := err.(*plan.Diagnostic)
+			diagnostic := &plan.Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != test.code {
 				t.Fatalf("Compile() error = %#v, want source-located %s", err, test.code)
 			}
@@ -3709,7 +3711,8 @@ func TestCompileRejectsOversizedGeneratedSQL(t *testing.T) {
 	logical := buildPlan(t, source.String())
 	var err error
 	_, err = (Compiler{}).Compile(logical)
-	diagnostic, ok := err.(*plan.Diagnostic)
+	diagnostic := &plan.Diagnostic{}
+	ok := errors.As(err, &diagnostic)
 	if !ok || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
 		t.Fatalf("Compile error = %#v, want SPL_QUERY_TOO_COMPLEX", err)
 	}
@@ -4322,7 +4325,8 @@ func TestCompileChartRejectsNonStringColumnFields(t *testing.T) {
 		`index=gradethis | stats count BY level | chart count OVER level BY count`,
 	} {
 		_, err := (Compiler{}).Compile(buildPlan(t, source))
-		diagnostic, ok := err.(*plan.Diagnostic)
+		diagnostic := &plan.Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_FIELD_TYPE" ||
 			diagnostic.Message != "chart column fields currently support strings plus missing and null values" ||
 			!slices.Contains(diagnostic.Suggestions, "convert the column field to a string before chart") {
@@ -4360,7 +4364,8 @@ func TestCompileChartRejectsReservedConvenienceColumn(t *testing.T) {
 			t.Fatalf("Parse(%q): %v", source, err)
 		}
 		_, err = plan.Build(parsed, testChartScope())
-		diagnostic, ok := err.(*plan.Diagnostic)
+		diagnostic := &plan.Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_FIELD_TYPE" ||
 			!strings.Contains(diagnostic.Message, "reserved fields payload") {
 			t.Fatalf("Build(%q) error = %#v, want the reserved-payload rejection", source, err)
@@ -4385,7 +4390,8 @@ func TestCompileChartRejectsReservedConvenienceColumn(t *testing.T) {
 			chart.Over = plan.FieldRef{Name: forged.axis, Path: []string{forged.axis}}
 			logical.DynamicOutput.FixedFields = []string{forged.axis}
 			_, err := (Compiler{}).Compile(logical)
-			diagnostic, ok := err.(*plan.Diagnostic)
+			diagnostic := &plan.Diagnostic{}
+			ok := errors.As(err, &diagnostic)
 			if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_FIELD_TYPE" ||
 				!strings.Contains(diagnostic.Message, forged.message) {
 				t.Fatalf("Compile() error = %#v, want %q", err, forged.message)
@@ -4506,7 +4512,8 @@ func TestAnalysisFinalizerCannotBypassCompiledQueryByteLimit(t *testing.T) {
 			relation.ownerRange,
 		), nil
 	})
-	diagnostic, ok := err.(*plan.Diagnostic)
+	diagnostic := &plan.Diagnostic{}
+	ok := errors.As(err, &diagnostic)
 	if !ok || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
 		t.Fatalf("compileEventAnalysis() error = %#v, want SPL_QUERY_TOO_COMPLEX", err)
 	}

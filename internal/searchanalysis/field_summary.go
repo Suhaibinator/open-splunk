@@ -421,7 +421,7 @@ func (service *FieldService) buildFieldSummary(
 		return nil, fmt.Errorf("rebuild completed search for field summary: %w", err)
 	}
 	if err := plan.ValidateFieldAnalysisEligibility(logical); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrFieldAnalysisUnsupported, err)
+		return nil, fmt.Errorf("%w: %w", ErrFieldAnalysisUnsupported, err)
 	}
 	spec := clickhouse.FieldSummarySpec{
 		FieldName:             key.fieldName,
@@ -479,12 +479,12 @@ func classifyFieldSummaryCompileError(err error) error {
 		switch {
 		case diagnostic.Code == "SPL_QUERY_TOO_COMPLEX":
 			return fmt.Errorf(
-				"%w: compile completed search field summary: %v",
+				"%w: compile completed search field summary: %w",
 				searchjobs.ErrExecutionLimit,
 				err,
 			)
 		case strings.HasPrefix(diagnostic.Code, "SPL_UNSUPPORTED_FIELD_ANALYSIS_"):
-			return fmt.Errorf("%w: %v", ErrFieldAnalysisUnsupported, err)
+			return fmt.Errorf("%w: %w", ErrFieldAnalysisUnsupported, err)
 		}
 	}
 	return fmt.Errorf("compile completed search field summary: %w", err)

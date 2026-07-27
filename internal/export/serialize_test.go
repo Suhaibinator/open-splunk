@@ -2,6 +2,7 @@ package export
 
 import (
 	"bytes"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -241,18 +242,6 @@ func TestCSVNestedEncodingIsMemoryBounded(t *testing.T) {
 	}
 }
 
-// Kept local so this test file's imports remain intentionally small.
 func errorsIs(err, target error) bool {
-	for err != nil {
-		if err == target {
-			return true
-		}
-		type unwrapper interface{ Unwrap() error }
-		unwrapped, ok := err.(unwrapper)
-		if !ok {
-			return false
-		}
-		err = unwrapped.Unwrap()
-	}
-	return false
+	return errors.Is(err, target)
 }

@@ -79,18 +79,13 @@ func Open(ctx context.Context, path string) (*DB, error) {
 // normalized log payloads, so relying on the process umask is insufficient.
 func secureSQLiteFiles(path string, create bool) error {
 	if create {
-		for {
-			file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-			if err == nil {
-				if closeErr := file.Close(); closeErr != nil {
-					return fmt.Errorf("secure SQLite control plane: close new database: %w", closeErr)
-				}
-				break
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+		if err == nil {
+			if closeErr := file.Close(); closeErr != nil {
+				return fmt.Errorf("secure SQLite control plane: close new database: %w", closeErr)
 			}
-			if !errors.Is(err, os.ErrExist) {
-				return fmt.Errorf("secure SQLite control plane: create database: %w", err)
-			}
-			break
+		} else if !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("secure SQLite control plane: create database: %w", err)
 		}
 	}
 

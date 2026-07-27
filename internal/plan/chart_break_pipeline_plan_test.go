@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -9,7 +10,7 @@ import (
 )
 
 // chartBreakPipelineScope is the plan-level scope these tests build against.
-// Two authorized indexes make the index-narrowing behaviour observable.
+// Two authorized indexes make the index-narrowing behavior observable.
 func chartBreakPipelineScope() Scope {
 	return testScope([]string{"gradethis", "internal"}, nil)
 }
@@ -29,7 +30,8 @@ func chartBreakPipelineBuildError(t *testing.T, source string) *Diagnostic {
 	if err == nil {
 		t.Fatalf("Build(%q) succeeded", source)
 	}
-	diagnostic, ok := err.(*Diagnostic)
+	diagnostic := &Diagnostic{}
+	ok := errors.As(err, &diagnostic)
 	if !ok {
 		t.Fatalf("Build(%q) error = %T, want *Diagnostic", source, err)
 	}
@@ -132,12 +134,14 @@ func TestChartBreakPipelineRejectsEveryTransformingConsumer(t *testing.T) {
 		logical := chartBreakPipelineBuild(t, source)
 
 		err := ValidateFieldAnalysisEligibility(logical)
-		diagnostic, ok := err.(*Diagnostic)
+		diagnostic := &Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_FIELD_ANALYSIS_PIPELINE" {
 			t.Fatalf("field analysis for %q = %#v, want SPL_UNSUPPORTED_FIELD_ANALYSIS_PIPELINE", source, err)
 		}
 		err = ValidateTimelineEligibility(logical)
-		diagnostic, ok = err.(*Diagnostic)
+		diagnostic = &Diagnostic{}
+		ok = errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_TIMELINE_PIPELINE" {
 			t.Fatalf("timeline for %q = %#v, want SPL_UNSUPPORTED_TIMELINE_PIPELINE", source, err)
 		}
@@ -307,7 +311,7 @@ func TestChartBreakPipelineIndexReferenceCollectionStopsAtChart(t *testing.T) {
 	}
 	if !slices.Equal(requested.EffectiveIndexes, []string{"gradethis"}) ||
 		!slices.Equal(requested.Operators[0].(*Scan).Indexes, []string{"gradethis"}) {
-		t.Fatalf("requested scope was not honoured: %v", requested.EffectiveIndexes)
+		t.Fatalf("requested scope was not honored: %v", requested.EffectiveIndexes)
 	}
 }
 
@@ -351,7 +355,8 @@ func TestChartBreakPipelineDuplicateAxesAreRejectedAtTheColumnField(t *testing.T
 		{`index=gradethis | chart count OVER fields BY fields`, "fields"},
 	} {
 		_, err := spl.Parse(test.source)
-		diagnostic, ok := err.(*spl.Diagnostic)
+		diagnostic := &spl.Diagnostic{}
+		ok := errors.As(err, &diagnostic)
 		if !ok || diagnostic.Code != "SPL_UNSUPPORTED_CHART_SYNTAX" {
 			t.Fatalf("Parse(%q) diagnostic = %#v, want SPL_UNSUPPORTED_CHART_SYNTAX", test.source, err)
 		}

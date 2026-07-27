@@ -220,13 +220,13 @@ func TestSearchFieldsRouteFeatureAndTrustBoundary(t *testing.T) {
 	if response.Code != http.StatusNotFound || service.callCount() != 0 {
 		t.Fatalf("suffix status/calls = %d/%d", response.Code, service.callCount())
 	}
-	request := httptest.NewRequest(http.MethodGet, searchFieldsListPath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, searchFieldsListPath, nil)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodPost || service.callCount() != 0 {
 		t.Fatalf("method status/allow/calls = %d/%q/%d", response.Code, response.Header().Get("Allow"), service.callCount())
 	}
-	request = httptest.NewRequest(http.MethodPost, searchFieldsListPath, strings.NewReader("not protobuf"))
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchFieldsListPath, strings.NewReader("not protobuf"))
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -247,14 +247,14 @@ func TestSearchFieldsRouteFeatureAndTrustBoundary(t *testing.T) {
 		{name: "foreign origin", host: "example.com", origin: "http://attacker.example"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, searchFieldsListPath, bytes.NewReader(payload))
-			request.Host = test.host
-			request.Header.Set("Content-Type", "application/x-protobuf")
-			request.Header.Set("Origin", test.origin)
-			response := httptest.NewRecorder()
-			handler.ServeHTTP(response, request)
-			if response.Code != http.StatusForbidden {
-				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			rejectedRequest := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchFieldsListPath, bytes.NewReader(payload))
+			rejectedRequest.Host = test.host
+			rejectedRequest.Header.Set("Content-Type", "application/x-protobuf")
+			rejectedRequest.Header.Set("Origin", test.origin)
+			rejectedResponse := httptest.NewRecorder()
+			handler.ServeHTTP(rejectedResponse, rejectedRequest)
+			if rejectedResponse.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, body = %s", rejectedResponse.Code, rejectedResponse.Body.String())
 			}
 		})
 	}
@@ -557,7 +557,7 @@ func TestSearchFieldsExecutionDoesNotOccupySerializationCapacity(t *testing.T) {
 
 	firstDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		request := httptest.NewRequest(http.MethodPost, searchFieldsListPath, bytes.NewReader(payload))
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchFieldsListPath, bytes.NewReader(payload))
 		request.Header.Set("Content-Type", "application/x-protobuf")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
@@ -598,7 +598,7 @@ func TestSearchFieldsSerializationCapacityIsNonblocking(t *testing.T) {
 		maximumFieldPageSize: 10, maximumFieldCatalogFields: 100,
 		serializationGate: make(chan struct{}, 1),
 	}
-	request := httptest.NewRequest(http.MethodPost, searchFieldsListPath, nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchFieldsListPath, nil)
 	input := &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job"}
 	first, err := handler.listSearchFields(request, input)
 	if err != nil || first == nil || len(handler.serializationGate) != 1 {
@@ -634,7 +634,7 @@ func TestSearchFieldsCancellationAfterServiceResultReleasesSerializationPermit(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, searchFieldsListPath, bytes.NewReader(payload)).WithContext(ctx)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchFieldsListPath, bytes.NewReader(payload)).WithContext(ctx)
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

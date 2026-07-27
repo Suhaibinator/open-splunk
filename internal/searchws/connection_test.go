@@ -804,7 +804,10 @@ func TestServiceCloseWaitsForBlockingScopedLookupAndClearsAccounting(t *testing.
 	}
 	server := httptest.NewServer(service)
 	t.Cleanup(server.Close)
-	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	client, dialResponse, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if dialResponse != nil {
+		t.Cleanup(func() { _ = dialResponse.Body.Close() })
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -935,7 +938,7 @@ func TestCoalescedLoadSurvivesInitiatorCancellationAndPinsForWaiter(t *testing.T
 	if pins := surviving.resolverCount.Load(); pins != 1 {
 		t.Fatalf("published target resolver pins = %d, want 1", pins)
 	}
-	if _, err := service.resolveTarget(context.Background(), targetKey{kind: targetKindSearch, id: "capacity-churn"}); err != errTargetCapacity {
+	if _, err := service.resolveTarget(context.Background(), targetKey{kind: targetKindSearch, id: "capacity-churn"}); !errors.Is(err, errTargetCapacity) {
 		t.Fatalf("capacity churn resolve = %v, want target capacity", err)
 	}
 	service.releaseResolvedTarget(surviving)

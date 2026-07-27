@@ -17,7 +17,7 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 	now := time.Date(2026, time.July, 22, 8, 9, 10, 11, time.FixedZone("west", -7*60*60))
 	clock := &fakeClock{now: now}
 	manager := newTestManager(t, Config{
-		Executor: executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+		Executor: executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 			if err := sink.SetSchema(messageSchema()); err != nil {
 				return err
 			}
@@ -85,7 +85,7 @@ func TestCompletedExecutionSnapshotForContextScopeAndLifecycleErrors(t *testing.
 
 	release := make(chan struct{})
 	manager := newTestManager(t, Config{
-		Executor: executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+		Executor: executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -107,6 +107,7 @@ func TestCompletedExecutionSnapshotForContextScopeAndLifecycleErrors(t *testing.
 	waitForState(t, manager, job.ID, StateRunning)
 	access := AccessScope{TenantID: "tenant", OwnerID: "owner"}
 
+	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
 	if _, err := manager.CompletedExecutionSnapshotFor(nil, access, job.ID); err == nil {
 		t.Fatal("CompletedExecutionSnapshotFor(nil context) error = nil")
 	}
@@ -154,7 +155,7 @@ func TestCompletedExecutionSnapshotForContextScopeAndLifecycleErrors(t *testing.
 	}
 
 	closedManager := newTestManager(t, Config{
-		Executor: executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+		Executor: executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 			return sink.SetSchema(messageSchema())
 		}),
 		CleanupInterval: -1,
@@ -178,7 +179,7 @@ func TestCompletedExecutionSnapshotForExpiresAtExactDeadlineWithoutNewLease(t *t
 
 	clock := &fakeClock{now: time.Date(2026, time.July, 22, 10, 0, 0, 0, time.UTC)}
 	manager := newTestManager(t, Config{
-		Executor: executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+		Executor: executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 			if err := sink.SetSchema(messageSchema()); err != nil {
 				return err
 			}
@@ -238,7 +239,7 @@ func TestCompletedExecutionSnapshotForConcurrentTombstoneCleanup(t *testing.T) {
 
 	clock := &fakeClock{now: time.Date(2026, time.July, 22, 11, 0, 0, 0, time.UTC)}
 	manager := newTestManager(t, Config{
-		Executor: executorFunc(func(ctx context.Context, query clickhouse.CompiledQuery, sink ResultSink) error {
+		Executor: executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 			return sink.SetSchema(messageSchema())
 		}),
 		RetentionTTL:     time.Second,

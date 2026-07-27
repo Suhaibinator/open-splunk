@@ -131,7 +131,7 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 	}
 	compiled, err := source.compile(job)
 	if err != nil {
-		return nil, fmt.Errorf("%w: rebuild completed search: %v", searchjobs.ErrResultsUnavailable, err)
+		return nil, fmt.Errorf("%w: rebuild completed search: %w", searchjobs.ErrResultsUnavailable, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -264,7 +264,7 @@ func (lease *reexecutionLease) Next(ctx context.Context) (searchjobs.ResultRow, 
 			executionDone = nil
 		case row, ok := <-lease.rows:
 			if !ok {
-				err, closed := lease.terminalState()
+				closed, err := lease.terminalState()
 				if closed {
 					return searchjobs.ResultRow{}, false, searchjobs.ErrResultLeaseClosed
 				}
@@ -364,10 +364,10 @@ func (lease *reexecutionLease) isClosed() bool {
 	return lease.closed
 }
 
-func (lease *reexecutionLease) terminalState() (error, bool) {
+func (lease *reexecutionLease) terminalState() (bool, error) {
 	lease.stateMu.Lock()
 	defer lease.stateMu.Unlock()
-	return lease.runErr, lease.closed
+	return lease.closed, lease.runErr
 }
 
 func (lease *reexecutionLease) executionContextFailure() error {
@@ -475,7 +475,7 @@ func schemaMatchesCompiledQuery(schema searchjobs.Schema, compiled clickhouse.Co
 	// fixed, plan-time column followed by at most MaxSeries unsigned count
 	// columns whose names came from runtime values.
 	fixedName := "_time"
-	fixedKind := searchjobs.ValueKindString
+	var fixedKind searchjobs.ValueKind
 	var maxSeries int
 	var maxLabelBytes int
 	if compiled.Timechart != nil {

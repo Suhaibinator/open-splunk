@@ -201,7 +201,7 @@ func scanString(value string, lineNumber int, path string, allowSyntheticRoute b
 	}
 	lower := strings.ToLower(value)
 	if strings.Contains(lower, "file://") ||
-		containsAbsolutePath(value) && !(allowSyntheticRoute && allowedSyntheticRoute(value)) {
+		containsAbsolutePath(value) && (!allowSyntheticRoute || !allowedSyntheticRoute(value)) {
 		return reject("an absolute filesystem path")
 	}
 	if emailPattern.MatchString(value) {
@@ -292,7 +292,7 @@ func blockedKeyReason(key string) (string, bool) {
 			return "email identifier key", true
 		}
 		if strings.Contains(component, "userid") || strings.Contains(component, "username") ||
-			component == "user" && !(index+1 < len(components) && components[index+1] == "agent") {
+			component == "user" && (index+1 >= len(components) || components[index+1] != "agent") {
 			return "user identifier key", true
 		}
 		if strings.Contains(component, "sessionid") ||
@@ -382,10 +382,10 @@ func startsURLAuthority(value string, slash int) bool {
 	schemeStart := schemeEnd
 	for schemeStart > 0 {
 		character := value[schemeStart-1]
-		if !((character >= 'a' && character <= 'z') ||
-			(character >= 'A' && character <= 'Z') ||
-			(character >= '0' && character <= '9') ||
-			strings.ContainsRune("+.-", rune(character))) {
+		if (character < 'a' || character > 'z') &&
+			(character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') &&
+			!strings.ContainsRune("+.-", rune(character)) {
 			break
 		}
 		schemeStart--
