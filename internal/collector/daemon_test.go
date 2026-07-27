@@ -272,12 +272,15 @@ func TestDaemonRedactsSecretsBeforeOfflineWALAppend(t *testing.T) {
 		noteSecret             = "offline-note-secret"
 		customStructuredSecret = "offline-custom-structured-secret"
 		customMessageSecret    = "offline-custom-message-secret"
+		secondStructuredSecret = "offline-second-structured-secret"
+		secondMessageSecret    = "offline-second-message-secret"
 		renamedSecret          = "offline-rename-to-sensitive-secret"
 	)
 	writeFile(t, logPath,
 		`{"message":"token=`+messageSecret+` customer_credential=`+customMessageSecret+
-			` safe=message-kept","token":"`+structuredSecret+
+			` customer_pin=`+secondMessageSecret+` safe=message-kept","token":"`+structuredSecret+
 			`","customer_credential":"`+customStructuredSecret+
+			`","customer_pin":"`+secondStructuredSecret+
 			`","credential":"`+renamedSecret+
 			`","note":"authorization=Bearer `+noteSecret+` safe=note-kept"}`+"\n")
 
@@ -285,6 +288,9 @@ func TestDaemonRedactsSecretsBeforeOfflineWALAppend(t *testing.T) {
 	cfg.Processors = []config.ProcessorConfig{
 		{
 			Type: "redact", Fields: []string{"customer_credential"}, Replacement: "***",
+		},
+		{
+			Type: "redact", Fields: []string{"customer_pin"}, Replacement: "###",
 		},
 		{
 			Type: "rename", From: "credential", To: "token",
@@ -329,6 +335,8 @@ func TestDaemonRedactsSecretsBeforeOfflineWALAppend(t *testing.T) {
 		noteSecret,
 		customStructuredSecret,
 		customMessageSecret,
+		secondStructuredSecret,
+		secondMessageSecret,
 		renamedSecret,
 	} {
 		if bytes.Contains(wire, []byte(secret)) {
@@ -337,9 +345,11 @@ func TestDaemonRedactsSecretsBeforeOfflineWALAppend(t *testing.T) {
 	}
 	event := batch.GetEvents()[0]
 	if !bytes.Contains(event.GetRaw(), []byte("***")) ||
+		!bytes.Contains(event.GetRaw(), []byte("###")) ||
 		!bytes.Contains(event.GetRaw(), []byte("message-kept")) ||
 		!bytes.Contains(event.GetRaw(), []byte("note-kept")) ||
 		!strings.Contains(event.GetMessage(), "***") ||
+		!strings.Contains(event.GetMessage(), "###") ||
 		!strings.Contains(event.GetMessage(), "message-kept") {
 		t.Fatalf("offline WAL redaction lost safe data or its replacement: raw=%q message=%q",
 			event.GetRaw(), event.GetMessage())
@@ -349,6 +359,7 @@ func TestDaemonRedactsSecretsBeforeOfflineWALAppend(t *testing.T) {
 		fields[field.GetName()] = field.GetValue()
 	}
 	if fields["customer_credential"].GetStringValue() != "***" ||
+		fields["customer_pin"].GetStringValue() != "###" ||
 		fields["token"].GetStringValue() == renamedSecret {
 		t.Fatalf("offline WAL configured/post-pipeline redaction = %+v", fields)
 	}
@@ -881,8 +892,9 @@ func TestDurableRedactorPreservesExactConfiguredPoliciesAndDeduplicatesMandatory
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(redactor.configured) != 2 {
-		t.Fatalf("configured durable policies = %+v", redactor)
+	if len(redactor.configured) != 1 {
+		t.Fatalf("distinct configured markers compiled to %d direct passes, want one composite pass",
+			len(redactor.configured))
 	}
 	event := testEvent(
 		t,
@@ -952,6 +964,97 @@ func TestDurableRedactorKeepsLastConfiguredReplacementAfterMandatoryPolicy(t *te
 		!strings.Contains(out.GetMessage(), ingest.DefaultRedactionReplacement) {
 		t.Fatalf("last configured replacement did not win: raw:%q message:%q event:%+v",
 			out.GetRaw(), out.GetMessage(), out)
+	}
+}
+
+func TestDurableRedactorConfiguredReplacementOverridesMandatoryMarkerForResolvedFields(t *testing.T) {
+	t.Parallel()
+
+	pipeline, err := buildPipeline([]config.ProcessorConfig{
+		{Type: "redact", Fields: []string{"token"}, Replacement: "CUSTOM"},
+		{Type: "redact", Fields: []string{"customer_pin"}, Replacement: "PIN"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redactor, err := buildDurableRedactor(pipeline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(redactor.configured) != 1 {
+		t.Fatalf("mandatory override plus neutral marker compiled to %d direct passes, want one",
+			len(redactor.configured))
+	}
+
+	raw := `{"message":"token=message-secret customer_pin=pin-secret safe=value",` +
+		`"token":"structured-secret","customer_pin":"structured-pin","safe":"kept"}`
+	event := redactor.beforePipeline(
+		testEvent(t, testDecoder(t), 0, uint64(len(raw)), 1, raw),
+		nil,
+	)
+	out, err := pipeline.Process(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"message-secret", "pin-secret", "structured-secret", "structured-pin"} {
+		if bytes.Contains(wire, []byte(secret)) {
+			t.Fatalf("configured override leaked %q", secret)
+		}
+	}
+	if !bytes.Contains(out.GetRaw(), []byte(`"token":"CUSTOM"`)) ||
+		!bytes.Contains(out.GetRaw(), []byte(`"customer_pin":"PIN"`)) ||
+		!strings.Contains(out.GetMessage(), "CUSTOM") ||
+		!strings.Contains(out.GetMessage(), "PIN") {
+		t.Fatalf("configured override markers = raw:%q message:%q", out.GetRaw(), out.GetMessage())
+	}
+	fields := make(map[string]string)
+	for _, field := range out.GetFields().GetFields() {
+		fields[field.GetName()] = field.GetValue().GetStringValue()
+	}
+	if fields["token"] != "CUSTOM" || fields["customer_pin"] != "PIN" || fields["safe"] != "kept" {
+		t.Fatalf("configured override fields = %+v", fields)
+	}
+}
+
+func TestDurableRedactorMandatoryFailClosedBoundaryPrecedesConfiguredReplacement(t *testing.T) {
+	t.Parallel()
+
+	pipeline, err := buildPipeline([]config.ProcessorConfig{{
+		Type: "redact", Fields: []string{"token"}, Replacement: "CUSTOM",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redactor, err := buildDurableRedactor(pipeline)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	event := testEvent(t, testDecoder(t), 0, 16, 1, `{"safe":"kept"}`)
+	ambiguous := `token=\"boundary-secret\" safe=value`
+	event.Raw = []byte(ambiguous)
+	event.Message = &ambiguous
+	event.Fields = nil
+	event = redactor.beforePipeline(event, nil)
+	out, err := pipeline.Process(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out.GetRaw()) != ingest.DefaultRedactionReplacement ||
+		out.GetMessage() != ingest.DefaultRedactionReplacement {
+		t.Fatalf("mandatory fail-closed marker = raw:%q message:%q, want %q",
+			out.GetRaw(), out.GetMessage(), ingest.DefaultRedactionReplacement)
+	}
+	if bytes.Contains(out.GetRaw(), []byte("boundary-secret")) ||
+		strings.Contains(out.GetMessage(), "boundary-secret") ||
+		bytes.Contains(out.GetRaw(), []byte("CUSTOM")) ||
+		strings.Contains(out.GetMessage(), "CUSTOM") {
+		t.Fatalf("fail-closed boundary leaked or was reclassified: raw:%q message:%q",
+			out.GetRaw(), out.GetMessage())
 	}
 }
 

@@ -756,16 +756,20 @@ func buildDurableRedactor(pipeline *Pipeline) (*durableRedactor, error) {
 			groups[groupIndex].fields = append(groups[groupIndex].fields, field)
 		}
 	}
-	for groupIndex, group := range groups {
-		configured, buildErr := ingest.NewSupplementalRedactor(
-			ingest.DefaultLimits(),
-			ingest.RedactionPolicy{
+	if len(groups) > 0 {
+		policies := make([]ingest.RedactionPolicy, len(groups))
+		for groupIndex, group := range groups {
+			policies[groupIndex] = ingest.RedactionPolicy{
 				AdditionalSensitiveFields: group.fields,
 				Replacement:               group.replacement,
-			},
+			}
+		}
+		configured, buildErr := ingest.NewCompositeSupplementalRedactor(
+			ingest.DefaultLimits(),
+			policies,
 		)
 		if buildErr != nil {
-			return nil, fmt.Errorf("configured replacement group %d: %w", groupIndex, buildErr)
+			return nil, fmt.Errorf("configured replacement resolver: %w", buildErr)
 		}
 		result.configured = append(result.configured, configured)
 	}

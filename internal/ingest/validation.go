@@ -37,11 +37,15 @@ func DurationFitsResultRange(value *durationpb.Duration) bool {
 // Validator performs deterministic, storage-independent event validation and
 // normalization. It is safe for concurrent use.
 type Validator struct {
-	limits      Limits
-	replacement string
-	sensitive   map[string]struct{}
-	mandatory   bool
-	exact       bool
+	limits            Limits
+	replacement       string
+	depthReplacement  string
+	sensitive         map[string]struct{}
+	replacementByName map[string]redactionMatch
+	ordered           []*Validator
+	sequential        []*Validator
+	mandatory         bool
+	exact             bool
 }
 
 func NewValidator(limits Limits, policy RedactionPolicy) (*Validator, error) {
@@ -60,6 +64,86 @@ func NewSupplementalRedactor(limits Limits, policy RedactionPolicy) (*Validator,
 	return newValidator(limits, policy, false, true)
 }
 
+// NewCompositeSupplementalRedactor constructs one exact-name redactor for an
+// ordered set of deployment-specific policies. Callers may group fields with
+// the same replacement. Policy order remains observable for fail-closed
+// boundaries, generated-marker cascades, and the embedded-JSON depth limit.
+//
+// Ordinary marker strings use one traversal for structured data, valid JSON,
+// unchanged text, and free-form text whose only observed match belongs to the
+// final policy. Any earlier-policy text match, embedded encoded payload, hidden
+// assignment inside a later value, or ambiguous fail-closed boundary is
+// replayed in policy order: generated quotes can change how a later historical
+// pass parses otherwise malformed text.
+// Repeated fields, pre-final syntax-bearing markers, and markers equal to a
+// later field always retain that ordered implementation because they can
+// intentionally create a match for a later policy. These compatibility paths
+// favor exact historical output and confidentiality over a misleading
+// one-pass claim.
+func NewCompositeSupplementalRedactor(
+	limits Limits,
+	policies []RedactionPolicy,
+) (*Validator, error) {
+	if len(policies) == 0 {
+		return nil, errors.New("composite supplemental redaction requires at least one policy")
+	}
+	if len(policies) == 1 {
+		redactor, err := NewSupplementalRedactor(limits, policies[0])
+		if err != nil {
+			return nil, fmt.Errorf("supplemental redaction policy 0: %w", err)
+		}
+		return redactor, nil
+	}
+
+	sequential := make([]*Validator, 0, len(policies))
+	replacements := make(map[string]redactionMatch)
+	useSequential := false
+	for order, policy := range policies {
+		redactor, err := NewSupplementalRedactor(limits, policy)
+		if err != nil {
+			return nil, fmt.Errorf("supplemental redaction policy %d: %w", order, err)
+		}
+		sequential = append(sequential, redactor)
+		for name, match := range redactor.replacementByName {
+			if _, exists := replacements[name]; exists {
+				useSequential = true
+			}
+			match.order = order
+			replacements[name] = match
+		}
+	}
+	for order, redactor := range sequential[:len(sequential)-1] {
+		if !compositeReplacementIsOpaque(redactor.replacement) {
+			useSequential = true
+		}
+		if later, markerBecomesLaterField := replacements[redactor.replacement]; markerBecomesLaterField &&
+			later.order > order {
+			useSequential = true
+		}
+	}
+
+	result := &Validator{
+		limits:            limits,
+		replacement:       sequential[0].replacement,
+		depthReplacement:  sequential[len(sequential)-1].replacement,
+		replacementByName: replacements,
+		ordered:           sequential,
+		exact:             true,
+	}
+	if useSequential {
+		result.sequential = sequential
+	}
+	return result, nil
+}
+
+func compositeReplacementIsOpaque(replacement string) bool {
+	// These bytes can create assignments, quoted/encoded strings, JSON
+	// composites, or new text records that a later historical pass would
+	// reinterpret. Ordinary visible markers such as [REDACTED], ***, and
+	// <MASKED> stay on the single-pass path.
+	return !strings.ContainsAny(replacement, "=:;'\"\\{},\r\n\t")
+}
+
 func newValidator(limits Limits, policy RedactionPolicy, mandatory, exact bool) (*Validator, error) {
 	if err := limits.validate(); err != nil {
 		return nil, fmt.Errorf("invalid ingestion limits: %w", err)
@@ -71,12 +155,26 @@ func newValidator(limits Limits, policy RedactionPolicy, mandatory, exact bool) 
 	if !utf8.ValidString(replacement) {
 		return nil, fmt.Errorf("redaction replacement is not valid UTF-8")
 	}
+	sensitive := sensitiveFieldSet(policy.AdditionalSensitiveFields, mandatory, exact)
+	var replacements map[string]redactionMatch
+	if exact {
+		replacements = make(map[string]redactionMatch, len(sensitive))
+		for name := range sensitive {
+			replacements[name] = redactionMatch{
+				kind:        rawSecretKindForName(name),
+				replacement: replacement,
+			}
+		}
+		sensitive = nil
+	}
 	return &Validator{
-		limits:      limits,
-		replacement: replacement,
-		sensitive:   sensitiveFieldSet(policy.AdditionalSensitiveFields, mandatory, exact),
-		mandatory:   mandatory,
-		exact:       exact,
+		limits:            limits,
+		replacement:       replacement,
+		depthReplacement:  replacement,
+		sensitive:         sensitive,
+		replacementByName: replacements,
+		mandatory:         mandatory,
+		exact:             exact,
 	}, nil
 }
 
@@ -101,14 +199,14 @@ func (v *Validator) RedactEventInPlace(event *opensplunkv1.LogEvent) *opensplunk
 	if event == nil {
 		return nil
 	}
-	v.redactObject(event.GetFields())
-	if event.GetRawEncoding() == opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 || utf8.Valid(event.GetRaw()) {
-		event.Raw = v.redactText(event.GetRaw())
-	} else {
-		// Binary payloads can still contain ASCII credentials. The raw scanner
-		// is byte-oriented and preserves unrelated invalid UTF-8 verbatim.
-		event.Raw = v.redactKeyValueText(event.GetRaw())
+	if len(v.sequential) > 0 {
+		for _, redactor := range v.sequential {
+			event = redactor.RedactEventInPlace(event)
+		}
+		return event
 	}
+	v.redactObject(event.GetFields())
+	event.Raw = v.redactEventRaw(event.GetRaw(), event.GetRawEncoding())
 	if event.Message != nil {
 		redactedMessage := string(v.redactText([]byte(event.GetMessage())))
 		event.Message = &redactedMessage
@@ -128,8 +226,9 @@ type TopLevelAliasRedaction struct {
 
 // RedactTopLevelAliasesInPlace sanitizes all active top-level rename aliases in
 // one structured/raw pass. Exact root-name matching preserves normalized and
-// nested lookalikes. Non-JSON raw text and the canonical message are scanned
-// once per distinct replacement rather than once per alias.
+// nested lookalikes. Non-JSON raw text and the canonical message share one
+// composite exact-name resolver across distinct ordinary replacement markers;
+// syntax-bearing compatibility cases retain the historical ordered fallback.
 func RedactTopLevelAliasesInPlace(
 	event *opensplunkv1.LogEvent,
 	policies []TopLevelAliasRedaction,
@@ -140,8 +239,8 @@ func RedactTopLevelAliasesInPlace(
 	structured := make(map[string]string, len(policies))
 	raw := make(map[string]string, len(policies))
 	type textGroup struct {
-		fields   map[string]struct{}
-		redactor *Validator
+		fields      map[string]struct{}
+		replacement string
 	}
 	var groups []textGroup
 	groupIndexes := make(map[string]int)
@@ -157,44 +256,116 @@ func RedactTopLevelAliasesInPlace(
 			groupIndexes[policy.Replacement] = groupIndex
 			fields := make(map[string]struct{})
 			groups = append(groups, textGroup{
-				fields: fields,
-				redactor: &Validator{
-					limits:      DefaultLimits(),
-					replacement: policy.Replacement,
-					sensitive:   fields,
-					exact:       true,
-				},
+				fields:      fields,
+				replacement: policy.Replacement,
 			})
 		}
 		groups[groupIndex].fields[policy.Field] = struct{}{}
 	}
-
 	redactTopLevelObjectWithReplacements(event.GetFields(), structured)
 	if len(raw) == 0 {
 		return event
 	}
+	redactRawAsText := false
 	if event.GetRawEncoding() == opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 || utf8.Valid(event.GetRaw()) {
 		if redacted, parsed := redactTopLevelJSONWithReplacements(event.GetRaw(), raw); parsed {
 			event.Raw = redacted
 		} else {
-			for _, group := range groups {
-				event.Raw = group.redactor.redactKeyValueText(event.GetRaw())
-			}
+			redactRawAsText = len(event.GetRaw()) > 0
 		}
 	} else {
-		for _, group := range groups {
-			event.Raw = group.redactor.redactKeyValueText(event.GetRaw())
+		redactRawAsText = len(event.GetRaw()) > 0
+	}
+	if !redactRawAsText && event.Message == nil {
+		return event
+	}
+
+	var textRedactor *Validator
+	var fallbackRedactors []*Validator
+	if len(groups) == 1 {
+		textRedactor = newExactRedactorFromSet(
+			DefaultLimits(),
+			groups[0].fields,
+			groups[0].replacement,
+		)
+	} else if len(groups) > 1 {
+		textPolicies := make([]RedactionPolicy, len(groups))
+		requiresLiteralReplacement := false
+		for index, group := range groups {
+			fields := make([]string, 0, len(group.fields))
+			for field := range group.fields {
+				fields = append(fields, field)
+			}
+			textPolicies[index] = RedactionPolicy{
+				AdditionalSensitiveFields: fields,
+				Replacement:               group.replacement,
+			}
+			requiresLiteralReplacement = requiresLiteralReplacement || group.replacement == ""
+		}
+		if !requiresLiteralReplacement {
+			candidate, err := NewCompositeSupplementalRedactor(DefaultLimits(), textPolicies)
+			if err == nil {
+				textRedactor = candidate
+			}
+		}
+		if textRedactor == nil {
+			// Collector-created aliases already hold validated replacements.
+			// Preserve the historical unchecked helper's literal empty/invalid
+			// replacement behavior for any other package caller.
+			fallbackRedactors = make([]*Validator, 0, len(groups))
+			for _, group := range groups {
+				fallbackRedactors = append(fallbackRedactors, newExactRedactorFromSet(
+					DefaultLimits(),
+					group.fields,
+					group.replacement,
+				))
+			}
+		}
+	}
+
+	if redactRawAsText {
+		if textRedactor != nil {
+			event.Raw = textRedactor.redactKeyValueText(event.GetRaw())
+		} else {
+			for _, redactor := range fallbackRedactors {
+				event.Raw = redactor.redactKeyValueText(event.GetRaw())
+			}
 		}
 	}
 	if event.Message != nil {
 		message := []byte(event.GetMessage())
-		for _, group := range groups {
-			message = group.redactor.redactText(message)
+		if textRedactor != nil {
+			message = textRedactor.redactText(message)
+		} else {
+			for _, redactor := range fallbackRedactors {
+				message = redactor.redactText(message)
+			}
 		}
 		redactedMessage := string(message)
 		event.Message = &redactedMessage
 	}
 	return event
+}
+
+func newExactRedactorFromSet(
+	limits Limits,
+	fields map[string]struct{},
+	replacement string,
+) *Validator {
+	replacements := make(map[string]redactionMatch, len(fields))
+	for name := range fields {
+		replacements[name] = redactionMatch{
+			kind:        rawSecretKindForName(name),
+			replacement: replacement,
+		}
+	}
+	return &Validator{
+		limits:            limits,
+		replacement:       replacement,
+		depthReplacement:  replacement,
+		replacementByName: replacements,
+		exact:             true,
+	}
 }
 
 // ValidateAndNormalizeEvent validates a collector event and returns an

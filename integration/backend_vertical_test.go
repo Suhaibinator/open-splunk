@@ -44,8 +44,12 @@ const (
 	redactionAPIKeySentinel        = "vertical-api-key-must-not-survive"
 	redactionCookieSentinel        = "vertical-cookie-must-not-survive"
 	redactionPrivateKeySentinel    = "vertical-private-key-must-not-survive"
+	redactionCredentialSentinel    = "vertical-customer-credential-must-not-survive"
+	redactionPINSentinel           = "vertical-customer-pin-must-not-survive"
+	redactionCredentialMarker      = "[CREDENTIAL-MASKED]"
+	redactionPINMarker             = "[PIN-MASKED]"
 	verticalSentinelMessage        = "typed redaction sentinel"
-	verticalSearchSPL              = " \nindex=vertical | dedup event_id | table _time message status duration_ms api_key _raw\t"
+	verticalSearchSPL              = " \nindex=vertical | dedup event_id | table _time message status duration_ms api_key customer_credential customer_pin _raw\t"
 	browserVerticalSearchSPL       = "index=vertical | dedup event_id"
 	bulkSearchSPL                  = "index=vertical-bulk | table event_id"
 	splCompatibilityVersionForTest = "tier-1-dev"
@@ -155,6 +159,8 @@ func TestBackendVertical(t *testing.T) {
 		redactionAPIKeySentinel,
 		redactionCookieSentinel,
 		redactionPrivateKeySentinel,
+		redactionCredentialSentinel,
+		redactionPINSentinel,
 	}
 
 	fixtureStart := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
@@ -250,6 +256,8 @@ func TestBackendVertical(t *testing.T) {
 		redactionAPIKeySentinel,
 		redactionCookieSentinel,
 		redactionPrivateKeySentinel,
+		redactionCredentialSentinel,
+		redactionPINSentinel,
 	)
 	waitForCollectorCheckpoint(t, ctx, collectorStateDir, logPath, collectorProcess, plaintextToken)
 
@@ -257,6 +265,7 @@ func TestBackendVertical(t *testing.T) {
 		t.Fatalf("stop collector: %v\nlogs:\n%s", err, redactForFailure(
 			collectorProcess.Logs(), plaintextToken,
 			redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
+			redactionCredentialSentinel, redactionPINSentinel,
 		))
 	}
 	assertDurableCollectorState(t, collectorStateDir, uint64(mustFileSize(t, logPath)), verticalEventCount)
@@ -264,7 +273,8 @@ func TestBackendVertical(t *testing.T) {
 	assertRestartDeliveryAccounting(t, ctx, storage)
 	for _, process := range collectorProcesses {
 		assertProcessLogsDoNotLeak(t, process.Logs(), plaintextToken,
-			redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel)
+			redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
+			redactionCredentialSentinel, redactionPINSentinel)
 	}
 	insertTimelineExclusiveBoundaryEvent(t, ctx, storage, fixtureStart.Add(5500*time.Millisecond), visibilityCutoff)
 
@@ -273,14 +283,25 @@ func TestBackendVertical(t *testing.T) {
 	assertTypedRedactedResults(t, search.results)
 	assertBrowserVisibleResults(t, ctx, repository, baseURL, fixtureStart)
 	for pageIndex, wire := range search.results.responseWire {
-		for _, sentinel := range []string{redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel} {
+		for _, sentinel := range []string{
+			redactionAPIKeySentinel,
+			redactionCookieSentinel,
+			redactionPrivateKeySentinel,
+			redactionCredentialSentinel,
+			redactionPINSentinel,
+		} {
 			if bytes.Contains(wire, []byte(sentinel)) {
 				t.Fatalf("HTTP protobuf search response page %d leaked sentinel %q", pageIndex+1, sentinel)
 			}
 		}
 	}
 	completedExport, artifact, downloadToken := exportAndDownloadJSONLines(t, ctx, httpClient, baseURL, search.jobID,
-		[]string{"message", "status", "duration_ms", "api_key", "_raw"}, verticalEventCount)
+		[]string{
+			"message", "status", "duration_ms", "api_key",
+			"customer_credential", "customer_pin", "_raw",
+		},
+		verticalEventCount,
+	)
 	serverSecrets = append(serverSecrets, downloadToken)
 	assertDownloadedRedactedResults(t, completedExport, artifact)
 
@@ -1065,7 +1086,13 @@ func assertDownloadedRedactedResults(t *testing.T, completed *opensplunkv1.Expor
 	if completed.GetArtifact().GetRowCount() != verticalEventCount {
 		t.Fatalf("downloaded export metadata = %+v", completed.GetArtifact())
 	}
-	for _, sentinel := range []string{redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel} {
+	for _, sentinel := range []string{
+		redactionAPIKeySentinel,
+		redactionCookieSentinel,
+		redactionPrivateKeySentinel,
+		redactionCredentialSentinel,
+		redactionPINSentinel,
+	} {
 		if bytes.Contains(artifact, []byte(sentinel)) {
 			t.Fatalf("downloaded export leaked sentinel %q", sentinel)
 		}
@@ -1074,7 +1101,15 @@ func assertDownloadedRedactedResults(t *testing.T, completed *opensplunkv1.Expor
 		rowCount uint64
 		found    bool
 	)
-	expectedColumns := []string{"message", "status", "duration_ms", "api_key", "_raw"}
+	expectedColumns := []string{
+		"message",
+		"status",
+		"duration_ms",
+		"api_key",
+		"customer_credential",
+		"customer_pin",
+		"_raw",
+	}
 	forEachJSONLine(t, artifact, func(line int, row map[string]any) {
 		if len(row) != len(expectedColumns) {
 			t.Fatalf("JSON Lines row %d columns = %#v", line, row)
@@ -1093,7 +1128,13 @@ func assertDownloadedRedactedResults(t *testing.T, completed *opensplunkv1.Expor
 		duration, durationOK := row["duration_ms"].(json.Number)
 		raw, rawOK := row["_raw"].(string)
 		if !statusOK || status.String() != "201" || !durationOK || duration.String() != "12.5" ||
-			row["api_key"] != "[REDACTED]" || !rawOK || strings.Count(raw, "[REDACTED]") < 3 {
+			row["api_key"] != "[REDACTED]" ||
+			row["customer_credential"] != redactionCredentialMarker ||
+			row["customer_pin"] != redactionPINMarker ||
+			!rawOK ||
+			strings.Count(raw, "[REDACTED]") < 3 ||
+			!strings.Contains(raw, `"customer_credential":"`+redactionCredentialMarker+`"`) ||
+			!strings.Contains(raw, `"customer_pin":"`+redactionPINMarker+`"`) {
 			t.Fatalf("downloaded typed redaction row = %#v", row)
 		}
 	})
@@ -1148,8 +1189,10 @@ func appendSentinelFixture(t *testing.T, path string, start time.Time) {
 		t.Fatal(err)
 	}
 	sentinelLine := fmt.Sprintf(
-		`{"timestamp":%q,"level":"INFO","message":%q,"status":201,"duration_ms":12.5,"api_key":%q,"note_one":%q,"note_two":%q}`+"\n",
+		`{"timestamp":%q,"level":"INFO","message":%q,"status":201,"duration_ms":12.5,`+
+			`"api_key":%q,"customer_credential":%q,"customer_pin":%q,"note_one":%q,"note_two":%q}`+"\n",
 		start.Add(3*time.Second).Format(time.RFC3339Nano), verticalSentinelMessage, redactionAPIKeySentinel,
+		redactionCredentialSentinel, redactionPINSentinel,
 		"Cookie: sid="+redactionCookieSentinel+"; csrf="+redactionCookieSentinel,
 		"private_key=-----BEGIN PRIVATE KEY----- "+redactionPrivateKeySentinel,
 	)
@@ -1216,7 +1259,15 @@ inputs:
     fields:
       environment: integration
       service: vertical-service
-`, address, tokenPath, statePath, logPath, verticalIndexName)
+processors:
+  - type: redact
+    fields: [customer_credential]
+    replacement: %q
+  - type: redact
+    fields: [customer_pin]
+    replacement: %q
+`, address, tokenPath, statePath, logPath, verticalIndexName,
+		redactionCredentialMarker, redactionPINMarker)
 }
 
 func waitForStoredEventCount(
@@ -1247,17 +1298,20 @@ func waitForStoredEventCount(
 		if process.Exited() {
 			t.Fatalf("collector exited before ingestion completed: %v, count=%d\nlogs:\n%s", process.Err(), lastCount,
 				redactForFailure(process.Logs(), plaintextToken,
-					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
+					redactionCredentialSentinel, redactionPINSentinel))
 		}
 		select {
 		case <-ctx.Done():
 			t.Fatalf("wait for stored events: %v, count=%d\ncollector logs:\n%s", ctx.Err(), lastCount,
 				redactForFailure(process.Logs(), plaintextToken,
-					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
+					redactionCredentialSentinel, redactionPINSentinel))
 		case <-deadline.C:
 			t.Fatalf("wait for stored events: timed out, count=%d\ncollector logs:\n%s", lastCount,
 				redactForFailure(process.Logs(), plaintextToken,
-					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
+					redactionCredentialSentinel, redactionPINSentinel))
 		case <-ticker.C:
 		}
 	}
@@ -1307,7 +1361,8 @@ func waitForCollectorCheckpoint(
 			t.Fatalf("collector exited before durable acknowledgment: %v, checkpoints=%d offset=%d error=%v\nlogs:\n%s",
 				process.Err(), lastCount, lastOffset, lastErr,
 				redactForFailure(process.Logs(), plaintextToken,
-					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
+					redactionCredentialSentinel, redactionPINSentinel))
 		}
 		select {
 		case <-ctx.Done():
@@ -1471,7 +1526,8 @@ func waitForCollectorWALAppend(
 		if process.Exited() {
 			t.Fatalf("collector exited before offline WAL append: %v snapshot=%v error=%v\nlogs:\n%s",
 				process.Err(), last, lastErr, redactForFailure(process.Logs(), plaintextToken,
-					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
+					redactionCredentialSentinel, redactionPINSentinel))
 		}
 		select {
 		case <-ctx.Done():
@@ -1479,7 +1535,8 @@ func waitForCollectorWALAppend(
 		case <-deadline.C:
 			t.Fatalf("wait for offline collector WAL append: timed out snapshot=%v error=%v\nlogs:\n%s",
 				last, lastErr, redactForFailure(process.Logs(), plaintextToken,
-					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
+					redactionCredentialSentinel, redactionPINSentinel))
 		case <-ticker.C:
 		}
 	}
@@ -1606,7 +1663,8 @@ func waitForCollectorDiscovery(
 			t.Fatalf("collector exited before empty-file discovery: %v, checkpoints=%d error=%v\nlogs:\n%s",
 				process.Err(), lastCount, lastErr,
 				redactForFailure(process.Logs(), plaintextToken,
-					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel))
+					redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
+					redactionCredentialSentinel, redactionPINSentinel))
 		}
 		select {
 		case <-ctx.Done():
@@ -2723,7 +2781,13 @@ func observeCompletedSearchWebSocket(
 				if err != nil {
 					t.Fatalf("marshal search websocket preview row %d: %v", rowIndex, err)
 				}
-				for _, sentinel := range []string{redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel} {
+				for _, sentinel := range []string{
+					redactionAPIKeySentinel,
+					redactionCookieSentinel,
+					redactionPrivateKeySentinel,
+					redactionCredentialSentinel,
+					redactionPINSentinel,
+				} {
 					if bytes.Contains(rowWire, []byte(sentinel)) {
 						t.Fatalf("search websocket preview row %d leaked protected input", rowIndex)
 					}
@@ -2873,7 +2937,15 @@ func assertTypedRedactedResults(t *testing.T, results *collectedVerticalSearchRe
 	for index, column := range results.schema.GetColumns() {
 		columns[column.GetFieldName()] = index
 	}
-	for _, name := range []string{"message", "status", "duration_ms", "api_key", "_raw"} {
+	for _, name := range []string{
+		"message",
+		"status",
+		"duration_ms",
+		"api_key",
+		"customer_credential",
+		"customer_pin",
+		"_raw",
+	} {
 		if _, ok := columns[name]; !ok {
 			t.Fatalf("result schema is missing %q: %+v", name, results.schema)
 		}
@@ -2904,12 +2976,28 @@ func assertTypedRedactedResults(t *testing.T, results *collectedVerticalSearchRe
 	if _, ok := redacted.GetKind().(*opensplunkv1.TypedValue_StringValue); !ok || redacted.GetStringValue() != "[REDACTED]" {
 		t.Fatalf("api_key cell = %+v, want redacted string", redacted)
 	}
+	credential := sentinel.GetCells()[columns["customer_credential"]]
+	if _, ok := credential.GetKind().(*opensplunkv1.TypedValue_StringValue); !ok ||
+		credential.GetStringValue() != redactionCredentialMarker {
+		t.Fatalf("customer_credential cell = %+v, want %q", credential, redactionCredentialMarker)
+	}
+	pin := sentinel.GetCells()[columns["customer_pin"]]
+	if _, ok := pin.GetKind().(*opensplunkv1.TypedValue_StringValue); !ok ||
+		pin.GetStringValue() != redactionPINMarker {
+		t.Fatalf("customer_pin cell = %+v, want %q", pin, redactionPINMarker)
+	}
 	raw := sentinel.GetCells()[columns["_raw"]]
 	rawText := raw.GetStringValue()
 	if rawText == "" {
 		rawText = string(raw.GetBytesValue())
 	}
-	for _, sentinel := range []string{redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel} {
+	for _, sentinel := range []string{
+		redactionAPIKeySentinel,
+		redactionCookieSentinel,
+		redactionPrivateKeySentinel,
+		redactionCredentialSentinel,
+		redactionPINSentinel,
+	} {
 		if strings.Contains(rawText, sentinel) {
 			t.Fatalf("raw search-result cell leaked sentinel %q", sentinel)
 		}
@@ -2919,6 +3007,10 @@ func assertTypedRedactedResults(t *testing.T, results *collectedVerticalSearchRe
 	}
 	if strings.Count(rawText, "[REDACTED]") < 3 {
 		t.Fatalf("raw cell did not redact the structured key plus embedded cookie/private-key values: %q", rawText)
+	}
+	if !strings.Contains(rawText, `"customer_credential":"`+redactionCredentialMarker+`"`) ||
+		!strings.Contains(rawText, `"customer_pin":"`+redactionPINMarker+`"`) {
+		t.Fatalf("raw cell did not retain both configured replacement markers: %q", rawText)
 	}
 }
 

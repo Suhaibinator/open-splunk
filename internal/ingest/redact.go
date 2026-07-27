@@ -34,6 +34,48 @@ var mandatorySensitiveFields = []string{
 
 type rawSecretKind uint8
 
+type redactionMatch struct {
+	kind        rawSecretKind
+	replacement string
+	order       int
+}
+
+type redactionChange struct {
+	changed                 bool
+	match                   redactionMatch
+	requiresOrderedFallback bool
+}
+
+func changedBy(match redactionMatch) redactionChange {
+	return redactionChange{
+		changed: true,
+		match:   match,
+	}
+}
+
+func boundaryChangedBy(match redactionMatch) redactionChange {
+	change := changedBy(match)
+	change.requiresOrderedFallback = true
+	return change
+}
+
+// A text replacement generated before the last policy can supply quoting or a
+// key boundary that makes previously malformed trailing text match later.
+func (change redactionChange) canAffectLaterPolicy(policyCount int) bool {
+	return change.changed && change.match.order < policyCount-1
+}
+
+func (change *redactionChange) merge(other redactionChange) {
+	if !other.changed {
+		return
+	}
+	if !change.changed || other.match.order < change.match.order {
+		change.match = other.match
+	}
+	change.requiresOrderedFallback = change.requiresOrderedFallback || other.requiresOrderedFallback
+	change.changed = true
+}
+
 const (
 	maxEmbeddedJSONRedactionDepth = 8
 	maxEscapedQuotedKeyCandidates = 8
@@ -99,15 +141,52 @@ func normalizeSensitiveName(name string) string {
 }
 
 func (v *Validator) isSensitive(name string) bool {
+	return v.matchSensitiveName(name, true).kind != rawSecretNone
+}
+
+func (v *Validator) matchSensitiveName(name string, allowComponentMatch bool) redactionMatch {
 	if v.exact {
-		_, ok := v.sensitive[name]
-		return ok
+		if match, ok := v.replacementByName[name]; ok {
+			return match
+		}
+		if _, ok := v.sensitive[name]; ok {
+			return redactionMatch{
+				kind:        rawSecretKindForName(name),
+				replacement: v.replacement,
+			}
+		}
+		return redactionMatch{}
 	}
 	normalized := normalizeSensitiveName(name)
+	components := strings.Split(normalized, "_")
 	if _, ok := v.sensitive[normalized]; ok {
-		return true
+		return redactionMatch{
+			kind:        rawSecretKindForComponents(components),
+			replacement: v.replacement,
+		}
 	}
-	return v.mandatory && hasMandatorySensitiveComponent(strings.Split(normalized, "_"))
+	if v.mandatory && allowComponentMatch &&
+		hasMandatorySensitiveComponent(components) {
+		return redactionMatch{
+			kind:        rawSecretKindForComponents(components),
+			replacement: v.replacement,
+		}
+	}
+	return redactionMatch{}
+}
+
+func (v *Validator) fallbackMatch() redactionMatch {
+	return redactionMatch{
+		kind:        rawSecretValue,
+		replacement: v.replacement,
+	}
+}
+
+func (v *Validator) depthLimitReplacement() string {
+	if v.depthReplacement != "" {
+		return v.depthReplacement
+	}
+	return v.replacement
 }
 
 // IsSensitiveField reports whether name is covered by the validator's
@@ -161,15 +240,16 @@ func (v *Validator) redactObject(object *opensplunkv1.TypedObject) {
 }
 
 func (v *Validator) redactFieldByName(field *opensplunkv1.TypedObjectField) bool {
-	if !v.isSensitive(field.GetName()) {
+	match := v.matchSensitiveName(field.GetName(), true)
+	if match.kind == rawSecretNone {
 		return false
 	}
 	if current, ok := field.GetValue().GetKind().(*opensplunkv1.TypedValue_StringValue); ok &&
-		current.StringValue == v.replacement {
+		current.StringValue == match.replacement {
 		return true
 	}
 	field.Value = &opensplunkv1.TypedValue{
-		Kind: &opensplunkv1.TypedValue_StringValue{StringValue: v.replacement},
+		Kind: &opensplunkv1.TypedValue_StringValue{StringValue: match.replacement},
 	}
 	return true
 }
@@ -271,31 +351,39 @@ func redactTopLevelJSONWithReplacements(
 // JSON numbers are decoded with UseNumber so sanitization does not coerce large
 // integers through float64.
 func (v *Validator) redactJSON(raw []byte) (redacted []byte, parsed bool) {
-	return v.redactJSONDepth(raw, 0)
+	redacted, parsed, _ = v.redactJSONDepth(raw, 0)
+	return redacted, parsed
 }
 
-func (v *Validator) redactJSONDepth(raw []byte, embeddedDepth int) (redacted []byte, parsed bool) {
+func (v *Validator) redactJSONDepth(
+	raw []byte,
+	embeddedDepth int,
+) (redacted []byte, parsed bool, change redactionChange) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	value, duplicateKey, err := decodeJSONValue(decoder)
 	if err != nil {
-		return raw, false
+		return raw, false, redactionChange{}
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return raw, false
+		return raw, false, redactionChange{}
 	}
-	redactedValue, changed := v.redactJSONValue(value, embeddedDepth)
-	if !changed && !duplicateKey {
-		return raw, true
+	redactedValue, change := v.redactJSONValue(value, embeddedDepth)
+	if duplicateKey && !change.changed {
+		change = changedBy(v.fallbackMatch())
+	}
+	if !change.changed && !duplicateKey {
+		return raw, true, redactionChange{}
 	}
 	encoded, err := json.Marshal(redactedValue)
 	if err != nil {
 		// Values produced by encoding/json plus the replacement string are
 		// marshalable. Keep this branch fail-closed if that invariant changes.
-		return []byte(v.replacement), true
+		fallback := v.fallbackMatch()
+		return []byte(fallback.replacement), true, changedBy(fallback)
 	}
-	return encoded, true
+	return encoded, true, change
 }
 
 func decodeJSONValue(decoder *json.Decoder) (any, bool, error) {
@@ -364,22 +452,120 @@ func decodeJSONValue(decoder *json.Decoder) (any, bool, error) {
 }
 
 func (v *Validator) redactText(raw []byte) []byte {
-	if redactedJSON, parsed := v.redactJSON(raw); parsed {
-		return redactedJSON
+	if len(v.sequential) > 0 {
+		redacted := raw
+		for _, redactor := range v.sequential {
+			redacted = redactor.redactText(redacted)
+		}
+		return redacted
 	}
-	embedded, _ := v.redactEmbeddedJSONStringLiterals(raw, 0)
-	return v.redactKeyValueText(embedded)
+	redacted, _ := v.redactTextChanged(raw)
+	return redacted
+}
+
+func (v *Validator) redactEventRaw(
+	raw []byte,
+	encoding opensplunkv1.RawEncoding,
+) []byte {
+	if encoding == opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 || utf8.Valid(raw) {
+		return v.redactText(raw)
+	}
+
+	// Binary payloads can still contain ASCII credentials. The raw scanner is
+	// byte-oriented and preserves unrelated invalid UTF-8 verbatim. If a policy
+	// before the last one changes the payload, replaying in policy order also
+	// preserves the historical transition to the full text scanner when that
+	// rewrite removes the only invalid byte.
+	redacted, change := v.redactKeyValueTextChanged(raw)
+	if len(v.ordered) > 0 &&
+		(change.requiresOrderedFallback ||
+			change.canAffectLaterPolicy(len(v.ordered))) {
+		return v.redactEventRawInPolicyOrder(raw, encoding)
+	}
+	return redacted
+}
+
+func (v *Validator) redactEventRawInPolicyOrder(
+	raw []byte,
+	encoding opensplunkv1.RawEncoding,
+) []byte {
+	redacted := raw
+	for _, redactor := range v.ordered {
+		redacted = redactor.redactEventRaw(redacted, encoding)
+	}
+	return redacted
+}
+
+func (v *Validator) redactTextChanged(raw []byte) ([]byte, redactionChange) {
+	if redactedJSON, parsed, change := v.redactJSONDepth(raw, 0); parsed {
+		return redactedJSON, change
+	}
+	embedded, embeddedChange := v.redactEmbeddedJSONStringLiteralsChanged(raw, 0)
+	if embeddedChange.changed && len(v.ordered) > 0 {
+		return v.redactTextInPolicyOrder(raw)
+	}
+	redacted, textChange := v.redactKeyValueTextChanged(embedded)
+	if len(v.ordered) > 0 &&
+		(textChange.requiresOrderedFallback ||
+			textChange.canAffectLaterPolicy(len(v.ordered))) {
+		return v.redactTextInPolicyOrder(raw)
+	}
+	embeddedChange.merge(textChange)
+	return redacted, embeddedChange
 }
 
 func (v *Validator) redactKeyValueText(raw []byte) []byte {
+	if len(v.sequential) > 0 {
+		redacted := raw
+		for _, redactor := range v.sequential {
+			redacted = redactor.redactKeyValueText(redacted)
+		}
+		return redacted
+	}
+	redacted, change := v.redactKeyValueTextChanged(raw)
+	if len(v.ordered) > 0 &&
+		(change.requiresOrderedFallback ||
+			change.canAffectLaterPolicy(len(v.ordered))) {
+		redacted = v.redactKeyValueTextInPolicyOrder(raw)
+	}
+	return redacted
+}
+
+func (v *Validator) redactTextInPolicyOrder(raw []byte) ([]byte, redactionChange) {
+	redacted := raw
+	var change redactionChange
+	for order, redactor := range v.ordered {
+		next := redactor.redactText(redacted)
+		if !bytes.Equal(next, redacted) {
+			change.merge(changedBy(redactionMatch{
+				kind:        rawSecretValue,
+				replacement: redactor.replacement,
+				order:       order,
+			}))
+		}
+		redacted = next
+	}
+	return redacted, change
+}
+
+func (v *Validator) redactKeyValueTextInPolicyOrder(raw []byte) []byte {
+	redacted := raw
+	for _, redactor := range v.ordered {
+		redacted = redactor.redactKeyValueText(redacted)
+	}
+	return redacted
+}
+
+func (v *Validator) redactKeyValueTextChanged(raw []byte) ([]byte, redactionChange) {
 	var result []byte
 	copyFrom := 0
+	var change redactionChange
 	for cursor := 0; cursor < len(raw); cursor++ {
 		if raw[cursor] != '=' && raw[cursor] != ':' {
 			continue
 		}
-		kind, quotedKey, encodedQuotedKey := v.rawSecretKindBefore(raw, cursor)
-		if kind == rawSecretNone {
+		match, quotedKey, encodedQuotedKey := v.rawSecretMatchBefore(raw, cursor)
+		if match.kind == rawSecretNone {
 			continue
 		}
 		if encodedQuotedKey {
@@ -387,7 +573,11 @@ func (v *Validator) redactKeyValueText(raw []byte) []byte {
 			// prose containing {\"password\":\"...\"}). Precisely rewriting one
 			// value would require decoding and re-encoding the surrounding string.
 			// Fail closed at the current string/raw boundary instead.
-			return []byte(v.replacement)
+			change := boundaryChangedBy(match)
+			if len(v.ordered) > 0 {
+				return raw, change
+			}
+			return []byte(match.replacement), change
 		}
 
 		valueStart := cursor + 1
@@ -395,31 +585,48 @@ func (v *Validator) redactKeyValueText(raw []byte) []byte {
 			(quotedKey && (raw[valueStart] == '\r' || raw[valueStart] == '\n'))) {
 			valueStart++
 		}
-		valueEnd, ambiguousValue := v.rawSecretValueEnd(raw, valueStart, kind)
+		valueEnd, ambiguousValue := v.rawSecretValueEnd(raw, valueStart, match.kind)
 		if ambiguousValue {
-			return []byte(v.replacement)
+			change := boundaryChangedBy(match)
+			if len(v.ordered) > 0 {
+				return raw, change
+			}
+			return []byte(match.replacement), change
 		}
-		if valueEnd < valueStart || (valueEnd == valueStart && kind == rawSecretValue) {
+		if valueEnd < valueStart || (valueEnd == valueStart && match.kind == rawSecretValue) {
 			continue
+		}
+		requiresOrderedFallback := match.order > 0 &&
+			bytes.IndexAny(raw[valueStart:valueEnd], "=:") >= 0
+		matchChange := changedBy(match)
+		matchChange.requiresOrderedFallback = requiresOrderedFallback
+		if len(v.ordered) > 0 &&
+			(matchChange.requiresOrderedFallback ||
+				matchChange.canAffectLaterPolicy(len(v.ordered))) {
+			return raw, matchChange
 		}
 
 		if result == nil {
-			result = make([]byte, 0, len(raw)+len(v.replacement))
+			result = make([]byte, 0, len(raw)+len(match.replacement))
 		}
 		result = append(result, raw[copyFrom:valueStart]...)
 		result = append(result, '"')
-		result = append(result, v.replacement...)
+		result = append(result, match.replacement...)
 		result = append(result, '"')
 		copyFrom = valueEnd
 		cursor = valueEnd - 1
+		change.merge(matchChange)
 	}
 	if result == nil {
-		return raw
+		return raw, redactionChange{}
 	}
-	return append(result, raw[copyFrom:]...)
+	return append(result, raw[copyFrom:]...), change
 }
 
-func (v *Validator) redactEmbeddedJSONStringLiterals(raw []byte, embeddedDepth int) ([]byte, bool) {
+func (v *Validator) redactEmbeddedJSONStringLiteralsChanged(
+	raw []byte,
+	embeddedDepth int,
+) ([]byte, redactionChange) {
 	for cursor := 0; cursor < len(raw); cursor++ {
 		if raw[cursor] != '"' || rawByteEscaped(raw, cursor, 0) {
 			continue
@@ -437,27 +644,27 @@ func (v *Validator) redactEmbeddedJSONStringLiterals(raw []byte, embeddedDepth i
 			cursor = end - 2
 			continue
 		}
-		_, changed := v.redactJSONValue(decoded, embeddedDepth+1)
-		if !changed {
+		_, change := v.redactJSONValue(decoded, embeddedDepth+1)
+		if !change.changed {
 			cursor = end - 2
 			continue
 		}
 		// A valid embedded string required redaction. Replace the current
 		// raw/string boundary rather than attempt overlapping rewrites in
 		// malformed prose; structured outer JSON fields remain intact.
-		return []byte(v.replacement), true
+		return []byte(change.match.replacement), change
 	}
-	return raw, false
+	return raw, redactionChange{}
 }
 
-func (v *Validator) rawSecretKindBefore(raw []byte, delimiter int) (rawSecretKind, bool, bool) {
+func (v *Validator) rawSecretMatchBefore(raw []byte, delimiter int) (redactionMatch, bool, bool) {
 	quotedKeyEnd, ambiguousEncodedWhitespace := rawQuotedKeyEnd(raw, delimiter, int(v.limits.MaxFieldNameBytes)+4)
 	if ambiguousEncodedWhitespace {
 		// A delimiter preceded by more encoded JSON whitespace than we are
 		// willing to scan could be hiding a sensitive quoted key. The caller
 		// replaces the current raw/string boundary rather than resuming from a
 		// partial parse and risking disclosure.
-		return rawSecretValue, true, true
+		return v.fallbackMatch(), true, true
 	}
 	// A decoded key byte may occupy six bytes as a JSON Unicode escape. Include
 	// quote delimiters and outer escape bytes as well. The hard field-name limit
@@ -473,15 +680,15 @@ func (v *Validator) rawSecretKindBefore(raw []byte, delimiter int) (rawSecretKin
 	if quotedName, ok := rawQuotedKeyBefore(raw, quotedKeyEnd, quotedLowerBound); ok {
 		return v.classifyRawSensitiveName(quotedName, true), true, false
 	}
-	if kind, parsed := v.rawEscapedQuotedSecretKindBefore(raw, quotedKeyEnd, quotedLowerBound, quotedKeyBudget); parsed {
-		return kind, true, kind != rawSecretNone
+	if match, parsed := v.rawEscapedQuotedSecretMatchBefore(raw, quotedKeyEnd, quotedLowerBound, quotedKeyBudget); parsed {
+		return match, true, match.kind != rawSecretNone
 	}
 	if quotedLowerBound > 0 && quotedKeyEnd > 0 && (raw[quotedKeyEnd-1] == '"' || raw[quotedKeyEnd-1] == '\'') &&
 		rawByteEscaped(raw, quotedKeyEnd-1, quotedLowerBound) {
 		// A quote-like key tail with no opener inside the maximum encoded-key
 		// budget is ambiguous. It may be a repeatedly encoded sensitive key, so
 		// fail closed instead of treating the tail as an ordinary bare name.
-		return rawSecretValue, true, true
+		return v.fallbackMatch(), true, true
 	}
 
 	keyEnd := delimiter
@@ -489,7 +696,7 @@ func (v *Validator) rawSecretKindBefore(raw []byte, delimiter int) (rawSecretKin
 		keyEnd--
 	}
 	if keyEnd == 0 {
-		return rawSecretNone, false, false
+		return redactionMatch{}, false, false
 	}
 
 	lowerBound := keyEnd - int(v.limits.MaxFieldNameBytes)
@@ -504,10 +711,10 @@ func (v *Validator) rawSecretKindBefore(raw []byte, delimiter int) (rawSecretKin
 		keyStart--
 	}
 	if keyStart == keyEnd {
-		return rawSecretNone, false, false
+		return redactionMatch{}, false, false
 	}
-	if kind := v.classifyRawSensitiveName(string(raw[keyStart:keyEnd]), true); kind != rawSecretNone {
-		return kind, false, false
+	if match := v.classifyRawSensitiveName(string(raw[keyStart:keyEnd]), true); match.kind != rawSecretNone {
+		return match, false, false
 	}
 
 	// Exact configured names may use horizontal whitespace between components
@@ -529,12 +736,12 @@ func (v *Validator) rawSecretKindBefore(raw []byte, delimiter int) (rawSecretKin
 		if previousStart == separatorStart {
 			break
 		}
-		if kind := v.classifyRawSensitiveName(string(raw[previousStart:keyEnd]), false); kind != rawSecretNone {
-			return kind, false, false
+		if match := v.classifyRawSensitiveName(string(raw[previousStart:keyEnd]), false); match.kind != rawSecretNone {
+			return match, false, false
 		}
 		extendedStart = previousStart
 	}
-	return rawSecretNone, false, false
+	return redactionMatch{}, false, false
 }
 
 func rawQuotedKeyEnd(raw []byte, delimiter, encodedWhitespaceBudget int) (int, bool) {
@@ -582,16 +789,21 @@ func rawQuotedKeyEnd(raw []byte, delimiter, encodedWhitespaceBudget int) (int, b
 	}
 }
 
-func (v *Validator) rawEscapedQuotedSecretKindBefore(raw []byte, keyEnd, lowerBound, encodedKeyBudget int) (rawSecretKind, bool) {
+func (v *Validator) rawEscapedQuotedSecretMatchBefore(
+	raw []byte,
+	keyEnd int,
+	lowerBound int,
+	encodedKeyBudget int,
+) (redactionMatch, bool) {
 	if keyEnd < 2 || (raw[keyEnd-1] != '"' && raw[keyEnd-1] != '\'') {
-		return rawSecretNone, false
+		return redactionMatch{}, false
 	}
 	closingEscapeRun, complete := rawBackslashRunBefore(raw, keyEnd-1, lowerBound)
 	if !complete {
-		return rawSecretValue, true
+		return v.fallbackMatch(), true
 	}
 	if closingEscapeRun%2 == 0 {
-		return rawSecretNone, false
+		return redactionMatch{}, false
 	}
 	closingEscapeLayer := rawEscapeLayer(closingEscapeRun)
 	quote := raw[keyEnd-1]
@@ -606,7 +818,7 @@ func (v *Validator) rawEscapedQuotedSecretKindBefore(raw []byte, keyEnd, lowerBo
 		}
 		openingEscapeRun, openingComplete := rawBackslashRunBefore(raw, openingQuote, lowerBound)
 		if !openingComplete {
-			return rawSecretValue, true
+			return v.fallbackMatch(), true
 		}
 		if rawEscapeLayer(openingEscapeRun) != closingEscapeLayer {
 			continue
@@ -616,7 +828,7 @@ func (v *Validator) rawEscapedQuotedSecretKindBefore(raw []byte, keyEnd, lowerBo
 			// Adversarial quote runs must not turn the bounded lookback into
 			// quadratic allocation/unquoting work. An unresolved quote tail is
 			// ambiguous, so the caller fail-closes the current boundary.
-			return rawSecretValue, true
+			return v.fallbackMatch(), true
 		}
 		contentStart := openingQuote + 1
 		if contentStart > contentEnd || contentEnd-contentStart > encodedKeyBudget {
@@ -634,24 +846,24 @@ func (v *Validator) rawEscapedQuotedSecretKindBefore(raw []byte, keyEnd, lowerBo
 		// Quotes inside the encoded key have a deeper slash run and are skipped.
 		return v.classifyRecursivelyEncodedKey(decoded), true
 	}
-	return rawSecretNone, false
+	return redactionMatch{}, false
 }
 
-func (v *Validator) classifyRecursivelyEncodedKey(decoded string) rawSecretKind {
+func (v *Validator) classifyRecursivelyEncodedKey(decoded string) redactionMatch {
 	for depth := 0; ; depth++ {
 		if len(decoded) <= int(v.limits.MaxFieldNameBytes) {
-			if kind := v.classifyRawSensitiveName(decoded, true); kind != rawSecretNone {
-				return kind
+			if match := v.classifyRawSensitiveName(decoded, true); match.kind != rawSecretNone {
+				return match
 			}
 		}
 		if !strings.Contains(decoded, `\`) {
 			if len(decoded) > int(v.limits.MaxFieldNameBytes) {
-				return rawSecretValue
+				return v.fallbackMatch()
 			}
-			return rawSecretNone
+			return redactionMatch{}
 		}
 		if depth >= maxEmbeddedJSONRedactionDepth {
-			return rawSecretValue
+			return v.fallbackMatch()
 		}
 		encoded := make([]byte, 0, len(decoded)+2)
 		encoded = append(encoded, '"')
@@ -662,7 +874,7 @@ func (v *Validator) classifyRecursivelyEncodedKey(decoded string) rawSecretKind 
 			// A matching encoded quote layer with unresolved escape syntax is
 			// ambiguous; fail closed rather than classify a partially decoded key
 			// as safe.
-			return rawSecretValue
+			return v.fallbackMatch()
 		}
 		decoded = next
 	}
@@ -722,18 +934,18 @@ func rawEscapeLayer(backslashRun int) int {
 	return layer
 }
 
-func (v *Validator) classifyRawSensitiveName(name string, allowComponentMatch bool) rawSecretKind {
-	normalized := normalizeSensitiveName(name)
-	lookup := normalized
-	if v.exact {
-		lookup = name
-	}
-	_, exact := v.sensitive[lookup]
-	components := strings.Split(normalized, "_")
-	sensitive := exact || v.mandatory && allowComponentMatch && hasMandatorySensitiveComponent(components)
-	if !sensitive {
-		return rawSecretNone
-	}
+func (v *Validator) classifyRawSensitiveName(
+	name string,
+	allowComponentMatch bool,
+) redactionMatch {
+	return v.matchSensitiveName(name, allowComponentMatch)
+}
+
+func rawSecretKindForName(name string) rawSecretKind {
+	return rawSecretKindForComponents(strings.Split(normalizeSensitiveName(name), "_"))
+}
+
+func rawSecretKindForComponents(components []string) rawSecretKind {
 	for index, component := range components {
 		switch {
 		case hasSensitiveFamilyAffix(component, "authorization"):
@@ -1046,49 +1258,82 @@ func pemPrivateKeyEnd(raw []byte, start int) (int, bool) {
 	return labelEnd + 5 + markerOffset + len(endMarker), true
 }
 
-func (v *Validator) redactJSONValue(value any, embeddedDepth int) (any, bool) {
+func (v *Validator) redactJSONValue(value any, embeddedDepth int) (any, redactionChange) {
 	switch typed := value.(type) {
 	case map[string]any:
-		changed := false
+		var change redactionChange
 		for name, child := range typed {
-			if v.isSensitive(name) {
-				typed[name] = v.replacement
-				changed = true
+			if match := v.matchSensitiveName(name, true); match.kind != rawSecretNone {
+				matchChange := changedBy(match)
+				replacement := match.replacement
+				if embeddedDepth >= maxEmbeddedJSONRedactionDepth && len(v.ordered) > 0 {
+					replacement = v.depthLimitReplacement()
+					matchChange = changedBy(redactionMatch{
+						kind:        rawSecretValue,
+						replacement: v.ordered[0].replacement,
+					})
+				}
+				typed[name] = replacement
+				change.merge(matchChange)
 				continue
 			}
-			redacted, childChanged := v.redactJSONValue(child, embeddedDepth)
-			if childChanged {
+			redacted, childChange := v.redactJSONValue(child, embeddedDepth)
+			if childChange.changed {
 				typed[name] = redacted
-				changed = true
+				change.merge(childChange)
 			}
 		}
-		return typed, changed
+		return typed, change
 	case []any:
-		changed := false
+		var change redactionChange
 		for i, child := range typed {
-			redacted, childChanged := v.redactJSONValue(child, embeddedDepth)
-			if childChanged {
+			redacted, childChange := v.redactJSONValue(child, embeddedDepth)
+			if childChange.changed {
 				typed[i] = redacted
-				changed = true
+				change.merge(childChange)
 			}
 		}
-		return typed, changed
+		return typed, change
 	case string:
 		if embeddedDepth >= maxEmbeddedJSONRedactionDepth {
 			// Deeply encoded JSON is unusual and expensive to inspect without a
 			// bound. Every string at this encoded depth is replaced: requiring the
 			// leaf itself to be valid JSON would permit prose-wrapped payloads to
 			// bypass the bound.
-			return v.replacement, true
+			change := changedBy(v.fallbackMatch())
+			return v.depthLimitReplacement(), change
 		}
-		if embedded, parsed := v.redactJSONDepth([]byte(typed), embeddedDepth+1); parsed {
-			return string(embedded), !bytes.Equal(embedded, []byte(typed))
+		if embedded, parsed, change := v.redactJSONDepth([]byte(typed), embeddedDepth+1); parsed {
+			if bytes.Equal(embedded, []byte(typed)) {
+				return typed, redactionChange{}
+			}
+			return string(embedded), change
 		}
 		typedBytes := []byte(typed)
-		embedded, embeddedChanged := v.redactEmbeddedJSONStringLiterals(typedBytes, embeddedDepth)
-		redacted := v.redactKeyValueText(embedded)
-		return string(redacted), embeddedChanged || !bytes.Equal(redacted, typedBytes)
+		embedded, change := v.redactEmbeddedJSONStringLiteralsChanged(typedBytes, embeddedDepth)
+		if change.changed && len(v.ordered) > 0 {
+			redacted, orderedChange := v.redactTextInPolicyOrder(typedBytes)
+			if bytes.Equal(redacted, typedBytes) {
+				return typed, redactionChange{}
+			}
+			return string(redacted), orderedChange
+		}
+		redacted, textChange := v.redactKeyValueTextChanged(embedded)
+		if len(v.ordered) > 0 &&
+			(textChange.requiresOrderedFallback ||
+				textChange.canAffectLaterPolicy(len(v.ordered))) {
+			redacted, orderedChange := v.redactTextInPolicyOrder(typedBytes)
+			if bytes.Equal(redacted, typedBytes) {
+				return typed, redactionChange{}
+			}
+			return string(redacted), orderedChange
+		}
+		change.merge(textChange)
+		if bytes.Equal(redacted, typedBytes) {
+			return typed, redactionChange{}
+		}
+		return string(redacted), change
 	default:
-		return value, false
+		return value, redactionChange{}
 	}
 }
