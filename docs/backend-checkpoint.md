@@ -21,6 +21,9 @@ Adversarial correctness, reuse, and efficiency checkpoint (committed and
 pushed):
 `39966596c7584ecef7976fbb7a697cf1eb12abca`
 
+Compatibility and editor checkpoint (committed and pushed):
+`a4a07e3aa20c2d8d3c45b0cd7986f5e7b7b6503e`
+
 This test-first slice implements bounded `mvcount(value)`:
 
 1. The parser accepts a case-insensitive call with exactly one scalar
@@ -66,13 +69,20 @@ This test-first slice implements bounded `mvcount(value)`:
     fail-closed tagged payload validation, pre-binding sparse presence guards,
     direct numeric-domain lowering, and nested cardinality identity collapse.
 
-Validation completed through the adversarial checkpoint:
+Validation completed on the current implementation:
 
 ```sh
 go test ./internal/clickhouse \
   -run 'TestCompileEval(MVCount|ToString|LowerUpper|LenLength)|TestCompileStats|TestFieldSummary' \
   -count=1
 go test ./... -count=1 -timeout=5m
+go vet ./...
+go build ./...
+golangci-lint run ./...
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
   OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4 \
   go test ./internal/clickhouse \
@@ -80,21 +90,20 @@ OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
 git diff --check
 ```
 
-The full Go suite passed. The pinned Store/compiler suite, including the raw
-malformed-envelope corpus, passed in 49.919 seconds. Compatibility/editor and
-final static-gate checkpoints follow this section once committed.
+All gates pass. The unrestricted repository-wide lint run reports zero issues.
+The frontend corpus contains 122 application tests and 47 release/build tests,
+and the production static export generated all 11 pages. The pinned
+Store/compiler suite, including the raw malformed-envelope corpus, passed in
+49.919 seconds.
 
 Immediate resume steps:
 
-1. Confirm `main` and `origin/main` contain `f68cacc`, `738fabf`, and
-   `3996659`. Preserve unexpected local changes.
-2. Run the frontend application/release corpus, typecheck, lint, build, Go
-   vet, and unrestricted repository-wide `golangci-lint` after the editor and
-   compatibility contract are committed.
-3. Select the next bounded scalar slice only after pinning its Splunk
+1. Confirm `main` and `origin/main` contain `f68cacc`, `738fabf`, `3996659`,
+   and `a4a07e3`. Preserve unexpected local changes.
+2. Select the next bounded scalar slice only after pinning its Splunk
    signature, fixed/Dynamic type behavior, null and multivalue behavior,
    resource limits, and ClickHouse lowering.
-4. Keep broader multivalue functions, formatted `tostring`, negative or
+3. Keep broader multivalue functions, formatted `tostring`, negative or
    calculated `round` precision, arithmetic, concatenation, and canonical-time
    conversion as separate compatibility slices.
 
