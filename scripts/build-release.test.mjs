@@ -225,6 +225,30 @@ async function installLauncherRetargetShim(
   await chmod(shim, 0o755);
 }
 
+async function installCleanupFailureShim(fixture, targetPattern) {
+  const binaryDirectory = path.join(
+    fixture,
+    ".cache",
+    "cleanup-failure-shim",
+    "bin",
+  );
+  await mkdir(binaryDirectory, { recursive: true });
+  const shim = path.join(binaryDirectory, "rm");
+  await writeFile(
+    shim,
+    "#!/usr/bin/env bash\n" +
+      "set -euo pipefail\n" +
+      `target_pattern=${JSON.stringify(targetPattern)}\n` +
+      "if [[ \"$#\" -eq 2 && \"$1\" == -rf && " +
+      "\"$2\" == $target_pattern ]]; then\n" +
+      "  exit 74\n" +
+      "fi\n" +
+      "exec /bin/rm \"$@\"\n",
+  );
+  await chmod(shim, 0o755);
+  return binaryDirectory;
+}
+
 function releaseArguments(fixture) {
   return [
     "-u",
@@ -668,6 +692,121 @@ test("release build pins its physical work root across TMPDIR retargeting", asyn
   assert.equal(
     await readFile(path.join(fixture, "build", "asset-manifest.json"), "utf8"),
     '{"node_env":"production","deployment":""}\n',
+  );
+});
+
+test("release cleanup removes read-only dependency-cache directories", async (t) => {
+  const fixture = await releaseFixture(t);
+  const makefilePath = path.join(fixture, "Makefile");
+  const originalMakefile = await readFile(makefilePath, "utf8");
+  const changedMakefile = originalMakefile.replace(
+    "proto-tools release-go-deps:\n",
+    "proto-tools release-go-deps:\n" +
+      "\tmkdir -p \"$$GOMODCACHE/read-only/child\"\n" +
+      "\tprintf 'cached\\n' > \"$$GOMODCACHE/read-only/child/module\"\n" +
+      "\tchmod 0555 \"$$GOMODCACHE/read-only\" \"$$GOMODCACHE/read-only/child\"\n",
+  );
+  assert.notEqual(changedMakefile, originalMakefile);
+  await writeFile(makefilePath, changedMakefile);
+  git(fixture, ["add", "Makefile"]);
+  git(fixture, ["commit", "--quiet", "-m", "create read-only dependency cache"]);
+  const revision = git(fixture, ["rev-parse", "HEAD"]);
+  const temporaryRoot = await mkdtemp(
+    path.join(tmpdir(), "open-splunk-read-only-cleanup-"),
+  );
+  t.after(() => rm(temporaryRoot, { force: true, recursive: true }));
+
+  const result = buildRelease(fixture, revision, {
+    env: { TMPDIR: temporaryRoot },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    (await readdir(temporaryRoot)).filter((entry) =>
+      entry.startsWith("open-splunk-release.")),
+    [],
+  );
+});
+
+test("release cleanup failure changes the command status", async (t) => {
+  const fixture = await releaseFixture(t);
+  const revision = git(fixture, ["rev-parse", "HEAD"]);
+  const shimDirectory = await installCleanupFailureShim(
+    fixture,
+    "*/open-splunk-release.*",
+  );
+  const temporaryRoot = await mkdtemp(
+    path.join(tmpdir(), "open-splunk-failed-cleanup-"),
+  );
+  t.after(() => rm(temporaryRoot, { force: true, recursive: true }));
+
+  const result = buildRelease(fixture, revision, {
+    env: {
+      PATH: `${shimDirectory}:${process.env.PATH}`,
+      TMPDIR: temporaryRoot,
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /could not remove release work root/);
+  assert.match(result.stderr, /release work root remains after cleanup/);
+  const remainingWorkRoots = (await readdir(temporaryRoot)).filter((entry) =>
+    entry.startsWith("open-splunk-release."));
+  assert.equal(remainingWorkRoots.length, 1);
+  await assert.rejects(
+    access(path.join(fixture, ".cache", "release.lock"), constants.F_OK),
+  );
+});
+
+test("release cleanup removes a read-only previous build", async (t) => {
+  const fixture = await releaseFixture(t);
+  const revision = git(fixture, ["rev-parse", "HEAD"]);
+  const readOnlyDirectory = path.join(fixture, "build", "cache", "child");
+  await mkdir(readOnlyDirectory, { recursive: true });
+  await writeFile(path.join(readOnlyDirectory, "artifact"), "previous\n");
+  await chmod(readOnlyDirectory, 0o555);
+  await chmod(path.dirname(readOnlyDirectory), 0o555);
+
+  const result = buildRelease(fixture, revision);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    (await readdir(path.join(fixture, ".cache"))).filter((entry) =>
+      entry.startsWith("release-previous.")),
+    [],
+  );
+});
+
+test("previous-build cleanup failure changes the command status", async (t) => {
+  const fixture = await releaseFixture(t);
+  const revision = git(fixture, ["rev-parse", "HEAD"]);
+  await mkdir(path.join(fixture, "build"));
+  await writeFile(path.join(fixture, "build", "previous"), "previous\n");
+  const shimDirectory = await installCleanupFailureShim(
+    fixture,
+    "*/.cache/release-previous.*",
+  );
+
+  const result = buildRelease(fixture, revision, {
+    env: {
+      PATH: `${shimDirectory}:${process.env.PATH}`,
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /could not remove previous release build/);
+  assert.match(result.stderr, /previous release build remains after cleanup/);
+  assert.equal(
+    (await readdir(path.join(fixture, ".cache"))).filter((entry) =>
+      entry.startsWith("release-previous.")).length,
+    1,
+  );
+  assert.equal(
+    await readFile(path.join(fixture, "build", "asset-manifest.json"), "utf8"),
+    '{"node_env":"production","deployment":""}\n',
+  );
+  await assert.rejects(
+    access(path.join(fixture, ".cache", "release.lock"), constants.F_OK),
   );
 });
 

@@ -86,6 +86,35 @@ rename_exact() {
     ' "$1" "$2"
 }
 
+remove_private_tree() {
+  local tree=$1
+  local description=$2
+  local failed=0
+
+  if [[ ! -e "$tree" && ! -L "$tree" ]]; then
+    return 0
+  fi
+  if [[ -L "$tree" || ! -d "$tree" ]]; then
+    echo "error: $description changed before cleanup: $tree" >&2
+    return 1
+  fi
+  # Go's module cache and prior artifacts may contain read-only directories.
+  # Restore owner traversal/write permission without following symlinks.
+  if ! find "$tree" -type d -exec chmod u+rwx {} +; then
+    echo "error: could not make $description removable: $tree" >&2
+    failed=1
+  fi
+  if ! rm -rf "$tree"; then
+    echo "error: could not remove $description: $tree" >&2
+    failed=1
+  fi
+  if [[ -e "$tree" || -L "$tree" ]]; then
+    echo "error: $description remains after cleanup: $tree" >&2
+    failed=1
+  fi
+  return "$failed"
+}
+
 cleanup() {
   local status=$?
   local rollback_failed=0
@@ -124,14 +153,20 @@ cleanup() {
     fi
   fi
 
-  if [[ -n "$PUBLISH_ROOT" && -d "$PUBLISH_ROOT" ]]; then
-    rm -rf "$PUBLISH_ROOT"
+  if [[ -n "$PUBLISH_ROOT" ]]; then
+    if ! remove_private_tree "$PUBLISH_ROOT" "unpublished release output"; then
+      status=1
+    fi
   fi
-  if [[ "$published" == true && -n "$PREVIOUS_BUILD" && -d "$PREVIOUS_BUILD" ]]; then
-    rm -rf "$PREVIOUS_BUILD"
+  if [[ "$published" == true && -n "$PREVIOUS_BUILD" ]]; then
+    if ! remove_private_tree "$PREVIOUS_BUILD" "previous release build"; then
+      status=1
+    fi
   fi
-  if [[ $rollback_failed -eq 0 && -n "$FAILED_BUILD" && -d "$FAILED_BUILD" ]]; then
-    rm -rf "$FAILED_BUILD"
+  if [[ $rollback_failed -eq 0 && -n "$FAILED_BUILD" ]]; then
+    if ! remove_private_tree "$FAILED_BUILD" "failed published build"; then
+      status=1
+    fi
   elif [[ $rollback_failed -ne 0 ]]; then
     echo "error: release rollback is incomplete" >&2
     if [[ -n "$PREVIOUS_BUILD" && -d "$PREVIOUS_BUILD" ]]; then
@@ -141,7 +176,9 @@ cleanup() {
       echo "error: failed published build preserved at $FAILED_BUILD" >&2
     fi
   fi
-  rm -rf "$WORK_ROOT"
+  if ! remove_private_tree "$WORK_ROOT" "release work root"; then
+    status=1
+  fi
   if [[ -n "$RELEASE_LOCK" ]]; then
     if [[ -L "$RELEASE_LOCK" || ! -d "$RELEASE_LOCK" ]]; then
       echo "error: repository release lock changed while held: $RELEASE_LOCK" >&2
