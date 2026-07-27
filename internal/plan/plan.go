@@ -514,6 +514,7 @@ const (
 	ScalarFunctionRound
 	ScalarFunctionCeil
 	ScalarFunctionFloor
+	ScalarFunctionMVCount
 )
 
 // ScalarCallExpression invokes one supported eval operation.

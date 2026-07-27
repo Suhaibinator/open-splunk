@@ -1881,6 +1881,9 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		case spl.ScalarFunctionFloor:
 			expectedArguments = 1
 			functionName = "floor"
+		case spl.ScalarFunctionMVCount:
+			expectedArguments = 1
+			functionName = "mvcount"
 		case spl.ScalarFunctionReplace:
 			expectedArguments = 3
 			functionName = "replace"
@@ -2041,6 +2044,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			function = ScalarFunctionCeil
 		case spl.ScalarFunctionFloor:
 			function = ScalarFunctionFloor
+		case spl.ScalarFunctionMVCount:
+			function = ScalarFunctionMVCount
 		case spl.ScalarFunctionReplace:
 			function = ScalarFunctionReplace
 		case spl.ScalarFunctionIsNull:

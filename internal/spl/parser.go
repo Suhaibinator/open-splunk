@@ -2464,6 +2464,15 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				},
 			}
 		}
+	case "mvcount":
+		function = ScalarFunctionMVCount
+		if len(arguments) != 1 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: "mvcount requires exactly one argument",
+				Range:   name.sourceRange,
+			}
+		}
 	case "substr":
 		function = ScalarFunctionSubstring
 		if len(arguments) < 2 || len(arguments) > 3 {
@@ -2518,6 +2527,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				"round(value, precision)",
 				"ceil(value)",
 				"floor(value)",
+				"mvcount(value)",
 				`if(predicate, true_value, false_value)`,
 			},
 		}

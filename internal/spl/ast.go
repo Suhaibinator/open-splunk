@@ -237,6 +237,7 @@ const (
 	ScalarFunctionRound
 	ScalarFunctionCeil
 	ScalarFunctionFloor
+	ScalarFunctionMVCount
 )
 
 // ScalarCallExpr invokes a supported eval function. Function names are
