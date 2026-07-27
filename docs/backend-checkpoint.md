@@ -7,16 +7,21 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: typed SPL `if` parser and logical plan
+## Latest checkpoint: typed SPL `if` end to end
 
 Date: 2026-07-27
 
 Parser/planner checkpoint (committed and pushed):
 `cfaa75bf3b6aa520dde94c6ca209f72cc1a800db`
 
-This test-first checkpoint establishes the Boolean-consumer architecture for
-`if(condition, true_value, false_value)` without yet advertising or compiling
-the function:
+ClickHouse compiler and pinned integration checkpoint (committed and pushed):
+`c1ad25b93223204df10f3fbb4ed37061f9842f3f`
+
+Compatibility/editor checkpoint (committed and pushed):
+`fed32762ed3bf8e22994383ea5f4aa401f375b5a`
+
+This test-first slice implements and advertises the bounded Boolean consumer
+`if(condition, true_value, false_value)`:
 
 1. The parser has a dedicated `ScalarIfExpr`; the first argument is the
    existing typed `WhereExpr`, not an ordinary scalar argument. It therefore
@@ -42,53 +47,105 @@ the function:
    non-predicate first arguments. Planner defense-in-depth rejects nil and
    typed-nil conditions/branches plus forged invalid Boolean operators rather
    than panicking or silently treating them as `AND`.
+6. The ClickHouse compiler lowers one scalar
+   `if(ifNull(condition, 0), true_value, false_value)`. Only Boolean true
+   selects the true branch; false or null selects the false branch. Bind
+   arguments remain in condition/true/false occurrence order, and `if` does
+   not expand multivalue members or multiply rows.
+7. Version 0.1 admits stable fixed unions only: String/String, Bool/Bool, and
+   identical `UInt8`, `Int64`, `UInt64`, or `Float64` numbers. A literal,
+   calculated, projected-away, declared-missing, renamed, or grouped value
+   proven always null adopts the other fixed branch type; null/null is
+   nullable String until an enclosing conditional supplies a fixed type.
+   Dynamic, fixed multivalue, time, mixed-kind, and differing-number branches
+   fail with `SPL_UNSUPPORTED_IF_BRANCH_TYPE` rather than inheriting
+   ClickHouse `Variant` or common-supertype inference.
+8. String branch metadata is fail closed. Identical text eligibility
+   propagates, and a null branch adopts the other branch's eligibility.
+   Mixing binary-sensitive `_raw` with an ordinary String is rejected so a
+   later `spath` or other text consumer cannot parse bytes as UTF-8.
+9. Predicate materialization traverses conditions and both branches.
+   Calculated Dynamic fields retain the existing materialized fence, while
+   the conditional itself adds no ordinary `ARRAY JOIN`. Production execution
+   pins ClickHouse short-circuit evaluation, subject to the documented static
+   type-analysis/constant-folding caveat.
+10. Every compiled conditional scalar has an incremental 64 KiB generated-SQL
+    ceiling in addition to the 256 KiB whole-query ceiling. This stops nested
+    conditionals and Dynamic comparisons from producing geometric compiler
+    allocations before final query validation.
+11. Pinned ClickHouse `26.3.17.4` coverage executes missing/null/empty/zero/
+    false/container conditions, String labels, Boolean predicates, nullable
+    String and Bool, Int64/UInt8/UInt64/Float64, nesting, sequential eval,
+    projection, rename, known-missing fields, calculated-field fences, and
+    no-row-expansion plans. A separate binary `_raw`/`spath` regression pins
+    text eligibility through an identical-branch conditional.
+12. Editor completion advertises the exact three-argument form and true-only
+    selection. Highlighting recognizes case-insensitive `if` only when
+    followed by `(`, so a field named `if` remains ordinary text. The
+    compatibility contract records all admitted and rejected forms.
 
-Validation completed before push:
+Validation completed across these checkpoints:
 
 ```sh
-go test ./internal/spl ./internal/plan -count=1
-go vet ./internal/spl ./internal/plan
+go test ./internal/spl ./internal/plan ./internal/clickhouse -count=1
 go test ./... -count=1
+go vet ./internal/spl ./internal/plan ./internal/clickhouse
+golangci-lint run --timeout=5m \
+  --new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102
+npm run typecheck
+npm run lint
+npm run test:frontend
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -v
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+    -run '^TestSpathAgainstClickHouse$' -count=1 -v
 git diff --check
 ```
 
-The full Go suite passed, and an independent parser/planner adversarial review
-found the typed-nil, Boolean-classification, mixed-budget, invalid-operator,
-and diagnostic issues that were fixed before the checkpoint.
+All local gates pass; the frontend corpus contains 111 application tests.
+Independent parser/planner, compiler correctness, compiler performance,
+test-quality, and compatibility/editor reviews drove fixes for typed-nil and
+invalid operators, consumer-aware Boolean classification, mixed predicate
+budgets, raw-text provenance, geometric SQL growth, all-null type adoption
+through eval/projection/rename/stats, compiler-known missing values, missing
+fixed-type runtime cases, calculated-field execution, and non-vacuous
+assertions. Their final current-tree findings are clean.
 
 Immediate resume steps:
 
-1. Add red ClickHouse compiler tests before implementation. Validate that the
-   broad condition IR contains only eval/where Boolean nodes, reject nil and
-   typed-nil condition/branch nodes, and pin SQL placeholder order as
-   condition, true branch, false branch.
-2. Implement the first correctness-first lowering as
-   `if(ifNull(condition, 0), true_value, false_value)`. Initially admit only
-   statically stable fixed scalar unions: String/String, Bool/Bool, identical
-   numeric types, null/null, and null plus one supported fixed type with a
-   correctly typed nullable null. Explicitly reject Dynamic, fixed
-   multivalue, time, mixed-kind, and differing-number-type branches rather
-   than letting ClickHouse infer a `Variant` or silently coerce values.
-3. Propagate the condition/branch materialization requirement and teach the
-   predicate-field visitor to traverse the condition and both branches. Keep
-   `existsSQL=1`; supported selected missing/null branches are represented by
-   the nullable result value, so nested `isnull(if(...))` remains exact
-   without duplicating placeholder-bearing metadata expressions.
-4. Cover documented String behavior, same-type numbers, null selection,
-   nesting, sequential assignments, projected-away values, calculated-field
-   fences, Boolean consumers, query-size bounds, and no row expansion in unit
-   tests. Then add the pinned ClickHouse `26.3.17.4` integration matrix and an
-   `EXPLAIN actions=1` no-`ArrayJoin` assertion.
-5. Treat heterogeneous/Dynamic/container branches as a separate follow-on
+1. Confirm `main` and `origin/main` contain `fed3276` plus the checkpoint-doc
+   commit that follows it. Preserve any unexpected local changes.
+2. The next bounded aggregate slice is
+   `stats count(eval(<predicate>)) AS <field>`. Start with red parser/planner
+   tests and require explicit `AS` in this first form. Accept only the current
+   eval/where predicate grammar; defer `c(eval(...))`, wildcard count,
+   arbitrary scalar truthiness, default expression-derived names, and
+   `eventstats`.
+3. Count exactly Boolean true. False or null contributes zero. Conditional
+   count must be a measure, never an aggregate pre-filter: sibling measures
+   and grouping must still see every scoped row. Reuse the query-wide
+   32-predicate and 16-measure ceilings.
+4. Carry a mutually exclusive predicate input through the aggregate AST and
+   plan, reject nil/typed-nil/field-plus-predicate forged states, and compile
+   the row predicate once into a non-null `UInt64` count contribution.
+   Preserve condition bind order and calculated-field materialization.
+5. Add unit and pinned ClickHouse tests for true/false/null/missing,
+   `NOT`/`AND`/`OR`, nested Boolean `if`, grouping, sibling row count,
+   multiple/repeated measures, projected and calculated fields, exact
+   argument order, no accidental `WHERE`, no ordinary row expansion, physical
+   sharing where safe, and adversarial complexity/forged-plan paths.
+6. Treat heterogeneous/Dynamic/container `if` branches as a separate follow-on
    contract. Pinned ClickHouse has `use_variant_as_common_type=true`, so
    implicit branch inference can produce `Variant` and violate compiler type
    metadata. Flattened object parents also need a durable hidden selected-
    descendant column or explicit reconstruction; do not propagate a
    conditional descendant expression across projections or use expensive
    JSON `.^` sub-object reads casually.
-6. Only after compiler and integration tests are green, update
-   `docs/spl-compatibility-v0.1.md`, editor completion/highlighting, the full
-   Go/frontend/lint gates, and this checkpoint, then commit and push.
+7. Keep broader `count` forms, `case`, `coalesce`, `tostring`, `eventstats`,
+   and aggregate-library refactoring as distinct reviewed contracts rather
+   than widening conditional count implicitly.
 
 ## Previous checkpoint: native SPL `isnull` / `isnotnull` predicates
 
@@ -4346,7 +4403,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `f9985a1`, `9714c79`, `e6acd1d`, `ac721fb`, `932f403`,
+   commits, especially `fed3276`, `c1ad25b`, `cfaa75b`, `2d35c66`, `070d24f`,
+   `f9985a1`, `9714c79`, `e6acd1d`, `ac721fb`, `932f403`,
    `4e00428`, `fbb8997`, `b0c00f3`, `4e2ddb4`,
    `05c1eaf`, `f68630a`, `5ecd999`,
    `c20204b`, `e647dd2`,
@@ -4388,8 +4446,10 @@ Do not guess those decisions if they materially affect the implementation.
    the bounded percentile family is published after parser/planner commit
    `efe4199`, exact-field `c(field)` is complete at `070d24f`, and native
    `isnull`/`isnotnull` predicates are complete at `2d35c66`, as described at
-   the top of this file. Continue with a test-first bounded `if` contract if
-   the user does not change priority. The generator
+   the top of this file. Typed fixed-scalar `if` is complete across `cfaa75b`,
+   `c1ad25b`, and `fed3276`; continue with a test-first bounded
+   `count(eval(predicate)) AS field` contract if the user does not change
+   priority. The generator
    foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
