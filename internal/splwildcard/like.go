@@ -32,10 +32,11 @@ type LikePattern struct {
 	WorkUnits int
 }
 
-// CompileLikePattern validates UTF-8 and NUL safety, collapses redundant
-// unescaped percent wildcards, and counts literal/wildcard work without
-// expanding the pattern. Backslash behavior intentionally matches ClickHouse:
-// it escapes %, _, and itself; before any other rune it is literal.
+// CompileLikePattern validates UTF-8, NUL, and complete-escape safety,
+// collapses redundant unescaped percent wildcards, and counts
+// literal/wildcard work without expanding the pattern. Backslash behavior
+// intentionally matches ClickHouse: it escapes %, _, and itself; before any
+// other rune it is literal.
 func CompileLikePattern(pattern string) (LikePattern, error) {
 	if !utf8.ValidString(pattern) || strings.IndexByte(pattern, 0) >= 0 {
 		return LikePattern{}, ErrInvalidLikePattern
@@ -50,7 +51,10 @@ func CompileLikePattern(pattern string) (LikePattern, error) {
 	previousPercent := false
 	for offset := 0; offset < len(pattern); {
 		current, width := utf8.DecodeRuneInString(pattern[offset:])
-		if current == '\\' && offset+width < len(pattern) {
+		if current == '\\' && offset+width >= len(pattern) {
+			return LikePattern{}, ErrInvalidLikePattern
+		}
+		if current == '\\' {
 			next, nextWidth := utf8.DecodeRuneInString(pattern[offset+width:])
 			normalized.WriteRune(current)
 			normalized.WriteRune(next)

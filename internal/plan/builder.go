@@ -1578,6 +1578,23 @@ func nilSPLScalarExpression(expression spl.ScalarExpr) bool {
 	}
 }
 
+func splQuotedStringLiteral(
+	expression spl.ScalarExpr,
+	fallbackRange spl.Range,
+) (*spl.ScalarLiteralExpr, spl.Range, bool) {
+	sourceRange := fallbackRange
+	if !nilSPLScalarExpression(expression) {
+		sourceRange = expression.SourceRange()
+	}
+	literal, ok := expression.(*spl.ScalarLiteralExpr)
+	if !ok || literal == nil ||
+		literal.Value.Kind != spl.LiteralKindString ||
+		!literal.Value.Quoted {
+		return nil, sourceRange, false
+	}
+	return literal, sourceRange, true
+}
+
 type splExpressionComplexityValidator struct {
 	nodes  int
 	active map[any]struct{}
@@ -2039,14 +2056,15 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 					Range:   expression.Arguments[0].SourceRange(),
 				}
 			}
-			pattern, ok := expression.Arguments[1].(*spl.ScalarLiteralExpr)
-			if !ok || pattern == nil ||
-				pattern.Value.Kind != spl.LiteralKindString ||
-				!pattern.Value.Quoted {
+			pattern, patternRange, ok := splQuotedStringLiteral(
+				expression.Arguments[1],
+				expression.Range,
+			)
+			if !ok {
 				return nil, &Diagnostic{
 					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
 					Message: "match regular expression must be a quoted string literal",
-					Range:   expression.Arguments[1].SourceRange(),
+					Range:   patternRange,
 				}
 			}
 			if _, err := splregex.CompileMatchPattern(pattern.Value.Text); err != nil {
@@ -2076,14 +2094,11 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 					Range:   expression.Arguments[0].SourceRange(),
 				}
 			}
-			pattern, ok := expression.Arguments[1].(*spl.ScalarLiteralExpr)
-			patternRange := expression.Range
-			if !nilSPLScalarExpression(expression.Arguments[1]) {
-				patternRange = expression.Arguments[1].SourceRange()
-			}
-			if !ok || pattern == nil ||
-				pattern.Value.Kind != spl.LiteralKindString ||
-				!pattern.Value.Quoted {
+			pattern, patternRange, ok := splQuotedStringLiteral(
+				expression.Arguments[1],
+				expression.Range,
+			)
+			if !ok {
 				return nil, &Diagnostic{
 					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
 					Message: "like pattern must be a quoted string literal",
@@ -2104,7 +2119,7 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				}
 				return nil, &Diagnostic{
 					Code:    "SPL_UNSUPPORTED_LIKE_PATTERN",
-					Message: "like pattern must be valid UTF-8 without NUL bytes",
+					Message: "like pattern must be valid UTF-8 without NUL bytes or an unpaired terminal backslash",
 					Range:   pattern.Range,
 				}
 			}

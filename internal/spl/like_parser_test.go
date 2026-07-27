@@ -39,7 +39,7 @@ func TestParseLikeSupportsPredicatesConditionalsNestingAndEscapes(t *testing.T) 
 		`index=main | where like(message, "error%")=true`,
 		`index=main | eval label=if(like(message, "%error%"), "problem", "ok")`,
 		`index=main | eval rendered=tostring(like(message, ""))`,
-		`index=main | where like(message, "\%\_\\")`,
+		`index=main | where like(message, "\%\_\\\\")`,
 	} {
 		if _, err := Parse(source); err != nil {
 			t.Fatalf("Parse(%q): %v", source, err)
@@ -59,6 +59,7 @@ func TestParseLikeRejectsArityNonliteralBooleanAndInvalidPattern(t *testing.T) {
 		{`index=main | where like(message, "x", "y")`, "SPL_INVALID_EVAL_ARITY"},
 		{`index=main | where like(message, pattern)`, "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
 		{`index=main | where like(isnull(message), "true")`, "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{`index=main | where like(message, "bad\\")`, "SPL_UNSUPPORTED_LIKE_PATTERN"},
 		{"index=main | where like(message, \"bad\x00pattern\")", "SPL_UNSUPPORTED_LIKE_PATTERN"},
 	} {
 		assertParseDiagnosticCode(t, test.source, test.code)

@@ -114,6 +114,10 @@ const (
 	// LIKE has the same durable-input and UTF-8 case-expansion envelope as
 	// match, while retaining an independent compatibility limit.
 	MaximumLikeInputBytes uint64 = 4 << 20
+	// MaximumLikeQueryInputBytes bounds the total conservative string bytes
+	// scanned by all LIKE occurrences for one result row. This admits sixteen
+	// worst-case durable fields or four maximum-size calculated inputs.
+	MaximumLikeQueryInputBytes uint64 = 16 << 20
 	// MaximumStoredScalarBytes mirrors the hard ingestion ceiling for one
 	// complete event and therefore bounds every durable scalar source.
 	MaximumStoredScalarBytes = 1 << 20
@@ -349,11 +353,13 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	state.matchBudget = &compiledMatchBudget{
-		patterns: make(map[*plan.ScalarCallExpression]splregex.MatchPattern),
-	}
-	state.likeBudget = &compiledLikeBudget{
-		patterns: make(map[*plan.ScalarCallExpression]splwildcard.LikePattern),
+	state.patternBudgets = &compiledPatternBudgets{
+		match: compiledMatchBudget{
+			patterns: make(map[*plan.ScalarCallExpression]splregex.MatchPattern),
+		},
+		like: compiledLikeBudget{
+			patterns: make(map[*plan.ScalarCallExpression]splwildcard.LikePattern),
+		},
 	}
 	relation := newScanRelation(fragment, scan.Range)
 
@@ -971,7 +977,7 @@ func compileLikePatternForBackend(
 	}
 	return splwildcard.LikePattern{}, &plan.Diagnostic{
 		Code:    "SPL_UNSUPPORTED_LIKE_PATTERN",
-		Message: "like pattern must be valid UTF-8 without NUL bytes",
+		Message: "like pattern must be valid UTF-8 without NUL bytes or an unpaired terminal backslash",
 		Range:   sourceRange,
 	}
 }
@@ -3095,8 +3101,7 @@ func compileChart(
 
 type compileState struct {
 	visible                          map[string]fieldState
-	matchBudget                      *compiledMatchBudget
-	likeBudget                       *compiledLikeBudget
+	patternBudgets                   *compiledPatternBudgets
 	publicOrder                      []string
 	privateColumns                   []string
 	rexCapturedBytesSQL              string
@@ -3125,9 +3130,15 @@ type compiledMatchBudget struct {
 	programWorkUnits int
 }
 
+type compiledPatternBudgets struct {
+	match compiledMatchBudget
+	like  compiledLikeBudget
+}
+
 type compiledLikeBudget struct {
-	patterns  map[*plan.ScalarCallExpression]splwildcard.LikePattern
-	workUnits int
+	patterns   map[*plan.ScalarCallExpression]splwildcard.LikePattern
+	workUnits  int
+	inputBytes uint64
 }
 
 type compiledChronologicalMeasure struct {
@@ -3737,10 +3748,53 @@ func compiledScalarStringByteBound(value compiledScalar) uint64 {
 	if value.maxStringBytes != 0 {
 		return value.maxStringBytes
 	}
-	// Durable event values and every fixed source column fit within the
-	// ingestion hard limit. Zero is reserved as "source-bounded", not
-	// "unbounded", so existing non-string scalar metadata remains compact.
-	return MaximumStoredScalarBytes
+	switch value.kind {
+	case fieldKindInvalid:
+		return 1
+	case fieldKindBool:
+		return 5
+	case fieldKindNumber:
+		switch value.numberType {
+		case "Int8":
+			return 4
+		case "Int16":
+			return 6
+		case "Int32":
+			return 11
+		case "Int64":
+			return 20
+		case "Int128":
+			return 40
+		case "Int256":
+			return 78
+		case "UInt8":
+			return 3
+		case "UInt16":
+			return 5
+		case "UInt32":
+			return 10
+		case "UInt64":
+			return 20
+		case "UInt128":
+			return 39
+		case "UInt256":
+			return 78
+		default:
+			// Float and Decimal formatting remains well inside this bound for
+			// every fixed numeric type accepted by the compiler.
+			return 128
+		}
+	case fieldKindTime:
+		return 64
+	default:
+		// Durable String and Dynamic event values fit within the ingestion hard
+		// limit. Zero is reserved as "source-bounded", not "unbounded".
+		return MaximumStoredScalarBytes
+	}
+}
+
+func fieldStateStringByteBound(field fieldState) uint64 {
+	return compiledScalarStringByteBound(compiledScalarFromField(field))
 }
 
 func maximumCompiledScalarStringByteBound(values ...compiledScalar) uint64 {
@@ -4745,7 +4799,7 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 					"compile ClickHouse predicate: match has a missing regular expression",
 				)
 			}
-			_, ok := scalarStringLiteral(expression.Arguments[1])
+			_, ok := scalarQuotedStringLiteral(expression.Arguments[1])
 			if !ok {
 				return errors.New(
 					"compile ClickHouse predicate: match regular expression must be a string literal",
@@ -4762,7 +4816,7 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 					"compile ClickHouse predicate: like has a missing pattern",
 				)
 			}
-			_, ok := scalarStringLiteral(expression.Arguments[1])
+			_, ok := scalarQuotedStringLiteral(expression.Arguments[1])
 			if !ok {
 				return errors.New(
 					"compile ClickHouse predicate: like pattern must be a string literal",
@@ -5195,45 +5249,122 @@ func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileSt
 	}, nil
 }
 
+func compileBinaryTextPredicateOperands(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+	functionName string,
+	patternDescription string,
+) (compiledScalar, string, error) {
+	if len(expression.Arguments) != 2 {
+		return compiledScalar{}, "", fmt.Errorf(
+			"compile ClickHouse %s: expected two arguments",
+			functionName,
+		)
+	}
+	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
+		return compiledScalar{}, "", booleanScalarConsumerError(functionName)
+	}
+	input, err := compileScalarValue(expression.Arguments[0], state)
+	if err != nil {
+		return compiledScalar{}, "", err
+	}
+	if input.kind == fieldKindStringArray {
+		return compiledScalar{}, "", unsupportedMultivalueUsage(
+			functionName,
+			expression.Range,
+		)
+	}
+	pattern, ok := scalarQuotedStringLiteral(expression.Arguments[1])
+	if !ok {
+		return compiledScalar{}, "", fmt.Errorf(
+			"compile ClickHouse %s: %s must be a string literal",
+			functionName,
+			patternDescription,
+		)
+	}
+	return input, pattern, nil
+}
+
+func compileBoundedTextPredicateResult(
+	input compiledScalar,
+	pattern string,
+	functionName string,
+	maximumInputBytes uint64,
+	maximumSQLBytes int,
+	sourceRange spl.Range,
+) (compiledScalar, error) {
+	if input.alwaysNull || input.kind == fieldKindInvalid {
+		return compiledScalar{
+			valueSQL:       "CAST(NULL AS Nullable(Bool))",
+			maxStringBytes: 1,
+			existsSQL:      "1",
+			kind:           fieldKindBool,
+			alwaysNull:     true,
+		}, nil
+	}
+	if compiledScalarStringByteBound(input) > maximumInputBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"%s input may exceed %d bytes after scalar evaluation",
+				functionName,
+				maximumInputBytes,
+			),
+			Range: sourceRange,
+		}
+	}
+	inputSQL, inputArgs := compiledTextEligibleStringScalar(input)
+	valueSQL := "CAST(" + functionName + "(" + inputSQL + ", ?) AS Nullable(Bool))"
+	if len(valueSQL) > maximumSQLBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"%s scalar SQL exceeds %d bytes",
+				functionName,
+				maximumSQLBytes,
+			),
+			Range: sourceRange,
+		}
+	}
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               append(inputArgs, pattern),
+		maxStringBytes:          5,
+		existsSQL:               "1",
+		kind:                    fieldKindBool,
+		materializeForPredicate: input.materializeForPredicate,
+	}, nil
+}
+
 func compileMatchScalar(
 	expression *plan.ScalarCallExpression,
 	state compileState,
 ) (compiledScalar, error) {
-	if len(expression.Arguments) != 2 {
-		return compiledScalar{}, errors.New("compile ClickHouse match: expected two arguments")
-	}
-	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
-		return compiledScalar{}, booleanScalarConsumerError("match")
-	}
-	input, err := compileScalarValue(expression.Arguments[0], state)
+	input, pattern, err := compileBinaryTextPredicateOperands(
+		expression,
+		state,
+		"match",
+		"regular expression",
+	)
 	if err != nil {
 		return compiledScalar{}, err
 	}
-	if input.kind == fieldKindStringArray {
-		return compiledScalar{}, unsupportedMultivalueUsage("match", expression.Range)
-	}
-	pattern, ok := scalarStringLiteral(expression.Arguments[1])
-	if !ok {
-		return compiledScalar{}, errors.New(
-			"compile ClickHouse match: regular expression must be a string literal",
-		)
-	}
 	compiledPattern := splregex.MatchPattern{}
-	if state.matchBudget != nil {
-		compiledPattern = state.matchBudget.patterns[expression]
+	if state.patternBudgets != nil {
+		compiledPattern = state.patternBudgets.match.patterns[expression]
 	}
 	if compiledPattern.ProgramWorkUnits == 0 {
 		compiledPattern, err = compileMatchPatternForBackend(pattern, expression.Range)
 		if err != nil {
 			return compiledScalar{}, err
 		}
-		if state.matchBudget != nil {
-			state.matchBudget.patterns[expression] = compiledPattern
+		if state.patternBudgets != nil {
+			state.patternBudgets.match.patterns[expression] = compiledPattern
 		}
 	}
-	if state.matchBudget != nil {
+	if state.patternBudgets != nil {
 		if compiledPattern.ProgramWorkUnits >
-			splregex.MaximumMatchQueryProgramWorkUnits-state.matchBudget.programWorkUnits {
+			splregex.MaximumMatchQueryProgramWorkUnits-state.patternBudgets.match.programWorkUnits {
 			return compiledScalar{}, &plan.Diagnostic{
 				Code: "SPL_QUERY_TOO_COMPLEX",
 				Message: fmt.Sprintf(
@@ -5243,88 +5374,47 @@ func compileMatchScalar(
 				Range: expression.Range,
 			}
 		}
-		state.matchBudget.programWorkUnits += compiledPattern.ProgramWorkUnits
+		state.patternBudgets.match.programWorkUnits += compiledPattern.ProgramWorkUnits
 	}
-	if input.alwaysNull || input.kind == fieldKindInvalid {
-		return compiledScalar{
-			valueSQL:       "CAST(NULL AS Nullable(Bool))",
-			maxStringBytes: 1,
-			existsSQL:      "1",
-			kind:           fieldKindBool,
-			alwaysNull:     true,
-		}, nil
-	}
-	if maximumInputBytes := compiledScalarStringByteBound(input); maximumInputBytes > MaximumMatchInputBytes {
-		return compiledScalar{}, &plan.Diagnostic{
-			Code: "SPL_QUERY_TOO_COMPLEX",
-			Message: fmt.Sprintf(
-				"match input may exceed %d bytes after scalar evaluation",
-				MaximumMatchInputBytes,
-			),
-			Range: expression.Range,
-		}
-	}
-	inputSQL, inputArgs := compiledTextEligibleStringScalar(input)
-	valueSQL := "CAST(match(" + inputSQL + ", ?) AS Nullable(Bool))"
-	if len(valueSQL) > maxCompiledMatchScalarSQLBytes {
-		return compiledScalar{}, &plan.Diagnostic{
-			Code: "SPL_QUERY_TOO_COMPLEX",
-			Message: fmt.Sprintf(
-				"match scalar SQL exceeds %d bytes",
-				maxCompiledMatchScalarSQLBytes,
-			),
-			Range: expression.Range,
-		}
-	}
-	return compiledScalar{
-		valueSQL:                valueSQL,
-		valueArgs:               append(inputArgs, compiledPattern.Pattern),
-		maxStringBytes:          5,
-		existsSQL:               "1",
-		kind:                    fieldKindBool,
-		materializeForPredicate: input.materializeForPredicate,
-	}, nil
+	return compileBoundedTextPredicateResult(
+		input,
+		compiledPattern.Pattern,
+		"match",
+		MaximumMatchInputBytes,
+		maxCompiledMatchScalarSQLBytes,
+		expression.Range,
+	)
 }
 
 func compileLikeScalar(
 	expression *plan.ScalarCallExpression,
 	state compileState,
 ) (compiledScalar, error) {
-	if len(expression.Arguments) != 2 {
-		return compiledScalar{}, errors.New("compile ClickHouse like: expected two arguments")
-	}
-	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
-		return compiledScalar{}, booleanScalarConsumerError("like")
-	}
-	input, err := compileScalarValue(expression.Arguments[0], state)
+	input, pattern, err := compileBinaryTextPredicateOperands(
+		expression,
+		state,
+		"like",
+		"pattern",
+	)
 	if err != nil {
 		return compiledScalar{}, err
 	}
-	if input.kind == fieldKindStringArray {
-		return compiledScalar{}, unsupportedMultivalueUsage("like", expression.Range)
-	}
-	pattern, ok := scalarStringLiteral(expression.Arguments[1])
-	if !ok {
-		return compiledScalar{}, errors.New(
-			"compile ClickHouse like: pattern must be a string literal",
-		)
-	}
 	compiledPattern := splwildcard.LikePattern{}
-	if state.likeBudget != nil {
-		compiledPattern = state.likeBudget.patterns[expression]
+	if state.patternBudgets != nil {
+		compiledPattern = state.patternBudgets.like.patterns[expression]
 	}
 	if compiledPattern.WorkUnits == 0 {
 		compiledPattern, err = compileLikePatternForBackend(pattern, expression.Range)
 		if err != nil {
 			return compiledScalar{}, err
 		}
-		if state.likeBudget != nil {
-			state.likeBudget.patterns[expression] = compiledPattern
+		if state.patternBudgets != nil {
+			state.patternBudgets.like.patterns[expression] = compiledPattern
 		}
 	}
-	if state.likeBudget != nil {
+	if state.patternBudgets != nil {
 		if compiledPattern.WorkUnits >
-			splwildcard.MaximumLikeQueryPatternWorkUnits-state.likeBudget.workUnits {
+			splwildcard.MaximumLikeQueryPatternWorkUnits-state.patternBudgets.like.workUnits {
 			return compiledScalar{}, &plan.Diagnostic{
 				Code: "SPL_QUERY_TOO_COMPLEX",
 				Message: fmt.Sprintf(
@@ -5334,47 +5424,31 @@ func compileLikeScalar(
 				Range: expression.Range,
 			}
 		}
-		state.likeBudget.workUnits += compiledPattern.WorkUnits
-	}
-	if input.alwaysNull || input.kind == fieldKindInvalid {
-		return compiledScalar{
-			valueSQL:       "CAST(NULL AS Nullable(Bool))",
-			maxStringBytes: 1,
-			existsSQL:      "1",
-			kind:           fieldKindBool,
-			alwaysNull:     true,
-		}, nil
-	}
-	if maximumInputBytes := compiledScalarStringByteBound(input); maximumInputBytes > MaximumLikeInputBytes {
-		return compiledScalar{}, &plan.Diagnostic{
-			Code: "SPL_QUERY_TOO_COMPLEX",
-			Message: fmt.Sprintf(
-				"like input may exceed %d bytes after scalar evaluation",
-				MaximumLikeInputBytes,
-			),
-			Range: expression.Range,
+		state.patternBudgets.like.workUnits += compiledPattern.WorkUnits
+		if !input.alwaysNull && input.kind != fieldKindInvalid {
+			inputBytes := compiledScalarStringByteBound(input)
+			if inputBytes >
+				MaximumLikeQueryInputBytes-state.patternBudgets.like.inputBytes {
+				return compiledScalar{}, &plan.Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"search like inputs require more than %d bytes of wildcard scanning per row",
+						MaximumLikeQueryInputBytes,
+					),
+					Range: expression.Range,
+				}
+			}
+			state.patternBudgets.like.inputBytes += inputBytes
 		}
 	}
-	inputSQL, inputArgs := compiledTextEligibleStringScalar(input)
-	valueSQL := "CAST(like(" + inputSQL + ", ?) AS Nullable(Bool))"
-	if len(valueSQL) > maxCompiledLikeScalarSQLBytes {
-		return compiledScalar{}, &plan.Diagnostic{
-			Code: "SPL_QUERY_TOO_COMPLEX",
-			Message: fmt.Sprintf(
-				"like scalar SQL exceeds %d bytes",
-				maxCompiledLikeScalarSQLBytes,
-			),
-			Range: expression.Range,
-		}
-	}
-	return compiledScalar{
-		valueSQL:                valueSQL,
-		valueArgs:               append(inputArgs, compiledPattern.Pattern),
-		maxStringBytes:          5,
-		existsSQL:               "1",
-		kind:                    fieldKindBool,
-		materializeForPredicate: input.materializeForPredicate,
-	}, nil
+	return compileBoundedTextPredicateResult(
+		input,
+		compiledPattern.Pattern,
+		"like",
+		MaximumLikeInputBytes,
+		maxCompiledLikeScalarSQLBytes,
+		expression.Range,
+	)
 }
 
 func compileTextCaseScalar(
@@ -6419,6 +6493,16 @@ func scalarStringLiteral(expression plan.ScalarExpression) (string, bool) {
 	return literal.Value.String, true
 }
 
+func scalarQuotedStringLiteral(expression plan.ScalarExpression) (string, bool) {
+	literal, ok := expression.(*plan.ScalarLiteralExpression)
+	if !ok || literal == nil ||
+		literal.Value.Kind != plan.ValueKindString ||
+		!literal.Value.Quoted {
+		return "", false
+	}
+	return literal.Value.String, true
+}
+
 func scalarExpressionMayReturnBooleanFunction(expression plan.ScalarExpression) bool {
 	switch expression := expression.(type) {
 	case *plan.ScalarCallExpression:
@@ -6713,8 +6797,13 @@ func compileExtract(
 			next.publicOrder = append(next.publicOrder, capture.Output.Name)
 		}
 		output := quoteIdentifier(capture.Output.Name)
+		maxStringBytes := uint64(MaximumRexCapturedBytesPerRow)
+		if previousKnown {
+			maxStringBytes = max(maxStringBytes, fieldStateStringByteBound(previous))
+		}
 		field := fieldState{
 			valueSQL:        output,
+			maxStringBytes:  maxStringBytes,
 			textEligibleSQL: textColumn,
 			existsSQL:       existsAlias,
 			storedTypeSQL:   typeAlias,
@@ -7020,8 +7109,13 @@ func compileExtractJSON(
 		next.publicOrder = append(next.publicOrder, operator.Output.Name)
 	}
 	outputName := quoteIdentifier(operator.Output.Name)
+	maxStringBytes := uint64(MaximumSpathInputBytes)
+	if previousKnown {
+		maxStringBytes = max(maxStringBytes, fieldStateStringByteBound(previous))
+	}
 	next.visible[operator.Output.Name] = fieldState{
 		valueSQL:                outputName,
+		maxStringBytes:          maxStringBytes,
 		textEligibleSQL:         textEligibleAlias,
 		dynamicTypeSQL:          "dynamicType(" + outputName + ")",
 		storedTypeSQL:           typeAlias,
@@ -8458,8 +8552,7 @@ func resolveCompiledField(field plan.FieldRef, state compileState) (fieldState, 
 func compileProjection(operator *plan.Project, state compileState) ([]string, compileState, []any, error) {
 	next := compileState{
 		visible:             make(map[string]fieldState),
-		matchBudget:         state.matchBudget,
-		likeBudget:          state.likeBudget,
+		patternBudgets:      state.patternBudgets,
 		privateColumns:      append([]string(nil), state.privateColumns...),
 		rexCapturedBytesSQL: state.rexCapturedBytesSQL,
 		allowDynamic:        operator.Mode == plan.ProjectModeExclude && state.allowDynamic,
@@ -8700,8 +8793,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 	}
 	next = compileState{
 		visible:               make(map[string]fieldState, len(operator.GroupBy)+len(operator.Measures)),
-		matchBudget:           state.matchBudget,
-		likeBudget:            state.likeBudget,
+		patternBudgets:        state.patternBudgets,
 		allowDynamic:          false,
 		eventRows:             false,
 		blocked:               make(map[string]struct{}),
@@ -8751,6 +8843,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		valueSQL := field.valueSQL
 		kind := field.kind
 		numericSort := field.numericSort
+		maxStringBytes := fieldStateStringByteBound(field)
 		supportedSQL := ""
 		if kind == fieldKindDynamic {
 			// SPL fields are compared and grouped by their lexical value. Dynamic
@@ -8792,7 +8885,8 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		groups = append(groups, valueSQL)
 		privateGroup := quoteIdentifier(groupOutput)
 		next.visible[group.Name] = fieldState{
-			valueSQL: privateGroup, existsSQL: "1", kind: kind,
+			valueSQL: privateGroup, maxStringBytes: maxStringBytes,
+			existsSQL: "1", kind: kind,
 			caseSensitive: field.caseSensitive, numberType: field.numberType,
 			numericSort: numericSort, alwaysNull: field.alwaysNull,
 		}
@@ -9576,6 +9670,17 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			measureState.existsSQL = "notEmpty(" + output + ")"
 		default:
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: unsupported function %d", measure.Function)
+		}
+		switch measure.Function {
+		case plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum,
+			plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
+			input, ok, resolveErr := resolveCompiledField(measure.Input, state)
+			if resolveErr != nil {
+				return nil, nil, nil, compileState{}, nil, resolveErr
+			}
+			if ok {
+				measureState.maxStringBytes = fieldStateStringByteBound(input)
+			}
 		}
 		next.visible[measure.Output] = measureState
 		next.publicOrder = append(next.publicOrder, measure.Output)

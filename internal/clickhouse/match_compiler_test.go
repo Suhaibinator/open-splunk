@@ -130,7 +130,7 @@ func TestCompileMatchRejectsForgedPlans(t *testing.T) {
 	}
 	pattern := func(text string) plan.ScalarExpression {
 		return &plan.ScalarLiteralExpression{
-			Value: plan.Value{Kind: plan.ValueKindString, String: text},
+			Value: plan.Value{Kind: plan.ValueKindString, String: text, Quoted: true},
 		}
 	}
 	var typedNil *plan.ScalarLiteralExpression
@@ -180,6 +180,19 @@ func TestCompileMatchRejectsForgedPlans(t *testing.T) {
 			expression: &plan.ScalarCallExpression{
 				Function:  plan.ScalarFunctionMatch,
 				Arguments: []plan.ScalarExpression{value(), value()},
+			},
+			want: "regular expression must be a string literal",
+		},
+		{
+			name: "unquoted pattern",
+			expression: &plan.ScalarCallExpression{
+				Function: plan.ScalarFunctionMatch,
+				Arguments: []plan.ScalarExpression{
+					value(),
+					&plan.ScalarLiteralExpression{
+						Value: plan.Value{Kind: plan.ValueKindString, String: "x"},
+					},
+				},
 			},
 			want: "regular expression must be a string literal",
 		},

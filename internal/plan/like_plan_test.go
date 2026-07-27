@@ -134,6 +134,15 @@ func TestBuildLikeRejectsForgedArityPatternBooleanEnumAndTypedNil(t *testing.T) 
 			code: "SPL_UNSUPPORTED_LIKE_PATTERN",
 		},
 		{
+			name: "trailing escape",
+			expression: &spl.ScalarCallExpr{
+				Function:  spl.ScalarFunctionLike,
+				Arguments: []spl.ScalarExpr{value(), pattern("bad\\")},
+				Range:     sourceRange,
+			},
+			code: "SPL_UNSUPPORTED_LIKE_PATTERN",
+		},
+		{
 			name: "oversized pattern",
 			expression: &spl.ScalarCallExpr{
 				Function: spl.ScalarFunctionLike,

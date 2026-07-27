@@ -2573,7 +2573,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 			}
 			return nil, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_LIKE_PATTERN",
-				Message: "like pattern must be valid UTF-8 without NUL bytes",
+				Message: "like pattern must be valid UTF-8 without NUL bytes or an unpaired terminal backslash",
 				Range:   pattern.Range,
 				Suggestions: []string{
 					`like(value, "prefix%")`,

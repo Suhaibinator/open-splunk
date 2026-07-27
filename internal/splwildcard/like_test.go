@@ -44,7 +44,7 @@ func TestCompileLikePatternPreservesEscapesAndCollapsesPercentRuns(t *testing.T)
 func TestCompileLikePatternRejectsInvalidAndOversizedText(t *testing.T) {
 	t.Parallel()
 
-	for _, pattern := range []string{"bad\x00pattern", "bad\xffpattern"} {
+	for _, pattern := range []string{"bad\x00pattern", "bad\xffpattern", "bad\\"} {
 		if _, err := CompileLikePattern(pattern); !errors.Is(err, ErrInvalidLikePattern) {
 			t.Errorf(
 				"CompileLikePattern(%q) = %v, want ErrInvalidLikePattern",

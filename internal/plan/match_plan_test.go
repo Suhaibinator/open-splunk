@@ -57,6 +57,7 @@ func TestBuildMatchRejectsForgedArityPatternBooleanEnumAndTypedNil(t *testing.T)
 		}
 	}
 	var typedNil *spl.ScalarFieldExpr
+	var typedNilPattern *spl.ScalarLiteralExpr
 	for _, test := range []struct {
 		name       string
 		expression *spl.ScalarCallExpr
@@ -97,6 +98,15 @@ func TestBuildMatchRejectsForgedArityPatternBooleanEnumAndTypedNil(t *testing.T)
 			expression: &spl.ScalarCallExpr{
 				Function:  spl.ScalarFunctionMatch,
 				Arguments: []spl.ScalarExpr{value(), value()},
+				Range:     sourceRange,
+			},
+			code: "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+		},
+		{
+			name: "typed nil pattern",
+			expression: &spl.ScalarCallExpr{
+				Function:  spl.ScalarFunctionMatch,
+				Arguments: []spl.ScalarExpr{value(), typedNilPattern},
 				Range:     sourceRange,
 			},
 			code: "SPL_UNSUPPORTED_EVAL_EXPRESSION",

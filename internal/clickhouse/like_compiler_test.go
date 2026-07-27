@@ -139,7 +139,7 @@ func TestCompileLikeRejectsForgedPlans(t *testing.T) {
 	}
 	pattern := func(text string) plan.ScalarExpression {
 		return &plan.ScalarLiteralExpression{
-			Value: plan.Value{Kind: plan.ValueKindString, String: text},
+			Value: plan.Value{Kind: plan.ValueKindString, String: text, Quoted: true},
 		}
 	}
 	var typedNil *plan.ScalarLiteralExpression
@@ -193,6 +193,19 @@ func TestCompileLikeRejectsForgedPlans(t *testing.T) {
 			want: "pattern must be a string literal",
 		},
 		{
+			name: "unquoted pattern",
+			expression: &plan.ScalarCallExpression{
+				Function: plan.ScalarFunctionLike,
+				Arguments: []plan.ScalarExpression{
+					value(),
+					&plan.ScalarLiteralExpression{
+						Value: plan.Value{Kind: plan.ValueKindString, String: "%"},
+					},
+				},
+			},
+			want: "pattern must be a string literal",
+		},
+		{
 			name: "Boolean input",
 			expression: &plan.ScalarCallExpression{
 				Function:  plan.ScalarFunctionLike,
@@ -205,6 +218,15 @@ func TestCompileLikeRejectsForgedPlans(t *testing.T) {
 			expression: &plan.ScalarCallExpression{
 				Function:  plan.ScalarFunctionLike,
 				Arguments: []plan.ScalarExpression{value(), pattern("bad\x00pattern")},
+			},
+			want:     "valid UTF-8 without NUL",
+			wantCode: "SPL_UNSUPPORTED_LIKE_PATTERN",
+		},
+		{
+			name: "trailing escape",
+			expression: &plan.ScalarCallExpression{
+				Function:  plan.ScalarFunctionLike,
+				Arguments: []plan.ScalarExpression{value(), pattern("bad\\")},
 			},
 			want:     "valid UTF-8 without NUL",
 			wantCode: "SPL_UNSUPPORTED_LIKE_PATTERN",
@@ -267,7 +289,11 @@ func TestCompileLikeBoundsAggregatePatternWorkAndCalculatedInputBytes(t *testing
 				Arguments: []plan.ScalarExpression{
 					expression,
 					&plan.ScalarLiteralExpression{
-						Value: plan.Value{Kind: plan.ValueKindString, String: patternText},
+						Value: plan.Value{
+							Kind:   plan.ValueKindString,
+							String: patternText,
+							Quoted: true,
+						},
 					},
 				},
 			}},
@@ -297,4 +323,65 @@ func TestCompileLikeBoundsAggregatePatternWorkAndCalculatedInputBytes(t *testing
 			t.Fatalf("calculated input error = %#v, want like input byte budget", err)
 		}
 	}
+}
+
+func TestCompileLikePreservesCalculatedInputBoundsAcrossRetainingOperators(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | eval amplified=replace(message, "x", "12345") | rex field=message "(?<amplified>never)" | where like(amplified, "%")`,
+		`index=gradethis | eval amplified=replace(message, "x", "12345") | spath input=message output=amplified path=never | where like(amplified, "%")`,
+		`index=gradethis | eval amplified=replace(message, "x", "12345") | stats count BY amplified | where like(amplified, "%")`,
+		`index=gradethis | eval amplified=replace(message, "x", "12345") | stats min(amplified) AS retained | where like(retained, "%")`,
+		`index=gradethis | eval amplified=replace(message, "x", "12345") | stats max(amplified) AS retained | where like(retained, "%")`,
+		`index=gradethis | eval amplified=replace(message, "x", "12345") | stats earliest(amplified) AS retained | where like(retained, "%")`,
+		`index=gradethis | eval amplified=replace(message, "x", "12345") | stats latest(amplified) AS retained | where like(retained, "%")`,
+	} {
+		_, err := (Compiler{}).Compile(buildPlan(t, source))
+		var diagnostic *plan.Diagnostic
+		if !errors.As(err, &diagnostic) ||
+			diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" ||
+			!strings.Contains(diagnostic.Message, "like input") {
+			t.Fatalf("%q error = %#v, want like input byte budget", source, err)
+		}
+	}
+}
+
+func TestCompileLikeBoundsAggregateInputScanning(t *testing.T) {
+	t.Parallel()
+
+	sourceWithCalls := func(calls int) string {
+		predicates := make([]string, calls)
+		for index := range predicates {
+			predicates[index] = `like(message, "%z")`
+		}
+		return `index=gradethis | where ` + strings.Join(predicates, " OR ")
+	}
+
+	if _, err := (Compiler{}).Compile(buildPlan(
+		t,
+		sourceWithCalls(int(MaximumLikeQueryInputBytes/MaximumStoredScalarBytes)),
+	)); err != nil {
+		t.Fatalf("Compile aggregate input boundary: %v", err)
+	}
+
+	_, err := (Compiler{}).Compile(buildPlan(
+		t,
+		sourceWithCalls(int(MaximumLikeQueryInputBytes/MaximumStoredScalarBytes)+1),
+	))
+	var diagnostic *plan.Diagnostic
+	if !errors.As(err, &diagnostic) ||
+		diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" ||
+		!strings.Contains(diagnostic.Message, "wildcard scanning") {
+		t.Fatalf("aggregate input error = %#v, want like scan byte budget", err)
+	}
+}
+
+func TestCompileLikeUsesFixedNumericTextBounds(t *testing.T) {
+	t.Parallel()
+
+	compileSPL(
+		t,
+		`index=gradethis | stats count AS n | eval rendered=replace(tostring(n), "0", "12345") | where like(rendered, "%")`,
+	)
 }
