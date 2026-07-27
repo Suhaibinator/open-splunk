@@ -93,6 +93,9 @@ const (
 	// ceil, and floor. Dynamic input is bound once, and integral results let
 	// redundant outer ceil/floor calls collapse to identities.
 	maxCompiledNumericRoundingScalarSQLBytes = 64 << 10
+	// maxCompiledMVCountScalarSQLBytes independently bounds value-cardinality
+	// expressions. Dynamic input is bound once, so nested calls grow linearly.
+	maxCompiledMVCountScalarSQLBytes = 64 << 10
 	// ClickHouse accepts UInt64 substring arguments syntactically but treats
 	// values above MaxInt64 as signed internally. Wider literals use the
 	// Int128 interval fallback instead of a native fast path.
@@ -3704,6 +3707,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileIntegralRoundingScalar(expression, state, "ceil")
 		case plan.ScalarFunctionFloor:
 			return compileIntegralRoundingScalar(expression, state, "floor")
+		case plan.ScalarFunctionMVCount:
+			return compileMVCountScalar(expression, state)
 		case plan.ScalarFunctionIsNull, plan.ScalarFunctionIsNotNull:
 			return compileNullTestScalar(expression, state)
 		case plan.ScalarFunctionCoalesce:
@@ -4578,7 +4583,8 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			plan.ScalarFunctionUpper,
 			plan.ScalarFunctionLength,
 			plan.ScalarFunctionCeil,
-			plan.ScalarFunctionFloor:
+			plan.ScalarFunctionFloor,
+			plan.ScalarFunctionMVCount:
 			expectedArguments = 1
 		case plan.ScalarFunctionRound:
 			if len(expression.Arguments) < 1 || len(expression.Arguments) > 2 {
@@ -5837,6 +5843,104 @@ func compileNumericRoundingInput(
 		kind:                    resultKind,
 		numberType:              numberType,
 		alwaysNull:              alwaysNull,
+		materializeForPredicate: input.materializeForPredicate,
+	}, nil
+}
+
+func compileMVCountScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+) (compiledScalar, error) {
+	input, err := compileUnaryScalarInput(expression, state, "mvcount")
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	nullUInt64 := "CAST(NULL AS Nullable(UInt64))"
+	if input.alwaysNull {
+		return compiledScalar{
+			valueSQL:        nullUInt64,
+			existsSQL:       "1",
+			kind:            fieldKindNumber,
+			numberType:      "UInt64",
+			numericIntegral: true,
+			alwaysNull:      true,
+		}, nil
+	}
+
+	valueSQL := ""
+	valueArgs := append([]any(nil), input.valueArgs...)
+	switch input.kind {
+	case fieldKindStringArray:
+		valueSQL = "nullIf(toUInt64(length(" + input.valueSQL +
+			")), toUInt64(0))"
+	case fieldKindDynamic:
+		typeSQL := "dynamicType(value)"
+		body := ""
+		switch input.dynamicDomain {
+		case dynamicScalarDomainText:
+			body = "multiIf(" +
+				typeSQL + " = 'String', toUInt64(1), " +
+				typeSQL + " = 'Array(String)', nullIf(toUInt64(length(" +
+				"dynamicElement(value, 'Array(String)'))), toUInt64(0)), " +
+				nullUInt64 + ")"
+		case dynamicScalarDomainNumeric:
+			body = "if(" + typeSQL + " = 'None', " +
+				nullUInt64 + ", toUInt64(1))"
+		default:
+			dynamicValue := compiledScalar{
+				valueSQL:       "value",
+				dynamicTypeSQL: typeSQL,
+				kind:           fieldKindDynamic,
+			}
+			dynamicCount := "nullIf(toUInt64(arrayCount(element -> " +
+				"dynamicType(element) != 'None', dynamicElement(value, " +
+				"'Array(Dynamic)'))), toUInt64(0))"
+			otherArrayCount := "nullIf(toUInt64(length(value)), toUInt64(0))"
+			scalar := "(" +
+				typeSQL + " = 'String' OR " +
+				typeSQL + " = 'Bool' OR " +
+				dynamicNumericTypePredicate(typeSQL) + " OR " +
+				dynamicTaggedScalarEnvelopeCondition(dynamicValue) + ")"
+			body = "multiIf(" +
+				typeSQL + " = 'None', " + nullUInt64 + ", " +
+				typeSQL + " = 'Array(Dynamic)', " + dynamicCount + ", " +
+				"startsWith(" + typeSQL + ", 'Array('), " +
+				otherArrayCount + ", " +
+				scalar + ", toUInt64(1), " +
+				nullUInt64 + ")"
+		}
+		existsSQL := input.existsSQL
+		if existsSQL == "" {
+			existsSQL = "1"
+		}
+		valueSQL = "arrayElement(arrayMap((value, present) -> if(present, " +
+			body + ", " + nullUInt64 + "), [" + input.valueSQL +
+			"], [toUInt8(" + existsSQL + ")]), 1)"
+		valueArgs = append(valueArgs, input.existsArgs...)
+	case fieldKindInvalid:
+		valueSQL = nullUInt64
+		valueArgs = nil
+	default:
+		valueSQL = "if(isNotNull(" + input.valueSQL +
+			"), toUInt64(1), " + nullUInt64 + ")"
+	}
+	if len(valueSQL) > maxCompiledMVCountScalarSQLBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"mvcount scalar SQL exceeds %d bytes",
+				maxCompiledMVCountScalarSQLBytes,
+			),
+			Range: expression.Range,
+		}
+	}
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               valueArgs,
+		existsSQL:               "1",
+		kind:                    fieldKindNumber,
+		numberType:              "UInt64",
+		numericIntegral:         true,
 		materializeForPredicate: input.materializeForPredicate,
 	}, nil
 }
@@ -7382,6 +7486,20 @@ func dynamicExactIntegerSQL(value compiledScalar) string {
 }
 
 func dynamicTaggedDecimalCondition(value compiledScalar) string {
+	return dynamicTaggedEnvelopeCondition(value, "= 'decimal/v1'")
+}
+
+func dynamicTaggedScalarEnvelopeCondition(value compiledScalar) string {
+	return dynamicTaggedEnvelopeCondition(
+		value,
+		"IN ('bytes/v1', 'timestamp/v1', 'duration/v1', 'decimal/v1')",
+	)
+}
+
+func dynamicTaggedEnvelopeCondition(
+	value compiledScalar,
+	typePredicate string,
+) string {
 	typeSQL := dynamicScalarTypeSQL(value)
 	mapSQL := dynamicTaggedMapSQL(value)
 	typeKey := "concat(char(0), 'open_splunk_type')"
@@ -7390,7 +7508,7 @@ func dynamicTaggedDecimalCondition(value compiledScalar) string {
 		" AND length(" + mapSQL + ") = 2" +
 		" AND mapContains(" + mapSQL + ", " + typeKey + ")" +
 		" AND mapContains(" + mapSQL + ", " + valueKey + ")" +
-		" AND " + mapSQL + "[" + typeKey + "] = 'decimal/v1')"
+		" AND " + mapSQL + "[" + typeKey + "] " + typePredicate + ")"
 }
 
 func dynamicTaggedDecimalText(value compiledScalar) (condition, payload string) {
