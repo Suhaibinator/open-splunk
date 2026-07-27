@@ -9,6 +9,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
+	"github.com/Suhaibinator/open-splunk/internal/spltimeformat"
 	"github.com/Suhaibinator/open-splunk/internal/splwildcard"
 )
 
@@ -2262,6 +2263,60 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				Range:   name.sourceRange,
 			}
 		}
+	case "strftime":
+		function = ScalarFunctionStrftime
+		if len(arguments) != 2 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: "strftime requires exactly two arguments",
+				Range:   name.sourceRange,
+			}
+		}
+		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "strftime cannot consume a Boolean time value",
+				Range:   arguments[0].SourceRange(),
+				Suggestions: []string{
+					`strftime(_time, "%Y-%m-%dT%H:%M:%S.%Q")`,
+				},
+			}
+		}
+		format, ok := arguments[1].(*ScalarLiteralExpr)
+		if !ok || format == nil || format.Value.Kind != LiteralKindString ||
+			!format.Value.Quoted {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "strftime format must be a quoted string literal",
+				Range:   arguments[1].SourceRange(),
+				Suggestions: []string{
+					`strftime(_time, "%Y-%m-%dT%H:%M:%S.%Q")`,
+				},
+			}
+		}
+		if _, err := spltimeformat.CompileStrftimeFormat(format.Value.Text); err != nil {
+			if errors.Is(err, spltimeformat.ErrStrftimeFormatTooLarge) {
+				return nil, &Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"strftime format exceeds the %d-byte, %d-work-unit, or %d-output-byte limit",
+						spltimeformat.MaximumStrftimeFormatBytes,
+						spltimeformat.MaximumStrftimeWorkUnits,
+						spltimeformat.MaximumStrftimeOutputBytes,
+					),
+					Range: format.Range,
+				}
+			}
+			return nil, &Diagnostic{
+				Code: "SPL_UNSUPPORTED_TIME_FORMAT",
+				Message: "strftime format is outside the supported locale-stable " +
+					"date/time variable subset",
+				Range: format.Range,
+				Suggestions: []string{
+					`strftime(_time, "%Y-%m-%dT%H:%M:%S.%Q")`,
+				},
+			}
+		}
 	case "tonumber":
 		function = ScalarFunctionToNumber
 		if len(arguments) != 1 {
@@ -2647,6 +2702,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				`match(value, "pattern")`,
 				`like(value, "pattern%")`,
 				"now()",
+				`strftime(time, "%Y-%m-%dT%H:%M:%S.%Q")`,
 				`if(predicate, true_value, false_value)`,
 			},
 		}

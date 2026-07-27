@@ -27,6 +27,7 @@ func BuildPlan(job searchjobs.Job) (*plan.Query, error) {
 		earliest:         job.Earliest,
 		latest:           job.Latest,
 		searchStart:      job.CreatedAt,
+		searchTimezone:   job.TimeRange.Timezone,
 		indexTimeCutoff:  job.IndexTimeCutoff,
 		visibilityCutoff: job.VisibilityCutoff,
 	})
@@ -42,6 +43,7 @@ func BuildExecutionPlan(snapshot searchjobs.ExecutionSnapshot) (*plan.Query, err
 		earliest:         snapshot.Earliest,
 		latest:           snapshot.Latest,
 		searchStart:      snapshot.SearchStart,
+		searchTimezone:   snapshot.SearchTimezone,
 		indexTimeCutoff:  snapshot.IndexTimeCutoff,
 		visibilityCutoff: snapshot.VisibilityCutoff,
 	})
@@ -54,6 +56,7 @@ type planSnapshot struct {
 	earliest         time.Time
 	latest           time.Time
 	searchStart      time.Time
+	searchTimezone   string
 	indexTimeCutoff  time.Time
 	visibilityCutoff uint64
 }
@@ -72,6 +75,7 @@ func buildPlan(snapshot planSnapshot) (*plan.Query, error) {
 		Earliest:          snapshot.earliest,
 		Latest:            snapshot.latest,
 		SearchStart:       snapshot.searchStart,
+		SearchTimezone:    snapshot.searchTimezone,
 		IndexTimeCutoff:   snapshot.indexTimeCutoff,
 		VisibilityCutoff:  &visibilityCutoff,
 	})

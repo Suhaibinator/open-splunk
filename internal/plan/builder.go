@@ -15,6 +15,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
+	"github.com/Suhaibinator/open-splunk/internal/spltimeformat"
 	"github.com/Suhaibinator/open-splunk/internal/splwildcard"
 )
 
@@ -46,6 +47,7 @@ const (
 	// drive unbounded recursive conversion.
 	maxConvertedExpressionNodes = 2048
 	maxConvertedExpressionDepth = 1024
+	maxSearchTimezoneBytes      = 255
 )
 
 // Scope is the server-resolved security and snapshot boundary for a search.
@@ -59,6 +61,7 @@ type Scope struct {
 	// SearchStart is the immutable server clock value captured when the search
 	// is admitted. It must not be derived from either storage cutoff below.
 	SearchStart     time.Time
+	SearchTimezone  string
 	IndexTimeCutoff time.Time
 	// VisibilityCutoff must be resolved by the storage writer when the search
 	// job starts. A pointer distinguishes an empty-table cutoff of zero from a
@@ -95,11 +98,26 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 	if searchStart.IsZero() {
 		return nil, &Diagnostic{Code: "SPL_INVALID_SEARCH_START", Message: "search-start anchor is required", Range: query.Range}
 	}
+	if scope.SearchTimezone == "" ||
+		len(scope.SearchTimezone) > maxSearchTimezoneBytes ||
+		!utf8.ValidString(scope.SearchTimezone) ||
+		strings.TrimSpace(scope.SearchTimezone) != scope.SearchTimezone ||
+		scope.SearchTimezone == "Local" {
+		return nil, &Diagnostic{
+			Code:    "SPL_INVALID_SEARCH_TIMEZONE",
+			Message: "effective search timezone is invalid",
+			Range:   query.Range,
+		}
+	}
 	if scope.VisibilityCutoff == nil {
 		return nil, &Diagnostic{Code: "SPL_INVALID_SNAPSHOT", Message: "storage visibility cutoff is required", Range: query.Range}
 	}
 
-	result := &Query{EffectiveIndexes: indexes, SearchStart: searchStart}
+	result := &Query{
+		EffectiveIndexes: indexes,
+		SearchStart:      searchStart,
+		SearchTimezone:   strings.Clone(scope.SearchTimezone),
+	}
 	result.Operators = append(result.Operators, &Scan{
 		TenantID:         scope.TenantID,
 		Indexes:          append([]string(nil), indexes...),
@@ -1890,6 +1908,10 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			expectedArguments = 0
 			hasExactArity = true
 			functionName = "now"
+		case spl.ScalarFunctionStrftime:
+			expectedArguments = 2
+			hasExactArity = true
+			functionName = "strftime"
 		case spl.ScalarFunctionToNumber:
 			expectedArguments = 1
 			hasExactArity = true
@@ -2156,6 +2178,46 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				}
 			}
 		}
+		if expression.Function == spl.ScalarFunctionStrftime {
+			if splScalarMayReturnBooleanFunction(expression.Arguments[0]) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message: "strftime cannot consume a Boolean time value",
+					Range:   expression.Arguments[0].SourceRange(),
+				}
+			}
+			format, formatRange, ok := splQuotedStringLiteral(
+				expression.Arguments[1],
+				expression.Range,
+			)
+			if !ok {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message: "strftime format must be a quoted string literal",
+					Range:   formatRange,
+				}
+			}
+			if _, err := spltimeformat.CompileStrftimeFormat(format.Value.Text); err != nil {
+				if errors.Is(err, spltimeformat.ErrStrftimeFormatTooLarge) {
+					return nil, &Diagnostic{
+						Code: "SPL_QUERY_TOO_COMPLEX",
+						Message: fmt.Sprintf(
+							"strftime format exceeds the %d-byte, %d-work-unit, or %d-output-byte limit",
+							spltimeformat.MaximumStrftimeFormatBytes,
+							spltimeformat.MaximumStrftimeWorkUnits,
+							spltimeformat.MaximumStrftimeOutputBytes,
+						),
+						Range: format.Range,
+					}
+				}
+				return nil, &Diagnostic{
+					Code: "SPL_UNSUPPORTED_TIME_FORMAT",
+					Message: "strftime format is outside the supported locale-stable " +
+						"date/time variable subset",
+					Range: format.Range,
+				}
+			}
+		}
 		arguments := make([]ScalarExpression, 0, len(expression.Arguments))
 		for _, argument := range expression.Arguments {
 			converted, err := convertScalarExpressionUnchecked(argument)
@@ -2168,6 +2230,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		switch expression.Function {
 		case spl.ScalarFunctionNow:
 			function = ScalarFunctionNow
+		case spl.ScalarFunctionStrftime:
+			function = ScalarFunctionStrftime
 		case spl.ScalarFunctionToNumber:
 			function = ScalarFunctionToNumber
 		case spl.ScalarFunctionToString:

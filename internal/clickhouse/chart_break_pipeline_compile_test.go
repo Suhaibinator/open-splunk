@@ -590,6 +590,7 @@ func TestChartBreakPipelineNarrowsIndexScopeAndStopsAtTheChart(t *testing.T) {
 		Earliest:          testChartScope().Earliest,
 		Latest:            testChartScope().Latest,
 		SearchStart:       testChartScope().SearchStart,
+		SearchTimezone:    testChartScope().SearchTimezone,
 		IndexTimeCutoff:   testChartScope().IndexTimeCutoff,
 		VisibilityCutoff:  testChartScope().VisibilityCutoff,
 	}

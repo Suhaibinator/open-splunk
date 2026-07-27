@@ -26,6 +26,10 @@ type Query struct {
 	// search-scoped scalar functions such as now(). It is deliberately
 	// independent from Scan.IndexTimeCutoff, which controls storage visibility.
 	SearchStart time.Time
+	// SearchTimezone is the canonical effective IANA timezone captured with
+	// the search time-range intent. Time formatting must never inherit the
+	// ClickHouse or API server's local timezone.
+	SearchTimezone string
 }
 
 // DynamicSeriesOutput describes a bounded runtime-wide result schema. Fixed
@@ -522,6 +526,7 @@ const (
 	ScalarFunctionMatch
 	ScalarFunctionLike
 	ScalarFunctionNow
+	ScalarFunctionStrftime
 )
 
 // ReturnsBoolean reports the atomic result trait shared by planning and

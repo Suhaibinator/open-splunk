@@ -1105,6 +1105,7 @@ func binEdgeMetadataPlan(t *testing.T, source string, cutoff time.Time, visibili
 		Earliest:          binEdgeMetadataEarliest,
 		Latest:            binEdgeMetadataLatest,
 		SearchStart:       cutoff.Add(-time.Second),
+		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   cutoff,
 		VisibilityCutoff:  uint64PointerForIntegration(visibilityCutoff),
 	})

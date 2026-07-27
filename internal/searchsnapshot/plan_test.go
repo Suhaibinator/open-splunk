@@ -9,6 +9,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
 func TestBuildPlanUsesOnlyImmutableEffectiveScope(t *testing.T) {
@@ -27,6 +28,13 @@ func TestBuildPlanUsesOnlyImmutableEffectiveScope(t *testing.T) {
 	}
 	if !logical.SearchStart.Equal(job.CreatedAt) {
 		t.Fatalf("search start = %v, want job creation time %v", logical.SearchStart, job.CreatedAt)
+	}
+	if logical.SearchTimezone != job.TimeRange.Timezone {
+		t.Fatalf(
+			"search timezone = %q, want %q",
+			logical.SearchTimezone,
+			job.TimeRange.Timezone,
+		)
 	}
 	scan, ok := logical.Operators[0].(*plan.Scan)
 	if !ok {
@@ -73,6 +81,7 @@ func TestBuildExecutionPlanMatchesCompletedJobPlan(t *testing.T) {
 		Earliest:         job.Earliest,
 		Latest:           job.Latest,
 		SearchStart:      job.CreatedAt,
+		SearchTimezone:   job.TimeRange.Timezone,
 		IndexTimeCutoff:  job.IndexTimeCutoff,
 		VisibilityCutoff: job.VisibilityCutoff,
 	})
@@ -83,7 +92,8 @@ func TestBuildExecutionPlanMatchesCompletedJobPlan(t *testing.T) {
 	snapshotScan := fromSnapshot.Operators[0].(*plan.Scan)
 	if !slices.Equal(fromSnapshot.EffectiveIndexes, fromJob.EffectiveIndexes) ||
 		!reflect.DeepEqual(snapshotScan, jobScan) ||
-		!fromSnapshot.SearchStart.Equal(fromJob.SearchStart) {
+		!fromSnapshot.SearchStart.Equal(fromJob.SearchStart) ||
+		fromSnapshot.SearchTimezone != fromJob.SearchTimezone {
 		t.Fatalf("execution snapshot plan differs: job=%+v snapshot=%+v", fromJob, fromSnapshot)
 	}
 }
@@ -125,6 +135,12 @@ func testJob() searchjobs.Job {
 		OwnerID:          "owner-1",
 		SPL:              `index=allowed-a OR index=allowed-b level=error`,
 		EffectiveIndexes: []string{"allowed-a", "allowed-b"},
+		TimeRange: searchtime.Intent{
+			Earliest:          "2026-07-21T08:00:00.000000123Z",
+			Latest:            "2026-07-21T09:00:00.000000456Z",
+			Timezone:          "America/Los_Angeles",
+			TimezoneSpecified: true,
+		},
 		Earliest:         time.Date(2026, 7, 21, 8, 0, 0, 123, time.UTC),
 		Latest:           time.Date(2026, 7, 21, 9, 0, 0, 456, time.UTC),
 		IndexTimeCutoff:  time.Date(2026, 7, 21, 9, 1, 0, 789, time.UTC),

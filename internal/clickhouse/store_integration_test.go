@@ -1672,6 +1672,7 @@ func testCompiledQueriesAgainstClickHouse(
 		Earliest:          time.Date(1969, 12, 31, 23, 55, 0, 0, time.UTC),
 		Latest:            time.Date(1970, 1, 1, 0, 0, 0, 1, time.UTC),
 		SearchStart:       indexTime.Add(9 * time.Second),
+		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   indexTime.Add(10 * time.Second),
 		VisibilityCutoff:  uint64PointerForIntegration(visibilityCutoff),
 	})
@@ -3948,6 +3949,7 @@ func buildIntegrationPlanForIndex(
 		Earliest:         time.Date(2026, time.July, 20, 0, 0, 0, 0, time.UTC),
 		Latest:           time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC),
 		SearchStart:      cutoff.Add(-time.Second),
+		SearchTimezone:   "UTC",
 		IndexTimeCutoff:  cutoff,
 		VisibilityCutoff: uint64PointerForIntegration(visibilityCutoff),
 	})

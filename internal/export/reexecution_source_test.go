@@ -12,6 +12,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
 type reexecutionTestSearches struct {
@@ -749,6 +750,11 @@ func newReexecutionTestSearches() (*reexecutionTestSearches, searchjobs.Schema, 
 			SPL:              `index=main | table status`,
 			RequestedIndexes: []string{"main"},
 			EffectiveIndexes: []string{"main"},
+			TimeRange: searchtime.Intent{
+				Earliest: "-1h",
+				Latest:   "now",
+				Timezone: "UTC",
+			},
 			Earliest:         now.Add(-time.Hour),
 			Latest:           now,
 			IndexTimeCutoff:  now,

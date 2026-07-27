@@ -309,6 +309,18 @@ func TestFieldServiceRechecksLifecycleScopeAndSnapshotOnEveryPage(t *testing.T) 
 		t.Fatalf("executor calls after stale search-start cursor = %d, want 1", executor.Calls())
 	}
 
+	changed = snapshot
+	changed.SearchTimezone = "America/Los_Angeles"
+	stateMu.Lock()
+	current = changed
+	stateMu.Unlock()
+	if _, err := service.ListFields(context.Background(), access, ListFieldsRequest{SearchJobID: snapshot.ID, PageToken: first.NextPageToken}); !errors.Is(err, ErrInvalidFieldCursor) {
+		t.Fatalf("changed-search-timezone cursor error = %v", err)
+	}
+	if executor.Calls() != 1 {
+		t.Fatalf("executor calls after stale search-timezone cursor = %d, want 1", executor.Calls())
+	}
+
 	stateMu.Lock()
 	current = snapshot
 	stateMu.Unlock()
@@ -1289,6 +1301,7 @@ func fieldTestSnapshot(id string) searchjobs.ExecutionSnapshot {
 		Earliest:         time.Date(2026, 7, 21, 8, 0, 0, 0, time.UTC),
 		Latest:           time.Date(2026, 7, 21, 9, 0, 0, 0, time.UTC),
 		SearchStart:      time.Date(2026, 7, 21, 9, 0, 59, 0, time.UTC),
+		SearchTimezone:   "UTC",
 		IndexTimeCutoff:  time.Date(2026, 7, 21, 9, 1, 0, 0, time.UTC),
 		VisibilityCutoff: 19,
 		FinishedAt:       time.Date(2026, 7, 21, 9, 1, 1, 0, time.UTC),

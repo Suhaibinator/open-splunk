@@ -241,6 +241,7 @@ const (
 	ScalarFunctionMatch
 	ScalarFunctionLike
 	ScalarFunctionNow
+	ScalarFunctionStrftime
 )
 
 // ReturnsBoolean reports the atomic result trait shared by parser, planner,

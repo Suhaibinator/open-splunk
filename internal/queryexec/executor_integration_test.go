@@ -1038,6 +1038,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			Earliest:          timechartBase.Add(2 * time.Minute),
 			Latest:            timechartBase.Add(18 * time.Minute),
 			SearchStart:       timechartIndexTime,
+			SearchTimezone:    "UTC",
 			IndexTimeCutoff:   timechartIndexTime.Add(500 * time.Microsecond),
 			VisibilityCutoff:  &visibility,
 		})
@@ -2468,6 +2469,7 @@ func queryIntegrationCompileSearchRange(
 		Earliest:          earliest,
 		Latest:            latest,
 		SearchStart:       indexTime,
+		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   indexTime.Add(500 * time.Microsecond),
 		VisibilityCutoff:  &visibility,
 	})
@@ -2500,6 +2502,7 @@ func queryIntegrationCompileTimeline(
 		Earliest:          spec.Earliest,
 		Latest:            spec.Latest,
 		SearchStart:       indexTime,
+		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   indexTime.Add(500 * time.Microsecond),
 		VisibilityCutoff:  &visibility,
 	})

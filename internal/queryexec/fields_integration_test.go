@@ -603,6 +603,7 @@ func queryIntegrationCompileFieldCatalog(
 		Earliest:          indexTime.Add(-time.Minute),
 		Latest:            indexTime.Add(time.Minute),
 		SearchStart:       indexTime,
+		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   indexTime.Add(time.Second),
 		VisibilityCutoff:  &visibility,
 	})
@@ -656,6 +657,7 @@ func queryIntegrationFieldPlan(
 		Earliest:          indexTime.Add(-time.Minute),
 		Latest:            indexTime.Add(time.Minute),
 		SearchStart:       indexTime,
+		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   indexTime.Add(time.Second),
 		VisibilityCutoff:  &visibility,
 	})

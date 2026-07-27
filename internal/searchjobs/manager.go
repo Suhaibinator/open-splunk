@@ -1403,6 +1403,7 @@ func (manager *Manager) run(entry *jobEntry) {
 		Earliest:          entry.job.Earliest,
 		Latest:            entry.job.Latest,
 		SearchStart:       entry.job.CreatedAt,
+		SearchTimezone:    entry.job.TimeRange.Timezone,
 		IndexTimeCutoff:   entry.job.IndexTimeCutoff,
 		VisibilityCutoff:  &visibilityCutoff,
 	}

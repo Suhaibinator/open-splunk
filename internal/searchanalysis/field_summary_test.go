@@ -255,12 +255,22 @@ func TestFieldServiceSummaryRechecksScopeIdentityExpiryAndFingerprint(t *testing
 	}
 
 	stateMu.Lock()
+	current.SearchTimezone = "America/Los_Angeles"
+	stateMu.Unlock()
+	if _, err := service.GetFieldSummary(context.Background(), access, request); err != nil {
+		t.Fatalf("GetFieldSummary(changed search timezone) error = %v", err)
+	}
+	if compiler.Calls() != 4 || executor.Calls() != 4 {
+		t.Fatalf("changed search timezone reused summary: compiler/executor %d/%d", compiler.Calls(), executor.Calls())
+	}
+
+	stateMu.Lock()
 	current.OwnerID = "another-owner"
 	stateMu.Unlock()
 	if _, err := service.GetFieldSummary(context.Background(), access, request); !errors.Is(err, searchjobs.ErrInvalidResult) {
 		t.Fatalf("GetFieldSummary(identity mismatch) error = %v, want ErrInvalidResult", err)
 	}
-	if compiler.Calls() != 3 {
+	if compiler.Calls() != 4 {
 		t.Fatalf("identity mismatch reached compiler: %d calls", compiler.Calls())
 	}
 
@@ -271,7 +281,7 @@ func TestFieldServiceSummaryRechecksScopeIdentityExpiryAndFingerprint(t *testing
 	if _, err := service.GetFieldSummary(context.Background(), access, request); !errors.Is(err, searchjobs.ErrExpired) {
 		t.Fatalf("GetFieldSummary(provider expiry) error = %v", err)
 	}
-	if compiler.Calls() != 3 {
+	if compiler.Calls() != 4 {
 		t.Fatalf("provider expiry used cache or compiler: %d calls", compiler.Calls())
 	}
 

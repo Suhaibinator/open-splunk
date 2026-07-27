@@ -407,6 +407,7 @@ func chartBreakPipelineIntegrationCompile(t *testing.T, source string, cutoff ti
 		Earliest:         time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC),
 		Latest:           time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC),
 		SearchStart:      cutoff.Add(-time.Second),
+		SearchTimezone:   "UTC",
 		IndexTimeCutoff:  cutoff,
 		VisibilityCutoff: uint64PointerForIntegration(visibilityCutoff),
 	})

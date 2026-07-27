@@ -19,6 +19,7 @@ type ExecutionSnapshot struct {
 	Earliest         time.Time
 	Latest           time.Time
 	SearchStart      time.Time
+	SearchTimezone   string
 	IndexTimeCutoff  time.Time
 	VisibilityCutoff uint64
 	FinishedAt       time.Time
@@ -87,6 +88,7 @@ func (manager *Manager) CompletedExecutionSnapshotFor(ctx context.Context, acces
 		Earliest:         entry.job.Earliest,
 		Latest:           entry.job.Latest,
 		SearchStart:      entry.job.CreatedAt,
+		SearchTimezone:   strings.Clone(entry.job.TimeRange.Timezone),
 		IndexTimeCutoff:  entry.job.IndexTimeCutoff,
 		VisibilityCutoff: entry.job.VisibilityCutoff,
 		FinishedAt:       entry.job.FinishedAt,

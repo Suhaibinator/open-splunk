@@ -109,6 +109,7 @@ func TestCompileTimeBoundsUseExplicitDateTime64StringParameters(t *testing.T) {
 		Earliest:          earliest,
 		Latest:            latest,
 		SearchStart:       cutoff.Add(-time.Second),
+		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   cutoff,
 		VisibilityCutoff:  &visibility,
 	})
@@ -1097,6 +1098,7 @@ func TestCompileTimeBinUsesMathematicalPreEpochFloor(t *testing.T) {
 		Earliest:          time.Date(1969, 12, 31, 23, 59, 59, 999999999, time.UTC),
 		Latest:            time.Date(1970, 1, 1, 0, 0, 0, 1, time.UTC),
 		SearchStart:       time.Date(2026, 7, 21, 23, 59, 59, 0, time.UTC),
+		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
 		VisibilityCutoff:  &visibility,
 	})
@@ -1128,6 +1130,7 @@ func TestCompileTimeBinRejectsBucketBeforeDateTime64Minimum(t *testing.T) {
 		Earliest:          earliest,
 		Latest:            earliest.Add(time.Second),
 		SearchStart:       time.Date(2026, 7, 21, 23, 59, 59, 0, time.UTC),
+		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
 		VisibilityCutoff:  &visibility,
 	})
@@ -1267,6 +1270,7 @@ func TestCompileTimechartUsesMathematicalPreEpochFloor(t *testing.T) {
 		Earliest:          time.Date(1969, 12, 31, 23, 59, 59, 999999999, time.UTC),
 		Latest:            time.Date(1970, 1, 1, 0, 0, 0, 1, time.UTC),
 		SearchStart:       time.Date(2026, 7, 21, 23, 59, 59, 0, time.UTC),
+		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
 		VisibilityCutoff:  &visibility,
 	})
@@ -1317,6 +1321,7 @@ func TestCompileTimechartKeepsAlignedBucketBeforeDateTime64MinimumAsInteger(t *t
 		Earliest:          earliest,
 		Latest:            earliest.Add(time.Second),
 		SearchStart:       time.Date(2026, 7, 21, 23, 59, 59, 0, time.UTC),
+		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
 		VisibilityCutoff:  &visibility,
 	})
@@ -4586,6 +4591,7 @@ func testChartScope() plan.Scope {
 		Earliest:          time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC),
 		Latest:            time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
 		SearchStart:       time.Date(2026, 7, 22, 0, 0, 0, 500_000_000, time.UTC),
+		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 1, 0, time.UTC),
 		VisibilityCutoff:  uint64Pointer(73),
 	}

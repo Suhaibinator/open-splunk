@@ -667,6 +667,7 @@ func binEdgePlanScope() plan.Scope {
 		Earliest:          time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC),
 		Latest:            time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
 		SearchStart:       time.Date(2026, 7, 22, 0, 0, 0, 500_000_000, time.UTC),
+		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 1, 0, time.UTC),
 		VisibilityCutoff:  uint64Pointer(73),
 	}

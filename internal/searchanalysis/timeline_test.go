@@ -309,6 +309,7 @@ func timelineTestSnapshot() searchjobs.ExecutionSnapshot {
 		Earliest:         time.Date(2026, 7, 21, 8, 0, 30, 123, time.UTC),
 		Latest:           time.Date(2026, 7, 21, 8, 2, 0, 1, time.UTC),
 		SearchStart:      time.Date(2026, 7, 21, 8, 2, 59, 0, time.UTC),
+		SearchTimezone:   "UTC",
 		IndexTimeCutoff:  time.Date(2026, 7, 21, 8, 3, 0, 0, time.UTC),
 		VisibilityCutoff: 19,
 		FinishedAt:       time.Date(2026, 7, 21, 8, 3, 1, 0, time.UTC),

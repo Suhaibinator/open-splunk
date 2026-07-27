@@ -349,6 +349,7 @@ func queryIntegrationRetentionPlan(
 		Earliest:          eventTime,
 		Latest:            eventTime.Add(time.Second),
 		SearchStart:       cutoff.Add(-time.Second),
+		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   cutoff,
 		VisibilityCutoff:  &visibility,
 	})

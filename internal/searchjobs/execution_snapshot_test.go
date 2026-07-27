@@ -61,6 +61,7 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 		Earliest:         earliest.UTC(),
 		Latest:           latest.UTC(),
 		SearchStart:      completed.CreatedAt,
+		SearchTimezone:   "UTC",
 		IndexTimeCutoff:  now.UTC(),
 		VisibilityCutoff: 91,
 		FinishedAt:       now.UTC(),

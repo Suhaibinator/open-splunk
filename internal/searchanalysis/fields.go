@@ -1259,6 +1259,7 @@ func fieldSnapshotFingerprint(snapshot searchjobs.ExecutionSnapshot) [sha256.Siz
 	writeFingerprintTime(hasher, snapshot.Earliest)
 	writeFingerprintTime(hasher, snapshot.Latest)
 	writeFingerprintTime(hasher, snapshot.SearchStart)
+	writeFingerprintString(hasher, snapshot.SearchTimezone)
 	writeFingerprintTime(hasher, snapshot.IndexTimeCutoff)
 	writeFingerprintUint64(hasher, snapshot.VisibilityCutoff)
 	writeFingerprintTime(hasher, snapshot.FinishedAt)
