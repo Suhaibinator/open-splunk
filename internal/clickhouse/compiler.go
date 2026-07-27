@@ -74,8 +74,12 @@ const (
 	// maxCompiledCaseScalarSQLBytes independently bounds the alternating
 	// predicate/value expansion of a case expression.
 	maxCompiledCaseScalarSQLBytes = 64 << 10
-	maxCompiledAssignments        = 64
-	maxCompiledExtractionOutputs  = 64
+	// maxCompiledTextCaseScalarSQLBytes bounds each Unicode case-conversion
+	// expression independently. The lowering references its input exactly
+	// once, so nested lower/upper calls grow linearly inside this ceiling.
+	maxCompiledTextCaseScalarSQLBytes = 64 << 10
+	maxCompiledAssignments            = 64
+	maxCompiledExtractionOutputs      = 64
 	// Parser-produced predicates are already bounded by a 1,024-token source
 	// and 32 eval/where leaves. Revalidate a deliberately wider structural
 	// ceiling here so forged logical plans cannot drive unbounded recursive
@@ -3661,6 +3665,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileNullTestScalar(expression, state)
 		case plan.ScalarFunctionCoalesce:
 			return compileCoalesceScalar(expression, state)
+		case plan.ScalarFunctionLower, plan.ScalarFunctionUpper:
+			return compileTextCaseScalar(expression, state)
 		default:
 			return compiledScalar{}, fmt.Errorf("compile ClickHouse scalar expression: unsupported function %d", expression.Function)
 		}
@@ -4519,7 +4525,9 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 		switch expression.Function {
 		case plan.ScalarFunctionToNumber,
 			plan.ScalarFunctionIsNull,
-			plan.ScalarFunctionIsNotNull:
+			plan.ScalarFunctionIsNotNull,
+			plan.ScalarFunctionLower,
+			plan.ScalarFunctionUpper:
 			expectedArguments = 1
 		case plan.ScalarFunctionReplace:
 			expectedArguments = 3
@@ -4900,7 +4908,96 @@ func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileSt
 		valueSQL:                "replaceRegexpAll(" + inputSQL + ", ?, ?)",
 		valueArgs:               append(inputArgs, pattern, replacement),
 		existsSQL:               "1",
+		textEligibleSQL:         input.textEligibleSQL,
 		kind:                    fieldKindString,
+		materializeForPredicate: input.materializeForPredicate,
+	}, nil
+}
+
+func compileTextCaseScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+) (compiledScalar, error) {
+	functionName := "lower"
+	clickHouseFunction := "lowerUTF8"
+	if expression.Function == plan.ScalarFunctionUpper {
+		functionName = "upper"
+		clickHouseFunction = "upperUTF8"
+	}
+	if len(expression.Arguments) != 1 {
+		return compiledScalar{}, fmt.Errorf(
+			"compile ClickHouse %s: expected one argument",
+			functionName,
+		)
+	}
+	if nilScalarExpression(expression.Arguments[0]) {
+		return compiledScalar{}, fmt.Errorf(
+			"compile ClickHouse %s: missing scalar expression",
+			functionName,
+		)
+	}
+	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
+		return compiledScalar{}, fmt.Errorf(
+			"compile ClickHouse %s: cannot consume a Boolean null predicate",
+			functionName,
+		)
+	}
+	input, err := compileScalarValue(expression.Arguments[0], state)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+
+	valueSQL := ""
+	valueArgs := append([]any(nil), input.valueArgs...)
+	resultKind := fieldKindString
+	switch input.kind {
+	case fieldKindDynamic:
+		// Dynamic event fields can be either scalar String or Splunk
+		// multivalue Array(String). Bind the input once through a single-element
+		// higher-order expression so nested calls grow linearly instead of
+		// duplicating the complete child SQL in each runtime-type branch.
+		valueSQL = "arrayElement(arrayMap(value -> multiIf(" +
+			"dynamicType(value) = 'String', " +
+			"CAST(" + clickHouseFunction +
+			"(dynamicElement(value, 'String')) AS Dynamic), " +
+			"dynamicType(value) = 'Array(String)', " +
+			"CAST(arrayMap(element -> " + clickHouseFunction +
+			"(element), dynamicElement(value, 'Array(String)')) AS Dynamic), " +
+			"CAST(NULL AS Dynamic)), [" + input.valueSQL + "]), 1)"
+		resultKind = fieldKindDynamic
+	case fieldKindStringArray:
+		valueSQL = "arrayMap(element -> " + clickHouseFunction +
+			"(element), " + input.valueSQL + ")"
+		resultKind = fieldKindStringArray
+	default:
+		inputSQL, inputArgs := compiledStringScalar(input)
+		valueArgs = inputArgs
+		if input.textEligibleSQL != "" {
+			// _raw and conditionals derived from it carry a provenance guard.
+			// Ingestion verifies the UTF-8 declaration, so this avoids both
+			// undefined lowerUTF8/upperUTF8 behavior and a redundant byte scan.
+			inputSQL = "if(ifNull(" + input.textEligibleSQL + ", 0), " +
+				inputSQL + ", CAST(NULL AS Nullable(String)))"
+		}
+		valueSQL = clickHouseFunction + "(" + inputSQL + ")"
+	}
+	if len(valueSQL) > maxCompiledTextCaseScalarSQLBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"%s scalar SQL exceeds %d bytes",
+				functionName,
+				maxCompiledTextCaseScalarSQLBytes,
+			),
+			Range: expression.Range,
+		}
+	}
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               valueArgs,
+		existsSQL:               "1",
+		kind:                    resultKind,
+		alwaysNull:              input.alwaysNull,
 		materializeForPredicate: input.materializeForPredicate,
 	}, nil
 }
