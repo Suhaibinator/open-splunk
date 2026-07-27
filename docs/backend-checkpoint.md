@@ -7,7 +7,124 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: typed SQLite-compatible SPL `substr`
+## Latest checkpoint: typed default SPL `tostring`
+
+Date: 2026-07-27
+
+Parser and logical-plan checkpoint (committed and pushed):
+`256a0e0fe6d001ad2771f0f6f5b3b4d036a3fb6e`
+
+Initial ClickHouse compiler and integration checkpoint (committed and pushed):
+`46737fc32b6167dabdb4af466e0c844425f573aa`
+
+Adversarial correctness, reuse, and efficiency checkpoint (committed and
+pushed):
+`a4ba7c2a6f51c549467f6affc56f0011c504a1be`
+
+Compatibility and editor checkpoint (committed and pushed):
+`35e7cb5929f02d066fab7b6633ffecba02b4af12`
+
+This test-first slice implements bounded default `tostring(value)`:
+
+1. The parser accepts a case-insensitive call with exactly one scalar
+   argument, preserves its complete source range, supports nesting and
+   predicate use, permits Boolean null-predicate consumption, and leaves a
+   bare field named `tostring` ordinary. A second argument fails at its own
+   range with `SPL_UNSUPPORTED_TOSTRING_FORMAT`; zero or three-plus arguments
+   fail arity validation.
+2. A dedicated AST and logical-plan enum carries the conversion without
+   stringly backend dispatch. Parser, planner, and compiler trust boundaries
+   independently reject forged arity, invalid enums, missing and typed-nil
+   arguments, excessive depth/nodes, and cycles.
+3. Fixed String input is an identity conversion. Fixed `Int64`, `UInt64`, and
+   `Float64` use exact ClickHouse textual spelling. Fixed Boolean values and
+   supported `isnull`/`isnotnull` results produce capitalized `"True"` or
+   `"False"`. Missing, explicit-null, and statically null input returns null.
+4. Dynamic runtime String, integer, floating-point, and Boolean values follow
+   the same contract. Exact `decimal/v1` input preserves its validated
+   payload spelling without `Float64` precision loss. The envelope must
+   contain exactly its type/value keys, remain within the 4 KiB lexical
+   ceiling, and match the Decimal grammar; malformed or oversized envelopes
+   return null without exposing their payload.
+5. Dynamic null, arrays, objects, and other tagged containers return null.
+   Fixed `Array(String)` fails with `SPL_UNSUPPORTED_MULTIVALUE_USAGE`.
+   Canonical time values fail with `SPL_UNSUPPORTED_TOSTRING_VALUE_TYPE`
+   until their timezone and precision behavior is separately pinned.
+6. String identity retains `_raw` text-eligibility provenance:
+   `tostring(_raw)` preserves binary-declared bytes, while a downstream
+   Unicode text function still returns null. No lowering uses `ARRAY JOIN`,
+   maps multivalue members, or changes event cardinality.
+7. General Dynamic conversion binds its source once and dispatches only
+   String, Boolean, validated Decimal, and physical numeric variants.
+   Dynamic text-only producers use direct nullable String extraction rather
+   than repeating broad dispatch. Fixed nullable Boolean uses one scalar
+   `transform` instead of a singleton `arrayMap`.
+8. Every call has a 64 KiB SQL ceiling in addition to the 256 KiB whole-query
+   ceiling. Nested calls grow linearly, input bindings retain source order,
+   and the text-only fast path references its complex child once.
+9. Compiler unit coverage pins fixed and Dynamic values, full-width unsigned
+   integers, exact Decimal detection, Boolean spelling, null/missing behavior,
+   container rejection, `_raw` provenance, text-only dispatch, exact source
+   occurrence, SQL growth, source-located diagnostics, typed nils, forged
+   arity, and cycles.
+10. The isolated ClickHouse corpus executes String, signed, `MaxUint64`,
+    Float64, exact Decimal with trailing zeroes, Boolean, null, missing,
+    predicate, binary `_raw`, Dynamic containers, and a directly inserted
+    malformed Decimal envelope. It also proves no `ArrayJoin` with
+    `EXPLAIN actions=1`.
+11. Independent reuse, quality, and efficiency reviewers found five concrete
+    improvements, all applied: generic unary scalar validation, a shared
+    scalar-function integration harness, direct text-only Dynamic extraction,
+    scalar nullable-Boolean transformation, and validated exact Decimal
+    support. The quality review's Decimal finding prevented a semantic
+    numeric value from being silently treated as a container.
+12. The compatibility contract cites official Splunk conversion behavior and
+    ClickHouse type-conversion behavior. It explicitly reserves formatted
+    `binary`, `hex`, `commas`, and `duration` modes plus canonical time
+    conversion for separately pinned slices. Editor completion advertises the
+    default-only and capitalized-Boolean boundary; syntax highlighting
+    recognizes `tostring` only in function position.
+
+Validation completed on the current implementation:
+
+```sh
+go test ./internal/spl ./internal/plan ./internal/clickhouse -count=1
+go test ./... -count=1
+go vet ./...
+golangci-lint run --timeout=5m \
+  --max-issues-per-linter=0 --max-same-issues=0
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1
+git diff --check
+```
+
+All gates pass. The unrestricted repository-wide lint run reports zero
+issues. The frontend corpus contains 119 application tests and 47
+release/build tests. The production static export generated all 11 pages, and
+the final pinned Store/compiler run passed in 41.556 seconds.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `256a0e0`, `46737fc`, `a4ba7c2`,
+   and `35e7cb5`. Preserve unexpected local changes.
+2. Implement bounded numeric `round` next only after pinning Splunk's optional
+   precision argument, fixed and Dynamic numeric behavior, return types,
+   null/non-numeric behavior, half-way rounding rule, full-width integer
+   edges, and exact ClickHouse lowering against the pinned target.
+3. Keep `tostring` formatting, canonical-time conversion, concatenation,
+   implicit String conversion, `ceil`, `floor`, and `mvcount` as separate
+   compatibility slices.
+4. Keep Dynamic/container `coalesce` and `case`, heterogeneous conditionals,
+   wildcard count, broader conditional count names, and `eventstats` as
+   separate reviewed contracts.
+
+## Previous checkpoint: typed SQLite-compatible SPL `substr`
 
 Date: 2026-07-27
 
