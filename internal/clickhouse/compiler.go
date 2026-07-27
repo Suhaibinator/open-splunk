@@ -78,8 +78,12 @@ const (
 	// expression independently. The lowering references its input exactly
 	// once, so nested lower/upper calls grow linearly inside this ceiling.
 	maxCompiledTextCaseScalarSQLBytes = 64 << 10
-	maxCompiledAssignments            = 64
-	maxCompiledExtractionOutputs      = 64
+	// maxCompiledTextLengthScalarSQLBytes independently bounds UTF-8 code-point
+	// counting. Dynamic lowering binds its input once, so nested text
+	// expressions grow linearly inside this ceiling.
+	maxCompiledTextLengthScalarSQLBytes = 64 << 10
+	maxCompiledAssignments              = 64
+	maxCompiledExtractionOutputs        = 64
 	// Parser-produced predicates are already bounded by a 1,024-token source
 	// and 32 eval/where leaves. Revalidate a deliberately wider structural
 	// ceiling here so forged logical plans cannot drive unbounded recursive
@@ -3670,6 +3674,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileCoalesceScalar(expression, state)
 		case plan.ScalarFunctionLower, plan.ScalarFunctionUpper:
 			return compileTextCaseScalar(expression, state)
+		case plan.ScalarFunctionLength:
+			return compileTextLengthScalar(expression, state)
 		default:
 			return compiledScalar{}, fmt.Errorf("compile ClickHouse scalar expression: unsupported function %d", expression.Function)
 		}
@@ -4530,7 +4536,8 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			plan.ScalarFunctionIsNull,
 			plan.ScalarFunctionIsNotNull,
 			plan.ScalarFunctionLower,
-			plan.ScalarFunctionUpper:
+			plan.ScalarFunctionUpper,
+			plan.ScalarFunctionLength:
 			expectedArguments = 1
 		case plan.ScalarFunctionReplace:
 			expectedArguments = 3
@@ -4927,25 +4934,7 @@ func compileTextCaseScalar(
 		functionName = "upper"
 		clickHouseFunction = "upperUTF8"
 	}
-	if len(expression.Arguments) != 1 {
-		return compiledScalar{}, fmt.Errorf(
-			"compile ClickHouse %s: expected one argument",
-			functionName,
-		)
-	}
-	if nilScalarExpression(expression.Arguments[0]) {
-		return compiledScalar{}, fmt.Errorf(
-			"compile ClickHouse %s: missing scalar expression",
-			functionName,
-		)
-	}
-	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
-		return compiledScalar{}, fmt.Errorf(
-			"compile ClickHouse %s: cannot consume a Boolean null predicate",
-			functionName,
-		)
-	}
-	input, err := compileScalarValue(expression.Arguments[0], state)
+	input, err := compileUnaryTextScalarInput(expression, state, functionName)
 	if err != nil {
 		return compiledScalar{}, err
 	}
@@ -4987,15 +4976,8 @@ func compileTextCaseScalar(
 			input.valueSQL + "]), 1)"
 		resultKind = fieldKindStringArray
 	case fieldKindString, fieldKindInvalid:
-		inputSQL, inputArgs := compiledStringScalar(input)
+		inputSQL, inputArgs := compiledTextEligibleStringScalar(input)
 		valueArgs = inputArgs
-		if input.textEligibleSQL != "" {
-			// _raw and conditionals derived from it carry a provenance guard.
-			// Ingestion verifies the UTF-8 declaration, so this avoids both
-			// undefined lowerUTF8/upperUTF8 behavior and a redundant byte scan.
-			inputSQL = "if(ifNull(" + input.textEligibleSQL + ", 0), " +
-				inputSQL + ", CAST(NULL AS Nullable(String)))"
-		}
 		valueSQL = clickHouseFunction + "(" + inputSQL + ")"
 	default:
 		return compiledScalar{}, &plan.Diagnostic{
@@ -5027,6 +5009,95 @@ func compileTextCaseScalar(
 		alwaysNull:              input.alwaysNull,
 		materializeForPredicate: input.materializeForPredicate,
 	}, nil
+}
+
+func compileTextLengthScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+) (compiledScalar, error) {
+	input, err := compileUnaryTextScalarInput(expression, state, "len")
+	if err != nil {
+		return compiledScalar{}, err
+	}
+
+	valueSQL := ""
+	valueArgs := append([]any(nil), input.valueArgs...)
+	switch input.kind {
+	case fieldKindDynamic:
+		// dynamicElement returns Nullable(String), with null for every other
+		// runtime type. It therefore preserves len's scalar-only boundary while
+		// referencing the open event field exactly once.
+		valueSQL = "lengthUTF8(dynamicElement(" + input.valueSQL + ", 'String'))"
+	case fieldKindStringArray:
+		return compiledScalar{}, unsupportedMultivalueUsage("len", expression.Range)
+	case fieldKindString, fieldKindInvalid:
+		inputSQL, inputArgs := compiledTextEligibleStringScalar(input)
+		valueArgs = inputArgs
+		valueSQL = "lengthUTF8(" + inputSQL + ")"
+	default:
+		return compiledScalar{}, &plan.Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TEXT_LENGTH_VALUE_TYPE",
+			Message: "len requires a String input",
+			Range:   expression.Range,
+		}
+	}
+	if len(valueSQL) > maxCompiledTextLengthScalarSQLBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"len scalar SQL exceeds %d bytes",
+				maxCompiledTextLengthScalarSQLBytes,
+			),
+			Range: expression.Range,
+		}
+	}
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               valueArgs,
+		existsSQL:               "1",
+		kind:                    fieldKindNumber,
+		numberType:              "UInt64",
+		alwaysNull:              input.alwaysNull,
+		materializeForPredicate: input.materializeForPredicate,
+	}, nil
+}
+
+func compileUnaryTextScalarInput(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+	functionName string,
+) (compiledScalar, error) {
+	if len(expression.Arguments) != 1 {
+		return compiledScalar{}, fmt.Errorf(
+			"compile ClickHouse %s: expected one argument",
+			functionName,
+		)
+	}
+	if nilScalarExpression(expression.Arguments[0]) {
+		return compiledScalar{}, fmt.Errorf(
+			"compile ClickHouse %s: missing scalar expression",
+			functionName,
+		)
+	}
+	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
+		return compiledScalar{}, fmt.Errorf(
+			"compile ClickHouse %s: cannot consume a Boolean null predicate",
+			functionName,
+		)
+	}
+	return compileScalarValue(expression.Arguments[0], state)
+}
+
+func compiledTextEligibleStringScalar(input compiledScalar) (string, []any) {
+	inputSQL, inputArgs := compiledStringScalar(input)
+	if input.textEligibleSQL == "" {
+		return inputSQL, inputArgs
+	}
+	// _raw and conditionals derived from it carry a provenance guard.
+	// Ingestion verifies the UTF-8 declaration, so this avoids both undefined
+	// UTF-8 function behavior and a redundant byte scan.
+	return "if(ifNull(" + input.textEligibleSQL + ", 0), " +
+		inputSQL + ", CAST(NULL AS Nullable(String)))", inputArgs
 }
 
 func compileToNumberScalar(expression *plan.ScalarCallExpression, state compileState) (compiledScalar, error) {

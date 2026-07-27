@@ -244,85 +244,9 @@ func TestCompileEvalLowerUpperNestedDynamicSQLGrowsLinearly(t *testing.T) {
 
 func TestCompileEvalLowerUpperRejectsForgedPlans(t *testing.T) {
 	t.Parallel()
-
-	base := buildPlan(t, `index=gradethis`)
-	literal := func() plan.ScalarExpression {
-		return &plan.ScalarLiteralExpression{
-			Value: plan.Value{Kind: plan.ValueKindString, String: "value"},
-		}
-	}
-	compileAssignment := func(expression plan.ScalarExpression) error {
-		t.Helper()
-		candidate := *base
-		candidate.Operators = append(
-			append([]plan.Operator(nil), base.Operators...),
-			&plan.Extend{Assignments: []plan.ExtendAssignment{{
-				Output:     plan.FieldRef{Name: "value"},
-				Expression: expression,
-			}}},
-		)
-		_, err := (Compiler{}).Compile(&candidate)
-		return err
-	}
-
-	var typedNil *plan.ScalarLiteralExpression
-	boolean := &plan.ScalarCallExpression{
-		Function: plan.ScalarFunctionIsNull,
-		Arguments: []plan.ScalarExpression{
-			literal(),
-		},
-	}
-	cyclic := &plan.ScalarCallExpression{Function: plan.ScalarFunctionLower}
-	cyclic.Arguments = []plan.ScalarExpression{cyclic}
-	for _, test := range []struct {
-		name       string
-		expression plan.ScalarExpression
-		want       string
-	}{
-		{
-			name: "zero arguments",
-			expression: &plan.ScalarCallExpression{
-				Function: plan.ScalarFunctionLower,
-			},
-			want: "expected one argument",
-		},
-		{
-			name: "two arguments",
-			expression: &plan.ScalarCallExpression{
-				Function:  plan.ScalarFunctionUpper,
-				Arguments: []plan.ScalarExpression{literal(), literal()},
-			},
-			want: "expected one argument",
-		},
-		{
-			name: "typed nil argument",
-			expression: &plan.ScalarCallExpression{
-				Function:  plan.ScalarFunctionLower,
-				Arguments: []plan.ScalarExpression{typedNil},
-			},
-			want: "missing scalar expression",
-		},
-		{
-			name: "Boolean null predicate",
-			expression: &plan.ScalarCallExpression{
-				Function:  plan.ScalarFunctionUpper,
-				Arguments: []plan.ScalarExpression{boolean},
-			},
-			want: "cannot consume a Boolean",
-		},
-		{
-			name:       "cyclic expression",
-			expression: cyclic,
-			want:       "contains a cycle",
-		},
-	} {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			err := compileAssignment(test.expression)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("Compile error = %v, want %q", err, test.want)
-			}
-		})
-	}
+	testUnaryScalarCompilerTrustBoundary(
+		t,
+		plan.ScalarFunctionLower,
+		plan.ScalarFunctionUpper,
+	)
 }
