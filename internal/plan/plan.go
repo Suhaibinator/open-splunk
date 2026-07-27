@@ -506,6 +506,8 @@ const (
 	ScalarFunctionIsNull
 	ScalarFunctionIsNotNull
 	ScalarFunctionCoalesce
+	ScalarFunctionLower
+	ScalarFunctionUpper
 )
 
 // ScalarCallExpression invokes one supported eval operation.

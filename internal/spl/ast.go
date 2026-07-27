@@ -225,6 +225,8 @@ const (
 	ScalarFunctionIsNull
 	ScalarFunctionIsNotNull
 	ScalarFunctionCoalesce
+	ScalarFunctionLower
+	ScalarFunctionUpper
 )
 
 // ScalarCallExpr invokes a supported eval function. Function names are
