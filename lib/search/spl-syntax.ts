@@ -77,8 +77,8 @@ export const SPL_PIPELINE_COMMANDS = [
   },
   {
     name: "stats",
-    insertion: "stats count count(user) AS user_occurrences dc(user) AS user_count values(user) AS users min(duration_ms) AS min_ms max(duration_ms) AS max_ms earliest(status) AS first_status latest(status) AS last_status p50(duration_ms) AS median_ms p95(duration_ms) AS p95_ms sum(bytes) AS total_bytes avg(duration_ms) AS avg_ms BY level",
-    detail: "Aggregate with row/value count, dc/distinct_count, values, list, min, max, chronological earliest/latest, pN/percN percentiles (1-99), sum, and avg.",
+    insertion: "stats count c(user) AS user_occurrences dc(user) AS user_count values(user) AS users min(duration_ms) AS min_ms max(duration_ms) AS max_ms earliest(status) AS first_status latest(status) AS last_status p50(duration_ms) AS median_ms p95(duration_ms) AS p95_ms sum(bytes) AS total_bytes avg(duration_ms) AS avg_ms BY level",
+    detail: "Aggregate with row count, count/c field occurrences, dc/distinct_count, values, list, min, max, chronological earliest/latest, pN/percN percentiles (1-99), sum, and avg.",
   },
   {
     name: "top",

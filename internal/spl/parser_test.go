@@ -841,6 +841,32 @@ func TestParseStatsCountFieldPreservesInputAliasAndFunctionCase(t *testing.T) {
 	}
 }
 
+func TestParseStatsCountFieldAbbreviationUsesCanonicalOutputName(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | stats C(productId) c(action) AS actions BY host`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command := query.Commands[0].(*StatsCommand)
+	if len(command.Aggregates) != 2 {
+		t.Fatalf("aggregates = %#v, want two value counts", command.Aggregates)
+	}
+	product := command.Aggregates[0]
+	if product.Function != AggregateFunctionCountValues ||
+		product.Input != "productId" || product.Alias != "count(productId)" {
+		t.Fatalf("product count aggregate = %#v", product)
+	}
+	actions := command.Aggregates[1]
+	if actions.Function != AggregateFunctionCountValues ||
+		actions.Input != "action" || actions.Alias != "actions" {
+		t.Fatalf("action count aggregate = %#v", actions)
+	}
+	if len(command.GroupBy) != 1 || command.GroupBy[0].Name != "host" {
+		t.Fatalf("group fields = %#v", command.GroupBy)
+	}
+}
+
 func TestParseStatsCountFieldRequiresExactlyOneExactField(t *testing.T) {
 	t.Parallel()
 
@@ -854,7 +880,9 @@ func TestParseStatsCountFieldRequiresExactlyOneExactField(t *testing.T) {
 		{name: "eval expression", source: `index=main | stats count(eval(status=200))`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 		{name: "quoted field", source: `index=main | stats count("status")`, code: "SPL_EXPECTED_FIELD"},
 		{name: "missing right parenthesis", source: `index=main | stats count(status`, code: "SPL_EXPECTED_RIGHT_PAREN"},
-		{name: "abbreviation deferred", source: `index=main | stats c(status)`, code: "SPL_UNSUPPORTED_STATS_AGGREGATE"},
+		{name: "bare abbreviation", source: `index=main | stats c`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
+		{name: "empty abbreviation", source: `index=main | stats c()`, code: "SPL_EXPECTED_FIELD"},
+		{name: "abbreviated eval expression", source: `index=main | stats c(eval(status=200))`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 	}
 	for _, test := range tests {
 		test := test

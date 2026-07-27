@@ -442,6 +442,7 @@ the selected rows in reversed order, matching its pipeline semantics.
 | stats count
 | stats count AS events BY field1, field2
 | stats count(productId) AS products BY host
+| stats c(productId) AS products BY host
 | stats dc(user) AS unique_users BY service
 | stats distinct_count(device) AS devices
 | stats values(user) AS users
@@ -453,15 +454,18 @@ the selected rows in reversed order, matching its pipeline semantics.
 | stats sum(bytes) AS total_bytes avg(duration_ms) AS mean_ms BY path
 ```
 
-Argument-free `count`, `count(field)`, `dc(field)`/`distinct_count(field)`,
+Argument-free `count`, `count(field)`/`c(field)`,
+`dc(field)`/`distinct_count(field)`,
 `pN(field)`/`percN(field)` for integer `N` from 1 through 99,
 `values(field)`, `list(field)`, `sum(field)`, `avg(field)`,
 `min(field)`, `max(field)`, `earliest(field)`, and `latest(field)` are
 supported, including multiple space- or comma-separated measures and `AS`
 aliases. Function names are
 case-insensitive. Both
-distinct-count spellings use the canonical default output `dc(field)`; other
-default names use canonical lowercase spelling such as `count(productId)`,
+distinct-count spellings use the canonical default output `dc(field)`;
+`count(field)` and `c(field)` both use the explicit Open Splunk canonical
+default output `count(field)`. Other default names use canonical lowercase
+spelling such as
 `values(user)`, `list(user)`, `min(duration_ms)`, `earliest(status)`, or
 `sum(bytes)`. Percentiles use the Splunk-compatible canonical default name
 `percN(field)` regardless of whether the query spells the function `pN` or
@@ -504,10 +508,14 @@ that contains parentheses. Use `AS` when a `count(field)`, `dc`, `values`,
 `list`, `min`, `max`, `earliest`, `latest`, `sum`, `avg`, or percentile result
 will be consumed by a later command.
 
-This slice accepts exactly one unquoted, exact field inside `count(...)`.
-`count()`, the documented `c(field)` abbreviation, wildcard fields,
-`count(eval(...))`, quoted fields, and other predicate/expression forms remain
-explicitly unsupported rather than being approximated.
+This slice accepts exactly one unquoted, exact field inside `count(...)` or
+`c(...)`. Bare `c`, `count()`, `c()`, wildcard fields, `count(eval(...))`,
+`c(eval(...))`, quoted fields, and other predicate/expression forms remain
+explicitly unsupported rather than being approximated. Public SPL
+documentation establishes `c(field)` as an abbreviation but does not pin its
+generated result-field spelling; canonicalizing it to `count(field)` is an
+explicit Open Splunk v0.1 choice. Bare row count remains the documented
+`count` form.
 
 `earliest(field)` and `latest(field)` select by event chronology, not by field
 value and not by current pipeline order. `earliest` chooses the eligible value

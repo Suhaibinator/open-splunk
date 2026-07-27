@@ -2330,6 +2330,21 @@ func TestCompileStatsCountValuesUsesSharedCardinalityWithoutRowExpansion(t *test
 	}
 }
 
+func TestCompileStatsCountFieldAbbreviationMatchesCanonicalCount(t *testing.T) {
+	t.Parallel()
+
+	canonical := compileSPL(t, `index=gradethis | stats count(user) count(device) AS devices BY service`)
+	abbreviated := compileSPL(t, `index=gradethis | stats C(user) c(device) AS devices BY service`)
+	if abbreviated.SQL != canonical.SQL ||
+		!reflect.DeepEqual(abbreviated.Args, canonical.Args) ||
+		!slices.Equal(abbreviated.OutputFields, canonical.OutputFields) ||
+		!reflect.DeepEqual(abbreviated.Timechart, canonical.Timechart) ||
+		!reflect.DeepEqual(abbreviated.Chart, canonical.Chart) ||
+		abbreviated.SparseFields != canonical.SparseFields {
+		t.Fatalf("c(field) compilation differs from count(field):\ncanonical: %#v\nabbreviated: %#v", canonical, abbreviated)
+	}
+}
+
 func TestCompileStatsCountValuesSupportsFixedMultivalueAndProjectedInput(t *testing.T) {
 	t.Parallel()
 

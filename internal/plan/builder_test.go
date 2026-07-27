@@ -388,6 +388,38 @@ func TestBuildStatsCountValuesPreservesMeasureOrderAndAliases(t *testing.T) {
 	}
 }
 
+func TestBuildStatsCountFieldAbbreviationUsesValueCountPlan(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats c(user) c(device) AS devices BY service`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"service", "count(user)", "devices"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+	aggregate, ok := logical.Operators[len(logical.Operators)-1].(*Aggregate)
+	if !ok || len(aggregate.Measures) != 2 {
+		t.Fatalf("aggregate operator = %#v", logical.Operators[len(logical.Operators)-1])
+	}
+	for index, want := range []struct {
+		input  string
+		output string
+	}{
+		{input: "user", output: "count(user)"},
+		{input: "device", output: "devices"},
+	} {
+		measure := aggregate.Measures[index]
+		if measure.Function != AggregateFunctionCountValues ||
+			measure.Input.Name != want.input || measure.Output != want.output {
+			t.Fatalf("measure %d = %#v, want count(%s) AS %s", index, measure, want.input, want.output)
+		}
+	}
+}
+
 func TestBuildStatsSumAndAveragePreserveMeasureOrder(t *testing.T) {
 	t.Parallel()
 
@@ -758,11 +790,14 @@ func TestBuildRejectsForgedStatsRequiredInputMetadata(t *testing.T) {
 	}
 }
 
-func TestBuildStatsSumAndAverageRequireExactInputFields(t *testing.T) {
+func TestBuildStatsAggregatesRequireExactInputFields(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
+		`index=gradethis | stats count(*)`,
+		`index=gradethis | stats c(*)`,
 		`index=gradethis | stats count(request*)`,
+		`index=gradethis | stats c(request*)`,
 		`index=gradethis | stats sum(request*)`,
 		`index=gradethis | stats avg(request*)`,
 		`index=gradethis | stats min(request*)`,
