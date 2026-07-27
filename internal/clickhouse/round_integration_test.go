@@ -8,7 +8,6 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 )
 
 func testRoundAgainstClickHouse(
@@ -214,29 +213,15 @@ func testRoundAgainstClickHouse(
 		)
 	}
 
-	visibilityCutoff, err := store.VisibilityCutoff(ctx)
-	if err != nil {
-		t.Fatalf("capture round malformed visibility cutoff: %v", err)
-	}
-	binEdgeInsertRawDecimalEnvelopes(
-		t,
+	insertMalformedDecimalIntegrationFixture(
 		ctx,
+		t,
+		store,
 		connection,
+		indexTime,
+		"round",
+		"round-malformed-decimal",
 		"round-malformed-decimal-envelope",
-		[]binEdgeRawDecimalEnvelope{{
-			eventID:       "round-malformed-decimal",
-			tenantID:      "tenant",
-			indexName:     "round",
-			eventTime:     indexTime,
-			indexTime:     indexTime,
-			visibilitySeq: visibilityCutoff,
-			fieldName:     "malformed",
-			fieldType:     eventfields.StoredValueTypeDecimal,
-			envelope: map[string]string{
-				"\x00open_splunk_type":  "decimal/v1",
-				"\x00open_splunk_value": "malformed-secret-1e",
-			},
-		}},
 	)
 	malformed := compile(
 		`index=round event_id="round-malformed-decimal"` +

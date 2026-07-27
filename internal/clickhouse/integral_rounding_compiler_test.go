@@ -113,6 +113,26 @@ func TestCompileEvalIntegralRoundingTextOnlyDynamicInputIsStaticallyNull(t *test
 	}
 }
 
+func TestCompileEvalIntegralRoundingClosedSchemaMissingInputIsNull(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | stats count | eval up=ceil(absent), down=floor(absent) | table up,down`,
+	)
+	if got := strings.Count(
+		compiled.SQL,
+		`CAST(NULL AS Nullable(Float64))`,
+	); got < 2 {
+		t.Fatalf("closed-schema missing integral rounding did not become null:\n%s", compiled.SQL)
+	}
+	for _, forbidden := range []string{`ceil(CAST(NULL`, `floor(CAST(NULL`} {
+		if strings.Contains(compiled.SQL, forbidden) {
+			t.Fatalf("closed-schema missing input retained %q:\n%s", forbidden, compiled.SQL)
+		}
+	}
+}
+
 func TestCompileEvalIntegralRoundingRejectsFixedNonNumbersAndMultivalue(t *testing.T) {
 	t.Parallel()
 
@@ -149,7 +169,7 @@ func TestCompileEvalIntegralRoundingRejectsFixedNonNumbersAndMultivalue(t *testi
 	}
 }
 
-func TestCompileEvalIntegralRoundingNestedDynamicSQLGrowsLinearly(t *testing.T) {
+func TestCompileEvalIntegralRoundingNestedDynamicIdentitiesCollapse(t *testing.T) {
 	t.Parallel()
 
 	expression := "category"
@@ -164,15 +184,37 @@ func TestCompileEvalIntegralRoundingNestedDynamicSQLGrowsLinearly(t *testing.T) 
 		t,
 		`index=gradethis | eval rounded=`+expression+` | table rounded`,
 	)
-	if len(compiled.SQL) > maxCompiledRoundScalarSQLBytes {
+	if len(compiled.SQL) > maxCompiledNumericRoundingScalarSQLBytes {
 		t.Fatalf(
 			"nested integral-rounding SQL = %d bytes, want at most %d",
 			len(compiled.SQL),
-			maxCompiledRoundScalarSQLBytes,
+			maxCompiledNumericRoundingScalarSQLBytes,
 		)
 	}
 	if strings.Count(compiled.SQL, `"__os_fields"."category"`) != 1 {
 		t.Fatalf("nested Dynamic input was duplicated:\n%s", compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, "ceil(") +
+		strings.Count(compiled.SQL, "floor("); got != 1 {
+		t.Fatalf("nested integral-rounding operations = %d, want one:\n%s", got, compiled.SQL)
+	}
+}
+
+func TestCompileEvalIntegralRoundingIdentitySurvivesAssignmentAndRename(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | eval integral=ceil(category) | rename integral AS renamed | eval collapsed=floor(renamed) | table collapsed`,
+	)
+	if got := strings.Count(compiled.SQL, "ceil("); got != 1 {
+		t.Fatalf("ceil operations = %d, want one:\n%s", got, compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, "floor(") {
+		t.Fatalf("outer floor did not collapse after assignment and rename:\n%s", compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, `"__os_fields"."category"`); got != 1 {
+		t.Fatalf("Dynamic source references = %d, want one:\n%s", got, compiled.SQL)
 	}
 }
 
@@ -196,7 +238,7 @@ func TestCompileEvalIntegralRoundingRejectsForgedPlans(t *testing.T) {
 		{
 			name:       "ceil zero arguments",
 			expression: &plan.ScalarCallExpression{Function: plan.ScalarFunctionCeil},
-			want:       "requires exactly one argument",
+			want:       "expected one argument",
 		},
 		{
 			name: "floor two arguments",
@@ -204,7 +246,7 @@ func TestCompileEvalIntegralRoundingRejectsForgedPlans(t *testing.T) {
 				Function:  plan.ScalarFunctionFloor,
 				Arguments: []plan.ScalarExpression{number(), number()},
 			},
-			want: "requires exactly one argument",
+			want: "expected one argument",
 		},
 		{
 			name: "typed nil value",

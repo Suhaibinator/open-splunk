@@ -3884,6 +3884,43 @@ func storeScalarFunctionIntegrationFixtures(
 	return compile, queryContext
 }
 
+func insertMalformedDecimalIntegrationFixture(
+	ctx context.Context,
+	t *testing.T,
+	store *Store,
+	connection clickhousedriver.Conn,
+	indexTime time.Time,
+	index string,
+	eventID string,
+	deduplicationToken string,
+) {
+	t.Helper()
+	visibilityCutoff, err := store.VisibilityCutoff(ctx)
+	if err != nil {
+		t.Fatalf("capture %s malformed Decimal visibility cutoff: %v", index, err)
+	}
+	binEdgeInsertRawDecimalEnvelopes(
+		t,
+		ctx,
+		connection,
+		deduplicationToken,
+		[]binEdgeRawDecimalEnvelope{{
+			eventID:       eventID,
+			tenantID:      "tenant",
+			indexName:     index,
+			eventTime:     indexTime,
+			indexTime:     indexTime,
+			visibilitySeq: visibilityCutoff,
+			fieldName:     "malformed",
+			fieldType:     eventfields.StoredValueTypeDecimal,
+			envelope: map[string]string{
+				"\x00open_splunk_type":  "decimal/v1",
+				"\x00open_splunk_value": "malformed-secret-1e",
+			},
+		}},
+	)
+}
+
 func buildIntegrationPlan(t *testing.T, source string, cutoff time.Time, visibilityCutoff uint64) *plan.Query {
 	t.Helper()
 	return buildIntegrationPlanForIndex(t, source, cutoff, visibilityCutoff, "compiler")

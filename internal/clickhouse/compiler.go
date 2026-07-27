@@ -89,9 +89,10 @@ const (
 	// maxCompiledToStringScalarSQLBytes independently bounds default scalar
 	// conversion. Dynamic input is bound once, so nested calls grow linearly.
 	maxCompiledToStringScalarSQLBytes = 64 << 10
-	// maxCompiledRoundScalarSQLBytes independently bounds numeric rounding.
-	// Dynamic input is bound once, so nested calls grow linearly.
-	maxCompiledRoundScalarSQLBytes = 64 << 10
+	// maxCompiledNumericRoundingScalarSQLBytes independently bounds round,
+	// ceil, and floor. Dynamic input is bound once, and integral results let
+	// redundant outer ceil/floor calls collapse to identities.
+	maxCompiledNumericRoundingScalarSQLBytes = 64 << 10
 	// ClickHouse accepts UInt64 substring arguments syntactically but treats
 	// values above MaxInt64 as signed internally. Wider literals use the
 	// Int128 interval fallback instead of a native fast path.
@@ -3108,6 +3109,7 @@ type fieldState struct {
 	valueSQL                string
 	textEligibleSQL         string
 	dynamicDomain           dynamicScalarDomain
+	numericIntegral         bool
 	dynamicTypeSQL          string
 	storedTypeSQL           string
 	existsSQL               string
@@ -3608,6 +3610,7 @@ type compiledScalar struct {
 	existsArgs              []any
 	textEligibleSQL         string
 	dynamicDomain           dynamicScalarDomain
+	numericIntegral         bool
 	dynamicTypeSQL          string
 	storedTypeSQL           string
 	descendantSQL           string
@@ -5011,7 +5014,7 @@ func compileTextCaseScalar(
 		functionName = "upper"
 		clickHouseFunction = "upperUTF8"
 	}
-	input, err := compileUnaryTextScalarInput(expression, state, functionName)
+	input, err := compileUnaryNonBooleanScalarInput(expression, state, functionName)
 	if err != nil {
 		return compiledScalar{}, err
 	}
@@ -5092,7 +5095,7 @@ func compileTextLengthScalar(
 	expression *plan.ScalarCallExpression,
 	state compileState,
 ) (compiledScalar, error) {
-	input, err := compileUnaryTextScalarInput(expression, state, "len")
+	input, err := compileUnaryNonBooleanScalarInput(expression, state, "len")
 	if err != nil {
 		return compiledScalar{}, err
 	}
@@ -5450,7 +5453,7 @@ func compileGenericSQLiteSubstringUTF8SQL(
 		lengthBindingSQL + ", " + outerArguments + "), 1)", indexArgs
 }
 
-func compileUnaryTextScalarInput(
+func compileUnaryNonBooleanScalarInput(
 	expression *plan.ScalarCallExpression,
 	state compileState,
 	functionName string,
@@ -5642,9 +5645,10 @@ func compileRoundScalar(
 		return compiledScalar{}, err
 	}
 
-	fixedPrecisionSQL := ""
-	dynamicPrecisionSQL := ""
-	var precisionArgs []any
+	operation := numericRoundingOperation{
+		functionName:        "round",
+		unsupportedTypeCode: "SPL_UNSUPPORTED_ROUND_VALUE_TYPE",
+	}
 	if len(expression.Arguments) == 2 {
 		precision, precisionErr := roundPrecisionLiteral(
 			expression.Arguments[1],
@@ -5652,18 +5656,12 @@ func compileRoundScalar(
 		if precisionErr != nil {
 			return compiledScalar{}, precisionErr
 		}
-		fixedPrecisionSQL = ", CAST(? AS UInt8)"
-		dynamicPrecisionSQL = ", precision"
-		precisionArgs = []any{precision}
+		operation.precision = &precision
 	}
 
 	return compileNumericRoundingInput(
 		input,
-		"round",
-		fixedPrecisionSQL,
-		dynamicPrecisionSQL,
-		precisionArgs,
-		"SPL_UNSUPPORTED_ROUND_VALUE_TYPE",
+		operation,
 		expression.Range,
 	)
 }
@@ -5673,35 +5671,32 @@ func compileIntegralRoundingScalar(
 	state compileState,
 	functionName string,
 ) (compiledScalar, error) {
-	if expression == nil {
-		return compiledScalar{}, fmt.Errorf(
-			"compile ClickHouse %s: missing expression",
-			functionName,
-		)
-	}
-	if len(expression.Arguments) != 1 {
-		return compiledScalar{}, fmt.Errorf(
-			"compile ClickHouse %s: requires exactly one argument",
-			functionName,
-		)
-	}
-	input, err := compileNonBooleanScalarInputArgument(
-		expression.Arguments[0],
+	input, err := compileUnaryNonBooleanScalarInput(
+		expression,
 		state,
 		functionName,
 	)
 	if err != nil {
 		return compiledScalar{}, err
 	}
+	unsupportedTypeCode := "SPL_UNSUPPORTED_CEIL_VALUE_TYPE"
+	if functionName == "floor" {
+		unsupportedTypeCode = "SPL_UNSUPPORTED_FLOOR_VALUE_TYPE"
+	}
 	return compileNumericRoundingInput(
 		input,
-		functionName,
-		"",
-		"",
-		nil,
-		"SPL_UNSUPPORTED_"+strings.ToUpper(functionName)+"_VALUE_TYPE",
+		numericRoundingOperation{
+			functionName:        functionName,
+			unsupportedTypeCode: unsupportedTypeCode,
+		},
 		expression.Range,
 	)
+}
+
+type numericRoundingOperation struct {
+	functionName        string
+	unsupportedTypeCode string
+	precision           *uint8
 }
 
 // compileNumericRoundingInput implements the common numeric contract for
@@ -5710,13 +5705,34 @@ func compileIntegralRoundingScalar(
 // converted through finite Float64 before applying the requested function.
 func compileNumericRoundingInput(
 	input compiledScalar,
-	functionName string,
-	fixedArgumentsSQL string,
-	dynamicArgumentsSQL string,
-	operationArgs []any,
-	unsupportedValueCode string,
+	operation numericRoundingOperation,
 	sourceRange spl.Range,
 ) (compiledScalar, error) {
+	numericIntegral := operation.functionName != "round" ||
+		operation.precision == nil ||
+		*operation.precision == 0
+	if input.alwaysNull {
+		return compiledScalar{
+			valueSQL:        "CAST(NULL AS Nullable(Float64))",
+			existsSQL:       "1",
+			kind:            fieldKindNumber,
+			numberType:      "Float64",
+			numericIntegral: numericIntegral,
+			alwaysNull:      true,
+		}, nil
+	}
+	if input.numericIntegral &&
+		(operation.functionName == "ceil" || operation.functionName == "floor") {
+		return input, nil
+	}
+	fixedArgumentsSQL := ""
+	dynamicArgumentsSQL := ""
+	var operationArgs []any
+	if operation.precision != nil {
+		fixedArgumentsSQL = ", CAST(? AS UInt8)"
+		dynamicArgumentsSQL = ", precision"
+		operationArgs = []any{*operation.precision}
+	}
 	valueSQL := ""
 	valueArgs := append([]any(nil), input.valueArgs...)
 	resultKind := fieldKindNumber
@@ -5736,7 +5752,7 @@ func compileNumericRoundingInput(
 		integerCondition := dynamicIntegerTypePredicate(typeSQL)
 		body := ""
 		if input.dynamicDomain == dynamicScalarDomainNumeric {
-			rounded := functionName + "(" +
+			rounded := operation.functionName + "(" +
 				finiteDynamicFloatOrNullSQL("value") +
 				dynamicArgumentsSQL + ")"
 			body = "multiIf(" +
@@ -5760,7 +5776,7 @@ func compileNumericRoundingInput(
 				dynamicNumericTypePredicate(typeSQL) + ", " +
 				finiteDynamicFloatOrNullSQL("value") + ", " +
 				"CAST(NULL AS Nullable(Float64)))"
-			rounded := functionName + "(" + numericValue + dynamicArgumentsSQL + ")"
+			rounded := operation.functionName + "(" + numericValue + dynamicArgumentsSQL + ")"
 			body = "arrayElement(arrayMap(exact_value -> multiIf(" +
 				integerCondition + ", value, (" +
 				"isNotNull(exact_value)), CAST(assumeNotNull(exact_value) AS Dynamic), " +
@@ -5783,7 +5799,7 @@ func compileNumericRoundingInput(
 			valueSQL = input.valueSQL
 			break
 		}
-		valueSQL = functionName + "(" + input.valueSQL + fixedArgumentsSQL + ")"
+		valueSQL = operation.functionName + "(" + input.valueSQL + fixedArgumentsSQL + ")"
 		valueArgs = append(valueArgs, operationArgs...)
 	case fieldKindInvalid:
 		valueSQL = "CAST(NULL AS Nullable(Float64))"
@@ -5791,23 +5807,23 @@ func compileNumericRoundingInput(
 		alwaysNull = true
 	case fieldKindStringArray:
 		return compiledScalar{}, unsupportedMultivalueUsage(
-			functionName,
+			operation.functionName,
 			sourceRange,
 		)
 	default:
 		return compiledScalar{}, &plan.Diagnostic{
-			Code:    unsupportedValueCode,
-			Message: functionName + " requires a numeric input",
+			Code:    operation.unsupportedTypeCode,
+			Message: operation.functionName + " requires a numeric input",
 			Range:   sourceRange,
 		}
 	}
-	if len(valueSQL) > maxCompiledRoundScalarSQLBytes {
+	if len(valueSQL) > maxCompiledNumericRoundingScalarSQLBytes {
 		return compiledScalar{}, &plan.Diagnostic{
 			Code: "SPL_QUERY_TOO_COMPLEX",
 			Message: fmt.Sprintf(
 				"%s scalar SQL exceeds %d bytes",
-				functionName,
-				maxCompiledRoundScalarSQLBytes,
+				operation.functionName,
+				maxCompiledNumericRoundingScalarSQLBytes,
 			),
 			Range: sourceRange,
 		}
@@ -5817,6 +5833,7 @@ func compileNumericRoundingInput(
 		valueArgs:               valueArgs,
 		existsSQL:               "1",
 		dynamicDomain:           dynamicDomain,
+		numericIntegral:         numericIntegral,
 		kind:                    resultKind,
 		numberType:              numberType,
 		alwaysNull:              alwaysNull,
@@ -5983,6 +6000,7 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 		valueSQL:        quoteIdentifier(output.Name),
 		textEligibleSQL: value.textEligibleSQL,
 		dynamicDomain:   value.dynamicDomain,
+		numericIntegral: value.numericIntegral,
 		existsSQL:       existsSQL,
 		descendantSQL:   value.descendantSQL,
 		descendantArgs:  append([]any(nil), value.descendantArgs...),
@@ -6791,6 +6809,7 @@ func projectedRenameField(source fieldState, destination string) fieldState {
 		valueSQL:        value,
 		textEligibleSQL: source.textEligibleSQL,
 		dynamicDomain:   source.dynamicDomain,
+		numericIntegral: source.numericIntegral,
 		storedTypeSQL:   source.storedTypeSQL,
 		existsSQL:       rewriteExistenceForProjection(source, destination),
 		existsArgs:      append([]any(nil), source.existsArgs...),
@@ -7774,6 +7793,7 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		existsArgs:              append([]any(nil), field.existsArgs...),
 		textEligibleSQL:         field.textEligibleSQL,
 		dynamicDomain:           field.dynamicDomain,
+		numericIntegral:         field.numericIntegral,
 		dynamicTypeSQL:          field.dynamicTypeSQL,
 		storedTypeSQL:           field.storedTypeSQL,
 		descendantSQL:           field.descendantSQL,
@@ -7990,6 +8010,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		next.visible[name] = fieldState{
 			valueSQL: publicName, textEligibleSQL: compiled.textEligibleSQL,
 			dynamicDomain:           compiled.dynamicDomain,
+			numericIntegral:         compiled.numericIntegral,
 			dynamicTypeSQL:          compiled.dynamicTypeSQL,
 			storedTypeSQL:           compiled.storedTypeSQL,
 			existsSQL:               rewriteExistenceForProjection(compiled, name),

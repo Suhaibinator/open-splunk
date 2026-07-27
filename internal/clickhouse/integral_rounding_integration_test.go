@@ -8,7 +8,6 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 )
 
 func testIntegralRoundingAgainstClickHouse(
@@ -213,29 +212,15 @@ func testIntegralRoundingAgainstClickHouse(
 		)
 	}
 
-	visibilityCutoff, err := store.VisibilityCutoff(ctx)
-	if err != nil {
-		t.Fatalf("capture integral-rounding malformed visibility cutoff: %v", err)
-	}
-	binEdgeInsertRawDecimalEnvelopes(
-		t,
+	insertMalformedDecimalIntegrationFixture(
 		ctx,
+		t,
+		store,
 		connection,
+		indexTime,
+		"integral-rounding",
+		"integral-rounding-malformed-decimal",
 		"integral-rounding-malformed-decimal-envelope",
-		[]binEdgeRawDecimalEnvelope{{
-			eventID:       "integral-rounding-malformed-decimal",
-			tenantID:      "tenant",
-			indexName:     "integral-rounding",
-			eventTime:     indexTime,
-			indexTime:     indexTime,
-			visibilitySeq: visibilityCutoff,
-			fieldName:     "malformed",
-			fieldType:     eventfields.StoredValueTypeDecimal,
-			envelope: map[string]string{
-				"\x00open_splunk_type":  "decimal/v1",
-				"\x00open_splunk_value": "malformed-secret-1e",
-			},
-		}},
 	)
 	malformed := compile(
 		`index=integral-rounding event_id="integral-rounding-malformed-decimal"` +
@@ -285,15 +270,16 @@ func testIntegralRoundingAgainstClickHouse(
 
 	fixed := compile(
 		`index=integral-rounding event_id="integral-rounding-scalars"` +
-			` | stats count AS total | eval up=ceil(total), down=floor(total)` +
-			` | table up,down`,
+			` | stats count AS total | eval up=ceil(total), down=floor(total), missing_up=ceil(absent), missing_down=floor(absent)` +
+			` | table up,down,missing_up,missing_down`,
 	)
 	var fixedUp, fixedDown uint64
+	var fixedMissingUp, fixedMissingDown *float64
 	if err := connection.QueryRow(
 		queryContext,
 		fixed.SQL,
 		fixed.Args...,
-	).Scan(&fixedUp, &fixedDown); err != nil {
+	).Scan(&fixedUp, &fixedDown, &fixedMissingUp, &fixedMissingDown); err != nil {
 		t.Fatalf(
 			"execute fixed integer integral rounding: %v\nSQL: %s\nargs: %#v",
 			err,
@@ -301,8 +287,15 @@ func testIntegralRoundingAgainstClickHouse(
 			fixed.Args,
 		)
 	}
-	if fixedUp != 1 || fixedDown != 1 {
-		t.Fatalf("fixed integer integral rounding = %d/%d, want 1/1", fixedUp, fixedDown)
+	if fixedUp != 1 || fixedDown != 1 ||
+		fixedMissingUp != nil || fixedMissingDown != nil {
+		t.Fatalf(
+			"fixed integer/missing integral rounding = %d/%d/%v/%v, want 1/1/null/null",
+			fixedUp,
+			fixedDown,
+			fixedMissingUp,
+			fixedMissingDown,
+		)
 	}
 
 	textOnly := compile(

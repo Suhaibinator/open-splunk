@@ -8,7 +8,6 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
-	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 )
 
 func testToStringAgainstClickHouse(
@@ -129,29 +128,15 @@ func testToStringAgainstClickHouse(
 		)
 	}
 
-	visibilityCutoff, err := store.VisibilityCutoff(ctx)
-	if err != nil {
-		t.Fatalf("capture tostring malformed visibility cutoff: %v", err)
-	}
-	binEdgeInsertRawDecimalEnvelopes(
-		t,
+	insertMalformedDecimalIntegrationFixture(
 		ctx,
+		t,
+		store,
 		connection,
+		indexTime,
+		"tostring",
+		"tostring-malformed-decimal",
 		"tostring-malformed-decimal-envelope",
-		[]binEdgeRawDecimalEnvelope{{
-			eventID:       "tostring-malformed-decimal",
-			tenantID:      "tenant",
-			indexName:     "tostring",
-			eventTime:     indexTime,
-			indexTime:     indexTime,
-			visibilitySeq: visibilityCutoff,
-			fieldName:     "malformed",
-			fieldType:     eventfields.StoredValueTypeDecimal,
-			envelope: map[string]string{
-				"\x00open_splunk_type":  "decimal/v1",
-				"\x00open_splunk_value": "malformed-secret-1e",
-			},
-		}},
 	)
 	malformed := compile(
 		`index=tostring event_id="tostring-malformed-decimal"` +

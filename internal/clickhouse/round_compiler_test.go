@@ -140,6 +140,24 @@ func TestCompileEvalRoundTextOnlyDynamicInputIsStaticallyNull(t *testing.T) {
 	}
 }
 
+func TestCompileEvalRoundClosedSchemaMissingInputIsNull(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | stats count | eval rounded=round(absent, 2) | table rounded`,
+	)
+	if !strings.Contains(
+		compiled.SQL,
+		`CAST(NULL AS Nullable(Float64)) AS "rounded"`,
+	) {
+		t.Fatalf("closed-schema missing round did not become null:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, `CAST(? AS UInt8)`) {
+		t.Fatalf("closed-schema missing round retained unused precision:\n%s", compiled.SQL)
+	}
+}
+
 func TestCompileEvalRoundRejectsFixedNonNumbersAndMultivalue(t *testing.T) {
 	t.Parallel()
 
@@ -187,11 +205,11 @@ func TestCompileEvalRoundNestedDynamicSQLGrowsLinearly(t *testing.T) {
 		t,
 		`index=gradethis | eval rounded=`+expression+` | table rounded`,
 	)
-	if len(compiled.SQL) > maxCompiledRoundScalarSQLBytes {
+	if len(compiled.SQL) > maxCompiledNumericRoundingScalarSQLBytes {
 		t.Fatalf(
 			"nested round SQL = %d bytes, want at most %d",
 			len(compiled.SQL),
-			maxCompiledRoundScalarSQLBytes,
+			maxCompiledNumericRoundingScalarSQLBytes,
 		)
 	}
 	if strings.Count(compiled.SQL, `"__os_fields"."category"`) != 1 {
