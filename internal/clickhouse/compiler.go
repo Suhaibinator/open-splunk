@@ -66,9 +66,13 @@ const (
 	// final query has a larger independent ceiling, but enforcing this limit
 	// at every conditional node bounds compiler allocations on adversarial
 	// depth-limited trees.
-	maxCompiledIfScalarSQLBytes  = 64 << 10
-	maxCompiledAssignments       = 64
-	maxCompiledExtractionOutputs = 64
+	maxCompiledIfScalarSQLBytes = 64 << 10
+	// maxCompiledCoalesceScalarSQLBytes provides the same incremental bound for
+	// a variadic expression. Without it, 32 individually bounded arguments can
+	// allocate a multi-megabyte intermediate before the whole-query guard runs.
+	maxCompiledCoalesceScalarSQLBytes = 64 << 10
+	maxCompiledAssignments            = 64
+	maxCompiledExtractionOutputs      = 64
 	// Parser-produced predicates are already bounded by a 1,024-token source
 	// and 32 eval/where leaves. Revalidate a deliberately wider structural
 	// ceiling here so forged logical plans cannot drive unbounded recursive
@@ -302,6 +306,9 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 		alias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 		switch operator := operator.(type) {
 		case *plan.Filter:
+			if err := validateCompiledPredicateComplexity(operator.Expression); err != nil {
+				return CompiledQuery{}, err
+			}
 			materializedFields := predicateMaterializationFields(operator.Expression, state)
 			predicateState := state
 			nextState := state
@@ -353,6 +360,9 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				}
 			}
 			for index, assignment := range operator.Assignments {
+				if err := validateCompiledScalarComplexity(assignment.Expression); err != nil {
+					return CompiledQuery{}, err
+				}
 				if scalarExpressionMayReturnBooleanFunction(assignment.Expression) {
 					return CompiledQuery{}, errors.New(
 						"compile ClickHouse extend: eval cannot directly assign a Boolean null predicate",
@@ -3264,6 +3274,9 @@ func compileExpression(expression plan.Expression, state compileState) (string, 
 		if expression == nil || expression.Value == nil {
 			return "", nil, errors.New("compile ClickHouse predicate: missing Boolean scalar expression")
 		}
+		if err := validateCompiledScalarComplexity(expression.Value); err != nil {
+			return "", nil, err
+		}
 		value, err := compileScalarValue(expression.Value, state)
 		if err != nil {
 			return "", nil, err
@@ -3624,6 +3637,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileToNumberScalar(expression, state)
 		case plan.ScalarFunctionIsNull, plan.ScalarFunctionIsNotNull:
 			return compileNullTestScalar(expression, state)
+		case plan.ScalarFunctionCoalesce:
+			return compileCoalesceScalar(expression, state)
 		default:
 			return compiledScalar{}, fmt.Errorf("compile ClickHouse scalar expression: unsupported function %d", expression.Function)
 		}
@@ -3631,6 +3646,202 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 		return compileIfScalar(expression, state)
 	default:
 		return compiledScalar{}, fmt.Errorf("compile ClickHouse scalar expression: unsupported expression %T", expression)
+	}
+}
+
+func compileCoalesceScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+) (compiledScalar, error) {
+	if expression == nil {
+		return compiledScalar{}, errors.New("compile ClickHouse coalesce: missing expression")
+	}
+	if len(expression.Arguments) == 0 {
+		return compiledScalar{}, errors.New("compile ClickHouse coalesce: requires at least one argument")
+	}
+	if len(expression.Arguments) > spl.MaximumCoalesceArguments {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"coalesce contains more than %d arguments",
+				spl.MaximumCoalesceArguments,
+			),
+			Range: expression.Range,
+		}
+	}
+
+	values := make([]compiledScalar, 0, len(expression.Arguments))
+	alwaysNull := true
+	materializeForPredicate := false
+	sqlBytes := len("coalesce()")
+	for _, argument := range expression.Arguments {
+		if nilScalarExpression(argument) {
+			return compiledScalar{}, errors.New("compile ClickHouse coalesce: missing argument")
+		}
+		value, err := compileScalarValue(argument, state)
+		if err != nil {
+			return compiledScalar{}, err
+		}
+		values = append(values, value)
+		alwaysNull = alwaysNull && compiledScalarIsAlwaysNull(value)
+		materializeForPredicate = materializeForPredicate || value.materializeForPredicate
+		sqlBytes += len(value.valueSQL) + len(", ")
+		if err := validateCoalesceScalarSQLBytes(sqlBytes, expression.Range); err != nil {
+			return compiledScalar{}, err
+		}
+	}
+
+	textEligibleSQL, ok := coalesceTextEligibility(values)
+	if !ok {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_UNSUPPORTED_COALESCE_VALUE_TYPE",
+			Message: "coalesce values carry incompatible text provenance; use matching text sources " +
+				"or normalize each value before coalescing",
+			Range: expression.Range,
+		}
+	}
+	values, kind, numberType, err := normalizeCoalesceValues(values, expression.Range)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+
+	valueSQL := make([]string, 0, len(values))
+	args := make([]any, 0)
+	for _, value := range values {
+		valueSQL = append(valueSQL, value.valueSQL)
+		args = append(args, value.valueArgs...)
+	}
+	sqlBytes = len("coalesce()") + len(strings.Join(valueSQL, ", "))
+	if err := validateCoalesceScalarSQLBytes(sqlBytes, expression.Range); err != nil {
+		return compiledScalar{}, err
+	}
+	return compiledScalar{
+		valueSQL:                "coalesce(" + strings.Join(valueSQL, ", ") + ")",
+		valueArgs:               args,
+		existsSQL:               "1",
+		textEligibleSQL:         textEligibleSQL,
+		kind:                    kind,
+		numberType:              numberType,
+		alwaysNull:              alwaysNull,
+		materializeForPredicate: materializeForPredicate,
+	}, nil
+}
+
+func validateCoalesceScalarSQLBytes(size int, sourceRange spl.Range) error {
+	if size <= maxCompiledCoalesceScalarSQLBytes {
+		return nil
+	}
+	return &plan.Diagnostic{
+		Code:    "SPL_QUERY_TOO_COMPLEX",
+		Message: fmt.Sprintf("coalesce scalar SQL exceeds %d bytes", maxCompiledCoalesceScalarSQLBytes),
+		Range:   sourceRange,
+	}
+}
+
+func coalesceTextEligibility(values []compiledScalar) (string, bool) {
+	textEligibleSQL := ""
+	found := false
+	for _, value := range values {
+		if compiledScalarIsAlwaysNull(value) {
+			continue
+		}
+		if !found {
+			textEligibleSQL = value.textEligibleSQL
+			found = true
+			continue
+		}
+		if value.textEligibleSQL != textEligibleSQL {
+			return "", false
+		}
+	}
+	return textEligibleSQL, true
+}
+
+func normalizeCoalesceValues(
+	values []compiledScalar,
+	sourceRange spl.Range,
+) ([]compiledScalar, fieldKind, string, error) {
+	target := compiledScalar{}
+	found := false
+	for _, value := range values {
+		if compiledScalarIsAlwaysNull(value) {
+			continue
+		}
+		if !found {
+			target = value
+			found = true
+			continue
+		}
+		if !coalesceFixedTypesMatch(target, value) {
+			return nil, fieldKindInvalid, "",
+				unsupportedCoalesceValueTypes(sourceRange, target, value)
+		}
+	}
+	if !found {
+		normalized := make([]compiledScalar, len(values))
+		for index := range normalized {
+			normalized[index] = typedNullIfBranch(fieldKindString, "")
+		}
+		return normalized, fieldKindString, "", nil
+	}
+	if !supportedCoalesceFixedType(target) {
+		return nil, fieldKindInvalid, "",
+			unsupportedCoalesceValueTypes(sourceRange, target, compiledScalar{})
+	}
+
+	normalized := append([]compiledScalar(nil), values...)
+	for index, value := range normalized {
+		if !compiledScalarIsAlwaysNull(value) {
+			continue
+		}
+		typed, ok := typedNullIfBranchFor(target)
+		if !ok {
+			return nil, fieldKindInvalid, "",
+				unsupportedCoalesceValueTypes(sourceRange, target, value)
+		}
+		normalized[index] = typed
+	}
+	return normalized, target.kind, target.numberType, nil
+}
+
+func supportedCoalesceFixedType(value compiledScalar) bool {
+	switch value.kind {
+	case fieldKindString, fieldKindBool:
+		return true
+	case fieldKindNumber:
+		return value.numberType != "" && supportedIfNumberType(value.numberType)
+	default:
+		return false
+	}
+}
+
+func coalesceFixedTypesMatch(left, right compiledScalar) bool {
+	if !supportedCoalesceFixedType(left) || !supportedCoalesceFixedType(right) {
+		return false
+	}
+	if left.kind != right.kind {
+		return false
+	}
+	return left.kind != fieldKindNumber || left.numberType == right.numberType
+}
+
+func unsupportedCoalesceValueTypes(
+	sourceRange spl.Range,
+	left, right compiledScalar,
+) error {
+	leftType := describeIfBranchType(left)
+	rightType := describeIfBranchType(right)
+	if right.kind == fieldKindInvalid && !compiledScalarIsAlwaysNull(right) {
+		rightType = "unsupported"
+	}
+	return &plan.Diagnostic{
+		Code: "SPL_UNSUPPORTED_COALESCE_VALUE_TYPE",
+		Message: fmt.Sprintf(
+			"coalesce values have unsupported or unstable types %s and %s; use matching fixed String, Bool, or numeric values",
+			leftType,
+			rightType,
+		),
+		Range: sourceRange,
 	}
 }
 
@@ -3803,6 +4014,20 @@ type predicateComplexityValidator struct {
 	active map[any]struct{}
 }
 
+func validateCompiledPredicateComplexity(expression plan.Expression) error {
+	validator := predicateComplexityValidator{
+		active: make(map[any]struct{}),
+	}
+	return validator.validateExpression(expression, 1)
+}
+
+func validateCompiledScalarComplexity(expression plan.ScalarExpression) error {
+	validator := predicateComplexityValidator{
+		active: make(map[any]struct{}),
+	}
+	return validator.validateScalar(expression, 1)
+}
+
 func (v *predicateComplexityValidator) validateExpression(
 	expression plan.Expression,
 	depth int,
@@ -3957,13 +4182,25 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			expectedArguments = 1
 		case plan.ScalarFunctionReplace:
 			expectedArguments = 3
+		case plan.ScalarFunctionCoalesce:
+			if len(expression.Arguments) == 0 {
+				return errors.New(
+					"compile ClickHouse predicate: coalesce requires at least one argument",
+				)
+			}
+			if len(expression.Arguments) > spl.MaximumCoalesceArguments {
+				return fmt.Errorf(
+					"compile ClickHouse predicate: coalesce contains more than %d arguments",
+					spl.MaximumCoalesceArguments,
+				)
+			}
 		default:
 			return fmt.Errorf(
 				"compile ClickHouse predicate: unsupported scalar function %d",
 				expression.Function,
 			)
 		}
-		if len(expression.Arguments) != expectedArguments {
+		if expectedArguments != 0 && len(expression.Arguments) != expectedArguments {
 			return fmt.Errorf(
 				"compile ClickHouse predicate: scalar function %d requires %d arguments",
 				expression.Function,
@@ -3995,9 +4232,17 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 func scalarExpressionReturnsBoolean(expression plan.ScalarExpression) bool {
 	switch expression := expression.(type) {
 	case *plan.ScalarCallExpression:
-		return expression != nil &&
-			(expression.Function == plan.ScalarFunctionIsNull ||
-				expression.Function == plan.ScalarFunctionIsNotNull)
+		if expression == nil {
+			return false
+		}
+		switch expression.Function {
+		case plan.ScalarFunctionIsNull, plan.ScalarFunctionIsNotNull:
+			return true
+		case plan.ScalarFunctionCoalesce:
+			return coalescePlanScalarReturnsBoolean(expression.Arguments)
+		default:
+			return false
+		}
 	case *plan.ScalarLiteralExpression:
 		return expression != nil && expression.Value.Kind == plan.ValueKindBool
 	case *plan.ScalarIfExpression:
@@ -4007,6 +4252,22 @@ func scalarExpressionReturnsBoolean(expression plan.ScalarExpression) bool {
 	default:
 		return false
 	}
+}
+
+func coalescePlanScalarReturnsBoolean(arguments []plan.ScalarExpression) bool {
+	foundBoolean := false
+	for _, argument := range arguments {
+		if literal, ok := argument.(*plan.ScalarLiteralExpression); ok &&
+			literal != nil &&
+			literal.Value.Kind == plan.ValueKindNull {
+			continue
+		}
+		if !scalarExpressionReturnsBoolean(argument) {
+			return false
+		}
+		foundBoolean = true
+	}
+	return foundBoolean
 }
 
 func nilPlanExpression(expression plan.Expression) bool {
@@ -4315,9 +4576,20 @@ func scalarStringLiteral(expression plan.ScalarExpression) (string, bool) {
 func scalarExpressionMayReturnBooleanFunction(expression plan.ScalarExpression) bool {
 	switch expression := expression.(type) {
 	case *plan.ScalarCallExpression:
-		return expression != nil &&
-			(expression.Function == plan.ScalarFunctionIsNull ||
-				expression.Function == plan.ScalarFunctionIsNotNull)
+		if expression == nil {
+			return false
+		}
+		switch expression.Function {
+		case plan.ScalarFunctionIsNull, plan.ScalarFunctionIsNotNull:
+			return true
+		case plan.ScalarFunctionCoalesce:
+			for _, argument := range expression.Arguments {
+				if scalarExpressionMayReturnBooleanFunction(argument) {
+					return true
+				}
+			}
+		}
+		return false
 	case *plan.ScalarIfExpression:
 		return expression != nil &&
 			(scalarExpressionMayReturnBooleanFunction(expression.True) ||
@@ -5303,6 +5575,12 @@ func appendPrivateEventProjection(projection []string, state compileState) []str
 }
 
 func compileEvalComparison(expression *plan.EvalComparisonExpression, state compileState) (string, []any, error) {
+	if err := validateCompiledScalarComplexity(expression.Left); err != nil {
+		return "", nil, err
+	}
+	if err := validateCompiledScalarComplexity(expression.Right); err != nil {
+		return "", nil, err
+	}
 	left, err := compileComparisonScalar(expression.Left, state)
 	if err != nil {
 		return "", nil, err
