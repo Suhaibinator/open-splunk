@@ -7,7 +7,125 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: typed SPL `if` end to end
+## Latest checkpoint: typed SPL `stats count(eval(...))`
+
+Date: 2026-07-27
+
+Implementation, tests, compatibility, and editor checkpoint (committed and
+pushed):
+`66b2b16c88f1e7a41bb5486dffe5942629969097`
+
+This test-first slice implements the bounded conditional aggregate
+`stats count(eval(<predicate>)) AS <field>`:
+
+1. The parser accepts case-insensitive outer `count` and inner `eval`, requires
+   one current eval/where predicate and an explicit unquoted `AS` output, and
+   rejects `c(eval(...))`, inferred expression names, implicit predicate
+   adjacency, multiple arguments, and malformed parentheses with source-
+   located diagnostics.
+2. The predicate uses the existing typed grammar and precedence: comparisons,
+   direct `isnull`/`isnotnull`, nested Boolean `if`, parentheses, `NOT`, `AND`,
+   and `OR`. Conditional measures share the query-wide 32-predicate ceiling
+   with earlier `where`/`if` expressions and the ordinary 16-measure stats
+   ceiling.
+3. Dedicated AST and logical-plan variants carry a mutually exclusive
+   predicate rather than overloading the aggregate input field. Planner and
+   compiler defenses reject nil/typed-nil predicates, field-plus-predicate or
+   percentile metadata, non-predicate functions, invalid operators, bad
+   scalar arity/metadata, and open-event use of the reserved `fields` payload.
+   A closed transforming schema may still expose an ordinary field named
+   `fields`.
+4. Count semantics are true-only: Boolean true contributes one; false, null,
+   and a comparison involving a missing value contribute zero. `isnull` and
+   `isnotnull` retain their documented missing/null behavior. A global
+   aggregation over no rows returns non-null `UInt64(0)`.
+5. The predicate is a measure, never an aggregate-wide prefilter. Sibling
+   counts and other measures see every scoped row, and grouped results retain
+   groups whose conditional contribution is zero.
+6. Each distinct compiled `{SQL, arguments}` predicate is lowered once to a
+   non-null per-row `UInt64` contribution. Exact repeated predicates share
+   that contribution; predicates with identical SQL shape but different
+   arguments do not. Arguments remain in first-use, left-to-right occurrence
+   order.
+7. Aggregation sums the contribution through `UInt128` and publishes
+   `UInt64`; the production source-row ceiling bounds the final conversion.
+   Ordinary conditional counts add neither `WHERE` nor `ARRAY JOIN`.
+8. Predicates over calculated Dynamic fields reuse one materialized input
+   fence and singleton binding set for the aggregate stage. Pinned server
+   execution caught and fixed a ClickHouse alias-scope issue by projecting the
+   bound aliases explicitly from that fence; bindings remain private and die
+   at the immediately following transforming aggregate.
+9. Parser/planner/compiler unit tests cover casing, precedence, exact and
+   over-limit budgets, bind order, repeated physical sharing, siblings,
+   grouping, projection, calculated fields, reserved fields, output metadata,
+   missing/null behavior, empty input, and forged invariants.
+10. Pinned ClickHouse `26.3.17.4` coverage executes canonical and Dynamic
+    comparison matches/misses, the true/false/null/missing truth table,
+    Boolean composition, nested and nullable `if`, grouped zero contributions,
+    sibling row counts, projection, calculated `spath`, global empty input,
+    and `EXPLAIN actions=1` proof that the ordinary path has no row expansion.
+11. Both AST-to-plan and plan-to-SQL trust boundaries now revalidate bounded
+    predicate occurrence count and depth, track active nodes to reject cycles,
+    and charge compact shared DAGs by occurrence. Aggregate cardinality is
+    rejected before predicate preprocessing. These guards prevent forged plans
+    from reaching unbounded recursive validation, materialization discovery,
+    or SQL expansion.
+12. Compatibility documentation and editor completion advertise the exact
+    explicit-alias form and true-only behavior. Nested `eval(` inside stats is
+    highlighted as a function without relabeling the pipeline `eval` command.
+
+Validation completed on the committed implementation:
+
+```sh
+go test ./internal/spl ./internal/plan ./internal/clickhouse -count=1
+go test ./... -count=1
+go vet ./...
+golangci-lint run --timeout=5m \
+  --new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -v
+git diff --check
+```
+
+All gates pass. The frontend corpus contains 113 application tests and 47
+release/build tests. The final pinned Store/compiler run passed in 43.34
+seconds. Independent contract/correctness, compiler/performance, test/security,
+and post-fix code-quality reviews drove fixes for invalid planner enums and
+function arity, real field-comparison coverage, query-wide predicate-budget
+coverage, early aggregate-cardinality enforcement, and cycle/depth/shared-DAG
+resource bypasses at both trust boundaries. Their final current-tree reviews
+are clean.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `66b2b16` plus the checkpoint-doc
+   commit that follows it. Preserve any unexpected local changes.
+2. The recommended next bounded expression slice is `coalesce(value, ...)`,
+   which is in the product plan and builds directly on the now-tested
+   missing/null and fixed-branch machinery. Before implementation, write the
+   official-source contract for arity, first-non-null selection, empty/false/
+   zero behavior, type and multivalue compatibility, evaluation order, and
+   resource ceilings.
+3. Start with red parser/planner tests, then compiler tests, then pinned
+   ClickHouse execution. Keep the accepted arity and scalar nesting within the
+   existing query budgets, and reject unstable Dynamic/container unions rather
+   than inheriting ClickHouse type inference accidentally.
+4. Keep `case`, `tostring`, numeric/string eval functions, wildcard count,
+   inferred conditional-count output names, `c(eval(...))`, and `eventstats`
+   as separate reviewed contracts. `eventstats` should wait for a stable
+   reusable aggregate library.
+5. Heterogeneous/Dynamic/container `if` branches remain a separate follow-on
+   contract. Flattened object parents still require a durable hidden
+   selected-descendant representation or explicit bounded reconstruction.
+6. The broader backend/product backlog and safe-resume procedure remain at the
+   end of this document.
+
+## Previous checkpoint: typed SPL `if` end to end
 
 Date: 2026-07-27
 
@@ -4294,8 +4412,9 @@ The chronological history is `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and
 `f9985a1`. If SPL expansion is the chosen next priority, implement one bounded
 aggregate contract at a time:
 
-- broader `count` forms (wildcards, predicates, and `count(eval(...))`) need
-  separate syntax and differential tests; exact-field `c(field)` is complete;
+- conditional `count(eval(...)) AS field` is complete at `66b2b16`; broader
+  wildcard `count` forms still need a separate syntax and differential
+  contract, while exact-field `c(field)` is complete;
 - decimal suffixes, SPL2 two-argument `perc`, `upperperc`, and `exactperc`
   remain separate percentile contracts and are not part of the first bounded
   integer-suffix slice;
@@ -4447,9 +4566,9 @@ Do not guess those decisions if they materially affect the implementation.
    `efe4199`, exact-field `c(field)` is complete at `070d24f`, and native
    `isnull`/`isnotnull` predicates are complete at `2d35c66`, as described at
    the top of this file. Typed fixed-scalar `if` is complete across `cfaa75b`,
-   `c1ad25b`, and `fed3276`; continue with a test-first bounded
-   `count(eval(predicate)) AS field` contract if the user does not change
-   priority. The generator
+   `c1ad25b`, and `fed3276`; typed conditional count is complete at `66b2b16`.
+   Continue with an official-source, test-first bounded `coalesce(value, ...)`
+   contract if the user does not change priority. The generator
    foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
