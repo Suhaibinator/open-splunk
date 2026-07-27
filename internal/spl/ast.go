@@ -241,6 +241,18 @@ const (
 	ScalarFunctionMatch
 )
 
+// ReturnsBoolean reports the atomic result trait shared by parser, planner,
+// and backend consumer checks. Composite coalesce/if/case expressions still
+// require branch-aware analysis.
+func (function ScalarFunction) ReturnsBoolean() bool {
+	switch function {
+	case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch:
+		return true
+	default:
+		return false
+	}
+}
+
 // ScalarCallExpr invokes a supported eval function. Function names are
 // resolved by the parser so no user-authored identifier reaches a backend.
 type ScalarCallExpr struct {

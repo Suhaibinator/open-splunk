@@ -2510,8 +2510,9 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				return nil, &Diagnostic{
 					Code: "SPL_QUERY_TOO_COMPLEX",
 					Message: fmt.Sprintf(
-						"match regular expression exceeds the %d-byte limit",
+						"match regular expression exceeds the %d-byte or %d-work-unit limit",
 						splregex.MaximumMatchPatternBytes,
+						splregex.MaximumMatchProgramWorkUnits,
 					),
 					Range: pattern.Range,
 				}
@@ -2612,14 +2613,13 @@ func scalarExpressionReturnsBoolean(expression ScalarExpr) bool {
 		if expression == nil {
 			return false
 		}
-		switch expression.Function {
-		case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch:
+		if expression.Function.ReturnsBoolean() {
 			return true
-		case ScalarFunctionCoalesce:
-			return coalesceScalarExpressionReturnsBoolean(expression.Arguments)
-		default:
-			return false
 		}
+		if expression.Function == ScalarFunctionCoalesce {
+			return coalesceScalarExpressionReturnsBoolean(expression.Arguments)
+		}
+		return false
 	case *ScalarLiteralExpr:
 		return expression != nil && expression.Value.Kind == LiteralKindBool
 	case *ScalarIfExpr:
@@ -2640,14 +2640,13 @@ func scalarExpressionCanBeDirectPredicate(expression ScalarExpr) bool {
 		if expression == nil {
 			return false
 		}
-		switch expression.Function {
-		case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch:
+		if expression.Function.ReturnsBoolean() {
 			return true
-		case ScalarFunctionCoalesce:
-			return coalesceScalarExpressionReturnsBoolean(expression.Arguments)
-		default:
-			return false
 		}
+		if expression.Function == ScalarFunctionCoalesce {
+			return coalesceScalarExpressionReturnsBoolean(expression.Arguments)
+		}
+		return false
 	case *ScalarIfExpr:
 		return expression != nil && scalarExpressionReturnsBoolean(expression)
 	case *ScalarCaseExpr:
@@ -2668,10 +2667,10 @@ func scalarExpressionMayReturnBooleanFunction(expression ScalarExpr) bool {
 		if expression == nil {
 			return false
 		}
-		switch expression.Function {
-		case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch:
+		if expression.Function.ReturnsBoolean() {
 			return true
-		case ScalarFunctionCoalesce:
+		}
+		if expression.Function == ScalarFunctionCoalesce {
 			for _, argument := range expression.Arguments {
 				if scalarExpressionMayReturnBooleanFunction(argument) {
 					return true

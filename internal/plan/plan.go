@@ -518,6 +518,17 @@ const (
 	ScalarFunctionMatch
 )
 
+// ReturnsBoolean reports the atomic result trait shared by planning and
+// backend consumer checks. Composite expressions remain branch-aware.
+func (function ScalarFunction) ReturnsBoolean() bool {
+	switch function {
+	case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch:
+		return true
+	default:
+		return false
+	}
+}
+
 // ScalarCallExpression invokes one supported eval operation.
 type ScalarCallExpression struct {
 	Function  ScalarFunction

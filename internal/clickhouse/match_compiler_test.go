@@ -34,7 +34,7 @@ func TestCompileWhereMatchBindsDynamicTextAndNormalizedPatternOnce(t *testing.T)
 	if got := strings.Count(compiled.SQL, `"__os_fields"."category"`); got != 1 {
 		t.Fatalf("Dynamic match source references = %d, want 1:\n%s", got, compiled.SQL)
 	}
-	if strings.Contains(compiled.SQL, pattern) || !containsArgument(compiled.Args, normalized) {
+	if strings.Contains(compiled.SQL, pattern) || !containsArgument(compiled.Args, normalized.Pattern) {
 		t.Fatalf("match pattern was not normalized and bound: args=%#v\nSQL: %s", compiled.Args, compiled.SQL)
 	}
 }
@@ -111,8 +111,8 @@ func TestCompileMatchNestedSQLGrowsLinearly(t *testing.T) {
 		t,
 		`index=gradethis | eval rendered=`+expression+` | table rendered`,
 	)
-	if len(compiled.SQL) > maxCompiledQueryBytes {
-		t.Fatalf("nested match SQL = %d bytes, want at most %d", len(compiled.SQL), maxCompiledQueryBytes)
+	if len(compiled.SQL) > maxCompiledMatchScalarSQLBytes {
+		t.Fatalf("nested match SQL = %d bytes, want at most %d", len(compiled.SQL), maxCompiledMatchScalarSQLBytes)
 	}
 	if got := strings.Count(compiled.SQL, `"__os_fields"."category"`); got != 1 {
 		t.Fatalf("nested match source references = %d, want 1:\n%s", got, compiled.SQL)
@@ -143,6 +143,7 @@ func TestCompileMatchRejectsForgedPlans(t *testing.T) {
 		name       string
 		expression plan.ScalarExpression
 		want       string
+		wantCode   string
 	}{
 		{
 			name: "zero arguments",
@@ -199,6 +200,30 @@ func TestCompileMatchRejectsForgedPlans(t *testing.T) {
 			want: "outside the supported RE2 subset",
 		},
 		{
+			name: "oversized regex text",
+			expression: &plan.ScalarCallExpression{
+				Function: plan.ScalarFunctionMatch,
+				Arguments: []plan.ScalarExpression{
+					value(),
+					pattern(strings.Repeat("x", splregex.MaximumMatchPatternBytes+1)),
+				},
+			},
+			want:     "byte or",
+			wantCode: "SPL_QUERY_TOO_COMPLEX",
+		},
+		{
+			name: "oversized regex program",
+			expression: &plan.ScalarCallExpression{
+				Function: plan.ScalarFunctionMatch,
+				Arguments: []plan.ScalarExpression{
+					value(),
+					pattern(strings.Repeat("a{1000}", 5)),
+				},
+			},
+			want:     "work-unit limit",
+			wantCode: "SPL_QUERY_TOO_COMPLEX",
+		},
+		{
 			name:       "cyclic expression",
 			expression: cyclic,
 			want:       "contains a cycle",
@@ -218,6 +243,45 @@ func TestCompileMatchRejectsForgedPlans(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Compile error = %v, want %q", err, test.want)
 			}
+			if test.wantCode != "" {
+				var diagnostic *plan.Diagnostic
+				if !errors.As(err, &diagnostic) || diagnostic.Code != test.wantCode {
+					t.Fatalf("Compile error = %#v, want code %s", err, test.wantCode)
+				}
+			}
 		})
+	}
+}
+
+func TestCompileMatchBoundsAggregateRegexWorkAndCalculatedInputBytes(t *testing.T) {
+	t.Parallel()
+
+	pattern := strings.Repeat("a{1000}", 4)
+	predicates := make([]string, 5)
+	for index := range predicates {
+		predicates[index] = `match(message, "` + pattern + `")`
+	}
+	_, err := (Compiler{}).Compile(buildPlan(
+		t,
+		`index=gradethis | where `+strings.Join(predicates, " OR "),
+	))
+	var diagnostic *plan.Diagnostic
+	if !errors.As(err, &diagnostic) ||
+		diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" ||
+		!strings.Contains(diagnostic.Message, "match programs") {
+		t.Fatalf("aggregate regex error = %#v, want match program budget", err)
+	}
+
+	for _, source := range []string{
+		`index=gradethis | where match(replace(message, "x", "12345"), "ok")`,
+		`index=gradethis | eval amplified=replace(message, "x", "12345") | where match(amplified, "ok")`,
+	} {
+		_, err = (Compiler{}).Compile(buildPlan(t, source))
+		diagnostic = nil
+		if !errors.As(err, &diagnostic) ||
+			diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" ||
+			!strings.Contains(diagnostic.Message, "match input") {
+			t.Fatalf("calculated input error = %#v, want match input byte budget", err)
+		}
 	}
 }

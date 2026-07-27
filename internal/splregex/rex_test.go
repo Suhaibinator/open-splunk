@@ -83,6 +83,14 @@ func TestCompileExtractionPatternBoundsPatternAndCaptureWork(t *testing.T) {
 	if _, err := CompileExtractionPattern(captures.String()); !errors.Is(err, ErrTooManyExtractionCaptures) {
 		t.Fatalf("capture-limit error = %v, want ErrTooManyExtractionCaptures", err)
 	}
+
+	programBomb := `(?<value>` + strings.Repeat("a{1000}", 5) + `)`
+	if len(programBomb) > MaximumExtractionPatternBytes {
+		t.Fatalf("adversarial pattern unexpectedly exceeds text bound: %d", len(programBomb))
+	}
+	if _, err := CompileExtractionPattern(programBomb); !errors.Is(err, ErrExtractionPatternTooLarge) {
+		t.Fatalf("program-work error = %v, want ErrExtractionPatternTooLarge", err)
+	}
 }
 
 func TestCompileExtractionPatternAllowsEmptyWholeMatches(t *testing.T) {

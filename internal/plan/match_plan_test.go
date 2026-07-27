@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"github.com/Suhaibinator/open-splunk/internal/splregex"
 )
 
 func TestBuildMatchPreservesTypedPredicateIR(t *testing.T) {
@@ -126,8 +127,20 @@ func TestBuildMatchRejectsForgedArityPatternBooleanEnumAndTypedNil(t *testing.T)
 			name: "oversized regex",
 			expression: &spl.ScalarCallExpr{
 				Function:  spl.ScalarFunctionMatch,
-				Arguments: []spl.ScalarExpr{value(), pattern(strings.Repeat("x", 4<<10+1))},
+				Arguments: []spl.ScalarExpr{value(), pattern(strings.Repeat("x", splregex.MaximumMatchPatternBytes+1))},
 				Range:     sourceRange,
+			},
+			code: "SPL_QUERY_TOO_COMPLEX",
+		},
+		{
+			name: "oversized regex program",
+			expression: &spl.ScalarCallExpr{
+				Function: spl.ScalarFunctionMatch,
+				Arguments: []spl.ScalarExpr{
+					value(),
+					pattern(strings.Repeat("a{1000}", 5)),
+				},
+				Range: sourceRange,
 			},
 			code: "SPL_QUERY_TOO_COMPLEX",
 		},
@@ -157,5 +170,48 @@ func TestBuildMatchRejectsForgedArityPatternBooleanEnumAndTypedNil(t *testing.T)
 				test.code,
 			)
 		})
+	}
+}
+
+func TestScalarFunctionBooleanTraitsRemainInParity(t *testing.T) {
+	t.Parallel()
+
+	functions := []struct {
+		spl  spl.ScalarFunction
+		plan ScalarFunction
+		want bool
+	}{
+		{spl.ScalarFunctionInvalid, ScalarFunctionInvalid, false},
+		{spl.ScalarFunctionToNumber, ScalarFunctionToNumber, false},
+		{spl.ScalarFunctionReplace, ScalarFunctionReplace, false},
+		{spl.ScalarFunctionIsNull, ScalarFunctionIsNull, true},
+		{spl.ScalarFunctionIsNotNull, ScalarFunctionIsNotNull, true},
+		{spl.ScalarFunctionCoalesce, ScalarFunctionCoalesce, false},
+		{spl.ScalarFunctionLower, ScalarFunctionLower, false},
+		{spl.ScalarFunctionUpper, ScalarFunctionUpper, false},
+		{spl.ScalarFunctionLength, ScalarFunctionLength, false},
+		{spl.ScalarFunctionSubstring, ScalarFunctionSubstring, false},
+		{spl.ScalarFunctionToString, ScalarFunctionToString, false},
+		{spl.ScalarFunctionRound, ScalarFunctionRound, false},
+		{spl.ScalarFunctionCeil, ScalarFunctionCeil, false},
+		{spl.ScalarFunctionFloor, ScalarFunctionFloor, false},
+		{spl.ScalarFunctionMVCount, ScalarFunctionMVCount, false},
+		{spl.ScalarFunctionMatch, ScalarFunctionMatch, true},
+	}
+	for index, function := range functions {
+		if int(function.spl) != index || int(function.plan) != index {
+			t.Fatalf(
+				"function %d enum mapping = SPL %d / plan %d",
+				index,
+				function.spl,
+				function.plan,
+			)
+		}
+		if got := function.spl.ReturnsBoolean(); got != function.want {
+			t.Errorf("SPL function %d ReturnsBoolean = %t, want %t", index, got, function.want)
+		}
+		if got := function.plan.ReturnsBoolean(); got != function.want {
+			t.Errorf("plan function %d ReturnsBoolean = %t, want %t", index, got, function.want)
+		}
 	}
 }

@@ -3,6 +3,8 @@ package spl
 import (
 	"strings"
 	"testing"
+
+	"github.com/Suhaibinator/open-splunk/internal/splregex"
 )
 
 func TestParseMatchPreservesRangeCaseAndLiteralPattern(t *testing.T) {
@@ -68,10 +70,15 @@ func TestParseMatchRejectsArityNonliteralBooleanAndUnsupportedRegex(t *testing.T
 func TestParseMatchBoundsOriginalAndNormalizedPattern(t *testing.T) {
 	t.Parallel()
 
-	tooLong := strings.Repeat("x", 4<<10+1)
+	tooLong := strings.Repeat("x", splregex.MaximumMatchPatternBytes+1)
 	assertParseDiagnosticCode(
 		t,
 		`index=main | where match(message, "`+tooLong+`")`,
+		"SPL_QUERY_TOO_COMPLEX",
+	)
+	assertParseDiagnosticCode(
+		t,
+		`index=main | where match(message, "`+strings.Repeat("a{1000}", 5)+`")`,
 		"SPL_QUERY_TOO_COMPLEX",
 	)
 }

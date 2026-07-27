@@ -3,15 +3,15 @@ package splregex
 import (
 	"errors"
 	"fmt"
-	"regexp/syntax"
-	"strings"
-	"unicode/utf8"
 )
 
 const (
 	// MaximumExtractionPatternBytes bounds RE2 compilation work independently
 	// of the surrounding SPL source limit.
 	MaximumExtractionPatternBytes = 4 << 10
+	// MaximumExtractionProgramWorkUnits bounds estimated RE2 instructions
+	// after counted repetitions are expanded.
+	MaximumExtractionProgramWorkUnits = 4 << 10
 	// MaximumExtractionCaptureGroups bounds the Array(String) produced for one
 	// row. Unnamed groups count because ClickHouse returns them too.
 	MaximumExtractionCaptureGroups = 16
@@ -53,31 +53,21 @@ type ExtractionPattern struct {
 // CompileExtractionPattern validates the deliberately supported RE2 subset of
 // Splunk's PCRE rex dialect and discovers every named capture exactly once.
 func CompileExtractionPattern(pattern string) (ExtractionPattern, error) {
-	if len(pattern) > MaximumExtractionPatternBytes {
-		return ExtractionPattern{}, fmt.Errorf(
-			"%w: pattern contains %d bytes, maximum is %d",
-			ErrExtractionPatternTooLarge,
-			len(pattern),
-			MaximumExtractionPatternBytes,
-		)
-	}
-	if pattern == "" || !utf8.ValidString(pattern) || strings.IndexByte(pattern, 0) >= 0 {
+	if pattern == "" {
 		return ExtractionPattern{}, ErrInvalidExtractionPattern
 	}
-
-	parsed, err := syntax.Parse(pattern, syntax.Perl)
+	compiled, err := compileBoundedRE2Pattern(
+		pattern,
+		MaximumExtractionPatternBytes,
+		MaximumExtractionProgramWorkUnits,
+	)
 	if err != nil {
+		if errors.Is(err, errBoundedRE2PatternTooComplex) {
+			return ExtractionPattern{}, fmt.Errorf("%w: %w", ErrExtractionPatternTooLarge, err)
+		}
 		return ExtractionPattern{}, fmt.Errorf("%w: %w", ErrInvalidExtractionPattern, err)
 	}
-	normalized := parsed.String()
-	if len("(?-s)")+len(normalized) > MaximumExtractionPatternBytes {
-		return ExtractionPattern{}, fmt.Errorf(
-			"%w: normalized pattern contains %d bytes, maximum is %d",
-			ErrExtractionPatternTooLarge,
-			len("(?-s)")+len(normalized),
-			MaximumExtractionPatternBytes,
-		)
-	}
+	parsed := compiled.parsed
 	groupCount := parsed.MaxCap()
 	if groupCount > MaximumExtractionCaptureGroups {
 		return ExtractionPattern{}, fmt.Errorf(
@@ -106,7 +96,7 @@ func CompileExtractionPattern(pattern string) (ExtractionPattern, error) {
 		return ExtractionPattern{}, ErrNoNamedCapture
 	}
 	return ExtractionPattern{
-		Pattern:    "(?-s)" + normalized,
+		Pattern:    compiled.normalized,
 		Captures:   captures,
 		GroupCount: groupCount,
 	}, nil

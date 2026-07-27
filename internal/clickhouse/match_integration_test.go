@@ -20,6 +20,7 @@ func testMatchAgainstClickHouse(
 	event := testStoredEvent("match-scalars", "match", indexTime)
 	event.Event.Fields = typedObjectValue(
 		typedField("text", typedString("line1\nline2 ERROR api/v1")),
+		typedField("final_newline", typedString("ERROR\n")),
 		typedField("number", typedSint(42)),
 		typedField("flag", typedBool(false)),
 		typedField("nothing", typedNull()),
@@ -48,6 +49,9 @@ func testMatchAgainstClickHouse(
 		{name: "inline case insensitive", where: `match(text, "(?i)error")`, want: 1},
 		{name: "dot excludes newline", where: `match(text, "line1.line2")`, want: 0},
 		{name: "explicit dotall", where: `match(text, "(?s)line1.line2")`, want: 1},
+		{name: "dollar before final newline", where: `match(final_newline, "ERROR$")`, want: 1},
+		{name: "strict end before final newline", where: `match(final_newline, "ERROR\z")`, want: 0},
+		{name: "multiline dollar", where: `match(text, "(?m)line1$")`, want: 1},
 		{name: "empty pattern", where: `match(text, "")`, want: 1},
 		{name: "zero width", where: `match(text, "^")`, want: 1},
 		{name: "fixed number conversion", where: `match(42, "^42$")`, want: 1},
