@@ -2364,6 +2364,27 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				},
 			}
 		}
+	case "len", "length":
+		function = ScalarFunctionLength
+		if len(arguments) != 1 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: functionName + " requires exactly one argument",
+				Range:   name.sourceRange,
+			}
+		}
+		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
+			return nil, &Diagnostic{
+				Code: "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: functionName +
+					" cannot consume a Boolean result in search-mode expressions",
+				Range: arguments[0].SourceRange(),
+				Suggestions: []string{
+					"use isnull or isnotnull directly with where",
+					"consume the Boolean with a supported conditional or conversion function",
+				},
+			}
+		}
 	default:
 		return nil, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_EVAL_FUNCTION",
@@ -2377,6 +2398,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				"coalesce(value, fallback)",
 				"lower(value)",
 				"upper(value)",
+				"len(value)",
 				`if(predicate, true_value, false_value)`,
 			},
 		}

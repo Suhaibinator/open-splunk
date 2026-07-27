@@ -1897,6 +1897,9 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		case spl.ScalarFunctionUpper:
 			expectedArguments = 1
 			functionName = "upper"
+		case spl.ScalarFunctionLength:
+			expectedArguments = 1
+			functionName = "len"
 		}
 		if expectedArguments != 0 && len(expression.Arguments) != expectedArguments {
 			argumentNoun := "arguments"
@@ -1917,7 +1920,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		if expression.Function == spl.ScalarFunctionToNumber ||
 			expression.Function == spl.ScalarFunctionReplace ||
 			expression.Function == spl.ScalarFunctionLower ||
-			expression.Function == spl.ScalarFunctionUpper {
+			expression.Function == spl.ScalarFunctionUpper ||
+			expression.Function == spl.ScalarFunctionLength {
 			for _, argument := range expression.Arguments {
 				if splScalarMayReturnBooleanFunction(argument) {
 					return nil, &Diagnostic{
@@ -1952,6 +1956,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			function = ScalarFunctionLower
 		case spl.ScalarFunctionUpper:
 			function = ScalarFunctionUpper
+		case spl.ScalarFunctionLength:
+			function = ScalarFunctionLength
 		default:
 			return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EVAL_FUNCTION", Message: "unsupported scalar function", Range: expression.Range}
 		}
