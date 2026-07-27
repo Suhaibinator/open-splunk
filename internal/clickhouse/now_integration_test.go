@@ -37,7 +37,7 @@ func testNowAgainstClickHouse(
 	composed := compile(
 		`index=now event_id="now-scalar"` +
 			` | eval first=now(), second=now(), rendered=tostring(now())` +
-			` | where first=second AND now()=first` +
+			` | where first=second AND now()=first AND _time<=now()` +
 			` | table first,second,rendered`,
 	)
 	var first, second int64

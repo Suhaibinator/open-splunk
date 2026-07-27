@@ -297,6 +297,18 @@ func TestFieldServiceRechecksLifecycleScopeAndSnapshotOnEveryPage(t *testing.T) 
 		t.Fatalf("executor calls after stale cursor = %d, want 1", executor.Calls())
 	}
 
+	changed = snapshot
+	changed.SearchStart = changed.SearchStart.Add(time.Second)
+	stateMu.Lock()
+	current = changed
+	stateMu.Unlock()
+	if _, err := service.ListFields(context.Background(), access, ListFieldsRequest{SearchJobID: snapshot.ID, PageToken: first.NextPageToken}); !errors.Is(err, ErrInvalidFieldCursor) {
+		t.Fatalf("changed-search-start cursor error = %v", err)
+	}
+	if executor.Calls() != 1 {
+		t.Fatalf("executor calls after stale search-start cursor = %d, want 1", executor.Calls())
+	}
+
 	stateMu.Lock()
 	current = snapshot
 	stateMu.Unlock()

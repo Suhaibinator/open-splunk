@@ -18,11 +18,7 @@ func TestCompileNowBindsImmutableSearchStartAtWholeSecondPrecision(t *testing.T)
 	scope.SearchStart = started
 	scope.IndexTimeCutoff = started.Add(17 * time.Second)
 	scope.VisibilityCutoff = &visibility
-	logical := buildPlanWithScope(t, source, scope)
-	compiled, err := (Compiler{}).Compile(logical)
-	if err != nil {
-		t.Fatalf("Compile: %v", err)
-	}
+	compiled := compileSPLWithScope(t, source, scope)
 	for _, required := range []string{
 		`CAST(? AS Int64) AS "started"`,
 		`toString(CAST(? AS Int64)) AS "rendered"`,

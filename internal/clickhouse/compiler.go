@@ -353,14 +353,6 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	state.context.patternBudgets = compiledPatternBudgets{
-		match: compiledMatchBudget{
-			patterns: make(map[*plan.ScalarCallExpression]splregex.MatchPattern),
-		},
-		like: compiledLikeBudget{
-			patterns: make(map[*plan.ScalarCallExpression]splwildcard.LikePattern),
-		},
-	}
 	relation := newScanRelation(fragment, scan.Range)
 
 	aliasSequence := 0
@@ -3134,6 +3126,20 @@ type compileContext struct {
 	searchStartUnix int64
 }
 
+func newCompileContext(searchStart time.Time) *compileContext {
+	return &compileContext{
+		patternBudgets: compiledPatternBudgets{
+			match: compiledMatchBudget{
+				patterns: make(map[*plan.ScalarCallExpression]splregex.MatchPattern),
+			},
+			like: compiledLikeBudget{
+				patterns: make(map[*plan.ScalarCallExpression]splwildcard.LikePattern),
+			},
+		},
+		searchStartUnix: searchStart.Unix(),
+	}
+}
+
 type compiledMatchBudget struct {
 	patterns         map[*plan.ScalarCallExpression]splregex.MatchPattern
 	programWorkUnits int
@@ -3328,7 +3334,7 @@ func compileScan(database, table string, scan *plan.Scan, searchStart time.Time)
 	}
 	state := compileState{
 		visible:         visible,
-		context:         &compileContext{searchStartUnix: searchStart.Unix()},
+		context:         newCompileContext(searchStart),
 		publicOrder:     append([]string(nil), defaultPublicFields...),
 		allowDynamic:    true,
 		eventRows:       true,
@@ -4816,13 +4822,10 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 		}
 	case *plan.ScalarCallExpression:
 		expectedArguments := 0
+		hasExactArity := false
 		switch expression.Function {
 		case plan.ScalarFunctionNow:
-			if len(expression.Arguments) != 0 {
-				return errors.New(
-					"compile ClickHouse predicate: now requires no arguments",
-				)
-			}
+			hasExactArity = true
 		case plan.ScalarFunctionToNumber,
 			plan.ScalarFunctionToString,
 			plan.ScalarFunctionIsNull,
@@ -4834,6 +4837,7 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			plan.ScalarFunctionFloor,
 			plan.ScalarFunctionMVCount:
 			expectedArguments = 1
+			hasExactArity = true
 		case plan.ScalarFunctionMatch:
 			if len(expression.Arguments) != 2 {
 				return errors.New(
@@ -4891,6 +4895,7 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			}
 		case plan.ScalarFunctionReplace:
 			expectedArguments = 3
+			hasExactArity = true
 		case plan.ScalarFunctionSubstring:
 			if len(expression.Arguments) < 2 || len(expression.Arguments) > 3 {
 				return errors.New(
@@ -4927,7 +4932,12 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 				expression.Function,
 			)
 		}
-		if expectedArguments != 0 && len(expression.Arguments) != expectedArguments {
+		if hasExactArity && len(expression.Arguments) != expectedArguments {
+			if expectedArguments == 0 {
+				return errors.New(
+					"compile ClickHouse predicate: now requires no arguments",
+				)
+			}
 			return fmt.Errorf(
 				"compile ClickHouse predicate: scalar function %d requires %d arguments",
 				expression.Function,
