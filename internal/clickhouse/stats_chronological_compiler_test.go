@@ -121,7 +121,7 @@ func TestCompileStatsChronologicalMultivalueUsesBoundedRowCandidatesAndFinalVali
 	for _, function := range []string{"argMinOrNullIf(", "argMaxOrNullIf("} {
 		call := chronologicalAggregateCall(t, compiled.SQL, function)
 		if !strings.Contains(call, `"__os_chronological_row_key"`) ||
-			!strings.Contains(call, `notEmpty("__os_chronological_values_0")`) {
+			!strings.Contains(call, `tupleElement("__os_chronological_candidates_0", 3) != 0`) {
 			t.Fatalf("%s call is missing its row key or eligibility check:\n%s", function, call)
 		}
 		if strings.Contains(call, "arrayEnumerate(") ||
@@ -133,14 +133,23 @@ func TestCompileStatsChronologicalMultivalueUsesBoundedRowCandidatesAndFinalVali
 		}
 	}
 	earliest := chronologicalAggregateCall(t, compiled.SQL, "argMinOrNullIf(")
-	if !strings.Contains(earliest, `arrayElement("__os_chronological_values_0", 1)`) ||
+	if !strings.Contains(earliest, `tupleElement("__os_chronological_candidates_0", 1)`) ||
 		!strings.Contains(earliest, `toUInt64(1)`) {
 		t.Fatalf("earliest does not select the first eligible row member:\n%s", earliest)
 	}
 	latest := chronologicalAggregateCall(t, compiled.SQL, "argMaxOrNullIf(")
-	if !strings.Contains(latest, `arrayElement("__os_chronological_values_0", -1)`) ||
-		!strings.Contains(latest, `toUInt64(length("__os_chronological_values_0"))`) {
+	if !strings.Contains(latest, `tupleElement("__os_chronological_candidates_0", 2)`) ||
+		!strings.Contains(latest, `toUInt64(tupleElement("__os_chronological_candidates_0", 3))`) {
 		t.Fatalf("latest does not select the last eligible row member:\n%s", latest)
+	}
+	for _, selector := range []string{"arrayFirst(", "arrayLast(", "arrayCount(", "arrayExists("} {
+		if !strings.Contains(compiled.SQL, selector) {
+			t.Fatalf("dynamic input is missing bounded selector %q:\n%s", selector, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, "arrayFold(") ||
+		strings.Contains(compiled.SQL, `"__os_chronological_values_`) {
+		t.Fatalf("dynamic input retains an unbounded intermediate:\n%s", compiled.SQL)
 	}
 
 	const validation = `"__os_stats_chronological_any_unsupported_0"`
@@ -243,6 +252,125 @@ func TestCompileStatsChronologicalMaximumAliasesKeepConstantAggregateState(t *te
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d", got, want)
+	}
+}
+
+func TestCompileStatsChronologicalTerminalChartRetainsValidationEnvelope(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | stats earliest(payload) AS discarded BY path, level | chart count OVER path BY level`,
+	)
+	if compiled.Chart == nil {
+		t.Fatalf("terminal chart metadata is missing: %#v", compiled)
+	}
+	const inputPrefix = `"__os_chronological_input_`
+	inputStart := strings.Index(compiled.SQL, inputPrefix)
+	inputEnd := -1
+	if inputStart >= 0 {
+		if suffix := strings.Index(compiled.SQL[inputStart+1:], `"`); suffix >= 0 {
+			inputEnd = inputStart + suffix + 2
+		}
+	}
+	if inputEnd <= inputStart {
+		t.Fatalf("terminal chart is missing a chronological input name:\n%s", compiled.SQL)
+	}
+	input := compiled.SQL[inputStart:inputEnd]
+	if strings.Count(compiled.SQL, input+` AS MATERIALIZED (`) != 1 ||
+		!strings.Contains(compiled.SQL, `FROM `+input) ||
+		!strings.Contains(compiled.SQL, `"__os_chronological_validation_`) ||
+		!strings.Contains(compiled.SQL, `UNION ALL`) ||
+		!strings.Contains(compiled.SQL, UnsupportedStatsMeasureValueMarker) {
+		t.Fatalf("terminal chart lost chronological validation:\n%s", compiled.SQL)
+	}
+	for _, column := range []string{
+		ChartOrdinalColumn,
+		ChartRowColumn,
+		ChartNamesColumn,
+		ChartCountsColumn,
+		ChartInvalidColumn,
+	} {
+		if !strings.Contains(compiled.SQL, quoteIdentifier(column)) {
+			t.Fatalf("terminal chart validation schema is missing %q:\n%s", column, compiled.SQL)
+		}
+	}
+}
+
+func TestCompileStatsChronologicalValidationKeepsBarrierArgumentsBeforeDownstreamArguments(t *testing.T) {
+	t.Parallel()
+
+	const (
+		sourceValue = "chronological-barrier-source"
+		markerValue = "chronological-downstream-marker"
+	)
+	compiled := compileSPL(
+		t,
+		`index=gradethis source="`+sourceValue+`"`+
+			` | stats earliest(payload) AS discarded`+
+			` | eval marker="`+markerValue+`"`+
+			` | table marker`,
+	)
+	sourceIndex := slices.Index(compiled.Args, any(sourceValue))
+	markerIndex := slices.Index(compiled.Args, any(markerValue))
+	if sourceIndex < 0 || markerIndex <= sourceIndex {
+		t.Fatalf(
+			"compiled args place downstream marker before its materialized input: source=%d marker=%d args=%#v",
+			sourceIndex,
+			markerIndex,
+			compiled.Args,
+		)
+	}
+	if markerIndex != len(compiled.Args)-1 {
+		t.Fatalf("downstream marker argument index = %d, want final index in %#v", markerIndex, compiled.Args)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s", got, want, compiled.SQL)
+	}
+}
+
+func TestWrapChronologicalValidationOrdersArgumentsByCTEDefinition(t *testing.T) {
+	t.Parallel()
+
+	compiled, err := wrapChronologicalValidation(
+		`SELECT toString(?) AS "result"`,
+		1,
+		spl.Range{},
+		[]compiledChronologicalBarrier{
+			{
+				name:              `"barrier_one"`,
+				sql:               `SELECT toUInt8(?) AS "invalid_one"`,
+				args:              []any{"barrier-one-argument"},
+				validationColumns: []string{`"invalid_one"`},
+				depth:             1,
+			},
+			{
+				name:              `"barrier_two"`,
+				sql:               `SELECT toUInt8(?) AS "invalid_two"`,
+				args:              []any{"barrier-two-argument"},
+				validationColumns: []string{`"invalid_two"`},
+				depth:             1,
+			},
+		},
+		[]string{`"result"`},
+		[]string{"result"},
+		"",
+		CompiledQuery{Args: []any{"final-input-argument"}},
+		0,
+	)
+	if err != nil {
+		t.Fatalf("wrapChronologicalValidation(): %v", err)
+	}
+	wantArgs := []any{
+		"barrier-one-argument",
+		"barrier-two-argument",
+		"final-input-argument",
+	}
+	if !slices.Equal(compiled.Args, wantArgs) {
+		t.Fatalf("compiled args = %#v, want CTE-definition order %#v", compiled.Args, wantArgs)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s", got, want, compiled.SQL)
 	}
 }
 

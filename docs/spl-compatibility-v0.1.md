@@ -550,11 +550,17 @@ remain absent.
 
 Repeated identical chronological measures share one normalization and one
 winner state per input/direction. `earliest` and `latest` require separate
-constant-size states and share one immutable row key. Dynamic inputs add one
-constant-size validation state per input. The lowering uses conditional or
-Array-combinator `argMin`/`argMax`; it uses no pipeline sort, window,
-`groupArray`, or row-expanding `ARRAY JOIN`. `first`, `last`,
-`earliest_time`, and `latest_time` remain unsupported.
+constant-size states and share one immutable row key. A Dynamic input retains
+only its first eligible value, last eligible value, eligible-member count, and
+unsupported-container bit per event; bounded selector/count/validation passes
+over a multivalue never retain a normalized member array or repeat the row key
+for each member. The lowering then uses scalar conditional `argMin`/`argMax`
+and one constant-size validation state per Dynamic input. A materialized
+whole-result check is joined before publication and retained in a final
+zero-row validation branch, so even a downstream always-false filter cannot
+erase validation. The lowering uses no pipeline sort, window, `groupArray`,
+Array aggregate combinator, `arrayFold`, or row-expanding `ARRAY JOIN`.
+`first`, `last`, `earliest_time`, and `latest_time` remain unsupported.
 
 `min` and `max` follow Splunk's documented numeric-if-possible rule for
 ordinary numbers and text. Open Splunk v0.1 makes the mixed-type and symbol
@@ -1273,8 +1279,8 @@ eventstats, streamstats
 
 All `stats` functions other than argument-free `count`, exact-field
 `count(field)`, `dc(field)`/`distinct_count(field)`, `values(field)`,
-`list(field)`, `min(field)`, `max(field)`, `p95(field)`, `sum(field)`, and
-`avg(field)`, plus `earliest(field)` and `latest(field)`, are unsupported.
+`list(field)`, `min(field)`, `max(field)`, `p95(field)`, `sum(field)`,
+`avg(field)`, `earliest(field)`, and `latest(field)` are unsupported.
 Unsupported examples include other fixed percentiles, `perc<N>`, `upperperc`,
 and `exactperc`. The broader `count` forms listed in the stats section are
 unsupported too.

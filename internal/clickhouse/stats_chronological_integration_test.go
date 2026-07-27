@@ -96,6 +96,16 @@ func testStatsChronologicalAgainstClickHouse(
 			)),
 		),
 		newEvent(
+			"chronological-multivalue-poison",
+			"stats-chronological-multivalue-poison",
+			indexTime.Add(-4*time.Second),
+			typedField("chronological_value", typedList(
+				typedString("eligible-winner"),
+				typedList(typedString("nested-list-must-fail")),
+				typedObject(typedField("child", typedString("nested-object-must-fail"))),
+			)),
+		),
+		newEvent(
 			"chronological-null-missing",
 			"stats-chronological-null",
 			indexTime.Add(-4*time.Second),
@@ -484,6 +494,33 @@ func testStatsChronologicalAgainstClickHouse(
 		t.Fatalf("grouped empty chronological rows = %d, want 0", groupedEmptyCount)
 	}
 
+	const downstreamMarker = "chronological-downstream-marker"
+	boundDownstream := compile(
+		orderBase + ` | stats earliest(chronological_value) AS discarded` +
+			` | eval marker="` + downstreamMarker + `"` +
+			` | table marker`,
+	)
+	var gotDownstreamMarker string
+	if err := connection.QueryRow(
+		ctx,
+		boundDownstream.SQL,
+		boundDownstream.Args...,
+	).Scan(&gotDownstreamMarker); err != nil {
+		t.Fatalf(
+			"execute chronological downstream argument binding: %v\nSQL: %s\nargs: %#v",
+			err,
+			boundDownstream.SQL,
+			boundDownstream.Args,
+		)
+	}
+	if gotDownstreamMarker != downstreamMarker {
+		t.Fatalf(
+			"chronological downstream marker = %q, want %q",
+			gotDownstreamMarker,
+			downstreamMarker,
+		)
+	}
+
 	projected := compile(
 		orderBase + ` | fields - chronological_value` +
 			` | stats earliest(chronological_value) AS first latest(chronological_value) AS last`,
@@ -525,6 +562,22 @@ func testStatsChronologicalAgainstClickHouse(
 		t.Fatalf(
 			"invalid chronological nonwinner error = %v, want marker %q",
 			nonwinnerErr,
+			UnsupportedStatsMeasureValueMarker,
+		)
+	}
+
+	multivaluePoison := compile(
+		`index=compiler source="stats-chronological-multivalue-poison"` +
+			` | stats earliest(chronological_value) AS discarded` +
+			` | eval marker="hidden-output"` +
+			` | table marker`,
+	)
+	multivaluePoisonErr := executeCompiledExpectingNoRows(ctx, connection, multivaluePoison)
+	if multivaluePoisonErr == nil ||
+		!strings.Contains(multivaluePoisonErr.Error(), UnsupportedStatsMeasureValueMarker) {
+		t.Fatalf(
+			"invalid chronological multivalue member error = %v, want marker %q",
+			multivaluePoisonErr,
 			UnsupportedStatsMeasureValueMarker,
 		)
 	}
@@ -574,6 +627,40 @@ func testStatsChronologicalAgainstClickHouse(
 		}
 	}
 
+	validChart := compile(
+		orderBase +
+			` | stats earliest(chronological_value) AS discarded BY chronological_group, host` +
+			` | chart count OVER chronological_group BY host`,
+	)
+	var validChartRows uint64
+	if err := connection.QueryRow(
+		ctx,
+		`SELECT count() FROM (`+validChart.SQL+`)`,
+		validChart.Args...,
+	).Scan(&validChartRows); err != nil {
+		t.Fatalf("execute valid terminal chronological chart: %v\nSQL: %s", err, validChart.SQL)
+	}
+	if validChartRows != 1 {
+		t.Fatalf("valid terminal chronological chart rows = %d, want 1", validChartRows)
+	}
+
+	chartPoison := compile(
+		`index=compiler source="stats-chronological-poison"` +
+			` | stats earliest(chronological_value) AS discarded BY chronological_group, host` +
+			` | chart count OVER chronological_group BY host`,
+	)
+	chartErr := executeCompiledExpectingNoRows(ctx, connection, chartPoison)
+	if chartErr == nil ||
+		!strings.Contains(chartErr.Error(), UnsupportedStatsMeasureValueMarker) {
+		t.Fatalf(
+			"terminal-chart chronological validation error = %v, want marker %q",
+			chartErr,
+			UnsupportedStatsMeasureValueMarker,
+		)
+	}
+
+	testStatsChronologicalHighCardinalityMultivalue(ctx, t, connection)
+
 	shared := compile(
 		orderBase + ` | stats earliest(chronological_value) AS first` +
 			` latest(chronological_value) AS last` +
@@ -609,6 +696,80 @@ func testStatsChronologicalAgainstClickHouse(
 				actions,
 			)
 		}
+	}
+}
+
+func testStatsChronologicalHighCardinalityMultivalue(
+	ctx context.Context,
+	t *testing.T,
+	connection clickhousedriver.Conn,
+) {
+	t.Helper()
+
+	const table = `"open_splunk"."stats_chronological_mv_memory"`
+	if err := connection.Exec(ctx, `DROP TABLE IF EXISTS `+table); err != nil {
+		t.Fatalf("drop stale chronological memory fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := connection.Exec(context.Background(), `DROP TABLE IF EXISTS `+table); err != nil {
+			t.Errorf("drop chronological memory fixture: %v", err)
+		}
+	})
+	if err := connection.Exec(
+		ctx,
+		`CREATE TABLE `+table+` (`+
+			`"id" UInt64, "values" Array(Dynamic)) `+
+			`ENGINE = MergeTree ORDER BY "id"`,
+	); err != nil {
+		t.Fatalf("create chronological memory fixture: %v", err)
+	}
+	if err := connection.Exec(
+		ctx,
+		`INSERT INTO `+table+` SELECT number, `+
+			`arrayConcat([CAST('first' AS Dynamic)], `+
+			`arrayMap(_ -> CAST('' AS Dynamic), range(toUInt32(249998))), `+
+			`[CAST('last' AS Dynamic)]) `+
+			`FROM numbers(8)`,
+	); err != nil {
+		t.Fatalf("insert chronological memory fixture: %v", err)
+	}
+
+	candidates, candidateArgs, runtimeValidated := chronologicalCandidatesSQL(
+		fieldState{
+			valueSQL:       `CAST("values" AS Dynamic)`,
+			dynamicTypeSQL: `'Array(Dynamic)'`,
+			existsSQL:      "1",
+			kind:           fieldKindDynamic,
+		},
+		true,
+	)
+	if len(candidateArgs) != 0 || !runtimeValidated {
+		t.Fatalf(
+			"chronological memory candidate metadata = %#v/%t, want no args/runtime validation",
+			candidateArgs,
+			runtimeValidated,
+		)
+	}
+	var firstBytes, lastBytes, eligible, invalid uint64
+	if err := connection.QueryRow(
+		ctx,
+		`SELECT sum(length(tupleElement("__os_candidates", 1))), `+
+			`sum(length(tupleElement("__os_candidates", 2))), `+
+			`sum(tupleElement("__os_candidates", 3)), `+
+			`sum(tupleElement("__os_candidates", 4)) FROM (`+
+			`SELECT `+candidates+` AS "__os_candidates" FROM `+table+`) `+
+			`SETTINGS max_threads = 1, use_query_cache = 0, max_memory_usage = 1073741824`,
+	).Scan(&firstBytes, &lastBytes, &eligible, &invalid); err != nil {
+		t.Fatalf("execute high-cardinality chronological candidates: %v", err)
+	}
+	if firstBytes != 40 || lastBytes != 32 || eligible != 2_000_000 || invalid != 0 {
+		t.Fatalf(
+			"high-cardinality chronological candidates = %d/%d/%d/%d, want 40/32/2000000/0",
+			firstBytes,
+			lastBytes,
+			eligible,
+			invalid,
+		)
 	}
 }
 

@@ -538,6 +538,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				aggregateSQL += " GROUP BY " + strings.Join(groups, ", ")
 			}
 			relation = relation.selectFrom(aggregateSQL, operator.Range)
+			args = append(args, aggregateArgs...)
 			if len(nextState.postAggregateChronological) > 0 {
 				var additionalAliases int
 				var barrier *compiledChronologicalBarrier
@@ -549,6 +550,8 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				)
 				aliasSequence += additionalAliases
 				if barrier != nil {
+					barrier.args = append([]any(nil), args...)
+					args = nil
 					nextState.chronologicalBarriers = append(
 						nextState.chronologicalBarriers,
 						*barrier,
@@ -608,7 +611,6 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				aliasSequence += additionalAliases
 				nextState.postAggregateOrderedStrings = nil
 			}
-			args = append(args, aggregateArgs...)
 			state = nextState
 		case *plan.Timechart:
 			if !permitTerminalWideOperators {
@@ -620,6 +622,16 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			compiled, compileErr := compileTimechart(relation, state, args, operator, query.DynamicOutput, alias)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
+			}
+			if len(state.chronologicalBarriers) > 0 {
+				compiled, compileErr = wrapCompiledChronologicalValidation(
+					compiled,
+					state,
+					aliasSequence,
+				)
+				if compileErr != nil {
+					return CompiledQuery{}, compileErr
+				}
 			}
 			if compileErr = validateCompiledRelationalDepth(compiled); compileErr != nil {
 				return CompiledQuery{}, compileErr
@@ -642,6 +654,16 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			compiled, compileErr := compileChart(relation, state, args, operator, query.DynamicOutput, alias)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
+			}
+			if len(state.chronologicalBarriers) > 0 {
+				compiled, compileErr = wrapCompiledChronologicalValidation(
+					compiled,
+					state,
+					aliasSequence,
+				)
+				if compileErr != nil {
+					return CompiledQuery{}, compileErr
+				}
 			}
 			if compileErr = validateCompiledRelationalDepth(compiled); compileErr != nil {
 				return CompiledQuery{}, compileErr
@@ -854,33 +876,127 @@ func finalizeChronologicallyValidatedQuery(
 	sparseFields bool,
 	aliasSequence int,
 ) (CompiledQuery, error) {
-	definitions := make([]string, 0, len(state.chronologicalBarriers)+1)
-	for _, barrier := range state.chronologicalBarriers {
-		definitions = append(
-			definitions,
-			barrier.name+" AS MATERIALIZED ("+barrier.sql+")",
-		)
-	}
-
-	finalInput := quoteIdentifier(fmt.Sprintf("__os_chronological_final_input_%d", aliasSequence+1))
-	definitions = append(definitions, finalInput+" AS MATERIALIZED ("+relation.sql+")")
-
-	aliasSequence++
-	mainAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
-	main := "SELECT " + strings.Join(projection, ", ") + " FROM " + finalInput + " AS " + mainAlias
+	order := ""
 	finalOrder := defaultCompiledOrder(state)
 	if len(finalOrder) > 0 {
-		order, orderErr := compileMaterializedOrder(finalOrder, false)
+		compiledOrder, orderErr := compileMaterializedOrder(finalOrder, false)
 		if orderErr != nil {
 			return CompiledQuery{}, orderErr
 		}
-		main += " ORDER BY " + order
+		order = compiledOrder
 	}
 
 	resultColumns := append([]string(nil), outputFields...)
 	if sparseFields {
 		resultColumns = append(resultColumns, SparseEventFieldNamesColumn)
 	}
+	return wrapChronologicalValidation(
+		relation.sql,
+		relation.depth,
+		relation.ownerRange,
+		state.chronologicalBarriers,
+		projection,
+		resultColumns,
+		order,
+		CompiledQuery{
+			Args:         args,
+			OutputFields: outputFields,
+			SparseFields: sparseFields,
+		},
+		aliasSequence,
+	)
+}
+
+func wrapCompiledChronologicalValidation(
+	compiled CompiledQuery,
+	state compileState,
+	aliasSequence int,
+) (CompiledQuery, error) {
+	var resultColumns []string
+	switch {
+	case compiled.Chart != nil && compiled.Timechart == nil:
+		resultColumns = []string{
+			ChartOrdinalColumn,
+			ChartRowColumn,
+			ChartNamesColumn,
+			ChartCountsColumn,
+			ChartInvalidColumn,
+		}
+	case compiled.Timechart != nil && compiled.Chart == nil:
+		resultColumns = []string{
+			TimechartOrdinalColumn,
+			TimechartNamesColumn,
+			TimechartCountsColumn,
+			TimechartInvalidColumn,
+		}
+	default:
+		return CompiledQuery{}, errors.New(
+			"compile ClickHouse query: chronological terminal output contract is invalid",
+		)
+	}
+	projection := make([]string, 0, len(resultColumns))
+	for _, name := range resultColumns {
+		projection = append(projection, quoteIdentifier(name))
+	}
+	return wrapChronologicalValidation(
+		compiled.SQL,
+		compiled.relationalDepth,
+		compiled.relationalDepthRange,
+		state.chronologicalBarriers,
+		projection,
+		resultColumns,
+		quoteIdentifier(resultColumns[0])+" ASC",
+		compiled,
+		aliasSequence,
+	)
+}
+
+func wrapChronologicalValidation(
+	inputSQL string,
+	inputDepth int,
+	ownerRange spl.Range,
+	barriers []compiledChronologicalBarrier,
+	projection []string,
+	resultColumns []string,
+	order string,
+	compiled CompiledQuery,
+	aliasSequence int,
+) (CompiledQuery, error) {
+	if len(barriers) == 0 || inputSQL == "" || inputDepth <= 0 ||
+		len(projection) == 0 || len(resultColumns) != len(projection) {
+		return CompiledQuery{}, errors.New(
+			"compile ClickHouse query: chronological validation envelope is invalid",
+		)
+	}
+	definitions := make([]string, 0, len(barriers)+2)
+	barrierArgs := make([]any, 0)
+	for _, barrier := range barriers {
+		definitions = append(
+			definitions,
+			barrier.name+" AS MATERIALIZED ("+barrier.sql+")",
+		)
+		barrierArgs = append(barrierArgs, barrier.args...)
+	}
+
+	finalInput := quoteIdentifier(fmt.Sprintf("__os_chronological_final_input_%d", aliasSequence+1))
+	definitions = append(definitions, finalInput+" AS MATERIALIZED ("+inputSQL+")")
+	validationName := quoteIdentifier(fmt.Sprintf(
+		"__os_chronological_validation_%d",
+		aliasSequence+1,
+	))
+
+	aliasSequence++
+	mainAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+	aliasSequence++
+	mainValidationAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+	main := "SELECT " + strings.Join(projection, ", ") + " FROM " + finalInput +
+		" AS " + mainAlias + " CROSS JOIN " + validationName + " AS " +
+		mainValidationAlias + " WHERE " + mainValidationAlias + "." +
+		quoteIdentifier("__os_chronological_valid") + " = 0"
+	if order != "" {
+		main += " ORDER BY " + order
+	}
+
 	dummyProjection := make([]string, 0, len(resultColumns))
 	for _, name := range resultColumns {
 		column := quoteIdentifier(name)
@@ -896,9 +1012,9 @@ func finalizeChronologicallyValidatedQuery(
 	dummy := "SELECT " + strings.Join(dummyProjection, ", ") + " FROM (" +
 		schemaSource + ") AS " + schemaAlias
 
-	validationRows := make([]string, 0, len(state.chronologicalBarriers))
+	validationRows := make([]string, 0, len(barriers))
 	maximumBarrierDepth := 0
-	for _, barrier := range state.chronologicalBarriers {
+	for _, barrier := range barriers {
 		invalid := make([]string, 0, len(barrier.validationColumns))
 		for _, column := range barrier.validationColumns {
 			invalid = append(invalid, column+" != 0")
@@ -913,41 +1029,34 @@ func finalizeChronologicallyValidatedQuery(
 		}
 	}
 	validationUnion := strings.Join(validationRows, " UNION ALL ")
-	validation := "SELECT maxOrDefault(" + quoteIdentifier("__os_chronological_invalid") +
-		") AS " + quoteIdentifier("__os_chronological_any_invalid") +
+	validationRowsDepth := relationalNodeDepth(maximumBarrierDepth)
+	validationDepth := relationalNodeDepth(validationRowsDepth)
+	validation := "SELECT if(maxOrDefault(" + quoteIdentifier("__os_chronological_invalid") +
+		") != 0, throwIf(toUInt8(1), '" + UnsupportedStatsMeasureValueMarker +
+		"'), toUInt8(0)) AS " + quoteIdentifier("__os_chronological_valid") +
 		" FROM (" + validationUnion + ")"
+	definitions = append(definitions, validationName+" AS MATERIALIZED ("+validation+")")
 
 	aliasSequence++
 	dummyAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 	aliasSequence++
 	validationAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 	validationBranch := "SELECT " + dummyAlias + ".* FROM (" + dummy + ") AS " +
-		dummyAlias + " CROSS JOIN (" + validation + ") AS " + validationAlias +
-		" WHERE if(" + validationAlias + "." +
-		quoteIdentifier("__os_chronological_any_invalid") +
-		" != 0, throwIf(toUInt8(1), '" + UnsupportedStatsMeasureValueMarker +
-		"'), toUInt8(0)) != 0"
+		dummyAlias + " CROSS JOIN " + validationName + " AS " + validationAlias +
+		" WHERE " + validationAlias + "." +
+		quoteIdentifier("__os_chronological_valid") + " != 0"
 
 	sql := "WITH " + strings.Join(definitions, ", ") + " " + main + " UNION ALL " +
 		validationBranch + materializedCTESettingsSQL
 
-	mainDepth := relationalNodeDepth(relation.depth)
-	schemaSourceDepth := relationalNodeDepth(relation.depth)
+	mainDepth := relationalNodeDepth(inputDepth, validationDepth)
+	schemaSourceDepth := relationalNodeDepth(inputDepth)
 	dummyDepth := relationalNodeDepth(schemaSourceDepth)
-	validationRowsDepth := relationalNodeDepth(maximumBarrierDepth)
-	validationDepth := relationalNodeDepth(validationRowsDepth)
 	validationBranchDepth := relationalNodeDepth(dummyDepth, validationDepth)
 	resultDepth := relationalNodeDepth(mainDepth, validationBranchDepth)
-	return withCompiledRelationalDepth(
-		CompiledQuery{
-			SQL:          sql,
-			Args:         args,
-			OutputFields: outputFields,
-			SparseFields: sparseFields,
-		},
-		resultDepth,
-		relation.ownerRange,
-	), nil
+	compiled.SQL = sql
+	compiled.Args = append(barrierArgs, compiled.Args...)
+	return withCompiledRelationalDepth(compiled, resultDepth, ownerRange), nil
 }
 
 func prependArguments(prefix, existing []any) []any {
@@ -2845,16 +2954,17 @@ type compiledChronologicalMeasure struct {
 	outputColumn     string
 }
 
-// compiledChronologicalBarrier names one materialized aggregate result whose
-// hidden validation columns must be checked by the outermost ordinary query.
-// Keeping the check outside every downstream SPL operator prevents ClickHouse
-// from proving an intervening filter empty and pruning the validation subtree.
+// compiledChronologicalBarrier owns one materialized aggregate result, its
+// bind arguments, and the hidden columns checked by the final validation
+// envelope. Keeping the check outside every downstream SPL operator prevents
+// ClickHouse from proving an intervening filter empty and pruning the
+// validation subtree.
 type compiledChronologicalBarrier struct {
 	name              string
 	sql               string
+	args              []any
 	validationColumns []string
 	depth             int
-	ownerRange        spl.Range
 }
 
 type compiledScalarExtremaMeasure struct {
@@ -5352,11 +5462,9 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 	}
 	scalarExtremaResults := make(map[scalarExtremaResultKey]scalarExtremaResult)
 	type chronologicalInput struct {
-		valueAlias      string
-		valuesAlias     string
-		invalidAlias    string
+		candidatesAlias string
 		validationAlias string
-		multivalue      bool
+		multiple        bool
 	}
 	type chronologicalResultKey struct {
 		input    string
@@ -5488,59 +5596,28 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		}
 		ordinal := len(chronologicalInputs)
 		compiled := chronologicalInput{}
-		if exists && (input.kind == fieldKindDynamic || input.kind == fieldKindStringArray) {
-			valuesSQL, valuesArgs := stringArrayInputSQL(input)
-			compiled.valuesAlias = quoteIdentifier(fmt.Sprintf(
-				"__os_chronological_values_%d",
+		candidatesSQL, candidateArgs, runtimeValidated := chronologicalCandidatesSQL(input, exists)
+		compiled.candidatesAlias = quoteIdentifier(fmt.Sprintf(
+			"__os_chronological_candidates_%d",
+			ordinal,
+		))
+		compiled.multiple = exists &&
+			(input.kind == fieldKindDynamic || input.kind == fieldKindStringArray)
+		next.preAggregateColumns = append(
+			next.preAggregateColumns,
+			candidatesSQL+" AS "+compiled.candidatesAlias,
+		)
+		next.preAggregateArgs = append(next.preAggregateArgs, candidateArgs...)
+		if runtimeValidated {
+			compiled.validationAlias = quoteIdentifier(fmt.Sprintf(
+				"__os_stats_chronological_any_unsupported_%d",
 				ordinal,
 			))
-			compiled.multivalue = true
-			next.preAggregateColumns = append(
-				next.preAggregateColumns,
-				valuesSQL+" AS "+compiled.valuesAlias,
+			projection = append(
+				projection,
+				"max(toUInt8(tupleElement("+compiled.candidatesAlias+", 4))) AS "+
+					compiled.validationAlias,
 			)
-			next.preAggregateArgs = append(next.preAggregateArgs, valuesArgs...)
-			if input.kind == fieldKindDynamic {
-				invalidSQL, invalidArgs := statsStringInputInvalidSQL(input)
-				compiled.invalidAlias = quoteIdentifier(fmt.Sprintf(
-					"__os_chronological_invalid_%d",
-					ordinal,
-				))
-				compiled.validationAlias = quoteIdentifier(fmt.Sprintf(
-					"__os_stats_chronological_any_unsupported_%d",
-					ordinal,
-				))
-				next.preAggregateColumns = append(
-					next.preAggregateColumns,
-					invalidSQL+" AS "+compiled.invalidAlias,
-				)
-				next.preAggregateArgs = append(next.preAggregateArgs, invalidArgs...)
-				projection = append(
-					projection,
-					"max(toUInt8("+compiled.invalidAlias+")) AS "+compiled.validationAlias,
-				)
-			}
-		} else {
-			valueSQL := "CAST(NULL AS Nullable(String))"
-			var valueArgs []any
-			if exists {
-				valueSQL = statsScalarStringOrNullSQL(input)
-				existsSQL := input.existsSQL
-				if existsSQL == "" {
-					existsSQL = "1"
-				}
-				valueSQL = "if(" + existsSQL + ", " + valueSQL + ", CAST(NULL AS Nullable(String)))"
-				valueArgs = append(valueArgs, input.existsArgs...)
-			}
-			compiled.valueAlias = quoteIdentifier(fmt.Sprintf(
-				"__os_chronological_value_%d",
-				ordinal,
-			))
-			next.preAggregateColumns = append(
-				next.preAggregateColumns,
-				valueSQL+" AS "+compiled.valueAlias,
-			)
-			next.preAggregateArgs = append(next.preAggregateArgs, valueArgs...)
 		}
 		chronologicalInputs[ref.Name] = compiled
 		return compiled, nil
@@ -5827,19 +5904,15 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 				}
 				chronologicalResults[resultKey] = result
 				function := "argMinOrNullIf"
-				argument := "ifNull(" + input.valueAlias + ", CAST('' AS String))"
+				argument := "tupleElement(" + input.candidatesAlias + ", 1)"
 				key := "tuple(" + rowKey + ", toUInt64(1))"
-				condition := "isNotNull(" + input.valueAlias + ")"
-				if input.multivalue {
-					argument = "arrayElement(" + input.valuesAlias + ", 1)"
-					condition = "notEmpty(" + input.valuesAlias + ")"
-				}
+				count := "tupleElement(" + input.candidatesAlias + ", 3)"
+				condition := count + " != 0"
 				if measure.Function == plan.AggregateFunctionLatest {
 					function = "argMaxOrNullIf"
-					if input.multivalue {
-						argument = "arrayElement(" + input.valuesAlias + ", -1)"
-						key = "tuple(" + rowKey + ", toUInt64(length(" +
-							input.valuesAlias + ")))"
+					argument = "tupleElement(" + input.candidatesAlias + ", 2)"
+					if input.multiple {
+						key = "tuple(" + rowKey + ", toUInt64(" + count + "))"
 					}
 				}
 				aggregateSQL := function + "(" + argument + ", " + key + ", " +
@@ -6160,13 +6233,50 @@ func stringArrayInputSQL(field fieldState) (string, []any) {
 	return "if(" + field.existsSQL + ", " + value + ", " + empty + ")", append([]any(nil), field.existsArgs...)
 }
 
-func statsStringInputInvalidSQL(field fieldState) (string, []any) {
+// chronologicalCandidatesSQL normalizes one event field to a constant-size
+// tuple: first eligible lexical value, last eligible lexical value, eligible
+// member count, and an unsupported-container bit. Bounded selector passes over
+// Dynamic multivalues avoid retaining either an Array ordering key or a
+// normalized copy of every member.
+func chronologicalCandidatesSQL(field fieldState, exists bool) (string, []any, bool) {
+	empty := "tuple(CAST('' AS String), CAST('' AS String), toUInt64(0), toUInt8(0))"
+	if !exists {
+		return empty, nil, false
+	}
+
+	if field.kind == fieldKindStringArray {
+		values := field.valueSQL
+		var args []any
+		if field.existsSQL != "" && field.existsSQL != "1" {
+			values = "if(" + field.existsSQL + ", " + values + ", CAST([], 'Array(String)'))"
+			args = append(args, field.existsArgs...)
+		}
+		count := "toUInt64(length(" + values + "))"
+		return "tuple(" +
+				"if(" + count + " != 0, arrayElement(" + values + ", 1), CAST('' AS String)), " +
+				"if(" + count + " != 0, arrayElement(" + values + ", -1), CAST('' AS String)), " +
+				count + ", toUInt8(0))",
+			args,
+			false
+	}
+
 	if field.kind != fieldKindDynamic {
-		return "toUInt8(0)", nil
+		value := statsScalarStringOrNullSQL(field)
+		existsSQL := field.existsSQL
+		if existsSQL == "" {
+			existsSQL = "1"
+		}
+		value = "if(" + existsSQL + ", " + value + ", CAST(NULL AS Nullable(String)))"
+		return "tuple(" +
+				"ifNull(" + value + ", CAST('' AS String)), " +
+				"ifNull(" + value + ", CAST('' AS String)), " +
+				"toUInt64(isNotNull(" + value + ")), toUInt8(0))",
+			append([]any(nil), field.existsArgs...),
+			false
 	}
 
 	typeSQL := dynamicTypeExpression(field)
-	scalarSupported, _ := statsByScalarExpressions(field)
+	scalarSupported, scalarLexical := statsByScalarExpressions(field)
 	element := fieldState{
 		valueSQL:       "element",
 		dynamicTypeSQL: "dynamicType(element)",
@@ -6174,7 +6284,34 @@ func statsStringInputInvalidSQL(field fieldState) (string, []any) {
 	}
 	elementSupported, _ := statsByScalarExpressions(element)
 	elementType := dynamicTypeExpression(element)
-	arrayValues := "dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)')"
+	elementEligible := "(" + elementType + " != 'None' AND " + elementSupported + ")"
+	elementInvalid := "(" + elementType + " != 'None' AND NOT (" + elementSupported + "))"
+	values := "dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)')"
+	first := "arrayFirst(element -> " + elementEligible + ", " + values + ")"
+	last := "arrayLast(element -> " + elementEligible + ", " + values + ")"
+	count := "toUInt64(arrayCount(element -> " + elementEligible + ", " + values + "))"
+	memberInvalid := "toUInt8(arrayExists(element -> " + elementInvalid + ", " + values + "))"
+	firstElement := fieldState{
+		valueSQL:       "first_element",
+		dynamicTypeSQL: "dynamicType(first_element)",
+		kind:           fieldKindDynamic,
+	}
+	lastElement := fieldState{
+		valueSQL:       "last_element",
+		dynamicTypeSQL: "dynamicType(last_element)",
+		kind:           fieldKindDynamic,
+	}
+	_, firstLexical := statsByScalarExpressions(firstElement)
+	_, lastLexical := statsByScalarExpressions(lastElement)
+	selected := "arrayElement(arrayMap(" +
+		"(first_element, last_element, eligible_count, member_invalid) -> tuple(" +
+		"if(eligible_count != 0, " + firstLexical + ", CAST('' AS String)), " +
+		"if(eligible_count != 0, " + lastLexical + ", CAST('' AS String)), " +
+		"eligible_count, member_invalid), " +
+		"[" + first + "], [" + last + "], [" + count + "], [" + memberInvalid + "]), 1)"
+	scalar := "tuple(" + scalarLexical + ", " + scalarLexical +
+		", toUInt64(1), toUInt8(0))"
+	invalid := "tuple(CAST('' AS String), CAST('' AS String), toUInt64(0), toUInt8(1))"
 
 	existsSQL := field.existsSQL
 	if existsSQL == "" {
@@ -6186,18 +6323,16 @@ func statsStringInputInvalidSQL(field fieldState) (string, []any) {
 		descendantSQL = field.descendantSQL
 		args = append(args, field.descendantArgs...)
 	}
-
-	topLevelInvalid := "(field_present != 0 AND " + typeSQL +
-		" != 'None' AND " + typeSQL + " != 'Array(Dynamic)' AND NOT (" +
-		scalarSupported + "))"
-	memberInvalid := "(field_present != 0 AND " + typeSQL +
-		" = 'Array(Dynamic)' AND arrayExists(element -> " + elementType +
-		" != 'None' AND NOT (" + elementSupported + "), " + arrayValues + "))"
-	invalid := "(" + topLevelInvalid + " OR " + memberInvalid +
-		" OR descendant_present != 0)"
-	return "arrayElement(arrayMap((field_present, descendant_present) -> toUInt8(" +
-		invalid + "), [toUInt8(" + existsSQL + ")], [toUInt8(" +
-		descendantSQL + ")]), 1)", args
+	value := "multiIf(" +
+		"descendant_present != 0, " + invalid + ", " +
+		"field_present = 0 OR " + typeSQL + " = 'None', " + empty + ", " +
+		typeSQL + " = 'Array(Dynamic)', " + selected + ", " +
+		scalarSupported + ", " + scalar + ", " +
+		invalid + ")"
+	return "arrayElement(arrayMap((field_present, descendant_present) -> " + value +
+			", [toUInt8(" + existsSQL + ")], [toUInt8(" + descendantSQL + ")]), 1)",
+		args,
+		true
 }
 
 func statsScalarStringInputSQL(field fieldState) (string, []any) {
@@ -6390,7 +6525,6 @@ func compileChronologicalResults(
 		sql:               relation.sql,
 		validationColumns: validations,
 		depth:             relation.depth,
-		ownerRange:        ownerRange,
 	}
 }
 
