@@ -124,7 +124,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		case *spl.EvalCommand:
 			assignments := make([]ExtendAssignment, 0, len(command.Assignments))
 			for _, assignment := range command.Assignments {
-				if splScalarContainsBooleanFunction(assignment.Expression) {
+				if splScalarMayReturnBooleanFunction(assignment.Expression) {
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
 						Message: "search-mode eval cannot directly assign a Boolean result",
@@ -1378,8 +1378,20 @@ func convertExpression(expression spl.Expr) (Expression, error) {
 }
 
 func convertWhereExpression(expression spl.WhereExpr) (Expression, error) {
+	if expression == nil {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_WHERE_EXPRESSION",
+			Message: "where expression is missing",
+		}
+	}
 	switch expression := expression.(type) {
 	case *spl.WhereBoolExpr:
+		if expression == nil {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_WHERE_EXPRESSION",
+				Message: "Boolean where expression is missing",
+			}
+		}
 		left, err := convertWhereExpression(expression.Left)
 		if err != nil {
 			return nil, err
@@ -1388,18 +1400,39 @@ func convertWhereExpression(expression spl.WhereExpr) (Expression, error) {
 		if err != nil {
 			return nil, err
 		}
-		op := BooleanOpAnd
-		if expression.Op == spl.BoolOpOr {
+		var op BooleanOp
+		switch expression.Op {
+		case spl.BoolOpAnd:
+			op = BooleanOpAnd
+		case spl.BoolOpOr:
 			op = BooleanOpOr
+		default:
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_WHERE_EXPRESSION",
+				Message: "where Boolean expression has an invalid operator",
+				Range:   expression.Range,
+			}
 		}
 		return &BooleanExpression{Op: op, Left: left, Right: right, Range: expression.Range}, nil
 	case *spl.WhereNotExpr:
+		if expression == nil {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_WHERE_EXPRESSION",
+				Message: "negated where expression is missing",
+			}
+		}
 		operand, err := convertWhereExpression(expression.Operand)
 		if err != nil {
 			return nil, err
 		}
 		return &NotExpression{Operand: operand, Range: expression.Range}, nil
 	case *spl.WhereComparisonExpr:
+		if expression == nil {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_WHERE_EXPRESSION",
+				Message: "where comparison is missing",
+			}
+		}
 		left, err := convertScalarExpression(expression.Left)
 		if err != nil {
 			return nil, err
@@ -1415,11 +1448,17 @@ func convertWhereExpression(expression spl.WhereExpr) (Expression, error) {
 			Range: expression.Range,
 		}, nil
 	case *spl.WhereScalarPredicateExpr:
+		if expression == nil {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_WHERE_EXPRESSION",
+				Message: "where scalar predicate is missing",
+			}
+		}
 		value, err := convertScalarExpression(expression.Value)
 		if err != nil {
 			return nil, err
 		}
-		if !scalarFunctionReturnsBoolean(value) {
+		if !scalarExpressionCanBeDirectPredicate(value) {
 			return nil, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_WHERE_EXPRESSION",
 				Message: "where scalar predicate must return Boolean",
@@ -1433,6 +1472,12 @@ func convertWhereExpression(expression spl.WhereExpr) (Expression, error) {
 }
 
 func convertScalarExpression(expression spl.ScalarExpr) (ScalarExpression, error) {
+	if expression == nil {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+			Message: "scalar expression is missing",
+		}
+	}
 	switch expression := expression.(type) {
 	case *spl.ScalarFieldExpr:
 		if expression == nil {
@@ -1468,7 +1513,7 @@ func convertScalarExpression(expression spl.ScalarExpr) (ScalarExpression, error
 		if expression.Function == spl.ScalarFunctionToNumber ||
 			expression.Function == spl.ScalarFunctionReplace {
 			for _, argument := range expression.Arguments {
-				if splScalarContainsBooleanFunction(argument) {
+				if splScalarMayReturnBooleanFunction(argument) {
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
 						Message: "search-mode scalar functions cannot consume a Boolean result",
@@ -1499,31 +1544,79 @@ func convertScalarExpression(expression spl.ScalarExpr) (ScalarExpression, error
 			return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EVAL_FUNCTION", Message: "unsupported scalar function", Range: expression.Range}
 		}
 		return &ScalarCallExpression{Function: function, Arguments: arguments, Range: expression.Range}, nil
+	case *spl.ScalarIfExpr:
+		if expression == nil {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "if expression is missing",
+			}
+		}
+		condition, err := convertWhereExpression(expression.Condition)
+		if err != nil {
+			return nil, err
+		}
+		trueValue, err := convertScalarExpression(expression.True)
+		if err != nil {
+			return nil, err
+		}
+		falseValue, err := convertScalarExpression(expression.False)
+		if err != nil {
+			return nil, err
+		}
+		return &ScalarIfExpression{
+			Condition: condition,
+			True:      trueValue,
+			False:     falseValue,
+			Range:     expression.Range,
+		}, nil
 	default:
 		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EVAL_EXPRESSION", Message: fmt.Sprintf("unsupported scalar expression type %T", expression), Range: expression.SourceRange()}
 	}
 }
 
-func splScalarContainsBooleanFunction(expression spl.ScalarExpr) bool {
-	call, ok := expression.(*spl.ScalarCallExpr)
-	if !ok || call == nil {
+func splScalarMayReturnBooleanFunction(expression spl.ScalarExpr) bool {
+	switch expression := expression.(type) {
+	case *spl.ScalarCallExpr:
+		return expression != nil &&
+			(expression.Function == spl.ScalarFunctionIsNull ||
+				expression.Function == spl.ScalarFunctionIsNotNull)
+	case *spl.ScalarIfExpr:
+		return expression != nil &&
+			(splScalarMayReturnBooleanFunction(expression.True) ||
+				splScalarMayReturnBooleanFunction(expression.False))
+	default:
 		return false
 	}
-	if call.Function == spl.ScalarFunctionIsNull || call.Function == spl.ScalarFunctionIsNotNull {
-		return true
-	}
-	for _, argument := range call.Arguments {
-		if splScalarContainsBooleanFunction(argument) {
-			return true
-		}
-	}
-	return false
 }
 
 func scalarFunctionReturnsBoolean(expression ScalarExpression) bool {
-	call, ok := expression.(*ScalarCallExpression)
-	return ok && call != nil &&
-		(call.Function == ScalarFunctionIsNull || call.Function == ScalarFunctionIsNotNull)
+	switch expression := expression.(type) {
+	case *ScalarCallExpression:
+		return expression != nil &&
+			(expression.Function == ScalarFunctionIsNull ||
+				expression.Function == ScalarFunctionIsNotNull)
+	case *ScalarLiteralExpression:
+		return expression != nil && expression.Value.Kind == ValueKindBool
+	case *ScalarIfExpression:
+		return expression != nil &&
+			scalarFunctionReturnsBoolean(expression.True) &&
+			scalarFunctionReturnsBoolean(expression.False)
+	default:
+		return false
+	}
+}
+
+func scalarExpressionCanBeDirectPredicate(expression ScalarExpression) bool {
+	switch expression := expression.(type) {
+	case *ScalarCallExpression:
+		return expression != nil &&
+			(expression.Function == ScalarFunctionIsNull ||
+				expression.Function == ScalarFunctionIsNotNull)
+	case *ScalarIfExpression:
+		return expression != nil && scalarFunctionReturnsBoolean(expression)
+	default:
+		return false
+	}
 }
 
 func convertComparisonOp(op spl.CompareOp) ComparisonOp {

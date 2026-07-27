@@ -225,6 +225,19 @@ type ScalarCallExpr struct {
 func (*ScalarCallExpr) scalarExpression()    {}
 func (e *ScalarCallExpr) SourceRange() Range { return e.Range }
 
+// ScalarIfExpr selects one of two scalar values with an eval-language Boolean
+// condition. Keeping the condition in the predicate AST prevents arbitrary
+// scalar truthiness while allowing the same NOT/AND/OR precedence as where.
+type ScalarIfExpr struct {
+	Condition WhereExpr
+	True      ScalarExpr
+	False     ScalarExpr
+	Range     Range
+}
+
+func (*ScalarIfExpr) scalarExpression()    {}
+func (e *ScalarIfExpr) SourceRange() Range { return e.Range }
+
 // WhereExpr is a Boolean eval expression accepted by where.
 type WhereExpr interface {
 	Node

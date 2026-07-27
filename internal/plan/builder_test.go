@@ -929,6 +929,137 @@ func TestBuildWhereNullPredicatesPreserveTypedScalarCalls(t *testing.T) {
 	}
 }
 
+func TestBuildEvalIfPreservesTypedConditionAndBranches(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(
+			t,
+			`index=gradethis | eval label=if(status>=500 AND isnotnull(host), replace(message, "error", "ERROR"), "ok")`,
+		),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	extend, ok := logical.Operators[len(logical.Operators)-1].(*Extend)
+	if !ok || len(extend.Assignments) != 1 {
+		t.Fatalf("last operator = %#v, want one-assignment Extend", logical.Operators[len(logical.Operators)-1])
+	}
+	conditional, ok := extend.Assignments[0].Expression.(*ScalarIfExpression)
+	if !ok {
+		t.Fatalf("assignment expression = %T, want *ScalarIfExpression", extend.Assignments[0].Expression)
+	}
+	condition, ok := conditional.Condition.(*BooleanExpression)
+	if !ok || condition.Op != BooleanOpAnd {
+		t.Fatalf("if condition = %#v, want AND", conditional.Condition)
+	}
+	comparison := condition.Left.(*EvalComparisonExpression)
+	if comparison.Left.(*ScalarFieldExpression).Field.Name != "status" ||
+		comparison.Op != ComparisonOpGreaterEqual ||
+		comparison.Right.(*ScalarLiteralExpression).Value.Int64 != 500 {
+		t.Fatalf("if comparison = %#v", comparison)
+	}
+	predicate := condition.Right.(*ScalarPredicateExpression)
+	predicateCall := predicate.Value.(*ScalarCallExpression)
+	if predicateCall.Function != ScalarFunctionIsNotNull ||
+		predicateCall.Arguments[0].(*ScalarFieldExpression).Field.Name != "host" {
+		t.Fatalf("if predicate = %#v", predicate)
+	}
+	trueValue := conditional.True.(*ScalarCallExpression)
+	if trueValue.Function != ScalarFunctionReplace ||
+		trueValue.Arguments[0].(*ScalarFieldExpression).Field.Name != "message" {
+		t.Fatalf("if true branch = %#v", conditional.True)
+	}
+	if conditional.False.(*ScalarLiteralExpression).Value.String != "ok" {
+		t.Fatalf("if false branch = %#v", conditional.False)
+	}
+}
+
+func TestBuildEvalIfRejectsForgedBooleanConsumers(t *testing.T) {
+	t.Parallel()
+
+	query := mustParse(t, `index=gradethis | eval value=tonumber(if(isnull(optional), "1", "0"))`)
+	assignment := query.Commands[0].(*spl.EvalCommand).Assignments[0]
+	toNumber := assignment.Expression.(*spl.ScalarCallExpr)
+	conditional := toNumber.Arguments[0].(*spl.ScalarIfExpr)
+	conditional.True = &spl.ScalarCallExpr{
+		Function:  spl.ScalarFunctionIsNull,
+		Arguments: []spl.ScalarExpr{&spl.ScalarFieldExpr{Field: "left"}},
+	}
+	_, err := Build(query, testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_EVAL_EXPRESSION")
+}
+
+func TestBuildEvalIfRejectsForgedMissingNodes(t *testing.T) {
+	t.Parallel()
+
+	var nilComparison *spl.WhereComparisonExpr
+	var nilField *spl.ScalarFieldExpr
+	tests := []struct {
+		name       string
+		condition  spl.WhereExpr
+		trueValue  spl.ScalarExpr
+		falseValue spl.ScalarExpr
+		code       string
+	}{
+		{
+			name:       "nil condition",
+			trueValue:  &spl.ScalarLiteralExpr{Value: spl.Literal{Kind: spl.LiteralKindString, Text: "yes"}},
+			falseValue: &spl.ScalarLiteralExpr{Value: spl.Literal{Kind: spl.LiteralKindString, Text: "no"}},
+			code:       "SPL_UNSUPPORTED_WHERE_EXPRESSION",
+		},
+		{
+			name:       "typed nil condition",
+			condition:  nilComparison,
+			trueValue:  &spl.ScalarLiteralExpr{Value: spl.Literal{Kind: spl.LiteralKindString, Text: "yes"}},
+			falseValue: &spl.ScalarLiteralExpr{Value: spl.Literal{Kind: spl.LiteralKindString, Text: "no"}},
+			code:       "SPL_UNSUPPORTED_WHERE_EXPRESSION",
+		},
+		{
+			name: "typed nil true branch",
+			condition: &spl.WhereScalarPredicateExpr{Value: &spl.ScalarCallExpr{
+				Function:  spl.ScalarFunctionIsNull,
+				Arguments: []spl.ScalarExpr{&spl.ScalarFieldExpr{Field: "optional"}},
+			}},
+			trueValue:  nilField,
+			falseValue: &spl.ScalarLiteralExpr{Value: spl.Literal{Kind: spl.LiteralKindString, Text: "no"}},
+			code:       "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+		},
+		{
+			name: "nil false branch",
+			condition: &spl.WhereScalarPredicateExpr{Value: &spl.ScalarCallExpr{
+				Function:  spl.ScalarFunctionIsNull,
+				Arguments: []spl.ScalarExpr{&spl.ScalarFieldExpr{Field: "optional"}},
+			}},
+			trueValue: &spl.ScalarLiteralExpr{Value: spl.Literal{Kind: spl.LiteralKindString, Text: "yes"}},
+			code:      "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			query := mustParse(t, `index=gradethis | eval value=if(isnull(optional), "yes", "no")`)
+			query.Commands[0].(*spl.EvalCommand).Assignments[0].Expression = &spl.ScalarIfExpr{
+				Condition: test.condition,
+				True:      test.trueValue,
+				False:     test.falseValue,
+			}
+			_, err := Build(query, testScope([]string{"gradethis"}, nil))
+			assertDiagnosticCode(t, err, test.code)
+		})
+	}
+}
+
+func TestBuildEvalIfRejectsForgedInvalidBooleanOperator(t *testing.T) {
+	t.Parallel()
+
+	query := mustParse(t, `index=gradethis | eval value=if(left=1 AND right=2, "yes", "no")`)
+	conditional := query.Commands[0].(*spl.EvalCommand).Assignments[0].Expression.(*spl.ScalarIfExpr)
+	conditional.Condition.(*spl.WhereBoolExpr).Op = spl.BoolOpInvalid
+	_, err := Build(query, testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_WHERE_EXPRESSION")
+}
+
 func TestBuildRejectsForgedBooleanScalarConsumer(t *testing.T) {
 	t.Parallel()
 

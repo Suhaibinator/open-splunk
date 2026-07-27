@@ -512,6 +512,19 @@ type ScalarCallExpression struct {
 func (*ScalarCallExpression) scalarExpression()        {}
 func (e *ScalarCallExpression) SourceRange() spl.Range { return e.Range }
 
+// ScalarIfExpression selects one scalar branch using a typed Boolean
+// expression. The condition reuses predicate IR so backends never infer
+// truthiness from arbitrary values.
+type ScalarIfExpression struct {
+	Condition Expression
+	True      ScalarExpression
+	False     ScalarExpression
+	Range     spl.Range
+}
+
+func (*ScalarIfExpression) scalarExpression()        {}
+func (e *ScalarIfExpression) SourceRange() spl.Range { return e.Range }
+
 // EvalComparisonExpression compares two scalar expressions using where/eval
 // semantics rather than base-search matching semantics.
 type EvalComparisonExpression struct {

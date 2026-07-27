@@ -2,6 +2,7 @@ package spl
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -469,7 +470,7 @@ func TestParseWhereNullPredicatesEnforceArityEvalBoundaryAndPredicateLimit(t *te
 
 	var predicates strings.Builder
 	predicates.WriteString("index=main | where ")
-	for index := 0; index <= maxWhereComparisons; index++ {
+	for index := 0; index <= maxEvalPredicates; index++ {
 		if index > 0 {
 			predicates.WriteString(" AND ")
 		}
@@ -478,9 +479,160 @@ func TestParseWhereNullPredicatesEnforceArityEvalBoundaryAndPredicateLimit(t *te
 		predicates.WriteByte(')')
 	}
 	assertParseDiagnosticCode(t, predicates.String(), "SPL_QUERY_TOO_COMPLEX")
-	lastPredicate := " AND isnull(f" + strconv.Itoa(maxWhereComparisons) + ")"
+	lastPredicate := " AND isnull(f" + strconv.Itoa(maxEvalPredicates) + ")"
 	if _, err := Parse(strings.TrimSuffix(predicates.String(), lastPredicate)); err != nil {
 		t.Fatalf("Parse(exact where null-predicate limit): %v", err)
+	}
+}
+
+func TestParseEvalIfConsumesBooleanPredicateAndPreservesPrecedence(t *testing.T) {
+	t.Parallel()
+
+	source := `index=main | eval label=IF(isnull(status) OR NOT status=200 AND source="api", "bad", if(isnotnull(host), host, "missing"))`
+	query, err := Parse(source)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command := query.Commands[0].(*EvalCommand)
+	conditional, ok := command.Assignments[0].Expression.(*ScalarIfExpr)
+	if !ok {
+		t.Fatalf("eval expression = %T, want *ScalarIfExpr", command.Assignments[0].Expression)
+	}
+	root, ok := conditional.Condition.(*WhereBoolExpr)
+	if !ok || root.Op != BoolOpOr {
+		t.Fatalf("if condition = %#v, want OR", conditional.Condition)
+	}
+	if _, ok := root.Left.(*WhereScalarPredicateExpr); !ok {
+		t.Fatalf("if condition left = %T, want null predicate", root.Left)
+	}
+	and, ok := root.Right.(*WhereBoolExpr)
+	if !ok || and.Op != BoolOpAnd {
+		t.Fatalf("if condition right = %#v, want AND", root.Right)
+	}
+	not, ok := and.Left.(*WhereNotExpr)
+	if !ok {
+		t.Fatalf("if condition AND left = %T, want NOT", and.Left)
+	}
+	assertWhereLiteralComparison(t, not.Operand, "status", CompareOpEqual, "200", false)
+	assertWhereLiteralComparison(t, and.Right, "source", CompareOpEqual, "api", true)
+
+	trueValue, ok := conditional.True.(*ScalarLiteralExpr)
+	if !ok || trueValue.Value.Text != "bad" {
+		t.Fatalf("if true branch = %#v, want string literal", conditional.True)
+	}
+	nested, ok := conditional.False.(*ScalarIfExpr)
+	if !ok {
+		t.Fatalf("if false branch = %T, want nested *ScalarIfExpr", conditional.False)
+	}
+	if nested.True.(*ScalarFieldExpr).Field != "host" ||
+		nested.False.(*ScalarLiteralExpr).Value.Text != "missing" {
+		t.Fatalf("nested if = %#v", nested)
+	}
+	if got := source[conditional.Range.Start.Offset:conditional.Range.End.Offset]; got !=
+		`IF(isnull(status) OR NOT status=200 AND source="api", "bad", if(isnotnull(host), host, "missing"))` {
+		t.Fatalf("if range = %q", got)
+	}
+}
+
+func TestParseEvalIfUsesConsumerAwareBooleanTyping(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=main | eval label=if(isnull(optional), "missing", "present")`,
+		`index=main | eval number=tonumber(if(isnull(optional), "0", "1"))`,
+		`index=main | eval flag=if(isnull(optional), true, false)`,
+		`index=main | where if(isnull(optional), isnull(left), isnotnull(right))`,
+		`index=main | where if(isnull(optional), true, false)`,
+		`index=main | where isnull(if(isnull(optional), left, right))`,
+	} {
+		if _, err := Parse(source); err != nil {
+			t.Fatalf("Parse(%q): %v", source, err)
+		}
+	}
+
+	for _, test := range []struct {
+		source string
+		code   string
+	}{
+		{source: `index=main | eval flag=isnull(optional)`, code: "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{source: `index=main | eval flag=if(isnull(optional), isnull(left), isnotnull(right))`, code: "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{source: `index=main | eval flag=if(isnull(optional), isnull(left), "no")`, code: "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{source: `index=main | eval number=tonumber(if(isnull(optional), isnull(left), "0"))`, code: "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{source: `index=main | eval label=if(optional, "yes", "no")`, code: "SPL_EXPECTED_COMPARISON"},
+		{source: `index=main | where true`, code: "SPL_EXPECTED_COMPARISON"},
+		{source: `index=main | eval label=if(status=200 XOR host="api", "yes", "no")`, code: "SPL_UNSUPPORTED_WHERE_EXPRESSION"},
+		{source: `index=main | eval label=if(status=200 host="api", "yes", "no")`, code: "SPL_UNSUPPORTED_WHERE_EXPRESSION"},
+	} {
+		assertParseDiagnosticCode(t, test.source, test.code)
+	}
+}
+
+func TestParseEvalIfEnforcesArityAndSharedPredicateLimit(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=main | eval label=if()`,
+		`index=main | eval label=if(isnull(optional))`,
+		`index=main | eval label=if(isnull(optional), "yes")`,
+		`index=main | eval label=if(isnull(optional), "yes", "no", "extra")`,
+		`index=main | eval label=if(isnull(optional),, "no")`,
+		`index=main | eval label=if(isnull(optional), "yes",)`,
+	} {
+		assertParseDiagnosticCode(t, source, "SPL_INVALID_EVAL_ARITY")
+	}
+
+	var assignments strings.Builder
+	assignments.WriteString("index=main | eval ")
+	for index := 0; index <= maxEvalPredicates; index++ {
+		if index > 0 {
+			assignments.WriteString(", ")
+		}
+		assignments.WriteString("f")
+		assignments.WriteString(strconv.Itoa(index))
+		assignments.WriteString("=if(p")
+		assignments.WriteString(strconv.Itoa(index))
+		assignments.WriteString("=1, 1, 0)")
+	}
+	assertParseDiagnosticCode(t, assignments.String(), "SPL_QUERY_TOO_COMPLEX")
+
+	lastAssignment := ", f" + strconv.Itoa(maxEvalPredicates) +
+		"=if(p" + strconv.Itoa(maxEvalPredicates) + "=1, 1, 0)"
+	if _, err := Parse(strings.TrimSuffix(assignments.String(), lastAssignment)); err != nil {
+		t.Fatalf("Parse(exact eval predicate limit): %v", err)
+	}
+
+	var mixedBudget strings.Builder
+	mixedBudget.WriteString("index=main | eval ")
+	for index := 0; index < maxEvalPredicates/2; index++ {
+		if index > 0 {
+			mixedBudget.WriteString(", ")
+		}
+		fmt.Fprintf(&mixedBudget, "f%d=if(p%d=1, 1, 0)", index, index)
+	}
+	mixedBudget.WriteString(" | where ")
+	for index := 0; index <= maxEvalPredicates/2; index++ {
+		if index > 0 {
+			mixedBudget.WriteString(" AND ")
+		}
+		fmt.Fprintf(&mixedBudget, "w%d=1", index)
+	}
+	assertParseDiagnosticCode(t, mixedBudget.String(), "SPL_QUERY_TOO_COMPLEX")
+	lastMixedPredicate := " AND w" + strconv.Itoa(maxEvalPredicates/2) + "=1"
+	if _, err := Parse(strings.TrimSuffix(mixedBudget.String(), lastMixedPredicate)); err != nil {
+		t.Fatalf("Parse(exact cross-command predicate limit): %v", err)
+	}
+
+	nestedIf := "0"
+	for range maxScalarNestingDepth {
+		nestedIf = "if(true=true, 1, " + nestedIf + ")"
+	}
+	assertParseDiagnosticCode(t, "index=main | eval value="+nestedIf, "SPL_QUERY_TOO_COMPLEX")
+	exactNestedIf := "0"
+	for range maxScalarNestingDepth - 1 {
+		exactNestedIf = "if(true=true, 1, " + exactNestedIf + ")"
+	}
+	if _, err := Parse("index=main | eval value=" + exactNestedIf); err != nil {
+		t.Fatalf("Parse(exact nested-if depth): %v", err)
 	}
 }
 
@@ -786,7 +938,7 @@ func TestParseBoundsQueryComplexity(t *testing.T) {
 
 	var where strings.Builder
 	where.WriteString("index=main | where ")
-	for index := 0; index <= maxWhereComparisons; index++ {
+	for index := 0; index <= maxEvalPredicates; index++ {
 		if index > 0 {
 			where.WriteString(" AND ")
 		}
@@ -795,7 +947,7 @@ func TestParseBoundsQueryComplexity(t *testing.T) {
 		where.WriteString("=1")
 	}
 	assertParseDiagnosticCode(t, where.String(), "SPL_QUERY_TOO_COMPLEX")
-	lastComparison := " AND f" + strconv.Itoa(maxWhereComparisons) + "=1"
+	lastComparison := " AND f" + strconv.Itoa(maxEvalPredicates) + "=1"
 	if _, err := Parse(strings.TrimSuffix(where.String(), lastComparison)); err != nil {
 		t.Fatalf("Parse(exact where comparison limit): %v", err)
 	}
