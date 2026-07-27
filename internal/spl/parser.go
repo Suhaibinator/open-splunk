@@ -2253,6 +2253,15 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	}
 	var function ScalarFunction
 	switch functionName {
+	case "now":
+		function = ScalarFunctionNow
+		if len(arguments) != 0 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: "now requires no arguments",
+				Range:   name.sourceRange,
+			}
+		}
 	case "tonumber":
 		function = ScalarFunctionToNumber
 		if len(arguments) != 1 {
@@ -2637,6 +2646,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				"mvcount(value)",
 				`match(value, "pattern")`,
 				`like(value, "pattern%")`,
+				"now()",
 				`if(predicate, true_value, false_value)`,
 			},
 		}

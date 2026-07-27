@@ -1878,6 +1878,15 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		expectedArguments := 0
 		functionName := ""
 		switch expression.Function {
+		case spl.ScalarFunctionNow:
+			functionName = "now"
+			if len(expression.Arguments) != 0 {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_EVAL_ARITY",
+					Message: "now requires no arguments",
+					Range:   expression.Range,
+				}
+			}
 		case spl.ScalarFunctionToNumber:
 			expectedArguments = 1
 			functionName = "tonumber"
@@ -2134,6 +2143,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		}
 		var function ScalarFunction
 		switch expression.Function {
+		case spl.ScalarFunctionNow:
+			function = ScalarFunctionNow
 		case spl.ScalarFunctionToNumber:
 			function = ScalarFunctionToNumber
 		case spl.ScalarFunctionToString:

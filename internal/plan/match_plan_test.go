@@ -208,6 +208,7 @@ func TestScalarFunctionBooleanTraitsRemainInParity(t *testing.T) {
 		{spl.ScalarFunctionMVCount, ScalarFunctionMVCount, false},
 		{spl.ScalarFunctionMatch, ScalarFunctionMatch, true},
 		{spl.ScalarFunctionLike, ScalarFunctionLike, true},
+		{spl.ScalarFunctionNow, ScalarFunctionNow, false},
 	}
 	for index, function := range functions {
 		if int(function.spl) != index || int(function.plan) != index {

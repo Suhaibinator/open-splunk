@@ -517,6 +517,7 @@ const (
 	ScalarFunctionMVCount
 	ScalarFunctionMatch
 	ScalarFunctionLike
+	ScalarFunctionNow
 )
 
 // ReturnsBoolean reports the atomic result trait shared by planning and
