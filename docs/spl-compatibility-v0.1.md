@@ -55,6 +55,9 @@ built. Formatted modes are a separate unsupported surface.
 Every `round` call accepts one numeric value and an optional literal precision
 from 0 through 18. It has the same separate 64 KiB generated-SQL ceiling,
 checked after its typed numeric lowering is built.
+Every `ceil`, `ceiling`, or `floor` call accepts exactly one numeric value and
+has the same separate 64 KiB generated-SQL ceiling, checked after its typed
+numeric lowering is built.
 Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
@@ -133,7 +136,7 @@ accepts exactly one scalar expression, and can also be compared explicitly
 with a Boolean literal. Scalar operands may be fields, typed literals, or the
 supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, bounded
 `case`, `lower`, `upper`, `len`, `length`, bounded `substr`, and bounded
-default `tostring` and bounded `round` calls
+default `tostring`, bounded `round`, `ceil`/`ceiling`, and `floor` calls
 described below;
 arithmetic, field quoting, `XOR`, and other eval functions are not yet
 accepted. Missing, null, container, or failed numeric operands do not pass
@@ -171,6 +174,7 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval route=substr(path, 1, 32)
 | eval rendered=tostring(status), flag=tostring(isnull(optional))
 | eval latency_ms=round(duration_ms, 2)
+| eval upper_bound=ceil(ratio), lower_bound=floor(ratio)
 ```
 
 Assignments are evaluated from left to right, and later assignments may use an
@@ -200,6 +204,8 @@ narrow:
   Boolean. Formatted modes are not supported.
 - `round(value[, precision])` rounds one numeric value with an optional literal
   precision from 0 through 18. The default precision is zero.
+- `ceil(value)` and its `ceiling(value)` alias round one numeric value upward;
+  `floor(value)` rounds one numeric value downward.
 
 The `if` predicate uses exactly the `where` grammar described above:
 case-sensitive scalar comparisons, direct `isnull` / `isnotnull` predicates,
@@ -621,6 +627,48 @@ field/literal comparisons stay scalar; compound comparisons bind each operand
 once to prevent repeated evaluation and superlinear SQL. No form applies
 `ARRAY JOIN`, expands a multivalue, or changes row cardinality. Nested calls
 grow linearly under the per-call 64 KiB and whole-query 256 KiB SQL ceilings.
+
+`ceil`/`ceiling` and `floor` each accept exactly one numeric value:
+
+```spl
+| eval next_integer=ceil(duration_ms)
+| eval next_integer=ceiling(duration_ms)
+| eval prior_integer=floor(duration_ms)
+| where floor(score)>=2
+```
+
+Function names are case-insensitive. `ceil` and `ceiling` are exact aliases;
+bare fields named `ceil`, `ceiling`, or `floor` remain ordinary fields.
+Zero or multiple arguments fail with `SPL_INVALID_EVAL_ARITY`. A Boolean
+null-predicate result is not implicitly numeric and fails with
+`SPL_UNSUPPORTED_EVAL_EXPRESSION`.
+
+Fixed `Int64` and `UInt64` input is an exact no-op and retains its type,
+including `MaxUint64`. Fixed `Float64` input returns `Float64`. Missing,
+explicit-null, projected-away, and statically null input returns nullable
+`Float64` null. Fixed String, Boolean, canonical time, or other nonnumeric
+input fails with `SPL_UNSUPPORTED_CEIL_VALUE_TYPE` or
+`SPL_UNSUPPORTED_FLOOR_VALUE_TYPE`. A fixed multivalue fails with
+`SPL_UNSUPPORTED_MULTIVALUE_USAGE`.
+
+Dynamic physical signed and unsigned integer variants retain their exact value
+and runtime type. A validated integral `decimal/v1` payload inside signed
+`Int256` becomes exact `Int256`, so adjacent integers above `2^53` remain
+distinct. Other validated Decimal payloads, physical floating-point variants,
+and physical Decimal variants convert to finite `Float64` before applying the
+function and return Dynamic `Float64`. The same 4 KiB Decimal-envelope grammar
+and exact-key validation as `round` applies. Malformed or non-finite Decimals,
+Strings, Booleans, null, arrays, objects, and other containers return null.
+
+Float64 behavior is pinned to ClickHouse `ceil` and `floor`:
+`ceil(1.2)=2`, `ceil(-1.2)=-1`, `floor(1.2)=1`, and
+`floor(-1.2)=-2`. `ceil(-0.2)` preserves the negative-zero sign bit. Each
+Dynamic source is bound once, numeric-only results let predicates skip
+text/container dispatch, and atomic comparisons remain scalar. Because every
+successful result is already integral, any outer `ceil` or `floor` is an
+identity and is removed during compilation, including across eval projection
+and rename stages. No form applies `ARRAY JOIN`, expands multivalue members,
+or changes row cardinality.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a

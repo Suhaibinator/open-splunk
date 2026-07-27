@@ -138,6 +138,18 @@ test("round highlights only when used as a parenthesized function", () => {
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
+test("ceil, ceiling, and floor highlight only as parenthesized functions", () => {
+  const query = `index=main ceil=1 ceiling=2 floor=3 | eval up=CeIl(ratio), alias=CEILING(ratio), down=FlOoR(ratio) | table ceil,ceiling,floor`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["ceil", "ceiling", "floor"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
 test("eval completion advertises the exact supported scalar signatures", () => {
   const evalCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eval");
   assert.ok(evalCompletion);
@@ -151,6 +163,8 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /substr\(value, start\[, length\]\)/);
   assert.match(evalCompletion.detail, /tostring\(value\)/);
   assert.match(evalCompletion.detail, /round\(value\[, precision\]\)/);
+  assert.match(evalCompletion.detail, /ceil\(value\)\/ceiling\(value\)/);
+  assert.match(evalCompletion.detail, /floor\(value\)/);
   assert.match(evalCompletion.detail, /literal precision from 0 through 18/i);
   assert.match(evalCompletion.detail, /first non-null fixed value/i);
   assert.match(evalCompletion.detail, /first true predicate/i);
