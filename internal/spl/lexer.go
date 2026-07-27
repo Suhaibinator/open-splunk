@@ -27,10 +27,10 @@ const (
 )
 
 type token struct {
-	kind   tokenKind
-	text   string
-	quoted bool
-	range_ Range
+	kind        tokenKind
+	text        string
+	quoted      bool
+	sourceRange Range
 }
 
 type lexer struct {
@@ -59,7 +59,7 @@ func (l *lexer) next() (token, error) {
 	l.skipSpace()
 	start := l.position()
 	if l.offset >= len(l.source) {
-		return token{kind: tokenEOF, range_: Range{Start: start, End: start}}, nil
+		return token{kind: tokenEOF, sourceRange: Range{Start: start, End: start}}, nil
 	}
 
 	switch l.source[l.offset] {
@@ -109,7 +109,7 @@ func (l *lexer) scanString(start Position) (token, error) {
 	for l.offset < len(l.source) {
 		if l.source[l.offset] == '"' {
 			l.advanceASCII()
-			return token{kind: tokenString, text: value.String(), quoted: true, range_: Range{Start: start, End: l.position()}}, nil
+			return token{kind: tokenString, text: value.String(), quoted: true, sourceRange: Range{Start: start, End: l.position()}}, nil
 		}
 		if l.source[l.offset] == '\\' {
 			l.advanceASCII()
@@ -177,7 +177,7 @@ func (l *lexer) scanWord(start Position) (token, error) {
 			l.position(),
 		)
 	}
-	return token{kind: tokenWord, text: l.source[startOffset:l.offset], range_: Range{Start: start, End: l.position()}}, nil
+	return token{kind: tokenWord, text: l.source[startOffset:l.offset], sourceRange: Range{Start: start, End: l.position()}}, nil
 }
 
 func isDelimiter(b byte) bool {
@@ -203,7 +203,7 @@ func (l *lexer) skipSpace() {
 }
 
 func (l *lexer) single(kind tokenKind, text string, start Position) token {
-	return token{kind: kind, text: text, range_: Range{Start: start, End: l.position()}}
+	return token{kind: kind, text: text, sourceRange: Range{Start: start, End: l.position()}}
 }
 
 func (l *lexer) consumeASCII(want byte) bool {

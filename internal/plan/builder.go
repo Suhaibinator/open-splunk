@@ -216,7 +216,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 				captures = append(captures, ExtractCapture{
 					Output: output,
-					Group:  uint16(capture.Group),
+					// #nosec G115 -- validated rex patterns contain at most 16 capture groups.
+					Group: uint16(capture.Group),
 				})
 				if outputSchemaKnown && !slices.Contains(result.OutputFields, capture.Name) {
 					result.OutputFields = append(result.OutputFields, capture.Name)
@@ -1038,14 +1039,17 @@ func fixedDurationSpan(span spl.TimeSpan, syntaxCode, commandName string) (time.
 			Range:   span.Range,
 		}
 	}
-	if span.Magnitude == 0 || span.Magnitude > uint64(math.MaxInt64/int64(unit)) {
+	// #nosec G115 -- unit is one of the positive time.Second, time.Minute, or time.Hour constants.
+	maximumMagnitude := uint64(math.MaxInt64) / uint64(unit)
+	if span.Magnitude == 0 || span.Magnitude > maximumMagnitude {
 		return 0, &Diagnostic{
 			Code:    "SPL_NUMBER_OUT_OF_RANGE",
 			Message: commandName + " span is outside the supported duration range",
 			Range:   span.Range,
 		}
 	}
-	return time.Duration(span.Magnitude) * unit, nil
+	// #nosec G115 -- the maximumMagnitude check above proves the conversion and multiplication fit in int64.
+	return time.Duration(int64(span.Magnitude)) * unit, nil
 }
 
 func fixedTimechartBuckets(earliest, latest time.Time, span time.Duration, sourceRange spl.Range) (time.Time, uint64, error) {
@@ -1066,6 +1070,7 @@ func fixedTimechartBuckets(earliest, latest time.Time, span time.Duration, sourc
 			Range:   sourceRange,
 		}
 	}
+	// #nosec G115 -- deltaSeconds is nonnegative and spanSeconds is positive above.
 	bucketCount := uint64(deltaSeconds / spanSeconds)
 	if deltaSeconds%spanSeconds != 0 || latest.Nanosecond() != 0 {
 		bucketCount++
@@ -1251,14 +1256,14 @@ func resolveIndexes(
 			return nil, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_INDEX_SELECTOR",
 				Message: "wildcard index selectors are not supported in compatibility version 0.1",
-				Range:   reference.range_,
+				Range:   reference.sourceRange,
 			}
 		}
 		if _, ok := authorized[reference.value]; !ok {
-			return nil, &Diagnostic{Code: "SPL_INDEX_FORBIDDEN", Message: fmt.Sprintf("index %q is outside the authorized scope", reference.value), Range: reference.range_}
+			return nil, &Diagnostic{Code: "SPL_INDEX_FORBIDDEN", Message: fmt.Sprintf("index %q is outside the authorized scope", reference.value), Range: reference.sourceRange}
 		}
 		if _, ok := effective[reference.value]; !ok {
-			return nil, &Diagnostic{Code: "SPL_INDEX_FORBIDDEN", Message: fmt.Sprintf("index %q is outside the requested scope", reference.value), Range: reference.range_}
+			return nil, &Diagnostic{Code: "SPL_INDEX_FORBIDDEN", Message: fmt.Sprintf("index %q is outside the requested scope", reference.value), Range: reference.sourceRange}
 		}
 	}
 
@@ -1271,8 +1276,8 @@ func resolveIndexes(
 }
 
 type indexReference struct {
-	value  string
-	range_ spl.Range
+	value       string
+	sourceRange spl.Range
 }
 
 func positiveIndexReferences(
@@ -1370,7 +1375,7 @@ func collectPositiveIndexReferences(expression spl.Expr, negated bool, destinati
 		collectPositiveIndexReferences(expression.Operand, !negated, destination)
 	case *spl.ComparisonExpr:
 		if !negated && expression.Field == "index" && expression.Op == spl.CompareOpEqual {
-			*destination = append(*destination, indexReference{value: expression.Value.Text, range_: expression.Range})
+			*destination = append(*destination, indexReference{value: expression.Value.Text, sourceRange: expression.Range})
 		}
 	}
 }
@@ -1813,13 +1818,6 @@ func predicateFieldRange(expression Expression, name string) (spl.Range, bool) {
 	return visitExpression(expression)
 }
 
-func convertScalarExpression(expression spl.ScalarExpr) (ScalarExpression, error) {
-	if err := validateSPLScalarExpressionComplexity(expression); err != nil {
-		return nil, err
-	}
-	return convertScalarExpressionUnchecked(expression)
-}
-
 func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpression, error) {
 	if expression == nil {
 		return nil, &Diagnostic{
@@ -1930,7 +1928,7 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			}
 			arguments = append(arguments, converted)
 		}
-		function := ScalarFunctionInvalid
+		var function ScalarFunction
 		switch expression.Function {
 		case spl.ScalarFunctionToNumber:
 			function = ScalarFunctionToNumber

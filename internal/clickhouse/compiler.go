@@ -879,7 +879,7 @@ func finalizeOrdinaryQuery(
 	relation compiledRelation,
 	state compileState,
 	args []any,
-	scan *plan.Scan,
+	_ *plan.Scan,
 	aliasSequence int,
 ) (CompiledQuery, error) {
 	projection, outputFields, err := finalProjection(state)
@@ -1872,7 +1872,6 @@ func compileDynamicNumericBucket(
 		"toUInt8(" + outputTypeSQL + ") AS " + outputTypeAlias,
 	})
 	relation = relation.selectFrom(supportedProjectionSQL, operator.Range)
-	layer++
 	privateAliases = append(privateAliases, supportedAlias)
 
 	normalizedFloat := "if(" + floatCandidateAlias + " = toFloat64(0), toFloat64(0), " + floatCandidateAlias + ")"
@@ -5650,6 +5649,7 @@ func spathPathSQL(steps []splpath.Step) (string, []any) {
 		args = append(args, step.Key)
 		if step.HasIndex {
 			placeholders = append(placeholders, "?")
+			// #nosec G115 -- splpath parsing caps array indices at 2^31-2.
 			args = append(args, int64(step.Index)+1)
 		}
 	}
@@ -5669,6 +5669,7 @@ func spathArrayGuardSQL(inputSQL string, steps []splpath.Step) (string, []any) {
 				strings.Join(pathSQL, ", ")+")) = 'Array'")
 			args = append(args, pathArgs...)
 			pathSQL = append(pathSQL, "?")
+			// #nosec G115 -- splpath parsing caps array indices at 2^31-2.
 			pathArgs = append(pathArgs, int64(step.Index)+1)
 		}
 	}
@@ -6441,8 +6442,10 @@ func compileComparison(expression *plan.ComparisonExpression, field fieldState) 
 	if err != nil {
 		return "", nil, err
 	}
-	var predicate string
-	argumentOccurrences := 1
+	var (
+		predicate           string
+		argumentOccurrences int
+	)
 	if expression.Op == plan.ComparisonOpEqual || expression.Op == plan.ComparisonOpNotEqual {
 		predicate, argumentOccurrences = equalityPredicate(expression, field, text)
 	} else {
@@ -6497,12 +6500,13 @@ func equalityPredicate(expression *plan.ComparisonExpression, field fieldState, 
 	dynamic := compiledScalarFromField(field)
 	typeSQL := dynamicScalarTypeSQL(dynamic)
 	guard := dynamicLiteralGuard(typeSQL, expression.Value.Kind)
-	if expression.Value.Kind == plan.ValueKindInt64 || expression.Value.Kind == plan.ValueKindUint64 {
+	switch expression.Value.Kind {
+	case plan.ValueKindInt64, plan.ValueKindUint64:
 		exact := dynamicExactIntegerSQL(dynamic) + " = accurateCastOrNull(?, 'Int256')"
 		decimal := dynamicTaggedDecimalFloatSQL(dynamic) + " = toFloat64OrNull(?)"
 		return "multiIf(" + dynamicExactIntegerPredicate(dynamic, typeSQL) + ", " + exact + ", " +
 			dynamicTaggedDecimalCondition(dynamic) + ", " + decimal + ", 0)", 2
-	} else if expression.Value.Kind == plan.ValueKindFloat64 {
+	case plan.ValueKindFloat64:
 		guard = "(" + guard + " OR " + dynamicTaggedDecimalCondition(dynamic) + ")"
 		base = numericScalarSQL(dynamic, false) + " = toFloat64OrNull(?)"
 	}

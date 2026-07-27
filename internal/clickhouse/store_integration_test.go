@@ -681,7 +681,7 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("duration_null", typedNull()),
 	)
 	extendedTimestamp := time.Date(2026, time.July, 21, 3, 4, 5, 123_456_789, time.UTC)
-	complex := compilerIntegrationEvent("n-complex", "complex", "complex values", indexTime,
+	complexEvent := compilerIntegrationEvent("n-complex", "complex", "complex values", indexTime,
 		typedField("n", typedSint(0)),
 		typedField("multi", typedList(typedSint(1), typedSint(2))),
 		typedField("bytes_value", typedBytes([]byte{0, 1, 2, 255})),
@@ -703,7 +703,7 @@ func testCompiledQueriesAgainstClickHouse(
 		TenantID: "tenant", CollectorID: "collector", BatchID: "compiler-batch", BatchSequence: 3,
 		SourceBatchSHA256: testSourceBatchDigest("compiler-batch"),
 		ReceivedAt:        indexTime,
-		Events:            []*ingest.StoredEvent{one, two, null, complex},
+		Events:            []*ingest.StoredEvent{one, two, null, complexEvent},
 	}
 	if _, err := store.Store(ctx, batch); err != nil {
 		t.Fatalf("store compiler fixtures: %v", err)
@@ -2129,12 +2129,12 @@ func testNumericBinAgainstClickHouse(
 					indexTime.Add(10*time.Second),
 					visibilityCutoff,
 				)
-				queryErr := executeCompiledExpectingNoRows(ctx, connection, unsupported)
-				var exception *clickhousedriver.Exception
-				if !errors.As(queryErr, &exception) ||
-					exception.Code != 395 ||
-					!strings.Contains(exception.Message, UnsupportedNumericBinValueMarker) {
-					t.Fatalf("unsupported Dynamic bin error = %v, want guarded ClickHouse exception", queryErr)
+				unsupportedQueryErr := executeCompiledExpectingNoRows(ctx, connection, unsupported)
+				var unsupportedException *clickhousedriver.Exception
+				if !errors.As(unsupportedQueryErr, &unsupportedException) ||
+					unsupportedException.Code != 395 ||
+					!strings.Contains(unsupportedException.Message, UnsupportedNumericBinValueMarker) {
+					t.Fatalf("unsupported Dynamic bin error = %v, want guarded ClickHouse exception", unsupportedQueryErr)
 				}
 			})
 		}

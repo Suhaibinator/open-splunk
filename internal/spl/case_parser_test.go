@@ -43,7 +43,7 @@ func TestParseEvalCasePreservesOrderedBranchesCasingAndRange(t *testing.T) {
 		"404",
 		false,
 	)
-	if _, ok := secondCondition.Right.(*WhereScalarPredicateExpr); !ok {
+	if _, rightPredicateOK := secondCondition.Right.(*WhereScalarPredicateExpr); !rightPredicateOK {
 		t.Fatalf("second condition right = %T, want null predicate", secondCondition.Right)
 	}
 	secondValue, ok := conditional.Branches[1].Value.(*ScalarCallExpr)

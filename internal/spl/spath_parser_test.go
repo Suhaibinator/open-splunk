@@ -28,7 +28,7 @@ func TestParseSpathExplicitJSONPath(t *testing.T) {
 			wantSteps: []splpath.Step{{Key: "server"}, {Key: "name"}},
 		},
 		{
-			name:      "unlabelled path",
+			name:      "unlabeled path",
 			source:    `* | spath output=myfield server.name`,
 			input:     "_raw",
 			output:    "myfield",

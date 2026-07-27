@@ -1,6 +1,7 @@
 package spl
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -44,7 +45,7 @@ func Parse(source string) (*Query, error) {
 		return nil, &Diagnostic{
 			Code:    "SPL_QUERY_TOO_COMPLEX",
 			Message: fmt.Sprintf("search contains more than %d syntax tokens", maxSPLTokens),
-			Range:   tokens[maxSPLTokens].range_,
+			Range:   tokens[maxSPLTokens].sourceRange,
 		}
 	}
 	p := parser{tokens: tokens}
@@ -84,7 +85,7 @@ type parser struct {
 }
 
 func (p *parser) parseQuery() (*Query, error) {
-	start := p.current().range_.Start
+	start := p.current().sourceRange.Start
 	query := &Query{}
 
 	if p.current().kind != tokenPipe && p.current().kind != tokenEOF {
@@ -102,7 +103,7 @@ func (p *parser) parseQuery() (*Query, error) {
 			return nil, &Diagnostic{
 				Code:    "SPL_QUERY_TOO_COMPLEX",
 				Message: fmt.Sprintf("search contains more than %d pipeline commands", maxPipelineCommands),
-				Range:   p.current().range_,
+				Range:   p.current().sourceRange,
 			}
 		}
 		command, err := p.parseCommand(stage)
@@ -117,7 +118,7 @@ func (p *parser) parseQuery() (*Query, error) {
 	if query.Search == nil && len(query.Commands) == 0 {
 		return nil, p.errorAtCurrent("SPL_EMPTY_QUERY", "search query is empty")
 	}
-	query.Range = Range{Start: start, End: p.current().range_.End}
+	query.Range = Range{Start: start, End: p.current().sourceRange.End}
 	return query, nil
 }
 
@@ -170,7 +171,7 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return nil, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_COMMAND",
 			Message: fmt.Sprintf("unsupported command %q at pipeline stage %d", nameToken.text, stage),
-			Range:   nameToken.range_,
+			Range:   nameToken.sourceRange,
 		}
 	}
 }
@@ -178,16 +179,16 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 func (p *parser) parseSpathCommand(name token) (Command, error) {
 	command := &SpathCommand{
 		Input:      "_raw",
-		InputRange: name.range_,
+		InputRange: name.sourceRange,
 	}
 	var inputSeen, outputSeen, pathSeen bool
-	end := name.range_.End
+	end := name.sourceRange.End
 
 	if p.atCommandEnd() {
 		return nil, &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_SPATH_SYNTAX",
 			Message:     "spath auto-extraction is not supported; provide one explicit JSON path",
-			Range:       name.range_,
+			Range:       name.sourceRange,
 			Suggestions: []string{"spath path=server.name", "spath output=value path=server.name"},
 		}
 	}
@@ -198,7 +199,7 @@ func (p *parser) parseSpathCommand(name token) (Command, error) {
 			return &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_SPATH_SYNTAX",
 				Message: fmt.Sprintf("spath %s may be specified only once", optionName),
-				Range:   option.range_,
+				Range:   option.sourceRange,
 			}
 		}
 		*seen = true
@@ -207,7 +208,7 @@ func (p *parser) parseSpathCommand(name token) (Command, error) {
 			return &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_SPATH_SYNTAX",
 				Message: fmt.Sprintf("spath %s must be written as %s=<field>", optionName, optionName),
-				Range:   option.range_,
+				Range:   option.sourceRange,
 			}
 		}
 		value := p.current()
@@ -215,29 +216,29 @@ func (p *parser) parseSpathCommand(name token) (Command, error) {
 			return p.errorAtCurrent("SPL_EXPECTED_FIELD", fmt.Sprintf("spath %s requires one exact field", optionName))
 		}
 		*destination = value.text
-		*sourceRange = value.range_
-		end = value.range_.End
+		*sourceRange = value.sourceRange
+		end = value.sourceRange.End
 		p.advance()
 		return nil
 	}
 
-	parsePath := func(labelled bool) error {
+	parsePath := func(labeled bool) error {
 		option := p.current()
 		if pathSeen {
 			return &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_SPATH_SYNTAX",
 				Message: "spath path may be specified only once",
-				Range:   option.range_,
+				Range:   option.sourceRange,
 			}
 		}
 		pathSeen = true
-		if labelled {
+		if labeled {
 			p.advance()
 			if !p.match(tokenEqual) {
 				return &Diagnostic{
 					Code:    "SPL_UNSUPPORTED_SPATH_SYNTAX",
 					Message: "spath path must be written as path=<datapath>",
-					Range:   option.range_,
+					Range:   option.sourceRange,
 				}
 			}
 		}
@@ -247,27 +248,30 @@ func (p *parser) parseSpathCommand(name token) (Command, error) {
 		}
 		steps, err := splpath.ParseJSON(value.text)
 		if err != nil {
-			pathErr, ok := err.(*splpath.Error)
-			if !ok {
+			var pathErr *splpath.Error
+			if !errors.As(err, &pathErr) {
 				return err
 			}
-			code := "SPL_INVALID_SPATH_PATH"
-			if pathErr.Kind == splpath.ErrorKindUnsupported {
+			var code string
+			switch pathErr.Kind {
+			case splpath.ErrorKindUnsupported:
 				code = "SPL_UNSUPPORTED_SPATH_PATH"
-			} else if pathErr.Kind == splpath.ErrorKindTooComplex {
+			case splpath.ErrorKindTooComplex:
 				code = "SPL_QUERY_TOO_COMPLEX"
+			default:
+				code = "SPL_INVALID_SPATH_PATH"
 			}
 			return &Diagnostic{
 				Code:        code,
 				Message:     fmt.Sprintf("%s at decoded path byte %d", pathErr.Message, pathErr.Offset),
-				Range:       value.range_,
+				Range:       value.sourceRange,
 				Suggestions: []string{"use a bounded case-sensitive JSON path such as items{0}.name"},
 			}
 		}
 		command.Path = value.text
-		command.PathRange = value.range_
+		command.PathRange = value.sourceRange
 		command.Steps = append([]splpath.Step(nil), steps...)
-		end = value.range_.End
+		end = value.sourceRange.End
 		p.advance()
 		return nil
 	}
@@ -295,7 +299,7 @@ func (p *parser) parseSpathCommand(name token) (Command, error) {
 			return nil, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_SPATH_SYNTAX",
 				Message:     fmt.Sprintf("unsupported spath option or syntax at %q", p.current().text),
-				Range:       p.current().range_,
+				Range:       p.current().sourceRange,
 				Suggestions: []string{"spath input=payload output=value path=server.name"},
 			}
 		}
@@ -311,7 +315,7 @@ func (p *parser) parseSpathCommand(name token) (Command, error) {
 		return nil, &Diagnostic{
 			Code:        code,
 			Message:     message,
-			Range:       name.range_,
+			Range:       name.sourceRange,
 			Suggestions: []string{"spath path=server.name"},
 		}
 	}
@@ -319,14 +323,14 @@ func (p *parser) parseSpathCommand(name token) (Command, error) {
 		command.Output = command.Path
 		command.OutputRange = command.PathRange
 	}
-	command.Range = Range{Start: name.range_.Start, End: end}
+	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	return command, nil
 }
 
 func (p *parser) parseRexCommand(name token) (Command, error) {
 	command := &RexCommand{
 		Field:      "_raw",
-		FieldRange: name.range_,
+		FieldRange: name.sourceRange,
 		MaxMatch:   1,
 	}
 	if p.atCommandEnd() {
@@ -341,7 +345,7 @@ func (p *parser) parseRexCommand(name token) (Command, error) {
 			return &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_REX_SYNTAX",
 				Message: "rex field may be specified only once before the pattern",
-				Range:   option.range_,
+				Range:   option.sourceRange,
 			}
 		}
 		fieldSeen = true
@@ -350,7 +354,7 @@ func (p *parser) parseRexCommand(name token) (Command, error) {
 			return &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_REX_SYNTAX",
 				Message:     "rex field must be written as field=<field>",
-				Range:       option.range_,
+				Range:       option.sourceRange,
 				Suggestions: []string{`rex field=message "(?<value>pattern)"`},
 			}
 		}
@@ -359,7 +363,7 @@ func (p *parser) parseRexCommand(name token) (Command, error) {
 			return p.errorAtCurrent("SPL_EXPECTED_FIELD", "rex field= requires an exact unquoted field")
 		}
 		command.Field = field.text
-		command.FieldRange = field.range_
+		command.FieldRange = field.sourceRange
 		p.advance()
 		return nil
 	}
@@ -369,7 +373,7 @@ func (p *parser) parseRexCommand(name token) (Command, error) {
 			return Position{}, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_REX_SYNTAX",
 				Message: "rex max_match may be specified only once",
-				Range:   option.range_,
+				Range:   option.sourceRange,
 			}
 		}
 		maxMatchSeen = true
@@ -378,7 +382,7 @@ func (p *parser) parseRexCommand(name token) (Command, error) {
 			return Position{}, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_REX_SYNTAX",
 				Message: "rex max_match must be written as max_match=1",
-				Range:   option.range_,
+				Range:   option.sourceRange,
 			}
 		}
 		value := p.current()
@@ -387,19 +391,19 @@ func (p *parser) parseRexCommand(name token) (Command, error) {
 			return Position{}, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_REX_SYNTAX",
 				Message:     "rex currently supports only the first match (max_match=1)",
-				Range:       value.range_,
+				Range:       value.sourceRange,
 				Suggestions: []string{"omit max_match or use max_match=1"},
 			}
 		}
 		command.MaxMatch = maxMatch
 		p.advance()
-		return value.range_.End, nil
+		return value.sourceRange.End, nil
 	}
 	unsupportedOption := func(message string) error {
 		return &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_REX_SYNTAX",
 			Message:     message,
-			Range:       p.current().range_,
+			Range:       p.current().sourceRange,
 			Suggestions: []string{`rex field=message max_match=1 "(?<value>pattern)"`},
 		}
 	}
@@ -429,8 +433,8 @@ options:
 		return nil, p.errorAtCurrent("SPL_EXPECTED_REX_PATTERN", "rex requires a quoted extraction regular expression")
 	}
 	command.Pattern = pattern.text
-	command.PatternRange = pattern.range_
-	end := pattern.range_.End
+	command.PatternRange = pattern.sourceRange
+	end := pattern.sourceRange.End
 	p.advance()
 
 	if !p.atCommandEnd() {
@@ -438,7 +442,7 @@ options:
 			return nil, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_REX_SYNTAX",
 				Message:     fmt.Sprintf("unsupported rex option or syntax at %q", p.current().text),
-				Range:       p.current().range_,
+				Range:       p.current().sourceRange,
 				Suggestions: []string{`rex field=message max_match=1 "(?<value>pattern)"`},
 			}
 		}
@@ -451,7 +455,7 @@ options:
 			return nil, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_REX_SYNTAX",
 				Message: fmt.Sprintf("unsupported rex option or syntax at %q", p.current().text),
-				Range:   p.current().range_,
+				Range:   p.current().sourceRange,
 			}
 		}
 	}
@@ -471,7 +475,7 @@ options:
 			Suggestions: []string{`use a bounded RE2 pattern with one or more unique named captures such as "(?<value>...)"`},
 		}
 	}
-	command.Range = Range{Start: name.range_.Start, End: end}
+	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	return command, nil
 }
 
@@ -479,7 +483,7 @@ func (p *parser) parseRenameCommand(name token) (Command, error) {
 	command := &RenameCommand{}
 	seenSources := make(map[string]struct{})
 	seenDestinations := make(map[string]struct{})
-	end := name.range_.End
+	var end Position
 
 	if p.atCommandEnd() {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "rename requires a source field")
@@ -493,7 +497,7 @@ func (p *parser) parseRenameCommand(name token) (Command, error) {
 			return nil, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_RENAME_PATTERN",
 				Message:     "wildcard rename patterns are not supported in compatibility version 0.1",
-				Range:       source.range_,
+				Range:       source.sourceRange,
 				Suggestions: []string{"rename old_field AS new_field"},
 			}
 		}
@@ -501,7 +505,7 @@ func (p *parser) parseRenameCommand(name token) (Command, error) {
 			return nil, &Diagnostic{
 				Code:    "SPL_DUPLICATE_RENAME_SOURCE",
 				Message: fmt.Sprintf("rename source field %q is repeated", source.text),
-				Range:   source.range_,
+				Range:   source.sourceRange,
 			}
 		}
 		p.advance()
@@ -509,7 +513,7 @@ func (p *parser) parseRenameCommand(name token) (Command, error) {
 			return nil, &Diagnostic{
 				Code:        "SPL_EXPECTED_AS",
 				Message:     "rename source field must be followed by AS",
-				Range:       p.current().range_,
+				Range:       p.current().sourceRange,
 				Suggestions: []string{"rename old_field AS new_field"},
 			}
 		}
@@ -523,7 +527,7 @@ func (p *parser) parseRenameCommand(name token) (Command, error) {
 			return nil, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_RENAME_PATTERN",
 				Message:     "wildcard rename patterns are not supported in compatibility version 0.1",
-				Range:       destination.range_,
+				Range:       destination.sourceRange,
 				Suggestions: []string{"rename old_field AS new_field"},
 			}
 		}
@@ -531,33 +535,33 @@ func (p *parser) parseRenameCommand(name token) (Command, error) {
 			return nil, &Diagnostic{
 				Code:    "SPL_INVALID_RENAME",
 				Message: fmt.Sprintf("rename source and destination are both %q", source.text),
-				Range:   Range{Start: source.range_.Start, End: destination.range_.End},
+				Range:   Range{Start: source.sourceRange.Start, End: destination.sourceRange.End},
 			}
 		}
 		if _, duplicate := seenDestinations[destination.text]; duplicate {
 			return nil, &Diagnostic{
 				Code:    "SPL_DUPLICATE_RENAME_TARGET",
 				Message: fmt.Sprintf("rename destination field %q is repeated", destination.text),
-				Range:   destination.range_,
+				Range:   destination.sourceRange,
 			}
 		}
 		seenSources[source.text] = struct{}{}
 		seenDestinations[destination.text] = struct{}{}
 		command.Assignments = append(command.Assignments, RenameAssignment{
 			Source:           source.text,
-			SourceRange:      source.range_,
+			SourceRange:      source.sourceRange,
 			Destination:      destination.text,
-			DestinationRange: destination.range_,
-			Range:            Range{Start: source.range_.Start, End: destination.range_.End},
+			DestinationRange: destination.sourceRange,
+			Range:            Range{Start: source.sourceRange.Start, End: destination.sourceRange.End},
 		})
 		if len(command.Assignments) > maxRenameAssignments {
 			return nil, &Diagnostic{
 				Code:    "SPL_QUERY_TOO_COMPLEX",
 				Message: fmt.Sprintf("rename contains more than %d assignments", maxRenameAssignments),
-				Range:   destination.range_,
+				Range:   destination.sourceRange,
 			}
 		}
-		end = destination.range_.End
+		end = destination.sourceRange.End
 		p.advance()
 		if p.atCommandEnd() {
 			break
@@ -566,7 +570,7 @@ func (p *parser) parseRenameCommand(name token) (Command, error) {
 			return nil, &Diagnostic{
 				Code:        "SPL_EXPECTED_COMMA",
 				Message:     "rename pairs must be separated by a comma",
-				Range:       p.current().range_,
+				Range:       p.current().sourceRange,
 				Suggestions: []string{"rename first AS one, second AS two"},
 			}
 		}
@@ -574,7 +578,7 @@ func (p *parser) parseRenameCommand(name token) (Command, error) {
 			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected another rename source field after comma")
 		}
 	}
-	command.Range = Range{Start: name.range_.Start, End: end}
+	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	return command, nil
 }
 
@@ -587,7 +591,7 @@ func (p *parser) parseBinCommand(name token) (Command, error) {
 		spanSeen  bool
 		span      BinSpan
 		spanValue token
-		end       = name.range_.End
+		end       = name.sourceRange.End
 	)
 
 	for !p.atCommandEnd() {
@@ -600,7 +604,7 @@ func (p *parser) parseBinCommand(name token) (Command, error) {
 			return nil, &Diagnostic{
 				Code:        "SPL_EXPECTED_EQUAL",
 				Message:     "bin span must be followed by '='",
-				Range:       current.range_,
+				Range:       current.sourceRange,
 				Suggestions: []string{"bin _time span=5m"},
 			}
 		}
@@ -625,7 +629,7 @@ func (p *parser) parseBinCommand(name token) (Command, error) {
 			spanSeen = true
 			span = parsed
 			spanValue = value
-			end = value.range_.End
+			end = value.sourceRange.End
 			p.advance()
 			continue
 		}
@@ -661,7 +665,7 @@ func (p *parser) parseBinCommand(name token) (Command, error) {
 				return nil, p.unsupportedBinSyntax(destination, "wildcard bin output fields are not supported")
 			}
 			output = destination
-			end = destination.range_.End
+			end = destination.sourceRange.End
 			p.advance()
 			if !p.atCommandEnd() {
 				return nil, p.unsupportedBinSyntax(p.current(), "bin AS output must be the final command argument")
@@ -690,7 +694,7 @@ func (p *parser) parseBinCommand(name token) (Command, error) {
 		fieldSeen = true
 		field = current
 		output = current
-		end = current.range_.End
+		end = current.sourceRange.End
 		p.advance()
 	}
 
@@ -707,11 +711,11 @@ func (p *parser) parseBinCommand(name token) (Command, error) {
 	return &BinCommand{
 		CommandName: commandName,
 		Field:       field.text,
-		FieldRange:  field.range_,
+		FieldRange:  field.sourceRange,
 		Output:      output.text,
-		OutputRange: output.range_,
+		OutputRange: output.sourceRange,
 		Span:        span,
-		Range:       Range{Start: name.range_.Start, End: end},
+		Range:       Range{Start: name.sourceRange.Start, End: end},
 	}, nil
 }
 
@@ -719,7 +723,7 @@ func (p *parser) unsupportedBinSyntax(tok token, message string) *Diagnostic {
 	return &Diagnostic{
 		Code:        "SPL_UNSUPPORTED_BIN_SYNTAX",
 		Message:     message,
-		Range:       tok.range_,
+		Range:       tok.sourceRange,
 		Suggestions: []string{"bin _time span=5m"},
 	}
 }
@@ -734,7 +738,7 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 		return nil, &Diagnostic{
 			Code:        "SPL_EXPECTED_EQUAL",
 			Message:     "timechart span must be followed by '='",
-			Range:       spanOption.range_,
+			Range:       spanOption.sourceRange,
 			Suggestions: []string{"timechart span=5m count by field"},
 		}
 	}
@@ -743,7 +747,7 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 		return nil, &Diagnostic{
 			Code:        "SPL_INVALID_ARGUMENT",
 			Message:     "timechart span must be a positive integer followed by s, m, or h",
-			Range:       spanToken.range_,
+			Range:       spanToken.sourceRange,
 			Suggestions: []string{"timechart span=5m count by field"},
 		}
 	}
@@ -758,7 +762,7 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 		return nil, &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
 			Message:     "only argument-free count is supported by timechart",
-			Range:       aggregate.range_,
+			Range:       aggregate.sourceRange,
 			Suggestions: []string{"timechart span=5m count by field"},
 		}
 	}
@@ -782,9 +786,9 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 	return &TimechartCommand{
 		Span:           span,
 		Function:       AggregateFunctionCount,
-		AggregateRange: aggregate.range_,
-		SplitBy:        StatsGroupField{Name: field.text, Range: field.range_},
-		Range:          Range{Start: name.range_.Start, End: field.range_.End},
+		AggregateRange: aggregate.sourceRange,
+		SplitBy:        StatsGroupField{Name: field.text, Range: field.sourceRange},
+		Range:          Range{Start: name.sourceRange.Start, End: field.sourceRange.End},
 	}, nil
 }
 
@@ -799,7 +803,7 @@ func parseBinSpan(tok token) (BinSpan, error) {
 			return BinSpan{}, &Diagnostic{
 				Code:    "SPL_NUMBER_OUT_OF_RANGE",
 				Message: "bin span is outside the supported 64-bit range",
-				Range:   tok.range_,
+				Range:   tok.sourceRange,
 			}
 		}
 		if magnitude == 0 {
@@ -808,7 +812,7 @@ func parseBinSpan(tok token) (BinSpan, error) {
 		return BinSpan{
 			Kind:      BinSpanKindNumeric,
 			Magnitude: magnitude,
-			Range:     tok.range_,
+			Range:     tok.sourceRange,
 		}, nil
 	}
 
@@ -828,7 +832,7 @@ func invalidBinSpan(tok token) *Diagnostic {
 	return &Diagnostic{
 		Code:        "SPL_INVALID_ARGUMENT",
 		Message:     "bin span must be a positive integer, optionally followed by s, m, or h",
-		Range:       tok.range_,
+		Range:       tok.sourceRange,
 		Suggestions: []string{"bin _time span=5m"},
 	}
 }
@@ -891,7 +895,7 @@ func parseFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) (TimeSpan, 
 		return TimeSpan{}, &Diagnostic{
 			Code:    "SPL_NUMBER_OUT_OF_RANGE",
 			Message: config.commandName + " span is outside the supported 64-bit range",
-			Range:   tok.range_,
+			Range:   tok.sourceRange,
 		}
 	}
 	if magnitude == 0 {
@@ -902,17 +906,17 @@ func parseFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) (TimeSpan, 
 		return TimeSpan{}, &Diagnostic{
 			Code:    "SPL_NUMBER_OUT_OF_RANGE",
 			Message: config.commandName + " span is outside the supported duration range",
-			Range:   tok.range_,
+			Range:   tok.sourceRange,
 		}
 	}
-	return TimeSpan{Magnitude: magnitude, Unit: unit, Range: tok.range_}, nil
+	return TimeSpan{Magnitude: magnitude, Unit: unit, Range: tok.sourceRange}, nil
 }
 
 func invalidFixedTimeSpan(tok token, config fixedTimeSpanParserConfig) *Diagnostic {
 	return &Diagnostic{
 		Code:        "SPL_INVALID_ARGUMENT",
 		Message:     config.commandName + " span must be a positive integer followed by s, m, or h",
-		Range:       tok.range_,
+		Range:       tok.sourceRange,
 		Suggestions: []string{config.suggestion},
 	}
 }
@@ -921,7 +925,7 @@ func unsupportedFixedTimeSpanUnit(tok token, config fixedTimeSpanParserConfig) *
 	return &Diagnostic{
 		Code:        config.syntaxCode,
 		Message:     fmt.Sprintf("%s span unit in %q is unsupported; use fixed seconds, minutes, or hours", config.commandName, tok.text),
-		Range:       tok.range_,
+		Range:       tok.sourceRange,
 		Suggestions: []string{config.suggestion},
 	}
 }
@@ -930,7 +934,7 @@ func (p *parser) unsupportedTimechartSyntax(tok token, message string) *Diagnost
 	return &Diagnostic{
 		Code:        "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
 		Message:     message,
-		Range:       tok.range_,
+		Range:       tok.sourceRange,
 		Suggestions: []string{"timechart span=5m count by field"},
 	}
 }
@@ -1011,11 +1015,11 @@ func (p *parser) parseChartCommand(name token) (Command, error) {
 	}
 	return &ChartCommand{
 		Function:        AggregateFunctionCount,
-		AggregateRange:  aggregate.range_,
+		AggregateRange:  aggregate.sourceRange,
 		Over:            over,
 		SplitBy:         splitBy,
 		OverSpelledOver: overSpelledOver,
-		Range:           Range{Start: name.range_.Start, End: splitBy.Range.End},
+		Range:           Range{Start: name.sourceRange.Start, End: splitBy.Range.End},
 	}, nil
 }
 
@@ -1088,7 +1092,7 @@ func (p *parser) parseChartField(clause string) (StatsGroupField, error) {
 		return StatsGroupField{}, p.unsupportedChartSyntax(field, "wildcard chart fields are not supported")
 	}
 	p.advance()
-	return StatsGroupField{Name: field.text, Range: field.range_}, nil
+	return StatsGroupField{Name: field.text, Range: field.sourceRange}, nil
 }
 
 // chartOptionDiagnostic rejects every <name>=<value> token, including
@@ -1106,7 +1110,7 @@ func (p *parser) chartOptionDiagnostic() *Diagnostic {
 	return &Diagnostic{
 		Code:        "SPL_UNSUPPORTED_CHART_OPTION",
 		Message:     fmt.Sprintf("chart option %q is not supported", option.text),
-		Range:       option.range_,
+		Range:       option.sourceRange,
 		Suggestions: []string{"chart count OVER row BY column"},
 	}
 }
@@ -1129,7 +1133,7 @@ func (p *parser) chartSingleSplitSyntax() *Diagnostic {
 	return &Diagnostic{
 		Code:        "SPL_UNSUPPORTED_CHART_SYNTAX",
 		Message:     "chart requires one row split field and one column split field",
-		Range:       p.current().range_,
+		Range:       p.current().sourceRange,
 		Suggestions: []string{"stats count BY <field>", "chart count OVER row BY column"},
 	}
 }
@@ -1138,13 +1142,13 @@ func (p *parser) unsupportedChartAggregate(tok token, message string) *Diagnosti
 	return &Diagnostic{
 		Code:        "SPL_UNSUPPORTED_CHART_AGGREGATE",
 		Message:     message,
-		Range:       tok.range_,
+		Range:       tok.sourceRange,
 		Suggestions: []string{"chart count OVER row BY column"},
 	}
 }
 
 func (p *parser) unsupportedChartSyntax(tok token, message string) *Diagnostic {
-	return p.unsupportedChartSyntaxAt(tok.range_, message)
+	return p.unsupportedChartSyntaxAt(tok.sourceRange, message)
 }
 
 func (p *parser) unsupportedChartSyntaxAt(sourceRange Range, message string) *Diagnostic {
@@ -1157,10 +1161,10 @@ func (p *parser) unsupportedChartSyntaxAt(sourceRange Range, message string) *Di
 }
 
 type parsedFrequencyCommand struct {
-	field      string
-	fieldRange Range
-	limit      uint64
-	range_     Range
+	field       string
+	fieldRange  Range
+	limit       uint64
+	sourceRange Range
 }
 
 func (p *parser) parseTopCommand(name token) (Command, error) {
@@ -1172,7 +1176,7 @@ func (p *parser) parseTopCommand(name token) (Command, error) {
 		Field:      parsed.field,
 		FieldRange: parsed.fieldRange,
 		Limit:      parsed.limit,
-		Range:      parsed.range_,
+		Range:      parsed.sourceRange,
 	}, nil
 }
 
@@ -1185,7 +1189,7 @@ func (p *parser) parseRareCommand(name token) (Command, error) {
 		Field:      parsed.field,
 		FieldRange: parsed.fieldRange,
 		Limit:      parsed.limit,
-		Range:      parsed.range_,
+		Range:      parsed.sourceRange,
 	}, nil
 }
 
@@ -1223,7 +1227,7 @@ func (p *parser) parseFrequencyCommand(name token, commandName string) (parsedFr
 			return parsedFrequencyCommand{}, &Diagnostic{
 				Code:    "SPL_NUMBER_OUT_OF_RANGE",
 				Message: commandName + " result count is outside the supported 64-bit range",
-				Range:   limitToken.range_,
+				Range:   limitToken.sourceRange,
 			}
 		}
 		command.limit = limit
@@ -1245,8 +1249,8 @@ func (p *parser) parseFrequencyCommand(name token, commandName string) (parsedFr
 		return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(field, commandName, "wildcard "+commandName+" fields are not supported")
 	}
 	command.field = field.text
-	command.fieldRange = field.range_
-	command.range_ = Range{Start: name.range_.Start, End: field.range_.End}
+	command.fieldRange = field.sourceRange
+	command.sourceRange = Range{Start: name.sourceRange.Start, End: field.sourceRange.End}
 	p.advance()
 	if !p.atCommandEnd() {
 		return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(p.current(), commandName, "only one "+commandName+" field is currently supported")
@@ -1258,7 +1262,7 @@ func (p *parser) unsupportedFrequencySyntax(tok token, commandName, message stri
 	return &Diagnostic{
 		Code:        "SPL_UNSUPPORTED_" + strings.ToUpper(commandName) + "_SYNTAX",
 		Message:     message,
-		Range:       tok.range_,
+		Range:       tok.sourceRange,
 		Suggestions: []string{commandName + " field", commandName + " limit=20 field"},
 	}
 }
@@ -1269,13 +1273,13 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 	}
 
 	aggregates := make([]StatsAggregate, 0, 4)
-	end := name.range_.End
+	var end Position
 	for {
 		if len(aggregates) >= MaximumStatsMeasures {
 			return nil, &Diagnostic{
 				Code:    "SPL_QUERY_TOO_COMPLEX",
 				Message: fmt.Sprintf("stats contains more than %d aggregate measures", MaximumStatsMeasures),
-				Range:   p.current().range_,
+				Range:   p.current().sourceRange,
 			}
 		}
 		aggregate, aggregateEnd, err := p.parseStatsAggregate()
@@ -1301,7 +1305,7 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 		return nil, &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
 			Message:     fmt.Sprintf("unsupported stats syntax at %q; expected another supported aggregate, AS, or BY", current.text),
-			Range:       current.range_,
+			Range:       current.sourceRange,
 			Suggestions: []string{"stats count", "stats dc(field) BY group", "stats earliest(field) latest(field) BY group", "stats min(field) max(field) BY group", "stats sum(field) avg(field) BY group", "stats p50(field) p95(field) BY group"},
 		}
 	}
@@ -1318,18 +1322,18 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 	return &StatsCommand{
 		Aggregates: aggregates,
 		GroupBy:    groupBy,
-		Range:      Range{Start: name.range_.Start, End: end},
+		Range:      Range{Start: name.sourceRange.Start, End: end},
 	}, nil
 }
 
 func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 	functionToken := p.current()
 	if functionToken.kind != tokenWord {
-		return StatsAggregate{}, functionToken.range_.End, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "stats requires an aggregate function")
+		return StatsAggregate{}, functionToken.sourceRange.End, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "stats requires an aggregate function")
 	}
 	p.advance()
-	aggregate := StatsAggregate{Range: functionToken.range_, AliasRange: functionToken.range_}
-	end := functionToken.range_.End
+	aggregate := StatsAggregate{Range: functionToken.sourceRange, AliasRange: functionToken.sourceRange}
+	end := functionToken.sourceRange.End
 	functionName := strings.ToLower(functionToken.text)
 	spec, supported := statsAggregateSpecForName(functionName)
 	if !supported {
@@ -1370,7 +1374,7 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 				return StatsAggregate{}, end, &Diagnostic{
 					Code:    "SPL_UNSUPPORTED_WHERE_EXPRESSION",
 					Message: "count(eval(...)) requires explicit AND or OR between predicates",
-					Range:   p.current().range_,
+					Range:   p.current().sourceRange,
 					Suggestions: []string{
 						"count(eval(field=value AND other_field=value)) AS matches",
 					},
@@ -1389,10 +1393,10 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 		}
 		aggregate.Function = AggregateFunctionCountPredicate
 		aggregate.Predicate = predicate
-		end = p.previous().range_.End
+		end = p.previous().sourceRange.End
 		aggregate.Range.End = end
 		aggregate.Alias = ""
-		aggregate.AliasRange = Range{Start: functionToken.range_.Start, End: end}
+		aggregate.AliasRange = Range{Start: functionToken.sourceRange.Start, End: end}
 	}
 	parseInput := spec.requiresInput ||
 		(spec.inputFunction != AggregateFunctionInvalid && p.current().kind == tokenLeftParen)
@@ -1401,7 +1405,7 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 			return StatsAggregate{}, end, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
 				Message:     functionName + " requires one field argument in parentheses",
-				Range:       functionToken.range_,
+				Range:       functionToken.sourceRange,
 				Suggestions: []string{functionName + "(field)"},
 			}
 		}
@@ -1410,7 +1414,7 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 			return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", functionName+" requires one input field")
 		}
 		aggregate.Input = input.text
-		aggregate.InputRange = input.range_
+		aggregate.InputRange = input.sourceRange
 		p.advance()
 		if !p.match(tokenRightParen) {
 			return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' after the "+functionName+" input field")
@@ -1418,10 +1422,10 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 		if spec.inputFunction != AggregateFunctionInvalid {
 			aggregate.Function = spec.inputFunction
 		}
-		end = p.previous().range_.End
+		end = p.previous().sourceRange.End
 		aggregate.Range.End = end
 		aggregate.Alias = spec.canonicalName + "(" + input.text + ")"
-		aggregate.AliasRange = Range{Start: functionToken.range_.Start, End: end}
+		aggregate.AliasRange = Range{Start: functionToken.sourceRange.Start, End: end}
 	}
 
 	if p.isKeyword("AS") {
@@ -1432,9 +1436,9 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 		}
 		aggregate.Alias = alias.text
 		aggregate.ExplicitAlias = true
-		aggregate.AliasRange = alias.range_
-		aggregate.Range.End = alias.range_.End
-		end = alias.range_.End
+		aggregate.AliasRange = alias.sourceRange
+		aggregate.Range.End = alias.sourceRange.End
+		end = alias.sourceRange.End
 		p.advance()
 	}
 	if aggregate.Function == AggregateFunctionCountPredicate && !aggregate.ExplicitAlias {
@@ -1539,7 +1543,7 @@ func supportedStatsAggregateName(name string) bool {
 
 func (p *parser) parseStatsGroupFields() ([]StatsGroupField, Position, error) {
 	fields := make([]StatsGroupField, 0, 4)
-	end := p.current().range_.Start
+	end := p.current().sourceRange.Start
 	wantField := true
 	for !p.atCommandEnd() {
 		tok := p.current()
@@ -1558,7 +1562,7 @@ func (p *parser) parseStatsGroupFields() ([]StatsGroupField, Position, error) {
 			return nil, end, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
 				Message:     "a stats aggregate alias must appear before the BY clause",
-				Range:       tok.range_,
+				Range:       tok.sourceRange,
 				Suggestions: []string{"stats count AS total BY field"},
 			}
 		}
@@ -1566,11 +1570,11 @@ func (p *parser) parseStatsGroupFields() ([]StatsGroupField, Position, error) {
 			return nil, end, &Diagnostic{
 				Code:    "SPL_QUERY_TOO_COMPLEX",
 				Message: fmt.Sprintf("stats BY contains more than %d grouping fields", MaximumStatsGroupFields),
-				Range:   tok.range_,
+				Range:   tok.sourceRange,
 			}
 		}
-		fields = append(fields, StatsGroupField{Name: tok.text, Range: tok.range_})
-		end = tok.range_.End
+		fields = append(fields, StatsGroupField{Name: tok.text, Range: tok.sourceRange})
+		end = tok.sourceRange.End
 		wantField = false
 		p.advance()
 	}
@@ -1584,7 +1588,7 @@ func (p *parser) unsupportedStatsAggregate(tok token, message string) *Diagnosti
 	return &Diagnostic{
 		Code:        "SPL_UNSUPPORTED_STATS_AGGREGATE",
 		Message:     message,
-		Range:       tok.range_,
+		Range:       tok.sourceRange,
 		Suggestions: []string{"stats count", "stats dc(field) BY group", "stats earliest(field) latest(field) BY group", "stats min(field) max(field) BY group", "stats sum(field) avg(field) BY group", "stats p50(field) p95(field) BY group"},
 	}
 }
@@ -1597,7 +1601,7 @@ func (p *parser) parseSearchCommand(name token) (Command, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &SearchCommand{Expression: expression, Range: Range{Start: name.range_.Start, End: expression.SourceRange().End}}, nil
+	return &SearchCommand{Expression: expression, Range: Range{Start: name.sourceRange.Start, End: expression.SourceRange().End}}, nil
 }
 
 func (p *parser) parseWhereCommand(name token) (Command, error) {
@@ -1612,25 +1616,25 @@ func (p *parser) parseWhereCommand(name token) (Command, error) {
 		return nil, &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_WHERE_EXPRESSION",
 			Message:     fmt.Sprintf("unsupported where syntax at %q; explicit AND or OR is required between comparisons", p.current().text),
-			Range:       p.current().range_,
+			Range:       p.current().sourceRange,
 			Suggestions: []string{"where field=value AND other_field>0"},
 		}
 	}
 	return &WhereCommand{
 		Expression: expression,
-		Range:      Range{Start: name.range_.Start, End: expression.SourceRange().End},
+		Range:      Range{Start: name.sourceRange.Start, End: expression.SourceRange().End},
 	}, nil
 }
 
 func (p *parser) parseEvalCommand(name token) (Command, error) {
 	command := &EvalCommand{}
-	end := name.range_.End
+	var end Position
 	for {
 		if len(command.Assignments) >= maxEvalAssignments {
 			return nil, &Diagnostic{
 				Code:    "SPL_QUERY_TOO_COMPLEX",
 				Message: fmt.Sprintf("eval contains more than %d assignments", maxEvalAssignments),
-				Range:   p.current().range_,
+				Range:   p.current().sourceRange,
 			}
 		}
 		field := p.current()
@@ -1641,7 +1645,7 @@ func (p *parser) parseEvalCommand(name token) (Command, error) {
 			return nil, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_EVAL_EXPRESSION",
 				Message:     fmt.Sprintf("unsupported eval destination %q", field.text),
-				Range:       field.range_,
+				Range:       field.sourceRange,
 				Suggestions: []string{"use an unquoted field name without arithmetic operators"},
 			}
 		}
@@ -1650,7 +1654,7 @@ func (p *parser) parseEvalCommand(name token) (Command, error) {
 			return nil, &Diagnostic{
 				Code:        "SPL_EXPECTED_EQUAL",
 				Message:     fmt.Sprintf("eval destination field %q must be followed by '='", field.text),
-				Range:       field.range_,
+				Range:       field.sourceRange,
 				Suggestions: []string{"eval field=expression"},
 			}
 		}
@@ -1671,9 +1675,9 @@ func (p *parser) parseEvalCommand(name token) (Command, error) {
 		}
 		assignment := EvalAssignment{
 			Field:      field.text,
-			FieldRange: field.range_,
+			FieldRange: field.sourceRange,
 			Expression: expression,
-			Range:      Range{Start: field.range_.Start, End: expression.SourceRange().End},
+			Range:      Range{Start: field.sourceRange.Start, End: expression.SourceRange().End},
 		}
 		command.Assignments = append(command.Assignments, assignment)
 		end = expression.SourceRange().End
@@ -1688,11 +1692,11 @@ func (p *parser) parseEvalCommand(name token) (Command, error) {
 		return nil, &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_EVAL_EXPRESSION",
 			Message:     fmt.Sprintf("unsupported eval syntax at %q", p.current().text),
-			Range:       p.current().range_,
+			Range:       p.current().sourceRange,
 			Suggestions: []string{"eval field=expression"},
 		}
 	}
-	command.Range = Range{Start: name.range_.Start, End: end}
+	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	return command, nil
 }
 
@@ -1706,7 +1710,7 @@ func (p *parser) parseFieldsCommand(name token) (Command, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &FieldsCommand{Fields: fields, Exclude: exclude, Range: Range{Start: name.range_.Start, End: end}}, nil
+	return &FieldsCommand{Fields: fields, Exclude: exclude, Range: Range{Start: name.sourceRange.Start, End: end}}, nil
 }
 
 func (p *parser) parseTableCommand(name token) (Command, error) {
@@ -1714,12 +1718,12 @@ func (p *parser) parseTableCommand(name token) (Command, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TableCommand{Fields: fields, Range: Range{Start: name.range_.Start, End: end}}, nil
+	return &TableCommand{Fields: fields, Range: Range{Start: name.sourceRange.Start, End: end}}, nil
 }
 
 func (p *parser) parseFieldList() ([]string, Position, error) {
 	fields := make([]string, 0, 8)
-	end := p.current().range_.Start
+	end := p.current().sourceRange.Start
 	wantField := true
 	for !p.atCommandEnd() {
 		tok := p.current()
@@ -1735,7 +1739,7 @@ func (p *parser) parseFieldList() ([]string, Position, error) {
 			return nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a field name")
 		}
 		fields = append(fields, tok.text)
-		end = tok.range_.End
+		end = tok.sourceRange.End
 		wantField = false
 		p.advance()
 	}
@@ -1765,7 +1769,7 @@ func (p *parser) parseSortCommand(name token) (Command, error) {
 		return nil, p.errorAtCurrent("SPL_UNSUPPORTED_SORT_SYNTAX", "use a + or - prefix on each sort field")
 	}
 
-	end := name.range_.End
+	end := name.sourceRange.End
 	lastWasComma := false
 	for !p.atCommandEnd() {
 		if p.match(tokenComma) {
@@ -1790,15 +1794,15 @@ func (p *parser) parseSortCommand(name token) (Command, error) {
 		if field == "" {
 			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field after direction prefix")
 		}
-		command.Fields = append(command.Fields, SortField{Field: field, Descending: descending, Range: tok.range_})
-		end = tok.range_.End
+		command.Fields = append(command.Fields, SortField{Field: field, Descending: descending, Range: tok.sourceRange})
+		end = tok.sourceRange.End
 		lastWasComma = false
 		p.advance()
 	}
 	if len(command.Fields) == 0 || lastWasComma {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "sort requires at least one field")
 	}
-	command.Range = Range{Start: name.range_.Start, End: end}
+	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	return command, nil
 }
 
@@ -1807,7 +1811,7 @@ func (p *parser) parseDedupCommand(name token) (Command, error) {
 		return nil, &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_DEDUP_SYNTAX",
 			Message:     message,
-			Range:       tok.range_,
+			Range:       tok.sourceRange,
 			Suggestions: []string{"dedup field", "dedup 2 field1, field2"},
 		}
 	}
@@ -1826,7 +1830,7 @@ func (p *parser) parseDedupCommand(name token) (Command, error) {
 		p.advance()
 	}
 
-	end := name.range_.End
+	end := name.sourceRange.End
 	wantField := true
 	seen := make(map[string]struct{})
 	for !p.atCommandEnd() {
@@ -1856,21 +1860,21 @@ func (p *parser) parseDedupCommand(name token) (Command, error) {
 			return unsupported(tok, fmt.Sprintf("dedup supports at most %d fields", maxDedupFields))
 		}
 		seen[tok.text] = struct{}{}
-		command.Fields = append(command.Fields, DedupField{Name: tok.text, Range: tok.range_})
-		end = tok.range_.End
+		command.Fields = append(command.Fields, DedupField{Name: tok.text, Range: tok.sourceRange})
+		end = tok.sourceRange.End
 		wantField = false
 		p.advance()
 	}
 	if len(command.Fields) == 0 || wantField {
 		return unsupported(p.current(), "dedup requires at least one exact field and cannot end with a comma")
 	}
-	command.Range = Range{Start: name.range_.Start, End: end}
+	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	return command, nil
 }
 
 func (p *parser) parseLimitCommand(name string, nameToken token) (Command, error) {
 	count := uint64(10)
-	end := nameToken.range_.End
+	end := nameToken.sourceRange.End
 	if !p.atCommandEnd() {
 		tok := p.current()
 		if tok.kind != tokenWord {
@@ -1881,13 +1885,13 @@ func (p *parser) parseLimitCommand(name string, nameToken token) (Command, error
 			return nil, p.errorAtCurrent("SPL_INVALID_ARGUMENT", fmt.Sprintf("%s count must be a positive integer", name))
 		}
 		count = parsed
-		end = tok.range_.End
+		end = tok.sourceRange.End
 		p.advance()
 	}
 	if !p.atCommandEnd() {
 		return nil, p.errorAtCurrent("SPL_UNSUPPORTED_ARGUMENT", fmt.Sprintf("unsupported %s argument %q", name, p.current().text))
 	}
-	return &LimitCommand{CommandName: name, Count: count, Range: Range{Start: nameToken.range_.Start, End: end}}, nil
+	return &LimitCommand{CommandName: name, Count: count, Range: Range{Start: nameToken.sourceRange.Start, End: end}}, nil
 }
 
 // parseSearchExpression implements Splunk base-search precedence:
@@ -1943,7 +1947,7 @@ func (p *parser) parseWhereAnd() (WhereExpr, error) {
 
 func (p *parser) parseWhereUnary() (WhereExpr, error) {
 	if p.isKeyword("NOT") {
-		start := p.current().range_.Start
+		start := p.current().sourceRange.Start
 		p.advance()
 		if !p.canStartWhereOperand() {
 			return nil, p.errorAtCurrent("SPL_EXPECTED_EXPRESSION", "expected an expression after NOT")
@@ -1959,7 +1963,7 @@ func (p *parser) parseWhereUnary() (WhereExpr, error) {
 
 func (p *parser) parseWherePrimary() (WhereExpr, error) {
 	if p.match(tokenLeftParen) {
-		start := p.previous().range_.Start
+		start := p.previous().sourceRange.Start
 		if p.current().kind == tokenRightParen {
 			return nil, p.errorAtCurrent("SPL_EXPECTED_EXPRESSION", "empty parenthesized where expression")
 		}
@@ -1970,7 +1974,7 @@ func (p *parser) parseWherePrimary() (WhereExpr, error) {
 		if !p.match(tokenRightParen) {
 			return nil, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' to close where expression")
 		}
-		setWhereExpressionRange(expression, Range{Start: start, End: p.previous().range_.End})
+		setWhereExpressionRange(expression, Range{Start: start, End: p.previous().sourceRange.End})
 		return expression, nil
 	}
 
@@ -1993,7 +1997,7 @@ func (p *parser) parseWherePrimary() (WhereExpr, error) {
 			return nil, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_EVAL_EXPRESSION",
 				Message:     fmt.Sprintf("unsupported where scalar operator %q", p.current().text),
-				Range:       p.current().range_,
+				Range:       p.current().sourceRange,
 				Suggestions: []string{"use a supported comparison operator"},
 			}
 		}
@@ -2025,7 +2029,7 @@ func (p *parser) parseScalarExpression() (ScalarExpr, error) {
 		return nil, &Diagnostic{
 			Code:    "SPL_QUERY_TOO_COMPLEX",
 			Message: fmt.Sprintf("scalar expression nesting exceeds %d levels", maxScalarNestingDepth),
-			Range:   p.current().range_,
+			Range:   p.current().sourceRange,
 		}
 	}
 	p.scalarDepth++
@@ -2034,8 +2038,8 @@ func (p *parser) parseScalarExpression() (ScalarExpr, error) {
 	tok := p.current()
 	if tok.kind == tokenString {
 		p.advance()
-		literal := Literal{Kind: LiteralKindString, Text: tok.text, Quoted: true, Range: tok.range_}
-		return &ScalarLiteralExpr{Value: literal, Range: tok.range_}, nil
+		literal := Literal{Kind: LiteralKindString, Text: tok.text, Quoted: true, Range: tok.sourceRange}
+		return &ScalarLiteralExpr{Value: literal, Range: tok.sourceRange}, nil
 	}
 	if tok.kind != tokenWord || p.isKeyword("AND") || p.isKeyword("OR") || p.isKeyword("NOT") {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_SCALAR_EXPRESSION", "expected a field, literal, or supported function call")
@@ -2052,18 +2056,18 @@ func (p *parser) parseScalarExpression() (ScalarExpr, error) {
 	}
 	kind := classifyLiteral(tok.text, false)
 	if kind != LiteralKindString {
-		literal := Literal{Kind: kind, Text: tok.text, Range: tok.range_}
-		return &ScalarLiteralExpr{Value: literal, Range: tok.range_}, nil
+		literal := Literal{Kind: kind, Text: tok.text, Range: tok.sourceRange}
+		return &ScalarLiteralExpr{Value: literal, Range: tok.sourceRange}, nil
 	}
 	if unsupportedScalarIdentifier(tok.text) {
 		return nil, &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_EVAL_EXPRESSION",
 			Message:     fmt.Sprintf("unsupported unquoted scalar expression %q", tok.text),
-			Range:       tok.range_,
+			Range:       tok.sourceRange,
 			Suggestions: []string{"use a supported field, literal, or function call"},
 		}
 	}
-	return &ScalarFieldExpr{Field: tok.text, Range: tok.range_}, nil
+	return &ScalarFieldExpr{Field: tok.text, Range: tok.sourceRange}, nil
 }
 
 func (p *parser) parseScalarIf(name token) (ScalarExpr, error) {
@@ -2075,7 +2079,7 @@ func (p *parser) parseScalarIf(name token) (ScalarExpr, error) {
 		}
 	}
 	if p.current().kind == tokenRightParen || p.current().kind == tokenComma {
-		return nil, invalidArity(name.range_)
+		return nil, invalidArity(name.sourceRange)
 	}
 	condition, err := p.parseWhereExpression()
 	if err != nil {
@@ -2083,7 +2087,7 @@ func (p *parser) parseScalarIf(name token) (ScalarExpr, error) {
 	}
 	if !p.match(tokenComma) {
 		if p.current().kind == tokenRightParen || p.atCommandEnd() {
-			return nil, invalidArity(name.range_)
+			return nil, invalidArity(name.sourceRange)
 		}
 		if p.current().kind == tokenWord {
 			return nil, &Diagnostic{
@@ -2092,31 +2096,31 @@ func (p *parser) parseScalarIf(name token) (ScalarExpr, error) {
 					"unsupported if predicate syntax at %q; explicit AND or OR is required between predicates",
 					p.current().text,
 				),
-				Range:       p.current().range_,
+				Range:       p.current().sourceRange,
 				Suggestions: []string{`if(first=value AND second=value, "yes", "no")`},
 			}
 		}
 		return nil, p.errorAtCurrent("SPL_EXPECTED_COMMA", "expected ',' after if predicate")
 	}
 	if p.current().kind == tokenRightParen || p.current().kind == tokenComma {
-		return nil, invalidArity(name.range_)
+		return nil, invalidArity(name.sourceRange)
 	}
 	trueValue, err := p.parseScalarExpression()
 	if err != nil {
 		return nil, err
 	}
 	if !p.match(tokenComma) {
-		return nil, invalidArity(name.range_)
+		return nil, invalidArity(name.sourceRange)
 	}
 	if p.current().kind == tokenRightParen || p.current().kind == tokenComma {
-		return nil, invalidArity(name.range_)
+		return nil, invalidArity(name.sourceRange)
 	}
 	falseValue, err := p.parseScalarExpression()
 	if err != nil {
 		return nil, err
 	}
 	if p.current().kind == tokenComma {
-		return nil, invalidArity(name.range_)
+		return nil, invalidArity(name.sourceRange)
 	}
 	if !p.match(tokenRightParen) {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' to close if function")
@@ -2125,7 +2129,7 @@ func (p *parser) parseScalarIf(name token) (ScalarExpr, error) {
 		Condition: condition,
 		True:      trueValue,
 		False:     falseValue,
-		Range:     Range{Start: name.range_.Start, End: p.previous().range_.End},
+		Range:     Range{Start: name.sourceRange.Start, End: p.previous().sourceRange.End},
 	}, nil
 }
 
@@ -2138,7 +2142,7 @@ func (p *parser) parseScalarCase(name token) (ScalarExpr, error) {
 		}
 	}
 	if p.current().kind == tokenRightParen || p.current().kind == tokenComma {
-		return nil, invalidArity(name.range_)
+		return nil, invalidArity(name.sourceRange)
 	}
 
 	branches := make([]ScalarCaseBranch, 0, 2)
@@ -2149,7 +2153,7 @@ func (p *parser) parseScalarCase(name token) (ScalarExpr, error) {
 		}
 		if !p.match(tokenComma) {
 			if p.current().kind == tokenRightParen || p.atCommandEnd() {
-				return nil, invalidArity(name.range_)
+				return nil, invalidArity(name.sourceRange)
 			}
 			if p.current().kind == tokenWord {
 				return nil, &Diagnostic{
@@ -2158,7 +2162,7 @@ func (p *parser) parseScalarCase(name token) (ScalarExpr, error) {
 						"unsupported case predicate syntax at %q; explicit AND or OR is required between predicates",
 						p.current().text,
 					),
-					Range:       p.current().range_,
+					Range:       p.current().sourceRange,
 					Suggestions: []string{`case(first=value AND second=value, "match")`},
 				}
 			}
@@ -2168,7 +2172,7 @@ func (p *parser) parseScalarCase(name token) (ScalarExpr, error) {
 			)
 		}
 		if p.current().kind == tokenRightParen || p.current().kind == tokenComma {
-			return nil, invalidArity(name.range_)
+			return nil, invalidArity(name.sourceRange)
 		}
 		value, err := p.parseScalarExpression()
 		if err != nil {
@@ -2189,14 +2193,14 @@ func (p *parser) parseScalarCase(name token) (ScalarExpr, error) {
 					"case contains more than %d condition/value pairs",
 					MaximumCaseBranches,
 				),
-				Range: name.range_,
+				Range: name.sourceRange,
 			}
 		}
 		if !p.match(tokenComma) {
 			break
 		}
 		if p.current().kind == tokenRightParen || p.current().kind == tokenComma {
-			return nil, invalidArity(name.range_)
+			return nil, invalidArity(name.sourceRange)
 		}
 	}
 	if !p.match(tokenRightParen) {
@@ -2207,7 +2211,7 @@ func (p *parser) parseScalarCase(name token) (ScalarExpr, error) {
 	}
 	return &ScalarCaseExpr{
 		Branches: branches,
-		Range:    Range{Start: name.range_.Start, End: p.previous().range_.End},
+		Range:    Range{Start: name.sourceRange.Start, End: p.previous().sourceRange.End},
 	}, nil
 }
 
@@ -2232,7 +2236,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 						"coalesce contains more than %d arguments",
 						MaximumCoalesceArguments,
 					),
-					Range: name.range_,
+					Range: name.sourceRange,
 				}
 			}
 			if !p.match(tokenComma) {
@@ -2246,12 +2250,12 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	if !p.match(tokenRightParen) {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' to close function call")
 	}
-	function := ScalarFunctionInvalid
+	var function ScalarFunction
 	switch functionName {
 	case "tonumber":
 		function = ScalarFunctionToNumber
 		if len(arguments) != 1 {
-			return nil, &Diagnostic{Code: "SPL_INVALID_EVAL_ARITY", Message: "tonumber requires exactly one argument in compatibility version 0.1", Range: name.range_}
+			return nil, &Diagnostic{Code: "SPL_INVALID_EVAL_ARITY", Message: "tonumber requires exactly one argument in compatibility version 0.1", Range: name.sourceRange}
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
 			return nil, &Diagnostic{
@@ -2267,7 +2271,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	case "replace":
 		function = ScalarFunctionReplace
 		if len(arguments) != 3 {
-			return nil, &Diagnostic{Code: "SPL_INVALID_EVAL_ARITY", Message: "replace requires exactly three arguments", Range: name.range_}
+			return nil, &Diagnostic{Code: "SPL_INVALID_EVAL_ARITY", Message: "replace requires exactly three arguments", Range: name.sourceRange}
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
 			return nil, &Diagnostic{
@@ -2314,7 +2318,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 			return nil, &Diagnostic{
 				Code:    "SPL_INVALID_EVAL_ARITY",
 				Message: "isnull requires exactly one argument",
-				Range:   name.range_,
+				Range:   name.sourceRange,
 			}
 		}
 	case "isnotnull":
@@ -2323,7 +2327,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 			return nil, &Diagnostic{
 				Code:    "SPL_INVALID_EVAL_ARITY",
 				Message: "isnotnull requires exactly one argument",
-				Range:   name.range_,
+				Range:   name.sourceRange,
 			}
 		}
 	case "coalesce":
@@ -2332,14 +2336,14 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 			return nil, &Diagnostic{
 				Code:    "SPL_INVALID_EVAL_ARITY",
 				Message: "coalesce requires at least one argument",
-				Range:   name.range_,
+				Range:   name.sourceRange,
 			}
 		}
 	default:
 		return nil, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_EVAL_FUNCTION",
 			Message: fmt.Sprintf("eval function %q is not supported", name.text),
-			Range:   name.range_,
+			Range:   name.sourceRange,
 			Suggestions: []string{
 				"tonumber(value)",
 				`replace(value, "pattern", "replacement")`,
@@ -2353,7 +2357,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	return &ScalarCallExpr{
 		Function:  function,
 		Arguments: arguments,
-		Range:     Range{Start: name.range_.Start, End: p.previous().range_.End},
+		Range:     Range{Start: name.sourceRange.Start, End: p.previous().sourceRange.End},
 	}, nil
 }
 
@@ -2539,7 +2543,7 @@ func (p *parser) parseSearchOr() (Expr, error) {
 
 func (p *parser) parseSearchUnary() (Expr, error) {
 	if p.isKeyword("NOT") {
-		start := p.current().range_.Start
+		start := p.current().sourceRange.Start
 		p.advance()
 		if !p.canStartSearchOperand() {
 			return nil, p.errorAtCurrent("SPL_EXPECTED_EXPRESSION", "expected an expression after NOT")
@@ -2555,7 +2559,7 @@ func (p *parser) parseSearchUnary() (Expr, error) {
 
 func (p *parser) parseSearchPrimary() (Expr, error) {
 	if p.match(tokenLeftParen) {
-		start := p.previous().range_.Start
+		start := p.previous().sourceRange.Start
 		if p.current().kind == tokenRightParen {
 			return nil, p.errorAtCurrent("SPL_EXPECTED_EXPRESSION", "empty parenthesized expression")
 		}
@@ -2566,14 +2570,14 @@ func (p *parser) parseSearchPrimary() (Expr, error) {
 		if !p.match(tokenRightParen) {
 			return nil, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' to close search expression")
 		}
-		setExpressionRange(expression, Range{Start: start, End: p.previous().range_.End})
+		setExpressionRange(expression, Range{Start: start, End: p.previous().sourceRange.End})
 		return expression, nil
 	}
 
 	tok := p.current()
 	if tok.kind == tokenString {
 		p.advance()
-		return &TermExpr{Value: tok.text, Quoted: true, Range: tok.range_}, nil
+		return &TermExpr{Value: tok.text, Quoted: true, Range: tok.sourceRange}, nil
 	}
 	if tok.kind != tokenWord || p.isKeyword("AND") || p.isKeyword("OR") {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_EXPRESSION", "expected a search term or field comparison")
@@ -2589,10 +2593,10 @@ func (p *parser) parseSearchPrimary() (Expr, error) {
 			Field: tok.text,
 			Op:    op,
 			Value: literal,
-			Range: Range{Start: tok.range_.Start, End: literal.Range.End},
+			Range: Range{Start: tok.sourceRange.Start, End: literal.Range.End},
 		}, nil
 	}
-	return &TermExpr{Value: tok.text, Range: tok.range_}, nil
+	return &TermExpr{Value: tok.text, Range: tok.sourceRange}, nil
 }
 
 func (p *parser) parseLiteral() (Literal, error) {
@@ -2602,7 +2606,7 @@ func (p *parser) parseLiteral() (Literal, error) {
 	}
 	p.advance()
 	kind := classifyLiteral(tok.text, tok.quoted)
-	return Literal{Kind: kind, Text: tok.text, Quoted: tok.quoted, Range: tok.range_}, nil
+	return Literal{Kind: kind, Text: tok.text, Quoted: tok.quoted, Range: tok.sourceRange}, nil
 }
 
 func classifyLiteral(text string, quoted bool) LiteralKind {
@@ -2797,5 +2801,5 @@ func (p *parser) previous() token {
 }
 
 func (p *parser) errorAtCurrent(code, message string) *Diagnostic {
-	return &Diagnostic{Code: code, Message: message, Range: p.current().range_}
+	return &Diagnostic{Code: code, Message: message, Range: p.current().sourceRange}
 }
