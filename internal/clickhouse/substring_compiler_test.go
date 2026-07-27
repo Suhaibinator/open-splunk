@@ -50,38 +50,41 @@ func TestCompileEvalSubstringUsesSQLiteUTF8IntervalSemantics(t *testing.T) {
 func TestCompileEvalSubstringOmittedLengthAndExtremeIndexesStayOverflowSafe(t *testing.T) {
 	t.Parallel()
 
-	compiled := compileSPL(
+	native := compileSPL(
 		t,
-		`index=gradethis | eval whole=substr(source, -9223372036854775808), empty=substr(source, 18446744073709551615) | table whole,empty`,
+		`index=gradethis | eval whole=substr(source, -9223372036854775808) | table whole`,
 	)
-	for _, argument := range []any{int64(math.MinInt64), uint64(math.MaxUint64)} {
-		found := false
-		for _, got := range compiled.Args {
-			if got == argument {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Fatalf("args = %#v, missing extreme index %#v", compiled.Args, argument)
-		}
+	if !containsArgument(native.Args, int64(math.MinInt64)) {
+		t.Fatalf("native args = %#v, missing MinInt64", native.Args)
 	}
 	for _, forbidden := range []string{
 		`lengthUTF8("source")`,
 		`arrayMap(`,
 		`abs(`,
 	} {
-		if strings.Contains(compiled.SQL, forbidden) {
-			t.Fatalf("omitted-length substring retained slow/unsafe operation %q:\n%s", forbidden, compiled.SQL)
+		if strings.Contains(native.SQL, forbidden) {
+			t.Fatalf("native omitted-length substring retained %q:\n%s", forbidden, native.SQL)
 		}
 	}
-	for _, required := range []string{
+	if !strings.Contains(
+		native.SQL,
 		`substringUTF8("source", CAST(? AS Int64)) AS "whole"`,
-		`substringUTF8("source", CAST(? AS UInt64)) AS "empty"`,
-	} {
-		if !strings.Contains(compiled.SQL, required) {
-			t.Fatalf("omitted-length substring SQL missing %q:\n%s", required, compiled.SQL)
-		}
+	) {
+		t.Fatalf("native omitted-length substring SQL:\n%s", native.SQL)
+	}
+
+	wideUnsigned := compileSPL(
+		t,
+		`index=gradethis | eval empty=substr(source, 18446744073709551615) | table empty`,
+	)
+	if !containsArgument(wideUnsigned.Args, uint64(math.MaxUint64)) ||
+		!strings.Contains(wideUnsigned.SQL, `arrayMap((value, start) ->`) ||
+		!strings.Contains(wideUnsigned.SQL, `CAST(? AS Int128)`) {
+		t.Fatalf(
+			"wide UInt64 omitted-length substring did not use Int128 fallback:\n%s\nargs: %#v",
+			wideUnsigned.SQL,
+			wideUnsigned.Args,
+		)
 	}
 
 	generic := compileSPL(

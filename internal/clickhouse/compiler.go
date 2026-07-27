@@ -86,8 +86,12 @@ const (
 	// compatible UTF-8 interval expression. Inputs and literal indexes are
 	// bound once, so nested substr calls grow linearly inside this ceiling.
 	maxCompiledSubstringScalarSQLBytes = 64 << 10
-	maxCompiledAssignments             = 64
-	maxCompiledExtractionOutputs       = 64
+	// ClickHouse accepts UInt64 substring arguments syntactically but treats
+	// values above MaxInt64 as signed internally. Wider literals use the
+	// Int128 interval fallback instead of a native fast path.
+	maximumNativeSubstringInteger uint64 = 1<<63 - 1
+	maxCompiledAssignments               = 64
+	maxCompiledExtractionOutputs         = 64
 	// Parser-produced predicates are already bounded by a 1,024-token source
 	// and 32 eval/where leaves. Revalidate a deliberately wider structural
 	// ceiling here so forged logical plans cannot drive unbounded recursive
@@ -5218,6 +5222,13 @@ func compileSQLiteSubstringUTF8SQL(
 			// character; with no explicit length that is the whole String.
 			return inputSQL, nil
 		}
+		if !nativeSubstringIntegerSafe(start) {
+			return compileGenericSQLiteSubstringUTF8SQL(
+				inputSQL,
+				start,
+				nil,
+			)
+		}
 		startSQL, startArgs := compileNativeSubstringInteger(start)
 		return "substringUTF8(" + inputSQL + ", " + startSQL + ")", startArgs
 	}
@@ -5233,10 +5244,25 @@ func compileSQLiteSubstringUTF8SQL(
 			if startValue == 0 {
 				// SQLite counts the virtual zero position against a positive
 				// length, so only length-1 real characters are returned.
-				return compileNativeSubstringUTF8(
+				if lengthValue-1 <= maximumNativeSubstringInteger {
+					return compileNativeSubstringUTF8(
+						inputSQL,
+						1,
+						lengthValue-1,
+					)
+				}
+				return compileGenericSQLiteSubstringUTF8SQL(
 					inputSQL,
-					1,
-					lengthValue-1,
+					start,
+					length,
+				)
+			}
+			if !nativeSubstringIntegerSafe(start) ||
+				!nativeSubstringIntegerSafe(*length) {
+				return compileGenericSQLiteSubstringUTF8SQL(
+					inputSQL,
+					start,
+					length,
 				)
 			}
 			startSQL, startArgs := compileNativeSubstringInteger(start)
@@ -5255,19 +5281,20 @@ func compileSQLiteSubstringUTF8SQL(
 		if startValue > 1 && magnitude < startValue-1 {
 			begin = startValue - magnitude
 		}
+		if begin > maximumNativeSubstringInteger ||
+			end-begin > maximumNativeSubstringInteger {
+			return compileGenericSQLiteSubstringUTF8SQL(
+				inputSQL,
+				start,
+				length,
+			)
+		}
 		return compileNativeSubstringUTF8(inputSQL, begin, end-begin)
 	}
 
-	// A negative start with an explicit non-zero length is the only shape
-	// whose clipped interval depends on the row's UTF-8 code-point count.
-	startSQL, startArgs := compileInt128SubstringInteger(start)
-	lengthSQL, lengthArgs := compileInt128SubstringInteger(*length)
-	return sqliteNegativeStartSubstringUTF8SQL(
-			inputSQL,
-			startSQL,
-			lengthSQL,
-		),
-		append(startArgs, lengthArgs...)
+	// A negative start with an explicit non-zero length has a clipped interval
+	// which depends on the row's UTF-8 code-point count.
+	return compileGenericSQLiteSubstringUTF8SQL(inputSQL, start, length)
 }
 
 func compileNativeSubstringUTF8(
@@ -5284,6 +5311,11 @@ func compileNativeSubstringInteger(value plan.Value) (string, []any) {
 		return "CAST(? AS Int64)", []any{value.Int64}
 	}
 	return "CAST(? AS UInt64)", []any{value.Uint64}
+}
+
+func nativeSubstringIntegerSafe(value plan.Value) bool {
+	return value.Kind == plan.ValueKindInt64 ||
+		value.Uint64 <= maximumNativeSubstringInteger
 }
 
 func compileInt128SubstringInteger(value plan.Value) (string, []any) {
@@ -5332,14 +5364,29 @@ func negativeSubstringIntegerMagnitude(value plan.Value) uint64 {
 	return uint64(magnitudeMinusOne) + 1
 }
 
-func sqliteNegativeStartSubstringUTF8SQL(
-	inputSQL, startSQL, lengthSQL string,
-) string {
+func compileGenericSQLiteSubstringUTF8SQL(
+	inputSQL string,
+	start plan.Value,
+	length *plan.Value,
+) (string, []any) {
+	startSQL, startArgs := compileInt128SubstringInteger(start)
+	outerParameters := "value, start"
+	outerArguments := "[" + inputSQL + "], [" + startSQL + "]"
+
 	positionSQL := "if(start < 0, n + start + 1, start)"
-	beginSQL := "if(span < 0, (" + positionSQL + ") + span, " +
-		positionSQL + ")"
-	endSQL := "if(span < 0, " + positionSQL + ", (" +
-		positionSQL + ") + span)"
+	beginSQL := positionSQL
+	endSQL := "n + 1"
+	indexArgs := startArgs
+	if length != nil {
+		lengthSQL, lengthArgs := compileInt128SubstringInteger(*length)
+		outerParameters += ", span"
+		outerArguments += ", [" + lengthSQL + "]"
+		indexArgs = append(indexArgs, lengthArgs...)
+		beginSQL = "if(span < 0, (" + positionSQL + ") + span, " +
+			positionSQL + ")"
+		endSQL = "if(span < 0, " + positionSQL + ", (" +
+			positionSQL + ") + span)"
+	}
 	clippedBeginSQL := "clamp(" + beginSQL +
 		", CAST(1 AS Int128), n + 1)"
 	clippedEndSQL := "clamp(" + endSQL +
@@ -5350,9 +5397,8 @@ func sqliteNegativeStartSubstringUTF8SQL(
 	lengthBindingSQL := "arrayElement(arrayMap(n -> " +
 		substringSQL +
 		", [CAST(lengthUTF8(value) AS Int128)]), 1)"
-	return "arrayElement(arrayMap((value, start, span) -> " +
-		lengthBindingSQL + ", [" + inputSQL + "], [" + startSQL +
-		"], [" + lengthSQL + "]), 1)"
+	return "arrayElement(arrayMap((" + outerParameters + ") -> " +
+		lengthBindingSQL + ", " + outerArguments + "), 1)", indexArgs
 }
 
 func compileUnaryTextScalarInput(

@@ -80,14 +80,14 @@ func testSubstringAgainstClickHouse(
 
 	matrix := compile(
 		`index=substring event_id="substring-unicode"` +
-			` | eval positive=substr(scalar, 1, 3), zero_start=substr(scalar, 0, 3), negative_start=substr(scalar, -2, 2), suffix=substr(scalar, -3), zero_length=substr(scalar, 2, 0), negative_length=substr(scalar, 4, -2), far_right=substr(scalar, 99, 3), far_left=substr(scalar, -99), covering=substr(scalar, -99, 100), minimum_start=substr(scalar, -9223372036854775808), maximum_start=substr(scalar, 18446744073709551615)` +
-			` | table positive,zero_start,negative_start,suffix,zero_length,negative_length,far_right,far_left,covering,minimum_start,maximum_start`,
+			` | eval positive=substr(scalar, 1, 3), zero_start=substr(scalar, 0, 3), negative_start=substr(scalar, -2, 2), suffix=substr(scalar, -3), zero_length=substr(scalar, 2, 0), negative_length=substr(scalar, 4, -2), far_right=substr(scalar, 99, 3), far_left=substr(scalar, -99), covering=substr(scalar, -99, 100), minimum_start=substr(scalar, -9223372036854775808), maximum_start=substr(scalar, 18446744073709551615), maximum_length=substr(scalar, 1, 18446744073709551615), huge_preceding=substr(scalar, 9223372036854775808, -9223372036854775808)` +
+			` | table positive,zero_start,negative_start,suffix,zero_length,negative_length,far_right,far_left,covering,minimum_start,maximum_start,maximum_length,huge_preceding`,
 	)
 	var (
 		positive, zeroStart, negativeStart, suffix string
 		zeroLength, negativeLength, farRight       string
 		farLeft, covering, minimumStart            string
-		maximumStart                               string
+		maximumStart, maximumLength, hugePreceding string
 	)
 	if err := connection.QueryRow(
 		queryContext,
@@ -105,6 +105,8 @@ func testSubstringAgainstClickHouse(
 		&covering,
 		&minimumStart,
 		&maximumStart,
+		&maximumLength,
+		&hugePreceding,
 	); err != nil {
 		t.Fatalf(
 			"execute SQLite substring matrix: %v\nSQL: %s\nargs: %#v",
@@ -125,6 +127,8 @@ func testSubstringAgainstClickHouse(
 		covering,
 		minimumStart,
 		maximumStart,
+		maximumLength,
+		hugePreceding,
 	}
 	want := []string{
 		"😀ab",
@@ -138,6 +142,8 @@ func testSubstringAgainstClickHouse(
 		"😀abcdef",
 		"😀abcdef",
 		"",
+		"😀abcdef",
+		"😀abcdef",
 	}
 	for index := range want {
 		if got[index] != want[index] {

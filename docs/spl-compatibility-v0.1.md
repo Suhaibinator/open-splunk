@@ -492,11 +492,14 @@ ClickHouse `substringUTF8`. Common positive starts, omitted lengths, zero
 lengths, start `0`, and negative lengths with non-negative starts therefore
 avoid a separate `lengthUTF8` scan and higher-order runtime work. A negative
 start combined with an explicit non-zero length needs the row's code-point
-count to preserve SQLite clipping; that bounded fallback binds the source and
-indexes once, computes in `Int128`, and converts only already-clipped offsets
-to ClickHouse's accepted integer types. This makes `MinInt64` and `MaxUint64`
-arguments overflow-safe. Nested calls grow linearly under the per-call 64 KiB
-and whole-query 256 KiB SQL ceilings.
+count to preserve SQLite clipping. The same fallback is used when an unsigned
+offset or length exceeds ClickHouse's empirically safe signed native argument
+range; the pinned server otherwise reinterprets values such as `MaxUint64` as
+negative. The bounded fallback binds the source and indexes once, computes in
+`Int128`, and converts only already-clipped offsets to ClickHouse's accepted
+integer types. This makes `MinInt64` and `MaxUint64` arguments overflow-safe.
+Nested calls grow linearly under the per-call 64 KiB and whole-query 256 KiB
+SQL ceilings.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
