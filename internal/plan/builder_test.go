@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -482,7 +483,10 @@ func TestBuildStatsEarliestAndLatestRequireUnmodifiedCanonicalTime(t *testing.T)
 		query := mustParse(t, source)
 		_, err := Build(query, testScope([]string{"gradethis"}, nil))
 		assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_STATS_TIME_FIELD")
-		diagnostic := err.(*Diagnostic)
+		var diagnostic *Diagnostic
+		if !errors.As(err, &diagnostic) {
+			t.Fatalf("Build(%q) error = %T, want *Diagnostic", source, err)
+		}
 		stats := query.Commands[len(query.Commands)-1].(*spl.StatsCommand)
 		if diagnostic.Range != stats.Aggregates[0].Range {
 			t.Errorf("Build(%q) diagnostic range = %#v, want aggregate %#v", source, diagnostic.Range, stats.Aggregates[0].Range)

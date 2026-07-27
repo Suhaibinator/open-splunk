@@ -105,36 +105,42 @@ func TestCompileStatsChronologicalScalarUsesImmutableEventOrderAndSharesStates(t
 	}
 }
 
-func TestCompileStatsChronologicalMultivalueIsStreamingAndValidationCannotBePruned(t *testing.T) {
+func TestCompileStatsChronologicalMultivalueUsesBoundedRowCandidatesAndFinalValidation(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(
 		t,
 		`index=gradethis | stats earliest(payload) AS first_seen latest(payload) AS last_seen earliest(payload) AS first_again`,
 	)
-	if got := strings.Count(compiled.SQL, "argMinOrNullArray("); got != 1 {
-		t.Fatalf("argMinOrNullArray state count = %d, want one shared earliest state:\n%s", got, compiled.SQL)
+	if got := strings.Count(compiled.SQL, "argMinOrNullIf("); got != 1 {
+		t.Fatalf("argMinOrNullIf state count = %d, want one shared earliest state:\n%s", got, compiled.SQL)
 	}
-	if got := strings.Count(compiled.SQL, "argMaxOrNullArray("); got != 1 {
-		t.Fatalf("argMaxOrNullArray state count = %d, want one latest state:\n%s", got, compiled.SQL)
+	if got := strings.Count(compiled.SQL, "argMaxOrNullIf("); got != 1 {
+		t.Fatalf("argMaxOrNullIf state count = %d, want one latest state:\n%s", got, compiled.SQL)
 	}
-	for _, function := range []string{"argMinOrNullArray(", "argMaxOrNullArray("} {
+	for _, function := range []string{"argMinOrNullIf(", "argMaxOrNullIf("} {
 		call := chronologicalAggregateCall(t, compiled.SQL, function)
-		for _, required := range []string{
-			`"__os_chronological_row_key"`,
-			"arrayEnumerate(",
-		} {
-			if !strings.Contains(call, required) {
-				t.Fatalf("%s call is missing %q:\n%s", function, required, call)
-			}
+		if !strings.Contains(call, `"__os_chronological_row_key"`) ||
+			!strings.Contains(call, `notEmpty("__os_chronological_values_0")`) {
+			t.Fatalf("%s call is missing its row key or eligibility check:\n%s", function, call)
 		}
-		if !strings.Contains(call, "toUInt64(member_ordinal)") &&
-			!strings.Contains(call, "toUInt64(member_index)") {
-			t.Fatalf("%s call does not append the one-based member ordinal to its key:\n%s", function, call)
+		if strings.Contains(call, "arrayEnumerate(") ||
+			strings.Contains(call, "arrayMap(member_") {
+			t.Fatalf("%s repeats the row key for each multivalue member:\n%s", function, call)
 		}
 		if strings.Contains(call, `"__os_order_`) {
 			t.Fatalf("%s depends on a pipeline-order key:\n%s", function, call)
 		}
+	}
+	earliest := chronologicalAggregateCall(t, compiled.SQL, "argMinOrNullIf(")
+	if !strings.Contains(earliest, `arrayElement("__os_chronological_values_0", 1)`) ||
+		!strings.Contains(earliest, `toUInt64(1)`) {
+		t.Fatalf("earliest does not select the first eligible row member:\n%s", earliest)
+	}
+	latest := chronologicalAggregateCall(t, compiled.SQL, "argMaxOrNullIf(")
+	if !strings.Contains(latest, `arrayElement("__os_chronological_values_0", -1)`) ||
+		!strings.Contains(latest, `toUInt64(length("__os_chronological_values_0"))`) {
+		t.Fatalf("latest does not select the last eligible row member:\n%s", latest)
 	}
 
 	const validation = `"__os_stats_chronological_any_unsupported_0"`
@@ -142,11 +148,15 @@ func TestCompileStatsChronologicalMultivalueIsStreamingAndValidationCannotBePrun
 		strings.Contains(compiled.SQL, `"__os_stats_chronological_any_unsupported_1"`) {
 		t.Fatalf("same-input validation was not shared:\n%s", compiled.SQL)
 	}
-	if !strings.Contains(compiled.SQL, "max(toUInt8(") ||
-		!strings.Contains(compiled.SQL, UnsupportedStatsMeasureValueMarker) ||
-		!strings.Contains(compiled.SQL, `WHERE throwIf(toUInt8(`+validation+` != 0), '`+
-			UnsupportedStatsMeasureValueMarker+`') = 0`) {
-		t.Fatalf("chronological validation is not forced after aggregation:\n%s", compiled.SQL)
+	for _, required := range []string{
+		`AS MATERIALIZED`,
+		`UNION ALL`,
+		`maxOrDefault("__os_chronological_invalid")`,
+		UnsupportedStatsMeasureValueMarker,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("chronological final validation is missing %q:\n%s", required, compiled.SQL)
+		}
 	}
 
 	upperSQL := strings.ToUpper(compiled.SQL)
@@ -155,6 +165,8 @@ func TestCompileStatsChronologicalMultivalueIsStreamingAndValidationCannotBePrun
 		"ARRAY JOIN",
 		"ARRAYJOIN(",
 		"GROUPARRAY",
+		"ARGMINORNULLARRAY",
+		"ARGMAXORNULLARRAY",
 	} {
 		if strings.Contains(upperSQL, forbidden) {
 			t.Fatalf("chronological aggregation retained unbounded/order-dependent %q:\n%s", forbidden, compiled.SQL)
@@ -167,9 +179,18 @@ func TestCompileStatsChronologicalMultivalueIsStreamingAndValidationCannotBePrun
 	)
 	if !slices.Equal(projected.OutputFields, []string{"service"}) ||
 		!strings.Contains(projected.SQL, ` AS `+validation) ||
-		!strings.Contains(projected.SQL, `WHERE throwIf(toUInt8(`+validation+` != 0), '`+
-			UnsupportedStatsMeasureValueMarker+`') = 0`) {
+		!strings.Contains(projected.SQL, `UNION ALL`) ||
+		!strings.Contains(projected.SQL, UnsupportedStatsMeasureValueMarker) {
 		t.Fatalf("downstream projection could prune chronological validation:\n%s", projected.SQL)
+	}
+
+	filtered := compileSPL(
+		t,
+		`index=gradethis | stats earliest(payload) AS discarded BY service | search absent=value | table service`,
+	)
+	if !strings.Contains(filtered.SQL, `WHERE 0`) ||
+		strings.LastIndex(filtered.SQL, `UNION ALL`) < strings.LastIndex(filtered.SQL, `WHERE 0`) {
+		t.Fatalf("always-false downstream filter is not enclosed by final validation:\n%s", filtered.SQL)
 	}
 
 	distinctInputs := compileSPL(

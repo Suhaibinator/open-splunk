@@ -20,8 +20,8 @@ import (
 // chronology from value and pipeline order, exercise every immutable row-key
 // tie-breaker, and prove unsupported values cannot be optimized away.
 func testStatsChronologicalAgainstClickHouse(
-	t *testing.T,
 	ctx context.Context,
+	t *testing.T,
 	store *Store,
 	connection clickhousedriver.Conn,
 	indexTime time.Time,
@@ -191,6 +191,13 @@ func testStatsChronologicalAgainstClickHouse(
 			)),
 		),
 		newEvent(
+			"chronological-poison-safe-group",
+			"stats-chronological-poison",
+			indexTime.Add(-2*time.Second),
+			typedField("chronological_group", typedString("safe")),
+			typedField("chronological_value", typedString("safe-value")),
+		),
+		newEvent(
 			"chronological-by-complete",
 			"stats-chronological-incomplete-by",
 			indexTime.Add(-4*time.Second),
@@ -206,7 +213,7 @@ func testStatsChronologicalAgainstClickHouse(
 			)),
 		),
 	}
-	storeStatsChronologicalBatch(t, ctx, store, "stats-chronological-main", 70, events)
+	storeStatsChronologicalBatch(ctx, t, store, "stats-chronological-main", 70, events)
 
 	tiedTime := indexTime.Add(-5 * time.Second)
 	older := newEvent(
@@ -216,8 +223,8 @@ func testStatsChronologicalAgainstClickHouse(
 		typedField("chronological_value", typedString("older")),
 	)
 	storeStatsChronologicalBatch(
-		t,
 		ctx,
+		t,
 		store,
 		"stats-chronological-older",
 		71,
@@ -230,8 +237,8 @@ func testStatsChronologicalAgainstClickHouse(
 		typedField("chronological_value", typedString("newer")),
 	)
 	storeStatsChronologicalBatch(
-		t,
 		ctx,
+		t,
 		store,
 		"stats-chronological-newer",
 		72,
@@ -537,25 +544,61 @@ func testStatsChronologicalAgainstClickHouse(
 		)
 	}
 
+	for _, test := range []struct {
+		name       string
+		downstream string
+	}{
+		{
+			name:       "retained group filter",
+			downstream: ` | search chronological_group=safe | table chronological_group`,
+		},
+		{
+			name:       "always-false missing-field filter",
+			downstream: ` | search absent=value | table chronological_group`,
+		},
+	} {
+		filteredPoison := compile(
+			`index=compiler source="stats-chronological-poison"` +
+				` | stats earliest(chronological_value) AS discarded BY chronological_group` +
+				test.downstream,
+		)
+		filteredErr := executeCompiledExpectingNoRows(ctx, connection, filteredPoison)
+		if filteredErr == nil ||
+			!strings.Contains(filteredErr.Error(), UnsupportedStatsMeasureValueMarker) {
+			t.Fatalf(
+				"%s chronological validation error = %v, want marker %q",
+				test.name,
+				filteredErr,
+				UnsupportedStatsMeasureValueMarker,
+			)
+		}
+	}
+
 	shared := compile(
 		orderBase + ` | stats earliest(chronological_value) AS first` +
 			` latest(chronological_value) AS last` +
 			` earliest(chronological_value) AS first_again`,
 	)
-	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", shared)
-	if got := strings.Count(actions, "Function: argMinOrNullArray("); got != 1 {
+	if got := strings.Count(shared.SQL, "argMinOrNullIf("); got != 1 {
 		t.Fatalf(
-			"repeated earliest has %d physical aggregate states, want one:\n%s",
+			"repeated earliest compiled %d aggregate states, want one:\n%s",
 			got,
-			actions,
+			shared.SQL,
 		)
 	}
-	if got := strings.Count(actions, "Function: argMaxOrNullArray("); got != 1 {
+	if got := strings.Count(shared.SQL, "argMaxOrNullIf("); got != 1 {
 		t.Fatalf(
-			"earliest/latest has %d physical latest states, want one:\n%s",
+			"earliest/latest compiled %d latest states, want one:\n%s",
 			got,
-			actions,
+			shared.SQL,
 		)
+	}
+	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", shared)
+	if !strings.Contains(actions, "Function: argMinOrNullIf(") {
+		t.Fatalf("physical plan is missing earliest aggregation:\n%s", actions)
+	}
+	if !strings.Contains(actions, "Function: argMaxOrNullIf(") {
+		t.Fatalf("physical plan is missing latest aggregation:\n%s", actions)
 	}
 	upperActions := strings.ToUpper(actions)
 	for _, forbidden := range []string{"ARRAYJOIN", "GROUPARRAY", "WINDOW"} {
@@ -570,8 +613,8 @@ func testStatsChronologicalAgainstClickHouse(
 }
 
 func storeStatsChronologicalBatch(
-	t *testing.T,
 	ctx context.Context,
+	t *testing.T,
 	store *Store,
 	batchID string,
 	sequence uint64,

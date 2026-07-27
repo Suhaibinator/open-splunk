@@ -1,6 +1,7 @@
 package spl
 
 import (
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -863,8 +864,8 @@ func TestParseStatsCountFieldRequiresExactlyOneExactField(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse succeeded, want error")
 			}
-			diagnostic, ok := err.(*Diagnostic)
-			if !ok || diagnostic.Code != test.code {
+			var diagnostic *Diagnostic
+			if !errors.As(err, &diagnostic) || diagnostic.Code != test.code {
 				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
 			}
 		})
@@ -1061,8 +1062,8 @@ func TestParseStatsValuesRequiresExactlyOneField(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse succeeded, want error")
 			}
-			diagnostic, ok := err.(*Diagnostic)
-			if !ok || diagnostic.Code != test.code {
+			var diagnostic *Diagnostic
+			if !errors.As(err, &diagnostic) || diagnostic.Code != test.code {
 				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
 			}
 		})
@@ -1226,8 +1227,8 @@ func TestParseStatsEarliestAndLatestRequireExactlyOneField(t *testing.T) {
 			if err == nil {
 				t.Fatal("Parse succeeded, want error")
 			}
-			diagnostic, ok := err.(*Diagnostic)
-			if !ok || diagnostic.Code != test.code {
+			var diagnostic *Diagnostic
+			if !errors.As(err, &diagnostic) || diagnostic.Code != test.code {
 				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
 			}
 		})

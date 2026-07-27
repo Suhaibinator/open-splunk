@@ -540,13 +540,20 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			relation = relation.selectFrom(aggregateSQL, operator.Range)
 			if len(nextState.postAggregateChronological) > 0 {
 				var additionalAliases int
-				relation, additionalAliases = compileChronologicalResults(
+				var barrier *compiledChronologicalBarrier
+				relation, additionalAliases, barrier = compileChronologicalResults(
 					relation,
 					nextState.postAggregateChronological,
 					operator.Range,
 					aliasSequence,
 				)
 				aliasSequence += additionalAliases
+				if barrier != nil {
+					nextState.chronologicalBarriers = append(
+						nextState.chronologicalBarriers,
+						*barrier,
+					)
+				}
 				nextState.postAggregateChronological = nil
 			}
 			if len(nextState.postAggregateScalarExtrema) > 0 {
@@ -806,6 +813,17 @@ func finalizeOrdinaryQuery(
 			quoteIdentifier(internalFieldNamesColumn)+" AS "+quoteIdentifier(SparseEventFieldNamesColumn),
 		)
 	}
+	if len(state.chronologicalBarriers) > 0 {
+		return finalizeChronologicallyValidatedQuery(
+			relation,
+			state,
+			args,
+			projection,
+			outputFields,
+			sparseFields,
+			aliasSequence,
+		)
+	}
 	aliasSequence++
 	fragment := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 	finalOrder := defaultCompiledOrder(state)
@@ -823,6 +841,111 @@ func finalizeOrdinaryQuery(
 			SparseFields: sparseFields,
 		},
 		relation.depth,
+		relation.ownerRange,
+	), nil
+}
+
+func finalizeChronologicallyValidatedQuery(
+	relation compiledRelation,
+	state compileState,
+	args []any,
+	projection []string,
+	outputFields []string,
+	sparseFields bool,
+	aliasSequence int,
+) (CompiledQuery, error) {
+	definitions := make([]string, 0, len(state.chronologicalBarriers)+1)
+	for _, barrier := range state.chronologicalBarriers {
+		definitions = append(
+			definitions,
+			barrier.name+" AS MATERIALIZED ("+barrier.sql+")",
+		)
+	}
+
+	finalInput := quoteIdentifier(fmt.Sprintf("__os_chronological_final_input_%d", aliasSequence+1))
+	definitions = append(definitions, finalInput+" AS MATERIALIZED ("+relation.sql+")")
+
+	aliasSequence++
+	mainAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+	main := "SELECT " + strings.Join(projection, ", ") + " FROM " + finalInput + " AS " + mainAlias
+	finalOrder := defaultCompiledOrder(state)
+	if len(finalOrder) > 0 {
+		order, orderErr := compileMaterializedOrder(finalOrder, false)
+		if orderErr != nil {
+			return CompiledQuery{}, orderErr
+		}
+		main += " ORDER BY " + order
+	}
+
+	resultColumns := append([]string(nil), outputFields...)
+	if sparseFields {
+		resultColumns = append(resultColumns, SparseEventFieldNamesColumn)
+	}
+	dummyProjection := make([]string, 0, len(resultColumns))
+	for _, name := range resultColumns {
+		column := quoteIdentifier(name)
+		dummyProjection = append(dummyProjection, "any("+column+") AS "+column)
+	}
+
+	aliasSequence++
+	schemaSourceAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+	schemaSource := "SELECT " + strings.Join(projection, ", ") + " FROM " +
+		finalInput + " AS " + schemaSourceAlias + " LIMIT 0"
+	aliasSequence++
+	schemaAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+	dummy := "SELECT " + strings.Join(dummyProjection, ", ") + " FROM (" +
+		schemaSource + ") AS " + schemaAlias
+
+	validationRows := make([]string, 0, len(state.chronologicalBarriers))
+	maximumBarrierDepth := 0
+	for _, barrier := range state.chronologicalBarriers {
+		invalid := make([]string, 0, len(barrier.validationColumns))
+		for _, column := range barrier.validationColumns {
+			invalid = append(invalid, column+" != 0")
+		}
+		validationRows = append(
+			validationRows,
+			"SELECT toUInt8(("+strings.Join(invalid, ") OR (")+
+				")) AS "+quoteIdentifier("__os_chronological_invalid")+" FROM "+barrier.name,
+		)
+		if barrier.depth > maximumBarrierDepth {
+			maximumBarrierDepth = barrier.depth
+		}
+	}
+	validationUnion := strings.Join(validationRows, " UNION ALL ")
+	validation := "SELECT maxOrDefault(" + quoteIdentifier("__os_chronological_invalid") +
+		") AS " + quoteIdentifier("__os_chronological_any_invalid") +
+		" FROM (" + validationUnion + ")"
+
+	aliasSequence++
+	dummyAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+	aliasSequence++
+	validationAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+	validationBranch := "SELECT " + dummyAlias + ".* FROM (" + dummy + ") AS " +
+		dummyAlias + " CROSS JOIN (" + validation + ") AS " + validationAlias +
+		" WHERE if(" + validationAlias + "." +
+		quoteIdentifier("__os_chronological_any_invalid") +
+		" != 0, throwIf(toUInt8(1), '" + UnsupportedStatsMeasureValueMarker +
+		"'), toUInt8(0)) != 0"
+
+	sql := "WITH " + strings.Join(definitions, ", ") + " " + main + " UNION ALL " +
+		validationBranch + materializedCTESettingsSQL
+
+	mainDepth := relationalNodeDepth(relation.depth)
+	schemaSourceDepth := relationalNodeDepth(relation.depth)
+	dummyDepth := relationalNodeDepth(schemaSourceDepth)
+	validationRowsDepth := relationalNodeDepth(maximumBarrierDepth)
+	validationDepth := relationalNodeDepth(validationRowsDepth)
+	validationBranchDepth := relationalNodeDepth(dummyDepth, validationDepth)
+	resultDepth := relationalNodeDepth(mainDepth, validationBranchDepth)
+	return withCompiledRelationalDepth(
+		CompiledQuery{
+			SQL:          sql,
+			Args:         args,
+			OutputFields: outputFields,
+			SparseFields: sparseFields,
+		},
+		resultDepth,
 		relation.ownerRange,
 	), nil
 }
@@ -2712,6 +2835,7 @@ type compileState struct {
 	postAggregateExactStrings        []compiledExactStringMeasure
 	postAggregateDistinctCounts      []compiledDistinctCount
 	postAggregateOrderedStrings      []compiledOrderedStringMeasure
+	chronologicalBarriers            []compiledChronologicalBarrier
 }
 
 type compiledChronologicalMeasure struct {
@@ -2719,6 +2843,18 @@ type compiledChronologicalMeasure struct {
 	validationColumn string
 	typeColumn       string
 	outputColumn     string
+}
+
+// compiledChronologicalBarrier names one materialized aggregate result whose
+// hidden validation columns must be checked by the outermost ordinary query.
+// Keeping the check outside every downstream SPL operator prevents ClickHouse
+// from proving an intervening filter empty and pruning the validation subtree.
+type compiledChronologicalBarrier struct {
+	name              string
+	sql               string
+	validationColumns []string
+	depth             int
+	ownerRange        spl.Range
 }
 
 type compiledScalarExtremaMeasure struct {
@@ -4059,6 +4195,10 @@ func cloneCompileState(state compileState) compileState {
 		[]compiledOrderedStringMeasure(nil),
 		state.postAggregateOrderedStrings...,
 	)
+	next.chronologicalBarriers = append(
+		[]compiledChronologicalBarrier(nil),
+		state.chronologicalBarriers...,
+	)
 	return next
 }
 
@@ -4945,6 +5085,10 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		blockedPrefixes:     cloneSet(state.blockedPrefixes),
 		order:               append([]compiledSortKey(nil), state.order...),
 		tieBreakers:         append([]compiledSortKey(nil), state.tieBreakers...),
+		chronologicalBarriers: append(
+			[]compiledChronologicalBarrier(nil),
+			state.chronologicalBarriers...,
+		),
 	}
 	var names []string
 	switch operator.Mode {
@@ -5088,10 +5232,11 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		}
 	}
 	next = compileState{
-		visible:      make(map[string]fieldState, len(operator.GroupBy)+len(operator.Measures)),
-		allowDynamic: false,
-		eventRows:    false,
-		blocked:      make(map[string]struct{}),
+		visible:               make(map[string]fieldState, len(operator.GroupBy)+len(operator.Measures)),
+		allowDynamic:          false,
+		eventRows:             false,
+		blocked:               make(map[string]struct{}),
+		chronologicalBarriers: append([]compiledChronologicalBarrier(nil), state.chronologicalBarriers...),
 	}
 	seen := make(map[string]struct{}, len(operator.GroupBy)+len(operator.Measures))
 	dynamicGroupInvalid := make([]string, 0, len(operator.GroupBy))
@@ -5682,37 +5827,23 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 				}
 				chronologicalResults[resultKey] = result
 				function := "argMinOrNullIf"
-				argument := "tuple(ifNull(" + input.valueAlias +
-					", CAST('' AS String)), toUInt8(1))"
+				argument := "ifNull(" + input.valueAlias + ", CAST('' AS String))"
 				key := "tuple(" + rowKey + ", toUInt64(1))"
 				condition := "isNotNull(" + input.valueAlias + ")"
 				if input.multivalue {
-					function = "argMinOrNullArray"
-					argument = "arrayMap(value -> tuple(value, toUInt8(1)), " +
-						input.valuesAlias + ")"
-					key = "arrayMap(member_index -> tuple(" +
-						strings.Join([]string{
-							"tupleElement(" + rowKey + ", 1)",
-							"tupleElement(" + rowKey + ", 2)",
-							"tupleElement(" + rowKey + ", 3)",
-							"tupleElement(" + rowKey + ", 4)",
-							"toUInt64(member_index)",
-						}, ", ") +
-						"), arrayEnumerate(" + input.valuesAlias + "))"
-					condition = ""
+					argument = "arrayElement(" + input.valuesAlias + ", 1)"
+					condition = "notEmpty(" + input.valuesAlias + ")"
 				}
 				if measure.Function == plan.AggregateFunctionLatest {
+					function = "argMaxOrNullIf"
 					if input.multivalue {
-						function = "argMaxOrNullArray"
-					} else {
-						function = "argMaxOrNullIf"
+						argument = "arrayElement(" + input.valuesAlias + ", -1)"
+						key = "tuple(" + rowKey + ", toUInt64(length(" +
+							input.valuesAlias + ")))"
 					}
 				}
-				aggregateSQL := function + "(" + argument + ", " + key
-				if condition != "" {
-					aggregateSQL += ", " + condition
-				}
-				aggregateSQL += ")"
+				aggregateSQL := function + "(" + argument + ", " + key + ", " +
+					condition + ")"
 				projection = append(
 					projection,
 					aggregateSQL+" AS "+result.winnerAlias,
@@ -6191,9 +6322,9 @@ func compileChronologicalResults(
 	measures []compiledChronologicalMeasure,
 	ownerRange spl.Range,
 	stage int,
-) (compiledRelation, int) {
+) (compiledRelation, int, *compiledChronologicalBarrier) {
 	if len(measures) == 0 {
-		return relation, 0
+		return relation, 0, nil
 	}
 
 	excluded := make([]string, 0, len(measures)*2)
@@ -6222,7 +6353,7 @@ func compileChronologicalResults(
 	publishedTypes := make(map[string]struct{}, len(measures))
 	for _, measure := range measures {
 		nonNullWinner := "assumeNotNull(" + measure.winnerColumn + ")"
-		value := "tupleElement(" + nonNullWinner + ", 1)"
+		value := nonNullWinner
 		projection = append(
 			projection,
 			"if(isNull("+measure.winnerColumn+"), CAST(NULL AS Dynamic), CAST("+
@@ -6244,20 +6375,23 @@ func compileChronologicalResults(
 	}
 
 	alias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
-	sql := "SELECT " + strings.Join(projection, ", ") +
-		" FROM (" + relation.sql + ") AS " + alias
-	if len(validations) > 0 {
-		guards := make([]string, 0, len(validations))
-		for _, validation := range validations {
-			guards = append(
-				guards,
-				"throwIf(toUInt8("+validation+" != 0), '"+
-					UnsupportedStatsMeasureValueMarker+"') = 0",
-			)
-		}
-		sql += " WHERE " + strings.Join(guards, " AND ")
+	if len(validations) == 0 {
+		sql := "SELECT " + strings.Join(projection, ", ") +
+			" FROM (" + relation.sql + ") AS " + alias
+		return relation.selectFrom(sql, ownerRange), 1, nil
 	}
-	return relation.selectFrom(sql, ownerRange), 1
+
+	materialized := quoteIdentifier(fmt.Sprintf("__os_chronological_input_%d", stage+1))
+	sql := "SELECT " + strings.Join(projection, ", ") +
+		" FROM " + materialized + " AS " + alias
+	published := relation.selectFrom(sql, ownerRange)
+	return published, 1, &compiledChronologicalBarrier{
+		name:              materialized,
+		sql:               relation.sql,
+		validationColumns: validations,
+		depth:             relation.depth,
+		ownerRange:        ownerRange,
+	}
 }
 
 func compileScalarExtremaResults(
