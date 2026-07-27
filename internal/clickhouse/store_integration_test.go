@@ -1703,6 +1703,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testStatsListAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testDedupAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testRexAgainstClickHouse(t, ctx, store, connection, indexTime)
+	testTextCaseAgainstClickHouse(ctx, t, store, connection, indexTime)
 }
 
 func testNumericBinAgainstClickHouse(
@@ -3806,7 +3807,18 @@ func float64PointerForIntegration(value float64) *float64 { return &value }
 
 func compileIntegrationSPL(t *testing.T, source string, cutoff time.Time, visibilityCutoff uint64) CompiledQuery {
 	t.Helper()
-	logical := buildIntegrationPlan(t, source, cutoff, visibilityCutoff)
+	return compileIntegrationSPLForIndex(t, source, cutoff, visibilityCutoff, "compiler")
+}
+
+func compileIntegrationSPLForIndex(
+	t *testing.T,
+	source string,
+	cutoff time.Time,
+	visibilityCutoff uint64,
+	index string,
+) CompiledQuery {
+	t.Helper()
+	logical := buildIntegrationPlanForIndex(t, source, cutoff, visibilityCutoff, index)
 	compiled, err := (Compiler{}).Compile(logical)
 	if err != nil {
 		t.Fatalf("compile integration SPL %q: %v", source, err)
@@ -3816,12 +3828,23 @@ func compileIntegrationSPL(t *testing.T, source string, cutoff time.Time, visibi
 
 func buildIntegrationPlan(t *testing.T, source string, cutoff time.Time, visibilityCutoff uint64) *plan.Query {
 	t.Helper()
+	return buildIntegrationPlanForIndex(t, source, cutoff, visibilityCutoff, "compiler")
+}
+
+func buildIntegrationPlanForIndex(
+	t *testing.T,
+	source string,
+	cutoff time.Time,
+	visibilityCutoff uint64,
+	index string,
+) *plan.Query {
+	t.Helper()
 	parsed, err := spl.Parse(source)
 	if err != nil {
 		t.Fatalf("parse integration SPL %q: %v", source, err)
 	}
 	logical, err := plan.Build(parsed, plan.Scope{
-		TenantID: "tenant", AuthorizedIndexes: []string{"compiler"},
+		TenantID: "tenant", AuthorizedIndexes: []string{index},
 		Earliest:         time.Date(2026, time.July, 20, 0, 0, 0, 0, time.UTC),
 		Latest:           time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC),
 		IndexTimeCutoff:  cutoff,

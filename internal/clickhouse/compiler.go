@@ -2159,6 +2159,7 @@ func updateBucketCompileState(state compileState, inputName string, output plan.
 		valueSQL:                quoteIdentifier(output.Name),
 		existsSQL:               source.existsSQL,
 		existsArgs:              append([]any(nil), source.existsArgs...),
+		dynamicTextOnly:         source.dynamicTextOnly,
 		kind:                    source.kind,
 		numberType:              source.numberType,
 		numericSort:             source.numericSort,
@@ -3080,6 +3081,7 @@ func unsupportedMultivalueUsage(operation string, sourceRange spl.Range) error {
 type fieldState struct {
 	valueSQL                string
 	textEligibleSQL         string
+	dynamicTextOnly         bool
 	dynamicTypeSQL          string
 	storedTypeSQL           string
 	existsSQL               string
@@ -3579,6 +3581,7 @@ type compiledScalar struct {
 	existsSQL               string
 	existsArgs              []any
 	textEligibleSQL         string
+	dynamicTextOnly         bool
 	dynamicTypeSQL          string
 	storedTypeSQL           string
 	descendantSQL           string
@@ -4950,6 +4953,7 @@ func compileTextCaseScalar(
 	valueSQL := ""
 	valueArgs := append([]any(nil), input.valueArgs...)
 	resultKind := fieldKindString
+	dynamicTextOnly := false
 	switch input.kind {
 	case fieldKindDynamic:
 		// Dynamic event fields can be either scalar String or Splunk
@@ -4963,11 +4967,24 @@ func compileTextCaseScalar(
 			"dynamicType(value) = 'Array(String)', " +
 			"CAST(arrayMap(element -> " + clickHouseFunction +
 			"(element), dynamicElement(value, 'Array(String)')) AS Dynamic), " +
+			"dynamicType(value) = 'Array(Dynamic)' AND " +
+			"arrayAll(element -> dynamicType(element) = 'String', " +
+			"dynamicElement(value, 'Array(Dynamic)')), " +
+			"CAST(arrayMap(element -> " + clickHouseFunction +
+			"(assumeNotNull(dynamicElement(element, 'String'))), " +
+			"dynamicElement(value, 'Array(Dynamic)')) AS Dynamic), " +
 			"CAST(NULL AS Dynamic)), [" + input.valueSQL + "]), 1)"
 		resultKind = fieldKindDynamic
+		dynamicTextOnly = true
 	case fieldKindStringArray:
-		valueSQL = "arrayMap(element -> " + clickHouseFunction +
-			"(element), " + input.valueSQL + ")"
+		// A fixed Array(String) can originate from an aggregate over _raw.
+		// Bind it once and validate every member before calling the UTF-8
+		// function; invalid arrays become the canonical empty/absent MV value.
+		valueSQL = "arrayElement(arrayMap(values -> if(" +
+			"arrayAll(element -> isValidUTF8(element), values), " +
+			"arrayMap(element -> " + clickHouseFunction +
+			"(element), values), CAST([], 'Array(String)')), [" +
+			input.valueSQL + "]), 1)"
 		resultKind = fieldKindStringArray
 	default:
 		inputSQL, inputArgs := compiledStringScalar(input)
@@ -4996,6 +5013,7 @@ func compileTextCaseScalar(
 		valueSQL:                valueSQL,
 		valueArgs:               valueArgs,
 		existsSQL:               "1",
+		dynamicTextOnly:         dynamicTextOnly,
 		kind:                    resultKind,
 		alwaysNull:              input.alwaysNull,
 		materializeForPredicate: input.materializeForPredicate,
@@ -5119,6 +5137,7 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 	field := fieldState{
 		valueSQL:        quoteIdentifier(output.Name),
 		textEligibleSQL: value.textEligibleSQL,
+		dynamicTextOnly: value.dynamicTextOnly,
 		existsSQL:       existsSQL,
 		descendantSQL:   value.descendantSQL,
 		descendantArgs:  append([]any(nil), value.descendantArgs...),
@@ -5926,6 +5945,7 @@ func projectedRenameField(source fieldState, destination string) fieldState {
 	result := fieldState{
 		valueSQL:        value,
 		textEligibleSQL: source.textEligibleSQL,
+		dynamicTextOnly: source.dynamicTextOnly,
 		storedTypeSQL:   source.storedTypeSQL,
 		existsSQL:       rewriteExistenceForProjection(source, destination),
 		existsArgs:      append([]any(nil), source.existsArgs...),
@@ -6112,6 +6132,9 @@ func evalComparisonCore(left, right compiledScalar, operator string) (string, []
 	if comparisonOperatorIsOrdered(operator) && (left.kind == fieldKindBool || right.kind == fieldKindBool) {
 		return "CAST(NULL AS Nullable(Bool))", nil
 	}
+	if left.dynamicTextOnly || right.dynamicTextOnly {
+		return dynamicTextEvalComparisonCore(left, right, operator)
+	}
 	if left.kind == fieldKindDynamic || right.kind == fieldKindDynamic {
 		return dynamicEvalComparisonCore(left, right, operator)
 	}
@@ -6131,6 +6154,40 @@ func evalComparisonCore(left, right compiledScalar, operator string) (string, []
 		rightSQL = stringScalarSQL(right)
 	}
 	return leftSQL + " " + operator + " " + rightSQL, comparisonValueArgs(left, right)
+}
+
+func dynamicTextEvalComparisonCore(left, right compiledScalar, operator string) (string, []any) {
+	const nullBool = "CAST(NULL AS Nullable(Bool))"
+	if left.kind != fieldKindDynamic && left.kind != fieldKindString {
+		return nullBool, nil
+	}
+	if right.kind != fieldKindDynamic && right.kind != fieldKindString {
+		return nullBool, nil
+	}
+
+	leftValue := "left_value"
+	leftString := leftValue
+	leftEligible := "1"
+	if left.kind == fieldKindDynamic {
+		leftEligible = "dynamicType(" + leftValue + ") = 'String'"
+		leftString = "dynamicElement(" + leftValue + ", 'String')"
+	}
+	rightValue := "right_value"
+	rightString := rightValue
+	rightEligible := "1"
+	if right.kind == fieldKindDynamic {
+		rightEligible = "dynamicType(" + rightValue + ") = 'String'"
+		rightString = "dynamicElement(" + rightValue + ", 'String')"
+	}
+
+	// The singleton arrays bind each operand once. In addition to keeping SQL
+	// linear, putting every placeholder in the lambda arguments preserves the
+	// ordinary left-to-right valueArgs order.
+	body := "if((" + leftEligible + ") AND (" + rightEligible + "), " +
+		leftString + " " + operator + " " + rightString + ", " + nullBool + ")"
+	return "arrayElement(arrayMap((" + leftValue + ", " + rightValue + ") -> " +
+			body + ", [" + left.valueSQL + "], [" + right.valueSQL + "]), 1)",
+		comparisonValueArgs(left, right)
 }
 
 func fixedScalarKindsComparable(left, right fieldKind) bool {
@@ -6657,6 +6714,7 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		existsSQL:               field.existsSQL,
 		existsArgs:              append([]any(nil), field.existsArgs...),
 		textEligibleSQL:         field.textEligibleSQL,
+		dynamicTextOnly:         field.dynamicTextOnly,
 		dynamicTypeSQL:          field.dynamicTypeSQL,
 		storedTypeSQL:           field.storedTypeSQL,
 		descendantSQL:           field.descendantSQL,
@@ -6871,6 +6929,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		}
 		next.visible[name] = fieldState{
 			valueSQL: publicName, textEligibleSQL: compiled.textEligibleSQL,
+			dynamicTextOnly:         compiled.dynamicTextOnly,
 			dynamicTypeSQL:          compiled.dynamicTypeSQL,
 			storedTypeSQL:           compiled.storedTypeSQL,
 			existsSQL:               rewriteExistenceForProjection(compiled, name),
@@ -8170,8 +8229,13 @@ func chronologicalCandidatesSQL(field fieldState, exists bool) (string, []any, b
 }
 
 func statsScalarStringInputSQL(field fieldState) (string, []any) {
-	value, args := compiledStringScalar(compiledScalarFromField(field))
-	return "CAST(" + value + " AS Nullable(String))", args
+	value := statsScalarStringOrNullSQL(field)
+	existsSQL := field.existsSQL
+	if existsSQL == "" || existsSQL == "1" {
+		return value, nil
+	}
+	return "if(" + existsSQL + ", " + value +
+		", CAST(NULL AS Nullable(String)))", append([]any(nil), field.existsArgs...)
 }
 
 func statsExtremaScalarNumberSQL(valueSQL string) string {
@@ -8410,15 +8474,19 @@ func compactNullableArraySQL(valuesSQL string) string {
 
 func statsScalarStringOrNullSQL(field fieldState) string {
 	nullString := "CAST(NULL AS Nullable(String))"
+	value := nullString
 	switch field.kind {
 	case fieldKindDynamic:
 		supported, lexical := statsByScalarExpressions(field)
-		return "if(" + supported + ", " + lexical + ", " + nullString + ")"
+		value = "if(" + supported + ", " + lexical + ", " + nullString + ")"
 	case fieldKindString, fieldKindNumber, fieldKindBool, fieldKindTime:
-		return "CAST(toString(" + field.valueSQL + ") AS Nullable(String))"
-	default:
-		return nullString
+		value = "CAST(toString(" + field.valueSQL + ") AS Nullable(String))"
 	}
+	if field.textEligibleSQL != "" {
+		value = "if(ifNull(" + field.textEligibleSQL + ", 0), " +
+			value + ", " + nullString + ")"
+	}
+	return value
 }
 
 func boundedDistinctCountSQL(inputSQL string) string {

@@ -81,6 +81,8 @@ func TestCompileEvalLowerUpperSupportsDynamicStringAndStringArrayWithoutExpansio
 		`CAST(lowerUTF8(dynamicElement(value, 'String')) AS Dynamic)`,
 		`dynamicType(value) = 'Array(String)'`,
 		`CAST(arrayMap(element -> lowerUTF8(element), dynamicElement(value, 'Array(String)')) AS Dynamic)`,
+		`dynamicType(value) = 'Array(Dynamic)' AND arrayAll(element -> dynamicType(element) = 'String'`,
+		`lowerUTF8(assumeNotNull(dynamicElement(element, 'String')))`,
 		`CAST(NULL AS Dynamic)`,
 		`CAST(upperUTF8(dynamicElement(value, 'String')) AS Dynamic)`,
 		`CAST(arrayMap(element -> upperUTF8(element), dynamicElement(value, 'Array(String)')) AS Dynamic)`,
@@ -101,11 +103,17 @@ func TestCompileEvalLowerUpperMapsFixedMultivalueStrings(t *testing.T) {
 		t,
 		`index=gradethis | stats values(user) AS users | eval normalized=upper(users) | table normalized`,
 	)
-	if !strings.Contains(
-		compiled.SQL,
-		`arrayMap(element -> upperUTF8(element), "users") AS "normalized"`,
-	) {
-		t.Fatalf("fixed multivalue text-case SQL is not elementwise:\n%s", compiled.SQL)
+	for _, required := range []string{
+		`arrayAll(element -> isValidUTF8(element), values)`,
+		`arrayMap(element -> upperUTF8(element), values)`,
+		`CAST([], 'Array(String)')`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("fixed multivalue text-case SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Count(compiled.SQL, `["users"]`) != 1 {
+		t.Fatalf("fixed multivalue text case duplicated its input:\n%s", compiled.SQL)
 	}
 	if strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
 		t.Fatalf("fixed multivalue text case introduced row expansion:\n%s", compiled.SQL)
@@ -120,6 +128,23 @@ func TestCompileEvalLowerUpperMapsFixedMultivalueStrings(t *testing.T) {
 		`notEmpty("normalized")`,
 	) {
 		t.Fatalf("fixed multivalue logical presence was not preserved:\n%s", presence.SQL)
+	}
+}
+
+func TestCompileEvalLowerUpperPreservesRawTextEligibilityThroughStats(t *testing.T) {
+	t.Parallel()
+
+	for _, aggregate := range []string{"values", "list"} {
+		compiled := compileSPL(
+			t,
+			`index=gradethis | stats `+aggregate+`(_raw) AS raws | eval normalized=lower(raws) | table normalized`,
+		)
+		if !strings.Contains(compiled.SQL, `"__os_raw_encoding" = 1`) {
+			t.Fatalf("%s(_raw) discarded the raw text eligibility guard:\n%s", aggregate, compiled.SQL)
+		}
+		if !strings.Contains(compiled.SQL, `arrayAll(element -> isValidUTF8(element), values)`) {
+			t.Fatalf("%s(_raw) text case omitted its UTF-8 array guard:\n%s", aggregate, compiled.SQL)
+		}
 	}
 }
 
@@ -149,6 +174,25 @@ func TestCompileLowerUpperCanFeedWhereWithoutChangingCaseSensitivity(t *testing.
 	if !strings.Contains(dynamic.SQL, `dynamicType(value) = 'Array(String)'`) ||
 		!strings.Contains(dynamic.SQL, `dynamicElement(`) {
 		t.Fatalf("dynamic where text-case SQL lost runtime typing:\n%s", dynamic.SQL)
+	}
+	if got := strings.Count(dynamic.SQL, `"__os_fields"."category"`); got != 1 {
+		t.Fatalf("dynamic where text case references its source %d times, want 1:\n%s", got, dynamic.SQL)
+	}
+	for _, forbidden := range []string{"'decimal/v1'", "startsWith(dynamicType("} {
+		if strings.Contains(dynamic.SQL, forbidden) {
+			t.Fatalf("dynamic text-only comparison retained generic branch %q:\n%s", forbidden, dynamic.SQL)
+		}
+	}
+
+	twoDynamic := compileSPL(
+		t,
+		`index=gradethis | where lower(category)=upper(other)`,
+	)
+	for _, field := range []string{"category", "other"} {
+		path := `"__os_fields"."` + field + `"`
+		if got := strings.Count(twoDynamic.SQL, path); got != 1 {
+			t.Fatalf("dynamic text comparison references %s %d times, want 1:\n%s", field, got, twoDynamic.SQL)
+		}
 	}
 }
 
