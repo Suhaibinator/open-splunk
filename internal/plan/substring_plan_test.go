@@ -24,29 +24,29 @@ func TestBuildEvalSubstringPreservesTypedScalarIR(t *testing.T) {
 		t.Fatalf("assignments = %#v", assignments)
 	}
 
-	first, ok := assignments[0].Expression.(*ScalarCallExpression)
-	if !ok || first.Function != ScalarFunctionSubstring || len(first.Arguments) != 3 {
+	first, firstOK := assignments[0].Expression.(*ScalarCallExpression)
+	if !firstOK || first.Function != ScalarFunctionSubstring || len(first.Arguments) != 3 {
 		t.Fatalf("first substring IR = %#v", assignments[0].Expression)
 	}
-	if value, ok := first.Arguments[0].(*ScalarLiteralExpression); !ok ||
+	if value, valueOK := first.Arguments[0].(*ScalarLiteralExpression); !valueOK ||
 		value.Value.Kind != ValueKindString || value.Value.String != "😀abcdef" {
 		t.Fatalf("first value IR = %#v", first.Arguments[0])
 	}
-	if start, ok := first.Arguments[1].(*ScalarLiteralExpression); !ok ||
+	if start, startOK := first.Arguments[1].(*ScalarLiteralExpression); !startOK ||
 		start.Value.Kind != ValueKindInt64 || start.Value.Int64 != -4 {
 		t.Fatalf("start IR = %#v", first.Arguments[1])
 	}
-	if length, ok := first.Arguments[2].(*ScalarLiteralExpression); !ok ||
+	if length, lengthOK := first.Arguments[2].(*ScalarLiteralExpression); !lengthOK ||
 		length.Value.Kind != ValueKindInt64 || length.Value.Int64 != 3 {
 		t.Fatalf("length IR = %#v", first.Arguments[2])
 	}
 
-	second, ok := assignments[1].Expression.(*ScalarCallExpression)
-	if !ok || second.Function != ScalarFunctionSubstring || len(second.Arguments) != 2 {
+	second, secondOK := assignments[1].Expression.(*ScalarCallExpression)
+	if !secondOK || second.Function != ScalarFunctionSubstring || len(second.Arguments) != 2 {
 		t.Fatalf("second substring IR = %#v", assignments[1].Expression)
 	}
-	field, ok := second.Arguments[0].(*ScalarFieldExpression)
-	if !ok || field.Field.Name != "source" || !field.Field.Canonical {
+	field, fieldOK := second.Arguments[0].(*ScalarFieldExpression)
+	if !fieldOK || field.Field.Name != "source" || !field.Field.Canonical {
 		t.Fatalf("second input IR = %#v, want canonical source", second.Arguments[0])
 	}
 }

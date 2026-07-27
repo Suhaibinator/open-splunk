@@ -15,26 +15,26 @@ func TestParseEvalSubstringPreservesRangeAndTypedArguments(t *testing.T) {
 		t.Fatalf("assignments = %#v", assignments)
 	}
 
-	first, ok := assignments[0].Expression.(*ScalarCallExpr)
-	if !ok || first.Function != ScalarFunctionSubstring || len(first.Arguments) != 3 {
+	first, firstOK := assignments[0].Expression.(*ScalarCallExpr)
+	if !firstOK || first.Function != ScalarFunctionSubstring || len(first.Arguments) != 3 {
 		t.Fatalf("first substring = %#v", assignments[0].Expression)
 	}
 	if got, want := source[first.Range.Start.Offset:first.Range.End.Offset], `SuBsTr("😀abcdef", -4, 3)`; got != want {
 		t.Fatalf("first range = %q, want %q", got, want)
 	}
-	if literal, ok := first.Arguments[0].(*ScalarLiteralExpr); !ok ||
+	if literal, literalOK := first.Arguments[0].(*ScalarLiteralExpr); !literalOK ||
 		literal.Value.Kind != LiteralKindString || literal.Value.Text != "😀abcdef" {
 		t.Fatalf("first value = %#v", first.Arguments[0])
 	}
 	for index, want := range []string{"-4", "3"} {
-		literal, ok := first.Arguments[index+1].(*ScalarLiteralExpr)
-		if !ok || literal.Value.Kind != LiteralKindInteger || literal.Value.Text != want {
+		literal, literalOK := first.Arguments[index+1].(*ScalarLiteralExpr)
+		if !literalOK || literal.Value.Kind != LiteralKindInteger || literal.Value.Text != want {
 			t.Fatalf("first index argument %d = %#v, want integer %q", index, first.Arguments[index+1], want)
 		}
 	}
 
-	second, ok := assignments[1].Expression.(*ScalarCallExpr)
-	if !ok || second.Function != ScalarFunctionSubstring || len(second.Arguments) != 2 {
+	second, secondOK := assignments[1].Expression.(*ScalarCallExpr)
+	if !secondOK || second.Function != ScalarFunctionSubstring || len(second.Arguments) != 2 {
 		t.Fatalf("second substring = %#v", assignments[1].Expression)
 	}
 	if got, want := source[second.Range.Start.Offset:second.Range.End.Offset], `substr(source, 2)`; got != want {

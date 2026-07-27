@@ -5314,12 +5314,22 @@ func nonnegativeSubstringInteger(value plan.Value) uint64 {
 	if value.Kind == plan.ValueKindUint64 {
 		return value.Uint64
 	}
+	if value.Int64 < 0 {
+		return 0
+	}
+	// #nosec G115 -- the explicit sign guard proves the Int64 is representable.
 	return uint64(value.Int64)
 }
 
 func negativeSubstringIntegerMagnitude(value plan.Value) uint64 {
-	// Avoid negating MinInt64 in its signed domain.
-	return uint64(-(value.Int64 + 1)) + 1
+	if value.Int64 >= 0 {
+		return 0
+	}
+	// Subtract before negating so MinInt64 stays representable in its signed
+	// domain. The result is non-negative and therefore fits UInt64.
+	magnitudeMinusOne := -(value.Int64 + 1)
+	// #nosec G115 -- magnitudeMinusOne is non-negative by the guard above.
+	return uint64(magnitudeMinusOne) + 1
 }
 
 func sqliteNegativeStartSubstringUTF8SQL(
