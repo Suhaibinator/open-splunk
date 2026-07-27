@@ -2228,12 +2228,18 @@ func TestCompileStatsP95UsesBoundedNullableAggregate(t *testing.T) {
 	}
 	for _, required := range []string{
 		`count() AS "count"`,
-		`quantileGKOrNull(100, 0.95)(ifNotFinite(toFloat64("duration_ms"), CAST(NULL AS Nullable(Float64)))) AS "p95_ms"`,
+		`ifNotFinite(toFloat64("duration_ms"), CAST(NULL AS Nullable(Float64))) AS "__os_measure_percentile_value_0"`,
+		`quantilesGKOrNull(100, 0.95)("__os_measure_percentile_value_0") AS "__os_stats_percentiles_0"`,
+		`arrayElementOrNull("__os_stats_percentiles_0", 1) AS "p95_ms"`,
 		`toFloat64("p95_ms") > toFloat64(CAST(? AS Int64))`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("p95 SQL missing %q:\n%s", required, compiled.SQL)
 		}
+	}
+	if strings.Contains(compiled.SQL, `AS "__os_measure_values_0"`) ||
+		strings.Contains(compiled.SQL, "quantilesGKOrNullArray(") {
+		t.Fatalf("scalar-only percentile paid the multivalue array cost:\n%s", compiled.SQL)
 	}
 }
 
@@ -2257,7 +2263,9 @@ func TestCompileStatsP95DoesNotResurrectProjectedInput(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis | fields - duration | stats count p95(duration) AS p95_ms BY path`)
-	if !strings.Contains(compiled.SQL, `quantileGKOrNull(100, 0.95)(CAST(NULL AS Nullable(Float64))) AS "p95_ms"`) {
+	if !strings.Contains(compiled.SQL, `CAST(NULL AS Nullable(Float64)) AS "__os_measure_percentile_value_0"`) ||
+		!strings.Contains(compiled.SQL, `quantilesGKOrNull(100, 0.95)("__os_measure_percentile_value_0") AS "__os_stats_percentiles_0"`) ||
+		!strings.Contains(compiled.SQL, `arrayElementOrNull("__os_stats_percentiles_0", 1) AS "p95_ms"`) {
 		t.Fatalf("projected percentile input was not retained as null:\n%s", compiled.SQL)
 	}
 }
@@ -2815,7 +2823,6 @@ func TestCompileStatsValuesRejectsUnpinnedScalarMultivalueConsumers(t *testing.T
 		{name: "sort", source: `index=gradethis | stats values(user) AS users | sort users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
 		{name: "dedup", source: `index=gradethis | stats values(user) AS users | dedup users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
 		{name: "stats BY", source: `index=gradethis | stats values(user) AS users | stats count BY users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
-		{name: "p95", source: `index=gradethis | stats values(user) AS users | stats p95(users)`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
 		{name: "replace", source: `index=gradethis | stats values(user) AS users | eval x=replace(users,"a","b")`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: `replace(users,"a","b")`},
 		{name: "tonumber", source: `index=gradethis | stats values(user) AS users | eval x=tonumber(users)`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "tonumber(users)"},
 		{name: "rex", source: `index=gradethis | stats values(user) AS users | rex field=users "(?<x>.+)"`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
@@ -2898,7 +2905,7 @@ func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T)
 		{Measures: []plan.AggregateMeasure{{
 			Function:   plan.AggregateFunctionCountRows,
 			Input:      field,
-			Percentile: 0.95,
+			Percentile: 95,
 			Output:     "count",
 		}}},
 		{Measures: []plan.AggregateMeasure{{
@@ -2915,7 +2922,7 @@ func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T)
 		{Measures: []plan.AggregateMeasure{{
 			Function:   plan.AggregateFunctionCountValues,
 			Input:      field,
-			Percentile: 0.95,
+			Percentile: 95,
 			Output:     "count_user",
 		}}},
 		{Measures: []plan.AggregateMeasure{{
@@ -2930,13 +2937,13 @@ func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T)
 		{Measures: []plan.AggregateMeasure{{
 			Function:   plan.AggregateFunctionDistinctCount,
 			Input:      field,
-			Percentile: 0.95,
+			Percentile: 95,
 			Output:     "dc_user",
 		}}},
 		{Measures: []plan.AggregateMeasure{{
 			Function:   plan.AggregateFunctionValues,
 			Input:      field,
-			Percentile: 0.95,
+			Percentile: 95,
 			Output:     "values_user",
 		}}},
 		{Measures: []plan.AggregateMeasure{{
@@ -2946,7 +2953,7 @@ func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T)
 		{Measures: []plan.AggregateMeasure{{
 			Function:   plan.AggregateFunctionList,
 			Input:      field,
-			Percentile: 0.95,
+			Percentile: 95,
 			Output:     "list_user",
 		}}},
 		{Measures: []plan.AggregateMeasure{{
@@ -2974,7 +2981,7 @@ func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T)
 		{Measures: []plan.AggregateMeasure{{
 			Function:   plan.AggregateFunctionMinimum,
 			Input:      field,
-			Percentile: 0.95,
+			Percentile: 95,
 			Output:     "min_user",
 		}}},
 		{Measures: []plan.AggregateMeasure{{

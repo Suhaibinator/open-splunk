@@ -448,12 +448,14 @@ the selected rows in reversed order, matching its pipeline semantics.
 | stats list(user) AS ordered_users
 | stats min(duration_ms) AS fastest max(duration_ms) AS slowest BY path
 | stats earliest(status) AS first_status latest(status) AS last_status BY service
-| stats count p95(duration_ms) AS p95_ms BY path
+| stats p50(duration_ms) AS median_ms p90(duration_ms) p95(duration_ms) p99(duration_ms) BY path
+| stats perc42(duration_ms) AS answer
 | stats sum(bytes) AS total_bytes avg(duration_ms) AS mean_ms BY path
 ```
 
 Argument-free `count`, `count(field)`, `dc(field)`/`distinct_count(field)`,
-`p95(field)`, `values(field)`, `list(field)`, `sum(field)`, `avg(field)`,
+`pN(field)`/`percN(field)` for integer `N` from 1 through 99,
+`values(field)`, `list(field)`, `sum(field)`, `avg(field)`,
 `min(field)`, `max(field)`, `earliest(field)`, and `latest(field)` are
 supported, including multiple space- or comma-separated measures and `AS`
 aliases. Function names are
@@ -461,9 +463,12 @@ case-insensitive. Both
 distinct-count spellings use the canonical default output `dc(field)`; other
 default names use canonical lowercase spelling such as `count(productId)`,
 `values(user)`, `list(user)`, `min(duration_ms)`, `earliest(status)`, or
-`sum(bytes)`. The command is transforming: output contains only the `BY`
-fields followed by measures in source order. Argument-free `count` includes
-every input row in a retained group.
+`sum(bytes)`. Percentiles use the Splunk-compatible canonical default name
+`percN(field)` regardless of whether the query spells the function `pN` or
+`percN`; for example, `p95(duration_ms)` publishes `perc95(duration_ms)`.
+The command is transforming: output contains only the `BY` fields followed by
+measures in source order. Argument-free `count` includes every input row in a
+retained group.
 
 `count(field)` counts immediate, non-null field occurrences without
 stringifying values or expanding event rows:
@@ -496,8 +501,8 @@ the published total strictly representable as `UInt64`.
 
 The current downstream field grammar cannot reference a default aggregate name
 that contains parentheses. Use `AS` when a `count(field)`, `dc`, `values`,
-`list`, `min`, `max`, `earliest`, `latest`, `sum`, `avg`, or `p95` result will
-be consumed by a later command.
+`list`, `min`, `max`, `earliest`, `latest`, `sum`, `avg`, or percentile result
+will be consumed by a later command.
 
 This slice accepts exactly one unquoted, exact field inside `count(...)`.
 `count()`, the documented `c(field)` abbreviation, wildcard fields,
@@ -719,7 +724,7 @@ when any valid-UTF-8 member matches;
 inequality matches only a nonempty list with no equal member, and `field=*`
 matches only a nonempty list. Invalid-UTF-8 Bytes members do not match textual
 equality or wildcard literals. Ordered base-search comparison, `where`, scalar
-`eval` functions, `sort`, `dedup`, `stats ... BY`, `p95`, `rex`, `spath`,
+`eval` functions, `sort`, `dedup`, `stats ... BY`, `rex`, `spath`,
 `bin`, `top`, `rare`, and chart axes reject a known fixed multivalue input
 explicitly until their SPL multivalue behavior is pinned; the compiler never
 silently stringifies the array.
@@ -731,27 +736,38 @@ cannot be a `stats` input or `BY` field. A prior transforming command or exact
 The numeric aggregates accept finite integers, floats, numeric strings, tagged
 decimals, and canonical timestamps converted to Unix epoch seconds. Missing,
 null, empty-string, Boolean, bytes, object, nonnumeric, `NaN`, and infinite
-inputs are ignored. For `sum` and `avg`, each finite numeric scalar in a
-top-level multivalue array contributes independently; nonnumeric elements and
-nested containers are ignored without expanding event rows. `p95` retains its
-scalar-only behavior: a runtime Dynamic event array is ineligible, while a
-known fixed multivalue result from `values` is rejected explicitly.
+inputs are ignored. For `sum`, `avg`, and percentiles, each finite numeric
+scalar in a top-level multivalue array contributes independently, including
+duplicates; nonnumeric members and nested containers are ignored without
+expanding event rows. This applies both to runtime Dynamic event arrays and to
+known fixed multivalue results from commands such as `values`.
 
-`sum`, `avg`, and `p95` return nullable `Float64`. A global aggregation over no
-rows still emits one row; an aggregate with no eligible numeric contribution is
-null, including `sum` rather than zero. Splunk's primary documentation specifies
-that nonnumeric values are ignored but does not define the empty `sum` result,
-so null is the explicit v0.1 compatibility choice. A grouped aggregation over no
-rows emits no groups. Finite inputs are filtered before aggregation, but a
-computed IEEE `NaN` or positive/negative infinity caused by Float64 arithmetic
-is preserved rather than changed to null. Projected-away inputs stay absent and
-cannot be recovered from hidden event columns.
+`sum`, `avg`, and percentiles return nullable `Float64`. A global aggregation
+over no rows still emits one row; an aggregate with no eligible numeric
+contribution is null, including `sum` rather than zero. Splunk's primary
+documentation specifies that nonnumeric values are ignored but does not define
+the empty `sum` result, so null is the explicit v0.1 compatibility choice. A
+grouped aggregation over no rows emits no groups. Finite inputs are filtered
+before aggregation, but a computed IEEE `NaN` or positive/negative infinity
+caused by Float64 arithmetic is preserved rather than changed to null.
+Projected-away inputs stay absent and cannot be recovered from hidden event
+columns.
 
-`p95` uses ClickHouse `quantileGKOrNull(100, 0.95)`, a bounded approximately
-1%-rank-error aggregate. Splunk's percentile implementation uses different
-exact/interpolated behavior for small cardinalities and a proprietary bounded
-approximation for larger inputs, so exact percentile values can differ while
-the rank/error intent is preserved. An all-null percentile remains null.
+Percentiles use ClickHouse
+`quantilesGKOrNullArray(100, levels...)(numeric_members)`, a bounded
+approximately 1%-rank-error aggregate. All unique levels over one exact input
+share one normalized numeric array and one physical GK state; synonymous or
+repeated requests such as `p50(field)` and `perc50(field)` reuse the same
+component. Accuracy is fixed at 100, while the 16-measure, 10,001-group,
+250-million-source-row, four-thread, and 1 GiB query-memory ceilings remain
+authoritative resource bounds. Splunk uses exact behavior for smaller distinct
+sets and a different proprietary approximation for larger inputs, whereas
+Open Splunk currently uses GK at every cardinality. Exact values can therefore
+differ while the documented rank/error intent is preserved. A global empty or
+all-ineligible percentile and a retained all-ineligible group publish null.
+Splunk's available documentation does not settle typed null/container members;
+the immediate-member rules above are the explicit Open Splunk v0.1 boundary
+pending a live oracle.
 
 Missing and explicit-null group values are omitted. Dynamic scalar values
 group by their lexical representation, so numeric `500` and string `"500"`
@@ -1139,7 +1155,7 @@ only their total is capped.
 
 The following fail explicitly rather than being approximated:
 
-- any aggregate other than argument-free `count` — `sum`, `avg`, `p95`,
+- any aggregate other than argument-free `count` — `sum`, `avg`, percentiles,
   `count(field)`, `dc`, `values`, multiple aggregates, `agg=<term>`, sparkline
   aggregates, and parenthesized eval-expression aggregates — and `AS <name>` on
   the aggregate, all with `SPL_UNSUPPORTED_CHART_AGGREGATE`. `AS` is rejected
@@ -1277,13 +1293,17 @@ The following planned commands are not implemented in this version:
 eventstats, streamstats
 ```
 
-All `stats` functions other than argument-free `count`, exact-field
+The supported `stats` functions are argument-free `count`, exact-field
 `count(field)`, `dc(field)`/`distinct_count(field)`, `values(field)`,
-`list(field)`, `min(field)`, `max(field)`, `p95(field)`, `sum(field)`,
-`avg(field)`, `earliest(field)`, and `latest(field)` are unsupported.
-Unsupported examples include other fixed percentiles, `perc<N>`, `upperperc`,
-and `exactperc`. The broader `count` forms listed in the stats section are
-unsupported too.
+`list(field)`, `min(field)`, `max(field)`, integer-suffix
+`pN(field)`/`percN(field)` for `N` from 1 through 99, `sum(field)`,
+`avg(field)`, `earliest(field)`, and `latest(field)`. Other functions are
+unsupported.
+Unsupported percentile examples include suffixes 0 or 100, decimal suffixes,
+the SPL2-style `perc(field, N)` form, `upperperc`, and `exactperc`. Percentile
+eval expressions and wildcard inputs are also outside the current exact-field
+subset. The broader `count` forms listed in the stats section are unsupported
+too.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,

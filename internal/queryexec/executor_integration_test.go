@@ -998,6 +998,32 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("percentile family through manager", func(t *testing.T) {
+		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
+			"queryexec-percentile-family",
+			`index=main | eval duration_ms=tonumber(replace(duration, "ms$", "")) | stats `+
+				`p50(duration_ms) AS q50 p90(duration_ms) AS q90 `+
+				`p95(duration_ms) AS q95 p99(duration_ms) AS q99 `+
+				`perc50(duration_ms) AS q50_again`,
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("percentile family state = %v, failure=%#v", job.State, job.Failure)
+		}
+		queryIntegrationAssertColumns(t, page, []string{"q50", "q90", "q95", "q99", "q50_again"})
+		if len(page.Rows) != 1 || len(page.Schema.Columns) != 5 {
+			t.Fatalf("percentile family page = %#v", page)
+		}
+		for index, column := range page.Schema.Columns {
+			if column.Kind != searchjobs.ValueKindDouble || !column.Nullable {
+				t.Fatalf("percentile family column[%d] = %#v", index, column)
+			}
+			value, ok := page.Rows[0].Values[index].Double()
+			if !ok || value != 650 {
+				t.Fatalf("percentile family value[%d] = %v, %v, want 650", index, value, ok)
+			}
+		}
+	})
+
 	t.Run("timechart fixed range gaps and null series through manager", func(t *testing.T) {
 		source := `index=main source="timechart-level" | timechart span=5m count by level`
 		parsed, err := spl.Parse(source)

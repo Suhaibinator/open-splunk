@@ -5441,6 +5441,32 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		next.tieBreakers = append(next.tieBreakers, compiledSortKey{valueSQL: privateGroup})
 	}
 	numericInputs := make(map[string]string)
+	numericInputForResolved := func(ref plan.FieldRef, input fieldState, ok bool) string {
+		if inputAlias, cached := numericInputs[ref.Name]; cached {
+			return inputAlias
+		}
+		inputSQL := "CAST([], 'Array(Float64)')"
+		var inputArgs []any
+		if ok {
+			inputSQL, inputArgs = numericArrayInputSQL(input)
+		}
+		inputAlias := quoteIdentifier(fmt.Sprintf("__os_measure_values_%d", len(numericInputs)))
+		numericInputs[ref.Name] = inputAlias
+		next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
+		next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
+		return inputAlias
+	}
+	numericInputFor := func(ref plan.FieldRef) (string, error) {
+		if inputAlias, cached := numericInputs[ref.Name]; cached {
+			return inputAlias, nil
+		}
+		input, ok, resolveErr := resolveCompiledField(ref, state)
+		if resolveErr != nil {
+			return "", resolveErr
+		}
+		inputAlias := numericInputForResolved(ref, input, ok)
+		return inputAlias, nil
+	}
 	stringInputs := make(map[string]string)
 	type scalarStringInput struct {
 		ordinal        int
@@ -5486,6 +5512,8 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 	orderedStringLists := make(map[string]orderedStringList)
 	valuesInputs := make(map[string]struct{})
 	extremaMeasureInputs := make(map[string]struct{})
+	numericArrayConsumers := make(map[string]struct{})
+	percentileLevels := make(map[string][]uint8)
 	for _, measure := range operator.Measures {
 		if measure.Function == plan.AggregateFunctionValues {
 			valuesInputs[measure.Input.Name] = struct{}{}
@@ -5493,6 +5521,18 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		if measure.Function == plan.AggregateFunctionMinimum ||
 			measure.Function == plan.AggregateFunctionMaximum {
 			extremaMeasureInputs[measure.Input.Name] = struct{}{}
+		}
+		if measure.Function == plan.AggregateFunctionSum ||
+			measure.Function == plan.AggregateFunctionAverage {
+			numericArrayConsumers[measure.Input.Name] = struct{}{}
+		}
+		if measure.Function == plan.AggregateFunctionPercentile &&
+			measure.Percentile >= 1 && measure.Percentile <= 99 &&
+			!slices.Contains(percentileLevels[measure.Input.Name], measure.Percentile) {
+			percentileLevels[measure.Input.Name] = append(
+				percentileLevels[measure.Input.Name],
+				measure.Percentile,
+			)
 		}
 	}
 	listRowOrdinal := ""
@@ -5622,6 +5662,39 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		chronologicalInputs[ref.Name] = compiled
 		return compiled, nil
 	}
+	type percentileState struct {
+		column    string
+		positions map[uint8]int
+	}
+	percentileStates := make(map[string]percentileState)
+	percentileInputFor := func(ref plan.FieldRef) (string, bool, error) {
+		if _, sharedWithArrayConsumer := numericArrayConsumers[ref.Name]; sharedWithArrayConsumer {
+			inputAlias, err := numericInputFor(ref)
+			return inputAlias, true, err
+		}
+		input, ok, resolveErr := resolveCompiledField(ref, state)
+		if resolveErr != nil {
+			return "", false, resolveErr
+		}
+		if ok && (input.kind == fieldKindDynamic || input.kind == fieldKindStringArray) {
+			return numericInputForResolved(ref, input, true), true, nil
+		}
+		inputSQL := "CAST(NULL AS Nullable(Float64))"
+		if ok {
+			inputSQL = percentileInputSQL(input)
+			if input.existsSQL != "" && input.existsSQL != "1" {
+				inputSQL = "if(" + input.existsSQL + ", " + inputSQL +
+					", CAST(NULL AS Nullable(Float64)))"
+				next.preAggregateArgs = append(next.preAggregateArgs, input.existsArgs...)
+			}
+		}
+		inputAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_measure_percentile_value_%d",
+			len(percentileStates),
+		))
+		next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
+		return inputAlias, false, nil
+	}
 	for measureIndex, measure := range operator.Measures {
 		if _, fieldErr := plan.ResolveField(measure.Output, spl.Range{}); fieldErr != nil {
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf(
@@ -5645,9 +5718,9 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 				)
 			}
 		case plan.AggregateFunctionPercentile:
-			if measure.Percentile != 0.95 {
+			if measure.Percentile < 1 || measure.Percentile > 99 {
 				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
-					"compile ClickHouse aggregate: unsupported percentile %g",
+					"compile ClickHouse aggregate: unsupported percentile %d",
 					measure.Percentile,
 				)
 			}
@@ -5713,38 +5786,58 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			projection = append(projection, "toUInt64(sum(toUInt128("+inputAlias+"))) AS "+output)
 			measureState.numberType = "UInt64"
 		case plan.AggregateFunctionPercentile:
-			input, ok, resolveErr := resolveCompiledField(measure.Input, state)
-			if resolveErr != nil {
-				return nil, nil, nil, compileState{}, nil, resolveErr
-			}
-			inputSQL := "CAST(NULL AS Nullable(Float64))"
-			if ok {
-				if input.kind == fieldKindStringArray {
-					return nil, nil, nil, compileState{}, nil, unsupportedMultivalueUsage(
-						"p95",
-						measure.Input.Range,
+			percentiles, cached := percentileStates[measure.Input.Name]
+			if !cached {
+				inputAlias, inputIsArray, inputErr := percentileInputFor(measure.Input)
+				if inputErr != nil {
+					return nil, nil, nil, compileState{}, nil, inputErr
+				}
+				levels := percentileLevels[measure.Input.Name]
+				if len(levels) == 0 {
+					return nil, nil, nil, compileState{}, nil, errors.New(
+						"compile ClickHouse aggregate: percentile input has no valid levels",
 					)
 				}
-				inputSQL = percentileInputSQL(input)
+				levelSQL := make([]string, 0, len(levels))
+				positions := make(map[uint8]int, len(levels))
+				for index, level := range levels {
+					levelSQL = append(levelSQL, statsPercentileLevelSQL(level))
+					positions[level] = index + 1
+				}
+				percentiles = percentileState{
+					column: quoteIdentifier(fmt.Sprintf(
+						"__os_stats_percentiles_%d",
+						len(percentileStates),
+					)),
+					positions: positions,
+				}
+				percentileStates[measure.Input.Name] = percentiles
+				aggregateFunction := "quantilesGKOrNull"
+				if inputIsArray {
+					aggregateFunction += "Array"
+				}
+				projection = append(
+					projection,
+					aggregateFunction+"(100, "+strings.Join(levelSQL, ", ")+")("+
+						inputAlias+") AS "+percentiles.column,
+				)
 			}
-			projection = append(projection, "quantileGKOrNull(100, 0.95)("+inputSQL+") AS "+output)
+			position, ok := percentiles.positions[measure.Percentile]
+			if !ok {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse aggregate: percentile level was not collected",
+				)
+			}
+			projection = append(
+				projection,
+				"arrayElementOrNull("+percentiles.column+", "+
+					strconv.Itoa(position)+") AS "+output,
+			)
 			measureState.numberType = "Float64"
 		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
-			inputAlias, cached := numericInputs[measure.Input.Name]
-			if !cached {
-				input, ok, resolveErr := resolveCompiledField(measure.Input, state)
-				if resolveErr != nil {
-					return nil, nil, nil, compileState{}, nil, resolveErr
-				}
-				inputSQL := "CAST([], 'Array(Float64)')"
-				var inputArgs []any
-				if ok {
-					inputSQL, inputArgs = numericArrayInputSQL(input)
-				}
-				inputAlias = quoteIdentifier(fmt.Sprintf("__os_measure_values_%d", len(numericInputs)))
-				numericInputs[measure.Input.Name] = inputAlias
-				next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
-				next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
+			inputAlias, inputErr := numericInputFor(measure.Input)
+			if inputErr != nil {
+				return nil, nil, nil, compileState{}, nil, inputErr
 			}
 			countSQL := "sum(length(" + inputAlias + "))"
 			sumSQL := "sum(arraySum(" + inputAlias + "))"
@@ -6143,6 +6236,13 @@ func percentileInputSQL(field fieldState) string {
 	default:
 		return nullFloat
 	}
+}
+
+func statsPercentileLevelSQL(percentile uint8) string {
+	if percentile%10 == 0 {
+		return "0." + strconv.Itoa(int(percentile/10))
+	}
+	return fmt.Sprintf("0.%02d", percentile)
 }
 
 func numericArrayInputSQL(field fieldState) (string, []any) {

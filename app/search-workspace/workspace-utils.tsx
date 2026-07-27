@@ -23,10 +23,15 @@ const PIPELINE_COMMAND_PATTERN = [
 ].map(escapeRegExp).join("|");
 const SPL_FUNCTION_NAMES = [
   "count", "dc", "distinct_count", "values", "list", "min", "max",
-  "earliest", "latest", "p95", "sum", "avg", "tonumber", "replace",
+  "earliest", "latest", "sum", "avg", "tonumber", "replace",
 ] as const;
-const SPL_FUNCTION_PATTERN = SPL_FUNCTION_NAMES.map(escapeRegExp).join("|");
+const SPL_PERCENTILE_FUNCTION_PATTERN = "(?:p|perc)0*(?:[1-9]|[1-9][0-9])";
+const SPL_FUNCTION_PATTERN = [
+  ...SPL_FUNCTION_NAMES.map(escapeRegExp),
+  SPL_PERCENTILE_FUNCTION_PATTERN,
+].join("|");
 const SPL_FUNCTION_SET = new Set<string>(SPL_FUNCTION_NAMES);
+const SPL_PERCENTILE_FUNCTION = new RegExp(`^${SPL_PERCENTILE_FUNCTION_PATTERN}$`, "i");
 const SYNTAX_TOKEN_PATTERN = new RegExp(
   `(\\b(?:index|host|source|sourcetype|level|status|trace_id|message|path)\\b(?=\\s*=)|\\b(?:${PIPELINE_COMMAND_PATTERN})\\b|\\b(?:${SPL_FUNCTION_PATTERN})\\b|\\b(?:AND|OR|NOT|AS|BY)\\b|"(?:\\\\.|[^"\\\\])*"|\\|)`,
   "gi",
@@ -105,7 +110,7 @@ export function syntaxTokens(query: string): ReactNode[] {
     else if (UNSUPPORTED_PIPELINE_COMMAND_SET.has(lower)) className = "spl-error-token";
     else if (isSupportedSplPipelineCommand(lower)) {
       className = "spl-command";
-    } else if (SPL_FUNCTION_SET.has(lower)) {
+    } else if (SPL_FUNCTION_SET.has(lower) || SPL_PERCENTILE_FUNCTION.test(part)) {
       className = "spl-function";
     } else if (/^(index|host|source|sourcetype|level|status|trace_id|message|path)$/i.test(part)) {
       className = "spl-field";
