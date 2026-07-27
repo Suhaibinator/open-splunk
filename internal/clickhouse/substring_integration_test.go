@@ -9,7 +9,6 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
-	"github.com/Suhaibinator/open-splunk/internal/ingest"
 )
 
 func testSubstringAgainstClickHouse(
@@ -22,7 +21,6 @@ func testSubstringAgainstClickHouse(
 	t.Helper()
 
 	unicodeEvent := testStoredEvent("substring-unicode", "substring", indexTime)
-	unicodeEvent.BatchID = "substring-batch"
 	unicodeEvent.Event.Host = "😀abcdef"
 	unicodeEvent.Event.Raw = []byte("😀abcdef RAW")
 	unicodeEvent.Event.Fields = typedObjectValue(
@@ -40,42 +38,19 @@ func testSubstringAgainstClickHouse(
 	)
 
 	binaryEvent := testStoredEvent("substring-binary", "substring", indexTime)
-	binaryEvent.BatchID = "substring-batch"
 	binaryEvent.Event.Raw = []byte("VALID ASCII MARKED BINARY")
 	binaryEvent.Event.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_BINARY
 
-	if _, err := store.Store(ctx, ingest.StoreBatch{
-		TenantID:           "tenant",
-		CollectorID:        "collector",
-		BatchID:            "substring-batch",
-		BatchSequence:      92,
-		OriginalEventCount: 2,
-		SourceBatchSHA256:  testSourceBatchDigest("substring-batch"),
-		ReceivedAt:         indexTime,
-		Events:             []*ingest.StoredEvent{unicodeEvent, binaryEvent},
-	}); err != nil {
-		t.Fatalf("store substring fixtures: %v", err)
-	}
-	visibilityCutoff, err := store.VisibilityCutoff(ctx)
-	if err != nil {
-		t.Fatalf("capture substring visibility cutoff: %v", err)
-	}
-	compile := func(source string) CompiledQuery {
-		t.Helper()
-		return compileIntegrationSPLForIndex(
-			t,
-			source,
-			indexTime.Add(10*time.Second),
-			visibilityCutoff,
-			"substring",
-		)
-	}
-	queryContext := clickhousedriver.Context(
+	compile, queryContext := storeScalarFunctionIntegrationFixtures(
 		ctx,
-		clickhousedriver.WithSettings(clickhousedriver.Settings{
-			"use_variant_as_common_type":        uint8(0),
-			"short_circuit_function_evaluation": "enable",
-		}),
+		t,
+		store,
+		indexTime,
+		"substring",
+		"substring-batch",
+		92,
+		unicodeEvent,
+		binaryEvent,
 	)
 
 	matrix := compile(

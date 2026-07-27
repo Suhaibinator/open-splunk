@@ -21,6 +21,7 @@ func TestCompileEvalToStringFixedScalarsAreTypedAndParameterized(t *testing.T) {
 		`toString(CAST(? AS Int64)) AS "signed"`,
 		`toString(CAST(? AS UInt64)) AS "unsigned"`,
 		`toString(CAST(? AS Float64)) AS "decimal"`,
+		`transform(CAST(? AS Bool), [true, false], ['True', 'False'], CAST(NULL AS Nullable(String))) AS "yes"`,
 		`'True'`,
 		`'False'`,
 		`CAST(NULL AS Nullable(String)) AS "absent"`,
@@ -60,6 +61,10 @@ func TestCompileEvalToStringSupportsDynamicScalarsOnceWithoutContainerConversion
 		`dynamicElement(value, 'String')`,
 		`dynamicType(value) = 'Bool'`,
 		`dynamicElement(value, 'Bool')`,
+		`'decimal/v1'`,
+		`open_splunk_value`,
+		`length(dynamicElement(value, 'Map(String, String)')`,
+		`match(if(length(`,
 		`toString(value)`,
 		`CAST(NULL AS Nullable(String))`,
 	} {
@@ -72,13 +77,41 @@ func TestCompileEvalToStringSupportsDynamicScalarsOnceWithoutContainerConversion
 	}
 	for _, forbidden := range []string{
 		`Array(String)`,
-		`Map(String`,
 		`ARRAY JOIN`,
-		`'decimal/v1'`,
 	} {
 		if strings.Contains(compiled.SQL, forbidden) {
 			t.Fatalf("Dynamic tostring retained container branch %q:\n%s", forbidden, compiled.SQL)
 		}
+	}
+}
+
+func TestCompileEvalToStringSkipsBroadRedispatchForDynamicTextProducers(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | eval rendered=tostring(lower(category)) | table rendered`,
+	)
+	for _, required := range []string{
+		`lowerUTF8(dynamicElement(value, 'String'))`,
+		`dynamicElement(arrayElement(arrayMap(value -> multiIf(`,
+		`), 1), 'String') AS "rendered"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("text-only tostring SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	for _, forbidden := range []string{
+		`dynamicType(value) = 'Bool'`,
+		`toString(value)`,
+		`'decimal/v1'`,
+	} {
+		if strings.Contains(compiled.SQL, forbidden) {
+			t.Fatalf("text-only tostring retained broad branch %q:\n%s", forbidden, compiled.SQL)
+		}
+	}
+	if got := strings.Count(compiled.SQL, `"__os_fields"."category"`); got != 1 {
+		t.Fatalf("Dynamic text source references = %d, want 1:\n%s", got, compiled.SQL)
 	}
 }
 

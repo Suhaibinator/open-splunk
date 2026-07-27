@@ -3829,6 +3829,59 @@ func compileIntegrationSPLForIndex(
 	return compiled
 }
 
+func storeScalarFunctionIntegrationFixtures(
+	ctx context.Context,
+	t *testing.T,
+	store *Store,
+	indexTime time.Time,
+	index string,
+	batchID string,
+	batchSequence uint64,
+	events ...*ingest.StoredEvent,
+) (func(string) CompiledQuery, context.Context) {
+	t.Helper()
+	if len(events) == 0 || uint64(len(events)) > math.MaxUint32 {
+		t.Fatalf("store %s scalar fixtures: invalid event count %d", index, len(events))
+	}
+	for _, event := range events {
+		event.BatchID = batchID
+	}
+	if _, err := store.Store(ctx, ingest.StoreBatch{
+		TenantID:           "tenant",
+		CollectorID:        "collector",
+		BatchID:            batchID,
+		BatchSequence:      batchSequence,
+		OriginalEventCount: uint32(len(events)),
+		SourceBatchSHA256:  testSourceBatchDigest(batchID),
+		ReceivedAt:         indexTime,
+		Events:             events,
+	}); err != nil {
+		t.Fatalf("store %s scalar fixtures: %v", index, err)
+	}
+	visibilityCutoff, err := store.VisibilityCutoff(ctx)
+	if err != nil {
+		t.Fatalf("capture %s scalar visibility cutoff: %v", index, err)
+	}
+	compile := func(source string) CompiledQuery {
+		t.Helper()
+		return compileIntegrationSPLForIndex(
+			t,
+			source,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+			index,
+		)
+	}
+	queryContext := clickhousedriver.Context(
+		ctx,
+		clickhousedriver.WithSettings(clickhousedriver.Settings{
+			"use_variant_as_common_type":        uint8(0),
+			"short_circuit_function_evaluation": "enable",
+		}),
+	)
+	return compile, queryContext
+}
+
 func buildIntegrationPlan(t *testing.T, source string, cutoff time.Time, visibilityCutoff uint64) *plan.Query {
 	t.Helper()
 	return buildIntegrationPlanForIndex(t, source, cutoff, visibilityCutoff, "compiler")

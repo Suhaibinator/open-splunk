@@ -5412,20 +5412,44 @@ func compileUnaryTextScalarInput(
 	state compileState,
 	functionName string,
 ) (compiledScalar, error) {
+	input, err := compileUnaryScalarInput(expression, state, functionName)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
+		return compiledScalar{}, fmt.Errorf(
+			"compile ClickHouse %s: cannot consume a Boolean null predicate",
+			functionName,
+		)
+	}
+	return input, nil
+}
+
+func compileUnaryScalarInput(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+	functionName string,
+) (compiledScalar, error) {
+	if expression == nil {
+		return compiledScalar{}, fmt.Errorf(
+			"compile ClickHouse %s: missing expression",
+			functionName,
+		)
+	}
 	if len(expression.Arguments) != 1 {
 		return compiledScalar{}, fmt.Errorf(
 			"compile ClickHouse %s: expected one argument",
 			functionName,
 		)
 	}
-	return compileTextScalarInputArgument(
+	return compileScalarInputArgument(
 		expression.Arguments[0],
 		state,
 		functionName,
 	)
 }
 
-func compileTextScalarInputArgument(
+func compileScalarInputArgument(
 	argument plan.ScalarExpression,
 	state compileState,
 	functionName string,
@@ -5436,13 +5460,25 @@ func compileTextScalarInputArgument(
 			functionName,
 		)
 	}
+	return compileScalarValue(argument, state)
+}
+
+func compileTextScalarInputArgument(
+	argument plan.ScalarExpression,
+	state compileState,
+	functionName string,
+) (compiledScalar, error) {
+	input, err := compileScalarInputArgument(argument, state, functionName)
+	if err != nil {
+		return compiledScalar{}, err
+	}
 	if scalarExpressionMayReturnBooleanFunction(argument) {
 		return compiledScalar{}, fmt.Errorf(
 			"compile ClickHouse %s: cannot consume a Boolean null predicate",
 			functionName,
 		)
 	}
-	return compileScalarValue(argument, state)
+	return input, nil
 }
 
 func compiledTextEligibleStringScalar(input compiledScalar) (string, []any) {
@@ -5461,22 +5497,7 @@ func compileToStringScalar(
 	expression *plan.ScalarCallExpression,
 	state compileState,
 ) (compiledScalar, error) {
-	if expression == nil {
-		return compiledScalar{}, errors.New(
-			"compile ClickHouse tostring: missing expression",
-		)
-	}
-	if len(expression.Arguments) != 1 {
-		return compiledScalar{}, errors.New(
-			"compile ClickHouse tostring: expected one argument",
-		)
-	}
-	if nilScalarExpression(expression.Arguments[0]) {
-		return compiledScalar{}, errors.New(
-			"compile ClickHouse tostring: missing scalar expression",
-		)
-	}
-	input, err := compileScalarValue(expression.Arguments[0], state)
+	input, err := compileUnaryScalarInput(expression, state, "tostring")
 	if err != nil {
 		return compiledScalar{}, err
 	}
@@ -5486,24 +5507,39 @@ func compileToStringScalar(
 	textEligibleSQL := ""
 	switch input.kind {
 	case fieldKindDynamic:
-		typeSQL := "dynamicType(value)"
-		valueSQL = "arrayElement(arrayMap(value -> multiIf(" +
-			typeSQL + " = 'String', dynamicElement(value, 'String'), " +
-			typeSQL + " = 'Bool', if(dynamicElement(value, 'Bool'), " +
-			"CAST('True' AS String), CAST('False' AS String)), " +
-			dynamicNumericTypePredicate(typeSQL) + ", toString(value), " +
-			"CAST(NULL AS Nullable(String))), [" + input.valueSQL + "]), 1)"
+		if input.dynamicTextOnly {
+			// Text-case producers can only contain String, String arrays, or
+			// null. A direct extraction avoids a redundant singleton-array
+			// binding and runtime dispatch while rejecting multivalue variants.
+			valueSQL = "dynamicElement(" + input.valueSQL + ", 'String')"
+		} else {
+			typeSQL := "dynamicType(value)"
+			dynamicValue := compiledScalar{
+				valueSQL:       "value",
+				dynamicTypeSQL: typeSQL,
+				kind:           fieldKindDynamic,
+			}
+			decimalCondition, decimalPayload := dynamicTaggedDecimalText(
+				dynamicValue,
+			)
+			valueSQL = "arrayElement(arrayMap(value -> multiIf(" +
+				typeSQL + " = 'String', dynamicElement(value, 'String'), " +
+				typeSQL + " = 'Bool', if(dynamicElement(value, 'Bool'), " +
+				"CAST('True' AS String), CAST('False' AS String)), " +
+				decimalCondition + ", " + decimalPayload + ", " +
+				dynamicNumericTypePredicate(typeSQL) + ", toString(value), " +
+				"CAST(NULL AS Nullable(String))), [" + input.valueSQL + "]), 1)"
+		}
 	case fieldKindString:
 		valueSQL = input.valueSQL
 		textEligibleSQL = input.textEligibleSQL
 	case fieldKindNumber:
 		valueSQL = "toString(" + input.valueSQL + ")"
 	case fieldKindBool:
-		// Bind nullable Boolean producers once so null does not become False.
-		valueSQL = "arrayElement(arrayMap(value -> multiIf(" +
-			"isNull(value), CAST(NULL AS Nullable(String)), value, " +
-			"CAST('True' AS String), CAST('False' AS String)), [" +
-			input.valueSQL + "]), 1)"
+		// transform preserves nullable Boolean null while evaluating its input
+		// once, without allocating a singleton array per row.
+		valueSQL = "transform(" + input.valueSQL + ", [true, false], " +
+			"['True', 'False'], CAST(NULL AS Nullable(String)))"
 	case fieldKindInvalid:
 		valueSQL = "CAST(NULL AS Nullable(String))"
 	case fieldKindStringArray:
@@ -6846,6 +6882,19 @@ func dynamicTaggedDecimalCondition(value compiledScalar) string {
 		" AND mapContains(" + mapSQL + ", " + typeKey + ")" +
 		" AND mapContains(" + mapSQL + ", " + valueKey + ")" +
 		" AND " + mapSQL + "[" + typeKey + "] = 'decimal/v1')"
+}
+
+func dynamicTaggedDecimalText(value compiledScalar) (condition, payload string) {
+	valueKey := "concat(char(0), 'open_splunk_value')"
+	payload = dynamicTaggedMapSQL(value) + "[" + valueKey + "]"
+	limit := strconv.Itoa(MaximumExactNumericBinTextBytes)
+	boundedPayload := "if(length(" + payload + ") <= " + limit + ", " +
+		payload + ", CAST('' AS String))"
+	condition = "(" + dynamicTaggedDecimalCondition(value) +
+		" AND length(" + payload + ") <= " + limit +
+		" AND match(" + boundedPayload + ", " +
+		dynamicDecimalPayloadPattern + "))"
+	return condition, payload
 }
 
 func dynamicTaggedMapSQL(value compiledScalar) string {

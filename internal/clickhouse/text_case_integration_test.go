@@ -9,7 +9,6 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
-	"github.com/Suhaibinator/open-splunk/internal/ingest"
 )
 
 func testTextCaseAgainstClickHouse(
@@ -22,7 +21,6 @@ func testTextCaseAgainstClickHouse(
 	t.Helper()
 
 	unicodeEvent := testStoredEvent("text-case-unicode", "textcase", indexTime)
-	unicodeEvent.BatchID = "text-case-batch"
 	unicodeEvent.Event.Host = "München"
 	unicodeEvent.Event.Raw = []byte("Straße RAW")
 	unicodeEvent.Event.Message = stringPointer("Unicode fixture")
@@ -41,45 +39,22 @@ func testTextCaseAgainstClickHouse(
 	)
 
 	binaryEvent := testStoredEvent("text-case-binary", "textcase", indexTime)
-	binaryEvent.BatchID = "text-case-batch"
 	binaryEvent.Event.Raw = []byte("VALID ASCII MARKED BINARY")
 	binaryEvent.Event.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_BINARY
 	binaryEvent.Event.Fields = typedObjectValue(
 		typedField("scalar", typedString("BINARY EVENT")),
 	)
 
-	if _, err := store.Store(ctx, ingest.StoreBatch{
-		TenantID:           "tenant",
-		CollectorID:        "collector",
-		BatchID:            "text-case-batch",
-		BatchSequence:      90,
-		OriginalEventCount: 2,
-		SourceBatchSHA256:  testSourceBatchDigest("text-case-batch"),
-		ReceivedAt:         indexTime,
-		Events:             []*ingest.StoredEvent{unicodeEvent, binaryEvent},
-	}); err != nil {
-		t.Fatalf("store text-case fixtures: %v", err)
-	}
-	visibilityCutoff, err := store.VisibilityCutoff(ctx)
-	if err != nil {
-		t.Fatalf("capture text-case visibility cutoff: %v", err)
-	}
-	compile := func(source string) CompiledQuery {
-		t.Helper()
-		return compileIntegrationSPLForIndex(
-			t,
-			source,
-			indexTime.Add(10*time.Second),
-			visibilityCutoff,
-			"textcase",
-		)
-	}
-	queryContext := clickhousedriver.Context(
+	compile, queryContext := storeScalarFunctionIntegrationFixtures(
 		ctx,
-		clickhousedriver.WithSettings(clickhousedriver.Settings{
-			"use_variant_as_common_type":        uint8(0),
-			"short_circuit_function_evaluation": "enable",
-		}),
+		t,
+		store,
+		indexTime,
+		"textcase",
+		"text-case-batch",
+		90,
+		unicodeEvent,
+		binaryEvent,
 	)
 
 	scalars := compile(

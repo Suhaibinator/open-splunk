@@ -8,7 +8,6 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
-	"github.com/Suhaibinator/open-splunk/internal/ingest"
 )
 
 func testTextLengthAgainstClickHouse(
@@ -21,7 +20,6 @@ func testTextLengthAgainstClickHouse(
 	t.Helper()
 
 	unicodeEvent := testStoredEvent("text-length-unicode", "textlength", indexTime)
-	unicodeEvent.BatchID = "text-length-batch"
 	unicodeEvent.Event.Host = "München Straße"
 	unicodeEvent.Event.Raw = []byte("München Straße RAW")
 	unicodeEvent.Event.Fields = typedObjectValue(
@@ -40,42 +38,19 @@ func testTextLengthAgainstClickHouse(
 	)
 
 	binaryEvent := testStoredEvent("text-length-binary", "textlength", indexTime)
-	binaryEvent.BatchID = "text-length-batch"
 	binaryEvent.Event.Raw = []byte("VALID ASCII MARKED BINARY")
 	binaryEvent.Event.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_BINARY
 
-	if _, err := store.Store(ctx, ingest.StoreBatch{
-		TenantID:           "tenant",
-		CollectorID:        "collector",
-		BatchID:            "text-length-batch",
-		BatchSequence:      91,
-		OriginalEventCount: 2,
-		SourceBatchSHA256:  testSourceBatchDigest("text-length-batch"),
-		ReceivedAt:         indexTime,
-		Events:             []*ingest.StoredEvent{unicodeEvent, binaryEvent},
-	}); err != nil {
-		t.Fatalf("store text-length fixtures: %v", err)
-	}
-	visibilityCutoff, err := store.VisibilityCutoff(ctx)
-	if err != nil {
-		t.Fatalf("capture text-length visibility cutoff: %v", err)
-	}
-	compile := func(source string) CompiledQuery {
-		t.Helper()
-		return compileIntegrationSPLForIndex(
-			t,
-			source,
-			indexTime.Add(10*time.Second),
-			visibilityCutoff,
-			"textlength",
-		)
-	}
-	queryContext := clickhousedriver.Context(
+	compile, queryContext := storeScalarFunctionIntegrationFixtures(
 		ctx,
-		clickhousedriver.WithSettings(clickhousedriver.Settings{
-			"use_variant_as_common_type":        uint8(0),
-			"short_circuit_function_evaluation": "enable",
-		}),
+		t,
+		store,
+		indexTime,
+		"textlength",
+		"text-length-batch",
+		91,
+		unicodeEvent,
+		binaryEvent,
 	)
 
 	scalars := compile(

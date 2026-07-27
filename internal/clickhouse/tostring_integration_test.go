@@ -8,7 +8,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
-	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 )
 
 func testToStringAgainstClickHouse(
@@ -21,14 +21,14 @@ func testToStringAgainstClickHouse(
 	t.Helper()
 
 	scalarEvent := testStoredEvent("tostring-scalars", "tostring", indexTime)
-	scalarEvent.BatchID = "tostring-batch"
 	scalarEvent.Event.Host = "München"
 	scalarEvent.Event.Raw = []byte("UTF-8 RAW")
 	scalarEvent.Event.Fields = typedObjectValue(
 		typedField("text", typedString("Straße")),
 		typedField("signed", typedSint(-42)),
 		typedField("unsigned", typedUint(^uint64(0))),
-		typedField("decimal", typedDouble(12.5)),
+		typedField("floating", typedDouble(12.5)),
+		typedField("decimal", typedDecimal("123.4500")),
 		typedField("yes", typedBool(true)),
 		typedField("no", typedBool(false)),
 		typedField("nothing", typedNull()),
@@ -43,51 +43,28 @@ func testToStringAgainstClickHouse(
 	)
 
 	binaryEvent := testStoredEvent("tostring-binary", "tostring", indexTime)
-	binaryEvent.BatchID = "tostring-batch"
 	binaryEvent.Event.Raw = []byte("VALID ASCII MARKED BINARY")
 	binaryEvent.Event.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_BINARY
 
-	if _, err := store.Store(ctx, ingest.StoreBatch{
-		TenantID:           "tenant",
-		CollectorID:        "collector",
-		BatchID:            "tostring-batch",
-		BatchSequence:      93,
-		OriginalEventCount: 2,
-		SourceBatchSHA256:  testSourceBatchDigest("tostring-batch"),
-		ReceivedAt:         indexTime,
-		Events:             []*ingest.StoredEvent{scalarEvent, binaryEvent},
-	}); err != nil {
-		t.Fatalf("store tostring fixtures: %v", err)
-	}
-	visibilityCutoff, err := store.VisibilityCutoff(ctx)
-	if err != nil {
-		t.Fatalf("capture tostring visibility cutoff: %v", err)
-	}
-	compile := func(source string) CompiledQuery {
-		t.Helper()
-		return compileIntegrationSPLForIndex(
-			t,
-			source,
-			indexTime.Add(10*time.Second),
-			visibilityCutoff,
-			"tostring",
-		)
-	}
-	queryContext := clickhousedriver.Context(
+	compile, queryContext := storeScalarFunctionIntegrationFixtures(
 		ctx,
-		clickhousedriver.WithSettings(clickhousedriver.Settings{
-			"use_variant_as_common_type":        uint8(0),
-			"short_circuit_function_evaluation": "enable",
-		}),
+		t,
+		store,
+		indexTime,
+		"tostring",
+		"tostring-batch",
+		93,
+		scalarEvent,
+		binaryEvent,
 	)
 
 	scalars := compile(
 		`index=tostring event_id="tostring-scalars"` +
-			` | eval literal=tostring(123), host_text=tostring(host), text_value=tostring(text), signed_value=tostring(signed), unsigned_value=tostring(unsigned), decimal_value=tostring(decimal), yes_value=tostring(yes), no_value=tostring(no), predicate=tostring(isnull(absent)), null_value=tostring(nothing), missing_value=tostring(absent)` +
-			` | table literal,host_text,text_value,signed_value,unsigned_value,decimal_value,yes_value,no_value,predicate,null_value,missing_value`,
+			` | eval literal=tostring(123), host_text=tostring(host), text_value=tostring(text), signed_value=tostring(signed), unsigned_value=tostring(unsigned), floating_value=tostring(floating), decimal_value=tostring(decimal), yes_value=tostring(yes), no_value=tostring(no), predicate=tostring(isnull(absent)), null_value=tostring(nothing), missing_value=tostring(absent)` +
+			` | table literal,host_text,text_value,signed_value,unsigned_value,floating_value,decimal_value,yes_value,no_value,predicate,null_value,missing_value`,
 	)
 	var literal, hostText string
-	var textValue, signedValue, unsignedValue, decimalValue *string
+	var textValue, signedValue, unsignedValue, floatingValue, decimalValue *string
 	var yesValue, noValue, predicate, nullValue, missingValue *string
 	if err := connection.QueryRow(
 		queryContext,
@@ -99,6 +76,7 @@ func testToStringAgainstClickHouse(
 		&textValue,
 		&signedValue,
 		&unsignedValue,
+		&floatingValue,
 		&decimalValue,
 		&yesValue,
 		&noValue,
@@ -117,6 +95,7 @@ func testToStringAgainstClickHouse(
 		"text":      textValue,
 		"signed":    signedValue,
 		"unsigned":  unsignedValue,
+		"floating":  floatingValue,
 		"decimal":   decimalValue,
 		"yes":       yesValue,
 		"no":        noValue,
@@ -129,16 +108,18 @@ func testToStringAgainstClickHouse(
 	if literal != "123" || hostText != "München" ||
 		*textValue != "Straße" || *signedValue != "-42" ||
 		*unsignedValue != "18446744073709551615" ||
-		*decimalValue != "12.5" || *yesValue != "True" ||
+		*floatingValue != "12.5" || *decimalValue != "123.4500" ||
+		*yesValue != "True" ||
 		*noValue != "False" || *predicate != "True" ||
 		nullValue != nil || missingValue != nil {
 		t.Fatalf(
-			"tostring scalars = literal:%q host:%q text:%v signed:%v unsigned:%v decimal:%v yes:%v no:%v predicate:%v null:%v missing:%v",
+			"tostring scalars = literal:%q host:%q text:%v signed:%v unsigned:%v floating:%v decimal:%v yes:%v no:%v predicate:%v null:%v missing:%v",
 			literal,
 			hostText,
 			textValue,
 			signedValue,
 			unsignedValue,
+			floatingValue,
 			decimalValue,
 			yesValue,
 			noValue,
@@ -146,6 +127,50 @@ func testToStringAgainstClickHouse(
 			nullValue,
 			missingValue,
 		)
+	}
+
+	visibilityCutoff, err := store.VisibilityCutoff(ctx)
+	if err != nil {
+		t.Fatalf("capture tostring malformed visibility cutoff: %v", err)
+	}
+	binEdgeInsertRawDecimalEnvelopes(
+		t,
+		ctx,
+		connection,
+		[]binEdgeRawDecimalEnvelope{{
+			eventID:       "tostring-malformed-decimal",
+			tenantID:      "tenant",
+			indexName:     "tostring",
+			eventTime:     indexTime,
+			indexTime:     indexTime,
+			visibilitySeq: visibilityCutoff,
+			fieldName:     "malformed",
+			fieldType:     eventfields.StoredValueTypeDecimal,
+			envelope: map[string]string{
+				"\x00open_splunk_type":  "decimal/v1",
+				"\x00open_splunk_value": "malformed-secret-1e",
+			},
+		}},
+	)
+	malformed := compile(
+		`index=tostring event_id="tostring-malformed-decimal"` +
+			` | eval rendered=tostring(malformed) | table rendered`,
+	)
+	var malformedValue *string
+	if err := connection.QueryRow(
+		queryContext,
+		malformed.SQL,
+		malformed.Args...,
+	).Scan(&malformedValue); err != nil {
+		t.Fatalf(
+			"execute malformed Decimal tostring: %v\nSQL: %s\nargs: %#v",
+			err,
+			malformed.SQL,
+			malformed.Args,
+		)
+	}
+	if malformedValue != nil {
+		t.Fatalf("malformed Decimal tostring = %q, want null", *malformedValue)
 	}
 
 	unsupported := compile(
