@@ -45,6 +45,10 @@ multivalue lowering is built.
 Every `len` or `length` call accepts exactly one value and has the same
 separate 64 KiB generated-SQL ceiling, checked after its UTF-8 code-point
 lowering is built.
+Every `substr` call accepts one String value, one literal integer start, and
+an optional literal integer length. It has the same separate 64 KiB
+generated-SQL ceiling, checked after its SQLite-compatible UTF-8 interval
+lowering is built.
 Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
@@ -122,7 +126,7 @@ slice supports Boolean combinations of scalar comparisons and direct
 accepts exactly one scalar expression, and can also be compared explicitly
 with a Boolean literal. Scalar operands may be fields, typed literals, or the
 supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, bounded
-`case`, `lower`, `upper`, `len`, and `length` calls
+`case`, `lower`, `upper`, `len`, `length`, and bounded `substr` calls
 described below;
 arithmetic, field quoting, `XOR`, and other eval functions are not yet
 accepted. Missing, null, container, or failed numeric operands do not pass
@@ -157,6 +161,7 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval class=case(status>=500, "server", status>=400, "client", 1=1, "other")
 | eval normalized=lower(username), display=upper(normalized)
 | eval characters=len(message)
+| eval route=substr(path, 1, 32)
 ```
 
 Assignments are evaluated from left to right, and later assignments may use an
@@ -179,7 +184,9 @@ narrow:
 - `lower(value)` and `upper(value)` map one String or multivalue String using
   Unicode-aware case conversion;
 - `len(value)` and its `length(value)` alias count UTF-8 code points in one
-  scalar String.
+  scalar String;
+- `substr(value, start[, length])` selects a UTF-8 code-point interval using
+  SQLite-compatible indexes and literal integer bounds.
 
 The `if` predicate uses exactly the `where` grammar described above:
 case-sensitive scalar comparisons, direct `isnull` / `isnotnull` predicates,
@@ -434,6 +441,62 @@ only supported runtime type and returns null for every other type, so the
 source expression appears once without a per-row singleton array or generic
 Dynamic numeric branches. Nested text input is compiled linearly under the
 per-call 64 KiB and whole-query 256 KiB SQL ceilings.
+
+`substr` accepts a scalar String, a literal integer start, and an optional
+literal integer length:
+
+```spl
+| eval prefix=substr(message, 1, 32)
+| eval suffix=substr(source, -4)
+| eval preceding=substr(source, 4, -2)
+| where substr(path, 1, 4)="/api"
+```
+
+Function names are case-insensitive, and a bare field named `substr` remains
+an ordinary field. Compatibility version 0.1 deliberately requires literal
+integer start and length arguments. A field, nested expression, Boolean, or
+floating-point index fails at its own source range with
+`SPL_UNSUPPORTED_SUBSTRING_INDEX`; it is never truncated or coerced. Signed
+64-bit integers and the complete non-negative unsigned 64-bit literal range
+are accepted. Out-of-range syntax fails during logical planning with
+`SPL_NUMBER_OUT_OF_RANGE`.
+
+Indexes exactly follow the SQLite semantics referenced by Splunk. The
+leftmost code point is position `1`; a negative start counts from the right.
+Start `0` denotes the virtual position immediately before the first code
+point, so `substr("abcdef", 0, 3)` is `"ab"`. Omitting length returns through
+the end. A positive length selects that many positions beginning at start,
+zero returns an empty String, and a negative length selects the absolute
+number of positions immediately preceding start. The resulting half-open
+interval is clipped to the real String. Consequently, overlong negative
+starts can still select data when their positive length reaches the String,
+while overlong positive starts normally return empty. Indexes count UTF-8
+code points, not bytes.
+
+Fixed String input produces a fixed String. Dynamic runtime String input
+produces a nullable fixed String. Missing, explicit null, and Dynamic runtime
+numbers, Booleans, arrays, objects, or other containers return null. Fixed
+numeric, Boolean, or canonical time input fails with
+`SPL_UNSUPPORTED_SUBSTRING_VALUE_TYPE`. Splunk does not support `substr` on a
+multivalue field: fixed `Array(String)` fails with
+`SPL_UNSUPPORTED_MULTIVALUE_USAGE`, while a Dynamic runtime array returns
+null.
+
+The same valid-UTF-8 and `_raw` provenance boundary applies as for the other
+text functions. Binary-declared `_raw` returns null even when its bytes happen
+to be ASCII, and `replace(_raw, ...)` retains that boundary. No lowering uses
+`ARRAY JOIN` or changes event cardinality.
+
+Open Splunk lowers statically equivalent literal intervals directly to
+ClickHouse `substringUTF8`. Common positive starts, omitted lengths, zero
+lengths, start `0`, and negative lengths with non-negative starts therefore
+avoid a separate `lengthUTF8` scan and higher-order runtime work. A negative
+start combined with an explicit non-zero length needs the row's code-point
+count to preserve SQLite clipping; that bounded fallback binds the source and
+indexes once, computes in `Int128`, and converts only already-clipped offsets
+to ClickHouse's accepted integer types. This makes `MinInt64` and `MaxUint64`
+arguments overflow-safe. Nested calls grow linearly under the per-call 64 KiB
+and whole-query 256 KiB SQL ceilings.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
@@ -1675,6 +1738,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
 [`if`, `coalesce`, `case`, and conditional functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
 [`lower`, `upper`, and text functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/text-functions),
+[SQLite core `substr` semantics](https://www.sqlite.org/lang_corefunc.html),
 [`predicate expressions`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.2/expressions-and-predicates/predicate-expressions),
 [`isnull` and `isnotnull` informational functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/informational-functions),
 [`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),

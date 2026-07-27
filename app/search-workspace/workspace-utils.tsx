@@ -31,6 +31,7 @@ const SPL_COALESCE_FUNCTION_PATTERN = "coalesce(?=\\s*\\()";
 const SPL_CASE_FUNCTION_PATTERN = "case(?=\\s*\\()";
 const SPL_TEXT_CASE_FUNCTION_PATTERN = "(?:lower|upper)(?=\\s*\\()";
 const SPL_TEXT_LENGTH_FUNCTION_PATTERN = "(?:len|length)(?=\\s*\\()";
+const SPL_SUBSTRING_FUNCTION_PATTERN = "substr(?=\\s*\\()";
 const SPL_NULL_PREDICATE_FUNCTION_PATTERN = "(?:isnull|isnotnull)(?=\\s*\\()";
 const SPL_PERCENTILE_FUNCTION_PATTERN = "(?:p|perc)0*(?:[1-9]|[1-9][0-9])";
 const SPL_FUNCTION_PATTERN = [
@@ -41,6 +42,7 @@ const SPL_FUNCTION_PATTERN = [
   SPL_CASE_FUNCTION_PATTERN,
   SPL_TEXT_CASE_FUNCTION_PATTERN,
   SPL_TEXT_LENGTH_FUNCTION_PATTERN,
+  SPL_SUBSTRING_FUNCTION_PATTERN,
   SPL_NULL_PREDICATE_FUNCTION_PATTERN,
   SPL_PERCENTILE_FUNCTION_PATTERN,
 ].join("|");
@@ -51,6 +53,7 @@ const SPL_COALESCE_FUNCTION = /^coalesce$/i;
 const SPL_CASE_FUNCTION = /^case$/i;
 const SPL_TEXT_CASE_FUNCTION = /^(?:lower|upper)$/i;
 const SPL_TEXT_LENGTH_FUNCTION = /^(?:len|length)$/i;
+const SPL_SUBSTRING_FUNCTION = /^substr$/i;
 const SPL_NULL_PREDICATE_FUNCTION = /^(?:isnull|isnotnull)$/i;
 const SPL_PERCENTILE_FUNCTION = new RegExp(`^${SPL_PERCENTILE_FUNCTION_PATTERN}$`, "i");
 const SYNTAX_TOKEN_PATTERN = new RegExp(
@@ -138,6 +141,7 @@ export function syntaxTokens(query: string): ReactNode[] {
       SPL_CASE_FUNCTION.test(part) ||
       SPL_TEXT_CASE_FUNCTION.test(part) ||
       SPL_TEXT_LENGTH_FUNCTION.test(part) ||
+      SPL_SUBSTRING_FUNCTION.test(part) ||
       SPL_NULL_PREDICATE_FUNCTION.test(part) ||
       SPL_PERCENTILE_FUNCTION.test(part)) {
       className = "spl-function";
