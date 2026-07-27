@@ -7,7 +7,68 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded ordered `stats list(field)`
+## Latest checkpoint: cumulative Go lint ratchet and boundary hardening
+
+Date: 2026-07-27
+
+Auth/visibility hardening commit:
+`b0c00f370323221f4bce50457caf11db3f3b939c`
+
+Collector hardening commit:
+`fbb89976271f96026e84964b036e7094d932f2cd`
+
+CI ratchet and remaining changed-code repairs:
+`4e0042805c9c1a7481c4310c3f6780907231a12a`
+
+This checkpoint turns the previously unusable repository-wide Go lint job into
+a cumulative changed-code gate without pretending the inherited inventory is
+already clean:
+
+1. The Go lint job checks out complete Git history and runs pinned
+   `golangci-lint v2.12.2` with
+   `--new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102`.
+   This fixed adoption revision makes every later main commit cumulative; a
+   concurrency-cancelled intermediate workflow cannot let a new finding
+   disappear on the following push.
+2. The uncapped adoption inventory contained 1,468 findings, rather than the
+   default report's capped 227. The reviewed first repair wave reduced the
+   current uncapped inventory to 1,365 while the cumulative ratchet reports
+   zero findings. The remaining inventory stays explicit cleanup debt; do not
+   advance the baseline merely to hide an issue.
+3. Visibility sequencing now validates every persisted signed sequence before
+   publishing it as `uint64`, rejects out-of-range public sequence inputs before
+   SQLite conversion, validates corrupted cutoff state, handles retention
+   horizons above `math.MaxInt64` without wraparound, and bounds
+   `RowsAffected` before committing a prune.
+4. Collector-token revocation rejects invalid persisted versions. The token
+   metadata query name no longer resembles a hard-coded credential to static
+   analysis, and transaction/query error paths no longer hide outer errors.
+5. Collector conversions are range-checked, file-identity handling is split by
+   Darwin/Linux types, and Darwin retains the historical signed-to-unsigned
+   checkpoint encoding. A Darwin-only regression pins the high-bit case so an
+   upgrade cannot orphan a checkpoint and duplicate or skip input.
+6. Command, server-listener, integration, and ClickHouse migration helpers use
+   context-aware APIs and context-first signatures. Test fixture permissions
+   are tightened, log-generator output defaults to owner-only, and only narrow,
+   justified security annotations remain.
+7. The full Go suite, focused race suites, collector cross-builds, exact lint
+   ratchet, uncapped inventory, workflow YAML parse, and diff checks passed.
+   Three independent adversarial reviews drove public nil-context coverage,
+   nonempty retention-overflow coverage, Darwin persisted-key compatibility,
+   and removal of six unnecessary command-taint suppressions. They reported no
+   remaining blocker.
+
+The workflow triggered by `4e00428`, GitHub Actions run `30255910487`,
+completed successfully. It passed the cumulative lint ratchet, full
+race-enabled Go suite, frontend, protobuf, backend vertical, pinned GradeThis
+ClickHouse corpus, vulnerability scan, Linux and macOS production builds, and
+the cross-platform embedded-asset comparison. The next SPL TDD slice is
+`earliest(field)` / `latest(field)` unless priority changes.
+
+The exact validation record is under **Latest validation evidence**. The
+overall backend goal remains active.
+
+## Previous checkpoint: bounded ordered `stats list(field)`
 
 Date: 2026-07-27
 
@@ -72,13 +133,12 @@ repairs the two actionable failures from the preceding remote CI run:
     frontend function-table consolidation. Their final current-tree reviews
     reported no remaining blocker.
 
-The remote workflow for `f2e6915` passed frontend, protobuf, backend vertical,
-and the pinned GradeThis ClickHouse corpus, but failed the search-history
-race fixture, the reachable `x/text` advisory, and the repository's accumulated
-227-item `golangci-lint` backlog. The first two are fixed at `05c1eaf`; the lint
-backlog remains the immediate CI-repair work and must be fixed in reviewable
-waves rather than hidden by disabling checks. After that gate is green, the
-next aggregate TDD slice is `earliest(field)` / `latest(field)`.
+The remote workflow for `327a162` subsequently passed frontend, protobuf,
+backend vertical, the pinned GradeThis ClickHouse corpus, full race-enabled Go
+tests, and vulnerability scanning. Its only failure was the accumulated Go
+lint inventory. The latest checkpoint above installs the cumulative ratchet
+and repairs the first reviewed wave; `earliest(field)` / `latest(field)` is now
+the next aggregate TDD slice.
 
 The exact validation record is under **Latest validation evidence**. The
 overall backend goal remains active.
@@ -93,7 +153,7 @@ Cleanup/proof fix: `f68630a5b4fc213a379bda1f2c163b4c96b42fac`
 
 This slice implements committed release-revision and embedded-asset
 consistency and proves repeatability on the checkpoint host. The independent
-Linux/macOS CI comparison remains to be confirmed after push:
+Linux/macOS CI comparison was subsequently confirmed by run `30255910487`:
 
 1. Go `1.26.5`, Node `24.18.0`, npm `11.16.0`, Buf, and both Go protobuf
    generators are pinned. Protobuf generation is complete-tree,
@@ -133,8 +193,8 @@ Linux/macOS CI comparison remains to be confirmed after push:
    macOS, uploads the canonical proof files, and compares the asset manifest,
    binary identities, and embedded verification output byte for byte. The
    Linux package uses a commit timestamp, canonical ownership/modes, sorted
-   paths, and timestamp-free gzip output. This workflow has not yet run for
-   the checkpoint commits.
+   paths, and timestamp-free gzip output. Run `30255910487` passed both builds
+   and the byte-for-byte comparison.
 9. The final local frontend gate contains 47 release/proto/materialization
    transaction tests plus 106 application tests. Full Go and race suites,
    vet, Go build, typecheck, lint, protobuf regeneration, a production
@@ -1942,6 +2002,50 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Cumulative Go lint ratchet and boundary hardening
+
+The reviewed commits `b0c00f370323221f4bce50457caf11db3f3b939c`,
+`fbb89976271f96026e84964b036e7094d932f2cd`, and
+`4e0042805c9c1a7481c4310c3f6780907231a12a` passed:
+
+```sh
+go test ./... -count=1
+go test ./internal/collector/... -count=1
+go test ./internal/auth ./internal/visibility -count=1
+go test -race ./internal/collector/... -count=1
+go test -race ./internal/auth ./internal/visibility \
+  -shuffle=on -count=10
+go vet ./internal/collector/...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=5m \
+  --new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102
+git diff --check
+```
+
+The exact repository ratchet returned `0 issues`. A separate uncapped
+inventory run with both per-linter and duplicate caps disabled recorded 1,365
+remaining inherited findings: 664 `govet`, 273 `gosec`, 169 `revive`, 104
+`errorlint`, 71 `noctx`, 39 `staticcheck`, 26 `misspell`, and 19 across the
+remaining enabled linters. The adoption inventory was 1,468, so this wave
+removed 103 concrete findings without weakening the configured linter set.
+
+The collector reviewer also ran Darwin/Linux amd64 and Linux 386 cross-builds,
+framing and decoder fuzzing, a zero-allocation guard-fingerprint benchmark,
+and the full collector race suite. The auth/visibility reviewer ran ten
+race-enabled shuffled repetitions. The command/CI reviewer reran focused
+command, integration, and migration tests and parsed the workflow YAML.
+
+Adversarial review found and fixed two test-coverage regressions, a Darwin
+checkpoint-key compatibility bug, and six unnecessary migration-test taint
+suppressions. Final reviews reported no remaining correctness, security,
+concurrency, performance, portability, or CI-ratchet blocker.
+
+GitHub Actions run `30255910487` then passed every job: the cumulative Go lint
+ratchet, race-enabled Go tests and coverage, vulnerability scan, frontend,
+protobuf, backend vertical, pinned GradeThis ClickHouse corpus, Linux and
+macOS production builds, Linux packaging, and the cross-platform canonical
+embedded-asset comparison.
+
 ### Bounded ordered `stats list(field)`
 
 The implementation at `4e2ddb43ddb60ecd790c6ad3783fd7d83ecfda72` and CI
@@ -3332,7 +3436,8 @@ The backend now includes:
 - `fields`, `table`, `rename`, `sort`, `head`, `tail`, and `dedup`;
 - the documented `eval`/`where` subset;
 - `stats` with row `count`, exact `count(field)`, `dc`/`distinct_count`,
-  `values`, typed `min`/`max`, `sum`, `avg`, and `p95`;
+  bounded ordered `list`, `values`, typed `min`/`max`, `sum`, `avg`, and
+  `p95`;
 - `top`, `rare`, `timechart`, and bounded two-field `chart`;
 - extraction-mode `rex`, explicit-span exact `bin`/`bucket`, and bounded
   explicit-path JSON `spath`;
@@ -3340,7 +3445,10 @@ The backend now includes:
   relational depth, extraction work, exact distinct state, and multivalue
   publication; and
 - materialized-CTE single-scan lowering for runtime-wide and
-  analyzer-sensitive paths.
+  analyzer-sensitive paths; and
+- a fixed-revision cumulative Go lint ratchet from `327a162`, with zero
+  changed-code findings and a separately measured 1,365-item inherited
+  cleanup inventory.
 
 Event retention is evaluated against each search job's immutable
 `IndexTimeCutoff`. An event with `expires_at` equal to that cutoff is not
@@ -3449,7 +3557,14 @@ independent stacks.
 2. Read this file, `docs/product-architecture-plan.md`, and
    `docs/spl-compatibility-v0.1.md`.
 3. Run `npm ci`, `go test ./...`, `npm run test:frontend`,
-   `npm run typecheck`, and `npm run lint`.
+   `npm run typecheck`, and `npm run lint`. Also run the cumulative Go lint
+   gate exactly as CI does:
+
+   ```sh
+   go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+     run --timeout=5m \
+     --new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102
+   ```
 4. If the next change touches the release path, install the pinned browser with
    `npx --no-install playwright install chromium` and run:
 
@@ -3479,10 +3594,13 @@ independent stacks.
    embedded-asset verification are locally complete at `5ecd999`, with
    transaction cleanup proof at `f68630a`. Bounded ordered `list(field)` is
    complete at `4e2ddb4`, and the preceding run's reachable vulnerability and
-   search-history race-fixture failures are repaired at `05c1eaf`. Repair the
-   remaining 227-item `golangci-lint` backlog in reviewable waves, rerun the
-   independent release workflow, then begin the `earliest(field)` /
-   `latest(field)` contract unless the user changes priority. The current
+   search-history race-fixture failures are repaired at `05c1eaf`. The
+   cumulative Go lint ratchet and first boundary-hardening wave are complete at
+   `b0c00f3`, `fbb8997`, and `4e00428`; continue reducing the explicit inherited
+   inventory in separate waves without advancing the baseline. Run
+   `30255910487` confirms the full workflow and independent release comparison;
+   begin the `earliest(field)` / `latest(field)` contract unless the user
+   changes priority. The current
    preview-to-final
    resource-release audit pass is complete at `961cba2`, the sanitized current
    GradeThis collector/config migration at `c576e85`, logical event retention
@@ -3605,8 +3723,12 @@ Release-proof implementation history and remaining confirmation:
   comparison. The remote `f2e6915` workflow passed frontend, protobuf,
   vertical, and pinned GradeThis jobs but skipped the release comparison after
   dependency jobs failed. `05c1eaf` fixes the race fixture and reachable
-  vulnerability; 227 existing `golangci-lint` findings still block the gate.
-  Fix them without weakening the linter, then rerun the workflow.
+  vulnerability. The fixed-revision lint ratchet and first cleanup wave are
+  complete at `b0c00f3`, `fbb8997`, and `4e00428`; 1,365 uncapped inherited
+  findings remain visible cleanup debt but no longer prevent cumulative
+  changed-code enforcement. Run `30255910487` passed the entire workflow,
+  including both production builds and their cross-platform canonical-proof
+  comparison.
 - Keep `app.log` only as local test input after a fixture secret scan. Do not
   commit unsanitized GradeThis production logs.
 
@@ -3734,7 +3856,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `4e2ddb4`, `05c1eaf`, `f68630a`, `5ecd999`,
+   commits, especially `4e00428`, `fbb8997`, `b0c00f3`, `4e2ddb4`,
+   `05c1eaf`, `f68630a`, `5ecd999`,
    `c20204b`, `e647dd2`,
    `1b89397`, `3f89229`, `34f3a9b`, `f41720e`, `9d6acc1`, `4c4003f`,
    `9898b41`, `59b8f7c`, `860acac`, `961cba2`, `c576e85`, `458c8b4`,
@@ -3765,11 +3888,13 @@ Do not guess those decisions if they materially affect the implementation.
    committed release identity, transactional publication, and embedded-asset
    proof are locally complete at `5ecd999` and `f68630a`; bounded ordered
    `list(field)` is complete at `4e2ddb4`, with CI vulnerability/race repair at
-   `05c1eaf`. The remote release workflow remains blocked by the repository's
-   227-item `golangci-lint` backlog. Fix that backlog in cohesive green commits
-   and rerun the workflow. If it passes and the user does not change priority,
-   begin `earliest(field)` / `latest(field)`. The generator foundation, current
-   preview-to-final
+   `05c1eaf`. The cumulative lint ratchet and first cleanup wave are complete
+   at `b0c00f3`, `fbb8997`, and `4e00428`; keep the baseline fixed while
+   reducing the remaining 1,365-item inherited inventory in separate waves.
+   Run `30255910487` passed the complete workflow and cross-platform release
+   comparison. If the user does not change priority, begin `earliest(field)` /
+   `latest(field)`. The generator
+   foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
    clock-driven job/result/export expiration,
