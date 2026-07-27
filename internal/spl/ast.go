@@ -459,7 +459,7 @@ const (
 	AggregateFunctionInvalid AggregateFunction = iota
 	AggregateFunctionCount
 	AggregateFunctionCountValues
-	AggregateFunctionP95
+	AggregateFunctionPercentile
 	AggregateFunctionSum
 	AggregateFunctionAverage
 	AggregateFunctionDistinctCount
@@ -477,6 +477,8 @@ type StatsAggregate struct {
 	Function   AggregateFunction
 	Input      string
 	InputRange Range
+	// Percentile is the validated integer pN/percN suffix in [1, 99].
+	Percentile uint8
 	Alias      string
 	Range      Range
 	AliasRange Range

@@ -212,9 +212,11 @@ const (
 
 // AggregateMeasure is one aggregate output column.
 type AggregateMeasure struct {
-	Function   AggregateFunction
-	Input      FieldRef
-	Percentile float64
+	Function AggregateFunction
+	Input    FieldRef
+	// Percentile is the integer function suffix in the closed interval [1, 99].
+	// It is zero for every non-percentile measure.
+	Percentile uint8
 	Output     string
 }
 

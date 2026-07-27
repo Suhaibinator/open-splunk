@@ -888,7 +888,8 @@ func TestParseStatsMultipleMeasuresWithP95(t *testing.T) {
 	if count.Function != AggregateFunctionCount || count.Alias != "count" || count.Input != "" {
 		t.Fatalf("count aggregate = %#v", count)
 	}
-	if percentile.Function != AggregateFunctionP95 || percentile.Input != "duration_ms" || percentile.Alias != "p95_ms" {
+	if percentile.Function != AggregateFunctionPercentile || percentile.Percentile != 95 ||
+		percentile.Input != "duration_ms" || percentile.Alias != "p95_ms" {
 		t.Fatalf("percentile aggregate = %#v", percentile)
 	}
 	if len(command.GroupBy) != 1 || command.GroupBy[0].Name != "path" {
@@ -904,7 +905,7 @@ func TestParseStatsP95DefaultOutputName(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	aggregate := query.Commands[0].(*StatsCommand).Aggregates[0]
-	if aggregate.Alias != "p95(duration_ms)" {
+	if aggregate.Alias != "perc95(duration_ms)" {
 		t.Fatalf("default alias = %q", aggregate.Alias)
 	}
 }

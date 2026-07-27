@@ -547,6 +547,21 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 			measures := make([]AggregateMeasure, 0, len(command.Aggregates))
 			for _, aggregate := range command.Aggregates {
+				if aggregate.Function == spl.AggregateFunctionPercentile {
+					if aggregate.Percentile < 1 || aggregate.Percentile > 99 {
+						return nil, &Diagnostic{
+							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+							Message: "percentile suffix must be an integer from 1 through 99",
+							Range:   aggregate.Range,
+						}
+					}
+				} else if aggregate.Percentile != 0 {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "non-percentile stats aggregate contains percentile metadata",
+						Range:   aggregate.Range,
+					}
+				}
 				if _, aliasErr := ResolveField(aggregate.Alias, aggregate.AliasRange); aliasErr != nil {
 					return nil, aliasErr
 				}
@@ -583,7 +598,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 					measure.Function = AggregateFunctionCountValues
 					measure.Input = input
-				case spl.AggregateFunctionP95, spl.AggregateFunctionSum,
+				case spl.AggregateFunctionPercentile, spl.AggregateFunctionSum,
 					spl.AggregateFunctionAverage, spl.AggregateFunctionDistinctCount,
 					spl.AggregateFunctionValues, spl.AggregateFunctionList,
 					spl.AggregateFunctionMinimum,
@@ -613,9 +628,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 					measure.Input = input
 					switch aggregate.Function {
-					case spl.AggregateFunctionP95:
+					case spl.AggregateFunctionPercentile:
 						measure.Function = AggregateFunctionPercentile
-						measure.Percentile = 0.95
+						measure.Percentile = aggregate.Percentile
 					case spl.AggregateFunctionSum:
 						measure.Function = AggregateFunctionSum
 					case spl.AggregateFunctionAverage:

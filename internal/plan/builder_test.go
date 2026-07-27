@@ -347,7 +347,7 @@ func TestBuildStatsMultipleMeasuresWithP95(t *testing.T) {
 		t.Fatalf("count measure = %#v", count)
 	}
 	if percentile.Function != AggregateFunctionPercentile || percentile.Input.Name != "duration_ms" ||
-		percentile.Percentile != 0.95 || percentile.Output != "p95_ms" {
+		percentile.Percentile != 95 || percentile.Output != "p95_ms" {
 		t.Fatalf("percentile measure = %#v", percentile)
 	}
 }
@@ -735,7 +735,7 @@ func TestBuildRejectsForgedStatsRequiredInputMetadata(t *testing.T) {
 		End:   spl.Position{Line: 1, Column: 5},
 	}
 	for _, function := range []spl.AggregateFunction{
-		spl.AggregateFunctionP95,
+		spl.AggregateFunctionPercentile,
 		spl.AggregateFunctionSum,
 		spl.AggregateFunctionAverage,
 		spl.AggregateFunctionDistinctCount,

@@ -1302,7 +1302,7 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 			Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
 			Message:     fmt.Sprintf("unsupported stats syntax at %q; expected another supported aggregate, AS, or BY", current.text),
 			Range:       current.range_,
-			Suggestions: []string{"stats count", "stats dc(field) BY group", "stats earliest(field) latest(field) BY group", "stats min(field) max(field) BY group", "stats sum(field) avg(field) BY group", "stats p95(field) AS p95_value BY group"},
+			Suggestions: []string{"stats count", "stats dc(field) BY group", "stats earliest(field) latest(field) BY group", "stats min(field) max(field) BY group", "stats sum(field) avg(field) BY group", "stats p50(field) p95(field) BY group"},
 		}
 	}
 
@@ -1335,10 +1335,11 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 	if !supported {
 		return StatsAggregate{}, end, p.unsupportedStatsAggregate(
 			functionToken,
-			fmt.Sprintf("stats aggregate %q is not supported; count, dc, values, list, p95, sum, avg, min, max, earliest, and latest are available", functionToken.text),
+			fmt.Sprintf("stats aggregate %q is not supported; count, dc, values, list, pN/percN (1-99), sum, avg, min, max, earliest, and latest are available", functionToken.text),
 		)
 	}
 	aggregate.Function = spec.function
+	aggregate.Percentile = spec.percentile
 	aggregate.Alias = spec.canonicalName
 	parseInput := spec.requiresInput ||
 		(spec.inputFunction != AggregateFunctionInvalid && p.current().kind == tokenLeftParen)
@@ -1390,18 +1391,26 @@ type statsAggregateSpec struct {
 	inputFunction AggregateFunction
 	canonicalName string
 	requiresInput bool
+	percentile    uint8
 }
 
 func statsAggregateSpecForName(name string) (statsAggregateSpec, bool) {
-	switch strings.ToLower(name) {
+	name = strings.ToLower(name)
+	if percentile, ok := parseStatsPercentileSuffix(name); ok {
+		return statsAggregateSpec{
+			function:      AggregateFunctionPercentile,
+			canonicalName: "perc" + strconv.Itoa(int(percentile)),
+			requiresInput: true,
+			percentile:    percentile,
+		}, true
+	}
+	switch name {
 	case "count":
 		return statsAggregateSpec{
 			function:      AggregateFunctionCount,
 			inputFunction: AggregateFunctionCountValues,
 			canonicalName: "count",
 		}, true
-	case "p95":
-		return statsAggregateSpec{function: AggregateFunctionP95, canonicalName: "p95", requiresInput: true}, true
 	case "sum":
 		return statsAggregateSpec{function: AggregateFunctionSum, canonicalName: "sum", requiresInput: true}, true
 	case "avg":
@@ -1423,6 +1432,26 @@ func statsAggregateSpecForName(name string) (statsAggregateSpec, bool) {
 	default:
 		return statsAggregateSpec{}, false
 	}
+}
+
+func parseStatsPercentileSuffix(name string) (uint8, bool) {
+	suffix := ""
+	switch {
+	case strings.HasPrefix(name, "perc"):
+		suffix = strings.TrimPrefix(name, "perc")
+	case strings.HasPrefix(name, "p"):
+		suffix = strings.TrimPrefix(name, "p")
+	default:
+		return 0, false
+	}
+	if suffix == "" {
+		return 0, false
+	}
+	value, err := strconv.ParseUint(suffix, 10, 8)
+	if err != nil || value < 1 || value > 99 {
+		return 0, false
+	}
+	return uint8(value), true
 }
 
 func supportedStatsAggregateName(name string) bool {
@@ -1478,7 +1507,7 @@ func (p *parser) unsupportedStatsAggregate(tok token, message string) *Diagnosti
 		Code:        "SPL_UNSUPPORTED_STATS_AGGREGATE",
 		Message:     message,
 		Range:       tok.range_,
-		Suggestions: []string{"stats count", "stats dc(field) BY group", "stats earliest(field) latest(field) BY group", "stats min(field) max(field) BY group", "stats sum(field) avg(field) BY group", "stats p95(field) AS p95_value BY group"},
+		Suggestions: []string{"stats count", "stats dc(field) BY group", "stats earliest(field) latest(field) BY group", "stats min(field) max(field) BY group", "stats sum(field) avg(field) BY group", "stats p50(field) p95(field) BY group"},
 	}
 }
 
