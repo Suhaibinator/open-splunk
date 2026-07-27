@@ -7,6 +7,70 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: bounded SPL `c(field)` count abbreviation
+
+Date: 2026-07-27
+
+Implementation/test/docs/editor checkpoint:
+`070d24fe6de1da8bc69b34ab4d8cb49341027f49`
+
+This deliberately small test-first slice closes the documented SPL1 count
+abbreviation without widening count semantics:
+
+1. The parser accepts case-insensitive `c(field)` with one exact unquoted
+   field and maps it to the existing `count(field)` AST and logical-plan
+   function. Explicit `AS` is preserved; the default output is the documented
+   Open Splunk canonical choice `count(field)`.
+2. Bare `c`, `c()`, `count()`, `c(eval(...))`, wildcard `c(*)`/`c(prefix*)`,
+   quoted inputs, and malformed arities remain explicit failures. Bare
+   argument-free `count` remains the supported row-count form.
+3. Compiler-equivalence tests prove that `c(field)` and `count(field)` emit
+   identical SQL, arguments, schema, and runtime metadata. No new ClickHouse
+   execution path or aggregate state was added.
+4. Wildcard count remains deferred because SPL expands matching fields; it is
+   never reinterpreted as row count. Open event schemas would require bounded
+   runtime field discovery, while closed schemas need stable plan-time
+   expansion, no-match, alias-rewrite, collision, and output-cap contracts.
+5. Editor completion now advertises `c(field)`. Highlighting recognizes the
+   one-letter abbreviation only when followed by `(`, so an ordinary field
+   named `c` is not mislabeled as a function.
+
+Validation:
+
+```sh
+go test ./internal/spl ./internal/plan ./internal/clickhouse -count=1
+go vet ./internal/spl ./internal/plan ./internal/clickhouse
+go test ./... -count=1
+golangci-lint run --timeout=5m \
+  --new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102
+npm run typecheck
+npm run lint
+npm run test:frontend
+git diff --check
+```
+
+All gates pass. The frontend corpus now has 108 application tests, including
+the focused `c` highlighter regression. Two independent primary-source SPL
+contract and adversarial implementation reviews are clean.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `070d24f`, then inspect the
+   corresponding GitHub workflow.
+2. Implement the product-plan `isnull`/`isnotnull` informational-function
+   slice test-first. Native `where isnull(field)` and
+   `where isnotnull(field)` are documented SPL1. Search-mode SPL1 does not
+   allow directly assigning a Boolean result with `eval`; keep
+   `eval flag=isnull(field)` rejected until a compatible Boolean consumer such
+   as `if` or `tostring` is implemented, unless a separately documented typed
+   Open Splunk divergence is chosen.
+3. Pin missing versus explicit null, empty String, false/zero, empty and
+   nonempty multivalue, flattened object-parent, projected-away field,
+   nullable conversion, complement, arity, predicate-depth, bind-order, and
+   physical no-row-expansion behavior in unit and pinned ClickHouse tests.
+4. Conditional `count(eval(predicate))` follows the stable Boolean-expression
+   path. Wildcard count and `eventstats` remain separate bounded contracts.
+
 ## Latest checkpoint: bounded percentile family
 
 Date: 2026-07-27
@@ -111,14 +175,11 @@ removal. Final implementation correctness and reuse reviews are clean. A
 separate adversarial review of the lint repair is also clean and reran both
 the exact lint ratchet and the pinned store fixture.
 
-Immediate resume steps:
+Continuation after this checkpoint:
 
-1. Confirm `main` and `origin/main` contain `209f753`; replacement workflow
-   `30273254671` is the fully green validation record.
-2. Begin broader `stats count` syntax only after pinning an explicit SPL
-   contract and red parser/planner/compiler/integration tests. The candidate
-   surface is the `c` alias, wildcards or predicates, and `count(eval(...))`;
-   do not conflate distinct semantics in one implementation step.
+1. Replacement workflow `30273254671` is the fully green validation record.
+2. The exact-field `c(field)` count abbreviation is complete at the newer
+   checkpoint recorded above.
 3. Keep `eventstats` behind the stable aggregate library. Decimal percentile
    suffixes, SPL2 two-argument `perc`, `upperperc`, and `exactperc` remain
    separate future contracts.
@@ -198,9 +259,10 @@ This checkpoint completes the first chronological aggregate slice:
     remaining P1/P2 blocker.
 
 The exact local validation record is under **Latest validation evidence**.
-The next bounded SPL work after the completed percentile checkpoint is
-broader `count` syntax, followed by `eventstats` only after the aggregate
-library is stable.
+The documented `c(field)` abbreviation is complete at the newer checkpoint
+above. The next product-plan SPL work is `isnull`/`isnotnull`; conditional and
+wildcard count remain later separate contracts, followed by `eventstats` only
+after the aggregate library is stable.
 The optional direction-aware Dynamic selector optimization and the existing
 inherited lint inventory remain nonblocking cleanup. The overall backend goal
 remains active.
@@ -4011,8 +4073,8 @@ The chronological history is `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and
 `f9985a1`. If SPL expansion is the chosen next priority, implement one bounded
 aggregate contract at a time:
 
-- broader `count` forms (`c`, wildcards, predicates, and `count(eval(...))`)
-  need separate syntax and differential tests;
+- broader `count` forms (wildcards, predicates, and `count(eval(...))`) need
+  separate syntax and differential tests; exact-field `c(field)` is complete;
 - decimal suffixes, SPL2 two-argument `perc`, `upperperc`, and `exactperc`
   remain separate percentile contracts and are not part of the first bounded
   integer-suffix slice;
@@ -4160,8 +4222,9 @@ Do not guess those decisions if they materially affect the implementation.
    comparison. Bounded chronological `earliest(field)` / `latest(field)` is
    complete across `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and `f9985a1`;
    the bounded percentile family is published after parser/planner commit
-   `efe4199` as described at the top of this file. Begin broader `count`
-   syntax if the user does not change priority. The generator
+   `efe4199`, and exact-field `c(field)` is complete at `070d24f`, as
+   described at the top of this file. Continue with the product-plan
+   `isnull`/`isnotnull` slice if the user does not change priority. The generator
    foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
