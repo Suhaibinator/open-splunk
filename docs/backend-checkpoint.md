@@ -7,7 +7,109 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded typed SPL `match`
+## Latest checkpoint: bounded typed SPL `like`
+
+Date: 2026-07-27
+
+Parser and logical-plan checkpoint (committed and pushed):
+`faa88c1`
+
+Initial ClickHouse compiler and integration checkpoint (committed and pushed):
+`93ec477`
+
+Adversarial correctness, reuse, and efficiency checkpoint (committed and
+pushed):
+`d758a07`
+
+Compatibility and editor checkpoint (committed and pushed):
+`8accd61`
+
+This test-first slice implements bounded `like(value, "pattern")`:
+
+1. The parser accepts exactly one scalar value and one quoted literal wildcard
+   pattern, preserves complete source ranges, treats function names
+   case-insensitively, and leaves a bare field named `like` ordinary. The
+   Boolean result composes through `where`, comparison, `NOT`/`AND`/`OR`,
+   `if`, `case`, `mvcount`, and default `tostring`.
+2. Matching is case-sensitive and covers the whole input. `%` matches zero or
+   more Unicode code points, including newlines; `_` matches one Unicode code
+   point. Empty, prefix, suffix, substring, Unicode, newline, and case edges
+   are pinned against ClickHouse 26.3.17.4.
+3. Decoded SPL patterns use ClickHouse-compatible backslash semantics:
+   backslash escapes `%`, `_`, or backslash, and remains literal before an
+   ordinary character. An unpaired terminal backslash is rejected before
+   ClickHouse can raise `CANNOT_PARSE_ESCAPE_SEQUENCE`.
+4. Fixed String input is matched directly. Fixed numeric, Boolean, and
+   canonical-time values use their supported text spelling. Dynamic runtime
+   String is supported; Dynamic numbers, Booleans, arrays, objects, tagged
+   values, null, missing fields, and binary provenance produce nullable
+   Boolean null. Fixed `Array(String)` fails with
+   `SPL_UNSUPPORTED_MULTIVALUE_USAGE`.
+5. Authored and normalized patterns are each capped at 4 KiB. One pattern is
+   capped at 4,096 wildcard/literal work units, and all occurrences in a query
+   are capped at 16,384 work units. Adjacent unescaped `%` runs collapse
+   without expanding the pattern.
+6. Each calculated input has a conservative 4 MiB byte ceiling. Independently,
+   all LIKE occurrences may total at most 16 MiB of conservative wildcard
+   scanning per row, so many cheap patterns cannot multiply a large scan
+   without limit.
+7. String-size metadata survives eval and projection plus retaining `rex` and
+   `spath` misses, `stats BY`, and string-preserving `min`, `max`, `earliest`,
+   and `latest`. Fixed Boolean and numeric formatting use type-specific bounds
+   instead of the durable 1 MiB String fallback.
+8. The compiler validates quoted-literal provenance at its own trust boundary,
+   caches normalized patterns, binds each as a query argument, references the
+   input once, lowers directly to ClickHouse `like()`, and enforces a separate
+   64 KiB generated-SQL ceiling per call.
+9. Shared planner literal validation is typed-nil-safe for both `like` and
+   `match`. Shared compiler operand/result lowering and one consolidated
+   pattern-budget state remove duplicated trust and state propagation paths
+   without coupling the two pattern dialects.
+10. Independent reuse, quality, and efficiency reviewers found nine actionable
+    defects or maintainability risks; all were fixed. Two broader suggestions
+    were deliberately not applied: duplicated parser/plan enums retain an
+    explicit trust-boundary conversion, and the forged aggregate-pattern test
+    remains necessary because the 16 KiB source ceiling prevents an equivalent
+    parsed query from reaching that budget.
+11. Editor highlighting recognizes only parenthesized `like`, and `where` and
+    `eval` completions advertise the exact whole-string `%`/`_` contract. The
+    compatibility specification records per-pattern, aggregate-pattern,
+    per-input, aggregate-scan, Dynamic/null, escape, and ClickHouse boundaries.
+
+Validation completed on the current implementation:
+
+```sh
+go test ./internal/splwildcard ./internal/spl ./internal/plan \
+  ./internal/clickhouse -run 'Like|Match' -count=1
+go test ./... -count=1
+golangci-lint run ./...
+npm run test:frontend
+npm run typecheck
+npm run lint
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m -v
+git diff --check
+```
+
+All gates pass. Repository-wide Go lint reports zero issues. The frontend
+corpus contains 125 application tests and 47 release/build tests. The pinned
+Store suite, including every LIKE escape, Unicode, newline, fixed conversion,
+Dynamic/null/container, and binary-provenance edge, passed in 56.31 seconds.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `faa88c1`, `93ec477`, `d758a07`,
+   and `8accd61`. Preserve unexpected local changes.
+2. Pin the next scalar slice's Splunk signature, fixed/Dynamic type behavior,
+   null and multivalue behavior, resource limits, and ClickHouse lowering
+   before adding parser tests.
+3. Keep calculated LIKE patterns, direct Boolean eval assignment, multivalue
+   matching, case-insensitive LIKE variants, and broader wildcard dialects as
+   separate compatibility slices.
+
+## Previous checkpoint: bounded typed SPL `match`
 
 Date: 2026-07-27
 
