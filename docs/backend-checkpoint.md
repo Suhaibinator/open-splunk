@@ -7,7 +7,90 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: native SPL `isnull` / `isnotnull` predicates
+## Latest checkpoint: typed SPL `if` parser and logical plan
+
+Date: 2026-07-27
+
+Parser/planner checkpoint (committed and pushed):
+`cfaa75bf3b6aa520dde94c6ca209f72cc1a800db`
+
+This test-first checkpoint establishes the Boolean-consumer architecture for
+`if(condition, true_value, false_value)` without yet advertising or compiling
+the function:
+
+1. The parser has a dedicated `ScalarIfExpr`; the first argument is the
+   existing typed `WhereExpr`, not an ordinary scalar argument. It therefore
+   supports comparisons, direct `isnull`/`isnotnull`, parentheses, `NOT`,
+   `AND`, and `OR` with the same eval/where precedence and no invented scalar
+   truthiness. Function names remain case-insensitive.
+2. The logical plan mirrors that separation with `ScalarIfExpression` and
+   lowers its condition through the existing backend-neutral predicate IR.
+   The true and false branches remain typed scalar expressions.
+3. `if` requires exactly three arguments and supports nested conditionals.
+   Predicates inside `if` and later `where` commands share one global
+   32-predicate ceiling; scalar nesting retains the 32-level ceiling. Tests
+   pin exact-limit, over-limit, and cross-command behavior.
+4. Boolean validation is consumer-aware. A null predicate consumed as the
+   condition of an `if` no longer poisons an otherwise scalar result, so
+   `tonumber(if(isnull(x), "0", "1"))` is valid. A null-predicate result that
+   can escape through a result branch is still rejected by search-mode
+   `eval` and by current non-Boolean consumers. Existing plain Bool literal
+   scalar behavior is preserved; a statically Bool-valued `if` may be used as
+   a direct predicate, while bare `where true` remains outside this tier.
+5. Parser diagnostics cover malformed commas, implicit predicate adjacency,
+   unsupported Boolean operators such as `XOR`, missing arguments, and
+   non-predicate first arguments. Planner defense-in-depth rejects nil and
+   typed-nil conditions/branches plus forged invalid Boolean operators rather
+   than panicking or silently treating them as `AND`.
+
+Validation completed before push:
+
+```sh
+go test ./internal/spl ./internal/plan -count=1
+go vet ./internal/spl ./internal/plan
+go test ./... -count=1
+git diff --check
+```
+
+The full Go suite passed, and an independent parser/planner adversarial review
+found the typed-nil, Boolean-classification, mixed-budget, invalid-operator,
+and diagnostic issues that were fixed before the checkpoint.
+
+Immediate resume steps:
+
+1. Add red ClickHouse compiler tests before implementation. Validate that the
+   broad condition IR contains only eval/where Boolean nodes, reject nil and
+   typed-nil condition/branch nodes, and pin SQL placeholder order as
+   condition, true branch, false branch.
+2. Implement the first correctness-first lowering as
+   `if(ifNull(condition, 0), true_value, false_value)`. Initially admit only
+   statically stable fixed scalar unions: String/String, Bool/Bool, identical
+   numeric types, null/null, and null plus one supported fixed type with a
+   correctly typed nullable null. Explicitly reject Dynamic, fixed
+   multivalue, time, mixed-kind, and differing-number-type branches rather
+   than letting ClickHouse infer a `Variant` or silently coerce values.
+3. Propagate the condition/branch materialization requirement and teach the
+   predicate-field visitor to traverse the condition and both branches. Keep
+   `existsSQL=1`; supported selected missing/null branches are represented by
+   the nullable result value, so nested `isnull(if(...))` remains exact
+   without duplicating placeholder-bearing metadata expressions.
+4. Cover documented String behavior, same-type numbers, null selection,
+   nesting, sequential assignments, projected-away values, calculated-field
+   fences, Boolean consumers, query-size bounds, and no row expansion in unit
+   tests. Then add the pinned ClickHouse `26.3.17.4` integration matrix and an
+   `EXPLAIN actions=1` no-`ArrayJoin` assertion.
+5. Treat heterogeneous/Dynamic/container branches as a separate follow-on
+   contract. Pinned ClickHouse has `use_variant_as_common_type=true`, so
+   implicit branch inference can produce `Variant` and violate compiler type
+   metadata. Flattened object parents also need a durable hidden selected-
+   descendant column or explicit reconstruction; do not propagate a
+   conditional descendant expression across projections or use expensive
+   JSON `.^` sub-object reads casually.
+6. Only after compiler and integration tests are green, update
+   `docs/spl-compatibility-v0.1.md`, editor completion/highlighting, the full
+   Go/frontend/lint gates, and this checkpoint, then commit and push.
+
+## Previous checkpoint: native SPL `isnull` / `isnotnull` predicates
 
 Date: 2026-07-27
 
