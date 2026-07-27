@@ -97,24 +97,13 @@ func TestBuildEvalLenLengthRejectForgedArityEnumAndTypedNil(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			query := &spl.Query{
-				Search: base.Search,
-				Commands: []spl.Command{&spl.EvalCommand{
-					Assignments: []spl.EvalAssignment{{
-						Field:      "result",
-						FieldRange: sourceRange,
-						Expression: test.expression,
-						Range:      sourceRange,
-					}},
-					Range: sourceRange,
-				}},
-				Range: base.Range,
-			}
-			_, err := Build(query, testScope([]string{"gradethis"}, nil))
-			if err == nil {
-				t.Fatalf("Build succeeded for forged expression %#v", test.expression)
-			}
-			assertDiagnosticCode(t, err, test.code)
+			assertForgedEvalBuildDiagnostic(
+				t,
+				base,
+				sourceRange,
+				test.expression,
+				test.code,
+			)
 		})
 	}
 }

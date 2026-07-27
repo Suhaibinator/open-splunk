@@ -4559,10 +4559,7 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 						"compile ClickHouse predicate: substr has a missing index",
 					)
 				}
-				literal, ok := expression.Arguments[index].(*plan.ScalarLiteralExpression)
-				if !ok || literal == nil ||
-					(literal.Value.Kind != plan.ValueKindInt64 &&
-						literal.Value.Kind != plan.ValueKindUint64) {
+				if _, ok := scalarIntegerLiteral(expression.Arguments[index]); !ok {
 					return errors.New(
 						"compile ClickHouse predicate: substr indexes must be literal integers",
 					)
@@ -5103,18 +5100,11 @@ func compileSubstringScalar(
 			"compile ClickHouse substr: expected two or three arguments",
 		)
 	}
-	if nilScalarExpression(expression.Arguments[0]) {
-		return compiledScalar{}, errors.New(
-			"compile ClickHouse substr: missing scalar expression",
-		)
-	}
-	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
-		return compiledScalar{}, errors.New(
-			"compile ClickHouse substr: cannot consume a Boolean null predicate",
-		)
-	}
-
-	input, err := compileScalarValue(expression.Arguments[0], state)
+	input, err := compileTextScalarInputArgument(
+		expression.Arguments[0],
+		state,
+		"substr",
+	)
 	if err != nil {
 		return compiledScalar{}, err
 	}
@@ -5141,26 +5131,29 @@ func compileSubstringScalar(
 		}
 	}
 
-	startSQL, startArgs, err := compileSubstringIntegerLiteral(
+	start, err := compileSubstringIntegerLiteral(
 		expression.Arguments[1],
 	)
 	if err != nil {
 		return compiledScalar{}, err
 	}
-	indexSQL := []string{startSQL}
-	valueArgs := append(inputArgs, startArgs...)
+	var length *plan.Value
 	if len(expression.Arguments) == 3 {
-		lengthSQL, lengthArgs, lengthErr := compileSubstringIntegerLiteral(
+		compiledLength, lengthErr := compileSubstringIntegerLiteral(
 			expression.Arguments[2],
 		)
 		if lengthErr != nil {
 			return compiledScalar{}, lengthErr
 		}
-		indexSQL = append(indexSQL, lengthSQL)
-		valueArgs = append(valueArgs, lengthArgs...)
+		length = &compiledLength
 	}
 
-	valueSQL := sqliteSubstringUTF8SQL(inputSQL, indexSQL)
+	valueSQL, indexArgs := compileSQLiteSubstringUTF8SQL(
+		inputSQL,
+		start,
+		length,
+	)
+	valueArgs := append(inputArgs, indexArgs...)
 	if len(valueSQL) > maxCompiledSubstringScalarSQLBytes {
 		return compiledScalar{}, &plan.Diagnostic{
 			Code: "SPL_QUERY_TOO_COMPLEX",
@@ -5183,42 +5176,160 @@ func compileSubstringScalar(
 
 func compileSubstringIntegerLiteral(
 	expression plan.ScalarExpression,
-) (string, []any, error) {
+) (plan.Value, error) {
 	if nilScalarExpression(expression) {
-		return "", nil, errors.New(
+		return plan.Value{}, errors.New(
 			"compile ClickHouse substr: missing index",
 		)
 	}
-	literal, ok := expression.(*plan.ScalarLiteralExpression)
-	if !ok || literal == nil {
-		return "", nil, errors.New(
+	value, ok := scalarIntegerLiteral(expression)
+	if !ok {
+		return plan.Value{}, errors.New(
 			"compile ClickHouse substr: index must be a literal integer",
 		)
 	}
+	return value, nil
+}
+
+func scalarIntegerLiteral(
+	expression plan.ScalarExpression,
+) (plan.Value, bool) {
+	literal, ok := expression.(*plan.ScalarLiteralExpression)
+	if !ok || literal == nil {
+		return plan.Value{}, false
+	}
 	switch literal.Value.Kind {
-	case plan.ValueKindInt64:
-		return "CAST(? AS Int128)", []any{literal.Value.Int64}, nil
-	case plan.ValueKindUint64:
-		return "CAST(? AS Int128)", []any{literal.Value.Uint64}, nil
+	case plan.ValueKindInt64, plan.ValueKindUint64:
+		return literal.Value, true
 	default:
-		return "", nil, errors.New(
-			"compile ClickHouse substr: index must be a literal integer",
-		)
+		return plan.Value{}, false
 	}
 }
 
-func sqliteSubstringUTF8SQL(inputSQL string, indexes []string) string {
-	positionSQL := "if(start < 0, n + start + 1, start)"
-	beginSQL := "position"
-	endSQL := "n + 1"
-	outerParameters := "value, start"
-	outerArguments := "[" + inputSQL + "], [" + indexes[0] + "]"
-	if len(indexes) == 2 {
-		beginSQL = "if(span < 0, position + span, position)"
-		endSQL = "if(span < 0, position, position + span)"
-		outerParameters += ", span"
-		outerArguments += ", [" + indexes[1] + "]"
+func compileSQLiteSubstringUTF8SQL(
+	inputSQL string,
+	start plan.Value,
+	length *plan.Value,
+) (string, []any) {
+	startSign := substringIntegerSign(start)
+	if length == nil {
+		if startSign == 0 {
+			// SQLite treats position zero as immediately before the first
+			// character; with no explicit length that is the whole String.
+			return inputSQL, nil
+		}
+		startSQL, startArgs := compileNativeSubstringInteger(start)
+		return "substringUTF8(" + inputSQL + ", " + startSQL + ")", startArgs
 	}
+
+	lengthSign := substringIntegerSign(*length)
+	if lengthSign == 0 {
+		return compileNativeSubstringUTF8(inputSQL, 1, 0)
+	}
+	if startSign >= 0 {
+		startValue := nonnegativeSubstringInteger(start)
+		if lengthSign > 0 {
+			lengthValue := nonnegativeSubstringInteger(*length)
+			if startValue == 0 {
+				// SQLite counts the virtual zero position against a positive
+				// length, so only length-1 real characters are returned.
+				return compileNativeSubstringUTF8(
+					inputSQL,
+					1,
+					lengthValue-1,
+				)
+			}
+			startSQL, startArgs := compileNativeSubstringInteger(start)
+			lengthSQL, lengthArgs := compileNativeSubstringInteger(*length)
+			return "substringUTF8(" + inputSQL + ", " + startSQL +
+					", " + lengthSQL + ")",
+				append(startArgs, lengthArgs...)
+		}
+
+		// For a non-negative start and negative length, both SQLite interval
+		// endpoints are compile-time constants. Clip the lower endpoint here;
+		// native substringUTF8 clips the upper endpoint at the row's end.
+		end := max(startValue, uint64(1))
+		magnitude := negativeSubstringIntegerMagnitude(*length)
+		begin := uint64(1)
+		if startValue > 1 && magnitude < startValue-1 {
+			begin = startValue - magnitude
+		}
+		return compileNativeSubstringUTF8(inputSQL, begin, end-begin)
+	}
+
+	// A negative start with an explicit non-zero length is the only shape
+	// whose clipped interval depends on the row's UTF-8 code-point count.
+	startSQL, startArgs := compileInt128SubstringInteger(start)
+	lengthSQL, lengthArgs := compileInt128SubstringInteger(*length)
+	return sqliteNegativeStartSubstringUTF8SQL(
+			inputSQL,
+			startSQL,
+			lengthSQL,
+		),
+		append(startArgs, lengthArgs...)
+}
+
+func compileNativeSubstringUTF8(
+	inputSQL string,
+	start, length uint64,
+) (string, []any) {
+	return "substringUTF8(" + inputSQL +
+			", CAST(? AS UInt64), CAST(? AS UInt64))",
+		[]any{start, length}
+}
+
+func compileNativeSubstringInteger(value plan.Value) (string, []any) {
+	if value.Kind == plan.ValueKindInt64 {
+		return "CAST(? AS Int64)", []any{value.Int64}
+	}
+	return "CAST(? AS UInt64)", []any{value.Uint64}
+}
+
+func compileInt128SubstringInteger(value plan.Value) (string, []any) {
+	if value.Kind == plan.ValueKindInt64 {
+		return "CAST(? AS Int128)", []any{value.Int64}
+	}
+	return "CAST(? AS Int128)", []any{value.Uint64}
+}
+
+func substringIntegerSign(value plan.Value) int {
+	if value.Kind == plan.ValueKindUint64 {
+		if value.Uint64 == 0 {
+			return 0
+		}
+		return 1
+	}
+	switch {
+	case value.Int64 < 0:
+		return -1
+	case value.Int64 > 0:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func nonnegativeSubstringInteger(value plan.Value) uint64 {
+	if value.Kind == plan.ValueKindUint64 {
+		return value.Uint64
+	}
+	return uint64(value.Int64)
+}
+
+func negativeSubstringIntegerMagnitude(value plan.Value) uint64 {
+	// Avoid negating MinInt64 in its signed domain.
+	return uint64(-(value.Int64 + 1)) + 1
+}
+
+func sqliteNegativeStartSubstringUTF8SQL(
+	inputSQL, startSQL, lengthSQL string,
+) string {
+	positionSQL := "if(start < 0, n + start + 1, start)"
+	beginSQL := "if(span < 0, (" + positionSQL + ") + span, " +
+		positionSQL + ")"
+	endSQL := "if(span < 0, " + positionSQL + ", (" +
+		positionSQL + ") + span)"
 	clippedBeginSQL := "clamp(" + beginSQL +
 		", CAST(1 AS Int128), n + 1)"
 	clippedEndSQL := "clamp(" + endSQL +
@@ -5226,13 +5337,12 @@ func sqliteSubstringUTF8SQL(inputSQL string, indexes []string) string {
 	substringSQL := "substringUTF8(value, toInt64(" +
 		clippedBeginSQL + "), toUInt64(" +
 		clippedEndSQL + " - " + clippedBeginSQL + "))"
-	positionBindingSQL := "arrayElement(arrayMap(position -> " +
-		substringSQL + ", [" + positionSQL + "]), 1)"
 	lengthBindingSQL := "arrayElement(arrayMap(n -> " +
-		positionBindingSQL +
+		substringSQL +
 		", [CAST(lengthUTF8(value) AS Int128)]), 1)"
-	return "arrayElement(arrayMap((" + outerParameters + ") -> " +
-		lengthBindingSQL + ", " + outerArguments + "), 1)"
+	return "arrayElement(arrayMap((value, start, span) -> " +
+		lengthBindingSQL + ", [" + inputSQL + "], [" + startSQL +
+		"], [" + lengthSQL + "]), 1)"
 }
 
 func compileUnaryTextScalarInput(
@@ -5246,19 +5356,31 @@ func compileUnaryTextScalarInput(
 			functionName,
 		)
 	}
-	if nilScalarExpression(expression.Arguments[0]) {
+	return compileTextScalarInputArgument(
+		expression.Arguments[0],
+		state,
+		functionName,
+	)
+}
+
+func compileTextScalarInputArgument(
+	argument plan.ScalarExpression,
+	state compileState,
+	functionName string,
+) (compiledScalar, error) {
+	if nilScalarExpression(argument) {
 		return compiledScalar{}, fmt.Errorf(
 			"compile ClickHouse %s: missing scalar expression",
 			functionName,
 		)
 	}
-	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
+	if scalarExpressionMayReturnBooleanFunction(argument) {
 		return compiledScalar{}, fmt.Errorf(
 			"compile ClickHouse %s: cannot consume a Boolean null predicate",
 			functionName,
 		)
 	}
-	return compileScalarValue(expression.Arguments[0], state)
+	return compileScalarValue(argument, state)
 }
 
 func compiledTextEligibleStringScalar(input compiledScalar) (string, []any) {

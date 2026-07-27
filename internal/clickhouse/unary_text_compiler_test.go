@@ -20,19 +20,6 @@ func testUnaryScalarCompilerTrustBoundary(
 			Value: plan.Value{Kind: plan.ValueKindString, String: "value"},
 		}
 	}
-	compileAssignment := func(expression plan.ScalarExpression) error {
-		t.Helper()
-		candidate := *base
-		candidate.Operators = append(
-			append([]plan.Operator(nil), base.Operators...),
-			&plan.Extend{Assignments: []plan.ExtendAssignment{{
-				Output:     plan.FieldRef{Name: "value"},
-				Expression: expression,
-			}}},
-		)
-		_, err := (Compiler{}).Compile(&candidate)
-		return err
-	}
 
 	var typedNil *plan.ScalarLiteralExpression
 	boolean := &plan.ScalarCallExpression{
@@ -84,10 +71,28 @@ func testUnaryScalarCompilerTrustBoundary(
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			err := compileAssignment(test.expression)
+			err := compileForgedScalarAssignment(t, base, test.expression)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Compile error = %v, want %q", err, test.want)
 			}
 		})
 	}
+}
+
+func compileForgedScalarAssignment(
+	t *testing.T,
+	base *plan.Query,
+	expression plan.ScalarExpression,
+) error {
+	t.Helper()
+	candidate := *base
+	candidate.Operators = append(
+		append([]plan.Operator(nil), base.Operators...),
+		&plan.Extend{Assignments: []plan.ExtendAssignment{{
+			Output:     plan.FieldRef{Name: "value"},
+			Expression: expression,
+		}}},
+	)
+	_, err := (Compiler{}).Compile(&candidate)
+	return err
 }

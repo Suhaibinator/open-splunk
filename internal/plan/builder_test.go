@@ -2358,3 +2358,31 @@ func assertDiagnosticCode(t *testing.T, err error, code string) {
 		t.Fatalf("code = %q, want %q", diagnostic.Code, code)
 	}
 }
+
+func assertForgedEvalBuildDiagnostic(
+	t *testing.T,
+	base *spl.Query,
+	sourceRange spl.Range,
+	expression spl.ScalarExpr,
+	code string,
+) {
+	t.Helper()
+	query := &spl.Query{
+		Search: base.Search,
+		Commands: []spl.Command{&spl.EvalCommand{
+			Assignments: []spl.EvalAssignment{{
+				Field:      "result",
+				FieldRange: sourceRange,
+				Expression: expression,
+				Range:      sourceRange,
+			}},
+			Range: sourceRange,
+		}},
+		Range: base.Range,
+	}
+	_, err := Build(query, testScope([]string{"gradethis"}, nil))
+	if err == nil {
+		t.Fatalf("Build succeeded for forged expression %#v", expression)
+	}
+	assertDiagnosticCode(t, err, code)
+}

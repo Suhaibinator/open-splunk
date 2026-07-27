@@ -20,8 +20,8 @@ func TestCompileEvalSubstringUsesSQLiteUTF8IntervalSemantics(t *testing.T) {
 		`arrayMap((value, start, span) ->`,
 		`CAST(lengthUTF8(value) AS Int128)`,
 		`if(start < 0, n + start + 1, start)`,
-		`clamp(if(span < 0, position + span, position), CAST(1 AS Int128), n + 1)`,
-		`clamp(if(span < 0, position, position + span), CAST(1 AS Int128), n + 1)`,
+		`clamp(if(span < 0, (if(start < 0, n + start + 1, start)) + span`,
+		`clamp(if(span < 0, if(start < 0, n + start + 1, start)`,
 		`substringUTF8(value, toInt64(`,
 		`toUInt64(`,
 		`) AS "value"`,
@@ -32,6 +32,9 @@ func TestCompileEvalSubstringUsesSQLiteUTF8IntervalSemantics(t *testing.T) {
 	}
 	if strings.Contains(compiled.SQL, `substringUTF8(value, start, span)`) {
 		t.Fatalf("substring passed SQLite-incompatible span through directly:\n%s", compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, "arrayMap("); got != 2 {
+		t.Fatalf("generic substring arrayMap calls = %d, want 2:\n%s", got, compiled.SQL)
 	}
 	if len(compiled.Args) < 3 ||
 		compiled.Args[0] != "😀abcdef" ||
@@ -64,16 +67,61 @@ func TestCompileEvalSubstringOmittedLengthAndExtremeIndexesStayOverflowSafe(t *t
 		}
 	}
 	for _, forbidden := range []string{
-		`CAST(? AS Int64) +`,
-		`CAST(? AS UInt64) +`,
+		`lengthUTF8("source")`,
+		`arrayMap(`,
 		`abs(`,
 	} {
 		if strings.Contains(compiled.SQL, forbidden) {
-			t.Fatalf("substring uses overflow-prone operation %q:\n%s", forbidden, compiled.SQL)
+			t.Fatalf("omitted-length substring retained slow/unsafe operation %q:\n%s", forbidden, compiled.SQL)
 		}
 	}
-	if got := strings.Count(compiled.SQL, `CAST(? AS Int128)`); got != 2 {
-		t.Fatalf("Int128 index casts = %d, want 2:\n%s", got, compiled.SQL)
+	for _, required := range []string{
+		`substringUTF8("source", CAST(? AS Int64)) AS "whole"`,
+		`substringUTF8("source", CAST(? AS UInt64)) AS "empty"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("omitted-length substring SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+
+	generic := compileSPL(
+		t,
+		`index=gradethis | eval value=substr(source, -9223372036854775808, 18446744073709551615) | table value`,
+	)
+	if got := strings.Count(generic.SQL, `CAST(? AS Int128)`); got != 2 {
+		t.Fatalf("generic Int128 index casts = %d, want 2:\n%s", got, generic.SQL)
+	}
+	if !containsArgument(generic.Args, int64(math.MinInt64)) ||
+		!containsArgument(generic.Args, uint64(math.MaxUint64)) {
+		t.Fatalf("generic args = %#v, want full-width indexes", generic.Args)
+	}
+	if strings.Contains(generic.SQL, "abs(") {
+		t.Fatalf("generic substring negates an extreme signed index:\n%s", generic.SQL)
+	}
+}
+
+func TestCompileEvalSubstringSpecializesLiteralIntervalsWithoutUTF8LengthScan(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | eval positive=substr(source, 1, 3), zero_start=substr(source, 0, 3), preceding=substr(source, 4, -2), empty=substr(source, -4, 0), whole=substr(source, 0) | table positive,zero_start,preceding,empty,whole`,
+	)
+	for _, forbidden := range []string{"lengthUTF8(", "arrayMap(", "Int128"} {
+		if strings.Contains(compiled.SQL, forbidden) {
+			t.Fatalf("specialized substring retained %q:\n%s", forbidden, compiled.SQL)
+		}
+	}
+	for _, required := range []string{
+		`substringUTF8("source", CAST(? AS Int64), CAST(? AS Int64)) AS "positive"`,
+		`substringUTF8("source", CAST(? AS UInt64), CAST(? AS UInt64)) AS "zero_start"`,
+		`substringUTF8("source", CAST(? AS UInt64), CAST(? AS UInt64)) AS "preceding"`,
+		`substringUTF8("source", CAST(? AS UInt64), CAST(? AS UInt64)) AS "empty"`,
+		`"source" AS "whole"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("specialized substring SQL missing %q:\n%s", required, compiled.SQL)
+		}
 	}
 }
 
@@ -197,19 +245,6 @@ func TestCompileEvalSubstringRejectsForgedPlans(t *testing.T) {
 			Value: plan.Value{Kind: plan.ValueKindInt64, Int64: value},
 		}
 	}
-	compileAssignment := func(expression plan.ScalarExpression) error {
-		t.Helper()
-		candidate := *base
-		candidate.Operators = append(
-			append([]plan.Operator(nil), base.Operators...),
-			&plan.Extend{Assignments: []plan.ExtendAssignment{{
-				Output:     plan.FieldRef{Name: "value"},
-				Expression: expression,
-			}}},
-		)
-		_, err := (Compiler{}).Compile(&candidate)
-		return err
-	}
 
 	var typedNil *plan.ScalarLiteralExpression
 	boolean := &plan.ScalarCallExpression{
@@ -306,7 +341,7 @@ func TestCompileEvalSubstringRejectsForgedPlans(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			err := compileAssignment(test.expression)
+			err := compileForgedScalarAssignment(t, base, test.expression)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Compile error = %v, want %q", err, test.want)
 			}

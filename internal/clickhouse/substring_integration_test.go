@@ -150,8 +150,8 @@ func testSubstringAgainstClickHouse(
 			)
 		}
 	}
-	if !containsIntegrationArgument(matrix.Args, int64(math.MinInt64)) ||
-		!containsIntegrationArgument(matrix.Args, uint64(math.MaxUint64)) {
+	if !containsArgument(matrix.Args, int64(math.MinInt64)) ||
+		!containsArgument(matrix.Args, uint64(math.MaxUint64)) {
 		t.Fatalf("substring matrix args lost extreme integers: %#v", matrix.Args)
 	}
 
@@ -193,8 +193,7 @@ func testSubstringAgainstClickHouse(
 
 	fixed := compile(
 		`index=substring event_id="substring-unicode"` +
-			` | stats min(host) AS selected` +
-			` | eval part=substr(selected, 2, 3) | table part`,
+			` | eval part=substr(host, 2, 3) | table part`,
 	)
 	var fixedPart string
 	if err := connection.QueryRow(
@@ -282,13 +281,4 @@ func testSubstringAgainstClickHouse(
 	if strings.Contains(actions, "ArrayJoin") {
 		t.Fatalf("substring lowering expands event rows:\n%s", actions)
 	}
-}
-
-func containsIntegrationArgument(arguments []any, want any) bool {
-	for _, argument := range arguments {
-		if argument == want {
-			return true
-		}
-	}
-	return false
 }
