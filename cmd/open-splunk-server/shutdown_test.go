@@ -28,13 +28,19 @@ func TestTrackedHandlerRejectsNewWorkAndWaitsForActiveWork(t *testing.T) {
 	firstDone := make(chan struct{})
 	go func() {
 		defer close(firstDone)
-		tracked.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+		tracked.ServeHTTP(
+			httptest.NewRecorder(),
+			httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil),
+		)
 	}()
 	<-entered
 	tracked.stopAccepting()
 
 	response := httptest.NewRecorder()
-	tracked.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	tracked.ServeHTTP(
+		response,
+		httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil),
+	)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("new request status = %d, want 503", response.Code)
 	}
@@ -62,7 +68,10 @@ func TestShutdownHTTPServerForceClosesThenWaitsForHandlers(t *testing.T) {
 		close(entered)
 		<-release
 	}))
-	go tracked.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	go tracked.ServeHTTP(
+		httptest.NewRecorder(),
+		httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil),
+	)
 	<-entered
 
 	server := &fakeShutdownServer{closed: make(chan struct{})}
@@ -119,7 +128,15 @@ func TestShutdownHTTPServerUnblocksActiveWebSocketHandlerEvenOnCloseError(t *tes
 	handlerDone := make(chan struct{})
 	go func() {
 		defer close(handlerDone)
-		tracked.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/search/ws", nil))
+		tracked.ServeHTTP(
+			httptest.NewRecorder(),
+			httptest.NewRequestWithContext(
+				context.Background(),
+				http.MethodGet,
+				"/api/v1/search/ws",
+				nil,
+			),
+		)
 	}()
 	select {
 	case <-webSockets.entered:

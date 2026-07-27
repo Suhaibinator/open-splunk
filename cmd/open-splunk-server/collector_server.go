@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -37,7 +38,11 @@ type collectorServerConfig struct {
 // openCollectorServer returns nil values when the collector listener is not
 // configured. A configured listener is TLS-only unless Insecure is explicitly
 // selected for a loopback address.
-func openCollectorServer(config collectorServerConfig, service opensplunkv1.CollectorIngestServiceServer) (*grpc.Server, net.Listener, error) {
+func openCollectorServer(
+	ctx context.Context,
+	config collectorServerConfig,
+	service opensplunkv1.CollectorIngestServiceServer,
+) (*grpc.Server, net.Listener, error) {
 	address := strings.TrimSpace(config.Address)
 	if address == "" {
 		if config.Insecure || strings.TrimSpace(config.TLSCertFile) != "" || strings.TrimSpace(config.TLSKeyFile) != "" {
@@ -56,7 +61,7 @@ func openCollectorServer(config collectorServerConfig, service opensplunkv1.Coll
 	if err != nil {
 		return nil, nil, err
 	}
-	rawListener, err := net.Listen("tcp", address)
+	rawListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", address)
 	if err != nil {
 		return nil, nil, fmt.Errorf("listen for collector gRPC: %w", err)
 	}
@@ -123,7 +128,7 @@ func collectorResourceServerOptions() []grpc.ServerOption {
 
 func concurrentStreamLimit(limit int) grpc.StreamServerInterceptor {
 	slots := make(chan struct{}, limit)
-	return func(server any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return func(server any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		select {
 		case slots <- struct{}{}:
 			defer func() { <-slots }()

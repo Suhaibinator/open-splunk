@@ -203,7 +203,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create collector ingestion service: %w", err)
 	}
-	collectorServer, collectorListener, err := openCollectorServer(collectorServerConfig{
+	collectorServer, collectorListener, err := openCollectorServer(startupContext, collectorServerConfig{
 		Address:     config.collectorAddress,
 		Insecure:    config.collectorInsecure,
 		TLSCertFile: config.collectorTLSCert,

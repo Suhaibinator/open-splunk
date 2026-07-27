@@ -435,6 +435,8 @@ func assertBrowserVisibleResults(
 	t.Helper()
 	browserContext, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
+	// #nosec G204 -- the executable is the repository-owned Playwright binary,
+	// and every argument is a fixed test path or flag; no shell is involved.
 	command := exec.CommandContext(
 		browserContext,
 		filepath.Join(repository, "node_modules", ".bin", "playwright"),
@@ -1526,11 +1528,11 @@ func waitForCollectorWALAppend(
 	for {
 		last, lastErr = readCollectorWALSnapshot(stateDir)
 		if lastErr == nil && collectorWALAdvanced(before, last) {
-			if syncErr := syncCollectorWALGrowth(stateDir, before, last); syncErr == nil {
+			syncErr := syncCollectorWALGrowth(stateDir, before, last)
+			if syncErr == nil {
 				return
-			} else {
-				lastErr = syncErr
 			}
+			lastErr = syncErr
 		}
 		if process.Exited() {
 			t.Fatalf("collector exited before offline WAL append: %v snapshot=%v error=%v\nlogs:\n%s",

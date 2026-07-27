@@ -20,10 +20,10 @@ func writeValidConfig(t *testing.T) string {
 		t.Fatalf("write token: %v", err)
 	}
 	logDir := filepath.Join(dir, "logs")
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		t.Fatalf("mkdir logs: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(logDir, "a.log"), []byte("{}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(logDir, "a.log"), []byte("{}\n"), 0o600); err != nil {
 		t.Fatalf("write log: %v", err)
 	}
 	cfg := "server:\n" +
@@ -38,7 +38,7 @@ func writeValidConfig(t *testing.T) string {
 		"      - " + filepath.Join(logDir, "*.log") + "\n" +
 		"    index: main\n"
 	path := filepath.Join(dir, "collector.yaml")
-	if err := os.WriteFile(path, []byte(cfg), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	return path

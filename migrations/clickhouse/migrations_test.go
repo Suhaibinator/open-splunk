@@ -165,7 +165,7 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 		image = pinnedClickHouseImage
 	}
 
-	runDocker(t, ctx, nil,
+	runDocker(ctx, t, nil,
 		"run", "--detach", "--rm",
 		"--name", container,
 		"--env", "CLICKHOUSE_DB=open_splunk",
@@ -184,9 +184,9 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 		}
 	})
 
-	waitForClickHouse(t, ctx, container, password)
+	waitForClickHouse(ctx, t, container, password)
 	files := migrationFiles(t)
-	runClickHouse(t, ctx, container, password, readFile(t, files[0]))
+	runClickHouse(ctx, t, container, password, readFile(t, files[0]))
 	legacyInsert := `
 		INSERT INTO open_splunk.events
 		(
@@ -196,16 +196,16 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 		(
 			'legacy-event', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY
 		)`
-	runClickHouse(t, ctx, container, password, legacyInsert)
+	runClickHouse(ctx, t, container, password, legacyInsert)
 	for _, path := range files[1:] {
-		runClickHouse(t, ctx, container, password, readFile(t, path))
+		runClickHouse(ctx, t, container, password, readFile(t, path))
 	}
 	// Every migration must remain idempotent after the populated upgrade path.
 	for _, path := range files {
-		runClickHouse(t, ctx, container, password, readFile(t, path))
+		runClickHouse(ctx, t, container, password, readFile(t, path))
 	}
 
-	columns := clickHouseQuery(t, ctx, container, password, `
+	columns := clickHouseQuery(ctx, t, container, password, `
 		SELECT name
 		FROM system.columns
 		WHERE database = 'open_splunk' AND table = 'events'
@@ -242,10 +242,10 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 
 	// A retry must contain the exact same accepted rows in the same order and
 	// reuse the exact token. The non-replicated MergeTree window then drops it.
-	runClickHouse(t, ctx, container, password, insert)
-	runClickHouse(t, ctx, container, password, insert)
+	runClickHouse(ctx, t, container, password, insert)
+	runClickHouse(ctx, t, container, password, insert)
 
-	legacyVisibility := clickHouseQuery(t, ctx, container, password, `
+	legacyVisibility := clickHouseQuery(ctx, t, container, password, `
 		SELECT visibility_seq
 		FROM open_splunk.events
 		WHERE event_id = 'legacy-event'
@@ -253,7 +253,7 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 	if legacyVisibility != "0" {
 		t.Fatalf("pre-migration row visibility = %q, want migration default 0", legacyVisibility)
 	}
-	legacyMetadata := clickHouseQuery(t, ctx, container, password, `
+	legacyMetadata := clickHouseQuery(ctx, t, container, password, `
 		SELECT concat(toString(field_metadata_version), ':', toJSONString(field_types))
 		FROM open_splunk.events
 		WHERE event_id = 'legacy-event'
@@ -261,7 +261,7 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 	if legacyMetadata != "0:[]" {
 		t.Fatalf("pre-migration row field metadata = %q, want version-zero empty types", legacyMetadata)
 	}
-	legacyError := clickHouseQueryError(t, ctx, container, password, strings.Replace(legacyInsert, "legacy-event", "post-upgrade-legacy-event", 1))
+	legacyError := clickHouseQueryError(ctx, t, container, password, strings.Replace(legacyInsert, "legacy-event", "post-upgrade-legacy-event", 1))
 	if !strings.Contains(legacyError, "visibility_seq_is_positive") {
 		t.Fatalf("legacy writer omission did not fail the visibility constraint: %s", legacyError)
 	}
@@ -276,13 +276,13 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 		"invalid-type":        "('invalid-type', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1, ['x'], [13], 1)",
 		"typed-legacy":        "('typed-legacy', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1, ['x'], [2], 0)",
 	} {
-		errorText := clickHouseQueryError(t, ctx, container, password, invalidMetadataPrefix+values)
+		errorText := clickHouseQueryError(ctx, t, container, password, invalidMetadataPrefix+values)
 		if !strings.Contains(errorText, "field_metadata_") {
 			t.Errorf("invalid field metadata case %q was not rejected by metadata constraint: %s", name, errorText)
 		}
 	}
 
-	rowCount := clickHouseQuery(t, ctx, container, password, `
+	rowCount := clickHouseQuery(ctx, t, container, password, `
 		SELECT count()
 		FROM open_splunk.events
 		WHERE event_id = 'event-1'
@@ -291,7 +291,7 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 		t.Fatalf("batch retry produced %q stored rows; want 1", rowCount)
 	}
 
-	got := clickHouseQuery(t, ctx, container, password, `
+	got := clickHouseQuery(ctx, t, container, password, `
 		SELECT
 			dynamicType(fields.big),
 			fields.big.:Int64,
@@ -313,7 +313,7 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 	if want := "Int64\t9007199254740993\tUInt64\t18446744073709551615\tInt64\t-9223372036854775808\tFloat64\t1.25\tBool\ttrue\tNone\tArray(Dynamic)\tkept"; got != want {
 		t.Fatalf("typed JSON contract mismatch\n got: %q\nwant: %q", got, want)
 	}
-	metadata := clickHouseQuery(t, ctx, container, password, `
+	metadata := clickHouseQuery(ctx, t, container, password, `
 		SELECT concat(toString(field_metadata_version), ':', toJSONString(field_types))
 		FROM open_splunk.events
 		WHERE event_id = 'event-1'
@@ -322,7 +322,7 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 		t.Fatalf("field metadata contract = %q", metadata)
 	}
 
-	versions := clickHouseQuery(t, ctx, container, password, `
+	versions := clickHouseQuery(ctx, t, container, password, `
 		SELECT groupArray((version, count))
 		FROM
 		(
@@ -365,7 +365,7 @@ func randomHex(t *testing.T, byteCount int) string {
 	return hex.EncodeToString(value)
 }
 
-func waitForClickHouse(t *testing.T, ctx context.Context, container, password string) {
+func waitForClickHouse(ctx context.Context, t *testing.T, container, password string) {
 	t.Helper()
 	deadline := time.Now().Add(90 * time.Second)
 	var lastErr error
@@ -401,16 +401,16 @@ func waitForClickHouse(t *testing.T, ctx context.Context, container, password st
 	t.Fatalf("ClickHouse did not become ready: %v", lastErr)
 }
 
-func runClickHouse(t *testing.T, ctx context.Context, container, password, sql string) {
+func runClickHouse(ctx context.Context, t *testing.T, container, password, sql string) {
 	t.Helper()
-	runDocker(t, ctx, strings.NewReader(sql),
+	runDocker(ctx, t, strings.NewReader(sql),
 		"exec", "--interactive", container,
 		"clickhouse-client", "--host", "127.0.0.1",
 		"--user", "open_splunk", "--password", password, "--multiquery",
 	)
 }
 
-func clickHouseQuery(t *testing.T, ctx context.Context, container, password, query string) string {
+func clickHouseQuery(ctx context.Context, t *testing.T, container, password, query string) string {
 	t.Helper()
 	cmd := exec.CommandContext(ctx, "docker", "exec", container,
 		"clickhouse-client", "--host", "127.0.0.1",
@@ -424,7 +424,7 @@ func clickHouseQuery(t *testing.T, ctx context.Context, container, password, que
 	return strings.TrimSpace(string(output))
 }
 
-func clickHouseQueryError(t *testing.T, ctx context.Context, container, password, query string) string {
+func clickHouseQueryError(ctx context.Context, t *testing.T, container, password, query string) string {
 	t.Helper()
 	cmd := exec.CommandContext(ctx, "docker", "exec", container,
 		"clickhouse-client", "--host", "127.0.0.1",
@@ -438,7 +438,7 @@ func clickHouseQueryError(t *testing.T, ctx context.Context, container, password
 	return string(output)
 }
 
-func runDocker(t *testing.T, ctx context.Context, stdin io.Reader, args ...string) {
+func runDocker(ctx context.Context, t *testing.T, stdin io.Reader, args ...string) {
 	t.Helper()
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	if stdin != nil {

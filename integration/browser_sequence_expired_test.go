@@ -601,7 +601,7 @@ func waitForAtomicValue(
 
 func newIPv4LoopbackTestServer(t *testing.T, handler http.Handler) *httptest.Server {
 	t.Helper()
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen for loopback test server: %v", err)
 	}

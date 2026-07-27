@@ -16,7 +16,7 @@ import (
 
 func TestOpenCollectorServerAllowsUnconfiguredListener(t *testing.T) {
 	t.Parallel()
-	server, listener, err := openCollectorServer(collectorServerConfig{}, nil)
+	server, listener, err := openCollectorServer(context.Background(), collectorServerConfig{}, nil)
 	if err != nil || server != nil || listener != nil {
 		t.Fatalf("openCollectorServer = (%v, %v, %v), want (nil, nil, nil)", server, listener, err)
 	}
@@ -68,7 +68,7 @@ func TestOpenCollectorServerRejectsIncompleteConfigurationBeforeListening(t *tes
 			if name == "missing service" {
 				candidate = nil
 			}
-			if _, _, err := openCollectorServer(config, candidate); err == nil {
+			if _, _, err := openCollectorServer(context.Background(), config, candidate); err == nil {
 				t.Fatal("openCollectorServer succeeded")
 			}
 		})

@@ -114,6 +114,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          # The fixed lint baseline below must remain available even after many
+          # incremental main pushes.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -126,7 +130,12 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
-          args: --timeout=5m
+          # Ratchet the inherited backlog from the adoption checkpoint. A fixed
+          # revision (rather than each push's "before" SHA) ensures that
+          # concurrency-cancelled intermediate runs cannot hide a new issue.
+          # Do not advance this baseline; reduce the legacy inventory in
+          # separate cleanup waves while every subsequent change stays clean.
+          args: --timeout=5m --new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102
 
   go-test:
     name: Go tests

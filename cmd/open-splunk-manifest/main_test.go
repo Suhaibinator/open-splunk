@@ -41,7 +41,7 @@ func TestWriteAtomicPreservesCleanupOnPublishFailure(t *testing.T) {
 
 	directory := t.TempDir()
 	destination := filepath.Join(directory, "occupied")
-	if err := os.Mkdir(destination, 0o755); err != nil {
+	if err := os.Mkdir(destination, 0o750); err != nil {
 		t.Fatal(err)
 	}
 

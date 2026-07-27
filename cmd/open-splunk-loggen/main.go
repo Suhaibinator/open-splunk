@@ -33,12 +33,13 @@ func main() {
 }
 
 func isOnlyCancellation(err error) bool {
-	if err == context.Canceled {
-		return true
+	if err == nil || !errors.Is(err, context.Canceled) {
+		return false
 	}
-	switch wrapped := err.(type) {
-	case interface{ Unwrap() []error }:
-		causes := wrapped.Unwrap()
+
+	var joined interface{ Unwrap() []error }
+	if errors.As(err, &joined) {
+		causes := joined.Unwrap()
 		if len(causes) == 0 {
 			return false
 		}
@@ -48,12 +49,14 @@ func isOnlyCancellation(err error) bool {
 			}
 		}
 		return true
-	case interface{ Unwrap() error }:
+	}
+
+	var wrapped interface{ Unwrap() error }
+	if errors.As(err, &wrapped) {
 		cause := wrapped.Unwrap()
 		return cause != nil && isOnlyCancellation(cause)
-	default:
-		return false
 	}
+	return true
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returnedErr error) {
@@ -159,12 +162,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returned
 
 	var emitted uint64
 	for *count == 0 || emitted < *count {
-		if err := pacer.Wait(ctx, emitted); err != nil {
-			return err
+		if waitErr := pacer.Wait(ctx, emitted); waitErr != nil {
+			return waitErr
 		}
-		line, err := generator.Next()
-		if err != nil {
-			return err
+		line, nextErr := generator.Next()
+		if nextErr != nil {
+			return nextErr
 		}
 		if _, err := buffered.Write(line); err != nil {
 			return fmt.Errorf("write event %d: %w", emitted, err)
@@ -187,7 +190,7 @@ func openOutputFile(path string, appendOutput bool) (*os.File, error) {
 	if appendOutput {
 		flags = os.O_CREATE | os.O_RDWR | os.O_APPEND
 	}
-	file, err := os.OpenFile(path, flags, 0o644)
+	file, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open output %q: %w", path, err)
 	}

@@ -58,8 +58,8 @@ func run(args []string, stdout io.Writer) error {
 	}
 	outputDirectory := filepath.Join(root, "out")
 	outputPath := filepath.Join(outputDirectory, buildassets.ManifestFilename)
-	if err := writeAtomic(outputPath, encoded); err != nil {
-		return err
+	if writeErr := writeAtomic(outputPath, encoded); writeErr != nil {
+		return writeErr
 	}
 	_, err = fmt.Fprintf(
 		stdout,
@@ -93,32 +93,32 @@ func writeAtomic(destination string, contents []byte) (returnedErr error) {
 			returnedErr = errors.Join(returnedErr, fmt.Errorf("remove temporary build manifest: %w", removeErr))
 		}
 	}()
-	if err := temporary.Chmod(0o644); err != nil {
-		return fmt.Errorf("set build manifest permissions: %w", err)
+	if chmodErr := temporary.Chmod(0o644); chmodErr != nil {
+		return fmt.Errorf("set build manifest permissions: %w", chmodErr)
 	}
-	if _, err := temporary.Write(contents); err != nil {
-		return fmt.Errorf("write build manifest: %w", err)
+	if _, writeErr := temporary.Write(contents); writeErr != nil {
+		return fmt.Errorf("write build manifest: %w", writeErr)
 	}
-	if err := temporary.Sync(); err != nil {
-		return fmt.Errorf("sync build manifest: %w", err)
+	if syncErr := temporary.Sync(); syncErr != nil {
+		return fmt.Errorf("sync build manifest: %w", syncErr)
 	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close build manifest: %w", err)
+	if closeErr := temporary.Close(); closeErr != nil {
+		return fmt.Errorf("close build manifest: %w", closeErr)
 	}
 	closed = true
 	if err := os.Rename(temporaryPath, destination); err != nil {
 		return fmt.Errorf("publish build manifest: %w", err)
 	}
-	directoryHandle, err := os.Open(directory)
-	if err != nil {
-		return fmt.Errorf("open build manifest directory for sync: %w", err)
+	directoryHandle, openErr := os.Open(directory)
+	if openErr != nil {
+		return fmt.Errorf("open build manifest directory for sync: %w", openErr)
 	}
-	if err := directoryHandle.Sync(); err != nil {
+	if syncErr := directoryHandle.Sync(); syncErr != nil {
 		_ = directoryHandle.Close()
-		return fmt.Errorf("sync build manifest directory: %w", err)
+		return fmt.Errorf("sync build manifest directory: %w", syncErr)
 	}
-	if err := directoryHandle.Close(); err != nil {
-		return fmt.Errorf("close build manifest directory: %w", err)
+	if closeErr := directoryHandle.Close(); closeErr != nil {
+		return fmt.Errorf("close build manifest directory: %w", closeErr)
 	}
 	return nil
 }
