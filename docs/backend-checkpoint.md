@@ -7,7 +7,121 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded typed SPL `mvcount`
+## Latest checkpoint: bounded typed SPL `match`
+
+Date: 2026-07-27
+
+Parser and logical-plan checkpoint (committed and pushed):
+`527a4ca`
+
+Initial ClickHouse compiler and integration checkpoint (committed and pushed):
+`5f604b8`
+
+Adversarial correctness, reuse, and efficiency checkpoint (committed and
+pushed):
+`4233a5a`
+
+Compatibility and editor checkpoint (committed and pushed):
+`39c0fd4`
+
+This test-first slice implements bounded `match(value, "regex")`:
+
+1. The parser accepts exactly one scalar value and one quoted literal pattern,
+   preserves complete source ranges, treats function names case-insensitively,
+   and leaves a bare field named `match` ordinary. The call is a first-class
+   Boolean predicate for `where`, comparisons, `NOT`/`AND`/`OR`, `if`, and
+   `case`.
+2. Dedicated AST and logical-plan enums carry the operation. Shared exhaustive
+   Boolean-function traits keep parser, planner, and compiler consumers in
+   parity. Every trust boundary rejects forged arity, nonliteral patterns,
+   Boolean input, invalid enums, typed nil, excess depth/nodes, and cycles.
+3. Matching is case-sensitive substring search by default. Inline flags are
+   supported; normalization explicitly disables ClickHouse's default dot-all
+   mode while allowing user `(?s)` to opt back in. Empty and zero-width
+   patterns are valid.
+4. Non-multiline PCRE `$` is normalized to match strict end or immediately
+   before one final newline. `\z` remains strict-end-only, and `(?m)$` retains
+   line-end behavior. Unit and pinned ClickHouse tests prove all three.
+5. Fixed String input is matched directly. Fixed numeric, Boolean, and
+   canonical-time scalars use their supported text spelling. Dynamic runtime
+   String is supported; Dynamic numbers, Booleans, arrays, objects, tagged
+   values, null, missing fields, and text-ineligible binary input produce
+   nullable Boolean null. Fixed `Array(String)` fails with
+   `SPL_UNSUPPORTED_MULTIVALUE_USAGE`.
+6. Direct Boolean assignment remains outside search-mode `eval`; `tostring`,
+   `if`, `case`, predicate composition, and explicit Boolean comparison consume
+   the result. Centralized compiler diagnostics now consistently say
+   “Boolean result” rather than the obsolete null-predicate-only wording.
+7. Authored and normalized pattern text are each capped at 4 KiB. A compact-AST
+   estimator caps the post-repeat RE2 program at 4,096 work units before
+   simplification or compilation can expand counted repetitions. The compiler
+   also caps the sum of all `match` occurrences at 16,384 work units.
+8. The shared bounded-RE2 parser is used by both `match` and `rex`; `rex` now
+   receives the same 4,096-work-unit counted-repeat protection without changing
+   its capture-sensitive `$` contract. Adversarial `a{1000}` repetition tests
+   prove rejection without first materializing the expanded program.
+9. The compiler validates and normalizes a pattern once per expression,
+   caches the typed result while still counting every occurrence, binds the
+   normalized text as a query argument, references the scalar source once, and
+   enforces a separate 64 KiB generated-SQL ceiling.
+10. Scalar compilation propagates conservative maximum String bytes through
+    literals, conditionals, coalesce, case conversion, substring, tostring,
+    eval, projection, bucket, and rename. Always-consuming `replace` uses a
+    saturating input/replacement product. `match` rejects calculated input that
+    may exceed 4 MiB, closing the near-1-GiB replacement-amplification path
+    before regex execution.
+11. Compiler and pinned integration coverage exercises substring and anchored
+    search, case and dot flags, final-newline anchors, empty/zero-width
+    patterns, fixed conversion, Dynamic/null/missing/container/binary behavior,
+    composition, source occurrence, multivalue rejection, forged plans,
+    counted-repeat bombs, aggregate regex work, and calculated-input
+    amplification.
+12. Independent reuse, quality, and efficiency reviewers reported nine
+    actionable findings, all applied: shared validation/classification,
+    compiler caching, exhaustive Boolean traits, type-correct diagnostics,
+    named limit assertions, bounded RE2 reuse, counted-repeat program budgets,
+    calculated-input bounds, and PCRE-compatible `$` semantics.
+
+Validation completed on the current implementation:
+
+```sh
+go test ./internal/splregex ./internal/spl ./internal/plan \
+  ./internal/clickhouse \
+  -run 'Match|ExtractionPattern|ScalarFunctionBooleanTraits' \
+  -count=1 -timeout=3m
+go test ./... -count=1 -timeout=5m
+go vet ./...
+go build ./...
+golangci-lint run ./...
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m -v
+git diff --check
+```
+
+All gates pass. The unrestricted repository-wide lint run reports zero issues.
+The frontend corpus contains 124 application tests and 47 release/build tests,
+and the production static export generated all 11 pages. The pinned Store
+suite, including the `$`/`\z`/multiline-anchor corpus, passed in 50.04 seconds.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `527a4ca`, `5f604b8`, `4233a5a`,
+   and `39c0fd4`. Preserve unexpected local changes.
+2. Select the next bounded scalar slice only after pinning its Splunk
+   signature, fixed/Dynamic type behavior, null and multivalue behavior,
+   resource limits, and ClickHouse lowering.
+3. Keep broader regex dialect support, calculated patterns, direct Boolean
+   eval assignment, multivalue matching, formatted `tostring`, arithmetic,
+   concatenation, and canonical-time conversion as separate compatibility
+   slices.
+
+## Previous checkpoint: bounded typed SPL `mvcount`
 
 Date: 2026-07-27
 
@@ -5582,7 +5696,9 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `fed3276`, `c1ad25b`, `cfaa75b`, `2d35c66`, `070d24f`,
+   commits, especially `39c0fd4`, `4233a5a`, `5f604b8`, `527a4ca`,
+   `a316a4b`, `a4a07e3`, `3996659`, `738fabf`, `f68cacc`, `fed3276`,
+   `c1ad25b`, `cfaa75b`, `2d35c66`, `070d24f`,
    `f9985a1`, `9714c79`, `e6acd1d`, `ac721fb`, `932f403`,
    `4e00428`, `fbb8997`, `b0c00f3`, `4e2ddb4`,
    `05c1eaf`, `f68630a`, `5ecd999`,
@@ -5630,9 +5746,12 @@ Do not guess those decisions if they materially affect the implementation.
    `c1ad25b`, and `fed3276`; typed conditional count is complete at `66b2b16`.
    Typed Unicode `lower`/`upper` is complete through `8e68c7e`, `3d9d5f8`,
    `53b1f55`, and `8e4cf5f`; typed UTF-8 `len`/`length` is complete through
-   `64004dc`, `e3a32e2`, and `5aebc70`. Continue with a test-first bounded
-   `substr` or `round`/`ceil`/`floor` contract if the user does not change
-   priority. The
+   `64004dc`, `e3a32e2`, and `5aebc70`. Subsequent bounded `substr`,
+   default `tostring`, `round`, `ceil`/`ceiling`, `floor`, `mvcount`, and
+   `match` slices are complete; the current `match` parser, compiler,
+   adversarial, and compatibility checkpoints are `527a4ca`, `5f604b8`,
+   `4233a5a`, and `39c0fd4`. Continue with one newly researched bounded scalar
+   contract if the user does not change priority. The
    generator foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
