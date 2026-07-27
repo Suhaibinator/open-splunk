@@ -59,8 +59,14 @@ const (
 	// MaximumSpathInputBytes bounds one current-pipeline JSON source. Native
 	// ingestion already caps complete events at the same size; this independent
 	// guard also covers calculated Strings amplified by earlier commands.
-	MaximumSpathInputBytes       = 1 << 20
-	maxCompiledQueryBytes        = 256 << 10
+	MaximumSpathInputBytes = 1 << 20
+	maxCompiledQueryBytes  = 256 << 10
+	// maxCompiledIfScalarSQLBytes stops nested conditional values before
+	// Dynamic comparison lowering can repeatedly duplicate their SQL. The
+	// final query has a larger independent ceiling, but enforcing this limit
+	// at every conditional node bounds compiler allocations on adversarial
+	// depth-limited trees.
+	maxCompiledIfScalarSQLBytes  = 64 << 10
 	maxCompiledAssignments       = 64
 	maxCompiledExtractionOutputs = 64
 	maxTimechartLabelBytes       = 256
@@ -341,7 +347,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				}
 			}
 			for index, assignment := range operator.Assignments {
-				if scalarExpressionContainsBooleanFunction(assignment.Expression) {
+				if scalarExpressionMayReturnBooleanFunction(assignment.Expression) {
 					return CompiledQuery{}, errors.New(
 						"compile ClickHouse extend: eval cannot directly assign a Boolean null predicate",
 					)
@@ -3032,6 +3038,7 @@ type fieldState struct {
 	numberType              string
 	numericSort             bool
 	canonicalTime           bool
+	alwaysNull              bool
 	materializeForPredicate bool
 }
 
@@ -3252,6 +3259,7 @@ func predicateMaterializationFields(expression plan.Expression, state compileSta
 		fields = append(fields, name)
 	}
 
+	var visit func(plan.Expression)
 	var visitScalar func(plan.ScalarExpression)
 	visitScalar = func(expression plan.ScalarExpression) {
 		switch expression := expression.(type) {
@@ -3266,10 +3274,16 @@ func predicateMaterializationFields(expression plan.Expression, state compileSta
 			for _, argument := range expression.Arguments {
 				visitScalar(argument)
 			}
+		case *plan.ScalarIfExpression:
+			if expression == nil {
+				return
+			}
+			visit(expression.Condition)
+			visitScalar(expression.True)
+			visitScalar(expression.False)
 		}
 	}
 
-	var visit func(plan.Expression)
 	visit = func(expression plan.Expression) {
 		switch expression := expression.(type) {
 		case *plan.BooleanExpression:
@@ -3372,6 +3386,7 @@ type compiledScalar struct {
 	kind                    fieldKind
 	numberType              string
 	literal                 *plan.Value
+	alwaysNull              bool
 	materializeForPredicate bool
 }
 
@@ -3387,9 +3402,10 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 		}
 		if !ok {
 			return compiledScalar{
-				valueSQL:  "CAST(NULL AS Nullable(String))",
-				existsSQL: "0",
-				kind:      fieldKindString,
+				valueSQL:   "CAST(NULL AS Nullable(String))",
+				existsSQL:  "0",
+				kind:       fieldKindString,
+				alwaysNull: true,
 			}, nil
 		}
 		return compiledScalarFromField(field), nil
@@ -3419,10 +3435,11 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			valueSQL, argument = "CAST(? AS Bool)", value.Bool
 		case plan.ValueKindNull:
 			return compiledScalar{
-				valueSQL:  "CAST(NULL AS Nullable(String))",
-				existsSQL: "1",
-				kind:      fieldKindInvalid,
-				literal:   &value,
+				valueSQL:   "CAST(NULL AS Nullable(String))",
+				existsSQL:  "1",
+				kind:       fieldKindInvalid,
+				literal:    &value,
+				alwaysNull: true,
 			}, nil
 		default:
 			return compiledScalar{}, errors.New("compile ClickHouse scalar expression: invalid literal")
@@ -3449,8 +3466,319 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 		default:
 			return compiledScalar{}, fmt.Errorf("compile ClickHouse scalar expression: unsupported function %d", expression.Function)
 		}
+	case *plan.ScalarIfExpression:
+		return compileIfScalar(expression, state)
 	default:
 		return compiledScalar{}, fmt.Errorf("compile ClickHouse scalar expression: unsupported expression %T", expression)
+	}
+}
+
+func compileIfScalar(expression *plan.ScalarIfExpression, state compileState) (compiledScalar, error) {
+	if expression == nil {
+		return compiledScalar{}, errors.New("compile ClickHouse if: missing if expression")
+	}
+	if nilPlanExpression(expression.Condition) {
+		return compiledScalar{}, errors.New("compile ClickHouse if: missing condition")
+	}
+	if nilScalarExpression(expression.True) {
+		return compiledScalar{}, errors.New("compile ClickHouse if: missing true branch")
+	}
+	if nilScalarExpression(expression.False) {
+		return compiledScalar{}, errors.New("compile ClickHouse if: missing false branch")
+	}
+	if err := validateIfCondition(expression.Condition); err != nil {
+		return compiledScalar{}, err
+	}
+
+	conditionSQL, conditionArgs, err := compileExpression(expression.Condition, state)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	if sizeErr := validateIfScalarSQLBytes(len(conditionSQL), expression.Range); sizeErr != nil {
+		return compiledScalar{}, sizeErr
+	}
+	trueValue, err := compileScalarValue(expression.True, state)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	if sizeErr := validateIfScalarSQLBytes(len(trueValue.valueSQL), expression.Range); sizeErr != nil {
+		return compiledScalar{}, sizeErr
+	}
+	falseValue, err := compileScalarValue(expression.False, state)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	if sizeErr := validateIfScalarSQLBytes(len(falseValue.valueSQL), expression.Range); sizeErr != nil {
+		return compiledScalar{}, sizeErr
+	}
+	alwaysNull := compiledScalarIsAlwaysNull(trueValue) &&
+		compiledScalarIsAlwaysNull(falseValue)
+	textEligibleSQL, ok := ifBranchTextEligibility(trueValue, falseValue)
+	if !ok {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_UNSUPPORTED_IF_BRANCH_TYPE",
+			Message: "if branches carry incompatible text provenance; use matching text sources " +
+				"or normalize each branch before the conditional",
+			Range: expression.Range,
+		}
+	}
+	trueValue, falseValue, kind, numberType, err := normalizeIfBranches(
+		trueValue,
+		falseValue,
+		expression.Range,
+	)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+
+	valueSQLBytes := len("if(ifNull(, 0), , )") +
+		len(conditionSQL) + len(trueValue.valueSQL) + len(falseValue.valueSQL)
+	if err := validateIfScalarSQLBytes(valueSQLBytes, expression.Range); err != nil {
+		return compiledScalar{}, err
+	}
+	args := make([]any, 0, len(conditionArgs)+len(trueValue.valueArgs)+len(falseValue.valueArgs))
+	args = append(args, conditionArgs...)
+	args = append(args, trueValue.valueArgs...)
+	args = append(args, falseValue.valueArgs...)
+	return compiledScalar{
+		valueSQL: "if(ifNull(" + conditionSQL + ", 0), " +
+			trueValue.valueSQL + ", " + falseValue.valueSQL + ")",
+		valueArgs:       args,
+		existsSQL:       "1",
+		textEligibleSQL: textEligibleSQL,
+		kind:            kind,
+		numberType:      numberType,
+		alwaysNull:      alwaysNull,
+		materializeForPredicate: len(predicateMaterializationFields(expression.Condition, state)) > 0 ||
+			trueValue.materializeForPredicate ||
+			falseValue.materializeForPredicate,
+	}, nil
+}
+
+func validateIfScalarSQLBytes(size int, sourceRange spl.Range) error {
+	if size <= maxCompiledIfScalarSQLBytes {
+		return nil
+	}
+	return &plan.Diagnostic{
+		Code:    "SPL_QUERY_TOO_COMPLEX",
+		Message: fmt.Sprintf("if scalar SQL exceeds %d bytes", maxCompiledIfScalarSQLBytes),
+		Range:   sourceRange,
+	}
+}
+
+func ifBranchTextEligibility(trueValue, falseValue compiledScalar) (string, bool) {
+	switch {
+	case compiledScalarIsAlwaysNull(trueValue):
+		return falseValue.textEligibleSQL, true
+	case compiledScalarIsAlwaysNull(falseValue):
+		return trueValue.textEligibleSQL, true
+	case trueValue.textEligibleSQL == falseValue.textEligibleSQL:
+		return trueValue.textEligibleSQL, true
+	default:
+		return "", false
+	}
+}
+
+func validateIfCondition(expression plan.Expression) error {
+	if nilPlanExpression(expression) {
+		return errors.New("compile ClickHouse if: missing condition")
+	}
+	switch expression := expression.(type) {
+	case *plan.BooleanExpression:
+		if expression.Op != plan.BooleanOpAnd && expression.Op != plan.BooleanOpOr {
+			return errors.New("compile ClickHouse if: condition has an invalid Boolean operator")
+		}
+		if err := validateIfCondition(expression.Left); err != nil {
+			return err
+		}
+		return validateIfCondition(expression.Right)
+	case *plan.NotExpression:
+		return validateIfCondition(expression.Operand)
+	case *plan.EvalComparisonExpression:
+		if nilScalarExpression(expression.Left) || nilScalarExpression(expression.Right) {
+			return errors.New("compile ClickHouse if: comparison condition has a missing scalar operand")
+		}
+		return nil
+	case *plan.ScalarPredicateExpression:
+		if nilScalarExpression(expression.Value) {
+			return errors.New("compile ClickHouse if: scalar condition is missing")
+		}
+		return nil
+	default:
+		return fmt.Errorf(
+			"compile ClickHouse if: condition must be an eval/where predicate, got %T",
+			expression,
+		)
+	}
+}
+
+func nilPlanExpression(expression plan.Expression) bool {
+	if expression == nil {
+		return true
+	}
+	switch expression := expression.(type) {
+	case *plan.BooleanExpression:
+		return expression == nil
+	case *plan.NotExpression:
+		return expression == nil
+	case *plan.TextExpression:
+		return expression == nil
+	case *plan.ComparisonExpression:
+		return expression == nil
+	case *plan.EvalComparisonExpression:
+		return expression == nil
+	case *plan.ScalarPredicateExpression:
+		return expression == nil
+	default:
+		return false
+	}
+}
+
+func nilScalarExpression(expression plan.ScalarExpression) bool {
+	if expression == nil {
+		return true
+	}
+	switch expression := expression.(type) {
+	case *plan.ScalarFieldExpression:
+		return expression == nil
+	case *plan.ScalarLiteralExpression:
+		return expression == nil
+	case *plan.ScalarCallExpression:
+		return expression == nil
+	case *plan.ScalarIfExpression:
+		return expression == nil
+	default:
+		return false
+	}
+}
+
+func normalizeIfBranches(
+	trueValue, falseValue compiledScalar,
+	sourceRange spl.Range,
+) (compiledScalar, compiledScalar, fieldKind, string, error) {
+	trueNull := compiledScalarIsAlwaysNull(trueValue)
+	falseNull := compiledScalarIsAlwaysNull(falseValue)
+	if trueNull && falseNull {
+		trueValue = typedNullIfBranch(fieldKindString, "")
+		falseValue = typedNullIfBranch(fieldKindString, "")
+		return trueValue, falseValue, fieldKindString, "", nil
+	}
+	if trueNull {
+		normalized, ok := typedNullIfBranchFor(falseValue)
+		if !ok {
+			return compiledScalar{}, compiledScalar{}, fieldKindInvalid, "",
+				unsupportedIfBranchTypes(sourceRange, trueValue, falseValue)
+		}
+		trueValue = normalized
+	}
+	if falseNull {
+		normalized, ok := typedNullIfBranchFor(trueValue)
+		if !ok {
+			return compiledScalar{}, compiledScalar{}, fieldKindInvalid, "",
+				unsupportedIfBranchTypes(sourceRange, trueValue, falseValue)
+		}
+		falseValue = normalized
+	}
+
+	switch {
+	case trueValue.kind == fieldKindString && falseValue.kind == fieldKindString:
+		return trueValue, falseValue, fieldKindString, "", nil
+	case trueValue.kind == fieldKindBool && falseValue.kind == fieldKindBool:
+		return trueValue, falseValue, fieldKindBool, "", nil
+	case trueValue.kind == fieldKindNumber &&
+		falseValue.kind == fieldKindNumber &&
+		trueValue.numberType != "" &&
+		trueValue.numberType == falseValue.numberType &&
+		supportedIfNumberType(trueValue.numberType):
+		return trueValue, falseValue, fieldKindNumber, trueValue.numberType, nil
+	default:
+		return compiledScalar{}, compiledScalar{}, fieldKindInvalid, "",
+			unsupportedIfBranchTypes(sourceRange, trueValue, falseValue)
+	}
+}
+
+func compiledScalarIsAlwaysNull(value compiledScalar) bool {
+	return value.alwaysNull ||
+		(value.literal != nil && value.literal.Kind == plan.ValueKindNull)
+}
+
+func typedNullIfBranchFor(value compiledScalar) (compiledScalar, bool) {
+	switch value.kind {
+	case fieldKindString, fieldKindBool:
+		return typedNullIfBranch(value.kind, ""), true
+	case fieldKindNumber:
+		if value.numberType == "" || !supportedIfNumberType(value.numberType) {
+			return compiledScalar{}, false
+		}
+		return typedNullIfBranch(value.kind, value.numberType), true
+	default:
+		return compiledScalar{}, false
+	}
+}
+
+func typedNullIfBranch(kind fieldKind, numberType string) compiledScalar {
+	typeSQL := "String"
+	switch kind {
+	case fieldKindBool:
+		typeSQL = "Bool"
+	case fieldKindNumber:
+		typeSQL = numberType
+	}
+	return compiledScalar{
+		valueSQL:   "CAST(NULL AS Nullable(" + typeSQL + "))",
+		existsSQL:  "1",
+		kind:       kind,
+		numberType: numberType,
+		alwaysNull: true,
+	}
+}
+
+func supportedIfNumberType(numberType string) bool {
+	switch numberType {
+	case "UInt8", "Int64", "UInt64", "Float64":
+		return true
+	default:
+		return false
+	}
+}
+
+func unsupportedIfBranchTypes(
+	sourceRange spl.Range,
+	trueValue, falseValue compiledScalar,
+) error {
+	return &plan.Diagnostic{
+		Code: "SPL_UNSUPPORTED_IF_BRANCH_TYPE",
+		Message: fmt.Sprintf(
+			"if branches have unsupported or unstable types %s and %s; use matching fixed String, Bool, or numeric branches",
+			describeIfBranchType(trueValue),
+			describeIfBranchType(falseValue),
+		),
+		Range: sourceRange,
+	}
+}
+
+func describeIfBranchType(value compiledScalar) string {
+	if compiledScalarIsAlwaysNull(value) {
+		return "Null"
+	}
+	switch value.kind {
+	case fieldKindDynamic:
+		return "Dynamic"
+	case fieldKindString:
+		return "String"
+	case fieldKindNumber:
+		if value.numberType != "" {
+			return value.numberType
+		}
+		return "Number"
+	case fieldKindBool:
+		return "Bool"
+	case fieldKindTime:
+		return "Time"
+	case fieldKindStringArray:
+		return "StringArray"
+	default:
+		return "Invalid"
 	}
 }
 
@@ -3502,7 +3830,7 @@ func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileSt
 	if len(expression.Arguments) != 3 {
 		return compiledScalar{}, errors.New("compile ClickHouse replace: expected three arguments")
 	}
-	if scalarExpressionContainsBooleanFunction(expression.Arguments[0]) {
+	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
 		return compiledScalar{}, errors.New("compile ClickHouse replace: cannot consume a Boolean null predicate")
 	}
 	input, err := compileScalarValue(expression.Arguments[0], state)
@@ -3540,7 +3868,7 @@ func compileToNumberScalar(expression *plan.ScalarCallExpression, state compileS
 	if len(expression.Arguments) != 1 {
 		return compiledScalar{}, errors.New("compile ClickHouse tonumber: expected one argument")
 	}
-	if scalarExpressionContainsBooleanFunction(expression.Arguments[0]) {
+	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
 		return compiledScalar{}, errors.New("compile ClickHouse tonumber: cannot consume a Boolean null predicate")
 	}
 	input, err := compileScalarValue(expression.Arguments[0], state)
@@ -3587,20 +3915,19 @@ func scalarStringLiteral(expression plan.ScalarExpression) (string, bool) {
 	return literal.Value.String, true
 }
 
-func scalarExpressionContainsBooleanFunction(expression plan.ScalarExpression) bool {
-	call, ok := expression.(*plan.ScalarCallExpression)
-	if !ok || call == nil {
+func scalarExpressionMayReturnBooleanFunction(expression plan.ScalarExpression) bool {
+	switch expression := expression.(type) {
+	case *plan.ScalarCallExpression:
+		return expression != nil &&
+			(expression.Function == plan.ScalarFunctionIsNull ||
+				expression.Function == plan.ScalarFunctionIsNotNull)
+	case *plan.ScalarIfExpression:
+		return expression != nil &&
+			(scalarExpressionMayReturnBooleanFunction(expression.True) ||
+				scalarExpressionMayReturnBooleanFunction(expression.False))
+	default:
 		return false
 	}
-	if call.Function == plan.ScalarFunctionIsNull || call.Function == plan.ScalarFunctionIsNotNull {
-		return true
-	}
-	for _, argument := range call.Arguments {
-		if scalarExpressionContainsBooleanFunction(argument) {
-			return true
-		}
-	}
-	return false
 }
 
 func extendCompileState(state compileState, output plan.FieldRef, value compiledScalar) compileState {
@@ -3642,6 +3969,7 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 		// selector. It follows its expression type and ordinary comparison rules.
 		caseSensitive:           false,
 		numberType:              value.numberType,
+		alwaysNull:              value.alwaysNull,
 		materializeForPredicate: value.materializeForPredicate,
 	}
 	if value.kind == fieldKindDynamic {
@@ -4321,9 +4649,10 @@ func compileRenameAssignment(assignment plan.RenameAssignment, state compileStat
 	}
 	if !sourceExists {
 		source = fieldState{
-			valueSQL:  "CAST(NULL AS Nullable(String))",
-			existsSQL: "0",
-			kind:      fieldKindString,
+			valueSQL:   "CAST(NULL AS Nullable(String))",
+			existsSQL:  "0",
+			kind:       fieldKindString,
+			alwaysNull: true,
 		}
 	}
 
@@ -4447,6 +4776,7 @@ func projectedRenameField(source fieldState, destination string) fieldState {
 		caseSensitive:           false,
 		numberType:              source.numberType,
 		numericSort:             source.numericSort,
+		alwaysNull:              source.alwaysNull,
 		materializeForPredicate: source.materializeForPredicate,
 	}
 	if source.kind == fieldKindDynamic {
@@ -5163,6 +5493,7 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		descendantArgs:          append([]any(nil), field.descendantArgs...),
 		kind:                    field.kind,
 		numberType:              field.numberType,
+		alwaysNull:              field.alwaysNull,
 		materializeForPredicate: field.materializeForPredicate,
 	}
 }
@@ -5356,9 +5687,10 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 			// that a prior transforming stage removed as nullable missing columns
 			// instead of silently changing the result shape.
 			compiled = fieldState{
-				valueSQL:  "CAST(NULL AS Nullable(String))",
-				existsSQL: "0",
-				kind:      fieldKindString,
+				valueSQL:   "CAST(NULL AS Nullable(String))",
+				existsSQL:  "0",
+				kind:       fieldKindString,
+				alwaysNull: true,
 			}
 		}
 		publicName := quoteIdentifier(name)
@@ -5380,6 +5712,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 			numberType:              compiled.numberType,
 			numericSort:             compiled.numericSort,
 			canonicalTime:           compiled.canonicalTime,
+			alwaysNull:              compiled.alwaysNull,
 			materializeForPredicate: compiled.materializeForPredicate,
 		}
 		next.publicOrder = append(next.publicOrder, name)
@@ -5475,9 +5808,10 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			// rather than resurrecting the private source document or surfacing an
 			// internal compiler error.
 			field = fieldState{
-				valueSQL:  "CAST(NULL AS Nullable(String))",
-				existsSQL: "0",
-				kind:      fieldKindString,
+				valueSQL:   "CAST(NULL AS Nullable(String))",
+				existsSQL:  "0",
+				kind:       fieldKindString,
+				alwaysNull: true,
 			}
 		}
 		if field.kind == fieldKindStringArray {
@@ -5532,7 +5866,7 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		next.visible[group.Name] = fieldState{
 			valueSQL: privateGroup, existsSQL: "1", kind: kind,
 			caseSensitive: field.caseSensitive, numberType: field.numberType,
-			numericSort: numericSort,
+			numericSort: numericSort, alwaysNull: field.alwaysNull,
 		}
 		next.publicOrder = append(next.publicOrder, group.Name)
 		next.order = append(next.order, compiledSortKey{valueSQL: privateGroup})

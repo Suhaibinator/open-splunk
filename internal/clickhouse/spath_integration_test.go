@@ -179,6 +179,10 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 | spath input=copied output=selected path=payload.text
 | table selected`,
 			`index=spath-edge event_id=s-binary
+| eval copied=if(isnull(absent), _raw, _raw)
+| spath input=copied output=selected path=payload.text
+| table selected`,
+			`index=spath-edge event_id=s-binary
 | rename _raw AS copied
 | spath input=copied output=selected path=payload.text
 | table selected`,

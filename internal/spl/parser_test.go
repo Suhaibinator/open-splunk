@@ -502,7 +502,7 @@ func TestParseEvalIfConsumesBooleanPredicateAndPreservesPrecedence(t *testing.T)
 	if !ok || root.Op != BoolOpOr {
 		t.Fatalf("if condition = %#v, want OR", conditional.Condition)
 	}
-	if _, ok := root.Left.(*WhereScalarPredicateExpr); !ok {
+	if _, leftOK := root.Left.(*WhereScalarPredicateExpr); !leftOK {
 		t.Fatalf("if condition left = %T, want null predicate", root.Left)
 	}
 	and, ok := root.Right.(*WhereBoolExpr)
