@@ -14,8 +14,8 @@ import (
 )
 
 func testStatsPercentilesAgainstClickHouse(
-	t *testing.T,
 	ctx context.Context,
+	t *testing.T,
 	store *Store,
 	connection clickhousedriver.Conn,
 	indexTime time.Time,
@@ -84,7 +84,7 @@ func testStatsPercentilesAgainstClickHouse(
 			)),
 		),
 	)
-	result, err := store.Store(ctx, ingest.StoreBatch{
+	result, storeErr := store.Store(ctx, ingest.StoreBatch{
 		TenantID:          "tenant",
 		CollectorID:       collectorID,
 		BatchID:           batchID,
@@ -93,15 +93,19 @@ func testStatsPercentilesAgainstClickHouse(
 		ReceivedAt:        indexTime,
 		Events:            events,
 	})
-	if err != nil {
-		t.Fatalf("store percentile fixtures: %v", err)
+	if storeErr != nil {
+		t.Fatalf("store percentile fixtures: %v", storeErr)
 	}
-	if result.Accepted != uint32(len(events)) || result.Duplicate != 0 {
+	const expectedStoredEvents = 103
+	if len(events) != expectedStoredEvents {
+		t.Fatalf("percentile fixture count = %d, want %d", len(events), expectedStoredEvents)
+	}
+	if result.Accepted != expectedStoredEvents || result.Duplicate != 0 {
 		t.Fatalf("store percentile fixtures result = %+v, want %d accepted", result, len(events))
 	}
-	visibilityCutoff, err := store.VisibilityCutoff(ctx)
-	if err != nil {
-		t.Fatalf("capture percentile visibility cutoff: %v", err)
+	visibilityCutoff, cutoffErr := store.VisibilityCutoff(ctx)
+	if cutoffErr != nil {
+		t.Fatalf("capture percentile visibility cutoff: %v", cutoffErr)
 	}
 	compile := func(source string) CompiledQuery {
 		return compileIntegrationSPL(t, source, indexTime.Add(10*time.Second), visibilityCutoff)
@@ -129,9 +133,9 @@ func testStatsPercentilesAgainstClickHouse(
 			`p1(metric) AS q1 p50(metric) AS q50 p90(metric) AS q90 ` +
 			`p95(metric) AS q95 p99(metric) AS q99 perc50(metric) AS q50_again`,
 	)
-	familyRows, err := connection.Query(ctx, family.SQL, family.Args...)
-	if err != nil {
-		t.Fatalf("execute percentile family: %v\nSQL: %s\nargs: %#v", err, family.SQL, family.Args)
+	familyRows, queryErr := connection.Query(ctx, family.SQL, family.Args...)
+	if queryErr != nil {
+		t.Fatalf("execute percentile family: %v\nSQL: %s\nargs: %#v", queryErr, family.SQL, family.Args)
 	}
 	if types := familyRows.ColumnTypes(); len(types) != 6 {
 		_ = familyRows.Close()
@@ -183,9 +187,9 @@ func testStatsPercentilesAgainstClickHouse(
 	assertOnePhysicalState("scalar percentile family", scalarFamily)
 
 	grouped := compile(base + ` | stats p75(metric) AS q75 BY percentile_group | sort percentile_group`)
-	groupedRows, err := connection.Query(ctx, grouped.SQL, grouped.Args...)
-	if err != nil {
-		t.Fatalf("execute grouped percentiles: %v\nSQL: %s\nargs: %#v", err, grouped.SQL, grouped.Args)
+	groupedRows, queryErr := connection.Query(ctx, grouped.SQL, grouped.Args...)
+	if queryErr != nil {
+		t.Fatalf("execute grouped percentiles: %v\nSQL: %s\nargs: %#v", queryErr, grouped.SQL, grouped.Args)
 	}
 	got := make(map[string]*float64, 4)
 	for groupedRows.Next() {
