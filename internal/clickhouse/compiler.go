@@ -17,6 +17,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
+	"github.com/Suhaibinator/open-splunk/internal/splwildcard"
 )
 
 const (
@@ -101,10 +102,18 @@ const (
 	// predicate lowering. Each value is referenced once and each normalized
 	// pattern remains a bound argument, so nested composition grows linearly.
 	maxCompiledMatchScalarSQLBytes = 64 << 10
+	// maxCompiledLikeScalarSQLBytes independently bounds wildcard-predicate
+	// lowering. Each value is referenced once and each normalized pattern
+	// remains a bound argument, so nested composition grows linearly.
+	maxCompiledLikeScalarSQLBytes = 64 << 10
 	// MaximumMatchInputBytes bounds regex work against calculated strings. A
 	// stored event is capped at 1 MiB; the wider allowance admits one worst-
 	// case UTF-8 case conversion while rejecting large replace amplification.
 	MaximumMatchInputBytes uint64 = 4 << 20
+	// MaximumLikeInputBytes bounds wildcard work against calculated strings.
+	// LIKE has the same durable-input and UTF-8 case-expansion envelope as
+	// match, while retaining an independent compatibility limit.
+	MaximumLikeInputBytes uint64 = 4 << 20
 	// MaximumStoredScalarBytes mirrors the hard ingestion ceiling for one
 	// complete event and therefore bounds every durable scalar source.
 	MaximumStoredScalarBytes = 1 << 20
@@ -342,6 +351,9 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	}
 	state.matchBudget = &compiledMatchBudget{
 		patterns: make(map[*plan.ScalarCallExpression]splregex.MatchPattern),
+	}
+	state.likeBudget = &compiledLikeBudget{
+		patterns: make(map[*plan.ScalarCallExpression]splwildcard.LikePattern),
 	}
 	relation := newScanRelation(fragment, scan.Range)
 
@@ -936,6 +948,32 @@ func compileMatchPatternForBackend(
 		"compile ClickHouse match: regular expression is outside the supported RE2 subset: %w",
 		err,
 	)
+}
+
+func compileLikePatternForBackend(
+	pattern string,
+	sourceRange spl.Range,
+) (splwildcard.LikePattern, error) {
+	compiled, err := splwildcard.CompileLikePattern(pattern)
+	if err == nil {
+		return compiled, nil
+	}
+	if splwildcard.IsLikeComplexityError(err) {
+		return splwildcard.LikePattern{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"like pattern exceeds the %d-byte or %d-work-unit limit",
+				splwildcard.MaximumLikePatternBytes,
+				splwildcard.MaximumLikePatternWorkUnits,
+			),
+			Range: sourceRange,
+		}
+	}
+	return splwildcard.LikePattern{}, &plan.Diagnostic{
+		Code:    "SPL_UNSUPPORTED_LIKE_PATTERN",
+		Message: "like pattern must be valid UTF-8 without NUL bytes",
+		Range:   sourceRange,
+	}
 }
 
 func isNilPlanOperator(operator plan.Operator) bool {
@@ -3058,6 +3096,7 @@ func compileChart(
 type compileState struct {
 	visible                          map[string]fieldState
 	matchBudget                      *compiledMatchBudget
+	likeBudget                       *compiledLikeBudget
 	publicOrder                      []string
 	privateColumns                   []string
 	rexCapturedBytesSQL              string
@@ -3084,6 +3123,11 @@ type compileState struct {
 type compiledMatchBudget struct {
 	patterns         map[*plan.ScalarCallExpression]splregex.MatchPattern
 	programWorkUnits int
+}
+
+type compiledLikeBudget struct {
+	patterns  map[*plan.ScalarCallExpression]splwildcard.LikePattern
+	workUnits int
 }
 
 type compiledChronologicalMeasure struct {
@@ -3805,6 +3849,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileMVCountScalar(expression, state)
 		case plan.ScalarFunctionMatch:
 			return compileMatchScalar(expression, state)
+		case plan.ScalarFunctionLike:
+			return compileLikeScalar(expression, state)
 		case plan.ScalarFunctionIsNull, plan.ScalarFunctionIsNotNull:
 			return compileNullTestScalar(expression, state)
 		case plan.ScalarFunctionCoalesce:
@@ -4705,6 +4751,23 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 					"compile ClickHouse predicate: match regular expression must be a string literal",
 				)
 			}
+		case plan.ScalarFunctionLike:
+			if len(expression.Arguments) != 2 {
+				return errors.New(
+					"compile ClickHouse predicate: like requires exactly two arguments",
+				)
+			}
+			if nilScalarExpression(expression.Arguments[1]) {
+				return errors.New(
+					"compile ClickHouse predicate: like has a missing pattern",
+				)
+			}
+			_, ok := scalarStringLiteral(expression.Arguments[1])
+			if !ok {
+				return errors.New(
+					"compile ClickHouse predicate: like pattern must be a string literal",
+				)
+			}
 		case plan.ScalarFunctionRound:
 			if len(expression.Arguments) < 1 || len(expression.Arguments) > 2 {
 				return errors.New(
@@ -5209,6 +5272,97 @@ func compileMatchScalar(
 			Message: fmt.Sprintf(
 				"match scalar SQL exceeds %d bytes",
 				maxCompiledMatchScalarSQLBytes,
+			),
+			Range: expression.Range,
+		}
+	}
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               append(inputArgs, compiledPattern.Pattern),
+		maxStringBytes:          5,
+		existsSQL:               "1",
+		kind:                    fieldKindBool,
+		materializeForPredicate: input.materializeForPredicate,
+	}, nil
+}
+
+func compileLikeScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+) (compiledScalar, error) {
+	if len(expression.Arguments) != 2 {
+		return compiledScalar{}, errors.New("compile ClickHouse like: expected two arguments")
+	}
+	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
+		return compiledScalar{}, booleanScalarConsumerError("like")
+	}
+	input, err := compileScalarValue(expression.Arguments[0], state)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	if input.kind == fieldKindStringArray {
+		return compiledScalar{}, unsupportedMultivalueUsage("like", expression.Range)
+	}
+	pattern, ok := scalarStringLiteral(expression.Arguments[1])
+	if !ok {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse like: pattern must be a string literal",
+		)
+	}
+	compiledPattern := splwildcard.LikePattern{}
+	if state.likeBudget != nil {
+		compiledPattern = state.likeBudget.patterns[expression]
+	}
+	if compiledPattern.WorkUnits == 0 {
+		compiledPattern, err = compileLikePatternForBackend(pattern, expression.Range)
+		if err != nil {
+			return compiledScalar{}, err
+		}
+		if state.likeBudget != nil {
+			state.likeBudget.patterns[expression] = compiledPattern
+		}
+	}
+	if state.likeBudget != nil {
+		if compiledPattern.WorkUnits >
+			splwildcard.MaximumLikeQueryPatternWorkUnits-state.likeBudget.workUnits {
+			return compiledScalar{}, &plan.Diagnostic{
+				Code: "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf(
+					"search like patterns require more than %d work units",
+					splwildcard.MaximumLikeQueryPatternWorkUnits,
+				),
+				Range: expression.Range,
+			}
+		}
+		state.likeBudget.workUnits += compiledPattern.WorkUnits
+	}
+	if input.alwaysNull || input.kind == fieldKindInvalid {
+		return compiledScalar{
+			valueSQL:       "CAST(NULL AS Nullable(Bool))",
+			maxStringBytes: 1,
+			existsSQL:      "1",
+			kind:           fieldKindBool,
+			alwaysNull:     true,
+		}, nil
+	}
+	if maximumInputBytes := compiledScalarStringByteBound(input); maximumInputBytes > MaximumLikeInputBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"like input may exceed %d bytes after scalar evaluation",
+				MaximumLikeInputBytes,
+			),
+			Range: expression.Range,
+		}
+	}
+	inputSQL, inputArgs := compiledTextEligibleStringScalar(input)
+	valueSQL := "CAST(like(" + inputSQL + ", ?) AS Nullable(Bool))"
+	if len(valueSQL) > maxCompiledLikeScalarSQLBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"like scalar SQL exceeds %d bytes",
+				maxCompiledLikeScalarSQLBytes,
 			),
 			Range: expression.Range,
 		}
@@ -8305,6 +8459,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 	next := compileState{
 		visible:             make(map[string]fieldState),
 		matchBudget:         state.matchBudget,
+		likeBudget:          state.likeBudget,
 		privateColumns:      append([]string(nil), state.privateColumns...),
 		rexCapturedBytesSQL: state.rexCapturedBytesSQL,
 		allowDynamic:        operator.Mode == plan.ProjectModeExclude && state.allowDynamic,
@@ -8546,6 +8701,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 	next = compileState{
 		visible:               make(map[string]fieldState, len(operator.GroupBy)+len(operator.Measures)),
 		matchBudget:           state.matchBudget,
+		likeBudget:            state.likeBudget,
 		allowDynamic:          false,
 		eventRows:             false,
 		blocked:               make(map[string]struct{}),
