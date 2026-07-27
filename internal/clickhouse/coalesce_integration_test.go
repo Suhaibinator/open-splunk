@@ -9,6 +9,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 )
 
 func testCoalesceAgainstClickHouse(
@@ -191,6 +192,28 @@ func testCoalesceAgainstClickHouse(
 	)
 	if floating != 1.5 {
 		t.Fatalf("coalesce Float64 = %g, want 1.5", floating)
+	}
+	var wideUnsigned uint64
+	scalar(
+		`eval selected=coalesce(null, 18446744073709551615) | table selected`,
+		&wideUnsigned,
+	)
+	if wideUnsigned != uint64(18446744073709551615) {
+		t.Fatalf(
+			"coalesce UInt64 = %d, want %d",
+			wideUnsigned,
+			uint64(18446744073709551615),
+		)
+	}
+	var severity uint8
+	scalar(`eval selected=coalesce(severity, severity) | table selected`, &severity)
+	if want := uint8(opensplunkv1.LogSeverity_LOG_SEVERITY_INFO); severity != want {
+		t.Fatalf("coalesce UInt8 = %d, want %d", severity, want)
+	}
+	var allNull *string
+	scalar(`eval selected=coalesce(null, null) | table selected`, &allNull)
+	if allNull != nil {
+		t.Fatalf("all-null coalesce = %q, want null", *allNull)
 	}
 	var sequential string
 	scalar(

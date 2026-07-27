@@ -38,6 +38,24 @@ func TestCompileEvalCoalesceFixedScalarsPreserveBindOrder(t *testing.T) {
 	if strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
 		t.Fatalf("ordinary coalesce introduced row expansion:\n%s", compiled.SQL)
 	}
+
+	nullExpression := compileSPL(
+		t,
+		`index=gradethis | eval selected=coalesce(if(source="match", null, null), "fallback") | table selected`,
+	)
+	wantNullExpressionPrefix := []any{"match", "fallback"}
+	if len(nullExpression.Args) < len(wantNullExpressionPrefix) ||
+		!slices.Equal(
+			nullExpression.Args[:len(wantNullExpressionPrefix)],
+			wantNullExpressionPrefix,
+		) {
+		t.Fatalf(
+			"statically-null coalesce argument prefix = %#v, want %#v\nSQL: %s",
+			nullExpression.Args,
+			wantNullExpressionPrefix,
+			nullExpression.SQL,
+		)
+	}
 }
 
 func TestCompileEvalCoalesceSupportsTypedNullsAndBooleanConsumers(t *testing.T) {
@@ -218,6 +236,64 @@ func TestCompileEvalCoalesceRetainsCalculatedFieldMaterialization(t *testing.T) 
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+}
+
+func TestCompileEvalCoalesceBoundsVariadicSQLGrowth(t *testing.T) {
+	t.Parallel()
+
+	nested := "1"
+	for range 1 {
+		nested = "if(" + nested + "=dynamic_probe, 1, 1)"
+	}
+	seed := buildPlan(t, "index=gradethis | eval seed="+nested)
+	seedExtend := seed.Operators[len(seed.Operators)-1].(*plan.Extend)
+	largeArgument := seedExtend.Assignments[0].Expression
+
+	arguments := make([]plan.ScalarExpression, spl.MaximumCoalesceArguments)
+	for index := range arguments {
+		arguments[index] = largeArgument
+	}
+	base := buildPlan(t, `index=gradethis`)
+	candidate := *base
+	candidate.Operators = append(
+		append([]plan.Operator(nil), base.Operators...),
+		&plan.Extend{Assignments: []plan.ExtendAssignment{{
+			Output: plan.FieldRef{Name: "value"},
+			Expression: &plan.ScalarCallExpression{
+				Function:  plan.ScalarFunctionCoalesce,
+				Arguments: arguments,
+			},
+		}}},
+	)
+	_, err := (Compiler{}).Compile(&candidate)
+	var diagnostic *plan.Diagnostic
+	if !errors.As(err, &diagnostic) ||
+		diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" ||
+		!strings.Contains(diagnostic.Message, "coalesce scalar SQL") {
+		t.Fatalf("Compile variadic coalesce growth error = %#v, want coalesce SQL budget", err)
+	}
+
+	small := *base
+	small.Operators = append(
+		append([]plan.Operator(nil), base.Operators...),
+		&plan.Extend{Assignments: []plan.ExtendAssignment{{
+			Output: plan.FieldRef{Name: "value"},
+			Expression: &plan.ScalarCallExpression{
+				Function: plan.ScalarFunctionCoalesce,
+				Arguments: []plan.ScalarExpression{
+					largeArgument,
+					largeArgument,
+				},
+			},
+		}}},
+	)
+	compiled, err := (Compiler{}).Compile(&small)
+	if err != nil {
+		t.Fatalf("Compile bounded coalesce: %v", err)
+	}
+	if len(compiled.SQL) > maxCompiledQueryBytes {
+		t.Fatalf("bounded coalesce compiled to %d bytes", len(compiled.SQL))
 	}
 }
 

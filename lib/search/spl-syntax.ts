@@ -18,7 +18,7 @@ export const SPL_PIPELINE_COMMANDS = [
   {
     name: "eval",
     insertion: 'eval availability=if(isnull(status), "missing", "present")',
-    detail: "Create or replace fields; if(predicate, true_value, false_value) selects true_value only for true, while false or null selects false_value.",
+    detail: "Create or replace fields; if(predicate, true_value, false_value) selects by a Boolean predicate, and coalesce(value, fallback, ...) selects the first non-null fixed value.",
   },
   {
     name: "rename",

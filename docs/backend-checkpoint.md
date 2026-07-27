@@ -7,7 +7,118 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: typed SPL `stats count(eval(...))`
+## Latest checkpoint: typed SPL `coalesce`
+
+Date: 2026-07-27
+
+Parser and logical-plan checkpoint (committed and pushed):
+`a9e0ffe618593230695c9f9150af082ec6867275`
+
+ClickHouse compiler and pinned execution checkpoint (committed and pushed):
+`a26106da5ff5bb4c61cabed19c261c8ac138eb94`
+
+This test-first slice implements the bounded conditional value selector
+`coalesce(value, ...)`:
+
+1. The parser accepts case-insensitive `coalesce` with one through 32 scalar
+   arguments, preserves source ranges and argument order, and shares the
+   existing 32-level scalar and query-wide predicate budgets. The planner
+   carries the ordered call through the typed scalar IR and independently
+   rejects zero/over-limit arity, invalid enums, typed-nil arguments, cycles,
+   excessive depth, and oversized shared DAGs.
+2. Selection is left to right and stops at the first non-null value. Explicit
+   null, failed nullable conversion, and statically missing fixed-schema values
+   are skipped. Empty String, numeric zero, and Boolean false are retained.
+   One argument is an identity; all-null input publishes a present nullable
+   String null.
+3. Version 0.1 admits stable fixed `String`, `Bool`, `UInt8`, `Int64`,
+   `UInt64`, and `Float64` values. Every non-null argument must have the same
+   exact type, including numeric width/sign. Statically null arguments adopt
+   that type without erasing bindings from a live null-producing expression.
+4. Dynamic values, fixed multivalues, canonical time, mixed kinds, differing
+   numeric types, and incompatible String provenance fail with the
+   source-located `SPL_UNSUPPORTED_COALESCE_VALUE_TYPE` diagnostic. This
+   prevents accidental ClickHouse `Variant` inference, numeric widening,
+   binary `_raw` parsing, or incomplete flattened-object reconstruction.
+5. Boolean recognition is consumer-aware. A coalesce whose non-null arguments
+   are syntactically Boolean can be consumed by `where`, an `if` condition, or
+   `count(eval(...))`. Plain Bool literals remain assignable, while
+   `isnull`/`isnotnull` results cannot escape through coalesce into direct
+   `eval`, `tonumber`, or `replace` consumption.
+6. The compiler emits one parameterized scalar `coalesce(...)`, preserves
+   source occurrence order for bindings, carries calculated-field
+   materialization and matching text provenance, and performs no ordinary
+   `ARRAY JOIN` or event-row expansion.
+7. Each call has an incremental 64 KiB generated-SQL ceiling in addition to
+   the 256 KiB whole-query ceiling. The regression corpus distinguishes this
+   variadic bound from the existing per-`if` bound and proves a bounded form
+   remains under the whole-query ceiling.
+8. Compiler trust-boundary validation now runs before filter materialization
+   discovery as well as before eval compilation. Forged cyclic scalar graphs
+   therefore fail before any recursive field walk, Boolean classification, or
+   SQL expansion.
+9. Unit coverage pins ordered binds, fixed and nullable types, Boolean
+   consumers, all-null and projected-away values, raw-text provenance,
+   calculated-field materialization, incompatible types, zero/over-limit
+   arity, typed nils, cycles, and variadic SQL growth.
+10. Pinned ClickHouse `26.3.17.4` coverage runs with common-Variant inference
+    disabled and executes missing/null selection, empty String, zero, false,
+    `Int64`, `UInt8`, `UInt64`, `Float64`, all-null, one-argument identity,
+    sequential assignments, projected values, Boolean filtering,
+    calculated-field materialization, and `EXPLAIN actions=1` proof of no row
+    expansion.
+11. The compatibility contract cites Splunk's official conditional-function
+    reference and documents exact syntax, null/type/provenance behavior,
+    Boolean boundaries, unsupported Dynamic/container inputs, and resource
+    limits. Editor completion and highlighting advertise coalesce only in
+    function position, leaving a field named `coalesce` ordinary.
+12. Adversarial correctness/performance review drove the pre-materialization
+    cycle guard, preservation of bindings inside typed all-null expressions,
+    the independent variadic SQL-growth regression, and pinned nullable and
+    integer-width execution probes.
+
+Validation completed on the current implementation:
+
+```sh
+go test ./internal/spl ./internal/plan ./internal/clickhouse -count=1
+go test ./... -count=1
+go vet ./...
+golangci-lint run --timeout=5m \
+  --new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m -v
+git diff --check
+```
+
+All gates pass. The frontend corpus contains 114 application tests and 47
+release/build tests. The final pinned Store/compiler run passed in 45.83
+seconds.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `a26106d` plus the
+   compatibility/editor/checkpoint commit that follows it. Preserve any
+   unexpected local changes.
+2. The next bounded eval slice should be selected from `case`,
+   `lower`/`upper`/`len`/`substr`, or `round`/`ceil`/`floor` only after writing
+   its executable type, null, Dynamic, multivalue, precision, Unicode, and
+   resource contract. `case` can reuse the fixed conditional type library but
+   must separately pin missing default, first-true selection, alternating
+   arity, and Boolean consumer behavior.
+3. Keep Dynamic/container coalesce as an explicit future typed-union slice.
+   It requires either bounded object reconstruction or durable selected-parent
+   metadata; do not silently treat a flattened object parent as null.
+4. Keep `tostring`, heterogeneous `if`, wildcard count, broader conditional
+   count names, and `eventstats` as separate reviewed contracts.
+5. The broader backend/product backlog and safe-resume procedure remain at the
+   end of this document.
+
+## Previous checkpoint: typed SPL `stats count(eval(...))`
 
 Date: 2026-07-27
 

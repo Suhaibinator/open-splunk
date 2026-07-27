@@ -18,20 +18,20 @@ func TestParseEvalCoalescePreservesArgumentsCasingAndRange(t *testing.T) {
 	if len(command.Assignments) != 2 {
 		t.Fatalf("assignments = %#v", command.Assignments)
 	}
-	selected, ok := command.Assignments[0].Expression.(*ScalarCallExpr)
-	if !ok || selected.Function != ScalarFunctionCoalesce ||
+	selected, selectedOK := command.Assignments[0].Expression.(*ScalarCallExpr)
+	if !selectedOK || selected.Function != ScalarFunctionCoalesce ||
 		len(selected.Arguments) != 3 {
 		t.Fatalf("selected expression = %#v, want three-argument coalesce", command.Assignments[0].Expression)
 	}
-	if literal, ok := selected.Arguments[0].(*ScalarLiteralExpr); !ok ||
+	if literal, literalOK := selected.Arguments[0].(*ScalarLiteralExpr); !literalOK ||
 		literal.Value.Kind != LiteralKindNull {
 		t.Fatalf("first argument = %#v, want null literal", selected.Arguments[0])
 	}
-	if field, ok := selected.Arguments[1].(*ScalarFieldExpr); !ok ||
+	if field, fieldOK := selected.Arguments[1].(*ScalarFieldExpr); !fieldOK ||
 		field.Field != "source" {
 		t.Fatalf("second argument = %#v, want source field", selected.Arguments[1])
 	}
-	if literal, ok := selected.Arguments[2].(*ScalarLiteralExpr); !ok ||
+	if literal, literalOK := selected.Arguments[2].(*ScalarLiteralExpr); !literalOK ||
 		literal.Value.Kind != LiteralKindString ||
 		literal.Value.Text != "fallback" {
 		t.Fatalf("third argument = %#v, want fallback literal", selected.Arguments[2])

@@ -33,6 +33,9 @@ Every compiled `if` scalar node has a separate 64 KiB generated-SQL ceiling,
 checked incrementally at each nested conditional before its fragments are
 concatenated. This bounds repeated Dynamic-comparison expansion before the
 whole-query ceiling is reached.
+Every `coalesce` call accepts at most 32 values and has the same separate
+64 KiB generated-SQL ceiling, checked incrementally while its variadic
+arguments are compiled.
 Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
@@ -109,7 +112,8 @@ slice supports Boolean combinations of scalar comparisons and direct
 `isnull(value)` / `isnotnull(value)` predicates. Each informational function
 accepts exactly one scalar expression, and can also be compared explicitly
 with a Boolean literal. Scalar operands may be fields, typed literals, or the
-supported `tonumber`, `replace`, and bounded `if` calls described below;
+supported `tonumber`, `replace`, bounded `if`, and bounded `coalesce` calls
+described below;
 arithmetic, field quoting, `XOR`, and other eval functions are not yet
 accepted. Missing, null, container, or failed numeric operands do not pass
 ordinary comparisons.
@@ -139,6 +143,7 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval duration_ms=tonumber(replace(duration, "ms$", ""))
 | eval label=if(isnull(optional), "missing", "present")
 | eval score=if(status>=500, 1, 0)
+| eval selected=coalesce(null, source, "unknown")
 ```
 
 Assignments are evaluated from left to right, and later assignments may use an
@@ -153,7 +158,9 @@ narrow:
   non-string dynamic, multivalue, object, `NaN`, and infinite inputs become
   null;
 - `if(predicate, true_value, false_value)` selects exactly one fixed scalar
-  result. It requires exactly three arguments.
+  result. It requires exactly three arguments;
+- `coalesce(value, ...)` selects the first non-null supported fixed value from
+  one through 32 arguments.
 
 The `if` predicate uses exactly the `where` grammar described above:
 case-sensitive scalar comparisons, direct `isnull` / `isnotnull` predicates,
@@ -224,6 +231,48 @@ while its public documentation does not fully pin mixed-return coercion,
 container behavior, or all evaluation-order edges. Open Splunk rejects those
 cases instead of inheriting ClickHouse common-supertype or `Variant` behavior;
 they require a live Splunk differential oracle before expansion.
+
+`coalesce` examines its arguments from left to right and returns the first
+supported fixed value that is not null. One argument is an identity operation.
+An explicit null, a failed nullable conversion, or a statically missing
+fixed-schema value is skipped. Empty String, numeric zero, and Boolean false
+are values and stop selection. When every argument is null, the result is a
+present nullable `String` null; as with every `eval` assignment, the
+destination exists even when its value is null.
+
+The supported non-null result types are the same stable fixed scalars as the
+current `if` tier: `String`, `Bool`, `UInt8`, `Int64`, `UInt64`, and `Float64`.
+Every non-null argument must have the same exact type, including the numeric
+type. Statically null arguments adopt that type. Non-null String arguments
+must also carry identical text-eligibility provenance, so
+`coalesce(_raw, _raw)` and `coalesce(null, _raw)` are supported while
+`coalesce(_raw, "fallback")` is rejected.
+
+Dynamic event values, fixed multivalue arrays, canonical time values, mixed
+result kinds, and different numeric types fail with
+`SPL_UNSUPPORTED_COALESCE_VALUE_TYPE`. In particular, the compiler does not
+ask ClickHouse to infer a common `Variant`, widen a numeric type, or
+reconstruct a flattened object parent. This means the common Splunk form
+`coalesce(field_a, field_b)` requires those inputs to have a fixed pipeline
+type in compatibility version 0.1; arbitrary open-event Dynamic inputs are a
+future typed-union slice.
+
+A coalesce whose non-null arguments are syntactically known Boolean values may
+be consumed directly by `where`, an `if` condition, or
+`count(eval(...))`. Plain Boolean literals may still be assigned. A Boolean
+`isnull`/`isnotnull` result does not become assignable or consumable by
+`tonumber`/`replace` merely because it passes through coalesce, preserving the
+search-mode Boolean boundary described above.
+
+The compiler emits one scalar ClickHouse `coalesce(...)`, after normalizing
+every statically null argument to the selected fixed type. Bindings remain in
+source occurrence order, no argument text is interpolated into SQL, and the
+operation neither expands multivalue members nor multiplies rows. The
+left-to-right result rule does not promise lazy evaluation of future
+side-effecting or throwing function arguments; the supported scalar surface is
+pure, and ClickHouse may analyze or constant-fold expressions independently.
+The per-call 64 KiB SQL ceiling is enforced before the final expression is
+concatenated.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
@@ -1463,7 +1512,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`earliest` and `latest` time functions](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/statistical-and-charting-functions/time-functions),
 [`first` and `last` event-order functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/statistical-and-charting-functions/event-order-functions),
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
-[`if` and conditional functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
+[`if`, `coalesce`, and conditional functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
 [`predicate expressions`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.2/expressions-and-predicates/predicate-expressions),
 [`isnull` and `isnotnull` informational functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/informational-functions),
 [`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),

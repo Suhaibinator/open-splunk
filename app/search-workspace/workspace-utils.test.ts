@@ -54,12 +54,25 @@ test("if highlights only when used as a parenthesized function", () => {
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
-test("eval completion advertises the exact if signature and null predicate behavior", () => {
+test("coalesce highlights only when used as a parenthesized function", () => {
+  const query = `index=main coalesce=1 | eval selected=COALESCE(null, source, "fallback") | table coalesce`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["coalesce"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
+test("eval completion advertises the exact if and coalesce signatures", () => {
   const evalCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eval");
   assert.ok(evalCompletion);
   assert.equal(evalCompletion.insertion, 'eval availability=if(isnull(status), "missing", "present")');
   assert.match(evalCompletion.detail, /if\(predicate, true_value, false_value\)/);
-  assert.match(evalCompletion.detail, /false or null/i);
+  assert.match(evalCompletion.detail, /coalesce\(value, fallback, \.\.\.\)/);
+  assert.match(evalCompletion.detail, /first non-null fixed value/i);
 });
 
 test("stats completion advertises true-only conditional count with an explicit alias", () => {

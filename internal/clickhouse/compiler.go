@@ -306,8 +306,8 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 		alias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 		switch operator := operator.(type) {
 		case *plan.Filter:
-			if err := validateCompiledPredicateComplexity(operator.Expression); err != nil {
-				return CompiledQuery{}, err
+			if complexityErr := validateCompiledPredicateComplexity(operator.Expression); complexityErr != nil {
+				return CompiledQuery{}, complexityErr
 			}
 			materializedFields := predicateMaterializationFields(operator.Expression, state)
 			predicateState := state
@@ -360,8 +360,8 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				}
 			}
 			for index, assignment := range operator.Assignments {
-				if err := validateCompiledScalarComplexity(assignment.Expression); err != nil {
-					return CompiledQuery{}, err
+				if complexityErr := validateCompiledScalarComplexity(assignment.Expression); complexityErr != nil {
+					return CompiledQuery{}, complexityErr
 				}
 				if scalarExpressionMayReturnBooleanFunction(assignment.Expression) {
 					return CompiledQuery{}, errors.New(
@@ -3794,14 +3794,37 @@ func normalizeCoalesceValues(
 		if !compiledScalarIsAlwaysNull(value) {
 			continue
 		}
+		if coalesceFixedTypesMatch(value, target) {
+			// Keep a typed null-producing expression intact. Its result cannot
+			// win selection, but preserving it retains source-order bindings
+			// and avoids inventing an evaluation-elision contract.
+			continue
+		}
 		typed, ok := typedNullIfBranchFor(target)
 		if !ok {
 			return nil, fieldKindInvalid, "",
 				unsupportedCoalesceValueTypes(sourceRange, target, value)
 		}
+		if len(value.valueArgs) > 0 {
+			typed.valueSQL = "CAST(" + value.valueSQL + " AS Nullable(" +
+				coalesceFixedTypeSQL(target) + "))"
+			typed.valueArgs = append([]any(nil), value.valueArgs...)
+			typed.materializeForPredicate = value.materializeForPredicate
+		}
 		normalized[index] = typed
 	}
 	return normalized, target.kind, target.numberType, nil
+}
+
+func coalesceFixedTypeSQL(value compiledScalar) string {
+	switch value.kind {
+	case fieldKindBool:
+		return "Bool"
+	case fieldKindNumber:
+		return value.numberType
+	default:
+		return "String"
+	}
 }
 
 func supportedCoalesceFixedType(value compiledScalar) bool {
