@@ -7,7 +7,88 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: cumulative Go lint ratchet and boundary hardening
+## Latest checkpoint: bounded chronological `stats earliest/latest`
+
+Date: 2026-07-27
+
+Planning commit:
+`932f4036e2967d5304a95b27b7109e15ffcbf601`
+
+Initial compiler implementation:
+`ac721fb1d84f746d8783b02a8e1b5ac13fef14f3`
+
+Pinned semantic corpus:
+`e6acd1d01ef5ff13608f6cd551e0d3d817debfaf`
+
+Atomic execution hardening:
+`9714c795ab93c334120e7391057f72297748164c`
+
+Bounded multivalue, terminal-output, and bind-order hardening:
+`f9985a1184b43a78a5ae5ef8761c9ff649ec1836`
+
+This checkpoint completes the first chronological aggregate slice:
+
+1. SPL parsing and planning accept case-insensitive `earliest(field)` and
+   `latest(field)` with one exact unquoted field, canonical default aliases,
+   explicit `AS`, and source-located diagnostics. `first`, `last`,
+   `earliest_time`, `latest_time`, quoted/wildcard/expression inputs, and
+   malformed arities remain unsupported.
+2. Chronology uses the original event `_time`, then event ID, immutable
+   visibility sequence, private
+   `(index, collector, batch sequence, batch ID)` source identity, and
+   multivalue member ordinal. Filters, `head`, `tail`, and `dedup` determine
+   the survivor set; a pipeline `sort` does not replace event chronology.
+   Planning and compiler defense-in-depth both require an unmodified visible
+   canonical `_time`.
+3. Missing fields, explicit nulls, empty multivalues, and null multivalue
+   members contribute nothing; an empty String is eligible. `earliest`
+   selects the first eligible member of its winning event and `latest` the
+   last. Global empty input emits one null row, retained all-null groups emit
+   null, and grouped empty input emits no rows.
+4. Supported scalar values retain the shared canonical string/bytes
+   representation in nullable `Dynamic` output. Nested arrays, objects,
+   generic containers, flattened object parents, and unsupported immediate
+   multivalue members fail the complete scoped aggregate atomically even when
+   they are not the winner or a downstream command hides every result row.
+5. Dynamic multivalues are reduced per event to a constant-size tuple: first
+   eligible value, last eligible value, eligible-member count, and one invalid
+   bit. Bounded `arrayFirst`, `arrayLast`, `arrayCount`, and `arrayExists`
+   passes avoid a normalized member copy, per-member row keys, row expansion,
+   `groupArray`, windows, or Array aggregate combinators. The scalar
+   `argMinOrNullIf`/`argMaxOrNullIf` states remain constant-size.
+6. Repeated aliases share candidate normalization and one winner state per
+   input/direction. A 2,000,000-member pinned regression consumes all four
+   candidate components under an exact 1 GiB ClickHouse query-memory limit.
+   Sixteen distinct Dynamic inputs compile below the 256 KiB SQL ceiling.
+7. Runtime validation inputs and the completed downstream result are
+   materialized once. A validation envelope joins the whole-result check
+   before publishing ordinary, `chart`, or defensive `timechart` output and
+   retains a zero-row validation branch, preventing ClickHouse from optimizing
+   poison away behind a false filter or empty terminal result.
+8. Every detached validation barrier owns exactly its SQL bind arguments.
+   Final arguments are rebuilt in emitted CTE-definition order before the
+   downstream relation's arguments. Runtime `eval` binding and a synthetic
+   two-barrier unit regression pin this invariant.
+9. Parser, planner, compiler, transport, and pinned ClickHouse tests cover
+   chronology versus value/sort order, every tie-breaker at one and four
+   threads, multivalue/null/empty behavior, all supported scalar types,
+   invalid UTF-8 bytes, scope and incomplete-`BY` poison, downstream
+   projection/filtering, terminal `chart`, nested list/object poison, shared
+   states, global/grouped empties, and high-cardinality memory behavior.
+10. Independent correctness, performance, and code-quality reviews found and
+    drove fixes for optimizer-pruned validation, terminal `chart` bypass,
+    unbounded `arrayFold` memory, materialized-CTE bind ordering, and missing
+    live nested-member coverage. Their final current-tree verdicts report no
+    remaining P1/P2 blocker.
+
+The exact local validation record is under **Latest validation evidence**.
+The next bounded SPL work is broader `count` syntax or remaining percentile
+forms, followed by `eventstats` only after the aggregate library is stable.
+The optional direction-aware Dynamic selector optimization and the existing
+inherited lint inventory remain nonblocking cleanup. The overall backend goal
+remains active.
+
+## Previous checkpoint: cumulative Go lint ratchet and boundary hardening
 
 Date: 2026-07-27
 
@@ -62,8 +143,8 @@ The workflow triggered by `4e00428`, GitHub Actions run `30255910487`,
 completed successfully. It passed the cumulative lint ratchet, full
 race-enabled Go suite, frontend, protobuf, backend vertical, pinned GradeThis
 ClickHouse corpus, vulnerability scan, Linux and macOS production builds, and
-the cross-platform embedded-asset comparison. The next SPL TDD slice is
-`earliest(field)` / `latest(field)` unless priority changes.
+the cross-platform embedded-asset comparison. The chronological aggregate
+slice described in the latest checkpoint above now follows this work.
 
 The exact validation record is under **Latest validation evidence**. The
 overall backend goal remains active.
@@ -136,9 +217,9 @@ repairs the two actionable failures from the preceding remote CI run:
 The remote workflow for `327a162` subsequently passed frontend, protobuf,
 backend vertical, the pinned GradeThis ClickHouse corpus, full race-enabled Go
 tests, and vulnerability scanning. Its only failure was the accumulated Go
-lint inventory. The latest checkpoint above installs the cumulative ratchet
-and repairs the first reviewed wave; `earliest(field)` / `latest(field)` is now
-the next aggregate TDD slice.
+lint inventory. The cumulative lint checkpoint above installs the ratchet and
+repairs the first reviewed wave; the newer chronological checkpoint now
+completes `earliest(field)` / `latest(field)`.
 
 The exact validation record is under **Latest validation evidence**. The
 overall backend goal remains active.
@@ -2002,6 +2083,61 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Bounded chronological `stats earliest/latest`
+
+The reviewed chronological sequence
+`932f4036e2967d5304a95b27b7109e15ffcbf601`,
+`ac721fb1d84f746d8783b02a8e1b5ac13fef14f3`,
+`e6acd1d01ef5ff13608f6cd551e0d3d817debfaf`,
+`9714c795ab93c334120e7391057f72297748164c`, and
+`f9985a1184b43a78a5ae5ef8761c9ff649ec1836` passed:
+
+```sh
+go test ./internal/clickhouse \
+  -run '^(TestCompileStatsChronological|TestWrapChronologicalValidation)' \
+  -count=1
+go test ./... -count=1
+go vet ./internal/clickhouse
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=5m \
+  --new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$' -count=1
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$' -count=1
+git diff --check
+```
+
+The strengthened pinned ClickHouse run completed in 40.726 seconds after the
+final argument-ownership and nested-member regressions were added. It executed
+the 2,000,000-member Dynamic fixture with all four tuple components consumed
+under `max_memory_usage=1073741824`, valid and poisoned terminal `chart`
+outputs, downstream literal binding, nonwinner and hidden poison, null/empty
+groups, supported scalar types, and deterministic source ties. The
+query-executor integration completed in 12.561 seconds; it is rerun after any
+compiler argument-order change.
+
+The complete Go suite passed. The exact cumulative lint gate returned
+`0 issues`; focused vet and diff checks also passed. The unchanged frontend
+baseline passed 47 release/script tests, 107 application tests, type checking,
+lint, and a production build earlier in the same chronological slice.
+
+The performance review reproduced why the discarded `arrayFold` design was
+unsafe: one 250,000-member row approached the exact 1 GiB limit, while the
+selector design processed eight such stored-Dynamic rows at about 10.3 MiB.
+The fixed `Array(String)` path used about 7.4 MiB. A 5,000,000-row validation
+probe found one additional logical final-result pass but no measured peak
+memory or wall-time regression. This extra pass is a nonblocking P3
+optimization opportunity, not a correctness exception.
+
+Correctness, performance, and code-quality reviewers all finished read-only
+current-tree reviews. The final code-quality pass caught the materialized-CTE
+bind-order defect and missing live nested-member case before commit; both now
+have permanent red-then-green regressions. Final reviews reported no remaining
+P1/P2 correctness, efficiency, performance, or maintainability finding.
+
 ### Cumulative Go lint ratchet and boundary hardening
 
 The reviewed commits `b0c00f370323221f4bce50457caf11db3f3b939c`,
@@ -3437,7 +3573,7 @@ The backend now includes:
 - the documented `eval`/`where` subset;
 - `stats` with row `count`, exact `count(field)`, `dc`/`distinct_count`,
   bounded ordered `list`, `values`, typed `min`/`max`, `sum`, `avg`, and
-  `p95`;
+  `p95`, plus deterministic bounded `earliest`/`latest`;
 - `top`, `rare`, `timechart`, and bounded two-field `chart`;
 - extraction-mode `rex`, explicit-span exact `bin`/`bucket`, and bounded
   explicit-path JSON `spath`;
@@ -3599,8 +3735,10 @@ independent stacks.
    `b0c00f3`, `fbb8997`, and `4e00428`; continue reducing the explicit inherited
    inventory in separate waves without advancing the baseline. Run
    `30255910487` confirms the full workflow and independent release comparison;
-   begin the `earliest(field)` / `latest(field)` contract unless the user
-   changes priority. The current
+   bounded chronological `earliest(field)` / `latest(field)` is complete across
+   `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and `f9985a1`. Begin broader
+   `count` syntax or remaining percentile forms unless the user changes
+   priority. The current
    preview-to-final
    resource-release audit pass is complete at `961cba2`, the sanitized current
    GradeThis collector/config migration at `c576e85`, logical event retention
@@ -3747,12 +3885,12 @@ PostCSS, or Sharp upgrade/override with the complete frontend and browser gates.
 
 ### 2. Continue TDD on aggregate correctness and efficiency
 
-The scalar-String extrema optimization and bounded ordered `list(field)` are
-complete, the latter at `4e2ddb4`. If SPL expansion is the chosen next
-priority, implement one bounded aggregate contract at a time:
+The scalar-String extrema optimization, bounded ordered `list(field)`, and
+bounded chronological `earliest(field)` / `latest(field)` are complete.
+The chronological history is `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and
+`f9985a1`. If SPL expansion is the chosen next priority, implement one bounded
+aggregate contract at a time:
 
-- `earliest(field)` / `latest(field)` need explicit event-order, tie-break,
-  null, multivalue, type, and precision contracts;
 - broader `count` forms (`c`, wildcards, predicates, and `count(eval(...))`)
   need separate syntax and differential tests;
 - remaining percentile forms need explicit approximation/error and resource
@@ -3761,6 +3899,11 @@ priority, implement one bounded aggregate contract at a time:
   `streamstats` remains outside the first release unless scope changes; and
 - exact Decimal comparison/aggregation remains separate work from the current
   finite-`Float64` runtime compatibility path.
+
+Chronological nonblocking P3 opportunities are direction-aware Dynamic
+selector generation when only `earliest` or only `latest` is requested, and
+reducing the validation envelope's additional logical final-result pass
+without weakening one-evaluation or atomic-error guarantees.
 
 Extend `chart`, `rex`, or `spath` only behind compatibility and pinned
 ClickHouse tests. Deferred `spath` surface includes auto-extraction, `{}`
@@ -3856,7 +3999,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `4e00428`, `fbb8997`, `b0c00f3`, `4e2ddb4`,
+   commits, especially `f9985a1`, `9714c79`, `e6acd1d`, `ac721fb`, `932f403`,
+   `4e00428`, `fbb8997`, `b0c00f3`, `4e2ddb4`,
    `05c1eaf`, `f68630a`, `5ecd999`,
    `c20204b`, `e647dd2`,
    `1b89397`, `3f89229`, `34f3a9b`, `f41720e`, `9d6acc1`, `4c4003f`,
@@ -3875,7 +4019,7 @@ Do not guess those decisions if they materially affect the implementation.
    ```
 
    Run both broader opt-in pinned ClickHouse suites before changing
-   extrema/bin metadata behavior.
+   chronological, extrema, or bin metadata behavior.
 5. The fixed-payload browser rendering measurement is complete at `9d6acc1`,
    and high-source-count collector profiling and polling are complete at
    `f41720e`; composite configured pre-WAL redaction is complete at `34f3a9b`.
@@ -3892,8 +4036,10 @@ Do not guess those decisions if they materially affect the implementation.
    at `b0c00f3`, `fbb8997`, and `4e00428`; keep the baseline fixed while
    reducing the remaining 1,365-item inherited inventory in separate waves.
    Run `30255910487` passed the complete workflow and cross-platform release
-   comparison. If the user does not change priority, begin `earliest(field)` /
-   `latest(field)`. The generator
+   comparison. Bounded chronological `earliest(field)` / `latest(field)` is
+   complete across `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and `f9985a1`;
+   if the user does not change priority, begin broader `count` syntax or the
+   remaining percentile forms. The generator
    foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
@@ -3907,10 +4053,11 @@ Do not guess those decisions if they materially affect the implementation.
    expiration/cancellation, the uninterrupted collector-to-browser path,
    exact GradeThis corpus, collector/server process-restart proof, and the
    protocol unit contract are already complete.
-6. For the next aggregate slice, write the explicit `earliest(field)` /
-   `latest(field)` order, tie, null, multivalue, type, precision, and resource
-   contract before implementation.
-7. Preserve scalar/Dynamic path separation, numeric grammar sharing,
+6. For the next aggregate slice, write an explicit syntax, null, multivalue,
+   type, precision, approximation, and resource contract before
+   implementation. Keep `eventstats` behind a stable aggregate library.
+7. Preserve chronological event-order/member-order and atomic validation,
+   scalar/Dynamic path separation, numeric grammar sharing,
    punctuation/UTF-8/zero/overlong boundaries,
    native timestamp precision, private calculated types, downstream `bin`,
    re-aggregation, scope poison, binary transport, physical state sharing, and
