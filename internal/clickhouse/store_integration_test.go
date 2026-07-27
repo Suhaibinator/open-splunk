@@ -1708,6 +1708,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testSubstringAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testToStringAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testRoundAgainstClickHouse(ctx, t, store, connection, indexTime)
+	testIntegralRoundingAgainstClickHouse(ctx, t, store, connection, indexTime)
 }
 
 func testNumericBinAgainstClickHouse(

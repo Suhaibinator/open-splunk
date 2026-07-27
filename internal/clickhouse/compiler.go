@@ -3697,6 +3697,10 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileToStringScalar(expression, state)
 		case plan.ScalarFunctionRound:
 			return compileRoundScalar(expression, state)
+		case plan.ScalarFunctionCeil:
+			return compileIntegralRoundingScalar(expression, state, "ceil")
+		case plan.ScalarFunctionFloor:
+			return compileIntegralRoundingScalar(expression, state, "floor")
 		case plan.ScalarFunctionIsNull, plan.ScalarFunctionIsNotNull:
 			return compileNullTestScalar(expression, state)
 		case plan.ScalarFunctionCoalesce:
@@ -4569,7 +4573,9 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			plan.ScalarFunctionIsNotNull,
 			plan.ScalarFunctionLower,
 			plan.ScalarFunctionUpper,
-			plan.ScalarFunctionLength:
+			plan.ScalarFunctionLength,
+			plan.ScalarFunctionCeil,
+			plan.ScalarFunctionFloor:
 			expectedArguments = 1
 		case plan.ScalarFunctionRound:
 			if len(expression.Arguments) < 1 || len(expression.Arguments) > 2 {
@@ -5651,6 +5657,66 @@ func compileRoundScalar(
 		precisionArgs = []any{precision}
 	}
 
+	return compileNumericRoundingInput(
+		input,
+		"round",
+		fixedPrecisionSQL,
+		dynamicPrecisionSQL,
+		precisionArgs,
+		"SPL_UNSUPPORTED_ROUND_VALUE_TYPE",
+		expression.Range,
+	)
+}
+
+func compileIntegralRoundingScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+	functionName string,
+) (compiledScalar, error) {
+	if expression == nil {
+		return compiledScalar{}, fmt.Errorf(
+			"compile ClickHouse %s: missing expression",
+			functionName,
+		)
+	}
+	if len(expression.Arguments) != 1 {
+		return compiledScalar{}, fmt.Errorf(
+			"compile ClickHouse %s: requires exactly one argument",
+			functionName,
+		)
+	}
+	input, err := compileNonBooleanScalarInputArgument(
+		expression.Arguments[0],
+		state,
+		functionName,
+	)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	return compileNumericRoundingInput(
+		input,
+		functionName,
+		"",
+		"",
+		nil,
+		"SPL_UNSUPPORTED_"+strings.ToUpper(functionName)+"_VALUE_TYPE",
+		expression.Range,
+	)
+}
+
+// compileNumericRoundingInput implements the common numeric contract for
+// round, ceil, and floor. Dynamic input is bound once; integer variants and
+// integral semantic Decimals stay exact, while other numeric variants are
+// converted through finite Float64 before applying the requested function.
+func compileNumericRoundingInput(
+	input compiledScalar,
+	functionName string,
+	fixedArgumentsSQL string,
+	dynamicArgumentsSQL string,
+	operationArgs []any,
+	unsupportedValueCode string,
+	sourceRange spl.Range,
+) (compiledScalar, error) {
 	valueSQL := ""
 	valueArgs := append([]any(nil), input.valueArgs...)
 	resultKind := fieldKindNumber
@@ -5670,9 +5736,9 @@ func compileRoundScalar(
 		integerCondition := dynamicIntegerTypePredicate(typeSQL)
 		body := ""
 		if input.dynamicDomain == dynamicScalarDomainNumeric {
-			rounded := "round(" +
+			rounded := functionName + "(" +
 				finiteDynamicFloatOrNullSQL("value") +
-				dynamicPrecisionSQL + ")"
+				dynamicArgumentsSQL + ")"
 			body = "multiIf(" +
 				integerCondition + ", value, " +
 				"CAST(" + rounded + " AS Dynamic))"
@@ -5694,21 +5760,21 @@ func compileRoundScalar(
 				dynamicNumericTypePredicate(typeSQL) + ", " +
 				finiteDynamicFloatOrNullSQL("value") + ", " +
 				"CAST(NULL AS Nullable(Float64)))"
-			rounded := "round(" + numericValue + dynamicPrecisionSQL + ")"
+			rounded := functionName + "(" + numericValue + dynamicArgumentsSQL + ")"
 			body = "arrayElement(arrayMap(exact_value -> multiIf(" +
 				integerCondition + ", value, (" +
 				"isNotNull(exact_value)), CAST(assumeNotNull(exact_value) AS Dynamic), " +
 				"CAST(" + rounded + " AS Dynamic)), [" +
 				exactTaggedInteger + "]), 1)"
 		}
-		if len(precisionArgs) == 0 {
+		if len(operationArgs) == 0 {
 			valueSQL = "arrayElement(arrayMap(value -> " + body + ", [" +
 				input.valueSQL + "]), 1)"
 		} else {
 			valueSQL = "arrayElement(arrayMap((value, precision) -> " + body +
 				", [" + input.valueSQL + "], [CAST(? AS UInt8)]), 1)"
 		}
-		valueArgs = append(valueArgs, precisionArgs...)
+		valueArgs = append(valueArgs, operationArgs...)
 		resultKind = fieldKindDynamic
 		numberType = ""
 		dynamicDomain = dynamicScalarDomainNumeric
@@ -5717,32 +5783,33 @@ func compileRoundScalar(
 			valueSQL = input.valueSQL
 			break
 		}
-		valueSQL = "round(" + input.valueSQL + fixedPrecisionSQL + ")"
-		valueArgs = append(valueArgs, precisionArgs...)
+		valueSQL = functionName + "(" + input.valueSQL + fixedArgumentsSQL + ")"
+		valueArgs = append(valueArgs, operationArgs...)
 	case fieldKindInvalid:
 		valueSQL = "CAST(NULL AS Nullable(Float64))"
 		numberType = "Float64"
 		alwaysNull = true
 	case fieldKindStringArray:
 		return compiledScalar{}, unsupportedMultivalueUsage(
-			"round",
-			expression.Range,
+			functionName,
+			sourceRange,
 		)
 	default:
 		return compiledScalar{}, &plan.Diagnostic{
-			Code:    "SPL_UNSUPPORTED_ROUND_VALUE_TYPE",
-			Message: "round requires a numeric input",
-			Range:   expression.Range,
+			Code:    unsupportedValueCode,
+			Message: functionName + " requires a numeric input",
+			Range:   sourceRange,
 		}
 	}
 	if len(valueSQL) > maxCompiledRoundScalarSQLBytes {
 		return compiledScalar{}, &plan.Diagnostic{
 			Code: "SPL_QUERY_TOO_COMPLEX",
 			Message: fmt.Sprintf(
-				"round scalar SQL exceeds %d bytes",
+				"%s scalar SQL exceeds %d bytes",
+				functionName,
 				maxCompiledRoundScalarSQLBytes,
 			),
-			Range: expression.Range,
+			Range: sourceRange,
 		}
 	}
 	return compiledScalar{
