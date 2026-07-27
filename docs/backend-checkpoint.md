@@ -7,7 +7,118 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: typed Unicode SPL `lower` and `upper`
+## Latest checkpoint: typed SPL UTF-8 `len` / `length`
+
+Date: 2026-07-27
+
+Parser and logical-plan checkpoint (committed and pushed):
+`64004dcc45e329692aea83d0467cd2a26a5ca94c`
+
+ClickHouse compiler, integration, and adversarial-review checkpoint (committed
+and pushed):
+`e3a32e2fad2dee31abd77d540f1fa43b1bd13b47`
+
+Compatibility and editor checkpoint (committed and pushed):
+`5aebc70d14057946aba3ff4a5cae5605cd5b27f8`
+
+This test-first slice implements `len(value)` and its exact `length(value)`
+alias:
+
+1. The parser accepts either case-insensitive name with exactly one scalar
+   argument, preserves the authored alias and source range in the AST,
+   supports nesting and predicate use, and leaves bare fields named `len` or
+   `length` ordinary.
+2. Both names lower to one dedicated logical-plan enum. Parser, planner, and
+   compiler trust boundaries reject missing/additional arguments, nil and
+   typed-nil values, invalid enums, Boolean null-predicate escape, excessive
+   depth/nodes, and cycles before recursive lowering.
+3. The function counts UTF-8 code points, not bytes. Empty String returns
+   zero. Fixed String returns `UInt64`; Dynamic runtime String returns
+   nullable `UInt64`. Missing, explicit null, and Dynamic runtime numbers,
+   Booleans, arrays, objects, or other containers return null.
+4. Fixed numeric, Boolean, and canonical time input fails with the
+   source-located `SPL_UNSUPPORTED_TEXT_LENGTH_VALUE_TYPE` diagnostic rather
+   than applying an implicit conversion.
+5. Splunk documents `len` as scalar-only. Fixed `Array(String)` fails with
+   `SPL_UNSUPPORTED_MULTIVALUE_USAGE`; Dynamic runtime arrays return null.
+   The function never maps members, applies `ARRAY JOIN`, or changes event
+   cardinality.
+6. Fixed String and `_raw` inputs share the text-function provenance helper
+   introduced by the Unicode case slice. Binary-declared `_raw` therefore
+   returns null even when its bytes are ASCII, and `replace(_raw, ...)`
+   retains the same guard.
+7. ClickHouse lowering uses `lengthUTF8`. Dynamic input compiles directly to
+   `lengthUTF8(dynamicElement(value, 'String'))`: pinned ClickHouse
+   `26.3.17.4` proves the extraction is `Nullable(String)`, returns null for
+   String-mismatched variants, and produces `Nullable(UInt64)` without a
+   runtime type branch or singleton array.
+8. Generated SQL references each Dynamic source once, omits generic Dynamic
+   numeric/decimal/Boolean comparison branches when compared with fixed
+   numeric literals, and grows linearly through nested text functions. Every
+   call has a separate 64 KiB SQL ceiling in addition to the 256 KiB
+   whole-query ceiling.
+9. Compiler unit coverage pins both aliases, Unicode literals, fixed and
+   Dynamic String inputs, empty/null/missing values, Dynamic non-strings and
+   containers, fixed multivalue rejection, binary `_raw`, replace provenance,
+   numeric predicates, exact source occurrence, bind order, nested SQL growth,
+   source-located diagnostics, typed nils, and forged cycles.
+10. The isolated ClickHouse corpus executes `München`/`Straße` code-point
+    counts, both aliases, sequential nesting with `lower`, empty String,
+    Dynamic unsupported types, fixed String output from `stats min(host)`,
+    numeric `where` predicates, binary `_raw`, and `EXPLAIN actions=1` proof
+    of no `ArrayJoin`. It runs with common-Variant inference disabled and
+    short-circuit evaluation enabled.
+11. Independent reuse, quality, and efficiency review found four concrete
+    improvements, all applied: lower/upper and len now share unary text-input
+    validation and provenance helpers; forged unary compiler plans share one
+    trust-boundary harness; the fixed-String integration case now truly uses
+    `min(host)` rather than a Dynamic event field; and Dynamic len uses direct
+    nullable extraction rather than a singleton `arrayMap`.
+12. The compatibility contract cites Splunk's official text-function
+    semantics and ClickHouse's `lengthUTF8` reference. Editor completion
+    advertises code-point behavior, while syntax highlighting recognizes
+    `len` and `length` only in function position.
+
+Validation completed on the current implementation:
+
+```sh
+go test ./internal/spl ./internal/plan ./internal/clickhouse -count=1
+go test ./... -count=1
+go vet ./...
+golangci-lint run --timeout=5m \
+  --max-issues-per-linter=0 --max-same-issues=0
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1
+git diff --check
+```
+
+All gates pass. The unrestricted repository-wide lint run reports zero issues.
+The frontend corpus contains 117 application tests and 47 release/build tests.
+The production static export generated all 11 pages, and the final pinned
+Store/compiler run passed in 45.380 seconds.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `64004dc`, `e3a32e2`, and
+   `5aebc70`. Preserve any unexpected local changes.
+2. Implement bounded scalar `substr` next only after pinning its SQLite-style
+   positive/zero/negative start and optional positive/zero/negative length
+   semantics, UTF-8 indexing, null/type behavior, and resource limits against
+   the pinned ClickHouse target.
+3. Keep multivalue substring behavior, concatenation, `mvcount`, implicit
+   String conversion, locale-sensitive case mapping, normalization, and full
+   case folding as separate compatibility slices.
+4. Keep Dynamic/container `coalesce` and `case`, `tostring`, heterogeneous
+   conditionals, wildcard count, broader conditional count names, and
+   `eventstats` as separate reviewed contracts.
+
+## Previous checkpoint: typed Unicode SPL `lower` and `upper`
 
 Date: 2026-07-27
 
@@ -4936,8 +5047,10 @@ Do not guess those decisions if they materially affect the implementation.
    the top of this file. Typed fixed-scalar `if` is complete across `cfaa75b`,
    `c1ad25b`, and `fed3276`; typed conditional count is complete at `66b2b16`.
    Typed Unicode `lower`/`upper` is complete through `8e68c7e`, `3d9d5f8`,
-   `53b1f55`, and `8e4cf5f`. Continue with a test-first bounded `len`/`substr`
-   or `round`/`ceil`/`floor` contract if the user does not change priority. The
+   `53b1f55`, and `8e4cf5f`; typed UTF-8 `len`/`length` is complete through
+   `64004dc`, `e3a32e2`, and `5aebc70`. Continue with a test-first bounded
+   `substr` or `round`/`ceil`/`floor` contract if the user does not change
+   priority. The
    generator foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
