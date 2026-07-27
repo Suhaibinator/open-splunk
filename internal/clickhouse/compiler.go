@@ -96,6 +96,10 @@ const (
 	// maxCompiledMVCountScalarSQLBytes independently bounds value-cardinality
 	// expressions. Dynamic input is bound once, so nested calls grow linearly.
 	maxCompiledMVCountScalarSQLBytes = 64 << 10
+	// maxCompiledMatchScalarSQLBytes independently bounds regular-expression
+	// predicate lowering. Each value is referenced once and each normalized
+	// pattern remains a bound argument, so nested composition grows linearly.
+	maxCompiledMatchScalarSQLBytes = 64 << 10
 	// MaximumMVCountTaggedPayloadBytes mirrors the hard ingestion ceiling for
 	// one complete event. It keeps adversarial raw storage from driving
 	// unbounded regular-expression work while admitting every envelope that
@@ -3716,6 +3720,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileIntegralRoundingScalar(expression, state, "floor")
 		case plan.ScalarFunctionMVCount:
 			return compileMVCountScalar(expression, state)
+		case plan.ScalarFunctionMatch:
+			return compileMatchScalar(expression, state)
 		case plan.ScalarFunctionIsNull, plan.ScalarFunctionIsNotNull:
 			return compileNullTestScalar(expression, state)
 		case plan.ScalarFunctionCoalesce:
@@ -4593,6 +4599,29 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			plan.ScalarFunctionFloor,
 			plan.ScalarFunctionMVCount:
 			expectedArguments = 1
+		case plan.ScalarFunctionMatch:
+			if len(expression.Arguments) != 2 {
+				return errors.New(
+					"compile ClickHouse predicate: match requires exactly two arguments",
+				)
+			}
+			if nilScalarExpression(expression.Arguments[1]) {
+				return errors.New(
+					"compile ClickHouse predicate: match has a missing regular expression",
+				)
+			}
+			pattern, ok := scalarStringLiteral(expression.Arguments[1])
+			if !ok {
+				return errors.New(
+					"compile ClickHouse predicate: match regular expression must be a string literal",
+				)
+			}
+			if _, err := splregex.CompileMatchPattern(pattern); err != nil {
+				return fmt.Errorf(
+					"compile ClickHouse predicate: match regular expression is invalid: %w",
+					err,
+				)
+			}
 		case plan.ScalarFunctionRound:
 			if len(expression.Arguments) < 1 || len(expression.Arguments) > 2 {
 				return errors.New(
@@ -4709,7 +4738,8 @@ func scalarExpressionReturnsBoolean(expression plan.ScalarExpression) bool {
 			return false
 		}
 		switch expression.Function {
-		case plan.ScalarFunctionIsNull, plan.ScalarFunctionIsNotNull:
+		case plan.ScalarFunctionIsNull, plan.ScalarFunctionIsNotNull,
+			plan.ScalarFunctionMatch:
 			return true
 		case plan.ScalarFunctionCoalesce:
 			return coalescePlanScalarReturnsBoolean(expression.Arguments)
@@ -5013,6 +5043,67 @@ func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileSt
 		existsSQL:               "1",
 		textEligibleSQL:         input.textEligibleSQL,
 		kind:                    fieldKindString,
+		materializeForPredicate: input.materializeForPredicate,
+	}, nil
+}
+
+func compileMatchScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+) (compiledScalar, error) {
+	if len(expression.Arguments) != 2 {
+		return compiledScalar{}, errors.New("compile ClickHouse match: expected two arguments")
+	}
+	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse match: cannot consume a Boolean result",
+		)
+	}
+	input, err := compileScalarValue(expression.Arguments[0], state)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	if input.kind == fieldKindStringArray {
+		return compiledScalar{}, unsupportedMultivalueUsage("match", expression.Range)
+	}
+	pattern, ok := scalarStringLiteral(expression.Arguments[1])
+	if !ok {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse match: regular expression must be a string literal",
+		)
+	}
+	normalized, err := splregex.CompileMatchPattern(pattern)
+	if err != nil {
+		return compiledScalar{}, fmt.Errorf(
+			"compile ClickHouse match: regular expression is outside the supported RE2 subset: %w",
+			err,
+		)
+	}
+	if input.alwaysNull || input.kind == fieldKindInvalid {
+		return compiledScalar{
+			valueSQL:   "CAST(NULL AS Nullable(Bool))",
+			existsSQL:  "1",
+			kind:       fieldKindBool,
+			alwaysNull: true,
+		}, nil
+	}
+	inputSQL, inputArgs := compiledTextEligibleStringScalar(input)
+	valueSQL := "CAST(match(" + inputSQL + ", ?) AS Nullable(Bool))"
+	if len(valueSQL) > maxCompiledMatchScalarSQLBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"match scalar SQL exceeds %d bytes",
+				maxCompiledMatchScalarSQLBytes,
+			),
+			Range: expression.Range,
+		}
+	}
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               append(inputArgs, normalized),
+		existsSQL:               "1",
+		kind:                    fieldKindBool,
 		materializeForPredicate: input.materializeForPredicate,
 	}, nil
 }
@@ -6069,7 +6160,8 @@ func scalarExpressionMayReturnBooleanFunction(expression plan.ScalarExpression) 
 			return false
 		}
 		switch expression.Function {
-		case plan.ScalarFunctionIsNull, plan.ScalarFunctionIsNotNull:
+		case plan.ScalarFunctionIsNull, plan.ScalarFunctionIsNotNull,
+			plan.ScalarFunctionMatch:
 			return true
 		case plan.ScalarFunctionCoalesce:
 			for _, argument := range expression.Arguments {

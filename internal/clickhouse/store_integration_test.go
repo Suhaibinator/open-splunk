@@ -1710,6 +1710,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testRoundAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testIntegralRoundingAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testMVCountAgainstClickHouse(ctx, t, store, connection, indexTime)
+	testMatchAgainstClickHouse(ctx, t, store, connection, indexTime)
 }
 
 func testNumericBinAgainstClickHouse(
