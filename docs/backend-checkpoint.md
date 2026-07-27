@@ -7,7 +7,103 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded typed SPL `like`
+## Latest checkpoint: immutable search-start SPL `now`
+
+Date: 2026-07-27
+
+Parser and logical-plan checkpoint (committed and pushed):
+`33134e9`
+
+Initial ClickHouse compiler and integration checkpoint (committed and pushed):
+`7d52001`
+
+Adversarial search-anchor correctness checkpoint (committed and pushed):
+`1314fc9`
+
+Adversarial replay-fingerprint and reuse checkpoint (committed and pushed):
+`df5c13a`
+
+Compatibility and editor checkpoint (committed and pushed):
+`8d4911c`
+
+This test-first slice implements search-scoped `now()`:
+
+1. The parser accepts a case-insensitive zero-argument call in eval and where
+   expressions, preserves its complete range, and leaves a bare field named
+   `now` ordinary. Parser, planner, predicate validation, and scalar lowering
+   independently reject forged arguments and invalid function enums.
+2. `now()` returns a present, non-null fixed `Int64` containing the whole Unix
+   second at which the ad-hoc search was admitted. Subseconds are truncated,
+   every occurrence in one search is identical, and supported numeric
+   comparison, conditional, rounding, and default `tostring` composition
+   remains available.
+3. `plan.Scope` and `plan.Query` carry an explicit immutable `SearchStart`
+   timestamp. It is sourced from the job's persisted `CreatedAt` value and is
+   intentionally independent from the index-time and storage-visibility
+   cutoffs. Missing anchors fail at both planning and compiler trust
+   boundaries.
+4. Completed execution snapshots preserve the search-start timestamp.
+   Rebuilding plans for field catalogs, field summaries, timelines, and
+   exports therefore reproduces the original value instead of consulting a
+   later wall clock.
+5. The compiler binds one signed whole-second argument per occurrence and
+   emits `CAST(? AS Int64)` rather than ClickHouse `now()` or `now64()`.
+   Projection, stats, and later eval stages retain the same query-local compile
+   context.
+6. Search-scoped constants and the existing MATCH/LIKE resource ledgers now
+   live in one atomically initialized shared compile context. Fresh relation
+   states carry one pointer, eliminating manual search-anchor copies and
+   partially initialized pattern maps.
+7. The execution-snapshot fingerprint includes `SearchStart`. A changed anchor
+   invalidates both field-page cursors and field-summary cache entries instead
+   of reusing output compiled with a different `now()` value.
+8. Unit and pinned ClickHouse coverage separates search start from the storage
+   cutoff and checks repeated calls, `_time<=now()`, `tostring`, projection,
+   stats, later eval, replay preservation, missing anchors, forged arity, and
+   cache/cursor invalidation.
+9. Independent correctness, reuse, and efficiency reviewers found six
+   actionable issues: storage-cutoff coupling, mutable-state anchor copying,
+   zero-arity sentinel handling, partially initialized compile context, and a
+   missing replay-fingerprint field, plus duplicated custom-scope compiler
+   fixtures. All were fixed. The remaining explicit SPL-to-plan enum conversion
+   stays as a deliberate trust boundary.
+10. Editor highlighting recognizes only parenthesized `now`, eval and where
+    completions describe the fixed search-start Unix second, and the
+    compatibility specification distinguishes scheduled-search behavior,
+    per-event `time()`, and the still-unsupported `relative_time`, `strftime`,
+    and `strptime` slices.
+
+Validation completed on the current implementation:
+
+```sh
+go test ./... -count=1
+golangci-lint run ./...
+npm run test:frontend
+npm run typecheck
+npm run lint
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1
+git diff --check
+```
+
+All gates pass. Repository-wide Go lint reports zero issues. The frontend
+corpus contains 126 application tests and 47 release/build tests. The pinned
+Store suite proves that `now()` uses a deliberately different search-admission
+timestamp rather than the index-time cutoff.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `33134e9`, `7d52001`, `1314fc9`,
+   `8d4911c`, and `df5c13a`. Preserve unexpected local changes.
+2. Treat `relative_time`, `strftime`, and `strptime` as independent semantic
+   slices with their own literal grammar, timezone, precision, null/type, and
+   ClickHouse portability contracts.
+3. Keep scheduled-search variants and per-event `time()` outside the ad-hoc
+   `now()` contract until those execution surfaces are explicitly designed.
+
+## Previous checkpoint: bounded typed SPL `like`
 
 Date: 2026-07-27
 
