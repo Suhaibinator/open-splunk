@@ -7,7 +7,83 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: deterministic committed release identity and artifacts
+## Latest checkpoint: bounded ordered `stats list(field)`
+
+Date: 2026-07-27
+
+Implementation commit: `4e2ddb43ddb60ecd790c6ad3783fd7d83ecfda72`
+
+CI repair commit: `05c1eaff6a373d220762c06838677e5db3fd6ee6`
+
+This slice implements the first bounded order-sensitive SPL aggregate and
+repairs the two actionable failures from the preceding remote CI run:
+
+1. SPL parsing and planning accept case-insensitive `list(field)` with one
+   exact unquoted field and the default output name `list(field)`. Unsupported
+   quoted, wildcard, expression, missing-input, and extra-argument forms retain
+   source-located diagnostics.
+2. `list` preserves duplicates and current pipeline order. One event can
+   contribute each immediate non-null top-level multivalue member in stored
+   member order. Missing fields, explicit nulls, null members, and empty
+   multivalues contribute nothing; an empty String remains a value.
+3. Event order defaults to `_time DESC, event_id DESC`, then the immutable
+   visibility sequence and private
+   `(index, collector, batch sequence, batch ID)` source identity. The final
+   source key keeps pre-visibility migrated rows deterministic when their
+   sequence is zero. Explicit `sort`, `head`, `tail`, and `dedup` order is
+   preserved.
+4. Scalar conversion is shared with `dc` and `values`. Objects and nested
+   containers fail the complete aggregate atomically, including poison after
+   visible occurrence 100; rows excluded by tenant/index/time/visibility,
+   filters, or an incomplete `BY` tuple cannot trigger that error.
+5. Only the first 100 eligible strings per group are returned. Prefix windows
+   select and byte-account that ordered prefix before grouping; the retained
+   physical state is bounded to 100 tuples and 512 KiB per unique group/input.
+   The compiler never expands event rows and never uses an unordered
+   `groupArray`.
+6. Repeated aliases over one input share one ordered aggregate state while
+   counting independently toward public budgets. `list` and `values` share a
+   10,000-element/512-KiB row budget and a 100,000-element/8-MiB complete-result
+   budget, validated before a later filter, sort, projection, or `LIMIT` can
+   hide overflow.
+7. A statically projected-away input uses one bounded zero-state aggregate
+   instead of sorting the full input through three ordered windows merely to
+   publish `[]`. Global-empty and retained-group semantics and the fixed
+   multivalue type remain intact.
+8. The executor publishes `Array(String)` as typed multivalue results and
+   preserves invalid UTF-8 members as Bytes. Stable list-specific markers map
+   unsupported and resource failures to sanitized public execution errors.
+9. The pinned ephemeral ClickHouse corpus covers explicit/default order,
+   multivalue member order, duplicates, null/missing/empty values, tail and
+   dedup input, the 100/101 boundary, exact/+1 byte boundaries, poison after
+   100, incomplete `BY`, same-visibility source ties at one and four threads,
+   downstream re-aggregation, shared physical state, projected-away input,
+   combined `values`/`list` budgets, duplicate-alias accounting, and
+   whole-result overflow before downstream `LIMIT`.
+10. `05c1eaf` updates `golang.org/x/text` from `v0.36.0` to `v0.39.0`, removing
+    the reachable `GO-2026-5970` path, and repairs a race/shuffle-sensitive
+    search-history retry fixture that had accidentally rebuilt nanosecond
+    search bounds from microsecond-normalized creation time.
+11. Full Go, frontend, pinned ClickHouse, vulnerability, race/shuffle, vet,
+    typecheck, frontend-lint, and diff checks passed locally. Two
+    correctness/performance reviewers and the simplify
+    reuse/quality/efficiency pass drove the legacy source tie, missing-input
+    hot path, executable resource-barrier tests, shared constants/helpers, and
+    frontend function-table consolidation. Their final current-tree reviews
+    reported no remaining blocker.
+
+The remote workflow for `f2e6915` passed frontend, protobuf, backend vertical,
+and the pinned GradeThis ClickHouse corpus, but failed the search-history
+race fixture, the reachable `x/text` advisory, and the repository's accumulated
+227-item `golangci-lint` backlog. The first two are fixed at `05c1eaf`; the lint
+backlog remains the immediate CI-repair work and must be fixed in reviewable
+waves rather than hidden by disabling checks. After that gate is green, the
+next aggregate TDD slice is `earliest(field)` / `latest(field)`.
+
+The exact validation record is under **Latest validation evidence**. The
+overall backend goal remains active.
+
+## Previous checkpoint: deterministic committed release identity and artifacts
 
 Date: 2026-07-27
 
@@ -91,11 +167,10 @@ Linux/macOS CI comparison remains to be confirmed after push:
 
 The exact validation record is under **Latest validation evidence**. Local
 release-revision consistency and deterministic embedded frontend assets are
-complete at this checkpoint. On resume, first confirm the Linux/macOS proof
-workflow; if it is green, the next backend TDD slice is the bounded
-`list(field)` aggregate contract under **Remaining work**. CI artifact reuse
-and dependency-audit follow-ups remain separate operational work. The overall
-backend goal remains active.
+complete at this checkpoint. The subsequent remote run and ordered
+`list(field)` slice are recorded in the latest checkpoint above. CI artifact
+reuse and dependency-audit follow-ups remain separate operational work. The
+overall backend goal remains active.
 
 ## Previous checkpoint: result-kind-bounded browser adaptation
 
@@ -155,10 +230,9 @@ The exact validation record is under **Latest validation evidence**.
 Result adaptation specialization and formatter reuse are complete at this
 checkpoint. Release-revision consistency and byte-identical embedded frontend
 assets were subsequently completed at `5ecd999` with the cleanup proof at
-`f68630a` on the checkpoint host; the independent Linux/macOS CI comparison
-still needs confirmation. Unless the user changes priority, confirm that gate
-and then start the bounded `list(field)` aggregate contract under **Remaining
-work**. The overall backend goal remains active.
+`f68630a` on the checkpoint host. The subsequent remote run, CI repairs, and
+ordered `list(field)` slice are recorded in the latest checkpoint above. The
+overall backend goal remains active.
 
 ## Previous checkpoint: statistics-only result projections
 
@@ -1868,6 +1942,51 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Bounded ordered `stats list(field)`
+
+The implementation at `4e2ddb43ddb60ecd790c6ad3783fd7d83ecfda72` and CI
+repair at `05c1eaff6a373d220762c06838677e5db3fd6ee6` passed:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/searchhistory -shuffle=on -count=20
+go vet ./...
+npm run test:frontend
+npm run typecheck
+npm run lint
+go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$' -count=1 -v
+git diff --check
+```
+
+The complete Go suite passed, including all parser, planner, compiler,
+executor, migration, and transport packages. The repaired search-history
+fixture passed 20 race-enabled randomized repetitions. The frontend gate
+passed 47 release/protobuf/materialization tests plus 106 application tests;
+typecheck and lint also passed.
+
+`govulncheck` reported no reachable vulnerabilities after the `x/text`
+upgrade. It still reported unreachable advisories in imported packages and
+required modules; those are not presented as fixed or reachable.
+
+The final pinned ClickHouse run completed in 36.17 seconds. An independent
+performance/security reviewer reran it in 38.3 seconds and also ran the full Go
+suite and vet. Both pinned runs passed the ordered list corpus and left no test
+container. Controlled red tests first failed for the legacy source-identity
+tie and for the projected-away input's unnecessary windows. The permanent
+corpus also executes forged post-aggregate relations to prove that combined,
+duplicate-alias, and whole-result limits cannot be hidden by a downstream
+`LIMIT`.
+
+The correctness reviewer found the legacy `visibility_seq = 0` ordering hole.
+The performance reviewer found the known-empty input sort and missing runtime
+whole-result proofs. The simplify reuse/quality/efficiency pass consolidated
+the byte-accounting helper, shared list/values policy constants, and frontend
+function-name source. After those changes, final adversarial review reported
+no remaining correctness, performance, security, or maintainability blocker.
+
 ### Deterministic committed release identity and artifacts
 
 The implementation at `5ecd99957bf4801da8b39e9bfabd274e11d5e208` and
@@ -3358,10 +3477,13 @@ independent stacks.
    bounds, single-pass event decoding, and adaptation-local formatter reuse
    are complete at `c20204b`; deterministic committed release identity and
    embedded-asset verification are locally complete at `5ecd999`, with
-   transaction cleanup proof at `f68630a`. First confirm the independent
-   Linux/macOS CI comparison; if it is green and the user does not change
-   priority, start the bounded `list(field)` aggregate contract below. The
-   current preview-to-final
+   transaction cleanup proof at `f68630a`. Bounded ordered `list(field)` is
+   complete at `4e2ddb4`, and the preceding run's reachable vulnerability and
+   search-history race-fixture failures are repaired at `05c1eaf`. Repair the
+   remaining 227-item `golangci-lint` backlog in reviewable waves, rerun the
+   independent release workflow, then begin the `earliest(field)` /
+   `latest(field)` contract unless the user changes priority. The current
+   preview-to-final
    resource-release audit pass is complete at `961cba2`, the sanitized current
    GradeThis collector/config migration at `c576e85`, logical event retention
    at `458c8b4`, clock-driven job/result/export expiration at `b2b2839`, and
@@ -3480,8 +3602,11 @@ Release-proof implementation history and remaining confirmation:
   and migrations is locally complete at `5ecd999`, with cleanup proof at
   `f68630a`. Local repeated builds are byte-identical, and CI defines
   independent Linux amd64/macOS builds plus a byte-for-byte canonical-proof
-  comparison. Confirm that remote gate after pushing; do not infer a CI result
-  from the local proof.
+  comparison. The remote `f2e6915` workflow passed frontend, protobuf,
+  vertical, and pinned GradeThis jobs but skipped the release comparison after
+  dependency jobs failed. `05c1eaf` fixes the race fixture and reachable
+  vulnerability; 227 existing `golangci-lint` findings still block the gate.
+  Fix them without weakening the linter, then rerun the workflow.
 - Keep `app.log` only as local test input after a fixture secret scan. Do not
   commit unsanitized GradeThis production logs.
 
@@ -3500,11 +3625,10 @@ PostCSS, or Sharp upgrade/override with the complete frontend and browser gates.
 
 ### 2. Continue TDD on aggregate correctness and efficiency
 
-The scalar-String extrema optimization is complete. If SPL expansion is the
-chosen next priority, implement one bounded aggregate contract at a time:
+The scalar-String extrema optimization and bounded ordered `list(field)` are
+complete, the latter at `4e2ddb4`. If SPL expansion is the chosen next
+priority, implement one bounded aggregate contract at a time:
 
-- `list(field)` must be order-sensitive, duplicate-preserving, and explicitly
-  bounded; do not adapt unordered `values`;
 - `earliest(field)` / `latest(field)` need explicit event-order, tie-break,
   null, multivalue, type, and precision contracts;
 - broader `count` forms (`c`, wildcards, predicates, and `count(eval(...))`)
@@ -3610,7 +3734,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `f68630a`, `5ecd999`, `c20204b`, `e647dd2`,
+   commits, especially `4e2ddb4`, `05c1eaf`, `f68630a`, `5ecd999`,
+   `c20204b`, `e647dd2`,
    `1b89397`, `3f89229`, `34f3a9b`, `f41720e`, `9d6acc1`, `4c4003f`,
    `9898b41`, `59b8f7c`, `860acac`, `961cba2`, `c576e85`, `458c8b4`,
    `b2b2839`, `b80bf0a`,
@@ -3638,10 +3763,12 @@ Do not guess those decisions if they materially affect the implementation.
    result-kind projection bounds, single-pass event decoding, and
    adaptation-local formatter reuse are complete at `c20204b`; deterministic
    committed release identity, transactional publication, and embedded-asset
-   proof are locally complete at `5ecd999` and `f68630a`. First confirm the
-   independent Linux/macOS CI comparison; if it is green and the user does not
-   change priority, start the bounded `list(field)` aggregate contract. The
-   generator foundation, current
+   proof are locally complete at `5ecd999` and `f68630a`; bounded ordered
+   `list(field)` is complete at `4e2ddb4`, with CI vulnerability/race repair at
+   `05c1eaf`. The remote release workflow remains blocked by the repository's
+   227-item `golangci-lint` backlog. Fix that backlog in cohesive green commits
+   and rerun the workflow. If it passes and the user does not change priority,
+   begin `earliest(field)` / `latest(field)`. The generator foundation, current
    preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
@@ -3655,8 +3782,9 @@ Do not guess those decisions if they materially affect the implementation.
    expiration/cancellation, the uninterrupted collector-to-browser path,
    exact GradeThis corpus, collector/server process-restart proof, and the
    protocol unit contract are already complete.
-6. For that aggregate slice, start with an explicit bounded contract for
-   `list(field)`; do not reuse unordered `values`.
+6. For the next aggregate slice, write the explicit `earliest(field)` /
+   `latest(field)` order, tie, null, multivalue, type, precision, and resource
+   contract before implementation.
 7. Preserve scalar/Dynamic path separation, numeric grammar sharing,
    punctuation/UTF-8/zero/overlong boundaries,
    native timestamp precision, private calculated types, downstream `bin`,
