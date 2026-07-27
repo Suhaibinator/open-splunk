@@ -43,7 +43,7 @@ type Validator struct {
 	sensitive         map[string]struct{}
 	replacementByName map[string]redactionMatch
 	ordered           []*Validator
-	sequential        []*Validator
+	orderedOnChange   bool
 	mandatory         bool
 	exact             bool
 }
@@ -76,10 +76,13 @@ func NewSupplementalRedactor(limits Limits, policy RedactionPolicy) (*Validator,
 // replayed in policy order: generated quotes can change how a later historical
 // pass parses otherwise malformed text.
 // Repeated fields, pre-final syntax-bearing markers, and markers equal to a
-// later field always retain that ordered implementation because they can
-// intentionally create a match for a later policy. These compatibility paths
-// favor exact historical output and confidentiality over a misleading
-// one-pass claim.
+// later field retain that ordered implementation because they can
+// intentionally create a match for a later policy. Each independent typed
+// field, raw payload, and message first uses the composite resolver to detect
+// a possible change. A directly named typed field starts at its last matching
+// policy because that replacement discards every earlier result; affected text
+// surfaces replay the complete historical chain. Definite misses and
+// duplicate-key-only JSON canonicalization avoid scanning once per policy.
 func NewCompositeSupplementalRedactor(
 	limits Limits,
 	policies []RedactionPolicy,
@@ -95,43 +98,41 @@ func NewCompositeSupplementalRedactor(
 		return redactor, nil
 	}
 
-	sequential := make([]*Validator, 0, len(policies))
+	ordered := make([]*Validator, 0, len(policies))
 	replacements := make(map[string]redactionMatch)
-	useSequential := false
+	orderedOnChange := false
 	for order, policy := range policies {
 		redactor, err := NewSupplementalRedactor(limits, policy)
 		if err != nil {
 			return nil, fmt.Errorf("supplemental redaction policy %d: %w", order, err)
 		}
-		sequential = append(sequential, redactor)
+		ordered = append(ordered, redactor)
 		for name, match := range redactor.replacementByName {
 			if _, exists := replacements[name]; exists {
-				useSequential = true
+				orderedOnChange = true
 			}
 			match.order = order
 			replacements[name] = match
 		}
 	}
-	for order, redactor := range sequential[:len(sequential)-1] {
+	for order, redactor := range ordered[:len(ordered)-1] {
 		if !compositeReplacementIsOpaque(redactor.replacement) {
-			useSequential = true
+			orderedOnChange = true
 		}
 		if later, markerBecomesLaterField := replacements[redactor.replacement]; markerBecomesLaterField &&
 			later.order > order {
-			useSequential = true
+			orderedOnChange = true
 		}
 	}
 
 	result := &Validator{
 		limits:            limits,
-		replacement:       sequential[0].replacement,
-		depthReplacement:  sequential[len(sequential)-1].replacement,
+		replacement:       ordered[0].replacement,
+		depthReplacement:  ordered[len(ordered)-1].replacement,
 		replacementByName: replacements,
-		ordered:           sequential,
+		ordered:           ordered,
+		orderedOnChange:   orderedOnChange,
 		exact:             true,
-	}
-	if useSequential {
-		result.sequential = sequential
 	}
 	return result, nil
 }
@@ -198,12 +199,6 @@ func (v *Validator) RedactEvent(event *opensplunkv1.LogEvent) *opensplunkv1.LogE
 func (v *Validator) RedactEventInPlace(event *opensplunkv1.LogEvent) *opensplunkv1.LogEvent {
 	if event == nil {
 		return nil
-	}
-	if len(v.sequential) > 0 {
-		for _, redactor := range v.sequential {
-			event = redactor.RedactEventInPlace(event)
-		}
-		return event
 	}
 	v.redactObject(event.GetFields())
 	event.Raw = v.redactEventRaw(event.GetRaw(), event.GetRawEncoding())

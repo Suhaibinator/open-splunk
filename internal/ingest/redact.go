@@ -59,17 +59,26 @@ func boundaryChangedBy(match redactionMatch) redactionChange {
 	return change
 }
 
+func canonicalizedJSON() redactionChange {
+	return redactionChange{changed: true}
+}
+
+func (change redactionChange) hasPolicyMatch() bool {
+	return change.match.kind != rawSecretNone
+}
+
 // A text replacement generated before the last policy can supply quoting or a
 // key boundary that makes previously malformed trailing text match later.
 func (change redactionChange) canAffectLaterPolicy(policyCount int) bool {
-	return change.changed && change.match.order < policyCount-1
+	return change.hasPolicyMatch() && change.match.order < policyCount-1
 }
 
 func (change *redactionChange) merge(other redactionChange) {
 	if !other.changed {
 		return
 	}
-	if !change.changed || other.match.order < change.match.order {
+	if other.hasPolicyMatch() &&
+		(!change.hasPolicyMatch() || other.match.order < change.match.order) {
 		change.match = other.match
 	}
 	change.requiresOrderedFallback = change.requiresOrderedFallback || other.requiresOrderedFallback
@@ -232,10 +241,28 @@ func (v *Validator) redactObject(object *opensplunkv1.TypedObject) {
 		if field == nil {
 			continue
 		}
+		if v.orderedOnChange {
+			if match := v.matchSensitiveName(field.GetName(), true); match.kind != rawSecretNone {
+				v.redactFieldInPolicyOrder(field, match.order)
+				continue
+			}
+		}
 		if v.redactFieldByName(field) {
 			continue
 		}
 		v.redactValue(field.GetValue())
+	}
+}
+
+func (v *Validator) redactFieldInPolicyOrder(
+	field *opensplunkv1.TypedObjectField,
+	startPolicy int,
+) {
+	for _, redactor := range v.ordered[startPolicy:] {
+		if redactor.redactFieldByName(field) {
+			continue
+		}
+		redactor.redactValue(field.GetValue())
 	}
 }
 
@@ -244,14 +271,26 @@ func (v *Validator) redactFieldByName(field *opensplunkv1.TypedObjectField) bool
 	if match.kind == rawSecretNone {
 		return false
 	}
-	if current, ok := field.GetValue().GetKind().(*opensplunkv1.TypedValue_StringValue); ok &&
-		current.StringValue == match.replacement {
-		return true
+	redactTypedFieldValue(field, match.replacement)
+	return true
+}
+
+func redactTypedFieldValue(
+	field *opensplunkv1.TypedObjectField,
+	replacement string,
+) {
+	if len(field.ProtoReflect().GetUnknown()) > 0 {
+		field.ProtoReflect().SetUnknown(nil)
+	}
+	value := field.GetValue()
+	if current, ok := value.GetKind().(*opensplunkv1.TypedValue_StringValue); ok &&
+		current.StringValue == replacement &&
+		len(value.ProtoReflect().GetUnknown()) == 0 {
+		return
 	}
 	field.Value = &opensplunkv1.TypedValue{
-		Kind: &opensplunkv1.TypedValue_StringValue{StringValue: match.replacement},
+		Kind: &opensplunkv1.TypedValue_StringValue{StringValue: replacement},
 	}
-	return true
 }
 
 func (v *Validator) redactValue(value *opensplunkv1.TypedValue) {
@@ -288,13 +327,7 @@ func redactTopLevelObjectWithReplacements(
 		if !sensitive {
 			continue
 		}
-		if current, ok := field.GetValue().GetKind().(*opensplunkv1.TypedValue_StringValue); ok &&
-			current.StringValue == replacement {
-			continue
-		}
-		field.Value = &opensplunkv1.TypedValue{
-			Kind: &opensplunkv1.TypedValue_StringValue{StringValue: replacement},
-		}
+		redactTypedFieldValue(field, replacement)
 	}
 }
 
@@ -351,13 +384,14 @@ func redactTopLevelJSONWithReplacements(
 // JSON numbers are decoded with UseNumber so sanitization does not coerce large
 // integers through float64.
 func (v *Validator) redactJSON(raw []byte) (redacted []byte, parsed bool) {
-	redacted, parsed, _ = v.redactJSONDepth(raw, 0)
+	redacted, parsed, _ = v.redactJSONDepth(raw, 0, true)
 	return redacted, parsed
 }
 
 func (v *Validator) redactJSONDepth(
 	raw []byte,
 	embeddedDepth int,
+	allowOrderedReplay bool,
 ) (redacted []byte, parsed bool, change redactionChange) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
@@ -369,12 +403,15 @@ func (v *Validator) redactJSONDepth(
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return raw, false, redactionChange{}
 	}
-	redactedValue, change := v.redactJSONValue(value, embeddedDepth)
-	if duplicateKey && !change.changed {
-		change = changedBy(v.fallbackMatch())
+	redactedValue, change := v.redactJSONValue(value, embeddedDepth, allowOrderedReplay)
+	if duplicateKey {
+		change.merge(canonicalizedJSON())
 	}
-	if !change.changed && !duplicateKey {
+	if !change.changed {
 		return raw, true, redactionChange{}
+	}
+	if !allowOrderedReplay && change.hasPolicyMatch() {
+		return raw, true, change
 	}
 	encoded, err := json.Marshal(redactedValue)
 	if err != nil {
@@ -452,14 +489,14 @@ func decodeJSONValue(decoder *json.Decoder) (any, bool, error) {
 }
 
 func (v *Validator) redactText(raw []byte) []byte {
-	if len(v.sequential) > 0 {
-		redacted := raw
-		for _, redactor := range v.sequential {
-			redacted = redactor.redactText(redacted)
+	redacted, change := v.redactTextChanged(raw, !v.orderedOnChange)
+	if v.orderedOnChange {
+		if !change.hasPolicyMatch() {
+			return redacted
 		}
+		redacted, _ = v.redactTextInPolicyOrder(raw)
 		return redacted
 	}
-	redacted, _ := v.redactTextChanged(raw)
 	return redacted
 }
 
@@ -476,7 +513,13 @@ func (v *Validator) redactEventRaw(
 	// before the last one changes the payload, replaying in policy order also
 	// preserves the historical transition to the full text scanner when that
 	// rewrite removes the only invalid byte.
-	redacted, change := v.redactKeyValueTextChanged(raw)
+	redacted, change := v.redactKeyValueTextChanged(raw, !v.orderedOnChange)
+	if v.orderedOnChange {
+		if !change.changed {
+			return redacted
+		}
+		return v.redactEventRawInPolicyOrder(raw, encoding)
+	}
 	if len(v.ordered) > 0 &&
 		(change.requiresOrderedFallback ||
 			change.canAffectLaterPolicy(len(v.ordered))) {
@@ -496,18 +539,35 @@ func (v *Validator) redactEventRawInPolicyOrder(
 	return redacted
 }
 
-func (v *Validator) redactTextChanged(raw []byte) ([]byte, redactionChange) {
-	if redactedJSON, parsed, change := v.redactJSONDepth(raw, 0); parsed {
+// redactTextChanged reports a possible change even when ordered replay is
+// disabled. Composite configurations that must preserve historical cascades
+// use that mode for one bounded detection pass, then replay the original text
+// exactly once.
+func (v *Validator) redactTextChanged(
+	raw []byte,
+	allowOrderedReplay bool,
+) ([]byte, redactionChange) {
+	if redactedJSON, parsed, change := v.redactJSONDepth(raw, 0, allowOrderedReplay); parsed {
 		return redactedJSON, change
 	}
-	embedded, embeddedChange := v.redactEmbeddedJSONStringLiteralsChanged(raw, 0)
-	if embeddedChange.changed && len(v.ordered) > 0 {
+	embedded, embeddedChange := v.redactEmbeddedJSONStringLiteralsChanged(
+		raw,
+		0,
+		allowOrderedReplay,
+	)
+	if embeddedChange.hasPolicyMatch() && len(v.ordered) > 0 {
+		if !allowOrderedReplay {
+			return raw, embeddedChange
+		}
 		return v.redactTextInPolicyOrder(raw)
 	}
-	redacted, textChange := v.redactKeyValueTextChanged(embedded)
+	redacted, textChange := v.redactKeyValueTextChanged(embedded, allowOrderedReplay)
 	if len(v.ordered) > 0 &&
 		(textChange.requiresOrderedFallback ||
 			textChange.canAffectLaterPolicy(len(v.ordered))) {
+		if !allowOrderedReplay {
+			return raw, textChange
+		}
 		return v.redactTextInPolicyOrder(raw)
 	}
 	embeddedChange.merge(textChange)
@@ -515,14 +575,13 @@ func (v *Validator) redactTextChanged(raw []byte) ([]byte, redactionChange) {
 }
 
 func (v *Validator) redactKeyValueText(raw []byte) []byte {
-	if len(v.sequential) > 0 {
-		redacted := raw
-		for _, redactor := range v.sequential {
-			redacted = redactor.redactKeyValueText(redacted)
+	redacted, change := v.redactKeyValueTextChanged(raw, !v.orderedOnChange)
+	if v.orderedOnChange {
+		if !change.changed {
+			return redacted
 		}
-		return redacted
+		return v.redactKeyValueTextInPolicyOrder(raw)
 	}
-	redacted, change := v.redactKeyValueTextChanged(raw)
 	if len(v.ordered) > 0 &&
 		(change.requiresOrderedFallback ||
 			change.canAffectLaterPolicy(len(v.ordered))) {
@@ -556,7 +615,10 @@ func (v *Validator) redactKeyValueTextInPolicyOrder(raw []byte) []byte {
 	return redacted
 }
 
-func (v *Validator) redactKeyValueTextChanged(raw []byte) ([]byte, redactionChange) {
+func (v *Validator) redactKeyValueTextChanged(
+	raw []byte,
+	materializeChanges bool,
+) ([]byte, redactionChange) {
 	var result []byte
 	copyFrom := 0
 	var change redactionChange
@@ -605,6 +667,9 @@ func (v *Validator) redactKeyValueTextChanged(raw []byte) ([]byte, redactionChan
 				matchChange.canAffectLaterPolicy(len(v.ordered))) {
 			return raw, matchChange
 		}
+		if !materializeChanges {
+			return raw, matchChange
+		}
 
 		if result == nil {
 			result = make([]byte, 0, len(raw)+len(match.replacement))
@@ -626,6 +691,7 @@ func (v *Validator) redactKeyValueTextChanged(raw []byte) ([]byte, redactionChan
 func (v *Validator) redactEmbeddedJSONStringLiteralsChanged(
 	raw []byte,
 	embeddedDepth int,
+	allowOrderedReplay bool,
 ) ([]byte, redactionChange) {
 	for cursor := 0; cursor < len(raw); cursor++ {
 		if raw[cursor] != '"' || rawByteEscaped(raw, cursor, 0) {
@@ -644,10 +710,20 @@ func (v *Validator) redactEmbeddedJSONStringLiteralsChanged(
 			cursor = end - 2
 			continue
 		}
-		_, change := v.redactJSONValue(decoded, embeddedDepth+1)
+		_, change := v.redactJSONValue(
+			decoded,
+			embeddedDepth+1,
+			allowOrderedReplay,
+		)
 		if !change.changed {
 			cursor = end - 2
 			continue
+		}
+		if !change.hasPolicyMatch() {
+			// Precisely re-encoding one literal inside otherwise malformed prose
+			// is ambiguous. Preserve the historical fail-closed boundary even
+			// when duplicate-key canonicalization was the inner JSON change.
+			change = boundaryChangedBy(v.fallbackMatch())
 		}
 		// A valid embedded string required redaction. Replace the current
 		// raw/string boundary rather than attempt overlapping rewrites in
@@ -1258,7 +1334,11 @@ func pemPrivateKeyEnd(raw []byte, start int) (int, bool) {
 	return labelEnd + 5 + markerOffset + len(endMarker), true
 }
 
-func (v *Validator) redactJSONValue(value any, embeddedDepth int) (any, redactionChange) {
+func (v *Validator) redactJSONValue(
+	value any,
+	embeddedDepth int,
+	allowOrderedReplay bool,
+) (any, redactionChange) {
 	switch typed := value.(type) {
 	case map[string]any:
 		var change redactionChange
@@ -1277,7 +1357,11 @@ func (v *Validator) redactJSONValue(value any, embeddedDepth int) (any, redactio
 				change.merge(matchChange)
 				continue
 			}
-			redacted, childChange := v.redactJSONValue(child, embeddedDepth)
+			redacted, childChange := v.redactJSONValue(
+				child,
+				embeddedDepth,
+				allowOrderedReplay,
+			)
 			if childChange.changed {
 				typed[name] = redacted
 				change.merge(childChange)
@@ -1287,7 +1371,11 @@ func (v *Validator) redactJSONValue(value any, embeddedDepth int) (any, redactio
 	case []any:
 		var change redactionChange
 		for i, child := range typed {
-			redacted, childChange := v.redactJSONValue(child, embeddedDepth)
+			redacted, childChange := v.redactJSONValue(
+				child,
+				embeddedDepth,
+				allowOrderedReplay,
+			)
 			if childChange.changed {
 				typed[i] = redacted
 				change.merge(childChange)
@@ -1303,30 +1391,53 @@ func (v *Validator) redactJSONValue(value any, embeddedDepth int) (any, redactio
 			change := changedBy(v.fallbackMatch())
 			return v.depthLimitReplacement(), change
 		}
-		if embedded, parsed, change := v.redactJSONDepth([]byte(typed), embeddedDepth+1); parsed {
-			if bytes.Equal(embedded, []byte(typed)) {
+		typedBytes := []byte(typed)
+		if embedded, parsed, change := v.redactJSONDepth(
+			typedBytes,
+			embeddedDepth+1,
+			allowOrderedReplay,
+		); parsed {
+			if !change.changed {
 				return typed, redactionChange{}
+			}
+			if !allowOrderedReplay && change.hasPolicyMatch() {
+				return typed, change
 			}
 			return string(embedded), change
 		}
-		typedBytes := []byte(typed)
-		embedded, change := v.redactEmbeddedJSONStringLiteralsChanged(typedBytes, embeddedDepth)
-		if change.changed && len(v.ordered) > 0 {
+		embedded, change := v.redactEmbeddedJSONStringLiteralsChanged(
+			typedBytes,
+			embeddedDepth,
+			allowOrderedReplay,
+		)
+		if change.hasPolicyMatch() && len(v.ordered) > 0 {
+			if !allowOrderedReplay {
+				return typed, change
+			}
 			redacted, orderedChange := v.redactTextInPolicyOrder(typedBytes)
 			if bytes.Equal(redacted, typedBytes) {
 				return typed, redactionChange{}
 			}
 			return string(redacted), orderedChange
 		}
-		redacted, textChange := v.redactKeyValueTextChanged(embedded)
+		redacted, textChange := v.redactKeyValueTextChanged(
+			embedded,
+			allowOrderedReplay,
+		)
 		if len(v.ordered) > 0 &&
 			(textChange.requiresOrderedFallback ||
 				textChange.canAffectLaterPolicy(len(v.ordered))) {
+			if !allowOrderedReplay {
+				return typed, textChange
+			}
 			redacted, orderedChange := v.redactTextInPolicyOrder(typedBytes)
 			if bytes.Equal(redacted, typedBytes) {
 				return typed, redactionChange{}
 			}
 			return string(redacted), orderedChange
+		}
+		if !allowOrderedReplay && textChange.changed {
+			return typed, textChange
 		}
 		change.merge(textChange)
 		if bytes.Equal(redacted, typedBytes) {

@@ -91,6 +91,290 @@ func BenchmarkCompositeSupplementalRedactor(b *testing.B) {
 	}
 }
 
+func BenchmarkCompositeSupplementalRedactorSyntaxMarkerSafeMiss(b *testing.B) {
+	safe := compositeSafeMissPayload()
+	for _, syntaxBearing := range []bool{false, true} {
+		policies := compositeSafeMissPolicies(syntaxBearing)
+		sequential := make([]*Validator, len(policies))
+		for index := range policies {
+			var err error
+			sequential[index], err = NewSupplementalRedactor(DefaultLimits(), policies[index])
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
+		if err != nil {
+			b.Fatal(err)
+		}
+		name := "opaque_markers"
+		if syntaxBearing {
+			name = "first_marker_contains_colon"
+		}
+		want := supplementalBenchmarkResult(safe, func(event *opensplunkv1.LogEvent) {
+			for _, redactor := range sequential {
+				redactor.RedactEventInPlace(event)
+			}
+		})
+		got := supplementalBenchmarkResult(safe, func(event *opensplunkv1.LogEvent) {
+			composite.RedactEventInPlace(event)
+		})
+		if !proto.Equal(got, want) {
+			b.Fatalf("%s safe-miss output differs from sequential output", name)
+		}
+		b.Run(name+"/sequential", func(b *testing.B) {
+			benchmarkSupplementalRedaction(b, safe, func(event *opensplunkv1.LogEvent) {
+				for _, redactor := range sequential {
+					redactor.RedactEventInPlace(event)
+				}
+			})
+		})
+		b.Run(name+"/composite", func(b *testing.B) {
+			benchmarkSupplementalRedaction(b, safe, func(event *opensplunkv1.LogEvent) {
+				composite.RedactEventInPlace(event)
+			})
+		})
+	}
+}
+
+func BenchmarkCompositeSupplementalRedactorSyntaxMarkerDuplicateJSONSafeMiss(b *testing.B) {
+	safe := []byte(`{"safe":"first","safe":"last"}`)
+	for _, policyCount := range []int{2, 8, compositeSafeMissPolicyCount} {
+		policies := compositeSafeMissPolicies(true)[:policyCount]
+		sequential := make([]*Validator, len(policies))
+		for index := range policies {
+			var err error
+			sequential[index], err = NewSupplementalRedactor(DefaultLimits(), policies[index])
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
+		if err != nil {
+			b.Fatal(err)
+		}
+		want := supplementalBenchmarkResult(safe, func(event *opensplunkv1.LogEvent) {
+			for _, redactor := range sequential {
+				redactor.RedactEventInPlace(event)
+			}
+		})
+		got := supplementalBenchmarkResult(safe, func(event *opensplunkv1.LogEvent) {
+			composite.RedactEventInPlace(event)
+		})
+		if !proto.Equal(got, want) {
+			b.Fatalf("policies=%d duplicate JSON output differs from sequential output", policyCount)
+		}
+		b.Run(fmt.Sprintf("policies=%d/sequential", policyCount), func(b *testing.B) {
+			benchmarkSupplementalRedaction(b, safe, func(event *opensplunkv1.LogEvent) {
+				for _, redactor := range sequential {
+					redactor.RedactEventInPlace(event)
+				}
+			})
+		})
+		b.Run(fmt.Sprintf("policies=%d/composite", policyCount), func(b *testing.B) {
+			benchmarkSupplementalRedaction(b, safe, func(event *opensplunkv1.LogEvent) {
+				composite.RedactEventInPlace(event)
+			})
+		})
+	}
+}
+
+func BenchmarkCompositeSupplementalRedactorSyntaxMarkerHitOnly(b *testing.B) {
+	for _, policyCount := range []int{2, 8, compositeSafeMissPolicyCount} {
+		policies := compositeSafeMissPolicies(false)[:policyCount]
+		policies[0] = RedactionPolicy{
+			AdditionalSensitiveFields: []string{"alpha"},
+			Replacement:               "beta=generated",
+		}
+		policies[1] = RedactionPolicy{
+			AdditionalSensitiveFields: []string{"beta"},
+			Replacement:               "FINAL",
+		}
+		sequential := make([]*Validator, len(policies))
+		for index, policy := range policies {
+			var err error
+			sequential[index], err = NewSupplementalRedactor(DefaultLimits(), policy)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, fixture := range []struct {
+			name     string
+			newEvent func() *opensplunkv1.LogEvent
+		}{
+			{
+				name: "raw_text",
+				newEvent: func() *opensplunkv1.LogEvent {
+					return &opensplunkv1.LogEvent{
+						Raw:         []byte("alpha=raw-secret"),
+						RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					}
+				},
+			},
+			{
+				name: "message_text",
+				newEvent: func() *opensplunkv1.LogEvent {
+					message := "alpha=message-secret"
+					return &opensplunkv1.LogEvent{Message: &message}
+				},
+			},
+			{
+				name: "valid_JSON",
+				newEvent: func() *opensplunkv1.LogEvent {
+					return &opensplunkv1.LogEvent{
+						Raw:         []byte(`{"alpha":"raw-secret"}`),
+						RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					}
+				},
+			},
+		} {
+			fixture := fixture
+			want := fixture.newEvent()
+			for _, redactor := range sequential {
+				redactor.RedactEventInPlace(want)
+			}
+			got := composite.RedactEventInPlace(fixture.newEvent())
+			if !proto.Equal(got, want) {
+				b.Fatalf(
+					"policies=%d %s output differs from sequential output",
+					policyCount,
+					fixture.name,
+				)
+			}
+			b.Run(
+				fmt.Sprintf("policies=%d/%s/sequential", policyCount, fixture.name),
+				func(b *testing.B) {
+					benchmarkSupplementalEvent(b, fixture.newEvent, func(event *opensplunkv1.LogEvent) {
+						for _, redactor := range sequential {
+							redactor.RedactEventInPlace(event)
+						}
+					})
+				},
+			)
+			b.Run(
+				fmt.Sprintf("policies=%d/%s/composite", policyCount, fixture.name),
+				func(b *testing.B) {
+					benchmarkSupplementalEvent(b, fixture.newEvent, func(event *opensplunkv1.LogEvent) {
+						composite.RedactEventInPlace(event)
+					})
+				},
+			)
+		}
+	}
+}
+
+func BenchmarkCompositeSupplementalRedactorSyntaxMarkerSparseHit(b *testing.B) {
+	policies := compositeSafeMissPolicies(false)
+	policies[0] = RedactionPolicy{
+		AdditionalSensitiveFields: []string{"alpha"},
+		Replacement:               "beta=generated",
+	}
+	policies[1] = RedactionPolicy{
+		AdditionalSensitiveFields: []string{"beta"},
+		Replacement:               "FINAL",
+	}
+	sequential := make([]*Validator, len(policies))
+	for index, policy := range policies {
+		var err error
+		sequential[index], err = NewSupplementalRedactor(DefaultLimits(), policy)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	safe := bytes.Repeat([]byte("x=y "), (64<<10)/len("x=y "))
+	safeMessage := string(safe)
+	largeTypedValue := string(bytes.Repeat([]byte("x=y "), (1<<20)/len("x=y ")))
+	for _, fixture := range []struct {
+		name     string
+		newEvent func() *opensplunkv1.LogEvent
+	}{
+		{
+			name: "raw_hit_with_64KiB_safe_message",
+			newEvent: func() *opensplunkv1.LogEvent {
+				message := safeMessage
+				return &opensplunkv1.LogEvent{
+					Raw:         []byte("alpha=raw-secret"),
+					RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					Message:     &message,
+				}
+			},
+		},
+		{
+			name: "message_hit_with_64KiB_safe_raw",
+			newEvent: func() *opensplunkv1.LogEvent {
+				message := "alpha=message-secret"
+				return &opensplunkv1.LogEvent{
+					Raw:         safe,
+					RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					Message:     &message,
+				}
+			},
+		},
+		{
+			name: "nested_JSON_message_hit_with_64KiB_safe_raw",
+			newEvent: func() *opensplunkv1.LogEvent {
+				message := `{"note":"alpha=message-secret","safe":"kept"}`
+				return &opensplunkv1.LogEvent{
+					Raw:         safe,
+					RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					Message:     &message,
+				}
+			},
+		},
+		{
+			name: "typed_hit_with_128KiB_safe_text",
+			newEvent: func() *opensplunkv1.LogEvent {
+				message := safeMessage
+				return &opensplunkv1.LogEvent{
+					Raw:         safe,
+					RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					Message:     &message,
+					Fields:      object(stringField("alpha", "beta=generated")),
+				}
+			},
+		},
+		{
+			name: "last_policy_typed_hit_with_1MiB_value",
+			newEvent: func() *opensplunkv1.LogEvent {
+				return &opensplunkv1.LogEvent{
+					Fields: object(stringField("secret_31", largeTypedValue)),
+				}
+			},
+		},
+	} {
+		fixture := fixture
+		want := fixture.newEvent()
+		for _, redactor := range sequential {
+			redactor.RedactEventInPlace(want)
+		}
+		got := composite.RedactEventInPlace(fixture.newEvent())
+		if !proto.Equal(got, want) {
+			b.Fatalf("%s output differs from sequential output", fixture.name)
+		}
+		b.Run(fixture.name+"/sequential", func(b *testing.B) {
+			benchmarkSupplementalEvent(b, fixture.newEvent, func(event *opensplunkv1.LogEvent) {
+				for _, redactor := range sequential {
+					redactor.RedactEventInPlace(event)
+				}
+			})
+		})
+		b.Run(fixture.name+"/composite", func(b *testing.B) {
+			benchmarkSupplementalEvent(b, fixture.newEvent, func(event *opensplunkv1.LogEvent) {
+				composite.RedactEventInPlace(event)
+			})
+		})
+	}
+}
+
 func BenchmarkTopLevelAliasRedaction(b *testing.B) {
 	for _, policyCount := range []int{1, 8, 32} {
 		policies := make([]TopLevelAliasRedaction, policyCount)
@@ -139,6 +423,36 @@ func BenchmarkTopLevelAliasRedaction(b *testing.B) {
 	}
 }
 
+func BenchmarkTopLevelAliasRedactionSyntaxMarkerSafeMiss(b *testing.B) {
+	safe := compositeSafeMissPayload()
+	for _, syntaxBearing := range []bool{false, true} {
+		policies := compositeSafeMissAliasPolicies(syntaxBearing)
+		name := "opaque_markers"
+		if syntaxBearing {
+			name = "first_marker_contains_colon"
+		}
+		want := aliasBenchmarkResult(b, safe, true, func(event *opensplunkv1.LogEvent) {
+			legacyTopLevelAliasRedaction(b, event, policies)
+		})
+		got := aliasBenchmarkResult(b, safe, true, func(event *opensplunkv1.LogEvent) {
+			RedactTopLevelAliasesInPlace(event, policies)
+		})
+		if !proto.Equal(got, want) {
+			b.Fatalf("%s safe-miss output differs from sequential output", name)
+		}
+		b.Run(name+"/sequential", func(b *testing.B) {
+			benchmarkAliasRedaction(b, safe, true, func(event *opensplunkv1.LogEvent) {
+				legacyTopLevelAliasRedaction(b, event, policies)
+			})
+		})
+		b.Run(name+"/composite", func(b *testing.B) {
+			benchmarkAliasRedaction(b, safe, true, func(event *opensplunkv1.LogEvent) {
+				RedactTopLevelAliasesInPlace(event, policies)
+			})
+		})
+	}
+}
+
 func supplementalBenchmarkResult(
 	raw []byte,
 	redact func(event *opensplunkv1.LogEvent),
@@ -170,6 +484,22 @@ func benchmarkSupplementalRedaction(
 		event.Raw = raw
 		event.Message = &message
 		redact(event)
+	}
+}
+
+func benchmarkSupplementalEvent(
+	b *testing.B,
+	newEvent func() *opensplunkv1.LogEvent,
+	redact func(event *opensplunkv1.LogEvent),
+) {
+	b.Helper()
+	sample := newEvent()
+	byteCount := proto.Size(sample)
+	b.ReportAllocs()
+	b.SetBytes(int64(byteCount))
+	b.ResetTimer()
+	for range b.N {
+		redact(newEvent())
 	}
 }
 

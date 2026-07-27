@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -334,10 +335,10 @@ func TestCompositeSupplementalRedactorChoosesCompatibilityFallbackOnlyWhenNeeded
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ordinary.sequential) != 0 || len(ordinary.ordered) != 3 {
+	if ordinary.orderedOnChange || len(ordinary.ordered) != 3 {
 		t.Fatalf(
-			"ordinary composite path = sequential:%d ordered:%d, want 0/3",
-			len(ordinary.sequential),
+			"ordinary composite path = requires-ordered:%t ordered:%d, want false/3",
+			ordinary.orderedOnChange,
 			len(ordinary.ordered),
 		)
 	}
@@ -348,7 +349,7 @@ func TestCompositeSupplementalRedactorChoosesCompatibilityFallbackOnlyWhenNeeded
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(finalSyntax.sequential) != 0 {
+	if finalSyntax.orderedOnChange {
 		t.Fatalf("final syntax-bearing marker selected compatibility fallback")
 	}
 
@@ -386,11 +387,469 @@ func TestCompositeSupplementalRedactorChoosesCompatibilityFallbackOnlyWhenNeeded
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := len(composite.sequential); got != len(test.policies) {
-				t.Fatalf("compatibility fallback validators = %d, want %d", got, len(test.policies))
+			if !composite.orderedOnChange || len(composite.ordered) != len(test.policies) {
+				t.Fatalf(
+					"compatibility fallback = %t/%d, want true/%d",
+					composite.orderedOnChange,
+					len(composite.ordered),
+					len(test.policies),
+				)
 			}
 		})
 	}
+}
+
+const compositeSafeMissPolicyCount = 32
+
+func compositeSafeMissPayload() []byte {
+	return bytes.Repeat([]byte("x=y "), 1024)
+}
+
+func compositeSafeMissReplacement(index int, syntaxBearing bool) string {
+	if syntaxBearing && index == 0 {
+		return "MASK:0"
+	}
+	return fmt.Sprintf("<MASK_%02d>", index)
+}
+
+func compositeSafeMissPolicies(syntaxBearing bool) []RedactionPolicy {
+	policies := make([]RedactionPolicy, compositeSafeMissPolicyCount)
+	for index := range policies {
+		policies[index] = RedactionPolicy{
+			AdditionalSensitiveFields: []string{fmt.Sprintf("secret_%02d", index)},
+			Replacement:               compositeSafeMissReplacement(index, syntaxBearing),
+		}
+	}
+	return policies
+}
+
+func compositeSafeMissAliasPolicies(syntaxBearing bool) []TopLevelAliasRedaction {
+	policies := make([]TopLevelAliasRedaction, compositeSafeMissPolicyCount)
+	for index := range policies {
+		policies[index] = TopLevelAliasRedaction{
+			Field:       fmt.Sprintf("secret_%02d", index),
+			Replacement: compositeSafeMissReplacement(index, syntaxBearing),
+		}
+	}
+	return policies
+}
+
+func TestCompositeSupplementalRedactorDefersSyntaxFallbackUntilAnEventMatches(t *testing.T) {
+	policies := compositeSafeMissPolicies(true)
+	composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !composite.orderedOnChange || len(composite.ordered) != compositeSafeMissPolicyCount {
+		t.Fatalf(
+			"ordered compatibility fallback = %t/%d, want true/%d",
+			composite.orderedOnChange,
+			len(composite.ordered),
+			compositeSafeMissPolicyCount,
+		)
+	}
+
+	safe := compositeSafeMissPayload()
+	message := string(safe)
+	event := &opensplunkv1.LogEvent{
+		Raw:         bytes.Clone(safe),
+		RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		Message:     &message,
+	}
+	got := composite.RedactEventInPlace(event)
+	if !bytes.Equal(got.GetRaw(), safe) || got.GetMessage() != string(safe) {
+		t.Fatalf("safe event changed: raw=%q message=%q", got.GetRaw(), got.GetMessage())
+	}
+}
+
+func TestCompositeSupplementalRedactorSyntaxSafeMissAllocationParity(t *testing.T) {
+	// Keep enough headroom for Go/runtime allocation drift while rejecting the
+	// historical 608-allocation ordered replay against the 19-allocation
+	// composite control.
+	const (
+		allocationMultiplier = 2
+		allocationSlack      = 32
+	)
+	safe := compositeSafeMissPayload()
+	safeDuplicateJSON := []byte(`{"safe":"first","safe":"last"}`)
+	opaque, err := NewCompositeSupplementalRedactor(
+		DefaultLimits(),
+		compositeSafeMissPolicies(false),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syntax, err := NewCompositeSupplementalRedactor(
+		DefaultLimits(),
+		compositeSafeMissPolicies(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocations := func(redactor *Validator) float64 {
+		event := &opensplunkv1.LogEvent{
+			RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		}
+		return testing.AllocsPerRun(20, func() {
+			messageCopy := string(safe)
+			event.Raw = safe
+			event.Message = &messageCopy
+			redactor.RedactEventInPlace(event)
+		})
+	}
+	for _, measurement := range []struct {
+		name   string
+		opaque func() float64
+		syntax func() float64
+	}{
+		{
+			name:   "event",
+			opaque: func() float64 { return allocations(opaque) },
+			syntax: func() float64 { return allocations(syntax) },
+		},
+		{
+			name: "text",
+			opaque: func() float64 {
+				return testing.AllocsPerRun(20, func() { opaque.redactText(safe) })
+			},
+			syntax: func() float64 {
+				return testing.AllocsPerRun(20, func() { syntax.redactText(safe) })
+			},
+		},
+		{
+			name: "key-value text",
+			opaque: func() float64 {
+				return testing.AllocsPerRun(20, func() { opaque.redactKeyValueText(safe) })
+			},
+			syntax: func() float64 {
+				return testing.AllocsPerRun(20, func() { syntax.redactKeyValueText(safe) })
+			},
+		},
+		{
+			name: "duplicate JSON text",
+			opaque: func() float64 {
+				return testing.AllocsPerRun(20, func() { opaque.redactText(safeDuplicateJSON) })
+			},
+			syntax: func() float64 {
+				return testing.AllocsPerRun(20, func() { syntax.redactText(safeDuplicateJSON) })
+			},
+		},
+	} {
+		opaqueAllocations := measurement.opaque()
+		syntaxAllocations := measurement.syntax()
+		if limit := opaqueAllocations*allocationMultiplier + allocationSlack; syntaxAllocations > limit {
+			t.Errorf(
+				"syntax-bearing safe-%s allocations = %.0f, want <= %.0f "+
+					"(opaque composite %.0f)",
+				measurement.name,
+				syntaxAllocations,
+				limit,
+				opaqueAllocations,
+			)
+		}
+	}
+}
+
+func TestCompositeSupplementalRedactorOrderedReplayMatchesSequentialAcrossSurfaces(t *testing.T) {
+	policies := []RedactionPolicy{
+		{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta=generated"},
+		{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
+	}
+	composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !composite.orderedOnChange {
+		t.Fatal("syntax-bearing marker did not retain ordered compatibility replay")
+	}
+
+	deep := `{"safe":"value"}`
+	for range maxEmbeddedJSONRedactionDepth + 1 {
+		encoded, marshalErr := json.Marshal(deep)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		deep = string(encoded)
+	}
+	messageOnly := "alpha=message-secret-must-not-survive"
+	for _, test := range []struct {
+		name        string
+		event       *opensplunkv1.LogEvent
+		checkGolden bool
+		wantRaw     string
+		wantMessage string
+	}{
+		{
+			name: "safe UTF8 raw and message",
+			event: func() *opensplunkv1.LogEvent {
+				message := "safe=value"
+				return &opensplunkv1.LogEvent{
+					Raw:         []byte("safe=value"),
+					RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					Message:     &message,
+					Fields:      object(stringField("safe", "kept")),
+				}
+			}(),
+		},
+		{
+			name: "safe invalid binary",
+			event: &opensplunkv1.LogEvent{
+				Raw:         []byte{0xff, 0x00, ' ', 's', 'a', 'f', 'e'},
+				RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
+				Fields:      object(stringField("safe", "kept")),
+			},
+		},
+		{
+			name: "direct typed field already equals first marker",
+			event: &opensplunkv1.LogEvent{
+				Fields: object(stringField("alpha", "beta=generated")),
+			},
+		},
+		{
+			name: "nested typed string",
+			event: &opensplunkv1.LogEvent{
+				Fields: object(objectField(
+					"nested",
+					object(stringField("note", "alpha=typed-secret-must-not-survive")),
+				)),
+			},
+		},
+		{
+			name: "valid JSON direct field",
+			event: &opensplunkv1.LogEvent{
+				Raw:         []byte(`{"alpha":"raw-secret-must-not-survive","safe":"kept"}`),
+				RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			},
+		},
+		{
+			name: "message-only assignment",
+			event: &opensplunkv1.LogEvent{
+				Raw:         []byte("safe=value"),
+				RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+				Message:     &messageOnly,
+			},
+		},
+		{
+			name: "invalid binary assignment",
+			event: &opensplunkv1.LogEvent{
+				Raw: append(
+					[]byte{0xff, 0x00, ' '},
+					[]byte("alpha=binary-secret-must-not-survive")...,
+				),
+				RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
+			},
+		},
+		{
+			name: "safe duplicate JSON still canonicalizes",
+			event: func() *opensplunkv1.LogEvent {
+				raw := `{"safe":"first","safe":"last"}`
+				return &opensplunkv1.LogEvent{
+					Raw:         []byte(raw),
+					RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					Message:     &raw,
+				}
+			}(),
+			checkGolden: true,
+			wantRaw:     `{"safe":"last"}`,
+			wantMessage: `{"safe":"last"}`,
+		},
+		{
+			name: "safe duplicate JSON nested in a JSON string canonicalizes",
+			event: func() *opensplunkv1.LogEvent {
+				raw := `{"note":"{\"safe\":\"first\",\"safe\":\"last\"}"}`
+				return &opensplunkv1.LogEvent{
+					Raw:         []byte(raw),
+					RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					Message:     &raw,
+				}
+			}(),
+			checkGolden: true,
+			wantRaw:     `{"note":"{\"safe\":\"last\"}"}`,
+			wantMessage: `{"note":"{\"safe\":\"last\"}"}`,
+		},
+		{
+			name: "safe duplicate JSON inside malformed prose fails closed",
+			event: func() *opensplunkv1.LogEvent {
+				raw := `failed payload="{\"safe\":\"first\",\"safe\":\"last\"}"`
+				return &opensplunkv1.LogEvent{
+					Raw:         []byte(raw),
+					RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					Message:     &raw,
+				}
+			}(),
+			checkGolden: true,
+			wantRaw:     `beta="FINAL"`,
+			wantMessage: `beta="FINAL"`,
+		},
+		{
+			name: "duplicate JSON plus sensitive field still replays policies",
+			event: func() *opensplunkv1.LogEvent {
+				raw := `{"safe":"first","safe":"last","alpha":"raw-secret-must-not-survive"}`
+				return &opensplunkv1.LogEvent{
+					Raw:         []byte(raw),
+					RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					Message:     &raw,
+				}
+			}(),
+			checkGolden: true,
+			wantRaw:     `{"alpha":"beta=\"FINAL\"","safe":"last"}`,
+			wantMessage: `{"alpha":"beta=\"FINAL\"","safe":"last"}`,
+		},
+		{
+			name: "depth fail-close without a named field",
+			event: &opensplunkv1.LogEvent{
+				Raw:         []byte(deep),
+				RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			want := applySequentialSupplementalRedaction(
+				t,
+				policies,
+				proto.Clone(test.event).(*opensplunkv1.LogEvent),
+			)
+			got := composite.RedactEventInPlace(
+				proto.Clone(test.event).(*opensplunkv1.LogEvent),
+			)
+			if !proto.Equal(got, want) {
+				t.Fatalf("composite result differs from sequential result:\n got: %+v\nwant: %+v", got, want)
+			}
+			if test.checkGolden &&
+				(string(got.GetRaw()) != test.wantRaw || got.GetMessage() != test.wantMessage) {
+				t.Fatalf(
+					"composite golden output = raw:%q message:%q, want raw:%q message:%q",
+					got.GetRaw(),
+					got.GetMessage(),
+					test.wantRaw,
+					test.wantMessage,
+				)
+			}
+			wire, marshalErr := proto.MarshalOptions{Deterministic: true}.Marshal(got)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if bytes.Contains(wire, []byte("secret-must-not-survive")) {
+				t.Fatalf("ordered replay leaked planted secret: %+v", got)
+			}
+		})
+	}
+}
+
+func TestCompositeSupplementalRedactorDirectFieldReplaysFromMiddleMatch(t *testing.T) {
+	t.Parallel()
+
+	policies := []RedactionPolicy{
+		{AdditionalSensitiveFields: []string{"unrelated"}, Replacement: "<PREFIX>"},
+		{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta=generated"},
+		{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
+	}
+	composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !composite.orderedOnChange {
+		t.Fatal("middle-policy fixture did not select ordered-on-change redaction")
+	}
+	input := &opensplunkv1.LogEvent{
+		Fields: object(stringField("alpha", "original-secret")),
+	}
+	want := applySequentialSupplementalRedaction(
+		t,
+		policies,
+		proto.Clone(input).(*opensplunkv1.LogEvent),
+	)
+	got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunkv1.LogEvent))
+	if !proto.Equal(got, want) {
+		t.Fatalf("middle-policy direct result differs:\n got: %+v\nwant: %+v", got, want)
+	}
+	value := got.GetFields().GetFields()[0].GetValue().GetStringValue()
+	if value != `beta="FINAL"` {
+		t.Fatalf("middle-policy direct value = %q, want %q", value, `beta="FINAL"`)
+	}
+}
+
+func TestCompositeSupplementalRedactorDirectFieldDropsUnknownBytesLikeSequential(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name            string
+		policies        []RedactionPolicy
+		wantOrderedPath bool
+	}{
+		{
+			name: "single policy",
+			policies: []RedactionPolicy{
+				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "FINAL"},
+			},
+		},
+		{
+			name: "unrelated syntax-bearing prefix",
+			policies: []RedactionPolicy{
+				{AdditionalSensitiveFields: []string{"unrelated"}, Replacement: "MASK:0"},
+				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "FINAL"},
+			},
+			wantOrderedPath: true,
+		},
+		{
+			name: "earlier direct replacement",
+			policies: []RedactionPolicy{
+				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "OLD"},
+				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "FINAL"},
+			},
+			wantOrderedPath: true,
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), test.policies)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if composite.orderedOnChange != test.wantOrderedPath {
+				t.Fatalf(
+					"ordered-on-change = %t, want %t",
+					composite.orderedOnChange,
+					test.wantOrderedPath,
+				)
+			}
+			unknown := plantedUnknownSecretBytes()
+			value := &opensplunkv1.TypedValue{
+				Kind: &opensplunkv1.TypedValue_StringValue{StringValue: "FINAL"},
+			}
+			value.ProtoReflect().SetUnknown(unknown)
+			field := &opensplunkv1.TypedObjectField{
+				Name:  "alpha",
+				Value: value,
+			}
+			field.ProtoReflect().SetUnknown(unknown)
+			input := &opensplunkv1.LogEvent{Fields: object(field)}
+			want := applySequentialSupplementalRedaction(
+				t,
+				test.policies,
+				proto.Clone(input).(*opensplunkv1.LogEvent),
+			)
+			got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunkv1.LogEvent))
+			if !proto.Equal(got, want) {
+				t.Fatalf("direct-field unknown-byte result differs:\n got: %+v\nwant: %+v", got, want)
+			}
+			wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(wire, []byte("planted-secret")) {
+				t.Fatalf("direct-field redaction retained unknown secret bytes: %x", wire)
+			}
+		})
+	}
+}
+
+func plantedUnknownSecretBytes() []byte {
+	unknown := protowire.AppendTag(nil, 2047, protowire.BytesType)
+	return protowire.AppendString(unknown, "planted-secret")
 }
 
 func TestNewCompositeSupplementalRedactorValidatesEveryPolicy(t *testing.T) {
@@ -497,13 +956,16 @@ func TestCompositeSupplementalRedactorIsSafeForConcurrentUse(t *testing.T) {
 	t.Parallel()
 
 	policies := []RedactionPolicy{
-		{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "<FIRST>"},
-		{AdditionalSensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
+		{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta=generated"},
+		{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
 		{AdditionalSensitiveFields: []string{"third"}, Replacement: "***"},
 	}
 	composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policies)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !composite.orderedOnChange {
+		t.Fatal("concurrency fixture did not select ordered-on-change redaction")
 	}
 	input := validTestEvent("composite-concurrent", "main")
 	input.Raw = []byte(`{"alpha":"raw-alpha","nested":{"beta":"raw-beta"},"safe":"kept"}`)
@@ -626,10 +1088,11 @@ func TestTopLevelAliasCompatibilityFallbackMatchesSequentialTextGroups(t *testin
 	t.Parallel()
 
 	for _, test := range []struct {
-		name     string
-		policies []TopLevelAliasRedaction
-		raw      string
-		wantRaw  string
+		name        string
+		policies    []TopLevelAliasRedaction
+		raw         string
+		wantRaw     string
+		wantMessage string
 	}{
 		{
 			name: "syntax-bearing generated marker",
@@ -637,8 +1100,19 @@ func TestTopLevelAliasCompatibilityFallbackMatchesSequentialTextGroups(t *testin
 				{Field: "alpha", Replacement: "beta=generated"},
 				{Field: "beta", Replacement: "FINAL"},
 			},
-			raw:     "alpha=raw-secret",
-			wantRaw: `alpha="beta="FINAL"`,
+			raw:         "alpha=raw-secret",
+			wantRaw:     `alpha="beta="FINAL"`,
+			wantMessage: "FINAL",
+		},
+		{
+			name: "final marker inside a root JSON string",
+			policies: []TopLevelAliasRedaction{
+				{Field: "alpha", Replacement: "beta=generated"},
+				{Field: "beta", Replacement: "FINAL"},
+			},
+			raw:         `"beta:00"`,
+			wantRaw:     `"beta:00"`,
+			wantMessage: `"beta:\"FINAL\""`,
 		},
 		{
 			name: "literal empty replacement",
@@ -646,8 +1120,9 @@ func TestTopLevelAliasCompatibilityFallbackMatchesSequentialTextGroups(t *testin
 				{Field: "alpha", Replacement: ""},
 				{Field: "beta", Replacement: "FINAL"},
 			},
-			raw:     "alpha=raw-secret safe=value",
-			wantRaw: `alpha="" safe=value`,
+			raw:         "alpha=raw-secret safe=value",
+			wantRaw:     `alpha="" safe=value`,
+			wantMessage: `alpha="" safe=value`,
 		},
 	} {
 		test := test
@@ -687,7 +1162,36 @@ func TestTopLevelAliasCompatibilityFallbackMatchesSequentialTextGroups(t *testin
 			if string(got.GetRaw()) != test.wantRaw {
 				t.Fatalf("compatibility raw = %q, want %q", got.GetRaw(), test.wantRaw)
 			}
+			if got.GetMessage() != test.wantMessage {
+				t.Fatalf("compatibility message = %q, want %q", got.GetMessage(), test.wantMessage)
+			}
 		})
+	}
+}
+
+func TestTopLevelAliasRedactionDropsUnknownBytesFromSensitiveTypedField(t *testing.T) {
+	t.Parallel()
+
+	unknown := plantedUnknownSecretBytes()
+	value := &opensplunkv1.TypedValue{
+		Kind: &opensplunkv1.TypedValue_StringValue{StringValue: "FINAL"},
+	}
+	value.ProtoReflect().SetUnknown(unknown)
+	field := &opensplunkv1.TypedObjectField{
+		Name:  "alpha",
+		Value: value,
+	}
+	field.ProtoReflect().SetUnknown(unknown)
+	got := RedactTopLevelAliasesInPlace(
+		&opensplunkv1.LogEvent{Fields: object(field)},
+		[]TopLevelAliasRedaction{{Field: "alpha", Replacement: "FINAL"}},
+	)
+	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(wire, []byte("planted-secret")) {
+		t.Fatalf("alias redaction retained unknown secret bytes: %x", wire)
 	}
 }
 
@@ -1094,6 +1598,32 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 	}
 }
 
+func requireTopLevelAliasMatchesSequential(
+	t testing.TB,
+	input *opensplunkv1.LogEvent,
+	policies []TopLevelAliasRedaction,
+	context string,
+) {
+	t.Helper()
+	want := legacyTopLevelAliasRedaction(
+		t,
+		proto.Clone(input).(*opensplunkv1.LogEvent),
+		policies,
+	)
+	got := RedactTopLevelAliasesInPlace(
+		proto.Clone(input).(*opensplunkv1.LogEvent),
+		policies,
+	)
+	if !proto.Equal(got, want) {
+		t.Fatalf(
+			"%s aliases differ from sequential oracle:\n got: %+v\nwant: %+v",
+			context,
+			got,
+			want,
+		)
+	}
+}
+
 func FuzzTopLevelAliasCompositeMatchesSequentialTextGroups(f *testing.F) {
 	policies := []TopLevelAliasRedaction{
 		{Field: "alpha", Replacement: "<FIRST>"},
@@ -1128,27 +1658,69 @@ func FuzzTopLevelAliasCompositeMatchesSequentialTextGroups(f *testing.F) {
 			message := string(raw)
 			input.Message = &message
 		}
-		want := legacyTopLevelAliasRedaction(
+		requireTopLevelAliasMatchesSequential(
 			t,
-			proto.Clone(input).(*opensplunkv1.LogEvent),
+			input,
 			policies,
+			"composite",
 		)
-		got := RedactTopLevelAliasesInPlace(
-			proto.Clone(input).(*opensplunkv1.LogEvent),
-			policies,
-		)
-		wantBytes, marshalErr := proto.MarshalOptions{Deterministic: true}.Marshal(want)
-		if marshalErr != nil {
-			t.Fatal(marshalErr)
-		}
-		gotBytes, marshalErr := proto.MarshalOptions{Deterministic: true}.Marshal(got)
-		if marshalErr != nil {
-			t.Fatal(marshalErr)
-		}
-		if !bytes.Equal(gotBytes, wantBytes) {
-			t.Fatalf("composite aliases differ from sequential oracle for raw %x", raw)
-		}
 	})
+}
+
+func FuzzTopLevelAliasOrderedOnChangeMatchesSequentialTextGroups(f *testing.F) {
+	policies := []TopLevelAliasRedaction{
+		{Field: "alpha", Replacement: "beta=generated"},
+		{Field: "beta", Replacement: "FINAL"},
+	}
+	for _, seed := range [][]byte{
+		[]byte("safe=value"),
+		[]byte("alpha=one beta=two safe=value"),
+		[]byte(`{"alpha":"one","beta":"two","safe":"kept"}`),
+		[]byte(`failed payload="{\"alpha\":\"secret\"}"`),
+		[]byte(`"beta:00"`),
+		append([]byte{0xff, 0x00, ' '}, []byte("alpha=binary-secret")...),
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		if len(raw) > 64<<10 {
+			t.Skip()
+		}
+		input := &opensplunkv1.LogEvent{
+			Raw:         bytes.Clone(raw),
+			RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
+			Fields:      object(stringField("safe", "kept")),
+		}
+		if utf8.Valid(raw) {
+			message := string(raw)
+			input.Message = &message
+		}
+		requireTopLevelAliasMatchesSequential(
+			t,
+			input,
+			policies,
+			"ordered-on-change",
+		)
+	})
+}
+
+func requireCompositeSupplementalMatchesSequential(
+	t testing.TB,
+	input *opensplunkv1.LogEvent,
+	composite *Validator,
+	sequential []*Validator,
+	context string,
+) {
+	t.Helper()
+	want := proto.Clone(input).(*opensplunkv1.LogEvent)
+	for _, redactor := range sequential {
+		want = redactor.RedactEventInPlace(want)
+	}
+	got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunkv1.LogEvent))
+	if !proto.Equal(got, want) {
+		t.Fatalf("%s composite differs from sequential oracle", context)
+	}
 }
 
 func FuzzCompositeSupplementalRedactorMatchesSequentialPolicies(f *testing.F) {
@@ -1194,21 +1766,140 @@ func FuzzCompositeSupplementalRedactorMatchesSequentialPolicies(f *testing.F) {
 			input.Message = &message
 			input.Fields.Fields = append(input.Fields.Fields, stringField("note", message))
 		}
-		want := proto.Clone(input).(*opensplunkv1.LogEvent)
-		for _, redactor := range sequential {
-			want = redactor.RedactEventInPlace(want)
+		requireCompositeSupplementalMatchesSequential(
+			t,
+			input,
+			composite,
+			sequential,
+			"ordinary",
+		)
+	})
+}
+
+func FuzzCompositeSupplementalRedactorOrderedOnChangeMatchesSequentialPolicies(f *testing.F) {
+	const (
+		fixtureMask       uint8 = 0b00000011
+		structuredHitFlag uint8 = 0b00000100
+		messageFlag       uint8 = 0b00001000
+		declaredUTF8Flag  uint8 = 0b00010000
+	)
+	type fuzzFixture struct {
+		name        string
+		directField string
+		composite   *Validator
+		sequential  []*Validator
+	}
+	policySets := []struct {
+		name        string
+		directField string
+		policies    []RedactionPolicy
+	}{
+		{
+			name:        "syntax marker",
+			directField: "alpha",
+			policies: []RedactionPolicy{
+				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta=generated"},
+				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
+				{AdditionalSensitiveFields: []string{"third"}, Replacement: "<LAST>"},
+			},
+		},
+		{
+			name:        "repeated field",
+			directField: "repeat",
+			policies: []RedactionPolicy{
+				{AdditionalSensitiveFields: []string{"repeat"}, Replacement: "OLD"},
+				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "[SECOND]"},
+				{AdditionalSensitiveFields: []string{"repeat"}, Replacement: "NEW"},
+			},
+		},
+		{
+			name:        "marker becomes later field",
+			directField: "alpha",
+			policies: []RedactionPolicy{
+				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta"},
+				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
+			},
+		},
+		{
+			name:        "specialized extent marker",
+			directField: "alpha",
+			policies: []RedactionPolicy{
+				{
+					AdditionalSensitiveFields: []string{"alpha"},
+					Replacement:               "-----BEGIN PRIVATE KEY-----",
+				},
+				{AdditionalSensitiveFields: []string{"private_key"}, Replacement: "[KEY]"},
+			},
+		},
+	}
+	fixtures := make([]fuzzFixture, len(policySets))
+	for fixtureIndex, policySet := range policySets {
+		composite, err := NewCompositeSupplementalRedactor(DefaultLimits(), policySet.policies)
+		if err != nil {
+			f.Fatal(err)
 		}
-		got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunkv1.LogEvent))
-		wantBytes, marshalErr := proto.MarshalOptions{Deterministic: true}.Marshal(want)
-		if marshalErr != nil {
-			t.Fatal(marshalErr)
+		sequential := make([]*Validator, len(policySet.policies))
+		for policyIndex, policy := range policySet.policies {
+			sequential[policyIndex], err = NewSupplementalRedactor(DefaultLimits(), policy)
+			if err != nil {
+				f.Fatal(err)
+			}
 		}
-		gotBytes, marshalErr := proto.MarshalOptions{Deterministic: true}.Marshal(got)
-		if marshalErr != nil {
-			t.Fatal(marshalErr)
+		fixtures[fixtureIndex] = fuzzFixture{
+			name:        policySet.name,
+			directField: policySet.directField,
+			composite:   composite,
+			sequential:  sequential,
 		}
-		if !bytes.Equal(gotBytes, wantBytes) {
-			t.Fatalf("composite differs from sequential oracle for raw %x", raw)
+	}
+	for _, seed := range []struct {
+		raw  []byte
+		mode uint8
+	}{
+		{raw: []byte("safe=value"), mode: 0},
+		{raw: []byte(`{"alpha":"one","beta":"two","safe":"kept"}`), mode: 8},
+		{raw: []byte(`alpha="old"=planted-secret`), mode: 2},
+		{raw: []byte(`private_key=preamble alpha=secret`), mode: 3},
+		{raw: append([]byte{0xff, 0x00, ' '}, []byte("alpha=binary-secret")...), mode: 0},
+		{raw: []byte(`{"safe":"first","safe":"last"}`), mode: 1},
+		{raw: []byte("alpha=structured-secret"), mode: structuredHitFlag},
+		{raw: []byte("alpha=utf8-secret"), mode: declaredUTF8Flag},
+		{
+			raw:  []byte("alpha=combined-secret beta=second-secret"),
+			mode: structuredHitFlag | messageFlag | declaredUTF8Flag,
+		},
+	} {
+		f.Add(seed.raw, seed.mode)
+	}
+
+	f.Fuzz(func(t *testing.T, raw []byte, mode uint8) {
+		if len(raw) > 64<<10 {
+			t.Skip()
 		}
+		fixture := fixtures[int(mode&fixtureMask)]
+		encoding := opensplunkv1.RawEncoding_RAW_ENCODING_BINARY
+		if mode&declaredUTF8Flag != 0 {
+			encoding = opensplunkv1.RawEncoding_RAW_ENCODING_UTF8
+		}
+		input := &opensplunkv1.LogEvent{
+			Raw:         bytes.Clone(raw),
+			RawEncoding: encoding,
+			Fields:      object(stringField("safe", "kept")),
+		}
+		if mode&structuredHitFlag != 0 {
+			input.Fields = object(stringField(fixture.directField, string(raw)))
+		}
+		if mode&messageFlag != 0 && utf8.Valid(raw) {
+			message := string(raw)
+			input.Message = &message
+		}
+
+		requireCompositeSupplementalMatchesSequential(
+			t,
+			input,
+			fixture.composite,
+			fixture.sequential,
+			fixture.name,
+		)
 	})
 }
