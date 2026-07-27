@@ -1864,6 +1864,248 @@ func TestCompileWhereKeepsEvalStringAndFieldComparisonSemantics(t *testing.T) {
 	}
 }
 
+func TestCompileWhereNullPredicatesUseSparsePresenceWithoutRowExpansion(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | where isnull(optional) OR isnotnull(object_parent)`,
+	)
+	for _, required := range []string{
+		`has("__os_field_names", ?)`,
+		`isNotNull("__os_fields"."optional")`,
+		`isNotNull("__os_fields"."object_parent")`,
+		`arrayExists(name -> startsWith(name, ?), "__os_field_names")`,
+		`CAST(NOT ifNull(`,
+		`CAST(ifNull(`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("null-predicate SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, "dynamicElement(") ||
+		strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
+		t.Fatalf("null predicates inspect or expand container members:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+	for _, want := range []string{"optional", "optional.", "object_parent", "object_parent."} {
+		if !slices.Contains(compiled.Args, any(want)) {
+			t.Fatalf("null-predicate args = %#v, missing %q", compiled.Args, want)
+		}
+	}
+}
+
+func TestCompileWhereNullPredicatesHonorProjectionNullableCallsAndFixedMultivalues(t *testing.T) {
+	t.Parallel()
+
+	projected := compileSPL(t, `index=gradethis | fields service | where isnull(optional)`)
+	if strings.Contains(projected.SQL, `"__os_fields"."optional"`) ||
+		!strings.Contains(projected.SQL, `isNotNull(CAST(NULL AS Nullable(String)))`) {
+		t.Fatalf("projected-away null predicate resurrected storage:\n%s", projected.SQL)
+	}
+
+	nullableCall := compileSPL(t, `index=gradethis | eval bad=tonumber("bad") | where isnull(bad)`)
+	if !strings.Contains(nullableCall.SQL, `isNotNull("bad")`) ||
+		!strings.Contains(nullableCall.SQL, `ifNotFinite(toFloat64OrNull(`) {
+		t.Fatalf("nullable scalar call lost its null result:\n%s", nullableCall.SQL)
+	}
+
+	fixedMultivalue := compileSPL(
+		t,
+		`index=gradethis | stats values(user) AS users | where isnull(users)`,
+	)
+	if !strings.Contains(fixedMultivalue.SQL, `notEmpty("users")`) ||
+		!strings.Contains(fixedMultivalue.SQL, `isNotNull("users")`) {
+		t.Fatalf("fixed empty multivalue lost logical absence:\n%s", fixedMultivalue.SQL)
+	}
+}
+
+func TestCompileWhereNullPredicateRetainsCalculatedFieldMaterializationFence(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | spath input=payload output=selected path=value | where isnull(selected)`,
+	)
+	if !strings.Contains(compiled.SQL, " AS MATERIALIZED (") ||
+		!strings.Contains(compiled.SQL, `isNotNull("__os_filter_bound_`) {
+		t.Fatalf("null predicate lost calculated-field materialization:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+}
+
+func TestCompileRejectsForgedNullPredicateAndEvalPlans(t *testing.T) {
+	t.Parallel()
+
+	base := buildPlan(t, `index=gradethis`)
+	field, err := plan.ResolveField("optional", spl.Range{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stringLiteral := &plan.ScalarLiteralExpression{
+		Value: plan.Value{Kind: plan.ValueKindString, String: "not Boolean"},
+	}
+	var nilField *plan.ScalarFieldExpression
+	var nilLiteral *plan.ScalarLiteralExpression
+	var nilCall *plan.ScalarCallExpression
+	for _, test := range []struct {
+		name       string
+		expression plan.ScalarExpression
+		want       string
+	}{
+		{name: "non-Boolean predicate", expression: stringLiteral, want: "Boolean"},
+		{name: "typed-nil field", expression: nilField, want: "missing field expression"},
+		{name: "typed-nil literal", expression: nilLiteral, want: "missing literal expression"},
+		{name: "typed-nil predicate", expression: nilCall, want: "missing call expression"},
+		{
+			name:       "isnull missing argument",
+			expression: &plan.ScalarCallExpression{Function: plan.ScalarFunctionIsNull},
+			want:       "expected one argument",
+		},
+		{
+			name: "isnotnull extra argument",
+			expression: &plan.ScalarCallExpression{
+				Function: plan.ScalarFunctionIsNotNull,
+				Arguments: []plan.ScalarExpression{
+					&plan.ScalarFieldExpression{Field: field},
+					stringLiteral,
+				},
+			},
+			want: "expected one argument",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := *base
+			candidate.Operators = append(
+				append([]plan.Operator(nil), base.Operators...),
+				&plan.Filter{Expression: &plan.ScalarPredicateExpression{Value: test.expression}},
+			)
+			_, compileErr := (Compiler{}).Compile(&candidate)
+			if compileErr == nil || !strings.Contains(compileErr.Error(), test.want) {
+				t.Fatalf("Compile error = %v, want %q", compileErr, test.want)
+			}
+		})
+	}
+
+	for _, nilArgument := range []int{1, 2} {
+		arguments := []plan.ScalarExpression{
+			&plan.ScalarFieldExpression{Field: field},
+			&plan.ScalarLiteralExpression{
+				Value: plan.Value{Kind: plan.ValueKindString, String: "pattern"},
+			},
+			&plan.ScalarLiteralExpression{
+				Value: plan.Value{Kind: plan.ValueKindString, String: "replacement"},
+			},
+		}
+		arguments[nilArgument] = nilLiteral
+		candidate := *base
+		candidate.Operators = append(
+			append([]plan.Operator(nil), base.Operators...),
+			&plan.Extend{Assignments: []plan.ExtendAssignment{{
+				Output: plan.FieldRef{Name: "value"},
+				Expression: &plan.ScalarCallExpression{
+					Function:  plan.ScalarFunctionReplace,
+					Arguments: arguments,
+				},
+			}}},
+		)
+		_, compileErr := (Compiler{}).Compile(&candidate)
+		if compileErr == nil || !strings.Contains(compileErr.Error(), "must be a string literal") {
+			t.Fatalf("Compile typed-nil replace argument %d error = %v", nilArgument, compileErr)
+		}
+	}
+
+	candidate := *base
+	candidate.Operators = append(
+		append([]plan.Operator(nil), base.Operators...),
+		&plan.Filter{Expression: &plan.EvalComparisonExpression{
+			Left: &plan.ScalarCallExpression{
+				Function: plan.ScalarFunctionToNumber,
+				Arguments: []plan.ScalarExpression{&plan.ScalarCallExpression{
+					Function:  plan.ScalarFunctionIsNull,
+					Arguments: []plan.ScalarExpression{&plan.ScalarFieldExpression{Field: field}},
+				}},
+			},
+			Op: plan.ComparisonOpEqual,
+			Right: &plan.ScalarLiteralExpression{
+				Value: plan.Value{Kind: plan.ValueKindInt64, Int64: 0},
+			},
+		}},
+	)
+	_, err = (Compiler{}).Compile(&candidate)
+	if err == nil || !strings.Contains(err.Error(), "cannot consume a Boolean") {
+		t.Fatalf("Compile forged Boolean consumer error = %v", err)
+	}
+
+	candidate = *base
+	candidate.Operators = append(
+		append([]plan.Operator(nil), base.Operators...),
+		&plan.Filter{Expression: &plan.EvalComparisonExpression{
+			Left: &plan.ScalarCallExpression{
+				Function: plan.ScalarFunctionReplace,
+				Arguments: []plan.ScalarExpression{
+					&plan.ScalarCallExpression{
+						Function:  plan.ScalarFunctionIsNotNull,
+						Arguments: []plan.ScalarExpression{&plan.ScalarFieldExpression{Field: field}},
+					},
+					&plan.ScalarLiteralExpression{
+						Value: plan.Value{Kind: plan.ValueKindString, String: "true"},
+					},
+					&plan.ScalarLiteralExpression{
+						Value: plan.Value{Kind: plan.ValueKindString, String: "1"},
+					},
+				},
+			},
+			Op: plan.ComparisonOpEqual,
+			Right: &plan.ScalarLiteralExpression{
+				Value: plan.Value{Kind: plan.ValueKindString, String: "1"},
+			},
+		}},
+	)
+	_, err = (Compiler{}).Compile(&candidate)
+	if err == nil || !strings.Contains(err.Error(), "cannot consume a Boolean") {
+		t.Fatalf("Compile forged Boolean replace consumer error = %v", err)
+	}
+
+	candidate = *base
+	candidate.Operators = append(
+		append([]plan.Operator(nil), base.Operators...),
+		&plan.Extend{Assignments: []plan.ExtendAssignment{{
+			Output: plan.FieldRef{Name: "flag"},
+			Expression: &plan.ScalarCallExpression{
+				Function:  plan.ScalarFunctionIsNull,
+				Arguments: []plan.ScalarExpression{&plan.ScalarFieldExpression{Field: field}},
+			},
+		}}},
+	)
+	_, err = (Compiler{}).Compile(&candidate)
+	if err == nil || !strings.Contains(err.Error(), "cannot directly assign a Boolean") {
+		t.Fatalf("Compile forged Boolean eval error = %v", err)
+	}
+}
+
+func TestCompileNullPredicateBoundaryPreservesOtherBooleanScalarInputs(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | eval flag=true`+
+			` | where tonumber(flag)=0 OR replace(flag, "true", "1")="1"`,
+	)
+	for _, required := range []string{
+		`toFloat64OrNull(toString("flag"))`,
+		`replaceRegexpAll(toString("flag"), ?, ?)`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("existing Boolean scalar input lost %q:\n%s", required, compiled.SQL)
+		}
+	}
+}
+
 func TestCompileWhereRejectsFixedBoolCoercion(t *testing.T) {
 	t.Parallel()
 

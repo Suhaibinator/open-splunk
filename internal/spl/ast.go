@@ -210,6 +210,8 @@ const (
 	ScalarFunctionInvalid ScalarFunction = iota
 	ScalarFunctionToNumber
 	ScalarFunctionReplace
+	ScalarFunctionIsNull
+	ScalarFunctionIsNotNull
 )
 
 // ScalarCallExpr invokes a supported eval function. Function names are
@@ -259,6 +261,17 @@ type WhereComparisonExpr struct {
 
 func (*WhereComparisonExpr) whereExpression()     {}
 func (e *WhereComparisonExpr) SourceRange() Range { return e.Range }
+
+// WhereScalarPredicateExpr consumes a scalar function whose result is
+// statically Boolean. The parser admits only functions with an explicit
+// Boolean contract so an arbitrary scalar cannot silently acquire truthiness.
+type WhereScalarPredicateExpr struct {
+	Value ScalarExpr
+	Range Range
+}
+
+func (*WhereScalarPredicateExpr) whereExpression()     {}
+func (e *WhereScalarPredicateExpr) SourceRange() Range { return e.Range }
 
 // WhereCommand filters rows with eval-language boolean precedence.
 type WhereCommand struct {

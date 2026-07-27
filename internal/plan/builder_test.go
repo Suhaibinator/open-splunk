@@ -890,6 +890,63 @@ func TestBuildWhereLowersToPostTransformFilter(t *testing.T) {
 	}
 }
 
+func TestBuildWhereNullPredicatesPreserveTypedScalarCalls(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | where isnull(optional) OR NOT isnotnull(required)`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	filter, ok := logical.Operators[len(logical.Operators)-1].(*Filter)
+	if !ok {
+		t.Fatalf("last operator = %T, want *Filter", logical.Operators[len(logical.Operators)-1])
+	}
+	root, ok := filter.Expression.(*BooleanExpression)
+	if !ok || root.Op != BooleanOpOr {
+		t.Fatalf("filter expression = %#v, want OR", filter.Expression)
+	}
+	left, ok := root.Left.(*ScalarPredicateExpression)
+	if !ok {
+		t.Fatalf("filter left = %T, want *ScalarPredicateExpression", root.Left)
+	}
+	leftCall, ok := left.Value.(*ScalarCallExpression)
+	if !ok || leftCall.Function != ScalarFunctionIsNull ||
+		leftCall.Arguments[0].(*ScalarFieldExpression).Field.Name != "optional" {
+		t.Fatalf("filter left predicate = %#v", left)
+	}
+	not, ok := root.Right.(*NotExpression)
+	if !ok {
+		t.Fatalf("filter right = %T, want *NotExpression", root.Right)
+	}
+	right := not.Operand.(*ScalarPredicateExpression)
+	rightCall := right.Value.(*ScalarCallExpression)
+	if rightCall.Function != ScalarFunctionIsNotNull ||
+		rightCall.Arguments[0].(*ScalarFieldExpression).Field.Name != "required" {
+		t.Fatalf("filter right predicate = %#v", right)
+	}
+}
+
+func TestBuildRejectsForgedBooleanScalarConsumer(t *testing.T) {
+	t.Parallel()
+
+	query := mustParse(t, `index=gradethis | where tonumber(optional)=0`)
+	comparison := query.Commands[0].(*spl.WhereCommand).Expression.(*spl.WhereComparisonExpr)
+	comparison.Left = &spl.ScalarCallExpr{
+		Function: spl.ScalarFunctionToNumber,
+		Arguments: []spl.ScalarExpr{&spl.ScalarCallExpr{
+			Function: spl.ScalarFunctionIsNull,
+			Arguments: []spl.ScalarExpr{&spl.ScalarFieldExpr{
+				Field: "optional",
+			}},
+		}},
+	}
+	_, err := Build(query, testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_EVAL_EXPRESSION")
+}
+
 func TestBuildEvalLowersOrderedTypedAssignments(t *testing.T) {
 	t.Parallel()
 

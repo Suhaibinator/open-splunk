@@ -27,3 +27,15 @@ test("count abbreviation highlights only when used as a parenthesized function",
   );
   assert.equal(tokens.map((token) => token.text).join(""), `index=main c=1 | stats c(user) BY c`);
 });
+
+test("null predicates highlight only when used as parenthesized functions", () => {
+  const query = `index=main isnull=1 | where isnull(optional) OR ISNOTNULL(required) | table isnotnull`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["isnull", "isnotnull"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});

@@ -382,6 +382,108 @@ func TestParseWhereRejectsSearchTermsAndImplicitAND(t *testing.T) {
 	}
 }
 
+func TestParseWhereNullPredicatesUseBooleanPrecedence(t *testing.T) {
+	t.Parallel()
+
+	source := `index=main | where isnull(optional) OR NOT ISNOTNULL(required) AND isnull(replace(message, "x", ""))`
+	query, err := Parse(source)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command := query.Commands[0].(*WhereCommand)
+	root, ok := command.Expression.(*WhereBoolExpr)
+	if !ok || root.Op != BoolOpOr {
+		t.Fatalf("where root = %#v, want OR", command.Expression)
+	}
+	left, ok := root.Left.(*WhereScalarPredicateExpr)
+	if !ok {
+		t.Fatalf("where left = %T, want *WhereScalarPredicateExpr", root.Left)
+	}
+	leftCall, ok := left.Value.(*ScalarCallExpr)
+	if !ok || leftCall.Function != ScalarFunctionIsNull ||
+		leftCall.Arguments[0].(*ScalarFieldExpr).Field != "optional" {
+		t.Fatalf("where left predicate = %#v", left)
+	}
+	and, ok := root.Right.(*WhereBoolExpr)
+	if !ok || and.Op != BoolOpAnd {
+		t.Fatalf("where right = %#v, want AND", root.Right)
+	}
+	not, ok := and.Left.(*WhereNotExpr)
+	if !ok {
+		t.Fatalf("where AND left = %T, want *WhereNotExpr", and.Left)
+	}
+	notPredicate, ok := not.Operand.(*WhereScalarPredicateExpr)
+	if !ok {
+		t.Fatalf("NOT operand = %T, want *WhereScalarPredicateExpr", not.Operand)
+	}
+	notCall := notPredicate.Value.(*ScalarCallExpr)
+	if notCall.Function != ScalarFunctionIsNotNull ||
+		notCall.Arguments[0].(*ScalarFieldExpr).Field != "required" {
+		t.Fatalf("NOT predicate = %#v", notPredicate)
+	}
+	nested := and.Right.(*WhereScalarPredicateExpr).Value.(*ScalarCallExpr)
+	if nested.Function != ScalarFunctionIsNull ||
+		nested.Arguments[0].(*ScalarCallExpr).Function != ScalarFunctionReplace {
+		t.Fatalf("nested null predicate = %#v", nested)
+	}
+	if source[left.Range.Start.Offset:left.Range.End.Offset] != "isnull(optional)" {
+		t.Fatalf("left predicate range = %#v", left.Range)
+	}
+}
+
+func TestParseWhereNullPredicatesAllowExplicitBooleanComparison(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | where isnull(status)=true`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	comparison := query.Commands[0].(*WhereCommand).Expression.(*WhereComparisonExpr)
+	call, ok := comparison.Left.(*ScalarCallExpr)
+	if !ok || call.Function != ScalarFunctionIsNull {
+		t.Fatalf("comparison left = %#v, want isnull call", comparison.Left)
+	}
+	literal, ok := comparison.Right.(*ScalarLiteralExpr)
+	if !ok || literal.Value.Kind != LiteralKindBool || !strings.EqualFold(literal.Value.Text, "true") {
+		t.Fatalf("comparison right = %#v, want true", comparison.Right)
+	}
+}
+
+func TestParseWhereNullPredicatesEnforceArityEvalBoundaryAndPredicateLimit(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		source string
+		code   string
+	}{
+		{source: `index=main | where isnull()`, code: "SPL_INVALID_EVAL_ARITY"},
+		{source: `index=main | where isnotnull(left, right)`, code: "SPL_INVALID_EVAL_ARITY"},
+		{source: `index=main | eval flag=isnull(optional)`, code: "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{source: `index=main | eval flag=tonumber(isnotnull(optional))`, code: "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{source: `index=main | where tonumber(isnull(optional))=0`, code: "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{source: `index=main | where replace(isnotnull(optional), "true", "yes")="yes"`, code: "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
+		{source: `index=main | where tonumber(optional)`, code: "SPL_EXPECTED_COMPARISON"},
+	} {
+		assertParseDiagnosticCode(t, test.source, test.code)
+	}
+
+	var predicates strings.Builder
+	predicates.WriteString("index=main | where ")
+	for index := 0; index <= maxWhereComparisons; index++ {
+		if index > 0 {
+			predicates.WriteString(" AND ")
+		}
+		predicates.WriteString("isnull(f")
+		predicates.WriteString(strconv.Itoa(index))
+		predicates.WriteByte(')')
+	}
+	assertParseDiagnosticCode(t, predicates.String(), "SPL_QUERY_TOO_COMPLEX")
+	lastPredicate := " AND isnull(f" + strconv.Itoa(maxWhereComparisons) + ")"
+	if _, err := Parse(strings.TrimSuffix(predicates.String(), lastPredicate)); err != nil {
+		t.Fatalf("Parse(exact where null-predicate limit): %v", err)
+	}
+}
+
 func TestParseEvalNestedReplaceAndToNumber(t *testing.T) {
 	t.Parallel()
 

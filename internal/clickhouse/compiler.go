@@ -341,6 +341,11 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				}
 			}
 			for index, assignment := range operator.Assignments {
+				if scalarExpressionContainsBooleanFunction(assignment.Expression) {
+					return CompiledQuery{}, errors.New(
+						"compile ClickHouse extend: eval cannot directly assign a Boolean null predicate",
+					)
+				}
 				value, compileErr := compileScalarValue(assignment.Expression, state)
 				if compileErr != nil {
 					return CompiledQuery{}, compileErr
@@ -3211,6 +3216,18 @@ func compileExpression(expression plan.Expression, state compileState) (string, 
 		return compileComparison(expression, field)
 	case *plan.EvalComparisonExpression:
 		return compileEvalComparison(expression, state)
+	case *plan.ScalarPredicateExpression:
+		if expression == nil || expression.Value == nil {
+			return "", nil, errors.New("compile ClickHouse predicate: missing Boolean scalar expression")
+		}
+		value, err := compileScalarValue(expression.Value, state)
+		if err != nil {
+			return "", nil, err
+		}
+		if value.kind != fieldKindBool {
+			return "", nil, errors.New("compile ClickHouse predicate: scalar expression must return Boolean")
+		}
+		return "ifNull(" + value.valueSQL + ", 0)", append([]any(nil), value.valueArgs...), nil
 	default:
 		return "", nil, fmt.Errorf("compile ClickHouse predicate: unsupported expression %T", expression)
 	}
@@ -3276,6 +3293,10 @@ func predicateMaterializationFields(expression plan.Expression, state compileSta
 			if expression != nil {
 				visitScalar(expression.Left)
 				visitScalar(expression.Right)
+			}
+		case *plan.ScalarPredicateExpression:
+			if expression != nil {
+				visitScalar(expression.Value)
 			}
 		}
 	}
@@ -3357,6 +3378,9 @@ type compiledScalar struct {
 func compileScalarValue(expression plan.ScalarExpression, state compileState) (compiledScalar, error) {
 	switch expression := expression.(type) {
 	case *plan.ScalarFieldExpression:
+		if expression == nil {
+			return compiledScalar{}, errors.New("compile ClickHouse scalar expression: missing field expression")
+		}
 		field, ok, err := resolveCompiledField(expression.Field, state)
 		if err != nil {
 			return compiledScalar{}, err
@@ -3370,6 +3394,9 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 		}
 		return compiledScalarFromField(field), nil
 	case *plan.ScalarLiteralExpression:
+		if expression == nil {
+			return compiledScalar{}, errors.New("compile ClickHouse scalar expression: missing literal expression")
+		}
 		value := expression.Value
 		kind := fieldKindString
 		numberType := ""
@@ -3409,11 +3436,16 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			literal:    &value,
 		}, nil
 	case *plan.ScalarCallExpression:
+		if expression == nil {
+			return compiledScalar{}, errors.New("compile ClickHouse scalar expression: missing call expression")
+		}
 		switch expression.Function {
 		case plan.ScalarFunctionReplace:
 			return compileReplaceScalar(expression, state)
 		case plan.ScalarFunctionToNumber:
 			return compileToNumberScalar(expression, state)
+		case plan.ScalarFunctionIsNull, plan.ScalarFunctionIsNotNull:
+			return compileNullTestScalar(expression, state)
 		default:
 			return compiledScalar{}, fmt.Errorf("compile ClickHouse scalar expression: unsupported function %d", expression.Function)
 		}
@@ -3422,9 +3454,56 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 	}
 }
 
+func compileNullTestScalar(expression *plan.ScalarCallExpression, state compileState) (compiledScalar, error) {
+	if len(expression.Arguments) != 1 {
+		return compiledScalar{}, errors.New("compile ClickHouse null predicate: expected one argument")
+	}
+	input, err := compileScalarValue(expression.Arguments[0], state)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+
+	presenceSQL, presenceArgs := compiledScalarPresenceSQL(input)
+	valueSQL := "CAST(ifNull(" + presenceSQL + ", 0) AS Bool)"
+	if expression.Function == plan.ScalarFunctionIsNull {
+		valueSQL = "CAST(NOT ifNull(" + presenceSQL + ", 0) AS Bool)"
+	}
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               presenceArgs,
+		existsSQL:               "1",
+		kind:                    fieldKindBool,
+		materializeForPredicate: input.materializeForPredicate,
+	}, nil
+}
+
+// compiledScalarPresenceSQL implements SPL's distinction between a missing or
+// null value and every present, non-null scalar. Dynamic object parents can be
+// represented only by their flattened descendants, so their bounded metadata
+// probe also establishes presence. Keep every argument with valueSQL because
+// null predicates are complete scalar values whose existsSQL is the constant 1.
+func compiledScalarPresenceSQL(value compiledScalar) (string, []any) {
+	existsSQL := value.existsSQL
+	if existsSQL == "" {
+		existsSQL = "1"
+	}
+	presenceSQL := "((" + existsSQL + ") AND isNotNull(" + value.valueSQL + "))"
+	args := make([]any, 0, len(value.existsArgs)+len(value.valueArgs)+len(value.descendantArgs))
+	args = append(args, value.existsArgs...)
+	args = append(args, value.valueArgs...)
+	if value.descendantSQL != "" {
+		presenceSQL = "(" + presenceSQL + " OR (" + value.descendantSQL + "))"
+		args = append(args, value.descendantArgs...)
+	}
+	return presenceSQL, args
+}
+
 func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileState) (compiledScalar, error) {
 	if len(expression.Arguments) != 3 {
 		return compiledScalar{}, errors.New("compile ClickHouse replace: expected three arguments")
+	}
+	if scalarExpressionContainsBooleanFunction(expression.Arguments[0]) {
+		return compiledScalar{}, errors.New("compile ClickHouse replace: cannot consume a Boolean null predicate")
 	}
 	input, err := compileScalarValue(expression.Arguments[0], state)
 	if err != nil {
@@ -3460,6 +3539,9 @@ func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileSt
 func compileToNumberScalar(expression *plan.ScalarCallExpression, state compileState) (compiledScalar, error) {
 	if len(expression.Arguments) != 1 {
 		return compiledScalar{}, errors.New("compile ClickHouse tonumber: expected one argument")
+	}
+	if scalarExpressionContainsBooleanFunction(expression.Arguments[0]) {
+		return compiledScalar{}, errors.New("compile ClickHouse tonumber: cannot consume a Boolean null predicate")
 	}
 	input, err := compileScalarValue(expression.Arguments[0], state)
 	if err != nil {
@@ -3499,10 +3581,26 @@ func compiledStringScalar(value compiledScalar) (string, []any) {
 
 func scalarStringLiteral(expression plan.ScalarExpression) (string, bool) {
 	literal, ok := expression.(*plan.ScalarLiteralExpression)
-	if !ok || literal.Value.Kind != plan.ValueKindString {
+	if !ok || literal == nil || literal.Value.Kind != plan.ValueKindString {
 		return "", false
 	}
 	return literal.Value.String, true
+}
+
+func scalarExpressionContainsBooleanFunction(expression plan.ScalarExpression) bool {
+	call, ok := expression.(*plan.ScalarCallExpression)
+	if !ok || call == nil {
+		return false
+	}
+	if call.Function == plan.ScalarFunctionIsNull || call.Function == plan.ScalarFunctionIsNotNull {
+		return true
+	}
+	for _, argument := range call.Arguments {
+		if scalarExpressionContainsBooleanFunction(argument) {
+			return true
+		}
+	}
+	return false
 }
 
 func extendCompileState(state compileState, output plan.FieldRef, value compiledScalar) compileState {

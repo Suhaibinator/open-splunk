@@ -12,8 +12,8 @@ export const SPL_PIPELINE_COMMANDS = [
   },
   {
     name: "where",
-    insertion: "where status >= 500",
-    detail: "Filter with an evaluated expression.",
+    insertion: "where isnotnull(status) AND status >= 500",
+    detail: "Filter with comparisons or direct isnull/isnotnull predicates.",
   },
   {
     name: "eval",

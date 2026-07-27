@@ -1586,6 +1586,17 @@ func (p *parser) parseEvalCommand(name token) (Command, error) {
 		if err != nil {
 			return nil, err
 		}
+		if scalarExpressionContainsBooleanFunction(expression) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "search-mode eval cannot directly assign a Boolean result",
+				Range:   expression.SourceRange(),
+				Suggestions: []string{
+					"use isnull or isnotnull directly with where",
+					"consume the Boolean with a supported conditional or conversion function",
+				},
+			}
+		}
 		assignment := EvalAssignment{
 			Field:      field.text,
 			FieldRange: field.range_,
@@ -1897,6 +1908,15 @@ func (p *parser) parseWherePrimary() (WhereExpr, error) {
 	}
 	op, ok := comparisonOperator(p.current().kind)
 	if !ok {
+		if scalarExpressionReturnsBoolean(left) {
+			if countErr := p.countWherePredicate(left.SourceRange()); countErr != nil {
+				return nil, countErr
+			}
+			return &WhereScalarPredicateExpr{
+				Value: left,
+				Range: left.SourceRange(),
+			}, nil
+		}
 		if p.current().kind == tokenWord && unsupportedScalarIdentifier(p.current().text) {
 			return nil, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_EVAL_EXPRESSION",
@@ -1917,14 +1937,9 @@ func (p *parser) parseWherePrimary() (WhereExpr, error) {
 	if err != nil {
 		return nil, err
 	}
-	if p.whereComparisons >= maxWhereComparisons {
-		return nil, &Diagnostic{
-			Code:    "SPL_QUERY_TOO_COMPLEX",
-			Message: fmt.Sprintf("search contains more than %d where comparisons", maxWhereComparisons),
-			Range:   left.SourceRange(),
-		}
+	if countErr := p.countWherePredicate(left.SourceRange()); countErr != nil {
+		return nil, countErr
 	}
-	p.whereComparisons++
 	return &WhereComparisonExpr{
 		Left:  left,
 		Op:    op,
@@ -2004,10 +2019,32 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 		if len(arguments) != 1 {
 			return nil, &Diagnostic{Code: "SPL_INVALID_EVAL_ARITY", Message: "tonumber requires exactly one argument in compatibility version 0.1", Range: name.range_}
 		}
+		if scalarExpressionContainsBooleanFunction(arguments[0]) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "tonumber cannot consume a Boolean result in search-mode expressions",
+				Range:   arguments[0].SourceRange(),
+				Suggestions: []string{
+					"use isnull or isnotnull directly with where",
+					"consume the Boolean with a supported conditional or conversion function",
+				},
+			}
+		}
 	case "replace":
 		function = ScalarFunctionReplace
 		if len(arguments) != 3 {
 			return nil, &Diagnostic{Code: "SPL_INVALID_EVAL_ARITY", Message: "replace requires exactly three arguments", Range: name.range_}
+		}
+		if scalarExpressionContainsBooleanFunction(arguments[0]) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "replace cannot consume a Boolean result in search-mode expressions",
+				Range:   arguments[0].SourceRange(),
+				Suggestions: []string{
+					"use isnull or isnotnull directly with where",
+					"consume the Boolean with a supported conditional or conversion function",
+				},
+			}
 		}
 		for index := 1; index < 3; index++ {
 			literal, ok := arguments[index].(*ScalarLiteralExpr)
@@ -2037,12 +2074,35 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				Suggestions: []string{"use an RE2-compatible regular expression"},
 			}
 		}
+	case "isnull":
+		function = ScalarFunctionIsNull
+		if len(arguments) != 1 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: "isnull requires exactly one argument",
+				Range:   name.range_,
+			}
+		}
+	case "isnotnull":
+		function = ScalarFunctionIsNotNull
+		if len(arguments) != 1 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: "isnotnull requires exactly one argument",
+				Range:   name.range_,
+			}
+		}
 	default:
 		return nil, &Diagnostic{
-			Code:        "SPL_UNSUPPORTED_EVAL_FUNCTION",
-			Message:     fmt.Sprintf("eval function %q is not supported", name.text),
-			Range:       name.range_,
-			Suggestions: []string{"tonumber(value)", `replace(value, "pattern", "replacement")`},
+			Code:    "SPL_UNSUPPORTED_EVAL_FUNCTION",
+			Message: fmt.Sprintf("eval function %q is not supported", name.text),
+			Range:   name.range_,
+			Suggestions: []string{
+				"tonumber(value)",
+				`replace(value, "pattern", "replacement")`,
+				"isnull(value)",
+				"isnotnull(value)",
+			},
 		}
 	}
 	return &ScalarCallExpr{
@@ -2050,6 +2110,40 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 		Arguments: arguments,
 		Range:     Range{Start: name.range_.Start, End: p.previous().range_.End},
 	}, nil
+}
+
+func scalarExpressionReturnsBoolean(expression ScalarExpr) bool {
+	call, ok := expression.(*ScalarCallExpr)
+	return ok && call != nil &&
+		(call.Function == ScalarFunctionIsNull || call.Function == ScalarFunctionIsNotNull)
+}
+
+func scalarExpressionContainsBooleanFunction(expression ScalarExpr) bool {
+	call, ok := expression.(*ScalarCallExpr)
+	if !ok || call == nil {
+		return false
+	}
+	if scalarExpressionReturnsBoolean(call) {
+		return true
+	}
+	for _, argument := range call.Arguments {
+		if scalarExpressionContainsBooleanFunction(argument) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *parser) countWherePredicate(sourceRange Range) error {
+	if p.whereComparisons >= maxWhereComparisons {
+		return &Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("search contains more than %d where predicates", maxWhereComparisons),
+			Range:   sourceRange,
+		}
+	}
+	p.whereComparisons++
+	return nil
 }
 
 func (p *parser) parseSearchAnd() (Expr, error) {
@@ -2296,6 +2390,8 @@ func setWhereExpressionRange(expression WhereExpr, sourceRange Range) {
 	case *WhereNotExpr:
 		expression.Range = sourceRange
 	case *WhereComparisonExpr:
+		expression.Range = sourceRange
+	case *WhereScalarPredicateExpr:
 		expression.Range = sourceRange
 	}
 }

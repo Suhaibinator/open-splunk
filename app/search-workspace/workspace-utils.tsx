@@ -26,14 +26,17 @@ const SPL_FUNCTION_NAMES = [
   "earliest", "latest", "sum", "avg", "tonumber", "replace",
 ] as const;
 const SPL_COUNT_ABBREVIATION_FUNCTION_PATTERN = "c(?=\\s*\\()";
+const SPL_NULL_PREDICATE_FUNCTION_PATTERN = "(?:isnull|isnotnull)(?=\\s*\\()";
 const SPL_PERCENTILE_FUNCTION_PATTERN = "(?:p|perc)0*(?:[1-9]|[1-9][0-9])";
 const SPL_FUNCTION_PATTERN = [
   ...SPL_FUNCTION_NAMES.map(escapeRegExp),
   SPL_COUNT_ABBREVIATION_FUNCTION_PATTERN,
+  SPL_NULL_PREDICATE_FUNCTION_PATTERN,
   SPL_PERCENTILE_FUNCTION_PATTERN,
 ].join("|");
 const SPL_FUNCTION_SET = new Set<string>(SPL_FUNCTION_NAMES);
 const SPL_COUNT_ABBREVIATION_FUNCTION = /^c$/i;
+const SPL_NULL_PREDICATE_FUNCTION = /^(?:isnull|isnotnull)$/i;
 const SPL_PERCENTILE_FUNCTION = new RegExp(`^${SPL_PERCENTILE_FUNCTION_PATTERN}$`, "i");
 const SYNTAX_TOKEN_PATTERN = new RegExp(
   `(\\b(?:index|host|source|sourcetype|level|status|trace_id|message|path)\\b(?=\\s*=)|\\b(?:${PIPELINE_COMMAND_PATTERN})\\b|\\b(?:${SPL_FUNCTION_PATTERN})\\b|\\b(?:AND|OR|NOT|AS|BY)\\b|"(?:\\\\.|[^"\\\\])*"|\\|)`,
@@ -115,6 +118,7 @@ export function syntaxTokens(query: string): ReactNode[] {
       className = "spl-command";
     } else if (SPL_FUNCTION_SET.has(lower) ||
       SPL_COUNT_ABBREVIATION_FUNCTION.test(part) ||
+      SPL_NULL_PREDICATE_FUNCTION.test(part) ||
       SPL_PERCENTILE_FUNCTION.test(part)) {
       className = "spl-function";
     } else if (/^(index|host|source|sourcetype|level|status|trace_id|message|path)$/i.test(part)) {

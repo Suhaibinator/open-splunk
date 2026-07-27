@@ -14,7 +14,7 @@ storage visibility snapshot. SPL cannot widen those boundaries.
 
 To bound parser, compiler, and ClickHouse AST work, one search may contain at
 most 16 KiB of UTF-8 source, 1,024 syntax tokens, and 64 pipeline commands.
-Scalar expressions may nest 32 levels, with at most 32 `where` comparisons.
+Scalar expressions may nest 32 levels, with at most 32 `where` predicates.
 `eval` and `rename` accept at most 64 assignments; `stats` accepts at most 16
 measures and 16 `BY` fields; `dedup` accepts at most 16 key fields. A `rex`
 pattern and its normalized form are each limited to 4 KiB and 16 total capture
@@ -95,15 +95,30 @@ decimal values compare through finite `Float64`, so distinct values beyond
 ```spl
 | where p95_ms > 500
 | where status=500 OR duration_ms>500 AND level="ERROR"
+| where isnull(optional) OR isnotnull(status)
 ```
 
 `where` uses a separate eval-expression grammar: quoted strings are literals,
 bare names are fields, comparisons are case-sensitive, implicit `AND` is not
 accepted, and precedence is parentheses, `NOT`, `AND`, then `OR`. The current
-slice supports Boolean combinations of scalar comparisons. Scalar operands may
-be fields, typed literals, or the supported `tonumber` and `replace` calls;
-arithmetic, field quoting, `XOR`, and other eval functions are not yet accepted.
-Missing, null, container, or failed numeric operands do not pass the filter.
+slice supports Boolean combinations of scalar comparisons and direct
+`isnull(value)` / `isnotnull(value)` predicates. Each informational function
+accepts exactly one scalar expression, and can also be compared explicitly
+with a Boolean literal. Scalar operands may be fields, typed literals, or the
+supported `tonumber` and `replace` calls; arithmetic, field quoting, `XOR`, and
+other eval functions are not yet accepted. Missing, null, container, or failed
+numeric operands do not pass ordinary comparisons.
+
+`isnull` is true when its input field is missing or its scalar result is null;
+`isnotnull` is its exact complement. Empty strings, numeric zero, and false are
+present, non-null values. A projected-away field is missing, and a failed
+`tonumber` result is null. An empty fixed multivalue result, such as an empty
+`stats values(...)` array, follows the existing logical-absence contract.
+Open Splunk's typed Dynamic boundary treats an exact array as present even
+when it is empty or contains only null members, and treats a flattened object
+parent as present when descendant metadata exists. These predicates do not
+walk or expand container members.
+
 Dynamic values compare through their runtime scalar types: integer pairs retain
 full 64-bit precision, numeric pairs compare numerically, and string pairs
 compare lexically. Canonical `_time` and `_indextime` use Unix epoch seconds in
@@ -129,6 +144,14 @@ or `String` output type. The current scalar-expression surface is deliberately n
 - `tonumber(value)` returns a nullable `Float64`; invalid, missing, null,
   non-string dynamic, multivalue, object, `NaN`, and infinite inputs become
   null.
+
+Search-mode SPL1 does not directly assign the Boolean result of `isnull` or
+`isnotnull` with `eval`. Open Splunk therefore rejects
+`eval flag=isnull(value)` (including nested use inside another eval function)
+until a compatible Boolean consumer such as `if` or `tostring` is implemented.
+The same boundary rejects feeding these Boolean results to the current
+`tonumber` or `replace` functions inside `where`; no implicit Bool-to-String
+coercion is invented.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
@@ -1327,6 +1350,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`earliest` and `latest` time functions](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/statistical-and-charting-functions/time-functions),
 [`first` and `last` event-order functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/statistical-and-charting-functions/event-order-functions),
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
+[`isnull` and `isnotnull` informational functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/informational-functions),
 [`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),
 [`spath`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.0.2503/search-commands/spath),
 [`replace`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.4.2604/evaluation-functions/text-functions),

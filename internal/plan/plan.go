@@ -498,6 +498,8 @@ const (
 	ScalarFunctionInvalid ScalarFunction = iota
 	ScalarFunctionToNumber
 	ScalarFunctionReplace
+	ScalarFunctionIsNull
+	ScalarFunctionIsNotNull
 )
 
 // ScalarCallExpression invokes one supported eval operation.
@@ -521,6 +523,17 @@ type EvalComparisonExpression struct {
 
 func (*EvalComparisonExpression) expression()              {}
 func (e *EvalComparisonExpression) SourceRange() spl.Range { return e.Range }
+
+// ScalarPredicateExpression consumes one statically Boolean scalar in a where
+// predicate. Backends must reject non-Boolean forged inputs rather than
+// inventing general scalar truthiness.
+type ScalarPredicateExpression struct {
+	Value ScalarExpression
+	Range spl.Range
+}
+
+func (*ScalarPredicateExpression) expression()              {}
+func (e *ScalarPredicateExpression) SourceRange() spl.Range { return e.Range }
 
 // Diagnostic is a source-located semantic/planning error.
 type Diagnostic struct {
