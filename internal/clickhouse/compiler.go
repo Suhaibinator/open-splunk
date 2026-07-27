@@ -71,8 +71,11 @@ const (
 	// a variadic expression. Without it, 32 individually bounded arguments can
 	// allocate a multi-megabyte intermediate before the whole-query guard runs.
 	maxCompiledCoalesceScalarSQLBytes = 64 << 10
-	maxCompiledAssignments            = 64
-	maxCompiledExtractionOutputs      = 64
+	// maxCompiledCaseScalarSQLBytes independently bounds the alternating
+	// predicate/value expansion of a case expression.
+	maxCompiledCaseScalarSQLBytes = 64 << 10
+	maxCompiledAssignments        = 64
+	maxCompiledExtractionOutputs  = 64
 	// Parser-produced predicates are already bounded by a 1,024-token source
 	// and 32 eval/where leaves. Revalidate a deliberately wider structural
 	// ceiling here so forged logical plans cannot drive unbounded recursive
@@ -3331,6 +3334,14 @@ func predicateMaterializationFields(expression plan.Expression, state compileSta
 			visit(expression.Condition)
 			visitScalar(expression.True)
 			visitScalar(expression.False)
+		case *plan.ScalarCaseExpression:
+			if expression == nil {
+				return
+			}
+			for _, branch := range expression.Branches {
+				visit(branch.Condition)
+				visitScalar(branch.Value)
+			}
 		}
 	}
 
@@ -3421,6 +3432,18 @@ func predicateFieldSourceRange(
 				return sourceRange, true
 			}
 			return visitScalar(expression.False)
+		case *plan.ScalarCaseExpression:
+			if expression == nil {
+				return spl.Range{}, false
+			}
+			for _, branch := range expression.Branches {
+				if sourceRange, found := visitExpression(branch.Condition); found {
+					return sourceRange, true
+				}
+				if sourceRange, found := visitScalar(branch.Value); found {
+					return sourceRange, true
+				}
+			}
 		}
 		return spl.Range{}, false
 	}
@@ -3644,6 +3667,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 		}
 	case *plan.ScalarIfExpression:
 		return compileIfScalar(expression, state)
+	case *plan.ScalarCaseExpression:
+		return compileCaseScalar(expression, state)
 	default:
 		return compiledScalar{}, fmt.Errorf("compile ClickHouse scalar expression: unsupported expression %T", expression)
 	}
@@ -3778,9 +3803,20 @@ func normalizeCoalesceValues(
 		}
 	}
 	if !found {
-		normalized := make([]compiledScalar, len(values))
-		for index := range normalized {
-			normalized[index] = typedNullIfBranch(fieldKindString, "")
+		normalized := append([]compiledScalar(nil), values...)
+		target = typedNullIfBranch(fieldKindString, "")
+		for index, value := range normalized {
+			if coalesceFixedTypesMatch(value, target) {
+				continue
+			}
+			typed := target
+			if len(value.valueArgs) > 0 {
+				typed.valueSQL = "CAST(" + value.valueSQL +
+					" AS Nullable(String))"
+				typed.valueArgs = append([]any(nil), value.valueArgs...)
+				typed.materializeForPredicate = value.materializeForPredicate
+			}
+			normalized[index] = typed
 		}
 		return normalized, fieldKindString, "", nil
 	}
@@ -3861,6 +3897,212 @@ func unsupportedCoalesceValueTypes(
 		Code: "SPL_UNSUPPORTED_COALESCE_VALUE_TYPE",
 		Message: fmt.Sprintf(
 			"coalesce values have unsupported or unstable types %s and %s; use matching fixed String, Bool, or numeric values",
+			leftType,
+			rightType,
+		),
+		Range: sourceRange,
+	}
+}
+
+func compileCaseScalar(
+	expression *plan.ScalarCaseExpression,
+	state compileState,
+) (compiledScalar, error) {
+	if expression == nil {
+		return compiledScalar{}, errors.New("compile ClickHouse case: missing expression")
+	}
+	if len(expression.Branches) == 0 {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse case: requires at least one condition/value pair",
+		)
+	}
+	if len(expression.Branches) > spl.MaximumCaseBranches {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"case contains more than %d condition/value pairs",
+				spl.MaximumCaseBranches,
+			),
+			Range: expression.Range,
+		}
+	}
+
+	conditionSQL := make([]string, 0, len(expression.Branches))
+	conditionArgs := make([][]any, 0, len(expression.Branches))
+	values := make([]compiledScalar, 0, len(expression.Branches))
+	alwaysNull := true
+	materializeForPredicate := false
+	sqlBytes := len("multiIf()")
+	for _, branch := range expression.Branches {
+		if nilPlanExpression(branch.Condition) {
+			return compiledScalar{}, errors.New("compile ClickHouse case: missing condition")
+		}
+		if nilScalarExpression(branch.Value) {
+			return compiledScalar{}, errors.New("compile ClickHouse case: missing value")
+		}
+		if err := validateCaseCondition(branch.Condition); err != nil {
+			return compiledScalar{}, err
+		}
+		compiledConditionSQL, compiledConditionArgs, err := compileExpression(
+			branch.Condition,
+			state,
+		)
+		if err != nil {
+			return compiledScalar{}, err
+		}
+		compiledValue, err := compileScalarValue(branch.Value, state)
+		if err != nil {
+			return compiledScalar{}, err
+		}
+		conditionSQL = append(conditionSQL, compiledConditionSQL)
+		conditionArgs = append(conditionArgs, compiledConditionArgs)
+		values = append(values, compiledValue)
+		alwaysNull = alwaysNull && compiledScalarIsAlwaysNull(compiledValue)
+		materializeForPredicate = materializeForPredicate ||
+			len(predicateMaterializationFields(branch.Condition, state)) > 0 ||
+			compiledValue.materializeForPredicate
+		sqlBytes += len("ifNull(, 0), , ") +
+			len(compiledConditionSQL) +
+			len(compiledValue.valueSQL)
+		if err := validateCaseScalarSQLBytes(sqlBytes, expression.Range); err != nil {
+			return compiledScalar{}, err
+		}
+	}
+
+	textEligibleSQL, ok := coalesceTextEligibility(values)
+	if !ok {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_UNSUPPORTED_CASE_VALUE_TYPE",
+			Message: "case values carry incompatible text provenance; use matching text sources " +
+				"or normalize each value before the conditional",
+			Range: expression.Range,
+		}
+	}
+	values, kind, numberType, err := normalizeCaseValues(values, expression.Range)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	defaultValue := typedNullIfBranch(kind, numberType)
+
+	parts := make([]string, 0, len(values)*2+1)
+	args := make([]any, 0)
+	for index, value := range values {
+		parts = append(
+			parts,
+			"ifNull("+conditionSQL[index]+", 0)",
+			value.valueSQL,
+		)
+		args = append(args, conditionArgs[index]...)
+		args = append(args, value.valueArgs...)
+	}
+	parts = append(parts, defaultValue.valueSQL)
+	valueSQL := "multiIf(" + strings.Join(parts, ", ") + ")"
+	if err := validateCaseScalarSQLBytes(len(valueSQL), expression.Range); err != nil {
+		return compiledScalar{}, err
+	}
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               args,
+		existsSQL:               "1",
+		textEligibleSQL:         textEligibleSQL,
+		kind:                    kind,
+		numberType:              numberType,
+		alwaysNull:              alwaysNull,
+		materializeForPredicate: materializeForPredicate,
+	}, nil
+}
+
+func validateCaseScalarSQLBytes(size int, sourceRange spl.Range) error {
+	if size <= maxCompiledCaseScalarSQLBytes {
+		return nil
+	}
+	return &plan.Diagnostic{
+		Code:    "SPL_QUERY_TOO_COMPLEX",
+		Message: fmt.Sprintf("case scalar SQL exceeds %d bytes", maxCompiledCaseScalarSQLBytes),
+		Range:   sourceRange,
+	}
+}
+
+func normalizeCaseValues(
+	values []compiledScalar,
+	sourceRange spl.Range,
+) ([]compiledScalar, fieldKind, string, error) {
+	target := compiledScalar{}
+	found := false
+	for _, value := range values {
+		if compiledScalarIsAlwaysNull(value) {
+			continue
+		}
+		if !found {
+			target = value
+			found = true
+			continue
+		}
+		if !coalesceFixedTypesMatch(target, value) {
+			return nil, fieldKindInvalid, "",
+				unsupportedCaseValueTypes(sourceRange, target, value)
+		}
+	}
+	if !found {
+		normalized := append([]compiledScalar(nil), values...)
+		target = typedNullIfBranch(fieldKindString, "")
+		for index, value := range normalized {
+			if coalesceFixedTypesMatch(value, target) {
+				continue
+			}
+			typed := target
+			if len(value.valueArgs) > 0 {
+				typed.valueSQL = "CAST(" + value.valueSQL +
+					" AS Nullable(String))"
+				typed.valueArgs = append([]any(nil), value.valueArgs...)
+				typed.materializeForPredicate = value.materializeForPredicate
+			}
+			normalized[index] = typed
+		}
+		return normalized, fieldKindString, "", nil
+	}
+	if !supportedCoalesceFixedType(target) {
+		return nil, fieldKindInvalid, "",
+			unsupportedCaseValueTypes(sourceRange, target, compiledScalar{})
+	}
+
+	normalized := append([]compiledScalar(nil), values...)
+	for index, value := range normalized {
+		if !compiledScalarIsAlwaysNull(value) {
+			continue
+		}
+		if coalesceFixedTypesMatch(value, target) {
+			continue
+		}
+		typed, ok := typedNullIfBranchFor(target)
+		if !ok {
+			return nil, fieldKindInvalid, "",
+				unsupportedCaseValueTypes(sourceRange, target, value)
+		}
+		if len(value.valueArgs) > 0 {
+			typed.valueSQL = "CAST(" + value.valueSQL + " AS Nullable(" +
+				coalesceFixedTypeSQL(target) + "))"
+			typed.valueArgs = append([]any(nil), value.valueArgs...)
+			typed.materializeForPredicate = value.materializeForPredicate
+		}
+		normalized[index] = typed
+	}
+	return normalized, target.kind, target.numberType, nil
+}
+
+func unsupportedCaseValueTypes(
+	sourceRange spl.Range,
+	left, right compiledScalar,
+) error {
+	leftType := describeIfBranchType(left)
+	rightType := describeIfBranchType(right)
+	if right.kind == fieldKindInvalid && !compiledScalarIsAlwaysNull(right) {
+		rightType = "unsupported"
+	}
+	return &plan.Diagnostic{
+		Code: "SPL_UNSUPPORTED_CASE_VALUE_TYPE",
+		Message: fmt.Sprintf(
+			"case values have unsupported or unstable types %s and %s; use matching fixed String, Bool, or numeric values",
 			leftType,
 			rightType,
 		),
@@ -4032,6 +4274,65 @@ func validateIfConditionStructure(expression plan.Expression) error {
 	}
 }
 
+func validateCaseCondition(expression plan.Expression) error {
+	validator := predicateComplexityValidator{
+		active: make(map[any]struct{}),
+	}
+	if err := validator.validateExpression(expression, 1); err != nil {
+		return err
+	}
+	return validateCaseConditionStructure(expression)
+}
+
+func validateCaseConditionStructure(expression plan.Expression) error {
+	if nilPlanExpression(expression) {
+		return errors.New("compile ClickHouse case: missing condition")
+	}
+	switch expression := expression.(type) {
+	case *plan.BooleanExpression:
+		if expression.Op != plan.BooleanOpAnd && expression.Op != plan.BooleanOpOr {
+			return errors.New("compile ClickHouse case: condition has an invalid Boolean operator")
+		}
+		if err := validateCaseConditionStructure(expression.Left); err != nil {
+			return err
+		}
+		return validateCaseConditionStructure(expression.Right)
+	case *plan.NotExpression:
+		return validateCaseConditionStructure(expression.Operand)
+	case *plan.EvalComparisonExpression:
+		if nilScalarExpression(expression.Left) || nilScalarExpression(expression.Right) {
+			return errors.New(
+				"compile ClickHouse case: comparison condition has a missing scalar operand",
+			)
+		}
+		if !validComparisonOp(expression.Op) {
+			return errors.New(
+				"compile ClickHouse case: condition has an invalid comparison operator",
+			)
+		}
+		if err := validatePredicateScalarStructure(expression.Left); err != nil {
+			return err
+		}
+		return validatePredicateScalarStructure(expression.Right)
+	case *plan.ScalarPredicateExpression:
+		if nilScalarExpression(expression.Value) {
+			return errors.New("compile ClickHouse case: scalar condition is missing")
+		}
+		if err := validatePredicateScalarStructure(expression.Value); err != nil {
+			return err
+		}
+		if !scalarExpressionReturnsBoolean(expression.Value) {
+			return errors.New("compile ClickHouse case: scalar condition must return Boolean")
+		}
+		return nil
+	default:
+		return fmt.Errorf(
+			"compile ClickHouse case: condition must be an eval/where predicate, got %T",
+			expression,
+		)
+	}
+}
+
 type predicateComplexityValidator struct {
 	nodes  int
 	active map[any]struct{}
@@ -4116,6 +4417,24 @@ func (v *predicateComplexityValidator) validateScalar(
 			return err
 		}
 		return v.validateScalar(expression.False, depth+1)
+	case *plan.ScalarCaseExpression:
+		if len(expression.Branches) > spl.MaximumCaseBranches {
+			return predicateComplexityError(
+				fmt.Sprintf(
+					"case contains more than %d condition/value pairs",
+					spl.MaximumCaseBranches,
+				),
+				expression.Range,
+			)
+		}
+		for _, branch := range expression.Branches {
+			if err := v.validateExpression(branch.Condition, depth+1); err != nil {
+				return err
+			}
+			if err := v.validateScalar(branch.Value, depth+1); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -4244,6 +4563,27 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			return err
 		}
 		return validatePredicateScalarStructure(expression.False)
+	case *plan.ScalarCaseExpression:
+		if len(expression.Branches) == 0 {
+			return errors.New(
+				"compile ClickHouse predicate: case requires at least one condition/value pair",
+			)
+		}
+		if len(expression.Branches) > spl.MaximumCaseBranches {
+			return fmt.Errorf(
+				"compile ClickHouse predicate: case contains more than %d condition/value pairs",
+				spl.MaximumCaseBranches,
+			)
+		}
+		for _, branch := range expression.Branches {
+			if err := validateCaseConditionStructure(branch.Condition); err != nil {
+				return err
+			}
+			if err := validatePredicateScalarStructure(branch.Value); err != nil {
+				return err
+			}
+		}
+		return nil
 	default:
 		return fmt.Errorf(
 			"compile ClickHouse predicate: unsupported scalar expression %T",
@@ -4272,6 +4612,9 @@ func scalarExpressionReturnsBoolean(expression plan.ScalarExpression) bool {
 		return expression != nil &&
 			scalarExpressionReturnsBoolean(expression.True) &&
 			scalarExpressionReturnsBoolean(expression.False)
+	case *plan.ScalarCaseExpression:
+		return expression != nil &&
+			casePlanScalarReturnsBoolean(expression.Branches)
 	default:
 		return false
 	}
@@ -4286,6 +4629,22 @@ func coalescePlanScalarReturnsBoolean(arguments []plan.ScalarExpression) bool {
 			continue
 		}
 		if !scalarExpressionReturnsBoolean(argument) {
+			return false
+		}
+		foundBoolean = true
+	}
+	return foundBoolean
+}
+
+func casePlanScalarReturnsBoolean(branches []plan.ScalarCaseBranch) bool {
+	foundBoolean := false
+	for _, branch := range branches {
+		if literal, ok := branch.Value.(*plan.ScalarLiteralExpression); ok &&
+			literal != nil &&
+			literal.Value.Kind == plan.ValueKindNull {
+			continue
+		}
+		if !scalarExpressionReturnsBoolean(branch.Value) {
 			return false
 		}
 		foundBoolean = true
@@ -4327,6 +4686,8 @@ func nilScalarExpression(expression plan.ScalarExpression) bool {
 	case *plan.ScalarCallExpression:
 		return expression == nil
 	case *plan.ScalarIfExpression:
+		return expression == nil
+	case *plan.ScalarCaseExpression:
 		return expression == nil
 	default:
 		return false
@@ -4617,6 +4978,16 @@ func scalarExpressionMayReturnBooleanFunction(expression plan.ScalarExpression) 
 		return expression != nil &&
 			(scalarExpressionMayReturnBooleanFunction(expression.True) ||
 				scalarExpressionMayReturnBooleanFunction(expression.False))
+	case *plan.ScalarCaseExpression:
+		if expression == nil {
+			return false
+		}
+		for _, branch := range expression.Branches {
+			if scalarExpressionMayReturnBooleanFunction(branch.Value) {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}

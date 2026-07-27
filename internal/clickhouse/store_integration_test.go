@@ -1694,6 +1694,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testNullPredicatesAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testIfAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testCoalesceAgainstClickHouse(ctx, t, store, connection, indexTime)
+	testCaseAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testStatsCountEvalAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testStatsAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testStatsPercentilesAgainstClickHouse(ctx, t, store, connection, indexTime)
