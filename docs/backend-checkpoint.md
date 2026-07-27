@@ -7,22 +7,82 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: statistics-only result projections
+## Latest checkpoint: result-kind-bounded browser adaptation
+
+Date: 2026-07-26
+
+Implementation/proof commit: `c20204b667c5711bc9c4484ba43d046e3a9f65d4`
+
+This slice finishes result-kind specialization and removes redundant
+date-time formatter construction plus duplicate typed-value decoding and
+allocation from browser result adaptation:
+
+1. The authoritative result kind now bounds every projection:
+   `RESULT_SET_KIND_EVENTS` builds only events,
+   `RESULT_SET_KIND_TIME_SERIES` builds only timeline points, and
+   `RESULT_SET_KIND_STATISTICS` builds only its categorical rows and generic
+   table. Event field profiles and authoritative event histograms continue to
+   come from their dedicated server routes; backend exports remain server-side.
+2. Event and time-series date-time formatters are lazy and local to one
+   adaptation. A nonempty valid projection constructs exactly one formatter,
+   while statistics, empty input, and all-invalid input construct none. A new
+   adaptation observes the then-current local timezone instead of retaining
+   import-time or previous-call state.
+3. The authoritative server-timeline adapter likewise constructs at most one
+   formatter per nonempty response. Repeated-response tests prevent a
+   module-level singleton, and empty or invalid responses remain allocation
+   free for this formatter.
+4. Event rows now decode each ordinary typed cell or flattened `fields` child
+   once. The previous path decoded every ordinary cell twice and recursively
+   rebuilt list/object values twice. Source-Date counters pin one serialization
+   for ordinary timestamps, flattened object children, and timestamps nested
+   in lists.
+5. Time-series adaptation no longer decodes complete rows. It reads the time
+   cell and candidate numeric cells only, retaining split-series order, exact
+   unsafe-integer export text, bucket-width behavior, and an
+   O(rows × columns) bound under the enforced 64-column browser limit.
+6. Controlled red tests observed 1,048 formatter constructions for 1,000
+   event rows and 1,000 constructions for 1,000 authoritative timeline
+   buckets. Permanent tests assert construction counts rather than timing:
+   one formatter for 1,000 events, one per time-series adaptation/response,
+   zero on skipped paths, and refreshed timezone labels. The frontend suite
+   now contains 104 passing tests.
+7. The complete Go and Go race suites, vet, Go build, frontend tests,
+   typecheck, lint, and production Next.js build passed. The exact
+   Docker-backed release-path suite passed after the final single-decode fix:
+   the vertical stored four distinct events with zero replay and passed all
+   six current GradeThis searches; fixed-result rendering, expiration/gap
+   recovery variants, and cancellation also passed. No Open Splunk test
+   container remained afterward.
+8. Independent consumer-correctness, allocation/performance, and
+   lifetime/test-design reviewers drove full Events/Time Series
+   specialization, the single-decode regression, repeated-call lifetime
+   proofs, and invalid-input coverage. All three reported staged SHA-256
+   `b1cd789777fe9336a33f4c6b5d856bb2befec8a3b30b8fe65200d21e73748253`
+   clean.
+
+The exact validation record is under **Latest validation evidence**.
+Result adaptation specialization and formatter reuse are complete at this
+checkpoint. Unless the user changes priority, next verify release-revision
+consistency and byte-identical embedded frontend assets under **Remaining
+work**. The overall backend goal remains active.
+
+## Previous checkpoint: statistics-only result projections
 
 Date: 2026-07-26
 
 Implementation/proof commit: `e647dd2e5ae3b422ec98ee16b758d15fc87a4aa5`
 
-This slice makes the browser adapter honor the backend result kind as an
+This slice made the browser adapter honor the backend result kind as an
 authoritative projection boundary instead of materializing event-only state
 for transforming statistics:
 
-1. `RESULT_SET_KIND_STATISTICS` now produces only the categorical chart rows
-   and generic statistics table that its Statistics and Visualization views
+1. `RESULT_SET_KIND_STATISTICS` produces only the categorical chart rows and
+   generic statistics table that its Statistics and Visualization views
    consume. Its `events`, `fields`, and `timeline` projections are empty.
 2. Statistics adaptation no longer decodes every row into a fabricated event,
-   formats event timestamps, derives and sorts field profiles, constructs an
-   event histogram. For schemas that produce a generic table, the remaining
+   formats event timestamps, derives and sorts field profiles, or constructs
+   an event histogram. For schemas that produce a generic table, the remaining
    asymptotic work is Θ(columns + rows × columns + decoded nested-value nodes),
    matching the table's structural output size even when it contains zero
    rows.
@@ -31,36 +91,27 @@ for transforming statistics:
    A guarded typed-object regression proves that this raw payload is not even
    decoded on the statistics path while the usable metric projection remains
    intact.
-4. The redundant caller-provided `timechart` boolean was removed. An exhaustive
-   result-kind switch now selects Events, Statistics, or Time Series directly
-   from the authoritative schema, and unspecified, unrecognized, or future
-   unknown numeric kinds fail closed instead of falling through as event data.
+4. The redundant caller-provided `timechart` boolean was removed. An
+   exhaustive result-kind switch selects Events, Statistics, or Time Series
+   directly from the authoritative schema, and unspecified, unrecognized, or
+   future unknown numeric kinds fail closed instead of falling through as
+   event data.
 5. Red tests first reproduced seven unnecessary `Intl.DateTimeFormat`
-   constructions for two statistics rows. Permanent coverage now pins empty
+   constructions for two statistics rows. Permanent coverage pins empty
    event-only projections, exact statistics rows/table columns, skipped raw
-   decoding, unsupported-kind rejection, unchanged event projections, and
-   unchanged time-series timeline/export behavior. The frontend suite now
-   contains 97 passing tests.
+   decoding, unsupported-kind rejection, and retained event/time-series
+   behavior. The frontend suite contained 97 passing tests.
 6. The complete Go and Go race suites, vet, Go build, frontend tests,
-   typecheck, lint, and production Next.js build passed on the exact commit.
-7. The Docker-backed release-path suite also passed. The vertical
-   crash-restarted the collector and server, stored four distinct events with
-   zero replay, and passed all six current GradeThis searches. The compiled
-   browser retained bounded 1,000-row by 64-column rendering and passed
-   sequence-expiration, sequence-gap, REST-first/terminal recovery, and honest
-   cancellation. No Open Splunk test container remained afterward.
-8. Independent correctness, efficiency, and maintainability reviewers drove
-   the authoritative enum switch and durable skipped-work sentinel, then
-   reported the final staged SHA-256
+   typecheck, lint, production Next.js build, and Docker-backed release-path
+   suite passed.
+7. Independent correctness, efficiency, and maintainability reviewers
+   reported staged SHA-256
    `ce22fc3ec685b30864e215891bb9ac3ebe0e8d49ef2f179fd0ce483e4f16b609`
    clean.
 
-The exact validation record is under **Latest validation evidence**.
-Statistics-only result specialization is complete at this checkpoint. Unless
-the user changes priority, next profile the event-time formatter; hoist/cache
-it behind focused correctness and construction-count regressions if the cost
-is material, otherwise proceed to release-revision consistency under
-**Remaining work**. The overall backend goal remains active.
+Statistics-only result specialization is complete at `e647dd2`; the formatter
+and remaining Events/Time Series specialization follow-up is complete at
+`c20204b`. The overall backend goal remains active.
 
 ## Previous checkpoint: per-surface ordered configured-redaction replay
 
@@ -143,8 +194,9 @@ weakening fail-closed behavior or changing observable sequential output:
 The exact validation record is under **Latest validation evidence**. The
 syntax-bearing configured-redaction performance follow-up is complete at this
 checkpoint. Its next priority was statistics-only result specialization, now
-complete at `e647dd2`; the event-time formatter and release-revision work
-follow under **Remaining work**. The overall backend goal remains active.
+complete at `e647dd2`; formatter reuse and the remaining result-kind
+specialization are now complete at `c20204b`, and release-revision work
+follows under **Remaining work**. The overall backend goal remains active.
 
 ## Previous checkpoint: bounded integration/browser harness resources
 
@@ -207,8 +259,9 @@ The exact validation record is under **Latest validation evidence**. Harness
 resource hardening is complete at this checkpoint. Its next priority was the
 red benchmark/test and per-event optimization for the syntax-bearing
 configured-redaction marker cliff, now complete at `1b89397`; the statistics
-adapter is now complete at `e647dd2`, and the event-time formatter and
-release-revision work follow. The overall backend goal remains active.
+adapter is complete at `e647dd2`, formatter reuse and the remaining
+result-kind specialization are complete at `c20204b`, and release-revision
+work follows. The overall backend goal remains active.
 
 ## Previous checkpoint: composite configured pre-WAL redaction
 
@@ -1718,6 +1771,54 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Result-kind-bounded browser adaptation
+
+The exact implementation at `c20204b667c5711bc9c4484ba43d046e3a9f65d4`
+passed:
+
+```sh
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
+go test ./... -count=1
+go test -race ./... -count=1
+go vet ./...
+go build ./...
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+go test ./integration \
+  -run '^(TestBackendVertical|TestBrowser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=15m -v
+git diff --cached --check
+```
+
+The frontend suite passed all 104 tests. Controlled red tests observed 1,048
+`Intl.DateTimeFormat` constructions for 1,000 event rows and 1,000
+constructions for 1,000 server timeline buckets. The final deterministic
+regressions require one formatter for 1,000 event rows, one formatter per
+nonempty adaptation or response, zero for statistics/empty/all-invalid paths,
+and one source-Date serialization per ordinary cell, flattened object child,
+or nested-list timestamp. Timing observations were deliberately not made
+release thresholds.
+
+The final Docker-backed suite completed in 54.31 seconds. Its vertical
+completed in 23.05 seconds, stored four distinct events with zero replay, and
+passed all six current GradeThis searches. The fixed rendering fixture used a
+424,238-byte 1,000-row by 64-column response, initially materialized 18 rows,
+peaked at 25 materialized rows and 27 total DOM rows, and reported 61.9 ms
+initial stable rendering on the checkpoint machine. Sequence expiration, all
+three sequence-gap recovery variants, and cancellation passed. No
+`open-splunk-*` test container remained.
+
+Consumer-correctness, allocation/performance, and lifetime/test-design
+reviewers covered authoritative and preview consumers, dedicated field and
+timeline routes, backend export ownership, typed-value equivalence, nested
+object/list handling, timezone changes, lazy allocation, repeated calls,
+all-invalid inputs, asymptotic work, and the private module surface. Their
+final review of staged SHA-256
+`b1cd789777fe9336a33f4c6b5d856bb2befec8a3b30b8fe65200d21e73748253`
+reported no remaining issue.
+
 ### Statistics-only result projections
 
 The exact implementation at `e647dd2e5ae3b422ec98ee16b758d15fc87a4aa5`
@@ -1742,8 +1843,8 @@ git diff --cached --check
 The frontend suite passed all 97 tests. The controlled red for two ordinary
 statistics rows observed seven `Intl.DateTimeFormat` constructions before the
 result-kind specialization. The permanent accessor sentinel now ties the
-regression to raw event decoding itself so the next formatter-hoisting change
-cannot make the skipped-work proof vacuous.
+regression to raw event decoding itself, so the formatter reuse completed at
+`c20204b` cannot make the skipped-work proof vacuous.
 
 The Docker-backed suite completed in 55.23 seconds. Its vertical completed in
 23.72 seconds, stored four distinct events with zero replay, and passed all six
@@ -3095,10 +3196,10 @@ independent stacks.
    `3f89229`; per-surface ordered configured-redaction replay and its
    safe-miss/duplicate/direct-hit performance coverage are complete at
    `1b89397`; statistics-only result specialization and authoritative
-   result-kind dispatch are complete at `e647dd2`. Unless the user changes
-   priority, next profile the event-time formatter and hoist/cache it behind a
-   focused regression if the cost is material; otherwise proceed to the
-   release-revision items below. The current
+   result-kind dispatch are complete at `e647dd2`; full result-kind projection
+   bounds, single-pass event decoding, and adaptation-local formatter reuse
+   are complete at `c20204b`. Unless the user changes priority, proceed to the
+   release-revision consistency and embedded-asset items below. The current
    preview-to-final
    resource-release audit pass is complete at `961cba2`, the sanitized current
    GradeThis collector/config migration at `c576e85`, logical event retention
@@ -3208,9 +3309,12 @@ Continue the release proof in this order:
   no longer builds events, derived fields, or an event histogram for
   transforming results; result-kind dispatch is authoritative and unsupported
   values fail closed.
-- The event path constructs an `Intl.DateTimeFormat` inside `formatEventTime`
-  for every valid event timestamp. Hoist or cache it behind a focused
-  correctness test if profiling shows that cost matters.
+- Full Events/Time Series specialization and formatter reuse are complete at
+  `c20204b`. Events build only their event projection and decode each typed
+  cell once; time series build only timeline points and avoid whole-row
+  decoding. Event, time-series, and authoritative server-timeline formatters
+  are lazy, adaptation-local, and count-pinned across repeated, empty, invalid,
+  and timezone-changing calls.
 - Verify release revision consistency across embedded UI, server, protobuf
   schema, and migrations, plus byte-identical embedded frontend assets for
   Linux and macOS builds from the same source revision.
@@ -3365,10 +3469,11 @@ Do not guess those decisions if they materially affect the implementation.
    Bounded harness process output, diagnostics, evidence, and matching socket
    ownership are complete at `3f89229`, and per-surface ordered redaction replay
    is complete at `1b89397`. Statistics-only result specialization and
-   authoritative result-kind dispatch are complete at `e647dd2`. Unless the
-   user changes priority, profile the event-time formatter and hoist/cache it
-   if material; otherwise proceed to the release-revision items above. The
-   generator foundation, current
+   authoritative result-kind dispatch are complete at `e647dd2`; complete
+   result-kind projection bounds, single-pass event decoding, and
+   adaptation-local formatter reuse are complete at `c20204b`. Unless the user
+   changes priority, proceed to the release-revision consistency and
+   embedded-asset items above. The generator foundation, current
    preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
