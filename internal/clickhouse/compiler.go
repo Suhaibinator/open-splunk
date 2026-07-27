@@ -2177,8 +2177,7 @@ func updateBucketCompileState(state compileState, inputName string, output plan.
 		valueSQL:                quoteIdentifier(output.Name),
 		existsSQL:               source.existsSQL,
 		existsArgs:              append([]any(nil), source.existsArgs...),
-		dynamicTextOnly:         source.dynamicTextOnly,
-		dynamicNumericOnly:      source.dynamicNumericOnly,
+		dynamicDomain:           source.dynamicDomain,
 		kind:                    source.kind,
 		numberType:              source.numberType,
 		numericSort:             source.numericSort,
@@ -3089,6 +3088,14 @@ const (
 	fieldKindStringArray
 )
 
+type dynamicScalarDomain uint8
+
+const (
+	dynamicScalarDomainAny dynamicScalarDomain = iota
+	dynamicScalarDomainText
+	dynamicScalarDomainNumeric
+)
+
 func unsupportedMultivalueUsage(operation string, sourceRange spl.Range) error {
 	return &plan.Diagnostic{
 		Code:    "SPL_UNSUPPORTED_MULTIVALUE_USAGE",
@@ -3100,8 +3107,7 @@ func unsupportedMultivalueUsage(operation string, sourceRange spl.Range) error {
 type fieldState struct {
 	valueSQL                string
 	textEligibleSQL         string
-	dynamicTextOnly         bool
-	dynamicNumericOnly      bool
+	dynamicDomain           dynamicScalarDomain
 	dynamicTypeSQL          string
 	storedTypeSQL           string
 	existsSQL               string
@@ -3601,8 +3607,7 @@ type compiledScalar struct {
 	existsSQL               string
 	existsArgs              []any
 	textEligibleSQL         string
-	dynamicTextOnly         bool
-	dynamicNumericOnly      bool
+	dynamicDomain           dynamicScalarDomain
 	dynamicTypeSQL          string
 	storedTypeSQL           string
 	descendantSQL           string
@@ -3611,6 +3616,7 @@ type compiledScalar struct {
 	numberType              string
 	literal                 *plan.Value
 	alwaysNull              bool
+	comparisonAtomic        bool
 	materializeForPredicate bool
 }
 
@@ -3659,22 +3665,24 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			valueSQL, argument = "CAST(? AS Bool)", value.Bool
 		case plan.ValueKindNull:
 			return compiledScalar{
-				valueSQL:   "CAST(NULL AS Nullable(String))",
-				existsSQL:  "1",
-				kind:       fieldKindInvalid,
-				literal:    &value,
-				alwaysNull: true,
+				valueSQL:         "CAST(NULL AS Nullable(String))",
+				existsSQL:        "1",
+				kind:             fieldKindInvalid,
+				literal:          &value,
+				alwaysNull:       true,
+				comparisonAtomic: true,
 			}, nil
 		default:
 			return compiledScalar{}, errors.New("compile ClickHouse scalar expression: invalid literal")
 		}
 		return compiledScalar{
-			valueSQL:   valueSQL,
-			valueArgs:  []any{argument},
-			existsSQL:  "1",
-			kind:       kind,
-			numberType: numberType,
-			literal:    &value,
+			valueSQL:         valueSQL,
+			valueArgs:        []any{argument},
+			existsSQL:        "1",
+			kind:             kind,
+			numberType:       numberType,
+			literal:          &value,
+			comparisonAtomic: true,
 		}, nil
 	case *plan.ScalarCallExpression:
 		if expression == nil {
@@ -5005,7 +5013,7 @@ func compileTextCaseScalar(
 	valueSQL := ""
 	valueArgs := append([]any(nil), input.valueArgs...)
 	resultKind := fieldKindString
-	dynamicTextOnly := false
+	dynamicDomain := dynamicScalarDomainAny
 	switch input.kind {
 	case fieldKindDynamic:
 		// Dynamic event fields can be either scalar String or Splunk
@@ -5027,7 +5035,7 @@ func compileTextCaseScalar(
 			"dynamicElement(value, 'Array(Dynamic)')) AS Dynamic), " +
 			"CAST(NULL AS Dynamic)), [" + input.valueSQL + "]), 1)"
 		resultKind = fieldKindDynamic
-		dynamicTextOnly = true
+		dynamicDomain = dynamicScalarDomainText
 	case fieldKindStringArray:
 		// A fixed Array(String) can originate from an aggregate over _raw.
 		// Bind it once and validate every member before calling the UTF-8
@@ -5067,7 +5075,7 @@ func compileTextCaseScalar(
 		valueSQL:                valueSQL,
 		valueArgs:               valueArgs,
 		existsSQL:               "1",
-		dynamicTextOnly:         dynamicTextOnly,
+		dynamicDomain:           dynamicDomain,
 		kind:                    resultKind,
 		alwaysNull:              input.alwaysNull,
 		materializeForPredicate: input.materializeForPredicate,
@@ -5139,7 +5147,7 @@ func compileSubstringScalar(
 			"compile ClickHouse substr: expected two or three arguments",
 		)
 	}
-	input, err := compileTextScalarInputArgument(
+	input, err := compileNonBooleanScalarInputArgument(
 		expression.Arguments[0],
 		state,
 		"substr",
@@ -5492,7 +5500,7 @@ func compileScalarInputArgument(
 	return compileScalarValue(argument, state)
 }
 
-func compileTextScalarInputArgument(
+func compileNonBooleanScalarInputArgument(
 	argument plan.ScalarExpression,
 	state compileState,
 	functionName string,
@@ -5536,7 +5544,7 @@ func compileToStringScalar(
 	textEligibleSQL := ""
 	switch input.kind {
 	case fieldKindDynamic:
-		if input.dynamicTextOnly {
+		if input.dynamicDomain == dynamicScalarDomainText {
 			// Text-case producers can only contain String, String arrays, or
 			// null. A direct extraction avoids a redundant singleton-array
 			// binding and runtime dispatch while rejecting multivalue variants.
@@ -5619,12 +5627,7 @@ func compileRoundScalar(
 			"compile ClickHouse round: requires one or two arguments",
 		)
 	}
-	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
-		return compiledScalar{}, errors.New(
-			"compile ClickHouse round: cannot consume a Boolean null predicate",
-		)
-	}
-	input, err := compileScalarInputArgument(
+	input, err := compileNonBooleanScalarInputArgument(
 		expression.Arguments[0],
 		state,
 		"round",
@@ -5633,7 +5636,8 @@ func compileRoundScalar(
 		return compiledScalar{}, err
 	}
 
-	precisionSQL := ""
+	fixedPrecisionSQL := ""
+	dynamicPrecisionSQL := ""
 	var precisionArgs []any
 	if len(expression.Arguments) == 2 {
 		precision, precisionErr := roundPrecisionLiteral(
@@ -5642,7 +5646,8 @@ func compileRoundScalar(
 		if precisionErr != nil {
 			return compiledScalar{}, precisionErr
 		}
-		precisionSQL = ", CAST(? AS UInt8)"
+		fixedPrecisionSQL = ", CAST(? AS UInt8)"
+		dynamicPrecisionSQL = ", precision"
 		precisionArgs = []any{precision}
 	}
 
@@ -5650,11 +5655,11 @@ func compileRoundScalar(
 	valueArgs := append([]any(nil), input.valueArgs...)
 	resultKind := fieldKindNumber
 	numberType := input.numberType
-	dynamicNumericOnly := false
+	dynamicDomain := dynamicScalarDomainAny
 	alwaysNull := input.alwaysNull
 	switch input.kind {
 	case fieldKindDynamic:
-		if input.dynamicTextOnly {
+		if input.dynamicDomain == dynamicScalarDomainText {
 			valueSQL = "CAST(NULL AS Nullable(Float64))"
 			valueArgs = nil
 			numberType = "Float64"
@@ -5663,16 +5668,14 @@ func compileRoundScalar(
 		}
 		typeSQL := "dynamicType(value)"
 		integerCondition := dynamicIntegerTypePredicate(typeSQL)
-		physicalNumericCondition := dynamicNumericTypePredicate(typeSQL)
-		if input.dynamicNumericOnly {
+		body := ""
+		if input.dynamicDomain == dynamicScalarDomainNumeric {
 			rounded := "round(" +
-				finiteFloatOrNullSQL("toString(value)") +
-				precisionSQL + ")"
-			valueSQL = "arrayElement(arrayMap(value -> multiIf(" +
+				finiteDynamicFloatOrNullSQL("value") +
+				dynamicPrecisionSQL + ")"
+			body = "multiIf(" +
 				integerCondition + ", value, " +
-				physicalNumericCondition + ", CAST(" + rounded +
-				" AS Dynamic), CAST(NULL AS Dynamic)), [" +
-				input.valueSQL + "]), 1)"
+				"CAST(" + rounded + " AS Dynamic))"
 		} else {
 			dynamicValue := compiledScalar{
 				valueSQL:       "value",
@@ -5682,30 +5685,39 @@ func compileRoundScalar(
 			decimalCondition, decimalPayload := dynamicTaggedDecimalText(
 				dynamicValue,
 			)
+			exactTaggedInteger := dynamicTaggedDecimalIntegralSQL(
+				dynamicValue,
+			)
 			numericValue := "multiIf(" +
 				decimalCondition + ", " +
 				finiteFloatOrNullSQL(decimalPayload) + ", " +
-				physicalNumericCondition + ", " +
-				finiteFloatOrNullSQL("toString(value)") + ", " +
+				dynamicNumericTypePredicate(typeSQL) + ", " +
+				finiteDynamicFloatOrNullSQL("value") + ", " +
 				"CAST(NULL AS Nullable(Float64)))"
-			rounded := "round(" + numericValue + precisionSQL + ")"
-			valueSQL = "arrayElement(arrayMap(value -> multiIf(" +
+			rounded := "round(" + numericValue + dynamicPrecisionSQL + ")"
+			body = "arrayElement(arrayMap(exact_value -> multiIf(" +
 				integerCondition + ", value, (" +
-				physicalNumericCondition + " OR " +
-				decimalCondition + "), CAST(" + rounded +
-				" AS Dynamic), CAST(NULL AS Dynamic)), [" +
+				"isNotNull(exact_value)), CAST(assumeNotNull(exact_value) AS Dynamic), " +
+				"CAST(" + rounded + " AS Dynamic)), [" +
+				exactTaggedInteger + "]), 1)"
+		}
+		if len(precisionArgs) == 0 {
+			valueSQL = "arrayElement(arrayMap(value -> " + body + ", [" +
 				input.valueSQL + "]), 1)"
+		} else {
+			valueSQL = "arrayElement(arrayMap((value, precision) -> " + body +
+				", [" + input.valueSQL + "], [CAST(? AS UInt8)]), 1)"
 		}
 		valueArgs = append(valueArgs, precisionArgs...)
 		resultKind = fieldKindDynamic
 		numberType = ""
-		dynamicNumericOnly = true
+		dynamicDomain = dynamicScalarDomainNumeric
 	case fieldKindNumber:
 		if fixedNumberTypeIsInteger(input.numberType) {
 			valueSQL = input.valueSQL
 			break
 		}
-		valueSQL = "round(" + input.valueSQL + precisionSQL + ")"
+		valueSQL = "round(" + input.valueSQL + fixedPrecisionSQL + ")"
 		valueArgs = append(valueArgs, precisionArgs...)
 	case fieldKindInvalid:
 		valueSQL = "CAST(NULL AS Nullable(Float64))"
@@ -5737,7 +5749,7 @@ func compileRoundScalar(
 		valueSQL:                valueSQL,
 		valueArgs:               valueArgs,
 		existsSQL:               "1",
-		dynamicNumericOnly:      dynamicNumericOnly,
+		dynamicDomain:           dynamicDomain,
 		kind:                    resultKind,
 		numberType:              numberType,
 		alwaysNull:              alwaysNull,
@@ -5901,15 +5913,14 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 		existsSQL = "notEmpty(" + quoteIdentifier(output.Name) + ")"
 	}
 	field := fieldState{
-		valueSQL:           quoteIdentifier(output.Name),
-		textEligibleSQL:    value.textEligibleSQL,
-		dynamicTextOnly:    value.dynamicTextOnly,
-		dynamicNumericOnly: value.dynamicNumericOnly,
-		existsSQL:          existsSQL,
-		descendantSQL:      value.descendantSQL,
-		descendantArgs:     append([]any(nil), value.descendantArgs...),
-		storedTypeSQL:      value.storedTypeSQL,
-		kind:               value.kind,
+		valueSQL:        quoteIdentifier(output.Name),
+		textEligibleSQL: value.textEligibleSQL,
+		dynamicDomain:   value.dynamicDomain,
+		existsSQL:       existsSQL,
+		descendantSQL:   value.descendantSQL,
+		descendantArgs:  append([]any(nil), value.descendantArgs...),
+		storedTypeSQL:   value.storedTypeSQL,
+		kind:            value.kind,
 		// An eval output named index is calculated data, not the physical scan
 		// selector. It follows its expression type and ordinary comparison rules.
 		caseSensitive:           false,
@@ -6710,16 +6721,15 @@ func renamePublicOrder(current []string, source, destination string, sourceIsPub
 func projectedRenameField(source fieldState, destination string) fieldState {
 	value := quoteIdentifier(destination)
 	result := fieldState{
-		valueSQL:           value,
-		textEligibleSQL:    source.textEligibleSQL,
-		dynamicTextOnly:    source.dynamicTextOnly,
-		dynamicNumericOnly: source.dynamicNumericOnly,
-		storedTypeSQL:      source.storedTypeSQL,
-		existsSQL:          rewriteExistenceForProjection(source, destination),
-		existsArgs:         append([]any(nil), source.existsArgs...),
-		descendantSQL:      source.descendantSQL,
-		descendantArgs:     append([]any(nil), source.descendantArgs...),
-		kind:               source.kind,
+		valueSQL:        value,
+		textEligibleSQL: source.textEligibleSQL,
+		dynamicDomain:   source.dynamicDomain,
+		storedTypeSQL:   source.storedTypeSQL,
+		existsSQL:       rewriteExistenceForProjection(source, destination),
+		existsArgs:      append([]any(nil), source.existsArgs...),
+		descendantSQL:   source.descendantSQL,
+		descendantArgs:  append([]any(nil), source.descendantArgs...),
+		kind:            source.kind,
 		// A field renamed to index is calculated pipeline data, not the
 		// authorization-constrained physical index selector.
 		caseSensitive:           false,
@@ -6900,10 +6910,15 @@ func evalComparisonCore(left, right compiledScalar, operator string) (string, []
 	if comparisonOperatorIsOrdered(operator) && (left.kind == fieldKindBool || right.kind == fieldKindBool) {
 		return "CAST(NULL AS Nullable(Bool))", nil
 	}
-	if left.dynamicTextOnly || right.dynamicTextOnly {
+	if left.dynamicDomain == dynamicScalarDomainText ||
+		right.dynamicDomain == dynamicScalarDomainText {
 		return dynamicTextEvalComparisonCore(left, right, operator)
 	}
 	if left.kind == fieldKindDynamic || right.kind == fieldKindDynamic {
+		if left.dynamicDomain == dynamicScalarDomainNumeric ||
+			right.dynamicDomain == dynamicScalarDomainNumeric {
+			return dynamicNumericEvalComparisonCore(left, right, operator)
+		}
 		return dynamicEvalComparisonCore(left, right, operator)
 	}
 	if !fixedScalarKindsComparable(left.kind, right.kind) {
@@ -6933,29 +6948,38 @@ func dynamicTextEvalComparisonCore(left, right compiledScalar, operator string) 
 		return nullBool, nil
 	}
 
-	leftValue := "left_value"
-	leftString := leftValue
+	if left.comparisonAtomic && right.comparisonAtomic {
+		return dynamicTextComparisonBody(left, right, operator),
+			comparisonValueArgs(left, right)
+	}
+	originalLeft := left
+	originalRight := right
+	left.valueSQL = "left_value"
+	right.valueSQL = "right_value"
+	return bindComparisonOperands(
+		dynamicTextComparisonBody(left, right, operator),
+		originalLeft,
+		originalRight,
+	)
+}
+
+func dynamicTextComparisonBody(left, right compiledScalar, operator string) string {
+	const nullBool = "CAST(NULL AS Nullable(Bool))"
+	leftString := left.valueSQL
 	leftEligible := "1"
 	if left.kind == fieldKindDynamic {
-		leftEligible = "dynamicType(" + leftValue + ") = 'String'"
-		leftString = "dynamicElement(" + leftValue + ", 'String')"
+		leftEligible = "dynamicType(" + left.valueSQL + ") = 'String'"
+		leftString = "dynamicElement(" + left.valueSQL + ", 'String')"
 	}
-	rightValue := "right_value"
-	rightString := rightValue
+	rightString := right.valueSQL
 	rightEligible := "1"
 	if right.kind == fieldKindDynamic {
-		rightEligible = "dynamicType(" + rightValue + ") = 'String'"
-		rightString = "dynamicElement(" + rightValue + ", 'String')"
+		rightEligible = "dynamicType(" + right.valueSQL + ") = 'String'"
+		rightString = "dynamicElement(" + right.valueSQL + ", 'String')"
 	}
 
-	// The singleton arrays bind each operand once. In addition to keeping SQL
-	// linear, putting every placeholder in the lambda arguments preserves the
-	// ordinary left-to-right valueArgs order.
-	body := "if((" + leftEligible + ") AND (" + rightEligible + "), " +
+	return "if((" + leftEligible + ") AND (" + rightEligible + "), " +
 		leftString + " " + operator + " " + rightString + ", " + nullBool + ")"
-	return "arrayElement(arrayMap((" + leftValue + ", " + rightValue + ") -> " +
-			body + ", [" + left.valueSQL + "], [" + right.valueSQL + "]), 1)",
-		comparisonValueArgs(left, right)
 }
 
 func fixedScalarKindsComparable(left, right fieldKind) bool {
@@ -6973,20 +6997,39 @@ func fixedScalarKindsComparable(left, right fieldKind) bool {
 }
 
 func dynamicEvalComparisonCore(left, right compiledScalar, operator string) (string, []any) {
-	const nullBool = "CAST(NULL AS Nullable(Bool))"
+	if left.comparisonAtomic && right.comparisonAtomic {
+		body, argumentOccurrences, ok := dynamicComparisonBody(
+			left,
+			right,
+			operator,
+		)
+		if !ok {
+			return "CAST(NULL AS Nullable(Bool))", nil
+		}
+		return body, repeatedComparisonValueArgs(
+			left,
+			right,
+			argumentOccurrences,
+		)
+	}
 	originalLeft := left
 	originalRight := right
 	left.valueSQL = "left_value"
 	left.dynamicTypeSQL = ""
 	right.valueSQL = "right_value"
 	right.dynamicTypeSQL = ""
-	bindOperands := func(body string) (string, []any) {
-		return "arrayElement(arrayMap((left_value, right_value) -> " +
-				body + ", [" + originalLeft.valueSQL + "], [" +
-				originalRight.valueSQL + "]), 1)",
-			comparisonValueArgs(originalLeft, originalRight)
+	body, _, ok := dynamicComparisonBody(left, right, operator)
+	if !ok {
+		return "CAST(NULL AS Nullable(Bool))", nil
 	}
+	return bindComparisonOperands(body, originalLeft, originalRight)
+}
 
+func dynamicComparisonBody(
+	left, right compiledScalar,
+	operator string,
+) (string, int, bool) {
+	const nullBool = "CAST(NULL AS Nullable(Bool))"
 	leftDynamic := left.kind == fieldKindDynamic
 	rightDynamic := right.kind == fieldKindDynamic
 	if leftDynamic && rightDynamic {
@@ -6998,8 +7041,10 @@ func dynamicEvalComparisonCore(left, right compiledScalar, operator string) (str
 		stringCondition := "(" + leftType + " = 'String' AND " + rightType + " = 'String')"
 		boolCondition := "(" + leftType + " = 'Bool' AND " + rightType + " = 'Bool')"
 		boolComparison := nullBool
+		argumentOccurrences := 3
 		if !comparisonOperatorIsOrdered(operator) {
 			boolComparison = dynamicBoolScalarSQL(left) + " " + operator + " " + dynamicBoolScalarSQL(right)
+			argumentOccurrences = 4
 		}
 		result := "multiIf(" +
 			integerCondition + ", " + scalarComparisonSQL(left, right, operator, true) + ", " +
@@ -7007,7 +7052,7 @@ func dynamicEvalComparisonCore(left, right compiledScalar, operator string) (str
 			stringCondition + ", " + dynamicStringScalarSQL(left) + " " + operator + " " + dynamicStringScalarSQL(right) + ", " +
 			boolCondition + ", " + boolComparison + ", " +
 			nullBool + ")"
-		return bindOperands(result)
+		return result, argumentOccurrences, true
 	}
 
 	dynamic := left
@@ -7029,22 +7074,182 @@ func dynamicEvalComparisonCore(left, right compiledScalar, operator string) (str
 			floating := comparison(numericScalarSQL(dynamic, false), numericScalarSQL(fixed, false))
 			result := "multiIf(" + dynamicExactIntegerPredicate(dynamic, typeSQL) + ", " + integer + ", " +
 				dynamicNumericValuePredicate(dynamic) + ", " + floating + ", " + nullBool + ")"
-			return bindOperands(result)
+			return result, 2, true
 		}
-		return bindOperands("if(" + dynamicNumericValuePredicate(dynamic) + ", " +
-			comparison(numericScalarSQL(dynamic, false), numericScalarSQL(fixed, false)) + ", " + nullBool + ")")
+		return "if(" + dynamicNumericValuePredicate(dynamic) + ", " +
+			comparison(numericScalarSQL(dynamic, false), numericScalarSQL(fixed, false)) +
+			", " + nullBool + ")", 1, true
 	case fieldKindTime:
-		return bindOperands("if(" + dynamicNumericValuePredicate(dynamic) + ", " +
-			comparison(numericScalarSQL(dynamic, false), numericScalarSQL(fixed, false)) + ", " + nullBool + ")")
+		return "if(" + dynamicNumericValuePredicate(dynamic) + ", " +
+			comparison(numericScalarSQL(dynamic, false), numericScalarSQL(fixed, false)) +
+			", " + nullBool + ")", 1, true
 	case fieldKindString:
-		return bindOperands("if(" + typeSQL + " = 'String', " +
-			comparison(dynamicStringScalarSQL(dynamic), stringScalarSQL(fixed)) + ", " + nullBool + ")")
+		return "if(" + typeSQL + " = 'String', " +
+			comparison(dynamicStringScalarSQL(dynamic), stringScalarSQL(fixed)) +
+			", " + nullBool + ")", 1, true
 	case fieldKindBool:
-		return bindOperands("if(" + typeSQL + " = 'Bool', " +
-			comparison(dynamicBoolScalarSQL(dynamic), fixed.valueSQL) + ", " + nullBool + ")")
+		return "if(" + typeSQL + " = 'Bool', " +
+			comparison(dynamicBoolScalarSQL(dynamic), fixed.valueSQL) +
+			", " + nullBool + ")", 1, true
 	default:
-		return nullBool, nil
+		return "", 0, false
 	}
+}
+
+func dynamicNumericEvalComparisonCore(
+	left, right compiledScalar,
+	operator string,
+) (string, []any) {
+	if left.comparisonAtomic && right.comparisonAtomic {
+		body, argumentOccurrences, ok := dynamicNumericComparisonBody(
+			left,
+			right,
+			operator,
+		)
+		if !ok {
+			return "CAST(NULL AS Nullable(Bool))", nil
+		}
+		return body, repeatedComparisonValueArgs(
+			left,
+			right,
+			argumentOccurrences,
+		)
+	}
+	originalLeft := left
+	originalRight := right
+	left.valueSQL = "left_value"
+	left.dynamicTypeSQL = ""
+	right.valueSQL = "right_value"
+	right.dynamicTypeSQL = ""
+	body, _, ok := dynamicNumericComparisonBody(left, right, operator)
+	if !ok {
+		return "CAST(NULL AS Nullable(Bool))", nil
+	}
+	return bindComparisonOperands(body, originalLeft, originalRight)
+}
+
+func dynamicNumericComparisonBody(
+	left, right compiledScalar,
+	operator string,
+) (string, int, bool) {
+	const nullBool = "CAST(NULL AS Nullable(Bool))"
+	leftDynamic := left.kind == fieldKindDynamic
+	rightDynamic := right.kind == fieldKindDynamic
+	if leftDynamic && rightDynamic {
+		leftNumeric := left.dynamicDomain == dynamicScalarDomainNumeric
+		rightNumeric := right.dynamicDomain == dynamicScalarDomainNumeric
+		if leftNumeric && rightNumeric {
+			integerCondition := "(" +
+				dynamicIntegerTypePredicate(dynamicScalarTypeSQL(left)) +
+				" AND " +
+				dynamicIntegerTypePredicate(dynamicScalarTypeSQL(right)) +
+				")"
+			return "if(" + integerCondition + ", " +
+				dynamicPhysicalIntegerSQL(left) + " " + operator + " " +
+				dynamicPhysicalIntegerSQL(right) + ", " +
+				dynamicPhysicalFloatSQL(left) + " " + operator + " " +
+				dynamicPhysicalFloatSQL(right) + ")", 0, true
+		}
+
+		numeric := left
+		other := right
+		numericIsLeft := leftNumeric
+		if rightNumeric {
+			numeric = right
+			other = left
+			numericIsLeft = false
+		}
+		exact := dynamicPhysicalIntegerSQL(numeric)
+		floating := dynamicPhysicalFloatSQL(numeric)
+		if numericIsLeft {
+			exact += " " + operator + " " + dynamicExactIntegerSQL(other)
+			floating += " " + operator + " " + numericScalarSQL(other, false)
+		} else {
+			exact = dynamicExactIntegerSQL(other) + " " + operator + " " + exact
+			floating = numericScalarSQL(other, false) + " " + operator + " " + floating
+		}
+		integerCondition := "(" +
+			dynamicIntegerTypePredicate(dynamicScalarTypeSQL(numeric)) +
+			" AND " +
+			dynamicExactIntegerPredicate(other, dynamicScalarTypeSQL(other)) +
+			")"
+		return "multiIf(" + integerCondition + ", " + exact + ", " +
+			dynamicNumericValuePredicate(other) + ", " + floating + ", " +
+			nullBool + ")", 0, true
+	}
+
+	dynamic := left
+	fixed := right
+	if rightDynamic {
+		dynamic = right
+		fixed = left
+	}
+	comparison := func(dynamicSQL, fixedSQL string) string {
+		if leftDynamic {
+			return dynamicSQL + " " + operator + " " + fixedSQL
+		}
+		return fixedSQL + " " + operator + " " + dynamicSQL
+	}
+	switch fixed.kind {
+	case fieldKindNumber:
+		if fixedNumberTypeIsInteger(fixed.numberType) {
+			return "if(" +
+				dynamicIntegerTypePredicate(dynamicScalarTypeSQL(dynamic)) +
+				", " +
+				comparison(
+					dynamicPhysicalIntegerSQL(dynamic),
+					numericScalarSQL(fixed, true),
+				) + ", " +
+				comparison(
+					dynamicPhysicalFloatSQL(dynamic),
+					numericScalarSQL(fixed, false),
+				) + ")", 2, true
+		}
+		return comparison(
+			dynamicPhysicalFloatSQL(dynamic),
+			numericScalarSQL(fixed, false),
+		), 1, true
+	case fieldKindTime:
+		return comparison(
+			dynamicPhysicalFloatSQL(dynamic),
+			numericScalarSQL(fixed, false),
+		), 1, true
+	default:
+		return "", 0, false
+	}
+}
+
+func dynamicPhysicalIntegerSQL(value compiledScalar) string {
+	return "accurateCastOrNull(" + value.valueSQL + ", 'Int256')"
+}
+
+func dynamicPhysicalFloatSQL(value compiledScalar) string {
+	return finiteDynamicFloatOrNullSQL(value.valueSQL)
+}
+
+func bindComparisonOperands(
+	body string,
+	left, right compiledScalar,
+) (string, []any) {
+	return "arrayElement(arrayMap((left_value, right_value) -> " +
+			body + ", [" + left.valueSQL + "], [" +
+			right.valueSQL + "]), 1)",
+		comparisonValueArgs(left, right)
+}
+
+func repeatedComparisonValueArgs(
+	left, right compiledScalar,
+	occurrences int,
+) []any {
+	arguments := make(
+		[]any,
+		0,
+		occurrences*(len(left.valueArgs)+len(right.valueArgs)),
+	)
+	for range occurrences {
+		arguments = append(arguments, comparisonValueArgs(left, right)...)
+	}
+	return arguments
 }
 
 func comparisonOperatorIsOrdered(operator string) bool {
@@ -7501,8 +7706,7 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		existsSQL:               field.existsSQL,
 		existsArgs:              append([]any(nil), field.existsArgs...),
 		textEligibleSQL:         field.textEligibleSQL,
-		dynamicTextOnly:         field.dynamicTextOnly,
-		dynamicNumericOnly:      field.dynamicNumericOnly,
+		dynamicDomain:           field.dynamicDomain,
 		dynamicTypeSQL:          field.dynamicTypeSQL,
 		storedTypeSQL:           field.storedTypeSQL,
 		descendantSQL:           field.descendantSQL,
@@ -7510,6 +7714,7 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		kind:                    field.kind,
 		numberType:              field.numberType,
 		alwaysNull:              field.alwaysNull,
+		comparisonAtomic:        true,
 		materializeForPredicate: field.materializeForPredicate,
 	}
 }
@@ -7717,8 +7922,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		}
 		next.visible[name] = fieldState{
 			valueSQL: publicName, textEligibleSQL: compiled.textEligibleSQL,
-			dynamicTextOnly:         compiled.dynamicTextOnly,
-			dynamicNumericOnly:      compiled.dynamicNumericOnly,
+			dynamicDomain:           compiled.dynamicDomain,
 			dynamicTypeSQL:          compiled.dynamicTypeSQL,
 			storedTypeSQL:           compiled.storedTypeSQL,
 			existsSQL:               rewriteExistenceForProjection(compiled, name),
@@ -9695,6 +9899,11 @@ func dynamicFiniteFloatOrNullSQL(valueSQL, typeSQL string) string {
 
 func finiteFloatOrNullSQL(valueSQL string) string {
 	return "ifNotFinite(toFloat64OrNull(" + valueSQL + "), CAST(NULL AS Nullable(Float64)))"
+}
+
+func finiteDynamicFloatOrNullSQL(valueSQL string) string {
+	return "ifNotFinite(accurateCastOrNull(" + valueSQL +
+		", 'Float64'), CAST(NULL AS Nullable(Float64)))"
 }
 
 func statsByScalarExpressions(field fieldState) (supported, lexical string) {

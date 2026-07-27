@@ -2425,7 +2425,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				},
 			}
 		}
-		if len(arguments) == 2 && !supportedRoundPrecision(arguments[1]) {
+		if len(arguments) == 2 && !SupportedRoundPrecision(arguments[1]) {
 			return nil, &Diagnostic{
 				Code: "SPL_UNSUPPORTED_ROUND_PRECISION",
 				Message: fmt.Sprintf(
@@ -2502,7 +2502,10 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	}, nil
 }
 
-func supportedRoundPrecision(expression ScalarExpr) bool {
+// SupportedRoundPrecision reports whether an SPL scalar expression is the
+// bounded non-negative integer literal accepted by round in compatibility
+// version 0.1. Parser and planner trust boundaries share this pure check.
+func SupportedRoundPrecision(expression ScalarExpr) bool {
 	literal, ok := expression.(*ScalarLiteralExpr)
 	if !ok || literal == nil ||
 		literal.Value.Kind != LiteralKindInteger {

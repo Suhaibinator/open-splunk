@@ -28,9 +28,12 @@ func testRoundAgainstClickHouse(
 		typedField("cents", typedDouble(2.555)),
 		typedField("binary_low", typedDouble(15.275)),
 		typedField("binary_high", typedDouble(17.275)),
+		typedField("nested_precision", typedDouble(2.51)),
 		typedField("signed", typedSint(-42)),
 		typedField("unsigned", typedUint(math.MaxUint64)),
 		typedField("decimal", typedDecimal("15.275")),
+		typedField("decimal_integer_low", typedDecimal("9007199254740992")),
+		typedField("decimal_integer_high", typedDecimal("9007199254740993")),
 		typedField("text", typedString("2.555")),
 		typedField("flag", typedBool(true)),
 		typedField("nothing", typedNull()),
@@ -87,8 +90,8 @@ func testRoundAgainstClickHouse(
 
 	dynamic := compile(
 		`index=round event_id="round-scalars"` +
-			` | eval positive=round(positive_half), even=round(even_half), negative=round(negative_half), cents_value=round(cents, 2), low=round(binary_low, 2), high=round(binary_high, 2), signed_value=round(signed, 18), unsigned_value=round(unsigned, 18), decimal_value=round(decimal, 2), text_value=round(text, 2), flag_value=round(flag), null_value=round(nothing), missing_value=round(absent), multi_value=round(multi), object_result=round(object_value)` +
-			` | table positive,even,negative,cents_value,low,high,signed_value,unsigned_value,decimal_value,text_value,flag_value,null_value,missing_value,multi_value,object_result`,
+			` | eval positive=round(positive_half), even=round(even_half), negative=round(negative_half), cents_value=round(cents, 2), low=round(binary_low, 2), high=round(binary_high, 2), nested_value=round(round(nested_precision, 1), 0), signed_value=round(signed, 18), unsigned_value=round(unsigned, 18), decimal_value=round(decimal, 2), decimal_integer_low_value=round(decimal_integer_low, 18), decimal_integer_high_value=round(decimal_integer_high, 18), text_value=round(text, 2), flag_value=round(flag), null_value=round(nothing), missing_value=round(absent), multi_value=round(multi), object_result=round(object_value)` +
+			` | table positive,even,negative,cents_value,low,high,nested_value,signed_value,unsigned_value,decimal_value,decimal_integer_low_value,decimal_integer_high_value,text_value,flag_value,null_value,missing_value,multi_value,object_result`,
 	)
 	dynamicControl := `SELECT
 		dynamicType(positive), dynamicElement(positive, 'Float64'),
@@ -96,24 +99,31 @@ func testRoundAgainstClickHouse(
 		dynamicType(negative), dynamicElement(negative, 'Float64'),
 		dynamicType(cents_value), dynamicElement(cents_value, 'Float64'),
 		dynamicElement(low, 'Float64'), dynamicElement(high, 'Float64'),
+		dynamicType(nested_value), dynamicElement(nested_value, 'Float64'),
 		dynamicType(signed_value), dynamicElement(signed_value, 'Int64'),
 		dynamicType(unsigned_value), dynamicElement(unsigned_value, 'UInt64'),
 		dynamicType(decimal_value), dynamicElement(decimal_value, 'Float64'),
+		dynamicType(decimal_integer_low_value), toString(dynamicElement(decimal_integer_low_value, 'Int256')),
+		dynamicType(decimal_integer_high_value), toString(dynamicElement(decimal_integer_high_value, 'Int256')),
 		dynamicType(text_value), dynamicType(flag_value),
 		dynamicType(null_value), dynamicType(missing_value),
 		dynamicType(multi_value), dynamicType(object_result)
 		FROM (` + dynamic.SQL + `)`
 	var (
 		positiveType, evenType, negativeType, centsType string
-		signedType, unsignedType, decimalType           string
+		nestedType, signedType, unsignedType            string
+		decimalType, decimalIntegerLowType              string
+		decimalIntegerHighType                          string
 		textType, flagType, nullType, missingType       string
 		multiType, objectType                           string
 	)
 	var dynamicPositive, dynamicEven, dynamicNegative float64
 	var dynamicCents, dynamicLow, dynamicHigh float64
+	var dynamicNested float64
 	var dynamicSigned int64
 	var dynamicUnsigned uint64
 	var dynamicDecimal float64
+	var dynamicDecimalIntegerLow, dynamicDecimalIntegerHigh string
 	if err := connection.QueryRow(
 		queryContext,
 		dynamicControl,
@@ -129,12 +139,18 @@ func testRoundAgainstClickHouse(
 		&dynamicCents,
 		&dynamicLow,
 		&dynamicHigh,
+		&nestedType,
+		&dynamicNested,
 		&signedType,
 		&dynamicSigned,
 		&unsignedType,
 		&dynamicUnsigned,
 		&decimalType,
 		&dynamicDecimal,
+		&decimalIntegerLowType,
+		&dynamicDecimalIntegerLow,
+		&decimalIntegerHighType,
+		&dynamicDecimalIntegerHigh,
 		&textType,
 		&flagType,
 		&nullType,
@@ -154,14 +170,19 @@ func testRoundAgainstClickHouse(
 		negativeType != "Float64" || dynamicNegative != -2 ||
 		centsType != "Float64" || dynamicCents != 2.56 ||
 		dynamicLow != 15.28 || dynamicHigh != 17.27 ||
+		nestedType != "Float64" || dynamicNested != 2 ||
 		signedType != "Int64" || dynamicSigned != -42 ||
 		unsignedType != "UInt64" || dynamicUnsigned != math.MaxUint64 ||
 		decimalType != "Float64" || dynamicDecimal != 15.28 ||
+		decimalIntegerLowType != "Int256" ||
+		dynamicDecimalIntegerLow != "9007199254740992" ||
+		decimalIntegerHighType != "Int256" ||
+		dynamicDecimalIntegerHigh != "9007199254740993" ||
 		textType != "None" || flagType != "None" ||
 		nullType != "None" || missingType != "None" ||
 		multiType != "None" || objectType != "None" {
 		t.Fatalf(
-			"Dynamic round = float:%q/%v %q/%v %q/%v %q/%v %v/%v integer:%q/%d %q/%d decimal:%q/%v unsupported:%q/%q/%q/%q/%q/%q",
+			"Dynamic round = float:%q/%v %q/%v %q/%v %q/%v %v/%v nested:%q/%v integer:%q/%d %q/%d decimal:%q/%v exact:%q/%q %q/%q unsupported:%q/%q/%q/%q/%q/%q",
 			positiveType,
 			dynamicPositive,
 			evenType,
@@ -172,12 +193,18 @@ func testRoundAgainstClickHouse(
 			dynamicCents,
 			dynamicLow,
 			dynamicHigh,
+			nestedType,
+			dynamicNested,
 			signedType,
 			dynamicSigned,
 			unsignedType,
 			dynamicUnsigned,
 			decimalType,
 			dynamicDecimal,
+			decimalIntegerLowType,
+			dynamicDecimalIntegerLow,
+			decimalIntegerHighType,
+			dynamicDecimalIntegerHigh,
 			textType,
 			flagType,
 			nullType,
@@ -195,6 +222,7 @@ func testRoundAgainstClickHouse(
 		t,
 		ctx,
 		connection,
+		"round-malformed-decimal-envelope",
 		[]binEdgeRawDecimalEnvelope{{
 			eventID:       "round-malformed-decimal",
 			tenantID:      "tenant",

@@ -137,6 +137,7 @@ func testToStringAgainstClickHouse(
 		t,
 		ctx,
 		connection,
+		"tostring-malformed-decimal-envelope",
 		[]binEdgeRawDecimalEnvelope{{
 			eventID:       "tostring-malformed-decimal",
 			tenantID:      "tenant",

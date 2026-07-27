@@ -1230,6 +1230,7 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 			t,
 			ctx,
 			connection,
+			"bin-edge-numeric-decimal-envelope-scope",
 			append(inScope, outOfScope...),
 		)
 
@@ -1433,14 +1434,18 @@ func binEdgeInsertRawDecimalEnvelopes(
 	t *testing.T,
 	ctx context.Context,
 	connection clickhousedriver.Conn,
+	deduplicationToken string,
 	fixtures []binEdgeRawDecimalEnvelope,
 ) {
 	t.Helper()
 	if len(fixtures) == 0 {
 		t.Fatal("insert raw Decimal envelopes: empty fixture set")
 	}
+	if deduplicationToken == "" {
+		t.Fatal("insert raw Decimal envelopes: empty deduplication token")
+	}
 	insertContext := clickhousedriver.Context(ctx, clickhousedriver.WithSettings(
-		insertSettings("bin-edge-raw-decimal-envelopes-"+fixtures[0].eventID),
+		insertSettings(deduplicationToken),
 	))
 	batch, err := connection.PrepareBatch(insertContext, eventsInsertSQL)
 	if err != nil {

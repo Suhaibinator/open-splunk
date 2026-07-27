@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"errors"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -53,15 +54,15 @@ func TestCompileEvalRoundSupportsDynamicNumbersOnceWithoutStringCoercion(t *test
 		`index=gradethis | eval rounded=round(category, 2) | where rounded=2.56`,
 	)
 	for _, required := range []string{
-		`arrayElement(arrayMap(value -> multiIf(`,
+		`arrayElement(arrayMap((value, precision) ->`,
+		`arrayElement(arrayMap(exact_value -> multiIf(`,
 		`dynamicType(value) IN ('Int8', 'Int16'`,
-		`startsWith(dynamicType(value), 'Float')`,
-		`startsWith(dynamicType(value), 'Decimal')`,
 		`'decimal/v1'`,
 		`open_splunk_value`,
-		`round(multiIf(`,
-		`CAST(? AS UInt8)`,
-		`CAST(NULL AS Dynamic)`,
+		`accurateCastOrNull(value, 'Float64')`,
+		`["__os_fields"."category"], [CAST(? AS UInt8)]`,
+		`CAST(NULL AS Nullable(Float64))`,
+		`accurateCastOrNull("rounded", 'Float64')`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("Dynamic round SQL missing %q:\n%s", required, compiled.SQL)
@@ -75,10 +76,43 @@ func TestCompileEvalRoundSupportsDynamicNumbersOnceWithoutStringCoercion(t *test
 		`dynamicType(value) = 'Bool'`,
 		`Array(String)`,
 		`ARRAY JOIN`,
+		`toFloat64OrNull(toString(value))`,
 	} {
 		if strings.Contains(compiled.SQL, forbidden) {
 			t.Fatalf("Dynamic round retained unsupported branch %q:\n%s", forbidden, compiled.SQL)
 		}
+	}
+	for _, forbidden := range []string{
+		`dynamicElement(left_value, 'Map(String, String)')`,
+		`dynamicElement(left_value, 'String')`,
+		`dynamicElement(left_value, 'Bool')`,
+	} {
+		if strings.Contains(compiled.SQL, forbidden) {
+			t.Fatalf("numeric-only round predicate retained %q:\n%s", forbidden, compiled.SQL)
+		}
+	}
+}
+
+func TestCompileEvalRoundBindsDistinctNestedPrecisionsInSourceOrder(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | eval rounded=round(round(category, 1), 2) | table rounded`,
+	)
+	if got := countArgument(compiled.Args, uint8(1)); got != 1 {
+		t.Fatalf("inner precision argument count = %d, want 1: %#v", got, compiled.Args)
+	}
+	if got := countArgument(compiled.Args, uint8(2)); got != 1 {
+		t.Fatalf("outer precision argument count = %d, want 1: %#v", got, compiled.Args)
+	}
+	inner := slices.Index(compiled.Args, any(uint8(1)))
+	outer := slices.Index(compiled.Args, any(uint8(2)))
+	if inner < 0 || outer != inner+1 {
+		t.Fatalf("nested precision arguments = %#v, want inner then outer", compiled.Args)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s", got, want, compiled.SQL)
 	}
 }
 
