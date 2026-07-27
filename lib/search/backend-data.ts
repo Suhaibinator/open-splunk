@@ -101,8 +101,26 @@ export interface AdaptedSearchResults {
   timeline: TimelinePoint[];
 }
 
-const SELECTED_FIELDS = new Set(["host", "source", "sourcetype", "level", "trace_id"]);
-const INTERNAL_FIELDS = new Set(["_raw", "_time", "timestamp"]);
+const EVENT_TIME_FORMAT_OPTIONS = Object.freeze<Intl.DateTimeFormatOptions>({
+  month: "numeric",
+  day: "numeric",
+  year: "2-digit",
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+  fractionalSecondDigits: 3,
+});
+const TIMELINE_TIME_FORMAT_OPTIONS = Object.freeze<Intl.DateTimeFormatOptions>({
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+interface ResultDateTimeFormatters {
+  event?: Intl.DateTimeFormat;
+  timeline?: Intl.DateTimeFormat;
+}
 
 function safeNumber(value: bigint): DemoScalar {
   const number = Number(value);
@@ -172,22 +190,21 @@ function jsonToScalar(decoded: unknown): DemoScalar {
   return JSON.stringify(decoded);
 }
 
-function formatEventTime(value: DemoScalar): { iso: string; label: string } {
+function formatEventTime(
+  value: DemoScalar,
+  formatters: ResultDateTimeFormatters,
+): { iso: string; label: string } {
   const parsed = typeof value === "string" || typeof value === "number" ? new Date(value) : new Date(Number.NaN);
   if (Number.isNaN(parsed.valueOf())) {
     return { iso: "", label: "Time unavailable" };
   }
+  const formatter = formatters.event ??= new Intl.DateTimeFormat(
+    "en-US",
+    EVENT_TIME_FORMAT_OPTIONS,
+  );
   return {
     iso: parsed.toISOString(),
-    label: new Intl.DateTimeFormat("en-US", {
-      month: "numeric",
-      day: "numeric",
-      year: "2-digit",
-      hour: "numeric",
-      minute: "2-digit",
-      second: "2-digit",
-      fractionalSecondDigits: 3,
-    }).format(parsed),
+    label: formatter.format(parsed),
   };
 }
 
@@ -199,26 +216,30 @@ function rowFields(
   const pivotableFields: Record<string, boolean> = {};
   schema.columns.forEach((column, index) => {
     const value = row.cells[index];
-    const decoded = typedValueToJSON(value);
-    if (column.fieldName === "fields" && typeof decoded === "object" && decoded !== null && !Array.isArray(decoded)) {
-      if (value?.kind?.$case === "objectValue") {
-        value.kind.value.fields.forEach((field) => {
-          fields[field.name] = typedValueToScalar(field.value);
-          pivotableFields[field.name] = typedValueIsPivotable(field.value);
-        });
-      }
+    if (column.fieldName === "fields" && value?.kind?.$case === "objectValue") {
+      value.kind.value.fields.forEach((field) => {
+        fields[field.name] = jsonToScalar(typedValueToJSON(field.value));
+        pivotableFields[field.name] = typedValueIsPivotable(field.value);
+      });
       return;
     }
-    fields[column.fieldName] = typedValueToScalar(value);
+    fields[column.fieldName] = jsonToScalar(typedValueToJSON(value));
     pivotableFields[column.fieldName] = typedValueIsPivotable(value);
   });
   return { fields, pivotableFields };
 }
 
-function rowsToEvents(schema: ResultSchema, rows: ResultRow[]): DemoEvent[] {
+function rowsToEvents(
+  schema: ResultSchema,
+  rows: ResultRow[],
+  formatters: ResultDateTimeFormatters,
+): DemoEvent[] {
   return rows.map((row) => {
     const { fields, pivotableFields } = rowFields(schema, row);
-    const eventTime = formatEventTime(fields["_time"] ?? fields.timestamp ?? null);
+    const eventTime = formatEventTime(
+      fields["_time"] ?? fields.timestamp ?? null,
+      formatters,
+    );
     const rawValue = fields["_raw"];
     return {
       id: row.rowId || `row-${row.ordinal.toString()}`,
@@ -229,43 +250,6 @@ function rowsToEvents(schema: ResultSchema, rows: ResultRow[]): DemoEvent[] {
       pivotableFields,
     };
   });
-}
-
-function fieldType(values: DemoScalar[]): DemoField["type"] {
-  if (values.some((value) => typeof value === "number")) return "number";
-  if (values.some((value) => typeof value === "boolean")) return "boolean";
-  return "string";
-}
-
-export function deriveFields(events: DemoEvent[]): DemoField[] {
-  const names = new Set(events.flatMap((event) => Object.keys(event.fields)));
-  return [...names]
-    .filter((name) => !INTERNAL_FIELDS.has(name))
-    .map((name) => {
-      const values = events.map((event) => event.fields[name]).filter((value): value is DemoScalar => value !== undefined);
-      const counts = new Map<string, { value: DemoScalar; count: number }>();
-      for (const value of values) {
-        const key = `${typeof value}:${String(value)}`;
-        const current = counts.get(key);
-        counts.set(key, { value, count: (current?.count ?? 0) + 1 });
-      }
-      const topValues = [...counts.values()].toSorted((left, right) => right.count - left.count).slice(0, 5);
-      const selected = SELECTED_FIELDS.has(name);
-      return {
-        name,
-        displayName: name,
-        distinctCount: counts.size,
-        eventCount: values.length,
-        selected,
-        interesting: !selected,
-        type: fieldType(values),
-        values: topValues,
-      } satisfies DemoField;
-    })
-    .toSorted((left, right) => {
-      const selectedDifference = Number(right.selected) - Number(left.selected);
-      return selectedDifference || right.eventCount - left.eventCount || left.name.localeCompare(right.name);
-    });
 }
 
 interface ChartNumericValue {
@@ -611,35 +595,14 @@ function statisticsFromRows(schema: ResultSchema, rows: ResultRow[]): { rows: Wo
   };
 }
 
-function statisticsFromEvents(events: DemoEvent[]): WorkspaceStatistic[] {
-  const counts = new Map<string, { count: number; durations: number[] }>();
-  for (const event of events) {
-    const level = String(event.fields.level ?? "OTHER");
-    const current = counts.get(level) ?? { count: 0, durations: [] };
-    current.count += 1;
-    const duration = event.fields.duration_ms;
-    if (typeof duration === "number") current.durations.push(duration);
-    counts.set(level, current);
-  }
-  return [...counts].map(([level, summary]) => ({
-    level,
-    count: summary.count,
-    percent: events.length > 0 ? `${((summary.count / events.length) * 100).toFixed(1)}%` : "0.0%",
-    avgDuration: summary.durations.length > 0
-      ? summary.durations.reduce((sum, value) => sum + value, 0) / summary.durations.length
-      : 0,
-  }));
-}
-
 function timelineFromRows(
   schema: ResultSchema,
   rows: ResultRow[],
+  formatters: ResultDateTimeFormatters,
   knownBucketWidthMs?: number,
 ): TimelinePoint[] {
   const timeIndex = schema.columns.findIndex((column) => /^_?time$/i.test(column.fieldName));
   if (timeIndex < 0) return [];
-  const timeName = schema.columns[timeIndex].fieldName;
-  const decodedRows = rows.map((row) => rowFields(schema, row).fields);
   // Timechart columns after _time are independent runtime series. A split value
   // can itself be named "count", so preferring that spelling would discard all
   // of its siblings.
@@ -654,8 +617,7 @@ function timelineFromRows(
   );
   if (numericIndexes.length === 0) return [];
   const points = rows.flatMap((row, index) => {
-    const fields = decodedRows[index];
-    const rawTime = fields[timeName];
+    const rawTime = typedValueToJSON(row.cells[timeIndex]);
     const date = typeof rawTime === "string" || typeof rawTime === "number" ? new Date(rawTime) : new Date(Number.NaN);
     const chartValues = numericIndexes.flatMap((sourceIndex) => {
       const value = chartNumericValue(row.cells[sourceIndex]);
@@ -676,9 +638,13 @@ function timelineFromRows(
       : undefined;
     const coordinateApproximate = chartValues.some((item) => item.value.approximate)
       || (exactIntegerTotal !== undefined && !Number.isSafeInteger(count));
+    const formatter = formatters.timeline ??= new Intl.DateTimeFormat(
+      "en-US",
+      TIMELINE_TIME_FORMAT_OPTIONS,
+    );
     return [{
       id: row.rowId || `bucket-${index}`,
-      label: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(date),
+      label: formatter.format(date),
       count,
       series,
       exactCount: coordinateApproximate && exactIntegerTotal !== undefined
@@ -712,30 +678,6 @@ function timelineFromRows(
           ? new Date(currentTime + inferredWidth).toISOString()
           : undefined
       ),
-    };
-  });
-}
-
-function timelineFromEvents(events: DemoEvent[]): TimelinePoint[] {
-  const dated = events
-    .map((event) => ({ event, date: new Date(event.time) }))
-    .filter(({ date }) => !Number.isNaN(date.valueOf()));
-  if (dated.length === 0) return [];
-  const earliest = Math.min(...dated.map(({ date }) => date.valueOf()));
-  const latest = Math.max(...dated.map(({ date }) => date.valueOf()));
-  const bucketCount = Math.min(48, Math.max(1, Math.ceil(Math.sqrt(dated.length) * 3)));
-  const width = Math.max(1, Math.ceil((latest - earliest + 1) / bucketCount));
-  const counts = Array.from({ length: bucketCount }, () => 0);
-  for (const { date } of dated) counts[Math.min(bucketCount - 1, Math.floor((date.valueOf() - earliest) / width))] += 1;
-  return counts.map((count, index) => {
-    const start = new Date(earliest + index * width);
-    const end = new Date(earliest + (index + 1) * width);
-    return {
-      id: `bucket-${index}`,
-      label: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(start),
-      count,
-      earliest: start.toISOString(),
-      latest: end.toISOString(),
     };
   });
 }
@@ -801,26 +743,31 @@ export function adaptSearchResults(
         timeline: [],
       };
     }
-    case ResultSetKind.RESULT_SET_KIND_EVENTS:
-    case ResultSetKind.RESULT_SET_KIND_TIME_SERIES:
-      break;
+    case ResultSetKind.RESULT_SET_KIND_EVENTS: {
+      const dateTimeFormatters: ResultDateTimeFormatters = {};
+      return {
+        events: rowsToEvents(schema, rows, dateTimeFormatters),
+        fields: [],
+        statistics: [],
+        statisticsTable: null,
+        statisticDimension: "level",
+        timeline: [],
+      };
+    }
+    case ResultSetKind.RESULT_SET_KIND_TIME_SERIES: {
+      const dateTimeFormatters: ResultDateTimeFormatters = {};
+      return {
+        events: [],
+        fields: [],
+        statistics: [],
+        statisticsTable: null,
+        statisticDimension: "level",
+        timeline: timelineFromRows(schema, rows, dateTimeFormatters, timechartBucketWidthMs),
+      };
+    }
     default:
       throw new RangeError(`Search results use unsupported result kind ${schema.resultKind}.`);
   }
-
-  const events = rowsToEvents(schema, rows);
-  const transformedStatistics = statisticsFromRows(schema, rows);
-  const timeline = schema.resultKind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES
-    ? timelineFromRows(schema, rows, timechartBucketWidthMs)
-    : timelineFromEvents(events);
-  return {
-    events,
-    fields: deriveFields(events),
-    statistics: statisticsFromEvents(events),
-    statisticsTable: null,
-    statisticDimension: transformedStatistics.dimension === "result" ? "level" : transformedStatistics.dimension,
-    timeline,
-  };
 }
 
 interface DecimalParts {

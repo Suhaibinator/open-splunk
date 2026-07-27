@@ -47,14 +47,12 @@ function validDate(date: Date | undefined): date is Date {
   return date !== undefined && !Number.isNaN(date.valueOf());
 }
 
-function timelineLabel(date: Date): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
-}
+const TIMELINE_LABEL_FORMAT_OPTIONS = Object.freeze<Intl.DateTimeFormatOptions>({
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
 
 export function adaptSearchTimeline(response: GetSearchTimelineResponse): ServerTimeline {
   const buckets = response.buckets.flatMap((bucket, index) => {
@@ -69,14 +67,17 @@ export function adaptSearchTimeline(response: GetSearchTimelineResponse): Server
       partial: bucket.partial,
     }];
   });
+  const timelineFormatter = buckets.length === 0
+    ? null
+    : new Intl.DateTimeFormat("en-US", TIMELINE_LABEL_FORMAT_OPTIONS);
   return {
     buckets,
-    points: buckets.map((bucket) => {
+    points: timelineFormatter === null ? [] : buckets.map((bucket) => {
       const count = Number(bucket.eventCount);
       const coordinateApproximate = !Number.isSafeInteger(count);
       return {
         id: bucket.id,
-        label: timelineLabel(new Date(bucket.earliest)),
+        label: timelineFormatter.format(new Date(bucket.earliest)),
         count,
         exactCount: coordinateApproximate ? bucket.eventCount.toString() : undefined,
         coordinateApproximate: coordinateApproximate || undefined,

@@ -50,8 +50,50 @@ function timestampValue(value: string): TypedValue {
   return { kind: { $case: "timestampValue", value: new Date(value) } };
 }
 
+function countedTimestampValue(
+  value: string,
+  counter: { calls: number },
+): TypedValue {
+  const date = new Date(value);
+  const toISOString = date.toISOString.bind(date);
+  Object.defineProperty(date, "toISOString", {
+    value() {
+      counter.calls += 1;
+      return toISOString();
+    },
+  });
+  return { kind: { $case: "timestampValue", value: date } };
+}
+
 function row(rowId: string, ordinal: bigint, cells: TypedValue[]): ResultRow {
   return { rowId, ordinal, cells };
+}
+
+function trackDateTimeFormatConstructions<T>(
+  action: () => T,
+): { value: T; constructions: number } {
+  const descriptor = Object.getOwnPropertyDescriptor(Intl, "DateTimeFormat");
+  assert.ok(descriptor);
+  let constructions = 0;
+  const trackedDateTimeFormat = new Proxy(Intl.DateTimeFormat, {
+    apply(target, thisArgument, argumentsList) {
+      constructions += 1;
+      return Reflect.apply(target, thisArgument, argumentsList);
+    },
+    construct(target, argumentsList) {
+      constructions += 1;
+      return Reflect.construct(target, argumentsList);
+    },
+  });
+  Object.defineProperty(Intl, "DateTimeFormat", {
+    ...descriptor,
+    value: trackedDateTimeFormat,
+  });
+  try {
+    return { value: action(), constructions };
+  } finally {
+    Object.defineProperty(Intl, "DateTimeFormat", descriptor);
+  }
 }
 
 test("result adaptation rejects schemas wider than the browser contract", () => {
@@ -409,8 +451,12 @@ test("statistics adaptation skips event-only projections", () => {
       uint64Value(2n),
     ]),
   ];
-  const adapted = adaptSearchResults(schema, rows);
+  const measured = trackDateTimeFormatConstructions(
+    () => adaptSearchResults(schema, rows),
+  );
+  const adapted = measured.value;
 
+  assert.equal(measured.constructions, 0);
   assert.deepEqual(adapted.events, []);
   assert.deepEqual(adapted.fields, []);
   assert.deepEqual(adapted.timeline, []);
@@ -472,7 +518,7 @@ test("statistics adaptation does not decode raw event payloads", () => {
   assert.equal(adapted.statisticsTable, null);
 });
 
-test("event adaptation retains event, field, statistic, and timeline projections", () => {
+test("event adaptation builds only the event projection", () => {
   const schema: ResultSchema = {
     schemaId: "event-projections-v1",
     revision: 1n,
@@ -505,13 +551,323 @@ test("event adaptation retains event, field, statistic, and timeline projections
   ]);
 
   assert.equal(adapted.events[0]?.raw, "request failed");
-  assert.deepEqual(adapted.fields.map(({ name }) => name), ["level"]);
-  assert.deepEqual(
-    adapted.statistics.map(({ level, count }) => ({ level, count })),
-    [{ level: "ERROR", count: 1 }],
-  );
-  assert.equal(adapted.timeline.reduce((sum, point) => sum + point.count, 0), 1);
+  assert.deepEqual(adapted.fields, []);
+  assert.deepEqual(adapted.statistics, []);
+  assert.deepEqual(adapted.timeline, []);
   assert.equal(adapted.statisticsTable, null);
+});
+
+test("event adaptation decodes each nested timestamp value once", () => {
+  const schema: ResultSchema = {
+    schemaId: "event-single-decode-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_EVENTS,
+    columns: [
+      column(
+        "_time",
+        ValueType.VALUE_TYPE_TIMESTAMP,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME,
+      ),
+      column(
+        "_raw",
+        ValueType.VALUE_TYPE_STRING,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_RAW,
+      ),
+      column("fields", ValueType.VALUE_TYPE_OBJECT),
+      column("payload", ValueType.VALUE_TYPE_LIST),
+    ],
+  };
+  const eventTime = { calls: 0 };
+  const flattenedFieldTime = { calls: 0 };
+  const listTime = { calls: 0 };
+  const timestamp = "2026-07-21T22:00:00.000Z";
+  const adapted = adaptSearchResults(schema, [
+    row("single-decode", 0n, [
+      countedTimestampValue(timestamp, eventTime),
+      stringValue("single decode"),
+      {
+        kind: {
+          $case: "objectValue",
+          value: {
+            fields: [{
+              name: "nested_time",
+              value: countedTimestampValue(timestamp, flattenedFieldTime),
+            }],
+          },
+        },
+      },
+      {
+        kind: {
+          $case: "listValue",
+          value: {
+            values: [countedTimestampValue(timestamp, listTime)],
+          },
+        },
+      },
+    ]),
+  ]);
+
+  assert.equal(eventTime.calls, 1);
+  assert.equal(flattenedFieldTime.calls, 1);
+  assert.equal(listTime.calls, 1);
+  assert.equal(adapted.events[0]?.fields.nested_time, timestamp);
+  assert.equal(adapted.events[0]?.fields.payload, JSON.stringify([timestamp]));
+});
+
+test("event adaptation reuses one date-time formatter", () => {
+  const schema: ResultSchema = {
+    schemaId: "event-formatter-reuse-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_EVENTS,
+    columns: [
+      column(
+        "_time",
+        ValueType.VALUE_TYPE_TIMESTAMP,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME,
+      ),
+      column(
+        "_raw",
+        ValueType.VALUE_TYPE_STRING,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_RAW,
+      ),
+      column(
+        "level",
+        ValueType.VALUE_TYPE_STRING,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_LEVEL,
+      ),
+    ],
+  };
+  const firstTimestamp = Date.parse("2026-07-21T22:00:00.000Z");
+  const rows = Array.from({ length: 1_000 }, (_, index) => {
+    const timestamp = new Date(firstTimestamp + index * 1_000).toISOString();
+    return row(`event-${index}`, BigInt(index), [
+      timestampValue(timestamp),
+      stringValue(`event ${index}`),
+      stringValue(index % 2 === 0 ? "INFO" : "ERROR"),
+    ]);
+  });
+  const expectedFirstLabel = new Intl.DateTimeFormat("en-US", {
+    month: "numeric",
+    day: "numeric",
+    year: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    fractionalSecondDigits: 3,
+  }).format(new Date(firstTimestamp));
+  const measured = trackDateTimeFormatConstructions(
+    () => adaptSearchResults(schema, rows),
+  );
+
+  assert.equal(measured.constructions, 1);
+  assert.equal(measured.value.events.length, rows.length);
+  assert.equal(measured.value.events[0]?.timeLabel, expectedFirstLabel);
+  assert.equal(
+    measured.value.events.at(-1)?.time,
+    new Date(firstTimestamp + (rows.length - 1) * 1_000).toISOString(),
+  );
+  assert.deepEqual(measured.value.fields, []);
+  assert.deepEqual(measured.value.statistics, []);
+  assert.deepEqual(measured.value.timeline, []);
+});
+
+test("empty and invalid event times do not construct date-time formatters", () => {
+  const schema: ResultSchema = {
+    schemaId: "invalid-event-times-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_EVENTS,
+    columns: [
+      column(
+        "_time",
+        ValueType.VALUE_TYPE_STRING,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME,
+      ),
+      column(
+        "_raw",
+        ValueType.VALUE_TYPE_STRING,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_RAW,
+      ),
+    ],
+  };
+
+  const empty = trackDateTimeFormatConstructions(
+    () => adaptSearchResults(schema, []),
+  );
+  const invalid = trackDateTimeFormatConstructions(
+    () => adaptSearchResults(schema, [
+      row("invalid-time", 0n, [
+        stringValue("not-a-timestamp"),
+        stringValue("invalid timestamp"),
+      ]),
+    ]),
+  );
+
+  assert.equal(empty.constructions, 0);
+  assert.equal(invalid.constructions, 0);
+  assert.equal(invalid.value.events[0]?.time, "");
+  assert.equal(invalid.value.events[0]?.timeLabel, "Time unavailable");
+  assert.deepEqual(invalid.value.timeline, []);
+});
+
+test("empty and invalid time-series rows do not construct date-time formatters", () => {
+  const schema: ResultSchema = {
+    schemaId: "invalid-time-series-times-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column(
+        "_time",
+        ValueType.VALUE_TYPE_STRING,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME,
+      ),
+      column(
+        "count",
+        ValueType.VALUE_TYPE_UINT64,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC,
+      ),
+    ],
+  };
+
+  const empty = trackDateTimeFormatConstructions(
+    () => adaptSearchResults(schema, []),
+  );
+  const invalid = trackDateTimeFormatConstructions(
+    () => adaptSearchResults(schema, [
+      row("invalid-bucket-time", 0n, [
+        stringValue("not-a-timestamp"),
+        uint64Value(1n),
+      ]),
+    ]),
+  );
+
+  assert.equal(empty.constructions, 0);
+  assert.deepEqual(empty.value.timeline, []);
+  assert.equal(invalid.constructions, 0);
+  assert.deepEqual(invalid.value.timeline, []);
+});
+
+test("formatter reuse refreshes the local timezone for each adaptation", (context) => {
+  const originalTimezone = process.env.TZ;
+  const schema: ResultSchema = {
+    schemaId: "event-timezone-refresh-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_EVENTS,
+    columns: [
+      column(
+        "_time",
+        ValueType.VALUE_TYPE_TIMESTAMP,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME,
+      ),
+      column(
+        "_raw",
+        ValueType.VALUE_TYPE_STRING,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_RAW,
+      ),
+    ],
+  };
+  const timestamp = "2026-07-21T22:00:00.000Z";
+  const rows = [row("timezone", 0n, [
+    timestampValue(timestamp),
+    stringValue("timezone"),
+  ])];
+  const timeSeriesSchema: ResultSchema = {
+    schemaId: "time-series-timezone-refresh-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column(
+        "_time",
+        ValueType.VALUE_TYPE_TIMESTAMP,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME,
+      ),
+      column(
+        "count",
+        ValueType.VALUE_TYPE_UINT64,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC,
+      ),
+    ],
+  };
+  const timeSeriesRows = [row("timezone-bucket", 0n, [
+    timestampValue(timestamp),
+    uint64Value(1n),
+  ])];
+  const eventOptions: Intl.DateTimeFormatOptions = {
+    month: "numeric",
+    day: "numeric",
+    year: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    fractionalSecondDigits: 3,
+  };
+  const timelineOptions: Intl.DateTimeFormatOptions = {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  };
+
+  try {
+    process.env.TZ = "UTC";
+    if (new Intl.DateTimeFormat().resolvedOptions().timeZone !== "UTC") {
+      context.skip("The runtime does not apply process.env.TZ changes.");
+      return;
+    }
+    const utcExpectedEvent = new Intl.DateTimeFormat("en-US", {
+      ...eventOptions,
+      timeZone: "UTC",
+    }).format(new Date(timestamp));
+    const utcExpectedTimeline = new Intl.DateTimeFormat("en-US", {
+      ...timelineOptions,
+      timeZone: "UTC",
+    }).format(new Date(timestamp));
+    const utcEvents = trackDateTimeFormatConstructions(
+      () => adaptSearchResults(schema, rows),
+    );
+    const utcTimeSeries = trackDateTimeFormatConstructions(
+      () => adaptSearchResults(timeSeriesSchema, timeSeriesRows, 60_000),
+    );
+
+    process.env.TZ = "America/Los_Angeles";
+    if (
+      new Intl.DateTimeFormat().resolvedOptions().timeZone
+      !== "America/Los_Angeles"
+    ) {
+      context.skip("The runtime does not apply process.env.TZ changes.");
+      return;
+    }
+    const pacificExpectedEvent = new Intl.DateTimeFormat("en-US", {
+      ...eventOptions,
+      timeZone: "America/Los_Angeles",
+    }).format(new Date(timestamp));
+    const pacificExpectedTimeline = new Intl.DateTimeFormat("en-US", {
+      ...timelineOptions,
+      timeZone: "America/Los_Angeles",
+    }).format(new Date(timestamp));
+    const pacificEvents = trackDateTimeFormatConstructions(
+      () => adaptSearchResults(schema, rows),
+    );
+    const pacificTimeSeries = trackDateTimeFormatConstructions(
+      () => adaptSearchResults(timeSeriesSchema, timeSeriesRows, 60_000),
+    );
+
+    assert.equal(utcEvents.constructions, 1);
+    assert.equal(utcTimeSeries.constructions, 1);
+    assert.equal(pacificEvents.constructions, 1);
+    assert.equal(pacificTimeSeries.constructions, 1);
+    assert.equal(utcEvents.value.events[0]?.timeLabel, utcExpectedEvent);
+    assert.equal(utcTimeSeries.value.timeline[0]?.label, utcExpectedTimeline);
+    assert.equal(pacificEvents.value.events[0]?.timeLabel, pacificExpectedEvent);
+    assert.equal(
+      pacificTimeSeries.value.timeline[0]?.label,
+      pacificExpectedTimeline,
+    );
+    assert.notEqual(utcExpectedEvent, pacificExpectedEvent);
+    assert.notEqual(utcExpectedTimeline, pacificExpectedTimeline);
+  } finally {
+    if (originalTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTimezone;
+  }
 });
 
 test("timechart keeps siblings when a runtime series is named count", () => {
@@ -533,10 +889,31 @@ test("timechart keeps siblings when a runtime series is named count", () => {
       uint64Value(9_007_199_254_740_993n),
       uint64Value(3n),
     ]),
+    row("bucket-2", 1n, [
+      timestampValue("2026-07-21T22:05:00.000Z"),
+      uint64Value(1n),
+      uint64Value(2n),
+      uint64Value(0n),
+    ]),
   ];
+  const expectedFirstTimelineLabel = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date("2026-07-21T22:00:00.000Z"));
 
-  const adapted = adaptSearchResults(schema, rows, 300_000);
+  const measured = trackDateTimeFormatConstructions(() => [
+    adaptSearchResults(schema, rows, 300_000),
+    adaptSearchResults(schema, rows.slice(0, 1), 300_000),
+  ]);
+  const adapted = measured.value[0];
 
+  assert.equal(measured.constructions, 2);
+  assert.deepEqual(adapted.events, []);
+  assert.deepEqual(adapted.fields, []);
+  assert.deepEqual(adapted.statistics, []);
+  assert.equal(adapted.timeline[0]?.label, expectedFirstTimelineLabel);
   assert.deepEqual(Object.keys(adapted.timeline[0]?.series ?? {}), ["count", "ERROR", "WARN"]);
   assert.deepEqual(timechartValueFields(adapted.timeline), ["count", "ERROR", "WARN"]);
   assert.equal(adapted.timeline[0]?.exactSeries?.ERROR, "9007199254740993");
@@ -545,5 +922,10 @@ test("timechart keeps siblings when a runtime series is named count", () => {
     count: 2,
     ERROR: "9007199254740993",
     WARN: 3,
+  }, {
+    _time: "2026-07-21T22:05:00.000Z",
+    count: 1,
+    ERROR: 2,
+    WARN: 0,
   }]);
 });

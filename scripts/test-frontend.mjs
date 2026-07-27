@@ -14,6 +14,7 @@ const testFiles = [
   path.join("lib", "api", "pagination.test.ts"),
   path.join("lib", "api", "search-websocket.test.ts"),
   path.join("lib", "search", "backend-data.test.ts"),
+  path.join("lib", "search", "server-timeline.test.ts"),
   path.join("lib", "search", "server-exports.test.ts"),
   path.join("lib", "search", "example-drafts.test.ts"),
   path.join("lib", "search", "saved-search-names.test.ts"),
