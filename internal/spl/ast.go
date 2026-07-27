@@ -239,6 +239,7 @@ const (
 	ScalarFunctionFloor
 	ScalarFunctionMVCount
 	ScalarFunctionMatch
+	ScalarFunctionLike
 )
 
 // ReturnsBoolean reports the atomic result trait shared by parser, planner,
@@ -246,7 +247,8 @@ const (
 // require branch-aware analysis.
 func (function ScalarFunction) ReturnsBoolean() bool {
 	switch function {
-	case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch:
+	case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch,
+		ScalarFunctionLike:
 		return true
 	default:
 		return false

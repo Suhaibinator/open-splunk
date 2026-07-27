@@ -516,13 +516,15 @@ const (
 	ScalarFunctionFloor
 	ScalarFunctionMVCount
 	ScalarFunctionMatch
+	ScalarFunctionLike
 )
 
 // ReturnsBoolean reports the atomic result trait shared by planning and
 // backend consumer checks. Composite expressions remain branch-aware.
 func (function ScalarFunction) ReturnsBoolean() bool {
 	switch function {
-	case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch:
+	case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch,
+		ScalarFunctionLike:
 		return true
 	default:
 		return false

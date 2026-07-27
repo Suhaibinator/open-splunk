@@ -15,6 +15,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
+	"github.com/Suhaibinator/open-splunk/internal/splwildcard"
 )
 
 const (
@@ -1887,6 +1888,9 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		case spl.ScalarFunctionMatch:
 			expectedArguments = 2
 			functionName = "match"
+		case spl.ScalarFunctionLike:
+			expectedArguments = 2
+			functionName = "like"
 		case spl.ScalarFunctionReplace:
 			expectedArguments = 3
 			functionName = "replace"
@@ -2064,6 +2068,47 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				}
 			}
 		}
+		if expression.Function == spl.ScalarFunctionLike {
+			if splScalarMayReturnBooleanFunction(expression.Arguments[0]) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message: "like cannot consume a Boolean result",
+					Range:   expression.Arguments[0].SourceRange(),
+				}
+			}
+			pattern, ok := expression.Arguments[1].(*spl.ScalarLiteralExpr)
+			patternRange := expression.Range
+			if !nilSPLScalarExpression(expression.Arguments[1]) {
+				patternRange = expression.Arguments[1].SourceRange()
+			}
+			if !ok || pattern == nil ||
+				pattern.Value.Kind != spl.LiteralKindString ||
+				!pattern.Value.Quoted {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message: "like pattern must be a quoted string literal",
+					Range:   patternRange,
+				}
+			}
+			if _, err := splwildcard.CompileLikePattern(pattern.Value.Text); err != nil {
+				if splwildcard.IsLikeComplexityError(err) {
+					return nil, &Diagnostic{
+						Code: "SPL_QUERY_TOO_COMPLEX",
+						Message: fmt.Sprintf(
+							"like pattern exceeds the %d-byte or %d-work-unit limit",
+							splwildcard.MaximumLikePatternBytes,
+							splwildcard.MaximumLikePatternWorkUnits,
+						),
+						Range: pattern.Range,
+					}
+				}
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_LIKE_PATTERN",
+					Message: "like pattern must be valid UTF-8 without NUL bytes",
+					Range:   pattern.Range,
+				}
+			}
+		}
 		arguments := make([]ScalarExpression, 0, len(expression.Arguments))
 		for _, argument := range expression.Arguments {
 			converted, err := convertScalarExpressionUnchecked(argument)
@@ -2088,6 +2133,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			function = ScalarFunctionMVCount
 		case spl.ScalarFunctionMatch:
 			function = ScalarFunctionMatch
+		case spl.ScalarFunctionLike:
+			function = ScalarFunctionLike
 		case spl.ScalarFunctionReplace:
 			function = ScalarFunctionReplace
 		case spl.ScalarFunctionIsNull:

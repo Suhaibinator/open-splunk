@@ -9,6 +9,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
+	"github.com/Suhaibinator/open-splunk/internal/splwildcard"
 )
 
 const (
@@ -2526,6 +2527,59 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				},
 			}
 		}
+	case "like":
+		function = ScalarFunctionLike
+		if len(arguments) != 2 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: "like requires exactly two arguments",
+				Range:   name.sourceRange,
+			}
+		}
+		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "like cannot consume a Boolean result in search-mode expressions",
+				Range:   arguments[0].SourceRange(),
+				Suggestions: []string{
+					"use the Boolean directly with where",
+					`like(value, "pattern")`,
+				},
+			}
+		}
+		pattern, ok := arguments[1].(*ScalarLiteralExpr)
+		if !ok || pattern == nil || pattern.Value.Kind != LiteralKindString ||
+			!pattern.Value.Quoted {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "like pattern must be a quoted string literal",
+				Range:   arguments[1].SourceRange(),
+				Suggestions: []string{
+					`like(value, "pattern%")`,
+				},
+			}
+		}
+		if _, err := splwildcard.CompileLikePattern(pattern.Value.Text); err != nil {
+			if splwildcard.IsLikeComplexityError(err) {
+				return nil, &Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"like pattern exceeds the %d-byte or %d-work-unit limit",
+						splwildcard.MaximumLikePatternBytes,
+						splwildcard.MaximumLikePatternWorkUnits,
+					),
+					Range: pattern.Range,
+				}
+			}
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_LIKE_PATTERN",
+				Message: "like pattern must be valid UTF-8 without NUL bytes",
+				Range:   pattern.Range,
+				Suggestions: []string{
+					`like(value, "prefix%")`,
+				},
+			}
+		}
 	case "substr":
 		function = ScalarFunctionSubstring
 		if len(arguments) < 2 || len(arguments) > 3 {
@@ -2582,6 +2636,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				"floor(value)",
 				"mvcount(value)",
 				`match(value, "pattern")`,
+				`like(value, "pattern%")`,
 				`if(predicate, true_value, false_value)`,
 			},
 		}

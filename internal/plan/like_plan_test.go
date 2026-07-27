@@ -5,16 +5,16 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/spl"
-	"github.com/Suhaibinator/open-splunk/internal/splregex"
+	"github.com/Suhaibinator/open-splunk/internal/splwildcard"
 )
 
-func TestBuildMatchPreservesTypedPredicateIR(t *testing.T) {
+func TestBuildLikePreservesTypedPredicateIR(t *testing.T) {
 	t.Parallel()
 
 	logical, err := Build(
 		mustParse(
 			t,
-			`index=gradethis | where match(message, "(?i)^error") OR NOT match(lower(service), "api")`,
+			`index=gradethis | where like(message, "%error%") OR NOT like(lower(service), "api%")`,
 		),
 		testScope([]string{"gradethis"}, nil),
 	)
@@ -24,22 +24,22 @@ func TestBuildMatchPreservesTypedPredicateIR(t *testing.T) {
 	filter := logical.Operators[len(logical.Operators)-1].(*Filter)
 	root := filter.Expression.(*BooleanExpression)
 	left := root.Left.(*ScalarPredicateExpression).Value.(*ScalarCallExpression)
-	if left.Function != ScalarFunctionMatch || len(left.Arguments) != 2 {
+	if left.Function != ScalarFunctionLike || len(left.Arguments) != 2 {
 		t.Fatalf("left predicate = %#v", root.Left)
 	}
 	pattern := left.Arguments[1].(*ScalarLiteralExpression)
-	if pattern.Value.Kind != ValueKindString || pattern.Value.String != "(?i)^error" {
+	if pattern.Value.Kind != ValueKindString || pattern.Value.String != "%error%" {
 		t.Fatalf("pattern = %#v", pattern)
 	}
 	right := root.Right.(*NotExpression).Operand.(*ScalarPredicateExpression).
 		Value.(*ScalarCallExpression)
-	if right.Function != ScalarFunctionMatch ||
+	if right.Function != ScalarFunctionLike ||
 		right.Arguments[0].(*ScalarCallExpression).Function != ScalarFunctionLower {
 		t.Fatalf("right predicate = %#v", root.Right)
 	}
 }
 
-func TestBuildMatchRejectsForgedArityPatternBooleanEnumAndTypedNil(t *testing.T) {
+func TestBuildLikeRejectsForgedArityPatternBooleanEnumAndTypedNil(t *testing.T) {
 	t.Parallel()
 
 	base := mustParse(t, `index=gradethis`)
@@ -57,6 +57,7 @@ func TestBuildMatchRejectsForgedArityPatternBooleanEnumAndTypedNil(t *testing.T)
 		}
 	}
 	var typedNil *spl.ScalarFieldExpr
+	var typedNilPattern *spl.ScalarLiteralExpr
 	for _, test := range []struct {
 		name       string
 		expression *spl.ScalarCallExpr
@@ -64,20 +65,20 @@ func TestBuildMatchRejectsForgedArityPatternBooleanEnumAndTypedNil(t *testing.T)
 	}{
 		{
 			name:       "zero arguments",
-			expression: &spl.ScalarCallExpr{Function: spl.ScalarFunctionMatch, Range: sourceRange},
+			expression: &spl.ScalarCallExpr{Function: spl.ScalarFunctionLike, Range: sourceRange},
 			code:       "SPL_INVALID_EVAL_ARITY",
 		},
 		{
 			name: "one argument",
 			expression: &spl.ScalarCallExpr{
-				Function: spl.ScalarFunctionMatch, Arguments: []spl.ScalarExpr{value()}, Range: sourceRange,
+				Function: spl.ScalarFunctionLike, Arguments: []spl.ScalarExpr{value()}, Range: sourceRange,
 			},
 			code: "SPL_INVALID_EVAL_ARITY",
 		},
 		{
 			name: "three arguments",
 			expression: &spl.ScalarCallExpr{
-				Function:  spl.ScalarFunctionMatch,
+				Function:  spl.ScalarFunctionLike,
 				Arguments: []spl.ScalarExpr{value(), pattern("x"), pattern("y")},
 				Range:     sourceRange,
 			},
@@ -86,7 +87,7 @@ func TestBuildMatchRejectsForgedArityPatternBooleanEnumAndTypedNil(t *testing.T)
 		{
 			name: "typed nil value",
 			expression: &spl.ScalarCallExpr{
-				Function:  spl.ScalarFunctionMatch,
+				Function:  spl.ScalarFunctionLike,
 				Arguments: []spl.ScalarExpr{typedNil, pattern("x")},
 				Range:     sourceRange,
 			},
@@ -95,8 +96,17 @@ func TestBuildMatchRejectsForgedArityPatternBooleanEnumAndTypedNil(t *testing.T)
 		{
 			name: "nonliteral pattern",
 			expression: &spl.ScalarCallExpr{
-				Function:  spl.ScalarFunctionMatch,
+				Function:  spl.ScalarFunctionLike,
 				Arguments: []spl.ScalarExpr{value(), value()},
+				Range:     sourceRange,
+			},
+			code: "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+		},
+		{
+			name: "typed nil pattern",
+			expression: &spl.ScalarCallExpr{
+				Function:  spl.ScalarFunctionLike,
+				Arguments: []spl.ScalarExpr{value(), typedNilPattern},
 				Range:     sourceRange,
 			},
 			code: "SPL_UNSUPPORTED_EVAL_EXPRESSION",
@@ -104,7 +114,7 @@ func TestBuildMatchRejectsForgedArityPatternBooleanEnumAndTypedNil(t *testing.T)
 		{
 			name: "Boolean value",
 			expression: &spl.ScalarCallExpr{
-				Function: spl.ScalarFunctionMatch,
+				Function: spl.ScalarFunctionLike,
 				Arguments: []spl.ScalarExpr{&spl.ScalarCallExpr{
 					Function:  spl.ScalarFunctionIsNull,
 					Arguments: []spl.ScalarExpr{value()},
@@ -115,30 +125,21 @@ func TestBuildMatchRejectsForgedArityPatternBooleanEnumAndTypedNil(t *testing.T)
 			code: "SPL_UNSUPPORTED_EVAL_EXPRESSION",
 		},
 		{
-			name: "unsupported regex",
+			name: "invalid pattern",
 			expression: &spl.ScalarCallExpr{
-				Function:  spl.ScalarFunctionMatch,
-				Arguments: []spl.ScalarExpr{value(), pattern(`(?=secret)`)},
+				Function:  spl.ScalarFunctionLike,
+				Arguments: []spl.ScalarExpr{value(), pattern("bad\x00pattern")},
 				Range:     sourceRange,
 			},
-			code: "SPL_UNSUPPORTED_REGEX",
+			code: "SPL_UNSUPPORTED_LIKE_PATTERN",
 		},
 		{
-			name: "oversized regex",
+			name: "oversized pattern",
 			expression: &spl.ScalarCallExpr{
-				Function:  spl.ScalarFunctionMatch,
-				Arguments: []spl.ScalarExpr{value(), pattern(strings.Repeat("x", splregex.MaximumMatchPatternBytes+1))},
-				Range:     sourceRange,
-			},
-			code: "SPL_QUERY_TOO_COMPLEX",
-		},
-		{
-			name: "oversized regex program",
-			expression: &spl.ScalarCallExpr{
-				Function: spl.ScalarFunctionMatch,
+				Function: spl.ScalarFunctionLike,
 				Arguments: []spl.ScalarExpr{
 					value(),
-					pattern(strings.Repeat("a{1000}", 5)),
+					pattern(strings.Repeat("x", splwildcard.MaximumLikePatternBytes+1)),
 				},
 				Range: sourceRange,
 			},
@@ -170,49 +171,5 @@ func TestBuildMatchRejectsForgedArityPatternBooleanEnumAndTypedNil(t *testing.T)
 				test.code,
 			)
 		})
-	}
-}
-
-func TestScalarFunctionBooleanTraitsRemainInParity(t *testing.T) {
-	t.Parallel()
-
-	functions := []struct {
-		spl  spl.ScalarFunction
-		plan ScalarFunction
-		want bool
-	}{
-		{spl.ScalarFunctionInvalid, ScalarFunctionInvalid, false},
-		{spl.ScalarFunctionToNumber, ScalarFunctionToNumber, false},
-		{spl.ScalarFunctionReplace, ScalarFunctionReplace, false},
-		{spl.ScalarFunctionIsNull, ScalarFunctionIsNull, true},
-		{spl.ScalarFunctionIsNotNull, ScalarFunctionIsNotNull, true},
-		{spl.ScalarFunctionCoalesce, ScalarFunctionCoalesce, false},
-		{spl.ScalarFunctionLower, ScalarFunctionLower, false},
-		{spl.ScalarFunctionUpper, ScalarFunctionUpper, false},
-		{spl.ScalarFunctionLength, ScalarFunctionLength, false},
-		{spl.ScalarFunctionSubstring, ScalarFunctionSubstring, false},
-		{spl.ScalarFunctionToString, ScalarFunctionToString, false},
-		{spl.ScalarFunctionRound, ScalarFunctionRound, false},
-		{spl.ScalarFunctionCeil, ScalarFunctionCeil, false},
-		{spl.ScalarFunctionFloor, ScalarFunctionFloor, false},
-		{spl.ScalarFunctionMVCount, ScalarFunctionMVCount, false},
-		{spl.ScalarFunctionMatch, ScalarFunctionMatch, true},
-		{spl.ScalarFunctionLike, ScalarFunctionLike, true},
-	}
-	for index, function := range functions {
-		if int(function.spl) != index || int(function.plan) != index {
-			t.Fatalf(
-				"function %d enum mapping = SPL %d / plan %d",
-				index,
-				function.spl,
-				function.plan,
-			)
-		}
-		if got := function.spl.ReturnsBoolean(); got != function.want {
-			t.Errorf("SPL function %d ReturnsBoolean = %t, want %t", index, got, function.want)
-		}
-		if got := function.plan.ReturnsBoolean(); got != function.want {
-			t.Errorf("plan function %d ReturnsBoolean = %t, want %t", index, got, function.want)
-		}
 	}
 }
