@@ -36,6 +36,7 @@ const SPL_TOSTRING_FUNCTION_PATTERN = "tostring(?=\\s*\\()";
 const SPL_ROUND_FUNCTION_PATTERN = "round(?=\\s*\\()";
 const SPL_INTEGRAL_ROUNDING_FUNCTION_PATTERN = "(?:ceil|ceiling|floor)(?=\\s*\\()";
 const SPL_MVCOUNT_FUNCTION_PATTERN = "mvcount(?=\\s*\\()";
+const SPL_MATCH_FUNCTION_PATTERN = "match(?=\\s*\\()";
 const SPL_NULL_PREDICATE_FUNCTION_PATTERN = "(?:isnull|isnotnull)(?=\\s*\\()";
 const SPL_PERCENTILE_FUNCTION_PATTERN = "(?:p|perc)0*(?:[1-9]|[1-9][0-9])";
 const SPL_FUNCTION_PATTERN = [
@@ -51,6 +52,7 @@ const SPL_FUNCTION_PATTERN = [
   SPL_ROUND_FUNCTION_PATTERN,
   SPL_INTEGRAL_ROUNDING_FUNCTION_PATTERN,
   SPL_MVCOUNT_FUNCTION_PATTERN,
+  SPL_MATCH_FUNCTION_PATTERN,
   SPL_NULL_PREDICATE_FUNCTION_PATTERN,
   SPL_PERCENTILE_FUNCTION_PATTERN,
 ].join("|");
@@ -66,6 +68,7 @@ const SPL_TOSTRING_FUNCTION = /^tostring$/i;
 const SPL_ROUND_FUNCTION = /^round$/i;
 const SPL_INTEGRAL_ROUNDING_FUNCTION = /^(?:ceil|ceiling|floor)$/i;
 const SPL_MVCOUNT_FUNCTION = /^mvcount$/i;
+const SPL_MATCH_FUNCTION = /^match$/i;
 const SPL_NULL_PREDICATE_FUNCTION = /^(?:isnull|isnotnull)$/i;
 const SPL_PERCENTILE_FUNCTION = new RegExp(`^${SPL_PERCENTILE_FUNCTION_PATTERN}$`, "i");
 const SYNTAX_TOKEN_PATTERN = new RegExp(
@@ -158,6 +161,7 @@ export function syntaxTokens(query: string): ReactNode[] {
       SPL_ROUND_FUNCTION.test(part) ||
       SPL_INTEGRAL_ROUNDING_FUNCTION.test(part) ||
       SPL_MVCOUNT_FUNCTION.test(part) ||
+      SPL_MATCH_FUNCTION.test(part) ||
       SPL_NULL_PREDICATE_FUNCTION.test(part) ||
       SPL_PERCENTILE_FUNCTION.test(part)) {
       className = "spl-function";

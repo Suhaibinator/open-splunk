@@ -162,6 +162,18 @@ test("mvcount highlights only when used as a parenthesized function", () => {
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
+test("match highlights only when used as a parenthesized function", () => {
+  const query = `index=main match=1 | where MaTcH(message, "(?i)error") | table match`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["match"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
 test("eval completion advertises the exact supported scalar signatures", () => {
   const evalCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eval");
   assert.ok(evalCompletion);
@@ -180,6 +192,8 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /mvcount\(value\)/);
   assert.match(evalCompletion.detail, /single value as 1/i);
   assert.match(evalCompletion.detail, /no values as null/i);
+  assert.match(evalCompletion.detail, /match\(value, "regex"\)/);
+  assert.match(evalCompletion.detail, /4 KiB literal RE2 pattern/i);
   assert.match(evalCompletion.detail, /literal precision from 0 through 18/i);
   assert.match(evalCompletion.detail, /first non-null fixed value/i);
   assert.match(evalCompletion.detail, /first true predicate/i);
@@ -194,6 +208,13 @@ test("stats completion advertises true-only conditional count with an explicit a
   assert.ok(statsCompletion);
   assert.match(statsCompletion.insertion, /count\(eval\(status>=500\)\) AS errors/);
   assert.match(statsCompletion.detail, /true-only count\(eval\(predicate\)\) AS output/);
+});
+
+test("where completion advertises direct bounded match predicates", () => {
+  const whereCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "where");
+  assert.ok(whereCompletion);
+  assert.match(whereCompletion.detail, /match\(value, "regex"\)/);
+  assert.match(whereCompletion.detail, /substring/i);
 });
 
 test("nested stats eval highlights as a function without relabeling the eval command", () => {

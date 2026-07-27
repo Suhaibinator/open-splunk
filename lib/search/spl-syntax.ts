@@ -13,12 +13,12 @@ export const SPL_PIPELINE_COMMANDS = [
   {
     name: "where",
     insertion: "where isnotnull(status) AND status >= 500",
-    detail: "Filter with comparisons or direct isnull/isnotnull predicates.",
+    detail: 'Filter with comparisons, direct isnull/isnotnull predicates, or match(value, "regex") substring predicates using a literal bounded RE2 pattern.',
   },
   {
     name: "eval",
     insertion: 'eval availability=if(isnull(status), "missing", "present")',
-    detail: "Create or replace fields; if(predicate, true_value, false_value) selects between two values, coalesce(value, fallback, ...) selects the first non-null fixed value, case(predicate, value, ...) selects the value for the first true predicate, lower(value)/upper(value) map a Unicode string or multivalue, len(value)/length(value) count UTF-8 code points in one string, substr(value, start[, length]) selects UTF-8 code points with SQLite indexing and literal integer indexes, tostring(value) preserves strings, renders exact numbers, and uses capitalized Boolean text, round(value[, precision]) rounds a number with an optional literal precision from 0 through 18, ceil(value)/ceiling(value) rounds a number upward, floor(value) rounds it downward, and mvcount(value) counts non-null multivalue members, a single value as 1, and no values as null. Formatted tostring modes and negative or calculated round precisions are not yet supported.",
+    detail: 'Create or replace fields; if(predicate, true_value, false_value) selects between two values, coalesce(value, fallback, ...) selects the first non-null fixed value, case(predicate, value, ...) selects the value for the first true predicate, lower(value)/upper(value) map a Unicode string or multivalue, len(value)/length(value) count UTF-8 code points in one string, substr(value, start[, length]) selects UTF-8 code points with SQLite indexing and literal integer indexes, tostring(value) preserves strings, renders exact numbers, and uses capitalized Boolean text, round(value[, precision]) rounds a number with an optional literal precision from 0 through 18, ceil(value)/ceiling(value) rounds a number upward, floor(value) rounds it downward, mvcount(value) counts non-null multivalue members, a single value as 1, and no values as null, and match(value, "regex") tests substring matches with a 4 KiB literal RE2 pattern for where or conditional use. Formatted tostring modes and negative or calculated round precisions are not yet supported.',
   },
   {
     name: "rename",

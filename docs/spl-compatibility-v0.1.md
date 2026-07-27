@@ -17,11 +17,12 @@ most 16 KiB of UTF-8 source, 1,024 syntax tokens, and 64 pipeline commands.
 Scalar expressions may nest 32 levels, with at most 32 eval/where predicates.
 `eval` and `rename` accept at most 64 assignments; `stats` accepts at most 16
 measures and 16 `BY` fields; `dedup` accepts at most 16 key fields. A `rex`
-pattern and its normalized form are each limited to 4 KiB and 16 total capture
+pattern and its normalized form are each limited to 4 KiB, its estimated
+post-repeat RE2 program to 4,096 work units, and its captures to 16 total
 groups, including unnamed groups; one query may produce at most 64 named `rex`
-outputs. Across all `rex` stages, the total bytes in all capture groups for
-one row may not exceed 4 MiB; exceeding that runtime ceiling fails the query
-with an execution-limit error.
+outputs. Across all `rex` stages, the total bytes in all capture groups for one
+row may not exceed 4 MiB; exceeding that runtime ceiling fails the query with
+an execution-limit error.
 Exceeding a general structural limit returns the source-located
 `SPL_QUERY_TOO_COMPLEX` diagnostic before planning or execution. Unsupported
 `dedup` arity is reported as `SPL_UNSUPPORTED_DEDUP_SYNTAX`. Dynamic field
@@ -62,6 +63,12 @@ Every `mvcount` call accepts exactly one value and has the same separate
 64 KiB generated-SQL ceiling, checked after its typed cardinality lowering is
 built. Validation of a tagged scalar payload is independently capped at the
 1 MiB hard ingestion ceiling.
+Every `match` call accepts one value and one quoted literal regular expression.
+Both the original and normalized RE2 text are capped at 4 KiB, the estimated
+post-repeat program is capped at 4,096 work units, and one query may use at
+most 16,384 total `match` work units. Calculated match inputs have a
+conservative 4 MiB byte ceiling, and each call has the same separate 64 KiB
+generated-SQL ceiling.
 Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
@@ -129,6 +136,7 @@ decimal values compare through finite `Float64`, so distinct values beyond
 | where p95_ms > 500
 | where status=500 OR duration_ms>500 AND level="ERROR"
 | where isnull(optional) OR isnotnull(status)
+| where match(message, "(?i)error|warn")
 ```
 
 `where` uses a separate eval-expression grammar: quoted strings are literals,
@@ -141,7 +149,7 @@ with a Boolean literal. Scalar operands may be fields, typed literals, or the
 supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, bounded
 `case`, `lower`, `upper`, `len`, `length`, bounded `substr`, and bounded
 default `tostring`, bounded `round`, `ceil`/`ceiling`, `floor`, and `mvcount`
-calls
+calls, plus bounded `match(value, "regex")`
 described below;
 arithmetic, field quoting, `XOR`, and other eval functions are not yet
 accepted. Missing, null, container, or failed numeric operands do not pass
@@ -181,6 +189,7 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval latency_ms=round(duration_ms, 2)
 | eval upper_bound=ceil(ratio), lower_bound=floor(ratio)
 | eval recipient_count=mvcount(recipients)
+| eval class=if(match(message, "(?i)error|warn"), "problem", "ok")
 ```
 
 Assignments are evaluated from left to right, and later assignments may use an
@@ -214,6 +223,8 @@ narrow:
   `floor(value)` rounds one numeric value downward.
 - `mvcount(value)` returns the number of immediate non-null multivalue members,
   one for a non-null scalar, or null when there are no values.
+- `match(value, "regex")` returns a Boolean substring-match result for
+  predicate and conditional use with a bounded literal RE2 pattern.
 
 The `if` predicate uses exactly the `where` grammar described above:
 case-sensitive scalar comparisons, direct `isnull` / `isnotnull` predicates,
@@ -723,6 +734,65 @@ operation because the first result is already one or null, including across
 eval projection and rename stages. No form uses `ARRAY JOIN` or changes row
 cardinality. The per-call 64 KiB and whole-query 256 KiB generated-SQL ceilings
 remain authoritative.
+
+`match` accepts one value and one quoted literal regular expression:
+
+```spl
+| where match(message, "(?i)error|warn")
+| where NOT match(path, "^/health(?:/|$)")
+| eval class=if(match(message, "timeout"), "slow", "other")
+| eval rendered=tostring(match(source, "^/api"))
+```
+
+Function names are case-insensitive, and a bare field named `match` remains an
+ordinary field. Any arity other than two fails with
+`SPL_INVALID_EVAL_ARITY`. The pattern cannot be a field or calculated value.
+Both its authored UTF-8 bytes and normalized RE2 text are limited to 4 KiB.
+Before any counted repetition is expanded, the compact syntax tree is
+conservatively limited to 4,096 estimated RE2 program work units. A query may
+use at most 16,384 total work units across all `match` occurrences. Invalid
+UTF-8, embedded NUL, PCRE constructs unavailable in RE2 such as lookaround and
+pattern backreferences, or any byte/program limit violation fails before
+execution. Resource overflow uses `SPL_QUERY_TOO_COMPLEX`; unsupported regex
+syntax uses `SPL_UNSUPPORTED_REGEX`.
+
+Matching is case-sensitive by default and succeeds when the expression finds
+any substring. Anchors request a full or boundary match. Empty and zero-width
+patterns are accepted because they do not have replacement's global
+zero-width ambiguity. Inline RE2 flags such as `(?i)` are accepted.
+Open Splunk explicitly disables ClickHouse's default dot-all mode so `.` does
+not match a newline, matching ordinary Splunk PCRE behavior; a caller can opt
+back in with `(?s)`. Non-multiline `$` preserves PCRE's match at strict end or
+immediately before one final newline; `\z` remains strict end, and `(?m)$`
+retains line-end behavior.
+
+A fixed String is matched directly. Fixed numeric, Boolean, and canonical-time
+scalars use their supported text spelling before matching. A Dynamic runtime
+String is matched; Dynamic numbers, Booleans, arrays, objects, tagged values,
+null, and missing fields produce nullable Boolean null. Fixed
+`Array(String)` fails with `SPL_UNSUPPORTED_MULTIVALUE_USAGE`. Binary `_raw`
+and other values carrying failed text-eligibility provenance also produce
+null. In predicate position, null behaves as false through the ordinary
+`where`/conditional predicate contract.
+
+`match` is a direct predicate and may be compared explicitly with a Boolean,
+used under `NOT`/`AND`/`OR`, or consumed by `if`, `case`, `mvcount`, and
+default `tostring`. Compatibility version 0.1 retains the established
+search-mode boundary that a Boolean-returning function cannot be assigned
+directly by `eval`; use a conditional or `tostring` when a stored field is
+needed.
+
+The compiler validates the literal again at its trust boundary, binds the
+normalized pattern as a query argument, and references the input once. No form
+expands rows. Each call has a 64 KiB generated-SQL ceiling in addition to the
+256 KiB whole-query ceiling. Stored inputs fit within the 1 MiB ingestion
+ceiling. String-size metadata is propagated through supported scalar
+composition; UTF-8 case conversion allows a conservative 4x expansion, while
+always-consuming `replace` uses a saturating input/replacement bound. A
+calculated value that may exceed 4 MiB is rejected before regex execution.
+Splunk executes PCRE while Open Splunk executes the explicitly validated RE2
+subset through ClickHouse; dialect differences remain a documented
+compatibility boundary.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
@@ -1962,7 +2032,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`earliest` and `latest` time functions](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/statistical-and-charting-functions/time-functions),
 [`first` and `last` event-order functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/statistical-and-charting-functions/event-order-functions),
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
-[`if`, `coalesce`, `case`, and conditional functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
+[`if`, `coalesce`, `case`, `match`, and conditional functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
 [`lower`, `upper`, and text functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/text-functions),
 [SQLite core `substr` semantics](https://www.sqlite.org/lang_corefunc.html),
 [`tostring` and conversion functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/evaluation-functions/conversion-functions),
@@ -1987,6 +2057,7 @@ ClickHouse's [`if` and conditional functions](https://clickhouse.com/docs/refere
 ClickHouse's [`lowerUTF8`, `upperUTF8`, `lengthUTF8`, and String functions](https://clickhouse.com/docs/sql-reference/functions/string-functions),
 ClickHouse's [`toString` and type-conversion functions](https://clickhouse.com/docs/sql-reference/functions/type-conversion-functions),
 ClickHouse's [`round` and rounding functions](https://clickhouse.com/docs/reference/functions/regular-functions/rounding-functions),
+ClickHouse's [`match` and string-search functions](https://clickhouse.com/docs/sql-reference/functions/string-search-functions),
 ClickHouse's [`extractGroups`](https://clickhouse.com/docs/sql-reference/functions/string-search-functions),
 and the [RE2 syntax reference](https://github.com/google/re2/wiki/Syntax)
 documentation.
