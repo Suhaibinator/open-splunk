@@ -7,7 +7,98 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded SPL `c(field)` count abbreviation
+## Latest checkpoint: native SPL `isnull` / `isnotnull` predicates
+
+Date: 2026-07-27
+
+Implementation/test/compatibility/editor checkpoint (committed and pushed):
+`2d35c6699c2bb5bb48a6d40d1e0795b2792c38bf`
+
+This test-first slice implements the product-plan informational null functions
+without inventing general scalar truthiness or search-mode Boolean assignment:
+
+1. The parser accepts case-insensitive `isnull(value)` and
+   `isnotnull(value)` with exactly one scalar argument. They can be used
+   directly in `where`, composed with parentheses/`NOT`/`AND`/`OR`, or
+   compared explicitly with a Boolean literal. Direct predicates and
+   comparisons share the existing 32-predicate complexity ceiling.
+2. `isnull` is true for a missing field or a scalar result that is null;
+   `isnotnull` is its exact complement. Empty String, false, and numeric zero
+   are present and non-null. Projected-away fields are missing, and failed
+   `tonumber` results are null.
+3. Empty fixed multivalue results use the existing logical-absence contract.
+   At the explicit Open Splunk typed boundary, an exact Dynamic array is
+   present even when it is empty or contains only null members. A flattened
+   object parent is present when bounded descendant metadata exists. Null
+   predicates never traverse members or expand event rows.
+4. The logical plan carries a statically Boolean scalar predicate. The
+   ClickHouse compiler lowers presence to exact-field existence plus
+   `isNotNull(value)`, with the bounded descendant probe for flattened object
+   parents. Presence placeholders remain attached to the scalar value in SQL
+   occurrence order, and calculated fields retain the existing materialized
+   predicate fence.
+5. Search-mode SPL does not allow `eval flag=isnull(field)` to publish a raw
+   Boolean. The parser and planner reject direct or nested assignment, and
+   current `tonumber`/`replace` consumers reject nested null Booleans rather
+   than inventing Bool-to-String coercion. Ordinary Bool literals and fields
+   retain their preceding scalar-conversion behavior.
+6. Compiler defense-in-depth rejects forged non-Boolean predicates, bad
+   arities, forbidden Boolean consumers/assignments, typed-nil field/literal/
+   call nodes, and typed-nil `replace` pattern/replacement nodes with errors
+   instead of panics.
+7. Editor completion advertises direct null predicates. Highlighting marks
+   `isnull`/`isnotnull` only when followed by `(`, so identically named fields
+   remain ordinary text.
+
+Validation:
+
+```sh
+go test ./internal/spl ./internal/plan ./internal/clickhouse -count=1
+go vet ./internal/spl ./internal/plan ./internal/clickhouse
+go test ./... -count=1
+golangci-lint run --timeout=5m \
+  --new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102
+npm run typecheck
+npm run lint
+npm run test:frontend
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -v
+git diff --check
+```
+
+All gates pass. The frontend corpus now has 109 application tests. The pinned
+ClickHouse `26.3.17.4` store/compiler suite passes with a dedicated nine-event
+null matrix covering missing, explicit null, empty String, false, zero, empty/
+null-only/nonempty Dynamic arrays, flattened objects, projection, nullable
+conversion, fixed multivalues, complement laws, and an `EXPLAIN actions=1`
+no-`ArrayJoin` assertion.
+
+Three independent adversarial correctness, compiler/performance, and
+test/quality reviews found and drove fixes for undocumented Bool coercion,
+typed-nil forged-IR panics, a stale predicate-limit description, and three lint
+ratchet failures. Their final current-tree verdicts are clean.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `2d35c66` plus the checkpoint-doc
+   commit that follows it, then inspect the corresponding GitHub workflows.
+2. Write the bounded executable contract and red tests for `if(condition,
+   true_value, false_value)`, the product-plan Boolean consumer needed for
+   documented forms such as
+   `eval flag=if(isnull(field), "missing", "present")`. Pin condition grammar,
+   branch type/null unification, missing values, nesting/complexity, bind
+   order, calculated-field materialization, Dynamic/multivalue boundaries,
+   forged IR, and pinned ClickHouse behavior before implementation.
+3. Keep direct `eval flag=isnull(field)` rejected. Conditional
+   `count(eval(predicate))`, wildcard count, and `eventstats` remain separate
+   contracts; take them only after the Boolean-expression/consumer model is
+   stable.
+4. Preserve the no-row-expansion and immutable-scope invariants, and run the
+   focused package, full Go/frontend, exact lint-ratchet, and pinned
+   ClickHouse gates before the next push.
+
+## Previous checkpoint: bounded SPL `c(field)` count abbreviation
 
 Date: 2026-07-27
 
@@ -53,25 +144,13 @@ All gates pass. The frontend corpus now has 108 application tests, including
 the focused `c` highlighter regression. Two independent primary-source SPL
 contract and adversarial implementation reviews are clean.
 
-Immediate resume steps:
+Follow-on status:
 
-1. Confirm `main` and `origin/main` contain `070d24f`, then inspect the
-   corresponding GitHub workflow.
-2. Implement the product-plan `isnull`/`isnotnull` informational-function
-   slice test-first. Native `where isnull(field)` and
-   `where isnotnull(field)` are documented SPL1. Search-mode SPL1 does not
-   allow directly assigning a Boolean result with `eval`; keep
-   `eval flag=isnull(field)` rejected until a compatible Boolean consumer such
-   as `if` or `tostring` is implemented, unless a separately documented typed
-   Open Splunk divergence is chosen.
-3. Pin missing versus explicit null, empty String, false/zero, empty and
-   nonempty multivalue, flattened object-parent, projected-away field,
-   nullable conversion, complement, arity, predicate-depth, bind-order, and
-   physical no-row-expansion behavior in unit and pinned ClickHouse tests.
-4. Conditional `count(eval(predicate))` follows the stable Boolean-expression
-   path. Wildcard count and `eventstats` remain separate bounded contracts.
+The `isnull`/`isnotnull` work that was next here is complete at the newer
+checkpoint above. Conditional `count(eval(predicate))`, wildcard count, and
+`eventstats` remain separate bounded contracts.
 
-## Latest checkpoint: bounded percentile family
+## Previous checkpoint: bounded percentile family
 
 Date: 2026-07-27
 
@@ -259,10 +338,12 @@ This checkpoint completes the first chronological aggregate slice:
     remaining P1/P2 blocker.
 
 The exact local validation record is under **Latest validation evidence**.
-The documented `c(field)` abbreviation is complete at the newer checkpoint
-above. The next product-plan SPL work is `isnull`/`isnotnull`; conditional and
-wildcard count remain later separate contracts, followed by `eventstats` only
-after the aggregate library is stable.
+The documented `c(field)` abbreviation and native `isnull`/`isnotnull`
+predicates are complete at the newer checkpoints above. The next product-plan
+SPL work is a bounded compatible Boolean consumer, starting with an explicit
+`if` contract; conditional and wildcard count remain later separate contracts,
+followed by `eventstats` only after the aggregate and Boolean-expression
+libraries are stable.
 The optional direction-aware Dynamic selector optimization and the existing
 inherited lint inventory remain nonblocking cleanup. The overall backend goal
 remains active.
@@ -4222,9 +4303,10 @@ Do not guess those decisions if they materially affect the implementation.
    comparison. Bounded chronological `earliest(field)` / `latest(field)` is
    complete across `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and `f9985a1`;
    the bounded percentile family is published after parser/planner commit
-   `efe4199`, and exact-field `c(field)` is complete at `070d24f`, as
-   described at the top of this file. Continue with the product-plan
-   `isnull`/`isnotnull` slice if the user does not change priority. The generator
+   `efe4199`, exact-field `c(field)` is complete at `070d24f`, and native
+   `isnull`/`isnotnull` predicates are complete at `2d35c66`, as described at
+   the top of this file. Continue with a test-first bounded `if` contract if
+   the user does not change priority. The generator
    foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
