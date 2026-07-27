@@ -159,6 +159,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	})
 
 	eventIndexTime := queryIntegrationInsertEvent(t, ctx, connection)
+	binaryIndexTime := queryIntegrationInsertBinaryEvent(t, ctx, connection)
 	timechartBase, timechartIndexTime := queryIntegrationInsertTimechartEvents(t, ctx, connection)
 	gradeThisBase, gradeThisIndexTime, gradeThisTraceID := queryIntegrationInsertGradeThisEvents(t, ctx, connection)
 	chartBase, chartIndexTime := queryIntegrationInsertChartEvents(t, ctx, connection)
@@ -689,6 +690,91 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		if !lowOK || low != 200 || !highOK || high != "/manager" ||
 			!page.Rows[0].Values[2].IsNull() {
 			t.Fatalf("min/max row = %#v, want Double(200)/String(/manager)/null", page.Rows[0])
+		}
+	})
+
+	t.Run("stats earliest and latest canonical strings through manager", func(t *testing.T) {
+		job, page := queryIntegrationRunGradeThisSearchRange(
+			t,
+			ctx,
+			executor,
+			gradeThisIndexTime,
+			"queryexec-stats-earliest-latest",
+			`index=gradethis | stats earliest(status) AS earliest_status latest(status) AS latest_status earliest(absent) AS absent`,
+			gradeThisBase,
+			gradeThisBase.Add(20*time.Minute),
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("earliest/latest state = %v, failure=%#v", job.State, job.Failure)
+		}
+		if len(page.Schema.Columns) != 3 {
+			t.Fatalf("earliest/latest schema = %#v", page.Schema)
+		}
+		for index, name := range []string{"earliest_status", "latest_status", "absent"} {
+			column := page.Schema.Columns[index]
+			if column.Name != name || column.Kind != searchjobs.ValueKindMixed ||
+				!column.Nullable || column.Multivalue {
+				t.Fatalf(
+					"earliest/latest column %d = %#v, want nullable Mixed %q",
+					index,
+					column,
+					name,
+				)
+			}
+		}
+		if len(page.Rows) != 1 || len(page.Rows[0].Values) != 3 {
+			t.Fatalf("earliest/latest rows = %#v, want one three-cell row", page.Rows)
+		}
+		earliestStatus, earliestOK := page.Rows[0].Values[0].String()
+		latestStatus, latestOK := page.Rows[0].Values[1].String()
+		if !earliestOK || earliestStatus != "503" ||
+			!latestOK || latestStatus != "502" ||
+			!page.Rows[0].Values[2].IsNull() {
+			t.Fatalf(
+				"earliest/latest row = %#v, want String(503)/String(502)/null",
+				page.Rows[0],
+			)
+		}
+	})
+
+	t.Run("stats earliest and latest preserve binary raw through manager", func(t *testing.T) {
+		job, page := queryIntegrationRunSearchRangeForIndex(
+			t,
+			ctx,
+			executor,
+			binaryIndexTime,
+			"queryexec-stats-earliest-latest-binary",
+			`index=binary | stats earliest(_raw) AS earliest_raw latest(_raw) AS latest_raw earliest(absent) AS absent`,
+			binaryIndexTime.Add(-time.Hour),
+			binaryIndexTime.Add(time.Hour),
+			"binary",
+		)
+		if job.State != searchjobs.StateCompleted ||
+			len(page.Schema.Columns) != 3 ||
+			len(page.Rows) != 1 {
+			t.Fatalf(
+				"binary earliest/latest transport = state %v failure %#v schema %#v rows %#v",
+				job.State,
+				job.Failure,
+				page.Schema,
+				page.Rows,
+			)
+		}
+		for index, name := range []string{"earliest_raw", "latest_raw", "absent"} {
+			if page.Schema.Columns[index] != (searchjobs.Column{
+				Name: name, Kind: searchjobs.ValueKindMixed, Nullable: true,
+			}) {
+				t.Fatalf("binary earliest/latest column %d = %#v", index, page.Schema.Columns[index])
+			}
+		}
+		for _, index := range []int{0, 1} {
+			raw, ok := page.Rows[0].Values[index].Bytes()
+			if !ok || !bytes.Equal(raw, []byte{0xff, 0x00}) {
+				t.Fatalf("binary earliest/latest cell %d = %x/%v, want ff00 Bytes", index, raw, ok)
+			}
+		}
+		if !page.Rows[0].Values[2].IsNull() {
+			t.Fatalf("binary absent chronological value = %#v, want null", page.Rows[0].Values[2])
 		}
 	})
 
@@ -1489,7 +1575,6 @@ ORDER BY grid.number`,
 	})
 
 	t.Run("stats values retains typed multivalue transport", func(t *testing.T) {
-		binaryIndexTime := queryIntegrationInsertBinaryEvent(t, ctx, connection)
 		job, page := queryIntegrationRunSearch(
 			t,
 			ctx,

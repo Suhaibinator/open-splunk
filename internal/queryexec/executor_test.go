@@ -1262,6 +1262,76 @@ func TestExecutorPublishesStatsListInOrderWithDuplicatesAndBinaryMembers(t *test
 	}
 }
 
+func TestExecutorPublishesStatsChronologicalValuesAsCanonicalStrings(t *testing.T) {
+	t.Parallel()
+
+	invalidUTF8 := string([]byte{0xff, 0x00})
+	rows := &fakeRows{
+		columns: []string{"earliest_number", "latest_bool", "absent", "earliest_raw"},
+		types: []driver.ColumnType{
+			fakeColumnType{
+				name:         "earliest_number",
+				databaseType: "Dynamic",
+				scanType:     reflect.TypeOf((*any)(nil)).Elem(),
+			},
+			fakeColumnType{
+				name:         "latest_bool",
+				databaseType: "Dynamic",
+				scanType:     reflect.TypeOf((*any)(nil)).Elem(),
+			},
+			fakeColumnType{
+				name:         "absent",
+				databaseType: "Dynamic",
+				scanType:     reflect.TypeOf((*any)(nil)).Elem(),
+			},
+			fakeColumnType{
+				name:         "earliest_raw",
+				databaseType: "Dynamic",
+				scanType:     reflect.TypeOf((*any)(nil)).Elem(),
+			},
+		},
+		data: [][]any{{
+			chcol.NewDynamicWithType("503", "String"),
+			chcol.NewDynamicWithType("false", "String"),
+			chcol.NewDynamicWithType(nil, ""),
+			chcol.NewDynamicWithType(invalidUTF8, "String"),
+		}},
+	}
+	sink := &fakeSink{}
+	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
+	if err := executor.Execute(context.Background(), clickhouse.CompiledQuery{
+		SQL: "SELECT earliest_number, latest_bool, absent, earliest_raw",
+		OutputFields: []string{
+			"earliest_number",
+			"latest_bool",
+			"absent",
+			"earliest_raw",
+		},
+	}, sink); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	for index, name := range rows.columns {
+		if sink.schema.Columns[index] != (searchjobs.Column{
+			Name: name, Kind: searchjobs.ValueKindMixed, Nullable: true,
+		}) {
+			t.Fatalf("chronological schema column %d = %#v", index, sink.schema.Columns[index])
+		}
+	}
+	if got, ok := sink.rows[0][0].String(); !ok || got != "503" {
+		t.Fatalf("earliest numeric spelling = %q/%v, want String(503)", got, ok)
+	}
+	if got, ok := sink.rows[0][1].String(); !ok || got != "false" {
+		t.Fatalf("latest boolean spelling = %q/%v, want String(false)", got, ok)
+	}
+	if !sink.rows[0][2].IsNull() {
+		t.Fatalf("absent chronological value = %#v, want null", sink.rows[0][2])
+	}
+	if got, ok := sink.rows[0][3].Bytes(); !ok || !slices.Equal(got, []byte{0xff, 0x00}) {
+		t.Fatalf("earliest binary raw = %x/%v, want ff00 Bytes", got, ok)
+	}
+}
+
 func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	t.Parallel()
 	settings, err := querySettings(Config{})

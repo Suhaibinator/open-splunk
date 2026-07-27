@@ -22,8 +22,8 @@ const PIPELINE_COMMAND_PATTERN = [
   ...UNSUPPORTED_SPL_PIPELINE_COMMANDS,
 ].map(escapeRegExp).join("|");
 const SPL_FUNCTION_NAMES = [
-  "count", "dc", "distinct_count", "values", "list", "min", "max", "p95",
-  "sum", "avg", "tonumber", "replace",
+  "count", "dc", "distinct_count", "values", "list", "min", "max",
+  "earliest", "latest", "p95", "sum", "avg", "tonumber", "replace",
 ] as const;
 const SPL_FUNCTION_PATTERN = SPL_FUNCTION_NAMES.map(escapeRegExp).join("|");
 const SPL_FUNCTION_SET = new Set<string>(SPL_FUNCTION_NAMES);

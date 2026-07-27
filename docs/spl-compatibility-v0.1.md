@@ -447,21 +447,23 @@ the selected rows in reversed order, matching its pipeline semantics.
 | stats values(user) AS users
 | stats list(user) AS ordered_users
 | stats min(duration_ms) AS fastest max(duration_ms) AS slowest BY path
+| stats earliest(status) AS first_status latest(status) AS last_status BY service
 | stats count p95(duration_ms) AS p95_ms BY path
 | stats sum(bytes) AS total_bytes avg(duration_ms) AS mean_ms BY path
 ```
 
 Argument-free `count`, `count(field)`, `dc(field)`/`distinct_count(field)`,
 `p95(field)`, `values(field)`, `list(field)`, `sum(field)`, `avg(field)`,
-`min(field)`, and `max(field)` are supported, including multiple space- or
-comma-separated measures and `AS` aliases. Function names are
+`min(field)`, `max(field)`, `earliest(field)`, and `latest(field)` are
+supported, including multiple space- or comma-separated measures and `AS`
+aliases. Function names are
 case-insensitive. Both
 distinct-count spellings use the canonical default output `dc(field)`; other
 default names use canonical lowercase spelling such as `count(productId)`,
-`values(user)`, `list(user)`, `min(duration_ms)`, or `sum(bytes)`. The command is
-transforming: output contains only the `BY` fields followed by measures in
-source order. Argument-free `count` includes every input row in a retained
-group.
+`values(user)`, `list(user)`, `min(duration_ms)`, `earliest(status)`, or
+`sum(bytes)`. The command is transforming: output contains only the `BY`
+fields followed by measures in source order. Argument-free `count` includes
+every input row in a retained group.
 
 `count(field)` counts immediate, non-null field occurrences without
 stringifying values or expanding event rows:
@@ -494,13 +496,65 @@ the published total strictly representable as `UInt64`.
 
 The current downstream field grammar cannot reference a default aggregate name
 that contains parentheses. Use `AS` when a `count(field)`, `dc`, `values`,
-`list`, `min`, `max`, `sum`, `avg`, or `p95` result will be consumed by a later
-command.
+`list`, `min`, `max`, `earliest`, `latest`, `sum`, `avg`, or `p95` result will
+be consumed by a later command.
 
 This slice accepts exactly one unquoted, exact field inside `count(...)`.
 `count()`, the documented `c(field)` abbreviation, wildcard fields,
 `count(eval(...))`, quoted fields, and other predicate/expression forms remain
 explicitly unsupported rather than being approximated.
+
+`earliest(field)` and `latest(field)` select by event chronology, not by field
+value and not by current pipeline order. `earliest` chooses the eligible value
+with the least original canonical `_time`; `latest` chooses the greatest.
+An upstream `sort` alone therefore cannot change the winner. Filters,
+`head`, `tail`, and `dedup` can change it only by changing which events survive
+to the aggregate.
+
+Chronological aggregates require source event rows with the visible,
+unmodified canonical `_time`. Removing or replacing `_time`, renaming it away
+or back, binning it in place, or placing a transforming command before the
+aggregate is rejected explicitly. `table` must retain `_time`. Copying a time
+bucket to another field with `bin _time ... AS bucket_time` preserves the
+original `_time` and remains eligible.
+
+Equal times use an ascending immutable total key: original nanosecond `_time`,
+event ID, visibility sequence, source identity `(index, collector, batch
+sequence, batch ID)`, and one-based multivalue member ordinal. `earliest`
+selects the minimum key and `latest` the maximum. Thus equal-time events can
+produce different earliest and latest winners, and within one multivalue
+event the first eligible member wins `earliest` while the last wins `latest`.
+Splunk's public documentation distinguishes chronological `earliest`/`latest`
+from processing-order `first`/`last`, but does not pin equal-time or
+multivalue ties; this deterministic key is an explicit Open Splunk v0.1
+boundary.
+
+Missing fields, explicit nulls, empty multivalues, and null members do not
+participate. An empty String is eligible. Immediate scalar members of a
+top-level multivalue participate independently without expanding event rows;
+duplicates remain distinct occurrences. Generic objects, flattened object
+parents, nested arrays, and nested objects fail the live aggregate atomically.
+Rows outside authorization/time/visibility scope, rows removed upstream, and
+rows omitted for an incomplete `BY` tuple cannot trigger that measure error.
+Validation is forced before any downstream projection, filter, sort, or row
+limit can hide a poisoned retained row.
+
+The selected value uses its stored canonical scalar spelling and is returned
+as nullable `Mixed`: valid UTF-8 is String, invalid UTF-8 is Bytes, and no
+winner is null. Numerics, Booleans, timestamps, durations, and decimals are
+not compared as values; their canonical spellings are carried from the
+chronologically selected occurrence. A global aggregate over no rows emits
+one null result row; a retained group with no eligible candidate contains
+null; grouped aggregation over no rows emits no groups. Projected-away inputs
+remain absent.
+
+Repeated identical chronological measures share one normalization and one
+winner state per input/direction. `earliest` and `latest` require separate
+constant-size states and share one immutable row key. Dynamic inputs add one
+constant-size validation state per input. The lowering uses conditional or
+Array-combinator `argMin`/`argMax`; it uses no pipeline sort, window,
+`groupArray`, or row-expanding `ARRAY JOIN`. `first`, `last`,
+`earliest_time`, and `latest_time` remain unsupported.
 
 `min` and `max` follow Splunk's documented numeric-if-possible rule for
 ordinary numbers and text. Open Splunk v0.1 makes the mixed-type and symbol
@@ -1220,9 +1274,10 @@ eventstats, streamstats
 All `stats` functions other than argument-free `count`, exact-field
 `count(field)`, `dc(field)`/`distinct_count(field)`, `values(field)`,
 `list(field)`, `min(field)`, `max(field)`, `p95(field)`, `sum(field)`, and
-`avg(field)` are unsupported, including `earliest`, `latest`, other fixed
-percentiles, `perc<N>`, `upperperc`, and `exactperc`. The broader `count` forms
-listed in the stats section are unsupported too.
+`avg(field)`, plus `earliest(field)` and `latest(field)`, are unsupported.
+Unsupported examples include other fixed percentiles, `perc<N>`, `upperperc`,
+and `exactperc`. The broader `count` forms listed in the stats section are
+unsupported too.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,
@@ -1235,6 +1290,8 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`stats`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/stats),
 [`stats` multivalue aggregation](https://help.splunk.com/en/splunk-cloud-platform/search/spl2-search-reference/stats-command/stats-command-overview-syntax-and-usage),
 [`min` and `max` aggregate functions](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/statistical-and-charting-functions/aggregate-functions),
+[`earliest` and `latest` time functions](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/statistical-and-charting-functions/time-functions),
+[`first` and `last` event-order functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/statistical-and-charting-functions/event-order-functions),
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
 [`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),
 [`spath`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.0.2503/search-commands/spath),

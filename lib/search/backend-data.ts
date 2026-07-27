@@ -449,7 +449,7 @@ function statisticsTableFromRows(schema: ResultSchema, rows: ResultRow[]): Works
   };
 }
 
-const AGGREGATE_FIELD_NAME = /^(?:(?:count|sum|avg|average|min|max|median|mode|range|stdev|variance|var|distinct_count|dc|rate|percent)(?:\(|$|_)|p(?:50|75|90|95|98|99|999)$|perc\d+(?:\(|$))/i;
+const AGGREGATE_FIELD_NAME = /^(?:(?:count|sum|avg|average|min|max|earliest|latest|median|mode|range|stdev|variance|var|distinct_count|dc|rate|percent)(?:\(|$|_)|p(?:50|75|90|95|98|99|999)$|perc\d+(?:\(|$))/i;
 
 function columnHasNumericValues(rows: ResultRow[], index: number): boolean {
   const observed = rows

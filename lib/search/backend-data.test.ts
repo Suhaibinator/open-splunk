@@ -204,6 +204,38 @@ test("top message results retain count and percent as categorical series", () =>
   );
 });
 
+test("chronological aggregate names are not offered as pivot dimensions", () => {
+  const schema: ResultSchema = {
+    schemaId: "stats-chronological-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [
+      column("service", ValueType.VALUE_TYPE_STRING),
+      column("earliest(status)", ValueType.VALUE_TYPE_STRING),
+      column("latest(path)", ValueType.VALUE_TYPE_STRING),
+    ],
+  };
+  const adapted = adaptSearchResults(schema, [
+    row("api", 0n, [
+      stringValue("api"),
+      stringValue("starting"),
+      stringValue("/ready"),
+    ]),
+  ]);
+
+  assert.deepEqual(
+    adapted.statisticsTable?.columns.map(({ fieldName, pivotable }) => ({
+      fieldName,
+      pivotable,
+    })),
+    [
+      { fieldName: "service", pivotable: true },
+      { fieldName: "earliest(status)", pivotable: false },
+      { fieldName: "latest(path)", pivotable: false },
+    ],
+  );
+});
+
 test("runtime-wide chart results retain every split series in schema order", () => {
   const schema: ResultSchema = {
     schemaId: "chart-path-by-level-v1",
