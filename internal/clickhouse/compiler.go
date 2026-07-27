@@ -86,6 +86,9 @@ const (
 	// compatible UTF-8 interval expression. Inputs and literal indexes are
 	// bound once, so nested substr calls grow linearly inside this ceiling.
 	maxCompiledSubstringScalarSQLBytes = 64 << 10
+	// maxCompiledToStringScalarSQLBytes independently bounds default scalar
+	// conversion. Dynamic input is bound once, so nested calls grow linearly.
+	maxCompiledToStringScalarSQLBytes = 64 << 10
 	// ClickHouse accepts UInt64 substring arguments syntactically but treats
 	// values above MaxInt64 as signed internally. Wider literals use the
 	// Int128 interval fallback instead of a native fast path.
@@ -3676,6 +3679,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileReplaceScalar(expression, state)
 		case plan.ScalarFunctionToNumber:
 			return compileToNumberScalar(expression, state)
+		case plan.ScalarFunctionToString:
+			return compileToStringScalar(expression, state)
 		case plan.ScalarFunctionIsNull, plan.ScalarFunctionIsNotNull:
 			return compileNullTestScalar(expression, state)
 		case plan.ScalarFunctionCoalesce:
@@ -4543,6 +4548,7 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 		expectedArguments := 0
 		switch expression.Function {
 		case plan.ScalarFunctionToNumber,
+			plan.ScalarFunctionToString,
 			plan.ScalarFunctionIsNull,
 			plan.ScalarFunctionIsNotNull,
 			plan.ScalarFunctionLower,
@@ -5449,6 +5455,89 @@ func compiledTextEligibleStringScalar(input compiledScalar) (string, []any) {
 	// UTF-8 function behavior and a redundant byte scan.
 	return "if(ifNull(" + input.textEligibleSQL + ", 0), " +
 		inputSQL + ", CAST(NULL AS Nullable(String)))", inputArgs
+}
+
+func compileToStringScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+) (compiledScalar, error) {
+	if expression == nil {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse tostring: missing expression",
+		)
+	}
+	if len(expression.Arguments) != 1 {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse tostring: expected one argument",
+		)
+	}
+	if nilScalarExpression(expression.Arguments[0]) {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse tostring: missing scalar expression",
+		)
+	}
+	input, err := compileScalarValue(expression.Arguments[0], state)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+
+	valueSQL := ""
+	valueArgs := append([]any(nil), input.valueArgs...)
+	textEligibleSQL := ""
+	switch input.kind {
+	case fieldKindDynamic:
+		typeSQL := "dynamicType(value)"
+		valueSQL = "arrayElement(arrayMap(value -> multiIf(" +
+			typeSQL + " = 'String', dynamicElement(value, 'String'), " +
+			typeSQL + " = 'Bool', if(dynamicElement(value, 'Bool'), " +
+			"CAST('True' AS String), CAST('False' AS String)), " +
+			dynamicNumericTypePredicate(typeSQL) + ", toString(value), " +
+			"CAST(NULL AS Nullable(String))), [" + input.valueSQL + "]), 1)"
+	case fieldKindString:
+		valueSQL = input.valueSQL
+		textEligibleSQL = input.textEligibleSQL
+	case fieldKindNumber:
+		valueSQL = "toString(" + input.valueSQL + ")"
+	case fieldKindBool:
+		// Bind nullable Boolean producers once so null does not become False.
+		valueSQL = "arrayElement(arrayMap(value -> multiIf(" +
+			"isNull(value), CAST(NULL AS Nullable(String)), value, " +
+			"CAST('True' AS String), CAST('False' AS String)), [" +
+			input.valueSQL + "]), 1)"
+	case fieldKindInvalid:
+		valueSQL = "CAST(NULL AS Nullable(String))"
+	case fieldKindStringArray:
+		return compiledScalar{}, unsupportedMultivalueUsage(
+			"tostring",
+			expression.Range,
+		)
+	default:
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_UNSUPPORTED_TOSTRING_VALUE_TYPE",
+			Message: "tostring supports scalar String, number, and Boolean " +
+				"input in compatibility version 0.1",
+			Range: expression.Range,
+		}
+	}
+	if len(valueSQL) > maxCompiledToStringScalarSQLBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"tostring scalar SQL exceeds %d bytes",
+				maxCompiledToStringScalarSQLBytes,
+			),
+			Range: expression.Range,
+		}
+	}
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               valueArgs,
+		existsSQL:               "1",
+		textEligibleSQL:         textEligibleSQL,
+		kind:                    fieldKindString,
+		alwaysNull:              input.alwaysNull,
+		materializeForPredicate: input.materializeForPredicate,
+	}, nil
 }
 
 func compileToNumberScalar(expression *plan.ScalarCallExpression, state compileState) (compiledScalar, error) {

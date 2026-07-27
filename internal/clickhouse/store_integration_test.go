@@ -1706,6 +1706,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testTextCaseAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testTextLengthAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testSubstringAgainstClickHouse(ctx, t, store, connection, indexTime)
+	testToStringAgainstClickHouse(ctx, t, store, connection, indexTime)
 }
 
 func testNumericBinAgainstClickHouse(
