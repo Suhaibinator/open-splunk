@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -57,12 +58,18 @@ func TestCompileEvalMVCountDynamicInputIsBoundOnceAndCountsNonNullMembers(t *tes
 		`index=gradethis | where mvcount(category)>1`,
 	)
 	for _, required := range []string{
-		`arrayElement(arrayMap((value, present) ->`,
+		`if(has("__os_field_names", ?), arrayElement(arrayMap(value ->`,
 		`dynamicType(value) = 'Array(Dynamic)'`,
 		`arrayCount(element -> dynamicType(element) != 'None'`,
 		`startsWith(dynamicType(value), 'Array(')`,
 		`nullIf(toUInt64(length(value)), toUInt64(0))`,
-		`'bytes/v1', 'timestamp/v1', 'duration/v1', 'decimal/v1'`,
+		`tag = 'bytes/v1'`,
+		`tag = 'timestamp/v1'`,
+		`tag = 'duration/v1'`,
+		`tag = 'decimal/v1'`,
+		`length(payload) <= ` + strconv.Itoa(MaximumMVCountTaggedPayloadBytes),
+		`'^[A-Za-z0-9+/]*$'`,
+		dynamicDecimalPayloadPattern,
 		`CAST(NULL AS Nullable(UInt64))`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
@@ -76,10 +83,31 @@ func TestCompileEvalMVCountDynamicInputIsBoundOnceAndCountsNonNullMembers(t *tes
 		`ARRAY JOIN`,
 		`arrayJoin(`,
 		`toString(value)`,
+		`value, present`,
+		`[toUInt8(has(`,
 	} {
 		if strings.Contains(compiled.SQL, forbidden) {
 			t.Fatalf("Dynamic mvcount retained forbidden branch %q:\n%s", forbidden, compiled.SQL)
 		}
+	}
+}
+
+func TestCompileEvalMVCountNumericDynamicSkipsRedundantBinding(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | eval count=mvcount(round(category)) | table count`,
+	)
+	if got := strings.Count(compiled.SQL, `arrayElement(arrayMap(value ->`); got != 1 {
+		t.Fatalf(
+			"numeric Dynamic mvcount binding layers = %d, want only round's binding:\n%s",
+			got,
+			compiled.SQL,
+		)
+	}
+	if !strings.Contains(compiled.SQL, `if(dynamicType(arrayElement(arrayMap(value ->`) {
+		t.Fatalf("numeric Dynamic mvcount did not inspect its input directly:\n%s", compiled.SQL)
 	}
 }
 
@@ -139,6 +167,10 @@ func TestCompileEvalMVCountClosedSchemaMissingInputIsNull(t *testing.T) {
 func TestCompileEvalMVCountNestedSQLGrowsLinearly(t *testing.T) {
 	t.Parallel()
 
+	single := compileSPL(
+		t,
+		`index=gradethis | eval count=mvcount(category) | table count`,
+	)
 	expression := "category"
 	for range 24 {
 		expression = "mvcount(" + expression + ")"
@@ -157,59 +189,20 @@ func TestCompileEvalMVCountNestedSQLGrowsLinearly(t *testing.T) {
 	if strings.Count(compiled.SQL, `"__os_fields"."category"`) != 1 {
 		t.Fatalf("nested Dynamic input was duplicated:\n%s", compiled.SQL)
 	}
+	if compiled.SQL != single.SQL {
+		t.Fatalf(
+			"nested mvcount did not collapse to one cardinality expression:\nsingle:\n%s\nnested:\n%s",
+			single.SQL,
+			compiled.SQL,
+		)
+	}
 }
 
 func TestCompileEvalMVCountRejectsForgedPlans(t *testing.T) {
 	t.Parallel()
-
-	base := buildPlan(t, `index=gradethis`)
-	value := func() plan.ScalarExpression {
-		return &plan.ScalarFieldExpression{
-			Field: plan.FieldRef{Name: "status", Path: []string{"status"}},
-		}
-	}
-	var typedNil *plan.ScalarLiteralExpression
-	cyclic := &plan.ScalarCallExpression{Function: plan.ScalarFunctionMVCount}
-	cyclic.Arguments = []plan.ScalarExpression{cyclic}
-	for _, test := range []struct {
-		name       string
-		expression plan.ScalarExpression
-		want       string
-	}{
-		{
-			name:       "zero arguments",
-			expression: &plan.ScalarCallExpression{Function: plan.ScalarFunctionMVCount},
-			want:       "expected one argument",
-		},
-		{
-			name: "two arguments",
-			expression: &plan.ScalarCallExpression{
-				Function:  plan.ScalarFunctionMVCount,
-				Arguments: []plan.ScalarExpression{value(), value()},
-			},
-			want: "expected one argument",
-		},
-		{
-			name: "typed nil value",
-			expression: &plan.ScalarCallExpression{
-				Function:  plan.ScalarFunctionMVCount,
-				Arguments: []plan.ScalarExpression{typedNil},
-			},
-			want: "missing scalar expression",
-		},
-		{
-			name:       "cyclic expression",
-			expression: cyclic,
-			want:       "contains a cycle",
-		},
-	} {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			err := compileForgedScalarAssignment(t, base, test.expression)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("Compile error = %v, want %q", err, test.want)
-			}
-		})
-	}
+	testUnaryScalarCompilerStructuralTrustBoundary(
+		t,
+		plan.ScalarFunctionMVCount,
+		plan.ScalarFunctionMVCount,
+	)
 }

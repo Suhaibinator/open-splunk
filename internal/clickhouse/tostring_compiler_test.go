@@ -193,50 +193,11 @@ func TestCompileEvalToStringRejectsForgedPlansButAcceptsBoolean(t *testing.T) {
 			Value: plan.Value{Kind: plan.ValueKindString, String: "value"},
 		}
 	}
-	var typedNil *plan.ScalarLiteralExpression
-	cyclic := &plan.ScalarCallExpression{Function: plan.ScalarFunctionToString}
-	cyclic.Arguments = []plan.ScalarExpression{cyclic}
-	for _, test := range []struct {
-		name       string
-		expression plan.ScalarExpression
-		want       string
-	}{
-		{
-			name:       "zero arguments",
-			expression: &plan.ScalarCallExpression{Function: plan.ScalarFunctionToString},
-			want:       "expected one argument",
-		},
-		{
-			name: "two arguments",
-			expression: &plan.ScalarCallExpression{
-				Function:  plan.ScalarFunctionToString,
-				Arguments: []plan.ScalarExpression{literal(), literal()},
-			},
-			want: "expected one argument",
-		},
-		{
-			name: "typed nil argument",
-			expression: &plan.ScalarCallExpression{
-				Function:  plan.ScalarFunctionToString,
-				Arguments: []plan.ScalarExpression{typedNil},
-			},
-			want: "missing scalar expression",
-		},
-		{
-			name:       "cyclic expression",
-			expression: cyclic,
-			want:       "contains a cycle",
-		},
-	} {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			err := compileForgedScalarAssignment(t, base, test.expression)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("Compile error = %v, want %q", err, test.want)
-			}
-		})
-	}
+	testUnaryScalarCompilerStructuralTrustBoundary(
+		t,
+		plan.ScalarFunctionToString,
+		plan.ScalarFunctionToString,
+	)
 
 	boolean := &plan.ScalarCallExpression{
 		Function:  plan.ScalarFunctionIsNull,

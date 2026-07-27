@@ -8,6 +8,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 )
 
 func testMVCountAgainstClickHouse(
@@ -193,6 +194,81 @@ func testMVCountAgainstClickHouse(
 	} {
 		if got != nil {
 			t.Fatalf("Dynamic absent %s count = %d, want null", name, *got)
+		}
+	}
+
+	visibilityCutoff, err := store.VisibilityCutoff(ctx)
+	if err != nil {
+		t.Fatalf("capture malformed mvcount visibility cutoff: %v", err)
+	}
+	typeKey := "\x00open_splunk_type"
+	valueKey := "\x00open_splunk_value"
+	malformedFixtures := []binEdgeRawDecimalEnvelope{
+		{
+			eventID:   "mvcount-malformed-bytes",
+			fieldType: eventfields.StoredValueTypeBytes,
+			envelope: map[string]string{
+				typeKey: "bytes/v1", valueKey: "A",
+			},
+		},
+		{
+			eventID:   "mvcount-malformed-timestamp",
+			fieldType: eventfields.StoredValueTypeTimestamp,
+			envelope: map[string]string{
+				typeKey: "timestamp/v1", valueKey: "not-a-timestamp",
+			},
+		},
+		{
+			eventID:   "mvcount-malformed-duration",
+			fieldType: eventfields.StoredValueTypeDuration,
+			envelope: map[string]string{
+				typeKey: "duration/v1", valueKey: "not-a-duration",
+			},
+		},
+		{
+			eventID:   "mvcount-malformed-decimal",
+			fieldType: eventfields.StoredValueTypeDecimal,
+			envelope: map[string]string{
+				typeKey: "decimal/v1", valueKey: "malformed-secret-1e",
+			},
+		},
+	}
+	for index := range malformedFixtures {
+		malformedFixtures[index].tenantID = "tenant"
+		malformedFixtures[index].indexName = "mvcount"
+		malformedFixtures[index].eventTime = indexTime
+		malformedFixtures[index].indexTime = indexTime
+		malformedFixtures[index].visibilitySeq = visibilityCutoff
+		malformedFixtures[index].fieldName = "malformed"
+	}
+	binEdgeInsertRawDecimalEnvelopes(
+		t,
+		ctx,
+		connection,
+		"mvcount-malformed-envelopes",
+		malformedFixtures,
+	)
+	for _, fixture := range malformedFixtures {
+		malformed := compile(
+			`index=mvcount event_id="` + fixture.eventID + `"` +
+				` | eval count=mvcount(malformed) | table count`,
+		)
+		var malformedCount *uint64
+		if err := connection.QueryRow(
+			queryContext,
+			malformed.SQL,
+			malformed.Args...,
+		).Scan(&malformedCount); err != nil {
+			t.Fatalf(
+				"execute %s mvcount: %v\nSQL: %s\nargs: %#v",
+				fixture.eventID,
+				err,
+				malformed.SQL,
+				malformed.Args,
+			)
+		}
+		if malformedCount != nil {
+			t.Fatalf("%s mvcount = %d, want null", fixture.eventID, *malformedCount)
 		}
 	}
 

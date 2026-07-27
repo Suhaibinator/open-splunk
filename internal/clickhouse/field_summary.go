@@ -531,7 +531,27 @@ type dynamicEnvelopeSQL struct {
 	decimalValid   string
 }
 
+type dynamicEnvelopePayloadValiditySQL struct {
+	bytesValid     string
+	timestampValid string
+	durationValid  string
+	decimalValid   string
+}
+
 const dynamicDecimalPayloadPattern = `'^(-|)(0|[1-9][0-9]*)([.][0-9]+|)([eE]([+]|-|)(0|[1-9][0-9]*)|)$'`
+
+func newDynamicEnvelopePayloadValiditySQL(payload string) dynamicEnvelopePayloadValiditySQL {
+	return dynamicEnvelopePayloadValiditySQL{
+		bytesValid: "match(" + payload +
+			", '^[A-Za-z0-9+/]*$') AND modulo(length(" + payload + "), 4) != 1",
+		timestampValid: "match(" + payload +
+			", '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]([.][0-9]+|)Z$')" +
+			" AND (position(" + payload + ", '.') = 0 OR length(" + payload +
+			") - position(" + payload + ", '.') - 1 BETWEEN 1 AND 9)",
+		durationValid: "match(" + payload + ", '^(-|)(0|[1-9][0-9]*):(-|)(0|[1-9][0-9]*)$')",
+		decimalValid:  "match(" + payload + ", " + dynamicDecimalPayloadPattern + ")",
+	}
+}
 
 func newDynamicEnvelopeSQL(valueSQL, typeSQL string) dynamicEnvelopeSQL {
 	mapSQL := "dynamicElement(" + valueSQL + ", 'Map(String, String)')"
@@ -542,19 +562,16 @@ func newDynamicEnvelopeSQL(valueSQL, typeSQL string) dynamicEnvelopeSQL {
 		" AND mapContains(" + mapSQL + ", " + typeKey + ")" +
 		" AND mapContains(" + mapSQL + ", " + valueKey + "))"
 	payload := mapSQL + "[" + valueKey + "]"
+	validity := newDynamicEnvelopePayloadValiditySQL(payload)
 	return dynamicEnvelopeSQL{
-		mapSQL:   mapSQL,
-		typeKey:  typeKey,
-		envelope: envelope,
-		payload:  payload,
-		bytesValid: "match(" + payload +
-			", '^[A-Za-z0-9+/]*$') AND modulo(length(" + payload + "), 4) != 1",
-		timestampValid: "match(" + payload +
-			", '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]([.][0-9]+|)Z$')" +
-			" AND (position(" + payload + ", '.') = 0 OR length(" + payload +
-			") - position(" + payload + ", '.') - 1 BETWEEN 1 AND 9)",
-		durationValid: "match(" + payload + ", '^(-|)(0|[1-9][0-9]*):(-|)(0|[1-9][0-9]*)$')",
-		decimalValid:  "match(" + payload + ", " + dynamicDecimalPayloadPattern + ")",
+		mapSQL:         mapSQL,
+		typeKey:        typeKey,
+		envelope:       envelope,
+		payload:        payload,
+		bytesValid:     validity.bytesValid,
+		timestampValid: validity.timestampValid,
+		durationValid:  validity.durationValid,
+		decimalValid:   validity.decimalValid,
 	}
 }
 

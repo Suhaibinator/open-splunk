@@ -96,6 +96,11 @@ const (
 	// maxCompiledMVCountScalarSQLBytes independently bounds value-cardinality
 	// expressions. Dynamic input is bound once, so nested calls grow linearly.
 	maxCompiledMVCountScalarSQLBytes = 64 << 10
+	// MaximumMVCountTaggedPayloadBytes mirrors the hard ingestion ceiling for
+	// one complete event. It keeps adversarial raw storage from driving
+	// unbounded regular-expression work while admitting every envelope that
+	// could have passed the supported ingestion path.
+	MaximumMVCountTaggedPayloadBytes = 1 << 20
 	// ClickHouse accepts UInt64 substring arguments syntactically but treats
 	// values above MaxInt64 as signed internally. Wider literals use the
 	// Int128 interval fallback instead of a native fast path.
@@ -3113,6 +3118,7 @@ type fieldState struct {
 	textEligibleSQL         string
 	dynamicDomain           dynamicScalarDomain
 	numericIntegral         bool
+	mvCountOneOrNull        bool
 	dynamicTypeSQL          string
 	storedTypeSQL           string
 	existsSQL               string
@@ -3614,6 +3620,7 @@ type compiledScalar struct {
 	textEligibleSQL         string
 	dynamicDomain           dynamicScalarDomain
 	numericIntegral         bool
+	mvCountOneOrNull        bool
 	dynamicTypeSQL          string
 	storedTypeSQL           string
 	descendantSQL           string
@@ -5855,15 +5862,19 @@ func compileMVCountScalar(
 	if err != nil {
 		return compiledScalar{}, err
 	}
+	if input.mvCountOneOrNull {
+		return input, nil
+	}
 	nullUInt64 := "CAST(NULL AS Nullable(UInt64))"
 	if input.alwaysNull {
 		return compiledScalar{
-			valueSQL:        nullUInt64,
-			existsSQL:       "1",
-			kind:            fieldKindNumber,
-			numberType:      "UInt64",
-			numericIntegral: true,
-			alwaysNull:      true,
+			valueSQL:         nullUInt64,
+			existsSQL:        "1",
+			kind:             fieldKindNumber,
+			numberType:       "UInt64",
+			numericIntegral:  true,
+			mvCountOneOrNull: true,
+			alwaysNull:       true,
 		}, nil
 	}
 
@@ -5874,27 +5885,38 @@ func compileMVCountScalar(
 		valueSQL = "nullIf(toUInt64(length(" + input.valueSQL +
 			")), toUInt64(0))"
 	case fieldKindDynamic:
-		typeSQL := "dynamicType(value)"
+		existsSQL := input.existsSQL
+		if existsSQL == "" {
+			existsSQL = "1"
+		}
 		body := ""
 		switch input.dynamicDomain {
 		case dynamicScalarDomainText:
+			typeSQL := "dynamicType(value)"
 			body = "multiIf(" +
 				typeSQL + " = 'String', toUInt64(1), " +
 				typeSQL + " = 'Array(String)', nullIf(toUInt64(length(" +
 				"dynamicElement(value, 'Array(String)'))), toUInt64(0)), " +
 				nullUInt64 + ")"
 		case dynamicScalarDomainNumeric:
-			body = "if(" + typeSQL + " = 'None', " +
+			body = "if(dynamicType(" + input.valueSQL + ") = 'None', " +
 				nullUInt64 + ", toUInt64(1))"
+			if existsSQL == "1" {
+				valueSQL = body
+			} else {
+				valueSQL = "if(" + existsSQL + ", " + body + ", " + nullUInt64 + ")"
+				valueArgs = append(append([]any(nil), input.existsArgs...), input.valueArgs...)
+			}
 		default:
+			typeSQL := "dynamicType(value)"
 			dynamicValue := compiledScalar{
 				valueSQL:       "value",
 				dynamicTypeSQL: typeSQL,
 				kind:           fieldKindDynamic,
 			}
-			dynamicCount := "nullIf(toUInt64(arrayCount(element -> " +
-				"dynamicType(element) != 'None', dynamicElement(value, " +
-				"'Array(Dynamic)'))), toUInt64(0))"
+			dynamicCount := "nullIf(" +
+				dynamicNonNullArrayCardinalitySQL("value") +
+				", toUInt64(0))"
 			otherArrayCount := "nullIf(toUInt64(length(value)), toUInt64(0))"
 			scalar := "(" +
 				typeSQL + " = 'String' OR " +
@@ -5909,14 +5931,16 @@ func compileMVCountScalar(
 				scalar + ", toUInt64(1), " +
 				nullUInt64 + ")"
 		}
-		existsSQL := input.existsSQL
-		if existsSQL == "" {
-			existsSQL = "1"
+		if input.dynamicDomain != dynamicScalarDomainNumeric {
+			bound := "arrayElement(arrayMap(value -> " + body +
+				", [" + input.valueSQL + "]), 1)"
+			if existsSQL == "1" {
+				valueSQL = bound
+			} else {
+				valueSQL = "if(" + existsSQL + ", " + bound + ", " + nullUInt64 + ")"
+				valueArgs = append(append([]any(nil), input.existsArgs...), input.valueArgs...)
+			}
 		}
-		valueSQL = "arrayElement(arrayMap((value, present) -> if(present, " +
-			body + ", " + nullUInt64 + "), [" + input.valueSQL +
-			"], [toUInt8(" + existsSQL + ")]), 1)"
-		valueArgs = append(valueArgs, input.existsArgs...)
 	case fieldKindInvalid:
 		valueSQL = nullUInt64
 		valueArgs = nil
@@ -5941,6 +5965,7 @@ func compileMVCountScalar(
 		kind:                    fieldKindNumber,
 		numberType:              "UInt64",
 		numericIntegral:         true,
+		mvCountOneOrNull:        true,
 		materializeForPredicate: input.materializeForPredicate,
 	}, nil
 }
@@ -6101,15 +6126,16 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 		existsSQL = "notEmpty(" + quoteIdentifier(output.Name) + ")"
 	}
 	field := fieldState{
-		valueSQL:        quoteIdentifier(output.Name),
-		textEligibleSQL: value.textEligibleSQL,
-		dynamicDomain:   value.dynamicDomain,
-		numericIntegral: value.numericIntegral,
-		existsSQL:       existsSQL,
-		descendantSQL:   value.descendantSQL,
-		descendantArgs:  append([]any(nil), value.descendantArgs...),
-		storedTypeSQL:   value.storedTypeSQL,
-		kind:            value.kind,
+		valueSQL:         quoteIdentifier(output.Name),
+		textEligibleSQL:  value.textEligibleSQL,
+		dynamicDomain:    value.dynamicDomain,
+		numericIntegral:  value.numericIntegral,
+		mvCountOneOrNull: value.mvCountOneOrNull,
+		existsSQL:        existsSQL,
+		descendantSQL:    value.descendantSQL,
+		descendantArgs:   append([]any(nil), value.descendantArgs...),
+		storedTypeSQL:    value.storedTypeSQL,
+		kind:             value.kind,
 		// An eval output named index is calculated data, not the physical scan
 		// selector. It follows its expression type and ordinary comparison rules.
 		caseSensitive:           false,
@@ -7486,29 +7512,58 @@ func dynamicExactIntegerSQL(value compiledScalar) string {
 }
 
 func dynamicTaggedDecimalCondition(value compiledScalar) string {
-	return dynamicTaggedEnvelopeCondition(value, "= 'decimal/v1'")
+	return dynamicTaggedEnvelopeCondition(value, "decimal/v1")
 }
 
 func dynamicTaggedScalarEnvelopeCondition(value compiledScalar) string {
-	return dynamicTaggedEnvelopeCondition(
-		value,
-		"IN ('bytes/v1', 'timestamp/v1', 'duration/v1', 'decimal/v1')",
-	)
+	limit := strconv.Itoa(MaximumMVCountTaggedPayloadBytes)
+	boundedPayload := "if(length(payload) <= " + limit +
+		", payload, CAST('' AS String))"
+	validity := newDynamicEnvelopePayloadValiditySQL(boundedPayload)
+	typeKey := "concat(char(0), 'open_splunk_type')"
+	valueKey := "concat(char(0), 'open_splunk_value')"
+	payloadValid := "length(payload) <= " + limit + " AND multiIf(" +
+		"tag = 'bytes/v1', " + validity.bytesValid + ", " +
+		"tag = 'timestamp/v1', " + validity.timestampValid + ", " +
+		"tag = 'duration/v1', " + validity.durationValid + ", " +
+		"tag = 'decimal/v1', " + validity.decimalValid + ", 0)"
+	tagged := "arrayElement(arrayMap(map -> (" +
+		"length(map) = 2" +
+		" AND mapContains(map, " + typeKey + ")" +
+		" AND mapContains(map, " + valueKey + ")" +
+		" AND arrayElement(arrayMap((tag, payload) -> (" + payloadValid +
+		"), [map[" + typeKey + "]], [map[" + valueKey + "]]), 1)" +
+		"), [dynamicElement(" + value.valueSQL + ", 'Map(String, String)')]), 1)"
+	return "(" + dynamicScalarTypeSQL(value) + " = 'Map(String, String)' AND " + tagged + ")"
 }
 
 func dynamicTaggedEnvelopeCondition(
 	value compiledScalar,
-	typePredicate string,
+	tags ...string,
 ) string {
+	if len(tags) == 0 {
+		return "0"
+	}
 	typeSQL := dynamicScalarTypeSQL(value)
 	mapSQL := dynamicTaggedMapSQL(value)
 	typeKey := "concat(char(0), 'open_splunk_type')"
 	valueKey := "concat(char(0), 'open_splunk_value')"
+	tagLiterals := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		// Tags are compiler-owned constants, but quote them here so the shared
+		// helper remains safe if a future storage tag contains punctuation.
+		escaped := strings.ReplaceAll(strings.ReplaceAll(tag, `\`, `\\`), `'`, `\'`)
+		tagLiterals = append(tagLiterals, "'"+escaped+"'")
+	}
+	tagPredicate := "= " + tagLiterals[0]
+	if len(tagLiterals) > 1 {
+		tagPredicate = "IN (" + strings.Join(tagLiterals, ", ") + ")"
+	}
 	return "(" + typeSQL + " = 'Map(String, String)'" +
 		" AND length(" + mapSQL + ") = 2" +
 		" AND mapContains(" + mapSQL + ", " + typeKey + ")" +
 		" AND mapContains(" + mapSQL + ", " + valueKey + ")" +
-		" AND " + mapSQL + "[" + typeKey + "] " + typePredicate + ")"
+		" AND " + mapSQL + "[" + typeKey + "] " + tagPredicate + ")"
 }
 
 func dynamicTaggedDecimalText(value compiledScalar) (condition, payload string) {
@@ -7912,6 +7967,7 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		textEligibleSQL:         field.textEligibleSQL,
 		dynamicDomain:           field.dynamicDomain,
 		numericIntegral:         field.numericIntegral,
+		mvCountOneOrNull:        field.mvCountOneOrNull,
 		dynamicTypeSQL:          field.dynamicTypeSQL,
 		storedTypeSQL:           field.storedTypeSQL,
 		descendantSQL:           field.descendantSQL,
@@ -8129,6 +8185,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 			valueSQL: publicName, textEligibleSQL: compiled.textEligibleSQL,
 			dynamicDomain:           compiled.dynamicDomain,
 			numericIntegral:         compiled.numericIntegral,
+			mvCountOneOrNull:        compiled.mvCountOneOrNull,
 			dynamicTypeSQL:          compiled.dynamicTypeSQL,
 			storedTypeSQL:           compiled.storedTypeSQL,
 			existsSQL:               rewriteExistenceForProjection(compiled, name),
@@ -9198,8 +9255,7 @@ func countValueInputSQL(field fieldState) (string, []any) {
 	}
 
 	typeSQL := dynamicTypeExpression(field)
-	arrayCount := "toUInt64(arrayCount(element -> dynamicType(element) != 'None', " +
-		"dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)')))"
+	arrayCount := dynamicNonNullArrayCardinalitySQL(field.valueSQL)
 	descendantCount := "toUInt64(0)"
 	if field.descendantSQL != "" {
 		// Non-empty typed objects are stored as flattened leaves. The object
@@ -9212,6 +9268,11 @@ func countValueInputSQL(field fieldState) (string, []any) {
 	return "if((" + existsSQL + ") AND " + typeSQL + " != 'None', " +
 		"if(" + typeSQL + " = 'Array(Dynamic)', " + arrayCount + ", toUInt64(1)), " +
 		descendantCount + ")", args
+}
+
+func dynamicNonNullArrayCardinalitySQL(valueSQL string) string {
+	return "toUInt64(arrayCount(element -> dynamicType(element) != 'None', " +
+		"dynamicElement(" + valueSQL + ", 'Array(Dynamic)')))"
 }
 
 func percentileInputSQL(field fieldState) string {
@@ -10115,13 +10176,13 @@ func finiteDynamicFloatOrNullSQL(valueSQL string) string {
 func statsByScalarExpressions(field fieldState) (supported, lexical string) {
 	typeSQL := dynamicTypeExpression(field)
 	mapSQL := "dynamicElement(" + field.valueSQL + ", 'Map(String, String)')"
-	typeKey := "concat(char(0), 'open_splunk_type')"
 	valueKey := "concat(char(0), 'open_splunk_value')"
-	extended := "(" + typeSQL + " = 'Map(String, String)'" +
-		" AND length(" + mapSQL + ") = 2" +
-		" AND mapContains(" + mapSQL + ", " + typeKey + ")" +
-		" AND mapContains(" + mapSQL + ", " + valueKey + ")" +
-		" AND " + mapSQL + "[" + typeKey + "] IN ('bytes/v1', 'timestamp/v1', 'duration/v1', 'decimal/v1'))"
+	value := compiledScalar{
+		valueSQL:       field.valueSQL,
+		dynamicTypeSQL: typeSQL,
+		kind:           fieldKindDynamic,
+	}
+	extended := dynamicTaggedScalarEnvelopeCondition(value)
 	// None is excluded deliberately. Missing and explicit-null leaves are
 	// removed before aggregation, while a flattened object parent reads as None
 	// at its literal path and must set the unsupported-container flag.

@@ -13,6 +13,41 @@ func testUnaryScalarCompilerTrustBoundary(
 	secondFunction plan.ScalarFunction,
 ) {
 	t.Helper()
+	testUnaryScalarCompilerStructuralTrustBoundary(t, firstFunction, secondFunction)
+
+	base := buildPlan(t, `index=gradethis`)
+	literal := func() plan.ScalarExpression {
+		return &plan.ScalarLiteralExpression{
+			Value: plan.Value{Kind: plan.ValueKindString, String: "value"},
+		}
+	}
+
+	boolean := &plan.ScalarCallExpression{
+		Function:  plan.ScalarFunctionIsNull,
+		Arguments: []plan.ScalarExpression{literal()},
+	}
+	t.Run("Boolean null predicate", func(t *testing.T) {
+		t.Parallel()
+		err := compileForgedScalarAssignment(
+			t,
+			base,
+			&plan.ScalarCallExpression{
+				Function:  secondFunction,
+				Arguments: []plan.ScalarExpression{boolean},
+			},
+		)
+		if err == nil || !strings.Contains(err.Error(), "cannot consume a Boolean") {
+			t.Fatalf("Compile error = %v, want %q", err, "cannot consume a Boolean")
+		}
+	})
+}
+
+func testUnaryScalarCompilerStructuralTrustBoundary(
+	t *testing.T,
+	firstFunction plan.ScalarFunction,
+	secondFunction plan.ScalarFunction,
+) {
+	t.Helper()
 
 	base := buildPlan(t, `index=gradethis`)
 	literal := func() plan.ScalarExpression {
@@ -22,10 +57,6 @@ func testUnaryScalarCompilerTrustBoundary(
 	}
 
 	var typedNil *plan.ScalarLiteralExpression
-	boolean := &plan.ScalarCallExpression{
-		Function:  plan.ScalarFunctionIsNull,
-		Arguments: []plan.ScalarExpression{literal()},
-	}
 	cyclic := &plan.ScalarCallExpression{Function: firstFunction}
 	cyclic.Arguments = []plan.ScalarExpression{cyclic}
 	for _, test := range []struct {
@@ -53,14 +84,6 @@ func testUnaryScalarCompilerTrustBoundary(
 				Arguments: []plan.ScalarExpression{typedNil},
 			},
 			want: "missing scalar expression",
-		},
-		{
-			name: "Boolean null predicate",
-			expression: &plan.ScalarCallExpression{
-				Function:  secondFunction,
-				Arguments: []plan.ScalarExpression{boolean},
-			},
-			want: "cannot consume a Boolean",
 		},
 		{
 			name:       "cyclic expression",
