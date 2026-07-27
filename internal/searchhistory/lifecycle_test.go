@@ -33,13 +33,24 @@ func TestBeginAttemptIsDurableIdempotentScopedAndNotYetVisible(t *testing.T) {
 	database, store := openTestStore(t, Options{})
 	ctx := context.Background()
 	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
-	pending := pendingHistoryEntry("job-pending", "  index=main | head 1\n", time.Now().UTC())
+	// Keep a deliberately sub-microsecond resolved bound. created_at is
+	// canonicalized to SQLite's microsecond precision, while resolved search
+	// bounds retain nanoseconds as part of the immutable search intent.
+	created := time.Date(2026, time.July, 27, 12, 34, 56, 123_456_789, time.UTC)
+	pending := pendingHistoryEntry("job-pending", "  index=main | head 1\n", created)
+	original := proto.Clone(pending).(*opensplunkv1.SearchHistoryEntry)
 	started, err := store.BeginAttempt(ctx, scope, pending)
 	if err != nil {
 		t.Fatalf("BeginAttempt() error = %v", err)
 	}
 	if started.FinalState != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED || started.FinishedAt != nil || started.Definition.Spl != pending.Definition.Spl {
 		t.Fatalf("BeginAttempt() = %+v", started)
+	}
+	if got, want := started.CreatedAt.AsTime(), time.UnixMicro(created.UnixMicro()).UTC(); !got.Equal(want) {
+		t.Fatalf("created_at = %s, want microsecond-normalized %s", got, want)
+	}
+	if got := started.ResolvedTimeRange.Latest.AsTime(); !got.Equal(created) {
+		t.Fatalf("resolved latest = %s, want nanosecond-preserving %s", got, created)
 	}
 	pending.Definition.Spl = "mutated"
 	started.Definition.Spl = "mutated result"
@@ -57,7 +68,6 @@ func TestBeginAttemptIsDurableIdempotentScopedAndNotYetVisible(t *testing.T) {
 		t.Fatalf("Get(pending) error = %v, want ErrNotFound", err)
 	}
 
-	original := pendingHistoryEntry("job-pending", "  index=main | head 1\n", started.CreatedAt.AsTime())
 	if _, err := store.BeginAttempt(ctx, scope, original); err != nil {
 		t.Fatalf("idempotent BeginAttempt() error = %v", err)
 	}
