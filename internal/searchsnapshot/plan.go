@@ -26,6 +26,7 @@ func BuildPlan(job searchjobs.Job) (*plan.Query, error) {
 		effectiveIndexes: job.EffectiveIndexes,
 		earliest:         job.Earliest,
 		latest:           job.Latest,
+		searchStart:      job.CreatedAt,
 		indexTimeCutoff:  job.IndexTimeCutoff,
 		visibilityCutoff: job.VisibilityCutoff,
 	})
@@ -40,6 +41,7 @@ func BuildExecutionPlan(snapshot searchjobs.ExecutionSnapshot) (*plan.Query, err
 		effectiveIndexes: snapshot.EffectiveIndexes,
 		earliest:         snapshot.Earliest,
 		latest:           snapshot.Latest,
+		searchStart:      snapshot.SearchStart,
 		indexTimeCutoff:  snapshot.IndexTimeCutoff,
 		visibilityCutoff: snapshot.VisibilityCutoff,
 	})
@@ -51,6 +53,7 @@ type planSnapshot struct {
 	effectiveIndexes []string
 	earliest         time.Time
 	latest           time.Time
+	searchStart      time.Time
 	indexTimeCutoff  time.Time
 	visibilityCutoff uint64
 }
@@ -68,6 +71,7 @@ func buildPlan(snapshot planSnapshot) (*plan.Query, error) {
 		RequestedIndexes:  slices.Clone(indexes),
 		Earliest:          snapshot.earliest,
 		Latest:            snapshot.latest,
+		SearchStart:       snapshot.searchStart,
 		IndexTimeCutoff:   snapshot.indexTimeCutoff,
 		VisibilityCutoff:  &visibilityCutoff,
 	})

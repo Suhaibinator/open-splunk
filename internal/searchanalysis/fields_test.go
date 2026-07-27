@@ -1276,6 +1276,7 @@ func fieldTestSnapshot(id string) searchjobs.ExecutionSnapshot {
 		EffectiveIndexes: []string{"main"},
 		Earliest:         time.Date(2026, 7, 21, 8, 0, 0, 0, time.UTC),
 		Latest:           time.Date(2026, 7, 21, 9, 0, 0, 0, time.UTC),
+		SearchStart:      time.Date(2026, 7, 21, 9, 0, 59, 0, time.UTC),
 		IndexTimeCutoff:  time.Date(2026, 7, 21, 9, 1, 0, 0, time.UTC),
 		VisibilityCutoff: 19,
 		FinishedAt:       time.Date(2026, 7, 21, 9, 1, 1, 0, time.UTC),

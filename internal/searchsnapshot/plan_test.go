@@ -25,6 +25,9 @@ func TestBuildPlanUsesOnlyImmutableEffectiveScope(t *testing.T) {
 	if !slices.Equal(logical.EffectiveIndexes, wantIndexes) {
 		t.Fatalf("effective indexes = %v, want %v", logical.EffectiveIndexes, wantIndexes)
 	}
+	if !logical.SearchStart.Equal(job.CreatedAt) {
+		t.Fatalf("search start = %v, want job creation time %v", logical.SearchStart, job.CreatedAt)
+	}
 	scan, ok := logical.Operators[0].(*plan.Scan)
 	if !ok {
 		t.Fatalf("first operator = %T, want *plan.Scan", logical.Operators[0])
@@ -69,6 +72,7 @@ func TestBuildExecutionPlanMatchesCompletedJobPlan(t *testing.T) {
 		EffectiveIndexes: slices.Clone(job.EffectiveIndexes),
 		Earliest:         job.Earliest,
 		Latest:           job.Latest,
+		SearchStart:      job.CreatedAt,
 		IndexTimeCutoff:  job.IndexTimeCutoff,
 		VisibilityCutoff: job.VisibilityCutoff,
 	})
@@ -78,7 +82,8 @@ func TestBuildExecutionPlanMatchesCompletedJobPlan(t *testing.T) {
 	jobScan := fromJob.Operators[0].(*plan.Scan)
 	snapshotScan := fromSnapshot.Operators[0].(*plan.Scan)
 	if !slices.Equal(fromSnapshot.EffectiveIndexes, fromJob.EffectiveIndexes) ||
-		!reflect.DeepEqual(snapshotScan, jobScan) {
+		!reflect.DeepEqual(snapshotScan, jobScan) ||
+		!fromSnapshot.SearchStart.Equal(fromJob.SearchStart) {
 		t.Fatalf("execution snapshot plan differs: job=%+v snapshot=%+v", fromJob, fromSnapshot)
 	}
 }
@@ -124,6 +129,7 @@ func testJob() searchjobs.Job {
 		Latest:           time.Date(2026, 7, 21, 9, 0, 0, 456, time.UTC),
 		IndexTimeCutoff:  time.Date(2026, 7, 21, 9, 1, 0, 789, time.UTC),
 		VisibilityCutoff: 42,
+		CreatedAt:        time.Date(2026, 7, 21, 9, 0, 59, 123456789, time.UTC),
 		State:            searchjobs.StateCompleted,
 	}
 }

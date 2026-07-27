@@ -528,6 +528,7 @@ func runtimeFieldExecutionSnapshot() searchjobs.ExecutionSnapshot {
 		EffectiveIndexes: []string{"main"},
 		Earliest:         time.Date(2026, 7, 22, 1, 0, 0, 0, time.UTC),
 		Latest:           time.Date(2026, 7, 22, 2, 0, 0, 0, time.UTC),
+		SearchStart:      time.Date(2026, 7, 22, 2, 0, 59, 0, time.UTC),
 		IndexTimeCutoff:  time.Date(2026, 7, 22, 2, 1, 0, 0, time.UTC),
 		VisibilityCutoff: 1,
 		FinishedAt:       time.Date(2026, 7, 22, 2, 2, 0, 0, time.UTC),

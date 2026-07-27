@@ -348,6 +348,7 @@ func queryIntegrationRetentionPlan(
 		RequestedIndexes:  []string{indexName},
 		Earliest:          eventTime,
 		Latest:            eventTime.Add(time.Second),
+		SearchStart:       cutoff.Add(-time.Second),
 		IndexTimeCutoff:   cutoff,
 		VisibilityCutoff:  &visibility,
 	})

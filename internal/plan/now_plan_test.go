@@ -2,6 +2,7 @@ package plan
 
 import (
 	"testing"
+	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
@@ -9,15 +10,23 @@ import (
 func TestBuildNowPreservesTypedScalarIR(t *testing.T) {
 	t.Parallel()
 
+	scope := testScope([]string{"gradethis"}, nil)
+	scope.SearchStart = time.Date(2026, time.July, 27, 19, 20, 21, 987654321, time.FixedZone("fixture", -7*60*60))
 	logical, err := Build(
 		mustParse(
 			t,
 			`index=gradethis | eval started=now(), rendered=tostring(now()) | where now()=started`,
 		),
-		testScope([]string{"gradethis"}, nil),
+		scope,
 	)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
+	}
+	if !logical.SearchStart.Equal(scope.SearchStart.UTC()) {
+		t.Fatalf("SearchStart = %v, want %v", logical.SearchStart, scope.SearchStart.UTC())
+	}
+	if logical.SearchStart.Equal(scope.IndexTimeCutoff) {
+		t.Fatal("SearchStart is coupled to IndexTimeCutoff")
 	}
 	extend := logical.Operators[len(logical.Operators)-2].(*Extend)
 	started := extend.Assignments[0].Expression.(*ScalarCallExpression)
@@ -34,6 +43,15 @@ func TestBuildNowPreservesTypedScalarIR(t *testing.T) {
 	if comparison.Left.(*ScalarCallExpression).Function != ScalarFunctionNow {
 		t.Fatalf("filter = %#v", filter.Expression)
 	}
+}
+
+func TestBuildNowRequiresExplicitSearchStart(t *testing.T) {
+	t.Parallel()
+
+	scope := testScope([]string{"gradethis"}, nil)
+	scope.SearchStart = time.Time{}
+	_, err := Build(mustParse(t, `index=gradethis | eval started=now()`), scope)
+	assertDiagnosticCode(t, err, "SPL_INVALID_SEARCH_START")
 }
 
 func TestBuildNowRejectsForgedArgumentsAndInvalidEnum(t *testing.T) {

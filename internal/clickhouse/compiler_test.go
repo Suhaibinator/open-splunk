@@ -108,6 +108,7 @@ func TestCompileTimeBoundsUseExplicitDateTime64StringParameters(t *testing.T) {
 		AuthorizedIndexes: []string{"gradethis"},
 		Earliest:          earliest,
 		Latest:            latest,
+		SearchStart:       cutoff.Add(-time.Second),
 		IndexTimeCutoff:   cutoff,
 		VisibilityCutoff:  &visibility,
 	})
@@ -1095,6 +1096,7 @@ func TestCompileTimeBinUsesMathematicalPreEpochFloor(t *testing.T) {
 		AuthorizedIndexes: []string{"gradethis"},
 		Earliest:          time.Date(1969, 12, 31, 23, 59, 59, 999999999, time.UTC),
 		Latest:            time.Date(1970, 1, 1, 0, 0, 0, 1, time.UTC),
+		SearchStart:       time.Date(2026, 7, 21, 23, 59, 59, 0, time.UTC),
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
 		VisibilityCutoff:  &visibility,
 	})
@@ -1125,6 +1127,7 @@ func TestCompileTimeBinRejectsBucketBeforeDateTime64Minimum(t *testing.T) {
 		AuthorizedIndexes: []string{"gradethis"},
 		Earliest:          earliest,
 		Latest:            earliest.Add(time.Second),
+		SearchStart:       time.Date(2026, 7, 21, 23, 59, 59, 0, time.UTC),
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
 		VisibilityCutoff:  &visibility,
 	})
@@ -1263,6 +1266,7 @@ func TestCompileTimechartUsesMathematicalPreEpochFloor(t *testing.T) {
 		AuthorizedIndexes: []string{"gradethis"},
 		Earliest:          time.Date(1969, 12, 31, 23, 59, 59, 999999999, time.UTC),
 		Latest:            time.Date(1970, 1, 1, 0, 0, 0, 1, time.UTC),
+		SearchStart:       time.Date(2026, 7, 21, 23, 59, 59, 0, time.UTC),
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
 		VisibilityCutoff:  &visibility,
 	})
@@ -1312,6 +1316,7 @@ func TestCompileTimechartKeepsAlignedBucketBeforeDateTime64MinimumAsInteger(t *t
 		AuthorizedIndexes: []string{"gradethis"},
 		Earliest:          earliest,
 		Latest:            earliest.Add(time.Second),
+		SearchStart:       time.Date(2026, 7, 21, 23, 59, 59, 0, time.UTC),
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
 		VisibilityCutoff:  &visibility,
 	})
@@ -4543,7 +4548,12 @@ func TestAnalysisFinalizerMustReportCompiledRelationalDepth(t *testing.T) {
 
 func compileSPL(t *testing.T, source string) CompiledQuery {
 	t.Helper()
-	logical := buildPlan(t, source)
+	return compileSPLWithScope(t, source, testChartScope())
+}
+
+func compileSPLWithScope(t *testing.T, source string, scope plan.Scope) CompiledQuery {
+	t.Helper()
+	logical := buildPlanWithScope(t, source, scope)
 	compiled, err := (Compiler{}).Compile(logical)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
@@ -4553,11 +4563,16 @@ func compileSPL(t *testing.T, source string) CompiledQuery {
 
 func buildPlan(t *testing.T, source string) *plan.Query {
 	t.Helper()
+	return buildPlanWithScope(t, source, testChartScope())
+}
+
+func buildPlanWithScope(t *testing.T, source string, scope plan.Scope) *plan.Query {
+	t.Helper()
 	parsed, err := spl.Parse(source)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	logical, err := plan.Build(parsed, testChartScope())
+	logical, err := plan.Build(parsed, scope)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -4570,6 +4585,7 @@ func testChartScope() plan.Scope {
 		AuthorizedIndexes: []string{"gradethis"},
 		Earliest:          time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC),
 		Latest:            time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
+		SearchStart:       time.Date(2026, 7, 22, 0, 0, 0, 500_000_000, time.UTC),
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 1, 0, time.UTC),
 		VisibilityCutoff:  uint64Pointer(73),
 	}

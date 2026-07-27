@@ -589,6 +589,7 @@ func TestChartBreakPipelineNarrowsIndexScopeAndStopsAtTheChart(t *testing.T) {
 		AuthorizedIndexes: []string{"gradethis", "internal"},
 		Earliest:          testChartScope().Earliest,
 		Latest:            testChartScope().Latest,
+		SearchStart:       testChartScope().SearchStart,
 		IndexTimeCutoff:   testChartScope().IndexTimeCutoff,
 		VisibilityCutoff:  testChartScope().VisibilityCutoff,
 	}

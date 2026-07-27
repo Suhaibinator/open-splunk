@@ -1402,6 +1402,7 @@ func (manager *Manager) run(entry *jobEntry) {
 		RequestedIndexes:  cloneStrings(entry.job.RequestedIndexes),
 		Earliest:          entry.job.Earliest,
 		Latest:            entry.job.Latest,
+		SearchStart:       entry.job.CreatedAt,
 		IndexTimeCutoff:   entry.job.IndexTimeCutoff,
 		VisibilityCutoff:  &visibilityCutoff,
 	}

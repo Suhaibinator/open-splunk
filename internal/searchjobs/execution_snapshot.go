@@ -18,6 +18,7 @@ type ExecutionSnapshot struct {
 	EffectiveIndexes []string
 	Earliest         time.Time
 	Latest           time.Time
+	SearchStart      time.Time
 	IndexTimeCutoff  time.Time
 	VisibilityCutoff uint64
 	FinishedAt       time.Time
@@ -85,6 +86,7 @@ func (manager *Manager) CompletedExecutionSnapshotFor(ctx context.Context, acces
 		EffectiveIndexes: cloneStrings(entry.job.EffectiveIndexes),
 		Earliest:         entry.job.Earliest,
 		Latest:           entry.job.Latest,
+		SearchStart:      entry.job.CreatedAt,
 		IndexTimeCutoff:  entry.job.IndexTimeCutoff,
 		VisibilityCutoff: entry.job.VisibilityCutoff,
 		FinishedAt:       entry.job.FinishedAt,

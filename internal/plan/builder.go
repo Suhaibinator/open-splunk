@@ -56,7 +56,10 @@ type Scope struct {
 	RequestedIndexes  []string
 	Earliest          time.Time
 	Latest            time.Time
-	IndexTimeCutoff   time.Time
+	// SearchStart is the immutable server clock value captured when the search
+	// is admitted. It must not be derived from either storage cutoff below.
+	SearchStart     time.Time
+	IndexTimeCutoff time.Time
 	// VisibilityCutoff must be resolved by the storage writer when the search
 	// job starts. A pointer distinguishes an empty-table cutoff of zero from a
 	// caller that forgot to establish an immutable snapshot.
@@ -81,6 +84,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 	}
 	earliest := scope.Earliest.UTC()
 	latest := scope.Latest.UTC()
+	searchStart := scope.SearchStart.UTC()
 	cutoff := scope.IndexTimeCutoff.UTC()
 	if earliest.IsZero() || latest.IsZero() || !earliest.Before(latest) {
 		return nil, &Diagnostic{Code: "SPL_INVALID_TIME_RANGE", Message: "time range must be a non-empty half-open interval", Range: query.Range}
@@ -88,11 +92,14 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 	if cutoff.IsZero() {
 		return nil, &Diagnostic{Code: "SPL_INVALID_TIME_RANGE", Message: "index-time cutoff is required", Range: query.Range}
 	}
+	if searchStart.IsZero() {
+		return nil, &Diagnostic{Code: "SPL_INVALID_SEARCH_START", Message: "search-start anchor is required", Range: query.Range}
+	}
 	if scope.VisibilityCutoff == nil {
 		return nil, &Diagnostic{Code: "SPL_INVALID_SNAPSHOT", Message: "storage visibility cutoff is required", Range: query.Range}
 	}
 
-	result := &Query{EffectiveIndexes: indexes}
+	result := &Query{EffectiveIndexes: indexes, SearchStart: searchStart}
 	result.Operators = append(result.Operators, &Scan{
 		TenantID:         scope.TenantID,
 		Indexes:          append([]string(nil), indexes...),
@@ -1876,22 +1883,20 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			}
 		}
 		expectedArguments := 0
+		hasExactArity := false
 		functionName := ""
 		switch expression.Function {
 		case spl.ScalarFunctionNow:
+			expectedArguments = 0
+			hasExactArity = true
 			functionName = "now"
-			if len(expression.Arguments) != 0 {
-				return nil, &Diagnostic{
-					Code:    "SPL_INVALID_EVAL_ARITY",
-					Message: "now requires no arguments",
-					Range:   expression.Range,
-				}
-			}
 		case spl.ScalarFunctionToNumber:
 			expectedArguments = 1
+			hasExactArity = true
 			functionName = "tonumber"
 		case spl.ScalarFunctionToString:
 			expectedArguments = 1
+			hasExactArity = true
 			functionName = "tostring"
 		case spl.ScalarFunctionRound:
 			functionName = "round"
@@ -1904,27 +1909,35 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			}
 		case spl.ScalarFunctionCeil:
 			expectedArguments = 1
+			hasExactArity = true
 			functionName = "ceil"
 		case spl.ScalarFunctionFloor:
 			expectedArguments = 1
+			hasExactArity = true
 			functionName = "floor"
 		case spl.ScalarFunctionMVCount:
 			expectedArguments = 1
+			hasExactArity = true
 			functionName = "mvcount"
 		case spl.ScalarFunctionMatch:
 			expectedArguments = 2
+			hasExactArity = true
 			functionName = "match"
 		case spl.ScalarFunctionLike:
 			expectedArguments = 2
+			hasExactArity = true
 			functionName = "like"
 		case spl.ScalarFunctionReplace:
 			expectedArguments = 3
+			hasExactArity = true
 			functionName = "replace"
 		case spl.ScalarFunctionIsNull:
 			expectedArguments = 1
+			hasExactArity = true
 			functionName = "isnull"
 		case spl.ScalarFunctionIsNotNull:
 			expectedArguments = 1
+			hasExactArity = true
 			functionName = "isnotnull"
 		case spl.ScalarFunctionCoalesce:
 			functionName = "coalesce"
@@ -1947,12 +1960,15 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			}
 		case spl.ScalarFunctionLower:
 			expectedArguments = 1
+			hasExactArity = true
 			functionName = "lower"
 		case spl.ScalarFunctionUpper:
 			expectedArguments = 1
+			hasExactArity = true
 			functionName = "upper"
 		case spl.ScalarFunctionLength:
 			expectedArguments = 1
+			hasExactArity = true
 			functionName = "len"
 		case spl.ScalarFunctionSubstring:
 			functionName = "substr"
@@ -1964,9 +1980,16 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				}
 			}
 		}
-		if expectedArguments != 0 && len(expression.Arguments) != expectedArguments {
+		if hasExactArity && len(expression.Arguments) != expectedArguments {
 			argumentNoun := "arguments"
-			if expectedArguments == 1 {
+			switch expectedArguments {
+			case 0:
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_EVAL_ARITY",
+					Message: functionName + " requires no arguments",
+					Range:   expression.Range,
+				}
+			case 1:
 				argumentNoun = "argument"
 			}
 			return nil, &Diagnostic{

@@ -406,6 +406,7 @@ func chartBreakPipelineIntegrationCompile(t *testing.T, source string, cutoff ti
 		TenantID: chartBreakPipelineTenant, AuthorizedIndexes: []string{chartBreakPipelineIndex},
 		Earliest:         time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC),
 		Latest:           time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC),
+		SearchStart:      cutoff.Add(-time.Second),
 		IndexTimeCutoff:  cutoff,
 		VisibilityCutoff: uint64PointerForIntegration(visibilityCutoff),
 	})

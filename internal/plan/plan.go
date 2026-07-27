@@ -22,6 +22,10 @@ type Query struct {
 	EffectiveIndexes []string
 	OutputFields     []string
 	DynamicOutput    *DynamicSeriesOutput
+	// SearchStart is the immutable server-resolved admission timestamp used by
+	// search-scoped scalar functions such as now(). It is deliberately
+	// independent from Scan.IndexTimeCutoff, which controls storage visibility.
+	SearchStart time.Time
 }
 
 // DynamicSeriesOutput describes a bounded runtime-wide result schema. Fixed

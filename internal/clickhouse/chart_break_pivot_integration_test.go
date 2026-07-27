@@ -772,6 +772,7 @@ func chartBreakBuild(source string, cutoff time.Time, visibilityCutoff uint64) (
 		TenantID: chartBreakTenant, AuthorizedIndexes: []string{chartBreakIndex},
 		Earliest:         time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC),
 		Latest:           time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC),
+		SearchStart:      cutoff.Add(-time.Second),
 		IndexTimeCutoff:  cutoff,
 		VisibilityCutoff: uint64PointerForIntegration(visibilityCutoff),
 	})

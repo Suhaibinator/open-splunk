@@ -1671,6 +1671,7 @@ func testCompiledQueriesAgainstClickHouse(
 		AuthorizedIndexes: []string{"compiler"},
 		Earliest:          time.Date(1969, 12, 31, 23, 55, 0, 0, time.UTC),
 		Latest:            time.Date(1970, 1, 1, 0, 0, 0, 1, time.UTC),
+		SearchStart:       indexTime.Add(9 * time.Second),
 		IndexTimeCutoff:   indexTime.Add(10 * time.Second),
 		VisibilityCutoff:  uint64PointerForIntegration(visibilityCutoff),
 	})
@@ -3946,6 +3947,7 @@ func buildIntegrationPlanForIndex(
 		TenantID: "tenant", AuthorizedIndexes: []string{index},
 		Earliest:         time.Date(2026, time.July, 20, 0, 0, 0, 0, time.UTC),
 		Latest:           time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC),
+		SearchStart:      cutoff.Add(-time.Second),
 		IndexTimeCutoff:  cutoff,
 		VisibilityCutoff: uint64PointerForIntegration(visibilityCutoff),
 	})

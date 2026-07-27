@@ -349,11 +349,11 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	if err := validateCompiledExtractionBudgets(query.Operators[1:]); err != nil {
 		return CompiledQuery{}, err
 	}
-	fragment, state, args, err := compileScan(database, table, scan)
+	fragment, state, args, err := compileScan(database, table, scan, query.SearchStart)
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	state.patternBudgets = &compiledPatternBudgets{
+	state.context.patternBudgets = compiledPatternBudgets{
 		match: compiledMatchBudget{
 			patterns: make(map[*plan.ScalarCallExpression]splregex.MatchPattern),
 		},
@@ -3101,8 +3101,7 @@ func compileChart(
 
 type compileState struct {
 	visible                          map[string]fieldState
-	patternBudgets                   *compiledPatternBudgets
-	searchStartUnix                  int64
+	context                          *compileContext
 	publicOrder                      []string
 	privateColumns                   []string
 	rexCapturedBytesSQL              string
@@ -3124,6 +3123,15 @@ type compileState struct {
 	postAggregateDistinctCounts      []compiledDistinctCount
 	postAggregateOrderedStrings      []compiledOrderedStringMeasure
 	chronologicalBarriers            []compiledChronologicalBarrier
+}
+
+// compileContext contains immutable query-wide values and shared resource
+// accounting. Relation-shaping stages carry one pointer instead of manually
+// copying each search-scoped constant into newly constructed compileState
+// values.
+type compileContext struct {
+	patternBudgets  compiledPatternBudgets
+	searchStartUnix int64
 }
 
 type compiledMatchBudget struct {
@@ -3244,9 +3252,12 @@ type compiledSortKey struct {
 	nullsFirst bool
 }
 
-func compileScan(database, table string, scan *plan.Scan) (string, compileState, []any, error) {
+func compileScan(database, table string, scan *plan.Scan, searchStart time.Time) (string, compileState, []any, error) {
 	if scan.TenantID == "" || len(scan.Indexes) == 0 || scan.Earliest.IsZero() || scan.Latest.IsZero() || !scan.Earliest.Before(scan.Latest) || scan.IndexTimeCutoff.IsZero() {
 		return "", compileState{}, nil, errors.New("compile ClickHouse query: Scan has an invalid security or time scope")
+	}
+	if searchStart.IsZero() {
+		return "", compileState{}, nil, errors.New("compile ClickHouse query: search-start anchor is required")
 	}
 	selects := []string{
 		aliasPhysical("event_id", "event_id"),
@@ -3317,7 +3328,7 @@ func compileScan(database, table string, scan *plan.Scan) (string, compileState,
 	}
 	state := compileState{
 		visible:         visible,
-		searchStartUnix: scan.IndexTimeCutoff.Unix(),
+		context:         &compileContext{searchStartUnix: searchStart.Unix()},
 		publicOrder:     append([]string(nil), defaultPublicFields...),
 		allowDynamic:    true,
 		eventRows:       true,
@@ -3935,12 +3946,18 @@ func compileNowScalar(
 	expression *plan.ScalarCallExpression,
 	state compileState,
 ) (compiledScalar, error) {
+	if expression == nil {
+		return compiledScalar{}, errors.New("compile ClickHouse now: missing expression")
+	}
 	if len(expression.Arguments) != 0 {
 		return compiledScalar{}, errors.New("compile ClickHouse now: now requires no arguments")
 	}
+	if state.context == nil {
+		return compiledScalar{}, errors.New("compile ClickHouse now: search-start anchor is required")
+	}
 	return compiledScalar{
 		valueSQL:         "CAST(? AS Int64)",
-		valueArgs:        []any{state.searchStartUnix},
+		valueArgs:        []any{state.context.searchStartUnix},
 		maxStringBytes:   20,
 		existsSQL:        "1",
 		kind:             fieldKindNumber,
@@ -5379,21 +5396,21 @@ func compileMatchScalar(
 		return compiledScalar{}, err
 	}
 	compiledPattern := splregex.MatchPattern{}
-	if state.patternBudgets != nil {
-		compiledPattern = state.patternBudgets.match.patterns[expression]
+	if state.context != nil {
+		compiledPattern = state.context.patternBudgets.match.patterns[expression]
 	}
 	if compiledPattern.ProgramWorkUnits == 0 {
 		compiledPattern, err = compileMatchPatternForBackend(pattern, expression.Range)
 		if err != nil {
 			return compiledScalar{}, err
 		}
-		if state.patternBudgets != nil {
-			state.patternBudgets.match.patterns[expression] = compiledPattern
+		if state.context != nil {
+			state.context.patternBudgets.match.patterns[expression] = compiledPattern
 		}
 	}
-	if state.patternBudgets != nil {
+	if state.context != nil {
 		if compiledPattern.ProgramWorkUnits >
-			splregex.MaximumMatchQueryProgramWorkUnits-state.patternBudgets.match.programWorkUnits {
+			splregex.MaximumMatchQueryProgramWorkUnits-state.context.patternBudgets.match.programWorkUnits {
 			return compiledScalar{}, &plan.Diagnostic{
 				Code: "SPL_QUERY_TOO_COMPLEX",
 				Message: fmt.Sprintf(
@@ -5403,7 +5420,7 @@ func compileMatchScalar(
 				Range: expression.Range,
 			}
 		}
-		state.patternBudgets.match.programWorkUnits += compiledPattern.ProgramWorkUnits
+		state.context.patternBudgets.match.programWorkUnits += compiledPattern.ProgramWorkUnits
 	}
 	return compileBoundedTextPredicateResult(
 		input,
@@ -5429,21 +5446,21 @@ func compileLikeScalar(
 		return compiledScalar{}, err
 	}
 	compiledPattern := splwildcard.LikePattern{}
-	if state.patternBudgets != nil {
-		compiledPattern = state.patternBudgets.like.patterns[expression]
+	if state.context != nil {
+		compiledPattern = state.context.patternBudgets.like.patterns[expression]
 	}
 	if compiledPattern.WorkUnits == 0 {
 		compiledPattern, err = compileLikePatternForBackend(pattern, expression.Range)
 		if err != nil {
 			return compiledScalar{}, err
 		}
-		if state.patternBudgets != nil {
-			state.patternBudgets.like.patterns[expression] = compiledPattern
+		if state.context != nil {
+			state.context.patternBudgets.like.patterns[expression] = compiledPattern
 		}
 	}
-	if state.patternBudgets != nil {
+	if state.context != nil {
 		if compiledPattern.WorkUnits >
-			splwildcard.MaximumLikeQueryPatternWorkUnits-state.patternBudgets.like.workUnits {
+			splwildcard.MaximumLikeQueryPatternWorkUnits-state.context.patternBudgets.like.workUnits {
 			return compiledScalar{}, &plan.Diagnostic{
 				Code: "SPL_QUERY_TOO_COMPLEX",
 				Message: fmt.Sprintf(
@@ -5453,11 +5470,11 @@ func compileLikeScalar(
 				Range: expression.Range,
 			}
 		}
-		state.patternBudgets.like.workUnits += compiledPattern.WorkUnits
+		state.context.patternBudgets.like.workUnits += compiledPattern.WorkUnits
 		if !input.alwaysNull && input.kind != fieldKindInvalid {
 			inputBytes := compiledScalarStringByteBound(input)
 			if inputBytes >
-				MaximumLikeQueryInputBytes-state.patternBudgets.like.inputBytes {
+				MaximumLikeQueryInputBytes-state.context.patternBudgets.like.inputBytes {
 				return compiledScalar{}, &plan.Diagnostic{
 					Code: "SPL_QUERY_TOO_COMPLEX",
 					Message: fmt.Sprintf(
@@ -5467,7 +5484,7 @@ func compileLikeScalar(
 					Range: expression.Range,
 				}
 			}
-			state.patternBudgets.like.inputBytes += inputBytes
+			state.context.patternBudgets.like.inputBytes += inputBytes
 		}
 	}
 	return compileBoundedTextPredicateResult(
@@ -8581,8 +8598,7 @@ func resolveCompiledField(field plan.FieldRef, state compileState) (fieldState, 
 func compileProjection(operator *plan.Project, state compileState) ([]string, compileState, []any, error) {
 	next := compileState{
 		visible:             make(map[string]fieldState),
-		patternBudgets:      state.patternBudgets,
-		searchStartUnix:     state.searchStartUnix,
+		context:             state.context,
 		privateColumns:      append([]string(nil), state.privateColumns...),
 		rexCapturedBytesSQL: state.rexCapturedBytesSQL,
 		allowDynamic:        operator.Mode == plan.ProjectModeExclude && state.allowDynamic,
@@ -8823,8 +8839,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 	}
 	next = compileState{
 		visible:               make(map[string]fieldState, len(operator.GroupBy)+len(operator.Measures)),
-		patternBudgets:        state.patternBudgets,
-		searchStartUnix:       state.searchStartUnix,
+		context:               state.context,
 		allowDynamic:          false,
 		eventRows:             false,
 		blocked:               make(map[string]struct{}),

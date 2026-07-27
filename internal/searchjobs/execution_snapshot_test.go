@@ -60,6 +60,7 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 		EffectiveIndexes: []string{"alpha"},
 		Earliest:         earliest.UTC(),
 		Latest:           latest.UTC(),
+		SearchStart:      completed.CreatedAt,
 		IndexTimeCutoff:  now.UTC(),
 		VisibilityCutoff: 91,
 		FinishedAt:       now.UTC(),

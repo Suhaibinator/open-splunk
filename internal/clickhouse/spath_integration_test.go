@@ -725,6 +725,7 @@ func spathBuildPlan(t *testing.T, source string, cutoff time.Time, visibilityCut
 		AuthorizedIndexes: []string{spathIntegrationIndex, spathLimitIndex, spathCorruptIndex},
 		Earliest:          time.Date(2026, time.July, 25, 0, 0, 0, 0, time.UTC),
 		Latest:            time.Date(2026, time.July, 26, 0, 0, 0, 0, time.UTC),
+		SearchStart:       cutoff.Add(-time.Second),
 		IndexTimeCutoff:   cutoff,
 		VisibilityCutoff:  uint64PointerForIntegration(visibilityCutoff),
 	})

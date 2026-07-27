@@ -29,7 +29,10 @@ func testNowAgainstClickHouse(
 		114,
 		event,
 	)
-	want := indexTime.Add(10 * time.Second).Unix()
+	// The shared integration planner deliberately keeps search admission one
+	// second before the storage cutoff so this test detects accidental
+	// coupling between now() and IndexTimeCutoff.
+	want := indexTime.Add(9 * time.Second).Unix()
 
 	composed := compile(
 		`index=now event_id="now-scalar"` +

@@ -602,6 +602,7 @@ func queryIntegrationCompileFieldCatalog(
 		RequestedIndexes:  []string{indexName},
 		Earliest:          indexTime.Add(-time.Minute),
 		Latest:            indexTime.Add(time.Minute),
+		SearchStart:       indexTime,
 		IndexTimeCutoff:   indexTime.Add(time.Second),
 		VisibilityCutoff:  &visibility,
 	})
@@ -654,6 +655,7 @@ func queryIntegrationFieldPlan(
 		RequestedIndexes:  []string{indexName},
 		Earliest:          indexTime.Add(-time.Minute),
 		Latest:            indexTime.Add(time.Minute),
+		SearchStart:       indexTime,
 		IndexTimeCutoff:   indexTime.Add(time.Second),
 		VisibilityCutoff:  &visibility,
 	})

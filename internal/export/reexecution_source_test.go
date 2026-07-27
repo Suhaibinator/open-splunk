@@ -754,6 +754,7 @@ func newReexecutionTestSearches() (*reexecutionTestSearches, searchjobs.Schema, 
 			IndexTimeCutoff:  now,
 			VisibilityCutoff: 42,
 			State:            searchjobs.StateCompleted,
+			CreatedAt:        now.Add(-time.Second),
 		},
 		pin: &reexecutionTestPin{schema: schema, generation: 7},
 	}, schema, access

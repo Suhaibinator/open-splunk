@@ -1037,6 +1037,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			RequestedIndexes:  []string{"main"},
 			Earliest:          timechartBase.Add(2 * time.Minute),
 			Latest:            timechartBase.Add(18 * time.Minute),
+			SearchStart:       timechartIndexTime,
 			IndexTimeCutoff:   timechartIndexTime.Add(500 * time.Microsecond),
 			VisibilityCutoff:  &visibility,
 		})
@@ -2466,6 +2467,7 @@ func queryIntegrationCompileSearchRange(
 		RequestedIndexes:  []string{"main"},
 		Earliest:          earliest,
 		Latest:            latest,
+		SearchStart:       indexTime,
 		IndexTimeCutoff:   indexTime.Add(500 * time.Microsecond),
 		VisibilityCutoff:  &visibility,
 	})
@@ -2497,6 +2499,7 @@ func queryIntegrationCompileTimeline(
 		RequestedIndexes:  []string{indexName},
 		Earliest:          spec.Earliest,
 		Latest:            spec.Latest,
+		SearchStart:       indexTime,
 		IndexTimeCutoff:   indexTime.Add(500 * time.Microsecond),
 		VisibilityCutoff:  &visibility,
 	})
