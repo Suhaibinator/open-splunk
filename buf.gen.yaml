@@ -1,0 +1,26 @@
+version: v2
+plugins:
+  - local: .cache/proto-tools/protoc-gen-go
+    out: gen/go
+    opt: paths=source_relative
+    strategy: all
+  - local: .cache/proto-tools/protoc-gen-go-grpc
+    out: gen/go
+    opt: paths=source_relative
+    strategy: all
+  - local: node_modules/.bin/protoc-gen-ts_proto
+    out: gen/ts
+    opt:
+      - esModuleInterop=true
+      - forceLong=bigint
+      - exportCommonSymbols=false
+      - snakeToCamel=true
+      - oneof=unions-value
+      - outputEncodeMethods=true
+      - outputJsonMethods=true
+      - outputPartialMethods=true
+      - outputServices=none
+      - stringEnums=false
+      - useDate=true
+      - outputIndex=true
+    strategy: all

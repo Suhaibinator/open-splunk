@@ -7,6 +7,7 @@ import {
   IndexState,
   type IndexSummary,
 } from "@/gen/ts/open_splunk/v1/index";
+import type { BuildMetadata } from "@/gen/ts/open_splunk/v1/common";
 
 import type { OpenSplunkApiClient } from "./open-splunk-client";
 import type { ProtobufRequestOptions } from "./protobuf-transport";
@@ -39,6 +40,7 @@ export interface SystemBootstrapModel {
   serverVersion: string;
   apiVersion: string;
   splCompatibilityVersion: string;
+  build: BuildMetadata | null;
   searchWebsocketPath: string | null;
   features: ReadonlySet<ServerFeature>;
   limits: BrowserApiLimitsModel;
@@ -101,6 +103,7 @@ export function adaptSystemBootstrap(response: GetSystemBootstrapResponse): Syst
     serverVersion: response.serverVersion,
     apiVersion: response.apiVersion,
     splCompatibilityVersion: response.splCompatibilityVersion,
+    build: response.build === undefined ? null : { ...response.build },
     searchWebsocketPath: sameOriginPath(response.searchWebsocketPath),
     features: new Set(response.features.filter((feature) =>
       feature !== ServerFeature.SERVER_FEATURE_UNSPECIFIED && feature !== ServerFeature.UNRECOGNIZED

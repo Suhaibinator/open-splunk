@@ -11,7 +11,27 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 )
+
+func TestRunReportsCompiledBuildIdentity(t *testing.T) {
+	t.Parallel()
+
+	identity, err := buildinfo.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := run(context.Background(), []string{"-version"}, &output, &bytes.Buffer{}); err != nil {
+		t.Fatalf("run(-version): %v", err)
+	}
+	want := "application_version=" + identity.ApplicationVersion +
+		"\nsource_revision=" + identity.SourceRevision + "\n"
+	if got := output.String(); got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
 
 func TestRunGeneratesDeterministicNDJSON(t *testing.T) {
 	t.Parallel()

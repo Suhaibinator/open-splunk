@@ -12,6 +12,7 @@ import (
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -45,6 +46,7 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 		ServerVersion:           handler.bootstrap.ServerVersion,
 		ApiVersion:              handler.bootstrap.APIVersion,
 		SplCompatibilityVersion: handler.bootstrap.SPLCompatibilityVersion,
+		Build:                   buildmetadata.Clone(handler.bootstrap.Build),
 		SearchWebsocketPath:     handler.bootstrap.SearchWebSocketPath,
 		Features:                slices.Clone(handler.bootstrap.Features),
 		Limits: &opensplunkv1.BrowserApiLimits{

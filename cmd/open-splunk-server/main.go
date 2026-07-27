@@ -18,7 +18,9 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunk "github.com/Suhaibinator/open-splunk"
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	internalclickhouse "github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
@@ -42,6 +44,7 @@ const (
 )
 
 type options struct {
+	verifyEmbeddedRelease      bool
 	httpAddress                string
 	httpAllowedHosts           []string
 	httpAllowedHostsCSV        string
@@ -79,6 +82,37 @@ func run() error {
 	config := parseFlags()
 	if err := normalizeRuntimeOptions(&config); err != nil {
 		return err
+	}
+	release, err := opensplunk.EmbeddedRelease()
+	if err != nil {
+		return fmt.Errorf("open embedded release: %w", err)
+	}
+	if config.verifyEmbeddedRelease {
+		if err := buildinfo.WriteIdentity(os.Stdout, buildinfo.Identity{
+			ApplicationVersion: release.Metadata.ApplicationVersion,
+			SourceRevision:     release.Metadata.SourceRevision,
+		}); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintf(
+			os.Stdout,
+			"ui_build_id=%s\nui_sha256=%s\n",
+			release.Metadata.UIBuildID,
+			release.Metadata.UI.SHA256,
+		)
+		return err
+	}
+	buildMetadata := &opensplunkv1.BuildMetadata{
+		ApplicationVersion:         release.Metadata.ApplicationVersion,
+		SourceRevision:             release.Metadata.SourceRevision,
+		UiBuildId:                  release.Metadata.UIBuildID,
+		UiSha256:                   release.Metadata.UI.SHA256,
+		ProtobufSchemaSha256:       release.Metadata.ProtobufSchema.SHA256,
+		SqliteMigrationsSha256:     release.Metadata.SQLiteMigrations.SHA256,
+		SqliteMigrationVersion:     release.Metadata.SQLiteMigrations.LatestVersion,
+		ClickhouseMigrationsSha256: release.Metadata.ClickHouseMigrations.SHA256,
+		ClickhouseMigrationVersion: release.Metadata.ClickHouseMigrations.LatestVersion,
+		AssetManifestFormatVersion: release.Metadata.FormatVersion,
 	}
 	exportSettings := defaultExportRuntimeSettings()
 	if err := exportSettings.validate(); err != nil {
@@ -162,7 +196,7 @@ func run() error {
 		}
 	}()
 	ingestConfig := ingest.DefaultConfig()
-	ingestConfig.ServerVersion = "dev"
+	ingestConfig.Build = buildMetadata
 	ingestService, err := ingest.NewService(ingestConfig, collectorAuthorizer{
 		store: tokenStore, tenantID: config.tenantID,
 	}, eventStore)
@@ -257,10 +291,6 @@ func run() error {
 		}
 	}()
 
-	webUI, err := opensplunk.WebUI()
-	if err != nil {
-		return fmt.Errorf("open embedded web UI: %w", err)
-	}
 	searchWebSocket, err := searchws.New(searchws.Config{
 		Searches: jobs,
 		Exports:  exports,
@@ -289,14 +319,14 @@ func run() error {
 		IngestionTokens:            tokenStore,
 		SavedSearches:              savedSearches,
 		SearchHistory:              searchHistory,
-		WebUI:                      webUI,
+		WebUI:                      release.WebUI,
 		OwnerID:                    defaultOwnerID,
 		TenantID:                   config.tenantID,
 		AdministrativeAllowedHosts: config.httpAllowedHosts,
 		Bootstrap: server.BootstrapConfig{
-			ServerVersion:           "dev",
 			APIVersion:              "v1",
 			SPLCompatibilityVersion: splCompatibility,
+			Build:                   buildMetadata,
 			MaximumExportRows:       exportSettings.maximumRowLimit,
 			MaximumExportBytes:      exportSettings.maximumByteLimit,
 		},
@@ -343,6 +373,7 @@ func run() error {
 
 func parseFlags() options {
 	var result options
+	flag.BoolVar(&result.verifyEmbeddedRelease, "verify-embedded-release", false, "verify the embedded release payload and exit before opening runtime resources")
 	flag.StringVar(&result.httpAddress, "http-address", "127.0.0.1:8080", "HTTP listen address (set explicitly to expose on a trusted network)")
 	flag.StringVar(&result.httpAllowedHostsCSV, "http-allowed-hosts", "", "comma-separated Host names allowed to use the browser API (defaults to the specific listen host)")
 	flag.BoolVar(&result.httpInsecureTrustedNetwork, "http-insecure-trusted-network", false, "explicitly allow plaintext browser HTTP on a non-loopback trusted network")

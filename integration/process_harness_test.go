@@ -322,7 +322,13 @@ func repositoryRoot(t *testing.T) string {
 
 func buildBinary(t *testing.T, ctx context.Context, repository, output, pkg string) {
 	t.Helper()
-	command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", output, pkg)
+	linkerFlags := fmt.Sprintf(
+		"-X github.com/Suhaibinator/open-splunk/internal/buildinfo.applicationVersion=%s "+
+			"-X github.com/Suhaibinator/open-splunk/internal/buildinfo.sourceRevision=%s",
+		integrationApplicationVersion,
+		integrationSourceRevision,
+	)
+	command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", linkerFlags, "-o", output, pkg)
 	configureProcessGroup(command)
 	command.Dir = repository
 	command.Env = environmentWithValue(os.Environ(), "CGO_ENABLED", "0")
@@ -341,9 +347,12 @@ func buildBinary(t *testing.T, ctx context.Context, repository, output, pkg stri
 }
 
 const (
-	backendFrontendStagePrefix   = "open-splunk-backend-frontend-"
-	maximumHarnessOutputBytes    = 1 << 20
-	commandOutputTruncatedSuffix = "\n... [command output truncated]"
+	integrationApplicationVersion = "0.1.0"
+	integrationSourceRevision     = "ad00000000000000000000000000000000000000"
+	integrationUIBuildID          = "rkkh71293jmh415h10571m4h1n2k00k4m26j0nn72nk97452n1n96jk3hk54m3h62"
+	backendFrontendStagePrefix    = "open-splunk-backend-frontend-"
+	maximumHarnessOutputBytes     = 1 << 20
+	commandOutputTruncatedSuffix  = "\n... [command output truncated]"
 )
 
 var backendFrontendBuild struct {
@@ -367,13 +376,16 @@ var backendFrontendStageRootFiles = []string{
 
 var backendFrontendStageDirectories = []string{
 	"app",
+	filepath.Join("cmd", "open-splunk-manifest"),
 	filepath.Join("cmd", "open-splunk-server"),
 	filepath.Join("gen", "go"),
 	filepath.Join("gen", "ts"),
 	"internal",
 	"lib",
 	"migrations",
+	"proto",
 	"public",
+	"scripts",
 }
 
 func buildBackendFrontend(t *testing.T, ctx context.Context, repository string) string {
@@ -407,7 +419,18 @@ func stageBackendFrontend(ctx context.Context, sourceRoot string) (string, strin
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
-	stageRoot, err := os.MkdirTemp(os.TempDir(), backendFrontendStagePrefix)
+	stageParent := filepath.Join(sourceRoot, ".cache")
+	if err := os.MkdirAll(stageParent, 0o755); err != nil {
+		return "", "", fmt.Errorf("create isolated repository parent: %w", err)
+	}
+	parentInfo, err := os.Lstat(stageParent)
+	if err != nil {
+		return "", "", fmt.Errorf("inspect isolated repository parent: %w", err)
+	}
+	if parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() {
+		return "", "", fmt.Errorf("isolated repository parent %q is not a real directory", stageParent)
+	}
+	stageRoot, err := os.MkdirTemp(stageParent, backendFrontendStagePrefix)
 	if err != nil {
 		return "", "", fmt.Errorf("create isolated repository: %w", err)
 	}
@@ -418,21 +441,29 @@ func stageBackendFrontend(ctx context.Context, sourceRoot string) (string, strin
 	if err != nil {
 		return stageRoot, "", fmt.Errorf("resolve frontend dependencies: %w", err)
 	}
-	if err := os.Symlink(nodeModules, filepath.Join(stageRoot, "node_modules")); err != nil {
-		return stageRoot, "", fmt.Errorf("link frontend dependencies: %w", err)
+	if err := materializeStageDependencies(
+		ctx,
+		nodeModules,
+		filepath.Join(stageRoot, "node_modules"),
+	); err != nil {
+		return stageRoot, "", fmt.Errorf("materialize frontend dependencies: %w", err)
 	}
 
-	// Turbopack rejects node_modules symlinks whose targets are outside its
-	// project root. The isolated stage intentionally uses such a symlink so it
-	// can reuse immutable installed dependencies without copying hundreds of
-	// megabytes. Webpack follows the same production Next build path without
-	// imposing that filesystem-root restriction.
-	command := exec.CommandContext(ctx, "npm", "run", "build", "--", "--webpack")
+	// Use the exact Turbopack production path shipped by make release. Regular
+	// dependency files are hard-linked when the temporary directory shares a
+	// filesystem, while package-relative symlinks are recreated inside the
+	// isolated project root.
+	command := exec.CommandContext(ctx, "npm", "run", "build")
 	configureProcessGroup(command)
 	command.Dir = stageRoot
 	command.Env = environmentWithValue(os.Environ(), "OPEN_SPLUNK_DATA_MODE", "backend")
 	command.Env = environmentWithValue(command.Env, "OPEN_SPLUNK_API_BASE_URL", "")
+	command.Env = environmentWithValue(command.Env, "OPEN_SPLUNK_APPLICATION_VERSION", integrationApplicationVersion)
+	command.Env = environmentWithValue(command.Env, "OPEN_SPLUNK_SOURCE_REVISION", integrationSourceRevision)
 	command.Env = environmentWithValue(command.Env, "NEXT_TELEMETRY_DISABLED", "1")
+	command.Env = environmentWithValue(command.Env, "LANG", "C")
+	command.Env = environmentWithValue(command.Env, "LC_ALL", "C")
+	command.Env = environmentWithValue(command.Env, "TZ", "UTC")
 	logs, truncated, runErr := runCommandWithBoundedOutput(command, maximumHarnessOutputBytes)
 	if runErr != nil {
 		return stageRoot,
@@ -448,6 +479,34 @@ func stageBackendFrontend(ctx context.Context, sourceRoot string) (string, strin
 	if _, err := os.Stat(filepath.Join(stageRoot, "out", "search", "index.html")); err != nil {
 		return stageRoot, logs, fmt.Errorf("staged backend frontend export is incomplete: %w", err)
 	}
+	manifestCommand := exec.CommandContext(
+		ctx,
+		"go",
+		"run",
+		"./cmd/open-splunk-manifest",
+		"-application-version",
+		integrationApplicationVersion,
+		"-source-revision",
+		integrationSourceRevision,
+	)
+	configureProcessGroup(manifestCommand)
+	manifestCommand.Dir = stageRoot
+	manifestLogs, manifestTruncated, manifestErr := runCommandWithBoundedOutput(
+		manifestCommand,
+		maximumHarnessOutputBytes,
+	)
+	if manifestErr != nil {
+		return stageRoot,
+			formatBoundedCommandOutput(logs+manifestLogs, truncated || manifestTruncated, maximumHarnessOutputBytes),
+			fmt.Errorf("generate staged frontend manifest: %w", manifestErr)
+	}
+	if manifestTruncated {
+		return stageRoot, "", fmt.Errorf(
+			"generate staged frontend manifest output exceeded %d bytes",
+			maximumHarnessOutputBytes,
+		)
+	}
+	logs += manifestLogs
 	return stageRoot, logs, nil
 }
 
@@ -547,6 +606,118 @@ func copyStageFile(ctx context.Context, sourcePath, destinationPath string) erro
 	return nil
 }
 
+func materializeStageDependencies(ctx context.Context, sourceRoot, destinationRoot string) error {
+	return filepath.WalkDir(sourceRoot, func(sourcePath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		relativePath, err := filepath.Rel(sourceRoot, sourcePath)
+		if err != nil {
+			return err
+		}
+		if relativePath == "." {
+			return os.Mkdir(destinationRoot, 0o755)
+		}
+		destinationPath := filepath.Join(destinationRoot, relativePath)
+		if entry.IsDir() {
+			return os.Mkdir(destinationPath, 0o755)
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(sourcePath)
+			if err != nil {
+				return err
+			}
+			if filepath.IsAbs(target) {
+				return fmt.Errorf("dependency symlink %q has an absolute target", sourcePath)
+			}
+			resolvedTarget := filepath.Clean(filepath.Join(filepath.Dir(sourcePath), target))
+			relativeTarget, err := filepath.Rel(sourceRoot, resolvedTarget)
+			if err != nil {
+				return err
+			}
+			if relativeTarget == ".." ||
+				strings.HasPrefix(relativeTarget, ".."+string(filepath.Separator)) {
+				return fmt.Errorf("dependency symlink %q escapes its source tree", sourcePath)
+			}
+			return os.Symlink(target, destinationPath)
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("dependency %q is not a regular file", sourcePath)
+		}
+		if err := os.Link(sourcePath, destinationPath); err == nil {
+			return nil
+		}
+		return copyStageFile(ctx, sourcePath, destinationPath)
+	})
+}
+
+func TestMaterializeStageDependenciesKeepsTheTreeInsideTheProjectRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	destination := filepath.Join(root, "stage", "node_modules")
+	if err := os.MkdirAll(filepath.Join(source, "package", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Dir(destination), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "package", "index.js"), []byte("export {};\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../index.js", filepath.Join(source, "package", "bin", "package")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := materializeStageDependencies(context.Background(), source, destination); err != nil {
+		t.Fatalf("materializeStageDependencies: %v", err)
+	}
+	info, err := os.Lstat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("materialized root mode = %s", info.Mode())
+	}
+	target, err := os.Readlink(filepath.Join(destination, "package", "bin", "package"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "../index.js" {
+		t.Fatalf("materialized relative link = %q", target)
+	}
+	contents, err := os.ReadFile(filepath.Join(destination, "package", "index.js"))
+	if err != nil || string(contents) != "export {};\n" {
+		t.Fatalf("materialized dependency = %q, %v", contents, err)
+	}
+}
+
+func TestMaterializeStageDependenciesRejectsEscapingSymlink(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	destination := filepath.Join(root, "stage", "node_modules")
+	if err := os.MkdirAll(filepath.Join(source, "package"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Dir(destination), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../outside", filepath.Join(source, "package", "escape")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := materializeStageDependencies(context.Background(), source, destination)
+	if err == nil || !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("escaping dependency symlink error = %v", err)
+	}
+}
+
 type contextReader struct {
 	ctx    context.Context
 	reader io.Reader
@@ -585,15 +756,24 @@ func cleanupBackendFrontendStage() error {
 	if stageRoot == "" {
 		return nil
 	}
-	temporaryRoot, err := filepath.Abs(os.TempDir())
+	stageParent, err := filepath.Abs(
+		filepath.Join(backendFrontendBuild.sourceRoot, ".cache"),
+	)
 	if err != nil {
-		return fmt.Errorf("resolve temporary directory: %w", err)
+		return fmt.Errorf("resolve stage parent directory: %w", err)
+	}
+	parentInfo, err := os.Lstat(stageParent)
+	if err != nil {
+		return fmt.Errorf("inspect stage parent directory: %w", err)
+	}
+	if parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() {
+		return fmt.Errorf("refuse to remove stage under unsafe parent %q", stageParent)
 	}
 	stageRoot, err = filepath.Abs(stageRoot)
 	if err != nil {
 		return fmt.Errorf("resolve stage directory: %w", err)
 	}
-	if filepath.Dir(stageRoot) != temporaryRoot ||
+	if filepath.Dir(stageRoot) != stageParent ||
 		!strings.HasPrefix(filepath.Base(stageRoot), backendFrontendStagePrefix) {
 		return fmt.Errorf("refuse to remove unsafe stage path %q", stageRoot)
 	}

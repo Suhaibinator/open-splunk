@@ -1,10 +1,56 @@
+import { createHash } from "node:crypto";
 import type { NextConfig } from "next";
+
+const developmentRevision = "development";
+const sourceRevision = (process.env.OPEN_SPLUNK_SOURCE_REVISION ?? developmentRevision).trim();
+if (
+  sourceRevision !== developmentRevision
+  && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sourceRevision)
+) {
+  throw new Error(
+    "OPEN_SPLUNK_SOURCE_REVISION must be development or a full lowercase Git hash.",
+  );
+}
+
+const applicationVersion = (process.env.OPEN_SPLUNK_APPLICATION_VERSION ?? "0.1.0").trim();
+if (
+  applicationVersion.length > 64
+  || !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(
+    applicationVersion,
+  )
+) {
+  throw new Error("OPEN_SPLUNK_APPLICATION_VERSION must be a semantic version.");
+}
+
+const revisionBuildIDCharacters: Readonly<Record<string, string>> = {
+  a: "g",
+  b: "h",
+  c: "j",
+  d: "k",
+  e: "m",
+  f: "n",
+};
+const identityDigest = createHash("sha256")
+  .update("open-splunk-ui-build-v1\0")
+  .update(applicationVersion)
+  .update("\0")
+  .update(sourceRevision)
+  .digest("hex");
+const uiBuildID = `r${identityDigest.replace(
+  /[a-f]/g,
+  (character) => revisionBuildIDCharacters[character],
+)}`;
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
   output: "export",
   reactStrictMode: true,
   trailingSlash: true,
+  generateBuildId: async () => uiBuildID,
+  env: {
+    NEXT_PUBLIC_OPEN_SPLUNK_APPLICATION_VERSION: applicationVersion,
+    NEXT_PUBLIC_OPEN_SPLUNK_SOURCE_REVISION: sourceRevision,
+  },
   images: {
     unoptimized: true,
   },

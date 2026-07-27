@@ -16,6 +16,7 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -283,13 +284,14 @@ func (catalog fakeIndexCatalog) GetIndexByName(_ context.Context, name string) (
 
 func TestBootstrapUsesProtobufAndLiveIndexes(t *testing.T) {
 	app := &opensplunkv1.AppSummary{AppId: "app-1", Slug: "main", DisplayName: "Main"}
+	build := validServerBuildMetadata(t)
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{},
 		Indexes: fakeIndexCatalog{indexes: []control.Index{{
 			ID: "idx-1", Definition: control.IndexDefinition{Name: "main", DisplayName: "Main", SearchEnabled: true}, State: control.IndexStateActive,
 		}}},
 		WebUI:     testUI(),
-		Bootstrap: BootstrapConfig{ServerVersion: "test", Apps: []*opensplunkv1.AppSummary{app}},
+		Bootstrap: BootstrapConfig{Build: build, Apps: []*opensplunkv1.AppSummary{app}},
 		Now:       func() time.Time { return testNow },
 	})
 
@@ -302,8 +304,13 @@ func TestBootstrapUsesProtobufAndLiveIndexes(t *testing.T) {
 	}
 	var decoded opensplunkv1.GetSystemBootstrapResponse
 	unmarshalResponse(t, response, &decoded)
-	if decoded.GetServerVersion() != "test" || decoded.GetLimits().GetMaximumPageSize() != defaultMaximumPageSize {
+	if decoded.GetServerVersion() != "1.2.3 ("+strings.Repeat("a", 40)+")" ||
+		decoded.GetLimits().GetMaximumPageSize() != defaultMaximumPageSize {
 		t.Fatalf("bootstrap = %+v", &decoded)
+	}
+	if decoded.GetBuild().GetApplicationVersion() != "1.2.3" ||
+		decoded.GetBuild().GetSourceRevision() != strings.Repeat("a", 40) {
+		t.Fatalf("bootstrap build = %+v", decoded.GetBuild())
 	}
 	if !slices.Contains(decoded.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_SAVED_SEARCHES) {
 		t.Fatalf("bootstrap features = %v, want saved searches", decoded.GetFeatures())
@@ -319,10 +326,57 @@ func TestBootstrapUsesProtobufAndLiveIndexes(t *testing.T) {
 	}
 	// Constructor input is detached.
 	app.DisplayName = "mutated"
+	build.SourceRevision = "mutated"
 	response = postProto(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
 	unmarshalResponse(t, response, &decoded)
 	if decoded.GetApps()[0].GetDisplayName() != "Main" {
 		t.Fatalf("app alias leaked: %+v", decoded.GetApps()[0])
+	}
+	if decoded.GetBuild().GetSourceRevision() != strings.Repeat("a", 40) {
+		t.Fatalf("build alias leaked: %+v", decoded.GetBuild())
+	}
+}
+
+func TestNormalizeBootstrapRejectsContradictoryOrMalformedBuildMetadata(t *testing.T) {
+	t.Parallel()
+
+	build := validServerBuildMetadata(t)
+	if _, err := normalizeBootstrap(BootstrapConfig{
+		ServerVersion: "contradictory",
+		Build:         build,
+	}); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("contradictory server version error = %v", err)
+	}
+
+	build = validServerBuildMetadata(t)
+	build.UiSha256 = "malformed"
+	if _, err := normalizeBootstrap(BootstrapConfig{Build: build}); err == nil ||
+		!strings.Contains(err.Error(), "UI SHA-256") {
+		t.Fatalf("malformed build metadata error = %v", err)
+	}
+}
+
+func validServerBuildMetadata(t *testing.T) *opensplunkv1.BuildMetadata {
+	t.Helper()
+	identity, err := buildinfo.Parse("1.2.3", strings.Repeat("a", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uiBuildID, err := identity.UIBuildID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &opensplunkv1.BuildMetadata{
+		ApplicationVersion:         identity.ApplicationVersion,
+		SourceRevision:             identity.SourceRevision,
+		UiBuildId:                  uiBuildID,
+		UiSha256:                   strings.Repeat("1", 64),
+		ProtobufSchemaSha256:       strings.Repeat("2", 64),
+		SqliteMigrationsSha256:     strings.Repeat("3", 64),
+		SqliteMigrationVersion:     2,
+		ClickhouseMigrationsSha256: strings.Repeat("4", 64),
+		ClickhouseMigrationVersion: 1,
+		AssetManifestFormatVersion: 1,
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -32,7 +33,16 @@ func TestCollectAuthenticatesBearerTokenAndNegotiatesReady(t *testing.T) {
 			AuthorizedIndexes: []string{"z-last", "main"},
 		}, nil
 	})
-	harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
+	config := testServiceConfig()
+	build := validServiceBuildMetadata(t)
+	config.Build = build
+	config.ServerVersion = ""
+	expectedServerVersion := buildinfo.Identity{
+		ApplicationVersion: build.GetApplicationVersion(),
+		SourceRevision:     build.GetSourceRevision(),
+	}.DisplayVersion()
+	harness := newServiceHarness(t, config, authorizer, acceptingStore())
+	build.SourceRevision = "mutated"
 	stream := harness.stream(t, "Bearer token-value")
 
 	sendHello(t, stream, 1, 1, 0)
@@ -47,11 +57,63 @@ func TestCollectAuthenticatesBearerTokenAndNegotiatesReady(t *testing.T) {
 	if response.GetStreamSequence() != 1 || ready.GetStreamId() != "stream-test" {
 		t.Fatalf("ready response = %#v", response)
 	}
+	if ready.GetBuild().GetApplicationVersion() != "1.2.3" ||
+		ready.GetBuild().GetSourceRevision() != strings.Repeat("a", 40) {
+		t.Fatalf("ready build = %+v", ready.GetBuild())
+	}
+	if ready.GetServerVersion() != expectedServerVersion ||
+		ready.GetBuild().GetAssetManifestFormatVersion() != 1 {
+		t.Fatalf("ready release identity = %q %+v", ready.GetServerVersion(), ready.GetBuild())
+	}
 	if got, want := ready.GetAuthorizedIndexes(), []string{"main", "z-last"}; !equalStrings(got, want) {
 		t.Fatalf("authorized indexes = %v, want %v", got, want)
 	}
 	if ready.GetAcknowledgmentDurability() != opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED {
 		t.Fatalf("ack durability = %v", ready.GetAcknowledgmentDurability())
+	}
+}
+
+func TestNewServiceRejectsContradictoryOrMalformedBuildMetadata(t *testing.T) {
+	t.Parallel()
+
+	config := testServiceConfig()
+	config.Build = validServiceBuildMetadata(t)
+	if _, err := NewService(config, staticTestAuthorizer(), acceptingStore()); err == nil ||
+		!strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("contradictory server version error = %v", err)
+	}
+
+	config = testServiceConfig()
+	config.ServerVersion = ""
+	config.Build = validServiceBuildMetadata(t)
+	config.Build.ProtobufSchemaSha256 = "malformed"
+	if _, err := NewService(config, staticTestAuthorizer(), acceptingStore()); err == nil ||
+		!strings.Contains(err.Error(), "protobuf schema") {
+		t.Fatalf("malformed build metadata error = %v", err)
+	}
+}
+
+func validServiceBuildMetadata(t *testing.T) *opensplunkv1.BuildMetadata {
+	t.Helper()
+	identity, err := buildinfo.Parse("1.2.3", strings.Repeat("a", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uiBuildID, err := identity.UIBuildID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &opensplunkv1.BuildMetadata{
+		ApplicationVersion:         identity.ApplicationVersion,
+		SourceRevision:             identity.SourceRevision,
+		UiBuildId:                  uiBuildID,
+		UiSha256:                   strings.Repeat("1", 64),
+		ProtobufSchemaSha256:       strings.Repeat("2", 64),
+		SqliteMigrationsSha256:     strings.Repeat("3", 64),
+		SqliteMigrationVersion:     2,
+		ClickhouseMigrationsSha256: strings.Repeat("4", 64),
+		ClickhouseMigrationVersion: 1,
+		AssetManifestFormatVersion: 1,
 	}
 }
 

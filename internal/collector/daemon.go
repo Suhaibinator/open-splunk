@@ -17,6 +17,7 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"github.com/Suhaibinator/open-splunk/internal/collector/config"
 	"github.com/Suhaibinator/open-splunk/internal/collector/framing"
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
@@ -27,10 +28,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-// collectorVersion is advertised in the CollectorHello. It is a build-time
-// identity string, not a protocol version (see protocolMajor/protocolMinor).
-const collectorVersion = "0.1.0-dev"
 
 // Wire-protocol version the collector speaks; must match the server's expected
 // major (see internal/ingest DefaultConfig). Frozen with the protobuf contract.
@@ -183,6 +180,10 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("collector: invalid config: %w", err)
 	}
+	identity, err := buildinfo.Current()
+	if err != nil {
+		return nil, fmt.Errorf("collector: %w", err)
+	}
 	pipeline, redactor, err := buildProcessorRuntime(cfg.Processors)
 	if err != nil {
 		return nil, fmt.Errorf("collector: build processors: %w", err)
@@ -308,13 +309,13 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		ProtocolMajor: protocolMajor,
 		ProtocolMinor: protocolMinor,
 		Hello: sender.HelloInfo{
-			CollectorVersion: collectorVersion,
-			Hostname:         hostname,
-			OperatingSystem:  runtime.GOOS,
-			Architecture:     runtime.GOARCH,
-			StartedAt:        time.Now().UTC(),
-			Capabilities:     capabilities(cfg, anyMultiline),
-			Inputs:           registrations,
+			CollectorVersion: identity.DisplayVersion(),
+			Hostname:        hostname,
+			OperatingSystem: runtime.GOOS,
+			Architecture:    runtime.GOARCH,
+			StartedAt:       time.Now().UTC(),
+			Capabilities:    capabilities(cfg, anyMultiline),
+			Inputs:          registrations,
 		},
 
 		DialTimeout: 10 * time.Second,

@@ -6,6 +6,7 @@ import Link from "next/link";
 
 import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref, splFromFindInput } from "@/lib/search/launch-url";
+import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
 
 import { installModalSurface } from "./modal-surface";
 
@@ -198,7 +199,7 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
               <div className="suite-popover suite-utility-popover" id="suite-help-popover" role="menu" data-suite-menu="help">
                 <span className="suite-menu-label">Documentation is not bundled in this frontend preview.</span>
                 <span className="suite-menu-rule" />
-                <button role="menuitem" type="button" onClick={() => closeMenu(true)}>Close · Open Splunk preview v0.1.0</button>
+                <button role="menuitem" type="button" onClick={() => closeMenu(true)}>Close · Open Splunk {OPEN_SPLUNK_BUILD_LABEL}</button>
               </div>
             ) : null}
           </div>

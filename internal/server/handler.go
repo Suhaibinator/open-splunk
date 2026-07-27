@@ -18,6 +18,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
@@ -204,6 +205,7 @@ type BootstrapConfig struct {
 	ServerVersion           string
 	APIVersion              string
 	SPLCompatibilityVersion string
+	Build                   *opensplunkv1.BuildMetadata
 	SearchWebSocketPath     string
 	Features                []opensplunkv1.ServerFeature
 	Apps                    []*opensplunkv1.AppSummary
@@ -613,9 +615,6 @@ func writeAPIError(response http.ResponseWriter, status int, message string) {
 func normalizeBootstrap(config BootstrapConfig) (BootstrapConfig, error) {
 	result := config
 	result.ServerVersion = strings.TrimSpace(result.ServerVersion)
-	if result.ServerVersion == "" {
-		result.ServerVersion = "dev"
-	}
 	result.APIVersion = strings.TrimSpace(result.APIVersion)
 	if result.APIVersion == "" {
 		result.APIVersion = "v1"
@@ -623,6 +622,19 @@ func normalizeBootstrap(config BootstrapConfig) (BootstrapConfig, error) {
 	result.SPLCompatibilityVersion = strings.TrimSpace(result.SPLCompatibilityVersion)
 	if result.SPLCompatibilityVersion == "" {
 		result.SPLCompatibilityVersion = "tier-1-dev"
+	}
+	if result.Build != nil {
+		clonedBuild, serverVersion, err := buildmetadata.Normalize(result.Build, result.ServerVersion)
+		if err != nil {
+			if errors.Is(err, buildmetadata.ErrVersionMismatch) {
+				return BootstrapConfig{}, errors.New("create server handler: bootstrap server version does not match structured build metadata")
+			}
+			return BootstrapConfig{}, fmt.Errorf("create server handler: bootstrap build metadata: %w", err)
+		}
+		result.ServerVersion = serverVersion
+		result.Build = clonedBuild
+	} else if result.ServerVersion == "" {
+		result.ServerVersion = "dev"
 	}
 	if result.DefaultSearchTimeout < 0 || result.SearchResultRetention < 0 {
 		return BootstrapConfig{}, errors.New("create server handler: bootstrap durations cannot be negative")

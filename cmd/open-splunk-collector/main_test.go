@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 )
 
 // writeValidConfig writes a minimal valid collector config referencing a real
@@ -39,6 +42,24 @@ func writeValidConfig(t *testing.T) string {
 		t.Fatalf("write config: %v", err)
 	}
 	return path
+}
+
+func TestWriteBuildIdentityReportsCompiledReleaseFields(t *testing.T) {
+	t.Parallel()
+
+	identity, err := buildinfo.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := writeBuildIdentity(&output); err != nil {
+		t.Fatalf("writeBuildIdentity: %v", err)
+	}
+	want := "application_version=" + identity.ApplicationVersion +
+		"\nsource_revision=" + identity.SourceRevision + "\n"
+	if got := output.String(); got != want {
+		t.Fatalf("build identity = %q, want %q", got, want)
+	}
 }
 
 func TestRunDispatch(t *testing.T) {

@@ -13,6 +13,7 @@ const testFiles = [
   path.join("app", "search-workspace", "virtual-table.test.ts"),
   path.join("lib", "api", "pagination.test.ts"),
   path.join("lib", "api", "search-websocket.test.ts"),
+  path.join("lib", "api", "system-bootstrap.test.ts"),
   path.join("lib", "search", "backend-data.test.ts"),
   path.join("lib", "search", "server-timeline.test.ts"),
   path.join("lib", "search", "server-exports.test.ts"),
@@ -37,6 +38,13 @@ function run(command, arguments_, environment = process.env) {
 }
 
 try {
+  await run(process.execPath, [
+    "--test",
+    path.join(workspace, "scripts", "build-ui-output.test.mjs"),
+    path.join(workspace, "scripts", "compile-protos.test.mjs"),
+    path.join(workspace, "scripts", "materialize-git-snapshot.test.mjs"),
+    path.join(workspace, "scripts", "build-release.test.mjs"),
+  ]);
   const compilerConfig = path.join(outputDirectory, "tsconfig.json");
   await writeFile(compilerConfig, JSON.stringify({
     extends: path.join(workspace, "tsconfig.json"),

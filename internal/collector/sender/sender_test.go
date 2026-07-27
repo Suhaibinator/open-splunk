@@ -510,8 +510,8 @@ func testOptions() Options {
 		ProtocolMinor: 0,
 		Hello: HelloInfo{
 			CollectorVersion: "v-test",
-			Hostname:         "host-a",
-			StartedAt:        time.Now().Add(-time.Hour),
+			Hostname:  "host-a",
+			StartedAt: time.Now().Add(-time.Hour),
 		},
 		Backoff: BackoffPolicy{Initial: 5 * time.Millisecond, Max: 20 * time.Millisecond, Multiplier: 2, Jitter: 0.2},
 	}

@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -32,6 +33,7 @@ type Config struct {
 	ProtocolMinor        uint32
 	ServerInstanceID     string
 	ServerVersion        string
+	Build                *opensplunkv1.BuildMetadata
 	HeartbeatInterval    time.Duration
 	MaxInFlightBatches   uint32
 	MaxStreamsPerSubject uint32
@@ -40,12 +42,13 @@ type Config struct {
 	NewStreamID          func() string
 }
 
+const defaultServerVersion = "development"
+
 func DefaultConfig() Config {
 	return Config{
 		Limits:               DefaultLimits(),
 		ProtocolMajor:        1,
 		ProtocolMinor:        0,
-		ServerVersion:        "development",
 		HeartbeatInterval:    15 * time.Second,
 		MaxInFlightBatches:   1,
 		MaxStreamsPerSubject: 4,
@@ -78,8 +81,19 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 	if config.ServerInstanceID == "" {
 		config.ServerInstanceID = randomID()
 	}
-	if config.ServerVersion == "" {
-		config.ServerVersion = defaults.ServerVersion
+	config.ServerVersion = strings.TrimSpace(config.ServerVersion)
+	if config.Build != nil {
+		clonedBuild, serverVersion, err := buildmetadata.Normalize(config.Build, config.ServerVersion)
+		if err != nil {
+			if errors.Is(err, buildmetadata.ErrVersionMismatch) {
+				return nil, errors.New("ingest server version does not match structured build metadata")
+			}
+			return nil, fmt.Errorf("ingest build metadata: %w", err)
+		}
+		config.ServerVersion = serverVersion
+		config.Build = clonedBuild
+	} else if config.ServerVersion == "" {
+		config.ServerVersion = defaultServerVersion
 	}
 	if config.HeartbeatInterval == 0 {
 		config.HeartbeatInterval = defaults.HeartbeatInterval
@@ -191,6 +205,7 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 			StreamId:                 streamID,
 			ServerInstanceId:         s.config.ServerInstanceID,
 			ServerVersion:            s.config.ServerVersion,
+			Build:                    buildmetadata.Clone(s.config.Build),
 			ProtocolMajor:            s.config.ProtocolMajor,
 			ProtocolMinor:            hello.GetProtocolMinor(),
 			ServerTime:               timestamppb.New(s.config.Clock().UTC()),

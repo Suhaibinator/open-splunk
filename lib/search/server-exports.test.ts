@@ -162,6 +162,7 @@ function bootstrapModel(searchWebsocketPath: string | null): SystemBootstrapMode
     serverVersion: "test",
     apiVersion: "v1",
     splCompatibilityVersion: "v0.1",
+    build: null,
     features: new Set([ServerFeature.SERVER_FEATURE_EXPORT_CSV]),
     searchWebsocketPath,
     limits: {

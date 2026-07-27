@@ -25,6 +25,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -32,6 +33,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"github.com/Suhaibinator/open-splunk/internal/collector"
 	"github.com/Suhaibinator/open-splunk/internal/collector/config"
 )
@@ -55,6 +57,16 @@ func run(args []string) int {
 		return runCollector(args)
 	case "validate":
 		return validateConfig(args)
+	case "version":
+		if len(args) != 0 {
+			fmt.Fprintln(os.Stderr, "version does not accept arguments")
+			return 2
+		}
+		if err := writeBuildIdentity(os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "load build identity: %v\n", err)
+			return 1
+		}
+		return 0
 	case "help", "-h", "-help", "--help":
 		usage(os.Stdout)
 		return 0
@@ -63,6 +75,17 @@ func run(args []string) int {
 		usage(os.Stderr)
 		return 2
 	}
+}
+
+func writeBuildIdentity(output io.Writer) error {
+	if output == nil {
+		return fmt.Errorf("build identity output is required")
+	}
+	identity, err := buildinfo.Current()
+	if err != nil {
+		return err
+	}
+	return buildinfo.WriteIdentity(output, identity)
 }
 
 // runCollector builds and runs the daemon until a termination signal arrives.
@@ -182,6 +205,7 @@ usage:
   open-splunk-collector [run] [-config PATH] [-log-level LEVEL]
                                                    start the collector (default)
   open-splunk-collector validate [-config PATH]    validate configuration and exit
+  open-splunk-collector version                    print the compiled build identity
 
 flags:
   -config PATH       configuration file (default `+defaultConfigPath+`)

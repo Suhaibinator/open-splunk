@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
+
 interface SignInScreenProps {
   dataMode: "backend" | "demo";
 }
@@ -45,7 +47,7 @@ export function SignInScreen({ dataMode }: SignInScreenProps) {
           <Link className="signin-submit" href="/" style={{ textDecoration: "none" }}>{localSession ? "Continue to local workspace" : "Continue to preview"}</Link>
           <div className="signin-divider"><span>or</span></div>
           <Link className="signin-preview-link" href="/search/">Open Search &amp; Reporting <span aria-hidden="true">›</span></Link>
-          <footer><span>Open Splunk v0.1.0 {localSession ? "local server" : "preview"}</span><span>{localSession ? "Single-user access" : "Authentication unavailable"}</span></footer>
+          <footer><span>Open Splunk {OPEN_SPLUNK_BUILD_LABEL} · {localSession ? "local server" : "preview"}</span><span>{localSession ? "Single-user access" : "Authentication unavailable"}</span></footer>
         </div>
       </section>
     </main>

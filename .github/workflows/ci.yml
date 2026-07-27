@@ -39,14 +39,9 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
-
-      - name: Install protoc
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends protobuf-compiler
 
       - name: Install protobuf generators
         run: make proto-tools
@@ -82,7 +77,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -90,10 +85,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .next/cache
-          key: ${{ runner.os }}-next-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**', 'next.config.ts', 'tsconfig.json') }}
+          key: ${{ runner.os }}-next-${{ hashFiles('.node-version', 'package-lock.json') }}-${{ hashFiles('app/**', 'next.config.ts', 'tsconfig.json') }}
           restore-keys: |
-            ${{ runner.os }}-next-${{ hashFiles('package-lock.json') }}-
-            ${{ runner.os }}-next-
+            ${{ runner.os }}-next-${{ hashFiles('.node-version', 'package-lock.json') }}-
 
       - name: Install dependencies
         run: npm ci
@@ -106,6 +100,9 @@ jobs:
 
       - name: Type-check
         run: npm run typecheck
+
+      - name: Test frontend and build transactions
+        run: npm run test:frontend
 
       - name: Build static UI
         run: npm run build
@@ -212,7 +209,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -269,7 +266,7 @@ jobs:
           go-package: ./...
 
   build:
-    name: Production binaries
+    name: Production binaries (${{ matrix.label }})
     needs:
       - backend-vertical
       - frontend
@@ -278,8 +275,16 @@ jobs:
       - go-test
       - go-vulnerability
       - protobuf
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-amd64
+            os: ubuntu-latest
+          - label: macos
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -288,40 +293,55 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
+          cache: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Restore Next.js cache
-        uses: actions/cache@v6
-        with:
-          path: .next/cache
-          key: ${{ runner.os }}-next-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**', 'next.config.ts', 'tsconfig.json') }}
-          restore-keys: |
-            ${{ runner.os }}-next-${{ hashFiles('package-lock.json') }}-
-            ${{ runner.os }}-next-
-
-      - name: Install protoc
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends protobuf-compiler
-
-      - name: Install build tools
-        run: make proto-tools
+          node-version-file: .node-version
 
       - name: Build server, collector, and log generator
-        run: make build build-loggen
+        env:
+          OPEN_SPLUNK_SOURCE_REVISION: ${{ github.sha }}
+        run: make release
+
+      - name: Verify embedded release payload
+        run: |
+          mkdir -p release-proof
+          ./build/open-splunk-server -verify-embedded-release > release-proof/verification.txt
+          cmp build/release-verification.txt release-proof/verification.txt
+          cp build/asset-manifest.json release-proof/asset-manifest.json
+          cp build/binary-identities.txt release-proof/binary-identities.txt
+
+      - name: Upload release proof
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-proof-${{ matrix.label }}
+          path: release-proof
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Package binaries
-        run: tar -C build -czf open-splunk-linux-amd64.tar.gz .
+        if: matrix.label == 'linux-amd64'
+        run: |
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          tar \
+            --format=gnu \
+            --sort=name \
+            --mtime="@${source_date_epoch}" \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            --mode='u+rwX,go+rX,go-w' \
+            -C build \
+            -cf - \
+            open-splunk-server \
+            open-splunk-collector \
+            open-splunk-loggen |
+            gzip -n > open-splunk-linux-amd64.tar.gz
 
       - name: Upload binaries
+        if: matrix.label == 'linux-amd64'
         uses: actions/upload-artifact@v7
         with:
           name: open-splunk-linux-amd64
@@ -329,3 +349,28 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           archive: false
+
+  release-assets-consistency:
+    name: Linux/macOS release asset consistency
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download Linux release proof
+        uses: actions/download-artifact@v7
+        with:
+          name: release-proof-linux-amd64
+          path: release-proof/linux
+
+      - name: Download macOS release proof
+        uses: actions/download-artifact@v7
+        with:
+          name: release-proof-macos
+          path: release-proof/macos
+
+      - name: Compare canonical embedded assets
+        run: |
+          cmp release-proof/linux/asset-manifest.json release-proof/macos/asset-manifest.json
+          cmp release-proof/linux/binary-identities.txt release-proof/macos/binary-identities.txt
+          cmp release-proof/linux/verification.txt release-proof/macos/verification.txt

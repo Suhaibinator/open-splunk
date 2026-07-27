@@ -5,6 +5,7 @@ package open_splunk.v1;
 import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 import "open_splunk/v1/app.proto";
+import "open_splunk/v1/common.proto";
 import "open_splunk/v1/index.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
@@ -54,4 +55,5 @@ message GetSystemBootstrapResponse {
   repeated IndexSummary indexes = 8;
   optional string selected_app_id = 9;
   google.protobuf.Timestamp server_time = 10;
+  BuildMetadata build = 11;
 }

@@ -6,6 +6,21 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
 
+// BuildMetadata reports one immutable server source identity and the exact
+// embedded UI, contracts, and migrations produced from it.
+message BuildMetadata {
+  string application_version = 1;
+  string source_revision = 2;
+  string ui_build_id = 3;
+  string ui_sha256 = 4;
+  string protobuf_schema_sha256 = 5;
+  string sqlite_migrations_sha256 = 6;
+  uint32 sqlite_migration_version = 7;
+  string clickhouse_migrations_sha256 = 8;
+  uint32 clickhouse_migration_version = 9;
+  uint32 asset_manifest_format_version = 10;
+}
+
 // PageRequest uses an opaque server cursor. page_token must only be replayed
 // with the same endpoint and filter/sort parameters that produced it.
 message PageRequest {

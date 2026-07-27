@@ -161,6 +161,7 @@ message CollectorReady {
   repeated string authorized_indexes = 12;
   AckDurability acknowledgment_durability = 13;
   optional uint64 resume_after_batch_sequence = 14;
+  BuildMetadata build = 15;
 }
 
 enum EventRejectionCode {

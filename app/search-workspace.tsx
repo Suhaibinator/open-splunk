@@ -77,6 +77,7 @@ import {
   supportsServerFeature,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
 import {
   adaptSearchResults,
   compareWorkspaceStatisticValues,
@@ -5894,7 +5895,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
                 <span className="menu-label">Search help</span>
                 <button role="menuitem" type="button" onClick={() => showToast("SPL reference will open in a documentation pane.")}>SPL command reference</button>
                 <button role="menuitem" type="button" onClick={() => showToast("Tip: press Ctrl+Space inside the editor for completions.")}>Keyboard shortcuts</button>
-                <button role="menuitem" type="button" onClick={() => showToast("Open Splunk frontend preview · v0.1.0")}>About Open Splunk</button>
+                <button role="menuitem" type="button" onClick={() => showToast(`Open Splunk ${OPEN_SPLUNK_BUILD_LABEL}`)}>About Open Splunk</button>
               </div>
             ) : null}
           </div>

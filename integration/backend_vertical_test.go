@@ -518,9 +518,18 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 			previewFeatures++
 		}
 	}
-	if bootstrap.GetServerVersion() != "dev" || bootstrap.GetApiVersion() != "v1" ||
+	build := bootstrap.GetBuild()
+	if bootstrap.GetServerVersion() != integrationApplicationVersion+" ("+integrationSourceRevision+")" ||
+		bootstrap.GetApiVersion() != "v1" ||
 		bootstrap.GetSplCompatibilityVersion() != splCompatibilityVersionForTest ||
 		bootstrap.GetSearchWebsocketPath() != "/api/v1/search/ws" ||
+		build.GetApplicationVersion() != integrationApplicationVersion ||
+		build.GetSourceRevision() != integrationSourceRevision ||
+		build.GetUiBuildId() != integrationUIBuildID ||
+		build.GetUiSha256() == "" || build.GetProtobufSchemaSha256() == "" ||
+		build.GetSqliteMigrationsSha256() == "" || build.GetSqliteMigrationVersion() == 0 ||
+		build.GetClickhouseMigrationsSha256() == "" || build.GetClickhouseMigrationVersion() == 0 ||
+		build.GetAssetManifestFormatVersion() != 1 ||
 		limits.GetMaximumPreviewRows() == 0 || limits.GetMaximumWebsocketSubscriptions() == 0 ||
 		limits.GetMaximumWebsocketFrameBytes() < 1<<10 || limits.GetMaximumWebsocketFrameBytes() > 1<<20 ||
 		timelineFeatures != 1 || previewFeatures != 1 ||

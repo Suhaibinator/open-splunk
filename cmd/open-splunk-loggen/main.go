@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"github.com/Suhaibinator/open-splunk/internal/loggen"
 )
 
@@ -72,6 +73,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returned
 	environment := flags.String("environment", defaults.Environment, "environment field")
 	host := flags.String("host", defaults.Host, "host field")
 	cardinality := flags.Uint64("cardinality", defaults.Cardinality, "number of distinct bounded user IDs")
+	version := flags.Bool("version", false, "print the compiled application version and source revision")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -83,6 +85,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returned
 	}
 	if stdout == nil || stderr == nil {
 		return errors.New("stdout and stderr writers are required")
+	}
+	if *version {
+		identity, err := buildinfo.Current()
+		if err != nil {
+			return err
+		}
+		return buildinfo.WriteIdentity(stdout, identity)
 	}
 	if *appendOutput && *output == "-" {
 		return errors.New("-append requires a file output path")
