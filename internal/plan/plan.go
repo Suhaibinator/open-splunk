@@ -509,6 +509,7 @@ const (
 	ScalarFunctionLower
 	ScalarFunctionUpper
 	ScalarFunctionLength
+	ScalarFunctionSubstring
 )
 
 // ScalarCallExpression invokes one supported eval operation.

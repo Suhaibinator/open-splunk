@@ -228,6 +228,7 @@ const (
 	ScalarFunctionLower
 	ScalarFunctionUpper
 	ScalarFunctionLength
+	ScalarFunctionSubstring
 )
 
 // ScalarCallExpr invokes a supported eval function. Function names are

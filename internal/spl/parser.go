@@ -2385,6 +2385,41 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				},
 			}
 		}
+	case "substr":
+		function = ScalarFunctionSubstring
+		if len(arguments) < 2 || len(arguments) > 3 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: "substr requires two or three arguments",
+				Range:   name.sourceRange,
+			}
+		}
+		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "substr cannot consume a Boolean result in search-mode expressions",
+				Range:   arguments[0].SourceRange(),
+				Suggestions: []string{
+					"use isnull or isnotnull directly with where",
+					"consume the Boolean with a supported conditional or conversion function",
+				},
+			}
+		}
+		for index := 1; index < len(arguments); index++ {
+			literal, ok := arguments[index].(*ScalarLiteralExpr)
+			if !ok || literal == nil || literal.Value.Kind != LiteralKindInteger {
+				return nil, &Diagnostic{
+					Code: "SPL_UNSUPPORTED_SUBSTRING_INDEX",
+					Message: "substr start and length must be literal integers " +
+						"in compatibility version 0.1",
+					Range: arguments[index].SourceRange(),
+					Suggestions: []string{
+						`substr(value, 1)`,
+						`substr(value, -3, 2)`,
+					},
+				}
+			}
+		}
 	default:
 		return nil, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_EVAL_FUNCTION",
@@ -2399,6 +2434,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				"lower(value)",
 				"upper(value)",
 				"len(value)",
+				"substr(value, start, length)",
 				`if(predicate, true_value, false_value)`,
 			},
 		}

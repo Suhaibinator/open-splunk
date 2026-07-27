@@ -1900,6 +1900,15 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		case spl.ScalarFunctionLength:
 			expectedArguments = 1
 			functionName = "len"
+		case spl.ScalarFunctionSubstring:
+			functionName = "substr"
+			if len(expression.Arguments) < 2 || len(expression.Arguments) > 3 {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_EVAL_ARITY",
+					Message: "substr requires two or three arguments",
+					Range:   expression.Range,
+				}
+			}
 		}
 		if expectedArguments != 0 && len(expression.Arguments) != expectedArguments {
 			argumentNoun := "arguments"
@@ -1932,6 +1941,34 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				}
 			}
 		}
+		if expression.Function == spl.ScalarFunctionSubstring {
+			if splScalarMayReturnBooleanFunction(expression.Arguments[0]) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message: "search-mode scalar functions cannot consume a Boolean result",
+					Range:   expression.Arguments[0].SourceRange(),
+				}
+			}
+			for index := 1; index < len(expression.Arguments); index++ {
+				if nilSPLScalarExpression(expression.Arguments[index]) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+						Message: "scalar expression is missing",
+						Range:   expression.Range,
+					}
+				}
+				literal, ok := expression.Arguments[index].(*spl.ScalarLiteralExpr)
+				if !ok || literal == nil ||
+					literal.Value.Kind != spl.LiteralKindInteger {
+					return nil, &Diagnostic{
+						Code: "SPL_UNSUPPORTED_SUBSTRING_INDEX",
+						Message: "substr start and length must be literal integers " +
+							"in compatibility version 0.1",
+						Range: expression.Arguments[index].SourceRange(),
+					}
+				}
+			}
+		}
 		arguments := make([]ScalarExpression, 0, len(expression.Arguments))
 		for _, argument := range expression.Arguments {
 			converted, err := convertScalarExpressionUnchecked(argument)
@@ -1958,6 +1995,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			function = ScalarFunctionUpper
 		case spl.ScalarFunctionLength:
 			function = ScalarFunctionLength
+		case spl.ScalarFunctionSubstring:
+			function = ScalarFunctionSubstring
 		default:
 			return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EVAL_FUNCTION", Message: "unsupported scalar function", Range: expression.Range}
 		}
