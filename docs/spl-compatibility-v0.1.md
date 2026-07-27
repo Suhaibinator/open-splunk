@@ -39,6 +39,9 @@ arguments are compiled.
 Every `case` call accepts one through 16 condition/value pairs and has the
 same separate 64 KiB generated-SQL ceiling, checked incrementally while its
 alternating predicates and values are compiled.
+Every `lower` or `upper` call accepts exactly one value and has the same
+separate 64 KiB generated-SQL ceiling, checked after its scalar or
+multivalue lowering is built.
 Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
@@ -115,8 +118,8 @@ slice supports Boolean combinations of scalar comparisons and direct
 `isnull(value)` / `isnotnull(value)` predicates. Each informational function
 accepts exactly one scalar expression, and can also be compared explicitly
 with a Boolean literal. Scalar operands may be fields, typed literals, or the
-supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, and bounded
-`case` calls
+supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, bounded
+`case`, `lower`, and `upper` calls
 described below;
 arithmetic, field quoting, `XOR`, and other eval functions are not yet
 accepted. Missing, null, container, or failed numeric operands do not pass
@@ -149,6 +152,7 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval score=if(status>=500, 1, 0)
 | eval selected=coalesce(null, source, "unknown")
 | eval class=case(status>=500, "server", status>=400, "client", 1=1, "other")
+| eval normalized=lower(username), display=upper(normalized)
 ```
 
 Assignments are evaluated from left to right, and later assignments may use an
@@ -167,7 +171,9 @@ narrow:
 - `coalesce(value, ...)` selects the first non-null supported fixed value from
   one through 32 arguments;
 - `case(predicate, value, ...)` selects the value paired with the first true
-  predicate from one through 16 condition/value pairs.
+  predicate from one through 16 condition/value pairs;
+- `lower(value)` and `upper(value)` map one String or multivalue String using
+  Unicode-aware case conversion.
 
 The `if` predicate uses exactly the `where` grammar described above:
 case-sensitive scalar comparisons, direct `isnull` / `isnotnull` predicates,
@@ -339,6 +345,59 @@ does not expand multivalue members or multiply rows. Production execution pins
 static type analysis and constant folding. The per-call 64 KiB SQL ceiling is
 enforced incrementally before the final expression is concatenated, in
 addition to the whole-query ceiling.
+
+`lower` and `upper` each accept exactly one argument:
+
+```spl
+| eval normalized=lower(username)
+| eval shouted=upper(normalized)
+| where lower(source)="api"
+```
+
+Function names are case-insensitive. A bare field named `lower` or `upper`
+remains an ordinary field; function parsing applies only when the name is
+followed by parentheses. The argument must be a String-producing expression
+or a multivalue String. A fixed numeric, Boolean, or canonical time argument
+fails with `SPL_UNSUPPORTED_TEXT_CASE_VALUE_TYPE`; Open Splunk does not
+silently apply the separate, currently unsupported `tostring` function.
+
+A fixed `String` produces a fixed `String`. A Dynamic runtime `String`
+produces a Dynamic `String`. Missing, explicit null, and unsupported Dynamic
+runtime values produce null. Unsupported runtime values include numbers,
+Booleans, objects, and other containers rather than being converted through
+ClickHouse's generic `toString`.
+
+Multivalue input is mapped member by member while preserving member order and
+cardinality. Fixed `Array(String)`, Dynamic `Array(String)`, and homogeneous
+all-String `Array(Dynamic)` are supported; the latter is normalized to
+`Array(String)`. A heterogeneous or null-containing Dynamic array produces
+null. An invalid fixed String array becomes the canonical empty, logically
+absent multivalue. No form uses `ARRAY JOIN`, expands an event into multiple
+rows, or changes event cardinality.
+
+The functions require valid UTF-8. Ingested typed Strings already satisfy that
+boundary. Canonical `_raw` is eligible only when its stored encoding is UTF-8;
+binary-declared raw bytes produce null even if those bytes happen to be ASCII.
+`replace(_raw, ...)` preserves this provenance. The String normalization used
+by `stats values(_raw)` and `stats list(_raw)` removes binary-declared inputs,
+and fixed multivalue conversion independently validates every retained member
+before applying a UTF-8 function.
+
+Open Splunk lowers to ClickHouse `lowerUTF8` and `upperUTF8` on the pinned
+ClickHouse `26.3.17.4` execution target. This is Unicode-aware case mapping,
+not locale-aware collation, normalization, or full case folding; in
+particular, callers must not infer Turkish-locale behavior. ClickHouse also
+documents limitations when a code point's upper- or lowercase representation
+changes encoded byte length. Compatibility expansion for locale-sensitive or
+normalization-sensitive searches requires a separate differential contract.
+
+The result of `lower` or `upper` still participates in `where`'s ordinary
+case-sensitive String comparison. Thus `lower(value)="text"` and
+`lower(value)="TEXT"` are distinct predicates. Dynamic text results use a
+text-only comparison path that binds each operand once and does not generate
+irrelevant numeric, decimal, or Boolean branches. Nested Dynamic and fixed
+multivalue calls also bind each child expression once, so SQL growth is linear
+until the per-call 64 KiB and whole-query 256 KiB ceilings apply.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
@@ -1579,6 +1638,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`first` and `last` event-order functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/statistical-and-charting-functions/event-order-functions),
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
 [`if`, `coalesce`, `case`, and conditional functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
+[`lower`, `upper`, and text functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/text-functions),
 [`predicate expressions`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.2/expressions-and-predicates/predicate-expressions),
 [`isnull` and `isnotnull` informational functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/informational-functions),
 [`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),
@@ -1595,6 +1655,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`chart`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/search-commands/chart),
 [`time modifiers`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.4/specify-time-ranges/specify-time-modifiers-in-your-search),
 ClickHouse's [`if` and conditional functions](https://clickhouse.com/docs/reference/functions/regular-functions/conditional-functions),
+ClickHouse's [`lowerUTF8`, `upperUTF8`, and String functions](https://clickhouse.com/docs/sql-reference/functions/string-functions),
 ClickHouse's [`extractGroups`](https://clickhouse.com/docs/sql-reference/functions/string-search-functions),
 and the [RE2 syntax reference](https://github.com/google/re2/wiki/Syntax)
 documentation.

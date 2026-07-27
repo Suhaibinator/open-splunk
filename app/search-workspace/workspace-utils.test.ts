@@ -78,15 +78,30 @@ test("case highlights only when used as a parenthesized function", () => {
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
-test("eval completion advertises the exact conditional signatures", () => {
+test("lower and upper highlight only when used as parenthesized functions", () => {
+  const query = `index=main lower=1 upper=2 | eval normalized=LOWER(source), shouted=upper(normalized) | table lower,upper`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["lower", "upper"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
+test("eval completion advertises the exact supported scalar signatures", () => {
   const evalCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eval");
   assert.ok(evalCompletion);
   assert.equal(evalCompletion.insertion, 'eval availability=if(isnull(status), "missing", "present")');
   assert.match(evalCompletion.detail, /if\(predicate, true_value, false_value\)/);
   assert.match(evalCompletion.detail, /coalesce\(value, fallback, \.\.\.\)/);
   assert.match(evalCompletion.detail, /case\(predicate, value, \.\.\.\)/);
+  assert.match(evalCompletion.detail, /lower\(value\)/);
+  assert.match(evalCompletion.detail, /upper\(value\)/);
   assert.match(evalCompletion.detail, /first non-null fixed value/i);
   assert.match(evalCompletion.detail, /first true predicate/i);
+  assert.match(evalCompletion.detail, /Unicode string or multivalue/i);
 });
 
 test("stats completion advertises true-only conditional count with an explicit alias", () => {

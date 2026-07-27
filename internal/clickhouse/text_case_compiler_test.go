@@ -1,32 +1,30 @@
 package clickhouse
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
-func TestCompileEvalLowerUpperFixedScalarsAreTypedAndParameterized(t *testing.T) {
+func TestCompileEvalLowerUpperFixedStringsAreTypedAndParameterized(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(
 		t,
-		`index=gradethis | eval folded=lower("MÜNCHEN"), shouted=upper(folded), number=lower(123), boolean=upper(true) | table folded,shouted,number,boolean`,
+		`index=gradethis | eval folded=lower("MÜNCHEN"), shouted=upper(folded), absent=lower(null) | table folded,shouted,absent`,
 	)
 	for _, required := range []string{
 		`lowerUTF8(CAST(? AS String)) AS "folded"`,
 		`upperUTF8("folded") AS "shouted"`,
-		`lowerUTF8(toString(CAST(? AS Int64))) AS "number"`,
-		`upperUTF8(toString(CAST(? AS Bool))) AS "boolean"`,
+		`lowerUTF8(toString(CAST(NULL AS Nullable(String)))) AS "absent"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("text-case SQL missing %q:\n%s", required, compiled.SQL)
 		}
 	}
-	// Sequential eval stages nest SELECTs, so later assignment bindings appear
-	// first in final SQL placeholder order.
-	wantPrefix := []any{true, int64(123), "MÜNCHEN"}
+	wantPrefix := []any{"MÜNCHEN"}
 	if len(compiled.Args) < len(wantPrefix) {
 		t.Fatalf("args = %#v, want prefix %#v", compiled.Args, wantPrefix)
 	}
@@ -37,6 +35,35 @@ func TestCompileEvalLowerUpperFixedScalarsAreTypedAndParameterized(t *testing.T)
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s", got, want, compiled.SQL)
+	}
+}
+
+func TestCompileEvalLowerUpperRejectsFixedNonStringInputs(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | eval value=lower(123)`,
+		`index=gradethis | eval value=upper(true)`,
+		`index=gradethis | eval value=lower(_time)`,
+	} {
+		logical := buildPlan(t, source)
+		_, err := (Compiler{}).Compile(logical)
+		var diagnostic *plan.Diagnostic
+		if !errors.As(err, &diagnostic) ||
+			diagnostic.Code != "SPL_UNSUPPORTED_TEXT_CASE_VALUE_TYPE" {
+			t.Fatalf(
+				"Compile(%q) error = %#v, want SPL_UNSUPPORTED_TEXT_CASE_VALUE_TYPE",
+				source,
+				err,
+			)
+		}
+		if diagnostic.Range.Start.Offset >= diagnostic.Range.End.Offset ||
+			!strings.Contains(
+				source[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset],
+				"(",
+			) {
+			t.Fatalf("Compile(%q) diagnostic range = %#v", source, diagnostic.Range)
+		}
 	}
 }
 

@@ -4986,7 +4986,7 @@ func compileTextCaseScalar(
 			"(element), values), CAST([], 'Array(String)')), [" +
 			input.valueSQL + "]), 1)"
 		resultKind = fieldKindStringArray
-	default:
+	case fieldKindString, fieldKindInvalid:
 		inputSQL, inputArgs := compiledStringScalar(input)
 		valueArgs = inputArgs
 		if input.textEligibleSQL != "" {
@@ -4997,6 +4997,15 @@ func compileTextCaseScalar(
 				inputSQL + ", CAST(NULL AS Nullable(String)))"
 		}
 		valueSQL = clickHouseFunction + "(" + inputSQL + ")"
+	default:
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_UNSUPPORTED_TEXT_CASE_VALUE_TYPE",
+			Message: fmt.Sprintf(
+				"%s requires a String or multivalue String input",
+				functionName,
+			),
+			Range: expression.Range,
+		}
 	}
 	if len(valueSQL) > maxCompiledTextCaseScalarSQLBytes {
 		return compiledScalar{}, &plan.Diagnostic{
