@@ -49,6 +49,9 @@ Every `substr` call accepts one String value, one literal integer start, and
 an optional literal integer length. It has the same separate 64 KiB
 generated-SQL ceiling, checked after its SQLite-compatible UTF-8 interval
 lowering is built.
+Every `tostring` call accepts exactly one value and has the same separate
+64 KiB generated-SQL ceiling, checked after its typed conversion lowering is
+built. Formatted modes are a separate unsupported surface.
 Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
@@ -126,7 +129,8 @@ slice supports Boolean combinations of scalar comparisons and direct
 accepts exactly one scalar expression, and can also be compared explicitly
 with a Boolean literal. Scalar operands may be fields, typed literals, or the
 supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, bounded
-`case`, `lower`, `upper`, `len`, `length`, and bounded `substr` calls
+`case`, `lower`, `upper`, `len`, `length`, bounded `substr`, and bounded
+default `tostring` calls
 described below;
 arithmetic, field quoting, `XOR`, and other eval functions are not yet
 accepted. Missing, null, container, or failed numeric operands do not pass
@@ -162,6 +166,7 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval normalized=lower(username), display=upper(normalized)
 | eval characters=len(message)
 | eval route=substr(path, 1, 32)
+| eval rendered=tostring(status), flag=tostring(isnull(optional))
 ```
 
 Assignments are evaluated from left to right, and later assignments may use an
@@ -186,7 +191,9 @@ narrow:
 - `len(value)` and its `length(value)` alias count UTF-8 code points in one
   scalar String;
 - `substr(value, start[, length])` selects a UTF-8 code-point interval using
-  SQLite-compatible indexes and literal integer bounds.
+  SQLite-compatible indexes and literal integer bounds;
+- `tostring(value)` returns one fixed String from a scalar String, number, or
+  Boolean. Formatted modes are not supported.
 
 The `if` predicate uses exactly the `where` grammar described above:
 case-sensitive scalar comparisons, direct `isnull` / `isnotnull` predicates,
@@ -372,7 +379,7 @@ remains an ordinary field; function parsing applies only when the name is
 followed by parentheses. The argument must be a String-producing expression
 or a multivalue String. A fixed numeric, Boolean, or canonical time argument
 fails with `SPL_UNSUPPORTED_TEXT_CASE_VALUE_TYPE`; Open Splunk does not
-silently apply the separate, currently unsupported `tostring` function.
+silently apply the separate `tostring` conversion.
 
 A fixed `String` produces a fixed `String`. A Dynamic runtime `String`
 produces a Dynamic `String`. Missing, explicit null, and unsupported Dynamic
@@ -500,6 +507,57 @@ negative. The bounded fallback binds the source and indexes once, computes in
 integer types. This makes `MinInt64` and `MaxUint64` arguments overflow-safe.
 Nested calls grow linearly under the per-call 64 KiB and whole-query 256 KiB
 SQL ceilings.
+
+`tostring` accepts exactly one value:
+
+```spl
+| eval status_text=tostring(status)
+| eval flag=tostring(isnull(optional))
+| where tostring(code)="500"
+```
+
+Function names are case-insensitive, and a bare field named `tostring`
+remains an ordinary field. The default, unformatted conversion is the only
+supported form in compatibility version 0.1. Splunk documents optional
+`binary`, `hex`, `commas`, and `duration` numeric formats; any second argument
+fails at the call with `SPL_UNSUPPORTED_TOSTRING_FORMAT`, regardless of its
+value. Zero arguments or more than two arguments fail arity validation.
+
+A fixed String is returned unchanged. Fixed `Int64`, `UInt64`, and `Float64`
+values use their exact ClickHouse textual spelling. A Boolean becomes exactly
+`"True"` or `"False"`, including a supported `isnull` or `isnotnull` result
+that cannot otherwise escape directly into an `eval` assignment. Missing,
+explicit-null, and statically null input returns null rather than a textual
+sentinel. Canonical `_time` and `_indextime` are deliberately rejected with
+`SPL_UNSUPPORTED_TOSTRING_VALUE_TYPE` until their timezone and precision
+contract is pinned.
+
+Dynamic runtime String, integer, floating-point, and Boolean values follow the
+same conversion. The repository's exact `decimal/v1` extension preserves its
+validated payload spelling, including trailing fractional zeroes, so it never
+loses precision through `Float64`. Decimal envelopes must contain exactly the
+type and value keys, have a payload of at most 4 KiB, and match the canonical
+Decimal grammar. Malformed or oversized envelopes return null without
+exposing their payload. Dynamic null, arrays, objects, and other tagged
+containers also return null. Fixed `Array(String)` fails with
+`SPL_UNSUPPORTED_MULTIVALUE_USAGE`; no form maps members, applies
+`ARRAY JOIN`, or changes row cardinality.
+
+String identity retains text-eligibility provenance. Thus
+`tostring(_raw)` preserves the raw bytes even when they are declared binary,
+while a later `lower`, `upper`, `len`, or `substr` still returns null instead
+of treating those bytes as UTF-8. Dynamic text-only producers such as
+`lower(field)` use direct nullable String extraction rather than repeating
+the broader type dispatch. General Dynamic conversion binds its input once;
+fixed nullable Boolean conversion uses one scalar `transform` call. Nested
+calls grow linearly under the per-call 64 KiB and whole-query 256 KiB SQL
+ceilings.
+
+Splunk's public documentation specifies String/number/Boolean conversion and
+capitalized Boolean output, but it does not fully pin null spelling, extended
+Decimal input, canonical time precision, or every default numeric edge.
+Those cases therefore remain the explicit conservative boundaries above
+until a live Splunk differential oracle is available.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
@@ -1742,6 +1800,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`if`, `coalesce`, `case`, and conditional functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
 [`lower`, `upper`, and text functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/text-functions),
 [SQLite core `substr` semantics](https://www.sqlite.org/lang_corefunc.html),
+[`tostring` and conversion functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/evaluation-functions/conversion-functions),
 [`predicate expressions`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.2/expressions-and-predicates/predicate-expressions),
 [`isnull` and `isnotnull` informational functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/informational-functions),
 [`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),
@@ -1759,6 +1818,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`time modifiers`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.4/specify-time-ranges/specify-time-modifiers-in-your-search),
 ClickHouse's [`if` and conditional functions](https://clickhouse.com/docs/reference/functions/regular-functions/conditional-functions),
 ClickHouse's [`lowerUTF8`, `upperUTF8`, `lengthUTF8`, and String functions](https://clickhouse.com/docs/sql-reference/functions/string-functions),
+ClickHouse's [`toString` and type-conversion functions](https://clickhouse.com/docs/sql-reference/functions/type-conversion-functions),
 ClickHouse's [`extractGroups`](https://clickhouse.com/docs/sql-reference/functions/string-search-functions),
 and the [RE2 syntax reference](https://github.com/google/re2/wiki/Syntax)
 documentation.

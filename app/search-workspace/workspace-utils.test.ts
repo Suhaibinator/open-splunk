@@ -114,6 +114,18 @@ test("substr highlights only when used as a parenthesized function", () => {
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
+test("tostring highlights only when used as a parenthesized function", () => {
+  const query = `index=main tostring=1 | eval rendered=ToStRiNg(status) | table tostring`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["tostring"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
 test("eval completion advertises the exact supported scalar signatures", () => {
   const evalCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eval");
   assert.ok(evalCompletion);
@@ -125,11 +137,13 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /upper\(value\)/);
   assert.match(evalCompletion.detail, /len\(value\)\/length\(value\)/);
   assert.match(evalCompletion.detail, /substr\(value, start\[, length\]\)/);
+  assert.match(evalCompletion.detail, /tostring\(value\)/);
   assert.match(evalCompletion.detail, /first non-null fixed value/i);
   assert.match(evalCompletion.detail, /first true predicate/i);
   assert.match(evalCompletion.detail, /Unicode string or multivalue/i);
   assert.match(evalCompletion.detail, /UTF-8 code points/i);
   assert.match(evalCompletion.detail, /SQLite indexing/i);
+  assert.match(evalCompletion.detail, /capitalized Boolean/i);
 });
 
 test("stats completion advertises true-only conditional count with an explicit alias", () => {
