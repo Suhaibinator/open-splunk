@@ -1985,6 +1985,10 @@ func TestUnsupportedStatsAggregatesAreSourceLocated(t *testing.T) {
 		{"other function", "index=main\n| stats median(bytes)", "SPL_UNSUPPORTED_STATS_AGGREGATE", 2, 9},
 		{"second aggregate", `* | stats count, median(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 18},
 		{"space-separated aggregate", `* | stats count mode(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 17},
+		{"first remains unsupported", `* | stats first(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 11},
+		{"last remains unsupported", `* | stats last(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 11},
+		{"earliest_time remains unsupported", `* | stats earliest_time(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 11},
+		{"latest_time remains unsupported", `* | stats latest_time(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 11},
 		{"missing AS", `* | stats count total`, "SPL_UNSUPPORTED_STATS_SYNTAX", 1, 17},
 		{"missing group field", `* | stats count by`, "SPL_EXPECTED_FIELD", 1, 19},
 	}

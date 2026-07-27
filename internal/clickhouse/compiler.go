@@ -538,6 +538,17 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				aggregateSQL += " GROUP BY " + strings.Join(groups, ", ")
 			}
 			relation = relation.selectFrom(aggregateSQL, operator.Range)
+			if len(nextState.postAggregateChronological) > 0 {
+				var additionalAliases int
+				relation, additionalAliases = compileChronologicalResults(
+					relation,
+					nextState.postAggregateChronological,
+					operator.Range,
+					aliasSequence,
+				)
+				aliasSequence += additionalAliases
+				nextState.postAggregateChronological = nil
+			}
 			if len(nextState.postAggregateScalarExtrema) > 0 {
 				var additionalAliases int
 				relation, additionalAliases = compileScalarExtremaResults(
@@ -2696,10 +2707,18 @@ type compileState struct {
 	preAggregateArgs                 []any
 	preAggregateListWindowColumns    []string
 	preAggregateListCandidateColumns []string
+	postAggregateChronological       []compiledChronologicalMeasure
 	postAggregateScalarExtrema       []compiledScalarExtremaMeasure
 	postAggregateExactStrings        []compiledExactStringMeasure
 	postAggregateDistinctCounts      []compiledDistinctCount
 	postAggregateOrderedStrings      []compiledOrderedStringMeasure
+}
+
+type compiledChronologicalMeasure struct {
+	winnerColumn     string
+	validationColumn string
+	typeColumn       string
+	outputColumn     string
 }
 
 type compiledScalarExtremaMeasure struct {
@@ -4020,6 +4039,10 @@ func cloneCompileState(state compileState) compileState {
 		[]string(nil),
 		state.preAggregateListCandidateColumns...,
 	)
+	next.postAggregateChronological = append(
+		[]compiledChronologicalMeasure(nil),
+		state.postAggregateChronological...,
+	)
 	next.postAggregateScalarExtrema = append(
 		[]compiledScalarExtremaMeasure(nil),
 		state.postAggregateScalarExtrema...,
@@ -5049,6 +5072,21 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			spl.MaximumStatsGroupFields,
 		)
 	}
+	for _, measure := range operator.Measures {
+		if measure.Function != plan.AggregateFunctionEarliest &&
+			measure.Function != plan.AggregateFunctionLatest {
+			continue
+		}
+		timeField, ok := state.visible["_time"]
+		if !state.eventRows || !ok || timeField.kind != fieldKindTime || !timeField.canonicalTime {
+			return nil, nil, nil, compileState{}, nil, &plan.Diagnostic{
+				Code:        "SPL_UNSUPPORTED_STATS_TIME_FIELD",
+				Message:     "earliest and latest require event rows with the unmodified canonical _time field",
+				Range:       measure.Input.Range,
+				Suggestions: []string{"run stats earliest or latest before removing, replacing, or transforming _time"},
+			}
+		}
+	}
 	next = compileState{
 		visible:      make(map[string]fieldState, len(operator.GroupBy)+len(operator.Measures)),
 		allowDynamic: false,
@@ -5168,6 +5206,24 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		typeAlias string
 	}
 	scalarExtremaResults := make(map[scalarExtremaResultKey]scalarExtremaResult)
+	type chronologicalInput struct {
+		valueAlias      string
+		valuesAlias     string
+		invalidAlias    string
+		validationAlias string
+		multivalue      bool
+	}
+	type chronologicalResultKey struct {
+		input    string
+		function plan.AggregateFunction
+	}
+	type chronologicalResult struct {
+		winnerAlias string
+		typeAlias   string
+	}
+	chronologicalInputs := make(map[string]chronologicalInput)
+	chronologicalResults := make(map[chronologicalResultKey]chronologicalResult)
+	chronologicalRowKey := ""
 	exactStringSets := make(map[string]string)
 	distinctCounts := make(map[string]string)
 	type orderedStringList struct {
@@ -5259,6 +5315,91 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		stringInputs[ref.Name] = inputSQL
 		return inputSQL, nil
 	}
+	chronologicalRowKeyFor := func() string {
+		if chronologicalRowKey != "" {
+			return chronologicalRowKey
+		}
+		chronologicalRowKey = quoteIdentifier("__os_chronological_row_key")
+		next.preAggregateColumns = append(
+			next.preAggregateColumns,
+			"tuple("+
+				strings.Join([]string{
+					quoteIdentifier(internalSortTimeColumn),
+					quoteIdentifier(internalSortIDColumn),
+					quoteIdentifier(internalSortVisibilityColumn),
+					quoteIdentifier(internalSortSourceIdentityColumn),
+				}, ", ")+
+				") AS "+chronologicalRowKey,
+		)
+		return chronologicalRowKey
+	}
+	chronologicalInputFor := func(ref plan.FieldRef) (chronologicalInput, error) {
+		if cached, ok := chronologicalInputs[ref.Name]; ok {
+			return cached, nil
+		}
+		input, exists, resolveErr := resolveCompiledField(ref, state)
+		if resolveErr != nil {
+			return chronologicalInput{}, resolveErr
+		}
+		ordinal := len(chronologicalInputs)
+		compiled := chronologicalInput{}
+		if exists && (input.kind == fieldKindDynamic || input.kind == fieldKindStringArray) {
+			valuesSQL, valuesArgs := stringArrayInputSQL(input)
+			compiled.valuesAlias = quoteIdentifier(fmt.Sprintf(
+				"__os_chronological_values_%d",
+				ordinal,
+			))
+			compiled.multivalue = true
+			next.preAggregateColumns = append(
+				next.preAggregateColumns,
+				valuesSQL+" AS "+compiled.valuesAlias,
+			)
+			next.preAggregateArgs = append(next.preAggregateArgs, valuesArgs...)
+			if input.kind == fieldKindDynamic {
+				invalidSQL, invalidArgs := statsStringInputInvalidSQL(input)
+				compiled.invalidAlias = quoteIdentifier(fmt.Sprintf(
+					"__os_chronological_invalid_%d",
+					ordinal,
+				))
+				compiled.validationAlias = quoteIdentifier(fmt.Sprintf(
+					"__os_stats_chronological_any_unsupported_%d",
+					ordinal,
+				))
+				next.preAggregateColumns = append(
+					next.preAggregateColumns,
+					invalidSQL+" AS "+compiled.invalidAlias,
+				)
+				next.preAggregateArgs = append(next.preAggregateArgs, invalidArgs...)
+				projection = append(
+					projection,
+					"max(toUInt8("+compiled.invalidAlias+")) AS "+compiled.validationAlias,
+				)
+			}
+		} else {
+			valueSQL := "CAST(NULL AS Nullable(String))"
+			var valueArgs []any
+			if exists {
+				valueSQL = statsScalarStringOrNullSQL(input)
+				existsSQL := input.existsSQL
+				if existsSQL == "" {
+					existsSQL = "1"
+				}
+				valueSQL = "if(" + existsSQL + ", " + valueSQL + ", CAST(NULL AS Nullable(String)))"
+				valueArgs = append(valueArgs, input.existsArgs...)
+			}
+			compiled.valueAlias = quoteIdentifier(fmt.Sprintf(
+				"__os_chronological_value_%d",
+				ordinal,
+			))
+			next.preAggregateColumns = append(
+				next.preAggregateColumns,
+				valueSQL+" AS "+compiled.valueAlias,
+			)
+			next.preAggregateArgs = append(next.preAggregateArgs, valueArgs...)
+		}
+		chronologicalInputs[ref.Name] = compiled
+		return compiled, nil
+	}
 	for measureIndex, measure := range operator.Measures {
 		if _, fieldErr := plan.ResolveField(measure.Output, spl.Range{}); fieldErr != nil {
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf(
@@ -5291,7 +5432,8 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage,
 			plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues,
 			plan.AggregateFunctionList,
-			plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum:
+			plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum,
+			plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
 			if measure.Percentile != 0 {
 				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
 					"compile ClickHouse aggregate: function %d contains percentile metadata",
@@ -5515,6 +5657,84 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 				kind:           fieldKindDynamic,
 			}
 			next.privateColumns = append(next.privateColumns, typeAlias)
+		case plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
+			input, inputErr := chronologicalInputFor(measure.Input)
+			if inputErr != nil {
+				return nil, nil, nil, compileState{}, nil, inputErr
+			}
+			rowKey := chronologicalRowKeyFor()
+			resultKey := chronologicalResultKey{
+				input:    measure.Input.Name,
+				function: measure.Function,
+			}
+			result, cached := chronologicalResults[resultKey]
+			if !cached {
+				ordinal := len(chronologicalResults)
+				result = chronologicalResult{
+					winnerAlias: quoteIdentifier(fmt.Sprintf(
+						"__os_chronological_winner_%d",
+						ordinal,
+					)),
+					typeAlias: quoteIdentifier(fmt.Sprintf(
+						"__os_chronological_type_%d",
+						ordinal,
+					)),
+				}
+				chronologicalResults[resultKey] = result
+				function := "argMinOrNullIf"
+				argument := "tuple(ifNull(" + input.valueAlias +
+					", CAST('' AS String)), toUInt8(1))"
+				key := "tuple(" + rowKey + ", toUInt64(1))"
+				condition := "isNotNull(" + input.valueAlias + ")"
+				if input.multivalue {
+					function = "argMinOrNullArray"
+					argument = "arrayMap(value -> tuple(value, toUInt8(1)), " +
+						input.valuesAlias + ")"
+					key = "arrayMap(member_index -> tuple(" +
+						strings.Join([]string{
+							"tupleElement(" + rowKey + ", 1)",
+							"tupleElement(" + rowKey + ", 2)",
+							"tupleElement(" + rowKey + ", 3)",
+							"tupleElement(" + rowKey + ", 4)",
+							"toUInt64(member_index)",
+						}, ", ") +
+						"), arrayEnumerate(" + input.valuesAlias + "))"
+					condition = ""
+				}
+				if measure.Function == plan.AggregateFunctionLatest {
+					if input.multivalue {
+						function = "argMaxOrNullArray"
+					} else {
+						function = "argMaxOrNullIf"
+					}
+				}
+				aggregateSQL := function + "(" + argument + ", " + key
+				if condition != "" {
+					aggregateSQL += ", " + condition
+				}
+				aggregateSQL += ")"
+				projection = append(
+					projection,
+					aggregateSQL+" AS "+result.winnerAlias,
+				)
+				next.privateColumns = append(next.privateColumns, result.typeAlias)
+			}
+			next.postAggregateChronological = append(
+				next.postAggregateChronological,
+				compiledChronologicalMeasure{
+					winnerColumn:     result.winnerAlias,
+					validationColumn: input.validationAlias,
+					typeColumn:       result.typeAlias,
+					outputColumn:     output,
+				},
+			)
+			measureState = fieldState{
+				valueSQL:       output,
+				dynamicTypeSQL: "dynamicType(" + output + ")",
+				storedTypeSQL:  result.typeAlias,
+				existsSQL:      "1",
+				kind:           fieldKindDynamic,
+			}
 		case plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues:
 			inputSQL, inputErr := stringInputFor(measure.Input)
 			if inputErr != nil {
@@ -5809,6 +6029,46 @@ func stringArrayInputSQL(field fieldState) (string, []any) {
 	return "if(" + field.existsSQL + ", " + value + ", " + empty + ")", append([]any(nil), field.existsArgs...)
 }
 
+func statsStringInputInvalidSQL(field fieldState) (string, []any) {
+	if field.kind != fieldKindDynamic {
+		return "toUInt8(0)", nil
+	}
+
+	typeSQL := dynamicTypeExpression(field)
+	scalarSupported, _ := statsByScalarExpressions(field)
+	element := fieldState{
+		valueSQL:       "element",
+		dynamicTypeSQL: "dynamicType(element)",
+		kind:           fieldKindDynamic,
+	}
+	elementSupported, _ := statsByScalarExpressions(element)
+	elementType := dynamicTypeExpression(element)
+	arrayValues := "dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)')"
+
+	existsSQL := field.existsSQL
+	if existsSQL == "" {
+		existsSQL = "1"
+	}
+	descendantSQL := "0"
+	args := append([]any(nil), field.existsArgs...)
+	if field.descendantSQL != "" {
+		descendantSQL = field.descendantSQL
+		args = append(args, field.descendantArgs...)
+	}
+
+	topLevelInvalid := "(field_present != 0 AND " + typeSQL +
+		" != 'None' AND " + typeSQL + " != 'Array(Dynamic)' AND NOT (" +
+		scalarSupported + "))"
+	memberInvalid := "(field_present != 0 AND " + typeSQL +
+		" = 'Array(Dynamic)' AND arrayExists(element -> " + elementType +
+		" != 'None' AND NOT (" + elementSupported + "), " + arrayValues + "))"
+	invalid := "(" + topLevelInvalid + " OR " + memberInvalid +
+		" OR descendant_present != 0)"
+	return "arrayElement(arrayMap((field_present, descendant_present) -> toUInt8(" +
+		invalid + "), [toUInt8(" + existsSQL + ")], [toUInt8(" +
+		descendantSQL + ")]), 1)", args
+}
+
 func statsScalarStringInputSQL(field fieldState) (string, []any) {
 	value, args := compiledStringScalar(compiledScalarFromField(field))
 	return "CAST(" + value + " AS Nullable(String))", args
@@ -5924,6 +6184,80 @@ func statsExtremaStoredTypeFromConditionsSQL(
 		strconv.Itoa(int(eventfields.StoredValueTypeString)) + "), " +
 		stringConditionSQL + ", toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeBytes)) + "), " +
 		"toUInt8(0))"
+}
+
+func compileChronologicalResults(
+	relation compiledRelation,
+	measures []compiledChronologicalMeasure,
+	ownerRange spl.Range,
+	stage int,
+) (compiledRelation, int) {
+	if len(measures) == 0 {
+		return relation, 0
+	}
+
+	excluded := make([]string, 0, len(measures)*2)
+	seenExcluded := make(map[string]struct{}, len(measures)*2)
+	validations := make([]string, 0, len(measures))
+	seenValidations := make(map[string]struct{}, len(measures))
+	for _, measure := range measures {
+		if _, seen := seenExcluded[measure.winnerColumn]; !seen {
+			seenExcluded[measure.winnerColumn] = struct{}{}
+			excluded = append(excluded, measure.winnerColumn)
+		}
+		if measure.validationColumn == "" {
+			continue
+		}
+		if _, seen := seenExcluded[measure.validationColumn]; !seen {
+			seenExcluded[measure.validationColumn] = struct{}{}
+			excluded = append(excluded, measure.validationColumn)
+		}
+		if _, seen := seenValidations[measure.validationColumn]; !seen {
+			seenValidations[measure.validationColumn] = struct{}{}
+			validations = append(validations, measure.validationColumn)
+		}
+	}
+
+	projection := []string{"* EXCEPT (" + strings.Join(excluded, ", ") + ")"}
+	publishedTypes := make(map[string]struct{}, len(measures))
+	for _, measure := range measures {
+		nonNullWinner := "assumeNotNull(" + measure.winnerColumn + ")"
+		value := "tupleElement(" + nonNullWinner + ", 1)"
+		projection = append(
+			projection,
+			"if(isNull("+measure.winnerColumn+"), CAST(NULL AS Dynamic), CAST("+
+				value+" AS Dynamic)) AS "+measure.outputColumn,
+		)
+		if _, published := publishedTypes[measure.winnerColumn]; published {
+			continue
+		}
+		publishedTypes[measure.winnerColumn] = struct{}{}
+		projection = append(
+			projection,
+			statsExtremaStoredTypeFromConditionsSQL(
+				"isNull("+measure.winnerColumn+")",
+				"0",
+				"1",
+				value,
+			)+" AS "+measure.typeColumn,
+		)
+	}
+
+	alias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
+	sql := "SELECT " + strings.Join(projection, ", ") +
+		" FROM (" + relation.sql + ") AS " + alias
+	if len(validations) > 0 {
+		guards := make([]string, 0, len(validations))
+		for _, validation := range validations {
+			guards = append(
+				guards,
+				"throwIf(toUInt8("+validation+" != 0), '"+
+					UnsupportedStatsMeasureValueMarker+"') = 0",
+			)
+		}
+		sql += " WHERE " + strings.Join(guards, " AND ")
+	}
+	return relation.selectFrom(sql, ownerRange), 1
 }
 
 func compileScalarExtremaResults(

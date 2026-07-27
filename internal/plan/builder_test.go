@@ -479,8 +479,17 @@ func TestBuildStatsEarliestAndLatestRequireUnmodifiedCanonicalTime(t *testing.T)
 		`index=gradethis | bin _time span=5m | stats earliest(value)`,
 		`index=gradethis | stats count BY _time | stats latest(count)`,
 	} {
-		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		query := mustParse(t, source)
+		_, err := Build(query, testScope([]string{"gradethis"}, nil))
 		assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_STATS_TIME_FIELD")
+		diagnostic := err.(*Diagnostic)
+		stats := query.Commands[len(query.Commands)-1].(*spl.StatsCommand)
+		if diagnostic.Range != stats.Aggregates[0].Range {
+			t.Errorf("Build(%q) diagnostic range = %#v, want aggregate %#v", source, diagnostic.Range, stats.Aggregates[0].Range)
+		}
+		if !slices.Contains(diagnostic.Suggestions, "run stats earliest or latest before removing, replacing, or transforming _time") {
+			t.Errorf("Build(%q) suggestions = %v", source, diagnostic.Suggestions)
+		}
 	}
 }
 
