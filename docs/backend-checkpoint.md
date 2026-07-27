@@ -7,7 +7,133 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: ordered typed SPL `case`
+## Latest checkpoint: typed Unicode SPL `lower` and `upper`
+
+Date: 2026-07-27
+
+Parser and logical-plan checkpoint (committed and pushed):
+`8e68c7e7516833e4975b4dc31c47f41ce3dcbcdb`
+
+Initial ClickHouse compiler checkpoint (committed and pushed):
+`3d9d5f86537cb8e938c20ed27c7ac9bff25941b2`
+
+Pinned integration and adversarial-hardening checkpoint (committed and pushed):
+`53b1f5564aac8bdc52e5b1085eecd05f7038ab6d`
+
+Final type contract, compatibility, and editor checkpoint (committed and
+pushed):
+`8e4cf5fb8a9ab1795a227b98347032ee651d5b20`
+
+This test-first slice implements Unicode-aware `lower(value)` and
+`upper(value)`:
+
+1. The parser accepts case-insensitive calls with exactly one scalar argument,
+   preserves source ranges, supports nesting and sequential eval assignments,
+   and leaves bare fields named `lower` or `upper` ordinary. Missing,
+   additional, malformed, over-depth, and over-budget arguments fail before
+   planning.
+2. Dedicated logical-plan enum values retain the call through the typed scalar
+   IR. Parser, planner, and compiler trust boundaries reject invalid enums,
+   zero/two-argument forged calls, nil and typed-nil arguments, Boolean
+   null-predicate escape, excessive nodes/depth, and cycles before recursive
+   lowering.
+3. The fixed input contract follows Splunk's documented string boundary:
+   fixed `String`, fixed `Array(String)`, missing, and null are supported.
+   Fixed numeric, Boolean, and canonical time input fails with the
+   source-located `SPL_UNSUPPORTED_TEXT_CASE_VALUE_TYPE` diagnostic rather
+   than silently applying the separate `tostring` conversion.
+4. Runtime Dynamic `String`, `Array(String)`, and homogeneous all-String
+   `Array(Dynamic)` are supported. Array(Dynamic) is normalized to
+   Array(String). Runtime numbers, Booleans, objects, missing/null values,
+   heterogeneous arrays, and null-containing arrays fail closed to Dynamic
+   None rather than inheriting ClickHouse's generic conversion behavior.
+5. Multivalue conversion is member-wise and preserves order and cardinality.
+   It uses no ordinary `ARRAY JOIN`, event-row expansion, sorting, or
+   aggregation. Fixed arrays bind once, validate every member with
+   `isValidUTF8`, and publish the existing empty/logically-absent multivalue
+   representation when invalid.
+6. Scalar `_raw` conversion uses its stored UTF-8 provenance guard, so
+   binary-declared raw bytes return null even when the bytes happen to be
+   ASCII. `replace` now retains that provenance. Statistics String
+   normalization carries the same guard into `values(_raw)` and `list(_raw)`,
+   preventing an aggregate from laundering binary raw bytes into a UTF-8
+   function.
+7. ClickHouse lowering uses `lowerUTF8` and `upperUTF8` on the pinned
+   `26.3.17.4` target. The contract is Unicode-aware but not locale-aware
+   collation, normalization, or full case folding, and records ClickHouse's
+   documented caveat for mappings whose encoded byte length changes.
+8. Eval/where comparisons remain case-sensitive after conversion. Dynamic
+   text results carry a narrow text-only domain marker, so direct comparisons
+   bind each operand once and omit the generic Dynamic numeric, extended
+   decimal, and Boolean branches. Fixed and Dynamic multivalue results remain
+   unsupported in ordinary scalar comparisons.
+9. Dynamic and fixed multivalue calls bind each child expression through a
+   singleton higher-order expression. Nested calls therefore grow linearly,
+   and tests pin one source occurrence. Every call has a 64 KiB generated-SQL
+   ceiling in addition to the 256 KiB whole-query ceiling.
+10. Compiler unit coverage pins fixed and Dynamic strings, null, unsupported
+    fixed types, Dynamic non-strings and containers, physical Array(Dynamic),
+    fixed and Dynamic multivalues, binary raw, replace provenance,
+    aggregate-raw provenance, case-sensitive predicates, single-evaluation
+    shape, bind order, linear nesting, no row expansion, exact diagnostics,
+    typed nils, and forged cycles.
+11. The isolated ClickHouse corpus executes Unicode scalars (`MÜNCHEN`,
+    `Straße`), sequential calls, Dynamic multivalues, fixed stats
+    multivalues, unsupported runtime types, missing/null values, case-sensitive
+    predicates, binary `_raw`, binary raw through `values` and `list`, and
+    `EXPLAIN actions=1` proof of no `ArrayJoin`. It runs with common-Variant
+    inference disabled and short-circuit evaluation enabled.
+12. Independent reuse, quality, and efficiency review found three concrete
+    issues and each was fixed: duplicated integration parse/build/compile
+    setup now shares an index-parameterized helper; fixed String arrays now
+    retain the raw UTF-8 safety boundary; and direct Dynamic text comparisons
+    no longer duplicate the full conversion or retain irrelevant type
+    branches. The final documentation review additionally removed implicit
+    fixed numeric/Boolean stringification.
+13. The compatibility contract cites Splunk's official text-function
+    reference and ClickHouse's String-function reference. Editor completion
+    advertises both exact signatures and Unicode/multivalue behavior, while
+    highlighting recognizes them only in function position.
+
+Validation completed on the current implementation:
+
+```sh
+go test ./internal/spl ./internal/plan ./internal/clickhouse -count=1
+go test ./... -count=1
+go vet ./...
+golangci-lint run --timeout=5m \
+  --max-issues-per-linter=0 --max-same-issues=0
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1
+git diff --check
+```
+
+All gates pass. The unrestricted repository-wide lint run reports zero issues.
+The frontend corpus contains 116 application tests and 47 release/build tests.
+The production static export generated all 11 pages, and the final pinned
+Store/compiler run passed in 46.628 seconds.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `8e68c7e`, `3d9d5f8`, `53b1f55`,
+   and `8e4cf5f`. Preserve any unexpected local changes.
+2. Select the next bounded eval slice from `len`/`substr` or
+   `round`/`ceil`/`floor` only after writing its executable type, null,
+   Dynamic, multivalue, Unicode/precision, and resource contract.
+3. Keep locale-sensitive case mapping, Unicode normalization, full case
+   folding, and broader implicit string conversion as explicit future
+   compatibility work requiring differential evidence.
+4. Keep Dynamic/container `coalesce` and `case`, `tostring`, heterogeneous
+   conditionals, wildcard count, broader conditional count names, and
+   `eventstats` as separate reviewed contracts.
+
+## Previous checkpoint: ordered typed SPL `case`
 
 Date: 2026-07-27
 
@@ -4809,8 +4935,9 @@ Do not guess those decisions if they materially affect the implementation.
    `isnull`/`isnotnull` predicates are complete at `2d35c66`, as described at
    the top of this file. Typed fixed-scalar `if` is complete across `cfaa75b`,
    `c1ad25b`, and `fed3276`; typed conditional count is complete at `66b2b16`.
-   Continue with a test-first bounded `lower`/`upper`/`len`/`substr` or
-   `round`/`ceil`/`floor` contract if the user does not change priority. The
+   Typed Unicode `lower`/`upper` is complete through `8e68c7e`, `3d9d5f8`,
+   `53b1f55`, and `8e4cf5f`. Continue with a test-first bounded `len`/`substr`
+   or `round`/`ceil`/`floor` contract if the user does not change priority. The
    generator foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
