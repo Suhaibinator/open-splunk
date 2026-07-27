@@ -7,6 +7,122 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: bounded percentile family
+
+Date: 2026-07-27
+
+Parser/planner checkpoint (committed and pushed):
+`efe41992ddec1f4c58e169a7b15772524e229ced`
+
+Implementation/test/compatibility checkpoint:
+`371f8815b54fe777dc574d39077150c9ca573a05`
+
+CI lint repair:
+`209f753746c2f653381496e97b349d27e081a359`
+
+This slice implements the product-plan percentile family:
+
+1. The parser and logical plan accept case-insensitive `pN(field)` and
+   `percN(field)` for integer suffixes 1 through 99. Leading zeroes are
+   accepted and canonicalized. The default output is always
+   `percN(field)`, matching documented Splunk naming; explicit `AS` is
+   preserved. Zero, 100, decimal suffixes, two-argument `perc(field, N)`,
+   expressions, wildcards, and malformed arities fail explicitly.
+2. The AST and plan carry a validated `uint8` suffix rather than a
+   floating-point fraction. Builder and compiler defense-in-depth reject
+   forged out-of-range levels and percentile metadata on other aggregates.
+3. Every finite immediate numeric value participates: integers, floats,
+   numeric Strings, tagged decimals, canonical timestamps, and immediate
+   multivalue members. Duplicates remain separate observations. Missing,
+   null, empty, Boolean, bytes, object, nonnumeric, nonfinite, and nested
+   container values are ignored. Runtime Dynamic arrays and fixed
+   multivalues are supported without row expansion.
+4. Multiple levels over one exact input share one
+   `quantilesGKOrNull(100, levels...)` or
+   `quantilesGKOrNullArray(100, levels...)` state. Repeated synonyms such as
+   `p50` and `perc50` share the same component. Inputs also share one numeric
+   array normalization with `sum`/`avg`.
+5. Statically scalar percentile-only inputs use the scalar multi-level GK
+   path and avoid singleton-array/filter/map work. Dynamic, fixed
+   multivalue, and same-input `sum`/`avg` consumers use the array path.
+   Existing field-existence predicates and bind arguments are preserved.
+6. `arrayElementOrNull` publishes nullable `Float64`; zero-row global input
+   and retained all-ineligible groups are null, while grouped zero-row input
+   emits no groups. Projected-away inputs remain absent.
+7. Accuracy is fixed at 100 (approximately 1% rank error). Splunk uses
+   different exact behavior for smaller distinct sets and a proprietary
+   approximation for larger inputs, so exact values are a documented
+   compatibility divergence. The 16-measure, group, row, thread, query-byte,
+   and 1 GiB query-memory ceilings remain authoritative.
+8. Compiler tests pin trusted level literals, scalar/array specialization,
+   one state per input, separate states across inputs, synonym deduplication,
+   source-order positions, `sum`/`avg` sharing in either measure order,
+   forged plans, fixed and Dynamic multivalues, nulls, maximum measures, no
+   `ARRAY JOIN`, and the compiled query ceiling.
+9. The pinned store fixture covers p1/p50/p90/p95/p99/perc50 rank envelopes,
+   grouped and global nulls, duplicate multivalue participation, ignored
+   nested/nonnumeric members, fixed multivalue re-aggregation, and physical
+   `EXPLAIN actions=1` state sharing for both scalar and array lowering. The
+   manager fixture covers the whole family as nullable doubles.
+10. The compatibility contract and editor completion/highlighting now expose
+    generic bounded `pN`/`percN` rather than p95 alone.
+
+Validation completed on the published implementation and lint repair:
+
+```sh
+go test ./internal/spl ./internal/plan ./internal/clickhouse ./internal/queryexec -count=1
+go vet ./internal/spl ./internal/plan ./internal/clickhouse ./internal/queryexec
+go test ./... -count=1
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+golangci-lint run --timeout=5m \
+  --new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$' -count=1 -timeout=6m
+git diff --check
+```
+
+The final pinned ClickHouse store suite, including scalar and Dynamic physical
+`EXPLAIN actions=1` assertions, passed in 45.266 seconds before the lint repair
+and in 46.839 seconds after it. The pinned manager/executor suite passed in
+13.385 seconds. Full `go test ./... -count=1`, frontend typecheck, lint, tests,
+and production build all passed. The exact lint ratchet reports zero issues.
+
+GitHub run `30272617065` for `371f881` passed the GradeThis compatibility
+corpus, frontend, vulnerability, backend-vertical, and protobuf jobs. Its only
+failure was five static-analysis findings in the new integration test: a
+checked fixture-length conversion, three shadowed error bindings, and helper
+argument order. Commit `209f753` repairs those findings without changing
+runtime semantics. Replacement run `30273254671` was in progress when this
+handoff was first written; it subsequently completed successfully with every
+job green, including lint, race/coverage, GradeThis, frontend, vulnerability,
+backend-vertical, protobuf, and release checks.
+
+Independent SPL-contract, code-inventory, correctness, efficiency,
+performance, and reuse reviews drove the scalar specialization,
+existence/bind preservation, physical-state regressions, and duplicate-test
+removal. Final implementation correctness and reuse reviews are clean. A
+separate adversarial review of the lint repair is also clean and reran both
+the exact lint ratchet and the pinned store fixture.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `209f753`; replacement workflow
+   `30273254671` is the fully green validation record.
+2. Begin broader `stats count` syntax only after pinning an explicit SPL
+   contract and red parser/planner/compiler/integration tests. The candidate
+   surface is the `c` alias, wildcards or predicates, and `count(eval(...))`;
+   do not conflate distinct semantics in one implementation step.
+3. Keep `eventstats` behind the stable aggregate library. Decimal percentile
+   suffixes, SPL2 two-argument `perc`, `upperperc`, and `exactperc` remain
+   separate future contracts.
+
 ## Latest checkpoint: bounded chronological `stats earliest/latest`
 
 Date: 2026-07-27
@@ -82,8 +198,9 @@ This checkpoint completes the first chronological aggregate slice:
     remaining P1/P2 blocker.
 
 The exact local validation record is under **Latest validation evidence**.
-The next bounded SPL work is broader `count` syntax or remaining percentile
-forms, followed by `eventstats` only after the aggregate library is stable.
+The next bounded SPL work after the completed percentile checkpoint is
+broader `count` syntax, followed by `eventstats` only after the aggregate
+library is stable.
 The optional direction-aware Dynamic selector optimization and the existing
 inherited lint inventory remain nonblocking cleanup. The overall backend goal
 remains active.
@@ -3736,9 +3853,10 @@ independent stacks.
    inventory in separate waves without advancing the baseline. Run
    `30255910487` confirms the full workflow and independent release comparison;
    bounded chronological `earliest(field)` / `latest(field)` is complete across
-   `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and `f9985a1`. Begin broader
-   `count` syntax or remaining percentile forms unless the user changes
-   priority. The current
+   `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and `f9985a1`; percentile
+   parser/planner support is committed at `efe4199`, with implementation and
+   CI lint repair commits recorded at the top of this file. Begin broader
+   `count` syntax unless the user changes priority. The current
    preview-to-final
    resource-release audit pass is complete at `961cba2`, the sanitized current
    GradeThis collector/config migration at `c576e85`, logical event retention
@@ -3887,14 +4005,17 @@ PostCSS, or Sharp upgrade/override with the complete frontend and browser gates.
 
 The scalar-String extrema optimization, bounded ordered `list(field)`, and
 bounded chronological `earliest(field)` / `latest(field)` are complete.
+The bounded integer-suffix percentile family is complete and published at the
+implementation and repair commits recorded at the top of this file.
 The chronological history is `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and
 `f9985a1`. If SPL expansion is the chosen next priority, implement one bounded
 aggregate contract at a time:
 
 - broader `count` forms (`c`, wildcards, predicates, and `count(eval(...))`)
   need separate syntax and differential tests;
-- remaining percentile forms need explicit approximation/error and resource
-  contracts;
+- decimal suffixes, SPL2 two-argument `perc`, `upperperc`, and `exactperc`
+  remain separate percentile contracts and are not part of the first bounded
+  integer-suffix slice;
 - `eventstats` should follow only after the aggregate library is stable;
   `streamstats` remains outside the first release unless scope changes; and
 - exact Decimal comparison/aggregation remains separate work from the current
@@ -4038,8 +4159,9 @@ Do not guess those decisions if they materially affect the implementation.
    Run `30255910487` passed the complete workflow and cross-platform release
    comparison. Bounded chronological `earliest(field)` / `latest(field)` is
    complete across `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and `f9985a1`;
-   if the user does not change priority, begin broader `count` syntax or the
-   remaining percentile forms. The generator
+   the bounded percentile family is published after parser/planner commit
+   `efe4199` as described at the top of this file. Begin broader `count`
+   syntax if the user does not change priority. The generator
    foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
