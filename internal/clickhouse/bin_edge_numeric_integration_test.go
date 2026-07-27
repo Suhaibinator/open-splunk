@@ -1436,8 +1436,11 @@ func binEdgeInsertRawDecimalEnvelopes(
 	fixtures []binEdgeRawDecimalEnvelope,
 ) {
 	t.Helper()
+	if len(fixtures) == 0 {
+		t.Fatal("insert raw Decimal envelopes: empty fixture set")
+	}
 	insertContext := clickhousedriver.Context(ctx, clickhousedriver.WithSettings(
-		insertSettings("bin-edge-raw-decimal-envelopes"),
+		insertSettings("bin-edge-raw-decimal-envelopes-"+fixtures[0].eventID),
 	))
 	batch, err := connection.PrepareBatch(insertContext, eventsInsertSQL)
 	if err != nil {

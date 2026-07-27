@@ -817,7 +817,8 @@ func TestCompileDynamicNumericBinCarriesSparseMetadataDownstream(t *testing.T) {
 	for _, required := range []string{
 		`"__os_numeric_bin_output_exists_2"`,
 		`"__os_numeric_bin_output_type_2"`,
-		`dynamicType("__os_filter_bound_3_1")`,
+		`dynamicType(left_value)`,
+		`["__os_filter_bound_3_1"]`,
 		`AS "band"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
@@ -2138,7 +2139,7 @@ func TestCompileWhereRejectsOrderedBoolComparisons(t *testing.T) {
 
 	dynamicPair := compileSPL(t, `index=gradethis | where dynamic_flag>other_flag`)
 	if strings.Contains(dynamicPair.SQL, `dynamicElement("__os_fields"."dynamic_flag", 'Bool') >`) ||
-		!strings.Contains(dynamicPair.SQL, `dynamicType("__os_fields"."dynamic_flag") = 'Bool'`) {
+		!strings.Contains(dynamicPair.SQL, `dynamicType(left_value) = 'Bool'`) {
 		t.Fatalf("dynamic Bool pair retained ordered comparison:\n%s", dynamicPair.SQL)
 	}
 }
@@ -2175,17 +2176,19 @@ func TestCompileBaseSearchOrdersStringsLexically(t *testing.T) {
 	}
 }
 
-func TestCompileWhereUsesRuntimeDynamicTypesAndOccurrenceOrderedArguments(t *testing.T) {
+func TestCompileWhereBindsRuntimeDynamicTypesAndArgumentsOnce(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis | where unsigned>18446744073709551614`)
 	for _, required := range []string{
-		`multiIf((dynamicType("__os_fields"."unsigned") IN (`,
+		`arrayElement(arrayMap((left_value, right_value) ->`,
+		`multiIf((dynamicType(left_value) IN (`,
 		`reinterpretAsInt256(bitNot(`,
 		`coalesce(`,
-		`accurateCastOrNull(toString("__os_fields"."unsigned"), 'Int256')) > accurateCastOrNull(CAST(? AS UInt64), 'Int256')`,
+		`accurateCastOrNull(toString(left_value), 'Int256')) > accurateCastOrNull(right_value, 'Int256')`,
 		`'decimal/v1'`,
-		`toFloat64(CAST(? AS UInt64))`,
+		`toFloat64(right_value)`,
+		`["__os_fields"."unsigned"], [CAST(? AS UInt64)]`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("dynamic integer SQL missing %q:\n%s", required, compiled.SQL)
@@ -2200,14 +2203,18 @@ func TestCompileWhereUsesRuntimeDynamicTypesAndOccurrenceOrderedArguments(t *tes
 			literalCount++
 		}
 	}
-	if literalCount != 2 {
-		t.Fatalf("wide integer argument occurrences = %d, want 2: %#v", literalCount, compiled.Args)
+	if literalCount != 1 {
+		t.Fatalf("wide integer argument occurrences = %d, want 1: %#v", literalCount, compiled.Args)
+	}
+	if got := strings.Count(compiled.SQL, `"__os_fields"."unsigned"`); got != 1 {
+		t.Fatalf("Dynamic comparison source occurrences = %d, want 1:\n%s", got, compiled.SQL)
 	}
 
 	fieldToField := compileSPL(t, `index=gradethis | where left>right`)
-	if !strings.Contains(fieldToField.SQL, `accurateCastOrNull(toString("__os_fields"."left"), 'Int256')) > coalesce(`) ||
-		!strings.Contains(fieldToField.SQL, `accurateCastOrNull(toString("__os_fields"."right"), 'Int256'))`) ||
-		!strings.Contains(fieldToField.SQL, `dynamicElement("__os_fields"."left", 'String') > dynamicElement("__os_fields"."right", 'String')`) {
+	if !strings.Contains(fieldToField.SQL, `accurateCastOrNull(toString(left_value), 'Int256')) > coalesce(`) ||
+		!strings.Contains(fieldToField.SQL, `accurateCastOrNull(toString(right_value), 'Int256'))`) ||
+		!strings.Contains(fieldToField.SQL, `dynamicElement(left_value, 'String') > dynamicElement(right_value, 'String')`) ||
+		!strings.Contains(fieldToField.SQL, `["__os_fields"."left"], ["__os_fields"."right"]`) {
 		t.Fatalf("dynamic field comparison is not runtime typed:\n%s", fieldToField.SQL)
 	}
 }
@@ -2318,7 +2325,8 @@ func TestCompileRexDoesNotResurrectProjectedSourceAndFeedsDownstreamCommands(t *
 
 	downstream := compileSPL(t, `index=gradethis | rex "method=(?<method>[A-Z]+)" | where method="POST" | stats count BY method`)
 	if !slices.Equal(downstream.OutputFields, []string{"method", "count"}) ||
-		!strings.Contains(downstream.SQL, `dynamicElement("method", 'String')`) {
+		!strings.Contains(downstream.SQL, `dynamicElement(left_value, 'String')`) ||
+		!strings.Contains(downstream.SQL, `["method"]`) {
 		t.Fatalf("downstream rex field was not resolved as current Dynamic data; output=%v\n%s", downstream.OutputFields, downstream.SQL)
 	}
 }
@@ -3697,20 +3705,26 @@ func TestCompileDriverMetacharacterFieldNamesRemainParameterized(t *testing.T) {
 func TestCompileRejectsOversizedGeneratedSQL(t *testing.T) {
 	t.Parallel()
 
-	segment := strings.Repeat("?", 245)
-	field := strings.Repeat(segment+".", 14) + segment
-	var source strings.Builder
-	source.WriteString("index=gradethis | where ")
-	for index := 0; index < 4; index++ {
-		if index > 0 {
-			source.WriteString(" AND ")
-		}
-		source.WriteString(field)
-		source.WriteString("=1")
+	logical := buildPlan(t, `index=gradethis`)
+	fieldName := strings.Repeat("oversized", 1_800)
+	field := plan.FieldRef{Name: fieldName, Path: []string{fieldName}}
+	for range 16 {
+		logical.Operators = append(logical.Operators, &plan.Filter{
+			Expression: &plan.EvalComparisonExpression{
+				Left: &plan.ScalarFieldExpression{
+					Field: field,
+				},
+				Op: plan.ComparisonOpEqual,
+				Right: &plan.ScalarLiteralExpression{
+					Value: plan.Value{
+						Kind:  plan.ValueKindInt64,
+						Int64: 1,
+					},
+				},
+			},
+		})
 	}
-	logical := buildPlan(t, source.String())
-	var err error
-	_, err = (Compiler{}).Compile(logical)
+	_, err := (Compiler{}).Compile(logical)
 	diagnostic := &plan.Diagnostic{}
 	ok := errors.As(err, &diagnostic)
 	if !ok || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
