@@ -90,6 +90,18 @@ test("lower and upper highlight only when used as parenthesized functions", () =
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
+test("len and length highlight only when used as parenthesized functions", () => {
+  const query = `index=main len=1 length=2 | eval short=LEN(source), long=length(message) | table len,length`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["len", "length"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
 test("eval completion advertises the exact supported scalar signatures", () => {
   const evalCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eval");
   assert.ok(evalCompletion);
@@ -99,9 +111,11 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /case\(predicate, value, \.\.\.\)/);
   assert.match(evalCompletion.detail, /lower\(value\)/);
   assert.match(evalCompletion.detail, /upper\(value\)/);
+  assert.match(evalCompletion.detail, /len\(value\)\/length\(value\)/);
   assert.match(evalCompletion.detail, /first non-null fixed value/i);
   assert.match(evalCompletion.detail, /first true predicate/i);
   assert.match(evalCompletion.detail, /Unicode string or multivalue/i);
+  assert.match(evalCompletion.detail, /UTF-8 code points/i);
 });
 
 test("stats completion advertises true-only conditional count with an explicit alias", () => {

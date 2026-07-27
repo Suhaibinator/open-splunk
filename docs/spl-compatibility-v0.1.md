@@ -42,6 +42,9 @@ alternating predicates and values are compiled.
 Every `lower` or `upper` call accepts exactly one value and has the same
 separate 64 KiB generated-SQL ceiling, checked after its scalar or
 multivalue lowering is built.
+Every `len` or `length` call accepts exactly one value and has the same
+separate 64 KiB generated-SQL ceiling, checked after its UTF-8 code-point
+lowering is built.
 Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
@@ -119,7 +122,7 @@ slice supports Boolean combinations of scalar comparisons and direct
 accepts exactly one scalar expression, and can also be compared explicitly
 with a Boolean literal. Scalar operands may be fields, typed literals, or the
 supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, bounded
-`case`, `lower`, and `upper` calls
+`case`, `lower`, `upper`, `len`, and `length` calls
 described below;
 arithmetic, field quoting, `XOR`, and other eval functions are not yet
 accepted. Missing, null, container, or failed numeric operands do not pass
@@ -153,6 +156,7 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval selected=coalesce(null, source, "unknown")
 | eval class=case(status>=500, "server", status>=400, "client", 1=1, "other")
 | eval normalized=lower(username), display=upper(normalized)
+| eval characters=len(message)
 ```
 
 Assignments are evaluated from left to right, and later assignments may use an
@@ -173,7 +177,9 @@ narrow:
 - `case(predicate, value, ...)` selects the value paired with the first true
   predicate from one through 16 condition/value pairs;
 - `lower(value)` and `upper(value)` map one String or multivalue String using
-  Unicode-aware case conversion.
+  Unicode-aware case conversion;
+- `len(value)` and its `length(value)` alias count UTF-8 code points in one
+  scalar String.
 
 The `if` predicate uses exactly the `where` grammar described above:
 case-sensitive scalar comparisons, direct `isnull` / `isnotnull` predicates,
@@ -398,6 +404,36 @@ text-only comparison path that binds each operand once and does not generate
 irrelevant numeric, decimal, or Boolean branches. Nested Dynamic and fixed
 multivalue calls also bind each child expression once, so SQL growth is linear
 until the per-call 64 KiB and whole-query 256 KiB ceilings apply.
+
+`len` and `length` are equivalent names for one scalar String operation:
+
+```spl
+| eval characters=len(message)
+| eval characters=length(message)
+| where len(source)>3
+```
+
+The function returns the number of UTF-8 code points, not encoded bytes. An
+empty String returns `0`. Fixed String input returns `UInt64`; Dynamic runtime
+String input returns nullable `UInt64`. Missing, explicit null, and Dynamic
+runtime numbers, Booleans, arrays, objects, or other containers return null.
+A fixed numeric, Boolean, or canonical time argument fails with
+`SPL_UNSUPPORTED_TEXT_LENGTH_VALUE_TYPE`.
+
+Unlike `lower` and `upper`, Splunk does not support `len` on a multivalue
+field. Open Splunk rejects a fixed `Array(String)` with
+`SPL_UNSUPPORTED_MULTIVALUE_USAGE`; a Dynamic runtime array returns null.
+Callers that need a member count require the separate, currently unsupported
+`mvcount` contract.
+
+The same valid-UTF-8 and `_raw` provenance boundary applies as for
+`lower`/`upper`: binary-declared raw bytes return null, while typed Strings and
+UTF-8-declared raw input are eligible. ClickHouse lowering uses `lengthUTF8`.
+For Dynamic input, nullable `dynamicElement(value, 'String')` both selects the
+only supported runtime type and returns null for every other type, so the
+source expression appears once without a per-row singleton array or generic
+Dynamic numeric branches. Nested text input is compiled linearly under the
+per-call 64 KiB and whole-query 256 KiB SQL ceilings.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
@@ -1655,7 +1691,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`chart`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/search-commands/chart),
 [`time modifiers`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.4/specify-time-ranges/specify-time-modifiers-in-your-search),
 ClickHouse's [`if` and conditional functions](https://clickhouse.com/docs/reference/functions/regular-functions/conditional-functions),
-ClickHouse's [`lowerUTF8`, `upperUTF8`, and String functions](https://clickhouse.com/docs/sql-reference/functions/string-functions),
+ClickHouse's [`lowerUTF8`, `upperUTF8`, `lengthUTF8`, and String functions](https://clickhouse.com/docs/sql-reference/functions/string-functions),
 ClickHouse's [`extractGroups`](https://clickhouse.com/docs/sql-reference/functions/string-search-functions),
 and the [RE2 syntax reference](https://github.com/google/re2/wiki/Syntax)
 documentation.
