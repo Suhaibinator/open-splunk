@@ -76,6 +76,9 @@ capped at 4,096 wildcard/literal work units, and one query may use at most
 4 MiB per-call byte ceiling, and the conservative input bounds across all
 `like` occurrences may total at most 16 MiB of wildcard scanning per row.
 Each call has the same separate 64 KiB generated-SQL ceiling.
+Every `now()` call accepts no arguments and returns the immutable search-start
+Unix second as a fixed signed integer. It is bound from the server-resolved
+search snapshot rather than evaluated from the ClickHouse wall clock.
 Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
@@ -145,6 +148,7 @@ decimal values compare through finite `Float64`, so distinct values beyond
 | where isnull(optional) OR isnotnull(status)
 | where match(message, "(?i)error|warn")
 | where like(path, "/api/%")
+| where _time<=now()
 ```
 
 `where` uses a separate eval-expression grammar: quoted strings are literals,
@@ -158,7 +162,7 @@ supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, bounded
 `case`, `lower`, `upper`, `len`, `length`, bounded `substr`, and bounded
 default `tostring`, bounded `round`, `ceil`/`ceiling`, `floor`, and `mvcount`
 calls, plus bounded `match(value, "regex")` and
-`like(value, "pattern")` described below;
+`like(value, "pattern")`, and zero-argument `now()` described below;
 arithmetic, field quoting, `XOR`, and other eval functions are not yet
 accepted. Missing, null, container, or failed numeric operands do not pass
 ordinary comparisons.
@@ -199,6 +203,7 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval recipient_count=mvcount(recipients)
 | eval class=if(match(message, "(?i)error|warn"), "problem", "ok")
 | eval route_class=if(like(path, "/api/%"), "api", "other")
+| eval search_started=now()
 ```
 
 Assignments are evaluated from left to right, and later assignments may use an
@@ -236,6 +241,7 @@ narrow:
   predicate and conditional use with a bounded literal RE2 pattern.
 - `like(value, "pattern")` returns a Boolean whole-string wildcard-match result
   for predicate and conditional use with a bounded literal pattern.
+- `now()` returns the fixed search-start Unix second as an `Int64`.
 
 The `if` predicate uses exactly the `where` grammar described above:
 case-sensitive scalar comparisons, direct `isnull` / `isnotnull` predicates,
@@ -867,6 +873,41 @@ calculated input that may exceed 4 MiB is rejected before wildcard execution.
 That size metadata remains conservative when `rex` or `spath` can retain a
 prior destination on a miss, and through `stats BY`, `min`, `max`, `earliest`,
 and `latest` when those commands preserve an input value.
+
+`now()` accepts no arguments:
+
+```spl
+| eval search_started=now()
+| where _time<=now()
+| eval rendered=tostring(now())
+| eval state=if(now()>0, "started", "invalid")
+```
+
+Function names are case-insensitive, and a bare field named `now` remains an
+ordinary field. Any argument fails with `SPL_INVALID_EVAL_ARITY`. The result is
+a present, non-null fixed `Int64` containing the whole Unix second at which the
+ad-hoc search was admitted. Every occurrence in one search returns the same
+value. Subsecond precision is deliberately truncated rather than rounded.
+
+The anchor is the explicit immutable server-resolved search-admission timestamp
+captured beside, but independently from, the search's index-time and storage
+visibility cutoffs. Repeated execution for field analysis or export preserves
+that timestamp in the completed execution snapshot and therefore reproduces the
+original value; a delayed ClickHouse query cannot move it forward. The compiler
+binds the signed integer as an ordinary query argument and never emits
+ClickHouse `now()` or `now64()`. Projection, aggregation, and later eval stages
+retain the same shared compile context.
+
+`now()` is a numeric scalar and can be assigned directly, compared in `where`,
+or consumed by the supported conditional, rounding, and conversion functions.
+It has no field-dependent Dynamic, null, multivalue, text-provenance, or
+cardinality behavior. General scalar depth, node, token, argument, generated
+SQL, and whole-query ceilings remain authoritative for repeated composition.
+
+Open Splunk v0.1 has no scheduled-search execution surface, so Splunk's
+scheduled-time variant is not claimed. The per-event wall-clock `time()`
+function is also unsupported rather than being approximated with `now()`.
+`relative_time`, `strftime`, and `strptime` remain separate planned slices.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
@@ -2107,6 +2148,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`first` and `last` event-order functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/statistical-and-charting-functions/event-order-functions),
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
 [`if`, `coalesce`, `case`, `match`, `like`, and conditional functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
+[`now` and date/time functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/evaluation-functions/date-and-time-functions),
 [`lower`, `upper`, and text functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/text-functions),
 [SQLite core `substr` semantics](https://www.sqlite.org/lang_corefunc.html),
 [`tostring` and conversion functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/evaluation-functions/conversion-functions),

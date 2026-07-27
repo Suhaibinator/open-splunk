@@ -186,6 +186,18 @@ test("like highlights only when used as a parenthesized function", () => {
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
+test("now highlights only when used as a parenthesized function", () => {
+  const query = `index=main now=1 | eval started=NoW() | table now,started`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["now"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
 test("eval completion advertises the exact supported scalar signatures", () => {
   const evalCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eval");
   assert.ok(evalCompletion);
@@ -209,6 +221,8 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /like\(value, "pattern"\)/);
   assert.match(evalCompletion.detail, /4 KiB literal wildcard pattern/i);
   assert.match(evalCompletion.detail, /%.*zero or more.*_.*one Unicode code point/i);
+  assert.match(evalCompletion.detail, /now\(\)/);
+  assert.match(evalCompletion.detail, /fixed search-start Unix second/i);
   assert.match(evalCompletion.detail, /literal precision from 0 through 18/i);
   assert.match(evalCompletion.detail, /first non-null fixed value/i);
   assert.match(evalCompletion.detail, /first true predicate/i);
@@ -232,6 +246,8 @@ test("where completion advertises direct bounded match and like predicates", () 
   assert.match(whereCompletion.detail, /substring/i);
   assert.match(whereCompletion.detail, /like\(value, "pattern"\)/);
   assert.match(whereCompletion.detail, /whole-string/i);
+  assert.match(whereCompletion.detail, /now\(\)/);
+  assert.match(whereCompletion.detail, /search-start/i);
 });
 
 test("nested stats eval highlights as a function without relabeling the eval command", () => {
