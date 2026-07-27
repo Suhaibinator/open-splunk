@@ -1959,14 +1959,18 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				}
 			}
 		}
-		if expression.Function == spl.ScalarFunctionRound ||
-			expression.Function == spl.ScalarFunctionCeil ||
-			expression.Function == spl.ScalarFunctionFloor {
+		switch expression.Function {
+		case spl.ScalarFunctionRound,
+			spl.ScalarFunctionCeil,
+			spl.ScalarFunctionFloor:
 			if splScalarMayReturnBooleanFunction(expression.Arguments[0]) {
-				functionName := "round"
-				if expression.Function == spl.ScalarFunctionCeil {
+				functionName := ""
+				switch expression.Function {
+				case spl.ScalarFunctionRound:
+					functionName = "round"
+				case spl.ScalarFunctionCeil:
 					functionName = "ceil"
-				} else if expression.Function == spl.ScalarFunctionFloor {
+				case spl.ScalarFunctionFloor:
 					functionName = "floor"
 				}
 				return nil, &Diagnostic{
