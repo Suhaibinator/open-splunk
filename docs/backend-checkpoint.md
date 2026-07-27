@@ -7,7 +7,125 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded typed SPL `round`
+## Latest checkpoint: bounded typed SPL `ceil`/`ceiling` and `floor`
+
+Date: 2026-07-27
+
+Parser and logical-plan checkpoint (committed and pushed):
+`ddcdc89393f8046109081d33ff8549b34351c067`
+
+Initial ClickHouse compiler and integration checkpoint (committed and pushed):
+`e98484671194149d388ecab053a70d19ab56f509`
+
+Adversarial correctness, reuse, and efficiency checkpoint (committed and
+pushed):
+`25dcf9b069b9c30d768dfde5e198be679b49a9bf`
+
+Compatibility and editor checkpoint (committed and pushed):
+`92bcd210265938426a3df3a9b485f56dd0c9c8c1`
+
+Final zero-lint cleanup checkpoint (committed and pushed):
+`2f318e9d9f50eb4afb57cd4078d038201a104966`
+
+This test-first slice implements bounded `ceil(value)`, its exact
+`ceiling(value)` alias, and `floor(value)`:
+
+1. The parser accepts case-insensitive calls with exactly one scalar argument,
+   preserves each complete source range, supports nesting and predicate use,
+   and leaves bare fields named `ceil`, `ceiling`, and `floor` ordinary.
+   Boolean null-predicate consumption and invalid arity fail with source-
+   located diagnostics.
+2. Dedicated AST and logical-plan enums normalize `ceil` and `ceiling` to one
+   operation while keeping `floor` distinct. Parser, planner, and compiler
+   trust boundaries independently reject forged arity and enums, missing and
+   typed-nil arguments, Boolean escape, excessive depth/nodes, and cycles.
+3. Fixed `Int64` and `UInt64` input is an exact type-preserving identity,
+   including `MaxUint64`. Fixed `Float64` uses pinned ClickHouse `ceil` or
+   `floor`. Missing, explicit-null, projected-away, and statically null input
+   returns nullable Float64 null. Fixed String, Boolean, canonical time, and
+   multivalue inputs fail explicitly.
+4. Dynamic physical integers retain their exact runtime type. Validated
+   integral `decimal/v1` payloads inside signed `Int256` return exact Int256;
+   coverage proves `9007199254740993` does not collapse through Float64.
+   Other validated Decimal and physical floating/Decimal variants convert to
+   finite Float64 before rounding.
+5. Dynamic String, Boolean, null, arrays, objects, malformed or oversized
+   Decimal envelopes, and non-finite values fail closed to null without
+   payload exposure. Fixed multivalue input remains a source-located
+   `SPL_UNSUPPORTED_MULTIVALUE_USAGE` error.
+6. Float64 behavior is pinned on ClickHouse `26.3.17.4`:
+   `ceil(1.2)=2`, `ceil(-1.2)=-1`, `floor(1.2)=1`, and
+   `floor(-1.2)=-2`. Literal and Dynamic coverage also preserves the negative
+   zero sign bit of `ceil(-0.2)`.
+7. `round`, `ceil`, and `floor` share one typed numeric-rounding operation
+   helper and one non-Boolean unary validator. Optional round precision is a
+   typed `*uint8` configuration rather than loosely coupled SQL fragments and
+   argument slices.
+8. Each successful `ceil` or `floor` output carries an integral-numeric
+   invariant through eval assignments, projections, and renames. Any outer
+   `ceil` or `floor` is therefore compiled away as an identity; 24 alternating
+   calls collapse to one runtime operation and one Dynamic source reference.
+9. Dynamic source expressions bind once, numeric-only comparison lowering
+   omits String/Boolean/container redispatch, atomic comparisons remain
+   scalar, and no form uses `ARRAY JOIN` or changes event cardinality. The
+   common numeric-rounding SQL ceiling is 64 KiB in addition to the 256 KiB
+   whole-query ceiling.
+10. Compiler and pinned integration coverage exercises aliases, full-width
+    integers, fractional and exact Decimals, signed zero, nesting, predicates,
+    fixed aggregates, open- and closed-schema missing fields, nulls,
+    unsupported variants, malformed envelopes, exact source occurrence, and
+    `EXPLAIN actions=1`.
+11. Independent reuse, quality, and efficiency reviewers reported six
+    actionable findings, all applied: typed helper configuration, shared
+    unary validation, shared malformed-Decimal fixtures, a correctly named
+    shared complexity bound, constant-depth integral composition, and the
+    closed-schema missing-field fix. The last finding prevented valid
+    `stats ... | eval ceil(absent)` pipelines from failing as String misuse.
+12. The versioned compatibility contract cites the existing official Splunk
+    mathematical-function and ClickHouse rounding references and records the
+    alias, type, null, Decimal, signed-zero, optimization, and resource
+    boundaries. Editor completion advertises all three signatures; syntax
+    highlighting recognizes them only in function position.
+
+Validation completed on the current implementation:
+
+```sh
+go test ./internal/spl ./internal/plan ./internal/clickhouse -count=1
+go test ./... -count=1
+go vet ./...
+golangci-lint run ./...
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m
+git diff --check
+```
+
+All gates pass. The unrestricted repository-wide lint run reports zero
+issues. The frontend corpus contains 121 application tests and 47
+release/build tests. The production static export generated all 11 pages, and
+the final pinned Store/compiler run passed in 44.342 seconds.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `ddcdc89`, `e984846`, `25dcf9b`,
+   `92bcd21`, and `2f318e9`. Preserve unexpected local changes.
+2. Select the next bounded scalar slice only after pinning its Splunk
+   signature, fixed/Dynamic type behavior, null and multivalue behavior,
+   resource limits, and ClickHouse lowering. `mvcount` is the leading small
+   candidate because typed multivalue results already exist.
+3. Keep negative/calculated `round` precision, `tostring` formatting,
+   canonical-time conversion, arithmetic, concatenation, and implicit String
+   conversion as separate compatibility slices.
+4. Keep Dynamic/container `coalesce` and `case`, heterogeneous conditionals,
+   wildcard count, broader conditional count names, and `eventstats` as
+   separate reviewed contracts.
+
+## Previous checkpoint: bounded typed SPL `round`
 
 Date: 2026-07-27
 
