@@ -199,16 +199,16 @@ func (sequencer *SQLiteSequencer) Lookup(
 		return Reservation{}, matched, err
 	}
 	if !matched {
-		if err := tx.Commit(); err != nil {
-			return Reservation{}, false, fmt.Errorf("commit empty visibility lookup: %w", err)
+		if commitErr := tx.Commit(); commitErr != nil {
+			return Reservation{}, false, fmt.Errorf("commit empty visibility lookup: %w", commitErr)
 		}
 		return Reservation{}, false, nil
 	}
 	reservation, err := queryActiveReservationByBatch(ctx, tx, batchKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		// All attempts for this still-known identity were safely abandoned.
-		if err := tx.Commit(); err != nil {
-			return Reservation{}, false, fmt.Errorf("commit abandoned visibility lookup: %w", err)
+		if commitErr := tx.Commit(); commitErr != nil {
+			return Reservation{}, false, fmt.Errorf("commit abandoned visibility lookup: %w", commitErr)
 		}
 		return Reservation{}, false, nil
 	}
@@ -293,8 +293,8 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 			if err != nil {
 				return Reservation{}, fmt.Errorf("read committed visibility reservation: %w", err)
 			}
-			if err := tx.Commit(); err != nil {
-				return Reservation{}, fmt.Errorf("commit visibility reservation lookup: %w", err)
+			if commitErr := tx.Commit(); commitErr != nil {
+				return Reservation{}, fmt.Errorf("commit visibility reservation lookup: %w", commitErr)
 			}
 			return reservation, nil
 		}
@@ -304,24 +304,24 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 		if owner != "" && owner != request.AttemptID && sequencer.leases.contains(owner) {
 			return Reservation{}, ErrAttemptInProgress
 		}
-		result, err := tx.ExecContext(ctx, `
+		result, leaseErr := tx.ExecContext(ctx, `
 			UPDATE ingest_visibility_reservations
 			SET attempt_id = ?
 			WHERE sequence = ? AND state = 'reserved' AND attempt_id = ?`,
 			request.AttemptID, sequence, owner)
-		if err != nil {
-			return Reservation{}, fmt.Errorf("acquire visibility attempt lease: %w", err)
+		if leaseErr != nil {
+			return Reservation{}, fmt.Errorf("acquire visibility attempt lease: %w", leaseErr)
 		}
-		if err := requireOneRow(result, "acquire visibility attempt lease"); err != nil {
-			return Reservation{}, err
+		if rowErr := requireOneRow(result, "acquire visibility attempt lease"); rowErr != nil {
+			return Reservation{}, rowErr
 		}
 		reservation, err = queryReservationBySequence(ctx, tx, sequence)
 		if err != nil {
 			return Reservation{}, fmt.Errorf("read reacquired visibility reservation: %w", err)
 		}
 		reservation.PreviouslyReserved = true
-		if err := tx.Commit(); err != nil {
-			return Reservation{}, fmt.Errorf("commit visibility attempt lease: %w", err)
+		if commitErr := tx.Commit(); commitErr != nil {
+			return Reservation{}, fmt.Errorf("commit visibility attempt lease: %w", commitErr)
 		}
 		sequencer.leases.bind(request.AttemptID, reservation.Sequence)
 		retainLease = true
@@ -337,12 +337,16 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 	if barrier {
 		return Reservation{}, ErrAmbiguousBarrier
 	}
-	if err := ensurePendingCapacity(ctx, tx, len(request.Outbox)); err != nil {
-		return Reservation{}, err
+	if capacityErr := ensurePendingCapacity(ctx, tx, len(request.Outbox)); capacityErr != nil {
+		return Reservation{}, capacityErr
 	}
 	sequence, err = allocateSequence(ctx, tx)
 	if err != nil {
 		return Reservation{}, err
+	}
+	storedSequence, decodeErr := decodePositiveSequence(sequence)
+	if decodeErr != nil {
+		return Reservation{}, fmt.Errorf("decode allocated visibility sequence: %w", decodeErr)
 	}
 	createdAt := time.Now().UTC().UnixMicro()
 	if !identityExists {
@@ -377,12 +381,12 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 	if err := tx.Commit(); err != nil {
 		return Reservation{}, fmt.Errorf("commit visibility reservation: %w", err)
 	}
-	sequencer.leases.bind(request.AttemptID, uint64(sequence))
+	sequencer.leases.bind(request.AttemptID, storedSequence)
 	retainLease = true
 	return Reservation{
 		BatchKey:      request.BatchKey,
 		SequenceKey:   request.SequenceKey,
-		Sequence:      uint64(sequence),
+		Sequence:      storedSequence,
 		IndexTime:     time.UnixMilli(indexTimeMillis).UTC(),
 		PayloadSHA256: request.PayloadSHA256,
 		Metadata:      slices.Clone(metadata),
@@ -424,24 +428,24 @@ func (sequencer *SQLiteSequencer) AcquirePending(ctx context.Context, attemptID 
 	for rows.Next() {
 		var candidate int64
 		var owner string
-		if err := rows.Scan(&candidate, &owner); err != nil {
+		if scanErr := rows.Scan(&candidate, &owner); scanErr != nil {
 			_ = rows.Close()
-			return Reservation{}, false, fmt.Errorf("scan pending visibility reservation: %w", err)
+			return Reservation{}, false, fmt.Errorf("scan pending visibility reservation: %w", scanErr)
 		}
 		if owner == "" || owner == attemptID || !sequencer.leases.contains(owner) {
 			sequence, priorOwner = candidate, owner
 			break
 		}
 	}
-	if err := rows.Close(); err != nil {
-		return Reservation{}, false, fmt.Errorf("close pending visibility rows: %w", err)
+	if closeErr := rows.Close(); closeErr != nil {
+		return Reservation{}, false, fmt.Errorf("close pending visibility rows: %w", closeErr)
 	}
-	if err := rows.Err(); err != nil {
-		return Reservation{}, false, fmt.Errorf("iterate pending visibility rows: %w", err)
+	if iterationErr := rows.Err(); iterationErr != nil {
+		return Reservation{}, false, fmt.Errorf("iterate pending visibility rows: %w", iterationErr)
 	}
 	if sequence == 0 {
-		if err := tx.Commit(); err != nil {
-			return Reservation{}, false, fmt.Errorf("commit empty pending visibility acquisition: %w", err)
+		if commitErr := tx.Commit(); commitErr != nil {
+			return Reservation{}, false, fmt.Errorf("commit empty pending visibility acquisition: %w", commitErr)
 		}
 		return Reservation{}, false, nil
 	}
@@ -452,8 +456,8 @@ func (sequencer *SQLiteSequencer) AcquirePending(ctx context.Context, attemptID 
 	if err != nil {
 		return Reservation{}, false, fmt.Errorf("acquire pending visibility lease: %w", err)
 	}
-	if err := requireOneRow(result, "acquire pending visibility lease"); err != nil {
-		return Reservation{}, false, err
+	if rowErr := requireOneRow(result, "acquire pending visibility lease"); rowErr != nil {
+		return Reservation{}, false, rowErr
 	}
 	reservation, err = queryReservationBySequence(ctx, tx, sequence)
 	if err != nil {
@@ -519,17 +523,21 @@ func resolveIdentity(
 		var identity batchIdentity
 		var digest []byte
 		var firstVisibilitySeq, createdAtMicros int64
-		if err := rows.Scan(
+		if scanErr := rows.Scan(
 			&identity.BatchKey,
 			&identity.SequenceKey,
 			&digest,
 			&firstVisibilitySeq,
 			&createdAtMicros,
-		); err != nil {
-			return batchIdentity{}, false, fmt.Errorf("scan ingest batch identity: %w", err)
+		); scanErr != nil {
+			return batchIdentity{}, false, fmt.Errorf("scan ingest batch identity: %w", scanErr)
 		}
 		copy(identity.PayloadSHA256[:], digest)
-		identity.FirstVisibilitySeq = uint64(firstVisibilitySeq)
+		decodedSequence, decodeErr := decodePositiveSequence(firstVisibilitySeq)
+		if decodeErr != nil {
+			return batchIdentity{}, false, fmt.Errorf("decode first visibility sequence: %w", decodeErr)
+		}
+		identity.FirstVisibilitySeq = decodedSequence
 		identity.CreatedAt = time.UnixMicro(createdAtMicros).UTC()
 		matches = append(matches, identity)
 	}
@@ -568,7 +576,11 @@ func scanReservation(row scanner) (Reservation, error) {
 	); err != nil {
 		return Reservation{}, err
 	}
-	reservation.Sequence = uint64(sequence)
+	decodedSequence, err := decodePositiveSequence(sequence)
+	if err != nil {
+		return Reservation{}, fmt.Errorf("decode visibility reservation sequence: %w", err)
+	}
+	reservation.Sequence = decodedSequence
 	reservation.AlreadyCommitted = state == reservationCommitted
 	reservation.MayHaveReachedStorage = phase == phaseAmbiguous || state == reservationCommitted
 	reservation.IndexTime = time.UnixMilli(indexTimeMillis).UTC()
@@ -708,11 +720,15 @@ func (sequencer *SQLiteSequencer) orphanedAmbiguousExists(
 		if err := rows.Scan(&sequence, &owner); err != nil {
 			return false, fmt.Errorf("scan ambiguous visibility barrier: %w", err)
 		}
-		if uint64(sequence) == excludeSequence ||
-			(beforeSequence != 0 && uint64(sequence) >= beforeSequence) {
+		decodedSequence, err := decodePositiveSequence(sequence)
+		if err != nil {
+			return false, fmt.Errorf("decode ambiguous visibility sequence: %w", err)
+		}
+		if decodedSequence == excludeSequence ||
+			(beforeSequence != 0 && decodedSequence >= beforeSequence) {
 			continue
 		}
-		if owner == "" || !sequencer.leases.owns(owner, uint64(sequence)) {
+		if owner == "" || !sequencer.leases.owns(owner, decodedSequence) {
 			return true, nil
 		}
 	}
@@ -725,8 +741,8 @@ func (sequencer *SQLiteSequencer) orphanedAmbiguousExists(
 func ambiguousExists(
 	ctx context.Context,
 	tx *sql.Tx,
-	excludeSequence uint64,
-	beforeSequence uint64,
+	excludeSequence int64,
+	beforeSequence int64,
 ) (bool, error) {
 	var exists int
 	err := tx.QueryRowContext(ctx, `
@@ -736,7 +752,7 @@ func ambiguousExists(
 			WHERE state = 'reserved' AND phase = 'ambiguous'
 			  AND sequence <> ?
 			  AND (? = 0 OR sequence < ?)
-		)`, int64(excludeSequence), int64(beforeSequence), int64(beforeSequence)).Scan(&exists)
+		)`, excludeSequence, beforeSequence, beforeSequence).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("read visibility sending barrier: %w", err)
 	}
@@ -746,8 +762,9 @@ func ambiguousExists(
 // MarkSending durably changes an owned unsent reservation to ambiguous before
 // the caller invokes ClickHouse Send.
 func (sequencer *SQLiteSequencer) MarkSending(ctx context.Context, sequence uint64, attemptID string) error {
-	if err := validateAttempt(ctx, sequence, attemptID); err != nil {
-		return err
+	storedSequence, validationErr := validateAttempt(ctx, sequence, attemptID)
+	if validationErr != nil {
+		return validationErr
 	}
 	tx, err := sequencer.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
@@ -755,26 +772,26 @@ func (sequencer *SQLiteSequencer) MarkSending(ctx context.Context, sequence uint
 	}
 	defer rollback(tx)
 	var state, phase, owner string
-	if err := tx.QueryRowContext(ctx, `
+	if queryErr := tx.QueryRowContext(ctx, `
 		SELECT state, phase, attempt_id
 		FROM ingest_visibility_reservations
-		WHERE sequence = ?`, int64(sequence)).Scan(&state, &phase, &owner); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		WHERE sequence = ?`, storedSequence).Scan(&state, &phase, &owner); queryErr != nil {
+		if errors.Is(queryErr, sql.ErrNoRows) {
 			return ErrNotFound
 		}
-		return fmt.Errorf("read visibility reservation before sending: %w", err)
+		return fmt.Errorf("read visibility reservation before sending: %w", queryErr)
 	}
 	if state != reservationReserved || owner != attemptID {
 		return ErrAttemptLease
 	}
-	beforeSequence := uint64(0)
+	var beforeSequence int64
 	if phase == phaseAmbiguous {
 		// Multiple sends can become orphaned in one crash. Replay them oldest
 		// first so each exact ambiguous reservation can make progress without
 		// allowing an unsent or later replay to jump the barrier.
-		beforeSequence = sequence
+		beforeSequence = storedSequence
 	}
-	barrier, err := ambiguousExists(ctx, tx, sequence, beforeSequence)
+	barrier, err := ambiguousExists(ctx, tx, storedSequence, beforeSequence)
 	if err != nil {
 		return err
 	}
@@ -785,7 +802,7 @@ func (sequencer *SQLiteSequencer) MarkSending(ctx context.Context, sequence uint
 		UPDATE ingest_visibility_reservations
 		SET phase = 'ambiguous'
 		WHERE sequence = ? AND state = 'reserved' AND phase IN ('unsent', 'ambiguous') AND attempt_id = ?`,
-		int64(sequence), attemptID)
+		storedSequence, attemptID)
 	if err != nil {
 		return fmt.Errorf("mark visibility reservation sending: %w", err)
 	}
@@ -828,8 +845,9 @@ func (sequencer *SQLiteSequencer) finish(ctx context.Context, sequence uint64, a
 	if attemptID != "" && sequencer.leases.owns(attemptID, sequence) {
 		defer sequencer.leases.deactivate(attemptID)
 	}
-	if err := validateAttempt(ctx, sequence, attemptID); err != nil {
-		return err
+	storedSequence, validationErr := validateAttempt(ctx, sequence, attemptID)
+	if validationErr != nil {
+		return validationErr
 	}
 	tx, err := sequencer.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
@@ -838,14 +856,14 @@ func (sequencer *SQLiteSequencer) finish(ctx context.Context, sequence uint64, a
 	defer rollback(tx)
 
 	var state, phase, owner string
-	if err := tx.QueryRowContext(ctx, `
+	if queryErr := tx.QueryRowContext(ctx, `
 		SELECT state, phase, attempt_id
 		FROM ingest_visibility_reservations
-		WHERE sequence = ?`, int64(sequence)).Scan(&state, &phase, &owner); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		WHERE sequence = ?`, storedSequence).Scan(&state, &phase, &owner); queryErr != nil {
+		if errors.Is(queryErr, sql.ErrNoRows) {
 			return ErrNotFound
 		}
-		return fmt.Errorf("read visibility reservation state: %w", err)
+		return fmt.Errorf("read visibility reservation state: %w", queryErr)
 	}
 	if (target == reservationCommitted && state == reservationCommitted) ||
 		(target == reservationAbandoned && state == reservationAbandoned) {
@@ -862,15 +880,15 @@ func (sequencer *SQLiteSequencer) finish(ctx context.Context, sequence uint64, a
 	}
 
 	if target == reservationReserved {
-		result, err := tx.ExecContext(ctx, `
+		result, releaseErr := tx.ExecContext(ctx, `
 			UPDATE ingest_visibility_reservations
 			SET attempt_id = ''
-			WHERE sequence = ? AND state = 'reserved' AND attempt_id = ?`, int64(sequence), attemptID)
-		if err != nil {
-			return fmt.Errorf("release visibility attempt lease: %w", err)
+			WHERE sequence = ? AND state = 'reserved' AND attempt_id = ?`, storedSequence, attemptID)
+		if releaseErr != nil {
+			return fmt.Errorf("release visibility attempt lease: %w", releaseErr)
 		}
-		if err := requireOneRow(result, "release visibility attempt lease"); err != nil {
-			return err
+		if rowErr := requireOneRow(result, "release visibility attempt lease"); rowErr != nil {
+			return rowErr
 		}
 	} else {
 		var result sql.Result
@@ -880,14 +898,14 @@ func (sequencer *SQLiteSequencer) finish(ctx context.Context, sequence uint64, a
 				SET state = 'committed', phase = 'final', attempt_id = '', outbox = X'',
 				    committed_at_unix_micro = ?
 				WHERE sequence = ? AND state = 'reserved' AND attempt_id = ?`,
-				committedAtMicros, int64(sequence), attemptID)
+				committedAtMicros, storedSequence, attemptID)
 		} else {
 			result, err = tx.ExecContext(ctx, `
 				UPDATE ingest_visibility_reservations
 				SET state = 'abandoned', phase = 'final', attempt_id = '', outbox = X'',
 				    committed_at_unix_micro = NULL
 				WHERE sequence = ? AND state = 'reserved' AND attempt_id = ?`,
-				int64(sequence), attemptID)
+				storedSequence, attemptID)
 		}
 		if err != nil {
 			return fmt.Errorf("finalize visibility reservation: %w", err)
@@ -937,14 +955,14 @@ func advanceCutoff(ctx context.Context, tx *sql.Tx) error {
 	return requireOneRow(result, "advance visibility cutoff")
 }
 
-func validateAttempt(ctx context.Context, sequence uint64, attemptID string) error {
+func validateAttempt(ctx context.Context, sequence uint64, attemptID string) (int64, error) {
 	if err := validateAttemptID(ctx, attemptID); err != nil {
-		return err
+		return 0, err
 	}
 	if sequence == 0 || sequence > math.MaxInt64 {
-		return fmt.Errorf("%w: sequence is invalid", ErrInvalidArgument)
+		return 0, fmt.Errorf("%w: sequence is invalid", ErrInvalidArgument)
 	}
-	return nil
+	return int64(sequence), nil
 }
 
 func (sequencer *SQLiteSequencer) Cutoff(ctx context.Context) (uint64, error) {
@@ -958,7 +976,11 @@ func (sequencer *SQLiteSequencer) Cutoff(ctx context.Context) (uint64, error) {
 		WHERE singleton = 1`).Scan(&cutoff); err != nil {
 		return 0, fmt.Errorf("read visibility cutoff: %w", err)
 	}
-	return uint64(cutoff), nil
+	decodedCutoff, err := decodeNonNegativeSequence(cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("decode visibility cutoff: %w", err)
+	}
+	return decodedCutoff, nil
 }
 
 // PruneTerminal advances the explicit idempotency horizon by deleting at most
@@ -985,38 +1007,45 @@ func (sequencer *SQLiteSequencer) PruneTerminal(
 	defer rollback(tx)
 
 	var lastAssigned, cutoff int64
-	if err := tx.QueryRowContext(ctx, `
+	if queryErr := tx.QueryRowContext(ctx, `
 		SELECT last_assigned, committed_through
 		FROM ingest_visibility_state
-		WHERE singleton = 1`).Scan(&lastAssigned, &cutoff); err != nil {
-		return 0, fmt.Errorf("read visibility cutoff for prune: %w", err)
+		WHERE singleton = 1`).Scan(&lastAssigned, &cutoff); queryErr != nil {
+		return 0, fmt.Errorf("read visibility cutoff for prune: %w", queryErr)
+	}
+	if lastAssigned < 0 || cutoff < 0 || cutoff > lastAssigned {
+		return 0, errors.New("invalid visibility cutoff state in control-plane database")
 	}
 	abandonedThreshold := lastAssigned
 	abandonedEligible := true
 	committedThreshold := cutoff
 	committedEligible := retainSequences == 0
-	if retainSequences > 0 {
-		if retainSequences >= uint64(lastAssigned) {
+	if retainSequences > math.MaxInt64 {
+		abandonedEligible = false
+		committedEligible = false
+	} else if retainSequences > 0 {
+		retained := int64(retainSequences)
+		if retained >= lastAssigned {
 			abandonedEligible = false
 		} else {
-			abandonedThreshold = lastAssigned - int64(retainSequences)
+			abandonedThreshold = lastAssigned - retained
 		}
 		// OFFSET retainSequences selects the (N+1)th newest committed
 		// block. Deleting it and older commits leaves exactly N newer ones.
-		if retainSequences < uint64(cutoff) {
-			err := tx.QueryRowContext(ctx, `
-			SELECT sequence
-			FROM ingest_visibility_reservations
-			WHERE state = 'committed' AND sequence <= ?
-			ORDER BY sequence DESC
-			LIMIT 1 OFFSET ?`, cutoff, int64(retainSequences)).Scan(&committedThreshold)
+		if retained < cutoff {
+			horizonErr := tx.QueryRowContext(ctx, `
+				SELECT sequence
+				FROM ingest_visibility_reservations
+				WHERE state = 'committed' AND sequence <= ?
+				ORDER BY sequence DESC
+				LIMIT 1 OFFSET ?`, cutoff, retained).Scan(&committedThreshold)
 			switch {
-			case err == nil:
+			case horizonErr == nil:
 				committedEligible = true
-			case errors.Is(err, sql.ErrNoRows):
+			case errors.Is(horizonErr, sql.ErrNoRows):
 				committedEligible = false
 			default:
-				return 0, fmt.Errorf("select terminal visibility prune horizon: %w", err)
+				return 0, fmt.Errorf("select terminal visibility prune horizon: %w", horizonErr)
 			}
 		}
 	}
@@ -1036,6 +1065,9 @@ func (sequencer *SQLiteSequencer) PruneTerminal(
 	deleted, err := result.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("read pruned visibility reservation count: %w", err)
+	}
+	if deleted < 0 || deleted > math.MaxUint32 || deleted > int64(limit) {
+		return 0, fmt.Errorf("invalid pruned visibility reservation count %d", deleted)
 	}
 	if deleted > 0 {
 		if _, err := tx.ExecContext(ctx, `
@@ -1058,6 +1090,20 @@ func (sequencer *SQLiteSequencer) PruneTerminal(
 		return 0, fmt.Errorf("commit terminal visibility prune: %w", err)
 	}
 	return uint32(deleted), nil
+}
+
+func decodePositiveSequence(value int64) (uint64, error) {
+	if value < 1 {
+		return 0, fmt.Errorf("invalid stored visibility sequence %d", value)
+	}
+	return uint64(value), nil
+}
+
+func decodeNonNegativeSequence(value int64) (uint64, error) {
+	if value < 0 {
+		return 0, fmt.Errorf("invalid stored visibility sequence %d", value)
+	}
+	return uint64(value), nil
 }
 
 func validateContext(ctx context.Context) error {

@@ -71,11 +71,11 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 
 	var digest []byte
 	var safePrefix string
-	if err := db.SQLDB().QueryRowContext(ctx, `
+	if queryErr := db.SQLDB().QueryRowContext(ctx, `
 		SELECT token_digest, token_prefix
 		FROM ingestion_tokens
-		WHERE ingestion_token_id = ?`, issued.Token.ID).Scan(&digest, &safePrefix); err != nil {
-		t.Fatalf("read stored token: %v", err)
+		WHERE ingestion_token_id = ?`, issued.Token.ID).Scan(&digest, &safePrefix); queryErr != nil {
+		t.Fatalf("read stored token: %v", queryErr)
 	}
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write([]byte(plaintext))
@@ -93,15 +93,15 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 	defer rows.Close()
 	for rows.Next() {
 		var column string
-		if err := rows.Scan(&column); err != nil {
-			t.Fatalf("scan ingestion_tokens column: %v", err)
+		if scanErr := rows.Scan(&column); scanErr != nil {
+			t.Fatalf("scan ingestion_tokens column: %v", scanErr)
 		}
 		if column == "token" || column == "secret" || column == "plaintext" {
 			t.Fatalf("ingestion_tokens contains plaintext-capable column %q", column)
 		}
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate ingestion_tokens columns: %v", err)
+	if iterationErr := rows.Err(); iterationErr != nil {
+		t.Fatalf("iterate ingestion_tokens columns: %v", iterationErr)
 	}
 
 	principal, err := store.Authorize(ctx, plaintext, " MAIN ")
@@ -118,27 +118,27 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 	if authentication.TokenID != issued.Token.ID || fmt.Sprint(authentication.AllowedIndexNames) != fmt.Sprint([]string{"audit", "main"}) {
 		t.Fatalf("Authenticate() = %#v", authentication)
 	}
-	if _, err := store.Authorize(ctx, plaintext, "unrelated"); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("Authorize(unrelated) error = %v, want ErrUnauthorized", err)
+	if _, authorizeErr := store.Authorize(ctx, plaintext, "unrelated"); !errors.Is(authorizeErr, ErrUnauthorized) {
+		t.Fatalf("Authorize(unrelated) error = %v, want ErrUnauthorized", authorizeErr)
 	}
-	if _, err := store.Authorize(ctx, "attacker-controlled-secret", "main"); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("Authorize(bad token) error = %v, want ErrUnauthorized", err)
-	} else if strings.Contains(err.Error(), "attacker-controlled-secret") {
-		t.Fatalf("Authorize error leaked supplied token: %v", err)
+	if _, authorizeErr := store.Authorize(ctx, "attacker-controlled-secret", "main"); !errors.Is(authorizeErr, ErrUnauthorized) {
+		t.Fatalf("Authorize(bad token) error = %v, want ErrUnauthorized", authorizeErr)
+	} else if strings.Contains(authorizeErr.Error(), "attacker-controlled-secret") {
+		t.Fatalf("Authorize error leaked supplied token: %v", authorizeErr)
 	}
-	if _, err := db.SQLDB().ExecContext(ctx, `
+	if _, updateErr := db.SQLDB().ExecContext(ctx, `
 		UPDATE ingestion_tokens SET state = 'revoked'
-		WHERE ingestion_token_id = ?`, issued.Token.ID); err == nil {
+		WHERE ingestion_token_id = ?`, issued.Token.ID); updateErr == nil {
 		t.Fatal("revoked state without revoked_at unexpectedly succeeded")
 	}
-	if _, err := db.SQLDB().ExecContext(ctx, `
+	if _, updateErr := db.SQLDB().ExecContext(ctx, `
 		UPDATE ingestion_tokens SET revoked_at_unix_micro = created_at_unix_micro
-		WHERE ingestion_token_id = ?`, issued.Token.ID); err == nil {
+		WHERE ingestion_token_id = ?`, issued.Token.ID); updateErr == nil {
 		t.Fatal("active state with revoked_at unexpectedly succeeded")
 	}
-	if _, err := db.SQLDB().ExecContext(ctx, `
+	if _, updateErr := db.SQLDB().ExecContext(ctx, `
 		UPDATE ingestion_tokens SET expires_at_unix_micro = created_at_unix_micro
-		WHERE ingestion_token_id = ?`, issued.Token.ID); err == nil {
+		WHERE ingestion_token_id = ?`, issued.Token.ID); updateErr == nil {
 		t.Fatal("expiration at creation time unexpectedly succeeded")
 	}
 
@@ -149,20 +149,20 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 	if revoked.State != CollectorTokenStateRevoked || revoked.Version != 2 || revoked.RevokedAt.IsZero() {
 		t.Fatalf("revoked token = %#v", revoked)
 	}
-	if _, err := store.Authorize(ctx, plaintext, "main"); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("Authorize(revoked) error = %v, want ErrUnauthorized", err)
+	if _, authorizeErr := store.Authorize(ctx, plaintext, "main"); !errors.Is(authorizeErr, ErrUnauthorized) {
+		t.Fatalf("Authorize(revoked) error = %v, want ErrUnauthorized", authorizeErr)
 	}
-	if _, err := store.Authenticate(ctx, plaintext); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("Authenticate(revoked) error = %v, want ErrUnauthorized", err)
+	if _, authenticateErr := store.Authenticate(ctx, plaintext); !errors.Is(authenticateErr, ErrUnauthorized) {
+		t.Fatalf("Authenticate(revoked) error = %v, want ErrUnauthorized", authenticateErr)
 	}
-	if _, err := db.SQLDB().ExecContext(ctx, `UPDATE ingestion_tokens SET state = 'active' WHERE ingestion_token_id = ?`, issued.Token.ID); err == nil {
+	if _, updateErr := db.SQLDB().ExecContext(ctx, `UPDATE ingestion_tokens SET state = 'active' WHERE ingestion_token_id = ?`, issued.Token.ID); updateErr == nil {
 		t.Fatal("direct reactivation of revoked token unexpectedly succeeded")
 	}
-	if _, err := db.SQLDB().ExecContext(ctx, `UPDATE ingestion_tokens SET token_digest = zeroblob(32) WHERE ingestion_token_id = ?`, issued.Token.ID); err == nil {
+	if _, updateErr := db.SQLDB().ExecContext(ctx, `UPDATE ingestion_tokens SET token_digest = zeroblob(32) WHERE ingestion_token_id = ?`, issued.Token.ID); updateErr == nil {
 		t.Fatal("direct mutation of token digest unexpectedly succeeded")
 	}
-	if _, err := store.RevokeCollectorToken(ctx, issued.Token.ID, issued.Token.Version); !errors.Is(err, control.ErrVersionConflict) {
-		t.Fatalf("stale RevokeCollectorToken() error = %v, want ErrVersionConflict", err)
+	if _, revokeErr := store.RevokeCollectorToken(ctx, issued.Token.ID, issued.Token.Version); !errors.Is(revokeErr, control.ErrVersionConflict) {
+		t.Fatalf("stale RevokeCollectorToken() error = %v, want ErrVersionConflict", revokeErr)
 	}
 }
 
@@ -186,8 +186,8 @@ func TestStoreCopiesDigestKey(t *testing.T) {
 	for i := range key {
 		key[i] = 0
 	}
-	if _, err := store.Authorize(ctx, issued.Secret.Plaintext(), "main"); err != nil {
-		t.Fatalf("Authorize() after caller key mutation = %v", err)
+	if _, authorizeErr := store.Authorize(ctx, issued.Secret.Plaintext(), "main"); authorizeErr != nil {
+		t.Fatalf("Authorize() after caller key mutation = %v", authorizeErr)
 	}
 }
 
@@ -225,8 +225,8 @@ func TestAuthenticateRefreshesCurrentActiveScopes(t *testing.T) {
 
 	secondDefinition := second.Definition
 	secondDefinition.IngestionEnabled = false
-	if _, err := db.UpdateIndex(ctx, second.ID, second.Version, secondDefinition); err != nil {
-		t.Fatalf("UpdateIndex(disable second): %v", err)
+	if _, updateErr := db.UpdateIndex(ctx, second.ID, second.Version, secondDefinition); updateErr != nil {
+		t.Fatalf("UpdateIndex(disable second): %v", updateErr)
 	}
 	authentication, err = store.Authenticate(ctx, plaintext)
 	if err != nil {
@@ -236,11 +236,11 @@ func TestAuthenticateRefreshesCurrentActiveScopes(t *testing.T) {
 		t.Fatalf("refreshed scopes = %v, want [first]", authentication.AllowedIndexNames)
 	}
 
-	if _, err := db.SetIndexState(ctx, first.ID, first.Version, control.IndexStateArchived); err != nil {
-		t.Fatalf("SetIndexState(archive first): %v", err)
+	if _, stateErr := db.SetIndexState(ctx, first.ID, first.Version, control.IndexStateArchived); stateErr != nil {
+		t.Fatalf("SetIndexState(archive first): %v", stateErr)
 	}
-	if _, err := store.Authenticate(ctx, plaintext); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("Authenticate(no active scopes) error = %v, want ErrUnauthorized", err)
+	if _, authenticateErr := store.Authenticate(ctx, plaintext); !errors.Is(authenticateErr, ErrUnauthorized) {
+		t.Fatalf("Authenticate(no active scopes) error = %v, want ErrUnauthorized", authenticateErr)
 	}
 }
 
@@ -279,8 +279,8 @@ func TestGetAndListCollectorTokensReturnSafeMetadata(t *testing.T) {
 	if got.ID != first.Token.ID || got.Prefix != first.Token.Prefix || strings.Contains(fmt.Sprintf("%#v", got), first.Secret.Plaintext()) {
 		t.Fatalf("GetCollectorToken() = %#v", got)
 	}
-	if _, err := store.GetCollectorToken(ctx, "missing"); !errors.Is(err, control.ErrNotFound) {
-		t.Fatalf("GetCollectorToken(missing) error = %v, want ErrNotFound", err)
+	if _, getErr := store.GetCollectorToken(ctx, "missing"); !errors.Is(getErr, control.ErrNotFound) {
+		t.Fatalf("GetCollectorToken(missing) error = %v, want ErrNotFound", getErr)
 	}
 
 	tokens, err := store.ListCollectorTokens(ctx)
@@ -333,17 +333,17 @@ func TestUpdateCollectorTokenReplacesDefinitionAndScopesAtomically(t *testing.T)
 		fmt.Sprint(updated.AllowedIndexNames) != fmt.Sprint([]string{"second"}) || !updated.ExpiresAt.Equal(now.Add(time.Hour)) {
 		t.Fatalf("updated token = %#v", updated)
 	}
-	if _, err := store.Authorize(ctx, issued.Secret.Plaintext(), "first"); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("Authorize(old scope) error = %v, want ErrUnauthorized", err)
+	if _, authorizeErr := store.Authorize(ctx, issued.Secret.Plaintext(), "first"); !errors.Is(authorizeErr, ErrUnauthorized) {
+		t.Fatalf("Authorize(old scope) error = %v, want ErrUnauthorized", authorizeErr)
 	}
-	if principal, err := store.Authorize(ctx, issued.Secret.Plaintext(), "second"); err != nil || principal.TokenID != issued.Token.ID {
-		t.Fatalf("Authorize(new scope) = %#v, %v", principal, err)
+	if principal, authorizeErr := store.Authorize(ctx, issued.Secret.Plaintext(), "second"); authorizeErr != nil || principal.TokenID != issued.Token.ID {
+		t.Fatalf("Authorize(new scope) = %#v, %v", principal, authorizeErr)
 	}
 
-	if _, err := store.UpdateCollectorToken(ctx, issued.Token.ID, 1, UpdateCollectorTokenRequest{
+	if _, updateErr := store.UpdateCollectorToken(ctx, issued.Token.ID, 1, UpdateCollectorTokenRequest{
 		Name: "stale", AllowedIndexNames: []string{"first"}, ExpiresAt: now.Add(time.Hour),
-	}); !errors.Is(err, control.ErrVersionConflict) {
-		t.Fatalf("stale UpdateCollectorToken() error = %v, want ErrVersionConflict", err)
+	}); !errors.Is(updateErr, control.ErrVersionConflict) {
+		t.Fatalf("stale UpdateCollectorToken() error = %v, want ErrVersionConflict", updateErr)
 	}
 	current, err := store.GetCollectorToken(ctx, issued.Token.ID)
 	if err != nil {
@@ -372,10 +372,10 @@ func TestUpdateCollectorTokenRejectsInactiveOrInvalidReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
 	}
-	if _, err := store.UpdateCollectorToken(ctx, issued.Token.ID, issued.Token.Version, UpdateCollectorTokenRequest{
+	if _, updateErr := store.UpdateCollectorToken(ctx, issued.Token.ID, issued.Token.Version, UpdateCollectorTokenRequest{
 		Name: "invalid", AllowedIndexNames: []string{"missing"},
-	}); !errors.Is(err, control.ErrInvalidArgument) {
-		t.Fatalf("invalid scope error = %v, want ErrInvalidArgument", err)
+	}); !errors.Is(updateErr, control.ErrInvalidArgument) {
+		t.Fatalf("invalid scope error = %v, want ErrInvalidArgument", updateErr)
 	}
 	unchanged, err := store.GetCollectorToken(ctx, issued.Token.ID)
 	if err != nil || unchanged.Version != 1 || unchanged.Name != "token" {
@@ -386,10 +386,10 @@ func TestUpdateCollectorTokenRejectsInactiveOrInvalidReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RevokeCollectorToken(): %v", err)
 	}
-	if _, err := store.UpdateCollectorToken(ctx, issued.Token.ID, revoked.Version, UpdateCollectorTokenRequest{
+	if _, updateErr := store.UpdateCollectorToken(ctx, issued.Token.ID, revoked.Version, UpdateCollectorTokenRequest{
 		Name: "cannot-reactivate", AllowedIndexNames: []string{"main"},
-	}); !errors.Is(err, ErrInactiveToken) {
-		t.Fatalf("revoked update error = %v, want ErrInactiveToken", err)
+	}); !errors.Is(updateErr, ErrInactiveToken) {
+		t.Fatalf("revoked update error = %v, want ErrInactiveToken", updateErr)
 	}
 
 	shortLived, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
@@ -399,10 +399,10 @@ func TestUpdateCollectorTokenRejectsInactiveOrInvalidReplacement(t *testing.T) {
 		t.Fatalf("CreateCollectorToken(short): %v", err)
 	}
 	store.now = func() time.Time { return now.Add(2 * time.Minute) }
-	if _, err := store.UpdateCollectorToken(ctx, shortLived.Token.ID, shortLived.Token.Version, UpdateCollectorTokenRequest{
+	if _, updateErr := store.UpdateCollectorToken(ctx, shortLived.Token.ID, shortLived.Token.Version, UpdateCollectorTokenRequest{
 		Name: "cannot-extend", AllowedIndexNames: []string{"main"}, ExpiresAt: now.Add(time.Hour),
-	}); !errors.Is(err, ErrInactiveToken) {
-		t.Fatalf("expired update error = %v, want ErrInactiveToken", err)
+	}); !errors.Is(updateErr, ErrInactiveToken) {
+		t.Fatalf("expired update error = %v, want ErrInactiveToken", updateErr)
 	}
 }
 
@@ -452,13 +452,13 @@ func TestCollectorTokensRequireExplicitActiveIngestionIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIndex(archived): %v", err)
 	}
-	if _, err := db.SetIndexState(ctx, archived.ID, archived.Version, control.IndexStateArchived); err != nil {
-		t.Fatalf("SetIndexState(archived): %v", err)
+	if _, stateErr := db.SetIndexState(ctx, archived.ID, archived.Version, control.IndexStateArchived); stateErr != nil {
+		t.Fatalf("SetIndexState(archived): %v", stateErr)
 	}
 	disabledDef := activeIndex("disabled")
 	disabledDef.IngestionEnabled = false
-	if _, err := db.CreateIndex(ctx, disabledDef); err != nil {
-		t.Fatalf("CreateIndex(disabled): %v", err)
+	if _, createErr := db.CreateIndex(ctx, disabledDef); createErr != nil {
+		t.Fatalf("CreateIndex(disabled): %v", createErr)
 	}
 
 	store, err := NewStore(db, []byte("0123456789abcdef0123456789abcdef"))
@@ -472,9 +472,9 @@ func TestCollectorTokensRequireExplicitActiveIngestionIndexes(t *testing.T) {
 		"disabled": {"disabled"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{Name: name, AllowedIndexNames: indexes})
-			if !errors.Is(err, control.ErrInvalidArgument) {
-				t.Fatalf("CreateCollectorToken() error = %v, want ErrInvalidArgument", err)
+			_, createErr := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{Name: name, AllowedIndexNames: indexes})
+			if !errors.Is(createErr, control.ErrInvalidArgument) {
+				t.Fatalf("CreateCollectorToken() error = %v, want ErrInvalidArgument", createErr)
 			}
 		})
 	}
@@ -483,19 +483,19 @@ func TestCollectorTokensRequireExplicitActiveIngestionIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(valid): %v", err)
 	}
-	if _, err := store.Authorize(ctx, issued.Secret.Plaintext(), "active"); err != nil {
-		t.Fatalf("Authorize(active): %v", err)
+	if _, authorizeErr := store.Authorize(ctx, issued.Secret.Plaintext(), "active"); authorizeErr != nil {
+		t.Fatalf("Authorize(active): %v", authorizeErr)
 	}
 	definition := active.Definition
 	definition.IngestionEnabled = false
-	if _, err := db.UpdateIndex(ctx, active.ID, active.Version, definition); err != nil {
-		t.Fatalf("UpdateIndex(disable ingestion): %v", err)
+	if _, updateErr := db.UpdateIndex(ctx, active.ID, active.Version, definition); updateErr != nil {
+		t.Fatalf("UpdateIndex(disable ingestion): %v", updateErr)
 	}
-	if _, err := store.Authorize(ctx, issued.Secret.Plaintext(), "active"); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("Authorize(disabled active) error = %v, want ErrUnauthorized", err)
+	if _, authorizeErr := store.Authorize(ctx, issued.Secret.Plaintext(), "active"); !errors.Is(authorizeErr, ErrUnauthorized) {
+		t.Fatalf("Authorize(disabled active) error = %v, want ErrUnauthorized", authorizeErr)
 	}
-	if _, err := store.Authenticate(ctx, issued.Secret.Plaintext()); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("Authenticate(without active scope) error = %v, want ErrUnauthorized", err)
+	if _, authenticateErr := store.Authenticate(ctx, issued.Secret.Plaintext()); !errors.Is(authenticateErr, ErrUnauthorized) {
+		t.Fatalf("Authenticate(without active scope) error = %v, want ErrUnauthorized", authenticateErr)
 	}
 }
 
@@ -517,10 +517,10 @@ func TestCollectorTokenValidationExpirationAndRandomness(t *testing.T) {
 	}
 	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	store.now = func() time.Time { return now }
-	if _, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+	if _, createErr := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name: "already expired", AllowedIndexNames: []string{"main"}, ExpiresAt: now,
-	}); !errors.Is(err, control.ErrInvalidArgument) {
-		t.Fatalf("CreateCollectorToken(expired) error = %v, want ErrInvalidArgument", err)
+	}); !errors.Is(createErr, control.ErrInvalidArgument) {
+		t.Fatalf("CreateCollectorToken(expired) error = %v, want ErrInvalidArgument", createErr)
 	}
 
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
@@ -530,11 +530,11 @@ func TestCollectorTokenValidationExpirationAndRandomness(t *testing.T) {
 		t.Fatalf("CreateCollectorToken(short lived): %v", err)
 	}
 	store.now = func() time.Time { return now.Add(time.Hour) }
-	if _, err := store.Authorize(ctx, issued.Secret.Plaintext(), "main"); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("Authorize(expired) error = %v, want ErrUnauthorized", err)
+	if _, authorizeErr := store.Authorize(ctx, issued.Secret.Plaintext(), "main"); !errors.Is(authorizeErr, ErrUnauthorized) {
+		t.Fatalf("Authorize(expired) error = %v, want ErrUnauthorized", authorizeErr)
 	}
-	if _, err := store.Authenticate(ctx, issued.Secret.Plaintext()); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("Authenticate(expired) error = %v, want ErrUnauthorized", err)
+	if _, authenticateErr := store.Authenticate(ctx, issued.Secret.Plaintext()); !errors.Is(authenticateErr, ErrUnauthorized) {
+		t.Fatalf("Authenticate(expired) error = %v, want ErrUnauthorized", authenticateErr)
 	}
 
 	store.now = func() time.Time { return now }
@@ -561,8 +561,8 @@ func BenchmarkAuthorizeCollectorToken(b *testing.B) {
 		b.Fatalf("control.Open(): %v", err)
 	}
 	b.Cleanup(func() { _ = db.Close() })
-	if _, err := db.CreateIndex(ctx, activeIndex("main")); err != nil {
-		b.Fatalf("CreateIndex(main): %v", err)
+	if _, createErr := db.CreateIndex(ctx, activeIndex("main")); createErr != nil {
+		b.Fatalf("CreateIndex(main): %v", createErr)
 	}
 	store, err := NewStore(db, []byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
@@ -577,8 +577,8 @@ func BenchmarkAuthorizeCollectorToken(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := store.Authorize(ctx, plaintext, "main"); err != nil {
-			b.Fatalf("Authorize(): %v", err)
+		if _, authorizeErr := store.Authorize(ctx, plaintext, "main"); authorizeErr != nil {
+			b.Fatalf("Authorize(): %v", authorizeErr)
 		}
 	}
 }
@@ -595,8 +595,8 @@ func controlTestOpen(t *testing.T) *control.DB {
 		t.Fatalf("control.Open(): %v", err)
 	}
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Errorf("control DB Close(): %v", err)
+		if closeErr := db.Close(); closeErr != nil {
+			t.Errorf("control DB Close(): %v", closeErr)
 		}
 	})
 	return db

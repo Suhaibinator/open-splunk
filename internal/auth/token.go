@@ -222,14 +222,14 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 		return IssuedCollectorToken{}, fmt.Errorf("store collector token digest: %w", err)
 	}
 	for _, indexID := range indexIDs {
-		if _, err := tx.ExecContext(ctx, `
+		if _, scopeErr := tx.ExecContext(ctx, `
 			INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
-			VALUES (?, ?)`, tokenID, indexID); err != nil {
-			return IssuedCollectorToken{}, fmt.Errorf("store collector token scope: %w", err)
+			VALUES (?, ?)`, tokenID, indexID); scopeErr != nil {
+			return IssuedCollectorToken{}, fmt.Errorf("store collector token scope: %w", scopeErr)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return IssuedCollectorToken{}, fmt.Errorf("commit collector token creation: %w", err)
+	if commitErr := tx.Commit(); commitErr != nil {
+		return IssuedCollectorToken{}, fmt.Errorf("commit collector token creation: %w", commitErr)
 	}
 
 	metadata := CollectorToken{
@@ -259,7 +259,7 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 	}
 	defer finishTx(tx, &err)
 
-	current, err := scanCollectorToken(tx.QueryRowContext(ctx, tokenSelect+` WHERE t.ingestion_token_id = ? GROUP BY t.ingestion_token_id`, tokenID), now)
+	current, err := scanCollectorToken(tx.QueryRowContext(ctx, collectorMetadataSelect+` WHERE t.ingestion_token_id = ? GROUP BY t.ingestion_token_id`, tokenID), now)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CollectorToken{}, control.ErrNotFound
 	}
@@ -318,23 +318,23 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 	if rows != 1 {
 		return CollectorToken{}, control.ErrVersionConflict
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM ingestion_token_indexes WHERE ingestion_token_id = ?`, tokenID); err != nil {
-		return CollectorToken{}, fmt.Errorf("replace collector token scopes: %w", err)
+	if _, deleteErr := tx.ExecContext(ctx, `DELETE FROM ingestion_token_indexes WHERE ingestion_token_id = ?`, tokenID); deleteErr != nil {
+		return CollectorToken{}, fmt.Errorf("replace collector token scopes: %w", deleteErr)
 	}
 	for _, indexID := range indexIDs {
-		if _, err := tx.ExecContext(ctx, `
+		if _, scopeErr := tx.ExecContext(ctx, `
 			INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
-			VALUES (?, ?)`, tokenID, indexID); err != nil {
-			return CollectorToken{}, fmt.Errorf("store updated collector token scope: %w", err)
+			VALUES (?, ?)`, tokenID, indexID); scopeErr != nil {
+			return CollectorToken{}, fmt.Errorf("store updated collector token scope: %w", scopeErr)
 		}
 	}
 
-	result, err = scanCollectorToken(tx.QueryRowContext(ctx, tokenSelect+` WHERE t.ingestion_token_id = ? GROUP BY t.ingestion_token_id`, tokenID), now)
+	result, err = scanCollectorToken(tx.QueryRowContext(ctx, collectorMetadataSelect+` WHERE t.ingestion_token_id = ? GROUP BY t.ingestion_token_id`, tokenID), now)
 	if err != nil {
 		return CollectorToken{}, fmt.Errorf("read updated collector token: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return CollectorToken{}, fmt.Errorf("commit collector token update: %w", err)
+	if commitErr := tx.Commit(); commitErr != nil {
+		return CollectorToken{}, fmt.Errorf("commit collector token update: %w", commitErr)
 	}
 	return result, nil
 }
@@ -410,7 +410,7 @@ func (store *Store) Authenticate(ctx context.Context, plaintext string) (Authent
 
 // GetCollectorToken returns safe metadata and explicit index scopes.
 func (store *Store) GetCollectorToken(ctx context.Context, tokenID string) (CollectorToken, error) {
-	token, err := scanCollectorToken(store.db.QueryRowContext(ctx, tokenSelect+` WHERE t.ingestion_token_id = ? GROUP BY t.ingestion_token_id`, tokenID), databaseTime(store.now()))
+	token, err := scanCollectorToken(store.db.QueryRowContext(ctx, collectorMetadataSelect+` WHERE t.ingestion_token_id = ? GROUP BY t.ingestion_token_id`, tokenID), databaseTime(store.now()))
 	if errors.Is(err, sql.ErrNoRows) {
 		return CollectorToken{}, control.ErrNotFound
 	}
@@ -422,7 +422,7 @@ func (store *Store) GetCollectorToken(ctx context.Context, tokenID string) (Coll
 
 // ListCollectorTokens lists safe metadata in creation order.
 func (store *Store) ListCollectorTokens(ctx context.Context) ([]CollectorToken, error) {
-	rows, err := store.db.QueryContext(ctx, tokenSelect+` GROUP BY t.ingestion_token_id ORDER BY t.created_at_unix_micro, t.ingestion_token_id`)
+	rows, err := store.db.QueryContext(ctx, collectorMetadataSelect+` GROUP BY t.ingestion_token_id ORDER BY t.created_at_unix_micro, t.ingestion_token_id`)
 	if err != nil {
 		return nil, fmt.Errorf("list collector tokens: %w", err)
 	}
@@ -430,14 +430,14 @@ func (store *Store) ListCollectorTokens(ctx context.Context) ([]CollectorToken, 
 	now := databaseTime(store.now())
 	tokens := make([]CollectorToken, 0)
 	for rows.Next() {
-		token, err := scanCollectorToken(rows, now)
-		if err != nil {
-			return nil, fmt.Errorf("scan collector token: %w", err)
+		token, scanErr := scanCollectorToken(rows, now)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan collector token: %w", scanErr)
 		}
 		tokens = append(tokens, token)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate collector tokens: %w", err)
+	if iterationErr := rows.Err(); iterationErr != nil {
+		return nil, fmt.Errorf("iterate collector tokens: %w", iterationErr)
 	}
 	return tokens, nil
 }
@@ -454,13 +454,18 @@ func (store *Store) RevokeCollectorToken(ctx context.Context, tokenID string, ex
 	defer finishTx(tx, &err)
 
 	var currentVersion int64
-	if err := tx.QueryRowContext(ctx, `
-		SELECT version FROM ingestion_tokens WHERE ingestion_token_id = ?`, tokenID).Scan(&currentVersion); errors.Is(err, sql.ErrNoRows) {
+	queryErr := tx.QueryRowContext(ctx, `
+		SELECT version FROM ingestion_tokens WHERE ingestion_token_id = ?`, tokenID).Scan(&currentVersion)
+	if errors.Is(queryErr, sql.ErrNoRows) {
 		return CollectorToken{}, control.ErrNotFound
-	} else if err != nil {
-		return CollectorToken{}, fmt.Errorf("read collector token for revocation: %w", err)
 	}
-	if uint64(currentVersion) != expectedVersion {
+	if queryErr != nil {
+		return CollectorToken{}, fmt.Errorf("read collector token for revocation: %w", queryErr)
+	}
+	if currentVersion < 1 {
+		return CollectorToken{}, errors.New("invalid collector token version in control-plane database")
+	}
+	if currentVersion != int64(expectedVersion) {
 		return CollectorToken{}, control.ErrVersionConflict
 	}
 
@@ -482,17 +487,17 @@ func (store *Store) RevokeCollectorToken(ctx context.Context, tokenID string, ex
 		return CollectorToken{}, control.ErrVersionConflict
 	}
 
-	result, err = scanCollectorToken(tx.QueryRowContext(ctx, tokenSelect+` WHERE t.ingestion_token_id = ? GROUP BY t.ingestion_token_id`, tokenID), now)
+	result, err = scanCollectorToken(tx.QueryRowContext(ctx, collectorMetadataSelect+` WHERE t.ingestion_token_id = ? GROUP BY t.ingestion_token_id`, tokenID), now)
 	if err != nil {
 		return CollectorToken{}, fmt.Errorf("read revoked collector token: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return CollectorToken{}, fmt.Errorf("commit collector token revocation: %w", err)
+	if commitErr := tx.Commit(); commitErr != nil {
+		return CollectorToken{}, fmt.Errorf("commit collector token revocation: %w", commitErr)
 	}
 	return result, nil
 }
 
-const tokenSelect = `
+const collectorMetadataSelect = `
 	SELECT
 		t.ingestion_token_id, t.version, t.name, t.description,
 		t.token_prefix, t.state, t.created_at_unix_micro,

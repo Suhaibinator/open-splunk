@@ -143,8 +143,8 @@ func TestSQLiteSequencerReleasePreservesReplayData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sequencer.Release(ctx, first.Sequence, request.AttemptID); err != nil {
-		t.Fatal(err)
+	if releaseErr := sequencer.Release(ctx, first.Sequence, request.AttemptID); releaseErr != nil {
+		t.Fatal(releaseErr)
 	}
 
 	retryRequest := reserveRequest("retryable", "attempt-two")
@@ -231,7 +231,11 @@ func TestSQLiteSequencerAbandonFinishesOutOfOrderAndRetryGetsFreshSequence(t *te
 		WHERE batch_key = ?`, retry.BatchKey).Scan(&identityCount, &firstVisibilitySeq); err != nil {
 		t.Fatal(err)
 	}
-	if identityCount != 1 || firstVisibilitySeq != int64(second.Sequence) {
+	decodedFirstVisibilitySeq, err := decodePositiveSequence(firstVisibilitySeq)
+	if err != nil {
+		t.Fatalf("decode first visibility sequence: %v", err)
+	}
+	if identityCount != 1 || decodedFirstVisibilitySeq != second.Sequence {
 		t.Fatalf("reused identity = count %d first sequence %d", identityCount, firstVisibilitySeq)
 	}
 }
@@ -275,8 +279,8 @@ func TestSQLiteSequencerRejectsCrossWiredExistingIdentities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sequencer.Abandon(ctx, first.Sequence, firstRequest.AttemptID); err != nil {
-		t.Fatal(err)
+	if abandonErr := sequencer.Abandon(ctx, first.Sequence, firstRequest.AttemptID); abandonErr != nil {
+		t.Fatal(abandonErr)
 	}
 	secondRequest := reserveRequest("batch-two", "attempt-two")
 	secondRequest.SequenceKey = "sequence-two"
@@ -360,8 +364,8 @@ func TestSQLiteSequencerConcurrentFirstSeenIdentity(t *testing.T) {
 	for range 2 {
 		outcome := <-outcomes
 		if outcome.err == nil {
-			copy := outcome
-			succeeded = &copy
+			successfulOutcome := outcome
+			succeeded = &successfulOutcome
 			continue
 		}
 		if !errors.Is(outcome.err, ErrAttemptInProgress) {
@@ -445,18 +449,18 @@ func TestSQLiteSequencerOrphanedAmbiguousSendFreezesNewWorkUntilExactReplay(t *t
 		t.Fatal(err)
 	}
 	later := reserve(t, sequencer, "later", "later-owner")
-	if err := sequencer.MarkSending(ctx, ambiguous.Sequence, ambiguousRequest.AttemptID); err != nil {
-		t.Fatal(err)
+	if sendingErr := sequencer.MarkSending(ctx, ambiguous.Sequence, ambiguousRequest.AttemptID); sendingErr != nil {
+		t.Fatal(sendingErr)
 	}
-	if err := sequencer.Release(ctx, ambiguous.Sequence, ambiguousRequest.AttemptID); err != nil {
-		t.Fatal(err)
+	if releaseErr := sequencer.Release(ctx, ambiguous.Sequence, ambiguousRequest.AttemptID); releaseErr != nil {
+		t.Fatal(releaseErr)
 	}
 
-	if _, err := sequencer.Reserve(ctx, reserveRequest("new-identity", "new-owner")); !errors.Is(err, ErrAmbiguousBarrier) {
-		t.Fatalf("Reserve() behind ambiguous orphan error = %v, want ErrAmbiguousBarrier", err)
+	if _, reserveErr := sequencer.Reserve(ctx, reserveRequest("new-identity", "new-owner")); !errors.Is(reserveErr, ErrAmbiguousBarrier) {
+		t.Fatalf("Reserve() behind ambiguous orphan error = %v, want ErrAmbiguousBarrier", reserveErr)
 	}
-	if err := sequencer.MarkSending(ctx, later.Sequence, "later-owner"); !errors.Is(err, ErrAmbiguousBarrier) {
-		t.Fatalf("MarkSending() behind ambiguous orphan error = %v, want ErrAmbiguousBarrier", err)
+	if sendingErr := sequencer.MarkSending(ctx, later.Sequence, "later-owner"); !errors.Is(sendingErr, ErrAmbiguousBarrier) {
+		t.Fatalf("MarkSending() behind ambiguous orphan error = %v, want ErrAmbiguousBarrier", sendingErr)
 	}
 
 	replayRequest := ambiguousRequest
@@ -614,11 +618,11 @@ func TestSQLiteSequencerRestartClearsLeaseAndPreservesOutbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	pending := reserve(t, sequencer, "ambiguous", "old-process")
-	if err := sequencer.MarkSending(ctx, pending.Sequence, "old-process"); err != nil {
-		t.Fatal(err)
+	if sendingErr := sequencer.MarkSending(ctx, pending.Sequence, "old-process"); sendingErr != nil {
+		t.Fatal(sendingErr)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := db.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	db, err = control.Open(ctx, path)
@@ -630,8 +634,8 @@ func TestSQLiteSequencerRestartClearsLeaseAndPreservesOutbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sequencer.Reserve(ctx, reserveRequest("different-after-restart", "blocked-owner")); !errors.Is(err, ErrAmbiguousBarrier) {
-		t.Fatalf("Reserve() after ambiguous restart error = %v, want ErrAmbiguousBarrier", err)
+	if _, reserveErr := sequencer.Reserve(ctx, reserveRequest("different-after-restart", "blocked-owner")); !errors.Is(reserveErr, ErrAmbiguousBarrier) {
+		t.Fatalf("Reserve() after ambiguous restart error = %v, want ErrAmbiguousBarrier", reserveErr)
 	}
 	recovered, found, err := sequencer.AcquirePending(ctx, "new-process")
 	if err != nil || !found {
@@ -928,6 +932,7 @@ func TestSQLiteSequencerRejectsInvalidInputsAndExhaustion(t *testing.T) {
 	if _, err := sequencer.Reserve(ctx, emptyOutbox); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("empty outbox error = %v", err)
 	}
+	//nolint:staticcheck // Deliberately verify that the package rejects a nil context.
 	if _, err := sequencer.Reserve(nil, reserveRequest("batch", "attempt")); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("nil context error = %v", err)
 	}
@@ -937,6 +942,21 @@ func TestSQLiteSequencerRejectsInvalidInputsAndExhaustion(t *testing.T) {
 	if err := sequencer.Commit(ctx, 1, "attempt", time.Time{}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("empty committed time error = %v", err)
 	}
+	if err := sequencer.MarkSending(ctx, math.MaxUint64, "attempt"); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("out-of-range sequence error = %v", err)
+	}
+	retainedCommit := reserve(t, sequencer, "retained-commit", "commit-owner")
+	markAndCommit(t, sequencer, retainedCommit.Sequence, "commit-owner", testCommittedAt)
+	retainedAbandon := reserve(t, sequencer, "retained-abandon", "abandon-owner")
+	if err := sequencer.Abandon(ctx, retainedAbandon.Sequence, "abandon-owner"); err != nil {
+		t.Fatalf("abandon retained reservation: %v", err)
+	}
+	if deleted, err := sequencer.PruneTerminal(ctx, math.MaxUint64, 1); err != nil || deleted != 0 {
+		t.Fatalf("huge retention horizon result = %d, error = %v", deleted, err)
+	}
+	assertReservationSequences(t, db, []uint64{retainedCommit.Sequence, retainedAbandon.Sequence})
+	assertIdentityPresence(t, db, retainedCommit.BatchKey, true)
+	assertIdentityPresence(t, db, retainedAbandon.BatchKey, true)
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		UPDATE ingest_visibility_state
 		SET last_assigned = ?, committed_through = ?
