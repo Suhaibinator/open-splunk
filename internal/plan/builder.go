@@ -1635,6 +1635,16 @@ func (v *splExpressionComplexityValidator) validateScalar(
 
 	switch expression := expression.(type) {
 	case *spl.ScalarCallExpr:
+		if expression.Function == spl.ScalarFunctionCoalesce &&
+			len(expression.Arguments) > spl.MaximumCoalesceArguments {
+			return splExpressionComplexityError(
+				fmt.Sprintf(
+					"coalesce contains more than %d arguments",
+					spl.MaximumCoalesceArguments,
+				),
+				expression.Range,
+			)
+		}
 		if len(expression.Arguments) > maxConvertedExpressionNodes {
 			return splExpressionComplexityError(
 				"scalar call exceeds the structural node budget",
@@ -1832,6 +1842,25 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		case spl.ScalarFunctionIsNotNull:
 			expectedArguments = 1
 			functionName = "isnotnull"
+		case spl.ScalarFunctionCoalesce:
+			functionName = "coalesce"
+			if len(expression.Arguments) == 0 {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_EVAL_ARITY",
+					Message: "coalesce requires at least one argument",
+					Range:   expression.Range,
+				}
+			}
+			if len(expression.Arguments) > spl.MaximumCoalesceArguments {
+				return nil, &Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"coalesce contains more than %d arguments",
+						spl.MaximumCoalesceArguments,
+					),
+					Range: expression.Range,
+				}
+			}
 		}
 		if expectedArguments != 0 && len(expression.Arguments) != expectedArguments {
 			argumentNoun := "arguments"
@@ -1879,6 +1908,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			function = ScalarFunctionIsNull
 		case spl.ScalarFunctionIsNotNull:
 			function = ScalarFunctionIsNotNull
+		case spl.ScalarFunctionCoalesce:
+			function = ScalarFunctionCoalesce
 		default:
 			return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EVAL_FUNCTION", Message: "unsupported scalar function", Range: expression.Range}
 		}
@@ -1916,9 +1947,20 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 func splScalarMayReturnBooleanFunction(expression spl.ScalarExpr) bool {
 	switch expression := expression.(type) {
 	case *spl.ScalarCallExpr:
-		return expression != nil &&
-			(expression.Function == spl.ScalarFunctionIsNull ||
-				expression.Function == spl.ScalarFunctionIsNotNull)
+		if expression == nil {
+			return false
+		}
+		switch expression.Function {
+		case spl.ScalarFunctionIsNull, spl.ScalarFunctionIsNotNull:
+			return true
+		case spl.ScalarFunctionCoalesce:
+			for _, argument := range expression.Arguments {
+				if splScalarMayReturnBooleanFunction(argument) {
+					return true
+				}
+			}
+		}
+		return false
 	case *spl.ScalarIfExpr:
 		return expression != nil &&
 			(splScalarMayReturnBooleanFunction(expression.True) ||
@@ -1931,9 +1973,17 @@ func splScalarMayReturnBooleanFunction(expression spl.ScalarExpr) bool {
 func scalarFunctionReturnsBoolean(expression ScalarExpression) bool {
 	switch expression := expression.(type) {
 	case *ScalarCallExpression:
-		return expression != nil &&
-			(expression.Function == ScalarFunctionIsNull ||
-				expression.Function == ScalarFunctionIsNotNull)
+		if expression == nil {
+			return false
+		}
+		switch expression.Function {
+		case ScalarFunctionIsNull, ScalarFunctionIsNotNull:
+			return true
+		case ScalarFunctionCoalesce:
+			return coalesceScalarExpressionReturnsBoolean(expression.Arguments)
+		default:
+			return false
+		}
 	case *ScalarLiteralExpression:
 		return expression != nil && expression.Value.Kind == ValueKindBool
 	case *ScalarIfExpression:
@@ -1948,14 +1998,38 @@ func scalarFunctionReturnsBoolean(expression ScalarExpression) bool {
 func scalarExpressionCanBeDirectPredicate(expression ScalarExpression) bool {
 	switch expression := expression.(type) {
 	case *ScalarCallExpression:
-		return expression != nil &&
-			(expression.Function == ScalarFunctionIsNull ||
-				expression.Function == ScalarFunctionIsNotNull)
+		if expression == nil {
+			return false
+		}
+		switch expression.Function {
+		case ScalarFunctionIsNull, ScalarFunctionIsNotNull:
+			return true
+		case ScalarFunctionCoalesce:
+			return coalesceScalarExpressionReturnsBoolean(expression.Arguments)
+		default:
+			return false
+		}
 	case *ScalarIfExpression:
 		return expression != nil && scalarFunctionReturnsBoolean(expression)
 	default:
 		return false
 	}
+}
+
+func coalesceScalarExpressionReturnsBoolean(arguments []ScalarExpression) bool {
+	foundBoolean := false
+	for _, argument := range arguments {
+		if literal, ok := argument.(*ScalarLiteralExpression); ok &&
+			literal != nil &&
+			literal.Value.Kind == ValueKindNull {
+			continue
+		}
+		if !scalarFunctionReturnsBoolean(argument) {
+			return false
+		}
+		foundBoolean = true
+	}
+	return foundBoolean
 }
 
 func convertComparisonOp(op spl.CompareOp) ComparisonOp {

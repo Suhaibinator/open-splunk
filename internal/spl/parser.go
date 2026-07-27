@@ -2132,6 +2132,7 @@ func unsupportedScalarIdentifier(value string) bool {
 
 func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	arguments := make([]ScalarExpr, 0, 3)
+	functionName := strings.ToLower(name.text)
 	if p.current().kind != tokenRightParen {
 		for {
 			argument, err := p.parseScalarExpression()
@@ -2139,6 +2140,16 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				return nil, err
 			}
 			arguments = append(arguments, argument)
+			if functionName == "coalesce" && len(arguments) > MaximumCoalesceArguments {
+				return nil, &Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"coalesce contains more than %d arguments",
+						MaximumCoalesceArguments,
+					),
+					Range: name.range_,
+				}
+			}
 			if !p.match(tokenComma) {
 				break
 			}
@@ -2151,7 +2162,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' to close function call")
 	}
 	function := ScalarFunctionInvalid
-	switch strings.ToLower(name.text) {
+	switch functionName {
 	case "tonumber":
 		function = ScalarFunctionToNumber
 		if len(arguments) != 1 {
@@ -2230,6 +2241,15 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				Range:   name.range_,
 			}
 		}
+	case "coalesce":
+		function = ScalarFunctionCoalesce
+		if len(arguments) == 0 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: "coalesce requires at least one argument",
+				Range:   name.range_,
+			}
+		}
 	default:
 		return nil, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_EVAL_FUNCTION",
@@ -2240,6 +2260,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				`replace(value, "pattern", "replacement")`,
 				"isnull(value)",
 				"isnotnull(value)",
+				"coalesce(value, fallback)",
 				`if(predicate, true_value, false_value)`,
 			},
 		}
@@ -2254,8 +2275,17 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 func scalarExpressionReturnsBoolean(expression ScalarExpr) bool {
 	switch expression := expression.(type) {
 	case *ScalarCallExpr:
-		return expression != nil &&
-			(expression.Function == ScalarFunctionIsNull || expression.Function == ScalarFunctionIsNotNull)
+		if expression == nil {
+			return false
+		}
+		switch expression.Function {
+		case ScalarFunctionIsNull, ScalarFunctionIsNotNull:
+			return true
+		case ScalarFunctionCoalesce:
+			return coalesceScalarExpressionReturnsBoolean(expression.Arguments)
+		default:
+			return false
+		}
 	case *ScalarLiteralExpr:
 		return expression != nil && expression.Value.Kind == LiteralKindBool
 	case *ScalarIfExpr:
@@ -2270,9 +2300,17 @@ func scalarExpressionReturnsBoolean(expression ScalarExpr) bool {
 func scalarExpressionCanBeDirectPredicate(expression ScalarExpr) bool {
 	switch expression := expression.(type) {
 	case *ScalarCallExpr:
-		return expression != nil &&
-			(expression.Function == ScalarFunctionIsNull ||
-				expression.Function == ScalarFunctionIsNotNull)
+		if expression == nil {
+			return false
+		}
+		switch expression.Function {
+		case ScalarFunctionIsNull, ScalarFunctionIsNotNull:
+			return true
+		case ScalarFunctionCoalesce:
+			return coalesceScalarExpressionReturnsBoolean(expression.Arguments)
+		default:
+			return false
+		}
 	case *ScalarIfExpr:
 		return expression != nil && scalarExpressionReturnsBoolean(expression)
 	default:
@@ -2288,9 +2326,20 @@ func scalarExpressionCanBeDirectPredicate(expression ScalarExpr) bool {
 func scalarExpressionMayReturnBooleanFunction(expression ScalarExpr) bool {
 	switch expression := expression.(type) {
 	case *ScalarCallExpr:
-		return expression != nil &&
-			(expression.Function == ScalarFunctionIsNull ||
-				expression.Function == ScalarFunctionIsNotNull)
+		if expression == nil {
+			return false
+		}
+		switch expression.Function {
+		case ScalarFunctionIsNull, ScalarFunctionIsNotNull:
+			return true
+		case ScalarFunctionCoalesce:
+			for _, argument := range expression.Arguments {
+				if scalarExpressionMayReturnBooleanFunction(argument) {
+					return true
+				}
+			}
+		}
+		return false
 	case *ScalarIfExpr:
 		return expression != nil &&
 			(scalarExpressionMayReturnBooleanFunction(expression.True) ||
@@ -2298,6 +2347,22 @@ func scalarExpressionMayReturnBooleanFunction(expression ScalarExpr) bool {
 	default:
 		return false
 	}
+}
+
+func coalesceScalarExpressionReturnsBoolean(arguments []ScalarExpr) bool {
+	foundBoolean := false
+	for _, argument := range arguments {
+		if literal, ok := argument.(*ScalarLiteralExpr); ok &&
+			literal != nil &&
+			literal.Value.Kind == LiteralKindNull {
+			continue
+		}
+		if !scalarExpressionReturnsBoolean(argument) {
+			return false
+		}
+		foundBoolean = true
+	}
+	return foundBoolean
 }
 
 func (p *parser) countEvalPredicate(sourceRange Range) error {

@@ -206,12 +206,18 @@ func (e *ScalarLiteralExpr) SourceRange() Range { return e.Range }
 // ScalarFunction identifies a supported, typed eval function.
 type ScalarFunction uint8
 
+// MaximumCoalesceArguments bounds parser work and generated backend
+// expressions for one coalesce call. This is an Open Splunk resource limit,
+// not a restriction imposed by SPL.
+const MaximumCoalesceArguments = 32
+
 const (
 	ScalarFunctionInvalid ScalarFunction = iota
 	ScalarFunctionToNumber
 	ScalarFunctionReplace
 	ScalarFunctionIsNull
 	ScalarFunctionIsNotNull
+	ScalarFunctionCoalesce
 )
 
 // ScalarCallExpr invokes a supported eval function. Function names are
