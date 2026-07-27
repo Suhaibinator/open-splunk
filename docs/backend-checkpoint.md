@@ -7,7 +7,75 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: high-source-count collector polling
+## Latest checkpoint: composite configured pre-WAL redaction
+
+Date: 2026-07-26
+
+Implementation/proof commit: `34f3a9b291ff7ea327869cf4e635f5c496f13563`
+
+This slice compiles distinct configured replacement groups into one immutable
+resolver while retaining the exact output and fail-closed behavior of the
+historical ordered `NewSupplementalRedactor` chain:
+
+1. `buildDurableRedactor` now constructs zero or one composite configured
+   resolver after last-rule-wins grouping. Mandatory redaction remains the
+   first trust-boundary pass, configured overrides apply when their field
+   boundary survives, and alias lineage remains the final pre-WAL pass.
+2. Exact fields carry their replacement marker and specialized raw-value kind
+   in one immutable lookup. Structured fields and valid JSON resolve distinct
+   markers in one traversal; unchanged free-form text is independent of the
+   configured marker count.
+3. Compatibility is deliberately conservative. Repeated fields, pre-final
+   syntax-bearing markers, marker-to-later-field cascades, embedded encoded
+   payloads, ambiguous boundaries, hidden earlier assignments, and any
+   non-final free-text hit replay the ordered validators. This preserves legacy
+   quote generation, policy precedence, specialized authorization/cookie/PEM
+   extents, and fail-closed marker selection.
+4. Binary events re-evaluate UTF-8 validity between replayed policies, matching
+   the historical transition from byte scanning to full text scanning when an
+   earlier replacement removes the last invalid byte.
+5. Embedded JSON depth behavior is pinned for both ordinary strings and direct
+   sensitive-key matches: at the bound, later configured policies retain their
+   historical final marker while an enclosing fail-closed boundary retains the
+   earliest changing marker.
+6. Active rename aliases share the same composite text resolver, but valid
+   root JSON without a message avoids constructing it. Literal empty or invalid
+   alias replacements retain the old unchecked ordered path, and
+   `StructuredOnly` aliases still never affect raw/message data.
+7. A frozen sequential corpus plus permanent differential fuzz targets cover
+   duplicate JSON keys, exact/case-sensitive names, ambiguous encoded
+   keys/values, prose-wrapped JSON, invalid UTF-8, depth bounds, generated
+   boundaries, syntax/marker cascades, authorization, cookie, private-key PEM
+   extents, aliases, and concurrent resolver reuse.
+8. Collector unit coverage reopens the offline WAL and proves two neutral
+   configured secrets with different markers are absent from deterministic
+   wire bytes while safe data survives. The Docker vertical sends the same two
+   markers through the real collector, offline WAL/restart, server,
+   ClickHouse, SPL search, WebSocket, HTTP protobuf, and JSONL export.
+9. The final 20-second fuzz runs completed 133,454 supplemental executions and
+   408,956 alias executions. Full ordinary tests, affected race tests, vet,
+   build, and the Docker-backed vertical all passed after the final runtime
+   change.
+10. Observational M4 Max benchmarks show the intended scaling where exact
+    compatibility permits it. At 32 policies and 64 KiB, safe text improved
+    from roughly 17.6 ms to 0.49 ms and valid JSON hits from roughly 22.8 ms to
+    0.70 ms. Hit-heavy 4-KiB free text that requires ordered replay is now at
+    parity with the legacy chain while allocating fewer bytes; both
+    policy-order and reverse-text-order fixtures remain pinned so this
+    tradeoff cannot be hidden.
+11. Multiple correctness, confidentiality, performance, concurrency, reuse,
+    and code-quality review rounds found and drove fixes for policy/text-order
+    inversions, generated-quote and PEM leaks, binary-to-UTF-8 transitions,
+    direct-key depth semantics, alias-oracle gaps, redundant normalization, and
+    discarded fallback buffers. The final implementation staged diff was
+    `90448fbafc9bc552e09ce509e1af3d93c9d01fa3b4f8e4fab3d5cf49c3a20520`.
+
+The exact validation record is under **Latest validation evidence**.
+Composite configured pre-WAL redaction is complete at this checkpoint. The
+next priority is the harness-output bound described under **Remaining work**.
+The overall backend goal remains active.
+
+## Previous checkpoint: high-source-count collector polling
 
 Date: 2026-07-26
 
@@ -1447,6 +1515,59 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Composite configured pre-WAL redaction
+
+The exact implementation at `34f3a9b291ff7ea327869cf4e635f5c496f13563`
+passed:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/ingest ./internal/collector ./integration -count=1
+go vet ./...
+go build ./...
+go test ./internal/ingest -run '^$' \
+  -fuzz '^FuzzCompositeSupplementalRedactorMatchesSequentialPolicies$' \
+  -fuzztime=20s -parallel=8
+go test ./internal/ingest -run '^$' \
+  -fuzz '^FuzzTopLevelAliasCompositeMatchesSequentialTextGroups$' \
+  -fuzztime=20s -parallel=8
+go test ./internal/ingest -run '^$' \
+  -bench '^(BenchmarkCompositeSupplementalRedactor|BenchmarkTopLevelAliasRedaction)$' \
+  -benchtime=50ms -count=1
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+go test ./integration -run '^TestBackendVertical$' -count=1 -timeout=15m -v
+git diff --cached --check
+```
+
+The final supplemental and alias fuzz campaigns completed 133,454 and 408,956
+executions respectively. Earlier adversarial campaigns also ran longer
+supplemental and specialized-field variants; every promoted counterexample is
+now a deterministic named regression or seed.
+
+The Docker-backed vertical stored exactly four distinct events, replayed none,
+passed all six current GradeThis searches, and proved exact
+`[CREDENTIAL-MASKED]` and `[PIN-MASKED]` markers across public search and
+export results. No configured sentinel survived the collector WAL, server
+logs, ClickHouse result path, WebSocket frames, HTTP protobuf, or downloaded
+JSONL artifact. No `open-splunk-*` container remained afterward.
+
+The benchmark suite verifies output equivalence before timing. Safe text and
+valid JSON scale independently of policy count on the composite path. Free
+text that could change the interpretation of a later policy intentionally
+replays the ordered chain. The final early-replay optimization stops before
+building a disposable composite output, leaving 8- and 32-policy all-hit
+4-KiB cases at approximately legacy latency with lower allocation volume.
+Reverse text/policy order has a separate fixture because it can scan farther
+before discovering that compatibility replay is required. These measurements
+are observational, not release acceptance thresholds.
+
+Independent review covered confidentiality, exact sequential equivalence,
+generated-marker interactions, JSON and invalid UTF-8 boundaries, alias
+semantics, concurrency, construction/runtime allocation, benchmark honesty,
+reuse, and maintainability. All concrete findings were fixed or, for the
+inherently ordered match-heavy text path, explicitly benchmarked and
+documented.
+
 ### High-source-count collector polling
 
 The exact implementation at `f41720e0f868354fafd535022b445b12ddaff99b`
@@ -2459,6 +2580,9 @@ count a skipped opt-in test as database validation.
 The backend now includes:
 
 - durable collector queue/checkpoint and ingestion acknowledgement coupling;
+- composite configured pre-WAL redaction with exact per-field markers,
+  sequential-compatibility fallbacks, alias lineage coverage, and deterministic
+  offline-WAL plus real ClickHouse/public-SPL proof;
 - restart-safe ephemeral input resume from intact pending WAL source
   coordinates, without advancing the terminal checkpoint;
 - a deterministic load generator with absolute target-rate pacing, bounded
@@ -2617,11 +2741,11 @@ independent stacks.
    backpressure slice is complete at `4c4003f`; bounded fixed-payload browser
    rendering is complete at `9d6acc1`; high-source-count collector polling,
    reusable timers, clean-EOF framing, guard reuse, and scalable path sorting
-   are complete at `f41720e`. Unless the user changes priority, next add
-   differential tests for the composite configured pre-WAL redaction resolver,
-   followed by the harness-output, adapter, formatter, and release-revision
-   items below. The current preview-to-final resource-release audit pass is
-   complete at
+   are complete at `f41720e`; composite configured pre-WAL redaction is
+   complete at `34f3a9b`. Unless the user changes priority, next bound the
+   remaining harness build-output and matching-WebSocket observation paths,
+   followed by the adapter, formatter, and release-revision items below. The
+   current preview-to-final resource-release audit pass is complete at
    `961cba2`, the sanitized current GradeThis collector/config migration at
    `c576e85`, logical event retention at `458c8b4`, clock-driven
    job/result/export expiration at `b2b2839`, and stale-duplicate injection at
@@ -2705,12 +2829,13 @@ Continue the release proof in this order:
   poll timers, clean-EOF framing avoidance, allocation-free steady guard
   fingerprints, scalable path sorting, and copy-truncate/drain race coverage
   are pinned.
-- Replace one-pass-per-distinct-marker configured pre-WAL redaction with a
-  composite resolver only after differential tests pin ambiguous encoded
-  keys/values, prose-wrapped embedded JSON, duplicate-key canonicalization,
-  exact-name matching, replacement precedence, and the depth-limit fail-closed
-  behavior. The shipped GradeThis profile already collapses to one direct
-  sanitizer pass.
+- Composite configured pre-WAL redaction is complete at `34f3a9b`.
+  Differential and fuzz coverage pins ambiguous encoded keys/values,
+  prose-wrapped embedded JSON, duplicate-key canonicalization, exact names,
+  marker precedence/cascades, binary transitions, specialized raw extents,
+  aliases, and depth-limit fail-closed behavior. Match-heavy free text
+  intentionally retains ordered replay and has direct/reverse-order benchmark
+  coverage.
 - The browser child output and observation counts are bounded, but
   build-command failure output still uses `CombinedOutput`. Complete the
   harness hardening with the same capped buffer, cap each recorded
@@ -2854,8 +2979,9 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `f41720e`, `9d6acc1`, `4c4003f`, `9898b41`, `59b8f7c`,
-   `860acac`, `961cba2`, `c576e85`, `458c8b4`, `b2b2839`, `b80bf0a`,
+   commits, especially `34f3a9b`, `f41720e`, `9d6acc1`, `4c4003f`,
+   `9898b41`, `59b8f7c`, `860acac`, `961cba2`, `c576e85`, `458c8b4`,
+   `b2b2839`, `b80bf0a`,
    `cdb60df`, `787a7f9`, and `522b0ac`; the preceding progress/recovery
    foundations are `b5502a3`, `f72f184`, `ed28182`, and `d1286a4`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
@@ -2872,9 +2998,9 @@ Do not guess those decisions if they materially affect the implementation.
    extrema/bin metadata behavior.
 5. The fixed-payload browser rendering measurement is complete at `9d6acc1`,
    and high-source-count collector profiling and polling are complete at
-   `f41720e`. Unless the user changes priority, proceed to differential tests
-   for the composite configured pre-WAL redaction resolver, followed by the
-   harness-output, adapter, formatter, and release-revision items above. The
+   `f41720e`; composite configured pre-WAL redaction is complete at `34f3a9b`.
+   Unless the user changes priority, proceed to the harness-output bounds,
+   followed by the adapter, formatter, and release-revision items above. The
    generator foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
