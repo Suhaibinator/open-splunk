@@ -61,3 +61,22 @@ test("eval completion advertises the exact if signature and null predicate behav
   assert.match(evalCompletion.detail, /if\(predicate, true_value, false_value\)/);
   assert.match(evalCompletion.detail, /false or null/i);
 });
+
+test("stats completion advertises true-only conditional count with an explicit alias", () => {
+  const statsCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "stats");
+  assert.ok(statsCompletion);
+  assert.match(statsCompletion.insertion, /count\(eval\(status>=500\)\) AS errors/);
+  assert.match(statsCompletion.detail, /true-only count\(eval\(predicate\)\) AS output/);
+});
+
+test("nested stats eval highlights as a function without relabeling the eval command", () => {
+  const query = `index=main | stats count(EVAL(status=500)) AS errors | eval label="ok" | table label`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.text.toLowerCase() === "eval")
+      .map((token) => token.className),
+    ["spl-function", "spl-command"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});

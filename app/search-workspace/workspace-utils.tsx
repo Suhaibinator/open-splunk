@@ -112,19 +112,21 @@ export function syntaxTokens(query: string): ReactNode[] {
   return parts.map((part) => {
     sourceOffset += part.length;
     const lower = part.toLowerCase();
+    const followedByLeftParenthesis = /^\s*\(/.test(query.slice(sourceOffset));
     let className = "spl-plain";
     if (part === "|") className = "spl-pipe";
     else if (part.startsWith('"')) className = "spl-string";
     else if (["and", "or", "not", "as", "by"].includes(lower)) className = "spl-boolean";
     else if (UNSUPPORTED_PIPELINE_COMMAND_SET.has(lower)) className = "spl-error-token";
-    else if (isSupportedSplPipelineCommand(lower)) {
-      className = "spl-command";
-    } else if (SPL_FUNCTION_SET.has(lower) ||
+    else if ((lower === "eval" && followedByLeftParenthesis) ||
+      SPL_FUNCTION_SET.has(lower) ||
       SPL_COUNT_ABBREVIATION_FUNCTION.test(part) ||
       SPL_CONDITIONAL_FUNCTION.test(part) ||
       SPL_NULL_PREDICATE_FUNCTION.test(part) ||
       SPL_PERCENTILE_FUNCTION.test(part)) {
       className = "spl-function";
+    } else if (isSupportedSplPipelineCommand(lower)) {
+      className = "spl-command";
     } else if (/^(index|host|source|sourcetype|level|status|trace_id|message|path)$/i.test(part)) {
       className = "spl-field";
     }

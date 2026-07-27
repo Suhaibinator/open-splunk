@@ -69,7 +69,13 @@ const (
 	maxCompiledIfScalarSQLBytes  = 64 << 10
 	maxCompiledAssignments       = 64
 	maxCompiledExtractionOutputs = 64
-	maxTimechartLabelBytes       = 256
+	// Parser-produced predicates are already bounded by a 1,024-token source
+	// and 32 eval/where leaves. Revalidate a deliberately wider structural
+	// ceiling here so forged logical plans cannot drive unbounded recursive
+	// validation or materialization-field walks.
+	maxCompiledPredicateNodes = 2048
+	maxCompiledPredicateDepth = 1024
+	maxTimechartLabelBytes    = 256
 	// maxChartRowValues bounds the chart pivot's runtime row axis. It is a
 	// deliberate resource policy rather than Splunk's configurable
 	// maxresultrows truncation: exceeding it fails the whole search.
@@ -479,7 +485,38 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				}
 			}
 		case *plan.Aggregate:
-			projection, predicates, groups, nextState, aggregateArgs, compileErr := compileAggregate(operator, state)
+			if cardinalityErr := validateAggregateCardinality(operator); cardinalityErr != nil {
+				return CompiledQuery{}, cardinalityErr
+			}
+			if validateErr := validateAggregatePredicateMeasures(operator, state); validateErr != nil {
+				return CompiledQuery{}, validateErr
+			}
+			materializedFields := aggregatePredicateMaterializationFields(operator, state)
+			if len(materializedFields) > 0 {
+				var bindings, boundColumns []string
+				state, bindings, boundColumns = bindAggregatePredicateFields(
+					state,
+					materializedFields,
+					aliasSequence,
+				)
+				materialized := quoteIdentifier(fmt.Sprintf(
+					"__os_stats_predicate_input_%d",
+					aliasSequence,
+				))
+				relation = relation.selectFrom(
+					"WITH "+materialized+" AS MATERIALIZED ("+relation.sql+") "+
+						"SELECT *, "+strings.Join(boundColumns, ", ")+" FROM "+
+						materialized+" AS "+alias+" ARRAY JOIN "+
+						strings.Join(bindings, ", ")+materializedCTESettingsSQL,
+					operator.Range,
+				)
+				aliasSequence++
+				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+			}
+			projection, predicates, groups, nextState, aggregateArgs, compileErr := compileAggregateValidated(
+				operator,
+				state,
+			)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
@@ -3318,6 +3355,130 @@ func predicateMaterializationFields(expression plan.Expression, state compileSta
 	return fields
 }
 
+func aggregatePredicateMaterializationFields(
+	operator *plan.Aggregate,
+	state compileState,
+) []string {
+	fields := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, measure := range operator.Measures {
+		if measure.Function != plan.AggregateFunctionCountPredicate {
+			continue
+		}
+		for _, name := range predicateMaterializationFields(measure.Predicate, state) {
+			if _, duplicate := seen[name]; duplicate {
+				continue
+			}
+			seen[name] = struct{}{}
+			fields = append(fields, name)
+		}
+	}
+	return fields
+}
+
+func predicateFieldSourceRange(
+	expression plan.Expression,
+	name string,
+) (spl.Range, bool) {
+	var visitExpression func(plan.Expression) (spl.Range, bool)
+	var visitScalar func(plan.ScalarExpression) (spl.Range, bool)
+	visitScalar = func(expression plan.ScalarExpression) (spl.Range, bool) {
+		switch expression := expression.(type) {
+		case *plan.ScalarFieldExpression:
+			if expression != nil && expression.Field.Name == name {
+				return expression.Field.Range, true
+			}
+		case *plan.ScalarCallExpression:
+			if expression == nil {
+				return spl.Range{}, false
+			}
+			for _, argument := range expression.Arguments {
+				if sourceRange, found := visitScalar(argument); found {
+					return sourceRange, true
+				}
+			}
+		case *plan.ScalarIfExpression:
+			if expression == nil {
+				return spl.Range{}, false
+			}
+			if sourceRange, found := visitExpression(expression.Condition); found {
+				return sourceRange, true
+			}
+			if sourceRange, found := visitScalar(expression.True); found {
+				return sourceRange, true
+			}
+			return visitScalar(expression.False)
+		}
+		return spl.Range{}, false
+	}
+	visitExpression = func(expression plan.Expression) (spl.Range, bool) {
+		switch expression := expression.(type) {
+		case *plan.BooleanExpression:
+			if expression == nil {
+				return spl.Range{}, false
+			}
+			if sourceRange, found := visitExpression(expression.Left); found {
+				return sourceRange, true
+			}
+			return visitExpression(expression.Right)
+		case *plan.NotExpression:
+			if expression != nil {
+				return visitExpression(expression.Operand)
+			}
+		case *plan.EvalComparisonExpression:
+			if expression == nil {
+				return spl.Range{}, false
+			}
+			if sourceRange, found := visitScalar(expression.Left); found {
+				return sourceRange, true
+			}
+			return visitScalar(expression.Right)
+		case *plan.ScalarPredicateExpression:
+			if expression != nil {
+				return visitScalar(expression.Value)
+			}
+		}
+		return spl.Range{}, false
+	}
+	return visitExpression(expression)
+}
+
+// bindAggregatePredicateFields creates singleton aliases that survive only
+// until the immediately following transforming aggregate. The MATERIALIZED
+// CTE emitted by the caller freezes calculated producers; the alias dependency
+// prevents ClickHouse from expanding a predicate back through those producers.
+func bindAggregatePredicateFields(
+	state compileState,
+	fields []string,
+	stage int,
+) (compileState, []string, []string) {
+	boundState := cloneCompileState(state)
+	bindings := make([]string, 0, len(fields))
+	boundColumns := make([]string, 0, len(fields))
+	for index, name := range fields {
+		field := state.visible[name]
+		bound := quoteIdentifier(fmt.Sprintf(
+			"__os_stats_predicate_bound_%d_%d",
+			stage,
+			index+1,
+		))
+		boundValue := field.valueSQL
+		if field.kind == fieldKindDynamic {
+			boundValue = "CAST(" + boundValue + " AS Dynamic)"
+		}
+		bindings = append(bindings, "["+boundValue+"] AS "+bound)
+		boundColumns = append(boundColumns, bound)
+
+		field.valueSQL = bound
+		if field.kind == fieldKindDynamic {
+			field.dynamicTypeSQL = "dynamicType(" + bound + ")"
+		}
+		field.materializeForPredicate = false
+		boundState.visible[name] = field
+	}
+	return boundState, bindings, boundColumns
+}
+
 // bindMaterializedPredicateFields builds a predicate state whose selected
 // calculated values refer to singleton ARRAY JOIN aliases. The enclosing
 // materialized CTE freezes the producer, while the alias dependency prevents
@@ -3580,6 +3741,16 @@ func ifBranchTextEligibility(trueValue, falseValue compiledScalar) (string, bool
 }
 
 func validateIfCondition(expression plan.Expression) error {
+	validator := predicateComplexityValidator{
+		active: make(map[any]struct{}),
+	}
+	if err := validator.validateExpression(expression, 1); err != nil {
+		return err
+	}
+	return validateIfConditionStructure(expression)
+}
+
+func validateIfConditionStructure(expression plan.Expression) error {
 	if nilPlanExpression(expression) {
 		return errors.New("compile ClickHouse if: missing condition")
 	}
@@ -3588,20 +3759,35 @@ func validateIfCondition(expression plan.Expression) error {
 		if expression.Op != plan.BooleanOpAnd && expression.Op != plan.BooleanOpOr {
 			return errors.New("compile ClickHouse if: condition has an invalid Boolean operator")
 		}
-		if err := validateIfCondition(expression.Left); err != nil {
+		if err := validateIfConditionStructure(expression.Left); err != nil {
 			return err
 		}
-		return validateIfCondition(expression.Right)
+		return validateIfConditionStructure(expression.Right)
 	case *plan.NotExpression:
-		return validateIfCondition(expression.Operand)
+		return validateIfConditionStructure(expression.Operand)
 	case *plan.EvalComparisonExpression:
 		if nilScalarExpression(expression.Left) || nilScalarExpression(expression.Right) {
 			return errors.New("compile ClickHouse if: comparison condition has a missing scalar operand")
+		}
+		if !validComparisonOp(expression.Op) {
+			return errors.New("compile ClickHouse if: condition has an invalid comparison operator")
+		}
+		if err := validatePredicateScalarStructure(expression.Left); err != nil {
+			return err
+		}
+		if err := validatePredicateScalarStructure(expression.Right); err != nil {
+			return err
 		}
 		return nil
 	case *plan.ScalarPredicateExpression:
 		if nilScalarExpression(expression.Value) {
 			return errors.New("compile ClickHouse if: scalar condition is missing")
+		}
+		if err := validatePredicateScalarStructure(expression.Value); err != nil {
+			return err
+		}
+		if !scalarExpressionReturnsBoolean(expression.Value) {
+			return errors.New("compile ClickHouse if: scalar condition must return Boolean")
 		}
 		return nil
 	default:
@@ -3609,6 +3795,217 @@ func validateIfCondition(expression plan.Expression) error {
 			"compile ClickHouse if: condition must be an eval/where predicate, got %T",
 			expression,
 		)
+	}
+}
+
+type predicateComplexityValidator struct {
+	nodes  int
+	active map[any]struct{}
+}
+
+func (v *predicateComplexityValidator) validateExpression(
+	expression plan.Expression,
+	depth int,
+) error {
+	if nilPlanExpression(expression) {
+		return nil
+	}
+	if err := v.enter(expression, depth, expression.SourceRange()); err != nil {
+		return err
+	}
+	defer v.leave(expression)
+
+	switch expression := expression.(type) {
+	case *plan.BooleanExpression:
+		if err := v.validateExpression(expression.Left, depth+1); err != nil {
+			return err
+		}
+		return v.validateExpression(expression.Right, depth+1)
+	case *plan.NotExpression:
+		return v.validateExpression(expression.Operand, depth+1)
+	case *plan.EvalComparisonExpression:
+		if err := v.validateScalar(expression.Left, depth+1); err != nil {
+			return err
+		}
+		return v.validateScalar(expression.Right, depth+1)
+	case *plan.ScalarPredicateExpression:
+		return v.validateScalar(expression.Value, depth+1)
+	default:
+		return nil
+	}
+}
+
+func (v *predicateComplexityValidator) validateScalar(
+	expression plan.ScalarExpression,
+	depth int,
+) error {
+	if nilScalarExpression(expression) {
+		return nil
+	}
+	if err := v.enter(expression, depth, expression.SourceRange()); err != nil {
+		return err
+	}
+	defer v.leave(expression)
+
+	switch expression := expression.(type) {
+	case *plan.ScalarCallExpression:
+		if len(expression.Arguments) > maxCompiledPredicateNodes {
+			return predicateComplexityError(
+				"predicate scalar call exceeds the structural node budget",
+				expression.Range,
+			)
+		}
+		for _, argument := range expression.Arguments {
+			if err := v.validateScalar(argument, depth+1); err != nil {
+				return err
+			}
+		}
+	case *plan.ScalarIfExpression:
+		if err := v.validateExpression(expression.Condition, depth+1); err != nil {
+			return err
+		}
+		if err := v.validateScalar(expression.True, depth+1); err != nil {
+			return err
+		}
+		return v.validateScalar(expression.False, depth+1)
+	}
+	return nil
+}
+
+func (v *predicateComplexityValidator) enter(
+	node any,
+	depth int,
+	sourceRange spl.Range,
+) error {
+	if depth > maxCompiledPredicateDepth {
+		return predicateComplexityError(
+			fmt.Sprintf("predicate nesting exceeds %d levels", maxCompiledPredicateDepth),
+			sourceRange,
+		)
+	}
+	if _, cyclic := v.active[node]; cyclic {
+		return predicateComplexityError(
+			"predicate expression graph contains a cycle",
+			sourceRange,
+		)
+	}
+	// Count occurrences rather than unique pointers. Later compilation walks
+	// every occurrence, so memoizing a shared DAG here would let a tiny forged
+	// graph expand exponentially after validation.
+	v.nodes++
+	if v.nodes > maxCompiledPredicateNodes {
+		return predicateComplexityError(
+			fmt.Sprintf("predicate contains more than %d structural nodes", maxCompiledPredicateNodes),
+			sourceRange,
+		)
+	}
+	v.active[node] = struct{}{}
+	return nil
+}
+
+func (v *predicateComplexityValidator) leave(node any) {
+	delete(v.active, node)
+}
+
+func predicateComplexityError(message string, sourceRange spl.Range) error {
+	return &plan.Diagnostic{
+		Code:    "SPL_QUERY_TOO_COMPLEX",
+		Message: message,
+		Range:   sourceRange,
+	}
+}
+
+func validComparisonOp(op plan.ComparisonOp) bool {
+	switch op {
+	case plan.ComparisonOpEqual,
+		plan.ComparisonOpNotEqual,
+		plan.ComparisonOpLess,
+		plan.ComparisonOpLessEqual,
+		plan.ComparisonOpGreater,
+		plan.ComparisonOpGreaterEqual:
+		return true
+	default:
+		return false
+	}
+}
+
+func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
+	if nilScalarExpression(expression) {
+		return errors.New("compile ClickHouse predicate: missing scalar expression")
+	}
+	switch expression := expression.(type) {
+	case *plan.ScalarFieldExpression:
+		return validateCanonicalFieldRef("predicate", "scalar", expression.Field)
+	case *plan.ScalarLiteralExpression:
+		switch expression.Value.Kind {
+		case plan.ValueKindNull,
+			plan.ValueKindString,
+			plan.ValueKindInt64,
+			plan.ValueKindUint64,
+			plan.ValueKindFloat64,
+			plan.ValueKindBool:
+			return nil
+		default:
+			return errors.New("compile ClickHouse predicate: scalar literal has an invalid kind")
+		}
+	case *plan.ScalarCallExpression:
+		expectedArguments := 0
+		switch expression.Function {
+		case plan.ScalarFunctionToNumber,
+			plan.ScalarFunctionIsNull,
+			plan.ScalarFunctionIsNotNull:
+			expectedArguments = 1
+		case plan.ScalarFunctionReplace:
+			expectedArguments = 3
+		default:
+			return fmt.Errorf(
+				"compile ClickHouse predicate: unsupported scalar function %d",
+				expression.Function,
+			)
+		}
+		if len(expression.Arguments) != expectedArguments {
+			return fmt.Errorf(
+				"compile ClickHouse predicate: scalar function %d requires %d arguments",
+				expression.Function,
+				expectedArguments,
+			)
+		}
+		for _, argument := range expression.Arguments {
+			if err := validatePredicateScalarStructure(argument); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *plan.ScalarIfExpression:
+		if err := validateIfConditionStructure(expression.Condition); err != nil {
+			return err
+		}
+		if err := validatePredicateScalarStructure(expression.True); err != nil {
+			return err
+		}
+		return validatePredicateScalarStructure(expression.False)
+	default:
+		return fmt.Errorf(
+			"compile ClickHouse predicate: unsupported scalar expression %T",
+			expression,
+		)
+	}
+}
+
+func scalarExpressionReturnsBoolean(expression plan.ScalarExpression) bool {
+	switch expression := expression.(type) {
+	case *plan.ScalarCallExpression:
+		return expression != nil &&
+			(expression.Function == plan.ScalarFunctionIsNull ||
+				expression.Function == plan.ScalarFunctionIsNotNull)
+	case *plan.ScalarLiteralExpression:
+		return expression != nil && expression.Value.Kind == plan.ValueKindBool
+	case *plan.ScalarIfExpression:
+		return expression != nil &&
+			scalarExpressionReturnsBoolean(expression.True) &&
+			scalarExpressionReturnsBoolean(expression.False)
+	default:
+		return false
 	}
 }
 
@@ -5734,6 +6131,78 @@ func rewriteExistenceForProjection(field fieldState, name string) string {
 	return field.existsSQL
 }
 
+func validateAggregatePredicateMeasures(
+	operator *plan.Aggregate,
+	state compileState,
+) error {
+	if operator == nil {
+		return errors.New("compile ClickHouse aggregate: aggregate is missing")
+	}
+	for _, measure := range operator.Measures {
+		if measure.Function != plan.AggregateFunctionCountPredicate {
+			if measure.Predicate != nil {
+				return fmt.Errorf(
+					"compile ClickHouse aggregate: function %d contains predicate metadata",
+					measure.Function,
+				)
+			}
+			continue
+		}
+		if measure.Input.Name != "" ||
+			measure.Input.Canonical ||
+			len(measure.Input.Path) != 0 ||
+			measure.Input.Range != (spl.Range{}) ||
+			measure.Percentile != 0 {
+			return errors.New(
+				"compile ClickHouse aggregate: count(eval(...)) contains unsupported field or percentile metadata",
+			)
+		}
+		if nilPlanExpression(measure.Predicate) {
+			return errors.New(
+				"compile ClickHouse aggregate: count(eval(...)) predicate is missing",
+			)
+		}
+		if err := validateIfCondition(measure.Predicate); err != nil {
+			return fmt.Errorf(
+				"compile ClickHouse aggregate: invalid count(eval(...)) predicate: %w",
+				err,
+			)
+		}
+		if state.eventRows && state.allowDynamic {
+			if sourceRange, reserved := predicateFieldSourceRange(
+				measure.Predicate,
+				"fields",
+			); reserved {
+				return &plan.Diagnostic{
+					Code:    "SPL_AMBIGUOUS_STATS_FIELD",
+					Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
+					Range:   sourceRange,
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateAggregateCardinality(operator *plan.Aggregate) error {
+	if operator == nil || len(operator.Measures) == 0 {
+		return errors.New("compile ClickHouse aggregate: no measures")
+	}
+	if len(operator.Measures) > spl.MaximumStatsMeasures {
+		return fmt.Errorf(
+			"compile ClickHouse aggregate: more than %d measures",
+			spl.MaximumStatsMeasures,
+		)
+	}
+	if len(operator.GroupBy) > spl.MaximumStatsGroupFields {
+		return fmt.Errorf(
+			"compile ClickHouse aggregate: more than %d group fields",
+			spl.MaximumStatsGroupFields,
+		)
+	}
+	return nil
+}
+
 func compileAggregate(operator *plan.Aggregate, state compileState) (
 	projection []string,
 	predicates []string,
@@ -5742,21 +6211,27 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 	args []any,
 	err error,
 ) {
-	if operator == nil || len(operator.Measures) == 0 {
-		return nil, nil, nil, compileState{}, nil, errors.New("compile ClickHouse aggregate: no measures")
+	if cardinalityErr := validateAggregateCardinality(operator); cardinalityErr != nil {
+		return nil, nil, nil, compileState{}, nil, cardinalityErr
 	}
-	if len(operator.Measures) > spl.MaximumStatsMeasures {
-		return nil, nil, nil, compileState{}, nil, fmt.Errorf(
-			"compile ClickHouse aggregate: more than %d measures",
-			spl.MaximumStatsMeasures,
-		)
+	if validateErr := validateAggregatePredicateMeasures(operator, state); validateErr != nil {
+		return nil, nil, nil, compileState{}, nil, validateErr
 	}
-	if len(operator.GroupBy) > spl.MaximumStatsGroupFields {
-		return nil, nil, nil, compileState{}, nil, fmt.Errorf(
-			"compile ClickHouse aggregate: more than %d group fields",
-			spl.MaximumStatsGroupFields,
-		)
-	}
+	return compileAggregateValidated(operator, state)
+}
+
+// compileAggregateValidated lowers an aggregate after the caller has checked
+// its cardinality and conditional-predicate structure. The pipeline compiler
+// performs that preflight before predicate materialization; compileAggregate
+// remains the defensive entry point for direct package callers and tests.
+func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
+	projection []string,
+	predicates []string,
+	groups []string,
+	next compileState,
+	args []any,
+	err error,
+) {
 	for _, measure := range operator.Measures {
 		if measure.Function != plan.AggregateFunctionEarliest &&
 			measure.Function != plan.AggregateFunctionLatest {
@@ -5909,6 +6384,42 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 	}
 	scalarStringInputs := make(map[string]*scalarStringInput)
 	countInputs := make(map[string]string)
+	type conditionalCountInput struct {
+		predicateSQL  string
+		predicateArgs []any
+		alias         string
+	}
+	conditionalCountInputs := make([]conditionalCountInput, 0)
+	conditionalCountInputFor := func(expression plan.Expression) (string, error) {
+		predicateSQL, predicateArgs, compileErr := compileExpression(expression, state)
+		if compileErr != nil {
+			return "", compileErr
+		}
+		for _, cached := range conditionalCountInputs {
+			if cached.predicateSQL == predicateSQL &&
+				reflect.DeepEqual(cached.predicateArgs, predicateArgs) {
+				return cached.alias, nil
+			}
+		}
+		alias := quoteIdentifier(fmt.Sprintf(
+			"__os_measure_conditional_count_%d",
+			len(conditionalCountInputs),
+		))
+		conditionalCountInputs = append(
+			conditionalCountInputs,
+			conditionalCountInput{
+				predicateSQL:  predicateSQL,
+				predicateArgs: append([]any(nil), predicateArgs...),
+				alias:         alias,
+			},
+		)
+		next.preAggregateColumns = append(
+			next.preAggregateColumns,
+			"toUInt64(ifNull("+predicateSQL+", 0)) AS "+alias,
+		)
+		next.preAggregateArgs = append(next.preAggregateArgs, predicateArgs...)
+		return alias, nil
+	}
 	extremaInputs := make(map[string]string)
 	type scalarExtremaResultKey struct {
 		input    string
@@ -6143,6 +6654,9 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 					"compile ClickHouse aggregate: count contains unsupported input metadata",
 				)
 			}
+		case plan.AggregateFunctionCountPredicate:
+			// Predicate structure and mutually exclusive metadata were
+			// validated before any materialization-field traversal.
 		case plan.AggregateFunctionCountValues:
 			if measure.Percentile != 0 {
 				return nil, nil, nil, compileState{}, nil, errors.New(
@@ -6173,7 +6687,8 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 				measure.Function,
 			)
 		}
-		if measure.Function != plan.AggregateFunctionCountRows {
+		if measure.Function != plan.AggregateFunctionCountRows &&
+			measure.Function != plan.AggregateFunctionCountPredicate {
 			if err := validateCanonicalFieldRef("aggregate", "input", measure.Input); err != nil {
 				return nil, nil, nil, compileState{}, nil, err
 			}
@@ -6194,6 +6709,20 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 		switch measure.Function {
 		case plan.AggregateFunctionCountRows:
 			projection = append(projection, "count() AS "+output)
+			measureState.numberType = "UInt64"
+		case plan.AggregateFunctionCountPredicate:
+			inputAlias, inputErr := conditionalCountInputFor(measure.Predicate)
+			if inputErr != nil {
+				return nil, nil, nil, compileState{}, nil, inputErr
+			}
+			// The predicate is a measure, not a prefilter: TRUE contributes one
+			// while FALSE/NULL contributes zero. UInt128 protects the partial
+			// aggregate state and the production row ceiling bounds the final
+			// UInt64 conversion.
+			projection = append(
+				projection,
+				"toUInt64(sum(toUInt128("+inputAlias+"))) AS "+output,
+			)
 			measureState.numberType = "UInt64"
 		case plan.AggregateFunctionCountValues:
 			inputAlias, cached := countInputs[measure.Input.Name]

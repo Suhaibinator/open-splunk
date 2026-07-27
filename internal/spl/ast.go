@@ -485,6 +485,7 @@ const (
 	AggregateFunctionInvalid AggregateFunction = iota
 	AggregateFunctionCount
 	AggregateFunctionCountValues
+	AggregateFunctionCountPredicate
 	AggregateFunctionPercentile
 	AggregateFunctionSum
 	AggregateFunctionAverage
@@ -503,11 +504,16 @@ type StatsAggregate struct {
 	Function   AggregateFunction
 	Input      string
 	InputRange Range
+	// Predicate is populated only for count(eval(<predicate>)). It remains
+	// separate from Input so later layers cannot reinterpret a conditional
+	// count as either a row count or count(field).
+	Predicate WhereExpr
 	// Percentile is the validated integer pN/percN suffix in [1, 99].
-	Percentile uint8
-	Alias      string
-	Range      Range
-	AliasRange Range
+	Percentile    uint8
+	Alias         string
+	ExplicitAlias bool
+	Range         Range
+	AliasRange    Range
 }
 
 // StatsGroupField is one source-located field in a stats BY clause.

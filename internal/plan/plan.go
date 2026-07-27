@@ -198,6 +198,7 @@ const (
 	AggregateFunctionInvalid AggregateFunction = iota
 	AggregateFunctionCountRows
 	AggregateFunctionCountValues
+	AggregateFunctionCountPredicate
 	AggregateFunctionPercentile
 	AggregateFunctionSum
 	AggregateFunctionAverage
@@ -214,6 +215,10 @@ const (
 type AggregateMeasure struct {
 	Function AggregateFunction
 	Input    FieldRef
+	// Predicate is populated only for a conditional count. It is deliberately
+	// distinct from Input so compilers cannot turn the condition into an
+	// aggregate-wide filter or reinterpret it as count(field).
+	Predicate Expression
 	// Percentile is the integer function suffix in the closed interval [1, 99].
 	// It is zero for every non-percentile measure.
 	Percentile uint8

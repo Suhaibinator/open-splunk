@@ -1131,7 +1131,6 @@ func TestParseStatsCountFieldRequiresExactlyOneExactField(t *testing.T) {
 	}{
 		{name: "missing field", source: `index=main | stats count()`, code: "SPL_EXPECTED_FIELD"},
 		{name: "multiple fields", source: `index=main | stats count(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
-		{name: "eval expression", source: `index=main | stats count(eval(status=200))`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 		{name: "quoted field", source: `index=main | stats count("status")`, code: "SPL_EXPECTED_FIELD"},
 		{name: "missing right parenthesis", source: `index=main | stats count(status`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 		{name: "bare abbreviation", source: `index=main | stats c`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},

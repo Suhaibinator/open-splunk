@@ -538,6 +538,7 @@ the selected rows in reversed order, matching its pipeline semantics.
 | stats count AS events BY field1, field2
 | stats count(productId) AS products BY host
 | stats c(productId) AS products BY host
+| stats count(eval(status>=500)) AS errors BY service
 | stats dc(user) AS unique_users BY service
 | stats distinct_count(device) AS devices
 | stats values(user) AS users
@@ -550,6 +551,7 @@ the selected rows in reversed order, matching its pipeline semantics.
 ```
 
 Argument-free `count`, `count(field)`/`c(field)`,
+`count(eval(predicate)) AS output`,
 `dc(field)`/`distinct_count(field)`,
 `pN(field)`/`percN(field)` for integer `N` from 1 through 99,
 `values(field)`, `list(field)`, `sum(field)`, `avg(field)`,
@@ -568,6 +570,42 @@ spelling such as
 The command is transforming: output contains only the `BY` fields followed by
 measures in source order. Argument-free `count` includes every input row in a
 retained group.
+
+`count(eval(predicate))` is the bounded conditional-count form. Version 0.1
+requires the exact shape
+`count(eval(<where predicate>)) AS <exact unquoted output field>`; both
+function names are case-insensitive. The predicate uses the same
+case-sensitive eval grammar and precedence as `where` and `if`: scalar
+comparisons, direct `isnull`/`isnotnull`, bounded Boolean-valued `if`,
+parentheses, and explicit `NOT`, `AND`, and `OR`. Its atomic predicates share
+the query-wide ceiling of 32, and the measure shares the ordinary 16-measure
+ceiling.
+
+Each input row contributes one only when the predicate is Boolean true. False
+or null contributes zero. An ordinary comparison involving a missing or null
+operand is null and therefore contributes zero; `isnull(missing)` is true,
+while `isnotnull(missing)` is false. The condition is local to that measure:
+it never becomes an aggregate `WHERE`, so sibling measures and `BY` grouping
+observe every scoped input row. A retained group with no true result publishes
+zero. Global empty input publishes one non-null `UInt64` zero, while grouped
+empty input publishes no groups.
+
+Repeated conditional measures share one per-row contribution only when their
+compiled predicate and bound arguments are exactly identical. Contributions
+are non-null `UInt64`, aggregate through `UInt128`, and publish `UInt64` under
+the production row ceiling. Ordinary predicates do not expand rows. A
+predicate over a calculated field that requires the existing ClickHouse
+optimizer fence uses one materialized CTE with singleton bindings shared by
+all conditional measures; the singleton operation preserves cardinality.
+Projected-away fields stay missing rather than being recovered from hidden
+event data.
+
+The explicit `AS` is required because Splunk's conditional-count guidance
+requires an alias and does not define a stable default expression-derived
+field name. `c(eval(...))`, an omitted alias, `match`, `like`, `XOR`,
+arbitrary scalar truthiness, wildcard count, quoted names, and other eval
+functions remain explicit version 0.1 failures. Splunk supports a broader eval
+expression surface; Open Splunk does not silently reinterpret those forms.
 
 `count(field)` counts immediate, non-null field occurrences without
 stringifying values or expanding event rows:
@@ -603,8 +641,9 @@ that contains parentheses. Use `AS` when a `count(field)`, `dc`, `values`,
 `list`, `min`, `max`, `earliest`, `latest`, `sum`, `avg`, or percentile result
 will be consumed by a later command.
 
-This slice accepts exactly one unquoted, exact field inside `count(...)` or
-`c(...)`. Bare `c`, `count()`, `c()`, wildcard fields, `count(eval(...))`,
+The field-occurrence form accepts exactly one unquoted, exact field inside
+`count(...)` or `c(...)`; the conditional form above is the only supported
+expression argument. Bare `c`, `count()`, `c()`, wildcard fields,
 `c(eval(...))`, quoted fields, and other predicate/expression forms remain
 explicitly unsupported rather than being approximated. Public SPL
 documentation establishes `c(field)` as an abbreviation but does not pin its
@@ -1397,7 +1436,8 @@ eventstats, streamstats
 ```
 
 The supported `stats` functions are argument-free `count`, exact-field
-`count(field)`, `dc(field)`/`distinct_count(field)`, `values(field)`,
+`count(field)`, conditional `count(eval(predicate)) AS output`,
+`dc(field)`/`distinct_count(field)`, `values(field)`,
 `list(field)`, `min(field)`, `max(field)`, integer-suffix
 `pN(field)`/`percN(field)` for `N` from 1 through 99, `sum(field)`,
 `avg(field)`, `earliest(field)`, and `latest(field)`. Other functions are
@@ -1417,6 +1457,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`sort`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/sort),
 [`dedup`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/dedup),
 [`stats`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/stats),
+[`stats` with eval expressions](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.2/calculate-statistics/use-stats-with-eval-expressions-and-functions),
 [`stats` multivalue aggregation](https://help.splunk.com/en/splunk-cloud-platform/search/spl2-search-reference/stats-command/stats-command-overview-syntax-and-usage),
 [`min` and `max` aggregate functions](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/statistical-and-charting-functions/aggregate-functions),
 [`earliest` and `latest` time functions](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/statistical-and-charting-functions/time-functions),

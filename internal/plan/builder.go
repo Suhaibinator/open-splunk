@@ -39,6 +39,12 @@ const (
 	maxChartSeries               = 12
 	maxDedupFields               = 16
 	maxExtractionOutputsPerQuery = 64
+	// Parsed eval/where trees are already bounded by the 1,024-token source
+	// and 32 predicate leaves. Revalidate a wider occurrence/depth budget at
+	// the AST trust boundary so forged trees and compact shared DAGs cannot
+	// drive unbounded recursive conversion.
+	maxConvertedExpressionNodes = 2048
+	maxConvertedExpressionDepth = 1024
 )
 
 // Scope is the server-resolved security and snapshot boundary for a search.
@@ -124,6 +130,11 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		case *spl.EvalCommand:
 			assignments := make([]ExtendAssignment, 0, len(command.Assignments))
 			for _, assignment := range command.Assignments {
+				if complexityErr := validateSPLScalarExpressionComplexity(
+					assignment.Expression,
+				); complexityErr != nil {
+					return nil, complexityErr
+				}
 				if splScalarMayReturnBooleanFunction(assignment.Expression) {
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
@@ -135,7 +146,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				if fieldErr != nil {
 					return nil, fieldErr
 				}
-				expression, expressionErr := convertScalarExpression(assignment.Expression)
+				expression, expressionErr := convertScalarExpressionUnchecked(
+					assignment.Expression,
+				)
 				if expressionErr != nil {
 					return nil, expressionErr
 				}
@@ -554,6 +567,14 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 			measures := make([]AggregateMeasure, 0, len(command.Aggregates))
 			for _, aggregate := range command.Aggregates {
+				if aggregate.Function != spl.AggregateFunctionCountPredicate &&
+					aggregate.Predicate != nil {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "only count(eval(...)) can contain predicate metadata",
+						Range:   aggregate.Range,
+					}
+				}
 				if aggregate.Function == spl.AggregateFunctionPercentile {
 					if aggregate.Percentile < 1 || aggregate.Percentile > 99 {
 						return nil, &Diagnostic{
@@ -591,6 +612,33 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 						}
 					}
 					measure.Function = AggregateFunctionCountRows
+				case spl.AggregateFunctionCountPredicate:
+					if aggregate.Input != "" ||
+						aggregate.InputRange != (spl.Range{}) ||
+						aggregate.Percentile != 0 ||
+						!aggregate.ExplicitAlias ||
+						nilSPLWhereExpression(aggregate.Predicate) {
+						return nil, &Diagnostic{
+							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+							Message: "count(eval(...)) requires one predicate, an explicit alias, and no field or percentile metadata",
+							Range:   aggregate.Range,
+						}
+					}
+					predicate, predicateErr := convertWhereExpression(aggregate.Predicate)
+					if predicateErr != nil {
+						return nil, predicateErr
+					}
+					if !outputSchemaKnown {
+						if fieldRange, referencesReserved := predicateFieldRange(predicate, "fields"); referencesReserved {
+							return nil, &Diagnostic{
+								Code:    "SPL_AMBIGUOUS_STATS_FIELD",
+								Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
+								Range:   fieldRange,
+							}
+						}
+					}
+					measure.Function = AggregateFunctionCountPredicate
+					measure.Predicate = predicate
 				case spl.AggregateFunctionCountValues:
 					if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) {
 						return nil, &Diagnostic{
@@ -1378,6 +1426,13 @@ func convertExpression(expression spl.Expr) (Expression, error) {
 }
 
 func convertWhereExpression(expression spl.WhereExpr) (Expression, error) {
+	if err := validateSPLWhereExpressionComplexity(expression); err != nil {
+		return nil, err
+	}
+	return convertWhereExpressionUnchecked(expression)
+}
+
+func convertWhereExpressionUnchecked(expression spl.WhereExpr) (Expression, error) {
 	if expression == nil {
 		return nil, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_WHERE_EXPRESSION",
@@ -1392,11 +1447,11 @@ func convertWhereExpression(expression spl.WhereExpr) (Expression, error) {
 				Message: "Boolean where expression is missing",
 			}
 		}
-		left, err := convertWhereExpression(expression.Left)
+		left, err := convertWhereExpressionUnchecked(expression.Left)
 		if err != nil {
 			return nil, err
 		}
-		right, err := convertWhereExpression(expression.Right)
+		right, err := convertWhereExpressionUnchecked(expression.Right)
 		if err != nil {
 			return nil, err
 		}
@@ -1421,7 +1476,7 @@ func convertWhereExpression(expression spl.WhereExpr) (Expression, error) {
 				Message: "negated where expression is missing",
 			}
 		}
-		operand, err := convertWhereExpression(expression.Operand)
+		operand, err := convertWhereExpressionUnchecked(expression.Operand)
 		if err != nil {
 			return nil, err
 		}
@@ -1433,17 +1488,25 @@ func convertWhereExpression(expression spl.WhereExpr) (Expression, error) {
 				Message: "where comparison is missing",
 			}
 		}
-		left, err := convertScalarExpression(expression.Left)
+		op := convertComparisonOp(expression.Op)
+		if op == ComparisonOpInvalid {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_WHERE_EXPRESSION",
+				Message: "where comparison has an invalid operator",
+				Range:   expression.Range,
+			}
+		}
+		left, err := convertScalarExpressionUnchecked(expression.Left)
 		if err != nil {
 			return nil, err
 		}
-		right, err := convertScalarExpression(expression.Right)
+		right, err := convertScalarExpressionUnchecked(expression.Right)
 		if err != nil {
 			return nil, err
 		}
 		return &EvalComparisonExpression{
 			Left:  left,
-			Op:    convertComparisonOp(expression.Op),
+			Op:    op,
 			Right: right,
 			Range: expression.Range,
 		}, nil
@@ -1454,7 +1517,7 @@ func convertWhereExpression(expression spl.WhereExpr) (Expression, error) {
 				Message: "where scalar predicate is missing",
 			}
 		}
-		value, err := convertScalarExpression(expression.Value)
+		value, err := convertScalarExpressionUnchecked(expression.Value)
 		if err != nil {
 			return nil, err
 		}
@@ -1471,7 +1534,251 @@ func convertWhereExpression(expression spl.WhereExpr) (Expression, error) {
 	}
 }
 
+func nilSPLWhereExpression(expression spl.WhereExpr) bool {
+	if expression == nil {
+		return true
+	}
+	switch expression := expression.(type) {
+	case *spl.WhereBoolExpr:
+		return expression == nil
+	case *spl.WhereNotExpr:
+		return expression == nil
+	case *spl.WhereComparisonExpr:
+		return expression == nil
+	case *spl.WhereScalarPredicateExpr:
+		return expression == nil
+	default:
+		return false
+	}
+}
+
+func nilSPLScalarExpression(expression spl.ScalarExpr) bool {
+	if expression == nil {
+		return true
+	}
+	switch expression := expression.(type) {
+	case *spl.ScalarFieldExpr:
+		return expression == nil
+	case *spl.ScalarLiteralExpr:
+		return expression == nil
+	case *spl.ScalarCallExpr:
+		return expression == nil
+	case *spl.ScalarIfExpr:
+		return expression == nil
+	default:
+		return false
+	}
+}
+
+type splExpressionComplexityValidator struct {
+	nodes  int
+	active map[any]struct{}
+}
+
+func validateSPLWhereExpressionComplexity(expression spl.WhereExpr) error {
+	validator := splExpressionComplexityValidator{
+		active: make(map[any]struct{}),
+	}
+	return validator.validateWhere(expression, 1)
+}
+
+func validateSPLScalarExpressionComplexity(expression spl.ScalarExpr) error {
+	validator := splExpressionComplexityValidator{
+		active: make(map[any]struct{}),
+	}
+	return validator.validateScalar(expression, 1)
+}
+
+func (v *splExpressionComplexityValidator) validateWhere(
+	expression spl.WhereExpr,
+	depth int,
+) error {
+	if nilSPLWhereExpression(expression) {
+		return nil
+	}
+	if err := v.enter(expression, depth, expression.SourceRange()); err != nil {
+		return err
+	}
+	defer v.leave(expression)
+
+	switch expression := expression.(type) {
+	case *spl.WhereBoolExpr:
+		if err := v.validateWhere(expression.Left, depth+1); err != nil {
+			return err
+		}
+		return v.validateWhere(expression.Right, depth+1)
+	case *spl.WhereNotExpr:
+		return v.validateWhere(expression.Operand, depth+1)
+	case *spl.WhereComparisonExpr:
+		if err := v.validateScalar(expression.Left, depth+1); err != nil {
+			return err
+		}
+		return v.validateScalar(expression.Right, depth+1)
+	case *spl.WhereScalarPredicateExpr:
+		return v.validateScalar(expression.Value, depth+1)
+	default:
+		return nil
+	}
+}
+
+func (v *splExpressionComplexityValidator) validateScalar(
+	expression spl.ScalarExpr,
+	depth int,
+) error {
+	if nilSPLScalarExpression(expression) {
+		return nil
+	}
+	if err := v.enter(expression, depth, expression.SourceRange()); err != nil {
+		return err
+	}
+	defer v.leave(expression)
+
+	switch expression := expression.(type) {
+	case *spl.ScalarCallExpr:
+		if len(expression.Arguments) > maxConvertedExpressionNodes {
+			return splExpressionComplexityError(
+				"scalar call exceeds the structural node budget",
+				expression.Range,
+			)
+		}
+		for _, argument := range expression.Arguments {
+			if err := v.validateScalar(argument, depth+1); err != nil {
+				return err
+			}
+		}
+	case *spl.ScalarIfExpr:
+		if err := v.validateWhere(expression.Condition, depth+1); err != nil {
+			return err
+		}
+		if err := v.validateScalar(expression.True, depth+1); err != nil {
+			return err
+		}
+		return v.validateScalar(expression.False, depth+1)
+	}
+	return nil
+}
+
+func (v *splExpressionComplexityValidator) enter(
+	node any,
+	depth int,
+	sourceRange spl.Range,
+) error {
+	if depth > maxConvertedExpressionDepth {
+		return splExpressionComplexityError(
+			fmt.Sprintf(
+				"eval/where expression nesting exceeds %d levels",
+				maxConvertedExpressionDepth,
+			),
+			sourceRange,
+		)
+	}
+	if _, cyclic := v.active[node]; cyclic {
+		return splExpressionComplexityError(
+			"eval/where expression graph contains a cycle",
+			sourceRange,
+		)
+	}
+	v.nodes++
+	if v.nodes > maxConvertedExpressionNodes {
+		return splExpressionComplexityError(
+			fmt.Sprintf(
+				"eval/where expression contains more than %d structural nodes",
+				maxConvertedExpressionNodes,
+			),
+			sourceRange,
+		)
+	}
+	v.active[node] = struct{}{}
+	return nil
+}
+
+func (v *splExpressionComplexityValidator) leave(node any) {
+	delete(v.active, node)
+}
+
+func splExpressionComplexityError(message string, sourceRange spl.Range) error {
+	return &Diagnostic{
+		Code:    "SPL_QUERY_TOO_COMPLEX",
+		Message: message,
+		Range:   sourceRange,
+	}
+}
+
+// predicateFieldRange finds the first reference to name in deterministic
+// expression order. Stats uses it to preserve the reserved open-event
+// "fields" payload boundary for predicates just as it does for exact inputs.
+func predicateFieldRange(expression Expression, name string) (spl.Range, bool) {
+	var visitExpression func(Expression) (spl.Range, bool)
+	var visitScalar func(ScalarExpression) (spl.Range, bool)
+	visitScalar = func(expression ScalarExpression) (spl.Range, bool) {
+		switch expression := expression.(type) {
+		case *ScalarFieldExpression:
+			if expression != nil && expression.Field.Name == name {
+				return expression.Field.Range, true
+			}
+		case *ScalarCallExpression:
+			if expression == nil {
+				return spl.Range{}, false
+			}
+			for _, argument := range expression.Arguments {
+				if sourceRange, ok := visitScalar(argument); ok {
+					return sourceRange, true
+				}
+			}
+		case *ScalarIfExpression:
+			if expression == nil {
+				return spl.Range{}, false
+			}
+			if sourceRange, ok := visitExpression(expression.Condition); ok {
+				return sourceRange, true
+			}
+			if sourceRange, ok := visitScalar(expression.True); ok {
+				return sourceRange, true
+			}
+			return visitScalar(expression.False)
+		}
+		return spl.Range{}, false
+	}
+	visitExpression = func(expression Expression) (spl.Range, bool) {
+		switch expression := expression.(type) {
+		case *BooleanExpression:
+			if expression == nil {
+				return spl.Range{}, false
+			}
+			if sourceRange, ok := visitExpression(expression.Left); ok {
+				return sourceRange, true
+			}
+			return visitExpression(expression.Right)
+		case *NotExpression:
+			if expression != nil {
+				return visitExpression(expression.Operand)
+			}
+		case *EvalComparisonExpression:
+			if expression == nil {
+				return spl.Range{}, false
+			}
+			if sourceRange, ok := visitScalar(expression.Left); ok {
+				return sourceRange, true
+			}
+			return visitScalar(expression.Right)
+		case *ScalarPredicateExpression:
+			if expression != nil {
+				return visitScalar(expression.Value)
+			}
+		}
+		return spl.Range{}, false
+	}
+	return visitExpression(expression)
+}
+
 func convertScalarExpression(expression spl.ScalarExpr) (ScalarExpression, error) {
+	if err := validateSPLScalarExpressionComplexity(expression); err != nil {
+		return nil, err
+	}
+	return convertScalarExpressionUnchecked(expression)
+}
+
+func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpression, error) {
 	if expression == nil {
 		return nil, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
@@ -1510,6 +1817,38 @@ func convertScalarExpression(expression spl.ScalarExpr) (ScalarExpression, error
 				Message: "scalar call expression is missing",
 			}
 		}
+		expectedArguments := 0
+		functionName := ""
+		switch expression.Function {
+		case spl.ScalarFunctionToNumber:
+			expectedArguments = 1
+			functionName = "tonumber"
+		case spl.ScalarFunctionReplace:
+			expectedArguments = 3
+			functionName = "replace"
+		case spl.ScalarFunctionIsNull:
+			expectedArguments = 1
+			functionName = "isnull"
+		case spl.ScalarFunctionIsNotNull:
+			expectedArguments = 1
+			functionName = "isnotnull"
+		}
+		if expectedArguments != 0 && len(expression.Arguments) != expectedArguments {
+			argumentNoun := "arguments"
+			if expectedArguments == 1 {
+				argumentNoun = "argument"
+			}
+			return nil, &Diagnostic{
+				Code: "SPL_INVALID_EVAL_ARITY",
+				Message: fmt.Sprintf(
+					"%s requires exactly %d %s",
+					functionName,
+					expectedArguments,
+					argumentNoun,
+				),
+				Range: expression.Range,
+			}
+		}
 		if expression.Function == spl.ScalarFunctionToNumber ||
 			expression.Function == spl.ScalarFunctionReplace {
 			for _, argument := range expression.Arguments {
@@ -1524,7 +1863,7 @@ func convertScalarExpression(expression spl.ScalarExpr) (ScalarExpression, error
 		}
 		arguments := make([]ScalarExpression, 0, len(expression.Arguments))
 		for _, argument := range expression.Arguments {
-			converted, err := convertScalarExpression(argument)
+			converted, err := convertScalarExpressionUnchecked(argument)
 			if err != nil {
 				return nil, err
 			}
@@ -1551,15 +1890,15 @@ func convertScalarExpression(expression spl.ScalarExpr) (ScalarExpression, error
 				Message: "if expression is missing",
 			}
 		}
-		condition, err := convertWhereExpression(expression.Condition)
+		condition, err := convertWhereExpressionUnchecked(expression.Condition)
 		if err != nil {
 			return nil, err
 		}
-		trueValue, err := convertScalarExpression(expression.True)
+		trueValue, err := convertScalarExpressionUnchecked(expression.True)
 		if err != nil {
 			return nil, err
 		}
-		falseValue, err := convertScalarExpression(expression.False)
+		falseValue, err := convertScalarExpressionUnchecked(expression.False)
 		if err != nil {
 			return nil, err
 		}
