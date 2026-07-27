@@ -2470,7 +2470,6 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     const adapted = adaptSearchResults(
       page.schema,
       page.rows,
-      isTimeSeries,
       timechartSpanMilliseconds(
         backendJobRef.current?.definition?.spl ?? submittedQuery,
       ) ?? undefined,
@@ -3008,7 +3007,6 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       const adapted = adaptSearchResults(
         schema,
         applied.snapshot.rows,
-        schema.resultKind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
         timechartSpanMilliseconds(
           backendJobRef.current?.definition?.spl ?? submittedQuery,
         ) ?? undefined,

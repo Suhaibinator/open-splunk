@@ -65,9 +65,27 @@ test("result adaptation rejects schemas wider than the browser contract", () => 
     ),
   };
   assert.throws(
-    () => adaptSearchResults(schema, [], false),
+    () => adaptSearchResults(schema, []),
     /65 columns.*supports 1–64/,
   );
+});
+
+test("result adaptation rejects unsupported result kinds", () => {
+  for (const resultKind of [
+    ResultSetKind.RESULT_SET_KIND_UNSPECIFIED,
+    ResultSetKind.UNRECOGNIZED,
+  ]) {
+    const schema: ResultSchema = {
+      schemaId: `unsupported-${resultKind}`,
+      revision: 1n,
+      resultKind,
+      columns: [column("message", ValueType.VALUE_TYPE_STRING)],
+    };
+    assert.throws(
+      () => adaptSearchResults(schema, []),
+      new RegExp(`unsupported result kind ${resultKind}`),
+    );
+  }
 });
 
 test("top message results retain count and percent as categorical series", () => {
@@ -98,7 +116,7 @@ test("top message results retain count and percent as categorical series", () =>
     ]),
   ];
 
-  const adapted = adaptSearchResults(schema, rows, false);
+  const adapted = adaptSearchResults(schema, rows);
 
   assert.equal(adapted.statisticDimension, "message");
   assert.deepEqual(
@@ -174,7 +192,7 @@ test("runtime-wide chart results retain every split series in schema order", () 
     ]),
   ];
 
-  const adapted = adaptSearchResults(schema, rows, false);
+  const adapted = adaptSearchResults(schema, rows);
 
   assert.equal(adapted.statisticDimension, "path");
   assert.equal(adapted.statistics.length, 2);
@@ -231,7 +249,7 @@ test("aliased multi-measure statistics retain every numeric measure including ne
     ]),
   ];
 
-  const adapted = adaptSearchResults(schema, rows, false);
+  const adapted = adaptSearchResults(schema, rows);
 
   assert.equal(adapted.statisticDimension, "level");
   assert.deepEqual(
@@ -258,7 +276,7 @@ test("explicit metrics retain an untagged aggregate sibling when one category re
 
   const adapted = adaptSearchResults(schema, [
     row("warn", 0n, [stringValue("WARN"), uint64Value(12n), doubleValue(48.5)]),
-  ], false);
+  ]);
 
   assert.deepEqual(
     adapted.statistics[0]?.series?.map(({ key, value }) => ({ key, value })),
@@ -283,7 +301,7 @@ test("multiple grouping dimensions are rejected instead of silently collapsing o
 
   const adapted = adaptSearchResults(schema, [
     row("host-path", 0n, [stringValue("api-01"), stringValue("/health"), uint64Value(8n)]),
-  ], false);
+  ]);
 
   assert.deepEqual(adapted.statistics, []);
   assert.deepEqual(
@@ -306,7 +324,7 @@ test("runtime chart can use a numeric dimension named count without reclassifyin
 
   const adapted = adaptSearchResults(schema, [
     row("count-200", 0n, [uint64Value(200n), uint64Value(4n), uint64Value(12n)]),
-  ], false);
+  ]);
 
   assert.equal(adapted.statisticDimension, "count");
   assert.equal(adapted.statistics[0]?.level, "200");
@@ -329,7 +347,7 @@ test("numeric stats BY count is rejected instead of inverting an aliased measure
 
   const adapted = adaptSearchResults(schema, [
     row("count-200", 0n, [uint64Value(200n), doubleValue(4.5)]),
-  ], false);
+  ]);
 
   assert.deepEqual(adapted.statistics, []);
   assert.deepEqual(
@@ -351,9 +369,149 @@ test("ambiguous all-numeric statistics do not invent a dimension or drop a measu
 
   const adapted = adaptSearchResults(schema, [
     row("pair", 0n, [doubleValue(1), doubleValue(2)]),
-  ], false);
+  ]);
 
   assert.deepEqual(adapted.statistics, []);
+});
+
+test("statistics adaptation skips event-only projections", () => {
+  const schema: ResultSchema = {
+    schemaId: "statistics-only-projection-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [
+      column(
+        "_time",
+        ValueType.VALUE_TYPE_TIMESTAMP,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME,
+      ),
+      column(
+        "level",
+        ValueType.VALUE_TYPE_STRING,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_LEVEL,
+      ),
+      column(
+        "count",
+        ValueType.VALUE_TYPE_UINT64,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC,
+      ),
+    ],
+  };
+  const rows: ResultRow[] = [
+    row("info", 0n, [
+      timestampValue("2026-07-21T22:00:00.000Z"),
+      stringValue("INFO"),
+      uint64Value(4n),
+    ]),
+    row("error", 1n, [
+      timestampValue("2026-07-21T22:05:00.000Z"),
+      stringValue("ERROR"),
+      uint64Value(2n),
+    ]),
+  ];
+  const adapted = adaptSearchResults(schema, rows);
+
+  assert.deepEqual(adapted.events, []);
+  assert.deepEqual(adapted.fields, []);
+  assert.deepEqual(adapted.timeline, []);
+  assert.equal(adapted.statisticDimension, "level");
+  assert.deepEqual(
+    adapted.statistics.map(({ level, count }) => ({ level, count })),
+    [
+      { level: "INFO", count: 4 },
+      { level: "ERROR", count: 2 },
+    ],
+  );
+  assert.deepEqual(
+    adapted.statisticsTable?.columns.map(({ fieldName }) => fieldName),
+    ["_time", "level", "count"],
+  );
+});
+
+test("statistics adaptation does not decode raw event payloads", () => {
+  let rawValueReads = 0;
+  const guardedRawValue: TypedValue = {
+    kind: {
+      $case: "objectValue",
+      get value() {
+        rawValueReads += 1;
+        return { fields: [] };
+      },
+    },
+  };
+  const schema: ResultSchema = {
+    schemaId: "statistics-raw-sentinel-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [
+      column(
+        "_raw",
+        ValueType.VALUE_TYPE_OBJECT,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_RAW,
+      ),
+      column(
+        "level",
+        ValueType.VALUE_TYPE_STRING,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_LEVEL,
+      ),
+      column(
+        "count",
+        ValueType.VALUE_TYPE_UINT64,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC,
+      ),
+    ],
+  };
+
+  const adapted = adaptSearchResults(schema, [
+    row("error", 0n, [guardedRawValue, stringValue("ERROR"), uint64Value(2n)]),
+  ]);
+
+  assert.equal(rawValueReads, 0);
+  assert.equal(adapted.statistics[0]?.level, "ERROR");
+  assert.equal(adapted.statistics[0]?.count, 2);
+  assert.equal(adapted.statisticsTable, null);
+});
+
+test("event adaptation retains event, field, statistic, and timeline projections", () => {
+  const schema: ResultSchema = {
+    schemaId: "event-projections-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_EVENTS,
+    columns: [
+      column(
+        "_time",
+        ValueType.VALUE_TYPE_TIMESTAMP,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME,
+      ),
+      column(
+        "_raw",
+        ValueType.VALUE_TYPE_STRING,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_RAW,
+      ),
+      column(
+        "level",
+        ValueType.VALUE_TYPE_STRING,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_LEVEL,
+      ),
+    ],
+  };
+
+  const adapted = adaptSearchResults(schema, [
+    row("event-1", 0n, [
+      timestampValue("2026-07-21T22:00:00.000Z"),
+      stringValue("request failed"),
+      stringValue("ERROR"),
+    ]),
+  ]);
+
+  assert.equal(adapted.events[0]?.raw, "request failed");
+  assert.deepEqual(adapted.fields.map(({ name }) => name), ["level"]);
+  assert.deepEqual(
+    adapted.statistics.map(({ level, count }) => ({ level, count })),
+    [{ level: "ERROR", count: 1 }],
+  );
+  assert.equal(adapted.timeline.reduce((sum, point) => sum + point.count, 0), 1);
+  assert.equal(adapted.statisticsTable, null);
 });
 
 test("timechart keeps siblings when a runtime series is named count", () => {
@@ -377,7 +535,7 @@ test("timechart keeps siblings when a runtime series is named count", () => {
     ]),
   ];
 
-  const adapted = adaptSearchResults(schema, rows, true, 300_000);
+  const adapted = adaptSearchResults(schema, rows, 300_000);
 
   assert.deepEqual(Object.keys(adapted.timeline[0]?.series ?? {}), ["count", "ERROR", "WARN"]);
   assert.deepEqual(timechartValueFields(adapted.timeline), ["count", "ERROR", "WARN"]);

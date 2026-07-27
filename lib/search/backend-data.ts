@@ -780,28 +780,44 @@ export function timechartSpanMilliseconds(spl: string): number | null {
 export function adaptSearchResults(
   schema: ResultSchema,
   rows: ResultRow[],
-  timechart: boolean,
   timechartBucketWidthMs?: number,
 ): AdaptedSearchResults {
   assertBrowserResultColumnCount(schema.columns.length);
+  switch (schema.resultKind) {
+    case ResultSetKind.RESULT_SET_KIND_STATISTICS: {
+      const transformedStatistics = statisticsFromRows(schema, rows);
+      const hasRawEventColumn = schema.columns.some((column) =>
+        column.semanticType === ColumnSemanticType.COLUMN_SEMANTIC_TYPE_RAW
+        || column.fieldName === "_raw"
+      );
+      return {
+        events: [],
+        fields: [],
+        statistics: transformedStatistics.rows,
+        statisticsTable: hasRawEventColumn ? null : statisticsTableFromRows(schema, rows),
+        statisticDimension: transformedStatistics.dimension === "result"
+          ? "level"
+          : transformedStatistics.dimension,
+        timeline: [],
+      };
+    }
+    case ResultSetKind.RESULT_SET_KIND_EVENTS:
+    case ResultSetKind.RESULT_SET_KIND_TIME_SERIES:
+      break;
+    default:
+      throw new RangeError(`Search results use unsupported result kind ${schema.resultKind}.`);
+  }
+
   const events = rowsToEvents(schema, rows);
   const transformedStatistics = statisticsFromRows(schema, rows);
-  const timeline = timechart
+  const timeline = schema.resultKind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES
     ? timelineFromRows(schema, rows, timechartBucketWidthMs)
     : timelineFromEvents(events);
-  const hasRawEventColumn = schema.columns.some((column) => column.semanticType === ColumnSemanticType.COLUMN_SEMANTIC_TYPE_RAW || column.fieldName === "_raw");
-  const statisticsTable = !timechart
-    && schema.resultKind !== ResultSetKind.RESULT_SET_KIND_EVENTS
-    && !hasRawEventColumn
-    ? statisticsTableFromRows(schema, rows)
-    : null;
   return {
     events,
     fields: deriveFields(events),
-    statistics: timechart || schema.resultKind === ResultSetKind.RESULT_SET_KIND_EVENTS
-      ? statisticsFromEvents(events)
-      : transformedStatistics.rows,
-    statisticsTable,
+    statistics: statisticsFromEvents(events),
+    statisticsTable: null,
     statisticDimension: transformedStatistics.dimension === "result" ? "level" : transformedStatistics.dimension,
     timeline,
   };
