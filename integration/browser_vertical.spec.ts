@@ -32,6 +32,16 @@ import {
   SearchWebSocketEvent,
 } from "../gen/ts/open_splunk/v1/search_ws";
 import { MAXIMUM_BROWSER_RESULT_COLUMNS } from "../lib/api/pagination";
+import {
+  BROWSER_DIAGNOSTIC_TRUNCATION_SUFFIX,
+  BoundedObservationRegistry,
+  MAXIMUM_BROWSER_DIAGNOSTIC_BYTES,
+  MAXIMUM_OBSERVED_MATCHING_WEBSOCKETS,
+  MAXIMUM_RECORDED_DIAGNOSTICS,
+  boundedDiagnostic,
+  boundedRecorder,
+  type BoundedRecorder,
+} from "./browser_harness";
 
 const baseURL = requiredEnvironment("OPEN_SPLUNK_E2E_BASE_URL");
 const searchSPL = requiredEnvironment("OPEN_SPLUNK_E2E_SPL");
@@ -60,6 +70,9 @@ const timeout = 45_000;
 const maximumMaterializedRows = 32;
 const maximumSpacerRows = 2;
 const maximumTableBodyRows = maximumMaterializedRows + maximumSpacerRows;
+const maximumRecordedBrowserFrameBytes = 16_384;
+const maximumRecordedBrowserFrames = 64;
+let browserRecorderSelfTestCompleted = false;
 
 test.use({
   launchOptions: browserExecutable ? { executablePath: browserExecutable } : {},
@@ -1205,9 +1218,10 @@ test(sequenceGapScenario.title, async ({ page }) => {
     if (restFirstProgress) {
       const observedMetrics = await finishJobMetricsObservation(page);
       expect(
-        observedMetrics.some((text) => /^(?:≈ )?1 rows$/.test(text)),
-        "stale replay K+1 never rendered, even transiently",
+        observedMetrics.staleOneRowSeen,
+        `stale replay K+1 never rendered, even transiently: ${JSON.stringify(observedMetrics.diagnostics)}`,
       ).toBe(false);
+      expect(observedMetrics.diagnosticOverflow, "job-metric diagnostic overflow").toBe(0);
       expect(authoritativeJobRequests, "authoritative GETs through live K+3").toBe(1);
       await expect(page.locator("body")).not.toContainText(
         /Live search progress was inconsistent|legacy live progress update could not be ordered/i,
@@ -1222,6 +1236,7 @@ test(sequenceGapScenario.title, async ({ page }) => {
         .slice(staleCheckpointStatusOffset);
       expect(observation.stalePreviewTextSeen, "stale preview text never resurrected").toBe(false);
       expect(observation.previewTableSeen, "stale preview table never resurrected").toBe(false);
+      expect(observation.jobStripSnapshotOverflow, "stale job-strip diagnostic overflow").toBe(0);
       expect(
         observation.unexpectedPreviewStatusSeen,
         `preview status across stale duplicate: ${JSON.stringify(previewStatuses)}`,
@@ -1350,6 +1365,8 @@ test(sequenceGapScenario.title, async ({ page }) => {
           .toBe(false);
         expect(observation.previewTableSeen, "terminal duplicate did not restore the preview table")
           .toBe(false);
+        expect(observation.jobStripSnapshotOverflow, "terminal job-strip diagnostic overflow")
+          .toBe(0);
         expect(
           observation.unexpectedPreviewStatusSeen,
           `preview status across terminal duplicate: ${JSON.stringify(previewStatuses)}`,
@@ -1460,16 +1477,25 @@ async function expectZeroRowBackendPreviewFinalizing(page: Page): Promise<void> 
 }
 
 async function beginJobMetricsObservation(page: Page): Promise<void> {
-  await page.evaluate(() => {
+  await page.evaluate((maximumRecordedDiagnostics) => {
     const target = document.querySelector('[aria-label="Job metrics"]');
     if (target === null) throw new Error("job metrics are unavailable for replay observation");
-    const observed: string[] = [];
+    const runtime = (window as BrowserHarnessRuntimeWindow)
+      .openSplunkBrowserHarnessRuntime;
+    if (runtime === undefined) throw new Error("browser harness runtime is unavailable");
+    const diagnostics: string[] = [];
+    let diagnosticOverflow = 0;
+    let staleOneRowSeen = false;
     const record = (): void => {
       const scannedRows = target.querySelector("strong")?.textContent;
       if (scannedRows === undefined) {
         throw new Error("scanned rows are unavailable for replay observation");
       }
-      observed.push(scannedRows);
+      if (/^(?:≈ )?1 rows$/.test(scannedRows)) staleOneRowSeen = true;
+      const diagnostic = runtime.boundedDiagnostic(scannedRows);
+      if (diagnostics.at(-1) === diagnostic) return;
+      if (diagnostics.length < maximumRecordedDiagnostics) diagnostics.push(diagnostic);
+      else if (diagnosticOverflow < Number.MAX_SAFE_INTEGER) diagnosticOverflow += 1;
     };
     record();
     const observer = new MutationObserver(record);
@@ -1479,11 +1505,16 @@ async function beginJobMetricsObservation(page: Page): Promise<void> {
       observer.disconnect();
       throw new Error("job metrics replay observation is already active");
     }
-    observedWindow.openSplunkJobMetricsObservation = { observed, observer };
-  });
+    observedWindow.openSplunkJobMetricsObservation = {
+      diagnosticOverflow: () => diagnosticOverflow,
+      diagnostics,
+      observer,
+      staleOneRowSeen: () => staleOneRowSeen,
+    };
+  }, MAXIMUM_RECORDED_DIAGNOSTICS);
 }
 
-async function finishJobMetricsObservation(page: Page): Promise<string[]> {
+async function finishJobMetricsObservation(page: Page): Promise<JobMetricsSnapshot> {
   return stopJobMetricsObservation(page, true);
 }
 
@@ -1494,7 +1525,7 @@ async function discardJobMetricsObservation(page: Page): Promise<void> {
 async function stopJobMetricsObservation(
   page: Page,
   required: boolean,
-): Promise<string[]> {
+): Promise<JobMetricsSnapshot> {
   return page.evaluate((observationRequired) => {
     const observedWindow = window as JobMetricsObservationWindow;
     const observation = observedWindow.openSplunkJobMetricsObservation;
@@ -1502,11 +1533,15 @@ async function stopJobMetricsObservation(
       if (observationRequired) {
         throw new Error("job metrics replay observation was not active");
       }
-      return [];
+      return { diagnosticOverflow: 0, diagnostics: [], staleOneRowSeen: false };
     }
     observation.observer.disconnect();
     delete observedWindow.openSplunkJobMetricsObservation;
-    return observation.observed;
+    return {
+      diagnosticOverflow: observation.diagnosticOverflow(),
+      diagnostics: [...observation.diagnostics],
+      staleOneRowSeen: observation.staleOneRowSeen(),
+    };
   }, required);
 }
 
@@ -2158,6 +2193,7 @@ async function beginStaleDuplicateDOMObservation(
   await page.evaluate(({
     expectedStalePreviewText,
     expectedStatus,
+    maximumRecordedDiagnostics,
     terminalJobPhaseRequired,
   }) => {
     const observedWindow = window as StaleDuplicateDOMObservationWindow;
@@ -2166,10 +2202,17 @@ async function beginStaleDuplicateDOMObservation(
     }
     const root = document.querySelector<HTMLElement>('[data-testid="search-workspace"]');
     if (root === null) throw new Error("search workspace is unavailable for DOM observation");
+    const runtime = (window as BrowserHarnessRuntimeWindow)
+      .openSplunkBrowserHarnessRuntime;
+    if (runtime === undefined) throw new Error("browser harness runtime is unavailable");
     let observation: StaleDuplicateDOMObservation;
     const record = (): void => {
-      if (root.textContent?.includes(expectedStalePreviewText)) {
-        observation.stalePreviewTextSeen = true;
+      if (!observation.stalePreviewTextSeen) {
+        for (const row of root.querySelectorAll(".event-row--preview")) {
+          if (!row.textContent?.includes(expectedStalePreviewText)) continue;
+          observation.stalePreviewTextSeen = true;
+          break;
+        }
       }
       if (root.querySelector('[aria-label="Live preview search statistics"]') !== null) {
         observation.previewTableSeen = true;
@@ -2181,23 +2224,33 @@ async function beginStaleDuplicateDOMObservation(
         observation.unexpectedPreviewStatusSeen = true;
       }
       const jobStrip = root.querySelector('[data-testid="job-strip"]');
-      const jobSnapshot = jobStrip === null
-        ? "missing"
-        : `${jobStrip.getAttribute("aria-busy") ?? "unset"}:${jobStrip.textContent?.replace(/\s+/g, " ").trim() ?? ""}`;
+      const jobPhase =
+        jobStrip?.querySelector(".job-result-copy > strong")?.textContent?.trim()
+        ?? "";
       if (
         terminalJobPhaseRequired
-        && (
-          !jobSnapshot.includes("Completed")
-          || /(?:Queued|Preparing|Running|Canceling)/.test(jobSnapshot)
-        )
+        && jobPhase !== "Completed"
       ) {
         observation.terminalPhaseRegressionSeen = true;
       }
+      const jobCount =
+        jobStrip?.querySelector(".job-result-copy > span")?.textContent?.trim()
+        ?? "";
+      const jobSnapshot = jobStrip === null
+        ? "missing"
+        : runtime.boundedDiagnostic(
+          `${jobStrip.getAttribute("aria-busy") ?? "unset"}:`
+          + `${runtime.boundedDiagnostic(jobPhase)}:`
+          + runtime.boundedDiagnostic(jobCount),
+        );
       if (
         observation.jobStripSnapshots.at(-1) !== jobSnapshot
-        && observation.jobStripSnapshots.length < 32
       ) {
-        observation.jobStripSnapshots.push(jobSnapshot);
+        if (observation.jobStripSnapshots.length < maximumRecordedDiagnostics) {
+          observation.jobStripSnapshots.push(jobSnapshot);
+        } else if (observation.jobStripSnapshotOverflow < Number.MAX_SAFE_INTEGER) {
+          observation.jobStripSnapshotOverflow += 1;
+        }
       }
     };
     const observer = new MutationObserver(record);
@@ -2206,6 +2259,7 @@ async function beginStaleDuplicateDOMObservation(
       previewTableSeen: false,
       unexpectedPreviewStatusSeen: false,
       terminalPhaseRegressionSeen: false,
+      jobStripSnapshotOverflow: 0,
       jobStripSnapshots: [],
       observer,
     };
@@ -2221,6 +2275,7 @@ async function beginStaleDuplicateDOMObservation(
   }, {
     expectedStalePreviewText: stalePreviewText,
     expectedStatus: expectedPreviewStatus,
+    maximumRecordedDiagnostics: MAXIMUM_RECORDED_DIAGNOSTICS,
     terminalJobPhaseRequired: requireTerminalJobPhase,
   });
 }
@@ -2251,6 +2306,7 @@ async function stopStaleDuplicateDOMObservation(
         previewTableSeen: false,
         unexpectedPreviewStatusSeen: false,
         terminalPhaseRegressionSeen: false,
+        jobStripSnapshotOverflow: 0,
         jobStripSnapshots: [],
       };
     }
@@ -2261,6 +2317,7 @@ async function stopStaleDuplicateDOMObservation(
       previewTableSeen: observation.previewTableSeen,
       unexpectedPreviewStatusSeen: observation.unexpectedPreviewStatusSeen,
       terminalPhaseRegressionSeen: observation.terminalPhaseRegressionSeen,
+      jobStripSnapshotOverflow: observation.jobStripSnapshotOverflow,
       jobStripSnapshots: [...observation.jobStripSnapshots],
     };
   }, required);
@@ -2270,19 +2327,33 @@ async function installBrowserWebSocketFrameRecorder(
   page: Page,
   expectedOrigin: string,
 ): Promise<void> {
-  await page.addInitScript((expectedSocketOrigin) => {
+  await page.addInitScript(({
+    expectedSocketOrigin,
+    maximumFrameBytes,
+    maximumFrames,
+    maximumMatchingSockets,
+  }) => {
     const recorderWindow = window as BrowserWebSocketFrameRecorderWindow;
     const frames: string[] = [];
-    let overflow = 0;
-    const record = (bytes: Uint8Array): void => {
-      if (bytes.byteLength > 16_384) {
-        overflow += 1;
-        return;
+    const activeSockets = new Set<EventTarget>();
+    let frameOverflow = 0;
+    let matchingSockets = 0;
+    let pendingFrameConversions = 0;
+    let socketOverflow = 0;
+    const reserveFrame = (byteLength: number): boolean => {
+      if (
+        byteLength > maximumFrameBytes
+        || frames.length + pendingFrameConversions >= maximumFrames
+      ) {
+        frameOverflow += 1;
+        return false;
       }
+      return true;
+    };
+    const recordReservedFrame = (bytes: Uint8Array): void => {
       let binary = "";
       for (const byte of bytes) binary += String.fromCharCode(byte);
-      if (frames.length < 64) frames.push(btoa(binary));
-      else overflow += 1;
+      frames.push(btoa(binary));
     };
     const matchesSearchSocket = (url: string): boolean => {
       const socketURL = new URL(url);
@@ -2296,17 +2367,41 @@ async function installBrowserWebSocketFrameRecorder(
       public constructor(url: string | URL, protocols?: string | string[]) {
         super(url, protocols);
         if (!matchesSearchSocket(this.url)) return;
-        this.addEventListener("message", (event) => {
+        matchingSockets += 1;
+        if (matchingSockets > maximumMatchingSockets) {
+          socketOverflow += 1;
+          return;
+        }
+        activeSockets.add(this);
+        const onMessage = (event: MessageEvent): void => {
           if (event.data instanceof ArrayBuffer) {
-            record(new Uint8Array(event.data));
+            if (!reserveFrame(event.data.byteLength)) return;
+            recordReservedFrame(new Uint8Array(event.data));
           } else if (event.data instanceof Blob) {
-            void event.data.arrayBuffer()
-              .then((buffer) => record(new Uint8Array(buffer)))
-              .catch(() => {
-                overflow += 1;
-              });
+            if (!reserveFrame(event.data.size)) return;
+            pendingFrameConversions += 1;
+            void (async () => {
+              try {
+                const buffer = await event.data.arrayBuffer();
+                if (buffer.byteLength > maximumFrameBytes) {
+                  frameOverflow += 1;
+                  return;
+                }
+                recordReservedFrame(new Uint8Array(buffer));
+              } catch {
+                frameOverflow += 1;
+              } finally {
+                pendingFrameConversions -= 1;
+              }
+            })();
           }
-        });
+        };
+        const onClose = (): void => {
+          this.removeEventListener("message", onMessage);
+          activeSockets.delete(this);
+        };
+        this.addEventListener("message", onMessage);
+        this.addEventListener("close", onClose, { once: true });
       }
     }
     Object.defineProperty(window, "WebSocket", {
@@ -2315,10 +2410,17 @@ async function installBrowserWebSocketFrameRecorder(
       writable: true,
     });
     recorderWindow.openSplunkBrowserWebSocketFrameRecorder = {
+      activeSockets: () => activeSockets.size,
       frames,
-      overflow: () => overflow,
+      frameOverflow: () => frameOverflow,
+      socketOverflow: () => socketOverflow,
     };
-  }, expectedOrigin);
+  }, {
+    expectedSocketOrigin: expectedOrigin,
+    maximumFrameBytes: maximumRecordedBrowserFrameBytes,
+    maximumFrames: maximumRecordedBrowserFrames,
+    maximumMatchingSockets: 2,
+  });
 }
 
 function requiredEnvironment(name: string): string {
@@ -2378,6 +2480,13 @@ function matchesSearchWebSocketURL(socketURL: URL, expectedOrigin: string): bool
     && socketURL.pathname === "/api/v1/search/ws";
 }
 
+function rejectExcessWebSocketRoute(client: WebSocketRoute): void {
+  void client.close({
+    code: 1008,
+    reason: "test harness connection limit",
+  }).catch(() => undefined);
+}
+
 function matchesAPIResponse(response: Response, expectedOrigin: string, pathname: string): boolean {
   const responseURL = new URL(response.url());
   return responseURL.origin === expectedOrigin
@@ -2431,10 +2540,21 @@ function observeCancellationSockets(
   void initialClose.catch(() => undefined);
 
   const fail = (error: Error): void => {
-    failure ??= error;
+    const normalized = normalizeError(error);
+    failure ??= normalized;
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    page.off("websocket", observeSocket);
+    for (const [socket, socketListeners] of listeners) {
+      socket.off("close", socketListeners.close);
+      socket.off("socketerror", socketListeners.error);
+    }
+    listeners.clear();
     if (!initialCloseSettled) {
       initialCloseSettled = true;
-      rejectInitialClose(error);
+      rejectInitialClose(normalized);
     }
   };
   const observeSocket = (socket: WebSocket): void => {
@@ -2448,6 +2568,9 @@ function observeCancellationSockets(
     const socketListeners: CancellationSocketListeners = {
       close: () => {
         closedConnections += 1;
+        socket.off("close", socketListeners.close);
+        socket.off("socketerror", socketListeners.error);
+        listeners.delete(socket);
         if (closedConnections > 1) {
           fail(new Error(`browser cancellation closed ${closedConnections} search WebSockets`));
           return;
@@ -2563,6 +2686,7 @@ function assertBrowserSafety(observation: BrowserSafetyObservation): void {
 }
 
 async function openSearchWorkspace(page: Page): Promise<Locator> {
+  await installBrowserHarnessRuntime(page);
   const launchURL = new URL("/search/", origin);
   launchURL.search = new URLSearchParams({
     q: searchSPL,
@@ -2572,13 +2696,291 @@ async function openSearchWorkspace(page: Page): Promise<Locator> {
     run: "0",
   }).toString();
   await page.goto(launchURL.href, { waitUntil: "domcontentloaded", timeout });
+  await verifyBrowserHarnessRuntime(page);
   await expect(page.getByTestId("search-workspace")).toBeVisible({ timeout });
   await expect(page.getByText("Backend data", { exact: true })).toBeVisible({ timeout });
   await expect(page.getByTestId("search-input")).toHaveValue(searchSPL);
   const runSearch = page.getByTestId("run-search");
   await expect(runSearch).toBeEnabled({ timeout });
   await installPreviewStatusRecorder(page);
+  if (!browserRecorderSelfTestCompleted) {
+    try {
+      await verifyBrowserRecorderBounds(page);
+      browserRecorderSelfTestCompleted = true;
+    } finally {
+      await installPreviewStatusRecorder(page);
+    }
+  }
   return runSearch;
+}
+
+async function installBrowserHarnessRuntime(page: Page): Promise<void> {
+  await page.addInitScript(({
+    maximumDiagnosticBytes,
+    truncationSuffix,
+  }) => {
+    const boundedPageDiagnostic = (value: string): string => {
+      const prefixByteLimit = maximumDiagnosticBytes - truncationSuffix.length;
+      let byteLength = 0;
+      let prefixEnd = 0;
+      for (let index = 0; index < value.length;) {
+        const codePoint = value.codePointAt(index)!;
+        const codeUnits = codePoint > 0xffff ? 2 : 1;
+        byteLength += codePoint <= 0x7f
+          ? 1
+          : codePoint <= 0x7ff
+            ? 2
+            : codePoint <= 0xffff
+              ? 3
+              : 4;
+        index += codeUnits;
+        if (byteLength <= prefixByteLimit) prefixEnd = index;
+        if (byteLength > maximumDiagnosticBytes) {
+          return value.slice(0, prefixEnd) + truncationSuffix;
+        }
+      }
+      return value;
+    };
+    Object.defineProperty(window, "openSplunkBrowserHarnessRuntime", {
+      configurable: false,
+      enumerable: false,
+      value: Object.freeze({ boundedDiagnostic: boundedPageDiagnostic }),
+      writable: false,
+    });
+  }, {
+    maximumDiagnosticBytes: MAXIMUM_BROWSER_DIAGNOSTIC_BYTES,
+    truncationSuffix: BROWSER_DIAGNOSTIC_TRUNCATION_SUFFIX,
+  });
+}
+
+async function verifyBrowserHarnessRuntime(page: Page): Promise<void> {
+  const result = await page.evaluate(({
+    maximumDiagnosticBytes,
+    truncationSuffix,
+  }) => {
+    const runtime = (window as BrowserHarnessRuntimeWindow)
+      .openSplunkBrowserHarnessRuntime;
+    if (runtime === undefined) return undefined;
+    const candidates = [
+      "x".repeat(maximumDiagnosticBytes + 1),
+      "🙂".repeat(maximumDiagnosticBytes),
+      `${"x".repeat(maximumDiagnosticBytes - 1)}\ud800`,
+    ];
+    return candidates.map((candidate) => {
+      const bounded = runtime.boundedDiagnostic(candidate);
+      return {
+        byteLength: new TextEncoder().encode(bounded).byteLength,
+        hasSuffix: bounded.endsWith(truncationSuffix),
+        hasReplacement: bounded.includes("\ufffd"),
+      };
+    });
+  }, {
+    maximumDiagnosticBytes: MAXIMUM_BROWSER_DIAGNOSTIC_BYTES,
+    truncationSuffix: BROWSER_DIAGNOSTIC_TRUNCATION_SUFFIX,
+  });
+  if (
+    result === undefined
+    || result.some((candidate) =>
+      candidate.byteLength > MAXIMUM_BROWSER_DIAGNOSTIC_BYTES
+      || !candidate.hasSuffix
+      || candidate.hasReplacement
+    )
+  ) {
+    throw new Error("browser harness diagnostic byte-bound self-test failed");
+  }
+}
+
+async function verifyBrowserRecorderBounds(page: Page): Promise<void> {
+  const fixtureIDs = {
+    metrics: "open-splunk-harness-metrics-fixture",
+    stale: "open-splunk-harness-stale-fixture",
+    status: "open-splunk-harness-status-fixture",
+  };
+
+  try {
+    await page.evaluate(async ({
+      maximumRecordedDiagnostics,
+      statusFixtureID,
+    }) => {
+      const status = document.createElement("div");
+      status.id = statusFixtureID;
+      status.hidden = true;
+      status.dataset.testid = "backend-preview-status";
+      document.body.prepend(status);
+      // This helper must be defined inside the evaluated browser realm.
+      // oxlint-disable-next-line unicorn/consistent-function-scoping
+      const settle = async (): Promise<void> => {
+        await new Promise<void>((resolve) => queueMicrotask(resolve));
+      };
+      for (let index = 0; index <= maximumRecordedDiagnostics; index += 1) {
+        status.dataset.status = `harness-overflow-${index}`;
+        // Each distinct value must reach the production MutationObserver.
+        // oxlint-disable-next-line eslint/no-await-in-loop
+        await settle();
+      }
+      status.dataset.status = "finalization-error";
+      await settle();
+    }, {
+      maximumRecordedDiagnostics: MAXIMUM_RECORDED_DIAGNOSTICS,
+      statusFixtureID: fixtureIDs.status,
+    });
+    const previewResult = await page.evaluate(() => {
+      const recorder = (window as PreviewRecorderWindow)
+        .openSplunkE2EPreviewRecorder;
+      return recorder === undefined
+        ? undefined
+        : {
+          finalizationErrorSeen: recorder.finalizationErrorSeen(),
+          overflow: recorder.overflow(),
+        };
+    });
+    if (
+      previewResult === undefined
+      || previewResult.overflow <= 0
+      || !previewResult.finalizationErrorSeen
+    ) {
+      throw new Error("preview-status overflow/latch self-test failed");
+    }
+    await page.evaluate((fixtureID) => document.getElementById(fixtureID)?.remove(), fixtureIDs.status);
+    await installPreviewStatusRecorder(page);
+
+    await page.evaluate((fixtureID) => {
+      const metrics = document.createElement("div");
+      metrics.id = fixtureID;
+      metrics.hidden = true;
+      metrics.setAttribute("aria-label", "Job metrics");
+      metrics.append(document.createElement("strong"));
+      metrics.querySelector("strong")!.textContent = "0 rows";
+      document.body.prepend(metrics);
+    }, fixtureIDs.metrics);
+    await beginJobMetricsObservation(page);
+    await page.evaluate(async ({
+      fixtureID,
+      maximumRecordedDiagnostics,
+    }) => {
+      const strong = document.querySelector<HTMLElement>(`#${fixtureID} strong`);
+      if (strong === null) throw new Error("job-metric self-test fixture is missing");
+      // This helper must be defined inside the evaluated browser realm.
+      // oxlint-disable-next-line unicorn/consistent-function-scoping
+      const settle = async (): Promise<void> => {
+        await new Promise<void>((resolve) => queueMicrotask(resolve));
+      };
+      for (let index = 0; index <= maximumRecordedDiagnostics; index += 1) {
+        strong.textContent = `${index + 2} rows`;
+        // Each distinct value must reach the production MutationObserver.
+        // oxlint-disable-next-line eslint/no-await-in-loop
+        await settle();
+      }
+      strong.textContent = "1 rows";
+      await settle();
+    }, {
+      fixtureID: fixtureIDs.metrics,
+      maximumRecordedDiagnostics: MAXIMUM_RECORDED_DIAGNOSTICS,
+    });
+    const metricsResult = await finishJobMetricsObservation(page);
+    if (metricsResult.diagnosticOverflow <= 0 || !metricsResult.staleOneRowSeen) {
+      throw new Error("job-metric overflow/latch self-test failed");
+    }
+    await page.evaluate((fixtureID) => document.getElementById(fixtureID)?.remove(), fixtureIDs.metrics);
+
+    const stalePreviewText = "harness-forbidden-stale-preview";
+    const expectedStatus = "harness-expected";
+    await page.evaluate(({
+      expectedPreviewStatus,
+      fixtureID,
+    }) => {
+      const root = document.createElement("div");
+      root.id = fixtureID;
+      root.hidden = true;
+      root.dataset.testid = "search-workspace";
+
+      const status = document.createElement("div");
+      status.dataset.testid = "backend-preview-status";
+      status.dataset.status = expectedPreviewStatus;
+      root.append(status);
+
+      const jobStrip = document.createElement("div");
+      jobStrip.dataset.testid = "job-strip";
+      jobStrip.setAttribute("aria-busy", "false");
+      const resultCopy = document.createElement("div");
+      resultCopy.className = "job-result-copy";
+      const phase = document.createElement("strong");
+      phase.textContent = "Completed";
+      const count = document.createElement("span");
+      count.textContent = "0 events";
+      resultCopy.append(phase, count);
+      jobStrip.append(resultCopy);
+      root.append(jobStrip);
+      document.body.prepend(root);
+    }, {
+      expectedPreviewStatus: expectedStatus,
+      fixtureID: fixtureIDs.stale,
+    });
+    await beginStaleDuplicateDOMObservation(
+      page,
+      stalePreviewText,
+      expectedStatus,
+      true,
+    );
+    await page.evaluate(async ({
+      fixtureID,
+      maximumRecordedDiagnostics,
+      staleText,
+    }) => {
+      const root = document.getElementById(fixtureID);
+      const count = root?.querySelector<HTMLElement>(".job-result-copy > span");
+      const phase = root?.querySelector<HTMLElement>(".job-result-copy > strong");
+      const status = root?.querySelector<HTMLElement>(
+        '[data-testid="backend-preview-status"]',
+      );
+      if (root === null || count == null || phase == null || status == null) {
+        throw new Error("stale-DOM self-test fixture is incomplete");
+      }
+      // This helper must be defined inside the evaluated browser realm.
+      // oxlint-disable-next-line unicorn/consistent-function-scoping
+      const settle = async (): Promise<void> => {
+        await new Promise<void>((resolve) => queueMicrotask(resolve));
+      };
+      for (let index = 0; index <= maximumRecordedDiagnostics; index += 1) {
+        count.textContent = `${index + 1} events`;
+        // Each distinct value must reach the production MutationObserver.
+        // oxlint-disable-next-line eslint/no-await-in-loop
+        await settle();
+      }
+      phase.textContent = "Queued";
+      status.dataset.status = "harness-unexpected";
+      const preview = document.createElement("article");
+      preview.className = "event-row--preview";
+      preview.textContent = staleText;
+      root.append(preview);
+      const previewTable = document.createElement("table");
+      previewTable.setAttribute("aria-label", "Live preview search statistics");
+      root.append(previewTable);
+      await settle();
+    }, {
+      fixtureID: fixtureIDs.stale,
+      maximumRecordedDiagnostics: MAXIMUM_RECORDED_DIAGNOSTICS,
+      staleText: stalePreviewText,
+    });
+    const staleResult = await finishStaleDuplicateDOMObservation(page);
+    if (
+      staleResult.jobStripSnapshotOverflow <= 0
+      || !staleResult.stalePreviewTextSeen
+      || !staleResult.previewTableSeen
+      || !staleResult.unexpectedPreviewStatusSeen
+      || !staleResult.terminalPhaseRegressionSeen
+    ) {
+      throw new Error("stale-DOM overflow/latch self-test failed");
+    }
+  } finally {
+    await discardJobMetricsObservation(page).catch(() => undefined);
+    await discardStaleDuplicateDOMObservation(page).catch(() => undefined);
+    await page.evaluate((ids) => {
+      document.getElementById(ids.metrics)?.remove();
+      document.getElementById(ids.stale)?.remove();
+      document.getElementById(ids.status)?.remove();
+    }, fixtureIDs).catch(() => undefined);
+  }
 }
 
 interface SearchResponseWaiters {
@@ -2608,27 +3010,10 @@ function waitForSearchResponses(page: Page): SearchResponseWaiters {
   return { createResponsePromise, resultsResponsePromise };
 }
 
-interface BoundedRecorder {
-  add(value: string): void;
-  snapshot(): string[];
-}
-
-function boundedRecorder(limit = 32): BoundedRecorder {
-  const values: string[] = [];
-  let overflow = 0;
-  return {
-    add(value) {
-      if (values.length < limit) values.push(value);
-      else overflow += 1;
-    },
-    snapshot() {
-      return overflow === 0 ? [...values] : [...values, `... ${overflow} additional entries`];
-    },
-  };
-}
-
 interface PreviewRecorderState {
+  finalizationErrorSeen(): boolean;
   observer: MutationObserver;
+  overflow(): number;
   statuses: string[];
 }
 
@@ -2636,9 +3021,25 @@ type PreviewRecorderWindow = Window & {
   openSplunkE2EPreviewRecorder?: PreviewRecorderState;
 };
 
+interface BrowserHarnessRuntime {
+  boundedDiagnostic(value: string): string;
+}
+
+type BrowserHarnessRuntimeWindow = Window & {
+  openSplunkBrowserHarnessRuntime?: BrowserHarnessRuntime;
+};
+
+interface JobMetricsSnapshot {
+  diagnosticOverflow: number;
+  diagnostics: string[];
+  staleOneRowSeen: boolean;
+}
+
 interface JobMetricsObservation {
-  observed: string[];
+  diagnosticOverflow(): number;
+  diagnostics: string[];
   observer: MutationObserver;
+  staleOneRowSeen(): boolean;
 }
 
 type JobMetricsObservationWindow = Window & {
@@ -2646,6 +3047,7 @@ type JobMetricsObservationWindow = Window & {
 };
 
 interface StaleDuplicateDOMSnapshot {
+  jobStripSnapshotOverflow: number;
   stalePreviewTextSeen: boolean;
   previewTableSeen: boolean;
   unexpectedPreviewStatusSeen: boolean;
@@ -2662,8 +3064,10 @@ type StaleDuplicateDOMObservationWindow = Window & {
 };
 
 interface BrowserWebSocketFrameRecorder {
+  activeSockets(): number;
   frames: string[];
-  overflow(): number;
+  frameOverflow(): number;
+  socketOverflow(): number;
 }
 
 type BrowserWebSocketFrameRecorderWindow = Window & {
@@ -2671,14 +3075,24 @@ type BrowserWebSocketFrameRecorderWindow = Window & {
 };
 
 async function installPreviewStatusRecorder(page: Page): Promise<void> {
-  await page.evaluate(() => {
+  await page.evaluate((maximumRecordedDiagnostics) => {
     const recorderWindow = window as PreviewRecorderWindow;
     recorderWindow.openSplunkE2EPreviewRecorder?.observer.disconnect();
+    const runtime = (window as BrowserHarnessRuntimeWindow)
+      .openSplunkBrowserHarnessRuntime;
+    if (runtime === undefined) throw new Error("browser harness runtime is unavailable");
     const statuses: string[] = [];
+    let finalizationErrorSeen = false;
+    let overflow = 0;
     const record = (): void => {
       const status = document.querySelector<HTMLElement>('[data-testid="backend-preview-status"]')
         ?.dataset.status;
-      if (status && statuses.at(-1) !== status && statuses.length < 32) statuses.push(status);
+      if (!status) return;
+      if (status === "finalization-error") finalizationErrorSeen = true;
+      const diagnostic = runtime.boundedDiagnostic(status);
+      if (statuses.at(-1) === diagnostic) return;
+      if (statuses.length < maximumRecordedDiagnostics) statuses.push(diagnostic);
+      else if (overflow < Number.MAX_SAFE_INTEGER) overflow += 1;
     };
     const observer = new MutationObserver(record);
     observer.observe(document.body, {
@@ -2687,9 +3101,14 @@ async function installPreviewStatusRecorder(page: Page): Promise<void> {
       childList: true,
       subtree: true,
     });
-    recorderWindow.openSplunkE2EPreviewRecorder = { observer, statuses };
+    recorderWindow.openSplunkE2EPreviewRecorder = {
+      finalizationErrorSeen: () => finalizationErrorSeen,
+      observer,
+      overflow: () => overflow,
+      statuses,
+    };
     record();
-  });
+  }, MAXIMUM_RECORDED_DIAGNOSTICS);
 }
 
 async function collectPreviewStatuses(page: Page): Promise<string[]> {
@@ -2697,14 +3116,30 @@ async function collectPreviewStatuses(page: Page): Promise<string[]> {
     const recorderWindow = window as PreviewRecorderWindow;
     const recorder = recorderWindow.openSplunkE2EPreviewRecorder;
     recorder?.observer.disconnect();
-    return recorder === undefined ? [] : [...recorder.statuses];
+    if (recorder === undefined) return [];
+    if (recorder.overflow() !== 0) {
+      throw new Error(`preview status diagnostics overflowed by ${recorder.overflow()} entries`);
+    }
+    const statuses = [...recorder.statuses];
+    if (recorder.finalizationErrorSeen() && !statuses.includes("finalization-error")) {
+      statuses.push("finalization-error");
+    }
+    return statuses;
   });
 }
 
 async function snapshotPreviewStatuses(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const recorder = (window as PreviewRecorderWindow).openSplunkE2EPreviewRecorder;
-    return recorder === undefined ? [] : [...recorder.statuses];
+    if (recorder === undefined) return [];
+    if (recorder.overflow() !== 0) {
+      throw new Error(`preview status diagnostics overflowed by ${recorder.overflow()} entries`);
+    }
+    const statuses = [...recorder.statuses];
+    if (recorder.finalizationErrorSeen() && !statuses.includes("finalization-error")) {
+      statuses.push("finalization-error");
+    }
+    return statuses;
   });
 }
 
@@ -2965,6 +3400,14 @@ async function interceptSequenceGap(
     const socketURL = new URL(socket.url());
     if (!routeMatchesSearchSocket(socketURL)) return;
     matchingBrowserSocketCount += 1;
+    if (matchingBrowserSocketCount > 2) {
+      fail(
+        new Error(
+          `sequence-gap browser opened ${matchingBrowserSocketCount} matching WebSockets`,
+        ),
+      );
+      return;
+    }
     if (matchingBrowserSocketCount !== 2) return;
     replayBrowserSocket = socket;
     replayBrowserFrameListener = ({ payload }) => {
@@ -2999,12 +3442,13 @@ async function interceptSequenceGap(
   await page.routeWebSocket(routeMatchesSearchSocket, (client) => {
     matchingConnectionCount += 1;
     const connectionOrdinal = matchingConnectionCount;
-    const server = client.connectToServer();
-    if (connectionOrdinal === 2) secondClient = client;
     if (connectionOrdinal > 2) {
       fail(new Error(`sequence-gap recovery opened ${connectionOrdinal} matching connections`));
+      rejectExcessWebSocketRoute(client);
       return;
     }
+    const server = client.connectToServer();
+    if (connectionOrdinal === 2) secondClient = client;
 
     client.onMessage((message) => {
       try {
@@ -3375,22 +3819,29 @@ async function interceptSequenceGap(
   );
 
   async function injectStaleBrowserFrame(frame: Buffer, label: string): Promise<void> {
+    if (frame.byteLength > maximumRecordedBrowserFrameBytes) {
+      throw new Error(
+        `browser ${label} exceeded ${maximumRecordedBrowserFrameBytes} evidence bytes`,
+      );
+    }
     const expectedFrame = frame.toString("base64");
     const baseline = await page.evaluate((expected) => {
       const recorder =
         (window as BrowserWebSocketFrameRecorderWindow)
           .openSplunkBrowserWebSocketFrameRecorder;
       if (recorder === undefined) {
-        return { matches: -1, overflow: -1 };
+        return { frameOverflow: -1, matches: -1, socketOverflow: -1 };
       }
       return {
+        frameOverflow: recorder.frameOverflow(),
         matches: recorder.frames.filter((candidate) => candidate === expected).length,
-        overflow: recorder.overflow(),
+        socketOverflow: recorder.socketOverflow(),
       };
     }, expectedFrame);
     if (
       baseline.matches < 0
-      || baseline.overflow !== 0
+      || baseline.frameOverflow !== 0
+      || baseline.socketOverflow !== 0
       || secondClient === undefined
     ) {
       throw new Error(
@@ -3403,17 +3854,24 @@ async function interceptSequenceGap(
         const recorder =
           (window as BrowserWebSocketFrameRecorderWindow)
             .openSplunkBrowserWebSocketFrameRecorder;
-        if (recorder === undefined) return { matches: 0, overflow: -1 };
+        if (recorder === undefined) {
+          return { frameOverflow: -1, matches: 0, socketOverflow: -1 };
+        }
         return {
+          frameOverflow: recorder.frameOverflow(),
           matches: recorder.frames.filter((candidate) => candidate === expected).length,
-          overflow: recorder.overflow(),
+          socketOverflow: recorder.socketOverflow(),
         };
       }, expectedFrame),
       {
         message: `browser receipt of ${label}`,
         timeout: Math.min(timeoutMilliseconds, 5_000),
       },
-    ).toEqual({ matches: baseline.matches + 1, overflow: 0 });
+    ).toEqual({
+      frameOverflow: 0,
+      matches: baseline.matches + 1,
+      socketOverflow: 0,
+    });
   }
 
   return {
@@ -3568,6 +4026,7 @@ async function interceptSequenceGap(
         || checkpoint === undefined
         || subscribeCommandCount !== 2
         || matchingConnectionCount !== 2
+        || matchingBrowserSocketCount !== 2
         || originalFrames.size !== 2
         || connectionOneDeliveredSequences.length !== 1
         || connectionOneDeliveredSequences[0] !== checkpoint + 2n
@@ -3704,12 +4163,13 @@ async function interceptSequenceExpiration(
   await page.routeWebSocket(routeMatchesSearchSocket, (client) => {
     matchingConnectionCount += 1;
     const connectionOrdinal = matchingConnectionCount;
-    const server = client.connectToServer();
-    if (connectionOrdinal === 1) firstServer = server;
     if (connectionOrdinal > 4) {
       fail(new Error(`search WebSocket opened ${connectionOrdinal} matching connections`));
+      rejectExcessWebSocketRoute(client);
       return;
     }
+    const server = client.connectToServer();
+    if (connectionOrdinal === 1) firstServer = server;
 
     client.onMessage((message) => {
       try {
@@ -4076,12 +4536,13 @@ async function interceptOneRetainedReplay(
   await page.routeWebSocket(routeMatchesSearchSocket, (client) => {
     connectionCount += 1;
     const connectionOrdinal = connectionCount;
-    const server = client.connectToServer();
-    if (connectionOrdinal === 1) firstServer = server;
     if (connectionOrdinal > 2) {
       fail(new Error(`search WebSocket opened ${connectionOrdinal} connections before retained replay completed`));
+      rejectExcessWebSocketRoute(client);
       return;
     }
+    const server = client.connectToServer();
+    if (connectionOrdinal === 1) firstServer = server;
 
     client.onMessage((message) => {
       try {
@@ -4287,7 +4748,7 @@ function observeSearchProtocol(
   let rejectCompletion!: (reason: Error) => void;
   const subscriptions: ObservedSubscription[] = [];
   const progressEvents: ObservedProgress[] = [];
-  const socketListeners = new Map<WebSocket, SocketListeners>();
+  const socketObservers = new BoundedObservationRegistry<WebSocket>();
   const completion = new Promise<void>((resolve, reject) => {
     resolveCompletion = resolve;
     rejectCompletion = reject;
@@ -4301,14 +4762,8 @@ function observeSearchProtocol(
     settled = true;
     if (timer !== undefined) clearTimeout(timer);
     page.off("websocket", observeSocket);
-    for (const [socket, listeners] of socketListeners) {
-      socket.off("framesent", listeners.sent);
-      socket.off("framereceived", listeners.received);
-      socket.off("socketerror", listeners.error);
-      socket.off("close", listeners.close);
-    }
-    socketListeners.clear();
-    if (error) rejectCompletion(error);
+    socketObservers.clear();
+    if (error) rejectCompletion(normalizeError(error));
     else resolveCompletion();
   };
 
@@ -4326,6 +4781,7 @@ function observeSearchProtocol(
   const observeSocket = (socket: WebSocket): void => {
     const socketURL = new URL(socket.url());
     if (!matchesSearchWebSocketURL(socketURL, expectedOrigin)) return;
+    if (socketObservers.has(socket)) return;
     const listeners: SocketListeners = {
       sent: ({ payload }) => {
         try {
@@ -4351,11 +4807,25 @@ function observeSearchProtocol(
       error: (error) => finish(new Error(`search WebSocket failed: ${error}`)),
       close: () => finish(new Error("search WebSocket closed before a sequenced search-progress event arrived")),
     };
-    socketListeners.set(socket, listeners);
-    socket.on("framesent", listeners.sent);
-    socket.on("framereceived", listeners.received);
-    socket.on("socketerror", listeners.error);
-    socket.on("close", listeners.close);
+    if (!socketObservers.tryObserve(socket, () => {
+      socket.on("framesent", listeners.sent);
+      socket.on("framereceived", listeners.received);
+      socket.on("socketerror", listeners.error);
+      socket.on("close", listeners.close);
+      return () => {
+        socket.off("framesent", listeners.sent);
+        socket.off("framereceived", listeners.received);
+        socket.off("socketerror", listeners.error);
+        socket.off("close", listeners.close);
+      };
+    })) {
+      finish(
+        new Error(
+          "browser opened more than "
+          + `${MAXIMUM_OBSERVED_MATCHING_WEBSOCKETS} simultaneously observed search WebSockets`,
+        ),
+      );
+    }
   };
 
   timer = setTimeout(
@@ -4427,5 +4897,6 @@ function decodeSearchProgress(payload: Uint8Array): ObservedProgress | undefined
 }
 
 function normalizeError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+  const message = error instanceof Error ? error.message : String(error);
+  return new Error(boundedDiagnostic(message));
 }

@@ -17,6 +17,7 @@ const testFiles = [
   path.join("lib", "search", "server-exports.test.ts"),
   path.join("lib", "search", "example-drafts.test.ts"),
   path.join("lib", "search", "saved-search-names.test.ts"),
+  path.join("integration", "browser_harness.test.ts"),
 ];
 
 function run(command, arguments_, environment = process.env) {

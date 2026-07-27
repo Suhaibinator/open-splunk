@@ -171,6 +171,131 @@ func TestLockedBufferReportsTruncation(t *testing.T) {
 	}
 }
 
+func TestRunCommandWithBoundedOutputCapsCombinedStreams(t *testing.T) {
+	t.Parallel()
+
+	command := exec.Command(os.Args[0], "-test.run=^TestHarnessOutputEmitter$")
+	command.Env = environmentWithValue(
+		os.Environ(),
+		"OPEN_SPLUNK_TEST_HARNESS_OUTPUT_EMITTER",
+		"overflow",
+	)
+	const maximum = 1 << 10
+	output, truncated, err := runCommandWithBoundedOutput(command, maximum)
+	if err == nil {
+		t.Fatal("runCommandWithBoundedOutput() error = nil, want helper-process failure")
+	}
+	if !truncated {
+		t.Fatal("runCommandWithBoundedOutput() truncated = false, want true")
+	}
+	if len(output) != maximum {
+		t.Fatalf("len(output) = %d, want %d", len(output), maximum)
+	}
+	if strings.Trim(output, "oe") != "" {
+		t.Fatalf("output contains bytes other than the emitted stdout/stderr payload: %q", output)
+	}
+}
+
+func TestRunCommandWithBoundedOutputBoundaries(t *testing.T) {
+	t.Parallel()
+
+	const maximum = 1 << 10
+	for _, test := range []struct {
+		name          string
+		mode          string
+		wantError     bool
+		wantLength    int
+		wantTruncated bool
+	}{
+		{name: "success", mode: "success", wantLength: len("stdoutstderr")},
+		{name: "failure", mode: "failure", wantError: true, wantLength: len("stdoutstderr")},
+		{name: "exact limit", mode: "exact", wantLength: maximum},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			command := exec.Command(os.Args[0], "-test.run=^TestHarnessOutputEmitter$")
+			command.Env = environmentWithValue(
+				os.Environ(),
+				"OPEN_SPLUNK_TEST_HARNESS_OUTPUT_EMITTER",
+				test.mode,
+			)
+			output, truncated, err := runCommandWithBoundedOutput(command, maximum)
+			if (err != nil) != test.wantError {
+				t.Fatalf("runCommandWithBoundedOutput() error = %v, want error %t", err, test.wantError)
+			}
+			if truncated != test.wantTruncated {
+				t.Fatalf(
+					"runCommandWithBoundedOutput() truncated = %t, want %t",
+					truncated,
+					test.wantTruncated,
+				)
+			}
+			if len(output) != test.wantLength {
+				t.Fatalf("len(output) = %d, want %d", len(output), test.wantLength)
+			}
+			if test.mode == "success" || test.mode == "failure" {
+				if !strings.Contains(output, "stdout") || !strings.Contains(output, "stderr") {
+					t.Fatalf("output = %q, want both streams", output)
+				}
+			}
+		})
+	}
+
+	t.Run("start failure", func(t *testing.T) {
+		t.Parallel()
+		command := exec.Command(filepath.Join(t.TempDir(), "missing-command"))
+		output, truncated, err := runCommandWithBoundedOutput(command, maximum)
+		if err == nil {
+			t.Fatal("runCommandWithBoundedOutput() error = nil, want start failure")
+		}
+		if output != "" || truncated {
+			t.Fatalf(
+				"runCommandWithBoundedOutput() = %q, truncated %t, want empty and complete",
+				output,
+				truncated,
+			)
+		}
+	})
+}
+
+func TestFormatBoundedCommandOutputIncludesMarkerWithinLimit(t *testing.T) {
+	t.Parallel()
+
+	const maximum = 64
+	formatted := formatBoundedCommandOutput(strings.Repeat("x", maximum), true, maximum)
+	if len(formatted) != maximum {
+		t.Fatalf("len(formatBoundedCommandOutput()) = %d, want %d", len(formatted), maximum)
+	}
+	if !strings.HasSuffix(formatted, commandOutputTruncatedSuffix) {
+		t.Fatalf("formatBoundedCommandOutput() = %q, want truncation suffix", formatted)
+	}
+}
+
+func TestHarnessOutputEmitter(t *testing.T) {
+	switch os.Getenv("OPEN_SPLUNK_TEST_HARNESS_OUTPUT_EMITTER") {
+	case "":
+		return
+	case "success":
+		_, _ = os.Stdout.WriteString("stdout")
+		_, _ = os.Stderr.WriteString("stderr")
+		os.Exit(0)
+	case "failure":
+		_, _ = os.Stdout.WriteString("stdout")
+		_, _ = os.Stderr.WriteString("stderr")
+		os.Exit(23)
+	case "exact":
+		_, _ = os.Stdout.Write(bytes.Repeat([]byte("x"), 1<<10))
+		os.Exit(0)
+	case "overflow":
+		_, _ = os.Stdout.Write(bytes.Repeat([]byte("o"), 2<<10))
+		_, _ = os.Stderr.Write(bytes.Repeat([]byte("e"), 2<<10))
+		os.Exit(23)
+	default:
+		t.Fatalf("unknown harness output emitter mode")
+	}
+}
+
 func completedManagedProcess(err error) *managedProcess {
 	process := &managedProcess{done: make(chan struct{}), err: err}
 	close(process.done)
@@ -200,14 +325,26 @@ func buildBinary(t *testing.T, ctx context.Context, repository, output, pkg stri
 	command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", output, pkg)
 	configureProcessGroup(command)
 	command.Dir = repository
-	command.Env = append(os.Environ(), "CGO_ENABLED=0")
-	combined, err := command.CombinedOutput()
+	command.Env = environmentWithValue(os.Environ(), "CGO_ENABLED", "0")
+	combined, truncated, err := runCommandWithBoundedOutput(command, maximumHarnessOutputBytes)
 	if err != nil {
-		t.Fatalf("build %s: %v\n%s", pkg, err, combined)
+		t.Fatalf(
+			"build %s: %v\n%s",
+			pkg,
+			err,
+			formatBoundedCommandOutput(combined, truncated, maximumHarnessOutputBytes),
+		)
+	}
+	if truncated {
+		t.Fatalf("build %s produced more than %d bytes of output", pkg, maximumHarnessOutputBytes)
 	}
 }
 
-const backendFrontendStagePrefix = "open-splunk-backend-frontend-"
+const (
+	backendFrontendStagePrefix   = "open-splunk-backend-frontend-"
+	maximumHarnessOutputBytes    = 1 << 20
+	commandOutputTruncatedSuffix = "\n... [command output truncated]"
+)
 
 var backendFrontendBuild struct {
 	once       sync.Once
@@ -296,16 +433,22 @@ func stageBackendFrontend(ctx context.Context, sourceRoot string) (string, strin
 	command.Env = environmentWithValue(os.Environ(), "OPEN_SPLUNK_DATA_MODE", "backend")
 	command.Env = environmentWithValue(command.Env, "OPEN_SPLUNK_API_BASE_URL", "")
 	command.Env = environmentWithValue(command.Env, "NEXT_TELEMETRY_DISABLED", "1")
-	logs := &lockedBuffer{maximum: 1 << 20}
-	command.Stdout = logs
-	command.Stderr = logs
-	if err := command.Run(); err != nil {
-		return stageRoot, logs.String(), fmt.Errorf("build staged frontend: %w", err)
+	logs, truncated, runErr := runCommandWithBoundedOutput(command, maximumHarnessOutputBytes)
+	if runErr != nil {
+		return stageRoot,
+			formatBoundedCommandOutput(logs, truncated, maximumHarnessOutputBytes),
+			fmt.Errorf("build staged frontend: %w", runErr)
+	}
+	if truncated {
+		return stageRoot, "", fmt.Errorf(
+			"build staged frontend output exceeded %d bytes",
+			maximumHarnessOutputBytes,
+		)
 	}
 	if _, err := os.Stat(filepath.Join(stageRoot, "out", "search", "index.html")); err != nil {
-		return stageRoot, logs.String(), fmt.Errorf("staged backend frontend export is incomplete: %w", err)
+		return stageRoot, logs, fmt.Errorf("staged backend frontend export is incomplete: %w", err)
 	}
-	return stageRoot, logs.String(), nil
+	return stageRoot, logs, nil
 }
 
 func copyBackendFrontendStageSources(ctx context.Context, sourceRoot, stageRoot string) error {
@@ -517,14 +660,17 @@ func runBrowserVerticalSpec(
 		environment = environmentWithValue(environment, name, value)
 	}
 	command.Env = environment
-	logs := &lockedBuffer{maximum: 1 << 20}
-	command.Stdout = logs
-	command.Stderr = logs
-	if err := command.Run(); err != nil {
-		t.Fatalf("%s: %v\n%s", config.failureDescription, err, logs.String())
+	logs, truncated, runErr := runCommandWithBoundedOutput(command, maximumHarnessOutputBytes)
+	if runErr != nil {
+		t.Fatalf(
+			"%s: %v\n%s",
+			config.failureDescription,
+			runErr,
+			formatBoundedCommandOutput(logs, truncated, maximumHarnessOutputBytes),
+		)
 	}
-	if logs.Truncated() {
-		t.Fatalf("%s logs exceeded 1 MiB", config.failureDescription)
+	if truncated {
+		t.Fatalf("%s logs exceeded %d bytes", config.failureDescription, maximumHarnessOutputBytes)
 	}
 }
 
@@ -580,7 +726,7 @@ func startProcess(t *testing.T, directory string, arguments []string, environmen
 	if len(arguments) == 0 {
 		t.Fatal("process command is required")
 	}
-	logs := &lockedBuffer{maximum: 1 << 20}
+	logs := &lockedBuffer{maximum: maximumHarnessOutputBytes}
 	command := exec.Command(arguments[0], arguments[1:]...)
 	command.Dir = directory
 	command.Env = environment
@@ -698,6 +844,26 @@ type lockedBuffer struct {
 	truncated bool
 }
 
+func runCommandWithBoundedOutput(command *exec.Cmd, maximum int) (string, bool, error) {
+	logs := &lockedBuffer{maximum: maximum}
+	command.Stdout = logs
+	command.Stderr = logs
+	err := command.Run()
+	output, truncated := logs.Snapshot()
+	return output, truncated, err
+}
+
+func formatBoundedCommandOutput(output string, truncated bool, maximum int) string {
+	if !truncated {
+		return output
+	}
+	if maximum <= len(commandOutputTruncatedSuffix) {
+		return commandOutputTruncatedSuffix[len(commandOutputTruncatedSuffix)-maximum:]
+	}
+	prefixLength := min(len(output), maximum-len(commandOutputTruncatedSuffix))
+	return output[:prefixLength] + commandOutputTruncatedSuffix
+}
+
 func (buffer *lockedBuffer) Write(value []byte) (int, error) {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
@@ -713,9 +879,14 @@ func (buffer *lockedBuffer) Write(value []byte) (int, error) {
 }
 
 func (buffer *lockedBuffer) String() string {
+	value, _ := buffer.Snapshot()
+	return value
+}
+
+func (buffer *lockedBuffer) Snapshot() (string, bool) {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
-	return buffer.buffer.String()
+	return buffer.buffer.String(), buffer.truncated
 }
 
 func (buffer *lockedBuffer) Truncated() bool {
