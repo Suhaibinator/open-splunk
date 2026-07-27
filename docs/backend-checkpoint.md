@@ -7,7 +7,97 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: result-kind-bounded browser adaptation
+## Latest checkpoint: deterministic committed release identity and artifacts
+
+Date: 2026-07-27
+
+Implementation commit: `5ecd99957bf4801da8b39e9bfabd274e11d5e208`
+
+Cleanup/proof fix: `f68630a5b4fc213a379bda1f2c163b4c96b42fac`
+
+This slice implements committed release-revision and embedded-asset
+consistency and proves repeatability on the checkpoint host. The independent
+Linux/macOS CI comparison remains to be confirmed after push:
+
+1. Go `1.26.5`, Node `24.18.0`, npm `11.16.0`, Buf, and both Go protobuf
+   generators are pinned. Protobuf generation is complete-tree,
+   transactional, serialized, and preserves only explicitly handwritten
+   files; concurrent generators cannot publish mixed Go/TypeScript contracts.
+2. `make release` accepts only a clean committed `HEAD`, bootstraps both the
+   launcher and snapshot materializer from raw Git object bytes, builds in an
+   isolated environment with fresh caches and a fixed umask, disables ambient
+   VCS stamping, and refuses a stale slow build if `HEAD` changes before
+   publication.
+3. Snapshot extraction uses one streaming `git cat-file --batch` process. File
+   count, individual and aggregate blob bytes, relative path bytes and depth,
+   component bytes, distinct directories, aggregate directory-prefix bytes,
+   Git output, and stderr are bounded. Invalid UTF-8, links, submodules,
+   administrative directories, and cross-platform case/Unicode collisions
+   fail closed.
+4. Temporary launcher, build, and extraction roots are resolved physically
+   before paths are derived. Active `TMPDIR` symlink-retarget regressions prove
+   that neither an attacker launcher nor an attacker source tree can replace
+   the committed inputs after materialization.
+5. The canonical JSON asset manifest binds application version, full source
+   revision, deterministic UI build ID, every UI file, protobuf schema, SQLite
+   migrations, and ClickHouse migrations. The server verifies the embedded
+   manifest and bytes; server, collector, log generator, protobuf bootstrap,
+   HTML, and browser UI expose the same structured identity.
+6. Publication is serialized and transactional. Private artifacts and all
+   three binary identities are verified before the canonical `build/` rename;
+   post-publication verification and rollback remain under the same lock.
+   Concurrent publication, stale-source publication, occupied destinations,
+   tampering, failed rollback, and prior-build restoration have deterministic
+   regressions.
+7. Cleanup handles Go's deliberately read-only module-cache directories and
+   every repository-side transaction tree. Removal or residual-data failures
+   force a nonzero release status while lock release is still attempted;
+   incomplete rollback evidence is deliberately preserved.
+8. CI now defines independent committed-release builds on Linux amd64 and
+   macOS, uploads the canonical proof files, and compares the asset manifest,
+   binary identities, and embedded verification output byte for byte. The
+   Linux package uses a commit timestamp, canonical ownership/modes, sorted
+   paths, and timestamp-free gzip output. This workflow has not yet run for
+   the checkpoint commits.
+9. The final local frontend gate contains 47 release/proto/materialization
+   transaction tests plus 106 application tests. Full Go and race suites,
+   vet, Go build, typecheck, lint, protobuf regeneration, a production
+   server/embed verification, and the Docker-backed collector-to-browser
+   vertical all passed. The final vertical completed in 22.35 seconds, stored
+   four distinct events with zero replay, and passed all six current GradeThis
+   SPL cases.
+10. The exact pinned-toolchain matrix at `f68630a` passed twice. The cold run
+    took 37.85 seconds with 861,011,968-byte peak RSS; the prior-artifact
+    replacement run took 36.32 seconds with 856,113,152-byte peak RSS. Both
+    produced exactly six byte-identical files with identical modes and hashes:
+    binaries are `0755`, proof files are `0644`, the UI contains 119 files,
+    and its SHA-256 is
+    `20520d9edbf374ae647ee293a68d966efa23e431920f06f9b787fc8bfe83caa4`.
+    Fresh internal dependency caches intentionally make the second pass only
+    4.0% faster; this is isolation cost, not an incremental-build benchmark.
+11. Both exact runs kept `HEAD` and the worktree unchanged; each emitted only
+    6,554 bytes of stdout and 601 bytes of stderr. Neither left a work root,
+    launcher, publication, prior-build, failed-build, or lock residue. The
+    earlier 682 MiB cleanup reproducer was removed after its permanent
+    regressions passed.
+12. Correctness/concurrency and performance/security reviewers drove the
+    locking, stale-release, TOCTOU, streaming, resource-bound, portable-path,
+    physical-root, and cleanup fixes. They reported final implementation
+    staged SHA-256
+    `cb29202d24c47dc46fecc0bd88702865b2a2a33da7707678eca0a74f84b8ce0e`
+    and cleanup staged SHA-256
+    `8a9cf57c8d5a96b256937b16a32e5433941ed5094b482464358f03ad69f76503`
+    clean.
+
+The exact validation record is under **Latest validation evidence**. Local
+release-revision consistency and deterministic embedded frontend assets are
+complete at this checkpoint. On resume, first confirm the Linux/macOS proof
+workflow; if it is green, the next backend TDD slice is the bounded
+`list(field)` aggregate contract under **Remaining work**. CI artifact reuse
+and dependency-audit follow-ups remain separate operational work. The overall
+backend goal remains active.
+
+## Previous checkpoint: result-kind-bounded browser adaptation
 
 Date: 2026-07-26
 
@@ -63,8 +153,11 @@ allocation from browser result adaptation:
 
 The exact validation record is under **Latest validation evidence**.
 Result adaptation specialization and formatter reuse are complete at this
-checkpoint. Unless the user changes priority, next verify release-revision
-consistency and byte-identical embedded frontend assets under **Remaining
+checkpoint. Release-revision consistency and byte-identical embedded frontend
+assets were subsequently completed at `5ecd999` with the cleanup proof at
+`f68630a` on the checkpoint host; the independent Linux/macOS CI comparison
+still needs confirmation. Unless the user changes priority, confirm that gate
+and then start the bounded `list(field)` aggregate contract under **Remaining
 work**. The overall backend goal remains active.
 
 ## Previous checkpoint: statistics-only result projections
@@ -195,8 +288,10 @@ The exact validation record is under **Latest validation evidence**. The
 syntax-bearing configured-redaction performance follow-up is complete at this
 checkpoint. Its next priority was statistics-only result specialization, now
 complete at `e647dd2`; formatter reuse and the remaining result-kind
-specialization are now complete at `c20204b`, and release-revision work
-follows under **Remaining work**. The overall backend goal remains active.
+specialization are now complete at `c20204b`. Release-revision implementation
+and local repeatability are complete at `5ecd999` and `f68630a`; only the
+independent Linux/macOS CI confirmation remains under **Remaining work**. The
+overall backend goal remains active.
 
 ## Previous checkpoint: bounded integration/browser harness resources
 
@@ -261,7 +356,9 @@ red benchmark/test and per-event optimization for the syntax-bearing
 configured-redaction marker cliff, now complete at `1b89397`; the statistics
 adapter is complete at `e647dd2`, formatter reuse and the remaining
 result-kind specialization are complete at `c20204b`, and release-revision
-work follows. The overall backend goal remains active.
+implementation and local repeatability are complete at `5ecd999` and
+`f68630a`; only the independent Linux/macOS CI confirmation remains. The
+overall backend goal remains active.
 
 ## Previous checkpoint: composite configured pre-WAL redaction
 
@@ -1771,6 +1868,67 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Deterministic committed release identity and artifacts
+
+The implementation at `5ecd99957bf4801da8b39e9bfabd274e11d5e208` and
+cleanup/proof fix at `f68630a5b4fc213a379bda1f2c163b4c96b42fac` passed:
+
+```sh
+npm run test:frontend
+npm run typecheck
+npm run lint
+make proto
+go test ./... -count=1
+go test -race ./... -count=1
+go vet ./...
+go build ./...
+OPEN_SPLUNK_APPLICATION_VERSION=0.1.0-test \
+OPEN_SPLUNK_SOURCE_REVISION=0123456789abcdef0123456789abcdef01234567 \
+make build-server
+build/open-splunk-server -verify-embedded-release
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+go test ./integration -run '^TestBackendVertical$' -count=1 -v
+OPEN_SPLUNK_APPLICATION_VERSION=0.1.0 \
+OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" make release
+OPEN_SPLUNK_APPLICATION_VERSION=0.1.0 \
+OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" make release
+git diff --cached --check
+```
+
+The final frontend gate passed 47 release, protobuf, source-materialization,
+and publication-transaction tests plus 106 application tests. The complete Go
+suite, race detector, vet, build, typecheck, lint, protobuf regeneration,
+production embed verification, and Docker-backed vertical all passed. The
+vertical completed in 22.35 seconds, stored four distinct events with zero
+replay, survived collector and server crash restarts, and passed all six
+current GradeThis searches.
+
+The two `make release` runs used exactly Node `24.18.0`, npm `11.16.0`, and Go
+`1.26.5`. The cold run took 37.85 seconds with 861,011,968-byte peak RSS; the
+prior-artifact replacement run took 36.32 seconds with 856,113,152-byte peak
+RSS. Their six published files were byte-for-byte identical with identical
+modes and sizes. All three binaries reported version `0.1.0` and full revision
+`f68630a5b4fc213a379bda1f2c163b4c96b42fac`; their embedded manifest and
+verification output agreed. The UI contained 119 files with SHA-256
+`20520d9edbf374ae647ee293a68d966efa23e431920f06f9b787fc8bfe83caa4`.
+Both runs kept `HEAD` and the worktree unchanged and left no launcher, work,
+publication, prior-build, failed-build, or lock residue.
+
+The workflow now defines independent Linux amd64 and macOS release builds and
+a byte-for-byte comparison of their canonical proof files. That cross-platform
+gate will run from the pushed commit; the exact local two-run proof above was
+performed on macOS and does not claim a completed remote CI run.
+
+Correctness/concurrency and performance/security reviewers covered publication
+serialization, stale-source rejection, rollback, cleanup failure propagation,
+proto-generation transactions, Git-object streaming, resource and path
+bounds, cross-platform collisions, physical temporary roots, and adversarial
+symlink retargeting. They reported no remaining issue for implementation staged
+SHA-256
+`cb29202d24c47dc46fecc0bd88702865b2a2a33da7707678eca0a74f84b8ce0e`
+or cleanup staged SHA-256
+`8a9cf57c8d5a96b256937b16a32e5433941ed5094b482464358f03ad69f76503`.
+
 ### Result-kind-bounded browser adaptation
 
 The exact implementation at `c20204b667c5711bc9c4484ba43d046e3a9f65d4`
@@ -3198,9 +3356,12 @@ independent stacks.
    `1b89397`; statistics-only result specialization and authoritative
    result-kind dispatch are complete at `e647dd2`; full result-kind projection
    bounds, single-pass event decoding, and adaptation-local formatter reuse
-   are complete at `c20204b`. Unless the user changes priority, proceed to the
-   release-revision consistency and embedded-asset items below. The current
-   preview-to-final
+   are complete at `c20204b`; deterministic committed release identity and
+   embedded-asset verification are locally complete at `5ecd999`, with
+   transaction cleanup proof at `f68630a`. First confirm the independent
+   Linux/macOS CI comparison; if it is green and the user does not change
+   priority, start the bounded `list(field)` aggregate contract below. The
+   current preview-to-final
    resource-release audit pass is complete at `961cba2`, the sanitized current
    GradeThis collector/config migration at `c576e85`, logical event retention
    at `458c8b4`, clock-driven job/result/export expiration at `b2b2839`, and
@@ -3274,7 +3435,7 @@ liveness, unique job identity, and public result metadata during live
 recovery. Scan, queue, lifecycle, wall, and overlap measurements remain
 observational until hardware and capacity decisions are made.
 
-Continue the release proof in this order:
+Release-proof implementation history and remaining confirmation:
 
 - The deterministic bounded-queue slow WebSocket consumer and replay recovery
   path is complete at `4c4003f`. The separate fixed 1,000-row by 64-column
@@ -3315,9 +3476,12 @@ Continue the release proof in this order:
   decoding. Event, time-series, and authoritative server-timeline formatters
   are lazy, adaptation-local, and count-pinned across repeated, empty, invalid,
   and timezone-changing calls.
-- Verify release revision consistency across embedded UI, server, protobuf
-  schema, and migrations, plus byte-identical embedded frontend assets for
-  Linux and macOS builds from the same source revision.
+- Release revision consistency across embedded UI, server, protobuf schema,
+  and migrations is locally complete at `5ecd999`, with cleanup proof at
+  `f68630a`. Local repeated builds are byte-identical, and CI defines
+  independent Linux amd64/macOS builds plus a byte-for-byte canonical-proof
+  comparison. Confirm that remote gate after pushing; do not infer a CI result
+  from the local proof.
 - Keep `app.log` only as local test input after a fixture secret scan. Do not
   commit unsanitized GradeThis production logs.
 
@@ -3446,9 +3610,10 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `e647dd2`, `1b89397`, `3f89229`, `34f3a9b`,
-   `f41720e`, `9d6acc1`, `4c4003f`, `9898b41`, `59b8f7c`, `860acac`,
-   `961cba2`, `c576e85`, `458c8b4`, `b2b2839`, `b80bf0a`,
+   commits, especially `f68630a`, `5ecd999`, `c20204b`, `e647dd2`,
+   `1b89397`, `3f89229`, `34f3a9b`, `f41720e`, `9d6acc1`, `4c4003f`,
+   `9898b41`, `59b8f7c`, `860acac`, `961cba2`, `c576e85`, `458c8b4`,
+   `b2b2839`, `b80bf0a`,
    `cdb60df`, `787a7f9`, and `522b0ac`; the preceding progress/recovery
    foundations are `b5502a3`, `f72f184`, `ed28182`, and `d1286a4`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
@@ -3471,9 +3636,12 @@ Do not guess those decisions if they materially affect the implementation.
    is complete at `1b89397`. Statistics-only result specialization and
    authoritative result-kind dispatch are complete at `e647dd2`; complete
    result-kind projection bounds, single-pass event decoding, and
-   adaptation-local formatter reuse are complete at `c20204b`. Unless the user
-   changes priority, proceed to the release-revision consistency and
-   embedded-asset items above. The generator foundation, current
+   adaptation-local formatter reuse are complete at `c20204b`; deterministic
+   committed release identity, transactional publication, and embedded-asset
+   proof are locally complete at `5ecd999` and `f68630a`. First confirm the
+   independent Linux/macOS CI comparison; if it is green and the user does not
+   change priority, start the bounded `list(field)` aggregate contract. The
+   generator foundation, current
    preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
@@ -3487,8 +3655,8 @@ Do not guess those decisions if they materially affect the implementation.
    expiration/cancellation, the uninterrupted collector-to-browser path,
    exact GradeThis corpus, collector/server process-restart proof, and the
    protocol unit contract are already complete.
-6. If extending aggregates instead, start with an explicit bounded contract
-   for `list(field)`; do not reuse unordered `values`.
+6. For that aggregate slice, start with an explicit bounded contract for
+   `list(field)`; do not reuse unordered `values`.
 7. Preserve scalar/Dynamic path separation, numeric grammar sharing,
    punctuation/UTF-8/zero/overlong boundaries,
    native timestamp precision, private calculated types, downstream `bin`,
