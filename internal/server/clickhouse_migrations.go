@@ -22,6 +22,8 @@ var (
 
 var clickHouseMigrationFilename = regexp.MustCompile(`^([0-9]{4})_([a-z0-9][a-z0-9_]*)\.sql$`)
 
+const maximumClickHouseMigrationCount = 9_999
+
 var (
 	clickHouseMigrationLedgerInsertPrefix = regexp.MustCompile("(?is)^\\s*INSERT\\s+INTO\\s+(?:open_splunk|`open_splunk`)\\s*\\.\\s*(?:schema_migrations\\b|`schema_migrations`)")
 	clickHouseMigrationLedgerInsert       = regexp.MustCompile("(?is)^\\s*INSERT\\s+INTO\\s+(?:open_splunk|`open_splunk`)\\s*\\.\\s*(?:schema_migrations\\b|`schema_migrations`)\\s*(?:\\([^)]*\\))?\\s*SELECT\\s+([0-9]+)\\s*,\\s*'([a-z0-9_]+)'(?:\\s*,|\\s*(?:WHERE\\b|$))")
@@ -179,7 +181,11 @@ func loadClickHouseMigrations(migrationFiles fs.FS) ([]clickHouseMigration, erro
 		}
 		return loaded[i].filename < loaded[j].filename
 	})
+	if len(loaded) > maximumClickHouseMigrationCount {
+		return nil, errors.New("too many ClickHouse migrations")
+	}
 	for index, migration := range loaded {
+		// #nosec G115 -- the migration count is capped at the four-digit filename version space.
 		wantVersion := uint32(index + 1)
 		if migration.version != wantVersion {
 			return nil, fmt.Errorf(
@@ -269,6 +275,10 @@ func readClickHouseMigrationHistory(ctx context.Context, connection ClickHouseMi
 }
 
 func verifyClickHouseMigrationHistory(history []clickHouseMigrationLedgerRow, migrations []clickHouseMigration, requireComplete bool) error {
+	if len(migrations) > maximumClickHouseMigrationCount {
+		return fmt.Errorf("%w: embedded migration count exceeds the supported version space", ErrClickHouseMigrationDrift)
+	}
+	// #nosec G115 -- the migration count is capped at the four-digit filename version space.
 	latestVersion := uint32(len(migrations))
 	for _, row := range history {
 		if row.Version > latestVersion {
@@ -282,6 +292,7 @@ func verifyClickHouseMigrationHistory(history []clickHouseMigrationLedgerRow, mi
 	}
 
 	for index, row := range history {
+		// #nosec G115 -- a matching history cannot exceed the bounded embedded migration prefix.
 		wantVersion := uint32(index + 1)
 		if row.Version != wantVersion {
 			return fmt.Errorf(

@@ -1118,10 +1118,12 @@ func (manager *Manager) resultsEntry(id string, entry *jobEntry, limit int, curs
 		}
 		offset = cursor.Offset
 	}
+	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
 	total := uint64(len(entry.rows))
 	if offset > total {
 		return ResultPage{}, ErrInvalidCursor
 	}
+	// #nosec G115 -- offset was just proven no larger than total, which came from len(entry.rows).
 	start := int(offset)
 	end := boundedResultRowEnd(entry.rows, start, limit, entry.schemaBytes, manager.maxPageBytes)
 	if end == start && end < len(entry.rows) {
@@ -1134,7 +1136,9 @@ func (manager *Manager) resultsEntry(id string, entry *jobEntry, limit int, curs
 		Complete:  end == len(entry.rows),
 	}
 	if end < len(entry.rows) {
-		cursor, err := encodeCursor(manager.cursorKey, manager.cursorScope, id, entry.resultGeneration, uint64(end))
+		// #nosec G115 -- end is a non-negative index into entry.rows.
+		nextOffset := uint64(end)
+		cursor, err := encodeCursor(manager.cursorKey, manager.cursorScope, id, entry.resultGeneration, nextOffset)
 		if err != nil {
 			return ResultPage{}, errors.New("encode search result cursor")
 		}
@@ -1982,6 +1986,7 @@ func (sink *resultSink) AddRow(values []Value) error {
 	// Validate an overflow row before recording truncation. A malformed row is
 	// not evidence that another valid result existed and must remain a failed
 	// executor result, even though its values will not be retained.
+	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
 	if uint64(len(entry.rows)) >= sink.manager.maxRows {
 		limitErr := &retainedRowLimitError{}
 		sink.truncationErr = limitErr
@@ -1999,13 +2004,17 @@ func (sink *resultSink) AddRow(values []Value) error {
 	if len(entry.rows) == cap(entry.rows) {
 		newCapacity64 := uint64(1)
 		if cap(entry.rows) > 0 {
+			// #nosec G115 -- a slice capacity is non-negative and exactly representable as uint64.
 			newCapacity64 = uint64(cap(entry.rows)) * 2
 		}
 		if newCapacity64 > sink.manager.maxRows {
 			newCapacity64 = sink.manager.maxRows
 		}
+		// #nosec G115 -- manager construction rejects maxRows values greater than MaxInt.
 		newCapacity = int(newCapacity64)
-		capacityBytes, multiplyErr := checkedMultiply(uint64(newCapacity-cap(entry.rows)), retainedResultRowBase)
+		// #nosec G115 -- newCapacity is never smaller than the current slice capacity.
+		capacityGrowth := uint64(newCapacity - cap(entry.rows))
+		capacityBytes, multiplyErr := checkedMultiply(capacityGrowth, retainedResultRowBase)
 		if multiplyErr != nil {
 			return sink.rememberLocked(ErrByteLimit)
 		}
@@ -2023,7 +2032,9 @@ func (sink *resultSink) AddRow(values []Value) error {
 		entry.rows = grown
 	}
 	cloned := cloneValues(values)
-	entry.rows = append(entry.rows, ResultRow{Ordinal: uint64(len(entry.rows)), Values: cloned, retainedBytes: rowPageBytes})
+	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
+	ordinal := uint64(len(entry.rows))
+	entry.rows = append(entry.rows, ResultRow{Ordinal: ordinal, Values: cloned, retainedBytes: rowPageBytes})
 	entry.job.RowCount++
 	entry.job.ResultBytes = nextBytes
 	incrementJobVersion(&entry.job)

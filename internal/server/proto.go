@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"time"
 
@@ -297,6 +298,9 @@ func uint64Pointer(value uint64) *uint64 { return &value }
 func nonnegativeUint32(value int) uint32 {
 	if value <= 0 {
 		return 0
+	}
+	if uint64(value) > math.MaxUint32 {
+		return math.MaxUint32
 	}
 	return uint32(value)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -304,6 +305,10 @@ func (q *queue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatc
 	}
 
 	seq := q.nextSeq
+	eventIDsDigest := ComputeEventIDsDigest(events)
+	if eventIDsDigest == nil {
+		return nil, ErrBatchTooLarge
+	}
 	batch := &opensplunkv1.EventBatch{
 		CollectorId:           q.opts.CollectorID,
 		BatchId:               uuid.NewString(),
@@ -311,7 +316,7 @@ func (q *queue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatc
 		CreatedAt:             timestamppb.New(time.Now().UTC()),
 		Events:                events,
 		UncompressedSizeBytes: uncompressedEventBytes(events),
-		EventIdsSha256:        ComputeEventIDsDigest(events),
+		EventIdsSha256:        eventIDsDigest,
 		ProtocolMajor:         q.opts.ProtocolMajor,
 		ProtocolMinor:         q.opts.ProtocolMinor,
 	}
@@ -319,7 +324,10 @@ func (q *queue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatc
 	if err != nil {
 		return nil, fmt.Errorf("collector/wal: marshal batch: %w", err)
 	}
-	record := encodeRecord(payload)
+	record, err := encodeRecord(payload)
+	if err != nil {
+		return nil, err
+	}
 	recordSize := uint64(len(record))
 
 	// A record that cannot fit even an empty queue is terminal, not backpressure:
@@ -360,9 +368,10 @@ func (q *queue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatc
 	}
 
 	d := batchDesc{
-		seq:         seq,
-		segName:     segName,
-		payloadOff:  payloadOff,
+		seq:        seq,
+		segName:    segName,
+		payloadOff: payloadOff,
+		// #nosec G115 -- encodeRecord rejects payload lengths above math.MaxUint32.
 		payloadLen:  uint32(len(payload)),
 		crc:         crc32c(payload),
 		eventCount:  uint64(len(events)),
@@ -381,8 +390,12 @@ func (q *queue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatc
 // record, returning the live segment name and the payload offset of the record.
 func (q *queue) writeRecordLocked(seq uint64, record []byte) (string, int64, error) {
 	recordSize := int64(len(record))
-	if q.active != nil && q.activeSize > 0 && q.opts.SegmentMaxBytes > 0 &&
-		q.activeSize+recordSize > int64(q.opts.SegmentMaxBytes) {
+	// #nosec G115 -- SegmentMaxBytes is bounded by math.MaxInt64 before either conversion.
+	rotateAtLimit := q.opts.SegmentMaxBytes > 0 &&
+		q.opts.SegmentMaxBytes <= math.MaxInt64 &&
+		(recordSize > int64(q.opts.SegmentMaxBytes) ||
+			q.activeSize > int64(q.opts.SegmentMaxBytes)-recordSize)
+	if q.active != nil && q.activeSize > 0 && rotateAtLimit {
 		if err := q.sealActiveLocked(); err != nil {
 			return "", 0, err
 		}
@@ -987,7 +1000,12 @@ func (q *queue) syncLoop(interval time.Duration) {
 func uncompressedEventBytes(events []*opensplunkv1.LogEvent) uint64 {
 	var total uint64
 	for _, event := range events {
-		size := uint64(proto.Size(event))
+		protoBytes := proto.Size(event)
+		if protoBytes < 0 {
+			return math.MaxUint64
+		}
+		// #nosec G115 -- proto.Size returned a non-negative int.
+		size := uint64(protoBytes)
 		if ^uint64(0)-total < size {
 			return ^uint64(0)
 		}

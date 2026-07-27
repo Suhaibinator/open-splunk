@@ -175,6 +175,26 @@ func TestNewRejectsUnsafeOrInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestGeneratorRejectsTimestampOffsetOverflowWithoutAdvancing(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	cfg.Format = FormatRaw
+	cfg.Interval = time.Second
+	generator, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rejectedOrdinal := generator.schedule.maximumOrdinal + 1
+	generator.ordinal = rejectedOrdinal
+	if _, err := generator.Next(); err == nil {
+		t.Fatal("Next(timestamp overflow) unexpectedly succeeded")
+	}
+	if got := generator.ordinal; got != rejectedOrdinal {
+		t.Fatalf("ordinal after rejected event = %d", got)
+	}
+}
+
 func TestGenerateHonorsCancellationAndWriterErrors(t *testing.T) {
 	t.Parallel()
 

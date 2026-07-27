@@ -472,7 +472,9 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 		}
 	}
 
-	buffered := bufferedTimechart{rows: make([]timechartRow, 0, int(output.BucketCount))}
+	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
+	bucketCapacity := int(output.BucketCount)
+	buffered := bufferedTimechart{rows: make([]timechartRow, 0, bucketCapacity)}
 	var encodedNames []string
 	for rows.Next() {
 		if err := ctx.Err(); err != nil {
@@ -815,6 +817,7 @@ func chartRowRetainedBytes(scanned any, seriesCount int) uint64 {
 	case []byte:
 		payload = uint64(len(typed))
 	}
+	// #nosec G115 -- seriesCount comes from a slice length and is capped by maximumChartSeries.
 	return payload + uint64(seriesCount)*8 + chartRowOverheadBytes
 }
 

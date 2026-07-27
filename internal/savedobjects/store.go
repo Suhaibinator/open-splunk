@@ -248,6 +248,7 @@ func (store *Store) Update(ctx context.Context, scope AccessScope, id string, ex
 			updated_at_unix_micro = ?
 		WHERE saved_search_id = ? AND owner_id = ? AND version = ?`,
 		indexed.name, indexed.appID, int64(indexed.sharingScope), encoded,
+		// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
 		now.UnixMicro(), id, ownerID, int64(expectedVersion),
 	)
 	if err != nil {
@@ -383,9 +384,11 @@ func (store *Store) Delete(ctx context.Context, scope AccessScope, id string, ex
 	if err != nil {
 		return mapContextError(ctx, "read saved search for delete", err)
 	}
+	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
 	if currentVersion != int64(expectedVersion) {
 		return control.ErrVersionConflict
 	}
+	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
 	result, err := tx.ExecContext(ctx, `DELETE FROM saved_searches WHERE saved_search_id = ? AND owner_id = ? AND version = ?`, id, ownerID, int64(expectedVersion))
 	if err != nil {
 		return mapContextError(ctx, "delete saved search", err)

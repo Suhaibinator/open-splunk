@@ -186,7 +186,11 @@ func csvValue(value searchjobs.Value, limit uint64) (string, bool, error) {
 		return strconv.FormatBool(result), false, nil
 	case searchjobs.ValueKindBytes:
 		result, _ := value.Bytes()
-		if uint64(base64.StdEncoding.EncodedLen(len(result))) > limit {
+		// #nosec G115 -- len is non-negative and every supported Go int value is
+		// exactly representable as uint64.
+		rawLength := uint64(len(result))
+		encodedLength := ((rawLength + 2) / 3) * 4
+		if encodedLength > limit {
 			return "", false, ErrByteLimit
 		}
 		return base64.StdEncoding.EncodeToString(result), true, nil
@@ -269,7 +273,9 @@ type limitedMemoryBuffer struct {
 }
 
 func (buffer *limitedMemoryBuffer) Write(payload []byte) (int, error) {
+	// #nosec G115 -- bytes.Buffer.Len and len are always non-negative.
 	retained := uint64(buffer.buffer.Len())
+	// #nosec G115 -- len is non-negative and exactly representable as uint64.
 	if retained > buffer.limit || uint64(len(payload)) > buffer.limit-retained {
 		return 0, ErrByteLimit
 	}
@@ -277,7 +283,9 @@ func (buffer *limitedMemoryBuffer) Write(payload []byte) (int, error) {
 }
 
 func (buffer *limitedMemoryBuffer) WriteString(value string) (int, error) {
+	// #nosec G115 -- bytes.Buffer.Len and len are always non-negative.
 	retained := uint64(buffer.buffer.Len())
+	// #nosec G115 -- len is non-negative and exactly representable as uint64.
 	if retained > buffer.limit || uint64(len(value)) > buffer.limit-retained {
 		return 0, ErrByteLimit
 	}
@@ -551,6 +559,7 @@ func writeJSONString(output io.Writer, value string) error {
 			replacement = `\u2029`
 		default:
 			if character < 0x20 {
+				// #nosec G115 -- this branch proves character is in [0, 0x1f].
 				replacement = `\u00` + string("0123456789abcdef"[byte(character)>>4]) + string("0123456789abcdef"[byte(character)&0xf])
 			}
 		}

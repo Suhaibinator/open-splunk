@@ -226,14 +226,16 @@ func (executor *Executor) ExecuteFieldSummary(
 			if valueCount == 0 {
 				return FieldSummaryResult{}, invalidFieldSummaryResult("value row count is zero")
 			}
-			if uint32(len(encodedValue)) > query.Spec.MaximumValueBytes {
+			// #nosec G115 -- a slice/string length is non-negative and exactly representable as uint64.
+			if uint64(len(encodedValue)) > uint64(query.Spec.MaximumValueBytes) {
 				return FieldSummaryResult{}, fmt.Errorf("%w: ClickHouse field summary value exceeded its byte limit", searchjobs.ErrExecutionLimit)
 			}
 			decoded, err := decodeFieldSummaryValue(eventfields.StoredValueType(valueType), encodedValue)
 			if err != nil {
 				return FieldSummaryResult{}, invalidFieldSummaryResult("contains an invalid encoded value")
 			}
-			if uint32(len(decoded.canonical)) > query.Spec.MaximumValueBytes {
+			// #nosec G115 -- a slice/string length is non-negative and exactly representable as uint64.
+			if uint64(len(decoded.canonical)) > uint64(query.Spec.MaximumValueBytes) {
 				return FieldSummaryResult{}, fmt.Errorf("%w: ClickHouse field summary canonical value exceeded its byte limit", searchjobs.ErrExecutionLimit)
 			}
 			// A structured key shares the canonical string backing retained by the
@@ -669,7 +671,9 @@ func fieldSummaryRetainedValueBytes(value canonicalFieldSummaryValue, encoded st
 	case searchjobs.ValueKindString, searchjobs.ValueKindDecimal:
 		retained += uint64(len(value.canonical))
 	case searchjobs.ValueKindBytes:
-		retained += uint64(base64.RawStdEncoding.DecodedLen(len(encoded)))
+		decodedLength := base64.RawStdEncoding.DecodedLen(len(encoded))
+		// #nosec G115 -- base64.DecodedLen returns a non-negative length for a non-negative input.
+		retained += uint64(decodedLength)
 	}
 	return retained
 }

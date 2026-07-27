@@ -36,6 +36,8 @@ func encodeStoreOutbox(batch ingest.StoreBatch) ([]byte, error) {
 	_, _ = body.Write(batch.SourceBatchSHA256[:])
 	writeOutboxUint64(&body, uint64(batch.ReceivedAt.UTC().UnixMilli()))
 	writeOutboxUint32(&body, batch.OriginalEventCount)
+	// #nosec G115 -- validateOutboxBatch bounds accepted events to
+	// maxDurableBatchEvents before this conversion.
 	writeOutboxUint32(&body, uint32(len(batch.Events)))
 	marshal := proto.MarshalOptions{Deterministic: true}
 	for index, stored := range batch.Events {
@@ -108,6 +110,7 @@ func decodeStoreOutbox(encoded []byte) (ingest.StoreBatch, error) {
 	}
 	eventCount, err := readOutboxUint32(reader)
 	if err != nil || eventCount == 0 || eventCount > originalEventCount ||
+		// #nosec G115 -- bytes.Reader.Len is always non-negative.
 		uint64(eventCount) > uint64(reader.Len())/9 {
 		return ingest.StoreBatch{}, errors.New("ClickHouse outbox has an invalid accepted event count")
 	}
@@ -123,7 +126,7 @@ func decodeStoreOutbox(encoded []byte) (ingest.StoreBatch, error) {
 		Events:             make([]*ingest.StoredEvent, 0, eventCount),
 	}
 	for index := uint32(0); index < eventCount; index++ {
-		payload, readErr := readOutboxBytes(reader, uint64(reader.Len()))
+		payload, readErr := readOutboxBytes(reader, math.MaxUint64)
 		if readErr != nil || len(payload) == 0 {
 			return ingest.StoreBatch{}, fmt.Errorf("decode ClickHouse outbox event %d: invalid payload", index)
 		}
@@ -208,6 +211,7 @@ func readOutboxString(reader *bytes.Reader, maximum uint64) (string, error) {
 
 func readOutboxBytes(reader *bytes.Reader, maximum uint64) ([]byte, error) {
 	length, err := readOutboxUint64(reader)
+	// #nosec G115 -- bytes.Reader.Len is always non-negative.
 	if err != nil || length > maximum || length > uint64(reader.Len()) || length > uint64(math.MaxInt) {
 		return nil, errors.New("invalid length")
 	}

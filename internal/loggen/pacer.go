@@ -21,6 +21,7 @@ const (
 type Pacer struct {
 	start    time.Time
 	interval time.Duration
+	schedule ordinalSchedule
 	timer    *time.Timer
 	started  bool
 	closed   bool
@@ -43,7 +44,8 @@ func newPacerAt(rate float64, start time.Time) (*Pacer, error) {
 		return nil, errors.New("rate must be finite and non-negative")
 	}
 	if rate == 0 {
-		return &Pacer{start: start, started: true}, nil
+		schedule, _ := newOrdinalSchedule(0)
+		return &Pacer{start: start, schedule: schedule, started: true}, nil
 	}
 
 	rawIntervalNanos := float64(time.Second) / rate
@@ -53,9 +55,15 @@ func newPacerAt(rate float64, start time.Time) (*Pacer, error) {
 	if rawIntervalNanos >= float64(math.MaxInt64) {
 		return nil, errors.New("rate is too small")
 	}
+	interval := time.Duration(math.Ceil(rawIntervalNanos))
+	schedule, scheduleOK := newOrdinalSchedule(interval)
+	if !scheduleOK {
+		return nil, errors.New("rate produced an invalid interval")
+	}
 	return &Pacer{
 		start:    start,
-		interval: time.Duration(math.Ceil(rawIntervalNanos)),
+		interval: interval,
+		schedule: schedule,
 		timer:    time.NewTimer(time.Hour),
 		started:  true,
 	}, nil
@@ -81,10 +89,11 @@ func (p *Pacer) Wait(ctx context.Context, ordinal uint64) error {
 		p.start = time.Now()
 		p.started = true
 	}
-	deadline, err := p.deadline(ordinal)
+	offset, err := p.scheduleOffset(ordinal)
 	if err != nil {
 		return err
 	}
+	deadline := p.start.Add(offset)
 
 	now := time.Now()
 	debtLimit := maxScheduleDebt
@@ -92,7 +101,6 @@ func (p *Pacer) Wait(ctx context.Context, ordinal uint64) error {
 		debtLimit = p.interval * maxCatchUpEvents
 	}
 	if now.Sub(deadline) >= debtLimit {
-		offset := time.Duration(ordinal * uint64(p.interval))
 		p.start = now.Add(-offset)
 		deadline = now
 	}
@@ -117,14 +125,19 @@ func (p *Pacer) Wait(ctx context.Context, ordinal uint64) error {
 }
 
 func (p *Pacer) deadline(ordinal uint64) (time.Time, error) {
-	if p.interval == 0 {
-		return p.start, nil
+	offset, err := p.scheduleOffset(ordinal)
+	if err != nil {
+		return time.Time{}, err
 	}
-	interval := uint64(p.interval)
-	if ordinal > uint64(math.MaxInt64)/interval {
-		return time.Time{}, fmt.Errorf("event ordinal %d exceeds the pacing deadline range", ordinal)
+	return p.start.Add(offset), nil
+}
+
+func (p *Pacer) scheduleOffset(ordinal uint64) (time.Duration, error) {
+	offset, ok := p.schedule.offset(ordinal)
+	if !ok {
+		return 0, fmt.Errorf("event ordinal %d exceeds the pacing deadline range", ordinal)
 	}
-	return p.start.Add(time.Duration(ordinal * interval)), nil
+	return offset, nil
 }
 
 func (p *Pacer) resetTimer(delay time.Duration) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -88,12 +89,18 @@ func listSegments(dir string) ([]string, error) {
 }
 
 // encodeRecord frames payload into a length-prefixed, CRC32C-checksummed record.
-func encodeRecord(payload []byte) []byte {
+func encodeRecord(payload []byte) ([]byte, error) {
+	// #nosec G115 -- len is non-negative and every supported Go int value is
+	// exactly representable as uint64.
+	if uint64(len(payload)) > math.MaxUint32 {
+		return nil, ErrBatchTooLarge
+	}
 	buf := make([]byte, recordHeaderSize+len(payload))
+	// #nosec G115 -- payload length is explicitly bounded by math.MaxUint32 above.
 	binary.BigEndian.PutUint32(buf[0:4], uint32(len(payload)))
 	binary.BigEndian.PutUint32(buf[4:8], crc32c(payload))
 	copy(buf[recordHeaderSize:], payload)
-	return buf
+	return buf, nil
 }
 
 // scannedRecord describes one intact record located within a segment file.

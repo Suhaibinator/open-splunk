@@ -185,8 +185,10 @@ func failureToHistory(failure *searchjobs.Failure) *opensplunkv1.SearchFailure {
 		}
 		if validSourceCoordinates(diagnostic) {
 			converted.SourceRange = &opensplunkv1.SourceRange{
+				// #nosec G115 -- validSourceCoordinates bounds every value by math.MaxUint32.
 				Start: &opensplunkv1.SourcePosition{Line: uint32(diagnostic.Line), Column: uint32(diagnostic.Column)},
-				End:   &opensplunkv1.SourcePosition{Line: uint32(diagnostic.EndLine), Column: uint32(diagnostic.EndColumn)},
+				// #nosec G115 -- validSourceCoordinates bounds every value by math.MaxUint32.
+				End: &opensplunkv1.SourcePosition{Line: uint32(diagnostic.EndLine), Column: uint32(diagnostic.EndColumn)},
 			}
 		}
 		result.Diagnostics = append(result.Diagnostics, converted)

@@ -93,14 +93,16 @@ func searchFieldSummaryToProto(
 	if ctx == nil {
 		return nil, errors.New("search field summary conversion context is required")
 	}
+	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
+	topValueCount := uint64(len(summary.TopValues))
 	if maximumValues == 0 || summary.Profile.FieldName != request.FieldName || summary.Profile.DistinctCount == nil ||
-		uint64(len(summary.TopValues)) > uint64(maximumValues) {
+		topValueCount > uint64(maximumValues) {
 		return nil, errors.New("invalid search field summary")
 	}
 	if summary.Profile.DistinctCountIsApproximate || summary.TopValuesAreApproximate {
 		return nil, errors.New("approximate search field summary is unsupported")
 	}
-	if request.MaxValues != nil && (*request.MaxValues == 0 || *request.MaxValues > maximumValues || uint32(len(summary.TopValues)) > *request.MaxValues) {
+	if request.MaxValues != nil && (*request.MaxValues == 0 || *request.MaxValues > maximumValues || topValueCount > uint64(*request.MaxValues)) {
 		return nil, errors.New("search field summary exceeds requested value limit")
 	}
 	if summary.Profile.NullCount > summary.Profile.EventCount {

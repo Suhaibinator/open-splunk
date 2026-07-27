@@ -57,8 +57,9 @@ func DefaultConfig() Config {
 // for concurrent use; independent generators with equal configuration emit
 // byte-identical sequences.
 type Generator struct {
-	cfg     Config
-	ordinal uint64
+	cfg      Config
+	schedule ordinalSchedule
+	ordinal  uint64
 }
 
 // New validates cfg and creates a deterministic generator.
@@ -71,7 +72,8 @@ func New(cfg Config) (*Generator, error) {
 	if cfg.Start.IsZero() {
 		return nil, errors.New("start time is required")
 	}
-	if cfg.Interval < 0 {
+	schedule, scheduleOK := newOrdinalSchedule(cfg.Interval)
+	if !scheduleOK {
 		return nil, errors.New("event interval cannot be negative")
 	}
 	if cfg.Cardinality == 0 {
@@ -88,7 +90,7 @@ func New(cfg Config) (*Generator, error) {
 		}
 	}
 	cfg.Start = cfg.Start.UTC()
-	return &Generator{cfg: cfg}, nil
+	return &Generator{cfg: cfg, schedule: schedule}, nil
 }
 
 // Next returns the next event without a trailing newline.
@@ -100,11 +102,11 @@ func (g *Generator) Next() ([]byte, error) {
 		format = formats[ordinal%uint64(len(formats))]
 	}
 
-	shape := g.shape(ordinal)
-	var (
-		line []byte
-		err  error
-	)
+	shape, err := g.shape(ordinal)
+	if err != nil {
+		return nil, err
+	}
+	var line []byte
 	switch format {
 	case FormatZapJSON:
 		line, err = json.Marshal(g.zapEvent(shape))
@@ -201,10 +203,11 @@ type eventShape struct {
 	dimensionID string
 }
 
-func (g *Generator) shape(ordinal uint64) eventShape {
+func (g *Generator) shape(ordinal uint64) (eventShape, error) {
 	paths := [...]string{"/api/v1/search/jobs/create", "/api/v1/search/jobs/get", "/api/v1/search/jobs/results", "/healthz", "/api/v1/indexes/list"}
 	methods := [...]string{"POST", "POST", "POST", "GET", "POST"}
-	pathIndex := mix(uint64(g.cfg.Seed), ordinal, 1) % uint64(len(paths))
+	seed := seedBits(g.cfg.Seed)
+	pathIndex := mix(seed, ordinal, 1) % uint64(len(paths))
 	status := 200
 	level := "INFO"
 	message := "request completed"
@@ -216,29 +219,33 @@ func (g *Generator) shape(ordinal uint64) eventShape {
 	case ordinal%5 == 0:
 		level = "DEBUG"
 	}
-	durationMicros := 100 + mix(uint64(g.cfg.Seed), ordinal, 2)%500_000
+	durationMicros := 100 + mix(seed, ordinal, 2)%500_000
 	if status >= 500 {
 		durationMicros += 500_000
 	}
 
+	timestampOffset, offsetOK := g.schedule.offset(ordinal)
+	if !offsetOK {
+		return eventShape{}, fmt.Errorf("event ordinal %d exceeds the timestamp range", ordinal)
+	}
 	return eventShape{
 		ordinal:     ordinal,
-		timestamp:   g.cfg.Start.Add(time.Duration(ordinal) * g.cfg.Interval),
+		timestamp:   g.cfg.Start.Add(timestampOffset),
 		level:       level,
 		message:     message,
 		method:      methods[pathIndex],
 		path:        paths[pathIndex],
 		status:      status,
 		duration:    time.Duration(durationMicros) * time.Microsecond,
-		bytes:       20 + mix(uint64(g.cfg.Seed), ordinal, 3)%32_768,
-		ip:          fmt.Sprintf("192.0.2.%d", 1+mix(uint64(g.cfg.Seed), ordinal, 4)%254),
+		bytes:       20 + mix(seed, ordinal, 3)%32_768,
+		ip:          fmt.Sprintf("192.0.2.%d", 1+mix(seed, ordinal, 4)%254),
 		traceID:     deterministicID(g.cfg.Seed, ordinal, 1, 16),
 		spanID:      deterministicID(g.cfg.Seed, ordinal, 2, 8),
 		requestID:   deterministicID(g.cfg.Seed, ordinal, 3, 16),
 		sessionID:   deterministicID(g.cfg.Seed, ordinal, 4, 16),
-		userID:      fmt.Sprintf("user-%d", mix(uint64(g.cfg.Seed), ordinal, 5)%g.cfg.Cardinality),
-		dimensionID: fmt.Sprintf("dimension-%016x", mix(uint64(g.cfg.Seed), ordinal, 6)),
-	}
+		userID:      fmt.Sprintf("user-%d", mix(seed, ordinal, 5)%g.cfg.Cardinality),
+		dimensionID: fmt.Sprintf("dimension-%016x", mix(seed, ordinal, 6)),
+	}, nil
 }
 
 type zapFixture struct {
@@ -408,11 +415,17 @@ func (g *Generator) rawEvent(shape eventShape) []byte {
 
 func deterministicID(seed int64, ordinal, stream uint64, size int) string {
 	var input [24]byte
-	binary.LittleEndian.PutUint64(input[0:8], uint64(seed))
+	binary.LittleEndian.PutUint64(input[0:8], seedBits(seed))
 	binary.LittleEndian.PutUint64(input[8:16], ordinal)
 	binary.LittleEndian.PutUint64(input[16:24], stream)
 	digest := sha256.Sum256(input[:])
 	return fmt.Sprintf("%x", digest[:size])
+}
+
+func seedBits(seed int64) uint64 {
+	// #nosec G115 -- deterministic generation intentionally preserves the
+	// signed seed's two's-complement bit pattern.
+	return uint64(seed)
 }
 
 func mix(seed, ordinal, stream uint64) uint64 {

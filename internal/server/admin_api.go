@@ -1303,6 +1303,7 @@ func (handler *apiHandler) adminPageResponse(endpoint, fingerprint, snapshot str
 		result.NextPageToken = stringPointer(token)
 	}
 	if includeTotal {
+		// #nosec G115 -- callers pass the length of an in-memory filtered slice.
 		value := uint64(total)
 		result.TotalSize = &value
 		result.TotalSizeExact = true

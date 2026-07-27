@@ -157,13 +157,17 @@ func (s *Service) processBatch(ctx context.Context, batch *opensplunkv1.EventBat
 			"durable_replay_too_large",
 		)), nil
 	}
+	originalEventCount, countOK := boundedBatchEventCount(batch)
+	if !countOK {
+		return nil, status.Error(codes.Internal, "validated batch event count is outside the durable range")
+	}
 
 	result, err := s.store.Store(ctx, StoreBatch{
 		TenantID:           state.authorization.TenantID,
 		CollectorID:        state.collectorID,
 		BatchID:            batch.GetBatchId(),
 		BatchSequence:      batch.GetBatchSequence(),
-		OriginalEventCount: uint32(len(batch.GetEvents())),
+		OriginalEventCount: originalEventCount,
 		SourceBatchSHA256:  identity.contentHash,
 		ReceivedAt:         receivedAt,
 		Events:             normalized,
@@ -208,17 +212,21 @@ func (s *Service) responseForStoredBatch(
 	result StoreResult,
 	fallbackRejections []*opensplunkv1.EventRejection,
 ) (*opensplunkv1.CollectResponse, error) {
+	batchEventCount, countOK := boundedBatchEventCount(batch)
+	if !countOK {
+		return nil, status.Error(codes.Internal, "event store returned an outcome for an oversized batch")
+	}
 	rejections := result.RejectedEvents
 	if rejections == nil {
 		rejections = fallbackRejections
 	}
 	originalEventCount := result.OriginalEventCount
 	if originalEventCount == 0 {
-		originalEventCount = uint32(len(batch.GetEvents()))
+		originalEventCount = batchEventCount
 	}
-	if originalEventCount != uint32(len(batch.GetEvents())) ||
+	if originalEventCount != batchEventCount ||
 		uint64(result.Accepted)+uint64(result.Duplicate)+uint64(len(rejections)) != uint64(originalEventCount) ||
-		!validStoredRejections(batch, rejections) {
+		!validStoredRejections(batch, batchEventCount, rejections) {
 		return nil, status.Error(codes.Internal, "event store returned an inconsistent durable batch outcome")
 	}
 	committedAt := result.CommittedAt
@@ -241,10 +249,14 @@ func (s *Service) responseForStoredBatch(
 	}}}, nil
 }
 
-func validStoredRejections(batch *opensplunkv1.EventBatch, rejections []*opensplunkv1.EventRejection) bool {
+func validStoredRejections(
+	batch *opensplunkv1.EventBatch,
+	eventCount uint32,
+	rejections []*opensplunkv1.EventRejection,
+) bool {
 	seen := make(map[uint32]struct{}, len(rejections))
 	for _, rejection := range rejections {
-		if rejection == nil || rejection.GetEventIndex() >= uint32(len(batch.GetEvents())) {
+		if rejection == nil || rejection.GetEventIndex() >= eventCount {
 			return false
 		}
 		if _, duplicate := seen[rejection.GetEventIndex()]; duplicate {
@@ -265,13 +277,17 @@ func durableOutboxFits(state *streamState, batch *opensplunkv1.EventBatch, event
 	// with clickhouse.encodeStoreOutbox.
 	total := uint64(5 + sha256.Size + 8*3 + 8 + sha256.Size + 8 + 4 + 4)
 	for _, value := range []string{state.authorization.TenantID, state.collectorID, batch.GetBatchId()} {
-		if !boundedSizeAdd(&total, uint64(len(value)), HardMaxDurableOutboxBytes) {
+		length, ok := nonNegativeIntUint64(len(value))
+		if !ok || !boundedSizeAdd(&total, length, HardMaxDurableOutboxBytes) {
 			return false
 		}
 	}
 	for _, stored := range events {
-		if stored == nil || stored.Event == nil ||
-			!boundedSizeAdd(&total, 8+uint64(proto.Size(stored.Event)), HardMaxDurableOutboxBytes) {
+		if stored == nil || stored.Event == nil {
+			return false
+		}
+		size, ok := protobufSizeUint64(stored.Event)
+		if !ok || !boundedSizeAdd(&total, 8+size, HardMaxDurableOutboxBytes) {
 			return false
 		}
 	}
@@ -290,13 +306,17 @@ func durableOutcomeFits(events []*StoredEvent, rejections []*opensplunkv1.EventR
 		indexes[stored.Event.GetIndexName()] = struct{}{}
 	}
 	for index := range indexes {
-		if !boundedSizeAdd(&total, 8+uint64(len(index))+8, HardMaxDurableMetadataBytes) {
+		length, ok := nonNegativeIntUint64(len(index))
+		if !ok || !boundedSizeAdd(&total, 8+length+8, HardMaxDurableMetadataBytes) {
 			return false
 		}
 	}
 	for _, rejection := range rejections {
-		if rejection == nil ||
-			!boundedSizeAdd(&total, 8+uint64(proto.Size(rejection)), HardMaxDurableMetadataBytes) {
+		if rejection == nil {
+			return false
+		}
+		size, ok := protobufSizeUint64(rejection)
+		if !ok || !boundedSizeAdd(&total, 8+size, HardMaxDurableMetadataBytes) {
 			return false
 		}
 	}
@@ -350,7 +370,8 @@ func responseWithBatchReject(rejection *opensplunkv1.BatchReject) *opensplunkv1.
 	response := &opensplunkv1.CollectResponse{
 		Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: boundedRejection},
 	}
-	if uint64(proto.Size(response)) <= batchRejectResponseBudget {
+	responseSize, sizeOK := protobufSizeUint64(response)
+	if sizeOK && responseSize <= batchRejectResponseBudget {
 		return response
 	}
 
@@ -381,14 +402,16 @@ func responseWithBatchReject(rejection *opensplunkv1.BatchReject) *opensplunkv1.
 	low, high := 0, len(boundedRejection.GetViolations())
 	for low < high {
 		middle := low + (high-low+1)/2
-		if uint64(proto.Size(build(middle))) <= batchRejectResponseBudget {
+		candidateSize, candidateOK := protobufSizeUint64(build(middle))
+		if candidateOK && candidateSize <= batchRejectResponseBudget {
 			low = middle
 		} else {
 			high = middle - 1
 		}
 	}
 	result := build(low)
-	if uint64(proto.Size(result)) <= batchRejectResponseBudget {
+	resultSize, resultOK := protobufSizeUint64(result)
+	if resultOK && resultSize <= batchRejectResponseBudget {
 		return result
 	}
 	// All fields above are bounded, so this is defensive against future proto
@@ -450,11 +473,12 @@ func (s *Service) validateBatchHardEnvelope(batch *opensplunkv1.EventBatch, stat
 	if len(batch.GetEvents()) == 0 {
 		return batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS, "batch must contain at least one event", "events", "required")
 	}
-	if uint64(len(batch.GetEvents())) > uint64(HardMaxBatchEvents) {
+	if _, ok := boundedBatchEventCount(batch); !ok {
 		return batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS, "batch contains too many events", "events", "too_many_events")
 	}
 	for eventIndex, event := range batch.GetEvents() {
-		if uint64(proto.Size(event)) > HardMaxEventBytes {
+		size, ok := protobufSizeUint64(event)
+		if !ok || size > HardMaxEventBytes {
 			return batchRejection(
 				batch,
 				opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
@@ -472,6 +496,18 @@ func (s *Service) validateBatchHardEnvelope(batch *opensplunkv1.EventBatch, stat
 		return batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_EVENT_ID_DIGEST_MISMATCH, "event ID digest does not match the ordered events", "event_ids_sha256", "digest_mismatch")
 	}
 	return nil
+}
+
+func boundedBatchEventCount(batch *opensplunkv1.EventBatch) (uint32, bool) {
+	if batch == nil {
+		return 0, false
+	}
+	length, ok := nonNegativeIntUint64(len(batch.GetEvents()))
+	if !ok || length > uint64(HardMaxBatchEvents) {
+		return 0, false
+	}
+	// #nosec G115 -- HardMaxBatchEvents is a uint32 ceiling.
+	return uint32(len(batch.GetEvents())), true
 }
 
 // validateBatchPolicy enforces deployment-configurable limits only after an

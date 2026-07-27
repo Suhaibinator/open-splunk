@@ -997,7 +997,9 @@ func (service *FieldService) buildFieldPage(
 	}
 
 	if cursor == nil {
-		page := make([]FieldProfile, 0, min(int(request.pageSize), len(entry.profiles)))
+		// #nosec G115 -- normalized page sizes cannot exceed the 10,000-field service ceiling.
+		pageLimit := int(request.pageSize)
+		page := make([]FieldProfile, 0, min(pageLimit, len(entry.profiles)))
 		totalFields := uint64(0)
 		nextScanIndex := uint64(0)
 		for index := range entry.profiles {
@@ -1011,9 +1013,9 @@ func (service *FieldService) buildFieldPage(
 				continue
 			}
 			totalFields++
-			if uint32(len(page)) < request.pageSize {
+			if len(page) < pageLimit {
 				page = append(page, cloneFieldProfile(profile))
-				if uint32(len(page)) == request.pageSize {
+				if len(page) == pageLimit {
 					nextScanIndex = uint64(index + 1)
 				}
 			}
@@ -1021,11 +1023,15 @@ func (service *FieldService) buildFieldPage(
 		if err := ctx.Err(); err != nil {
 			return FieldPage{}, err
 		}
-		return service.finishFieldPage(key, request, entry, page, uint64(len(page)), nextScanIndex, totalFields)
+		// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
+		pageLength := uint64(len(page))
+		return service.finishFieldPage(key, request, entry, page, pageLength, nextScanIndex, totalFields)
 	}
 
-	if cursor.TotalFields > uint64(len(entry.profiles)) || cursor.Offset >= cursor.TotalFields ||
-		cursor.ScanIndex < cursor.Offset || cursor.ScanIndex >= uint64(len(entry.profiles)) {
+	// #nosec G115 -- the catalog is capped at 10,000 profiles during normalization.
+	profileCount := uint64(len(entry.profiles))
+	if cursor.TotalFields > profileCount || cursor.Offset >= cursor.TotalFields ||
+		cursor.ScanIndex < cursor.Offset || cursor.ScanIndex >= profileCount {
 		return FieldPage{}, ErrInvalidFieldCursor
 	}
 	// Offset, ScanIndex, and TotalFields are authenticated service output over
@@ -1033,14 +1039,19 @@ func (service *FieldService) buildFieldPage(
 	// continuation pages together O(catalog size), rather than rescanning each
 	// filtered prefix on every request.
 	want := min(uint64(request.pageSize), cursor.TotalFields-cursor.Offset)
-	page := make([]FieldProfile, 0, int(want))
+	// #nosec G115 -- want cannot exceed the normalized 10,000-row page-size ceiling.
+	pageCapacity := int(want)
+	page := make([]FieldProfile, 0, pageCapacity)
 	nextScanIndex := cursor.ScanIndex
-	for index := int(cursor.ScanIndex); index < len(entry.profiles) && uint64(len(page)) < want; index++ {
+	// #nosec G115 -- ScanIndex was just proven smaller than the bounded catalog length.
+	scanIndex := int(cursor.ScanIndex)
+	for index := scanIndex; index < len(entry.profiles) && len(page) < pageCapacity; index++ {
 		if index&255 == 0 {
 			if err := ctx.Err(); err != nil {
 				return FieldPage{}, err
 			}
 		}
+		// #nosec G115 -- index is a non-negative position within the bounded catalog.
 		nextScanIndex = uint64(index + 1)
 		profile := entry.profiles[index]
 		if fieldProfileMatches(profile, request) {
@@ -1050,11 +1061,11 @@ func (service *FieldService) buildFieldPage(
 	if err := ctx.Err(); err != nil {
 		return FieldPage{}, err
 	}
-	if uint64(len(page)) != want {
+	if len(page) != pageCapacity {
 		return FieldPage{}, ErrInvalidFieldCursor
 	}
 	return service.finishFieldPage(
-		key, request, entry, page, cursor.Offset+uint64(len(page)), nextScanIndex, cursor.TotalFields,
+		key, request, entry, page, cursor.Offset+want, nextScanIndex, cursor.TotalFields,
 	)
 }
 
@@ -1065,6 +1076,7 @@ func (service *FieldService) buildUnfilteredFieldPage(
 	entry *fieldCacheEntry,
 	cursor *fieldCursorPayload,
 ) (FieldPage, error) {
+	// #nosec G115 -- the catalog is capped at 10,000 profiles during normalization.
 	totalFields := uint64(len(entry.profiles))
 	offset := uint64(0)
 	if cursor != nil {
@@ -1074,7 +1086,9 @@ func (service *FieldService) buildUnfilteredFieldPage(
 		offset = cursor.Offset
 	}
 	end := min(totalFields, offset+uint64(request.pageSize))
-	page := make([]FieldProfile, 0, int(end-offset))
+	// #nosec G115 -- end and offset are positions within the bounded catalog.
+	pageCapacity := int(end - offset)
+	page := make([]FieldProfile, 0, pageCapacity)
 	for index := offset; index < end; index++ {
 		if index&255 == 0 {
 			if err := ctx.Err(); err != nil {

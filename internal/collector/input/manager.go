@@ -124,11 +124,12 @@ func (m *manager) Health() Health {
 		State:             state,
 		StatusMessage:     status,
 		DiscoveredSources: m.discovered.Load(),
-		ActiveSources:     uint64(max64(m.active.Load(), 0)),
-		EventsReadTotal:   m.eventsRead.Load(),
-		BytesReadTotal:    m.bytesRead.Load(),
-		LastEventAt:       timeFromNanos(m.lastEventNs.Load()),
-		LastErrorAt:       timeFromNanos(m.lastErrorNs.Load()),
+		// #nosec G115 -- max64 clamps the atomic counter to a non-negative int64.
+		ActiveSources:   uint64(max64(m.active.Load(), 0)),
+		EventsReadTotal: m.eventsRead.Load(),
+		BytesReadTotal:  m.bytesRead.Load(),
+		LastEventAt:     timeFromNanos(m.lastEventNs.Load()),
+		LastErrorAt:     timeFromNanos(m.lastErrorNs.Load()),
 	}
 }
 
@@ -180,6 +181,12 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 			m.lastErrorNs.Store(time.Now().UnixNano())
 			continue
 		}
+		if fi2.Size() < 0 {
+			_ = f.Close()
+			openErr = fmt.Sprintf("stat %s: negative size", p)
+			m.lastErrorNs.Store(time.Now().UnixNano())
+			continue
+		}
 		id, err := identityFor(f, fi2, m.fpBytes)
 		if err != nil {
 			_ = f.Close()
@@ -199,6 +206,7 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 			continue
 		}
 
+		// #nosec G115 -- the negative-size case is rejected above.
 		start, err := m.resolveStart(
 			id, p, uint64(fi2.Size()), initial, f,
 		)
@@ -690,6 +698,11 @@ func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 		t.m.setReadError(t.pathStr(), err)
 		return 0, false
 	}
+	if fi.Size() < 0 {
+		t.m.setReadError(t.pathStr(), errors.New("file has a negative size"))
+		return 0, false
+	}
+	// #nosec G115 -- the negative-size case is rejected above.
 	size = uint64(fi.Size())
 	changed := size < t.offset
 	if !changed && t.guardLength > 0 {
@@ -771,9 +784,13 @@ func (t *tailer) refreshGuard() error {
 func (t *tailer) readGuardFingerprint() (fingerprintDigest, error) {
 	length := int(t.guardLength)
 	t.guardScratch = slices.Grow(t.guardScratch[:0], length)[:length]
+	guardOffset, err := checkedFileOffset(t.guardOffset)
+	if err != nil {
+		return fingerprintDigest{}, err
+	}
 	return computeFingerprintRangeDigest(
 		t.f,
-		int64(t.guardOffset),
+		guardOffset,
 		t.guardLength,
 		t.guardScratch,
 	)
@@ -782,7 +799,11 @@ func (t *tailer) readGuardFingerprint() (fingerprintDigest, error) {
 // reframe seeks the file to the current offset and returns a fresh framer whose
 // offsets are seeded there.
 func (t *tailer) reframe() (framing.Framer, error) {
-	if _, err := t.f.Seek(int64(t.offset), io.SeekStart); err != nil {
+	offset, err := checkedFileOffset(t.offset)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := t.f.Seek(offset, io.SeekStart); err != nil {
 		return nil, err
 	}
 	return t.m.newFramer(t.f, t.offset, t.nextLineNumber)
@@ -794,7 +815,11 @@ func (t *tailer) reframe() (framing.Framer, error) {
 // is in-memory only: after a crash the older durable checkpoint replays from a
 // true event boundary and reconstructs the same skip.
 func (t *tailer) discardOversizedRemainder(ctx context.Context) (bool, error) {
-	if _, err := t.f.Seek(int64(t.offset), io.SeekStart); err != nil {
+	offset, err := checkedFileOffset(t.offset)
+	if err != nil {
+		return false, err
+	}
+	if _, err := t.f.Seek(offset, io.SeekStart); err != nil {
 		return false, err
 	}
 	var buffer [32 << 10]byte
@@ -825,6 +850,14 @@ func (t *tailer) discardOversizedRemainder(ctx context.Context) (bool, error) {
 			return false, io.ErrNoProgress
 		}
 	}
+}
+
+func checkedFileOffset(offset uint64) (int64, error) {
+	if offset > math.MaxInt64 {
+		return 0, fmt.Errorf("file offset %d exceeds int64", offset)
+	}
+	// #nosec G115 -- offset is explicitly bounded by math.MaxInt64 above.
+	return int64(offset), nil
 }
 
 // drain reads every complete frame currently available from fr and emits each.

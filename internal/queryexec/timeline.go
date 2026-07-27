@@ -97,7 +97,9 @@ func (executor *Executor) ExecuteTimeline(ctx context.Context, query clickhouse.
 		return nil, err
 	}
 
-	buckets = make([]TimelineBucket, 0, int(query.Spec.BucketCount))
+	// #nosec G115 -- validateTimelineQuery caps BucketCount at maximumTimelineResultBuckets.
+	bucketCapacity := int(query.Spec.BucketCount)
+	buckets = make([]TimelineBucket, 0, bucketCapacity)
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -188,6 +190,7 @@ func checkedBucketBoundary(first, span int64, multiplier uint64) (int64, bool) {
 	if span <= 0 || multiplier > (^uint64(0)>>1)/uint64(span) {
 		return 0, false
 	}
+	// #nosec G115 -- the guard above proves the product does not exceed MaxInt64.
 	offset := int64(multiplier * uint64(span))
 	if offset > 0 && first > int64(^uint64(0)>>1)-offset {
 		return 0, false

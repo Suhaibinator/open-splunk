@@ -106,18 +106,21 @@ func (handler *apiHandler) downloadExport(response http.ResponseWriter, request 
 		if err := request.Context().Err(); err != nil {
 			return
 		}
-		readBytes := uint64(len(buffer))
-		if remaining < readBytes {
-			readBytes = remaining
+		readBytes := len(buffer)
+		// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
+		if remaining < uint64(readBytes) {
+			// #nosec G115 -- this branch proves remaining is smaller than the 32 KiB buffer length.
+			readBytes = int(remaining)
 		}
-		read, readErr := download.Read(buffer[:int(readBytes)])
-		if read < 0 || read > int(readBytes) {
+		read, readErr := download.Read(buffer[:readBytes])
+		if read < 0 || read > readBytes {
 			return
 		}
 		if read > 0 {
 			if writeErr := writeDownloadBytes(request.Context(), response, buffer[:read]); writeErr != nil {
 				return
 			}
+			// #nosec G115 -- io.Reader returned a non-negative count no larger than readBytes.
 			remaining -= uint64(read)
 		}
 		if remaining == 0 {

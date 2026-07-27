@@ -90,6 +90,7 @@ func geometryForSpan(earliest, latest time.Time, spanSeconds int64) (timelineGeo
 	if deltaSeconds < 0 {
 		return timelineGeometry{}, ErrInvalidTimelineRequest
 	}
+	// #nosec G115 -- deltaSeconds is non-negative and spanSeconds is positive.
 	bucketCount := uint64(deltaSeconds / spanSeconds)
 	if deltaSeconds%spanSeconds != 0 || latest.Nanosecond() != 0 {
 		bucketCount++

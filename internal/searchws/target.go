@@ -244,6 +244,7 @@ func (service *Service) performTargetLoad(key targetKey, load *targetLoad) {
 	}
 	if err == nil {
 		service.targets[key] = target
+		// #nosec G115 -- one waiter consumes a bounded connection slot (hard ceiling 4,096).
 		target.resolverCount.Add(int32(load.waiters))
 		service.touchTargetLocked(target)
 	}
@@ -687,6 +688,7 @@ func (target *targetState) currentEventsContinuousLocked() bool {
 			maximum = event.sequence
 		}
 	}
+	// #nosec G115 -- len(target.current) is positive because the empty map returned above.
 	return maximum == target.latest && maximum-minimum == uint64(len(target.current)-1)
 }
 
@@ -1063,7 +1065,12 @@ func (target *targetState) previewEventByteLimit(
 		if warning := cloned.GetWarning(); warning != nil {
 			warning.Target = proto.Clone(target.target).(*opensplunkv1.JobTarget)
 		}
-		size := uint64(proto.Size(cloned))
+		sizeInt := proto.Size(cloned)
+		if sizeInt < 0 {
+			return 0, errors.New("search websocket current projection size is invalid")
+		}
+		// #nosec G115 -- protobuf sizes are non-negative.
+		size := uint64(sizeInt)
 		if size > ^uint64(0)-nonPreviewBytes {
 			return 0, errors.New("search websocket current projection size overflow")
 		}
@@ -1450,7 +1457,7 @@ func stampCanonicalSubscriptionID(data []byte, subscriptionID string, maximumFra
 	if err != nil || frameBytes > maximumFrameBytes {
 		return nil, errors.New("search websocket event exceeds frame limit after subscription stamping")
 	}
-	fieldBytes := int(frameBytes) - len(data)
+	fieldBytes := protowire.SizeTag(3) + protowire.SizeBytes(len(subscriptionID))
 	stamped := make([]byte, len(data), len(data)+fieldBytes)
 	copy(stamped, data)
 	stamped = protowire.AppendTag(stamped, 3, protowire.BytesType)
@@ -1467,10 +1474,14 @@ func stampedFrameSizeForIDBytes(dataBytes, subscriptionIDBytes int) (uint64, err
 		return 0, errors.New("search websocket event size is invalid")
 	}
 	fieldBytes := protowire.SizeTag(3) + protowire.SizeBytes(subscriptionIDBytes)
-	if uint64(dataBytes) > ^uint64(0)-uint64(fieldBytes) {
+	// #nosec G115 -- both byte counts were proven non-negative above.
+	dataBytes64 := uint64(dataBytes)
+	// #nosec G115 -- protowire size helpers return non-negative lengths.
+	fieldBytes64 := uint64(fieldBytes)
+	if dataBytes64 > ^uint64(0)-fieldBytes64 {
 		return 0, errors.New("search websocket event size overflow")
 	}
-	return uint64(dataBytes) + uint64(fieldBytes), nil
+	return dataBytes64 + fieldBytes64, nil
 }
 
 func canonicalEventSequence(data []byte) (uint64, error) {

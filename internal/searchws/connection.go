@@ -192,6 +192,7 @@ func newConnection(service *Service, socket *websocket.Conn) *connection {
 }
 
 func (connection *connection) run() {
+	// #nosec G115 -- normalized frame bytes cannot exceed the 1 MiB hard ceiling.
 	connection.socket.SetReadLimit(int64(connection.service.config.maximumFrameBytes) + 1)
 	_ = connection.socket.SetReadDeadline(time.Now().Add(connection.service.config.pongTimeout))
 	connection.socket.SetPongHandler(func(string) error {

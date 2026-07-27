@@ -293,6 +293,12 @@ func (s *Store) store(ctx context.Context, batch ingest.StoreBatch, resumeOnly b
 	indexTime := prior.IndexTime
 	if !found {
 		if batch.OriginalEventCount == 0 && len(batch.RejectedEvents) == 0 && len(batch.Events) > 0 {
+			// #nosec G115 -- len is non-negative and every supported Go int
+			// value is exactly representable as uint64.
+			if uint64(len(batch.Events)) > math.MaxUint32 {
+				return ingest.StoreResult{}, errors.New("store ClickHouse batch: source event count exceeds uint32")
+			}
+			// #nosec G115 -- the explicit math.MaxUint32 check above proves the conversion safe.
 			batch.OriginalEventCount = uint32(len(batch.Events))
 		}
 		rows, rowsErr := s.rowsForBatch(ctx, batch, nil)
@@ -549,6 +555,8 @@ func resultForReservation(reservation visibility.Reservation, duplicate bool) (i
 	if err != nil {
 		return ingest.StoreResult{}, fmt.Errorf("decode durable ClickHouse batch outcome: %w", err)
 	}
+	// #nosec G115 -- decodeReservationMetadata bounds rejection count by the
+	// uint32 source-event count before constructing metadata.
 	storedCount := metadata.OriginalEventCount - uint32(len(metadata.RejectedEvents))
 	result := ingest.StoreResult{
 		CommittedAt:        reservation.CommittedAt,
@@ -809,15 +817,21 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 			event.GetEventTime().AsTime().UTC(),
 			indexTime,
 			collectedAt,
+			// #nosec G115 -- event_time_source is range-checked above against
+			// the generated enum values, all of which fit in uint8.
 			uint8(event.GetEventTimeSource()),
 			event.GetHost(),
 			event.GetSource(),
 			event.GetSourcetype(),
 			cloneOptionalString(event.Service),
+			// #nosec G115 -- severity is range-checked above against the
+			// generated enum values, all of which fit in uint8.
 			uint8(event.GetSeverity()),
 			cloneOptionalString(event.Level),
 			cloneOptionalString(event.Message),
 			slices.Clone(event.GetRaw()),
+			// #nosec G115 -- raw_encoding is checked above against its two
+			// generated enum values, both of which fit in uint8.
 			uint8(event.GetRawEncoding()),
 			cloneOptionalString(event.TraceId),
 			cloneOptionalString(event.SpanId),
@@ -1319,6 +1333,8 @@ func encodeReservationMetadata(rows [][]any, batch ingest.StoreBatch) ([]byte, e
 		binary.BigEndian.PutUint64(number[:], uint64(len(index)))
 		_, _ = metadata.Write(number[:])
 		_, _ = metadata.WriteString(index)
+		// #nosec G115 -- eventExpiration canonicalizes and rejects non-positive
+		// or unrepresentable retention durations before they enter this map.
 		binary.BigEndian.PutUint64(number[:], uint64(retentionByIndex[index]))
 		_, _ = metadata.Write(number[:])
 	}
@@ -1327,6 +1343,8 @@ func encodeReservationMetadata(rows [][]any, batch ingest.StoreBatch) ([]byte, e
 	var short [4]byte
 	binary.BigEndian.PutUint32(short[:], batch.OriginalEventCount)
 	_, _ = metadata.Write(short[:])
+	// #nosec G115 -- disposition validation above proves rejection count is no
+	// larger than the uint32 source-event count.
 	binary.BigEndian.PutUint32(short[:], uint32(len(batch.RejectedEvents)))
 	_, _ = metadata.Write(short[:])
 	marshal := proto.MarshalOptions{Deterministic: true}
@@ -1382,6 +1400,7 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 	retentionByIndex := make(map[string]time.Duration, count)
 	for range count {
 		length, err := readUint64()
+		// #nosec G115 -- bytes.Reader.Len is always non-negative.
 		if err != nil || length == 0 || length > 255 || length > uint64(reader.Len()) {
 			return reservationMetadata{}, errors.New("visibility reservation metadata has an invalid index name")
 		}
@@ -1419,6 +1438,7 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 		return reservationMetadata{}, errors.New("visibility reservation metadata has no rejection count")
 	}
 	rejectionCount := binary.BigEndian.Uint32(short[:])
+	// #nosec G115 -- bytes.Reader.Len is always non-negative.
 	if rejectionCount > originalEventCount || uint64(rejectionCount) > uint64(reader.Len())/9 {
 		return reservationMetadata{}, errors.New("visibility reservation metadata has an invalid rejection count")
 	}
@@ -1426,6 +1446,7 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 	seenRejections := make(map[uint32]struct{}, rejectionCount)
 	for index := uint32(0); index < rejectionCount; index++ {
 		length, err := readUint64()
+		// #nosec G115 -- bytes.Reader.Len is always non-negative.
 		if err != nil || length == 0 || length > uint64(reader.Len()) || length > uint64(math.MaxInt) {
 			return reservationMetadata{}, errors.New("visibility reservation metadata has an invalid rejection payload")
 		}

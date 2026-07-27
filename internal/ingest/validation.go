@@ -372,7 +372,8 @@ func (v *Validator) ValidateAndNormalizeEvent(event *opensplunkv1.LogEvent, ctx 
 			"event is required", "event", "required",
 		)
 	}
-	if uint64(proto.Size(event)) > v.limits.MaxEventBytes {
+	size, sizeOK := protobufSizeUint64(event)
+	if !sizeOK || size > v.limits.MaxEventBytes {
 		return nil, eventFailure(
 			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
 			"event exceeds the maximum encoded size", "event", "event_too_large",
@@ -448,7 +449,8 @@ func (v *Validator) ValidateAndNormalizeEvent(event *opensplunkv1.LogEvent, ctx 
 			"field_metadata_too_large",
 		)
 	}
-	if uint64(proto.Size(cloned)) > v.limits.MaxEventBytes {
+	size, sizeOK = protobufSizeUint64(cloned)
+	if !sizeOK || size > v.limits.MaxEventBytes {
 		return nil, eventFailure(
 			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
 			"event exceeds the maximum encoded size after mandatory redaction", "event", "event_too_large_after_redaction",
@@ -683,7 +685,8 @@ func validateFieldName(name string, maxBytes uint32) string {
 	if !utf8.ValidString(name) {
 		return "invalid_utf8"
 	}
-	if uint32(len(name)) > maxBytes {
+	length, ok := nonNegativeIntUint64(len(name))
+	if !ok || length > uint64(maxBytes) {
 		return "field_name_too_long"
 	}
 	for _, r := range name {
@@ -695,7 +698,8 @@ func validateFieldName(name string, maxBytes uint32) string {
 }
 
 func validIdentifier(value string, maxBytes uint32) bool {
-	if value == "" || uint32(len(value)) > maxBytes || !utf8.ValidString(value) {
+	length, ok := nonNegativeIntUint64(len(value))
+	if value == "" || !ok || length > uint64(maxBytes) || !utf8.ValidString(value) {
 		return false
 	}
 	for i, r := range value {
@@ -743,6 +747,11 @@ func EventIDDigest(events []*opensplunkv1.LogEvent) []byte {
 		if event != nil {
 			id = event.GetEventId()
 		}
+		length64, ok := nonNegativeIntUint64(len(id))
+		if !ok || length64 > math.MaxUint32 {
+			return nil
+		}
+		// #nosec G115 -- the explicit math.MaxUint32 check above proves this safe.
 		binary.BigEndian.PutUint32(length[:], uint32(len(id)))
 		_, _ = h.Write(length[:])
 		_, _ = h.Write([]byte(id))
@@ -755,11 +764,27 @@ func EventIDDigest(events []*opensplunkv1.LogEvent) []byte {
 func UncompressedEventBytes(events []*opensplunkv1.LogEvent) uint64 {
 	var total uint64
 	for _, event := range events {
-		size := uint64(proto.Size(event))
+		size, ok := protobufSizeUint64(event)
+		if !ok {
+			return math.MaxUint64
+		}
 		if math.MaxUint64-total < size {
 			return math.MaxUint64
 		}
 		total += size
 	}
 	return total
+}
+
+func protobufSizeUint64(message proto.Message) (uint64, bool) {
+	size := proto.Size(message)
+	return nonNegativeIntUint64(size)
+}
+
+func nonNegativeIntUint64(value int) (uint64, bool) {
+	if value < 0 {
+		return 0, false
+	}
+	// #nosec G115 -- a non-negative Go int is exactly representable as uint64.
+	return uint64(value), true
 }

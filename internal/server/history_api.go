@@ -132,7 +132,8 @@ func (handler *apiHandler) listSearchHistory(request *http.Request, input *opens
 	if err := mapSearchHistoryCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
-	if uint32(len(result.Entries)) > effectiveHistoryPageSize(pageSize, handler.maximumPageSize) {
+	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
+	if uint64(len(result.Entries)) > uint64(effectiveHistoryPageSize(pageSize, handler.maximumPageSize)) {
 		return nil, internalError()
 	}
 
@@ -210,6 +211,7 @@ func (handler *apiHandler) historyPageRequest(page *opensplunkv1.PageRequest) (u
 		pageSize = int(min(maximumHistoryRowsPerResponse, handler.maximumPageSize))
 	}
 	pageSize = min(pageSize, int(maximumHistoryRowsPerResponse))
+	// #nosec G115 -- pageSize is non-negative and capped at 15 immediately above.
 	return uint32(pageSize), pageToken, includeTotal, nil
 }
 
@@ -438,6 +440,7 @@ func historyEntrySortKey(entry *opensplunkv1.SearchHistoryEntry, sortBy opensplu
 	case opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_DURATION:
 		return int64(entry.GetDuration().AsDuration())
 	case opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS:
+		// #nosec G115 -- cloneSearchHistoryEntry rejects matched-event counts above MaxInt64.
 		return int64(entry.GetMatchedEvents())
 	default:
 		return entry.GetCreatedAt().AsTime().UnixMicro()

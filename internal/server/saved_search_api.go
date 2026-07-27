@@ -136,7 +136,8 @@ func (handler *apiHandler) listSavedSearches(request *http.Request, input *opens
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
-	if uint32(len(result.SavedSearches)) > effectiveSavedSearchPageSize(pageSize, handler.maximumPageSize) {
+	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
+	if uint64(len(result.SavedSearches)) > uint64(effectiveSavedSearchPageSize(pageSize, handler.maximumPageSize)) {
 		return nil, internalError()
 	}
 	converted := make([]*opensplunkv1.SavedSearch, len(result.SavedSearches))
@@ -340,6 +341,7 @@ func (handler *apiHandler) savedSearchPageRequest(page *opensplunkv1.PageRequest
 		pageSize = int(min(defaultSavedSearchPageSize, handler.maximumPageSize))
 	}
 	pageSize = min(pageSize, maximumSavedSearchRowsPerResponse)
+	// #nosec G115 -- pageSize is non-negative and capped at 24 immediately above.
 	return uint32(pageSize), pageToken, includeTotal, nil
 }
 

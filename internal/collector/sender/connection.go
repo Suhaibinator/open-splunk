@@ -427,7 +427,9 @@ func (c *conn) batchExceedsReadyLimits(batch *opensplunkv1.EventBatch) (string, 
 	maxBytes := c.maxBatchBytes
 	c.mu.Unlock()
 
-	if maxEvents > 0 && uint32(len(batch.GetEvents())) > maxEvents {
+	// #nosec G115 -- len is non-negative and every supported Go int value is
+	// exactly representable as uint64.
+	if maxEvents > 0 && uint64(len(batch.GetEvents())) > uint64(maxEvents) {
 		return opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS.String(), true
 	}
 	if maxBytes > 0 && batch.GetUncompressedSizeBytes() > maxBytes {
@@ -445,7 +447,9 @@ func (c *conn) batchExceedsThrottleLimits(batch *opensplunkv1.EventBatch) bool {
 	if !c.throttleActiveLocked() {
 		return false
 	}
-	if c.throttleMaxEvents > 0 && uint32(len(batch.GetEvents())) > c.throttleMaxEvents {
+	// #nosec G115 -- len is non-negative and every supported Go int value is
+	// exactly representable as uint64.
+	if c.throttleMaxEvents > 0 && uint64(len(batch.GetEvents())) > uint64(c.throttleMaxEvents) {
 		return true
 	}
 	if c.throttleMaxBytes > 0 && batch.GetUncompressedSizeBytes() > c.throttleMaxBytes {

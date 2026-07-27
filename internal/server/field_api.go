@@ -118,29 +118,31 @@ func searchFieldPageToProto(
 	if ctx == nil {
 		return nil, errors.New("search field conversion context is required")
 	}
+	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
+	fieldCount := uint64(len(result.Fields))
 	if maximumPageSize == 0 || maximumCatalogFields == 0 ||
-		uint64(len(result.Fields)) > uint64(maximumPageSize) ||
+		fieldCount > uint64(maximumPageSize) ||
 		result.TotalFields > uint64(maximumCatalogFields) ||
-		result.TotalFields < uint64(len(result.Fields)) {
+		result.TotalFields < fieldCount {
 		return nil, errors.New("invalid search field page")
 	}
 	if request.PageSize != nil {
-		if *request.PageSize == 0 || *request.PageSize > maximumPageSize || uint32(len(result.Fields)) > *request.PageSize {
+		if *request.PageSize == 0 || *request.PageSize > maximumPageSize || fieldCount > uint64(*request.PageSize) {
 			return nil, errors.New("search field page exceeds requested size")
 		}
 	}
 	emptyPageCannotProgress := len(result.Fields) == 0 && (result.TotalFields != 0 || request.PageToken != "")
-	truncatedFirstPage := request.PageToken == "" && result.TotalFields > uint64(len(result.Fields)) && result.NextPageToken == ""
-	contradictoryContinuation := request.PageToken != "" && result.TotalFields <= uint64(len(result.Fields))
+	truncatedFirstPage := request.PageToken == "" && result.TotalFields > fieldCount && result.NextPageToken == ""
+	contradictoryContinuation := request.PageToken != "" && result.TotalFields <= fieldCount
 	if emptyPageCannotProgress || truncatedFirstPage || contradictoryContinuation {
 		return nil, errors.New("search field page does not make progress")
 	}
 	invalidContinuation := result.NextPageToken != "" &&
-		(len(result.Fields) == 0 || result.TotalFields <= uint64(len(result.Fields)) || result.NextPageToken == request.PageToken)
+		(len(result.Fields) == 0 || result.TotalFields <= fieldCount || result.NextPageToken == request.PageToken)
 	if len(result.NextPageToken) > maximumPageTokenBytes || !utf8.ValidString(result.NextPageToken) || invalidContinuation {
 		return nil, errors.New("invalid search field page token")
 	}
-	if request.PageSize != nil && result.NextPageToken != "" && uint32(len(result.Fields)) != *request.PageSize {
+	if request.PageSize != nil && result.NextPageToken != "" && fieldCount != uint64(*request.PageSize) {
 		return nil, errors.New("short search field page has a continuation")
 	}
 

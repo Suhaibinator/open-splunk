@@ -306,6 +306,7 @@ func parseRelativeOffset(expression string) (relativeOffset, bool, error) {
 	if amount > uint64(math.MaxInt64)/unitSeconds {
 		return relativeOffset{}, true, errors.New("relative offset is outside the supported range")
 	}
+	// #nosec G115 -- the guard above proves the product does not exceed MaxInt64.
 	return relativeOffset{elapsedSeconds: int64(amount * unitSeconds)}, true, nil
 }
 

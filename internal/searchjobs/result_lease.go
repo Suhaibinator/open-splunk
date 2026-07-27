@@ -3,6 +3,7 @@ package searchjobs
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"sync"
 	"time"
@@ -197,11 +198,17 @@ func (lease *resultLease) Next(ctx context.Context) (row ResultRow, ok bool, err
 	// The entry lock makes the storage lifetime relationship explicit. A pin
 	// prevents reclamation, and completed result rows never mutate.
 	lease.entry.mu.RLock()
-	if lease.next >= uint64(len(lease.entry.rows)) {
+	if lease.next > uint64(math.MaxInt) {
 		lease.entry.mu.RUnlock()
 		return ResultRow{}, false, ErrResultsUnavailable
 	}
-	source := lease.entry.rows[int(lease.next)]
+	// #nosec G115 -- lease.next was just proven representable as int.
+	rowIndex := int(lease.next)
+	if rowIndex >= len(lease.entry.rows) {
+		lease.entry.mu.RUnlock()
+		return ResultRow{}, false, ErrResultsUnavailable
+	}
+	source := lease.entry.rows[rowIndex]
 	row = ResultRow{Ordinal: source.Ordinal, Values: slices.Clone(source.Values)}
 	lease.entry.mu.RUnlock()
 	if err := ctx.Err(); err != nil {

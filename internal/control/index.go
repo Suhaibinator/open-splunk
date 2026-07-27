@@ -106,6 +106,7 @@ func (db *DB) CreateIndex(ctx context.Context, definition IndexDefinition) (Inde
 			boolInteger(definition.IngestionEnabled),
 			boolInteger(definition.SearchEnabled),
 			definition.DefaultSourcetype,
+			// #nosec G115 -- validateIndexDefinition bounds MaxEventBytes by math.MaxInt64.
 			int64(definition.Limits.MaxEventBytes),
 			int64(definition.Limits.MaxFieldCount),
 			int64(definition.Limits.MaxNestingDepth),
@@ -230,11 +231,13 @@ func (db *DB) UpdateIndex(ctx context.Context, id string, expectedVersion uint64
 		boolInteger(definition.IngestionEnabled),
 		boolInteger(definition.SearchEnabled),
 		definition.DefaultSourcetype,
+		// #nosec G115 -- validateIndexDefinition bounds MaxEventBytes by math.MaxInt64.
 		int64(definition.Limits.MaxEventBytes),
 		int64(definition.Limits.MaxFieldCount),
 		int64(definition.Limits.MaxNestingDepth),
 		int64(definition.Limits.MaximumFutureSkew),
 		int64(definition.Limits.MaximumEventAge),
+		// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
 		now.UnixMicro(), id, int64(expectedVersion),
 	)
 	if err != nil {
@@ -268,10 +271,12 @@ func (db *DB) SetIndexState(ctx context.Context, id string, expectedVersion uint
 	defer finishTx(tx, &err)
 
 	now := databaseTime(time.Now())
+	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
+	expectedVersionDB := int64(expectedVersion)
 	updateResult, err := tx.ExecContext(ctx, `
 		UPDATE indexes
 		SET state = ?, version = version + 1, updated_at_unix_micro = ?
-		WHERE index_id = ? AND version = ?`, state, now.UnixMicro(), id, int64(expectedVersion))
+		WHERE index_id = ? AND version = ?`, state, now.UnixMicro(), id, expectedVersionDB)
 	if err != nil {
 		return Index{}, fmt.Errorf("set index state: %w", err)
 	}
