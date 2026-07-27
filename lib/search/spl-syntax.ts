@@ -18,7 +18,7 @@ export const SPL_PIPELINE_COMMANDS = [
   {
     name: "eval",
     insertion: 'eval availability=if(isnull(status), "missing", "present")',
-    detail: "Create or replace fields; if(predicate, true_value, false_value) selects between two values, coalesce(value, fallback, ...) selects the first non-null fixed value, case(predicate, value, ...) selects the value for the first true predicate, lower(value)/upper(value) map a Unicode string or multivalue, len(value)/length(value) count UTF-8 code points in one string, substr(value, start[, length]) selects UTF-8 code points with SQLite indexing and literal integer indexes, and tostring(value) preserves strings, renders exact numbers, and uses capitalized Boolean text. Formatted tostring modes are not yet supported.",
+    detail: "Create or replace fields; if(predicate, true_value, false_value) selects between two values, coalesce(value, fallback, ...) selects the first non-null fixed value, case(predicate, value, ...) selects the value for the first true predicate, lower(value)/upper(value) map a Unicode string or multivalue, len(value)/length(value) count UTF-8 code points in one string, substr(value, start[, length]) selects UTF-8 code points with SQLite indexing and literal integer indexes, tostring(value) preserves strings, renders exact numbers, and uses capitalized Boolean text, and round(value[, precision]) rounds a number with an optional literal precision from 0 through 18. Formatted tostring modes and negative or calculated round precisions are not yet supported.",
   },
   {
     name: "rename",

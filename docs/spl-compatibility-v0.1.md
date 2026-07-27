@@ -52,6 +52,9 @@ lowering is built.
 Every `tostring` call accepts exactly one value and has the same separate
 64 KiB generated-SQL ceiling, checked after its typed conversion lowering is
 built. Formatted modes are a separate unsupported surface.
+Every `round` call accepts one numeric value and an optional literal precision
+from 0 through 18. It has the same separate 64 KiB generated-SQL ceiling,
+checked after its typed numeric lowering is built.
 Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
@@ -130,7 +133,7 @@ accepts exactly one scalar expression, and can also be compared explicitly
 with a Boolean literal. Scalar operands may be fields, typed literals, or the
 supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, bounded
 `case`, `lower`, `upper`, `len`, `length`, bounded `substr`, and bounded
-default `tostring` calls
+default `tostring` and bounded `round` calls
 described below;
 arithmetic, field quoting, `XOR`, and other eval functions are not yet
 accepted. Missing, null, container, or failed numeric operands do not pass
@@ -167,6 +170,7 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval characters=len(message)
 | eval route=substr(path, 1, 32)
 | eval rendered=tostring(status), flag=tostring(isnull(optional))
+| eval latency_ms=round(duration_ms, 2)
 ```
 
 Assignments are evaluated from left to right, and later assignments may use an
@@ -194,6 +198,8 @@ narrow:
   SQLite-compatible indexes and literal integer bounds;
 - `tostring(value)` returns one fixed String from a scalar String, number, or
   Boolean. Formatted modes are not supported.
+- `round(value[, precision])` rounds one numeric value with an optional literal
+  precision from 0 through 18. The default precision is zero.
 
 The `if` predicate uses exactly the `where` grammar described above:
 case-sensitive scalar comparisons, direct `isnull` / `isnotnull` predicates,
@@ -558,6 +564,63 @@ capitalized Boolean output, but it does not fully pin null spelling, extended
 Decimal input, canonical time precision, or every default numeric edge.
 Those cases therefore remain the explicit conservative boundaries above
 until a live Splunk differential oracle is available.
+
+`round` accepts one numeric value and an optional precision:
+
+```spl
+| eval nearest=round(duration_ms)
+| eval hundredths=round(duration_ms, 2)
+| where round(score, 1)>=2.5
+```
+
+Function names are case-insensitive, and a bare field named `round` remains an
+ordinary field. Precision defaults to zero and, in compatibility version 0.1,
+must be a literal integer from `0` through `18`. Negative precision is rejected
+because Splunk documents it as unsupported. A field, Boolean, null,
+floating-point value, nested expression, or integer above `18` in the precision
+position fails at that argument with `SPL_UNSUPPORTED_ROUND_PRECISION`; no
+value is truncated or coerced. The upper bound also stays inside the pinned
+ClickHouse target's accepted Float64 precision range.
+
+Fixed `Int64` and `UInt64` input is an exact no-op for every supported
+non-negative precision and retains its type, including `MaxUint64`. Fixed
+`Float64` input returns `Float64`. Missing, explicit-null, and statically null
+input returns nullable `Float64` null. Fixed String, Boolean, canonical time,
+or other nonnumeric input fails with `SPL_UNSUPPORTED_ROUND_VALUE_TYPE`.
+A fixed multivalue fails with `SPL_UNSUPPORTED_MULTIVALUE_USAGE`.
+
+Dynamic physical signed and unsigned integer variants are returned exactly
+with their original runtime type. A validated `decimal/v1` payload whose
+mathematical value is integral and fits signed `Int256` becomes that exact
+`Int256`; adjacent values such as `9007199254740992` and `9007199254740993`
+therefore remain distinct. Other validated Decimal payloads, physical
+floating-point variants, and physical Decimal variants convert to finite
+`Float64` before rounding and return Dynamic `Float64`. A Decimal envelope
+must contain exactly the type and value keys, have at most 4 KiB of payload,
+and match the canonical Decimal grammar. Malformed, oversized, or non-finite
+values return null without exposing their payload. Dynamic Strings, Booleans,
+null, arrays, objects, and other containers also return null rather than being
+coerced.
+
+Float64 rounding uses the pinned ClickHouse `round` implementation: decimal
+precision with binary-double input and halfway-to-even behavior. Representative
+results are `round(3.5)=4`, `round(2.5)=2`, `round(-2.5)=-2`,
+`round(2.555,2)=2.56`, `round(15.275,2)=15.28`, and
+`round(17.275,2)=17.27`. The latter pair deliberately records binary
+representation effects rather than promising decimal arithmetic. Splunk's
+public documentation specifies the signature, non-negative precision, and
+examples such as `3.5` and `2.555`, but does not fully specify every halfway
+or binary-representation edge; these results remain the explicit version 0.1
+boundary until a live differential oracle is available.
+
+Dynamic lowering binds the source once. An explicit precision is a second
+lambda input, so nested calls preserve inner-to-outer placeholder order.
+After the first Dynamic `round`, a numeric-only domain marker lets nested calls
+and predicates omit String, Boolean, and tagged-envelope dispatch. Atomic
+field/literal comparisons stay scalar; compound comparisons bind each operand
+once to prevent repeated evaluation and superlinear SQL. No form applies
+`ARRAY JOIN`, expands a multivalue, or changes row cardinality. Nested calls
+grow linearly under the per-call 64 KiB and whole-query 256 KiB SQL ceilings.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
@@ -1801,6 +1864,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`lower`, `upper`, and text functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/text-functions),
 [SQLite core `substr` semantics](https://www.sqlite.org/lang_corefunc.html),
 [`tostring` and conversion functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/evaluation-functions/conversion-functions),
+[`round` and mathematical functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/evaluation-functions/mathematical-functions),
 [`predicate expressions`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.2/expressions-and-predicates/predicate-expressions),
 [`isnull` and `isnotnull` informational functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/informational-functions),
 [`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),
@@ -1819,6 +1883,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 ClickHouse's [`if` and conditional functions](https://clickhouse.com/docs/reference/functions/regular-functions/conditional-functions),
 ClickHouse's [`lowerUTF8`, `upperUTF8`, `lengthUTF8`, and String functions](https://clickhouse.com/docs/sql-reference/functions/string-functions),
 ClickHouse's [`toString` and type-conversion functions](https://clickhouse.com/docs/sql-reference/functions/type-conversion-functions),
+ClickHouse's [`round` and rounding functions](https://clickhouse.com/docs/reference/functions/regular-functions/rounding-functions),
 ClickHouse's [`extractGroups`](https://clickhouse.com/docs/sql-reference/functions/string-search-functions),
 and the [RE2 syntax reference](https://github.com/google/re2/wiki/Syntax)
 documentation.

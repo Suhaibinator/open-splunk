@@ -126,6 +126,18 @@ test("tostring highlights only when used as a parenthesized function", () => {
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
+test("round highlights only when used as a parenthesized function", () => {
+  const query = `index=main round=1 | eval rendered=RoUnD(duration_ms, 2) | table round`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["round"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
 test("eval completion advertises the exact supported scalar signatures", () => {
   const evalCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eval");
   assert.ok(evalCompletion);
@@ -138,6 +150,8 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /len\(value\)\/length\(value\)/);
   assert.match(evalCompletion.detail, /substr\(value, start\[, length\]\)/);
   assert.match(evalCompletion.detail, /tostring\(value\)/);
+  assert.match(evalCompletion.detail, /round\(value\[, precision\]\)/);
+  assert.match(evalCompletion.detail, /literal precision from 0 through 18/i);
   assert.match(evalCompletion.detail, /first non-null fixed value/i);
   assert.match(evalCompletion.detail, /first true predicate/i);
   assert.match(evalCompletion.detail, /Unicode string or multivalue/i);

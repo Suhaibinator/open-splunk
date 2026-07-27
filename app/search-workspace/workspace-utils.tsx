@@ -33,6 +33,7 @@ const SPL_TEXT_CASE_FUNCTION_PATTERN = "(?:lower|upper)(?=\\s*\\()";
 const SPL_TEXT_LENGTH_FUNCTION_PATTERN = "(?:len|length)(?=\\s*\\()";
 const SPL_SUBSTRING_FUNCTION_PATTERN = "substr(?=\\s*\\()";
 const SPL_TOSTRING_FUNCTION_PATTERN = "tostring(?=\\s*\\()";
+const SPL_ROUND_FUNCTION_PATTERN = "round(?=\\s*\\()";
 const SPL_NULL_PREDICATE_FUNCTION_PATTERN = "(?:isnull|isnotnull)(?=\\s*\\()";
 const SPL_PERCENTILE_FUNCTION_PATTERN = "(?:p|perc)0*(?:[1-9]|[1-9][0-9])";
 const SPL_FUNCTION_PATTERN = [
@@ -45,6 +46,7 @@ const SPL_FUNCTION_PATTERN = [
   SPL_TEXT_LENGTH_FUNCTION_PATTERN,
   SPL_SUBSTRING_FUNCTION_PATTERN,
   SPL_TOSTRING_FUNCTION_PATTERN,
+  SPL_ROUND_FUNCTION_PATTERN,
   SPL_NULL_PREDICATE_FUNCTION_PATTERN,
   SPL_PERCENTILE_FUNCTION_PATTERN,
 ].join("|");
@@ -57,6 +59,7 @@ const SPL_TEXT_CASE_FUNCTION = /^(?:lower|upper)$/i;
 const SPL_TEXT_LENGTH_FUNCTION = /^(?:len|length)$/i;
 const SPL_SUBSTRING_FUNCTION = /^substr$/i;
 const SPL_TOSTRING_FUNCTION = /^tostring$/i;
+const SPL_ROUND_FUNCTION = /^round$/i;
 const SPL_NULL_PREDICATE_FUNCTION = /^(?:isnull|isnotnull)$/i;
 const SPL_PERCENTILE_FUNCTION = new RegExp(`^${SPL_PERCENTILE_FUNCTION_PATTERN}$`, "i");
 const SYNTAX_TOKEN_PATTERN = new RegExp(
@@ -146,6 +149,7 @@ export function syntaxTokens(query: string): ReactNode[] {
       SPL_TEXT_LENGTH_FUNCTION.test(part) ||
       SPL_SUBSTRING_FUNCTION.test(part) ||
       SPL_TOSTRING_FUNCTION.test(part) ||
+      SPL_ROUND_FUNCTION.test(part) ||
       SPL_NULL_PREDICATE_FUNCTION.test(part) ||
       SPL_PERCENTILE_FUNCTION.test(part)) {
       className = "spl-function";
