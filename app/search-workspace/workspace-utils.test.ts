@@ -150,6 +150,18 @@ test("ceil, ceiling, and floor highlight only as parenthesized functions", () =>
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
+test("mvcount highlights only when used as a parenthesized function", () => {
+  const query = `index=main mvcount=1 | eval tally=MvCoUnT(recipients) | table mvcount`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["mvcount"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
 test("eval completion advertises the exact supported scalar signatures", () => {
   const evalCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eval");
   assert.ok(evalCompletion);
@@ -165,6 +177,9 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /round\(value\[, precision\]\)/);
   assert.match(evalCompletion.detail, /ceil\(value\)\/ceiling\(value\)/);
   assert.match(evalCompletion.detail, /floor\(value\)/);
+  assert.match(evalCompletion.detail, /mvcount\(value\)/);
+  assert.match(evalCompletion.detail, /single value as 1/i);
+  assert.match(evalCompletion.detail, /no values as null/i);
   assert.match(evalCompletion.detail, /literal precision from 0 through 18/i);
   assert.match(evalCompletion.detail, /first non-null fixed value/i);
   assert.match(evalCompletion.detail, /first true predicate/i);

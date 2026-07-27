@@ -7,7 +7,98 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded typed SPL `ceil`/`ceiling` and `floor`
+## Latest checkpoint: bounded typed SPL `mvcount`
+
+Date: 2026-07-27
+
+Parser and logical-plan checkpoint (committed and pushed):
+`f68cacc81694b3f65ccb0838a082770b437a94ac`
+
+Initial ClickHouse compiler and integration checkpoint (committed and pushed):
+`738fabf8282aec2feeb9e82f0e4884d4e640a978`
+
+Adversarial correctness, reuse, and efficiency checkpoint (committed and
+pushed):
+`39966596c7584ecef7976fbb7a697cf1eb12abca`
+
+This test-first slice implements bounded `mvcount(value)`:
+
+1. The parser accepts a case-insensitive call with exactly one scalar
+   argument, including Boolean null predicates, nesting, and predicate use.
+   It preserves complete source ranges and leaves a bare field named
+   `mvcount` ordinary.
+2. A dedicated AST and logical-plan enum carries the operation. Parser,
+   planner, and compiler trust boundaries independently reject forged arity
+   and enums, typed-nil arguments, excessive depth/nodes, and cycles through a
+   shared unary structural-validation harness.
+3. A non-null fixed scalar returns `UInt64(1)`. Missing, explicit-null,
+   projected-away, and statically null input returns nullable `UInt64` null.
+   Fixed `Array(String)` returns its immediate length and maps empty to null.
+4. Runtime `Array(Dynamic)` counts immediate members whose type is not `None`;
+   empty and all-null arrays return null. Immediate nested arrays and objects
+   count atomically. Other Dynamic arrays use physical length. Dynamic
+   String, number, and Boolean values return one; ordinary objects and
+   flattened object parents return null.
+5. Valid `bytes/v1`, `timestamp/v1`, `duration/v1`, and `decimal/v1` tagged
+   scalar envelopes return one. Exact-key shape, tag-specific payload grammar,
+   and a 1 MiB payload ceiling are required. Live raw-storage tests prove each
+   malformed tag fails closed to null without exposing its payload.
+6. Dynamic input is metadata-presence guarded before binding, so absent sparse
+   fields avoid value loading and dispatch. General/text input binds once;
+   numeric-only calculated input skips a redundant singleton-array lambda.
+   The shared non-null Array(Dynamic) cardinality helper keeps `mvcount` and
+   aggregate `count(field)` aligned.
+7. Every result carries a one-or-null cardinality invariant through eval
+   assignments and projections. Any outer `mvcount` is compiled away as an
+   identity, so 24 nested calls collapse to the exact SQL of one call.
+8. No lowering uses `ARRAY JOIN` or changes row cardinality. Each call has a
+   separate 64 KiB generated-SQL ceiling in addition to the 256 KiB
+   whole-query limit; tagged-payload validation has its independent 1 MiB
+   runtime bound.
+9. Compiler and pinned integration coverage exercises literals, Boolean
+   predicates, `MaxUint64`, fixed aggregates, text and numeric calculated
+   domains, empty/all-null/mixed/nested arrays, missing/null/object parents,
+   all four valid tagged scalars, all four malformed tagged scalars,
+   predicates, exact source occurrence, and `EXPLAIN actions=1`.
+10. Independent reuse, quality, and efficiency reviewers reported six
+    actionable findings, all applied: shared tagged-envelope recognition,
+    shared Dynamic-array cardinality, shared unary forged-plan coverage,
+    fail-closed tagged payload validation, pre-binding sparse presence guards,
+    direct numeric-domain lowering, and nested cardinality identity collapse.
+
+Validation completed through the adversarial checkpoint:
+
+```sh
+go test ./internal/clickhouse \
+  -run 'TestCompileEval(MVCount|ToString|LowerUpper|LenLength)|TestCompileStats|TestFieldSummary' \
+  -count=1
+go test ./... -count=1 -timeout=5m
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m
+git diff --check
+```
+
+The full Go suite passed. The pinned Store/compiler suite, including the raw
+malformed-envelope corpus, passed in 49.919 seconds. Compatibility/editor and
+final static-gate checkpoints follow this section once committed.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `f68cacc`, `738fabf`, and
+   `3996659`. Preserve unexpected local changes.
+2. Run the frontend application/release corpus, typecheck, lint, build, Go
+   vet, and unrestricted repository-wide `golangci-lint` after the editor and
+   compatibility contract are committed.
+3. Select the next bounded scalar slice only after pinning its Splunk
+   signature, fixed/Dynamic type behavior, null and multivalue behavior,
+   resource limits, and ClickHouse lowering.
+4. Keep broader multivalue functions, formatted `tostring`, negative or
+   calculated `round` precision, arithmetic, concatenation, and canonical-time
+   conversion as separate compatibility slices.
+
+## Previous checkpoint: bounded typed SPL `ceil`/`ceiling` and `floor`
 
 Date: 2026-07-27
 

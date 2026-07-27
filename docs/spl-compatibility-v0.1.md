@@ -58,6 +58,10 @@ checked after its typed numeric lowering is built.
 Every `ceil`, `ceiling`, or `floor` call accepts exactly one numeric value and
 has the same separate 64 KiB generated-SQL ceiling, checked after its typed
 numeric lowering is built.
+Every `mvcount` call accepts exactly one value and has the same separate
+64 KiB generated-SQL ceiling, checked after its typed cardinality lowering is
+built. Validation of a tagged scalar payload is independently capped at the
+1 MiB hard ingestion ceiling.
 Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
@@ -136,7 +140,8 @@ accepts exactly one scalar expression, and can also be compared explicitly
 with a Boolean literal. Scalar operands may be fields, typed literals, or the
 supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, bounded
 `case`, `lower`, `upper`, `len`, `length`, bounded `substr`, and bounded
-default `tostring`, bounded `round`, `ceil`/`ceiling`, and `floor` calls
+default `tostring`, bounded `round`, `ceil`/`ceiling`, `floor`, and `mvcount`
+calls
 described below;
 arithmetic, field quoting, `XOR`, and other eval functions are not yet
 accepted. Missing, null, container, or failed numeric operands do not pass
@@ -175,6 +180,7 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval rendered=tostring(status), flag=tostring(isnull(optional))
 | eval latency_ms=round(duration_ms, 2)
 | eval upper_bound=ceil(ratio), lower_bound=floor(ratio)
+| eval recipient_count=mvcount(recipients)
 ```
 
 Assignments are evaluated from left to right, and later assignments may use an
@@ -206,6 +212,8 @@ narrow:
   precision from 0 through 18. The default precision is zero.
 - `ceil(value)` and its `ceiling(value)` alias round one numeric value upward;
   `floor(value)` rounds one numeric value downward.
+- `mvcount(value)` returns the number of immediate non-null multivalue members,
+  one for a non-null scalar, or null when there are no values.
 
 The `if` predicate uses exactly the `where` grammar described above:
 case-sensitive scalar comparisons, direct `isnull` / `isnotnull` predicates,
@@ -669,6 +677,52 @@ successful result is already integral, any outer `ceil` or `floor` is an
 identity and is removed during compilation, including across eval projection
 and rename stages. No form applies `ARRAY JOIN`, expands multivalue members,
 or changes row cardinality.
+
+`mvcount` accepts exactly one value:
+
+```spl
+| eval recipient_count=mvcount(recipients)
+| where mvcount(errors)>1
+| eval present_count=mvcount(isnotnull(status))
+```
+
+Function names are case-insensitive, and a bare field named `mvcount` remains
+an ordinary field. Zero or multiple arguments fail with
+`SPL_INVALID_EVAL_ARITY`. Unlike text and numeric functions, `mvcount` accepts
+a Boolean null-predicate result because Boolean false is still one scalar
+value.
+
+A non-null fixed String, number, Boolean, or canonical time has count one.
+Missing, explicit-null, projected-away, and statically null input returns
+nullable `UInt64` null. A fixed `Array(String)` returns its member count, while
+an empty fixed array returns null. The result is always an integral
+`UInt64` when present.
+
+For a runtime `Array(Dynamic)`, Open Splunk counts immediate members whose
+runtime type is not `None`. Empty and all-null arrays therefore return null.
+Immediate nested arrays and objects are each counted atomically when non-null;
+members are never walked or expanded. Other physical Dynamic array variants
+use their immediate physical length and return null when empty. A Dynamic
+String, finite or non-finite physical number, or Boolean has count one.
+Validated `bytes/v1`, `timestamp/v1`, `duration/v1`, and `decimal/v1`
+envelopes also have count one. Each envelope must contain exactly the type and
+value keys and pass its tag-specific payload grammar. Malformed envelopes,
+unknown maps, ordinary objects, flattened object parents, Dynamic null, and
+missing fields return null without exposing stored payloads.
+
+This scalar and no-value behavior follows Splunk's documented `mvcount`
+contract. Splunk's public documentation does not settle typed null members or
+nested typed containers; immediate non-null member counting and atomic nested
+containers are the explicit Open Splunk v0.1 typed-data boundary.
+
+Dynamic sources are bound once. A metadata-authoritative missing-field guard
+runs before the binding, numeric-only calculated inputs skip a redundant
+lambda allocation, and tagged-payload regular-expression work is limited to
+1 MiB. Repeated `mvcount(mvcount(...))` calls collapse to one cardinality
+operation because the first result is already one or null, including across
+eval projection and rename stages. No form uses `ARRAY JOIN` or changes row
+cardinality. The per-call 64 KiB and whole-query 256 KiB generated-SQL ceilings
+remain authoritative.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
@@ -1913,6 +1967,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [SQLite core `substr` semantics](https://www.sqlite.org/lang_corefunc.html),
 [`tostring` and conversion functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/evaluation-functions/conversion-functions),
 [`round` and mathematical functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/evaluation-functions/mathematical-functions),
+[`mvcount` and multivalue eval functions](https://help.splunk.com/en?resourceId=SCS_SearchReference_MultivalueEvalFunctions),
 [`predicate expressions`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.2/expressions-and-predicates/predicate-expressions),
 [`isnull` and `isnotnull` informational functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/informational-functions),
 [`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),
