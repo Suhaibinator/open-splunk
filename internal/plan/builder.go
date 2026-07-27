@@ -1863,6 +1863,9 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		case spl.ScalarFunctionToNumber:
 			expectedArguments = 1
 			functionName = "tonumber"
+		case spl.ScalarFunctionToString:
+			expectedArguments = 1
+			functionName = "tostring"
 		case spl.ScalarFunctionReplace:
 			expectedArguments = 3
 			functionName = "replace"
@@ -1981,6 +1984,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		switch expression.Function {
 		case spl.ScalarFunctionToNumber:
 			function = ScalarFunctionToNumber
+		case spl.ScalarFunctionToString:
+			function = ScalarFunctionToString
 		case spl.ScalarFunctionReplace:
 			function = ScalarFunctionReplace
 		case spl.ScalarFunctionIsNull:

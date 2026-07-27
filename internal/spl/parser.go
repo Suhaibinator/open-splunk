@@ -2268,6 +2268,26 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				},
 			}
 		}
+	case "tostring":
+		function = ScalarFunctionToString
+		if len(arguments) == 2 {
+			return nil, &Diagnostic{
+				Code: "SPL_UNSUPPORTED_TOSTRING_FORMAT",
+				Message: "tostring formats are outside compatibility version 0.1; " +
+					"only tostring(value) is supported",
+				Range: arguments[1].SourceRange(),
+				Suggestions: []string{
+					"tostring(value)",
+				},
+			}
+		}
+		if len(arguments) != 1 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: "tostring requires exactly one argument in compatibility version 0.1",
+				Range:   name.sourceRange,
+			}
+		}
 	case "replace":
 		function = ScalarFunctionReplace
 		if len(arguments) != 3 {
@@ -2427,6 +2447,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 			Range:   name.sourceRange,
 			Suggestions: []string{
 				"tonumber(value)",
+				"tostring(value)",
 				`replace(value, "pattern", "replacement")`,
 				"isnull(value)",
 				"isnotnull(value)",
