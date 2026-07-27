@@ -216,6 +216,10 @@ const (
 	// expressions for one case call. This is an Open Splunk resource limit,
 	// not a restriction imposed by SPL.
 	MaximumCaseBranches = 16
+
+	// MaximumRoundPrecision is the largest non-negative decimal precision
+	// accepted by the pinned ClickHouse Float64 round implementation.
+	MaximumRoundPrecision = 18
 )
 
 const (
@@ -230,6 +234,7 @@ const (
 	ScalarFunctionLength
 	ScalarFunctionSubstring
 	ScalarFunctionToString
+	ScalarFunctionRound
 )
 
 // ScalarCallExpr invokes a supported eval function. Function names are

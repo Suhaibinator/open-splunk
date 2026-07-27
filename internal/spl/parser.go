@@ -2405,6 +2405,40 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				},
 			}
 		}
+	case "round":
+		function = ScalarFunctionRound
+		if len(arguments) < 1 || len(arguments) > 2 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: "round requires one or two arguments",
+				Range:   name.sourceRange,
+			}
+		}
+		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "round cannot consume a Boolean result in search-mode expressions",
+				Range:   arguments[0].SourceRange(),
+				Suggestions: []string{
+					"use isnull or isnotnull directly with where",
+					"convert a numeric value before rounding it",
+				},
+			}
+		}
+		if len(arguments) == 2 && !supportedRoundPrecision(arguments[1]) {
+			return nil, &Diagnostic{
+				Code: "SPL_UNSUPPORTED_ROUND_PRECISION",
+				Message: fmt.Sprintf(
+					"round precision must be a literal integer from 0 through %d",
+					MaximumRoundPrecision,
+				),
+				Range: arguments[1].SourceRange(),
+				Suggestions: []string{
+					"round(value)",
+					"round(value, 2)",
+				},
+			}
+		}
 	case "substr":
 		function = ScalarFunctionSubstring
 		if len(arguments) < 2 || len(arguments) > 3 {
@@ -2456,6 +2490,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				"upper(value)",
 				"len(value)",
 				"substr(value, start, length)",
+				"round(value, precision)",
 				`if(predicate, true_value, false_value)`,
 			},
 		}
@@ -2465,6 +2500,17 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 		Arguments: arguments,
 		Range:     Range{Start: name.sourceRange.Start, End: p.previous().sourceRange.End},
 	}, nil
+}
+
+func supportedRoundPrecision(expression ScalarExpr) bool {
+	literal, ok := expression.(*ScalarLiteralExpr)
+	if !ok || literal == nil ||
+		literal.Value.Kind != LiteralKindInteger {
+		return false
+	}
+	text := strings.TrimPrefix(literal.Value.Text, "+")
+	precision, err := strconv.ParseUint(text, 10, 8)
+	return err == nil && precision <= MaximumRoundPrecision
 }
 
 func scalarExpressionReturnsBoolean(expression ScalarExpr) bool {

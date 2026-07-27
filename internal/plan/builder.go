@@ -1866,6 +1866,15 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		case spl.ScalarFunctionToString:
 			expectedArguments = 1
 			functionName = "tostring"
+		case spl.ScalarFunctionRound:
+			functionName = "round"
+			if len(expression.Arguments) < 1 || len(expression.Arguments) > 2 {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_EVAL_ARITY",
+					Message: "round requires one or two arguments",
+					Range:   expression.Range,
+				}
+			}
 		case spl.ScalarFunctionReplace:
 			expectedArguments = 3
 			functionName = "replace"
@@ -1944,6 +1953,26 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				}
 			}
 		}
+		if expression.Function == spl.ScalarFunctionRound {
+			if splScalarMayReturnBooleanFunction(expression.Arguments[0]) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message: "round cannot consume a Boolean result",
+					Range:   expression.Arguments[0].SourceRange(),
+				}
+			}
+			if len(expression.Arguments) == 2 &&
+				!validSPLRoundPrecision(expression.Arguments[1]) {
+				return nil, &Diagnostic{
+					Code: "SPL_UNSUPPORTED_ROUND_PRECISION",
+					Message: fmt.Sprintf(
+						"round precision must be a literal integer from 0 through %d",
+						spl.MaximumRoundPrecision,
+					),
+					Range: expression.Arguments[1].SourceRange(),
+				}
+			}
+		}
 		if expression.Function == spl.ScalarFunctionSubstring {
 			if splScalarMayReturnBooleanFunction(expression.Arguments[0]) {
 				return nil, &Diagnostic{
@@ -1986,6 +2015,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			function = ScalarFunctionToNumber
 		case spl.ScalarFunctionToString:
 			function = ScalarFunctionToString
+		case spl.ScalarFunctionRound:
+			function = ScalarFunctionRound
 		case spl.ScalarFunctionReplace:
 			function = ScalarFunctionReplace
 		case spl.ScalarFunctionIsNull:
@@ -2078,6 +2109,20 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 	default:
 		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EVAL_EXPRESSION", Message: fmt.Sprintf("unsupported scalar expression type %T", expression), Range: expression.SourceRange()}
 	}
+}
+
+func validSPLRoundPrecision(expression spl.ScalarExpr) bool {
+	if nilSPLScalarExpression(expression) {
+		return false
+	}
+	literal, ok := expression.(*spl.ScalarLiteralExpr)
+	if !ok || literal == nil ||
+		literal.Value.Kind != spl.LiteralKindInteger {
+		return false
+	}
+	text := strings.TrimPrefix(literal.Value.Text, "+")
+	precision, err := strconv.ParseUint(text, 10, 8)
+	return err == nil && precision <= spl.MaximumRoundPrecision
 }
 
 func splScalarMayReturnBooleanFunction(expression spl.ScalarExpr) bool {

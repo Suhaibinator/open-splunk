@@ -511,6 +511,7 @@ const (
 	ScalarFunctionLength
 	ScalarFunctionSubstring
 	ScalarFunctionToString
+	ScalarFunctionRound
 )
 
 // ScalarCallExpression invokes one supported eval operation.
