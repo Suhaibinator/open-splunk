@@ -3102,6 +3102,7 @@ func compileChart(
 type compileState struct {
 	visible                          map[string]fieldState
 	patternBudgets                   *compiledPatternBudgets
+	searchStartUnix                  int64
 	publicOrder                      []string
 	privateColumns                   []string
 	rexCapturedBytesSQL              string
@@ -3316,6 +3317,7 @@ func compileScan(database, table string, scan *plan.Scan) (string, compileState,
 	}
 	state := compileState{
 		visible:         visible,
+		searchStartUnix: scan.IndexTimeCutoff.Unix(),
 		publicOrder:     append([]string(nil), defaultPublicFields...),
 		allowDynamic:    true,
 		eventRows:       true,
@@ -3887,6 +3889,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compiledScalar{}, errors.New("compile ClickHouse scalar expression: missing call expression")
 		}
 		switch expression.Function {
+		case plan.ScalarFunctionNow:
+			return compileNowScalar(expression, state)
 		case plan.ScalarFunctionReplace:
 			return compileReplaceScalar(expression, state)
 		case plan.ScalarFunctionToNumber:
@@ -3925,6 +3929,25 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 	default:
 		return compiledScalar{}, fmt.Errorf("compile ClickHouse scalar expression: unsupported expression %T", expression)
 	}
+}
+
+func compileNowScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+) (compiledScalar, error) {
+	if len(expression.Arguments) != 0 {
+		return compiledScalar{}, errors.New("compile ClickHouse now: now requires no arguments")
+	}
+	return compiledScalar{
+		valueSQL:         "CAST(? AS Int64)",
+		valueArgs:        []any{state.searchStartUnix},
+		maxStringBytes:   20,
+		existsSQL:        "1",
+		kind:             fieldKindNumber,
+		numberType:       "Int64",
+		numericIntegral:  true,
+		comparisonAtomic: true,
+	}, nil
 }
 
 func compileCoalesceScalar(
@@ -4777,6 +4800,12 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 	case *plan.ScalarCallExpression:
 		expectedArguments := 0
 		switch expression.Function {
+		case plan.ScalarFunctionNow:
+			if len(expression.Arguments) != 0 {
+				return errors.New(
+					"compile ClickHouse predicate: now requires no arguments",
+				)
+			}
 		case plan.ScalarFunctionToNumber,
 			plan.ScalarFunctionToString,
 			plan.ScalarFunctionIsNull,
@@ -8553,6 +8582,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 	next := compileState{
 		visible:             make(map[string]fieldState),
 		patternBudgets:      state.patternBudgets,
+		searchStartUnix:     state.searchStartUnix,
 		privateColumns:      append([]string(nil), state.privateColumns...),
 		rexCapturedBytesSQL: state.rexCapturedBytesSQL,
 		allowDynamic:        operator.Mode == plan.ProjectModeExclude && state.allowDynamic,
@@ -8794,6 +8824,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 	next = compileState{
 		visible:               make(map[string]fieldState, len(operator.GroupBy)+len(operator.Measures)),
 		patternBudgets:        state.patternBudgets,
+		searchStartUnix:       state.searchStartUnix,
 		allowDynamic:          false,
 		eventRows:             false,
 		blocked:               make(map[string]struct{}),
