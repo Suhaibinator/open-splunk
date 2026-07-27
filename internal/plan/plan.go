@@ -515,6 +515,7 @@ const (
 	ScalarFunctionCeil
 	ScalarFunctionFloor
 	ScalarFunctionMVCount
+	ScalarFunctionMatch
 )
 
 // ScalarCallExpression invokes one supported eval operation.

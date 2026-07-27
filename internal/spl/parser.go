@@ -2473,6 +2473,58 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				Range:   name.sourceRange,
 			}
 		}
+	case "match":
+		function = ScalarFunctionMatch
+		if len(arguments) != 2 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: "match requires exactly two arguments",
+				Range:   name.sourceRange,
+			}
+		}
+		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "match cannot consume a Boolean result in search-mode expressions",
+				Range:   arguments[0].SourceRange(),
+				Suggestions: []string{
+					"use the Boolean directly with where",
+					`match(value, "pattern")`,
+				},
+			}
+		}
+		pattern, ok := arguments[1].(*ScalarLiteralExpr)
+		if !ok || pattern == nil || pattern.Value.Kind != LiteralKindString ||
+			!pattern.Value.Quoted {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "match regular expression must be a quoted string literal",
+				Range:   arguments[1].SourceRange(),
+				Suggestions: []string{
+					`match(value, "pattern")`,
+				},
+			}
+		}
+		if _, err := splregex.CompileMatchPattern(pattern.Value.Text); err != nil {
+			if splregex.IsMatchComplexityError(err) {
+				return nil, &Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"match regular expression exceeds the %d-byte limit",
+						splregex.MaximumMatchPatternBytes,
+					),
+					Range: pattern.Range,
+				}
+			}
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_REGEX",
+				Message: "match regular expression is outside the supported RE2-compatible subset",
+				Range:   pattern.Range,
+				Suggestions: []string{
+					"use an RE2-compatible regular expression",
+				},
+			}
+		}
 	case "substr":
 		function = ScalarFunctionSubstring
 		if len(arguments) < 2 || len(arguments) > 3 {
@@ -2528,6 +2580,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				"ceil(value)",
 				"floor(value)",
 				"mvcount(value)",
+				`match(value, "pattern")`,
 				`if(predicate, true_value, false_value)`,
 			},
 		}
@@ -2560,7 +2613,7 @@ func scalarExpressionReturnsBoolean(expression ScalarExpr) bool {
 			return false
 		}
 		switch expression.Function {
-		case ScalarFunctionIsNull, ScalarFunctionIsNotNull:
+		case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch:
 			return true
 		case ScalarFunctionCoalesce:
 			return coalesceScalarExpressionReturnsBoolean(expression.Arguments)
@@ -2588,7 +2641,7 @@ func scalarExpressionCanBeDirectPredicate(expression ScalarExpr) bool {
 			return false
 		}
 		switch expression.Function {
-		case ScalarFunctionIsNull, ScalarFunctionIsNotNull:
+		case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch:
 			return true
 		case ScalarFunctionCoalesce:
 			return coalesceScalarExpressionReturnsBoolean(expression.Arguments)
@@ -2616,7 +2669,7 @@ func scalarExpressionMayReturnBooleanFunction(expression ScalarExpr) bool {
 			return false
 		}
 		switch expression.Function {
-		case ScalarFunctionIsNull, ScalarFunctionIsNotNull:
+		case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch:
 			return true
 		case ScalarFunctionCoalesce:
 			for _, argument := range expression.Arguments {

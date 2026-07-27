@@ -1884,6 +1884,9 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		case spl.ScalarFunctionMVCount:
 			expectedArguments = 1
 			functionName = "mvcount"
+		case spl.ScalarFunctionMatch:
+			expectedArguments = 2
+			functionName = "match"
 		case spl.ScalarFunctionReplace:
 			expectedArguments = 3
 			functionName = "replace"
@@ -2024,6 +2027,42 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				}
 			}
 		}
+		if expression.Function == spl.ScalarFunctionMatch {
+			if splScalarMayReturnBooleanFunction(expression.Arguments[0]) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message: "match cannot consume a Boolean result",
+					Range:   expression.Arguments[0].SourceRange(),
+				}
+			}
+			pattern, ok := expression.Arguments[1].(*spl.ScalarLiteralExpr)
+			if !ok || pattern == nil ||
+				pattern.Value.Kind != spl.LiteralKindString ||
+				!pattern.Value.Quoted {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message: "match regular expression must be a quoted string literal",
+					Range:   expression.Arguments[1].SourceRange(),
+				}
+			}
+			if _, err := splregex.CompileMatchPattern(pattern.Value.Text); err != nil {
+				if splregex.IsMatchComplexityError(err) {
+					return nil, &Diagnostic{
+						Code: "SPL_QUERY_TOO_COMPLEX",
+						Message: fmt.Sprintf(
+							"match regular expression exceeds the %d-byte limit",
+							splregex.MaximumMatchPatternBytes,
+						),
+						Range: pattern.Range,
+					}
+				}
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_REGEX",
+					Message: "match regular expression is outside the supported RE2-compatible subset",
+					Range:   pattern.Range,
+				}
+			}
+		}
 		arguments := make([]ScalarExpression, 0, len(expression.Arguments))
 		for _, argument := range expression.Arguments {
 			converted, err := convertScalarExpressionUnchecked(argument)
@@ -2046,6 +2085,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			function = ScalarFunctionFloor
 		case spl.ScalarFunctionMVCount:
 			function = ScalarFunctionMVCount
+		case spl.ScalarFunctionMatch:
+			function = ScalarFunctionMatch
 		case spl.ScalarFunctionReplace:
 			function = ScalarFunctionReplace
 		case spl.ScalarFunctionIsNull:
@@ -2147,7 +2188,8 @@ func splScalarMayReturnBooleanFunction(expression spl.ScalarExpr) bool {
 			return false
 		}
 		switch expression.Function {
-		case spl.ScalarFunctionIsNull, spl.ScalarFunctionIsNotNull:
+		case spl.ScalarFunctionIsNull, spl.ScalarFunctionIsNotNull,
+			spl.ScalarFunctionMatch:
 			return true
 		case spl.ScalarFunctionCoalesce:
 			for _, argument := range expression.Arguments {
@@ -2183,7 +2225,7 @@ func scalarFunctionReturnsBoolean(expression ScalarExpression) bool {
 			return false
 		}
 		switch expression.Function {
-		case ScalarFunctionIsNull, ScalarFunctionIsNotNull:
+		case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch:
 			return true
 		case ScalarFunctionCoalesce:
 			return coalesceScalarExpressionReturnsBoolean(expression.Arguments)
@@ -2211,7 +2253,7 @@ func scalarExpressionCanBeDirectPredicate(expression ScalarExpression) bool {
 			return false
 		}
 		switch expression.Function {
-		case ScalarFunctionIsNull, ScalarFunctionIsNotNull:
+		case ScalarFunctionIsNull, ScalarFunctionIsNotNull, ScalarFunctionMatch:
 			return true
 		case ScalarFunctionCoalesce:
 			return coalesceScalarExpressionReturnsBoolean(expression.Arguments)
