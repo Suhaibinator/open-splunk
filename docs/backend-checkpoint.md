@@ -7,7 +7,71 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: composite configured pre-WAL redaction
+## Latest checkpoint: bounded integration/browser harness resources
+
+Date: 2026-07-26
+
+Implementation/proof commit: `3f8922972ab5258a0f0658c714b5ba36971dcf71`
+
+This slice puts explicit memory and listener bounds around the integration
+harness itself so a failing build, hostile browser diagnostic, or unexpected
+socket fan-out cannot turn the correctness proof into a resource-amplification
+path:
+
+1. Go builds, isolated frontend builds, and Playwright specifications now share
+   a concurrency-safe 1-MiB process-output buffer. Failure output retains an
+   in-budget truncation marker; successful commands that exceed the budget
+   fail explicitly rather than silently discarding evidence.
+2. Self-exec tests pin normal success and failure, the exact byte boundary,
+   interleaved stdout/stderr overflow, missing executables, and environment
+   replacement without duplicate inherited `CGO_ENABLED` settings.
+3. Browser text diagnostics are capped at 4 KiB of UTF-8 per entry and 32
+   entries per history, followed by one fixed overflow marker. Boundary
+   scanning does not encode the entire attacker-sized input, handles
+   multibyte and lone-surrogate input, and returns isolated snapshots.
+4. The same diagnostic runtime is installed in the page realm before
+   application code. Fresh bounded errors discard the original error's
+   message, stack, and cause so truncation does not retain the oversized
+   source through object references.
+5. Page errors, API failures, external URLs, preview statuses, job metrics,
+   and stale job-strip snapshots now use bounded histories. Compact boolean
+   latches continue to observe finalization errors, stale one-row metrics, and
+   stale loading/results DOM states even after the corresponding history is
+   full.
+6. A real-page worker self-test deliberately fills and overflows the preview,
+   metrics, and stale-DOM histories, then injects forbidden late values and
+   proves that all latches still fire. Its temporary fixtures are removed in a
+   `finally` block and the preview recorder is reset before each product test.
+7. Stale-DOM observation no longer materializes or normalizes the full
+   `root.textContent`; it scans only the preview rows and targeted phase/count
+   elements, with bounded intermediate concatenation.
+8. Matching search-protocol WebSockets have explicit ownership. Browser
+   cancellation observes exactly one socket, treats duplicate attachment as
+   idempotent, removes closed-socket listeners immediately, and keeps the page
+   observer alive to reject a forbidden reconnect. Sequence-gap routes cap
+   accepted connections before connecting upstream, and the page-frame
+   recorder caps matching sockets at two and detaches listeners on close.
+9. Exact frame evidence is separately bounded to 64 frames of at most 16 KiB.
+   ArrayBuffer byte lengths and Blob sizes are checked before copying; pending
+   Blob conversions reserve their frame slots, and expected byte payloads are
+   checked before base64 allocation.
+10. The exact Docker-backed vertical and all affected compiled-browser
+    sequence-gap and cancellation cases passed against Google Chrome, in
+    addition to the complete Go/frontend, race, vet, build, lint, and type
+    gates.
+11. Independent Go/process-reuse, WebSocket/concurrency/code-quality, and
+    diagnostic/performance reviewers found no remaining issue in frozen staged
+    patch SHA-256
+    `f3f6ac27e6b4fdd109a7d993047dcc2dbbb7da65c4925ad1ee3d91c915de3e09`.
+
+The exact validation record is under **Latest validation evidence**. Harness
+resource hardening is complete at this checkpoint. The next priority is a
+red benchmark/test and per-event optimization for the syntax-bearing
+configured-redaction marker cliff described under **Remaining work**, followed
+by the statistics adapter, event-time formatter, and release-revision work.
+The overall backend goal remains active.
+
+## Previous checkpoint: composite configured pre-WAL redaction
 
 Date: 2026-07-26
 
@@ -72,7 +136,7 @@ historical ordered `NewSupplementalRedactor` chain:
 
 The exact validation record is under **Latest validation evidence**.
 Composite configured pre-WAL redaction is complete at this checkpoint. The
-next priority is the harness-output bound described under **Remaining work**.
+next priority was the harness-output bound, now complete at `3f89229`.
 The overall backend goal remains active.
 
 ## Previous checkpoint: high-source-count collector polling
@@ -1515,6 +1579,47 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Bounded integration/browser harness resources
+
+The exact implementation at `3f8922972ab5258a0f0658c714b5ba36971dcf71`
+passed:
+
+```sh
+go test ./... -count=1
+go test -race ./integration -count=1
+go vet ./...
+go build ./...
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_BROWSER_EXECUTABLE='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' \
+go test ./integration -run '^TestBackendVertical$' \
+  -count=1 -timeout=12m -v
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_BROWSER_EXECUTABLE='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' \
+go test ./integration \
+  -run '^TestBrowser(SequenceGapRecovery|SequenceGapRESTFirstProgressRecovery|SearchCancellation)$' \
+  -count=1 -timeout=12m -v
+git diff --cached --check
+```
+
+The frontend suite passed 93 tests. The Docker-backed vertical completed in
+23.82 seconds, stored four distinct events with zero replay, and passed all six
+current GradeThis searches. The affected real-browser sequence-gap,
+REST-first-progress, and cancellation cases completed in 14.29, 4.99, and
+1.77 seconds respectively. Focused harness race tests also passed ten
+consecutive runs while the implementation was being hardened.
+
+Adversarial review explicitly covered exact process-output boundaries,
+concurrent stdout/stderr writes, truncation evidence, missing commands,
+environment replacement, Unicode byte limits, large untrusted inputs, error
+object retention, post-overflow safety latches, page-realm parity, DOM
+materialization, socket ownership and cleanup, excess connection attempts,
+Blob conversion races, and frame-slot accounting. All concrete findings were
+fixed before the staged patch was frozen and independently re-reviewed.
+
 ### Composite configured pre-WAL redaction
 
 The exact implementation at `34f3a9b291ff7ea327869cf4e635f5c496f13563`
@@ -2742,11 +2847,14 @@ independent stacks.
    rendering is complete at `9d6acc1`; high-source-count collector polling,
    reusable timers, clean-EOF framing, guard reuse, and scalable path sorting
    are complete at `f41720e`; composite configured pre-WAL redaction is
-   complete at `34f3a9b`. Unless the user changes priority, next bound the
-   remaining harness build-output and matching-WebSocket observation paths,
-   followed by the adapter, formatter, and release-revision items below. The
-   current preview-to-final resource-release audit pass is complete at
-   `961cba2`, the sanitized current GradeThis collector/config migration at
+   complete at `34f3a9b`; bounded process output, diagnostic histories,
+   frame evidence, and matching-WebSocket ownership are complete at
+   `3f89229`. Unless the user changes priority, next add the red
+   syntax-bearing-marker/no-hit redaction performance test and replace the
+   global construction-time sequential fallback with a safe per-event
+   strategy, followed by the adapter, formatter, and release-revision items
+   below. The current preview-to-final resource-release audit pass is complete
+   at `961cba2`, the sanitized current GradeThis collector/config migration at
    `c576e85`, logical event retention at `458c8b4`, clock-driven
    job/result/export expiration at `b2b2839`, and stale-duplicate injection at
    `b80bf0a`. Add a red unit or integration test before implementation, run
@@ -2836,11 +2944,22 @@ Continue the release proof in this order:
   aliases, and depth-limit fail-closed behavior. Match-heavy free text
   intentionally retains ordered replay and has direct/reverse-order benchmark
   coverage.
-- The browser child output and observation counts are bounded, but
-  build-command failure output still uses `CombinedOutput`. Complete the
-  harness hardening with the same capped buffer, cap each recorded
-  diagnostic's byte length, and bound the number of simultaneously observed
-  matching WebSockets.
+- An adversarial follow-up probe found that one non-final syntax-bearing
+  configured marker, such as `MASK:0`, currently selects the sequential
+  resolver for every event at construction time. With 32 policies and 4-KiB
+  safe raw and message fields, an ordinary-marker configuration took roughly
+  36.6–37.4 microseconds while changing only the first marker to `MASK:0` took
+  roughly 1.378–1.394 milliseconds and allocated about 326,656 bytes across
+  608 allocations. Add a permanent safe/no-hit benchmark and red regression,
+  then preserve exact cascade semantics with a per-event fallback or
+  precomputed structured cascade rather than globally penalizing unrelated
+  events.
+- Integration/browser harness hardening is complete at `3f89229`. Process
+  output, each text diagnostic, diagnostic histories, stale-state evidence,
+  matching WebSocket ownership, matching page sockets, raw frames, and
+  pending Blob conversions all have explicit bounds. The real page self-test,
+  compiled-browser cases, and adversarial review pin late safety latches and
+  cleanup behavior.
 - The statistics result adapter still eagerly builds events, derived fields,
   and a timeline even when a statistics-only view consumes just columns and
   rows. Specialize or lazily construct those projections before raising
@@ -2979,7 +3098,7 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `34f3a9b`, `f41720e`, `9d6acc1`, `4c4003f`,
+   commits, especially `3f89229`, `34f3a9b`, `f41720e`, `9d6acc1`, `4c4003f`,
    `9898b41`, `59b8f7c`, `860acac`, `961cba2`, `c576e85`, `458c8b4`,
    `b2b2839`, `b80bf0a`,
    `cdb60df`, `787a7f9`, and `522b0ac`; the preceding progress/recovery
@@ -2999,9 +3118,12 @@ Do not guess those decisions if they materially affect the implementation.
 5. The fixed-payload browser rendering measurement is complete at `9d6acc1`,
    and high-source-count collector profiling and polling are complete at
    `f41720e`; composite configured pre-WAL redaction is complete at `34f3a9b`.
-   Unless the user changes priority, proceed to the harness-output bounds,
-   followed by the adapter, formatter, and release-revision items above. The
-   generator foundation, current preview-to-final
+   Bounded harness process output, diagnostics, evidence, and matching socket
+   ownership are complete at `3f89229`. Unless the user changes priority,
+   proceed to the syntax-bearing-marker/no-hit redaction performance
+   regression and per-event optimization, followed by the adapter, formatter,
+   and release-revision items above. The generator foundation, current
+   preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
    clock-driven job/result/export expiration,
