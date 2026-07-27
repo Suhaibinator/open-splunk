@@ -439,6 +439,69 @@ func TestBuildStatsMinimumAndMaximumPreserveMeasureOrder(t *testing.T) {
 	}
 }
 
+func TestBuildStatsEarliestAndLatestPreserveMeasureOrder(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count earliest(amount) latest(label) AS newest BY service, host`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"service", "host", "count", "earliest(amount)", "newest"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+	aggregate, ok := logical.Operators[len(logical.Operators)-1].(*Aggregate)
+	if !ok || len(aggregate.Measures) != 3 {
+		t.Fatalf("aggregate operator = %#v", logical.Operators[len(logical.Operators)-1])
+	}
+	if earliest := aggregate.Measures[1]; earliest.Function != AggregateFunctionEarliest ||
+		earliest.Input.Name != "amount" || earliest.Output != "earliest(amount)" {
+		t.Fatalf("earliest measure = %#v", earliest)
+	}
+	if latest := aggregate.Measures[2]; latest.Function != AggregateFunctionLatest ||
+		latest.Input.Name != "label" || latest.Output != "newest" {
+		t.Fatalf("latest measure = %#v", latest)
+	}
+}
+
+func TestBuildStatsEarliestAndLatestRequireUnmodifiedCanonicalTime(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | fields - _time | stats earliest(value)`,
+		`index=gradethis | table value | stats latest(value)`,
+		`index=gradethis | eval _time=1 | stats earliest(value)`,
+		`index=gradethis | rex "(?<_time>\d+)" | stats latest(value)`,
+		`index=gradethis | spath input=_raw output=_time path=observed_at | stats earliest(value)`,
+		`index=gradethis | rename _time AS observed_at | stats latest(value)`,
+		`index=gradethis | bin _time span=5m | stats earliest(value)`,
+		`index=gradethis | stats count BY _time | stats latest(count)`,
+	} {
+		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
+		assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_STATS_TIME_FIELD")
+	}
+}
+
+func TestBuildStatsEarliestAndLatestAcceptEventPreservingPipelines(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis level=error | stats earliest(value)`,
+		`index=gradethis | search level=error | where status>=500 | stats latest(value)`,
+		`index=gradethis | sort -_time | head 20 | stats earliest(value)`,
+		`index=gradethis | sort _time | tail 20 | stats latest(value)`,
+		`index=gradethis | dedup 2 host | stats earliest(value)`,
+		`index=gradethis | table _time, value | stats latest(value)`,
+		`index=gradethis | bin _time span=5m AS bucket_time | stats earliest(value)`,
+	} {
+		if _, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil)); err != nil {
+			t.Errorf("Build(%q): %v", source, err)
+		}
+	}
+}
+
 func TestBuildStatsDistinctCountPreservesMeasureOrderAndAliases(t *testing.T) {
 	t.Parallel()
 
@@ -545,6 +608,8 @@ func TestBuildStatsRejectsReservedOpenSchemaFieldsInputs(t *testing.T) {
 		`index=gradethis | stats list(fields)`,
 		`index=gradethis | stats min(fields)`,
 		`index=gradethis | stats max(fields)`,
+		`index=gradethis | stats earliest(fields)`,
+		`index=gradethis | stats latest(fields)`,
 		`index=gradethis | stats count BY fields`,
 	} {
 		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
@@ -665,6 +730,8 @@ func TestBuildRejectsForgedStatsRequiredInputMetadata(t *testing.T) {
 		spl.AggregateFunctionList,
 		spl.AggregateFunctionMinimum,
 		spl.AggregateFunctionMaximum,
+		spl.AggregateFunctionEarliest,
+		spl.AggregateFunctionLatest,
 	} {
 		for _, aggregate := range []spl.StatsAggregate{
 			{Function: function, Input: "host", Alias: "result"},
@@ -687,6 +754,8 @@ func TestBuildStatsSumAndAverageRequireExactInputFields(t *testing.T) {
 		`index=gradethis | stats avg(request*)`,
 		`index=gradethis | stats min(request*)`,
 		`index=gradethis | stats max(request*)`,
+		`index=gradethis | stats earliest(request*)`,
+		`index=gradethis | stats latest(request*)`,
 		`index=gradethis | stats dc(request*)`,
 		`index=gradethis | stats values(request*)`,
 		`index=gradethis | stats list(request*)`,

@@ -206,6 +206,8 @@ const (
 	AggregateFunctionList
 	AggregateFunctionMinimum
 	AggregateFunctionMaximum
+	AggregateFunctionEarliest
+	AggregateFunctionLatest
 )
 
 // AggregateMeasure is one aggregate output column.

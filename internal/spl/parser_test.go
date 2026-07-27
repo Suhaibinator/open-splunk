@@ -958,6 +958,32 @@ func TestParseStatsMinAndMaxFieldsAliasesAndFunctionCase(t *testing.T) {
 	}
 }
 
+func TestParseStatsEarliestAndLatestFieldsAliasesAndFunctionCase(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | stats EaRLiEsT(amount) LaTeSt(label) AS newest BY service`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command := query.Commands[0].(*StatsCommand)
+	if len(command.Aggregates) != 2 {
+		t.Fatalf("aggregates = %#v", command.Aggregates)
+	}
+	earliest := command.Aggregates[0]
+	if earliest.Function != AggregateFunctionEarliest ||
+		earliest.Input != "amount" || earliest.Alias != "earliest(amount)" {
+		t.Fatalf("earliest aggregate = %#v", earliest)
+	}
+	latest := command.Aggregates[1]
+	if latest.Function != AggregateFunctionLatest ||
+		latest.Input != "label" || latest.Alias != "newest" {
+		t.Fatalf("latest aggregate = %#v", latest)
+	}
+	if len(command.GroupBy) != 1 || command.GroupBy[0].Name != "service" {
+		t.Fatalf("group fields = %#v", command.GroupBy)
+	}
+}
+
 func TestParseStatsDistinctCountAliasesAndFunctionCase(t *testing.T) {
 	t.Parallel()
 
@@ -1163,6 +1189,35 @@ func TestParseStatsMinAndMaxRequireExactlyOneField(t *testing.T) {
 		{name: "min multiple fields", source: `index=main | stats min(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 		{name: "max eval expression", source: `index=main | stats max(eval(status=200))`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 		{name: "min quoted field", source: `index=main | stats min("status")`, code: "SPL_EXPECTED_FIELD"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(test.source)
+			if err == nil {
+				t.Fatal("Parse succeeded, want error")
+			}
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != test.code {
+				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
+			}
+		})
+	}
+}
+
+func TestParseStatsEarliestAndLatestRequireExactlyOneField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		code   string
+	}{
+		{name: "earliest missing parentheses", source: `index=main | stats earliest`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
+		{name: "latest missing field", source: `index=main | stats latest()`, code: "SPL_EXPECTED_FIELD"},
+		{name: "earliest multiple fields", source: `index=main | stats earliest(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
+		{name: "latest eval expression", source: `index=main | stats latest(eval(status=200))`, code: "SPL_EXPECTED_RIGHT_PAREN"},
+		{name: "earliest quoted field", source: `index=main | stats earliest("status")`, code: "SPL_EXPECTED_FIELD"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

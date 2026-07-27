@@ -467,6 +467,8 @@ const (
 	AggregateFunctionList
 	AggregateFunctionMinimum
 	AggregateFunctionMaximum
+	AggregateFunctionEarliest
+	AggregateFunctionLatest
 )
 
 // StatsAggregate is one source-located aggregate expression and its public

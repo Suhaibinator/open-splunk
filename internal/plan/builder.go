@@ -494,7 +494,6 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		case *spl.LimitCommand:
 			result.Operators = append(result.Operators, &Limit{Count: command.Count, FromEnd: command.Name() == "tail", Range: command.Range})
 		case *spl.StatsCommand:
-			canonicalTimeAvailable = false
 			if len(command.Aggregates) == 0 {
 				return nil, &Diagnostic{
 					Code:    "SPL_EXPECTED_AGGREGATE",
@@ -588,12 +587,24 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					spl.AggregateFunctionAverage, spl.AggregateFunctionDistinctCount,
 					spl.AggregateFunctionValues, spl.AggregateFunctionList,
 					spl.AggregateFunctionMinimum,
-					spl.AggregateFunctionMaximum:
+					spl.AggregateFunctionMaximum,
+					spl.AggregateFunctionEarliest,
+					spl.AggregateFunctionLatest:
 					if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) {
 						return nil, &Diagnostic{
 							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
 							Message: "stats aggregate requires one exact input field",
 							Range:   aggregate.Range,
+						}
+					}
+					if (aggregate.Function == spl.AggregateFunctionEarliest ||
+						aggregate.Function == spl.AggregateFunctionLatest) &&
+						!canonicalTimeAvailable {
+						return nil, &Diagnostic{
+							Code:        "SPL_UNSUPPORTED_STATS_TIME_FIELD",
+							Message:     "earliest and latest require the unmodified canonical _time field",
+							Range:       aggregate.Range,
+							Suggestions: []string{"run stats earliest or latest before removing, replacing, or transforming _time"},
 						}
 					}
 					input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
@@ -619,6 +630,10 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 						measure.Function = AggregateFunctionMinimum
 					case spl.AggregateFunctionMaximum:
 						measure.Function = AggregateFunctionMaximum
+					case spl.AggregateFunctionEarliest:
+						measure.Function = AggregateFunctionEarliest
+					case spl.AggregateFunctionLatest:
+						measure.Function = AggregateFunctionLatest
 					}
 				default:
 					return nil, &Diagnostic{
@@ -637,6 +652,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				Measures: measures,
 				Range:    command.Range,
 			})
+			canonicalTimeAvailable = false
 		case *spl.TopCommand, *spl.RareCommand:
 			var commandName, fieldName string
 			var fieldRange, commandRange spl.Range
