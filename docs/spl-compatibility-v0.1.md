@@ -36,6 +36,9 @@ whole-query ceiling is reached.
 Every `coalesce` call accepts at most 32 values and has the same separate
 64 KiB generated-SQL ceiling, checked incrementally while its variadic
 arguments are compiled.
+Every `case` call accepts one through 16 condition/value pairs and has the
+same separate 64 KiB generated-SQL ceiling, checked incrementally while its
+alternating predicates and values are compiled.
 Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
@@ -112,7 +115,8 @@ slice supports Boolean combinations of scalar comparisons and direct
 `isnull(value)` / `isnotnull(value)` predicates. Each informational function
 accepts exactly one scalar expression, and can also be compared explicitly
 with a Boolean literal. Scalar operands may be fields, typed literals, or the
-supported `tonumber`, `replace`, bounded `if`, and bounded `coalesce` calls
+supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, and bounded
+`case` calls
 described below;
 arithmetic, field quoting, `XOR`, and other eval functions are not yet
 accepted. Missing, null, container, or failed numeric operands do not pass
@@ -144,6 +148,7 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval label=if(isnull(optional), "missing", "present")
 | eval score=if(status>=500, 1, 0)
 | eval selected=coalesce(null, source, "unknown")
+| eval class=case(status>=500, "server", status>=400, "client", 1=1, "other")
 ```
 
 Assignments are evaluated from left to right, and later assignments may use an
@@ -160,7 +165,9 @@ narrow:
 - `if(predicate, true_value, false_value)` selects exactly one fixed scalar
   result. It requires exactly three arguments;
 - `coalesce(value, ...)` selects the first non-null supported fixed value from
-  one through 32 arguments.
+  one through 32 arguments;
+- `case(predicate, value, ...)` selects the value paired with the first true
+  predicate from one through 16 condition/value pairs.
 
 The `if` predicate uses exactly the `where` grammar described above:
 case-sensitive scalar comparisons, direct `isnull` / `isnotnull` predicates,
@@ -273,6 +280,65 @@ side-effecting or throwing function arguments; the supported scalar surface is
 pure, and ClickHouse may analyze or constant-fold expressions independently.
 The per-call 64 KiB SQL ceiling is enforced before the final expression is
 concatenated.
+
+`case` accepts alternating predicate/value arguments:
+
+```spl
+| eval class=case(status>=500, "server", status>=400, "client")
+| eval class=case(status>=500, "server", status>=400, "client", 1=1, "other")
+| where case(isnull(optional), false, isnotnull(status), true)
+```
+
+Predicates are evaluated from left to right, and the value paired with the
+first Boolean true predicate is selected. Boolean false or null continues to
+the next pair. If no predicate is true, the result is a present null; there is
+no separate default argument. A final always-true comparison such as `1=1`
+provides an explicit default in the current grammar. Splunk commonly shows
+`true()` for that purpose, but Open Splunk does not yet support `true()` as an
+eval function and rejects it rather than silently changing the grammar.
+
+Every predicate uses the exact current `where` grammar and precedence:
+case-sensitive scalar comparisons, direct `isnull` / `isnotnull`, parentheses,
+and explicit `NOT`, `AND`, and `OR`. Predicate leaves share the query-wide
+32-leaf eval/where ceiling with `where`, `if`, other `case` calls, and
+`count(eval(...))`. The complete call and all nested predicate/value
+expressions share the 32-level scalar nesting ceiling. Zero arguments, an odd
+number of arguments, a missing condition or value, and a seventeenth pair are
+rejected before planning or execution.
+
+Result typing uses the same conservative fixed-scalar contract as `if` and
+`coalesce`: non-null values must have one identical type from `String`, `Bool`,
+`UInt8`, `Int64`, `UInt64`, and `Float64`, including exact numeric type.
+Statically null values and the implicit no-match default adopt that type. If
+every value is statically null, the result is nullable `String`. A selected
+empty String, numeric zero, or Boolean false remains a value rather than being
+treated as null. Bindings inside a live statically null-producing expression
+remain in source order; type normalization does not invent argument-elision
+semantics.
+
+Dynamic event values, fixed multivalue arrays, canonical time values, mixed
+result kinds, differing numeric types, and incompatible String provenance fail
+with `SPL_UNSUPPORTED_CASE_VALUE_TYPE`. The compiler never delegates those
+cases to ClickHouse common-type or `Variant` inference. Matching `_raw`
+provenance is accepted, while mixing binary-sensitive `_raw` with an ordinary
+String is rejected.
+
+A case whose non-null values are all syntactically known Boolean values can be
+consumed directly by `where`, an `if` or `case` condition, or
+`count(eval(...))`; its implicit no-match null is false at a predicate
+boundary. Plain Boolean-literal values remain assignable. A Boolean
+`isnull`/`isnotnull` result still cannot escape through a case value into a
+direct `eval`, `tonumber`, or `replace` consumer.
+
+The compiler emits one parameterized ClickHouse
+`multiIf(ifNull(predicate, 0), value, ..., typed_null_default)`. Predicate and
+value bindings retain alternating source order. Calculated Dynamic inputs are
+materialized before predicate evaluation when required, and the scalar path
+does not expand multivalue members or multiply rows. Production execution pins
+`short_circuit_function_evaluation=enable`; ClickHouse may still perform
+static type analysis and constant folding. The per-call 64 KiB SQL ceiling is
+enforced incrementally before the final expression is concatenated, in
+addition to the whole-query ceiling.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
@@ -1512,7 +1578,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`earliest` and `latest` time functions](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/statistical-and-charting-functions/time-functions),
 [`first` and `last` event-order functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/statistical-and-charting-functions/event-order-functions),
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
-[`if`, `coalesce`, and conditional functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
+[`if`, `coalesce`, `case`, and conditional functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
 [`predicate expressions`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.2/expressions-and-predicates/predicate-expressions),
 [`isnull` and `isnotnull` informational functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/informational-functions),
 [`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),

@@ -7,7 +7,111 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: typed SPL `coalesce`
+## Latest checkpoint: ordered typed SPL `case`
+
+Date: 2026-07-27
+
+Parser and logical-plan checkpoint (committed and pushed):
+`1ee3b7e3e12fc4758474878785db4dbdd3a37319`
+
+ClickHouse compiler and pinned execution checkpoint (committed and pushed):
+`ae24b1c4b83fd18b2641561aaef0b35fab7f1ec5`
+
+This test-first slice implements the bounded ordered conditional selector
+`case(predicate, value, ...)`:
+
+1. The parser accepts case-insensitive `case` with one through 16 alternating
+   condition/value pairs. It preserves pair order and source ranges, requires
+   even arity, leaves a bare field named `case` ordinary, and rejects malformed
+   separators, missing values, implicit predicate adjacency, excess pairs, and
+   excess nesting with source-located diagnostics.
+2. Conditions use the current eval/where grammar and precedence: comparisons,
+   direct `isnull`/`isnotnull`, parentheses, and explicit `NOT`, `AND`, and
+   `OR`. Their leaves share the query-wide 32-predicate budget with earlier
+   `where`, `if`, `case`, and `count(eval(...))` expressions.
+3. Dedicated ordered AST and logical-plan branches carry predicates separately
+   from scalar values. Both trust boundaries reject zero/over-limit branches,
+   nil and typed-nil conditions or values, invalid predicate structure,
+   excessive depth/nodes, and cycles before recursive conversion or SQL
+   generation.
+4. Conditions are considered from first to last. The value paired with the
+   first Boolean true condition is selected; false or null continues. No true
+   condition publishes a present typed null. The current grammar uses an
+   explicit always-true comparison such as `1=1` for a default because
+   `true()` is not yet a supported eval function.
+5. Values use the stable fixed-scalar tier shared with `if` and `coalesce`:
+   `String`, `Bool`, `UInt8`, `Int64`, `UInt64`, and `Float64`. Non-null values
+   must have one exact type, including numeric width/sign. Statically null
+   values and the implicit default adopt it; all-null values become nullable
+   String.
+6. Dynamic values, fixed multivalues, canonical time, mixed kinds, differing
+   numeric types, and incompatible String provenance fail with the
+   source-located `SPL_UNSUPPORTED_CASE_VALUE_TYPE` diagnostic. The compiler
+   never delegates these cases to ClickHouse `Variant` or common-type
+   inference.
+7. Boolean recognition is consumer-aware. A case whose non-null values are
+   syntactically Boolean may feed `where`, another conditional, or
+   `count(eval(...))`. Plain Bool literals remain assignable, while a Boolean
+   null-predicate result cannot escape through a value into direct `eval`,
+   `tonumber`, or `replace` consumption.
+8. The compiler emits one parameterized
+   `multiIf(ifNull(condition, 0), value, ..., typed_null_default)`, preserving
+   alternating condition/value bind order and calculated-field
+   materialization. It performs no ordinary `ARRAY JOIN` or event-row
+   expansion.
+9. Each case has an incremental 64 KiB generated-SQL ceiling in addition to
+   the 256 KiB whole-query ceiling. The compiler validates branch count,
+   structural nodes, depth, and active-node cycles before materialization
+   discovery or recursive lowering.
+10. Unit coverage pins ordered pairs and bindings, predicate precedence,
+    fixed/nullable values, implicit and all-null defaults, Boolean consumers,
+    projected values, raw provenance, calculated-field materialization,
+    incompatible types, malformed/over-limit pairs, typed nils, cycles, and
+    variadic SQL growth. Adversarial review additionally fixed preservation of
+    bindings inside all-null conditional values for both case and coalesce.
+11. Pinned ClickHouse `26.3.17.4` coverage runs with common-Variant inference
+    disabled and executes first-true ordering, null-condition fallthrough,
+    implicit null, explicit default, Boolean filtering, `Int64`, `UInt8`,
+    `UInt64`, `Float64`, sequential assignments, calculated-field
+    materialization, and `EXPLAIN actions=1` proof of no row expansion.
+12. The compatibility contract cites Splunk's official conditional-function
+    reference and documents exact arity, ordering, default, type, provenance,
+    Boolean, unsupported Dynamic/container, execution, and resource behavior.
+    Editor completion and highlighting advertise case only in function
+    position, leaving a field named `case` ordinary.
+
+Validation completed so far on the current implementation:
+
+```sh
+go test ./internal/spl ./internal/plan ./internal/clickhouse -count=1
+golangci-lint run --timeout=5m --new-from-rev=1ee3b7e
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1
+```
+
+The focused suites and lint ratchet pass. The final pinned Store/compiler run
+passed in 43.565 seconds. Run the complete repository, frontend, and build
+matrix after merging the concurrent repository-wide lint cleanup.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `1ee3b7e` and `ae24b1c`, plus the
+   compatibility/editor/checkpoint commit that follows them. Preserve any
+   unexpected local changes.
+2. Run the complete validation matrix after the requested lint cleanup is
+   integrated, then update the validation paragraph above with exact results.
+3. Select the next bounded eval slice from `lower`/`upper`/`len`/`substr` or
+   `round`/`ceil`/`floor` only after writing its executable type, null,
+   Dynamic, multivalue, precision, Unicode, and resource contract.
+4. Keep Dynamic/container `coalesce` and `case` as explicit future typed-union
+   slices. They require either bounded object reconstruction or durable
+   selected-parent metadata.
+5. Keep `tostring`, heterogeneous conditionals, wildcard count, broader
+   conditional count names, and `eventstats` as separate reviewed contracts.
+
+## Previous checkpoint: typed SPL `coalesce`
 
 Date: 2026-07-27
 
