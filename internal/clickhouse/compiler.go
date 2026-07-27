@@ -82,8 +82,12 @@ const (
 	// counting. Dynamic lowering binds its input once, so nested text
 	// expressions grow linearly inside this ceiling.
 	maxCompiledTextLengthScalarSQLBytes = 64 << 10
-	maxCompiledAssignments              = 64
-	maxCompiledExtractionOutputs        = 64
+	// maxCompiledSubstringScalarSQLBytes independently bounds each SQLite-
+	// compatible UTF-8 interval expression. Inputs and literal indexes are
+	// bound once, so nested substr calls grow linearly inside this ceiling.
+	maxCompiledSubstringScalarSQLBytes = 64 << 10
+	maxCompiledAssignments             = 64
+	maxCompiledExtractionOutputs       = 64
 	// Parser-produced predicates are already bounded by a 1,024-token source
 	// and 32 eval/where leaves. Revalidate a deliberately wider structural
 	// ceiling here so forged logical plans cannot drive unbounded recursive
@@ -3676,6 +3680,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileTextCaseScalar(expression, state)
 		case plan.ScalarFunctionLength:
 			return compileTextLengthScalar(expression, state)
+		case plan.ScalarFunctionSubstring:
+			return compileSubstringScalar(expression, state)
 		default:
 			return compiledScalar{}, fmt.Errorf("compile ClickHouse scalar expression: unsupported function %d", expression.Function)
 		}
@@ -4541,6 +4547,27 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			expectedArguments = 1
 		case plan.ScalarFunctionReplace:
 			expectedArguments = 3
+		case plan.ScalarFunctionSubstring:
+			if len(expression.Arguments) < 2 || len(expression.Arguments) > 3 {
+				return errors.New(
+					"compile ClickHouse predicate: substr requires two or three arguments",
+				)
+			}
+			for index := 1; index < len(expression.Arguments); index++ {
+				if nilScalarExpression(expression.Arguments[index]) {
+					return errors.New(
+						"compile ClickHouse predicate: substr has a missing index",
+					)
+				}
+				literal, ok := expression.Arguments[index].(*plan.ScalarLiteralExpression)
+				if !ok || literal == nil ||
+					(literal.Value.Kind != plan.ValueKindInt64 &&
+						literal.Value.Kind != plan.ValueKindUint64) {
+					return errors.New(
+						"compile ClickHouse predicate: substr indexes must be literal integers",
+					)
+				}
+			}
 		case plan.ScalarFunctionCoalesce:
 			if len(expression.Arguments) == 0 {
 				return errors.New(
@@ -5060,6 +5087,152 @@ func compileTextLengthScalar(
 		alwaysNull:              input.alwaysNull,
 		materializeForPredicate: input.materializeForPredicate,
 	}, nil
+}
+
+func compileSubstringScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+) (compiledScalar, error) {
+	if expression == nil {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse substr: missing expression",
+		)
+	}
+	if len(expression.Arguments) < 2 || len(expression.Arguments) > 3 {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse substr: expected two or three arguments",
+		)
+	}
+	if nilScalarExpression(expression.Arguments[0]) {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse substr: missing scalar expression",
+		)
+	}
+	if scalarExpressionMayReturnBooleanFunction(expression.Arguments[0]) {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse substr: cannot consume a Boolean null predicate",
+		)
+	}
+
+	input, err := compileScalarValue(expression.Arguments[0], state)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	inputSQL := ""
+	inputArgs := append([]any(nil), input.valueArgs...)
+	switch input.kind {
+	case fieldKindDynamic:
+		// dynamicElement returns Nullable(String), so unsupported runtime
+		// numbers, Booleans, arrays, and objects fail closed without generic
+		// Dynamic conversion branches.
+		inputSQL = "dynamicElement(" + input.valueSQL + ", 'String')"
+	case fieldKindStringArray:
+		return compiledScalar{}, unsupportedMultivalueUsage(
+			"substr",
+			expression.Range,
+		)
+	case fieldKindString, fieldKindInvalid:
+		inputSQL, inputArgs = compiledTextEligibleStringScalar(input)
+	default:
+		return compiledScalar{}, &plan.Diagnostic{
+			Code:    "SPL_UNSUPPORTED_SUBSTRING_VALUE_TYPE",
+			Message: "substr requires a String input",
+			Range:   expression.Range,
+		}
+	}
+
+	startSQL, startArgs, err := compileSubstringIntegerLiteral(
+		expression.Arguments[1],
+	)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	indexSQL := []string{startSQL}
+	valueArgs := append(inputArgs, startArgs...)
+	if len(expression.Arguments) == 3 {
+		lengthSQL, lengthArgs, lengthErr := compileSubstringIntegerLiteral(
+			expression.Arguments[2],
+		)
+		if lengthErr != nil {
+			return compiledScalar{}, lengthErr
+		}
+		indexSQL = append(indexSQL, lengthSQL)
+		valueArgs = append(valueArgs, lengthArgs...)
+	}
+
+	valueSQL := sqliteSubstringUTF8SQL(inputSQL, indexSQL)
+	if len(valueSQL) > maxCompiledSubstringScalarSQLBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"substr scalar SQL exceeds %d bytes",
+				maxCompiledSubstringScalarSQLBytes,
+			),
+			Range: expression.Range,
+		}
+	}
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               valueArgs,
+		existsSQL:               "1",
+		kind:                    fieldKindString,
+		alwaysNull:              input.alwaysNull,
+		materializeForPredicate: input.materializeForPredicate,
+	}, nil
+}
+
+func compileSubstringIntegerLiteral(
+	expression plan.ScalarExpression,
+) (string, []any, error) {
+	if nilScalarExpression(expression) {
+		return "", nil, errors.New(
+			"compile ClickHouse substr: missing index",
+		)
+	}
+	literal, ok := expression.(*plan.ScalarLiteralExpression)
+	if !ok || literal == nil {
+		return "", nil, errors.New(
+			"compile ClickHouse substr: index must be a literal integer",
+		)
+	}
+	switch literal.Value.Kind {
+	case plan.ValueKindInt64:
+		return "CAST(? AS Int128)", []any{literal.Value.Int64}, nil
+	case plan.ValueKindUint64:
+		return "CAST(? AS Int128)", []any{literal.Value.Uint64}, nil
+	default:
+		return "", nil, errors.New(
+			"compile ClickHouse substr: index must be a literal integer",
+		)
+	}
+}
+
+func sqliteSubstringUTF8SQL(inputSQL string, indexes []string) string {
+	positionSQL := "if(start < 0, n + start + 1, start)"
+	beginSQL := "position"
+	endSQL := "n + 1"
+	outerParameters := "value, start"
+	outerArguments := "[" + inputSQL + "], [" + indexes[0] + "]"
+	if len(indexes) == 2 {
+		beginSQL = "if(span < 0, position + span, position)"
+		endSQL = "if(span < 0, position, position + span)"
+		outerParameters += ", span"
+		outerArguments += ", [" + indexes[1] + "]"
+	}
+	clippedBeginSQL := "clamp(" + beginSQL +
+		", CAST(1 AS Int128), n + 1)"
+	clippedEndSQL := "clamp(" + endSQL +
+		", CAST(1 AS Int128), n + 1)"
+	substringSQL := "substringUTF8(value, toInt64(" +
+		clippedBeginSQL + "), toUInt64(" +
+		clippedEndSQL + " - " + clippedBeginSQL + "))"
+	positionBindingSQL := "arrayElement(arrayMap(position -> " +
+		substringSQL + ", [" + positionSQL + "]), 1)"
+	lengthBindingSQL := "arrayElement(arrayMap(n -> " +
+		positionBindingSQL +
+		", [CAST(lengthUTF8(value) AS Int128)]), 1)"
+	return "arrayElement(arrayMap((" + outerParameters + ") -> " +
+		lengthBindingSQL + ", " + outerArguments + "), 1)"
 }
 
 func compileUnaryTextScalarInput(
