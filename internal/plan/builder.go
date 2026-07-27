@@ -1875,6 +1875,12 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 					Range:   expression.Range,
 				}
 			}
+		case spl.ScalarFunctionCeil:
+			expectedArguments = 1
+			functionName = "ceil"
+		case spl.ScalarFunctionFloor:
+			expectedArguments = 1
+			functionName = "floor"
 		case spl.ScalarFunctionReplace:
 			expectedArguments = 3
 			functionName = "replace"
@@ -1953,14 +1959,24 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				}
 			}
 		}
-		if expression.Function == spl.ScalarFunctionRound {
+		if expression.Function == spl.ScalarFunctionRound ||
+			expression.Function == spl.ScalarFunctionCeil ||
+			expression.Function == spl.ScalarFunctionFloor {
 			if splScalarMayReturnBooleanFunction(expression.Arguments[0]) {
+				functionName := "round"
+				if expression.Function == spl.ScalarFunctionCeil {
+					functionName = "ceil"
+				} else if expression.Function == spl.ScalarFunctionFloor {
+					functionName = "floor"
+				}
 				return nil, &Diagnostic{
 					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
-					Message: "round cannot consume a Boolean result",
+					Message: functionName + " cannot consume a Boolean result",
 					Range:   expression.Arguments[0].SourceRange(),
 				}
 			}
+		}
+		if expression.Function == spl.ScalarFunctionRound {
 			if len(expression.Arguments) == 2 &&
 				!spl.SupportedRoundPrecision(expression.Arguments[1]) {
 				return nil, &Diagnostic{
@@ -2017,6 +2033,10 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			function = ScalarFunctionToString
 		case spl.ScalarFunctionRound:
 			function = ScalarFunctionRound
+		case spl.ScalarFunctionCeil:
+			function = ScalarFunctionCeil
+		case spl.ScalarFunctionFloor:
+			function = ScalarFunctionFloor
 		case spl.ScalarFunctionReplace:
 			function = ScalarFunctionReplace
 		case spl.ScalarFunctionIsNull:

@@ -512,6 +512,8 @@ const (
 	ScalarFunctionSubstring
 	ScalarFunctionToString
 	ScalarFunctionRound
+	ScalarFunctionCeil
+	ScalarFunctionFloor
 )
 
 // ScalarCallExpression invokes one supported eval operation.

@@ -2439,6 +2439,31 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				},
 			}
 		}
+	case "ceil", "ceiling", "floor":
+		if functionName == "floor" {
+			function = ScalarFunctionFloor
+		} else {
+			function = ScalarFunctionCeil
+		}
+		if len(arguments) != 1 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: functionName + " requires exactly one argument",
+				Range:   name.sourceRange,
+			}
+		}
+		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
+			return nil, &Diagnostic{
+				Code: "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: functionName +
+					" cannot consume a Boolean result in search-mode expressions",
+				Range: arguments[0].SourceRange(),
+				Suggestions: []string{
+					"use isnull or isnotnull directly with where",
+					"convert a numeric value before rounding it",
+				},
+			}
+		}
 	case "substr":
 		function = ScalarFunctionSubstring
 		if len(arguments) < 2 || len(arguments) > 3 {
@@ -2491,6 +2516,8 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				"len(value)",
 				"substr(value, start, length)",
 				"round(value, precision)",
+				"ceil(value)",
+				"floor(value)",
 				`if(predicate, true_value, false_value)`,
 			},
 		}

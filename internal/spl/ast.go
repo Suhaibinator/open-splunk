@@ -235,6 +235,8 @@ const (
 	ScalarFunctionSubstring
 	ScalarFunctionToString
 	ScalarFunctionRound
+	ScalarFunctionCeil
+	ScalarFunctionFloor
 )
 
 // ScalarCallExpr invokes a supported eval function. Function names are
