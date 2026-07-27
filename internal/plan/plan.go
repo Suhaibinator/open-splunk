@@ -203,6 +203,7 @@ const (
 	AggregateFunctionAverage
 	AggregateFunctionDistinctCount
 	AggregateFunctionValues
+	AggregateFunctionList
 	AggregateFunctionMinimum
 	AggregateFunctionMaximum
 )

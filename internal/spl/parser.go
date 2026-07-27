@@ -1335,7 +1335,7 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 	if !supported {
 		return StatsAggregate{}, end, p.unsupportedStatsAggregate(
 			functionToken,
-			fmt.Sprintf("stats aggregate %q is not supported; count, dc, values, p95, sum, avg, min, and max are available", functionToken.text),
+			fmt.Sprintf("stats aggregate %q is not supported; count, dc, values, list, p95, sum, avg, min, and max are available", functionToken.text),
 		)
 	}
 	aggregate.Function = spec.function
@@ -1410,6 +1410,8 @@ func statsAggregateSpecForName(name string) (statsAggregateSpec, bool) {
 		return statsAggregateSpec{function: AggregateFunctionDistinctCount, canonicalName: "dc", requiresInput: true}, true
 	case "values":
 		return statsAggregateSpec{function: AggregateFunctionValues, canonicalName: "values", requiresInput: true}, true
+	case "list":
+		return statsAggregateSpec{function: AggregateFunctionList, canonicalName: "list", requiresInput: true}, true
 	case "min":
 		return statsAggregateSpec{function: AggregateFunctionMinimum, canonicalName: "min", requiresInput: true}, true
 	case "max":

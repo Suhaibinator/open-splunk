@@ -26,6 +26,8 @@ const (
 	internalRawEncodingColumn          = "__os_raw_encoding"
 	internalSortTimeColumn             = "__os_sort_time"
 	internalSortIDColumn               = "__os_sort_event_id"
+	internalSortVisibilityColumn       = "__os_sort_visibility_seq"
+	internalSortSourceIdentityColumn   = "__os_sort_source_identity"
 	rawEncodingUTF8                    = 1
 	// Timechart physical columns are an executor-only transport. Runtime series
 	// names are data, never SQL identifiers, and are expanded into the public
@@ -85,6 +87,15 @@ const (
 	// results before a later head/sort limit can hide them.
 	MaximumStatsValuesPerResult      = 100_000
 	MaximumStatsValuesBytesPerResult = 8 << 20
+	// MaximumStatsListValuesPerGroup matches Splunk's fixed list() behavior:
+	// only the first 100 eligible values in pipeline order are published.
+	MaximumStatsListValuesPerGroup = 100
+	// List results share values()'s publication-byte policy while retaining
+	// separate whole-result accounting and diagnostics. The aggregate state is
+	// already element-bounded by groupArraySortedArray.
+	MaximumStatsListBytesPerGroup   = MaximumStatsValuesBytesPerGroup
+	MaximumStatsListValuesPerResult = MaximumStatsValuesPerResult
+	MaximumStatsListBytesPerResult  = MaximumStatsValuesBytesPerResult
 
 	// UnsupportedStatsByValueMarker is emitted by the scalar-only stats BY
 	// guard so the executor can classify the ClickHouse exception without
@@ -103,6 +114,13 @@ const (
 	// StatsValuesLimitMarker classifies a values cell or complete transforming
 	// result that exceeded its published element ceiling.
 	StatsValuesLimitMarker = "open-splunk: stats values exceed the supported limit"
+	// StatsListBytesLimitMarker classifies the selected first-100 list values
+	// when their per-cell or whole-result lexical payload is too large.
+	StatsListBytesLimitMarker = "open-splunk: stats list bytes exceed the supported limit"
+	// StatsListLimitMarker classifies a complete transforming result with too
+	// many list elements across groups and aliases. Per-cell values beyond the
+	// documented first 100 are truncated rather than treated as overflow.
+	StatsListLimitMarker = "open-splunk: stats list exceeds the supported result limit"
 	// UnsupportedDedupValueMarker is emitted when a complete dedup key contains
 	// a runtime list or object. It is intentionally stable for executor-side
 	// classification and is never returned verbatim to clients.
@@ -491,6 +509,30 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				nextState.preAggregateColumns = nil
 				nextState.preAggregateArgs = nil
 			}
+			if len(nextState.preAggregateListWindowColumns) > 0 {
+				// Bound list() input bytes before aggregation. Per-input prefix
+				// windows establish each value's position and cumulative payload
+				// within its BY group without expanding event rows.
+				relation = relation.selectFrom(
+					"SELECT *, "+strings.Join(nextState.preAggregateListWindowColumns, ", ")+" FROM ("+relation.sql+") AS "+alias,
+					operator.Range,
+				)
+				aliasSequence++
+				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+				nextState.preAggregateListWindowColumns = nil
+			}
+			if len(nextState.preAggregateListCandidateColumns) > 0 {
+				// Freeze the already-bounded candidate arrays and their tiny
+				// overflow flags before the aggregate. This prevents repeated
+				// evaluation and keeps every partial list state byte-bounded.
+				relation = relation.selectFrom(
+					"SELECT *, "+strings.Join(nextState.preAggregateListCandidateColumns, ", ")+" FROM ("+relation.sql+") AS "+alias,
+					operator.Range,
+				)
+				aliasSequence++
+				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+				nextState.preAggregateListCandidateColumns = nil
+			}
 			aggregateSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql + ") AS " + alias
 			if len(groups) > 0 {
 				aggregateSQL += " GROUP BY " + strings.Join(groups, ", ")
@@ -506,6 +548,12 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				)
 				aliasSequence += additionalAliases
 				nextState.postAggregateScalarExtrema = nil
+			}
+			publishedValues := make([]string, 0, len(nextState.postAggregateExactStrings))
+			for _, measure := range nextState.postAggregateExactStrings {
+				if measure.function == plan.AggregateFunctionValues {
+					publishedValues = append(publishedValues, measure.outputColumn)
+				}
 			}
 			if len(nextState.postAggregateExactStrings) > 0 {
 				var additionalAliases int
@@ -529,6 +577,18 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				)
 				aliasSequence += additionalAliases
 				nextState.postAggregateDistinctCounts = nil
+			}
+			if len(nextState.postAggregateOrderedStrings) > 0 {
+				var additionalAliases int
+				relation, additionalAliases = compileBoundedOrderedStringResults(
+					relation,
+					nextState.postAggregateOrderedStrings,
+					publishedValues,
+					operator.Range,
+					aliasSequence,
+				)
+				aliasSequence += additionalAliases
+				nextState.postAggregateOrderedStrings = nil
 			}
 			args = append(args, aggregateArgs...)
 			state = nextState
@@ -2620,23 +2680,26 @@ func compileChart(
 }
 
 type compileState struct {
-	visible                       map[string]fieldState
-	publicOrder                   []string
-	privateColumns                []string
-	rexCapturedBytesSQL           string
-	allowDynamic                  bool
-	eventRows                     bool
-	blocked                       map[string]struct{}
-	blockedPrefixes               map[string]struct{}
-	order                         []compiledSortKey
-	tieBreakers                   []compiledSortKey
-	preAggregateValidationColumns []string
-	preAggregateValidationArgs    []any
-	preAggregateColumns           []string
-	preAggregateArgs              []any
-	postAggregateScalarExtrema    []compiledScalarExtremaMeasure
-	postAggregateExactStrings     []compiledExactStringMeasure
-	postAggregateDistinctCounts   []compiledDistinctCount
+	visible                          map[string]fieldState
+	publicOrder                      []string
+	privateColumns                   []string
+	rexCapturedBytesSQL              string
+	allowDynamic                     bool
+	eventRows                        bool
+	blocked                          map[string]struct{}
+	blockedPrefixes                  map[string]struct{}
+	order                            []compiledSortKey
+	tieBreakers                      []compiledSortKey
+	preAggregateValidationColumns    []string
+	preAggregateValidationArgs       []any
+	preAggregateColumns              []string
+	preAggregateArgs                 []any
+	preAggregateListWindowColumns    []string
+	preAggregateListCandidateColumns []string
+	postAggregateScalarExtrema       []compiledScalarExtremaMeasure
+	postAggregateExactStrings        []compiledExactStringMeasure
+	postAggregateDistinctCounts      []compiledDistinctCount
+	postAggregateOrderedStrings      []compiledOrderedStringMeasure
 }
 
 type compiledScalarExtremaMeasure struct {
@@ -2649,6 +2712,12 @@ type compiledExactStringMeasure struct {
 	setColumn    string
 	outputColumn string
 	function     plan.AggregateFunction
+}
+
+type compiledOrderedStringMeasure struct {
+	listColumn     string
+	overflowColumn string
+	outputColumn   string
 }
 
 // compiledDistinctCount carries an already-materialized exact cardinality
@@ -2730,6 +2799,15 @@ func compileScan(database, table string, scan *plan.Scan) (string, compileState,
 		aliasPhysical("field_metadata_version", internalFieldMetadataVersionColumn),
 		aliasPhysical("event_time", internalSortTimeColumn),
 		aliasPhysical("event_id", internalSortIDColumn),
+		aliasPhysical("visibility_seq", internalSortVisibilityColumn),
+		"tuple(" +
+			strings.Join([]string{
+				quoteIdentifier("index_name"),
+				quoteIdentifier("collector_id"),
+				quoteIdentifier("batch_sequence"),
+				quoteIdentifier("batch_id"),
+			}, ", ") +
+			") AS " + quoteIdentifier(internalSortSourceIdentityColumn),
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(scan.Indexes)), ", ")
 	where := []string{
@@ -2773,6 +2851,8 @@ func compileScan(database, table string, scan *plan.Scan) (string, compileState,
 		blockedPrefixes: make(map[string]struct{}),
 		tieBreakers: []compiledSortKey{
 			{valueSQL: quoteIdentifier(internalSortIDColumn), descending: true},
+			{valueSQL: quoteIdentifier(internalSortVisibilityColumn), descending: true},
+			{valueSQL: quoteIdentifier(internalSortSourceIdentityColumn), descending: true},
 		},
 	}
 	return "SELECT " + strings.Join(selects, ", ") + " FROM " + quoteIdentifier(database) + "." + quoteIdentifier(table) + " WHERE " + strings.Join(where, " AND "), state, args, nil
@@ -3932,6 +4012,14 @@ func cloneCompileState(state compileState) compileState {
 	next.preAggregateValidationArgs = append([]any(nil), state.preAggregateValidationArgs...)
 	next.preAggregateColumns = append([]string(nil), state.preAggregateColumns...)
 	next.preAggregateArgs = append([]any(nil), state.preAggregateArgs...)
+	next.preAggregateListWindowColumns = append(
+		[]string(nil),
+		state.preAggregateListWindowColumns...,
+	)
+	next.preAggregateListCandidateColumns = append(
+		[]string(nil),
+		state.preAggregateListCandidateColumns...,
+	)
 	next.postAggregateScalarExtrema = append(
 		[]compiledScalarExtremaMeasure(nil),
 		state.postAggregateScalarExtrema...,
@@ -3943,6 +4031,10 @@ func cloneCompileState(state compileState) compileState {
 	next.postAggregateDistinctCounts = append(
 		[]compiledDistinctCount(nil),
 		state.postAggregateDistinctCounts...,
+	)
+	next.postAggregateOrderedStrings = append(
+		[]compiledOrderedStringMeasure(nil),
+		state.postAggregateOrderedStrings...,
 	)
 	return next
 }
@@ -4080,7 +4172,7 @@ func livePrivateColumns(columns []string, visible map[string]fieldState) []strin
 // columns publicly, but they also must not discard them before an event
 // analysis finalizer consumes the relation.
 func appendPrivateEventProjection(projection []string, state compileState) []string {
-	privateColumns := make([]string, 0, 7+len(state.privateColumns)+len(state.order)+len(state.tieBreakers))
+	privateColumns := make([]string, 0, 9+len(state.privateColumns)+len(state.order)+len(state.tieBreakers))
 	if state.eventRows {
 		privateColumns = append(privateColumns,
 			quoteIdentifier(internalFieldsColumn),
@@ -4090,6 +4182,8 @@ func appendPrivateEventProjection(projection []string, state compileState) []str
 			quoteIdentifier(internalRawEncodingColumn),
 			quoteIdentifier(internalSortTimeColumn),
 			quoteIdentifier(internalSortIDColumn),
+			quoteIdentifier(internalSortVisibilityColumn),
+			quoteIdentifier(internalSortSourceIdentityColumn),
 		)
 	}
 	privateColumns = append(privateColumns, state.privateColumns...)
@@ -5076,6 +5170,11 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 	scalarExtremaResults := make(map[scalarExtremaResultKey]scalarExtremaResult)
 	exactStringSets := make(map[string]string)
 	distinctCounts := make(map[string]string)
+	type orderedStringList struct {
+		listColumn     string
+		overflowColumn string
+	}
+	orderedStringLists := make(map[string]orderedStringList)
 	valuesInputs := make(map[string]struct{})
 	extremaMeasureInputs := make(map[string]struct{})
 	for _, measure := range operator.Measures {
@@ -5086,6 +5185,33 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			measure.Function == plan.AggregateFunctionMaximum {
 			extremaMeasureInputs[measure.Input.Name] = struct{}{}
 		}
+	}
+	listRowOrdinal := ""
+	listWindowOrder := ""
+	listRowOrdinalFor := func() (string, string, error) {
+		if listRowOrdinal != "" {
+			return listRowOrdinal, listWindowOrder, nil
+		}
+		orderKeys := defaultCompiledOrder(state)
+		if len(orderKeys) == 0 {
+			return "", "", errors.New("compile ClickHouse list order: input has no deterministic row identity")
+		}
+		orderSQL, orderErr := compileMaterializedOrder(orderKeys, false)
+		if orderErr != nil {
+			return "", "", fmt.Errorf("compile ClickHouse list order: %w", orderErr)
+		}
+		windowParts := make([]string, 0, 2)
+		if len(groups) > 0 {
+			windowParts = append(windowParts, "PARTITION BY "+strings.Join(groups, ", "))
+		}
+		windowParts = append(windowParts, "ORDER BY "+orderSQL)
+		listWindowOrder = strings.Join(windowParts, " ")
+		listRowOrdinal = quoteIdentifier("__os_list_row_ordinal")
+		next.preAggregateListWindowColumns = append(
+			next.preAggregateListWindowColumns,
+			"row_number() OVER ("+listWindowOrder+") AS "+listRowOrdinal,
+		)
+		return listRowOrdinal, listWindowOrder, nil
 	}
 	scalarStringInputFor := func(ref plan.FieldRef, input fieldState) *scalarStringInput {
 		if cached, ok := scalarStringInputs[ref.Name]; ok {
@@ -5164,6 +5290,7 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 			}
 		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage,
 			plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues,
+			plan.AggregateFunctionList,
 			plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum:
 			if measure.Percentile != 0 {
 				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
@@ -5430,6 +5557,92 @@ func compileAggregate(operator *plan.Aggregate, state compileState) (
 					measureState.existsSQL = "notEmpty(" + output + ")"
 				}
 			}
+		case plan.AggregateFunctionList:
+			_, inputExists, resolveErr := resolveCompiledField(measure.Input, state)
+			if resolveErr != nil {
+				return nil, nil, nil, compileState{}, nil, resolveErr
+			}
+			if !inputExists {
+				// Preserve global aggregate and retained-group row semantics with
+				// one constant-size aggregate state. There is no row order to
+				// recover for a field that is statically absent, so ordered
+				// prefix windows would only sort the entire input to publish [].
+				projection = append(
+					projection,
+					"groupArrayArray(1)(CAST([], 'Array(String)')) AS "+output,
+				)
+				measureState.kind = fieldKindStringArray
+				measureState.existsSQL = "notEmpty(" + output + ")"
+				break
+			}
+			inputSQL, inputErr := stringInputFor(measure.Input)
+			if inputErr != nil {
+				return nil, nil, nil, compileState{}, nil, inputErr
+			}
+			rowOrdinal, windowOrder, orderErr := listRowOrdinalFor()
+			if orderErr != nil {
+				return nil, nil, nil, compileState{}, nil, orderErr
+			}
+			list, cached := orderedStringLists[measure.Input.Name]
+			if !cached {
+				ordinal := len(orderedStringLists)
+				priorElements := quoteIdentifier(fmt.Sprintf(
+					"__os_list_prior_elements_%d",
+					ordinal,
+				))
+				priorBytes := quoteIdentifier(fmt.Sprintf(
+					"__os_list_prior_bytes_%d",
+					ordinal,
+				))
+				frame := " OVER (" + windowOrder +
+					" ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)"
+				next.preAggregateListWindowColumns = append(
+					next.preAggregateListWindowColumns,
+					"ifNull(sum(toUInt128(length("+inputSQL+")))"+frame+
+						", toUInt128(0)) AS "+priorElements,
+					"ifNull(sum("+stringArrayPayloadBytesSQL(inputSQL)+")"+frame+
+						", toUInt128(0)) AS "+priorBytes,
+				)
+				rowState := quoteIdentifier(fmt.Sprintf(
+					"__os_list_row_state_%d",
+					ordinal,
+				))
+				next.preAggregateListCandidateColumns = append(
+					next.preAggregateListCandidateColumns,
+					boundedOrderedStringRowStateSQL(
+						rowOrdinal,
+						inputSQL,
+						priorElements,
+						priorBytes,
+					)+" AS "+rowState,
+				)
+				list.listColumn = quoteIdentifier(fmt.Sprintf(
+					"__os_ordered_strings_%d",
+					ordinal,
+				))
+				list.overflowColumn = quoteIdentifier(fmt.Sprintf(
+					"__os_ordered_strings_bytes_overflow_%d",
+					ordinal,
+				))
+				orderedStringLists[measure.Input.Name] = list
+				projection = append(
+					projection,
+					boundedOrderedStringListSQL("tupleElement("+rowState+", 1)")+
+						" AS "+list.listColumn,
+					"max(tupleElement("+rowState+", 2)) AS "+list.overflowColumn,
+				)
+			}
+			next.postAggregateOrderedStrings = append(
+				next.postAggregateOrderedStrings,
+				compiledOrderedStringMeasure{
+					listColumn:     list.listColumn,
+					overflowColumn: list.overflowColumn,
+					outputColumn:   output,
+				},
+			)
+			measureState.kind = fieldKindStringArray
+			// As with values(), an empty physical array has no logical SPL value.
+			measureState.existsSQL = "notEmpty(" + output + ")"
 		default:
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: unsupported function %d", measure.Function)
 		}
@@ -5791,9 +6004,169 @@ func exactDistinctStringSetSQL(inputSQL string, maximum uint64) string {
 	return "groupUniqArrayArray(" + sentinel + ")(" + inputSQL + ")"
 }
 
-func exactStringPayloadBytesSQL(setSQL string) string {
+func stringArrayPayloadBytesSQL(valuesSQL string) string {
 	return "arrayFold((bytes, value) -> bytes + toUInt128(length(value)), " +
-		setSQL + ", toUInt128(0))"
+		valuesSQL + ", toUInt128(0))"
+}
+
+func orderedStringMembersSQL(valuesSQL string) string {
+	return "arrayMap((value, element_index, cumulative_bytes) -> " +
+		"tuple(value, toUInt128(element_index), cumulative_bytes), " +
+		valuesSQL + ", arrayEnumerate(" + valuesSQL + "), " +
+		"arrayCumSum(arrayMap(value -> toUInt128(length(value)), " + valuesSQL + ")))"
+}
+
+func boundedOrderedStringRowStateSQL(
+	rowOrdinalSQL string,
+	valuesSQL string,
+	priorElementsSQL string,
+	priorBytesSQL string,
+) string {
+	maximumValues := strconv.FormatUint(MaximumStatsListValuesPerGroup, 10)
+	maximumBytes := strconv.FormatUint(MaximumStatsListBytesPerGroup, 10)
+	remainingValues := "if(" + priorElementsSQL + " < toUInt128(" + maximumValues +
+		"), arraySlice(" + valuesSQL + ", 1, toUInt64(toUInt128(" + maximumValues +
+		") - " + priorElementsSQL + ")), CAST([], 'Array(String)'))"
+	remaining := "__os_list_remaining_values"
+	members := orderedStringMembersSQL(remaining)
+	member := "member"
+	bytes := priorBytesSQL + " + tupleElement(" + member + ", 3)"
+	candidates := "arrayMap(" + member + " -> tuple(" + rowOrdinalSQL +
+		", toUInt64(tupleElement(" + member + ", 2)), tupleElement(" + member +
+		", 1)), arrayFilter(" + member + " -> " + bytes + " <= toUInt128(" +
+		maximumBytes + "), " + members + "))"
+	overflow := "toUInt8(" + priorElementsSQL + " < toUInt128(" + maximumValues +
+		") AND " + priorBytesSQL + " + " + stringArrayPayloadBytesSQL(remaining) +
+		" > toUInt128(" + maximumBytes + "))"
+	return "arrayElement(arrayMap(" + remaining + " -> tuple(" + candidates +
+		", " + overflow + "), [" + remainingValues + "]), 1)"
+}
+
+func boundedOrderedStringListSQL(candidatesSQL string) string {
+	return "groupArraySortedArray(" +
+		strconv.FormatUint(MaximumStatsListValuesPerGroup, 10) +
+		")(" + candidatesSQL + ")"
+}
+
+func orderedStringListPayloadBytesSQL(listSQL string) string {
+	return "arrayFold((bytes, item) -> bytes + toUInt128(length(tupleElement(item, 3))), " +
+		listSQL + ", toUInt128(0))"
+}
+
+func compileBoundedOrderedStringResults(
+	relation compiledRelation,
+	measures []compiledOrderedStringMeasure,
+	existingValues []string,
+	ownerRange spl.Range,
+	stage int,
+) (compiledRelation, int) {
+	if len(measures) == 0 {
+		return relation, 0
+	}
+
+	listColumns := make([]string, 0, len(measures))
+	overflowColumns := make([]string, 0, len(measures))
+	materialized := make(map[string]string, len(measures))
+	seenLists := make(map[string]struct{}, len(measures))
+	for _, measure := range measures {
+		if _, seen := seenLists[measure.listColumn]; seen {
+			continue
+		}
+		seenLists[measure.listColumn] = struct{}{}
+		listColumns = append(listColumns, measure.listColumn)
+		overflowColumns = append(overflowColumns, measure.overflowColumn)
+		materialized[measure.listColumn] = quoteIdentifier(fmt.Sprintf(
+			"__os_list_strings_%d",
+			len(materialized),
+		))
+	}
+
+	windowColumns := make([]string, 0, len(listColumns)+4)
+	byteConditions := make([]string, 0, len(listColumns))
+	for index, listColumn := range listColumns {
+		windowColumns = append(
+			windowColumns,
+			"arrayMap(item -> tupleElement(item, 3), "+listColumn+") AS "+
+				materialized[listColumn],
+		)
+		byteConditions = append(
+			byteConditions,
+			overflowColumns[index]+" != 0",
+			orderedStringListPayloadBytesSQL(listColumn)+" > toUInt128("+
+				strconv.FormatUint(MaximumStatsListBytesPerGroup, 10)+")",
+		)
+	}
+
+	rowElementTotal := "toUInt128(0)"
+	rowByteTotal := "toUInt128(0)"
+	for _, measure := range measures {
+		// Public aliases count independently even when their physical ordered
+		// aggregate state is shared.
+		rowElementTotal += " + toUInt128(length(" + measure.listColumn + "))"
+		rowByteTotal += " + " + orderedStringListPayloadBytesSQL(measure.listColumn)
+	}
+	for _, valuesColumn := range existingValues {
+		// values() has already passed its own exact-state barrier. Include each
+		// public values alias again so list() cannot bypass the combined
+		// transforming-row and transport budgets.
+		rowElementTotal += " + toUInt128(length(" + valuesColumn + "))"
+		rowByteTotal += " + " + stringArrayPayloadBytesSQL(valuesColumn)
+	}
+
+	elementOverflow := quoteIdentifier("__os_stats_list_any_overflow")
+	totalElements := quoteIdentifier("__os_stats_list_total_elements")
+	bytesOverflow := quoteIdentifier("__os_stats_list_bytes_any_overflow")
+	totalBytes := quoteIdentifier("__os_stats_list_total_bytes")
+	windowColumns = append(
+		windowColumns,
+		"max(toUInt8("+rowElementTotal+" > toUInt128("+
+			strconv.FormatUint(MaximumStatsValuesPerGroup, 10)+
+			"))) OVER () AS "+elementOverflow,
+		"sum("+rowElementTotal+") OVER () AS "+totalElements,
+		"max(toUInt8(("+strings.Join(byteConditions, " OR ")+") OR "+
+			rowByteTotal+" > toUInt128("+
+			strconv.FormatUint(MaximumStatsValuesBytesPerGroup, 10)+
+			"))) OVER () AS "+bytesOverflow,
+		"sum("+rowByteTotal+") OVER () AS "+totalBytes,
+	)
+
+	windowAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
+	windowSQL := "SELECT *, " + strings.Join(windowColumns, ", ") +
+		" FROM (" + relation.sql + ") AS " + windowAlias
+	relation = relation.selectFrom(windowSQL, ownerRange)
+
+	excluded := append([]string(nil), listColumns...)
+	excluded = append(excluded, overflowColumns...)
+	for _, listColumn := range listColumns {
+		excluded = append(excluded, materialized[listColumn])
+	}
+	excluded = append(
+		excluded,
+		elementOverflow,
+		totalElements,
+		bytesOverflow,
+		totalBytes,
+	)
+	projection := []string{"* EXCEPT (" + strings.Join(excluded, ", ") + ")"}
+	for _, measure := range measures {
+		projection = append(
+			projection,
+			materialized[measure.listColumn]+" AS "+measure.outputColumn,
+		)
+	}
+
+	publishAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+2))
+	publishSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql +
+		") AS " + publishAlias +
+		" WHERE throwIf(toUInt8(" + elementOverflow +
+		" != 0 OR " + totalElements + " > toUInt128(" +
+		strconv.FormatUint(MaximumStatsListValuesPerResult, 10) +
+		")), '" + StatsListLimitMarker + "') = 0" +
+		" AND throwIf(toUInt8(" + bytesOverflow +
+		" != 0 OR " + totalBytes + " > toUInt128(" +
+		strconv.FormatUint(MaximumStatsListBytesPerResult, 10) +
+		")), '" + StatsListBytesLimitMarker + "') = 0"
+	return relation.selectFrom(publishSQL, ownerRange), 2
 }
 
 func compileBoundedExactStringResults(
@@ -5878,7 +6251,7 @@ func compileBoundedExactStringResults(
 			)
 			byteConditions = append(
 				byteConditions,
-				exactStringPayloadBytesSQL(setColumn)+" > toUInt128("+
+				stringArrayPayloadBytesSQL(setColumn)+" > toUInt128("+
 					strconv.FormatUint(MaximumStatsValuesBytesPerGroup, 10)+")",
 			)
 		}
@@ -5893,7 +6266,7 @@ func compileBoundedExactStringResults(
 			// Deliberately retain duplicates: two public aliases create two
 			// recursive list cells even when their aggregate state is shared.
 			rowElementTotal += " + toUInt128(length(" + measure.setColumn + "))"
-			rowByteTotal += " + " + exactStringPayloadBytesSQL(measure.setColumn)
+			rowByteTotal += " + " + stringArrayPayloadBytesSQL(measure.setColumn)
 		}
 		windowColumns = append(
 			windowColumns,
@@ -6348,6 +6721,8 @@ func stableCompiledSortKeys() []compiledSortKey {
 	return []compiledSortKey{
 		{valueSQL: quoteIdentifier(internalSortTimeColumn), descending: true},
 		{valueSQL: quoteIdentifier(internalSortIDColumn), descending: true},
+		{valueSQL: quoteIdentifier(internalSortVisibilityColumn), descending: true},
+		{valueSQL: quoteIdentifier(internalSortSourceIdentityColumn), descending: true},
 	}
 }
 

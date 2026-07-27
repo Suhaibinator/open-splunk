@@ -1220,6 +1220,48 @@ func TestExecutorPublishesStatsValuesAsTypedMultivalueList(t *testing.T) {
 	}
 }
 
+func TestExecutorPublishesStatsListInOrderWithDuplicatesAndBinaryMembers(t *testing.T) {
+	t.Parallel()
+
+	invalidUTF8 := string([]byte{0xff, 0x00})
+	rows := &fakeRows{
+		columns: []string{"ordered"},
+		types: []driver.ColumnType{
+			fakeColumnType{
+				name:         "ordered",
+				databaseType: "Array(String)",
+				scanType:     reflect.TypeOf([]string{}),
+			},
+		},
+		data: [][]any{{[]string{"duplicate", invalidUTF8, "duplicate"}}},
+	}
+	sink := &fakeSink{}
+	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
+	if err := executor.Execute(context.Background(), clickhouse.CompiledQuery{
+		SQL:          "SELECT ordered FROM events",
+		OutputFields: []string{"ordered"},
+	}, sink); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if sink.schema.Columns[0] != (searchjobs.Column{
+		Name: "ordered", Kind: searchjobs.ValueKindList, Multivalue: true,
+	}) {
+		t.Fatalf("schema = %#v", sink.schema)
+	}
+	items, ok := sink.rows[0][0].List()
+	if !ok || len(items) != 3 {
+		t.Fatalf("list cell = %#v", sink.rows[0][0])
+	}
+	for _, index := range []int{0, 2} {
+		if got, stringOK := items[index].String(); !stringOK || got != "duplicate" {
+			t.Fatalf("list item %d = %#v, want duplicate String", index, items[index])
+		}
+	}
+	if got, bytesOK := items[1].Bytes(); !bytesOK || !slices.Equal(got, []byte{0xff, 0x00}) {
+		t.Fatalf("binary list item = %x/%v, want ff00 Bytes", got, bytesOK)
+	}
+}
+
 func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	t.Parallel()
 	settings, err := querySettings(Config{})

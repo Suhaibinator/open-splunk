@@ -445,18 +445,20 @@ the selected rows in reversed order, matching its pipeline semantics.
 | stats dc(user) AS unique_users BY service
 | stats distinct_count(device) AS devices
 | stats values(user) AS users
+| stats list(user) AS ordered_users
 | stats min(duration_ms) AS fastest max(duration_ms) AS slowest BY path
 | stats count p95(duration_ms) AS p95_ms BY path
 | stats sum(bytes) AS total_bytes avg(duration_ms) AS mean_ms BY path
 ```
 
 Argument-free `count`, `count(field)`, `dc(field)`/`distinct_count(field)`,
-`p95(field)`, `values(field)`, `sum(field)`, `avg(field)`, `min(field)`, and
-`max(field)` are supported, including multiple space- or comma-separated
-measures and `AS` aliases. Function names are case-insensitive. Both
+`p95(field)`, `values(field)`, `list(field)`, `sum(field)`, `avg(field)`,
+`min(field)`, and `max(field)` are supported, including multiple space- or
+comma-separated measures and `AS` aliases. Function names are
+case-insensitive. Both
 distinct-count spellings use the canonical default output `dc(field)`; other
 default names use canonical lowercase spelling such as `count(productId)`,
-`values(user)`, `min(duration_ms)`, or `sum(bytes)`. The command is
+`values(user)`, `list(user)`, `min(duration_ms)`, or `sum(bytes)`. The command is
 transforming: output contains only the `BY` fields followed by measures in
 source order. Argument-free `count` includes every input row in a retained
 group.
@@ -492,7 +494,7 @@ the published total strictly representable as `UInt64`.
 
 The current downstream field grammar cannot reference a default aggregate name
 that contains parentheses. Use `AS` when a `count(field)`, `dc`, `values`,
-`min`, `max`, `sum`, `avg`, or `p95` result will be consumed by a later
+`list`, `min`, `max`, `sum`, `avg`, or `p95` result will be consumed by a later
 command.
 
 This slice accepts exactly one unquoted, exact field inside `count(...)`.
@@ -605,21 +607,53 @@ an empty list to `values`, rather than being recovered from hidden event
 columns. Invalid UTF-8 fixed String data is retained as a Bytes child at the
 typed result boundary instead of being replaced or exposed as malformed text.
 
+`list` returns one non-null typed multivalue cell containing the first 100
+eligible canonical strings in current pipeline order. Unlike `values`, it
+preserves duplicates. A top-level multivalue contributes each immediate
+non-null member in its stored member order before the next event contributes.
+Missing fields, explicit nulls, and null members contribute nothing; an empty
+String is retained. Scalar conversion and unsupported object or
+nested-container handling are identical to `dc` and `values`. In particular, an unsupported
+value fails the whole aggregate even when it occurs after the visible first
+100 values, because truncation is not permission to skip validation.
+
+Event pipelines begin in `_time DESC, event_id DESC` order. The immutable
+visibility sequence closes cross-commit ties, followed by the immutable
+`(index, collector, batch sequence, batch ID)` source identity. That final
+private key also makes migrated rows deterministic when their pre-migration
+visibility sequence is zero. An upstream `sort`, `head`, `tail`, or `dedup`
+establishes the order seen by `list`; use `sort 0` when all matching rows must
+participate. Ordering is implemented with a per-group ordinal and a bounded
+merge-stable aggregate, never ClickHouse's indeterminately ordered `groupArray`
+and never row-expanding `ARRAY JOIN`.
+
+A global or retained empty group publishes `[]`; that physical empty list is
+logically absent to downstream SPL presence tests. Grouped aggregation over no
+rows emits no groups, and a projected-away input stays absent. Invalid UTF-8
+fixed String data is retained as a Bytes child at the typed result boundary.
+The first 100 selected values in one `list` cell may contain at most 512 KiB
+of raw lexical payload. Crossing that byte ceiling fails atomically; values
+after occurrence 100 are truncated and do not count toward it. The retained
+aggregate state is bounded before grouping to at most 100 tuples and 512 KiB
+of exact String payload per unique group/input.
+
 Equivalent `dc` and `values` measures over the same input share one exact
 canonical set. A values-bearing set retains at most 10,000 strings; a dc-only
 set retains at most 100,000. Every `values` cell and the combined public
-multivalue cells in one row are limited to 10,000 elements and 512 KiB of raw
-lexical payload. Duplicate output aliases count independently. Before any
-downstream filter, projection, sort, or row limit, the complete transforming
-result is also limited to 100,000 elements and 8 MiB across all `values`
-outputs. Crossing any ceiling fails the search atomically with a sanitized
+`values` and `list` cells in one row are limited to 10,000 elements and 512
+KiB of raw lexical payload. Duplicate output aliases count independently,
+while repeated `list` aliases over the same input share one ordered physical
+state. Before any downstream filter, projection, sort, or row limit, the
+complete transforming result is also limited to 100,000 elements and 8 MiB
+across all `values` and `list` outputs. Crossing any ceiling fails the search atomically with a sanitized
 resource-limit error; results are never truncated or approximated. The
 ClickHouse query-memory ceiling independently bounds the exact aggregate state
 before these post-aggregate publication checks run.
 
 `fields`, `table`, `rename`, `head`, `tail`, and a direct `eval` field copy
 preserve the fixed multivalue type. A later `dc` or `values` flattens its
-members; `min`/`max` compare its immediate members; and `sum`/`avg` parse and
+members; a later `list` flattens its members in order; `min`/`max` compare its
+immediate members; and `sum`/`avg` parse and
 flatten finite numeric members. Base-search equality and wildcard tests match
 when any valid-UTF-8 member matches;
 inequality matches only a nonempty list with no equal member, and `field=*`
@@ -1185,10 +1219,10 @@ eventstats, streamstats
 
 All `stats` functions other than argument-free `count`, exact-field
 `count(field)`, `dc(field)`/`distinct_count(field)`, `values(field)`,
-`min(field)`, `max(field)`, `p95(field)`, `sum(field)`, and `avg(field)` are
-unsupported, including `list`, `earliest`, `latest`, other fixed percentiles,
-`perc<N>`, `upperperc`, and `exactperc`. The broader `count` forms listed in
-the stats section are unsupported too.
+`list(field)`, `min(field)`, `max(field)`, `p95(field)`, `sum(field)`, and
+`avg(field)` are unsupported, including `earliest`, `latest`, other fixed
+percentiles, `perc<N>`, `upperperc`, and `exactperc`. The broader `count` forms
+listed in the stats section are unsupported too.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,

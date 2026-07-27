@@ -130,10 +130,16 @@ func TestCompiledRelationalDepthPinsRepresentativeOperatorCosts(t *testing.T) {
 		{name: "scalar String extrema aggregate", source: `| stats min(service) AS low max(service) AS high`, depth: 5},
 		{name: "dynamic extrema aggregate", source: `| stats min(user) AS low max(user) AS high`, depth: 4},
 		{name: "values aggregate", source: `| stats values(user) AS users`, depth: 6},
+		{name: "list aggregate", source: `| stats list(user) AS users`, depth: 8},
 		{
 			name:   "shared dc and values aggregate",
 			source: `| stats dc(user) AS user_count values(user) AS users`,
 			depth:  6,
+		},
+		{
+			name:   "combined values and list aggregate",
+			source: `| stats values(user) AS distinct_users list(user) AS ordered_users`,
+			depth:  10,
 		},
 	} {
 		test := test
@@ -252,6 +258,65 @@ func TestStatsValuesRelationalDepthBoundaryIsSourceLocated(t *testing.T) {
 	statsRange := rejected.Operators[len(rejected.Operators)-1].SourceRange()
 	_, err = (Compiler{}).Compile(rejected)
 	relationalDepthRequireLimitDiagnostic(t, err, statsRange)
+}
+
+func TestStatsListRelationalDepthBoundariesAreSourceLocated(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name            string
+		acceptedSingles int
+		rejectedSingles int
+		terminal        string
+	}{
+		{
+			name:            "list",
+			acceptedSingles: 24,
+			rejectedSingles: 25,
+			terminal:        "stats list(user) AS users",
+		},
+		{
+			name:            "combined values and list",
+			acceptedSingles: 22,
+			rejectedSingles: 23,
+			terminal:        "stats values(user) AS distinct_users list(user) AS ordered_users",
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			acceptedSource := relationalDepthEvalPipeline(
+				t,
+				test.acceptedSingles,
+				64,
+				test.terminal,
+			)
+			accepted, err := (Compiler{}).Compile(relationalDepthPlan(t, acceptedSource))
+			if err != nil {
+				t.Fatalf("Compile(%s at depth %d): %v", test.name, maximumCompiledRelationalDepth, err)
+			}
+			if accepted.relationalDepth != maximumCompiledRelationalDepth {
+				t.Fatalf(
+					"accepted %s relational depth = %d, want %d",
+					test.name,
+					accepted.relationalDepth,
+					maximumCompiledRelationalDepth,
+				)
+			}
+
+			rejectedSource := relationalDepthEvalPipeline(
+				t,
+				test.rejectedSingles,
+				64,
+				test.terminal,
+			)
+			rejected := relationalDepthPlan(t, rejectedSource)
+			statsRange := rejected.Operators[len(rejected.Operators)-1].SourceRange()
+			_, err = (Compiler{}).Compile(rejected)
+			relationalDepthRequireLimitDiagnostic(t, err, statsRange)
+		})
+	}
 }
 
 func TestSpathRelationalDepthBoundaryIsSourceLocated(t *testing.T) {

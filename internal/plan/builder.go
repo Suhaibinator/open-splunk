@@ -586,7 +586,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					measure.Input = input
 				case spl.AggregateFunctionP95, spl.AggregateFunctionSum,
 					spl.AggregateFunctionAverage, spl.AggregateFunctionDistinctCount,
-					spl.AggregateFunctionValues, spl.AggregateFunctionMinimum,
+					spl.AggregateFunctionValues, spl.AggregateFunctionList,
+					spl.AggregateFunctionMinimum,
 					spl.AggregateFunctionMaximum:
 					if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) {
 						return nil, &Diagnostic{
@@ -612,6 +613,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 						measure.Function = AggregateFunctionDistinctCount
 					case spl.AggregateFunctionValues:
 						measure.Function = AggregateFunctionValues
+					case spl.AggregateFunctionList:
+						measure.Function = AggregateFunctionList
 					case spl.AggregateFunctionMinimum:
 						measure.Function = AggregateFunctionMinimum
 					case spl.AggregateFunctionMaximum:

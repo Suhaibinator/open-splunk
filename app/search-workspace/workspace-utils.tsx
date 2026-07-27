@@ -21,8 +21,14 @@ const PIPELINE_COMMAND_PATTERN = [
   ...SPL_PIPELINE_COMMANDS.map((command) => command.name),
   ...UNSUPPORTED_SPL_PIPELINE_COMMANDS,
 ].map(escapeRegExp).join("|");
+const SPL_FUNCTION_NAMES = [
+  "count", "dc", "distinct_count", "values", "list", "min", "max", "p95",
+  "sum", "avg", "tonumber", "replace",
+] as const;
+const SPL_FUNCTION_PATTERN = SPL_FUNCTION_NAMES.map(escapeRegExp).join("|");
+const SPL_FUNCTION_SET = new Set<string>(SPL_FUNCTION_NAMES);
 const SYNTAX_TOKEN_PATTERN = new RegExp(
-  `(\\b(?:index|host|source|sourcetype|level|status|trace_id|message|path)\\b(?=\\s*=)|\\b(?:${PIPELINE_COMMAND_PATTERN})\\b|\\b(?:count|dc|distinct_count|values|min|max|p95|sum|avg|tonumber|replace)\\b|\\b(?:AND|OR|NOT|AS|BY)\\b|"(?:\\\\.|[^"\\\\])*"|\\|)`,
+  `(\\b(?:index|host|source|sourcetype|level|status|trace_id|message|path)\\b(?=\\s*=)|\\b(?:${PIPELINE_COMMAND_PATTERN})\\b|\\b(?:${SPL_FUNCTION_PATTERN})\\b|\\b(?:AND|OR|NOT|AS|BY)\\b|"(?:\\\\.|[^"\\\\])*"|\\|)`,
   "gi",
 );
 const UNSUPPORTED_PIPELINE_COMMAND_SET = new Set<string>(UNSUPPORTED_SPL_PIPELINE_COMMANDS);
@@ -99,7 +105,7 @@ export function syntaxTokens(query: string): ReactNode[] {
     else if (UNSUPPORTED_PIPELINE_COMMAND_SET.has(lower)) className = "spl-error-token";
     else if (isSupportedSplPipelineCommand(lower)) {
       className = "spl-command";
-    } else if (/^(count|dc|distinct_count|values|min|max|p95|sum|avg|tonumber|replace)$/i.test(part)) {
+    } else if (SPL_FUNCTION_SET.has(lower)) {
       className = "spl-function";
     } else if (/^(index|host|source|sourcetype|level|status|trace_id|message|path)$/i.test(part)) {
       className = "spl-field";

@@ -1043,6 +1043,58 @@ func TestParseStatsValuesRequiresExactlyOneField(t *testing.T) {
 	}
 }
 
+func TestParseStatsListFieldAliasAndFunctionCase(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | stats LiSt(user) LIST(device) AS devices BY service`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command := query.Commands[0].(*StatsCommand)
+	if len(command.Aggregates) != 2 {
+		t.Fatalf("aggregates = %#v", command.Aggregates)
+	}
+	users := command.Aggregates[0]
+	if users.Function != AggregateFunctionList || users.Input != "user" || users.Alias != "list(user)" {
+		t.Fatalf("list aggregate = %#v", users)
+	}
+	devices := command.Aggregates[1]
+	if devices.Function != AggregateFunctionList || devices.Input != "device" || devices.Alias != "devices" {
+		t.Fatalf("aliased list aggregate = %#v", devices)
+	}
+	if len(command.GroupBy) != 1 || command.GroupBy[0].Name != "service" {
+		t.Fatalf("group fields = %#v", command.GroupBy)
+	}
+}
+
+func TestParseStatsListRequiresExactlyOneField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		code   string
+	}{
+		{name: "missing parentheses", source: `index=main | stats list`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
+		{name: "missing field", source: `index=main | stats list()`, code: "SPL_EXPECTED_FIELD"},
+		{name: "multiple fields", source: `index=main | stats list(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse(test.source)
+			if err == nil {
+				t.Fatal("Parse succeeded, want error")
+			}
+			diagnostic, ok := err.(*Diagnostic)
+			if !ok || diagnostic.Code != test.code {
+				t.Fatalf("diagnostic = %#v, want %s", err, test.code)
+			}
+		})
+	}
+}
+
 func TestParseStatsDistinctCountRequiresExactlyOneField(t *testing.T) {
 	t.Parallel()
 
@@ -1876,7 +1928,7 @@ func TestUnsupportedStatsAggregatesAreSourceLocated(t *testing.T) {
 		column int
 	}{
 		{"other function", "index=main\n| stats median(bytes)", "SPL_UNSUPPORTED_STATS_AGGREGATE", 2, 9},
-		{"second aggregate", `* | stats count, list(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 18},
+		{"second aggregate", `* | stats count, median(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 18},
 		{"space-separated aggregate", `* | stats count mode(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 17},
 		{"missing AS", `* | stats count total`, "SPL_UNSUPPORTED_STATS_SYNTAX", 1, 17},
 		{"missing group field", `* | stats count by`, "SPL_EXPECTED_FIELD", 1, 19},

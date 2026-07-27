@@ -22,6 +22,7 @@ func TestCompileGradeThisEventSearchIsScopedAndParameterized(t *testing.T) {
 	compiled := compileSPL(t, `index=gradethis trace_id="secret-value" | sort _time | table _time level layer logger message | head 20`)
 	for _, required := range []string{
 		`FROM "open_splunk"."events"`,
+		`tuple("index_name", "collector_id", "batch_sequence", "batch_id") AS "__os_sort_source_identity"`,
 		`"tenant_id" = ?`,
 		`"index_name" IN (?)`,
 		`"event_time" >= parseDateTime64BestEffort(?, 9, 'UTC')`,
@@ -346,7 +347,7 @@ func TestCompileDedupUsesOrderedLimitByAndPrivateScalarKeys(t *testing.T) {
 		`OVER () AS "__os_dedup_any_unsupported_`,
 		UnsupportedDedupValueMarker,
 		`SELECT * EXCEPT ("__os_dedup_present_`,
-		`ORDER BY "__os_sort_time" DESC NULLS LAST, "__os_sort_event_id" DESC NULLS LAST LIMIT ? BY "__os_dedup_key_`,
+		`ORDER BY "__os_sort_time" DESC NULLS LAST, "__os_sort_event_id" DESC NULLS LAST, "__os_sort_visibility_seq" DESC NULLS LAST, "__os_sort_source_identity" DESC NULLS LAST LIMIT ? BY "__os_dedup_key_`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("dedup SQL missing %q:\n%s", required, compiled.SQL)
@@ -2561,6 +2562,178 @@ func TestCompileStatsValuesValidatesEveryGroupBeforeDownstreamLimit(t *testing.T
 	}
 }
 
+func TestCompileStatsListUsesOneBoundedOrderedStateAndPreservesPipelineOrder(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | sort 0 +sequence | stats count list(user) AS users list(user) AS users_again BY service`,
+	)
+	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "users_again"}) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	maximum := strconv.FormatUint(MaximumStatsListValuesPerGroup, 10)
+	maximumBytes := strconv.FormatUint(MaximumStatsListBytesPerGroup, 10)
+	for _, required := range []string{
+		`row_number() OVER (PARTITION BY "service" ORDER BY "__os_order_2_0" ASC NULLS LAST, "__os_order_2_tie_0" DESC NULLS LAST, "__os_order_2_tie_1" DESC NULLS LAST, "__os_order_2_tie_2" DESC NULLS LAST) AS "__os_list_row_ordinal"`,
+		`ifNull(sum(toUInt128(length("__os_measure_strings_0"))) OVER (PARTITION BY "service" ORDER BY "__os_order_2_0" ASC NULLS LAST, "__os_order_2_tie_0" DESC NULLS LAST, "__os_order_2_tie_1" DESC NULLS LAST, "__os_order_2_tie_2" DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), toUInt128(0)) AS "__os_list_prior_elements_0"`,
+		`AS "__os_measure_strings_0"`,
+		`arraySlice("__os_measure_strings_0", 1, toUInt64(toUInt128(` + maximum + `) - "__os_list_prior_elements_0"))`,
+		`AS "__os_list_row_state_0"`,
+		`groupArraySortedArray(` + maximum + `)(tupleElement("__os_list_row_state_0", 1)) AS "__os_ordered_strings_0"`,
+		`max(tupleElement("__os_list_row_state_0", 2)) AS "__os_ordered_strings_bytes_overflow_0"`,
+		`arrayMap(item -> tupleElement(item, 3), "__os_ordered_strings_0") AS "__os_list_strings_0"`,
+		`arrayFold((bytes, item) -> bytes + toUInt128(length(tupleElement(item, 3))), "__os_ordered_strings_0", toUInt128(0)) > toUInt128(` + maximumBytes + `)`,
+		`OVER () AS "__os_stats_list_bytes_any_overflow"`,
+		`OVER () AS "__os_stats_list_total_elements"`,
+		`OVER () AS "__os_stats_list_total_bytes"`,
+		StatsListLimitMarker,
+		StatsListBytesLimitMarker,
+		`"__os_list_strings_0" AS "users"`,
+		`"__os_list_strings_0" AS "users_again"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("list SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
+		t.Fatalf("list expanded event rows and would corrupt count:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, "groupArray(") {
+		t.Fatalf("list uses an unbounded or indeterminately ordered aggregate:\n%s", compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, `groupArraySortedArray(`+maximum+`)`); got != 1 {
+		t.Fatalf("repeated list aliases compiled %d ordered aggregate states, want one:\n%s", got, compiled.SQL)
+	}
+	if strings.Count(compiled.SQL, `AS "__os_measure_strings_0"`) != 1 ||
+		strings.Contains(compiled.SQL, `__os_measure_strings_1`) {
+		t.Fatalf("list did not reuse one string conversion for the same input:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsListUsesStableDefaultEventOrderAndValidatesBeforeLimit(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | stats list(user) AS users BY service | sort 0 +service | head 1`,
+	)
+	for _, required := range []string{
+		`row_number() OVER (PARTITION BY "service" ORDER BY "__os_sort_time" DESC NULLS LAST, "__os_sort_event_id" DESC NULLS LAST, "__os_sort_visibility_seq" DESC NULLS LAST, "__os_sort_source_identity" DESC NULLS LAST) AS "__os_list_row_ordinal"`,
+		`OVER () AS "__os_stats_list_bytes_any_overflow"`,
+		`throwIf(toUInt8("__os_stats_list_any_overflow" != 0 OR "__os_stats_list_total_elements" > toUInt128(`,
+		`throwIf(toUInt8("__os_stats_list_bytes_any_overflow" != 0 OR "__os_stats_list_total_bytes" > toUInt128(`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("default-order list SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	elementWindow := strings.Index(compiled.SQL, `OVER () AS "__os_stats_list_total_elements"`)
+	byteWindow := strings.Index(compiled.SQL, `OVER () AS "__os_stats_list_bytes_any_overflow"`)
+	elementValidation := strings.Index(compiled.SQL, `throwIf(toUInt8("__os_stats_list_any_overflow" != 0 OR "__os_stats_list_total_elements" >`)
+	byteValidation := strings.Index(compiled.SQL, `throwIf(toUInt8("__os_stats_list_bytes_any_overflow" != 0 OR`)
+	limit := strings.LastIndex(compiled.SQL, "LIMIT ?")
+	if elementWindow < 0 || byteWindow < 0 || elementValidation < 0 || byteValidation < 0 ||
+		limit < 0 || elementWindow > elementValidation || byteWindow > byteValidation ||
+		elementValidation > limit || byteValidation > limit {
+		t.Fatalf("list whole-result overflow barrier does not precede downstream LIMIT:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileStatsListProjectedInputIsEmptyAndRetainsMultivalueType(t *testing.T) {
+	t.Parallel()
+
+	projected := compileSPL(t, `index=gradethis | fields service | stats list(user) AS users BY service`)
+	if !strings.Contains(
+		projected.SQL,
+		`groupArrayArray(1)(CAST([], 'Array(String)')) AS "users"`,
+	) {
+		t.Fatalf("projected list did not use a bounded zero-state aggregate:\n%s", projected.SQL)
+	}
+	for _, wasteful := range []string{
+		`row_number() OVER`,
+		`"__os_list_prior_elements_`,
+		`"__os_list_prior_bytes_`,
+		`groupArraySortedArray(`,
+	} {
+		if strings.Contains(projected.SQL, wasteful) {
+			t.Fatalf("projected list retained wasteful ordered work %q:\n%s", wasteful, projected.SQL)
+		}
+	}
+
+	repeated := compileSPL(
+		t,
+		`index=gradethis | sort 0 +_time | stats list(user) AS users | stats count(users) AS occurrences values(users) AS distinct_values list(users) AS repeated`,
+	)
+	if !slices.Equal(repeated.OutputFields, []string{"occurrences", "distinct_values", "repeated"}) {
+		t.Fatalf("repeated list output = %v", repeated.OutputFields)
+	}
+	if !strings.Contains(repeated.SQL, `notEmpty("users")`) ||
+		!strings.Contains(repeated.SQL, `"__os_list_strings_0" AS "repeated"`) {
+		t.Fatalf("list result lost its fixed multivalue semantics:\n%s", repeated.SQL)
+	}
+}
+
+func TestCompileStatsListRejectsInputWithoutDeterministicRowIdentity(t *testing.T) {
+	t.Parallel()
+
+	input, err := plan.ResolveField("user", spl.Range{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := compileState{
+		visible: map[string]fieldState{
+			"user": {
+				valueSQL:  `"user"`,
+				existsSQL: "1",
+				kind:      fieldKindString,
+			},
+		},
+		blocked:         make(map[string]struct{}),
+		blockedPrefixes: make(map[string]struct{}),
+	}
+	_, _, _, _, _, err = compileAggregate(&plan.Aggregate{
+		Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionList,
+			Input:    input,
+			Output:   "users",
+		}},
+	}, state)
+	if err == nil || !strings.Contains(err.Error(), "no deterministic row identity") {
+		t.Fatalf("compileAggregate error = %v, want deterministic-order rejection", err)
+	}
+}
+
+func TestCompileStatsListAndValuesShareOneCombinedPublicationBudget(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | stats values(user) AS distinct_users list(user) AS ordered_users`,
+	)
+	for _, required := range []string{
+		`toUInt128(length("__os_ordered_strings_0")) + toUInt128(length("distinct_users"))`,
+		`arrayFold((bytes, item) -> bytes + toUInt128(length(tupleElement(item, 3))), "__os_ordered_strings_0", toUInt128(0)) + arrayFold((bytes, value) -> bytes + toUInt128(length(value)), "distinct_users", toUInt128(0))`,
+		StatsValuesLimitMarker,
+		StatsValuesBytesLimitMarker,
+		StatsListLimitMarker,
+		StatsListBytesLimitMarker,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("combined list/values SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Count(compiled.SQL, `AS "__os_measure_strings_0"`) != 1 ||
+		strings.Contains(compiled.SQL, `AS "__os_measure_strings_1"`) {
+		t.Fatalf("list/values did not share one canonical string conversion:\n%s", compiled.SQL)
+	}
+	valuesBarrier := strings.Index(compiled.SQL, StatsValuesLimitMarker)
+	listBarrier := strings.Index(compiled.SQL, StatsListLimitMarker)
+	if valuesBarrier < 0 || listBarrier < 0 || valuesBarrier > listBarrier {
+		t.Fatalf("combined publication barriers are out of order:\n%s", compiled.SQL)
+	}
+}
+
 func TestCompileStatsValuesProjectedInputIsEmptyAndCanFeedStringStats(t *testing.T) {
 	t.Parallel()
 
@@ -2709,6 +2882,11 @@ func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T)
 			Output:   "values_fields",
 		}}},
 		{Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionList,
+			Input:    fields,
+			Output:   "list_fields",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
 			Function: plan.AggregateFunctionCountValues,
 			Input:    fields,
 			Output:   "count_fields",
@@ -2764,6 +2942,25 @@ func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T)
 		{Measures: []plan.AggregateMeasure{{
 			Function: plan.AggregateFunctionValues,
 			Output:   "values_user",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function:   plan.AggregateFunctionList,
+			Input:      field,
+			Percentile: 0.95,
+			Output:     "list_user",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionList,
+			Output:   "list_user",
+		}}},
+		{Measures: []plan.AggregateMeasure{{
+			Function: plan.AggregateFunctionList,
+			Input: plan.FieldRef{
+				Name:      "user",
+				Canonical: true,
+				Path:      []string{"other"},
+			},
+			Output: "list_user",
 		}}},
 		{Measures: []plan.AggregateMeasure{{
 			Function: plan.AggregateFunctionMinimum,

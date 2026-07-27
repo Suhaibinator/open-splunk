@@ -503,6 +503,38 @@ func TestBuildStatsValuesPreservesMeasureOrderAndAliases(t *testing.T) {
 	}
 }
 
+func TestBuildStatsListPreservesMeasureOrderAndAliases(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | stats count list(user) list(device) AS devices BY service`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"service", "count", "list(user)", "devices"}) {
+		t.Fatalf("output fields = %v", logical.OutputFields)
+	}
+	aggregate, ok := logical.Operators[len(logical.Operators)-1].(*Aggregate)
+	if !ok || len(aggregate.Measures) != 3 {
+		t.Fatalf("aggregate operator = %#v", logical.Operators[len(logical.Operators)-1])
+	}
+	for index, want := range []struct {
+		input  string
+		output string
+	}{
+		{input: "user", output: "list(user)"},
+		{input: "device", output: "devices"},
+	} {
+		measure := aggregate.Measures[index+1]
+		if measure.Function != AggregateFunctionList ||
+			measure.Input.Name != want.input || measure.Output != want.output {
+			t.Fatalf("measure %d = %#v, want list(%s) AS %s", index+1, measure, want.input, want.output)
+		}
+	}
+}
+
 func TestBuildStatsRejectsReservedOpenSchemaFieldsInputs(t *testing.T) {
 	t.Parallel()
 
@@ -510,6 +542,7 @@ func TestBuildStatsRejectsReservedOpenSchemaFieldsInputs(t *testing.T) {
 		`index=gradethis | stats count(fields)`,
 		`index=gradethis | stats dc(fields)`,
 		`index=gradethis | stats values(fields)`,
+		`index=gradethis | stats list(fields)`,
 		`index=gradethis | stats min(fields)`,
 		`index=gradethis | stats max(fields)`,
 		`index=gradethis | stats count BY fields`,
@@ -629,6 +662,7 @@ func TestBuildRejectsForgedStatsRequiredInputMetadata(t *testing.T) {
 		spl.AggregateFunctionAverage,
 		spl.AggregateFunctionDistinctCount,
 		spl.AggregateFunctionValues,
+		spl.AggregateFunctionList,
 		spl.AggregateFunctionMinimum,
 		spl.AggregateFunctionMaximum,
 	} {
@@ -655,6 +689,7 @@ func TestBuildStatsSumAndAverageRequireExactInputFields(t *testing.T) {
 		`index=gradethis | stats max(request*)`,
 		`index=gradethis | stats dc(request*)`,
 		`index=gradethis | stats values(request*)`,
+		`index=gradethis | stats list(request*)`,
 	} {
 		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
 		assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_FIELD_PATTERN")

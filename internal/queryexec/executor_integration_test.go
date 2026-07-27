@@ -1648,6 +1648,8 @@ ORDER BY grid.number`,
 			clickhouse.UnsupportedStatsDistinctLimitMarker,
 			clickhouse.StatsValuesBytesLimitMarker,
 			clickhouse.StatsValuesLimitMarker,
+			clickhouse.StatsListBytesLimitMarker,
+			clickhouse.StatsListLimitMarker,
 		} {
 			err := executor.Execute(ctx, clickhouse.CompiledQuery{
 				SQL: `SELECT throwIf(toUInt8(1), '` + marker +

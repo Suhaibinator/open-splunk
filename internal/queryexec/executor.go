@@ -1444,6 +1444,8 @@ var executionLimitMarkers = [...]struct {
 	{clickhouse.UnsupportedStatsDistinctLimitMarker, "stats distinct values exceeded the supported limit"},
 	{clickhouse.StatsValuesBytesLimitMarker, "stats values bytes exceeded the supported limit"},
 	{clickhouse.StatsValuesLimitMarker, "stats values exceeded the supported limit"},
+	{clickhouse.StatsListBytesLimitMarker, "stats list bytes exceeded the supported limit"},
+	{clickhouse.StatsListLimitMarker, "stats list exceeded the supported result limit"},
 }
 
 func classifyQueryError(ctx context.Context, err error) error {
