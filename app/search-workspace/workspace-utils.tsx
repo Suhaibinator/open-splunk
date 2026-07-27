@@ -26,16 +26,19 @@ const SPL_FUNCTION_NAMES = [
   "earliest", "latest", "sum", "avg", "tonumber", "replace",
 ] as const;
 const SPL_COUNT_ABBREVIATION_FUNCTION_PATTERN = "c(?=\\s*\\()";
+const SPL_CONDITIONAL_FUNCTION_PATTERN = "if(?=\\s*\\()";
 const SPL_NULL_PREDICATE_FUNCTION_PATTERN = "(?:isnull|isnotnull)(?=\\s*\\()";
 const SPL_PERCENTILE_FUNCTION_PATTERN = "(?:p|perc)0*(?:[1-9]|[1-9][0-9])";
 const SPL_FUNCTION_PATTERN = [
   ...SPL_FUNCTION_NAMES.map(escapeRegExp),
   SPL_COUNT_ABBREVIATION_FUNCTION_PATTERN,
+  SPL_CONDITIONAL_FUNCTION_PATTERN,
   SPL_NULL_PREDICATE_FUNCTION_PATTERN,
   SPL_PERCENTILE_FUNCTION_PATTERN,
 ].join("|");
 const SPL_FUNCTION_SET = new Set<string>(SPL_FUNCTION_NAMES);
 const SPL_COUNT_ABBREVIATION_FUNCTION = /^c$/i;
+const SPL_CONDITIONAL_FUNCTION = /^if$/i;
 const SPL_NULL_PREDICATE_FUNCTION = /^(?:isnull|isnotnull)$/i;
 const SPL_PERCENTILE_FUNCTION = new RegExp(`^${SPL_PERCENTILE_FUNCTION_PATTERN}$`, "i");
 const SYNTAX_TOKEN_PATTERN = new RegExp(
@@ -118,6 +121,7 @@ export function syntaxTokens(query: string): ReactNode[] {
       className = "spl-command";
     } else if (SPL_FUNCTION_SET.has(lower) ||
       SPL_COUNT_ABBREVIATION_FUNCTION.test(part) ||
+      SPL_CONDITIONAL_FUNCTION.test(part) ||
       SPL_NULL_PREDICATE_FUNCTION.test(part) ||
       SPL_PERCENTILE_FUNCTION.test(part)) {
       className = "spl-function";

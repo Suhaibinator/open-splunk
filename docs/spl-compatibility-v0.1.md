@@ -2,7 +2,7 @@
 
 **Status:** executable implementation contract
 **Compatibility version:** `0.1`
-**Last updated:** July 25, 2026
+**Last updated:** July 27, 2026
 
 Open Splunk accepts only the syntax and behavior described here. Unsupported
 commands or forms fail with a source-located diagnostic; the compiler never
@@ -14,7 +14,7 @@ storage visibility snapshot. SPL cannot widen those boundaries.
 
 To bound parser, compiler, and ClickHouse AST work, one search may contain at
 most 16 KiB of UTF-8 source, 1,024 syntax tokens, and 64 pipeline commands.
-Scalar expressions may nest 32 levels, with at most 32 `where` predicates.
+Scalar expressions may nest 32 levels, with at most 32 eval/where predicates.
 `eval` and `rename` accept at most 64 assignments; `stats` accepts at most 16
 measures and 16 `BY` fields; `dedup` accepts at most 16 key fields. A `rex`
 pattern and its normalized form are each limited to 4 KiB and 16 total capture
@@ -29,7 +29,11 @@ paths align with ingestion's ceiling: 17 dotted segments and 256 unescaped
 UTF-8 bytes per segment. Generated ClickHouse SQL is additionally capped at
 256 KiB. Its longest generated `SELECT`/`UNION` dependency path is capped at
 96 relational levels; independent sibling branches do not add to that path.
-Exceeding either internal expansion budget returns the same diagnostic. The
+Every compiled `if` scalar node has a separate 64 KiB generated-SQL ceiling,
+checked incrementally at each nested conditional before its fragments are
+concatenated. This bounds repeated Dynamic-comparison expansion before the
+whole-query ceiling is reached.
+Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
 expanded, in addition to its time, memory, scan, group, and result budgets.
@@ -105,9 +109,10 @@ slice supports Boolean combinations of scalar comparisons and direct
 `isnull(value)` / `isnotnull(value)` predicates. Each informational function
 accepts exactly one scalar expression, and can also be compared explicitly
 with a Boolean literal. Scalar operands may be fields, typed literals, or the
-supported `tonumber` and `replace` calls; arithmetic, field quoting, `XOR`, and
-other eval functions are not yet accepted. Missing, null, container, or failed
-numeric operands do not pass ordinary comparisons.
+supported `tonumber`, `replace`, and bounded `if` calls described below;
+arithmetic, field quoting, `XOR`, and other eval functions are not yet
+accepted. Missing, null, container, or failed numeric operands do not pass
+ordinary comparisons.
 
 `isnull` is true when its input field is missing or its scalar result is null;
 `isnotnull` is its exact complement. Empty strings, numeric zero, and false are
@@ -132,26 +137,93 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 
 ```spl
 | eval duration_ms=tonumber(replace(duration, "ms$", ""))
+| eval label=if(isnull(optional), "missing", "present")
+| eval score=if(status>=500, 1, 0)
 ```
 
 Assignments are evaluated from left to right, and later assignments may use an
 earlier output. Existing fields can be replaced without producing duplicate
 columns. Literal assignments retain their `Int64`, `UInt64`, `Float64`, `Bool`,
-or `String` output type. The current scalar-expression surface is deliberately narrow:
+or `String` output type. The current scalar-expression surface is deliberately
+narrow:
 
 - `replace(value, "regex", "replacement")` substitutes every match and
   requires literal regex/replacement arguments;
 - `tonumber(value)` returns a nullable `Float64`; invalid, missing, null,
   non-string dynamic, multivalue, object, `NaN`, and infinite inputs become
-  null.
+  null;
+- `if(predicate, true_value, false_value)` selects exactly one fixed scalar
+  result. It requires exactly three arguments.
 
-Search-mode SPL1 does not directly assign the Boolean result of `isnull` or
-`isnotnull` with `eval`. Open Splunk therefore rejects
-`eval flag=isnull(value)` (including nested use inside another eval function)
-until a compatible Boolean consumer such as `if` or `tostring` is implemented.
-The same boundary rejects feeding these Boolean results to the current
-`tonumber` or `replace` functions inside `where`; no implicit Bool-to-String
-coercion is invented.
+The `if` predicate uses exactly the `where` grammar described above:
+case-sensitive scalar comparisons, direct `isnull` / `isnotnull` predicates,
+parentheses, and explicit `NOT`, `AND`, and `OR` with `where` precedence.
+An `if` whose result branches are syntactically known Boolean values—Boolean
+literals, null predicates, or recursively recognized conditionals—is also
+accepted as a direct predicate. The parser does not infer the runtime type of
+an arbitrary field, so a fixed `Bool` field used as an `if` result branch does
+not qualify for that direct-predicate form.
+Implicit `AND`, base-search text predicates, and other eval functions or
+operators remain unsupported. Every comparison or direct scalar predicate in
+an `if` condition consumes the same query-wide budget of 32 eval/where
+predicates. Conditional calls and their branch expressions share the existing
+32-level scalar-expression nesting ceiling.
+
+Only a condition that evaluates to Boolean true selects `true_value`. Boolean
+false or null selects `false_value`; in particular, a comparison involving a
+missing or null operand follows the false branch. Assignments still run from
+left to right, so a later conditional in the same `eval` may inspect an earlier
+assignment.
+
+Branch types are resolved before execution. The supported fixed result types
+are `String`, `Bool`, `UInt8`, `Int64`, `UInt64`, and `Float64`. Two non-null
+branches must have the same type, including the exact numeric type; Open Splunk
+does not ask ClickHouse to infer a `Variant` or a wider common numeric type. A
+statically null branch adopts the other supported fixed type and makes the
+result nullable. This also applies to a projected-away or declared-missing
+fixed-schema input whose value is known to be null. When both branches are
+statically null, the output is a nullable `String`. An `eval` destination is
+present even when the selected value is explicit null.
+
+Dynamic fields, fixed multivalue arrays, canonical time values, mixed result
+kinds, and different numeric types are rejected with
+`SPL_UNSUPPORTED_IF_BRANCH_TYPE`. Non-null String branches must also carry
+identical text-eligibility provenance. A null branch adopts the other branch's
+provenance, and `_raw` may be selected against itself, but mixing
+binary-sensitive `_raw` with an ordinary String is rejected rather than
+allowing a downstream text function to parse bytes as UTF-8.
+
+Search-mode SPL1 does not directly assign the Boolean function result of
+`isnull` or `isnotnull` with `eval`. The predicate position of `if` consumes
+those results, so `eval label=if(isnull(value), "missing", "present")` is
+supported. A Boolean-valued conditional is also supported when its result is
+consumed as a predicate, such as
+`where if(test=1, isnull(left), isnotnull(right))`. The Boolean-function result
+does not become assignable merely because it passes through a result branch:
+`eval flag=if(test=1, isnull(left), isnotnull(right))` remains rejected, as
+does feeding that result to `tonumber` or `replace`. A conditional made from
+plain Boolean literals, optionally with a null branch, is an ordinary fixed
+`Bool` scalar and may be assigned.
+
+The lowering is one scalar ClickHouse
+`if(ifNull(predicate, 0), true_value, false_value)` per conditional; it does
+not expand multivalue members or multiply input rows. A surrounding `where`
+still applies its ordinary row filter. Production execution pins
+`short_circuit_function_evaluation=enable`, so an unselected supported branch
+is not evaluated for that row. ClickHouse still performs static type analysis
+and may constant-fold constant subexpressions before row execution; the
+short-circuit guarantee is a per-row runtime contract for the supported
+expression surface, not a general lazy-language contract for future throwing
+functions. Branch arguments remain bound data, and the compiler enforces the
+64 KiB conditional-SQL ceiling at every node before constructing a larger
+nested expression.
+
+These fixed-type and text-provenance restrictions are deliberate version 0.1
+compatibility boundaries. Splunk supports a broader eval-expression surface,
+while its public documentation does not fully pin mixed-return coercion,
+container behavior, or all evaluation-order edges. Open Splunk rejects those
+cases instead of inheriting ClickHouse common-supertype or `Variant` behavior;
+they require a live Splunk differential oracle before expansion.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
@@ -1350,6 +1422,8 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`earliest` and `latest` time functions](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/statistical-and-charting-functions/time-functions),
 [`first` and `last` event-order functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/statistical-and-charting-functions/event-order-functions),
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
+[`if` and conditional functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
+[`predicate expressions`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.2/expressions-and-predicates/predicate-expressions),
 [`isnull` and `isnotnull` informational functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/informational-functions),
 [`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),
 [`spath`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.0.2503/search-commands/spath),
@@ -1364,6 +1438,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`timechart`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/timechart),
 [`chart`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/search-commands/chart),
 [`time modifiers`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.4/specify-time-ranges/specify-time-modifiers-in-your-search),
+ClickHouse's [`if` and conditional functions](https://clickhouse.com/docs/reference/functions/regular-functions/conditional-functions),
 ClickHouse's [`extractGroups`](https://clickhouse.com/docs/sql-reference/functions/string-search-functions),
 and the [RE2 syntax reference](https://github.com/google/re2/wiki/Syntax)
 documentation.

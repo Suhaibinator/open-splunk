@@ -17,8 +17,8 @@ export const SPL_PIPELINE_COMMANDS = [
   },
   {
     name: "eval",
-    insertion: 'eval duration_ms=tonumber(replace(duration, "ms$", ""))',
-    detail: "Create or replace fields.",
+    insertion: 'eval availability=if(isnull(status), "missing", "present")',
+    detail: "Create or replace fields; if(predicate, true_value, false_value) selects true_value only for true, while false or null selects false_value.",
   },
   {
     name: "rename",

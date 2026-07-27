@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { isValidElement, type ReactNode } from "react";
 
+import { SPL_PIPELINE_COMMANDS } from "@/lib/search/spl-syntax";
+
 import { syntaxTokens } from "./workspace-utils";
 
 interface SyntaxTokenProps {
@@ -38,4 +40,24 @@ test("null predicates highlight only when used as parenthesized functions", () =
     ["isnull", "isnotnull"],
   );
   assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
+test("if highlights only when used as a parenthesized function", () => {
+  const query = `index=main if=1 | eval state=IF(isnull(optional), "missing", "present") | table if`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["if", "isnull"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
+test("eval completion advertises the exact if signature and null predicate behavior", () => {
+  const evalCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eval");
+  assert.ok(evalCompletion);
+  assert.equal(evalCompletion.insertion, 'eval availability=if(isnull(status), "missing", "present")');
+  assert.match(evalCompletion.detail, /if\(predicate, true_value, false_value\)/);
+  assert.match(evalCompletion.detail, /false or null/i);
 });
