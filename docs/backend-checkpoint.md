@@ -7,7 +7,92 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded integration/browser harness resources
+## Latest checkpoint: per-surface ordered configured-redaction replay
+
+Date: 2026-07-26
+
+Implementation/proof commit: `1b8939775efcf053d0d11ec870cf075dc5a22178`
+
+This slice removes the construction-time performance cliff for configured
+redaction policies that require historical ordered semantics, without
+weakening fail-closed behavior or changing observable sequential output:
+
+1. Composite configured redactors always retain the exact ordered validators,
+   but hazardous configurations no longer run that chain across every surface
+   of every event. One bounded composite pass first detects a policy-dependent
+   change; only the affected typed field, raw payload, or message replays the
+   historical chain. Safe sibling surfaces remain on the one-pass path.
+2. Valid UTF-8 text, JSON, invalid binary raw bytes, embedded JSON strings,
+   ambiguous boundaries, and binary-to-UTF-8 transitions retain their prior
+   behavior. Detection suppresses disposable output construction, and replay
+   starts from the original surface so generated quotes, marker cascades,
+   specialized authorization/cookie/PEM extents, and depth-limit fail-close
+   selection remain exact.
+3. Duplicate-key-only JSON changes carry canonicalization metadata separately
+   from a policy match. Safe duplicates are decoded and canonicalized once
+   even in an ordered-on-change configuration; duplicate JSON combined with a
+   sensitive match still replays. Duplicate JSON inside malformed prose keeps
+   the historical whole-boundary fail-close behavior.
+4. A directly named typed field starts at its last matching policy because
+   that whole-value assignment discards every earlier result, then runs the
+   remaining suffix so a later policy can still reinterpret the generated
+   marker. The sensitive typed-field primitive also clears protobuf unknown
+   bytes from both the field and value boundary, including an input already
+   equal to its marker, so forward-compatible wire data cannot bypass
+   redaction.
+5. Permanent differential regressions cover every event surface, safe and
+   sensitive duplicate JSON, nested and malformed encoded JSON, middle and
+   final direct-policy matches, marker cascades, binary input, depth bounds,
+   concurrent reuse, and serialized unknown-byte secrets. Independent golden
+   assertions pin the canonical and fail-closed outputs rather than relying
+   only on the sequential oracle.
+6. The hazardous-policy fuzz target freezes syntax markers, repeated fields,
+   marker-to-later-field cascades, specialized private-key extents, structured
+   hits, declared UTF-8, messages, binary input, and combined surfaces. The
+   final 30-second hazardous campaigns completed 744,099 supplemental and
+   274,443 alias executions; the ordinary supplemental campaign added 209,756
+   executions. No reproducer survived, and every earlier counterexample is a
+   named regression or explicit seed.
+7. A permanent allocation regression compares opaque and syntax-bearing
+   32-policy composites for event, text, key/value, and duplicate-JSON safe
+   misses. On the checkpoint M4 Max, one 4-KiB safe payload used for both raw
+   and message (8 KiB combined) fell from roughly 2.23–2.30 ms, 326,656 bytes,
+   and 608 allocations on the sequential chain to 60.7–62.7 µs, 10,208 bytes,
+   and 19 allocations on the composite path.
+8. Duplicate-only JSON remains policy-count independent: at 32 policies its
+   raw-plus-message benchmark took roughly 3.04–3.06 µs, 5,749 bytes, and 101
+   allocations versus 63.7–64.2 µs, 162,628–162,631 bytes, and 2,116 allocations
+   sequentially. A final-policy direct hit with a 1-MiB value avoids 31
+   discarded full-value scans; the focused benchmark dropped from roughly
+   273–276 ms and 62 MiB allocated to about 374–380 ns and 1.4 KiB.
+9. Hit-only raw, message, and valid-JSON benchmarks at 2, 8, and 32 policies
+   make the detection-pass tradeoff explicit. For tiny two-policy fixtures,
+   detection added roughly 0.15–0.82 µs depending on the surface. At 32
+   policies raw and JSON remained modestly slower in the short samples while
+   the message fixture was faster because replay avoids unrelated event
+   surfaces. These are observational measurements, not release thresholds.
+10. The complete ordinary Go suite, a full-repository race pass followed by
+    final affected-package race gates, vet, build, three differential fuzz
+    campaigns, focused repeated allocation/confidentiality regressions, and
+    the exact Docker-backed vertical passed. The vertical stored four distinct
+    events with zero replay, passed all six current GradeThis searches, and
+    left no test container running.
+11. Correctness/confidentiality, efficiency/concurrency, and
+    maintainability/test reviewers repeatedly drove fixes for nested detection
+    metadata, duplicate-only replay, direct-field prefix scans, fuzz seed
+    coverage, independent goldens, hit-only measurement, and protobuf unknown
+    bytes. All three independently verified the final staged SHA-256
+    `023c792c59b45711bf5cd01c0019ad49f7d203ca874fcbf6587206a8c94abf9a`
+    and reported it clean.
+
+The exact validation record is under **Latest validation evidence**. The
+syntax-bearing configured-redaction performance follow-up is complete at this
+checkpoint. Unless the user changes priority, next specialize or lazily build
+statistics-only result projections, followed by the event-time formatter and
+release-revision work under **Remaining work**. The overall backend goal
+remains active.
+
+## Previous checkpoint: bounded integration/browser harness resources
 
 Date: 2026-07-26
 
@@ -65,11 +150,11 @@ path:
     `f3f6ac27e6b4fdd109a7d993047dcc2dbbb7da65c4925ad1ee3d91c915de3e09`.
 
 The exact validation record is under **Latest validation evidence**. Harness
-resource hardening is complete at this checkpoint. The next priority is a
+resource hardening is complete at this checkpoint. Its next priority was the
 red benchmark/test and per-event optimization for the syntax-bearing
-configured-redaction marker cliff described under **Remaining work**, followed
-by the statistics adapter, event-time formatter, and release-revision work.
-The overall backend goal remains active.
+configured-redaction marker cliff, now complete at `1b89397`; the statistics
+adapter, event-time formatter, and release-revision work follow. The overall
+backend goal remains active.
 
 ## Previous checkpoint: composite configured pre-WAL redaction
 
@@ -1579,6 +1664,66 @@ or code-quality finding after those fixes.
 
 ## Latest validation evidence
 
+### Per-surface ordered configured-redaction replay
+
+The exact implementation at `1b8939775efcf053d0d11ec870cf075dc5a22178`
+passed:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/ingest ./internal/collector ./integration -count=1
+go vet ./...
+go build ./...
+go test ./internal/ingest \
+  -run 'Test(CompositeSupplementalRedactorDirectFieldDropsUnknownBytesLikeSequential|CompositeSupplementalRedactorDirectFieldReplaysFromMiddleMatch|TopLevelAliasRedactionDropsUnknownBytesFromSensitiveTypedField|CompositeSupplementalRedactorOrderedReplayMatchesSequentialAcrossSurfaces|CompositeSupplementalRedactorSyntaxSafeMissAllocationParity)$' \
+  -count=50
+go test ./internal/ingest -run '^$' \
+  -bench 'BenchmarkCompositeSupplementalRedactorSyntaxMarker(DuplicateJSONSafeMiss|HitOnly)$' \
+  -benchmem -benchtime=100ms -count=3
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_BROWSER_EXECUTABLE='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' \
+go test ./integration -run '^TestBackendVertical$' \
+  -count=1 -timeout=12m -v
+git diff --cached --check
+```
+
+The complete `go test -race ./... -count=1` command also passed during final
+hardening before the isolated unknown-byte change. The exact committed tree
+then passed the affected race suites listed above. Its Docker vertical
+completed in 24.33 seconds, stored four distinct events with zero replay,
+passed all six current GradeThis searches, and left no `open-splunk-*` test
+container running.
+
+During final hardening, these three differential fuzz campaigns completed
+1,228,298 executions without a saved reproducer:
+
+```sh
+go test ./internal/ingest -run '^$' \
+  -fuzz '^FuzzCompositeSupplementalRedactorOrderedOnChangeMatchesSequentialPolicies$' \
+  -fuzztime=30s
+go test ./internal/ingest -run '^$' \
+  -fuzz '^FuzzTopLevelAliasOrderedOnChangeMatchesSequentialTextGroups$' \
+  -fuzztime=30s
+go test ./internal/ingest -run '^$' \
+  -fuzz '^FuzzCompositeSupplementalRedactorMatchesSequentialPolicies$' \
+  -fuzztime=20s
+```
+
+The benchmark suite proved exact sequential output before timing safe misses,
+duplicate-only canonicalization, tiny hit-only events at 2/8/32 policies,
+sparse hits with large safe sibling surfaces, and a 1-MiB typed value matched
+only by the final policy. Measurements are checkpoint-machine observations;
+allocation regressions enforce relative one-pass parity without encoding
+timing thresholds.
+
+Three final reviewers independently recomputed staged SHA-256
+`023c792c59b45711bf5cd01c0019ad49f7d203ca874fcbf6587206a8c94abf9a`.
+Their final pass covered confidentiality/fail-close behavior, protobuf unknown
+wire data, exact policy order, per-surface isolation, duplicate JSON,
+concurrent immutable reuse, bounded scanning, allocation behavior, benchmark
+honesty, golden-oracle independence, and fuzz dimensions. All reported the
+frozen patch clean.
+
 ### Bounded integration/browser harness resources
 
 The exact implementation at `3f8922972ab5258a0f0658c714b5ba36971dcf71`
@@ -2849,17 +2994,17 @@ independent stacks.
    are complete at `f41720e`; composite configured pre-WAL redaction is
    complete at `34f3a9b`; bounded process output, diagnostic histories,
    frame evidence, and matching-WebSocket ownership are complete at
-   `3f89229`. Unless the user changes priority, next add the red
-   syntax-bearing-marker/no-hit redaction performance test and replace the
-   global construction-time sequential fallback with a safe per-event
-   strategy, followed by the adapter, formatter, and release-revision items
-   below. The current preview-to-final resource-release audit pass is complete
-   at `961cba2`, the sanitized current GradeThis collector/config migration at
-   `c576e85`, logical event retention at `458c8b4`, clock-driven
-   job/result/export expiration at `b2b2839`, and stale-duplicate injection at
-   `b80bf0a`. Add a red unit or integration test before implementation, run
-   read-only adversarial reviews, fix concrete findings, then commit and push
-   `main`.
+   `3f89229`; per-surface ordered configured-redaction replay and its
+   safe-miss/duplicate/direct-hit performance coverage are complete at
+   `1b89397`. Unless the user changes priority, next specialize or lazily build
+   the statistics-only result projections, followed by the formatter and
+   release-revision items below. The current preview-to-final
+   resource-release audit pass is complete at `961cba2`, the sanitized current
+   GradeThis collector/config migration at `c576e85`, logical event retention
+   at `458c8b4`, clock-driven job/result/export expiration at `b2b2839`, and
+   stale-duplicate injection at `b80bf0a`. Add a red unit or integration test
+   before implementation, run read-only adversarial reviews, fix concrete
+   findings, then commit and push `main`.
 
 ## Remaining work, in priority order
 
@@ -2944,16 +3089,14 @@ Continue the release proof in this order:
   aliases, and depth-limit fail-closed behavior. Match-heavy free text
   intentionally retains ordered replay and has direct/reverse-order benchmark
   coverage.
-- An adversarial follow-up probe found that one non-final syntax-bearing
-  configured marker, such as `MASK:0`, currently selects the sequential
-  resolver for every event at construction time. With 32 policies and 4-KiB
-  safe raw and message fields, an ordinary-marker configuration took roughly
-  36.6–37.4 microseconds while changing only the first marker to `MASK:0` took
-  roughly 1.378–1.394 milliseconds and allocated about 326,656 bytes across
-  608 allocations. Add a permanent safe/no-hit benchmark and red regression,
-  then preserve exact cascade semantics with a per-event fallback or
-  precomputed structured cascade rather than globally penalizing unrelated
-  events.
+- The syntax-bearing configured-marker follow-up is complete at `1b89397`.
+  Hazardous configurations detect changes once per independent event surface
+  and replay only affected text; duplicate-only JSON canonicalizes once, and a
+  direct typed field begins at its last matching policy before running the
+  suffix. Differential fuzzing, independent goldens, unknown-wire
+  confidentiality regressions, allocation checks, and safe-miss,
+  duplicate-JSON, hit-only, sparse-hit, and direct-final-policy benchmarks pin
+  both exact output and the performance tradeoff.
 - Integration/browser harness hardening is complete at `3f89229`. Process
   output, each text diagnostic, diagnostic histories, stale-state evidence,
   matching WebSocket ownership, matching page sockets, raw frames, and
@@ -3098,9 +3241,9 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `3f89229`, `34f3a9b`, `f41720e`, `9d6acc1`, `4c4003f`,
-   `9898b41`, `59b8f7c`, `860acac`, `961cba2`, `c576e85`, `458c8b4`,
-   `b2b2839`, `b80bf0a`,
+   commits, especially `1b89397`, `3f89229`, `34f3a9b`, `f41720e`, `9d6acc1`,
+   `4c4003f`, `9898b41`, `59b8f7c`, `860acac`, `961cba2`, `c576e85`,
+   `458c8b4`, `b2b2839`, `b80bf0a`,
    `cdb60df`, `787a7f9`, and `522b0ac`; the preceding progress/recovery
    foundations are `b5502a3`, `f72f184`, `ed28182`, and `d1286a4`.
 3. Confirm no stale `open-splunk-*` Docker test containers are running.
@@ -3119,10 +3262,10 @@ Do not guess those decisions if they materially affect the implementation.
    and high-source-count collector profiling and polling are complete at
    `f41720e`; composite configured pre-WAL redaction is complete at `34f3a9b`.
    Bounded harness process output, diagnostics, evidence, and matching socket
-   ownership are complete at `3f89229`. Unless the user changes priority,
-   proceed to the syntax-bearing-marker/no-hit redaction performance
-   regression and per-event optimization, followed by the adapter, formatter,
-   and release-revision items above. The generator foundation, current
+   ownership are complete at `3f89229`, and per-surface ordered redaction replay
+   is complete at `1b89397`. Unless the user changes priority, proceed to the
+   statistics-only result-adapter projections, followed by the formatter and
+   release-revision items above. The generator foundation, current
    preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
