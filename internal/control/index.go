@@ -206,6 +206,15 @@ func (db *DB) UpdateIndex(ctx context.Context, id string, expectedVersion uint64
 	if current.Definition.Name != definition.Name {
 		return Index{}, ErrImmutableName
 	}
+	if !definition.SearchEnabled {
+		dependent, dependencyErr := activeAppUsesIndex(tx, id)
+		if dependencyErr != nil {
+			return Index{}, fmt.Errorf("check active app index dependency: %w", dependencyErr)
+		}
+		if dependent {
+			return Index{}, ErrDependencyConflict
+		}
+	}
 
 	now := databaseTime(time.Now())
 	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
@@ -247,6 +256,30 @@ func (db *DB) SetIndexState(ctx context.Context, id string, expectedVersion uint
 	}
 	defer finishGORMTx(tx, &err)
 
+	currentRecord, err := takeIndexRecord(tx, "index_id = ?", id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return Index{}, ErrNotFound
+	}
+	if err != nil {
+		return Index{}, fmt.Errorf("read index for state update: %w", err)
+	}
+	current, err := indexFromRecord(currentRecord)
+	if err != nil {
+		return Index{}, fmt.Errorf("read index for state update: %w", err)
+	}
+	if current.Version != expectedVersion {
+		return Index{}, ErrVersionConflict
+	}
+	if state != IndexStateActive {
+		dependent, dependencyErr := activeAppUsesIndex(tx, id)
+		if dependencyErr != nil {
+			return Index{}, fmt.Errorf("check active app index dependency: %w", dependencyErr)
+		}
+		if dependent {
+			return Index{}, ErrDependencyConflict
+		}
+	}
+
 	now := databaseTime(time.Now())
 	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
 	expectedVersionDB := int64(expectedVersion)
@@ -285,6 +318,25 @@ func (db *DB) SetIndexState(ctx context.Context, id string, expectedVersion uint
 		return Index{}, fmt.Errorf("commit index state update: %w", commitErr)
 	}
 	return result, nil
+}
+
+func activeAppUsesIndex(database *gorm.DB, indexID string) (bool, error) {
+	var dependency appDefaultIndexRecord
+	result := database.Table("app_default_indexes AS app_index").
+		Select("app_index.tenant_id, app_index.app_id, app_index.index_id").
+		Joins(`
+			JOIN app_workspaces AS app
+			  ON app.tenant_id = app_index.tenant_id
+			 AND app.app_id = app_index.app_id`).
+		Where("app_index.index_id = ? AND app.state = ?", indexID, AppStateActive).
+		Take(&dependency)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return true, nil
 }
 
 func takeIndexRecord(database *gorm.DB, query string, args ...any) (indexRecord, error) {
