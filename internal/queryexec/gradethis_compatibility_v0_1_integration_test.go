@@ -3,7 +3,6 @@ package queryexec
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -19,9 +18,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
-	"github.com/Suhaibinator/open-splunk/internal/collector"
 	"github.com/Suhaibinator/open-splunk/internal/control"
-	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport/gradethiscorpus"
@@ -215,55 +212,18 @@ type gradeThisDecodedFixture struct {
 
 func gradeThisStoreCorpus(t *testing.T, ctx context.Context, store *clickhouse.Store) gradeThisDecodedFixture {
 	t.Helper()
-	profile := gradethiscorpus.Fixture()
-	if err := gradethiscorpus.Validate(profile); err != nil {
-		t.Fatal(err)
-	}
-	decoder, err := collector.NewDecoder(collector.DecodeConfig{
-		Format: collector.InputFormatNDJSON, InputID: "gradethis-corpus-v0.1",
-		IndexName: gradethiscorpus.IndexName, Source: gradethiscorpus.Source,
-		Sourcetype: gradethiscorpus.Sourcetype, Host: gradethiscorpus.Host,
-		Service: gradethiscorpus.Service,
-	})
+	stored, err := gradethiscorpus.StoreCanonical(
+		ctx,
+		store,
+		"tenant",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	events := make([]*ingest.StoredEvent, 0, len(profile.Events))
-	byID := make(map[string]*opensplunkv1.LogEvent, len(profile.Events))
-	offset := uint64(0)
-	for index, expected := range profile.Events {
-		end := offset + uint64(len(expected.RawLine))
-		event, err := decoder.Decode(expected.RawLine, collector.SourcePosition{
-			FileIdentity: "gradethis-corpus-v0.1", SourcePath: gradethiscorpus.Source,
-			FileFingerprintLength: 4096, StartOffset: offset, EndOffset: end,
-			LineNumber: uint64(index + 1),
-		}, profile.IndexTime)
-		if err != nil {
-			t.Fatalf("decode fixture event %q: %v", expected.ID, err)
-		}
-		events = append(events, &ingest.StoredEvent{
-			Event: event, TenantID: "tenant", CollectorID: "gradethis-corpus",
-			BatchID: "gradethis-corpus-v0.1", IndexTime: profile.IndexTime,
-		})
-		byID[expected.ID] = event
-		offset = end + 1
+	return gradeThisDecodedFixture{
+		profile: stored.Profile,
+		byID:    stored.EventsByID,
 	}
-	digest := sha256.Sum256(profile.NDJSON)
-	result, err := store.Store(ctx, ingest.StoreBatch{
-		TenantID: "tenant", CollectorID: "gradethis-corpus",
-		BatchID: "gradethis-corpus-v0.1", BatchSequence: 1,
-		OriginalEventCount: uint32(len(events)), SourceBatchSHA256: digest,
-		ReceivedAt: profile.IndexTime, Events: events,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Accepted != uint32(len(events)) || result.Duplicate != 0 ||
-		result.OriginalEventCount != uint32(len(events)) {
-		t.Fatalf("store result = %+v", result)
-	}
-	return gradeThisDecodedFixture{profile: profile, byID: byID}
 }
 
 type gradeThisExpectation struct {

@@ -11,9 +11,6 @@ import (
 )
 
 const (
-	gradeThisInspectionDatabase = "open_splunk"
-	gradeThisInspectionTable    = "events"
-
 	// A selected decoy part contains 7,500 rows. This deliberately lower
 	// ceiling therefore proves that native progress did not include even one
 	// complete poison cohort while allowing modest implementation variance
@@ -28,14 +25,6 @@ type gradeThisInspectionEvidence struct {
 	searchID     gradethiscorpus.SearchID
 	scannedRows  uint64
 	scannedBytes uint64
-}
-
-type gradeThisInspectionPart struct {
-	partition string
-	parts     uint64
-	rows      uint64
-	marks     uint64
-	maxLevel  uint64
 }
 
 var (
@@ -56,15 +45,12 @@ func gradeThisStopInspectionMerges(
 	connection clickhousedriver.Conn,
 ) {
 	t.Helper()
-	if err := connection.Exec(
+	if err := gradethiscorpus.StopInspectionMerges(
 		ctx,
-		"SYSTEM STOP MERGES "+
-			gradeThisInspectionDatabase+"."+
-			gradeThisInspectionTable,
+		connection,
 	); err != nil {
-		t.Fatalf("stop GradeThis inspection merges: %v", err)
+		t.Fatal(err)
 	}
-	gradeThisAssertNoInspectionMerges(t, ctx, connection)
 }
 
 func gradeThisStoreInspectionLoad(
@@ -74,115 +60,15 @@ func gradeThisStoreInspectionLoad(
 	profile gradethiscorpus.Profile,
 ) {
 	t.Helper()
-	cohorts, err := gradethiscorpus.InspectionLoadCohorts("tenant")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := gradethiscorpus.ValidateInspectionLoad(
+	if err := gradethiscorpus.StoreInspectionLoad(
+		ctx,
+		connection,
 		profile,
 		"tenant",
-		cohorts,
 	); err != nil {
 		t.Fatal(err)
 	}
-	for _, cohort := range cohorts {
-		if err := connection.Exec(
-			ctx,
-			gradeThisInspectionInsertSQL,
-			string(cohort.ID),
-			cohort.TenantID,
-			cohort.IndexName,
-			cohort.EventTime,
-			profile.IndexTime,
-			profile.TraceID,
-			string(cohort.ID),
-			cohort.Rows,
-		); err != nil {
-			t.Fatalf(
-				"insert GradeThis inspection cohort %q: %v",
-				cohort.ID,
-				err,
-			)
-		}
-	}
 }
-
-const gradeThisInspectionInsertSQL = `
-INSERT INTO open_splunk.events
-(
-	event_id,
-	tenant_id,
-	index_name,
-	event_time,
-	index_time,
-	collected_at,
-	event_time_source,
-	host,
-	source,
-	sourcetype,
-	service,
-	severity,
-	level,
-	body,
-	raw,
-	raw_encoding,
-	trace_id,
-	span_id,
-	fields,
-	field_names,
-	field_types,
-	field_metadata_version,
-	collector_id,
-	batch_id,
-	batch_sequence,
-	expires_at,
-	visibility_seq
-)
-SELECT
-	concat('gradethis-inspection-', ?, '-', toString(number)),
-	?,
-	?,
-	addNanoseconds(toDateTime64(?, 9, 'UTC'), toInt64(number)),
-	toDateTime64(?, 3, 'UTC'),
-	CAST(NULL AS Nullable(DateTime64(9, 'UTC'))),
-	toUInt8(0),
-	'gradethis-inspection',
-	'inspection-load',
-	'go:zap:json',
-	CAST('gradethis' AS Nullable(String)),
-	toUInt8(4),
-	CAST('ERROR' AS Nullable(String)),
-	CAST('Request metrics' AS Nullable(String)),
-	concat(
-		char(123),
-		'"duration":"9999ms","error":"connection refused",',
-		'"layer":"load","level":"ERROR","logger":"load-decoy",',
-		'"message":"Request metrics","path":"/api/v1/decoy",',
-		'"status":599,"sequence":',
-		toString(number),
-		char(125)
-	),
-	toUInt8(1),
-	CAST(? AS Nullable(String)),
-	CAST(NULL AS Nullable(String)),
-	CAST(
-		concat(
-			char(123),
-			'"duration":"9999ms","layer":"load","logger":"load-decoy",',
-			'"path":"/api/v1/decoy","status":599',
-			char(125)
-		)
-		AS JSON
-	),
-	['duration', 'layer', 'logger', 'path', 'status'],
-	CAST([2, 2, 2, 2, 3] AS Array(UInt8)),
-	toUInt8(1),
-	'gradethis-inspection',
-	concat('gradethis-inspection-', ?),
-	number + 1,
-	toDateTime64('2100-01-01 00:00:00', 3, 'UTC'),
-	toUInt64(1)
-FROM numbers(?)`
 
 func gradeThisAssertInspectionPartLayout(
 	t *testing.T,
@@ -190,118 +76,21 @@ func gradeThisAssertInspectionPartLayout(
 	connection clickhousedriver.Conn,
 ) {
 	t.Helper()
-	gradeThisAssertNoInspectionMerges(t, ctx, connection)
-	rows, err := connection.Query(
+	layout, err := gradethiscorpus.ReadInspectionPartLayout(
 		ctx,
-		`SELECT
-			partition,
-			toUInt64(count()),
-			toUInt64(sum(rows)),
-			toUInt64(sum(marks)),
-			toUInt64(max(level))
-		FROM system.parts
-		WHERE
-			database = ?
-			AND table = ?
-			AND active
-		GROUP BY partition
-		ORDER BY partition`,
-		gradeThisInspectionDatabase,
-		gradeThisInspectionTable,
+		connection,
 	)
 	if err != nil {
-		t.Fatalf("read GradeThis inspection part layout: %v", err)
+		t.Fatal(err)
 	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			t.Errorf(
-				"close GradeThis inspection part layout: %v",
-				closeErr,
-			)
-		}
-	}()
-
-	got := make([]gradeThisInspectionPart, 0, 2)
-	for rows.Next() {
-		var part gradeThisInspectionPart
-		if err := rows.Scan(
-			&part.partition,
-			&part.parts,
-			&part.rows,
-			&part.marks,
-			&part.maxLevel,
-		); err != nil {
-			t.Fatalf("scan GradeThis inspection part layout: %v", err)
-		}
-		got = append(got, part)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate GradeThis inspection part layout: %v", err)
-	}
-
 	profile := gradethiscorpus.Fixture()
-	want := []gradeThisInspectionPart{
-		{
-			partition: profile.BaseTime.AddDate(0, 0, -1).
-				Format("200601"),
-			parts:    1,
-			rows:     gradethiscorpus.InspectionLoadRowsPerCohort,
-			marks:    2,
-			maxLevel: 0,
-		},
-		{
-			partition: profile.BaseTime.Format("200601"),
-			parts:     4,
-			rows: uint64(len(profile.Events)) +
-				3*gradethiscorpus.InspectionLoadRowsPerCohort,
-			marks:    8,
-			maxLevel: 0,
-		},
+	if err := gradethiscorpus.ValidateInspectionPartLayout(
+		profile,
+		layout,
+	); err != nil {
+		t.Fatal(err)
 	}
-	if len(got) != len(want) {
-		t.Fatalf(
-			"GradeThis inspection partitions = %#v, want %#v",
-			got,
-			want,
-		)
-	}
-	for index := range want {
-		if got[index].partition != want[index].partition ||
-			got[index].parts != want[index].parts ||
-			got[index].rows != want[index].rows ||
-			got[index].marks != want[index].marks ||
-			got[index].maxLevel != want[index].maxLevel {
-			t.Fatalf(
-				"GradeThis inspection partition %d = %#v, want %#v",
-				index,
-				got[index],
-				want[index],
-			)
-		}
-	}
-	t.Logf("GradeThis inspection part layout: %#v", got)
-}
-
-func gradeThisAssertNoInspectionMerges(
-	t *testing.T,
-	ctx context.Context,
-	connection clickhousedriver.Conn,
-) {
-	t.Helper()
-	var active uint64
-	if err := connection.QueryRow(
-		ctx,
-		`SELECT toUInt64(count())
-		FROM system.merges
-		WHERE database = ? AND table = ?`,
-		gradeThisInspectionDatabase,
-		gradeThisInspectionTable,
-	).Scan(&active); err != nil {
-		t.Fatalf("read GradeThis active merges: %v", err)
-	}
-	if active != 0 {
-		t.Fatalf("GradeThis active merges = %d, want 0", active)
-	}
+	t.Logf("GradeThis inspection part layout: %#v", layout)
 }
 
 func gradeThisCaptureInspectionEvidence(
