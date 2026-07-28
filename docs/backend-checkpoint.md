@@ -7,7 +7,133 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded structured physical plans
+## Latest checkpoint: measured GradeThis plans and schema decision
+
+Date: 2026-07-28
+
+Committed and pushed checkpoints:
+
+- `1961f9d` — deterministic same-scope/out-of-time, foreign-tenant,
+  foreign-index, and adjacent-partition load cohorts;
+- `e409f89` — exact ten-query results plus bounded native ClickHouse scan
+  evidence over that multipart load; and
+- `dde9092` — the same corpus executed through real completed search jobs and
+  the internal inspection service, with exact physical-plan contracts and a
+  pinned CI gate.
+
+The related control-plane modernization is also complete at `cddeb7a`: index
+persistence uses GORM over the exact existing modernc SQLite connection while
+SQL migrations remain authoritative and `AutoMigrate` remains disabled.
+
+This slice closes the Phase 2 storage-tuning measurement loop without changing
+the event schema:
+
+1. The exact canonical twenty-event corpus traverses the production collector
+   decoder and ClickHouse Store once. Four independent 7,500-row poison
+   cohorts are then inserted for same-scope/out-of-time, foreign-tenant,
+   foreign-index, and adjacent-partition isolation.
+2. Merges are stopped before insertion. The pinned image must expose exactly
+   five level-zero parts: June has one part, 7,500 rows, and two marks; July
+   has four parts, 22,520 rows, and eight marks. Part, row, mark, partition,
+   and merge-level drift fails the fixture before query evidence is accepted.
+3. All ten exact GradeThis result, schema, ordering, aggregation, and paging
+   oracles remain unchanged. Two manual repetitions produced the same native
+   progress values shown below. These values are observational, not latency or
+   progress goldens; the executable contract requires nonzero evidence below
+   the ceilings of 100 scanned rows and 4 MiB scanned bytes:
+
+   ```text
+   follow-trace                   40 rows    9,627 bytes
+   errors-and-warnings            40 rows   20,151 bytes
+   raw-error-fragment             20 rows   16,566 bytes
+   severity-counts                20 rows      800 bytes
+   frequent-errors                20 rows    8,948 bytes
+   volume-by-severity             86 rows    1,721 bytes
+   server-errors-by-route         47 rows    9,519 bytes
+   responses-by-route-and-status  20 rows    8,875 bytes
+   slow-routes                    20 rows    8,875 bytes
+   top-messages                   20 rows    1,232 bytes
+   ```
+
+4. Each exact SPL source now runs through the real query executor and Manager
+   to a completed job. The inspection Service reads that same authoritative
+   snapshot before and after EXPLAIN, compiles exactly once, and returns a
+   uniquely identified structured PLAN. No hand-built snapshot or synthetic
+   target row can make the inspection proof diverge from the semantic corpus.
+5. Every search has exactly one MergeTree read. Exact safe physical columns
+   are pinned per search. Every plan reports MinMax pruning from five parts and
+   granules to three, partition evidence of three to three, and primary-key
+   pruning from three to one. `idx_visibility_seq` is selected after that
+   pruning but remains one-to-one. Only `server-errors-by-route` additionally
+   selects `idx_field_names`, also one-to-one. No search selects
+   `idx_trace_id` or `idx_raw_text`; unexpected indexes, keys, columns, or
+   counters fail with fixed metadata-free errors.
+6. The pinned GradeThis CI job now runs both the exact query-execution corpus
+   and the search-inspection physical-plan corpus, serially, against the same
+   digest-pinned ClickHouse image. CI therefore exercises the physical
+   contract alongside the semantic half.
+7. Independent adversarial reviews found and closed disconnected synthetic
+   inspection targets, ignored partition/column/skip evidence, contradictory
+   successful Store results containing rejected events, and missing CI
+   coverage. Final rereviews reported no remaining P0/P1/P2 finding.
+
+Schema decision:
+
+- Do **not** add a schema, ordering-key, projection, promoted-field, or
+  skip-index migration for this corpus.
+- The existing ordering key
+  `(tenant_id, index_name, toStartOfHour(event_time), event_time, event_id)`
+  already reduces every measured query to one part/granule after time and
+  scope pruning, with exact results and very small scans.
+- The existing trace/raw indexes are not selected by the current compiler
+  predicates, and forcing a different predicate solely to activate them would
+  risk changing SPL equality or case-insensitive free-text semantics.
+  `idx_field_names` is selected only once and performs no additional pruning
+  after the primary key. There is therefore no measured benefit that
+  outweighs migration and write-amplification risk.
+- Keep the executable corpus as the regression gate. Reconsider physical
+  storage only when a representative larger corpus or production measurements
+  demonstrate a concrete reduction while preserving exact SPL behavior and
+  chronological ordering.
+
+Validation on the pushed implementation:
+
+```sh
+go test ./... -count=1
+go test -race \
+  ./internal/queryexec ./internal/searchinspection \
+  ./internal/testsupport/gradethiscorpus -count=1
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/queryexec ./internal/searchinspection \
+    -run '^TestGradeThis(CompatibilityV0_1|InspectionService)AgainstClickHouse$' \
+    -count=2 -timeout=12m -p=1 -v
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=5m ./...
+npm run lint
+git diff --check
+```
+
+The two pinned integrations produced identical evidence in both repetitions.
+Repository-wide Go lint reported zero issues.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `dde9092`.
+2. Keep `searchinspection` internal until an authenticated administrator
+   identity and role boundary exists.
+3. Add that administrator boundary as a separate test-first checkpoint. Do
+   not couple identity establishment to raw plan exposure.
+4. Then add a dedicated administrator-only inspection route with bounded
+   protobuf projections, principal-derived tenant/owner scope, isolated
+   Explainer lifecycle ownership, and a pinned route integration.
+5. Continue Phase 3/4 HEC, reports/dashboards, RBAC expansion, audit search,
+   alerts, scheduled searches, and packaging without weakening the exact
+   GradeThis/compiler/lifecycle gates.
+
+## Previous checkpoint: bounded structured physical plans
 
 Date: 2026-07-28
 
