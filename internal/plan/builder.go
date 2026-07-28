@@ -1908,6 +1908,10 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			expectedArguments = 2
 			hasExactArity = true
 			functionName = "strftime"
+		case spl.ScalarFunctionStrptime:
+			expectedArguments = 2
+			hasExactArity = true
+			functionName = "strptime"
 		case spl.ScalarFunctionToNumber:
 			expectedArguments = 1
 			hasExactArity = true
@@ -2214,6 +2218,45 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				}
 			}
 		}
+		if expression.Function == spl.ScalarFunctionStrptime {
+			if splScalarMayReturnBooleanFunction(expression.Arguments[0]) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message: "strptime cannot consume a Boolean text value",
+					Range:   expression.Arguments[0].SourceRange(),
+				}
+			}
+			format, formatRange, ok := splQuotedStringLiteral(
+				expression.Arguments[1],
+				expression.Range,
+			)
+			if !ok {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message: "strptime format must be a quoted string literal",
+					Range:   formatRange,
+				}
+			}
+			if _, err := spltimeformat.CompileStrptimeFormat(format.Value.Text); err != nil {
+				if errors.Is(err, spltimeformat.ErrStrptimeFormatTooLarge) {
+					return nil, &Diagnostic{
+						Code: "SPL_QUERY_TOO_COMPLEX",
+						Message: fmt.Sprintf(
+							"strptime format exceeds the %d-byte or %d-work-unit limit",
+							spltimeformat.MaximumStrptimeFormatBytes,
+							spltimeformat.MaximumStrptimeWorkUnits,
+						),
+						Range: format.Range,
+					}
+				}
+				return nil, &Diagnostic{
+					Code: "SPL_UNSUPPORTED_TIME_FORMAT",
+					Message: "strptime format is outside the supported deterministic " +
+						"full-date parsing subset",
+					Range: format.Range,
+				}
+			}
+		}
 		arguments := make([]ScalarExpression, 0, len(expression.Arguments))
 		for _, argument := range expression.Arguments {
 			converted, err := convertScalarExpressionUnchecked(argument)
@@ -2228,6 +2271,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			function = ScalarFunctionNow
 		case spl.ScalarFunctionStrftime:
 			function = ScalarFunctionStrftime
+		case spl.ScalarFunctionStrptime:
+			function = ScalarFunctionStrptime
 		case spl.ScalarFunctionToNumber:
 			function = ScalarFunctionToNumber
 		case spl.ScalarFunctionToString:

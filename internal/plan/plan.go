@@ -527,6 +527,7 @@ const (
 	ScalarFunctionLike
 	ScalarFunctionNow
 	ScalarFunctionStrftime
+	ScalarFunctionStrptime
 )
 
 // ReturnsBoolean reports the atomic result trait shared by planning and

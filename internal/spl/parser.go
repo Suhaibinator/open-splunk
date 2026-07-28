@@ -2317,6 +2317,59 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				},
 			}
 		}
+	case "strptime":
+		function = ScalarFunctionStrptime
+		if len(arguments) != 2 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: "strptime requires exactly two arguments",
+				Range:   name.sourceRange,
+			}
+		}
+		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "strptime cannot consume a Boolean text value",
+				Range:   arguments[0].SourceRange(),
+				Suggestions: []string{
+					`strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%6N")`,
+				},
+			}
+		}
+		format, ok := arguments[1].(*ScalarLiteralExpr)
+		if !ok || format == nil || format.Value.Kind != LiteralKindString ||
+			!format.Value.Quoted {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "strptime format must be a quoted string literal",
+				Range:   arguments[1].SourceRange(),
+				Suggestions: []string{
+					`strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%6N")`,
+				},
+			}
+		}
+		if _, err := spltimeformat.CompileStrptimeFormat(format.Value.Text); err != nil {
+			if errors.Is(err, spltimeformat.ErrStrptimeFormatTooLarge) {
+				return nil, &Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"strptime format exceeds the %d-byte or %d-work-unit limit",
+						spltimeformat.MaximumStrptimeFormatBytes,
+						spltimeformat.MaximumStrptimeWorkUnits,
+					),
+					Range: format.Range,
+				}
+			}
+			return nil, &Diagnostic{
+				Code: "SPL_UNSUPPORTED_TIME_FORMAT",
+				Message: "strptime format is outside the supported deterministic " +
+					"full-date parsing subset",
+				Range: format.Range,
+				Suggestions: []string{
+					`strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%6N")`,
+				},
+			}
+		}
 	case "tonumber":
 		function = ScalarFunctionToNumber
 		if len(arguments) != 1 {
