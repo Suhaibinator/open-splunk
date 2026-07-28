@@ -626,6 +626,7 @@ func TestCollectorTokenGORMModelsMatchMigratedSQLiteSchema(t *testing.T) {
 				wantChecks := []string{
 					"ingestion_tokens_digest_length",
 					"ingestion_tokens_expiration_after_create",
+					"ingestion_tokens_last_use_not_before_create",
 					"ingestion_tokens_name_length",
 					"ingestion_tokens_prefix_length",
 					"ingestion_tokens_revocation_consistency",

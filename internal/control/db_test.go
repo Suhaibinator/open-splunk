@@ -37,8 +37,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 10 {
-		t.Fatalf("schema migration count = %d, want 10", migrationCount)
+	if migrationCount != 11 {
+		t.Fatalf("schema migration count = %d, want 11", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -86,8 +86,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 10 {
-		t.Fatalf("schema migration count after reopen = %d, want 10", migrationCount)
+	if migrationCount != 11 {
+		t.Fatalf("schema migration count after reopen = %d, want 11", migrationCount)
 	}
 }
 
@@ -258,8 +258,59 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 10 {
-		t.Fatalf("schema migration count = %d, want 10", count)
+	if count != 11 {
+		t.Fatalf("schema migration count = %d, want 11", count)
+	}
+}
+
+func TestIngestionTokenLastUseMigrationUpgradesLegacyRows(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "token-last-use-upgrade.sqlite")+"?_txlock=immediate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+
+	if err := ApplyMigrations(ctx, raw, migrationsBefore(t, "0011_")); err != nil {
+		t.Fatalf("apply pre-last-use migrations: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO ingestion_tokens (
+			ingestion_token_id, version, name, description, token_prefix,
+			token_digest, state, created_at_unix_micro, updated_at_unix_micro
+		) VALUES (
+			'legacy-token', 1, 'legacy token', '', 'ost_v1_legacy',
+			zeroblob(32), 'active', 100, 100
+		)`); err != nil {
+		t.Fatalf("seed legacy ingestion token: %v", err)
+	}
+
+	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+		t.Fatalf("apply last-use migration: %v", err)
+	}
+	var legacyLastUse sql.NullInt64
+	if err := raw.QueryRowContext(ctx, `
+		SELECT last_used_at_unix_micro
+		FROM ingestion_tokens
+		WHERE ingestion_token_id = 'legacy-token'`).Scan(&legacyLastUse); err != nil {
+		t.Fatalf("read upgraded legacy ingestion token: %v", err)
+	}
+	if legacyLastUse.Valid {
+		t.Fatalf("legacy last use = %d, want NULL", legacyLastUse.Int64)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		UPDATE ingestion_tokens
+		SET last_used_at_unix_micro = created_at_unix_micro - 1
+		WHERE ingestion_token_id = 'legacy-token'`); err == nil {
+		t.Fatal("last use before creation unexpectedly succeeded")
+	}
+	if _, err := raw.ExecContext(ctx, `
+		UPDATE ingestion_tokens
+		SET last_used_at_unix_micro = created_at_unix_micro
+		WHERE ingestion_token_id = 'legacy-token'`); err != nil {
+		t.Fatalf("last use at creation time: %v", err)
 	}
 }
 

@@ -8,17 +8,18 @@ package auth
 // triggers cannot be represented completely by GORM tags. Never use
 // AutoMigrate for this model.
 type collectorTokenRecord struct {
-	IngestionTokenID   string              `gorm:"column:ingestion_token_id;type:text;primaryKey;not null"`
-	Version            int64               `gorm:"column:version;type:integer;not null;check:ingestion_tokens_version_positive,version >= 1"`
-	Name               string              `gorm:"column:name;type:text;not null;check:ingestion_tokens_name_length,length(name) BETWEEN 1 AND 255"`
-	Description        string              `gorm:"column:description;type:text;not null"`
-	TokenPrefix        string              `gorm:"column:token_prefix;type:text;not null;check:ingestion_tokens_prefix_length,length(token_prefix) BETWEEN 8 AND 32"`
-	TokenDigest        []byte              `gorm:"column:token_digest;type:blob;not null;unique;check:ingestion_tokens_digest_length,length(token_digest) = 32"`
-	State              CollectorTokenState `gorm:"column:state;type:text;not null;check:ingestion_tokens_state,state IN ('active', 'disabled', 'revoked')"`
-	CreatedAtUnixMicro int64               `gorm:"column:created_at_unix_micro;type:integer;not null"`
-	UpdatedAtUnixMicro int64               `gorm:"column:updated_at_unix_micro;type:integer;not null;check:ingestion_tokens_update_not_before_create,updated_at_unix_micro >= created_at_unix_micro"`
-	ExpiresAtUnixMicro *int64              `gorm:"column:expires_at_unix_micro;type:integer;check:ingestion_tokens_expiration_after_create,expires_at_unix_micro IS NULL OR expires_at_unix_micro > created_at_unix_micro"`
-	RevokedAtUnixMicro *int64              `gorm:"column:revoked_at_unix_micro;type:integer;check:ingestion_tokens_revocation_consistency,(state = 'revoked' AND revoked_at_unix_micro IS NOT NULL) OR (state IN ('active', 'disabled') AND revoked_at_unix_micro IS NULL)"`
+	IngestionTokenID    string              `gorm:"column:ingestion_token_id;type:text;primaryKey;not null"`
+	Version             int64               `gorm:"column:version;type:integer;not null;check:ingestion_tokens_version_positive,version >= 1"`
+	Name                string              `gorm:"column:name;type:text;not null;check:ingestion_tokens_name_length,length(name) BETWEEN 1 AND 255"`
+	Description         string              `gorm:"column:description;type:text;not null"`
+	TokenPrefix         string              `gorm:"column:token_prefix;type:text;not null;check:ingestion_tokens_prefix_length,length(token_prefix) BETWEEN 8 AND 32"`
+	TokenDigest         []byte              `gorm:"column:token_digest;type:blob;not null;unique;check:ingestion_tokens_digest_length,length(token_digest) = 32"`
+	State               CollectorTokenState `gorm:"column:state;type:text;not null;check:ingestion_tokens_state,state IN ('active', 'disabled', 'revoked')"`
+	CreatedAtUnixMicro  int64               `gorm:"column:created_at_unix_micro;type:integer;not null"`
+	UpdatedAtUnixMicro  int64               `gorm:"column:updated_at_unix_micro;type:integer;not null;check:ingestion_tokens_update_not_before_create,updated_at_unix_micro >= created_at_unix_micro"`
+	ExpiresAtUnixMicro  *int64              `gorm:"column:expires_at_unix_micro;type:integer;check:ingestion_tokens_expiration_after_create,expires_at_unix_micro IS NULL OR expires_at_unix_micro > created_at_unix_micro"`
+	RevokedAtUnixMicro  *int64              `gorm:"column:revoked_at_unix_micro;type:integer;check:ingestion_tokens_revocation_consistency,(state = 'revoked' AND revoked_at_unix_micro IS NOT NULL) OR (state IN ('active', 'disabled') AND revoked_at_unix_micro IS NULL)"`
+	LastUsedAtUnixMicro *int64              `gorm:"column:last_used_at_unix_micro;type:integer;check:ingestion_tokens_last_use_not_before_create,last_used_at_unix_micro IS NULL OR last_used_at_unix_micro >= created_at_unix_micro"`
 }
 
 func (collectorTokenRecord) TableName() string {
@@ -42,17 +43,18 @@ func (collectorTokenIndexRecord) TableName() string {
 // separate from collectorTokenRecord so the persisted model cannot
 // accidentally acquire a synthetic group-concatenation column.
 type collectorTokenMetadataRow struct {
-	IngestionTokenID   string              `gorm:"column:ingestion_token_id"`
-	Version            int64               `gorm:"column:version"`
-	Name               string              `gorm:"column:name"`
-	Description        string              `gorm:"column:description"`
-	TokenPrefix        string              `gorm:"column:token_prefix"`
-	State              CollectorTokenState `gorm:"column:state"`
-	CreatedAtUnixMicro int64               `gorm:"column:created_at_unix_micro"`
-	UpdatedAtUnixMicro int64               `gorm:"column:updated_at_unix_micro"`
-	ExpiresAtUnixMicro *int64              `gorm:"column:expires_at_unix_micro"`
-	RevokedAtUnixMicro *int64              `gorm:"column:revoked_at_unix_micro"`
-	AllowedIndexNames  string              `gorm:"column:allowed_index_names"`
+	IngestionTokenID    string              `gorm:"column:ingestion_token_id"`
+	Version             int64               `gorm:"column:version"`
+	Name                string              `gorm:"column:name"`
+	Description         string              `gorm:"column:description"`
+	TokenPrefix         string              `gorm:"column:token_prefix"`
+	State               CollectorTokenState `gorm:"column:state"`
+	CreatedAtUnixMicro  int64               `gorm:"column:created_at_unix_micro"`
+	UpdatedAtUnixMicro  int64               `gorm:"column:updated_at_unix_micro"`
+	ExpiresAtUnixMicro  *int64              `gorm:"column:expires_at_unix_micro"`
+	RevokedAtUnixMicro  *int64              `gorm:"column:revoked_at_unix_micro"`
+	LastUsedAtUnixMicro *int64              `gorm:"column:last_used_at_unix_micro"`
+	AllowedIndexNames   string              `gorm:"column:allowed_index_names"`
 }
 
 type collectorTokenAuthenticationRow struct {

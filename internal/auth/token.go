@@ -38,9 +38,10 @@ var (
 	// credentials, expired credentials, and forbidden indexes into one safe
 	// externally reportable error.
 	ErrUnauthorized = errors.New("auth: collector authentication or index authorization failed")
-	// ErrInactiveToken means an administrative mutation targeted a revoked or
-	// effectively expired token. Neither state can safely be made active again
-	// by changing token metadata.
+	// ErrInactiveToken means an operation that requires an active collector
+	// credential could not proceed. Accepted-use recording deliberately uses
+	// this one sentinel for missing, disabled, revoked, and expired IDs so the
+	// stream-admission path does not disclose credential existence or state.
 	ErrInactiveToken = errors.New("auth: collector token is inactive")
 
 	errCollectorTokenScopeUnavailable = errors.New("collector token scope is unavailable")
@@ -68,6 +69,7 @@ type CollectorToken struct {
 	AllowedIndexNames []string
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	LastUsedAt        time.Time
 	ExpiresAt         time.Time
 	RevokedAt         time.Time
 }
@@ -448,6 +450,54 @@ func (store *Store) Authenticate(ctx context.Context, plaintext string) (Authent
 	return authentication, nil
 }
 
+// RecordCollectorTokenUse records when the server accepted a collector stream
+// for an active, unexpired token. Observations only move forward and are
+// operational telemetry: they deliberately do not change the administrative
+// version or updated-at timestamp used for optimistic locking. The caller
+// supplies a server-owned admission time captured immediately after successful
+// authentication. If the wall clock has moved behind the token's persisted
+// creation time, the observation is clamped to that durable lower bound rather
+// than falsely deauthorizing an already-authenticated credential.
+func (store *Store) RecordCollectorTokenUse(ctx context.Context, tokenID string, acceptedAt time.Time) error {
+	acceptedAt = databaseTime(acceptedAt)
+	if acceptedAt.IsZero() {
+		return fmt.Errorf("%w: collector token acceptance time is required", control.ErrInvalidArgument)
+	}
+	acceptedAtUnixMicro := acceptedAt.UnixMicro()
+	result := store.orm.WithContext(ctx).
+		Model(&collectorTokenRecord{}).
+		Where("ingestion_token_id = ?", tokenID).
+		Where("state = ?", CollectorTokenStateActive).
+		Where(
+			"expires_at_unix_micro IS NULL OR expires_at_unix_micro > ?",
+			acceptedAtUnixMicro,
+		).
+		UpdateColumn(
+			"last_used_at_unix_micro",
+			gorm.Expr(`
+				CASE
+					WHEN last_used_at_unix_micro IS NULL
+					THEN MAX(created_at_unix_micro, ?)
+					WHEN last_used_at_unix_micro < ?
+					THEN MAX(created_at_unix_micro, ?)
+					ELSE last_used_at_unix_micro
+				END`,
+				acceptedAtUnixMicro,
+				acceptedAtUnixMicro,
+				acceptedAtUnixMicro,
+			),
+		)
+	if result.Error != nil {
+		return fmt.Errorf("record collector token use: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		// The stream-admission path must not reveal whether an identifier is
+		// missing, disabled, revoked, expired, or predates the token.
+		return ErrInactiveToken
+	}
+	return nil
+}
+
 // GetCollectorToken returns safe metadata and explicit index scopes.
 func (store *Store) GetCollectorToken(ctx context.Context, tokenID string) (CollectorToken, error) {
 	row, err := takeCollectorTokenMetadata(store.orm.WithContext(ctx), tokenID)
@@ -569,6 +619,7 @@ func collectorTokenMetadataQuery(db *gorm.DB) *gorm.DB {
 			token.updated_at_unix_micro,
 			token.expires_at_unix_micro,
 			token.revoked_at_unix_micro,
+			token.last_used_at_unix_micro,
 			group_concat(target.name, ',') AS allowed_index_names`).
 		Joins(`
 			JOIN ingestion_token_indexes AS scope
@@ -607,6 +658,12 @@ func collectorTokenFromMetadataRow(row collectorTokenMetadataRow, now time.Time)
 	}
 	if row.RevokedAtUnixMicro != nil {
 		token.RevokedAt = time.UnixMicro(*row.RevokedAtUnixMicro).UTC()
+	}
+	if row.LastUsedAtUnixMicro != nil {
+		token.LastUsedAt = time.UnixMicro(*row.LastUsedAtUnixMicro).UTC()
+		if token.LastUsedAt.Before(token.CreatedAt) {
+			return CollectorToken{}, errors.New("invalid collector token last-use time in control-plane database")
+		}
 	}
 	if row.AllowedIndexNames != "" {
 		token.AllowedIndexNames = strings.Split(row.AllowedIndexNames, ",")
