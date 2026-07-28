@@ -57,7 +57,10 @@ func TestNewExplainerOwnsTwoOneConnectionNativeLanes(t *testing.T) {
 	}
 	seen := make(map[*explainLane]struct{}, maximumConcurrentExplains)
 	for _, lane := range explainer.allLanes {
-		if lane == nil || lane.activateContext == nil || lane.close == nil {
+		if lane == nil ||
+			lane.activateContext == nil ||
+			lane.discard == nil ||
+			lane.close == nil {
 			t.Fatalf("invalid lane %#v", lane)
 		}
 		if _, duplicate := seen[lane]; duplicate {

@@ -21,10 +21,10 @@ import (
 )
 
 // This regression exercises clickhouse-go itself rather than a queryConnection
-// fake. v2.46 sends a native Query synchronously before it installs its own
-// context deadline. The injected connection completes the real ClickHouse
-// handshake, then simulates a zero-window peer by holding only the large query
-// write until our per-lane deadline overlay expires it.
+// fake. The pinned driver sends a native Query synchronously before it installs
+// its own context deadline. The injected connection completes the real
+// ClickHouse handshake, then simulates a zero-window peer by holding only the
+// large query write until our per-lane deadline overlay expires it.
 func TestExplainerBoundsInitialNativeQueryWriteAndReusesLanes(t *testing.T) {
 	server := newExplainHandshakeServer(t, false)
 	defer server.Close(t)
@@ -208,6 +208,7 @@ func newStalledWriteExplainer(
 		lane := &explainLane{
 			connection:      connection,
 			activateContext: coordinator.ActivateContext,
+			discard:         coordinator.DiscardConnection,
 			close: func() error {
 				return errors.Join(connection.Close(), coordinator.Close())
 			},

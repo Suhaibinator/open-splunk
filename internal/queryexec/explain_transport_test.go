@@ -529,6 +529,76 @@ func TestExplainDeadlineCoordinatorCloseOwnsAbandonedConnection(t *testing.T) {
 	}
 }
 
+func TestExplainDeadlineCoordinatorDiscardIsIdempotentAndAllowsRedial(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	first := newRecordingDeadlineConn()
+	second := newRecordingDeadlineConn()
+	connections := []*recordingDeadlineConn{first, second}
+	next := 0
+	coordinator := newExplainDeadlineCoordinator(time.Second, nil)
+	coordinator.dialConnection = func(
+		context.Context,
+		string,
+		string,
+		time.Duration,
+		*tls.Config,
+	) (net.Conn, error) {
+		if next >= len(connections) {
+			return nil, errors.New("unexpected extra dial")
+		}
+		connection := connections[next]
+		next++
+		return connection, nil
+	}
+	if _, err := coordinator.DialContext(
+		context.Background(),
+		"clickhouse.test:9000",
+	); err != nil {
+		t.Fatalf("first DialContext() error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	release, err := coordinator.ActivateContext(ctx)
+	if err != nil {
+		t.Fatalf("ActivateContext() error = %v", err)
+	}
+	if err := coordinator.DiscardConnection(); err != nil {
+		t.Fatalf("DiscardConnection() error = %v", err)
+	}
+	if err := coordinator.DiscardConnection(); err != nil {
+		t.Fatalf("second DiscardConnection() error = %v", err)
+	}
+	first.mu.Lock()
+	firstClosed := first.closed
+	first.mu.Unlock()
+	if !firstClosed {
+		t.Fatal("DiscardConnection did not close the first transport")
+	}
+	if _, err := coordinator.DialContext(
+		context.Background(),
+		"clickhouse.test:9000",
+	); err != nil {
+		t.Fatalf("replacement DialContext() error = %v", err)
+	}
+	assertRecordedDeadlines(t, second, deadline, deadline)
+	if err := release(); err != nil {
+		t.Fatalf("release() error = %v", err)
+	}
+	assertRecordedDeadlines(t, second, time.Time{}, time.Time{})
+	if err := coordinator.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	var nilCoordinator *explainDeadlineCoordinator
+	if err := nilCoordinator.DiscardConnection(); err == nil {
+		t.Fatal("nil coordinator DiscardConnection unexpectedly succeeded")
+	}
+}
+
 func TestExplainDeadlineCoordinatorDialContextPreservesConfiguration(
 	t *testing.T,
 ) {

@@ -71,6 +71,7 @@ type ExplainResult struct {
 type explainLane struct {
 	connection      queryConnection
 	activateContext func(context.Context) (func() error, error)
+	discard         func() error
 	close           func() error
 }
 
@@ -167,7 +168,8 @@ func (explainer *Explainer) Explain(
 	}
 	if lane == nil ||
 		isNilDriverValue(lane.connection) ||
-		lane.activateContext == nil {
+		lane.activateContext == nil ||
+		lane.discard == nil {
 		if lane != nil {
 			explainer.lanes <- lane
 		}
@@ -249,9 +251,9 @@ func (explainer *Explainer) Explain(
 	}
 
 	// Preserve the real deadline so clickhouse-go can install native socket
-	// deadlines. v2.46 also derives a looser max_execution_time protocol
-	// setting from this deadline; the fixed SQL SETTINGS clause above has
-	// server-side precedence and pins the effective value back to our cap.
+	// deadlines. The pinned driver also derives a looser max_execution_time
+	// protocol setting from this deadline; the fixed SQL SETTINGS clause above
+	// has server-side precedence and pins the effective value back to our cap.
 	queryContext := clickhousedriver.Context(
 		explainContext,
 		clickhousedriver.WithQueryID(queryID),
@@ -263,7 +265,16 @@ func (explainer *Explainer) Explain(
 		detachedArgs...,
 	)
 	if err != nil {
-		return ExplainResult{}, sanitizeExplainQueryError(explainContext, err)
+		queryErr := sanitizeExplainQueryError(explainContext, err)
+		if discardErr := lane.discard(); discardErr != nil {
+			return ExplainResult{}, errors.Join(
+				queryErr,
+				errors.New(
+					"execute ClickHouse EXPLAIN: discard failed transport",
+				),
+			)
+		}
+		return ExplainResult{}, queryErr
 	}
 	if isNilDriverValue(rows) {
 		return ExplainResult{}, invalidExplainResult("returned no result stream")

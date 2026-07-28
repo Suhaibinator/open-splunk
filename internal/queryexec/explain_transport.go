@@ -516,6 +516,32 @@ func (coordinator *explainDeadlineCoordinator) Close() error {
 	return coordinator.closeErr
 }
 
+// DiscardConnection closes and detaches the current lane transport after a
+// native query error. clickhouse-go v2.47 marks some failed writes closed
+// before its pool calls close, which makes the driver's close a no-op while
+// leaving a custom-dialed socket open. The dedicated lane can safely discard
+// every failed-query transport and redial on its next use.
+func (coordinator *explainDeadlineCoordinator) DiscardConnection() error {
+	if coordinator == nil {
+		return errors.New(
+			"discard ClickHouse EXPLAIN transport: transport is nil",
+		)
+	}
+	coordinator.mu.Lock()
+	connection := coordinator.connection
+	coordinator.connection = nil
+	coordinator.mu.Unlock()
+	if connection == nil {
+		return nil
+	}
+	if err := connection.Close(); err != nil {
+		return errors.New(
+			"discard ClickHouse EXPLAIN transport connection failed",
+		)
+	}
+	return nil
+}
+
 func (connection *explainDeadlineConn) SetDeadline(deadline time.Time) error {
 	return connection.coordinator.setDeadline(connection, deadline)
 }

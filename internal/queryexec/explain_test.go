@@ -749,6 +749,17 @@ func TestExplainerRejectsInvalidStateQueryAndQueryIDBeforeExecution(t *testing.T
 			ctx: context.Background(), query: validQuery,
 		},
 		{
+			name: "nil transport discard",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				executor := mustExplainer(t, connection)
+				for _, lane := range executor.allLanes {
+					lane.discard = nil
+				}
+				return executor
+			},
+			ctx: context.Background(), query: validQuery,
+		},
+		{
 			name: "nil query ID generator",
 			executor: func(connection *fakeQueryConnection) *Explainer {
 				executor := mustExplainer(t, connection)
@@ -1382,6 +1393,48 @@ func TestExplainerSanitizesAndClassifiesDriverFailures(t *testing.T) {
 		})
 	}
 
+	t.Run("query failure discards the lane transport", func(t *testing.T) {
+		for _, test := range []struct {
+			name       string
+			discardErr error
+		}{
+			{name: "successful discard"},
+			{
+				name:       "sanitized discard failure",
+				discardErr: errors.New(leak),
+			},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				var discards atomic.Int32
+				explainer := mustExplainer(
+					t,
+					&fakeQueryConnection{err: errors.New(leak)},
+				)
+				for _, lane := range explainer.allLanes {
+					lane.discard = func() error {
+						discards.Add(1)
+						return test.discardErr
+					}
+				}
+				got, err := explainer.Explain(
+					context.Background(),
+					validQuery,
+				)
+				if !errors.Is(err, errExplainQueryFailed) ||
+					got != (ExplainResult{}) ||
+					discards.Load() != 1 ||
+					strings.Contains(err.Error(), leak) {
+					t.Fatalf(
+						"Explain() = (%#v, %v), discards = %d",
+						got,
+						err,
+						discards.Load(),
+					)
+				}
+			})
+		}
+	})
+
 	t.Run("primary validation error wins over close failure", func(t *testing.T) {
 		rows := explainStructuredRows()
 		rows.columns[0] = "wrong"
@@ -1447,14 +1500,28 @@ func TestExplainerCancellationIsAtomicAndBoundsLaneWait(t *testing.T) {
 
 	t.Run("long caller deadline remains driver-visible and internally bounded", func(t *testing.T) {
 		connection := &deadlineExplainConnection{rows: explainStructuredRows()}
+		explainer := mustExplainer(t, connection)
+		var discards atomic.Int32
+		for _, lane := range explainer.allLanes {
+			lane.discard = func() error {
+				discards.Add(1)
+				return nil
+			}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		start := time.Now()
-		if _, err := mustExplainer(t, connection).Explain(
+		if _, err := explainer.Explain(
 			ctx,
 			validQuery,
 		); err != nil {
 			t.Fatal(err)
+		}
+		if discards.Load() != 0 {
+			t.Fatalf(
+				"successful query discarded %d transports",
+				discards.Load(),
+			)
 		}
 		if !connection.hasDeadline {
 			t.Fatal("driver context hid the transport deadline")
@@ -1482,19 +1549,30 @@ func TestExplainerCancellationIsAtomicAndBoundsLaneWait(t *testing.T) {
 
 	t.Run("sub-second caller deadline stays visible and cancels driver wait", func(t *testing.T) {
 		connection := &cancelWaitingExplainConnection{}
+		explainer := mustExplainer(t, connection)
+		var discards atomic.Int32
+		for _, lane := range explainer.allLanes {
+			lane.discard = func() error {
+				discards.Add(1)
+				return errors.New("secret discard detail")
+			}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 		defer cancel()
-		got, err := mustExplainer(t, connection).Explain(ctx, validQuery)
+		got, err := explainer.Explain(ctx, validQuery)
 		if !errors.Is(err, context.DeadlineExceeded) ||
 			got != (ExplainResult{}) ||
 			!connection.hasDeadline ||
-			!errors.Is(connection.observedErr, context.DeadlineExceeded) {
+			!errors.Is(connection.observedErr, context.DeadlineExceeded) ||
+			discards.Load() != 1 ||
+			strings.Contains(err.Error(), "secret") {
 			t.Fatalf(
-				"Explain() = (%#v, %v), driver deadline=%v error=%v",
+				"Explain() = (%#v, %v), driver deadline=%v error=%v discards=%d",
 				got,
 				err,
 				connection.hasDeadline,
 				connection.observedErr,
+				discards.Load(),
 			)
 		}
 	})
@@ -1754,6 +1832,7 @@ func mustExplainer(t *testing.T, connection queryConnection) *Explainer {
 			activateContext: func(context.Context) (func() error, error) {
 				return func() error { return nil }, nil
 			},
+			discard: func() error { return nil },
 		}
 		lanes <- lane
 		allLanes = append(allLanes, lane)

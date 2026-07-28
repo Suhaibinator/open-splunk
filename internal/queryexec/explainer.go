@@ -69,6 +69,7 @@ func NewExplainer(
 		lane := &explainLane{
 			connection:      connection,
 			activateContext: coordinator.ActivateContext,
+			discard:         coordinator.DiscardConnection,
 			close: func() error {
 				return errors.Join(connection.Close(), coordinator.Close())
 			},
