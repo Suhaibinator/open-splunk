@@ -7,7 +7,123 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: immutable search-start SPL `now`
+## Latest checkpoint: bounded timezone-aware SPL `strftime`
+
+Date: 2026-07-27
+
+Parser and logical-plan checkpoint (committed and pushed):
+`fe94e37`
+
+ClickHouse compiler and pinned integration checkpoint (committed and pushed):
+`28c27e2`
+
+Adversarial correctness, reuse, and efficiency checkpoint (committed and
+pushed):
+`7bf4f6f`
+
+Compatibility and editor checkpoint (committed and pushed):
+`1e78bf4`
+
+This test-first slice implements bounded `strftime(time, "format")`:
+
+1. The parser accepts exactly one scalar time value and one quoted literal
+   format, treats the function name case-insensitively, preserves complete
+   source ranges, and leaves a bare field named `strftime` ordinary. Parser,
+   planner, predicate validation, and compiler independently reject forged
+   arity, a nonliteral format, Boolean input, malformed variables, typed nil,
+   unsupported enums, and format/resource overflow.
+2. `internal/spltimeformat` owns a backend-neutral, locale-stable directive
+   model. One format is capped at 4 KiB of UTF-8, 4,096 literal-code-point plus
+   directive work units, and 16 KiB of conservative output. A query may total
+   16,384 work units and 64 KiB of conservative output per row across all
+   calls; each lowering also has a 64 KiB SQL ceiling.
+3. The supported variables are `%%`; `%Y`, `%y`, `%G`, `%g`; `%m`, `%b`,
+   `%B`; `%d`, `%e`, `%j`; `%V`, `%w`, `%a`, `%A`; `%H`, `%I`, `%M`, `%S`,
+   `%p`, `%T`; `%F`, `%s`; `%z`, `%:z`; `%Q`, `%N`, `%f`; and explicit
+   3/6/9-digit `%Q`/`%N` widths. Locale-dependent, timezone-abbreviation,
+   malformed, and pinned-ClickHouse-incompatible variants are rejected rather
+   than delegated to process or database configuration.
+4. Canonical time input retains `DateTime64(9)`. Fixed numeric input is Unix
+   seconds with nanosecond flooring, including correct negative fractional
+   and pre-epoch `%s` behavior. `now()` composes as its immutable search-start
+   integer. Fixed String, Boolean, and multivalue values are rejected;
+   statically null input is null.
+5. Dynamic input formats only a finite runtime number inside the supported
+   timestamp range. Runtime String, Boolean, list, object, tagged value, null,
+   missing, non-finite, and overflowing numeric values return null without
+   parsing or throwing.
+6. `plan.Scope`, `plan.Query`, completed execution snapshots, replay planning,
+   field-summary cache keys, and field-page cursors carry the effective IANA
+   search timezone. Omitted user timezone remains UTC. Invalid, server-local,
+   host-specific POSIX/leap-second, overlong, and unknown zone names fail at
+   admission or the planner/compiler trust boundary.
+7. One shared success-only IANA loader embeds fallback timezone data and
+   process-caches immutable named locations for admission, planning, and
+   compilation. Invalid attacker-controlled names are never cached. The
+   timestamp is evaluated once and localized once per call rather than once
+   per generated format fragment.
+8. The compiler binds the timezone and formatter fragments as query arguments,
+   preserves apostrophe/Unicode/percent literals, never expands rows, and
+   uses portable custom lowering where ClickHouse's percent and Joda dialects
+   differ. `%M` is not delegated to the pinned percent formatter, `%s` uses
+   exact nanosecond arithmetic, and `%g`, `%e`, `%w`, and offsets have explicit
+   implementations.
+9. ISO `%G`/`%g` use the week-based year, not the calendar year. A dedicated
+   2021-01-01 integration fixture proves `2020`, week 53, preventing a
+   midyear-only test from masking the Joda `Y` versus `x` distinction.
+10. The pinned ClickHouse corpus covers every supported directive, UTC and
+    America/Los_Angeles summer/winter offsets, ISO year boundaries, zero and
+    negative fractional epochs, nanoseconds, `now()`, Unicode/apostrophe/
+    percent/empty literals, fixed and Dynamic types, predicates, projection,
+    aggregation, later eval, and replay.
+11. Independent quality, reuse, and efficiency reviewers found six concrete
+    correctness, resource, and duplication issues; all were fixed: ISO
+    week-year lowering, planner IANA validation, repeated timezone loading,
+    per-fragment localization, retained duplicate format text, and a custom
+    test slice comparator. The broader suggestion to merge parser and plan
+    scalar enums was not applied because the explicit exhaustive conversion is
+    the forged-IR trust boundary.
+12. Editor highlighting recognizes only parenthesized `strftime`, eval and
+    where completions advertise the exact timezone-aware signature, and the
+    compatibility contract records the full directive, type, null, precision,
+    timezone, portability, snapshot, and resource behavior.
+
+Validation completed on the current implementation:
+
+```sh
+go test ./... -count=1 -timeout=5m
+golangci-lint run ./...
+npm run test:frontend
+npm run typecheck
+npm run lint
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=5m
+git diff --check
+```
+
+All gates pass. Repository-wide Go lint reports zero issues. The frontend
+corpus contains 127 application tests and 47 release/build tests. The complete
+pinned Store suite passed in 55.030 seconds after the ISO-boundary and
+single-localization fixes.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `fe94e37`, `28c27e2`, `7bf4f6f`,
+   and `1e78bf4`. Preserve unexpected local changes.
+2. Treat `strptime` and `relative_time` as independent researched slices.
+   Pin their literal grammar, effective timezone, precision, invalid/null/type
+   behavior, resource limits, and ClickHouse portability before adding parser
+   support.
+3. Do not infer `strptime` support from the formatter directive set: parsing
+   has different ambiguity, range, default-field, DST-gap/fold, and failure
+   semantics that require their own contract and pinned differential corpus.
+4. Keep scheduled-search variants and per-event `time()` outside the ad-hoc
+   `now()`/`strftime` contract until those execution surfaces are explicitly
+   designed.
+
+## Previous checkpoint: immutable search-start SPL `now`
 
 Date: 2026-07-27
 
@@ -5894,7 +6010,10 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `39c0fd4`, `4233a5a`, `5f604b8`, `527a4ca`,
+   commits, especially `1e78bf4`, `7bf4f6f`, `28c27e2`, `fe94e37`,
+   `8d4d7b8`, `df5c13a`, `8d4911c`, `1314fc9`, `7d52001`, `33134e9`,
+   `3ad5359`, `8accd61`, `d758a07`, `93ec477`, `faa88c1`,
+   `39c0fd4`, `4233a5a`, `5f604b8`, `527a4ca`,
    `a316a4b`, `a4a07e3`, `3996659`, `738fabf`, `f68cacc`, `fed3276`,
    `c1ad25b`, `cfaa75b`, `2d35c66`, `070d24f`,
    `f9985a1`, `9714c79`, `e6acd1d`, `ac721fb`, `932f403`,
@@ -5945,11 +6064,12 @@ Do not guess those decisions if they materially affect the implementation.
    Typed Unicode `lower`/`upper` is complete through `8e68c7e`, `3d9d5f8`,
    `53b1f55`, and `8e4cf5f`; typed UTF-8 `len`/`length` is complete through
    `64004dc`, `e3a32e2`, and `5aebc70`. Subsequent bounded `substr`,
-   default `tostring`, `round`, `ceil`/`ceiling`, `floor`, `mvcount`, and
-   `match` slices are complete; the current `match` parser, compiler,
-   adversarial, and compatibility checkpoints are `527a4ca`, `5f604b8`,
-   `4233a5a`, and `39c0fd4`. Continue with one newly researched bounded scalar
-   contract if the user does not change priority. The
+   default `tostring`, `round`, `ceil`/`ceiling`, `floor`, `mvcount`, `match`,
+   `like`, `now`, and `strftime` slices are complete. The current `strftime`
+   parser, compiler, adversarial, and compatibility checkpoints are
+   `fe94e37`, `28c27e2`, `7bf4f6f`, and `1e78bf4`. Continue with one newly
+   researched bounded scalar contract if the user does not change priority.
+   The
    generator foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
    migration, logical event retention,
@@ -5963,9 +6083,9 @@ Do not guess those decisions if they materially affect the implementation.
    expiration/cancellation, the uninterrupted collector-to-browser path,
    exact GradeThis corpus, collector/server process-restart proof, and the
    protocol unit contract are already complete.
-6. For the next aggregate slice, write an explicit syntax, null, multivalue,
-   type, precision, approximation, and resource contract before
-   implementation. Keep `eventstats` behind a stable aggregate library.
+6. For the next scalar or aggregate slice, write an explicit syntax, null,
+   multivalue, type, precision, approximation, timezone, and resource contract
+   before implementation. Keep `eventstats` behind a stable aggregate library.
 7. Preserve chronological event-order/member-order and atomic validation,
    scalar/Dynamic path separation, numeric grammar sharing,
    punctuation/UTF-8/zero/overlong boundaries,
