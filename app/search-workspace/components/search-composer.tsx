@@ -312,7 +312,7 @@ export function SearchComposer({
                   {timePickerSection === "advanced" ? (
                     <div className="time-form-section">
                       <h3>Advanced time modifiers</h3><p>{backendTimeSyntax
-                        ? "Enter RFC 3339 timestamps, now, or a fixed -N[s|m|h|d] offset."
+                        ? "Enter RFC 3339 timestamps, now, -N[s|m|h|d], @d, or -Nd@d. Earliest also accepts 0 for all data."
                         : "Enter SPL relative modifiers or ISO timestamps."}</p>
                       <div className="absolute-time-row">
                         <label><span>Earliest</span><input value={draftTimeRange.earliest} onChange={(event) => onDraftTimeRangeChange({ ...draftTimeRange, label: "Custom time range", earliest: event.target.value })} /></label>

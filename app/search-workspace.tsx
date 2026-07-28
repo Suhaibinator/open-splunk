@@ -159,7 +159,10 @@ import type {
   TimelineDisplay,
   ToastState,
 } from "./search-workspace/model";
-import { serverTimeRangeValidationError } from "./search-workspace/time-range";
+import {
+  backendTimeRangeIntent,
+  serverTimeRangeValidationError,
+} from "./search-workspace/time-range";
 import {
   applyLiveResultPreview,
   validateLivePreviewSchema,
@@ -519,18 +522,6 @@ function defaultQueryForBootstrap(bootstrap: SystemBootstrapModel): string {
     .find((name): name is string => name !== undefined);
   const indexName = preferred ?? bootstrap.indexes.find((index) => index.searchable)?.name;
   return indexName === undefined ? "" : `index=${JSON.stringify(indexName)}`;
-}
-
-function backendTimeRangeIntent(range: TimeRange, preserveAbsentTimezone: boolean) {
-  const explicitTimezone = range.timezone?.trim();
-  return {
-    earliest: range.earliest,
-    latest: range.latest,
-    timezone: explicitTimezone
-      || (preserveAbsentTimezone
-        ? undefined
-        : Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"),
-  };
 }
 
 function formatResolvedBackendTimeRange(range: ResolvedTimeRange | undefined): string | null {

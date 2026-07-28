@@ -14,6 +14,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
+	"github.com/Suhaibinator/open-splunk/internal/searchtimebounds"
 )
 
 const (
@@ -56,10 +57,12 @@ func (resolved Range) Latest() time.Time { return resolved.latest }
 // constructors. The zero value is invalid.
 func (resolved Range) Valid() bool { return resolved.valid }
 
-// Resolve accepts strict RFC3339/RFC3339Nano timestamps, now, and offsets of
-// the form -N[s|m|h|d]. Both expressions share one anchor. Seconds, minutes,
-// and hours are elapsed durations; days are calendar days in the effective
-// timezone, matching Splunk's distinction between -1d and -24h across DST.
+// Resolve accepts strict RFC3339/RFC3339Nano timestamps, now, offsets of the
+// form -N[s|m|h|d], and the bounded day snaps @d and -Nd@d. The exact earliest
+// expression 0 means the earliest backend-representable event time and is
+// rejected as latest. Both expressions share one anchor. Seconds, minutes,
+// and hours are elapsed durations; days and day snaps use the effective IANA
+// timezone, matching Splunk's calendar behavior across DST.
 func Resolve(earliest, latest string, timezone *string, now time.Time) (Range, error) {
 	intent, err := normalizeIntent(earliest, latest, timezone)
 	if err != nil {
@@ -121,11 +124,19 @@ type parsedIntent struct {
 }
 
 func parseIntent(intent Intent) (parsedIntent, error) {
-	earliest, err := parseCanonicalExpression("earliest", intent.Earliest)
+	earliest, err := parseCanonicalExpression(
+		expressionEndpointEarliest,
+		"earliest",
+		intent.Earliest,
+	)
 	if err != nil {
 		return parsedIntent{}, err
 	}
-	latest, err := parseCanonicalExpression("latest", intent.Latest)
+	latest, err := parseCanonicalExpression(
+		expressionEndpointLatest,
+		"latest",
+		intent.Latest,
+	)
 	if err != nil {
 		return parsedIntent{}, err
 	}
@@ -174,6 +185,14 @@ const (
 	expressionNow expressionKind = iota
 	expressionRelative
 	expressionAbsolute
+	expressionEarliestData
+)
+
+type expressionEndpoint uint8
+
+const (
+	expressionEndpointEarliest expressionEndpoint = iota + 1
+	expressionEndpointLatest
 )
 
 type parsedExpression struct {
@@ -195,12 +214,18 @@ func resolveExpression(expression parsedExpression, now time.Time, location *tim
 		return shifted, nil
 	case expressionAbsolute:
 		return expression.absolute, nil
+	case expressionEarliestData:
+		return clickhouse.MinimumSearchTime(), nil
 	default:
 		return time.Time{}, fmt.Errorf("%s time expression is invalid", expression.name)
 	}
 }
 
-func parseCanonicalExpression(name, expression string) (parsedExpression, error) {
+func parseCanonicalExpression(
+	endpoint expressionEndpoint,
+	name string,
+	expression string,
+) (parsedExpression, error) {
 	if expression == "" {
 		return parsedExpression{}, fmt.Errorf("%s time expression is required", name)
 	}
@@ -211,6 +236,14 @@ func parseCanonicalExpression(name, expression string) (parsedExpression, error)
 	if expression == "now" {
 		return parsedExpression{kind: expressionNow, name: name}, nil
 	}
+	if expression == "0" {
+		if endpoint != expressionEndpointEarliest {
+			return parsedExpression{}, errors.New(
+				"latest cannot use 0 because earliest-data is only an earliest boundary",
+			)
+		}
+		return parsedExpression{kind: expressionEarliestData, name: name}, nil
+	}
 	if offset, relative, err := parseRelativeOffset(expression); relative {
 		if err != nil {
 			return parsedExpression{}, fmt.Errorf("%s relative time expression is invalid", name)
@@ -218,7 +251,10 @@ func parseCanonicalExpression(name, expression string) (parsedExpression, error)
 		return parsedExpression{kind: expressionRelative, relative: offset, name: name}, nil
 	}
 	if !validRFC3339Nano(expression) {
-		return parsedExpression{}, fmt.Errorf("%s must be RFC 3339, now, or -N[s|m|h|d]", name)
+		return parsedExpression{}, fmt.Errorf(
+			"%s must be RFC 3339, now, -N[s|m|h|d], @d, or -Nd@d",
+			name,
+		)
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, expression)
 	if err != nil {
@@ -230,9 +266,13 @@ func parseCanonicalExpression(name, expression string) (parsedExpression, error)
 type relativeOffset struct {
 	calendarDays   int
 	elapsedSeconds int64
+	snapToDay      bool
 }
 
 func resolveRelative(offset relativeOffset, now time.Time, location *time.Location) (time.Time, error) {
+	if offset.snapToDay {
+		return resolveSnappedDay(offset.calendarDays, now, location)
+	}
 	if offset.calendarDays != 0 {
 		return now.In(location).AddDate(0, 0, -offset.calendarDays).UTC(), nil
 	}
@@ -243,7 +283,108 @@ func resolveRelative(offset relativeOffset, now time.Time, location *time.Locati
 	return time.Unix(anchorSeconds-offset.elapsedSeconds, int64(now.Nanosecond())).UTC(), nil
 }
 
+func resolveSnappedDay(
+	calendarDays int,
+	now time.Time,
+	location *time.Location,
+) (time.Time, error) {
+	localAnchor := now.In(location)
+	// Compute the authored civil target independently of timezone transitions.
+	// Calling AddDate directly in a zone can silently normalize a skipped civil
+	// date such as Pacific/Apia 2011-12-30 onto a different day.
+	target := time.Date(
+		localAnchor.Year(),
+		localAnchor.Month(),
+		localAnchor.Day()-calendarDays,
+		0,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+	snapped := time.Date(
+		target.Year(),
+		target.Month(),
+		target.Day(),
+		0,
+		0,
+		0,
+		0,
+		location,
+	)
+	if !sameLocalMidnight(snapped, target, location) {
+		return time.Time{}, errors.New("snapped local day does not have a valid midnight")
+	}
+	// time.Date deliberately makes no promise about which side of an
+	// ambiguous local time it returns. A few IANA zones moved clocks backward
+	// at 00:00, producing two midnights. Inspect the adjacent constant-offset
+	// intervals and select the first matching instant so @d always means the
+	// start of the civil day rather than silently dropping the folded hour.
+	start, end := snapped.ZoneBounds()
+	for _, adjacent := range [...]time.Time{start, end} {
+		if adjacent.IsZero() {
+			continue
+		}
+		probe := adjacent
+		if adjacent.Equal(start) {
+			probe = adjacent.Add(-time.Nanosecond)
+		}
+		_, offset := probe.In(location).Zone()
+		candidate := target.Add(-time.Duration(offset) * time.Second)
+		if sameLocalMidnight(candidate, target, location) && candidate.Before(snapped) {
+			snapped = candidate
+		}
+	}
+	if snapped.After(now) {
+		return time.Time{}, errors.New("snapped local day does not have a valid midnight")
+	}
+	return snapped.UTC(), nil
+}
+
+func sameLocalMidnight(candidate, target time.Time, location *time.Location) bool {
+	roundTrip := candidate.In(location)
+	return roundTrip.Year() == target.Year() &&
+		roundTrip.Month() == target.Month() &&
+		roundTrip.Day() == target.Day() &&
+		roundTrip.Hour() == 0 &&
+		roundTrip.Minute() == 0 &&
+		roundTrip.Second() == 0 &&
+		roundTrip.Nanosecond() == 0
+}
+
 func parseRelativeOffset(expression string) (relativeOffset, bool, error) {
+	if expression == "@d" {
+		return relativeOffset{snapToDay: true}, true, nil
+	}
+	const daySnapSuffix = "d@d"
+	if strings.HasPrefix(expression, "-") &&
+		strings.HasSuffix(expression, daySnapSuffix) {
+		digits := expression[1 : len(expression)-len(daySnapSuffix)]
+		if digits == "" {
+			return relativeOffset{}, true, errors.New(
+				"snapped-day magnitude is required",
+			)
+		}
+		for index := range len(digits) {
+			if digits[index] < '0' || digits[index] > '9' {
+				return relativeOffset{}, true, errors.New(
+					"snapped-day magnitude is not decimal",
+				)
+			}
+		}
+		amount, err := strconv.ParseUint(digits, 10, 64)
+		if err != nil || amount == 0 ||
+			amount > searchtimebounds.MaximumSpanDays {
+			return relativeOffset{}, true, errors.New(
+				"snapped-day magnitude is outside the supported range",
+			)
+		}
+		return relativeOffset{
+			// #nosec G115 -- MaximumSpanDays is much smaller than MaxInt.
+			calendarDays: int(amount),
+			snapToDay:    true,
+		}, true, nil
+	}
 	if len(expression) < 3 || expression[0] != '-' {
 		return relativeOffset{}, false, nil
 	}

@@ -123,10 +123,13 @@ Immediate resume steps:
 2. Add bounded `/search/suggestions` support and index/time-scoped field
    completion on top of the shared validation/admission contract; static
    browser completions are not the Phase 2 field-autocomplete service.
-3. Resolve the connected time-picker mismatch: Today, Yesterday, and All-time
-   currently publish `@d`, `-1d@d`, and `0`, while `internal/searchtime`
-   admits only RFC3339, `now`, and bounded negative offsets. Define and
-   implement the missing backend semantics or stop publishing invalid forms.
+3. Preserve the connected time-picker contract now pinned at the protobuf and
+   browser boundaries: Today uses `@d`/`now`, Yesterday uses
+   `-1d@d`/`@d`, and All time uses earliest-only `0`/`now`. Day snaps apply
+   the offset before local-midnight snapping, choose the first occurrence of a
+   repeated midnight, and fail closed for skipped civil dates or midnights.
+   Keep browser validation, IANA timezone handoff, retained authored intent,
+   and the backend's `1900-01-01` earliest-data sentinel synchronized.
 4. Complete administrator-only generated-SQL/ClickHouse-`EXPLAIN` inspection
    and schema, ordering-key, text-index, and materialized-field tuning against
    the real query and load corpus. Do not expose plans or sensitive bound

@@ -138,6 +138,198 @@ func TestResolveDistinguishesCalendarDaysFromElapsedHoursAcrossDST(t *testing.T)
 	}
 }
 
+func TestResolveSnappedDaysUseLocalMidnightAcrossDST(t *testing.T) {
+	t.Parallel()
+
+	zone := "America/Los_Angeles"
+	location, err := time.LoadLocation(zone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name          string
+		anchor        time.Time
+		wantToday     time.Time
+		wantElapsed   time.Duration
+		yesterdayAt   time.Time
+		wantYesterday time.Duration
+	}{
+		{
+			name:          "spring forward",
+			anchor:        time.Date(2026, time.March, 8, 12, 0, 0, 0, location),
+			wantToday:     time.Date(2026, time.March, 8, 0, 0, 0, 0, location),
+			wantElapsed:   11 * time.Hour,
+			yesterdayAt:   time.Date(2026, time.March, 9, 12, 0, 0, 456, location),
+			wantYesterday: 23 * time.Hour,
+		},
+		{
+			name:          "fall back",
+			anchor:        time.Date(2026, time.November, 1, 12, 0, 0, 0, location),
+			wantToday:     time.Date(2026, time.November, 1, 0, 0, 0, 0, location),
+			wantElapsed:   13 * time.Hour,
+			yesterdayAt:   time.Date(2026, time.November, 2, 12, 0, 0, 456, location),
+			wantYesterday: 25 * time.Hour,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			today, err := Resolve("@d", "now", &zone, test.anchor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !today.Earliest().Equal(test.wantToday) ||
+				!today.Latest().Equal(test.anchor) ||
+				today.Latest().Sub(today.Earliest()) != test.wantElapsed {
+				t.Fatalf(
+					"today = [%s, %s), want [%s, %s) with %s elapsed",
+					today.Earliest(),
+					today.Latest(),
+					test.wantToday,
+					test.anchor,
+					test.wantElapsed,
+				)
+			}
+
+			yesterday, err := Resolve("-1d@d", "@d", &zone, test.yesterdayAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantLatest := time.Date(
+				test.yesterdayAt.Year(),
+				test.yesterdayAt.Month(),
+				test.yesterdayAt.Day(),
+				0,
+				0,
+				0,
+				0,
+				location,
+			)
+			wantEarliest := wantLatest.AddDate(0, 0, -1)
+			if !yesterday.Earliest().Equal(wantEarliest) ||
+				!yesterday.Latest().Equal(wantLatest) ||
+				yesterday.Latest().Sub(yesterday.Earliest()) != test.wantYesterday {
+				t.Fatalf(
+					"yesterday = [%s, %s), want [%s, %s) with %s elapsed",
+					yesterday.Earliest(),
+					yesterday.Latest(),
+					wantEarliest,
+					wantLatest,
+					test.wantYesterday,
+				)
+			}
+			intent := yesterday.Intent()
+			if intent.Earliest != "-1d@d" || intent.Latest != "@d" ||
+				intent.Timezone != zone || !intent.TimezoneSpecified {
+				t.Fatalf("snapped intent = %+v", intent)
+			}
+		})
+	}
+}
+
+func TestResolveSnappedDayAppliesOffsetBeforeSnapAndRejectsSkippedDate(t *testing.T) {
+	t.Parallel()
+
+	zone := "America/Los_Angeles"
+	location, err := time.LoadLocation(zone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor := time.Date(2026, time.March, 9, 12, 34, 56, 789, location)
+	resolved, err := Resolve("-1d@d", "now", &zone, anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, time.March, 8, 0, 0, 0, 0, location)
+	if !resolved.Earliest().Equal(want) {
+		t.Fatalf("offset-before-snap earliest = %s, want %s", resolved.Earliest(), want)
+	}
+	if resolved.Earliest().Equal(
+		time.Date(2026, time.March, 9, 0, 0, 0, 0, location).Add(-24 * time.Hour),
+	) {
+		t.Fatal("snapped day was implemented as elapsed subtraction after snap")
+	}
+
+	apia := "Pacific/Apia"
+	apiaLocation, err := time.LoadLocation(apia)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterSkippedDate := time.Date(2011, time.December, 31, 12, 0, 0, 0, apiaLocation)
+	if _, err := Resolve("-1d@d", "@d", &apia, afterSkippedDate); err == nil {
+		t.Fatal("snap to Pacific/Apia's skipped 2011-12-30 unexpectedly succeeded")
+	}
+}
+
+func TestResolveSnappedDayChoosesFirstRepeatedMidnight(t *testing.T) {
+	t.Parallel()
+
+	zone := "Asia/Amman"
+	// Jordan moved from +03 to +02 at local midnight on 2000-09-29.
+	// During the first occurrence of 00:30, @d must select 00:00 +03 rather
+	// than Go's implementation-dependent choice of 00:00 +02.
+	anchor := time.Date(2000, time.September, 28, 21, 30, 0, 0, time.UTC)
+	resolved, err := Resolve("@d", "now", &zone, anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2000, time.September, 28, 21, 0, 0, 0, time.UTC)
+	if !resolved.Earliest().Equal(want) ||
+		!resolved.Latest().Equal(anchor) ||
+		resolved.Latest().Sub(resolved.Earliest()) != 30*time.Minute {
+		t.Fatalf(
+			"repeated-midnight range = [%s, %s), want [%s, %s)",
+			resolved.Earliest(),
+			resolved.Latest(),
+			want,
+			anchor,
+		)
+	}
+}
+
+func TestResolveEarliestDataUsesCompleteStorageDomain(t *testing.T) {
+	t.Parallel()
+
+	anchor := time.Date(1965, time.July, 1, 12, 0, 0, 123, time.UTC)
+	resolved, err := Resolve("0", "now", nil, anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resolved.Earliest().Equal(clickhouse.MinimumSearchTime()) ||
+		!resolved.Latest().Equal(anchor) ||
+		!resolved.Earliest().Before(time.Unix(0, 0)) {
+		t.Fatalf(
+			"all-time range = [%s, %s), want [%s, %s)",
+			resolved.Earliest(),
+			resolved.Latest(),
+			clickhouse.MinimumSearchTime(),
+			anchor,
+		)
+	}
+	intent := resolved.Intent()
+	if intent.Earliest != "0" || intent.Latest != "now" ||
+		intent.Timezone != "UTC" || intent.TimezoneSpecified {
+		t.Fatalf("all-time intent = %+v", intent)
+	}
+
+	oneNanosecond, err := Resolve(
+		"0",
+		clickhouse.MinimumSearchTime().Add(time.Nanosecond).Format(time.RFC3339Nano),
+		nil,
+		time.Time{},
+	)
+	if err != nil ||
+		oneNanosecond.Latest().Sub(oneNanosecond.Earliest()) != time.Nanosecond {
+		t.Fatalf("minimum all-time range = (%+v, %v)", oneNanosecond, err)
+	}
+	if _, err := Resolve("-1h", "0", nil, anchor); err == nil {
+		t.Fatal("latest=0 unexpectedly succeeded")
+	}
+	if _, err := Resolve("0", "0", nil, anchor); err == nil {
+		t.Fatal("both endpoints at earliest data unexpectedly succeeded")
+	}
+}
+
 func TestLoadLocationCachesOnlySuccessfulZonesConcurrently(t *testing.T) {
 	t.Parallel()
 
@@ -213,6 +405,17 @@ func TestResolveRejectsUnsupportedOrUnsafeExpressions(t *testing.T) {
 		{name: "unsigned relative", earliest: "1h", latest: "now", anchor: anchor},
 		{name: "compound relative", earliest: "now-1h", latest: "now", anchor: anchor},
 		{name: "unsupported week", earliest: "-1w", latest: "now", anchor: anchor},
+		{name: "uppercase snap", earliest: "@D", latest: "now", anchor: anchor},
+		{name: "snap alias", earliest: "@day", latest: "now", anchor: anchor},
+		{name: "snap missing magnitude", earliest: "-d@d", latest: "now", anchor: anchor},
+		{name: "zero snapped day", earliest: "-0d@d", latest: "now", anchor: anchor},
+		{name: "unsigned snapped day", earliest: "1d@d", latest: "now", anchor: anchor},
+		{name: "positive snapped day", earliest: "+1d@d", latest: "now", anchor: anchor},
+		{name: "hour offset day snap", earliest: "-1h@d", latest: "now", anchor: anchor},
+		{name: "day offset hour snap", earliest: "-1d@h", latest: "now", anchor: anchor},
+		{name: "chained snapped day", earliest: "-1d@d+1h", latest: "now", anchor: anchor},
+		{name: "duplicate snap", earliest: "-1d@d@d", latest: "now", anchor: anchor},
+		{name: "snapped day overflow", earliest: "-132219d@d", latest: "now", anchor: anchor},
 		{name: "fractional relative", earliest: "-1.5h", latest: "now", anchor: anchor},
 		{name: "uppercase now", earliest: "-1h", latest: "NOW", anchor: anchor},
 		{name: "duration overflow", earliest: huge, latest: "now", anchor: anchor},
@@ -279,6 +482,9 @@ func FuzzResolveMaintainsRangeInvariants(f *testing.F) {
 		specified                  bool
 	}{
 		{earliest: "-1d", latest: "now", timezone: "America/Los_Angeles", specified: true},
+		{earliest: "@d", latest: "now", timezone: "America/Los_Angeles", specified: true},
+		{earliest: "-1d@d", latest: "@d", timezone: "America/Los_Angeles", specified: true},
+		{earliest: "0", latest: "now", timezone: "Pacific/Chatham", specified: true},
 		{earliest: "-24h", latest: "now"},
 		{earliest: "2026-03-08T10:00:00Z", latest: "2026-03-08T11:00:00.000000001Z", timezone: "UTC", specified: true},
 		{earliest: "-18446744073709551616s", latest: "NOW", timezone: "Mars/Olympus_Mons", specified: true},
@@ -311,6 +517,13 @@ func TestValidateIntentRequiresCanonicalExecutableMetadata(t *testing.T) {
 
 	valid := []Intent{
 		{Earliest: "-024h", Latest: "now", Timezone: "UTC"},
+		{Earliest: "@d", Latest: "now", Timezone: "UTC"},
+		{
+			Earliest: "-0001d@d", Latest: "@d",
+			Timezone: "America/Los_Angeles", TimezoneSpecified: true,
+		},
+		{Earliest: "-132218d@d", Latest: "@d", Timezone: "UTC"},
+		{Earliest: "0", Latest: "now", Timezone: "UTC"},
 		{Earliest: "2026-07-22T10:00:00.123456789Z", Latest: "2026-07-22T11:00:00+01:00", Timezone: "America/Los_Angeles", TimezoneSpecified: true},
 	}
 	for _, intent := range valid {
@@ -325,6 +538,9 @@ func TestValidateIntentRequiresCanonicalExecutableMetadata(t *testing.T) {
 		{Earliest: "-1w", Latest: "now", Timezone: "UTC"},
 		{Earliest: "-1h", Latest: "now", Timezone: "America/Los_Angeles"},
 		{Earliest: "-1h", Latest: "now", Timezone: " UTC", TimezoneSpecified: true},
+		{Earliest: "-1h", Latest: "0", Timezone: "UTC"},
+		{Earliest: "-0d@d", Latest: "@d", Timezone: "UTC"},
+		{Earliest: "-132219d@d", Latest: "@d", Timezone: "UTC"},
 	}
 	for _, intent := range invalid {
 		if err := ValidateIntent(intent); err == nil {

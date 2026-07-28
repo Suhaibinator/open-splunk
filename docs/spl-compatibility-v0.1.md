@@ -131,23 +131,30 @@ only these executable forms:
 
 - strict RFC 3339 timestamps with an explicit `Z` or numeric offset and up to
   nine fractional digits;
-- the exact keyword `now`; and
-- negative integer offsets `-N[s|m|h|d]`, where `N` is greater than zero.
+- the exact keyword `now`;
+- negative integer offsets `-N[s|m|h|d]`, where `N` is greater than zero;
+- the day snaps `@d` and `-Nd@d`, with snapped `N` bounded to 132,218; and
+- exact `0` at the earliest endpoint only, meaning the backend's earliest
+  representable event time (`1900-01-01T00:00:00Z`), not the Unix epoch.
 
 Both endpoints resolve from one captured `now` anchor and form a half-open
 `[earliest, latest)` interval. Seconds, minutes, and hours are elapsed durations.
 Days are calendar days in the effective IANA timezone, so `-1d` and `-24h` can
-differ across daylight-saving transitions, as they do in Splunk. An omitted
-timezone means UTC. The original normalized expressions and optional timezone
-presence are retained separately from the resolved UTC nanosecond timestamps,
-including in search history.
+differ across daylight-saving transitions, as they do in Splunk. Day-snap
+offsets apply before snapping to local midnight. A repeated midnight selects
+its first occurrence; a skipped civil date or midnight fails closed rather
+than being normalized onto another day. An omitted timezone means UTC. The
+original normalized expressions and optional timezone presence are retained
+separately from the resolved UTC nanosecond timestamps, including in search
+history.
 
 Expressions outside ClickHouse's supported `DateTime64(9)` range, empty or
 inverted intervals, invalid timezone names, and arithmetic overflow fail before
 job admission. Splunk forms not listed above—including implied-one offsets such
-as `-h`, positive offsets, snap expressions such as `@d` or `-1d@d`, aliases,
-chained modifiers, and week/month/quarter/year units—are explicitly rejected in
-version 0.1 rather than approximated.
+as `-h`, positive offsets, snap units other than the exact day forms above,
+aliases, chained modifiers, and week/month/quarter/year units—are explicitly
+rejected in version 0.1 rather than approximated. `0` at the latest endpoint is
+also rejected.
 
 ## Search expressions
 
