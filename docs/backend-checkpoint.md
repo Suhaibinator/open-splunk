@@ -7,7 +7,142 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: measured GradeThis plans and schema decision
+## Latest checkpoint: administrator identity boundary
+
+Date: 2026-07-28
+
+Committed and pushed checkpoint:
+
+- `8a66f10` — a fail-closed administrator browser identity and role boundary,
+  secure operator-provisioned credential loading, protected control-plane
+  routes, and real-process integration harness authentication.
+
+This slice establishes the identity prerequisite for exposing the internal
+search-inspection service without exposing raw SQL or ClickHouse plans to the
+ordinary single-user search surface:
+
+1. `internal/auth` now owns an immutable browser principal with exact
+   tenant/owner scope and an explicit ordinary-user or administrator role.
+   The fixed bearer authenticator accepts only bounded 32–512-byte token68
+   credentials, stores only SHA-256, compares fixed-size digests in constant
+   time, detaches all identity strings, honors cancellation, and redacts
+   diagnostic formatting.
+2. All five index-administration and all five ingestion-token routes are in
+   one exact administrator-route set. Handler construction fails closed when
+   either administrative service is present without a non-nil authenticator,
+   including typed-nil implementations.
+3. The HTTP order is now exact path/method, Host/Origin trust, administrator
+   authentication, content type, request admission, protobuf decoding, and
+   service work. Unknown routes and wrong methods therefore remain 404/405
+   without invoking authentication; rejected credentials do not read request
+   bodies, acquire the API gate, decode protobuf, or call a control service.
+4. Authorization parsing requires one unambiguous case-insensitive `Bearer`
+   field, rejects duplicate or case-variant header keys, multiple values,
+   comma joining, extra whitespace, controls, non-ASCII token characters,
+   malformed padding, short values, and oversized values before calling the
+   authenticator. The reusable header is removed from a cloned authorized
+   request before route middleware or handlers receive it.
+5. Missing, malformed, and incorrect credentials return a generic 401 plus
+   `WWW-Authenticate`; authenticated non-administrators and exact
+   tenant/owner mismatches return 403; cancellation/deadline returns 408; and
+   backend or corrupt-principal failures return a generic 503. All use the
+   no-store JSON envelope and disclose neither credentials nor backend errors.
+6. A valid detached administrator principal is stored in request context for
+   the next inspection route. Ordinary search, saved-search, history, export,
+   WebSocket, bootstrap, health, and static routes remain outside this
+   administrator gate and do not invoke the authenticator.
+7. Normal server startup now requires
+   `-administrator-token-file`. The existing regular file must be owned by the
+   effective server user, have exactly one hard link, use exactly 0400 or 0600
+   permissions, contain one valid token with at most one LF or CRLF terminator,
+   and have no special bits, final-component symlink, or macOS extended ACL.
+   Missing or unsafe files fail startup; the server never creates or chmods
+   the credential.
+8. Loading uses pre-open `Lstat`, `O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC`, descriptor
+   identity and metadata checks, a 514-byte bounded read, and post-read
+   descriptor/path checks. On macOS, descriptor-based `fgetattrlist` checks
+   before and after the read reject direct and inherited ACL entries that can
+   grant access despite mode 0600. Plaintext buffers are cleared immediately
+   after constructing the digest-only authenticator.
+9. Browser HTTP is loopback-only until the server supports HTTPS. The former
+   insecure trusted-network flag is retained only as a deprecated compatibility
+   flag and cannot bypass this boundary. Remote browser exposure requires a
+   later HTTPS-aware listener or trusted-proxy design that preserves the exact
+   Host/Origin boundary.
+10. The sustained-load and vertical real-process harnesses now provision
+    independent CSPRNG administrator tokens in 0600 files, pass only file
+    paths to server processes, attach credentials only to administrative
+    protobuf calls, reuse them safely across server restarts, and assert that
+    process logs never contain them.
+11. Adversarial review initially found one P2 macOS ACL bypass: an
+    `everyone allow read` ACL can coexist with reported mode 0600. That finding
+    is closed by the descriptor ACL checks and direct/inherited regression
+    fixtures. Two independent rereviews found no remaining P0/P1/P2 issue in
+    the identity, route, runtime-file, ACL, or integration boundaries.
+
+Operator provisioning example:
+
+```sh
+umask 077
+openssl rand -base64 48 > administrator.token
+chmod 0600 administrator.token
+# macOS only, if the containing directory applies inherited ACLs:
+chmod -N administrator.token
+
+open-splunk-server \
+  -administrator-token-file=administrator.token
+```
+
+The file is loaded once. Rotation uses a newly provisioned safe file, atomic
+replacement, and a server restart. `-verify-embedded-release` still exits
+before credential loading.
+
+Validation on the pushed implementation:
+
+```sh
+go test ./... -count=1
+go test -race \
+  ./internal/auth ./internal/server ./cmd/open-splunk-server -count=1
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+  go build -o /tmp/open-splunk-server-linux-amd64 \
+  ./cmd/open-splunk-server
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=5m ./...
+npm run lint
+git diff --check
+```
+
+The full Go suite passed, the focused race suite passed, the Linux release
+target cross-built without CGO, and repository-wide Go lint reported zero
+issues.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `8a66f10`.
+2. Add a dedicated exact POST `/api/v1/search/jobs/inspect` protobuf route.
+   Its request contains only `search_job_id`; derive tenant and owner solely
+   from the detached administrator principal, never from protobuf or the
+   handler's ordinary fixed scope.
+3. Register the route in the SRouter definition, exact API route map, and
+   administrator route set. Keep the ordinary search-job `include_plan` and
+   `include_generated_sql` flags rejected.
+4. Add bounded protobuf projections for logical and physical plans, generated
+   SQL, raw EXPLAIN text, and diagnostic query ID. Defensively validate an
+   arbitrary inspection-service result before serialization, including
+   reparsing raw EXPLAIN and requiring equality with its structured physical
+   plan.
+5. Give the runtime inspection service an isolated two-lane Explainer
+   lifecycle. Drain HTTP first, then close the inspection service, Explainer,
+   search manager, and shared ClickHouse resources in that order.
+6. Add a pinned ClickHouse HTTP integration that executes all ten canonical
+   GradeThis searches through real completed jobs and compares every
+   authorized route projection with the exact internal inspection result.
+7. Then continue Phase 3/4 HEC, reports/dashboards, RBAC expansion, audit
+   search, alerts, scheduled searches, and packaging.
+
+## Previous checkpoint: measured GradeThis plans and schema decision
 
 Date: 2026-07-28
 
