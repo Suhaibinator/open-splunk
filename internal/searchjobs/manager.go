@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -295,10 +296,10 @@ type jobEntry struct {
 
 // New constructs and starts a search job manager.
 func New(config Config) (*Manager, error) {
-	if config.Executor == nil {
+	if isNilRequiredDependency(config.Executor) {
 		return nil, errors.New("create search job manager: executor is required")
 	}
-	if config.Snapshotter == nil {
+	if isNilRequiredDependency(config.Snapshotter) {
 		return nil, errors.New("create search job manager: visibility snapshotter is required")
 	}
 	if config.MaxConcurrent < 0 || config.MaxConcurrentReads < 0 || config.MaxConcurrentSnapshots < 0 || config.MaxResultLeases < 0 || config.MaxResultLeasesPerJob < 0 || config.MaxQueued < 0 || config.MaxJobs < 0 || config.DefaultPageSize < 0 || config.MaxPageSize < 0 || config.MaxSPLBytes < 0 || config.MaxScopeIndexes < 0 {
@@ -507,6 +508,19 @@ func New(config Config) (*Manager, error) {
 	return manager, nil
 }
 
+func isNilRequiredDependency(dependency any) bool {
+	if dependency == nil {
+		return true
+	}
+	value := reflect.ValueOf(dependency)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 // Create takes an immutable absolute-time, authorization, and committed-storage
 // visibility snapshot and queues it for asynchronous parsing. Visibility is
 // captured synchronously during admission; if that lookup fails, no job is
@@ -681,7 +695,7 @@ func (manager *Manager) snapshotAdmissionError(callerContext context.Context) er
 	if manager.ctx.Err() != nil {
 		return ErrClosed
 	}
-	return fmt.Errorf("create search job: %w", ErrStorageUnavailable)
+	return fmt.Errorf("capture search visibility: %w", ErrStorageUnavailable)
 }
 
 func (manager *Manager) beginOperation() error {
@@ -710,6 +724,35 @@ func (manager *Manager) operationContextError(ctx context.Context) error {
 		return ErrClosed
 	}
 	return nil
+}
+
+// beginSynchronousOperation joins manager shutdown accounting and reserves the
+// fail-fast CPU/planning gate shared by validation and no-job derived analysis.
+// Callers must invoke endSynchronousOperation exactly once after success.
+func (manager *Manager) beginSynchronousOperation(ctx context.Context) error {
+	if err := manager.beginOperation(); err != nil {
+		return err
+	}
+	if err := manager.operationContextError(ctx); err != nil {
+		manager.endOperation()
+		return err
+	}
+	select {
+	case manager.validationGate <- struct{}{}:
+		return nil
+	default:
+		err := manager.operationContextError(ctx)
+		manager.endOperation()
+		if err != nil {
+			return err
+		}
+		return ErrCapacity
+	}
+}
+
+func (manager *Manager) endSynchronousOperation() {
+	<-manager.validationGate
+	manager.endOperation()
 }
 
 // reserveAdmission reserves both a retained-job slot and a future queue slot

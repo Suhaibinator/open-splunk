@@ -163,6 +163,30 @@ type ValidateRequest struct {
 	TimeRange         searchtime.Range
 }
 
+// AnalysisScopeRequest is trusted, server-resolved search scope for one
+// synchronous storage analysis that must not create a search job. An empty
+// RequestedIndexes slice means every authorized index.
+type AnalysisScopeRequest struct {
+	TenantID          string
+	AuthorizedIndexes []string
+	RequestedIndexes  []string
+	TimeRange         searchtime.Range
+}
+
+// AnalysisScopeSnapshot is one detached, immutable authorization, time, and
+// storage-visibility boundary for derived analysis. SearchStart and
+// IndexTimeCutoff deliberately share one manager clock read. The type remains
+// backend-neutral so callers can translate it into their own logical plan.
+type AnalysisScopeSnapshot struct {
+	TenantID          string
+	AuthorizedIndexes []string
+	RequestedIndexes  []string
+	TimeRange         searchtime.Range
+	SearchStart       time.Time
+	IndexTimeCutoff   time.Time
+	VisibilityCutoff  uint64
+}
+
 // ValidationResultKind predicts the relation shape produced by a successfully
 // compiled search without coupling the search-job layer to transport enums.
 type ValidationResultKind uint8

@@ -18,6 +18,9 @@ import (
 // compiler output. SPL diagnostics are returned as a successful invalid result;
 // service, cancellation, and internal failures are returned as errors.
 func (manager *Manager) Validate(ctx context.Context, request ValidateRequest) (ValidationResult, error) {
+	if manager == nil {
+		return ValidationResult{}, errors.New("validate search: manager is nil")
+	}
 	if ctx == nil {
 		return ValidationResult{}, errors.New("validate search: context is nil")
 	}
@@ -39,22 +42,10 @@ func (manager *Manager) Validate(ctx context.Context, request ValidateRequest) (
 	if !validAccessIdentity(request.TenantID) {
 		return ValidationResult{}, errors.New("validate search: tenant identity is invalid")
 	}
-	if err := manager.beginOperation(); err != nil {
+	if err := manager.beginSynchronousOperation(ctx); err != nil {
 		return ValidationResult{}, err
 	}
-	defer manager.endOperation()
-	if err := manager.operationContextError(ctx); err != nil {
-		return ValidationResult{}, err
-	}
-	select {
-	case manager.validationGate <- struct{}{}:
-		defer func() { <-manager.validationGate }()
-	default:
-		if err := manager.operationContextError(ctx); err != nil {
-			return ValidationResult{}, err
-		}
-		return ValidationResult{}, ErrCapacity
-	}
+	defer manager.endSynchronousOperation()
 	request.AuthorizedIndexes = cloneStrings(request.AuthorizedIndexes)
 	request.RequestedIndexes = cloneStrings(request.RequestedIndexes)
 
