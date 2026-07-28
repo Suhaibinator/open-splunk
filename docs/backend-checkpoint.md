@@ -7,7 +7,103 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: persistent GORM app workspaces
+## Latest checkpoint: bounded GORM control plane
+
+Date: 2026-07-28
+
+Committed and pushed checkpoints:
+
+- `cddeb7a` — index-definition persistence through GORM;
+- `af31a35` — app-workspace persistence through GORM;
+- `5996973` — ingestion-token persistence through GORM;
+- `b490c80` — saved-search persistence through GORM; and
+- `baad652` — terminal and pending search-history persistence through GORM.
+
+The bounded mutable SQLite stores now share one explicit persistence model:
+checked-in SQL migrations remain the sole schema authority, while GORM maps
+reviewable records and queries onto the existing modernc SQLite connection.
+No production path calls `AutoMigrate`.
+
+1. Every converted store has an explicit model whose table, column, primary
+   key, unique key, index, nullability, and representable check metadata is
+   compared with the authoritative migrated schema. Upgrade/reopen coverage
+   protects existing databases instead of testing only empty-schema creation.
+2. Index definitions and app workspaces retain tenant scope, canonical
+   identifiers, lifecycle constraints, default-index referential checks,
+   optimistic versions, immediate writer transactions, and signed
+   revision-bound keyset pagination.
+3. Ingestion tokens retain digest-only persistence, one-time plaintext-secret
+   return, bounded index-scope resolution, active/expiry checks, deterministic
+   ordering, optimistic update/revoke behavior, and atomic scope replacement.
+   Failure-injection tests prove a partial scope update rolls back.
+4. Saved searches retain owner and app-workspace scope, definition
+   canonicalization, ID-collision retry, exact counts, deterministic signed
+   keyset paging, optimistic updates, and app archival/deletion triggers.
+   Query-plan tests prove owner-scoped keyset indexes are used without a
+   temporary sort.
+5. Search history maps terminal jobs and pending attempts separately. GORM now
+   covers lifecycle admission, idempotency, completion, interrupted-attempt
+   recovery, capacity pruning, clearing, counts, and every supported keyset
+   order while retaining immediate writer transactions and canonical protobuf
+   checksums.
+6. Persisted terminal and pending records are treated as untrusted data.
+   Checksum-valid but semantically invalid protobufs and corrupt stored scopes
+   return internal corruption errors rather than the invalid-client sentinel;
+   request validation and context cancellation retain their original error
+   identities. Regression tests exercise Get, List, Begin, Complete, duplicate
+   completion, and recovery paths.
+7. Concurrent tests cover token compare-and-swap, history capacity and
+   idempotency, saved-search mutation, and cursor behavior. Cursor keys remain
+   stable across database reopen, and returned domain values are detached from
+   mutable ORM records.
+8. Independent adversarial reviews were performed after each conversion. The
+   sole P2 found in the final search-history review—the persisted-corruption
+   classification issue described above—was fixed and stress-regressed. Final
+   re-review found no remaining P0/P1/P2 issue in the converted stores.
+
+Validation on pushed commit `baad652`:
+
+```sh
+go test ./... -count=1
+go test -race \
+  ./internal/auth ./internal/control ./internal/savedobjects \
+  ./internal/searchhistory ./internal/server ./cmd/open-splunk-server \
+  -count=1
+go vet ./...
+go build ./...
+/private/tmp/open-splunk-golangci-lint-v2.12.2 run --timeout=10m
+git diff --check
+```
+
+All Go packages and the focused control-plane race suites passed. Vet and
+build passed, and the pinned repository-wide golangci-lint v2.12.2 run
+reported `0 issues`. Verification ran from an isolated worktree anchored at
+the pushed commit while the next Phase 3 slice was developed separately.
+
+This checkpoint changes only SQLite persistence. It does not change SPL
+parsing, planning, generated ClickHouse SQL, or execution, so the immediately
+preceding pinned all-ten-query GradeThis gate remains the relevant ClickHouse
+compatibility evidence.
+
+Next priorities:
+
+1. Complete ingestion-token last-use visibility: store a monotonic accepted
+   stream timestamp without changing administrator CAS metadata, record it
+   once per protocol-valid stream before readiness, and expose the existing
+   administrator field and deterministic sort.
+2. Define collector identity/fencing and heartbeat coalescing before exposing
+   collector fleet administration; token last-use does not imply a durable
+   fleet registry.
+3. Continue Phase 3 with reports/dashboards, per-index user permissions, HEC
+   compatibility, and expanded RBAC/audit search after their unresolved
+   contracts are made explicit.
+4. Retain the lifecycle backlog: bounded ingestion-token tombstones, surfaced
+   export-deletion failures, physical search-history cleanup, completion of
+   deleting-index state, and a bounded WebSocket shutdown dependency.
+5. Keep every SPL change behind unit, adversarial, and pinned ClickHouse
+   compatibility evidence.
+
+## Previous checkpoint: persistent GORM app workspaces
 
 Date: 2026-07-28
 
