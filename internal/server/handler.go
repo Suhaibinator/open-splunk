@@ -127,6 +127,30 @@ type AppAdministration interface {
 	DeleteApp(context.Context, AppAdministrationScope, AppAdministrationSelector, uint64, string) (string, error)
 }
 
+// AppCatalogSummary is one detached active workspace projection for the
+// ordinary browser bootstrap. Lifecycle state is intentionally omitted:
+// ListActiveApps must return active workspaces only.
+type AppCatalogSummary struct {
+	AppID             string
+	Slug              string
+	DisplayName       string
+	DefaultIndexNames []string
+}
+
+// AppCatalogResult is the complete bounded active catalog for one tenant.
+// Complete must be false when more rows exist than the caller's maximum.
+type AppCatalogResult struct {
+	Apps     []AppCatalogSummary
+	Complete bool
+}
+
+// AppCatalog is the read-only, tenant-scoped app surface used by ordinary
+// bootstrap requests. Tenant identity comes from Config, never an
+// administrator principal or caller-controlled protobuf field.
+type AppCatalog interface {
+	ListActiveApps(context.Context, string, uint32) (AppCatalogResult, error)
+}
+
 // SavedSearches is the owner-scoped saved-search surface exposed to the
 // browser API. savedobjects.Store satisfies this interface directly. Keeping
 // the authenticated owner outside every protobuf request prevents callers
@@ -234,9 +258,11 @@ func (handler *Handler) Close(ctx context.Context) error {
 	return handler.searchWebSocket.Close(ctx)
 }
 
-// BootstrapConfig contains build information and static workspace summaries.
-// Index summaries are always loaded from IndexCatalog so authorization and the
-// UI bootstrap cannot drift apart.
+// BootstrapConfig contains build information and optional static workspace
+// summaries. Apps are a compatibility source for embedded/test deployments
+// without AppCatalog; configuring both sources is rejected. Index summaries
+// are always loaded from IndexCatalog so authorization and UI bootstrap cannot
+// drift apart.
 type BootstrapConfig struct {
 	ServerVersion           string
 	APIVersion              string
@@ -265,6 +291,7 @@ type Config struct {
 	IndexAdmin                 IndexAdministration
 	IngestionTokens            IngestionTokenAdministration
 	AppAdmin                   AppAdministration
+	AppCatalog                 AppCatalog
 	SavedSearches              SavedSearches
 	SearchHistory              SearchHistory
 	Exports                    Exports
@@ -301,6 +328,7 @@ type apiHandler struct {
 	indexAdmin                IndexAdministration
 	ingestionTokens           IngestionTokenAdministration
 	appAdmin                  AppAdministration
+	appCatalog                AppCatalog
 	savedSearches             SavedSearches
 	searchHistory             SearchHistory
 	exports                   Exports
@@ -355,6 +383,15 @@ func NewHandler(config Config) (*Handler, error) {
 	appAdmin := config.AppAdmin
 	if isNilDependency(appAdmin) {
 		appAdmin = nil
+	}
+	appCatalog := config.AppCatalog
+	if isNilDependency(appCatalog) {
+		appCatalog = nil
+	}
+	if appCatalog != nil && len(config.Bootstrap.Apps) != 0 {
+		return nil, errors.New(
+			"create server handler: live app catalog and static bootstrap apps cannot both be configured",
+		)
 	}
 	browserAuthenticator := config.BrowserAuthenticator
 	if isNilDependency(browserAuthenticator) {
@@ -559,6 +596,7 @@ func NewHandler(config Config) (*Handler, error) {
 		indexAdmin:                indexAdmin,
 		ingestionTokens:           ingestionTokens,
 		appAdmin:                  appAdmin,
+		appCatalog:                appCatalog,
 		savedSearches:             config.SavedSearches,
 		searchHistory:             searchHistoryService,
 		exports:                   exportService,

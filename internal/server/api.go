@@ -25,7 +25,7 @@ const maximumRequestedIndexes = 128
 func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *opensplunkv1.GetSystemBootstrapRequest) (*opensplunkv1.GetSystemBootstrapResponse, error) {
 	indexes, err := handler.indexes.ListIndexes(request.Context())
 	if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
-		return nil, contextErr
+		return nil, bootstrapContextError(contextErr)
 	}
 	if err != nil {
 		return nil, unavailableError("control plane is unavailable")
@@ -35,9 +35,34 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 		indexSummaries[index] = indexSummaryToProto(record)
 	}
 	apps := cloneApps(handler.bootstrap.Apps)
-	selectedAppID := handler.bootstrap.SelectedAppID
-	if preferred := strings.TrimSpace(input.GetPreferredAppId()); preferred != "" && appExists(apps, preferred) {
-		selectedAppID = preferred
+	if handler.appCatalog != nil {
+		catalog, catalogErr := handler.appCatalog.ListActiveApps(
+			request.Context(),
+			handler.tenantID,
+			uint32(maximumBootstrapApps),
+		)
+		if contextErr := requestContextFailure(
+			request.Context(),
+			catalogErr,
+		); contextErr != nil {
+			return nil, bootstrapContextError(contextErr)
+		}
+		if catalogErr != nil {
+			return nil, unavailableError("control plane is unavailable")
+		}
+		apps, catalogErr = appCatalogSummariesToProto(catalog)
+		if catalogErr != nil {
+			return nil, internalError()
+		}
+	}
+
+	selectedAppID := strings.TrimSpace(handler.bootstrap.SelectedAppID)
+	if !appExists(apps, selectedAppID) {
+		selectedAppID = ""
+	}
+	preferredAppID := strings.TrimSpace(input.GetPreferredAppId())
+	if preferredAppID != "" && appExists(apps, preferredAppID) {
+		selectedAppID = preferredAppID
 	}
 	if selectedAppID == "" && len(apps) > 0 {
 		selectedAppID = apps[0].GetAppId()
@@ -72,6 +97,86 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 		return nil, err
 	}
 	return response, nil
+}
+
+func bootstrapContextError(err error) error {
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return router.NewHTTPError(
+			http.StatusRequestTimeout,
+			"bootstrap request was canceled",
+		)
+	}
+	return err
+}
+
+func appCatalogSummariesToProto(
+	catalog AppCatalogResult,
+) ([]*opensplunkv1.AppSummary, error) {
+	if !catalog.Complete || len(catalog.Apps) > maximumBootstrapApps {
+		return nil, errors.New("active app catalog is incomplete or exceeds its bound")
+	}
+
+	apps := make([]*opensplunkv1.AppSummary, 0, len(catalog.Apps))
+	seenIDs := make(map[string]struct{}, len(catalog.Apps))
+	seenSlugs := make(map[string]struct{}, len(catalog.Apps))
+	for _, app := range catalog.Apps {
+		appID := strings.TrimSpace(app.AppID)
+		if appID != app.AppID ||
+			validateBoundedIdentifier(
+				appID,
+				maximumAppAdministrationIDBytes,
+				false,
+			) != nil {
+			return nil, errors.New("active app catalog contains an invalid app ID")
+		}
+		slug, err := normalizeAppAdministrationSlug(app.Slug)
+		if err != nil || slug != app.Slug {
+			return nil, errors.New("active app catalog contains an invalid slug")
+		}
+		displayName, err := normalizeAppAdministrationDisplayName(
+			app.DisplayName,
+		)
+		if err != nil || displayName != app.DisplayName {
+			return nil, errors.New(
+				"active app catalog contains an invalid display name",
+			)
+		}
+		indexNames, err := normalizeAppAdministrationIndexes(
+			app.DefaultIndexNames,
+		)
+		if err != nil ||
+			!slices.Equal(indexNames, app.DefaultIndexNames) {
+			return nil, errors.New(
+				"active app catalog contains invalid default indexes",
+			)
+		}
+		if _, duplicate := seenIDs[appID]; duplicate {
+			return nil, errors.New("active app catalog contains a duplicate app")
+		}
+		if _, duplicate := seenSlugs[slug]; duplicate {
+			return nil, errors.New("active app catalog contains a duplicate app")
+		}
+		seenIDs[appID] = struct{}{}
+		seenSlugs[slug] = struct{}{}
+		apps = append(apps, &opensplunkv1.AppSummary{
+			AppId:             strings.Clone(appID),
+			Slug:              strings.Clone(slug),
+			DisplayName:       strings.Clone(displayName),
+			DefaultIndexNames: slices.Clone(indexNames),
+			State:             opensplunkv1.AppState_APP_STATE_ACTIVE,
+		})
+	}
+	slices.SortFunc(
+		apps,
+		func(left, right *opensplunkv1.AppSummary) int {
+			if order := strings.Compare(left.GetSlug(), right.GetSlug()); order != 0 {
+				return order
+			}
+			return strings.Compare(left.GetAppId(), right.GetAppId())
+		},
+	)
+	return apps, nil
 }
 
 func (handler *apiHandler) createSearchJob(request *http.Request, input *opensplunkv1.CreateSearchJobRequest) (*opensplunkv1.CreateSearchJobResponse, error) {
