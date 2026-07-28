@@ -23,13 +23,18 @@ import (
 )
 
 const (
-	// The default PLAN form is already exercised against the production-pinned
-	// ClickHouse image by the compiler integration suite. The compiler SQL is
-	// sealed inside this fixed outer SELECT so its server-side timeout clause
-	// takes precedence over clickhouse-go's deadline-derived protocol setting.
-	// Callers cannot select a more expensive EXPLAIN mode, alias, or setting.
-	explainQueryPrefix         = "EXPLAIN SELECT * FROM ("
+	// The fixed structured PLAN form is exercised against the
+	// production-pinned ClickHouse image. It exposes only plan structure,
+	// physical read headers, and index selection; actions remain disabled.
+	// The compiler SQL is sealed inside this fixed outer SELECT so its
+	// server-side timeout clause takes precedence over clickhouse-go's
+	// deadline-derived protocol setting. Callers cannot select an EXPLAIN
+	// mode, alias, or setting.
+	explainQueryPrefix = "EXPLAIN PLAN json = 1, description = 1, indexes = 1, " +
+		"actions = 0, header = 1 SELECT * FROM ("
 	explainQuerySettingsPrefix = ") AS __os_explain_input SETTINGS max_execution_time = "
+	explainQuerySettingsSuffix = ", use_query_condition_cache = 0, " +
+		"use_skip_indexes_on_data_read = 0, enable_full_text_index = 1"
 
 	maximumConcurrentExplains   = 2
 	maximumExplainExecutionTime = 10 * time.Second
@@ -93,11 +98,11 @@ type Explainer struct {
 	closeErr   error
 }
 
-// Explain obtains ClickHouse's default logical/physical plan for a
+// Explain obtains ClickHouse's fixed structured logical/physical PLAN for a
 // compiler-produced query. It validates and detaches the ordered bind
-// arguments but never returns or logs them. The complete bounded result is
-// validated before publication, so cancellation and driver failures are
-// atomic.
+// arguments but never returns or logs them. The complete bounded one-row JSON
+// result is structurally validated before publication, so cancellation,
+// malformed plans, and driver failures are atomic.
 func (explainer *Explainer) Explain(
 	ctx context.Context,
 	query clickhouse.CompiledQuery,
@@ -216,7 +221,8 @@ func (explainer *Explainer) Explain(
 	}
 
 	querySQL := explainQueryPrefix + query.SQL +
-		explainQuerySettingsPrefix + strconv.FormatUint(timeoutSeconds, 10)
+		explainQuerySettingsPrefix + strconv.FormatUint(timeoutSeconds, 10) +
+		explainQuerySettingsSuffix
 	detachedArgs, err := detachExplainArguments(
 		query.Args,
 		compilerPlaceholderCount(query.SQL),
@@ -282,7 +288,7 @@ func (explainer *Explainer) Explain(
 	}
 
 	var text strings.Builder
-	var rowCount, resultBytes uint64
+	var serverRowCount, lineCount, resultBytes uint64
 	for {
 		if err := explainContext.Err(); err != nil {
 			return ExplainResult{}, err
@@ -293,34 +299,27 @@ func (explainer *Explainer) Explain(
 		if err := explainContext.Err(); err != nil {
 			return ExplainResult{}, err
 		}
-		if rowCount >= maximumExplainResultRows {
-			return ExplainResult{}, explainLimit("returned too many rows")
+		if serverRowCount != 0 {
+			return ExplainResult{}, invalidExplainResult(
+				"returned multiple structured plan rows",
+			)
 		}
-
-		var line string
-		if err := rows.Scan(&line); err != nil {
+		var row string
+		if err := rows.Scan(&row); err != nil {
 			return ExplainResult{}, sanitizeExplainQueryError(explainContext, err)
 		}
 		if err := explainContext.Err(); err != nil {
 			return ExplainResult{}, err
 		}
-		if err := validateExplainLine(line); err != nil {
+		if err := appendExplainRow(
+			&text,
+			row,
+			&lineCount,
+			&resultBytes,
+		); err != nil {
 			return ExplainResult{}, err
 		}
-
-		additionalBytes := uint64(len(line))
-		if rowCount > 0 {
-			additionalBytes++
-		}
-		if additionalBytes > maximumExplainResultBytes-resultBytes {
-			return ExplainResult{}, explainLimit("exceeded the result byte limit")
-		}
-		if rowCount > 0 {
-			text.WriteByte('\n')
-		}
-		text.WriteString(line)
-		resultBytes += additionalBytes
-		rowCount++
+		serverRowCount++
 	}
 	if err := rows.Err(); err != nil {
 		return ExplainResult{}, sanitizeExplainQueryError(explainContext, err)
@@ -328,7 +327,7 @@ func (explainer *Explainer) Explain(
 	if err := explainContext.Err(); err != nil {
 		return ExplainResult{}, err
 	}
-	if rowCount == 0 {
+	if serverRowCount != 1 || lineCount == 0 {
 		return ExplainResult{}, invalidExplainResult("returned an empty plan")
 	}
 
@@ -339,7 +338,59 @@ func (explainer *Explainer) Explain(
 	if err := explainContext.Err(); err != nil {
 		return ExplainResult{}, err
 	}
-	return ExplainResult{Text: text.String(), QueryID: queryID}, nil
+	result = ExplainResult{Text: text.String(), QueryID: queryID}
+	if _, err := parseExplainPlanText(explainContext, result.Text); err != nil {
+		return ExplainResult{}, err
+	}
+	if err := explainContext.Err(); err != nil {
+		return ExplainResult{}, err
+	}
+	return result, nil
+}
+
+// ClickHouse's json=1 PLAN is one String row containing pretty-printed JSON,
+// so normalize its embedded lines into the bounded newline-delimited result
+// contract. Literal newlines are the only admitted controls and are retained
+// exactly between independently validated nonempty lines.
+func appendExplainRow(
+	text *strings.Builder,
+	row string,
+	lineCount *uint64,
+	resultBytes *uint64,
+) error {
+	remaining := row
+	for {
+		if *lineCount >= maximumExplainResultRows {
+			return explainLimit("returned too many rows")
+		}
+		newline := strings.IndexByte(remaining, '\n')
+		line := remaining
+		if newline >= 0 {
+			line = remaining[:newline]
+		}
+		if err := validateExplainLine(line); err != nil {
+			return err
+		}
+
+		additionalBytes := uint64(len(line))
+		if *lineCount > 0 {
+			additionalBytes++
+		}
+		if additionalBytes > maximumExplainResultBytes-*resultBytes {
+			return explainLimit("exceeded the result byte limit")
+		}
+		if *lineCount > 0 {
+			text.WriteByte('\n')
+		}
+		text.WriteString(line)
+		*resultBytes += additionalBytes
+		*lineCount++
+
+		if newline < 0 {
+			return nil
+		}
+		remaining = remaining[newline+1:]
+	}
 }
 
 func (explainer *Explainer) beginCall(

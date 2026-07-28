@@ -43,10 +43,7 @@ func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 	searches := &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}}
 	compiler := &inspectionCompiler{}
 	explainer := &inspectionExplainer{
-		result: queryexec.ExplainResult{
-			Text:    "Expression ((Projection + Before ORDER BY))\n  ReadFromMergeTree",
-			QueryID: "open-splunk-explain-service-test",
-		},
+		result: inspectionExplainResult("open-splunk-explain-service-test"),
 	}
 	service := newInspectionTestService(t, Config{
 		Searches: searches, Compiler: compiler, Explainer: explainer,
@@ -104,6 +101,12 @@ func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 		result.DiagnosticQueryID != explainer.result.QueryID {
 		t.Fatalf("result diagnostics = %#v", result)
 	}
+	if !slices.Equal(
+		result.PhysicalPlan.NodeTypes,
+		[]string{"Expression", "ReadFromMergeTree"},
+	) || len(result.PhysicalPlan.Reads) != 1 {
+		t.Fatalf("physical plan = %#v", result.PhysicalPlan)
+	}
 	if got := stageOperators(result.Plan); !slices.Equal(
 		got,
 		[]string{"Scan", "Filter", "Aggregate", "Sort", "Limit"},
@@ -136,6 +139,9 @@ func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 	result.Plan.Stages[2].OutputFields[0] = "mutated"
 	result.Plan.Output.Fields[0] = "mutated"
 	result.Plan.ReferencedFields[0] = "mutated"
+	result.PhysicalPlan.NodeTypes[0] = "mutated"
+	result.PhysicalPlan.Reads[0].Columns[0] = "mutated"
+	result.PhysicalPlan.Reads[0].Indexes[0].Keys[0] = "mutated"
 	again, err := service.Inspect(
 		context.Background(),
 		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
@@ -148,8 +154,15 @@ func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 		again.Plan.Stages[1].InputFields[0] != "index" ||
 		again.Plan.Stages[2].OutputFields[0] != "events" ||
 		again.Plan.Output.Fields[0] != "host" ||
-		again.Plan.ReferencedFields[0] == "mutated" {
-		t.Fatalf("result aliases retained state: %#v", again.Plan)
+		again.Plan.ReferencedFields[0] == "mutated" ||
+		again.PhysicalPlan.NodeTypes[0] != "Expression" ||
+		again.PhysicalPlan.Reads[0].Columns[0] != "event_time" ||
+		again.PhysicalPlan.Reads[0].Indexes[0].Keys[0] != "event_time" {
+		t.Fatalf(
+			"result aliases retained state: logical=%#v physical=%#v",
+			again.Plan,
+			again.PhysicalPlan,
+		)
 	}
 }
 
@@ -293,9 +306,7 @@ func TestInspectAdmissionIsFailFastBeforeSnapshotAndCompilation(t *testing.T) {
 	searches := &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}}
 	compiler := &inspectionCompiler{}
 	explainer := &inspectionExplainer{
-		result: queryexec.ExplainResult{
-			Text: "ReadFromMergeTree", QueryID: "open-splunk-explain-capacity",
-		},
+		result:  inspectionExplainResult("open-splunk-explain-capacity"),
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
@@ -428,9 +439,11 @@ func TestInspectUsesMetadataOnlyWhenResultLeaseCapacityIsSaturated(t *testing.T)
 	service := newInspectionTestService(t, Config{
 		Searches: manager,
 		Compiler: clickhouse.Compiler{},
-		Explainer: &inspectionExplainer{result: queryexec.ExplainResult{
-			Text: "ReadFromMergeTree", QueryID: "open-splunk-explain-metadata-only",
-		}},
+		Explainer: &inspectionExplainer{
+			result: inspectionExplainResult(
+				"open-splunk-explain-metadata-only",
+			),
+		},
 	})
 	result, err := service.Inspect(
 		context.Background(),
@@ -493,9 +506,11 @@ func TestInspectPostflightPreventsStaleOrChangedPublication(t *testing.T) {
 					errors:    []error{nil, test.secondErr},
 				},
 				Compiler: &inspectionCompiler{},
-				Explainer: &inspectionExplainer{result: queryexec.ExplainResult{
-					Text: "ReadFromMergeTree", QueryID: "open-splunk-explain-postflight",
-				}},
+				Explainer: &inspectionExplainer{
+					result: inspectionExplainResult(
+						"open-splunk-explain-postflight",
+					),
+				},
 			})
 			result, err := service.Inspect(context.Background(), access, request)
 			if !errors.Is(err, test.want) {
@@ -588,9 +603,11 @@ func TestInspectSanitizesEveryDependencyError(t *testing.T) {
 			t.Run(dependency+"/"+safe.Error(), func(t *testing.T) {
 				searches := &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}}
 				compiler := &inspectionCompiler{}
-				explainer := &inspectionExplainer{result: queryexec.ExplainResult{
-					Text: "ReadFromMergeTree", QueryID: "open-splunk-explain-error",
-				}}
+				explainer := &inspectionExplainer{
+					result: inspectionExplainResult(
+						"open-splunk-explain-error",
+					),
+				}
 				wrapped := fmt.Errorf("%s: %w", secret, safe)
 				switch dependency {
 				case "snapshot":
@@ -624,9 +641,11 @@ func TestInspectSanitizesEveryDependencyError(t *testing.T) {
 			t.Run(dependency+"/unknown/"+unknown.Error(), func(t *testing.T) {
 				searches := &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}}
 				compiler := &inspectionCompiler{}
-				explainer := &inspectionExplainer{result: queryexec.ExplainResult{
-					Text: "ReadFromMergeTree", QueryID: "open-splunk-explain-unknown",
-				}}
+				explainer := &inspectionExplainer{
+					result: inspectionExplainResult(
+						"open-splunk-explain-unknown",
+					),
+				}
 				switch dependency {
 				case "snapshot":
 					searches.errors = []error{unknown}
@@ -877,9 +896,7 @@ func TestInspectCloseCanTimeOutAndRetry(t *testing.T) {
 	snapshot := validInspectionSnapshot()
 	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 	explainer := &inspectionExplainer{
-		result: queryexec.ExplainResult{
-			Text: "ReadFromMergeTree", QueryID: "open-splunk-explain-close-retry",
-		},
+		result:        inspectionExplainResult("open-splunk-explain-close-retry"),
 		started:       make(chan struct{}),
 		release:       make(chan struct{}),
 		ignoreContext: true,
@@ -1132,6 +1149,38 @@ type inspectionExplainer struct {
 	startOnce     sync.Once
 	calls         int
 	queries       []clickhouse.CompiledQuery
+}
+
+func inspectionExplainResult(queryID string) queryexec.ExplainResult {
+	const text = `[
+  {
+    "Plan": {
+      "Node Type": "Expression",
+      "Plans": [
+        {
+          "Node Type": "ReadFromMergeTree",
+          "Header": [
+            {"Name": "event_time", "Type": "DateTime64(9, 'UTC')"}
+          ],
+          "Indexes": [
+            {
+              "Type": "PrimaryKey",
+              "Keys": ["event_time"],
+              "Initial Parts": 2,
+              "Selected Parts": 1,
+              "Initial Granules": 4,
+              "Selected Granules": 1
+            }
+          ]
+        }
+      ]
+    }
+  }
+]`
+	return queryexec.ExplainResult{
+		Text:    text,
+		QueryID: queryID,
+	}
 }
 
 func (explainer *inspectionExplainer) Explain(

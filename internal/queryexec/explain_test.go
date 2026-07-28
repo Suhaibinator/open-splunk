@@ -27,11 +27,13 @@ import (
 func TestExplainerBuffersExactPlanAndPreservesParameters(t *testing.T) {
 	t.Parallel()
 
-	rows := explainFakeRows(
-		"Projection",
-		"  ReadFromMergeTree (open_splunk.events)",
-		"    Unicode \u2502 plan node",
+	planText := strings.Replace(
+		validStructuredExplainPlan,
+		"private description",
+		"Unicode \u2502 plan node",
+		1,
 	)
+	rows := explainFakeRows(planText)
 	connection := &fakeQueryConnection{rows: rows}
 	explainer := mustExplainer(t, connection)
 	query := sealedExplainQuery(t)
@@ -52,9 +54,7 @@ func TestExplainerBuffersExactPlanAndPreservesParameters(t *testing.T) {
 		t.Fatalf("Explain() error = %v", err)
 	}
 	if got != (ExplainResult{
-		Text: "Projection\n" +
-			"  ReadFromMergeTree (open_splunk.events)\n" +
-			"    Unicode \u2502 plan node",
+		Text:    planText,
 		QueryID: "open-splunk-explain-test",
 	}) {
 		t.Fatalf("Explain() = %#v", got)
@@ -63,7 +63,17 @@ func TestExplainerBuffersExactPlanAndPreservesParameters(t *testing.T) {
 		strconv.FormatUint(
 			uint64(maximumExplainExecutionTime/time.Second),
 			10,
+		) + explainQuerySettingsSuffix
+	const wantStructuredPrefix = "EXPLAIN PLAN json = 1, description = 1, indexes = 1, actions = 0, header = 1 SELECT * FROM ("
+	const wantStructuredSettings = ") AS __os_explain_input SETTINGS max_execution_time = 10, use_query_condition_cache = 0, use_skip_indexes_on_data_read = 0, enable_full_text_index = 1"
+	if explainQueryPrefix != wantStructuredPrefix ||
+		explainQuerySettingsPrefix+"10"+explainQuerySettingsSuffix != wantStructuredSettings {
+		t.Fatalf(
+			"fixed structured PLAN shape drifted: prefix=%q settings=%q",
+			explainQueryPrefix,
+			explainQuerySettingsPrefix+"10"+explainQuerySettingsSuffix,
 		)
+	}
 	if connection.query != wantQuery ||
 		!reflect.DeepEqual(connection.args, query.Args) {
 		t.Fatalf(
@@ -344,7 +354,7 @@ func TestExplainerAcceptsExactCompilerArgumentInventory(t *testing.T) {
 		}
 	}
 
-	connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+	connection := &fakeQueryConnection{rows: explainStructuredRows()}
 	if _, err := mustExplainer(t, connection).Explain(
 		context.Background(),
 		query,
@@ -381,7 +391,7 @@ func TestExplainerRejectsDriverUnsafeArgumentsBeforeQuery(t *testing.T) {
 
 			query := sealedExplainQuery(t)
 			query.Args[0] = test.argument
-			connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+			connection := &fakeQueryConnection{rows: explainStructuredRows()}
 			got, err := mustExplainer(t, connection).Explain(
 				context.Background(),
 				query,
@@ -426,7 +436,7 @@ func TestExplainerRequiresExactCompilerPlaceholderCardinality(t *testing.T) {
 
 			query := valid
 			query.Args = test.args
-			connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+			connection := &fakeQueryConnection{rows: explainStructuredRows()}
 			got, err := mustExplainer(t, connection).Explain(
 				context.Background(),
 				query,
@@ -451,7 +461,7 @@ func TestExplainerBoundsRenderedArgumentsBeforeDriverBinding(t *testing.T) {
 
 	query := sealedExplainQuery(t)
 	query.Args[0] = strings.Repeat(`\\'`, 300<<10)
-	connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+	connection := &fakeQueryConnection{rows: explainStructuredRows()}
 	got, err := mustExplainer(t, connection).Explain(
 		context.Background(),
 		query,
@@ -472,7 +482,7 @@ func TestExplainerDetachesArgumentsBeforeQueryAdmission(t *testing.T) {
 	query := sealedExplainQuery(t)
 	query.Args[0] = "before-admission"
 	wantArgs := slices.Clone(query.Args)
-	connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+	connection := &fakeQueryConnection{rows: explainStructuredRows()}
 	explainer := mustExplainer(t, connection)
 	detached := make(chan struct{})
 	release := make(chan struct{})
@@ -593,7 +603,7 @@ func TestSettingsForExplainClonesAndTightensEveryResourceCap(t *testing.T) {
 func TestExplainerPreservesExactTimeoutAndPinsCeiledServerSetting(t *testing.T) {
 	t.Parallel()
 
-	connection := &deadlineExplainConnection{rows: explainFakeRows("Projection")}
+	connection := &deadlineExplainConnection{rows: explainStructuredRows()}
 	explainer := mustExplainer(t, connection)
 	explainer.settings["max_execution_time"] = uint64(2)
 	explainer.executionTimeout = 1500 * time.Millisecond
@@ -602,7 +612,8 @@ func TestExplainerPreservesExactTimeoutAndPinsCeiledServerSetting(t *testing.T) 
 	if _, err := explainer.Explain(context.Background(), query); err != nil {
 		t.Fatal(err)
 	}
-	want := explainQueryPrefix + query.SQL + explainQuerySettingsPrefix + "2"
+	want := explainQueryPrefix + query.SQL + explainQuerySettingsPrefix + "2" +
+		explainQuerySettingsSuffix
 	if connection.query != want {
 		t.Fatalf("Query() SQL = %q, want %q", connection.query, want)
 	}
@@ -890,7 +901,7 @@ func TestExplainerRejectsInvalidStateQueryAndQueryIDBeforeExecution(t *testing.T
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+			connection := &fakeQueryConnection{rows: explainStructuredRows()}
 			executor := test.executor(connection)
 			got, err := executor.Explain(test.ctx, test.query)
 			if err == nil || got != (ExplainResult{}) {
@@ -906,7 +917,7 @@ func TestExplainerRejectsInvalidStateQueryAndQueryIDBeforeExecution(t *testing.T
 	}
 
 	t.Run("canceled context", func(t *testing.T) {
-		connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+		connection := &fakeQueryConnection{rows: explainStructuredRows()}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		got, err := mustExplainer(t, connection).Explain(ctx, validQuery)
@@ -941,7 +952,7 @@ func TestExplainerRequiresUnchangedCompilerSQLBeforeQuery(t *testing.T) {
 		{name: "multiple statements", query: multiStatement},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+			connection := &fakeQueryConnection{rows: explainStructuredRows()}
 			got, err := mustExplainer(t, connection).Explain(
 				context.Background(),
 				test.query,
@@ -1081,7 +1092,7 @@ func TestExplainerRejectsMalformedSchemaAndEmptyResults(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rows := explainFakeRows("Projection")
+			rows := explainStructuredRows()
 			test.mutate(rows)
 			got, err := mustExplainer(
 				t,
@@ -1151,7 +1162,7 @@ func TestExplainerEnforcesTextRowsLineAndByteContracts(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rows := explainFakeRows(test.lines...)
+			rows := explainFakeRows(strings.Join(test.lines, "\n"))
 			got, err := mustExplainer(
 				t,
 				&fakeQueryConnection{rows: rows},
@@ -1162,45 +1173,133 @@ func TestExplainerEnforcesTextRowsLineAndByteContracts(t *testing.T) {
 		})
 	}
 
-	t.Run("maximum rows are accepted atomically", func(t *testing.T) {
-		lines := make([]string, 4_096)
-		for index := range lines {
-			lines[index] = "x"
-		}
-		got, err := mustExplainer(
-			t,
-			&fakeQueryConnection{rows: explainFakeRows(lines...)},
-		).Explain(context.Background(), validQuery)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.Text != strings.Join(lines, "\n") {
-			t.Fatalf("maximum-row result bytes = %d", len(got.Text))
-		}
-	})
-
-	t.Run("maximum line is accepted", func(t *testing.T) {
-		line := strings.Repeat("x", 16<<10)
-		got, err := mustExplainer(
-			t,
-			&fakeQueryConnection{rows: explainFakeRows(line)},
-		).Explain(context.Background(), validQuery)
-		if err != nil || got.Text != line {
-			t.Fatalf("Explain() = (%d bytes, %v)", len(got.Text), err)
-		}
-	})
-
-	t.Run("exact total byte maximum including newlines is accepted", func(t *testing.T) {
-		rows := explainFakeRows(exactBytes...)
+	t.Run("multiple server rows are rejected atomically", func(t *testing.T) {
+		rows := explainFakeRows(
+			validStructuredExplainPlan,
+			validStructuredExplainPlan,
+		)
 		got, err := mustExplainer(
 			t,
 			&fakeQueryConnection{rows: rows},
 		).Explain(context.Background(), validQuery)
+		if !errors.Is(err, searchjobs.ErrInvalidResult) ||
+			got != (ExplainResult{}) ||
+			!rows.closed {
+			t.Fatalf("Explain() = (%#v, %v), rows closed=%v", got, err, rows.closed)
+		}
+	})
+
+	t.Run("maximum normalized lines are accepted atomically", func(t *testing.T) {
+		lines := make([]string, 4_096)
+		for index := range lines {
+			lines[index] = "x"
+		}
+		var text strings.Builder
+		var lineCount, resultBytes uint64
+		err := appendExplainRow(
+			&text,
+			strings.Join(lines, "\n"),
+			&lineCount,
+			&resultBytes,
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got.Text) != 1<<20 || got.Text != strings.Join(exactBytes, "\n") {
-			t.Fatalf("exact-boundary result bytes = %d, want %d", len(got.Text), 1<<20)
+		if text.String() != strings.Join(lines, "\n") ||
+			lineCount != maximumExplainResultRows {
+			t.Fatalf(
+				"maximum-line result = bytes %d lines %d",
+				text.Len(),
+				lineCount,
+			)
+		}
+	})
+
+	t.Run("maximum normalized line is accepted", func(t *testing.T) {
+		line := strings.Repeat("x", 16<<10)
+		var text strings.Builder
+		var lineCount, resultBytes uint64
+		err := appendExplainRow(
+			&text,
+			line,
+			&lineCount,
+			&resultBytes,
+		)
+		if err != nil || text.String() != line ||
+			lineCount != 1 ||
+			resultBytes != maximumExplainLineBytes {
+			t.Fatalf(
+				"appendExplainRow() = bytes %d lines %d accounted %d error %v",
+				text.Len(),
+				lineCount,
+				resultBytes,
+				err,
+			)
+		}
+	})
+
+	t.Run("one structured JSON driver row is normalized into bounded lines", func(t *testing.T) {
+		row := validStructuredExplainPlan
+		got, err := mustExplainer(
+			t,
+			&fakeQueryConnection{rows: explainFakeRows(row)},
+		).Explain(context.Background(), validQuery)
+		if err != nil || got.Text != row {
+			t.Fatalf("Explain() = (%q, %v), want exact structured row", got.Text, err)
+		}
+	})
+
+	t.Run("one structured driver row cannot exceed the line count", func(t *testing.T) {
+		lines := make([]string, int(maximumExplainResultRows)+1)
+		for index := range lines {
+			lines[index] = "x"
+		}
+		rows := explainFakeRows(strings.Join(lines, "\n"))
+		got, err := mustExplainer(
+			t,
+			&fakeQueryConnection{rows: rows},
+		).Explain(context.Background(), validQuery)
+		if !errors.Is(err, searchjobs.ErrExecutionLimit) ||
+			got != (ExplainResult{}) ||
+			!rows.closed {
+			t.Fatalf("Explain() = (%#v, %v), rows closed=%v", got, err, rows.closed)
+		}
+	})
+
+	t.Run("structured driver rows retain per-line control rejection", func(t *testing.T) {
+		rows := explainFakeRows("{\n  \"Plan\": \"private\tvalue\"\n}")
+		got, err := mustExplainer(
+			t,
+			&fakeQueryConnection{rows: rows},
+		).Explain(context.Background(), validQuery)
+		if !errors.Is(err, searchjobs.ErrInvalidResult) ||
+			got != (ExplainResult{}) ||
+			!rows.closed {
+			t.Fatalf("Explain() = (%#v, %v), rows closed=%v", got, err, rows.closed)
+		}
+	})
+
+	t.Run("exact total byte maximum including newlines is accepted", func(t *testing.T) {
+		var text strings.Builder
+		var lineCount, resultBytes uint64
+		err := appendExplainRow(
+			&text,
+			strings.Join(exactBytes, "\n"),
+			&lineCount,
+			&resultBytes,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if text.Len() != 1<<20 ||
+			text.String() != strings.Join(exactBytes, "\n") ||
+			resultBytes != maximumExplainResultBytes {
+			t.Fatalf(
+				"exact-boundary result bytes = %d accounted %d, want %d",
+				text.Len(),
+				resultBytes,
+				1<<20,
+			)
 		}
 	})
 }
@@ -1236,7 +1335,7 @@ func TestExplainerSanitizesAndClassifiesDriverFailures(t *testing.T) {
 		{
 			name: "scan storage failure",
 			connection: &fakeQueryConnection{rows: &controlledExplainRows{
-				fakeRows: explainFakeRows("Projection"),
+				fakeRows: explainStructuredRows(),
 				scanErr:  fmt.Errorf("%s: %w", leak, io.ErrUnexpectedEOF),
 			}},
 			wantErr: searchjobs.ErrStorageUnavailable,
@@ -1244,7 +1343,7 @@ func TestExplainerSanitizesAndClassifiesDriverFailures(t *testing.T) {
 		{
 			name: "scan unknown failure",
 			connection: &fakeQueryConnection{rows: &controlledExplainRows{
-				fakeRows: explainFakeRows("Projection"),
+				fakeRows: explainStructuredRows(),
 				scanErr:  errors.New(leak),
 			}},
 			wantErr: errExplainQueryFailed,
@@ -1252,7 +1351,7 @@ func TestExplainerSanitizesAndClassifiesDriverFailures(t *testing.T) {
 		{
 			name: "iteration failure",
 			connection: &fakeQueryConnection{rows: func() *fakeRows {
-				rows := explainFakeRows("Projection")
+				rows := explainStructuredRows()
 				rows.err = fmt.Errorf("%s: %w", leak, io.ErrUnexpectedEOF)
 				return rows
 			}()},
@@ -1261,7 +1360,7 @@ func TestExplainerSanitizesAndClassifiesDriverFailures(t *testing.T) {
 		{
 			name: "close failure",
 			connection: &fakeQueryConnection{rows: func() *fakeRows {
-				rows := explainFakeRows("Projection")
+				rows := explainStructuredRows()
 				rows.closeErr = fmt.Errorf("%s: %w", leak, io.ErrUnexpectedEOF)
 				return rows
 			}()},
@@ -1284,7 +1383,7 @@ func TestExplainerSanitizesAndClassifiesDriverFailures(t *testing.T) {
 	}
 
 	t.Run("primary validation error wins over close failure", func(t *testing.T) {
-		rows := explainFakeRows("Projection")
+		rows := explainStructuredRows()
 		rows.columns[0] = "wrong"
 		rows.closeErr = errors.New(leak)
 		got, err := mustExplainer(
@@ -1304,7 +1403,7 @@ func TestExplainerCancellationIsAtomicAndBoundsLaneWait(t *testing.T) {
 	t.Run("cancellation during scan wins over driver detail", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		rows := &controlledExplainRows{
-			fakeRows: explainFakeRows("Projection"),
+			fakeRows: explainStructuredRows(),
 			beforeScan: func() {
 				cancel()
 			},
@@ -1323,7 +1422,7 @@ func TestExplainerCancellationIsAtomicAndBoundsLaneWait(t *testing.T) {
 	})
 
 	t.Run("full gate fails fast without query work", func(t *testing.T) {
-		connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+		connection := &fakeQueryConnection{rows: explainStructuredRows()}
 		explainer := mustExplainer(t, connection)
 		firstLane := <-explainer.lanes
 		secondLane := <-explainer.lanes
@@ -1347,7 +1446,7 @@ func TestExplainerCancellationIsAtomicAndBoundsLaneWait(t *testing.T) {
 	})
 
 	t.Run("long caller deadline remains driver-visible and internally bounded", func(t *testing.T) {
-		connection := &deadlineExplainConnection{rows: explainFakeRows("Projection")}
+		connection := &deadlineExplainConnection{rows: explainStructuredRows()}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		start := time.Now()
@@ -1569,7 +1668,7 @@ func TestExplainerCloseCancelsJoinsAndClosesEveryLane(t *testing.T) {
 func TestExplainerCloseSanitizesLaneFailuresAndRejectsNilReceiver(t *testing.T) {
 	explainer := mustExplainer(
 		t,
-		&fakeQueryConnection{rows: explainFakeRows("Projection")},
+		&fakeQueryConnection{rows: explainStructuredRows()},
 	)
 	const secret = "private close detail"
 	for _, lane := range explainer.allLanes {
@@ -1594,7 +1693,7 @@ func TestExplainerClosedStateWinsOverFullLaneCapacity(t *testing.T) {
 
 	explainer := mustExplainer(
 		t,
-		&fakeQueryConnection{rows: explainFakeRows("Projection")},
+		&fakeQueryConnection{rows: explainStructuredRows()},
 	)
 	firstLane := <-explainer.lanes
 	secondLane := <-explainer.lanes
@@ -1720,6 +1819,10 @@ func explainFakeRows(lines ...string) *fakeRows {
 		}},
 		data: data,
 	}
+}
+
+func explainStructuredRows() *fakeRows {
+	return explainFakeRows(validStructuredExplainPlan)
 }
 
 type explainTestDeadlineContext struct {
@@ -1851,7 +1954,7 @@ func (connection *blockingExplainConnection) Query(
 		return nil, ctx.Err()
 	}
 	connection.current.Add(-1)
-	return explainFakeRows("Projection"), nil
+	return explainStructuredRows(), nil
 }
 
 type closeWaitingExplainConnection struct {

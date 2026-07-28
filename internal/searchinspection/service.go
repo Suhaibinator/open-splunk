@@ -57,6 +57,7 @@ type Request struct {
 // arguments, execution snapshots, result rows, nor mutable plan pointers.
 type Result struct {
 	Plan              LogicalPlan
+	PhysicalPlan      queryexec.ExplainPlan
 	GeneratedSQL      string
 	ExplainText       string
 	DiagnosticQueryID string
@@ -282,7 +283,8 @@ func (service *Service) Inspect(
 	if err := operationContext.Err(); err != nil {
 		return Result{}, err
 	}
-	if err := queryexec.ValidateExplainResult(explained); err != nil {
+	physical, err := queryexec.ParseExplainPlan(explained)
+	if err != nil {
 		return Result{}, ErrInspectionFailed
 	}
 
@@ -303,6 +305,7 @@ func (service *Service) Inspect(
 
 	result = Result{
 		Plan:              projected,
+		PhysicalPlan:      physical,
 		GeneratedSQL:      strings.Clone(compiled.SQL),
 		ExplainText:       strings.Clone(explained.Text),
 		DiagnosticQueryID: strings.Clone(explained.QueryID),

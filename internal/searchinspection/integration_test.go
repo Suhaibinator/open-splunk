@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -101,11 +103,33 @@ func TestServiceAgainstClickHouse(t *testing.T) {
 			result.GeneratedSQL,
 		)
 	}
-	if !strings.Contains(result.ExplainText, "ReadFromMergeTree") {
+	physical, err := queryexec.ParseExplainPlan(queryexec.ExplainResult{
+		Text:    result.ExplainText,
+		QueryID: result.DiagnosticQueryID,
+	})
+	if err != nil {
+		t.Fatalf("parse ClickHouse structured plan: %v", err)
+	}
+	if !reflect.DeepEqual(result.PhysicalPlan, physical) {
 		t.Fatalf(
-			"ClickHouse plan does not contain a MergeTree read:\n%s",
-			result.ExplainText,
+			"service physical plan = %#v, parsed raw plan %#v",
+			result.PhysicalPlan,
+			physical,
 		)
+	}
+	if !slices.Contains(physical.NodeTypes, "ReadFromMergeTree") ||
+		len(physical.Reads) != 1 ||
+		len(physical.Reads[0].Columns) == 0 ||
+		len(physical.Reads[0].Indexes) == 0 {
+		t.Fatalf("ClickHouse structured plan evidence = %#v", physical)
+	}
+	indexTypes := make([]string, len(physical.Reads[0].Indexes))
+	for index, evidence := range physical.Reads[0].Indexes {
+		indexTypes[index] = evidence.Type
+	}
+	if !slices.Contains(indexTypes, "MinMax") ||
+		!slices.Contains(indexTypes, "PrimaryKey") {
+		t.Fatalf("ClickHouse structured plan index types = %v", indexTypes)
 	}
 	if !strings.HasPrefix(
 		result.DiagnosticQueryID,

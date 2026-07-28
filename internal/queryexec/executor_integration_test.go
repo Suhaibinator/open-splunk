@@ -95,6 +95,37 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			t.Errorf("close EXPLAIN transport: %v", err)
 		}
 	})
+	t.Run("structured EXPLAIN accepts empty MergeTree ReadNothing", func(t *testing.T) {
+		anchor := time.Date(
+			2026,
+			time.July,
+			27,
+			12,
+			0,
+			0,
+			0,
+			time.UTC,
+		)
+		compiled := queryIntegrationCompileSearchRange(
+			t,
+			`index=main`,
+			anchor,
+			anchor.Add(-time.Hour),
+			anchor.Add(time.Hour),
+		)
+		explained, err := explainer.Explain(ctx, compiled)
+		if err != nil {
+			t.Fatalf("Explain() empty MergeTree query: %v", err)
+		}
+		physical, err := ParseExplainPlan(explained)
+		if err != nil {
+			t.Fatalf("parse empty MergeTree plan: %v", err)
+		}
+		if !slices.Contains(physical.NodeTypes, "ReadNothing") ||
+			len(physical.Reads) != 0 {
+			t.Fatalf("empty MergeTree plan = %#v", physical)
+		}
+	})
 	queryIntegrationTestFieldCatalog(t, ctx, connection, executor)
 	queryIntegrationTestLogicalRetention(t, ctx, connection, executor)
 	t.Run("native progress reports exact generated scan", func(t *testing.T) {
@@ -173,6 +204,64 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	timechartBase, timechartIndexTime := queryIntegrationInsertTimechartEvents(t, ctx, connection)
 	gradeThisBase, gradeThisIndexTime, gradeThisTraceID := queryIntegrationInsertGradeThisEvents(t, ctx, connection)
 	chartBase, chartIndexTime := queryIntegrationInsertChartEvents(t, ctx, connection)
+	t.Run("structured EXPLAIN accepts an index-free MergeTree read", func(t *testing.T) {
+		compiled := queryIntegrationCompileSearchRange(
+			t,
+			`index=main | where true=false`,
+			eventIndexTime,
+			eventIndexTime.Add(-time.Hour),
+			eventIndexTime.Add(time.Hour),
+		)
+		explained, err := explainer.Explain(ctx, compiled)
+		if err != nil {
+			t.Fatalf("Explain() constant-false query: %v", err)
+		}
+		physical, err := ParseExplainPlan(explained)
+		if err != nil {
+			t.Fatalf("parse constant-false plan: %v", err)
+		}
+		indexlessRead := false
+		for _, read := range physical.Reads {
+			if len(read.Columns) != 0 && len(read.Indexes) == 0 {
+				indexlessRead = true
+				break
+			}
+		}
+		if !slices.Contains(physical.NodeTypes, "ReadFromMergeTree") ||
+			!indexlessRead {
+			t.Fatalf("constant-false MergeTree plan = %#v", physical)
+		}
+	})
+	t.Run("structured EXPLAIN accepts a legal deep sort pipeline", func(t *testing.T) {
+		var source strings.Builder
+		source.WriteString("| table host")
+		for command := 0; command < 21; command++ {
+			source.WriteString(" | sort host")
+		}
+		compiled := queryIntegrationCompileSearchRange(
+			t,
+			source.String(),
+			eventIndexTime,
+			eventIndexTime.Add(-time.Hour),
+			eventIndexTime.Add(time.Hour),
+		)
+		explained, err := explainer.Explain(ctx, compiled)
+		if err != nil {
+			t.Fatalf("Explain() 21-sort query: %v", err)
+		}
+		physical, err := ParseExplainPlan(explained)
+		if err != nil {
+			t.Fatalf("parse 21-sort plan: %v", err)
+		}
+		if len(physical.NodeTypes) <= 64 ||
+			!slices.Contains(physical.NodeTypes, "ReadFromMergeTree") {
+			t.Fatalf(
+				"21-sort physical plan has %d nodes: %#v",
+				len(physical.NodeTypes),
+				physical,
+			)
+		}
+	})
 	t.Run("bounded EXPLAIN accepts compiler SQL and ordered parameters", func(t *testing.T) {
 		// clickhouse-go v2.46 overwrites a protocol max_execution_time from a
 		// visible deadline by adding five seconds. Prove on the pinned server
@@ -258,9 +347,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			!strings.HasPrefix(explained.QueryID, "open-splunk-explain-") {
 			t.Fatalf("EXPLAIN query ID = %q", explained.QueryID)
 		}
-		if !strings.Contains(explained.Text, "ReadFromMergeTree") {
-			t.Fatalf("EXPLAIN plan does not contain a MergeTree read:\n%s", explained.Text)
-		}
+		queryIntegrationAssertStructuredExplain(t, explained)
 	})
 	t.Run("bounded EXPLAIN wraps chronological compiler settings", func(t *testing.T) {
 		compiled := queryIntegrationCompileSearchRange(
@@ -286,12 +373,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Explain() chronological compiler query: %v", err)
 		}
-		if !strings.Contains(explained.Text, "ReadFromMergeTree") {
-			t.Fatalf(
-				"chronological EXPLAIN plan does not contain a MergeTree read:\n%s",
-				explained.Text,
-			)
-		}
+		queryIntegrationAssertStructuredExplain(t, explained)
 	})
 	t.Run("timeline compiler and executor preserve exact event selection", func(t *testing.T) {
 		earliest := gradeThisBase.Add(2 * time.Minute)
@@ -1950,6 +2032,43 @@ ORDER BY grid.number`,
 			t.Fatalf("canceled query returned after %v", elapsed)
 		}
 	})
+}
+
+func queryIntegrationAssertStructuredExplain(
+	t *testing.T,
+	result ExplainResult,
+) ExplainPlan {
+	t.Helper()
+	physical, err := ParseExplainPlan(result)
+	if err != nil {
+		t.Fatalf("parse structured EXPLAIN: %v", err)
+	}
+	if !slices.Contains(physical.NodeTypes, "ReadFromMergeTree") ||
+		len(physical.Reads) == 0 {
+		t.Fatalf("structured EXPLAIN has no MergeTree read: %#v", physical)
+	}
+	for readIndex, read := range physical.Reads {
+		if len(read.Columns) == 0 || len(read.Indexes) == 0 {
+			t.Fatalf(
+				"structured EXPLAIN read %d lacks headers or indexes: %#v",
+				readIndex,
+				read,
+			)
+		}
+		types := make([]string, len(read.Indexes))
+		for index, evidence := range read.Indexes {
+			types[index] = evidence.Type
+		}
+		if !slices.Contains(types, "MinMax") ||
+			!slices.Contains(types, "PrimaryKey") {
+			t.Fatalf(
+				"structured EXPLAIN read %d index types = %v",
+				readIndex,
+				types,
+			)
+		}
+	}
+	return physical
 }
 
 type queryIntegrationSnapshotter uint64
