@@ -3,7 +3,6 @@ package searchhistory
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -15,6 +14,8 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type normalizedFilter struct {
@@ -65,23 +66,19 @@ func (store *Store) List(ctx context.Context, scope AccessScope, request ListReq
 			return ListResult{}, err
 		}
 	}
-	query, args := listQuery(normalized, cursor)
-	rows, err := store.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return ListResult{}, mapContextError(ctx, "list search history", err)
+	var records []historyRecord
+	query := historyListQuery(store.orm.WithContext(ctx), normalized, cursor).Find(&records)
+	if query.Error != nil {
+		return ListResult{}, mapContextError(ctx, "list search history", query.Error)
 	}
-	defer rows.Close()
 
 	result := ListResult{Entries: make([]*opensplunkv1.SearchHistoryEntry, 0, normalized.pageSize)}
-	for rows.Next() {
-		entry, err := scanHistoryEntry(rows)
+	for _, record := range records {
+		entry, err := historyEntryFromRecord(record)
 		if err != nil {
 			return ListResult{}, fmt.Errorf("scan listed search-history entry: %w", err)
 		}
 		result.Entries = append(result.Entries, entry)
-	}
-	if err := rows.Err(); err != nil {
-		return ListResult{}, mapContextError(ctx, "iterate search history", err)
 	}
 	if len(result.Entries) > int(normalized.pageSize) {
 		result.Entries = result.Entries[:normalized.pageSize]
@@ -99,10 +96,13 @@ func (store *Store) List(ctx context.Context, scope AccessScope, request ListReq
 		result.NextPageToken = &token
 	}
 	if normalized.includeTotal {
-		query, args := filterQuery(`SELECT COUNT(*) FROM search_history`, normalized.filter)
 		var count int64
-		if err := store.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
-			return ListResult{}, mapContextError(ctx, "count search history", err)
+		countQuery := applyHistoryFilter(
+			store.orm.WithContext(ctx).Model(&historyRecord{}),
+			normalized.filter,
+		).Count(&count)
+		if countQuery.Error != nil {
+			return ListResult{}, mapContextError(ctx, "count search history", countQuery.Error)
 		}
 		if count < 0 {
 			return ListResult{}, errors.New("count search history: database returned a negative count")
@@ -255,66 +255,54 @@ func listFilterHash(request normalizedListRequest) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(digest[:]), nil
 }
 
-func filterQuery(prefix string, filter normalizedFilter) (string, []any) {
-	var query strings.Builder
-	query.Grow(len(prefix) + 256)
-	query.WriteString(prefix)
-	query.WriteString(` WHERE tenant_id = ? AND owner_id = ?`)
-	args := []any{filter.scope.TenantID, filter.scope.OwnerID}
+func applyHistoryFilter(query *gorm.DB, filter normalizedFilter) *gorm.DB {
+	query = query.Where("tenant_id = ? AND owner_id = ?", filter.scope.TenantID, filter.scope.OwnerID)
 	if filter.appID != nil {
-		query.WriteString(` AND app_id = ?`)
-		args = append(args, *filter.appID)
+		query = query.Where("app_id = ?", *filter.appID)
 	}
 	if len(filter.states) != 0 {
-		query.WriteString(` AND final_state IN (`)
+		states := make([]int64, len(filter.states))
 		for index, state := range filter.states {
-			if index != 0 {
-				query.WriteByte(',')
-			}
-			query.WriteByte('?')
-			args = append(args, int64(state))
+			states[index] = int64(state)
 		}
-		query.WriteByte(')')
+		query = query.Where("final_state IN ?", states)
 	}
 	if filter.text != nil {
-		query.WriteString(` AND instr(lower(search_text), lower(?)) > 0`)
-		args = append(args, *filter.text)
+		query = query.Where("instr(lower(search_text), lower(?)) > 0", *filter.text)
 	}
 	if filter.savedSearchID != nil {
-		query.WriteString(` AND saved_search_id = ?`)
-		args = append(args, *filter.savedSearchID)
+		query = query.Where("saved_search_id = ?", *filter.savedSearchID)
 	}
 	if filter.createdAfter != nil {
-		query.WriteString(` AND created_at_unix_micro > ?`)
-		args = append(args, *filter.createdAfter)
+		query = query.Where("created_at_unix_micro > ?", *filter.createdAfter)
 	}
 	if filter.createdBefore != nil {
-		query.WriteString(` AND created_at_unix_micro < ?`)
-		args = append(args, *filter.createdBefore)
+		query = query.Where("created_at_unix_micro < ?", *filter.createdBefore)
 	}
 	if filter.retentionFloor != nil {
-		query.WriteString(` AND created_at_unix_micro >= ?`)
-		args = append(args, *filter.retentionFloor)
+		query = query.Where("created_at_unix_micro >= ?", *filter.retentionFloor)
 	}
-	return query.String(), args
+	return query
 }
 
-func listQuery(request normalizedListRequest, cursor listCursor) (string, []any) {
+func historyListQuery(database *gorm.DB, request normalizedListRequest, cursor listCursor) *gorm.DB {
 	column := sortColumn(request.sortBy)
-	comparison, order := ">", "ASC"
+	comparison := ">"
+	descending := false
 	if request.direction == opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
-		comparison, order = "<", "DESC"
+		comparison = "<"
+		descending = true
 	}
-	hasCursor, sortKey, jobID := int64(0), int64(0), ""
 	if cursor.SortKey != nil {
-		hasCursor, sortKey, jobID = 1, *cursor.SortKey, cursor.JobID
+		database = database.Where(
+			fmt.Sprintf("(%[1]s %[2]s ? OR (%[1]s = ? AND search_job_id %[2]s ?))", column, comparison),
+			*cursor.SortKey, *cursor.SortKey, cursor.JobID,
+		)
 	}
-	query, args := filterQuery(historySelect, request.filter)
-	query += fmt.Sprintf(`
-		AND (? = 0 OR %[1]s %[2]s ? OR (%[1]s = ? AND search_job_id %[2]s ?))
-		ORDER BY %[1]s %[3]s, search_job_id %[3]s LIMIT ?`, column, comparison, order)
-	args = append(args, hasCursor, sortKey, sortKey, jobID, int64(request.pageSize)+1)
-	return query, args
+	return applyHistoryFilter(database.Model(&historyRecord{}), request.filter).
+		Order(clause.OrderByColumn{Column: clause.Column{Name: column}, Desc: descending}).
+		Order(clause.OrderByColumn{Column: clause.Column{Name: "search_job_id"}, Desc: descending}).
+		Limit(int(request.pageSize) + 1)
 }
 
 func sortColumn(sortBy opensplunkv1.SearchHistorySortBy) string {
@@ -353,5 +341,3 @@ func cloneStringPointer(value *string) *string {
 	cloned := strings.Clone(*value)
 	return &cloned
 }
-
-var _ rowScanner = (*sql.Rows)(nil)

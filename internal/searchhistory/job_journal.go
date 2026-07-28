@@ -24,7 +24,7 @@ type JobJournal struct {
 
 // NewJobJournal constructs a searchjobs.JobJournal backed by store.
 func NewJobJournal(store *Store, compilerVersion string) (*JobJournal, error) {
-	if store == nil || store.db == nil {
+	if store == nil || store.orm == nil {
 		return nil, invalid("search-history store is required")
 	}
 	compilerVersion = strings.TrimSpace(compilerVersion)

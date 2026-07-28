@@ -420,6 +420,20 @@ func invalid(message string) error {
 	return fmt.Errorf("%w: %s", control.ErrInvalidArgument, message)
 }
 
+// persistedDataError keeps request-classification sentinels behind the
+// persistence boundary. Validation failures while decoding stored rows are
+// database corruption, not bad caller input, but context cancellation must
+// remain detectable by callers.
+func persistedDataError(operation string, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%s: %w", operation, err)
+	}
+	if errors.Is(err, control.ErrInvalidArgument) {
+		return errors.New(operation + ": " + err.Error())
+	}
+	return fmt.Errorf("%s: %w", operation, err)
+}
+
 func decodeEntry(encoded, expectedChecksum []byte) (*opensplunkv1.SearchHistoryEntry, indexedEntry, error) {
 	checksum := sha256.Sum256(encoded)
 	if len(expectedChecksum) != sha256.Size || !bytes.Equal(checksum[:], expectedChecksum) {
@@ -432,7 +446,7 @@ func decodeEntry(encoded, expectedChecksum []byte) (*opensplunkv1.SearchHistoryE
 	normalizedEntry, normalized, err := normalizeEntry(entry)
 	if err != nil {
 		// Persisted corruption is an availability failure, never caller input.
-		return nil, indexedEntry{}, fmt.Errorf("validate persisted search-history entry: %w", err)
+		return nil, indexedEntry{}, persistedDataError("validate persisted search-history entry", err)
 	}
 	if !bytes.Equal(normalized.encoded, encoded) {
 		return nil, indexedEntry{}, errors.New("persisted search-history entry is not canonical")

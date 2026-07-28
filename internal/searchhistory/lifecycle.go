@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -15,6 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 )
 
 // ErrCapacity means an owner's bounded pending-attempt journal is full. It is
@@ -52,35 +52,37 @@ func (store *Store) BeginAttempt(ctx context.Context, scope AccessScope, input *
 		return nil, err
 	}
 
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, mapContextError(ctx, "begin pending search-history record", err)
+	tx := store.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return nil, mapContextError(ctx, "begin pending search-history record", tx.Error)
 	}
-	defer finishTx(tx, &returnedErr)
+	defer finishGORMTx(tx, &returnedErr)
 
-	var terminalTenant, terminalOwner string
-	err = tx.QueryRowContext(ctx, `
-		SELECT tenant_id, owner_id FROM search_history WHERE search_job_id = ?`,
-		indexed.jobID,
-	).Scan(&terminalTenant, &terminalOwner)
+	var terminal historyRecord
+	err = tx.Select("tenant_id", "owner_id").
+		Where("search_job_id = ?", indexed.jobID).
+		Take(&terminal).Error
 	switch {
 	case err == nil:
-		if _, scopeErr := normalizeScope(AccessScope{TenantID: terminalTenant, OwnerID: terminalOwner}); scopeErr != nil {
-			return nil, fmt.Errorf("persisted terminal search-history scope is invalid: %w", scopeErr)
+		if _, scopeErr := normalizeScope(AccessScope{TenantID: terminal.TenantID, OwnerID: terminal.OwnerID}); scopeErr != nil {
+			return nil, persistedDataError("persisted terminal search-history scope is invalid", scopeErr)
 		}
-		if terminalTenant != scope.TenantID || terminalOwner != scope.OwnerID {
+		if terminal.TenantID != scope.TenantID || terminal.OwnerID != scope.OwnerID {
 			return nil, fmt.Errorf("%w: search job ID already exists", control.ErrAlreadyExists)
 		}
 		return nil, control.ErrVersionConflict
-	case !errors.Is(err, sql.ErrNoRows):
+	case !errors.Is(err, gorm.ErrRecordNotFound):
 		return nil, mapContextError(ctx, "check terminal search-history record", err)
 	}
 
-	existing, err := scanPendingAttempt(tx.QueryRowContext(ctx,
-		pendingSelect+` WHERE search_job_id = ?`, indexed.jobID,
-	))
+	var existingRecord pendingHistoryRecord
+	err = tx.Where("search_job_id = ?", indexed.jobID).Take(&existingRecord).Error
 	switch {
 	case err == nil:
+		existing, conversionErr := pendingAttemptFromRecord(existingRecord)
+		if conversionErr != nil {
+			return nil, mapContextError(ctx, "read pending search-history record", conversionErr)
+		}
 		if existing.scope != scope {
 			return nil, fmt.Errorf("%w: search job ID already exists", control.ErrAlreadyExists)
 		}
@@ -88,20 +90,20 @@ func (store *Store) BeginAttempt(ctx context.Context, scope AccessScope, input *
 			!slices.Equal(existing.indexed.checksum[:], indexed.checksum[:]) {
 			return nil, control.ErrVersionConflict
 		}
-		if err := tx.Commit(); err != nil {
+		if err := tx.Commit().Error; err != nil {
 			return nil, fmt.Errorf("commit idempotent pending search-history record: %w", err)
 		}
 		return existing.entry, nil
-	case !errors.Is(err, sql.ErrNoRows):
+	case !errors.Is(err, gorm.ErrRecordNotFound):
 		return nil, mapContextError(ctx, "read pending search-history record", err)
 	}
 
 	var pendingCount int64
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM search_history_pending
-		WHERE tenant_id = ? AND owner_id = ?`, scope.TenantID, scope.OwnerID,
-	).Scan(&pendingCount); err != nil {
-		return nil, mapContextError(ctx, "count pending search-history records", err)
+	count := tx.Model(&pendingHistoryRecord{}).
+		Where("tenant_id = ? AND owner_id = ?", scope.TenantID, scope.OwnerID).
+		Count(&pendingCount)
+	if count.Error != nil {
+		return nil, mapContextError(ctx, "count pending search-history records", count.Error)
 	}
 	if pendingCount < 0 {
 		return nil, errors.New("count pending search-history records: database returned a negative count")
@@ -110,17 +112,19 @@ func (store *Store) BeginAttempt(ctx context.Context, scope AccessScope, input *
 		return nil, ErrCapacity
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO search_history_pending (
-			search_job_id, tenant_id, owner_id, state,
-			created_at_unix_micro, entry_proto, entry_sha256
-		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		indexed.jobID, scope.TenantID, scope.OwnerID, indexed.state,
-		indexed.createdAt, indexed.encoded, indexed.checksum[:],
-	); err != nil {
-		return nil, mapContextError(ctx, "record pending search-history entry", err)
+	create := tx.Create(&pendingHistoryRecord{
+		SearchJobID:        indexed.jobID,
+		TenantID:           scope.TenantID,
+		OwnerID:            scope.OwnerID,
+		State:              indexed.state,
+		CreatedAtUnixMicro: indexed.createdAt,
+		EntryProto:         slices.Clone(indexed.encoded),
+		EntrySHA256:        slices.Clone(indexed.checksum[:]),
+	})
+	if create.Error != nil {
+		return nil, mapContextError(ctx, "record pending search-history entry", create.Error)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit().Error; err != nil {
 		return nil, fmt.Errorf("commit pending search-history record: %w", err)
 	}
 	return entry, nil
@@ -146,25 +150,28 @@ func (store *Store) CompleteAttempt(ctx context.Context, scope AccessScope, inpu
 		return nil, errors.New("complete search history: clock returned an invalid timestamp")
 	}
 
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, mapContextError(ctx, "begin search-history completion", err)
+	tx := store.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return nil, mapContextError(ctx, "begin search-history completion", tx.Error)
 	}
-	defer finishTx(tx, &returnedErr)
+	defer finishGORMTx(tx, &returnedErr)
 
-	pending, err := scanPendingAttempt(tx.QueryRowContext(ctx,
-		pendingSelect+` WHERE search_job_id = ?`, indexed.jobID,
-	))
+	var pendingRecord pendingHistoryRecord
+	err = tx.Where("search_job_id = ?", indexed.jobID).Take(&pendingRecord).Error
 	hasPending := err == nil
 	switch {
 	case err == nil:
+		pending, conversionErr := pendingAttemptFromRecord(pendingRecord)
+		if conversionErr != nil {
+			return nil, mapContextError(ctx, "read pending search-history completion", conversionErr)
+		}
 		if pending.scope != scope {
 			return nil, fmt.Errorf("%w: search job ID already exists", control.ErrAlreadyExists)
 		}
 		if !sameAdmission(pending.entry, entry) {
 			return nil, control.ErrVersionConflict
 		}
-	case !errors.Is(err, sql.ErrNoRows):
+	case !errors.Is(err, gorm.ErrRecordNotFound):
 		return nil, mapContextError(ctx, "read pending search-history completion", err)
 	}
 
@@ -172,22 +179,20 @@ func (store *Store) CompleteAttempt(ctx context.Context, scope AccessScope, inpu
 		return nil, err
 	}
 	if hasPending {
-		result, err := tx.ExecContext(ctx, `
-			DELETE FROM search_history_pending
-			WHERE search_job_id = ? AND tenant_id = ? AND owner_id = ?`,
-			indexed.jobID, scope.TenantID, scope.OwnerID,
-		)
-		if err != nil {
-			return nil, mapContextError(ctx, "remove completed pending search-history entry", err)
+		result := tx.
+			Where("search_job_id = ? AND tenant_id = ? AND owner_id = ?", indexed.jobID, scope.TenantID, scope.OwnerID).
+			Delete(&pendingHistoryRecord{})
+		if result.Error != nil {
+			return nil, mapContextError(ctx, "remove completed pending search-history entry", result.Error)
 		}
-		if err := requireOneAffected(result, "remove completed pending search-history entry"); err != nil {
+		if err := requireOneAffected(result.RowsAffected, "remove completed pending search-history entry"); err != nil {
 			return nil, err
 		}
 	}
-	if _, err := store.pruneScope(ctx, tx, scope, now); err != nil {
+	if _, err := store.pruneScope(tx, scope, now); err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit().Error; err != nil {
 		return nil, fmt.Errorf("commit search-history completion: %w", err)
 	}
 	return entry, nil
@@ -209,24 +214,28 @@ func (store *Store) RecoverInterrupted(ctx context.Context, scope AccessScope) (
 		return 0, errors.New("recover search history: clock returned an invalid timestamp")
 	}
 
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, mapContextError(ctx, "begin interrupted search-history recovery", err)
+	tx := store.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return 0, mapContextError(ctx, "begin interrupted search-history recovery", tx.Error)
 	}
-	defer finishTx(tx, &returnedErr)
+	defer finishGORMTx(tx, &returnedErr)
 
 	for {
-		pending, scanErr := scanPendingAttempt(tx.QueryRowContext(ctx,
-			pendingSelect+`
-			 WHERE tenant_id = ? AND owner_id = ?
-			 ORDER BY created_at_unix_micro, search_job_id
-			 LIMIT 1`, scope.TenantID, scope.OwnerID,
-		))
-		if errors.Is(scanErr, sql.ErrNoRows) {
+		var pendingRecord pendingHistoryRecord
+		read := tx.
+			Where("tenant_id = ? AND owner_id = ?", scope.TenantID, scope.OwnerID).
+			Order("created_at_unix_micro").
+			Order("search_job_id").
+			Take(&pendingRecord)
+		if errors.Is(read.Error, gorm.ErrRecordNotFound) {
 			break
 		}
-		if scanErr != nil {
-			return 0, mapContextError(ctx, "read interrupted search-history entry", scanErr)
+		if read.Error != nil {
+			return 0, mapContextError(ctx, "read interrupted search-history entry", read.Error)
+		}
+		pending, conversionErr := pendingAttemptFromRecord(pendingRecord)
+		if conversionErr != nil {
+			return 0, mapContextError(ctx, "read interrupted search-history entry", conversionErr)
 		}
 		if pending.scope != scope {
 			return 0, errors.New("pending search-history scope query returned a cross-scope entry")
@@ -256,29 +265,30 @@ func (store *Store) RecoverInterrupted(ctx context.Context, scope AccessScope) (
 		}
 		_, terminalIndexed, normalizeErr := normalizeEntry(terminal)
 		if normalizeErr != nil {
-			return 0, fmt.Errorf("finalize interrupted search-history entry: %w", normalizeErr)
+			return 0, persistedDataError("finalize interrupted search-history entry", normalizeErr)
 		}
 		if err := putTerminalEntry(ctx, tx, scope, terminalIndexed); err != nil {
 			return 0, err
 		}
-		result, err := tx.ExecContext(ctx, `
-			DELETE FROM search_history_pending
-			WHERE search_job_id = ? AND tenant_id = ? AND owner_id = ?`,
-			pending.indexed.jobID, scope.TenantID, scope.OwnerID,
-		)
-		if err != nil {
-			return 0, mapContextError(ctx, "remove interrupted pending search-history entry", err)
+		result := tx.
+			Where(
+				"search_job_id = ? AND tenant_id = ? AND owner_id = ?",
+				pending.indexed.jobID, scope.TenantID, scope.OwnerID,
+			).
+			Delete(&pendingHistoryRecord{})
+		if result.Error != nil {
+			return 0, mapContextError(ctx, "remove interrupted pending search-history entry", result.Error)
 		}
-		if err := requireOneAffected(result, "remove interrupted pending search-history entry"); err != nil {
+		if err := requireOneAffected(result.RowsAffected, "remove interrupted pending search-history entry"); err != nil {
 			return 0, err
 		}
 		recovered++
 	}
 
-	if _, err := store.pruneScope(ctx, tx, scope, now); err != nil {
+	if _, err := store.pruneScope(tx, scope, now); err != nil {
 		return 0, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit().Error; err != nil {
 		return 0, fmt.Errorf("commit interrupted search-history recovery: %w", err)
 	}
 	return recovered, nil
@@ -343,7 +353,7 @@ func decodePendingEntry(encoded, expectedChecksum []byte) (*opensplunkv1.SearchH
 	}
 	normalizedEntry, normalized, err := normalizePendingEntry(entry)
 	if err != nil {
-		return nil, pendingIndexedEntry{}, fmt.Errorf("validate persisted pending search-history entry: %w", err)
+		return nil, pendingIndexedEntry{}, persistedDataError("validate persisted pending search-history entry", err)
 	}
 	if !bytes.Equal(normalized.encoded, encoded) {
 		return nil, pendingIndexedEntry{}, errors.New("persisted pending search-history entry is not canonical")
@@ -351,29 +361,17 @@ func decodePendingEntry(encoded, expectedChecksum []byte) (*opensplunkv1.SearchH
 	return normalizedEntry, normalized, nil
 }
 
-const pendingSelect = `
-	SELECT search_job_id, tenant_id, owner_id, state,
-		created_at_unix_micro, entry_proto, entry_sha256
-	FROM search_history_pending`
-
-func scanPendingAttempt(row rowScanner) (*pendingAttempt, error) {
-	var (
-		jobID, tenantID, ownerID string
-		state, createdAt         int64
-		encoded, checksum        []byte
-	)
-	if err := row.Scan(&jobID, &tenantID, &ownerID, &state, &createdAt, &encoded, &checksum); err != nil {
-		return nil, err
-	}
-	scope, err := normalizeScope(AccessScope{TenantID: tenantID, OwnerID: ownerID})
+func pendingAttemptFromRecord(record pendingHistoryRecord) (*pendingAttempt, error) {
+	scope, err := normalizeScope(AccessScope{TenantID: record.TenantID, OwnerID: record.OwnerID})
 	if err != nil {
-		return nil, fmt.Errorf("persisted pending search-history scope is invalid: %w", err)
+		return nil, persistedDataError("persisted pending search-history scope is invalid", err)
 	}
-	entry, indexed, err := decodePendingEntry(encoded, checksum)
+	entry, indexed, err := decodePendingEntry(record.EntryProto, record.EntrySHA256)
 	if err != nil {
 		return nil, err
 	}
-	if indexed.jobID != jobID || indexed.state != state || indexed.createdAt != createdAt {
+	if indexed.jobID != record.SearchJobID || indexed.state != record.State ||
+		indexed.createdAt != record.CreatedAtUnixMicro {
 		return nil, errors.New("pending search-history indexed metadata does not match its canonical entry")
 	}
 	return &pendingAttempt{scope: scope, entry: entry, indexed: indexed}, nil
@@ -388,51 +386,51 @@ func sameAdmission(pending, terminal *opensplunkv1.SearchHistoryEntry) bool {
 		proto.Equal(pending.CreatedAt, terminal.CreatedAt)
 }
 
-func putTerminalEntry(ctx context.Context, tx *sql.Tx, scope AccessScope, indexed indexedEntry) error {
-	var existingTenant, existingOwner string
-	var existingEncoded, existingChecksum []byte
-	err := tx.QueryRowContext(ctx, `
-		SELECT tenant_id, owner_id, entry_proto, entry_sha256
-		FROM search_history WHERE search_job_id = ?`, indexed.jobID,
-	).Scan(&existingTenant, &existingOwner, &existingEncoded, &existingChecksum)
+func putTerminalEntry(ctx context.Context, tx *gorm.DB, scope AccessScope, indexed indexedEntry) error {
+	var existing historyRecord
+	err := tx.
+		Select("tenant_id", "owner_id", "entry_proto", "entry_sha256").
+		Where("search_job_id = ?", indexed.jobID).
+		Take(&existing).Error
 	switch {
 	case err == nil:
-		if existingTenant != scope.TenantID || existingOwner != scope.OwnerID {
+		if existing.TenantID != scope.TenantID || existing.OwnerID != scope.OwnerID {
 			return fmt.Errorf("%w: search job ID already exists", control.ErrAlreadyExists)
 		}
-		if _, _, decodeErr := decodeEntry(existingEncoded, existingChecksum); decodeErr != nil {
+		if _, _, decodeErr := decodeEntry(existing.EntryProto, existing.EntrySHA256); decodeErr != nil {
 			return fmt.Errorf("read duplicate search-history record: %w", decodeErr)
 		}
-		if !slices.Equal(existingEncoded, indexed.encoded) || !slices.Equal(existingChecksum, indexed.checksum[:]) {
+		if !slices.Equal(existing.EntryProto, indexed.encoded) ||
+			!slices.Equal(existing.EntrySHA256, indexed.checksum[:]) {
 			return control.ErrVersionConflict
 		}
 		return nil
-	case !errors.Is(err, sql.ErrNoRows):
+	case !errors.Is(err, gorm.ErrRecordNotFound):
 		return mapContextError(ctx, "check terminal search-history record", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO search_history (
-			search_job_id, tenant_id, owner_id, app_id, saved_search_id,
-			final_state, search_text, created_at_unix_micro,
-			finished_at_unix_micro, duration_nanoseconds, matched_events,
-			entry_proto, entry_sha256
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		indexed.jobID, scope.TenantID, scope.OwnerID, indexed.appID,
-		indexed.savedSearchID, indexed.state, indexed.searchText,
-		indexed.createdAt, indexed.finishedAt, indexed.duration,
-		indexed.matchedEvents, indexed.encoded, indexed.checksum[:],
-	); err != nil {
-		return mapContextError(ctx, "record terminal search-history entry", err)
+	create := tx.Create(&historyRecord{
+		SearchJobID:         indexed.jobID,
+		TenantID:            scope.TenantID,
+		OwnerID:             scope.OwnerID,
+		AppID:               indexed.appID,
+		SavedSearchID:       indexed.savedSearchID,
+		FinalState:          indexed.state,
+		SearchText:          indexed.searchText,
+		CreatedAtUnixMicro:  indexed.createdAt,
+		FinishedAtUnixMicro: indexed.finishedAt,
+		DurationNanoseconds: indexed.duration,
+		MatchedEvents:       indexed.matchedEvents,
+		EntryProto:          slices.Clone(indexed.encoded),
+		EntrySHA256:         slices.Clone(indexed.checksum[:]),
+	})
+	if create.Error != nil {
+		return mapContextError(ctx, "record terminal search-history entry", create.Error)
 	}
 	return nil
 }
 
-func requireOneAffected(result sql.Result, operation string) error {
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("%s: read affected row count: %w", operation, err)
-	}
+func requireOneAffected(rows int64, operation string) error {
 	if rows != 1 {
 		return fmt.Errorf("%s: database changed %d rows, want 1", operation, rows)
 	}

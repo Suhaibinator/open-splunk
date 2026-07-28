@@ -13,12 +13,13 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 )
 
 // New constructs a bounded history store over an already configured control
 // database. Retention is enforced transactionally after every new record.
 func New(database *control.DB, options Options) (*Store, error) {
-	if database == nil || database.SQLDB() == nil {
+	if database == nil || database.GORMDB() == nil {
 		return nil, invalid("control database is required")
 	}
 	if len(options.CursorKey) < minimumCursorKeyBytes {
@@ -43,7 +44,7 @@ func New(database *control.DB, options Options) (*Store, error) {
 		clock = time.Now
 	}
 	return &Store{
-		db: database.SQLDB(), clock: clock, cursorKey: slices.Clone(options.CursorKey),
+		orm: database.GORMDB(), clock: clock, cursorKey: slices.Clone(options.CursorKey),
 		maximumAge: maximumAge, maximumEntriesPerOwner: maximumEntries,
 	}, nil
 }
@@ -73,13 +74,20 @@ func (store *Store) Get(ctx context.Context, scope AccessScope, searchJobID stri
 	if timestamppb.New(now).CheckValid() != nil {
 		return nil, errors.New("get search history: clock returned an invalid timestamp")
 	}
-	entry, err := scanHistoryEntry(store.db.QueryRowContext(ctx,
-		historySelect+` WHERE search_job_id = ? AND tenant_id = ? AND owner_id = ? AND created_at_unix_micro >= ?`,
-		searchJobID, scope.TenantID, scope.OwnerID, now.Add(-store.maximumAge).UnixMicro(),
-	))
-	if errors.Is(err, sql.ErrNoRows) {
+	var record historyRecord
+	query := store.orm.WithContext(ctx).
+		Where(
+			"search_job_id = ? AND tenant_id = ? AND owner_id = ? AND created_at_unix_micro >= ?",
+			searchJobID, scope.TenantID, scope.OwnerID, now.Add(-store.maximumAge).UnixMicro(),
+		).
+		Take(&record)
+	if errors.Is(query.Error, gorm.ErrRecordNotFound) {
 		return nil, control.ErrNotFound
 	}
+	if query.Error != nil {
+		return nil, mapContextError(ctx, "get search-history entry", query.Error)
+	}
+	entry, err := historyEntryFromRecord(record)
 	if err != nil {
 		return nil, mapContextError(ctx, "get search-history entry", err)
 	}
@@ -102,56 +110,49 @@ func (store *Store) Prune(ctx context.Context, scope AccessScope) (deleted uint6
 	if timestamppb.New(now).CheckValid() != nil {
 		return 0, errors.New("prune search history: clock returned an invalid timestamp")
 	}
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, mapContextError(ctx, "begin search-history prune", err)
+	tx := store.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return 0, mapContextError(ctx, "begin search-history prune", tx.Error)
 	}
-	defer finishTx(tx, &returnedErr)
-	deleted, err = store.pruneScope(ctx, tx, scope, now)
+	defer finishGORMTx(tx, &returnedErr)
+	deleted, err = store.pruneScope(tx, scope, now)
 	if err != nil {
 		return 0, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit().Error; err != nil {
 		return 0, fmt.Errorf("commit search-history prune: %w", err)
 	}
 	return deleted, nil
 }
 
-type contextExecutor interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
-func (store *Store) pruneScope(ctx context.Context, executor contextExecutor, scope AccessScope, now time.Time) (uint64, error) {
+func (store *Store) pruneScope(database *gorm.DB, scope AccessScope, now time.Time) (uint64, error) {
 	cutoff := now.Add(-store.maximumAge).UnixMicro()
-	ageResult, err := executor.ExecContext(ctx, `
-		DELETE FROM search_history
-		WHERE tenant_id = ? AND owner_id = ? AND created_at_unix_micro < ?`,
-		scope.TenantID, scope.OwnerID, cutoff,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("prune search history by age: %w", err)
+	ageResult := database.
+		Where("tenant_id = ? AND owner_id = ? AND created_at_unix_micro < ?", scope.TenantID, scope.OwnerID, cutoff).
+		Delete(&historyRecord{})
+	if ageResult.Error != nil {
+		return 0, fmt.Errorf("prune search history by age: %w", ageResult.Error)
 	}
-	ageRows, err := ageResult.RowsAffected()
-	if err != nil || ageRows < 0 {
+	if ageResult.RowsAffected < 0 {
 		return 0, errors.New("prune search history by age: invalid affected row count")
 	}
-	countResult, err := executor.ExecContext(ctx, `
-		DELETE FROM search_history
-		WHERE search_job_id IN (
-			SELECT search_job_id FROM search_history
-			WHERE tenant_id = ? AND owner_id = ?
-			ORDER BY created_at_unix_micro DESC, search_job_id DESC
-			LIMIT -1 OFFSET ?
-		)`, scope.TenantID, scope.OwnerID, store.maximumEntriesPerOwner,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("prune search history by count: %w", err)
+	overflow := database.Model(&historyRecord{}).
+		Select("search_job_id").
+		Where("tenant_id = ? AND owner_id = ?", scope.TenantID, scope.OwnerID).
+		Order("created_at_unix_micro DESC").
+		Order("search_job_id DESC").
+		Limit(-1).
+		Offset(store.maximumEntriesPerOwner)
+	countResult := database.
+		Where("search_job_id IN (?)", overflow).
+		Delete(&historyRecord{})
+	if countResult.Error != nil {
+		return 0, fmt.Errorf("prune search history by count: %w", countResult.Error)
 	}
-	countRows, err := countResult.RowsAffected()
-	if err != nil || countRows < 0 {
+	if countResult.RowsAffected < 0 {
 		return 0, errors.New("prune search history by count: invalid affected row count")
 	}
-	return uint64(ageRows) + uint64(countRows), nil
+	return uint64(ageResult.RowsAffected) + uint64(countResult.RowsAffected), nil
 }
 
 // Delete removes one entry without disclosing cross-scope existence.
@@ -167,22 +168,16 @@ func (store *Store) Delete(ctx context.Context, scope AccessScope, searchJobID s
 	if err := validateText("search job ID", searchJobID, maximumSearchJobIDBytes, false); err != nil {
 		return err
 	}
-	result, err := store.db.ExecContext(ctx, `
-		DELETE FROM search_history
-		WHERE search_job_id = ? AND tenant_id = ? AND owner_id = ?`,
-		searchJobID, scope.TenantID, scope.OwnerID,
-	)
-	if err != nil {
-		return mapContextError(ctx, "delete search-history entry", err)
+	result := store.orm.WithContext(ctx).
+		Where("search_job_id = ? AND tenant_id = ? AND owner_id = ?", searchJobID, scope.TenantID, scope.OwnerID).
+		Delete(&historyRecord{})
+	if result.Error != nil {
+		return mapContextError(ctx, "delete search-history entry", result.Error)
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read deleted search-history row count: %w", err)
-	}
-	if rows == 0 {
+	if result.RowsAffected == 0 {
 		return control.ErrNotFound
 	}
-	if rows != 1 {
+	if result.RowsAffected != 1 {
 		return errors.New("delete search-history entry: database changed an unexpected number of rows")
 	}
 	return nil
@@ -198,65 +193,38 @@ func (store *Store) Clear(ctx context.Context, scope AccessScope, filter Filter)
 	if err != nil {
 		return 0, err
 	}
-	query, args := filterQuery(`DELETE FROM search_history`, normalized)
-	result, err := store.db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return 0, mapContextError(ctx, "clear search history", err)
+	result := applyHistoryFilter(store.orm.WithContext(ctx), normalized).Delete(&historyRecord{})
+	if result.Error != nil {
+		return 0, mapContextError(ctx, "clear search history", result.Error)
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("read cleared search-history row count: %w", err)
-	}
-	if rows < 0 {
+	if result.RowsAffected < 0 {
 		return 0, errors.New("clear search history: database returned a negative row count")
 	}
-	return uint64(rows), nil
+	return uint64(result.RowsAffected), nil
 }
 
-const historySelect = `
-	SELECT search_job_id, tenant_id, owner_id, app_id, saved_search_id,
-		final_state, search_text, created_at_unix_micro,
-		finished_at_unix_micro, duration_nanoseconds, matched_events,
-		entry_proto, entry_sha256
-	FROM search_history`
-
-type rowScanner interface {
-	Scan(...any) error
-}
-
-func scanHistoryEntry(row rowScanner) (*opensplunkv1.SearchHistoryEntry, error) {
-	var (
-		jobID, tenantID, ownerID, appID, savedSearchID, searchText string
-		state, createdAt, finishedAt, duration, matchedEvents      int64
-		encoded, checksum                                          []byte
-	)
-	if err := row.Scan(
-		&jobID, &tenantID, &ownerID, &appID, &savedSearchID,
-		&state, &searchText, &createdAt, &finishedAt, &duration,
-		&matchedEvents, &encoded, &checksum,
-	); err != nil {
-		return nil, err
+func historyEntryFromRecord(record historyRecord) (*opensplunkv1.SearchHistoryEntry, error) {
+	if _, err := normalizeScope(AccessScope{TenantID: record.TenantID, OwnerID: record.OwnerID}); err != nil {
+		return nil, persistedDataError("persisted search-history scope is invalid", err)
 	}
-	if _, err := normalizeScope(AccessScope{TenantID: tenantID, OwnerID: ownerID}); err != nil {
-		return nil, fmt.Errorf("persisted search-history scope is invalid: %w", err)
-	}
-	entry, indexed, err := decodeEntry(encoded, checksum)
+	entry, indexed, err := decodeEntry(record.EntryProto, record.EntrySHA256)
 	if err != nil {
 		return nil, err
 	}
-	if indexed.jobID != jobID || indexed.appID != appID || indexed.savedSearchID != savedSearchID ||
-		indexed.state != state || indexed.searchText != searchText || indexed.createdAt != createdAt ||
-		indexed.finishedAt != finishedAt || indexed.duration != duration || indexed.matchedEvents != matchedEvents {
+	if indexed.jobID != record.SearchJobID || indexed.appID != record.AppID || indexed.savedSearchID != record.SavedSearchID ||
+		indexed.state != record.FinalState || indexed.searchText != record.SearchText ||
+		indexed.createdAt != record.CreatedAtUnixMicro || indexed.finishedAt != record.FinishedAtUnixMicro ||
+		indexed.duration != record.DurationNanoseconds || indexed.matchedEvents != record.MatchedEvents {
 		return nil, errors.New("search-history indexed metadata does not match its canonical entry")
 	}
 	return entry, nil
 }
 
-func finishTx(tx *sql.Tx, returnedErr *error) {
+func finishGORMTx(tx *gorm.DB, returnedErr *error) {
 	if tx == nil || returnedErr == nil || *returnedErr == nil {
 		return
 	}
-	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+	if err := tx.Rollback().Error; err != nil && !errors.Is(err, sql.ErrTxDone) {
 		*returnedErr = errors.Join(*returnedErr, fmt.Errorf("roll back search-history transaction: %w", err))
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 )
 
 var testCursorKey = []byte("search-history-test-cursor-key-32-bytes-minimum")
@@ -368,38 +369,58 @@ func TestListKeysetPaginationFiltersSortsAndBindsCursor(t *testing.T) {
 func TestListFilterQueriesUseCompositeIndexes(t *testing.T) {
 	database, _ := openTestStore(t, Options{})
 	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
-	for name, request := range map[string]ListRequest{
-		"app":   {AppIDFilter: stringPointer("search")},
-		"saved": {SavedSearchIDFilter: stringPointer("saved-1")},
-	} {
+	tests := map[string]struct {
+		request   ListRequest
+		wantIndex string
+	}{
+		"created": {
+			request:   ListRequest{},
+			wantIndex: "search_history_owner_created_idx",
+		},
+		"app": {
+			request:   ListRequest{AppIDFilter: stringPointer("search")},
+			wantIndex: "search_history_owner_app_created_idx",
+		},
+		"saved": {
+			request:   ListRequest{SavedSearchIDFilter: stringPointer("saved-1")},
+			wantIndex: "search_history_owner_saved_created_idx",
+		},
+	}
+	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			normalized, err := normalizeListRequest(scope, request)
+			normalized, err := normalizeListRequest(scope, test.request)
 			if err != nil {
 				t.Fatal(err)
 			}
 			floor := time.Now().Add(-time.Hour).UnixMicro()
 			normalized.filter.retentionFloor = &floor
-			query, args := listQuery(normalized, listCursor{})
-			rows, err := database.SQLDB().QueryContext(context.Background(), `EXPLAIN QUERY PLAN `+query, args...)
-			if err != nil {
-				t.Fatal(err)
+			query := historyListQuery(
+				database.GORMDB().Session(&gorm.Session{DryRun: true}),
+				normalized,
+				listCursor{},
+			).Find(&[]historyRecord{})
+			if query.Error != nil {
+				t.Fatal(query.Error)
 			}
-			defer rows.Close()
-			var details []string
-			for rows.Next() {
-				var id, parent, unused int
-				var detail string
-				if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
-					t.Fatal(err)
-				}
-				details = append(details, detail)
+			type queryPlanRow struct {
+				ID     int
+				Parent int
+				Unused int
+				Detail string
 			}
-			if err := rows.Err(); err != nil {
-				t.Fatal(err)
+			var plans []queryPlanRow
+			explain := database.GORMDB().WithContext(context.Background()).
+				Raw("EXPLAIN QUERY PLAN "+query.Statement.SQL.String(), query.Statement.Vars...).
+				Scan(&plans)
+			if explain.Error != nil {
+				t.Fatal(explain.Error)
 			}
-			wantIndex := "search_history_owner_" + name + "_created_idx"
-			if !strings.Contains(strings.Join(details, "\n"), wantIndex) {
-				t.Fatalf("query plan = %v, want %s", details, wantIndex)
+			details := make([]string, len(plans))
+			for index, plan := range plans {
+				details[index] = plan.Detail
+			}
+			if !strings.Contains(strings.Join(details, "\n"), test.wantIndex) {
+				t.Fatalf("query plan = %v, want %s", details, test.wantIndex)
 			}
 		})
 	}

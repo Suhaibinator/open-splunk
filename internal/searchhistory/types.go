@@ -3,10 +3,10 @@
 package searchhistory
 
 import (
-	"database/sql"
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"gorm.io/gorm"
 )
 
 const (
@@ -91,7 +91,7 @@ type ListResult struct {
 
 // Store owns search-history persistence over the configured control database.
 type Store struct {
-	db                     *sql.DB
+	orm                    *gorm.DB
 	clock                  func() time.Time
 	cursorKey              []byte
 	maximumAge             time.Duration
