@@ -172,7 +172,11 @@ func run() error {
 	if recoveredSearches != 0 {
 		log.Printf("recovered %d interrupted search attempts", recoveredSearches)
 	}
-	connection, err := openClickHouse(config)
+	clickHouseOptions, err := newClickHouseOptions(config)
+	if err != nil {
+		return err
+	}
+	connection, err := openClickHouse(clickHouseOptions)
 	if err != nil {
 		return err
 	}
@@ -258,6 +262,25 @@ func run() error {
 			log.Printf("close search jobs: %v", err)
 		}
 	}()
+	inspection, err := newRuntimeSearchInspection(
+		runtimeSearchInspectionConfig{
+			Searches:          jobs,
+			Compiler:          compiler,
+			ClickHouseOptions: clickHouseOptions,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("create search inspection services: %w", err)
+	}
+	// Registered after jobs so LIFO shutdown first stops inspection admission,
+	// waits for active requests, and closes its isolated EXPLAIN lanes. The
+	// borrowed search manager and shared ClickHouse connection remain alive
+	// until afterward.
+	defer func() {
+		if err := inspection.Close(); err != nil {
+			log.Printf("close search inspection services: %v", err)
+		}
+	}()
 	exportExecutor, err := queryexec.New(connection, exportSettings.queryExecutorConfig())
 	if err != nil {
 		return fmt.Errorf("create export query executor: %w", err)
@@ -323,6 +346,7 @@ func run() error {
 	}()
 	handler, err := newRuntimeHTTPHandler(server.Config{
 		SearchJobs:                 jobs,
+		SearchInspections:          inspection.service,
 		SearchWebSocket:            searchWebSocket,
 		Exports:                    exports,
 		Indexes:                    controlDB,
@@ -465,24 +489,37 @@ func openSearchHistoryStore(ctx context.Context, db *control.DB, masterKeyPath s
 	return store, nil
 }
 
-func openClickHouse(config options) (clickhousedriver.Conn, error) {
+func newClickHouseOptions(
+	config options,
+) (*clickhousedriver.Options, error) {
 	address := strings.TrimSpace(config.clickhouseAddress)
 	if address == "" {
-		return nil, errors.New("open ClickHouse: address is required")
+		return nil, errors.New(
+			"configure ClickHouse: address is required",
+		)
 	}
 	if !config.clickhouseSecure && !loopbackAddress(address) {
-		return nil, errors.New("open ClickHouse: plaintext is allowed only for a loopback address; enable -clickhouse-secure")
+		return nil, errors.New(
+			"configure ClickHouse: plaintext is allowed only for a " +
+				"loopback address; enable -clickhouse-secure",
+		)
 	}
 	database := strings.TrimSpace(config.clickhouseDatabase)
 	if database != "open_splunk" {
-		return nil, errors.New("open ClickHouse: database must be open_splunk for the embedded schema")
+		return nil, errors.New(
+			"configure ClickHouse: database must be open_splunk for " +
+				"the embedded schema",
+		)
 	}
 	username := strings.TrimSpace(config.clickhouseUsername)
 	if username == "" {
-		return nil, errors.New("open ClickHouse: username is required")
+		return nil, errors.New(
+			"configure ClickHouse: username is required",
+		)
 	}
-	options := &clickhousedriver.Options{
-		Addr: []string{address},
+	result := &clickhousedriver.Options{
+		Protocol: clickhousedriver.Native,
+		Addr:     []string{address},
 		Auth: clickhousedriver.Auth{
 			// Connect through ClickHouse's always-present bootstrap database so
 			// the first migration can create open_splunk on a clean server. All
@@ -491,14 +528,26 @@ func openClickHouse(config options) (clickhousedriver.Conn, error) {
 			Username: username,
 			Password: os.Getenv("OPEN_SPLUNK_CLICKHOUSE_PASSWORD"),
 		},
-		DialTimeout:     5 * time.Second,
-		ReadTimeout:     30 * time.Second,
-		MaxOpenConns:    8,
-		MaxIdleConns:    4,
-		ConnMaxLifetime: 30 * time.Minute,
+		DialTimeout:      5 * time.Second,
+		ReadTimeout:      30 * time.Second,
+		MaxOpenConns:     8,
+		MaxIdleConns:     4,
+		ConnMaxLifetime:  30 * time.Minute,
+		ConnOpenStrategy: clickhousedriver.ConnOpenInOrder,
 	}
 	if config.clickhouseSecure {
-		options.TLS = &tls.Config{MinVersion: tls.VersionTLS12}
+		result.TLS = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	return result, nil
+}
+
+func openClickHouse(
+	options *clickhousedriver.Options,
+) (clickhousedriver.Conn, error) {
+	if options == nil {
+		return nil, errors.New(
+			"open ClickHouse: options are required",
+		)
 	}
 	connection, err := clickhousedriver.Open(options)
 	if err != nil {
