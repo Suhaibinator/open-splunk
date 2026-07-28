@@ -22,6 +22,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchsuggestions"
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -31,6 +33,20 @@ type runtimeCompletedSearches struct{}
 
 func (runtimeCompletedSearches) CompletedExecutionSnapshotFor(context.Context, searchjobs.AccessScope, string) (searchjobs.ExecutionSnapshot, error) {
 	return searchjobs.ExecutionSnapshot{}, searchjobs.ErrNotFound
+}
+
+func (runtimeCompletedSearches) Validate(
+	context.Context,
+	searchjobs.ValidateRequest,
+) (searchjobs.ValidationResult, error) {
+	return searchjobs.ValidationResult{}, searchjobs.ErrClosed
+}
+
+func (runtimeCompletedSearches) SnapshotAnalysisScope(
+	context.Context,
+	searchjobs.AnalysisScopeRequest,
+) (searchjobs.AnalysisScopeSnapshot, error) {
+	return searchjobs.AnalysisScopeSnapshot{}, searchjobs.ErrClosed
 }
 
 type runtimeTimelineCompiler struct{}
@@ -47,6 +63,16 @@ func (runtimeTimelineCompiler) CompileFieldSummary(_ *plan.Query, spec clickhous
 	return clickhouse.CompiledFieldSummary{SQL: "SELECT field summary", Spec: spec}, nil
 }
 
+func (runtimeTimelineCompiler) CompileFieldSuggestions(
+	_ *plan.Query,
+	spec clickhouse.FieldSuggestionSpec,
+) (clickhouse.CompiledFieldSuggestions, error) {
+	return clickhouse.CompiledFieldSuggestions{
+		SQL:  "SELECT field suggestions",
+		Spec: spec,
+	}, nil
+}
+
 type runtimeTimelineExecutor struct{}
 
 func (runtimeTimelineExecutor) ExecuteTimeline(context.Context, clickhouse.CompiledTimeline) ([]queryexec.TimelineBucket, error) {
@@ -59,6 +85,13 @@ func (runtimeTimelineExecutor) ExecuteFieldCatalog(context.Context, clickhouse.C
 
 func (runtimeTimelineExecutor) ExecuteFieldSummary(context.Context, clickhouse.CompiledFieldSummary) (queryexec.FieldSummaryResult, error) {
 	return queryexec.FieldSummaryResult{}, nil
+}
+
+func (runtimeTimelineExecutor) ExecuteFieldSuggestions(
+	context.Context,
+	clickhouse.CompiledFieldSuggestions,
+) (queryexec.FieldSuggestionResult, error) {
+	return queryexec.FieldSuggestionResult{}, nil
 }
 
 type runtimeSearchJobs struct{}
@@ -105,6 +138,74 @@ func (runtimeIndexCatalog) ListIndexes(context.Context) ([]control.Index, error)
 
 func (runtimeIndexCatalog) GetIndexByName(context.Context, string) (control.Index, error) {
 	return control.Index{}, control.ErrNotFound
+}
+
+type runtimeSuggestionSearches struct {
+	runtimeSearchJobs
+
+	mu          sync.Mutex
+	createCalls int
+}
+
+func (searches *runtimeSuggestionSearches) Create(
+	context.Context,
+	searchjobs.CreateRequest,
+) (searchjobs.Job, error) {
+	searches.mu.Lock()
+	defer searches.mu.Unlock()
+	searches.createCalls++
+	return searchjobs.Job{}, nil
+}
+
+func (*runtimeSuggestionSearches) Validate(
+	_ context.Context,
+	request searchjobs.ValidateRequest,
+) (searchjobs.ValidationResult, error) {
+	return searchjobs.ValidationResult{
+		Valid:               true,
+		NormalizedSPL:       strings.TrimSpace(request.SPL),
+		ReferencedIndexes:   []string{"main"},
+		PredictedResultKind: searchjobs.ValidationResultKindEvents,
+	}, nil
+}
+
+func (*runtimeSuggestionSearches) CompletedExecutionSnapshotFor(
+	context.Context,
+	searchjobs.AccessScope,
+	string,
+) (searchjobs.ExecutionSnapshot, error) {
+	return searchjobs.ExecutionSnapshot{}, searchjobs.ErrNotFound
+}
+
+func (*runtimeSuggestionSearches) SnapshotAnalysisScope(
+	context.Context,
+	searchjobs.AnalysisScopeRequest,
+) (searchjobs.AnalysisScopeSnapshot, error) {
+	return searchjobs.AnalysisScopeSnapshot{}, errors.New("static suggestion unexpectedly requested storage scope")
+}
+
+func (searches *runtimeSuggestionSearches) createCallCount() int {
+	searches.mu.Lock()
+	defer searches.mu.Unlock()
+	return searches.createCalls
+}
+
+type runtimeSuggestionIndexes struct{ runtimeIndexCatalog }
+
+func (runtimeSuggestionIndexes) GetIndexByName(
+	_ context.Context,
+	name string,
+) (control.Index, error) {
+	if name != "main" {
+		return control.Index{}, control.ErrNotFound
+	}
+	return control.Index{
+		Definition: control.IndexDefinition{
+			Name:          name,
+			SearchEnabled: true,
+		},
+		State: control.IndexStateActive,
+	}, nil
 }
 
 type runtimeSavedSearches struct{}
@@ -170,6 +271,82 @@ func TestRuntimeHTTPHandlerAdvertisesEnforcedTimelineService(t *testing.T) {
 			decoded.GetLimits().GetMaximumFieldSummaryValues(),
 			clickhouse.MaximumFieldSummaryValues,
 		)
+	}
+}
+
+func TestRuntimeHTTPHandlerServesComposedSearchSuggestionsWithoutCreatingJob(t *testing.T) {
+	searches := &runtimeSuggestionSearches{}
+	analysis, err := newRuntimeSearchAnalysis(runtimeSearchAnalysisConfig{
+		Searches: searches,
+		Compiler: runtimeTimelineCompiler{},
+		Executor: runtimeTimelineExecutor{},
+	})
+	if err != nil {
+		t.Fatalf("newRuntimeSearchAnalysis: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := analysis.Close(); err != nil {
+			t.Errorf("analysis.Close: %v", err)
+		}
+	})
+
+	config := runtimeServerConfig()
+	config.SearchJobs = searches
+	config.Indexes = runtimeSuggestionIndexes{}
+	config.TenantID = "tenant"
+	config.Now = func() time.Time {
+		return time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	}
+	handler, err := newRuntimeHTTPHandler(config, analysis)
+	if err != nil {
+		t.Fatalf("newRuntimeHTTPHandler: %v", err)
+	}
+
+	source := "index=main | head"
+	cursor := len("index=main | he")
+	earliest, latest, timezone := "-24h", "now", "UTC"
+	payload, err := proto.Marshal(&opensplunkv1.GetSearchSuggestionsRequest{
+		Spl:              source,
+		CursorByteOffset: uint64(cursor),
+		TimeRange: &opensplunkv1.TimeRangeSpec{
+			Earliest: &earliest,
+			Latest:   &latest,
+			Timezone: &timezone,
+		},
+		IndexScope: []string{"main"},
+	})
+	if err != nil {
+		t.Fatalf("marshal suggestion request: %v", err)
+	}
+	request := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"http://127.0.0.1/api/v1/search/suggestions",
+		bytes.NewReader(payload),
+	)
+	request.Header.Set("Content-Type", "application/x-protobuf")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("suggestion status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var decoded opensplunkv1.GetSearchSuggestionsResponse
+	if err := proto.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("unmarshal suggestion response: %v", err)
+	}
+	foundHead := false
+	for _, suggestion := range decoded.GetSuggestions() {
+		if suggestion.GetKind() == opensplunkv1.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_COMMAND &&
+			suggestion.GetLabel() == "head" {
+			foundHead = true
+			break
+		}
+	}
+	if !foundHead {
+		t.Fatalf("suggestions = %+v, want command head", decoded.GetSuggestions())
+	}
+	if calls := searches.createCallCount(); calls != 0 {
+		t.Fatalf("search job Create calls = %d, want 0", calls)
 	}
 }
 
@@ -325,6 +502,12 @@ func TestRuntimeHTTPHandlerRejectsPreconfiguredFieldServiceAndMissingAnalysis(t 
 	if _, err := newRuntimeHTTPHandler(config, analysis); err == nil || !strings.Contains(err.Error(), "already configured") {
 		t.Fatalf("preconfigured field error = %v", err)
 	}
+	config = runtimeServerConfig()
+	config.SearchSuggestions = &runtimeConfiguredSuggestions{}
+	if _, err := newRuntimeHTTPHandler(config, analysis); err == nil ||
+		!strings.Contains(err.Error(), "already configured") {
+		t.Fatalf("preconfigured suggestion error = %v", err)
+	}
 	if _, err := newRuntimeHTTPHandler(runtimeServerConfig(), nil); err == nil || !strings.Contains(err.Error(), "services are required") {
 		t.Fatalf("nil analysis error = %v", err)
 	}
@@ -442,6 +625,79 @@ func TestRuntimeSearchAnalysisCloseWaitsForBlockedFieldWorker(t *testing.T) {
 	}
 }
 
+func TestRuntimeSearchAnalysisCloseWaitsForBlockedSuggestion(t *testing.T) {
+	searches := &runtimeBlockingSuggestionSearches{
+		entered: make(chan struct{}),
+		exited:  make(chan struct{}),
+	}
+	analysis, err := newRuntimeSearchAnalysis(runtimeSearchAnalysisConfig{
+		Searches: searches,
+		Compiler: runtimeTimelineCompiler{},
+		Executor: runtimeTimelineExecutor{},
+	})
+	if err != nil {
+		t.Fatalf("newRuntimeSearchAnalysis: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := analysis.Close(); err != nil {
+			t.Errorf("analysis.Close cleanup: %v", err)
+		}
+	})
+
+	resolvedRange, err := searchtime.NewAbsoluteRange(
+		time.Date(2026, 7, 22, 1, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 22, 2, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("resolve suggestion range: %v", err)
+	}
+	suggestResult := make(chan error, 1)
+	go func() {
+		_, err := analysis.suggestions.Suggest(
+			context.Background(),
+			searchsuggestions.Request{
+				SPL:                       "index=main | he",
+				CursorByteOffset:          len("index=main | he"),
+				TenantID:                  "tenant",
+				AuthorizedIndexes:         []string{"main"},
+				RequestedIndexes:          []string{"main"},
+				TimeRange:                 resolvedRange,
+				AuthorizedIndexCandidates: []string{"main"},
+			},
+		)
+		suggestResult <- err
+	}()
+	select {
+	case <-searches.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("suggestion did not enter validation")
+	}
+
+	closeResult := make(chan error, 1)
+	go func() { closeResult <- analysis.Close() }()
+	select {
+	case err := <-closeResult:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not wait for the cancellation-aware suggestion")
+	}
+	select {
+	case <-searches.exited:
+	default:
+		t.Fatal("Close returned before suggestion validation exited")
+	}
+	select {
+	case err := <-suggestResult:
+		if !errors.Is(err, searchjobs.ErrClosed) {
+			t.Fatalf("Suggest error = %v, want ErrClosed", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Suggest did not return after analysis close")
+	}
+}
+
 func TestRuntimeSearchAnalysisCloseWaitsForBlockedFieldSummaryWorker(t *testing.T) {
 	snapshot := runtimeFieldExecutionSnapshot()
 	executor := &runtimeBlockingFieldSummaryExecutor{
@@ -522,7 +778,19 @@ func (*runtimeConfiguredFields) GetFieldSummary(context.Context, searchjobs.Acce
 	return searchanalysis.FieldSummary{}, nil
 }
 
+type runtimeConfiguredSuggestions struct{}
+
+func (*runtimeConfiguredSuggestions) MaximumSuggestions() uint32 { return 1 }
+
+func (*runtimeConfiguredSuggestions) Suggest(
+	context.Context,
+	searchsuggestions.Request,
+) (searchsuggestions.Result, error) {
+	return searchsuggestions.Result{}, nil
+}
+
 type runtimeSnapshotSearches struct {
+	runtimeCompletedSearches
 	snapshot searchjobs.ExecutionSnapshot
 }
 
@@ -557,6 +825,23 @@ func (executor *runtimeBlockingFieldExecutor) ExecuteFieldCatalog(ctx context.Co
 	<-ctx.Done()
 	close(executor.exited)
 	return queryexec.FieldCatalogResult{}, ctx.Err()
+}
+
+type runtimeBlockingSuggestionSearches struct {
+	runtimeCompletedSearches
+	entered chan struct{}
+	exited  chan struct{}
+	once    sync.Once
+}
+
+func (searches *runtimeBlockingSuggestionSearches) Validate(
+	ctx context.Context,
+	_ searchjobs.ValidateRequest,
+) (searchjobs.ValidationResult, error) {
+	searches.once.Do(func() { close(searches.entered) })
+	<-ctx.Done()
+	close(searches.exited)
+	return searchjobs.ValidationResult{}, ctx.Err()
 }
 
 type runtimeFieldSummaryCompiler struct{ runtimeTimelineCompiler }

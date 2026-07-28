@@ -283,8 +283,9 @@ func run() error {
 		return fmt.Errorf("create search analysis services: %w", err)
 	}
 	// Registered after exports and jobs so LIFO shutdown cancels and joins all
-	// detached field-catalog workers before either borrowed dependency closes.
-	// The later WebSocket safety close still runs first.
+	// suggestion operations and detached field-catalog workers before either
+	// borrowed dependency closes. The later WebSocket safety close still runs
+	// first.
 	defer func() {
 		if err := analysis.Close(); err != nil {
 			log.Printf("close search analysis services: %v", err)

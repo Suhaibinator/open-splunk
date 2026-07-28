@@ -26,6 +26,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchsuggestions"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -160,6 +162,14 @@ type SearchFields interface {
 	MaximumSummaryValues() uint32
 }
 
+// SearchSuggestions is the bounded, no-job SPL editor-completion surface. The
+// handler snapshots the enforced maximum during construction so transport
+// validation cannot drift while a request is live.
+type SearchSuggestions interface {
+	Suggest(context.Context, searchsuggestions.Request) (searchsuggestions.Result, error)
+	MaximumSuggestions() uint32
+}
+
 // SearchWebSocket is the independently lifecycle-managed progress transport.
 // Its advertised limits are read from the same service that enforces them so
 // bootstrap metadata cannot drift from the live route.
@@ -234,6 +244,7 @@ type Config struct {
 	Exports                    Exports
 	SearchTimelines            SearchTimelines
 	SearchFields               SearchFields
+	SearchSuggestions          SearchSuggestions
 	SearchWebSocket            SearchWebSocket
 	WebUI                      fs.FS
 	Bootstrap                  BootstrapConfig
@@ -262,6 +273,7 @@ type apiHandler struct {
 	exports                   Exports
 	searchTimelines           SearchTimelines
 	searchFields              SearchFields
+	searchSuggestions         SearchSuggestions
 	searchWebSocket           SearchWebSocket
 	ownerID                   string
 	tenantID                  string
@@ -270,6 +282,7 @@ type apiHandler struct {
 	maximumFieldPageSize      uint32
 	maximumFieldCatalogFields uint32
 	maximumFieldSummaryValues uint32
+	maximumSuggestions        uint32
 	bootstrap                 BootstrapConfig
 	now                       func() time.Time
 	requestGate               chan struct{}
@@ -342,6 +355,20 @@ func NewHandler(config Config) (*Handler, error) {
 		}
 		if maximumFieldSummaryValues == 0 || maximumFieldSummaryValues > clickhouse.MaximumFieldSummaryValues {
 			return nil, fmt.Errorf("create server handler: field summary maximum values must be between 1 and %d", clickhouse.MaximumFieldSummaryValues)
+		}
+	}
+	suggestionService := config.SearchSuggestions
+	if isNilDependency(suggestionService) {
+		suggestionService = nil
+	}
+	maximumSuggestions := uint32(0)
+	if suggestionService != nil {
+		maximumSuggestions = suggestionService.MaximumSuggestions()
+		if maximumSuggestions == 0 || maximumSuggestions > uint32(spl.MaximumSuggestionLimit) {
+			return nil, fmt.Errorf(
+				"create server handler: search suggestion maximum must be between 1 and %d",
+				spl.MaximumSuggestionLimit,
+			)
 		}
 	}
 	searchWebSocket := config.SearchWebSocket
@@ -469,6 +496,7 @@ func NewHandler(config Config) (*Handler, error) {
 		exports:                   exportService,
 		searchTimelines:           timelineService,
 		searchFields:              fieldService,
+		searchSuggestions:         suggestionService,
 		searchWebSocket:           searchWebSocket,
 		ownerID:                   ownerID,
 		tenantID:                  tenantID,
@@ -477,6 +505,7 @@ func NewHandler(config Config) (*Handler, error) {
 		maximumFieldPageSize:      maximumFieldPageSize,
 		maximumFieldCatalogFields: maximumFieldCatalogFields,
 		maximumFieldSummaryValues: maximumFieldSummaryValues,
+		maximumSuggestions:        maximumSuggestions,
 		bootstrap:                 bootstrap,
 		now:                       now,
 		requestGate:               make(chan struct{}, concurrentRequests),
@@ -549,6 +578,9 @@ func NewHandler(config Config) (*Handler, error) {
 	if api.searchFields != nil {
 		apiRoutes[searchFieldsListPath] = http.MethodPost
 		apiRoutes[searchFieldSummaryPath] = http.MethodPost
+	}
+	if api.searchSuggestions != nil {
+		apiRoutes[searchSuggestionsPath] = http.MethodPost
 	}
 	if api.searchWebSocket != nil {
 		apiRoutes[searchWebSocketPath] = http.MethodGet
@@ -815,6 +847,15 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	}
 	if handler.searchFields != nil {
 		routes = append(routes, handler.searchFieldRoutes(noAuth, smallRequestBytes)...)
+	}
+	if handler.searchSuggestions != nil {
+		routes = append(
+			routes,
+			handler.searchSuggestionRoutes(
+				noAuth,
+				min(maximumRequestBytes, maximumSearchSuggestionRequestBytes),
+			)...,
+		)
 	}
 	if handler.exports != nil {
 		routes = append(routes,
