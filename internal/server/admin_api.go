@@ -947,6 +947,7 @@ func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, err
 		return nil, errors.New("invalid ingestion token state")
 	}
 	if (!record.ExpiresAt.IsZero() && !record.ExpiresAt.After(record.CreatedAt)) ||
+		(!record.LastUsedAt.IsZero() && record.LastUsedAt.Before(record.CreatedAt)) ||
 		(record.State == auth.CollectorTokenStateExpired && record.ExpiresAt.IsZero()) ||
 		(record.State == auth.CollectorTokenStateRevoked) != !record.RevokedAt.IsZero() ||
 		(!record.RevokedAt.IsZero() && record.RevokedAt.Before(record.CreatedAt)) {
@@ -963,6 +964,12 @@ func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, err
 	}
 	if !record.ExpiresAt.IsZero() {
 		result.ExpiresAt, err = validTimestamp(record.ExpiresAt)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !record.LastUsedAt.IsZero() {
+		result.LastUsedAt, err = validTimestamp(record.LastUsedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -1155,11 +1162,9 @@ func normalizeTokenSort(sortBy opensplunkv1.IngestionTokenSortBy, direction open
 	if sortBy == opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_UNSPECIFIED {
 		sortBy = opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME
 	}
-	if sortBy == opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT {
-		return 0, 0, errors.New("last-used token sorting is not available in this API version")
-	}
 	if sortBy != opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME &&
 		sortBy != opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_CREATED_AT &&
+		sortBy != opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT &&
 		sortBy != opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_EXPIRES_AT {
 		return 0, 0, errors.New("ingestion token sort is invalid")
 	}
@@ -1250,6 +1255,8 @@ func filterAndSortTokens(input []auth.CollectorToken, states []opensplunkv1.Inge
 			comparison = strings.Compare(strings.ToLower(result[left].Name), strings.ToLower(result[right].Name))
 		case opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_CREATED_AT:
 			comparison = result[left].CreatedAt.Compare(result[right].CreatedAt)
+		case opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT:
+			comparison = compareOptionalTime(result[left].LastUsedAt, result[right].LastUsedAt)
 		case opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_EXPIRES_AT:
 			comparison = compareOptionalTime(result[left].ExpiresAt, result[right].ExpiresAt)
 		}
@@ -1356,6 +1363,7 @@ func tokenSnapshot(records []auth.CollectorToken) string {
 	for _, record := range records {
 		writeSnapshotRecord(digest, record.ID, record.Version)
 		_, _ = io.WriteString(digest, string(record.State))
+		writeSnapshotTime(digest, record.LastUsedAt)
 	}
 	return base64.RawURLEncoding.EncodeToString(digest.Sum(nil))
 }
@@ -1366,6 +1374,19 @@ func writeSnapshotRecord(writer io.Writer, id string, version uint64) {
 	binary.BigEndian.PutUint64(integers[8:], version)
 	_, _ = writer.Write(integers[:])
 	_, _ = io.WriteString(writer, id)
+}
+
+func writeSnapshotTime(writer io.Writer, value time.Time) {
+	var boundary [1]byte
+	if value.IsZero() {
+		_, _ = writer.Write(boundary[:])
+		return
+	}
+	boundary[0] = 1
+	_, _ = writer.Write(boundary[:])
+	_, _ = io.WriteString(writer, value.Round(0).UTC().Format(time.RFC3339Nano))
+	boundary[0] = 0
+	_, _ = writer.Write(boundary[:])
 }
 
 func encodeAdminCursor(key []byte, cursor adminCursor) (string, error) {

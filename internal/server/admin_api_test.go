@@ -314,13 +314,6 @@ func TestIngestionTokenListFiltersSortsAndReportsExactTotals(t *testing.T) {
 		listed.GetPage().GetTotalSize() != 1 || !listed.GetPage().GetTotalSizeExact() || listed.GetPage().GetNextPageToken() != "" {
 		t.Fatalf("listed tokens = %+v", &listed)
 	}
-
-	response = postProto(t, handler, "/api/v1/ingestion-tokens/list", &opensplunkv1.ListIngestionTokensRequest{
-		SortBy: opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT,
-	})
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("unsupported last-used sort status = %d, body = %s", response.Code, response.Body.String())
-	}
 }
 
 func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
