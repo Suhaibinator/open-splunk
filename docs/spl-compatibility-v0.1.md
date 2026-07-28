@@ -79,6 +79,12 @@ Each call has the same separate 64 KiB generated-SQL ceiling.
 Every `now()` call accepts no arguments and returns the immutable search-start
 Unix second as a fixed signed integer. It is bound from the server-resolved
 search snapshot rather than evaluated from the ClickHouse wall clock.
+Every `strftime` call accepts one canonical time or numeric Unix-seconds value
+and one quoted literal format. The authored format is capped at 4 KiB, 4,096
+literal-code-point/directive work units, and 16 KiB of conservative output.
+Across one query, all calls may total at most 16,384 format work units and
+64 KiB of conservative output per row. Each call has the same separate 64 KiB
+generated-SQL ceiling.
 Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
@@ -149,6 +155,7 @@ decimal values compare through finite `Float64`, so distinct values beyond
 | where match(message, "(?i)error|warn")
 | where like(path, "/api/%")
 | where _time<=now()
+| where strftime(_time, "%Y")="2026"
 ```
 
 `where` uses a separate eval-expression grammar: quoted strings are literals,
@@ -162,7 +169,8 @@ supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, bounded
 `case`, `lower`, `upper`, `len`, `length`, bounded `substr`, and bounded
 default `tostring`, bounded `round`, `ceil`/`ceiling`, `floor`, and `mvcount`
 calls, plus bounded `match(value, "regex")` and
-`like(value, "pattern")`, and zero-argument `now()` described below;
+`like(value, "pattern")`, zero-argument `now()`, and bounded
+`strftime(time, "format")` described below;
 arithmetic, field quoting, `XOR`, and other eval functions are not yet
 accepted. Missing, null, container, or failed numeric operands do not pass
 ordinary comparisons.
@@ -204,6 +212,7 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval class=if(match(message, "(?i)error|warn"), "problem", "ok")
 | eval route_class=if(like(path, "/api/%"), "api", "other")
 | eval search_started=now()
+| eval rendered_time=strftime(_time, "%Y-%m-%dT%H:%M:%S.%Q%:z")
 ```
 
 Assignments are evaluated from left to right, and later assignments may use an
@@ -242,6 +251,8 @@ narrow:
 - `like(value, "pattern")` returns a Boolean whole-string wildcard-match result
   for predicate and conditional use with a bounded literal pattern.
 - `now()` returns the fixed search-start Unix second as an `Int64`.
+- `strftime(time, "format")` returns one fixed nullable String using the
+  search's effective IANA timezone and a bounded literal format.
 
 The `if` predicate uses exactly the `where` grammar described above:
 case-sensitive scalar comparisons, direct `isnull` / `isnotnull` predicates,
@@ -907,7 +918,88 @@ SQL, and whole-query ceilings remain authoritative for repeated composition.
 Open Splunk v0.1 has no scheduled-search execution surface, so Splunk's
 scheduled-time variant is not claimed. The per-event wall-clock `time()`
 function is also unsupported rather than being approximated with `now()`.
-`relative_time`, `strftime`, and `strptime` remain separate planned slices.
+`relative_time` and `strptime` remain separate planned slices.
+
+`strftime` accepts one time value and one quoted literal format:
+
+```spl
+| eval rendered=strftime(_time, "%Y-%m-%dT%H:%M:%S.%Q%:z")
+| eval admitted=strftime(now(), "%F %T")
+| eval epoch=strftime(0, "%F %T.%9N %s %z")
+| where strftime(_time, "%Y-%m")="2026-07"
+```
+
+Function names are case-insensitive, and a bare field named `strftime`
+remains an ordinary field. Any arity other than two fails with
+`SPL_INVALID_EVAL_ARITY`. The format must be a quoted String literal; a field,
+calculated value, malformed directive, invalid UTF-8, or embedded NUL fails
+before execution. A Boolean-producing first argument is rejected as an
+unsupported scalar consumer.
+
+Canonical `_time` and `_indextime` values preserve `DateTime64(9)` precision.
+Fixed numeric input is interpreted as Unix seconds; a fractional value is
+floored to nanoseconds, so `-0.5` is
+`1969-12-31 23:59:59.500000000`, and `%s` returns `-1`. The immutable numeric
+result of `now()` composes directly. Statically null input returns null.
+Fixed String, Boolean, and multivalue inputs are rejected. For a Dynamic
+field, only a finite runtime number inside the supported `DateTime64(9)` range
+is formatted; String, Boolean, array, object, tagged, null, missing, non-finite,
+and out-of-range values return null. Numeric conversion does not parse a
+Dynamic String.
+
+Formatting uses the effective IANA timezone retained with the search's
+time-range intent. An omitted timezone means UTC. `Local`, host-specific
+POSIX/leap-second zone names, malformed names, and unknown IANA names fail at
+job admission or the planner trust boundary. The effective name is preserved
+in completed execution snapshots and in field-summary/cache fingerprints, so
+field analysis, timelines, exports, and cursor replay cannot silently switch
+zones. Daylight-saving offsets follow that named zone at the formatted
+instant. `%s` remains the instant's timezone-independent Unix second.
+
+The supported locale-stable directive subset is:
+
+| Group | Variables |
+| --- | --- |
+| literal | `%%` |
+| year and ISO week | `%Y`, `%y`, `%G`, `%g`, `%V` |
+| month and day | `%m`, `%b`, `%B`, `%d`, `%e`, `%j` |
+| weekday | `%w`, `%a`, `%A` |
+| clock | `%H`, `%I`, `%M`, `%S`, `%p`, `%T` |
+| composed date | `%F` |
+| epoch and zone offset | `%s`, `%z`, `%:z` |
+| fractional second | `%Q`, `%3Q`, `%6Q`, `%9Q`, `%N`, `%3N`, `%6N`, `%9N`, `%f` |
+
+`%G`/`%g` are the ISO week-based year rather than the calendar year; for
+example, 2021-01-01 formats as ISO year 2020, week 53. `%w` numbers Sunday as
+zero. `%Q` defaults to three fractional digits, `%N` defaults to nine, and
+`%f` emits six. Explicit fractional widths are limited to 3, 6, or 9 digits
+and are zero-padded/truncated from the nanosecond timestamp without rounding.
+`%z` emits `+hhmm` and `%:z` emits `+hh:mm`. Month/weekday names and AM/PM use
+the pinned English spellings; no process locale is consulted.
+
+Locale-dependent variables and unimplemented portability edges are rejected
+rather than delegated to ClickHouse or server configuration. This includes
+`%c`, `%+`, `%x`, `%X`, `%Z`, `%U`, `%k`, `%C`, `%Ez`, `%::z`, `%:::z`,
+unknown variables, a dangling `%`, and unsupported precisions such as `%2Q`,
+`%4N`, `%0Q`, or `%12Q`.
+
+One authored format may contain at most 4 KiB of UTF-8, 4,096 literal Unicode
+code points plus directives, and 16 KiB of conservative output. One query may
+total at most 16,384 work units and 64 KiB of conservative `strftime` output
+per row across all occurrences. Resource overflow uses
+`SPL_QUERY_TOO_COMPLEX`; unsupported format syntax uses
+`SPL_UNSUPPORTED_TIME_FORMAT`. Each scalar lowering also has a 64 KiB
+generated-SQL ceiling beneath the 256 KiB whole-query ceiling.
+
+The parser, planner, and compiler independently revalidate the format. The
+compiler binds the format fragments and timezone as query arguments, evaluates
+the input once, localizes the timestamp once, and does not expand rows. The
+pinned ClickHouse 26.3.17.4 integration corpus covers every supported
+directive, UTC and daylight-saving offsets, the ISO year boundary, pre-epoch
+flooring, nanoseconds, literal Unicode/apostrophes/percent, fixed and Dynamic
+types, predicates, projection, aggregation, later eval, and snapshot replay.
+Open Splunk uses custom lowering where ClickHouse's native percent/Joda tokens
+do not match this contract, including `%s`, `%g`, `%e`, `%w`, and zone offsets.
 
 Splunk uses PCRE for `replace`; Open Splunk validates and executes the bounded
 RE2-compatible subset supported by ClickHouse. Any pattern capable of a
@@ -2149,6 +2241,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
 [`if`, `coalesce`, `case`, `match`, `like`, and conditional functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
 [`now` and date/time functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/evaluation-functions/date-and-time-functions),
+[`strftime` date/time variables](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/time-format-variables-and-modifiers/date-and-time-format-variables),
 [`lower`, `upper`, and text functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/text-functions),
 [SQLite core `substr` semantics](https://www.sqlite.org/lang_corefunc.html),
 [`tostring` and conversion functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/evaluation-functions/conversion-functions),
