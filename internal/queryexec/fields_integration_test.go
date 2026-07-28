@@ -160,6 +160,151 @@ func queryIntegrationTestFieldCatalog(
 		}
 	})
 
+	t.Run("field suggestion compiler and executor", func(t *testing.T) {
+		t.Run("canonical and dynamic names are bytewise bounded", func(t *testing.T) {
+			suggestions, err := executor.ExecuteFieldSuggestions(
+				ctx,
+				queryIntegrationCompileFieldSuggestions(
+					t,
+					"field-catalog-v1",
+					indexTime,
+					`index=field-catalog-v1`,
+					"",
+					3,
+				),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := FieldSuggestionResult{
+				FieldNames: []string{"_indextime", "_raw", "_time"},
+				Truncated:  true,
+			}
+			if !reflect.DeepEqual(suggestions, want) {
+				t.Fatalf("suggestions = %#v, want %#v", suggestions, want)
+			}
+
+			suggestions, err = executor.ExecuteFieldSuggestions(
+				ctx,
+				queryIntegrationCompileFieldSuggestions(
+					t,
+					"field-catalog-v1",
+					indexTime,
+					`index=field-catalog-v1`,
+					"sta",
+					10,
+				),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(
+				suggestions,
+				FieldSuggestionResult{FieldNames: []string{"status"}},
+			) {
+				t.Fatalf("dynamic prefix suggestions = %#v", suggestions)
+			}
+		})
+
+		t.Run("projection and rename shadows are final-relation exact", func(t *testing.T) {
+			excluded, err := executor.ExecuteFieldSuggestions(
+				ctx,
+				queryIntegrationCompileFieldSuggestions(
+					t,
+					"field-catalog-v1",
+					indexTime,
+					`index=field-catalog-v1 | fields - status`,
+					"sta",
+					10,
+				),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(excluded.FieldNames) != 0 || excluded.Truncated {
+				t.Fatalf("excluded suggestions = %#v, want empty", excluded)
+			}
+
+			renamed, err := executor.ExecuteFieldSuggestions(
+				ctx,
+				queryIntegrationCompileFieldSuggestions(
+					t,
+					"field-catalog-v1",
+					indexTime,
+					`index=field-catalog-v1 | rename status AS state`,
+					"sta",
+					10,
+				),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(
+				renamed,
+				FieldSuggestionResult{FieldNames: []string{"state"}},
+			) {
+				t.Fatalf("renamed suggestions = %#v", renamed)
+			}
+		})
+
+		t.Run("every immutable scan boundary excludes poisoned metadata", func(t *testing.T) {
+			suggestions, err := executor.ExecuteFieldSuggestions(
+				ctx,
+				queryIntegrationCompileFieldSuggestions(
+					t,
+					"field-suggestions-scope",
+					indexTime,
+					`index=field-suggestions-scope`,
+					"scope_",
+					100,
+				),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := FieldSuggestionResult{FieldNames: []string{"scope_visible"}}
+			if !reflect.DeepEqual(suggestions, want) {
+				t.Fatalf("scoped suggestions = %#v, want %#v", suggestions, want)
+			}
+		})
+
+		t.Run("in-scope invalid metadata fails closed", func(t *testing.T) {
+			for _, test := range []struct {
+				index  string
+				prefix string
+			}{
+				{index: "field-catalog-legacy", prefix: "sta"},
+				{index: "field-catalog-oversized", prefix: "field"},
+				{index: "field-suggestions-invalid-escape", prefix: "does-not-match"},
+				{index: "field-suggestions-empty-segment", prefix: "does-not-match"},
+				{index: "field-suggestions-control-name", prefix: "does-not-match"},
+			} {
+				test := test
+				t.Run(test.index, func(t *testing.T) {
+					suggestions, err := executor.ExecuteFieldSuggestions(
+						ctx,
+						queryIntegrationCompileFieldSuggestions(
+							t,
+							test.index,
+							indexTime,
+							"index="+test.index,
+							test.prefix,
+							10,
+						),
+					)
+					if !errors.Is(err, ErrFieldMetadataUnavailable) ||
+						!reflect.DeepEqual(suggestions, FieldSuggestionResult{}) {
+						t.Fatalf(
+							"suggestions = %#v, error = %v, want atomic ErrFieldMetadataUnavailable",
+							suggestions,
+							err,
+						)
+					}
+				})
+			}
+		})
+	})
+
 	t.Run("field summary compiler and executor", func(t *testing.T) {
 		t.Run("mixed dynamic values preserve typed identity and missing counts", func(t *testing.T) {
 			compiled := queryIntegrationCompileFieldSummary(
@@ -391,16 +536,20 @@ func queryIntegrationInsertFieldCatalogEvents(t *testing.T, ctx context.Context,
 	indexTime := time.Now().UTC().Add(-30 * time.Second).Truncate(time.Millisecond)
 	service := "catalog"
 	type fixture struct {
-		id        string
-		index     string
-		fields    *clickhousedriver.JSON
-		names     []string
-		types     []uint8
-		version   uint8
-		service   *string
-		raw       []byte
-		encoding  uint8
-		eventTime time.Time
+		id         string
+		tenant     string
+		index      string
+		fields     *clickhousedriver.JSON
+		names      []string
+		types      []uint8
+		version    uint8
+		service    *string
+		raw        []byte
+		encoding   uint8
+		eventTime  time.Time
+		indexTime  time.Time
+		expiresAt  time.Time
+		visibility uint64
 	}
 	newDocument := func(values map[string]any) *clickhousedriver.JSON {
 		document := clickhousedriver.NewJSON()
@@ -551,6 +700,73 @@ func queryIntegrationInsertFieldCatalogEvents(t *testing.T, ctx context.Context,
 		names: []string{strings.Repeat("x", eventfields.MaximumNormalizedFieldNameBytes+1)},
 		types: []uint8{uint8(eventfields.StoredValueTypeString)}, version: eventfields.CurrentFieldMetadataVersion,
 	})
+	fixtures = append(fixtures,
+		fixture{
+			id: "suggestion-visible", index: "field-suggestions-scope",
+			fields: newDocument(map[string]any{"scope_visible": "visible"}),
+			names:  []string{"scope_visible"}, types: []uint8{uint8(eventfields.StoredValueTypeString)},
+			version: eventfields.CurrentFieldMetadataVersion,
+		},
+		fixture{
+			id: "suggestion-poison-tenant", tenant: "other-tenant",
+			index:  "field-suggestions-scope",
+			fields: newDocument(map[string]any{"scope_poison_tenant": "poison"}),
+			names:  []string{"scope_poison_tenant"}, types: []uint8{},
+		},
+		fixture{
+			id: "suggestion-poison-index", index: "field-suggestions-other-index",
+			fields: newDocument(map[string]any{"scope_poison_index": "poison"}),
+			names:  []string{"scope_poison_index"}, types: []uint8{},
+		},
+		fixture{
+			id: "suggestion-poison-event-earliest", index: "field-suggestions-scope",
+			fields: newDocument(map[string]any{"scope_poison_event_earliest": "poison"}),
+			names:  []string{"scope_poison_event_earliest"}, types: []uint8{},
+			eventTime: indexTime.Add(-2 * time.Minute),
+		},
+		fixture{
+			id: "suggestion-poison-event-latest", index: "field-suggestions-scope",
+			fields: newDocument(map[string]any{"scope_poison_event_latest": "poison"}),
+			names:  []string{"scope_poison_event_latest"}, types: []uint8{},
+			eventTime: indexTime.Add(time.Minute),
+		},
+		fixture{
+			id: "suggestion-poison-index-time", index: "field-suggestions-scope",
+			fields: newDocument(map[string]any{"scope_poison_index_time": "poison"}),
+			names:  []string{"scope_poison_index_time"}, types: []uint8{},
+			indexTime: indexTime.Add(2 * time.Second),
+		},
+		fixture{
+			id: "suggestion-poison-expiry", index: "field-suggestions-scope",
+			fields: newDocument(map[string]any{"scope_poison_expiry": "poison"}),
+			names:  []string{"scope_poison_expiry"}, types: []uint8{},
+			expiresAt: indexTime.Add(time.Second),
+		},
+		fixture{
+			id: "suggestion-poison-visibility", index: "field-suggestions-scope",
+			fields: newDocument(map[string]any{"scope_poison_visibility": "poison"}),
+			names:  []string{"scope_poison_visibility"}, types: []uint8{},
+			visibility: 2,
+		},
+		fixture{
+			id: "suggestion-invalid-escape", index: "field-suggestions-invalid-escape",
+			fields: clickhousedriver.NewJSON(),
+			names:  []string{`a\q`}, types: []uint8{uint8(eventfields.StoredValueTypeString)},
+			version: eventfields.CurrentFieldMetadataVersion,
+		},
+		fixture{
+			id: "suggestion-empty-segment", index: "field-suggestions-empty-segment",
+			fields: clickhousedriver.NewJSON(),
+			names:  []string{"a..b"}, types: []uint8{uint8(eventfields.StoredValueTypeString)},
+			version: eventfields.CurrentFieldMetadataVersion,
+		},
+		fixture{
+			id: "suggestion-control-name", index: "field-suggestions-control-name",
+			fields: clickhousedriver.NewJSON(),
+			names:  []string{"a\x01b"}, types: []uint8{uint8(eventfields.StoredValueTypeString)},
+			version: eventfields.CurrentFieldMetadataVersion,
+		},
+	)
 	for sequence, event := range fixtures {
 		message := "field catalog " + event.id
 		raw := event.raw
@@ -565,11 +781,27 @@ func queryIntegrationInsertFieldCatalogEvents(t *testing.T, ctx context.Context,
 		if !event.eventTime.IsZero() {
 			eventTime = event.eventTime
 		}
+		tenant := event.tenant
+		if tenant == "" {
+			tenant = "tenant"
+		}
+		storedAt := event.indexTime
+		if storedAt.IsZero() {
+			storedAt = indexTime
+		}
+		expiresAt := event.expiresAt
+		if expiresAt.IsZero() {
+			expiresAt = indexTime.Add(24 * time.Hour)
+		}
+		visibility := event.visibility
+		if visibility == 0 {
+			visibility = 1
+		}
 		if err := batch.Append(
-			"queryexec-field-catalog-"+event.id, "tenant", event.index, eventTime, indexTime,
+			"queryexec-field-catalog-"+event.id, tenant, event.index, eventTime, storedAt,
 			nil, uint8(1), "catalog-host", "catalog.log", "test", event.service, uint8(1), nil, &message, raw,
 			encoding, nil, nil, event.fields, event.names, event.types, event.version, "collector", "field-catalog-batch", uint64(sequence+1),
-			indexTime.Add(24*time.Hour), uint64(1),
+			expiresAt, visibility,
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -611,6 +843,29 @@ func queryIntegrationCompileFieldCatalog(
 		t.Fatal(err)
 	}
 	compiled, err := (clickhouse.Compiler{}).CompileFieldCatalog(logical, clickhouse.FieldCatalogSpec{MaximumFields: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiled
+}
+
+func queryIntegrationCompileFieldSuggestions(
+	t *testing.T,
+	indexName string,
+	indexTime time.Time,
+	source string,
+	prefix string,
+	maximumFields uint32,
+) clickhouse.CompiledFieldSuggestions {
+	t.Helper()
+	logical := queryIntegrationFieldPlan(t, indexName, indexTime, source)
+	compiled, err := (clickhouse.Compiler{}).CompileFieldSuggestions(
+		logical,
+		clickhouse.FieldSuggestionSpec{
+			Prefix:        prefix,
+			MaximumFields: maximumFields,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

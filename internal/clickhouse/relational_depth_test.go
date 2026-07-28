@@ -562,6 +562,19 @@ func TestFieldAnalysisRelationalDepthBoundariesIncludePrivateFinalizers(t *testi
 		relationalDepthRequireLimitDiagnostic(t, err, rejected.Operators[0].SourceRange())
 	})
 
+	t.Run("field suggestions", func(t *testing.T) {
+		t.Parallel()
+		spec := FieldSuggestionSpec{Prefix: "lev", MaximumFields: 10}
+		accepted := relationalDepthPlan(t, relationalDepthEvalPipeline(t, 22, 64, ""))
+		if _, err := (Compiler{}).CompileFieldSuggestions(accepted, spec); err != nil {
+			t.Fatalf("CompileFieldSuggestions(depth 96): %v", err)
+		}
+
+		rejected := relationalDepthPlan(t, relationalDepthEvalPipeline(t, 23, 64, ""))
+		_, err := (Compiler{}).CompileFieldSuggestions(rejected, spec)
+		relationalDepthRequireLimitDiagnostic(t, err, rejected.Operators[0].SourceRange())
+	})
+
 	t.Run("timeline", func(t *testing.T) {
 		t.Parallel()
 		accepted := relationalDepthPlan(t, relationalDepthEvalPipeline(t, 26, 64, ""))
