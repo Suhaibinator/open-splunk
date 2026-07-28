@@ -77,13 +77,16 @@ func testStrptimeAgainstClickHouse(
 			` millis=strptime("2026-07-27 19:20:21.125", "%F %T.%Q"),` +
 			` midnight=strptime("1971-01-01", "%F"),` +
 			` twelve=strptime("2026-07-27 07:20:21 PM", "%F %I:%M:%S %p"),` +
+			` twelve_lower=strptime("2026-07-27 07:20:21 pm", "%F %I:%M:%S %p"),` +
+			` twelve_mixed=strptime("2026-07-27 07:20:21 pM", "%F %I:%M:%S %p"),` +
 			` offset=strptime("2026-07-27 19:20:21.654321-0730", "%F %T.%f%z"),` +
 			` unpadded=strptime("2026-7-2 3:4:5", "%Y-%m-%d %H:%M:%S"),` +
 			` literal_percent=strptime("2026%07%27", "%Y%%%m%%%d"),` +
 			` optional_fraction=strptime("2026-07-27 19:20:21", "%F %T.%Q")` +
-			` | table full,millis,midnight,twelve,offset,unpadded,literal_percent,optional_fraction`,
+			` | table full,millis,midnight,twelve,twelve_lower,twelve_mixed,offset,unpadded,literal_percent,optional_fraction`,
 	)
-	var full, millis, midnight, twelve, offset, unpadded, literalPercent float64
+	var full, millis, midnight, twelve, twelveLower, twelveMixed float64
+	var offset, unpadded, literalPercent float64
 	var optionalFraction float64
 	if err := connection.QueryRow(
 		queryContext,
@@ -94,6 +97,8 @@ func testStrptimeAgainstClickHouse(
 		&millis,
 		&midnight,
 		&twelve,
+		&twelveLower,
+		&twelveMixed,
 		&offset,
 		&unpadded,
 		&literalPercent,
@@ -128,6 +133,18 @@ func testStrptimeAgainstClickHouse(
 		t,
 		"twelve",
 		twelve,
+		time.Date(2026, 7, 27, 19, 20, 21, 0, time.UTC),
+	)
+	assertStrptimeEpoch(
+		t,
+		"twelve lowercase",
+		twelveLower,
+		time.Date(2026, 7, 27, 19, 20, 21, 0, time.UTC),
+	)
+	assertStrptimeEpoch(
+		t,
+		"twelve mixed case",
+		twelveMixed,
 		time.Date(2026, 7, 27, 19, 20, 21, 0, time.UTC),
 	)
 	assertStrptimeEpoch(

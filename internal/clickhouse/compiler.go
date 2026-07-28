@@ -4314,13 +4314,14 @@ func compileStrptimeScalar(
 		state.context.searchTimezone,
 	}
 	if patterns.fallbackJoda != "" {
-		parserSQL = "arrayElement(arrayMap(primary -> if(isNotNull(primary), " +
-			"primary, parseDateTime64InJodaSyntaxOrNull(value, ?, ?)), [" +
-			parserSQL + "]), 1)"
+		parserSQL = "if(notEmpty(arrayElement(groups, " +
+			strconv.Itoa(patterns.optionalFractionGroup) + ")), " +
+			parserSQL +
+			", parseDateTime64InJodaSyntaxOrNull(value, ?, ?))"
 		parserArgs = []any{
-			patterns.fallbackJoda,
-			state.context.searchTimezone,
 			patterns.primaryJoda,
+			state.context.searchTimezone,
+			patterns.fallbackJoda,
 			state.context.searchTimezone,
 		}
 	}
@@ -4397,12 +4398,13 @@ func compileStrptimeFormatForBackend(
 }
 
 type compiledStrptimePatterns struct {
-	primaryJoda  string
-	fallbackJoda string
-	civilRegex   string
-	yearGroup    int
-	monthGroup   int
-	dayGroup     int
+	primaryJoda           string
+	fallbackJoda          string
+	civilRegex            string
+	yearGroup             int
+	monthGroup            int
+	dayGroup              int
+	optionalFractionGroup int
 }
 
 func compileStrptimePatterns(
@@ -4462,7 +4464,7 @@ func compileStrptimePatterns(
 			spltimeformat.DirectiveSecond:
 			pattern.WriteString(`[0-9]{1,2}`)
 		case spltimeformat.DirectiveAMPM:
-			pattern.WriteString(`(?:AM|PM)`)
+			pattern.WriteString(`(?:[Aa][Mm]|[Pp][Mm])`)
 		case spltimeformat.DirectiveTime24:
 			pattern.WriteString(
 				`[0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}`,
@@ -4470,10 +4472,15 @@ func compileStrptimePatterns(
 		case spltimeformat.DirectiveTimezoneOffset:
 			pattern.WriteString(`[+-][0-9]{4}`)
 		case spltimeformat.DirectiveSubseconds:
+			isOptional := optionalFraction && index == len(parts)-1
+			if isOptional {
+				groupCount++
+				compiled.optionalFractionGroup = groupCount
+			}
 			appendStrptimeFractionPattern(
 				&pattern,
 				part.Width,
-				optionalFraction && index == len(parts)-1,
+				isOptional,
 			)
 		case spltimeformat.DirectiveMicroseconds:
 			appendStrptimeFractionPattern(
@@ -4518,7 +4525,7 @@ func appendStrptimeFractionPattern(
 	optional bool,
 ) {
 	if optional {
-		pattern.WriteString(`(?:\.`)
+		pattern.WriteString(`(\.`)
 	}
 	pattern.WriteString(`[0-9]{1,`)
 	pattern.WriteString(strconv.Itoa(int(width)))

@@ -27,6 +27,7 @@ func TestCompileStrptimeUsesBoundedParameterizedJodaParserAndPinnedTimezone(t *t
 		"extractGroups(ifNull(value, CAST('' AS String)), ?)",
 		"19710101",
 		"22991231",
+		"if(notEmpty(arrayElement(groups, 4)), parseDateTime64InJodaSyntaxOrNull(",
 		"arrayMap(",
 		`AS "epoch"`,
 	} {
@@ -39,6 +40,7 @@ func TestCompileStrptimeUsesBoundedParameterizedJodaParserAndPinnedTimezone(t *t
 		"timezone()",
 		"serverTimeZone",
 		"31536000000000",
+		"arrayMap(primary ->",
 	} {
 		if strings.Contains(compiled.SQL, forbidden) {
 			t.Fatalf("strptime SQL contains unpinned parser behavior %q:\n%s", forbidden, compiled.SQL)
@@ -50,11 +52,11 @@ func TestCompileStrptimeUsesBoundedParameterizedJodaParserAndPinnedTimezone(t *t
 		t.Fatalf("strptime parser arguments = %#v", compiled.Args)
 	}
 	wantPrefix := []any{
-		"yyyy-MM-dd HH:mm:ss",
-		scope.SearchTimezone,
 		"yyyy-MM-dd HH:mm:ss.SSSSSS",
 		scope.SearchTimezone,
-		`^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2}) [0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}(?:\.[0-9]{1,6})?$`,
+		"yyyy-MM-dd HH:mm:ss",
+		scope.SearchTimezone,
+		`^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2}) [0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}(\.[0-9]{1,6})?$`,
 	}
 	for index, want := range wantPrefix {
 		if index >= len(compiled.Args) {
@@ -87,6 +89,21 @@ func TestCompileStrptimeUsesOneParserWithoutOptionalFractionFallback(t *testing.
 	}
 	if countArgument(compiled.Args, "yyyy-MM-dd HH:mm:ss") != 1 {
 		t.Fatalf("ordinary strptime parser arguments = %#v", compiled.Args)
+	}
+}
+
+func TestCompileStrptimeAllowsCaseInsensitiveMeridiem(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | eval epoch=strptime(source, "%F %I:%M:%S %p") | table epoch`,
+	)
+	if countArgument(
+		compiled.Args,
+		`^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2}) [0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2} (?:[Aa][Mm]|[Pp][Mm])$`,
+	) != 1 {
+		t.Fatalf("case-insensitive meridiem guard args = %#v", compiled.Args)
 	}
 }
 
