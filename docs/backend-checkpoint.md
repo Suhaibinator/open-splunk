@@ -7,7 +7,137 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded SPL1 period concatenation
+## Latest checkpoint: bounded side-effect-free SPL validation
+
+Date: 2026-07-27
+
+Search-validation, ClickHouse-regression, and adversarial-hardening checkpoint
+(committed and pushed):
+`1919e2b`
+
+This test-first slice implements
+`POST /api/v1/search/validate` without creating a search job:
+
+1. The exact POST-only protobuf route accepts `ValidateSearchRequest` and
+   returns `ValidateSearchResponse`. It shares search-definition resolution
+   with creation: SPL must be nonblank and NUL-free, earliest/latest must
+   resolve to a valid half-open time range, and the requested indexes must
+   normalize to active, search-enabled catalog indexes. Search presentation
+   metadata remains unsupported.
+2. The handler passes the exact detached tenant, normalized authorized scope,
+   requested scope, and resolved range to the manager. The manager shares
+   asynchronous-job parsing, logical planning, authorization, and ClickHouse
+   compilation helpers, including one immutable clock anchor for `now()` and
+   other time-dependent planning. Validation uses a local zero visibility
+   cutoff only to compile the same scoped plan; it never asks storage for a
+   visibility snapshot.
+3. A valid HTTP 200 response includes trimmed normalized SPL, sorted unique
+   effective indexes, sorted unique logical read fields, and the predicted
+   Events, Statistics, or Time Series result kind. Read fields are derived
+   from the accepted logical plan rather than final result columns: write-only
+   eval, rename, and aggregate outputs are omitted unless a later operator
+   reads them.
+4. SPL parse, planning, compiler, and in-query index-scope failures are
+   successful HTTP 200 validation results with `valid = false` and an error
+   diagnostic. Invalid results expose no normalized SPL, indexes, fields, or
+   result kind. Definition, time, requested-scope authorization, request-size,
+   deadline, capacity, service, and internal failures remain non-2xx transport
+   errors with sensitive details removed.
+5. Parse, planning, and compiler diagnostics retain exact half-open source
+   ranges into the original UTF-8 SPL. Byte offsets are zero-based; lines and
+   Unicode-scalar columns are one-based. The new shared, fail-closed
+   diagnostic projection carries both start and end coordinates consistently
+   through validation HTTP, retained search history/jobs, and WebSocket
+   projection.
+6. Validation creates no ID or job, admits nothing to the job queue, retains
+   no manager metadata, writes no journal/history record, takes no storage
+   snapshot, executes no SQL, and exposes neither generated SQL nor compiler
+   arguments. SQL is constructed only transiently by compilation to prove
+   that the accepted SPL is executable by the pinned backend.
+7. Request, scope, parser token/depth, plan analysis, and compiler work bounds
+   remain authoritative. Logical read analysis independently fails closed on
+   typed nil, unknown or malformed nodes, empty fields, excess depth, and
+   excess nodes. Synchronous validations have a separate `MaxConcurrent`
+   gate, fail fast instead of queuing when full, honor caller and manager
+   cancellation, and participate in shutdown ownership without leaking an
+   operation or gate slot.
+8. Result-shape classification is now one source-ordered SPL helper shared by
+   validation and HTTP/WebSocket projection. This prevents a later
+   transformation such as `timechart | table` from being classified
+   differently by the validation response and executed result transport.
+   Scope slices are copied only after admission, and safe response metadata is
+   detached before publication.
+9. The required pinned query-executor gate exposed a pre-existing binary
+   `_raw` aggregate regression introduced by Unicode text eligibility:
+   chronological `earliest`/`latest` and scalar String `min`/`max` had reused
+   the text-only input needed by `values`/`list`, turning selected binary bytes
+   into null. The compiler now uses byte-preserving scalar/candidate aliases
+   for chronological and extrema aggregates and a distinct UTF-8-eligible
+   alias for `values`/`list`, including when both classes occur in one `stats`
+   command. Chronological and extrema results again publish `Bytes`;
+   binary-only `values`/`list` remains empty/logically absent as required by
+   the published text-aggregate contract.
+
+Validation completed on the exact pushed tree:
+
+```sh
+go test ./... -count=1
+go test -race \
+  ./internal/clickhouse ./internal/queryexec ./internal/spl ./internal/plan \
+  ./internal/searchjobproto ./internal/searchjobs ./internal/searchhistory \
+  ./internal/searchws ./internal/server -count=1
+golangci-lint run --timeout=5m
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/queryexec \
+    -run '^TestExecutorAndManagerAgainstClickHouse/(stats_earliest_and_latest_preserve_binary_raw_through_manager|stats_values_retains_typed_multivalue_transport)$' \
+    -count=1 -timeout=5m -v
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/queryexec \
+    -run '^TestExecutorAndManagerAgainstClickHouse$' -count=1 -timeout=5m
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=5m
+git diff --check
+```
+
+The ordinary suite passed in 22.36 seconds, the targeted race suite in
+19.42 seconds, and repository-wide Go lint reported zero issues. The targeted
+binary aggregate regression passed in 7.545 seconds; the full pinned
+ClickHouse `26.3.17.4` query-executor and Store suites passed in 13.138 and
+53.521 seconds respectively.
+
+Two independent adversarial reviewers audited correctness and efficiency.
+Their findings were applied before the final gates: make the shutdown
+concurrency fixture deadline-bounded and fail-safe, share fail-closed
+diagnostic range validation/projection, avoid premature input cloning, and
+separate binary-preserving extrema/chronological inputs from text-only
+multivalue inputs. Reuse, quality, and efficiency simplify passes found and
+applied the shared result classifier and analysis/projection consolidation.
+No review blocker remains on `1919e2b`.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` are at `1919e2b`, following the
+   concatenation implementation/publication commits `875ddad`, `bc80006`, and
+   `0b3f073`.
+2. Add bounded `/search/suggestions` support and index/time-scoped field
+   completion on top of the shared validation/admission contract; static
+   browser completions are not the Phase 2 field-autocomplete service.
+3. Resolve the connected time-picker mismatch: Today, Yesterday, and All-time
+   currently publish `@d`, `-1d@d`, and `0`, while `internal/searchtime`
+   admits only RFC3339, `now`, and bounded negative offsets. Define and
+   implement the missing backend semantics or stop publishing invalid forms.
+4. Complete administrator-only generated-SQL/ClickHouse-`EXPLAIN` inspection
+   and schema, ordering-key, text-index, and materialized-field tuning against
+   the real query and load corpus. Do not expose plans or sensitive bound
+   values to ordinary users.
+5. Keep the new mixed binary-aggregate regressions whenever changing
+   chronological, extrema, `values`, or `list` lowering.
+6. Keep `eventstats` behind the stable aggregate library. Finish Phase 2 before
+   proceeding through the plan's Phase 3/4 index administration, RBAC, HEC,
+   alerts, scheduled-search, and packaging work.
+
+## Previous checkpoint: bounded SPL1 period concatenation
 
 Date: 2026-07-27
 
@@ -6144,9 +6274,11 @@ independent stacks.
    `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and `f9985a1`; percentile
    parser/planner support is committed at `efe4199`, with implementation and
    CI lint repair commits recorded at the top of this file. The bounded
-   `relative_time` execution checkpoint is complete at `2a1245c`. If SPL
-   surface completion remains the priority, implement bounded eval
-   concatenation next; broader `count` syntax remains a separate aggregate
+   `relative_time` execution checkpoint is complete at `2a1245c`; bounded SPL1
+   concatenation is complete through `875ddad`, `bc80006`, and `0b3f073`; and
+   side-effect-free search validation is complete at `1919e2b`. If Phase 2
+   remains the priority, implement bounded `/search/suggestions` and scoped
+   field completion next; broader `count` syntax remains a separate aggregate
    contract. The current preview-to-final resource-release audit pass is
    complete at `961cba2`, the sanitized current GradeThis collector/config
    migration at `c576e85`, logical event retention at `458c8b4`, clock-driven
@@ -6291,15 +6423,14 @@ PostCSS/Sharp chain. npm's offered force-fix would install the breaking
 `next@9.3.3` downgrade; do not apply it blindly. Re-evaluate a safe Next.js,
 PostCSS, or Sharp upgrade/override with the complete frontend and browser gates.
 
-### 2. Finish the initial SPL surface, then continue aggregate correctness
+### 2. Finish Phase 2 search assistance, then continue aggregate correctness
 
-The architecture plan's initial eval-function list is now complete except for
-concatenation. If SPL completion is the selected priority, research that
-operator as its own bounded semantic slice before second-tier aggregates:
-pin its grammar, String and numeric coercion, null and missing behavior,
-Dynamic and multivalue handling, UTF-8/output bounds, composition, and
-ClickHouse portability. Do not infer concatenation semantics from
-`tostring` or from backend `concat` defaults.
+The architecture plan's initial eval-function list, including bounded SPL1
+period concatenation, is complete. Side-effect-free `/search/validate` is also
+complete. Keep the remaining Phase 2 order: add bounded
+`/search/suggestions` with index/time-scoped field completion, then resolve
+the connected time-picker expressions described at the latest checkpoint
+before expanding second-tier aggregates.
 
 The scalar-String extrema optimization, bounded ordered `list(field)`, and
 bounded chronological `earliest(field)` / `latest(field)` are complete.
@@ -6479,9 +6610,10 @@ Do not guess those decisions if they materially affect the implementation.
    `like`, `now`, `strftime`, `strptime`, and `relative_time` slices are
    complete. The current `relative_time` validation, plan, semantic-hardening,
    and execution checkpoints are `6e18333`, `421ba4d`, `72b7936`, and
-   `2a1245c`. Bounded eval concatenation is the remaining initial eval surface
-   in the architecture plan; implement it next if the user keeps SPL
-   completion as the priority.
+   `2a1245c`. Bounded SPL1 period concatenation is complete through `875ddad`,
+   `bc80006`, and `0b3f073`, and side-effect-free search validation is
+   complete at `1919e2b`. Implement bounded `/search/suggestions` and scoped
+   field completion next if the user keeps Phase 2 as the priority.
    The
    generator foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config

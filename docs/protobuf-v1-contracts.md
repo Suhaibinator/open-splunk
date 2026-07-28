@@ -69,6 +69,50 @@ Every route below is `POST`, relative to `/api/v1`, and uses `application/x-prot
 | `/ingestion-tokens/update` | `UpdateIngestionTokenRequest` | `UpdateIngestionTokenResponse` |
 | `/ingestion-tokens/revoke` | `RevokeIngestionTokenRequest` | `RevokeIngestionTokenResponse` |
 
+### Search validation
+
+`POST /api/v1/search/validate` accepts the same bounded `SearchDefinition`
+intent used to create an ad-hoc search. The server requires nonblank,
+NUL-free SPL, an explicit resolvable time range, and at least one normalized
+active, search-enabled index which the caller may search. Search presentation
+fields are not validation inputs. The server resolves relative times once and
+passes the exact detached tenant, authorized index set, requested index set,
+and half-open absolute time range through the same parse, plan, authorization,
+and ClickHouse compilation path used by search-job creation.
+
+A successfully compiled search returns HTTP 200 with `valid = true`, trimmed
+`normalized_spl`, sorted unique effective `referenced_indexes`, sorted unique
+logical read `referenced_fields`, and a non-unspecified
+`predicted_result_kind`. Referenced fields describe inputs read by the logical
+pipeline, not merely final result columns.
+
+An SPL parse, planning, compiler, or in-query index-scope rejection also
+returns HTTP 200, but with `valid = false` and one or more error
+`diagnostics`. An invalid response contains no normalized SPL, referenced
+indexes, referenced fields, or predicted result kind, so a rejected partial
+plan cannot be mistaken for accepted analysis. Diagnostic ranges are exact
+half-open ranges into the original UTF-8 SPL: byte offsets are zero-based,
+while lines and Unicode-scalar columns are one-based. The shared diagnostic
+projection keeps validation, retained-job/history, and WebSocket coordinates
+identical.
+
+Malformed protobuf or search definitions, invalid or unauthorized requested
+index scopes, unresolvable time ranges, oversized requests, deadlines,
+capacity exhaustion, unavailable dependencies, and internal failures are
+transport failures rather than SPL diagnostics. They use the standard
+non-2xx SRouter/go-common error response and do not expose compiler SQL,
+arguments, catalog details, or other internal error text.
+
+Validation is synchronous, cancellation-aware, and independently bounded by
+the search manager's validation concurrency gate; a full gate fails fast
+instead of queuing. Existing request-byte, SPL-token, scope-count,
+expression-depth, logical-analysis node/depth, and compiler-work limits still
+apply. Validation creates no ID or search job, changes no queue or retained
+metadata, writes no history or journal record, takes no storage visibility
+snapshot, and executes no ClickHouse query. Compilation may construct
+generated SQL transiently to prove backend support, but neither SQL nor bound
+arguments are retained, exposed, or submitted to ClickHouse.
+
 The export download route is a raw `GET` file response rather than protobuf. Its short-lived path and bearer capability are returned only in `ExportDownloadGrant`; the token is sent in the `Authorization` header and never placed in a query string.
 
 The `client_request_id` fields reserve the wire contract for future durable retry handling. The current server does not support them for search jobs, exports, saved searches, indexes, or ingestion tokens: supplying the field, including an explicitly empty value, fails request validation. App administration is not implemented yet. Create requests without the field are not deduplicated, and the server does not currently advertise an idempotency-retention window. When support is added, a key will be scoped to the authenticated caller and operation, and reuse for a different canonical request will be a conflict.
