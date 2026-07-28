@@ -111,6 +111,219 @@ func TestParseExplainPlanProjectsBoundedPhysicalEvidence(t *testing.T) {
 	}
 }
 
+func TestParseExplainPlanOmitsLiteralBearingHeaderAndKeyMetadata(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const private = "private-search-literal"
+	const identifierShapedPrivate = "private_search_literal_7f2c"
+	result := ExplainResult{
+		Text: `[{"Plan":{"Node Type":"` + identifierShapedPrivate + `","Plans":[{` +
+			`"Node Type":"ReadFromMergeTree","Header":[` +
+			`{"Name":"event_time","Type":"DateTime64(9, 'UTC')"},` +
+			`{"Name":"_part_offset","Type":"UInt64"},` +
+			`{"Name":"equals(tenant_id, '` + private + `')","Type":"UInt8"},` +
+			`{"Name":"` + identifierShapedPrivate + `","Type":"String"},` +
+			`{"Name":"fields.` + identifierShapedPrivate + `","Type":"String"}],"Indexes":[{` +
+			`"Type":"PrimaryKey","Keys":["tenant_id",` +
+			`"equals(trace_id, '` + private + `')","` + private + `"],` +
+			`"Initial Parts":2,"Selected Parts":1,` +
+			`"Initial Granules":2,"Selected Granules":1},{` +
+			`"Type":"` + identifierShapedPrivate + `",` +
+			`"Name":"` + identifierShapedPrivate + `",` +
+			`"Keys":["` + identifierShapedPrivate + `"],` +
+			`"Initial Parts":1,"Selected Parts":1,` +
+			`"Initial Granules":1,"Selected Granules":1}]}]}}]`,
+		QueryID: "open-splunk-explain-literal-bearing-metadata",
+	}
+	got, err := ParseExplainPlan(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ExplainPlan{
+		NodeTypes: []string{"ReadFromMergeTree"},
+		Reads: []ExplainRead{{
+			Columns: []string{"event_time", "_part_offset"},
+			Indexes: []ExplainIndex{{
+				Type:             "PrimaryKey",
+				Keys:             []string{"tenant_id"},
+				InitialParts:     2,
+				SelectedParts:    1,
+				InitialGranules:  2,
+				SelectedGranules: 1,
+			}},
+		}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ParseExplainPlan() = %#v, want %#v", got, want)
+	}
+	rendered := fmt.Sprintf("%#v", got)
+	if strings.Contains(rendered, private) ||
+		strings.Contains(rendered, identifierShapedPrivate) {
+		t.Fatalf(
+			"safe physical projection retained query metadata: %#v",
+			got,
+		)
+	}
+}
+
+func TestParseExplainPlanProjectsOnlyKnownIndexMetadata(t *testing.T) {
+	t.Parallel()
+
+	index := func(
+		indexType string,
+		name string,
+		keys []string,
+	) rawExplainIndex {
+		initialParts := uint64(5)
+		selectedParts := uint64(3)
+		initialGranules := uint64(5)
+		selectedGranules := uint64(3)
+		return rawExplainIndex{
+			Type:             indexType,
+			Name:             name,
+			Keys:             keys,
+			InitialParts:     &initialParts,
+			SelectedParts:    &selectedParts,
+			InitialGranules:  &initialGranules,
+			SelectedGranules: &selectedGranules,
+		}
+	}
+	tests := []struct {
+		name string
+		raw  rawExplainIndex
+		want ExplainIndex
+		safe bool
+	}{
+		{
+			name: "MinMax",
+			raw: index(
+				"MinMax",
+				"ignored_known_name",
+				[]string{"event_time", "tenant_id"},
+			),
+			want: ExplainIndex{
+				Type:             "MinMax",
+				Keys:             []string{"event_time"},
+				InitialParts:     5,
+				SelectedParts:    3,
+				InitialGranules:  5,
+				SelectedGranules: 3,
+			},
+			safe: true,
+		},
+		{
+			name: "Partition",
+			raw: index(
+				"Partition",
+				"",
+				[]string{"toYYYYMM(event_time)", "event_time"},
+			),
+			want: ExplainIndex{
+				Type:             "Partition",
+				Keys:             []string{"toYYYYMM(event_time)"},
+				InitialParts:     5,
+				SelectedParts:    3,
+				InitialGranules:  5,
+				SelectedGranules: 3,
+			},
+			safe: true,
+		},
+		{
+			name: "PrimaryKey",
+			raw: index(
+				"PrimaryKey",
+				"",
+				[]string{
+					"tenant_id",
+					"index_name",
+					"toStartOfHour(event_time)",
+					"event_time",
+					"raw",
+				},
+			),
+			want: ExplainIndex{
+				Type: "PrimaryKey",
+				Keys: []string{
+					"tenant_id",
+					"index_name",
+					"toStartOfHour(event_time)",
+					"event_time",
+				},
+				InitialParts:     5,
+				SelectedParts:    3,
+				InitialGranules:  5,
+				SelectedGranules: 3,
+			},
+			safe: true,
+		},
+		{
+			name: "known Skip",
+			raw: index(
+				"Skip",
+				"idx_raw_text",
+				[]string{"lowerUTF8(raw)", "raw"},
+			),
+			want: ExplainIndex{
+				Type:             "Skip",
+				Name:             "idx_raw_text",
+				Keys:             []string{"lowerUTF8(raw)"},
+				InitialParts:     5,
+				SelectedParts:    3,
+				InitialGranules:  5,
+				SelectedGranules: 3,
+			},
+			safe: true,
+		},
+		{
+			name: "unknown Skip name",
+			raw: index(
+				"Skip",
+				"private_index_7f2c",
+				[]string{"visibility_seq"},
+			),
+			want: ExplainIndex{
+				Type:             "Skip",
+				Keys:             []string{},
+				InitialParts:     5,
+				SelectedParts:    3,
+				InitialGranules:  5,
+				SelectedGranules: 3,
+			},
+			safe: true,
+		},
+		{
+			name: "unknown type",
+			raw: index(
+				"private_index_type_7f2c",
+				"idx_visibility_seq",
+				[]string{"visibility_seq"},
+			),
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, safe, err := projectExplainIndex(test.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if safe != test.safe || !reflect.DeepEqual(got, test.want) {
+				t.Fatalf(
+					"projectExplainIndex() = (%#v, %v), want (%#v, %v)",
+					got,
+					safe,
+					test.want,
+					test.safe,
+				)
+			}
+		})
+	}
+}
+
 func TestParseExplainPlanAcceptsPlansWithoutPhysicalIndexEvidence(
 	t *testing.T,
 ) {
@@ -121,6 +334,7 @@ func TestParseExplainPlanAcceptsPlansWithoutPhysicalIndexEvidence(
 		text      string
 		nodeType  string
 		readCount int
+		columns   int
 	}{
 		{
 			name:      "empty MergeTree becomes ReadNothing",
@@ -131,14 +345,23 @@ func TestParseExplainPlanAcceptsPlansWithoutPhysicalIndexEvidence(
 		{
 			name: "MergeTree read can omit Indexes",
 			text: `[{"Plan":{"Node Type":"ReadFromMergeTree",` +
-				`"Header":[{"Name":"x","Type":"UInt8"}]}}]`,
+				`"Header":[{"Name":"event_time","Type":"UInt8"}]}}]`,
 			nodeType:  "ReadFromMergeTree",
 			readCount: 1,
+			columns:   1,
 		},
 		{
 			name: "MergeTree read can report empty Indexes",
 			text: `[{"Plan":{"Node Type":"ReadFromMergeTree",` +
-				`"Header":[{"Name":"x","Type":"UInt8"}],"Indexes":[]}}]`,
+				`"Header":[{"Name":"event_time","Type":"UInt8"}],"Indexes":[]}}]`,
+			nodeType:  "ReadFromMergeTree",
+			readCount: 1,
+			columns:   1,
+		},
+		{
+			name: "literal-safe projection can omit every header name",
+			text: `[{"Plan":{"Node Type":"ReadFromMergeTree",` +
+				`"Header":[{"Name":"private_literal","Type":"UInt8"}]}}]`,
 			nodeType:  "ReadFromMergeTree",
 			readCount: 1,
 		},
@@ -160,7 +383,7 @@ func TestParseExplainPlanAcceptsPlansWithoutPhysicalIndexEvidence(
 				t.Fatalf("ParseExplainPlan() = %#v", got)
 			}
 			if test.readCount != 0 &&
-				(len(got.Reads[0].Columns) != 1 ||
+				(len(got.Reads[0].Columns) != test.columns ||
 					len(got.Reads[0].Indexes) != 0) {
 				t.Fatalf("indexless MergeTree read = %#v", got.Reads[0])
 			}

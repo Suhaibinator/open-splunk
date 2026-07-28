@@ -99,7 +99,13 @@ func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 	if result.GeneratedSQL != compiled.SQL ||
 		result.ExplainText != explainer.result.Text ||
 		result.DiagnosticQueryID != explainer.result.QueryID {
-		t.Fatalf("result diagnostics = %#v", result)
+		t.Fatal("inspection result did not preserve compiler and Explainer diagnostics")
+	}
+	if !strings.Contains(
+		result.ExplainText,
+		"sensitive-literal-7f2c",
+	) {
+		t.Fatal("raw EXPLAIN fixture did not exercise literal-bearing metadata")
 	}
 	if !slices.Equal(
 		result.PhysicalPlan.NodeTypes,
@@ -123,7 +129,12 @@ func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 		}
 	}
 
-	rendered := fmt.Sprintf("%#v", result)
+	rendered := fmt.Sprintf(
+		"%#v %#v %s",
+		result.Plan,
+		result.PhysicalPlan,
+		result.GeneratedSQL,
+	)
 	for _, secret := range []string{
 		snapshot.TenantID,
 		snapshot.OwnerID,
@@ -1160,12 +1171,21 @@ func inspectionExplainResult(queryID string) queryexec.ExplainResult {
         {
           "Node Type": "ReadFromMergeTree",
           "Header": [
-            {"Name": "event_time", "Type": "DateTime64(9, 'UTC')"}
+            {"Name": "event_time", "Type": "DateTime64(9, 'UTC')"},
+            {
+              "Name": "equals(tenant_id, 'sensitive-literal-7f2c')",
+              "Type": "UInt8"
+            },
+            {"Name": "sensitive_literal_7f2c", "Type": "String"}
           ],
           "Indexes": [
             {
               "Type": "PrimaryKey",
-              "Keys": ["event_time"],
+              "Keys": [
+                "event_time",
+                "equals(trace_id, 'sensitive-literal-7f2c')",
+                "sensitive_literal_7f2c"
+              ],
               "Initial Parts": 2,
               "Selected Parts": 1,
               "Initial Granules": 4,

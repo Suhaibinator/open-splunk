@@ -3,6 +3,7 @@ package searchinspection
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,9 +142,9 @@ func TestServiceAgainstClickHouse(t *testing.T) {
 		)
 	}
 	// Generated SQL remains parameterized. EXPLAIN text is intentionally not
-	// checked here because ClickHouse may render bound values into its plan;
+	// treated as safe because ClickHouse may render bound values into its plan;
 	// that is why this service remains behind an internal administrator-only
-	// boundary.
+	// boundary. The derived physical projection must still be literal-free.
 	rendered := result.GeneratedSQL
 	for _, secret := range []string{
 		snapshot.TenantID,
@@ -153,6 +154,19 @@ func TestServiceAgainstClickHouse(t *testing.T) {
 	} {
 		if strings.Contains(rendered, secret) {
 			t.Fatalf("inspection diagnostics leaked %q", secret)
+		}
+	}
+	physicalRendered := fmt.Sprintf("%#v", result.PhysicalPlan)
+	for _, secret := range []string{
+		snapshot.TenantID,
+		snapshot.OwnerID,
+		snapshot.EffectiveIndexes[0],
+		"sensitive-literal-7f2c",
+	} {
+		if strings.Contains(physicalRendered, secret) {
+			t.Fatalf(
+				"safe physical projection leaked query metadata",
+			)
 		}
 	}
 }

@@ -23,22 +23,26 @@ const (
 
 // ExplainPlan is the safe, detached structural projection of one fixed
 // ClickHouse PLAN. Conditions, descriptions, node IDs, column types, query
-// arguments, and other literal-bearing fields are deliberately omitted.
+// arguments, rendered expressions, and other literal-bearing fields are
+// deliberately omitted.
 type ExplainPlan struct {
 	NodeTypes []string
 	Reads     []ExplainRead
 }
 
 // ExplainRead describes one physical MergeTree read after ClickHouse plan
-// optimization. Columns are the physical read header, not the public result
-// schema.
+// optimization. Columns contains only canonical event-storage or fixed
+// MergeTree virtual columns that ClickHouse emitted as direct header names.
+// Rendered header expressions are never published.
 type ExplainRead struct {
 	Columns []string
 	Indexes []ExplainIndex
 }
 
 // ExplainIndex contains only bounded index-selection counters and safe schema
-// names. Selected counts must not exceed their corresponding initial counts.
+// names. Keys is the allowlisted subset of storage columns and fixed schema
+// expressions; query-derived rendered expressions are never published.
+// Selected counts must not exceed their corresponding initial counts.
 type ExplainIndex struct {
 	Type             string
 	Name             string
@@ -136,16 +140,17 @@ func parseExplainPlanText(
 		Reads:     make([]ExplainRead, 0, 1),
 	}
 	stack := []*rawExplainNode{envelopes[0].Plan}
-	var headerCount, indexCount uint64
+	var nodeCount, headerCount, indexCount uint64
 	for len(stack) > 0 {
 		if err := ctx.Err(); err != nil {
 			return ExplainPlan{}, err
 		}
-		if len(projected.NodeTypes) >= maximumExplainPlanNodes {
+		if nodeCount >= maximumExplainPlanNodes {
 			return ExplainPlan{}, explainLimit(
 				"structured plan exceeded the node limit",
 			)
 		}
+		nodeCount++
 		node := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if !validExplainMetadata(
@@ -154,10 +159,12 @@ func parseExplainPlanText(
 		) || len(node.Actions) != 0 {
 			return ExplainPlan{}, malformedExplainPlan()
 		}
-		projected.NodeTypes = append(
-			projected.NodeTypes,
-			strings.Clone(node.NodeType),
-		)
+		if nodeType, safe := projectExplainNodeType(node.NodeType); safe {
+			projected.NodeTypes = append(
+				projected.NodeTypes,
+				nodeType,
+			)
+		}
 
 		if len(node.Plans) > maximumExplainPlanChildren {
 			return ExplainPlan{}, explainLimit(
@@ -230,8 +237,8 @@ func decodeExplainRead(
 			"structured plan exceeded the header limit",
 		)
 	}
-	columns := make([]string, len(headers))
-	for index, header := range headers {
+	columns := make([]string, 0, len(headers))
+	for _, header := range headers {
 		if err := ctx.Err(); err != nil {
 			return ExplainRead{}, 0, 0, err
 		}
@@ -244,9 +251,10 @@ func decodeExplainRead(
 		) {
 			return ExplainRead{}, 0, 0, malformedExplainPlan()
 		}
-		columns[index] = strings.Clone(header.Name)
+		if safeExplainPhysicalColumn(header.Name) {
+			columns = append(columns, strings.Clone(header.Name))
+		}
 	}
-
 	var rawIndexValues []rawExplainIndex
 	if len(rawIndexes) != 0 {
 		if bytes.Equal(bytes.TrimSpace(rawIndexes), []byte("null")) {
@@ -267,27 +275,31 @@ func decodeExplainRead(
 			"structured plan exceeded the index limit",
 		)
 	}
-	indexes := make([]ExplainIndex, len(rawIndexValues))
-	for index, rawIndex := range rawIndexValues {
+	indexes := make([]ExplainIndex, 0, len(rawIndexValues))
+	for _, rawIndex := range rawIndexValues {
 		if err := ctx.Err(); err != nil {
 			return ExplainRead{}, 0, 0, err
 		}
-		projected, err := projectExplainIndex(rawIndex)
+		projected, safe, err := projectExplainIndex(rawIndex)
 		if err != nil {
 			return ExplainRead{}, 0, 0, err
 		}
-		indexes[index] = projected
+		if safe {
+			indexes = append(indexes, projected)
+		}
 	}
 	return ExplainRead{
 			Columns: columns,
 			Indexes: indexes,
 		},
-		uint64(len(columns)),
-		uint64(len(indexes)),
+		uint64(len(headers)),
+		uint64(len(rawIndexValues)),
 		nil
 }
 
-func projectExplainIndex(raw rawExplainIndex) (ExplainIndex, error) {
+func projectExplainIndex(
+	raw rawExplainIndex,
+) (ExplainIndex, bool, error) {
 	if !validExplainMetadata(raw.Type, maximumExplainPlanMetadataLen) ||
 		(raw.Name != "" &&
 			!validExplainMetadata(raw.Name, maximumExplainPlanMetadataLen)) ||
@@ -298,24 +310,162 @@ func projectExplainIndex(raw rawExplainIndex) (ExplainIndex, error) {
 		raw.SelectedGranules == nil ||
 		*raw.SelectedParts > *raw.InitialParts ||
 		*raw.SelectedGranules > *raw.InitialGranules {
-		return ExplainIndex{}, malformedExplainPlan()
+		return ExplainIndex{}, false, malformedExplainPlan()
 	}
-	keys := make([]string, len(raw.Keys))
-	for index, key := range raw.Keys {
-		if !validExplainMetadata(key, maximumExplainPlanMetadataLen) {
-			return ExplainIndex{}, malformedExplainPlan()
+	indexType, safe := projectExplainIndexType(raw.Type)
+	if !safe {
+		for _, key := range raw.Keys {
+			if !validExplainMetadata(key, maximumExplainPlanMetadataLen) {
+				return ExplainIndex{}, false, malformedExplainPlan()
+			}
 		}
-		keys[index] = strings.Clone(key)
+		return ExplainIndex{}, false, nil
+	}
+	keys := make([]string, 0, len(raw.Keys))
+	for _, key := range raw.Keys {
+		if !validExplainMetadata(key, maximumExplainPlanMetadataLen) {
+			return ExplainIndex{}, false, malformedExplainPlan()
+		}
+		if safeExplainIndexKey(indexType, raw.Name, key) {
+			keys = append(keys, strings.Clone(key))
+		}
 	}
 	return ExplainIndex{
-		Type:             strings.Clone(raw.Type),
-		Name:             strings.Clone(raw.Name),
+		Type:             indexType,
+		Name:             projectExplainIndexName(indexType, raw.Name),
 		Keys:             keys,
 		InitialParts:     *raw.InitialParts,
 		SelectedParts:    *raw.SelectedParts,
 		InitialGranules:  *raw.InitialGranules,
 		SelectedGranules: *raw.SelectedGranules,
-	}, nil
+	}, true, nil
+}
+
+func projectExplainNodeType(value string) (string, bool) {
+	switch value {
+	case "Aggregating",
+		"CreatingSet",
+		"CreatingSets",
+		"Expression",
+		"Filter",
+		"Join",
+		"JoinLazyColumnsStep",
+		"LazilyReadFromMergeTree",
+		"Limit",
+		"MaterializingCTE",
+		"MaterializingCTEs",
+		"ReadFromMemoryStorage",
+		"ReadFromMergeTree",
+		"ReadFromSystemNumbers",
+		"ReadNothing",
+		"Sorting",
+		"Union",
+		"Window":
+		return strings.Clone(value), true
+	default:
+		return "", false
+	}
+}
+
+func projectExplainIndexType(value string) (string, bool) {
+	switch value {
+	case "MinMax", "Partition", "PrimaryKey", "Skip":
+		return strings.Clone(value), true
+	default:
+		return "", false
+	}
+}
+
+func projectExplainIndexName(indexType, value string) string {
+	if indexType != "Skip" {
+		return ""
+	}
+	switch value {
+	case "idx_event_id",
+		"idx_trace_id",
+		"idx_span_id",
+		"idx_field_names",
+		"idx_raw_text",
+		"idx_visibility_seq":
+		return value
+	default:
+		return ""
+	}
+}
+
+func safeExplainIndexKey(indexType, indexName, key string) bool {
+	switch indexType {
+	case "MinMax":
+		return key == "event_time"
+	case "Partition":
+		return key == "toYYYYMM(event_time)"
+	case "PrimaryKey":
+		switch key {
+		case "tenant_id",
+			"index_name",
+			"toStartOfHour(event_time)",
+			"event_time":
+			return true
+		default:
+			return false
+		}
+	case "Skip":
+		switch indexName {
+		case "idx_event_id":
+			return key == "event_id"
+		case "idx_trace_id":
+			return key == "ifNull(trace_id, '')"
+		case "idx_span_id":
+			return key == "ifNull(span_id, '')"
+		case "idx_field_names":
+			return key == "field_names"
+		case "idx_raw_text":
+			return key == "lowerUTF8(raw)"
+		case "idx_visibility_seq":
+			return key == "visibility_seq"
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+}
+
+func safeExplainPhysicalColumn(value string) bool {
+	switch value {
+	case "event_id",
+		"tenant_id",
+		"index_name",
+		"event_time",
+		"index_time",
+		"collected_at",
+		"event_time_source",
+		"host",
+		"source",
+		"sourcetype",
+		"service",
+		"severity",
+		"level",
+		"body",
+		"raw",
+		"raw_encoding",
+		"trace_id",
+		"span_id",
+		"fields",
+		"field_names",
+		"field_types",
+		"field_metadata_version",
+		"collector_id",
+		"batch_id",
+		"batch_sequence",
+		"visibility_seq",
+		"expires_at",
+		"_part_starting_offset",
+		"_part_offset":
+		return true
+	default:
+		return false
+	}
 }
 
 func validExplainMetadata(value string, maximumBytes int) bool {
