@@ -529,6 +529,7 @@ const (
 	ScalarFunctionStrftime
 	ScalarFunctionStrptime
 	ScalarFunctionRelativeTime
+	ScalarFunctionConcat
 	ScalarFunctionCount
 )
 

@@ -220,6 +220,16 @@ const (
 	// MaximumRoundPrecision is the largest non-negative decimal precision
 	// accepted by the pinned ClickHouse Float64 round implementation.
 	MaximumRoundPrecision = 18
+
+	// MaximumConcatenationOperands bounds one flattened period-concatenation
+	// expression. This is an Open Splunk resource limit, not a restriction
+	// imposed by SPL.
+	MaximumConcatenationOperands = 32
+
+	// MaximumConcatenationOperandsPerQuery bounds the aggregate number of
+	// operand occurrences across all period-concatenation expressions in one
+	// parsed query. Nested expressions are charged independently.
+	MaximumConcatenationOperandsPerQuery = 256
 )
 
 const (
@@ -244,6 +254,7 @@ const (
 	ScalarFunctionStrftime
 	ScalarFunctionStrptime
 	ScalarFunctionRelativeTime
+	ScalarFunctionConcat
 	ScalarFunctionCount
 )
 

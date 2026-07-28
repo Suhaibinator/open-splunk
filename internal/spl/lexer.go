@@ -24,6 +24,7 @@ const (
 	tokenLessEqual
 	tokenGreater
 	tokenGreaterEqual
+	tokenConcat
 )
 
 type token struct {
@@ -96,6 +97,12 @@ func (l *lexer) next() (token, error) {
 			return l.single(tokenGreaterEqual, ">=", start), nil
 		}
 		return l.single(tokenGreater, ">", start), nil
+	case '.':
+		if l.concatenationDotAt(l.offset) {
+			l.advanceASCII()
+			return l.single(tokenConcat, ".", start), nil
+		}
+		return l.scanWord(start)
 	case '"':
 		return l.scanString(start)
 	default:
@@ -155,6 +162,9 @@ func (l *lexer) scanWord(start Position) (token, error) {
 	startOffset := l.offset
 	for l.offset < len(l.source) {
 		b := l.source[l.offset]
+		if b == '.' && l.concatenationDotAt(l.offset) {
+			break
+		}
 		if isDelimiter(b) {
 			break
 		}
@@ -180,8 +190,77 @@ func (l *lexer) scanWord(start Position) (token, error) {
 	return token{kind: tokenWord, text: l.source[startOffset:l.offset], sourceRange: Range{Start: start, End: l.position()}}, nil
 }
 
+// concatenationDotAt recognizes only spellings that cannot change the
+// repository's existing contiguous dotted-field and decimal-token grammar.
+// SPL's canonical first_name." ".last_name spelling is unambiguous because
+// each operator neighbors a quoted literal (with optional Unicode space).
+// Bare field-to-field concatenation must use a fully separated dot:
+// left . right.
+func (l *lexer) concatenationDotAt(offset int) bool {
+	if offset < 0 || offset >= len(l.source) || l.source[offset] != '.' {
+		return false
+	}
+	if l.quoteBeforeIgnoringSpace(offset) {
+		return true
+	}
+	if l.quoteAfterIgnoringSpace(offset) {
+		return true
+	}
+	return l.dotBoundaryBefore(offset) && l.dotBoundaryAfter(offset)
+}
+
+func (l *lexer) quoteBeforeIgnoringSpace(offset int) bool {
+	for cursor := offset; cursor > 0; {
+		r, width := utf8.DecodeLastRuneInString(l.source[:cursor])
+		cursor -= width
+		if unicode.IsSpace(r) {
+			continue
+		}
+		return r == '"'
+	}
+	return false
+}
+
+func (l *lexer) quoteAfterIgnoringSpace(offset int) bool {
+	for cursor := offset + 1; cursor < len(l.source); {
+		r, width := utf8.DecodeRuneInString(l.source[cursor:])
+		cursor += width
+		if unicode.IsSpace(r) {
+			continue
+		}
+		return r == '"'
+	}
+	return false
+}
+
+func (l *lexer) dotBoundaryBefore(offset int) bool {
+	if offset == 0 {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(l.source[:offset])
+	if unicode.IsSpace(r) {
+		return true
+	}
+	return isDelimiterRune(r)
+}
+
+func (l *lexer) dotBoundaryAfter(offset int) bool {
+	if offset+1 >= len(l.source) {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(l.source[offset+1:])
+	if unicode.IsSpace(r) {
+		return true
+	}
+	return isDelimiterRune(r)
+}
+
 func isDelimiter(b byte) bool {
-	switch b {
+	return isDelimiterRune(rune(b))
+}
+
+func isDelimiterRune(r rune) bool {
+	switch r {
 	case '|', '(', ')', ',', '=', '!', '<', '>', '"':
 		return true
 	default:

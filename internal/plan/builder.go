@@ -137,6 +137,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 	canonicalTimeAvailable := true
 	extractionOutputCount := 0
 	spathEvaluationWorkUnits := 0
+	expressionBudget := splExpressionResourceBudget{}
 	for commandIndex, command := range query.Commands {
 		switch command := command.(type) {
 		case *spl.SearchCommand:
@@ -146,7 +147,10 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 			result.Operators = append(result.Operators, &Filter{Expression: expression, Range: command.Range})
 		case *spl.WhereCommand:
-			expression, convertErr := convertWhereExpression(command.Expression)
+			expression, convertErr := convertWhereExpression(
+				command.Expression,
+				&expressionBudget,
+			)
 			if convertErr != nil {
 				return nil, convertErr
 			}
@@ -156,6 +160,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			for _, assignment := range command.Assignments {
 				if complexityErr := validateSPLScalarExpressionComplexity(
 					assignment.Expression,
+					&expressionBudget,
 				); complexityErr != nil {
 					return nil, complexityErr
 				}
@@ -649,7 +654,10 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 							Range:   aggregate.Range,
 						}
 					}
-					predicate, predicateErr := convertWhereExpression(aggregate.Predicate)
+					predicate, predicateErr := convertWhereExpression(
+						aggregate.Predicate,
+						&expressionBudget,
+					)
 					if predicateErr != nil {
 						return nil, predicateErr
 					}
@@ -1454,8 +1462,14 @@ func convertExpression(expression spl.Expr) (Expression, error) {
 	}
 }
 
-func convertWhereExpression(expression spl.WhereExpr) (Expression, error) {
-	if err := validateSPLWhereExpressionComplexity(expression); err != nil {
+func convertWhereExpression(
+	expression spl.WhereExpr,
+	budget *splExpressionResourceBudget,
+) (Expression, error) {
+	if err := validateSPLWhereExpressionComplexity(
+		expression,
+		budget,
+	); err != nil {
 		return nil, err
 	}
 	return convertWhereExpressionUnchecked(expression)
@@ -1621,18 +1635,31 @@ func splQuotedStringLiteral(
 type splExpressionComplexityValidator struct {
 	nodes  int
 	active map[any]struct{}
+	budget *splExpressionResourceBudget
 }
 
-func validateSPLWhereExpressionComplexity(expression spl.WhereExpr) error {
+type splExpressionResourceBudget struct {
+	concatenationOperands int
+}
+
+func validateSPLWhereExpressionComplexity(
+	expression spl.WhereExpr,
+	budget *splExpressionResourceBudget,
+) error {
 	validator := splExpressionComplexityValidator{
 		active: make(map[any]struct{}),
+		budget: budget,
 	}
 	return validator.validateWhere(expression, 1)
 }
 
-func validateSPLScalarExpressionComplexity(expression spl.ScalarExpr) error {
+func validateSPLScalarExpressionComplexity(
+	expression spl.ScalarExpr,
+	budget *splExpressionResourceBudget,
+) error {
 	validator := splExpressionComplexityValidator{
 		active: make(map[any]struct{}),
+		budget: budget,
 	}
 	return validator.validateScalar(expression, 1)
 }
@@ -1692,6 +1719,30 @@ func (v *splExpressionComplexityValidator) validateScalar(
 				),
 				expression.Range,
 			)
+		}
+		if expression.Function == spl.ScalarFunctionConcat &&
+			len(expression.Arguments) > spl.MaximumConcatenationOperands {
+			return splExpressionComplexityError(
+				fmt.Sprintf(
+					"concatenation contains more than %d operands",
+					spl.MaximumConcatenationOperands,
+				),
+				expression.Range,
+			)
+		}
+		if expression.Function == spl.ScalarFunctionConcat &&
+			v.budget != nil {
+			if v.budget.concatenationOperands >
+				spl.MaximumConcatenationOperandsPerQuery-len(expression.Arguments) {
+				return splExpressionComplexityError(
+					fmt.Sprintf(
+						"concatenation contains more than %d operand occurrences per query",
+						spl.MaximumConcatenationOperandsPerQuery,
+					),
+					expression.Range,
+				)
+			}
+			v.budget.concatenationOperands += len(expression.Arguments)
 		}
 		if len(expression.Arguments) > maxConvertedExpressionNodes {
 			return splExpressionComplexityError(
@@ -1902,6 +1953,25 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		hasExactArity := false
 		functionName := ""
 		switch expression.Function {
+		case spl.ScalarFunctionConcat:
+			functionName = "concatenation"
+			if len(expression.Arguments) < 2 {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_EVAL_ARITY",
+					Message: "concatenation requires at least two operands",
+					Range:   expression.Range,
+				}
+			}
+			if len(expression.Arguments) > spl.MaximumConcatenationOperands {
+				return nil, &Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"concatenation contains more than %d operands",
+						spl.MaximumConcatenationOperands,
+					),
+					Range: expression.Range,
+				}
+			}
 		case spl.ScalarFunctionNow:
 			expectedArguments = 0
 			hasExactArity = true
@@ -2041,6 +2111,24 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
 						Message: "search-mode scalar functions cannot consume a Boolean result",
+						Range:   argument.SourceRange(),
+					}
+				}
+			}
+		}
+		if expression.Function == spl.ScalarFunctionConcat {
+			for _, argument := range expression.Arguments {
+				if nilSPLScalarExpression(argument) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+						Message: "concatenation operand is missing",
+						Range:   expression.Range,
+					}
+				}
+				if splScalarMayReturnBooleanValue(argument) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+						Message: "concatenation cannot consume a Boolean result",
 						Range:   argument.SourceRange(),
 					}
 				}
@@ -2322,6 +2410,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		}
 		var function ScalarFunction
 		switch expression.Function {
+		case spl.ScalarFunctionConcat:
+			function = ScalarFunctionConcat
 		case spl.ScalarFunctionNow:
 			function = ScalarFunctionNow
 		case spl.ScalarFunctionStrftime:
@@ -2467,6 +2557,45 @@ func splScalarMayReturnBooleanFunction(expression spl.ScalarExpr) bool {
 		}
 		for _, branch := range expression.Branches {
 			if splScalarMayReturnBooleanFunction(branch.Value) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func splScalarMayReturnBooleanValue(expression spl.ScalarExpr) bool {
+	switch expression := expression.(type) {
+	case *spl.ScalarLiteralExpr:
+		return expression != nil &&
+			expression.Value.Kind == spl.LiteralKindBool
+	case *spl.ScalarCallExpr:
+		if expression == nil {
+			return false
+		}
+		if expression.Function.ReturnsBoolean() {
+			return true
+		}
+		if expression.Function == spl.ScalarFunctionCoalesce {
+			for _, argument := range expression.Arguments {
+				if splScalarMayReturnBooleanValue(argument) {
+					return true
+				}
+			}
+		}
+		return false
+	case *spl.ScalarIfExpr:
+		return expression != nil &&
+			(splScalarMayReturnBooleanValue(expression.True) ||
+				splScalarMayReturnBooleanValue(expression.False))
+	case *spl.ScalarCaseExpr:
+		if expression == nil {
+			return false
+		}
+		for _, branch := range expression.Branches {
+			if splScalarMayReturnBooleanValue(branch.Value) {
 				return true
 			}
 		}

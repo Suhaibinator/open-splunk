@@ -212,6 +212,7 @@ func TestScalarFunctionBooleanTraitsRemainInParity(t *testing.T) {
 		{spl.ScalarFunctionStrftime, ScalarFunctionStrftime, false},
 		{spl.ScalarFunctionStrptime, ScalarFunctionStrptime, false},
 		{spl.ScalarFunctionRelativeTime, ScalarFunctionRelativeTime, false},
+		{spl.ScalarFunctionConcat, ScalarFunctionConcat, false},
 	}
 	if len(functions) != int(spl.ScalarFunctionCount) {
 		t.Fatalf(

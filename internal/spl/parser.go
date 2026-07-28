@@ -82,10 +82,11 @@ func sourcePositionAtOffset(source string, offset int) Position {
 }
 
 type parser struct {
-	tokens         []token
-	index          int
-	scalarDepth    int
-	evalPredicates int
+	tokens                []token
+	index                 int
+	scalarDepth           int
+	evalPredicates        int
+	concatenationOperands int
 }
 
 func (p *parser) parseQuery() (*Query, error) {
@@ -2039,6 +2040,77 @@ func (p *parser) parseScalarExpression() (ScalarExpr, error) {
 	p.scalarDepth++
 	defer func() { p.scalarDepth-- }()
 
+	first, err := p.parseScalarPrimary()
+	if err != nil {
+		return nil, err
+	}
+	if !p.match(tokenConcat) {
+		return first, nil
+	}
+
+	arguments := make([]ScalarExpr, 0, 4)
+	arguments = append(arguments, first)
+	for {
+		argument, argumentErr := p.parseScalarPrimary()
+		if argumentErr != nil {
+			return nil, argumentErr
+		}
+		arguments = append(arguments, argument)
+		if len(arguments) > MaximumConcatenationOperands {
+			return nil, &Diagnostic{
+				Code: "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf(
+					"concatenation contains more than %d operands",
+					MaximumConcatenationOperands,
+				),
+				Range: Range{
+					Start: first.SourceRange().Start,
+					End:   argument.SourceRange().End,
+				},
+			}
+		}
+		if !p.match(tokenConcat) {
+			break
+		}
+	}
+	for _, argument := range arguments {
+		if scalarExpressionMayReturnBooleanValue(argument) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "concatenation cannot consume a Boolean result",
+				Range:   argument.SourceRange(),
+				Suggestions: []string{
+					"convert the Boolean explicitly with tostring",
+				},
+			}
+		}
+	}
+	if p.concatenationOperands >
+		MaximumConcatenationOperandsPerQuery-len(arguments) {
+		return nil, &Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"concatenation contains more than %d operand occurrences per query",
+				MaximumConcatenationOperandsPerQuery,
+			),
+			Range: Range{
+				Start: first.SourceRange().Start,
+				End:   arguments[len(arguments)-1].SourceRange().End,
+			},
+		}
+	}
+	p.concatenationOperands += len(arguments)
+	return &ScalarCallExpr{
+		Function:  ScalarFunctionConcat,
+		Arguments: arguments,
+		Range: Range{
+			Start: first.SourceRange().Start,
+			End:   arguments[len(arguments)-1].SourceRange().End,
+		},
+	}, nil
+}
+
+func (p *parser) parseScalarPrimary() (ScalarExpr, error) {
 	tok := p.current()
 	if tok.kind == tokenString {
 		p.advance()
@@ -2937,6 +3009,48 @@ func scalarExpressionMayReturnBooleanFunction(expression ScalarExpr) bool {
 	}
 }
 
+// scalarExpressionMayReturnBooleanValue is intentionally stricter than the
+// general function-only guard above. Search-mode eval retains its historical
+// support for assigning Boolean literals, but concatenation has no implicit
+// Boolean spelling; callers must use tostring explicitly.
+func scalarExpressionMayReturnBooleanValue(expression ScalarExpr) bool {
+	switch expression := expression.(type) {
+	case *ScalarLiteralExpr:
+		return expression != nil && expression.Value.Kind == LiteralKindBool
+	case *ScalarCallExpr:
+		if expression == nil {
+			return false
+		}
+		if expression.Function.ReturnsBoolean() {
+			return true
+		}
+		if expression.Function == ScalarFunctionCoalesce {
+			for _, argument := range expression.Arguments {
+				if scalarExpressionMayReturnBooleanValue(argument) {
+					return true
+				}
+			}
+		}
+		return false
+	case *ScalarIfExpr:
+		return expression != nil &&
+			(scalarExpressionMayReturnBooleanValue(expression.True) ||
+				scalarExpressionMayReturnBooleanValue(expression.False))
+	case *ScalarCaseExpr:
+		if expression == nil {
+			return false
+		}
+		for _, branch := range expression.Branches {
+			if scalarExpressionMayReturnBooleanValue(branch.Value) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
 func coalesceScalarExpressionReturnsBoolean(arguments []ScalarExpr) bool {
 	foundBoolean := false
 	for _, argument := range arguments {
@@ -3063,7 +3177,8 @@ func (p *parser) parseSearchPrimary() (Expr, error) {
 		p.advance()
 		return &TermExpr{Value: tok.text, Quoted: true, Range: tok.sourceRange}, nil
 	}
-	if tok.kind != tokenWord || p.isKeyword("AND") || p.isKeyword("OR") {
+	if (tok.kind != tokenWord && tok.kind != tokenConcat) ||
+		p.isKeyword("AND") || p.isKeyword("OR") {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_EXPRESSION", "expected a search term or field comparison")
 	}
 	p.advance()
@@ -3085,7 +3200,8 @@ func (p *parser) parseSearchPrimary() (Expr, error) {
 
 func (p *parser) parseLiteral() (Literal, error) {
 	tok := p.current()
-	if tok.kind != tokenWord && tok.kind != tokenString {
+	if tok.kind != tokenWord && tok.kind != tokenString &&
+		tok.kind != tokenConcat {
 		return Literal{}, p.errorAtCurrent("SPL_EXPECTED_LITERAL", "expected a comparison value")
 	}
 	p.advance()
@@ -3233,7 +3349,8 @@ func setWhereExpressionRange(expression WhereExpr, sourceRange Range) {
 
 func (p *parser) canStartSearchOperand() bool {
 	tok := p.current()
-	if tok.kind == tokenString || tok.kind == tokenLeftParen {
+	if tok.kind == tokenString || tok.kind == tokenLeftParen ||
+		tok.kind == tokenConcat {
 		return true
 	}
 	if tok.kind != tokenWord {
