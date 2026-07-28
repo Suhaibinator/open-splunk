@@ -274,6 +274,9 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /UTF-8 code points/i);
   assert.match(evalCompletion.detail, /SQLite indexing/i);
   assert.match(evalCompletion.detail, /capitalized Boolean/i);
+  assert.match(evalCompletion.detail, /period operator concatenates 2-32 String or number operands/i);
+  assert.match(evalCompletion.detail, /full_name=first\." "\.last/);
+  assert.match(evalCompletion.detail, /null-propagating.*use tostring\(value\) for Boolean/i);
 });
 
 test("stats completion advertises true-only conditional count with an explicit alias", () => {
@@ -299,6 +302,8 @@ test("where completion advertises direct bounded match and like predicates", () 
   assert.match(whereCompletion.detail, /effective IANA search timezone/i);
   assert.match(whereCompletion.detail, /strptime\(text, "format"\)/);
   assert.match(whereCompletion.detail, /nullable Unix seconds/i);
+  assert.match(whereCompletion.detail, /period concatenation.*first\." "\.last = full_name/i);
+  assert.match(whereCompletion.detail, /String and number operands.*tostring\(value\) for Boolean/i);
 });
 
 test("nested stats eval highlights as a function without relabeling the eval command", () => {

@@ -40,6 +40,13 @@ arguments are compiled.
 Every `case` call accepts one through 16 condition/value pairs and has the
 same separate 64 KiB generated-SQL ceiling, checked incrementally while its
 alternating predicates and values are compiled.
+Every period-concatenation expression accepts two through 32 flattened
+operands and has the same separate 64 KiB generated-SQL ceiling, checked
+incrementally while operands are compiled in source order. One query may
+contain at most 256 concatenation operand occurrences. Conservative output
+bounds may total at most 4 MiB for one concatenation occurrence and 16 MiB
+across all concatenation occurrences for one result row; nested occurrences
+are charged independently.
 Every `lower` or `upper` call accepts exactly one value and has the same
 separate 64 KiB generated-SQL ceiling, checked after its scalar or
 multivalue lowering is built.
@@ -53,6 +60,10 @@ lowering is built.
 Every `tostring` call accepts exactly one value and has the same separate
 64 KiB generated-SQL ceiling, checked after its typed conversion lowering is
 built. Formatted modes are a separate unsupported surface.
+An unrestricted Dynamic input to either `tostring` or period concatenation
+reserves 4 KiB for bounded `decimal/v1` lexical conversion. Those reservations
+share one 64 KiB query-wide ceiling; a Dynamic expression already proven
+numeric or text does not reserve decimal work.
 Every `round` call accepts one numeric value and an optional literal precision
 from 0 through 18. It has the same separate 64 KiB generated-SQL ceiling,
 checked after its typed numeric lowering is built.
@@ -184,8 +195,9 @@ accepts exactly one scalar expression, and can also be compared explicitly
 with a Boolean literal. Scalar operands may be fields, typed literals, or the
 supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, bounded
 `case`, `lower`, `upper`, `len`, `length`, bounded `substr`, and bounded
-default `tostring`, bounded `round`, `ceil`/`ceiling`, `floor`, and `mvcount`
-calls, plus bounded `match(value, "regex")` and
+default `tostring`, bounded period concatenation, bounded `round`,
+`ceil`/`ceiling`, `floor`, and `mvcount` calls, plus bounded
+`match(value, "regex")` and
 `like(value, "pattern")`, zero-argument `now()`, and bounded
 `relative_time(value, "specifier")`, `strftime(time, "format")`, and
 `strptime(value, "format")` described below;
@@ -220,6 +232,8 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval score=if(status>=500, 1, 0)
 | eval selected=coalesce(null, source, "unknown")
 | eval class=case(status>=500, "server", status>=400, "client", 1=1, "other")
+| eval full_name=first_name." ".last_name
+| eval route_label="route=" . http.route . ":" . tostring(status)
 | eval normalized=lower(username), display=upper(normalized)
 | eval characters=len(message)
 | eval route=substr(path, 1, 32)
@@ -252,6 +266,9 @@ narrow:
   one through 32 arguments;
 - `case(predicate, value, ...)` selects the value paired with the first true
   predicate from one through 16 condition/value pairs;
+- `left . right [ . value ...]` concatenates two through 32 scalar String or
+  numeric operands as one String under the bounded SPL1 period-operator
+  contract below;
 - `lower(value)` and `upper(value)` map one String or multivalue String using
   Unicode-aware case conversion;
 - `len(value)` and its `length(value)` alias count UTF-8 code points in one
@@ -448,6 +465,112 @@ does not expand multivalue members or multiply rows. Production execution pins
 static type analysis and constant folding. The per-call 64 KiB SQL ceiling is
 enforced incrementally before the final expression is concatenated, in
 addition to the whole-query ceiling.
+
+SPL1 period concatenation joins scalar values with the `.` operator:
+
+```spl
+| eval full_name=first_name." ".last_name
+| eval label="route=" . http.route . ":" . tostring(status)
+| eval ordered="" . first . ":" . last . ":" . signed . ""
+| where first . last = "AdaLovelace"
+| stats count(eval(first . last = "AdaLovelace")) AS matches
+```
+
+Compatibility version 0.1 supports only the SPL1 period operator.
+`concat(first, last)`, the SPL2 `+` concatenation spelling, arithmetic, and
+other implicit String-conversion operators remain unsupported. A chain is
+parsed as one flat, source-ordered expression with two through 32 operands;
+there is no backend-dependent left- or right-nested associativity. Function
+arguments and results may themselves contain or participate in concatenation,
+including supported `if`, `case`, and `coalesce` values. Concatenation may be
+used on either side of a `where`, conditional, or `count(eval(...))`
+comparison.
+
+From tightest to loosest, the expression-language precedence relevant to this
+operator is scalar primary or function call, period concatenation, comparison,
+`NOT`, `AND`, then `OR`. Parentheses group Boolean predicates and delimit
+function calls; version 0.1 does not add a separate parenthesized-scalar
+grammar. This means `first . last = "AdaLovelace"` compares the completed
+String, and `NOT code . suffix = "500x" AND status=200` negates the completed
+concatenation comparison before applying `AND`.
+
+Open Splunk deliberately preserves its existing dotted dynamic-field grammar.
+A contiguous bare spelling such as `http.route` is one field path, not
+`http` concatenated with `route`; escaped dotted paths, `.5`, `1.25`,
+`"a.b"`, and contiguous tokens such as `foo..bar` likewise keep their prior
+lexical meaning. Two bare operands must therefore use a fully separated
+operator, as in `first . last`; the ambiguous half-spaced forms `first. last`
+and `first .last` are rejected. The official
+`first_name." ".last_name` spelling remains accepted because a dot adjoining
+a quoted literal is unambiguous, with optional Unicode whitespace around that
+quoted boundary. A period in base search or pipeline `search` remains a
+literal search term or comparison value, not concatenation. Requiring spaces
+between two bare operands is an intentional Open Splunk divergence from
+unspaced SPL1 examples so dotted event paths remain deterministic.
+
+Supported non-null fixed operands are scalar `String` and number. A String is
+copied unchanged. Fixed signed and unsigned integers, floating-point values,
+and other fixed numeric variants use the pinned ClickHouse textual spelling;
+in particular, `UInt64` does not pass through `Float64`. Empty String is an
+ordinary zero-byte operand and preserves source order. A missing, explicit
+null, or statically null operand makes the complete concatenation null rather
+than contributing an empty String or textual sentinel.
+
+A direct Boolean operand is not implicitly converted. Syntactically known
+Boolean literals, informational functions, and Boolean conditional results
+are rejected by the parser or planner; a forged fixed Boolean plan is rejected
+again by the compiler. Use `tostring(value)` explicitly when `"True"` or
+`"False"` is intended. Canonical `_time` and `_indextime` operands fail with
+`SPL_UNSUPPORTED_CONCATENATION_VALUE_TYPE`; callers must use an explicitly
+supported date/time formatter. Fixed `Array(String)` and other fixed
+multivalue inputs fail with `SPL_UNSUPPORTED_MULTIVALUE_USAGE`; concatenation
+never maps, joins, or expands their members.
+
+An open-schema Dynamic runtime `String` or physical numeric value uses the
+same String or numeric conversion. A validated `decimal/v1` envelope is also
+accepted. Dynamic Boolean, array, object, null, missing, malformed or
+oversized Decimal, and other tagged runtime values produce a null operand and
+therefore a null result. A Dynamic expression already proven text accepts
+only its scalar String branch, while one already proven numeric accepts only
+physical numeric variants; those specialized paths omit impossible Boolean,
+container, and tagged-envelope dispatch.
+
+Physical and tagged Decimal spelling is intentionally distinct. A physical
+Dynamic Decimal uses ClickHouse `toString` on the pinned `26.3.17.4` target;
+the integration contract pins `toDecimal64('12.3400', 4)` as `"12.34"`. A
+`decimal/v1` envelope instead retains its exact validated payload, so
+`"123.4500"` remains `"123.4500"` without a `Float64` conversion. Such an
+envelope must contain exactly the type and value keys, use the canonical
+Decimal grammar, and carry at most 4 KiB of payload. An unrestricted Dynamic
+operand conversion reserves that 4 KiB capacity against the shared 64 KiB
+query-wide `tostring`/concatenation Decimal-parsing budget. Proven text and
+numeric domains do not reserve it.
+
+Concatenation preserves String byte provenance rather than claiming that all
+output is UTF-8. Ordinary typed Strings remain text-eligible. Raw-derived
+eligibility guards from every operand are combined, so
+`"[" . _raw . "]"` copies binary-declared raw bytes exactly, including NUL
+and invalid UTF-8, while a later `lower`, `upper`, `len`, or `substr` returns
+null for that result. No conversion scans or rewrites those bytes merely to
+perform concatenation.
+
+The compiler emits one scalar parameterized ClickHouse `concat(...)` in
+operand order. Every calculated or Dynamic operand is bound once, argument
+bindings retain source occurrence order, and no form uses `ARRAY JOIN` or
+changes row cardinality. Conservative String bounds are summed before SQL is
+admitted: one occurrence may produce at most 4 MiB and all occurrences may
+total at most 16 MiB per result row. Every occurrence also has a 64 KiB
+generated-SQL ceiling, one query has at most 256 operand occurrences, and the
+existing 256 KiB whole-query SQL ceiling still applies. Exact boundary values
+are accepted; the first over-limit occurrence fails before execution with
+`SPL_QUERY_TOO_COMPLEX`.
+
+Splunk's public SPL1 documentation specifies period concatenation, the
+`first_name." ".last_name` example, and String/number conversion. It does not
+fully pin missing/null, Dynamic containers, extended Decimal, binary
+provenance, or every physical numeric spelling. Those cases remain the
+explicit conservative version 0.1 boundaries above pending a live Splunk
+differential oracle.
 
 `lower` and `upper` each accept exactly one argument:
 
@@ -2511,6 +2634,8 @@ and type edges remain conservative and must gain oracle-backed differential
 coverage before they are declared compatible.
 
 Reference behavior is compared against Splunk's official [`search`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/search),
+[`eval` and SPL1 period concatenation](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/eval),
+[SPL and SPL2 concatenation-operator differences](https://help.splunk.com/en/splunk-enterprise/search/spl2-overview/specific-differences-between-spl-and-spl2),
 [`sort`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/sort),
 [`dedup`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/search-commands/dedup),
 [`stats`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/stats),

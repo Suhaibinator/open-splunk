@@ -7,7 +7,118 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded timezone-aware SPL `relative_time`
+## Latest checkpoint: bounded SPL1 period concatenation
+
+Date: 2026-07-27
+
+Parser and logical-plan checkpoint (committed and pushed):
+`875ddad`
+
+ClickHouse execution and pinned-integration checkpoint (committed and pushed):
+`bc80006`
+
+This test-first slice implements bounded `left . right [ . value ...]`
+concatenation:
+
+1. The lexer accepts the official `first_name." ".last_name` spelling and
+   fully separated bare-operand forms such as `first . last`. It deliberately
+   preserves contiguous dotted event paths, escaped paths, decimal literals,
+   quoted dots, and literal periods in base and pipeline `search`. Half-spaced
+   ambiguous bare forms are rejected, `concat(...)` remains unsupported, and
+   SPL2 `+` is not added to the SPL1 grammar.
+2. A chain becomes one flat, source-ordered scalar node with two through 32
+   operands. One query may contain at most 256 operand occurrences, including
+   independently charged nested expressions. The parser and planner retain
+   complete source ranges and reject direct Boolean results and resource
+   overflow. Planner and compiler trust boundaries independently recheck
+   forged arity, typed nil, unsupported enums, operand type, and query
+   budgets before execution, including predicate-contained expressions.
+3. Concatenation binds tighter than comparison and looser than a scalar
+   primary or function call. It composes inside and around supported scalar
+   functions and in `where`, conditional predicates and values, and
+   `count(eval(...))`, while the existing `NOT`, `AND`, and `OR` precedence
+   remains unchanged.
+4. Fixed String operands are identities and fixed numbers use their typed
+   ClickHouse spelling without a `Float64` round trip. Empty String is a value.
+   Missing, explicit-null, or statically null input makes the complete result
+   null. Direct fixed Boolean, canonical time, and multivalue operands are
+   rejected; callers must use an explicitly supported conversion such as
+   `tostring` for Boolean output.
+5. Dynamic runtime String and physical numeric variants are accepted.
+   Unrestricted Dynamic input also accepts a validated, at-most-4-KiB
+   `decimal/v1` envelope. Dynamic Boolean, null, missing, array, object, other
+   tag, and malformed or oversized Decimal input produces null. Proven text
+   and numeric Dynamic domains omit irrelevant dispatch.
+6. Decimal spelling is pinned rather than conflated: tagged
+   `decimal/v1` retains its validated payload exactly, including trailing
+   fractional zeroes, while physical Decimal uses ClickHouse `toString`;
+   pinned integration asserts that `toDecimal64('12.3400', 4)` renders
+   `"12.34"` and tagged `"123.4500"` remains `"123.4500"`.
+7. Concatenation preserves byte provenance. Binary-declared `_raw` can be
+   copied between String delimiters byte-for-byte, but the combined provenance
+   makes a later UTF-8 consumer return null. Ordinary typed Strings remain
+   text-eligible, and duplicate provenance guards are combined once.
+8. The compiler emits one scalar parameterized ClickHouse `concat(...)`,
+   retains arguments in source order, binds every calculated or Dynamic
+   operand once, and never uses `ARRAY JOIN`. One occurrence has a conservative
+   4 MiB output ceiling, all occurrences share a 16 MiB per-row ceiling, each
+   occurrence has a 64 KiB generated-SQL ceiling, and the whole-query 256 KiB
+   ceiling remains independent.
+9. Unrestricted Dynamic lexical conversion reserves 4 KiB per occurrence
+   against a 64 KiB query-wide Decimal-parsing budget now shared by
+   concatenation and `tostring`. Domain-proven text and numeric conversions do
+   not reserve that work.
+10. Unit and pinned ClickHouse coverage includes official and spaced syntax,
+    operand order, fixed and Dynamic scalar matrices, maximum unsigned
+    integers, tagged and physical Decimals, null and missing propagation,
+    direct and explicit Boolean behavior, multivalue and object rejection,
+    sequential eval, `if`, `where`, `stats`, binary raw provenance, exact and
+    first-invalid limits, forged plans, source-once SQL, and `EXPLAIN` proof
+    that row expansion is absent. The helper is registered in the pinned Store
+    suite.
+
+Validation completed on the execution checkpoint:
+
+```sh
+go test ./... -count=1
+golangci-lint run ./...
+go test -race ./internal/clickhouse -count=1
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=5m
+git diff --check
+```
+
+All listed gates pass on `bc80006`; repository-wide Go lint reports zero
+issues, and the pinned ClickHouse `26.3.17.4` Store suite includes the
+concatenation corpus. The synchronized compatibility and editor publication
+also passes `npm run test:frontend`, `npm run typecheck`, `npm run lint`, and
+`git diff --check`.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` retain `875ddad` followed by `bc80006`,
+   with the compatibility contract and editor help synchronized to that
+   execution checkpoint.
+2. Add the already-prototyped `/search/validate` backend route without creating
+   a search job, sharing create-search parsing, time/index authorization,
+   planning, and source-located diagnostics.
+3. Add bounded `/search/suggestions` support and index/time-scoped field
+   completion on top of the same admission contract; static browser
+   completions are not the Phase 2 field-autocomplete service.
+4. Resolve the connected time-picker mismatch: Today, Yesterday, and All-time
+   currently publish `@d`, `-1d@d`, and `0`, while `internal/searchtime`
+   admits only RFC3339, `now`, and bounded negative offsets. Define and
+   implement the missing backend semantics or stop publishing invalid forms.
+5. Complete administrator-only generated-SQL/ClickHouse-`EXPLAIN` inspection
+   and schema, ordering-key, text-index, and materialized-field tuning against
+   the real query and load corpus. Do not expose plans or sensitive bound
+   values to ordinary users.
+6. Keep `eventstats` behind the stable aggregate library. Finish Phase 2 before
+   proceeding through the plan's Phase 3/4 index administration, RBAC, HEC,
+   alerts, scheduled-search, and packaging work.
+
+## Previous checkpoint: bounded timezone-aware SPL `relative_time`
 
 Date: 2026-07-27
 
