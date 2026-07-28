@@ -7,7 +7,121 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded search suggestions and connected time semantics
+## Latest checkpoint: sealed and bounded ClickHouse EXPLAIN
+
+Date: 2026-07-27
+
+Committed and pushed checkpoint:
+
+- `27c0781` — compiler-sealed SQL and a bounded, isolated ClickHouse EXPLAIN
+  primitive.
+
+This test-first slice completes the transport-independent foundation for
+administrator search inspection without exposing it through the currently
+unauthenticated browser API:
+
+1. `clickhouse.Compiler.Compile` now places a private SHA-256 seal over the
+   generated SQL. `CompiledQuery.HasValidSQLSeal` proves that query structure
+   is the unchanged output of the main compiler; constructing or changing
+   public `CompiledQuery` fields cannot forge that provenance.
+2. `queryexec.NewExplainer` owns two dedicated native ClickHouse lanes, each
+   with a one-connection pool and an independent deadline coordinator.
+   Ordinary search/export connections are never reserved for diagnostics.
+   Admission is fail-fast before SQL hashing, argument inspection, timer
+   creation, or lifecycle registration, so a burst cannot create unbounded
+   waiter state.
+3. The only accepted statement shape is
+   `EXPLAIN SELECT * FROM (<sealed compiler SQL>) AS __os_explain_input
+   SETTINGS max_execution_time = N`. The fixed outer setting defeats the
+   pinned driver's looser deadline-derived protocol setting and safely wraps
+   compiler queries that already contain chronological `UNION ALL` relations
+   and inner settings.
+4. Explain execution is capped at two concurrent calls, ten seconds, one
+   thread, 128 MiB memory, five million input rows, one GiB input bytes, 4,096
+   result rows/groups, 16 KiB per line, one MiB result text, 256 KiB raw
+   compiler SQL, and one MiB after conservative parameter rendering. Query
+   cache use is disabled and every overflow mode throws.
+5. Argument admission accepts only the exact scalar inventory emitted by the
+   compiler, checks exact placeholder cardinality, rejects formatters,
+   `driver.Valuer`, named scalars, pointers, collections, nils, and typed nils,
+   and passes one detached snapshot to the driver. Neither arguments nor
+   driver/query detail are returned or logged.
+6. The custom native transport overlays the exact earlier request deadline on
+   driver read/write deadlines before the initial native query write, expires
+   the socket immediately on cancellation, restores driver deadlines on
+   release, preserves the stale-socket `syscall.Conn` probe, and performs TLS
+   itself because clickhouse-go bypasses TLS when a custom dialer is present.
+   Failed deadline restoration closes the socket rather than returning a
+   poisoned connection to the lane.
+7. Construction rejects HTTP, custom dialers/strategies/settings, JWT
+   callbacks, invalid connection strategies, unsafe or callback-bearing TLS,
+   invalid endpoints, and plaintext non-loopback addresses. TLS configuration
+   is detached once per lane and reused immutably rather than deep-cloned on
+   every reconnect. Fractional configured execution limits retain their exact
+   Go deadline while the ClickHouse setting is conservatively rounded up.
+8. Results are completely buffered and validated before publication: exactly
+   one non-null `explain String` column, valid bounded UTF-8 text without
+   controls, a separate bounded diagnostic query ID, and atomic failure on
+   cancellation, stream errors, malformed schema, or limit violations.
+   `Close` is concurrent/idempotent, cancels and joins admitted calls, closes
+   both lanes, and returns the closed state rather than capacity once shutdown
+   has begun.
+9. Independent adversarial and reuse/quality/efficiency reviews found and
+   closed abandoned native-handshake sockets, off-loopback plaintext, the
+   socket/context deadline publication race, deadline-restore poisoning,
+   unbounded pre-admission waiter work, fractional timeout rounding, repeated
+   TLS/settings cloning, and Close-versus-capacity error precedence. No
+   remaining P0/P1/P2 finding was reported on the committed snapshot.
+
+Validation on the pushed checkpoint:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/queryexec ./internal/clickhouse -count=1
+go test ./internal/queryexec \
+  -run 'TestExplainerBoundsInitialNativeQueryWriteAndReusesLanes|TestExplainerClosesFailedHandshakeAndRetriesAnotherAddress|TestExplainerHasTwoIsolatedRequestLanes|TestSanitizeExplainQueryErrorHandlesSocketContextDeadlineRace' \
+  -count=20
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/queryexec \
+    -run '^TestExecutorAndManagerAgainstClickHouse$' -count=1 -timeout=6m
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=5m ./...
+npm run lint
+git diff --check
+```
+
+The pinned ClickHouse suite passed in 17.957 seconds. Repository-wide Go lint
+reported zero issues.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `27c0781`.
+2. Build an internal-only `internal/searchinspection` service. Resolve an
+   exact tenant/owner completed, unexpired execution snapshot without
+   acquiring a result lease or extending retention; build its detached
+   execution plan, compile it once, and pass that exact sealed
+   `CompiledQuery` unchanged to `Explainer`.
+3. Return only a detached safe logical-plan projection, generated SQL,
+   EXPLAIN text, and diagnostic query ID. Never expose compiler arguments,
+   mutable SPL/plan pointers, execution snapshots, retained results, or
+   storage/driver errors. Give the service its own fail-fast concurrency
+   bound, exact cancellation, shutdown ownership, output limits, and sanitized
+   stable errors.
+4. Keep the service internal. Do not add protobuf, HTTP, runtime feature
+   advertisement, or UI wiring until a genuine administrator identity/role
+   boundary exists; ClickHouse plans can inline bound search values.
+5. Use the internal service in the pinned ten-query/load corpus to establish
+   plan, scan, partition, ordering-key, text-index, and promoted-field
+   baselines. Add a schema/index migration only when that evidence supports
+   it.
+6. Then finish the Phase 3 administrator identity boundary before exposing
+   inspection, and continue through HEC, alerts, scheduled search, and
+   packaging without weakening the existing SPL/compiler regressions.
+
+## Previous checkpoint: bounded search suggestions and connected time semantics
 
 Date: 2026-07-27
 
