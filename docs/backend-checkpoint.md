@@ -7,7 +7,92 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded side-effect-free SPL validation
+## Latest checkpoint: bounded search suggestions and connected time semantics
+
+Date: 2026-07-27
+
+Committed and pushed checkpoints:
+
+- `cd9d012` — bounded SPL completion context;
+- `9115465` — time/index-scoped ClickHouse field suggestions;
+- `2a82932` — side-effect-free cross-layer suggestion composition;
+- `076ff43` — exact protobuf search-suggestions route and runtime wiring; and
+- `7eba237` — backend/browser time-picker semantic alignment.
+
+These test-first slices complete two Phase 2 compatibility gaps:
+
+1. `POST /api/v1/search/suggestions` now validates the same detached tenant,
+   app, authorized index scope, requested scope, and half-open time range used
+   by search admission without creating or retaining a job. It composes
+   bounded static SPL completions with ClickHouse field candidates selected
+   only from the authorized index/time window.
+2. Completion context preserves the active base-search or pipeline-`search`
+   predicate prefix, caps parser/editor work and candidate/result bytes, and
+   rejects malformed cursor, metadata, dependency, UTF-8, and field-path
+   states before publication. The ClickHouse query bounds both eligible and
+   ineligible metadata work, preserves ASCII-fold/exact ordering, validates
+   the full fetched metadata row, and permits valid cross-row parent/child
+   field names while rejecting durable within-row ancestor collisions.
+3. The route is exact POST-only protobuf, shares search authorization, copies
+   all scopes before concurrent use, maps only sanitized errors, participates
+   in runtime shutdown, and returns a defensively validated bounded response.
+   A composed-handler regression proves static completion creates no search
+   job and performs no storage lookup.
+4. The executable time subset now includes `@d`, bounded `-Nd@d`, and exact
+   earliest-only `0`. Day offsets apply before local-midnight snapping,
+   repeated midnight selects its first occurrence, and skipped civil
+   dates/midnights fail closed. `0` resolves to
+   `1900-01-01T00:00:00Z`, never the Unix epoch.
+5. Browser validation accepts every published preset and the backend's
+   zero-padded offset grammar, measures authored bytes before normalization,
+   matches Go's Unicode trim set, preserves relative/calendar intent and the
+   effective IANA timezone, and avoids false rejection when a millisecond
+   client clock cannot prove a nanosecond server interval. The server remains
+   authoritative for mixed anchor/timezone-dependent ordering and tzdb lookup.
+6. Unit, race, frontend, TypeScript, Go/frontend lint, server-adapter, and
+   pinned ClickHouse suggestion coverage includes maximum-width metadata,
+   long ineligible prefixes, Unicode/escape parity, poison rows outside the
+   returned prefix, DST 23/25-hour days, a repeated midnight, a skipped date,
+   first-invalid grammar/bounds, and pre-1970 all-time resolution.
+7. Independent adversarial review found and closed the repeated-midnight fold,
+   raw-byte/zero-padding mismatch, lossy `now`/elapsed nanosecond comparisons,
+   Go/JavaScript trim mismatch, browser/backend tzdb mismatch, metadata
+   ancestor-collision, prefix-poison, and work-before-limit cases. No P0/P1/P2
+   finding remains on `7eba237`.
+
+Validation on the pushed time checkpoint:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/searchtime ./internal/server -count=1
+npm run test:frontend
+npm run typecheck
+npm run lint
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=5m ./...
+git diff --check
+```
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `7eba237`.
+2. Finish the transport-independent, read-only, bounded ClickHouse `EXPLAIN`
+   primitive and its pinned integration coverage. Do not expose it through an
+   HTTP/protobuf route while the server has no administrator authentication
+   boundary; plans may contain rendered bound values.
+3. Build an administrator-facing inspection service over completed, unexpired,
+   access-scoped execution snapshots and safe logical-plan projection. Keep
+   generated SQL, arguments, and EXPLAIN text out of ordinary job/history
+   responses.
+4. Add an authenticated administrator route only after the Phase 3 identity
+   and role boundary exists, then tune schema/order/text/materialized fields
+   against the real query and load corpus.
+5. Keep the mixed binary-aggregate, suggestion poison/bounds, and time
+   transition regressions when changing adjacent compiler or search code.
+6. Keep `eventstats` behind the stable aggregate library. Finish Phase 2 before
+   proceeding through Phase 3/4 HEC, alerts, scheduled search, and packaging.
+
+## Previous checkpoint: bounded side-effect-free SPL validation
 
 Date: 2026-07-27
 
@@ -115,7 +200,7 @@ multivalue inputs. Reuse, quality, and efficiency simplify passes found and
 applied the shared result classifier and analysis/projection consolidation.
 No review blocker remains on `1919e2b`.
 
-Immediate resume steps:
+Resume steps recorded at this checkpoint:
 
 1. Confirm `main` and `origin/main` are at `1919e2b`, following the
    concatenation implementation/publication commits `875ddad`, `bc80006`, and
