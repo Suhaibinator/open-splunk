@@ -344,6 +344,14 @@ func run() error {
 			log.Printf("close search websocket service: %v", err)
 		}
 	}()
+	appCatalog, appCursorKey, err := newRuntimeAppCatalog(
+		startupContext,
+		controlDB,
+		config.masterKeyPath,
+	)
+	if err != nil {
+		return err
+	}
 	handler, err := newRuntimeHTTPHandler(server.Config{
 		SearchJobs:                 jobs,
 		SearchInspections:          inspection.service,
@@ -351,6 +359,9 @@ func run() error {
 		Exports:                    exports,
 		Indexes:                    controlDB,
 		IngestionTokens:            tokenStore,
+		AppAdmin:                   appCatalog,
+		AppCatalog:                 appCatalog,
+		AppCursorKey:               appCursorKey,
 		SavedSearches:              savedSearches,
 		SearchHistory:              searchHistory,
 		WebUI:                      release.WebUI,
@@ -366,6 +377,9 @@ func run() error {
 			MaximumExportBytes:      exportSettings.maximumByteLimit,
 		},
 	}, analysis)
+	// NewHandler clones the key before returning. Erase this temporary caller
+	// copy immediately on both success and failure.
+	clear(appCursorKey)
 	if err != nil {
 		return fmt.Errorf("create HTTP handler: %w", err)
 	}
