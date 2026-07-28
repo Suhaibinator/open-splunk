@@ -34,27 +34,26 @@ func ResultShapeForSPL(source string) ResultShape {
 	if err != nil {
 		return ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED}
 	}
-	result := ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS}
-	for _, command := range query.Commands {
-		switch command.(type) {
-		case *spl.TimechartCommand:
-			return ResultShape{
-				Kind:                opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
-				RuntimeNamedColumns: true,
-			}
-		// chart is a categorical pivot rather than a time series: its first
-		// column is a runtime row value, not canonical time. Its remaining
-		// columns are still named from runtime split values.
-		case *spl.ChartCommand:
-			result = ResultShape{
-				Kind:                opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-				RuntimeNamedColumns: true,
-			}
-		case *spl.TableCommand, *spl.StatsCommand, *spl.TopCommand, *spl.RareCommand:
-			result = ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS}
+	classified := spl.ClassifyResultShape(query)
+	switch classified.Kind {
+	case spl.ResultKindEvents:
+		return ResultShape{
+			Kind:                opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS,
+			RuntimeNamedColumns: classified.RuntimeNamedColumns,
 		}
+	case spl.ResultKindStatistics:
+		return ResultShape{
+			Kind:                opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+			RuntimeNamedColumns: classified.RuntimeNamedColumns,
+		}
+	case spl.ResultKindTimeSeries:
+		return ResultShape{
+			Kind:                opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
+			RuntimeNamedColumns: classified.RuntimeNamedColumns,
+		}
+	default:
+		return ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED}
 	}
-	return result
 }
 
 // Progress projects the authoritative counters and timing shared by HTTP and

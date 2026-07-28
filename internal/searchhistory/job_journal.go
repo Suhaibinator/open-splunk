@@ -2,7 +2,6 @@ package searchhistory
 
 import (
 	"context"
-	"math"
 	"slices"
 	"strings"
 	"time"
@@ -183,12 +182,22 @@ func failureToHistory(failure *searchjobs.Failure) *opensplunkv1.SearchFailure {
 		for _, suggestion := range diagnostic.Suggestions[:min(len(diagnostic.Suggestions), 32)] {
 			converted.Suggestions = append(converted.Suggestions, boundedUTF8(suggestion, 1024))
 		}
-		if validSourceCoordinates(diagnostic) {
+		if diagnostic.ValidSourceRange() {
 			converted.SourceRange = &opensplunkv1.SourceRange{
-				// #nosec G115 -- validSourceCoordinates bounds every value by math.MaxUint32.
-				Start: &opensplunkv1.SourcePosition{Line: uint32(diagnostic.Line), Column: uint32(diagnostic.Column)},
-				// #nosec G115 -- validSourceCoordinates bounds every value by math.MaxUint32.
-				End: &opensplunkv1.SourcePosition{Line: uint32(diagnostic.EndLine), Column: uint32(diagnostic.EndColumn)},
+				// #nosec G115 -- ValidSourceRange proves offsets non-negative
+				// and bounds line/column values by math.MaxUint32.
+				Start: &opensplunkv1.SourcePosition{
+					ByteOffset: uint64(diagnostic.ByteOffset),
+					Line:       uint32(diagnostic.Line),
+					Column:     uint32(diagnostic.Column),
+				},
+				// #nosec G115 -- ValidSourceRange proves offsets non-negative
+				// and bounds line/column values by math.MaxUint32.
+				End: &opensplunkv1.SourcePosition{
+					ByteOffset: uint64(diagnostic.EndByteOffset),
+					Line:       uint32(diagnostic.EndLine),
+					Column:     uint32(diagnostic.EndColumn),
+				},
 			}
 		}
 		result.Diagnostics = append(result.Diagnostics, converted)
@@ -217,16 +226,6 @@ func failureCodeToHistory(code searchjobs.FailureCode) opensplunkv1.SearchFailur
 	default:
 		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL
 	}
-}
-
-func validSourceCoordinates(diagnostic searchjobs.Diagnostic) bool {
-	values := []int{diagnostic.Line, diagnostic.Column, diagnostic.EndLine, diagnostic.EndColumn}
-	for _, value := range values {
-		if value <= 0 || uint64(value) > math.MaxUint32 {
-			return false
-		}
-	}
-	return true
 }
 
 func boundedUTF8(value string, maximum int) string {

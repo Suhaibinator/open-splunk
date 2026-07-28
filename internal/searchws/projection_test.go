@@ -1,7 +1,6 @@
 package searchws
 
 import (
-	"math"
 	"testing"
 	"time"
 
@@ -541,9 +540,17 @@ func TestProjectSearchMapsDiagnosticsAndDetachesSuggestions(t *testing.T) {
 	job.Failure = &searchjobs.Failure{
 		Code: searchjobs.FailureInvalidSPL,
 		Diagnostics: []searchjobs.Diagnostic{
-			{Code: "SPL001", Message: "unexpected token", Line: 2, Column: 3, EndLine: 2, EndColumn: 9, Suggestions: suggestions},
+			{
+				Code: "SPL001", Message: "unexpected token",
+				ByteOffset: 10, Line: 2, Column: 3, EndByteOffset: 18, EndLine: 2, EndColumn: 9,
+				Suggestions: suggestions,
+			},
 			{Code: "SPL002", Message: "no source position"},
-			{Code: "SPL003", Message: "bounded source position", Line: -1, Column: -2, EndLine: math.MaxInt, EndColumn: math.MaxInt},
+			{
+				Code: "SPL003", Message: "malformed source position",
+				ByteOffset: -1, Line: -1, Column: -2,
+				EndByteOffset: 18, EndLine: 2, EndColumn: 9,
+			},
 		},
 	}
 
@@ -559,14 +566,19 @@ func TestProjectSearchMapsDiagnosticsAndDetachesSuggestions(t *testing.T) {
 	if first.GetCode() != "SPL001" || first.GetSeverity() != opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR || first.GetMessage() != "unexpected token" {
 		t.Fatalf("first diagnostic = %+v", first)
 	}
-	if first.GetSourceRange().GetStart().GetLine() != 2 || first.GetSourceRange().GetStart().GetColumn() != 3 || first.GetSourceRange().GetEnd().GetLine() != 2 || first.GetSourceRange().GetEnd().GetColumn() != 9 {
+	if first.GetSourceRange().GetStart().GetByteOffset() != 10 ||
+		first.GetSourceRange().GetStart().GetLine() != 2 ||
+		first.GetSourceRange().GetStart().GetColumn() != 3 ||
+		first.GetSourceRange().GetEnd().GetByteOffset() != 18 ||
+		first.GetSourceRange().GetEnd().GetLine() != 2 ||
+		first.GetSourceRange().GetEnd().GetColumn() != 9 {
 		t.Fatalf("source range = %+v", first.GetSourceRange())
 	}
 	if diagnostics[1].GetSourceRange() != nil {
 		t.Fatalf("positionless diagnostic has range %+v", diagnostics[1].GetSourceRange())
 	}
-	if diagnostics[2].GetSourceRange().GetStart().GetLine() != 0 || diagnostics[2].GetSourceRange().GetStart().GetColumn() != 0 || diagnostics[2].GetSourceRange().GetEnd().GetLine() != math.MaxUint32 || diagnostics[2].GetSourceRange().GetEnd().GetColumn() != math.MaxUint32 {
-		t.Fatalf("bounded source range = %+v", diagnostics[2].GetSourceRange())
+	if diagnostics[2].GetSourceRange() != nil {
+		t.Fatalf("malformed diagnostic has range %+v", diagnostics[2].GetSourceRange())
 	}
 
 	suggestions[0] = "mutated"

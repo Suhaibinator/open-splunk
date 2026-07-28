@@ -11039,7 +11039,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		if ok {
 			var inputArgs []any
 			if _, sharesScalar := extremaMeasureInputs[ref.Name]; sharesScalar &&
-				input.kind == fieldKindString {
+				input.kind == fieldKindString && input.textEligibleSQL == "" {
 				scalarInput := scalarStringInputFor(ref, input)
 				inputSQL = compactNullableArraySQL("[" + scalarInput.valueAlias + "]")
 			} else {
@@ -11761,7 +11761,7 @@ func stringArrayInputSQL(field fieldState) (string, []any) {
 		return "if(" + field.existsSQL + ", " + field.valueSQL + ", " + empty + ")",
 			append([]any(nil), field.existsArgs...)
 	}
-	scalar := statsScalarStringOrNullSQL(field)
+	scalar := statsTextEligibleScalarStringOrNullSQL(field)
 	scalarArray := compactNullableArraySQL("[" + scalar + "]")
 	value := scalarArray
 	if field.kind == fieldKindDynamic {
@@ -12160,18 +12160,25 @@ func compactNullableArraySQL(valuesSQL string) string {
 
 func statsScalarStringOrNullSQL(field fieldState) string {
 	nullString := "CAST(NULL AS Nullable(String))"
-	value := nullString
 	switch field.kind {
 	case fieldKindDynamic:
 		supported, lexical := statsByScalarExpressions(field)
-		value = "if(" + supported + ", " + lexical + ", " + nullString + ")"
+		return "if(" + supported + ", " + lexical + ", " + nullString + ")"
 	case fieldKindString, fieldKindNumber, fieldKindBool, fieldKindTime:
-		value = "CAST(toString(" + field.valueSQL + ") AS Nullable(String))"
+		return "CAST(toString(" + field.valueSQL + ") AS Nullable(String))"
+	default:
+		return nullString
 	}
-	if field.textEligibleSQL != "" {
-		value = "if(ifNull(" + field.textEligibleSQL + ", 0), " +
-			value + ", " + nullString + ")"
+}
+
+func statsTextEligibleScalarStringOrNullSQL(field fieldState) string {
+	value := statsScalarStringOrNullSQL(field)
+	if field.textEligibleSQL == "" {
+		return value
 	}
+	nullString := "CAST(NULL AS Nullable(String))"
+	value = "if(ifNull(" + field.textEligibleSQL + ", 0), " +
+		value + ", " + nullString + ")"
 	return value
 }
 

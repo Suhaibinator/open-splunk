@@ -29,28 +29,33 @@ var testNow = time.Date(2026, 7, 22, 12, 0, 0, 123_000_000, time.UTC)
 type fakeSearchJobs struct {
 	mu sync.Mutex
 
-	createRequest  searchjobs.CreateRequest
-	createJob      searchjobs.Job
-	createErr      error
-	createCalls    int
-	getJob         searchjobs.Job
-	getErr         error
-	getScope       searchjobs.AccessScope
-	getID          string
-	resultsPage    searchjobs.ResultPage
-	resultsErr     error
-	resultsScope   searchjobs.AccessScope
-	resultsID      string
-	resultsRequest searchjobs.PageRequest
-	listPage       searchjobs.JobListPage
-	listErr        error
-	listScope      searchjobs.AccessScope
-	listRequest    searchjobs.JobListRequest
-	listCalls      int
-	listFn         func(context.Context, searchjobs.AccessScope, searchjobs.JobListRequest) (searchjobs.JobListPage, error)
-	cancelErr      error
-	cancelScope    searchjobs.AccessScope
-	cancelID       string
+	createRequest   searchjobs.CreateRequest
+	createJob       searchjobs.Job
+	createErr       error
+	createCalls     int
+	validateRequest searchjobs.ValidateRequest
+	validateResult  searchjobs.ValidationResult
+	validateErr     error
+	validateCalls   int
+	validateFn      func(context.Context, searchjobs.ValidateRequest) (searchjobs.ValidationResult, error)
+	getJob          searchjobs.Job
+	getErr          error
+	getScope        searchjobs.AccessScope
+	getID           string
+	resultsPage     searchjobs.ResultPage
+	resultsErr      error
+	resultsScope    searchjobs.AccessScope
+	resultsID       string
+	resultsRequest  searchjobs.PageRequest
+	listPage        searchjobs.JobListPage
+	listErr         error
+	listScope       searchjobs.AccessScope
+	listRequest     searchjobs.JobListRequest
+	listCalls       int
+	listFn          func(context.Context, searchjobs.AccessScope, searchjobs.JobListRequest) (searchjobs.JobListPage, error)
+	cancelErr       error
+	cancelScope     searchjobs.AccessScope
+	cancelID        string
 }
 
 // cancelOnSuccessfulSearchJobs simulates the request being canceled in the
@@ -85,6 +90,19 @@ func (jobs *fakeSearchJobs) Create(_ context.Context, request searchjobs.CreateR
 	jobs.createCalls++
 	jobs.createRequest = request
 	return jobs.createJob, jobs.createErr
+}
+
+func (jobs *fakeSearchJobs) Validate(ctx context.Context, request searchjobs.ValidateRequest) (searchjobs.ValidationResult, error) {
+	jobs.mu.Lock()
+	jobs.validateCalls++
+	jobs.validateRequest = request
+	fn := jobs.validateFn
+	result, err := jobs.validateResult, jobs.validateErr
+	jobs.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, request)
+	}
+	return result, err
 }
 
 func (jobs *fakeSearchJobs) GetFor(scope searchjobs.AccessScope, id string) (searchjobs.Job, error) {

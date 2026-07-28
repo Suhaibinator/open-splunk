@@ -105,6 +105,24 @@ func TestCompileStatsChronologicalScalarUsesImmutableEventOrderAndSharesStates(t
 	}
 }
 
+func TestCompileStatsChronologicalPreservesBinaryRawCandidates(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | stats earliest(_raw) AS first_raw latest(_raw) AS last_raw`,
+	)
+	if !strings.Contains(
+		compiled.SQL,
+		`CAST(toString("_raw") AS Nullable(String))`,
+	) {
+		t.Fatalf("chronological raw candidates lost their byte-preserving String value:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, `"__os_raw_encoding" = 1`) {
+		t.Fatalf("chronological raw candidates incorrectly discarded binary bytes:\n%s", compiled.SQL)
+	}
+}
+
 func TestCompileStatsChronologicalMultivalueUsesBoundedRowCandidatesAndFinalValidation(t *testing.T) {
 	t.Parallel()
 

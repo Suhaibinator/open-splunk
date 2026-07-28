@@ -3,8 +3,6 @@ package searchws
 import (
 	"context"
 	"errors"
-	"math"
-	"slices"
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
@@ -272,23 +270,9 @@ func exportStateToProto(state exportjobs.State) opensplunkv1.ExportJobState {
 }
 
 func searchFailureToProto(failure searchjobs.Failure) *opensplunkv1.SearchFailure {
-	diagnostics := make([]*opensplunkv1.Diagnostic, len(failure.Diagnostics))
-	for index, diagnostic := range failure.Diagnostics {
-		converted := &opensplunkv1.Diagnostic{
-			Code: diagnostic.Code, Severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
-			Message: diagnostic.Message, Suggestions: slices.Clone(diagnostic.Suggestions),
-		}
-		if diagnostic.Line > 0 || diagnostic.Column > 0 || diagnostic.EndLine > 0 || diagnostic.EndColumn > 0 {
-			converted.SourceRange = &opensplunkv1.SourceRange{
-				Start: &opensplunkv1.SourcePosition{Line: nonnegativeUint32(diagnostic.Line), Column: nonnegativeUint32(diagnostic.Column)},
-				End:   &opensplunkv1.SourcePosition{Line: nonnegativeUint32(diagnostic.EndLine), Column: nonnegativeUint32(diagnostic.EndColumn)},
-			}
-		}
-		diagnostics[index] = converted
-	}
 	return &opensplunkv1.SearchFailure{
 		Code: searchFailureCodeToProto(failure.Code), Message: failure.Message,
-		Retryable: failure.Retryable, Diagnostics: diagnostics,
+		Retryable: failure.Retryable, Diagnostics: searchjobproto.Diagnostics(failure.Diagnostics),
 	}
 }
 
@@ -343,13 +327,3 @@ func timestampToProto(input time.Time) (*timestamppb.Timestamp, error) {
 }
 
 func canonicalTime(input time.Time) time.Time { return input.Round(0).UTC() }
-
-func nonnegativeUint32(value int) uint32 {
-	if value <= 0 {
-		return 0
-	}
-	if uint64(value) > math.MaxUint32 {
-		return math.MaxUint32
-	}
-	return uint32(value)
-}

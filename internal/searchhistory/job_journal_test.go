@@ -103,7 +103,8 @@ func TestJobJournalMapsAndBoundsSafeFailure(t *testing.T) {
 	failed.Failure = &searchjobs.Failure{
 		Code: searchjobs.FailureInvalidSPL, Message: strings.Repeat("é", maximumFailureMessageBytes), Retryable: true,
 		Diagnostics: []searchjobs.Diagnostic{{
-			Code: " SPL_PARSE ", Message: "unexpected token", Line: 1, Column: 2, EndLine: 1, EndColumn: 3,
+			Code: " SPL_PARSE ", Message: "unexpected token",
+			ByteOffset: 7, Line: 1, Column: 2, EndByteOffset: 15, EndLine: 1, EndColumn: 3,
 			Suggestions: []string{"check syntax"},
 		}},
 	}
@@ -114,9 +115,12 @@ func TestJobJournalMapsAndBoundsSafeFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sourceRange := got.Failure.GetDiagnostics()[0].GetSourceRange()
 	if got.Failure.GetCode() != opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL || !got.Failure.GetRetryable() ||
 		len(got.Failure.GetMessage()) > maximumFailureMessageBytes || !strings.HasPrefix(got.Failure.GetMessage(), "é") ||
-		got.Failure.GetDiagnostics()[0].GetCode() != "SPL_PARSE" || got.Failure.GetDiagnostics()[0].GetSourceRange().GetStart().GetColumn() != 2 {
+		got.Failure.GetDiagnostics()[0].GetCode() != "SPL_PARSE" ||
+		sourceRange.GetStart().GetByteOffset() != 7 || sourceRange.GetStart().GetColumn() != 2 ||
+		sourceRange.GetEnd().GetByteOffset() != 15 {
 		t.Fatalf("failure history = %+v", got.Failure)
 	}
 }

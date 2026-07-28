@@ -770,7 +770,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		for _, index := range []int{0, 1} {
 			raw, ok := page.Rows[0].Values[index].Bytes()
 			if !ok || !bytes.Equal(raw, []byte{0xff, 0x00}) {
-				t.Fatalf("binary earliest/latest cell %d = %x/%v, want ff00 Bytes", index, raw, ok)
+				t.Fatalf("binary earliest/latest cell %d = %#v (%x/%v), want ff00 Bytes", index, page.Rows[0].Values[index], raw, ok)
 			}
 		}
 		if !page.Rows[0].Values[2].IsNull() {
@@ -1651,11 +1651,8 @@ ORDER BY grid.number`,
 			t.Fatalf("binary values transport = schema %#v rows %#v", binaryPage.Schema, binaryPage.Rows)
 		}
 		binaryValues, listOK := binaryPage.Rows[0].Values[0].List()
-		if !listOK || len(binaryValues) != 1 {
-			t.Fatalf("binary values cell = %#v", binaryPage.Rows[0].Values[0])
-		}
-		if raw, bytesOK := binaryValues[0].Bytes(); !bytesOK || !bytes.Equal(raw, []byte{0xff, 0x00}) {
-			t.Fatalf("binary values child = %x/%v", raw, bytesOK)
+		if !listOK || len(binaryValues) != 0 {
+			t.Fatalf("binary values cell = %#v, want empty text-eligible multivalue", binaryPage.Rows[0].Values[0])
 		}
 		binaryMaxJob, binaryMaxPage := queryIntegrationRunSearchRangeForIndex(
 			t,
@@ -1692,8 +1689,8 @@ ORDER BY grid.number`,
 		}{
 			{name: "equality", filter: `search binary_values=missing`, rows: 0},
 			{name: "wildcard", filter: `search binary_values="m*"`, rows: 0},
-			{name: "inequality", filter: `search binary_values!=missing`, rows: 1},
-			{name: "presence", filter: `search binary_values=*`, rows: 1},
+			{name: "inequality", filter: `search binary_values!=missing`, rows: 0},
+			{name: "presence", filter: `search binary_values=*`, rows: 0},
 		} {
 			test := test
 			t.Run("binary "+test.name, func(t *testing.T) {

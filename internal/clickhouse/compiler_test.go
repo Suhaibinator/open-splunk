@@ -3438,6 +3438,26 @@ func TestCompileStatsScalarStringExtremaAvoidArrayLowering(t *testing.T) {
 		}
 	}
 
+	rawWithValues := compileSPL(
+		t,
+		`index=gradethis | stats max(_raw) AS high values(_raw) AS text_values`,
+	)
+	for _, required := range []string{
+		`CAST(toString("_raw") AS Nullable(String)) AS "__os_measure_scalar_string_0"`,
+		`if(ifNull("__os_raw_encoding" = 1, 0), CAST(toString("_raw") AS Nullable(String)), CAST(NULL AS Nullable(String)))`,
+		`AS "__os_measure_strings_0"`,
+	} {
+		if !strings.Contains(rawWithValues.SQL, required) {
+			t.Fatalf("raw extrema/values inputs lost distinct byte and text policies %q:\n%s", required, rawWithValues.SQL)
+		}
+	}
+	if strings.Contains(
+		rawWithValues.SQL,
+		`if(ifNull("__os_raw_encoding" = 1, 0), CAST(toString("_raw") AS Nullable(String)), CAST(NULL AS Nullable(String))) AS "__os_measure_scalar_string_0"`,
+	) {
+		t.Fatalf("raw scalar extrema discarded binary bytes:\n%s", rawWithValues.SQL)
+	}
+
 	interleaved := compileSPL(
 		t,
 		`index=gradethis | stats values(service) AS services min(host) AS host_low min(service) AS service_low`,

@@ -67,6 +67,10 @@ func (runtimeSearchJobs) Create(context.Context, searchjobs.CreateRequest) (sear
 	return searchjobs.Job{}, nil
 }
 
+func (runtimeSearchJobs) Validate(context.Context, searchjobs.ValidateRequest) (searchjobs.ValidationResult, error) {
+	return searchjobs.ValidationResult{}, nil
+}
+
 func (runtimeSearchJobs) GetFor(searchjobs.AccessScope, string) (searchjobs.Job, error) {
 	return searchjobs.Job{}, searchjobs.ErrNotFound
 }

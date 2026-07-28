@@ -109,7 +109,7 @@ func (manager *Manager) listPageFor(ctx context.Context, access AccessScope, req
 	process := func(entries []retainedJobListEntry) (bool, error) {
 		for _, retained := range entries {
 			if visited&31 == 0 {
-				if contextErr := manager.jobListContextError(ctx); contextErr != nil {
+				if contextErr := manager.operationContextError(ctx); contextErr != nil {
 					return false, contextErr
 				}
 			}
@@ -186,7 +186,7 @@ func (manager *Manager) listPageFor(ctx context.Context, access AccessScope, req
 			}
 		}
 	}
-	if err := manager.jobListContextError(ctx); err != nil {
+	if err := manager.operationContextError(ctx); err != nil {
 		return JobListPage{}, err
 	}
 
@@ -368,16 +368,6 @@ func (manager *Manager) acquireJobListGate(ctx context.Context) error {
 	case <-manager.ctx.Done():
 		return ErrClosed
 	}
-}
-
-func (manager *Manager) jobListContextError(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if manager.ctx.Err() != nil {
-		return ErrClosed
-	}
-	return nil
 }
 
 func jobMatchesListMetadata(job Job, request normalizedJobListRequest) bool {

@@ -75,47 +75,23 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 }
 
 func (handler *apiHandler) createSearchJob(request *http.Request, input *opensplunkv1.CreateSearchJobRequest) (*opensplunkv1.CreateSearchJobResponse, error) {
-	definition := input.GetDefinition()
-	if definition == nil {
-		return nil, badRequestError("search definition is required")
-	}
-	spl := definition.GetSpl()
-	if strings.TrimSpace(spl) == "" {
-		return nil, badRequestError("SPL is required")
-	}
-	if strings.IndexByte(spl, 0) >= 0 {
-		return nil, badRequestError("SPL cannot contain NUL bytes")
-	}
-	if err := rejectUnsupportedCreateFields(input, definition); err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	resolvedRange, err := resolveSearchTimeRange(definition.GetTimeRange(), handler.now())
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	appID, source, err := handler.resolveSearchJobSource(request.Context(), definition.GetAppId(), input.GetSource())
+	resolved, err := handler.resolveSearchDefinition(input.GetDefinition(), func(definition *opensplunkv1.SearchDefinition) error {
+		return rejectUnsupportedCreateFields(input, definition)
+	})
 	if err != nil {
 		return nil, err
 	}
-	requestedIndexes, err := normalizeRequestedIndexes(definition.GetIndexScope())
+	appID, source, err := handler.resolveSearchJobSource(request.Context(), resolved.AppID, input.GetSource())
 	if err != nil {
-		return nil, badRequestError(err.Error())
+		return nil, err
 	}
-	if len(requestedIndexes) == 0 {
-		return nil, badRequestError("at least one index is required")
-	}
-	if err := handler.authorizeRequestedIndexes(request.Context(), requestedIndexes); err != nil {
-		if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
-			return nil, contextErr
-		}
-		if errors.Is(err, errIndexUnavailable) {
-			return nil, forbiddenError("index scope contains an unavailable index")
-		}
-		return nil, unavailableError("control plane is unavailable")
+	requestedIndexes, err := handler.resolveAuthorizedSearchIndexes(request.Context(), resolved.IndexScope)
+	if err != nil {
+		return nil, err
 	}
 
 	job, err := handler.jobs.Create(request.Context(), searchjobs.CreateRequest{
-		SPL:      spl,
+		SPL:      resolved.SPL,
 		OwnerID:  handler.ownerID,
 		TenantID: handler.tenantID,
 		// The catalog check above authorizes this exact immutable request scope.
@@ -123,7 +99,7 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 		// deployment and could exceed the manager's metadata bound.
 		AuthorizedIndexes: slices.Clone(requestedIndexes),
 		RequestedIndexes:  requestedIndexes,
-		TimeRange:         resolvedRange,
+		TimeRange:         resolved.TimeRange,
 		AppID:             appID,
 		Source:            source,
 	})
@@ -263,6 +239,46 @@ func (handler *apiHandler) accessScope() searchjobs.AccessScope {
 	return searchjobs.AccessScope{TenantID: handler.tenantID, OwnerID: handler.ownerID}
 }
 
+type resolvedSearchDefinition struct {
+	SPL        string
+	TimeRange  searchtime.Range
+	AppID      string
+	IndexScope []string
+}
+
+func (handler *apiHandler) resolveSearchDefinition(
+	definition *opensplunkv1.SearchDefinition,
+	rejectUnsupported func(*opensplunkv1.SearchDefinition) error,
+) (resolvedSearchDefinition, error) {
+	if definition == nil {
+		return resolvedSearchDefinition{}, badRequestError("search definition is required")
+	}
+	source := definition.GetSpl()
+	if strings.TrimSpace(source) == "" {
+		return resolvedSearchDefinition{}, badRequestError("SPL is required")
+	}
+	if strings.IndexByte(source, 0) >= 0 {
+		return resolvedSearchDefinition{}, badRequestError("SPL cannot contain NUL bytes")
+	}
+	if err := rejectUnsupported(definition); err != nil {
+		return resolvedSearchDefinition{}, badRequestError(err.Error())
+	}
+	resolvedRange, err := resolveSearchTimeRange(definition.GetTimeRange(), handler.now())
+	if err != nil {
+		return resolvedSearchDefinition{}, badRequestError(err.Error())
+	}
+	appID, err := normalizeSearchAppID(definition.GetAppId())
+	if err != nil {
+		return resolvedSearchDefinition{}, badRequestError("search app ID is invalid")
+	}
+	return resolvedSearchDefinition{
+		SPL:        source,
+		TimeRange:  resolvedRange,
+		AppID:      appID,
+		IndexScope: slices.Clone(definition.GetIndexScope()),
+	}, nil
+}
+
 func requestContextFailure(ctx context.Context, operationErr error) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -274,6 +290,26 @@ func requestContextFailure(ctx context.Context, operationErr error) error {
 }
 
 var errIndexUnavailable = errors.New("requested index is unavailable")
+
+func (handler *apiHandler) resolveAuthorizedSearchIndexes(ctx context.Context, scope []string) ([]string, error) {
+	requestedIndexes, err := normalizeRequestedIndexes(scope)
+	if err != nil {
+		return nil, badRequestError(err.Error())
+	}
+	if len(requestedIndexes) == 0 {
+		return nil, badRequestError("at least one index is required")
+	}
+	if err := handler.authorizeRequestedIndexes(ctx, requestedIndexes); err != nil {
+		if contextErr := requestContextFailure(ctx, err); contextErr != nil {
+			return nil, contextErr
+		}
+		if errors.Is(err, errIndexUnavailable) {
+			return nil, forbiddenError("index scope contains an unavailable index")
+		}
+		return nil, unavailableError("control plane is unavailable")
+	}
+	return requestedIndexes, nil
+}
 
 func (handler *apiHandler) authorizeRequestedIndexes(ctx context.Context, requested []string) error {
 	for _, name := range requested {
@@ -304,6 +340,10 @@ func rejectUnsupportedCreateFields(input *opensplunkv1.CreateSearchJobRequest, d
 			return errors.New("eager field discovery and timeline options are not supported; request those analyses through their dedicated APIs")
 		}
 	}
+	return rejectUnsupportedSearchDefinitionFields(definition)
+}
+
+func rejectUnsupportedSearchDefinitionFields(definition *opensplunkv1.SearchDefinition) error {
 	if definition.GetPreferredResultTab() != opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED || len(definition.GetSelectedFields()) != 0 || definition.GetVisualization() != nil {
 		return errors.New("search presentation metadata is not supported")
 	}
@@ -343,8 +383,8 @@ func (handler *apiHandler) resolveSearchJobSource(
 	requestedAppID string,
 	input *opensplunkv1.SearchJobSource,
 ) (string, searchjobs.JobSource, error) {
-	appID := strings.TrimSpace(requestedAppID)
-	if err := validateBoundedIdentifier(appID, maximumSavedSearchAppIDBytes, true); err != nil {
+	appID, err := normalizeSearchAppID(requestedAppID)
+	if err != nil {
 		return "", searchjobs.JobSource{}, badRequestError("search app ID is invalid")
 	}
 	if input == nil || input.GetOrigin() == opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_UNSPECIFIED &&
@@ -383,6 +423,14 @@ func (handler *apiHandler) resolveSearchJobSource(
 		Origin:   searchjobs.JobOriginSavedSearch,
 		ObjectID: savedSearchID,
 	}, nil
+}
+
+func normalizeSearchAppID(requested string) (string, error) {
+	appID := strings.TrimSpace(requested)
+	if err := validateBoundedIdentifier(appID, maximumSavedSearchAppIDBytes, true); err != nil {
+		return "", err
+	}
+	return appID, nil
 }
 
 func normalizeRequestedIndexes(input []string) ([]string, error) {

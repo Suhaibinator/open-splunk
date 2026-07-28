@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"errors"
-	"math"
 	"slices"
 	"time"
 
@@ -199,23 +198,7 @@ func failureCodeToProto(code searchjobs.FailureCode) opensplunkv1.SearchFailureC
 }
 
 func diagnosticsToProto(diagnostics []searchjobs.Diagnostic) []*opensplunkv1.Diagnostic {
-	result := make([]*opensplunkv1.Diagnostic, len(diagnostics))
-	for index, diagnostic := range diagnostics {
-		converted := &opensplunkv1.Diagnostic{
-			Code:        diagnostic.Code,
-			Severity:    opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
-			Message:     diagnostic.Message,
-			Suggestions: slices.Clone(diagnostic.Suggestions),
-		}
-		if diagnostic.Line > 0 || diagnostic.Column > 0 || diagnostic.EndLine > 0 || diagnostic.EndColumn > 0 {
-			converted.SourceRange = &opensplunkv1.SourceRange{
-				Start: &opensplunkv1.SourcePosition{Line: nonnegativeUint32(diagnostic.Line), Column: nonnegativeUint32(diagnostic.Column)},
-				End:   &opensplunkv1.SourcePosition{Line: nonnegativeUint32(diagnostic.EndLine), Column: nonnegativeUint32(diagnostic.EndColumn)},
-			}
-		}
-		result[index] = converted
-	}
-	return result
+	return searchjobproto.Diagnostics(diagnostics)
 }
 
 func indexSummaryToProto(index control.Index) *opensplunkv1.IndexSummary {
@@ -294,15 +277,5 @@ func optionalString(value string) *string {
 func stringPointer(value string) *string { return &value }
 
 func uint64Pointer(value uint64) *uint64 { return &value }
-
-func nonnegativeUint32(value int) uint32 {
-	if value <= 0 {
-		return 0
-	}
-	if uint64(value) > math.MaxUint32 {
-		return math.MaxUint32
-	}
-	return uint32(value)
-}
 
 func identitySanitizer[T proto.Message](request T) (T, error) { return request, nil }

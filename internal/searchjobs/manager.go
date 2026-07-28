@@ -16,7 +16,6 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
-	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -66,8 +65,8 @@ var (
 	ErrClosed = errors.New("search job manager is closed")
 	// ErrQueueFull means the bounded pending-job queue has no capacity.
 	ErrQueueFull = errors.New("search job queue is full")
-	// ErrCapacity means a manager-wide retained job, byte, or result-reader
-	// budget is full.
+	// ErrCapacity means a manager-wide retained job, byte, result-reader, or
+	// synchronous validation budget is full.
 	ErrCapacity = errors.New("search job manager capacity is exhausted")
 	// ErrRequestTooLarge means query or scope metadata exceeded an admission
 	// bound before the job could be safely queued.
@@ -160,10 +159,11 @@ type Snapshotter interface {
 // defaults. A negative CleanupInterval disables the background cleanup loop,
 // which is useful with an injected deterministic clock in tests.
 type Config struct {
-	Executor               Executor
-	Snapshotter            Snapshotter
-	Journal                JobJournal
-	Compiler               clickhouse.Compiler
+	Executor    Executor
+	Snapshotter Snapshotter
+	Journal     JobJournal
+	Compiler    clickhouse.Compiler
+	// MaxConcurrent bounds workers and, independently, synchronous validations.
 	MaxConcurrent          int
 	MaxConcurrentReads     int
 	MaxConcurrentSnapshots int
@@ -244,6 +244,7 @@ type Manager struct {
 	readGate              chan struct{}
 	listGate              chan struct{}
 	snapshotGate          chan struct{}
+	validationGate        chan struct{}
 
 	ctx               context.Context
 	cancel            context.CancelFunc
@@ -251,11 +252,11 @@ type Manager struct {
 	queueTail         *jobEntry
 	queueCount        int
 	queueCapacity     int
-	activeAdmissions  int
+	activeOperations  int
 	pendingAdmissions int
 	queueCond         *sync.Cond
 	wg                sync.WaitGroup
-	admissionWG       sync.WaitGroup
+	operationWG       sync.WaitGroup
 	closeOnce         sync.Once
 
 	budgetMu             sync.Mutex
@@ -489,6 +490,7 @@ func New(config Config) (*Manager, error) {
 		readGate:              make(chan struct{}, maxConcurrentReads),
 		listGate:              make(chan struct{}, defaultMaxConcurrentLists),
 		snapshotGate:          make(chan struct{}, maxConcurrentSnapshots),
+		validationGate:        make(chan struct{}, maxConcurrent),
 		ctx:                   managerContext,
 		cancel:                cancel,
 		queueCapacity:         maxQueued,
@@ -527,10 +529,10 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 		return Job{}, err
 	}
 	request = normalizedRequest
-	if err := manager.beginCreate(); err != nil {
+	if err := manager.beginOperation(); err != nil {
 		return Job{}, err
 	}
-	defer manager.endCreate()
+	defer manager.endOperation()
 	if err := manager.reserveAdmission(); err != nil {
 		return Job{}, err
 	}
@@ -682,22 +684,32 @@ func (manager *Manager) snapshotAdmissionError(callerContext context.Context) er
 	return fmt.Errorf("create search job: %w", ErrStorageUnavailable)
 }
 
-func (manager *Manager) beginCreate() error {
+func (manager *Manager) beginOperation() error {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	if manager.closed {
 		return ErrClosed
 	}
-	manager.activeAdmissions++
-	manager.admissionWG.Add(1)
+	manager.activeOperations++
+	manager.operationWG.Add(1)
 	return nil
 }
 
-func (manager *Manager) endCreate() {
+func (manager *Manager) endOperation() {
 	manager.mu.Lock()
-	manager.activeAdmissions--
+	manager.activeOperations--
 	manager.mu.Unlock()
-	manager.admissionWG.Done()
+	manager.operationWG.Done()
+}
+
+func (manager *Manager) operationContextError(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if manager.ctx.Err() != nil {
+		return ErrClosed
+	}
+	return nil
 }
 
 // reserveAdmission reserves both a retained-job slot and a future queue slot
@@ -861,18 +873,17 @@ func (manager *Manager) LastJournalError() error {
 }
 
 func (manager *Manager) validateRequestSize(request CreateRequest) error {
-	if len(request.SPL) > manager.maxSPLBytes {
-		return fmt.Errorf("%w: SPL exceeds %d bytes", ErrRequestTooLarge, manager.maxSPLBytes)
+	if err := manager.validatePlanningRequestSize(
+		request.SPL,
+		request.TenantID,
+		request.AuthorizedIndexes,
+		request.RequestedIndexes,
+		request.TimeRange,
+	); err != nil {
+		return err
 	}
-	if len(request.OwnerID) > defaultMaxIdentityBytes || len(request.TenantID) > defaultMaxIdentityBytes {
+	if len(request.OwnerID) > defaultMaxIdentityBytes {
 		return fmt.Errorf("%w: owner or tenant identity exceeds %d bytes", ErrRequestTooLarge, defaultMaxIdentityBytes)
-	}
-	intent := request.TimeRange.Intent()
-	if len(intent.Earliest) > searchtime.MaximumExpressionBytes || len(intent.Latest) > searchtime.MaximumExpressionBytes {
-		return fmt.Errorf("%w: time expression exceeds %d bytes", ErrRequestTooLarge, searchtime.MaximumExpressionBytes)
-	}
-	if len(intent.Timezone) > searchtime.MaximumTimezoneBytes {
-		return fmt.Errorf("%w: timezone exceeds %d bytes", ErrRequestTooLarge, searchtime.MaximumTimezoneBytes)
 	}
 	if len(request.AppID) > maximumJobAppIDBytes {
 		return fmt.Errorf("%w: app ID exceeds %d bytes", ErrRequestTooLarge, maximumJobAppIDBytes)
@@ -881,24 +892,11 @@ func (manager *Manager) validateRequestSize(request CreateRequest) error {
 		return fmt.Errorf("%w: source object ID exceeds %d bytes", ErrRequestTooLarge, maximumJobSourceIDBytes)
 	}
 	for _, value := range []string{
-		intent.Earliest,
-		intent.Latest,
-		intent.Timezone,
 		request.AppID,
 		request.Source.ObjectID,
 	} {
 		if len(value) > defaultMaxIdentityBytes || !utf8.ValidString(value) {
 			return fmt.Errorf("%w: search intent metadata exceeds %d bytes", ErrRequestTooLarge, defaultMaxIdentityBytes)
-		}
-	}
-	if len(request.AuthorizedIndexes) > manager.maxScopeIndexes || len(request.RequestedIndexes) > manager.maxScopeIndexes-len(request.AuthorizedIndexes) {
-		return fmt.Errorf("%w: index scope exceeds %d entries", ErrRequestTooLarge, manager.maxScopeIndexes)
-	}
-	for _, indexes := range [][]string{request.AuthorizedIndexes, request.RequestedIndexes} {
-		for _, index := range indexes {
-			if len(index) > defaultMaxIdentityBytes {
-				return fmt.Errorf("%w: index name exceeds %d bytes", ErrRequestTooLarge, defaultMaxIdentityBytes)
-			}
 		}
 	}
 	return nil
@@ -1264,7 +1262,7 @@ func (manager *Manager) Close() error {
 		manager.mu.Unlock()
 
 		manager.cancel()
-		manager.admissionWG.Wait()
+		manager.operationWG.Wait()
 		now := manager.nowUTC()
 		journalContext, cancelJournal := context.WithTimeout(context.Background(), manager.journalTimeout)
 		for _, entry := range entries {
@@ -1385,7 +1383,7 @@ func (manager *Manager) run(entry *jobEntry) {
 	if !manager.advance(entry, StateQueued, StateParsing, nil) {
 		return
 	}
-	parsed, err := spl.Parse(entry.job.SPL)
+	parsed, err := parseSPLQuery(entry.ctx, entry.job.SPL)
 	if err != nil {
 		manager.failOrCancel(entry, parseFailure(err), manager.nowUTC())
 		return
@@ -1408,12 +1406,7 @@ func (manager *Manager) run(entry *jobEntry) {
 		VisibilityCutoff:  &visibilityCutoff,
 	}
 	entry.mu.RUnlock()
-	logical, err := plan.Build(parsed, scope)
-	if err != nil {
-		manager.failOrCancel(entry, planningFailure(err), manager.nowUTC())
-		return
-	}
-	compiled, err := manager.compiler.Compile(logical)
+	logical, compiled, err := manager.buildAndCompileQuery(entry.ctx, parsed, scope)
 	if err != nil {
 		var diagnostic *plan.Diagnostic
 		if errors.As(err, &diagnostic) {
@@ -1810,17 +1803,9 @@ func parseFailure(err error) Failure {
 		code = FailureUnsupportedSPL
 	}
 	return Failure{
-		Code:    code,
-		Message: diagnostic.Error(),
-		Diagnostics: []Diagnostic{{
-			Code:        diagnostic.Code,
-			Message:     diagnostic.Message,
-			Line:        diagnostic.Range.Start.Line,
-			Column:      diagnostic.Range.Start.Column,
-			EndLine:     diagnostic.Range.End.Line,
-			EndColumn:   diagnostic.Range.End.Column,
-			Suggestions: cloneStrings(diagnostic.Suggestions),
-		}},
+		Code:        code,
+		Message:     diagnostic.Error(),
+		Diagnostics: []Diagnostic{diagnosticFromSPL(diagnostic)},
 	}
 }
 
@@ -1839,17 +1824,9 @@ func planningFailure(err error) Failure {
 		code = FailureUnsupportedSPL
 	}
 	return Failure{
-		Code:    code,
-		Message: diagnostic.Error(),
-		Diagnostics: []Diagnostic{{
-			Code:        diagnostic.Code,
-			Message:     diagnostic.Message,
-			Line:        diagnostic.Range.Start.Line,
-			Column:      diagnostic.Range.Start.Column,
-			EndLine:     diagnostic.Range.End.Line,
-			EndColumn:   diagnostic.Range.End.Column,
-			Suggestions: cloneStrings(diagnostic.Suggestions),
-		}},
+		Code:        code,
+		Message:     diagnostic.Error(),
+		Diagnostics: []Diagnostic{diagnosticFromPlan(diagnostic)},
 	}
 }
 

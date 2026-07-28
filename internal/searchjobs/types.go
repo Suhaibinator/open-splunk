@@ -77,13 +77,34 @@ const (
 // Diagnostic is a source-located SPL parse or planning diagnostic. It contains
 // only user-safe compiler information and never generated SQL.
 type Diagnostic struct {
-	Code        string
-	Message     string
-	Line        int
-	Column      int
-	EndLine     int
-	EndColumn   int
-	Suggestions []string
+	Code          string
+	Message       string
+	ByteOffset    int
+	Line          int
+	Column        int
+	EndByteOffset int
+	EndLine       int
+	EndColumn     int
+	Suggestions   []string
+}
+
+// ValidSourceRange reports whether the diagnostic carries a complete,
+// forward, protobuf-representable source range. A positionless or malformed
+// diagnostic is still safe to publish, but transports must omit its range.
+func (diagnostic Diagnostic) ValidSourceRange() bool {
+	if diagnostic.ByteOffset < 0 || diagnostic.EndByteOffset < diagnostic.ByteOffset {
+		return false
+	}
+	values := [...]int{diagnostic.Line, diagnostic.Column, diagnostic.EndLine, diagnostic.EndColumn}
+	for _, value := range values {
+		if value <= 0 || uint64(value) > math.MaxUint32 {
+			return false
+		}
+	}
+	if diagnostic.EndLine < diagnostic.Line {
+		return false
+	}
+	return diagnostic.EndLine != diagnostic.Line || diagnostic.EndColumn >= diagnostic.Column
 }
 
 // Failure describes why a job failed without exposing storage errors or SQL.
@@ -129,6 +150,40 @@ type CreateRequest struct {
 	TimeRange         searchtime.Range
 	AppID             string
 	Source            JobSource
+}
+
+// ValidateRequest is a server-resolved planning scope for synchronous SPL
+// validation. It deliberately omits owner, provenance, and storage visibility:
+// validation creates no retained job and never reads storage.
+type ValidateRequest struct {
+	SPL               string
+	TenantID          string
+	AuthorizedIndexes []string
+	RequestedIndexes  []string
+	TimeRange         searchtime.Range
+}
+
+// ValidationResultKind predicts the relation shape produced by a successfully
+// compiled search without coupling the search-job layer to transport enums.
+type ValidationResultKind uint8
+
+const (
+	ValidationResultKindInvalid ValidationResultKind = iota
+	ValidationResultKindEvents
+	ValidationResultKindStatistics
+	ValidationResultKindTimeSeries
+)
+
+// ValidationResult contains only safe, bounded analysis metadata. Invalid SPL
+// returns diagnostics with Valid false and no partial plan metadata. Generated
+// SQL and compiler arguments are never retained or exposed.
+type ValidationResult struct {
+	Valid               bool
+	NormalizedSPL       string
+	Diagnostics         []Diagnostic
+	ReferencedIndexes   []string
+	ReferencedFields    []string
+	PredictedResultKind ValidationResultKind
 }
 
 // AccessScope is the authenticated tenant and owner boundary used by the

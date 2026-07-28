@@ -71,6 +71,7 @@ const (
 // Manager satisfies this interface directly.
 type SearchJobs interface {
 	Create(context.Context, searchjobs.CreateRequest) (searchjobs.Job, error)
+	Validate(context.Context, searchjobs.ValidateRequest) (searchjobs.ValidationResult, error)
 	GetFor(searchjobs.AccessScope, string) (searchjobs.Job, error)
 	ListPageFor(context.Context, searchjobs.AccessScope, searchjobs.JobListRequest) (searchjobs.JobListPage, error)
 	ResultsFor(searchjobs.AccessScope, string, searchjobs.PageRequest) (searchjobs.ResultPage, error)
@@ -487,6 +488,7 @@ func NewHandler(config Config) (*Handler, error) {
 	apiRouter := api.newRouter(requestBytes, routeTimeout)
 	apiRoutes := postAPIRoutes(
 		"/api/v1/system/bootstrap",
+		"/api/v1/search/validate",
 		"/api/v1/search/jobs/create",
 		"/api/v1/search/jobs/get",
 		searchJobsListPath,
@@ -737,6 +739,11 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 			Path: "/system/bootstrap", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.GetSystemBootstrapRequest, *opensplunkv1.GetSystemBootstrapResponse](), Handler: handler.getSystemBootstrap,
 			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.GetSystemBootstrapRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+		}),
+		router.NewGenericRouteDefinition[*opensplunkv1.ValidateSearchRequest, *opensplunkv1.ValidateSearchResponse, string, struct{}](router.RouteConfig[*opensplunkv1.ValidateSearchRequest, *opensplunkv1.ValidateSearchResponse]{
+			Path: "/search/validate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: codec.NewProtoCodec[*opensplunkv1.ValidateSearchRequest, *opensplunkv1.ValidateSearchResponse](), Handler: handler.validateSearch,
+			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.ValidateSearchRequest],
 		}),
 		router.NewGenericRouteDefinition[*opensplunkv1.CreateSearchJobRequest, *opensplunkv1.CreateSearchJobResponse, string, struct{}](router.RouteConfig[*opensplunkv1.CreateSearchJobRequest, *opensplunkv1.CreateSearchJobResponse]{
 			Path: "/search/jobs/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
