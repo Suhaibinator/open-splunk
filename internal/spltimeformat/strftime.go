@@ -18,9 +18,6 @@ const (
 	// MaximumStrftimeOutputBytes bounds the conservative result of expanding
 	// every directive in one call.
 	MaximumStrftimeOutputBytes = 16 << 10
-	// MaximumTimezoneAbbreviationBytes is deliberately conservative for the
-	// IANA abbreviations emitted by supported search timezones.
-	MaximumTimezoneAbbreviationBytes = 64
 )
 
 var (
@@ -56,7 +53,6 @@ const (
 	DirectiveTime24
 	DirectiveISODate
 	DirectiveEpochSeconds
-	DirectiveTimezoneAbbreviation
 	DirectiveTimezoneOffset
 	DirectiveTimezoneOffsetColon
 	DirectiveSubseconds
@@ -209,7 +205,6 @@ var simpleDirectives = map[byte]Directive{
 	'T': DirectiveTime24,
 	'F': DirectiveISODate,
 	's': DirectiveEpochSeconds,
-	'Z': DirectiveTimezoneAbbreviation,
 	'z': DirectiveTimezoneOffset,
 	'Q': DirectiveSubseconds,
 	'N': DirectiveSubseconds,
@@ -240,8 +235,6 @@ func directiveMaximumBytes(directive Directive, width uint8) uint64 {
 		return 10
 	case DirectiveEpochSeconds:
 		return 20
-	case DirectiveTimezoneAbbreviation:
-		return MaximumTimezoneAbbreviationBytes
 	case DirectiveSubseconds:
 		return uint64(width)
 	default:

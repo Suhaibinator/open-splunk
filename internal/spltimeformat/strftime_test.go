@@ -28,13 +28,13 @@ func TestCompileStrftimeFormatAcceptsBoundedLocaleStableSubset(t *testing.T) {
 		},
 		{
 			name:        "precision and timezone",
-			format:      "%3Q/%6Q/%9Q %3N/%6N/%9N %f %z %:z %Z",
-			outputBytes: 3 + 1 + 6 + 1 + 9 + 1 + 3 + 1 + 6 + 1 + 9 + 1 + 6 + 1 + 5 + 1 + 6 + 1 + MaximumTimezoneAbbreviationBytes,
+			format:      "%3Q/%6Q/%9Q %3N/%6N/%9N %f %z %:z",
+			outputBytes: 3 + 1 + 6 + 1 + 9 + 1 + 3 + 1 + 6 + 1 + 9 + 1 + 6 + 1 + 5 + 1 + 6,
 			directives: []Directive{
 				DirectiveSubseconds, DirectiveSubseconds, DirectiveSubseconds,
 				DirectiveSubseconds, DirectiveSubseconds, DirectiveSubseconds,
 				DirectiveMicroseconds, DirectiveTimezoneOffset,
-				DirectiveTimezoneOffsetColon, DirectiveTimezoneAbbreviation,
+				DirectiveTimezoneOffsetColon,
 			},
 		},
 		{
@@ -123,6 +123,7 @@ func TestCompileStrftimeFormatRejectsInvalidUnsupportedAndOversizedFormats(t *te
 		"%U",
 		"%k",
 		"%C",
+		"%Z",
 		"%Ez",
 		"%::z",
 		"%:::z",
@@ -141,7 +142,7 @@ func TestCompileStrftimeFormatRejectsInvalidUnsupportedAndOversizedFormats(t *te
 		t.Fatalf("oversized format error = %v, want ErrStrftimeFormatTooLarge", err)
 	}
 	if _, err := CompileStrftimeFormat(
-		strings.Repeat("%Z", MaximumStrftimeOutputBytes/int(MaximumTimezoneAbbreviationBytes)+1),
+		strings.Repeat("%s", MaximumStrftimeOutputBytes/20+1),
 	); !errors.Is(err, ErrStrftimeFormatTooLarge) {
 		t.Fatalf("output-amplifying format error = %v, want ErrStrftimeFormatTooLarge", err)
 	}

@@ -64,6 +64,7 @@ func TestParseStrftimeRejectsArityNonliteralBooleanAndInvalidFormats(t *testing.
 		{`index=main | eval rendered=strftime(isnull(_time), "%F")`, "SPL_UNSUPPORTED_EVAL_EXPRESSION"},
 		{`index=main | eval rendered=strftime(_time, "%")`, "SPL_UNSUPPORTED_TIME_FORMAT"},
 		{`index=main | eval rendered=strftime(_time, "%c")`, "SPL_UNSUPPORTED_TIME_FORMAT"},
+		{`index=main | eval rendered=strftime(_time, "%Z")`, "SPL_UNSUPPORTED_TIME_FORMAT"},
 		{"index=main | eval rendered=strftime(_time, \"bad\x00format\")", "SPL_UNSUPPORTED_TIME_FORMAT"},
 	} {
 		assertParseDiagnosticCode(t, test.source, test.code)
@@ -80,9 +81,8 @@ func TestParseStrftimeBoundsFormatResources(t *testing.T) {
 		"SPL_QUERY_TOO_COMPLEX",
 	)
 	amplifying := strings.Repeat(
-		"%Z",
-		spltimeformat.MaximumStrftimeOutputBytes/
-			spltimeformat.MaximumTimezoneAbbreviationBytes+1,
+		"%s",
+		spltimeformat.MaximumStrftimeOutputBytes/20+1,
 	)
 	assertParseDiagnosticCode(
 		t,
