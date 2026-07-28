@@ -7,7 +7,101 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded internal search inspection
+## Latest checkpoint: bounded structured physical plans
+
+Date: 2026-07-28
+
+Committed and pushed checkpoint:
+
+- `1a3d9d0` — fixed structured ClickHouse PLAN output, a bounded safe physical
+  projection, and pinned compatibility/adversarial coverage.
+
+This test-first slice turns the internal inspection primitive into measurable,
+machine-readable physical evidence without weakening its administrator-only
+boundary:
+
+1. The Explainer now issues only fixed
+   `EXPLAIN PLAN json = 1, description = 1, indexes = 1, actions = 0,
+   header = 1` around the unchanged sealed compiler SQL. Its outer settings
+   retain the exact execution cap and pin condition-cache, skip-index-on-read,
+   and full-text-index behavior for reproducible physical analysis.
+2. ClickHouse must return exactly one non-null String row containing one JSON
+   PLAN envelope. The row is normalized into at most 4,096 nonempty,
+   control-free UTF-8 lines, with 16 KiB per line and one MiB total. Multiple
+   rows, plaintext plans, truncated JSON, trailing values, Actions, malformed
+   structure, cancellation, and driver errors fail atomically before
+   publication.
+3. `queryexec.ParseExplainPlan` returns a detached projection of bounded node
+   types, physical MergeTree read columns, index types/names/keys, and
+   initial/selected part and granule counts. It deliberately omits
+   descriptions, conditions, node IDs, column types, arguments, and other
+   literal-bearing fields.
+4. A streaming token preflight enforces the one-envelope shape, 4,096 total
+   nodes, 1,024 children per node, 4,096 accumulated read headers and indexes,
+   and 64 keys per index before typed collections are materialized. Every field
+   consumed by the typed projection is matched with the same case folding as
+   `encoding/json`; ambiguous exact or case-variant duplicates are rejected.
+   The subsequent typed decode and iterative traversal are linear under the
+   existing one-MiB input ceiling and cap projected MergeTree reads at 256.
+5. The pinned ClickHouse suite proves all legitimate optimizer shapes used by
+   supported compiler output: `ReadNothing` for an empty MergeTree, a
+   `ReadFromMergeTree` with no Indexes for a constant-false predicate, a legal
+   greater-than-64-node table/sort pipeline, populated reads with MinMax and
+   PrimaryKey evidence, and chronological compiler queries with inner
+   settings.
+6. `searchinspection.Result` now publishes the safe `PhysicalPlan` beside the
+   administrator-sensitive raw PLAN. The service reruns the complete public
+   parser at its arbitrary Explainer boundary and still requires an unchanged
+   postflight execution snapshot before returning either representation.
+7. Three independent adversarial passes found and closed acceptance of
+   non-JSON/multi-row results, cancellation after parsing, rejection of valid
+   empty/index-free plans, quadratic repeated-subtree parsing, an artificial
+   depth cap below legal compiler output, decode-time wide-array allocation
+   amplification, and ambiguous duplicate projected fields. Final rereviews
+   reported no remaining P0/P1/P2 finding.
+
+Validation on the pushed implementation:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/queryexec ./internal/searchinspection -count=1
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/queryexec \
+    -run '^TestExecutorAndManagerAgainstClickHouse$' -count=1 -timeout=6m
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/searchinspection \
+    -run '^TestServiceAgainstClickHouse$' -count=1 -timeout=6m
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=5m ./...
+npm run lint
+git diff --check
+```
+
+The final pinned query-executor and inspection integrations passed in 13.831
+and 6.540 seconds. Repository-wide Go lint reported zero issues.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `1a3d9d0`.
+2. Reuse `internal/testsupport/gradethiscorpus` as the exact ten-query semantic
+   oracle; do not create or weaken a parallel corpus.
+3. Add deterministic same-tenant/index, foreign-tenant, foreign-index,
+   adjacent-partition, and out-of-time load cohorts, then capture real
+   execution progress and structured physical evidence without latency
+   goldens.
+4. Require the existing exact result oracle to remain unchanged while proving
+   bounded scanned rows/bytes, selected parts/granules, physical columns, and
+   actual index use for each query.
+5. Add a schema/order/projection/index/promoted-field migration only if the
+   measured corpus demonstrates a concrete improvement without changing SPL
+   semantics or chronological ordering. Otherwise record the evidence-backed
+   rejection and continue the remaining architecture phases.
+
+## Previous checkpoint: bounded internal search inspection
 
 Date: 2026-07-28
 
