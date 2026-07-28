@@ -40,6 +40,7 @@ type Config struct {
 	DefaultRetryAfter    time.Duration
 	Clock                func() time.Time
 	NewStreamID          func() string
+	TokenUseRecorder     CollectorTokenUseRecorder
 }
 
 const defaultServerVersion = "development"
@@ -65,6 +66,7 @@ type Service struct {
 	config           Config
 	validator        *Validator
 	authorizer       Authorizer
+	tokenUseRecorder CollectorTokenUseRecorder
 	store            EventStore
 	streamMu         sync.Mutex
 	streamsBySubject map[string]uint32
@@ -142,6 +144,7 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 		config:           config,
 		validator:        validator,
 		authorizer:       authorizer,
+		tokenUseRecorder: config.TokenUseRecorder,
 		store:            store,
 		streamsBySubject: make(map[string]uint32),
 	}, nil
@@ -185,6 +188,24 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 		return err
 	}
 
+	streamID := s.config.NewStreamID()
+	if !validIdentifier(streamID, s.config.Limits.MaxIDBytes) {
+		return status.Error(codes.Internal, "failed to allocate collector stream ID")
+	}
+	acceptedAt := s.config.Clock().UTC()
+	if s.tokenUseRecorder != nil {
+		if authorization.SubjectID == "" {
+			return status.Error(codes.Unavailable, "collector admission service is unavailable")
+		}
+		if err := s.tokenUseRecorder.RecordCollectorTokenUse(
+			stream.Context(),
+			authorization.SubjectID,
+			acceptedAt,
+		); err != nil {
+			return tokenUseRPCError(err)
+		}
+	}
+
 	state := streamState{
 		collectorID:       hello.GetCollectorId(),
 		instanceID:        hello.GetInstanceId(),
@@ -194,13 +215,9 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 		authorizedIndexes: authorizedSet,
 	}
 	responseSequence := uint64(1)
-	streamID := s.config.NewStreamID()
-	if !validIdentifier(streamID, s.config.Limits.MaxIDBytes) {
-		return status.Error(codes.Internal, "failed to allocate collector stream ID")
-	}
 	if err := stream.Send(&opensplunkv1.CollectResponse{
 		StreamSequence: responseSequence,
-		SentAt:         timestamppb.New(s.config.Clock().UTC()),
+		SentAt:         timestamppb.New(acceptedAt),
 		Payload: &opensplunkv1.CollectResponse_Ready{Ready: &opensplunkv1.CollectorReady{
 			StreamId:                 streamID,
 			ServerInstanceId:         s.config.ServerInstanceID,
@@ -208,7 +225,7 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 			Build:                    buildmetadata.Clone(s.config.Build),
 			ProtocolMajor:            s.config.ProtocolMajor,
 			ProtocolMinor:            hello.GetProtocolMinor(),
-			ServerTime:               timestamppb.New(s.config.Clock().UTC()),
+			ServerTime:               timestamppb.New(acceptedAt),
 			HeartbeatInterval:        durationpb.New(s.config.HeartbeatInterval),
 			MaxInFlightBatches:       s.config.MaxInFlightBatches,
 			MaxBatchEvents:           s.config.Limits.MaxBatchEvents,
@@ -337,6 +354,19 @@ func authorizationRPCError(err error, unauthorizedMessage string) error {
 		return status.FromContextError(err).Err()
 	default:
 		return status.Error(codes.Unavailable, "collector authentication service is unavailable")
+	}
+}
+
+func tokenUseRPCError(err error) error {
+	switch {
+	case errors.Is(err, ErrUnauthorized):
+		return status.Error(codes.Unauthenticated, "collector authentication is no longer valid")
+	case errors.Is(err, context.Canceled):
+		return status.Error(codes.Canceled, context.Canceled.Error())
+	case errors.Is(err, context.DeadlineExceeded):
+		return status.Error(codes.DeadlineExceeded, context.DeadlineExceeded.Error())
+	default:
+		return status.Error(codes.Unavailable, "collector admission service is unavailable")
 	}
 }
 

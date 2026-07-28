@@ -186,6 +186,24 @@ func (f AuthorizerFunc) Authorize(ctx context.Context, token string) (Authorizat
 	return f(ctx, token)
 }
 
+// CollectorTokenUseRecorder records one accepted stream admission using only
+// the stable token identifier returned by Authorizer. Implementations must
+// return ErrUnauthorized when the identified token is no longer active.
+type CollectorTokenUseRecorder interface {
+	RecordCollectorTokenUse(context.Context, string, time.Time) error
+}
+
+// CollectorTokenUseRecorderFunc adapts a function to CollectorTokenUseRecorder.
+type CollectorTokenUseRecorderFunc func(context.Context, string, time.Time) error
+
+func (f CollectorTokenUseRecorderFunc) RecordCollectorTokenUse(
+	ctx context.Context,
+	tokenID string,
+	acceptedAt time.Time,
+) error {
+	return f(ctx, tokenID, acceptedAt)
+}
+
 // StoreBatch contains only events which passed validation, authorization, and
 // mandatory redaction. BatchID and event IDs remain stable across retries.
 type StoreBatch struct {
