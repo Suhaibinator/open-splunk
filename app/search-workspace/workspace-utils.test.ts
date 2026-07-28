@@ -210,6 +210,18 @@ test("strftime highlights only when used as a parenthesized function", () => {
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
+test("strptime highlights only when used as a parenthesized function", () => {
+  const query = `index=main strptime=1 | eval epoch=StRpTiMe(timestamp, "%F %T.%6N") | table strptime`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["strptime"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
 test("eval completion advertises the exact supported scalar signatures", () => {
   const evalCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eval");
   assert.ok(evalCompletion);
@@ -237,6 +249,9 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /fixed search-start Unix second/i);
   assert.match(evalCompletion.detail, /strftime\(time, "%Y-%m-%dT%H:%M:%S\.%Q"\)/);
   assert.match(evalCompletion.detail, /effective IANA search timezone/i);
+  assert.match(evalCompletion.detail, /strptime\(text, "%Y-%m-%dT%H:%M:%S\.%6N"\)/);
+  assert.match(evalCompletion.detail, /full date.*microsecond Unix seconds/i);
+  assert.match(evalCompletion.detail, /4 KiB literal format.*4 KiB String input/i);
   assert.match(evalCompletion.detail, /literal precision from 0 through 18/i);
   assert.match(evalCompletion.detail, /first non-null fixed value/i);
   assert.match(evalCompletion.detail, /first true predicate/i);
@@ -264,6 +279,8 @@ test("where completion advertises direct bounded match and like predicates", () 
   assert.match(whereCompletion.detail, /search-start/i);
   assert.match(whereCompletion.detail, /strftime\(time, "format"\)/);
   assert.match(whereCompletion.detail, /effective IANA search timezone/i);
+  assert.match(whereCompletion.detail, /strptime\(text, "format"\)/);
+  assert.match(whereCompletion.detail, /nullable Unix seconds/i);
 });
 
 test("nested stats eval highlights as a function without relabeling the eval command", () => {

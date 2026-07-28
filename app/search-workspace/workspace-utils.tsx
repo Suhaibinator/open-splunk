@@ -40,6 +40,7 @@ const SPL_MATCH_FUNCTION_PATTERN = "match(?=\\s*\\()";
 const SPL_LIKE_FUNCTION_PATTERN = "like(?=\\s*\\()";
 const SPL_NOW_FUNCTION_PATTERN = "now(?=\\s*\\()";
 const SPL_STRFTIME_FUNCTION_PATTERN = "strftime(?=\\s*\\()";
+const SPL_STRPTIME_FUNCTION_PATTERN = "strptime(?=\\s*\\()";
 const SPL_NULL_PREDICATE_FUNCTION_PATTERN = "(?:isnull|isnotnull)(?=\\s*\\()";
 const SPL_PERCENTILE_FUNCTION_PATTERN = "(?:p|perc)0*(?:[1-9]|[1-9][0-9])";
 const SPL_FUNCTION_PATTERN = [
@@ -59,6 +60,7 @@ const SPL_FUNCTION_PATTERN = [
   SPL_LIKE_FUNCTION_PATTERN,
   SPL_NOW_FUNCTION_PATTERN,
   SPL_STRFTIME_FUNCTION_PATTERN,
+  SPL_STRPTIME_FUNCTION_PATTERN,
   SPL_NULL_PREDICATE_FUNCTION_PATTERN,
   SPL_PERCENTILE_FUNCTION_PATTERN,
 ].join("|");
@@ -78,6 +80,7 @@ const SPL_MATCH_FUNCTION = /^match$/i;
 const SPL_LIKE_FUNCTION = /^like$/i;
 const SPL_NOW_FUNCTION = /^now$/i;
 const SPL_STRFTIME_FUNCTION = /^strftime$/i;
+const SPL_STRPTIME_FUNCTION = /^strptime$/i;
 const SPL_NULL_PREDICATE_FUNCTION = /^(?:isnull|isnotnull)$/i;
 const SPL_PERCENTILE_FUNCTION = new RegExp(`^${SPL_PERCENTILE_FUNCTION_PATTERN}$`, "i");
 const SYNTAX_TOKEN_PATTERN = new RegExp(
@@ -174,6 +177,7 @@ export function syntaxTokens(query: string): ReactNode[] {
       SPL_LIKE_FUNCTION.test(part) ||
       SPL_NOW_FUNCTION.test(part) ||
       SPL_STRFTIME_FUNCTION.test(part) ||
+      SPL_STRPTIME_FUNCTION.test(part) ||
       SPL_NULL_PREDICATE_FUNCTION.test(part) ||
       SPL_PERCENTILE_FUNCTION.test(part)) {
       className = "spl-function";
