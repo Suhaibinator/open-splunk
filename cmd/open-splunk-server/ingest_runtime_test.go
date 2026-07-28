@@ -112,6 +112,53 @@ func TestCollectorAuthorizerClassifiesOnlyCredentialFailuresAsUnauthorized(t *te
 	}
 }
 
+func TestCollectorTokenUseRecorderPassesSafeAdmissionMetadata(t *testing.T) {
+	t.Parallel()
+	acceptedAt := time.Date(2026, 7, 28, 12, 34, 56, 123_456_000, time.UTC)
+	store := &fakeCollectorTokenUseStore{}
+	recorder := collectorTokenUseRecorder{store: store}
+
+	if err := recorder.RecordCollectorTokenUse(context.Background(), "token-safe-id", acceptedAt); err != nil {
+		t.Fatalf("RecordCollectorTokenUse() error = %v", err)
+	}
+	if store.calls != 1 || store.tokenID != "token-safe-id" || !store.acceptedAt.Equal(acceptedAt) {
+		t.Fatalf(
+			"recorded use = calls:%d token:%q at:%v",
+			store.calls,
+			store.tokenID,
+			store.acceptedAt,
+		)
+	}
+}
+
+func TestCollectorTokenUseRecorderClassifiesOnlyInactiveTokensAsUnauthorized(t *testing.T) {
+	t.Parallel()
+	recorder := collectorTokenUseRecorder{}
+	if err := recorder.RecordCollectorTokenUse(context.Background(), "token-id", time.Now()); err == nil ||
+		errors.Is(err, ingest.ErrUnauthorized) {
+		t.Fatalf("missing-store error = %v, want operational error", err)
+	}
+
+	store := &fakeCollectorTokenUseStore{}
+	recorder.store = store
+	for _, inactiveErr := range []error{
+		auth.ErrUnauthorized,
+		auth.ErrInactiveToken,
+	} {
+		store.err = inactiveErr
+		if err := recorder.RecordCollectorTokenUse(context.Background(), "token-id", time.Now()); !errors.Is(err, ingest.ErrUnauthorized) {
+			t.Fatalf("inactive-token error = %v, want ingest.ErrUnauthorized", err)
+		}
+	}
+
+	backendErr := errors.New("sqlite unavailable")
+	store.err = backendErr
+	if err := recorder.RecordCollectorTokenUse(context.Background(), "token-id", time.Now()); !errors.Is(err, backendErr) ||
+		errors.Is(err, ingest.ErrUnauthorized) {
+		t.Fatalf("backend error classification = %v", err)
+	}
+}
+
 func TestControlRetentionProviderRequiresOwnedActiveIngestionIndex(t *testing.T) {
 	t.Parallel()
 	period := 30 * 24 * time.Hour
@@ -154,6 +201,24 @@ type fakeCollectorAuthenticationStore struct {
 
 func (store fakeCollectorAuthenticationStore) Authenticate(context.Context, string) (auth.Authentication, error) {
 	return store.authentication, store.err
+}
+
+type fakeCollectorTokenUseStore struct {
+	tokenID    string
+	acceptedAt time.Time
+	calls      int
+	err        error
+}
+
+func (store *fakeCollectorTokenUseStore) RecordCollectorTokenUse(
+	_ context.Context,
+	tokenID string,
+	acceptedAt time.Time,
+) error {
+	store.calls++
+	store.tokenID = tokenID
+	store.acceptedAt = acceptedAt
+	return store.err
 }
 
 type fakeIndexRetentionCatalog struct {

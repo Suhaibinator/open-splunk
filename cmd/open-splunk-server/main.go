@@ -210,6 +210,7 @@ func run() error {
 	}()
 	ingestConfig := ingest.DefaultConfig()
 	ingestConfig.Build = buildMetadata
+	ingestConfig.TokenUseRecorder = collectorTokenUseRecorder{store: tokenStore}
 	ingestService, err := ingest.NewService(ingestConfig, collectorAuthorizer{
 		store: tokenStore, tenantID: config.tenantID,
 	}, eventStore)

@@ -112,6 +112,32 @@ func (authorizer collectorAuthorizer) Authorize(ctx context.Context, token strin
 	}, nil
 }
 
+type collectorTokenUseStore interface {
+	RecordCollectorTokenUse(context.Context, string, time.Time) error
+}
+
+type collectorTokenUseRecorder struct {
+	store collectorTokenUseStore
+}
+
+func (recorder collectorTokenUseRecorder) RecordCollectorTokenUse(
+	ctx context.Context,
+	tokenID string,
+	acceptedAt time.Time,
+) error {
+	if recorder.store == nil {
+		return errors.New("collector token-use persistence is unavailable")
+	}
+	if err := recorder.store.RecordCollectorTokenUse(ctx, tokenID, acceptedAt); err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) ||
+			errors.Is(err, auth.ErrInactiveToken) {
+			return ingest.ErrUnauthorized
+		}
+		return err
+	}
+	return nil
+}
+
 type indexRetentionCatalog interface {
 	GetIndexByName(context.Context, string) (control.Index, error)
 }
