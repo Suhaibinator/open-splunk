@@ -158,6 +158,17 @@ func TestCompileEvalToStringRejectsTimeAndFixedMultivalue(t *testing.T) {
 		if diagnostic.Range.Start.Offset >= diagnostic.Range.End.Offset {
 			t.Fatalf("Compile(%q) diagnostic range = %#v", test.source, diagnostic.Range)
 		}
+		if test.code == "SPL_UNSUPPORTED_TOSTRING_VALUE_TYPE" &&
+			!strings.Contains(
+				diagnostic.Message,
+				"scalar String, number, and Boolean",
+			) {
+			t.Fatalf(
+				"Compile(%q) diagnostic message = %q, want supported Boolean input",
+				test.source,
+				diagnostic.Message,
+			)
+		}
 	}
 }
 

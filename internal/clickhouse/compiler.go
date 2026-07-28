@@ -95,6 +95,10 @@ const (
 	// maxCompiledToStringScalarSQLBytes independently bounds default scalar
 	// conversion. Dynamic input is bound once, so nested calls grow linearly.
 	maxCompiledToStringScalarSQLBytes = 64 << 10
+	// maxCompiledConcatenationScalarSQLBytes independently bounds one flattened
+	// period-concatenation expression. Every operand is emitted once and the
+	// parser caps operand count, so the check is incremental and linear.
+	maxCompiledConcatenationScalarSQLBytes = 64 << 10
 	// maxCompiledNumericRoundingScalarSQLBytes independently bounds round,
 	// ceil, and floor. Dynamic input is bound once, and integral results let
 	// redundant outer ceil/floor calls collapse to identities.
@@ -134,6 +138,19 @@ const (
 	// scanned by all LIKE occurrences for one result row. This admits sixteen
 	// worst-case durable fields or four maximum-size calculated inputs.
 	MaximumLikeQueryInputBytes uint64 = 16 << 20
+	// MaximumConcatenationOutputBytes bounds the conservative String bytes
+	// produced by one concatenation occurrence for one result row.
+	MaximumConcatenationOutputBytes uint64 = 4 << 20
+	// MaximumConcatenationQueryOutputBytes bounds the sum of conservative
+	// concatenation outputs across every occurrence for one result row.
+	MaximumConcatenationQueryOutputBytes uint64 = 16 << 20
+	// MaximumStringConversionDynamicDecimalBytes is the bounded lexical
+	// reservation for one open-schema decimal/v1 conversion used by tostring
+	// or concatenation.
+	MaximumStringConversionDynamicDecimalBytes = MaximumExactNumericBinTextBytes
+	// MaximumStringConversionQueryDynamicDecimalBytes bounds aggregate runtime
+	// decimal-envelope parsing across tostring and concatenation per result row.
+	MaximumStringConversionQueryDynamicDecimalBytes uint64 = 64 << 10
 	// MaximumStrftimeQueryWorkUnits bounds the sum of validated format parts
 	// across every strftime occurrence in a forged or parser-produced plan.
 	MaximumStrftimeQueryWorkUnits = 16 << 10
@@ -3189,6 +3206,8 @@ type compileContext struct {
 	strptimeBudget                    compiledStrptimeBudget
 	relativeTimeBudget                compiledRelativeTimeBudget
 	unixTimestampBudget               compiledUnixTimestampBudget
+	concatenationBudget               compiledConcatenationBudget
+	stringConversionBudget            compiledStringConversionBudget
 	searchStartUnix                   int64
 	searchTimezone                    string
 	searchLocalMinimumUnixNanoseconds int64
@@ -3233,6 +3252,15 @@ type compiledRelativeTimeBudget struct {
 }
 
 type compiledUnixTimestampBudget struct {
+	dynamicDecimalBytes uint64
+}
+
+type compiledConcatenationBudget struct {
+	operands    int
+	outputBytes uint64
+}
+
+type compiledStringConversionBudget struct {
 	dynamicDecimalBytes uint64
 }
 
@@ -3940,6 +3968,13 @@ func saturatingStringByteProduct(value, factor uint64) uint64 {
 	return value * factor
 }
 
+func saturatingStringByteSum(left, right uint64) uint64 {
+	if left > math.MaxUint64-right {
+		return math.MaxUint64
+	}
+	return left + right
+}
+
 func compileScalarValue(expression plan.ScalarExpression, state compileState) (compiledScalar, error) {
 	switch expression := expression.(type) {
 	case *plan.ScalarFieldExpression:
@@ -4029,6 +4064,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileToNumberScalar(expression, state)
 		case plan.ScalarFunctionToString:
 			return compileToStringScalar(expression, state)
+		case plan.ScalarFunctionConcat:
+			return compileConcatenationScalar(expression, state)
 		case plan.ScalarFunctionRound:
 			return compileRoundScalar(expression, state)
 		case plan.ScalarFunctionCeil:
@@ -6493,6 +6530,18 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 					spl.MaximumCoalesceArguments,
 				)
 			}
+		case plan.ScalarFunctionConcat:
+			if len(expression.Arguments) < 2 {
+				return errors.New(
+					"compile ClickHouse predicate: concatenation requires at least two operands",
+				)
+			}
+			if len(expression.Arguments) > spl.MaximumConcatenationOperands {
+				return fmt.Errorf(
+					"compile ClickHouse predicate: concatenation contains more than %d operands",
+					spl.MaximumConcatenationOperands,
+				)
+			}
 		default:
 			return fmt.Errorf(
 				"compile ClickHouse predicate: unsupported scalar function %d",
@@ -7613,18 +7662,61 @@ func compileToStringScalar(
 	if err != nil {
 		return compiledScalar{}, err
 	}
+	return compileLexicalStringScalar(
+		input,
+		state,
+		scalarStringConversion{
+			operation:           "tostring",
+			unsupportedTypeCode: "SPL_UNSUPPORTED_TOSTRING_VALUE_TYPE",
+			allowBoolean:        true,
+			maximumSQLBytes:     maxCompiledToStringScalarSQLBytes,
+		},
+		expression.Range,
+	)
+}
 
+type scalarStringConversion struct {
+	operation           string
+	unsupportedTypeCode string
+	allowBoolean        bool
+	maximumSQLBytes     int
+}
+
+// compileLexicalStringScalar implements the exact scalar-to-String spelling
+// shared by explicit tostring and period concatenation. Dynamic inputs are
+// bound once and domain-specialized; only the unrestricted domain reserves
+// bounded decimal/v1 parsing work.
+func compileLexicalStringScalar(
+	input compiledScalar,
+	state compileState,
+	conversion scalarStringConversion,
+	sourceRange spl.Range,
+) (compiledScalar, error) {
 	valueSQL := ""
 	valueArgs := append([]any(nil), input.valueArgs...)
 	textEligibleSQL := ""
 	switch input.kind {
 	case fieldKindDynamic:
-		if input.dynamicDomain == dynamicScalarDomainText {
+		switch input.dynamicDomain {
+		case dynamicScalarDomainText:
 			// Text-case producers can only contain String, String arrays, or
 			// null. A direct extraction avoids a redundant singleton-array
 			// binding and runtime dispatch while rejecting multivalue variants.
 			valueSQL = "dynamicElement(" + input.valueSQL + ", 'String')"
-		} else {
+		case dynamicScalarDomainNumeric:
+			typeSQL := "dynamicType(value)"
+			valueSQL = "arrayElement(arrayMap(value -> if(" +
+				dynamicNumericTypePredicate(typeSQL) + ", toString(value), " +
+				"CAST(NULL AS Nullable(String))), [" +
+				input.valueSQL + "]), 1)"
+		default:
+			if err := reserveStringConversionDynamicDecimal(
+				state.context,
+				conversion.operation,
+				sourceRange,
+			); err != nil {
+				return compiledScalar{}, err
+			}
 			typeSQL := "dynamicType(value)"
 			dynamicValue := compiledScalar{
 				valueSQL:       "value",
@@ -7634,13 +7726,18 @@ func compileToStringScalar(
 			decimalCondition, decimalPayload := dynamicTaggedDecimalText(
 				dynamicValue,
 			)
+			branches := typeSQL +
+				" = 'String', dynamicElement(value, 'String'), "
+			if conversion.allowBoolean {
+				branches += typeSQL +
+					" = 'Bool', if(dynamicElement(value, 'Bool'), " +
+					"CAST('True' AS String), CAST('False' AS String)), "
+			}
 			valueSQL = "arrayElement(arrayMap(value -> multiIf(" +
-				typeSQL + " = 'String', dynamicElement(value, 'String'), " +
-				typeSQL + " = 'Bool', if(dynamicElement(value, 'Bool'), " +
-				"CAST('True' AS String), CAST('False' AS String)), " +
-				decimalCondition + ", " + decimalPayload + ", " +
+				branches + decimalCondition + ", " + decimalPayload + ", " +
 				dynamicNumericTypePredicate(typeSQL) + ", toString(value), " +
-				"CAST(NULL AS Nullable(String))), [" + input.valueSQL + "]), 1)"
+				"CAST(NULL AS Nullable(String))), [" +
+				input.valueSQL + "]), 1)"
 		}
 	case fieldKindString:
 		valueSQL = input.valueSQL
@@ -7648,6 +7745,11 @@ func compileToStringScalar(
 	case fieldKindNumber:
 		valueSQL = "toString(" + input.valueSQL + ")"
 	case fieldKindBool:
+		if !conversion.allowBoolean {
+			return compiledScalar{}, booleanScalarConsumerError(
+				conversion.operation,
+			)
+		}
 		// transform preserves nullable Boolean null while evaluating its input
 		// once, without allocating a singleton array per row.
 		valueSQL = "transform(" + input.valueSQL + ", [true, false], " +
@@ -7656,25 +7758,31 @@ func compileToStringScalar(
 		valueSQL = "CAST(NULL AS Nullable(String))"
 	case fieldKindStringArray:
 		return compiledScalar{}, unsupportedMultivalueUsage(
-			"tostring",
-			expression.Range,
+			conversion.operation,
+			sourceRange,
 		)
 	default:
+		supportedTypes := "scalar String and number"
+		if conversion.allowBoolean {
+			supportedTypes = "scalar String, number, and Boolean"
+		}
 		return compiledScalar{}, &plan.Diagnostic{
-			Code: "SPL_UNSUPPORTED_TOSTRING_VALUE_TYPE",
-			Message: "tostring supports scalar String, number, and Boolean " +
-				"input in compatibility version 0.1",
-			Range: expression.Range,
+			Code: conversion.unsupportedTypeCode,
+			Message: conversion.operation +
+				" supports " + supportedTypes +
+				" input in compatibility version 0.1",
+			Range: sourceRange,
 		}
 	}
-	if len(valueSQL) > maxCompiledToStringScalarSQLBytes {
+	if len(valueSQL) > conversion.maximumSQLBytes {
 		return compiledScalar{}, &plan.Diagnostic{
 			Code: "SPL_QUERY_TOO_COMPLEX",
 			Message: fmt.Sprintf(
-				"tostring scalar SQL exceeds %d bytes",
-				maxCompiledToStringScalarSQLBytes,
+				"%s scalar SQL exceeds %d bytes",
+				conversion.operation,
+				conversion.maximumSQLBytes,
 			),
-			Range: expression.Range,
+			Range: sourceRange,
 		}
 	}
 	return compiledScalar{
@@ -7687,6 +7795,231 @@ func compileToStringScalar(
 		alwaysNull:              input.alwaysNull,
 		materializeForPredicate: input.materializeForPredicate,
 	}, nil
+}
+
+func reserveStringConversionDynamicDecimal(
+	context *compileContext,
+	operation string,
+	sourceRange spl.Range,
+) error {
+	if context == nil {
+		return fmt.Errorf(
+			"compile ClickHouse %s: query context is required",
+			operation,
+		)
+	}
+	reservation := uint64(MaximumStringConversionDynamicDecimalBytes)
+	used := context.stringConversionBudget.dynamicDecimalBytes
+	if used > MaximumStringConversionQueryDynamicDecimalBytes ||
+		reservation > MaximumStringConversionQueryDynamicDecimalBytes-used {
+		return &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"search Dynamic decimal String conversions require more than %d bytes of parsing",
+				MaximumStringConversionQueryDynamicDecimalBytes,
+			),
+			Range: sourceRange,
+		}
+	}
+	context.stringConversionBudget.dynamicDecimalBytes += reservation
+	return nil
+}
+
+func compileConcatenationScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+) (compiledScalar, error) {
+	if expression == nil {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse concatenation: missing expression",
+		)
+	}
+	if len(expression.Arguments) < 2 {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse concatenation: requires at least two operands",
+		)
+	}
+	if len(expression.Arguments) > spl.MaximumConcatenationOperands {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"concatenation contains more than %d operands",
+				spl.MaximumConcatenationOperands,
+			),
+			Range: expression.Range,
+		}
+	}
+	if state.context == nil {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse concatenation: query context is required",
+		)
+	}
+	for _, argument := range expression.Arguments {
+		if nilScalarExpression(argument) {
+			return compiledScalar{}, errors.New(
+				"compile ClickHouse concatenation: missing operand",
+			)
+		}
+	}
+	if err := reserveConcatenationOperands(
+		state.context,
+		len(expression.Arguments),
+		expression.Range,
+	); err != nil {
+		return compiledScalar{}, err
+	}
+
+	operands := make([]compiledScalar, 0, len(expression.Arguments))
+	outputBytes := uint64(0)
+	alwaysNull := false
+	materializeForPredicate := false
+	for _, argument := range expression.Arguments {
+		input, err := compileScalarValue(argument, state)
+		if err != nil {
+			return compiledScalar{}, err
+		}
+		operand, err := compileLexicalStringScalar(
+			input,
+			state,
+			scalarStringConversion{
+				operation:           "concatenation",
+				unsupportedTypeCode: "SPL_UNSUPPORTED_CONCATENATION_VALUE_TYPE",
+				maximumSQLBytes:     maxCompiledConcatenationScalarSQLBytes,
+			},
+			argument.SourceRange(),
+		)
+		if err != nil {
+			return compiledScalar{}, err
+		}
+		outputBytes = saturatingStringByteSum(
+			outputBytes,
+			compiledScalarStringByteBound(operand),
+		)
+		if outputBytes > MaximumConcatenationOutputBytes {
+			return compiledScalar{}, &plan.Diagnostic{
+				Code: "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf(
+					"concatenation output may exceed %d bytes",
+					MaximumConcatenationOutputBytes,
+				),
+				Range: expression.Range,
+			}
+		}
+		alwaysNull = alwaysNull || operand.alwaysNull
+		materializeForPredicate = materializeForPredicate ||
+			operand.materializeForPredicate
+		operands = append(operands, operand)
+	}
+	if err := reserveConcatenationOutput(
+		state.context,
+		outputBytes,
+		expression.Range,
+	); err != nil {
+		return compiledScalar{}, err
+	}
+
+	var sql strings.Builder
+	sql.WriteString("concat(")
+	args := make([]any, 0)
+	for index, operand := range operands {
+		separatorBytes := 0
+		if index > 0 {
+			separatorBytes = 2
+		}
+		if sql.Len() >
+			maxCompiledConcatenationScalarSQLBytes-
+				separatorBytes-len(operand.valueSQL)-1 {
+			return compiledScalar{}, &plan.Diagnostic{
+				Code: "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf(
+					"concatenation scalar SQL exceeds %d bytes",
+					maxCompiledConcatenationScalarSQLBytes,
+				),
+				Range: expression.Range,
+			}
+		}
+		if index > 0 {
+			sql.WriteString(", ")
+		}
+		sql.WriteString(operand.valueSQL)
+		args = append(args, operand.valueArgs...)
+	}
+	sql.WriteByte(')')
+	return compiledScalar{
+		valueSQL:                sql.String(),
+		valueArgs:               args,
+		maxStringBytes:          outputBytes,
+		existsSQL:               "1",
+		textEligibleSQL:         concatenationTextEligibility(operands),
+		kind:                    fieldKindString,
+		alwaysNull:              alwaysNull,
+		materializeForPredicate: materializeForPredicate,
+	}, nil
+}
+
+func reserveConcatenationOperands(
+	context *compileContext,
+	operands int,
+	sourceRange spl.Range,
+) error {
+	used := context.concatenationBudget.operands
+	if used > spl.MaximumConcatenationOperandsPerQuery ||
+		operands > spl.MaximumConcatenationOperandsPerQuery-used {
+		return &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"concatenation contains more than %d operand occurrences per query",
+				spl.MaximumConcatenationOperandsPerQuery,
+			),
+			Range: sourceRange,
+		}
+	}
+	context.concatenationBudget.operands += operands
+	return nil
+}
+
+func reserveConcatenationOutput(
+	context *compileContext,
+	outputBytes uint64,
+	sourceRange spl.Range,
+) error {
+	used := context.concatenationBudget.outputBytes
+	if used > MaximumConcatenationQueryOutputBytes ||
+		outputBytes > MaximumConcatenationQueryOutputBytes-used {
+		return &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"concatenation outputs may exceed %d bytes per query row",
+				MaximumConcatenationQueryOutputBytes,
+			),
+			Range: sourceRange,
+		}
+	}
+	context.concatenationBudget.outputBytes += outputBytes
+	return nil
+}
+
+func concatenationTextEligibility(operands []compiledScalar) string {
+	seen := make(map[string]struct{}, len(operands))
+	guards := make([]string, 0, len(operands))
+	for _, operand := range operands {
+		if operand.textEligibleSQL == "" {
+			continue
+		}
+		if _, duplicate := seen[operand.textEligibleSQL]; duplicate {
+			continue
+		}
+		seen[operand.textEligibleSQL] = struct{}{}
+		guards = append(guards, operand.textEligibleSQL)
+	}
+	switch len(guards) {
+	case 0:
+		return ""
+	case 1:
+		return guards[0]
+	default:
+		return "(" + strings.Join(guards, ") AND (") + ")"
+	}
 }
 
 func compileRoundScalar(
