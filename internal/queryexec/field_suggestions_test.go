@@ -71,6 +71,79 @@ func TestExecutorExecuteFieldSuggestionsAcceptsCanonicalEscapes(t *testing.T) {
 	}
 }
 
+func TestExecutorExecuteFieldSuggestionsAcceptsSeventeenSegmentQueryField(t *testing.T) {
+	t.Parallel()
+
+	fieldName := strings.Repeat("segment.", 16) + "leaf"
+	got, err := mustExecutor(
+		t,
+		&fakeQueryConnection{rows: fieldSuggestionFakeRows(0, fieldName)},
+	).ExecuteFieldSuggestions(
+		context.Background(),
+		validCompiledFieldSuggestions("segment.", 1),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := FieldSuggestionResult{FieldNames: []string{fieldName}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("seventeen-segment suggestions = %#v, want %#v", got, want)
+	}
+}
+
+func TestExecutorExecuteFieldSuggestionsAcceptsVisibleParentAndChild(t *testing.T) {
+	t.Parallel()
+
+	got, err := mustExecutor(
+		t,
+		&fakeQueryConnection{rows: fieldSuggestionFakeRows(
+			0,
+			"edge_obj",
+			"edge_obj.child",
+		)},
+	).ExecuteFieldSuggestions(
+		context.Background(),
+		validCompiledFieldSuggestions("edge_", 2),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := FieldSuggestionResult{FieldNames: []string{"edge_obj", "edge_obj.child"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parent/child suggestions = %#v, want %#v", got, want)
+	}
+}
+
+func TestExecutorExecuteFieldSuggestionsAcceptsASCIIFoldedExactOrder(t *testing.T) {
+	t.Parallel()
+
+	got, err := mustExecutor(
+		t,
+		&fakeQueryConnection{rows: fieldSuggestionFakeRows(
+			0,
+			"mixaardvark",
+			"mixAlpha",
+			"mixalpha",
+			"mixValid",
+		)},
+	).ExecuteFieldSuggestions(
+		context.Background(),
+		validCompiledFieldSuggestions("mix", 4),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := FieldSuggestionResult{FieldNames: []string{
+		"mixaardvark",
+		"mixAlpha",
+		"mixalpha",
+		"mixValid",
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("mixed-case suggestions = %#v, want %#v", got, want)
+	}
+}
+
 func TestExecutorExecuteFieldSuggestionsUsesOverflowSentinelForTruncation(t *testing.T) {
 	t.Parallel()
 
@@ -200,17 +273,29 @@ func TestExecutorExecuteFieldSuggestionsRejectsMalformedRowsAtomically(t *testin
 				eventfields.MaximumDynamicPathSegmentBytes+1,
 			)
 		}},
-		{name: "too many path segments", mutate: func(rows *fakeRows) {
+		{name: "too many query path segments", mutate: func(rows *fakeRows) {
 			rows.data[1][1] = strings.Repeat(
 				"a.",
-				eventfields.MaximumDynamicPathSegments,
+				eventfields.MaximumDynamicPathSegments+1,
 			) + "a"
 		}},
 		{name: "oversized field name", mutate: func(rows *fakeRows) {
 			rows.data[1][1] = strings.Repeat("x", eventfields.MaximumNormalizedFieldNameBytes+1)
 		}},
+		{name: "leading plus", mutate: func(rows *fakeRows) { rows.data[1][1] = "+field" }},
+		{name: "leading minus", mutate: func(rows *fakeRows) { rows.data[1][1] = "-field" }},
+		{name: "whitespace", mutate: func(rows *fakeRows) { rows.data[1][1] = "bad field" }},
+		{name: "operator delimiter", mutate: func(rows *fakeRows) { rows.data[1][1] = "bad|field" }},
+		{name: "wildcard", mutate: func(rows *fakeRows) { rows.data[1][1] = "bad*field" }},
+		{name: "private namespace", mutate: func(rows *fakeRows) { rows.data[1][1] = "__OS_private" }},
+		{name: "Unicode format", mutate: func(rows *fakeRows) { rows.data[1][1] = "bad\u200bfield" }},
+		{name: "Unicode private use", mutate: func(rows *fakeRows) { rows.data[1][1] = "bad\uE000field" }},
 		{name: "descending names", mutate: func(rows *fakeRows) {
 			rows.data = append(rows.data, fieldSuggestionName("a"))
+		}},
+		{name: "bytewise ascending but folded descending", mutate: func(rows *fakeRows) {
+			rows.data[1][1] = "hoZ"
+			rows.data = append(rows.data, fieldSuggestionName("hoa"))
 		}},
 		{name: "duplicate names", mutate: func(rows *fakeRows) {
 			rows.data = append(rows.data, fieldSuggestionName("b"))

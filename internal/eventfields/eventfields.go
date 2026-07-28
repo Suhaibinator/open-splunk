@@ -74,7 +74,7 @@ func CanonicalSPLFieldNames() []string {
 	return slices.Clone(canonicalSPLFieldNames)
 }
 
-// ReservedDynamicRootNames returns the case-insensitive dynamic root
+// ReservedDynamicRootNames returns the ASCII-case-insensitive dynamic root
 // namespace. The returned names are the lowercase canonical spellings and the
 // slice is independent.
 func ReservedDynamicRootNames() []string {
@@ -90,9 +90,9 @@ func IsCanonicalSPLField(name string) bool {
 
 // IsReservedDynamicRoot reports whether an untrusted root dynamic field would
 // collide with canonical, physical, security, or public-container metadata.
-// Root collision checks are deliberately case-insensitive.
+// Root collision checks are deliberately ASCII-case-insensitive.
 func IsReservedDynamicRoot(name string) bool {
-	folded := strings.ToLower(name)
+	folded := foldASCIIIdentifier(name)
 	return isReservedDynamicRootFolded(folded)
 }
 
@@ -108,7 +108,7 @@ func isReservedDynamicRootFolded(folded string) bool {
 // aliases extracted by the first-party collector. Alias extraction itself
 // remains owned by the collector and is intentionally not defined here.
 func IsCollectorReservedRoot(name string) bool {
-	folded := strings.ToLower(name)
+	folded := foldASCIIIdentifier(name)
 	if isReservedDynamicRootFolded(folded) {
 		return true
 	}
@@ -127,9 +127,28 @@ func exactSet(names []string) map[string]struct{} {
 func foldedSet(names []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(names))
 	for _, name := range names {
-		set[strings.ToLower(name)] = struct{}{}
+		set[foldASCIIIdentifier(name)] = struct{}{}
 	}
 	return set
+}
+
+// foldASCIIIdentifier lowercases only ASCII A-Z. Reserved event-root
+// spellings are ASCII identifiers, while all other field names remain
+// case-sensitive Unicode. This deliberately matches ClickHouse lower().
+func foldASCIIIdentifier(value string) string {
+	for index := 0; index < len(value); index++ {
+		if value[index] < 'A' || value[index] > 'Z' {
+			continue
+		}
+		folded := []byte(value)
+		for position := index; position < len(folded); position++ {
+			if folded[position] >= 'A' && folded[position] <= 'Z' {
+				folded[position] += 'a' - 'A'
+			}
+		}
+		return string(folded)
+	}
+	return value
 }
 
 func join(groups ...[]string) []string {

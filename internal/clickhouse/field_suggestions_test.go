@@ -108,6 +108,45 @@ func TestCompileFieldSuggestionsIsDeterministicParameterizedAndNameOnly(t *testi
 	}
 }
 
+func TestCompileFieldSuggestionsAcceptsSeventeenSegmentDerivedQueryField(t *testing.T) {
+	t.Parallel()
+
+	fieldName := strings.Repeat("segment.", 16) + "leaf"
+	logical := buildPlan(t, `index=gradethis | eval `+fieldName+`=host`)
+	// Every visible name is validated even when it does not match the active
+	// prefix, so this proves the query-only field cannot poison another lookup.
+	compileFieldSuggestions(
+		t,
+		logical,
+		FieldSuggestionSpec{Prefix: "ho", MaximumFields: 20},
+	)
+	compiled := compileFieldSuggestions(
+		t,
+		logical,
+		FieldSuggestionSpec{Prefix: fieldName, MaximumFields: 20},
+	)
+	known, _, _, _, ok := fieldSuggestionControlArguments(compiled.Args)
+	if !ok || !slices.Contains(known, fieldName) {
+		t.Fatalf("seventeen-segment known field is missing: %#v", compiled.Args)
+	}
+}
+
+func TestCompileFieldSuggestionsAcceptsVisibleParentAndChild(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileFieldSuggestions(
+		t,
+		buildPlan(t, `index=gradethis | eval edge_obj=host,edge_obj.child=source`),
+		FieldSuggestionSpec{Prefix: "edge_", MaximumFields: 20},
+	)
+	known, _, _, _, ok := fieldSuggestionControlArguments(compiled.Args)
+	if !ok ||
+		!slices.Contains(known, "edge_obj") ||
+		!slices.Contains(known, "edge_obj.child") {
+		t.Fatalf("visible parent/child fields are missing: %#v", compiled.Args)
+	}
+}
+
 func TestCompileFieldSuggestionsPushesExactPrefixBeforeDynamicGrouping(t *testing.T) {
 	t.Parallel()
 
@@ -147,6 +186,46 @@ func TestCompileFieldSuggestionsPushesExactPrefixBeforeDynamicGrouping(t *testin
 	}
 }
 
+func TestCompileFieldSuggestionsFiltersAndRanksBeforeLimit(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileFieldSuggestions(
+		t,
+		buildPlan(t, `index=gradethis`),
+		FieldSuggestionSpec{Prefix: "mix", MaximumFields: 20},
+	)
+	limitedStart := strings.Index(
+		compiled.SQL,
+		quoteIdentifier(fieldSuggestionLimitedCTE)+" AS",
+	)
+	if limitedStart < 0 {
+		t.Fatalf("limited candidate CTE is missing:\n%s", compiled.SQL)
+	}
+	limitedSQL := compiled.SQL[limitedStart:]
+	filter := strings.Index(
+		limitedSQL,
+		"WHERE NOT startsWith("+quoteIdentifier(fieldSuggestionCandidateName)+", '+')",
+	)
+	order := strings.Index(
+		limitedSQL,
+		"ORDER BY lower("+quoteIdentifier(fieldSuggestionCandidateName)+") ASC, "+
+			quoteIdentifier(fieldSuggestionCandidateName)+" ASC",
+	)
+	limit := strings.Index(limitedSQL, "LIMIT ?")
+	if filter < 0 || order <= filter || limit <= order {
+		t.Fatalf("editor eligibility and ranking must precede LIMIT:\n%s", compiled.SQL)
+	}
+	outputOrder := "ORDER BY " + quoteIdentifier(FieldSuggestionRowKindColumn) +
+		" ASC, lower(" + quoteIdentifier(FieldSuggestionNameColumn) + ") ASC, " +
+		quoteIdentifier(FieldSuggestionNameColumn) + " ASC"
+	if !strings.Contains(compiled.SQL, outputOrder) {
+		t.Fatalf("final output does not preserve candidate ranking:\n%s", compiled.SQL)
+	}
+	if !containsArgument(compiled.Args, fieldSuggestionInvalidEditorNamePattern) {
+		t.Fatalf("editor eligibility pattern is not parameterized: %#v", compiled.Args)
+	}
+}
+
 func TestCompileFieldSuggestionsValidatesAllMetadataBeforePublishingNames(t *testing.T) {
 	t.Parallel()
 
@@ -161,6 +240,9 @@ func TestCompileFieldSuggestionsValidatesAllMetadataBeforePublishingNames(t *tes
 		"arrayMap(field_name -> left(field_name, CAST(? AS UInt64)), " +
 			quoteIdentifier(fieldSuggestionBoundedNames) + ") AS " +
 			quoteIdentifier(fieldSuggestionCheckedNames),
+		"arrayMap(field_name -> extractAll(field_name, CAST(? AS String)), " +
+			quoteIdentifier(fieldSuggestionCheckedNames) + ") AS " +
+			quoteIdentifier(fieldSuggestionCheckedPaths),
 		"arraySlice(" + quoteIdentifier(internalFieldTypesColumn) + ", 1, CAST(? AS UInt64)) AS " +
 			quoteIdentifier(fieldSuggestionBoundedTypes),
 		quoteIdentifier(internalFieldMetadataVersionColumn) + " != ?",
@@ -171,6 +253,10 @@ func TestCompileFieldSuggestionsValidatesAllMetadataBeforePublishingNames(t *tes
 			quoteIdentifier(fieldSuggestionCheckedNames) + "))",
 		"NOT match(field_name, CAST(? AS String))",
 		"splitByChar('.', replaceAll(replaceAll(field_name, CAST(? AS String), 'x'), CAST(? AS String), 'x'))",
+		"startsWith(lower(field_name), '__os_')",
+		"lower(field_name) = reserved_root",
+		"indexOfAssumeSorted(" + quoteIdentifier(fieldSuggestionCheckedNames) +
+			", arrayStringConcat(arraySlice(path, 1, depth), '.')) != 0",
 		"arrayExists(stored_type -> stored_type < ? OR stored_type > ?, " +
 			quoteIdentifier(fieldSuggestionBoundedTypes) + ")",
 		"toUInt8(0) AS " + quoteIdentifier(FieldSuggestionRowKindColumn),
@@ -188,12 +274,18 @@ func TestCompileFieldSuggestionsValidatesAllMetadataBeforePublishingNames(t *tes
 		uint8(eventfields.StoredValueTypeNull),
 		uint8(eventfields.StoredValueTypeDecimal),
 		fieldSuggestionNormalizedNamePattern,
+		fieldSuggestionNormalizedSegmentPattern,
 		fieldSuggestionEscapedBackslash,
 		fieldSuggestionEscapedDot,
 	} {
 		if !containsArgument(compiled.Args, want) {
 			t.Errorf("metadata guard arg %#v is missing: %#v", want, compiled.Args)
 		}
+	}
+	reservedRoots := eventfields.ReservedDynamicRootNames()
+	slices.Sort(reservedRoots)
+	if !containsArgument(compiled.Args, reservedRoots) {
+		t.Errorf("reserved dynamic roots are missing: %#v", compiled.Args)
 	}
 }
 
@@ -228,6 +320,31 @@ func TestFieldSuggestionNormalizedNamePatternMatchesDurableParser(t *testing.T) 
 		_, parseErr := eventfields.ParseNormalizedDynamicPath(name)
 		if got, want := pattern.MatchString(name), parseErr == nil; got != want {
 			t.Errorf("normalized-name pattern match for %q = %t, parser valid = %t", name, got, want)
+		}
+	}
+}
+
+func TestFieldSuggestionInvalidEditorNamePatternMatchesPreLimitContract(t *testing.T) {
+	t.Parallel()
+
+	pattern, err := regexp.Compile(fieldSuggestionInvalidEditorNamePattern)
+	if err != nil {
+		t.Fatalf("compile invalid editor-name pattern: %v", err)
+	}
+	for _, valid := range []string{
+		"host", `request\.id`, `path\\name`, "münchen",
+	} {
+		if pattern.MatchString(valid) {
+			t.Errorf("editor-name pattern rejected %q", valid)
+		}
+	}
+	for _, invalid := range []string{
+		"bad field", "bad\u200bfield", "bad\uE000field", "bad\tfield",
+		`bad"field`, "bad|field", "bad(field", "bad,field", "bad=field",
+		"bad!field", "bad<field", "bad>field", "bad*field",
+	} {
+		if !pattern.MatchString(invalid) {
+			t.Errorf("editor-name pattern accepted %q", invalid)
 		}
 	}
 }

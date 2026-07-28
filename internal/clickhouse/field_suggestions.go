@@ -16,7 +16,7 @@ import (
 const (
 	// MaximumFieldSuggestions is the hard cross-layer result bound for one
 	// field-name completion request. The compiler requests one additional
-	// bytewise-sorted name so the executor can report deterministic truncation.
+	// ranked name so the executor can report deterministic truncation.
 	MaximumFieldSuggestions uint32 = 100
 
 	FieldSuggestionRowKindColumn = "__os_field_suggestion_row_kind"
@@ -90,15 +90,21 @@ const (
 	fieldSuggestionMetadataInvalid = "__os_field_suggestion_metadata_invalid"
 	fieldSuggestionBoundedNames    = "__os_field_suggestion_bounded_names"
 	fieldSuggestionCheckedNames    = "__os_field_suggestion_checked_names"
+	fieldSuggestionCheckedPaths    = "__os_field_suggestion_checked_paths"
 	fieldSuggestionBoundedTypes    = "__os_field_suggestion_bounded_types"
 
 	// The pattern is the byte-preserving grammar accepted by
 	// eventfields.ParseNormalizedDynamicPath: nonempty segments, only canonical
 	// dot/backslash escapes, no Unicode control characters, and at most sixteen
 	// path segments. Decoded per-segment byte bounds are checked separately.
-	fieldSuggestionNormalizedNamePattern = `^(?:\\[\\.]|[^.\\\p{Cc}])+(?:\.(?:\\[\\.]|[^.\\\p{Cc}])+){0,15}$`
-	fieldSuggestionEscapedBackslash      = `\\`
-	fieldSuggestionEscapedDot            = `\.`
+	fieldSuggestionNormalizedNamePattern    = `^(?:\\[\\.]|[^.\\\p{Cc}])+(?:\.(?:\\[\\.]|[^.\\\p{Cc}])+){0,15}$`
+	fieldSuggestionNormalizedSegmentPattern = `(?:\\[\\.]|[^.\\\p{Cc}])+`
+	// Suggestions must be insertable as unquoted SPL field tokens. Filtering
+	// happens before LIMIT so malformed metadata cannot consume the bounded
+	// candidate window and hide later usable names.
+	fieldSuggestionInvalidEditorNamePattern = `[\p{Z}\p{C}|(),=!<>"*]`
+	fieldSuggestionEscapedBackslash         = `\\`
+	fieldSuggestionEscapedDot               = `\.`
 )
 
 func fieldSuggestionContainsControl(value string) bool {
@@ -125,9 +131,10 @@ func finalizeFieldSuggestions(
 
 	knownNames := make([]string, 0, len(state.visible))
 	for name := range state.visible {
-		if _, err := eventfields.ParseNormalizedDynamicPath(name); err != nil {
+		resolved, err := plan.ResolveField(name, spl.Range{})
+		if err != nil || resolved.Name != name {
 			return CompiledQuery{}, errors.New(
-				"compile ClickHouse field suggestions: visible field name is not canonical",
+				"compile ClickHouse field suggestions: visible field name is not a valid query field",
 			)
 		}
 		if strings.HasPrefix(name, spec.Prefix) {
@@ -145,6 +152,8 @@ func finalizeFieldSuggestions(
 	}
 	shadows := sortedSetValues(shadowSet)
 	blockedPrefixes := sortedSetValues(state.blockedPrefixes)
+	reservedRoots := eventfields.ReservedDynamicRootNames()
+	sort.Strings(reservedRoots)
 
 	q := quoteIdentifier
 	var sql strings.Builder
@@ -167,6 +176,10 @@ func finalizeFieldSuggestions(
 	sql.WriteString(q(fieldSuggestionBoundedNames))
 	sql.WriteString(") AS ")
 	sql.WriteString(q(fieldSuggestionCheckedNames))
+	sql.WriteString(", arrayMap(field_name -> extractAll(field_name, CAST(? AS String)), ")
+	sql.WriteString(q(fieldSuggestionCheckedNames))
+	sql.WriteString(") AS ")
+	sql.WriteString(q(fieldSuggestionCheckedPaths))
 	sql.WriteString(", arraySlice(")
 	sql.WriteString(q(internalFieldTypesColumn))
 	sql.WriteString(", 1, CAST(? AS UInt64)) AS ")
@@ -187,6 +200,12 @@ func finalizeFieldSuggestions(
 	sql.WriteString(q(fieldSuggestionBoundedNames))
 	sql.WriteString(") OR arrayExists(field_name -> NOT match(field_name, CAST(? AS String)) OR arrayExists(normalized_segment -> length(normalized_segment) > ?, splitByChar('.', replaceAll(replaceAll(field_name, CAST(? AS String), 'x'), CAST(? AS String), 'x'))), ")
 	sql.WriteString(q(fieldSuggestionCheckedNames))
+	sql.WriteString(") OR arrayExists(field_name -> startsWith(lower(field_name), '__os_') OR arrayExists(reserved_root -> lower(field_name) = reserved_root OR startsWith(lower(field_name), concat(reserved_root, '.')), CAST(? AS Array(String))), ")
+	sql.WriteString(q(fieldSuggestionCheckedNames))
+	sql.WriteString(") OR arrayExists(path -> arrayExists(depth -> depth < length(path) AND indexOfAssumeSorted(")
+	sql.WriteString(q(fieldSuggestionCheckedNames))
+	sql.WriteString(", arrayStringConcat(arraySlice(path, 1, depth), '.')) != 0, arrayEnumerate(path)), ")
+	sql.WriteString(q(fieldSuggestionCheckedPaths))
 	sql.WriteString(") OR ")
 	sql.WriteString(q(fieldSuggestionCheckedNames))
 	sql.WriteString(" != arraySort(arrayDistinct(")
@@ -201,6 +220,7 @@ func finalizeFieldSuggestions(
 	args = append(args,
 		uint64(eventfields.MaximumStoredFieldsPerEvent),
 		uint64(eventfields.MaximumNormalizedFieldNameBytes+1),
+		fieldSuggestionNormalizedSegmentPattern,
 		uint64(eventfields.MaximumStoredFieldsPerEvent),
 		eventfields.CurrentFieldMetadataVersion,
 		uint64(eventfields.MaximumStoredFieldsPerEvent),
@@ -211,6 +231,7 @@ func finalizeFieldSuggestions(
 		uint64(eventfields.MaximumDynamicPathSegmentBytes),
 		fieldSuggestionEscapedBackslash,
 		fieldSuggestionEscapedDot,
+		reservedRoots,
 		uint8(eventfields.StoredValueTypeNull),
 		uint8(eventfields.StoredValueTypeDecimal),
 	)
@@ -292,10 +313,24 @@ func finalizeFieldSuggestions(
 	sql.WriteString(q(fieldSuggestionCandidateName))
 	sql.WriteString(" FROM ")
 	sql.WriteString(q(fieldSuggestionCandidatesCTE))
-	sql.WriteString(" ORDER BY ")
+	sql.WriteString(" WHERE NOT startsWith(")
+	sql.WriteString(q(fieldSuggestionCandidateName))
+	sql.WriteString(", '+') AND NOT startsWith(")
+	sql.WriteString(q(fieldSuggestionCandidateName))
+	sql.WriteString(", '-') AND NOT startsWith(lower(")
+	sql.WriteString(q(fieldSuggestionCandidateName))
+	sql.WriteString("), '__os_') AND NOT match(")
+	sql.WriteString(q(fieldSuggestionCandidateName))
+	sql.WriteString(", CAST(? AS String)) ORDER BY lower(")
+	sql.WriteString(q(fieldSuggestionCandidateName))
+	sql.WriteString(") ASC, ")
 	sql.WriteString(q(fieldSuggestionCandidateName))
 	sql.WriteString(" ASC LIMIT ?)")
-	args = append(args, uint64(spec.MaximumFields)+1)
+	args = append(
+		args,
+		fieldSuggestionInvalidEditorNamePattern,
+		uint64(spec.MaximumFields)+1,
+	)
 
 	sql.WriteString(" SELECT * FROM (SELECT toUInt8(0) AS ")
 	sql.WriteString(q(FieldSuggestionRowKindColumn))
@@ -322,6 +357,9 @@ func finalizeFieldSuggestions(
 	sql.WriteString(" ORDER BY ")
 	sql.WriteString(q(FieldSuggestionRowKindColumn))
 	sql.WriteString(" ASC, ")
+	sql.WriteString("lower(")
+	sql.WriteString(q(FieldSuggestionNameColumn))
+	sql.WriteString(") ASC, ")
 	sql.WriteString(q(FieldSuggestionNameColumn))
 	sql.WriteString(" ASC")
 

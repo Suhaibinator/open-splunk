@@ -16,7 +16,9 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 const (
@@ -32,9 +34,10 @@ const (
 	maximumFieldSuggestionThreads = uint64(2)
 )
 
-// FieldSuggestionResult is a fully validated, bytewise-sorted list of field
-// names. Truncated is true only when the compiler's one-row overflow sentinel
-// proves that at least one additional matching name exists.
+// FieldSuggestionResult is a fully validated list of field names sorted by
+// ASCII-folded spelling and then exact spelling. Truncated is true only when
+// the compiler's one-row overflow sentinel proves that at least one additional
+// matching name exists.
 type FieldSuggestionResult struct {
 	FieldNames []string
 	Truncated  bool
@@ -183,7 +186,11 @@ func (executor *Executor) ExecuteFieldSuggestions(
 			rowIndex++
 			continue
 		}
-		if err := validateFieldSuggestionName(fieldName, query.Spec.Prefix, previousName); err != nil {
+		if err := validateFieldSuggestionName(
+			fieldName,
+			query.Spec.Prefix,
+			previousName,
+		); err != nil {
 			return FieldSuggestionResult{}, err
 		}
 		previousName = fieldName
@@ -376,19 +383,103 @@ func validateFieldSuggestionColumns(
 	return nil
 }
 
-func validateFieldSuggestionName(fieldName, prefix, previousName string) error {
-	if _, err := eventfields.ParseNormalizedDynamicPath(fieldName); err != nil {
-		return invalidFieldSuggestionResult("field name is not canonical")
+func validateFieldSuggestionName(
+	fieldName,
+	prefix,
+	previousName string,
+) error {
+	resolved, err := plan.ResolveField(fieldName, spl.Range{})
+	if err != nil || resolved.Name != fieldName {
+		return invalidFieldSuggestionResult("field name is not a valid query field")
+	}
+	if !fieldSuggestionEditorName(fieldName) {
+		return invalidFieldSuggestionResult(
+			"field name cannot be represented as an SPL editor token",
+		)
 	}
 	if !strings.HasPrefix(fieldName, prefix) {
-		return invalidFieldSuggestionResult("field name does not match the compiled prefix")
-	}
-	if previousName != "" && fieldName <= previousName {
 		return invalidFieldSuggestionResult(
-			"field names are not strictly bytewise sorted",
+			"field name does not match the compiled prefix",
+		)
+	}
+	if previousName != "" && !fieldSuggestionNameBefore(previousName, fieldName) {
+		return invalidFieldSuggestionResult(
+			"field names are not strictly sorted by ASCII-folded and exact spelling",
 		)
 	}
 	return nil
+}
+
+func fieldSuggestionEditorName(name string) bool {
+	if name == "" ||
+		name[0] == '+' ||
+		name[0] == '-' ||
+		fieldSuggestionHasPrivatePrefix(name) ||
+		strings.ContainsAny(name, "|(),=!<>\"*") {
+		return false
+	}
+	for _, character := range name {
+		if unicode.IsSpace(character) || !unicode.IsGraphic(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func fieldSuggestionHasPrivatePrefix(name string) bool {
+	const privatePrefix = "__os_"
+	if len(name) < len(privatePrefix) {
+		return false
+	}
+	for index := range len(privatePrefix) {
+		character := name[index]
+		if character >= 'A' && character <= 'Z' {
+			character += 'a' - 'A'
+		}
+		if character != privatePrefix[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func fieldSuggestionNameBefore(left, right string) bool {
+	switch fieldSuggestionFoldedCompare(left, right) {
+	case -1:
+		return true
+	case 1:
+		return false
+	default:
+		return left < right
+	}
+}
+
+func fieldSuggestionFoldedCompare(left, right string) int {
+	maximum := min(len(left), len(right))
+	for index := range maximum {
+		leftByte := left[index]
+		if leftByte >= 'A' && leftByte <= 'Z' {
+			leftByte += 'a' - 'A'
+		}
+		rightByte := right[index]
+		if rightByte >= 'A' && rightByte <= 'Z' {
+			rightByte += 'a' - 'A'
+		}
+		switch {
+		case leftByte < rightByte:
+			return -1
+		case leftByte > rightByte:
+			return 1
+		}
+	}
+	switch {
+	case len(left) < len(right):
+		return -1
+	case len(left) > len(right):
+		return 1
+	default:
+		return 0
+	}
 }
 
 func invalidFieldSuggestionResult(message string) error {

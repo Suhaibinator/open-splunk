@@ -58,6 +58,14 @@ func TestReservedDynamicRootsCoverPhysicalSecurityAndContainers(t *testing.T) {
 			t.Errorf("ordinary/native-protocol dynamic root %q was globally reserved", name)
 		}
 	}
+	for _, unicodeLookalike := range []string{"İndex", "İNDEX", "__ös_private"} {
+		if IsReservedDynamicRoot(unicodeLookalike) {
+			t.Errorf("Unicode-distinct root %q was folded into an ASCII reservation", unicodeLookalike)
+		}
+	}
+	if _, err := ParseStoredFieldNames([]string{"İndex"}); err != nil {
+		t.Fatalf("Unicode-distinct stored root was rejected: %v", err)
+	}
 
 	names := ReservedDynamicRootNames()
 	seen := make(map[string]struct{}, len(names))

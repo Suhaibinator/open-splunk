@@ -161,7 +161,7 @@ func queryIntegrationTestFieldCatalog(
 	})
 
 	t.Run("field suggestion compiler and executor", func(t *testing.T) {
-		t.Run("canonical and dynamic names are bytewise bounded", func(t *testing.T) {
+		t.Run("canonical and dynamic names are deterministically bounded", func(t *testing.T) {
 			suggestions, err := executor.ExecuteFieldSuggestions(
 				ctx,
 				queryIntegrationCompileFieldSuggestions(
@@ -203,6 +203,125 @@ func queryIntegrationTestFieldCatalog(
 				FieldSuggestionResult{FieldNames: []string{"status"}},
 			) {
 				t.Fatalf("dynamic prefix suggestions = %#v", suggestions)
+			}
+		})
+
+		t.Run("editor eligibility and mixed-case ranking happen before limit", func(t *testing.T) {
+			suggestions, err := executor.ExecuteFieldSuggestions(
+				ctx,
+				queryIntegrationCompileFieldSuggestions(
+					t,
+					"field-suggestions-poison-window",
+					indexTime,
+					`index=field-suggestions-poison-window`,
+					"mix",
+					5,
+				),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := FieldSuggestionResult{FieldNames: []string{
+				"mixaardvark",
+				"mixAlpha",
+				"mixValid",
+				"mixz",
+				"mixİ",
+			}}
+			if !reflect.DeepEqual(suggestions, want) {
+				t.Fatalf("pre-limit filtered suggestions = %#v, want %#v", suggestions, want)
+			}
+		})
+
+		t.Run("escaped path segments retain decoded metadata semantics", func(t *testing.T) {
+			suggestions, err := executor.ExecuteFieldSuggestions(
+				ctx,
+				queryIntegrationCompileFieldSuggestions(
+					t,
+					"field-suggestions-escaped-valid",
+					indexTime,
+					`index=field-suggestions-escaped-valid`,
+					"tenant_id",
+					10,
+				),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := FieldSuggestionResult{FieldNames: []string{`tenant_id\.shadow`}}
+			if !reflect.DeepEqual(suggestions, want) {
+				t.Fatalf("escaped-root suggestions = %#v, want %#v", suggestions, want)
+			}
+		})
+
+		t.Run("Unicode-distinct root is not an ASCII reservation", func(t *testing.T) {
+			suggestions, err := executor.ExecuteFieldSuggestions(
+				ctx,
+				queryIntegrationCompileFieldSuggestions(
+					t,
+					"field-suggestions-unicode-root",
+					indexTime,
+					`index=field-suggestions-unicode-root`,
+					"İ",
+					10,
+				),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := FieldSuggestionResult{FieldNames: []string{"İndex"}}
+			if !reflect.DeepEqual(suggestions, want) {
+				t.Fatalf("Unicode-distinct root suggestions = %#v, want %#v", suggestions, want)
+			}
+		})
+
+		t.Run("maximum-width valid metadata remains queryable", func(t *testing.T) {
+			suggestions, err := executor.ExecuteFieldSuggestions(
+				ctx,
+				queryIntegrationCompileFieldSuggestions(
+					t,
+					"field-suggestions-wide-valid",
+					indexTime,
+					`index=field-suggestions-wide-valid`,
+					"wide_field_102",
+					10,
+				),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := FieldSuggestionResult{FieldNames: []string{
+				"wide_field_1020",
+				"wide_field_1021",
+				"wide_field_1022",
+				"wide_field_1023",
+			}}
+			if !reflect.DeepEqual(suggestions, want) {
+				t.Fatalf("maximum-width suggestions = %#v, want %#v", suggestions, want)
+			}
+		})
+
+		t.Run("parent and child from different valid rows coexist", func(t *testing.T) {
+			suggestions, err := executor.ExecuteFieldSuggestions(
+				ctx,
+				queryIntegrationCompileFieldSuggestions(
+					t,
+					"field-suggestions-cross-row-paths",
+					indexTime,
+					`index=field-suggestions-cross-row-paths`,
+					"cross_parent",
+					10,
+				),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := FieldSuggestionResult{FieldNames: []string{
+				"cross_parent",
+				"cross_parent.child",
+			}}
+			if !reflect.DeepEqual(suggestions, want) {
+				t.Fatalf("cross-row parent/child suggestions = %#v, want %#v", suggestions, want)
 			}
 		})
 
@@ -274,10 +393,16 @@ func queryIntegrationTestFieldCatalog(
 				prefix string
 			}{
 				{index: "field-catalog-legacy", prefix: "sta"},
+				{index: "field-catalog-invalid", prefix: "does-not-match"},
+				{index: "field-catalog-invalid-name", prefix: "does-not-match"},
 				{index: "field-catalog-oversized", prefix: "field"},
 				{index: "field-suggestions-invalid-escape", prefix: "does-not-match"},
 				{index: "field-suggestions-empty-segment", prefix: "does-not-match"},
 				{index: "field-suggestions-control-name", prefix: "does-not-match"},
+				{index: "field-suggestions-reserved-root", prefix: "does-not-match"},
+				{index: "field-suggestions-private-root", prefix: "does-not-match"},
+				{index: "field-suggestions-path-collision", prefix: "does-not-match"},
+				{index: "field-suggestions-escaped-path-collision", prefix: "does-not-match"},
 			} {
 				test := test
 				t.Run(test.index, func(t *testing.T) {
@@ -700,6 +825,41 @@ func queryIntegrationInsertFieldCatalogEvents(t *testing.T, ctx context.Context,
 		names: []string{strings.Repeat("x", eventfields.MaximumNormalizedFieldNameBytes+1)},
 		types: []uint8{uint8(eventfields.StoredValueTypeString)}, version: eventfields.CurrentFieldMetadataVersion,
 	})
+	poisonWindowNames := make([]string, 0, int(clickhouse.MaximumFieldSuggestions)+5)
+	poisonWindowTypes := make([]uint8, 0, cap(poisonWindowNames))
+	for index := range int(clickhouse.MaximumFieldSuggestions) {
+		poisonWindowNames = append(poisonWindowNames, fmt.Sprintf("mix poison%03d", index))
+		poisonWindowTypes = append(poisonWindowTypes, uint8(eventfields.StoredValueTypeString))
+	}
+	// The durable array remains bytewise sorted. Its usable names deliberately
+	// appear after a full hard-limit window of editor-ineligible names.
+	poisonWindowNames = append(
+		poisonWindowNames,
+		"mixAlpha",
+		"mixValid",
+		"mixaardvark",
+		"mixz",
+		"mixİ",
+	)
+	for range 5 {
+		poisonWindowTypes = append(poisonWindowTypes, uint8(eventfields.StoredValueTypeString))
+	}
+	fixtures = append(fixtures, fixture{
+		id: "suggestion-poison-window", index: "field-suggestions-poison-window",
+		fields: clickhousedriver.NewJSON(), names: poisonWindowNames, types: poisonWindowTypes,
+		version: eventfields.CurrentFieldMetadataVersion,
+	})
+	wideNames := make([]string, eventfields.MaximumStoredFieldsPerEvent)
+	wideTypes := make([]uint8, len(wideNames))
+	for index := range wideNames {
+		wideNames[index] = fmt.Sprintf("wide_field_%04d", index)
+		wideTypes[index] = uint8(eventfields.StoredValueTypeString)
+	}
+	fixtures = append(fixtures, fixture{
+		id: "suggestion-wide-valid", index: "field-suggestions-wide-valid",
+		fields: clickhousedriver.NewJSON(), names: wideNames, types: wideTypes,
+		version: eventfields.CurrentFieldMetadataVersion,
+	})
 	fixtures = append(fixtures,
 		fixture{
 			id: "suggestion-visible", index: "field-suggestions-scope",
@@ -764,6 +924,70 @@ func queryIntegrationInsertFieldCatalogEvents(t *testing.T, ctx context.Context,
 			id: "suggestion-control-name", index: "field-suggestions-control-name",
 			fields: clickhousedriver.NewJSON(),
 			names:  []string{"a\x01b"}, types: []uint8{uint8(eventfields.StoredValueTypeString)},
+			version: eventfields.CurrentFieldMetadataVersion,
+		},
+		fixture{
+			id: "suggestion-reserved-root", index: "field-suggestions-reserved-root",
+			fields: clickhousedriver.NewJSON(),
+			names:  []string{"tenant_id"}, types: []uint8{uint8(eventfields.StoredValueTypeString)},
+			version: eventfields.CurrentFieldMetadataVersion,
+		},
+		fixture{
+			id: "suggestion-private-root", index: "field-suggestions-private-root",
+			fields: clickhousedriver.NewJSON(),
+			names:  []string{"__OS_private"}, types: []uint8{uint8(eventfields.StoredValueTypeString)},
+			version: eventfields.CurrentFieldMetadataVersion,
+		},
+		fixture{
+			id: "suggestion-path-collision", index: "field-suggestions-path-collision",
+			fields: clickhousedriver.NewJSON(),
+			names:  []string{"a", "a.b"},
+			types: []uint8{
+				uint8(eventfields.StoredValueTypeString),
+				uint8(eventfields.StoredValueTypeString),
+			},
+			version: eventfields.CurrentFieldMetadataVersion,
+		},
+		fixture{
+			id: "suggestion-escaped-valid", index: "field-suggestions-escaped-valid",
+			fields: clickhousedriver.NewJSON(),
+			names:  []string{"a", `a\.b`, `tenant_id\.shadow`},
+			types: []uint8{
+				uint8(eventfields.StoredValueTypeString),
+				uint8(eventfields.StoredValueTypeString),
+				uint8(eventfields.StoredValueTypeString),
+			},
+			version: eventfields.CurrentFieldMetadataVersion,
+		},
+		fixture{
+			id: "suggestion-escaped-path-collision", index: "field-suggestions-escaped-path-collision",
+			fields: clickhousedriver.NewJSON(),
+			names:  []string{`a\.b`, `a\.b.c`},
+			types: []uint8{
+				uint8(eventfields.StoredValueTypeString),
+				uint8(eventfields.StoredValueTypeString),
+			},
+			version: eventfields.CurrentFieldMetadataVersion,
+		},
+		fixture{
+			id: "suggestion-cross-row-parent", index: "field-suggestions-cross-row-paths",
+			fields:  clickhousedriver.NewJSON(),
+			names:   []string{"cross_parent"},
+			types:   []uint8{uint8(eventfields.StoredValueTypeString)},
+			version: eventfields.CurrentFieldMetadataVersion,
+		},
+		fixture{
+			id: "suggestion-cross-row-child", index: "field-suggestions-cross-row-paths",
+			fields:  clickhousedriver.NewJSON(),
+			names:   []string{"cross_parent.child"},
+			types:   []uint8{uint8(eventfields.StoredValueTypeString)},
+			version: eventfields.CurrentFieldMetadataVersion,
+		},
+		fixture{
+			id: "suggestion-unicode-root", index: "field-suggestions-unicode-root",
+			fields:  clickhousedriver.NewJSON(),
+			names:   []string{"İndex"},
+			types:   []uint8{uint8(eventfields.StoredValueTypeString)},
 			version: eventfields.CurrentFieldMetadataVersion,
 		},
 	)
