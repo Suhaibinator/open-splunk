@@ -72,6 +72,7 @@ func TestGradeThisCompatibilityV0_1AgainstClickHouse(t *testing.T) {
 	if err := queryConnection.Ping(ctx); err != nil {
 		t.Fatal(err)
 	}
+	gradeThisStopInspectionMerges(t, ctx, queryConnection)
 	executor, err := New(queryConnection, Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -110,6 +111,13 @@ func TestGradeThisCompatibilityV0_1AgainstClickHouse(t *testing.T) {
 	})
 
 	fixture := gradeThisStoreCorpus(t, ctx, store)
+	gradeThisStoreInspectionLoad(
+		t,
+		ctx,
+		queryConnection,
+		fixture.profile,
+	)
+	gradeThisAssertInspectionPartLayout(t, ctx, queryConnection)
 	cutoff, err := sequencer.Cutoff(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -143,6 +151,10 @@ func TestGradeThisCompatibilityV0_1AgainstClickHouse(t *testing.T) {
 	if len(expectations) != len(searches) {
 		t.Fatalf("expectations = %d, searches = %d", len(expectations), len(searches))
 	}
+	evidence := make(
+		map[gradethiscorpus.SearchID]gradeThisInspectionEvidence,
+		len(searches),
+	)
 	for _, search := range searches {
 		search := search
 		t.Run(string(search.ID), func(t *testing.T) {
@@ -185,8 +197,15 @@ func TestGradeThisCompatibilityV0_1AgainstClickHouse(t *testing.T) {
 				t.Fatalf("rows=%d were not exercised through multiple pages", len(expectation.rows))
 			}
 			gradeThisAssertRows(t, gotRows, expectation.rows)
+			evidence[search.ID] = gradeThisCaptureInspectionEvidence(
+				t,
+				search.ID,
+				created.ID,
+				terminal,
+			)
 		})
 	}
+	gradeThisAssertInspectionCorpusEvidence(t, searches, evidence)
 }
 
 type gradeThisDecodedFixture struct {
