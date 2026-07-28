@@ -1716,6 +1716,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testLikeAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testNowAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testStrftimeAgainstClickHouse(ctx, t, store, connection, indexTime)
+	testStrptimeAgainstClickHouse(ctx, t, store, connection, indexTime)
 }
 
 func testNumericBinAgainstClickHouse(
