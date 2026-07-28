@@ -382,6 +382,67 @@ The ingestion API should be independently scalable later, but the MVP can run it
 
 The first deployment is single-user on a trusted network, so end-user authentication and RBAC are not release blockers. Collector ingestion tokens remain necessary: even on a trusted network, they prevent accidental cross-index writes and establish a protocol that can be hardened later. SQLite is sufficient for this single-node control plane and should run in WAL mode with explicit backup and migration tooling.
 
+### Collector identity and active-instance fencing
+
+`collector_id` is durable security identity, not client-supplied display
+metadata. It participates in stored event provenance and the durable
+batch-sequence/idempotency namespace. A bearer credential that can choose an
+arbitrary well-formed collector ID could therefore impersonate another
+collector and reserve that collector's future sequence numbers.
+
+The native collector protocol uses the following identity contract:
+
+- An administrator first obtains the collector's locally persisted stable
+  `collector_id`, then creates an ingestion token explicitly bound to that ID.
+  The server never trusts first use to choose a binding and never auto-enrolls
+  an unknown identity from `CollectorHello`.
+- Every newly created native ingestion token requires exactly one canonical,
+  bounded `bound_collector_id`. The binding is immutable once set. Several
+  tokens may bind to the same collector during credential rotation, so the
+  binding is not unique.
+- The upgrade migration may represent old tokens with a `NULL` binding, but
+  native gRPC authentication fails closed for them. An administrator may bind
+  such a token exactly once under optimistic locking, although revoking it and
+  issuing a replacement is the preferred rollout. A non-`NULL` binding can
+  never be cleared or changed.
+- Successful authentication returns the bound ID as trusted authorization
+  state. `CollectorHello.collector_id` must match it before readiness,
+  token-use recording, visibility reservation, or event insertion.
+  `instance_id` remains useful operator metadata but is never security
+  authority.
+
+The single-node server also owns an active-stream lease keyed by
+`(tenant_id, collector_id)`. Because the process lifetime lock prevents two
+supported server processes from sharing one control database, the first
+implementation may keep this lease registry in memory. Each accepted Hello
+claims a monotonically increasing process-local generation and a random
+stream ID under the server boot epoch. A fresh claim supersedes the previous
+claim so a half-open connection cannot prevent reconnection. The previous
+handler is canceled promptly and all post-ready heartbeat, batch, goodbye,
+and deferred-cleanup actions must prove that their lease is still current.
+Cleanup is conditional, so a delayed old handler cannot release a newer
+lease.
+
+Lease validation is a request-admission boundary: a request that proved it
+held the current generation before a newer claim may finish, while a request
+that reaches the boundary afterward is rejected without starting a durable
+write. Token authorization is refreshed at every heartbeat and batch
+boundary. Revocation or scope replacement that races after a boundary may
+allow only that already-admitted operation to finish; the next boundary
+observes the new state. The later persisted fleet implementation must combine
+collector enabled-state checks, token revalidation, token-use recording, and
+durable lease allocation in one SQLite transaction so administrator
+disablement can offer the stronger linearizable guarantee.
+
+Fleet state must not be inferred merely from an open gRPC socket or a
+client-supplied timestamp. The server boot epoch invalidates all prior live
+leases after restart, server receive time drives lifecycle display, and a
+monotonic in-process deadline drives online/stale transitions. Hello and
+heartbeat collections, strings, counters, and encoded sizes must be bounded
+before persistence. Heartbeat storage is latest-wins and coalesced, uses a
+telemetry revision separate from administrator optimistic-lock versions, and
+conditions every write on the current boot epoch and lease generation.
+
 ## Indexes, apps, and tenancy
 
 Splunk “apps” and “indexes” should not be represented by the same database entity, even if the first UI creates one of each together.

@@ -7,7 +7,68 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: durable ingestion-token last use
+## Latest checkpoint: collector identity and fencing contract
+
+Date: 2026-07-28
+
+This design checkpoint resolves the security and compatibility choices that
+must precede a persisted GORM collector fleet:
+
+1. `collector_id` already controls stored provenance and the durable
+   `(tenant, collector, sequence)` ingestion namespace. Production currently
+   leaves the authorization binding empty, so any valid token can claim
+   another well-formed ID and reserve its future sequence. Independent
+   adversarial review classified this as a present P1 integrity/availability
+   defect rather than a future fleet-only concern.
+2. Native credentials are explicitly bound by an administrator, never through
+   trust-on-first-use. New tokens require a bounded collector ID. A migration
+   keeps legacy rows nullable only so existing databases open successfully;
+   unbound credentials fail closed on native gRPC until they are bound once
+   under optimistic locking or, preferably, revoked and rotated.
+3. A nonempty binding is immutable and cannot be cleared. It is intentionally
+   not unique because safe token rotation may briefly leave two active
+   credentials bound to the same collector.
+4. Authentication returns the binding as trusted state and Hello must match
+   it before readiness, last-use recording, visibility reservation, or
+   ClickHouse insertion. Client `instance_id` remains display metadata.
+5. Before fleet persistence, the singleton server uses an in-memory
+   `(tenant_id, collector_id)` registry with a boot epoch and monotonic
+   generation. A new validated stream supersedes and fences the old stream;
+   every post-ready message and conditional cleanup checks the lease.
+6. A message admitted under the current lease may finish if a takeover or
+   credential update races afterward. Messages reaching the boundary later
+   fail before durable work. Heartbeats and batches both refresh token
+   authorization.
+7. The subsequent GORM fleet slice will replace the process-local registry
+   with transactionally allocated durable leases and linearizable
+   administrator disablement. Fleet telemetry will use server receive time,
+   boot invalidation, monotonic liveness deadlines, bounded payloads, and
+   coalesced generation-conditional writes separate from administrator CAS
+   versions.
+
+Required prerequisite acceptance coverage includes migration/model parity and
+reopen behavior; immutable one-way binding; match/mismatch and legacy
+fail-closed runtime streams; cross-token provenance/sequence isolation;
+simultaneous takeover barriers; stale heartbeat, batch, and cleanup fencing;
+revocation/scope refresh; server-restart boot invalidation; and tenant
+isolation. The existing real HTTP/native-gRPC/SQLite runtime fixture will be
+extended rather than replaced.
+
+Next implementation checkpoints:
+
+1. Add the nullable authoritative SQL column, explicit GORM mapping, domain
+   projection, create requirement, one-way legacy binding, and authentication
+   result with unit, migration, concurrency, corruption, and reopen tests.
+2. Accept, validate, project, and mask the existing
+   `bound_collector_id` administrator protobuf field, then map it through the
+   production authorizer and prove legacy failure and exact Hello matching
+   through real HTTP and gRPC.
+3. Add the process-local superseding lease registry and adversarial concurrent
+   stream tests before any collector fleet table or feature advertisement.
+4. Re-run the full Go, race, vet, build, pinned lint, and pinned ClickHouse
+   compatibility gates, then perform independent adversarial re-review.
+
+## Previous checkpoint: durable ingestion-token last use
 
 Date: 2026-07-28
 
