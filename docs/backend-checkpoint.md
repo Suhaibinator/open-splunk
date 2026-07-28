@@ -7,7 +7,136 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded timezone-aware SPL `strftime`
+## Latest checkpoint: bounded timezone-aware SPL `strptime`
+
+Date: 2026-07-27
+
+Backend-neutral format validation checkpoint (committed and pushed):
+`da587a4`
+
+Parser and logical-plan checkpoint (committed and pushed):
+`c9221de`
+
+ClickHouse compiler checkpoint (committed and pushed):
+`4d34c8a`
+
+Pinned ClickHouse integration checkpoint (committed and pushed):
+`983e125`
+
+Editor checkpoint (committed and pushed):
+`fe4b7bc`
+
+Adversarial correctness, resource, and reuse checkpoint (committed and
+pushed):
+`4966a7d`
+
+Exact-one-parser and case-insensitive-meridiem checkpoint (committed and
+pushed):
+`825c1e4`
+
+Compatibility checkpoint (committed and pushed):
+`7dd3209`
+
+This test-first slice implements bounded `strptime(value, "format")`:
+
+1. The parser accepts exactly one scalar value and one quoted literal format,
+   treats the function name case-insensitively, preserves complete source
+   ranges, and leaves a bare field named `strptime` ordinary. Parser, planner,
+   predicate validation, and compiler independently reject forged arity,
+   nonliteral formats, Boolean input, typed nil, unsupported enums, malformed
+   directives, and resource overflow.
+2. Parsing requires exactly one complete numeric calendar date. The supported
+   variables are `%%`; `%Y`, `%m`, `%d`, `%F`; `%H`, `%I`, `%M`, `%S`, `%p`,
+   `%T`; `%z`; and `%Q`, `%3Q`, `%6Q`, `%3N`, `%6N`, `%f`. Incomplete,
+   duplicate, ambiguous, locale-dependent, named-zone, colon-offset,
+   two-digit-year, ISO-week, epoch-input, nine-digit, unknown, and dangling
+   variables are rejected rather than delegated to backend defaults.
+3. Numeric month, day, hour, minute, and second fields may be unpadded. `%p`
+   accepts any ASCII case of `AM` or `PM`; `%z` accepts compact signed offsets.
+   Fractions accept one through their declared three- or six-digit width. A
+   terminal literal dot plus `%Q` or explicit 3/6-digit `%Q`/`%N` may be
+   omitted together; `%f` remains required.
+4. Fixed String and Dynamic runtime String values parse to nullable `Float64`
+   Unix seconds after microsecond parsing. Statically null input returns typed
+   null. Fixed numeric, Boolean, canonical-time, and multivalue input is
+   rejected; Dynamic non-String, null, missing, invalid-calendar, mismatched,
+   trailing, and oversized input returns null without throwing. The public
+   numeric result follows the documented v0.1 binary-`Float64` precision model.
+5. Inputs without `%z` use the search's effective IANA timezone; an explicit
+   offset takes precedence. Authored civil dates are checked before timezone
+   conversion and must be from 1971-01-01 through 2299-12-31 inclusive, with a
+   representable resulting instant. A supported civil date may therefore
+   legitimately convert to a 1970 instant. Pinned ClickHouse behavior
+   normalizes daylight-saving gaps forward and chooses the earlier fall-back
+   occurrence.
+6. One format is independently capped at 4 KiB and 4,096
+   literal-code-point/directive work units. One runtime input is capped at
+   4 KiB. Across a query, calls may total 16,384 format work units and 64 KiB
+   of date parsing per row; each lowering also has a 64 KiB generated-SQL
+   ceiling beneath the whole-query ceiling.
+7. The compiler binds the exact-match input-shape regular expression, Joda
+   patterns, and timezone as arguments. It references input once, extracts
+   authored date fields once, selects the optional-fraction primary or
+   fallback pattern before parsing, executes exactly one parser per value, and
+   never expands rows.
+8. Pinned ClickHouse coverage includes fixed and Dynamic types, invalid and
+   trailing input, millisecond and microsecond precision, omitted terminal
+   fractions, unpadded fields, case-insensitive meridiem, compact offsets,
+   civil-date boundaries, UTC and America/Los_Angeles summer/winter behavior,
+   daylight-saving gaps/folds, predicates, projection, aggregation, later
+   eval, nested `strftime`, and query-wide budgets.
+9. Adversarial review removed `strftime` output-policy leakage by introducing
+   a common lexer with caller-owned limits, pinned independent `strptime`
+   limits, removed unused fraction/offset metadata, allocated the format cache
+   lazily, enforced authored civil bounds before timezone conversion,
+   preserved linear SQL/input-once behavior, accepted lowercase and mixed-case
+   meridiem, and replaced eager fallback parsing with capture-directed
+   exact-one-parser routing.
+10. The suggestion to merge SPL and plan scalar enums or centralize every
+    scalar descriptor was declined for this slice: explicit exhaustive
+    conversion and independent validation remain forged-IR trust boundaries.
+    The initial Float64 microsecond-identity concern was also withdrawn because
+    the result intentionally follows the repository's documented Float64
+    numeric model; the compatibility contract now states that precision edge.
+11. Editor highlighting recognizes only parenthesized `strptime`, and eval and
+    where completions advertise the bounded nullable-Unix-seconds signature.
+
+Validation completed on the final implementation:
+
+```sh
+go test ./... -count=1
+golangci-lint run ./...
+npm run test:frontend
+npm run typecheck
+npm run lint
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=5m
+git diff --check
+```
+
+All gates pass. Repository-wide Go lint reports zero issues. The frontend
+corpus contains 128 application tests and 47 release/build tests. Type
+checking and frontend lint pass. The final pinned Store suite passed in
+56.808 seconds after lowercase/mixed-case meridiem coverage and
+exact-one-parser routing.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain, in order, `da587a4`, `c9221de`,
+   `4d34c8a`, `983e125`, `fe4b7bc`, `4966a7d`, `825c1e4`, and `7dd3209`.
+   Preserve unexpected local changes.
+2. Begin `relative_time` as the next independent researched slice. Pin its
+   relative-specifier grammar, search-time anchor, calendar-versus-duration
+   arithmetic, timezone and daylight-saving behavior, precision,
+   invalid/null/type behavior, resource limits, and ClickHouse portability
+   before adding parser support.
+3. Preserve the existing `now()`, `strftime`, and `strptime` trust-boundary
+   validation and replay-stable search scope; do not infer scheduled-search or
+   per-event wall-clock semantics for `relative_time`.
+
+## Previous checkpoint: bounded timezone-aware SPL `strftime`
 
 Date: 2026-07-27
 
