@@ -6,7 +6,7 @@ This directory is the source of truth shared by the Go server, Go collector, and
 
 - `value.proto`, `common.proto`, `event.proto`, and `result.proto` define shared wire primitives, exact dynamic values, canonical collected events, dynamic result schemas, field summaries, timelines, and visualization settings.
 - `collector.proto` is the only gRPC service. It defines the collector registration and at-least-once batch-delivery stream.
-- `search.proto` and `search_api.proto` separate reusable search intent and job state from SRouter request/response messages.
+- `search.proto` and `search_api.proto` separate reusable search intent and job state from SRouter request/response messages. `search_inspection_api.proto` is the administrator-only completed-job logical/physical plan inspection contract.
 - `search_ws.proto` defines binary WebSocket commands and sequenced progress events. It is not a results paging API.
 - `saved_search*`, `history*`, and `export*` remain separate because they have different lifecycle, persistence, and security semantics.
 - `index*`, `app*`, and `collector_admin*` define control-plane entities plus SRouter operations.
@@ -29,6 +29,7 @@ Every route below is `POST`, relative to `/api/v1`, and uses `application/x-prot
 | `/search/jobs/field-summary` | `GetSearchFieldSummaryRequest` | `GetSearchFieldSummaryResponse` |
 | `/search/jobs/timeline` | `GetSearchTimelineRequest` | `GetSearchTimelineResponse` |
 | `/search/jobs/cancel` | `CancelSearchJobRequest` | `CancelSearchJobResponse` |
+| `/search/jobs/inspect` | `InspectSearchJobRequest` | `InspectSearchJobResponse` |
 | `/search/validate` | `ValidateSearchRequest` | `ValidateSearchResponse` |
 | `/search/suggestions` | `GetSearchSuggestionsRequest` | `GetSearchSuggestionsResponse` |
 | `/search/history/get` | `GetSearchHistoryEntryRequest` | `GetSearchHistoryEntryResponse` |
@@ -112,6 +113,31 @@ metadata, writes no history or journal record, takes no storage visibility
 snapshot, and executes no ClickHouse query. Compilation may construct
 generated SQL transiently to prove backend support, but neither SQL nor bound
 arguments are retained, exposed, or submitted to ClickHouse.
+
+### Administrator search inspection
+
+`POST /api/v1/search/jobs/inspect` is an administrator-only diagnostic route
+for one retained, completed search job. Its request contains only
+`search_job_id`; tenant and owner scope come exclusively from the authenticated
+browser principal and cannot be selected on the wire.
+
+The response contains a bounded logical projection (ordered stages, safe field
+names, exact source ranges, and final output shape), a bounded physical
+projection (allowlisted ClickHouse node types, read columns, index names and
+keys, and initial/selected part and granule counts), the generated SQL, raw
+structured `EXPLAIN PLAN` text, and the diagnostic ClickHouse query ID.
+`OPEN`, `STATIC`, and `DYNAMIC` output kinds distinguish an unknown schema, a
+complete ordered schema, and a fixed prefix with a maximum number of dynamic
+fields.
+
+Generated SQL and raw EXPLAIN text are administrator-sensitive and are not
+returned by ordinary search-job reads. Compiler arguments are never separate
+response fields and the generated SQL remains parameterized, but ClickHouse
+may render any query-bound tenant, index, or predicate value into the raw
+EXPLAIN text. Treat the entire inspection response as privileged diagnostic
+data. Execution rows, owner IDs, and mutable planner state are never part of
+this contract. The server validates and bounds every projected collection and
+string before serialization.
 
 The export download route is a raw `GET` file response rather than protobuf. Its short-lived path and bearer capability are returned only in `ExportDownloadGrant`; the token is sent in the `Authorization` header and never placed in a query string.
 
