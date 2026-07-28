@@ -1,0 +1,1659 @@
+package queryexec
+
+import (
+	"context"
+	sqldriver "database/sql/driver"
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"reflect"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
+)
+
+func TestExplainerBuffersExactPlanAndPreservesParameters(t *testing.T) {
+	t.Parallel()
+
+	rows := explainFakeRows(
+		"Projection",
+		"  ReadFromMergeTree (open_splunk.events)",
+		"    Unicode \u2502 plan node",
+	)
+	connection := &fakeQueryConnection{rows: rows}
+	explainer := mustExplainer(t, connection)
+	query := sealedExplainQuery(t)
+	replaced := false
+	for index, argument := range query.Args {
+		if argument == "needle" {
+			query.Args[index] = "bound-secret"
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		t.Fatalf("Compiler args have no search literal: %#v", query.Args)
+	}
+
+	got, err := explainer.Explain(context.Background(), query)
+	if err != nil {
+		t.Fatalf("Explain() error = %v", err)
+	}
+	if got != (ExplainResult{
+		Text: "Projection\n" +
+			"  ReadFromMergeTree (open_splunk.events)\n" +
+			"    Unicode \u2502 plan node",
+		QueryID: "open-splunk-explain-test",
+	}) {
+		t.Fatalf("Explain() = %#v", got)
+	}
+	wantQuery := explainQueryPrefix + query.SQL + explainQuerySettingsPrefix +
+		strconv.FormatUint(
+			uint64(maximumExplainExecutionTime/time.Second),
+			10,
+		)
+	if connection.query != wantQuery ||
+		!reflect.DeepEqual(connection.args, query.Args) {
+		t.Fatalf(
+			"query/args = %q %#v, want %q %#v",
+			connection.query,
+			connection.args,
+			wantQuery,
+			query.Args,
+		)
+	}
+	if strings.Contains(got.Text, "bound-secret") {
+		t.Fatalf("Explain() serialized a bind argument: %q", got.Text)
+	}
+	if !rows.closed {
+		t.Fatal("EXPLAIN rows were not closed")
+	}
+	resultType := reflect.TypeOf(ExplainResult{})
+	if resultType.NumField() != 2 ||
+		resultType.Field(0).Name != "Text" ||
+		resultType.Field(1).Name != "QueryID" {
+		t.Fatalf("ExplainResult unexpectedly exposes more state: %v", resultType)
+	}
+}
+
+func TestExplainerAcceptsExactCompilerArgumentInventory(t *testing.T) {
+	t.Parallel()
+
+	query := sealedExplainQueryFromSPL(
+		t,
+		`index=main | eval signed=-7,`+
+			`unsigned=18446744073709551615,ratio=1.25,ok=true,text="x",`+
+			`rounded=round(1.25, 2) | head 1`,
+	)
+	inventory := make(map[reflect.Type]struct{})
+	for _, argument := range query.Args {
+		inventory[reflect.TypeOf(argument)] = struct{}{}
+	}
+	want := []reflect.Type{
+		reflect.TypeOf(""),
+		reflect.TypeOf(false),
+		reflect.TypeOf(int64(0)),
+		reflect.TypeOf(uint64(0)),
+		reflect.TypeOf(float64(0)),
+		reflect.TypeOf(uint8(0)),
+	}
+	if len(inventory) != len(want) {
+		t.Fatalf("Compiler argument types = %v, want exactly %v", inventory, want)
+	}
+	for _, argumentType := range want {
+		if _, ok := inventory[argumentType]; !ok {
+			t.Fatalf("Compiler argument types = %v, missing %v", inventory, argumentType)
+		}
+	}
+
+	connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+	if _, err := mustExplainer(t, connection).Explain(
+		context.Background(),
+		query,
+	); err != nil {
+		t.Fatalf("Explain() rejected Compiler argument inventory: %v", err)
+	}
+	if !reflect.DeepEqual(connection.args, query.Args) {
+		t.Fatalf("detached args = %#v, want %#v", connection.args, query.Args)
+	}
+}
+
+func TestExplainerRejectsDriverUnsafeArgumentsBeforeQuery(t *testing.T) {
+	t.Parallel()
+
+	var typedNil *string
+	value := 7
+	tests := []struct {
+		name     string
+		argument any
+	}{
+		{name: "nil", argument: nil},
+		{name: "typed nil", argument: typedNil},
+		{name: "pointer", argument: &value},
+		{name: "map", argument: map[string]string{"secret": "value"}},
+		{name: "slice", argument: []byte("secret")},
+		{name: "named scalar", argument: explainNamedString("secret")},
+		{name: "panic formatter", argument: panicExplainFormatter{}},
+		{name: "panic stringer", argument: panicExplainStringer{}},
+		{name: "panic Valuer", argument: panicExplainValuer{}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			query := sealedExplainQuery(t)
+			query.Args[0] = test.argument
+			connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+			got, err := mustExplainer(t, connection).Explain(
+				context.Background(),
+				query,
+			)
+			if !errors.Is(err, searchjobs.ErrInvalidResult) ||
+				got != (ExplainResult{}) ||
+				connection.query != "" {
+				t.Fatalf(
+					"Explain() = (%#v, %v), query=%q",
+					got,
+					err,
+					connection.query,
+				)
+			}
+		})
+	}
+}
+
+func TestExplainerRequiresExactCompilerPlaceholderCardinality(t *testing.T) {
+	t.Parallel()
+
+	valid := sealedExplainQuery(t)
+	if got, want := compilerPlaceholderCount(valid.SQL), len(valid.Args); got != want {
+		t.Fatalf("Compiler placeholders = %d, args = %d", got, want)
+	}
+	tests := []struct {
+		name string
+		args []any
+	}{
+		{
+			name: "missing",
+			args: slices.Clone(valid.Args[:len(valid.Args)-1]),
+		},
+		{
+			name: "extra",
+			args: append(slices.Clone(valid.Args), "ignored-by-clickhouse-go"),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			query := valid
+			query.Args = test.args
+			connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+			got, err := mustExplainer(t, connection).Explain(
+				context.Background(),
+				query,
+			)
+			if !errors.Is(err, searchjobs.ErrInvalidResult) ||
+				!strings.Contains(err.Error(), "compiler placeholders") ||
+				got != (ExplainResult{}) ||
+				connection.query != "" {
+				t.Fatalf(
+					"Explain() = (%#v, %v), query=%q",
+					got,
+					err,
+					connection.query,
+				)
+			}
+		})
+	}
+}
+
+func TestExplainerBoundsRenderedArgumentsBeforeDriverBinding(t *testing.T) {
+	t.Parallel()
+
+	query := sealedExplainQuery(t)
+	query.Args[0] = strings.Repeat(`\\'`, 300<<10)
+	connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+	got, err := mustExplainer(t, connection).Explain(
+		context.Background(),
+		query,
+	)
+	if !errors.Is(err, searchjobs.ErrExecutionLimit) ||
+		got != (ExplainResult{}) ||
+		connection.query != "" {
+		t.Fatalf(
+			"Explain() = (%#v, %v), query bytes=%d",
+			got,
+			err,
+			len(connection.query),
+		)
+	}
+}
+
+func TestExplainerDetachesArgumentsBeforeQueryAdmission(t *testing.T) {
+	query := sealedExplainQuery(t)
+	query.Args[0] = "before-admission"
+	wantArgs := slices.Clone(query.Args)
+	connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+	explainer := mustExplainer(t, connection)
+	detached := make(chan struct{})
+	release := make(chan struct{})
+	explainer.newQueryID = func() (string, error) {
+		close(detached)
+		<-release
+		return "open-splunk-explain-detached", nil
+	}
+
+	type explainCallResult struct {
+		result ExplainResult
+		err    error
+	}
+	completed := make(chan explainCallResult, 1)
+	go func() {
+		result, err := explainer.Explain(context.Background(), query)
+		completed <- explainCallResult{result: result, err: err}
+	}()
+	select {
+	case <-detached:
+	case <-time.After(time.Second):
+		t.Fatal("Explain() did not reach post-detachment admission")
+	}
+	// The query-ID hook is after detachment and before Query. Mutating the
+	// caller-owned slice here is synchronized and therefore race-detector safe.
+	query.Args[0] = strings.Repeat("after-admission", 64<<10)
+	close(release)
+
+	select {
+	case call := <-completed:
+		if call.err != nil {
+			t.Fatalf("Explain() error = %v", call.err)
+		}
+		if !reflect.DeepEqual(connection.args, wantArgs) {
+			t.Fatalf("Query args = %#v, want detached %#v", connection.args, wantArgs)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Explain() did not complete")
+	}
+}
+
+func TestSettingsForExplainClonesAndTightensEveryResourceCap(t *testing.T) {
+	t.Parallel()
+
+	base, err := querySettings(Config{
+		MaxExecutionTime: 2 * maximumExplainExecutionTime,
+		MaxMemoryBytes:   2 * maximumExplainMemoryBytes,
+		MaxRowsToRead:    2 * maximumExplainRowsToRead,
+		MaxBytesToRead:   2 * maximumExplainBytesToRead,
+		MaxResultRows:    2 * maximumExplainResultRows,
+		MaxResultBytes:   2 * maximumExplainResultBytes,
+		MaxRowsToGroupBy: 2 * maximumExplainGroups,
+		MaxThreads:       4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base["use_query_cache"] = uint8(1)
+	base["max_query_size"] = 2 * defaultMaxQueryBytes
+	before := maps.Clone(base)
+
+	got, err := settingsForExplain(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"readonly":             uint8(2),
+		"max_execution_time":   uint64(maximumExplainExecutionTime / time.Second),
+		"max_memory_usage":     maximumExplainMemoryBytes,
+		"max_rows_to_read":     maximumExplainRowsToRead,
+		"max_bytes_to_read":    maximumExplainBytesToRead,
+		"max_result_rows":      maximumExplainResultRows,
+		"max_result_bytes":     maximumExplainResultBytes,
+		"max_rows_to_group_by": maximumExplainGroups,
+		"max_threads":          maximumExplainThreads,
+		"max_query_size":       defaultMaxQueryBytes,
+		"use_query_cache":      uint8(0),
+	}
+	for name, wantValue := range want {
+		if got[name] != wantValue {
+			t.Errorf("setting %s = %#v, want %#v", name, got[name], wantValue)
+		}
+	}
+	if !reflect.DeepEqual(base, before) {
+		t.Fatalf("base settings were mutated: got %#v, want %#v", base, before)
+	}
+	if got["max_query_size"].(uint64) <=
+		maximumExplainQueryBytes+uint64(len(explainQueryPrefix))+(256<<10) {
+		t.Fatalf(
+			"max_query_size %d leaves no bounded driver-parameter headroom above raw SQL",
+			got["max_query_size"],
+		)
+	}
+
+	stricter := maps.Clone(base)
+	stricter["max_execution_time"] = uint64(3)
+	stricter["max_memory_usage"] = uint64(1 << 20)
+	stricter["max_result_rows"] = uint64(7)
+	stricter["max_result_bytes"] = uint64(1_024)
+	stricter["max_query_size"] = uint64(2_048)
+	strict, err := settingsForExplain(stricter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, wantValue := range map[string]any{
+		"max_execution_time": uint64(3),
+		"max_memory_usage":   uint64(1 << 20),
+		"max_result_rows":    uint64(7),
+		"max_result_bytes":   uint64(1_024),
+		"max_query_size":     uint64(2_048),
+	} {
+		if strict[name] != wantValue {
+			t.Errorf("stricter setting %s = %#v, want %#v", name, strict[name], wantValue)
+		}
+	}
+}
+
+func TestExplainerPreservesExactTimeoutAndPinsCeiledServerSetting(t *testing.T) {
+	t.Parallel()
+
+	connection := &deadlineExplainConnection{rows: explainFakeRows("Projection")}
+	explainer := mustExplainer(t, connection)
+	explainer.settings["max_execution_time"] = uint64(2)
+	explainer.executionTimeout = 1500 * time.Millisecond
+	query := sealedExplainQuery(t)
+	started := time.Now()
+	if _, err := explainer.Explain(context.Background(), query); err != nil {
+		t.Fatal(err)
+	}
+	want := explainQueryPrefix + query.SQL + explainQuerySettingsPrefix + "2"
+	if connection.query != want {
+		t.Fatalf("Query() SQL = %q, want %q", connection.query, want)
+	}
+	if !connection.hasDeadline {
+		t.Fatal("stricter timeout was not exposed as a transport deadline")
+	}
+	remaining := connection.deadline.Sub(started)
+	if remaining < 1400*time.Millisecond || remaining > 1600*time.Millisecond {
+		t.Fatalf("exact execution timeout = %v, want about 1.5s", remaining)
+	}
+}
+
+func TestSettingsForExplainRejectsMalformedOrUnsafeBase(t *testing.T) {
+	base, err := querySettings(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"max_execution_time",
+		"max_memory_usage",
+		"max_rows_to_read",
+		"max_bytes_to_read",
+		"max_result_rows",
+		"max_result_bytes",
+		"max_rows_to_group_by",
+		"max_threads",
+		"max_query_size",
+		"max_subquery_depth",
+	} {
+		t.Run(name+" missing", func(t *testing.T) {
+			malformed := maps.Clone(base)
+			delete(malformed, name)
+			if _, err := settingsForExplain(malformed); err == nil {
+				t.Fatalf("missing %s unexpectedly accepted", name)
+			}
+		})
+		t.Run(name+" zero", func(t *testing.T) {
+			malformed := maps.Clone(base)
+			malformed[name] = uint64(0)
+			if _, err := settingsForExplain(malformed); err == nil {
+				t.Fatalf("zero %s unexpectedly accepted", name)
+			}
+		})
+		t.Run(name+" wrong type", func(t *testing.T) {
+			malformed := maps.Clone(base)
+			malformed[name] = "1"
+			if _, err := settingsForExplain(malformed); err == nil {
+				t.Fatalf("wrong-type %s unexpectedly accepted", name)
+			}
+		})
+	}
+	for _, name := range []string{
+		"timeout_overflow_mode",
+		"read_overflow_mode",
+		"result_overflow_mode",
+		"group_by_overflow_mode",
+	} {
+		t.Run(name, func(t *testing.T) {
+			malformed := maps.Clone(base)
+			malformed[name] = "break"
+			if _, err := settingsForExplain(malformed); err == nil {
+				t.Fatalf("unsafe %s unexpectedly accepted", name)
+			}
+		})
+	}
+	for _, test := range []struct {
+		name  string
+		value any
+	}{
+		{name: "enable_materialized_cte", value: uint8(0)},
+		{name: "short_circuit_function_evaluation", value: "disable"},
+		{name: "async_insert", value: uint8(1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			malformed := maps.Clone(base)
+			malformed[test.name] = test.value
+			if _, err := settingsForExplain(malformed); err == nil {
+				t.Fatalf("unsafe %s unexpectedly accepted", test.name)
+			}
+		})
+	}
+	for _, malformed := range []clickhousedriver.Settings{
+		nil,
+		func() clickhousedriver.Settings {
+			settings := maps.Clone(base)
+			settings["readonly"] = uint8(1)
+			return settings
+		}(),
+		func() clickhousedriver.Settings {
+			settings := maps.Clone(base)
+			settings["readonly"] = "2"
+			return settings
+		}(),
+	} {
+		if _, err := settingsForExplain(malformed); err == nil {
+			t.Fatalf("settingsForExplain(%#v) unexpectedly succeeded", malformed)
+		}
+	}
+}
+
+func TestExplainerRejectsInvalidStateQueryAndQueryIDBeforeExecution(t *testing.T) {
+	var typedNilConnection *fakeQueryConnection
+	validQuery := sealedExplainQuery(t)
+	tests := []struct {
+		name     string
+		executor func(*fakeQueryConnection) *Explainer
+		ctx      context.Context
+		query    clickhouse.CompiledQuery
+	}{
+		{
+			name: "nil receiver",
+			executor: func(*fakeQueryConnection) *Explainer {
+				return nil
+			},
+			ctx: context.Background(), query: validQuery,
+		},
+		{
+			name: "nil connection",
+			executor: func(*fakeQueryConnection) *Explainer {
+				executor := mustExplainer(t, typedNilConnection)
+				for _, lane := range executor.allLanes {
+					lane.connection = nil
+				}
+				return executor
+			},
+			ctx: context.Background(), query: validQuery,
+		},
+		{
+			name: "typed nil connection",
+			executor: func(*fakeQueryConnection) *Explainer {
+				return mustExplainer(t, typedNilConnection)
+			},
+			ctx: context.Background(), query: validQuery,
+		},
+		{
+			name: "nil query ID generator",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				executor := mustExplainer(t, connection)
+				executor.newQueryID = nil
+				return executor
+			},
+			ctx: context.Background(), query: validQuery,
+		},
+		{
+			name: "nil gate",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				executor := mustExplainer(t, connection)
+				executor.lanes = nil
+				return executor
+			},
+			ctx: context.Background(), query: validQuery,
+		},
+		{
+			name: "wrong gate capacity",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				executor := mustExplainer(t, connection)
+				executor.lanes = make(chan *explainLane, 1)
+				return executor
+			},
+			ctx: context.Background(), query: validQuery,
+		},
+		{
+			name: "nil settings",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				executor := mustExplainer(t, connection)
+				executor.settings = nil
+				return executor
+			},
+			ctx: context.Background(), query: validQuery,
+		},
+		{
+			name: "nil context",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				return mustExplainer(t, connection)
+			},
+			query: validQuery,
+		},
+		{
+			name: "blank SQL",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				return mustExplainer(t, connection)
+			},
+			ctx: context.Background(), query: clickhouse.CompiledQuery{SQL: " \n\t"},
+		},
+		{
+			name: "oversized SQL",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				return mustExplainer(t, connection)
+			},
+			ctx: context.Background(), query: clickhouse.CompiledQuery{
+				SQL: strings.Repeat("x", 256<<10+1),
+			},
+		},
+		{
+			name: "invalid UTF-8 SQL",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				return mustExplainer(t, connection)
+			},
+			ctx: context.Background(), query: clickhouse.CompiledQuery{
+				SQL: string([]byte{'S', 'E', 'L', 'E', 'C', 'T', ' ', 0xff}),
+			},
+		},
+		{
+			name: "NUL SQL",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				return mustExplainer(t, connection)
+			},
+			ctx: context.Background(), query: clickhouse.CompiledQuery{SQL: "SELECT\x00 1"},
+		},
+		{
+			name: "control SQL",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				return mustExplainer(t, connection)
+			},
+			ctx: context.Background(), query: clickhouse.CompiledQuery{SQL: "SELECT\v1"},
+		},
+		{
+			name: "query ID generation failure",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				executor := mustExplainer(t, connection)
+				executor.newQueryID = func() (string, error) {
+					return "", errors.New("secret random source detail")
+				}
+				return executor
+			},
+			ctx: context.Background(), query: validQuery,
+		},
+		{
+			name: "empty query ID",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				executor := mustExplainer(t, connection)
+				executor.newQueryID = func() (string, error) { return "", nil }
+				return executor
+			},
+			ctx: context.Background(), query: validQuery,
+		},
+		{
+			name: "query ID control",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				executor := mustExplainer(t, connection)
+				executor.newQueryID = func() (string, error) {
+					return "explain\nsecret", nil
+				}
+				return executor
+			},
+			ctx: context.Background(), query: validQuery,
+		},
+		{
+			name: "query ID wrong prefix",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				executor := mustExplainer(t, connection)
+				executor.newQueryID = func() (string, error) {
+					return "open-splunk-search-deadbeef", nil
+				}
+				return executor
+			},
+			ctx: context.Background(), query: validQuery,
+		},
+		{
+			name: "query ID empty suffix",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				executor := mustExplainer(t, connection)
+				executor.newQueryID = func() (string, error) {
+					return explainQueryIDPrefix, nil
+				}
+				return executor
+			},
+			ctx: context.Background(), query: validQuery,
+		},
+		{
+			name: "oversized query ID",
+			executor: func(connection *fakeQueryConnection) *Explainer {
+				executor := mustExplainer(t, connection)
+				executor.newQueryID = func() (string, error) {
+					return explainQueryIDPrefix +
+						strings.Repeat(
+							"x",
+							maximumExplainQueryIDBytes-len(explainQueryIDPrefix)+1,
+						), nil
+				}
+				return executor
+			},
+			ctx: context.Background(), query: validQuery,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+			executor := test.executor(connection)
+			got, err := executor.Explain(test.ctx, test.query)
+			if err == nil || got != (ExplainResult{}) {
+				t.Fatalf("Explain() = (%#v, %v), want zero and error", got, err)
+			}
+			if strings.Contains(err.Error(), "secret") {
+				t.Fatalf("Explain() leaked private error detail: %v", err)
+			}
+			if connection.query != "" {
+				t.Fatalf("invalid request issued query %q", connection.query)
+			}
+		})
+	}
+
+	t.Run("canceled context", func(t *testing.T) {
+		connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		got, err := mustExplainer(t, connection).Explain(ctx, validQuery)
+		if !errors.Is(err, context.Canceled) || got != (ExplainResult{}) ||
+			connection.query != "" {
+			t.Fatalf("Explain() = (%#v, %v), query=%q", got, err, connection.query)
+		}
+	})
+}
+
+func TestExplainerRequiresUnchangedCompilerSQLBeforeQuery(t *testing.T) {
+	sealed := sealedExplainQuery(t)
+	forged := clickhouse.CompiledQuery{
+		SQL:          sealed.SQL,
+		Args:         sealed.Args,
+		OutputFields: sealed.OutputFields,
+		Timechart:    sealed.Timechart,
+		Chart:        sealed.Chart,
+		SparseFields: sealed.SparseFields,
+	}
+	appendedSettings := sealed
+	appendedSettings.SQL += " SETTINGS max_execution_time = 0, readonly = 0"
+	multiStatement := sealed
+	multiStatement.SQL += "; SELECT currentUser()"
+
+	for _, test := range []struct {
+		name  string
+		query clickhouse.CompiledQuery
+	}{
+		{name: "forged public fields", query: forged},
+		{name: "appended settings", query: appendedSettings},
+		{name: "multiple statements", query: multiStatement},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+			got, err := mustExplainer(t, connection).Explain(
+				context.Background(),
+				test.query,
+			)
+			if !errors.Is(err, searchjobs.ErrInvalidResult) ||
+				got != (ExplainResult{}) ||
+				connection.query != "" {
+				t.Fatalf(
+					"Explain() = (%#v, %v), query=%q",
+					got,
+					err,
+					connection.query,
+				)
+			}
+			if !strings.Contains(err.Error(), "unchanged Compiler result") {
+				t.Fatalf("provenance error = %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateExplainQueryChecksRawLengthBeforeContentAndSeal(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		wantMessage string
+	}{
+		{
+			name: "oversized invalid blank SQL is length-first",
+			sql: strings.Repeat(" ", 256<<10) +
+				string([]byte{0xff}),
+			wantMessage: "raw byte limit",
+		},
+		{
+			name:        "blank SQL",
+			sql:         " \n\t",
+			wantMessage: "is empty",
+		},
+		{
+			name: "invalid UTF-8",
+			sql: string([]byte{
+				'S', 'E', 'L', 'E', 'C', 'T', ' ', 0xff,
+			}),
+			wantMessage: "valid UTF-8",
+		},
+		{
+			name:        "NUL",
+			sql:         "SELECT\x00 1",
+			wantMessage: "contains NUL",
+		},
+		{
+			name:        "unsupported control",
+			sql:         "SELECT\v1",
+			wantMessage: "unsupported controls",
+		},
+		{
+			name:        "exact raw byte maximum reaches provenance check",
+			sql:         strings.Repeat("x", 256<<10),
+			wantMessage: "unchanged Compiler result",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateExplainQuery(clickhouse.CompiledQuery{SQL: test.sql})
+			if !errors.Is(err, searchjobs.ErrInvalidResult) ||
+				!strings.Contains(err.Error(), test.wantMessage) {
+				t.Fatalf("validateExplainQuery() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestExplainerRejectsMalformedSchemaAndEmptyResults(t *testing.T) {
+	validQuery := sealedExplainQuery(t)
+	var typedNilType *fakeColumnType
+	tests := []struct {
+		name   string
+		mutate func(*fakeRows)
+	}{
+		{
+			name: "wrong column",
+			mutate: func(rows *fakeRows) {
+				rows.columns[0] = "plan"
+			},
+		},
+		{
+			name: "extra column",
+			mutate: func(rows *fakeRows) {
+				rows.columns = append(rows.columns, "extra")
+			},
+		},
+		{
+			name: "missing type",
+			mutate: func(rows *fakeRows) {
+				rows.types = nil
+			},
+		},
+		{
+			name: "typed nil type",
+			mutate: func(rows *fakeRows) {
+				rows.types[0] = typedNilType
+			},
+		},
+		{
+			name: "wrong type name",
+			mutate: func(rows *fakeRows) {
+				rows.types[0] = fakeColumnType{
+					name: "explain", databaseType: "LowCardinality(String)",
+					scanType: reflect.TypeOf(""),
+				}
+			},
+		},
+		{
+			name: "nullable type",
+			mutate: func(rows *fakeRows) {
+				rows.types[0] = fakeColumnType{
+					name: "explain", databaseType: "String",
+					scanType: reflect.TypeOf(""), nullable: true,
+				}
+			},
+		},
+		{
+			name: "wrong scan type",
+			mutate: func(rows *fakeRows) {
+				rows.types[0] = fakeColumnType{
+					name: "explain", databaseType: "String",
+					scanType: reflect.TypeOf([]byte{}),
+				}
+			},
+		},
+		{
+			name: "empty result",
+			mutate: func(rows *fakeRows) {
+				rows.data = nil
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rows := explainFakeRows("Projection")
+			test.mutate(rows)
+			got, err := mustExplainer(
+				t,
+				&fakeQueryConnection{rows: rows},
+			).Explain(context.Background(), validQuery)
+			if !errors.Is(err, searchjobs.ErrInvalidResult) ||
+				got != (ExplainResult{}) ||
+				!rows.closed {
+				t.Fatalf("Explain() = (%#v, %v), rows closed=%v", got, err, rows.closed)
+			}
+		})
+	}
+
+	t.Run("typed nil rows", func(t *testing.T) {
+		var rows *fakeRows
+		got, err := mustExplainer(
+			t,
+			&fakeQueryConnection{rows: rows},
+		).Explain(context.Background(), validQuery)
+		if !errors.Is(err, searchjobs.ErrInvalidResult) || got != (ExplainResult{}) {
+			t.Fatalf("Explain() = (%#v, %v)", got, err)
+		}
+	})
+}
+
+func TestExplainerEnforcesTextRowsLineAndByteContracts(t *testing.T) {
+	validQuery := sealedExplainQuery(t)
+	tooManyRows := make([]string, 4_097)
+	for index := range tooManyRows {
+		tooManyRows[index] = "x"
+	}
+	exactBytes := make([]string, 64)
+	exactBytes[0] = strings.Repeat("x", 16<<10)
+	for index := 1; index < len(exactBytes); index++ {
+		exactBytes[index] = strings.Repeat("x", 16<<10-1)
+	}
+	oneByteOver := slices.Clone(exactBytes)
+	oneByteOver[1] += "x"
+	tests := []struct {
+		name    string
+		lines   []string
+		wantErr error
+	}{
+		{name: "empty line", lines: []string{""}, wantErr: searchjobs.ErrInvalidResult},
+		{
+			name: "invalid UTF-8",
+			lines: []string{
+				string([]byte{'p', 'l', 'a', 'n', 0xff}),
+			},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+		{name: "NUL", lines: []string{"plan\x00node"}, wantErr: searchjobs.ErrInvalidResult},
+		{name: "tab", lines: []string{"plan\tnode"}, wantErr: searchjobs.ErrInvalidResult},
+		{
+			name: "C1 control", lines: []string{"plan\u0085node"},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "oversized line", lines: []string{strings.Repeat("x", 16<<10+1)},
+			wantErr: searchjobs.ErrExecutionLimit,
+		},
+		{name: "too many rows", lines: tooManyRows, wantErr: searchjobs.ErrExecutionLimit},
+		{
+			name: "one byte over total including newlines", lines: oneByteOver,
+			wantErr: searchjobs.ErrExecutionLimit,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rows := explainFakeRows(test.lines...)
+			got, err := mustExplainer(
+				t,
+				&fakeQueryConnection{rows: rows},
+			).Explain(context.Background(), validQuery)
+			if !errors.Is(err, test.wantErr) || got != (ExplainResult{}) || !rows.closed {
+				t.Fatalf("Explain() = (%#v, %v), rows closed=%v", got, err, rows.closed)
+			}
+		})
+	}
+
+	t.Run("maximum rows are accepted atomically", func(t *testing.T) {
+		lines := make([]string, 4_096)
+		for index := range lines {
+			lines[index] = "x"
+		}
+		got, err := mustExplainer(
+			t,
+			&fakeQueryConnection{rows: explainFakeRows(lines...)},
+		).Explain(context.Background(), validQuery)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Text != strings.Join(lines, "\n") {
+			t.Fatalf("maximum-row result bytes = %d", len(got.Text))
+		}
+	})
+
+	t.Run("maximum line is accepted", func(t *testing.T) {
+		line := strings.Repeat("x", 16<<10)
+		got, err := mustExplainer(
+			t,
+			&fakeQueryConnection{rows: explainFakeRows(line)},
+		).Explain(context.Background(), validQuery)
+		if err != nil || got.Text != line {
+			t.Fatalf("Explain() = (%d bytes, %v)", len(got.Text), err)
+		}
+	})
+
+	t.Run("exact total byte maximum including newlines is accepted", func(t *testing.T) {
+		rows := explainFakeRows(exactBytes...)
+		got, err := mustExplainer(
+			t,
+			&fakeQueryConnection{rows: rows},
+		).Explain(context.Background(), validQuery)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Text) != 1<<20 || got.Text != strings.Join(exactBytes, "\n") {
+			t.Fatalf("exact-boundary result bytes = %d, want %d", len(got.Text), 1<<20)
+		}
+	})
+}
+
+func TestExplainerSanitizesAndClassifiesDriverFailures(t *testing.T) {
+	const leak = "password=hunter2 generated SQL SELECT private"
+	validQuery := sealedExplainQuery(t)
+	validQuery.Args[0] = leak
+	tests := []struct {
+		name       string
+		connection queryConnection
+		wantErr    error
+	}{
+		{
+			name: "query resource limit",
+			connection: &fakeQueryConnection{err: &clickhousedriver.Exception{
+				Code: 241, Name: "MEMORY_LIMIT_EXCEEDED", Message: leak,
+			}},
+			wantErr: searchjobs.ErrExecutionLimit,
+		},
+		{
+			name: "query storage failure",
+			connection: &fakeQueryConnection{
+				err: fmt.Errorf("%s: %w", leak, io.ErrUnexpectedEOF),
+			},
+			wantErr: searchjobs.ErrStorageUnavailable,
+		},
+		{
+			name:       "query unknown failure",
+			connection: &fakeQueryConnection{err: errors.New(leak)},
+			wantErr:    errExplainQueryFailed,
+		},
+		{
+			name: "scan storage failure",
+			connection: &fakeQueryConnection{rows: &controlledExplainRows{
+				fakeRows: explainFakeRows("Projection"),
+				scanErr:  fmt.Errorf("%s: %w", leak, io.ErrUnexpectedEOF),
+			}},
+			wantErr: searchjobs.ErrStorageUnavailable,
+		},
+		{
+			name: "scan unknown failure",
+			connection: &fakeQueryConnection{rows: &controlledExplainRows{
+				fakeRows: explainFakeRows("Projection"),
+				scanErr:  errors.New(leak),
+			}},
+			wantErr: errExplainQueryFailed,
+		},
+		{
+			name: "iteration failure",
+			connection: &fakeQueryConnection{rows: func() *fakeRows {
+				rows := explainFakeRows("Projection")
+				rows.err = fmt.Errorf("%s: %w", leak, io.ErrUnexpectedEOF)
+				return rows
+			}()},
+			wantErr: searchjobs.ErrStorageUnavailable,
+		},
+		{
+			name: "close failure",
+			connection: &fakeQueryConnection{rows: func() *fakeRows {
+				rows := explainFakeRows("Projection")
+				rows.closeErr = fmt.Errorf("%s: %w", leak, io.ErrUnexpectedEOF)
+				return rows
+			}()},
+			wantErr: searchjobs.ErrStorageUnavailable,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := mustExplainer(t, test.connection).Explain(
+				context.Background(),
+				validQuery,
+			)
+			if !errors.Is(err, test.wantErr) || got != (ExplainResult{}) {
+				t.Fatalf("Explain() = (%#v, %v), want %v", got, err, test.wantErr)
+			}
+			if strings.Contains(err.Error(), leak) {
+				t.Fatalf("Explain() leaked driver or query detail: %v", err)
+			}
+		})
+	}
+
+	t.Run("primary validation error wins over close failure", func(t *testing.T) {
+		rows := explainFakeRows("Projection")
+		rows.columns[0] = "wrong"
+		rows.closeErr = errors.New(leak)
+		got, err := mustExplainer(
+			t,
+			&fakeQueryConnection{rows: rows},
+		).Explain(context.Background(), validQuery)
+		if !errors.Is(err, searchjobs.ErrInvalidResult) ||
+			got != (ExplainResult{}) ||
+			strings.Contains(err.Error(), leak) {
+			t.Fatalf("Explain() = (%#v, %v)", got, err)
+		}
+	})
+}
+
+func TestExplainerCancellationIsAtomicAndBoundsLaneWait(t *testing.T) {
+	validQuery := sealedExplainQuery(t)
+	t.Run("cancellation during scan wins over driver detail", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		rows := &controlledExplainRows{
+			fakeRows: explainFakeRows("Projection"),
+			beforeScan: func() {
+				cancel()
+			},
+			scanErr: errors.New("secret scan detail"),
+		}
+		got, err := mustExplainer(
+			t,
+			&fakeQueryConnection{rows: rows},
+		).Explain(ctx, validQuery)
+		if !errors.Is(err, context.Canceled) ||
+			got != (ExplainResult{}) ||
+			strings.Contains(err.Error(), "secret") ||
+			!rows.closed {
+			t.Fatalf("Explain() = (%#v, %v), rows closed=%v", got, err, rows.closed)
+		}
+	})
+
+	t.Run("full gate fails fast without query work", func(t *testing.T) {
+		connection := &fakeQueryConnection{rows: explainFakeRows("Projection")}
+		explainer := mustExplainer(t, connection)
+		firstLane := <-explainer.lanes
+		secondLane := <-explainer.lanes
+		defer func() {
+			explainer.lanes <- firstLane
+			explainer.lanes <- secondLane
+		}()
+		start := time.Now()
+		got, err := explainer.Explain(
+			context.Background(),
+			clickhouse.CompiledQuery{SQL: "unsealed work must not be validated"},
+		)
+		if !errors.Is(err, searchjobs.ErrCapacity) ||
+			got != (ExplainResult{}) ||
+			connection.query != "" {
+			t.Fatalf("Explain() = (%#v, %v), query=%q", got, err, connection.query)
+		}
+		if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+			t.Fatalf("full gate returned after %v, want fail-fast capacity", elapsed)
+		}
+	})
+
+	t.Run("long caller deadline remains driver-visible and internally bounded", func(t *testing.T) {
+		connection := &deadlineExplainConnection{rows: explainFakeRows("Projection")}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		start := time.Now()
+		if _, err := mustExplainer(t, connection).Explain(
+			ctx,
+			validQuery,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if !connection.hasDeadline {
+			t.Fatal("driver context hid the transport deadline")
+		}
+		remainingAtAdmission := connection.deadline.Sub(start)
+		if remainingAtAdmission <= 9*time.Second ||
+			remainingAtAdmission > maximumExplainExecutionTime+time.Second {
+			t.Fatalf(
+				"driver deadline remaining = %v, want the real bounded timeout",
+				remainingAtAdmission,
+			)
+		}
+		if connection.context == nil {
+			t.Fatal("driver context was not captured")
+		}
+		select {
+		case <-connection.context.Done():
+		default:
+			t.Fatal("driver context did not inherit timer cancellation")
+		}
+		if !errors.Is(connection.context.Err(), context.Canceled) {
+			t.Fatalf("driver context error = %v, want cancellation", connection.context.Err())
+		}
+	})
+
+	t.Run("sub-second caller deadline stays visible and cancels driver wait", func(t *testing.T) {
+		connection := &cancelWaitingExplainConnection{}
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+		defer cancel()
+		got, err := mustExplainer(t, connection).Explain(ctx, validQuery)
+		if !errors.Is(err, context.DeadlineExceeded) ||
+			got != (ExplainResult{}) ||
+			!connection.hasDeadline ||
+			!errors.Is(connection.observedErr, context.DeadlineExceeded) {
+			t.Fatalf(
+				"Explain() = (%#v, %v), driver deadline=%v error=%v",
+				got,
+				err,
+				connection.hasDeadline,
+				connection.observedErr,
+			)
+		}
+	})
+}
+
+func TestSanitizeExplainQueryErrorHandlesSocketContextDeadlineRace(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	timeoutErr := explainTestTimeoutError{detail: "secret socket detail"}
+	publishedLate := explainTestDeadlineContext{
+		Context:  context.Background(),
+		deadline: time.Now().Add(-time.Second),
+	}
+	if err := sanitizeExplainQueryError(publishedLate, timeoutErr); !errors.Is(
+		err,
+		context.DeadlineExceeded,
+	) || strings.Contains(err.Error(), timeoutErr.detail) {
+		t.Fatalf("expired socket timeout classification = %v", err)
+	}
+
+	earlierDriverTimeout := explainTestDeadlineContext{
+		Context:  context.Background(),
+		deadline: time.Now().Add(time.Hour),
+	}
+	if err := sanitizeExplainQueryError(
+		earlierDriverTimeout,
+		timeoutErr,
+	); !errors.Is(err, searchjobs.ErrStorageUnavailable) ||
+		strings.Contains(err.Error(), timeoutErr.detail) {
+		t.Fatalf("early socket timeout classification = %v", err)
+	}
+
+	if err := sanitizeExplainQueryError(
+		publishedLate,
+		errors.New("secret non-timeout detail"),
+	); !errors.Is(err, errExplainQueryFailed) ||
+		strings.Contains(err.Error(), "secret") {
+		t.Fatalf("expired non-timeout classification = %v", err)
+	}
+}
+
+func TestExplainerHasTwoIsolatedRequestLanes(t *testing.T) {
+	connection := &blockingExplainConnection{
+		entered: make(chan struct{}, 3),
+		release: make(chan struct{}),
+	}
+	explainer := mustExplainer(t, connection)
+	validQuery := sealedExplainQuery(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	results := make(chan error, 3)
+	var wait sync.WaitGroup
+	wait.Add(3)
+	for range 3 {
+		go func() {
+			defer wait.Done()
+			_, err := explainer.Explain(ctx, validQuery)
+			results <- err
+		}()
+	}
+	for range 2 {
+		select {
+		case <-connection.entered:
+		case <-ctx.Done():
+			t.Fatal("two EXPLAIN requests did not enter the independent gate")
+		}
+	}
+	select {
+	case <-connection.entered:
+		t.Fatal("third EXPLAIN entered while two requests held the gate")
+	case <-time.After(75 * time.Millisecond):
+	}
+	close(connection.release)
+	wait.Wait()
+	close(results)
+	var successful, capacityRejected int
+	for err := range results {
+		switch {
+		case err == nil:
+			successful++
+		case errors.Is(err, searchjobs.ErrCapacity):
+			capacityRejected++
+		default:
+			t.Errorf("Explain() error = %v", err)
+		}
+	}
+	if successful != maximumConcurrentExplains || capacityRejected != 1 {
+		t.Fatalf(
+			"EXPLAIN results: successful=%d capacity=%d",
+			successful,
+			capacityRejected,
+		)
+	}
+	if got := connection.maximum.Load(); got != maximumConcurrentExplains {
+		t.Fatalf("maximum concurrent EXPLAIN queries = %d, want %d", got, maximumConcurrentExplains)
+	}
+}
+
+func TestExplainerCloseCancelsJoinsAndClosesEveryLane(t *testing.T) {
+	connection := &closeWaitingExplainConnection{
+		entered: make(chan struct{}),
+	}
+	explainer := mustExplainer(t, connection)
+	var closed atomic.Int32
+	for _, lane := range explainer.allLanes {
+		lane.close = func() error {
+			closed.Add(1)
+			return nil
+		}
+	}
+	query := sealedExplainQuery(t)
+
+	explainResult := make(chan error, 1)
+	go func() {
+		_, err := explainer.Explain(context.Background(), query)
+		explainResult <- err
+	}()
+	select {
+	case <-connection.entered:
+	case <-time.After(time.Second):
+		t.Fatal("Explain() did not enter the active transport")
+	}
+
+	closeResults := make(chan error, 3)
+	for range 3 {
+		go func() { closeResults <- explainer.Close() }()
+	}
+	for range 3 {
+		select {
+		case err := <-closeResults:
+			if err != nil {
+				t.Fatalf("Close() error = %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Close() did not join the active Explain call")
+		}
+	}
+	select {
+	case err := <-explainResult:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Explain() error = %v, want cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active Explain call did not return")
+	}
+	if got := closed.Load(); got != maximumConcurrentExplains {
+		t.Fatalf(
+			"closed lanes = %d, want %d",
+			got,
+			maximumConcurrentExplains,
+		)
+	}
+
+	got, err := explainer.Explain(
+		context.Background(),
+		sealedExplainQuery(t),
+	)
+	if err == nil || got != (ExplainResult{}) || connection.calls.Load() != 1 {
+		t.Fatalf(
+			"Explain() after Close = (%#v, %v), transport calls=%d",
+			got,
+			err,
+			connection.calls.Load(),
+		)
+	}
+}
+
+func TestExplainerCloseSanitizesLaneFailuresAndRejectsNilReceiver(t *testing.T) {
+	explainer := mustExplainer(
+		t,
+		&fakeQueryConnection{rows: explainFakeRows("Projection")},
+	)
+	const secret = "private close detail"
+	for _, lane := range explainer.allLanes {
+		lane.close = func() error { return errors.New(secret) }
+	}
+	err := explainer.Close()
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if second := explainer.Close(); second == nil || second.Error() != err.Error() {
+		t.Fatalf("second Close() error = %v, want stable %v", second, err)
+	}
+
+	var nilExplainer *Explainer
+	if err := nilExplainer.Close(); err == nil {
+		t.Fatal("nil Explainer.Close() unexpectedly succeeded")
+	}
+}
+
+func TestExplainerClosedStateWinsOverFullLaneCapacity(t *testing.T) {
+	t.Parallel()
+
+	explainer := mustExplainer(
+		t,
+		&fakeQueryConnection{rows: explainFakeRows("Projection")},
+	)
+	firstLane := <-explainer.lanes
+	secondLane := <-explainer.lanes
+	defer func() {
+		explainer.lanes <- firstLane
+		explainer.lanes <- secondLane
+	}()
+	if err := explainer.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	got, err := explainer.Explain(
+		context.Background(),
+		sealedExplainQuery(t),
+	)
+	if !errors.Is(err, errExplainerClosed) ||
+		errors.Is(err, searchjobs.ErrCapacity) ||
+		got != (ExplainResult{}) {
+		t.Fatalf("Explain(closed full lanes) = (%#v, %v)", got, err)
+	}
+}
+
+func TestRandomExplainQueryIDIsBoundedDistinctAndDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	seen := make(map[string]struct{}, 128)
+	for range 128 {
+		queryID, err := randomExplainQueryID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !validExplainQueryID(queryID) ||
+			!strings.HasPrefix(queryID, explainQueryIDPrefix) {
+			t.Fatalf("invalid EXPLAIN query ID %q", queryID)
+		}
+		if _, duplicate := seen[queryID]; duplicate {
+			t.Fatalf("duplicate EXPLAIN query ID %q", queryID)
+		}
+		seen[queryID] = struct{}{}
+	}
+}
+
+func mustExplainer(t *testing.T, connection queryConnection) *Explainer {
+	t.Helper()
+	baseSettings, err := querySettings(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := settingsForExplain(baseSettings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lanes := make(chan *explainLane, maximumConcurrentExplains)
+	allLanes := make([]*explainLane, 0, maximumConcurrentExplains)
+	for range maximumConcurrentExplains {
+		lane := &explainLane{
+			connection: connection,
+			activateContext: func(context.Context) (func() error, error) {
+				return func() error { return nil }, nil
+			},
+		}
+		lanes <- lane
+		allLanes = append(allLanes, lane)
+	}
+	return &Explainer{
+		settings:         settings,
+		executionTimeout: maximumExplainExecutionTime,
+		lanes:            lanes,
+		allLanes:         allLanes,
+		newQueryID:       func() (string, error) { return "open-splunk-explain-test", nil },
+	}
+}
+
+func sealedExplainQuery(t *testing.T) clickhouse.CompiledQuery {
+	t.Helper()
+	return sealedExplainQueryFromSPL(t, `index=main "needle" | head 1`)
+}
+
+func sealedExplainQueryFromSPL(
+	t *testing.T,
+	source string,
+) clickhouse.CompiledQuery {
+	t.Helper()
+	parsed, err := spl.Parse(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	searchStart := time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC)
+	visibility := uint64(7)
+	logical, err := plan.Build(parsed, plan.Scope{
+		TenantID:          "tenant",
+		AuthorizedIndexes: []string{"main"},
+		RequestedIndexes:  []string{"main"},
+		Earliest:          searchStart.Add(-time.Hour),
+		Latest:            searchStart,
+		SearchStart:       searchStart,
+		SearchTimezone:    "UTC",
+		IndexTimeCutoff:   searchStart,
+		VisibilityCutoff:  &visibility,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := (clickhouse.Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compiled.HasValidSQLSeal() {
+		t.Fatal("test compiler returned an unsealed query")
+	}
+	return compiled
+}
+
+func explainFakeRows(lines ...string) *fakeRows {
+	data := make([][]any, len(lines))
+	for index, line := range lines {
+		data[index] = []any{line}
+	}
+	return &fakeRows{
+		columns: []string{"explain"},
+		types: []driver.ColumnType{fakeColumnType{
+			name: "explain", databaseType: "String", scanType: reflect.TypeOf(""),
+		}},
+		data: data,
+	}
+}
+
+type explainTestDeadlineContext struct {
+	context.Context
+
+	deadline time.Time
+}
+
+func (ctx explainTestDeadlineContext) Deadline() (time.Time, bool) {
+	return ctx.deadline, true
+}
+
+type explainTestTimeoutError struct {
+	detail string
+}
+
+func (err explainTestTimeoutError) Error() string {
+	return err.detail
+}
+
+func (explainTestTimeoutError) Timeout() bool {
+	return true
+}
+
+func (explainTestTimeoutError) Temporary() bool {
+	return true
+}
+
+type controlledExplainRows struct {
+	*fakeRows
+	beforeScan func()
+	scanErr    error
+}
+
+type explainNamedString string
+
+type panicExplainFormatter struct{}
+
+func (panicExplainFormatter) Format(fmt.State, rune) {
+	panic("formatter must never run")
+}
+
+type panicExplainStringer struct{}
+
+func (panicExplainStringer) String() string {
+	panic("String must never run")
+}
+
+type panicExplainValuer struct{}
+
+func (panicExplainValuer) Value() (sqldriver.Value, error) {
+	panic("Value must never run")
+}
+
+func (rows *controlledExplainRows) Scan(destinations ...any) error {
+	if rows.beforeScan != nil {
+		rows.beforeScan()
+	}
+	if rows.scanErr != nil {
+		return rows.scanErr
+	}
+	return rows.fakeRows.Scan(destinations...)
+}
+
+type deadlineExplainConnection struct {
+	rows        driver.Rows
+	context     context.Context
+	deadline    time.Time
+	hasDeadline bool
+	query       string
+}
+
+func (connection *deadlineExplainConnection) Query(
+	ctx context.Context,
+	query string,
+	_ ...any,
+) (driver.Rows, error) {
+	connection.deadline, connection.hasDeadline = ctx.Deadline()
+	connection.context = ctx
+	connection.query = query
+	return connection.rows, nil
+}
+
+type cancelWaitingExplainConnection struct {
+	hasDeadline bool
+	observedErr error
+}
+
+func (connection *cancelWaitingExplainConnection) Query(
+	ctx context.Context,
+	_ string,
+	_ ...any,
+) (driver.Rows, error) {
+	_, connection.hasDeadline = ctx.Deadline()
+	<-ctx.Done()
+	connection.observedErr = ctx.Err()
+	return nil, fmt.Errorf("private driver detail: %w", ctx.Err())
+}
+
+type blockingExplainConnection struct {
+	entered chan struct{}
+	release chan struct{}
+	current atomic.Int32
+	maximum atomic.Int32
+}
+
+func (connection *blockingExplainConnection) Query(
+	ctx context.Context,
+	_ string,
+	_ ...any,
+) (driver.Rows, error) {
+	current := connection.current.Add(1)
+	for {
+		maximum := connection.maximum.Load()
+		if current <= maximum || connection.maximum.CompareAndSwap(maximum, current) {
+			break
+		}
+	}
+	select {
+	case connection.entered <- struct{}{}:
+	case <-ctx.Done():
+		connection.current.Add(-1)
+		return nil, ctx.Err()
+	}
+	select {
+	case <-connection.release:
+	case <-ctx.Done():
+		connection.current.Add(-1)
+		return nil, ctx.Err()
+	}
+	connection.current.Add(-1)
+	return explainFakeRows("Projection"), nil
+}
+
+type closeWaitingExplainConnection struct {
+	entered chan struct{}
+	once    sync.Once
+	calls   atomic.Int32
+}
+
+func (connection *closeWaitingExplainConnection) Query(
+	ctx context.Context,
+	_ string,
+	_ ...any,
+) (driver.Rows, error) {
+	connection.calls.Add(1)
+	connection.once.Do(func() { close(connection.entered) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestExplainTestFixturesImplementDriverContracts(t *testing.T) {
+	t.Parallel()
+
+	var _ driver.Rows = (*controlledExplainRows)(nil)
+	var _ queryConnection = (*deadlineExplainConnection)(nil)
+	var _ queryConnection = (*cancelWaitingExplainConnection)(nil)
+	var _ queryConnection = (*blockingExplainConnection)(nil)
+	var _ queryConnection = (*closeWaitingExplainConnection)(nil)
+	if !slices.Equal(explainFakeRows("x").columns, []string{"explain"}) {
+		t.Fatal("invalid EXPLAIN fixture")
+	}
+}

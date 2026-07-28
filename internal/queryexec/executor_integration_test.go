@@ -64,7 +64,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	queryIntegrationWait(t, ctx, container, password)
 	queryIntegrationMigrate(t, ctx, container, password)
 
-	connection, err := clickhousedriver.Open(&clickhousedriver.Options{
+	connectionOptions := &clickhousedriver.Options{
 		Addr: []string{queryIntegrationNativeAddress(t, ctx, container)},
 		Auth: clickhousedriver.Auth{
 			Database: "open_splunk",
@@ -72,7 +72,8 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			Password: password,
 		},
 		DialTimeout: 5 * time.Second,
-	})
+	}
+	connection, err := clickhousedriver.Open(connectionOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +86,15 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	explainer, err := NewExplainer(connectionOptions, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := explainer.Close(); err != nil {
+			t.Errorf("close EXPLAIN transport: %v", err)
+		}
+	})
 	queryIntegrationTestFieldCatalog(t, ctx, connection, executor)
 	queryIntegrationTestLogicalRetention(t, ctx, connection, executor)
 	t.Run("native progress reports exact generated scan", func(t *testing.T) {
@@ -163,6 +173,126 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	timechartBase, timechartIndexTime := queryIntegrationInsertTimechartEvents(t, ctx, connection)
 	gradeThisBase, gradeThisIndexTime, gradeThisTraceID := queryIntegrationInsertGradeThisEvents(t, ctx, connection)
 	chartBase, chartIndexTime := queryIntegrationInsertChartEvents(t, ctx, connection)
+	t.Run("bounded EXPLAIN accepts compiler SQL and ordered parameters", func(t *testing.T) {
+		// clickhouse-go v2.46 overwrites a protocol max_execution_time from a
+		// visible deadline by adding five seconds. Prove on the pinned server
+		// that our fixed outer SQL clause wins over that looser value, including
+		// inside the wrapped subquery that EXPLAIN plans.
+		probeContext, probeCancel := context.WithTimeout(ctx, 30*time.Second)
+		defer probeCancel()
+		probeContext = clickhousedriver.Context(
+			probeContext,
+			clickhousedriver.WithSettings(clickhousedriver.Settings{
+				"max_execution_time": uint64(1),
+			}),
+		)
+		var protocolTimeout uint64
+		if err := connection.QueryRow(
+			probeContext,
+			"SELECT toUInt64(getSetting('max_execution_time'))",
+		).Scan(&protocolTimeout); err != nil {
+			t.Fatalf("read deadline-derived protocol timeout: %v", err)
+		}
+		if protocolTimeout <=
+			uint64(maximumExplainExecutionTime/time.Second) {
+			t.Fatalf(
+				"deadline-derived protocol timeout = %d, want above EXPLAIN cap",
+				protocolTimeout,
+			)
+		}
+		var clauseTimeout uint64
+		if err := connection.QueryRow(
+			probeContext,
+			"SELECT effective_timeout FROM ("+
+				"SELECT toUInt64(getSetting('max_execution_time')) AS effective_timeout"+
+				") AS __os_explain_input SETTINGS max_execution_time = "+
+				strconv.FormatUint(
+					uint64(maximumExplainExecutionTime/time.Second),
+					10,
+				),
+		).Scan(&clauseTimeout); err != nil {
+			t.Fatalf("read SQL-clause timeout: %v", err)
+		}
+		if clauseTimeout !=
+			uint64(maximumExplainExecutionTime/time.Second) {
+			t.Fatalf(
+				"SQL-clause timeout = %d, want %d (protocol was %d)",
+				clauseTimeout,
+				uint64(maximumExplainExecutionTime/time.Second),
+				protocolTimeout,
+			)
+		}
+
+		compiled := queryIntegrationCompileSearchRange(
+			t,
+			`index=main "hello"`,
+			eventIndexTime,
+			eventIndexTime.Add(-time.Hour),
+			eventIndexTime.Add(time.Hour),
+		)
+		if len(compiled.Args) == 0 {
+			t.Fatal("compiler produced no ordered parameters for EXPLAIN coverage")
+		}
+		largeParameter := strings.Repeat("x", 300<<10)
+		replaced := false
+		for index, argument := range compiled.Args {
+			if argument == "hello" {
+				compiled.Args[index] = largeParameter
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			t.Fatalf("compiler arguments have no search literal: %#v", compiled.Args)
+		}
+		if !compiled.HasValidSQLSeal() ||
+			len(compiled.SQL) > 256<<10 ||
+			len(largeParameter) <= 256<<10 {
+			t.Fatal("compiled SQL seal or parameter-expansion boundary is invalid")
+		}
+		explained, err := explainer.Explain(ctx, compiled)
+		if err != nil {
+			t.Fatalf("Explain() error = %v", err)
+		}
+		if !validExplainQueryID(explained.QueryID) ||
+			!strings.HasPrefix(explained.QueryID, "open-splunk-explain-") {
+			t.Fatalf("EXPLAIN query ID = %q", explained.QueryID)
+		}
+		if !strings.Contains(explained.Text, "ReadFromMergeTree") {
+			t.Fatalf("EXPLAIN plan does not contain a MergeTree read:\n%s", explained.Text)
+		}
+	})
+	t.Run("bounded EXPLAIN wraps chronological compiler settings", func(t *testing.T) {
+		compiled := queryIntegrationCompileSearchRange(
+			t,
+			`index=main | stats earliest(path) AS first latest(path) AS last`,
+			eventIndexTime,
+			eventIndexTime.Add(-time.Hour),
+			eventIndexTime.Add(time.Hour),
+		)
+		if !compiled.HasValidSQLSeal() ||
+			!strings.Contains(compiled.SQL, " UNION ALL ") ||
+			!strings.Contains(compiled.SQL, "__os_chronological_") ||
+			!strings.HasSuffix(
+				compiled.SQL,
+				" SETTINGS enable_materialized_cte = 1",
+			) {
+			t.Fatalf(
+				"Compiler did not produce sealed chronological UNION with inner settings:\n%s",
+				compiled.SQL,
+			)
+		}
+		explained, err := explainer.Explain(ctx, compiled)
+		if err != nil {
+			t.Fatalf("Explain() chronological compiler query: %v", err)
+		}
+		if !strings.Contains(explained.Text, "ReadFromMergeTree") {
+			t.Fatalf(
+				"chronological EXPLAIN plan does not contain a MergeTree read:\n%s",
+				explained.Text,
+			)
+		}
+	})
 	t.Run("timeline compiler and executor preserve exact event selection", func(t *testing.T) {
 		earliest := gradeThisBase.Add(2 * time.Minute)
 		latest := gradeThisBase.Add(12 * time.Minute)

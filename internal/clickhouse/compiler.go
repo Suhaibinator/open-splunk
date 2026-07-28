@@ -343,6 +343,7 @@ type CompiledQuery struct {
 	// extend an already validated event relation without reparsing SQL.
 	relationalDepth      int
 	relationalDepthRange spl.Range
+	sqlSeal              compiledSQLSeal
 }
 
 // ChartOutput describes the bounded runtime-wide pivot contract. Both axes are
@@ -370,7 +371,11 @@ type TimechartOutput struct {
 
 // Compile compiles one plan without mutating it.
 func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
-	return c.compileWithFinalizer(query, finalizeOrdinaryQuery, true)
+	compiled, err := c.compileWithFinalizer(query, finalizeOrdinaryQuery, true)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
+	return sealCompiledQuerySQL(compiled), nil
 }
 
 type queryFinalizer func(

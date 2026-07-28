@@ -1430,11 +1430,15 @@ func isNullJSONPathValue(value any) bool {
 }
 
 func randomQueryID() (string, error) {
+	return randomPrefixedQueryID("open-splunk-search-")
+}
+
+func randomPrefixedQueryID(prefix string) (string, error) {
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return "", err
 	}
-	return "open-splunk-search-" + hex.EncodeToString(random[:]), nil
+	return prefix + hex.EncodeToString(random[:]), nil
 }
 
 var executionLimitMarkers = [...]struct {

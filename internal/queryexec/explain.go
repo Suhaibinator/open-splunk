@@ -1,0 +1,722 @@
+package queryexec
+
+import (
+	"context"
+	sqldriver "database/sql/driver"
+	"errors"
+	"fmt"
+	"maps"
+	"net"
+	"reflect"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+)
+
+const (
+	// The default PLAN form is already exercised against the production-pinned
+	// ClickHouse image by the compiler integration suite. The compiler SQL is
+	// sealed inside this fixed outer SELECT so its server-side timeout clause
+	// takes precedence over clickhouse-go's deadline-derived protocol setting.
+	// Callers cannot select a more expensive EXPLAIN mode, alias, or setting.
+	explainQueryPrefix         = "EXPLAIN SELECT * FROM ("
+	explainQuerySettingsPrefix = ") AS __os_explain_input SETTINGS max_execution_time = "
+
+	maximumConcurrentExplains   = 2
+	maximumExplainExecutionTime = 10 * time.Second
+	maximumExplainMemoryBytes   = uint64(128 << 20)
+	maximumExplainRowsToRead    = uint64(5_000_000)
+	maximumExplainBytesToRead   = uint64(1 << 30)
+	maximumExplainResultRows    = uint64(4_096)
+	maximumExplainLineBytes     = uint64(16 << 10)
+	maximumExplainResultBytes   = uint64(1 << 20)
+	maximumExplainGroups        = uint64(4_096)
+	maximumExplainThreads       = uint64(1)
+	// This independently enforces the compiler's 256 KiB generated-query
+	// ceiling at the execution boundary. The ClickHouse max_query_size setting
+	// includes the fixed wrapper and rendered bind arguments.
+	maximumExplainQueryBytes   = uint64(256 << 10)
+	maximumExplainQueryIDBytes = 128
+	explainQueryIDPrefix       = "open-splunk-explain-"
+)
+
+var (
+	errExplainQueryFailed = errors.New("execute ClickHouse EXPLAIN: query failed")
+	errExplainerClosed    = errors.New("execute ClickHouse EXPLAIN: explainer is closed")
+)
+
+// ExplainResult is one completely buffered and validated ClickHouse query
+// plan. Text can contain ClickHouse-rendered bound values and must therefore
+// remain restricted to an administrator-only diagnostic boundary. QueryID
+// identifies this EXPLAIN request, not the original search execution.
+type ExplainResult struct {
+	Text    string
+	QueryID string
+}
+
+type explainLane struct {
+	connection      queryConnection
+	activateContext func(context.Context) (func() error, error)
+	close           func() error
+}
+
+// Explainer owns two isolated native ClickHouse lanes used only for bounded
+// administrative plans. Each lane has one physical connection and its own
+// transport-deadline overlay, so a short or canceled request cannot poison an
+// unrelated plan while the initial native query write remains cancellable.
+//
+// Construct an Explainer with NewExplainer and close it after every inspection
+// service has stopped. It is intentionally separate from Executor: ordinary
+// search and export queries do not reserve these diagnostic connections.
+type Explainer struct {
+	settings         clickhousedriver.Settings
+	executionTimeout time.Duration
+	lanes            chan *explainLane
+	allLanes         []*explainLane
+	newQueryID       func() (string, error)
+
+	mu         sync.Mutex
+	closed     bool
+	nextCallID uint64
+	active     map[uint64]context.CancelFunc
+	calls      sync.WaitGroup
+	closeOnce  sync.Once
+	closeErr   error
+}
+
+// Explain obtains ClickHouse's default logical/physical plan for a
+// compiler-produced query. It validates and detaches the ordered bind
+// arguments but never returns or logs them. The complete bounded result is
+// validated before publication, so cancellation and driver failures are
+// atomic.
+func (explainer *Explainer) Explain(
+	ctx context.Context,
+	query clickhouse.CompiledQuery,
+) (result ExplainResult, resultErr error) {
+	if ctx == nil {
+		return ExplainResult{}, errors.New("execute ClickHouse EXPLAIN: context is nil")
+	}
+	if explainer == nil {
+		return ExplainResult{}, errors.New(
+			"execute ClickHouse EXPLAIN: explainer is required",
+		)
+	}
+	if explainer.newQueryID == nil {
+		return ExplainResult{}, errors.New(
+			"execute ClickHouse EXPLAIN: query ID generator is required",
+		)
+	}
+	if explainer.lanes == nil ||
+		cap(explainer.lanes) != maximumConcurrentExplains ||
+		len(explainer.allLanes) != maximumConcurrentExplains {
+		return ExplainResult{}, errors.New(
+			"execute ClickHouse EXPLAIN: transport lanes are invalid",
+		)
+	}
+	timeoutSeconds, timeoutOK := explainer.settings["max_execution_time"].(uint64)
+	maximumBoundQueryBytes, querySizeOK :=
+		explainer.settings["max_query_size"].(uint64)
+	if explainer.settings == nil ||
+		!timeoutOK ||
+		timeoutSeconds == 0 ||
+		timeoutSeconds > uint64(maximumExplainExecutionTime/time.Second) ||
+		!querySizeOK ||
+		maximumBoundQueryBytes == 0 ||
+		maximumBoundQueryBytes > defaultMaxQueryBytes ||
+		explainer.executionTimeout <= 0 ||
+		explainer.executionTimeout > maximumExplainExecutionTime {
+		return ExplainResult{}, errors.New(
+			"execute ClickHouse EXPLAIN: runtime limits are invalid",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return ExplainResult{}, err
+	}
+	if err := explainer.checkOpen(); err != nil {
+		return ExplainResult{}, err
+	}
+
+	// Admission is deliberately fail-fast and precedes SQL hashing, argument
+	// inspection, timer creation, and lifecycle registration. At most the two
+	// lane owners can consume any of those resources.
+	var lane *explainLane
+	select {
+	case lane = <-explainer.lanes:
+	default:
+		if err := explainer.checkOpen(); err != nil {
+			return ExplainResult{}, err
+		}
+		if err := ctx.Err(); err != nil {
+			return ExplainResult{}, err
+		}
+		return ExplainResult{}, searchjobs.ErrCapacity
+	}
+	if lane == nil ||
+		isNilDriverValue(lane.connection) ||
+		lane.activateContext == nil {
+		if lane != nil {
+			explainer.lanes <- lane
+		}
+		return ExplainResult{}, errors.New(
+			"execute ClickHouse EXPLAIN: transport lane is invalid",
+		)
+	}
+	defer func() { explainer.lanes <- lane }()
+
+	explainContext, cancel := context.WithTimeout(
+		ctx,
+		explainer.executionTimeout,
+	)
+	defer cancel()
+
+	callID, err := explainer.beginCall(cancel)
+	if err != nil {
+		return ExplainResult{}, err
+	}
+	defer explainer.endCall(callID)
+
+	if err := explainContext.Err(); err != nil {
+		return ExplainResult{}, err
+	}
+	if err := validateExplainQuery(query); err != nil {
+		return ExplainResult{}, err
+	}
+
+	releaseContext, err := lane.activateContext(explainContext)
+	if err != nil {
+		return ExplainResult{}, errors.New(
+			"execute ClickHouse EXPLAIN: activate transport deadline failed",
+		)
+	}
+	if releaseContext == nil {
+		return ExplainResult{}, errors.New(
+			"execute ClickHouse EXPLAIN: transport deadline release is required",
+		)
+	}
+	defer func() {
+		if err := releaseContext(); resultErr == nil && err != nil {
+			result = ExplainResult{}
+			resultErr = errors.New(
+				"execute ClickHouse EXPLAIN: release transport deadline failed",
+			)
+		}
+	}()
+
+	if err := explainContext.Err(); err != nil {
+		return ExplainResult{}, err
+	}
+
+	querySQL := explainQueryPrefix + query.SQL +
+		explainQuerySettingsPrefix + strconv.FormatUint(timeoutSeconds, 10)
+	detachedArgs, err := detachExplainArguments(
+		query.Args,
+		compilerPlaceholderCount(query.SQL),
+		uint64(len(querySQL)),
+		maximumBoundQueryBytes,
+	)
+	if err != nil {
+		return ExplainResult{}, err
+	}
+
+	queryID, err := explainer.newQueryID()
+	if err != nil {
+		return ExplainResult{}, errors.New(
+			"execute ClickHouse EXPLAIN: create query ID failed",
+		)
+	}
+	if !validExplainQueryID(queryID) {
+		return ExplainResult{}, errors.New(
+			"execute ClickHouse EXPLAIN: query ID is invalid",
+		)
+	}
+	if err := explainContext.Err(); err != nil {
+		return ExplainResult{}, err
+	}
+
+	// Preserve the real deadline so clickhouse-go can install native socket
+	// deadlines. v2.46 also derives a looser max_execution_time protocol
+	// setting from this deadline; the fixed SQL SETTINGS clause above has
+	// server-side precedence and pins the effective value back to our cap.
+	queryContext := clickhousedriver.Context(
+		explainContext,
+		clickhousedriver.WithQueryID(queryID),
+		clickhousedriver.WithSettings(explainer.settings),
+	)
+	rows, err := lane.connection.Query(
+		queryContext,
+		querySQL,
+		detachedArgs...,
+	)
+	if err != nil {
+		return ExplainResult{}, sanitizeExplainQueryError(explainContext, err)
+	}
+	if isNilDriverValue(rows) {
+		return ExplainResult{}, invalidExplainResult("returned no result stream")
+	}
+
+	rowsClosed := false
+	defer func() {
+		if rowsClosed {
+			return
+		}
+		if closeErr := rows.Close(); resultErr == nil && closeErr != nil {
+			result = ExplainResult{}
+			resultErr = sanitizeExplainQueryError(explainContext, closeErr)
+		}
+	}()
+
+	if err := explainContext.Err(); err != nil {
+		return ExplainResult{}, err
+	}
+	if err := validateExplainColumns(rows.Columns(), rows.ColumnTypes()); err != nil {
+		return ExplainResult{}, err
+	}
+
+	var text strings.Builder
+	var rowCount, resultBytes uint64
+	for {
+		if err := explainContext.Err(); err != nil {
+			return ExplainResult{}, err
+		}
+		if !rows.Next() {
+			break
+		}
+		if err := explainContext.Err(); err != nil {
+			return ExplainResult{}, err
+		}
+		if rowCount >= maximumExplainResultRows {
+			return ExplainResult{}, explainLimit("returned too many rows")
+		}
+
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			return ExplainResult{}, sanitizeExplainQueryError(explainContext, err)
+		}
+		if err := explainContext.Err(); err != nil {
+			return ExplainResult{}, err
+		}
+		if err := validateExplainLine(line); err != nil {
+			return ExplainResult{}, err
+		}
+
+		additionalBytes := uint64(len(line))
+		if rowCount > 0 {
+			additionalBytes++
+		}
+		if additionalBytes > maximumExplainResultBytes-resultBytes {
+			return ExplainResult{}, explainLimit("exceeded the result byte limit")
+		}
+		if rowCount > 0 {
+			text.WriteByte('\n')
+		}
+		text.WriteString(line)
+		resultBytes += additionalBytes
+		rowCount++
+	}
+	if err := rows.Err(); err != nil {
+		return ExplainResult{}, sanitizeExplainQueryError(explainContext, err)
+	}
+	if err := explainContext.Err(); err != nil {
+		return ExplainResult{}, err
+	}
+	if rowCount == 0 {
+		return ExplainResult{}, invalidExplainResult("returned an empty plan")
+	}
+
+	rowsClosed = true
+	if err := rows.Close(); err != nil {
+		return ExplainResult{}, sanitizeExplainQueryError(explainContext, err)
+	}
+	if err := explainContext.Err(); err != nil {
+		return ExplainResult{}, err
+	}
+	return ExplainResult{Text: text.String(), QueryID: queryID}, nil
+}
+
+func (explainer *Explainer) beginCall(
+	cancel context.CancelFunc,
+) (uint64, error) {
+	explainer.mu.Lock()
+	defer explainer.mu.Unlock()
+	if explainer.closed {
+		return 0, errExplainerClosed
+	}
+	if explainer.active == nil {
+		explainer.active = make(map[uint64]context.CancelFunc)
+	}
+	explainer.nextCallID++
+	if explainer.nextCallID == 0 {
+		return 0, errors.New(
+			"execute ClickHouse EXPLAIN: active call identity is exhausted",
+		)
+	}
+	callID := explainer.nextCallID
+	explainer.active[callID] = cancel
+	// Add is serialized with Close setting closed under the same mutex. Once
+	// closed is visible, no later Add can race with Close's Wait.
+	explainer.calls.Add(1)
+	return callID, nil
+}
+
+func (explainer *Explainer) checkOpen() error {
+	explainer.mu.Lock()
+	defer explainer.mu.Unlock()
+	if explainer.closed {
+		return errExplainerClosed
+	}
+	return nil
+}
+
+func (explainer *Explainer) endCall(callID uint64) {
+	explainer.mu.Lock()
+	delete(explainer.active, callID)
+	explainer.mu.Unlock()
+	explainer.calls.Done()
+}
+
+// Close cancels active plans, waits for their native calls to unwind, and
+// closes both dedicated lanes. It is safe to call concurrently and more than
+// once.
+func (explainer *Explainer) Close() error {
+	if explainer == nil {
+		return errors.New("close ClickHouse EXPLAIN: explainer is required")
+	}
+	explainer.closeOnce.Do(func() {
+		explainer.mu.Lock()
+		explainer.closed = true
+		cancels := make([]context.CancelFunc, 0, len(explainer.active))
+		for _, cancel := range explainer.active {
+			cancels = append(cancels, cancel)
+		}
+		explainer.mu.Unlock()
+
+		for _, cancel := range cancels {
+			cancel()
+		}
+		explainer.calls.Wait()
+
+		var closeErrors []error
+		for _, lane := range explainer.allLanes {
+			if lane == nil || lane.close == nil {
+				continue
+			}
+			if err := lane.close(); err != nil {
+				closeErrors = append(
+					closeErrors,
+					errors.New("close ClickHouse EXPLAIN transport failed"),
+				)
+			}
+		}
+		explainer.closeErr = errors.Join(closeErrors...)
+	})
+	return explainer.closeErr
+}
+
+func validateExplainQuery(query clickhouse.CompiledQuery) error {
+	sqlBytes := uint64(len(query.SQL))
+	if sqlBytes > maximumExplainQueryBytes {
+		return invalidExplainResult("compiled SQL exceeds the raw byte limit")
+	}
+	if strings.TrimSpace(query.SQL) == "" {
+		return invalidExplainResult("compiled SQL is empty")
+	}
+	if !utf8.ValidString(query.SQL) {
+		return invalidExplainResult("compiled SQL is not valid UTF-8")
+	}
+	if strings.IndexByte(query.SQL, 0) >= 0 {
+		return invalidExplainResult("compiled SQL contains NUL")
+	}
+	for _, character := range query.SQL {
+		if unicode.IsControl(character) &&
+			character != '\t' &&
+			character != '\n' &&
+			character != '\r' {
+			return invalidExplainResult("compiled SQL contains unsupported controls")
+		}
+	}
+	if !query.HasValidSQLSeal() {
+		return invalidExplainResult("compiled SQL is not an unchanged Compiler result")
+	}
+	return nil
+}
+
+// detachExplainArguments admits exactly the concrete argument inventory
+// emitted by Compiler.Compile: string, bool, int64, uint64, float64, and
+// uint8. In particular, it rejects the formatter, Valuer, pointer, collection,
+// and named-scalar fallbacks that clickhouse-go would otherwise evaluate
+// during unsafe client-side query binding.
+//
+// Compiler emits no mutable argument form. The fresh []any still matters:
+// CompiledQuery.Args is public, so a caller may replace one of its scalar
+// interface values after admission. The executor must retain its detached
+// snapshot.
+func detachExplainArguments(
+	arguments []any,
+	compilerPlaceholders int,
+	rawQueryBytes uint64,
+	maximumBoundQueryBytes uint64,
+) ([]any, error) {
+	if len(arguments) != compilerPlaceholders {
+		return nil, invalidExplainResult(
+			"argument count does not match compiler placeholders",
+		)
+	}
+	if rawQueryBytes > maximumBoundQueryBytes {
+		return nil, explainLimit("query exceeds the bound byte limit")
+	}
+
+	// Clone once, under the EXPLAIN concurrency gate, before inspecting any
+	// element. Type and byte validation below apply to this exact snapshot,
+	// which is the only slice later passed to the driver.
+	detached := slices.Clone(arguments)
+	estimatedBytes := rawQueryBytes
+	for index, argument := range detached {
+		renderedBytes, supported := explainArgumentRenderedBytes(argument)
+		if !supported {
+			return nil, invalidExplainResult(
+				"argument " + strconv.Itoa(index) + " has an unsupported type",
+			)
+		}
+		if renderedBytes > maximumBoundQueryBytes-estimatedBytes {
+			return nil, explainLimit(
+				"bound arguments exceed the query byte limit",
+			)
+		}
+		estimatedBytes += renderedBytes
+	}
+	return detached, nil
+}
+
+// Every question mark in sealed Compiler SQL is a positional bind
+// placeholder. The compiler never emits question marks inside literals or
+// escaped identifiers, so a raw byte count is its exact cardinality contract.
+func compilerPlaceholderCount(sql string) int {
+	return strings.Count(sql, "?")
+}
+
+func explainArgumentRenderedBytes(argument any) (uint64, bool) {
+	if argument == nil || isNilDriverValue(argument) {
+		return 0, false
+	}
+	switch argument.(type) {
+	case sqldriver.Valuer, fmt.Formatter, fmt.Stringer:
+		return 0, false
+	}
+	switch value := argument.(type) {
+	case string:
+		// clickhouse-go v2.46 surrounds Strings with quotes and doubles every
+		// quote or backslash. Two bytes per input byte plus the quotes is a
+		// conservative bound, independent of the actual contents.
+		valueBytes := uint64(len(value))
+		if valueBytes > (^uint64(0)-2)/2 {
+			return ^uint64(0), true
+		}
+		return valueBytes*2 + 2, true
+	case bool:
+		return 1, true
+	case int64, uint64:
+		return 20, true
+	case float64:
+		// fmt's shortest Float64 representation is at most 24 bytes for a
+		// finite value. Leave additional headroom for special values and any
+		// compatible formatter detail in the pinned driver.
+		return 32, true
+	case uint8:
+		return 3, true
+	default:
+		return 0, false
+	}
+}
+
+func settingsForExplain(
+	base clickhousedriver.Settings,
+) (clickhousedriver.Settings, error) {
+	if base == nil || base["readonly"] != uint8(2) {
+		return nil, errors.New(
+			"execute ClickHouse EXPLAIN: explainer does not have read-only settings",
+		)
+	}
+	settings := maps.Clone(base)
+	for _, limit := range [...]struct {
+		name    string
+		maximum uint64
+	}{
+		{name: "max_execution_time", maximum: uint64(maximumExplainExecutionTime / time.Second)},
+		{name: "max_memory_usage", maximum: maximumExplainMemoryBytes},
+		{name: "max_rows_to_read", maximum: maximumExplainRowsToRead},
+		{name: "max_bytes_to_read", maximum: maximumExplainBytesToRead},
+		{name: "max_result_rows", maximum: maximumExplainResultRows},
+		{name: "max_result_bytes", maximum: maximumExplainResultBytes},
+		{name: "max_rows_to_group_by", maximum: maximumExplainGroups},
+		{name: "max_threads", maximum: maximumExplainThreads},
+		{name: "max_query_size", maximum: defaultMaxQueryBytes},
+		{name: "max_subquery_depth", maximum: defaultMaxSubqueryDepth},
+	} {
+		value, ok := base[limit.name].(uint64)
+		if !ok || value == 0 {
+			return nil, fmt.Errorf(
+				"execute ClickHouse EXPLAIN: explainer setting %s is invalid",
+				limit.name,
+			)
+		}
+		settings[limit.name] = min(value, limit.maximum)
+	}
+	for _, name := range []string{
+		"timeout_overflow_mode",
+		"read_overflow_mode",
+		"result_overflow_mode",
+		"group_by_overflow_mode",
+	} {
+		if base[name] != "throw" {
+			return nil, fmt.Errorf(
+				"execute ClickHouse EXPLAIN: explainer setting %s is unsafe",
+				name,
+			)
+		}
+	}
+	if base["enable_materialized_cte"] != uint8(1) {
+		return nil, errors.New(
+			"execute ClickHouse EXPLAIN: materialized CTEs are not enabled",
+		)
+	}
+	if base["short_circuit_function_evaluation"] != "enable" {
+		return nil, errors.New(
+			"execute ClickHouse EXPLAIN: short-circuit evaluation is not enabled",
+		)
+	}
+	if base["async_insert"] != uint8(0) {
+		return nil, errors.New(
+			"execute ClickHouse EXPLAIN: asynchronous inserts must remain disabled",
+		)
+	}
+
+	settings["use_query_cache"] = uint8(0)
+	return settings, nil
+}
+
+func validateExplainColumns(
+	columns []string,
+	columnTypes []driver.ColumnType,
+) error {
+	const explainColumn = "explain"
+	if !slices.Equal(columns, []string{explainColumn}) ||
+		len(columnTypes) != 1 {
+		return invalidExplainResult("columns do not match the expected output")
+	}
+	columnType := columnTypes[0]
+	if isNilDriverValue(columnType) ||
+		columnType.Name() != explainColumn ||
+		columnType.Nullable() ||
+		columnType.DatabaseTypeName() != "String" ||
+		columnType.ScanType() != reflect.TypeOf("") {
+		return invalidExplainResult("column has an invalid type")
+	}
+	return nil
+}
+
+func validateExplainLine(line string) error {
+	lineBytes := uint64(len(line))
+	if line == "" || lineBytes > maximumExplainLineBytes {
+		if lineBytes > maximumExplainLineBytes {
+			return explainLimit("returned an oversized line")
+		}
+		return invalidExplainResult("returned an empty line")
+	}
+	if !utf8.ValidString(line) {
+		return invalidExplainResult("returned invalid UTF-8")
+	}
+	for _, character := range line {
+		if unicode.IsControl(character) {
+			return invalidExplainResult("returned control characters")
+		}
+	}
+	return nil
+}
+
+func validExplainQueryID(queryID string) bool {
+	if !strings.HasPrefix(queryID, explainQueryIDPrefix) ||
+		len(queryID) == len(explainQueryIDPrefix) ||
+		len(queryID) > maximumExplainQueryIDBytes {
+		return false
+	}
+	for _, character := range queryID[len(explainQueryIDPrefix):] {
+		switch {
+		case character >= 'a' && character <= 'z':
+		case character >= 'A' && character <= 'Z':
+		case character >= '0' && character <= '9':
+		case character == '-', character == '_', character == '.', character == ':':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func randomExplainQueryID() (string, error) {
+	return randomPrefixedQueryID(explainQueryIDPrefix)
+}
+
+func sanitizeExplainQueryError(ctx context.Context, err error) error {
+	if explainContextDeadlineTimeout(ctx, err) {
+		return context.DeadlineExceeded
+	}
+	classified := classifyQueryError(ctx, err)
+	switch {
+	case classified == nil:
+		return nil
+	case errors.Is(classified, context.Canceled):
+		return context.Canceled
+	case errors.Is(classified, context.DeadlineExceeded):
+		return context.DeadlineExceeded
+	case errors.Is(classified, searchjobs.ErrExecutionLimit):
+		return searchjobs.ErrExecutionLimit
+	case errors.Is(classified, searchjobs.ErrStorageUnavailable):
+		return searchjobs.ErrStorageUnavailable
+	case errors.Is(classified, searchjobs.ErrUnsupportedValue):
+		return searchjobs.ErrUnsupportedValue
+	default:
+		return errExplainQueryFailed
+	}
+}
+
+// A socket deadline and a context deadline share the same monotonic instant,
+// but the network poller can publish its timeout just before the context timer
+// goroutine records ctx.Err(). Treat only timeout-shaped errors at or after the
+// exact Explain deadline as context expiration. Earlier driver timeouts remain
+// storage failures.
+func explainContextDeadlineTimeout(ctx context.Context, err error) bool {
+	if ctx == nil || err == nil {
+		return false
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok || deadline.IsZero() || time.Now().Before(deadline) {
+		return false
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError) && networkError.Timeout()
+}
+
+func invalidExplainResult(message string) error {
+	return fmt.Errorf(
+		"%w: ClickHouse EXPLAIN %s",
+		searchjobs.ErrInvalidResult,
+		message,
+	)
+}
+
+func explainLimit(message string) error {
+	return fmt.Errorf(
+		"%w: ClickHouse EXPLAIN %s",
+		searchjobs.ErrExecutionLimit,
+		message,
+	)
+}
