@@ -15,9 +15,11 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/searchtimebounds"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
+	"github.com/Suhaibinator/open-splunk/internal/splrelativetime"
 	"github.com/Suhaibinator/open-splunk/internal/spltimeformat"
 	"github.com/Suhaibinator/open-splunk/internal/splwildcard"
 )
@@ -116,6 +118,10 @@ const (
 	// date-parser lowering. The String operand and parser result are each bound
 	// once, so nested text producers grow linearly inside this ceiling.
 	maxCompiledStrptimeScalarSQLBytes = 64 << 10
+	// maxCompiledRelativeTimeScalarSQLBytes independently bounds one
+	// offset-and-snap lowering. Every stage binds its predecessor once, so
+	// nested relative_time producers grow linearly inside this ceiling.
+	maxCompiledRelativeTimeScalarSQLBytes = 64 << 10
 	// MaximumMatchInputBytes bounds regex work against calculated strings. A
 	// stored event is capped at 1 MiB; the wider allowance admits one worst-
 	// case UTF-8 case conversion while rejecting large replace amplification.
@@ -144,6 +150,24 @@ const (
 	// MaximumStrptimeQueryInputBytes bounds aggregate date-parser work for one
 	// result row after every occurrence applies its per-value input ceiling.
 	MaximumStrptimeQueryInputBytes uint64 = 64 << 10
+	// MaximumRelativeTimeQueryWorkUnits bounds total validated specifier bytes
+	// examined across every relative_time occurrence in one logical plan.
+	MaximumRelativeTimeQueryWorkUnits = 16 << 10
+	// MaximumRelativeTimeQueryOperations independently bounds the total
+	// calendar/elapsed operations lowered across one logical plan.
+	MaximumRelativeTimeQueryOperations = 256
+	// MaximumUnixTimestampDynamicDecimalBytes reuses the bounded exact-decimal
+	// lexical envelope for one runtime timestamp conversion shared by
+	// relative_time and strftime.
+	MaximumUnixTimestampDynamicDecimalBytes = MaximumExactNumericBinTextBytes
+	// MaximumUnixTimestampQueryDynamicDecimalBytes bounds aggregate runtime
+	// parsing of open-schema decimal timestamp envelopes across every
+	// relative_time and strftime occurrence per result row.
+	MaximumUnixTimestampQueryDynamicDecimalBytes uint64 = 64 << 10
+	minimumRelativeTimeUnixNanoseconds                  = searchtimebounds.MinimumUnixSeconds *
+		1_000_000_000
+	maximumRelativeTimeUnixNanoseconds = searchtimebounds.MaximumUnixSeconds *
+		1_000_000_000
 	// strptime accepts authored civil dates from Splunk's documented lower
 	// bound through ClickHouse DateTime64's portable upper calendar year.
 	// Validate the authored date before timezone conversion so explicit
@@ -3160,13 +3184,16 @@ type compileState struct {
 // copying each search-scoped constant into newly constructed compileState
 // values.
 type compileContext struct {
-	patternBudgets         compiledPatternBudgets
-	strftimeBudget         compiledStrftimeBudget
-	strptimeBudget         compiledStrptimeBudget
-	searchStartUnix        int64
-	searchTimezone         string
-	searchTimezoneChecked  bool
-	searchTimezoneCheckErr error
+	patternBudgets                    compiledPatternBudgets
+	strftimeBudget                    compiledStrftimeBudget
+	strptimeBudget                    compiledStrptimeBudget
+	relativeTimeBudget                compiledRelativeTimeBudget
+	unixTimestampBudget               compiledUnixTimestampBudget
+	searchStartUnix                   int64
+	searchTimezone                    string
+	searchLocalMinimumUnixNanoseconds int64
+	searchTimezoneChecked             bool
+	searchTimezoneCheckErr            error
 }
 
 func newCompileContext(searchStart time.Time, searchTimezone string) *compileContext {
@@ -3198,6 +3225,24 @@ type compiledStrptimeBudget struct {
 	workUnits  int
 	inputBytes uint64
 }
+
+type compiledRelativeTimeBudget struct {
+	specifiers map[*plan.ScalarCallExpression]splrelativetime.Specifier
+	workUnits  int
+	operations int
+}
+
+type compiledUnixTimestampBudget struct {
+	dynamicDecimalBytes uint64
+}
+
+type relativeTimeResultDirection uint8
+
+const (
+	relativeTimeResultBefore relativeTimeResultDirection = iota + 1
+	relativeTimeResultAfter
+	relativeTimeResultNotAfter
+)
 
 type compiledMatchBudget struct {
 	patterns         map[*plan.ScalarCallExpression]splregex.MatchPattern
@@ -3976,6 +4021,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileStrftimeScalar(expression, state)
 		case plan.ScalarFunctionStrptime:
 			return compileStrptimeScalar(expression, state)
+		case plan.ScalarFunctionRelativeTime:
+			return compileRelativeTimeScalar(expression, state)
 		case plan.ScalarFunctionReplace:
 			return compileReplaceScalar(expression, state)
 		case plan.ScalarFunctionToNumber:
@@ -4119,7 +4166,10 @@ func compileStrftimeScalar(
 			expression.Range,
 		)
 	}
-	if input.alwaysNull || input.kind == fieldKindInvalid {
+	if input.alwaysNull ||
+		input.kind == fieldKindInvalid ||
+		input.kind == fieldKindDynamic &&
+			input.dynamicDomain == dynamicScalarDomainText {
 		return compiledScalar{
 			valueSQL:                "CAST(NULL AS Nullable(String))",
 			maxStringBytes:          1,
@@ -4137,8 +4187,16 @@ func compileStrftimeScalar(
 			Range: expression.Arguments[0].SourceRange(),
 		}
 	}
+	if err := chargeUnixTimestampDynamicDecimalBudget(
+		input,
+		state.context,
+		"strftime",
+		expression.Range,
+	); err != nil {
+		return compiledScalar{}, err
+	}
 
-	timestampSQL, err := strftimeTimestampSQL(input)
+	timestampSQL, err := unixTimestampScalarSQL(input, "strftime")
 	if err != nil {
 		return compiledScalar{}, err
 	}
@@ -4186,11 +4244,30 @@ func validateCompileContextSearchTimezone(context *compileContext) error {
 		return context.searchTimezoneCheckErr
 	}
 	context.searchTimezoneChecked = true
-	if _, err := ianatimezone.Load(context.searchTimezone); err != nil {
+	location, err := ianatimezone.Load(context.searchTimezone)
+	if err != nil {
 		context.searchTimezoneCheckErr = errors.New(
 			"compile ClickHouse date/time function: search timezone is invalid",
 		)
+		return context.searchTimezoneCheckErr
 	}
+	localMinimum := time.Date(
+		searchtimebounds.MinimumYear,
+		time.January,
+		1,
+		0,
+		0,
+		0,
+		0,
+		location,
+	)
+	// ClickHouse clamps some localized DateTime64 values at its 1900 floor
+	// and can report a wall-clock remainder instead of a true UTC offset.
+	// Derive the earliest safe local civil instant from the same IANA rules
+	// used by search admission. Pinned integration coverage with a historical
+	// second-offset zone detects drift against ClickHouse's bundled tzdb.
+	context.searchLocalMinimumUnixNanoseconds =
+		localMinimum.Unix() * 1_000_000_000
 	return context.searchTimezoneCheckErr
 }
 
@@ -4372,6 +4449,600 @@ func compileStrptimeScalar(
 		numberType:              "Float64",
 		materializeForPredicate: input.materializeForPredicate,
 	}, nil
+}
+
+func compileRelativeTimeScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+) (compiledScalar, error) {
+	if expression == nil {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse relative_time: missing expression",
+		)
+	}
+	if len(expression.Arguments) != 2 {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse relative_time: expected two arguments",
+		)
+	}
+	specifierText, ok := scalarQuotedStringLiteral(expression.Arguments[1])
+	if !ok {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse relative_time: specifier must be a quoted string literal",
+		)
+	}
+	if state.context == nil {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse relative_time: search timezone is required",
+		)
+	}
+	if err := validateCompileContextSearchTimezone(state.context); err != nil {
+		return compiledScalar{}, err
+	}
+
+	specifier, cached := state.context.relativeTimeBudget.specifiers[expression]
+	if !cached {
+		var err error
+		specifier, err = compileRelativeTimeSpecifierForBackend(
+			specifierText,
+			expression.Arguments[1].SourceRange(),
+		)
+		if err != nil {
+			return compiledScalar{}, err
+		}
+		if state.context.relativeTimeBudget.specifiers == nil {
+			state.context.relativeTimeBudget.specifiers =
+				make(map[*plan.ScalarCallExpression]splrelativetime.Specifier)
+		}
+		state.context.relativeTimeBudget.specifiers[expression] = specifier
+	}
+	if specifier.WorkUnits >
+		MaximumRelativeTimeQueryWorkUnits-
+			state.context.relativeTimeBudget.workUnits {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"search relative_time specifiers require more than %d work units",
+				MaximumRelativeTimeQueryWorkUnits,
+			),
+			Range: expression.Range,
+		}
+	}
+	operationCount := specifier.OperationCount()
+	if operationCount >
+		MaximumRelativeTimeQueryOperations-
+			state.context.relativeTimeBudget.operations {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"search relative_time specifiers contain more than %d operations",
+				MaximumRelativeTimeQueryOperations,
+			),
+			Range: expression.Range,
+		}
+	}
+	state.context.relativeTimeBudget.workUnits += specifier.WorkUnits
+	state.context.relativeTimeBudget.operations += operationCount
+
+	input, err := compileNonBooleanScalarInputArgument(
+		expression.Arguments[0],
+		state,
+		"relative_time",
+	)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	if input.kind == fieldKindStringArray {
+		return compiledScalar{}, unsupportedMultivalueUsage(
+			"relative_time",
+			expression.Range,
+		)
+	}
+	if input.alwaysNull ||
+		input.kind == fieldKindInvalid ||
+		input.kind == fieldKindDynamic &&
+			input.dynamicDomain == dynamicScalarDomainText {
+		return compiledScalar{
+			valueSQL:                "CAST(NULL AS Nullable(Float64))",
+			maxStringBytes:          1,
+			existsSQL:               "1",
+			kind:                    fieldKindNumber,
+			numberType:              "Float64",
+			alwaysNull:              true,
+			materializeForPredicate: input.materializeForPredicate,
+		}, nil
+	}
+	if input.kind != fieldKindTime &&
+		input.kind != fieldKindNumber &&
+		input.kind != fieldKindDynamic {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_UNSUPPORTED_RELATIVE_TIME_VALUE_TYPE",
+			Message: "relative_time requires a numeric Unix-seconds value or " +
+				"time field in compatibility version 0.1",
+			Range: expression.Arguments[0].SourceRange(),
+		}
+	}
+	if err := chargeUnixTimestampDynamicDecimalBudget(
+		input,
+		state.context,
+		"relative_time",
+		expression.Range,
+	); err != nil {
+		return compiledScalar{}, err
+	}
+
+	timestampSQL, err := unixTimestampScalarSQL(input, "relative_time")
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	programSQL := compileRelativeTimeInputTimestampSQL(
+		timestampSQL,
+		input.valueSQL,
+	)
+	programArgs := make(
+		[]any,
+		0,
+		1+len(input.valueArgs)+operationCount,
+	)
+	programArgs = append(programArgs, state.context.searchTimezone)
+	programArgs = append(programArgs, input.valueArgs...)
+	for index := range operationCount {
+		operation, found := specifier.Operation(index)
+		if !found {
+			return compiledScalar{}, errors.New(
+				"compile ClickHouse relative_time: validated operation is missing",
+			)
+		}
+		programSQL, programArgs, err = compileRelativeTimeOperation(
+			programSQL,
+			programArgs,
+			operation,
+			state.context.searchLocalMinimumUnixNanoseconds,
+		)
+		if err != nil {
+			return compiledScalar{}, err
+		}
+	}
+
+	valueSQL := "arrayElement(arrayMap(value -> if(isNull(value), " +
+		"CAST(NULL AS Nullable(Float64)), " +
+		"toFloat64(toUnixTimestamp64Nano(value)) / 1000000000), [" +
+		programSQL + "]), 1)"
+	if len(valueSQL) > maxCompiledRelativeTimeScalarSQLBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"relative_time scalar SQL exceeds %d bytes",
+				maxCompiledRelativeTimeScalarSQLBytes,
+			),
+			Range: expression.Range,
+		}
+	}
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               programArgs,
+		maxStringBytes:          64,
+		existsSQL:               "1",
+		kind:                    fieldKindNumber,
+		numberType:              "Float64",
+		materializeForPredicate: input.materializeForPredicate,
+	}, nil
+}
+
+func compileRelativeTimeSpecifierForBackend(
+	source string,
+	sourceRange spl.Range,
+) (splrelativetime.Specifier, error) {
+	specifier, err := splrelativetime.CompileSpecifier(source)
+	if err == nil {
+		return specifier, nil
+	}
+	if errors.Is(err, splrelativetime.ErrSpecifierTooLarge) {
+		return splrelativetime.Specifier{}, &plan.Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: "relative_time specifier exceeds its resource limit",
+			Range:   sourceRange,
+		}
+	}
+	if errors.Is(err, splrelativetime.ErrMagnitudeOutOfRange) {
+		return splrelativetime.Specifier{}, &plan.Diagnostic{
+			Code: "SPL_NUMBER_OUT_OF_RANGE",
+			Message: "relative_time magnitude exceeds the supported " +
+				searchtimebounds.YearRangeDescription + " timestamp span",
+			Range: sourceRange,
+		}
+	}
+	return splrelativetime.Specifier{}, &plan.Diagnostic{
+		Code: "SPL_UNSUPPORTED_RELATIVE_TIME_SPECIFIER",
+		Message: "relative_time specifier is outside the supported bounded " +
+			"offset-and-snap subset",
+		Range: sourceRange,
+	}
+}
+
+func compileRelativeTimeInputTimestampSQL(
+	timestampSQL string,
+	inputSQL string,
+) string {
+	return "arrayElement(arrayMap(value -> arrayElement(arrayMap(timestamp -> " +
+		"if(" + relativeTimeTimestampRangeCondition("timestamp") +
+		", toTimeZone(timestamp, ?), NULL), [" + timestampSQL +
+		"]), 1), [" + inputSQL + "]), 1)"
+}
+
+func compileRelativeTimeOperation(
+	inputSQL string,
+	inputArgs []any,
+	operation splrelativetime.Operation,
+	localMinimumUnixNanoseconds int64,
+) (string, []any, error) {
+	switch operation.Kind {
+	case splrelativetime.OperationOffset:
+		if operation.Magnitude == 0 {
+			return inputSQL, inputArgs, nil
+		}
+		var (
+			compiledSQL string
+			err         error
+		)
+		switch operation.Unit {
+		case splrelativetime.UnitSecond:
+			compiledSQL = compileRelativeTimeElapsedOffsetSQL(
+				inputSQL,
+				operation,
+				1_000_000_000,
+			)
+		case splrelativetime.UnitMinute:
+			compiledSQL = compileRelativeTimeElapsedOffsetSQL(
+				inputSQL,
+				operation,
+				60*1_000_000_000,
+			)
+		case splrelativetime.UnitHour:
+			compiledSQL = compileRelativeTimeElapsedOffsetSQL(
+				inputSQL,
+				operation,
+				60*60*1_000_000_000,
+			)
+		case splrelativetime.UnitDay:
+			compiledSQL = compileRelativeTimeCalendarDayOffsetSQL(
+				inputSQL,
+				operation,
+				1,
+				localMinimumUnixNanoseconds,
+			)
+		case splrelativetime.UnitWeek:
+			compiledSQL = compileRelativeTimeCalendarDayOffsetSQL(
+				inputSQL,
+				operation,
+				7,
+				localMinimumUnixNanoseconds,
+			)
+		case splrelativetime.UnitMonth:
+			compiledSQL = compileRelativeTimeCalendarMonthOffsetSQL(
+				inputSQL,
+				operation,
+				1,
+				localMinimumUnixNanoseconds,
+			)
+		case splrelativetime.UnitQuarter:
+			compiledSQL = compileRelativeTimeCalendarMonthOffsetSQL(
+				inputSQL,
+				operation,
+				3,
+				localMinimumUnixNanoseconds,
+			)
+		case splrelativetime.UnitYear:
+			compiledSQL = compileRelativeTimeCalendarMonthOffsetSQL(
+				inputSQL,
+				operation,
+				12,
+				localMinimumUnixNanoseconds,
+			)
+		default:
+			err = errors.New(
+				"compile ClickHouse relative_time: invalid offset unit",
+			)
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		args := make([]any, 0, 1+len(inputArgs))
+		args = append(args, operation.Magnitude)
+		args = append(args, inputArgs...)
+		return compiledSQL, args, nil
+	case splrelativetime.OperationSnap:
+		compiledSQL, err := compileRelativeTimeSnapSQL(
+			inputSQL,
+			operation,
+			localMinimumUnixNanoseconds,
+		)
+		if err != nil {
+			return "", nil, err
+		}
+		return compiledSQL, inputArgs, nil
+	default:
+		return "", nil, errors.New(
+			"compile ClickHouse relative_time: invalid operation",
+		)
+	}
+}
+
+func compileRelativeTimeElapsedOffsetSQL(
+	inputSQL string,
+	operation splrelativetime.Operation,
+	nanosecondsPerUnit uint64,
+) string {
+	operator := "+"
+	if operation.Negative {
+		operator = "-"
+	}
+	targetTicks := "toInt256(toUnixTimestamp64Nano(value)) " + operator +
+		" toInt256(?) * toInt256(" +
+		strconv.FormatUint(nanosecondsPerUnit, 10) + ")"
+	candidate := "arrayElement(arrayMap(ticks -> if(isNotNull(value) AND ticks >= " +
+		"toInt256(" +
+		strconv.FormatInt(minimumRelativeTimeUnixNanoseconds, 10) +
+		") AND ticks <= toInt256(" +
+		strconv.FormatInt(maximumRelativeTimeUnixNanoseconds, 10) +
+		"), toTimeZone(fromUnixTimestamp64Nano(" +
+		"accurateCastOrNull(ticks, 'Int64'), 'UTC'), timezoneOf(value)), " +
+		"NULL), [" + targetTicks + "]), 1)"
+	return boundedRelativeTimeTimestampSQL(
+		inputSQL,
+		candidate,
+		relativeTimeOffsetResultDirection(operation),
+	)
+}
+
+func compileRelativeTimeCalendarDayOffsetSQL(
+	inputSQL string,
+	operation splrelativetime.Operation,
+	daysPerUnit uint64,
+	localMinimumUnixNanoseconds int64,
+) string {
+	operator := "+"
+	if operation.Negative {
+		operator = "-"
+	}
+	currentDay := "toInt64(toDaysSinceYearZero(value))"
+	targetDay := currentDay + " " + operator + " toInt64(?) * " +
+		strconv.FormatUint(daysPerUnit, 10)
+	valid := relativeTimeLocalCivilLowerBoundCondition(
+		"value",
+		localMinimumUnixNanoseconds,
+	) + " AND " +
+		relativeTimeCalendarDayRangeCondition("target_day")
+	adjusted := "addDays(value, if(" + valid + ", target_day - " +
+		currentDay + ", 0))"
+	candidate := "arrayElement(arrayMap(target_day -> " +
+		"if(isNotNull(value) AND " + valid + ", " + adjusted +
+		", NULL), [" + targetDay + "]), 1)"
+	return boundedRelativeTimeTimestampSQL(
+		inputSQL,
+		candidate,
+		relativeTimeOffsetResultDirection(operation),
+	)
+}
+
+func compileRelativeTimeCalendarMonthOffsetSQL(
+	inputSQL string,
+	operation splrelativetime.Operation,
+	monthsPerUnit uint64,
+	localMinimumUnixNanoseconds int64,
+) string {
+	operator := "+"
+	if operation.Negative {
+		operator = "-"
+	}
+	currentMonth := "toInt64(toYear(value)) * 12 + " +
+		"toInt64(toMonth(value)) - 1"
+	targetMonth := currentMonth + " " + operator + " toInt64(?) * " +
+		strconv.FormatUint(monthsPerUnit, 10)
+	valid := relativeTimeLocalCivilLowerBoundCondition(
+		"value",
+		localMinimumUnixNanoseconds,
+	) + " AND " +
+		relativeTimeCalendarMonthRangeCondition("target_month")
+	adjusted := "addMonths(value, if(" + valid + ", target_month - (" +
+		currentMonth + "), 0))"
+	candidate := "arrayElement(arrayMap(target_month -> " +
+		"if(isNotNull(value) AND " + valid + ", " + adjusted +
+		", NULL), [" + targetMonth + "]), 1)"
+	return boundedRelativeTimeTimestampSQL(
+		inputSQL,
+		candidate,
+		relativeTimeOffsetResultDirection(operation),
+	)
+}
+
+func compileRelativeTimeSnapSQL(
+	inputSQL string,
+	operation splrelativetime.Operation,
+	localMinimumUnixNanoseconds int64,
+) (string, error) {
+	body := ""
+	switch operation.Unit {
+	case splrelativetime.UnitSecond:
+		body = compileRelativeTimeSubdaySnapCandidateSQL(
+			1_000_000_000,
+			false,
+		)
+	case splrelativetime.UnitMinute:
+		body = compileRelativeTimeSubdaySnapCandidateSQL(
+			60*1_000_000_000,
+			true,
+		)
+	case splrelativetime.UnitHour:
+		body = compileRelativeTimeSubdaySnapCandidateSQL(
+			60*60*1_000_000_000,
+			true,
+		)
+	case splrelativetime.UnitDay:
+		body = relativeTimeLocallyRepresentableCandidateSQL(
+			"dateTrunc('day', value)",
+			localMinimumUnixNanoseconds,
+		)
+	case splrelativetime.UnitWeek:
+		return compileRelativeTimeWeekSnapSQL(
+			inputSQL,
+			operation.Weekday,
+			localMinimumUnixNanoseconds,
+		), nil
+	case splrelativetime.UnitMonth:
+		body = relativeTimeLocallyRepresentableCandidateSQL(
+			"toDateTime64(dateTrunc('month', value), 0, timezoneOf(value))",
+			localMinimumUnixNanoseconds,
+		)
+	case splrelativetime.UnitQuarter:
+		body = relativeTimeLocallyRepresentableCandidateSQL(
+			"toDateTime64(dateTrunc('quarter', value), 0, timezoneOf(value))",
+			localMinimumUnixNanoseconds,
+		)
+	case splrelativetime.UnitYear:
+		body = relativeTimeLocallyRepresentableCandidateSQL(
+			"toDateTime64(dateTrunc('year', value), 0, timezoneOf(value))",
+			localMinimumUnixNanoseconds,
+		)
+	default:
+		return "", errors.New(
+			"compile ClickHouse relative_time: invalid snap unit",
+		)
+	}
+	return boundedRelativeTimeTimestampSQL(
+		inputSQL,
+		body,
+		relativeTimeResultNotAfter,
+	), nil
+}
+
+func compileRelativeTimeSubdaySnapCandidateSQL(
+	nanosecondsPerUnit uint64,
+	timezoneAligned bool,
+) string {
+	step := "toInt256(" +
+		strconv.FormatUint(nanosecondsPerUnit, 10) + ")"
+	alignedTicks := "ticks"
+	if timezoneAligned {
+		alignedTicks += " + toInt256(timeZoneOffset(value)) * " +
+			"toInt256(1000000000)"
+	}
+	remainder := "modulo(modulo(" + alignedTicks + ", " + step + ") + " + step +
+		", " + step + ")"
+	target := "ticks - " + remainder
+	return "arrayElement(arrayMap(ticks -> " +
+		"toTimeZone(fromUnixTimestamp64Nano(" +
+		"accurateCastOrNull(" + target + ", 'Int64'), 'UTC'), " +
+		"timezoneOf(value)), [" +
+		"toInt256(toUnixTimestamp64Nano(value))]), 1)"
+}
+
+func compileRelativeTimeWeekSnapSQL(
+	inputSQL string,
+	weekday uint8,
+	localMinimumUnixNanoseconds int64,
+) string {
+	currentDay := "toInt64(toDaysSinceYearZero(value))"
+	daysBack := "modulo(toInt64(modulo(toDayOfWeek(value), 7)) - " +
+		strconv.FormatUint(uint64(weekday), 10) + " + 7, 7)"
+	targetDay := currentDay + " - " + daysBack
+	valid := relativeTimeLocalCivilLowerBoundCondition(
+		"value",
+		localMinimumUnixNanoseconds,
+	) + " AND " +
+		relativeTimeCalendarDayRangeCondition("target_day")
+	adjusted := "addDays(dateTrunc('day', value), if(" + valid +
+		", target_day - " + currentDay + ", 0))"
+	candidate := "arrayElement(arrayMap(target_day -> " +
+		"if(isNotNull(value) AND " + valid + ", " + adjusted +
+		", NULL), [" + targetDay + "]), 1)"
+	return boundedRelativeTimeTimestampSQL(
+		inputSQL,
+		candidate,
+		relativeTimeResultNotAfter,
+	)
+}
+
+func relativeTimeCalendarDayRangeCondition(valueSQL string) string {
+	return valueSQL + " >= toInt64(toDaysSinceYearZero(toDate32('" +
+		strconv.Itoa(searchtimebounds.MinimumYear) +
+		"-01-01'))) AND " + valueSQL +
+		" <= toInt64(toDaysSinceYearZero(toDate32('" +
+		strconv.Itoa(searchtimebounds.MaximumYear) + "-01-01')))"
+}
+
+func relativeTimeCalendarMonthRangeCondition(valueSQL string) string {
+	return valueSQL + " >= " +
+		strconv.Itoa(searchtimebounds.MinimumYear*12) + " AND " +
+		valueSQL + " <= " +
+		strconv.Itoa(searchtimebounds.MaximumYear*12)
+}
+
+func relativeTimeTimestampRangeCondition(valueSQL string) string {
+	ticks := "toUnixTimestamp64Nano(" + valueSQL + ")"
+	return "isNotNull(" + valueSQL + ") AND " + ticks + " >= " +
+		strconv.FormatInt(minimumRelativeTimeUnixNanoseconds, 10) +
+		" AND " + ticks + " <= " +
+		strconv.FormatInt(maximumRelativeTimeUnixNanoseconds, 10)
+}
+
+func relativeTimeLocalCivilLowerBoundCondition(
+	valueSQL string,
+	localMinimumUnixNanoseconds int64,
+) string {
+	return "toUnixTimestamp64Nano(" + valueSQL + ") >= " +
+		strconv.FormatInt(localMinimumUnixNanoseconds, 10)
+}
+
+func relativeTimeLocallyRepresentableCandidateSQL(
+	candidateSQL string,
+	localMinimumUnixNanoseconds int64,
+) string {
+	return "if(isNotNull(value) AND " +
+		relativeTimeLocalCivilLowerBoundCondition(
+			"value",
+			localMinimumUnixNanoseconds,
+		) +
+		", " + candidateSQL + ", NULL)"
+}
+
+func relativeTimeOffsetResultDirection(
+	operation splrelativetime.Operation,
+) relativeTimeResultDirection {
+	if operation.Negative {
+		return relativeTimeResultBefore
+	}
+	return relativeTimeResultAfter
+}
+
+func relativeTimeResultDirectionCondition(
+	direction relativeTimeResultDirection,
+) string {
+	resultTicks := "toUnixTimestamp64Nano(result)"
+	inputTicks := "toUnixTimestamp64Nano(value)"
+	switch direction {
+	case relativeTimeResultBefore:
+		return resultTicks + " < " + inputTicks
+	case relativeTimeResultAfter:
+		return resultTicks + " > " + inputTicks
+	case relativeTimeResultNotAfter:
+		return resultTicks + " <= " + inputTicks
+	default:
+		return "0"
+	}
+}
+
+func boundedRelativeTimeTimestampSQL(
+	inputSQL string,
+	candidateSQL string,
+	direction relativeTimeResultDirection,
+) string {
+	return "arrayElement(arrayMap(value -> " +
+		"arrayElement(arrayMap(result -> if(" +
+		relativeTimeTimestampRangeCondition("result") + " AND " +
+		relativeTimeResultDirectionCondition(direction) +
+		", result, NULL), [" + candidateSQL + "]), 1), [" +
+		inputSQL + "]), 1)"
 }
 
 func compileStrptimeFormatForBackend(
@@ -4576,7 +5247,43 @@ func compileStrftimeFormatForBackend(
 	}
 }
 
-func strftimeTimestampSQL(input compiledScalar) (string, error) {
+func chargeUnixTimestampDynamicDecimalBudget(
+	input compiledScalar,
+	context *compileContext,
+	functionName string,
+	sourceRange spl.Range,
+) error {
+	if input.kind != fieldKindDynamic ||
+		input.dynamicDomain != dynamicScalarDomainAny {
+		return nil
+	}
+	if context == nil {
+		return fmt.Errorf(
+			"compile ClickHouse %s: query context is required",
+			functionName,
+		)
+	}
+	inputBytes := uint64(MaximumUnixTimestampDynamicDecimalBytes)
+	if inputBytes >
+		MaximumUnixTimestampQueryDynamicDecimalBytes-
+			context.unixTimestampBudget.dynamicDecimalBytes {
+		return &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"search Dynamic decimal timestamp inputs require more than %d bytes of parsing",
+				MaximumUnixTimestampQueryDynamicDecimalBytes,
+			),
+			Range: sourceRange,
+		}
+	}
+	context.unixTimestampBudget.dynamicDecimalBytes += inputBytes
+	return nil
+}
+
+func unixTimestampScalarSQL(
+	input compiledScalar,
+	functionName string,
+) (string, error) {
 	switch input.kind {
 	case fieldKindTime:
 		return "value", nil
@@ -4591,21 +5298,46 @@ func strftimeTimestampSQL(input compiledScalar) (string, error) {
 		}
 		return "fromUnixTimestamp64Nano(" + nanoseconds + ", 'UTC')", nil
 	case fieldKindDynamic:
+		if input.dynamicDomain == dynamicScalarDomainText {
+			return "fromUnixTimestamp64Nano(" +
+				"CAST(NULL AS Nullable(Int64)), 'UTC')", nil
+		}
 		dynamic := compiledScalar{
 			valueSQL:       "value",
 			dynamicTypeSQL: "dynamicType(value)",
 			kind:           fieldKindDynamic,
 			dynamicDomain:  input.dynamicDomain,
 		}
-		numeric := numericScalarSQL(dynamic, false)
-		nanoseconds := "accurateCastOrNull(floor(ifNotFinite(" + numeric +
+		typeSQL := dynamicScalarTypeSQL(dynamic)
+		integerNanoseconds := "accurateCastOrNull(toInt256(" +
+			"accurateCastOrNull(value, 'Int64')) * " +
+			"toInt256(1000000000), 'Int64')"
+		numeric := finiteDynamicFloatOrNullSQL("value")
+		if input.dynamicDomain == dynamicScalarDomainAny {
+			taggedDecimal, taggedPayload := dynamicTaggedDecimalText(dynamic)
+			payloadLimit := strconv.Itoa(
+				MaximumUnixTimestampDynamicDecimalBytes,
+			)
+			boundedTaggedPayload := "if(length(" + taggedPayload + ") <= " +
+				payloadLimit + ", " + taggedPayload +
+				", CAST('' AS String))"
+			numeric = "multiIf(" +
+				dynamicNumericTypePredicate(typeSQL) + ", " +
+				numeric + ", " +
+				taggedDecimal + ", " +
+				finiteFloatOrNullSQL(boundedTaggedPayload) +
+				", CAST(NULL AS Nullable(Float64)))"
+		}
+		floatingNanoseconds := "accurateCastOrNull(floor(ifNotFinite(" + numeric +
 			", CAST(NULL AS Nullable(Float64))) * 1000000000), 'Int64')"
 		return "fromUnixTimestamp64Nano(if(" +
-			dynamicNumericValuePredicate(dynamic) + ", " + nanoseconds +
-			", CAST(NULL AS Nullable(Int64))), 'UTC')", nil
+			dynamicIntegerTypePredicate(typeSQL) + ", " +
+			integerNanoseconds + ", " + floatingNanoseconds +
+			"), 'UTC')", nil
 	default:
-		return "", errors.New(
-			"compile ClickHouse strftime: unsupported scalar value type",
+		return "", fmt.Errorf(
+			"compile ClickHouse %s: unsupported scalar value type",
+			functionName,
 		)
 	}
 }
@@ -5688,6 +6420,23 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			if !ok {
 				return errors.New(
 					"compile ClickHouse predicate: strptime format must be a quoted string literal",
+				)
+			}
+		case plan.ScalarFunctionRelativeTime:
+			if len(expression.Arguments) != 2 {
+				return errors.New(
+					"compile ClickHouse predicate: relative_time requires exactly two arguments",
+				)
+			}
+			if nilScalarExpression(expression.Arguments[1]) {
+				return errors.New(
+					"compile ClickHouse predicate: relative_time has a missing specifier",
+				)
+			}
+			_, ok := scalarQuotedStringLiteral(expression.Arguments[1])
+			if !ok {
+				return errors.New(
+					"compile ClickHouse predicate: relative_time specifier must be a quoted string literal",
 				)
 			}
 		case plan.ScalarFunctionRound:

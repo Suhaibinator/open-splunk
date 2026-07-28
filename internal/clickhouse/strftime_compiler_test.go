@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spltimeformat"
@@ -321,5 +322,109 @@ func TestCompileStrftimeBoundsQueryWideFormatWorkAndOutput(t *testing.T) {
 				t.Fatalf("Compile error = %#v, want SPL_QUERY_TOO_COMPLEX", err)
 			}
 		})
+	}
+}
+
+func TestCompileStrftimeSharesDynamicTimestampParsingBudget(t *testing.T) {
+	t.Parallel()
+
+	context := newCompileContext(time.Unix(0, 0), "UTC")
+	context.unixTimestampBudget.dynamicDecimalBytes =
+		MaximumUnixTimestampQueryDynamicDecimalBytes
+	state := compileState{
+		context: context,
+		visible: map[string]fieldState{
+			"timestamp": {
+				valueSQL:  `"timestamp"`,
+				existsSQL: "1",
+				kind:      fieldKindDynamic,
+			},
+		},
+	}
+	_, err := compileStrftimeScalar(
+		&plan.ScalarCallExpression{
+			Function: plan.ScalarFunctionStrftime,
+			Arguments: []plan.ScalarExpression{
+				&plan.ScalarFieldExpression{
+					Field: plan.FieldRef{
+						Name: "timestamp", Path: []string{"timestamp"},
+					},
+				},
+				&plan.ScalarLiteralExpression{
+					Value: plan.Value{
+						Kind: plan.ValueKindString, String: "%s", Quoted: true,
+					},
+				},
+			},
+		},
+		state,
+	)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"Dynamic decimal timestamp inputs require more than",
+	) {
+		t.Fatalf("Compile shared Dynamic timestamp budget error = %v", err)
+	}
+	var diagnostic *plan.Diagnostic
+	if !errors.As(err, &diagnostic) ||
+		diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
+		t.Fatalf("Compile error = %#v, want SPL_QUERY_TOO_COMPLEX", err)
+	}
+}
+
+func TestCompileStrftimeElidesKnownDynamicTextProducer(t *testing.T) {
+	t.Parallel()
+
+	context := newCompileContext(time.Unix(0, 0), "UTC")
+	context.unixTimestampBudget.dynamicDecimalBytes =
+		MaximumUnixTimestampQueryDynamicDecimalBytes
+	state := compileState{
+		context: context,
+		visible: map[string]fieldState{
+			"timestamp": {
+				valueSQL:                `lowerUTF8("timestamp")`,
+				existsSQL:               "1",
+				kind:                    fieldKindDynamic,
+				dynamicDomain:           dynamicScalarDomainText,
+				materializeForPredicate: true,
+			},
+		},
+	}
+	compiled, err := compileStrftimeScalar(
+		&plan.ScalarCallExpression{
+			Function: plan.ScalarFunctionStrftime,
+			Arguments: []plan.ScalarExpression{
+				&plan.ScalarFieldExpression{
+					Field: plan.FieldRef{
+						Name: "timestamp", Path: []string{"timestamp"},
+					},
+				},
+				&plan.ScalarLiteralExpression{
+					Value: plan.Value{
+						Kind: plan.ValueKindString, String: "%s", Quoted: true,
+					},
+				},
+			},
+		},
+		state,
+	)
+	if err != nil {
+		t.Fatalf("compile text-domain strftime: %v", err)
+	}
+	if compiled.valueSQL != "CAST(NULL AS Nullable(String))" ||
+		!compiled.alwaysNull {
+		t.Fatalf("text Dynamic strftime did not specialize to null:\n%s", compiled.valueSQL)
+	}
+	for _, forbidden := range []string{"timestamp", "lowerUTF8"} {
+		if strings.Contains(compiled.valueSQL, forbidden) {
+			t.Fatalf(
+				"text Dynamic strftime retained %q producer work:\n%s",
+				forbidden,
+				compiled.valueSQL,
+			)
+		}
+	}
+	if !compiled.materializeForPredicate {
+		t.Fatal("text Dynamic strftime lost predicate materialization")
 	}
 }

@@ -22,6 +22,8 @@ func testStrftimeAgainstClickHouse(
 	eventTime := event.Event.EventTime.AsTime()
 	event.Event.Fields = typedObjectValue(
 		typedField("whole", typedSint(0)),
+		typedField("signed", typedSint(1_700_000_001)),
+		typedField("unsigned", typedUint(1_700_000_001)),
 		typedField("fraction", typedDouble(0.125)),
 		typedField("huge", typedUint(^uint64(0))),
 		typedField("text", typedString("0")),
@@ -136,6 +138,8 @@ func testStrftimeAgainstClickHouse(
 	dynamic := compileUTC(
 		`index=strftime event_id="strftime-scalars"` +
 			` | eval whole_result=strftime(whole, "%s.%9N"),` +
+			` signed_result=strftime(signed, "%s.%9N"),` +
+			` unsigned_result=strftime(unsigned, "%s.%9N"),` +
 			` fraction_result=strftime(fraction, "%s.%9N"),` +
 			` huge_result=strftime(huge, "%F"),` +
 			` text_result=strftime(text, "%F"),` +
@@ -143,15 +147,18 @@ func testStrftimeAgainstClickHouse(
 			` null_result=strftime(nothing, "%F"),` +
 			` missing_result=strftime(absent, "%F"),` +
 			` multi_result=strftime(multi, "%F")` +
-			` | table whole_result,fraction_result,huge_result,text_result,flag_result,null_result,missing_result,multi_result`,
+			` | table whole_result,signed_result,unsigned_result,fraction_result,huge_result,text_result,flag_result,null_result,missing_result,multi_result`,
 	)
-	var whole, fraction, hugeResult, textResult, flagResult, nullResult, missingResult, multiResult *string
+	var whole, signed, unsigned, fraction *string
+	var hugeResult, textResult, flagResult, nullResult, missingResult, multiResult *string
 	if err := connection.QueryRow(
 		queryContext,
 		dynamic.SQL,
 		dynamic.Args...,
 	).Scan(
 		&whole,
+		&signed,
+		&unsigned,
 		&fraction,
 		&hugeResult,
 		&textResult,
@@ -168,12 +175,16 @@ func testStrftimeAgainstClickHouse(
 		)
 	}
 	if whole == nil || *whole != "0.000000000" ||
+		signed == nil || *signed != "1700000001.000000000" ||
+		unsigned == nil || *unsigned != "1700000001.000000000" ||
 		fraction == nil || *fraction != "0.125000000" ||
 		hugeResult != nil || textResult != nil || flagResult != nil || nullResult != nil ||
 		missingResult != nil || multiResult != nil {
 		t.Fatalf(
-			"Dynamic strftime = %#v/%#v/%#v/%#v/%#v/%#v/%#v/%#v",
+			"Dynamic strftime = %#v/%#v/%#v/%#v/%#v/%#v/%#v/%#v/%#v/%#v",
 			whole,
+			signed,
+			unsigned,
 			fraction,
 			hugeResult,
 			textResult,
