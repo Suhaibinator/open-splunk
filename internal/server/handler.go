@@ -112,6 +112,21 @@ type IngestionTokenAdministration interface {
 	RevokeCollectorToken(context.Context, string, uint64) (auth.CollectorToken, error)
 }
 
+// AppAdministration is the complete administrator-only app-workspace surface.
+// Its transport-independent types keep the browser boundary decoupled from
+// control-plane persistence. Implementations must scope every operation by
+// TenantID and treat ActorID as immutable audit context. ListApps must apply
+// the supplied bounded page request in storage rather than loading an
+// unbounded tenant into memory.
+type AppAdministration interface {
+	CreateApp(context.Context, AppAdministrationScope, AppAdministrationDefinition) (AppAdministrationWorkspace, error)
+	GetApp(context.Context, AppAdministrationScope, AppAdministrationSelector) (AppAdministrationWorkspace, error)
+	ListApps(context.Context, AppAdministrationScope, AppAdministrationListRequest) (AppAdministrationListResult, error)
+	UpdateApp(context.Context, AppAdministrationScope, AppAdministrationSelector, uint64, AppAdministrationDefinition) (AppAdministrationWorkspace, error)
+	SetAppState(context.Context, AppAdministrationScope, AppAdministrationSelector, uint64, AppAdministrationState) (AppAdministrationWorkspace, error)
+	DeleteApp(context.Context, AppAdministrationScope, AppAdministrationSelector, uint64, string) (string, error)
+}
+
 // SavedSearches is the owner-scoped saved-search surface exposed to the
 // browser API. savedobjects.Store satisfies this interface directly. Keeping
 // the authenticated owner outside every protobuf request prevents callers
@@ -249,6 +264,7 @@ type Config struct {
 	Indexes                    IndexCatalog
 	IndexAdmin                 IndexAdministration
 	IngestionTokens            IngestionTokenAdministration
+	AppAdmin                   AppAdministration
 	SavedSearches              SavedSearches
 	SearchHistory              SearchHistory
 	Exports                    Exports
@@ -269,6 +285,10 @@ type Config struct {
 	MaximumConcurrentDownloads int
 	RouteTimeout               time.Duration
 	Now                        func() time.Time
+	// AppCursorKey signs administrator app-list continuations across process
+	// restarts. It is required when AppAdmin is configured and must be derived
+	// from persisted server key material rather than generated at startup.
+	AppCursorKey []byte
 	// AdministrativeAllowedHosts is retained as a compatibility name, but is
 	// the Host/Origin trust boundary for every browser API route. Values are
 	// host names or IP literals without paths. Empty defaults to loopback only.
@@ -280,6 +300,7 @@ type apiHandler struct {
 	indexes                   IndexCatalog
 	indexAdmin                IndexAdministration
 	ingestionTokens           IngestionTokenAdministration
+	appAdmin                  AppAdministration
 	savedSearches             SavedSearches
 	searchHistory             SearchHistory
 	exports                   Exports
@@ -305,6 +326,7 @@ type apiHandler struct {
 	serializationGate         chan struct{}
 	downloadGate              chan struct{}
 	adminCursorKey            [32]byte
+	appCursorKey              []byte
 	browserAllowedHosts       map[string]struct{}
 }
 
@@ -330,6 +352,10 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(ingestionTokens) {
 		ingestionTokens = nil
 	}
+	appAdmin := config.AppAdmin
+	if isNilDependency(appAdmin) {
+		appAdmin = nil
+	}
 	browserAuthenticator := config.BrowserAuthenticator
 	if isNilDependency(browserAuthenticator) {
 		browserAuthenticator = nil
@@ -338,11 +364,20 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(inspectionService) {
 		inspectionService = nil
 	}
-	if (indexAdmin != nil || ingestionTokens != nil || inspectionService != nil) &&
+	if (indexAdmin != nil || ingestionTokens != nil || appAdmin != nil || inspectionService != nil) &&
 		browserAuthenticator == nil {
 		return nil, errors.New(
 			"create server handler: administrative services require browser authentication",
 		)
+	}
+	var appCursorKey []byte
+	if appAdmin != nil {
+		if len(config.AppCursorKey) < 32 || len(config.AppCursorKey) > 1<<10 {
+			return nil, errors.New(
+				"create server handler: app cursor key must contain between 32 and 1024 bytes",
+			)
+		}
+		appCursorKey = slices.Clone(config.AppCursorKey)
 	}
 	if isNilDependency(config.SavedSearches) {
 		return nil, errors.New("create server handler: saved search service is required")
@@ -498,6 +533,7 @@ func NewHandler(config Config) (*Handler, error) {
 		history:        searchHistoryService != nil,
 		exports:        exportService != nil,
 		timeline:       timelineService != nil,
+		appAdmin:       appAdmin != nil,
 		planInspection: inspectionService != nil,
 		fieldDiscovery: fieldService != nil,
 		previews:       searchWebSocket != nil,
@@ -522,6 +558,7 @@ func NewHandler(config Config) (*Handler, error) {
 		indexes:                   config.Indexes,
 		indexAdmin:                indexAdmin,
 		ingestionTokens:           ingestionTokens,
+		appAdmin:                  appAdmin,
 		savedSearches:             config.SavedSearches,
 		searchHistory:             searchHistoryService,
 		exports:                   exportService,
@@ -546,6 +583,7 @@ func NewHandler(config Config) (*Handler, error) {
 		serializationGate:         make(chan struct{}, concurrentResponses),
 		downloadGate:              make(chan struct{}, concurrentDownloads),
 		adminCursorKey:            adminCursorKey,
+		appCursorKey:              appCursorKey,
 		browserAllowedHosts:       browserAllowedHosts,
 	}
 	apiRouter := api.newRouter(requestBytes, routeTimeout)
@@ -594,6 +632,19 @@ func NewHandler(config Config) (*Handler, error) {
 			"/api/v1/ingestion-tokens/list",
 			"/api/v1/ingestion-tokens/update",
 			"/api/v1/ingestion-tokens/revoke",
+		} {
+			apiRoutes[path] = http.MethodPost
+			administratorRoutes[path] = struct{}{}
+		}
+	}
+	if api.appAdmin != nil {
+		for _, path := range []string{
+			"/api/v1/apps/create",
+			"/api/v1/apps/get",
+			"/api/v1/apps/list",
+			"/api/v1/apps/update",
+			"/api/v1/apps/state/set",
+			"/api/v1/apps/delete",
 		} {
 			apiRoutes[path] = http.MethodPost
 			administratorRoutes[path] = struct{}{}
@@ -747,6 +798,7 @@ type serviceCapabilities struct {
 	history        bool
 	exports        bool
 	timeline       bool
+	appAdmin       bool
 	planInspection bool
 	fieldDiscovery bool
 	previews       bool
@@ -764,6 +816,7 @@ func featuresForServices(features []opensplunkv1.ServerFeature, capabilities ser
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV, capabilities.exports},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES, capabilities.exports},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE, capabilities.timeline},
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN, capabilities.appAdmin},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION, capabilities.planInspection},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY, capabilities.fieldDiscovery},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW, capabilities.previews},
@@ -775,7 +828,6 @@ func featuresForServices(features []opensplunkv1.ServerFeature, capabilities ser
 	unsupported := map[opensplunkv1.ServerFeature]struct{}{
 		opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN:     {},
 		opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN: {},
-		opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN:       {},
 	}
 	result := make([]opensplunkv1.ServerFeature, 0, len(features)+len(managed))
 	seen := make(map[opensplunkv1.ServerFeature]struct{}, len(managed))
@@ -881,6 +933,16 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	}
 	if handler.ingestionTokens != nil {
 		routes = append(routes, handler.ingestionTokenRoutes(noAuth, maximumRequestBytes, smallRequestBytes)...)
+	}
+	if handler.appAdmin != nil {
+		routes = append(
+			routes,
+			handler.appAdministrationRoutes(
+				noAuth,
+				maximumRequestBytes,
+				smallRequestBytes,
+			)...,
+		)
 	}
 	if handler.searchHistory != nil {
 		routes = append(routes, handler.searchHistoryRoutes(noAuth, smallRequestBytes)...)

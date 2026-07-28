@@ -34,6 +34,12 @@ var browserGateAdministratorPaths = []string{
 	"/api/v1/ingestion-tokens/list",
 	"/api/v1/ingestion-tokens/update",
 	"/api/v1/ingestion-tokens/revoke",
+	"/api/v1/apps/create",
+	"/api/v1/apps/get",
+	"/api/v1/apps/list",
+	"/api/v1/apps/update",
+	"/api/v1/apps/state/set",
+	"/api/v1/apps/delete",
 	searchInspectionPath,
 }
 
@@ -988,6 +994,8 @@ func newBrowserGateHandler(
 		Indexes:                    indexes,
 		IndexAdmin:                 indexes,
 		IngestionTokens:            tokens,
+		AppAdmin:                   &fakeAppAdministration{},
+		AppCursorKey:               appAdministrationCursorKey,
 		SearchInspections:          &fakeSearchInspections{},
 		SavedSearches:              &fakeSavedSearches{},
 		BrowserAuthenticator:       authenticator,
