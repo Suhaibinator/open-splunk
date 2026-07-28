@@ -25,6 +25,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
+	"github.com/Suhaibinator/open-splunk/internal/searchinspection"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchsuggestions"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -41,6 +42,8 @@ const (
 	searchFieldSummaryRoute           = "/search/jobs/field-summary"
 	searchFieldSummaryPath            = apiV1PathPrefix + searchFieldSummaryRoute
 	searchTimelinePath                = "/api/v1/search/jobs/timeline"
+	searchInspectionRoute             = "/search/jobs/inspect"
+	searchInspectionPath              = apiV1PathPrefix + searchInspectionRoute
 	searchWebSocketPath               = "/api/v1/search/ws"
 	defaultMaximumRequestBytes        = int64(128 << 10)
 	defaultMaximumPageSize            = uint32(1_000)
@@ -151,6 +154,13 @@ type SearchTimelines interface {
 	MaximumBuckets() uint32
 }
 
+// SearchInspections is the administrator-only, owner-scoped diagnostic
+// surface. Tenant and owner identity come from the authenticated browser
+// principal rather than from caller-controlled protobuf fields.
+type SearchInspections interface {
+	Inspect(context.Context, searchjobs.AccessScope, searchinspection.Request) (searchinspection.Result, error)
+}
+
 // SearchFields is the bounded, owner-scoped field-catalog surface. The
 // handler snapshots both enforced limits during construction so transport
 // validation cannot drift from the service contract while requests are live.
@@ -243,6 +253,7 @@ type Config struct {
 	SearchHistory              SearchHistory
 	Exports                    Exports
 	SearchTimelines            SearchTimelines
+	SearchInspections          SearchInspections
 	SearchFields               SearchFields
 	SearchSuggestions          SearchSuggestions
 	SearchWebSocket            SearchWebSocket
@@ -273,6 +284,7 @@ type apiHandler struct {
 	searchHistory             SearchHistory
 	exports                   Exports
 	searchTimelines           SearchTimelines
+	searchInspections         SearchInspections
 	searchFields              SearchFields
 	searchSuggestions         SearchSuggestions
 	searchWebSocket           SearchWebSocket
@@ -322,7 +334,11 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(browserAuthenticator) {
 		browserAuthenticator = nil
 	}
-	if (indexAdmin != nil || ingestionTokens != nil) &&
+	inspectionService := config.SearchInspections
+	if isNilDependency(inspectionService) {
+		inspectionService = nil
+	}
+	if (indexAdmin != nil || ingestionTokens != nil || inspectionService != nil) &&
 		browserAuthenticator == nil {
 		return nil, errors.New(
 			"create server handler: administrative services require browser authentication",
@@ -482,6 +498,7 @@ func NewHandler(config Config) (*Handler, error) {
 		history:        searchHistoryService != nil,
 		exports:        exportService != nil,
 		timeline:       timelineService != nil,
+		planInspection: inspectionService != nil,
 		fieldDiscovery: fieldService != nil,
 		previews:       searchWebSocket != nil,
 	})
@@ -509,6 +526,7 @@ func NewHandler(config Config) (*Handler, error) {
 		searchHistory:             searchHistoryService,
 		exports:                   exportService,
 		searchTimelines:           timelineService,
+		searchInspections:         inspectionService,
 		searchFields:              fieldService,
 		searchSuggestions:         suggestionService,
 		searchWebSocket:           searchWebSocket,
@@ -546,7 +564,7 @@ func NewHandler(config Config) (*Handler, error) {
 		"/api/v1/saved-searches/duplicate",
 		"/api/v1/saved-searches/delete",
 	)
-	administratorRoutes := make(map[string]struct{}, 10)
+	administratorRoutes := make(map[string]struct{}, 11)
 	if api.searchHistory != nil {
 		for _, path := range []string{
 			"/api/v1/search/history/get",
@@ -593,6 +611,10 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 	if api.searchTimelines != nil {
 		apiRoutes[searchTimelinePath] = http.MethodPost
+	}
+	if api.searchInspections != nil {
+		apiRoutes[searchInspectionPath] = http.MethodPost
+		administratorRoutes[searchInspectionPath] = struct{}{}
 	}
 	if api.searchFields != nil {
 		apiRoutes[searchFieldsListPath] = http.MethodPost
@@ -725,6 +747,7 @@ type serviceCapabilities struct {
 	history        bool
 	exports        bool
 	timeline       bool
+	planInspection bool
 	fieldDiscovery bool
 	previews       bool
 }
@@ -741,6 +764,7 @@ func featuresForServices(features []opensplunkv1.ServerFeature, capabilities ser
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV, capabilities.exports},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES, capabilities.exports},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE, capabilities.timeline},
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION, capabilities.planInspection},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY, capabilities.fieldDiscovery},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW, capabilities.previews},
 	}
@@ -752,7 +776,6 @@ func featuresForServices(features []opensplunkv1.ServerFeature, capabilities ser
 		opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN:     {},
 		opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN: {},
 		opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN:       {},
-		opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION: {},
 	}
 	result := make([]opensplunkv1.ServerFeature, 0, len(features)+len(managed))
 	seen := make(map[opensplunkv1.ServerFeature]struct{}, len(managed))
@@ -864,6 +887,9 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	}
 	if handler.searchTimelines != nil {
 		routes = append(routes, handler.searchTimelineRoutes(noAuth, smallRequestBytes)...)
+	}
+	if handler.searchInspections != nil {
+		routes = append(routes, handler.searchInspectionRoutes(noAuth, smallRequestBytes)...)
 	}
 	if handler.searchFields != nil {
 		routes = append(routes, handler.searchFieldRoutes(noAuth, smallRequestBytes)...)

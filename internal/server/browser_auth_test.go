@@ -34,6 +34,7 @@ var browserGateAdministratorPaths = []string{
 	"/api/v1/ingestion-tokens/list",
 	"/api/v1/ingestion-tokens/update",
 	"/api/v1/ingestion-tokens/revoke",
+	searchInspectionPath,
 }
 
 type recordingBrowserAuthenticator struct {
@@ -987,6 +988,7 @@ func newBrowserGateHandler(
 		Indexes:                    indexes,
 		IndexAdmin:                 indexes,
 		IngestionTokens:            tokens,
+		SearchInspections:          &fakeSearchInspections{},
 		SavedSearches:              &fakeSavedSearches{},
 		BrowserAuthenticator:       authenticator,
 		WebUI:                      testUI(),
