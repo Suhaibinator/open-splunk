@@ -14,6 +14,7 @@ import (
 	"testing/fstest"
 
 	"github.com/Suhaibinator/open-splunk/migrations"
+	"gorm.io/gorm"
 	_ "modernc.org/sqlite"
 )
 
@@ -87,6 +88,87 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	}
 	if migrationCount != 9 {
 		t.Fatalf("schema migration count after reopen = %d, want 9", migrationCount)
+	}
+}
+
+func TestOpenConfiguresGORMOnTheExistingSQLitePool(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+
+	orm := db.GORMDB()
+	if orm == nil {
+		t.Fatal("GORMDB() = nil")
+	}
+	raw, err := orm.DB()
+	if err != nil {
+		t.Fatalf("GORMDB().DB() error = %v", err)
+	}
+	if raw != db.SQLDB() {
+		t.Fatal("GORM and legacy SQL accessors do not share one configured connection pool")
+	}
+
+	created, err := db.CreateIndex(ctx, enabledIndex("shared-pool"))
+	if err != nil {
+		t.Fatalf("CreateIndex() error = %v", err)
+	}
+	var stored indexRecord
+	query := orm.WithContext(ctx).Where("index_id = ?", created.ID).Take(&stored)
+	if query.Error != nil {
+		t.Fatalf("GORM lookup error = %v", query.Error)
+	}
+	if stored.IndexID != created.ID || stored.Name != created.Definition.Name {
+		t.Fatalf("GORM lookup = %#v, want ID %q and name %q", stored, created.ID, created.Definition.Name)
+	}
+}
+
+func TestIndexRecordMatchesMigratedSQLiteColumns(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+
+	statement := &gorm.Statement{DB: db.GORMDB()}
+	if err := statement.Parse(&indexRecord{}); err != nil {
+		t.Fatalf("parse GORM index model: %v", err)
+	}
+
+	rows, err := db.SQLDB().QueryContext(ctx, `
+		SELECT name
+		FROM pragma_table_info('indexes')
+		ORDER BY cid`)
+	if err != nil {
+		t.Fatalf("read migrated index columns: %v", err)
+	}
+	defer rows.Close()
+	var migratedColumns []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan migrated index column: %v", err)
+		}
+		migratedColumns = append(migratedColumns, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate migrated index columns: %v", err)
+	}
+	if !slices.Equal(statement.Schema.DBNames, migratedColumns) {
+		t.Fatalf("GORM index columns = %v, migrated columns = %v", statement.Schema.DBNames, migratedColumns)
+	}
+
+	idField := statement.Schema.LookUpField("IndexID")
+	nameField := statement.Schema.LookUpField("Name")
+	if idField == nil || !idField.PrimaryKey || nameField == nil || !nameField.Unique {
+		t.Fatalf("GORM index keys are not explicit: ID=%#v name=%#v", idField, nameField)
 	}
 }
 

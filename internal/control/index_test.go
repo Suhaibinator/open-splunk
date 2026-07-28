@@ -260,6 +260,89 @@ func TestIndexValidationAndNotFoundErrors(t *testing.T) {
 	}
 }
 
+func TestIndexOperationsPreserveCanceledContextIdentity(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	created, err := db.CreateIndex(context.Background(), enabledIndex("canceled"))
+	if err != nil {
+		t.Fatalf("CreateIndex(): %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := map[string]func() error{
+		"create": func() error {
+			_, operationErr := db.CreateIndex(ctx, enabledIndex("canceled-create"))
+			return operationErr
+		},
+		"get": func() error {
+			_, operationErr := db.GetIndex(ctx, created.ID)
+			return operationErr
+		},
+		"get by name": func() error {
+			_, operationErr := db.GetIndexByName(ctx, created.Definition.Name)
+			return operationErr
+		},
+		"list": func() error {
+			_, operationErr := db.ListIndexes(ctx)
+			return operationErr
+		},
+		"update": func() error {
+			_, operationErr := db.UpdateIndex(ctx, created.ID, created.Version, created.Definition)
+			return operationErr
+		},
+		"set state": func() error {
+			_, operationErr := db.SetIndexState(ctx, created.ID, created.Version, IndexStateArchived)
+			return operationErr
+		},
+	}
+	for name, operation := range tests {
+		t.Run(name, func(t *testing.T) {
+			if operationErr := operation(); !errors.Is(operationErr, context.Canceled) {
+				t.Fatalf("operation error = %v, want context.Canceled", operationErr)
+			}
+		})
+	}
+}
+
+func TestIndexReadsRejectCorruptRecordsWithoutLeakingFields(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	created, err := db.CreateIndex(ctx, IndexDefinition{
+		Name:        "corrupt",
+		Description: "private-description-sentinel",
+	})
+	if err != nil {
+		t.Fatalf("CreateIndex(): %v", err)
+	}
+
+	connection, err := db.SQLDB().Conn(ctx)
+	if err != nil {
+		t.Fatalf("acquire corruption connection: %v", err)
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatalf("disable test-only check constraints: %v", err)
+	}
+	if _, err := connection.ExecContext(ctx, `
+		UPDATE indexes
+		SET ingestion_enabled = 2
+		WHERE index_id = ?`, created.ID); err != nil {
+		t.Fatalf("corrupt index record: %v", err)
+	}
+
+	_, err = db.GetIndex(ctx, created.ID)
+	if err == nil || !strings.Contains(err.Error(), "invalid index record in control-plane database") {
+		t.Fatalf("GetIndex() error = %v, want invalid-record error", err)
+	}
+	if strings.Contains(err.Error(), created.Definition.Description) {
+		t.Fatalf("GetIndex() error disclosed persisted field: %v", err)
+	}
+}
+
 func openTestDB(t *testing.T) *DB {
 	t.Helper()
 

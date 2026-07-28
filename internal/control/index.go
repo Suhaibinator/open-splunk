@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 const maxIndexNameBytes = 255
@@ -89,51 +91,33 @@ func (db *DB) CreateIndex(ctx context.Context, definition IndexDefinition) (Inde
 		if err != nil {
 			return Index{}, fmt.Errorf("generate index ID: %w", err)
 		}
-		_, err = db.sql.ExecContext(ctx, `
-			INSERT INTO indexes (
-				index_id, version, name, display_name, description,
-				retention_nanoseconds, ingestion_enabled, search_enabled,
-				default_sourcetype, max_event_bytes, max_field_count,
-				max_nesting_depth, maximum_future_skew_nanoseconds,
-				maximum_event_age_nanoseconds, state,
-				created_at_unix_micro, updated_at_unix_micro
-			) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id,
-			definition.Name,
-			definition.DisplayName,
-			definition.Description,
-			int64(definition.RetentionPeriod),
-			boolInteger(definition.IngestionEnabled),
-			boolInteger(definition.SearchEnabled),
-			definition.DefaultSourcetype,
-			// #nosec G115 -- validateIndexDefinition bounds MaxEventBytes by math.MaxInt64.
-			int64(definition.Limits.MaxEventBytes),
-			int64(definition.Limits.MaxFieldCount),
-			int64(definition.Limits.MaxNestingDepth),
-			int64(definition.Limits.MaximumFutureSkew),
-			int64(definition.Limits.MaximumEventAge),
-			IndexStateActive,
-			now.UnixMicro(),
-			now.UnixMicro(),
-		)
-		if err == nil {
-			return Index{
-				ID: id, Version: 1, Definition: definition, State: IndexStateActive,
-				CreatedAt: now, UpdatedAt: now,
-			}, nil
+		record := newIndexRecord(id, definition, now)
+		create := db.orm.WithContext(ctx).Create(&record)
+		if create.Error == nil {
+			index, conversionErr := indexFromRecord(record)
+			if conversionErr != nil {
+				return Index{}, fmt.Errorf("read created index: %w", conversionErr)
+			}
+			return index, nil
 		}
 
-		var existingID string
-		nameErr := db.sql.QueryRowContext(ctx, `SELECT index_id FROM indexes WHERE name = ?`, definition.Name).Scan(&existingID)
+		var existing indexRecord
+		nameErr := db.orm.WithContext(ctx).
+			Select("index_id").
+			Where("name = ?", definition.Name).
+			Take(&existing).Error
 		if nameErr == nil {
 			return Index{}, fmt.Errorf("%w: index name %q", ErrAlreadyExists, definition.Name)
 		}
-		if nameErr != nil && !errors.Is(nameErr, sql.ErrNoRows) {
+		if !errors.Is(nameErr, gorm.ErrRecordNotFound) {
 			return Index{}, fmt.Errorf("check duplicate index name: %w", nameErr)
 		}
-		idErr := db.sql.QueryRowContext(ctx, `SELECT index_id FROM indexes WHERE index_id = ?`, id).Scan(&existingID)
-		if errors.Is(idErr, sql.ErrNoRows) {
-			return Index{}, fmt.Errorf("create index: %w", err)
+		idErr := db.orm.WithContext(ctx).
+			Select("index_id").
+			Where("index_id = ?", id).
+			Take(&existing).Error
+		if errors.Is(idErr, gorm.ErrRecordNotFound) {
+			return Index{}, fmt.Errorf("create index: %w", create.Error)
 		}
 		if idErr != nil {
 			return Index{}, fmt.Errorf("check duplicate index ID: %w", idErr)
@@ -149,7 +133,11 @@ func (db *DB) GetIndex(ctx context.Context, id string) (Index, error) {
 	if strings.TrimSpace(id) == "" {
 		return Index{}, fmt.Errorf("%w: index ID is required", ErrInvalidArgument)
 	}
-	index, err := scanIndex(db.sql.QueryRowContext(ctx, indexSelect+` WHERE index_id = ?`, id))
+	record, err := takeIndexRecord(db.orm.WithContext(ctx), "index_id = ?", id)
+	if err != nil {
+		return Index{}, indexLookupError(err)
+	}
+	index, err := indexFromRecord(record)
 	return index, indexLookupError(err)
 }
 
@@ -159,28 +147,28 @@ func (db *DB) GetIndexByName(ctx context.Context, name string) (Index, error) {
 	if err != nil {
 		return Index{}, err
 	}
-	index, err := scanIndex(db.sql.QueryRowContext(ctx, indexSelect+` WHERE name = ?`, normalized))
+	record, err := takeIndexRecord(db.orm.WithContext(ctx), "name = ?", normalized)
+	if err != nil {
+		return Index{}, indexLookupError(err)
+	}
+	index, err := indexFromRecord(record)
 	return index, indexLookupError(err)
 }
 
 // ListIndexes lists every index in normalized-name order.
 func (db *DB) ListIndexes(ctx context.Context) ([]Index, error) {
-	rows, err := db.sql.QueryContext(ctx, indexSelect+` ORDER BY name`)
-	if err != nil {
-		return nil, fmt.Errorf("list indexes: %w", err)
+	var records []indexRecord
+	query := db.orm.WithContext(ctx).Order("name").Find(&records)
+	if query.Error != nil {
+		return nil, fmt.Errorf("list indexes: %w", query.Error)
 	}
-	defer rows.Close()
-
-	indexes := make([]Index, 0)
-	for rows.Next() {
-		index, err := scanIndex(rows)
+	indexes := make([]Index, 0, len(records))
+	for _, record := range records {
+		index, err := indexFromRecord(record)
 		if err != nil {
 			return nil, fmt.Errorf("scan listed index: %w", err)
 		}
 		indexes = append(indexes, index)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate indexes: %w", err)
 	}
 	return indexes, nil
 }
@@ -195,16 +183,20 @@ func (db *DB) UpdateIndex(ctx context.Context, id string, expectedVersion uint64
 	if err != nil {
 		return Index{}, err
 	}
-	tx, err := db.sql.BeginTx(ctx, nil)
-	if err != nil {
-		return Index{}, fmt.Errorf("begin index update: %w", err)
+	tx := db.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return Index{}, fmt.Errorf("begin index update: %w", tx.Error)
 	}
-	defer finishTx(tx, &err)
+	defer finishGORMTx(tx, &err)
 
-	current, err := scanIndex(tx.QueryRowContext(ctx, indexSelect+` WHERE index_id = ?`, id))
-	if errors.Is(err, sql.ErrNoRows) {
+	currentRecord, err := takeIndexRecord(tx, "index_id = ?", id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return Index{}, ErrNotFound
 	}
+	if err != nil {
+		return Index{}, fmt.Errorf("read index for update: %w", err)
+	}
+	current, err := indexFromRecord(currentRecord)
 	if err != nil {
 		return Index{}, fmt.Errorf("read index for update: %w", err)
 	}
@@ -216,42 +208,27 @@ func (db *DB) UpdateIndex(ctx context.Context, id string, expectedVersion uint64
 	}
 
 	now := databaseTime(time.Now())
-	updateResult, err := tx.ExecContext(ctx, `
-		UPDATE indexes SET
-			version = version + 1,
-			display_name = ?, description = ?, retention_nanoseconds = ?,
-			ingestion_enabled = ?, search_enabled = ?, default_sourcetype = ?,
-			max_event_bytes = ?, max_field_count = ?, max_nesting_depth = ?,
-			maximum_future_skew_nanoseconds = ?, maximum_event_age_nanoseconds = ?,
-			updated_at_unix_micro = ?
-		WHERE index_id = ? AND version = ?`,
-		definition.DisplayName,
-		definition.Description,
-		int64(definition.RetentionPeriod),
-		boolInteger(definition.IngestionEnabled),
-		boolInteger(definition.SearchEnabled),
-		definition.DefaultSourcetype,
-		// #nosec G115 -- validateIndexDefinition bounds MaxEventBytes by math.MaxInt64.
-		int64(definition.Limits.MaxEventBytes),
-		int64(definition.Limits.MaxFieldCount),
-		int64(definition.Limits.MaxNestingDepth),
-		int64(definition.Limits.MaximumFutureSkew),
-		int64(definition.Limits.MaximumEventAge),
-		// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
-		now.UnixMicro(), id, int64(expectedVersion),
-	)
-	if err != nil {
-		return Index{}, fmt.Errorf("update index: %w", err)
+	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
+	expectedVersionDB := int64(expectedVersion)
+	update := tx.Model(&indexRecord{}).
+		Where("index_id = ? AND version = ?", id, expectedVersionDB).
+		Updates(indexDefinitionUpdates(definition, now))
+	if update.Error != nil {
+		return Index{}, fmt.Errorf("update index: %w", update.Error)
 	}
-	if err := requireOneUpdated(updateResult); err != nil {
+	if err := requireOneUpdated(update.RowsAffected); err != nil {
 		return Index{}, err
 	}
-	result, err = scanIndex(tx.QueryRowContext(ctx, indexSelect+` WHERE index_id = ?`, id))
+	updatedRecord, err := takeIndexRecord(tx, "index_id = ?", id)
 	if err != nil {
 		return Index{}, fmt.Errorf("read updated index: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return Index{}, fmt.Errorf("commit index update: %w", err)
+	result, err = indexFromRecord(updatedRecord)
+	if err != nil {
+		return Index{}, fmt.Errorf("read updated index: %w", err)
+	}
+	if commitErr := tx.Commit().Error; commitErr != nil {
+		return Index{}, fmt.Errorf("commit index update: %w", commitErr)
 	}
 	return result, nil
 }
@@ -264,27 +241,30 @@ func (db *DB) SetIndexState(ctx context.Context, id string, expectedVersion uint
 	if !validIndexState(state) {
 		return Index{}, fmt.Errorf("%w: unknown index state", ErrInvalidArgument)
 	}
-	tx, err := db.sql.BeginTx(ctx, nil)
-	if err != nil {
-		return Index{}, fmt.Errorf("begin index state update: %w", err)
+	tx := db.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return Index{}, fmt.Errorf("begin index state update: %w", tx.Error)
 	}
-	defer finishTx(tx, &err)
+	defer finishGORMTx(tx, &err)
 
 	now := databaseTime(time.Now())
 	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
 	expectedVersionDB := int64(expectedVersion)
-	updateResult, err := tx.ExecContext(ctx, `
-		UPDATE indexes
-		SET state = ?, version = version + 1, updated_at_unix_micro = ?
-		WHERE index_id = ? AND version = ?`, state, now.UnixMicro(), id, expectedVersionDB)
-	if err != nil {
-		return Index{}, fmt.Errorf("set index state: %w", err)
+	update := tx.Model(&indexRecord{}).
+		Where("index_id = ? AND version = ?", id, expectedVersionDB).
+		Updates(map[string]any{
+			"state":                 state,
+			"updated_at_unix_micro": now.UnixMicro(),
+			"version":               gorm.Expr("version + 1"),
+		})
+	if update.Error != nil {
+		return Index{}, fmt.Errorf("set index state: %w", update.Error)
 	}
-	if err := requireOneUpdated(updateResult); err != nil {
+	if err := requireOneUpdated(update.RowsAffected); err != nil {
 		if errors.Is(err, ErrVersionConflict) {
-			var exists int
-			lookupErr := tx.QueryRowContext(ctx, `SELECT 1 FROM indexes WHERE index_id = ?`, id).Scan(&exists)
-			if errors.Is(lookupErr, sql.ErrNoRows) {
+			var existing indexRecord
+			lookupErr := tx.Select("index_id").Where("index_id = ?", id).Take(&existing).Error
+			if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
 				return Index{}, ErrNotFound
 			}
 			if lookupErr != nil {
@@ -293,68 +273,104 @@ func (db *DB) SetIndexState(ctx context.Context, id string, expectedVersion uint
 		}
 		return Index{}, err
 	}
-	result, err = scanIndex(tx.QueryRowContext(ctx, indexSelect+` WHERE index_id = ?`, id))
+	updatedRecord, err := takeIndexRecord(tx, "index_id = ?", id)
 	if err != nil {
 		return Index{}, fmt.Errorf("read index after state update: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return Index{}, fmt.Errorf("commit index state update: %w", err)
+	result, err = indexFromRecord(updatedRecord)
+	if err != nil {
+		return Index{}, fmt.Errorf("read index after state update: %w", err)
+	}
+	if commitErr := tx.Commit().Error; commitErr != nil {
+		return Index{}, fmt.Errorf("commit index state update: %w", commitErr)
 	}
 	return result, nil
 }
 
-const indexSelect = `
-	SELECT
-		index_id, version, name, display_name, description,
-		retention_nanoseconds, ingestion_enabled, search_enabled,
-		default_sourcetype, max_event_bytes, max_field_count,
-		max_nesting_depth, maximum_future_skew_nanoseconds,
-		maximum_event_age_nanoseconds, state,
-		created_at_unix_micro, updated_at_unix_micro
-	FROM indexes`
-
-type rowScanner interface {
-	Scan(dest ...any) error
+func takeIndexRecord(database *gorm.DB, query string, args ...any) (indexRecord, error) {
+	var record indexRecord
+	result := database.Where(query, args...).Take(&record)
+	return record, result.Error
 }
 
-func scanIndex(row rowScanner) (Index, error) {
-	var (
-		index                                  Index
-		version                                int64
-		retention, maxEventBytes               int64
-		maxFieldCount, maxNestingDepth         int64
-		maximumFutureSkew, maximumEventAge     int64
-		ingestionEnabled, searchEnabled        int64
-		createdAtUnixMicro, updatedAtUnixMicro int64
-	)
-	err := row.Scan(
-		&index.ID, &version, &index.Definition.Name,
-		&index.Definition.DisplayName, &index.Definition.Description,
-		&retention, &ingestionEnabled, &searchEnabled,
-		&index.Definition.DefaultSourcetype, &maxEventBytes,
-		&maxFieldCount, &maxNestingDepth, &maximumFutureSkew,
-		&maximumEventAge, &index.State, &createdAtUnixMicro, &updatedAtUnixMicro,
-	)
-	if err != nil {
-		return Index{}, err
+func newIndexRecord(id string, definition IndexDefinition, now time.Time) indexRecord {
+	return indexRecord{
+		IndexID:                      id,
+		Version:                      1,
+		Name:                         definition.Name,
+		DisplayName:                  definition.DisplayName,
+		Description:                  definition.Description,
+		RetentionNanoseconds:         int64(definition.RetentionPeriod),
+		IngestionEnabled:             boolInteger(definition.IngestionEnabled),
+		SearchEnabled:                boolInteger(definition.SearchEnabled),
+		DefaultSourcetype:            definition.DefaultSourcetype,
+		MaxEventBytes:                int64(definition.Limits.MaxEventBytes), // #nosec G115 -- validation bounds this value.
+		MaxFieldCount:                int64(definition.Limits.MaxFieldCount),
+		MaxNestingDepth:              int64(definition.Limits.MaxNestingDepth),
+		MaximumFutureSkewNanoseconds: int64(definition.Limits.MaximumFutureSkew),
+		MaximumEventAgeNanoseconds:   int64(definition.Limits.MaximumEventAge),
+		State:                        IndexStateActive,
+		CreatedAtUnixMicro:           now.UnixMicro(),
+		UpdatedAtUnixMicro:           now.UnixMicro(),
 	}
-	if version < 1 || retention < 0 || retention%int64(time.Millisecond) != 0 || maxEventBytes < 0 || maxFieldCount < 0 || maxFieldCount > math.MaxUint32 || maxNestingDepth < 0 || maxNestingDepth > math.MaxUint32 || maximumFutureSkew < 0 || maximumEventAge < 0 || (ingestionEnabled != 0 && ingestionEnabled != 1) || (searchEnabled != 0 && searchEnabled != 1) || !validIndexState(index.State) {
+}
+
+func indexDefinitionUpdates(definition IndexDefinition, now time.Time) map[string]any {
+	return map[string]any{
+		"default_sourcetype":              definition.DefaultSourcetype,
+		"description":                     definition.Description,
+		"display_name":                    definition.DisplayName,
+		"ingestion_enabled":               boolInteger(definition.IngestionEnabled),
+		"max_event_bytes":                 int64(definition.Limits.MaxEventBytes), // #nosec G115 -- validation bounds this value.
+		"max_field_count":                 int64(definition.Limits.MaxFieldCount),
+		"max_nesting_depth":               int64(definition.Limits.MaxNestingDepth),
+		"maximum_event_age_nanoseconds":   int64(definition.Limits.MaximumEventAge),
+		"maximum_future_skew_nanoseconds": int64(definition.Limits.MaximumFutureSkew),
+		"retention_nanoseconds":           int64(definition.RetentionPeriod),
+		"search_enabled":                  boolInteger(definition.SearchEnabled),
+		"updated_at_unix_micro":           now.UnixMicro(),
+		"version":                         gorm.Expr("version + 1"),
+	}
+}
+
+func indexFromRecord(record indexRecord) (Index, error) {
+	if record.Version < 1 || record.RetentionNanoseconds < 0 || record.RetentionNanoseconds%int64(time.Millisecond) != 0 || record.MaxEventBytes < 0 || record.MaxFieldCount < 0 || record.MaxFieldCount > math.MaxUint32 || record.MaxNestingDepth < 0 || record.MaxNestingDepth > math.MaxUint32 || record.MaximumFutureSkewNanoseconds < 0 || record.MaximumEventAgeNanoseconds < 0 || (record.IngestionEnabled != 0 && record.IngestionEnabled != 1) || (record.SearchEnabled != 0 && record.SearchEnabled != 1) || !validIndexState(record.State) {
 		return Index{}, errors.New("invalid index record in control-plane database")
 	}
-	index.Version = uint64(version)
-	index.Definition.RetentionPeriod = time.Duration(retention)
-	index.Definition.IngestionEnabled = ingestionEnabled == 1
-	index.Definition.SearchEnabled = searchEnabled == 1
-	index.Definition.Limits = IndexLimits{
-		MaxEventBytes:     uint64(maxEventBytes),
-		MaxFieldCount:     uint32(maxFieldCount),
-		MaxNestingDepth:   uint32(maxNestingDepth),
-		MaximumFutureSkew: time.Duration(maximumFutureSkew),
-		MaximumEventAge:   time.Duration(maximumEventAge),
+	return Index{
+		ID:      record.IndexID,
+		Version: uint64(record.Version),
+		Definition: IndexDefinition{
+			Name:              record.Name,
+			DisplayName:       record.DisplayName,
+			Description:       record.Description,
+			RetentionPeriod:   time.Duration(record.RetentionNanoseconds),
+			IngestionEnabled:  record.IngestionEnabled == 1,
+			SearchEnabled:     record.SearchEnabled == 1,
+			DefaultSourcetype: record.DefaultSourcetype,
+			Limits: IndexLimits{
+				MaxEventBytes:     uint64(record.MaxEventBytes),
+				MaxFieldCount:     uint32(record.MaxFieldCount),
+				MaxNestingDepth:   uint32(record.MaxNestingDepth),
+				MaximumFutureSkew: time.Duration(record.MaximumFutureSkewNanoseconds),
+				MaximumEventAge:   time.Duration(record.MaximumEventAgeNanoseconds),
+			},
+		},
+		State:     record.State,
+		CreatedAt: time.UnixMicro(record.CreatedAtUnixMicro).UTC(),
+		UpdatedAt: time.UnixMicro(record.UpdatedAtUnixMicro).UTC(),
+	}, nil
+}
+
+func indexLookupError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return ErrNotFound
+	default:
+		return fmt.Errorf("get index: %w", err)
 	}
-	index.CreatedAt = time.UnixMicro(createdAtUnixMicro).UTC()
-	index.UpdatedAt = time.UnixMicro(updatedAtUnixMicro).UTC()
-	return index, nil
 }
 
 func validateIndexDefinition(definition IndexDefinition) (IndexDefinition, error) {
@@ -396,33 +412,18 @@ func validIndexState(state IndexState) bool {
 	}
 }
 
-func indexLookupError(err error) error {
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, sql.ErrNoRows):
-		return ErrNotFound
-	default:
-		return fmt.Errorf("get index: %w", err)
-	}
-}
-
-func requireOneUpdated(result sql.Result) error {
-	count, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read updated row count: %w", err)
-	}
+func requireOneUpdated(count int64) error {
 	if count != 1 {
 		return ErrVersionConflict
 	}
 	return nil
 }
 
-func finishTx(tx *sql.Tx, returnedErr *error) {
+func finishGORMTx(tx *gorm.DB, returnedErr *error) {
 	if tx == nil || returnedErr == nil || *returnedErr == nil {
 		return
 	}
-	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+	if err := tx.Rollback().Error; err != nil && !errors.Is(err, sql.ErrTxDone) {
 		*returnedErr = errors.Join(*returnedErr, fmt.Errorf("roll back transaction: %w", err))
 	}
 }

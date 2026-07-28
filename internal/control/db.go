@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/migrations"
+	gormsqlite "gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"modernc.org/sqlite"
 )
 
@@ -23,6 +26,7 @@ const (
 // DB is the SQLite-backed single-node control-plane database.
 type DB struct {
 	sql *sql.DB
+	orm *gorm.DB
 }
 
 // Open opens a persistent SQLite control-plane database, configures its
@@ -67,11 +71,22 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
 		return closeOnError(err)
 	}
+	orm, err := gorm.Open(gormsqlite.New(gormsqlite.Config{
+		DriverName: "sqlite",
+		Conn:       raw,
+	}), &gorm.Config{
+		DisableAutomaticPing:   true,
+		Logger:                 logger.Discard,
+		SkipDefaultTransaction: true,
+	})
+	if err != nil {
+		return closeOnError(fmt.Errorf("configure GORM control plane: %w", err))
+	}
 	if err := secureSQLiteFiles(absPath, false); err != nil {
 		return closeOnError(err)
 	}
 
-	return &DB{sql: raw}, nil
+	return &DB{sql: raw, orm: orm}, nil
 }
 
 // secureSQLiteFiles ensures the control database and every SQLite sidecar are
@@ -179,6 +194,16 @@ func (db *DB) SQLDB() *sql.DB {
 		return nil
 	}
 	return db.sql
+}
+
+// GORMDB exposes the GORM handle configured over the same SQLite connection
+// pool as SQLDB. Versioned SQL migrations remain authoritative; callers must
+// not use AutoMigrate or close the underlying pool.
+func (db *DB) GORMDB() *gorm.DB {
+	if db == nil {
+		return nil
+	}
+	return db.orm
 }
 
 // Close releases all SQLite connections.
