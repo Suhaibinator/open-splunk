@@ -5,6 +5,10 @@ package searchtimebounds
 import "time"
 
 const (
+	MinimumYear          = 1900
+	MaximumYear          = 2262
+	YearRangeDescription = "1900-to-2262"
+
 	MinimumUnixSeconds = int64(-2_208_988_800) // 1900-01-01T00:00:00Z
 	MaximumUnixSeconds = int64(9_214_646_400)  // 2262-01-01T00:00:00Z
 
@@ -13,7 +17,7 @@ const (
 	MaximumSpanHours    = MaximumSpanMinutes / 60
 	MaximumSpanDays     = MaximumSpanHours / 24
 	MaximumSpanWeeks    = MaximumSpanDays / 7
-	MaximumSpanYears    = uint64(362)
+	MaximumSpanYears    = uint64(MaximumYear - MinimumYear)
 	MaximumSpanMonths   = MaximumSpanYears * 12
 	MaximumSpanQuarters = MaximumSpanYears * 4
 )

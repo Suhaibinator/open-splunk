@@ -23,9 +23,12 @@ func TestBoundsPinBackendTimestampDomainAndExactSpans(t *testing.T) {
 		MaximumSpanWeeks != 18_888 ||
 		MaximumSpanMonths != 4_344 ||
 		MaximumSpanQuarters != 1_448 ||
-		MaximumSpanYears != 362 {
+		MaximumSpanYears != 362 ||
+		MinimumYear != 1900 ||
+		MaximumYear != 2262 ||
+		YearRangeDescription != "1900-to-2262" {
 		t.Fatalf(
-			"span limits = %d seconds/%d minutes/%d hours/%d days/%d weeks/%d months/%d quarters/%d years",
+			"span limits = %d seconds/%d minutes/%d hours/%d days/%d weeks/%d months/%d quarters/%d years; domain %d..%d (%q)",
 			MaximumSpanSeconds,
 			MaximumSpanMinutes,
 			MaximumSpanHours,
@@ -34,6 +37,9 @@ func TestBoundsPinBackendTimestampDomainAndExactSpans(t *testing.T) {
 			MaximumSpanMonths,
 			MaximumSpanQuarters,
 			MaximumSpanYears,
+			MinimumYear,
+			MaximumYear,
+			YearRangeDescription,
 		)
 	}
 }

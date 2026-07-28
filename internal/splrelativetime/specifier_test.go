@@ -60,7 +60,7 @@ func TestCompileSpecifierNormalizesDocumentedOperationOrder(t *testing.T) {
 			},
 		},
 		{
-			name:   "implicit magnitude and second snap",
+			name:   "implicit magnitude without snap",
 			source: "+d",
 			operations: []Operation{
 				{
@@ -68,7 +68,6 @@ func TestCompileSpecifierNormalizesDocumentedOperationOrder(t *testing.T) {
 					Unit:      UnitDay,
 					Magnitude: 1,
 				},
-				{Kind: OperationSnap, Unit: UnitSecond},
 			},
 		},
 		{
@@ -79,7 +78,6 @@ func TestCompileSpecifierNormalizesDocumentedOperationOrder(t *testing.T) {
 					Kind: OperationOffset,
 					Unit: UnitSecond,
 				},
-				{Kind: OperationSnap, Unit: UnitSecond},
 			},
 		},
 		{
@@ -90,7 +88,6 @@ func TestCompileSpecifierNormalizesDocumentedOperationOrder(t *testing.T) {
 					Kind: OperationOffset,
 					Unit: UnitSecond,
 				},
-				{Kind: OperationSnap, Unit: UnitSecond},
 			},
 		},
 		{
@@ -123,7 +120,7 @@ func TestCompileSpecifierNormalizesDocumentedOperationOrder(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CompileSpecifier(%q): %v", test.source, err)
 			}
-			operations := compiled.Operations[:compiled.OperationCount]
+			operations := specifierOperations(compiled)
 			if !reflect.DeepEqual(operations, test.operations) {
 				t.Fatalf(
 					"CompileSpecifier(%q) operations = %#v, want %#v",
@@ -189,16 +186,34 @@ func TestCompileSpecifierAcceptsDocumentedUnitAliases(t *testing.T) {
 					Magnitude: 3,
 					Negative:  true,
 				}
-				if compiled.Operations[0] != want {
-					t.Fatalf("offset = %#v, want %#v", compiled.Operations[0], want)
+				operation, ok := compiled.Operation(0)
+				if !ok || operation != want {
+					t.Fatalf("offset = %#v/%t, want %#v", operation, ok, want)
 				}
-				if compiled.Operations[1] !=
-					(Operation{Kind: OperationSnap, Unit: UnitSecond}) {
-					t.Fatalf("implicit snap = %#v", compiled.Operations[1])
+				if compiled.OperationCount() != 1 {
+					t.Fatalf(
+						"operation count = %d, want offset only",
+						compiled.OperationCount(),
+					)
+				}
+				if _, ok := compiled.Operation(1); ok {
+					t.Fatal("out-of-range operation lookup unexpectedly succeeded")
 				}
 			})
 		}
 	}
+}
+
+func specifierOperations(specifier Specifier) []Operation {
+	operations := make([]Operation, 0, specifier.OperationCount())
+	for index := range specifier.OperationCount() {
+		operation, ok := specifier.Operation(index)
+		if !ok {
+			panic("validated specifier rejected an in-range operation")
+		}
+		operations = append(operations, operation)
+	}
+	return operations
 }
 
 func TestCompileSpecifierRejectsAmbiguousUnsupportedOrUnsafeSyntax(t *testing.T) {

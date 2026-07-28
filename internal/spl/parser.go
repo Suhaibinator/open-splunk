@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Suhaibinator/open-splunk/internal/searchtimebounds"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
 	"github.com/Suhaibinator/open-splunk/internal/splrelativetime"
@@ -2421,7 +2422,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				return nil, &Diagnostic{
 					Code: "SPL_NUMBER_OUT_OF_RANGE",
 					Message: "relative_time magnitude exceeds the supported " +
-						"1900-to-2262 timestamp span",
+						searchtimebounds.YearRangeDescription + " timestamp span",
 					Range: specifier.Range,
 				}
 			}

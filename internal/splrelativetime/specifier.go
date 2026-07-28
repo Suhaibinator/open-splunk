@@ -61,14 +61,35 @@ type Operation struct {
 
 // Specifier is one validated, normalized relative-time program.
 type Specifier struct {
-	Operations     [MaximumOperations]Operation
-	OperationCount uint8
+	operations     [MaximumOperations]Operation
+	operationCount uint8
 	WorkUnits      int
 }
 
+// OperationCount returns the number of validated operations.
+func (specifier Specifier) OperationCount() int {
+	return int(specifier.operationCount)
+}
+
+// Operation returns one validated operation without exposing mutable storage.
+func (specifier Specifier) Operation(index int) (Operation, bool) {
+	if index < 0 || index >= int(specifier.operationCount) {
+		return Operation{}, false
+	}
+	return specifier.operations[index], true
+}
+
+func (specifier *Specifier) appendOperation(operation Operation) error {
+	if specifier.operationCount >= MaximumOperations {
+		return ErrInvalidSpecifier
+	}
+	specifier.operations[specifier.operationCount] = operation
+	specifier.operationCount++
+	return nil
+}
+
 // CompileSpecifier accepts one optional signed offset, one optional snap, and
-// one optional signed post-snap offset. When the explicit snap is absent,
-// Splunk's documented second-boundary snap is appended to the typed program.
+// one optional signed post-snap offset. Offset-only programs do not snap.
 func CompileSpecifier(source string) (Specifier, error) {
 	if len(source) > MaximumSpecifierBytes {
 		return Specifier{}, ErrSpecifierTooLarge
@@ -86,33 +107,24 @@ func CompileSpecifier(source string) (Specifier, error) {
 		return Specifier{}, ErrSpecifierTooLarge
 	}
 
-	var operations [MaximumOperations]Operation
-	operationCount := 0
+	specifier := Specifier{WorkUnits: workUnits}
 	offset := 0
 	if source[offset] == '+' || source[offset] == '-' {
 		operation, next, err := parseOffset(source, offset)
 		if err != nil {
 			return Specifier{}, err
 		}
-		operations[operationCount] = operation
-		operationCount++
+		if err := specifier.appendOperation(operation); err != nil {
+			return Specifier{}, err
+		}
 		offset = next
 	}
 
 	if offset == len(source) {
-		if operationCount == 0 {
+		if specifier.operationCount == 0 {
 			return Specifier{}, ErrInvalidSpecifier
 		}
-		operations[operationCount] = Operation{
-			Kind: OperationSnap,
-			Unit: UnitSecond,
-		}
-		operationCount++
-		return Specifier{
-			Operations:     operations,
-			OperationCount: uint8(operationCount),
-			WorkUnits:      workUnits,
-		}, nil
+		return specifier, nil
 	}
 	if source[offset] != '@' {
 		return Specifier{}, ErrInvalidSpecifier
@@ -121,8 +133,9 @@ func CompileSpecifier(source string) (Specifier, error) {
 	if err != nil {
 		return Specifier{}, err
 	}
-	operations[operationCount] = snap
-	operationCount++
+	if err := specifier.appendOperation(snap); err != nil {
+		return Specifier{}, err
+	}
 	offset = next
 
 	if offset < len(source) {
@@ -133,18 +146,15 @@ func CompileSpecifier(source string) (Specifier, error) {
 		if err != nil {
 			return Specifier{}, err
 		}
-		operations[operationCount] = post
-		operationCount++
+		if err := specifier.appendOperation(post); err != nil {
+			return Specifier{}, err
+		}
 		offset = postEnd
 	}
-	if offset != len(source) || operationCount > MaximumOperations {
+	if offset != len(source) {
 		return Specifier{}, ErrInvalidSpecifier
 	}
-	return Specifier{
-		Operations:     operations,
-		OperationCount: uint8(operationCount),
-		WorkUnits:      workUnits,
-	}, nil
+	return specifier, nil
 }
 
 func parseOffset(source string, start int) (Operation, int, error) {
