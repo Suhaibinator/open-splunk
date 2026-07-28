@@ -243,6 +243,8 @@ const (
 	ScalarFunctionNow
 	ScalarFunctionStrftime
 	ScalarFunctionStrptime
+	ScalarFunctionRelativeTime
+	ScalarFunctionCount
 )
 
 // ReturnsBoolean reports the atomic result trait shared by parser, planner,

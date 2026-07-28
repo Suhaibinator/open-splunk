@@ -16,6 +16,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
+	"github.com/Suhaibinator/open-splunk/internal/splrelativetime"
 	"github.com/Suhaibinator/open-splunk/internal/spltimeformat"
 	"github.com/Suhaibinator/open-splunk/internal/splwildcard"
 )
@@ -1912,6 +1913,10 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			expectedArguments = 2
 			hasExactArity = true
 			functionName = "strptime"
+		case spl.ScalarFunctionRelativeTime:
+			expectedArguments = 2
+			hasExactArity = true
+			functionName = "relative_time"
 		case spl.ScalarFunctionToNumber:
 			expectedArguments = 1
 			hasExactArity = true
@@ -2257,6 +2262,55 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				}
 			}
 		}
+		if expression.Function == spl.ScalarFunctionRelativeTime {
+			if splScalarMayReturnBooleanFunction(expression.Arguments[0]) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message: "relative_time cannot consume a Boolean time value",
+					Range:   expression.Arguments[0].SourceRange(),
+				}
+			}
+			specifier, specifierRange, ok := splQuotedStringLiteral(
+				expression.Arguments[1],
+				expression.Range,
+			)
+			if !ok {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message: "relative_time specifier must be a quoted string literal",
+					Range:   specifierRange,
+				}
+			}
+			if _, err := splrelativetime.CompileSpecifier(
+				specifier.Value.Text,
+			); err != nil {
+				if errors.Is(err, splrelativetime.ErrSpecifierTooLarge) {
+					return nil, &Diagnostic{
+						Code: "SPL_QUERY_TOO_COMPLEX",
+						Message: fmt.Sprintf(
+							"relative_time specifier exceeds the %d-byte or %d-work-unit limit",
+							splrelativetime.MaximumSpecifierBytes,
+							splrelativetime.MaximumSpecifierWorkUnits,
+						),
+						Range: specifier.Range,
+					}
+				}
+				if errors.Is(err, splrelativetime.ErrMagnitudeOutOfRange) {
+					return nil, &Diagnostic{
+						Code: "SPL_NUMBER_OUT_OF_RANGE",
+						Message: "relative_time magnitude exceeds the supported " +
+							"1900-to-2262 timestamp span",
+						Range: specifier.Range,
+					}
+				}
+				return nil, &Diagnostic{
+					Code: "SPL_UNSUPPORTED_RELATIVE_TIME_SPECIFIER",
+					Message: "relative_time specifier is outside the supported " +
+						"bounded offset-and-snap subset",
+					Range: specifier.Range,
+				}
+			}
+		}
 		arguments := make([]ScalarExpression, 0, len(expression.Arguments))
 		for _, argument := range expression.Arguments {
 			converted, err := convertScalarExpressionUnchecked(argument)
@@ -2273,6 +2327,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			function = ScalarFunctionStrftime
 		case spl.ScalarFunctionStrptime:
 			function = ScalarFunctionStrptime
+		case spl.ScalarFunctionRelativeTime:
+			function = ScalarFunctionRelativeTime
 		case spl.ScalarFunctionToNumber:
 			function = ScalarFunctionToNumber
 		case spl.ScalarFunctionToString:

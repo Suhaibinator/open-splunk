@@ -83,6 +83,17 @@ func TestCompileSpecifierNormalizesDocumentedOperationOrder(t *testing.T) {
 			},
 		},
 		{
+			name:   "negative zero offset is canonicalized",
+			source: "-0seconds",
+			operations: []Operation{
+				{
+					Kind: OperationOffset,
+					Unit: UnitSecond,
+				},
+				{Kind: OperationSnap, Unit: UnitSecond},
+			},
+		},
+		{
 			name:   "sunday week default",
 			source: "@week",
 			operations: []Operation{
@@ -112,11 +123,12 @@ func TestCompileSpecifierNormalizesDocumentedOperationOrder(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CompileSpecifier(%q): %v", test.source, err)
 			}
-			if !reflect.DeepEqual(compiled.Operations, test.operations) {
+			operations := compiled.Operations[:compiled.OperationCount]
+			if !reflect.DeepEqual(operations, test.operations) {
 				t.Fatalf(
 					"CompileSpecifier(%q) operations = %#v, want %#v",
 					test.source,
-					compiled.Operations,
+					operations,
 					test.operations,
 				)
 			}
@@ -208,15 +220,6 @@ func TestCompileSpecifierRejectsAmbiguousUnsupportedOrUnsafeSyntax(t *testing.T)
 		"@d ",
 		"@ day",
 		"+-1d",
-		"+18446744073709551616s",
-		"+12000000001s",
-		"+200000001m",
-		"+3400001h",
-		"+140001d",
-		"+20001w",
-		"+4401mon",
-		"+1501q",
-		"+401y",
 		"@w01",
 		"@month1",
 		"+1d\x00",
@@ -232,6 +235,47 @@ func TestCompileSpecifierRejectsAmbiguousUnsupportedOrUnsafeSyntax(t *testing.T)
 				err,
 			)
 		}
+	}
+}
+
+func TestCompileSpecifierPinsExactMagnitudeBounds(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name       string
+		accepted   string
+		outOfRange string
+	}{
+		{"seconds", "+11423635200s", "+11423635201s"},
+		{"minutes", "+190393920m", "+190393921m"},
+		{"hours", "+3173232h", "+3173233h"},
+		{"days", "+132218d", "+132219d"},
+		{"weeks", "+18888w", "+18889w"},
+		{"months", "+4344mon", "+4345mon"},
+		{"quarters", "+1448q", "+1449q"},
+		{"years", "+362y", "+363y"},
+		{"uint64 overflow", "", "+18446744073709551616s"},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if test.accepted != "" {
+				if _, err := CompileSpecifier(test.accepted); err != nil {
+					t.Fatalf("CompileSpecifier(%q): %v", test.accepted, err)
+				}
+			}
+			if _, err := CompileSpecifier(test.outOfRange); !errors.Is(
+				err,
+				ErrMagnitudeOutOfRange,
+			) {
+				t.Fatalf(
+					"CompileSpecifier(%q) error = %v, want ErrMagnitudeOutOfRange",
+					test.outOfRange,
+					err,
+				)
+			}
+		})
 	}
 }
 
@@ -252,5 +296,23 @@ func TestCompileSpecifierPinsIndependentResourceLimits(t *testing.T) {
 		"+" + strings.Repeat("0", MaximumSpecifierBytes) + "s",
 	); !errors.Is(err, ErrSpecifierTooLarge) {
 		t.Fatalf("oversized specifier error = %v, want ErrSpecifierTooLarge", err)
+	}
+}
+
+var (
+	compiledSpecifierSink      Specifier
+	compiledSpecifierErrorSink error
+)
+
+func TestCompileSpecifierDoesNotAllocateForBoundedPrograms(t *testing.T) {
+	allocations := testing.AllocsPerRun(100, func() {
+		compiledSpecifierSink, compiledSpecifierErrorSink =
+			CompileSpecifier("-1d@d+2h")
+	})
+	if compiledSpecifierErrorSink != nil {
+		t.Fatalf("CompileSpecifier: %v", compiledSpecifierErrorSink)
+	}
+	if allocations != 0 {
+		t.Fatalf("CompileSpecifier allocations = %g, want 0", allocations)
 	}
 }

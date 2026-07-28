@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strconv"
 	"unicode/utf8"
+
+	"github.com/Suhaibinator/open-splunk/internal/searchtimebounds"
 )
 
 const (
@@ -15,7 +17,10 @@ const (
 )
 
 var (
-	ErrInvalidSpecifier  = errors.New("invalid relative-time specifier")
+	ErrInvalidSpecifier    = errors.New("invalid relative-time specifier")
+	ErrMagnitudeOutOfRange = errors.New(
+		"relative-time magnitude exceeds the representable timestamp domain",
+	)
 	ErrSpecifierTooLarge = errors.New(
 		"relative-time specifier exceeds its resource limit",
 	)
@@ -56,8 +61,9 @@ type Operation struct {
 
 // Specifier is one validated, normalized relative-time program.
 type Specifier struct {
-	Operations []Operation
-	WorkUnits  int
+	Operations     [MaximumOperations]Operation
+	OperationCount uint8
+	WorkUnits      int
 }
 
 // CompileSpecifier accepts one optional signed offset, one optional snap, and
@@ -80,26 +86,33 @@ func CompileSpecifier(source string) (Specifier, error) {
 		return Specifier{}, ErrSpecifierTooLarge
 	}
 
-	operations := make([]Operation, 0, MaximumOperations)
+	var operations [MaximumOperations]Operation
+	operationCount := 0
 	offset := 0
 	if source[offset] == '+' || source[offset] == '-' {
 		operation, next, err := parseOffset(source, offset)
 		if err != nil {
 			return Specifier{}, err
 		}
-		operations = append(operations, operation)
+		operations[operationCount] = operation
+		operationCount++
 		offset = next
 	}
 
 	if offset == len(source) {
-		if len(operations) == 0 {
+		if operationCount == 0 {
 			return Specifier{}, ErrInvalidSpecifier
 		}
-		operations = append(operations, Operation{
+		operations[operationCount] = Operation{
 			Kind: OperationSnap,
 			Unit: UnitSecond,
-		})
-		return Specifier{Operations: operations, WorkUnits: workUnits}, nil
+		}
+		operationCount++
+		return Specifier{
+			Operations:     operations,
+			OperationCount: uint8(operationCount),
+			WorkUnits:      workUnits,
+		}, nil
 	}
 	if source[offset] != '@' {
 		return Specifier{}, ErrInvalidSpecifier
@@ -108,7 +121,8 @@ func CompileSpecifier(source string) (Specifier, error) {
 	if err != nil {
 		return Specifier{}, err
 	}
-	operations = append(operations, snap)
+	operations[operationCount] = snap
+	operationCount++
 	offset = next
 
 	if offset < len(source) {
@@ -119,13 +133,18 @@ func CompileSpecifier(source string) (Specifier, error) {
 		if err != nil {
 			return Specifier{}, err
 		}
-		operations = append(operations, post)
+		operations[operationCount] = post
+		operationCount++
 		offset = postEnd
 	}
-	if offset != len(source) || len(operations) > MaximumOperations {
+	if offset != len(source) || operationCount > MaximumOperations {
 		return Specifier{}, ErrInvalidSpecifier
 	}
-	return Specifier{Operations: operations, WorkUnits: workUnits}, nil
+	return Specifier{
+		Operations:     operations,
+		OperationCount: uint8(operationCount),
+		WorkUnits:      workUnits,
+	}, nil
 }
 
 func parseOffset(source string, start int) (Operation, int, error) {
@@ -138,23 +157,29 @@ func parseOffset(source string, start int) (Operation, int, error) {
 	for offset < len(source) && asciiDigit(source[offset]) {
 		offset++
 	}
-	if digitStart == offset {
-		operation.Magnitude = 1
-	} else {
-		magnitude, err := strconv.ParseUint(source[digitStart:offset], 10, 64)
-		if err != nil {
-			return Operation{}, 0, ErrInvalidSpecifier
-		}
-		operation.Magnitude = magnitude
-	}
-
 	unitStart := offset
 	for offset < len(source) && asciiLetter(source[offset]) {
 		offset++
 	}
 	unit, ok := normalizeUnit(source[unitStart:offset])
-	if !ok || operation.Magnitude > maximumMagnitude(unit) {
+	if !ok {
 		return Operation{}, 0, ErrInvalidSpecifier
+	}
+
+	if digitStart == unitStart {
+		operation.Magnitude = 1
+	} else {
+		magnitude, err := strconv.ParseUint(source[digitStart:unitStart], 10, 64)
+		if err != nil {
+			return Operation{}, 0, ErrMagnitudeOutOfRange
+		}
+		operation.Magnitude = magnitude
+	}
+	if operation.Magnitude > maximumMagnitude(unit) {
+		return Operation{}, 0, ErrMagnitudeOutOfRange
+	}
+	if operation.Magnitude == 0 {
+		operation.Negative = false
 	}
 	operation.Unit = unit
 	return operation, offset, nil
@@ -215,21 +240,21 @@ func normalizeUnit(source string) (Unit, bool) {
 func maximumMagnitude(unit Unit) uint64 {
 	switch unit {
 	case UnitSecond:
-		return 12_000_000_000
+		return searchtimebounds.MaximumSpanSeconds
 	case UnitMinute:
-		return 200_000_000
+		return searchtimebounds.MaximumSpanMinutes
 	case UnitHour:
-		return 3_400_000
+		return searchtimebounds.MaximumSpanHours
 	case UnitDay:
-		return 140_000
+		return searchtimebounds.MaximumSpanDays
 	case UnitWeek:
-		return 20_000
+		return searchtimebounds.MaximumSpanWeeks
 	case UnitMonth:
-		return 4_400
+		return searchtimebounds.MaximumSpanMonths
 	case UnitQuarter:
-		return 1_500
+		return searchtimebounds.MaximumSpanQuarters
 	case UnitYear:
-		return 400
+		return searchtimebounds.MaximumSpanYears
 	default:
 		return 0
 	}

@@ -211,6 +211,21 @@ func TestScalarFunctionBooleanTraitsRemainInParity(t *testing.T) {
 		{spl.ScalarFunctionNow, ScalarFunctionNow, false},
 		{spl.ScalarFunctionStrftime, ScalarFunctionStrftime, false},
 		{spl.ScalarFunctionStrptime, ScalarFunctionStrptime, false},
+		{spl.ScalarFunctionRelativeTime, ScalarFunctionRelativeTime, false},
+	}
+	if len(functions) != int(spl.ScalarFunctionCount) {
+		t.Fatalf(
+			"registered scalar functions = %d, want SPL %d",
+			len(functions),
+			spl.ScalarFunctionCount,
+		)
+	}
+	if len(functions) != int(ScalarFunctionCount) {
+		t.Fatalf(
+			"registered scalar functions = %d, want plan %d",
+			len(functions),
+			ScalarFunctionCount,
+		)
 	}
 	for index, function := range functions {
 		if int(function.spl) != index || int(function.plan) != index {
