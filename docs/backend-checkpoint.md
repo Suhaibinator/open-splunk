@@ -7,7 +7,111 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: sealed and bounded ClickHouse EXPLAIN
+## Latest checkpoint: bounded internal search inspection
+
+Date: 2026-07-28
+
+Committed and pushed checkpoint:
+
+- `e43ea10` — access-scoped completed-search plan inspection with a detached
+  logical projection and bounded ClickHouse EXPLAIN.
+
+This test-first slice completes the internal administrator-diagnostic layer
+without exposing sensitive plans through the unauthenticated browser API:
+
+1. `searchinspection.Service` accepts only a canonical tenant/owner scope and
+   search-job ID, performs a metadata-only lookup of one completed, unexpired
+   execution snapshot, and never acquires or extends a retained-result lease.
+   A second authoritative lookup after EXPLAIN must equal the exact first
+   snapshot, so expiry, tombstone cleanup, or execution-scope drift prevents
+   atomic publication.
+2. The service rebuilds the retained search with its exact effective indexes,
+   absolute time range, search anchor/timezone, `_indextime` cutoff, and
+   visibility cutoff. It compiles exactly once and passes the resulting sealed
+   `CompiledQuery`, including its argument slice, unchanged to `Explainer`.
+3. The returned logical plan is a detached projection containing only
+   canonical operator names, sorted logical read/write field names, bounded
+   final shape, and exact half-open UTF-8 source coordinates. SPL text,
+   predicates, literal values, regexes, JSON paths, labels, arguments,
+   snapshots, result rows, and mutable logical-plan pointers are omitted.
+4. Projection is capped at 256 stages, 1,024 fields per stage, 4,096 final
+   static fields, 16,384 total projected field occurrences, one MiB of
+   projected strings, and the parser's 16 KiB source ceiling. Generated SQL
+   must retain its compiler seal and remain within 256 KiB. EXPLAIN output is
+   revalidated against `queryexec`'s canonical one-MiB/4,096-row contract at
+   the arbitrary dependency boundary.
+5. Admission is fail-fast at two concurrent inspections before snapshot,
+   planning, compilation, or timer work. Every admitted operation has an exact
+   ten-second deadline. `Close` synchronously stops admission, cancels every
+   registered operation, joins dependency calls, is concurrent/idempotent, and
+   can be retried after a caller's close deadline expires.
+6. Search-job execution snapshots now own canonical instant-aware equality,
+   and the manager and inspection service share hard 256-entry index-scope and
+   256-byte job-ID ceilings. Custom job-ID generators must produce nonempty,
+   unpadded, control-free UTF-8 IDs, preventing the manager from creating a job
+   that inspection cannot address.
+7. `queryexec.ValidateExplainResult` is the reusable buffered-result contract.
+   The concrete Explainer continues to enforce rows, lines, UTF-8, controls,
+   and cumulative bytes while streaming; inspection performs one independent
+   scan for arbitrary Explainer implementations rather than redundantly
+   rescanning the concrete result twice.
+8. Planner field resolution now rejects the complete Unicode control category,
+   including C1 controls, so every accepted field name can be projected without
+   a later diagnostic-only incompatibility.
+9. The package deliberately has no protobuf, HTTP, server-runtime,
+   feature-advertisement, or UI seam. Generated SQL and ClickHouse plans can
+   reveal schema detail or rendered bind values and remain internal until a
+   genuine administrator identity/role boundary exists.
+10. Three-way correctness, confidentiality/security, and efficiency/reuse
+    review found and closed snapshot-field comparison drift, duplicated
+    operator metadata and EXPLAIN validation, a manager/inspection index-scope
+    mismatch, noncanonical generated job IDs, redundant postflight rescans,
+    projection ceilings that rejected valid accumulated outputs, and
+    Close/cancellation publication races. Final targeted rereviews reported no
+    remaining finding.
+
+Validation on the pushed implementation:
+
+```sh
+go test ./... -count=1
+go test -race \
+  ./internal/searchinspection ./internal/plan ./internal/clickhouse \
+  ./internal/searchjobs -count=1
+go test -race ./internal/queryexec \
+  -run '^Test(ValidateExplainResult|Explainer(Buffers|Accepts|RejectsDriver|RequiresExact|BoundsRendered|Detaches|PreservesExact|RejectsInvalidState|RequiresUnchanged|RejectsMalformed|EnforcesText|Sanitizes|Cancellation|HasTwo|CloseCancels|CloseSanitizes|ClosedState)|ExplainTestFixtures)' \
+  -count=1
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/searchinspection \
+    -run '^TestServiceAgainstClickHouse$' -count=1 -timeout=6m
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=5m ./...
+npm run lint
+git diff --check
+```
+
+The exact pinned ClickHouse service integration passed in 7.052 seconds.
+Repository-wide Go lint reported zero issues.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain `e43ea10`.
+2. Keep inspection internal. Do not add protobuf, HTTP, runtime advertisement,
+   or UI wiring before the Phase 3 administrator identity/role boundary.
+3. Exercise the internal service against the pinned ten-query/load corpus and
+   retain bounded evidence for plan shape, scanned rows/bytes, partitions,
+   ordering-key use, text indexes, and promoted versus dynamic fields.
+4. Add a schema, ordering, projection, skip-index, or promoted-field migration
+   only when that evidence demonstrates a concrete improvement without
+   changing SPL results or chronological ordering.
+5. Finish the Phase 3 administrator identity boundary before exposing
+   inspection, then continue through HEC, alerts, scheduled search, and
+   packaging without weakening current compiler, lifecycle, and corpus
+   regressions.
+
+## Previous checkpoint: sealed and bounded ClickHouse EXPLAIN
 
 Date: 2026-07-27
 
