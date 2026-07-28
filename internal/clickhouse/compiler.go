@@ -112,6 +112,10 @@ const (
 	// date-format lowering. The time operand is bound once before directive
 	// expansion, so nested numeric producers grow linearly inside this ceiling.
 	maxCompiledStrftimeScalarSQLBytes = 64 << 10
+	// maxCompiledStrptimeScalarSQLBytes independently bounds one portable
+	// date-parser lowering. The String operand and parser result are each bound
+	// once, so nested text producers grow linearly inside this ceiling.
+	maxCompiledStrptimeScalarSQLBytes = 64 << 10
 	// MaximumMatchInputBytes bounds regex work against calculated strings. A
 	// stored event is capped at 1 MiB; the wider allowance admits one worst-
 	// case UTF-8 case conversion while rejecting large replace amplification.
@@ -130,6 +134,16 @@ const (
 	// MaximumStrftimeQueryOutputBytes bounds conservative per-row publication
 	// across all strftime occurrences, before the whole-query SQL ceiling.
 	MaximumStrftimeQueryOutputBytes uint64 = 64 << 10
+	// MaximumStrptimeInputBytes bounds the text examined by one parser call.
+	// Longer stored values fail closed to null at runtime rather than making a
+	// durable 1 MiB field a plan-time rejection.
+	MaximumStrptimeInputBytes uint64 = 4 << 10
+	// MaximumStrptimeQueryWorkUnits bounds the sum of validated format parts
+	// across every strptime occurrence in a forged or parser-produced plan.
+	MaximumStrptimeQueryWorkUnits = 16 << 10
+	// MaximumStrptimeQueryInputBytes bounds aggregate date-parser work for one
+	// result row after every occurrence applies its per-value input ceiling.
+	MaximumStrptimeQueryInputBytes uint64 = 64 << 10
 	// MaximumStoredScalarBytes mirrors the hard ingestion ceiling for one
 	// complete event and therefore bounds every durable scalar source.
 	MaximumStoredScalarBytes = 1 << 20
@@ -3142,6 +3156,7 @@ type compileState struct {
 type compileContext struct {
 	patternBudgets         compiledPatternBudgets
 	strftimeBudget         compiledStrftimeBudget
+	strptimeBudget         compiledStrptimeBudget
 	searchStartUnix        int64
 	searchTimezone         string
 	searchTimezoneChecked  bool
@@ -3161,6 +3176,9 @@ func newCompileContext(searchStart time.Time, searchTimezone string) *compileCon
 		strftimeBudget: compiledStrftimeBudget{
 			formats: make(map[*plan.ScalarCallExpression]spltimeformat.StrftimeFormat),
 		},
+		strptimeBudget: compiledStrptimeBudget{
+			formats: make(map[*plan.ScalarCallExpression]spltimeformat.StrptimeFormat),
+		},
 		searchStartUnix: searchStart.Unix(),
 		searchTimezone:  strings.Clone(searchTimezone),
 	}
@@ -3170,6 +3188,12 @@ type compiledStrftimeBudget struct {
 	formats     map[*plan.ScalarCallExpression]spltimeformat.StrftimeFormat
 	workUnits   int
 	outputBytes uint64
+}
+
+type compiledStrptimeBudget struct {
+	formats    map[*plan.ScalarCallExpression]spltimeformat.StrptimeFormat
+	workUnits  int
+	inputBytes uint64
 }
 
 type compiledMatchBudget struct {
@@ -3947,6 +3971,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileNowScalar(expression, state)
 		case plan.ScalarFunctionStrftime:
 			return compileStrftimeScalar(expression, state)
+		case plan.ScalarFunctionStrptime:
+			return compileStrptimeScalar(expression, state)
 		case plan.ScalarFunctionReplace:
 			return compileReplaceScalar(expression, state)
 		case plan.ScalarFunctionToNumber:
@@ -4159,10 +4185,201 @@ func validateCompileContextSearchTimezone(context *compileContext) error {
 	context.searchTimezoneChecked = true
 	if _, err := ianatimezone.Load(context.searchTimezone); err != nil {
 		context.searchTimezoneCheckErr = errors.New(
-			"compile ClickHouse strftime: search timezone is invalid",
+			"compile ClickHouse date/time function: search timezone is invalid",
 		)
 	}
 	return context.searchTimezoneCheckErr
+}
+
+func compileStrptimeScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+) (compiledScalar, error) {
+	if expression == nil {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse strptime: missing expression",
+		)
+	}
+	if len(expression.Arguments) != 2 {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse strptime: expected two arguments",
+		)
+	}
+	format, ok := scalarQuotedStringLiteral(expression.Arguments[1])
+	if !ok {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse strptime: format must be a quoted string literal",
+		)
+	}
+	if state.context == nil {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse strptime: search timezone is required",
+		)
+	}
+	if err := validateCompileContextSearchTimezone(state.context); err != nil {
+		return compiledScalar{}, err
+	}
+
+	compiledFormat, cached := state.context.strptimeBudget.formats[expression]
+	if !cached {
+		var err error
+		compiledFormat, err = compileStrptimeFormatForBackend(
+			format,
+			expression.Arguments[1].SourceRange(),
+		)
+		if err != nil {
+			return compiledScalar{}, err
+		}
+		state.context.strptimeBudget.formats[expression] = compiledFormat
+	}
+	if compiledFormat.WorkUnits >
+		MaximumStrptimeQueryWorkUnits-state.context.strptimeBudget.workUnits {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"search strptime formats require more than %d work units",
+				MaximumStrptimeQueryWorkUnits,
+			),
+			Range: expression.Range,
+		}
+	}
+	state.context.strptimeBudget.workUnits += compiledFormat.WorkUnits
+
+	input, err := compileNonBooleanScalarInputArgument(
+		expression.Arguments[0],
+		state,
+		"strptime",
+	)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	if input.kind == fieldKindStringArray {
+		return compiledScalar{}, unsupportedMultivalueUsage(
+			"strptime",
+			expression.Range,
+		)
+	}
+	if input.alwaysNull || input.kind == fieldKindInvalid {
+		return compiledScalar{
+			valueSQL:                "CAST(NULL AS Nullable(Float64))",
+			maxStringBytes:          1,
+			existsSQL:               "1",
+			kind:                    fieldKindNumber,
+			numberType:              "Float64",
+			alwaysNull:              true,
+			materializeForPredicate: input.materializeForPredicate,
+		}, nil
+	}
+	if input.kind != fieldKindString && input.kind != fieldKindDynamic {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_UNSUPPORTED_STRPTIME_VALUE_TYPE",
+			Message: "strptime requires a String timestamp value in " +
+				"compatibility version 0.1",
+			Range: expression.Arguments[0].SourceRange(),
+		}
+	}
+
+	inputBytes := min(
+		compiledScalarStringByteBound(input),
+		MaximumStrptimeInputBytes,
+	)
+	if inputBytes >
+		MaximumStrptimeQueryInputBytes-state.context.strptimeBudget.inputBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"search strptime inputs require more than %d bytes of date parsing per row",
+				MaximumStrptimeQueryInputBytes,
+			),
+			Range: expression.Range,
+		}
+	}
+	state.context.strptimeBudget.inputBytes += inputBytes
+
+	jodaPattern, err := compileStrptimeJodaPattern(compiledFormat.Parts)
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	inputSQL, inputArgs := compiledTextEligibleStringScalar(input)
+	parserSQL := "if(ifNull(length(value) <= " +
+		strconv.FormatUint(MaximumStrptimeInputBytes, 10) +
+		", 0), parseDateTime64InJodaSyntaxOrNull(value, ?, ?), NULL)"
+	microsecondsSQL := "toUnixTimestamp64Micro(" + parserSQL + ")"
+	epochSQL := "arrayElement(arrayMap(microseconds -> if(" +
+		"isNull(microseconds) OR microseconds < 31536000000000, " +
+		"CAST(NULL AS Nullable(Float64)), " +
+		"toFloat64(microseconds) / 1000000), [" + microsecondsSQL + "]), 1)"
+	valueSQL := "arrayElement(arrayMap(value -> " + epochSQL +
+		", [" + inputSQL + "]), 1)"
+	if len(valueSQL) > maxCompiledStrptimeScalarSQLBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"strptime scalar SQL exceeds %d bytes",
+				maxCompiledStrptimeScalarSQLBytes,
+			),
+			Range: expression.Range,
+		}
+	}
+	valueArgs := make([]any, 0, 2+len(inputArgs))
+	valueArgs = append(
+		valueArgs,
+		jodaPattern,
+		state.context.searchTimezone,
+	)
+	valueArgs = append(valueArgs, inputArgs...)
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               valueArgs,
+		maxStringBytes:          64,
+		existsSQL:               "1",
+		kind:                    fieldKindNumber,
+		numberType:              "Float64",
+		materializeForPredicate: input.materializeForPredicate,
+	}, nil
+}
+
+func compileStrptimeFormatForBackend(
+	format string,
+	sourceRange spl.Range,
+) (spltimeformat.StrptimeFormat, error) {
+	compiled, err := spltimeformat.CompileStrptimeFormat(format)
+	if err == nil {
+		return compiled, nil
+	}
+	if errors.Is(err, spltimeformat.ErrStrptimeFormatTooLarge) {
+		return spltimeformat.StrptimeFormat{}, &plan.Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: "strptime format exceeds its resource limit",
+			Range:   sourceRange,
+		}
+	}
+	return spltimeformat.StrptimeFormat{}, &plan.Diagnostic{
+		Code: "SPL_UNSUPPORTED_TIME_FORMAT",
+		Message: "strptime format is outside the supported deterministic " +
+			"full-date parsing subset",
+		Range: sourceRange,
+	}
+}
+
+func compileStrptimeJodaPattern(
+	parts []spltimeformat.Part,
+) (string, error) {
+	var pattern strings.Builder
+	for _, part := range parts {
+		if appendStrftimeJodaPart(&pattern, part) {
+			continue
+		}
+		if part.Directive == spltimeformat.DirectiveTimezoneOffset {
+			pattern.WriteByte('Z')
+			continue
+		}
+		return "", fmt.Errorf(
+			"compile ClickHouse strptime: unsupported directive %d",
+			part.Directive,
+		)
+	}
+	return pattern.String(), nil
 }
 
 func compileStrftimeFormatForBackend(
@@ -5283,6 +5500,23 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			if !ok {
 				return errors.New(
 					"compile ClickHouse predicate: strftime format must be a quoted string literal",
+				)
+			}
+		case plan.ScalarFunctionStrptime:
+			if len(expression.Arguments) != 2 {
+				return errors.New(
+					"compile ClickHouse predicate: strptime requires exactly two arguments",
+				)
+			}
+			if nilScalarExpression(expression.Arguments[1]) {
+				return errors.New(
+					"compile ClickHouse predicate: strptime has a missing format",
+				)
+			}
+			_, ok := scalarQuotedStringLiteral(expression.Arguments[1])
+			if !ok {
+				return errors.New(
+					"compile ClickHouse predicate: strptime format must be a quoted string literal",
 				)
 			}
 		case plan.ScalarFunctionRound:
