@@ -7,7 +7,124 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded GORM control plane
+## Latest checkpoint: durable ingestion-token last use
+
+Date: 2026-07-28
+
+Committed and pushed checkpoints:
+
+- `f81dc75` — migration, GORM projection, and monotonic token-use persistence;
+- `b681348` — one synchronous token-use write per accepted native stream;
+- `003e9aa` — administrator projection, optional-time sorting, and stale-page
+  detection; and
+- `6c0b329` — production adapter/wiring plus real HTTP, gRPC, SQLite, and
+  restart proof.
+
+This slice completes the Phase 3 ingestion-token creation/revocation/last-seen
+contract without prematurely advertising a collector-fleet API:
+
+1. SQLite migration `0011_ingestion_token_last_used.sql` adds nullable
+   `last_used_at_unix_micro` with a check that every recorded use is at or
+   after token creation. Existing rows upgrade to `NULL`. SQL migrations
+   remain authoritative; the explicit GORM model and schema-parity tests map
+   the column without calling `AutoMigrate`.
+2. `auth.CollectorToken.LastUsedAt` is safe metadata and is projected by
+   create/get/list as zero until the first accepted stream. The persisted
+   value survives database and process-store reopen.
+3. `RecordCollectorTokenUse` performs one atomic GORM `UpdateColumn`. It keeps
+   the maximum observation under concurrent connections and older/equal
+   clocks, requires an active and unexpired token, and collapses inactive
+   states behind one internal error category.
+4. Token use is operational telemetry. Recording it never increments the
+   administrator optimistic-lock version or changes `updated_at`, so active
+   collectors cannot invalidate unrelated administrator metadata updates.
+5. The acceptance time is captured from the server clock after bearer
+   authentication and complete `CollectorHello` identity/protocol validation,
+   and before `CollectorReady`. A wall-clock correction behind the token's
+   durable creation timestamp is clamped to that lower bound; it cannot move a
+   newer observation backward or falsely deauthenticate the already-validated
+   credential.
+6. The ingestion service passes only the safe token subject ID and server
+   acceptance time to a narrow recorder. It never passes plaintext or digest
+   material and does not write for invalid authentication, malformed Hello,
+   invalid stream allocation, heartbeats, batch reauthorization, or
+   individual batches.
+7. A recorder failure prevents readiness. Inactive-token races map to a
+   sanitized `Unauthenticated`; cancellation and deadline identities retain
+   their transport categories; all other persistence failures become a
+   generic retryable `Unavailable` without exposing SQLite diagnostics.
+8. The production adapter deliberately translates auth-layer inactive errors
+   into the ingestion boundary's credential sentinel. Production always wires
+   the process-owned token store into the service while preserving the
+   control database's single close owner.
+9. The existing administrator protobuf `last_used_at` field is now populated
+   and the existing `INGESTION_TOKEN_SORT_BY_LAST_USED_AT` mode is enabled.
+   Unused values follow the established optional-time order and token ID is
+   the deterministic tie-breaker in both directions.
+10. Signed administrator page tokens bind all filters, sort direction, page
+    size, and an exact snapshot. Last-use timestamps are part of that snapshot
+    even though they do not alter token versions, so a telemetry update cannot
+    produce a mixed or reordered continuation page.
+11. A real runtime test opens the migrated control database through production
+    key derivation, creates a scoped token through authenticated HTTP, admits a
+    native gRPC collector stream using the one-time secret, observes the exact
+    server timestamp through authenticated HTTP get/list, closes the handler
+    and database, reopens both with the persisted master key, and observes the
+    same timestamp and unchanged CAS metadata.
+12. Independent adversarial reviews covered migration compatibility,
+    SQLite/GORM matched-row behavior, concurrency, clock rollback, error
+    secrecy, stream ordering, runtime wiring, resource shutdown, optional-time
+    sorting, timestamp validation, response bounds, and cursor snapshots. One
+    P2 clock-rollback rejection was found, fixed with the atomic
+    creation-boundary clamp, stress-regressed, and re-reviewed. No P0/P1/P2
+    findings remain.
+
+Validation on pushed commit `6c0b329`:
+
+```sh
+go test ./... -count=1
+go test -race \
+  ./internal/auth ./internal/control ./internal/ingest \
+  ./internal/server ./cmd/open-splunk-server \
+  -count=1
+go vet ./...
+go build ./...
+/private/tmp/open-splunk-golangci-lint-v2.12.2 \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+git diff --check
+```
+
+All Go packages and the combined auth/control/ingestion/server/runtime race
+suites passed. Vet and build passed, and pinned golangci-lint v2.12.2 reported
+`0 issues`. Focused clock-rollback, concurrent-monotonicity, admission,
+projection, sorting, paging, and reopen tests were additionally repeated
+between 20 and 50 times under normal and race builds. The listener-based full
+and race suites were run outside the filesystem/network sandbox after their
+initial sandbox attempts were denied loopback binds.
+
+This slice does not change SPL parsing, planning, generated ClickHouse SQL, or
+event insertion, and its real stream intentionally stops after readiness.
+The preceding pinned all-ten-query GradeThis gate therefore remains the
+relevant ClickHouse compatibility evidence.
+
+Next priorities:
+
+1. Define and implement non-bypassable collector identity binding and instance
+   fencing before persisting or advertising collector fleet administration.
+2. Once identity is durable, add a read-only persisted fleet catalog with
+   bounded, coalesced heartbeat writes and explicit stale/offline semantics;
+   defer administrative disablement until a collector cannot evade it by
+   choosing a new ID.
+3. Continue Phase 3 with reports/dashboards, per-index user permissions, HEC
+   compatibility, and expanded RBAC/audit search after their unresolved
+   contracts are made explicit.
+4. Retain the lifecycle backlog: bounded ingestion-token tombstones, surfaced
+   export-deletion failures, physical search-history cleanup, completion of
+   deleting-index state, and a bounded WebSocket shutdown dependency.
+5. Keep every SPL change behind unit, adversarial, and pinned ClickHouse
+   compatibility evidence.
+
+## Previous checkpoint: bounded GORM control plane
 
 Date: 2026-07-28
 
