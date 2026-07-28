@@ -144,6 +144,12 @@ const (
 	// MaximumStrptimeQueryInputBytes bounds aggregate date-parser work for one
 	// result row after every occurrence applies its per-value input ceiling.
 	MaximumStrptimeQueryInputBytes uint64 = 64 << 10
+	// strptime accepts authored civil dates from Splunk's documented lower
+	// bound through ClickHouse DateTime64's portable upper calendar year.
+	// Validate the authored date before timezone conversion so explicit
+	// offsets cannot move a supported date across either policy boundary.
+	minimumStrptimeCivilDate = 19710101
+	maximumStrptimeCivilDate = 22991231
 	// MaximumStoredScalarBytes mirrors the hard ingestion ceiling for one
 	// complete event and therefore bounds every durable scalar source.
 	MaximumStoredScalarBytes = 1 << 20
@@ -3176,9 +3182,6 @@ func newCompileContext(searchStart time.Time, searchTimezone string) *compileCon
 		strftimeBudget: compiledStrftimeBudget{
 			formats: make(map[*plan.ScalarCallExpression]spltimeformat.StrftimeFormat),
 		},
-		strptimeBudget: compiledStrptimeBudget{
-			formats: make(map[*plan.ScalarCallExpression]spltimeformat.StrptimeFormat),
-		},
 		searchStartUnix: searchStart.Unix(),
 		searchTimezone:  strings.Clone(searchTimezone),
 	}
@@ -4230,6 +4233,10 @@ func compileStrptimeScalar(
 		if err != nil {
 			return compiledScalar{}, err
 		}
+		if state.context.strptimeBudget.formats == nil {
+			state.context.strptimeBudget.formats =
+				make(map[*plan.ScalarCallExpression]spltimeformat.StrptimeFormat)
+		}
 		state.context.strptimeBudget.formats[expression] = compiledFormat
 	}
 	if compiledFormat.WorkUnits >
@@ -4296,18 +4303,48 @@ func compileStrptimeScalar(
 	}
 	state.context.strptimeBudget.inputBytes += inputBytes
 
-	jodaPattern, err := compileStrptimeJodaPattern(compiledFormat.Parts)
+	patterns, err := compileStrptimePatterns(compiledFormat.Parts)
 	if err != nil {
 		return compiledScalar{}, err
 	}
 	inputSQL, inputArgs := compiledTextEligibleStringScalar(input)
-	parserSQL := "if(ifNull(length(value) <= " +
+	parserSQL := "parseDateTime64InJodaSyntaxOrNull(value, ?, ?)"
+	parserArgs := []any{
+		patterns.primaryJoda,
+		state.context.searchTimezone,
+	}
+	if patterns.fallbackJoda != "" {
+		parserSQL = "arrayElement(arrayMap(primary -> if(isNotNull(primary), " +
+			"primary, parseDateTime64InJodaSyntaxOrNull(value, ?, ?)), [" +
+			parserSQL + "]), 1)"
+		parserArgs = []any{
+			patterns.fallbackJoda,
+			state.context.searchTimezone,
+			patterns.primaryJoda,
+			state.context.searchTimezone,
+		}
+	}
+	maximumDateGroup := max(
+		patterns.yearGroup,
+		patterns.monthGroup,
+		patterns.dayGroup,
+	)
+	civilDateSQL := "toUInt32OrZero(arrayElement(groups, " +
+		strconv.Itoa(patterns.yearGroup) + ")) * 10000 + " +
+		"toUInt32OrZero(arrayElement(groups, " +
+		strconv.Itoa(patterns.monthGroup) + ")) * 100 + " +
+		"toUInt32OrZero(arrayElement(groups, " +
+		strconv.Itoa(patterns.dayGroup) + "))"
+	parserSQL = "if(ifNull(length(value) <= " +
 		strconv.FormatUint(MaximumStrptimeInputBytes, 10) +
-		", 0), parseDateTime64InJodaSyntaxOrNull(value, ?, ?), NULL)"
+		", 0), arrayElement(arrayMap(groups -> if(length(groups) >= " +
+		strconv.Itoa(maximumDateGroup) + " AND (" + civilDateSQL + ") >= " +
+		strconv.Itoa(minimumStrptimeCivilDate) + " AND (" + civilDateSQL +
+		") <= " + strconv.Itoa(maximumStrptimeCivilDate) + ", " + parserSQL +
+		", NULL), [extractGroups(ifNull(value, CAST('' AS String)), ?)]), 1), NULL)"
 	microsecondsSQL := "toUnixTimestamp64Micro(" + parserSQL + ")"
 	epochSQL := "arrayElement(arrayMap(microseconds -> if(" +
-		"isNull(microseconds) OR microseconds < 31536000000000, " +
-		"CAST(NULL AS Nullable(Float64)), " +
+		"isNull(microseconds), CAST(NULL AS Nullable(Float64)), " +
 		"toFloat64(microseconds) / 1000000), [" + microsecondsSQL + "]), 1)"
 	valueSQL := "arrayElement(arrayMap(value -> " + epochSQL +
 		", [" + inputSQL + "]), 1)"
@@ -4321,12 +4358,9 @@ func compileStrptimeScalar(
 			Range: expression.Range,
 		}
 	}
-	valueArgs := make([]any, 0, 2+len(inputArgs))
-	valueArgs = append(
-		valueArgs,
-		jodaPattern,
-		state.context.searchTimezone,
-	)
+	valueArgs := make([]any, 0, 1+len(parserArgs)+len(inputArgs))
+	valueArgs = append(valueArgs, parserArgs...)
+	valueArgs = append(valueArgs, patterns.civilRegex)
 	valueArgs = append(valueArgs, inputArgs...)
 	return compiledScalar{
 		valueSQL:                valueSQL,
@@ -4362,9 +4396,139 @@ func compileStrptimeFormatForBackend(
 	}
 }
 
-func compileStrptimeJodaPattern(
+type compiledStrptimePatterns struct {
+	primaryJoda  string
+	fallbackJoda string
+	civilRegex   string
+	yearGroup    int
+	monthGroup   int
+	dayGroup     int
+}
+
+func compileStrptimePatterns(
 	parts []spltimeformat.Part,
-) (string, error) {
+) (compiledStrptimePatterns, error) {
+	primaryJoda, err := compileStrptimeJodaPattern(parts)
+	if err != nil {
+		return compiledStrptimePatterns{}, err
+	}
+	compiled := compiledStrptimePatterns{primaryJoda: primaryJoda}
+	optionalFraction := hasOptionalTerminalStrptimeFraction(parts)
+	if optionalFraction {
+		fallbackParts := slices.Clone(parts[:len(parts)-1])
+		lastLiteral := &fallbackParts[len(fallbackParts)-1]
+		lastLiteral.Literal = strings.TrimSuffix(lastLiteral.Literal, ".")
+		compiled.fallbackJoda, err = compileStrptimeJodaPattern(fallbackParts)
+		if err != nil {
+			return compiledStrptimePatterns{}, err
+		}
+	}
+
+	var pattern strings.Builder
+	pattern.WriteByte('^')
+	groupCount := 0
+	appendDateGroup := func(fragment string, target *int) {
+		groupCount++
+		*target = groupCount
+		pattern.WriteByte('(')
+		pattern.WriteString(fragment)
+		pattern.WriteByte(')')
+	}
+	for index, part := range parts {
+		switch part.Directive {
+		case spltimeformat.DirectiveLiteral:
+			literal := part.Literal
+			if optionalFraction && index == len(parts)-2 {
+				literal = strings.TrimSuffix(literal, ".")
+			}
+			pattern.WriteString(regexp.QuoteMeta(literal))
+		case spltimeformat.DirectivePercent:
+			pattern.WriteByte('%')
+		case spltimeformat.DirectiveYear:
+			appendDateGroup(`[0-9]{4}`, &compiled.yearGroup)
+		case spltimeformat.DirectiveMonthNumber:
+			appendDateGroup(`[0-9]{1,2}`, &compiled.monthGroup)
+		case spltimeformat.DirectiveDay:
+			appendDateGroup(`[0-9]{1,2}`, &compiled.dayGroup)
+		case spltimeformat.DirectiveISODate:
+			appendDateGroup(`[0-9]{4}`, &compiled.yearGroup)
+			pattern.WriteByte('-')
+			appendDateGroup(`[0-9]{1,2}`, &compiled.monthGroup)
+			pattern.WriteByte('-')
+			appendDateGroup(`[0-9]{1,2}`, &compiled.dayGroup)
+		case spltimeformat.DirectiveHour24,
+			spltimeformat.DirectiveHour12,
+			spltimeformat.DirectiveMinute,
+			spltimeformat.DirectiveSecond:
+			pattern.WriteString(`[0-9]{1,2}`)
+		case spltimeformat.DirectiveAMPM:
+			pattern.WriteString(`(?:AM|PM)`)
+		case spltimeformat.DirectiveTime24:
+			pattern.WriteString(
+				`[0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}`,
+			)
+		case spltimeformat.DirectiveTimezoneOffset:
+			pattern.WriteString(`[+-][0-9]{4}`)
+		case spltimeformat.DirectiveSubseconds:
+			appendStrptimeFractionPattern(
+				&pattern,
+				part.Width,
+				optionalFraction && index == len(parts)-1,
+			)
+		case spltimeformat.DirectiveMicroseconds:
+			appendStrptimeFractionPattern(
+				&pattern,
+				6,
+				optionalFraction && index == len(parts)-1,
+			)
+		default:
+			return compiledStrptimePatterns{}, fmt.Errorf(
+				"compile ClickHouse strptime: unsupported directive %d",
+				part.Directive,
+			)
+		}
+	}
+	pattern.WriteByte('$')
+	if compiled.yearGroup == 0 ||
+		compiled.monthGroup == 0 ||
+		compiled.dayGroup == 0 {
+		return compiledStrptimePatterns{}, errors.New(
+			"compile ClickHouse strptime: format is missing a complete date",
+		)
+	}
+	compiled.civilRegex = pattern.String()
+	return compiled, nil
+}
+
+func hasOptionalTerminalStrptimeFraction(parts []spltimeformat.Part) bool {
+	if len(parts) < 2 {
+		return false
+	}
+	if parts[len(parts)-1].Directive != spltimeformat.DirectiveSubseconds {
+		return false
+	}
+	literal := parts[len(parts)-2]
+	return literal.Directive == spltimeformat.DirectiveLiteral &&
+		strings.HasSuffix(literal.Literal, ".")
+}
+
+func appendStrptimeFractionPattern(
+	pattern *strings.Builder,
+	width uint8,
+	optional bool,
+) {
+	if optional {
+		pattern.WriteString(`(?:\.`)
+	}
+	pattern.WriteString(`[0-9]{1,`)
+	pattern.WriteString(strconv.Itoa(int(width)))
+	pattern.WriteByte('}')
+	if optional {
+		pattern.WriteString(`)?`)
+	}
+}
+
+func compileStrptimeJodaPattern(parts []spltimeformat.Part) (string, error) {
 	var pattern strings.Builder
 	for _, part := range parts {
 		if appendStrftimeJodaPart(&pattern, part) {

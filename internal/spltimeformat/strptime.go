@@ -3,8 +3,8 @@ package spltimeformat
 import "errors"
 
 const (
-	MaximumStrptimeFormatBytes = MaximumStrftimeFormatBytes
-	MaximumStrptimeWorkUnits   = MaximumStrftimeWorkUnits
+	MaximumStrptimeFormatBytes = 4 << 10
+	MaximumStrptimeWorkUnits   = 4 << 10
 )
 
 var (
@@ -15,19 +15,20 @@ var (
 // StrptimeFormat is one validated, deterministic full-date parser format.
 // Parsing deliberately has a narrower directive set than formatting.
 type StrptimeFormat struct {
-	Parts             []Part
-	WorkUnits         int
-	FractionalDigits  uint8
-	HasTimezoneOffset bool
+	Parts     []Part
+	WorkUnits int
 }
 
 // CompileStrptimeFormat validates a bounded parsing subset with an explicit
 // year, month, and day. Requiring complete calendar input avoids inheriting
 // process time, search start, or backend-specific defaults for omitted fields.
 func CompileStrptimeFormat(format string) (StrptimeFormat, error) {
-	lexed, err := CompileStrftimeFormat(format)
+	lexed, err := compileBoundedTimeFormat(format, timeFormatLimits{
+		maximumFormatBytes: MaximumStrptimeFormatBytes,
+		maximumWorkUnits:   MaximumStrptimeWorkUnits,
+	})
 	if err != nil {
-		if errors.Is(err, ErrStrftimeFormatTooLarge) {
+		if errors.Is(err, errTimeFormatTooLarge) {
 			return StrptimeFormat{}, ErrStrptimeFormatTooLarge
 		}
 		return StrptimeFormat{}, ErrInvalidStrptimeFormat
@@ -79,16 +80,13 @@ func CompileStrptimeFormat(format string) (StrptimeFormat, error) {
 			counts.second++
 		case DirectiveTimezoneOffset:
 			counts.offset++
-			compiled.HasTimezoneOffset = true
 		case DirectiveSubseconds:
 			if part.Width != 3 && part.Width != 6 {
 				return StrptimeFormat{}, ErrInvalidStrptimeFormat
 			}
 			counts.fraction++
-			compiled.FractionalDigits = part.Width
 		case DirectiveMicroseconds:
 			counts.fraction++
-			compiled.FractionalDigits = 6
 		default:
 			return StrptimeFormat{}, ErrInvalidStrptimeFormat
 		}

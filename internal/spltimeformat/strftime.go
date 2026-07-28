@@ -23,7 +23,14 @@ const (
 var (
 	ErrInvalidStrftimeFormat  = errors.New("invalid strftime format")
 	ErrStrftimeFormatTooLarge = errors.New("strftime format exceeds its resource limit")
+	errInvalidTimeFormat      = errors.New("invalid time format")
+	errTimeFormatTooLarge     = errors.New("time format exceeds its resource limit")
 )
+
+type timeFormatLimits struct {
+	maximumFormatBytes int
+	maximumWorkUnits   int
+}
 
 // Directive identifies one supported, locale-stable SPL strftime variable.
 type Directive uint8
@@ -79,11 +86,34 @@ type StrftimeFormat struct {
 // date/time variables. Locale-dependent variables and unimplemented offset
 // variants are rejected rather than delegated to server configuration.
 func CompileStrftimeFormat(format string) (StrftimeFormat, error) {
-	if !utf8.ValidString(format) || strings.IndexByte(format, 0) >= 0 {
+	compiled, err := compileBoundedTimeFormat(format, timeFormatLimits{
+		maximumFormatBytes: MaximumStrftimeFormatBytes,
+		maximumWorkUnits:   MaximumStrftimeWorkUnits,
+	})
+	if err != nil {
+		if errors.Is(err, errTimeFormatTooLarge) {
+			return StrftimeFormat{}, ErrStrftimeFormatTooLarge
+		}
 		return StrftimeFormat{}, ErrInvalidStrftimeFormat
 	}
-	if len(format) > MaximumStrftimeFormatBytes {
+	if compiled.MaximumOutputBytes > MaximumStrftimeOutputBytes {
 		return StrftimeFormat{}, ErrStrftimeFormatTooLarge
+	}
+	return compiled, nil
+}
+
+// compileBoundedTimeFormat lexes the common directive superset under
+// caller-owned source and work limits. Output expansion is formatter policy
+// and is deliberately enforced only by CompileStrftimeFormat.
+func compileBoundedTimeFormat(
+	format string,
+	limits timeFormatLimits,
+) (StrftimeFormat, error) {
+	if !utf8.ValidString(format) || strings.IndexByte(format, 0) >= 0 {
+		return StrftimeFormat{}, errInvalidTimeFormat
+	}
+	if len(format) > limits.maximumFormatBytes {
+		return StrftimeFormat{}, errTimeFormatTooLarge
 	}
 
 	compiled := StrftimeFormat{}
@@ -95,23 +125,26 @@ func CompileStrftimeFormat(format string) (StrftimeFormat, error) {
 			continue
 		}
 		if literalStart < offset {
-			if err := compiled.appendLiteral(format[literalStart:offset]); err != nil {
-				return StrftimeFormat{}, err
+			compiled.appendLiteral(format[literalStart:offset])
+			if compiled.WorkUnits > limits.maximumWorkUnits {
+				return StrftimeFormat{}, errTimeFormatTooLarge
 			}
 		}
 		directive, width, consumed, err := parseDirective(format[offset:])
 		if err != nil {
 			return StrftimeFormat{}, err
 		}
-		if err := compiled.appendDirective(directive, width); err != nil {
-			return StrftimeFormat{}, err
+		compiled.appendDirective(directive, width)
+		if compiled.WorkUnits > limits.maximumWorkUnits {
+			return StrftimeFormat{}, errTimeFormatTooLarge
 		}
 		offset += consumed
 		literalStart = offset
 	}
 	if literalStart < len(format) {
-		if err := compiled.appendLiteral(format[literalStart:]); err != nil {
-			return StrftimeFormat{}, err
+		compiled.appendLiteral(format[literalStart:])
+		if compiled.WorkUnits > limits.maximumWorkUnits {
+			return StrftimeFormat{}, errTimeFormatTooLarge
 		}
 	}
 	if compiled.WorkUnits == 0 {
@@ -120,55 +153,45 @@ func CompileStrftimeFormat(format string) (StrftimeFormat, error) {
 	return compiled, nil
 }
 
-func (compiled *StrftimeFormat) appendLiteral(literal string) error {
+func (compiled *StrftimeFormat) appendLiteral(literal string) {
 	compiled.Parts = append(compiled.Parts, Part{
 		Directive: DirectiveLiteral,
 		Literal:   strings.Clone(literal),
 	})
 	compiled.WorkUnits += utf8.RuneCountInString(literal)
 	compiled.MaximumOutputBytes += uint64(len(literal))
-	return compiled.checkLimits()
 }
 
-func (compiled *StrftimeFormat) appendDirective(directive Directive, width uint8) error {
+func (compiled *StrftimeFormat) appendDirective(directive Directive, width uint8) {
 	compiled.Parts = append(compiled.Parts, Part{
 		Directive: directive,
 		Width:     width,
 	})
 	compiled.WorkUnits++
 	compiled.MaximumOutputBytes += directiveMaximumBytes(directive, width)
-	return compiled.checkLimits()
-}
-
-func (compiled StrftimeFormat) checkLimits() error {
-	if compiled.WorkUnits > MaximumStrftimeWorkUnits ||
-		compiled.MaximumOutputBytes > MaximumStrftimeOutputBytes {
-		return ErrStrftimeFormatTooLarge
-	}
-	return nil
 }
 
 func parseDirective(source string) (Directive, uint8, int, error) {
 	if len(source) < 2 || source[0] != '%' {
-		return DirectiveLiteral, 0, 0, ErrInvalidStrftimeFormat
+		return DirectiveLiteral, 0, 0, errInvalidTimeFormat
 	}
 	if source[1] == ':' {
 		if len(source) >= 3 && source[2] == 'z' {
 			return DirectiveTimezoneOffsetColon, 0, 3, nil
 		}
-		return DirectiveLiteral, 0, 0, ErrInvalidStrftimeFormat
+		return DirectiveLiteral, 0, 0, errInvalidTimeFormat
 	}
 	if source[1] >= '0' && source[1] <= '9' {
 		if len(source) < 3 ||
 			(source[1] != '3' && source[1] != '6' && source[1] != '9') ||
 			(source[2] != 'Q' && source[2] != 'N') {
-			return DirectiveLiteral, 0, 0, ErrInvalidStrftimeFormat
+			return DirectiveLiteral, 0, 0, errInvalidTimeFormat
 		}
 		return DirectiveSubseconds, source[1] - '0', 3, nil
 	}
 	directive, ok := simpleDirectives[source[1]]
 	if !ok {
-		return DirectiveLiteral, 0, 0, ErrInvalidStrftimeFormat
+		return DirectiveLiteral, 0, 0, errInvalidTimeFormat
 	}
 	width := uint8(0)
 	switch source[1] {

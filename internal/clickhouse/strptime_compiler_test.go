@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spltimeformat"
@@ -23,7 +24,9 @@ func TestCompileStrptimeUsesBoundedParameterizedJodaParserAndPinnedTimezone(t *t
 		"parseDateTime64InJodaSyntaxOrNull(",
 		"toUnixTimestamp64Micro(",
 		"length(value) <= 4096",
-		"31536000000000",
+		"extractGroups(ifNull(value, CAST('' AS String)), ?)",
+		"19710101",
+		"22991231",
 		"arrayMap(",
 		`AS "epoch"`,
 	} {
@@ -35,17 +38,55 @@ func TestCompileStrptimeUsesBoundedParameterizedJodaParserAndPinnedTimezone(t *t
 		"parseDateTime64BestEffortOrNull(value",
 		"timezone()",
 		"serverTimeZone",
+		"31536000000000",
 	} {
 		if strings.Contains(compiled.SQL, forbidden) {
 			t.Fatalf("strptime SQL contains unpinned parser behavior %q:\n%s", forbidden, compiled.SQL)
 		}
 	}
 	if countArgument(compiled.Args, "yyyy-MM-dd HH:mm:ss.SSSSSS") != 1 ||
-		countArgument(compiled.Args, scope.SearchTimezone) != 1 {
+		countArgument(compiled.Args, "yyyy-MM-dd HH:mm:ss") != 1 ||
+		countArgument(compiled.Args, scope.SearchTimezone) != 2 {
 		t.Fatalf("strptime parser arguments = %#v", compiled.Args)
+	}
+	wantPrefix := []any{
+		"yyyy-MM-dd HH:mm:ss",
+		scope.SearchTimezone,
+		"yyyy-MM-dd HH:mm:ss.SSSSSS",
+		scope.SearchTimezone,
+		`^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2}) [0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}(?:\.[0-9]{1,6})?$`,
+	}
+	for index, want := range wantPrefix {
+		if index >= len(compiled.Args) {
+			t.Fatalf("strptime args = %#v, want prefix %#v", compiled.Args, wantPrefix)
+		}
+		if compiled.Args[index] != want {
+			t.Fatalf(
+				"strptime argument %d = %#v, want %#v; args = %#v",
+				index,
+				compiled.Args[index],
+				want,
+				compiled.Args,
+			)
+		}
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s", got, want, compiled.SQL)
+	}
+}
+
+func TestCompileStrptimeUsesOneParserWithoutOptionalFractionFallback(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | eval epoch=strptime(source, "%F %T") | table epoch`,
+	)
+	if strings.Count(compiled.SQL, "parseDateTime64InJodaSyntaxOrNull(") != 1 {
+		t.Fatalf("ordinary strptime parser was duplicated:\n%s", compiled.SQL)
+	}
+	if countArgument(compiled.Args, "yyyy-MM-dd HH:mm:ss") != 1 {
+		t.Fatalf("ordinary strptime parser arguments = %#v", compiled.Args)
 	}
 }
 
@@ -245,6 +286,17 @@ func TestCompileStrptimeRejectsForgedPlans(t *testing.T) {
 			wantCode: "SPL_UNSUPPORTED_TIME_FORMAT",
 		},
 		{
+			name: "formatter output amplification is unsupported",
+			expression: &plan.ScalarCallExpression{
+				Function: plan.ScalarFunctionStrptime,
+				Arguments: []plan.ScalarExpression{
+					value(), format(strings.Repeat("%F", 1700), true),
+				},
+			},
+			want:     "full-date",
+			wantCode: "SPL_UNSUPPORTED_TIME_FORMAT",
+		},
+		{
 			name: "oversized format",
 			expression: &plan.ScalarCallExpression{
 				Function: plan.ScalarFunctionStrptime,
@@ -289,7 +341,7 @@ func TestCompileStrptimeNestedTextSQLGrowsLinearlyAndEvaluatesInputOnce(t *testi
 	}
 	compiled := compileSPL(
 		t,
-		`index=gradethis | eval epoch=strptime(`+expression+`, "%F %T.%6N") | table epoch`,
+		`index=gradethis | eval epoch=strptime(`+expression+`, "%F %T") | table epoch`,
 	)
 	if len(compiled.SQL) > maxCompiledStrptimeScalarSQLBytes {
 		t.Fatalf(
@@ -303,6 +355,15 @@ func TestCompileStrptimeNestedTextSQLGrowsLinearlyAndEvaluatesInputOnce(t *testi
 	}
 	if strings.Count(compiled.SQL, "parseDateTime64InJodaSyntaxOrNull(") != 1 {
 		t.Fatalf("strptime parser was duplicated:\n%s", compiled.SQL)
+	}
+}
+
+func TestNewCompileContextAllocatesStrptimeCacheLazily(t *testing.T) {
+	t.Parallel()
+
+	context := newCompileContext(time.Unix(0, 0), "UTC")
+	if context.strptimeBudget.formats != nil {
+		t.Fatal("newCompileContext eagerly allocated the strptime format cache")
 	}
 }
 

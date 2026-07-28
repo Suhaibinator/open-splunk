@@ -79,10 +79,12 @@ func testStrptimeAgainstClickHouse(
 			` twelve=strptime("2026-07-27 07:20:21 PM", "%F %I:%M:%S %p"),` +
 			` offset=strptime("2026-07-27 19:20:21.654321-0730", "%F %T.%f%z"),` +
 			` unpadded=strptime("2026-7-2 3:4:5", "%Y-%m-%d %H:%M:%S"),` +
-			` literal_percent=strptime("2026%07%27", "%Y%%%m%%%d")` +
-			` | table full,millis,midnight,twelve,offset,unpadded,literal_percent`,
+			` literal_percent=strptime("2026%07%27", "%Y%%%m%%%d"),` +
+			` optional_fraction=strptime("2026-07-27 19:20:21", "%F %T.%Q")` +
+			` | table full,millis,midnight,twelve,offset,unpadded,literal_percent,optional_fraction`,
 	)
 	var full, millis, midnight, twelve, offset, unpadded, literalPercent float64
+	var optionalFraction float64
 	if err := connection.QueryRow(
 		queryContext,
 		fixed.SQL,
@@ -95,6 +97,7 @@ func testStrptimeAgainstClickHouse(
 		&offset,
 		&unpadded,
 		&literalPercent,
+		&optionalFraction,
 	); err != nil {
 		t.Fatalf(
 			"execute fixed strptime: %v\nSQL: %s\nargs: %#v",
@@ -144,6 +147,12 @@ func testStrptimeAgainstClickHouse(
 		"literal percent",
 		literalPercent,
 		time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC),
+	)
+	assertStrptimeEpoch(
+		t,
+		"optional fraction",
+		optionalFraction,
+		time.Date(2026, 7, 27, 19, 20, 21, 0, time.UTC),
 	)
 
 	dynamic := compileUTC(
@@ -211,17 +220,28 @@ func testStrptimeAgainstClickHouse(
 			` | eval summer=strptime("2026-07-27 12:00:00", "%F %T"),`+
 			` winter=strptime("2026-01-01 12:00:00", "%F %T"),`+
 			` explicit_offset=strptime("2026-07-27 12:00:00+0200", "%F %T%z"),`+
+			` civil_min=strptime("1971-01-01 00:00:00+1400", "%F %T%z"),`+
+			` civil_before=strptime("1970-12-31 23:30:00-1200", "%F %T%z"),`+
 			` gap=strptime("2024-03-10 02:30:00", "%F %T"),`+
 			` fold=strptime("2024-11-03 01:30:00", "%F %T")`+
-			` | table summer,winter,explicit_offset,gap,fold`,
+			` | table summer,winter,explicit_offset,civil_min,civil_before,gap,fold`,
 		"America/Los_Angeles",
 	)
-	var summer, winter, explicitOffset, gap, fold float64
+	var summer, winter, explicitOffset, civilMinimum, gap, fold float64
+	var civilBefore *float64
 	if err := connection.QueryRow(
 		queryContext,
 		timezones.SQL,
 		timezones.Args...,
-	).Scan(&summer, &winter, &explicitOffset, &gap, &fold); err != nil {
+	).Scan(
+		&summer,
+		&winter,
+		&explicitOffset,
+		&civilMinimum,
+		&civilBefore,
+		&gap,
+		&fold,
+	); err != nil {
 		t.Fatalf(
 			"execute timezone strptime: %v\nSQL: %s\nargs: %#v",
 			err,
@@ -247,6 +267,15 @@ func testStrptimeAgainstClickHouse(
 		explicitOffset,
 		time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC),
 	)
+	assertStrptimeEpoch(
+		t,
+		"civil minimum",
+		civilMinimum,
+		time.Date(1970, 12, 31, 10, 0, 0, 0, time.UTC),
+	)
+	if civilBefore != nil {
+		t.Fatalf("pre-1971 civil date = %v, want null", *civilBefore)
+	}
 	// The pinned ClickHouse parser normalizes spring-forward gaps and chooses
 	// the earlier occurrence of a fall-back fold. These deterministic choices
 	// remain part of the compatibility contract until a live Splunk oracle
@@ -263,6 +292,36 @@ func testStrptimeAgainstClickHouse(
 		fold,
 		time.Date(2024, 11, 3, 8, 30, 0, 0, time.UTC),
 	)
+
+	rangeBounds := compileUTC(
+		`index=strptime event_id="strptime-scalars"` +
+			` | eval maximum=strptime("2299-12-31 00:00:00", "%F %T"),` +
+			` after_maximum=strptime("2300-01-01 00:00:00", "%F %T")` +
+			` | table maximum,after_maximum`,
+	)
+	var maximum float64
+	var afterMaximum *float64
+	if err := connection.QueryRow(
+		queryContext,
+		rangeBounds.SQL,
+		rangeBounds.Args...,
+	).Scan(&maximum, &afterMaximum); err != nil {
+		t.Fatalf(
+			"execute strptime range bounds: %v\nSQL: %s\nargs: %#v",
+			err,
+			rangeBounds.SQL,
+			rangeBounds.Args,
+		)
+	}
+	assertStrptimeEpoch(
+		t,
+		"maximum",
+		maximum,
+		time.Date(2299, 12, 31, 0, 0, 0, 0, time.UTC),
+	)
+	if afterMaximum != nil {
+		t.Fatalf("post-2299 date = %v, want null", *afterMaximum)
+	}
 
 	transformed := compileUTC(
 		`index=strptime event_id="strptime-scalars"` +

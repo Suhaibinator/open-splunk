@@ -11,11 +11,9 @@ func TestCompileStrptimeFormatAcceptsDeterministicFullDateSubset(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
-		name           string
-		format         string
-		fractionDigits uint8
-		hasOffset      bool
-		directives     []Directive
+		name       string
+		format     string
+		directives []Directive
 	}{
 		{
 			name:       "date only",
@@ -33,9 +31,8 @@ func TestCompileStrptimeFormatAcceptsDeterministicFullDateSubset(t *testing.T) {
 			},
 		},
 		{
-			name:      "12 hour and offset",
-			format:    "%m/%d/%Y %I:%M:%S %p %z",
-			hasOffset: true,
+			name:   "12 hour and offset",
+			format: "%m/%d/%Y %I:%M:%S %p %z",
 			directives: []Directive{
 				DirectiveMonthNumber,
 				DirectiveDay,
@@ -48,24 +45,20 @@ func TestCompileStrptimeFormatAcceptsDeterministicFullDateSubset(t *testing.T) {
 			},
 		},
 		{
-			name:           "default milliseconds",
-			format:         "%Y-%m-%d %H:%M:%S.%Q",
-			fractionDigits: 3,
+			name:   "default milliseconds",
+			format: "%Y-%m-%d %H:%M:%S.%Q",
 		},
 		{
-			name:           "explicit milliseconds",
-			format:         "%Y-%m-%d %H:%M:%S.%3N",
-			fractionDigits: 3,
+			name:   "explicit milliseconds",
+			format: "%Y-%m-%d %H:%M:%S.%3N",
 		},
 		{
-			name:           "microseconds",
-			format:         "%Y-%m-%d %H:%M:%S.%6Q",
-			fractionDigits: 6,
+			name:   "microseconds",
+			format: "%Y-%m-%d %H:%M:%S.%6Q",
 		},
 		{
-			name:           "microsecond alias",
-			format:         "%Y-%m-%d %H:%M:%S.%f",
-			fractionDigits: 6,
+			name:   "microsecond alias",
+			format: "%Y-%m-%d %H:%M:%S.%f",
 		},
 		{
 			name:   "literal percent and letters",
@@ -80,9 +73,7 @@ func TestCompileStrptimeFormatAcceptsDeterministicFullDateSubset(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CompileStrptimeFormat(%q): %v", test.format, err)
 			}
-			if compiled.FractionalDigits != test.fractionDigits ||
-				compiled.HasTimezoneOffset != test.hasOffset ||
-				compiled.WorkUnits == 0 {
+			if compiled.WorkUnits == 0 {
 				t.Fatalf("CompileStrptimeFormat(%q) = %#v", test.format, compiled)
 			}
 			if test.directives == nil {
@@ -157,9 +148,32 @@ func TestCompileStrptimeFormatRejectsAmbiguousIncompleteOrUnsupportedFormats(t *
 func TestCompileStrptimeFormatPinsIndependentResourceLimit(t *testing.T) {
 	t.Parallel()
 
+	if MaximumStrptimeFormatBytes != 4<<10 ||
+		MaximumStrptimeWorkUnits != 4<<10 {
+		t.Fatalf(
+			"strptime limits = %d bytes/%d work units, want 4096/4096",
+			MaximumStrptimeFormatBytes,
+			MaximumStrptimeWorkUnits,
+		)
+	}
 	if _, err := CompileStrptimeFormat(
 		strings.Repeat("x", MaximumStrptimeFormatBytes+1),
 	); !errors.Is(err, ErrStrptimeFormatTooLarge) {
 		t.Fatalf("oversized format error = %v, want ErrStrptimeFormatTooLarge", err)
+	}
+}
+
+func TestCompileStrptimeFormatDoesNotInheritFormatterOutputLimit(t *testing.T) {
+	t.Parallel()
+
+	format := strings.Repeat("%F", 1700)
+	if _, err := CompileStrptimeFormat(format); !errors.Is(
+		err,
+		ErrInvalidStrptimeFormat,
+	) {
+		t.Fatalf(
+			"formatter-amplifying parse format error = %v, want ErrInvalidStrptimeFormat",
+			err,
+		)
 	}
 }

@@ -168,6 +168,17 @@ func TestBuildStrptimeRejectsForgedArityFormatBooleanEnumAndTypedNil(t *testing.
 			code: "SPL_UNSUPPORTED_TIME_FORMAT",
 		},
 		{
+			name: "formatter output amplification is unsupported",
+			expression: &spl.ScalarCallExpr{
+				Function: spl.ScalarFunctionStrptime,
+				Arguments: []spl.ScalarExpr{
+					value(), format(strings.Repeat("%F", 1700), true),
+				},
+				Range: sourceRange,
+			},
+			code: "SPL_UNSUPPORTED_TIME_FORMAT",
+		},
+		{
 			name: "oversized format",
 			expression: &spl.ScalarCallExpr{
 				Function: spl.ScalarFunctionStrptime,

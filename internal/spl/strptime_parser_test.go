@@ -66,6 +66,11 @@ func TestParseStrptimeRejectsArityNonliteralBooleanAndInvalidFormats(t *testing.
 		{`index=main | eval epoch=strptime(timestamp, "%Y-%m")`, "SPL_UNSUPPORTED_TIME_FORMAT"},
 		{`index=main | eval epoch=strptime(timestamp, "%Y-%m-%d %H:%M:%S.%N")`, "SPL_UNSUPPORTED_TIME_FORMAT"},
 		{`index=main | eval epoch=strptime(timestamp, "%Y-%m-%d %:z")`, "SPL_UNSUPPORTED_TIME_FORMAT"},
+		{
+			`index=main | eval epoch=strptime(timestamp, "` +
+				strings.Repeat("%F", 1700) + `")`,
+			"SPL_UNSUPPORTED_TIME_FORMAT",
+		},
 		{"index=main | eval epoch=strptime(timestamp, \"bad\x00format\")", "SPL_UNSUPPORTED_TIME_FORMAT"},
 	} {
 		assertParseDiagnosticCode(t, test.source, test.code)
