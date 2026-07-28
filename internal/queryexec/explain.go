@@ -642,6 +642,43 @@ func validateExplainLine(line string) error {
 	return nil
 }
 
+// ValidateExplainResult verifies the complete public contract of a buffered
+// EXPLAIN result. Returned errors expose only stable search-job categories and
+// fixed diagnostics; neither plan text nor query IDs are included because both
+// may contain administrator-sensitive data.
+func ValidateExplainResult(result ExplainResult) error {
+	if !validExplainQueryID(result.QueryID) {
+		return invalidExplainResult("query ID is invalid")
+	}
+	if result.Text == "" {
+		return invalidExplainResult("returned an empty plan")
+	}
+	if uint64(len(result.Text)) > maximumExplainResultBytes {
+		return explainLimit("exceeded the result byte limit")
+	}
+
+	remaining := result.Text
+	var lineCount uint64
+	for {
+		if lineCount >= maximumExplainResultRows {
+			return explainLimit("returned too many rows")
+		}
+		newline := strings.IndexByte(remaining, '\n')
+		line := remaining
+		if newline >= 0 {
+			line = remaining[:newline]
+		}
+		if err := validateExplainLine(line); err != nil {
+			return err
+		}
+		lineCount++
+		if newline < 0 {
+			return nil
+		}
+		remaining = remaining[newline+1:]
+	}
+}
+
 func validExplainQueryID(queryID string) bool {
 	if !strings.HasPrefix(queryID, explainQueryIDPrefix) ||
 		len(queryID) == len(explainQueryIDPrefix) ||

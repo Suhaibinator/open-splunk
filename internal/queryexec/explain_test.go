@@ -88,6 +88,232 @@ func TestExplainerBuffersExactPlanAndPreservesParameters(t *testing.T) {
 	}
 }
 
+func TestValidateExplainResult(t *testing.T) {
+	t.Parallel()
+
+	const validQueryID = "open-splunk-explain-validator"
+	exactAggregateLines := make([]string, 64)
+	exactAggregateLines[0] = strings.Repeat("x", int(maximumExplainLineBytes))
+	for index := 1; index < len(exactAggregateLines); index++ {
+		exactAggregateLines[index] = strings.Repeat(
+			"x",
+			int(maximumExplainLineBytes)-1,
+		)
+	}
+	exactAggregate := strings.Join(exactAggregateLines, "\n")
+	if uint64(len(exactAggregate)) != maximumExplainResultBytes {
+		t.Fatalf(
+			"exact aggregate fixture = %d bytes, want %d",
+			len(exactAggregate),
+			maximumExplainResultBytes,
+		)
+	}
+	exactRows := make([]string, int(maximumExplainResultRows))
+	for index := range exactRows {
+		exactRows[index] = "x"
+	}
+	overRows := append(slices.Clone(exactRows), "x")
+	maximumQueryID := explainQueryIDPrefix + strings.Repeat(
+		"x",
+		maximumExplainQueryIDBytes-len(explainQueryIDPrefix),
+	)
+
+	tests := []struct {
+		name    string
+		result  ExplainResult
+		wantErr error
+	}{
+		{
+			name: "valid multiline Unicode",
+			result: ExplainResult{
+				Text:    "Projection\n  Unicode \u2502 node",
+				QueryID: validQueryID,
+			},
+		},
+		{
+			name: "maximum query ID",
+			result: ExplainResult{
+				Text:    "Projection",
+				QueryID: maximumQueryID,
+			},
+		},
+		{
+			name: "maximum line",
+			result: ExplainResult{
+				Text:    strings.Repeat("x", int(maximumExplainLineBytes)),
+				QueryID: validQueryID,
+			},
+		},
+		{
+			name: "maximum aggregate",
+			result: ExplainResult{
+				Text:    exactAggregate,
+				QueryID: validQueryID,
+			},
+		},
+		{
+			name: "maximum rows",
+			result: ExplainResult{
+				Text:    strings.Join(exactRows, "\n"),
+				QueryID: validQueryID,
+			},
+		},
+		{
+			name: "empty text",
+			result: ExplainResult{
+				QueryID: validQueryID,
+			},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "invalid UTF-8",
+			result: ExplainResult{
+				Text:    string([]byte{'p', 'r', 'i', 'v', 'a', 't', 'e', 0xff}),
+				QueryID: validQueryID,
+			},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "control character",
+			result: ExplainResult{
+				Text:    "private-result\x00",
+				QueryID: validQueryID,
+			},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "tab control",
+			result: ExplainResult{
+				Text:    "private\tresult",
+				QueryID: validQueryID,
+			},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "C1 control",
+			result: ExplainResult{
+				Text:    "private\u0085result",
+				QueryID: validQueryID,
+			},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "leading empty line",
+			result: ExplainResult{
+				Text:    "\nprivate-result",
+				QueryID: validQueryID,
+			},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "trailing empty line",
+			result: ExplainResult{
+				Text:    "private-result\n",
+				QueryID: validQueryID,
+			},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "interior empty line",
+			result: ExplainResult{
+				Text:    "private-result\n\nnode",
+				QueryID: validQueryID,
+			},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "line one byte over",
+			result: ExplainResult{
+				Text:    strings.Repeat("x", int(maximumExplainLineBytes)+1),
+				QueryID: validQueryID,
+			},
+			wantErr: searchjobs.ErrExecutionLimit,
+		},
+		{
+			name: "aggregate one byte over",
+			result: ExplainResult{
+				Text:    exactAggregate + "x",
+				QueryID: validQueryID,
+			},
+			wantErr: searchjobs.ErrExecutionLimit,
+		},
+		{
+			name: "one row over",
+			result: ExplainResult{
+				Text:    strings.Join(overRows, "\n"),
+				QueryID: validQueryID,
+			},
+			wantErr: searchjobs.ErrExecutionLimit,
+		},
+		{
+			name: "empty query ID",
+			result: ExplainResult{
+				Text: "private-result",
+			},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "wrong query ID prefix",
+			result: ExplainResult{
+				Text:    "private-result",
+				QueryID: "private-query-id",
+			},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "empty query ID suffix",
+			result: ExplainResult{
+				Text:    "private-result",
+				QueryID: explainQueryIDPrefix,
+			},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "query ID control",
+			result: ExplainResult{
+				Text:    "private-result",
+				QueryID: explainQueryIDPrefix + "private\nid",
+			},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+		{
+			name: "oversized query ID",
+			result: ExplainResult{
+				Text: "private-result",
+				QueryID: explainQueryIDPrefix + strings.Repeat(
+					"x",
+					maximumExplainQueryIDBytes-len(explainQueryIDPrefix)+1,
+				),
+			},
+			wantErr: searchjobs.ErrInvalidResult,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := ValidateExplainResult(test.result)
+			if test.wantErr == nil {
+				if err != nil {
+					t.Fatalf("ValidateExplainResult() error = %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf(
+					"ValidateExplainResult() error = %v, want %v",
+					err,
+					test.wantErr,
+				)
+			}
+			if strings.Contains(err.Error(), "private") {
+				t.Fatalf("ValidateExplainResult() leaked result content: %v", err)
+			}
+		})
+	}
+}
+
 func TestExplainerAcceptsExactCompilerArgumentInventory(t *testing.T) {
 	t.Parallel()
 

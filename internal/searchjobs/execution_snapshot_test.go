@@ -82,6 +82,76 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 	assertLeaseCounts(t, manager, job.ID, 0, 0)
 }
 
+func TestExecutionSnapshotEqualCoversEveryFieldAndIndexOrder(t *testing.T) {
+	t.Parallel()
+
+	baseTime := time.Date(2026, time.July, 28, 1, 2, 3, 4, time.UTC)
+	base := ExecutionSnapshot{
+		ID:               "job",
+		OwnerID:          "owner",
+		TenantID:         "tenant",
+		SPL:              "index=alpha",
+		EffectiveIndexes: []string{"alpha", "beta"},
+		Earliest:         baseTime,
+		Latest:           baseTime.Add(time.Hour),
+		SearchStart:      baseTime.Add(2 * time.Hour),
+		SearchTimezone:   "UTC",
+		IndexTimeCutoff:  baseTime.Add(3 * time.Hour),
+		VisibilityCutoff: 41,
+		FinishedAt:       baseTime.Add(4 * time.Hour),
+		ExpiresAt:        baseTime.Add(5 * time.Hour),
+	}
+	if !base.Equal(base) {
+		t.Fatal("snapshot is not equal to itself")
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*ExecutionSnapshot)
+	}{
+		{name: "ID", mutate: func(snapshot *ExecutionSnapshot) { snapshot.ID += "-changed" }},
+		{name: "owner ID", mutate: func(snapshot *ExecutionSnapshot) { snapshot.OwnerID += "-changed" }},
+		{name: "tenant ID", mutate: func(snapshot *ExecutionSnapshot) { snapshot.TenantID += "-changed" }},
+		{name: "SPL", mutate: func(snapshot *ExecutionSnapshot) { snapshot.SPL += " | head 1" }},
+		{name: "effective index order", mutate: func(snapshot *ExecutionSnapshot) {
+			snapshot.EffectiveIndexes = []string{"beta", "alpha"}
+		}},
+		{name: "earliest", mutate: func(snapshot *ExecutionSnapshot) {
+			snapshot.Earliest = snapshot.Earliest.Add(time.Nanosecond)
+		}},
+		{name: "latest", mutate: func(snapshot *ExecutionSnapshot) {
+			snapshot.Latest = snapshot.Latest.Add(time.Nanosecond)
+		}},
+		{name: "search start", mutate: func(snapshot *ExecutionSnapshot) {
+			snapshot.SearchStart = snapshot.SearchStart.Add(time.Nanosecond)
+		}},
+		{name: "search timezone", mutate: func(snapshot *ExecutionSnapshot) {
+			snapshot.SearchTimezone = "America/Los_Angeles"
+		}},
+		{name: "index-time cutoff", mutate: func(snapshot *ExecutionSnapshot) {
+			snapshot.IndexTimeCutoff = snapshot.IndexTimeCutoff.Add(time.Nanosecond)
+		}},
+		{name: "visibility cutoff", mutate: func(snapshot *ExecutionSnapshot) {
+			snapshot.VisibilityCutoff++
+		}},
+		{name: "finished at", mutate: func(snapshot *ExecutionSnapshot) {
+			snapshot.FinishedAt = snapshot.FinishedAt.Add(time.Nanosecond)
+		}},
+		{name: "expires at", mutate: func(snapshot *ExecutionSnapshot) {
+			snapshot.ExpiresAt = snapshot.ExpiresAt.Add(time.Nanosecond)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			changed := base
+			test.mutate(&changed)
+			if base.Equal(changed) || changed.Equal(base) {
+				t.Fatal("field mutation remained equal")
+			}
+		})
+	}
+}
+
 func TestCompletedExecutionSnapshotForContextScopeAndLifecycleErrors(t *testing.T) {
 	t.Parallel()
 

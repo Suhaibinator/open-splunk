@@ -2252,7 +2252,15 @@ func TestResolveFieldSupportsNestedAndEscapedDot(t *testing.T) {
 func TestResolveFieldRejectsAmbiguousPaths(t *testing.T) {
 	t.Parallel()
 
-	for _, field := range []string{"", ".foo", "foo.", "foo..bar", `foo\q`, "foo\x00bar"} {
+	for _, field := range []string{
+		"",
+		".foo",
+		"foo.",
+		"foo..bar",
+		`foo\q`,
+		"foo\x00bar",
+		"foo\u0080bar",
+	} {
 		_, err := ResolveField(field, spl.Range{})
 		assertDiagnosticCode(t, err, "SPL_INVALID_FIELD")
 	}

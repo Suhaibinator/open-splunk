@@ -40,7 +40,6 @@ const (
 	defaultSnapshotTimeout        = 10 * time.Second
 	defaultJournalTimeout         = 10 * time.Second
 	defaultMaxSPLBytes            = 64 << 10
-	defaultMaxScopeIndexes        = 256
 	defaultMaxIdentityBytes       = 1 << 10
 	defaultRetentionTTL           = 15 * time.Minute
 	defaultExpiredRetention       = 5 * time.Minute
@@ -59,6 +58,15 @@ const (
 	capacityCleanupThrottle   = 250 * time.Millisecond
 	maximumJobAppIDBytes      = 255
 	maximumJobSourceIDBytes   = 128
+)
+
+const (
+	// MaximumJobIDBytes is the hard UTF-8 byte ceiling for a canonical
+	// generated search-job identifier.
+	MaximumJobIDBytes = 256
+	// MaximumScopeIndexes is the hard manager-wide ceiling for authorized and
+	// requested index-scope entries retained with one search.
+	MaximumScopeIndexes = 256
 )
 
 var (
@@ -191,7 +199,9 @@ type Config struct {
 	ExpiredRetention      time.Duration
 	CleanupInterval       time.Duration
 	// Now and NewID may be called concurrently and must be safe for concurrent
-	// use. Returned strings and times are detached before they are retained.
+	// use. NewID must return a nonempty, unpadded, control-free UTF-8 identifier
+	// within MaximumJobIDBytes. Returned strings and times are detached before
+	// they are retained.
 	Now   func() time.Time
 	NewID func() string
 	// OnJournalError receives trusted operational details after either journal
@@ -305,6 +315,12 @@ func New(config Config) (*Manager, error) {
 	if config.MaxConcurrent < 0 || config.MaxConcurrentReads < 0 || config.MaxConcurrentSnapshots < 0 || config.MaxResultLeases < 0 || config.MaxResultLeasesPerJob < 0 || config.MaxQueued < 0 || config.MaxJobs < 0 || config.DefaultPageSize < 0 || config.MaxPageSize < 0 || config.MaxSPLBytes < 0 || config.MaxScopeIndexes < 0 {
 		return nil, errors.New("create search job manager: limits cannot be negative")
 	}
+	if config.MaxScopeIndexes > MaximumScopeIndexes {
+		return nil, fmt.Errorf(
+			"create search job manager: index scope limit exceeds the safe maximum of %d",
+			MaximumScopeIndexes,
+		)
+	}
 	if config.MaxRuntime < 0 || config.SnapshotTimeout < 0 || config.JournalTimeout < 0 || config.RetentionTTL < 0 || config.ExpiredRetention < 0 {
 		return nil, errors.New("create search job manager: retention durations cannot be negative")
 	}
@@ -409,7 +425,7 @@ func New(config Config) (*Manager, error) {
 	}
 	maxScopeIndexes := config.MaxScopeIndexes
 	if maxScopeIndexes == 0 {
-		maxScopeIndexes = defaultMaxScopeIndexes
+		maxScopeIndexes = MaximumScopeIndexes
 	}
 	retentionTTL := config.RetentionTTL
 	if retentionTTL == 0 {
@@ -555,7 +571,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 		return Job{}, ErrClosed
 	}
 	id := strings.Clone(manager.newID())
-	if id == "" || len(id) > 256 || !utf8.ValidString(id) {
+	if !canonicalJobMetadataIdentifier(id, MaximumJobIDBytes, false) {
 		return Job{}, errors.New("create search job: ID generator returned an invalid ID")
 	}
 	if err := manager.reserveJobID(id); err != nil {

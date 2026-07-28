@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
@@ -2825,7 +2826,7 @@ func splitFieldPath(name string) ([]string, error) {
 			path = append(path, segment.String())
 			segment.Reset()
 		default:
-			if r < 0x20 || r == 0x7f {
+			if unicode.IsControl(r) {
 				return nil, fmt.Errorf("field %q contains a control character", name)
 			}
 			segment.WriteRune(r)

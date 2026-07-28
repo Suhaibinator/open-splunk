@@ -3,6 +3,7 @@ package searchjobs
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 )
@@ -24,6 +25,25 @@ type ExecutionSnapshot struct {
 	VisibilityCutoff uint64
 	FinishedAt       time.Time
 	ExpiresAt        time.Time
+}
+
+// Equal reports whether other identifies the same immutable completed-search
+// execution. EffectiveIndexes is ordered, while timestamps are compared by
+// instant so equivalent locations and monotonic representations remain equal.
+func (snapshot ExecutionSnapshot) Equal(other ExecutionSnapshot) bool {
+	return snapshot.ID == other.ID &&
+		snapshot.OwnerID == other.OwnerID &&
+		snapshot.TenantID == other.TenantID &&
+		snapshot.SPL == other.SPL &&
+		slices.Equal(snapshot.EffectiveIndexes, other.EffectiveIndexes) &&
+		snapshot.Earliest.Equal(other.Earliest) &&
+		snapshot.Latest.Equal(other.Latest) &&
+		snapshot.SearchStart.Equal(other.SearchStart) &&
+		snapshot.SearchTimezone == other.SearchTimezone &&
+		snapshot.IndexTimeCutoff.Equal(other.IndexTimeCutoff) &&
+		snapshot.VisibilityCutoff == other.VisibilityCutoff &&
+		snapshot.FinishedAt.Equal(other.FinishedAt) &&
+		snapshot.ExpiresAt.Equal(other.ExpiresAt)
 }
 
 // CompletedExecutionSnapshotFor returns the detached execution scope of a

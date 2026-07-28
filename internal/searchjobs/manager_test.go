@@ -1382,13 +1382,51 @@ func TestCreateRejectsOversizedMetadataAndInvalidGeneratedID(t *testing.T) {
 		})
 	}
 
-	invalidIDManager := newTestManager(t, Config{
+	for _, test := range []struct {
+		name string
+		id   string
+	}{
+		{name: "empty", id: ""},
+		{name: "leading padding", id: " job-id"},
+		{name: "trailing padding", id: "job-id "},
+		{name: "control", id: "job\nid"},
+		{name: "C1 control", id: "job\u0080id"},
+		{name: "invalid UTF-8", id: string([]byte{0xff})},
+		{name: "oversized", id: strings.Repeat("j", MaximumJobIDBytes+1)},
+	} {
+		t.Run("generated ID/"+test.name, func(t *testing.T) {
+			invalidIDManager := newTestManager(t, Config{
+				Executor:        executor,
+				CleanupInterval: -1,
+				NewID:           func() string { return test.id },
+			})
+			if _, err := invalidIDManager.Create(
+				context.Background(),
+				validRequest(),
+			); err == nil {
+				t.Fatal("Create(invalid generated ID) unexpectedly succeeded")
+			}
+			if jobs := invalidIDManager.List(); len(jobs) != 0 {
+				t.Fatalf("invalid generated ID retained %d jobs", len(jobs))
+			}
+		})
+	}
+
+	maximumID := strings.Repeat("j", MaximumJobIDBytes)
+	maximumIDManager := newTestManager(t, Config{
 		Executor:        executor,
 		CleanupInterval: -1,
-		NewID:           func() string { return string([]byte{0xff}) },
+		NewID:           func() string { return maximumID },
 	})
-	if _, err := invalidIDManager.Create(context.Background(), validRequest()); err == nil {
-		t.Fatal("Create(invalid UTF-8 ID) unexpectedly succeeded")
+	created, err := maximumIDManager.Create(
+		context.Background(),
+		validRequest(),
+	)
+	if err != nil {
+		t.Fatalf("Create(maximum generated ID): %v", err)
+	}
+	if created.ID != maximumID {
+		t.Fatalf("created ID has %d bytes, want %d", len(created.ID), len(maximumID))
 	}
 }
 
@@ -1510,6 +1548,57 @@ func TestNewRejectsUnsafeResourceConfiguration(t *testing.T) {
 				t.Fatal("New() succeeded with unsafe configuration")
 			}
 		})
+	}
+}
+
+func TestNewEnforcesMaximumScopeIndexes(t *testing.T) {
+	t.Parallel()
+
+	base := Config{
+		Executor: executorFunc(func(
+			context.Context,
+			clickhouse.CompiledQuery,
+			ResultSink,
+		) error {
+			return nil
+		}),
+		Snapshotter: snapshotterFunc(func(context.Context) (uint64, error) {
+			return 0, nil
+		}),
+		CleanupInterval: -1,
+		CursorKey:       testCursorKey,
+	}
+
+	defaultManager, err := New(base)
+	if err != nil {
+		t.Fatalf("New(default scope limit): %v", err)
+	}
+	if defaultManager.maxScopeIndexes != MaximumScopeIndexes {
+		t.Fatalf(
+			"default scope limit = %d, want %d",
+			defaultManager.maxScopeIndexes,
+			MaximumScopeIndexes,
+		)
+	}
+	if err := defaultManager.Close(); err != nil {
+		t.Fatalf("close default manager: %v", err)
+	}
+
+	atMaximum := base
+	atMaximum.MaxScopeIndexes = MaximumScopeIndexes
+	maximumManager, err := New(atMaximum)
+	if err != nil {
+		t.Fatalf("New(exact maximum scope limit): %v", err)
+	}
+	if err := maximumManager.Close(); err != nil {
+		t.Fatalf("close maximum manager: %v", err)
+	}
+
+	overMaximum := base
+	overMaximum.MaxScopeIndexes = MaximumScopeIndexes + 1
+	if manager, err := New(overMaximum); err == nil {
+		_ = manager.Close()
+		t.Fatal("New() accepted a scope limit above MaximumScopeIndexes")
 	}
 }
 
