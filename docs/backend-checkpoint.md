@@ -7,7 +7,175 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: administrator identity boundary
+## Latest checkpoint: authenticated administrator search inspection
+
+Date: 2026-07-28
+
+Committed and pushed checkpoints:
+
+- `25d809c` — the administrator-only protobuf inspection contract and
+  reproducible generated Go and TypeScript messages;
+- `97396af` — defensive validation of arbitrary inspection-service results
+  before transport publication;
+- `ea1ccdc` — the exact authenticated HTTP route, principal-derived scope,
+  bounded atomic serialization, and feature advertisement;
+- `a94b835` — production runtime wiring with an isolated Explainer lifecycle;
+  and
+- `d17566d` — the pinned all-ten-query GradeThis HTTP integration, detached
+  comparison oracle, and CI gate.
+
+This slice completes the Phase 2 administrator plan-inspection path from one
+real completed job through the authenticated protobuf transport:
+
+1. `search_inspection_api.proto` defines exact POST
+   `/api/v1/search/jobs/inspect`. The request contains only
+   `search_job_id`; tenant and owner selectors are deliberately absent. The
+   response contains the detached logical stages, referenced fields and final
+   output shape; the literal-free structured physical plan; generated SQL;
+   raw structured EXPLAIN; and its diagnostic query ID. The compiler argument
+   vector, result rows, owner IDs, snapshots, and mutable planner state are
+   absent. Generated Go and TypeScript messages and the TypeScript barrel are
+   committed from the protobuf source of truth.
+2. The SQL and raw EXPLAIN are administrator-sensitive. SQL remains
+   parameterized and arguments are not separately exposed, but ClickHouse may
+   render any query-bound tenant, index, or predicate value into raw EXPLAIN.
+   The contract and transport documentation therefore classify the entire
+   response as privileged diagnostic data rather than describing only
+   individual fields as sensitive.
+3. `searchinspection.ValidateResult` distrusts an arbitrary service
+   implementation before serialization. It requires canonical contiguous
+   stages, supported operators, resolved and canonically ordered field sets,
+   valid source coordinates and output-kind invariants, allowlisted physical
+   nodes and indexes, consistent part/granule counters, and bounded UTF-8
+   metadata. It reparses raw EXPLAIN through
+   `queryexec.ParseExplainPlan` and requires exact equality with the supplied
+   physical projection. Every failure wraps the fixed
+   `ErrInspectionFailed` category without echoing SQL, EXPLAIN, IDs, fields,
+   or dependency diagnostics.
+4. The validation ceilings match the producing service and parser: 256 KiB
+   SQL; one MiB EXPLAIN with at most 4,096 nonempty lines and 16 KiB per line;
+   a 128-byte diagnostic query ID; 256 logical stages, 1,024 fields per stage,
+   4,096 final fields, 16,384 projected field occurrences, and one MiB of
+   logical strings; plus 4,096 physical nodes, 256 reads, 4,096 accumulated
+   read headers, 4,096 indexes, 64 keys per index, 16 KiB per physical
+   metadata string, and one MiB of physical strings.
+5. The server registers the route only when a non-nil inspection service is
+   configured, including typed-nil normalization, and handler construction
+   fails closed if that administrative service lacks browser
+   authentication. Exact path and method resolution precede Host/Origin
+   checks and administrator authentication; authentication precedes content
+   type, request admission, protobuf decoding, and service work. Wrong paths
+   and methods remain 404/405 without invoking authentication, while rejected
+   credentials do not read the body or consume admission capacity.
+6. Tenant and owner scope come solely from the detached authenticated browser
+   principal. Both middleware and the handler's defensive boundary require
+   the administrator role and an exact match with the handler's configured
+   tenant/owner; protobuf input and the ordinary fixed search scope cannot
+   select either value. The route accepts one canonical, nonempty,
+   control-free, unpadded UTF-8 job ID of at most 256 bytes, rejects unknown
+   protobuf fields, caps the body at 16 KiB, and continues to reject the
+   ordinary search-job `include_plan` and `include_generated_sql` flags.
+7. Response construction shares the server's fail-fast serialization gate
+   and is atomic under cancellation. The handler validates the complete
+   service result, deeply converts every logical and physical field, checks
+   the protobuf size before publication, and uses a bounded codec with an
+   eight-MiB ceiling that releases its permit on every path. Bootstrap
+   advertises `SERVER_FEATURE_PLAN_INSPECTION` exactly when the service is
+   available.
+8. Transport errors are stable and sanitized: malformed input is 400, missing
+   jobs are 404, expired jobs are 410, not-ready or unavailable results are
+   409, unsupported or execution-limited inspections are 422, inspection
+   capacity is 429, cancellation/deadline is 408, and closed or unavailable
+   storage is 503. Exhausted response-serialization capacity also fails fast
+   with 503. Invalid dependency output, inspection failure, and unknown errors
+   return a generic 500 without leaking diagnostic content.
+9. Production startup now builds the native ClickHouse options once and uses
+   the same validated connection-configuration snapshot for the shared query
+   connection and `queryexec.NewExplainer`. The Explainer still owns two
+   dedicated native lanes, so administrator diagnostics cannot reserve
+   ordinary search/export connections. Construction validates borrowed
+   search/compiler/options dependencies before opening lanes, rejects nil and
+   typed-nil factories, and closes the Explainer if later service construction
+   fails.
+10. Runtime shutdown drains HTTP first, then closes the WebSocket, analysis,
+    and export services before the inspection runtime. Inspection shutdown is
+    concurrent-safe and idempotent: it first stops service admission, cancels
+    and joins active inspections, and only then closes the isolated Explainer.
+    Search jobs, the event store, and the shared ClickHouse connection remain
+    alive until their borrowers release them.
+11. The pinned ClickHouse integration freezes merges, stores the canonical
+    GradeThis corpus plus deterministic poison cohorts, and validates the
+    exact five-part layout before evidence is accepted. It executes all ten
+    canonical searches through the real `searchjobs.Manager`, inspects each
+    through the real service and isolated Explainer, and sends an authenticated
+    bearer request through the exact HTTP route.
+12. For every search, an independent protobuf mapper compares every response
+    field with a completely detached recording of the exact internal result.
+    The clone oracle mutates every nested logical and physical slice to prove
+    independence. The integration also requires exactly two authoritative
+    snapshot reads per job, ten route/service calls, and ten unique diagnostic
+    query IDs. The digest-pinned GradeThis CI selector now includes
+    `internal/server`, and its serial job budget is 20 minutes.
+13. Adversarial review found and closed two P2 contract wording gaps around
+    raw EXPLAIN values and whole-response privilege; one P1 omission that left
+    the HTTP integration outside the pinned CI selector; one P2 shallow-copy
+    oracle that could alias nested result slices; and one P2 CI timeout below
+    the legal serial three-package budget. The selector, full deep-copy oracle
+    with an independence race test, and 20-minute job cap close those findings.
+    Independent final reviews found no remaining P0/P1/P2 issue in the
+    contract, validator, route, runtime, integration, or CI boundary.
+
+Validation on the pushed implementation:
+
+```sh
+go test ./... -count=1
+go test -race \
+  ./internal/searchinspection ./internal/server ./cmd/open-splunk-server \
+  -count=1
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/queryexec ./internal/searchinspection ./internal/server \
+    -run '^(TestGradeThis(CompatibilityV0_1|InspectionService)AgainstClickHouse|TestSearchInspectionRouteGradeThisAgainstClickHouse)$' \
+    -count=1 -timeout=6m -p=1
+go test -race ./internal/server \
+  -run '^TestGradeThisInspectionRouteResultCloneIsIndependent$' -count=1
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=5m ./...
+npm run lint
+npm run typecheck
+npm run test:frontend
+make proto
+git diff --check
+```
+
+The full Go suite, focused race suite, complete pinned three-package
+GradeThis selector, and clone-oracle race test passed. The exact route
+integration completed in 7.71 seconds; fixture cleanup left no ClickHouse
+container behind. Vet, build, repository-wide Go lint with zero issues,
+frontend lint/typecheck, all 47 release/build tests, all 136 frontend tests,
+Buf format/lint plus reproducible protobuf generation, CI YAML parsing, and
+`git diff --check` also passed.
+
+Next priorities:
+
+1. Keep this route administrator-only and retain its validator, lifecycle,
+   corpus, and pinned-CI gates while continuing the remaining product phases.
+2. Select the next bounded Phase 3 slice from per-index retention and
+   permissions, index/app administration, ingestion-token and collector fleet
+   operations, reports/dashboards, HEC compatibility, or expanded RBAC and
+   audit search.
+3. Continue Phase 4 with migration upgrades, backup/restore and disaster
+   recovery, load shedding and fair/per-user scheduling, alerts and scheduled
+   searches, and packaging/installers/upgrades/signed releases.
+4. Retain the lifecycle backlog: bounded ingestion-token tombstones, surfaced
+   export-deletion failures, physical search-history cleanup, completion of
+   deleting-index state, and a bounded WebSocket shutdown dependency.
+5. Do not guess unresolved capacity, hardware, concurrent-load, Windows, or
+   dashboard-scope product decisions when they materially affect a slice.
+
+## Previous checkpoint: administrator identity boundary
 
 Date: 2026-07-28
 
@@ -118,29 +286,12 @@ The full Go suite passed, the focused race suite passed, the Linux release
 target cross-built without CGO, and repository-wide Go lint reported zero
 issues.
 
-Immediate resume steps:
+Follow-up status:
 
-1. Confirm `main` and `origin/main` contain `8a66f10`.
-2. Add a dedicated exact POST `/api/v1/search/jobs/inspect` protobuf route.
-   Its request contains only `search_job_id`; derive tenant and owner solely
-   from the detached administrator principal, never from protobuf or the
-   handler's ordinary fixed scope.
-3. Register the route in the SRouter definition, exact API route map, and
-   administrator route set. Keep the ordinary search-job `include_plan` and
-   `include_generated_sql` flags rejected.
-4. Add bounded protobuf projections for logical and physical plans, generated
-   SQL, raw EXPLAIN text, and diagnostic query ID. Defensively validate an
-   arbitrary inspection-service result before serialization, including
-   reparsing raw EXPLAIN and requiring equality with its structured physical
-   plan.
-5. Give the runtime inspection service an isolated two-lane Explainer
-   lifecycle. Drain HTTP first, then close the inspection service, Explainer,
-   search manager, and shared ClickHouse resources in that order.
-6. Add a pinned ClickHouse HTTP integration that executes all ten canonical
-   GradeThis searches through real completed jobs and compares every
-   authorized route projection with the exact internal inspection result.
-7. Then continue Phase 3/4 HEC, reports/dashboards, RBAC expansion, audit
-   search, alerts, scheduled searches, and packaging.
+The inspection contract, validator, exact administrator route, isolated
+runtime lifecycle, and pinned all-ten-query HTTP integration identified by
+this checkpoint's former resume list are complete in `25d809c` through
+`d17566d` and documented in the latest checkpoint above.
 
 ## Previous checkpoint: measured GradeThis plans and schema decision
 
