@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/collector"
@@ -209,6 +210,80 @@ func TestFixtureDecodesThroughCollectorWithTypedRequestFields(t *testing.T) {
 			t.Fatalf("%q decoded fields = %#v, want %#v", expected.ID, gotFields, wantFields)
 		}
 		offset = end + 1
+	}
+}
+
+func TestInspectionLoadCohortsPinIndependentPruningDimensions(t *testing.T) {
+	t.Parallel()
+
+	profile := Fixture()
+	cohorts, err := InspectionLoadCohorts("tenant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateInspectionLoad(profile, "tenant", cohorts); err != nil {
+		t.Fatal(err)
+	}
+	if len(cohorts) != 4 {
+		t.Fatalf("inspection load cohorts = %d, want 4", len(cohorts))
+	}
+	var rows uint64
+	seen := make(map[InspectionLoadCohortID]struct{}, len(cohorts))
+	for _, cohort := range cohorts {
+		rows += cohort.Rows
+		if cohort.Rows != InspectionLoadRowsPerCohort {
+			t.Fatalf("cohort %q rows = %d", cohort.ID, cohort.Rows)
+		}
+		if _, duplicate := seen[cohort.ID]; duplicate {
+			t.Fatalf("duplicate cohort %q", cohort.ID)
+		}
+		seen[cohort.ID] = struct{}{}
+	}
+	if rows != InspectionLoadTotalRows {
+		t.Fatalf("inspection load rows = %d, want %d", rows, InspectionLoadTotalRows)
+	}
+
+	byID := make(map[InspectionLoadCohortID]InspectionLoadCohort, len(cohorts))
+	for _, cohort := range cohorts {
+		byID[cohort.ID] = cohort
+	}
+	latest := profile.BaseTime.Add(15 * time.Minute)
+	outOfTime := byID[InspectionLoadSameScopeOutOfTime]
+	if outOfTime.TenantID != "tenant" ||
+		outOfTime.IndexName != IndexName ||
+		!outOfTime.EventTime.Equal(profile.BaseTime.Add(30*time.Minute)) ||
+		outOfTime.EventTime.Before(latest) {
+		t.Fatalf("same-scope out-of-time cohort = %#v", outOfTime)
+	}
+	foreignTenant := byID[InspectionLoadForeignTenant]
+	if foreignTenant.TenantID == "tenant" ||
+		foreignTenant.IndexName != IndexName ||
+		foreignTenant.EventTime.Before(profile.BaseTime) ||
+		!foreignTenant.EventTime.Before(latest) {
+		t.Fatalf("foreign-tenant cohort = %#v", foreignTenant)
+	}
+	foreignIndex := byID[InspectionLoadForeignIndex]
+	if foreignIndex.TenantID != "tenant" ||
+		foreignIndex.IndexName == IndexName ||
+		foreignIndex.EventTime.Before(profile.BaseTime) ||
+		!foreignIndex.EventTime.Before(latest) {
+		t.Fatalf("foreign-index cohort = %#v", foreignIndex)
+	}
+	adjacent := byID[InspectionLoadAdjacentPartition]
+	if adjacent.TenantID != "tenant" ||
+		adjacent.IndexName != IndexName ||
+		!adjacent.EventTime.Before(profile.BaseTime) ||
+		adjacent.EventTime.Month() == profile.BaseTime.Month() {
+		t.Fatalf("adjacent-partition cohort = %#v", adjacent)
+	}
+
+	cohorts[0].TenantID = "mutated"
+	fresh, err := InspectionLoadCohorts("tenant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh[0].TenantID == "mutated" {
+		t.Fatal("InspectionLoadCohorts returned aliased storage")
 	}
 }
 
