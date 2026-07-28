@@ -16,6 +16,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"gorm.io/gorm"
 )
 
 var testCursorKey = []byte("saved-search-test-cursor-key-32-bytes-minimum")
@@ -87,9 +88,240 @@ func TestNewValidatesDependenciesAndClonesCursorKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
+	if store.orm != database.GORMDB() {
+		t.Fatal("New() did not retain the configured shared GORM handle")
+	}
 	key[0] ^= 0xff
 	if store.cursorKey[0] == key[0] {
 		t.Fatal("New() retained caller cursor-key storage")
+	}
+}
+
+func TestSavedSearchGORMModelMatchesMigratedSQLiteSchema(t *testing.T) {
+	t.Parallel()
+
+	database, _, _ := openTestStore(t)
+	statement := &gorm.Statement{DB: database.GORMDB()}
+	if err := statement.Parse(&savedSearchRecord{}); err != nil {
+		t.Fatalf("parse GORM saved-search model: %v", err)
+	}
+
+	rows, err := database.SQLDB().QueryContext(
+		context.Background(),
+		`SELECT name FROM pragma_table_info('saved_searches') ORDER BY cid`,
+	)
+	if err != nil {
+		t.Fatalf("read migrated saved-search columns: %v", err)
+	}
+	var migratedColumns []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan migrated saved-search column: %v", err)
+		}
+		migratedColumns = append(migratedColumns, name)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close migrated saved-search columns: %v", err)
+	}
+	if !slices.Equal(statement.Schema.DBNames, migratedColumns) {
+		t.Fatalf(
+			"GORM saved-search columns = %v, migrated columns = %v",
+			statement.Schema.DBNames,
+			migratedColumns,
+		)
+	}
+	idField := statement.Schema.LookUpField("SavedSearchID")
+	if idField == nil || !idField.PrimaryKey {
+		t.Fatalf("GORM saved-search primary key is not explicit: %#v", idField)
+	}
+
+	expectedChecks := map[string]string{
+		"saved_searches_app_id_length":            "length(app_id) <= 255",
+		"saved_searches_definition_length":        "length(definition_proto) BETWEEN 1 AND 262144",
+		"saved_searches_id_length":                "length(saved_search_id) BETWEEN 1 AND 128",
+		"saved_searches_name_length":              "length(name) BETWEEN 1 AND 255",
+		"saved_searches_owner_id_length":          "length(owner_id) <= 255",
+		"saved_searches_sharing_scope_range":      "sharing_scope BETWEEN 1 AND 3",
+		"saved_searches_update_not_before_create": "updated_at_unix_micro >= created_at_unix_micro",
+		"saved_searches_version_positive":         "version >= 1",
+	}
+	modelChecks := statement.Schema.ParseCheckConstraints()
+	if len(modelChecks) != len(expectedChecks) {
+		t.Fatalf("GORM saved-search checks = %v, want %v", modelChecks, expectedChecks)
+	}
+	var migratedDDL string
+	if err := database.SQLDB().QueryRowContext(
+		context.Background(),
+		`SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'saved_searches'`,
+	).Scan(&migratedDDL); err != nil {
+		t.Fatalf("read migrated saved-search DDL: %v", err)
+	}
+	normalizedDDL := strings.Join(strings.Fields(migratedDDL), " ")
+	for name, constraint := range expectedChecks {
+		check, exists := modelChecks[name]
+		if !exists || check.Constraint != constraint {
+			t.Errorf("GORM check %s = %#v, want %q", name, check, constraint)
+		}
+		if !strings.Contains(normalizedDDL, "CHECK ("+constraint+")") {
+			t.Errorf("migrated saved-search DDL does not contain check %q", constraint)
+		}
+	}
+
+	type indexShape struct {
+		class   string
+		columns []string
+		sorts   []string
+	}
+	expectedIndexes := map[string]indexShape{
+		"saved_searches_app_name_id_idx": {
+			columns: []string{"app_id", "name", "saved_search_id"},
+			sorts:   []string{"", "", ""},
+		},
+		"saved_searches_owner_app_name_key": {
+			class:   "UNIQUE",
+			columns: []string{"owner_id", "app_id", "name"},
+			sorts:   []string{"", "", ""},
+		},
+		"saved_searches_owner_created_id_idx": {
+			columns: []string{"owner_id", "created_at_unix_micro", "saved_search_id"},
+			sorts:   []string{"", "", ""},
+		},
+		"saved_searches_owner_name_id_idx": {
+			columns: []string{"owner_id", "name", "saved_search_id"},
+			sorts:   []string{"", "", ""},
+		},
+		"saved_searches_owner_updated_id_idx": {
+			columns: []string{"owner_id", "updated_at_unix_micro", "saved_search_id"},
+			sorts:   []string{"", "", ""},
+		},
+		"saved_searches_updated_idx": {
+			columns: []string{"updated_at_unix_micro", "saved_search_id"},
+			sorts:   []string{"desc", ""},
+		},
+	}
+	modelIndexes := make(map[string]indexShape)
+	for _, index := range statement.Schema.ParseIndexes() {
+		shape := indexShape{class: index.Class}
+		for _, option := range index.Fields {
+			shape.columns = append(shape.columns, option.DBName)
+			shape.sorts = append(shape.sorts, option.Sort)
+		}
+		modelIndexes[index.Name] = shape
+	}
+	if len(modelIndexes) != len(expectedIndexes) {
+		t.Fatalf("GORM saved-search indexes = %v, want %v", modelIndexes, expectedIndexes)
+	}
+	for name, want := range expectedIndexes {
+		got, exists := modelIndexes[name]
+		if !exists ||
+			got.class != want.class ||
+			!slices.Equal(got.columns, want.columns) ||
+			!slices.Equal(got.sorts, want.sorts) {
+			t.Errorf("GORM index %s = %#v, want %#v", name, got, want)
+		}
+		if name == "saved_searches_owner_app_name_key" {
+			continue
+		}
+		migratedColumns, migratedDescending := readSavedSearchIndexShape(t, database, name)
+		if !slices.Equal(migratedColumns, want.columns) ||
+			!slices.Equal(migratedDescending, descendingFlags(want.sorts)) {
+			t.Errorf(
+				"migrated index %s = columns %v descending %v, want columns %v descending %v",
+				name,
+				migratedColumns,
+				migratedDescending,
+				want.columns,
+				descendingFlags(want.sorts),
+			)
+		}
+	}
+	assertMigratedSavedSearchUniqueKey(t, database, expectedIndexes["saved_searches_owner_app_name_key"].columns)
+}
+
+func TestSavedSearchGORMListUsesOwnerKeysetIndexes(t *testing.T) {
+	t.Parallel()
+
+	database, _, _ := openTestStore(t)
+	integerCursor := int64(1)
+	tests := []struct {
+		name          string
+		sortBy        opensplunkv1.SavedSearchSortBy
+		sortDirection opensplunkv1.SortDirection
+		cursor        listCursor
+		wantIndex     string
+	}{
+		{
+			name:          "name ascending",
+			sortBy:        opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME,
+			sortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+			cursor:        listCursor{StringKey: "middle", SavedSearch: "ss_middle"},
+			wantIndex:     "saved_searches_owner_name_id_idx",
+		},
+		{
+			name:          "created descending",
+			sortBy:        opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT,
+			sortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+			cursor:        listCursor{IntegerKey: &integerCursor, SavedSearch: "ss_middle"},
+			wantIndex:     "saved_searches_owner_created_id_idx",
+		},
+		{
+			name:          "updated ascending",
+			sortBy:        opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT,
+			sortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+			cursor:        listCursor{IntegerKey: &integerCursor, SavedSearch: "ss_middle"},
+			wantIndex:     "saved_searches_owner_updated_id_idx",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := normalizedListRequest{
+				ownerID:       "owner",
+				pageSize:      50,
+				sortBy:        test.sortBy,
+				sortDirection: test.sortDirection,
+			}
+			query := applySavedSearchListFilters(
+				database.GORMDB().Session(&gorm.Session{DryRun: true}).Model(&savedSearchRecord{}),
+				request,
+			)
+			query = applySavedSearchListCursor(query, request, test.cursor)
+			query = applySavedSearchListOrder(query, request)
+			var records []savedSearchRecord
+			generated := query.Limit(int(request.pageSize) + 1).Find(&records)
+			if generated.Error != nil {
+				t.Fatalf("build GORM list query: %v", generated.Error)
+			}
+			planRows, err := database.SQLDB().QueryContext(
+				context.Background(),
+				"EXPLAIN QUERY PLAN "+generated.Statement.SQL.String(),
+				generated.Statement.Vars...,
+			)
+			if err != nil {
+				t.Fatalf("explain GORM list query: %v", err)
+			}
+			var details []string
+			for planRows.Next() {
+				var id, parent, unused int64
+				var detail string
+				if err := planRows.Scan(&id, &parent, &unused, &detail); err != nil {
+					_ = planRows.Close()
+					t.Fatalf("scan GORM list query plan: %v", err)
+				}
+				details = append(details, detail)
+			}
+			if err := planRows.Close(); err != nil {
+				t.Fatalf("close GORM list query plan: %v", err)
+			}
+			plan := strings.Join(details, "\n")
+			if !strings.Contains(plan, test.wantIndex) {
+				t.Errorf("GORM list query plan = %q, want index %q", plan, test.wantIndex)
+			}
+			if strings.Contains(plan, "USE TEMP B-TREE") {
+				t.Errorf("GORM list query plan performs a temporary sort: %q", plan)
+			}
+		})
 	}
 }
 
@@ -179,6 +411,55 @@ func TestDefinitionPersistenceIsDeterministicAndDefinitionOnly(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "SELECT ") || strings.Contains(string(encoded), "clickhouse") {
 		t.Fatal("stored definition unexpectedly contains generated SQL/storage state")
+	}
+}
+
+func TestGORMPersistenceHonorsMigratedAppWorkspaceTriggers(t *testing.T) {
+	database, store, _ := openTestStore(t)
+	catalog, err := control.NewAppCatalog(database, control.AppCatalogOptions{
+		CursorKey: []byte("saved-search-app-catalog-test-key"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := catalog.CreateApp(
+		context.Background(),
+		control.AppAccessScope{TenantID: "tenant"},
+		control.AppDefinition{Slug: "search-app", DisplayName: "Search App"},
+	)
+	if err != nil {
+		t.Fatalf("CreateApp() error = %v", err)
+	}
+	created, err := store.Create(
+		context.Background(),
+		AccessScope{OwnerID: "owner"},
+		savedSearchDefinition("existing canonical app", app.ID),
+	)
+	if err != nil {
+		t.Fatalf("Create(existing canonical app) error = %v", err)
+	}
+	if created.Definition.Search.GetAppId() != app.ID {
+		t.Fatalf("Create(existing canonical app) app = %q, want %q", created.Definition.Search.GetAppId(), app.ID)
+	}
+
+	missingCanonicalApp := "app_AAAAAAAAAAAAAAAAAAAAAA"
+	if _, err := store.Create(
+		context.Background(),
+		AccessScope{OwnerID: "owner"},
+		savedSearchDefinition("missing canonical app", missingCanonicalApp),
+	); err == nil || errors.Is(err, control.ErrAlreadyExists) {
+		t.Fatalf("Create(missing canonical app) error = %v, want migrated dependency rejection", err)
+	}
+	page, err := store.List(
+		context.Background(),
+		AccessScope{OwnerID: "owner"},
+		ListRequest{IncludeTotal: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.TotalSize == nil || *page.TotalSize != 1 {
+		t.Fatalf("saved-search total after rejected app reference = %v, want 1", page.TotalSize)
 	}
 }
 
@@ -334,6 +615,75 @@ func TestConcurrentCreateClassifiesUniqueName(t *testing.T) {
 	}
 	if success != 1 || exists != 1 {
 		t.Fatalf("concurrent creates: success=%d exists=%d", success, exists)
+	}
+}
+
+func TestGORMCreateAndDuplicateRetryIDCollisions(t *testing.T) {
+	database, _, _ := openTestStore(t)
+	ids := []string{
+		"ss_source",
+		"ss_existing",
+		"ss_existing",
+		"ss_created_after_collision",
+		"ss_source",
+		"ss_duplicate_after_collision",
+	}
+	var idCalls atomic.Int64
+	store, err := New(database, Options{
+		CursorKey: testCursorKey,
+		Clock: func() time.Time {
+			return time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+		},
+		IDGenerator: func() (string, error) {
+			index := idCalls.Add(1) - 1
+			return ids[index], nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := AccessScope{OwnerID: "owner"}
+	source, err := store.Create(
+		context.Background(),
+		scope,
+		savedSearchDefinition("source", "app"),
+	)
+	if err != nil {
+		t.Fatalf("Create(source) error = %v", err)
+	}
+	if _, err := store.Create(
+		context.Background(),
+		scope,
+		savedSearchDefinition("existing", "app"),
+	); err != nil {
+		t.Fatalf("Create(existing) error = %v", err)
+	}
+	created, err := store.Create(
+		context.Background(),
+		scope,
+		savedSearchDefinition("created after collision", "app"),
+	)
+	if err != nil {
+		t.Fatalf("Create(after collision) error = %v", err)
+	}
+	if created.SavedSearchId != "ss_created_after_collision" {
+		t.Fatalf("Create(after collision) ID = %q", created.SavedSearchId)
+	}
+	duplicate, err := store.Duplicate(
+		context.Background(),
+		scope,
+		source.SavedSearchId,
+		"duplicate after collision",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Duplicate(after collision) error = %v", err)
+	}
+	if duplicate.SavedSearchId != "ss_duplicate_after_collision" {
+		t.Fatalf("Duplicate(after collision) ID = %q", duplicate.SavedSearchId)
+	}
+	if got := idCalls.Load(); got != int64(len(ids)) {
+		t.Fatalf("ID generator calls = %d, want %d", got, len(ids))
 	}
 }
 
@@ -517,6 +867,82 @@ func differentCursorByte(value byte) string {
 	return "A"
 }
 
+func readSavedSearchIndexShape(
+	t *testing.T,
+	database *control.DB,
+	indexName string,
+) ([]string, []int64) {
+	t.Helper()
+	rows, err := database.SQLDB().QueryContext(
+		context.Background(),
+		`SELECT name, "desc" FROM pragma_index_xinfo(?) WHERE key = 1 ORDER BY seqno`,
+		indexName,
+	)
+	if err != nil {
+		t.Fatalf("read migrated saved-search index %s: %v", indexName, err)
+	}
+	var columns []string
+	var descending []int64
+	for rows.Next() {
+		var column string
+		var isDescending int64
+		if err := rows.Scan(&column, &isDescending); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan migrated saved-search index %s: %v", indexName, err)
+		}
+		columns = append(columns, column)
+		descending = append(descending, isDescending)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close migrated saved-search index %s: %v", indexName, err)
+	}
+	return columns, descending
+}
+
+func descendingFlags(sorts []string) []int64 {
+	result := make([]int64, len(sorts))
+	for index, sort := range sorts {
+		if strings.EqualFold(sort, "DESC") {
+			result[index] = 1
+		}
+	}
+	return result
+}
+
+func assertMigratedSavedSearchUniqueKey(
+	t *testing.T,
+	database *control.DB,
+	wantColumns []string,
+) {
+	t.Helper()
+	rows, err := database.SQLDB().QueryContext(
+		context.Background(),
+		`SELECT name FROM pragma_index_list('saved_searches') WHERE "unique" = 1`,
+	)
+	if err != nil {
+		t.Fatalf("read migrated saved-search unique indexes: %v", err)
+	}
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan migrated saved-search unique index: %v", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close migrated saved-search unique indexes: %v", err)
+	}
+	for _, name := range names {
+		columns, _ := readSavedSearchIndexShape(t, database, name)
+		if slices.Equal(columns, wantColumns) {
+			return
+		}
+	}
+	t.Fatalf("migrated saved-search unique key %v was not found", wantColumns)
+}
+
 func TestCursorAndRecordsSurviveReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.sqlite")
 	ctx := context.Background()
@@ -574,8 +1000,10 @@ func TestMalformedStoredProtoAndMetadataAreRejected(t *testing.T) {
 	if _, err := database.SQLDB().ExecContext(ctx, `UPDATE saved_searches SET definition_proto = x'ff' WHERE saved_search_id = ?`, created.SavedSearchId); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Get(ctx, scope, created.SavedSearchId); err == nil || errors.Is(err, control.ErrNotFound) {
-		t.Fatalf("Get(malformed proto) error = %v", err)
+	if _, err := store.Get(ctx, scope, created.SavedSearchId); err == nil ||
+		errors.Is(err, control.ErrNotFound) ||
+		errors.Is(err, control.ErrInvalidArgument) {
+		t.Fatalf("Get(malformed proto) error = %v, want internal persistence error", err)
 	}
 
 	other, err := store.Create(ctx, scope, savedSearchDefinition("valid two", "app"))
@@ -585,8 +1013,30 @@ func TestMalformedStoredProtoAndMetadataAreRejected(t *testing.T) {
 	if _, err := database.SQLDB().ExecContext(ctx, `UPDATE saved_searches SET name = 'mismatch' WHERE saved_search_id = ?`, other.SavedSearchId); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Get(ctx, scope, other.SavedSearchId); err == nil {
-		t.Fatal("Get(mismatched metadata) unexpectedly succeeded")
+	if _, err := store.Get(ctx, scope, other.SavedSearchId); err == nil ||
+		errors.Is(err, control.ErrInvalidArgument) {
+		t.Fatalf("Get(mismatched metadata) error = %v, want internal persistence error", err)
+	}
+
+	invalidDefinitionProto, err := proto.Marshal(&opensplunkv1.SavedSearchDefinition{Name: "missing search"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid, err := store.Create(ctx, scope, savedSearchDefinition("valid three", "app"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.SQLDB().ExecContext(
+		ctx,
+		`UPDATE saved_searches SET definition_proto = ? WHERE saved_search_id = ?`,
+		invalidDefinitionProto,
+		invalid.SavedSearchId,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(ctx, scope, invalid.SavedSearchId); err == nil ||
+		errors.Is(err, control.ErrInvalidArgument) {
+		t.Fatalf("Get(invalid definition) error = %v, want internal persistence error", err)
 	}
 }
 

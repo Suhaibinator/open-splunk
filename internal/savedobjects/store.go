@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 )
 
 const (
@@ -63,7 +64,7 @@ type ListResult struct {
 
 // Store owns saved-search persistence over an already configured control DB.
 type Store struct {
-	db          *sql.DB
+	orm         *gorm.DB
 	clock       func() time.Time
 	idGenerator func() (string, error)
 	cursorKey   []byte
@@ -73,7 +74,7 @@ type Store struct {
 // generated here: a random process-local key would invalidate tokens after a
 // restart, while a built-in key would make them forgeable.
 func New(db *control.DB, options Options) (*Store, error) {
-	if db == nil || db.SQLDB() == nil {
+	if db == nil || db.GORMDB() == nil {
 		return nil, fmt.Errorf("%w: control database is required", control.ErrInvalidArgument)
 	}
 	if len(options.CursorKey) < minimumCursorKeyBytes {
@@ -88,7 +89,7 @@ func New(db *control.DB, options Options) (*Store, error) {
 		idGenerator = newSavedSearchID
 	}
 	return &Store{
-		db:          db.SQLDB(),
+		orm:         db.GORMDB(),
 		clock:       clock,
 		idGenerator: idGenerator,
 		cursorKey:   slices.Clone(options.CursorKey),
@@ -121,16 +122,9 @@ func (store *Store) Create(ctx context.Context, scope AccessScope, definition *o
 		if err := validateObjectID(id); err != nil {
 			return nil, errors.New("generate saved-search ID: generator returned an invalid ID")
 		}
-		_, err = store.db.ExecContext(ctx, `
-			INSERT INTO saved_searches (
-				saved_search_id, version, name, app_id, owner_id,
-				sharing_scope, definition_proto,
-				created_at_unix_micro, updated_at_unix_micro
-			) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)`,
-			id, indexed.name, indexed.appID, ownerID, int64(indexed.sharingScope),
-			encoded, now.UnixMicro(), now.UnixMicro(),
-		)
-		if err == nil {
+		record := newSavedSearchRecord(id, ownerID, indexed, encoded, now)
+		create := store.orm.WithContext(ctx).Create(&record)
+		if create.Error == nil {
 			return buildSavedSearch(id, 1, normalized, now, now), nil
 		}
 		if contextErr := ctx.Err(); contextErr != nil {
@@ -143,13 +137,16 @@ func (store *Store) Create(ctx context.Context, scope AccessScope, definition *o
 		if conflict {
 			return nil, fmt.Errorf("%w: saved search %q already exists in app %q", control.ErrAlreadyExists, indexed.name, indexed.appID)
 		}
-		var existingID string
-		idErr := store.db.QueryRowContext(ctx, `SELECT saved_search_id FROM saved_searches WHERE saved_search_id = ?`, id).Scan(&existingID)
+		var existing savedSearchRecord
+		idErr := store.orm.WithContext(ctx).
+			Select("saved_search_id").
+			Where("saved_search_id = ?", id).
+			Take(&existing).Error
 		switch {
 		case idErr == nil:
 			continue
-		case errors.Is(idErr, sql.ErrNoRows):
-			return nil, fmt.Errorf("create saved search: %w", err)
+		case errors.Is(idErr, gorm.ErrRecordNotFound):
+			return nil, fmt.Errorf("create saved search: %w", create.Error)
 		default:
 			return nil, fmt.Errorf("check saved-search ID collision: %w", idErr)
 		}
@@ -169,14 +166,23 @@ func (store *Store) Get(ctx context.Context, scope AccessScope, id string) (*ope
 	if err := validateObjectID(id); err != nil {
 		return nil, err
 	}
-	result, err := scanSavedSearch(store.db.QueryRowContext(ctx, savedSearchSelect+` WHERE saved_search_id = ? AND owner_id = ?`, id, ownerID))
-	if errors.Is(err, sql.ErrNoRows) {
+	record, err := takeSavedSearchRecord(
+		store.orm.WithContext(ctx),
+		"saved_search_id = ? AND owner_id = ?",
+		id,
+		ownerID,
+	)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, control.ErrNotFound
 	}
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return nil, fmt.Errorf("get saved search: %w", contextErr)
 		}
+		return nil, fmt.Errorf("get saved search: %w", err)
+	}
+	result, err := savedSearchFromRecord(record)
+	if err != nil {
 		return nil, fmt.Errorf("get saved search: %w", err)
 	}
 	return result, nil
@@ -206,16 +212,25 @@ func (store *Store) Update(ctx context.Context, scope AccessScope, id string, ex
 		return nil, fmt.Errorf("%w: saved-search definition is required", control.ErrInvalidArgument)
 	}
 
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, mapContextError(ctx, "begin saved-search update", err)
+	tx := store.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return nil, mapContextError(ctx, "begin saved-search update", tx.Error)
 	}
-	defer finishTx(tx, &returnedErr)
+	defer finishSavedSearchTx(tx, &returnedErr)
 
-	current, err := scanSavedSearch(tx.QueryRowContext(ctx, savedSearchSelect+` WHERE saved_search_id = ? AND owner_id = ?`, id, ownerID))
-	if errors.Is(err, sql.ErrNoRows) {
+	currentRecord, err := takeSavedSearchRecord(
+		tx,
+		"saved_search_id = ? AND owner_id = ?",
+		id,
+		ownerID,
+	)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, control.ErrNotFound
 	}
+	if err != nil {
+		return nil, fmt.Errorf("read saved search for update: %w", err)
+	}
+	current, err := savedSearchFromRecord(currentRecord)
 	if err != nil {
 		return nil, fmt.Errorf("read saved search for update: %w", err)
 	}
@@ -230,7 +245,7 @@ func (store *Store) Update(ctx context.Context, scope AccessScope, id string, ex
 	if err != nil {
 		return nil, err
 	}
-	conflict, err := nameConflictQuery(ctx, tx, ownerID, indexed.appID, indexed.name, id)
+	conflict, err := nameConflictQuery(tx, ownerID, indexed.appID, indexed.name, id)
 	if err != nil {
 		return nil, fmt.Errorf("check saved-search name conflict: %w", err)
 	}
@@ -241,31 +256,34 @@ func (store *Store) Update(ctx context.Context, scope AccessScope, id string, ex
 	if err != nil {
 		return nil, err
 	}
-	updateResult, err := tx.ExecContext(ctx, `
-		UPDATE saved_searches SET
-			version = version + 1,
-			name = ?, app_id = ?, sharing_scope = ?, definition_proto = ?,
-			updated_at_unix_micro = ?
-		WHERE saved_search_id = ? AND owner_id = ? AND version = ?`,
-		indexed.name, indexed.appID, int64(indexed.sharingScope), encoded,
-		// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
-		now.UnixMicro(), id, ownerID, int64(expectedVersion),
-	)
-	if err != nil {
+	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
+	expectedVersionDB := int64(expectedVersion)
+	update := tx.Model(&savedSearchRecord{}).
+		Where(
+			"saved_search_id = ? AND owner_id = ? AND version = ?",
+			id,
+			ownerID,
+			expectedVersionDB,
+		).
+		Updates(map[string]any{
+			"app_id":                indexed.appID,
+			"definition_proto":      encoded,
+			"name":                  indexed.name,
+			"sharing_scope":         int64(indexed.sharingScope),
+			"updated_at_unix_micro": now.UnixMicro(),
+			"version":               gorm.Expr("version + 1"),
+		})
+	if update.Error != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return nil, fmt.Errorf("update saved search: %w", contextErr)
 		}
-		return nil, fmt.Errorf("update saved search: %w", err)
+		return nil, fmt.Errorf("update saved search: %w", update.Error)
 	}
-	rowsAffected, err := updateResult.RowsAffected()
-	if err != nil {
-		return nil, fmt.Errorf("read saved-search update count: %w", err)
-	}
-	if rowsAffected != 1 {
+	if update.RowsAffected != 1 {
 		return nil, control.ErrVersionConflict
 	}
 	result = buildSavedSearch(id, expectedVersion+1, normalized, current.CreatedAt.AsTime(), now)
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit().Error; err != nil {
 		return nil, mapContextError(ctx, "commit saved-search update", err)
 	}
 	return result, nil
@@ -284,15 +302,24 @@ func (store *Store) Duplicate(ctx context.Context, scope AccessScope, sourceID, 
 		return nil, err
 	}
 
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, mapContextError(ctx, "begin saved-search duplicate", err)
+	tx := store.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return nil, mapContextError(ctx, "begin saved-search duplicate", tx.Error)
 	}
-	defer finishTx(tx, &returnedErr)
-	source, err := scanSavedSearch(tx.QueryRowContext(ctx, savedSearchSelect+` WHERE saved_search_id = ? AND owner_id = ?`, sourceID, ownerID))
-	if errors.Is(err, sql.ErrNoRows) {
+	defer finishSavedSearchTx(tx, &returnedErr)
+	sourceRecord, err := takeSavedSearchRecord(
+		tx,
+		"saved_search_id = ? AND owner_id = ?",
+		sourceID,
+		ownerID,
+	)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, control.ErrNotFound
 	}
+	if err != nil {
+		return nil, fmt.Errorf("read saved search for duplicate: %w", err)
+	}
+	source, err := savedSearchFromRecord(sourceRecord)
 	if err != nil {
 		return nil, fmt.Errorf("read saved search for duplicate: %w", err)
 	}
@@ -308,7 +335,7 @@ func (store *Store) Duplicate(ctx context.Context, scope AccessScope, sourceID, 
 	if err != nil {
 		return nil, err
 	}
-	conflict, err := nameConflictQuery(ctx, tx, ownerID, indexed.appID, indexed.name, "")
+	conflict, err := nameConflictQuery(tx, ownerID, indexed.appID, indexed.name, "")
 	if err != nil {
 		return nil, fmt.Errorf("check duplicate saved-search name: %w", err)
 	}
@@ -327,29 +354,35 @@ func (store *Store) Duplicate(ctx context.Context, scope AccessScope, sourceID, 
 		if validationErr := validateObjectID(id); validationErr != nil {
 			return nil, errors.New("generate duplicate saved-search ID: generator returned an invalid ID")
 		}
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO saved_searches (
-				saved_search_id, version, name, app_id, owner_id,
-				sharing_scope, definition_proto,
-				created_at_unix_micro, updated_at_unix_micro
-			) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)`,
-			id, indexed.name, indexed.appID, ownerID, int64(indexed.sharingScope),
-			encoded, now.UnixMicro(), now.UnixMicro(),
-		)
-		if err == nil {
+		record := newSavedSearchRecord(id, ownerID, indexed, encoded, now)
+		create := tx.Create(&record)
+		if create.Error == nil {
 			result = buildSavedSearch(id, 1, normalized, now, now)
-			if err := tx.Commit(); err != nil {
+			if err := tx.Commit().Error; err != nil {
 				return nil, mapContextError(ctx, "commit saved-search duplicate", err)
 			}
 			return result, nil
 		}
-		var existing int
-		idErr = tx.QueryRowContext(ctx, `SELECT 1 FROM saved_searches WHERE saved_search_id = ?`, id).Scan(&existing)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, fmt.Errorf("duplicate saved search: %w", contextErr)
+		}
+		conflict, conflictErr := nameConflictQuery(tx, ownerID, indexed.appID, indexed.name, "")
+		if conflictErr != nil {
+			return nil, fmt.Errorf("check duplicate saved-search name: %w", conflictErr)
+		}
+		if conflict {
+			return nil, fmt.Errorf("%w: saved search %q already exists in app %q", control.ErrAlreadyExists, indexed.name, indexed.appID)
+		}
+		var existing savedSearchRecord
+		idErr = tx.
+			Select("saved_search_id").
+			Where("saved_search_id = ?", id).
+			Take(&existing).Error
 		if idErr == nil {
 			continue
 		}
-		if errors.Is(idErr, sql.ErrNoRows) {
-			return nil, fmt.Errorf("duplicate saved search: %w", err)
+		if errors.Is(idErr, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("duplicate saved search: %w", create.Error)
 		}
 		return nil, fmt.Errorf("check duplicate saved-search ID collision: %w", idErr)
 	}
@@ -371,84 +404,78 @@ func (store *Store) Delete(ctx context.Context, scope AccessScope, id string, ex
 	if err := validateExpectedVersion(expectedVersion); err != nil {
 		return err
 	}
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return mapContextError(ctx, "begin saved-search delete", err)
+	tx := store.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return mapContextError(ctx, "begin saved-search delete", tx.Error)
 	}
-	defer finishTx(tx, &returnedErr)
-	var currentVersion int64
-	err = tx.QueryRowContext(ctx, `SELECT version FROM saved_searches WHERE saved_search_id = ? AND owner_id = ?`, id, ownerID).Scan(&currentVersion)
-	if errors.Is(err, sql.ErrNoRows) {
+	defer finishSavedSearchTx(tx, &returnedErr)
+	var current savedSearchRecord
+	err = tx.
+		Select("saved_search_id", "version").
+		Where("saved_search_id = ? AND owner_id = ?", id, ownerID).
+		Take(&current).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return control.ErrNotFound
 	}
 	if err != nil {
 		return mapContextError(ctx, "read saved search for delete", err)
 	}
 	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
-	if currentVersion != int64(expectedVersion) {
+	expectedVersionDB := int64(expectedVersion)
+	if current.Version != expectedVersionDB {
 		return control.ErrVersionConflict
 	}
-	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
-	result, err := tx.ExecContext(ctx, `DELETE FROM saved_searches WHERE saved_search_id = ? AND owner_id = ? AND version = ?`, id, ownerID, int64(expectedVersion))
-	if err != nil {
-		return mapContextError(ctx, "delete saved search", err)
+	deleted := tx.
+		Where(
+			"saved_search_id = ? AND owner_id = ? AND version = ?",
+			id,
+			ownerID,
+			expectedVersionDB,
+		).
+		Delete(&savedSearchRecord{})
+	if deleted.Error != nil {
+		return mapContextError(ctx, "delete saved search", deleted.Error)
 	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read saved-search delete count: %w", err)
-	}
-	if count != 1 {
+	if deleted.RowsAffected != 1 {
 		return control.ErrVersionConflict
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit().Error; err != nil {
 		return mapContextError(ctx, "commit saved-search delete", err)
 	}
 	return nil
 }
 
-const savedSearchSelect = `
-	SELECT saved_search_id, version, name, app_id, owner_id, sharing_scope,
-		definition_proto, created_at_unix_micro, updated_at_unix_micro
-	FROM saved_searches`
-
-type rowScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanSavedSearch(scanner rowScanner) (*opensplunkv1.SavedSearch, error) {
-	var (
-		id, name, appID, ownerID string
-		version, sharing         int64
-		encoded                  []byte
-		createdMicro             int64
-		updatedMicro             int64
-	)
-	if err := scanner.Scan(&id, &version, &name, &appID, &ownerID, &sharing, &encoded, &createdMicro, &updatedMicro); err != nil {
-		return nil, err
-	}
-	if validateObjectID(id) != nil || version < 1 || sharing < 1 || sharing > 3 || updatedMicro < createdMicro {
+func savedSearchFromRecord(record savedSearchRecord) (*opensplunkv1.SavedSearch, error) {
+	if validateObjectID(record.SavedSearchID) != nil ||
+		record.Version < 1 ||
+		record.SharingScope < 1 ||
+		record.SharingScope > 3 ||
+		record.UpdatedAtUnixMicro < record.CreatedAtUnixMicro {
 		return nil, errors.New("invalid saved-search record in control-plane database")
 	}
 	definition := new(opensplunkv1.SavedSearchDefinition)
-	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(encoded, definition); err != nil {
+	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(record.DefinitionProto, definition); err != nil {
 		return nil, fmt.Errorf("decode saved-search definition: %w", err)
 	}
-	normalized, indexed, _, err := normalizeAndEncodeDefinition(definition, ownerID)
+	normalized, indexed, _, err := normalizeAndEncodeDefinition(definition, record.OwnerID)
 	if err != nil {
 		// The definition originated from durable storage, not the active request.
 		// Do not preserve ErrInvalidArgument or the HTTP layer could misclassify
 		// database corruption as a client-side 400 response.
-		return nil, fmt.Errorf("invalid saved-search definition in control-plane database: %w", err)
+		return nil, errors.New("invalid saved-search definition in control-plane database")
 	}
-	if name != indexed.name || appID != indexed.appID || ownerID != indexed.ownerID || sharing != int64(indexed.sharingScope) {
+	if record.Name != indexed.name ||
+		record.AppID != indexed.appID ||
+		record.OwnerID != indexed.ownerID ||
+		record.SharingScope != int64(indexed.sharingScope) {
 		return nil, errors.New("saved-search indexed metadata does not match definition in control-plane database")
 	}
-	created := time.UnixMicro(createdMicro).UTC()
-	updated := time.UnixMicro(updatedMicro).UTC()
+	created := time.UnixMicro(record.CreatedAtUnixMicro).UTC()
+	updated := time.UnixMicro(record.UpdatedAtUnixMicro).UTC()
 	if timestamppb.New(created).CheckValid() != nil || timestamppb.New(updated).CheckValid() != nil {
 		return nil, errors.New("saved-search record contains a timestamp outside the protobuf range")
 	}
-	return buildSavedSearch(id, uint64(version), normalized, created, updated), nil
+	return buildSavedSearch(record.SavedSearchID, uint64(record.Version), normalized, created, updated), nil
 }
 
 func buildSavedSearch(id string, version uint64, definition *opensplunkv1.SavedSearchDefinition, created, updated time.Time) *opensplunkv1.SavedSearch {
@@ -461,27 +488,62 @@ func buildSavedSearch(id string, version uint64, definition *opensplunkv1.SavedS
 	}
 }
 
+func newSavedSearchRecord(
+	id string,
+	ownerID string,
+	indexed indexedDefinition,
+	encoded []byte,
+	now time.Time,
+) savedSearchRecord {
+	return savedSearchRecord{
+		SavedSearchID:      id,
+		Version:            1,
+		Name:               indexed.name,
+		AppID:              indexed.appID,
+		OwnerID:            ownerID,
+		SharingScope:       int64(indexed.sharingScope),
+		DefinitionProto:    slices.Clone(encoded),
+		CreatedAtUnixMicro: now.UnixMicro(),
+		UpdatedAtUnixMicro: now.UnixMicro(),
+	}
+}
+
+func takeSavedSearchRecord(database *gorm.DB, query string, args ...any) (savedSearchRecord, error) {
+	var record savedSearchRecord
+	result := database.Where(query, args...).Take(&record)
+	return record, result.Error
+}
+
 func (store *Store) nameConflict(ctx context.Context, ownerID, appID, name, excludingID string) (bool, error) {
-	conflict, err := nameConflictQuery(ctx, store.db, ownerID, appID, name, excludingID)
+	conflict, err := nameConflictQuery(
+		store.orm.WithContext(ctx),
+		ownerID,
+		appID,
+		name,
+		excludingID,
+	)
 	if err != nil {
 		return false, fmt.Errorf("check saved-search name conflict: %w", err)
 	}
 	return conflict, nil
 }
 
-type queryRower interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
-
-func nameConflictQuery(ctx context.Context, queryer queryRower, ownerID, appID, name, excludingID string) (bool, error) {
-	var existingID string
-	err := queryer.QueryRowContext(ctx, `
-		SELECT saved_search_id FROM saved_searches
-		WHERE owner_id = ? AND app_id = ? AND name = ? AND saved_search_id <> ?`, ownerID, appID, name, excludingID).Scan(&existingID)
+func nameConflictQuery(database *gorm.DB, ownerID, appID, name, excludingID string) (bool, error) {
+	var existing savedSearchRecord
+	err := database.
+		Select("saved_search_id").
+		Where(
+			"owner_id = ? AND app_id = ? AND name = ? AND saved_search_id <> ?",
+			ownerID,
+			appID,
+			name,
+			excludingID,
+		).
+		Take(&existing).Error
 	if err == nil {
 		return true, nil
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, nil
 	}
 	return false, err
@@ -556,11 +618,11 @@ func nextUpdateTime(value time.Time, previous time.Time) (time.Time, error) {
 	return advanced, nil
 }
 
-func finishTx(tx *sql.Tx, returnedErr *error) {
+func finishSavedSearchTx(tx *gorm.DB, returnedErr *error) {
 	if tx == nil || returnedErr == nil || *returnedErr == nil {
 		return
 	}
-	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+	if err := tx.Rollback().Error; err != nil && !errors.Is(err, sql.ErrTxDone) {
 		*returnedErr = errors.Join(*returnedErr, fmt.Errorf("roll back saved-search transaction: %w", err))
 	}
 }

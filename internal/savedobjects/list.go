@@ -3,7 +3,6 @@ package savedobjects
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -13,6 +12,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"gorm.io/gorm"
 )
 
 const (
@@ -59,24 +59,24 @@ func (store *Store) List(ctx context.Context, scope AccessScope, request ListReq
 		}
 	}
 
-	query := listQuery(normalized.sortBy, normalized.sortDirection)
-	args := listQueryArguments(normalized, cursor)
-	rows, err := store.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return ListResult{}, mapContextError(ctx, "list saved searches", err)
+	query := applySavedSearchListFilters(
+		store.orm.WithContext(ctx).Model(&savedSearchRecord{}),
+		normalized,
+	)
+	query = applySavedSearchListCursor(query, normalized, cursor)
+	query = applySavedSearchListOrder(query, normalized)
+	var records []savedSearchRecord
+	listed := query.Limit(int(normalized.pageSize) + 1).Find(&records)
+	if listed.Error != nil {
+		return ListResult{}, mapContextError(ctx, "list saved searches", listed.Error)
 	}
-	defer rows.Close()
-
 	result := ListResult{SavedSearches: make([]*opensplunkv1.SavedSearch, 0, normalized.pageSize)}
-	for rows.Next() {
-		savedSearch, err := scanSavedSearch(rows)
+	for _, record := range records {
+		savedSearch, err := savedSearchFromRecord(record)
 		if err != nil {
 			return ListResult{}, fmt.Errorf("scan listed saved search: %w", err)
 		}
 		result.SavedSearches = append(result.SavedSearches, savedSearch)
-	}
-	if err := rows.Err(); err != nil {
-		return ListResult{}, mapContextError(ctx, "iterate saved searches", err)
 	}
 	if len(result.SavedSearches) > int(normalized.pageSize) {
 		result.SavedSearches = result.SavedSearches[:normalized.pageSize]
@@ -200,95 +200,117 @@ func listFilterHash(request normalizedListRequest) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(digest[:]), nil
 }
 
-func listQueryArguments(request normalizedListRequest, cursor listCursor) []any {
-	hasApp, appID := int64(0), ""
+func applySavedSearchListFilters(
+	query *gorm.DB,
+	request normalizedListRequest,
+) *gorm.DB {
+	query = query.Where("owner_id = ?", request.ownerID)
 	if request.appIDFilter != nil {
-		hasApp, appID = 1, *request.appIDFilter
+		query = query.Where("app_id = ?", *request.appIDFilter)
 	}
-	hasText, text := int64(0), ""
 	if request.textFilter != nil {
-		hasText, text = 1, *request.textFilter
+		query = query.Where("instr(lower(name), lower(?)) > 0", *request.textFilter)
 	}
-	hasSharing := int64(0)
-	sharing := [3]int64{}
 	if len(request.sharingScopeFilters) != 0 {
-		hasSharing = 1
+		sharingScopes := make([]int64, len(request.sharingScopeFilters))
 		for index, scope := range request.sharingScopeFilters {
-			sharing[index] = int64(scope)
+			sharingScopes[index] = int64(scope)
 		}
+		query = query.Where("sharing_scope IN ?", sharingScopes)
 	}
-	hasCursor := int64(0)
-	var sortKey any = ""
-	if cursor.SavedSearch != "" {
-		hasCursor = 1
-		if cursor.IntegerKey != nil {
-			sortKey = *cursor.IntegerKey
-		} else {
-			sortKey = cursor.StringKey
+	return query
+}
+
+func applySavedSearchListCursor(
+	query *gorm.DB,
+	request normalizedListRequest,
+	cursor listCursor,
+) *gorm.DB {
+	if cursor.SavedSearch == "" {
+		return query
+	}
+	ascending := request.sortDirection == opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING
+	switch request.sortBy {
+	case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME:
+		if ascending {
+			return query.Where(
+				"(name > ? OR (name = ? AND saved_search_id > ?))",
+				cursor.StringKey,
+				cursor.StringKey,
+				cursor.SavedSearch,
+			)
 		}
-	}
-	return []any{
-		request.ownerID,
-		hasApp, appID,
-		hasText, text,
-		hasSharing, sharing[0], sharing[1], sharing[2],
-		hasCursor, sortKey, sortKey, cursor.SavedSearch,
-		int64(request.pageSize) + 1,
+		return query.Where(
+			"(name < ? OR (name = ? AND saved_search_id < ?))",
+			cursor.StringKey,
+			cursor.StringKey,
+			cursor.SavedSearch,
+		)
+	case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT:
+		if ascending {
+			return query.Where(
+				"(created_at_unix_micro > ? OR (created_at_unix_micro = ? AND saved_search_id > ?))",
+				*cursor.IntegerKey,
+				*cursor.IntegerKey,
+				cursor.SavedSearch,
+			)
+		}
+		return query.Where(
+			"(created_at_unix_micro < ? OR (created_at_unix_micro = ? AND saved_search_id < ?))",
+			*cursor.IntegerKey,
+			*cursor.IntegerKey,
+			cursor.SavedSearch,
+		)
+	default:
+		if ascending {
+			return query.Where(
+				"(updated_at_unix_micro > ? OR (updated_at_unix_micro = ? AND saved_search_id > ?))",
+				*cursor.IntegerKey,
+				*cursor.IntegerKey,
+				cursor.SavedSearch,
+			)
+		}
+		return query.Where(
+			"(updated_at_unix_micro < ? OR (updated_at_unix_micro = ? AND saved_search_id < ?))",
+			*cursor.IntegerKey,
+			*cursor.IntegerKey,
+			cursor.SavedSearch,
+		)
 	}
 }
 
-const listFilterSQL = `
-	WHERE owner_id = ?
-		AND (? = 0 OR app_id = ?)
-		AND (? = 0 OR instr(lower(name), lower(?)) > 0)
-		AND (? = 0 OR sharing_scope IN (?, ?, ?))`
-
-func listQuery(sortBy opensplunkv1.SavedSearchSortBy, direction opensplunkv1.SortDirection) string {
-	ascending := direction == opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING
-	switch sortBy {
+func applySavedSearchListOrder(query *gorm.DB, request normalizedListRequest) *gorm.DB {
+	ascending := request.sortDirection == opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING
+	switch request.sortBy {
 	case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME:
 		if ascending {
-			return savedSearchSelect + listFilterSQL + `
-				AND (? = 0 OR name > ? OR (name = ? AND saved_search_id > ?))
-				ORDER BY name ASC, saved_search_id ASC LIMIT ?`
+			return query.Order("name ASC, saved_search_id ASC")
 		}
-		return savedSearchSelect + listFilterSQL + `
-			AND (? = 0 OR name < ? OR (name = ? AND saved_search_id < ?))
-			ORDER BY name DESC, saved_search_id DESC LIMIT ?`
+		return query.Order("name DESC, saved_search_id DESC")
 	case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT:
 		if ascending {
-			return savedSearchSelect + listFilterSQL + `
-				AND (? = 0 OR created_at_unix_micro > ? OR (created_at_unix_micro = ? AND saved_search_id > ?))
-				ORDER BY created_at_unix_micro ASC, saved_search_id ASC LIMIT ?`
+			return query.Order("created_at_unix_micro ASC, saved_search_id ASC")
 		}
-		return savedSearchSelect + listFilterSQL + `
-			AND (? = 0 OR created_at_unix_micro < ? OR (created_at_unix_micro = ? AND saved_search_id < ?))
-			ORDER BY created_at_unix_micro DESC, saved_search_id DESC LIMIT ?`
+		return query.Order("created_at_unix_micro DESC, saved_search_id DESC")
 	default:
 		if ascending {
-			return savedSearchSelect + listFilterSQL + `
-				AND (? = 0 OR updated_at_unix_micro > ? OR (updated_at_unix_micro = ? AND saved_search_id > ?))
-				ORDER BY updated_at_unix_micro ASC, saved_search_id ASC LIMIT ?`
+			return query.Order("updated_at_unix_micro ASC, saved_search_id ASC")
 		}
-		return savedSearchSelect + listFilterSQL + `
-			AND (? = 0 OR updated_at_unix_micro < ? OR (updated_at_unix_micro = ? AND saved_search_id < ?))
-			ORDER BY updated_at_unix_micro DESC, saved_search_id DESC LIMIT ?`
+		return query.Order("updated_at_unix_micro DESC, saved_search_id DESC")
 	}
 }
 
 func (store *Store) countSavedSearches(ctx context.Context, request normalizedListRequest) (uint64, error) {
-	args := listQueryArguments(request, listCursor{})
-	// Drop cursor and LIMIT arguments; the filter prefix has nine bind values.
-	args = args[:9]
 	var count int64
-	err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM saved_searches`+listFilterSQL, args...).Scan(&count)
-	if err != nil {
-		return 0, mapContextError(ctx, "count saved searches", err)
+	query := applySavedSearchListFilters(
+		store.orm.WithContext(ctx).Model(&savedSearchRecord{}),
+		request,
+	).Count(&count)
+	if query.Error != nil {
+		return 0, mapContextError(ctx, "count saved searches", query.Error)
 	}
 	if count < 0 {
 		return 0, errors.New("count saved searches: database returned a negative count")
 	}
 	return uint64(count), nil
 }
-
-var _ rowScanner = (*sql.Rows)(nil)
