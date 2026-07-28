@@ -9,11 +9,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"gorm.io/gorm"
 )
 
 func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
@@ -264,7 +268,7 @@ func TestGetAndListCollectorTokensReturnSafeMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(first): %v", err)
 	}
-	store.now = func() time.Time { return now.Add(time.Microsecond) }
+	store.now = func() time.Time { return now }
 	second, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name: "second", AllowedIndexNames: []string{"main"},
 	})
@@ -287,7 +291,9 @@ func TestGetAndListCollectorTokensReturnSafeMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCollectorTokens(): %v", err)
 	}
-	if len(tokens) != 2 || tokens[0].ID != first.Token.ID || tokens[1].ID != second.Token.ID {
+	wantIDs := []string{first.Token.ID, second.Token.ID}
+	slices.Sort(wantIDs)
+	if len(tokens) != 2 || tokens[0].ID != wantIDs[0] || tokens[1].ID != wantIDs[1] {
 		t.Fatalf("ListCollectorTokens() = %#v", tokens)
 	}
 	store.now = func() time.Time { return now.Add(time.Hour) }
@@ -351,6 +357,15 @@ func TestUpdateCollectorTokenReplacesDefinitionAndScopesAtomically(t *testing.T)
 	}
 	if current.Name != "after" || fmt.Sprint(current.AllowedIndexNames) != fmt.Sprint([]string{"second"}) {
 		t.Fatalf("stale update mutated token: %#v", current)
+	}
+	cleared, err := store.UpdateCollectorToken(ctx, current.ID, current.Version, UpdateCollectorTokenRequest{
+		Name: "without expiration", AllowedIndexNames: []string{"second"},
+	})
+	if err != nil {
+		t.Fatalf("UpdateCollectorToken(clear expiration): %v", err)
+	}
+	if cleared.Version != 3 || !cleared.ExpiresAt.IsZero() {
+		t.Fatalf("expiration was not cleared: %#v", cleared)
 	}
 }
 
@@ -551,6 +566,434 @@ func TestCollectorTokenValidationExpirationAndRandomness(t *testing.T) {
 			t.Fatalf("duplicate randomly generated token at iteration %d", i)
 		}
 		seen[plaintext] = struct{}{}
+	}
+}
+
+func TestCollectorTokenGORMModelsMatchMigratedSQLiteSchema(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openControlDB(t)
+	tests := []struct {
+		table string
+		model any
+	}{
+		{table: "ingestion_tokens", model: &collectorTokenRecord{}},
+		{table: "ingestion_token_indexes", model: &collectorTokenIndexRecord{}},
+	}
+	for _, test := range tests {
+		t.Run(test.table, func(t *testing.T) {
+			statement := &gorm.Statement{DB: db.GORMDB()}
+			if err := statement.Parse(test.model); err != nil {
+				t.Fatalf("parse GORM model: %v", err)
+			}
+
+			rows, err := db.SQLDB().QueryContext(
+				ctx,
+				fmt.Sprintf("SELECT name FROM pragma_table_info('%s') ORDER BY cid", test.table),
+			)
+			if err != nil {
+				t.Fatalf("read migrated columns: %v", err)
+			}
+			var migratedColumns []string
+			for rows.Next() {
+				var column string
+				if err := rows.Scan(&column); err != nil {
+					_ = rows.Close()
+					t.Fatal(err)
+				}
+				migratedColumns = append(migratedColumns, column)
+			}
+			if err := rows.Close(); err != nil {
+				t.Fatalf("close migrated-column rows: %v", err)
+			}
+			if !slices.Equal(statement.Schema.DBNames, migratedColumns) {
+				t.Fatalf(
+					"GORM %s columns = %v, migrated columns = %v",
+					test.table,
+					statement.Schema.DBNames,
+					migratedColumns,
+				)
+			}
+
+			switch test.table {
+			case "ingestion_tokens":
+				id := statement.Schema.LookUpField("IngestionTokenID")
+				digest := statement.Schema.LookUpField("TokenDigest")
+				if id == nil || !id.PrimaryKey || digest == nil || !digest.Unique {
+					t.Fatalf("GORM token keys are not explicit: ID=%#v digest=%#v", id, digest)
+				}
+				wantChecks := []string{
+					"ingestion_tokens_digest_length",
+					"ingestion_tokens_expiration_after_create",
+					"ingestion_tokens_name_length",
+					"ingestion_tokens_prefix_length",
+					"ingestion_tokens_revocation_consistency",
+					"ingestion_tokens_state",
+					"ingestion_tokens_update_not_before_create",
+					"ingestion_tokens_version_positive",
+				}
+				checks := statement.Schema.ParseCheckConstraints()
+				gotChecks := make([]string, 0, len(checks))
+				for name := range checks {
+					gotChecks = append(gotChecks, name)
+				}
+				slices.Sort(gotChecks)
+				if !slices.Equal(gotChecks, wantChecks) {
+					t.Fatalf("GORM token checks = %v, want %v", gotChecks, wantChecks)
+				}
+			case "ingestion_token_indexes":
+				primaryColumns := make([]string, len(statement.Schema.PrimaryFields))
+				for index, field := range statement.Schema.PrimaryFields {
+					primaryColumns[index] = field.DBName
+				}
+				if want := []string{"ingestion_token_id", "index_id"}; !slices.Equal(primaryColumns, want) {
+					t.Fatalf("GORM token-scope primary key = %v, want %v", primaryColumns, want)
+				}
+				assertCollectorTokenScopeIndexParity(t, db, statement)
+			}
+		})
+	}
+}
+
+func TestCollectorTokenStoreSurvivesDatabaseReopen(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "control.sqlite")
+	key := []byte("0123456789abcdef0123456789abcdef")
+	db, err := control.Open(ctx, path)
+	if err != nil {
+		t.Fatalf("control.Open(first): %v", err)
+	}
+	if _, err := db.CreateIndex(ctx, activeIndex("main")); err != nil {
+		_ = db.Close()
+		t.Fatalf("CreateIndex(main): %v", err)
+	}
+	store, err := NewStore(db, key)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("NewStore(first): %v", err)
+	}
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name:              "persistent",
+		Description:       "before reopen",
+		AllowedIndexNames: []string{"main"},
+	})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("CreateCollectorToken(): %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close(first): %v", err)
+	}
+
+	reopened, err := control.Open(ctx, path)
+	if err != nil {
+		t.Fatalf("control.Open(second): %v", err)
+	}
+	defer reopened.Close()
+	reopenedStore, err := NewStore(reopened, key)
+	if err != nil {
+		t.Fatalf("NewStore(second): %v", err)
+	}
+	got, err := reopenedStore.GetCollectorToken(ctx, issued.Token.ID)
+	if err != nil {
+		t.Fatalf("GetCollectorToken(reopened): %v", err)
+	}
+	if got.ID != issued.Token.ID || got.Name != "persistent" ||
+		!slices.Equal(got.AllowedIndexNames, []string{"main"}) {
+		t.Fatalf("reopened token = %#v", got)
+	}
+	if _, err := reopenedStore.Authorize(ctx, issued.Secret.Plaintext(), "main"); err != nil {
+		t.Fatalf("Authorize(reopened): %v", err)
+	}
+	updated, err := reopenedStore.UpdateCollectorToken(
+		ctx,
+		got.ID,
+		got.Version,
+		UpdateCollectorTokenRequest{
+			Name:              "after reopen",
+			AllowedIndexNames: []string{"main"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("UpdateCollectorToken(reopened): %v", err)
+	}
+	if updated.Version != 2 || updated.Name != "after reopen" {
+		t.Fatalf("updated reopened token = %#v", updated)
+	}
+}
+
+func TestConcurrentCollectorTokenUpdatesHaveOneAtomicCASWinner(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openControlDB(t)
+	for _, name := range []string{"alpha", "beta"} {
+		if _, err := db.CreateIndex(ctx, activeIndex(name)); err != nil {
+			t.Fatalf("CreateIndex(%q): %v", name, err)
+		}
+	}
+	store, err := NewStore(db, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("NewStore(): %v", err)
+	}
+	fixedNow := time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return fixedNow }
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name:              "before",
+		AllowedIndexNames: []string{"alpha"},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollectorToken(): %v", err)
+	}
+
+	const contenders = 8
+	start := make(chan struct{})
+	results := make(chan CollectorToken, contenders)
+	errs := make(chan error, contenders)
+	var workers sync.WaitGroup
+	for contender := range contenders {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			scope := "alpha"
+			if contender%2 == 1 {
+				scope = "beta"
+			}
+			updated, updateErr := store.UpdateCollectorToken(
+				ctx,
+				issued.Token.ID,
+				issued.Token.Version,
+				UpdateCollectorTokenRequest{
+					Name:              fmt.Sprintf("winner-%d-%s", contender, scope),
+					Description:       fmt.Sprintf("definition-%d", contender),
+					AllowedIndexNames: []string{scope},
+				},
+			)
+			if updateErr != nil {
+				errs <- updateErr
+				return
+			}
+			results <- updated
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	close(errs)
+
+	var winners []CollectorToken
+	for result := range results {
+		winners = append(winners, result)
+	}
+	if len(winners) != 1 {
+		t.Fatalf("successful updates = %d, want 1: %#v", len(winners), winners)
+	}
+	conflicts := 0
+	for updateErr := range errs {
+		if !errors.Is(updateErr, control.ErrVersionConflict) {
+			t.Fatalf("losing update error = %v, want ErrVersionConflict", updateErr)
+		}
+		conflicts++
+	}
+	if conflicts != contenders-1 {
+		t.Fatalf("version conflicts = %d, want %d", conflicts, contenders-1)
+	}
+
+	current, err := store.GetCollectorToken(ctx, issued.Token.ID)
+	if err != nil {
+		t.Fatalf("GetCollectorToken(): %v", err)
+	}
+	winner := winners[0]
+	if current.Version != 2 || current.Name != winner.Name ||
+		current.Description != winner.Description ||
+		!slices.Equal(current.AllowedIndexNames, winner.AllowedIndexNames) {
+		t.Fatalf("persisted token = %#v, winning transaction = %#v", current, winner)
+	}
+}
+
+func TestCollectorTokenScopeReplacementRollsBackOnPersistenceFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openControlDB(t)
+	for _, name := range []string{"before", "after"} {
+		if _, err := db.CreateIndex(ctx, activeIndex(name)); err != nil {
+			t.Fatalf("CreateIndex(%q): %v", name, err)
+		}
+	}
+	store, err := NewStore(db, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("NewStore(): %v", err)
+	}
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name:              "original",
+		Description:       "original definition",
+		AllowedIndexNames: []string{"before"},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollectorToken(): %v", err)
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		CREATE TRIGGER reject_replacement_scope
+		BEFORE INSERT ON ingestion_token_indexes
+		BEGIN
+			SELECT RAISE(ABORT, 'forced token-scope failure');
+		END`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	if _, err := store.UpdateCollectorToken(
+		ctx,
+		issued.Token.ID,
+		issued.Token.Version,
+		UpdateCollectorTokenRequest{
+			Name:              "mutated",
+			Description:       "mutated definition",
+			AllowedIndexNames: []string{"after"},
+		},
+	); err == nil {
+		t.Fatal("UpdateCollectorToken() unexpectedly succeeded")
+	}
+	current, err := store.GetCollectorToken(ctx, issued.Token.ID)
+	if err != nil {
+		t.Fatalf("GetCollectorToken(): %v", err)
+	}
+	if current.Version != issued.Token.Version ||
+		current.Name != issued.Token.Name ||
+		current.Description != issued.Token.Description ||
+		!slices.Equal(current.AllowedIndexNames, issued.Token.AllowedIndexNames) {
+		t.Fatalf("failed scope replacement was not atomic: %#v", current)
+	}
+	if _, err := store.Authorize(ctx, issued.Secret.Plaintext(), "before"); err != nil {
+		t.Fatalf("Authorize(original scope): %v", err)
+	}
+	if _, err := store.Authorize(ctx, issued.Secret.Plaintext(), "after"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Authorize(rejected scope) error = %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestCollectorTokenStoreHonorsContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openControlDB(t)
+	if _, err := db.CreateIndex(ctx, activeIndex("main")); err != nil {
+		t.Fatalf("CreateIndex(main): %v", err)
+	}
+	store, err := NewStore(db, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("NewStore(): %v", err)
+	}
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name:              "context",
+		AllowedIndexNames: []string{"main"},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollectorToken(): %v", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	operations := map[string]func() error{
+		"authenticate": func() error {
+			_, operationErr := store.Authenticate(canceled, issued.Secret.Plaintext())
+			return operationErr
+		},
+		"authorize": func() error {
+			_, operationErr := store.Authorize(canceled, issued.Secret.Plaintext(), "main")
+			return operationErr
+		},
+		"create": func() error {
+			_, operationErr := store.CreateCollectorToken(canceled, CreateCollectorTokenRequest{
+				Name:              "canceled",
+				AllowedIndexNames: []string{"main"},
+			})
+			return operationErr
+		},
+		"get": func() error {
+			_, operationErr := store.GetCollectorToken(canceled, issued.Token.ID)
+			return operationErr
+		},
+		"list": func() error {
+			_, operationErr := store.ListCollectorTokens(canceled)
+			return operationErr
+		},
+		"revoke": func() error {
+			_, operationErr := store.RevokeCollectorToken(
+				canceled,
+				issued.Token.ID,
+				issued.Token.Version,
+			)
+			return operationErr
+		},
+		"update": func() error {
+			_, operationErr := store.UpdateCollectorToken(
+				canceled,
+				issued.Token.ID,
+				issued.Token.Version,
+				UpdateCollectorTokenRequest{
+					Name:              "canceled",
+					AllowedIndexNames: []string{"main"},
+				},
+			)
+			return operationErr
+		},
+	}
+	for name, operation := range operations {
+		t.Run(name, func(t *testing.T) {
+			if operationErr := operation(); !errors.Is(operationErr, context.Canceled) {
+				t.Fatalf("operation error = %v, want context.Canceled", operationErr)
+			}
+		})
+	}
+}
+
+func assertCollectorTokenScopeIndexParity(
+	t *testing.T,
+	db *control.DB,
+	statement *gorm.Statement,
+) {
+	t.Helper()
+	const indexName = "ingestion_token_indexes_index_idx"
+	var modelColumns []string
+	for _, index := range statement.Schema.ParseIndexes() {
+		if index.Name != indexName {
+			continue
+		}
+		modelColumns = make([]string, len(index.Fields))
+		for fieldIndex, option := range index.Fields {
+			modelColumns[fieldIndex] = option.DBName
+		}
+	}
+	want := []string{"index_id", "ingestion_token_id"}
+	if !slices.Equal(modelColumns, want) {
+		t.Fatalf("GORM %s columns = %v, want %v", indexName, modelColumns, want)
+	}
+	rows, err := db.SQLDB().QueryContext(
+		context.Background(),
+		fmt.Sprintf("SELECT name FROM pragma_index_info('%s') ORDER BY seqno", indexName),
+	)
+	if err != nil {
+		t.Fatalf("read migrated index: %v", err)
+	}
+	var migratedColumns []string
+	for rows.Next() {
+		var column string
+		if err := rows.Scan(&column); err != nil {
+			_ = rows.Close()
+			t.Fatal(err)
+		}
+		migratedColumns = append(migratedColumns, column)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close migrated-index rows: %v", err)
+	}
+	if !slices.Equal(migratedColumns, want) {
+		t.Fatalf("migrated %s columns = %v, want %v", indexName, migratedColumns, want)
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -18,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"gorm.io/gorm"
 )
 
 const (
@@ -42,6 +42,8 @@ var (
 	// effectively expired token. Neither state can safely be made active again
 	// by changing token metadata.
 	ErrInactiveToken = errors.New("auth: collector token is inactive")
+
+	errCollectorTokenScopeUnavailable = errors.New("collector token scope is unavailable")
 )
 
 // CollectorTokenState is the administrative/effective state of a token.
@@ -136,7 +138,7 @@ type Authentication struct {
 // Store owns collector credential creation, persistence, revocation, and
 // per-index authorization.
 type Store struct {
-	db        *sql.DB
+	orm       *gorm.DB
 	digestKey []byte
 	random    io.Reader
 	now       func() time.Time
@@ -145,14 +147,14 @@ type Store struct {
 // NewStore constructs a collector-token store. digestKey is copied so caller
 // mutation cannot silently invalidate every credential.
 func NewStore(db *control.DB, digestKey []byte) (*Store, error) {
-	if db == nil || db.SQLDB() == nil {
+	if db == nil || db.GORMDB() == nil {
 		return nil, fmt.Errorf("%w: control-plane database is required", control.ErrInvalidArgument)
 	}
 	if len(digestKey) < minimumDigestKeyBytes {
 		return nil, ErrInvalidDigestKey
 	}
 	return &Store{
-		db:        db.SQLDB(),
+		orm:       db.GORMDB(),
 		digestKey: append([]byte(nil), digestKey...),
 		random:    rand.Reader,
 		now:       time.Now,
@@ -181,54 +183,56 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 	digest := store.digest(plaintext)
 	prefix := plaintext[:len(collectorTokenPrefix)+8]
 
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return IssuedCollectorToken{}, fmt.Errorf("begin collector token creation: %w", err)
+	tx := store.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return IssuedCollectorToken{}, fmt.Errorf("begin collector token creation: %w", tx.Error)
 	}
-	defer finishTx(tx, &err)
+	transactionFinished := false
+	defer finishTokenTransaction(tx, &transactionFinished, &err)
 
-	indexIDs := make([]string, 0, len(allowedNames))
-	for _, indexName := range allowedNames {
-		var indexID string
-		queryErr := tx.QueryRowContext(ctx, `
-			SELECT index_id
-			FROM indexes
-			WHERE name = ? AND state = 'active' AND ingestion_enabled = 1`, indexName).Scan(&indexID)
-		if errors.Is(queryErr, sql.ErrNoRows) {
-			return IssuedCollectorToken{}, fmt.Errorf("%w: every token scope must name an active ingestion-enabled index", control.ErrInvalidArgument)
-		}
-		if queryErr != nil {
-			return IssuedCollectorToken{}, fmt.Errorf("validate collector token scope: %w", queryErr)
-		}
-		indexIDs = append(indexIDs, indexID)
+	indexIDs, err := resolveCollectorTokenScopes(tx, allowedNames)
+	if errors.Is(err, errCollectorTokenScopeUnavailable) {
+		return IssuedCollectorToken{}, fmt.Errorf("%w: every token scope must name an active ingestion-enabled index", control.ErrInvalidArgument)
+	}
+	if err != nil {
+		return IssuedCollectorToken{}, fmt.Errorf("validate collector token scope: %w", err)
 	}
 
-	var expiration any
-	if !request.ExpiresAt.IsZero() {
-		expiration = expiresAt.UnixMicro()
+	var expiration *int64
+	if !expiresAt.IsZero() {
+		expirationUnixMicro := expiresAt.UnixMicro()
+		expiration = &expirationUnixMicro
 	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO ingestion_tokens (
-			ingestion_token_id, version, name, description, token_prefix,
-			token_digest, state, created_at_unix_micro, updated_at_unix_micro,
-			expires_at_unix_micro, revoked_at_unix_micro
-		) VALUES (?, 1, ?, ?, ?, ?, 'active', ?, ?, ?, NULL)`,
-		tokenID, name, description, prefix, digest,
-		now.UnixMicro(), now.UnixMicro(), expiration,
-	)
-	if err != nil {
+	record := collectorTokenRecord{
+		IngestionTokenID:   tokenID,
+		Version:            1,
+		Name:               name,
+		Description:        description,
+		TokenPrefix:        prefix,
+		TokenDigest:        digest,
+		State:              CollectorTokenStateActive,
+		CreatedAtUnixMicro: now.UnixMicro(),
+		UpdatedAtUnixMicro: now.UnixMicro(),
+		ExpiresAtUnixMicro: expiration,
+	}
+	if err := tx.Create(&record).Error; err != nil {
 		// No bound SQL value contains plaintext: only the HMAC digest is sent
 		// to SQLite, so wrapping a driver error cannot disclose the token.
 		return IssuedCollectorToken{}, fmt.Errorf("store collector token digest: %w", err)
 	}
-	for _, indexID := range indexIDs {
-		if _, scopeErr := tx.ExecContext(ctx, `
-			INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
-			VALUES (?, ?)`, tokenID, indexID); scopeErr != nil {
-			return IssuedCollectorToken{}, fmt.Errorf("store collector token scope: %w", scopeErr)
+	memberships := make([]collectorTokenIndexRecord, len(indexIDs))
+	for index, indexID := range indexIDs {
+		memberships[index] = collectorTokenIndexRecord{
+			IngestionTokenID: tokenID,
+			IndexID:          indexID,
 		}
 	}
-	if commitErr := tx.Commit(); commitErr != nil {
+	if err := tx.Create(&memberships).Error; err != nil {
+		return IssuedCollectorToken{}, fmt.Errorf("store collector token scope: %w", err)
+	}
+	commitErr := tx.Commit().Error
+	transactionFinished = true
+	if commitErr != nil {
 		return IssuedCollectorToken{}, fmt.Errorf("commit collector token creation: %w", commitErr)
 	}
 
@@ -253,16 +257,21 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 		return CollectorToken{}, fmt.Errorf("%w: expected token version is outside the supported range", control.ErrInvalidArgument)
 	}
 	now := databaseTime(store.now())
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return CollectorToken{}, fmt.Errorf("begin collector token update: %w", err)
+	tx := store.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return CollectorToken{}, fmt.Errorf("begin collector token update: %w", tx.Error)
 	}
-	defer finishTx(tx, &err)
+	transactionFinished := false
+	defer finishTokenTransaction(tx, &transactionFinished, &err)
 
-	current, err := scanCollectorToken(tx.QueryRowContext(ctx, collectorMetadataSelect+` WHERE t.ingestion_token_id = ? GROUP BY t.ingestion_token_id`, tokenID), now)
-	if errors.Is(err, sql.ErrNoRows) {
+	currentRow, err := takeCollectorTokenMetadata(tx, tokenID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return CollectorToken{}, control.ErrNotFound
 	}
+	if err != nil {
+		return CollectorToken{}, fmt.Errorf("read collector token for update: %w", err)
+	}
+	current, err := collectorTokenFromMetadataRow(currentRow, now)
 	if err != nil {
 		return CollectorToken{}, fmt.Errorf("read collector token for update: %w", err)
 	}
@@ -282,58 +291,67 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 		return CollectorToken{}, fmt.Errorf("%w: token expiration must be after its creation time", control.ErrInvalidArgument)
 	}
 
-	indexIDs := make([]string, 0, len(allowedNames))
-	for _, indexName := range allowedNames {
-		var indexID string
-		queryErr := tx.QueryRowContext(ctx, `
-			SELECT index_id
-			FROM indexes
-			WHERE name = ? AND state = 'active' AND ingestion_enabled = 1`, indexName).Scan(&indexID)
-		if errors.Is(queryErr, sql.ErrNoRows) {
-			return CollectorToken{}, fmt.Errorf("%w: every token scope must name an active ingestion-enabled index", control.ErrInvalidArgument)
-		}
-		if queryErr != nil {
-			return CollectorToken{}, fmt.Errorf("validate collector token update scope: %w", queryErr)
-		}
-		indexIDs = append(indexIDs, indexID)
+	indexIDs, err := resolveCollectorTokenScopes(tx, allowedNames)
+	if errors.Is(err, errCollectorTokenScopeUnavailable) {
+		return CollectorToken{}, fmt.Errorf("%w: every token scope must name an active ingestion-enabled index", control.ErrInvalidArgument)
+	}
+	if err != nil {
+		return CollectorToken{}, fmt.Errorf("validate collector token update scope: %w", err)
 	}
 
-	var expiration any
+	// #nosec G115 -- expectedVersion is bounded above by math.MaxInt64.
+	expectedVersionDB := int64(expectedVersion)
+	var expiration *int64
 	if !expiresAt.IsZero() {
-		expiration = expiresAt.UnixMicro()
+		expirationUnixMicro := expiresAt.UnixMicro()
+		expiration = &expirationUnixMicro
 	}
-	update, err := tx.ExecContext(ctx, `
-		UPDATE ingestion_tokens
-		SET name = ?, description = ?, expires_at_unix_micro = ?,
-			version = version + 1, updated_at_unix_micro = ?
-		WHERE ingestion_token_id = ? AND version = ? AND state != 'revoked'`,
-		name, description, expiration, now.UnixMicro(), tokenID, int64(expectedVersion))
-	if err != nil {
-		return CollectorToken{}, fmt.Errorf("update collector token: %w", err)
+	update := tx.Model(&collectorTokenRecord{}).
+		Where(
+			"ingestion_token_id = ? AND version = ? AND state != ?",
+			tokenID,
+			expectedVersionDB,
+			CollectorTokenStateRevoked,
+		).
+		Updates(map[string]any{
+			"name":                  name,
+			"description":           description,
+			"expires_at_unix_micro": expiration,
+			"updated_at_unix_micro": now.UnixMicro(),
+			"version":               gorm.Expr("version + 1"),
+		})
+	if update.Error != nil {
+		return CollectorToken{}, fmt.Errorf("update collector token: %w", update.Error)
 	}
-	rows, err := update.RowsAffected()
-	if err != nil {
-		return CollectorToken{}, fmt.Errorf("read updated collector token row count: %w", err)
-	}
-	if rows != 1 {
+	if update.RowsAffected != 1 {
 		return CollectorToken{}, control.ErrVersionConflict
 	}
-	if _, deleteErr := tx.ExecContext(ctx, `DELETE FROM ingestion_token_indexes WHERE ingestion_token_id = ?`, tokenID); deleteErr != nil {
+	if deleteErr := tx.Where("ingestion_token_id = ?", tokenID).
+		Delete(&collectorTokenIndexRecord{}).Error; deleteErr != nil {
 		return CollectorToken{}, fmt.Errorf("replace collector token scopes: %w", deleteErr)
 	}
-	for _, indexID := range indexIDs {
-		if _, scopeErr := tx.ExecContext(ctx, `
-			INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
-			VALUES (?, ?)`, tokenID, indexID); scopeErr != nil {
-			return CollectorToken{}, fmt.Errorf("store updated collector token scope: %w", scopeErr)
+	memberships := make([]collectorTokenIndexRecord, len(indexIDs))
+	for index, indexID := range indexIDs {
+		memberships[index] = collectorTokenIndexRecord{
+			IngestionTokenID: tokenID,
+			IndexID:          indexID,
 		}
 	}
+	if err := tx.Create(&memberships).Error; err != nil {
+		return CollectorToken{}, fmt.Errorf("store updated collector token scope: %w", err)
+	}
 
-	result, err = scanCollectorToken(tx.QueryRowContext(ctx, collectorMetadataSelect+` WHERE t.ingestion_token_id = ? GROUP BY t.ingestion_token_id`, tokenID), now)
+	updatedRow, err := takeCollectorTokenMetadata(tx, tokenID)
 	if err != nil {
 		return CollectorToken{}, fmt.Errorf("read updated collector token: %w", err)
 	}
-	if commitErr := tx.Commit(); commitErr != nil {
+	result, err = collectorTokenFromMetadataRow(updatedRow, now)
+	if err != nil {
+		return CollectorToken{}, fmt.Errorf("read updated collector token: %w", err)
+	}
+	commitErr := tx.Commit().Error
+	transactionFinished = true
+	if commitErr != nil {
 		return CollectorToken{}, fmt.Errorf("commit collector token update: %w", commitErr)
 	}
 	return result, nil
@@ -349,25 +367,35 @@ func (store *Store) Authorize(ctx context.Context, plaintext, indexName string) 
 	digest := store.digest(plaintext)
 	now := databaseTime(store.now())
 	var principal Principal
-	err = store.db.QueryRowContext(ctx, `
-		SELECT t.ingestion_token_id, t.name, i.name
-		FROM ingestion_tokens AS t
-		JOIN ingestion_token_indexes AS ti
-			ON ti.ingestion_token_id = t.ingestion_token_id
-		JOIN indexes AS i ON i.index_id = ti.index_id
-		WHERE t.token_digest = ?
-			AND t.state = 'active'
-			AND (t.expires_at_unix_micro IS NULL OR t.expires_at_unix_micro > ?)
-			AND i.name = ?
-			AND i.state = 'active'
-			AND i.ingestion_enabled = 1`,
-		digest, now.UnixMicro(), normalizedIndex,
-	).Scan(&principal.TokenID, &principal.TokenName, &principal.IndexName)
-	if errors.Is(err, sql.ErrNoRows) {
+	result := store.orm.WithContext(ctx).
+		Table("ingestion_tokens AS token").
+		Select(`
+			token.ingestion_token_id AS token_id,
+			token.name AS token_name,
+			target.name AS index_name`).
+		Joins(`
+			JOIN ingestion_token_indexes AS scope
+			  ON scope.ingestion_token_id = token.ingestion_token_id`).
+		Joins("JOIN indexes AS target ON target.index_id = scope.index_id").
+		Where(
+			`token.token_digest = ?
+			 AND token.state = ?
+			 AND (token.expires_at_unix_micro IS NULL OR token.expires_at_unix_micro > ?)
+			 AND target.name = ?
+			 AND target.state = ?
+			 AND target.ingestion_enabled = 1`,
+			digest,
+			CollectorTokenStateActive,
+			now.UnixMicro(),
+			normalizedIndex,
+			control.IndexStateActive,
+		).
+		Take(&principal)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return Principal{}, ErrUnauthorized
 	}
-	if err != nil {
-		return Principal{}, fmt.Errorf("authorize collector token: %w", err)
+	if result.Error != nil {
+		return Principal{}, fmt.Errorf("authorize collector token: %w", result.Error)
 	}
 	return principal, nil
 }
@@ -381,39 +409,55 @@ func (store *Store) Authenticate(ctx context.Context, plaintext string) (Authent
 	}
 	digest := store.digest(plaintext)
 	now := databaseTime(store.now())
-	var authentication Authentication
-	var allowedIndexes string
-	err := store.db.QueryRowContext(ctx, `
-		SELECT t.ingestion_token_id, t.name, group_concat(i.name, ',')
-		FROM ingestion_tokens AS t
-		JOIN ingestion_token_indexes AS ti
-			ON ti.ingestion_token_id = t.ingestion_token_id
-		JOIN indexes AS i ON i.index_id = ti.index_id
-		WHERE t.token_digest = ?
-			AND t.state = 'active'
-			AND (t.expires_at_unix_micro IS NULL OR t.expires_at_unix_micro > ?)
-			AND i.state = 'active'
-			AND i.ingestion_enabled = 1
-		GROUP BY t.ingestion_token_id`, digest, now.UnixMicro()).Scan(
-		&authentication.TokenID, &authentication.TokenName, &allowedIndexes,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
+	var row collectorTokenAuthenticationRow
+	result := store.orm.WithContext(ctx).
+		Table("ingestion_tokens AS token").
+		Select(`
+			token.ingestion_token_id,
+			token.name,
+			group_concat(target.name, ',') AS allowed_index_names`).
+		Joins(`
+			JOIN ingestion_token_indexes AS scope
+			  ON scope.ingestion_token_id = token.ingestion_token_id`).
+		Joins("JOIN indexes AS target ON target.index_id = scope.index_id").
+		Where(
+			`token.token_digest = ?
+			 AND token.state = ?
+			 AND (token.expires_at_unix_micro IS NULL OR token.expires_at_unix_micro > ?)
+			 AND target.state = ?
+			 AND target.ingestion_enabled = 1`,
+			digest,
+			CollectorTokenStateActive,
+			now.UnixMicro(),
+			control.IndexStateActive,
+		).
+		Group("token.ingestion_token_id").
+		Take(&row)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return Authentication{}, ErrUnauthorized
 	}
-	if err != nil {
-		return Authentication{}, fmt.Errorf("authenticate collector token: %w", err)
+	if result.Error != nil {
+		return Authentication{}, fmt.Errorf("authenticate collector token: %w", result.Error)
 	}
-	authentication.AllowedIndexNames = strings.Split(allowedIndexes, ",")
+	authentication := Authentication{
+		TokenID:           row.IngestionTokenID,
+		TokenName:         row.Name,
+		AllowedIndexNames: strings.Split(row.AllowedIndexNames, ","),
+	}
 	sort.Strings(authentication.AllowedIndexNames)
 	return authentication, nil
 }
 
 // GetCollectorToken returns safe metadata and explicit index scopes.
 func (store *Store) GetCollectorToken(ctx context.Context, tokenID string) (CollectorToken, error) {
-	token, err := scanCollectorToken(store.db.QueryRowContext(ctx, collectorMetadataSelect+` WHERE t.ingestion_token_id = ? GROUP BY t.ingestion_token_id`, tokenID), databaseTime(store.now()))
-	if errors.Is(err, sql.ErrNoRows) {
+	row, err := takeCollectorTokenMetadata(store.orm.WithContext(ctx), tokenID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return CollectorToken{}, control.ErrNotFound
 	}
+	if err != nil {
+		return CollectorToken{}, fmt.Errorf("get collector token: %w", err)
+	}
+	token, err := collectorTokenFromMetadataRow(row, databaseTime(store.now()))
 	if err != nil {
 		return CollectorToken{}, fmt.Errorf("get collector token: %w", err)
 	}
@@ -422,22 +466,23 @@ func (store *Store) GetCollectorToken(ctx context.Context, tokenID string) (Coll
 
 // ListCollectorTokens lists safe metadata in creation order.
 func (store *Store) ListCollectorTokens(ctx context.Context) ([]CollectorToken, error) {
-	rows, err := store.db.QueryContext(ctx, collectorMetadataSelect+` GROUP BY t.ingestion_token_id ORDER BY t.created_at_unix_micro, t.ingestion_token_id`)
-	if err != nil {
-		return nil, fmt.Errorf("list collector tokens: %w", err)
+	var rows []collectorTokenMetadataRow
+	query := collectorTokenMetadataQuery(store.orm.WithContext(ctx)).
+		Group("token.ingestion_token_id").
+		Order("token.created_at_unix_micro").
+		Order("token.ingestion_token_id").
+		Scan(&rows)
+	if query.Error != nil {
+		return nil, fmt.Errorf("list collector tokens: %w", query.Error)
 	}
-	defer rows.Close()
 	now := databaseTime(store.now())
-	tokens := make([]CollectorToken, 0)
-	for rows.Next() {
-		token, scanErr := scanCollectorToken(rows, now)
-		if scanErr != nil {
-			return nil, fmt.Errorf("scan collector token: %w", scanErr)
+	tokens := make([]CollectorToken, 0, len(rows))
+	for _, row := range rows {
+		token, err := collectorTokenFromMetadataRow(row, now)
+		if err != nil {
+			return nil, fmt.Errorf("scan collector token: %w", err)
 		}
 		tokens = append(tokens, token)
-	}
-	if iterationErr := rows.Err(); iterationErr != nil {
-		return nil, fmt.Errorf("iterate collector tokens: %w", iterationErr)
 	}
 	return tokens, nil
 }
@@ -447,105 +492,124 @@ func (store *Store) RevokeCollectorToken(ctx context.Context, tokenID string, ex
 	if expectedVersion == 0 || expectedVersion > math.MaxInt64 {
 		return CollectorToken{}, fmt.Errorf("%w: expected token version is outside the supported range", control.ErrInvalidArgument)
 	}
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return CollectorToken{}, fmt.Errorf("begin collector token revocation: %w", err)
+	tx := store.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return CollectorToken{}, fmt.Errorf("begin collector token revocation: %w", tx.Error)
 	}
-	defer finishTx(tx, &err)
+	transactionFinished := false
+	defer finishTokenTransaction(tx, &transactionFinished, &err)
 
-	var currentVersion int64
-	queryErr := tx.QueryRowContext(ctx, `
-		SELECT version FROM ingestion_tokens WHERE ingestion_token_id = ?`, tokenID).Scan(&currentVersion)
-	if errors.Is(queryErr, sql.ErrNoRows) {
+	var current collectorTokenRecord
+	queryErr := tx.Select("ingestion_token_id", "version").
+		Where("ingestion_token_id = ?", tokenID).
+		Take(&current).Error
+	if errors.Is(queryErr, gorm.ErrRecordNotFound) {
 		return CollectorToken{}, control.ErrNotFound
 	}
 	if queryErr != nil {
 		return CollectorToken{}, fmt.Errorf("read collector token for revocation: %w", queryErr)
 	}
-	if currentVersion < 1 {
+	if current.Version < 1 {
 		return CollectorToken{}, errors.New("invalid collector token version in control-plane database")
 	}
-	if currentVersion != int64(expectedVersion) {
+	// #nosec G115 -- expectedVersion is bounded above by math.MaxInt64.
+	expectedVersionDB := int64(expectedVersion)
+	if current.Version != expectedVersionDB {
 		return CollectorToken{}, control.ErrVersionConflict
 	}
 
 	now := databaseTime(store.now())
-	update, err := tx.ExecContext(ctx, `
-		UPDATE ingestion_tokens
-		SET state = 'revoked', version = version + 1,
-			updated_at_unix_micro = ?, revoked_at_unix_micro = ?
-		WHERE ingestion_token_id = ? AND version = ? AND state != 'revoked'`,
-		now.UnixMicro(), now.UnixMicro(), tokenID, int64(expectedVersion))
-	if err != nil {
-		return CollectorToken{}, fmt.Errorf("revoke collector token: %w", err)
+	update := tx.Model(&collectorTokenRecord{}).
+		Where(
+			"ingestion_token_id = ? AND version = ? AND state != ?",
+			tokenID,
+			expectedVersionDB,
+			CollectorTokenStateRevoked,
+		).
+		Updates(map[string]any{
+			"state":                 CollectorTokenStateRevoked,
+			"version":               gorm.Expr("version + 1"),
+			"updated_at_unix_micro": now.UnixMicro(),
+			"revoked_at_unix_micro": now.UnixMicro(),
+		})
+	if update.Error != nil {
+		return CollectorToken{}, fmt.Errorf("revoke collector token: %w", update.Error)
 	}
-	rows, err := update.RowsAffected()
-	if err != nil {
-		return CollectorToken{}, fmt.Errorf("read revoked token row count: %w", err)
-	}
-	if rows != 1 {
+	if update.RowsAffected != 1 {
 		return CollectorToken{}, control.ErrVersionConflict
 	}
 
-	result, err = scanCollectorToken(tx.QueryRowContext(ctx, collectorMetadataSelect+` WHERE t.ingestion_token_id = ? GROUP BY t.ingestion_token_id`, tokenID), now)
+	revokedRow, err := takeCollectorTokenMetadata(tx, tokenID)
 	if err != nil {
 		return CollectorToken{}, fmt.Errorf("read revoked collector token: %w", err)
 	}
-	if commitErr := tx.Commit(); commitErr != nil {
+	result, err = collectorTokenFromMetadataRow(revokedRow, now)
+	if err != nil {
+		return CollectorToken{}, fmt.Errorf("read revoked collector token: %w", err)
+	}
+	commitErr := tx.Commit().Error
+	transactionFinished = true
+	if commitErr != nil {
 		return CollectorToken{}, fmt.Errorf("commit collector token revocation: %w", commitErr)
 	}
 	return result, nil
 }
 
-const collectorMetadataSelect = `
-	SELECT
-		t.ingestion_token_id, t.version, t.name, t.description,
-		t.token_prefix, t.state, t.created_at_unix_micro,
-		t.updated_at_unix_micro, t.expires_at_unix_micro,
-		t.revoked_at_unix_micro, group_concat(i.name, ',')
-	FROM ingestion_tokens AS t
-	JOIN ingestion_token_indexes AS ti
-		ON ti.ingestion_token_id = t.ingestion_token_id
-	JOIN indexes AS i ON i.index_id = ti.index_id`
-
-type rowScanner interface {
-	Scan(dest ...any) error
+func collectorTokenMetadataQuery(db *gorm.DB) *gorm.DB {
+	return db.
+		Table("ingestion_tokens AS token").
+		Select(`
+			token.ingestion_token_id,
+			token.version,
+			token.name,
+			token.description,
+			token.token_prefix,
+			token.state,
+			token.created_at_unix_micro,
+			token.updated_at_unix_micro,
+			token.expires_at_unix_micro,
+			token.revoked_at_unix_micro,
+			group_concat(target.name, ',') AS allowed_index_names`).
+		Joins(`
+			JOIN ingestion_token_indexes AS scope
+			  ON scope.ingestion_token_id = token.ingestion_token_id`).
+		Joins("JOIN indexes AS target ON target.index_id = scope.index_id")
 }
 
-func scanCollectorToken(row rowScanner, now time.Time) (CollectorToken, error) {
-	var (
-		token            CollectorToken
-		version          int64
-		state            string
-		created, updated int64
-		expires, revoked sql.NullInt64
-		allowedIndexes   string
-	)
-	if err := row.Scan(
-		&token.ID, &version, &token.Name, &token.Description,
-		&token.Prefix, &state, &created, &updated, &expires, &revoked,
-		&allowedIndexes,
-	); err != nil {
-		return CollectorToken{}, err
-	}
-	if version < 1 {
+func takeCollectorTokenMetadata(db *gorm.DB, tokenID string) (collectorTokenMetadataRow, error) {
+	var row collectorTokenMetadataRow
+	result := collectorTokenMetadataQuery(db).
+		Where("token.ingestion_token_id = ?", tokenID).
+		Group("token.ingestion_token_id").
+		Take(&row)
+	return row, result.Error
+}
+
+func collectorTokenFromMetadataRow(row collectorTokenMetadataRow, now time.Time) (CollectorToken, error) {
+	if row.Version < 1 {
 		return CollectorToken{}, errors.New("invalid collector token version in control-plane database")
 	}
-	token.Version = uint64(version)
-	token.State = CollectorTokenState(state)
-	token.CreatedAt = time.UnixMicro(created).UTC()
-	token.UpdatedAt = time.UnixMicro(updated).UTC()
-	if expires.Valid {
-		token.ExpiresAt = time.UnixMicro(expires.Int64).UTC()
+	token := CollectorToken{
+		ID:          row.IngestionTokenID,
+		Version:     uint64(row.Version),
+		Name:        row.Name,
+		Description: row.Description,
+		Prefix:      row.TokenPrefix,
+		State:       row.State,
+		CreatedAt:   time.UnixMicro(row.CreatedAtUnixMicro).UTC(),
+		UpdatedAt:   time.UnixMicro(row.UpdatedAtUnixMicro).UTC(),
+	}
+	if row.ExpiresAtUnixMicro != nil {
+		token.ExpiresAt = time.UnixMicro(*row.ExpiresAtUnixMicro).UTC()
 		if token.State == CollectorTokenStateActive && !token.ExpiresAt.After(now) {
 			token.State = CollectorTokenStateExpired
 		}
 	}
-	if revoked.Valid {
-		token.RevokedAt = time.UnixMicro(revoked.Int64).UTC()
+	if row.RevokedAtUnixMicro != nil {
+		token.RevokedAt = time.UnixMicro(*row.RevokedAtUnixMicro).UTC()
 	}
-	if allowedIndexes != "" {
-		token.AllowedIndexNames = strings.Split(allowedIndexes, ",")
+	if row.AllowedIndexNames != "" {
+		token.AllowedIndexNames = strings.Split(row.AllowedIndexNames, ",")
 		sort.Strings(token.AllowedIndexNames)
 	}
 	return token, nil
@@ -613,11 +677,40 @@ func (store *Store) digest(plaintext string) []byte {
 	return mac.Sum(nil)
 }
 
-func finishTx(tx *sql.Tx, returnedErr *error) {
-	if tx == nil || returnedErr == nil || *returnedErr == nil {
+func resolveCollectorTokenScopes(db *gorm.DB, names []string) ([]string, error) {
+	var targets []collectorTokenScopeTarget
+	query := db.
+		Table("indexes").
+		Select("index_id", "name").
+		Where(
+			"name IN ? AND state = ? AND ingestion_enabled = 1",
+			names,
+			control.IndexStateActive,
+		).
+		Order("name").
+		Find(&targets)
+	if query.Error != nil {
+		return nil, query.Error
+	}
+	if len(targets) != len(names) {
+		return nil, errCollectorTokenScopeUnavailable
+	}
+	indexIDs := make([]string, len(targets))
+	for index, target := range targets {
+		if target.Name != names[index] {
+			return nil, errCollectorTokenScopeUnavailable
+		}
+		indexIDs[index] = target.IndexID
+	}
+	return indexIDs, nil
+}
+
+func finishTokenTransaction(tx *gorm.DB, transactionFinished *bool, returnedErr *error) {
+	if tx == nil || transactionFinished == nil || *transactionFinished ||
+		returnedErr == nil || *returnedErr == nil {
 		return
 	}
-	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+	if err := tx.Rollback().Error; err != nil {
 		*returnedErr = errors.Join(*returnedErr, fmt.Errorf("roll back transaction: %w", err))
 	}
 }
