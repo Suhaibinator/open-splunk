@@ -1,3 +1,3 @@
-// Package auth owns collector token validation and, later, user authentication
-// and authorization policy.
+// Package auth owns collector token validation and browser authentication and
+// authorization identity policy.
 package auth

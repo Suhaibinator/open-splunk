@@ -37,7 +37,7 @@ func (handler *apiHandler) downloadExport(response http.ResponseWriter, request 
 		writeDownloadError(response, http.StatusBadRequest, "download request is invalid")
 		return
 	}
-	token, ok := exportBearerToken(request.Header.Values("Authorization"))
+	token, ok := strictBearerToken(request.Header.Values("Authorization"))
 	if !ok {
 		writeInvalidDownloadGrant(response)
 		return
@@ -147,7 +147,7 @@ func validExportDownloadShape(request *http.Request) bool {
 	return true
 }
 
-func exportBearerToken(values []string) (string, bool) {
+func strictBearerToken(values []string) (string, bool) {
 	if len(values) != 1 {
 		return "", false
 	}

@@ -55,8 +55,8 @@ func normalizeRuntimeOptions(config *options) error {
 	if err != nil {
 		return errors.New("HTTP listen address must include a valid host and port")
 	}
-	if !loopbackAddress(config.httpAddress) && !config.httpInsecureTrustedNetwork {
-		return errors.New("plaintext browser HTTP on a non-loopback address requires -http-insecure-trusted-network")
+	if !loopbackAddress(config.httpAddress) {
+		return errors.New("administrator browser routes require a loopback HTTP listen address until HTTPS is configured")
 	}
 	config.httpAllowedHosts = config.httpAllowedHosts[:0]
 	for _, candidate := range strings.Split(config.httpAllowedHostsCSV, ",") {

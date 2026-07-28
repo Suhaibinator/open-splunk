@@ -531,7 +531,24 @@ func TestHandlerRejectsInvalidTenantIdentity(t *testing.T) {
 	}
 }
 
-func newAdminIntegrationHandler(t *testing.T) (http.Handler, *control.DB, *auth.Store) {
+const adminIntegrationBearerToken = "open-splunk-administrator-test-token-0123456789"
+
+type adminIntegrationHandler struct {
+	raw   http.Handler
+	token string
+}
+
+func (handler *adminIntegrationHandler) ServeHTTP(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	request = request.Clone(request.Context())
+	request.Header = request.Header.Clone()
+	request.Header.Set("Authorization", "Bearer "+handler.token)
+	handler.raw.ServeHTTP(response, request)
+}
+
+func newAdminIntegrationHandler(t *testing.T) (*adminIntegrationHandler, *control.DB, *auth.Store) {
 	t.Helper()
 	db, err := control.Open(context.Background(), t.TempDir()+"/control.sqlite")
 	if err != nil {
@@ -546,12 +563,25 @@ func newAdminIntegrationHandler(t *testing.T) (http.Handler, *control.DB, *auth.
 	if err != nil {
 		t.Fatalf("auth.NewStore: %v", err)
 	}
-	handler := newTestHandler(t, Config{
+	browserAuthenticator, err := auth.NewBearerTokenAuthenticator(
+		[]byte(adminIntegrationBearerToken),
+		"default",
+		"single-user",
+		auth.BrowserRoleAdministrator,
+	)
+	if err != nil {
+		t.Fatalf("auth.NewBearerTokenAuthenticator: %v", err)
+	}
+	raw := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: db, IngestionTokens: tokens,
 		SavedSearches: &fakeSavedSearches{}, WebUI: testUI(), Now: func() time.Time { return testNow },
 		AdministrativeAllowedHosts: []string{"example.com"},
+		BrowserAuthenticator:       browserAuthenticator,
 	})
-	return handler, db, tokens
+	return &adminIntegrationHandler{
+		raw:   raw,
+		token: adminIntegrationBearerToken,
+	}, db, tokens
 }
 
 func adminTestIndex(name string) control.IndexDefinition {

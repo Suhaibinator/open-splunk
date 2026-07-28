@@ -5,6 +5,8 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -43,10 +45,43 @@ func postProto(t *testing.T, ctx context.Context, client *http.Client, url strin
 	return body
 }
 
+func postAdministratorProto(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	url string,
+	bearerToken string,
+	input, output proto.Message,
+) []byte {
+	t.Helper()
+	body, err := postProtoRequestWithBearer(
+		ctx,
+		client,
+		url,
+		bearerToken,
+		input,
+		output,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
 func postProtoRequest(
 	ctx context.Context,
 	client *http.Client,
 	url string,
+	input, output proto.Message,
+) ([]byte, error) {
+	return postProtoRequestWithBearer(ctx, client, url, "", input, output)
+}
+
+func postProtoRequestWithBearer(
+	ctx context.Context,
+	client *http.Client,
+	url string,
+	bearerToken string,
 	input, output proto.Message,
 ) ([]byte, error) {
 	payload, err := proto.Marshal(input)
@@ -58,6 +93,9 @@ func postProtoRequest(
 		return nil, fmt.Errorf("create POST %s: %w", url, err)
 	}
 	request.Header.Set("Content-Type", "application/x-protobuf")
+	if bearerToken != "" {
+		request.Header.Set("Authorization", "Bearer "+bearerToken)
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("POST %s: %w", url, err)
@@ -77,6 +115,26 @@ func postProtoRequest(
 		return nil, fmt.Errorf("decode POST %s: %w", url, err)
 	}
 	return body, nil
+}
+
+func provisionAdministratorToken(
+	t *testing.T,
+	directory string,
+) (string, string) {
+	t.Helper()
+
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		t.Fatalf("generate administrator token: %v", err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(random)
+	clear(random)
+
+	path := filepath.Join(directory, "administrator.token")
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatalf("write administrator token fixture: %v", err)
+	}
+	return path, token
 }
 
 func TestRedactForFailure(t *testing.T) {

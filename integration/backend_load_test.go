@@ -275,6 +275,10 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 	httpAddress := unusedLoopbackAddress(t)
 	collectorAddress := unusedLoopbackAddress(t)
 	controlDBPath := filepath.Join(work, "control.sqlite")
+	administratorTokenPath, administratorToken := provisionAdministratorToken(
+		t,
+		work,
+	)
 	assertEmptyDirectory(t, serverRuntimeDir)
 	serverEnvironment := environmentWithValue(
 		os.Environ(),
@@ -291,6 +295,7 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		"-http-address=" + httpAddress,
 		"-control-db=" + controlDBPath,
 		"-master-key=" + filepath.Join(work, "server.key"),
+		"-administrator-token-file=" + administratorTokenPath,
 		"-clickhouse-address=" + clickhouse.Address,
 		"-clickhouse-database=" + clickhouse.Database,
 		"-clickhouse-username=" + clickhouse.Username,
@@ -309,8 +314,23 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	waitForHealth(t, ctx, httpClient, baseURL, serverProcess)
 
-	createVerticalIndex(t, ctx, httpClient, baseURL, plan.IndexName, "Sustained backend load")
-	plaintextToken := createBackendLoadToken(t, ctx, httpClient, baseURL, plan.IndexName)
+	createVerticalIndex(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		administratorToken,
+		plan.IndexName,
+		"Sustained backend load",
+	)
+	plaintextToken := createBackendLoadToken(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		administratorToken,
+		plan.IndexName,
+	)
 
 	fixtureStart := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Millisecond)
 	logPath := filepath.Join(work, "backend-load.ndjson")
@@ -677,7 +697,11 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		t.Fatalf(
 			"stop sustained-load server: %v\nlogs:\n%s",
 			err,
-			redactForFailure(serverProcess.Logs(), plaintextToken),
+			redactForFailure(
+				serverProcess.Logs(),
+				administratorToken,
+				plaintextToken,
+			),
 		)
 	}
 	for index, process := range serverProcesses {
@@ -685,9 +709,15 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 			t,
 			fmt.Sprintf("server process %d", index+1),
 			process,
+			administratorToken,
 			plaintextToken,
 		)
-		assertProcessLogsDoNotLeak(t, process.Logs(), plaintextToken)
+		assertProcessLogsDoNotLeak(
+			t,
+			process.Logs(),
+			administratorToken,
+			plaintextToken,
+		)
 	}
 
 	activeGeneration := warmDuration + mainDuration
@@ -732,7 +762,9 @@ func createBackendLoadToken(
 	t *testing.T,
 	ctx context.Context,
 	client *http.Client,
-	baseURL, indexName string,
+	baseURL string,
+	administratorToken string,
+	indexName string,
 ) string {
 	t.Helper()
 	return createIndexScopedIngestionToken(
@@ -740,6 +772,7 @@ func createBackendLoadToken(
 		ctx,
 		client,
 		baseURL,
+		administratorToken,
 		"backend-sustained-load-collector",
 		indexName,
 	)

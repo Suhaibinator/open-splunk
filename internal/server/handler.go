@@ -246,6 +246,7 @@ type Config struct {
 	SearchFields               SearchFields
 	SearchSuggestions          SearchSuggestions
 	SearchWebSocket            SearchWebSocket
+	BrowserAuthenticator       auth.BrowserAuthenticator
 	WebUI                      fs.FS
 	Bootstrap                  BootstrapConfig
 	OwnerID                    string
@@ -275,6 +276,8 @@ type apiHandler struct {
 	searchFields              SearchFields
 	searchSuggestions         SearchSuggestions
 	searchWebSocket           SearchWebSocket
+	browserAuthenticator      auth.BrowserAuthenticator
+	administratorRoutes       map[string]struct{}
 	ownerID                   string
 	tenantID                  string
 	maximumPageSize           uint32
@@ -283,6 +286,7 @@ type apiHandler struct {
 	maximumFieldCatalogFields uint32
 	maximumFieldSummaryValues uint32
 	maximumSuggestions        uint32
+	routeTimeout              time.Duration
 	bootstrap                 BootstrapConfig
 	now                       func() time.Time
 	requestGate               chan struct{}
@@ -313,6 +317,16 @@ func NewHandler(config Config) (*Handler, error) {
 	ingestionTokens := config.IngestionTokens
 	if isNilDependency(ingestionTokens) {
 		ingestionTokens = nil
+	}
+	browserAuthenticator := config.BrowserAuthenticator
+	if isNilDependency(browserAuthenticator) {
+		browserAuthenticator = nil
+	}
+	if (indexAdmin != nil || ingestionTokens != nil) &&
+		browserAuthenticator == nil {
+		return nil, errors.New(
+			"create server handler: administrative services require browser authentication",
+		)
 	}
 	if isNilDependency(config.SavedSearches) {
 		return nil, errors.New("create server handler: saved search service is required")
@@ -498,6 +512,7 @@ func NewHandler(config Config) (*Handler, error) {
 		searchFields:              fieldService,
 		searchSuggestions:         suggestionService,
 		searchWebSocket:           searchWebSocket,
+		browserAuthenticator:      browserAuthenticator,
 		ownerID:                   ownerID,
 		tenantID:                  tenantID,
 		maximumPageSize:           pageSize,
@@ -506,6 +521,7 @@ func NewHandler(config Config) (*Handler, error) {
 		maximumFieldCatalogFields: maximumFieldCatalogFields,
 		maximumFieldSummaryValues: maximumFieldSummaryValues,
 		maximumSuggestions:        maximumSuggestions,
+		routeTimeout:              routeTimeout,
 		bootstrap:                 bootstrap,
 		now:                       now,
 		requestGate:               make(chan struct{}, concurrentRequests),
@@ -530,6 +546,7 @@ func NewHandler(config Config) (*Handler, error) {
 		"/api/v1/saved-searches/duplicate",
 		"/api/v1/saved-searches/delete",
 	)
+	administratorRoutes := make(map[string]struct{}, 10)
 	if api.searchHistory != nil {
 		for _, path := range []string{
 			"/api/v1/search/history/get",
@@ -549,6 +566,7 @@ func NewHandler(config Config) (*Handler, error) {
 			"/api/v1/indexes/state/set",
 		} {
 			apiRoutes[path] = http.MethodPost
+			administratorRoutes[path] = struct{}{}
 		}
 	}
 	if api.ingestionTokens != nil {
@@ -560,6 +578,7 @@ func NewHandler(config Config) (*Handler, error) {
 			"/api/v1/ingestion-tokens/revoke",
 		} {
 			apiRoutes[path] = http.MethodPost
+			administratorRoutes[path] = struct{}{}
 		}
 	}
 	if api.exports != nil {
@@ -585,6 +604,7 @@ func NewHandler(config Config) (*Handler, error) {
 	if api.searchWebSocket != nil {
 		apiRoutes[searchWebSocketPath] = http.MethodGet
 	}
+	api.administratorRoutes = administratorRoutes
 	apiBoundary := exactAPIRoutes(api.protectBrowserAPIRoutes(apiRouter), apiRoutes)
 
 	mux := http.NewServeMux()

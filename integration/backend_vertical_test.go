@@ -106,6 +106,10 @@ func TestBackendVertical(t *testing.T) {
 	httpAddress := unusedLoopbackAddress(t)
 	collectorAddress := unusedLoopbackAddress(t)
 	controlDBPath := filepath.Join(work, "control.sqlite")
+	administratorTokenPath, administratorToken := provisionAdministratorToken(
+		t,
+		work,
+	)
 	assertEmptyDirectory(t, serverRuntimeDir)
 	serverEnvironment := environmentWithValue(os.Environ(), "OPEN_SPLUNK_CLICKHOUSE_PASSWORD", clickhouse.Password)
 	serverEnvironment = environmentWithValue(
@@ -118,6 +122,7 @@ func TestBackendVertical(t *testing.T) {
 		"-http-address=" + httpAddress,
 		"-control-db=" + controlDBPath,
 		"-master-key=" + filepath.Join(work, "server.key"),
+		"-administrator-token-file=" + administratorTokenPath,
 		"-clickhouse-address=" + clickhouse.Address,
 		"-clickhouse-database=" + clickhouse.Database,
 		"-clickhouse-username=" + clickhouse.Username,
@@ -133,15 +138,23 @@ func TestBackendVertical(t *testing.T) {
 	assertStandaloneServerSurface(t, ctx, httpClient, baseURL)
 
 	var createdIndex opensplunkv1.CreateIndexResponse
-	postProto(t, ctx, httpClient, baseURL+"/api/v1/indexes/create", &opensplunkv1.CreateIndexRequest{
-		Definition: &opensplunkv1.IndexDefinition{
-			Name:            verticalIndexName,
-			DisplayName:     "Backend vertical integration",
-			RetentionPeriod: durationpb.New(24 * time.Hour),
-			IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
-			SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+	postAdministratorProto(
+		t,
+		ctx,
+		httpClient,
+		baseURL+"/api/v1/indexes/create",
+		administratorToken,
+		&opensplunkv1.CreateIndexRequest{
+			Definition: &opensplunkv1.IndexDefinition{
+				Name:            verticalIndexName,
+				DisplayName:     "Backend vertical integration",
+				RetentionPeriod: durationpb.New(24 * time.Hour),
+				IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+				SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+			},
 		},
-	}, &createdIndex)
+		&createdIndex,
+	)
 	if createdIndex.GetIndex().GetVersion() != 1 || createdIndex.GetIndex().GetDefinition().GetName() != verticalIndexName {
 		t.Fatalf("created index = %+v", createdIndex.GetIndex())
 	}
@@ -151,10 +164,12 @@ func TestBackendVertical(t *testing.T) {
 		ctx,
 		httpClient,
 		baseURL,
+		administratorToken,
 		"backend-vertical-collector",
 		verticalIndexName,
 	)
 	serverSecrets := []string{
+		administratorToken,
 		plaintextToken,
 		redactionAPIKeySentinel,
 		redactionCookieSentinel,
@@ -315,9 +330,18 @@ func TestBackendVertical(t *testing.T) {
 		httpClient,
 		baseURL,
 		storage,
+		administratorToken,
 	))
 
-	createVerticalIndex(t, ctx, httpClient, baseURL, bulkIndexName, "Backend vertical bulk export")
+	createVerticalIndex(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		administratorToken,
+		bulkIndexName,
+		"Backend vertical bulk export",
+	)
 	bulkStart := insertBulkEvents(t, ctx, storage, visibilityCutoff)
 	serverSecrets = append(serverSecrets, assertTruncatedPreviewExportsAllRows(
 		t, ctx, httpClient, storage, baseURL, bulkStart, visibilityCutoff,
@@ -576,18 +600,34 @@ func waitForHealth(t *testing.T, ctx context.Context, client *http.Client, baseU
 	}
 }
 
-func createVerticalIndex(t *testing.T, ctx context.Context, client *http.Client, baseURL, name, displayName string) {
+func createVerticalIndex(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	administratorToken string,
+	name string,
+	displayName string,
+) {
 	t.Helper()
 	var created opensplunkv1.CreateIndexResponse
-	postProto(t, ctx, client, baseURL+"/api/v1/indexes/create", &opensplunkv1.CreateIndexRequest{
-		Definition: &opensplunkv1.IndexDefinition{
-			Name:            name,
-			DisplayName:     displayName,
-			RetentionPeriod: durationpb.New(24 * time.Hour),
-			IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
-			SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/indexes/create",
+		administratorToken,
+		&opensplunkv1.CreateIndexRequest{
+			Definition: &opensplunkv1.IndexDefinition{
+				Name:            name,
+				DisplayName:     displayName,
+				RetentionPeriod: durationpb.New(24 * time.Hour),
+				IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+				SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+			},
 		},
-	}, &created)
+		&created,
+	)
 	if created.GetIndex().GetVersion() != 1 || created.GetIndex().GetDefinition().GetName() != name {
 		t.Fatalf("created index %q = %+v", name, created.GetIndex())
 	}
@@ -597,18 +637,29 @@ func createIndexScopedIngestionToken(
 	t *testing.T,
 	ctx context.Context,
 	client *http.Client,
-	baseURL, name, indexName string,
+	baseURL string,
+	administratorToken string,
+	name string,
+	indexName string,
 ) string {
 	t.Helper()
 	var created opensplunkv1.CreateIngestionTokenResponse
-	postProto(t, ctx, client, baseURL+"/api/v1/ingestion-tokens/create", &opensplunkv1.CreateIngestionTokenRequest{
-		Definition: &opensplunkv1.IngestionTokenDefinition{
-			Name: name,
-			Constraints: &opensplunkv1.IngestionTokenConstraints{
-				AllowedIndexNames: []string{indexName},
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/ingestion-tokens/create",
+		administratorToken,
+		&opensplunkv1.CreateIngestionTokenRequest{
+			Definition: &opensplunkv1.IngestionTokenDefinition{
+				Name: name,
+				Constraints: &opensplunkv1.IngestionTokenConstraints{
+					AllowedIndexNames: []string{indexName},
+				},
 			},
 		},
-	}, &created)
+		&created,
+	)
 	plaintext := created.GetPlaintextToken()
 	metadata := created.GetIngestionToken()
 	if plaintext == "" || metadata.GetVersion() != 1 ||
@@ -630,6 +681,7 @@ func assertCurrentGradeThisMigration(
 	client *http.Client,
 	baseURL string,
 	connection clickhousedriver.Conn,
+	administratorToken string,
 ) string {
 	t.Helper()
 
@@ -644,6 +696,7 @@ func assertCurrentGradeThisMigration(
 		ctx,
 		client,
 		baseURL,
+		administratorToken,
 		gradethiscorpus.MigrationIndexName,
 		"Current GradeThis collector migration",
 	)
@@ -653,6 +706,7 @@ func assertCurrentGradeThisMigration(
 		ctx,
 		client,
 		baseURL,
+		administratorToken,
 		"gradethis-current-migration",
 		gradethiscorpus.MigrationIndexName,
 	)

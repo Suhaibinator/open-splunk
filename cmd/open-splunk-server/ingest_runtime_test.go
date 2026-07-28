@@ -37,18 +37,15 @@ func TestNormalizeRuntimeOptionsCanonicalizesAndBoundsTenantIdentity(t *testing.
 	}
 }
 
-func TestNormalizeRuntimeOptionsRequiresExplicitNonLoopbackHTTPTrust(t *testing.T) {
+func TestNormalizeRuntimeOptionsRequiresLoopbackHTTPForAdministratorRoutes(t *testing.T) {
 	t.Parallel()
 	config := options{httpAddress: "192.0.2.10:8080", tenantID: "tenant", indexRetention: time.Hour}
 	if err := normalizeRuntimeOptions(&config); err == nil {
-		t.Fatal("non-loopback plaintext HTTP unexpectedly succeeded without explicit trust")
+		t.Fatal("non-loopback plaintext HTTP unexpectedly succeeded")
 	}
 	config.httpInsecureTrustedNetwork = true
-	if err := normalizeRuntimeOptions(&config); err != nil {
-		t.Fatalf("explicit trusted-network HTTP error = %v", err)
-	}
-	if len(config.httpAllowedHosts) != 1 || config.httpAllowedHosts[0] != "192.0.2.10" {
-		t.Fatalf("derived allowed hosts = %v", config.httpAllowedHosts)
+	if err := normalizeRuntimeOptions(&config); err == nil {
+		t.Fatal("trusted-network override bypassed the administrator loopback boundary")
 	}
 
 	wildcard := options{
@@ -56,11 +53,11 @@ func TestNormalizeRuntimeOptionsRequiresExplicitNonLoopbackHTTPTrust(t *testing.
 		tenantID: "tenant", indexRetention: time.Hour,
 	}
 	if err := normalizeRuntimeOptions(&wildcard); err == nil {
-		t.Fatal("wildcard HTTP listener unexpectedly succeeded without allowed hosts")
+		t.Fatal("wildcard HTTP listener unexpectedly succeeded")
 	}
 	wildcard.httpAllowedHostsCSV = "logs.internal.example, 192.0.2.10"
-	if err := normalizeRuntimeOptions(&wildcard); err != nil {
-		t.Fatalf("explicit wildcard allowed hosts error = %v", err)
+	if err := normalizeRuntimeOptions(&wildcard); err == nil {
+		t.Fatal("allowed hosts bypassed the administrator loopback boundary")
 	}
 }
 

@@ -51,6 +51,7 @@ type options struct {
 	httpInsecureTrustedNetwork bool
 	controlDBPath              string
 	masterKeyPath              string
+	administratorTokenFile     string
 	exportArtifactDir          string
 	clickhouseAddress          string
 	clickhouseDatabase         string
@@ -100,6 +101,14 @@ func run() error {
 			release.Metadata.UIBuildID,
 			release.Metadata.UI.SHA256,
 		)
+		return err
+	}
+	browserAuthenticator, err := newAdministratorBrowserAuthenticator(
+		config.administratorTokenFile,
+		config.tenantID,
+		defaultOwnerID,
+	)
+	if err != nil {
 		return err
 	}
 	buildMetadata := &opensplunkv1.BuildMetadata{
@@ -324,6 +333,7 @@ func run() error {
 		OwnerID:                    defaultOwnerID,
 		TenantID:                   config.tenantID,
 		AdministrativeAllowedHosts: config.httpAllowedHosts,
+		BrowserAuthenticator:       browserAuthenticator,
 		Bootstrap: server.BootstrapConfig{
 			APIVersion:              "v1",
 			SPLCompatibilityVersion: splCompatibility,
@@ -375,11 +385,22 @@ func run() error {
 func parseFlags() options {
 	var result options
 	flag.BoolVar(&result.verifyEmbeddedRelease, "verify-embedded-release", false, "verify the embedded release payload and exit before opening runtime resources")
-	flag.StringVar(&result.httpAddress, "http-address", "127.0.0.1:8080", "HTTP listen address (set explicitly to expose on a trusted network)")
+	flag.StringVar(&result.httpAddress, "http-address", "127.0.0.1:8080", "HTTP listen address (administrator browser routes currently require loopback)")
 	flag.StringVar(&result.httpAllowedHostsCSV, "http-allowed-hosts", "", "comma-separated Host names allowed to use the browser API (defaults to the specific listen host)")
-	flag.BoolVar(&result.httpInsecureTrustedNetwork, "http-insecure-trusted-network", false, "explicitly allow plaintext browser HTTP on a non-loopback trusted network")
+	flag.BoolVar(
+		&result.httpInsecureTrustedNetwork,
+		"http-insecure-trusted-network",
+		false,
+		"deprecated compatibility flag; administrator browser routes remain loopback-only until HTTPS is configured",
+	)
 	flag.StringVar(&result.controlDBPath, "control-db", "open-splunk.db", "SQLite control-plane path")
 	flag.StringVar(&result.masterKeyPath, "master-key", "", "server master-key path (default: <control-db>.key)")
+	flag.StringVar(
+		&result.administratorTokenFile,
+		"administrator-token-file",
+		"",
+		"required owner-only administrator bearer-token file (provision first with a CSPRNG, for example: umask 077; openssl rand -base64 48 > FILE; required mode 0400 or 0600)",
+	)
 	flag.StringVar(&result.exportArtifactDir, "export-artifact-dir", "", "private export-artifact base directory (default: <control-db>.exports)")
 	flag.StringVar(&result.clickhouseAddress, "clickhouse-address", "127.0.0.1:9000", "ClickHouse native-protocol address")
 	flag.StringVar(&result.clickhouseDatabase, "clickhouse-database", "open_splunk", "ClickHouse database")

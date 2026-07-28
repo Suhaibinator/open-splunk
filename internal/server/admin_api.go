@@ -113,6 +113,22 @@ func (handler *apiHandler) protectBrowserAPIRoutes(next http.Handler) http.Handl
 			writeAPIError(response, http.StatusForbidden, "browser request origin is not trusted")
 			return
 		}
+		if _, protected := handler.administratorRoutes[request.URL.Path]; protected {
+			ctx, cancel := context.WithTimeout(
+				request.Context(),
+				handler.routeTimeout,
+			)
+			defer cancel()
+			request = request.WithContext(ctx)
+			var authorized bool
+			request, authorized = handler.authorizeBrowserAdministrator(
+				response,
+				request,
+			)
+			if !authorized {
+				return
+			}
+		}
 		next.ServeHTTP(response, request)
 	})
 }

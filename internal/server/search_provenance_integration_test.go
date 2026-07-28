@@ -11,6 +11,7 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
@@ -133,15 +134,25 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	})
 	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 
+	browserAuthenticator, err := auth.NewBearerTokenAuthenticator(
+		[]byte(adminIntegrationBearerToken),
+		tenantID,
+		ownerID,
+		auth.BrowserRoleAdministrator,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler := newTestHandler(t, Config{
-		SearchJobs:    manager,
-		Indexes:       database,
-		SavedSearches: savedSearches,
-		SearchHistory: history,
-		WebUI:         testUI(),
-		OwnerID:       ownerID,
-		TenantID:      tenantID,
-		Now:           func() time.Time { return anchor },
+		SearchJobs:           manager,
+		Indexes:              database,
+		SavedSearches:        savedSearches,
+		SearchHistory:        history,
+		BrowserAuthenticator: browserAuthenticator,
+		WebUI:                testUI(),
+		OwnerID:              ownerID,
+		TenantID:             tenantID,
+		Now:                  func() time.Time { return anchor },
 	})
 	timezone := location.String()
 	request := &opensplunkv1.CreateSearchJobRequest{
