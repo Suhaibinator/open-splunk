@@ -2,6 +2,7 @@ package spltimeformat
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -65,8 +66,7 @@ func TestCompileStrftimeFormatAcceptsBoundedLocaleStableSubset(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CompileStrftimeFormat(%q): %v", test.format, err)
 			}
-			if compiled.Format != test.format ||
-				compiled.MaximumOutputBytes != test.outputBytes {
+			if compiled.MaximumOutputBytes != test.outputBytes {
 				t.Fatalf(
 					"CompileStrftimeFormat(%q) = %#v, want output bound %d",
 					test.format,
@@ -80,7 +80,7 @@ func TestCompileStrftimeFormatAcceptsBoundedLocaleStableSubset(t *testing.T) {
 					gotDirectives = append(gotDirectives, part.Directive)
 				}
 			}
-			if !equalDirectives(gotDirectives, test.directives) {
+			if !slices.Equal(gotDirectives, test.directives) {
 				t.Fatalf("directives = %v, want %v", gotDirectives, test.directives)
 			}
 		})
@@ -146,16 +146,4 @@ func TestCompileStrftimeFormatRejectsInvalidUnsupportedAndOversizedFormats(t *te
 	); !errors.Is(err, ErrStrftimeFormatTooLarge) {
 		t.Fatalf("output-amplifying format error = %v, want ErrStrftimeFormatTooLarge", err)
 	}
-}
-
-func equalDirectives(left, right []Directive) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
 }

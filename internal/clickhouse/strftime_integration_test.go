@@ -86,17 +86,26 @@ func testStrftimeAgainstClickHouse(
 			` | eval epoch=strftime(0, "%F %T.%9N %s %z"),` +
 			` negative=strftime(-0.5, "%F %T.%9N %s"),` +
 			` padded=strftime(1782864000, "%e"),` +
+			` week_boundary=strftime(1609459200, "%Y %G %g %V %w %I %p"),` +
 			` admitted=strftime(now(), "%F %T.%Q"),` +
 			` literal=strftime(_time, "東京 %H時%M分 O'clock %%"),` +
 			` empty=strftime(_time, "")` +
-			` | table epoch,negative,padded,admitted,literal,empty`,
+			` | table epoch,negative,padded,week_boundary,admitted,literal,empty`,
 	)
-	var epoch, negative, padded, admitted, literal, empty string
+	var epoch, negative, padded, weekBoundary, admitted, literal, empty string
 	if err := connection.QueryRow(
 		queryContext,
 		fixed.SQL,
 		fixed.Args...,
-	).Scan(&epoch, &negative, &padded, &admitted, &literal, &empty); err != nil {
+	).Scan(
+		&epoch,
+		&negative,
+		&padded,
+		&weekBoundary,
+		&admitted,
+		&literal,
+		&empty,
+	); err != nil {
 		t.Fatalf(
 			"execute fixed strftime: %v\nSQL: %s\nargs: %#v",
 			err,
@@ -108,13 +117,15 @@ func testStrftimeAgainstClickHouse(
 		Format("2006-01-02 15:04:05") + ".000"
 	if epoch != "1970-01-01 00:00:00.000000000 0 +0000" ||
 		negative != "1969-12-31 23:59:59.500000000 -1" ||
-		padded != " 1" || admitted != wantAdmission ||
+		padded != " 1" || weekBoundary != "2021 2020 20 53 5 12 AM" ||
+		admitted != wantAdmission ||
 		literal != "東京 22時04分 O'clock %" || empty != "" {
 		t.Fatalf(
-			"fixed strftime = %q/%q/%q/%q/%q/%q, want epoch/negative/padded/%q/literal/empty",
+			"fixed strftime = %q/%q/%q/%q/%q/%q/%q, want epoch/negative/padded/week/%q/literal/empty",
 			epoch,
 			negative,
 			padded,
+			weekBoundary,
 			admitted,
 			literal,
 			empty,

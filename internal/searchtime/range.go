@@ -9,24 +9,19 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
-	_ "time/tzdata" // Embed IANA timezone data for deployments without a system database.
-
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
 )
 
 const (
 	MaximumExpressionBytes = 1_024
-	MaximumTimezoneBytes   = 255
+	MaximumTimezoneBytes   = ianatimezone.MaximumNameBytes
 )
 
-var (
-	locationCache    sync.Map
-	errLocalTimezone = errors.New("timezone must not depend on the server's local configuration")
-)
+var errLocalTimezone = ianatimezone.ErrLocal
 
 // Intent is the normalized reusable time-range input retained separately from
 // the resolved execution interval. Timezone is always effective; the presence
@@ -134,10 +129,6 @@ func parseIntent(intent Intent) (parsedIntent, error) {
 	if err != nil {
 		return parsedIntent{}, err
 	}
-	if intent.Timezone == "" || len(intent.Timezone) > MaximumTimezoneBytes ||
-		!utf8.ValidString(intent.Timezone) || strings.TrimSpace(intent.Timezone) != intent.Timezone {
-		return parsedIntent{}, errors.New("timezone is invalid")
-	}
 	if !intent.TimezoneSpecified && intent.Timezone != "UTC" {
 		return parsedIntent{}, errors.New("unspecified timezone must use UTC")
 	}
@@ -174,23 +165,7 @@ func normalizeIntent(earliest, latest string, timezone *string) (Intent, error) 
 }
 
 func loadLocation(name string) (*time.Location, error) {
-	if name == "Local" {
-		return nil, errLocalTimezone
-	}
-	if name == "UTC" {
-		return time.UTC, nil
-	}
-	if cached, ok := locationCache.Load(name); ok {
-		return cached.(*time.Location), nil
-	}
-	location, err := time.LoadLocation(name)
-	if err != nil {
-		return nil, err
-	}
-	// A short timezone may be a substring of a much larger request buffer.
-	// Clone the retained key so the process-wide cache never pins that buffer.
-	cached, _ := locationCache.LoadOrStore(strings.Clone(name), location)
-	return cached.(*time.Location), nil
+	return ianatimezone.Load(name)
 }
 
 type expressionKind uint8

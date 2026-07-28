@@ -11,11 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
-
-	_ "time/tzdata" // Embed IANA zones so lowering validation is host-independent.
 
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
@@ -4117,14 +4115,13 @@ func compileStrftimeScalar(
 	}
 	formattedSQL, formatArgs, err := compileStrftimeParts(
 		compiledFormat.Parts,
-		state.context.searchTimezone,
 	)
 	if err != nil {
 		return compiledScalar{}, err
 	}
 	timestampBinding := "arrayElement(arrayMap(timestamp -> if(isNull(timestamp), " +
 		"CAST(NULL AS Nullable(String)), " + formattedSQL + "), [" +
-		timestampSQL + "]), 1)"
+		"toTimeZone(" + timestampSQL + ", ?)]), 1)"
 	valueSQL := "arrayElement(arrayMap(value -> " + timestampBinding +
 		", [" + input.valueSQL + "]), 1)"
 	if len(valueSQL) > maxCompiledStrftimeScalarSQLBytes {
@@ -4140,9 +4137,10 @@ func compileStrftimeScalar(
 	valueArgs := make(
 		[]any,
 		0,
-		len(formatArgs)+len(input.valueArgs),
+		len(formatArgs)+1+len(input.valueArgs),
 	)
 	valueArgs = append(valueArgs, formatArgs...)
+	valueArgs = append(valueArgs, state.context.searchTimezone)
 	valueArgs = append(valueArgs, input.valueArgs...)
 	return compiledScalar{
 		valueSQL:                valueSQL,
@@ -4159,15 +4157,7 @@ func validateCompileContextSearchTimezone(context *compileContext) error {
 		return context.searchTimezoneCheckErr
 	}
 	context.searchTimezoneChecked = true
-	timezone := context.searchTimezone
-	if timezone == "" || len(timezone) > 255 || !utf8.ValidString(timezone) ||
-		strings.TrimSpace(timezone) != timezone || timezone == "Local" {
-		context.searchTimezoneCheckErr = errors.New(
-			"compile ClickHouse strftime: search timezone is invalid",
-		)
-		return context.searchTimezoneCheckErr
-	}
-	if _, err := time.LoadLocation(timezone); err != nil {
+	if _, err := ianatimezone.Load(context.searchTimezone); err != nil {
 		context.searchTimezoneCheckErr = errors.New(
 			"compile ClickHouse strftime: search timezone is invalid",
 		)
@@ -4234,10 +4224,9 @@ func strftimeTimestampSQL(input compiledScalar) (string, error) {
 
 func compileStrftimeParts(
 	parts []spltimeformat.Part,
-	timezone string,
 ) (string, []any, error) {
 	fragments := make([]string, 0, len(parts))
-	args := make([]any, 0, len(parts)*2)
+	args := make([]any, 0, len(parts))
 	var joda strings.Builder
 	flushJoda := func() {
 		if joda.Len() == 0 {
@@ -4245,9 +4234,9 @@ func compileStrftimeParts(
 		}
 		fragments = append(
 			fragments,
-			"formatDateTimeInJodaSyntax(timestamp, ?, ?)",
+			"formatDateTimeInJodaSyntax(timestamp, ?)",
 		)
-		args = append(args, joda.String(), timezone)
+		args = append(args, joda.String())
 		joda.Reset()
 	}
 	for _, part := range parts {
@@ -4259,15 +4248,19 @@ func compileStrftimeParts(
 		case spltimeformat.DirectiveDaySpace:
 			fragments = append(
 				fragments,
-				"leftPad(toString(toDayOfMonth(toTimeZone(timestamp, ?))), 2, ' ')",
+				"leftPad(toString(toDayOfMonth(timestamp)), 2, ' ')",
 			)
-			args = append(args, timezone)
 		case spltimeformat.DirectiveWeekdayNumber:
 			fragments = append(
 				fragments,
-				"toString(modulo(toDayOfWeek(toTimeZone(timestamp, ?)), 7))",
+				"toString(modulo(toDayOfWeek(timestamp), 7))",
 			)
-			args = append(args, timezone)
+		case spltimeformat.DirectiveISOWeekYearShort:
+			fragments = append(
+				fragments,
+				"substring(formatDateTimeInJodaSyntax(timestamp, ?), -2)",
+			)
+			args = append(args, "xxxx")
 		case spltimeformat.DirectiveEpochSeconds:
 			fragments = append(
 				fragments,
@@ -4279,17 +4272,17 @@ func compileStrftimeParts(
 		case spltimeformat.DirectiveTimezoneOffset:
 			fragments = append(
 				fragments,
-				"formatDateTime(timestamp, ?, ?)",
+				"formatDateTime(timestamp, ?)",
 			)
-			args = append(args, "%z", timezone)
+			args = append(args, "%z")
 		case spltimeformat.DirectiveTimezoneOffsetColon:
 			fragments = append(
 				fragments,
 				"arrayElement(arrayMap(offset -> concat(substring(offset, 1, 3), "+
 					"':', substring(offset, 4, 2)), "+
-					"[formatDateTime(timestamp, ?, ?)]), 1)",
+					"[formatDateTime(timestamp, ?)]), 1)",
 			)
-			args = append(args, "%z", timezone)
+			args = append(args, "%z")
 		default:
 			return "", nil, fmt.Errorf(
 				"compile ClickHouse strftime: unsupported directive %d",
@@ -4319,9 +4312,7 @@ func appendStrftimeJodaPart(builder *strings.Builder, part spltimeformat.Part) b
 	case spltimeformat.DirectiveYearShort:
 		builder.WriteString("yy")
 	case spltimeformat.DirectiveISOWeekYear:
-		builder.WriteString("YYYY")
-	case spltimeformat.DirectiveISOWeekYearShort:
-		builder.WriteString("YY")
+		builder.WriteString("xxxx")
 	case spltimeformat.DirectiveMonthNumber:
 		builder.WriteString("MM")
 	case spltimeformat.DirectiveMonthShort:

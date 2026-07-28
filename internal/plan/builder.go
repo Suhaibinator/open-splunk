@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
@@ -47,7 +48,6 @@ const (
 	// drive unbounded recursive conversion.
 	maxConvertedExpressionNodes = 2048
 	maxConvertedExpressionDepth = 1024
-	maxSearchTimezoneBytes      = 255
 )
 
 // Scope is the server-resolved security and snapshot boundary for a search.
@@ -98,11 +98,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 	if searchStart.IsZero() {
 		return nil, &Diagnostic{Code: "SPL_INVALID_SEARCH_START", Message: "search-start anchor is required", Range: query.Range}
 	}
-	if scope.SearchTimezone == "" ||
-		len(scope.SearchTimezone) > maxSearchTimezoneBytes ||
-		!utf8.ValidString(scope.SearchTimezone) ||
-		strings.TrimSpace(scope.SearchTimezone) != scope.SearchTimezone ||
-		scope.SearchTimezone == "Local" {
+	if _, err := ianatimezone.Load(scope.SearchTimezone); err != nil {
 		return nil, &Diagnostic{
 			Code:    "SPL_INVALID_SEARCH_TIMEZONE",
 			Message: "effective search timezone is invalid",

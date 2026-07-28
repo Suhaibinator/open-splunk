@@ -48,13 +48,21 @@ func TestBuildStrftimePreservesTypedIRAndSearchTimezone(t *testing.T) {
 func TestBuildStrftimeRequiresExplicitSearchTimezone(t *testing.T) {
 	t.Parallel()
 
-	scope := testScope([]string{"gradethis"}, nil)
-	scope.SearchTimezone = ""
-	_, err := Build(
-		mustParse(t, `index=gradethis | eval rendered=strftime(_time, "%F")`),
-		scope,
-	)
-	assertDiagnosticCode(t, err, "SPL_INVALID_SEARCH_TIMEZONE")
+	for _, timezone := range []string{
+		"",
+		" Local",
+		"Local",
+		"OpenSplunk/Invalid",
+		strings.Repeat("x", 256),
+	} {
+		scope := testScope([]string{"gradethis"}, nil)
+		scope.SearchTimezone = timezone
+		_, err := Build(
+			mustParse(t, `index=gradethis | eval rendered=strftime(_time, "%F")`),
+			scope,
+		)
+		assertDiagnosticCode(t, err, "SPL_INVALID_SEARCH_TIMEZONE")
+	}
 }
 
 func TestBuildStrftimeRejectsForgedArityFormatBooleanEnumAndTypedNil(t *testing.T) {

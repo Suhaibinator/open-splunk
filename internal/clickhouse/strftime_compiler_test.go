@@ -31,9 +31,10 @@ func TestCompileStrftimeUsesPinnedTimezoneAndPortableDirectiveLowering(t *testin
 	}
 	if strings.Contains(compiled.SQL, "timezone()") ||
 		strings.Contains(compiled.SQL, "serverTimeZone") ||
-		!containsArgument(compiled.Args, scope.SearchTimezone) {
+		countArgument(compiled.Args, scope.SearchTimezone) != 1 ||
+		strings.Count(compiled.SQL, "toTimeZone(") != 1 {
 		t.Fatalf(
-			"strftime did not bind the search timezone: args=%#v\nSQL: %s",
+			"strftime did not localize once in the bound search timezone: args=%#v\nSQL: %s",
 			compiled.Args,
 			compiled.SQL,
 		)

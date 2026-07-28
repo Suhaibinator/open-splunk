@@ -70,7 +70,6 @@ type Part struct {
 // StrftimeFormat is one validated format and its conservative resource
 // metadata.
 type StrftimeFormat struct {
-	Format             string
 	Parts              []Part
 	WorkUnits          int
 	MaximumOutputBytes uint64
@@ -87,7 +86,7 @@ func CompileStrftimeFormat(format string) (StrftimeFormat, error) {
 		return StrftimeFormat{}, ErrStrftimeFormatTooLarge
 	}
 
-	compiled := StrftimeFormat{Format: strings.Clone(format)}
+	compiled := StrftimeFormat{}
 	literalStart := 0
 	for offset := 0; offset < len(format); {
 		if format[offset] != '%' {
