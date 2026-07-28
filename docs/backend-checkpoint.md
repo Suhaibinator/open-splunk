@@ -7,7 +7,145 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: authenticated administrator search inspection
+## Latest checkpoint: persistent GORM app workspaces
+
+Date: 2026-07-28
+
+Committed and pushed checkpoints:
+
+- `af31a35` — tenant-scoped app workspace persistence through GORM, with SQL
+  migrations retained as the sole schema authority;
+- `3632cb3` — the complete authenticated administrator app API;
+- `a5ab97a` — live active-app bootstrap from the persistent catalog; and
+- `40b00ac` — production runtime wiring, stable purpose-separated cursor keys,
+  and real HTTP/SQLite restart proof.
+
+This slice establishes the first persistent Phase 3 app workspace from schema
+through ordinary browser bootstrap:
+
+1. SQLite migration `0010_app_workspaces.sql` defines `app_workspaces`,
+   `app_default_indexes`, and tenant catalog revisions, including tenant-local
+   slug uniqueness, globally unique generated app IDs, positive versions,
+   lifecycle/timestamp checks, foreign keys, lookup indexes, and triggers that
+   keep active default indexes searchable. The migration also bridges legacy
+   saved-search namespaces without breaking arbitrary pre-app identifiers and
+   prevents a referenced app from being deleted.
+2. `internal/control.AppCatalog` uses explicit GORM models and transactions but
+   never calls `AutoMigrate`; checked-in SQL remains the reviewable source of
+   truth. Model-tag/schema parity and v9-to-v10 upgrade tests keep the GORM
+   mapping synchronized with the migration.
+3. App IDs are canonical random `app_` identifiers. Slugs are immutable and
+   tenant-local; definitions carry a display name, optional canonical
+   description, as many as 128 active/searchable default indexes, and an
+   authored optional time-range intent whose field presence is preserved
+   without resolving wall-clock values during persistence.
+4. Create, get, update, state transition, list, and hard delete are
+   tenant-scoped and detached. Mutations use optimistic versions and
+   immediate SQLite writer transactions. Each tenant is bounded to 256 apps.
+   An active app cannot outlive a disabled or archived default index, and hard
+   deletion requires archived state, an exact version, the exact canonical
+   slug as confirmation, and no saved-search dependency.
+5. Listing uses signed composite-keyset continuations over a tenant catalog
+   revision. Any create, update, state transition, or delete invalidates an
+   older continuation rather than silently duplicating or skipping rows.
+   Filters, sort direction, page size, tenant, and required revision are bound
+   into the cursor, and total counts are opt-in and exact.
+6. The protobuf administrator surface exposes exact POST routes for create,
+   get, list, update, state transition, and delete. Exact route/method
+   resolution and Host/Origin checks precede administrator authentication;
+   authentication precedes content type, admission, decoding, and storage.
+   Tenant scope and actor identity come only from the authenticated principal.
+7. Requests reject recursive unknown fields, invalid presence, unsupported
+   masks, mutable slugs, malformed selectors, padded or oversized page tokens,
+   invalid states, and inexact delete confirmations. Service results are
+   deeply validated and detached before bounded atomic serialization. Stable
+   status categories do not expose persistence diagnostics.
+8. Ordinary `/api/v1/system/bootstrap` uses a separate read-only
+   `AppCatalog.ListActiveApps` contract. It passes only the server's fixed
+   tenant, requires one complete result within the hard 256-app bound,
+   validates and detaches every field, rejects corrupt or duplicate IDs/slugs,
+   emits active state, and sorts by immutable `(slug, app_id)`.
+9. Live catalog and static bootstrap apps cannot both be configured. With a
+   live catalog, selection precedence is an active configured default, then an
+   active request preference, then the first sorted active app. A missing or
+   archived request preference therefore cannot displace a valid configured
+   default. Bootstrap remains an ordinary route and does not require an
+   administrator bearer token.
+10. Production constructs one adapter for both the privileged mutation
+    surface and ordinary read-only projection. It borrows the process-owned
+    control database and has no competing close lifecycle. Known catalog
+    errors map to fixed transport categories; unknown persistence/corruption
+    errors retain server-side identity but become generic HTTP failures.
+11. The persisted inner catalog cursor and the outer administrator transport
+    cursor use two stable, purpose-separated keys derived from the verified
+    server master key. The GORM catalog and HTTP handler clone their keys, and
+    temporary caller/master-key buffers are cleared on success and failure.
+12. A real end-to-end test opens the migrated SQLite database, constructs the
+    production adapter and real HTTP handler, authenticates administrator
+    create/archive/list calls, observes active apps through unauthenticated
+    ordinary bootstrap, closes and reopens the database/adapter/handler, and
+    continues an administrator page token issued before restart. It also
+    proves tenant isolation, archived-app exclusion, persisted state, stable
+    inner and outer keys, caller-key erasure, and single database ownership.
+13. Adversarial review closed server-side selection fallback and aliasing
+    hazards while the slice was being built. The final independent combined
+    review found no remaining P0/P1/P2 issue in tenancy, privilege boundaries,
+    bounds/completeness, deterministic selection, adapter conversion, key
+    lifecycle, restart paging, database ownership, or startup cleanup.
+
+Validation on pushed commit `40b00ac`:
+
+```sh
+go test ./... -count=1
+go test -race \
+  ./internal/control ./internal/server ./cmd/open-splunk-server \
+  -count=1
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=5m --max-issues-per-linter=0 --max-same-issues=0
+npm run lint
+npm run typecheck
+npm run test:frontend
+make proto
+git diff --check
+```
+
+All Go packages and the focused race suites passed. Vet, build, pinned
+repository-wide lint with `0 issues`, frontend lint/typecheck, all 47
+release/build tests, all 136 frontend tests, Buf format/lint, reproducible
+protobuf generation, and the clean-tree check passed. Verification ran from
+an isolated worktree anchored at the pushed commit so parallel follow-up GORM
+work could not affect the evidence. The installed Node runtime was newer than
+the repository's exact engine pin and emitted an engine warning, but every
+frontend gate passed. `npm ci` continued to report the already-documented
+three high-severity transitive Next.js/PostCSS/Sharp findings; no unsafe
+breaking force-fix was applied.
+
+This control-plane-only slice does not execute ClickHouse or change SPL
+behavior, so it relies on the immediately preceding pinned all-ten-query
+GradeThis inspection/compatibility gate rather than starting an unrelated
+container. The next GORM work should keep each remaining store independently
+reviewable: ingestion tokens, saved searches, and search history still use
+direct `database/sql` at this checkpoint.
+
+Next priorities:
+
+1. Convert the remaining bounded SQLite control-plane stores to explicit GORM
+   models without introducing `AutoMigrate` or weakening their transaction,
+   cursor, scope, secret, lifecycle, and concurrency contracts.
+2. Continue Phase 3 with collector fleet operations, reports/dashboards,
+   per-index permissions/retention completion, HEC compatibility, and expanded
+   RBAC/audit search.
+3. Retain the lifecycle backlog: bounded ingestion-token tombstones, surfaced
+   export-deletion failures, physical search-history cleanup, completion of
+   deleting-index state, and a bounded WebSocket shutdown dependency.
+4. Keep every SPL change behind unit, adversarial, and pinned ClickHouse
+   compatibility evidence; this GORM work does not alter that contract.
+5. Do not guess unresolved capacity, hardware, concurrent-load, Windows, or
+   dashboard-scope product decisions when they materially affect a slice.
+
+## Previous checkpoint: authenticated administrator search inspection
 
 Date: 2026-07-28
 
