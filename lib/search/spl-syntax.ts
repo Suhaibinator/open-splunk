@@ -1,106 +1,38 @@
+import completionCatalog from "../../internal/spl/completion_catalog.json";
+
 export interface SplPipelineCommandDefinition {
-  name: string;
-  insertion: string;
-  detail: string;
+  readonly name: string;
+  readonly insertion: string;
+  readonly detail: string;
 }
 
-export const SPL_PIPELINE_COMMANDS = [
-  {
-    name: "search",
-    insertion: 'search level="ERROR"',
-    detail: "Filter events or transformed rows.",
-  },
-  {
-    name: "where",
-    insertion: "where isnotnull(status) AND status >= 500",
-    detail: 'Filter with comparisons, including null-propagating period concatenation such as first." ".last = full_name for String and number operands (use tostring(value) for Boolean), direct isnull/isnotnull predicates, match(value, "regex") substring predicates using a literal bounded RE2 pattern, like(value, "pattern") whole-string predicates using a literal bounded wildcard pattern, now() as the fixed search-start Unix second, relative_time(time, "specifier") as nullable Unix seconds after a bounded literal offset-and-snap program in the effective IANA search timezone, strftime(time, "format") in that timezone, or strptime(text, "format") as nullable Unix seconds.',
-  },
-  {
-    name: "eval",
-    insertion: 'eval availability=if(isnull(status), "missing", "present")',
-    detail: 'Create or replace fields; the null-propagating period operator concatenates 2-32 String or number operands in source order, as in full_name=first." ".last (use tostring(value) for Boolean), if(predicate, true_value, false_value) selects between two values, coalesce(value, fallback, ...) selects the first non-null fixed value, case(predicate, value, ...) selects the value for the first true predicate, lower(value)/upper(value) map a Unicode string or multivalue, len(value)/length(value) count UTF-8 code points in one string, substr(value, start[, length]) selects UTF-8 code points with SQLite indexing and literal integer indexes, tostring(value) preserves strings, renders exact numbers, and uses capitalized Boolean text, round(value[, precision]) rounds a number with an optional literal precision from 0 through 18, ceil(value)/ceiling(value) rounds a number upward, floor(value) rounds it downward, mvcount(value) counts non-null multivalue members, a single value as 1, and no values as null, match(value, "regex") tests substring matches with a 4 KiB literal RE2 pattern, like(value, "pattern") tests whole-string matches with a 4 KiB literal wildcard pattern where % matches zero or more Unicode code points and _ matches one Unicode code point, now() returns the fixed search-start Unix second, relative_time(time, "-1d@d+2h") applies an optional signed offset, optional snap, and optional signed post-snap offset in the effective IANA search timezone and returns nullable Unix seconds from a 1 KiB literal specifier, strftime(time, "%Y-%m-%dT%H:%M:%S.%Q") formats canonical time or Unix seconds in that timezone using a bounded literal format, and strptime(text, "%Y-%m-%dT%H:%M:%S.%6N") requires a full date and returns nullable microsecond Unix seconds with a 4 KiB literal format and a 4 KiB String input ceiling. Formatted tostring modes and negative or calculated round precisions are not yet supported.',
-  },
-  {
-    name: "rename",
-    insertion: "rename logger AS component",
-    detail: "Rename one or more exact fields.",
-  },
-  {
-    name: "fields",
-    insertion: "fields _time level logger message trace_id",
-    detail: "Include or exclude exact fields.",
-  },
-  {
-    name: "table",
-    insertion: "table _time level logger message trace_id",
-    detail: "Create an ordered statistics table.",
-  },
-  {
-    name: "sort",
-    insertion: "sort -_time",
-    detail: "Sort rows by exact fields.",
-  },
-  {
-    name: "dedup",
-    insertion: "dedup trace_id",
-    detail: "Keep the first row for each exact key.",
-  },
-  {
-    name: "rex",
-    insertion: 'rex field=_raw "(?<request_id>request_id=[^ ]+)"',
-    detail: "Extract named fields with the supported RE2 subset.",
-  },
-  {
-    name: "spath",
-    insertion: "spath input=payload output=status path=response.status",
-    detail: "Extract one typed scalar from an explicit JSON path.",
-  },
-  {
-    name: "bin",
-    insertion: "bin duration_ms span=100 AS duration_bucket",
-    detail: "Bucket one numeric or canonical time field with an explicit span.",
-  },
-  {
-    name: "bucket",
-    insertion: "bucket _time span=5m",
-    detail: "Alias of bin with an explicit span.",
-  },
-  {
-    name: "head",
-    insertion: "head 20",
-    detail: "Keep the first rows.",
-  },
-  {
-    name: "tail",
-    insertion: "tail 20",
-    detail: "Keep and reverse the final rows.",
-  },
-  {
-    name: "stats",
-    insertion: "stats count AS events count(eval(status>=500)) AS errors c(user) AS user_occurrences dc(user) AS user_count values(user) AS users min(duration_ms) AS min_ms max(duration_ms) AS max_ms earliest(status) AS first_status latest(status) AS last_status p50(duration_ms) AS median_ms p95(duration_ms) AS p95_ms sum(bytes) AS total_bytes avg(duration_ms) AS avg_ms BY level",
-    detail: "Aggregate with row count, true-only count(eval(predicate)) AS output, count/c field occurrences, dc/distinct_count, values, list, min, max, chronological earliest/latest, pN/percN percentiles (1-99), sum, and avg.",
-  },
-  {
-    name: "top",
-    insertion: "top limit=20 message",
-    detail: "Find the most frequent values.",
-  },
-  {
-    name: "rare",
-    insertion: "rare limit=20 message",
-    detail: "Find the least frequent values.",
-  },
-  {
-    name: "timechart",
-    insertion: "timechart span=5m count BY level",
-    detail: "Chart count over fixed time buckets.",
-  },
-  {
-    name: "chart",
-    insertion: "chart count OVER status BY level",
-    detail: "Build a bounded two-dimensional aggregate table.",
-  },
-] as const satisfies readonly SplPipelineCommandDefinition[];
+export interface SplFunctionDefinition {
+  readonly name: string;
+  readonly insertion: string;
+  readonly detail: string;
+  readonly class: "scalar" | "aggregate";
+  readonly highlight_requires_call: boolean;
+}
+
+export interface SplKeywordDefinition {
+  readonly name: string;
+  readonly insertion: string;
+  readonly detail: string;
+  readonly highlight: boolean;
+}
+
+interface SplCompletionCatalogDefinition {
+  commands: readonly SplPipelineCommandDefinition[];
+  functions: readonly SplFunctionDefinition[];
+  keywords: readonly SplKeywordDefinition[];
+}
+
+const SHARED_SPL_COMPLETION_CATALOG =
+  completionCatalog as SplCompletionCatalogDefinition;
+
+export const SPL_PIPELINE_COMMANDS = SHARED_SPL_COMPLETION_CATALOG.commands;
+export const SPL_FUNCTIONS = SHARED_SPL_COMPLETION_CATALOG.functions;
+export const SPL_KEYWORDS = SHARED_SPL_COMPLETION_CATALOG.keywords;
 
 export const UNSUPPORTED_SPL_PIPELINE_COMMANDS = [
   "eventstats",

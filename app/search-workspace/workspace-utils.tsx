@@ -5,6 +5,8 @@ import { DEMO_EVENTS, type DemoEvent, type DemoScalar } from "@/lib/demo/search-
 import {
   isSplOffsetInDoubleQuotedValue,
   isSupportedSplPipelineCommand,
+  SPL_FUNCTIONS,
+  SPL_KEYWORDS,
   SPL_PIPELINE_COMMANDS,
   splitSplPipeline,
   UNSUPPORTED_SPL_PIPELINE_COMMANDS,
@@ -21,73 +23,27 @@ const PIPELINE_COMMAND_PATTERN = [
   ...SPL_PIPELINE_COMMANDS.map((command) => command.name),
   ...UNSUPPORTED_SPL_PIPELINE_COMMANDS,
 ].map(escapeRegExp).join("|");
-const SPL_FUNCTION_NAMES = [
-  "count", "dc", "distinct_count", "values", "list", "min", "max",
-  "earliest", "latest", "sum", "avg", "tonumber", "replace",
-] as const;
-const SPL_COUNT_ABBREVIATION_FUNCTION_PATTERN = "c(?=\\s*\\()";
-const SPL_CONDITIONAL_FUNCTION_PATTERN = "if(?=\\s*\\()";
-const SPL_COALESCE_FUNCTION_PATTERN = "coalesce(?=\\s*\\()";
-const SPL_CASE_FUNCTION_PATTERN = "case(?=\\s*\\()";
-const SPL_TEXT_CASE_FUNCTION_PATTERN = "(?:lower|upper)(?=\\s*\\()";
-const SPL_TEXT_LENGTH_FUNCTION_PATTERN = "(?:len|length)(?=\\s*\\()";
-const SPL_SUBSTRING_FUNCTION_PATTERN = "substr(?=\\s*\\()";
-const SPL_TOSTRING_FUNCTION_PATTERN = "tostring(?=\\s*\\()";
-const SPL_ROUND_FUNCTION_PATTERN = "round(?=\\s*\\()";
-const SPL_INTEGRAL_ROUNDING_FUNCTION_PATTERN = "(?:ceil|ceiling|floor)(?=\\s*\\()";
-const SPL_MVCOUNT_FUNCTION_PATTERN = "mvcount(?=\\s*\\()";
-const SPL_MATCH_FUNCTION_PATTERN = "match(?=\\s*\\()";
-const SPL_LIKE_FUNCTION_PATTERN = "like(?=\\s*\\()";
-const SPL_NOW_FUNCTION_PATTERN = "now(?=\\s*\\()";
-const SPL_RELATIVE_TIME_FUNCTION_PATTERN = "relative_time(?=\\s*\\()";
-const SPL_STRFTIME_FUNCTION_PATTERN = "strftime(?=\\s*\\()";
-const SPL_STRPTIME_FUNCTION_PATTERN = "strptime(?=\\s*\\()";
-const SPL_NULL_PREDICATE_FUNCTION_PATTERN = "(?:isnull|isnotnull)(?=\\s*\\()";
 const SPL_PERCENTILE_FUNCTION_PATTERN = "(?:p|perc)0*(?:[1-9]|[1-9][0-9])";
 const SPL_FUNCTION_PATTERN = [
-  ...SPL_FUNCTION_NAMES.map(escapeRegExp),
-  SPL_COUNT_ABBREVIATION_FUNCTION_PATTERN,
-  SPL_CONDITIONAL_FUNCTION_PATTERN,
-  SPL_COALESCE_FUNCTION_PATTERN,
-  SPL_CASE_FUNCTION_PATTERN,
-  SPL_TEXT_CASE_FUNCTION_PATTERN,
-  SPL_TEXT_LENGTH_FUNCTION_PATTERN,
-  SPL_SUBSTRING_FUNCTION_PATTERN,
-  SPL_TOSTRING_FUNCTION_PATTERN,
-  SPL_ROUND_FUNCTION_PATTERN,
-  SPL_INTEGRAL_ROUNDING_FUNCTION_PATTERN,
-  SPL_MVCOUNT_FUNCTION_PATTERN,
-  SPL_MATCH_FUNCTION_PATTERN,
-  SPL_LIKE_FUNCTION_PATTERN,
-  SPL_NOW_FUNCTION_PATTERN,
-  SPL_RELATIVE_TIME_FUNCTION_PATTERN,
-  SPL_STRFTIME_FUNCTION_PATTERN,
-  SPL_STRPTIME_FUNCTION_PATTERN,
-  SPL_NULL_PREDICATE_FUNCTION_PATTERN,
+  ...SPL_FUNCTIONS.map((definition) => {
+    const name = escapeRegExp(definition.name);
+    return definition.highlight_requires_call ? `${name}(?=\\s*\\()` : name;
+  }),
   SPL_PERCENTILE_FUNCTION_PATTERN,
 ].join("|");
-const SPL_FUNCTION_SET = new Set<string>(SPL_FUNCTION_NAMES);
-const SPL_COUNT_ABBREVIATION_FUNCTION = /^c$/i;
-const SPL_CONDITIONAL_FUNCTION = /^if$/i;
-const SPL_COALESCE_FUNCTION = /^coalesce$/i;
-const SPL_CASE_FUNCTION = /^case$/i;
-const SPL_TEXT_CASE_FUNCTION = /^(?:lower|upper)$/i;
-const SPL_TEXT_LENGTH_FUNCTION = /^(?:len|length)$/i;
-const SPL_SUBSTRING_FUNCTION = /^substr$/i;
-const SPL_TOSTRING_FUNCTION = /^tostring$/i;
-const SPL_ROUND_FUNCTION = /^round$/i;
-const SPL_INTEGRAL_ROUNDING_FUNCTION = /^(?:ceil|ceiling|floor)$/i;
-const SPL_MVCOUNT_FUNCTION = /^mvcount$/i;
-const SPL_MATCH_FUNCTION = /^match$/i;
-const SPL_LIKE_FUNCTION = /^like$/i;
-const SPL_NOW_FUNCTION = /^now$/i;
-const SPL_RELATIVE_TIME_FUNCTION = /^relative_time$/i;
-const SPL_STRFTIME_FUNCTION = /^strftime$/i;
-const SPL_STRPTIME_FUNCTION = /^strptime$/i;
-const SPL_NULL_PREDICATE_FUNCTION = /^(?:isnull|isnotnull)$/i;
+const SPL_FUNCTION_SET = new Set<string>(
+  SPL_FUNCTIONS.map((definition) => definition.name),
+);
 const SPL_PERCENTILE_FUNCTION = new RegExp(`^${SPL_PERCENTILE_FUNCTION_PATTERN}$`, "i");
+const SPL_HIGHLIGHTED_KEYWORDS = SPL_KEYWORDS
+  .filter((definition) => definition.highlight)
+  .map((definition) => definition.name);
+const SPL_KEYWORD_PATTERN = SPL_HIGHLIGHTED_KEYWORDS.map(escapeRegExp).join("|");
+const SPL_KEYWORD_SET = new Set<string>(
+  SPL_HIGHLIGHTED_KEYWORDS.map((keyword) => keyword.toLowerCase()),
+);
 const SYNTAX_TOKEN_PATTERN = new RegExp(
-  `(\\b(?:index|host|source|sourcetype|level|status|trace_id|message|path)\\b(?=\\s*=)|\\b(?:${PIPELINE_COMMAND_PATTERN})\\b|\\b(?:${SPL_FUNCTION_PATTERN})\\b|\\b(?:AND|OR|NOT|AS|BY)\\b|"(?:\\\\.|[^"\\\\])*"|\\|)`,
+  `(\\b(?:index|host|source|sourcetype|level|status|trace_id|message|path)\\b(?=\\s*=)|\\b(?:${PIPELINE_COMMAND_PATTERN})\\b|\\b(?:${SPL_FUNCTION_PATTERN})\\b|\\b(?:${SPL_KEYWORD_PATTERN})\\b|"(?:\\\\.|[^"\\\\])*"|\\|)`,
   "gi",
 );
 const UNSUPPORTED_PIPELINE_COMMAND_SET = new Set<string>(UNSUPPORTED_SPL_PIPELINE_COMMANDS);
@@ -161,28 +117,10 @@ export function syntaxTokens(query: string): ReactNode[] {
     let className = "spl-plain";
     if (part === "|") className = "spl-pipe";
     else if (part.startsWith('"')) className = "spl-string";
-    else if (["and", "or", "not", "as", "by"].includes(lower)) className = "spl-boolean";
+    else if (SPL_KEYWORD_SET.has(lower)) className = "spl-boolean";
     else if (UNSUPPORTED_PIPELINE_COMMAND_SET.has(lower)) className = "spl-error-token";
     else if ((lower === "eval" && followedByLeftParenthesis) ||
       SPL_FUNCTION_SET.has(lower) ||
-      SPL_COUNT_ABBREVIATION_FUNCTION.test(part) ||
-      SPL_CONDITIONAL_FUNCTION.test(part) ||
-      SPL_COALESCE_FUNCTION.test(part) ||
-      SPL_CASE_FUNCTION.test(part) ||
-      SPL_TEXT_CASE_FUNCTION.test(part) ||
-      SPL_TEXT_LENGTH_FUNCTION.test(part) ||
-      SPL_SUBSTRING_FUNCTION.test(part) ||
-      SPL_TOSTRING_FUNCTION.test(part) ||
-      SPL_ROUND_FUNCTION.test(part) ||
-      SPL_INTEGRAL_ROUNDING_FUNCTION.test(part) ||
-      SPL_MVCOUNT_FUNCTION.test(part) ||
-      SPL_MATCH_FUNCTION.test(part) ||
-      SPL_LIKE_FUNCTION.test(part) ||
-      SPL_NOW_FUNCTION.test(part) ||
-      SPL_RELATIVE_TIME_FUNCTION.test(part) ||
-      SPL_STRFTIME_FUNCTION.test(part) ||
-      SPL_STRPTIME_FUNCTION.test(part) ||
-      SPL_NULL_PREDICATE_FUNCTION.test(part) ||
       SPL_PERCENTILE_FUNCTION.test(part)) {
       className = "spl-function";
     } else if (isSupportedSplPipelineCommand(lower)) {
