@@ -198,6 +198,18 @@ test("now highlights only when used as a parenthesized function", () => {
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
+test("relative_time highlights only when used as a parenthesized function", () => {
+  const query = `index=main relative_time=1 | eval shifted=ReLaTiVe_TiMe(_time, "-1d@d+2h") | table relative_time`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["relative_time"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
 test("strftime highlights only when used as a parenthesized function", () => {
   const query = `index=main strftime=1 | eval rendered=StRfTiMe(_time, "%F %T.%Q") | table strftime`;
   const tokens = classifiedTokens(query);
@@ -247,6 +259,9 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /%.*zero or more.*_.*one Unicode code point/i);
   assert.match(evalCompletion.detail, /now\(\)/);
   assert.match(evalCompletion.detail, /fixed search-start Unix second/i);
+  assert.match(evalCompletion.detail, /relative_time\(time, "-1d@d\+2h"\)/);
+  assert.match(evalCompletion.detail, /optional signed offset.*optional snap.*optional signed post-snap offset/i);
+  assert.match(evalCompletion.detail, /nullable Unix seconds.*1 KiB literal specifier/i);
   assert.match(evalCompletion.detail, /strftime\(time, "%Y-%m-%dT%H:%M:%S\.%Q"\)/);
   assert.match(evalCompletion.detail, /effective IANA search timezone/i);
   assert.match(evalCompletion.detail, /strptime\(text, "%Y-%m-%dT%H:%M:%S\.%6N"\)/);
@@ -277,6 +292,9 @@ test("where completion advertises direct bounded match and like predicates", () 
   assert.match(whereCompletion.detail, /whole-string/i);
   assert.match(whereCompletion.detail, /now\(\)/);
   assert.match(whereCompletion.detail, /search-start/i);
+  assert.match(whereCompletion.detail, /relative_time\(time, "specifier"\)/);
+  assert.match(whereCompletion.detail, /bounded literal offset-and-snap program/i);
+  assert.match(whereCompletion.detail, /nullable Unix seconds/i);
   assert.match(whereCompletion.detail, /strftime\(time, "format"\)/);
   assert.match(whereCompletion.detail, /effective IANA search timezone/i);
   assert.match(whereCompletion.detail, /strptime\(text, "format"\)/);

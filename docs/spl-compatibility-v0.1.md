@@ -79,6 +79,11 @@ Each call has the same separate 64 KiB generated-SQL ceiling.
 Every `now()` call accepts no arguments and returns the immutable search-start
 Unix second as a fixed signed integer. It is bound from the server-resolved
 search snapshot rather than evaluated from the ClickHouse wall clock.
+Every `relative_time` call accepts one canonical time or numeric Unix-seconds
+value and one quoted literal offset-and-snap specifier. One specifier is capped
+at 1 KiB and three operations. Across one query, specifiers may total at most
+16,384 work units and 256 operations. Each call has the same separate 64 KiB
+generated-SQL ceiling.
 Every `strftime` call accepts one canonical time or numeric Unix-seconds value
 and one quoted literal format. The authored format is capped at 4 KiB, 4,096
 literal-code-point/directive work units, and 16 KiB of conservative output.
@@ -91,6 +96,10 @@ literal-code-point/directive work units. One input may contain at most 4 KiB
 of UTF-8, and across one query all calls may total at most 16,384 format work
 units and 64 KiB of date parsing per row. Each call has the same separate
 64 KiB generated-SQL ceiling.
+An unrestricted Dynamic input to either `relative_time` or `strftime` reserves
+4 KiB for bounded `decimal/v1` timestamp parsing. Those reservations share one
+64 KiB query-wide ceiling; a Dynamic expression already proven numeric or text
+does not reserve decimal work.
 Exceeding any internal expansion budget returns the same diagnostic. The
 executor also pins ClickHouse's independently measured `max_subquery_depth`
 to 100 and applies a 1 MiB `max_query_size` ceiling after bound arguments are
@@ -161,6 +170,7 @@ decimal values compare through finite `Float64`, so distinct values beyond
 | where match(message, "(?i)error|warn")
 | where like(path, "/api/%")
 | where _time<=now()
+| where relative_time(_time, "@d")>=0
 | where strftime(_time, "%Y")="2026"
 | where strptime(received_at, "%F %T")>=0
 ```
@@ -177,7 +187,8 @@ supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, bounded
 default `tostring`, bounded `round`, `ceil`/`ceiling`, `floor`, and `mvcount`
 calls, plus bounded `match(value, "regex")` and
 `like(value, "pattern")`, zero-argument `now()`, and bounded
-`strftime(time, "format")` and `strptime(value, "format")` described below;
+`relative_time(value, "specifier")`, `strftime(time, "format")`, and
+`strptime(value, "format")` described below;
 arithmetic, field quoting, `XOR`, and other eval functions are not yet
 accepted. Missing, null, container, or failed numeric operands do not pass
 ordinary comparisons.
@@ -219,6 +230,7 @@ numeric comparisons. Mathematically integral extended decimals inside signed
 | eval class=if(match(message, "(?i)error|warn"), "problem", "ok")
 | eval route_class=if(like(path, "/api/%"), "api", "other")
 | eval search_started=now()
+| eval previous_hour=relative_time(_time, "-1h")
 | eval rendered_time=strftime(_time, "%Y-%m-%dT%H:%M:%S.%Q%:z")
 | eval received_epoch=strptime(received_at, "%F %T.%6N")
 ```
@@ -259,6 +271,8 @@ narrow:
 - `like(value, "pattern")` returns a Boolean whole-string wildcard-match result
   for predicate and conditional use with a bounded literal pattern.
 - `now()` returns the fixed search-start Unix second as an `Int64`.
+- `relative_time(value, "specifier")` returns nullable `Float64` Unix seconds
+  after a bounded literal offset-and-snap program in the search timezone.
 - `strftime(time, "format")` returns one fixed nullable String using the
   search's effective IANA timezone and a bounded literal format.
 - `strptime(value, "format")` returns nullable `Float64` Unix seconds from one
@@ -928,7 +942,162 @@ SQL, and whole-query ceilings remain authoritative for repeated composition.
 Open Splunk v0.1 has no scheduled-search execution surface, so Splunk's
 scheduled-time variant is not claimed. The per-event wall-clock `time()`
 function is also unsupported rather than being approximated with `now()`.
-`relative_time` remains a separate planned slice.
+
+`relative_time` accepts one time value and one quoted literal specifier:
+
+```spl
+| eval previous_hour=relative_time(_time, "-1h")
+| eval hour_boundary=relative_time(_time, "-1h@h")
+| eval reporting_day=relative_time(_time, "-1mon@mon+7d")
+| eval admitted_hour=relative_time(now(), "-2h@h")
+| eval parsed_tomorrow=relative_time(strptime(received_at, "%F %T"), "+1d")
+| where relative_time(_time, "@d")>=0
+| eval rendered=strftime(relative_time(_time, "@d"), "%F %T")
+```
+
+Function names are case-insensitive, and a bare field named `relative_time`
+remains an ordinary field. Any arity other than two fails with
+`SPL_INVALID_EVAL_ARITY`. The specifier must be a quoted String literal; a
+field, calculated value, or numeric literal in the specifier position is
+rejected before execution. A Boolean-producing first argument is likewise not
+an accepted scalar timestamp input.
+
+The bounded specifier grammar is
+`[signed-offset][@snap][signed-post-offset]`. At least the first offset or snap
+must be present, and a post-offset is accepted only after a snap. A signed
+offset starts with `+` or `-`, followed by an optional unsigned decimal
+magnitude and one lowercase unit. An omitted magnitude means one. Operations
+run in authored order: `-1mon@mon+7d` first subtracts a calendar month, then
+snaps to that month's start, then adds seven calendar days. Offset-only forms
+do not synthesize a snap: at 03:45, `-1h` produces 02:45, while `-1h@h`
+produces 02:00. A zero offset is a no-op and preserves the input fraction.
+
+The offset and ordinary snap unit spellings are:
+
+| Unit | Accepted lowercase spellings |
+| --- | --- |
+| second | `s`, `sec`, `secs`, `second`, `seconds` |
+| minute | `m`, `min`, `mins`, `minute`, `minutes` |
+| hour | `h`, `hr`, `hrs`, `hour`, `hours` |
+| day | `d`, `day`, `days` |
+| week | `w`, `week`, `weeks` |
+| month | `mon`, `month`, `months` |
+| quarter | `q`, `qtr`, `qtrs`, `quarter`, `quarters` |
+| year | `y`, `yr`, `yrs`, `year`, `years` |
+
+`@w`, `@week`, and `@w0` snap to Sunday. `@w1` through `@w6` select Monday
+through Saturday, and `@w7` is another Sunday spelling. A magnitude is not
+accepted after `@`. Uppercase units, whitespace, non-ASCII text, embedded NUL,
+fractional or signed magnitudes after the leading sign, `@w8`, multiple snaps,
+and more than one post-offset fail with
+`SPL_UNSUPPORTED_RELATIVE_TIME_SPECIFIER`.
+
+Each magnitude is independently capped by the complete supported timestamp
+span:
+
+| Unit | Maximum magnitude |
+| --- | ---: |
+| seconds | 11,423,635,200 |
+| minutes | 190,393,920 |
+| hours | 3,173,232 |
+| days | 132,218 |
+| weeks | 18,888 |
+| months | 4,344 |
+| quarters | 1,448 |
+| years | 362 |
+
+A larger magnitude or decimal overflow fails with
+`SPL_NUMBER_OUT_OF_RANGE`. One specifier may contain at most 1 KiB of ASCII,
+1,024 work units, and three operations. Across all `relative_time`
+occurrences, one query may contain at most 16,384 specifier work units and 256
+operations. Resource overflow uses `SPL_QUERY_TOO_COMPLEX`. Each scalar
+lowering also has a 64 KiB generated-SQL ceiling beneath the 256 KiB
+whole-query ceiling.
+
+Canonical `_time` and `_indextime` values are accepted directly. A fixed
+numeric input is interpreted as Unix seconds; a fractional value is floored to
+nanoseconds before the program runs. The immutable result of `now()` and the
+numeric result of `strptime` compose directly. Statically null or missing input
+returns a present nullable `Float64` null. Fixed String input is rejected with
+`SPL_UNSUPPORTED_RELATIVE_TIME_VALUE_TYPE`; a Boolean-producing input is an
+unsupported scalar consumer, and a fixed multivalue input fails with
+`SPL_UNSUPPORTED_MULTIVALUE_USAGE`.
+
+For an unrestricted Dynamic field, finite physical integer, floating-point,
+and Decimal values are interpreted as Unix seconds. A validated
+`decimal/v1` envelope is also accepted through a bounded finite `Float64`
+conversion. Dynamic String, Boolean, list, object, other tagged, null, missing,
+non-finite, malformed Decimal, and out-of-range runtime values return null
+rather than being stringified or expanded. A `decimal/v1` payload longer than
+4 KiB returns null. Each unrestricted Dynamic occurrence reserves 4 KiB
+against the 64 KiB query-wide Dynamic timestamp-parsing budget shared with
+`strftime`; a Dynamic expression already proven numeric or text skips that
+reservation and the tagged-envelope parser.
+
+The result is nullable `Float64` Unix seconds. Offset-only programs preserve
+the input fraction internally at nanosecond scale, and explicit snaps discard
+the appropriate lower-order fields. As with the rest of the v0.1 numeric
+model, the published binary `Float64` cannot distinguish every nanosecond at
+modern or late dates. It is not an exact decimal timestamp.
+
+Seconds, minutes, and hours are elapsed durations. Days and weeks are calendar
+day operations in the search's effective IANA timezone; months, quarters, and
+years are calendar-month operations and use end-of-month clamping. Thus
+`+1mon` from 2024-01-31 produces 2024-02-29, and `+1y` from 2024-02-29
+produces 2025-02-28. A calendar day and 24 elapsed hours can differ by an hour
+across daylight-saving transitions.
+
+`@s` removes fractional seconds on the Unix timeline. `@m` and `@h` align to
+the local wall-clock boundary, including historical zones whose UTC offset
+contains seconds; an ambiguous fall-back hour retains the input fold
+occurrence. `@d` selects local midnight. Week snaps select the most recent
+requested weekday at local midnight. Month, quarter, and year snaps select
+local midnight on the first day of the containing period.
+
+Calendar arithmetic uses the pinned ClickHouse 26.3.17.4 IANA behavior. The
+integration contract covers elapsed-versus-calendar DST differences, month
+and leap-year clamping, historical second offsets, both occurrences of a
+fall-back hour, a spring-gap wall time, and a skipped civil date. A Los Angeles
+calendar operation from 2024-03-09 02:30 through `+1d` normalizes to
+2024-03-10 01:30, the backend's preceding valid wall time; an ambiguous
+fall-back target chooses the earlier occurrence. In `Pacific/Apia`,
+2011-12-29 12:00 through `+1d` encounters the skipped 2011-12-30 civil date
+and fails closed to null rather than silently moving two local dates.
+
+The input and every intermediate operation must remain in the inclusive UTC
+policy interval from `1900-01-01T00:00:00Z` through
+`2262-01-01T00:00:00Z`. A nonzero offset must move strictly in its signed
+direction, and a snap result must not be after its input. Any out-of-range,
+wrapped, clamped in the wrong direction, or null intermediate makes the final
+result null; a later operation cannot bring it back into range. Calendar
+operations additionally require the input local civil time to be on or after
+1900-01-01 in the effective timezone. This deliberately makes some globally
+in-range instants near the lower UTC boundary fail closed in negative-offset
+zones. The local boundary is derived from Open Splunk's IANA data and is
+pinned against ClickHouse with a historical odd-second-offset integration
+case.
+
+An omitted search timezone means UTC. `Local`, host-specific POSIX/leap-second
+zone names, malformed names, and unknown IANA names follow the same admission,
+snapshot, replay, and rejection contract as `strftime`. The parser, planner,
+and compiler independently revalidate the specifier, and the planner and
+compiler revalidate the timezone at their trust boundaries. The compiler
+parameterizes the timezone and every emitted nonzero magnitude, binds each
+predecessor once, and does not expand rows. Nested calls grow linearly and
+share the query-wide budgets.
+
+`relative_time` is a numeric scalar: it may be assigned directly, compared in
+`where`, used in `if`/`case` predicates through an explicit comparison,
+grouped after projection, consumed by supported numeric functions, evaluated
+again in a later `eval`, or passed to `strftime`. It is not itself a Boolean
+predicate. Unsupported boundaries include a runtime or calculated specifier,
+an unsigned offset such as `"1d"`, compound offset lists such as
+`"+1h+30m"`, a third timezone argument, String-to-number coercion, multivalue
+mapping, locale units, leap-second arithmetic, and any broader
+`relative_time` grammar. Current SPL2 examples make `@` optional and
+distinguish an unsnapped offset from an explicit snap; older search-modifier
+wording that describes an implicit seconds snap is not adopted for this
+function.
 
 `strftime` accepts one time value and one quoted literal format:
 
@@ -952,10 +1121,12 @@ floored to nanoseconds, so `-0.5` is
 `1969-12-31 23:59:59.500000000`, and `%s` returns `-1`. The immutable numeric
 result of `now()` composes directly. Statically null input returns null.
 Fixed String, Boolean, and multivalue inputs are rejected. For a Dynamic
-field, only a finite runtime number inside the supported `DateTime64(9)` range
-is formatted; String, Boolean, array, object, tagged, null, missing, non-finite,
-and out-of-range values return null. Numeric conversion does not parse a
-Dynamic String.
+field, a finite physical integer, floating-point, or Decimal value inside the
+supported `DateTime64(9)` range is formatted. A validated `decimal/v1`
+envelope with at most 4 KiB of payload is also accepted through the bounded
+finite `Float64` path. Dynamic String, Boolean, array, object, other tagged,
+null, missing, malformed Decimal, non-finite, and out-of-range values return
+null. Numeric conversion does not parse a Dynamic String.
 
 Formatting uses the effective IANA timezone retained with the search's
 time-range intent. An omitted timezone means UTC. `Local`, host-specific
@@ -996,7 +1167,9 @@ unknown variables, a dangling `%`, and unsupported precisions such as `%2Q`,
 One authored format may contain at most 4 KiB of UTF-8, 4,096 literal Unicode
 code points plus directives, and 16 KiB of conservative output. One query may
 total at most 16,384 work units and 64 KiB of conservative `strftime` output
-per row across all occurrences. Resource overflow uses
+per row across all occurrences. Each unrestricted Dynamic timestamp input also
+reserves 4 KiB against the shared 64 KiB `strftime`/`relative_time` Decimal
+parsing budget described above. Resource overflow uses
 `SPL_QUERY_TOO_COMPLEX`; unsupported format syntax uses
 `SPL_UNSUPPORTED_TIME_FORMAT`. Each scalar lowering also has a 64 KiB
 generated-SQL ceiling beneath the 256 KiB whole-query ceiling.
@@ -2349,6 +2522,8 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`where`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/search-commands/where),
 [`if`, `coalesce`, `case`, `match`, `like`, and conditional functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/evaluation-functions/comparison-and-conditional-functions),
 [`now` and date/time functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/evaluation-functions/date-and-time-functions),
+[`relative_time` and SPL2 date/time data types](https://help.splunk.com/en/splunk-cloud-platform/search/spl2-search-manual/data-types/built-in-data-types),
+[relative-time offset and snap specifiers](https://help.splunk.com/en/splunk-cloud-platform/search/spl2-search-manual/dates-and-time/specifying-relative-time),
 [`strftime` date/time variables](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/time-format-variables-and-modifiers/date-and-time-format-variables),
 [`strptime` enhanced timestamp parsing](https://help.splunk.com/en/splunk-enterprise/get-started/get-data-in/10.2/configure-timestamps/configure-timestamp-recognition),
 [`lower`, `upper`, and text functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/text-functions),

@@ -39,6 +39,7 @@ const SPL_MVCOUNT_FUNCTION_PATTERN = "mvcount(?=\\s*\\()";
 const SPL_MATCH_FUNCTION_PATTERN = "match(?=\\s*\\()";
 const SPL_LIKE_FUNCTION_PATTERN = "like(?=\\s*\\()";
 const SPL_NOW_FUNCTION_PATTERN = "now(?=\\s*\\()";
+const SPL_RELATIVE_TIME_FUNCTION_PATTERN = "relative_time(?=\\s*\\()";
 const SPL_STRFTIME_FUNCTION_PATTERN = "strftime(?=\\s*\\()";
 const SPL_STRPTIME_FUNCTION_PATTERN = "strptime(?=\\s*\\()";
 const SPL_NULL_PREDICATE_FUNCTION_PATTERN = "(?:isnull|isnotnull)(?=\\s*\\()";
@@ -59,6 +60,7 @@ const SPL_FUNCTION_PATTERN = [
   SPL_MATCH_FUNCTION_PATTERN,
   SPL_LIKE_FUNCTION_PATTERN,
   SPL_NOW_FUNCTION_PATTERN,
+  SPL_RELATIVE_TIME_FUNCTION_PATTERN,
   SPL_STRFTIME_FUNCTION_PATTERN,
   SPL_STRPTIME_FUNCTION_PATTERN,
   SPL_NULL_PREDICATE_FUNCTION_PATTERN,
@@ -79,6 +81,7 @@ const SPL_MVCOUNT_FUNCTION = /^mvcount$/i;
 const SPL_MATCH_FUNCTION = /^match$/i;
 const SPL_LIKE_FUNCTION = /^like$/i;
 const SPL_NOW_FUNCTION = /^now$/i;
+const SPL_RELATIVE_TIME_FUNCTION = /^relative_time$/i;
 const SPL_STRFTIME_FUNCTION = /^strftime$/i;
 const SPL_STRPTIME_FUNCTION = /^strptime$/i;
 const SPL_NULL_PREDICATE_FUNCTION = /^(?:isnull|isnotnull)$/i;
@@ -176,6 +179,7 @@ export function syntaxTokens(query: string): ReactNode[] {
       SPL_MATCH_FUNCTION.test(part) ||
       SPL_LIKE_FUNCTION.test(part) ||
       SPL_NOW_FUNCTION.test(part) ||
+      SPL_RELATIVE_TIME_FUNCTION.test(part) ||
       SPL_STRFTIME_FUNCTION.test(part) ||
       SPL_STRPTIME_FUNCTION.test(part) ||
       SPL_NULL_PREDICATE_FUNCTION.test(part) ||

@@ -7,7 +7,166 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded timezone-aware SPL `strptime`
+## Latest checkpoint: bounded timezone-aware SPL `relative_time`
+
+Date: 2026-07-27
+
+Backend-neutral specifier checkpoint (committed and pushed):
+`6e18333`
+
+Parser and logical-plan checkpoint (committed and pushed):
+`421ba4d`
+
+Unsnapped-semantics and shared-boundary hardening checkpoint (committed and
+pushed):
+`72b7936`
+
+ClickHouse compiler, pinned integration, and adversarial hardening checkpoint
+(committed and pushed):
+`2a1245c`
+
+This test-first slice implements bounded
+`relative_time(time, "specifier")`:
+
+1. The parser accepts exactly one scalar time value and one quoted literal
+   specifier, treats the function name case-insensitively, preserves complete
+   source ranges, and leaves a bare field named `relative_time` ordinary.
+   Parser, planner, predicate validation, and compiler independently reject
+   forged arity, a calculated or unquoted specifier, Boolean input, typed nil,
+   unsupported enums, malformed syntax, magnitude overflow, and resource
+   overflow.
+2. `internal/splrelativetime` owns the backend-neutral grammar. A specifier may
+   contain a signed pre-snap offset, a snap, and a signed post-snap offset, in
+   that order; either an offset alone or a snap alone is valid. Offset-only
+   forms such as `-1h` preserve the input's minute, second, and fractional
+   components. Only an explicit snap such as `-1h@h` rounds to a boundary.
+3. Supported offset and snap units are seconds, minutes, hours, days, weeks,
+   months, quarters, and years, with the documented lowercase aliases.
+   `@w`, `@week`, `@w0`, and `@w7` snap to Sunday, while `@w1` through `@w6`
+   select Monday through Saturday. A program has at most three operations;
+   unsupported uppercase, whitespace, millisecond, repeated-snap, or
+   additional-offset syntax fails before execution.
+4. Second, minute, and hour offsets are elapsed durations. Day and week
+   offsets are local-calendar day changes; month, quarter, and year offsets
+   are local-calendar month changes with pinned end-of-month and leap-year
+   clamping. Operations execute strictly left to right, so
+   `-1mon@mon+7d` first moves one calendar month, then snaps to the month, then
+   moves seven local days.
+5. Every calendar operation and snap uses the search's effective immutable
+   IANA timezone. Subday snaps use the instant's historical offset, including
+   non-hour offsets and both occurrences of a fall-back hour. Calendar and
+   elapsed arithmetic remain distinct across spring-forward and fall-back.
+   A skipped civil date or an unrepresentable historical boundary fails
+   closed to null instead of wrapping or silently moving in the wrong
+   direction.
+6. Canonical time and fixed finite numeric inputs are interpreted at
+   nanosecond precision; `now()` composes through its immutable whole-second
+   search anchor. Dynamic runtime integers avoid `Float64` conversion, finite
+   numeric variants and bounded tagged decimals use the numeric path, and
+   known numeric/text Dynamic domains omit impossible tagged parsing.
+   Statically null input returns typed null. Fixed String, Boolean, and
+   multivalue input is rejected; Dynamic String, Boolean, list, object,
+   timestamp tag, null, missing, non-finite, overflowing, invalid, or
+   oversized decimal input returns null.
+7. The supported instant policy is the canonical inclusive
+   1900-01-01-through-2262-01-01 UTC domain shared by search storage and SPL.
+   Every input, intermediate result, and final result is checked. Nonzero
+   positive offsets must move forward, nonzero negative offsets must move
+   backward, and snaps must not move forward; these direction checks catch
+   ClickHouse wrap and clamp behavior that can otherwise produce an
+   in-policy-looking wrong result.
+8. Calendar work is admitted only after the instant reaches the Go-derived
+   1900-01-01 local boundary for the selected embedded-IANA location. This
+   avoids consulting ClickHouse calendar components or offsets in its clamped
+   pre-1900 local range. UTC, Los Angeles, Amsterdam, Kathmandu, Dublin, and
+   Apia coverage pins ordinary, fractional-hour, historical-second,
+   lower-bound, daylight-saving, and skipped-date behavior across the Go and
+   ClickHouse timezone runtimes.
+9. One specifier is capped at 1 KiB, 1,024 work units, and three operations.
+   One query may total 16,384 specifier work units and 256 operations.
+   Open-schema tagged-decimal timestamp conversion is capped at 4 KiB per call
+   and 64 KiB per result row across both `relative_time` and `strftime` calls.
+   Each scalar lowering has a 64 KiB generated-SQL ceiling beneath the existing
+   256 KiB whole-query ceiling.
+10. The compiler binds the timezone and every authored magnitude as ordinary
+    query arguments, binds each source and predecessor once, nests operations
+    linearly, and never expands rows. Exact `Int256` tick arithmetic handles
+    elapsed offsets; preguarded `addDays` and `addMonths` handle calendar
+    offsets. A shared Unix-seconds-to-`DateTime64(9)` conversion keeps
+    `strftime` and `relative_time` type behavior aligned while preserving
+    exact nonzero Dynamic integer handling.
+11. Unit and pinned ClickHouse coverage includes every offset unit, every snap
+    unit and weekday spelling, offset/snap/post-offset order, fractional
+    unsnapped values, month-end and leap-year clamps, spring/fall transitions,
+    ambiguous hours, historical offsets, skipped dates, exact policy
+    boundaries, intermediate excursions, fixed and Dynamic types, tagged
+    decimal bounds, `now`, `strptime`, nested `strftime`, predicates,
+    conditionals, projection, aggregation, later eval, forged plans, lazy
+    caches, linear SQL, input-once behavior, and query-wide budgets. The
+    opt-in helper is explicitly registered in the pinned Store suite.
+12. Independent correctness, quality, reuse, and efficiency review drove the
+    final hardening: offset-only programs no longer synthesize a seconds snap;
+    specifier operations are privately stored; year bounds and diagnostic
+    text have one canonical owner; unit-specific magnitude limits prevent
+    impossible work; unsafe ClickHouse truncation and arithmetic paths have
+    range and direction fences; historical local admission uses embedded Go
+    timezone data; Dynamic integer and decimal paths are exact or bounded;
+    known Dynamic domains avoid unnecessary parsing; every unit has a real
+    result assertion; and the shared `strftime` conversion has direct
+    nonzero signed/unsigned regression coverage.
+
+Validation completed on the compiler checkpoint:
+
+```sh
+go test ./... -count=1
+golangci-lint run ./...
+go test -race ./internal/clickhouse -count=1
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=5m
+git diff --check
+```
+
+All listed gates pass on `2a1245c`. Repository-wide Go lint reports zero
+issues. The final exact ordinary Go suite passed in 21.118 seconds, the
+ClickHouse race suite passed in 5.033 seconds, and the pinned ClickHouse
+26.3.17.4 Store suite passed in 53.774 seconds with the Dublin historical
+local-boundary, all-unit offset, oversized-decimal, and shared-`strftime`
+regressions included.
+
+Immediate resume steps:
+
+1. Confirm `main` and `origin/main` contain, in order, `6e18333`, `421ba4d`,
+   `72b7936`, and `2a1245c`. Preserve unexpected local changes and keep the
+   compatibility contract and editor publication synchronized with this
+   execution checkpoint.
+2. If initial SPL-surface completion remains the priority, research and
+   implement bounded eval concatenation next. It is the remaining initial
+   eval surface named by `docs/product-architecture-plan.md`; pin operator
+   grammar, coercion, null, Dynamic, multivalue, UTF-8, output-size, nesting,
+   and ClickHouse behavior before adding parser support.
+3. Add the already-prototyped `/search/validate` backend route without creating
+   a search job, sharing create-search parsing, time/index authorization,
+   planning, and source-located diagnostics. Then add bounded
+   `/search/suggestions` support and index/time-scoped field completion on top
+   of the same admission contract; static browser completions are not the
+   Phase 2 field-autocomplete service.
+4. Resolve the connected time-picker mismatch before calling inline time-range
+   support complete: Today, Yesterday, and All-time currently publish `@d`,
+   `-1d@d`, and `0`, while `internal/searchtime` admits only RFC3339, `now`,
+   and bounded negative offsets. Either define and implement snap/epoch
+   semantics at the backend boundary or stop publishing those invalid forms;
+   do not silently approximate them.
+5. Complete administrator-only generated-SQL/ClickHouse-`EXPLAIN` inspection
+   and schema, ordering-key, text-index, and materialized-field tuning against
+   the real query and load corpus. Do not expose plans or sensitive bound
+   values to ordinary users.
+6. Keep `eventstats` behind the stable aggregate library. Finish Phase 2 before
+   proceeding through the plan's Phase 3/4 index administration, RBAC, HEC,
+   alerts, scheduled-search, and packaging work. Scheduled-search relative-time
+   variants and per-event `time()` remain outside this ad-hoc search contract.
+
+## Previous checkpoint: bounded timezone-aware SPL `strptime`
 
 Date: 2026-07-27
 
@@ -5873,15 +6032,17 @@ independent stacks.
    bounded chronological `earliest(field)` / `latest(field)` is complete across
    `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and `f9985a1`; percentile
    parser/planner support is committed at `efe4199`, with implementation and
-   CI lint repair commits recorded at the top of this file. Begin broader
-   `count` syntax unless the user changes priority. The current
-   preview-to-final
-   resource-release audit pass is complete at `961cba2`, the sanitized current
-   GradeThis collector/config migration at `c576e85`, logical event retention
-   at `458c8b4`, clock-driven job/result/export expiration at `b2b2839`, and
-   stale-duplicate injection at `b80bf0a`. Add a red unit or integration test
-   before implementation, run read-only adversarial reviews, fix concrete
-   findings, then commit and push `main`.
+   CI lint repair commits recorded at the top of this file. The bounded
+   `relative_time` execution checkpoint is complete at `2a1245c`. If SPL
+   surface completion remains the priority, implement bounded eval
+   concatenation next; broader `count` syntax remains a separate aggregate
+   contract. The current preview-to-final resource-release audit pass is
+   complete at `961cba2`, the sanitized current GradeThis collector/config
+   migration at `c576e85`, logical event retention at `458c8b4`, clock-driven
+   job/result/export expiration at `b2b2839`, and stale-duplicate injection at
+   `b80bf0a`. Add a red unit or integration test before implementation, run
+   read-only adversarial reviews, fix concrete findings, then commit and push
+   `main`.
 
 ## Remaining work, in priority order
 
@@ -6019,7 +6180,15 @@ PostCSS/Sharp chain. npm's offered force-fix would install the breaking
 `next@9.3.3` downgrade; do not apply it blindly. Re-evaluate a safe Next.js,
 PostCSS, or Sharp upgrade/override with the complete frontend and browser gates.
 
-### 2. Continue TDD on aggregate correctness and efficiency
+### 2. Finish the initial SPL surface, then continue aggregate correctness
+
+The architecture plan's initial eval-function list is now complete except for
+concatenation. If SPL completion is the selected priority, research that
+operator as its own bounded semantic slice before second-tier aggregates:
+pin its grammar, String and numeric coercion, null and missing behavior,
+Dynamic and multivalue handling, UTF-8/output bounds, composition, and
+ClickHouse portability. Do not infer concatenation semantics from
+`tostring` or from backend `concat` defaults.
 
 The scalar-String extrema optimization, bounded ordered `list(field)`, and
 bounded chronological `earliest(field)` / `latest(field)` are complete.
@@ -6139,7 +6308,9 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `1e78bf4`, `7bf4f6f`, `28c27e2`, `fe94e37`,
+   commits, especially `2a1245c`, `72b7936`, `421ba4d`, `6e18333`,
+   `7dd3209`, `825c1e4`, `4966a7d`, `fe4b7bc`, `983e125`, `4d34c8a`,
+   `c9221de`, `da587a4`, `1e78bf4`, `7bf4f6f`, `28c27e2`, `fe94e37`,
    `8d4d7b8`, `df5c13a`, `8d4911c`, `1314fc9`, `7d52001`, `33134e9`,
    `3ad5359`, `8accd61`, `d758a07`, `93ec477`, `faa88c1`,
    `39c0fd4`, `4233a5a`, `5f604b8`, `527a4ca`,
@@ -6194,10 +6365,12 @@ Do not guess those decisions if they materially affect the implementation.
    `53b1f55`, and `8e4cf5f`; typed UTF-8 `len`/`length` is complete through
    `64004dc`, `e3a32e2`, and `5aebc70`. Subsequent bounded `substr`,
    default `tostring`, `round`, `ceil`/`ceiling`, `floor`, `mvcount`, `match`,
-   `like`, `now`, and `strftime` slices are complete. The current `strftime`
-   parser, compiler, adversarial, and compatibility checkpoints are
-   `fe94e37`, `28c27e2`, `7bf4f6f`, and `1e78bf4`. Continue with one newly
-   researched bounded scalar contract if the user does not change priority.
+   `like`, `now`, `strftime`, `strptime`, and `relative_time` slices are
+   complete. The current `relative_time` validation, plan, semantic-hardening,
+   and execution checkpoints are `6e18333`, `421ba4d`, `72b7936`, and
+   `2a1245c`. Bounded eval concatenation is the remaining initial eval surface
+   in the architecture plan; implement it next if the user keeps SPL
+   completion as the priority.
    The
    generator foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
