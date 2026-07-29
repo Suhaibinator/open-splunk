@@ -7,7 +7,100 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: production coalesced collector heartbeat lifecycle
+## Latest checkpoint: authenticated GORM collector administration
+
+Date: 2026-07-29
+
+Committed and pushed checkpoints:
+
+- `8161f2d` — bounded process-owned collector liveness snapshots;
+- `f7a06b7` — migration-backed GORM catalog indexes and query-plan coverage;
+- `c84de56` — bounded batched GORM fleet hydration;
+- `f3fc981` — signed snapshot-bound collector catalog cursors;
+- `125b2bc` — the complete tenant-scoped GORM collector catalog; and
+- `782da43` — authenticated HTTP/protobuf collector administration, runtime
+  wiring, durable-capacity enforcement, and end-to-end acceptance.
+
+This slice completes the planned backend boundary for collector fleet
+administration:
+
+1. `collectorfleet.Catalog` reads the SQLite control plane through GORM. It
+   performs bounded tenant-scoped filtering, exact optional counts, stable
+   indexed ordering, four-record keyset pages, and batched child hydration.
+   Signed purpose-separated cursors bind the request, durable catalog revision,
+   liveness digest, continuation key, and optional total.
+2. Each get or list captures the process liveness snapshot exactly once.
+   Online/stale state is derived from the complete exact lease; a nil runtime
+   is deliberately offline. Continuations fail closed after a durable revision
+   or liveness change rather than mixing snapshots.
+3. Four authenticated administrator routes expose list, get, display-name
+   update, and state mutation. Tenant identity comes only from the authenticated
+   principal, malformed or non-canonical protobuf state is rejected before the
+   service call, and `SERVER_FEATURE_COLLECTOR_ADMIN` is advertised only when
+   the complete service is configured.
+4. Mutations use durable optimistic versions and return only the durable
+   administration snapshot. They do not perform a post-commit telemetry read,
+   so corrupt or concurrently changing operational telemetry cannot turn a
+   committed administrator action into an apparent failure.
+5. A hard limit of 256 durable collector identities per tenant bounds text
+   filtering, sorting, exact counts, and hydration. Existing collectors can
+   reconnect at capacity, disabled-state precedence is preserved, and
+   concurrent new claims cannot cross the limit. Capacity rejection maps to
+   gRPC `ResourceExhausted` and rolls back token-use and fleet writes from the
+   admission transaction.
+6. Real authenticated HTTP, native bufconn gRPC, migrated SQLite/GORM, and
+   database-reopen acceptance proves route authorization, feature discovery,
+   live/offline projection, mutations, durable persistence, and continuation
+   invalidation together.
+7. GORM remains confined to the SQLite control plane. ClickHouse persistence
+   and SPL execution retain their native bounded implementation.
+
+Validation on pushed commit `782da43`:
+
+```sh
+make proto
+go test ./... -count=1
+go test -race \
+  ./internal/collectorfleet ./internal/collectoradmission \
+  ./internal/server ./cmd/open-splunk-server ./internal/ingest -count=1
+go vet ./...
+go build ./...
+GOLANGCI_LINT_CACHE=/private/tmp/open-splunk-golangci-cache-20260729-collector-admin \
+  go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+    run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+npm run typecheck
+npm run lint
+npm run test:frontend
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m -v
+git diff --check
+```
+
+All repository Go tests, the focused race suite, vet, build, reproducible
+protobuf generation, frontend type/lint/tests, and the repository-wide pinned
+Go lint ratchet passed; the linter reported `0 issues`. The digest-pinned
+ClickHouse suite passed all subtests in 59.31 seconds. Adversarial review found
+and drove fixes for unbounded tenant-wide infix work, duplicated trusted
+liveness validation, redundant full protobuf sizing, duplicated boundary
+cloning and version checks, and a lint-shadowed built-in. Security and API
+reviews additionally exercised authentication, tenant isolation, malformed
+protobufs, cursor/total/revision combinations, transaction rollback, output
+bounds, and serialization-permit release. Three independent final reviewers
+verified the exact 260301-byte staged diff with SHA-256
+`dfe3731bddf5d68e1958b881cdaac75c2a7d5437c4374639998564bea1acb503`;
+no actionable P0/P1/P2 finding remains.
+
+Explicit pause point:
+
+1. Do not begin another implementation slice until the user selects it.
+2. When work resumes, preserve the GORM-only SQLite control-plane boundary and
+   keep ClickHouse on its native path.
+3. Continue with test-first checkpoints, pinned ClickHouse acceptance,
+   adversarial review, and commit/push after each working unit.
+
+## Previous checkpoint: production coalesced collector heartbeat lifecycle
 
 Date: 2026-07-28
 
@@ -75,7 +168,7 @@ an inactive exact-lease requeue loss, final-release error masking, insufficient
 SQLite cleanup slack, late transport validation, and one startup worker leak.
 The stable diff has no remaining P0/P1/P2 finding.
 
-Next implementation checkpoints:
+Next implementation checkpoints recorded at that point:
 
 1. Add a bounded storage-side GORM fleet catalog with batched child loading,
    migration-backed sort/filter indexes, signed snapshot-bound keyset cursors,
