@@ -7,7 +7,104 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: scoped ClickHouse write freeze and proven outbox drain
+## Latest checkpoint: durable GORM physical-deletion admission
+
+Date: 2026-07-29
+
+Committed implementation checkpoint:
+
+- `dca543a` — atomic GORM deletion-operation admission, restart discovery,
+  coordinator-owned `DELETING`, and hardened SQLite integrity guards.
+
+This test-first unit completes the durable control-plane prerequisite for
+physical `DELETE_DATA` without exposing the route or submitting a ClickHouse
+mutation:
+
+1. Migration 0017 and the explicit GORM `indexDeletionOperationRecord` model
+   add one immutable outstanding-work row per index. It snapshots the stable
+   operation ID, index ID, canonical name, archived version, and creation
+   timestamp. No ClickHouse persistence uses GORM.
+2. `BeginIndexDataDeletion` requires the exact archived version and canonical
+   confirmation. The operation insert trigger owns the archived
+   generation `N` to coordinator-owned `DELETING` generation `N+1`
+   transition, so an operation and its state change cannot commit
+   independently. An injected transition failure rolls both back.
+3. Exact sequential, concurrent, and post-restart retries return the original
+   operation without another version bump. A read-only fast path avoids
+   entropy and write-lock acquisition for the common exact retry, while the
+   immediate write transaction rechecks before creation.
+4. `GetIndexDeletionOperation` provides stable lookup and
+   `NextIndexDeletionOperation` returns exactly the oldest outstanding row by
+   the indexed `(created_at_unix_micro, deletion_operation_id)` order.
+   Discovery is therefore deterministic and bounded to one row. The
+   supported host singleton permits the later coordinator to remain
+   serialized; speculative durable leases and ClickHouse-specific phases are
+   intentionally absent.
+5. Generic `UpdateIndex` and `SetIndexState` now reject an already-deleting
+   index. SQLite guards also forbid creating or entering `DELETING` without
+   an operation, mutating/deleting a coordinator-owned index, and
+   mutating/deleting the immutable operation.
+6. The operation ID uses the shared bounded ASCII protocol-ID grammar in both
+   Go and SQLite, including byte-length and embedded-NUL checks. Version and
+   timestamp ceilings are aligned. A pre-conflict identity trigger defeats
+   SQLite `INSERT OR REPLACE`/UPSERT conflict policies that could otherwise
+   delete one operation without firing its DELETE trigger and orphan its
+   deleting index.
+7. Adversarial coverage proves atomic rollback, penultimate-to-final SQLite
+   version admission, concurrent physical-vs-`KEEP_DATA` single-winner
+   behavior, identity replacement resistance, direct-SQL corruption guards,
+   second-query cancellation identity, restart persistence, and deterministic
+   discovery.
+
+Validation on implementation commit `dca543a`:
+
+```sh
+go test ./... -count=1
+go test ./internal/control -count=10
+go test -race ./internal/control -count=1
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+git show --check --oneline dca543a
+```
+
+The exact implementation tree passed the full suite, ten repeated
+control-plane runs, the control race detector, vet, build, and the
+repository-wide pinned lint ratchet with `0 issues`.
+
+Two design agents first converged on an immutable outstanding intent rather
+than speculative leases or mutation phases. The frozen-diff reviews then
+found and drove fixes for retry entropy/write-lock waste, duplicated GORM
+lookup logic, character-vs-byte identifier drift, lost relationship-query
+errors, and unnecessary terminal-history scanning. The transaction adversary
+reproduced the SQLite `INSERT OR REPLACE` trigger bypass against two indexes;
+the pre-conflict identity guard and regression close it. Final correctness,
+atomicity, and simplify passes report no remaining finding.
+
+Remaining `DELETE_DATA` work:
+
+1. define and persist the concrete ClickHouse mutation-attempt/correlation
+   protocol, including outcome-ambiguous submission and
+   `system.mutations` reconciliation;
+2. compose oldest-operation recovery with `Store.WithWritesFrozen`, the
+   proven bounded outbox drain, mutation completion, and physical zero-row
+   verification;
+3. atomically replace the outstanding operation with a terminal audit marker
+   only after zero rows are proven, then crash-test every coordinator
+   boundary and shutdown ordering; and
+4. enable the authenticated `DELETE_DATA` route only after the complete
+   coordinator is safe. The route still returns an explicit 400 today.
+
+Explicit pause point:
+
+1. Durable GORM admission and restart discovery are complete and committed.
+2. ClickHouse mutation execution remains native and is unchanged in this
+   unit.
+3. Do not begin the mutation/reconciliation coordinator until the user gives
+   further instructions.
+
+## Previous checkpoint: scoped ClickHouse write freeze and proven outbox drain
 
 Date: 2026-07-29
 
@@ -85,7 +182,7 @@ lifecycle/query logic, and callback reentrancy. Final adversarial review found
 the nested different-Store context-shadowing case; per-Store context keys and
 a regression test close it. No unresolved blocker remains in this unit.
 
-Remaining `DELETE_DATA` work:
+Remaining `DELETE_DATA` work at that checkpoint:
 
 1. atomically set `DELETING` and create a restartable GORM deletion-operation
    record;

@@ -493,22 +493,30 @@ unique name reservation. The name is not reusable because ClickHouse events
 and search scopes currently identify a logical index by `tenant_id` and
 `index_name`; freeing it would expose retained events through a replacement
 index. Generic state administration cannot set `DELETING`, which is reserved
-for a future physical-deletion coordinator. The ClickHouse Store now provides
-a writer-preferring, context-aware `WithWritesFrozen` scope that covers
-`Store`, `ResumeBatch`, manual/background reconciliation, and shutdown. Its
-privileged drain replays at most the visibility layer's 64 pending
-reservations / 256 MiB durable-outbox bound, then separately counts every
-reserved row—including live-leased rows—and succeeds only after proving the
-count and bytes are both zero. The production runtime's single Store owner is
-part of that fence contract; every writer for the physical events table must
-use it.
+for the physical-deletion coordinator. The GORM-backed SQLite control plane
+now admits that transition through `BeginIndexDataDeletion`: one immutable
+outstanding operation snapshots the exact archived index ID, canonical name,
+version, and timestamp, and its insert trigger atomically advances the index
+to `DELETING` at version `N+1`. Exact retries return the same operation,
+including after restart, and oldest-first discovery returns one indexed row
+at a time. The operation and its deleting index are immutable until a future
+terminal transaction replaces the outstanding marker.
 
-This primitive is necessary but does not itself enable physical deletion.
-`DELETE_DATA` must continue to fail explicitly until the coordinator can
-atomically persist and restart a GORM deletion operation, reconcile
-outcome-ambiguous ClickHouse mutations, and verify physical removal before
-terminal tombstoning. ClickHouse persistence and mutation execution do not use
-GORM.
+The ClickHouse Store separately provides a writer-preferring, context-aware
+`WithWritesFrozen` scope that covers `Store`, `ResumeBatch`,
+manual/background reconciliation, and shutdown. Its privileged drain replays
+at most the visibility layer's 64 pending reservations / 256 MiB
+durable-outbox bound, then separately counts every reserved row—including
+live-leased rows—and succeeds only after proving the count and bytes are both
+zero. The production runtime's single Store owner is part of that fence
+contract; every writer for the physical events table must use it.
+
+These primitives are necessary but do not themselves enable physical
+deletion. `DELETE_DATA` must continue to fail explicitly until the runtime
+coordinator composes durable operation recovery with the Store fence and
+drain, reconciles outcome-ambiguous native ClickHouse mutations, verifies
+physical removal, and only then performs terminal tombstoning. ClickHouse
+persistence and mutation execution do not use GORM.
 
 ## ClickHouse event model
 
