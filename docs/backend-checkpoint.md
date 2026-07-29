@@ -7,7 +7,107 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: production-owned bounded search-history retention
+## Latest checkpoint: terminal KEEP_DATA index deletion
+
+Date: 2026-07-29
+
+Committed and pushed checkpoint:
+
+- `66f36d1` — archived-index deletion through a durable GORM tombstone,
+  authenticated `/indexes/delete`, and retained-row ClickHouse proof.
+
+This test-first unit closes the unsafe permanent-intermediate behavior for
+logical index deletion without pretending that physical deletion is ready:
+
+1. `KEEP_DATA` requires an archived index, its current optimistic version, and
+   an exact canonical-name confirmation. It completes synchronously and
+   returns the stable index ID without a deletion-operation ID.
+2. Migration 0016 adds the explicit GORM-modeled
+   `index_deletion_tombstones` table. The archived `indexes` row remains in
+   place so ingestion-token/app foreign keys and the immutable name
+   reservation survive, while Get-by-ID, Get-by-name, List, Update, state
+   mutation, and repeat deletion all treat the tombstoned object as absent.
+3. SQLite triggers require every tombstone to match the exact archived
+   index/version/name, then make both the retained row and tombstone
+   irreversible through direct SQL. The migration recovers any legacy
+   `deleting` row to `archived`, bumps its version and timestamp when the
+   SQLite integer ceiling permits, and remains valid at that ceiling.
+4. Creating the same name after deletion returns `ErrAlreadyExists`. This is
+   mandatory because ClickHouse rows and compiled search scope currently use
+   `tenant_id + index_name`; freeing the name would make retained events
+   visible through a new logical index.
+5. `/api/v1/indexes/delete` is an exact administrator-only protobuf route with
+   selector resolution, optimistic/state checks, sanitized 400/404/409/408/503
+   mapping, and a second transactional confirmation check. The shared mapper
+   now correctly reports dependency conflicts as 409.
+6. Generic state administration rejects `DELETING` in both the HTTP adapter
+   and control store. Only a future physical-deletion coordinator may own
+   that intermediate state and it must create a durable operation atomically.
+7. `DELETE_DATA` returns a clear 400 without changing control or storage
+   state. The adversarial audit proved that a state CAS plus ClickHouse
+   mutation is unsafe: durable outbox replay intentionally bypasses mutable
+   authorization and could insert a late row after the mutation.
+8. Deterministic coverage pins state/version/confirmation validation, hidden
+   reads, permanent name reservation, preserved token references, concurrent
+   single-winner deletion, direct-SQL guards, migration upgrade/ceiling
+   behavior, authenticated routing, response invariants, mode rejection, and
+   physical ClickHouse row retention.
+
+Validation on the exact implementation tree committed as `66f36d1`:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/control ./internal/server ./internal/clickhouse \
+  -count=1
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' \
+    -count=1 -timeout=8m -v
+git diff --check
+```
+
+The repository-wide suite, focused race suite, vet, build, and CI-pinned
+golangci-lint v2.12.2 all passed; lint reported `0 issues`. The digest-pinned
+ClickHouse Store integration passed in 60.25 seconds, including the new
+terminal `KEEP_DATA` subtest. Its first placement correctly exposed an
+existing exact visibility-cutoff dependency; moving the subtest to the end of
+the reusable container run preserves isolation and the complete existing
+corpus.
+
+Three frozen simplify reviewers examined the same staged diff for reuse,
+quality/correctness, and efficiency. Their concrete findings removed a
+redundant permanent SQLite name index and corrected the live-catalog comment;
+the quality reviewer found no behavioral or transaction-safety defect. The
+final local adversarial pass also moved malformed confirmation/ID rejection
+before the immediate write lock and made legacy-state recovery overflow-safe.
+GORM remains confined to SQLite control-plane records and transactions.
+
+Required future `DELETE_DATA` work is explicit rather than hidden behind an
+unsafe partial route:
+
+1. a context-aware Store write fence covering Store, ResumeBatch, and
+   background reconciliation;
+2. bounded durable-outbox drain while the fence is held;
+3. an atomically created, restartable GORM deletion-operation record;
+4. serialized heavyweight ClickHouse mutation submission and
+   `system.mutations` reconciliation for ambiguous outcomes; and
+5. post-mutation zero-row verification before terminal tombstoning.
+
+Explicit pause point:
+
+1. Synchronous terminal `KEEP_DATA` deletion is complete for this unit.
+2. `DELETE_DATA` remains intentionally unavailable until all safety
+   prerequisites above are implemented and tested together.
+3. Do not begin another implementation slice until the user gives further
+   instructions.
+4. Preserve the GORM-only SQLite control-plane boundary; do not introduce GORM
+   into ClickHouse persistence.
+
+## Previous checkpoint: production-owned bounded search-history retention
 
 Date: 2026-07-29
 
@@ -8869,8 +8969,10 @@ multivalue output, XML, terminal containers, escaped literal-dot keys, and the
 
 Resource/lifecycle audit findings to retain in the backlog:
 
-- Finish the deleting-index lifecycle instead of leaving indexes permanently
-  in an intermediate state.
+- Implement physical `DELETE_DATA` only with Store/replay fencing, bounded
+  outbox drain, a durable restartable operation, outcome-ambiguous ClickHouse
+  mutation reconciliation, and terminal zero-row verification. Synchronous
+  `KEEP_DATA` deletion is complete in `66f36d1`.
 
 The architecture plan still requires product decisions for capacity-planning
 retention/event size, target hardware, concurrent search load, immediate

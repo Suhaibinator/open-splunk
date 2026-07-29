@@ -483,6 +483,22 @@ Environment is not a special storage hierarchy. Each collector explicitly choose
 
 Indexes should be logical partitions in a shared event table rather than one ClickHouse database or table per app. This avoids schema drift, excessive parts, cross-index query complexity, and migration duplication. Every query must be intersected with the requesting user’s allowed index set, regardless of what the SPL text contains.
 
+Index deletion must preserve the storage-generation boundary implied by that
+shared table. An administrator first archives the index, then supplies its
+current optimistic version, an exact canonical-name confirmation, and a data
+deletion mode. `KEEP_DATA` completes synchronously in the GORM-backed SQLite
+control plane: an immutable deletion tombstone hides the archived index from
+all live catalog reads while retaining its row, token/app references, and
+unique name reservation. The name is not reusable because ClickHouse events
+and search scopes currently identify a logical index by `tenant_id` and
+`index_name`; freeing it would expose retained events through a replacement
+index. Generic state administration cannot set `DELETING`, which is reserved
+for a future physical-deletion coordinator. `DELETE_DATA` must fail explicitly
+until that coordinator can fence every ClickHouse Store/replay writer, drain
+the bounded durable outbox, persist and restart a GORM deletion operation,
+reconcile outcome-ambiguous ClickHouse mutations, and verify physical removal.
+ClickHouse persistence and mutation execution do not use GORM.
+
 ## ClickHouse event model
 
 The storage model should preserve Splunk’s canonical event fields while retaining typed application data.
