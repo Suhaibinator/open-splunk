@@ -107,42 +107,18 @@ func collectorLivenessDigest(
 	scope Scope,
 	snapshot []CollectorLiveness,
 ) (string, error) {
-	normalizedScope, err := normalizeScope(scope)
+	normalizedScope, normalizedSnapshot, err :=
+		normalizeCollectorLivenessSnapshot(scope, snapshot)
 	if err != nil {
 		return "", err
-	}
-	if len(snapshot) > maximumCollectorListLiveness {
-		return "", invalid(
-			"collector liveness snapshot cannot contain more than %d values",
-			maximumCollectorListLiveness,
-		)
 	}
 	entries := make(
 		[]collectorLivenessFingerprintEntry,
 		0,
-		len(snapshot),
+		len(normalizedSnapshot),
 	)
-	seen := make(map[string]struct{}, len(snapshot))
-	for _, item := range snapshot {
-		lease, normalizeErr := normalizeLease(item.Lease)
-		if normalizeErr != nil {
-			return "", normalizeErr
-		}
-		if lease.TenantID != normalizedScope.TenantID {
-			return "", invalid(
-				"collector liveness lease is outside the requested tenant",
-			)
-		}
-		if item.State != LivenessStateOnline &&
-			item.State != LivenessStateStale {
-			return "", invalid("collector liveness state is invalid")
-		}
-		if _, exists := seen[lease.CollectorID]; exists {
-			return "", invalid(
-				"collector liveness snapshot contains a duplicate collector",
-			)
-		}
-		seen[lease.CollectorID] = struct{}{}
+	for _, item := range normalizedSnapshot {
+		lease := item.Lease
 		entries = append(entries, collectorLivenessFingerprintEntry{
 			TenantID:    lease.TenantID,
 			CollectorID: lease.CollectorID,
@@ -200,7 +176,7 @@ func encodeCollectorListCursor(
 		normalizedKey,
 		collectorListCursorPurpose,
 		collectorListCursorVersion,
-		maximumCollectorCursorBytes,
+		MaximumCollectorListCursorBytes,
 		cursor,
 	)
 	if err != nil {
@@ -238,7 +214,7 @@ func decodeCollectorListCursor(
 		normalizedKey,
 		collectorListCursorPurpose,
 		collectorListCursorVersion,
-		maximumCollectorCursorBytes,
+		MaximumCollectorListCursorBytes,
 		token,
 		&cursor,
 	); err != nil {

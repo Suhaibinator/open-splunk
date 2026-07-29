@@ -388,7 +388,7 @@ func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunkv
 }
 
 func (handler *apiHandler) updateIndex(request *http.Request, input *opensplunkv1.UpdateIndexRequest) (*opensplunkv1.UpdateIndexResponse, error) {
-	if err := savedSearchExpectedVersion(input.GetExpectedVersion()); err != nil {
+	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
 		return nil, badRequestError(err.Error())
 	}
 	current, err := handler.resolveIndex(request.Context(), input.GetSelector())
@@ -411,7 +411,7 @@ func (handler *apiHandler) updateIndex(request *http.Request, input *opensplunkv
 }
 
 func (handler *apiHandler) setIndexState(request *http.Request, input *opensplunkv1.SetIndexStateRequest) (*opensplunkv1.SetIndexStateResponse, error) {
-	if err := savedSearchExpectedVersion(input.GetExpectedVersion()); err != nil {
+	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
 		return nil, badRequestError(err.Error())
 	}
 	current, err := handler.resolveIndex(request.Context(), input.GetSelector())
@@ -546,7 +546,7 @@ func (handler *apiHandler) updateIngestionToken(request *http.Request, input *op
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
-	if err := savedSearchExpectedVersion(input.GetExpectedVersion()); err != nil {
+	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
 		return nil, badRequestError(err.Error())
 	}
 	current, err := handler.ingestionTokens.GetCollectorToken(request.Context(), id)
@@ -576,7 +576,7 @@ func (handler *apiHandler) revokeIngestionToken(request *http.Request, input *op
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
-	if err := savedSearchExpectedVersion(input.GetExpectedVersion()); err != nil {
+	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
 		return nil, badRequestError(err.Error())
 	}
 	if input.Reason != nil {
@@ -1256,6 +1256,13 @@ func normalizeSortDirection(direction opensplunkv1.SortDirection) (opensplunkv1.
 		return 0, errors.New("sort direction is invalid")
 	}
 	return direction, nil
+}
+
+func administrationExpectedVersion(version uint64) error {
+	if version == 0 || version > math.MaxInt64 {
+		return errors.New("expected version is invalid")
+	}
+	return nil
 }
 
 func filterAndSortIndexes(input []control.Index, states []opensplunkv1.IndexState, text string, sortBy opensplunkv1.IndexSortBy, direction opensplunkv1.SortDirection) []control.Index {

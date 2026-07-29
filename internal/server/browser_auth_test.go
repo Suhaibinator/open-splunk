@@ -14,6 +14,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 )
@@ -34,6 +35,10 @@ var browserGateAdministratorPaths = []string{
 	"/api/v1/ingestion-tokens/list",
 	"/api/v1/ingestion-tokens/update",
 	"/api/v1/ingestion-tokens/revoke",
+	"/api/v1/collectors/get",
+	"/api/v1/collectors/list",
+	"/api/v1/collectors/update",
+	"/api/v1/collectors/state/set",
 	"/api/v1/apps/create",
 	"/api/v1/apps/get",
 	"/api/v1/apps/list",
@@ -166,6 +171,54 @@ func (administration *browserGateIndexAdministration) SetIndexState(
 type browserGateTokenAdministration struct {
 	mu    sync.Mutex
 	calls int
+}
+
+type browserGateCollectorAdministration struct{}
+
+func (browserGateCollectorAdministration) Get(
+	context.Context,
+	collectorfleet.Scope,
+	string,
+) (collectorfleet.CatalogEntry, error) {
+	return collectorfleet.CatalogEntry{}, errors.New(
+		"collector administration must not run before browser authorization",
+	)
+}
+
+func (browserGateCollectorAdministration) List(
+	context.Context,
+	collectorfleet.Scope,
+	collectorfleet.ListRequest,
+) (collectorfleet.ListResult, error) {
+	return collectorfleet.ListResult{}, errors.New(
+		"collector administration must not run before browser authorization",
+	)
+}
+
+func (browserGateCollectorAdministration) UpdateDisplayName(
+	context.Context,
+	collectorfleet.Scope,
+	string,
+	uint64,
+	*string,
+	time.Time,
+) (collectorfleet.AdministrationSnapshot, error) {
+	return collectorfleet.AdministrationSnapshot{}, errors.New(
+		"collector administration must not run before browser authorization",
+	)
+}
+
+func (browserGateCollectorAdministration) SetAdministrativeState(
+	context.Context,
+	collectorfleet.Scope,
+	string,
+	uint64,
+	collectorfleet.AdministrativeState,
+	time.Time,
+) (collectorfleet.AdministrationSnapshot, error) {
+	return collectorfleet.AdministrationSnapshot{}, errors.New(
+		"collector administration must not run before browser authorization",
+	)
 }
 
 func (administration *browserGateTokenAdministration) record() {
@@ -994,6 +1047,7 @@ func newBrowserGateHandler(
 		Indexes:                    indexes,
 		IndexAdmin:                 indexes,
 		IngestionTokens:            tokens,
+		CollectorAdmin:             browserGateCollectorAdministration{},
 		AppAdmin:                   &fakeAppAdministration{},
 		AppCursorKey:               appAdministrationCursorKey,
 		SearchInspections:          &fakeSearchInspections{},

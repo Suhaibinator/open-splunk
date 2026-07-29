@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"strings"
 	"unicode"
@@ -207,7 +206,7 @@ func (handler *apiHandler) updateSavedSearch(request *http.Request, input *opens
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
-	if err := savedSearchExpectedVersion(input.GetExpectedVersion()); err != nil {
+	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
 		return nil, badRequestError(err.Error())
 	}
 	definition, err := handler.savedSearchDefinition(input.GetDefinition())
@@ -273,7 +272,7 @@ func (handler *apiHandler) deleteSavedSearch(request *http.Request, input *opens
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
-	if err := savedSearchExpectedVersion(input.GetExpectedVersion()); err != nil {
+	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
 		return nil, badRequestError(err.Error())
 	}
 	err = handler.savedSearches.Delete(request.Context(), handler.savedSearchScope(), id, input.GetExpectedVersion())
@@ -376,13 +375,6 @@ func optionalBoundedString(input *string, maximumBytes int, name string) (*strin
 	}
 	result := value
 	return &result, nil
-}
-
-func savedSearchExpectedVersion(version uint64) error {
-	if version == 0 || version > math.MaxInt64 {
-		return errors.New("expected version is outside the supported range")
-	}
-	return nil
 }
 
 func validateBoundedIdentifier(value string, maximumBytes int, allowEmpty bool) error {

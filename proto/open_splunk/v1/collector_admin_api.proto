@@ -50,7 +50,7 @@ message UpdateCollectorRequest {
 }
 
 message UpdateCollectorResponse {
-  CollectorRecord collector = 1;
+  CollectorAdministrationSnapshot collector = 1;
 }
 
 // POST /api/v1/collectors/state/set
@@ -61,7 +61,7 @@ message SetCollectorEnabledRequest {
 }
 
 message SetCollectorEnabledResponse {
-  CollectorRecord collector = 1;
+  CollectorAdministrationSnapshot collector = 1;
 }
 
 message IngestionTokenDefinition {

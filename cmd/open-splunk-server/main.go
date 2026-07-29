@@ -438,6 +438,17 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	collectorAdministration, err := newRuntimeCollectorAdministration(
+		startupContext,
+		controlDB,
+		collectorFleet,
+		collectorHeartbeats,
+		config.masterKeyPath,
+	)
+	if err != nil {
+		clear(appCursorKey)
+		return err
+	}
 	handler, err := newRuntimeHTTPHandler(server.Config{
 		SearchJobs:                 jobs,
 		SearchInspections:          inspection.service,
@@ -445,6 +456,7 @@ func run() error {
 		Exports:                    exports,
 		Indexes:                    controlDB,
 		IngestionTokens:            tokenStore,
+		CollectorAdmin:             collectorAdministration,
 		AppAdmin:                   appCatalog,
 		AppCatalog:                 appCatalog,
 		AppCursorKey:               appCursorKey,

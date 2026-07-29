@@ -410,6 +410,14 @@ The native collector protocol uses the following identity contract:
   token-use recording, visibility reservation, or event insertion.
   `instance_id` remains useful operator metadata but is never security
   authority.
+- Each tenant may retain at most 256 durable collector identities. This hard
+  control-plane bound keeps every fleet list, substring filter, exact count,
+  and sort traversal finite even though only four rows are hydrated per page.
+  Reaching the bound rejects only a previously unseen identity with gRPC
+  `RESOURCE_EXHAUSTED`; an existing enabled identity may still reconnect, and
+  a disabled identity still reports its authoritative disabled state. The
+  durable bound is independent of the smaller 16-collector process-liveness
+  ceiling.
 
 The single-node server also owns an active-stream lease keyed by
 `(tenant_id, collector_id)`. Because the process lifetime lock prevents two

@@ -644,7 +644,7 @@ func TestCollectorCatalogUnfilteredSortsUseCompositeIndexes(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				request := normalizedListRequest{
 					tenantID:  "tenant-a",
-					pageSize:  maximumCollectorListPageSize,
+					pageSize:  MaximumCollectorListPageSize,
 					sortBy:    test.sortBy,
 					direction: test.direction,
 				}
@@ -715,7 +715,7 @@ func TestCollectorCatalogAuthorizedIndexFilterUsesIndexedSearch(
 	indexName := "main"
 	request := normalizedListRequest{
 		tenantID:        "tenant-a",
-		pageSize:        maximumCollectorListPageSize,
+		pageSize:        MaximumCollectorListPageSize,
 		indexNameFilter: &indexName,
 		sortBy:          CollectorSortByDisplayName,
 		direction:       SortAscending,
@@ -772,6 +772,98 @@ func TestCollectorCatalogAuthorizedIndexFilterUsesIndexedSearch(
 			generated.Statement.SQL.String(),
 		)
 	}
+}
+
+func TestCollectorCatalogTextFilterPlansStayTenantAndSortIndexed(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	database, _ := openTestStore(t)
+	text := "needle"
+	request := normalizedListRequest{
+		tenantID:   "tenant-a",
+		pageSize:   MaximumCollectorListPageSize,
+		textFilter: &text,
+		sortBy:     CollectorSortByDisplayName,
+		direction:  SortAscending,
+	}
+	pageQuery := collectorCatalogPageQuery(
+		database.GORMDB().Session(&gorm.Session{DryRun: true}),
+		request,
+		catalogLivenessView{},
+	)
+	pageQuery = applyCollectorCatalogOrder(pageQuery, request)
+	var records []catalogPageRecord
+	generatedPage := pageQuery.
+		Limit(int(request.pageSize) + 1).
+		Find(&records)
+	if generatedPage.Error != nil {
+		t.Fatalf("build text-filter page query: %v", generatedPage.Error)
+	}
+	pagePlan := explainCollectorCatalogQuery(t, database.GORMDB(), generatedPage)
+	if !strings.Contains(
+		pagePlan,
+		"collector_fleet_tenant_display_id_idx",
+	) ||
+		!strings.Contains(pagePlan, "SEARCH runtime") ||
+		strings.Contains(pagePlan, "USE TEMP B-TREE") {
+		t.Fatalf(
+			"text-filter page plan = %q, want tenant display index, indexed runtime join, and no temporary sort",
+			pagePlan,
+		)
+	}
+
+	var count int64
+	generatedCount := collectorCatalogFilteredQuery(
+		database.GORMDB().Session(&gorm.Session{DryRun: true}),
+		request,
+		catalogLivenessView{},
+	).Count(&count)
+	if generatedCount.Error != nil {
+		t.Fatalf("build text-filter count query: %v", generatedCount.Error)
+	}
+	countPlan := explainCollectorCatalogQuery(
+		t,
+		database.GORMDB(),
+		generatedCount,
+	)
+	if !strings.Contains(countPlan, "SEARCH fleet") ||
+		!strings.Contains(countPlan, "SEARCH runtime") ||
+		strings.Contains(countPlan, "SCAN fleet") ||
+		strings.Contains(countPlan, "SCAN runtime") {
+		t.Fatalf(
+			"text-filter count plan = %q, want tenant-keyed parent searches",
+			countPlan,
+		)
+	}
+}
+
+func explainCollectorCatalogQuery(
+	t *testing.T,
+	database *gorm.DB,
+	generated *gorm.DB,
+) string {
+	t.Helper()
+	var planRows []struct {
+		ID     int
+		Parent int
+		Unused int
+		Detail string
+	}
+	if err := database.
+		Raw(
+			"EXPLAIN QUERY PLAN "+generated.Statement.SQL.String(),
+			generated.Statement.Vars...,
+		).
+		Scan(&planRows).Error; err != nil {
+		t.Fatalf("EXPLAIN QUERY PLAN: %v", err)
+	}
+	details := make([]string, len(planRows))
+	for index, row := range planRows {
+		details[index] = row.Detail
+	}
+	return strings.Join(details, "\n")
 }
 
 func claimCatalogQueryCollector(

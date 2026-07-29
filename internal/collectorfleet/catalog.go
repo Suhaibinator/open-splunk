@@ -263,6 +263,20 @@ func readCollectorCatalogRevision(
 	database *gorm.DB,
 	tenantID string,
 ) (int64, error) {
+	record, exists, err := readCollectorCatalogMarker(database, tenantID)
+	if err != nil || !exists {
+		return 0, err
+	}
+	return record.Revision, nil
+}
+
+// readCollectorCatalogMarker returns the trigger-maintained parent counts
+// used by both list-snapshot validation and new-identity admission. Absence is
+// valid only for a genuinely never-seen tenant.
+func readCollectorCatalogMarker(
+	database *gorm.DB,
+	tenantID string,
+) (collectorCatalogRevisionRecord, bool, error) {
 	var record collectorCatalogRevisionRecord
 	err := database.
 		Where("tenant_id = ?", tenantID).
@@ -284,29 +298,31 @@ func readCollectorCatalogRevision(
 			tenantID,
 		).Scan(&parentMarker)
 		if parentResult.Error != nil {
-			return 0, parentResult.Error
+			return collectorCatalogRevisionRecord{}, false, parentResult.Error
 		}
 		if parentResult.RowsAffected != 0 {
-			return 0, errors.New(
+			return collectorCatalogRevisionRecord{}, false, errors.New(
 				"collector catalog fleet/runtime revision is missing from the control-plane database",
 			)
 		}
-		return 0, nil
+		return collectorCatalogRevisionRecord{}, false, nil
 	}
 	if err != nil {
-		return 0, err
+		return collectorCatalogRevisionRecord{}, false, err
 	}
 	if record.Revision < 1 ||
 		record.FleetCount < 0 ||
-		record.RuntimeCount < 0 {
-		return 0, errors.New(
+		record.FleetCount > MaximumDurableCollectorsPerTenant ||
+		record.RuntimeCount < 0 ||
+		record.RuntimeCount > MaximumDurableCollectorsPerTenant {
+		return collectorCatalogRevisionRecord{}, false, errors.New(
 			"collector catalog fleet/runtime revision is invalid in the control-plane database",
 		)
 	}
 	if record.FleetCount != record.RuntimeCount {
-		return 0, errors.New(
+		return collectorCatalogRevisionRecord{}, false, errors.New(
 			"collector catalog fleet/runtime counts are inconsistent in the control-plane database",
 		)
 	}
-	return record.Revision, nil
+	return record, true, nil
 }

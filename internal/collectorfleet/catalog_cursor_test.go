@@ -340,7 +340,7 @@ func TestCollectorListCursorRoundTripsTypedNullableKeys(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encodeCollectorListCursor(): %v", err)
 			}
-			if len(token) > maximumCollectorCursorBytes {
+			if len(token) > MaximumCollectorListCursorBytes {
 				t.Fatalf("token length = %d, exceeds bound", len(token))
 			}
 			cursor.Version = collectorListCursorVersion
@@ -478,7 +478,7 @@ func TestCollectorListCursorBindsOptionalExactTotal(t *testing.T) {
 		key,
 		collectorListCursorPurpose,
 		collectorListCursorVersion,
-		maximumCollectorCursorBytes,
+		MaximumCollectorListCursorBytes,
 		map[string]any{
 			"v": collectorListCursorVersion,
 			"f": requestHash,
@@ -586,7 +586,7 @@ func TestCollectorListCursorRejectsTamperingAndRequestReplay(t *testing.T) {
 		key,
 		"another-purpose",
 		collectorListCursorVersion,
-		maximumCollectorCursorBytes,
+		MaximumCollectorListCursorBytes,
 		func() collectorListCursor {
 			value := cursor
 			value.Version = collectorListCursorVersion
@@ -600,7 +600,7 @@ func TestCollectorListCursorRejectsTamperingAndRequestReplay(t *testing.T) {
 		key,
 		collectorListCursorPurpose,
 		collectorListCursorVersion+1,
-		maximumCollectorCursorBytes,
+		MaximumCollectorListCursorBytes,
 		func() collectorListCursor {
 			value := cursor
 			value.Version = collectorListCursorVersion
@@ -614,7 +614,7 @@ func TestCollectorListCursorRejectsTamperingAndRequestReplay(t *testing.T) {
 		key,
 		collectorListCursorPurpose,
 		collectorListCursorVersion,
-		maximumCollectorCursorBytes,
+		MaximumCollectorListCursorBytes,
 		func() collectorListCursor {
 			value := cursor
 			value.Version = collectorListCursorVersion + 1
@@ -628,7 +628,7 @@ func TestCollectorListCursorRejectsTamperingAndRequestReplay(t *testing.T) {
 		key,
 		collectorListCursorPurpose,
 		collectorListCursorVersion,
-		maximumCollectorCursorBytes,
+		MaximumCollectorListCursorBytes,
 		map[string]any{
 			"v":       collectorListCursorVersion,
 			"f":       tenantAHash,
@@ -687,7 +687,7 @@ func TestCollectorListCursorRejectsTamperingAndRequestReplay(t *testing.T) {
 		{
 			name:        "oversized",
 			key:         key,
-			token:       strings.Repeat("x", maximumCollectorCursorBytes+1),
+			token:       strings.Repeat("x", MaximumCollectorListCursorBytes+1),
 			requestHash: tenantAHash,
 		},
 		{
@@ -1027,7 +1027,7 @@ func TestCollectorListCursorRejectsInvalidPayloadShape(t *testing.T) {
 				key,
 				collectorListCursorPurpose,
 				collectorListCursorVersion,
-				maximumCollectorCursorBytes,
+				MaximumCollectorListCursorBytes,
 				cursor,
 			)
 			if err != nil {

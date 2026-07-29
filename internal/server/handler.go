@@ -20,6 +20,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
@@ -110,6 +111,39 @@ type IngestionTokenAdministration interface {
 	ListCollectorTokens(context.Context) ([]auth.CollectorToken, error)
 	UpdateCollectorToken(context.Context, string, uint64, auth.UpdateCollectorTokenRequest) (auth.CollectorToken, error)
 	RevokeCollectorToken(context.Context, string, uint64) (auth.CollectorToken, error)
+}
+
+// CollectorAdministration is the complete tenant-scoped fleet surface exposed
+// to an authenticated browser administrator. Implementations must source
+// liveness from trusted process state, never from protobuf input, and must not
+// hydrate operational telemetry after committing an administrator mutation.
+type CollectorAdministration interface {
+	Get(
+		context.Context,
+		collectorfleet.Scope,
+		string,
+	) (collectorfleet.CatalogEntry, error)
+	List(
+		context.Context,
+		collectorfleet.Scope,
+		collectorfleet.ListRequest,
+	) (collectorfleet.ListResult, error)
+	UpdateDisplayName(
+		context.Context,
+		collectorfleet.Scope,
+		string,
+		uint64,
+		*string,
+		time.Time,
+	) (collectorfleet.AdministrationSnapshot, error)
+	SetAdministrativeState(
+		context.Context,
+		collectorfleet.Scope,
+		string,
+		uint64,
+		collectorfleet.AdministrativeState,
+		time.Time,
+	) (collectorfleet.AdministrationSnapshot, error)
 }
 
 // AppAdministration is the complete administrator-only app-workspace surface.
@@ -290,6 +324,7 @@ type Config struct {
 	Indexes                    IndexCatalog
 	IndexAdmin                 IndexAdministration
 	IngestionTokens            IngestionTokenAdministration
+	CollectorAdmin             CollectorAdministration
 	AppAdmin                   AppAdministration
 	AppCatalog                 AppCatalog
 	SavedSearches              SavedSearches
@@ -327,6 +362,7 @@ type apiHandler struct {
 	indexes                   IndexCatalog
 	indexAdmin                IndexAdministration
 	ingestionTokens           IngestionTokenAdministration
+	collectorAdmin            CollectorAdministration
 	appAdmin                  AppAdministration
 	appCatalog                AppCatalog
 	savedSearches             SavedSearches
@@ -380,6 +416,10 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(ingestionTokens) {
 		ingestionTokens = nil
 	}
+	collectorAdmin := config.CollectorAdmin
+	if isNilDependency(collectorAdmin) {
+		collectorAdmin = nil
+	}
 	appAdmin := config.AppAdmin
 	if isNilDependency(appAdmin) {
 		appAdmin = nil
@@ -401,7 +441,11 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(inspectionService) {
 		inspectionService = nil
 	}
-	if (indexAdmin != nil || ingestionTokens != nil || appAdmin != nil || inspectionService != nil) &&
+	if (indexAdmin != nil ||
+		ingestionTokens != nil ||
+		collectorAdmin != nil ||
+		appAdmin != nil ||
+		inspectionService != nil) &&
 		browserAuthenticator == nil {
 		return nil, errors.New(
 			"create server handler: administrative services require browser authentication",
@@ -570,6 +614,7 @@ func NewHandler(config Config) (*Handler, error) {
 		history:        searchHistoryService != nil,
 		exports:        exportService != nil,
 		timeline:       timelineService != nil,
+		collectorAdmin: collectorAdmin != nil,
 		appAdmin:       appAdmin != nil,
 		planInspection: inspectionService != nil,
 		fieldDiscovery: fieldService != nil,
@@ -595,6 +640,7 @@ func NewHandler(config Config) (*Handler, error) {
 		indexes:                   config.Indexes,
 		indexAdmin:                indexAdmin,
 		ingestionTokens:           ingestionTokens,
+		collectorAdmin:            collectorAdmin,
 		appAdmin:                  appAdmin,
 		appCatalog:                appCatalog,
 		savedSearches:             config.SavedSearches,
@@ -640,7 +686,7 @@ func NewHandler(config Config) (*Handler, error) {
 		"/api/v1/saved-searches/duplicate",
 		"/api/v1/saved-searches/delete",
 	)
-	administratorRoutes := make(map[string]struct{}, 11)
+	administratorRoutes := make(map[string]struct{}, 15)
 	if api.searchHistory != nil {
 		for _, path := range []string{
 			"/api/v1/search/history/get",
@@ -670,6 +716,17 @@ func NewHandler(config Config) (*Handler, error) {
 			"/api/v1/ingestion-tokens/list",
 			"/api/v1/ingestion-tokens/update",
 			"/api/v1/ingestion-tokens/revoke",
+		} {
+			apiRoutes[path] = http.MethodPost
+			administratorRoutes[path] = struct{}{}
+		}
+	}
+	if api.collectorAdmin != nil {
+		for _, path := range []string{
+			"/api/v1/collectors/get",
+			"/api/v1/collectors/list",
+			"/api/v1/collectors/update",
+			"/api/v1/collectors/state/set",
 		} {
 			apiRoutes[path] = http.MethodPost
 			administratorRoutes[path] = struct{}{}
@@ -836,6 +893,7 @@ type serviceCapabilities struct {
 	history        bool
 	exports        bool
 	timeline       bool
+	collectorAdmin bool
 	appAdmin       bool
 	planInspection bool
 	fieldDiscovery bool
@@ -854,6 +912,7 @@ func featuresForServices(features []opensplunkv1.ServerFeature, capabilities ser
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV, capabilities.exports},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES, capabilities.exports},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE, capabilities.timeline},
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN, capabilities.collectorAdmin},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN, capabilities.appAdmin},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION, capabilities.planInspection},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY, capabilities.fieldDiscovery},
@@ -864,8 +923,7 @@ func featuresForServices(features []opensplunkv1.ServerFeature, capabilities ser
 		enabled[item.feature] = item.enabled
 	}
 	unsupported := map[opensplunkv1.ServerFeature]struct{}{
-		opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN:     {},
-		opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN: {},
+		opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN: {},
 	}
 	result := make([]opensplunkv1.ServerFeature, 0, len(features)+len(managed))
 	seen := make(map[opensplunkv1.ServerFeature]struct{}, len(managed))
@@ -971,6 +1029,12 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	}
 	if handler.ingestionTokens != nil {
 		routes = append(routes, handler.ingestionTokenRoutes(noAuth, maximumRequestBytes, smallRequestBytes)...)
+	}
+	if handler.collectorAdmin != nil {
+		routes = append(
+			routes,
+			handler.collectorAdministrationRoutes(noAuth, smallRequestBytes)...,
+		)
 	}
 	if handler.appAdmin != nil {
 		routes = append(

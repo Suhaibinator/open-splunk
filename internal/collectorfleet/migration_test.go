@@ -236,6 +236,27 @@ func TestGORMModelsMatchAuthoritativeCollectorFleetMigration(t *testing.T) {
 			fleetCreateSQL,
 		)
 	}
+	revisionStatement := &gorm.Statement{DB: database.GORMDB()}
+	if err := revisionStatement.Parse(
+		&collectorCatalogRevisionRecord{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	revisionChecks := revisionStatement.Schema.ParseCheckConstraints()
+	for _, name := range []string{
+		"collector_catalog_revisions_fleet_count_bounded",
+		"collector_catalog_revisions_runtime_count_bounded",
+	} {
+		check, exists := revisionChecks[name]
+		if !exists ||
+			!strings.Contains(check.Constraint, "BETWEEN 0 AND 256") {
+			t.Fatalf(
+				"GORM durable collector capacity check %q drifted: %#v",
+				name,
+				check,
+			)
+		}
+	}
 }
 
 func assertCollectorCatalogIndexesMatchModels(
@@ -583,6 +604,71 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 	}
 }
 
+func TestCollectorFleetMigrationDefendsDurableCollectorCapacity(
+	t *testing.T,
+) {
+	database, store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 29, 3, 5, 0, 0, time.UTC)
+	const tenantID = "tenant-schema-capacity"
+	fillDurableCollectorCapacity(
+		t,
+		store,
+		tenantID,
+		now,
+		MaximumDurableCollectorsPerTenant,
+	)
+	beforeRevision, beforeFleet, beforeRuntime := readCapacityMarker(
+		t,
+		database,
+		tenantID,
+	)
+
+	_, err := database.SQLDB().ExecContext(ctx, `
+		INSERT INTO collector_fleet (
+			tenant_id,
+			collector_id,
+			admin_version,
+			display_name,
+			administrative_state,
+			first_seen_at_unix_micro,
+			updated_at_unix_micro
+		) VALUES (?, ?, 1, NULL, 'enabled', ?, ?)`,
+		tenantID,
+		"collector-schema-over-capacity",
+		now.UnixMicro(),
+		now.UnixMicro(),
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "collector fleet capacity exhausted") {
+		t.Fatalf("raw fleet insert over capacity error = %v", err)
+	}
+	afterRevision, afterFleet, afterRuntime := readCapacityMarker(
+		t,
+		database,
+		tenantID,
+	)
+	if afterRevision != beforeRevision ||
+		afterFleet != beforeFleet ||
+		afterRuntime != beforeRuntime {
+		t.Fatalf(
+			"rejected raw insert changed marker from (%d,%d,%d) to (%d,%d,%d)",
+			beforeRevision,
+			beforeFleet,
+			beforeRuntime,
+			afterRevision,
+			afterFleet,
+			afterRuntime,
+		)
+	}
+	assertCapacityCollectorAbsent(
+		t,
+		database,
+		tenantID,
+		"collector-schema-over-capacity",
+	)
+}
+
 func TestCollectorFleetCatalogRevisionFencesChildSnapshotTransactionsOnce(
 	t *testing.T,
 ) {
@@ -815,28 +901,28 @@ func TestCollectorFleetCatalogCountGuardsAbortMutationsAtomically(
 		wantRuntimeCount int64
 	}{
 		{
-			name: "fleet count overflow",
+			name: "fleet count capacity boundary",
 			corruptionSQL: `
 				UPDATE collector_catalog_revisions
 				SET fleet_count = ?
 				WHERE tenant_id = ?`,
-			corruptionValue:  math.MaxInt64,
+			corruptionValue:  MaximumDurableCollectorsPerTenant,
 			mutation:         "claim",
-			errorFragment:    "fleet count exhausted",
-			wantFleetCount:   math.MaxInt64,
+			errorFragment:    "counts are inconsistent",
+			wantFleetCount:   MaximumDurableCollectorsPerTenant,
 			wantRuntimeCount: 1,
 		},
 		{
-			name: "runtime count overflow",
+			name: "runtime count capacity boundary",
 			corruptionSQL: `
 				UPDATE collector_catalog_revisions
 				SET runtime_count = ?
 				WHERE tenant_id = ?`,
-			corruptionValue:  math.MaxInt64,
+			corruptionValue:  MaximumDurableCollectorsPerTenant,
 			mutation:         "claim",
-			errorFragment:    "runtime count exhausted",
+			errorFragment:    "counts are inconsistent",
 			wantFleetCount:   1,
-			wantRuntimeCount: math.MaxInt64,
+			wantRuntimeCount: MaximumDurableCollectorsPerTenant,
 		},
 		{
 			name: "fleet count underflow",

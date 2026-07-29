@@ -10,13 +10,19 @@ import (
 )
 
 const (
-	defaultCollectorListPageSize   = maximumCollectorBatchSize
-	maximumCollectorListPageSize   = maximumCollectorBatchSize
-	maximumCollectorListTextBytes  = 255
-	maximumCollectorListLiveness   = MaximumActiveCollectors
-	maximumCollectorCursorBytes    = 2 << 10
-	minimumCollectorCursorKeyBytes = 32
-	maximumCollectorCursorKeyBytes = 1 << 10
+	// MaximumCollectorListPageSize is coupled to the bounded child hydrator so
+	// every catalog request remains a fixed number of storage queries.
+	MaximumCollectorListPageSize = uint32(maximumCollectorBatchSize)
+	// MaximumCollectorListTextBytes bounds the storage-side text predicate.
+	MaximumCollectorListTextBytes = 255
+	// MaximumCollectorListStateFilters covers every public connection state.
+	MaximumCollectorListStateFilters = 4
+	// MaximumCollectorListCursorBytes bounds signed opaque continuations.
+	MaximumCollectorListCursorBytes = 2 << 10
+	defaultCollectorListPageSize    = MaximumCollectorListPageSize
+	maximumCollectorListLiveness    = MaximumActiveCollectors
+	minimumCollectorCursorKeyBytes  = 32
+	maximumCollectorCursorKeyBytes  = 1 << 10
 )
 
 // ConnectionState is the administrator-facing collector connection state.
@@ -61,6 +67,21 @@ type ListRequest struct {
 	Direction       SortDirection
 }
 
+// CloneListRequest returns a detached copy safe to retain across package and
+// goroutine boundaries.
+func CloneListRequest(input ListRequest) ListRequest {
+	return ListRequest{
+		PageSize:        input.PageSize,
+		PageToken:       strings.Clone(input.PageToken),
+		IncludeTotal:    input.IncludeTotal,
+		StateFilters:    slices.Clone(input.StateFilters),
+		IndexNameFilter: cloneString(input.IndexNameFilter),
+		TextFilter:      cloneString(input.TextFilter),
+		SortBy:          input.SortBy,
+		Direction:       input.Direction,
+	}
+}
+
 // CatalogOptions contains durable configuration for a collector fleet
 // catalog. CursorKey is copied during catalog construction.
 type CatalogOptions struct {
@@ -91,16 +112,16 @@ func normalizeListRequest(
 	if pageSize == 0 {
 		pageSize = defaultCollectorListPageSize
 	}
-	if pageSize > maximumCollectorListPageSize {
+	if pageSize > MaximumCollectorListPageSize {
 		return normalizedListRequest{}, invalid(
 			"collector page size exceeds the supported maximum",
 		)
 	}
-	if len(request.PageToken) > maximumCollectorCursorBytes ||
+	if len(request.PageToken) > MaximumCollectorListCursorBytes ||
 		strings.TrimSpace(request.PageToken) != request.PageToken {
 		return normalizedListRequest{}, invalid("collector page token is invalid")
 	}
-	if len(request.StateFilters) > 4 {
+	if len(request.StateFilters) > MaximumCollectorListStateFilters {
 		return normalizedListRequest{}, invalid(
 			"collector state filters cannot contain more than 4 values",
 		)
@@ -167,12 +188,12 @@ func normalizeCollectorListText(input *string) (*string, error) {
 	if input == nil {
 		return nil, nil
 	}
-	if len(*input) > maximumCollectorListTextBytes ||
+	if len(*input) > MaximumCollectorListTextBytes ||
 		!utf8.ValidString(*input) {
 		return nil, invalid("collector text filter is invalid")
 	}
 	value := strings.TrimSpace(*input)
-	if len(value) > maximumCollectorListTextBytes ||
+	if len(value) > MaximumCollectorListTextBytes ||
 		strings.IndexByte(value, 0) >= 0 {
 		return nil, invalid("collector text filter is invalid")
 	}

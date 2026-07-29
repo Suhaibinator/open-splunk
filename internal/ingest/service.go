@@ -853,7 +853,7 @@ func sessionAdmissionRPCError(err error) error {
 	case errors.Is(err, ErrInvalidCollectorSnapshot):
 		return status.Error(codes.InvalidArgument, "collector hello is invalid")
 	case errors.Is(err, ErrCollectorSessionCapacity):
-		return status.Error(codes.ResourceExhausted, "collector session capacity is exhausted")
+		return status.Error(codes.ResourceExhausted, "collector capacity is exhausted")
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, context.Canceled.Error())
 	case errors.Is(err, context.DeadlineExceeded):

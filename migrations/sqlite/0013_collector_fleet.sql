@@ -55,10 +55,10 @@ CREATE TABLE collector_catalog_revisions (
         CHECK (revision >= 1),
     fleet_count INTEGER NOT NULL
         CONSTRAINT collector_catalog_revisions_fleet_count_bounded
-        CHECK (fleet_count BETWEEN 0 AND 9223372036854775807),
+        CHECK (fleet_count BETWEEN 0 AND 256),
     runtime_count INTEGER NOT NULL
         CONSTRAINT collector_catalog_revisions_runtime_count_bounded
-        CHECK (runtime_count BETWEEN 0 AND 9223372036854775807),
+        CHECK (runtime_count BETWEEN 0 AND 256),
     CONSTRAINT collector_catalog_revisions_tenant_id_bounded
         CHECK (
             length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 255
@@ -122,9 +122,8 @@ BEGIN
             ELSE collector_catalog_revisions.revision + 1
         END,
         fleet_count = CASE
-            WHEN collector_catalog_revisions.fleet_count
-                    = 9223372036854775807
-                THEN RAISE(ABORT, 'collector catalog fleet count exhausted')
+            WHEN collector_catalog_revisions.fleet_count = 256
+                THEN RAISE(ABORT, 'collector fleet capacity exhausted')
             ELSE collector_catalog_revisions.fleet_count + 1
         END;
 END;
@@ -411,8 +410,8 @@ BEGIN
             ELSE revision + 1
         END,
         runtime_count = CASE
-            WHEN runtime_count = 9223372036854775807
-                THEN RAISE(ABORT, 'collector catalog runtime count exhausted')
+            WHEN runtime_count = 256
+                THEN RAISE(ABORT, 'collector runtime capacity exhausted')
             ELSE runtime_count + 1
         END
     WHERE tenant_id = NEW.tenant_id;

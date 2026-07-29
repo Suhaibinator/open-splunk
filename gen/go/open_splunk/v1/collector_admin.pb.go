@@ -361,6 +361,94 @@ func (x *CollectorRecord) GetAdministrativeState() CollectorAdministrativeState 
 	return CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_UNSPECIFIED
 }
 
+// CollectorAdministrationSnapshot is the durable administrator-owned
+// projection returned by collector mutations. It intentionally excludes
+// operational telemetry so a committed administrative change can always be
+// represented without hydrating runtime state.
+type CollectorAdministrationSnapshot struct {
+	state               protoimpl.MessageState       `protogen:"open.v1"`
+	CollectorId         string                       `protobuf:"bytes,1,opt,name=collector_id,json=collectorId,proto3" json:"collector_id,omitempty"`
+	Version             uint64                       `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	DisplayName         *string                      `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3,oneof" json:"display_name,omitempty"`
+	AdministrativeState CollectorAdministrativeState `protobuf:"varint,4,opt,name=administrative_state,json=administrativeState,proto3,enum=open_splunk.v1.CollectorAdministrativeState" json:"administrative_state,omitempty"`
+	FirstSeenAt         *timestamppb.Timestamp       `protobuf:"bytes,5,opt,name=first_seen_at,json=firstSeenAt,proto3" json:"first_seen_at,omitempty"`
+	UpdatedAt           *timestamppb.Timestamp       `protobuf:"bytes,6,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *CollectorAdministrationSnapshot) Reset() {
+	*x = CollectorAdministrationSnapshot{}
+	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CollectorAdministrationSnapshot) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CollectorAdministrationSnapshot) ProtoMessage() {}
+
+func (x *CollectorAdministrationSnapshot) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CollectorAdministrationSnapshot.ProtoReflect.Descriptor instead.
+func (*CollectorAdministrationSnapshot) Descriptor() ([]byte, []int) {
+	return file_open_splunk_v1_collector_admin_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *CollectorAdministrationSnapshot) GetCollectorId() string {
+	if x != nil {
+		return x.CollectorId
+	}
+	return ""
+}
+
+func (x *CollectorAdministrationSnapshot) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *CollectorAdministrationSnapshot) GetDisplayName() string {
+	if x != nil && x.DisplayName != nil {
+		return *x.DisplayName
+	}
+	return ""
+}
+
+func (x *CollectorAdministrationSnapshot) GetAdministrativeState() CollectorAdministrativeState {
+	if x != nil {
+		return x.AdministrativeState
+	}
+	return CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_UNSPECIFIED
+}
+
+func (x *CollectorAdministrationSnapshot) GetFirstSeenAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.FirstSeenAt
+	}
+	return nil
+}
+
+func (x *CollectorAdministrationSnapshot) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
 type IngestionTokenConstraints struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	AllowedIndexNames []string               `protobuf:"bytes,1,rep,name=allowed_index_names,json=allowedIndexNames,proto3" json:"allowed_index_names,omitempty"`
@@ -374,7 +462,7 @@ type IngestionTokenConstraints struct {
 
 func (x *IngestionTokenConstraints) Reset() {
 	*x = IngestionTokenConstraints{}
-	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[1]
+	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -386,7 +474,7 @@ func (x *IngestionTokenConstraints) String() string {
 func (*IngestionTokenConstraints) ProtoMessage() {}
 
 func (x *IngestionTokenConstraints) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[1]
+	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -399,7 +487,7 @@ func (x *IngestionTokenConstraints) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestionTokenConstraints.ProtoReflect.Descriptor instead.
 func (*IngestionTokenConstraints) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_collector_admin_proto_rawDescGZIP(), []int{1}
+	return file_open_splunk_v1_collector_admin_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *IngestionTokenConstraints) GetAllowedIndexNames() []string {
@@ -452,7 +540,7 @@ type IngestionToken struct {
 
 func (x *IngestionToken) Reset() {
 	*x = IngestionToken{}
-	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[2]
+	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -464,7 +552,7 @@ func (x *IngestionToken) String() string {
 func (*IngestionToken) ProtoMessage() {}
 
 func (x *IngestionToken) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[2]
+	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -477,7 +565,7 @@ func (x *IngestionToken) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestionToken.ProtoReflect.Descriptor instead.
 func (*IngestionToken) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_collector_admin_proto_rawDescGZIP(), []int{2}
+	return file_open_splunk_v1_collector_admin_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *IngestionToken) GetIngestionTokenId() string {
@@ -595,7 +683,16 @@ const file_open_splunk_v1_collector_admin_proto_rawDesc = "" +
 	"\x12_collector_versionB\v\n" +
 	"\t_hostnameB\x13\n" +
 	"\x11_operating_systemB\x0f\n" +
-	"\r_architecture\"\xfd\x01\n" +
+	"\r_architecture\"\xf3\x02\n" +
+	"\x1fCollectorAdministrationSnapshot\x12!\n" +
+	"\fcollector_id\x18\x01 \x01(\tR\vcollectorId\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\x04R\aversion\x12&\n" +
+	"\fdisplay_name\x18\x03 \x01(\tH\x00R\vdisplayName\x88\x01\x01\x12_\n" +
+	"\x14administrative_state\x18\x04 \x01(\x0e2,.open_splunk.v1.CollectorAdministrativeStateR\x13administrativeState\x12>\n" +
+	"\rfirst_seen_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vfirstSeenAt\x129\n" +
+	"\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAtB\x0f\n" +
+	"\r_display_name\"\xfd\x01\n" +
 	"\x19IngestionTokenConstraints\x12.\n" +
 	"\x13allowed_index_names\x18\x01 \x03(\tR\x11allowedIndexNames\x120\n" +
 	"\x14allowed_host_regexes\x18\x02 \x03(\tR\x12allowedHostRegexes\x124\n" +
@@ -652,41 +749,45 @@ func file_open_splunk_v1_collector_admin_proto_rawDescGZIP() []byte {
 }
 
 var file_open_splunk_v1_collector_admin_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_open_splunk_v1_collector_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_open_splunk_v1_collector_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_open_splunk_v1_collector_admin_proto_goTypes = []any{
-	(CollectorConnectionState)(0),     // 0: open_splunk.v1.CollectorConnectionState
-	(CollectorAdministrativeState)(0), // 1: open_splunk.v1.CollectorAdministrativeState
-	(IngestionTokenState)(0),          // 2: open_splunk.v1.IngestionTokenState
-	(*CollectorRecord)(nil),           // 3: open_splunk.v1.CollectorRecord
-	(*IngestionTokenConstraints)(nil), // 4: open_splunk.v1.IngestionTokenConstraints
-	(*IngestionToken)(nil),            // 5: open_splunk.v1.IngestionToken
-	(CollectorCapability)(0),          // 6: open_splunk.v1.CollectorCapability
-	(*CollectorQueueStats)(nil),       // 7: open_splunk.v1.CollectorQueueStats
-	(*CollectorInputHealth)(nil),      // 8: open_splunk.v1.CollectorInputHealth
-	(*timestamppb.Timestamp)(nil),     // 9: google.protobuf.Timestamp
+	(CollectorConnectionState)(0),           // 0: open_splunk.v1.CollectorConnectionState
+	(CollectorAdministrativeState)(0),       // 1: open_splunk.v1.CollectorAdministrativeState
+	(IngestionTokenState)(0),                // 2: open_splunk.v1.IngestionTokenState
+	(*CollectorRecord)(nil),                 // 3: open_splunk.v1.CollectorRecord
+	(*CollectorAdministrationSnapshot)(nil), // 4: open_splunk.v1.CollectorAdministrationSnapshot
+	(*IngestionTokenConstraints)(nil),       // 5: open_splunk.v1.IngestionTokenConstraints
+	(*IngestionToken)(nil),                  // 6: open_splunk.v1.IngestionToken
+	(CollectorCapability)(0),                // 7: open_splunk.v1.CollectorCapability
+	(*CollectorQueueStats)(nil),             // 8: open_splunk.v1.CollectorQueueStats
+	(*CollectorInputHealth)(nil),            // 9: open_splunk.v1.CollectorInputHealth
+	(*timestamppb.Timestamp)(nil),           // 10: google.protobuf.Timestamp
 }
 var file_open_splunk_v1_collector_admin_proto_depIdxs = []int32{
 	0,  // 0: open_splunk.v1.CollectorRecord.connection_state:type_name -> open_splunk.v1.CollectorConnectionState
-	6,  // 1: open_splunk.v1.CollectorRecord.capabilities:type_name -> open_splunk.v1.CollectorCapability
-	7,  // 2: open_splunk.v1.CollectorRecord.queue:type_name -> open_splunk.v1.CollectorQueueStats
-	8,  // 3: open_splunk.v1.CollectorRecord.inputs:type_name -> open_splunk.v1.CollectorInputHealth
-	9,  // 4: open_splunk.v1.CollectorRecord.first_seen_at:type_name -> google.protobuf.Timestamp
-	9,  // 5: open_splunk.v1.CollectorRecord.connected_at:type_name -> google.protobuf.Timestamp
-	9,  // 6: open_splunk.v1.CollectorRecord.last_seen_at:type_name -> google.protobuf.Timestamp
-	9,  // 7: open_splunk.v1.CollectorRecord.disconnected_at:type_name -> google.protobuf.Timestamp
+	7,  // 1: open_splunk.v1.CollectorRecord.capabilities:type_name -> open_splunk.v1.CollectorCapability
+	8,  // 2: open_splunk.v1.CollectorRecord.queue:type_name -> open_splunk.v1.CollectorQueueStats
+	9,  // 3: open_splunk.v1.CollectorRecord.inputs:type_name -> open_splunk.v1.CollectorInputHealth
+	10, // 4: open_splunk.v1.CollectorRecord.first_seen_at:type_name -> google.protobuf.Timestamp
+	10, // 5: open_splunk.v1.CollectorRecord.connected_at:type_name -> google.protobuf.Timestamp
+	10, // 6: open_splunk.v1.CollectorRecord.last_seen_at:type_name -> google.protobuf.Timestamp
+	10, // 7: open_splunk.v1.CollectorRecord.disconnected_at:type_name -> google.protobuf.Timestamp
 	1,  // 8: open_splunk.v1.CollectorRecord.administrative_state:type_name -> open_splunk.v1.CollectorAdministrativeState
-	2,  // 9: open_splunk.v1.IngestionToken.state:type_name -> open_splunk.v1.IngestionTokenState
-	4,  // 10: open_splunk.v1.IngestionToken.constraints:type_name -> open_splunk.v1.IngestionTokenConstraints
-	9,  // 11: open_splunk.v1.IngestionToken.created_at:type_name -> google.protobuf.Timestamp
-	9,  // 12: open_splunk.v1.IngestionToken.updated_at:type_name -> google.protobuf.Timestamp
-	9,  // 13: open_splunk.v1.IngestionToken.last_used_at:type_name -> google.protobuf.Timestamp
-	9,  // 14: open_splunk.v1.IngestionToken.expires_at:type_name -> google.protobuf.Timestamp
-	9,  // 15: open_splunk.v1.IngestionToken.revoked_at:type_name -> google.protobuf.Timestamp
-	16, // [16:16] is the sub-list for method output_type
-	16, // [16:16] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	1,  // 9: open_splunk.v1.CollectorAdministrationSnapshot.administrative_state:type_name -> open_splunk.v1.CollectorAdministrativeState
+	10, // 10: open_splunk.v1.CollectorAdministrationSnapshot.first_seen_at:type_name -> google.protobuf.Timestamp
+	10, // 11: open_splunk.v1.CollectorAdministrationSnapshot.updated_at:type_name -> google.protobuf.Timestamp
+	2,  // 12: open_splunk.v1.IngestionToken.state:type_name -> open_splunk.v1.IngestionTokenState
+	5,  // 13: open_splunk.v1.IngestionToken.constraints:type_name -> open_splunk.v1.IngestionTokenConstraints
+	10, // 14: open_splunk.v1.IngestionToken.created_at:type_name -> google.protobuf.Timestamp
+	10, // 15: open_splunk.v1.IngestionToken.updated_at:type_name -> google.protobuf.Timestamp
+	10, // 16: open_splunk.v1.IngestionToken.last_used_at:type_name -> google.protobuf.Timestamp
+	10, // 17: open_splunk.v1.IngestionToken.expires_at:type_name -> google.protobuf.Timestamp
+	10, // 18: open_splunk.v1.IngestionToken.revoked_at:type_name -> google.protobuf.Timestamp
+	19, // [19:19] is the sub-list for method output_type
+	19, // [19:19] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_collector_admin_proto_init() }
@@ -698,13 +799,14 @@ func file_open_splunk_v1_collector_admin_proto_init() {
 	file_open_splunk_v1_collector_admin_proto_msgTypes[0].OneofWrappers = []any{}
 	file_open_splunk_v1_collector_admin_proto_msgTypes[1].OneofWrappers = []any{}
 	file_open_splunk_v1_collector_admin_proto_msgTypes[2].OneofWrappers = []any{}
+	file_open_splunk_v1_collector_admin_proto_msgTypes[3].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_open_splunk_v1_collector_admin_proto_rawDesc), len(file_open_splunk_v1_collector_admin_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

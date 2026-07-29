@@ -484,7 +484,7 @@ func (handler *apiHandler) updateApp(
 	if err != nil {
 		return nil, badRequestError("app selector is invalid")
 	}
-	if err := appAdministrationExpectedVersion(input.GetExpectedVersion()); err != nil {
+	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
 		return nil, badRequestError("app expected version is invalid")
 	}
 	if input.GetDefinition() == nil {
@@ -594,7 +594,7 @@ func (handler *apiHandler) setAppState(
 	if err != nil {
 		return nil, badRequestError("app selector is invalid")
 	}
-	if err := appAdministrationExpectedVersion(input.GetExpectedVersion()); err != nil {
+	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
 		return nil, badRequestError("app expected version is invalid")
 	}
 	state, err := appAdministrationStateFromProto(input.GetState())
@@ -695,7 +695,7 @@ func (handler *apiHandler) deleteApp(
 	if err != nil {
 		return nil, badRequestError("app selector is invalid")
 	}
-	if err := appAdministrationExpectedVersion(input.GetExpectedVersion()); err != nil {
+	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
 		return nil, badRequestError("app expected version is invalid")
 	}
 	confirmation := input.GetConfirmationSlug()
@@ -1036,13 +1036,6 @@ func cloneOptionalString(input *string) *string {
 		return nil
 	}
 	return stringPointer(strings.Clone(*input))
-}
-
-func appAdministrationExpectedVersion(version uint64) error {
-	if version == 0 || version > math.MaxInt64 {
-		return errors.New("expected version is invalid")
-	}
-	return nil
 }
 
 var errAppAdministrationImmutableSlug = errors.New("app slug is immutable")

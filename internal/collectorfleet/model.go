@@ -75,8 +75,8 @@ func (authorizedIndexRecord) TableName() string { return "collector_authorized_i
 type collectorCatalogRevisionRecord struct {
 	TenantID     string `gorm:"column:tenant_id;type:text;primaryKey;not null;check:collector_catalog_revisions_tenant_id_bounded,length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 255 AND instr(tenant_id, char(0)) = 0"`
 	Revision     int64  `gorm:"column:revision;type:integer;not null;check:collector_catalog_revisions_revision_positive,revision >= 1"`
-	FleetCount   int64  `gorm:"column:fleet_count;type:integer;not null;check:collector_catalog_revisions_fleet_count_bounded,fleet_count BETWEEN 0 AND 9223372036854775807"`
-	RuntimeCount int64  `gorm:"column:runtime_count;type:integer;not null;check:collector_catalog_revisions_runtime_count_bounded,runtime_count BETWEEN 0 AND 9223372036854775807"`
+	FleetCount   int64  `gorm:"column:fleet_count;type:integer;not null;check:collector_catalog_revisions_fleet_count_bounded,fleet_count BETWEEN 0 AND 256"`
+	RuntimeCount int64  `gorm:"column:runtime_count;type:integer;not null;check:collector_catalog_revisions_runtime_count_bounded,runtime_count BETWEEN 0 AND 256"`
 }
 
 func (collectorCatalogRevisionRecord) TableName() string {

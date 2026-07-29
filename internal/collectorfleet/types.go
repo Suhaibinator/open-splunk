@@ -8,6 +8,11 @@ import (
 )
 
 const (
+	// MaximumDurableCollectorsPerTenant bounds every tenant-scoped fleet
+	// catalog traversal. It is intentionally distinct from the smaller
+	// process-local MaximumActiveCollectors liveness bound.
+	MaximumDurableCollectorsPerTenant = 256
+
 	maximumTenantIDBytes          = 255
 	maximumIdentifierBytes        = 128
 	maximumDisplayNameBytes       = 255
@@ -62,6 +67,8 @@ type AdministrationSnapshot struct {
 	Version             uint64
 	DisplayName         *string
 	AdministrativeState AdministrativeState
+	FirstSeenAt         time.Time
+	UpdatedAt           time.Time
 }
 
 // InputRegistration is one bounded input announced in CollectorHello.

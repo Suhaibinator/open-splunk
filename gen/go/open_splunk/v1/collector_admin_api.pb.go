@@ -429,8 +429,8 @@ func (x *UpdateCollectorRequest) GetUpdateMask() *fieldmaskpb.FieldMask {
 }
 
 type UpdateCollectorResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Collector     *CollectorRecord       `protobuf:"bytes,1,opt,name=collector,proto3" json:"collector,omitempty"`
+	state         protoimpl.MessageState           `protogen:"open.v1"`
+	Collector     *CollectorAdministrationSnapshot `protobuf:"bytes,1,opt,name=collector,proto3" json:"collector,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -465,7 +465,7 @@ func (*UpdateCollectorResponse) Descriptor() ([]byte, []int) {
 	return file_open_splunk_v1_collector_admin_api_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *UpdateCollectorResponse) GetCollector() *CollectorRecord {
+func (x *UpdateCollectorResponse) GetCollector() *CollectorAdministrationSnapshot {
 	if x != nil {
 		return x.Collector
 	}
@@ -534,8 +534,8 @@ func (x *SetCollectorEnabledRequest) GetAdministrativeState() CollectorAdministr
 }
 
 type SetCollectorEnabledResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Collector     *CollectorRecord       `protobuf:"bytes,1,opt,name=collector,proto3" json:"collector,omitempty"`
+	state         protoimpl.MessageState           `protogen:"open.v1"`
+	Collector     *CollectorAdministrationSnapshot `protobuf:"bytes,1,opt,name=collector,proto3" json:"collector,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -570,7 +570,7 @@ func (*SetCollectorEnabledResponse) Descriptor() ([]byte, []int) {
 	return file_open_splunk_v1_collector_admin_api_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *SetCollectorEnabledResponse) GetCollector() *CollectorRecord {
+func (x *SetCollectorEnabledResponse) GetCollector() *CollectorAdministrationSnapshot {
 	if x != nil {
 		return x.Collector
 	}
@@ -1226,15 +1226,15 @@ const file_open_splunk_v1_collector_admin_api_proto_rawDesc = "" +
 	"\fdisplay_name\x18\x03 \x01(\tH\x00R\vdisplayName\x88\x01\x01\x12;\n" +
 	"\vupdate_mask\x18\x04 \x01(\v2\x1a.google.protobuf.FieldMaskR\n" +
 	"updateMaskB\x0f\n" +
-	"\r_display_name\"X\n" +
-	"\x17UpdateCollectorResponse\x12=\n" +
-	"\tcollector\x18\x01 \x01(\v2\x1f.open_splunk.v1.CollectorRecordR\tcollector\"\xcb\x01\n" +
+	"\r_display_name\"h\n" +
+	"\x17UpdateCollectorResponse\x12M\n" +
+	"\tcollector\x18\x01 \x01(\v2/.open_splunk.v1.CollectorAdministrationSnapshotR\tcollector\"\xcb\x01\n" +
 	"\x1aSetCollectorEnabledRequest\x12!\n" +
 	"\fcollector_id\x18\x01 \x01(\tR\vcollectorId\x12)\n" +
 	"\x10expected_version\x18\x02 \x01(\x04R\x0fexpectedVersion\x12_\n" +
-	"\x14administrative_state\x18\x03 \x01(\x0e2,.open_splunk.v1.CollectorAdministrativeStateR\x13administrativeState\"\\\n" +
-	"\x1bSetCollectorEnabledResponse\x12=\n" +
-	"\tcollector\x18\x01 \x01(\v2\x1f.open_splunk.v1.CollectorRecordR\tcollector\"\x81\x02\n" +
+	"\x14administrative_state\x18\x03 \x01(\x0e2,.open_splunk.v1.CollectorAdministrativeStateR\x13administrativeState\"l\n" +
+	"\x1bSetCollectorEnabledResponse\x12M\n" +
+	"\tcollector\x18\x01 \x01(\v2/.open_splunk.v1.CollectorAdministrationSnapshotR\tcollector\"\x81\x02\n" +
 	"\x18IngestionTokenDefinition\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12%\n" +
 	"\vdescription\x18\x02 \x01(\tH\x00R\vdescription\x88\x01\x01\x12K\n" +
@@ -1314,38 +1314,39 @@ func file_open_splunk_v1_collector_admin_api_proto_rawDescGZIP() []byte {
 var file_open_splunk_v1_collector_admin_api_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_open_splunk_v1_collector_admin_api_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_open_splunk_v1_collector_admin_api_proto_goTypes = []any{
-	(CollectorSortBy)(0),                 // 0: open_splunk.v1.CollectorSortBy
-	(IngestionTokenSortBy)(0),            // 1: open_splunk.v1.IngestionTokenSortBy
-	(*ListCollectorsRequest)(nil),        // 2: open_splunk.v1.ListCollectorsRequest
-	(*ListCollectorsResponse)(nil),       // 3: open_splunk.v1.ListCollectorsResponse
-	(*GetCollectorRequest)(nil),          // 4: open_splunk.v1.GetCollectorRequest
-	(*GetCollectorResponse)(nil),         // 5: open_splunk.v1.GetCollectorResponse
-	(*UpdateCollectorRequest)(nil),       // 6: open_splunk.v1.UpdateCollectorRequest
-	(*UpdateCollectorResponse)(nil),      // 7: open_splunk.v1.UpdateCollectorResponse
-	(*SetCollectorEnabledRequest)(nil),   // 8: open_splunk.v1.SetCollectorEnabledRequest
-	(*SetCollectorEnabledResponse)(nil),  // 9: open_splunk.v1.SetCollectorEnabledResponse
-	(*IngestionTokenDefinition)(nil),     // 10: open_splunk.v1.IngestionTokenDefinition
-	(*CreateIngestionTokenRequest)(nil),  // 11: open_splunk.v1.CreateIngestionTokenRequest
-	(*CreateIngestionTokenResponse)(nil), // 12: open_splunk.v1.CreateIngestionTokenResponse
-	(*GetIngestionTokenRequest)(nil),     // 13: open_splunk.v1.GetIngestionTokenRequest
-	(*GetIngestionTokenResponse)(nil),    // 14: open_splunk.v1.GetIngestionTokenResponse
-	(*ListIngestionTokensRequest)(nil),   // 15: open_splunk.v1.ListIngestionTokensRequest
-	(*ListIngestionTokensResponse)(nil),  // 16: open_splunk.v1.ListIngestionTokensResponse
-	(*UpdateIngestionTokenRequest)(nil),  // 17: open_splunk.v1.UpdateIngestionTokenRequest
-	(*UpdateIngestionTokenResponse)(nil), // 18: open_splunk.v1.UpdateIngestionTokenResponse
-	(*RevokeIngestionTokenRequest)(nil),  // 19: open_splunk.v1.RevokeIngestionTokenRequest
-	(*RevokeIngestionTokenResponse)(nil), // 20: open_splunk.v1.RevokeIngestionTokenResponse
-	(*PageRequest)(nil),                  // 21: open_splunk.v1.PageRequest
-	(CollectorConnectionState)(0),        // 22: open_splunk.v1.CollectorConnectionState
-	(SortDirection)(0),                   // 23: open_splunk.v1.SortDirection
-	(*CollectorRecord)(nil),              // 24: open_splunk.v1.CollectorRecord
-	(*PageResponse)(nil),                 // 25: open_splunk.v1.PageResponse
-	(*fieldmaskpb.FieldMask)(nil),        // 26: google.protobuf.FieldMask
-	(CollectorAdministrativeState)(0),    // 27: open_splunk.v1.CollectorAdministrativeState
-	(*IngestionTokenConstraints)(nil),    // 28: open_splunk.v1.IngestionTokenConstraints
-	(*timestamppb.Timestamp)(nil),        // 29: google.protobuf.Timestamp
-	(*IngestionToken)(nil),               // 30: open_splunk.v1.IngestionToken
-	(IngestionTokenState)(0),             // 31: open_splunk.v1.IngestionTokenState
+	(CollectorSortBy)(0),                    // 0: open_splunk.v1.CollectorSortBy
+	(IngestionTokenSortBy)(0),               // 1: open_splunk.v1.IngestionTokenSortBy
+	(*ListCollectorsRequest)(nil),           // 2: open_splunk.v1.ListCollectorsRequest
+	(*ListCollectorsResponse)(nil),          // 3: open_splunk.v1.ListCollectorsResponse
+	(*GetCollectorRequest)(nil),             // 4: open_splunk.v1.GetCollectorRequest
+	(*GetCollectorResponse)(nil),            // 5: open_splunk.v1.GetCollectorResponse
+	(*UpdateCollectorRequest)(nil),          // 6: open_splunk.v1.UpdateCollectorRequest
+	(*UpdateCollectorResponse)(nil),         // 7: open_splunk.v1.UpdateCollectorResponse
+	(*SetCollectorEnabledRequest)(nil),      // 8: open_splunk.v1.SetCollectorEnabledRequest
+	(*SetCollectorEnabledResponse)(nil),     // 9: open_splunk.v1.SetCollectorEnabledResponse
+	(*IngestionTokenDefinition)(nil),        // 10: open_splunk.v1.IngestionTokenDefinition
+	(*CreateIngestionTokenRequest)(nil),     // 11: open_splunk.v1.CreateIngestionTokenRequest
+	(*CreateIngestionTokenResponse)(nil),    // 12: open_splunk.v1.CreateIngestionTokenResponse
+	(*GetIngestionTokenRequest)(nil),        // 13: open_splunk.v1.GetIngestionTokenRequest
+	(*GetIngestionTokenResponse)(nil),       // 14: open_splunk.v1.GetIngestionTokenResponse
+	(*ListIngestionTokensRequest)(nil),      // 15: open_splunk.v1.ListIngestionTokensRequest
+	(*ListIngestionTokensResponse)(nil),     // 16: open_splunk.v1.ListIngestionTokensResponse
+	(*UpdateIngestionTokenRequest)(nil),     // 17: open_splunk.v1.UpdateIngestionTokenRequest
+	(*UpdateIngestionTokenResponse)(nil),    // 18: open_splunk.v1.UpdateIngestionTokenResponse
+	(*RevokeIngestionTokenRequest)(nil),     // 19: open_splunk.v1.RevokeIngestionTokenRequest
+	(*RevokeIngestionTokenResponse)(nil),    // 20: open_splunk.v1.RevokeIngestionTokenResponse
+	(*PageRequest)(nil),                     // 21: open_splunk.v1.PageRequest
+	(CollectorConnectionState)(0),           // 22: open_splunk.v1.CollectorConnectionState
+	(SortDirection)(0),                      // 23: open_splunk.v1.SortDirection
+	(*CollectorRecord)(nil),                 // 24: open_splunk.v1.CollectorRecord
+	(*PageResponse)(nil),                    // 25: open_splunk.v1.PageResponse
+	(*fieldmaskpb.FieldMask)(nil),           // 26: google.protobuf.FieldMask
+	(*CollectorAdministrationSnapshot)(nil), // 27: open_splunk.v1.CollectorAdministrationSnapshot
+	(CollectorAdministrativeState)(0),       // 28: open_splunk.v1.CollectorAdministrativeState
+	(*IngestionTokenConstraints)(nil),       // 29: open_splunk.v1.IngestionTokenConstraints
+	(*timestamppb.Timestamp)(nil),           // 30: google.protobuf.Timestamp
+	(*IngestionToken)(nil),                  // 31: open_splunk.v1.IngestionToken
+	(IngestionTokenState)(0),                // 32: open_splunk.v1.IngestionTokenState
 }
 var file_open_splunk_v1_collector_admin_api_proto_depIdxs = []int32{
 	21, // 0: open_splunk.v1.ListCollectorsRequest.page:type_name -> open_splunk.v1.PageRequest
@@ -1356,24 +1357,24 @@ var file_open_splunk_v1_collector_admin_api_proto_depIdxs = []int32{
 	25, // 5: open_splunk.v1.ListCollectorsResponse.page:type_name -> open_splunk.v1.PageResponse
 	24, // 6: open_splunk.v1.GetCollectorResponse.collector:type_name -> open_splunk.v1.CollectorRecord
 	26, // 7: open_splunk.v1.UpdateCollectorRequest.update_mask:type_name -> google.protobuf.FieldMask
-	24, // 8: open_splunk.v1.UpdateCollectorResponse.collector:type_name -> open_splunk.v1.CollectorRecord
-	27, // 9: open_splunk.v1.SetCollectorEnabledRequest.administrative_state:type_name -> open_splunk.v1.CollectorAdministrativeState
-	24, // 10: open_splunk.v1.SetCollectorEnabledResponse.collector:type_name -> open_splunk.v1.CollectorRecord
-	28, // 11: open_splunk.v1.IngestionTokenDefinition.constraints:type_name -> open_splunk.v1.IngestionTokenConstraints
-	29, // 12: open_splunk.v1.IngestionTokenDefinition.expires_at:type_name -> google.protobuf.Timestamp
+	27, // 8: open_splunk.v1.UpdateCollectorResponse.collector:type_name -> open_splunk.v1.CollectorAdministrationSnapshot
+	28, // 9: open_splunk.v1.SetCollectorEnabledRequest.administrative_state:type_name -> open_splunk.v1.CollectorAdministrativeState
+	27, // 10: open_splunk.v1.SetCollectorEnabledResponse.collector:type_name -> open_splunk.v1.CollectorAdministrationSnapshot
+	29, // 11: open_splunk.v1.IngestionTokenDefinition.constraints:type_name -> open_splunk.v1.IngestionTokenConstraints
+	30, // 12: open_splunk.v1.IngestionTokenDefinition.expires_at:type_name -> google.protobuf.Timestamp
 	10, // 13: open_splunk.v1.CreateIngestionTokenRequest.definition:type_name -> open_splunk.v1.IngestionTokenDefinition
-	30, // 14: open_splunk.v1.CreateIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
-	30, // 15: open_splunk.v1.GetIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
+	31, // 14: open_splunk.v1.CreateIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
+	31, // 15: open_splunk.v1.GetIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
 	21, // 16: open_splunk.v1.ListIngestionTokensRequest.page:type_name -> open_splunk.v1.PageRequest
-	31, // 17: open_splunk.v1.ListIngestionTokensRequest.state_filters:type_name -> open_splunk.v1.IngestionTokenState
+	32, // 17: open_splunk.v1.ListIngestionTokensRequest.state_filters:type_name -> open_splunk.v1.IngestionTokenState
 	1,  // 18: open_splunk.v1.ListIngestionTokensRequest.sort_by:type_name -> open_splunk.v1.IngestionTokenSortBy
 	23, // 19: open_splunk.v1.ListIngestionTokensRequest.sort_direction:type_name -> open_splunk.v1.SortDirection
-	30, // 20: open_splunk.v1.ListIngestionTokensResponse.ingestion_tokens:type_name -> open_splunk.v1.IngestionToken
+	31, // 20: open_splunk.v1.ListIngestionTokensResponse.ingestion_tokens:type_name -> open_splunk.v1.IngestionToken
 	25, // 21: open_splunk.v1.ListIngestionTokensResponse.page:type_name -> open_splunk.v1.PageResponse
 	10, // 22: open_splunk.v1.UpdateIngestionTokenRequest.definition:type_name -> open_splunk.v1.IngestionTokenDefinition
 	26, // 23: open_splunk.v1.UpdateIngestionTokenRequest.update_mask:type_name -> google.protobuf.FieldMask
-	30, // 24: open_splunk.v1.UpdateIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
-	30, // 25: open_splunk.v1.RevokeIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
+	31, // 24: open_splunk.v1.UpdateIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
+	31, // 25: open_splunk.v1.RevokeIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
 	26, // [26:26] is the sub-list for method output_type
 	26, // [26:26] is the sub-list for method input_type
 	26, // [26:26] is the sub-list for extension type_name

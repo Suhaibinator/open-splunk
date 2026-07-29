@@ -42,6 +42,19 @@ message CollectorRecord {
   CollectorAdministrativeState administrative_state = 18;
 }
 
+// CollectorAdministrationSnapshot is the durable administrator-owned
+// projection returned by collector mutations. It intentionally excludes
+// operational telemetry so a committed administrative change can always be
+// represented without hydrating runtime state.
+message CollectorAdministrationSnapshot {
+  string collector_id = 1;
+  uint64 version = 2;
+  optional string display_name = 3;
+  CollectorAdministrativeState administrative_state = 4;
+  google.protobuf.Timestamp first_seen_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
 enum IngestionTokenState {
   INGESTION_TOKEN_STATE_UNSPECIFIED = 0;
   INGESTION_TOKEN_STATE_ACTIVE = 1;

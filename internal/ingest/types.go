@@ -56,9 +56,10 @@ var (
 	// ErrInvalidCollectorSnapshot means bounded collector lifecycle metadata
 	// failed validation before it could be persisted.
 	ErrInvalidCollectorSnapshot = errors.New("ingest: collector lifecycle snapshot is invalid")
-	// ErrCollectorSessionCapacity means a bounded durable revision or
-	// generation counter cannot admit another session or telemetry snapshot.
-	ErrCollectorSessionCapacity = errors.New("ingest: collector session capacity is exhausted")
+	// ErrCollectorSessionCapacity means the bounded durable identity fleet,
+	// a revision/generation counter, or process telemetry capacity cannot admit
+	// another collector operation.
+	ErrCollectorSessionCapacity = errors.New("ingest: collector capacity is exhausted")
 )
 
 // Limits are hard ingestion limits advertised during collector negotiation and

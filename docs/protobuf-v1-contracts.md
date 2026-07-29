@@ -18,6 +18,14 @@ Persistent database rows and ClickHouse table definitions are deliberately not p
 
 Every route below is `POST`, relative to `/api/v1`, and uses `application/x-protobuf` for successful request and response bodies. Non-2xx errors use the standard SRouter/go-common transport error shape. Authentication can be added by SRouter middleware without changing these messages.
 
+Collector display-name and enabled-state mutations return a
+`CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.
+The snapshot is the exact durable result of the optimistic update and contains
+only fleet-owned fields. This keeps a committed security-critical disable
+reportable even when unrelated runtime telemetry is unavailable or corrupt;
+clients may refresh `/collectors/get` separately for a current operational
+projection.
+
 | Path | Request | Response |
 | --- | --- | --- |
 | `/system/bootstrap` | `GetSystemBootstrapRequest` | `GetSystemBootstrapResponse` |
@@ -157,6 +165,14 @@ The native service is `open_splunk.v1.CollectorIngestService/Collect`, a bidirec
 4. The collector sends durable `EventBatch` records and periodic `CollectorHeartbeat` frames while respecting negotiated in-flight and byte/event limits.
 5. `BatchAck` and `BatchReject` are terminal dispositions. An ack may contain permanent per-event rejections; accepted, duplicate, and rejected counts must sum to the original event count. Rejected events go to the collector dead-letter output while the durable batch advances. `RetryBatch` is non-terminal and requires replay of the unchanged batch. `Throttle` applies to future sending without acknowledging anything.
 6. On disconnect, the collector reconnects, sends its last contiguous acknowledged sequence, and replays every unacknowledged batch with the same batch ID, sequence, event IDs, and event-ID digest.
+
+The control plane retains at most 256 durable collector identities per tenant,
+independent of the 16-collector process-liveness ceiling. At capacity, an
+authenticated Hello for a previously unseen bound `collector_id` fails with
+gRPC `RESOURCE_EXHAUSTED` and records neither token use nor partial fleet
+state. Existing enabled identities may reconnect at capacity; disabled
+identities continue to fail as disabled rather than being misreported as a
+capacity failure.
 
 An acknowledgment means the server reached `ACK_DURABILITY_CLICKHOUSE_COMMITTED`. It does not promise global exactly-once delivery. Stable event and batch IDs make retries idempotent for the most recent 10,000 committed server visibility sequences, matching the exclusively managed ClickHouse events table's 10,000-block deduplication window. The server pauses newer sends behind an ambiguous insert until its durable outbox is reconciled, so that insert cannot age out of the window. Replaying a terminal batch older than this explicit horizon is at-least-once and may create duplicates.
 

@@ -9,6 +9,7 @@ import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { FieldMask } from "../../google/protobuf/field_mask";
 import { Timestamp } from "../../google/protobuf/timestamp";
 import {
+  CollectorAdministrationSnapshot,
   CollectorAdministrativeState,
   collectorAdministrativeStateFromJSON,
   collectorAdministrativeStateToJSON,
@@ -159,7 +160,7 @@ export interface UpdateCollectorRequest {
 }
 
 export interface UpdateCollectorResponse {
-  collector: CollectorRecord | undefined;
+  collector: CollectorAdministrationSnapshot | undefined;
 }
 
 /** POST /api/v1/collectors/state/set */
@@ -170,7 +171,7 @@ export interface SetCollectorEnabledRequest {
 }
 
 export interface SetCollectorEnabledResponse {
-  collector: CollectorRecord | undefined;
+  collector: CollectorAdministrationSnapshot | undefined;
 }
 
 export interface IngestionTokenDefinition {
@@ -763,7 +764,7 @@ function createBaseUpdateCollectorResponse(): UpdateCollectorResponse {
 export const UpdateCollectorResponse: MessageFns<UpdateCollectorResponse> = {
   encode(message: UpdateCollectorResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.collector !== undefined) {
-      CollectorRecord.encode(message.collector, writer.uint32(10).fork()).join();
+      CollectorAdministrationSnapshot.encode(message.collector, writer.uint32(10).fork()).join();
     }
     return writer;
   },
@@ -780,7 +781,7 @@ export const UpdateCollectorResponse: MessageFns<UpdateCollectorResponse> = {
             break;
           }
 
-          message.collector = CollectorRecord.decode(reader, reader.uint32());
+          message.collector = CollectorAdministrationSnapshot.decode(reader, reader.uint32());
           continue;
         }
       }
@@ -793,13 +794,15 @@ export const UpdateCollectorResponse: MessageFns<UpdateCollectorResponse> = {
   },
 
   fromJSON(object: any): UpdateCollectorResponse {
-    return { collector: isSet(object.collector) ? CollectorRecord.fromJSON(object.collector) : undefined };
+    return {
+      collector: isSet(object.collector) ? CollectorAdministrationSnapshot.fromJSON(object.collector) : undefined,
+    };
   },
 
   toJSON(message: UpdateCollectorResponse): unknown {
     const obj: any = {};
     if (message.collector !== undefined) {
-      obj.collector = CollectorRecord.toJSON(message.collector);
+      obj.collector = CollectorAdministrationSnapshot.toJSON(message.collector);
     }
     return obj;
   },
@@ -810,7 +813,7 @@ export const UpdateCollectorResponse: MessageFns<UpdateCollectorResponse> = {
   fromPartial<I extends Exact<DeepPartial<UpdateCollectorResponse>, I>>(object: I): UpdateCollectorResponse {
     const message = createBaseUpdateCollectorResponse();
     message.collector = (object.collector !== undefined && object.collector !== null)
-      ? CollectorRecord.fromPartial(object.collector)
+      ? CollectorAdministrationSnapshot.fromPartial(object.collector)
       : undefined;
     return message;
   },
@@ -932,7 +935,7 @@ function createBaseSetCollectorEnabledResponse(): SetCollectorEnabledResponse {
 export const SetCollectorEnabledResponse: MessageFns<SetCollectorEnabledResponse> = {
   encode(message: SetCollectorEnabledResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.collector !== undefined) {
-      CollectorRecord.encode(message.collector, writer.uint32(10).fork()).join();
+      CollectorAdministrationSnapshot.encode(message.collector, writer.uint32(10).fork()).join();
     }
     return writer;
   },
@@ -949,7 +952,7 @@ export const SetCollectorEnabledResponse: MessageFns<SetCollectorEnabledResponse
             break;
           }
 
-          message.collector = CollectorRecord.decode(reader, reader.uint32());
+          message.collector = CollectorAdministrationSnapshot.decode(reader, reader.uint32());
           continue;
         }
       }
@@ -962,13 +965,15 @@ export const SetCollectorEnabledResponse: MessageFns<SetCollectorEnabledResponse
   },
 
   fromJSON(object: any): SetCollectorEnabledResponse {
-    return { collector: isSet(object.collector) ? CollectorRecord.fromJSON(object.collector) : undefined };
+    return {
+      collector: isSet(object.collector) ? CollectorAdministrationSnapshot.fromJSON(object.collector) : undefined,
+    };
   },
 
   toJSON(message: SetCollectorEnabledResponse): unknown {
     const obj: any = {};
     if (message.collector !== undefined) {
-      obj.collector = CollectorRecord.toJSON(message.collector);
+      obj.collector = CollectorAdministrationSnapshot.toJSON(message.collector);
     }
     return obj;
   },
@@ -979,7 +984,7 @@ export const SetCollectorEnabledResponse: MessageFns<SetCollectorEnabledResponse
   fromPartial<I extends Exact<DeepPartial<SetCollectorEnabledResponse>, I>>(object: I): SetCollectorEnabledResponse {
     const message = createBaseSetCollectorEnabledResponse();
     message.collector = (object.collector !== undefined && object.collector !== null)
-      ? CollectorRecord.fromPartial(object.collector)
+      ? CollectorAdministrationSnapshot.fromPartial(object.collector)
       : undefined;
     return message;
   },

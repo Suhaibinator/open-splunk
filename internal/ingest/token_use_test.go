@@ -272,6 +272,12 @@ func TestCollectMapsSessionAdmissionFailuresBeforeReady(t *testing.T) {
 			wantText: "context deadline exceeded",
 		},
 		{
+			name:     "collector capacity",
+			err:      fmt.Errorf("private capacity detail: %w", ErrCollectorSessionCapacity),
+			wantCode: codes.ResourceExhausted,
+			wantText: "collector capacity is exhausted",
+		},
+		{
 			name:     "backend unavailable",
 			err:      errors.New("private sqlite path and key"),
 			wantCode: codes.Unavailable,

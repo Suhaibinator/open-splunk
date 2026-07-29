@@ -197,6 +197,84 @@ func TestAdmitCommitsFreshCredentialScopeTokenUseAndDurableLease(t *testing.T) {
 	}
 }
 
+func TestAdmitCapacityRollsBackTokenUseAndNewCollectorIdentity(
+	t *testing.T,
+) {
+	fixture := openAdmissionFixture(t, "main")
+	ctx := context.Background()
+	now := time.Date(2026, 7, 29, 16, 0, 0, 0, time.UTC)
+	for ordinal := 0; ordinal < collectorfleet.MaximumDurableCollectorsPerTenant; ordinal++ {
+		collectorID := fmt.Sprintf(
+			"collector-admission-capacity-%03d",
+			ordinal,
+		)
+		request := admissionRequest(
+			collectorID,
+			"stream-"+collectorID,
+			now.Add(time.Duration(ordinal)*time.Microsecond),
+			"",
+		)
+		_, _, err := fixture.fleet.Claim(ctx, collectorfleet.ClaimRequest{
+			Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+			CollectorID: request.CollectorID,
+			BootEpoch:   request.BootEpoch,
+			StreamID:    request.StreamID,
+			ReceivedAt:  request.AcceptedAt,
+			Hello: collectorfleet.Hello{
+				InstanceID:        "instance-" + collectorID,
+				ProtocolMajor:     request.Hello.ProtocolMajor,
+				ProtocolMinor:     request.Hello.ProtocolMinor,
+				CollectorVersion:  request.Hello.CollectorVersion,
+				Hostname:          collectorID + ".example",
+				OperatingSystem:   request.Hello.OperatingSystem,
+				Architecture:      request.Hello.Architecture,
+				StartedAt:         request.Hello.StartedAt,
+				AuthorizedIndexes: []string{"main"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("seed durable collector %d: %v", ordinal, err)
+		}
+	}
+
+	const rejectedCollectorID = "collector-admission-over-capacity"
+	issued := issueToken(
+		t,
+		fixture,
+		"over-capacity",
+		rejectedCollectorID,
+		"main",
+	)
+	acceptedAt := issued.Token.CreatedAt.Add(time.Minute)
+	_, err := fixture.store.Admit(
+		ctx,
+		issued.Secret.Plaintext(),
+		admissionRequest(
+			rejectedCollectorID,
+			"stream-over-capacity",
+			acceptedAt,
+			"main",
+		),
+	)
+	if !errors.Is(err, control.ErrCapacityExceeded) {
+		t.Fatalf(
+			"Admit(over capacity) error = %v, want ErrCapacityExceeded",
+			err,
+		)
+	}
+	assertTokenUnused(t, fixture.tokens, issued.Token.ID)
+	if _, err := fixture.fleet.Get(
+		ctx,
+		collectorfleet.Scope{TenantID: "tenant-a"},
+		rejectedCollectorID,
+	); !errors.Is(err, control.ErrNotFound) {
+		t.Fatalf(
+			"fleet Get(rejected identity) error = %v, want ErrNotFound",
+			err,
+		)
+	}
+}
+
 func TestAdmitRejectsBindingMismatchWithoutPartialWrites(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

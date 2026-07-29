@@ -101,7 +101,7 @@ func TestNormalizeListRequestRejectsInvalidInput(t *testing.T) {
 	invalidUTF8 := string([]byte{0xff})
 	emptyIndex := ""
 	reservedIndex := "kvstore_data"
-	oversizedText := strings.Repeat("a", maximumCollectorListTextBytes+1)
+	oversizedText := strings.Repeat("a", MaximumCollectorListTextBytes+1)
 	nulText := "bad\x00text"
 	controlText := "bad\ntext"
 	tests := []struct {
@@ -114,14 +114,14 @@ func TestNormalizeListRequestRejectsInvalidInput(t *testing.T) {
 			name:  "page size",
 			scope: validScope,
 			request: ListRequest{
-				PageSize: maximumCollectorListPageSize + 1,
+				PageSize: MaximumCollectorListPageSize + 1,
 			},
 		},
 		{
 			name:  "oversized token",
 			scope: validScope,
 			request: ListRequest{
-				PageToken: strings.Repeat("x", maximumCollectorCursorBytes+1),
+				PageToken: strings.Repeat("x", MaximumCollectorListCursorBytes+1),
 			},
 		},
 		{

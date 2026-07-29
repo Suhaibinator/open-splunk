@@ -29,18 +29,21 @@ func TestAdministrativePatchAPIsPreserveIndependentFieldsAndClearDisplay(t *test
 	}
 	if initial.Version != collector.Version ||
 		initial.DisplayName != nil ||
-		initial.AdministrativeState != AdministrativeStateEnabled {
+		initial.AdministrativeState != AdministrativeStateEnabled ||
+		!initial.FirstSeenAt.Equal(connectedAt) ||
+		!initial.UpdatedAt.Equal(connectedAt) {
 		t.Fatalf("initial administration = %#v", initial)
 	}
 
 	requestedDisplayName := "  Production collector  "
+	displayUpdateTime := connectedAt.Add(time.Minute)
 	displayUpdated, err := store.UpdateDisplayName(
 		ctx,
 		lease.Scope,
 		lease.CollectorID,
 		initial.Version,
 		&requestedDisplayName,
-		connectedAt.Add(time.Minute),
+		displayUpdateTime,
 	)
 	if err != nil {
 		t.Fatalf("UpdateDisplayName(set): %v", err)
@@ -48,7 +51,9 @@ func TestAdministrativePatchAPIsPreserveIndependentFieldsAndClearDisplay(t *test
 	if displayUpdated.Version != initial.Version+1 ||
 		displayUpdated.DisplayName == nil ||
 		*displayUpdated.DisplayName != "Production collector" ||
-		displayUpdated.AdministrativeState != AdministrativeStateEnabled {
+		displayUpdated.AdministrativeState != AdministrativeStateEnabled ||
+		!displayUpdated.FirstSeenAt.Equal(connectedAt) ||
+		!displayUpdated.UpdatedAt.Equal(displayUpdateTime) {
 		t.Fatalf("display update = %#v", displayUpdated)
 	}
 
@@ -777,7 +782,9 @@ func TestAdministrativeProjectionAndDisableSurviveUnrelatedCorruption(t *testing
 			if readable.Version != administration.Version ||
 				readable.DisplayName == nil ||
 				*readable.DisplayName != displayName ||
-				readable.AdministrativeState != AdministrativeStateEnabled {
+				readable.AdministrativeState != AdministrativeStateEnabled ||
+				!readable.FirstSeenAt.Equal(connectedAt) ||
+				!readable.UpdatedAt.Equal(connectedAt.Add(time.Minute)) {
 				t.Fatalf("administration over corrupt %s = %#v", corruption.name, readable)
 			}
 
@@ -795,7 +802,9 @@ func TestAdministrativeProjectionAndDisableSurviveUnrelatedCorruption(t *testing
 			if disabled.Version != readable.Version+1 ||
 				disabled.DisplayName == nil ||
 				*disabled.DisplayName != displayName ||
-				disabled.AdministrativeState != AdministrativeStateDisabled {
+				disabled.AdministrativeState != AdministrativeStateDisabled ||
+				!disabled.FirstSeenAt.Equal(connectedAt) ||
+				!disabled.UpdatedAt.Equal(connectedAt.Add(2*time.Minute)) {
 				t.Fatalf("disable over corrupt %s = %#v", corruption.name, disabled)
 			}
 			afterDisable, err := store.GetAdministration(ctx, lease.Scope, lease.CollectorID)
@@ -805,7 +814,9 @@ func TestAdministrativeProjectionAndDisableSurviveUnrelatedCorruption(t *testing
 			if afterDisable.Version != disabled.Version ||
 				afterDisable.DisplayName == nil ||
 				*afterDisable.DisplayName != displayName ||
-				afterDisable.AdministrativeState != AdministrativeStateDisabled {
+				afterDisable.AdministrativeState != AdministrativeStateDisabled ||
+				!afterDisable.FirstSeenAt.Equal(connectedAt) ||
+				!afterDisable.UpdatedAt.Equal(connectedAt.Add(2*time.Minute)) {
 				t.Fatalf("persisted disable over corrupt %s = %#v", corruption.name, afterDisable)
 			}
 			if _, err := store.Get(ctx, lease.Scope, lease.CollectorID); err == nil {

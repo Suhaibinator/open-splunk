@@ -177,6 +177,21 @@ export interface CollectorRecord {
   administrativeState: CollectorAdministrativeState;
 }
 
+/**
+ * CollectorAdministrationSnapshot is the durable administrator-owned
+ * projection returned by collector mutations. It intentionally excludes
+ * operational telemetry so a committed administrative change can always be
+ * represented without hydrating runtime state.
+ */
+export interface CollectorAdministrationSnapshot {
+  collectorId: string;
+  version: bigint;
+  displayName?: string | undefined;
+  administrativeState: CollectorAdministrativeState;
+  firstSeenAt: Date | undefined;
+  updatedAt: Date | undefined;
+}
+
 export interface IngestionTokenConstraints {
   allowedIndexNames: string[];
   /** Regexes use Go/RE2 syntax and must match the complete host/source value. */
@@ -620,6 +635,178 @@ export const CollectorRecord: MessageFns<CollectorRecord> = {
     message.lastSeenAt = object.lastSeenAt ?? undefined;
     message.disconnectedAt = object.disconnectedAt ?? undefined;
     message.administrativeState = object.administrativeState ?? 0;
+    return message;
+  },
+};
+
+function createBaseCollectorAdministrationSnapshot(): CollectorAdministrationSnapshot {
+  return {
+    collectorId: "",
+    version: 0n,
+    displayName: undefined,
+    administrativeState: 0,
+    firstSeenAt: undefined,
+    updatedAt: undefined,
+  };
+}
+
+export const CollectorAdministrationSnapshot: MessageFns<CollectorAdministrationSnapshot> = {
+  encode(message: CollectorAdministrationSnapshot, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.collectorId !== "") {
+      writer.uint32(10).string(message.collectorId);
+    }
+    if (message.version !== 0n) {
+      if (BigInt.asUintN(64, message.version) !== message.version) {
+        throw new globalThis.Error("value provided for field message.version of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.version);
+    }
+    if (message.displayName !== undefined) {
+      writer.uint32(26).string(message.displayName);
+    }
+    if (message.administrativeState !== 0) {
+      writer.uint32(32).int32(message.administrativeState);
+    }
+    if (message.firstSeenAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.firstSeenAt), writer.uint32(42).fork()).join();
+    }
+    if (message.updatedAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.updatedAt), writer.uint32(50).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): CollectorAdministrationSnapshot {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseCollectorAdministrationSnapshot();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.collectorId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.version = reader.uint64() as bigint;
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.displayName = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.administrativeState = reader.int32() as any;
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.firstSeenAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.updatedAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): CollectorAdministrationSnapshot {
+    return {
+      collectorId: isSet(object.collectorId)
+        ? globalThis.String(object.collectorId)
+        : isSet(object.collector_id)
+        ? globalThis.String(object.collector_id)
+        : "",
+      version: isSet(object.version) ? BigInt(object.version) : 0n,
+      displayName: isSet(object.displayName)
+        ? globalThis.String(object.displayName)
+        : isSet(object.display_name)
+        ? globalThis.String(object.display_name)
+        : undefined,
+      administrativeState: isSet(object.administrativeState)
+        ? collectorAdministrativeStateFromJSON(object.administrativeState)
+        : isSet(object.administrative_state)
+        ? collectorAdministrativeStateFromJSON(object.administrative_state)
+        : 0,
+      firstSeenAt: isSet(object.firstSeenAt)
+        ? fromJsonTimestamp(object.firstSeenAt)
+        : isSet(object.first_seen_at)
+        ? fromJsonTimestamp(object.first_seen_at)
+        : undefined,
+      updatedAt: isSet(object.updatedAt)
+        ? fromJsonTimestamp(object.updatedAt)
+        : isSet(object.updated_at)
+        ? fromJsonTimestamp(object.updated_at)
+        : undefined,
+    };
+  },
+
+  toJSON(message: CollectorAdministrationSnapshot): unknown {
+    const obj: any = {};
+    if (message.collectorId !== "") {
+      obj.collectorId = message.collectorId;
+    }
+    if (message.version !== 0n) {
+      obj.version = message.version.toString();
+    }
+    if (message.displayName !== undefined) {
+      obj.displayName = message.displayName;
+    }
+    if (message.administrativeState !== 0) {
+      obj.administrativeState = collectorAdministrativeStateToJSON(message.administrativeState);
+    }
+    if (message.firstSeenAt !== undefined) {
+      obj.firstSeenAt = message.firstSeenAt.toISOString();
+    }
+    if (message.updatedAt !== undefined) {
+      obj.updatedAt = message.updatedAt.toISOString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<CollectorAdministrationSnapshot>, I>>(base?: I): CollectorAdministrationSnapshot {
+    return CollectorAdministrationSnapshot.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<CollectorAdministrationSnapshot>, I>>(
+    object: I,
+  ): CollectorAdministrationSnapshot {
+    const message = createBaseCollectorAdministrationSnapshot();
+    message.collectorId = object.collectorId ?? "";
+    message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    message.displayName = object.displayName ?? undefined;
+    message.administrativeState = object.administrativeState ?? 0;
+    message.firstSeenAt = object.firstSeenAt ?? undefined;
+    message.updatedAt = object.updatedAt ?? undefined;
     return message;
   },
 };

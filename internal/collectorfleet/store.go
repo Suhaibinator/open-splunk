@@ -160,6 +160,21 @@ func claimInTransaction(
 		Take(&fleet).Error
 	switch {
 	case errors.Is(queryErr, gorm.ErrRecordNotFound):
+		marker, exists, markerErr := readCollectorCatalogMarker(
+			tx,
+			normalized.scope.TenantID,
+		)
+		if markerErr != nil {
+			return Collector{}, Lease{}, mapContextError(
+				ctx,
+				"check collector identity capacity",
+				markerErr,
+			)
+		}
+		if exists &&
+			marker.FleetCount >= MaximumDurableCollectorsPerTenant {
+			return Collector{}, Lease{}, control.ErrCapacityExceeded
+		}
 		fleet = fleetRecord{
 			TenantID:             normalized.scope.TenantID,
 			CollectorID:          normalized.collectorID,
@@ -542,6 +557,8 @@ func (store *Store) GetAdministration(
 			"admin_version",
 			"display_name",
 			"administrative_state",
+			"first_seen_at_unix_micro",
+			"updated_at_unix_micro",
 		).
 		Where("tenant_id = ? AND collector_id = ?", scope.TenantID, collectorID).
 		Take(&fleet).Error
@@ -712,6 +729,7 @@ func (store *Store) updateAdministration(
 			"admin_version",
 			"display_name",
 			"administrative_state",
+			"first_seen_at_unix_micro",
 			"updated_at_unix_micro",
 		).
 		Where("tenant_id = ? AND collector_id = ?", scope.TenantID, collectorID).
@@ -740,6 +758,10 @@ func (store *Store) updateAdministration(
 	if uint64(fleet.AdminVersion) != expectedVersion {
 		return AdministrationSnapshot{}, control.ErrVersionConflict
 	}
+	firstSeenAt, persistedUpdatedAt, err := administrationTimestampsFromRecord(fleet)
+	if err != nil {
+		return AdministrationSnapshot{}, err
+	}
 	resultState := fleet.AdministrativeState
 	if patch.updateState {
 		resultState = normalizedState
@@ -755,8 +777,8 @@ func (store *Store) updateAdministration(
 	if fleet.AdminVersion == math.MaxInt64 && !terminalDisable {
 		return AdministrationSnapshot{}, control.ErrCapacityExceeded
 	}
-	if fleet.UpdatedAtUnixMicro > receivedAt.UnixMicro() {
-		receivedAt = time.UnixMicro(fleet.UpdatedAtUnixMicro).UTC()
+	if persistedUpdatedAt.After(receivedAt) {
+		receivedAt = persistedUpdatedAt
 	}
 	if fleet.AdministrativeState == AdministrativeStateDisabled &&
 		resultState == AdministrativeStateEnabled {
@@ -825,6 +847,8 @@ func (store *Store) updateAdministration(
 		Version:             uint64(nextAdminVersion),
 		DisplayName:         cloneString(resultDisplayName),
 		AdministrativeState: resultState,
+		FirstSeenAt:         firstSeenAt,
+		UpdatedAt:           receivedAt,
 	}, nil
 }
 
@@ -857,13 +881,35 @@ func administrationSnapshotFromRecord(
 			"invalid collector administration display name in control-plane database",
 		)
 	}
+	firstSeenAt, updatedAt, err := administrationTimestampsFromRecord(fleet)
+	if err != nil {
+		return AdministrationSnapshot{}, err
+	}
 	return AdministrationSnapshot{
 		TenantID:            fleet.TenantID,
 		CollectorID:         fleet.CollectorID,
 		Version:             uint64(fleet.AdminVersion),
 		DisplayName:         displayName,
 		AdministrativeState: state,
+		FirstSeenAt:         firstSeenAt,
+		UpdatedAt:           updatedAt,
 	}, nil
+}
+
+func administrationTimestampsFromRecord(
+	fleet fleetRecord,
+) (time.Time, time.Time, error) {
+	if fleet.FirstSeenAtUnixMicro < 1 ||
+		fleet.FirstSeenAtUnixMicro > maximumPublicUnixMicro ||
+		fleet.UpdatedAtUnixMicro < fleet.FirstSeenAtUnixMicro ||
+		fleet.UpdatedAtUnixMicro > maximumPublicUnixMicro {
+		return time.Time{}, time.Time{}, errors.New(
+			"invalid collector administration lifecycle time in control-plane database",
+		)
+	}
+	return time.UnixMicro(fleet.FirstSeenAtUnixMicro).UTC(),
+		time.UnixMicro(fleet.UpdatedAtUnixMicro).UTC(),
+		nil
 }
 
 func runtimeForClaim(
