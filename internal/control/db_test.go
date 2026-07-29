@@ -38,8 +38,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 17 {
-		t.Fatalf("schema migration count = %d, want 17", migrationCount)
+	if migrationCount != 18 {
+		t.Fatalf("schema migration count = %d, want 18", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -87,8 +87,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 17 {
-		t.Fatalf("schema migration count after reopen = %d, want 17", migrationCount)
+	if migrationCount != 18 {
+		t.Fatalf("schema migration count after reopen = %d, want 18", migrationCount)
 	}
 }
 
@@ -306,6 +306,62 @@ func TestIndexDeletionOperationRecordMatchesMigratedSQLiteColumns(t *testing.T) 
 	}
 }
 
+func TestIndexDeletionMutationAttemptRecordMatchesMigratedSQLiteColumns(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+
+	statement := &gorm.Statement{DB: db.GORMDB()}
+	if err := statement.Parse(&indexDeletionMutationAttemptRecord{}); err != nil {
+		t.Fatalf("parse GORM index-deletion mutation-attempt model: %v", err)
+	}
+
+	rows, err := db.SQLDB().QueryContext(ctx, `
+		SELECT name
+		FROM pragma_table_info('index_deletion_mutation_attempts')
+		ORDER BY cid`)
+	if err != nil {
+		t.Fatalf("read migrated index-deletion mutation-attempt columns: %v", err)
+	}
+	defer rows.Close()
+	var migratedColumns []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan migrated index-deletion mutation-attempt column: %v", err)
+		}
+		migratedColumns = append(migratedColumns, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate migrated index-deletion mutation-attempt columns: %v", err)
+	}
+	if !slices.Equal(statement.Schema.DBNames, migratedColumns) {
+		t.Fatalf(
+			"GORM index-deletion mutation-attempt columns = %v, migrated columns = %v",
+			statement.Schema.DBNames,
+			migratedColumns,
+		)
+	}
+
+	operationIDField := statement.Schema.LookUpField("DeletionOperationID")
+	correlationIDField := statement.Schema.LookUpField("CorrelationID")
+	if operationIDField == nil ||
+		!operationIDField.PrimaryKey ||
+		correlationIDField == nil ||
+		!correlationIDField.Unique {
+		t.Fatalf(
+			"GORM mutation-attempt keys are not explicit: operation ID=%#v correlation ID=%#v",
+			operationIDField,
+			correlationIDField,
+		)
+	}
+}
+
 func TestApplyMigrationsIsVersionedAndDetectsDrift(t *testing.T) {
 	t.Parallel()
 
@@ -392,8 +448,8 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 17 {
-		t.Fatalf("schema migration count = %d, want 17", count)
+	if count != 18 {
+		t.Fatalf("schema migration count = %d, want 18", count)
 	}
 }
 

@@ -61,3 +61,22 @@ type indexDeletionOperationRecord struct {
 func (indexDeletionOperationRecord) TableName() string {
 	return "index_deletion_operations"
 }
+
+// indexDeletionMutationAttemptRecord is the GORM representation of the stable
+// correlation marker persisted before the first ClickHouse mutation side
+// effect. The target fields bind retries to one tenant and one physical table
+// UUID; live mutation progress remains in ClickHouse system tables.
+type indexDeletionMutationAttemptRecord struct {
+	DeletionOperationID string `gorm:"column:deletion_operation_id;type:text;primaryKey;not null"`
+	CorrelationID       string `gorm:"column:correlation_id;type:text;not null;unique;check:index_deletion_mutation_attempts_correlation_id_byte_length,length(CAST(correlation_id AS BLOB)) BETWEEN 1 AND 128"`
+	TenantID            string `gorm:"column:tenant_id;type:text;not null;check:index_deletion_mutation_attempts_tenant_id_byte_length,length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 255"`
+	ClickHouseDatabase  string `gorm:"column:clickhouse_database;type:text;not null;check:index_deletion_mutation_attempts_database_byte_length,length(CAST(clickhouse_database AS BLOB)) BETWEEN 1 AND 255"`
+	ClickHouseTable     string `gorm:"column:clickhouse_table;type:text;not null;check:index_deletion_mutation_attempts_table_byte_length,length(CAST(clickhouse_table AS BLOB)) BETWEEN 1 AND 255"`
+	ClickHouseTableUUID string `gorm:"column:clickhouse_table_uuid;type:text;not null"`
+	ProtocolVersion     int64  `gorm:"column:protocol_version;type:integer;not null;check:index_deletion_mutation_attempts_protocol_supported,protocol_version = 1"`
+	CreatedAtUnixMicro  int64  `gorm:"column:created_at_unix_micro;type:integer;not null;check:index_deletion_mutation_attempts_created_at_positive,created_at_unix_micro > 0"`
+}
+
+func (indexDeletionMutationAttemptRecord) TableName() string {
+	return "index_deletion_mutation_attempts"
+}

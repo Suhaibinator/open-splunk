@@ -116,6 +116,12 @@ func DefaultConfig() Config {
 // Open creates a Store backed by clickhouse-go's native protocol. Open is
 // deliberately lazy like the driver; call Ping during application startup when
 // readiness must verify credentials and network reachability.
+//
+// The configured database/table name must remain exclusively bound to one
+// physical table generation while the Store is open. Apply migrations before
+// Open, and do not concurrently rename, drop, exchange, or replace that table.
+// The deletion protocol detects observable UUID drift, but ClickHouse ALTER
+// targets a table by name and cannot fence privileged out-of-band DDL.
 func Open(config Config, retention RetentionProvider, sequencer visibility.Sequencer) (*Store, error) {
 	options, normalized, err := config.clickHouseOptions()
 	if err != nil {
@@ -144,7 +150,9 @@ func Open(config Config, retention RetentionProvider, sequencer visibility.Seque
 
 // NewStore wraps an existing clickhouse-go connection. A caller that uses
 // WithWritesFrozen must route every writer for the physical events table
-// through the returned Store for the lifetime of the frozen callback.
+// through the returned Store for the lifetime of the frozen callback. It must
+// also apply table-changing DDL before NewStore and keep the configured table
+// name exclusively bound to that generation until Store.Close; see Open.
 func NewStore(connection clickhousedriver.Conn, retention RetentionProvider, sequencer visibility.Sequencer) (*Store, error) {
 	if connection == nil {
 		return nil, errors.New("ClickHouse connection is required")
@@ -170,6 +178,8 @@ func NewStore(connection clickhousedriver.Conn, retention RetentionProvider, seq
 // accepted protocol batch.
 type Store struct {
 	connection       storeConnection
+	database         string
+	table            string
 	insertSQL        string
 	retention        RetentionProvider
 	visibility       visibility.Sequencer
@@ -227,6 +237,8 @@ func newStore(
 	lifecycleContext, lifecycleCancel := context.WithCancel(context.Background())
 	return &Store{
 		connection:       connection,
+		database:         database,
+		table:            table,
 		insertSQL:        buildEventsInsertSQL(database, table),
 		retention:        retention,
 		visibility:       sequencer,
@@ -1663,8 +1675,24 @@ type writeBatch interface {
 
 type storeConnection interface {
 	prepare(context.Context, string, clickhousedriver.Settings) (writeBatch, error)
+	exec(
+		context.Context,
+		string,
+		clickhousedriver.Settings,
+		clickhousedriver.Parameters,
+		string,
+	) error
+	queryRow(
+		context.Context,
+		string,
+		clickhousedriver.Parameters,
+	) storeQueryRow
 	Ping(context.Context) error
 	Close() error
+}
+
+type storeQueryRow interface {
+	Scan(...any) error
 }
 
 type nativeStoreConnection struct {
@@ -1674,6 +1702,35 @@ type nativeStoreConnection struct {
 func (c *nativeStoreConnection) prepare(ctx context.Context, query string, settings clickhousedriver.Settings) (writeBatch, error) {
 	ctx = clickhousedriver.Context(ctx, clickhousedriver.WithSettings(settings))
 	return c.connection.PrepareBatch(ctx, query)
+}
+
+func (c *nativeStoreConnection) exec(
+	ctx context.Context,
+	query string,
+	settings clickhousedriver.Settings,
+	parameters clickhousedriver.Parameters,
+	queryID string,
+) error {
+	options := []clickhousedriver.QueryOption{
+		clickhousedriver.WithSettings(settings),
+		clickhousedriver.WithParameters(parameters),
+	}
+	if queryID != "" {
+		options = append(options, clickhousedriver.WithQueryID(queryID))
+	}
+	return c.connection.Exec(clickhousedriver.Context(ctx, options...), query)
+}
+
+func (c *nativeStoreConnection) queryRow(
+	ctx context.Context,
+	query string,
+	parameters clickhousedriver.Parameters,
+) storeQueryRow {
+	ctx = clickhousedriver.Context(
+		ctx,
+		clickhousedriver.WithParameters(parameters),
+	)
+	return c.connection.QueryRow(ctx, query)
 }
 
 func (c *nativeStoreConnection) Ping(ctx context.Context) error {

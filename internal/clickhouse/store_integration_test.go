@@ -339,6 +339,321 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 			t.Fatalf("retained keep-data rows = %d, want 1", retainedRows)
 		}
 	})
+	t.Run("durable physical deletion mutation is scoped and restartable", func(t *testing.T) {
+		testIndexDataDeletionMutationAgainstClickHouse(
+			t,
+			ctx,
+			store,
+			queryConnection,
+			indexTime,
+		)
+	})
+}
+
+func testIndexDataDeletionMutationAgainstClickHouse(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	queryConnection clickhousedriver.Conn,
+	indexTime time.Time,
+) {
+	t.Helper()
+
+	const (
+		targetTenant  = "physical-delete-tenant"
+		targetIndex   = "physical-delete"
+		neighborIndex = "physical-neighbor"
+	)
+	fixtures := []struct {
+		eventID   string
+		tenantID  string
+		indexName string
+		eventTime time.Time
+	}{
+		{
+			eventID:   "physical-delete-july",
+			tenantID:  targetTenant,
+			indexName: targetIndex,
+			eventTime: indexTime,
+		},
+		{
+			eventID:   "physical-delete-august",
+			tenantID:  targetTenant,
+			indexName: targetIndex,
+			eventTime: indexTime.AddDate(0, 1, 0),
+		},
+		{
+			eventID:   "physical-delete-other-tenant",
+			tenantID:  "physical-delete-other-tenant",
+			indexName: targetIndex,
+			eventTime: indexTime,
+		},
+		{
+			eventID:   "physical-delete-other-index",
+			tenantID:  targetTenant,
+			indexName: neighborIndex,
+			eventTime: indexTime,
+		},
+	}
+	for sequence, fixture := range fixtures {
+		event := testStoredEvent(
+			fixture.eventID,
+			fixture.indexName,
+			fixture.eventTime,
+		)
+		event.TenantID = fixture.tenantID
+		event.CollectorID = "physical-delete-collector-" + fixture.eventID
+		event.BatchID = "physical-delete-batch-" + fixture.eventID
+		event.Event.EventTime = timestamppb.New(fixture.eventTime)
+		event.Event.CollectedAt = timestamppb.New(
+			fixture.eventTime.Add(-time.Second),
+		)
+		if _, err := store.Store(ctx, ingest.StoreBatch{
+			TenantID:          fixture.tenantID,
+			CollectorID:       event.CollectorID,
+			BatchID:           event.BatchID,
+			BatchSequence:     uint64(sequence + 1),
+			SourceBatchSHA256: testSourceBatchDigest(event.BatchID),
+			ReceivedAt:        fixture.eventTime,
+			Events:            []*ingest.StoredEvent{event},
+		}); err != nil {
+			t.Fatalf("store physical-deletion fixture %q: %v", fixture.eventID, err)
+		}
+	}
+
+	var physicalTarget IndexDataDeletionTarget
+	if err := store.WithWritesFrozen(
+		ctx,
+		func(ctx context.Context, frozen FrozenWrites) error {
+			if err := frozen.DrainPending(ctx); err != nil {
+				return err
+			}
+			var err error
+			physicalTarget, err = frozen.IndexDataDeletionTarget(ctx)
+			return err
+		},
+	); err != nil {
+		t.Fatalf("resolve physical-deletion target: %v", err)
+	}
+	var directUUID string
+	if err := queryConnection.QueryRow(
+		ctx,
+		`SELECT toString(uuid)
+		 FROM system.tables
+		 WHERE database = ? AND name = ?`,
+		physicalTarget.Database,
+		physicalTarget.Table,
+	).Scan(&directUUID); err != nil {
+		t.Fatalf("read direct ClickHouse table UUID: %v", err)
+	}
+	if directUUID != physicalTarget.TableUUID {
+		t.Fatalf(
+			"resolved table UUID = %q, direct UUID = %q",
+			physicalTarget.TableUUID,
+			directUUID,
+		)
+	}
+
+	controlPath := filepath.Join(t.TempDir(), "physical-deletion-control.sqlite")
+	controlDB, err := control.Open(ctx, controlPath)
+	if err != nil {
+		t.Fatalf("open physical-deletion control database: %v", err)
+	}
+	index, err := controlDB.CreateIndex(ctx, control.IndexDefinition{
+		Name:             targetIndex,
+		DisplayName:      "Physical deletion",
+		IngestionEnabled: true,
+		SearchEnabled:    true,
+	})
+	if err != nil {
+		t.Fatalf("create physical-deletion index: %v", err)
+	}
+	index, err = controlDB.SetIndexState(
+		ctx,
+		index.ID,
+		index.Version,
+		control.IndexStateArchived,
+	)
+	if err != nil {
+		t.Fatalf("archive physical-deletion index: %v", err)
+	}
+	operation, err := controlDB.BeginIndexDataDeletion(
+		ctx,
+		index.ID,
+		index.Version,
+		index.Definition.Name,
+	)
+	if err != nil {
+		t.Fatalf("begin physical-deletion operation: %v", err)
+	}
+	attempt, err := controlDB.EnsureIndexDeletionMutationAttempt(
+		ctx,
+		operation.ID,
+		control.IndexDeletionMutationTarget{
+			TenantID:  targetTenant,
+			Database:  physicalTarget.Database,
+			Table:     physicalTarget.Table,
+			TableUUID: physicalTarget.TableUUID,
+		},
+	)
+	if err != nil {
+		t.Fatalf("persist physical-deletion mutation attempt: %v", err)
+	}
+	if err := controlDB.Close(); err != nil {
+		t.Fatalf("close physical-deletion control database: %v", err)
+	}
+	controlDB, err = control.Open(ctx, controlPath)
+	if err != nil {
+		t.Fatalf("reopen physical-deletion control database: %v", err)
+	}
+	defer controlDB.Close()
+	restartedAttempt, err := controlDB.GetIndexDeletionMutationAttempt(
+		ctx,
+		operation.ID,
+	)
+	if err != nil {
+		t.Fatalf("recover physical-deletion mutation attempt: %v", err)
+	}
+	if restartedAttempt != attempt {
+		t.Fatalf(
+			"restarted mutation attempt = %#v, want %#v",
+			restartedAttempt,
+			attempt,
+		)
+	}
+
+	request := IndexDataDeletionRequest{
+		OperationID:     operation.ID,
+		CorrelationID:   attempt.CorrelationID,
+		TenantID:        attempt.Target.TenantID,
+		IndexName:       attempt.IndexName,
+		Database:        attempt.Target.Database,
+		Table:           attempt.Target.Table,
+		TableUUID:       attempt.Target.TableUUID,
+		ProtocolVersion: attempt.ProtocolVersion,
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	var progress IndexDataDeletionProgress
+	for {
+		if err := store.WithWritesFrozen(
+			ctx,
+			func(ctx context.Context, frozen FrozenWrites) error {
+				if err := frozen.DrainPending(ctx); err != nil {
+					return err
+				}
+				var err error
+				progress, err = frozen.AdvanceIndexDataDeletion(ctx, request)
+				return err
+			},
+		); err != nil {
+			t.Fatalf("advance physical-deletion mutation: %v", err)
+		}
+		if progress.State == IndexDataDeletionPhysicallyEmpty {
+			break
+		}
+		if progress.State != IndexDataDeletionPending {
+			t.Fatalf("physical-deletion progress = %#v", progress)
+		}
+		for {
+			if !time.Now().Before(deadline) {
+				t.Fatalf(
+					"physical-deletion mutation did not finish: %#v",
+					progress,
+				)
+			}
+			timer := time.NewTimer(25 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				t.Fatalf(
+					"wait for physical-deletion mutation: %v",
+					ctx.Err(),
+				)
+			case <-timer.C:
+			}
+			progress, err = store.IndexDataDeletionStatus(ctx, request)
+			if err != nil {
+				t.Fatalf("poll physical-deletion mutation: %v", err)
+			}
+			if progress.State == IndexDataDeletionPending {
+				continue
+			}
+			if progress.State != IndexDataDeletionReady {
+				t.Fatalf(
+					"read-only physical-deletion progress = %#v",
+					progress,
+				)
+			}
+			break
+		}
+	}
+
+	marker := indexDataDeletionCorrelationMarker(request)
+	var matchingMutations, malformedCommands uint64
+	if err := queryConnection.QueryRow(
+		ctx,
+		`SELECT
+		     count(),
+		     countIf(countSubstrings(command, ?) != 2)
+		 FROM system.mutations
+		 WHERE database = ?
+		   AND table = ?
+		   AND position(command, ?) != 0`,
+		marker,
+		request.Database,
+		request.Table,
+		marker,
+	).Scan(&matchingMutations, &malformedCommands); err != nil {
+		t.Fatalf("inspect correlated physical-deletion mutation: %v", err)
+	}
+	if matchingMutations < 1 || malformedCommands != 0 {
+		t.Fatalf(
+			"correlated mutations = %d, malformed commands = %d",
+			matchingMutations,
+			malformedCommands,
+		)
+	}
+
+	var targetRows, otherTenantRows, otherIndexRows uint64
+	if err := queryConnection.QueryRow(
+		ctx,
+		`SELECT
+		     countIf(tenant_id = ? AND index_name = ?),
+		     countIf(tenant_id = ? AND index_name = ?),
+		     countIf(tenant_id = ? AND index_name = ?)
+		 FROM open_splunk.events`,
+		targetTenant,
+		targetIndex,
+		"physical-delete-other-tenant",
+		targetIndex,
+		targetTenant,
+		neighborIndex,
+	).Scan(&targetRows, &otherTenantRows, &otherIndexRows); err != nil {
+		t.Fatalf("verify physical-deletion scope: %v", err)
+	}
+	if targetRows != 0 || otherTenantRows != 1 || otherIndexRows != 1 {
+		t.Fatalf(
+			"physical-deletion scope rows = target %d other-tenant %d other-index %d",
+			targetRows,
+			otherTenantRows,
+			otherIndexRows,
+		)
+	}
+	if recovered, err := controlDB.NextIndexDeletionOperation(
+		ctx,
+	); err != nil || recovered != operation {
+		t.Fatalf(
+			"outstanding operation after native proof = %#v, error=%v, want %#v",
+			recovered,
+			err,
+			operation,
+		)
+	}
 }
 
 func testWriteFreezeDrainsAmbiguousInsert(
@@ -777,6 +1092,30 @@ func (connection *commitThenErrorStoreConnection) prepare(
 			return fail
 		},
 	}, nil
+}
+
+func (connection *commitThenErrorStoreConnection) exec(
+	ctx context.Context,
+	query string,
+	settings clickhousedriver.Settings,
+	parameters clickhousedriver.Parameters,
+	queryID string,
+) error {
+	return connection.delegate.exec(
+		ctx,
+		query,
+		settings,
+		parameters,
+		queryID,
+	)
+}
+
+func (connection *commitThenErrorStoreConnection) queryRow(
+	ctx context.Context,
+	query string,
+	parameters clickhousedriver.Parameters,
+) storeQueryRow {
+	return connection.delegate.queryRow(ctx, query, parameters)
 }
 
 func (connection *commitThenErrorStoreConnection) Ping(ctx context.Context) error {

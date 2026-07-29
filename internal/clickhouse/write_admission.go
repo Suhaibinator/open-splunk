@@ -22,6 +22,10 @@ var (
 	// ErrPendingOutboxNotDrained means an exclusive drain could not prove that
 	// every durable replay reservation reached a terminal state.
 	ErrPendingOutboxNotDrained = errors.New("ClickHouse pending outbox is not drained")
+	// ErrWriteFreezeNotDrained means physical maintenance was attempted before
+	// the callback-scoped freeze proved that the durable replay outbox was
+	// empty.
+	ErrWriteFreezeNotDrained = errors.New("ClickHouse write freeze has not drained the pending outbox")
 )
 
 // FrozenWrites is valid only during the callback passed to WithWritesFrozen.
@@ -29,6 +33,11 @@ var (
 // Store, ResumeBatch, and reconciliation writers are excluded.
 type FrozenWrites interface {
 	DrainPending(context.Context) error
+	IndexDataDeletionTarget(context.Context) (IndexDataDeletionTarget, error)
+	AdvanceIndexDataDeletion(
+		context.Context,
+		IndexDataDeletionRequest,
+	) (IndexDataDeletionProgress, error)
 }
 
 // writeAdmission is a writer-preferring shared/exclusive gate. Ordinary
@@ -186,6 +195,7 @@ type frozenWrites struct {
 
 	mu        sync.Mutex
 	valid     bool
+	drained   bool
 	active    sync.WaitGroup
 	drainSlot chan struct{}
 }
@@ -193,39 +203,87 @@ type frozenWrites struct {
 var _ FrozenWrites = (*frozenWrites)(nil)
 
 func (frozen *frozenWrites) DrainPending(ctx context.Context) error {
+	drainContext, finish, err := frozen.beginPrivilegedOperation(
+		ctx,
+		"drain frozen ClickHouse outbox",
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	defer finish()
+
+	frozen.mu.Lock()
+	frozen.drained = false
+	frozen.mu.Unlock()
+	err = frozen.store.reconcilePending(drainContext, true)
+	if err == nil {
+		frozen.mu.Lock()
+		frozen.drained = true
+		frozen.mu.Unlock()
+	}
+	return frozen.store.operationError(ctx, err)
+}
+
+func (frozen *frozenWrites) beginPrivilegedOperation(
+	ctx context.Context,
+	action string,
+	requireDrained bool,
+) (context.Context, func(), error) {
 	if frozen == nil || frozen.store == nil {
-		return ErrWriteFreezeInactive
+		return nil, nil, ErrWriteFreezeInactive
 	}
 	if ctx == nil {
-		return errors.New("drain frozen ClickHouse outbox: context is required")
+		return nil, nil, fmt.Errorf("%s: context is required", action)
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, nil, err
 	}
 	frozen.mu.Lock()
 	if !frozen.valid {
 		frozen.mu.Unlock()
-		return ErrWriteFreezeInactive
+		return nil, nil, ErrWriteFreezeInactive
 	}
 	frozen.active.Add(1)
 	frozen.mu.Unlock()
-	defer frozen.active.Done()
 
-	drainContext, cancelDrain := context.WithCancel(ctx)
-	stopScopeCancellation := context.AfterFunc(frozen.scope, cancelDrain)
-	defer func() {
-		stopScopeCancellation()
-		cancelDrain()
-	}()
-
+	operationContext, cancelOperation := context.WithCancel(ctx)
+	stopScopeCancellation := context.AfterFunc(
+		frozen.scope,
+		cancelOperation,
+	)
 	select {
-	case <-drainContext.Done():
-		return frozen.store.operationError(ctx, drainContext.Err())
+	case <-operationContext.Done():
+		stopScopeCancellation()
+		cancelOperation()
+		frozen.active.Done()
+		return nil, nil, frozen.store.operationError(
+			ctx,
+			operationContext.Err(),
+		)
 	case <-frozen.drainSlot:
 	}
-	defer func() { frozen.drainSlot <- struct{}{} }()
-	err := frozen.store.reconcilePending(drainContext, true)
-	return frozen.store.operationError(ctx, err)
+	frozen.mu.Lock()
+	valid := frozen.valid
+	drained := frozen.drained
+	frozen.mu.Unlock()
+	if !valid || requireDrained && !drained {
+		frozen.drainSlot <- struct{}{}
+		stopScopeCancellation()
+		cancelOperation()
+		frozen.active.Done()
+		if !valid {
+			return nil, nil, ErrWriteFreezeInactive
+		}
+		return nil, nil, ErrWriteFreezeNotDrained
+	}
+	finish := func() {
+		frozen.drainSlot <- struct{}{}
+		stopScopeCancellation()
+		cancelOperation()
+		frozen.active.Done()
+	}
+	return operationContext, finish, nil
 }
 
 func (frozen *frozenWrites) invalidate() {

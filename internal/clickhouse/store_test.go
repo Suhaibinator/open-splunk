@@ -1408,6 +1408,24 @@ func (c *fakeStoreConnection) prepare(_ context.Context, query string, settings 
 	}
 	return c.batch, nil
 }
+func (c *fakeStoreConnection) exec(
+	context.Context,
+	string,
+	clickhousedriver.Settings,
+	clickhousedriver.Parameters,
+	string,
+) error {
+	return errors.New("unexpected ClickHouse Exec")
+}
+func (c *fakeStoreConnection) queryRow(
+	context.Context,
+	string,
+	clickhousedriver.Parameters,
+) storeQueryRow {
+	return fakeErrorStoreQueryRow{
+		err: errors.New("unexpected ClickHouse QueryRow"),
+	}
+}
 func (c *fakeStoreConnection) Ping(context.Context) error { return c.pingErr }
 func (c *fakeStoreConnection) Close() error {
 	c.closeCalls++
@@ -1433,6 +1451,34 @@ func (connection *gatedStoreConnection) prepare(ctx context.Context, _ string, _
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func (connection *gatedStoreConnection) exec(
+	context.Context,
+	string,
+	clickhousedriver.Settings,
+	clickhousedriver.Parameters,
+	string,
+) error {
+	return errors.New("unexpected ClickHouse Exec")
+}
+
+func (connection *gatedStoreConnection) queryRow(
+	context.Context,
+	string,
+	clickhousedriver.Parameters,
+) storeQueryRow {
+	return fakeErrorStoreQueryRow{
+		err: errors.New("unexpected ClickHouse QueryRow"),
+	}
+}
+
+type fakeErrorStoreQueryRow struct {
+	err error
+}
+
+func (row fakeErrorStoreQueryRow) Scan(...any) error {
+	return row.err
 }
 
 func (*gatedStoreConnection) Ping(context.Context) error { return nil }

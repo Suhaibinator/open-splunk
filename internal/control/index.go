@@ -8,16 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/indexname"
 	"gorm.io/gorm"
 )
 
-const maxIndexNameBytes = 255
-
-var splunkIndexName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+const maxIndexNameBytes = indexname.MaximumBytes
 
 // IndexState is the lifecycle state of a logical event index.
 type IndexState string
@@ -69,10 +67,10 @@ func NormalizeIndexName(input string) (string, error) {
 	if len(name) == 0 || len(name) > maxIndexNameBytes {
 		return "", fmt.Errorf("%w: index name must contain between 1 and %d ASCII characters", ErrInvalidArgument, maxIndexNameBytes)
 	}
-	if !splunkIndexName.MatchString(name) {
+	if !indexname.ValidSyntax(name) {
 		return "", fmt.Errorf("%w: index name must start with a letter or number and contain only lowercase letters, numbers, underscores, and hyphens", ErrInvalidArgument)
 	}
-	if strings.Contains(name, "kvstore") {
+	if indexname.ContainsReservedWord(name) {
 		return "", fmt.Errorf("%w: index name contains a reserved word", ErrInvalidArgument)
 	}
 	return name, nil

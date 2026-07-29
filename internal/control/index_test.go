@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/indexname"
 )
 
 func TestIndexLifecycleNormalizesNameAndUsesOptimisticVersions(t *testing.T) {
@@ -562,7 +564,8 @@ func FuzzNormalizeIndexName(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if normalized != strings.ToLower(normalized) || !splunkIndexName.MatchString(normalized) || strings.Contains(normalized, "kvstore") {
+		if normalized != strings.ToLower(normalized) ||
+			!indexname.ValidCanonical(normalized) {
 			t.Fatalf("NormalizeIndexName(%q) returned invalid canonical name %q", input, normalized)
 		}
 		second, err := NormalizeIndexName(normalized)
