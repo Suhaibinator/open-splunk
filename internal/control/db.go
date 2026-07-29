@@ -25,8 +25,9 @@ const (
 
 // DB is the SQLite-backed single-node control-plane database.
 type DB struct {
-	sql *sql.DB
-	orm *gorm.DB
+	sql      *sql.DB
+	orm      *gorm.DB
+	fileInfo os.FileInfo
 }
 
 // Open opens a persistent SQLite control-plane database, configures its
@@ -85,8 +86,12 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	if err := secureSQLiteFiles(absPath, false); err != nil {
 		return closeOnError(err)
 	}
+	fileInfo, err := os.Stat(absPath)
+	if err != nil {
+		return closeOnError(fmt.Errorf("identify SQLite control plane: %w", err))
+	}
 
-	return &DB{sql: raw, orm: orm}, nil
+	return &DB{sql: raw, orm: orm, fileInfo: fileInfo}, nil
 }
 
 // secureSQLiteFiles ensures the control database and every SQLite sidecar are
@@ -204,6 +209,19 @@ func (db *DB) GORMDB() *gorm.DB {
 		return nil
 	}
 	return db.orm
+}
+
+// SameSQLiteFile reports whether two control handles were opened over the same
+// physical database file. It is used only for process-local ownership fencing;
+// SQLite transactions remain authoritative for persisted state.
+func (db *DB) SameSQLiteFile(other *DB) bool {
+	if db == nil || other == nil {
+		return false
+	}
+	if db.fileInfo == nil || other.fileInfo == nil {
+		return db == other || (db.sql != nil && db.sql == other.sql)
+	}
+	return os.SameFile(db.fileInfo, other.fileInfo)
 }
 
 // Close releases all SQLite connections.

@@ -128,6 +128,14 @@ func TestSearchInspectionRouteGradeThisAgainstClickHouse(t *testing.T) {
 		_ = storeConnection.Close()
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if closeErr := sequencer.Close(); closeErr != nil {
+			t.Errorf(
+				"close GradeThis inspection route visibility sequencer: %v",
+				closeErr,
+			)
+		}
+	})
 	store, err := clickhouse.NewStore(
 		storeConnection,
 		clickhouse.RetentionProviderFunc(

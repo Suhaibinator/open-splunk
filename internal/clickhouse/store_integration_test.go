@@ -97,6 +97,7 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create visibility sequencer: %v", err)
 	}
+	t.Cleanup(func() { _ = sequencer.Close() })
 	store, err := Open(config, fixedRetention(30*24*time.Hour), sequencer)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -288,6 +289,7 @@ func testLegacyUnalignedRetentionNativeReplay(
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = sequencer.Close() }()
 	// The production TTL is evaluated against ClickHouse wall time. This
 	// fixture intentionally retains for only 1.5ms, so keep its event in the
 	// near future or the TTL worker can delete it before the assertion.
@@ -399,6 +401,12 @@ func testAmbiguousCommittedInsertRecovery(
 	if err != nil {
 		t.Fatalf("create first visibility sequencer: %v", err)
 	}
+	firstSequencerOpen := true
+	defer func() {
+		if firstSequencerOpen {
+			_ = firstSequencer.Close()
+		}
+	}()
 	options, normalized, err := config.clickHouseOptions()
 	if err != nil {
 		t.Fatal(err)
@@ -467,6 +475,10 @@ func testAmbiguousCommittedInsertRecovery(
 		t.Fatalf("close first store: %v", err)
 	}
 	firstStoreOpen = false
+	if err := firstSequencer.Close(); err != nil {
+		t.Fatalf("close first visibility sequencer: %v", err)
+	}
+	firstSequencerOpen = false
 	if err := firstControl.Close(); err != nil {
 		t.Fatalf("close first visibility control database: %v", err)
 	}
@@ -489,6 +501,7 @@ func testAmbiguousCommittedInsertRecovery(
 	if err != nil {
 		t.Fatalf("create restarted visibility sequencer: %v", err)
 	}
+	defer func() { _ = secondSequencer.Close() }()
 	secondStore, err := Open(config, fixedRetention(30*24*time.Hour), secondSequencer)
 	if err != nil {
 		t.Fatalf("open restarted store: %v", err)

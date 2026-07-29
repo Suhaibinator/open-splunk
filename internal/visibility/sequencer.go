@@ -31,6 +31,13 @@ var (
 	// ErrAttemptLease means the caller does not own the reservation attempt it
 	// tried to commit or release.
 	ErrAttemptLease = errors.New("visibility sequencer: attempt does not own reservation")
+	// ErrClosed means the sequencer owner has begun shutdown and no longer
+	// admits visibility operations.
+	ErrClosed = errors.New("visibility sequencer: closed")
+	// ErrOwnerExists means another live SQLiteSequencer already owns attempt
+	// fencing for the supplied control database file. Callers must share that
+	// owner.
+	ErrOwnerExists = errors.New("visibility sequencer: database file already has a live owner")
 )
 
 const (

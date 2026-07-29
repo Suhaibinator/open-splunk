@@ -25,20 +25,23 @@ const (
 	maxBatchKeyBytes     = 512
 	maxSequenceKeyBytes  = 512
 	maxAttemptIDBytes    = 128
+	// Cleanup is detached from any one Shutdown caller so a short deadline
+	// cannot strand process ownership. Its own hard bound prevents a drained
+	// owner from retaining the borrowed database behind a stuck pool.
+	ownerCleanupTimeout = 10 * time.Second
 )
 
 type processLeases struct {
-	mu          sync.Mutex
-	active      map[string]uint64
-	initialized bool
+	mu              sync.Mutex
+	active          map[string]uint64
+	possiblyDurable bool
 }
 
-var leaseRegistry sync.Map // map[*sql.DB]*processLeases
-
-func leasesFor(db *sql.DB) *processLeases {
-	created := &processLeases{active: make(map[string]uint64)}
-	actual, _ := leaseRegistry.LoadOrStore(db, created)
-	return actual.(*processLeases)
+var sqliteOwners = struct {
+	sync.Mutex
+	bySequencer map[*SQLiteSequencer]*control.DB
+}{
+	bySequencer: make(map[*SQLiteSequencer]*control.DB),
 }
 
 func (leases *processLeases) activate(id string) bool {
@@ -48,6 +51,11 @@ func (leases *processLeases) activate(id string) bool {
 		return false
 	}
 	leases.active[id] = 0
+	// A transaction that follows may persist its attempt ID even if Commit
+	// reports an outcome-ambiguous error. Shutdown must therefore perform
+	// durable cleanup after any admitted acquisition attempt, not only after a
+	// confirmed commit reaches bind.
+	leases.possiblyDurable = true
 	return true
 }
 
@@ -55,6 +63,7 @@ func (leases *processLeases) bind(id string, sequence uint64) {
 	leases.mu.Lock()
 	if _, exists := leases.active[id]; exists {
 		leases.active[id] = sequence
+		leases.possiblyDurable = true
 	}
 	leases.mu.Unlock()
 }
@@ -79,19 +88,45 @@ func (leases *processLeases) owns(id string, sequence uint64) bool {
 	return exists && ownedSequence == sequence
 }
 
+func (leases *processLeases) mayHaveDurableLease() bool {
+	leases.mu.Lock()
+	defer leases.mu.Unlock()
+	return leases.possiblyDurable
+}
+
+func (leases *processLeases) clear() {
+	leases.mu.Lock()
+	clear(leases.active)
+	leases.possiblyDurable = false
+	leases.mu.Unlock()
+}
+
 // SQLiteSequencer persists sequence allocation, replay payloads, and the
 // highest contiguous terminal boundary in the single-node control database.
+// It is also the explicit process-local owner of every attempt lease over that
+// physical SQLite file. All callers sharing that file must share one
+// sequencer.
 type SQLiteSequencer struct {
 	db     *sql.DB
 	leases *processLeases
+
+	lifecycleMu sync.Mutex
+	closed      bool
+	operations  sync.WaitGroup
+
+	shutdownOnce sync.Once
+	terminalDone chan struct{}
+	terminalErr  error
 }
 
 var _ Sequencer = (*SQLiteSequencer)(nil)
 
-// NewSQLite constructs a sequencer over an already-open, migrated control DB.
-// Sequencers built over the same *sql.DB share process-local attempt fencing.
-// The server holds a process-wide database lock, so a lease not represented in
-// this registry necessarily belongs to a dead server instance.
+// NewSQLite constructs the exclusive process-local sequencer owner over an
+// already-open, migrated control DB. Callers using any handle to the same
+// physical file must share the returned sequencer rather than construct
+// concurrent owners. Production additionally holds a process-wide server lock
+// to fence separate processes. Close the owner before replacing it; the
+// underlying control database remains caller-owned.
 func NewSQLite(ctx context.Context, db *control.DB) (*SQLiteSequencer, error) {
 	if err := validateContext(ctx); err != nil {
 		return nil, err
@@ -99,73 +134,174 @@ func NewSQLite(ctx context.Context, db *control.DB) (*SQLiteSequencer, error) {
 	if db == nil || db.SQLDB() == nil {
 		return nil, fmt.Errorf("%w: control database is required", ErrInvalidArgument)
 	}
-	sequencer := &SQLiteSequencer{db: db.SQLDB(), leases: leasesFor(db.SQLDB())}
+	sequencer := &SQLiteSequencer{
+		db:           db.SQLDB(),
+		leases:       &processLeases{active: make(map[string]uint64)},
+		terminalDone: make(chan struct{}),
+	}
+	if !registerSQLiteOwner(db, sequencer) {
+		sequencer.db = nil
+		sequencer.leases = nil
+		return nil, ErrOwnerExists
+	}
 	if err := sequencer.clearStaleLeases(ctx); err != nil {
+		unregisterSQLiteOwner(sequencer)
+		sequencer.db = nil
+		sequencer.leases = nil
 		return nil, err
 	}
 	return sequencer, nil
 }
 
-// clearStaleLeases makes durable reservations available for replay exactly
-// once per *sql.DB. Holding the registry lock prevents a concurrently-created
-// sequencer from stealing an attempt that is live in this process.
-func (sequencer *SQLiteSequencer) clearStaleLeases(ctx context.Context) error {
-	sequencer.leases.mu.Lock()
-	defer sequencer.leases.mu.Unlock()
-	if sequencer.leases.initialized {
-		return nil
+func registerSQLiteOwner(db *control.DB, sequencer *SQLiteSequencer) bool {
+	sqliteOwners.Lock()
+	defer sqliteOwners.Unlock()
+	for _, ownerDB := range sqliteOwners.bySequencer {
+		if db.SameSQLiteFile(ownerDB) {
+			return false
+		}
 	}
+	sqliteOwners.bySequencer[sequencer] = db
+	return true
+}
 
-	tx, err := sequencer.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+func unregisterSQLiteOwner(sequencer *SQLiteSequencer) {
+	if sequencer == nil {
+		return
+	}
+	sqliteOwners.Lock()
+	delete(sqliteOwners.bySequencer, sequencer)
+	sqliteOwners.Unlock()
+}
+
+// clearStaleLeases makes durable reservations available for replay exactly
+// once when an exclusive owner opens. A concurrent owner for the same physical
+// database would violate NewSQLite's ownership contract and could steal a live
+// attempt.
+func (sequencer *SQLiteSequencer) clearStaleLeases(ctx context.Context) error {
+	return releaseDurableAttemptLeases(
+		ctx,
+		sequencer.db,
+		"visibility lease recovery",
+	)
+}
+
+func releaseDurableAttemptLeases(
+	ctx context.Context,
+	db *sql.DB,
+	operation string,
+) error {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
-		return fmt.Errorf("begin visibility lease recovery: %w", err)
+		return fmt.Errorf("begin %s: %w", operation, err)
 	}
 	defer rollback(tx)
-	rows, err := tx.QueryContext(ctx, `
-		SELECT sequence, attempt_id
-		FROM ingest_visibility_reservations
-		WHERE state = 'reserved' AND attempt_id <> ''`)
-	if err != nil {
-		return fmt.Errorf("read visibility leases for recovery: %w", err)
-	}
-	type staleLease struct {
-		sequence int64
-		owner    string
-	}
-	var stale []staleLease
-	for rows.Next() {
-		var lease staleLease
-		if err := rows.Scan(&lease.sequence, &lease.owner); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan visibility lease for recovery: %w", err)
-		}
-		if _, active := sequencer.leases.active[lease.owner]; !active {
-			stale = append(stale, lease)
-		}
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close visibility lease recovery rows: %w", err)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate visibility leases for recovery: %w", err)
-	}
-	for _, lease := range stale {
-		result, err := tx.ExecContext(ctx, `
-			UPDATE ingest_visibility_reservations
-			SET attempt_id = ''
-			WHERE sequence = ? AND state = 'reserved' AND attempt_id = ?`, lease.sequence, lease.owner)
-		if err != nil {
-			return fmt.Errorf("clear stale visibility lease: %w", err)
-		}
-		if err := requireOneRow(result, "clear stale visibility lease"); err != nil {
-			return err
-		}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE ingest_visibility_reservations
+		SET attempt_id = ''
+		WHERE state = 'reserved' AND attempt_id <> ''`); err != nil {
+		return fmt.Errorf("release durable leases during %s: %w", operation, err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit visibility lease recovery: %w", err)
+		return fmt.Errorf("commit %s: %w", operation, err)
 	}
-	sequencer.leases.initialized = true
 	return nil
+}
+
+func (sequencer *SQLiteSequencer) beginOperation() error {
+	if sequencer == nil {
+		return ErrClosed
+	}
+	sequencer.lifecycleMu.Lock()
+	defer sequencer.lifecycleMu.Unlock()
+	if sequencer.closed || sequencer.db == nil || sequencer.leases == nil {
+		return ErrClosed
+	}
+	sequencer.operations.Add(1)
+	return nil
+}
+
+func (sequencer *SQLiteSequencer) endOperation() {
+	sequencer.operations.Done()
+}
+
+// Shutdown rejects new operations and waits for the single owner finalizer.
+// Each caller is independently bounded by ctx; a caller timeout does not stop
+// the finalizer from draining admitted operations, attempting bounded durable
+// lease cleanup, and unregistering ownership. The caller-owned control
+// database is never closed here.
+func (sequencer *SQLiteSequencer) Shutdown(ctx context.Context) error {
+	if sequencer == nil {
+		return nil
+	}
+	if ctx == nil {
+		return fmt.Errorf("%w: shutdown context is nil", ErrInvalidArgument)
+	}
+
+	sequencer.lifecycleMu.Lock()
+	initialized := sequencer.db != nil && sequencer.leases != nil &&
+		sequencer.terminalDone != nil
+	sequencer.lifecycleMu.Unlock()
+	if !initialized {
+		select {
+		case <-sequencer.terminalDone:
+			return sequencer.terminalErr
+		default:
+			return nil
+		}
+	}
+
+	sequencer.shutdownOnce.Do(func() {
+		sequencer.lifecycleMu.Lock()
+		sequencer.closed = true
+		sequencer.lifecycleMu.Unlock()
+		go sequencer.finalizeShutdown()
+	})
+	select {
+	case <-sequencer.terminalDone:
+		return sequencer.terminalErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (sequencer *SQLiteSequencer) finalizeShutdown() {
+	sequencer.operations.Wait()
+	ctx, cancel := context.WithTimeout(context.Background(), ownerCleanupTimeout)
+	cleanupErr := sequencer.clearActiveLeases(ctx)
+	cancel()
+	sequencer.finishShutdown(cleanupErr)
+}
+
+// Close waits without a caller deadline; finalizer cleanup retains its own
+// hard bound. Server shutdown should use Shutdown with its existing timeout.
+func (sequencer *SQLiteSequencer) Close() error {
+	return sequencer.Shutdown(context.Background())
+}
+
+func (sequencer *SQLiteSequencer) clearActiveLeases(ctx context.Context) error {
+	if !sequencer.leases.mayHaveDurableLease() {
+		return nil
+	}
+	if err := releaseDurableAttemptLeases(
+		ctx,
+		sequencer.db,
+		"visibility owner shutdown",
+	); err != nil {
+		return err
+	}
+	sequencer.leases.clear()
+	return nil
+}
+
+func (sequencer *SQLiteSequencer) finishShutdown(shutdownErr error) {
+	unregisterSQLiteOwner(sequencer)
+	sequencer.lifecycleMu.Lock()
+	sequencer.db = nil
+	sequencer.leases = nil
+	sequencer.terminalErr = shutdownErr
+	close(sequencer.terminalDone)
+	sequencer.lifecycleMu.Unlock()
 }
 
 // Lookup reads an active reservation without acquiring its attempt lease. Both
@@ -176,6 +312,10 @@ func (sequencer *SQLiteSequencer) Lookup(
 	sequenceKey string,
 	payloadSHA256 [32]byte,
 ) (Reservation, bool, error) {
+	if err := sequencer.beginOperation(); err != nil {
+		return Reservation{}, false, err
+	}
+	defer sequencer.endOperation()
 	if err := validateLookup(ctx, batchKey, sequenceKey); err != nil {
 		return Reservation{}, false, err
 	}
@@ -225,6 +365,10 @@ func (sequencer *SQLiteSequencer) Lookup(
 // sequence and durable outbox entry. Allocation does not wait for earlier
 // reservations; Cutoff remains the contiguous terminal boundary.
 func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRequest) (reservation Reservation, resultErr error) {
+	if err := sequencer.beginOperation(); err != nil {
+		return Reservation{}, err
+	}
+	defer sequencer.endOperation()
 	if err := validateReserveRequest(ctx, request); err != nil {
 		return Reservation{}, err
 	}
@@ -397,6 +541,10 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 // AcquirePending leases the oldest replayable reservation that has no live
 // in-process owner. It is used by startup/background reconciliation.
 func (sequencer *SQLiteSequencer) AcquirePending(ctx context.Context, attemptID string) (reservation Reservation, found bool, resultErr error) {
+	if err := sequencer.beginOperation(); err != nil {
+		return Reservation{}, false, err
+	}
+	defer sequencer.endOperation()
 	if err := validateAttemptID(ctx, attemptID); err != nil {
 		return Reservation{}, false, err
 	}
@@ -762,6 +910,10 @@ func ambiguousExists(
 // MarkSending durably changes an owned unsent reservation to ambiguous before
 // the caller invokes ClickHouse Send.
 func (sequencer *SQLiteSequencer) MarkSending(ctx context.Context, sequence uint64, attemptID string) error {
+	if err := sequencer.beginOperation(); err != nil {
+		return err
+	}
+	defer sequencer.endOperation()
 	storedSequence, validationErr := validateAttempt(ctx, sequence, attemptID)
 	if validationErr != nil {
 		return validationErr
@@ -820,6 +972,10 @@ func (sequencer *SQLiteSequencer) MarkSending(ctx context.Context, sequence uint
 }
 
 func (sequencer *SQLiteSequencer) Commit(ctx context.Context, sequence uint64, attemptID string, committedAt time.Time) error {
+	if err := sequencer.beginOperation(); err != nil {
+		return err
+	}
+	defer sequencer.endOperation()
 	if committedAt.IsZero() {
 		return fmt.Errorf("%w: committed time is required", ErrInvalidArgument)
 	}
@@ -832,12 +988,20 @@ func (sequencer *SQLiteSequencer) Commit(ctx context.Context, sequence uint64, a
 }
 
 func (sequencer *SQLiteSequencer) Release(ctx context.Context, sequence uint64, attemptID string) error {
+	if err := sequencer.beginOperation(); err != nil {
+		return err
+	}
+	defer sequencer.endOperation()
 	return sequencer.finish(ctx, sequence, attemptID, reservationReserved, 0)
 }
 
 // Abandon records that Send provably never began. The tombstone may finish out
 // of order and becomes visible only when every earlier sequence is terminal.
 func (sequencer *SQLiteSequencer) Abandon(ctx context.Context, sequence uint64, attemptID string) error {
+	if err := sequencer.beginOperation(); err != nil {
+		return err
+	}
+	defer sequencer.endOperation()
 	return sequencer.finish(ctx, sequence, attemptID, reservationAbandoned, 0)
 }
 
@@ -966,6 +1130,10 @@ func validateAttempt(ctx context.Context, sequence uint64, attemptID string) (in
 }
 
 func (sequencer *SQLiteSequencer) Cutoff(ctx context.Context) (uint64, error) {
+	if err := sequencer.beginOperation(); err != nil {
+		return 0, err
+	}
+	defer sequencer.endOperation()
 	if err := validateContext(ctx); err != nil {
 		return 0, err
 	}
@@ -994,6 +1162,10 @@ func (sequencer *SQLiteSequencer) PruneTerminal(
 	retainSequences uint64,
 	limit uint32,
 ) (uint32, error) {
+	if err := sequencer.beginOperation(); err != nil {
+		return 0, err
+	}
+	defer sequencer.endOperation()
 	if err := validateContext(ctx); err != nil {
 		return 0, err
 	}

@@ -191,6 +191,21 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("open visibility sequencer: %w", err)
 	}
+	// The sequencer borrows the control database and exclusively owns its
+	// process-local attempt leases. This defer is registered after the
+	// control-database defer and before every sequencer consumer, so LIFO
+	// shutdown first drains those consumers, then releases durable attempt
+	// leases, and only then closes SQLite. If this component exhausts the
+	// process shutdown budget, its finalizer remains responsible for
+	// unregistering ownership after admitted work exits; closing SQLite then
+	// forces any driver work that ignored cancellation to return.
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := sequencer.Shutdown(ctx); err != nil {
+			log.Printf("shutdown visibility sequencer: %v", err)
+		}
+	}()
 	savedSearches, tokenStore, err := openSecurityStores(startupContext, controlDB, config.masterKeyPath)
 	if err != nil {
 		return err

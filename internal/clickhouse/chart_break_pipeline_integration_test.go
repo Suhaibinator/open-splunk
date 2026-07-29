@@ -578,6 +578,7 @@ func chartBreakPipelineStartClickHouse(t *testing.T, ctx context.Context) (click
 	if err != nil {
 		t.Fatalf("create chart pipeline visibility sequencer: %v", err)
 	}
+	t.Cleanup(func() { _ = sequencer.Close() })
 	store, err := Open(config, fixedRetention(30*24*time.Hour), sequencer)
 	if err != nil {
 		t.Fatalf("open chart pipeline store: %v", err)

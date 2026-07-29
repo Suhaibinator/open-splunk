@@ -90,6 +90,11 @@ func TestGradeThisCompatibilityV0_1AgainstClickHouse(t *testing.T) {
 		_ = storeConnection.Close()
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := sequencer.Close(); err != nil {
+			t.Errorf("close GradeThis corpus visibility sequencer: %v", err)
+		}
+	})
 	store, err := clickhouse.NewStore(
 		storeConnection,
 		clickhouse.RetentionProviderFunc(func(context.Context, string, string) (time.Duration, error) {

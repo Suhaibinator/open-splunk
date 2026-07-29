@@ -3,6 +3,7 @@ package visibility
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math"
@@ -339,11 +340,7 @@ func TestSQLiteSequencerLegacyTombstonePermanentlyRejectsBatchKey(t *testing.T) 
 
 func TestSQLiteSequencerConcurrentFirstSeenIdentity(t *testing.T) {
 	t.Parallel()
-	first, db := openTestSequencer(t)
-	second, err := NewSQLite(context.Background(), db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sequencer, db := openTestSequencer(t)
 	type outcome struct {
 		reservation Reservation
 		attemptID   string
@@ -351,13 +348,13 @@ func TestSQLiteSequencerConcurrentFirstSeenIdentity(t *testing.T) {
 	}
 	start := make(chan struct{})
 	outcomes := make(chan outcome, 2)
-	for i, sequencer := range []*SQLiteSequencer{first, second} {
-		go func(i int, sequencer *SQLiteSequencer) {
+	for i := range 2 {
+		go func(i int) {
 			request := reserveRequest("concurrent", fmt.Sprintf("attempt-%d", i))
 			<-start
 			reservation, err := sequencer.Reserve(context.Background(), request)
 			outcomes <- outcome{reservation: reservation, attemptID: request.AttemptID, err: err}
-		}(i, sequencer)
+		}(i)
 	}
 	close(start)
 	var succeeded *outcome
@@ -385,28 +382,24 @@ func TestSQLiteSequencerConcurrentFirstSeenIdentity(t *testing.T) {
 	if identityCount != 1 || reservationCount != 1 {
 		t.Fatalf("concurrent rows = identities %d reservations %d, want 1/1", identityCount, reservationCount)
 	}
-	if err := first.Abandon(context.Background(), succeeded.reservation.Sequence, succeeded.attemptID); err != nil {
+	if err := sequencer.Abandon(context.Background(), succeeded.reservation.Sequence, succeeded.attemptID); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestSQLiteSequencerConcurrentConflictingFirstSeenClassifiesConflict(t *testing.T) {
 	t.Parallel()
-	first, db := openTestSequencer(t)
-	second, err := NewSQLite(context.Background(), db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sequencer, _ := openTestSequencer(t)
 	start := make(chan struct{})
 	errorsByRequest := make(chan error, 2)
-	for i, sequencer := range []*SQLiteSequencer{first, second} {
-		go func(i int, sequencer *SQLiteSequencer) {
+	for i := range 2 {
+		go func(i int) {
 			request := reserveRequest("same-batch", fmt.Sprintf("attempt-%d", i))
 			request.SequenceKey = fmt.Sprintf("sequence-%d", i)
 			<-start
 			_, err := sequencer.Reserve(context.Background(), request)
 			errorsByRequest <- err
-		}(i, sequencer)
+		}(i)
 	}
 	close(start)
 	var successes, conflicts int
@@ -592,16 +585,417 @@ func TestSQLiteSequencerAcquirePendingOldestUnowned(t *testing.T) {
 func TestSQLiteSequencerSecondConstructorDoesNotStealLiveAttempt(t *testing.T) {
 	t.Parallel()
 	first, db := openTestSequencer(t)
+	reservation := reserve(t, first, "live-owner", "attempt-one")
+	second, err := NewSQLite(context.Background(), db)
+	if second != nil || !errors.Is(err, ErrOwnerExists) {
+		t.Fatalf("second NewSQLite = (%p, %v), want nil/ErrOwnerExists", second, err)
+	}
+	var durableOwner string
+	if err := db.SQLDB().QueryRowContext(context.Background(), `
+		SELECT attempt_id
+		FROM ingest_visibility_reservations
+		WHERE sequence = ?`, reservation.Sequence).Scan(&durableOwner); err != nil {
+		t.Fatal(err)
+	}
+	if durableOwner != "attempt-one" {
+		t.Fatalf("durable owner after rejected constructor = %q, want attempt-one", durableOwner)
+	}
+	if err := first.Abandon(context.Background(), reservation.Sequence, "attempt-one"); err != nil {
+		t.Fatalf("original owner lost its live lease: %v", err)
+	}
+}
+
+func TestSQLiteSequencerSecondHandleToSameFileDoesNotStealLiveAttempt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "control.sqlite")
+	firstDB, err := control.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = firstDB.Close() })
+	first, err := NewSQLite(ctx, firstDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+	reservation := reserve(t, first, "same-file", "first-owner")
+
+	secondDB, err := control.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = secondDB.Close() })
+	second, err := NewSQLite(ctx, secondDB)
+	if second != nil || !errors.Is(err, ErrOwnerExists) {
+		t.Fatalf("second-file-handle NewSQLite = (%p, %v), want nil/ErrOwnerExists", second, err)
+	}
+	var durableOwner string
+	if err := firstDB.SQLDB().QueryRowContext(ctx, `
+		SELECT attempt_id
+		FROM ingest_visibility_reservations
+		WHERE sequence = ?`, reservation.Sequence).Scan(&durableOwner); err != nil {
+		t.Fatal(err)
+	}
+	if durableOwner != "first-owner" {
+		t.Fatalf("durable owner after rejected second handle = %q, want first-owner", durableOwner)
+	}
+	if err := first.Abandon(ctx, reservation.Sequence, "first-owner"); err != nil {
+		t.Fatalf("first handle lost its live lease: %v", err)
+	}
+}
+
+func TestSQLiteSequencerCloseReleasesDurableLeaseAfterCanceledOperation(t *testing.T) {
+	t.Parallel()
+	first, db := openTestSequencer(t)
 	reservation := reserve(t, first, "live", "attempt-one")
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := first.Release(
+		canceled,
+		reservation.Sequence,
+		"attempt-one",
+	); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled Release error = %v, want context.Canceled", err)
+	}
+	if first.leases.contains("attempt-one") {
+		t.Fatal("canceled Release retained a live process lease")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var durableOwner string
+	if err := db.SQLDB().QueryRowContext(context.Background(), `
+		SELECT attempt_id
+		FROM ingest_visibility_reservations
+		WHERE sequence = ?`, reservation.Sequence).Scan(&durableOwner); err != nil {
+		t.Fatal(err)
+	}
+	if durableOwner != "" {
+		t.Fatalf("durable owner after Close = %q, want empty", durableOwner)
+	}
 	second, err := NewSQLite(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := second.AcquirePending(context.Background(), "attempt-two"); err != nil || found {
-		t.Fatalf("second sequencer stole live attempt: found=%v error=%v", found, err)
+	t.Cleanup(func() { _ = second.Close() })
+	recovered, found, err := second.AcquirePending(context.Background(), "attempt-two")
+	if err != nil || !found {
+		t.Fatalf("reopen acquisition found=%v error=%v", found, err)
 	}
-	if err := first.Abandon(context.Background(), reservation.Sequence, "attempt-one"); err != nil {
+	if recovered.Sequence != reservation.Sequence || !recovered.PreviouslyReserved {
+		t.Fatalf("recovered reservation = %+v, want sequence %d", recovered, reservation.Sequence)
+	}
+	if err := second.Abandon(context.Background(), reservation.Sequence, "attempt-two"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSQLiteSequencerConstructorFailureDoesNotPoisonReopen(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "control.sqlite")
+	db, err := control.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if sequencer, err := NewSQLite(ctx, db); err == nil || sequencer != nil {
+		t.Fatalf("NewSQLite(closed database) = (%p, %v), want nil/error", sequencer, err)
+	}
+	if sequencer, err := NewSQLite(ctx, db); err == nil ||
+		sequencer != nil || errors.Is(err, ErrOwnerExists) {
+		t.Fatalf(
+			"second NewSQLite(closed database) = (%p, %v), want nil/non-owner error",
+			sequencer,
+			err,
+		)
+	}
+
+	reopened, err := control.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	sequencer, err := NewSQLite(ctx, reopened)
+	if err != nil {
+		t.Fatalf("NewSQLite(reopened database): %v", err)
+	}
+	if err := sequencer.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSQLiteSequencerShutdownCleansOutcomeAmbiguousLeaseBeforeBind(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	ctx := context.Background()
+	request := reserveRequest("ambiguous-commit", "ambiguous-owner")
+	if !sequencer.leases.activate(request.AttemptID) {
+		t.Fatal("activate outcome-ambiguous attempt = false, want true")
+	}
+
+	tx, err := db.SQLDB().BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rollback(tx)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE ingest_visibility_state
+		SET last_assigned = 1
+		WHERE singleton = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO ingest_batch_identities (
+			batch_key, sequence_key, payload_sha256,
+			first_visibility_seq, created_at_unix_micro
+		) VALUES (?, ?, ?, 1, ?)`,
+		request.BatchKey,
+		request.SequenceKey,
+		request.PayloadSHA256[:],
+		time.Now().UTC().UnixMicro(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO ingest_visibility_reservations (
+			sequence, batch_key, state, phase, attempt_id,
+			index_time_unix_milli, metadata, outbox,
+			created_at_unix_micro, committed_at_unix_micro
+		) VALUES (1, ?, 'reserved', 'unsent', ?, ?, ?, ?, ?, NULL)`,
+		request.BatchKey,
+		request.AttemptID,
+		request.IndexTime.UnixMilli(),
+		request.Metadata,
+		request.Outbox,
+		time.Now().UTC().UnixMicro(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	// This is the state after SQLite persists the transaction but Commit
+	// reports an error: Reserve's deferred failure path drops only the live
+	// process lease, while shutdown must conservatively clean the durable one.
+	sequencer.leases.deactivate(request.AttemptID)
+
+	if err := sequencer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var durableOwner string
+	if err := db.SQLDB().QueryRowContext(ctx, `
+		SELECT attempt_id
+		FROM ingest_visibility_reservations
+		WHERE sequence = 1`).Scan(&durableOwner); err != nil {
+		t.Fatal(err)
+	}
+	if durableOwner != "" {
+		t.Fatalf("durable owner after ambiguous-commit shutdown = %q, want empty", durableOwner)
+	}
+}
+
+func TestSQLiteSequencerCloseIsIdempotentAndRejectsOperations(t *testing.T) {
+	t.Parallel()
+	sequencer, _ := openTestSequencer(t)
+	if err := sequencer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if sequencer.db != nil || sequencer.leases != nil {
+		t.Fatalf("Close retained borrowed database or lease owner: db=%p leases=%p", sequencer.db, sequencer.leases)
+	}
+	if err := sequencer.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	ctx := context.Background()
+	request := reserveRequest("closed", "closed-attempt")
+	assertClosed := func(operation string, err error) {
+		t.Helper()
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("%s error = %v, want ErrClosed", operation, err)
+		}
+	}
+	_, _, err := sequencer.Lookup(ctx, request.BatchKey, request.SequenceKey, request.PayloadSHA256)
+	assertClosed("Lookup", err)
+	_, err = sequencer.Reserve(ctx, request)
+	assertClosed("Reserve", err)
+	_, _, err = sequencer.AcquirePending(ctx, request.AttemptID)
+	assertClosed("AcquirePending", err)
+	assertClosed("MarkSending", sequencer.MarkSending(ctx, 1, request.AttemptID))
+	assertClosed("Commit", sequencer.Commit(ctx, 1, request.AttemptID, testCommittedAt))
+	assertClosed("Release", sequencer.Release(ctx, 1, request.AttemptID))
+	assertClosed("Abandon", sequencer.Abandon(ctx, 1, request.AttemptID))
+	_, err = sequencer.Cutoff(ctx)
+	assertClosed("Cutoff", err)
+	_, err = sequencer.PruneTerminal(ctx, 0, 1)
+	assertClosed("PruneTerminal", err)
+}
+
+func TestSQLiteSequencerShutdownWithNoActiveLeasesDoesNotTouchDatabase(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequencer, err := NewSQLite(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sequencer.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown with no active leases after database close: %v", err)
+	}
+	if sequencer.db != nil || sequencer.leases != nil {
+		t.Fatalf(
+			"Shutdown retained borrowed state: db=%p leases=%p",
+			sequencer.db,
+			sequencer.leases,
+		)
+	}
+}
+
+func TestSQLiteSequencerZeroValueIsClosed(t *testing.T) {
+	t.Parallel()
+	var sequencer SQLiteSequencer
+	if err := sequencer.Close(); err != nil {
+		t.Fatalf("zero-value Close: %v", err)
+	}
+	if _, err := sequencer.Cutoff(context.Background()); !errors.Is(err, ErrClosed) {
+		t.Fatalf("zero-value Cutoff error = %v, want ErrClosed", err)
+	}
+}
+
+func TestSQLiteSequencerShutdownDeadlineFinalizesAfterBlockedOperationDrains(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	blocker := beginVisibilityWriteBlocker(t, db)
+	reserveResult := make(chan error, 1)
+	go func() {
+		_, err := sequencer.Reserve(
+			context.Background(),
+			reserveRequest("blocked-operation", "blocked-attempt"),
+		)
+		reserveResult <- err
+	}()
+	waitForVisibilityDBInUse(t, db, 2)
+
+	shutdownContext, cancelShutdown := context.WithTimeout(
+		context.Background(),
+		50*time.Millisecond,
+	)
+	defer cancelShutdown()
+	shutdownStarted := time.Now()
+	if err := sequencer.Shutdown(shutdownContext); !errors.Is(
+		err,
+		context.DeadlineExceeded,
+	) {
+		t.Fatalf("Shutdown behind blocked operation error = %v, want deadline", err)
+	}
+	if elapsed := time.Since(shutdownStarted); elapsed > time.Second {
+		t.Fatalf("Shutdown behind blocked operation returned after %s, want under 1s", elapsed)
+	}
+	if replacement, err := NewSQLite(context.Background(), db); replacement != nil ||
+		!errors.Is(err, ErrOwnerExists) {
+		t.Fatalf(
+			"replacement during timed-out shutdown = (%p, %v), want nil/ErrOwnerExists",
+			replacement,
+			err,
+		)
+	}
+	if err := blocker.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-reserveResult; err != nil {
+		t.Fatalf("blocked Reserve: %v", err)
+	}
+	replacement := waitForReplacementVisibilityOwner(t, db)
+	t.Cleanup(func() { _ = replacement.Close() })
+	recovered, found, err := replacement.AcquirePending(
+		context.Background(),
+		"recovered-attempt",
+	)
+	if err != nil || !found || recovered.BatchKey != "blocked-operation" {
+		t.Fatalf("recovered reservation = %+v found=%v error=%v", recovered, found, err)
+	}
+	if err := replacement.Abandon(
+		context.Background(),
+		recovered.Sequence,
+		"recovered-attempt",
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSQLiteSequencerShutdownDeadlineDoesNotAbandonDurableCleanup(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	reservation := reserve(t, sequencer, "blocked-cleanup", "cleanup-attempt")
+	blocker := beginVisibilityWriteBlocker(t, db)
+
+	shutdownContext, cancelShutdown := context.WithTimeout(
+		context.Background(),
+		50*time.Millisecond,
+	)
+	defer cancelShutdown()
+	shutdownStarted := time.Now()
+	if err := sequencer.Shutdown(shutdownContext); !errors.Is(
+		err,
+		context.DeadlineExceeded,
+	) {
+		t.Fatalf("Shutdown with blocked cleanup error = %v, want deadline", err)
+	}
+	if elapsed := time.Since(shutdownStarted); elapsed > time.Second {
+		t.Fatalf("Shutdown with blocked cleanup returned after %s, want under 1s", elapsed)
+	}
+	if replacement, err := NewSQLite(context.Background(), db); replacement != nil ||
+		!errors.Is(err, ErrOwnerExists) {
+		t.Fatalf(
+			"replacement after cleanup timeout = (%p, %v), want nil/ErrOwnerExists",
+			replacement,
+			err,
+		)
+	}
+	if err := blocker.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	replacement := waitForReplacementVisibilityOwner(t, db)
+	t.Cleanup(func() { _ = replacement.Close() })
+	var durableOwner string
+	if err := db.SQLDB().QueryRowContext(context.Background(), `
+		SELECT attempt_id
+		FROM ingest_visibility_reservations
+		WHERE sequence = ?`, reservation.Sequence).Scan(&durableOwner); err != nil {
+		t.Fatal(err)
+	}
+	if durableOwner != "" {
+		t.Fatalf("durable owner after retried cleanup = %q, want empty", durableOwner)
+	}
+}
+
+func TestSQLiteSequencerConcurrentCloseIsIdempotent(t *testing.T) {
+	t.Parallel()
+	sequencer, _ := openTestSequencer(t)
+	const callers = 16
+	start := make(chan struct{})
+	results := make(chan error, callers)
+	for range callers {
+		go func() {
+			<-start
+			results <- sequencer.Close()
+		}()
+	}
+	close(start)
+	for range callers {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -624,6 +1018,9 @@ func TestSQLiteSequencerRestartClearsLeaseAndPreservesOutbox(t *testing.T) {
 	if closeErr := db.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
+	if shutdownErr := sequencer.Shutdown(context.Background()); shutdownErr == nil {
+		t.Fatal("Shutdown after crash-close succeeded, want cleanup error")
+	}
 
 	db, err = control.Open(ctx, path)
 	if err != nil {
@@ -634,6 +1031,7 @@ func TestSQLiteSequencerRestartClearsLeaseAndPreservesOutbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = sequencer.Close() })
 	if _, reserveErr := sequencer.Reserve(ctx, reserveRequest("different-after-restart", "blocked-owner")); !errors.Is(reserveErr, ErrAmbiguousBarrier) {
 		t.Fatalf("Reserve() after ambiguous restart error = %v, want ErrAmbiguousBarrier", reserveErr)
 	}
@@ -998,7 +1396,67 @@ func openTestSequencer(t *testing.T) (*SQLiteSequencer, *control.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = sequencer.Close() })
 	return sequencer, db
+}
+
+func beginVisibilityWriteBlocker(t *testing.T, db *control.DB) *sql.Tx {
+	t.Helper()
+	tx, err := db.SQLDB().BeginTx(
+		context.Background(),
+		&sql.TxOptions{Isolation: sql.LevelSerializable},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(context.Background(), `
+		UPDATE ingest_visibility_state
+		SET last_assigned = last_assigned
+		WHERE singleton = 1`); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
+	return tx
+}
+
+func waitForVisibilityDBInUse(t *testing.T, db *control.DB, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if inUse := db.SQLDB().Stats().InUse; inUse >= want {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf(
+				"control database in-use connections = %d, want at least %d",
+				db.SQLDB().Stats().InUse,
+				want,
+			)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitForReplacementVisibilityOwner(
+	t *testing.T,
+	db *control.DB,
+) *SQLiteSequencer {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		replacement, err := NewSQLite(context.Background(), db)
+		if err == nil {
+			return replacement
+		}
+		if !errors.Is(err, ErrOwnerExists) {
+			t.Fatalf("construct replacement visibility owner: %v", err)
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("visibility owner remained registered after shutdown finalization")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func reserve(t *testing.T, sequencer *SQLiteSequencer, key, attemptID string) Reservation {

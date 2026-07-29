@@ -872,6 +872,7 @@ func spathStartClickHouse(t *testing.T, ctx context.Context) (clickhousedriver.C
 	if err != nil {
 		t.Fatalf("create spath visibility sequencer: %v", err)
 	}
+	t.Cleanup(func() { _ = sequencer.Close() })
 	store, err := Open(config, fixedRetention(30*24*time.Hour), sequencer)
 	if err != nil {
 		t.Fatalf("open spath store: %v", err)

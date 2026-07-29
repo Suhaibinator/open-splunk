@@ -256,6 +256,7 @@ func TestServerOwnedReconcilerResolvesGapAndAdvancesCommittedFrontier(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = sequencer.Close() })
 
 	firstBatch := validStoreBatch()
 	firstConnection := &fakeStoreConnection{batch: &fakeWriteBatch{sendErr: io.ErrUnexpectedEOF}}
@@ -319,6 +320,7 @@ func TestBackgroundReconcilerDrainsOutboxWithoutCollectorRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = sequencer.Close() })
 	connection := &fakeStoreConnection{batch: &fakeWriteBatch{sendErr: io.ErrUnexpectedEOF}}
 	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
 	if _, err := store.Store(ctx, validStoreBatch()); !isTransient(err) {
@@ -560,6 +562,7 @@ func TestStoreAttemptLeaseFencesConcurrentWriters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = sequencer.Close() })
 
 	gate := &gatedStoreConnection{
 		entered: make(chan struct{}),
@@ -638,6 +641,7 @@ func TestStorePermanentPreSendFailureDoesNotBlockLaterBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = sequencer.Close() })
 	bad := mustTestStoreWithVisibility(t, &fakeStoreConnection{batch: &fakeWriteBatch{
 		appendErr: errors.New("deterministic native conversion failure"),
 	}}, fixedRetention(time.Hour), sequencer)
@@ -675,6 +679,7 @@ func TestStoreRetryUsesPersistedRetentionBeforeLivePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = sequencer.Close() })
 	batch := validStoreBatch()
 	firstProvider := &fakeRetentionProvider{periods: map[string]time.Duration{"main": 72 * time.Hour}}
 	first := mustTestStoreWithVisibility(t, &fakeStoreConnection{batch: &fakeWriteBatch{
@@ -725,6 +730,7 @@ func TestStoreRetryReplaysLegacyUnalignedRetentionMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = sequencer.Close() })
 	batch := validStoreBatch()
 	first := mustTestStoreWithVisibility(t, &fakeStoreConnection{batch: &fakeWriteBatch{
 		sendErr: io.ErrUnexpectedEOF,

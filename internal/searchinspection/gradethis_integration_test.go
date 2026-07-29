@@ -227,6 +227,11 @@ func TestGradeThisInspectionServiceAgainstClickHouse(t *testing.T) {
 		_ = storeConnection.Close()
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := sequencer.Close(); err != nil {
+			t.Errorf("close GradeThis inspection visibility sequencer: %v", err)
+		}
+	})
 	store, err := clickhouse.NewStore(
 		storeConnection,
 		clickhouse.RetentionProviderFunc(
