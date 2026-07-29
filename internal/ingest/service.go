@@ -17,6 +17,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -39,13 +40,18 @@ type Config struct {
 	DefaultRetryAfter    time.Duration
 	Clock                func() time.Time
 	NewStreamID          func() string
-	TokenUseRecorder     CollectorTokenUseRecorder
+	SessionManager       CollectorSessionManager
 	StreamRegistry       CollectorStreamRegistry
+	SessionErrorHandler  func(error)
 }
 
 const defaultServerVersion = "development"
 
 const maximumTrustedAuthorizationIdentityBytes = 255
+const maximumAuthorizedCollectorIndexes = 256
+const collectorSessionCleanupTimeout = 5 * time.Second
+const collectorSessionCleanupAttempts = 3
+const collectorSessionCleanupRetryDelay = 10 * time.Millisecond
 
 func DefaultConfig() Config {
 	return Config{
@@ -65,15 +71,17 @@ func DefaultConfig() Config {
 type Service struct {
 	opensplunkv1.UnimplementedCollectorIngestServiceServer
 
-	config           Config
-	validator        *Validator
-	authorizer       Authorizer
-	tokenUseRecorder CollectorTokenUseRecorder
-	streamRegistry   CollectorStreamRegistry
-	store            EventStore
-	admissionMu      sync.Mutex
-	nextAdmission    uint64
-	admissions       map[string]map[CollectorStreamKey]collectorStreamAdmissionEntry
+	config         Config
+	validator      *Validator
+	authorizer     Authorizer
+	sessionManager CollectorSessionManager
+	streamRegistry CollectorStreamRegistry
+	store          EventStore
+	admissionMu    sync.Mutex
+	nextAdmission  uint64
+	admissions     map[string]map[CollectorStreamKey]collectorStreamAdmissionEntry
+	finalizersMu   sync.Mutex
+	finalizers     map[CollectorStreamKey]*collectorSessionFinalizer
 }
 
 func NewService(config Config, authorizer Authorizer, store EventStore) (*Service, error) {
@@ -125,6 +133,9 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 	if authorizer == nil {
 		return nil, errors.New("ingest authorizer is required")
 	}
+	if config.SessionManager == nil {
+		return nil, errors.New("ingest collector session manager is required")
+	}
 	if store == nil {
 		return nil, errors.New("ingest event store is required")
 	}
@@ -148,13 +159,14 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 		return nil, err
 	}
 	return &Service{
-		config:           config,
-		validator:        validator,
-		authorizer:       authorizer,
-		tokenUseRecorder: config.TokenUseRecorder,
-		streamRegistry:   config.StreamRegistry,
-		store:            store,
-		admissions:       make(map[string]map[CollectorStreamKey]collectorStreamAdmissionEntry),
+		config:         config,
+		validator:      validator,
+		authorizer:     authorizer,
+		sessionManager: config.SessionManager,
+		streamRegistry: config.StreamRegistry,
+		store:          store,
+		admissions:     make(map[string]map[CollectorStreamKey]collectorStreamAdmissionEntry),
+		finalizers:     make(map[CollectorStreamKey]*collectorSessionFinalizer),
 	}, nil
 }
 
@@ -190,12 +202,6 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 		admission.Superseded,
 	)
 	defer cancelAdmission()
-	authorizedIndexes := normalizedAuthorizedIndexes(authorization.AuthorizedIndexes, s.config.Limits.MaxIDBytes)
-	authorizedSet := make(map[string]struct{}, len(authorizedIndexes))
-	for _, index := range authorizedIndexes {
-		authorizedSet[index] = struct{}{}
-	}
-
 	received, stopReceiving := receiveCollectRequests(stream)
 	defer stopReceiving()
 	var firstResult collectRequestResult
@@ -225,33 +231,90 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 	if err := s.validateHello(hello, authorization); err != nil {
 		return err
 	}
+	helloSnapshot, err := collectorHelloSnapshot(hello)
+	if err != nil {
+		return collectorSnapshotRPCError(err)
+	}
 
 	streamID := s.config.NewStreamID()
 	if !validIdentifier(streamID, s.config.Limits.MaxIDBytes) {
 		return status.Error(codes.Internal, "failed to allocate collector stream ID")
 	}
-	acceptedAt := s.config.Clock().UTC()
-	if s.tokenUseRecorder != nil {
-		if err := s.tokenUseRecorder.RecordCollectorTokenUse(
-			admissionContext,
-			authorization.SubjectID,
-			acceptedAt,
-		); err != nil {
-			select {
-			case <-admission.Superseded:
-				return supersededStreamRPCError()
-			default:
-			}
-			return tokenUseRPCError(err)
+	releaseFinalization := s.lockCollectorFinalization(collectorKey)
+	finalizationLocked := true
+	defer func() {
+		if finalizationLocked {
+			releaseFinalization()
 		}
+	}()
+	if !s.streamAdmissionIsCurrent(admission) {
+		return supersededStreamRPCError()
 	}
-	lease, err := s.promoteStreamAdmission(admission, streamID)
+	acceptedAt := s.config.Clock().UTC()
+	session, err := s.sessionManager.Admit(
+		admissionContext,
+		token,
+		CollectorSessionAdmissionRequest{
+			CollectorID: hello.GetCollectorId(),
+			BootEpoch:   s.config.ServerInstanceID,
+			StreamID:    streamID,
+			AcceptedAt:  acceptedAt,
+			Hello:       helloSnapshot,
+		},
+	)
+	if err != nil {
+		select {
+		case <-admission.Superseded:
+			return supersededStreamRPCError()
+		default:
+		}
+		return sessionAdmissionRPCError(err)
+	}
+	// Arm exact, detached durable cleanup immediately after the commit. Every
+	// later validation, process activation, and Ready failure is covered.
+	defer s.disconnectCollectorSession(session.Lease)
+	if err := s.validateAdmittedSession(
+		authorization,
+		session,
+		hello.GetCollectorId(),
+		streamID,
+	); err != nil {
+		return err
+	}
+	authorization = cloneAuthorization(session.Authorization)
+	authorizedIndexes, indexesValid := normalizedAuthorizedIndexes(
+		authorization.AuthorizedIndexes,
+	)
+	if len(authorization.AuthorizedIndexes) == 0 {
+		return status.Error(
+			codes.Unauthenticated,
+			"collector authentication is no longer valid",
+		)
+	}
+	if !indexesValid {
+		return status.Error(
+			codes.Unavailable,
+			"collector admission service returned invalid index authority",
+		)
+	}
+	authorizedSet := make(map[string]struct{}, len(authorizedIndexes))
+	for _, index := range authorizedIndexes {
+		authorizedSet[index] = struct{}{}
+	}
+
+	lease, err := s.promoteStreamAdmission(admission, session.Lease)
 	if errors.Is(err, errStreamAdmissionSuperseded) {
+		return supersededStreamRPCError()
+	}
+	if errors.Is(err, ErrCollectorStreamActivationStale) ||
+		errors.Is(err, ErrCollectorStreamActivationConflict) {
 		return supersededStreamRPCError()
 	}
 	if err != nil {
 		return status.Error(codes.Unavailable, "collector stream admission is unavailable")
 	}
+	releaseFinalization()
+	finalizationLocked = false
 	cancelAdmission()
 	defer s.streamRegistry.Release(lease)
 	authorizationContext, cancelAuthorization := collectorSupersessionContext(
@@ -317,10 +380,33 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 		if expectedRequestSequence == math.MaxUint64 {
 			return status.Error(codes.ResourceExhausted, "collector stream sequence exhausted")
 		}
+		boundaryAt := s.config.Clock().UTC()
+		var heartbeatSnapshot *collectorfleet.Heartbeat
+		switch payload := request.GetPayload().(type) {
+		case *opensplunkv1.CollectRequest_Heartbeat:
+			if err := s.validateHeartbeat(payload.Heartbeat, &state); err != nil {
+				return err
+			}
+			snapshot, err := collectorHeartbeatSnapshot(
+				payload.Heartbeat,
+				request.GetStreamSequence(),
+				boundaryAt,
+			)
+			if err != nil {
+				return collectorSnapshotRPCError(err)
+			}
+			heartbeatSnapshot = &snapshot
+		}
 		var authorizationErr error
 		switch request.GetPayload().(type) {
 		case *opensplunkv1.CollectRequest_Heartbeat, *opensplunkv1.CollectRequest_Batch:
-			authorizationErr = s.refreshAuthorization(authorizationContext, token, &state)
+			authorizationErr = s.refreshLeaseAuthorization(
+				authorizationContext,
+				token,
+				lease.Lease,
+				boundaryAt,
+				&state,
+			)
 		}
 		if !s.streamRegistry.IsCurrent(lease) {
 			return supersededStreamRPCError()
@@ -334,8 +420,21 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 		case *opensplunkv1.CollectRequest_Hello:
 			return status.Error(codes.InvalidArgument, "CollectorHello may only appear as the first request")
 		case *opensplunkv1.CollectRequest_Heartbeat:
-			if err := s.validateHeartbeat(payload.Heartbeat, &state); err != nil {
-				return err
+			applied, err := s.sessionManager.RecordHeartbeat(
+				authorizationContext,
+				lease.Lease,
+				*heartbeatSnapshot,
+			)
+			if err != nil {
+				select {
+				case <-lease.Superseded:
+					return supersededStreamRPCError()
+				default:
+				}
+				return heartbeatPersistenceRPCError(err)
+			}
+			if !applied {
+				return supersededStreamRPCError()
 			}
 			continue
 		case *opensplunkv1.CollectRequest_Goodbye:
@@ -446,6 +545,45 @@ type collectorStreamAdmissionEntry struct {
 	superseded chan struct{}
 }
 
+type collectorSessionFinalizer struct {
+	mu         sync.Mutex
+	references uint64
+}
+
+func (s *Service) lockCollectorFinalization(
+	key CollectorStreamKey,
+) func() {
+	s.finalizersMu.Lock()
+	finalizer := s.finalizers[key]
+	if finalizer == nil {
+		finalizer = &collectorSessionFinalizer{}
+		s.finalizers[key] = finalizer
+	}
+	finalizer.references++
+	s.finalizersMu.Unlock()
+
+	finalizer.mu.Lock()
+	return func() {
+		finalizer.mu.Unlock()
+		s.finalizersMu.Lock()
+		defer s.finalizersMu.Unlock()
+		finalizer.references--
+		if finalizer.references == 0 {
+			delete(s.finalizers, key)
+		}
+	}
+}
+
+func (s *Service) streamAdmissionIsCurrent(
+	admission collectorStreamAdmission,
+) bool {
+	s.admissionMu.Lock()
+	defer s.admissionMu.Unlock()
+	byCollector := s.admissions[admission.SubjectKey]
+	current, ok := byCollector[admission.CollectorKey]
+	return ok && current.admission.Generation == admission.Generation
+}
+
 func (s *Service) acquireStreamAdmission(
 	subjectKey string,
 	collectorKey CollectorStreamKey,
@@ -489,7 +627,7 @@ func (s *Service) acquireStreamAdmission(
 
 func (s *Service) promoteStreamAdmission(
 	admission collectorStreamAdmission,
-	streamID string,
+	durableLease collectorfleet.Lease,
 ) (CollectorStreamLease, error) {
 	s.admissionMu.Lock()
 	defer s.admissionMu.Unlock()
@@ -499,7 +637,7 @@ func (s *Service) promoteStreamAdmission(
 	if !ok || current.admission.Generation != admission.Generation {
 		return CollectorStreamLease{}, errStreamAdmissionSuperseded
 	}
-	lease, err := s.streamRegistry.Claim(admission.CollectorKey, streamID)
+	lease, err := s.streamRegistry.Activate(durableLease)
 	if err != nil {
 		return CollectorStreamLease{}, err
 	}
@@ -525,10 +663,115 @@ func (s *Service) releaseStreamAdmission(admission collectorStreamAdmission) {
 	}
 }
 
-func (s *Service) refreshAuthorization(ctx context.Context, token string, state *streamState) error {
-	authorization, err := s.authorizer.Authorize(ctx, token)
+func (s *Service) validateAdmittedSession(
+	preliminary Authorization,
+	session CollectorSessionAdmission,
+	collectorID string,
+	streamID string,
+) error {
+	fresh := session.Authorization
+	if !validTrustedAuthorizationIdentity(fresh.SubjectID) ||
+		!validTrustedAuthorizationIdentity(fresh.TenantID) ||
+		!validIdentifier(fresh.CollectorID, s.config.Limits.MaxIDBytes) {
+		return status.Error(
+			codes.Unavailable,
+			"collector admission service is unavailable",
+		)
+	}
+	if fresh.SubjectID != preliminary.SubjectID ||
+		fresh.TenantID != preliminary.TenantID ||
+		fresh.CollectorID != preliminary.CollectorID {
+		return status.Error(
+			codes.Unavailable,
+			"collector admission service returned inconsistent authority",
+		)
+	}
+	lease := session.Lease
+	if fresh.CollectorID != collectorID ||
+		lease.TenantID != fresh.TenantID ||
+		lease.CollectorID != collectorID ||
+		lease.BootEpoch != s.config.ServerInstanceID ||
+		lease.StreamID != streamID ||
+		lease.Generation == 0 ||
+		lease.Generation > math.MaxInt64 {
+		return status.Error(
+			codes.Unavailable,
+			"collector admission service returned an invalid lease",
+		)
+	}
+	return nil
+}
+
+func (s *Service) disconnectCollectorSession(lease collectorfleet.Lease) {
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		collectorSessionCleanupTimeout,
+	)
+	defer cancel()
+	disconnectedAt := s.config.Clock().UTC()
+	var disconnectErr error
+	for attempt := 1; attempt <= collectorSessionCleanupAttempts; attempt++ {
+		_, disconnectErr = s.sessionManager.Disconnect(
+			ctx,
+			lease,
+			disconnectedAt,
+		)
+		if disconnectErr == nil {
+			return
+		}
+		if attempt == collectorSessionCleanupAttempts {
+			break
+		}
+		if !waitForCollectorSessionCleanupRetry(
+			ctx,
+			time.Duration(attempt)*collectorSessionCleanupRetryDelay,
+		) {
+			disconnectErr = ctx.Err()
+			break
+		}
+	}
+	if disconnectErr != nil && s.config.SessionErrorHandler != nil {
+		s.config.SessionErrorHandler(
+			fmt.Errorf("disconnect collector session: %w", disconnectErr),
+		)
+	}
+}
+
+func waitForCollectorSessionCleanupRetry(
+	ctx context.Context,
+	delay time.Duration,
+) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (s *Service) refreshLeaseAuthorization(
+	ctx context.Context,
+	token string,
+	lease collectorfleet.Lease,
+	checkedAt time.Time,
+	state *streamState,
+) error {
+	authorization, err := s.sessionManager.AuthorizeLease(
+		ctx,
+		token,
+		lease,
+		checkedAt,
+	)
 	if err != nil {
-		return authorizationRPCError(err, "collector authentication is no longer valid")
+		if errors.Is(err, ErrCollectorLeaseNotCurrent) {
+			return supersededStreamRPCError()
+		}
+		return authorizationRPCError(
+			err,
+			"collector authentication is no longer valid",
+		)
 	}
 	if authorization.CollectorID == "" {
 		return status.Error(codes.Unauthenticated, "collector authentication is no longer valid")
@@ -550,7 +793,21 @@ func (s *Service) refreshAuthorization(ctx context.Context, token string, state 
 	if authorization.SubjectID != state.authorization.SubjectID {
 		return status.Error(codes.PermissionDenied, "collector principal changed during the stream")
 	}
-	indexes := normalizedAuthorizedIndexes(authorization.AuthorizedIndexes, s.config.Limits.MaxIDBytes)
+	indexes, indexesValid := normalizedAuthorizedIndexes(
+		authorization.AuthorizedIndexes,
+	)
+	if len(authorization.AuthorizedIndexes) == 0 {
+		return status.Error(
+			codes.Unauthenticated,
+			"collector authentication is no longer valid",
+		)
+	}
+	if !indexesValid {
+		return status.Error(
+			codes.Unavailable,
+			"collector authentication service returned invalid index authority",
+		)
+	}
 	authorizedSet := make(map[string]struct{}, len(indexes))
 	for _, index := range indexes {
 		authorizedSet[index] = struct{}{}
@@ -571,16 +828,48 @@ func authorizationRPCError(err error, unauthorizedMessage string) error {
 	}
 }
 
-func tokenUseRPCError(err error) error {
+func sessionAdmissionRPCError(err error) error {
 	switch {
 	case errors.Is(err, ErrUnauthorized):
 		return status.Error(codes.Unauthenticated, "collector authentication is no longer valid")
+	case errors.Is(err, ErrCollectorDisabled):
+		return status.Error(codes.PermissionDenied, "collector is disabled")
+	case errors.Is(err, ErrInvalidCollectorSnapshot):
+		return status.Error(codes.InvalidArgument, "collector hello is invalid")
+	case errors.Is(err, ErrCollectorSessionCapacity):
+		return status.Error(codes.ResourceExhausted, "collector session capacity is exhausted")
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, context.Canceled.Error())
 	case errors.Is(err, context.DeadlineExceeded):
 		return status.Error(codes.DeadlineExceeded, context.DeadlineExceeded.Error())
 	default:
 		return status.Error(codes.Unavailable, "collector admission service is unavailable")
+	}
+}
+
+func collectorSnapshotRPCError(err error) error {
+	switch {
+	case errors.Is(err, ErrInvalidCollectorSnapshot):
+		return status.Error(codes.InvalidArgument, "collector lifecycle snapshot is invalid")
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return status.FromContextError(err).Err()
+	default:
+		return status.Error(codes.Unavailable, "collector lifecycle validation is unavailable")
+	}
+}
+
+func heartbeatPersistenceRPCError(err error) error {
+	switch {
+	case errors.Is(err, ErrCollectorLeaseNotCurrent):
+		return supersededStreamRPCError()
+	case errors.Is(err, ErrInvalidCollectorSnapshot):
+		return status.Error(codes.InvalidArgument, "collector heartbeat is invalid")
+	case errors.Is(err, ErrCollectorSessionCapacity):
+		return status.Error(codes.ResourceExhausted, "collector telemetry capacity is exhausted")
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return status.FromContextError(err).Err()
+	default:
+		return status.Error(codes.Unavailable, "collector heartbeat persistence is unavailable")
 	}
 }
 
@@ -628,7 +917,7 @@ func (s *Service) validateHello(hello *opensplunkv1.CollectorHello, authorizatio
 	}
 	for _, input := range hello.GetInputs() {
 		if input == nil || !validIdentifier(input.GetInputId(), s.config.Limits.MaxIDBytes) ||
-			!validIdentifier(input.GetIndexName(), s.config.Limits.MaxIDBytes) {
+			!validIndexName(input.GetIndexName()) {
 			return status.Error(codes.InvalidArgument, "hello contains an invalid input registration")
 		}
 	}
@@ -687,12 +976,15 @@ func bearerToken(ctx context.Context) (string, error) {
 	return parts[1], nil
 }
 
-func normalizedAuthorizedIndexes(indexes []string, maxIDBytes uint32) []string {
+func normalizedAuthorizedIndexes(indexes []string) ([]string, bool) {
+	if len(indexes) > maximumAuthorizedCollectorIndexes {
+		return nil, false
+	}
 	seen := make(map[string]struct{}, len(indexes))
 	result := make([]string, 0, len(indexes))
 	for _, index := range indexes {
-		if !validIdentifier(index, maxIDBytes) {
-			continue
+		if !validIndexName(index) {
+			return nil, false
 		}
 		if _, duplicate := seen[index]; duplicate {
 			continue
@@ -701,7 +993,7 @@ func normalizedAuthorizedIndexes(indexes []string, maxIDBytes uint32) []string {
 		result = append(result, index)
 	}
 	sort.Strings(result)
-	return result
+	return result, true
 }
 
 func randomID() string {

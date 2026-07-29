@@ -13,6 +13,8 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/collectoradmission"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/server"
@@ -119,6 +121,7 @@ func TestRuntimeIngestionTokenLastUseSurvivesHTTPGRPCReopen(t *testing.T) {
 	mismatchedCollectorID := "collector-runtime-attacker"
 	rejected, rejectionErr := runtimeCollectorHello(
 		t,
+		firstDB,
 		firstTokens,
 		created.GetPlaintextToken(),
 		mismatchedCollectorID,
@@ -145,6 +148,7 @@ func TestRuntimeIngestionTokenLastUseSurvivesHTTPGRPCReopen(t *testing.T) {
 
 	admitRuntimeCollectorStream(
 		t,
+		firstDB,
 		firstTokens,
 		created.GetPlaintextToken(),
 		collectorID,
@@ -265,6 +269,7 @@ func newRuntimeTokenHTTPHandlerForTest(
 
 func admitRuntimeCollectorStream(
 	t *testing.T,
+	db *control.DB,
 	tokens *auth.Store,
 	plaintextToken string,
 	collectorID string,
@@ -273,6 +278,7 @@ func admitRuntimeCollectorStream(
 	t.Helper()
 	response, err := runtimeCollectorHello(
 		t,
+		db,
 		tokens,
 		plaintextToken,
 		collectorID,
@@ -285,6 +291,7 @@ func admitRuntimeCollectorStream(
 
 func runtimeCollectorHello(
 	t *testing.T,
+	db *control.DB,
 	tokens *auth.Store,
 	plaintextToken string,
 	collectorID string,
@@ -296,7 +303,18 @@ func runtimeCollectorHello(
 	config.NewStreamID = func() string { return "stream-runtime-test" }
 	config.ServerInstanceID = "server-runtime-test"
 	config.ServerVersion = "runtime-test"
-	config.TokenUseRecorder = collectorTokenUseRecorder{store: tokens}
+	fleet, err := collectorfleet.New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admissions, err := collectoradmission.New(db, tokens, "tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.SessionManager = collectorSessionManager{
+		admission: admissions,
+		fleet:     fleet,
+	}
 	service, err := ingest.NewService(
 		config,
 		collectorAuthorizer{store: tokens, tenantID: "tenant-a"},

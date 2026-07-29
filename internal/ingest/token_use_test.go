@@ -44,17 +44,31 @@ func TestCollectRecordsTokenUseOncePerValidStreamAdmission(t *testing.T) {
 		calls   []tokenUseCall
 	)
 	config := testServiceConfig()
-	config.TokenUseRecorder = CollectorTokenUseRecorderFunc(func(
+	manager := newTestCollectorSessionManager(authorizer)
+	manager.admitFunc = func(
 		_ context.Context,
-		tokenID string,
-		acceptedAt time.Time,
-	) error {
+		bearer string,
+		request CollectorSessionAdmissionRequest,
+	) (CollectorSessionAdmission, error) {
+		if bearer != "one-time-secret" {
+			return CollectorSessionAdmission{}, ErrUnauthorized
+		}
+		authorization := Authorization{
+			SubjectID:         "token-safe-id",
+			TenantID:          "tenant-a",
+			CollectorID:       "collector-a",
+			AuthorizedIndexes: []string{"main"},
+		}
 		callsMu.Lock()
-		calls = append(calls, tokenUseCall{tokenID: tokenID, acceptedAt: acceptedAt})
+		calls = append(calls, tokenUseCall{
+			tokenID:    authorization.SubjectID,
+			acceptedAt: request.AcceptedAt,
+		})
 		callsMu.Unlock()
 		trace <- "record"
-		return nil
-	})
+		return manager.admissionFor(authorization, request), nil
+	}
+	config.SessionManager = manager
 
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer one-time-secret")
@@ -202,14 +216,18 @@ func TestCollectDoesNotRecordRejectedStreamAdmission(t *testing.T) {
 
 			var calls atomic.Uint32
 			config := testServiceConfig()
-			config.TokenUseRecorder = CollectorTokenUseRecorderFunc(func(
+			manager := newTestCollectorSessionManager(tt.authorizer)
+			manager.admitFunc = func(
 				context.Context,
 				string,
-				time.Time,
-			) error {
+				CollectorSessionAdmissionRequest,
+			) (CollectorSessionAdmission, error) {
 				calls.Add(1)
-				return nil
-			})
+				return CollectorSessionAdmission{}, errors.New(
+					"unexpected collector admission",
+				)
+			}
+			config.SessionManager = manager
 			if tt.configure != nil {
 				tt.configure(&config)
 			}
@@ -226,7 +244,7 @@ func TestCollectDoesNotRecordRejectedStreamAdmission(t *testing.T) {
 	}
 }
 
-func TestCollectMapsTokenUseRecorderFailuresBeforeReady(t *testing.T) {
+func TestCollectMapsSessionAdmissionFailuresBeforeReady(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -267,14 +285,16 @@ func TestCollectMapsTokenUseRecorderFailuresBeforeReady(t *testing.T) {
 
 			var calls atomic.Uint32
 			config := testServiceConfig()
-			config.TokenUseRecorder = CollectorTokenUseRecorderFunc(func(
+			manager := newTestCollectorSessionManager(staticTestAuthorizer())
+			manager.admitFunc = func(
 				context.Context,
 				string,
-				time.Time,
-			) error {
+				CollectorSessionAdmissionRequest,
+			) (CollectorSessionAdmission, error) {
 				calls.Add(1)
-				return tt.err
-			})
+				return CollectorSessionAdmission{}, tt.err
+			}
+			config.SessionManager = manager
 			harness := newServiceHarness(t, config, staticTestAuthorizer(), acceptingStore())
 			stream := harness.stream(t, "Bearer good-token")
 			sendHello(t, stream, 1, 1, 0)

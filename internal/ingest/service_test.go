@@ -74,6 +74,73 @@ func TestCollectAuthenticatesBearerTokenAndNegotiatesReady(t *testing.T) {
 	}
 }
 
+func TestCollectSupportsMaximumControlPlaneIndexNameEndToEnd(t *testing.T) {
+	t.Parallel()
+	indexName := strings.Repeat("a", 255)
+	authorization := Authorization{
+		SubjectID:         "token-maximum-index",
+		TenantID:          "tenant-a",
+		CollectorID:       "collector-a",
+		AuthorizedIndexes: []string{indexName},
+	}
+	authorizer := AuthorizerFunc(func(context.Context, string) (Authorization, error) {
+		return authorization, nil
+	})
+	var stored StoreBatch
+	store := EventStoreFunc(func(_ context.Context, batch StoreBatch) (StoreResult, error) {
+		stored = batch
+		return StoreResult{
+			Accepted:    uint32(len(batch.Events)),
+			CommittedAt: validationTestNow,
+		}, nil
+	})
+	harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
+	stream := harness.stream(t, "Bearer maximum-index-token")
+	if err := stream.Send(&opensplunkv1.CollectRequest{
+		StreamSequence: 1,
+		SentAt:         timestamppb.New(validationTestNow),
+		Payload: &opensplunkv1.CollectRequest_Hello{
+			Hello: &opensplunkv1.CollectorHello{
+				CollectorId:      "collector-a",
+				InstanceId:       "instance-a",
+				ProtocolMajor:    1,
+				CollectorVersion: "collector-test",
+				StartedAt:        timestamppb.New(validationTestNow.Add(-time.Hour)),
+				Inputs: []*opensplunkv1.CollectorInputRegistration{{
+					InputId:   "input-a",
+					InputType: opensplunkv1.CollectorInputType_COLLECTOR_INPUT_TYPE_FILE,
+					IndexName: indexName,
+				}},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ready := recvResponse(t, stream).GetReady()
+	if ready == nil ||
+		len(ready.GetAuthorizedIndexes()) != 1 ||
+		ready.GetAuthorizedIndexes()[0] != indexName {
+		t.Fatalf("Ready authorized indexes = %#v", ready.GetAuthorizedIndexes())
+	}
+	batch := validTestBatch(
+		"collector-a",
+		"batch-maximum-index",
+		1,
+		validTestEvent("event-maximum-index", indexName),
+	)
+	if err := stream.Send(batchRequest(2, batch)); err != nil {
+		t.Fatal(err)
+	}
+	ack := recvResponse(t, stream).GetBatchAck()
+	if ack == nil || ack.GetAcceptedEventCount() != 1 {
+		t.Fatalf("batch acknowledgment = %#v", ack)
+	}
+	if len(stored.Events) != 1 ||
+		stored.Events[0].Event.GetIndexName() != indexName {
+		t.Fatalf("stored maximum index batch = %#v", stored)
+	}
+}
+
 func TestNewServiceRejectsContradictoryOrMalformedBuildMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -583,6 +650,7 @@ func TestCollectRetryReusesFirstServerReceiveTime(t *testing.T) {
 func TestProcessBatchCommittedRetryBypassesMutablePolicy(t *testing.T) {
 	store := &recoverableTestStore{}
 	firstConfig := testServiceConfig()
+	firstConfig = withTestSessionManager(firstConfig, staticTestAuthorizer())
 	first, err := NewService(firstConfig, staticTestAuthorizer(), store)
 	if err != nil {
 		t.Fatal(err)
@@ -608,6 +676,7 @@ func TestProcessBatchCommittedRetryBypassesMutablePolicy(t *testing.T) {
 	retryConfig := testServiceConfig()
 	retryConfig.Limits.MaxBatchEvents = 1
 	retryConfig.Clock = func() time.Time { return validationTestNow.Add(HardMaxEventAge + time.Hour) }
+	retryConfig = withTestSessionManager(retryConfig, staticTestAuthorizer())
 	retry, err := NewService(retryConfig, staticTestAuthorizer(), store)
 	if err != nil {
 		t.Fatal(err)
@@ -628,6 +697,7 @@ func TestProcessBatchCommittedRetryBypassesMutablePolicy(t *testing.T) {
 func TestProcessBatchAllowsEarlierPendingRetryAfterLaterSuccess(t *testing.T) {
 	cfg := testServiceConfig()
 	cfg.MaxInFlightBatches = 2
+	cfg = withTestSessionManager(cfg, staticTestAuthorizer())
 	var calls []uint64
 	sequenceOneCalls := 0
 	store := EventStoreFunc(func(_ context.Context, batch StoreBatch) (StoreResult, error) {
@@ -672,6 +742,7 @@ func TestProcessBatchAllowsEarlierPendingRetryAfterLaterSuccess(t *testing.T) {
 func TestProcessBatchCapacityRetriesWithoutConsumingIdentity(t *testing.T) {
 	cfg := testServiceConfig()
 	cfg.MaxInFlightBatches = 1
+	cfg = withTestSessionManager(cfg, staticTestAuthorizer())
 	var calls []uint64
 	sequenceOneCalls := 0
 	store := EventStoreFunc(func(_ context.Context, batch StoreBatch) (StoreResult, error) {
@@ -732,7 +803,8 @@ func TestProcessBatchMapsDurableIdentityConflictToBatchReject(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			store := &durableIdentityConflictTestStore{conflictOnLookup: conflictOnLookup}
-			service, err := NewService(testServiceConfig(), staticTestAuthorizer(), store)
+			config := withTestSessionManager(testServiceConfig(), staticTestAuthorizer())
+			service, err := NewService(config, staticTestAuthorizer(), store)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -756,6 +828,7 @@ func TestProcessBatchMapsDurableIdentityConflictToBatchReject(t *testing.T) {
 func TestProcessBatchTerminallyRejectsExpandedDurableOutbox(t *testing.T) {
 	config := testServiceConfig()
 	config.Redaction.Replacement = strings.Repeat("r", 100)
+	config = withTestSessionManager(config, staticTestAuthorizer())
 	storeCalls := 0
 	store := EventStoreFunc(func(context.Context, StoreBatch) (StoreResult, error) {
 		storeCalls++
@@ -790,7 +863,8 @@ func TestProcessBatchTerminallyRejectsOversizedDurableOutcome(t *testing.T) {
 		storeCalls++
 		return StoreResult{}, nil
 	})
-	service, err := NewService(testServiceConfig(), staticTestAuthorizer(), store)
+	config := withTestSessionManager(testServiceConfig(), staticTestAuthorizer())
+	service, err := NewService(config, staticTestAuthorizer(), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1035,6 +1109,11 @@ type serviceHarness struct {
 
 func newServiceHarness(t *testing.T, cfg Config, authorizer Authorizer, store EventStore) *serviceHarness {
 	t.Helper()
+	if cfg.SessionManager == nil {
+		manager := newTestCollectorSessionManager(authorizer)
+		cfg.SessionManager = manager
+		authorizer = manager.preliminaryAuthorizer()
+	}
 	service, err := NewService(cfg, authorizer, store)
 	if err != nil {
 		t.Fatal(err)
@@ -1085,6 +1164,11 @@ func testServiceConfig() Config {
 	cfg.ProtocolMajor = 1
 	cfg.ProtocolMinor = 0
 	return cfg
+}
+
+func withTestSessionManager(config Config, authorizer Authorizer) Config {
+	config.SessionManager = newTestCollectorSessionManager(authorizer)
+	return config
 }
 
 func staticTestAuthorizer() Authorizer {

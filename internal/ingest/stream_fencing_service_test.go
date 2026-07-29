@@ -254,18 +254,23 @@ func TestCollectPreHelloTakeoverCancelsTokenUseRecording(t *testing.T) {
 	var recorderCalls atomic.Uint32
 	config := testServiceConfigWithUniqueStreamIDs()
 	config.MaxStreamsPerSubject = 1
-	config.TokenUseRecorder = CollectorTokenUseRecorderFunc(func(
+	manager := newTestCollectorSessionManager(staticTestAuthorizer())
+	manager.admitFunc = func(
 		ctx context.Context,
 		_ string,
-		_ time.Time,
-	) error {
+		request CollectorSessionAdmissionRequest,
+	) (CollectorSessionAdmission, error) {
 		if recorderCalls.Add(1) == 1 {
 			close(recordingStarted)
 			<-ctx.Done()
-			return ctx.Err()
+			return CollectorSessionAdmission{}, ctx.Err()
 		}
-		return nil
-	})
+		return manager.admissionFor(
+			boundTestAuthorization("token-1", "tenant-a", "collector-a"),
+			request,
+		), nil
+	}
+	config.SessionManager = manager
 	harness := newServiceHarness(t, config, staticTestAuthorizer(), acceptingStore())
 
 	first := harness.stream(t, "Bearer good-token")

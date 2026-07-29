@@ -8,11 +8,13 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -1377,7 +1379,13 @@ func TestSenderAgainstRealService(t *testing.T) {
 			AuthorizedIndexes: []string{"main"},
 		}, nil
 	})
-	svc, err := ingest.NewService(ingest.DefaultConfig(), authorizer, store)
+	config := realServiceIngestConfig(ingest.Authorization{
+		SubjectID:         "s1",
+		TenantID:          "t1",
+		CollectorID:       "collector-a",
+		AuthorizedIndexes: []string{"main"},
+	})
+	svc, err := ingest.NewService(config, authorizer, store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1425,7 +1433,13 @@ func TestSenderAgainstRealServicePartialRejectDeadLetters(t *testing.T) {
 			AuthorizedIndexes: []string{"main"},
 		}, nil
 	})
-	svc, err := ingest.NewService(ingest.DefaultConfig(), authorizer, store)
+	config := realServiceIngestConfig(ingest.Authorization{
+		SubjectID:         "s1",
+		TenantID:          "t1",
+		CollectorID:       "collector-a",
+		AuthorizedIndexes: []string{"main"},
+	})
+	svc, err := ingest.NewService(config, authorizer, store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1458,6 +1472,63 @@ func TestSenderAgainstRealServicePartialRejectDeadLetters(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+type realServiceSessionManager struct {
+	authorization ingest.Authorization
+	generation    atomic.Uint64
+}
+
+func realServiceIngestConfig(authorization ingest.Authorization) ingest.Config {
+	config := ingest.DefaultConfig()
+	config.SessionManager = &realServiceSessionManager{
+		authorization: authorization,
+	}
+	return config
+}
+
+func (manager *realServiceSessionManager) Admit(
+	_ context.Context,
+	_ string,
+	request ingest.CollectorSessionAdmissionRequest,
+) (ingest.CollectorSessionAdmission, error) {
+	return ingest.CollectorSessionAdmission{
+		Authorization: manager.authorization,
+		Lease: collectorfleet.Lease{
+			Scope: collectorfleet.Scope{
+				TenantID: manager.authorization.TenantID,
+			},
+			CollectorID: request.CollectorID,
+			BootEpoch:   request.BootEpoch,
+			StreamID:    request.StreamID,
+			Generation:  manager.generation.Add(1),
+		},
+	}, nil
+}
+
+func (manager *realServiceSessionManager) AuthorizeLease(
+	context.Context,
+	string,
+	collectorfleet.Lease,
+	time.Time,
+) (ingest.Authorization, error) {
+	return manager.authorization, nil
+}
+
+func (*realServiceSessionManager) RecordHeartbeat(
+	context.Context,
+	collectorfleet.Lease,
+	collectorfleet.Heartbeat,
+) (bool, error) {
+	return true, nil
+}
+
+func (*realServiceSessionManager) Disconnect(
+	context.Context,
+	collectorfleet.Lease,
+	time.Time,
+) (bool, error) {
+	return true, nil
 }
 
 func validLogEvent(id, index string) *opensplunkv1.LogEvent {

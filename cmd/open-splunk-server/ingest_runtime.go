@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -11,11 +13,21 @@ import (
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/collectoradmission"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 )
 
 const maximumDurableTenantIDBytes = 255
+
+func newCollectorBootEpoch() (string, error) {
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", fmt.Errorf("generate collector server boot epoch: %w", err)
+	}
+	return hex.EncodeToString(random[:]), nil
+}
 
 func normalizeRuntimeOptions(config *options) error {
 	if config == nil {
@@ -114,31 +126,154 @@ func (authorizer collectorAuthorizer) Authorize(ctx context.Context, token strin
 	}, nil
 }
 
-type collectorTokenUseStore interface {
-	RecordCollectorTokenUse(context.Context, string, time.Time) error
+type collectorAdmissionRuntimeStore interface {
+	Admit(
+		context.Context,
+		string,
+		collectoradmission.Request,
+	) (collectoradmission.Result, error)
+	AuthorizeLease(
+		context.Context,
+		string,
+		collectorfleet.Lease,
+		time.Time,
+	) (auth.Authentication, error)
 }
 
-type collectorTokenUseRecorder struct {
-	store collectorTokenUseStore
+type collectorFleetRuntimeStore interface {
+	RecordHeartbeat(
+		context.Context,
+		collectorfleet.Lease,
+		collectorfleet.Heartbeat,
+	) (bool, error)
+	Disconnect(
+		context.Context,
+		collectorfleet.Lease,
+		time.Time,
+	) (bool, error)
 }
 
-func (recorder collectorTokenUseRecorder) RecordCollectorTokenUse(
+type collectorSessionManager struct {
+	admission collectorAdmissionRuntimeStore
+	fleet     collectorFleetRuntimeStore
+}
+
+func (manager collectorSessionManager) Admit(
 	ctx context.Context,
-	tokenID string,
-	acceptedAt time.Time,
-) error {
-	if recorder.store == nil {
-		return errors.New("collector token-use persistence is unavailable")
+	bearer string,
+	request ingest.CollectorSessionAdmissionRequest,
+) (ingest.CollectorSessionAdmission, error) {
+	if manager.admission == nil {
+		return ingest.CollectorSessionAdmission{}, errors.New(
+			"collector admission persistence is unavailable",
+		)
 	}
-	if err := recorder.store.RecordCollectorTokenUse(ctx, tokenID, acceptedAt); err != nil {
-		if errors.Is(err, auth.ErrUnauthorized) ||
-			errors.Is(err, auth.ErrInactiveToken) {
-			return ingest.ErrUnauthorized
-		}
+	result, err := manager.admission.Admit(
+		ctx,
+		bearer,
+		collectoradmission.Request{
+			CollectorID: request.CollectorID,
+			BootEpoch:   request.BootEpoch,
+			StreamID:    request.StreamID,
+			AcceptedAt:  request.AcceptedAt,
+			Hello:       request.Hello,
+		},
+	)
+	if err != nil {
+		return ingest.CollectorSessionAdmission{}, mapCollectorSessionError(err)
+	}
+	return ingest.CollectorSessionAdmission{
+		Authorization: collectorAuthenticationAuthorization(
+			result.Authentication,
+			result.Lease.TenantID,
+		),
+		Lease: result.Lease,
+	}, nil
+}
+
+func (manager collectorSessionManager) AuthorizeLease(
+	ctx context.Context,
+	bearer string,
+	lease collectorfleet.Lease,
+	checkedAt time.Time,
+) (ingest.Authorization, error) {
+	if manager.admission == nil {
+		return ingest.Authorization{}, errors.New(
+			"collector admission persistence is unavailable",
+		)
+	}
+	authentication, err := manager.admission.AuthorizeLease(
+		ctx,
+		bearer,
+		lease,
+		checkedAt,
+	)
+	if err != nil {
+		return ingest.Authorization{}, mapCollectorSessionError(err)
+	}
+	return collectorAuthenticationAuthorization(
+		authentication,
+		lease.TenantID,
+	), nil
+}
+
+func (manager collectorSessionManager) RecordHeartbeat(
+	ctx context.Context,
+	lease collectorfleet.Lease,
+	heartbeat collectorfleet.Heartbeat,
+) (bool, error) {
+	if manager.fleet == nil {
+		return false, errors.New("collector fleet persistence is unavailable")
+	}
+	applied, err := manager.fleet.RecordHeartbeat(ctx, lease, heartbeat)
+	return applied, mapCollectorSessionError(err)
+}
+
+func (manager collectorSessionManager) Disconnect(
+	ctx context.Context,
+	lease collectorfleet.Lease,
+	receivedAt time.Time,
+) (bool, error) {
+	if manager.fleet == nil {
+		return false, errors.New("collector fleet persistence is unavailable")
+	}
+	applied, err := manager.fleet.Disconnect(ctx, lease, receivedAt)
+	return applied, mapCollectorSessionError(err)
+}
+
+func collectorAuthenticationAuthorization(
+	authentication auth.Authentication,
+	tenantID string,
+) ingest.Authorization {
+	return ingest.Authorization{
+		SubjectID:         authentication.TokenID,
+		TenantID:          tenantID,
+		CollectorID:       authentication.BoundCollectorID,
+		AuthorizedIndexes: append([]string(nil), authentication.AllowedIndexNames...),
+	}
+}
+
+func mapCollectorSessionError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, auth.ErrUnauthorized),
+		errors.Is(err, auth.ErrInactiveToken):
+		return ingest.ErrUnauthorized
+	case errors.Is(err, collectoradmission.ErrLeaseNotCurrent):
+		return ingest.ErrCollectorLeaseNotCurrent
+	case errors.Is(err, collectorfleet.ErrCollectorDisabled):
+		return ingest.ErrCollectorDisabled
+	case errors.Is(err, control.ErrInvalidArgument):
+		return ingest.ErrInvalidCollectorSnapshot
+	case errors.Is(err, control.ErrCapacityExceeded):
+		return ingest.ErrCollectorSessionCapacity
+	default:
 		return err
 	}
-	return nil
 }
+
+var _ ingest.CollectorSessionManager = collectorSessionManager{}
 
 type indexRetentionCatalog interface {
 	GetIndexByName(context.Context, string) (control.Index, error)

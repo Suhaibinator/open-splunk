@@ -83,7 +83,8 @@ func TestBatchRejectNeverReflectsOversizedUnvalidatedScalars(t *testing.T) {
 
 func TestCollectorMismatchBeforeBatchIDValidationStillReturnsBoundedRejection(t *testing.T) {
 	t.Parallel()
-	service, err := NewService(testServiceConfig(), staticTestAuthorizer(), acceptingStore())
+	config := withTestSessionManager(testServiceConfig(), staticTestAuthorizer())
+	service, err := NewService(config, staticTestAuthorizer(), acceptingStore())
 	if err != nil {
 		t.Fatal(err)
 	}

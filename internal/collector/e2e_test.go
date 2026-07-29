@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collector/config"
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -119,7 +121,17 @@ func startIngestServer(t *testing.T, store ingest.EventStore) string {
 			AuthorizedIndexes: []string{e2eIndex},
 		}, nil
 	})
-	svc, err := ingest.NewService(ingest.DefaultConfig(), authorizer, store)
+	authorization := ingest.Authorization{
+		SubjectID:         "e2e-subject",
+		TenantID:          "e2e-tenant",
+		CollectorID:       e2eCollectorID,
+		AuthorizedIndexes: []string{e2eIndex},
+	}
+	config := ingest.DefaultConfig()
+	config.SessionManager = &e2eCollectorSessionManager{
+		authorization: authorization,
+	}
+	svc, err := ingest.NewService(config, authorizer, store)
 	if err != nil {
 		t.Fatalf("ingest.NewService: %v", err)
 	}
@@ -133,6 +145,55 @@ func startIngestServer(t *testing.T, store ingest.EventStore) string {
 	go func() { _ = server.Serve(lis) }()
 	t.Cleanup(server.Stop)
 	return lis.Addr().String()
+}
+
+type e2eCollectorSessionManager struct {
+	authorization ingest.Authorization
+	generation    atomic.Uint64
+}
+
+func (manager *e2eCollectorSessionManager) Admit(
+	_ context.Context,
+	_ string,
+	request ingest.CollectorSessionAdmissionRequest,
+) (ingest.CollectorSessionAdmission, error) {
+	return ingest.CollectorSessionAdmission{
+		Authorization: manager.authorization,
+		Lease: collectorfleet.Lease{
+			Scope: collectorfleet.Scope{
+				TenantID: manager.authorization.TenantID,
+			},
+			CollectorID: request.CollectorID,
+			BootEpoch:   request.BootEpoch,
+			StreamID:    request.StreamID,
+			Generation:  manager.generation.Add(1),
+		},
+	}, nil
+}
+
+func (manager *e2eCollectorSessionManager) AuthorizeLease(
+	context.Context,
+	string,
+	collectorfleet.Lease,
+	time.Time,
+) (ingest.Authorization, error) {
+	return manager.authorization, nil
+}
+
+func (*e2eCollectorSessionManager) RecordHeartbeat(
+	context.Context,
+	collectorfleet.Lease,
+	collectorfleet.Heartbeat,
+) (bool, error) {
+	return true, nil
+}
+
+func (*e2eCollectorSessionManager) Disconnect(
+	context.Context,
+	collectorfleet.Lease,
+	time.Time,
+) (bool, error) {
+	return true, nil
 }
 
 // writeE2EConfig writes a real collector YAML file wiring one ndjson file input

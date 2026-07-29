@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/collectoradmission"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 )
@@ -124,50 +126,115 @@ func TestCollectorAuthorizerClassifiesOnlyCredentialFailuresAsUnauthorized(t *te
 	}
 }
 
-func TestCollectorTokenUseRecorderPassesSafeAdmissionMetadata(t *testing.T) {
+func TestCollectorSessionManagerAdmitsAndDetachesFreshAuthority(t *testing.T) {
 	t.Parallel()
 	acceptedAt := time.Date(2026, 7, 28, 12, 34, 56, 123_456_000, time.UTC)
-	store := &fakeCollectorTokenUseStore{}
-	recorder := collectorTokenUseRecorder{store: store}
-
-	if err := recorder.RecordCollectorTokenUse(context.Background(), "token-safe-id", acceptedAt); err != nil {
-		t.Fatalf("RecordCollectorTokenUse() error = %v", err)
+	indexes := []string{"audit", "main"}
+	lease := collectorfleet.Lease{
+		Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+		CollectorID: "collector-a",
+		BootEpoch:   "boot-a",
+		StreamID:    "stream-a",
+		Generation:  7,
 	}
-	if store.calls != 1 || store.tokenID != "token-safe-id" || !store.acceptedAt.Equal(acceptedAt) {
-		t.Fatalf(
-			"recorded use = calls:%d token:%q at:%v",
-			store.calls,
-			store.tokenID,
-			store.acceptedAt,
-		)
+	store := &fakeCollectorAdmissionRuntimeStore{
+		admitResult: collectoradmission.Result{
+			Authentication: auth.Authentication{
+				TokenID:           "token-safe-id",
+				BoundCollectorID:  "collector-a",
+				AllowedIndexNames: indexes,
+			},
+			Lease: lease,
+		},
+	}
+	manager := collectorSessionManager{admission: store}
+	request := ingest.CollectorSessionAdmissionRequest{
+		CollectorID: "collector-a",
+		BootEpoch:   "boot-a",
+		StreamID:    "stream-a",
+		AcceptedAt:  acceptedAt,
+		Hello: collectorfleet.Hello{
+			InstanceID: "instance-a",
+		},
+	}
+	got, err := manager.Admit(context.Background(), "private-bearer", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.admitBearer != "private-bearer" ||
+		store.admitRequest.CollectorID != request.CollectorID ||
+		!store.admitRequest.AcceptedAt.Equal(acceptedAt) {
+		t.Fatalf("forwarded admission = bearer:%q request:%+v", store.admitBearer, store.admitRequest)
+	}
+	if got.Lease != lease ||
+		got.Authorization.SubjectID != "token-safe-id" ||
+		got.Authorization.TenantID != "tenant-a" ||
+		got.Authorization.CollectorID != "collector-a" {
+		t.Fatalf("admission = %+v", got)
+	}
+	got.Authorization.AuthorizedIndexes[0] = "changed"
+	if indexes[0] != "audit" {
+		t.Fatal("admission authorization aliases persistence result")
 	}
 }
 
-func TestCollectorTokenUseRecorderClassifiesOnlyInactiveTokensAsUnauthorized(t *testing.T) {
+func TestCollectorSessionManagerMapsOnlyKnownBoundaryErrors(t *testing.T) {
 	t.Parallel()
-	recorder := collectorTokenUseRecorder{}
-	if err := recorder.RecordCollectorTokenUse(context.Background(), "token-id", time.Now()); err == nil ||
-		errors.Is(err, ingest.ErrUnauthorized) {
-		t.Fatalf("missing-store error = %v, want operational error", err)
-	}
-
-	store := &fakeCollectorTokenUseStore{}
-	recorder.store = store
-	for _, inactiveErr := range []error{
-		auth.ErrUnauthorized,
-		auth.ErrInactiveToken,
-	} {
-		store.err = inactiveErr
-		if err := recorder.RecordCollectorTokenUse(context.Background(), "token-id", time.Now()); !errors.Is(err, ingest.ErrUnauthorized) {
-			t.Fatalf("inactive-token error = %v, want ingest.ErrUnauthorized", err)
-		}
-	}
-
 	backendErr := errors.New("sqlite unavailable")
-	store.err = backendErr
-	if err := recorder.RecordCollectorTokenUse(context.Background(), "token-id", time.Now()); !errors.Is(err, backendErr) ||
-		errors.Is(err, ingest.ErrUnauthorized) {
-		t.Fatalf("backend error classification = %v", err)
+	tests := []struct {
+		name          string
+		err           error
+		want          error
+		knownBoundary bool
+	}{
+		{
+			name:          "credential",
+			err:           auth.ErrUnauthorized,
+			want:          ingest.ErrUnauthorized,
+			knownBoundary: true,
+		},
+		{
+			name:          "inactive",
+			err:           auth.ErrInactiveToken,
+			want:          ingest.ErrUnauthorized,
+			knownBoundary: true,
+		},
+		{
+			name:          "lease",
+			err:           collectoradmission.ErrLeaseNotCurrent,
+			want:          ingest.ErrCollectorLeaseNotCurrent,
+			knownBoundary: true,
+		},
+		{
+			name:          "disabled",
+			err:           collectorfleet.ErrCollectorDisabled,
+			want:          ingest.ErrCollectorDisabled,
+			knownBoundary: true,
+		},
+		{
+			name:          "invalid",
+			err:           control.ErrInvalidArgument,
+			want:          ingest.ErrInvalidCollectorSnapshot,
+			knownBoundary: true,
+		},
+		{
+			name:          "capacity",
+			err:           control.ErrCapacityExceeded,
+			want:          ingest.ErrCollectorSessionCapacity,
+			knownBoundary: true,
+		},
+		{name: "backend", err: backendErr, want: backendErr},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mapped := mapCollectorSessionError(test.err)
+			if !errors.Is(mapped, test.want) {
+				t.Fatalf("mapped error = %v, want %v", mapped, test.want)
+			}
+			if test.knownBoundary && errors.Is(mapped, backendErr) {
+				t.Fatalf("known error mapped as backend failure: %v", mapped)
+			}
+		})
 	}
 }
 
@@ -215,22 +282,30 @@ func (store fakeCollectorAuthenticationStore) Authenticate(context.Context, stri
 	return store.authentication, store.err
 }
 
-type fakeCollectorTokenUseStore struct {
-	tokenID    string
-	acceptedAt time.Time
-	calls      int
-	err        error
+type fakeCollectorAdmissionRuntimeStore struct {
+	admitBearer  string
+	admitRequest collectoradmission.Request
+	admitResult  collectoradmission.Result
+	admitErr     error
 }
 
-func (store *fakeCollectorTokenUseStore) RecordCollectorTokenUse(
+func (store *fakeCollectorAdmissionRuntimeStore) Admit(
 	_ context.Context,
-	tokenID string,
-	acceptedAt time.Time,
-) error {
-	store.calls++
-	store.tokenID = tokenID
-	store.acceptedAt = acceptedAt
-	return store.err
+	bearer string,
+	request collectoradmission.Request,
+) (collectoradmission.Result, error) {
+	store.admitBearer = bearer
+	store.admitRequest = request
+	return store.admitResult, store.admitErr
+}
+
+func (*fakeCollectorAdmissionRuntimeStore) AuthorizeLease(
+	context.Context,
+	string,
+	collectorfleet.Lease,
+	time.Time,
+) (auth.Authentication, error) {
+	return auth.Authentication{}, errors.New("unexpected lease authorization")
 }
 
 type fakeIndexRetentionCatalog struct {

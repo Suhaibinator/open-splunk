@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 )
 
 func TestStreamAdmissionsBoundDistinctKeysAndPromoteOnlyNewestAttempt(t *testing.T) {
@@ -42,10 +44,16 @@ func TestStreamAdmissionsBoundDistinctKeysAndPromoteOnlyNewestAttempt(t *testing
 		t.Fatal("same-key replacement did not supersede the older admission")
 	}
 	service.releaseStreamAdmission(first)
-	if _, err := service.promoteStreamAdmission(first, "stream-old"); !errors.Is(err, errStreamAdmissionSuperseded) {
+	if _, err := service.promoteStreamAdmission(
+		first,
+		durableStreamLease(key, "boot-a", "stream-old", 1),
+	); !errors.Is(err, errStreamAdmissionSuperseded) {
 		t.Fatalf("stale promotion error = %v, want superseded", err)
 	}
-	lease, err := service.promoteStreamAdmission(second, "stream-current")
+	lease, err := service.promoteStreamAdmission(
+		second,
+		durableStreamLease(key, "boot-a", "stream-current", 2),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,19 +73,23 @@ func TestInMemoryCollectorStreamRegistrySupersedesAndConditionallyReleases(t *te
 	registry := NewInMemoryCollectorStreamRegistry()
 	key := CollectorStreamKey{TenantID: "tenant-a", CollectorID: "collector-a"}
 
-	first, err := registry.Claim(key, "stream-a")
+	firstDurable := durableStreamLease(key, "boot-a", "stream-a", 41)
+	first, err := registry.Activate(firstDurable)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Generation == 0 || first.StreamID != "stream-a" || !registry.IsCurrent(first) {
+	if first.Lease != firstDurable || !registry.IsCurrent(first) {
 		t.Fatalf("first lease = %#v, current = %t", first, registry.IsCurrent(first))
 	}
 
-	second, err := registry.Claim(key, "stream-b")
+	secondDurable := durableStreamLease(key, "boot-b", "stream-b", 42)
+	second, err := registry.Activate(secondDurable)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.Generation <= first.Generation || !registry.IsCurrent(second) || registry.IsCurrent(first) {
+	if second.Lease != secondDurable ||
+		!registry.IsCurrent(second) ||
+		registry.IsCurrent(first) {
 		t.Fatalf("leases after takeover: first=%#v second=%#v", first, second)
 	}
 	select {
@@ -91,21 +103,68 @@ func TestInMemoryCollectorStreamRegistrySupersedesAndConditionallyReleases(t *te
 	default:
 	}
 
-	registry.Release(first)
-	if !registry.IsCurrent(second) {
-		t.Fatal("stale conditional release deleted its successor")
+	for name, stale := range map[string]CollectorStreamLease{
+		"prior activation": first,
+		"wrong boot": {
+			Lease: collectorfleet.Lease{
+				Scope:       second.Scope,
+				CollectorID: second.CollectorID,
+				BootEpoch:   "boot-c",
+				StreamID:    second.StreamID,
+				Generation:  second.Generation,
+			},
+			Superseded: second.Superseded,
+		},
+		"wrong stream": {
+			Lease: collectorfleet.Lease{
+				Scope:       second.Scope,
+				CollectorID: second.CollectorID,
+				BootEpoch:   second.BootEpoch,
+				StreamID:    "stream-c",
+				Generation:  second.Generation,
+			},
+			Superseded: second.Superseded,
+		},
+		"wrong generation": {
+			Lease: collectorfleet.Lease{
+				Scope:       second.Scope,
+				CollectorID: second.CollectorID,
+				BootEpoch:   second.BootEpoch,
+				StreamID:    second.StreamID,
+				Generation:  second.Generation + 1,
+			},
+			Superseded: second.Superseded,
+		},
+		"forged activation token": {
+			Lease:      second.Lease,
+			Superseded: make(chan struct{}),
+		},
+	} {
+		if registry.IsCurrent(stale) {
+			t.Fatalf("%s lease was spuriously current", name)
+		}
+		registry.Release(stale)
+		if !registry.IsCurrent(second) {
+			t.Fatalf("%s conditional release deleted its successor", name)
+		}
 	}
 	registry.Release(second)
 	if registry.IsCurrent(second) {
 		t.Fatal("current lease remained after release")
 	}
 
-	third, err := registry.Claim(key, "stream-a")
+	thirdDurable := durableStreamLease(key, "boot-c", "stream-c", 43)
+	third, err := registry.Activate(thirdDurable)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if third.Generation <= second.Generation {
-		t.Fatalf("generation after inactive interval = %d, want > %d", third.Generation, second.Generation)
+	if third.Lease != thirdDurable || !registry.IsCurrent(third) {
+		t.Fatalf("third lease = %#v, current = %t", third, registry.IsCurrent(third))
+	}
+	select {
+	case <-second.Superseded:
+		t.Fatal("new activation canceled a handler that had already released")
+	default:
 	}
 }
 
@@ -120,7 +179,12 @@ func TestInMemoryCollectorStreamRegistryScopesLeasesByTenantAndCollector(t *test
 	}
 	leases := make([]CollectorStreamLease, 0, len(keys))
 	for index, key := range keys {
-		lease, err := registry.Claim(key, "stream-"+string(rune('a'+index)))
+		lease, err := registry.Activate(durableStreamLease(
+			key,
+			"boot-"+string(rune('a'+index)),
+			"stream-"+string(rune('a'+index)),
+			1,
+		))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -138,26 +202,32 @@ func TestInMemoryCollectorStreamRegistryScopesLeasesByTenantAndCollector(t *test
 	}
 }
 
-func TestInMemoryCollectorStreamRegistryConcurrentClaimsLeaveOneCurrent(t *testing.T) {
+func TestInMemoryCollectorStreamRegistryConcurrentActivationsLeaveHighestCurrent(t *testing.T) {
 	t.Parallel()
 
-	const claims = 64
+	const activations = 64
 	registry := NewInMemoryCollectorStreamRegistry()
 	key := CollectorStreamKey{TenantID: "tenant-a", CollectorID: "collector-a"}
-	leases := make([]CollectorStreamLease, claims)
-	errs := make([]error, claims)
+	leases := make([]CollectorStreamLease, activations)
+	errs := make([]error, activations)
 	var ready sync.WaitGroup
 	var start sync.WaitGroup
-	ready.Add(claims)
+	ready.Add(activations)
 	start.Add(1)
 	var workers sync.WaitGroup
-	workers.Add(claims)
-	for index := range claims {
+	workers.Add(activations)
+	for index := range activations {
 		go func() {
 			defer workers.Done()
 			ready.Done()
 			start.Wait()
-			leases[index], errs[index] = registry.Claim(key, "stream")
+			generation := uint64(index + 1)
+			leases[index], errs[index] = registry.Activate(durableStreamLease(
+				key,
+				"boot-a",
+				"stream-"+strconv.Itoa(index+1),
+				generation,
+			))
 		}()
 	}
 	ready.Wait()
@@ -165,25 +235,39 @@ func TestInMemoryCollectorStreamRegistryConcurrentClaimsLeaveOneCurrent(t *testi
 	workers.Wait()
 
 	current := 0
-	var highest uint64
-	generations := make(map[uint64]struct{}, claims)
+	var highestSuccessful uint64
 	for index, lease := range leases {
+		generation := uint64(index + 1)
+		if errors.Is(errs[index], ErrCollectorStreamActivationStale) {
+			continue
+		}
 		if errs[index] != nil {
-			t.Fatalf("Claim(%d): %v", index, errs[index])
+			t.Fatalf("Activate(%d): %v", generation, errs[index])
 		}
-		if _, duplicate := generations[lease.Generation]; duplicate {
-			t.Fatalf("duplicate generation %d", lease.Generation)
+		if lease.Generation != generation {
+			t.Fatalf("Activate(%d) installed generation %d", generation, lease.Generation)
 		}
-		generations[lease.Generation] = struct{}{}
-		if lease.Generation > highest {
-			highest = lease.Generation
+		if lease.Generation > highestSuccessful {
+			highestSuccessful = lease.Generation
 		}
 	}
+	if highestSuccessful != activations {
+		t.Fatalf("highest successful generation = %d, want %d", highestSuccessful, activations)
+	}
 	for _, lease := range leases {
+		if lease.Generation == 0 {
+			continue
+		}
 		if registry.IsCurrent(lease) {
 			current++
-			if lease.Generation != highest {
-				t.Fatalf("current generation = %d, highest = %d", lease.Generation, highest)
+			if lease.Generation != activations {
+				t.Fatalf("current generation = %d, highest = %d", lease.Generation, activations)
+			}
+		} else {
+			select {
+			case <-lease.Superseded:
+			default:
+				t.Fatalf("successful generation %d is neither current nor canceled", lease.Generation)
 			}
 		}
 	}
@@ -192,32 +276,211 @@ func TestInMemoryCollectorStreamRegistryConcurrentClaimsLeaveOneCurrent(t *testi
 	}
 }
 
-func TestInMemoryCollectorStreamRegistryRejectsInvalidClaimsAndExhaustion(t *testing.T) {
+func TestInMemoryCollectorStreamRegistryRejectsIncompleteOrUnsupportedLeases(t *testing.T) {
 	t.Parallel()
 
 	registry := NewInMemoryCollectorStreamRegistry()
 	for _, test := range []struct {
-		name     string
-		key      CollectorStreamKey
-		streamID string
+		name  string
+		lease collectorfleet.Lease
 	}{
-		{name: "empty tenant", key: CollectorStreamKey{CollectorID: "collector-a"}, streamID: "stream-a"},
-		{name: "empty collector", key: CollectorStreamKey{TenantID: "tenant-a"}, streamID: "stream-a"},
-		{name: "empty stream", key: CollectorStreamKey{TenantID: "tenant-a", CollectorID: "collector-a"}},
+		{
+			name: "empty tenant",
+			lease: durableStreamLease(
+				CollectorStreamKey{CollectorID: "collector-a"},
+				"boot-a",
+				"stream-a",
+				1,
+			),
+		},
+		{
+			name: "empty collector",
+			lease: durableStreamLease(
+				CollectorStreamKey{TenantID: "tenant-a"},
+				"boot-a",
+				"stream-a",
+				1,
+			),
+		},
+		{
+			name: "empty boot",
+			lease: durableStreamLease(
+				CollectorStreamKey{TenantID: "tenant-a", CollectorID: "collector-a"},
+				"",
+				"stream-a",
+				1,
+			),
+		},
+		{
+			name: "empty stream",
+			lease: durableStreamLease(
+				CollectorStreamKey{TenantID: "tenant-a", CollectorID: "collector-a"},
+				"boot-a",
+				"",
+				1,
+			),
+		},
+		{
+			name: "zero generation",
+			lease: durableStreamLease(
+				CollectorStreamKey{TenantID: "tenant-a", CollectorID: "collector-a"},
+				"boot-a",
+				"stream-a",
+				0,
+			),
+		},
+		{
+			name: "generation outside durable range",
+			lease: durableStreamLease(
+				CollectorStreamKey{TenantID: "tenant-a", CollectorID: "collector-a"},
+				"boot-a",
+				"stream-a",
+				uint64(math.MaxInt64)+1,
+			),
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := registry.Claim(test.key, test.streamID); err == nil {
-				t.Fatal("Claim() error = nil")
+			if _, err := registry.Activate(test.lease); err == nil {
+				t.Fatal("Activate() error = nil")
 			}
 		})
 	}
+}
 
-	registry.nextGeneration = math.MaxUint64
-	if _, err := registry.Claim(
-		CollectorStreamKey{TenantID: "tenant-a", CollectorID: "collector-a"},
+func TestInMemoryCollectorStreamRegistryRejectsReverseCompletionAndEqualGeneration(t *testing.T) {
+	t.Parallel()
+
+	registry := NewInMemoryCollectorStreamRegistry()
+	key := CollectorStreamKey{TenantID: "tenant-a", CollectorID: "collector-a"}
+	newerDurable := durableStreamLease(key, "boot-a", "stream-new", 2)
+	newer, err := registry.Activate(newerDurable)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	olderDurable := durableStreamLease(key, "boot-a", "stream-old", 1)
+	if _, err := registry.Activate(olderDurable); !errors.Is(
+		err,
+		ErrCollectorStreamActivationStale,
+	) {
+		t.Fatalf("reverse-completed older activation error = %v, want stale", err)
+	}
+	if !registry.IsCurrent(newer) {
+		t.Fatal("reverse-completed older activation displaced the newer handler")
+	}
+	select {
+	case <-newer.Superseded:
+		t.Fatal("rejected older activation canceled the newer handler")
+	default:
+	}
+
+	for name, equal := range map[string]collectorfleet.Lease{
+		"identical": newerDurable,
+		"different stream": durableStreamLease(
+			key,
+			"boot-a",
+			"stream-conflict",
+			newer.Generation,
+		),
+		"different boot": durableStreamLease(
+			key,
+			"boot-b",
+			newer.StreamID,
+			newer.Generation,
+		),
+	} {
+		if _, err := registry.Activate(equal); !errors.Is(
+			err,
+			ErrCollectorStreamActivationConflict,
+		) {
+			t.Fatalf("%s equal-generation activation error = %v, want conflict", name, err)
+		}
+		if !registry.IsCurrent(newer) {
+			t.Fatalf("%s equal-generation activation displaced the newer handler", name)
+		}
+	}
+	select {
+	case <-newer.Superseded:
+		t.Fatal("rejected equal-generation activation canceled the current handler")
+	default:
+	}
+
+	registry.Release(newer)
+	if _, err := registry.Activate(olderDurable); !errors.Is(
+		err,
+		ErrCollectorStreamActivationStale,
+	) {
+		t.Fatalf("older activation after release error = %v, want stale", err)
+	}
+	if _, err := registry.Activate(newerDurable); !errors.Is(
+		err,
+		ErrCollectorStreamActivationConflict,
+	) {
+		t.Fatalf("equal activation after release error = %v, want conflict", err)
+	}
+}
+
+func TestInMemoryCollectorStreamRegistryCancelsOnlyPreviousHandlerForKey(t *testing.T) {
+	t.Parallel()
+
+	registry := NewInMemoryCollectorStreamRegistry()
+	firstKey := CollectorStreamKey{TenantID: "tenant-a", CollectorID: "collector-a"}
+	otherKey := CollectorStreamKey{TenantID: "tenant-a", CollectorID: "collector-b"}
+	first, err := registry.Activate(durableStreamLease(
+		firstKey,
+		"boot-a",
 		"stream-a",
-	); err == nil {
-		t.Fatal("Claim() at generation exhaustion error = nil")
+		1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := registry.Activate(durableStreamLease(
+		otherKey,
+		"boot-a",
+		"stream-other",
+		1,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	successor, err := registry.Activate(durableStreamLease(
+		firstKey,
+		"boot-a",
+		"stream-b",
+		2,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-first.Superseded:
+	case <-time.After(time.Second):
+		t.Fatal("successor did not cancel the exact previous handler")
+	}
+	select {
+	case <-other.Superseded:
+		t.Fatal("successor canceled a handler for another collector")
+	default:
+	}
+	if !registry.IsCurrent(successor) || !registry.IsCurrent(other) {
+		t.Fatal("independent current handlers were not preserved")
+	}
+}
+
+func durableStreamLease(
+	key CollectorStreamKey,
+	bootEpoch string,
+	streamID string,
+	generation uint64,
+) collectorfleet.Lease {
+	return collectorfleet.Lease{
+		Scope:       collectorfleet.Scope{TenantID: key.TenantID},
+		CollectorID: key.CollectorID,
+		BootEpoch:   bootEpoch,
+		StreamID:    streamID,
+		Generation:  generation,
 	}
 }
 

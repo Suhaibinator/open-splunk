@@ -48,6 +48,39 @@ func TestValidateAndNormalizeEventDoesNotMutateInput(t *testing.T) {
 	}
 }
 
+func TestValidateAndNormalizeEventUsesControlPlaneIndexNameBoundary(t *testing.T) {
+	t.Parallel()
+	validator := newTestValidator(t, DefaultLimits())
+	maximumName := strings.Repeat("a", 255)
+	event := validTestEvent("event-maximum-index", maximumName)
+	if _, rejection := validator.ValidateAndNormalizeEvent(
+		event,
+		EventContext{ReceivedAt: validationTestNow},
+	); rejection != nil {
+		t.Fatalf("255-byte canonical index rejected: %v", rejection)
+	}
+
+	for name, indexName := range map[string]string{
+		"too long":      strings.Repeat("a", 256),
+		"not canonical": "Main",
+		"protocol ID":   "main:archive",
+		"reserved":      "my_kvstore_data",
+	} {
+		t.Run(name, func(t *testing.T) {
+			event := validTestEvent("event-invalid-index", indexName)
+			_, rejection := validator.ValidateAndNormalizeEvent(
+				event,
+				EventContext{ReceivedAt: validationTestNow},
+			)
+			assertEventRejectionCode(
+				t,
+				rejection,
+				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_INDEX,
+			)
+		})
+	}
+}
+
 func TestValidateAndNormalizeEventRejectsCanonicalFieldInjection(t *testing.T) {
 	t.Parallel()
 
@@ -1297,20 +1330,47 @@ func TestNewValidatorRejectsLimitsAboveHardCeilings(t *testing.T) {
 }
 
 func TestNewServiceRejectsLimitsAboveHardCeiling(t *testing.T) {
-	config := testServiceConfig()
-	config.Limits.MaxBatchEvents = HardMaxBatchEvents + 1
-	if _, err := NewService(config, staticTestAuthorizer(), acceptingStore()); err == nil {
-		t.Fatal("NewService() error = nil, want hard-limit rejection")
+	tests := []struct {
+		name    string
+		edit    func(*Config)
+		message string
+	}{
+		{
+			name: "batch events",
+			edit: func(config *Config) {
+				config.Limits.MaxBatchEvents = HardMaxBatchEvents + 1
+			},
+			message: "max batch events cannot exceed hard limit",
+		},
+		{
+			name: "in-flight batches",
+			edit: func(config *Config) {
+				config.MaxInFlightBatches = HardMaxInFlightBatches + 1
+			},
+			message: "max in-flight batches cannot exceed hard limit",
+		},
+		{
+			name: "per-subject streams",
+			edit: func(config *Config) {
+				config.MaxStreamsPerSubject = HardMaxStreamsPerSubject + 1
+			},
+			message: "max streams per subject cannot exceed hard limit",
+		},
 	}
-	config = testServiceConfig()
-	config.MaxInFlightBatches = HardMaxInFlightBatches + 1
-	if _, err := NewService(config, staticTestAuthorizer(), acceptingStore()); err == nil {
-		t.Fatal("NewService() accepted an unsafe in-flight batch limit")
-	}
-	config = testServiceConfig()
-	config.MaxStreamsPerSubject = HardMaxStreamsPerSubject + 1
-	if _, err := NewService(config, staticTestAuthorizer(), acceptingStore()); err == nil {
-		t.Fatal("NewService() accepted an unsafe per-subject stream limit")
+	authorizer := staticTestAuthorizer()
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := withTestSessionManager(testServiceConfig(), authorizer)
+			test.edit(&config)
+			_, err := NewService(config, authorizer, acceptingStore())
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf(
+					"NewService() error = %v, want %q hard-limit rejection",
+					err,
+					test.message,
+				)
+			}
+		})
 	}
 }
 

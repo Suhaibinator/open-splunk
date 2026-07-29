@@ -22,6 +22,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	internalclickhouse "github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/collectoradmission"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -149,6 +151,21 @@ func run() error {
 			log.Printf("close control plane: %v", err)
 		}
 	}()
+	collectorBootEpoch, err := newCollectorBootEpoch()
+	if err != nil {
+		return err
+	}
+	collectorFleet, err := collectorfleet.New(controlDB)
+	if err != nil {
+		return fmt.Errorf("open collector fleet: %w", err)
+	}
+	if _, err := collectorFleet.InvalidatePriorBootLeases(
+		startupContext,
+		collectorBootEpoch,
+		time.Now().UTC(),
+	); err != nil {
+		return fmt.Errorf("invalidate prior collector leases: %w", err)
+	}
 
 	sequencer, err := visibility.NewSQLite(startupContext, controlDB)
 	if err != nil {
@@ -157,6 +174,14 @@ func run() error {
 	savedSearches, tokenStore, err := openSecurityStores(startupContext, controlDB, config.masterKeyPath)
 	if err != nil {
 		return err
+	}
+	collectorAdmissions, err := collectoradmission.New(
+		controlDB,
+		tokenStore,
+		config.tenantID,
+	)
+	if err != nil {
+		return fmt.Errorf("open collector admission coordinator: %w", err)
 	}
 	searchHistory, err := openSearchHistoryStore(startupContext, controlDB, config.masterKeyPath)
 	if err != nil {
@@ -210,7 +235,14 @@ func run() error {
 	}()
 	ingestConfig := ingest.DefaultConfig()
 	ingestConfig.Build = buildMetadata
-	ingestConfig.TokenUseRecorder = collectorTokenUseRecorder{store: tokenStore}
+	ingestConfig.ServerInstanceID = collectorBootEpoch
+	ingestConfig.SessionManager = collectorSessionManager{
+		admission: collectorAdmissions,
+		fleet:     collectorFleet,
+	}
+	ingestConfig.SessionErrorHandler = func(err error) {
+		log.Printf("collector session cleanup: %v", err)
+	}
 	ingestService, err := ingest.NewService(ingestConfig, collectorAuthorizer{
 		store: tokenStore, tenantID: config.tenantID,
 	}, eventStore)

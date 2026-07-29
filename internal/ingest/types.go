@@ -8,6 +8,7 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 )
 
@@ -44,6 +45,21 @@ const (
 // failures must retain their distinct error so the gRPC boundary can return a
 // retryable Unavailable status instead of falsely reporting token revocation.
 var ErrUnauthorized = errors.New("ingest: collector credential is unauthorized")
+
+var (
+	// ErrCollectorLeaseNotCurrent means a request no longer owns the exact
+	// enabled durable collector lease which admitted its stream.
+	ErrCollectorLeaseNotCurrent = errors.New("ingest: collector lease is not current")
+	// ErrCollectorDisabled means an authenticated collector is administratively
+	// disabled and cannot establish a new durable stream lease.
+	ErrCollectorDisabled = errors.New("ingest: collector is disabled")
+	// ErrInvalidCollectorSnapshot means bounded collector lifecycle metadata
+	// failed validation before it could be persisted.
+	ErrInvalidCollectorSnapshot = errors.New("ingest: collector lifecycle snapshot is invalid")
+	// ErrCollectorSessionCapacity means a bounded durable revision or
+	// generation counter cannot admit another session or telemetry snapshot.
+	ErrCollectorSessionCapacity = errors.New("ingest: collector session capacity is exhausted")
+)
 
 // Limits are hard ingestion limits advertised during collector negotiation and
 // independently enforced against untrusted wire data.
@@ -188,22 +204,60 @@ func (f AuthorizerFunc) Authorize(ctx context.Context, token string) (Authorizat
 	return f(ctx, token)
 }
 
-// CollectorTokenUseRecorder records one accepted stream admission using only
-// the stable token identifier returned by Authorizer. Implementations must
-// return ErrUnauthorized when the identified token is no longer active.
-type CollectorTokenUseRecorder interface {
-	RecordCollectorTokenUse(context.Context, string, time.Time) error
+func cloneAuthorization(authorization Authorization) Authorization {
+	authorization.AuthorizedIndexes = append(
+		[]string(nil),
+		authorization.AuthorizedIndexes...,
+	)
+	return authorization
 }
 
-// CollectorTokenUseRecorderFunc adapts a function to CollectorTokenUseRecorder.
-type CollectorTokenUseRecorderFunc func(context.Context, string, time.Time) error
+// CollectorSessionAdmissionRequest contains the server-owned durable lease
+// identity and bounded Hello snapshot for one validated native stream.
+// Implementations must freshly revalidate bearer in the same transaction that
+// allocates the lease.
+type CollectorSessionAdmissionRequest struct {
+	CollectorID string
+	BootEpoch   string
+	StreamID    string
+	AcceptedAt  time.Time
+	Hello       collectorfleet.Hello
+}
 
-func (f CollectorTokenUseRecorderFunc) RecordCollectorTokenUse(
-	ctx context.Context,
-	tokenID string,
-	acceptedAt time.Time,
-) error {
-	return f(ctx, tokenID, acceptedAt)
+// CollectorSessionAdmission is the fresh authorization scope and exact
+// durable lease committed before CollectorReady is sent.
+type CollectorSessionAdmission struct {
+	Authorization Authorization
+	Lease         collectorfleet.Lease
+}
+
+// CollectorSessionManager owns the durable control-plane boundaries for a
+// native collector stream. Admit must atomically revalidate the bearer, record
+// accepted use, verify enabled fleet state, and allocate Lease. AuthorizeLease
+// must read fresh credential and exact lease state from one consistent
+// snapshot. Heartbeat and Disconnect must condition every mutation on Lease.
+type CollectorSessionManager interface {
+	Admit(
+		context.Context,
+		string,
+		CollectorSessionAdmissionRequest,
+	) (CollectorSessionAdmission, error)
+	AuthorizeLease(
+		context.Context,
+		string,
+		collectorfleet.Lease,
+		time.Time,
+	) (Authorization, error)
+	RecordHeartbeat(
+		context.Context,
+		collectorfleet.Lease,
+		collectorfleet.Heartbeat,
+	) (bool, error)
+	Disconnect(
+		context.Context,
+		collectorfleet.Lease,
+		time.Time,
+	) (bool, error)
 }
 
 // StoreBatch contains only events which passed validation, authorization, and

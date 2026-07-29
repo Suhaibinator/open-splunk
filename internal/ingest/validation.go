@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -385,7 +386,7 @@ func (v *Validator) ValidateAndNormalizeEvent(event *opensplunkv1.LogEvent, ctx 
 			"event_id is empty or has an invalid format", "event_id", "invalid_event_id",
 		)
 	}
-	if !validIdentifier(event.GetIndexName(), v.limits.MaxIDBytes) {
+	if !validIndexName(event.GetIndexName()) {
 		return nil, eventFailure(
 			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_INDEX,
 			"index_name is empty or has an invalid format", "index_name", "invalid_index",
@@ -709,6 +710,11 @@ func validIdentifier(value string, maxBytes uint32) bool {
 		}
 	}
 	return true
+}
+
+func validIndexName(value string) bool {
+	normalized, err := control.NormalizeIndexName(value)
+	return err == nil && normalized == value
 }
 
 func eventFailure(code opensplunkv1.EventRejectionCode, message, path, violationCode string) *EventError {
