@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 	"unsafe"
@@ -37,28 +38,30 @@ const (
 	defaultMaxGrantsPerJob    = 16
 	defaultMaxActiveDownloads = 128
 	defaultMaxActivePerJob    = 4
+	capacityCleanupThrottle   = 250 * time.Millisecond
 
-	maximumWorkers          = 64
-	maximumQueued           = 10_000
-	maximumJobs             = 100_000
-	hardMaximumRowLimit     = uint64(100_000_000)
-	hardMaximumByteLimit    = uint64(64 << 30)
-	hardMaximumTotalBytes   = uint64(1 << 40)
-	hardMaximumMetadata     = uint64(4 << 30)
-	maximumArtifactTTL      = 7 * 24 * time.Hour
-	maximumDownloadGrantTTL = 5 * time.Minute
-	maximumDownloadGrants   = 100_000
-	maximumGrantsPerJob     = 1_024
-	maximumActiveDownloads  = 4_096
-	maximumActivePerJob     = 64
-	maximumIDAttempts       = 8
-	maximumExportIDBytes    = 128
-	maximumColumns          = 1_024
-	maximumColumnBytes      = 256 << 10
-	maximumAccessIDBytes    = 1 << 10
-	maximumSearchIDBytes    = 256
-	artifactSessionPrefix   = ".open-splunk-export-session-"
-	artifactBaseLockName    = ".open-splunk-export.lock"
+	maximumWorkers             = 64
+	maximumQueued              = 10_000
+	maximumJobs                = 100_000
+	hardMaximumRowLimit        = uint64(100_000_000)
+	hardMaximumByteLimit       = uint64(64 << 30)
+	hardMaximumTotalBytes      = uint64(1 << 40)
+	hardMaximumMetadata        = uint64(4 << 30)
+	maximumArtifactTTL         = 7 * 24 * time.Hour
+	maximumDownloadGrantTTL    = 5 * time.Minute
+	maximumDownloadGrants      = 100_000
+	maximumGrantsPerJob        = 1_024
+	maximumActiveDownloads     = 4_096
+	maximumActivePerJob        = 64
+	maximumIDAttempts          = 8
+	maximumExportIDBytes       = 128
+	maximumColumns             = 1_024
+	maximumColumnBytes         = 256 << 10
+	maximumAccessIDBytes       = 1 << 10
+	maximumSearchIDBytes       = 256
+	maximumCleanupErrorSamples = 16
+	artifactSessionPrefix      = ".open-splunk-export-session-"
+	artifactBaseLockName       = ".open-splunk-export.lock"
 
 	// Metadata accounting conservatively covers the retained Job column slice,
 	// active column selection, index slice, column-name storage, and fixed job
@@ -127,6 +130,13 @@ type Config struct {
 	// Now and NewID may be invoked concurrently and must be concurrency-safe.
 	Now   func() time.Time
 	NewID func() string
+	// OnCleanupError receives trusted operational details when periodic
+	// background cleanup fails. At most one asynchronous hook call is in
+	// flight; further notifications are coalesced while LastCleanupError still
+	// retains the newest cleanup failure, including admission-time reclamation.
+	// The hook runs without manager or job locks, cannot stall cleanup or
+	// shutdown, and any panic is contained.
+	OnCleanupError func(error)
 }
 
 // Manager owns a bounded worker pool and temporary export artifacts.
@@ -137,6 +147,14 @@ type Manager struct {
 	closed            bool
 	reservations      int
 	queueReservations int
+	// Capacity-cleanup scheduling state is guarded by cleanupGate. The
+	// reclamation generation invalidates advisory deadlines when a lifecycle
+	// transition makes earlier cleanup possible, but never bypasses a failed
+	// unlink's retry floor.
+	nextCapacityCleanup            time.Time
+	capacityCleanupStateGeneration uint64
+	capacityCleanupSnapshotValid   bool
+	capacityCleanupRetryFloor      bool
 
 	source ResultSource
 	queue  chan *jobEntry
@@ -174,15 +192,22 @@ type Manager struct {
 	downloadsByJob     map[string]int
 	now                func() time.Time
 	newID              func() string
+	onCleanupError     func(error)
 
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	admissions sync.WaitGroup
-	workers    sync.WaitGroup
-	closeOnce  sync.Once
-	closeErr   error
-	removePath func(string) error
+	admissions             sync.WaitGroup
+	workers                sync.WaitGroup
+	cleanupGate            chan struct{}
+	cleanupGeneration      atomic.Uint64
+	cleanupStateGeneration atomic.Uint64
+	cleanupErrMu           sync.RWMutex
+	lastCleanupErr         error
+	cleanupErrorHookGate   chan struct{}
+	closeOnce              sync.Once
+	closeErr               error
+	removePath             func(string) error
 }
 
 type jobEntry struct {
@@ -212,6 +237,32 @@ type jobEntry struct {
 type admissionReservation struct {
 	artifactBytes uint64
 	metadataBytes uint64
+}
+
+type cleanupErrorAccumulator struct {
+	samples []error
+	total   int
+}
+
+func (accumulator *cleanupErrorAccumulator) add(err error) {
+	if err == nil {
+		return
+	}
+	accumulator.total++
+	if len(accumulator.samples) < maximumCleanupErrorSamples {
+		accumulator.samples = append(accumulator.samples, err)
+	}
+}
+
+func (accumulator *cleanupErrorAccumulator) err() error {
+	if accumulator.total == 0 {
+		return nil
+	}
+	failures := append([]error(nil), accumulator.samples...)
+	if omitted := accumulator.total - len(accumulator.samples); omitted > 0 {
+		failures = append(failures, fmt.Errorf("%d additional export cleanup errors omitted", omitted))
+	}
+	return errors.Join(failures...)
 }
 
 // New constructs an export manager and starts its bounded workers.
@@ -338,39 +389,43 @@ func New(config Config) (*Manager, error) {
 	// #nosec G118 -- cancel is retained on Manager and invoked by Close.
 	managerContext, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
-		jobs:               make(map[string]*jobEntry),
-		reservedIDs:        make(map[string]admissionReservation),
-		source:             config.Source,
-		queue:              make(chan *jobEntry, maxQueued),
-		maxWorkers:         maxWorkers,
-		maxQueued:          maxQueued,
-		maxJobs:            maxJobs,
-		defaultRowLimit:    defaultRows,
-		maximumRowLimit:    maximumRows,
-		defaultByteLimit:   defaultBytes,
-		maximumByteLimit:   maximumBytes,
-		maxTotalBytes:      maxTotalBytes,
-		maxTotalMetadata:   maxTotalMetadata,
-		artifactDir:        artifactDir,
-		artifactRoot:       artifactRoot,
-		artifactDirectory:  artifactDirectory,
-		artifactTTL:        artifactTTL,
-		expiredRetention:   expiredRetention,
-		cleanupInterval:    cleanupInterval,
-		downloadGrantTTL:   downloadGrantTTL,
-		maxDownloadGrants:  maxDownloadGrants,
-		maxGrantsPerJob:    maxGrantsPerJob,
-		maxActiveDownloads: maxActiveDownloads,
-		maxActivePerJob:    maxActivePerJob,
-		grants:             make(map[[32]byte]*downloadGrantEntry),
-		grantsByJob:        make(map[string]int),
-		downloadsByJob:     make(map[string]int),
-		now:                now,
-		newID:              newID,
-		ctx:                managerContext,
-		cancel:             cancel,
-		removePath:         removeFile,
+		jobs:                 make(map[string]*jobEntry),
+		reservedIDs:          make(map[string]admissionReservation),
+		source:               config.Source,
+		queue:                make(chan *jobEntry, maxQueued),
+		maxWorkers:           maxWorkers,
+		maxQueued:            maxQueued,
+		maxJobs:              maxJobs,
+		defaultRowLimit:      defaultRows,
+		maximumRowLimit:      maximumRows,
+		defaultByteLimit:     defaultBytes,
+		maximumByteLimit:     maximumBytes,
+		maxTotalBytes:        maxTotalBytes,
+		maxTotalMetadata:     maxTotalMetadata,
+		artifactDir:          artifactDir,
+		artifactRoot:         artifactRoot,
+		artifactDirectory:    artifactDirectory,
+		artifactTTL:          artifactTTL,
+		expiredRetention:     expiredRetention,
+		cleanupInterval:      cleanupInterval,
+		downloadGrantTTL:     downloadGrantTTL,
+		maxDownloadGrants:    maxDownloadGrants,
+		maxGrantsPerJob:      maxGrantsPerJob,
+		maxActiveDownloads:   maxActiveDownloads,
+		maxActivePerJob:      maxActivePerJob,
+		grants:               make(map[[32]byte]*downloadGrantEntry),
+		grantsByJob:          make(map[string]int),
+		downloadsByJob:       make(map[string]int),
+		now:                  now,
+		newID:                newID,
+		onCleanupError:       config.OnCleanupError,
+		ctx:                  managerContext,
+		cancel:               cancel,
+		cleanupGate:          make(chan struct{}, 1),
+		cleanupErrorHookGate: make(chan struct{}, 1),
+		removePath:           removeFile,
 	}
+	manager.cleanupGate <- struct{}{}
 	for range maxWorkers {
 		manager.workers.Add(1)
 		go manager.worker()
@@ -652,7 +707,18 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 	if err != nil {
 		return Job{}, err
 	}
+	cleanupGeneration := manager.cleanupGeneration.Load()
 	id, err := manager.reserveAdmission(normalized.ByteLimit, metadataReservation)
+	if errors.Is(err, ErrCapacity) {
+		cleanupErr := manager.tryCapacityCleanup(ctx, cleanupGeneration)
+		if callerErr := ctx.Err(); callerErr != nil {
+			return Job{}, callerErr
+		}
+		if errors.Is(cleanupErr, ErrClosed) {
+			return Job{}, ErrClosed
+		}
+		id, err = manager.reserveAdmission(normalized.ByteLimit, metadataReservation)
+	}
 	if err != nil {
 		return Job{}, err
 	}
@@ -1097,7 +1163,11 @@ func (manager *Manager) Get(ctx context.Context, access searchjobs.AccessScope, 
 		manager.mu.RUnlock()
 		return Job{}, ErrNotFound
 	}
+	priorState := entry.job.State
 	artifactPath, tempPath := manager.expireLocked(entry, manager.nowUTC())
+	if entry.job.State != priorState {
+		manager.noteCleanupStateChange()
+	}
 	result := cloneJob(entry.job)
 	removalAdmitted := artifactPath != "" || tempPath != ""
 	if removalAdmitted {
@@ -1185,6 +1255,7 @@ func (manager *Manager) run(entry *jobEntry) {
 		_ = entry.finalizeLease()
 		entry.mu.Lock()
 		entry.workerDone = true
+		manager.noteCleanupStateChange()
 		entry.mu.Unlock()
 	}()
 	entry.mu.Lock()
@@ -1459,6 +1530,10 @@ func (manager *Manager) reconcileEntryBytesLocked(entry *jobEntry, retained uint
 func (manager *Manager) releaseEntryBytesIfUnbacked(entry *jobEntry) {
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
+	manager.releaseEntryBytesIfUnbackedLocked(entry)
+}
+
+func (manager *Manager) releaseEntryBytesIfUnbackedLocked(entry *jobEntry) {
 	if entry.tempPath != "" || entry.artifactPath != "" || entry.accountedBytes == 0 {
 		return
 	}
@@ -1561,7 +1636,9 @@ func (manager *Manager) cleanupLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			_ = manager.Cleanup(context.Background())
+			if err := manager.Cleanup(context.Background()); shouldReportCleanupError(err) {
+				manager.reportCleanupError(fmt.Errorf("clean up expired exports: %w", err))
+			}
 		case <-manager.ctx.Done():
 			return
 		}
@@ -1574,6 +1651,17 @@ func (manager *Manager) Cleanup(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("cleanup export jobs: context is nil")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := manager.acquireCleanup(ctx); err != nil {
+		return err
+	}
+	defer manager.releaseCleanup()
+	return manager.cleanup(ctx, false)
+}
+
+func (manager *Manager) cleanup(ctx context.Context, capacityTriggered bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1595,22 +1683,25 @@ func (manager *Manager) Cleanup(ctx context.Context) error {
 	manager.mu.Unlock()
 	defer manager.admissions.Done()
 
-	var cleanupErr error
+	var cleanupErrors cleanupErrorAccumulator
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
-			return err
+			return errors.Join(cleanupErrors.err(), err)
 		}
 		entry.mu.Lock()
 		artifactPath, tempPath := manager.expireLocked(entry, now)
 		entry.mu.Unlock()
 		if err := manager.removeTrackedArtifact(entry, artifactPath); err != nil {
-			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove expired export artifact: %w", err))
+			cleanupErrors.add(fmt.Errorf("remove expired export artifact: %w", err))
 		}
 		if err := manager.removeTrackedTemp(entry, tempPath); err != nil {
-			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove expired export partial: %w", err))
+			cleanupErrors.add(fmt.Errorf("remove expired export partial: %w", err))
 		}
 	}
 	manager.mu.Lock()
+	cleanupStateAtStart := manager.cleanupStateGeneration.Load()
+	nextCleanupDue := time.Time{}
+	retryCleanup := false
 	for id, entry := range manager.jobs {
 		entry.mu.Lock()
 		remove := entry.job.State == StateExpired && entry.artifactPath == "" && entry.tempPath == "" &&
@@ -1621,6 +1712,10 @@ func (manager *Manager) Cleanup(ctx context.Context) error {
 		if remove {
 			retainedMetadata = entry.accountedMetadata
 			entry.accountedMetadata = 0
+		} else {
+			deadline, retry := manager.entryCleanupDeadlineLocked(entry)
+			nextCleanupDue = earlierTime(nextCleanupDue, deadline)
+			retryCleanup = retryCleanup || retry
 		}
 		entry.mu.Unlock()
 		if remove {
@@ -1629,8 +1724,181 @@ func (manager *Manager) Cleanup(ctx context.Context) error {
 			manager.releaseMetadata(retainedMetadata)
 		}
 	}
+	if len(manager.grantExpirations) != 0 {
+		nextCleanupDue = earlierTime(nextCleanupDue, manager.grantExpirations[0].expiresAt)
+	}
+	cleanupStateAtEnd := manager.cleanupStateGeneration.Load()
 	manager.mu.Unlock()
+	cleanupErr := cleanupErrors.err()
+	manager.noteCleanupCompletion(
+		manager.nowUTC(),
+		nextCleanupDue,
+		capacityTriggered,
+		retryCleanup,
+		cleanupErr != nil,
+		cleanupStateAtEnd,
+		cleanupStateAtStart == cleanupStateAtEnd,
+	)
 	return cleanupErr
+}
+
+func (manager *Manager) tryCapacityCleanup(ctx context.Context, observedGeneration uint64) error {
+	if err := manager.acquireCleanup(ctx); err != nil {
+		return err
+	}
+	defer manager.releaseCleanup()
+	now := manager.nowUTC()
+	cleanupStateChanged := !manager.capacityCleanupSnapshotValid ||
+		manager.cleanupStateGeneration.Load() != manager.capacityCleanupStateGeneration
+	if manager.capacityCleanupRetryFloor && now.Before(manager.nextCapacityCleanup) {
+		return nil
+	}
+	if !cleanupStateChanged && manager.cleanupGeneration.Load() != observedGeneration &&
+		(manager.nextCapacityCleanup.IsZero() || now.Before(manager.nextCapacityCleanup)) {
+		return nil
+	}
+	if !cleanupStateChanged && now.Before(manager.nextCapacityCleanup) {
+		return nil
+	}
+	err := manager.cleanup(ctx, true)
+	if shouldReportCleanupError(err) {
+		manager.rememberCleanupError(fmt.Errorf("reclaim export capacity: %w", err))
+	}
+	return err
+}
+
+func (manager *Manager) acquireCleanup(ctx context.Context) error {
+	select {
+	case <-manager.cleanupGate:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-manager.ctx.Done():
+		return ErrClosed
+	}
+}
+
+func (manager *Manager) releaseCleanup() {
+	manager.cleanupGate <- struct{}{}
+}
+
+// noteCleanupCompletion records both advisory scheduling and the strict
+// failed-unlink retry floor. Lifecycle invalidation may bypass only the former.
+func (manager *Manager) noteCleanupCompletion(
+	completedAt time.Time,
+	nextDue time.Time,
+	capacityTriggered bool,
+	retryCleanup bool,
+	retryFloor bool,
+	cleanupStateGeneration uint64,
+	snapshotValid bool,
+) {
+	manager.nextCapacityCleanup = time.Time{}
+	manager.capacityCleanupRetryFloor = retryFloor
+	if capacityTriggered || retryCleanup || retryFloor {
+		manager.nextCapacityCleanup = completedAt.Add(capacityCleanupThrottle)
+	}
+	if !retryCleanup && !retryFloor && !nextDue.IsZero() &&
+		(manager.nextCapacityCleanup.IsZero() || nextDue.Before(manager.nextCapacityCleanup)) {
+		manager.nextCapacityCleanup = nextDue
+	}
+	manager.capacityCleanupStateGeneration = cleanupStateGeneration
+	manager.capacityCleanupSnapshotValid = snapshotValid
+	manager.cleanupGeneration.Add(1)
+}
+
+func (manager *Manager) noteCleanupStateChange() {
+	manager.cleanupStateGeneration.Add(1)
+}
+
+func shouldReportCleanupError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			if shouldReportCleanupError(child) {
+				return true
+			}
+		}
+		return false
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return shouldReportCleanupError(child)
+		}
+	}
+	return !errors.Is(err, ErrClosed) &&
+		!errors.Is(err, context.Canceled) &&
+		!errors.Is(err, context.DeadlineExceeded)
+}
+
+func (manager *Manager) reportCleanupError(err error) {
+	if !shouldReportCleanupError(err) {
+		return
+	}
+	manager.rememberCleanupError(err)
+	if manager.onCleanupError == nil {
+		return
+	}
+	select {
+	case manager.cleanupErrorHookGate <- struct{}{}:
+		hook := manager.onCleanupError
+		gate := manager.cleanupErrorHookGate
+		go func(reported error) {
+			defer func() {
+				_ = recover()
+				<-gate
+			}()
+			hook(reported)
+		}(err)
+	default:
+		// LastCleanupError retains the newest failure even when a previous
+		// optional notification hook is stuck or still running.
+	}
+}
+
+func (manager *Manager) rememberCleanupError(err error) {
+	manager.cleanupErrMu.Lock()
+	manager.lastCleanupErr = err
+	manager.cleanupErrMu.Unlock()
+}
+
+// LastCleanupError returns the most recently observed background or
+// admission-time cleanup failure, or nil. It is trusted operational detail
+// and must not be exposed directly in an API response because filesystem
+// errors can contain paths.
+func (manager *Manager) LastCleanupError() error {
+	manager.cleanupErrMu.RLock()
+	defer manager.cleanupErrMu.RUnlock()
+	return manager.lastCleanupErr
+}
+
+func (manager *Manager) entryCleanupDeadlineLocked(entry *jobEntry) (time.Time, bool) {
+	switch entry.job.State {
+	case StateCompleted, StateFailed, StateCanceled:
+		if entry.workerDone && entry.leaseReleased && !entry.job.ExpiresAt.IsZero() {
+			return entry.job.ExpiresAt, false
+		}
+	case StateExpired:
+		if len(entry.downloads) != 0 {
+			return time.Time{}, false
+		}
+		if entry.artifactPath != "" || entry.tempPath != "" || entry.artifactRemoving || entry.tempRemoving {
+			return time.Time{}, true
+		}
+		if entry.workerDone && entry.leaseReleased && entry.accountedBytes == 0 && !entry.expiredAt.IsZero() {
+			return entry.expiredAt.Add(manager.expiredRetention), false
+		}
+	}
+	return time.Time{}, false
+}
+
+func earlierTime(current, candidate time.Time) time.Time {
+	if candidate.IsZero() || (!current.IsZero() && !candidate.Before(current)) {
+		return current
+	}
+	return candidate
 }
 
 func (manager *Manager) releaseMetadata(retained uint64) {
@@ -1685,12 +1953,13 @@ func (manager *Manager) removeTrackedArtifact(entry *jobEntry, path string) erro
 	if err == nil && entry.artifactPath == path {
 		entry.artifactPath = ""
 		entry.artifactIdentity = nil
+		manager.releaseEntryBytesIfUnbackedLocked(entry)
 	}
+	manager.noteCleanupStateChange()
 	entry.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	manager.releaseEntryBytesIfUnbacked(entry)
 	return nil
 }
 
@@ -1710,12 +1979,13 @@ func (manager *Manager) removeTrackedTemp(entry *jobEntry, path string) error {
 	entry.tempRemoving = false
 	if err == nil && entry.tempPath == path {
 		entry.tempPath = ""
+		manager.releaseEntryBytesIfUnbackedLocked(entry)
 	}
+	manager.noteCleanupStateChange()
 	entry.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	manager.releaseEntryBytesIfUnbacked(entry)
 	return nil
 }
 

@@ -380,7 +380,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create export re-execution source: %w", err)
 	}
-	exports, err := exportjobs.New(exportSettings.managerConfig(exportSource, config.exportArtifactDir))
+	exports, err := exportjobs.New(exportSettings.managerConfig(
+		exportSource,
+		config.exportArtifactDir,
+		reportExportCleanupError,
+	))
 	if err != nil {
 		return fmt.Errorf("create export manager: %w", err)
 	}

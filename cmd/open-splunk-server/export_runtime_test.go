@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"log"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -14,7 +18,7 @@ func TestDefaultExportRuntimeSettingsKeepAllBoundariesAligned(t *testing.T) {
 	}
 
 	queryConfig := settings.queryExecutorConfig()
-	managerConfig := settings.managerConfig(nil, "/private/export-base")
+	managerConfig := settings.managerConfig(nil, "/private/export-base", nil)
 	if queryConfig.MaxResultRows < managerConfig.MaximumRowLimit+1 {
 		t.Fatalf("query rows = %d, need at least %d", queryConfig.MaxResultRows, managerConfig.MaximumRowLimit+1)
 	}
@@ -41,6 +45,33 @@ func TestDefaultExportRuntimeSettingsKeepAllBoundariesAligned(t *testing.T) {
 		managerConfig.MaxTotalBytes != settings.maximumTotalBytes ||
 		managerConfig.ArtifactDir != "/private/export-base" {
 		t.Fatalf("manager config drifted from runtime settings: %+v", managerConfig)
+	}
+}
+
+func TestExportRuntimeCarriesCleanupReporterAndUsesPathFreeLogMessage(t *testing.T) {
+	t.Parallel()
+	reported := make(chan error, 1)
+	managerConfig := defaultExportRuntimeSettings().managerConfig(
+		nil,
+		"/private/export-base",
+		func(err error) { reported <- err },
+	)
+	cleanupFailure := errors.New("secret\n/private/export-base/artifact.csv")
+	managerConfig.OnCleanupError(cleanupFailure)
+	select {
+	case got := <-reported:
+		if !errors.Is(got, cleanupFailure) {
+			t.Fatalf("OnCleanupError() = %v, want original operational failure", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("configured cleanup reporter was not invoked")
+	}
+	var output bytes.Buffer
+	newExportCleanupErrorReporter(log.New(&output, "", 0))(cleanupFailure)
+	logged := output.String()
+	if logged == "" || strings.Contains(logged, "secret") || strings.Contains(logged, "/private") ||
+		strings.Count(logged, "\n") != 1 {
+		t.Fatalf("cleanup error log output is not path-safe: %q", logged)
 	}
 }
 

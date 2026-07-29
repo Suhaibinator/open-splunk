@@ -206,6 +206,65 @@ func TestDownloadGrantBoundsMetadataAndExpirationRecovery(t *testing.T) {
 	}
 }
 
+func TestAdmissionCleanupObservesEarlierDownloadGrantExpiration(t *testing.T) {
+	t.Parallel()
+	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"first": {schema: basicExportSchema(), rows: basicExportRows()},
+		"after": {schema: basicExportSchema(), rows: basicExportRows()},
+	}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.Now = clock.Now
+		config.ArtifactTTL = time.Hour
+		config.DownloadGrantTTL = time.Second
+	})
+	completed := createCompletedDownloadJob(t, manager, "first")
+	if err := manager.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	grant, err := manager.CreateDownloadGrant(context.Background(), testAccess, completed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := CreateRequest{
+		SearchJobID: "after",
+		Format:      FormatJSONLines,
+		Columns:     []string{"message"},
+	}
+	normalized, err := manager.normalizeRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requiredMetadata, err := requestedMetadataBytes(
+		manager.artifactDir,
+		testAccess,
+		normalized.SearchJobID,
+		normalized.Columns,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantMetadata := downloadGrantMetadataFixed + uint64(len(completed.ID))
+	manager.budgetMu.Lock()
+	if manager.totalMetadata < grantMetadata {
+		manager.budgetMu.Unlock()
+		t.Fatal("download grant metadata was not retained")
+	}
+	manager.maxTotalMetadata = manager.totalMetadata - grantMetadata + requiredMetadata
+	manager.budgetMu.Unlock()
+
+	clock.Advance(time.Second)
+	after, err := manager.Create(context.Background(), testAccess, request)
+	if err != nil {
+		t.Fatalf("Create(after earlier grant expiration) = %v", err)
+	}
+	waitExportState(t, manager, testAccess, after.ID, StateCompleted)
+	if _, err := manager.RedeemDownload(context.Background(), grant.Token); !errors.Is(err, ErrInvalidDownloadGrant) {
+		t.Fatalf("RedeemDownload(expired reclaimed grant) = %v, want ErrInvalidDownloadGrant", err)
+	}
+}
+
 func TestDownloadGrantReportsExistingJobStateErrors(t *testing.T) {
 	t.Parallel()
 	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
@@ -334,6 +393,142 @@ func TestDownloadLeasePinsExpiredArtifactUntilFinalClose(t *testing.T) {
 	if retainedBytes != 0 {
 		t.Fatalf("retained artifact bytes after final Close = %d", retainedBytes)
 	}
+}
+
+func TestAdmissionCleanupDoesNotReclaimPinnedDownloadArtifact(t *testing.T) {
+	t.Parallel()
+	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{{Name: "x", Kind: searchjobs.ValueKindString}}}
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"first": {
+			schema: schema,
+			rows: []searchjobs.ResultRow{{
+				Values: []searchjobs.Value{searchjobs.StringValue("v")},
+			}},
+		},
+		"after": {schema: schema},
+	}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.MaxJobs = 1
+		config.DefaultByteLimit = 16
+		config.MaximumByteLimit = 16
+		config.MaxTotalBytes = 16
+		config.ArtifactTTL = time.Minute
+		config.ExpiredRetention = time.Nanosecond
+		config.Now = clock.Now
+	})
+	completed := createCompletedDownloadJob(t, manager, "first")
+	grant, err := manager.CreateDownloadGrant(context.Background(), testAccess, completed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := manager.RedeemDownload(context.Background(), grant.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.budgetMu.Lock()
+	retainedBytes := manager.totalBytes
+	manager.budgetMu.Unlock()
+	if retainedBytes == 0 {
+		t.Fatal("completed export retained no artifact bytes")
+	}
+
+	clock.Advance(time.Minute)
+	if _, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "after",
+		Format:      FormatCSV,
+	}); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("Create(while expired artifact is pinned) = %v, want ErrCapacity", err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(time.Nanosecond)
+	after, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "after",
+		Format:      FormatCSV,
+	})
+	if err != nil {
+		t.Fatalf("Create(after final download close) = %v", err)
+	}
+	waitExportState(t, manager, testAccess, after.ID, StateCompleted)
+}
+
+func TestAdmissionCleanupRefreshesAfterExternalUnlinkCompletes(t *testing.T) {
+	t.Parallel()
+	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"first": {schema: basicExportSchema(), rows: basicExportRows()},
+		"after": {schema: basicExportSchema(), rows: basicExportRows()},
+	}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.Now = clock.Now
+		config.MaxJobs = 1
+		config.ArtifactTTL = time.Second
+		config.ExpiredRetention = time.Nanosecond
+	})
+	completed := createCompletedDownloadJob(t, manager, "first")
+	grant, err := manager.CreateDownloadGrant(context.Background(), testAccess, completed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := manager.RedeemDownload(context.Background(), grant.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(manager.artifactDir, completed.Artifact.FileName)
+	clock.Advance(time.Second)
+	expired, err := manager.Get(context.Background(), testAccess, completed.ID)
+	if err != nil || expired.State != StateExpired {
+		t.Fatalf("Get(at expiry) = (%#v, %v), want expired", expired, err)
+	}
+
+	removeStarted := make(chan struct{})
+	releaseRemove := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseRemove) }) }
+	defer release()
+	originalRemove := manager.removePath
+	manager.removePath = func(path string) error {
+		if path == artifactPath {
+			close(removeStarted)
+			<-releaseRemove
+		}
+		return originalRemove(path)
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- lease.Close() }()
+	select {
+	case <-removeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("final download close did not begin deferred unlink")
+	}
+
+	clock.Advance(time.Nanosecond)
+	if _, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "after",
+		Format:      FormatCSV,
+	}); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("Create(while deferred unlink is active) = %v, want ErrCapacity", err)
+	}
+	release()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("DownloadLease.Close() = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("final download close did not finish")
+	}
+
+	after, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "after",
+		Format:      FormatCSV,
+	})
+	if err != nil {
+		t.Fatalf("Create(after deferred unlink completion) = %v", err)
+	}
+	waitExportState(t, manager, testAccess, after.ID, StateCompleted)
 }
 
 func TestDownloadLeaseDeferredUnlinkIsAdmittedBeforeManagerClose(t *testing.T) {

@@ -1187,6 +1187,607 @@ func TestManagerQueueAndJobCapacityRecoverAfterCleanup(t *testing.T) {
 	waitExportState(t, manager, testAccess, third.ID, StateCompleted)
 }
 
+func TestManagerAdmissionReclaimsDueArtifactByteCapacity(t *testing.T) {
+	t.Parallel()
+	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{{Name: "x", Kind: searchjobs.ValueKindString}}}
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"first": {schema: schema},
+		"after": {schema: schema},
+	}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.MaxJobs = 2
+		config.DefaultByteLimit = 16
+		config.MaximumByteLimit = 16
+		config.MaxTotalBytes = 16
+		config.ArtifactTTL = time.Minute
+		config.Now = clock.Now
+	})
+	first, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "first",
+		Format:      FormatCSV,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitExportState(t, manager, testAccess, first.ID, StateCompleted)
+	manager.budgetMu.Lock()
+	retainedBefore := manager.totalBytes
+	manager.budgetMu.Unlock()
+	if retainedBefore == 0 {
+		t.Fatal("completed export retained no artifact bytes")
+	}
+
+	clock.Advance(time.Minute)
+	after, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "after",
+		Format:      FormatCSV,
+	})
+	if err != nil {
+		t.Fatalf("Create(after artifact became reclaimable) = %v", err)
+	}
+	waitExportState(t, manager, testAccess, after.ID, StateCompleted)
+	firstExpired, err := manager.Get(context.Background(), testAccess, first.ID)
+	if err != nil || firstExpired.State != StateExpired {
+		t.Fatalf("Get(first after capacity cleanup) = (%#v, %v), want expired tombstone", firstExpired, err)
+	}
+}
+
+func TestManagerAdmissionCleanupHonorsEarlierReclaimDeadline(t *testing.T) {
+	t.Parallel()
+	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{{Name: "x", Kind: searchjobs.ValueKindString}}}
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"first": {schema: schema},
+		"after": {schema: schema},
+	}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.MaxJobs = 2
+		config.DefaultByteLimit = 16
+		config.MaximumByteLimit = 16
+		config.MaxTotalBytes = 16
+		config.ArtifactTTL = time.Minute
+		config.Now = clock.Now
+	})
+	first, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "first",
+		Format:      FormatCSV,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitExportState(t, manager, testAccess, first.ID, StateCompleted)
+
+	clock.Advance(time.Minute - 100*time.Millisecond)
+	observedGeneration := manager.cleanupGeneration.Load()
+	if err := manager.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(100 * time.Millisecond)
+	if err := manager.tryCapacityCleanup(context.Background(), observedGeneration); err != nil {
+		t.Fatalf("coalesced cleanup at newly due deadline = %v", err)
+	}
+	expired, err := manager.Get(context.Background(), testAccess, first.ID)
+	if err != nil || expired.State != StateExpired {
+		t.Fatalf("Get(after coalesced deadline cleanup) = (%#v, %v), want expired", expired, err)
+	}
+	after, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "after",
+		Format:      FormatCSV,
+	})
+	if err != nil {
+		t.Fatalf("Create(at reclaim deadline before generic throttle) = %v", err)
+	}
+	waitExportState(t, manager, testAccess, after.ID, StateCompleted)
+}
+
+func TestManagerAdmissionReclaimsDueTombstoneJobAndMetadataCapacity(t *testing.T) {
+	t.Parallel()
+	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{{Name: "x", Kind: searchjobs.ValueKindString}}}
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"first": {schema: schema},
+		"after": {schema: schema},
+	}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.MaxJobs = 1
+		config.ArtifactTTL = time.Minute
+		config.ExpiredRetention = time.Minute
+		config.Now = clock.Now
+	})
+	first, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "first",
+		Format:      FormatCSV,
+		Columns:     []string{"x"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitExportState(t, manager, testAccess, first.ID, StateCompleted)
+	manager.budgetMu.Lock()
+	retainedMetadata := manager.totalMetadata
+	manager.maxTotalMetadata = retainedMetadata
+	manager.budgetMu.Unlock()
+	if retainedMetadata == 0 {
+		t.Fatal("completed export retained no metadata")
+	}
+
+	clock.Advance(time.Minute)
+	if err := manager.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(time.Minute)
+	after, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "after",
+		Format:      FormatCSV,
+		Columns:     []string{"x"},
+	})
+	if err != nil {
+		t.Fatalf("Create(after tombstone became reclaimable) = %v", err)
+	}
+	waitExportState(t, manager, testAccess, after.ID, StateCompleted)
+	if _, err := manager.Get(context.Background(), testAccess, first.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get(first after capacity cleanup) = %v, want ErrNotFound", err)
+	}
+}
+
+func TestManagerAdmissionCleanupFailureRetainsCapacityAndThrottlesRetry(t *testing.T) {
+	t.Parallel()
+	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{{Name: "x", Kind: searchjobs.ValueKindString}}}
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"first": {schema: schema},
+		"after": {schema: schema},
+	}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.MaxJobs = 2
+		config.DefaultByteLimit = 16
+		config.MaximumByteLimit = 16
+		config.MaxTotalBytes = 16
+		config.ArtifactTTL = time.Minute
+		config.Now = clock.Now
+	})
+	first, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "first",
+		Format:      FormatCSV,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := waitExportState(t, manager, testAccess, first.ID, StateCompleted)
+	artifactPath := filepath.Join(manager.artifactDir, completed.Artifact.FileName)
+	deleteFailure := errors.New("private injected unlink failure")
+	originalRemove := manager.removePath
+	var failDeletion atomic.Bool
+	var removalAttempts atomic.Int32
+	failDeletion.Store(true)
+	manager.removePath = func(path string) error {
+		if path == artifactPath {
+			attempt := removalAttempts.Add(1)
+			if failDeletion.Load() {
+				if attempt == 1 {
+					// Simulate a filesystem call that consumes the entire
+					// throttle interval. The next retry must still be measured
+					// from completion, not from the beginning of this call.
+					clock.Advance(capacityCleanupThrottle)
+				}
+				return deleteFailure
+			}
+		}
+		return originalRemove(path)
+	}
+
+	clock.Advance(time.Minute)
+	createAfter := func() error {
+		_, createErr := manager.Create(context.Background(), testAccess, CreateRequest{
+			SearchJobID: "after",
+			Format:      FormatCSV,
+		})
+		return createErr
+	}
+	if err := createAfter(); !errors.Is(err, ErrCapacity) || strings.Contains(err.Error(), deleteFailure.Error()) {
+		t.Fatalf("Create(after failed reclamation) = %v, want path-safe ErrCapacity", err)
+	}
+	manager.mu.RLock()
+	entry := manager.jobs[first.ID]
+	manager.mu.RUnlock()
+	if entry == nil {
+		t.Fatal("failed reclamation removed the retryable tombstone")
+	}
+	entry.mu.RLock()
+	retainedPath := entry.artifactPath
+	retainedBytes := entry.accountedBytes
+	entry.mu.RUnlock()
+	if retainedPath != artifactPath || retainedBytes == 0 {
+		t.Fatalf("retry state = path %q bytes %d", retainedPath, retainedBytes)
+	}
+	if got := manager.LastCleanupError(); !errors.Is(got, deleteFailure) {
+		t.Fatalf("LastCleanupError() = %v, want admission cleanup failure", got)
+	}
+	if attempts := removalAttempts.Load(); attempts != 1 {
+		t.Fatalf("unlink attempts after first rejection = %d, want 1", attempts)
+	}
+
+	// A newly reclaimable lifecycle event invalidates advisory cleanup timing,
+	// but must not bypass the strict retry floor for the failed unlink.
+	manager.noteCleanupStateChange()
+	if err := createAfter(); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("immediate Create retry = %v, want ErrCapacity", err)
+	}
+	if attempts := removalAttempts.Load(); attempts != 1 {
+		t.Fatalf("immediate retry bypassed cleanup throttle: %d unlink attempts", attempts)
+	}
+	failDeletion.Store(false)
+	clock.Advance(capacityCleanupThrottle - time.Nanosecond)
+	if err := createAfter(); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("Create(before cleanup throttle deadline) = %v, want ErrCapacity", err)
+	}
+	if attempts := removalAttempts.Load(); attempts != 1 {
+		t.Fatalf("pre-deadline retry performed %d unlink attempts, want 1", attempts)
+	}
+	clock.Advance(time.Nanosecond)
+	after, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "after",
+		Format:      FormatCSV,
+	})
+	if err != nil {
+		t.Fatalf("Create(after cleanup throttle deadline) = %v", err)
+	}
+	waitExportState(t, manager, testAccess, after.ID, StateCompleted)
+	if attempts := removalAttempts.Load(); attempts != 2 {
+		t.Fatalf("unlink attempts after repaired retry = %d, want 2", attempts)
+	}
+}
+
+func TestManagerCanceledPartialCleanupDoesNotSuppressCapacityReclamation(t *testing.T) {
+	t.Parallel()
+	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{{Name: "x", Kind: searchjobs.ValueKindString}}}
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"first": {schema: schema},
+		"other": {schema: schema},
+		"after": {schema: schema},
+	}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.MaxJobs = 3
+		config.DefaultByteLimit = 8
+		config.MaximumByteLimit = 8
+		config.MaxTotalBytes = 9
+		config.ArtifactTTL = time.Minute
+		config.Now = clock.Now
+	})
+	for _, searchID := range []string{"first", "other"} {
+		created, err := manager.Create(context.Background(), testAccess, CreateRequest{
+			SearchJobID: searchID,
+			Format:      FormatCSV,
+			ByteLimit:   4,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitExportState(t, manager, testAccess, created.ID, StateCompleted)
+	}
+	clock.Advance(time.Minute)
+	generationBefore := manager.cleanupGeneration.Load()
+	ctx, cancel := context.WithCancel(context.Background())
+	originalRemove := manager.removePath
+	deleteFailure := errors.New("injected unlink before cancellation")
+	var failedFirstRemoval atomic.Bool
+	manager.removePath = func(path string) error {
+		if path != "" && failedFirstRemoval.CompareAndSwap(false, true) {
+			cancel()
+			return deleteFailure
+		}
+		return originalRemove(path)
+	}
+	if _, err := manager.Create(ctx, testAccess, CreateRequest{
+		SearchJobID: "after",
+		Format:      FormatCSV,
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Create(canceled after failed unlink) = %v, want context.Canceled", err)
+	}
+	if generationAfter := manager.cleanupGeneration.Load(); generationAfter != generationBefore {
+		t.Fatalf("partial cleanup generation = %d, want unchanged %d", generationAfter, generationBefore)
+	}
+	if got := manager.LastCleanupError(); !errors.Is(got, deleteFailure) {
+		t.Fatalf("LastCleanupError() = %v, want pre-cancellation unlink failure", got)
+	}
+
+	after, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "after",
+		Format:      FormatCSV,
+	})
+	if err != nil {
+		t.Fatalf("Create(after partial cleanup) = %v", err)
+	}
+	waitExportState(t, manager, testAccess, after.ID, StateCompleted)
+}
+
+func TestManagerConcurrentCapacityCleanupCoalescesAndCloseCancelsWaiters(t *testing.T) {
+	t.Parallel()
+	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{{Name: "x", Kind: searchjobs.ValueKindString}}}
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"first": {schema: schema},
+		"after": {schema: schema},
+	}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.MaxJobs = 2
+		config.DefaultByteLimit = 16
+		config.MaximumByteLimit = 16
+		config.MaxTotalBytes = 16
+		config.ArtifactTTL = time.Minute
+		config.Now = clock.Now
+	})
+	first, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "first",
+		Format:      FormatCSV,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := waitExportState(t, manager, testAccess, first.ID, StateCompleted)
+	artifactPath := filepath.Join(manager.artifactDir, completed.Artifact.FileName)
+	removeStarted := make(chan struct{})
+	releaseRemove := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseRemove) }) }
+	defer release()
+	originalRemove := manager.removePath
+	var removalAttempts atomic.Int32
+	manager.removePath = func(path string) error {
+		if path == artifactPath && removalAttempts.Add(1) == 1 {
+			close(removeStarted)
+			<-releaseRemove
+		}
+		return originalRemove(path)
+	}
+	clock.Advance(time.Minute)
+
+	create := func(result chan<- error) {
+		_, createErr := manager.Create(context.Background(), testAccess, CreateRequest{
+			SearchJobID: "after",
+			Format:      FormatCSV,
+		})
+		result <- createErr
+	}
+	triggerDone := make(chan error, 1)
+	go create(triggerDone)
+	select {
+	case <-removeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("capacity cleanup did not reach artifact removal")
+	}
+	const waiters = 8
+	waiterDone := make(chan error, waiters)
+	for range waiters {
+		go create(waiterDone)
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- manager.Close() }()
+	select {
+	case <-manager.ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not cancel cleanup waiters")
+	}
+	for range waiters {
+		select {
+		case err := <-waiterDone:
+			if !errors.Is(err, ErrClosed) {
+				t.Fatalf("cleanup waiter Create() = %v, want ErrClosed", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("capacity cleanup waiter ignored manager shutdown")
+		}
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before active cleanup completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case err := <-triggerDone:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("capacity-triggering Create() = %v, want ErrClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("capacity-triggering Create did not finish")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not finish after active cleanup")
+	}
+	if attempts := removalAttempts.Load(); attempts != 1 {
+		t.Fatalf("artifact removal attempts = %d, want exactly 1", attempts)
+	}
+}
+
+func TestManagerBackgroundCleanupReportsDeletionFailure(t *testing.T) {
+	t.Parallel()
+	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
+	reported := make(chan error, 1)
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"search": {schema: basicExportSchema(), rows: basicExportRows()[:1]},
+	}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.ArtifactTTL = time.Minute
+		config.CleanupInterval = time.Millisecond
+		config.Now = clock.Now
+		config.OnCleanupError = func(err error) {
+			select {
+			case reported <- err:
+			default:
+			}
+		}
+	})
+	created, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "search",
+		Format:      FormatCSV,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := waitExportState(t, manager, testAccess, created.ID, StateCompleted)
+	artifactPath := filepath.Join(manager.artifactDir, completed.Artifact.FileName)
+	deleteFailure := errors.New("injected background deletion failure")
+	originalRemove := manager.removePath
+	var failDeletion atomic.Bool
+	failDeletion.Store(true)
+	manager.removePath = func(path string) error {
+		if path == artifactPath && failDeletion.Load() {
+			return deleteFailure
+		}
+		return originalRemove(path)
+	}
+
+	clock.Advance(time.Minute)
+	select {
+	case got := <-reported:
+		if !errors.Is(got, deleteFailure) {
+			t.Fatalf("OnCleanupError() = %v, want injected deletion failure", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("background deletion failure was not reported")
+	}
+	if got := manager.LastCleanupError(); !errors.Is(got, deleteFailure) {
+		t.Fatalf("LastCleanupError() = %v, want injected deletion failure", got)
+	}
+
+	failDeletion.Store(false)
+	if err := manager.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(artifactPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("artifact after deletion retry Stat() = %v, want not exist", err)
+	}
+}
+
+func TestManagerCleanupErrorHookIsBoundedAndPanicSafe(t *testing.T) {
+	t.Parallel()
+	callbackCalls := make(chan int, 2)
+	releaseCallback := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseCallback) }) }
+	defer release()
+	var calls atomic.Int32
+	source := &exportTestSource{datasets: map[string]exportTestDataset{}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.OnCleanupError = func(error) {
+			call := int(calls.Add(1))
+			callbackCalls <- call
+			if call == 1 {
+				<-releaseCallback
+				panic("cleanup callback panic must be contained")
+			}
+		}
+	})
+	first := errors.New("first cleanup failure")
+	manager.reportCleanupError(first)
+	select {
+	case call := <-callbackCalls:
+		if call != 1 {
+			t.Fatalf("first cleanup callback number = %d", call)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cleanup error callback did not start")
+	}
+	latest := errors.New("latest cleanup failure")
+	reportDone := make(chan struct{})
+	go func() {
+		for range 1_000 {
+			manager.reportCleanupError(latest)
+		}
+		close(reportDone)
+	}()
+	select {
+	case <-reportDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked cleanup callback stalled failure reporting")
+	}
+	if got := manager.LastCleanupError(); !errors.Is(got, latest) {
+		t.Fatalf("LastCleanupError() = %v, want latest failure", got)
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- manager.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked cleanup callback stalled Close")
+	}
+	release()
+	waitFor(t, func() bool {
+		return len(manager.cleanupErrorHookGate) == 0
+	}, "cleanup callback panic recovery")
+	manager.reportCleanupError(errors.New("post-panic cleanup failure"))
+	select {
+	case call := <-callbackCalls:
+		if call != 2 {
+			t.Fatalf("post-panic cleanup callback number = %d, want 2", call)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("panicking cleanup callback left its notification gate stuck")
+	}
+}
+
+func TestCleanupErrorReportingHandlesMixedAndBoundedAggregates(t *testing.T) {
+	t.Parallel()
+	deleteFailure := errors.New("injected deletion failure")
+	if !shouldReportCleanupError(errors.Join(context.Canceled, deleteFailure)) {
+		t.Fatal("mixed cancellation and deletion failure was suppressed")
+	}
+	if shouldReportCleanupError(errors.Join(
+		context.Canceled,
+		fmt.Errorf("wrapped deadline: %w", context.DeadlineExceeded),
+		ErrClosed,
+	)) {
+		t.Fatal("cancellation-only aggregate was reported")
+	}
+
+	var aggregate cleanupErrorAccumulator
+	for index := range maximumCleanupErrorSamples + 100 {
+		aggregate.add(fmt.Errorf("cleanup failure %d", index))
+	}
+	err := aggregate.err()
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		t.Fatalf("bounded cleanup aggregate type = %T, want multi-error", err)
+	}
+	children := joined.Unwrap()
+	if len(children) != maximumCleanupErrorSamples+1 {
+		t.Fatalf("bounded cleanup aggregate children = %d, want %d", len(children), maximumCleanupErrorSamples+1)
+	}
+	if summary := children[len(children)-1].Error(); !strings.Contains(summary, "100 additional") {
+		t.Fatalf("bounded cleanup aggregate summary = %q", summary)
+	}
+}
+
+func TestCleanupCompletionPreservesRetryFloorAndEarlierKnownDeadline(t *testing.T) {
+	t.Parallel()
+	completedAt := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	staleDue := completedAt.Add(-time.Second)
+
+	retrying := &Manager{}
+	retrying.noteCleanupCompletion(completedAt, staleDue, true, true, true, 0, true)
+	if want := completedAt.Add(capacityCleanupThrottle); !retrying.nextCapacityCleanup.Equal(want) {
+		t.Fatalf("retry cleanup deadline = %v, want %v", retrying.nextCapacityCleanup, want)
+	}
+
+	reclaimable := &Manager{}
+	reclaimable.noteCleanupCompletion(completedAt, staleDue, true, false, false, 0, true)
+	if !reclaimable.nextCapacityCleanup.Equal(staleDue) {
+		t.Fatalf("known cleanup deadline = %v, want %v", reclaimable.nextCapacityCleanup, staleDue)
+	}
+}
+
 func TestManagerArtifactTTLAndTombstoneCleanup(t *testing.T) {
 	t.Parallel()
 	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}

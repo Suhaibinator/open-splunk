@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"log"
 	"time"
 
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
@@ -12,6 +13,7 @@ const (
 	exportMaximumGroupedRows     = uint64(10_001)
 	exportNativeResultByteMargin = uint64(16)
 	exportMaximumExecutionTime   = time.Hour
+	exportCleanupFailureMessage  = "background export cleanup could not remove one or more private artifacts"
 )
 
 // exportRuntimeSettings is the single source of truth for limits that span
@@ -92,7 +94,11 @@ func (settings exportRuntimeSettings) queryExecutorConfig() queryexec.Config {
 	}
 }
 
-func (settings exportRuntimeSettings) managerConfig(source exportjobs.ResultSource, artifactDir string) exportjobs.Config {
+func (settings exportRuntimeSettings) managerConfig(
+	source exportjobs.ResultSource,
+	artifactDir string,
+	onCleanupError func(error),
+) exportjobs.Config {
 	return exportjobs.Config{
 		Source:           source,
 		ArtifactDir:      artifactDir,
@@ -101,5 +107,14 @@ func (settings exportRuntimeSettings) managerConfig(source exportjobs.ResultSour
 		DefaultByteLimit: settings.defaultByteLimit,
 		MaximumByteLimit: settings.maximumByteLimit,
 		MaxTotalBytes:    settings.maximumTotalBytes,
+		OnCleanupError:   onCleanupError,
 	}
 }
+
+func newExportCleanupErrorReporter(logger *log.Logger) func(error) {
+	return func(error) {
+		logger.Print(exportCleanupFailureMessage)
+	}
+}
+
+var reportExportCleanupError = newExportCleanupErrorReporter(log.Default())

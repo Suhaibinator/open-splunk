@@ -164,6 +164,7 @@ func (manager *Manager) CreateDownloadGrant(ctx context.Context, access searchjo
 			manager.grantMapHighWater = len(manager.grants)
 		}
 		manager.grantsByJob[canonicalID]++
+		manager.noteCleanupStateChange()
 		entry.mu.Unlock()
 		manager.mu.Unlock()
 		return DownloadGrant{Token: token, ExpiresAt: expiresAt}, nil
@@ -450,7 +451,8 @@ func (lease *DownloadLease) Close() error {
 		manager.mu.Lock()
 		entry.mu.Lock()
 		delete(entry.downloads, lease)
-		if len(entry.downloads) == 0 {
+		finalDownload := len(entry.downloads) == 0
+		if finalDownload {
 			entry.downloads = nil
 		}
 		if manager.activeDownloads > 0 {
@@ -475,6 +477,9 @@ func (lease *DownloadLease) Close() error {
 				// begun, Close owns any deferred artifact removal itself.
 				manager.admissions.Add(1)
 			}
+		}
+		if finalDownload && entry.job.State == StateExpired {
+			manager.noteCleanupStateChange()
 		}
 		entry.mu.Unlock()
 		manager.mu.Unlock()
