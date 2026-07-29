@@ -2,6 +2,7 @@ package collectoradmission
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,6 +16,16 @@ import (
 )
 
 const maximumTenantIDBytes = 255
+
+var (
+	// ErrLeaseNotCurrent means an operation did not present the exact enabled
+	// durable lease currently authoritative for this tenant and collector.
+	// Disabled, disconnected, and superseded leases deliberately share one
+	// externally safe result.
+	ErrLeaseNotCurrent = errors.New(
+		"collector admission: durable lease is not current",
+	)
+)
 
 // Store owns the atomic collector Hello admission boundary for one exact
 // server-controlled tenant.
@@ -84,6 +95,76 @@ func New(
 		fleet:  fleet,
 		scope:  collectorfleet.Scope{TenantID: tenantID},
 	}, nil
+}
+
+// AuthorizeLease revalidates bearer at checkedAt and verifies its exact
+// collector binding plus the enabled current durable lease in one consistent
+// read transaction. It returns freshly derived index scope and deliberately
+// does not record token-use telemetry.
+//
+// A concurrent administrative or credential change that commits before the
+// snapshot is established takes effect for this operation. A change that
+// commits afterward fences the next operation; the already admitted operation
+// may finish.
+func (store *Store) AuthorizeLease(
+	ctx context.Context,
+	bearer string,
+	lease collectorfleet.Lease,
+	checkedAt time.Time,
+) (
+	authentication auth.Authentication,
+	returnedErr error,
+) {
+	if ctx == nil {
+		return auth.Authentication{}, fmt.Errorf(
+			"%w: nil context",
+			control.ErrInvalidArgument,
+		)
+	}
+	if lease.TenantID != store.scope.TenantID {
+		return auth.Authentication{}, ErrLeaseNotCurrent
+	}
+	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	if tx.Error != nil {
+		return auth.Authentication{}, fmt.Errorf(
+			"begin collector lease authorization: %w",
+			tx.Error,
+		)
+	}
+	finished := false
+	defer finishTransaction(tx, &finished, &returnedErr)
+
+	authentication, err := store.tokens.RevalidateCollectorInTransaction(
+		ctx,
+		tx,
+		bearer,
+		checkedAt,
+	)
+	if err != nil {
+		return auth.Authentication{}, err
+	}
+	if authentication.BoundCollectorID != lease.CollectorID {
+		return auth.Authentication{}, auth.ErrUnauthorized
+	}
+	current, err := store.fleet.IsCurrentLeaseInTransaction(
+		ctx,
+		tx,
+		lease,
+	)
+	if err != nil {
+		return auth.Authentication{}, err
+	}
+	if !current {
+		return auth.Authentication{}, ErrLeaseNotCurrent
+	}
+	if err := tx.Commit().Error; err != nil {
+		return auth.Authentication{}, fmt.Errorf(
+			"commit collector lease authorization: %w",
+			err,
+		)
+	}
+	finished = true
+	return authentication, nil
 }
 
 // Admit atomically revalidates bearer at AcceptedAt, records token use,

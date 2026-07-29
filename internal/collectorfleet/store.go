@@ -108,6 +108,43 @@ func (store *Store) ClaimPreparedInTransaction(
 	return claimInTransaction(transaction.WithContext(ctx), normalized)
 }
 
+// IsCurrentLeaseInTransaction reports whether lease exactly identifies the
+// enabled collector's active durable stream using a caller-owned transaction.
+// It neither commits nor rolls back transaction.
+//
+// Callers must use an active transaction from the same migrated control
+// database and read any credential state for the operation in that same
+// transaction. A disabled collector, inactive runtime, or superseded boot,
+// stream, or generation returns false without disclosing which fence changed.
+func (store *Store) IsCurrentLeaseInTransaction(
+	ctx context.Context,
+	transaction *gorm.DB,
+	lease Lease,
+) (bool, error) {
+	if err := validateContext(ctx); err != nil {
+		return false, err
+	}
+	if transaction == nil ||
+		transaction.Statement == nil ||
+		transaction.Statement.ConnPool == nil {
+		return false, invalid("collector lease transaction is required")
+	}
+	if _, ok := transaction.Statement.ConnPool.(gorm.TxCommitter); !ok {
+		return false, invalid(
+			"collector lease check requires an active database transaction",
+		)
+	}
+	lease, err := normalizeLease(lease)
+	if err != nil {
+		return false, err
+	}
+	_, current, err := takeCurrentLease(
+		transaction.WithContext(ctx),
+		lease,
+	)
+	return current, err
+}
+
 func claimInTransaction(
 	tx *gorm.DB,
 	normalized normalizedClaim,
