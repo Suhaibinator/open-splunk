@@ -65,13 +65,14 @@ func TestCollectorAuthorizerMapsCurrentTokenScopeWithoutAliasing(t *testing.T) {
 	t.Parallel()
 	indexes := []string{"audit", "main"}
 	store := fakeCollectorAuthenticationStore{authentication: auth.Authentication{
-		TokenID: "token-id", AllowedIndexNames: indexes,
+		TokenID: "token-id", BoundCollectorID: "collector-id", AllowedIndexNames: indexes,
 	}}
 	authorization, err := (collectorAuthorizer{store: store, tenantID: "tenant"}).Authorize(context.Background(), "secret")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if authorization.SubjectID != "token-id" || authorization.TenantID != "tenant" || len(authorization.AuthorizedIndexes) != 2 {
+	if authorization.SubjectID != "token-id" || authorization.TenantID != "tenant" ||
+		authorization.CollectorID != "collector-id" || len(authorization.AuthorizedIndexes) != 2 {
 		t.Fatalf("authorization = %+v", authorization)
 	}
 	authorization.AuthorizedIndexes[0] = "changed"
@@ -87,7 +88,18 @@ func TestCollectorAuthorizerRejectsMalformedOrFailedAuthentication(t *testing.T)
 		"missing store":  {tenantID: "tenant"},
 		"missing tenant": {store: fakeCollectorAuthenticationStore{}},
 		"store error":    {store: fakeCollectorAuthenticationStore{err: denied}, tenantID: "tenant"},
-		"empty scope":    {store: fakeCollectorAuthenticationStore{authentication: auth.Authentication{TokenID: "id"}}, tenantID: "tenant"},
+		"empty binding": {
+			store: fakeCollectorAuthenticationStore{authentication: auth.Authentication{
+				TokenID: "id", AllowedIndexNames: []string{"main"},
+			}},
+			tenantID: "tenant",
+		},
+		"empty scope": {
+			store: fakeCollectorAuthenticationStore{authentication: auth.Authentication{
+				TokenID: "id", BoundCollectorID: "collector-id",
+			}},
+			tenantID: "tenant",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := authorizer.Authorize(context.Background(), "secret"); err == nil {

@@ -4,9 +4,9 @@ package auth
 // ingestion_tokens.
 //
 // Versioned SQL migrations remain the sole schema authority. In particular,
-// SQLite STRICT mode and the digest-immutability and irreversible-revocation
-// triggers cannot be represented completely by GORM tags. Never use
-// AutoMigrate for this model.
+// SQLite STRICT mode and the digest-immutability, irreversible-revocation, and
+// collector-binding insert/update triggers cannot be represented completely
+// by GORM tags. Never use AutoMigrate for this model.
 type collectorTokenRecord struct {
 	IngestionTokenID    string              `gorm:"column:ingestion_token_id;type:text;primaryKey;not null"`
 	Version             int64               `gorm:"column:version;type:integer;not null;check:ingestion_tokens_version_positive,version >= 1"`
@@ -20,6 +20,7 @@ type collectorTokenRecord struct {
 	ExpiresAtUnixMicro  *int64              `gorm:"column:expires_at_unix_micro;type:integer;check:ingestion_tokens_expiration_after_create,expires_at_unix_micro IS NULL OR expires_at_unix_micro > created_at_unix_micro"`
 	RevokedAtUnixMicro  *int64              `gorm:"column:revoked_at_unix_micro;type:integer;check:ingestion_tokens_revocation_consistency,(state = 'revoked' AND revoked_at_unix_micro IS NOT NULL) OR (state IN ('active', 'disabled') AND revoked_at_unix_micro IS NULL)"`
 	LastUsedAtUnixMicro *int64              `gorm:"column:last_used_at_unix_micro;type:integer;check:ingestion_tokens_last_use_not_before_create,last_used_at_unix_micro IS NULL OR last_used_at_unix_micro >= created_at_unix_micro"`
+	BoundCollectorID    *string             `gorm:"column:bound_collector_id;type:text;check:ingestion_tokens_bound_collector_id_canonical,bound_collector_id IS NULL OR (length(bound_collector_id) BETWEEN 1 AND 128 AND instr(bound_collector_id, char(0)) = 0 AND substr(bound_collector_id, 1, 1) GLOB '[A-Za-z0-9]' AND bound_collector_id NOT GLOB '*[^A-Za-z0-9._:-]*')"`
 }
 
 func (collectorTokenRecord) TableName() string {
@@ -54,12 +55,14 @@ type collectorTokenMetadataRow struct {
 	ExpiresAtUnixMicro  *int64              `gorm:"column:expires_at_unix_micro"`
 	RevokedAtUnixMicro  *int64              `gorm:"column:revoked_at_unix_micro"`
 	LastUsedAtUnixMicro *int64              `gorm:"column:last_used_at_unix_micro"`
+	BoundCollectorID    *string             `gorm:"column:bound_collector_id"`
 	AllowedIndexNames   string              `gorm:"column:allowed_index_names"`
 }
 
 type collectorTokenAuthenticationRow struct {
 	IngestionTokenID  string `gorm:"column:ingestion_token_id"`
 	Name              string `gorm:"column:name"`
+	BoundCollectorID  string `gorm:"column:bound_collector_id"`
 	AllowedIndexNames string `gorm:"column:allowed_index_names"`
 }
 

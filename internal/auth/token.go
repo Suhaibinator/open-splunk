@@ -27,6 +27,7 @@ const (
 	minimumDigestKeyBytes   = 32
 	maximumTokenScopes      = 256
 	maximumDescriptionBytes = 8 << 10
+	maximumCollectorIDBytes = 128
 	redactedValue           = "[REDACTED]"
 )
 
@@ -66,6 +67,7 @@ type CollectorToken struct {
 	Description       string
 	Prefix            string
 	State             CollectorTokenState
+	BoundCollectorID  string
 	AllowedIndexNames []string
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
@@ -109,6 +111,7 @@ type CreateCollectorTokenRequest struct {
 	Name              string
 	Description       string
 	AllowedIndexNames []string
+	BoundCollectorID  string
 	ExpiresAt         time.Time
 }
 
@@ -118,14 +121,16 @@ type UpdateCollectorTokenRequest struct {
 	Name              string
 	Description       string
 	AllowedIndexNames []string
+	BoundCollectorID  string
 	ExpiresAt         time.Time
 }
 
 // Principal is the safe result of a collector authorization check.
 type Principal struct {
-	TokenID   string
-	TokenName string
-	IndexName string
+	TokenID          string
+	TokenName        string
+	IndexName        string
+	BoundCollectorID string
 }
 
 // Authentication is a safe credential resolution snapshot. AllowedIndexNames
@@ -134,6 +139,7 @@ type Principal struct {
 type Authentication struct {
 	TokenID           string
 	TokenName         string
+	BoundCollectorID  string
 	AllowedIndexNames []string
 }
 
@@ -172,6 +178,13 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 	)
 	if err != nil {
 		return IssuedCollectorToken{}, err
+	}
+	if !validCollectorID(request.BoundCollectorID) {
+		return IssuedCollectorToken{}, fmt.Errorf(
+			"%w: bound collector ID must be a canonical identifier containing between 1 and %d ASCII bytes",
+			control.ErrInvalidArgument,
+			maximumCollectorIDBytes,
+		)
 	}
 
 	plaintext, err := store.generatePlaintext()
@@ -216,6 +229,7 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 		CreatedAtUnixMicro: now.UnixMicro(),
 		UpdatedAtUnixMicro: now.UnixMicro(),
 		ExpiresAtUnixMicro: expiration,
+		BoundCollectorID:   &request.BoundCollectorID,
 	}
 	if err := tx.Create(&record).Error; err != nil {
 		// No bound SQL value contains plaintext: only the HMAC digest is sent
@@ -241,6 +255,7 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 	metadata := CollectorToken{
 		ID: tokenID, Version: 1, Name: name, Description: description,
 		Prefix: prefix, State: CollectorTokenStateActive,
+		BoundCollectorID:  request.BoundCollectorID,
 		AllowedIndexNames: append([]string(nil), allowedNames...),
 		CreatedAt:         now, UpdatedAt: now, ExpiresAt: expiresAt,
 	}
@@ -283,6 +298,13 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 	if current.State == CollectorTokenStateRevoked || current.State == CollectorTokenStateExpired {
 		return CollectorToken{}, ErrInactiveToken
 	}
+	boundCollectorID, err := replacementCollectorID(
+		current.BoundCollectorID,
+		request.BoundCollectorID,
+	)
+	if err != nil {
+		return CollectorToken{}, err
+	}
 	name, description, allowedNames, expiresAt, err := normalizeTokenDefinition(
 		request.Name, request.Description, request.AllowedIndexNames, request.ExpiresAt, now,
 	)
@@ -308,6 +330,16 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 		expirationUnixMicro := expiresAt.UnixMicro()
 		expiration = &expirationUnixMicro
 	}
+	updateValues := map[string]any{
+		"name":                  name,
+		"description":           description,
+		"expires_at_unix_micro": expiration,
+		"updated_at_unix_micro": now.UnixMicro(),
+		"version":               gorm.Expr("version + 1"),
+	}
+	if current.BoundCollectorID == "" && boundCollectorID != "" {
+		updateValues["bound_collector_id"] = boundCollectorID
+	}
 	update := tx.Model(&collectorTokenRecord{}).
 		Where(
 			"ingestion_token_id = ? AND version = ? AND state != ?",
@@ -315,13 +347,7 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 			expectedVersionDB,
 			CollectorTokenStateRevoked,
 		).
-		Updates(map[string]any{
-			"name":                  name,
-			"description":           description,
-			"expires_at_unix_micro": expiration,
-			"updated_at_unix_micro": now.UnixMicro(),
-			"version":               gorm.Expr("version + 1"),
-		})
+		Updates(updateValues)
 	if update.Error != nil {
 		return CollectorToken{}, fmt.Errorf("update collector token: %w", update.Error)
 	}
@@ -374,7 +400,8 @@ func (store *Store) Authorize(ctx context.Context, plaintext, indexName string) 
 		Select(`
 			token.ingestion_token_id AS token_id,
 			token.name AS token_name,
-			target.name AS index_name`).
+			target.name AS index_name,
+			token.bound_collector_id AS bound_collector_id`).
 		Joins(`
 			JOIN ingestion_token_indexes AS scope
 			  ON scope.ingestion_token_id = token.ingestion_token_id`).
@@ -382,6 +409,7 @@ func (store *Store) Authorize(ctx context.Context, plaintext, indexName string) 
 		Where(
 			`token.token_digest = ?
 			 AND token.state = ?
+			 AND token.bound_collector_id IS NOT NULL
 			 AND (token.expires_at_unix_micro IS NULL OR token.expires_at_unix_micro > ?)
 			 AND target.name = ?
 			 AND target.state = ?
@@ -398,6 +426,9 @@ func (store *Store) Authorize(ctx context.Context, plaintext, indexName string) 
 	}
 	if result.Error != nil {
 		return Principal{}, fmt.Errorf("authorize collector token: %w", result.Error)
+	}
+	if !validCollectorID(principal.BoundCollectorID) {
+		return Principal{}, errors.New("authorize collector token: invalid bound collector ID in control-plane database")
 	}
 	return principal, nil
 }
@@ -417,6 +448,7 @@ func (store *Store) Authenticate(ctx context.Context, plaintext string) (Authent
 		Select(`
 			token.ingestion_token_id,
 			token.name,
+			token.bound_collector_id,
 			group_concat(target.name, ',') AS allowed_index_names`).
 		Joins(`
 			JOIN ingestion_token_indexes AS scope
@@ -425,6 +457,7 @@ func (store *Store) Authenticate(ctx context.Context, plaintext string) (Authent
 		Where(
 			`token.token_digest = ?
 			 AND token.state = ?
+			 AND token.bound_collector_id IS NOT NULL
 			 AND (token.expires_at_unix_micro IS NULL OR token.expires_at_unix_micro > ?)
 			 AND target.state = ?
 			 AND target.ingestion_enabled = 1`,
@@ -441,9 +474,13 @@ func (store *Store) Authenticate(ctx context.Context, plaintext string) (Authent
 	if result.Error != nil {
 		return Authentication{}, fmt.Errorf("authenticate collector token: %w", result.Error)
 	}
+	if !validCollectorID(row.BoundCollectorID) {
+		return Authentication{}, errors.New("authenticate collector token: invalid bound collector ID in control-plane database")
+	}
 	authentication := Authentication{
 		TokenID:           row.IngestionTokenID,
 		TokenName:         row.Name,
+		BoundCollectorID:  row.BoundCollectorID,
 		AllowedIndexNames: strings.Split(row.AllowedIndexNames, ","),
 	}
 	sort.Strings(authentication.AllowedIndexNames)
@@ -468,6 +505,7 @@ func (store *Store) RecordCollectorTokenUse(ctx context.Context, tokenID string,
 		Model(&collectorTokenRecord{}).
 		Where("ingestion_token_id = ?", tokenID).
 		Where("state = ?", CollectorTokenStateActive).
+		Where("bound_collector_id IS NOT NULL").
 		Where(
 			"expires_at_unix_micro IS NULL OR expires_at_unix_micro > ?",
 			acceptedAtUnixMicro,
@@ -620,6 +658,7 @@ func collectorTokenMetadataQuery(db *gorm.DB) *gorm.DB {
 			token.expires_at_unix_micro,
 			token.revoked_at_unix_micro,
 			token.last_used_at_unix_micro,
+			token.bound_collector_id,
 			group_concat(target.name, ',') AS allowed_index_names`).
 		Joins(`
 			JOIN ingestion_token_indexes AS scope
@@ -649,6 +688,12 @@ func collectorTokenFromMetadataRow(row collectorTokenMetadataRow, now time.Time)
 		State:       row.State,
 		CreatedAt:   time.UnixMicro(row.CreatedAtUnixMicro).UTC(),
 		UpdatedAt:   time.UnixMicro(row.UpdatedAtUnixMicro).UTC(),
+	}
+	if row.BoundCollectorID != nil {
+		if !validCollectorID(*row.BoundCollectorID) {
+			return CollectorToken{}, errors.New("invalid collector token bound collector ID in control-plane database")
+		}
+		token.BoundCollectorID = *row.BoundCollectorID
 	}
 	if row.ExpiresAtUnixMicro != nil {
 		token.ExpiresAt = time.UnixMicro(*row.ExpiresAtUnixMicro).UTC()
@@ -690,6 +735,42 @@ func normalizeTokenScopes(inputs []string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+func replacementCollectorID(current, requested string) (string, error) {
+	if requested == "" {
+		return current, nil
+	}
+	if !validCollectorID(requested) {
+		return "", fmt.Errorf(
+			"%w: bound collector ID must be a canonical identifier containing between 1 and %d ASCII bytes",
+			control.ErrInvalidArgument,
+			maximumCollectorIDBytes,
+		)
+	}
+	if current != "" && requested != current {
+		return "", fmt.Errorf("%w: bound collector ID is immutable", control.ErrInvalidArgument)
+	}
+	return requested, nil
+}
+
+func validCollectorID(value string) bool {
+	if len(value) == 0 || len(value) > maximumCollectorIDBytes || !utf8.ValidString(value) {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		isASCIIAlphaNumeric := character >= 'a' && character <= 'z' ||
+			character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9'
+		if isASCIIAlphaNumeric {
+			continue
+		}
+		if index == 0 || !strings.ContainsRune("._:-", rune(character)) {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeTokenDefinition(name, description string, scopes []string, expiration, now time.Time) (string, string, []string, time.Time, error) {

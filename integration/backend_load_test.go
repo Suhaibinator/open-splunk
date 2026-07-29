@@ -323,6 +323,9 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		plan.IndexName,
 		"Sustained backend load",
 	)
+	collectorStateDir := filepath.Join(work, "collector-state")
+	collectorID := "backend-sustained-load-collector"
+	writeCollectorIdentity(t, collectorStateDir, collectorID)
 	plaintextToken := createBackendLoadToken(
 		t,
 		ctx,
@@ -330,6 +333,7 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		baseURL,
 		administratorToken,
 		plan.IndexName,
+		collectorID,
 	)
 
 	fixtureStart := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Millisecond)
@@ -337,7 +341,6 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 	createEmptyFixture(t, logPath)
 	tokenPath := filepath.Join(work, "collector.token")
 	writePrivateFile(t, tokenPath, []byte(plaintextToken+"\n"))
-	collectorStateDir := filepath.Join(work, "collector-state")
 	collectorConfig := filepath.Join(work, "collector.yaml")
 	writePrivateFile(t, collectorConfig, []byte(backendLoadCollectorYAML(
 		collectorAddress,
@@ -765,6 +768,7 @@ func createBackendLoadToken(
 	baseURL string,
 	administratorToken string,
 	indexName string,
+	collectorID string,
 ) string {
 	t.Helper()
 	return createIndexScopedIngestionToken(
@@ -775,6 +779,7 @@ func createBackendLoadToken(
 		administratorToken,
 		"backend-sustained-load-collector",
 		indexName,
+		collectorID,
 	)
 }
 

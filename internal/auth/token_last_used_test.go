@@ -28,6 +28,7 @@ func TestRecordCollectorTokenUseProjectsMonotonicObservation(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "last-used",
 		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -149,6 +150,7 @@ func TestRecordCollectorTokenUseRequiresActiveUnexpiredToken(t *testing.T) {
 	revoked, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "revoked",
 		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(revoked): %v", err)
@@ -163,6 +165,7 @@ func TestRecordCollectorTokenUseRequiresActiveUnexpiredToken(t *testing.T) {
 	expired, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "expired",
 		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
 		ExpiresAt:         now.Add(time.Minute),
 	})
 	if err != nil {
@@ -175,6 +178,7 @@ func TestRecordCollectorTokenUseRequiresActiveUnexpiredToken(t *testing.T) {
 	disabled, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "disabled",
 		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(disabled): %v", err)
@@ -193,6 +197,7 @@ func TestRecordCollectorTokenUseRequiresActiveUnexpiredToken(t *testing.T) {
 	active, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "active",
 		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(active): %v", err)
@@ -228,6 +233,7 @@ func TestConcurrentCollectorTokenUseKeepsNewestObservation(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "concurrent",
 		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -295,6 +301,7 @@ func TestCollectorTokenLastUseSurvivesDatabaseReopen(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "persistent-last-use",
 		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
 	})
 	if err != nil {
 		_ = db.Close()

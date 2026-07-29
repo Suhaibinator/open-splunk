@@ -37,8 +37,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 11 {
-		t.Fatalf("schema migration count = %d, want 11", migrationCount)
+	if migrationCount != 12 {
+		t.Fatalf("schema migration count = %d, want 12", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -86,8 +86,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 11 {
-		t.Fatalf("schema migration count after reopen = %d, want 11", migrationCount)
+	if migrationCount != 12 {
+		t.Fatalf("schema migration count after reopen = %d, want 12", migrationCount)
 	}
 }
 
@@ -258,8 +258,8 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 11 {
-		t.Fatalf("schema migration count = %d, want 11", count)
+	if count != 12 {
+		t.Fatalf("schema migration count = %d, want 12", count)
 	}
 }
 
@@ -311,6 +311,136 @@ func TestIngestionTokenLastUseMigrationUpgradesLegacyRows(t *testing.T) {
 		SET last_used_at_unix_micro = created_at_unix_micro
 		WHERE ingestion_token_id = 'legacy-token'`); err != nil {
 		t.Fatalf("last use at creation time: %v", err)
+	}
+}
+
+func TestIngestionTokenCollectorBindingMigrationUpgradesLegacyRows(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	raw, err := sql.Open(
+		"sqlite",
+		filepath.Join(t.TempDir(), "token-collector-binding-upgrade.sqlite")+"?_txlock=immediate",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+
+	if err := ApplyMigrations(ctx, raw, migrationsBefore(t, "0012_")); err != nil {
+		t.Fatalf("apply pre-collector-binding migrations: %v", err)
+	}
+	for position, tokenID := range []string{"legacy-first", "legacy-second", "legacy-invalid"} {
+		if _, err := raw.ExecContext(ctx, `
+			INSERT INTO ingestion_tokens (
+				ingestion_token_id, version, name, description, token_prefix,
+				token_digest, state, created_at_unix_micro, updated_at_unix_micro
+			) VALUES (?, 1, ?, '', 'ost_v1_legacy', randomblob(32), 'active', 100, 100)`,
+			tokenID,
+			fmt.Sprintf("legacy token %d", position),
+		); err != nil {
+			t.Fatalf("seed legacy ingestion token %q: %v", tokenID, err)
+		}
+	}
+
+	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+		t.Fatalf("apply collector-binding migration: %v", err)
+	}
+	rows, err := raw.QueryContext(ctx, `
+		SELECT ingestion_token_id, bound_collector_id
+		FROM ingestion_tokens
+		ORDER BY ingestion_token_id`)
+	if err != nil {
+		t.Fatalf("read upgraded legacy ingestion tokens: %v", err)
+	}
+	defer rows.Close()
+	upgraded := 0
+	for rows.Next() {
+		var tokenID string
+		var binding sql.NullString
+		if err := rows.Scan(&tokenID, &binding); err != nil {
+			t.Fatalf("scan upgraded legacy ingestion token: %v", err)
+		}
+		if binding.Valid {
+			t.Fatalf("legacy token %q binding = %q, want NULL", tokenID, binding.String)
+		}
+		upgraded++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate upgraded legacy ingestion tokens: %v", err)
+	}
+	if upgraded != 3 {
+		t.Fatalf("upgraded legacy tokens = %d, want 3", upgraded)
+	}
+
+	// The same collector may have overlapping credentials during rotation.
+	for _, tokenID := range []string{"legacy-first", "legacy-second"} {
+		if _, err := raw.ExecContext(ctx, `
+			UPDATE ingestion_tokens
+			SET bound_collector_id = 'collector-shared'
+			WHERE ingestion_token_id = ?`,
+			tokenID,
+		); err != nil {
+			t.Fatalf("bind %q to shared collector: %v", tokenID, err)
+		}
+	}
+	if _, err := raw.ExecContext(ctx, `
+		UPDATE ingestion_tokens
+		SET bound_collector_id = 'invalid/collector'
+		WHERE ingestion_token_id = 'legacy-invalid'`); err == nil {
+		t.Fatal("invalid collector binding unexpectedly succeeded")
+	}
+	if _, err := raw.ExecContext(ctx, `
+		UPDATE ingestion_tokens
+		SET bound_collector_id = ?
+		WHERE ingestion_token_id = 'legacy-invalid'`,
+		"a\x00hidden",
+	); err == nil {
+		t.Fatal("NUL-containing collector binding unexpectedly succeeded")
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO ingestion_tokens (
+			ingestion_token_id, version, name, description, token_prefix,
+			token_digest, state, created_at_unix_micro, updated_at_unix_micro
+		) VALUES (
+			'future-unbound', 1, 'future unbound', '', 'ost_v1_future',
+			randomblob(32), 'active', 100, 100
+		)`); err == nil || !strings.Contains(err.Error(), "collector binding is required") {
+		t.Fatalf("future unbound token insert error = %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		UPDATE ingestion_tokens
+		SET bound_collector_id = 'collector-shared'
+		WHERE ingestion_token_id = 'legacy-first'`); err != nil {
+		t.Fatalf("idempotent collector binding update: %v", err)
+	}
+	for label, statement := range map[string]string{
+		"clear": `
+			UPDATE ingestion_tokens
+			SET bound_collector_id = NULL
+			WHERE ingestion_token_id = 'legacy-first'`,
+		"change": `
+			UPDATE ingestion_tokens
+			SET bound_collector_id = 'collector-other'
+			WHERE ingestion_token_id = 'legacy-first'`,
+	} {
+		if _, err := raw.ExecContext(ctx, statement); err == nil ||
+			!strings.Contains(err.Error(), "collector binding is immutable") {
+			t.Fatalf("%s immutable collector binding error = %v", label, err)
+		}
+	}
+	var requiredTriggerSQL string
+	if err := raw.QueryRowContext(ctx, `
+		SELECT sql
+		FROM sqlite_schema
+		WHERE type = 'trigger'
+		  AND name = 'ingestion_token_collector_binding_is_required'`).
+		Scan(&requiredTriggerSQL); err != nil {
+		t.Fatalf("read collector-binding insert trigger: %v", err)
+	}
+	if !strings.Contains(requiredTriggerSQL, "BEFORE INSERT ON ingestion_tokens") ||
+		!strings.Contains(requiredTriggerSQL, "NEW.bound_collector_id IS NULL") {
+		t.Fatalf("collector-binding insert trigger = %q", requiredTriggerSQL)
 	}
 }
 

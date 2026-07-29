@@ -286,6 +286,20 @@ func (administration *mutableTokenAdministration) setLastUsedAt(
 	}
 }
 
+func (administration *mutableTokenAdministration) setBoundCollectorID(
+	id string,
+	boundCollectorID string,
+) {
+	administration.mu.Lock()
+	defer administration.mu.Unlock()
+	for index := range administration.records {
+		if administration.records[index].ID == id {
+			administration.records[index].BoundCollectorID = boundCollectorID
+			return
+		}
+	}
+}
+
 func cloneAdminToken(record auth.CollectorToken) auth.CollectorToken {
 	record.AllowedIndexNames = slices.Clone(record.AllowedIndexNames)
 	return record

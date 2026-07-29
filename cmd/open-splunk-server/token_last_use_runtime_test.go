@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,8 +17,10 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -66,6 +69,7 @@ func TestRuntimeIngestionTokenLastUseSurvivesHTTPGRPCReopen(t *testing.T) {
 		firstTokens,
 		authenticator,
 	)
+	collectorID := "collector-runtime-test"
 
 	createResponse := postRuntimeAppProto(
 		t,
@@ -76,6 +80,7 @@ func TestRuntimeIngestionTokenLastUseSurvivesHTTPGRPCReopen(t *testing.T) {
 				Name: "native collector",
 				Constraints: &opensplunkv1.IngestionTokenConstraints{
 					AllowedIndexNames: []string{"main"},
+					BoundCollectorId:  &collectorID,
 				},
 			},
 		},
@@ -95,7 +100,8 @@ func TestRuntimeIngestionTokenLastUseSurvivesHTTPGRPCReopen(t *testing.T) {
 	if created.GetPlaintextToken() == "" ||
 		created.GetIngestionToken().GetCreatedAt() == nil ||
 		created.GetIngestionToken().GetUpdatedAt() == nil ||
-		created.GetIngestionToken().GetLastUsedAt() != nil {
+		created.GetIngestionToken().GetLastUsedAt() != nil ||
+		created.GetIngestionToken().GetConstraints().GetBoundCollectorId() != collectorID {
 		_ = firstHandler.Close(ctx)
 		_ = firstDB.Close()
 		t.Fatalf("created token = %#v", &created)
@@ -110,10 +116,38 @@ func TestRuntimeIngestionTokenLastUseSurvivesHTTPGRPCReopen(t *testing.T) {
 		Truncate(time.Microsecond).
 		UTC()
 
+	mismatchedCollectorID := "collector-runtime-attacker"
+	rejected, rejectionErr := runtimeCollectorHello(
+		t,
+		firstTokens,
+		created.GetPlaintextToken(),
+		mismatchedCollectorID,
+		acceptedAt,
+	)
+	if rejected != nil || status.Code(rejectionErr) != codes.PermissionDenied ||
+		strings.Contains(rejectionErr.Error(), collectorID) ||
+		strings.Contains(rejectionErr.Error(), mismatchedCollectorID) {
+		t.Fatalf(
+			"mismatched collector admission = (%#v, %v), want sanitized PermissionDenied",
+			rejected,
+			rejectionErr,
+		)
+	}
+	rejectedGet := getRuntimeIngestionToken(
+		t,
+		firstHandler,
+		administratorToken,
+		tokenID,
+	)
+	if rejectedGet.GetLastUsedAt() != nil {
+		t.Fatalf("identity-rejected stream recorded token use: %#v", rejectedGet)
+	}
+
 	admitRuntimeCollectorStream(
 		t,
 		firstTokens,
 		created.GetPlaintextToken(),
+		collectorID,
 		acceptedAt,
 	)
 
@@ -233,8 +267,29 @@ func admitRuntimeCollectorStream(
 	t *testing.T,
 	tokens *auth.Store,
 	plaintextToken string,
+	collectorID string,
 	acceptedAt time.Time,
 ) {
+	t.Helper()
+	response, err := runtimeCollectorHello(
+		t,
+		tokens,
+		plaintextToken,
+		collectorID,
+		acceptedAt,
+	)
+	if err != nil || response.GetReady() == nil {
+		t.Fatalf("collector Ready = %#v, %v", response, err)
+	}
+}
+
+func runtimeCollectorHello(
+	t *testing.T,
+	tokens *auth.Store,
+	plaintextToken string,
+	collectorID string,
+	acceptedAt time.Time,
+) (*opensplunkv1.CollectResponse, error) {
 	t.Helper()
 	config := ingest.DefaultConfig()
 	config.Clock = func() time.Time { return acceptedAt }
@@ -295,7 +350,7 @@ func admitRuntimeCollectorStream(
 		SentAt:         timestamppb.New(acceptedAt),
 		Payload: &opensplunkv1.CollectRequest_Hello{
 			Hello: &opensplunkv1.CollectorHello{
-				CollectorId:      "collector-runtime-test",
+				CollectorId:      collectorID,
 				InstanceId:       "instance-runtime-test",
 				ProtocolMajor:    1,
 				ProtocolMinor:    0,
@@ -312,13 +367,6 @@ func admitRuntimeCollectorStream(
 		t.Fatal(err)
 	}
 	response, err := stream.Recv()
-	if err != nil || response.GetReady() == nil {
-		cancel()
-		_ = connection.Close()
-		grpcServer.Stop()
-		_ = listener.Close()
-		t.Fatalf("collector Ready = %#v, %v", response, err)
-	}
 	cancel()
 	if err := connection.Close(); err != nil {
 		t.Error(err)
@@ -330,6 +378,7 @@ func admitRuntimeCollectorStream(
 	if err := <-serveDone; err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 		t.Fatalf("serve collector: %v", err)
 	}
+	return response, err
 }
 
 func getRuntimeIngestionToken(

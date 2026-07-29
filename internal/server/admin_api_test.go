@@ -192,11 +192,15 @@ func TestIngestionTokenLifecycleReturnsPlaintextOnlyAtCreation(t *testing.T) {
 		}
 	}
 	description := "application collector"
+	boundCollectorID := "collector-production"
 	expires := timestamppb.New(time.Now().UTC().Add(24 * time.Hour))
 	response := postProto(t, handler, "/api/v1/ingestion-tokens/create", &opensplunkv1.CreateIngestionTokenRequest{
 		Definition: &opensplunkv1.IngestionTokenDefinition{
 			Name: "production", Description: &description,
-			Constraints: &opensplunkv1.IngestionTokenConstraints{AllowedIndexNames: []string{"main"}}, ExpiresAt: expires,
+			Constraints: &opensplunkv1.IngestionTokenConstraints{
+				AllowedIndexNames: []string{"main"}, BoundCollectorId: &boundCollectorID,
+			},
+			ExpiresAt: expires,
 		},
 	})
 	if response.Code != http.StatusOK {
@@ -210,7 +214,8 @@ func TestIngestionTokenLifecycleReturnsPlaintextOnlyAtCreation(t *testing.T) {
 	plaintext := created.GetPlaintextToken()
 	token := created.GetIngestionToken()
 	if plaintext == "" || token.GetIngestionTokenId() == "" || token.GetVersion() != 1 || token.GetTokenPrefix() == plaintext ||
-		!strings.HasPrefix(plaintext, token.GetTokenPrefix()) {
+		!strings.HasPrefix(plaintext, token.GetTokenPrefix()) ||
+		token.GetConstraints().GetBoundCollectorId() != boundCollectorID {
 		t.Fatalf("created token metadata = %+v, plaintext length = %d", token, len(plaintext))
 	}
 	if _, err := tokenStore.Authorize(ctx, plaintext, "main"); err != nil {
@@ -223,7 +228,8 @@ func TestIngestionTokenLifecycleReturnsPlaintextOnlyAtCreation(t *testing.T) {
 	}
 	var got opensplunkv1.GetIngestionTokenResponse
 	unmarshalResponse(t, response, &got)
-	if got.GetIngestionToken().GetTokenPrefix() != token.GetTokenPrefix() {
+	if got.GetIngestionToken().GetTokenPrefix() != token.GetTokenPrefix() ||
+		got.GetIngestionToken().GetConstraints().GetBoundCollectorId() != boundCollectorID {
 		t.Fatalf("get token = %+v", got.GetIngestionToken())
 	}
 
@@ -237,7 +243,12 @@ func TestIngestionTokenLifecycleReturnsPlaintextOnlyAtCreation(t *testing.T) {
 	}
 	var updated opensplunkv1.UpdateIngestionTokenResponse
 	unmarshalResponse(t, response, &updated)
-	if updated.GetIngestionToken().GetVersion() != 2 || !proto.Equal(updated.GetIngestionToken().GetConstraints(), &opensplunkv1.IngestionTokenConstraints{AllowedIndexNames: []string{"audit"}}) {
+	if updated.GetIngestionToken().GetVersion() != 2 || !proto.Equal(
+		updated.GetIngestionToken().GetConstraints(),
+		&opensplunkv1.IngestionTokenConstraints{
+			AllowedIndexNames: []string{"audit"}, BoundCollectorId: &boundCollectorID,
+		},
+	) {
 		t.Fatalf("updated token = %+v", updated.GetIngestionToken())
 	}
 	if _, err := tokenStore.Authorize(ctx, plaintext, "main"); !errors.Is(err, auth.ErrUnauthorized) {
@@ -247,25 +258,60 @@ func TestIngestionTokenLifecycleReturnsPlaintextOnlyAtCreation(t *testing.T) {
 		t.Fatalf("Authorize(new scope): %v", err)
 	}
 
+	response = postProto(t, handler, "/api/v1/ingestion-tokens/update", &opensplunkv1.UpdateIngestionTokenRequest{
+		IngestionTokenId: token.GetIngestionTokenId(), ExpectedVersion: 2,
+		Definition: &opensplunkv1.IngestionTokenDefinition{Constraints: &opensplunkv1.IngestionTokenConstraints{
+			BoundCollectorId: &boundCollectorID,
+		}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"constraints.bound_collector_id"}},
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("same-binding update status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var rebound opensplunkv1.UpdateIngestionTokenResponse
+	unmarshalResponse(t, response, &rebound)
+	if rebound.GetIngestionToken().GetVersion() != 3 ||
+		rebound.GetIngestionToken().GetConstraints().GetBoundCollectorId() != boundCollectorID ||
+		len(rebound.GetIngestionToken().GetConstraints().GetAllowedIndexNames()) != 1 ||
+		rebound.GetIngestionToken().GetConstraints().GetAllowedIndexNames()[0] != "audit" {
+		t.Fatalf("same-binding update = %+v", rebound.GetIngestionToken())
+	}
+
+	differentCollectorID := "collector-other"
+	response = postProto(t, handler, "/api/v1/ingestion-tokens/update", &opensplunkv1.UpdateIngestionTokenRequest{
+		IngestionTokenId: token.GetIngestionTokenId(), ExpectedVersion: 3,
+		Definition: &opensplunkv1.IngestionTokenDefinition{Constraints: &opensplunkv1.IngestionTokenConstraints{
+			BoundCollectorId: &differentCollectorID,
+		}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"constraints.bound_collector_id"}},
+	})
+	if response.Code != http.StatusConflict ||
+		bytes.Contains(response.Body.Bytes(), []byte(boundCollectorID)) ||
+		bytes.Contains(response.Body.Bytes(), []byte(differentCollectorID)) {
+		t.Fatalf("immutable-binding response = status %d body %q", response.Code, response.Body.String())
+	}
+
 	response = postProto(t, handler, "/api/v1/ingestion-tokens/list", &opensplunkv1.ListIngestionTokensRequest{})
 	if response.Code != http.StatusOK || bytes.Contains(response.Body.Bytes(), []byte(plaintext)) {
 		t.Fatalf("list token response leaked plaintext: status %d body %x", response.Code, response.Body.Bytes())
 	}
 	var listed opensplunkv1.ListIngestionTokensResponse
 	unmarshalResponse(t, response, &listed)
-	if len(listed.GetIngestionTokens()) != 1 || listed.GetIngestionTokens()[0].GetIngestionTokenId() != token.GetIngestionTokenId() {
+	if len(listed.GetIngestionTokens()) != 1 ||
+		listed.GetIngestionTokens()[0].GetIngestionTokenId() != token.GetIngestionTokenId() ||
+		listed.GetIngestionTokens()[0].GetConstraints().GetBoundCollectorId() != boundCollectorID {
 		t.Fatalf("listed tokens = %+v", listed.GetIngestionTokens())
 	}
 
 	response = postProto(t, handler, "/api/v1/ingestion-tokens/revoke", &opensplunkv1.RevokeIngestionTokenRequest{
-		IngestionTokenId: token.GetIngestionTokenId(), ExpectedVersion: 2,
+		IngestionTokenId: token.GetIngestionTokenId(), ExpectedVersion: 3,
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("revoke token status = %d, body = %s", response.Code, response.Body.String())
 	}
 	var revoked opensplunkv1.RevokeIngestionTokenResponse
 	unmarshalResponse(t, response, &revoked)
-	if revoked.GetIngestionToken().GetVersion() != 3 || revoked.GetIngestionToken().GetState() != opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED ||
+	if revoked.GetIngestionToken().GetVersion() != 4 || revoked.GetIngestionToken().GetState() != opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED ||
 		revoked.GetIngestionToken().GetRevokedAt() == nil {
 		t.Fatalf("revoked token = %+v", revoked.GetIngestionToken())
 	}
@@ -284,11 +330,16 @@ func TestIngestionTokenListFiltersSortsAndReportsExactTotals(t *testing.T) {
 			t.Fatalf("CreateIndex(%q): %v", name, err)
 		}
 	}
-	alpha, err := tokenStore.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{Name: "Alpha", AllowedIndexNames: []string{"main"}})
+	alpha, err := tokenStore.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{
+		Name: "Alpha", BoundCollectorID: "collector-alpha", AllowedIndexNames: []string{"main"},
+	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(alpha): %v", err)
 	}
-	if _, err := tokenStore.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{Name: "Beta audit", Description: "secondary", AllowedIndexNames: []string{"audit"}}); err != nil {
+	if _, err := tokenStore.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{
+		Name: "Beta audit", Description: "secondary", BoundCollectorID: "collector-beta",
+		AllowedIndexNames: []string{"audit"},
+	}); err != nil {
 		t.Fatalf("CreateCollectorToken(beta): %v", err)
 	}
 	if _, err := tokenStore.RevokeCollectorToken(ctx, alpha.Token.ID, alpha.Token.Version); err != nil {
@@ -388,7 +439,17 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 		{
 			name: "unsupported token constraints", path: "/api/v1/ingestion-tokens/create",
 			request: &opensplunkv1.CreateIngestionTokenRequest{Definition: &opensplunkv1.IngestionTokenDefinition{
-				Name: "bad", Constraints: &opensplunkv1.IngestionTokenConstraints{AllowedIndexNames: []string{"main"}, AllowedHostRegexes: []string{".*"}},
+				Name: "bad", Constraints: &opensplunkv1.IngestionTokenConstraints{
+					AllowedIndexNames: []string{"main"}, AllowedHostRegexes: []string{".*"},
+					BoundCollectorId: stringPointer("collector-bad"),
+				},
+			}},
+			status: http.StatusBadRequest,
+		},
+		{
+			name: "missing token collector binding", path: "/api/v1/ingestion-tokens/create",
+			request: &opensplunkv1.CreateIngestionTokenRequest{Definition: &opensplunkv1.IngestionTokenDefinition{
+				Name: "unbound", Constraints: &opensplunkv1.IngestionTokenConstraints{AllowedIndexNames: []string{"main"}},
 			}},
 			status: http.StatusBadRequest,
 		},
@@ -396,7 +457,9 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 			name: "present empty token idempotency key", path: "/api/v1/ingestion-tokens/create",
 			request: &opensplunkv1.CreateIngestionTokenRequest{
 				Definition: &opensplunkv1.IngestionTokenDefinition{
-					Name: "empty-token-idempotency", Constraints: &opensplunkv1.IngestionTokenConstraints{AllowedIndexNames: []string{"main"}},
+					Name: "empty-token-idempotency", Constraints: &opensplunkv1.IngestionTokenConstraints{
+						AllowedIndexNames: []string{"main"}, BoundCollectorId: stringPointer("collector-idempotency"),
+					},
 				},
 				ClientRequestId: stringPointer(""),
 			},
@@ -459,7 +522,9 @@ func TestAdministrativeRoutesRejectDNSRebindingAndCrossOriginBrowsers(t *testing
 		t.Fatalf("CreateIndex(main): %v", err)
 	}
 	requestMessage := &opensplunkv1.CreateIngestionTokenRequest{Definition: &opensplunkv1.IngestionTokenDefinition{
-		Name: "browser", Constraints: &opensplunkv1.IngestionTokenConstraints{AllowedIndexNames: []string{"main"}},
+		Name: "browser", Constraints: &opensplunkv1.IngestionTokenConstraints{
+			AllowedIndexNames: []string{"main"}, BoundCollectorId: stringPointer("collector-browser"),
+		},
 	}}
 
 	for name, headers := range map[string]map[string]string{

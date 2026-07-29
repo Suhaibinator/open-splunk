@@ -40,6 +40,7 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 		Name:              "production collector",
 		Description:       "writes two indexes",
 		AllowedIndexNames: []string{" AUDIT ", "main", "main"},
+		BoundCollectorID:  testCollectorID,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken() error = %v", err)
@@ -48,7 +49,9 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 	if !strings.HasPrefix(plaintext, collectorTokenPrefix) || len(plaintext) < 40 {
 		t.Fatalf("issued plaintext has unexpected format (length=%d)", len(plaintext))
 	}
-	if issued.Token.Version != 1 || issued.Token.State != CollectorTokenStateActive {
+	if issued.Token.Version != 1 ||
+		issued.Token.State != CollectorTokenStateActive ||
+		issued.Token.BoundCollectorID != testCollectorID {
 		t.Fatalf("issued metadata = %#v", issued.Token)
 	}
 	if got, want := issued.Token.AllowedIndexNames, []string{"audit", "main"}; fmt.Sprint(got) != fmt.Sprint(want) {
@@ -75,10 +78,12 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 
 	var digest []byte
 	var safePrefix string
+	var boundCollectorID string
 	if queryErr := db.SQLDB().QueryRowContext(ctx, `
-		SELECT token_digest, token_prefix
+		SELECT token_digest, token_prefix, bound_collector_id
 		FROM ingestion_tokens
-		WHERE ingestion_token_id = ?`, issued.Token.ID).Scan(&digest, &safePrefix); queryErr != nil {
+		WHERE ingestion_token_id = ?`, issued.Token.ID).
+		Scan(&digest, &safePrefix, &boundCollectorID); queryErr != nil {
 		t.Fatalf("read stored token: %v", queryErr)
 	}
 	mac := hmac.New(sha256.New, key)
@@ -89,6 +94,9 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 	}
 	if string(digest) == plaintext || safePrefix == plaintext || !strings.HasPrefix(safePrefix, collectorTokenPrefix) {
 		t.Fatal("stored token representation is not a safe digest/prefix")
+	}
+	if boundCollectorID != testCollectorID {
+		t.Fatalf("stored collector binding = %q, want %q", boundCollectorID, testCollectorID)
 	}
 	rows, err := db.SQLDB().QueryContext(ctx, `SELECT name FROM pragma_table_info('ingestion_tokens')`)
 	if err != nil {
@@ -112,14 +120,18 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authorize(main) error = %v", err)
 	}
-	if principal.TokenID != issued.Token.ID || principal.IndexName != "main" {
+	if principal.TokenID != issued.Token.ID ||
+		principal.IndexName != "main" ||
+		principal.BoundCollectorID != testCollectorID {
 		t.Fatalf("Authorize(main) = %#v", principal)
 	}
 	authentication, err := store.Authenticate(ctx, plaintext)
 	if err != nil {
 		t.Fatalf("Authenticate() error = %v", err)
 	}
-	if authentication.TokenID != issued.Token.ID || fmt.Sprint(authentication.AllowedIndexNames) != fmt.Sprint([]string{"audit", "main"}) {
+	if authentication.TokenID != issued.Token.ID ||
+		authentication.BoundCollectorID != testCollectorID ||
+		fmt.Sprint(authentication.AllowedIndexNames) != fmt.Sprint([]string{"audit", "main"}) {
 		t.Fatalf("Authenticate() = %#v", authentication)
 	}
 	if _, authorizeErr := store.Authorize(ctx, plaintext, "unrelated"); !errors.Is(authorizeErr, ErrUnauthorized) {
@@ -183,7 +195,11 @@ func TestStoreCopiesDigestKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore(): %v", err)
 	}
-	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{Name: "key-copy", AllowedIndexNames: []string{"main"}})
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name:              "key-copy",
+		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
+	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
 	}
@@ -213,7 +229,9 @@ func TestAuthenticateRefreshesCurrentActiveScopes(t *testing.T) {
 		t.Fatalf("NewStore(): %v", err)
 	}
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
-		Name: "scope refresh", AllowedIndexNames: []string{"second", "first"},
+		Name:              "scope refresh",
+		AllowedIndexNames: []string{"second", "first"},
+		BoundCollectorID:  testCollectorID,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -263,14 +281,19 @@ func TestGetAndListCollectorTokensReturnSafeMetadata(t *testing.T) {
 	now := time.Date(2026, 7, 21, 10, 0, 0, 0, time.UTC)
 	store.now = func() time.Time { return now }
 	first, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
-		Name: "first", AllowedIndexNames: []string{"main"}, ExpiresAt: now.Add(time.Hour),
+		Name:              "first",
+		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
+		ExpiresAt:         now.Add(time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(first): %v", err)
 	}
 	store.now = func() time.Time { return now }
 	second, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
-		Name: "second", AllowedIndexNames: []string{"main"},
+		Name:              "second",
+		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(second): %v", err)
@@ -323,7 +346,10 @@ func TestUpdateCollectorTokenReplacesDefinitionAndScopesAtomically(t *testing.T)
 	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	store.now = func() time.Time { return now }
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
-		Name: "before", Description: "old", AllowedIndexNames: []string{"first"},
+		Name:              "before",
+		Description:       "old",
+		AllowedIndexNames: []string{"first"},
+		BoundCollectorID:  testCollectorID,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -383,7 +409,11 @@ func TestUpdateCollectorTokenRejectsInactiveOrInvalidReplacement(t *testing.T) {
 	}
 	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	store.now = func() time.Time { return now }
-	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{Name: "token", AllowedIndexNames: []string{"main"}})
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name:              "token",
+		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
+	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
 	}
@@ -408,7 +438,10 @@ func TestUpdateCollectorTokenRejectsInactiveOrInvalidReplacement(t *testing.T) {
 	}
 
 	shortLived, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
-		Name: "short", AllowedIndexNames: []string{"main"}, ExpiresAt: now.Add(time.Minute),
+		Name:              "short",
+		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
+		ExpiresAt:         now.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(short): %v", err)
@@ -434,7 +467,11 @@ func TestCollectorTokenRandomnessFailuresAreSafe(t *testing.T) {
 		t.Fatalf("NewStore(): %v", err)
 	}
 	store.random = errorReader{err: errors.New("sensitive random source detail")}
-	_, err = store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{Name: "failure", AllowedIndexNames: []string{"main"}})
+	_, err = store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name:              "failure",
+		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
+	})
 	if err == nil {
 		t.Fatal("CreateCollectorToken() unexpectedly succeeded")
 	}
@@ -444,7 +481,11 @@ func TestCollectorTokenRandomnessFailuresAreSafe(t *testing.T) {
 
 	knownRandom := byte('x')
 	store.random = &tokenThenErrorReader{tokenByte: knownRandom}
-	_, err = store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{Name: "id failure", AllowedIndexNames: []string{"main"}})
+	_, err = store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name:              "id failure",
+		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
+	})
 	if err == nil {
 		t.Fatal("CreateCollectorToken(ID randomness failure) unexpectedly succeeded")
 	}
@@ -487,14 +528,22 @@ func TestCollectorTokensRequireExplicitActiveIngestionIndexes(t *testing.T) {
 		"disabled": {"disabled"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, createErr := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{Name: name, AllowedIndexNames: indexes})
+			_, createErr := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+				Name:              name,
+				AllowedIndexNames: indexes,
+				BoundCollectorID:  testCollectorID,
+			})
 			if !errors.Is(createErr, control.ErrInvalidArgument) {
 				t.Fatalf("CreateCollectorToken() error = %v, want ErrInvalidArgument", createErr)
 			}
 		})
 	}
 
-	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{Name: "valid", AllowedIndexNames: []string{"active"}})
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name:              "valid",
+		AllowedIndexNames: []string{"active"},
+		BoundCollectorID:  testCollectorID,
+	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(valid): %v", err)
 	}
@@ -533,13 +582,19 @@ func TestCollectorTokenValidationExpirationAndRandomness(t *testing.T) {
 	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	store.now = func() time.Time { return now }
 	if _, createErr := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
-		Name: "already expired", AllowedIndexNames: []string{"main"}, ExpiresAt: now,
+		Name:              "already expired",
+		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
+		ExpiresAt:         now,
 	}); !errors.Is(createErr, control.ErrInvalidArgument) {
 		t.Fatalf("CreateCollectorToken(expired) error = %v, want ErrInvalidArgument", createErr)
 	}
 
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
-		Name: "short lived", AllowedIndexNames: []string{"main"}, ExpiresAt: now.Add(time.Hour),
+		Name:              "short lived",
+		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
+		ExpiresAt:         now.Add(time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(short lived): %v", err)
@@ -556,7 +611,9 @@ func TestCollectorTokenValidationExpirationAndRandomness(t *testing.T) {
 	seen := make(map[string]struct{}, 128)
 	for i := 0; i < 128; i++ {
 		issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
-			Name: fmt.Sprintf("random-%03d", i), AllowedIndexNames: []string{"main"},
+			Name:              fmt.Sprintf("random-%03d", i),
+			AllowedIndexNames: []string{"main"},
+			BoundCollectorID:  testCollectorID,
 		})
 		if err != nil {
 			t.Fatalf("CreateCollectorToken(%d): %v", i, err)
@@ -623,7 +680,12 @@ func TestCollectorTokenGORMModelsMatchMigratedSQLiteSchema(t *testing.T) {
 				if id == nil || !id.PrimaryKey || digest == nil || !digest.Unique {
 					t.Fatalf("GORM token keys are not explicit: ID=%#v digest=%#v", id, digest)
 				}
+				binding := statement.Schema.LookUpField("BoundCollectorID")
+				if binding == nil || binding.NotNull || binding.Unique {
+					t.Fatalf("GORM collector binding must be nullable and non-unique: %#v", binding)
+				}
 				wantChecks := []string{
+					"ingestion_tokens_bound_collector_id_canonical",
 					"ingestion_tokens_digest_length",
 					"ingestion_tokens_expiration_after_create",
 					"ingestion_tokens_last_use_not_before_create",
@@ -680,6 +742,7 @@ func TestCollectorTokenStoreSurvivesDatabaseReopen(t *testing.T) {
 		Name:              "persistent",
 		Description:       "before reopen",
 		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
 	})
 	if err != nil {
 		_ = db.Close()
@@ -703,6 +766,7 @@ func TestCollectorTokenStoreSurvivesDatabaseReopen(t *testing.T) {
 		t.Fatalf("GetCollectorToken(reopened): %v", err)
 	}
 	if got.ID != issued.Token.ID || got.Name != "persistent" ||
+		got.BoundCollectorID != testCollectorID ||
 		!slices.Equal(got.AllowedIndexNames, []string{"main"}) {
 		t.Fatalf("reopened token = %#v", got)
 	}
@@ -721,7 +785,9 @@ func TestCollectorTokenStoreSurvivesDatabaseReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateCollectorToken(reopened): %v", err)
 	}
-	if updated.Version != 2 || updated.Name != "after reopen" {
+	if updated.Version != 2 ||
+		updated.Name != "after reopen" ||
+		updated.BoundCollectorID != testCollectorID {
 		t.Fatalf("updated reopened token = %#v", updated)
 	}
 }
@@ -745,6 +811,7 @@ func TestConcurrentCollectorTokenUpdatesHaveOneAtomicCASWinner(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "before",
 		AllowedIndexNames: []string{"alpha"},
+		BoundCollectorID:  testCollectorID,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -834,6 +901,7 @@ func TestCollectorTokenScopeReplacementRollsBackOnPersistenceFailure(t *testing.
 		Name:              "original",
 		Description:       "original definition",
 		AllowedIndexNames: []string{"before"},
+		BoundCollectorID:  testCollectorID,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -892,6 +960,7 @@ func TestCollectorTokenStoreHonorsContextCancellation(t *testing.T) {
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 		Name:              "context",
 		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
 	})
 	if err != nil {
 		t.Fatalf("CreateCollectorToken(): %v", err)
@@ -912,6 +981,7 @@ func TestCollectorTokenStoreHonorsContextCancellation(t *testing.T) {
 			_, operationErr := store.CreateCollectorToken(canceled, CreateCollectorTokenRequest{
 				Name:              "canceled",
 				AllowedIndexNames: []string{"main"},
+				BoundCollectorID:  testCollectorID,
 			})
 			return operationErr
 		},
@@ -1012,7 +1082,11 @@ func BenchmarkAuthorizeCollectorToken(b *testing.B) {
 	if err != nil {
 		b.Fatalf("NewStore(): %v", err)
 	}
-	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{Name: "benchmark", AllowedIndexNames: []string{"main"}})
+	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
+		Name:              "benchmark",
+		AllowedIndexNames: []string{"main"},
+		BoundCollectorID:  testCollectorID,
+	})
 	if err != nil {
 		b.Fatalf("CreateCollectorToken(): %v", err)
 	}

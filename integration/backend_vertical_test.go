@@ -159,6 +159,9 @@ func TestBackendVertical(t *testing.T) {
 		t.Fatalf("created index = %+v", createdIndex.GetIndex())
 	}
 
+	collectorStateDir := filepath.Join(work, "collector-state")
+	collectorID := "backend-vertical-collector"
+	writeCollectorIdentity(t, collectorStateDir, collectorID)
 	plaintextToken := createIndexScopedIngestionToken(
 		t,
 		ctx,
@@ -167,6 +170,7 @@ func TestBackendVertical(t *testing.T) {
 		administratorToken,
 		"backend-vertical-collector",
 		verticalIndexName,
+		collectorID,
 	)
 	serverSecrets := []string{
 		administratorToken,
@@ -183,7 +187,6 @@ func TestBackendVertical(t *testing.T) {
 	createEmptyFixture(t, logPath)
 	tokenPath := filepath.Join(work, "collector.token")
 	writePrivateFile(t, tokenPath, []byte(plaintextToken+"\n"))
-	collectorStateDir := filepath.Join(work, "collector-state")
 	collectorConfig := filepath.Join(work, "collector.yaml")
 	writePrivateFile(t, collectorConfig, []byte(collectorYAML(collectorAddress, tokenPath, collectorStateDir, logPath)))
 
@@ -641,6 +644,7 @@ func createIndexScopedIngestionToken(
 	administratorToken string,
 	name string,
 	indexName string,
+	collectorID string,
 ) string {
 	t.Helper()
 	var created opensplunkv1.CreateIngestionTokenResponse
@@ -655,6 +659,7 @@ func createIndexScopedIngestionToken(
 				Name: name,
 				Constraints: &opensplunkv1.IngestionTokenConstraints{
 					AllowedIndexNames: []string{indexName},
+					BoundCollectorId:  &collectorID,
 				},
 			},
 		},
@@ -663,6 +668,7 @@ func createIndexScopedIngestionToken(
 	plaintext := created.GetPlaintextToken()
 	metadata := created.GetIngestionToken()
 	if plaintext == "" || metadata.GetVersion() != 1 ||
+		metadata.GetConstraints().GetBoundCollectorId() != collectorID ||
 		!strings.HasPrefix(plaintext, metadata.GetTokenPrefix()) {
 		t.Fatalf(
 			"created ingestion token %q metadata = %+v, plaintext length = %d",
@@ -701,6 +707,9 @@ func assertCurrentGradeThisMigration(
 		"Current GradeThis collector migration",
 	)
 
+	stateDir := filepath.Join(work, "gradethis-current-state")
+	collectorID := "gradethis-current-migration"
+	writeCollectorIdentity(t, stateDir, collectorID)
 	plaintextToken := createIndexScopedIngestionToken(
 		t,
 		ctx,
@@ -709,13 +718,13 @@ func assertCurrentGradeThisMigration(
 		administratorToken,
 		"gradethis-current-migration",
 		gradethiscorpus.MigrationIndexName,
+		collectorID,
 	)
 
 	logPath := filepath.Join(work, "gradethis-current.log")
 	createEmptyFixture(t, logPath)
 	tokenPath := filepath.Join(work, "gradethis-current.token")
 	writePrivateFile(t, tokenPath, []byte(plaintextToken+"\n"))
-	stateDir := filepath.Join(work, "gradethis-current-state")
 	configPath := filepath.Join(repository, "configs", "examples", "collector.yaml")
 	environment := os.Environ()
 	for name, value := range map[string]string{
@@ -1296,6 +1305,14 @@ func writePrivateFile(t *testing.T, path string, contents []byte) {
 	if err := os.WriteFile(path, contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeCollectorIdentity(t *testing.T, stateDir, collectorID string) {
+	t.Helper()
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writePrivateFile(t, filepath.Join(stateDir, "collector_id"), []byte(collectorID+"\n"))
 }
 
 func collectorYAML(address, tokenPath, statePath, logPath string) string {

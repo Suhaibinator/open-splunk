@@ -83,6 +83,7 @@ type TokenCreateOutcomeKind = "pending" | "settled-response" | "ambiguous-failur
 interface TokenCreateDefinitionSnapshot {
   name: string;
   description: string;
+  boundCollectorId: string;
   allowedIndexNames: string[];
   expiresAt: Date | undefined;
   armedServerTimeMs: number;
@@ -117,6 +118,7 @@ interface PersistedTokenCreateGuardV1 {
   definition: {
     name: string;
     description: string;
+    boundCollectorId: string;
     allowedIndexNames: string[];
     expiresAt: string | null;
     armedServerTimeMs: number;
@@ -176,6 +178,10 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
+function validCollectorId(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
+}
+
 function serializeTokenCreateGuard(
   normalizedApiBaseUrl: string,
   recovery: TokenCreateRecovery,
@@ -190,6 +196,7 @@ function serializeTokenCreateGuard(
     definition: {
       name: recovery.definition.name,
       description: recovery.definition.description,
+      boundCollectorId: recovery.definition.boundCollectorId,
       allowedIndexNames: [...recovery.definition.allowedIndexNames],
       expiresAt: recovery.definition.expiresAt?.toISOString() ?? null,
       armedServerTimeMs: recovery.definition.armedServerTimeMs,
@@ -235,6 +242,8 @@ function parsePersistedTokenCreateGuard(
     || typeof definition.name !== "string"
     || definition.name.length === 0
     || typeof definition.description !== "string"
+    || typeof definition.boundCollectorId !== "string"
+    || !validCollectorId(definition.boundCollectorId)
     || !isStringArray(definition.allowedIndexNames)
     || definition.allowedIndexNames.length === 0
     || new Set(definition.allowedIndexNames).size !== definition.allowedIndexNames.length
@@ -275,6 +284,7 @@ function parsePersistedTokenCreateGuard(
       definition: {
         name: definition.name,
         description: definition.description,
+        boundCollectorId: definition.boundCollectorId,
         allowedIndexNames: [...new Set(definition.allowedIndexNames)].toSorted(),
         expiresAt,
         armedServerTimeMs: definition.armedServerTimeMs,
@@ -453,7 +463,7 @@ function tokenMatchesCreateMetadata(
     || !hasSameStrings(constraints.allowedIndexNames, definition.allowedIndexNames)
     || constraints.allowedHostRegexes.length !== 0
     || constraints.allowedSourceRegexes.length !== 0
-    || constraints.boundCollectorId !== undefined
+    || constraints.boundCollectorId !== definition.boundCollectorId
     || (token.expiresAt?.valueOf() ?? null) !== (definition.expiresAt?.valueOf() ?? null)
   ) {
     return false;
@@ -682,6 +692,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const [tokenEditTarget, setTokenEditTarget] = useState<IngestionToken | null>(null);
   const [tokenName, setTokenName] = useState("");
   const [tokenDescription, setTokenDescription] = useState("");
+  const [tokenCollectorId, setTokenCollectorId] = useState("");
   const [tokenIndexes, setTokenIndexes] = useState<Set<string>>(new Set());
   const [tokenExpiration, setTokenExpiration] = useState("");
   const [tokenSecret, setTokenSecret] = useState<string | null>(null);
@@ -1369,6 +1380,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     setTokenEditTarget(null);
     setTokenName("");
     setTokenDescription("");
+    setTokenCollectorId("");
     setTokenIndexes(new Set(ingestibleTokenScopes.slice(0, 1).map((scope) => scope.name)));
     setTokenExpiration("");
     setTokenSecret(null);
@@ -1413,6 +1425,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       setTokenEditTarget(current);
       setTokenName(current.name);
       setTokenDescription(current.description ?? "");
+      setTokenCollectorId(current.constraints?.boundCollectorId ?? "");
       setTokenIndexes(new Set(current.constraints?.allowedIndexNames ?? []));
       setTokenExpiration(dateTimeLocalValue(current.expiresAt));
       setTokenSecret(null);
@@ -1820,7 +1833,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
 
   async function createToken(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (tokenName.trim().length === 0) return;
+    if (tokenName.trim().length === 0 || !validCollectorId(tokenCollectorId)) return;
     if (serverClockAnchor === null) {
       setToast({
         message: "Token generation is disabled until system bootstrap supplies an authoritative server clock.",
@@ -1900,6 +1913,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       const definition: TokenCreateDefinitionSnapshot = {
         name: tokenName.trim(),
         description: tokenDescription.trim(),
+        boundCollectorId: tokenCollectorId,
         allowedIndexNames: [...tokenIndexes].toSorted(),
         expiresAt,
         armedServerTimeMs: initialServerTimeMs,
@@ -1956,7 +1970,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             allowedIndexNames: definition.allowedIndexNames,
             allowedHostRegexes: [],
             allowedSourceRegexes: [],
-            boundCollectorId: undefined,
+            boundCollectorId: definition.boundCollectorId,
           },
           expiresAt: definition.expiresAt,
         },
@@ -2132,6 +2146,13 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     if (!hasSameStrings(tokenIndexes, target.constraints?.allowedIndexNames ?? [])) {
       updateMask.push("constraints");
     }
+    if (
+      target.constraints?.boundCollectorId === undefined
+      && validCollectorId(tokenCollectorId)
+      && !updateMask.includes("constraints")
+    ) {
+      updateMask.push("constraints.bound_collector_id");
+    }
     if (tokenExpiration !== dateTimeLocalValue(target.expiresAt)) updateMask.push("expires_at");
     if (updateMask.length === 0) return;
     cancelTokenLoadMoreRequest();
@@ -2146,9 +2167,9 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           constraints: {
             allowedHostRegexes: [],
             allowedSourceRegexes: [],
-            boundCollectorId: undefined,
             ...target.constraints,
             allowedIndexNames: [...tokenIndexes].toSorted(),
+            boundCollectorId: tokenCollectorId || target.constraints?.boundCollectorId,
           },
           expiresAt: expirationFromForm(tokenExpiration, authoritativeServerNowMs()),
         },
@@ -2588,8 +2609,12 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const ingestibleIndexNames = new Set(ingestibleTokenScopes.map((option) => option.name));
   const tokenScopeChanged = tokenEditTarget !== null
     && !hasSameStrings(tokenIndexes, tokenEditTarget.constraints?.allowedIndexNames ?? []);
+  const tokenBindingChanged = tokenEditTarget !== null
+    && tokenEditTarget.constraints?.boundCollectorId === undefined
+    && validCollectorId(tokenCollectorId);
   const tokenHasUnavailableScope = [...tokenIndexes].some((name) => !ingestibleIndexNames.has(name));
   const tokenScopeInvalid = tokenScopeChanged && tokenHasUnavailableScope;
+  const tokenCollectorIdInvalid = !validCollectorId(tokenCollectorId);
   const tokenCreationBlockReason = serverClockAnchor === null
     ? "System bootstrap has not supplied an authoritative server clock. Token generation is disabled so a one-time credential can always be reconciled safely."
     : normalizedApiBaseUrl === null
@@ -2608,6 +2633,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const tokenCreateScopeInvalid = tokenScopeSource === "unavailable"
     || tokenIndexes.size === 0
     || tokenHasUnavailableScope
+    || tokenCollectorIdInvalid
     || tokenCreationBlockReason !== null;
   const indexDefinition = indexEditTarget?.definition;
   const indexHasChanges = indexDefinition !== undefined && (
@@ -2621,6 +2647,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     tokenName.trim() !== tokenEditTarget.name
     || tokenDescription !== (tokenEditTarget.description ?? "")
     || tokenScopeChanged
+    || tokenBindingChanged
     || tokenExpiration !== dateTimeLocalValue(tokenEditTarget.expiresAt)
   );
   const activeIndexes = indexes.filter((index) => index.state === IndexState.INDEX_STATE_ACTIVE).length;
@@ -2940,6 +2967,8 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             <form className="admin-form" id="create-token-form" onSubmit={(event) => void createToken(event)}>
               <label htmlFor="new-token-name"><span>Token name</span><input id="new-token-name" value={tokenName} onChange={(event) => setTokenName(event.target.value)} placeholder="prod-api-collector" autoComplete="off" /></label>
               <label htmlFor="new-token-description"><span>Description <small>(optional)</small></span><input id="new-token-description" value={tokenDescription} onChange={(event) => setTokenDescription(event.target.value)} placeholder="Production collector credential" /></label>
+              <label htmlFor="new-token-collector-id"><span>Collector ID</span><input id="new-token-collector-id" value={tokenCollectorId} onChange={(event) => setTokenCollectorId(event.target.value)} placeholder="Paste the collector’s stable ID" autoComplete="off" aria-invalid={tokenCollectorId.length > 0 && tokenCollectorIdInvalid} /><small>Run or inspect the collector once to obtain its stable ID. The binding cannot be changed after creation.</small></label>
+              {tokenCollectorId.length > 0 && tokenCollectorIdInvalid ? <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Collector ID is invalid</strong><p>Use 1–128 ASCII characters: start with a letter or number, then use letters, numbers, dot, underscore, colon, or hyphen.</p></div></div> : null}
               <TokenScopePicker idPrefix="new-token" options={tokenScopeOptions} selected={tokenIndexes} onChange={setTokenIndexes} disabled={tokenScopeSource === "unavailable"} />
               {tokenHasUnavailableScope ? <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Choose an available scope</strong><p>Tokens can only be generated for active, ingestion-enabled indexes. Remove the unavailable scope before continuing.</p></div></div> : null}
               {tokenScopeSource === "unavailable" ? <div className="access-mode-notice" role="note"><span>i</span><div><strong>Index scopes are unavailable</strong><p>Token generation is disabled until the server returns an authoritative index summary.</p></div></div> : null}
@@ -2982,11 +3011,12 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             setTokenEditTarget(null);
             setModal(null);
           }}
-          footer={<><button className="button secondary" type="button" onClick={() => { setTokenEditTarget(null); setModal(null); }} disabled={busy !== null}>Cancel</button><button className="button primary" type="submit" form="edit-token-form" disabled={busy !== null || !tokenHasChanges || tokenName.trim().length === 0 || tokenIndexes.size === 0 || tokenScopeInvalid}>{busy === `update-token-${tokenEditTarget.ingestionTokenId}` ? "Saving…" : "Save changes"}</button></>}
+          footer={<><button className="button secondary" type="button" onClick={() => { setTokenEditTarget(null); setModal(null); }} disabled={busy !== null}>Cancel</button><button className="button primary" type="submit" form="edit-token-form" disabled={busy !== null || !tokenHasChanges || tokenName.trim().length === 0 || tokenIndexes.size === 0 || tokenScopeInvalid || (tokenCollectorId.length > 0 && tokenCollectorIdInvalid)}>{busy === `update-token-${tokenEditTarget.ingestionTokenId}` ? "Saving…" : "Save changes"}</button></>}
         >
           <form className="admin-form" id="edit-token-form" onSubmit={(event) => void updateToken(event)}>
             <label htmlFor="edit-token-name"><span>Token name</span><input id="edit-token-name" value={tokenName} onChange={(event) => setTokenName(event.target.value)} autoComplete="off" /></label>
             <label htmlFor="edit-token-description"><span>Description <small>(optional)</small></span><input id="edit-token-description" value={tokenDescription} onChange={(event) => setTokenDescription(event.target.value)} placeholder="Production collector credential" /></label>
+            <label htmlFor="edit-token-collector-id"><span>Collector ID</span><input id="edit-token-collector-id" value={tokenCollectorId} onChange={(event) => setTokenCollectorId(event.target.value)} readOnly={tokenEditTarget.constraints?.boundCollectorId !== undefined} placeholder="Bind this legacy token once" autoComplete="off" aria-invalid={tokenCollectorId.length > 0 && tokenCollectorIdInvalid} /><small>{tokenEditTarget.constraints?.boundCollectorId === undefined ? "This upgraded legacy token cannot use native gRPC until it is bound. Binding is one-way." : "This security binding is immutable. Rotate the token to use a different collector ID."}</small></label>
             <TokenScopePicker idPrefix="edit-token" options={tokenScopeOptions} selected={tokenIndexes} onChange={setTokenIndexes} disabled={tokenScopeSource === "unavailable"} />
             {tokenScopeInvalid ? <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Remove unavailable scopes</strong><p>Tokens can only be saved with active, ingestion-enabled indexes. Uncheck the unavailable scope before saving.</p></div></div> : null}
             {tokenScopeSource === "unavailable" ? <div className="access-mode-notice" role="note"><span>i</span><div><strong>Index scopes are read-only</strong><p>No authoritative index summary is available. Other token metadata can still be saved while the existing scope is preserved.</p></div></div> : null}
@@ -3321,7 +3351,7 @@ function BackendTokens(props: BackendTokensProps) {
             const state = tokenStateLabel(token.state);
             const canRevoke = tokenCanBeRevoked(token);
             const canEdit = canRevoke;
-            return <tr key={token.ingestionTokenId}><td><strong>{token.name}</strong>{token.description ? <small className="table-secondary">{token.description}</small> : null}</td><td><code>{token.tokenPrefix}</code></td><td>{token.constraints?.allowedIndexNames.join(", ") || "None"}</td><td>{formatDate(token.expiresAt)}</td><td>{formatDate(token.lastUsedAt)}</td><td><span className={`status-label status-label--${statusClass(state)}`}><i />{state}</span></td><td><div className="row-actions"><button className="table-action" type="button" aria-label={`Edit token ${token.name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onEdit(token)}>{props.busy === `read-token-${token.ingestionTokenId}` ? "Loading…" : "Edit"}</button><button className="table-action" type="button" aria-label={`Revoke token ${token.name}`} disabled={!canRevoke || props.busy !== null} onClick={() => props.onRevoke(token)}>{props.busy === `token-${token.ingestionTokenId}` ? "Revoking…" : canRevoke ? "Revoke" : "—"}</button></div></td></tr>;
+            return <tr key={token.ingestionTokenId}><td><strong>{token.name}</strong>{token.description ? <small className="table-secondary">{token.description}</small> : null}</td><td><code>{token.tokenPrefix}</code></td><td>{token.constraints?.allowedIndexNames.join(", ") || "None"}<small className="table-secondary">{token.constraints?.boundCollectorId === undefined ? "Native collector binding required" : `Collector ${token.constraints.boundCollectorId}`}</small></td><td>{formatDate(token.expiresAt)}</td><td>{formatDate(token.lastUsedAt)}</td><td><span className={`status-label status-label--${statusClass(state)}`}><i />{state}</span></td><td><div className="row-actions"><button className="table-action" type="button" aria-label={`Edit token ${token.name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onEdit(token)}>{props.busy === `read-token-${token.ingestionTokenId}` ? "Loading…" : "Edit"}</button><button className="table-action" type="button" aria-label={`Revoke token ${token.name}`} disabled={!canRevoke || props.busy !== null} onClick={() => props.onRevoke(token)}>{props.busy === `token-${token.ingestionTokenId}` ? "Revoking…" : canRevoke ? "Revoke" : "—"}</button></div></td></tr>;
           })}</tbody></table></div>
         )}
         <div className="admin-pagination-footer" aria-live="polite">

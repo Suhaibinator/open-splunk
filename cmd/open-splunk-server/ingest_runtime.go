@@ -102,12 +102,14 @@ func (authorizer collectorAuthorizer) Authorize(ctx context.Context, token strin
 		}
 		return ingest.Authorization{}, err
 	}
-	if authentication.TokenID == "" || len(authentication.AllowedIndexNames) == 0 {
+	if authentication.TokenID == "" || authentication.BoundCollectorID == "" ||
+		len(authentication.AllowedIndexNames) == 0 {
 		return ingest.Authorization{}, ingest.ErrUnauthorized
 	}
 	return ingest.Authorization{
 		SubjectID:         authentication.TokenID,
 		TenantID:          authorizer.tenantID,
+		CollectorID:       authentication.BoundCollectorID,
 		AuthorizedIndexes: append([]string(nil), authentication.AllowedIndexNames...),
 	}, nil
 }

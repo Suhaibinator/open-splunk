@@ -46,10 +46,13 @@ const (
 	maximumSourcetypeBytes        = 255
 	maximumAdminTextFilterBytes   = 255
 	maximumTokenNameBytes         = 255
+	maximumCollectorIDBytes       = 128
 	maximumTokenScopes            = 256
 	adminCursorVersion            = 1
 	maximumBrowserAllowedHosts    = 32
 )
+
+var errImmutableTokenCollectorBinding = errors.New("ingestion token collector binding is immutable")
 
 var indexUpdatePaths = map[string]string{
 	"display_name":                          "display_name",
@@ -79,14 +82,16 @@ var indexUpdatePaths = map[string]string{
 }
 
 var tokenUpdatePaths = map[string]string{
-	"name":                   "name",
-	"definition.name":        "name",
-	"description":            "description",
-	"definition.description": "description",
-	"constraints":            "constraints",
-	"definition.constraints": "constraints",
-	"expires_at":             "expires_at",
-	"definition.expires_at":  "expires_at",
+	"name":                           "name",
+	"definition.name":                "name",
+	"description":                    "description",
+	"definition.description":         "description",
+	"constraints":                    "constraints",
+	"definition.constraints":         "constraints",
+	"constraints.bound_collector_id": "constraints.bound_collector_id",
+	"definition.constraints.bound_collector_id": "constraints.bound_collector_id",
+	"expires_at":            "expires_at",
+	"definition.expires_at": "expires_at",
 }
 
 func normalizeBrowserAllowedHosts(input []string) (map[string]struct{}, error) {
@@ -550,6 +555,9 @@ func (handler *apiHandler) updateIngestionToken(request *http.Request, input *op
 	}
 	replacement, err := applyTokenUpdate(current, input.GetDefinition(), input.GetUpdateMask())
 	if err != nil {
+		if errors.Is(err, errImmutableTokenCollectorBinding) {
+			return nil, router.NewHTTPError(http.StatusConflict, "ingestion token collector binding is immutable")
+		}
 		return nil, badRequestError(err.Error())
 	}
 	record, err := handler.ingestionTokens.UpdateCollectorToken(request.Context(), id, input.GetExpectedVersion(), replacement)
@@ -826,6 +834,14 @@ func indexToProto(record control.Index) (*opensplunkv1.Index, error) {
 }
 
 func tokenDefinitionFromProto(input *opensplunkv1.IngestionTokenDefinition) (auth.UpdateCollectorTokenRequest, error) {
+	return tokenDefinitionFromProtoWithCurrentBinding(input, "", true)
+}
+
+func tokenDefinitionFromProtoWithCurrentBinding(
+	input *opensplunkv1.IngestionTokenDefinition,
+	currentBinding string,
+	requireBinding bool,
+) (auth.UpdateCollectorTokenRequest, error) {
 	if input == nil {
 		return auth.UpdateCollectorTokenRequest{}, errors.New("ingestion token definition is required")
 	}
@@ -841,8 +857,12 @@ func tokenDefinitionFromProto(input *opensplunkv1.IngestionTokenDefinition) (aut
 	if constraints == nil {
 		return auth.UpdateCollectorTokenRequest{}, errors.New("ingestion token constraints are required")
 	}
-	if len(constraints.GetAllowedHostRegexes()) != 0 || len(constraints.GetAllowedSourceRegexes()) != 0 || constraints.BoundCollectorId != nil {
-		return auth.UpdateCollectorTokenRequest{}, errors.New("host, source, and collector-bound token constraints are not supported by this API version")
+	if len(constraints.GetAllowedHostRegexes()) != 0 || len(constraints.GetAllowedSourceRegexes()) != 0 {
+		return auth.UpdateCollectorTokenRequest{}, errors.New("host and source token constraints are not supported by this API version")
+	}
+	boundCollectorID, err := tokenCollectorBinding(constraints, currentBinding, requireBinding)
+	if err != nil {
+		return auth.UpdateCollectorTokenRequest{}, err
 	}
 	if len(constraints.GetAllowedIndexNames()) == 0 || len(constraints.GetAllowedIndexNames()) > maximumTokenScopes {
 		return auth.UpdateCollectorTokenRequest{}, fmt.Errorf("ingestion tokens require between 1 and %d index scopes", maximumTokenScopes)
@@ -868,8 +888,48 @@ func tokenDefinitionFromProto(input *opensplunkv1.IngestionTokenDefinition) (aut
 		expiresAt = input.GetExpiresAt().AsTime().Round(0).UTC()
 	}
 	return auth.UpdateCollectorTokenRequest{
-		Name: name, Description: description, AllowedIndexNames: allowedIndexes, ExpiresAt: expiresAt,
+		Name: name, Description: description, BoundCollectorID: boundCollectorID,
+		AllowedIndexNames: allowedIndexes, ExpiresAt: expiresAt,
 	}, nil
+}
+
+func tokenCollectorBinding(
+	constraints *opensplunkv1.IngestionTokenConstraints,
+	currentBinding string,
+	requireBinding bool,
+) (string, error) {
+	if constraints.BoundCollectorId == nil {
+		if requireBinding {
+			return "", errors.New("ingestion token bound collector ID is required")
+		}
+		return currentBinding, nil
+	}
+	candidate := constraints.GetBoundCollectorId()
+	if currentBinding != "" && candidate != currentBinding {
+		return "", errImmutableTokenCollectorBinding
+	}
+	if !validTokenCollectorID(candidate) {
+		return "", errors.New("ingestion token bound collector ID is invalid")
+	}
+	return candidate, nil
+}
+
+func validTokenCollectorID(value string) bool {
+	if len(value) == 0 || len(value) > maximumCollectorIDBytes || !asciiLetterOrDigit(value[0]) {
+		return false
+	}
+	for index := 1; index < len(value); index++ {
+		if !asciiLetterOrDigit(value[index]) && !strings.ContainsRune("._:-", rune(value[index])) {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiLetterOrDigit(value byte) bool {
+	return value >= 'a' && value <= 'z' ||
+		value >= 'A' && value <= 'Z' ||
+		value >= '0' && value <= '9'
 }
 
 func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.IngestionTokenDefinition, mask *fieldmaskpb.FieldMask) (auth.UpdateCollectorTokenRequest, error) {
@@ -881,10 +941,11 @@ func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.Ingestion
 		return auth.UpdateCollectorTokenRequest{}, err
 	}
 	if full {
-		return tokenDefinitionFromProto(input)
+		return tokenDefinitionFromProtoWithCurrentBinding(input, current.BoundCollectorID, false)
 	}
 	result := auth.UpdateCollectorTokenRequest{
 		Name: current.Name, Description: current.Description,
+		BoundCollectorID:  current.BoundCollectorID,
 		AllowedIndexNames: slices.Clone(current.AllowedIndexNames), ExpiresAt: current.ExpiresAt,
 	}
 	for _, path := range paths {
@@ -901,11 +962,21 @@ func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.Ingestion
 			}
 		case "constraints":
 			partial := &opensplunkv1.IngestionTokenDefinition{Name: result.Name, Constraints: input.GetConstraints()}
-			parsed, err := tokenDefinitionFromProto(partial)
+			parsed, err := tokenDefinitionFromProtoWithCurrentBinding(partial, current.BoundCollectorID, false)
 			if err != nil {
 				return auth.UpdateCollectorTokenRequest{}, err
 			}
 			result.AllowedIndexNames = parsed.AllowedIndexNames
+			result.BoundCollectorID = parsed.BoundCollectorID
+		case "constraints.bound_collector_id":
+			constraints := input.GetConstraints()
+			if constraints == nil || constraints.BoundCollectorId == nil {
+				return auth.UpdateCollectorTokenRequest{}, errors.New("ingestion token bound collector ID is required for update")
+			}
+			result.BoundCollectorID, err = tokenCollectorBinding(constraints, current.BoundCollectorID, false)
+			if err != nil {
+				return auth.UpdateCollectorTokenRequest{}, err
+			}
 		case "expires_at":
 			result.ExpiresAt = time.Time{}
 			if input.GetExpiresAt() != nil {
@@ -923,7 +994,9 @@ func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, err
 	if validateBoundedIdentifier(record.ID, maximumTokenIDBytes, false) != nil || record.Version == 0 ||
 		validateAdminText(record.Name, maximumTokenNameBytes, false, false) != nil ||
 		validateAdminText(record.Description, maximumDescriptionBytes, true, true) != nil ||
-		validateBoundedIdentifier(record.Prefix, 32, false) != nil || len(record.AllowedIndexNames) == 0 || len(record.AllowedIndexNames) > maximumTokenScopes {
+		validateBoundedIdentifier(record.Prefix, 32, false) != nil ||
+		(record.BoundCollectorID != "" && !validTokenCollectorID(record.BoundCollectorID)) ||
+		len(record.AllowedIndexNames) == 0 || len(record.AllowedIndexNames) > maximumTokenScopes {
 		return nil, errors.New("invalid ingestion token record")
 	}
 	previousScope := ""
@@ -961,6 +1034,9 @@ func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, err
 	}
 	if record.Description != "" {
 		result.Description = stringPointer(record.Description)
+	}
+	if record.BoundCollectorID != "" {
+		result.Constraints.BoundCollectorId = stringPointer(record.BoundCollectorID)
 	}
 	if !record.ExpiresAt.IsZero() {
 		result.ExpiresAt, err = validTimestamp(record.ExpiresAt)
@@ -1362,6 +1438,7 @@ func tokenSnapshot(records []auth.CollectorToken) string {
 	digest := sha256.New()
 	for _, record := range records {
 		writeSnapshotRecord(digest, record.ID, record.Version)
+		writeSnapshotString(digest, record.BoundCollectorID)
 		_, _ = io.WriteString(digest, string(record.State))
 		writeSnapshotTime(digest, record.LastUsedAt)
 	}
@@ -1374,6 +1451,13 @@ func writeSnapshotRecord(writer io.Writer, id string, version uint64) {
 	binary.BigEndian.PutUint64(integers[8:], version)
 	_, _ = writer.Write(integers[:])
 	_, _ = io.WriteString(writer, id)
+}
+
+func writeSnapshotString(writer io.Writer, value string) {
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+	_, _ = writer.Write(length[:])
+	_, _ = io.WriteString(writer, value)
 }
 
 func writeSnapshotTime(writer io.Writer, value time.Time) {

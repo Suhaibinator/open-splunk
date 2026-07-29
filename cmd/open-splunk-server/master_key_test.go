@@ -159,7 +159,8 @@ func TestOpenSecurityStoresKeepsCollectorCredentialsValidAcrossRestart(t *testin
 		t.Fatal(err)
 	}
 	issued, err := firstTokens.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{
-		Name: "restart test", AllowedIndexNames: []string{"main"},
+		Name: "restart test", BoundCollectorID: "restart-collector",
+		AllowedIndexNames: []string{"main"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +173,10 @@ func TestOpenSecurityStoresKeepsCollectorCredentialsValidAcrossRestart(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if authentication.TokenID != issued.Token.ID || len(authentication.AllowedIndexNames) != 1 || authentication.AllowedIndexNames[0] != "main" {
+	if authentication.TokenID != issued.Token.ID ||
+		authentication.BoundCollectorID != "restart-collector" ||
+		len(authentication.AllowedIndexNames) != 1 ||
+		authentication.AllowedIndexNames[0] != "main" {
 		t.Fatalf("authentication after reopen = %+v", authentication)
 	}
 	if err := os.Remove(keyPath); err != nil {
@@ -215,7 +219,8 @@ func TestOpenSecurityStoresRefusesUnverifiableExistingTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := legacyTokens.CreateCollectorToken(ctx, auth.CreateCollectorTokenRequest{
-		Name: "legacy", AllowedIndexNames: []string{"main"},
+		Name: "legacy", BoundCollectorID: "legacy-collector",
+		AllowedIndexNames: []string{"main"},
 	}); err != nil {
 		t.Fatal(err)
 	}
