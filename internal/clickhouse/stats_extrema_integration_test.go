@@ -249,11 +249,15 @@ func testStatsExtremaAgainstClickHouse(
 		)
 	}
 	scalarActions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", scalar)
-	const scalarMinSignature = "Function: minOrNullIf(Tuple(UInt8, Float64, String), UInt8)"
+	const scalarMinSignature = "Function: argMinOrNullIf(" +
+		"Tuple(UInt8, Float64, String), " +
+		"Tuple(UInt8, UInt8, Int64, String, String), UInt8)"
 	if got := strings.Count(scalarActions, scalarMinSignature); got != 1 {
 		t.Fatalf("repeated scalar min has %d physical aggregate states, want one:\n%s", got, scalarActions)
 	}
-	const scalarMaxSignature = "Function: maxOrNullIf(Tuple(UInt8, Float64, String), UInt8)"
+	const scalarMaxSignature = "Function: argMaxOrNullIf(" +
+		"Tuple(UInt8, Float64, String), " +
+		"Tuple(UInt8, UInt8, Int64, String, String), UInt8)"
 	if got := strings.Count(scalarActions, scalarMaxSignature); got != 1 {
 		t.Fatalf("scalar min/max has %d physical max states, want one:\n%s", got, scalarActions)
 	}

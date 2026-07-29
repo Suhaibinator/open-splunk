@@ -453,6 +453,10 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				return CompiledQuery{}, complexityErr
 			}
 			materializedFields := predicateMaterializationFields(operator.Expression, state)
+			exactNumericFields := repeatedExactNumericPredicateFields(
+				operator.Expression,
+				state,
+			)
 			predicateState := state
 			nextState := state
 			var excludedColumns, replacements, bindings []string
@@ -463,15 +467,75 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 					aliasSequence,
 				)
 			}
+			exactNumericAliases := make([]string, 0, len(exactNumericFields))
+			if len(exactNumericFields) > 0 {
+				predicateState = cloneCompileState(predicateState)
+				keyColumns := make([]string, 0, len(exactNumericFields))
+				for index, reference := range exactNumericFields {
+					field, ok, resolveErr := resolveCompiledField(
+						reference,
+						predicateState,
+					)
+					if resolveErr != nil {
+						return CompiledQuery{}, resolveErr
+					}
+					if !ok {
+						continue
+					}
+					scalar := compiledScalarFromField(field)
+					keyAlias := quoteIdentifier(fmt.Sprintf(
+						"__os_filter_exact_key_%d_%d",
+						aliasSequence,
+						index+1,
+					))
+					numericAlias := quoteIdentifier(fmt.Sprintf(
+						"__os_filter_exact_numeric_%d_%d",
+						aliasSequence,
+						index+1,
+					))
+					keyColumns = append(
+						keyColumns,
+						exactNumericScalarKeySQL(scalar)+
+							" AS "+keyAlias,
+						"toUInt8("+dynamicNumericValuePredicate(scalar)+
+							") AS "+numericAlias,
+					)
+					field.exactNumericKeySQL = keyAlias
+					field.dynamicNumericEligibleSQL = numericAlias
+					predicateState.visible[reference.Name] = field
+					exactNumericAliases = append(
+						exactNumericAliases,
+						keyAlias,
+						numericAlias,
+					)
+				}
+				relation = relation.selectFrom(
+					"SELECT *, "+strings.Join(keyColumns, ", ")+" FROM ("+
+						relation.sql+") AS "+alias,
+					operator.Range,
+				)
+				aliasSequence++
+				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+			}
 			predicate, predicateArgs, compileErr := compileExpression(operator.Expression, predicateState)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			filterSQL := "SELECT * FROM (" + relation.sql + ") AS " + alias + " WHERE " + predicate
+			filterProjection := "*"
+			if len(exactNumericAliases) > 0 {
+				filterProjection = "* EXCEPT (" +
+					strings.Join(exactNumericAliases, ", ") + ")"
+			}
+			filterSQL := "SELECT " + filterProjection + " FROM (" +
+				relation.sql + ") AS " + alias + " WHERE " + predicate
 			if len(materializedFields) > 0 {
 				materialized := quoteIdentifier(fmt.Sprintf("__os_filter_input_%d", aliasSequence))
+				privateColumns := append(
+					append([]string(nil), excludedColumns...),
+					exactNumericAliases...,
+				)
 				filterSQL = "WITH " + materialized + " AS MATERIALIZED (" + relation.sql + ") " +
-					"SELECT * EXCEPT (" + strings.Join(excludedColumns, ", ") + ") REPLACE (" +
+					"SELECT * EXCEPT (" + strings.Join(privateColumns, ", ") + ") REPLACE (" +
 					strings.Join(replacements, ", ") + ") FROM " + materialized + " AS " +
 					alias + " ARRAY JOIN " +
 					strings.Join(bindings, ", ") + " WHERE " + predicate +
@@ -3314,7 +3378,7 @@ type compiledChronologicalBarrier struct {
 }
 
 type compiledScalarExtremaMeasure struct {
-	keyColumn    string
+	winnerColumn string
 	typeColumn   string
 	outputColumn string
 }
@@ -3368,25 +3432,27 @@ func unsupportedMultivalueUsage(operation string, sourceRange spl.Range) error {
 }
 
 type fieldState struct {
-	valueSQL                string
-	maxStringBytes          uint64
-	textEligibleSQL         string
-	dynamicDomain           dynamicScalarDomain
-	numericIntegral         bool
-	mvCountOneOrNull        bool
-	dynamicTypeSQL          string
-	storedTypeSQL           string
-	existsSQL               string
-	existsArgs              []any
-	descendantSQL           string
-	descendantArgs          []any
-	kind                    fieldKind
-	caseSensitive           bool
-	numberType              string
-	numericSort             bool
-	canonicalTime           bool
-	alwaysNull              bool
-	materializeForPredicate bool
+	valueSQL                  string
+	exactNumericKeySQL        string
+	dynamicNumericEligibleSQL string
+	maxStringBytes            uint64
+	textEligibleSQL           string
+	dynamicDomain             dynamicScalarDomain
+	numericIntegral           bool
+	mvCountOneOrNull          bool
+	dynamicTypeSQL            string
+	storedTypeSQL             string
+	existsSQL                 string
+	existsArgs                []any
+	descendantSQL             string
+	descendantArgs            []any
+	kind                      fieldKind
+	caseSensitive             bool
+	numberType                string
+	numericSort               bool
+	canonicalTime             bool
+	alwaysNull                bool
+	materializeForPredicate   bool
 }
 
 type compiledSortKey struct {
@@ -3685,6 +3751,107 @@ func predicateMaterializationFields(expression plan.Expression, state compileSta
 	return fields
 }
 
+// repeatedExactNumericPredicateFields identifies ordinary Dynamic fields whose
+// exact decimal key would otherwise be expanded more than once in one filter.
+// The caller materializes each key in a private column and removes it
+// immediately after filtering. This keeps the parser's legal 32-predicate
+// ceiling well below the compiled-SQL byte ceiling without adding a stage to
+// the overwhelmingly common one-comparison path.
+func repeatedExactNumericPredicateFields(
+	expression plan.Expression,
+	state compileState,
+) []plan.FieldRef {
+	counts := make(map[string]int)
+	references := make(map[string]plan.FieldRef)
+	conflicts := make(map[string]struct{})
+	order := make([]plan.FieldRef, 0)
+	add := func(reference plan.FieldRef) {
+		field, ok, err := resolveCompiledField(reference, state)
+		if err != nil || !ok || field.kind != fieldKindDynamic ||
+			field.dynamicDomain != dynamicScalarDomainAny ||
+			field.materializeForPredicate {
+			return
+		}
+		if previous, exists := references[reference.Name]; exists {
+			if previous.Canonical != reference.Canonical ||
+				!slices.Equal(previous.Path, reference.Path) {
+				// Parser-built plans keep Name/Path canonical, but a forged
+				// plan can reuse one public name for distinct dynamic paths.
+				// Leave that case unoptimized so the ordinary resolver
+				// preserves its established behavior.
+				conflicts[reference.Name] = struct{}{}
+				return
+			}
+		} else {
+			references[reference.Name] = reference
+		}
+		if counts[reference.Name] == 0 {
+			order = append(order, reference)
+		}
+		counts[reference.Name]++
+	}
+	directField := func(expression plan.ScalarExpression) (plan.FieldRef, bool) {
+		field, ok := expression.(*plan.ScalarFieldExpression)
+		if !ok || field == nil {
+			return plan.FieldRef{}, false
+		}
+		return field.Field, true
+	}
+	numericLiteral := func(expression plan.ScalarExpression) bool {
+		literal, ok := expression.(*plan.ScalarLiteralExpression)
+		if !ok || literal == nil {
+			return false
+		}
+		return literal.Value.Kind == plan.ValueKindInt64 ||
+			literal.Value.Kind == plan.ValueKindUint64 ||
+			literal.Value.Kind == plan.ValueKindFloat64
+	}
+
+	var visit func(plan.Expression)
+	visit = func(expression plan.Expression) {
+		switch expression := expression.(type) {
+		case *plan.BooleanExpression:
+			if expression != nil {
+				visit(expression.Left)
+				visit(expression.Right)
+			}
+		case *plan.NotExpression:
+			if expression != nil {
+				visit(expression.Operand)
+			}
+		case *plan.ComparisonExpression:
+			if expression != nil &&
+				(expression.Value.Kind == plan.ValueKindInt64 ||
+					expression.Value.Kind == plan.ValueKindUint64 ||
+					expression.Value.Kind == plan.ValueKindFloat64) {
+				add(expression.Field)
+			}
+		case *plan.EvalComparisonExpression:
+			if expression == nil {
+				return
+			}
+			leftReference, leftField := directField(expression.Left)
+			rightReference, rightField := directField(expression.Right)
+			if leftField && (rightField || numericLiteral(expression.Right)) {
+				add(leftReference)
+			}
+			if rightField && (leftField || numericLiteral(expression.Left)) {
+				add(rightReference)
+			}
+		}
+	}
+	visit(expression)
+
+	fields := make([]plan.FieldRef, 0, len(order))
+	for _, reference := range order {
+		if _, conflict := conflicts[reference.Name]; !conflict &&
+			counts[reference.Name] > 1 {
+			fields = append(fields, reference)
+		}
+	}
+	return fields
+}
+
 func aggregatePredicateMaterializationFields(
 	operator *plan.Aggregate,
 	state compileState,
@@ -3877,25 +4044,27 @@ func fieldNeedsPredicateMaterialization(name string, state compileState) bool {
 }
 
 type compiledScalar struct {
-	valueSQL                string
-	valueArgs               []any
-	maxStringBytes          uint64
-	existsSQL               string
-	existsArgs              []any
-	textEligibleSQL         string
-	dynamicDomain           dynamicScalarDomain
-	numericIntegral         bool
-	mvCountOneOrNull        bool
-	dynamicTypeSQL          string
-	storedTypeSQL           string
-	descendantSQL           string
-	descendantArgs          []any
-	kind                    fieldKind
-	numberType              string
-	literal                 *plan.Value
-	alwaysNull              bool
-	comparisonAtomic        bool
-	materializeForPredicate bool
+	valueSQL                  string
+	valueArgs                 []any
+	exactNumericKeySQL        string
+	dynamicNumericEligibleSQL string
+	maxStringBytes            uint64
+	existsSQL                 string
+	existsArgs                []any
+	textEligibleSQL           string
+	dynamicDomain             dynamicScalarDomain
+	numericIntegral           bool
+	mvCountOneOrNull          bool
+	dynamicTypeSQL            string
+	storedTypeSQL             string
+	descendantSQL             string
+	descendantArgs            []any
+	kind                      fieldKind
+	numberType                string
+	literal                   *plan.Value
+	alwaysNull                bool
+	comparisonAtomic          bool
+	materializeForPredicate   bool
 }
 
 func booleanScalarConsumerError(operation string) error {
@@ -9665,20 +9834,20 @@ func dynamicComparisonBody(
 	if leftDynamic && rightDynamic {
 		leftType := dynamicScalarTypeSQL(left)
 		rightType := dynamicScalarTypeSQL(right)
-		integerCondition := "(" + dynamicExactIntegerPredicate(left, leftType) + " AND " +
-			dynamicExactIntegerPredicate(right, rightType) + ")"
 		numericCondition := "(" + dynamicNumericValuePredicate(left) + " AND " + dynamicNumericValuePredicate(right) + ")"
 		stringCondition := "(" + leftType + " = 'String' AND " + rightType + " = 'String')"
 		boolCondition := "(" + leftType + " = 'Bool' AND " + rightType + " = 'Bool')"
 		boolComparison := nullBool
-		argumentOccurrences := 3
+		argumentOccurrences := 1
 		if !comparisonOperatorIsOrdered(operator) {
 			boolComparison = dynamicBoolScalarSQL(left) + " " + operator + " " + dynamicBoolScalarSQL(right)
-			argumentOccurrences = 4
 		}
 		result := "multiIf(" +
-			integerCondition + ", " + scalarComparisonSQL(left, right, operator, true) + ", " +
-			numericCondition + ", " + scalarComparisonSQL(left, right, operator, false) + ", " +
+			numericCondition + ", " + exactNumericKeyComparisonSQL(
+			exactNumericScalarKeySQL(left),
+			exactNumericScalarKeySQL(right),
+			operator,
+		) + ", " +
 			stringCondition + ", " + dynamicStringScalarSQL(left) + " " + operator + " " + dynamicStringScalarSQL(right) + ", " +
 			boolCondition + ", " + boolComparison + ", " +
 			nullBool + ")"
@@ -9699,15 +9868,26 @@ func dynamicComparisonBody(
 	}
 	switch fixed.kind {
 	case fieldKindNumber:
-		if fixedNumberTypeIsInteger(fixed.numberType) {
-			integer := comparison(numericScalarSQL(dynamic, true), numericScalarSQL(fixed, true))
-			floating := comparison(numericScalarSQL(dynamic, false), numericScalarSQL(fixed, false))
-			result := "multiIf(" + dynamicExactIntegerPredicate(dynamic, typeSQL) + ", " + integer + ", " +
-				dynamicNumericValuePredicate(dynamic) + ", " + floating + ", " + nullBool + ")"
-			return result, 2, true
+		if fixed.literal != nil {
+			exact := exactNumericKeyComparisonSQL(
+				exactNumericScalarKeySQL(left),
+				exactNumericScalarKeySQL(right),
+				operator,
+			)
+			floating := comparison(
+				numericScalarSQL(dynamic, false),
+				numericScalarSQL(fixed, false),
+			)
+			return "multiIf(startsWith(" + typeSQL + ", 'Float'), " +
+				floating + ", " + dynamicNumericValuePredicate(dynamic) +
+				", " + exact + ", " + nullBool + ")", 1, true
 		}
 		return "if(" + dynamicNumericValuePredicate(dynamic) + ", " +
-			comparison(numericScalarSQL(dynamic, false), numericScalarSQL(fixed, false)) +
+			exactNumericKeyComparisonSQL(
+				exactNumericScalarKeySQL(left),
+				exactNumericScalarKeySQL(right),
+				operator,
+			) +
 			", " + nullBool + ")", 1, true
 	case fieldKindTime:
 		return "if(" + dynamicNumericValuePredicate(dynamic) + ", " +
@@ -9789,6 +9969,11 @@ func dynamicNumericComparisonBody(
 			other = left
 			numericIsLeft = false
 		}
+		exactComparison := exactNumericKeyComparisonSQL(
+			exactNumericScalarKeySQL(left),
+			exactNumericScalarKeySQL(right),
+			operator,
+		)
 		exact := dynamicPhysicalIntegerSQL(numeric)
 		floating := dynamicPhysicalFloatSQL(numeric)
 		if numericIsLeft {
@@ -9803,7 +9988,12 @@ func dynamicNumericComparisonBody(
 			" AND " +
 			dynamicExactIntegerPredicate(other, dynamicScalarTypeSQL(other)) +
 			")"
+		exactDecimalCondition := "(" +
+			dynamicIntegerTypePredicate(dynamicScalarTypeSQL(numeric)) +
+			" AND " + dynamicNumericValuePredicate(other) +
+			" AND NOT startsWith(" + dynamicScalarTypeSQL(other) + ", 'Float'))"
 		return "multiIf(" + integerCondition + ", " + exact + ", " +
+			exactDecimalCondition + ", " + exactComparison + ", " +
 			dynamicNumericValuePredicate(other) + ", " + floating + ", " +
 			nullBool + ")", 0, true
 	}
@@ -9822,6 +10012,23 @@ func dynamicNumericComparisonBody(
 	}
 	switch fixed.kind {
 	case fieldKindNumber:
+		if fixed.literal != nil &&
+			fixed.literal.Kind == plan.ValueKindFloat64 {
+			exact := exactNumericKeyComparisonSQL(
+				exactNumericScalarKeySQL(left),
+				exactNumericScalarKeySQL(right),
+				operator,
+			)
+			floating := comparison(
+				dynamicPhysicalFloatSQL(dynamic),
+				numericScalarSQL(fixed, false),
+			)
+			return "multiIf(" +
+				dynamicIntegerTypePredicate(dynamicScalarTypeSQL(dynamic)) +
+				", " + exact + ", startsWith(" +
+				dynamicScalarTypeSQL(dynamic) + ", 'Float'), " +
+				floating + ", " + nullBool + ")", 1, true
+		}
 		if fixedNumberTypeIsInteger(fixed.numberType) {
 			return "if(" +
 				dynamicIntegerTypePredicate(dynamicScalarTypeSQL(dynamic)) +
@@ -9861,9 +10068,11 @@ func bindComparisonOperands(
 	body string,
 	left, right compiledScalar,
 ) (string, []any) {
-	return "arrayElement(arrayMap((left_value, right_value) -> " +
-			body + ", [" + left.valueSQL + "], [" +
-			right.valueSQL + "]), 1)",
+	return bindSQLExpressions(
+			[]string{"left_value", "right_value"},
+			[]string{left.valueSQL, right.valueSQL},
+			body,
+		),
 		comparisonValueArgs(left, right)
 }
 
@@ -9892,10 +10101,6 @@ func comparisonValueArgs(left, right compiledScalar) []any {
 	return append(args, right.valueArgs...)
 }
 
-func scalarComparisonSQL(left, right compiledScalar, operator string, integer bool) string {
-	return numericScalarSQL(left, integer) + " " + operator + " " + numericScalarSQL(right, integer)
-}
-
 func dynamicScalarTypeSQL(value compiledScalar) string {
 	if value.dynamicTypeSQL != "" {
 		return value.dynamicTypeSQL
@@ -9912,6 +10117,9 @@ func dynamicNumericTypePredicate(typeSQL string) string {
 }
 
 func dynamicNumericValuePredicate(value compiledScalar) string {
+	if value.dynamicNumericEligibleSQL != "" {
+		return value.dynamicNumericEligibleSQL
+	}
 	return "(" + dynamicNumericTypePredicate(dynamicScalarTypeSQL(value)) + " OR " + dynamicTaggedDecimalCondition(value) + ")"
 }
 
@@ -9981,9 +10189,19 @@ func dynamicTaggedEnvelopeCondition(
 }
 
 func dynamicTaggedDecimalText(value compiledScalar) (condition, payload string) {
+	return dynamicTaggedDecimalTextWithLimit(
+		value,
+		MaximumExactNumericBinTextBytes,
+	)
+}
+
+func dynamicTaggedDecimalTextWithLimit(
+	value compiledScalar,
+	maximumBytes int,
+) (condition, payload string) {
 	valueKey := "concat(char(0), 'open_splunk_value')"
 	payload = dynamicTaggedMapSQL(value) + "[" + valueKey + "]"
-	limit := strconv.Itoa(MaximumExactNumericBinTextBytes)
+	limit := strconv.Itoa(maximumBytes)
 	boundedPayload := "if(length(" + payload + ") <= " + limit + ", " +
 		payload + ", CAST('' AS String))"
 	condition = "(" + dynamicTaggedDecimalCondition(value) +
@@ -10321,13 +10539,24 @@ func equalityPredicate(expression *plan.ComparisonExpression, field fieldState, 
 	guard := dynamicLiteralGuard(typeSQL, expression.Value.Kind)
 	switch expression.Value.Kind {
 	case plan.ValueKindInt64, plan.ValueKindUint64:
-		exact := dynamicExactIntegerSQL(dynamic) + " = accurateCastOrNull(?, 'Int256')"
-		decimal := dynamicTaggedDecimalFloatSQL(dynamic) + " = toFloat64OrNull(?)"
-		return "multiIf(" + dynamicExactIntegerPredicate(dynamic, typeSQL) + ", " + exact + ", " +
-			dynamicTaggedDecimalCondition(dynamic) + ", " + decimal + ", 0)", 2
+		exact := exactNumericLiteralFieldComparisonSQL(
+			dynamic,
+			&expression.Value,
+			"=",
+		)
+		return "if(" + dynamicExactIntegerPredicate(dynamic, typeSQL) + ", " +
+			exact + ", 0)", 0
 	case plan.ValueKindFloat64:
-		guard = "(" + guard + " OR " + dynamicTaggedDecimalCondition(dynamic) + ")"
-		base = numericScalarSQL(dynamic, false) + " = toFloat64OrNull(?)"
+		exactCondition := "(startsWith(" + typeSQL + ", 'Decimal') OR " +
+			dynamicTaggedDecimalCondition(dynamic) + ")"
+		exact := exactNumericLiteralFieldComparisonSQL(
+			dynamic,
+			&expression.Value,
+			"=",
+		)
+		floating := numericScalarSQL(dynamic, false) + " = toFloat64OrNull(?)"
+		return "multiIf(startsWith(" + typeSQL + ", 'Float'), " +
+			floating + ", " + exactCondition + ", " + exact + ", 0)", 1
 	}
 	return "(" + guard + " AND " + base + ")", 1
 }
@@ -10360,12 +10589,23 @@ func relationalPredicate(expression *plan.ComparisonExpression, field fieldState
 		return left + " " + operator + " " + right, 1, nil
 	}
 	if field.kind == fieldKindDynamic &&
-		(expression.Value.Kind == plan.ValueKindInt64 || expression.Value.Kind == plan.ValueKindUint64) {
+		(expression.Value.Kind == plan.ValueKindInt64 ||
+			expression.Value.Kind == plan.ValueKindUint64 ||
+			expression.Value.Kind == plan.ValueKindFloat64) {
 		typeSQL := dynamicTypeExpression(field)
 		dynamic := compiledScalarFromField(field)
-		exact := dynamicExactIntegerSQL(dynamic) + " " + operator + " accurateCastOrNull(?, 'Int256')"
-		fallback := numericScalarSQL(dynamic, false) + " " + operator + " toFloat64OrNull(?)"
-		return "multiIf(" + dynamicExactIntegerPredicate(dynamic, typeSQL) + ", " + exact + ", " + fallback + ")", 2, nil
+		exact := exactNumericLiteralFieldComparisonSQL(
+			dynamic,
+			&expression.Value,
+			operator,
+		)
+		eligible := "(" + dynamicNumericValuePredicate(dynamic) + " OR " +
+			typeSQL + " = 'String')"
+		floating := numericScalarSQL(dynamic, false) + " " + operator +
+			" toFloat64OrNull(?)"
+		return "multiIf(startsWith(" + typeSQL + ", 'Float'), " +
+			floating + ", " + eligible + ", " + exact +
+			", CAST(NULL AS Nullable(Bool)))", 1, nil
 	}
 	if field.kind == fieldKindDynamic {
 		return numericScalarSQL(compiledScalarFromField(field), false) + " " + operator + " toFloat64OrNull(?)", 1, nil
@@ -10375,23 +10615,25 @@ func relationalPredicate(expression *plan.ComparisonExpression, field fieldState
 
 func compiledScalarFromField(field fieldState) compiledScalar {
 	return compiledScalar{
-		valueSQL:                field.valueSQL,
-		maxStringBytes:          field.maxStringBytes,
-		existsSQL:               field.existsSQL,
-		existsArgs:              append([]any(nil), field.existsArgs...),
-		textEligibleSQL:         field.textEligibleSQL,
-		dynamicDomain:           field.dynamicDomain,
-		numericIntegral:         field.numericIntegral,
-		mvCountOneOrNull:        field.mvCountOneOrNull,
-		dynamicTypeSQL:          field.dynamicTypeSQL,
-		storedTypeSQL:           field.storedTypeSQL,
-		descendantSQL:           field.descendantSQL,
-		descendantArgs:          append([]any(nil), field.descendantArgs...),
-		kind:                    field.kind,
-		numberType:              field.numberType,
-		alwaysNull:              field.alwaysNull,
-		comparisonAtomic:        true,
-		materializeForPredicate: field.materializeForPredicate,
+		valueSQL:                  field.valueSQL,
+		exactNumericKeySQL:        field.exactNumericKeySQL,
+		dynamicNumericEligibleSQL: field.dynamicNumericEligibleSQL,
+		maxStringBytes:            field.maxStringBytes,
+		existsSQL:                 field.existsSQL,
+		existsArgs:                append([]any(nil), field.existsArgs...),
+		textEligibleSQL:           field.textEligibleSQL,
+		dynamicDomain:             field.dynamicDomain,
+		numericIntegral:           field.numericIntegral,
+		mvCountOneOrNull:          field.mvCountOneOrNull,
+		dynamicTypeSQL:            field.dynamicTypeSQL,
+		storedTypeSQL:             field.storedTypeSQL,
+		descendantSQL:             field.descendantSQL,
+		descendantArgs:            append([]any(nil), field.descendantArgs...),
+		kind:                      field.kind,
+		numberType:                field.numberType,
+		alwaysNull:                field.alwaysNull,
+		comparisonAtomic:          true,
+		materializeForPredicate:   field.materializeForPredicate,
 	}
 }
 
@@ -10934,8 +11176,8 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		function plan.AggregateFunction
 	}
 	type scalarExtremaResult struct {
-		keyAlias  string
-		typeAlias string
+		winnerAlias string
+		typeAlias   string
 	}
 	scalarExtremaResults := make(map[scalarExtremaResultKey]scalarExtremaResult)
 	type chronologicalInput struct {
@@ -11373,8 +11615,8 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				result, cached := scalarExtremaResults[resultKey]
 				if !cached {
 					result = scalarExtremaResult{
-						keyAlias: quoteIdentifier(fmt.Sprintf(
-							"__os_stats_extrema_key_%d",
+						winnerAlias: quoteIdentifier(fmt.Sprintf(
+							"__os_stats_extrema_winner_%d",
 							measureIndex,
 						)),
 						typeAlias: quoteIdentifier(fmt.Sprintf(
@@ -11385,10 +11627,10 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 					scalarExtremaResults[resultKey] = result
 					projection = append(
 						projection,
-						statsExtremaScalarAggregateKeySQL(
+						statsExtremaScalarAggregateWinnerSQL(
 							measure.Function,
 							scalarInput.candidateAlias,
-						)+" AS "+result.keyAlias,
+						)+" AS "+result.winnerAlias,
 					)
 					next.privateColumns = append(
 						next.privateColumns,
@@ -11398,7 +11640,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				next.postAggregateScalarExtrema = append(
 					next.postAggregateScalarExtrema,
 					compiledScalarExtremaMeasure{
-						keyColumn:    result.keyAlias,
+						winnerColumn: result.winnerAlias,
 						typeColumn:   result.typeAlias,
 						outputColumn: output,
 					},
@@ -11413,18 +11655,26 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				break
 			}
 
-			stringInputSQL, inputErr := stringInputFor(measure.Input)
-			if inputErr != nil {
-				return nil, nil, nil, compileState{}, nil, inputErr
-			}
 			candidates, cached := extremaInputs[measure.Input.Name]
 			if !cached {
 				candidates = quoteIdentifier(fmt.Sprintf("__os_measure_extrema_%d", len(extremaInputs)))
 				extremaInputs[measure.Input.Name] = candidates
+				var candidateSQL string
+				var candidateArgs []any
+				if ok && input.kind == fieldKindDynamic {
+					candidateSQL, candidateArgs = statsExtremaDynamicCandidatesSQL(input)
+				} else {
+					stringInputSQL, inputErr := stringInputFor(measure.Input)
+					if inputErr != nil {
+						return nil, nil, nil, compileState{}, nil, inputErr
+					}
+					candidateSQL = statsExtremaCandidatesSQL(stringInputSQL)
+				}
 				next.preAggregateColumns = append(
 					next.preAggregateColumns,
-					statsExtremaCandidatesSQL(stringInputSQL)+" AS "+candidates,
+					candidateSQL+" AS "+candidates,
 				)
+				next.preAggregateArgs = append(next.preAggregateArgs, candidateArgs...)
 			}
 			extreme := statsExtremaAggregateSQL(measure.Function, candidates)
 			typeAlias := quoteIdentifier(fmt.Sprintf("__os_stats_extrema_type_%d", measureIndex))
@@ -11940,59 +12190,206 @@ func statsExtremaNormalizedNumberSQL(numberSQL string) string {
 		") = 0, toFloat64(0), assumeNotNull(" + numberSQL + "))"
 }
 
-func statsExtremaOrderingKeySQL(valueSQL, numberSQL string) string {
-	return "tuple(toUInt8(isNull(" + numberSQL + ")), if(isNotNull(" + numberSQL +
-		"), " + statsExtremaNormalizedNumberSQL(numberSQL) +
-		", toFloat64(0)), if(isNull(" + numberSQL + "), " + valueSQL +
-		", CAST('' AS String)))"
+const (
+	statsExtremaPublicationFloat uint8 = iota
+	statsExtremaPublicationDecimal
+	statsExtremaPublicationLexical
+)
+
+func statsExtremaOrderingKeySQL(valueSQL, exactKeySQL string) string {
+	exact := exactNumericKeyValueSQL(exactKeySQL)
+	numeric := exactNumericKeyEligibleSQL(exactKeySQL)
+	return "tuple(toUInt8(NOT (" + numeric + ")), " +
+		"if(" + numeric + ", tupleElement(" + exact + ", 1), toUInt8(1)), " +
+		"if(" + numeric + ", tupleElement(" + exact + ", 2), toInt64(0)), " +
+		"if(" + numeric + ", tupleElement(" + exact + ", 3), CAST('' AS String)), " +
+		"if(" + numeric + ", CAST('' AS String), " + valueSQL + "))"
+}
+
+func statsExtremaExactFloatPublicationSQL(numberSQL, exactKeySQL string) string {
+	roundTrip := exactNumericOrderingKeySQL(
+		"toString(" + statsExtremaNormalizedNumberSQL(numberSQL) + ")",
+	)
+	return statsExtremaExactFloatKeyMatchSQL(
+		numberSQL,
+		exactKeySQL,
+		roundTrip,
+	)
+}
+
+func statsExtremaExactFloatKeyMatchSQL(
+	numberSQL, exactKeySQL, floatKeySQL string,
+) string {
+	return "isNotNull(" + numberSQL + ") AND " +
+		exactNumericKeyEligibleSQL(exactKeySQL) + " AND " +
+		exactKeySQL + " = " + floatKeySQL
 }
 
 func statsExtremaScalarCandidateSQL(valueSQL, numberSQL string) string {
 	value := "ifNull(" + valueSQL + ", CAST('' AS String))"
-	key := statsExtremaOrderingKeySQL(value, numberSQL)
-	return "tuple(" + key + ", toUInt8(isNotNull(" + valueSQL + ")))"
+	boundedValue := boundedExactNumericOrderingInputSQL(value)
+	exactVariable := "__os_stats_extrema_exact_key"
+	floatVariable := "__os_stats_extrema_float_key"
+	ordering := statsExtremaOrderingKeySQL(value, exactVariable)
+	exactFloat := statsExtremaExactFloatKeyMatchSQL(
+		numberSQL,
+		exactVariable,
+		floatVariable,
+	)
+	numeric := exactNumericKeyEligibleSQL(exactVariable)
+	decimalInput := "if(" + numeric + ", " + value + ", CAST('0' AS String))"
+	publicationKind := "toUInt8(multiIf(NOT (" + numeric + "), " +
+		strconv.Itoa(int(statsExtremaPublicationLexical)) + ", " +
+		exactFloat + ", " +
+		strconv.Itoa(int(statsExtremaPublicationFloat)) + ", " +
+		strconv.Itoa(int(statsExtremaPublicationDecimal)) + "))"
+	publicationNumber := "if(isNotNull(" + numberSQL + "), " +
+		statsExtremaNormalizedNumberSQL(numberSQL) + ", toFloat64(0))"
+	publicationText := "multiIf(NOT (" + numeric + "), " + value + ", " +
+		exactFloat + ", CAST('' AS String), " +
+		decimalInput + ")"
+	candidate := "tuple(" + ordering + ", " + publicationKind + ", " +
+		publicationNumber + ", " + publicationText + ", toUInt8(isNotNull(" +
+		valueSQL + ")))"
+	return bindSQLExpressions(
+		[]string{exactVariable, floatVariable},
+		[]string{
+			exactNumericOrderingKeySQL(boundedValue),
+			exactNumericOrderingKeySQL(
+				"toString(ifNull(" + numberSQL + ", toFloat64(0)))",
+			),
+		},
+		candidate,
+	)
 }
 
-func statsExtremaScalarAggregateKeySQL(
+func statsExtremaScalarAggregateWinnerSQL(
 	function plan.AggregateFunction,
 	candidateSQL string,
 ) string {
-	name := "minIfOrNull"
+	name := "argMinOrNullIf"
 	if function == plan.AggregateFunctionMaximum {
-		name = "maxIfOrNull"
+		name = "argMaxOrNullIf"
 	}
 	key := "tupleElement(" + candidateSQL + ", 1)"
-	eligible := "tupleElement(" + candidateSQL + ", 2) != 0"
-	return name + "(" + key + ", " + eligible + ")"
+	eligible := "tupleElement(" + candidateSQL + ", 5) != 0"
+	publication := "tuple(tupleElement(" + candidateSQL + ", 2), tupleElement(" +
+		candidateSQL + ", 3), tupleElement(" + candidateSQL + ", 4))"
+	return name + "(" + publication + ", " + key + ", " + eligible + ")"
 }
 
-func statsExtremaScalarValueSQL(extremeKeySQL string) string {
-	nonNull := "assumeNotNull(" + extremeKeySQL + ")"
-	return "if(isNull(" + extremeKeySQL + "), CAST(NULL AS Dynamic), if(tupleElement(" +
-		nonNull + ", 1) = 0, CAST(tupleElement(" + nonNull +
-		", 2) AS Dynamic), CAST(tupleElement(" + nonNull + ", 3) AS Dynamic)))"
+func statsExtremaScalarValueSQL(extremeWinnerSQL string) string {
+	nonNull := "assumeNotNull(" + extremeWinnerSQL + ")"
+	kind := "tupleElement(" + nonNull + ", 1)"
+	number := "tupleElement(" + nonNull + ", 2)"
+	text := "tupleElement(" + nonNull + ", 3)"
+	return "if(isNull(" + extremeWinnerSQL + "), CAST(NULL AS Dynamic), multiIf(" +
+		kind + " = " + strconv.Itoa(int(statsExtremaPublicationFloat)) +
+		", CAST(" + number + " AS Dynamic), " +
+		kind + " = " + strconv.Itoa(int(statsExtremaPublicationDecimal)) +
+		", " + decimalEnvelopeDynamicSQL(text) + ", " +
+		"CAST(" + text + " AS Dynamic)))"
 }
 
-func statsExtremaScalarStoredTypeSQL(extremeKeySQL string) string {
-	nonNull := "assumeNotNull(" + extremeKeySQL + ")"
-	class := "tupleElement(" + nonNull + ", 1)"
+func statsExtremaScalarStoredTypeSQL(extremeWinnerSQL string) string {
+	nonNull := "assumeNotNull(" + extremeWinnerSQL + ")"
+	kind := "tupleElement(" + nonNull + ", 1)"
 	lexical := "tupleElement(" + nonNull + ", 3)"
-	return statsExtremaStoredTypeFromConditionsSQL(
-		"isNull("+extremeKeySQL+")",
-		class+" = 0",
-		class+" != 0",
+	return statsExtremaStoredTypeWithDecimalSQL(
+		"isNull("+extremeWinnerSQL+")",
+		kind+" = "+strconv.Itoa(int(statsExtremaPublicationFloat)),
+		kind+" = "+strconv.Itoa(int(statsExtremaPublicationDecimal)),
+		kind+" = "+strconv.Itoa(int(statsExtremaPublicationLexical)),
 		lexical,
 	)
 }
 
 func statsExtremaCandidatesSQL(valuesSQL string) string {
-	number := statsExtremaNumericOrNullSQL("value")
-	candidate := "if(isNotNull(number), CAST(" + statsExtremaNormalizedNumberSQL("number") +
-		" AS Dynamic), CAST(value AS Dynamic))"
-	key := statsExtremaOrderingKeySQL("value", "number")
-	bound := "arrayElement(arrayMap(number -> tuple(" + candidate + ", " + key +
-		"), [" + number + "]), 1)"
-	return "arrayMap(value -> " + bound + ", " + valuesSQL + ")"
+	candidate := statsExtremaCandidateSQL(
+		"value",
+		boundedExactNumericOrderingInputSQL("value"),
+	)
+	return "arrayMap(value -> " + candidate + ", " + valuesSQL + ")"
+}
+
+func statsExtremaCandidateSQL(valueSQL, exactTextSQL string) string {
+	number := statsExtremaNumericOrNullSQL(valueSQL)
+	exact := exactNumericOrderingKeySQL(exactTextSQL)
+	exactFloat := statsExtremaExactFloatPublicationSQL("number", "exact_key")
+	numeric := exactNumericKeyEligibleSQL("exact_key")
+	decimalInput := "if(" + numeric + ", lexical_value, CAST('0' AS String))"
+	candidate := "multiIf(NOT (" + numeric + "), CAST(lexical_value AS Dynamic), " +
+		exactFloat + ", CAST(" + statsExtremaNormalizedNumberSQL("number") +
+		" AS Dynamic), " + decimalEnvelopeDynamicSQL(decimalInput) + ")"
+	key := statsExtremaOrderingKeySQL("lexical_value", "exact_key")
+	bound := bindSQLExpressions(
+		[]string{"lexical_value", "number", "exact_key"},
+		[]string{valueSQL, number, exact},
+		"tuple("+candidate+", "+key+")",
+	)
+	return bound
+}
+
+func statsExtremaDynamicCandidatesSQL(field fieldState) (string, []any) {
+	empty := "CAST([], 'Array(Tuple(String, String))')"
+	typeSQL := dynamicTypeExpression(field)
+	scalar := compiledScalarFromField(field)
+	scalarSupported, scalarLexical := statsByScalarExpressions(field)
+	scalarEligible := scalarSupported
+	if field.textEligibleSQL != "" {
+		scalarEligible = "(" + scalarEligible + " AND ifNull(" +
+			field.textEligibleSQL + ", 0))"
+	}
+	scalarInput := "if(" + scalarEligible + ", [tuple(" + scalarLexical + ", " +
+		exactNumericScalarTextSQL(scalar) + ")], " + empty + ")"
+
+	elementField := fieldState{
+		valueSQL:       "element",
+		dynamicTypeSQL: "dynamicType(element)",
+		kind:           fieldKindDynamic,
+	}
+	element := compiledScalarFromField(elementField)
+	elementType := dynamicTypeExpression(elementField)
+	elementSupported, elementLexical := statsByScalarExpressions(elementField)
+	elementInput := "if(throwIf(toUInt8(NOT (" + elementSupported + ")), '" +
+		UnsupportedStatsMeasureValueMarker + "') = 0, tuple(" + elementLexical + ", " +
+		exactNumericScalarTextSQL(element) +
+		"), tuple(CAST('' AS String), CAST('' AS String)))"
+	arrayValues := "arrayFilter(element -> " + elementType +
+		" != 'None', dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)'))"
+	arrayInput := "arrayMap(element -> " + elementInput + ", " + arrayValues + ")"
+
+	existsSQL := field.existsSQL
+	if existsSQL == "" {
+		existsSQL = "1"
+	}
+	descendantSQL := "0"
+	args := append([]any(nil), field.existsArgs...)
+	if field.descendantSQL != "" {
+		descendantSQL = field.descendantSQL
+		args = append(args, field.descendantArgs...)
+	}
+	topLevelUnsupported := "(field_present != 0 AND " + typeSQL +
+		" != 'None' AND " + typeSQL + " != 'Array(Dynamic)' AND NOT (" +
+		scalarSupported + "))"
+	invalid := "(" + topLevelUnsupported + " OR descendant_present != 0)"
+	value := "multiIf(" + typeSQL + " = 'None', " + empty + ", " +
+		typeSQL + " = 'Array(Dynamic)', " + arrayInput + ", " +
+		scalarInput + ")"
+	body := "if(throwIf(toUInt8(" + invalid + "), '" +
+		UnsupportedStatsMeasureValueMarker + "') = 0, if(field_present != 0, " +
+		value + ", " + empty + "), " + empty + ")"
+	inputs := bindSQLExpressions(
+		[]string{"field_present", "descendant_present"},
+		[]string{"toUInt8(" + existsSQL + ")", "toUInt8(" + descendantSQL + ")"},
+		body,
+	)
+	input := "__os_stats_extrema_input"
+	candidate := statsExtremaCandidateSQL(
+		"tupleElement("+input+", 1)",
+		"tupleElement("+input+", 2)",
+	)
+	return "arrayMap(" + input + " -> " + candidate + ", " + inputs + ")", args
 }
 
 func statsExtremaNumericOrNullSQL(valueSQL string) string {
@@ -12018,9 +12415,10 @@ func statsExtremaAggregateSQL(function plan.AggregateFunction, candidatesSQL str
 func statsExtremaStoredTypeSQL(valueSQL string) string {
 	typeSQL := "dynamicType(" + valueSQL + ")"
 	stringSQL := "dynamicElement(" + valueSQL + ", 'String')"
-	return statsExtremaStoredTypeFromConditionsSQL(
+	return statsExtremaStoredTypeWithDecimalSQL(
 		typeSQL+" = 'None'",
 		typeSQL+" = 'Float64'",
+		typeSQL+" = 'Map(String, String)'",
 		typeSQL+" = 'String'",
 		stringSQL,
 	)
@@ -12032,9 +12430,26 @@ func statsExtremaStoredTypeFromConditionsSQL(
 	stringConditionSQL string,
 	stringSQL string,
 ) string {
+	return statsExtremaStoredTypeWithDecimalSQL(
+		nullConditionSQL,
+		numberConditionSQL,
+		"0",
+		stringConditionSQL,
+		stringSQL,
+	)
+}
+
+func statsExtremaStoredTypeWithDecimalSQL(
+	nullConditionSQL string,
+	numberConditionSQL string,
+	decimalConditionSQL string,
+	stringConditionSQL string,
+	stringSQL string,
+) string {
 	return "multiIf(" +
 		nullConditionSQL + ", toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeNull)) + "), " +
 		numberConditionSQL + ", toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeDouble)) + "), " +
+		decimalConditionSQL + ", toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeDecimal)) + "), " +
 		stringConditionSQL + " AND isValidUTF8(" + stringSQL + "), toUInt8(" +
 		strconv.Itoa(int(eventfields.StoredValueTypeString)) + "), " +
 		stringConditionSQL + ", toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeBytes)) + "), " +
@@ -12127,28 +12542,28 @@ func compileScalarExtremaResults(
 		return relation, 0
 	}
 
-	keys := make([]string, 0, len(measures))
-	seenKeys := make(map[string]struct{}, len(measures))
+	winners := make([]string, 0, len(measures))
+	seenWinners := make(map[string]struct{}, len(measures))
 	projection := make([]string, 1, 1+len(measures)*2)
 	for _, measure := range measures {
-		if _, seen := seenKeys[measure.keyColumn]; !seen {
-			seenKeys[measure.keyColumn] = struct{}{}
-			keys = append(keys, measure.keyColumn)
+		if _, seen := seenWinners[measure.winnerColumn]; !seen {
+			seenWinners[measure.winnerColumn] = struct{}{}
+			winners = append(winners, measure.winnerColumn)
 		}
 	}
-	projection[0] = "* EXCEPT (" + strings.Join(keys, ", ") + ")"
+	projection[0] = "* EXCEPT (" + strings.Join(winners, ", ") + ")"
 
-	publishedTypes := make(map[string]struct{}, len(keys))
+	publishedTypes := make(map[string]struct{}, len(winners))
 	for _, measure := range measures {
 		projection = append(
 			projection,
-			statsExtremaScalarValueSQL(measure.keyColumn)+" AS "+measure.outputColumn,
+			statsExtremaScalarValueSQL(measure.winnerColumn)+" AS "+measure.outputColumn,
 		)
-		if _, published := publishedTypes[measure.keyColumn]; !published {
-			publishedTypes[measure.keyColumn] = struct{}{}
+		if _, published := publishedTypes[measure.winnerColumn]; !published {
+			publishedTypes[measure.winnerColumn] = struct{}{}
 			projection = append(
 				projection,
-				statsExtremaScalarStoredTypeSQL(measure.keyColumn)+" AS "+measure.typeColumn,
+				statsExtremaScalarStoredTypeSQL(measure.winnerColumn)+" AS "+measure.typeColumn,
 			)
 		}
 	}
@@ -12856,37 +13271,52 @@ func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, 
 }
 
 func dynamicSortValue(valueSQL string, dynamicValue bool) string {
-	text := "toString(" + valueSQL + ")"
-	number := finiteFloatOrNullSQL(text)
+	scalar := compiledScalar{
+		valueSQL: valueSQL,
+		kind:     fieldKindString,
+	}
 	if dynamicValue {
-		dynamic := compiledScalar{
+		scalar = compiledScalar{
 			valueSQL:       valueSQL,
 			dynamicTypeSQL: "dynamicType(" + valueSQL + ")",
 			kind:           fieldKindDynamic,
 		}
-		number = "ifNotFinite(" + numericScalarSQL(dynamic, false) + ", CAST(NULL AS Nullable(Float64)))"
 	}
-	integer := "accurateCastOrNull(" + text + ", 'Int256')"
-	if dynamicValue {
-		dynamic := compiledScalar{
-			valueSQL:       valueSQL,
-			dynamicTypeSQL: "dynamicType(" + valueSQL + ")",
-			kind:           fieldKindDynamic,
-		}
-		integer = dynamicExactIntegerSQL(dynamic)
-	}
+	numericText := exactNumericScalarTextSQL(scalar)
+	lexicalText := exactNumericScalarLexicalTextSQL(scalar)
 	// Dynamic itself is intentionally forbidden in ClickHouse ORDER BY. A
 	// fixed tuple also gives SPL-like numeric ordering for numeric values and
-	// strings. The Int256 tie-break preserves adjacent integral values that
-	// collapse to the same Float64 beyond 2^53. Nonnumeric scalars sort before
-	// missing/explicit null.
-	return "tuple(" +
-		"if(isNull(" + valueSQL + "), toUInt8(2), if(isNotNull(" + number + "), toUInt8(0), toUInt8(1))), " +
-		"ifNull(" + number + ", 0.), " +
-		"if(isNotNull(" + integer + "), toUInt8(0), toUInt8(1)), " +
-		"ifNull(" + integer + ", toInt256(0)), " +
-		"ifNull(" + text + ", '')" +
-		")"
+	// strings. Numeric eligibility uses the bounded complete-decimal grammar,
+	// while the ordering components retain exact normalized decimal text and
+	// never collapse distinct wide integers or decimals through Float64.
+	// Nonnumeric scalars sort before missing/explicit null.
+	textVariable := "__os_sort_exact_text"
+	lexicalVariable := "__os_sort_lexical_text"
+	nullVariable := "__os_sort_exact_null"
+	keyVariable := "__os_sort_exact_key"
+	numeric := exactNumericKeyEligibleSQL(keyVariable)
+	keyValue := exactNumericKeyValueSQL(keyVariable)
+	body := "tuple(" +
+		"if(" + nullVariable + " != 0, toUInt8(2), if(" + numeric +
+		", toUInt8(0), toUInt8(1))), " +
+		"if(" + numeric + ", tupleElement(" + keyValue + ", 1), toUInt8(1)), " +
+		"if(" + numeric + ", tupleElement(" + keyValue + ", 2), toInt64(0)), " +
+		"if(" + numeric + ", tupleElement(" + keyValue + ", 3), CAST('' AS String)), " +
+		"ifNull(" + lexicalVariable + ", CAST('' AS String)))"
+	boundKey := bindSQLExpressions(
+		[]string{keyVariable},
+		[]string{exactNumericOrderingKeySQL(textVariable)},
+		body,
+	)
+	return bindSQLExpressions(
+		[]string{textVariable, lexicalVariable, nullVariable},
+		[]string{
+			numericText,
+			lexicalText,
+			"toUInt8(isNull(" + valueSQL + "))",
+		},
+		boundKey,
+	)
 }
 
 func compileMaterializedOrder(keys []compiledSortKey, reverse bool) (string, error) {

@@ -1703,6 +1703,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testStatsAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testStatsPercentilesAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testStatsExtremaAgainstClickHouse(t, ctx, store, connection, indexTime)
+	testExactNumericOrderingAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testStatsChronologicalAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testStatsListAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testDedupAgainstClickHouse(t, ctx, store, connection, indexTime)

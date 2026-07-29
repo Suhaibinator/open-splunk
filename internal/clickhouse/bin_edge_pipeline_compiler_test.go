@@ -609,7 +609,9 @@ func TestBinEdgeBinnedOutputStaysVisibleToNumericPredicates(t *testing.T) {
 			compiled := compileSPL(t, test.source)
 			for _, required := range []string{
 				`dynamicType("__os_filter_bound_3_1")`,
-				`accurateCastOrNull(toString("__os_filter_bound_3_1"), 'Int256')`,
+				`__os_exact_order_text`,
+				`tupleElement(__os_exact_order_left, 1) != 0`,
+				`tuple(toUInt8(1), toUInt8(2), toInt64(2), CAST('2' AS String))`,
 			} {
 				if !strings.Contains(compiled.SQL, required) {
 					t.Fatalf("numeric predicate over a bucket is missing %q:\n%s", required, compiled.SQL)

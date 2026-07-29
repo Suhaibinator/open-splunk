@@ -154,9 +154,10 @@ func TestCompileDynamicNumericComparisonUsesFailureFreeNumericCoercion(t *testin
 
 	compiled := compileSPL(t, `index=gradethis status>=500`)
 	for _, required := range []string{
-		`has("__os_field_names", ?) AND ifNull(multiIf((dynamicType("__os_fields"."status") IN (`,
-		`accurateCastOrNull(toString("__os_fields"."status"), 'Int256')) >= accurateCastOrNull(?, 'Int256')`,
-		`reinterpretAsInt256(bitNot(`,
+		`has("__os_field_names", ?) AND ifNull(multiIf(startsWith(dynamicType("__os_fields"."status"), 'Float')`,
+		`__os_exact_order_text`,
+		`tupleElement(__os_exact_order_left, 1) != 0`,
+		`tuple(toUInt8(1), toUInt8(2), toInt64(3), CAST('5' AS String))`,
 		`'decimal/v1'`,
 		`toFloat64OrNull(?)`,
 	} {
@@ -164,8 +165,11 @@ func TestCompileDynamicNumericComparisonUsesFailureFreeNumericCoercion(t *testin
 			t.Fatalf("dynamic comparison SQL missing %q:\n%s", required, compiled.SQL)
 		}
 	}
-	if got := compiled.Args[len(compiled.Args)-2:]; !reflect.DeepEqual(got, []any{"500", "500"}) {
+	if got := compiled.Args[len(compiled.Args)-1:]; !reflect.DeepEqual(got, []any{"500"}) {
 		t.Fatalf("numeric argument occurrences = %#v, want source strings", got)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d: %#v", got, want, compiled.Args)
 	}
 }
 
@@ -220,8 +224,9 @@ func TestCompileDynamicEqualityRetainsLiteralTypeIntent(t *testing.T) {
 	if integer.SQL == floating.SQL {
 		t.Fatal("integer and floating equality compiled identically")
 	}
-	if integer.Args[len(integer.Args)-1] != "1" || floating.Args[len(floating.Args)-1] != "1.0" {
-		t.Fatalf("source lexemes lost: integer=%#v floating=%#v", integer.Args, floating.Args)
+	if slices.Contains(integer.Args, "1") ||
+		floating.Args[len(floating.Args)-1] != "1.0" {
+		t.Fatalf("literal argument accounting is wrong: integer=%#v floating=%#v", integer.Args, floating.Args)
 	}
 }
 
@@ -246,8 +251,12 @@ func TestCompileFieldNotEqualRequiresExistence(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis status!=500`)
-	if !strings.Contains(compiled.SQL, `has("__os_field_names", ?) AND NOT ifNull(multiIf((dynamicType("__os_fields"."status") IN (`) {
+	if !strings.Contains(compiled.SQL, `has("__os_field_names", ?) AND NOT ifNull(if((dynamicType("__os_fields"."status") IN (`) ||
+		!strings.Contains(compiled.SQL, `__os_exact_order_left`) {
 		t.Fatalf("!= does not enforce presence:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d: %#v", got, want, compiled.Args)
 	}
 }
 
@@ -255,8 +264,12 @@ func TestCompileNOTComparisonIncludesMissingField(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis NOT status=500`)
-	if !strings.Contains(compiled.SQL, `NOT ((has("__os_field_names", ?) AND ifNull(multiIf((dynamicType("__os_fields"."status") IN (`) {
+	if !strings.Contains(compiled.SQL, `NOT ((has("__os_field_names", ?) AND ifNull(if((dynamicType("__os_fields"."status") IN (`) ||
+		!strings.Contains(compiled.SQL, `__os_exact_order_left`) {
 		t.Fatalf("NOT comparison grouping is unsafe:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d: %#v", got, want, compiled.Args)
 	}
 }
 
@@ -1806,24 +1819,113 @@ func TestCompileDynamicStatsGroupRetainsNumericAwareSort(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis | stats count by status | sort status`)
-	if !strings.Contains(compiled.SQL, `tuple(if(isNull("__os_group_0")`) ||
-		!strings.Contains(compiled.SQL, `toFloat64OrNull(toString("__os_group_0"))`) ||
-		!strings.Contains(compiled.SQL, `accurateCastOrNull(toString("__os_group_0"), 'Int256')`) {
-		t.Fatalf("dynamic stats group lost numeric-aware downstream sort:\n%s", compiled.SQL)
+	for _, required := range []string{
+		`arrayMap((__os_sort_exact_text, __os_sort_lexical_text, __os_sort_exact_null)`,
+		`if(length(toString("__os_group_0")) <= ` +
+			strconv.Itoa(MaximumExactNumericOrderingInputTextBytes),
+		`ifNull(__os_sort_lexical_text, CAST('' AS String))`,
+		`__os_exact_order_text`,
+		`tupleElement(__os_sort_exact_key, 1) != 0`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("dynamic stats group sort lost exact numeric shape %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d: %#v", got, want, compiled.Args)
 	}
 }
 
-func TestCompileDynamicSortUsesExactIntegralTieBreaker(t *testing.T) {
+func TestCompileDynamicSortUsesExactDecimalOrderingKey(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis | sort wide_sort | table event_id`)
 	for _, required := range []string{
 		`dynamicType("__os_fields"."wide_sort")`,
-		`accurateCastOrNull(toString("__os_fields"."wide_sort"), 'Int256')`,
-		`ifNotFinite(`,
+		`__os_exact_order_text`,
+		`translate(`,
+		`'0123456789'`,
+		`'9876543210'`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("dynamic sort SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, `accurateCastOrNull(toString("__os_fields"."wide_sort"), 'Int256')`) {
+		t.Fatalf("dynamic sort retained the Float64-plus-integral tie-breaker:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d: %#v", got, want, compiled.Args)
+	}
+}
+
+func TestCompileMixedExactDecimalComparisonsAvoidFloat64Collapse(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		source       string
+		exactLiteral string
+	}{
+		{source: `index=gradethis ratio<9007199254740993`},
+		{
+			source:       `index=gradethis ratio>9007199254740992.75`,
+			exactLiteral: "9007199254740992.75",
+		},
+		{
+			source:       `index=gradethis | where ratio>9007199254740992.75`,
+			exactLiteral: "9007199254740992.75",
+		},
+		{
+			source:       `index=gradethis | where 9007199254740992.75<ratio`,
+			exactLiteral: "9007199254740992.75",
+		},
+		{source: `index=gradethis | where ratio>other_ratio`},
+	} {
+		compiled := compileSPL(t, test.source)
+		for _, required := range []string{
+			`__os_exact_order_text`,
+			`translate(`,
+			`'0123456789'`,
+			`'9876543210'`,
+		} {
+			if !strings.Contains(compiled.SQL, required) {
+				t.Fatalf(
+					"%q exact comparison SQL missing %q:\n%s",
+					test.source,
+					required,
+					compiled.SQL,
+				)
+			}
+		}
+		if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+			t.Fatalf(
+				"%q placeholder count = %d, args = %d: %#v\n%s",
+				test.source,
+				got,
+				want,
+				compiled.Args,
+				compiled.SQL,
+			)
+		}
+		if test.exactLiteral != "" {
+			key := parseExactNumericLiteralKey(test.exactLiteral)
+			if !key.eligible {
+				t.Fatalf("%q test literal unexpectedly lacks an exact key", test.exactLiteral)
+			}
+			for _, required := range []string{
+				`toInt64(` + strconv.FormatInt(key.decimalOrder, 10) + `)`,
+				`CAST('` + key.coefficient + `' AS String)`,
+			} {
+				if !strings.Contains(compiled.SQL, required) {
+					t.Fatalf(
+						"%q exact literal key missing %q for %q:\n%s",
+						test.source,
+						required,
+						test.exactLiteral,
+						compiled.SQL,
+					)
+				}
+			}
 		}
 	}
 }
@@ -2190,10 +2292,10 @@ func TestCompileWhereKeepsAtomicDynamicComparisonDirect(t *testing.T) {
 
 	compiled := compileSPL(t, `index=gradethis | where unsigned>18446744073709551614`)
 	for _, required := range []string{
-		`multiIf((dynamicType("__os_fields"."unsigned") IN (`,
-		`reinterpretAsInt256(bitNot(`,
-		`coalesce(`,
-		`accurateCastOrNull(toString("__os_fields"."unsigned"), 'Int256')) > accurateCastOrNull(CAST(? AS UInt64), 'Int256')`,
+		`multiIf(startsWith(dynamicType("__os_fields"."unsigned"), 'Float')`,
+		`__os_exact_order_text`,
+		`tupleElement(__os_exact_order_left, 1) != 0`,
+		`tuple(toUInt8(1), toUInt8(2), toInt64(20), CAST('18446744073709551614' AS String))`,
 		`'decimal/v1'`,
 		`toFloat64(CAST(? AS UInt64))`,
 	} {
@@ -2210,16 +2312,18 @@ func TestCompileWhereKeepsAtomicDynamicComparisonDirect(t *testing.T) {
 			literalCount++
 		}
 	}
-	if literalCount != 2 {
-		t.Fatalf("wide integer argument occurrences = %d, want 2: %#v", literalCount, compiled.Args)
+	if literalCount != 1 {
+		t.Fatalf("wide integer argument occurrences = %d, want 1: %#v", literalCount, compiled.Args)
 	}
 	if strings.Contains(compiled.SQL, `arrayMap((left_value, right_value)`) {
 		t.Fatalf("atomic Dynamic comparison retained singleton arrays:\n%s", compiled.SQL)
 	}
 
 	fieldToField := compileSPL(t, `index=gradethis | where left>right`)
-	if !strings.Contains(fieldToField.SQL, `accurateCastOrNull(toString("__os_fields"."left"), 'Int256')) > coalesce(`) ||
-		!strings.Contains(fieldToField.SQL, `accurateCastOrNull(toString("__os_fields"."right"), 'Int256'))`) ||
+	if !strings.Contains(fieldToField.SQL, `tupleElement(__os_exact_order_left, 1) != 0 AND tupleElement(__os_exact_order_right, 1) != 0`) ||
+		!strings.Contains(fieldToField.SQL, `tupleElement(__os_exact_order_left, 4)) > tuple(`) ||
+		!strings.Contains(fieldToField.SQL, `__os_fields"."left`) ||
+		!strings.Contains(fieldToField.SQL, `__os_fields"."right`) ||
 		!strings.Contains(fieldToField.SQL, `dynamicElement("__os_fields"."left", 'String') > dynamicElement("__os_fields"."right", 'String')`) ||
 		strings.Contains(fieldToField.SQL, `arrayMap((left_value, right_value)`) {
 		t.Fatalf("dynamic field comparison is not runtime typed:\n%s", fieldToField.SQL)
@@ -3303,15 +3407,19 @@ func TestCompileStatsMinAndMaxShareOneRuntimeNormalization(t *testing.T) {
 		t.Fatalf("output fields = %v", compiled.OutputFields)
 	}
 	for _, required := range []string{
-		`AS "__os_measure_strings_0"`,
 		`AS "__os_measure_extrema_0"`,
 		`argMinArray(arrayMap(candidate -> tupleElement(candidate, 1), "__os_measure_extrema_0")`,
 		`argMaxArray(arrayMap(candidate -> tupleElement(candidate, 1), "__os_measure_extrema_0")`,
 		`AS "__os_stats_extrema_type_0"`,
 		`AS "__os_stats_extrema_type_1"`,
 		`AS "__os_stats_extrema_type_2"`,
-		`isValidUTF8(value)`,
-		`length(value) <= ` + strconv.Itoa(MaximumExactNumericBinTextBytes),
+		`__os_stats_extrema_input`,
+		`Array(Tuple(String, String))`,
+		`length(toString(element)) <= ` +
+			strconv.Itoa(MaximumExactNumericOrderingInputTextBytes),
+		`length(dynamicElement(element, 'Map(String, String)')` +
+			`[concat(char(0), 'open_splunk_value')]) <= ` +
+			strconv.Itoa(MaximumExactNumericOrderingTextBytes),
 		`ifNotFinite(toFloat64OrNull(`,
 		`'^([+]|-|)(([0-9]+([.][0-9]*|))|([.][0-9]+))([eE]([+]|-|)[0-9]+|)$'`,
 	} {
@@ -3319,8 +3427,7 @@ func TestCompileStatsMinAndMaxShareOneRuntimeNormalization(t *testing.T) {
 			t.Fatalf("min/max SQL missing %q:\n%s", required, compiled.SQL)
 		}
 	}
-	if strings.Count(compiled.SQL, `AS "__os_measure_strings_0"`) != 1 ||
-		strings.Count(compiled.SQL, `AS "__os_measure_extrema_0"`) != 1 ||
+	if strings.Count(compiled.SQL, `AS "__os_measure_extrema_0"`) != 1 ||
 		strings.Contains(compiled.SQL, `__os_measure_extrema_1`) {
 		t.Fatalf("min/max did not share one normalization for the same input:\n%s", compiled.SQL)
 	}
@@ -3351,7 +3458,7 @@ func TestCompileStatsMinAndMaxUseNativeFixedScalarExtrema(t *testing.T) {
 	for _, required := range []string{
 		`minIfOrNull("severity", (1) AND isNotNull("severity")) AS "low"`,
 		`maxIfOrNull("_time", (1) AND isNotNull("_time")) AS "latest"`,
-		`maxIfOrNull(tupleElement("__os_measure_extrema_scalar_0", 1), tupleElement("__os_measure_extrema_scalar_0", 2) != 0)`,
+		`argMaxOrNullIf(tuple(tupleElement("__os_measure_extrema_scalar_0", 2), tupleElement("__os_measure_extrema_scalar_0", 3), tupleElement("__os_measure_extrema_scalar_0", 4)), tupleElement("__os_measure_extrema_scalar_0", 1), tupleElement("__os_measure_extrema_scalar_0", 5) != 0)`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("fixed min/max SQL missing %q:\n%s", required, compiled.SQL)
@@ -3360,6 +3467,9 @@ func TestCompileStatsMinAndMaxUseNativeFixedScalarExtrema(t *testing.T) {
 	if strings.Contains(compiled.SQL, `toFloat64("severity")`) ||
 		strings.Contains(compiled.SQL, `toFloat64("_time")`) {
 		t.Fatalf("fixed extrema lost native precision:\n%s", compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d: %#v", got, want, compiled.Args)
 	}
 }
 
@@ -3374,8 +3484,8 @@ func TestCompileStatsScalarStringExtremaAvoidArrayLowering(t *testing.T) {
 		`AS "__os_measure_scalar_string_0"`,
 		`AS "__os_measure_extrema_number_0"`,
 		`AS "__os_measure_extrema_scalar_0"`,
-		`minIfOrNull(tupleElement("__os_measure_extrema_scalar_0", 1), tupleElement("__os_measure_extrema_scalar_0", 2) != 0)`,
-		`maxIfOrNull(tupleElement("__os_measure_extrema_scalar_0", 1), tupleElement("__os_measure_extrema_scalar_0", 2) != 0)`,
+		`argMinOrNullIf(tuple(tupleElement("__os_measure_extrema_scalar_0", 2), tupleElement("__os_measure_extrema_scalar_0", 3), tupleElement("__os_measure_extrema_scalar_0", 4)), tupleElement("__os_measure_extrema_scalar_0", 1), tupleElement("__os_measure_extrema_scalar_0", 5) != 0)`,
+		`argMaxOrNullIf(tuple(tupleElement("__os_measure_extrema_scalar_0", 2), tupleElement("__os_measure_extrema_scalar_0", 3), tupleElement("__os_measure_extrema_scalar_0", 4)), tupleElement("__os_measure_extrema_scalar_0", 1), tupleElement("__os_measure_extrema_scalar_0", 5) != 0)`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("scalar String extrema SQL missing %q:\n%s", required, compiled.SQL)
@@ -3408,14 +3518,14 @@ func TestCompileStatsScalarStringExtremaAvoidArrayLowering(t *testing.T) {
 		t,
 		`index=gradethis | stats min(service) AS low | where low=2 | sort low | head 1`,
 	)
-	const scalarKeyCleanup = `SELECT * EXCEPT ("__os_stats_extrema_key_0"),`
-	cleanupIndex := strings.Index(downstream.SQL, scalarKeyCleanup)
+	const scalarWinnerCleanup = `SELECT * EXCEPT ("__os_stats_extrema_winner_0"),`
+	cleanupIndex := strings.Index(downstream.SQL, scalarWinnerCleanup)
 	if cleanupIndex < 0 {
 		t.Fatalf("scalar extrema did not drop its tuple key after aggregation:\n%s", downstream.SQL)
 	}
 	if strings.Contains(
 		downstream.SQL[:cleanupIndex],
-		`"__os_stats_extrema_key_0"`,
+		`"__os_stats_extrema_winner_0"`,
 	) {
 		t.Fatalf("downstream operator retained the private scalar extrema key:\n%s", downstream.SQL)
 	}
@@ -3463,8 +3573,8 @@ func TestCompileStatsScalarStringExtremaAvoidArrayLowering(t *testing.T) {
 		`index=gradethis | stats values(service) AS services min(host) AS host_low min(service) AS service_low`,
 	)
 	for _, required := range []string{
-		`minIfOrNull(tupleElement("__os_measure_extrema_scalar_1", 1), tupleElement("__os_measure_extrema_scalar_1", 2) != 0) AS "__os_stats_extrema_key_1"`,
-		`minIfOrNull(tupleElement("__os_measure_extrema_scalar_0", 1), tupleElement("__os_measure_extrema_scalar_0", 2) != 0) AS "__os_stats_extrema_key_2"`,
+		`argMinOrNullIf(tuple(tupleElement("__os_measure_extrema_scalar_1", 2), tupleElement("__os_measure_extrema_scalar_1", 3), tupleElement("__os_measure_extrema_scalar_1", 4)), tupleElement("__os_measure_extrema_scalar_1", 1), tupleElement("__os_measure_extrema_scalar_1", 5) != 0) AS "__os_stats_extrema_winner_1"`,
+		`argMinOrNullIf(tuple(tupleElement("__os_measure_extrema_scalar_0", 2), tupleElement("__os_measure_extrema_scalar_0", 3), tupleElement("__os_measure_extrema_scalar_0", 4)), tupleElement("__os_measure_extrema_scalar_0", 1), tupleElement("__os_measure_extrema_scalar_0", 5) != 0) AS "__os_stats_extrema_winner_2"`,
 	} {
 		if !strings.Contains(interleaved.SQL, required) {
 			t.Fatalf("interleaved scalar fields lost stable descriptor %q:\n%s", required, interleaved.SQL)
@@ -3528,19 +3638,19 @@ func TestCompileStatsScalarStringExtremaMaximumMeasuresStayBounded(t *testing.T)
 		t.Fatalf("maximum scalar extrema measures did not share one candidate:\n%s", compiled.SQL)
 	}
 	for _, alias := range []string{
-		`AS "__os_stats_extrema_key_0"`,
+		`AS "__os_stats_extrema_winner_0"`,
 		`AS "__os_stats_extrema_type_0"`,
-		`AS "__os_stats_extrema_key_1"`,
+		`AS "__os_stats_extrema_winner_1"`,
 		`AS "__os_stats_extrema_type_1"`,
 	} {
 		if strings.Count(compiled.SQL, alias) != 1 {
 			t.Fatalf("maximum scalar extrema measures did not materialize one %s:\n%s", alias, compiled.SQL)
 		}
 	}
-	if strings.Contains(compiled.SQL, `__os_stats_extrema_key_2`) ||
+	if strings.Contains(compiled.SQL, `__os_stats_extrema_winner_2`) ||
 		strings.Contains(compiled.SQL, `__os_stats_extrema_type_2`) ||
-		strings.Count(compiled.SQL, "minIfOrNull(") != 1 ||
-		strings.Count(compiled.SQL, "maxIfOrNull(") != 1 {
+		strings.Count(compiled.SQL, "argMinOrNullIf(") != 1 ||
+		strings.Count(compiled.SQL, "argMaxOrNullIf(") != 1 {
 		t.Fatalf("maximum scalar extrema measures duplicated aggregate state:\n%s", compiled.SQL)
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
@@ -4343,13 +4453,27 @@ func TestCompileChartOrdersRowsLikeAutomaticSort(t *testing.T) {
 	t.Parallel()
 
 	lexical := compileSPL(t, `index=gradethis | chart count OVER path BY level`)
-	if !strings.Contains(lexical.SQL, `row_number() OVER (ORDER BY tuple(if(isNull("__os_ch_row")`) ||
-		!strings.Contains(lexical.SQL, `accurateCastOrNull(toString("__os_ch_row"), 'Int256')`) {
-		t.Fatalf("runtime-typed row axis is not ordered numerically:\n%s", lexical.SQL)
+	for _, required := range []string{
+		`row_number() OVER (ORDER BY arrayElement(arrayMap((__os_sort_exact_text, __os_sort_lexical_text, __os_sort_exact_null)`,
+		`if(length(toString("__os_ch_row")) <= ` +
+			strconv.Itoa(MaximumExactNumericOrderingInputTextBytes),
+		`ifNull(__os_sort_lexical_text, CAST('' AS String))`,
+		`tupleElement(__os_sort_exact_key, 1) != 0`,
+		`__os_exact_order_text`,
+	} {
+		if !strings.Contains(lexical.SQL, required) {
+			t.Fatalf("runtime-typed row axis lost exact numeric ordering %q:\n%s", required, lexical.SQL)
+		}
+	}
+	if got, want := strings.Count(lexical.SQL, "?"), len(lexical.Args); got != want {
+		t.Fatalf("runtime-typed chart placeholder count = %d, args = %d: %#v", got, want, lexical.Args)
 	}
 	fixed := compileSPL(t, `index=gradethis | bin severity span=10 | chart count OVER severity BY level`)
 	if !strings.Contains(fixed.SQL, `row_number() OVER (ORDER BY "__os_ch_row" ASC)`) {
 		t.Fatalf("fixed numeric row axis is not ordered by its own value:\n%s", fixed.SQL)
+	}
+	if got, want := strings.Count(fixed.SQL, "?"), len(fixed.Args); got != want {
+		t.Fatalf("fixed chart placeholder count = %d, args = %d: %#v", got, want, fixed.Args)
 	}
 }
 

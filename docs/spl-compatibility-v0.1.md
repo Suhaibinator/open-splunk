@@ -173,11 +173,15 @@ a numeric literal also accept numeric-looking dynamic strings; failed numeric
 conversion does not match. `field!=value` excludes a missing field, while `NOT
 field=value` includes it. `field=*` requires a present, non-null value. Canonical
 `index` comparisons are case-sensitive; ordinary string comparisons are
-case-insensitive. Mathematically integral `decimal/v1` values inside signed
-`Int256`, including fractional/exponent spellings and exact Decimal results
-produced by `bin`, use the exact integer comparison path. Other extended
-decimal values compare through finite `Float64`, so distinct values beyond
-`Float64` precision can compare as equal in compatibility version 0.1.
+case-insensitive. Runtime integers, bounded `decimal/v1` values, and
+numeric-looking dynamic Strings use a normalized exact-decimal ordering key,
+including fractional and exponent spellings and exact Decimal results produced
+by `bin`. Distinct values such as integer `9007199254740993` and Decimal
+`9007199254740992.75` therefore remain distinct. Raw numeric text is capped at
+4 KiB; a nonzero value may use an exponent magnitude through 10,000, and every
+syntactically valid zero spelling normalizes to zero without expanding its
+exponent. A physical Float compared with a numeric literal retains native
+`Float64` behavior.
 
 ### `where`
 
@@ -223,11 +227,13 @@ parent as present when descendant metadata exists. These predicates do not
 walk or expand container members.
 
 Dynamic values compare through their runtime scalar types: integer pairs retain
-full 64-bit precision, numeric pairs compare numerically, and string pairs
-compare lexically. Canonical `_time` and `_indextime` use Unix epoch seconds in
-numeric comparisons. Mathematically integral extended decimals inside signed
-`Int256` use the exact integer path; other extended decimals have the same
-`Float64` precision caveat as base-search comparisons.
+their full stored precision, generic numeric pairs use the bounded exact-decimal
+key, and string pairs compare lexically. Canonical `_time` and `_indextime` use
+Unix epoch seconds in numeric comparisons. Comparisons known to involve a
+physical Float retain native `Float64` behavior. For a generic cross-type
+Dynamic comparison, a finite Float contributes ClickHouse's pinned canonical
+`toString(Float64)` decimal spelling to the exact key; this is a rendered
+decimal compatibility contract, not an exact binary-rational comparison.
 
 ## Pipeline commands
 
@@ -1661,9 +1667,15 @@ per-event JSON serialize/reparse pass for every rename pair.
 
 The default result bound is 10,000. An explicit zero removes the logical SQL
 limit but does not bypass server execution, memory, group, result-row, or
-result-byte budgets. Dynamic values use numeric-aware automatic ordering;
-stable private row/group identities make ties deterministic. Missing values
-sort last in the forward direction and first when `tail` reverses the order.
+result-byte budgets. Dynamic values use numeric-aware automatic ordering.
+Bounded complete-decimal Strings, integers, Decimals, and finite Floats sort by
+the normalized exact-decimal key, so wide integer and fractional Decimal
+neighbors do not collapse. A Float contributes its pinned canonical rendered
+decimal spelling. Other scalars use deterministic lexical ordering over their
+complete logical text. In particular, the numeric parser's byte ceiling does
+not truncate or collapse longer nonnumeric Strings. Stable private row/group
+identities make genuine ties deterministic. Missing values sort last in the
+forward direction and first when `tail` reverses the order.
 
 ### `dedup`
 
@@ -1898,33 +1910,43 @@ Array aggregate combinator, `arrayFold`, or row-expanding `ARRAY JOIN`.
 
 `min` and `max` follow Splunk's documented numeric-if-possible rule for
 ordinary numbers and text. Open Splunk v0.1 makes the mixed-type and symbol
-edges deterministic: finite numeric candidates sort before lexical candidates;
-numeric candidates compare numerically and lexical candidates compare by raw
-bytes. Consequently, `min` selects a numeric value whenever one is present,
-while `max` selects a lexical value whenever one is present. This is a total,
-locale-independent order. Public Splunk documentation does not define a
-standard symbol order and warns that some symbols may precede numbers, so the
-placement of punctuation is an explicit Open Splunk v0.1 boundary pending a
-live differential oracle.
+edges deterministic: exact numeric candidates sort before lexical candidates;
+numeric candidates compare by the normalized exact-decimal key and lexical
+candidates compare by raw bytes. Consequently, `min` selects a numeric value
+whenever one is present, while `max` selects a lexical value whenever one is
+present. This is a total, locale-independent order. Public Splunk documentation
+does not define a standard symbol order and warns that some symbols may precede
+numbers, so the placement of punctuation is an explicit Open Splunk v0.1
+boundary pending a live differential oracle.
 
 For runtime String and Dynamic values, a candidate is numeric only when it is
-valid UTF-8, no longer than 4 KiB, matches this complete decimal grammar, and
-converts to a finite `Float64`:
+valid UTF-8, matches this complete decimal grammar, and is within the exact-key
+resource domain:
 
 ```text
 [+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?
 ```
 
-Whitespace, `NaN`, infinity spellings, overflowing exponents, invalid UTF-8,
-and longer values remain lexical. Numeric zero is normalized to positive zero,
-and equivalent spellings such as `01`, `1.0`, and `1e0` publish the same
-canonical `Double(1)` result. The runtime comparison key is currently
-`Float64`; distinct very-wide integers or exact decimals that collapse to the
-same `Float64` are an explicit Open Splunk v0.1 precision boundary pending an
-exact decimal comparison key and live Splunk oracle. Statically typed numeric,
-Boolean, and timestamp columns take an exact native ClickHouse path instead,
-preserving their physical width and timestamp precision; non-finite fixed
-floats do not participate.
+Ordinary String input is capped at 4 KiB for numeric classification. A nonzero
+exponent magnitude through 10,000 is accepted without expansion; a larger
+nonzero exponent, whitespace, `NaN`, infinity, invalid UTF-8, or longer String
+remains lexical with its complete bytes intact. Every syntactically valid zero
+spelling within the text bound is zero even when its exponent magnitude is
+larger. A validated semantic `decimal/v1` value may use one reserved
+normalization byte. This admits the 4,097-byte payload produced when an exact
+extremum normalizes a 4,096-byte `.digits` String to `0.digits`, including in a
+later comparison, sort, or extrema aggregation. Other Decimal-consuming
+functions retain their documented 4 KiB payload ceilings.
+
+Numeric zero is normalized to positive zero, and equivalent spellings such as
+`01`, `1.0`, and `1e0` publish the same canonical `Double(1)` result. A winner
+publishes as `Double` only when its exact key equals the key obtained after a
+finite `Float64` round trip. Otherwise it publishes as a validated
+`decimal/v1` value, so very-wide integers, fractional Decimals beyond binary
+precision, and accepted values outside the finite Float range remain exact.
+Statically typed numeric, Boolean, and timestamp columns take their native
+ClickHouse path instead, preserving their physical width and timestamp
+precision; non-finite fixed floats do not participate.
 
 Missing values, explicit null, an empty multivalue, and null multivalue members
 do not participate. An empty String is a lexical candidate. Every immediate
@@ -1936,22 +1958,22 @@ tenant/index/time/visibility scope, rows removed by an upstream filter, and
 rows omitted for an incomplete `BY` tuple cannot trigger that error.
 
 A runtime String, Dynamic, or multivalue result is nullable `Mixed`: numeric
-winners are `Double`, lexical winners are String or Bytes, and no winner is
-null. A statically typed scalar result is nullable and retains its numeric,
-Boolean, or timestamp type. A global aggregation over no rows emits one null
-result row; a retained group with no eligible candidate also contains null;
-grouped aggregation over no rows emits no groups. Projected-away inputs remain
-absent. Repeated extrema over one input share one bounded row-local
-normalization, and `min` plus `max` use separate constant-size aggregate
-states. A statically known scalar String uses one nullable input alias, one
-numeric-classification alias, and one non-null ordering tuple; ClickHouse
-aggregates that tuple with conditional scalar `min`/`max` and constructs the
-nullable `Mixed` winner only after aggregation. This avoids row-local
-singleton arrays and per-row Dynamic boxing. Dynamic and fixed multivalue
-inputs retain the guarded Array-combinator path. Scalar extrema and
-`dc`/`values` over the same input share the nullable scalar materialization.
-Neither path uses `ARRAY JOIN`, row expansion, sorting, or unbounded list
-aggregation.
+winners are lossless `Double` or exact Decimal, lexical winners are String or
+Bytes, and no winner is null. A statically typed scalar result is nullable and
+retains its numeric, Boolean, or timestamp type. A global aggregation over no
+rows emits one null result row; a retained group with no eligible candidate
+also contains null; grouped aggregation over no rows emits no groups.
+Projected-away inputs remain absent. Repeated extrema over one input share one
+bounded row-local normalization, and `min` plus `max` use separate
+constant-size aggregate states. A statically known scalar String uses one
+nullable input alias, one exact-key candidate alias, and one non-null ordering
+tuple; ClickHouse aggregates that tuple with conditional scalar `argMin` /
+`argMax` and constructs the nullable `Mixed` winner only after aggregation.
+This avoids row-local singleton arrays and per-row Dynamic boxing. Dynamic and
+fixed multivalue inputs retain the guarded Array-combinator path. Scalar
+extrema and `dc`/`values` over the same input share the nullable scalar
+materialization. Neither path uses `ARRAY JOIN`, row expansion, sorting, or
+unbounded list aggregation.
 
 `min` and `max` accept exactly one unquoted, exact field. Expression/eval
 arguments, wildcards, quoted fields, empty argument lists, and multiple
