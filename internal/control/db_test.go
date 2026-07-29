@@ -38,8 +38,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 16 {
-		t.Fatalf("schema migration count = %d, want 16", migrationCount)
+	if migrationCount != 17 {
+		t.Fatalf("schema migration count = %d, want 17", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -87,8 +87,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 16 {
-		t.Fatalf("schema migration count after reopen = %d, want 16", migrationCount)
+	if migrationCount != 17 {
+		t.Fatalf("schema migration count after reopen = %d, want 17", migrationCount)
 	}
 }
 
@@ -222,6 +222,90 @@ func TestIndexDeletionTombstoneRecordMatchesMigratedSQLiteColumns(t *testing.T) 
 	}
 }
 
+func TestIndexDeletionOperationRecordMatchesMigratedSQLiteColumns(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+
+	statement := &gorm.Statement{DB: db.GORMDB()}
+	if err := statement.Parse(&indexDeletionOperationRecord{}); err != nil {
+		t.Fatalf("parse GORM index-deletion operation model: %v", err)
+	}
+
+	rows, err := db.SQLDB().QueryContext(ctx, `
+		SELECT name
+		FROM pragma_table_info('index_deletion_operations')
+		ORDER BY cid`)
+	if err != nil {
+		t.Fatalf("read migrated index-deletion operation columns: %v", err)
+	}
+	defer rows.Close()
+	var migratedColumns []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan migrated index-deletion operation column: %v", err)
+		}
+		migratedColumns = append(migratedColumns, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate migrated index-deletion operation columns: %v", err)
+	}
+	if !slices.Equal(statement.Schema.DBNames, migratedColumns) {
+		t.Fatalf(
+			"GORM index-deletion operation columns = %v, migrated columns = %v",
+			statement.Schema.DBNames,
+			migratedColumns,
+		)
+	}
+
+	operationIDField := statement.Schema.LookUpField("DeletionOperationID")
+	indexIDField := statement.Schema.LookUpField("IndexID")
+	if operationIDField == nil ||
+		!operationIDField.PrimaryKey ||
+		indexIDField == nil ||
+		!indexIDField.Unique {
+		t.Fatalf(
+			"GORM index-deletion operation keys are not explicit: operation ID=%#v index ID=%#v",
+			operationIDField,
+			indexIDField,
+		)
+	}
+
+	indexRows, err := db.SQLDB().QueryContext(ctx, `
+		SELECT name
+		FROM pragma_index_info('index_deletion_operations_created_id_idx')
+		ORDER BY seqno`)
+	if err != nil {
+		t.Fatalf("read index-deletion operation restart index: %v", err)
+	}
+	defer indexRows.Close()
+	var restartColumns []string
+	for indexRows.Next() {
+		var name string
+		if err := indexRows.Scan(&name); err != nil {
+			t.Fatalf("scan index-deletion operation restart column: %v", err)
+		}
+		restartColumns = append(restartColumns, name)
+	}
+	if err := indexRows.Err(); err != nil {
+		t.Fatalf("iterate index-deletion operation restart columns: %v", err)
+	}
+	wantRestartColumns := []string{"created_at_unix_micro", "deletion_operation_id"}
+	if !slices.Equal(restartColumns, wantRestartColumns) {
+		t.Fatalf(
+			"index-deletion operation restart index = %v, want %v",
+			restartColumns,
+			wantRestartColumns,
+		)
+	}
+}
+
 func TestApplyMigrationsIsVersionedAndDetectsDrift(t *testing.T) {
 	t.Parallel()
 
@@ -308,8 +392,8 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 16 {
-		t.Fatalf("schema migration count = %d, want 16", count)
+	if count != 17 {
+		t.Fatalf("schema migration count = %d, want 17", count)
 	}
 }
 

@@ -400,13 +400,22 @@ func TestAppDefaultIndexesMustExistAndRemainSearchable(t *testing.T) {
 	ingestionOnlyDefinition.SearchEnabled = false
 	ingestionOnly := mustCreateIndex(t, db, ingestionOnlyDefinition)
 	deleting := mustCreateIndex(t, db, enabledIndex("deleting"))
-	if _, err := db.SQLDB().ExecContext(ctx, `
-		UPDATE indexes
-		SET state = 'deleting', version = version + 1
-		WHERE index_id = ?`,
+	deleting, err := db.SetIndexState(
+		ctx,
 		deleting.ID,
+		deleting.Version,
+		IndexStateArchived,
+	)
+	if err != nil {
+		t.Fatalf("archive deleting index: %v", err)
+	}
+	if _, err := db.BeginIndexDataDeletion(
+		ctx,
+		deleting.ID,
+		deleting.Version,
+		deleting.Definition.Name,
 	); err != nil {
-		t.Fatalf("seed deleting index state: %v", err)
+		t.Fatalf("begin deleting index operation: %v", err)
 	}
 	archived := mustCreateIndex(t, db, enabledIndex("archived"))
 	archivedState, err := db.SetIndexState(ctx, archived.ID, archived.Version, IndexStateArchived)

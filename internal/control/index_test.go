@@ -321,13 +321,26 @@ func TestDeleteIndexValidatesConfirmationVersionAndState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIndex(deleting): %v", err)
 	}
-	if _, err := db.SQLDB().ExecContext(ctx, `
-		UPDATE indexes
-		SET state = 'deleting', version = version + 1
-		WHERE index_id = ?`,
+	deleting, err = db.SetIndexState(
+		ctx,
 		deleting.ID,
+		deleting.Version,
+		IndexStateArchived,
+	)
+	if err != nil {
+		t.Fatalf("archive deleting index: %v", err)
+	}
+	if _, err := db.BeginIndexDataDeletion(
+		ctx,
+		deleting.ID,
+		deleting.Version,
+		deleting.Definition.Name,
 	); err != nil {
-		t.Fatalf("seed deleting state: %v", err)
+		t.Fatalf("begin physical deletion: %v", err)
+	}
+	deleting, err = db.GetIndex(ctx, deleting.ID)
+	if err != nil {
+		t.Fatalf("read deleting index: %v", err)
 	}
 
 	tests := map[string]struct {
@@ -367,7 +380,7 @@ func TestDeleteIndexValidatesConfirmationVersionAndState(t *testing.T) {
 		},
 		"deleting state": {
 			id:           deleting.ID,
-			version:      deleting.Version + 1,
+			version:      deleting.Version,
 			confirmation: deleting.Definition.Name,
 			want:         ErrDependencyConflict,
 		},

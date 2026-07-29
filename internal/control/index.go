@@ -203,6 +203,9 @@ func (db *DB) UpdateIndex(ctx context.Context, id string, expectedVersion uint64
 	if current.Version != expectedVersion {
 		return Index{}, ErrVersionConflict
 	}
+	if current.State == IndexStateDeleting {
+		return Index{}, ErrDependencyConflict
+	}
 	if current.Definition.Name != definition.Name {
 		return Index{}, ErrImmutableName
 	}
@@ -272,6 +275,9 @@ func (db *DB) SetIndexState(ctx context.Context, id string, expectedVersion uint
 	}
 	if current.Version != expectedVersion {
 		return Index{}, ErrVersionConflict
+	}
+	if current.State == IndexStateDeleting {
+		return Index{}, ErrDependencyConflict
 	}
 	if state != IndexStateActive {
 		dependent, dependencyErr := activeAppUsesIndex(tx, id)
