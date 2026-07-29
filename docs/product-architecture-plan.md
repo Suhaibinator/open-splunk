@@ -382,6 +382,25 @@ The ingestion API should be independently scalable later, but the MVP can run it
 
 The first deployment is single-user on a trusted network, so end-user authentication and RBAC are not release blockers. Collector ingestion tokens remain necessary: even on a trusted network, they prevent accidental cross-index writes and establish a protocol that can be hardened later. SQLite is sufficient for this single-node control plane and should run in WAL mode with explicit backup and migration tooling. Checked-in SQL migrations remain the sole schema authority, while explicit GORM models make control-plane keys, relationships, constraints, and bounded projections legible in Go. `AutoMigrate` is not used in production. Narrow raw SQL remains appropriate for SQLite transaction modes and conditional compare-and-swap or fencing operations that GORM cannot express safely or efficiently.
 
+The ingestion-token catalog is deliberately bounded rather than an unbounded
+audit log. The production default and hard structural ceiling both admit at
+most 1,024 physical token records, and the catalog admits at most 16,384 total
+token-to-index scope memberships. Those ceilings bound list allocation and
+detect corrupt catalogs. Creation returns a capacity response only when normal
+retention compaction and reclaiming revoked tombstones cannot make enough
+record and scope room; expiry alone does not delete administrator-visible
+metadata. An operator can explicitly revoke an obsolete or expired credential
+and retry creation without ever deleting an active, disabled, or merely
+expired credential. Ordinary revocation always preserves the just-revoked
+current tombstone and fills the configured retention bound with the newest
+prior tombstones, ordered deterministically by revocation time and token ID.
+A later create that needs capacity may reclaim even the last tombstone. Each
+prune deletes the victim's scope rows in the same immediate GORM transaction.
+Pruned IDs disappear from administrator get/list results while their
+credentials remain unauthorized. This lifecycle belongs only to the
+GORM-backed SQLite control plane; ClickHouse event persistence does not use
+GORM.
+
 ### Collector identity and active-instance fencing
 
 `collector_id` is durable security identity, not client-supplied display

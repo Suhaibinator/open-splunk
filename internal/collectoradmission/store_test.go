@@ -972,7 +972,11 @@ func TestAdmitRejectsCorruptTotalScopeCardinalityWithoutUnboundedProjection(
 				strings.Contains(err.Error(), issued.Secret.Plaintext()) {
 				t.Fatalf("Admit() error = %v", err)
 			}
-			assertTokenUnused(t, fixture.tokens, issued.Token.ID)
+			assertPersistedTokenUnused(
+				t,
+				fixture.database,
+				issued.Token.ID,
+			)
 			if _, err := fixture.fleet.Get(
 				ctx,
 				collectorfleet.Scope{TenantID: "tenant-a"},
@@ -1215,5 +1219,30 @@ func assertTokenUnused(
 	}
 	if !token.LastUsedAt.IsZero() {
 		t.Fatalf("token last use = %v, want zero", token.LastUsedAt)
+	}
+}
+
+func assertPersistedTokenUnused(
+	t *testing.T,
+	database *control.DB,
+	tokenID string,
+) {
+	t.Helper()
+	var row struct {
+		LastUsedAtUnixMicro *int64 `gorm:"column:last_used_at_unix_micro"`
+	}
+	query := database.GORMDB().
+		Table("ingestion_tokens").
+		Select("last_used_at_unix_micro").
+		Where("ingestion_token_id = ?", tokenID).
+		Take(&row)
+	if query.Error != nil {
+		t.Fatalf("read persisted collector token last use: %v", query.Error)
+	}
+	if row.LastUsedAtUnixMicro != nil {
+		t.Fatalf(
+			"persisted token last use = %d, want NULL",
+			*row.LastUsedAtUnixMicro,
+		)
 	}
 }

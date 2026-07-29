@@ -1179,6 +1179,8 @@ func mapAdministrativeCallError(ctx context.Context, operationErr error, object 
 		return router.NewHTTPError(http.StatusConflict, object+" already exists")
 	case errors.Is(operationErr, control.ErrVersionConflict), errors.Is(operationErr, control.ErrImmutableName), errors.Is(operationErr, auth.ErrInactiveToken):
 		return router.NewHTTPError(http.StatusConflict, object+" version or state conflict")
+	case errors.Is(operationErr, control.ErrCapacityExceeded):
+		return router.NewHTTPError(http.StatusTooManyRequests, object+" capacity is exhausted")
 	default:
 		return unavailableError(object + " service is unavailable")
 	}

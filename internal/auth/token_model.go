@@ -1,5 +1,7 @@
 package auth
 
+import "database/sql"
+
 // collectorTokenRecord is the explicit GORM representation of
 // ingestion_tokens.
 //
@@ -8,7 +10,7 @@ package auth
 // collector-binding insert/update triggers cannot be represented completely
 // by GORM tags. Never use AutoMigrate for this model.
 type collectorTokenRecord struct {
-	IngestionTokenID    string              `gorm:"column:ingestion_token_id;type:text;primaryKey;not null"`
+	IngestionTokenID    string              `gorm:"column:ingestion_token_id;type:text;primaryKey;not null;index:ingestion_tokens_revoked_retention_idx,priority:2,sort:desc"`
 	Version             int64               `gorm:"column:version;type:integer;not null;check:ingestion_tokens_version_positive,version >= 1"`
 	Name                string              `gorm:"column:name;type:text;not null;check:ingestion_tokens_name_length,length(name) BETWEEN 1 AND 255"`
 	Description         string              `gorm:"column:description;type:text;not null"`
@@ -18,7 +20,7 @@ type collectorTokenRecord struct {
 	CreatedAtUnixMicro  int64               `gorm:"column:created_at_unix_micro;type:integer;not null"`
 	UpdatedAtUnixMicro  int64               `gorm:"column:updated_at_unix_micro;type:integer;not null;check:ingestion_tokens_update_not_before_create,updated_at_unix_micro >= created_at_unix_micro"`
 	ExpiresAtUnixMicro  *int64              `gorm:"column:expires_at_unix_micro;type:integer;check:ingestion_tokens_expiration_after_create,expires_at_unix_micro IS NULL OR expires_at_unix_micro > created_at_unix_micro"`
-	RevokedAtUnixMicro  *int64              `gorm:"column:revoked_at_unix_micro;type:integer;check:ingestion_tokens_revocation_consistency,(state = 'revoked' AND revoked_at_unix_micro IS NOT NULL) OR (state IN ('active', 'disabled') AND revoked_at_unix_micro IS NULL)"`
+	RevokedAtUnixMicro  *int64              `gorm:"column:revoked_at_unix_micro;type:integer;check:ingestion_tokens_revocation_consistency,(state = 'revoked' AND revoked_at_unix_micro IS NOT NULL) OR (state IN ('active', 'disabled') AND revoked_at_unix_micro IS NULL);index:ingestion_tokens_revoked_retention_idx,priority:1,sort:desc,where:state = 'revoked'"`
 	LastUsedAtUnixMicro *int64              `gorm:"column:last_used_at_unix_micro;type:integer;check:ingestion_tokens_last_use_not_before_create,last_used_at_unix_micro IS NULL OR last_used_at_unix_micro >= created_at_unix_micro"`
 	BoundCollectorID    *string             `gorm:"column:bound_collector_id;type:text;check:ingestion_tokens_bound_collector_id_canonical,bound_collector_id IS NULL OR (length(bound_collector_id) BETWEEN 1 AND 128 AND instr(bound_collector_id, char(0)) = 0 AND substr(bound_collector_id, 1, 1) GLOB '[A-Za-z0-9]' AND bound_collector_id NOT GLOB '*[^A-Za-z0-9._:-]*')"`
 }
@@ -40,9 +42,9 @@ func (collectorTokenIndexRecord) TableName() string {
 	return "ingestion_token_indexes"
 }
 
-// collectorTokenMetadataRow is a read-only aggregate projection. It is kept
-// separate from collectorTokenRecord so the persisted model cannot
-// accidentally acquire a synthetic group-concatenation column.
+// collectorTokenMetadataRow is a read-only parent projection. Scope children
+// are hydrated separately under a bounded query so corrupt fanout cannot make
+// one aggregate string consume unbounded memory.
 type collectorTokenMetadataRow struct {
 	IngestionTokenID    string              `gorm:"column:ingestion_token_id"`
 	Version             int64               `gorm:"column:version"`
@@ -56,7 +58,34 @@ type collectorTokenMetadataRow struct {
 	RevokedAtUnixMicro  *int64              `gorm:"column:revoked_at_unix_micro"`
 	LastUsedAtUnixMicro *int64              `gorm:"column:last_used_at_unix_micro"`
 	BoundCollectorID    *string             `gorm:"column:bound_collector_id"`
-	AllowedIndexNames   string              `gorm:"column:allowed_index_names"`
+	AllowedIndexNames   []string            `gorm:"-"`
+}
+
+// collectorTokenProjectionWidths is a constant-size preflight projection.
+// Persisted text is loaded only after every selected value has safe byte
+// bounds.
+type collectorTokenProjectionWidths struct {
+	IngestionTokenIDBytes int64  `gorm:"column:ingestion_token_id_bytes"`
+	NameBytes             int64  `gorm:"column:name_bytes"`
+	DescriptionBytes      int64  `gorm:"column:description_bytes"`
+	TokenPrefixBytes      int64  `gorm:"column:token_prefix_bytes"`
+	BoundCollectorIDBytes *int64 `gorm:"column:bound_collector_id_bytes"`
+}
+
+type collectorTokenMetadataScopeWidths struct {
+	IngestionTokenIDBytes int64  `gorm:"column:ingestion_token_id_bytes"`
+	IndexNameBytes        *int64 `gorm:"column:index_name_bytes"`
+}
+
+type collectorTokenMetadataScopeRow struct {
+	IngestionTokenID string         `gorm:"column:ingestion_token_id"`
+	IndexName        sql.NullString `gorm:"column:index_name"`
+}
+
+type collectorTokenScopeDistributionRow struct {
+	StateKind   int64 `gorm:"column:state_kind"`
+	ScopeCount  int64 `gorm:"column:scope_count"`
+	TargetCount int64 `gorm:"column:target_count"`
 }
 
 type collectorTokenAuthenticationRow struct {

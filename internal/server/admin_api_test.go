@@ -367,6 +367,550 @@ func TestIngestionTokenListFiltersSortsAndReportsExactTotals(t *testing.T) {
 	}
 }
 
+func TestPrunedIngestionTokenTombstonesDisappearFromAdministrativeCatalog(t *testing.T) {
+	t.Parallel()
+
+	handler, db, tokenStore := newAdminIntegrationHandlerWithTokenOptions(
+		t,
+		auth.StoreOptions{RetainedRevokedTokenLimit: 3},
+	)
+	ctx := context.Background()
+	if _, err := db.CreateIndex(ctx, adminTestIndex("audit")); err != nil {
+		t.Fatalf("CreateIndex(audit): %v", err)
+	}
+
+	createToken := func(name, description, collectorID string) auth.IssuedCollectorToken {
+		t.Helper()
+		issued, err := tokenStore.CreateCollectorToken(
+			ctx,
+			auth.CreateCollectorTokenRequest{
+				Name:              name,
+				Description:       description,
+				BoundCollectorID:  collectorID,
+				AllowedIndexNames: []string{"audit"},
+			},
+		)
+		if err != nil {
+			t.Fatalf("CreateCollectorToken(%s): %v", name, err)
+		}
+		return issued
+	}
+
+	matching := []auth.IssuedCollectorToken{
+		createToken("Bravo retention", "retention fixture", "collector-bravo"),
+		createToken("Charlie retention", "retention fixture", "collector-charlie"),
+		createToken("Delta retention", "retention fixture", "collector-delta"),
+	}
+	trigger := createToken(
+		"Echo pruning trigger",
+		"cursor-excluded fixture",
+		"collector-echo",
+	)
+	for tokenIndex := range matching {
+		if _, err := tokenStore.RevokeCollectorToken(
+			ctx,
+			matching[tokenIndex].Token.ID,
+			matching[tokenIndex].Token.Version,
+		); err != nil {
+			t.Fatalf(
+				"RevokeCollectorToken(%s): %v",
+				matching[tokenIndex].Token.Name,
+				err,
+			)
+		}
+	}
+
+	indexFilter := "AUDIT"
+	textFilter := "RETENTION FIXTURE"
+	pageSize := uint32(1)
+	states := []opensplunkv1.IngestionTokenState{
+		opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED,
+	}
+	listRequest := func(pageToken string) *opensplunkv1.ListIngestionTokensRequest {
+		page := &opensplunkv1.PageRequest{
+			PageSize:         &pageSize,
+			IncludeTotalSize: true,
+		}
+		if pageToken != "" {
+			page.PageToken = &pageToken
+		}
+		return &opensplunkv1.ListIngestionTokensRequest{
+			Page:            page,
+			StateFilters:    states,
+			IndexNameFilter: &indexFilter,
+			TextFilter:      &textFilter,
+			SortBy:          opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME,
+			SortDirection:   opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+		}
+	}
+
+	response := postProto(
+		t,
+		handler,
+		"/api/v1/ingestion-tokens/list",
+		listRequest(""),
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"list before prune status = %d, body = %s",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+	var before opensplunkv1.ListIngestionTokensResponse
+	unmarshalResponse(t, response, &before)
+	if len(before.GetIngestionTokens()) != 1 ||
+		before.GetIngestionTokens()[0].GetIngestionTokenId() !=
+			matching[0].Token.ID ||
+		before.GetPage().GetTotalSize() != uint64(len(matching)) ||
+		!before.GetPage().GetTotalSizeExact() ||
+		before.GetPage().GetNextPageToken() == "" {
+		t.Fatalf("list before prune = %+v", &before)
+	}
+	staleCursor := before.GetPage().GetNextPageToken()
+
+	revokedTrigger, err := tokenStore.RevokeCollectorToken(
+		ctx,
+		trigger.Token.ID,
+		trigger.Token.Version,
+	)
+	if err != nil {
+		t.Fatalf("RevokeCollectorToken(trigger): %v", err)
+	}
+	if revokedTrigger.ID != trigger.Token.ID ||
+		revokedTrigger.State != auth.CollectorTokenStateRevoked {
+		t.Fatalf("revoked current token = %#v", revokedTrigger)
+	}
+
+	retainedMatching := make([]auth.IssuedCollectorToken, 0, 2)
+	prunedMatching := make([]auth.IssuedCollectorToken, 0, 1)
+	for tokenIndex := range matching {
+		response = postProto(
+			t,
+			handler,
+			"/api/v1/ingestion-tokens/get",
+			&opensplunkv1.GetIngestionTokenRequest{
+				IngestionTokenId: matching[tokenIndex].Token.ID,
+			},
+		)
+		switch response.Code {
+		case http.StatusOK:
+			var retained opensplunkv1.GetIngestionTokenResponse
+			unmarshalResponse(t, response, &retained)
+			if retained.GetIngestionToken().GetIngestionTokenId() !=
+				matching[tokenIndex].Token.ID ||
+				retained.GetIngestionToken().GetState() !=
+					opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED {
+				t.Fatalf(
+					"retained matching token = %+v",
+					retained.GetIngestionToken(),
+				)
+			}
+			retainedMatching = append(retainedMatching, matching[tokenIndex])
+		case http.StatusNotFound:
+			prunedMatching = append(prunedMatching, matching[tokenIndex])
+		default:
+			t.Fatalf(
+				"get matching token %q status = %d, body = %s",
+				matching[tokenIndex].Token.Name,
+				response.Code,
+				response.Body.String(),
+			)
+		}
+	}
+	if len(prunedMatching) != 1 || len(retainedMatching) != 2 {
+		t.Fatalf(
+			"post-prune matching tokens = %d pruned/%d retained, want 1/2",
+			len(prunedMatching),
+			len(retainedMatching),
+		)
+	}
+
+	response = postProto(
+		t,
+		handler,
+		"/api/v1/ingestion-tokens/get",
+		&opensplunkv1.GetIngestionTokenRequest{
+			IngestionTokenId: trigger.Token.ID,
+		},
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"get retained trigger token status = %d, body = %s",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+	var retainedTrigger opensplunkv1.GetIngestionTokenResponse
+	unmarshalResponse(t, response, &retainedTrigger)
+	if retainedTrigger.GetIngestionToken().GetIngestionTokenId() !=
+		trigger.Token.ID ||
+		retainedTrigger.GetIngestionToken().GetState() !=
+			opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED {
+		t.Fatalf(
+			"retained trigger token = %+v",
+			retainedTrigger.GetIngestionToken(),
+		)
+	}
+
+	// The trigger token is excluded by the unchanged text filter both before
+	// and after its revocation. The cursor's offset (1) also remains within the
+	// two-row result, so only physical removal of one matching tombstone can
+	// make this otherwise valid cursor stale.
+	response = postProto(
+		t,
+		handler,
+		"/api/v1/ingestion-tokens/list",
+		listRequest(staleCursor),
+	)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"stale pre-prune cursor status = %d, want %d; body = %s",
+			response.Code,
+			http.StatusBadRequest,
+			response.Body.String(),
+		)
+	}
+
+	cursor := ""
+	for pageIndex := range retainedMatching {
+		response = postProto(
+			t,
+			handler,
+			"/api/v1/ingestion-tokens/list",
+			listRequest(cursor),
+		)
+		if response.Code != http.StatusOK {
+			t.Fatalf(
+				"fresh page %d status = %d, body = %s",
+				pageIndex,
+				response.Code,
+				response.Body.String(),
+			)
+		}
+		var page opensplunkv1.ListIngestionTokensResponse
+		unmarshalResponse(t, response, &page)
+		if len(page.GetIngestionTokens()) != 1 ||
+			page.GetIngestionTokens()[0].GetIngestionTokenId() !=
+				retainedMatching[pageIndex].Token.ID ||
+			page.GetPage().GetTotalSize() != uint64(len(retainedMatching)) ||
+			!page.GetPage().GetTotalSizeExact() {
+			t.Fatalf("fresh page %d = %+v", pageIndex, &page)
+		}
+		cursor = page.GetPage().GetNextPageToken()
+		if (pageIndex < len(retainedMatching)-1) != (cursor != "") {
+			t.Fatalf(
+				"fresh page %d next cursor presence = %t",
+				pageIndex,
+				cursor != "",
+			)
+		}
+	}
+
+	response = postProto(
+		t,
+		handler,
+		"/api/v1/ingestion-tokens/list",
+		&opensplunkv1.ListIngestionTokensRequest{
+			Page: &opensplunkv1.PageRequest{
+				IncludeTotalSize: true,
+			},
+			StateFilters:    states,
+			IndexNameFilter: &indexFilter,
+			TextFilter:      &textFilter,
+			SortBy:          opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME,
+			SortDirection:   opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+		},
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"revoked filter status = %d, body = %s",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+	var revokedOnly opensplunkv1.ListIngestionTokensResponse
+	unmarshalResponse(t, response, &revokedOnly)
+	if len(revokedOnly.GetIngestionTokens()) != len(retainedMatching) ||
+		revokedOnly.GetPage().GetTotalSize() != uint64(len(retainedMatching)) ||
+		!revokedOnly.GetPage().GetTotalSizeExact() ||
+		revokedOnly.GetPage().GetNextPageToken() != "" {
+		t.Fatalf("revoked filtered list = %+v", &revokedOnly)
+	}
+	for tokenIndex := range retainedMatching {
+		descendingIndex := len(retainedMatching) - 1 - tokenIndex
+		if revokedOnly.GetIngestionTokens()[tokenIndex].
+			GetIngestionTokenId() !=
+			retainedMatching[descendingIndex].Token.ID {
+			t.Fatalf("revoked filtered list = %+v", &revokedOnly)
+		}
+	}
+}
+
+func TestAdministrativeIngestionTokenCapacityIsSanitizedAndRecoverable(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	handler, db, tokenStore := newAdminIntegrationHandlerWithTokenOptions(
+		t,
+		auth.StoreOptions{
+			RetainedRevokedTokenLimit: 1,
+			TotalTokenRecordLimit:     2,
+		},
+	)
+	ctx := context.Background()
+	if _, err := db.CreateIndex(ctx, adminTestIndex("audit")); err != nil {
+		t.Fatalf("CreateIndex(audit): %v", err)
+	}
+	createDirect := func(name, collectorID string) auth.IssuedCollectorToken {
+		t.Helper()
+		issued, err := tokenStore.CreateCollectorToken(
+			ctx,
+			auth.CreateCollectorTokenRequest{
+				Name:              name,
+				BoundCollectorID:  collectorID,
+				AllowedIndexNames: []string{"audit"},
+			},
+		)
+		if err != nil {
+			t.Fatalf("CreateCollectorToken(%s): %v", name, err)
+		}
+		return issued
+	}
+	first := createDirect("first capacity fixture", "collector-first")
+	second := createDirect("second capacity fixture", "collector-second")
+
+	request := &opensplunkv1.CreateIngestionTokenRequest{
+		Definition: &opensplunkv1.IngestionTokenDefinition{
+			Name: "replacement capacity fixture",
+			Constraints: &opensplunkv1.IngestionTokenConstraints{
+				AllowedIndexNames: []string{"audit"},
+				BoundCollectorId:  stringPointer("collector-replacement"),
+			},
+		},
+	}
+	response := postProto(
+		t,
+		handler,
+		"/api/v1/ingestion-tokens/create",
+		request,
+	)
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf(
+			"full-catalog create status = %d, want %d; body = %s",
+			response.Code,
+			http.StatusTooManyRequests,
+			response.Body.String(),
+		)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "ingestion token capacity is exhausted") {
+		t.Fatalf("full-catalog response is not generic: %q", body)
+	}
+	for _, sensitive := range []string{
+		first.Token.ID,
+		first.Token.Prefix,
+		first.Secret.Plaintext(),
+		second.Token.ID,
+		second.Token.Prefix,
+		second.Secret.Plaintext(),
+		"ingestion_tokens",
+		"SQLite",
+		"database",
+	} {
+		if strings.Contains(body, sensitive) {
+			t.Fatalf(
+				"full-catalog response disclosed %q: %q",
+				sensitive,
+				body,
+			)
+		}
+	}
+
+	if _, err := tokenStore.RevokeCollectorToken(
+		ctx,
+		first.Token.ID,
+		first.Token.Version,
+	); err != nil {
+		t.Fatalf("RevokeCollectorToken(first): %v", err)
+	}
+	response = postProto(
+		t,
+		handler,
+		"/api/v1/ingestion-tokens/create",
+		request,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"recovered create status = %d, body = %s",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+	var created opensplunkv1.CreateIngestionTokenResponse
+	unmarshalResponse(t, response, &created)
+	if created.GetIngestionToken().GetName() !=
+		request.GetDefinition().GetName() ||
+		created.GetPlaintextToken() == "" {
+		t.Fatalf("recovered create = %+v", &created)
+	}
+	if _, err := tokenStore.GetCollectorToken(
+		ctx,
+		first.Token.ID,
+	); !errors.Is(err, control.ErrNotFound) {
+		t.Fatalf(
+			"GetCollectorToken(compacted first) error = %v, want ErrNotFound",
+			err,
+		)
+	}
+	if _, err := tokenStore.GetCollectorToken(ctx, second.Token.ID); err != nil {
+		t.Fatalf("GetCollectorToken(second retained): %v", err)
+	}
+}
+
+func TestAdministrativeRevokePruneFailureIsSanitizedAndRollsBack(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	handler, db, tokenStore := newAdminIntegrationHandlerWithTokenOptions(
+		t,
+		auth.StoreOptions{RetainedRevokedTokenLimit: 1},
+	)
+	ctx := context.Background()
+	if _, err := db.CreateIndex(ctx, adminTestIndex("audit")); err != nil {
+		t.Fatalf("CreateIndex(audit): %v", err)
+	}
+	createToken := func(name, collectorID string) auth.IssuedCollectorToken {
+		t.Helper()
+		issued, err := tokenStore.CreateCollectorToken(
+			ctx,
+			auth.CreateCollectorTokenRequest{
+				Name:              name,
+				Description:       "prune rollback fixture",
+				BoundCollectorID:  collectorID,
+				AllowedIndexNames: []string{"audit"},
+			},
+		)
+		if err != nil {
+			t.Fatalf("CreateCollectorToken(%s): %v", name, err)
+		}
+		return issued
+	}
+	first := createToken("first revoked", "collector-first")
+	current := createToken("current rollback", "collector-current")
+	if _, err := tokenStore.RevokeCollectorToken(
+		ctx,
+		first.Token.ID,
+		first.Token.Version,
+	); err != nil {
+		t.Fatalf("RevokeCollectorToken(first): %v", err)
+	}
+
+	const pruneFailureDetail = "forced token-prune database-secret"
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		CREATE TRIGGER reject_administrative_revoked_token_prune
+		BEFORE DELETE ON ingestion_tokens
+		WHEN OLD.state = 'revoked'
+		BEGIN
+			SELECT RAISE(ABORT, 'forced token-prune database-secret');
+		END`); err != nil {
+		t.Fatalf("create prune failure trigger: %v", err)
+	}
+
+	response := postProto(
+		t,
+		handler,
+		"/api/v1/ingestion-tokens/revoke",
+		&opensplunkv1.RevokeIngestionTokenRequest{
+			IngestionTokenId: current.Token.ID,
+			ExpectedVersion:  current.Token.Version,
+		},
+	)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf(
+			"failed-prune revoke status = %d, want %d; body = %s",
+			response.Code,
+			http.StatusServiceUnavailable,
+			response.Body.String(),
+		)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "ingestion token service is unavailable") {
+		t.Fatalf("failed-prune response is not generic: %q", body)
+	}
+	for _, sensitive := range []string{
+		pruneFailureDetail,
+		"reject_administrative_revoked_token_prune",
+		"SQLite",
+		"database",
+		first.Token.ID,
+		first.Token.Prefix,
+		first.Secret.Plaintext(),
+		current.Token.ID,
+		current.Token.Prefix,
+		current.Secret.Plaintext(),
+	} {
+		if strings.Contains(body, sensitive) {
+			t.Fatalf(
+				"failed-prune response disclosed %q: %q",
+				sensitive,
+				body,
+			)
+		}
+	}
+
+	firstAfter, err := tokenStore.GetCollectorToken(ctx, first.Token.ID)
+	if err != nil {
+		t.Fatalf("GetCollectorToken(first after rollback): %v", err)
+	}
+	if firstAfter.State != auth.CollectorTokenStateRevoked ||
+		firstAfter.Version != first.Token.Version+1 ||
+		firstAfter.RevokedAt.IsZero() {
+		t.Fatalf("first tombstone after rollback = %#v", firstAfter)
+	}
+	currentAfter, err := tokenStore.GetCollectorToken(ctx, current.Token.ID)
+	if err != nil {
+		t.Fatalf("GetCollectorToken(current after rollback): %v", err)
+	}
+	if currentAfter.State != auth.CollectorTokenStateActive ||
+		currentAfter.Version != current.Token.Version ||
+		!currentAfter.RevokedAt.IsZero() {
+		t.Fatalf("current token after rollback = %#v", currentAfter)
+	}
+	if _, err := tokenStore.Authorize(
+		ctx,
+		first.Secret.Plaintext(),
+		"audit",
+	); !errors.Is(err, auth.ErrUnauthorized) {
+		t.Fatalf(
+			"Authorize(first after rollback) error = %v, want ErrUnauthorized",
+			err,
+		)
+	}
+	if _, err := tokenStore.Authorize(
+		ctx,
+		current.Secret.Plaintext(),
+		"audit",
+	); err != nil {
+		t.Fatalf("Authorize(current after rollback): %v", err)
+	}
+	for _, table := range []string{
+		"ingestion_tokens",
+		"ingestion_token_indexes",
+	} {
+		var rows int64
+		query := db.GORMDB().WithContext(ctx).Table(table).Count(&rows)
+		if query.Error != nil {
+			t.Fatalf("count %s after rollback: %v", table, query.Error)
+		}
+		if rows != 2 {
+			t.Fatalf("%s rows after rollback = %d, want 2", table, rows)
+		}
+	}
+}
+
 func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 	t.Parallel()
 
@@ -608,6 +1152,14 @@ func (handler *adminIntegrationHandler) ServeHTTP(
 
 func newAdminIntegrationHandler(t *testing.T) (*adminIntegrationHandler, *control.DB, *auth.Store) {
 	t.Helper()
+	return newAdminIntegrationHandlerWithTokenOptions(t, auth.StoreOptions{})
+}
+
+func newAdminIntegrationHandlerWithTokenOptions(
+	t *testing.T,
+	options auth.StoreOptions,
+) (*adminIntegrationHandler, *control.DB, *auth.Store) {
+	t.Helper()
 	db, err := control.Open(context.Background(), t.TempDir()+"/control.sqlite")
 	if err != nil {
 		t.Fatalf("control.Open: %v", err)
@@ -617,9 +1169,10 @@ func newAdminIntegrationHandler(t *testing.T) (*adminIntegrationHandler, *contro
 			t.Errorf("control DB close: %v", err)
 		}
 	})
-	tokens, err := auth.NewStore(db, []byte("0123456789abcdef0123456789abcdef"))
+	digestKey := []byte("0123456789abcdef0123456789abcdef")
+	tokens, err := auth.NewStoreWithOptions(db, digestKey, options)
 	if err != nil {
-		t.Fatalf("auth.NewStore: %v", err)
+		t.Fatalf("auth.NewStoreWithOptions: %v", err)
 	}
 	browserAuthenticator, err := auth.NewBearerTokenAuthenticator(
 		[]byte(adminIntegrationBearerToken),

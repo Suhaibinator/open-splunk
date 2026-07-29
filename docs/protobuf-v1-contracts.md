@@ -151,6 +151,21 @@ The export download route is a raw `GET` file response rather than protobuf. Its
 
 The `client_request_id` fields reserve the wire contract for future durable retry handling. The current server does not support them for search jobs, exports, saved searches, indexes, or ingestion tokens: supplying the field, including an explicitly empty value, fails request validation. App administration is not implemented yet. Create requests without the field are not deduplicated, and the server does not currently advertise an idempotency-retention window. When support is added, a key will be scoped to the authenticated caller and operation, and reuse for a different canonical request will be a conflict.
 
+Ingestion-token metadata is a bounded operational catalog, not permanent audit
+history. The hard catalog ceiling is 1,024 physical token records and 16,384
+total token-to-index scope memberships. Create returns HTTP `429` only when
+normal retention compaction and reclaiming revoked tombstones cannot make
+enough record and scope room; the response contains no token material. Expired
+credentials remain visible and consume capacity until an administrator
+explicitly revokes them. Ordinary revocation always preserves the
+just-revoked current tombstone and retains the newest prior tombstones, ordered
+by revocation time and token ID, within the configured bound. A later create
+may reclaim even the last revoked tombstone for capacity. A physically pruned
+token returns `404` from get, is absent from list totals and filters, and
+invalidates a list cursor whose snapshot included it. Its former plaintext
+credential remains indistinguishable from every other unauthorized credential
+at the collector boundary.
+
 Search creation always creates a job record—even parse or planning failures transition that job to `FAILED` and therefore appear in history. Search and export cancellation are idempotent, and an already-terminal job is returned unchanged.
 
 Result cursors are scoped to one immutable search snapshot and one column selection. A page token must not be reused with another job or changed request parameters. Rows contain exactly one cell per schema column; a nonexistent field uses `MISSING_VALUE_MISSING`, while an explicitly present null uses `NULL_VALUE_NULL`.
