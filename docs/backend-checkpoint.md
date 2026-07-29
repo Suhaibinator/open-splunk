@@ -7,7 +7,86 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: durable collector runtime fencing
+## Latest checkpoint: production coalesced collector heartbeat lifecycle
+
+Date: 2026-07-28
+
+Committed and pushed checkpoints:
+
+- `76a6191` — bounded latest-wins heartbeat runtime with exact durable-lease
+  fencing, monotonic online/stale state, and serialized shutdown; and
+- `88bdf16` — production activation, coalesced heartbeat admission, final
+  release drain, durable disconnect ordering, and forced-shutdown integration.
+
+This slice replaces synchronous per-heartbeat SQLite writes with one bounded
+runtime that preserves the persisted GORM fleet contract:
+
+1. A stream becomes heartbeat-active only after its durable lease is admitted
+   and its exact process lease is current, but before `CollectorReady` is sent.
+   Activation failure releases both authorities and sends no Ready response.
+2. Heartbeats are detached and normalized at the RPC boundary, then stored in
+   a capacity-bounded latest-wins map. One worker flushes at most one snapshot
+   per collector per cycle, and one five-second deadline bounds the whole cycle
+   rather than each entry.
+3. Every offer, flush, release, and retry compares the complete trusted
+   tenant/collector/boot/stream/generation lease. A failed in-flight flush is
+   retained for the waiting exact Release, while successor activation prevents
+   a predecessor completion from being requeued or deleted.
+4. Release marks the exact lease offline, drains its latest accepted snapshot,
+   and completes before durable Disconnect clears the lease. Final write
+   failures and pending snapshots discarded at a release deadline are
+   asynchronously observable even when a later idempotent cleanup retry
+   succeeds.
+5. Runtime ownership is explicit. Disabled collector transport starts no
+   worker; configured transport validation happens before either persistence
+   plane opens; startup failure closes the worker immediately; normal shutdown
+   first joins all gRPC handlers and then idempotently closes the runtime.
+6. The 35-second collector shutdown envelope reserves 15 seconds for graceful
+   transport drain and 20 seconds for forced handler cleanup. Cleanup in turn
+   reserves ten seconds for heartbeat Release and ten for SQLite Disconnect,
+   covering the five-second busy timeout plus transaction and retry slack.
+7. Real migrated SQLite/GORM and native bufconn gRPC tests prove immediate
+   Goodbye drain, forced `grpc.Server.Stop` cleanup, exact offline persistence,
+   reopen behavior, and the absence of post-Close heartbeat resurrection.
+
+Validation on pushed commit `88bdf16`:
+
+```sh
+go test ./... -count=1
+go test -race \
+  ./internal/collectorfleet ./internal/ingest ./cmd/open-splunk-server \
+  ./internal/collector ./internal/collector/sender -count=1
+go vet ./...
+go build ./...
+/private/tmp/open-splunk-golangci-lint-v2.12.2 \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m -v
+git diff --check
+```
+
+All repository tests, touched-package race tests, vet, build, and the
+repository-wide zero-lint ratchet passed. The pinned ClickHouse acceptance
+suite passed all subtests in 58.34 seconds. Independent lifecycle, efficiency,
+and reuse reviews found and drove fixes for a per-entry timeout amplification,
+an inactive exact-lease requeue loss, final-release error masking, insufficient
+SQLite cleanup slack, late transport validation, and one startup worker leak.
+The stable diff has no remaining P0/P1/P2 finding.
+
+Next implementation checkpoints:
+
+1. Add a bounded storage-side GORM fleet catalog with batched child loading,
+   migration-backed sort/filter indexes, signed snapshot-bound keyset cursors,
+   and SQLite query-plan tests.
+2. Wire the four authenticated collector administrator routes and advertise
+   `SERVER_FEATURE_COLLECTOR_ADMIN` only after get/list/mutations and liveness
+   semantics are complete.
+3. Repeat real HTTP/native-gRPC/SQLite/reopen acceptance, the pinned
+   ClickHouse suite, and independent adversarial review.
+
+## Previous checkpoint: durable collector runtime fencing
 
 Date: 2026-07-28
 
