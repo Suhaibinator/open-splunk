@@ -60,10 +60,15 @@ type collectorTokenMetadataRow struct {
 }
 
 type collectorTokenAuthenticationRow struct {
-	IngestionTokenID  string `gorm:"column:ingestion_token_id"`
-	Name              string `gorm:"column:name"`
-	BoundCollectorID  string `gorm:"column:bound_collector_id"`
-	AllowedIndexNames string `gorm:"column:allowed_index_names"`
+	IngestionTokenID string `gorm:"column:ingestion_token_id"`
+	Name             string `gorm:"column:name"`
+	BoundCollectorID string `gorm:"column:bound_collector_id"`
+}
+
+type collectorTokenAuthenticationScopeRow struct {
+	Name             string `gorm:"column:name"`
+	State            string `gorm:"column:state"`
+	IngestionEnabled int64  `gorm:"column:ingestion_enabled"`
 }
 
 type collectorTokenScopeTarget struct {

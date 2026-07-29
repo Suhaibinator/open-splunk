@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,7 @@ const (
 	tokenIDRandomBytes      = 16
 	minimumDigestKeyBytes   = 32
 	maximumTokenScopes      = 256
+	maximumTokenIDBytes     = 255
 	maximumDescriptionBytes = 8 << 10
 	maximumCollectorIDBytes = 128
 	redactedValue           = "[REDACTED]"
@@ -436,37 +438,72 @@ func (store *Store) Authorize(ctx context.Context, plaintext, indexName string) 
 // Authenticate validates one collector credential and resolves its complete
 // current ingestion scope in a single database snapshot. Invalid, disabled,
 // revoked, expired, and scope-less credentials all return ErrUnauthorized.
-func (store *Store) Authenticate(ctx context.Context, plaintext string) (Authentication, error) {
+func (store *Store) Authenticate(
+	ctx context.Context,
+	plaintext string,
+) (
+	authentication Authentication,
+	returnedErr error,
+) {
+	if ctx == nil {
+		return Authentication{}, fmt.Errorf("%w: nil context", control.ErrInvalidArgument)
+	}
+	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	if tx.Error != nil {
+		return Authentication{}, fmt.Errorf(
+			"begin collector token authentication: %w",
+			tx.Error,
+		)
+	}
+	finished := false
+	defer finishTokenTransaction(tx, &finished, &returnedErr)
+
+	authentication, err := store.authenticate(
+		tx,
+		plaintext,
+		databaseTime(store.now()),
+	)
+	if err != nil {
+		return Authentication{}, err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return Authentication{}, fmt.Errorf(
+			"commit collector token authentication: %w",
+			err,
+		)
+	}
+	finished = true
+	return authentication, nil
+}
+
+func (store *Store) authenticate(
+	database *gorm.DB,
+	plaintext string,
+	now time.Time,
+) (Authentication, error) {
 	if plaintext == "" {
 		return Authentication{}, ErrUnauthorized
 	}
 	digest := store.digest(plaintext)
-	now := databaseTime(store.now())
 	var row collectorTokenAuthenticationRow
-	result := store.orm.WithContext(ctx).
+	result := database.
 		Table("ingestion_tokens AS token").
 		Select(`
 			token.ingestion_token_id,
 			token.name,
-			token.bound_collector_id,
-			group_concat(target.name, ',') AS allowed_index_names`).
-		Joins(`
-			JOIN ingestion_token_indexes AS scope
-			  ON scope.ingestion_token_id = token.ingestion_token_id`).
-		Joins("JOIN indexes AS target ON target.index_id = scope.index_id").
+			token.bound_collector_id`).
 		Where(
 			`token.token_digest = ?
 			 AND token.state = ?
 			 AND token.bound_collector_id IS NOT NULL
-			 AND (token.expires_at_unix_micro IS NULL OR token.expires_at_unix_micro > ?)
-			 AND target.state = ?
-			 AND target.ingestion_enabled = 1`,
+			 AND length(CAST(token.ingestion_token_id AS BLOB)) BETWEEN 1 AND ?
+			 AND instr(token.ingestion_token_id, char(0)) = 0
+			 AND (token.expires_at_unix_micro IS NULL OR token.expires_at_unix_micro > ?)`,
 			digest,
 			CollectorTokenStateActive,
+			maximumTokenIDBytes,
 			now.UnixMicro(),
-			control.IndexStateActive,
 		).
-		Group("token.ingestion_token_id").
 		Take(&row)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return Authentication{}, ErrUnauthorized
@@ -474,17 +511,80 @@ func (store *Store) Authenticate(ctx context.Context, plaintext string) (Authent
 	if result.Error != nil {
 		return Authentication{}, fmt.Errorf("authenticate collector token: %w", result.Error)
 	}
+	if !validAuthenticationTokenID(row.IngestionTokenID) {
+		return Authentication{}, errors.New(
+			"authenticate collector token: invalid token ID in control-plane database",
+		)
+	}
 	if !validCollectorID(row.BoundCollectorID) {
 		return Authentication{}, errors.New("authenticate collector token: invalid bound collector ID in control-plane database")
+	}
+	var scopes []collectorTokenAuthenticationScopeRow
+	scopeResult := database.
+		Table("ingestion_token_indexes AS scope").
+		Select("target.name", "target.state", "target.ingestion_enabled").
+		Joins("LEFT JOIN indexes AS target ON target.index_id = scope.index_id").
+		Where("scope.ingestion_token_id = ?", row.IngestionTokenID).
+		Order("scope.index_id").
+		Limit(maximumTokenScopes + 1).
+		Find(&scopes)
+	if scopeResult.Error != nil {
+		return Authentication{}, fmt.Errorf(
+			"authenticate collector token scopes: %w",
+			scopeResult.Error,
+		)
+	}
+	if len(scopes) == 0 {
+		return Authentication{}, ErrUnauthorized
+	}
+	if len(scopes) > maximumTokenScopes {
+		return Authentication{}, errors.New(
+			"authenticate collector token: scope count exceeds the supported maximum",
+		)
+	}
+	allowedIndexNames := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		canonicalName, err := control.NormalizeIndexName(scope.Name)
+		if err != nil ||
+			canonicalName != scope.Name ||
+			(scope.State != string(control.IndexStateActive) &&
+				scope.State != string(control.IndexStateArchived) &&
+				scope.State != string(control.IndexStateDeleting)) ||
+			(scope.IngestionEnabled != 0 && scope.IngestionEnabled != 1) {
+			return Authentication{}, errors.New(
+				"authenticate collector token: invalid scope in control-plane database",
+			)
+		}
+		if scope.State == string(control.IndexStateActive) &&
+			scope.IngestionEnabled == 1 {
+			allowedIndexNames = append(allowedIndexNames, scope.Name)
+		}
+	}
+	if len(allowedIndexNames) == 0 {
+		return Authentication{}, ErrUnauthorized
+	}
+	sort.Strings(allowedIndexNames)
+	for index := 1; index < len(allowedIndexNames); index++ {
+		if allowedIndexNames[index-1] >= allowedIndexNames[index] {
+			return Authentication{}, errors.New(
+				"authenticate collector token: duplicate scope in control-plane database",
+			)
+		}
 	}
 	authentication := Authentication{
 		TokenID:           row.IngestionTokenID,
 		TokenName:         row.Name,
 		BoundCollectorID:  row.BoundCollectorID,
-		AllowedIndexNames: strings.Split(row.AllowedIndexNames, ","),
+		AllowedIndexNames: allowedIndexNames,
 	}
-	sort.Strings(authentication.AllowedIndexNames)
 	return authentication, nil
+}
+
+func validAuthenticationTokenID(value string) bool {
+	return len(value) >= 1 &&
+		len(value) <= maximumTokenIDBytes &&
+		utf8.ValidString(value) &&
+		strings.IndexByte(value, 0) < 0
 }
 
 // RecordCollectorTokenUse records when the server accepted a collector stream
@@ -496,12 +596,24 @@ func (store *Store) Authenticate(ctx context.Context, plaintext string) (Authent
 // creation time, the observation is clamped to that durable lower bound rather
 // than falsely deauthorizing an already-authenticated credential.
 func (store *Store) RecordCollectorTokenUse(ctx context.Context, tokenID string, acceptedAt time.Time) error {
+	return recordCollectorTokenUse(
+		store.orm.WithContext(ctx),
+		tokenID,
+		acceptedAt,
+	)
+}
+
+func recordCollectorTokenUse(
+	database *gorm.DB,
+	tokenID string,
+	acceptedAt time.Time,
+) error {
 	acceptedAt = databaseTime(acceptedAt)
 	if acceptedAt.IsZero() {
 		return fmt.Errorf("%w: collector token acceptance time is required", control.ErrInvalidArgument)
 	}
 	acceptedAtUnixMicro := acceptedAt.UnixMicro()
-	result := store.orm.WithContext(ctx).
+	result := database.
 		Model(&collectorTokenRecord{}).
 		Where("ingestion_token_id = ?", tokenID).
 		Where("state = ?", CollectorTokenStateActive).

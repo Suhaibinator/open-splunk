@@ -201,6 +201,72 @@ func TestClaimCreatesTenantScopedFleetRecordAndSupersedesLease(t *testing.T) {
 	}
 }
 
+func TestPreparedClaimIsDetachedAndReusableWithFreshAuthorization(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	database, store := openTestStore(t)
+	receivedAt := time.Date(2026, 7, 28, 18, 0, 0, 0, time.UTC)
+	request := testClaim(receivedAt)
+	prepared, err := PrepareClaim(request)
+	if err != nil {
+		t.Fatalf("PrepareClaim(): %v", err)
+	}
+
+	request.Hello.InstanceID = "mutated-instance"
+	request.Hello.Capabilities[0] = 99
+	request.Hello.Inputs[0].InputID = "mutated-input"
+	*request.Hello.Inputs[0].Source = "/mutated"
+	request.Hello.AuthorizedIndexes = []string{"mutated"}
+
+	claimPrepared := func() (Collector, Lease) {
+		t.Helper()
+		tx := database.GORMDB().WithContext(ctx).Begin()
+		if tx.Error != nil {
+			t.Fatalf("begin prepared claim transaction: %v", tx.Error)
+		}
+		finished := false
+		defer func() {
+			if !finished {
+				_ = tx.Rollback().Error
+			}
+		}()
+		collector, lease, err := store.ClaimPreparedInTransaction(
+			ctx,
+			tx,
+			prepared,
+			[]string{"audit", "main"},
+		)
+		if err != nil {
+			t.Fatalf("ClaimPreparedInTransaction(): %v", err)
+		}
+		if err := tx.Commit().Error; err != nil {
+			t.Fatalf("commit prepared claim: %v", err)
+		}
+		finished = true
+		return collector, lease
+	}
+
+	first, firstLease := claimPrepared()
+	if firstLease.Generation != 1 ||
+		first.ActiveLease == nil ||
+		first.ActiveLease.InstanceID != "instance-1" ||
+		!slices.Equal(first.Capabilities, []uint32{1, 2, 6}) ||
+		!slices.Equal(first.AuthorizedIndexes, []string{"audit", "main"}) ||
+		len(first.Inputs) != 2 ||
+		first.Inputs[0].InputID != "input-app" ||
+		first.Inputs[0].Source == nil ||
+		*first.Inputs[0].Source != "/var/log/app.json" {
+		t.Fatalf("first prepared collector = %#v", first)
+	}
+	second, secondLease := claimPrepared()
+	if secondLease.Generation != 2 ||
+		second.ActiveLease == nil ||
+		second.ActiveLease.InstanceID != "instance-1" ||
+		!slices.Equal(second.AuthorizedIndexes, []string{"audit", "main"}) {
+		t.Fatalf("reused prepared collector = %#v", second)
+	}
+}
+
 func TestTrustedTenantScopeRejectsPaddedAlias(t *testing.T) {
 	t.Parallel()
 

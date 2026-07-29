@@ -100,6 +100,14 @@ type ClaimRequest struct {
 	Hello       Hello
 }
 
+// PreparedClaim is an opaque, detached, bounded claim snapshot whose
+// credential-derived authorized-index scope has not yet been attached.
+// PrepareClaim constructs valid values; the zero value is invalid.
+type PreparedClaim struct {
+	normalized normalizedClaim
+	valid      bool
+}
+
 // Lease identifies one server-owned active stream generation. Every
 // operational mutation requires all fields to match the current durable lease.
 type Lease struct {

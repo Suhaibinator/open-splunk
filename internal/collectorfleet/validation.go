@@ -20,12 +20,31 @@ type normalizedClaim struct {
 	streamID    string
 	receivedAt  time.Time
 	hello       Hello
+	helloBytes  int
 }
 
 func normalizeClaim(request ClaimRequest) (normalizedClaim, error) {
-	scope, err := normalizeScope(request.Scope)
+	prepared, err := PrepareClaim(request)
 	if err != nil {
 		return normalizedClaim{}, err
+	}
+	return authorizePreparedClaim(
+		prepared.normalized,
+		request.Hello.AuthorizedIndexes,
+	)
+}
+
+// PrepareClaim validates and copies every untrusted collector/server claim
+// field except the credential-derived authorized-index snapshot. It performs
+// the potentially large Hello normalization before SQLite takes its global
+// writer lock.
+//
+// ClaimRequest.Hello.AuthorizedIndexes is deliberately ignored. The exact
+// fresh credential scope must be supplied to ClaimPreparedInTransaction.
+func PrepareClaim(request ClaimRequest) (PreparedClaim, error) {
+	scope, err := normalizeScope(request.Scope)
+	if err != nil {
+		return PreparedClaim{}, err
 	}
 	for name, value := range map[string]string{
 		"collector ID": request.CollectorID,
@@ -34,16 +53,16 @@ func normalizeClaim(request ClaimRequest) (normalizedClaim, error) {
 		"instance ID":  request.Hello.InstanceID,
 	} {
 		if !validIdentifier(value) {
-			return normalizedClaim{}, invalid("%s is not a canonical identifier", name)
+			return PreparedClaim{}, invalid("%s is not a canonical identifier", name)
 		}
 	}
 	receivedAt, err := normalizeTimestamp("server receive time", request.ReceivedAt)
 	if err != nil {
-		return normalizedClaim{}, err
+		return PreparedClaim{}, err
 	}
 	startedAt, err := normalizeTimestamp("collector start time", request.Hello.StartedAt)
 	if err != nil {
-		return normalizedClaim{}, err
+		return PreparedClaim{}, err
 	}
 	metadata := []struct {
 		name    string
@@ -58,67 +77,95 @@ func normalizeClaim(request ClaimRequest) (normalizedClaim, error) {
 	aggregateBytes := 0
 	for _, field := range metadata {
 		if err := validateText(field.name, field.value, field.maximum, true); err != nil {
-			return normalizedClaim{}, err
+			return PreparedClaim{}, err
 		}
 		if !addBoundedBytes(&aggregateBytes, len(field.value), maximumHelloSnapshotBytes) {
-			return normalizedClaim{}, invalid("collector hello exceeds %d bytes", maximumHelloSnapshotBytes)
+			return PreparedClaim{}, invalid(
+				"collector hello exceeds %d bytes",
+				maximumHelloSnapshotBytes,
+			)
 		}
 	}
 
 	capabilities, err := normalizeCapabilities(request.Hello.Capabilities)
 	if err != nil {
-		return normalizedClaim{}, err
+		return PreparedClaim{}, err
 	}
 	if !addBoundedBytes(&aggregateBytes, len(capabilities)*8, maximumHelloSnapshotBytes) {
-		return normalizedClaim{}, invalid("collector hello exceeds %d bytes", maximumHelloSnapshotBytes)
-	}
-	authorizedIndexes, err := normalizeAuthorizedIndexes(request.Hello.AuthorizedIndexes)
-	if err != nil {
-		return normalizedClaim{}, err
-	}
-	authorizedSet := make(map[string]struct{}, len(authorizedIndexes))
-	for _, indexName := range authorizedIndexes {
-		authorizedSet[indexName] = struct{}{}
-		if !addBoundedBytes(&aggregateBytes, len(indexName), maximumHelloSnapshotBytes) {
-			return normalizedClaim{}, invalid("collector hello exceeds %d bytes", maximumHelloSnapshotBytes)
-		}
+		return PreparedClaim{}, invalid(
+			"collector hello exceeds %d bytes",
+			maximumHelloSnapshotBytes,
+		)
 	}
 	inputs, err := normalizeInputRegistrations(
 		request.Hello.Inputs,
-		authorizedSet,
+		nil,
 		&aggregateBytes,
 	)
 	if err != nil {
-		return normalizedClaim{}, err
+		return PreparedClaim{}, err
 	}
 	lastAcknowledged, err := normalizeOptionalUint64(
 		"last acknowledged batch sequence",
 		request.Hello.LastAcknowledgedBatchSequence,
 	)
 	if err != nil {
+		return PreparedClaim{}, err
+	}
+	return PreparedClaim{
+		valid: true,
+		normalized: normalizedClaim{
+			scope:       scope,
+			collectorID: request.CollectorID,
+			bootEpoch:   request.BootEpoch,
+			streamID:    request.StreamID,
+			receivedAt:  receivedAt,
+			hello: Hello{
+				InstanceID:                    request.Hello.InstanceID,
+				ProtocolMajor:                 request.Hello.ProtocolMajor,
+				ProtocolMinor:                 request.Hello.ProtocolMinor,
+				CollectorVersion:              request.Hello.CollectorVersion,
+				Hostname:                      request.Hello.Hostname,
+				OperatingSystem:               request.Hello.OperatingSystem,
+				Architecture:                  request.Hello.Architecture,
+				StartedAt:                     startedAt,
+				Capabilities:                  capabilities,
+				Inputs:                        inputs,
+				LastAcknowledgedBatchSequence: lastAcknowledged,
+			},
+			helloBytes: aggregateBytes,
+		}}, nil
+}
+
+func authorizePreparedClaim(
+	prepared normalizedClaim,
+	authorizedIndexNames []string,
+) (normalizedClaim, error) {
+	authorizedIndexes, err := normalizeAuthorizedIndexes(authorizedIndexNames)
+	if err != nil {
 		return normalizedClaim{}, err
 	}
-	return normalizedClaim{
-		scope:       scope,
-		collectorID: request.CollectorID,
-		bootEpoch:   request.BootEpoch,
-		streamID:    request.StreamID,
-		receivedAt:  receivedAt,
-		hello: Hello{
-			InstanceID:                    request.Hello.InstanceID,
-			ProtocolMajor:                 request.Hello.ProtocolMajor,
-			ProtocolMinor:                 request.Hello.ProtocolMinor,
-			CollectorVersion:              request.Hello.CollectorVersion,
-			Hostname:                      request.Hello.Hostname,
-			OperatingSystem:               request.Hello.OperatingSystem,
-			Architecture:                  request.Hello.Architecture,
-			StartedAt:                     startedAt,
-			Capabilities:                  capabilities,
-			AuthorizedIndexes:             authorizedIndexes,
-			Inputs:                        inputs,
-			LastAcknowledgedBatchSequence: lastAcknowledged,
-		},
-	}, nil
+	aggregateBytes := prepared.helloBytes
+	authorizedSet := make(map[string]struct{}, len(authorizedIndexes))
+	for _, indexName := range authorizedIndexes {
+		authorizedSet[indexName] = struct{}{}
+		if !addBoundedBytes(&aggregateBytes, len(indexName), maximumHelloSnapshotBytes) {
+			return normalizedClaim{}, invalid(
+				"collector hello exceeds %d bytes",
+				maximumHelloSnapshotBytes,
+			)
+		}
+	}
+	for _, input := range prepared.hello.Inputs {
+		if _, allowed := authorizedSet[input.IndexName]; !allowed {
+			return normalizedClaim{}, invalid(
+				"input index is not in the authorized index snapshot",
+			)
+		}
+	}
+	prepared.hello.AuthorizedIndexes = authorizedIndexes
+	prepared.helloBytes = aggregateBytes
+	return prepared, nil
 }
 
 func normalizeScope(scope Scope) (Scope, error) {
@@ -297,8 +344,10 @@ func normalizeInputRegistrations(
 		if err != nil || canonicalIndex != input.IndexName {
 			return nil, invalid("input index name is not canonical")
 		}
-		if _, allowed := authorized[input.IndexName]; !allowed {
-			return nil, invalid("input index is not in the authorized index snapshot")
+		if authorized != nil {
+			if _, allowed := authorized[input.IndexName]; !allowed {
+				return nil, invalid("input index is not in the authorized index snapshot")
+			}
 		}
 		source, err := normalizeOptionalText("input source", input.Source, maximumSourceBytes)
 		if err != nil {

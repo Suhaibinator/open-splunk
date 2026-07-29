@@ -41,6 +41,78 @@ func (store *Store) Claim(
 	finished := false
 	defer finishGORMTransaction(tx, &finished, &returnedErr)
 
+	result, lease, err = claimInTransaction(tx, normalized)
+	if err != nil {
+		return Collector{}, Lease{}, err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return Collector{}, Lease{}, mapContextError(ctx, "commit collector lease claim", err)
+	}
+	finished = true
+	return result, lease, nil
+}
+
+// ClaimInTransaction creates or supersedes a lease using a caller-owned GORM
+// transaction. It neither commits nor rolls back transaction. The transaction
+// must come from the same migrated control database and must use an immediate
+// SQLite write lock.
+func (store *Store) ClaimInTransaction(
+	ctx context.Context,
+	transaction *gorm.DB,
+	request ClaimRequest,
+) (Collector, Lease, error) {
+	prepared, err := PrepareClaim(request)
+	if err != nil {
+		return Collector{}, Lease{}, err
+	}
+	return store.ClaimPreparedInTransaction(
+		ctx,
+		transaction,
+		prepared,
+		request.Hello.AuthorizedIndexes,
+	)
+}
+
+// ClaimPreparedInTransaction attaches the exact fresh credential scope to a
+// prevalidated claim and persists it in a caller-owned transaction. It neither
+// commits nor rolls back transaction.
+func (store *Store) ClaimPreparedInTransaction(
+	ctx context.Context,
+	transaction *gorm.DB,
+	prepared PreparedClaim,
+	authorizedIndexNames []string,
+) (Collector, Lease, error) {
+	if err := validateContext(ctx); err != nil {
+		return Collector{}, Lease{}, err
+	}
+	if transaction == nil ||
+		transaction.Statement == nil ||
+		transaction.Statement.ConnPool == nil {
+		return Collector{}, Lease{}, invalid("collector claim transaction is required")
+	}
+	if _, ok := transaction.Statement.ConnPool.(gorm.TxCommitter); !ok {
+		return Collector{}, Lease{}, invalid(
+			"collector claim requires an active database transaction",
+		)
+	}
+	if !prepared.valid {
+		return Collector{}, Lease{}, invalid("prepared collector claim is required")
+	}
+	normalized, err := authorizePreparedClaim(
+		prepared.normalized,
+		authorizedIndexNames,
+	)
+	if err != nil {
+		return Collector{}, Lease{}, err
+	}
+	return claimInTransaction(transaction.WithContext(ctx), normalized)
+}
+
+func claimInTransaction(
+	tx *gorm.DB,
+	normalized normalizedClaim,
+) (result Collector, lease Lease, returnedErr error) {
+	ctx := tx.Statement.Context
 	var fleet fleetRecord
 	queryErr := tx.
 		Where(
@@ -127,7 +199,7 @@ func (store *Store) Claim(
 	if err := replaceHelloCollections(tx, normalized); err != nil {
 		return Collector{}, Lease{}, err
 	}
-	result, err = loadCollector(
+	loaded, err := loadCollector(
 		tx,
 		normalized.scope,
 		normalized.collectorID,
@@ -135,6 +207,7 @@ func (store *Store) Claim(
 	if err != nil {
 		return Collector{}, Lease{}, fmt.Errorf("read claimed collector: %w", err)
 	}
+	result = loaded
 	lease = Lease{
 		Scope:       normalized.scope,
 		CollectorID: normalized.collectorID,
@@ -142,10 +215,6 @@ func (store *Store) Claim(
 		StreamID:    normalized.streamID,
 		Generation:  result.LeaseGeneration,
 	}
-	if err := tx.Commit().Error; err != nil {
-		return Collector{}, Lease{}, mapContextError(ctx, "commit collector lease claim", err)
-	}
-	finished = true
 	return result, lease, nil
 }
 
