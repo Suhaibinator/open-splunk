@@ -7,7 +7,131 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: input-scoped collector durability
+## Latest checkpoint: bounded GORM ingestion-token lifecycle
+
+Date: 2026-07-29
+
+Committed and pushed checkpoint:
+
+- `72b1b11` — bounded token and scope catalogs, transactional revoked-token
+  retention and capacity reclamation, bounded metadata hydration, sanitized
+  administration behavior, and real collector-runtime acceptance.
+
+This slice closes the unbounded ingestion-token control-plane lifecycle:
+
+1. The GORM-backed SQLite catalog now has a 1,024-parent production default
+   and hard structural ceiling plus a 16,384-row global token-to-index
+   membership ceiling. Configured parent limits may be lower, but no request
+   can raise either structural bound.
+2. Ordinary revocation retains the just-revoked token and then the newest
+   prior tombstones up to the configured retention bound, with deterministic
+   ordering by `(revoked_at_unix_micro DESC, ingestion_token_id DESC)`.
+   Migration `0014` adds the matching partial covering index over revoked rows,
+   and the explicit GORM model carries the same index definition.
+3. Creation admits a new token only after both parent and scope equations fit.
+   It may reclaim the deterministic oldest suffix of revoked tombstones,
+   including the last tombstone when necessary, but never deletes an active,
+   disabled, or merely expired token. Each victim's exact scope count
+   participates in admission.
+4. Capacity inspection, victim deletion, parent insertion, and scope insertion
+   share one immediate SQLite/GORM transaction. Trigger-forced insert and prune
+   failures prove that reclaimed tombstones, their scopes, and the current
+   revocation all roll back together.
+5. Updates use the transactional equation
+   `physical scopes - current scopes + replacement scopes <= 16,384`.
+   Reductions remain possible at the ceiling, growth returns the shared
+   capacity sentinel, and rejected updates leave the version, metadata, and
+   memberships unchanged.
+6. Get and list no longer hydrate an unbounded `group_concat`. They first use
+   constant-size byte-width projections, then load bounded parent and scope
+   rows under one read snapshot. Structural probes stop at `limit + 1`.
+   Hydration rejects oversized persisted text, missing targets, unknown
+   parents, duplicate scopes, zero-scope tokens, and more than 256 scopes for
+   one token.
+7. Exact-boundary coverage lists 1,024 tokens with exactly 16,384 memberships,
+   including a 1,024-parent GORM child query. Hostile fixtures cover parent and
+   scope overflow, orphan rows, oversized IDs and descriptions, scope-capacity
+   recovery, update rejection, insert rollback, and revocation without
+   mutation on corrupt catalogs.
+8. Administrator creation maps unrecoverable capacity to sanitized HTTP `429`.
+   Pruned tombstones return `404`, disappear from exact list totals and
+   filters, and invalidate cursors whose snapshot included them. Database
+   details, token prefixes, and plaintext credentials remain absent from error
+   responses.
+9. A real listener-backed gRPC runtime test proves a pruned credential remains
+   indistinguishable from every other unauthorized credential, while a valid
+   token completes Hello admission and queues its batch without changing the
+   ClickHouse persistence implementation.
+10. The stricter metadata reader is also exercised by collector-admission
+    corruption tests. Those tests inspect the persisted last-use scalar
+    directly after deliberately corrupting fanout, rather than asking the
+    hardened administrative reader to accept the corrupt record.
+
+Validation on pushed commit `72b1b11`:
+
+```sh
+make proto
+go test ./... -count=1
+go test -race \
+  ./internal/control ./internal/auth ./internal/collectoradmission \
+  ./internal/server ./cmd/open-splunk-server -count=1
+go test ./internal/auth \
+  -run '^(TestConcurrentCollectorTokenCreatesRespectTotalRecordLimit|TestConcurrentCollectorTokenRevocationsPreserveRetentionLimit)$' \
+  -count=20
+go vet ./...
+go build ./...
+GOLANGCI_LINT_CACHE=/private/tmp/open-splunk-golangci-cache-token-retention-20260729 \
+  go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+    run --timeout=10m \
+    --new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102 \
+    --max-issues-per-linter=0 --max-same-issues=0
+npm run lint
+npm run typecheck
+npm run test:frontend
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m -v
+go mod tidy
+git diff --check
+```
+
+All repository Go tests, the touched-package race suite, 20 repeated
+concurrent create/revoke runs, vet, build, reproducible protobuf generation,
+frontend lint/type/tests, and module normalization passed. The CI-pinned
+golangci-lint v2.12.2 ratchet reported `0 issues`, and `go mod tidy` produced no
+module-file diff. The digest-pinned ClickHouse suite passed every subtest in
+54.35 seconds.
+
+Three independent final reviewers verified the exact 4,143-insertion and
+87-deletion staged diff before and after with SHA-256
+`ffd111c19c90462972ea69ee58212e6bdffd1ed97df0dc9184721e922ac8ecec`.
+They reviewed transaction serialization, capacity math, query plans,
+corruption bounds, rollback, HTTP secrecy, cursor behavior, runtime
+authorization, documentation, migration/model parity, and cross-package
+coverage; no actionable P0/P1/P2 finding remains. The `simplify` pass factored
+one shared victim query and retained the reusable two-phase child-loader
+pattern.
+
+GORM remains confined to the SQLite control plane. ClickHouse event storage and
+SPL execution continue to use their native bounded implementation. The
+previous Go dependency upgrade is already committed on `main` as `347a015`;
+this slice leaves `go.mod` and `go.sum` canonical and unchanged.
+
+Explicit pause point:
+
+1. Do not begin another implementation slice until the user gives further
+   instructions.
+2. When work resumes, the next known SPL correctness target is exact mixed
+   numeric ordering and aggregation. A wide integer `9007199254740993` and
+   decimal `9007199254740992.75` currently collapse through `Float64` in
+   comparison, sort, `min`, and `max` paths.
+3. Preserve the GORM-only SQLite control-plane boundary; do not introduce GORM
+   into ClickHouse persistence.
+4. Continue test-first checkpoints, pinned ClickHouse acceptance, frozen
+   adversarial review, and commit/push after each cohesive green unit.
+
+## Previous checkpoint: input-scoped collector durability
 
 Date: 2026-07-29
 
