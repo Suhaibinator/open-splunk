@@ -7,7 +7,114 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: authenticated GORM collector administration
+## Latest checkpoint: input-scoped collector durability
+
+Date: 2026-07-29
+
+Committed and pushed checkpoint:
+
+- `e312ae9` — input-scoped checkpoints, WAL source marks, pending-WAL resume,
+  terminal disposition, hostile-state validation, and deterministic
+  shared-file crash/restart acceptance.
+
+This slice closes the collector compatibility boundary where two logical file
+inputs intentionally observe the same physical file:
+
+1. Durable checkpoints are now keyed by the collision-safe pair
+   `(input_id, FileIdentity.TrackingKey())`. The configured input ID is carried
+   through discovery, copy-truncate generations, batching, WAL source marks,
+   startup resume overlays, terminal acknowledgments, and local oversized-event
+   disposition.
+2. WAL append/recovery and cumulative acknowledgment coalesce by
+   `(input_id, exact file generation)` with struct keys and deterministic
+   input/identity/event ordering. Planning remains `O(M + K log K)` for `M`
+   compact marks and `K` distinct input/file generations, outside the queue
+   mutex.
+3. Checkpoint format v2 persists the input ID and rejects nonempty v1 state
+   explicitly. This is intentional for the greenfield, pre-release project;
+   there is no migration path to preserve. Empty v1 state upgrades on its next
+   write.
+4. Both loaded and newly written checkpoints now require a canonical
+   protocol ID, canonical positive-generation SHA-256 identity, nonempty path,
+   signed-file-range offset, at most a 1 MiB fingerprint prefix, and a
+   structurally safe line cursor. Batched writes validate before mutation and
+   again after monotonic cursor normalization, so the store cannot persist
+   state its own loader rejects.
+5. A file first discovered empty must establish and durably record a nonempty
+   distinguishing fingerprint before its first event is emitted. Fingerprint
+   or checkpoint-write failure now fail-stops that poll and retries without
+   advancing the tailer.
+6. The canonical 128-byte ASCII protocol-ID grammar is owned by the shared
+   `internal/protocolid` package and reused by collector configuration, input
+   durability, ingestion validation, and the GORM fleet control plane.
+7. Product-level acceptance uses one real file/inode through two differently
+   routed inputs. It proves independent historical ingestion, one deterministic
+   mixed-input pending WAL batch, canceled-handler shutdown, startup overlay
+   recovery without reread, two terminal checkpoints, and zero duplicate
+   deliveries.
+8. The pinned ClickHouse legacy-retention fixture now derives its event time
+   from the current wall clock rather than a fixed old timestamp. Its
+   deliberately tiny 1.5 ms TTL can no longer race asynchronous deletion, while
+   the native millisecond-rounding assertion remains unchanged.
+
+Validation on pushed commit `e312ae9`:
+
+```sh
+make proto
+go test ./... -count=1
+go test -race ./internal/collector/... -count=1
+go test ./internal/collector \
+  -run '^TestE2ECollectorCheckpointsAreScopedByInput$' -count=10
+go test -race ./internal/collector \
+  -run '^TestE2ECollectorCheckpointsAreScopedByInput$' -count=3
+go vet ./...
+go build ./...
+golangci-lint v2.12.2 run \
+  --timeout=5m \
+  --new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102
+npm run lint
+npm run typecheck
+npm run test:frontend
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m -v
+go mod tidy
+git diff --check
+```
+
+All repository Go tests, the complete collector race suite, repeated
+shared-file acceptance, vet, build, reproducible protobuf generation, frontend
+lint/type/tests, and module normalization passed. Pinned golangci-lint v2.12.2
+reported `0 issues`; `go mod tidy` produced no module-file diff. The
+digest-pinned ClickHouse suite passed every subtest in 59.11 seconds.
+
+Three independent adversarial passes found and drove fixes for hostile
+checkpoint allocation/state, noncanonical input configuration, a
+physical-identity-only sender fake, a mixed-input pending-WAL coverage gap,
+empty-file fingerprint failure swallowing, post-normalization cursor
+corruption, zero-line cursor overflow, and a canceled Store-handler race. The
+second frozen review found no remaining P0/P1/P2 issue. Every reviewer verified
+the exact 2392-insertion/277-deletion staged diff with SHA-256
+`a769e8099a5a0b91e481ab302ce05cab4b063c8303087b44feaf94b8d58356a4`.
+
+The `simplify` review consolidated the protocol identifier grammar instead of
+adding a third copy; no remaining reuse, maintainability, or scaling issue was
+actionable in the final diff. GORM remains confined to the SQLite control
+plane, and ClickHouse continues to use its native persistence path.
+
+Explicit pause point:
+
+1. Do not begin another implementation slice until the user gives further
+   instructions.
+2. Overlapping file-input globs and hard links across distinct input IDs now
+   retain independent durable cursors and WAL recovery.
+3. Nonempty checkpoint v1 state is deliberately unsupported before the first
+   release; reset it rather than adding a migration.
+4. Continue test-first work, pinned ClickHouse acceptance, frozen adversarial
+   review, and commit/push after each cohesive green unit.
+
+## Previous checkpoint: authenticated GORM collector administration
 
 Date: 2026-07-29
 
@@ -8107,12 +8214,8 @@ Do not guess those decisions if they materially affect the implementation.
   Open Splunk counts immediate non-null containers atomically.
 - Collector decoding does not preserve every original numeric token spelling.
   String-oriented aggregates operate on stored canonical values.
-- Collector checkpoints and WAL source marks are currently keyed by physical
-  file identity rather than `(input_id, file identity)`. Configure at most one
-  file input pipeline for a given inode/path set; overlapping globs or hard
-  links across distinct inputs can otherwise let one input's higher checkpoint
-  skip the other input's logical events. Either enforce non-overlap or carry
-  input identity through checkpoint/WAL keys before claiming that topology.
+- Collector checkpoint format v2 deliberately rejects nonempty v1 state. This
+  is a greenfield, pre-release reset boundary rather than a migration promise.
 - Default aggregate names containing parentheses cannot be referenced by the
   downstream field grammar; use `AS`.
 - The 512 KiB `values` bound is a publication bound, not an aggregate-state
@@ -8133,7 +8236,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `2a1245c`, `72b7936`, `421ba4d`, `6e18333`,
+   commits, especially `e312ae9`, `782da43`, `125b2bc`, `f3fc981`,
+   `c84de56`, `f7a06b7`, `8161f2d`, `2a1245c`, `72b7936`, `421ba4d`, `6e18333`,
    `7dd3209`, `825c1e4`, `4966a7d`, `fe4b7bc`, `983e125`, `4d34c8a`,
    `c9221de`, `da587a4`, `1e78bf4`, `7bf4f6f`, `28c27e2`, `fe94e37`,
    `8d4d7b8`, `df5c13a`, `8d4911c`, `1314fc9`, `7d52001`, `33134e9`,
