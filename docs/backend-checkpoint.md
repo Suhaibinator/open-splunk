@@ -7,7 +7,119 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded GORM ingestion-token lifecycle
+## Latest checkpoint: exact mixed numeric ordering
+
+Date: 2026-07-29
+
+Committed and pushed checkpoint:
+
+- `a03aa33` — exact mixed numeric comparison, automatic sort, and extrema
+  ordering with bounded ClickHouse execution and adversarial boundary coverage.
+
+This slice closes the known `Float64` collapse between values such as integer
+`9007199254740993` and Decimal `9007199254740992.75`:
+
+1. A shared lexical decimal key now orders eligible values by sign class,
+   decimal order, and normalized coefficient. Negative magnitude and
+   coefficient-prefix ordering are reversed correctly, equivalent spellings
+   share a key, signed zero normalizes to zero, and exponents are never
+   expanded.
+2. Generic Dynamic comparisons use that exact key for integers, validated
+   semantic Decimals, and bounded complete-decimal Strings. Fixed numeric
+   columns and physical Float/literal comparisons retain their native
+   ClickHouse semantics. A generic Dynamic Float contributes its canonical
+   rendered `Float64` decimal spelling, which is an explicit v0.1 contract
+   rather than a claim of exact binary-rational comparison.
+3. Automatic Dynamic sort uses separate classifier and lexical channels.
+   Numeric classification is bounded, while an ineligible String retains its
+   complete logical text; distinct values above the numeric-parser ceiling no
+   longer collapse to the same empty fallback key.
+4. `stats min` and `stats max` use the same exact order for scalar and
+   multivalue runtime fields. Losslessly round-trippable winners publish as
+   `Float64`; every other numeric winner publishes as validated
+   `decimal/v1`. The scalar aggregate retains only the compact publication
+   tuple and ordering key required by `argMinOrNullIf` / `argMaxOrNullIf`.
+5. Ordinary String classification is capped at 4,096 bytes and nonzero
+   exponent magnitude 10,000. A validated Decimal ordering payload may use the
+   one reserved normalization byte needed when `.digits` becomes
+   `0.digits`. Separate `(lexical text, exact input)` Dynamic extrema channels
+   preserve that 4,097-byte value through re-aggregation without treating a
+   4,097-byte raw String as numeric.
+6. Repeated exact predicates materialize one key and eligibility alias per
+   field, including fields absent from the initial visible schema. The aliases
+   compose with calculated-field `MATERIALIZED` / `ARRAY JOIN` fences, reject
+   forged same-name/different-path references from optimization, and are
+   removed after the filter.
+7. Unit coverage includes exact-key normalization, pairwise `big.Rat`
+   ordering, exponent and byte ceilings, SQL-size ceilings, binding mismatch
+   defense, 32 repeated comparisons, calculated-field fences, and forged field
+   references.
+8. The digest-pinned ClickHouse suite covers positive and negative
+   beyond-`2^53` neighbors, base and `where` comparisons, repeated
+   field-to-field comparisons, exact sort, scalar/list extrema, downstream
+   comparison/sort/bin metadata, zero and exponent edges, negative
+   coefficient prefixes, 4,096/4,097-byte classification, adversarial
+   over-limit lexical insertion order, and Decimal extrema followed by a
+   second extrema.
+
+Validation on pushed commit `a03aa33`:
+
+```sh
+make proto
+go test ./... -count=1
+go test -race ./internal/clickhouse -count=1
+go vet ./...
+go build ./...
+GOLANGCI_LINT_CACHE=/private/tmp/open-splunk-golangci-cache-exact-numeric-final-20260729 \
+  go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+    run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+npm run lint
+npm run typecheck
+npm run test:frontend
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m -v
+go mod tidy
+git diff --check
+```
+
+All repository Go tests, the ClickHouse race suite, vet, build, reproducible
+protobuf generation, frontend lint/type checking, and all 183 frontend/release
+tests passed. The repository-wide CI-pinned golangci-lint v2.12.2 run reported
+`0 issues`; it identified and removed one genuinely dead comparison helper.
+`go mod tidy` produced no module-file diff. The digest-pinned ClickHouse suite
+passed in 63.14 seconds.
+
+Three independent final reviewers verified the unchanged 2,243-insertion and
+268-deletion staged diff at SHA-256
+`8580e5284c2b07d343e3d19b312e9303a15dd6d80e2be0f88dc66a1a48bff519`.
+They reviewed mathematical ordering, type intent, Float behavior, attacker
+work, query growth, alias scope, ClickHouse lambda/type behavior, publication
+metadata, downstream composition, integration coverage, and documentation; no
+P0/P1/P2 finding remains. An earlier frozen review found and prompted both the
+over-limit lexical-sort repair and the 4,097-byte extrema re-aggregation
+repair. The `simplify` review reduced duplicated exact-key SQL, compacted
+scalar aggregate state, and made the reference-order property test
+non-vacuous before final verification.
+
+GORM remains confined to the SQLite control plane. ClickHouse storage and SPL
+execution continue to use native bounded SQL; this slice introduces no GORM
+dependency there. The user's dependency upgrades remain committed separately
+as `347a015`, and this slice leaves `go.mod` and `go.sum` unchanged.
+
+Explicit pause point:
+
+1. Exact mixed numeric comparison, sort, and extrema behavior is complete for
+   this unit.
+2. Do not begin another implementation slice until the user gives further
+   instructions.
+3. Preserve the GORM-only SQLite control-plane boundary; do not introduce GORM
+   into ClickHouse persistence.
+4. Continue test-first checkpoints, pinned ClickHouse acceptance, frozen
+   adversarial review, and commit/push after each cohesive green unit.
+
+## Previous checkpoint: bounded GORM ingestion-token lifecycle
 
 Date: 2026-07-29
 
@@ -118,14 +230,12 @@ SPL execution continue to use their native bounded implementation. The
 previous Go dependency upgrade is already committed on `main` as `347a015`;
 this slice leaves `go.mod` and `go.sum` canonical and unchanged.
 
-Explicit pause point:
+Historical pause point at that checkpoint:
 
 1. Do not begin another implementation slice until the user gives further
    instructions.
-2. When work resumes, the next known SPL correctness target is exact mixed
-   numeric ordering and aggregation. A wide integer `9007199254740993` and
-   decimal `9007199254740992.75` currently collapse through `Float64` in
-   comparison, sort, `min`, and `max` paths.
+2. The exact mixed numeric target identified here is now complete at
+   `a03aa33`; use the latest checkpoint above as the active pause state.
 3. Preserve the GORM-only SQLite control-plane boundary; do not introduce GORM
    into ClickHouse persistence.
 4. Continue test-first checkpoints, pinned ClickHouse acceptance, frozen
@@ -8303,8 +8413,6 @@ multivalue output, XML, terminal containers, escaped literal-dot keys, and the
 
 Resource/lifecycle audit findings to retain in the backlog:
 
-- Bound or physically prune ingestion-token tombstones so token listing does
-  not remain O(all historical tokens).
 - Surface background export-deletion failures, and let admission perform due
   cleanup before reporting capacity exhaustion.
 - Physically prune idle search-history owner rows and replace the
@@ -8326,10 +8434,15 @@ Do not guess those decisions if they materially affect the implementation.
 - A live licensed Splunk differential oracle is unavailable. Public
   documentation leaves several multivalue, null, binary, symbol-ordering, and
   error behaviors unspecified; keep Open Splunk choices explicit.
-- Runtime String/Dynamic extrema compare numeric candidates through `Float64`.
-  Distinct very-wide integers or exact decimals can collapse to the same key.
-  Do not silently claim exactness until an exact decimal comparison key and
-  live oracle exist.
+- Eligible Dynamic integers, Decimals, and bounded numeric Strings compare,
+  sort, and aggregate through the normalized exact-decimal key. Physical
+  Float/literal paths retain native `Float64`; a Float in a generic Dynamic
+  ordering contributes ClickHouse's canonical rendered decimal spelling, not
+  its exact binary rational.
+- Ordinary String numeric classification is capped at 4,096 bytes. A validated
+  semantic Decimal may use 4,097 bytes in exact comparison, sort, and extrema
+  ordering to carry one compiler-added normalization byte. Other
+  Decimal-consuming functions retain their documented 4 KiB limits.
 - Numeric candidates sort before all lexical candidates in Open Splunk v0.1;
   punctuation within the lexical class uses raw-byte order. Symbol placement
   is not claimed as verified Splunk parity.
@@ -8360,7 +8473,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `e312ae9`, `782da43`, `125b2bc`, `f3fc981`,
+   commits, especially `a03aa33`, `72b1b11`, `347a015`, `e312ae9`,
+   `782da43`, `125b2bc`, `f3fc981`,
    `c84de56`, `f7a06b7`, `8161f2d`, `2a1245c`, `72b7936`, `421ba4d`, `6e18333`,
    `7dd3209`, `825c1e4`, `4966a7d`, `fe4b7bc`, `983e125`, `4d34c8a`,
    `c9221de`, `da587a4`, `1e78bf4`, `7bf4f6f`, `28c27e2`, `fe94e37`,
@@ -8423,8 +8537,9 @@ Do not guess those decisions if they materially affect the implementation.
    and execution checkpoints are `6e18333`, `421ba4d`, `72b7936`, and
    `2a1245c`. Bounded SPL1 period concatenation is complete through `875ddad`,
    `bc80006`, and `0b3f073`, and side-effect-free search validation is
-   complete at `1919e2b`. Implement bounded `/search/suggestions` and scoped
-   field completion next if the user keeps Phase 2 as the priority.
+   complete at `1919e2b`. Exact mixed numeric comparison, automatic sort, and
+   extrema are complete at `a03aa33`. Do not infer the next slice from this
+   historical list; wait for the user's next instruction.
    The
    generator foundation, current preview-to-final
    resource-release audit pass, sanitized current GradeThis collector/config
