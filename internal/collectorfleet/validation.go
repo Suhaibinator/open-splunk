@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 )
 
 type normalizedClaim struct {
@@ -568,22 +569,7 @@ func validateText(name, value string, maximum int, allowEmpty bool) error {
 }
 
 func validIdentifier(value string) bool {
-	if len(value) == 0 || len(value) > maximumIdentifierBytes || !utf8.ValidString(value) {
-		return false
-	}
-	for index := 0; index < len(value); index++ {
-		character := value[index]
-		alphanumeric := character >= 'a' && character <= 'z' ||
-			character >= 'A' && character <= 'Z' ||
-			character >= '0' && character <= '9'
-		if alphanumeric {
-			continue
-		}
-		if index == 0 || !strings.ContainsRune("._:-", rune(character)) {
-			return false
-		}
-	}
-	return true
+	return protocolid.Valid(value)
 }
 
 func addBoundedBytes(total *int, addition, maximum int) bool {

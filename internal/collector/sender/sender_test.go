@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -156,7 +157,7 @@ func (q *fakeQueue) prepareAckLocked(batchSequence uint64, cumulative bool) (wal
 		return wal.AckPreview{}, wal.ErrInvalidAck
 	}
 	preview := wal.AckPreview{}
-	byIdentity := make(map[string]wal.SourceCheckpointMark)
+	var aggregator fakeSourceMarkAggregator
 	for _, batch := range q.batches {
 		sequence := batch.GetBatchSequence()
 		if sequence <= q.acked {
@@ -174,35 +175,161 @@ func (q *fakeQueue) prepareAckLocked(batchSequence uint64, cumulative bool) (wal
 		}
 		preview.BatchCount++
 		preview.ThroughBatchSequence = sequence
-		for _, mark := range fakeSourceMarks(batch) {
-			byIdentity[mark.FileIdentity] = mark
+		if !aggregator.failed {
+			for _, mark := range fakeSourceMarks(batch) {
+				if !aggregator.add(mark) {
+					break
+				}
+			}
 		}
 	}
-	for _, mark := range byIdentity {
-		preview.Marks = append(preview.Marks, mark)
-	}
+	preview.Marks = aggregator.marks()
 	return preview, nil
 }
 
+type fakeSourceMarkKey struct {
+	inputID      string
+	fileIdentity string
+}
+
+type fakeSourceMarkAggregator struct {
+	bySource map[fakeSourceMarkKey]wal.SourceCheckpointMark
+	failure  wal.SourceCheckpointMark
+	failed   bool
+}
+
+func (aggregator *fakeSourceMarkAggregator) add(mark wal.SourceCheckpointMark) bool {
+	if mark.InputID == "" || mark.FileIdentity == "" ||
+		!mark.HasEndOffset || mark.ConflictingMetadata {
+		aggregator.failure = mark
+		aggregator.failed = true
+		return false
+	}
+	if aggregator.bySource == nil {
+		aggregator.bySource = make(map[fakeSourceMarkKey]wal.SourceCheckpointMark)
+	}
+	key := fakeSourceMarkKey{inputID: mark.InputID, fileIdentity: mark.FileIdentity}
+	current, exists := aggregator.bySource[key]
+	if exists && current.HasFingerprintLength && mark.HasFingerprintLength &&
+		current.FingerprintLength != mark.FingerprintLength {
+		mark.ConflictingMetadata = true
+		aggregator.failure = mark
+		aggregator.failed = true
+		return false
+	}
+	if exists && fakeSourceLineCursorsConflict(current, mark) {
+		mark.ConflictingMetadata = true
+		aggregator.failure = mark
+		aggregator.failed = true
+		return false
+	}
+	if !exists || mark.EndOffset > current.EndOffset ||
+		mark.EndOffset == current.EndOffset &&
+			(mark.HasNextLineNumber && !current.HasNextLineNumber ||
+				mark.HasNextLineNumber == current.HasNextLineNumber &&
+					mark.BatchSequence >= current.BatchSequence) {
+		aggregator.bySource[key] = mark
+	}
+	return true
+}
+
+func (aggregator *fakeSourceMarkAggregator) marks() []wal.SourceCheckpointMark {
+	if aggregator.failed {
+		return []wal.SourceCheckpointMark{aggregator.failure}
+	}
+	marks := make([]wal.SourceCheckpointMark, 0, len(aggregator.bySource))
+	for _, mark := range aggregator.bySource {
+		marks = append(marks, mark)
+	}
+	sort.Slice(marks, func(i, j int) bool {
+		return fakeSourceCheckpointMarkLess(marks[i], marks[j])
+	})
+	return marks
+}
+
 func fakeSourceMarks(batch *opensplunkv1.EventBatch) []wal.SourceCheckpointMark {
-	var marks []wal.SourceCheckpointMark
+	bySource := make(map[fakeSourceMarkKey]wal.SourceCheckpointMark)
+	var invalid *wal.SourceCheckpointMark
 	for index, event := range batch.GetEvents() {
-		origin := event.GetOrigin()
-		if origin == nil || origin.FileIdentity == nil {
+		if event == nil || event.GetOrigin() == nil {
 			continue
 		}
-		marks = append(marks, wal.SourceCheckpointMark{
+		origin := event.GetOrigin()
+		mark := wal.SourceCheckpointMark{
 			BatchSequence: batch.GetBatchSequence(), EventIndex: uint32(index),
-			FileIdentity: origin.GetFileIdentity(), SourcePath: origin.GetSourcePath(),
-			EndOffset: origin.GetEndOffset(), LineNumber: origin.GetLineNumber(),
+			InputID: origin.GetInputId(), FileIdentity: origin.GetFileIdentity(),
+			SourcePath: origin.GetSourcePath(),
+			EndOffset:  origin.GetEndOffset(), LineNumber: origin.GetLineNumber(),
 			NextLineNumber:    origin.GetNextLineNumber(),
 			FingerprintLength: origin.GetFileFingerprintLength(),
 			HasSourcePath:     origin.SourcePath != nil, HasEndOffset: origin.EndOffset != nil,
 			HasNextLineNumber:    origin.NextLineNumber != nil,
 			HasFingerprintLength: origin.FileFingerprintLength != nil,
-		})
+		}
+		if mark.InputID == "" || mark.FileIdentity == "" || !mark.HasEndOffset {
+			if invalid == nil {
+				invalidMark := mark
+				invalid = &invalidMark
+			}
+			continue
+		}
+		key := fakeSourceMarkKey{inputID: mark.InputID, fileIdentity: mark.FileIdentity}
+		current, exists := bySource[key]
+		if exists && current.ConflictingMetadata {
+			continue
+		}
+		if exists && current.HasFingerprintLength && mark.HasFingerprintLength &&
+			current.FingerprintLength != mark.FingerprintLength {
+			mark.ConflictingMetadata = true
+			bySource[key] = mark
+			continue
+		}
+		if exists && fakeSourceLineCursorsConflict(current, mark) {
+			mark.ConflictingMetadata = true
+			bySource[key] = mark
+			continue
+		}
+		if !exists || mark.EndOffset > current.EndOffset ||
+			mark.EndOffset == current.EndOffset &&
+				(mark.HasNextLineNumber || !current.HasNextLineNumber) {
+			bySource[key] = mark
+		}
 	}
+	marks := make([]wal.SourceCheckpointMark, 0, len(bySource)+1)
+	if invalid != nil {
+		marks = append(marks, *invalid)
+	}
+	for _, mark := range bySource {
+		marks = append(marks, mark)
+	}
+	sort.Slice(marks, func(i, j int) bool {
+		return fakeSourceCheckpointMarkLess(marks[i], marks[j])
+	})
 	return marks
+}
+
+func fakeSourceCheckpointMarkLess(left, right wal.SourceCheckpointMark) bool {
+	if left.InputID != right.InputID {
+		return left.InputID < right.InputID
+	}
+	if left.FileIdentity != right.FileIdentity {
+		return left.FileIdentity < right.FileIdentity
+	}
+	return left.EventIndex < right.EventIndex
+}
+
+func fakeSourceLineCursorsConflict(left, right wal.SourceCheckpointMark) bool {
+	if !left.HasNextLineNumber || !right.HasNextLineNumber {
+		return false
+	}
+	switch {
+	case left.EndOffset == right.EndOffset:
+		return left.NextLineNumber != right.NextLineNumber
+	case left.EndOffset < right.EndOffset:
+		return left.NextLineNumber >= right.NextLineNumber
+	default:
+		return left.NextLineNumber <= right.NextLineNumber
+	}
 }
 
 func (q *fakeQueue) hasSequenceLocked(sequence uint64) bool {
@@ -630,6 +757,7 @@ func TestSenderCheckpointCallbackFailureLeavesBatchReplayable(t *testing.T) {
 	t.Parallel()
 	batch := fakeBatch(1, makeEvent("e1", "main"))
 	batch.Events[0].Origin = &opensplunkv1.EventOrigin{
+		InputId:      "input-a",
 		FileIdentity: proto.String("dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)),
 		EndOffset:    proto.Uint64(1),
 	}
@@ -667,6 +795,155 @@ func TestSenderCheckpointCallbackFailureLeavesBatchReplayable(t *testing.T) {
 	}
 	if c.lookupInflight(1) == nil {
 		t.Fatal("callback failure released in-flight batch")
+	}
+}
+
+func TestSenderMalformedOriginCallbackFailureLeavesBatchReplayable(t *testing.T) {
+	t.Parallel()
+	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)
+	checkpointEvent := func(id string, origin *opensplunkv1.EventOrigin) *opensplunkv1.LogEvent {
+		event := makeEvent(id, "main")
+		event.Origin = origin
+		return event
+	}
+	tests := []struct {
+		name       string
+		events     []*opensplunkv1.LogEvent
+		markIsFail func(wal.SourceCheckpointMark) bool
+	}{
+		{
+			name: "missing input ID",
+			events: []*opensplunkv1.LogEvent{checkpointEvent("e1", &opensplunkv1.EventOrigin{
+				FileIdentity: &identity,
+				EndOffset:    proto.Uint64(1),
+			})},
+			markIsFail: func(mark wal.SourceCheckpointMark) bool {
+				return mark.InputID == "" && mark.FileIdentity == identity &&
+					mark.HasEndOffset && !mark.ConflictingMetadata
+			},
+		},
+		{
+			name: "missing file identity",
+			events: []*opensplunkv1.LogEvent{checkpointEvent("e1", &opensplunkv1.EventOrigin{
+				InputId:   "input-a",
+				EndOffset: proto.Uint64(1),
+			})},
+			markIsFail: func(mark wal.SourceCheckpointMark) bool {
+				return mark.InputID == "input-a" && mark.FileIdentity == "" &&
+					mark.HasEndOffset && !mark.ConflictingMetadata
+			},
+		},
+		{
+			name: "missing end offset",
+			events: []*opensplunkv1.LogEvent{checkpointEvent("e1", &opensplunkv1.EventOrigin{
+				InputId:      "input-a",
+				FileIdentity: &identity,
+			})},
+			markIsFail: func(mark wal.SourceCheckpointMark) bool {
+				return mark.InputID == "input-a" && mark.FileIdentity == identity &&
+					!mark.HasEndOffset && !mark.ConflictingMetadata
+			},
+		},
+		{
+			name: "conflicting fingerprint metadata",
+			events: []*opensplunkv1.LogEvent{
+				checkpointEvent("e1", &opensplunkv1.EventOrigin{
+					InputId:               "input-a",
+					FileIdentity:          &identity,
+					EndOffset:             proto.Uint64(1),
+					FileFingerprintLength: proto.Uint32(64),
+				}),
+				checkpointEvent("e2", &opensplunkv1.EventOrigin{
+					InputId:               "input-a",
+					FileIdentity:          &identity,
+					EndOffset:             proto.Uint64(2),
+					FileFingerprintLength: proto.Uint32(65),
+				}),
+			},
+			markIsFail: func(mark wal.SourceCheckpointMark) bool {
+				return mark.InputID == "input-a" && mark.FileIdentity == identity &&
+					mark.EventIndex == 1 && mark.ConflictingMetadata
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			batch := fakeBatch(1, test.events...)
+			q := newFakeQueue(batch)
+			callbackErr := errors.New("malformed source checkpoint")
+			callbackCalls := 0
+			opts := testOptions()
+			opts.OnTerminalMarks = func(marks []wal.SourceCheckpointMark) error {
+				callbackCalls++
+				if len(marks) != 1 || marks[0].BatchSequence != 1 ||
+					!test.markIsFail(marks[0]) {
+					t.Fatalf("callback marks = %+v, want one representative failure mark", marks)
+				}
+				return callbackErr
+			}
+			s, err := New(opts, q, &memSink{}, nil)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			c := s.newConn(context.Background(), func() {}, func() {}, nil)
+			c.inflight[1] = batch
+			c.inflightN = 1
+
+			err = c.handleAck(&opensplunkv1.BatchAck{
+				BatchId:            batch.GetBatchId(),
+				BatchSequence:      1,
+				Durability:         opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+				AcceptedEventCount: uint32(len(batch.GetEvents())),
+			})
+			if !errors.Is(err, callbackErr) {
+				t.Fatalf("handleAck error = %v, want callback error", err)
+			}
+			if callbackCalls != 1 {
+				t.Fatalf("checkpoint callback calls = %d, want 1", callbackCalls)
+			}
+			if got := q.Stats(); got.LastAckedBatchSequence != 0 || got.QueuedBatches != 1 {
+				t.Fatalf("callback failure consumed replayable batch: %+v", got)
+			}
+			if got := q.ackCallsSnapshot(); len(got) != 0 {
+				t.Fatalf("queue Ack calls = %v, want none after callback failure", got)
+			}
+			if c.lookupInflight(1) == nil {
+				t.Fatal("callback failure released in-flight batch")
+			}
+		})
+	}
+}
+
+func TestFakeQueueCumulativePreviewRetainsCrossBatchConflict(t *testing.T) {
+	t.Parallel()
+	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)
+	checkpointBatch := func(sequence uint64, offset uint64, fingerprintLength uint32) *opensplunkv1.EventBatch {
+		event := makeEvent("event-"+itoa(sequence), "main")
+		event.Origin = &opensplunkv1.EventOrigin{
+			InputId:               "input-a",
+			FileIdentity:          &identity,
+			EndOffset:             &offset,
+			FileFingerprintLength: &fingerprintLength,
+		}
+		return fakeBatch(sequence, event)
+	}
+	q := newFakeQueue(
+		checkpointBatch(1, 1, 64),
+		checkpointBatch(2, 2, 65),
+	)
+
+	preview, err := q.PrepareAckThrough(2)
+	if err != nil {
+		t.Fatalf("PrepareAckThrough: %v", err)
+	}
+	if preview.BatchCount != 2 || preview.ThroughBatchSequence != 2 ||
+		len(preview.Marks) != 1 || preview.Marks[0].BatchSequence != 2 ||
+		!preview.Marks[0].ConflictingMetadata {
+		t.Fatalf("preview = %+v, want one representative cross-batch conflict", preview)
+	}
+	if got := q.Stats(); got.LastAckedBatchSequence != 0 || got.QueuedBatches != 2 {
+		t.Fatalf("read-only conflict preview advanced queue: %+v", got)
 	}
 }
 
@@ -937,6 +1214,7 @@ func TestSenderTerminalAckCancelsRetryBeforeCheckpointCommit(t *testing.T) {
 
 	batch := fakeBatch(1, makeEvent("e1", "main"))
 	batch.Events[0].Origin = &opensplunkv1.EventOrigin{
+		InputId:      "input-a",
 		FileIdentity: proto.String("dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)),
 		EndOffset:    proto.Uint64(1),
 	}
@@ -1048,11 +1326,13 @@ func TestSenderCumulativeAckCommitsCheckpointAndCancelsEarlierRetry(t *testing.T
 	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)
 	batch1 := fakeBatch(1, makeEvent("e1", "main"))
 	batch1.Events[0].Origin = &opensplunkv1.EventOrigin{
+		InputId:      "input-a",
 		FileIdentity: &identity,
 		EndOffset:    proto.Uint64(1),
 	}
 	batch2 := fakeBatch(2, makeEvent("e2", "main"))
 	batch2.Events[0].Origin = &opensplunkv1.EventOrigin{
+		InputId:      "input-b",
 		FileIdentity: &identity,
 		EndOffset:    proto.Uint64(2),
 	}
@@ -1074,8 +1354,15 @@ func TestSenderCumulativeAckCommitsCheckpointAndCancelsEarlierRetry(t *testing.T
 	marksMu.Lock()
 	gotMarks := append([]wal.SourceCheckpointMark(nil), committed...)
 	marksMu.Unlock()
-	if len(gotMarks) != 1 || gotMarks[0].BatchSequence != 2 || gotMarks[0].EndOffset != 2 {
-		t.Fatalf("committed checkpoint marks = %+v, want coalesced batch 2 offset 2", gotMarks)
+	if len(gotMarks) != 2 ||
+		gotMarks[0].InputID != "input-a" || gotMarks[0].BatchSequence != 1 ||
+		gotMarks[0].EndOffset != 1 ||
+		gotMarks[1].InputID != "input-b" || gotMarks[1].BatchSequence != 2 ||
+		gotMarks[1].EndOffset != 2 {
+		t.Fatalf(
+			"committed checkpoint marks = %+v, want input-a batch 1 and input-b batch 2",
+			gotMarks,
+		)
 	}
 
 	time.Sleep(250 * time.Millisecond)

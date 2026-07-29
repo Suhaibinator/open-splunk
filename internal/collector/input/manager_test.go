@@ -2,6 +2,7 @@ package input
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -217,6 +218,150 @@ func appendFileT(t testing.TB, path, content string) {
 	}
 }
 
+func newEmptyFingerprintTransitionTailer(
+	t *testing.T,
+) (*tailer, *fileCheckpointStore, FileIdentity) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "app.log")
+	writeFileT(t, path, "")
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open empty input: %v", err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatalf("stat empty input: %v", err)
+	}
+	emptyIdentity, err := identityFor(file, info, defaultFingerprintBytes)
+	if err != nil {
+		t.Fatalf("identify empty input: %v", err)
+	}
+	if emptyIdentity.FingerprintLength != 0 ||
+		emptyIdentity.Fingerprint != emptyFingerprintSHA256 {
+		t.Fatalf("empty identity = %+v, want canonical zero-length fingerprint", emptyIdentity)
+	}
+
+	store := newStore(t).(*fileCheckpointStore)
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Set(Checkpoint{
+		InputID: "in", Identity: emptyIdentity, Path: path,
+		Offset: 0, NextLineNumber: 1,
+	}); err != nil {
+		t.Fatalf("seed empty discovery checkpoint: %v", err)
+	}
+	manager := &manager{
+		cfg:         Config{InputID: "in"},
+		checkpoints: store,
+		fpBytes:     defaultFingerprintBytes,
+	}
+	tracked := &tailer{
+		m:               manager,
+		f:               file,
+		id:              emptyIdentity,
+		nextLineNumber:  1,
+		lineCursorKnown: true,
+	}
+	tracked.path.Store(&path)
+	appendFileT(t, path, "first\n")
+	return tracked, store, emptyIdentity
+}
+
+func assertEmptyFingerprintTransitionEstablished(
+	t *testing.T,
+	tracked *tailer,
+	store *fileCheckpointStore,
+	emptyIdentity FileIdentity,
+) {
+	t.Helper()
+	if tracked.offset != 0 {
+		t.Fatalf("tailer offset = %d, want zero before first emission", tracked.offset)
+	}
+	if tracked.id == emptyIdentity || tracked.id.FingerprintLength == 0 {
+		t.Fatalf("tailer identity = %+v, want established nonempty fingerprint", tracked.id)
+	}
+	checkpoint, found, err := store.Get("in", tracked.id)
+	if err != nil || !found {
+		t.Fatalf("get established checkpoint = (%+v, %t, %v)", checkpoint, found, err)
+	}
+	if checkpoint.Identity != tracked.id || checkpoint.Offset != 0 ||
+		checkpoint.NextLineNumber != 1 {
+		t.Fatalf("established checkpoint = %+v, want tailer identity at initial cursor", checkpoint)
+	}
+}
+
+func TestTailerEmptyFingerprintTransitionRetriesFingerprintFailure(t *testing.T) {
+	t.Parallel()
+	tracked, store, emptyIdentity := newEmptyFingerprintTransitionTailer(t)
+	injected := errors.New("injected fingerprint failure")
+	attempts := 0
+	tracked.m.identityFn = func(
+		file *os.File,
+		info os.FileInfo,
+		fingerprintBytes int,
+	) (FileIdentity, error) {
+		attempts++
+		if attempts == 1 {
+			return FileIdentity{}, injected
+		}
+		return identityFor(file, info, fingerprintBytes)
+	}
+
+	if size, trackable := tracked.trackGrowthAndTruncate(); trackable || size != 0 {
+		t.Fatalf("failed transition = size:%d trackable:%t, want 0/false", size, trackable)
+	}
+	if tracked.id != emptyIdentity || tracked.offset != 0 {
+		t.Fatalf("failed transition advanced tailer: identity=%+v offset=%d", tracked.id, tracked.offset)
+	}
+	if attempts != 1 {
+		t.Fatalf("identity attempts after failure = %d, want 1", attempts)
+	}
+
+	size, trackable := tracked.trackGrowthAndTruncate()
+	if !trackable || size != uint64(len("first\n")) {
+		t.Fatalf("retried transition = size:%d trackable:%t", size, trackable)
+	}
+	if attempts != 2 {
+		t.Fatalf("identity attempts after retry = %d, want 2", attempts)
+	}
+	assertEmptyFingerprintTransitionEstablished(t, tracked, store, emptyIdentity)
+}
+
+func TestTailerEmptyFingerprintTransitionRetriesCheckpointFailure(t *testing.T) {
+	t.Parallel()
+	tracked, store, emptyIdentity := newEmptyFingerprintTransitionTailer(t)
+	injected := errors.New("injected checkpoint failure")
+	originalPersist := store.persistSnapshot
+	persistAttempts := 0
+	store.persistSnapshot = func(checkpoints []Checkpoint) error {
+		persistAttempts++
+		if persistAttempts == 1 {
+			return injected
+		}
+		return originalPersist(checkpoints)
+	}
+
+	if size, trackable := tracked.trackGrowthAndTruncate(); trackable || size != 0 {
+		t.Fatalf("failed transition = size:%d trackable:%t, want 0/false", size, trackable)
+	}
+	if tracked.id != emptyIdentity || tracked.offset != 0 {
+		t.Fatalf("failed transition advanced tailer: identity=%+v offset=%d", tracked.id, tracked.offset)
+	}
+	checkpoint, found, err := store.Get("in", emptyIdentity)
+	if err != nil || !found || checkpoint.Identity != emptyIdentity || checkpoint.Offset != 0 {
+		t.Fatalf("checkpoint after failure = (%+v, %t, %v), want empty discovery", checkpoint, found, err)
+	}
+
+	size, trackable := tracked.trackGrowthAndTruncate()
+	if !trackable || size != uint64(len("first\n")) {
+		t.Fatalf("retried transition = size:%d trackable:%t", size, trackable)
+	}
+	if persistAttempts != 2 {
+		t.Fatalf("persistence attempts = %d, want 2", persistAttempts)
+	}
+	assertEmptyFingerprintTransitionEstablished(t, tracked, store, emptyIdentity)
+}
+
 // --- tests ----------------------------------------------------------------
 
 func TestNewManagerRejectsMultilineWithoutLineStartPattern(t *testing.T) {
@@ -231,6 +376,20 @@ func TestNewManagerRejectsMultilineWithoutLineStartPattern(t *testing.T) {
 	const want = "collector/input: multiline line-start pattern is required"
 	if err == nil || err.Error() != want {
 		t.Fatalf("NewManager error = %v, want %q", err, want)
+	}
+}
+
+func TestNewManagerRejectsFingerprintLimitAboveAbsoluteMaximum(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	t.Cleanup(func() { _ = store.Close() })
+	_, err := NewManager(Config{
+		InputID:          "in",
+		Include:          []string{filepath.Join(t.TempDir(), "*.log")},
+		FingerprintBytes: maximumFingerprintBytes + 1,
+	}, store)
+	if err == nil {
+		t.Fatal("NewManager accepted fingerprint limit above absolute maximum")
 	}
 }
 
@@ -295,7 +454,7 @@ func TestManagerStartAtEnd(t *testing.T) {
 	// EOF. Wait for the exact discovery checkpoint so the append is
 	// unambiguously part of the monitored stream.
 	waitFor(t, "start-at-end discovery checkpoint", func() bool {
-		checkpoint, ok, getErr := h.store.Get(identity)
+		checkpoint, ok, getErr := h.store.Get("in", identity)
 		return getErr == nil && ok && checkpoint.Offset == uint64(len(initial))
 	})
 	appendFileT(t, p, "new1\n")
@@ -338,7 +497,8 @@ func TestManagerResumeFromCheckpoint(t *testing.T) {
 	}
 	// Checkpoint after "first\n" (6 bytes): resume should skip it.
 	if err := store.Set(Checkpoint{
-		Identity: id, Path: p, Offset: 6, LineNumber: 1, NextLineNumber: 2,
+		InputID: "in", Identity: id, Path: p,
+		Offset: 6, LineNumber: 1, NextLineNumber: 2,
 	}); err != nil {
 		t.Fatalf("seed checkpoint: %v", err)
 	}
@@ -378,7 +538,8 @@ func TestManagerKeepsLegacyMultilineCheckpointLineCursorUnknown(t *testing.T) {
 	// Checkpoints written before NextLineNumber existed retain only the first
 	// physical line of the last acknowledged logical event.
 	if err := store.Set(Checkpoint{
-		Identity: id, Path: p, Offset: uint64(len(first)), LineNumber: 1,
+		InputID: "in", Identity: id, Path: p,
+		Offset: uint64(len(first)), LineNumber: 1,
 	}); err != nil {
 		t.Fatalf("seed legacy checkpoint: %v", err)
 	}
@@ -406,7 +567,7 @@ func TestManagerKeepsLegacyMultilineCheckpointLineCursorUnknown(t *testing.T) {
 					event.Source.NextLineNumber,
 				)
 			}
-			checkpoint, ok, err := reopened.Get(id)
+			checkpoint, ok, err := reopened.Get("in", id)
 			if err != nil || !ok || checkpoint.NextLineNumber != 0 {
 				t.Fatalf(
 					"legacy checkpoint = %+v (ok=%t err=%v), want unknown next line",
@@ -435,6 +596,7 @@ func TestManagerBatchesLegacyCheckpointCursorUpgrades(t *testing.T) {
 			t.Fatalf("identity %s: %v", path, err)
 		}
 		legacy = append(legacy, Checkpoint{
+			InputID:    "in",
 			Identity:   id,
 			Path:       path,
 			Offset:     uint64(len("first\n")),
@@ -458,7 +620,7 @@ func TestManagerBatchesLegacyCheckpointCursorUpgrades(t *testing.T) {
 	}, store)
 	waitFor(t, "legacy cursors persisted", func() bool {
 		for _, checkpoint := range legacy {
-			got, ok, err := store.Get(checkpoint.Identity)
+			got, ok, err := store.Get("in", checkpoint.Identity)
 			if err != nil || !ok || got.NextLineNumber != 2 {
 				return false
 			}
@@ -478,6 +640,7 @@ func TestCheckpointNextLineRejectsRegressingOrExhaustedCursor(t *testing.T) {
 	for _, checkpoint := range []Checkpoint{
 		{LineNumber: 4, NextLineNumber: 4},
 		{LineNumber: 4, NextLineNumber: 3},
+		{LineNumber: 0, NextLineNumber: 2},
 		{LineNumber: ^uint64(0) - 1, NextLineNumber: ^uint64(0)},
 		{LineNumber: ^uint64(0) - 1},
 		{LineNumber: ^uint64(0)},
@@ -544,7 +707,8 @@ func TestManagerStartAtEndResumesFromStaleCheckpointAfterReopen(t *testing.T) {
 		t.Fatalf("identity: %v", err)
 	}
 	if err := store.Set(Checkpoint{
-		Identity: id, Path: p, Offset: uint64(len("first\n")), LineNumber: 1,
+		InputID: "in", Identity: id, Path: p,
+		Offset: uint64(len("first\n")), LineNumber: 1,
 		UpdatedAt: time.Now().UTC().Add(-staleCheckpointAge),
 	}); err != nil {
 		t.Fatalf("seed stale checkpoint: %v", err)
@@ -699,6 +863,7 @@ func newTrackedTailerForTest(
 	store := newStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	manager := &manager{
+		cfg:         Config{InputID: "in"},
 		checkpoints: store,
 		fpBytes:     defaultFingerprintBytes,
 		events:      make(chan RawEvent, 8),

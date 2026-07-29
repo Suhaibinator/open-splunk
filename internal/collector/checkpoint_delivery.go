@@ -42,8 +42,8 @@ func sourceCheckpointsFromWAL(
 	if store == nil {
 		return nil, errors.New("collector: checkpoint store is required")
 	}
-	marks := make(map[string]checkpointMark)
-	discovery := make(map[string]checkpointDiscovery)
+	marks := make(map[inputFileKey]checkpointMark)
+	discovery := make(map[inputFileKey]checkpointDiscovery)
 	for _, sourceMark := range sourceMarks {
 		mark, obsolete, err := checkpointMarkFromSource(store, discovery, sourceMark)
 		if err != nil {
@@ -55,7 +55,7 @@ func sourceCheckpointsFromWAL(
 		if obsolete {
 			continue
 		}
-		key := mark.identity.TrackingKey()
+		key := inputFileTrackingKey(mark.inputID, mark.identity)
 		current, ok := marks[key]
 		if ok && mark.identity.Generation == current.identity.Generation {
 			if mark.identity.String() != current.identity.String() {
@@ -98,7 +98,7 @@ func sourceCheckpointsFromWAL(
 	ordered := make([]input.Checkpoint, 0, len(marks))
 	for _, mark := range marks {
 		ordered = append(ordered, input.Checkpoint{
-			Identity: mark.identity, Path: mark.path,
+			InputID: mark.inputID, Identity: mark.identity, Path: mark.path,
 			Offset: mark.offset, LineNumber: mark.lineNumber,
 			NextLineNumber: mark.nextLineNumber,
 		})
@@ -129,11 +129,14 @@ func checkpointLineCursorsConflict(
 // this is a delayed pre-copytruncate batch, which is safely obsolete.
 func checkpointMarkFromSource(
 	store input.CheckpointStore,
-	discovery map[string]checkpointDiscovery,
+	discovery map[inputFileKey]checkpointDiscovery,
 	source wal.SourceCheckpointMark,
 ) (mark checkpointMark, obsolete bool, err error) {
 	if source.BatchSequence == 0 {
 		return checkpointMark{}, false, errors.New("source mark has invalid batch sequence")
+	}
+	if source.InputID == "" {
+		return checkpointMark{}, false, errors.New("source mark has empty input ID")
 	}
 	if source.ConflictingMetadata {
 		return checkpointMark{}, false, errors.New("file origin has conflicting metadata")
@@ -152,10 +155,10 @@ func checkpointMarkFromSource(
 		return checkpointMark{}, false, errors.New("file origin has invalid next_line_number")
 	}
 
-	key := identity.TrackingKey()
+	key := inputFileTrackingKey(source.InputID, identity)
 	entry, cached := discovery[key]
 	if !cached {
-		cp, ok, getErr := store.Get(identity)
+		cp, ok, getErr := store.Get(source.InputID, identity)
 		if getErr != nil {
 			return checkpointMark{}, false, fmt.Errorf("read discovery checkpoint: %w", getErr)
 		}
@@ -196,7 +199,7 @@ func checkpointMarkFromSource(
 	}
 
 	return checkpointMark{
-		identity: identity, path: path,
+		inputID: source.InputID, identity: identity, path: path,
 		offset: source.EndOffset, lineNumber: source.LineNumber,
 		nextLineNumber: source.NextLineNumber,
 	}, false, nil

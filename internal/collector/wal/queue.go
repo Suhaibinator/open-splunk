@@ -603,7 +603,8 @@ func (q *queue) prepareAckPlanLocked(batchSequence uint64, cumulative bool) (ack
 	}
 	// Size the immutable header snapshot exactly. Geometric append growth for a
 	// 100K-batch prefix otherwise allocates and copies tens of megabytes while
-	// holding q.mu even when the final checkpoint set coalesces to one identity.
+	// holding q.mu even when the final checkpoint set coalesces to one
+	// input/file key.
 	plan.markGroups = make([]ackMarkGroup, 0, markGroupCount)
 	for _, d := range q.unacked[:prefixLength] {
 		if len(d.sourceMarks) > 0 {
@@ -615,7 +616,7 @@ func (q *queue) prepareAckPlanLocked(batchSequence uint64, cumulative bool) (ack
 	return plan, nil
 }
 
-// aggregateAckPlan performs the potentially expensive identity hash
+// aggregateAckPlan performs the potentially expensive input/file-key hash
 // aggregation and deterministic sort without holding the queue mutex. The mark
 // arrays are immutable after Append/recovery, so a concurrent ack may discard
 // its descriptor without invalidating this snapshot.
@@ -640,23 +641,33 @@ func aggregateAckPlan(plan ackPlan) AckPreview {
 }
 
 type sourceMarkAggregator struct {
-	byIdentity map[string]SourceCheckpointMark
-	failure    SourceCheckpointMark
-	failed     bool
+	bySource map[sourceMarkKey]SourceCheckpointMark
+	failure  SourceCheckpointMark
+	failed   bool
+}
+
+// sourceMarkKey keeps inputs independent even when they intentionally or
+// accidentally observe the same physical file generation. A struct avoids the
+// delimiter collisions possible with concatenated string keys.
+type sourceMarkKey struct {
+	InputID      string
+	FileIdentity string
 }
 
 func (aggregator *sourceMarkAggregator) add(mark SourceCheckpointMark) bool {
 	// Preserve the first malformed mark verbatim so the daemon fails closed
 	// without retaining every malformed event in a hostile WAL.
-	if mark.FileIdentity == "" || !mark.HasEndOffset || mark.ConflictingMetadata {
+	if mark.InputID == "" || mark.FileIdentity == "" ||
+		!mark.HasEndOffset || mark.ConflictingMetadata {
 		aggregator.failure = mark
 		aggregator.failed = true
 		return false
 	}
-	if aggregator.byIdentity == nil {
-		aggregator.byIdentity = make(map[string]SourceCheckpointMark)
+	if aggregator.bySource == nil {
+		aggregator.bySource = make(map[sourceMarkKey]SourceCheckpointMark)
 	}
-	current, ok := aggregator.byIdentity[mark.FileIdentity]
+	key := sourceMarkKey{InputID: mark.InputID, FileIdentity: mark.FileIdentity}
+	current, ok := aggregator.bySource[key]
 	if ok && current.HasFingerprintLength && mark.HasFingerprintLength &&
 		current.FingerprintLength != mark.FingerprintLength {
 		mark.ConflictingMetadata = true
@@ -675,7 +686,7 @@ func (aggregator *sourceMarkAggregator) add(mark SourceCheckpointMark) bool {
 			(mark.HasNextLineNumber && !current.HasNextLineNumber ||
 				mark.HasNextLineNumber == current.HasNextLineNumber &&
 					mark.BatchSequence >= current.BatchSequence)) {
-		aggregator.byIdentity[mark.FileIdentity] = mark
+		aggregator.bySource[key] = mark
 	}
 	return true
 }
@@ -684,31 +695,33 @@ func (aggregator *sourceMarkAggregator) marks() []SourceCheckpointMark {
 	if aggregator.failed {
 		return []SourceCheckpointMark{aggregator.failure}
 	}
-	marks := make([]SourceCheckpointMark, 0, len(aggregator.byIdentity))
-	for _, mark := range aggregator.byIdentity {
+	marks := make([]SourceCheckpointMark, 0, len(aggregator.bySource))
+	for _, mark := range aggregator.bySource {
 		marks = append(marks, mark)
 	}
 	sort.Slice(marks, func(i, j int) bool {
-		return marks[i].FileIdentity < marks[j].FileIdentity
+		return sourceCheckpointMarkLess(marks[i], marks[j])
 	})
 	return marks
 }
 
-// checkpointMarksForBatch extracts a compact high-water mark per exact file
-// identity while the EventBatch is already resident (Append or recovery).
-// Invalid file origins retain one representative mark so acknowledgment later
-// fails closed instead of silently dropping source coordinates.
+// checkpointMarksForBatch extracts a compact high-water mark per input and
+// exact file identity while the EventBatch is already resident (Append or
+// recovery). Invalid file origins retain one representative mark so
+// acknowledgment later fails closed instead of silently dropping source
+// coordinates.
 func checkpointMarksForBatch(batchSequence uint64, events []*opensplunkv1.LogEvent) []SourceCheckpointMark {
-	byIdentity := make(map[string]SourceCheckpointMark)
+	bySource := make(map[sourceMarkKey]SourceCheckpointMark)
 	var invalid *SourceCheckpointMark
 	for eventIndex, event := range events {
-		if event == nil || event.GetOrigin() == nil || event.GetOrigin().FileIdentity == nil {
+		if event == nil || event.GetOrigin() == nil {
 			continue
 		}
 		origin := event.GetOrigin()
 		mark := SourceCheckpointMark{
 			BatchSequence:        batchSequence,
 			EventIndex:           uint32(eventIndex),
+			InputID:              origin.GetInputId(),
 			FileIdentity:         origin.GetFileIdentity(),
 			SourcePath:           origin.GetSourcePath(),
 			EndOffset:            origin.GetEndOffset(),
@@ -720,48 +733,56 @@ func checkpointMarksForBatch(batchSequence uint64, events []*opensplunkv1.LogEve
 			HasNextLineNumber:    origin.NextLineNumber != nil,
 			HasFingerprintLength: origin.FileFingerprintLength != nil,
 		}
-		if mark.FileIdentity == "" || !mark.HasEndOffset {
+		if mark.InputID == "" || mark.FileIdentity == "" || !mark.HasEndOffset {
 			if invalid == nil {
 				invalidMark := mark
 				invalid = &invalidMark
 			}
 			continue
 		}
-		current, ok := byIdentity[mark.FileIdentity]
+		key := sourceMarkKey{InputID: mark.InputID, FileIdentity: mark.FileIdentity}
+		current, ok := bySource[key]
 		if ok && current.ConflictingMetadata {
 			continue
 		}
 		if ok && current.HasFingerprintLength && mark.HasFingerprintLength &&
 			current.FingerprintLength != mark.FingerprintLength {
 			mark.ConflictingMetadata = true
-			byIdentity[mark.FileIdentity] = mark
+			bySource[key] = mark
 			continue
 		}
 		if ok && sourceLineCursorsConflict(current, mark) {
 			mark.ConflictingMetadata = true
-			byIdentity[mark.FileIdentity] = mark
+			bySource[key] = mark
 			continue
 		}
 		if !ok || mark.EndOffset > current.EndOffset ||
 			(mark.EndOffset == current.EndOffset &&
 				(mark.HasNextLineNumber || !current.HasNextLineNumber)) {
-			byIdentity[mark.FileIdentity] = mark
+			bySource[key] = mark
 		}
 	}
-	marks := make([]SourceCheckpointMark, 0, len(byIdentity)+1)
+	marks := make([]SourceCheckpointMark, 0, len(bySource)+1)
 	if invalid != nil {
 		marks = append(marks, *invalid)
 	}
-	for _, mark := range byIdentity {
+	for _, mark := range bySource {
 		marks = append(marks, mark)
 	}
 	sort.Slice(marks, func(i, j int) bool {
-		if marks[i].FileIdentity == marks[j].FileIdentity {
-			return marks[i].EventIndex < marks[j].EventIndex
-		}
-		return marks[i].FileIdentity < marks[j].FileIdentity
+		return sourceCheckpointMarkLess(marks[i], marks[j])
 	})
 	return marks
+}
+
+func sourceCheckpointMarkLess(left, right SourceCheckpointMark) bool {
+	if left.InputID != right.InputID {
+		return left.InputID < right.InputID
+	}
+	if left.FileIdentity != right.FileIdentity {
+		return left.FileIdentity < right.FileIdentity
+	}
+	return left.EventIndex < right.EventIndex
 }
 
 // sourceLineCursorsConflict reports metadata that cannot describe one

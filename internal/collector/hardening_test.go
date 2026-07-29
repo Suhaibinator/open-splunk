@@ -69,14 +69,18 @@ func TestDaemonOversizedEventDeadLettered(t *testing.T) {
 		log: discardLogger(), now: time.Now, queue: q, checkpoints: cps, deadLetter: sink,
 		batchMaxEvents: 1, batchMaxBytes: 1 << 20, batchLinger: time.Hour,
 		queueFullRetry: 5 * time.Millisecond, shutdownFlushGrace: time.Second,
-		lastOffsets: make(map[string]uint64),
+		lastOffsets: make(map[inputFileKey]uint64),
 	}
-	identity := input.FileIdentity{Device: 1, Inode: 2, Generation: 1, Fingerprint: "fp"}
+	identity := input.FileIdentity{
+		Device: 1, Inode: 2, Generation: 1,
+		Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 64,
+	}
+	const inputID = "oversized-input"
 
 	processed := make(chan processedEvent, 1)
 	processed <- processedEvent{
-		event:    &opensplunkv1.LogEvent{EventId: "e1", IndexName: "main"},
-		identity: identity, path: "/x.log", endOffset: 42,
+		event:   &opensplunkv1.LogEvent{EventId: "e1", IndexName: "main"},
+		inputID: inputID, identity: identity, path: "/x.log", endOffset: 42,
 		lineNumber: 1, nextLineNumber: 3, size: 10,
 	}
 	close(processed)
@@ -96,7 +100,7 @@ func TestDaemonOversizedEventDeadLettered(t *testing.T) {
 		t.Fatalf("OversizedDrops = %d, want 1", got)
 	}
 	// The checkpoint must advance past the dropped event so it does not strand.
-	if cp, ok, _ := cps.Get(identity); !ok || cp.Offset != 42 ||
+	if cp, ok, _ := cps.Get(inputID, identity); !ok || cp.Offset != 42 ||
 		cp.LineNumber != 1 || cp.NextLineNumber != 3 {
 		t.Fatalf("checkpoint after oversized drop = %+v (ok=%v), want offset 42 lines [1,3)", cp, ok)
 	}
@@ -127,7 +131,7 @@ func TestFlushShutdownDoesNotBusySpin(t *testing.T) {
 	d := &Daemon{
 		log: discardLogger(), now: time.Now, queue: q,
 		queueFullRetry: 5 * time.Millisecond, shutdownFlushGrace: 50 * time.Millisecond,
-		lastOffsets: make(map[string]uint64),
+		lastOffsets: make(map[inputFileKey]uint64),
 	}
 	b := &pendingBatch{}
 	b.add(processedEvent{

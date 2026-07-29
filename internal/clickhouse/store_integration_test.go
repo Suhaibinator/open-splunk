@@ -154,7 +154,7 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 		testAmbiguousCommittedInsertRecovery(t, ctx, config, queryConnection, indexTime)
 	})
 	t.Run("legacy v3 unaligned retention replays through native encoder", func(t *testing.T) {
-		testLegacyUnalignedRetentionNativeReplay(t, ctx, store.connection, queryConnection, indexTime)
+		testLegacyUnalignedRetentionNativeReplay(t, ctx, store.connection, queryConnection)
 	})
 	var count uint64
 	if err := queryConnection.QueryRow(ctx, "SELECT count() FROM open_splunk.events WHERE event_id = ?", "native-event").Scan(&count); err != nil {
@@ -276,7 +276,6 @@ func testLegacyUnalignedRetentionNativeReplay(
 	ctx context.Context,
 	nativeConnection storeConnection,
 	queryConnection clickhousedriver.Conn,
-	indexTime time.Time,
 ) {
 	t.Helper()
 
@@ -289,7 +288,10 @@ func testLegacyUnalignedRetentionNativeReplay(
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacyIndexTime := indexTime.Add(2 * time.Second)
+	// The production TTL is evaluated against ClickHouse wall time. This
+	// fixture intentionally retains for only 1.5ms, so keep its event in the
+	// near future or the TTL worker can delete it before the assertion.
+	legacyIndexTime := time.Now().UTC().Add(time.Hour)
 	event := testStoredEvent("native-legacy-retention", "main", legacyIndexTime)
 	event.CollectorID = "native-legacy-retention-collector"
 	event.BatchID = "native-legacy-retention-batch"

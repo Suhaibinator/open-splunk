@@ -20,6 +20,7 @@ func BenchmarkPrepareAckThrough100KCompactMarks(b *testing.B) {
 			seq: sequence,
 			sourceMarks: []SourceCheckpointMark{{
 				BatchSequence:        sequence,
+				InputID:              "input",
 				FileIdentity:         identity,
 				SourcePath:           "/logs/app-" + strconv.Itoa(index%8) + ".log",
 				EndOffset:            sequence * 100,
@@ -46,8 +47,8 @@ func BenchmarkPrepareAckThrough100KCompactMarks(b *testing.B) {
 
 // BenchmarkPrepareAckThrough100KUniqueMarks is the adversarial counterpart to
 // BenchmarkPrepareAckThrough100KCompactMarks. Every descriptor has a distinct
-// exact file-generation identity, so the preview must retain and sort all
-// 100,000 marks instead of repeatedly replacing one map entry.
+// input/file-generation key, so the preview must retain and sort all 100,000
+// marks instead of repeatedly replacing one map entry.
 func BenchmarkPrepareAckThrough100KUniqueMarks(b *testing.B) {
 	const batches = 100_000
 	const fingerprint = "abababababababababababababababababababababababababababababababab"
@@ -64,6 +65,7 @@ func BenchmarkPrepareAckThrough100KUniqueMarks(b *testing.B) {
 			seq: sequence,
 			sourceMarks: []SourceCheckpointMark{{
 				BatchSequence:        sequence,
+				InputID:              "input",
 				FileIdentity:         identity,
 				SourcePath:           "/logs/app.log",
 				EndOffset:            sequence * 100,

@@ -88,8 +88,9 @@ type RawEvent struct {
 	Source SourceRef
 }
 
-// Checkpoint is the persisted read position for one file identity.
+// Checkpoint is the persisted read position for one input and file identity.
 type Checkpoint struct {
+	InputID        string
 	Identity       FileIdentity
 	Path           string
 	Offset         uint64
@@ -104,22 +105,22 @@ type Checkpoint struct {
 // manager-originated metadata writes at those coordinates until terminal
 // delivery advances the underlying durable checkpoint.
 type ManagerCheckpointStore interface {
-	// Get returns the checkpoint for id and whether one exists.
-	Get(id FileIdentity) (Checkpoint, bool, error)
+	// Get returns the checkpoint for inputID and id and whether one exists.
+	Get(inputID string, id FileIdentity) (Checkpoint, bool, error)
 	// Set records one discovery, generation, or compatibility-cursor update.
 	Set(cp Checkpoint) error
 	// SetMany records a batch of compatibility-cursor updates.
 	SetMany(checkpoints []Checkpoint) error
 }
 
-// CheckpointStore persists per-file read offsets durably. Set and SetMany must
-// be atomic: a crash at any point leaves either the old or the new checkpoint
-// snapshot, never a torn or partially applied one. Implementations must be safe
-// for concurrent use.
+// CheckpointStore persists per-input, per-file read offsets durably. Set and
+// SetMany must be atomic: a crash at any point leaves either the old or the new
+// checkpoint snapshot, never a torn or partially applied one. Implementations
+// must be safe for concurrent use.
 type CheckpointStore interface {
 	ManagerCheckpointStore
-	// Delete removes the checkpoint for id, if any.
-	Delete(id FileIdentity) error
+	// Delete removes the checkpoint for inputID and id, if any.
+	Delete(inputID string, id FileIdentity) error
 	// List returns all persisted checkpoints (used for reconciliation).
 	List() ([]Checkpoint, error)
 	// Close flushes and releases the store.

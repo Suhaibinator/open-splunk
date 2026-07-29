@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const checkpointTestInputID = "input-a"
+
 func TestCheckpointStoreSetGetReopen(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -17,9 +19,10 @@ func TestCheckpointStoreSetGetReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	id := FileIdentity{Device: 7, Inode: 42, Fingerprint: "deadbeef"}
+	id := canonicalIdentityForTest(7, 42, 1, "ab", 64)
 	// Use a recent, truncated timestamp so JSON round-tripping is exact.
 	cp := Checkpoint{
+		InputID:  checkpointTestInputID,
 		Identity: id, Path: "/var/log/app.log", Offset: 4096,
 		LineNumber: 12, NextLineNumber: 15,
 		UpdatedAt: time.Now().UTC().Add(-time.Minute).Truncate(time.Second),
@@ -38,7 +41,7 @@ func TestCheckpointStoreSetGetReopen(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store2.Close() })
 
-	got, ok, err := store2.Get(id)
+	got, ok, err := store2.Get(checkpointTestInputID, id)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -62,21 +65,30 @@ func TestCheckpointStoreUsesPhysicalKeyAndFencesOldGeneration(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	old := FileIdentity{Device: 7, Inode: 9, Generation: 1, Fingerprint: "old"}
-	newer := FileIdentity{Device: 7, Inode: 9, Generation: 2, Fingerprint: "new"}
-	if err := store.Set(Checkpoint{Identity: old, Offset: 900}); err != nil {
+	old := canonicalIdentityForTest(7, 9, 1, "ab", 64)
+	newer := canonicalIdentityForTest(7, 9, 2, "cd", 64)
+	if err := store.Set(Checkpoint{
+		InputID: checkpointTestInputID, Identity: old,
+		Path: "/logs/app.log", Offset: 900,
+	}); err != nil {
 		t.Fatalf("set old: %v", err)
 	}
-	if err := store.Set(Checkpoint{Identity: newer, Offset: 20}); err != nil {
+	if err := store.Set(Checkpoint{
+		InputID: checkpointTestInputID, Identity: newer,
+		Path: "/logs/app.log", Offset: 20,
+	}); err != nil {
 		t.Fatalf("set new: %v", err)
 	}
 	// A delayed checkpoint from an old-generation batch cannot restore 900.
-	if err := store.Set(Checkpoint{Identity: old, Offset: 950}); err != nil {
+	if err := store.Set(Checkpoint{
+		InputID: checkpointTestInputID, Identity: old,
+		Path: "/logs/app.log", Offset: 950,
+	}); err != nil {
 		t.Fatalf("set stale: %v", err)
 	}
 	lookup := newer
 	lookup.Fingerprint = "fingerprint-computed-after-growth"
-	cp, ok, err := store.Get(lookup)
+	cp, ok, err := store.Get(checkpointTestInputID, lookup)
 	if err != nil || !ok {
 		t.Fatalf("get by stable key: ok=%v err=%v", ok, err)
 	}
@@ -101,16 +113,16 @@ func TestCheckpointStoreSetManyPersistsOneDeterministicSnapshot(t *testing.T) {
 		return originalPersist(checkpoints)
 	}
 
-	first := FileIdentity{Device: 1, Inode: 1, Generation: 1, Fingerprint: "first"}
-	secondV1 := FileIdentity{Device: 1, Inode: 2, Generation: 1, Fingerprint: "second-v1"}
-	secondV2 := FileIdentity{Device: 1, Inode: 2, Generation: 2, Fingerprint: "second-v2"}
+	first := canonicalIdentityForTest(1, 1, 1, "ab", 64)
+	secondV1 := canonicalIdentityForTest(1, 2, 1, "cd", 64)
+	secondV2 := canonicalIdentityForTest(1, 2, 2, "ef", 64)
 	err = storeAPI.SetMany([]Checkpoint{
-		{Identity: secondV1, Offset: 500, LineNumber: 5},
-		{Identity: first, Offset: 100, LineNumber: 1},
-		{Identity: secondV2, Offset: 20, LineNumber: 6},
-		{Identity: secondV1, Offset: 900, LineNumber: 9}, // stale after generation 2
-		{Identity: secondV2, Offset: 25, LineNumber: 7},
-		{Identity: secondV2, Offset: 15, LineNumber: 6}, // regressing in generation 2
+		{InputID: checkpointTestInputID, Identity: secondV1, Path: "/logs/second.log", Offset: 500, LineNumber: 5},
+		{InputID: checkpointTestInputID, Identity: first, Path: "/logs/first.log", Offset: 100, LineNumber: 1},
+		{InputID: checkpointTestInputID, Identity: secondV2, Path: "/logs/second.log", Offset: 20, LineNumber: 6},
+		{InputID: checkpointTestInputID, Identity: secondV1, Path: "/logs/second.log", Offset: 900, LineNumber: 9}, // stale after generation 2
+		{InputID: checkpointTestInputID, Identity: secondV2, Path: "/logs/second.log", Offset: 25, LineNumber: 7},
+		{InputID: checkpointTestInputID, Identity: secondV2, Path: "/logs/second.log", Offset: 15, LineNumber: 6}, // regressing in generation 2
 	})
 	if err != nil {
 		t.Fatalf("SetMany: %v", err)
@@ -142,8 +154,9 @@ func TestCheckpointStoreSetManyNoEffectiveAdvanceDoesNotPersist(t *testing.T) {
 	t.Cleanup(func() { _ = storeAPI.Close() })
 	store := storeAPI.(*fileCheckpointStore)
 
-	currentID := FileIdentity{Device: 7, Inode: 9, Generation: 3, Fingerprint: "current"}
+	currentID := canonicalIdentityForTest(7, 9, 3, "ab", 64)
 	current := Checkpoint{
+		InputID:    checkpointTestInputID,
 		Identity:   currentID,
 		Path:       "/logs/current.log",
 		Offset:     100,
@@ -161,16 +174,19 @@ func TestCheckpointStoreSetManyNoEffectiveAdvanceDoesNotPersist(t *testing.T) {
 	}
 	err = storeAPI.SetMany([]Checkpoint{
 		{
+			InputID:    checkpointTestInputID,
 			Identity:   currentID,
 			Path:       current.Path,
 			Offset:     100,
 			LineNumber: current.LineNumber,
 		},
 		{
-			Identity: FileIdentity{Device: 7, Inode: 9, Generation: 2, Fingerprint: "old"},
+			InputID:  checkpointTestInputID,
+			Identity: canonicalIdentityForTest(7, 9, 2, "cd", 64),
+			Path:     current.Path,
 			Offset:   1_000,
 		},
-		{Identity: currentID, Offset: 99},
+		{InputID: checkpointTestInputID, Identity: currentID, Path: current.Path, Offset: 99},
 	})
 	if err != nil {
 		t.Fatalf("SetMany no-op: %v", err)
@@ -181,7 +197,7 @@ func TestCheckpointStoreSetManyNoEffectiveAdvanceDoesNotPersist(t *testing.T) {
 	if persistCalls != 0 {
 		t.Fatalf("persist calls = %d, want 0", persistCalls)
 	}
-	got, ok, err := storeAPI.Get(currentID)
+	got, ok, err := storeAPI.Get(checkpointTestInputID, currentID)
 	if err != nil || !ok {
 		t.Fatalf("Get current: ok=%v err=%v", ok, err)
 	}
@@ -199,22 +215,66 @@ func TestCheckpointStoreRejectsConflictingNextLineAtSameOffset(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	identity := FileIdentity{Device: 7, Inode: 9, Generation: 3, Fingerprint: "current"}
+	identity := canonicalIdentityForTest(7, 9, 3, "ab", 64)
 	if err := store.Set(Checkpoint{
+		InputID:  checkpointTestInputID,
 		Identity: identity, Path: "/logs/current.log", Offset: 100,
 		LineNumber: 10, NextLineNumber: 11,
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := store.Set(Checkpoint{
+		InputID:  checkpointTestInputID,
 		Identity: identity, Path: "/logs/current.log", Offset: 100,
 		LineNumber: 10, NextLineNumber: 12,
 	}); err == nil || !strings.Contains(err.Error(), "conflicting next line number") {
 		t.Fatalf("conflicting same-offset Set error = %v", err)
 	}
-	got, ok, err := store.Get(identity)
+	got, ok, err := store.Get(checkpointTestInputID, identity)
 	if err != nil || !ok || got.NextLineNumber != 11 {
 		t.Fatalf("checkpoint after rejected conflict = %+v (ok=%t err=%v)", got, ok, err)
+	}
+}
+
+func TestCheckpointStoreRejectsConflictingLineAtSameOffsetAndReopens(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store, err := NewCheckpointStore(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	identity := canonicalIdentityForTest(7, 9, 3, "ab", 64)
+	current := Checkpoint{
+		InputID:  checkpointTestInputID,
+		Identity: identity, Path: "/logs/current.log", Offset: 100,
+		LineNumber: 10, NextLineNumber: 11,
+	}
+	if err := store.Set(current); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	conflict := current
+	conflict.LineNumber = 100
+	conflict.NextLineNumber = 0
+	if err := store.Set(conflict); err == nil ||
+		!strings.Contains(err.Error(), "conflicting line number") {
+		t.Fatalf("conflicting same-offset Set error = %v", err)
+	}
+	got, ok, err := store.Get(checkpointTestInputID, identity)
+	if err != nil || !ok || !checkpointPositionEqual(got, current) {
+		t.Fatalf("checkpoint after rejected conflict = %+v (ok=%t err=%v)", got, ok, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := NewCheckpointStore(dir)
+	if err != nil {
+		t.Fatalf("reopen after rejected conflict: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	got, ok, err = reopened.Get(checkpointTestInputID, identity)
+	if err != nil || !ok || !checkpointPositionEqual(got, current) {
+		t.Fatalf("reopened checkpoint = %+v (ok=%t err=%v), want %+v", got, ok, err, current)
 	}
 }
 
@@ -225,8 +285,9 @@ func TestCheckpointStoreRejectsRegressingNextLineAtGreaterOffset(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	identity := FileIdentity{Device: 7, Inode: 9, Generation: 3, Fingerprint: "current"}
+	identity := canonicalIdentityForTest(7, 9, 3, "ab", 64)
 	current := Checkpoint{
+		InputID:  checkpointTestInputID,
 		Identity: identity, Path: "/logs/current.log", Offset: 100,
 		LineNumber: 100, NextLineNumber: 101,
 	}
@@ -234,12 +295,13 @@ func TestCheckpointStoreRejectsRegressingNextLineAtGreaterOffset(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := store.Set(Checkpoint{
+		InputID:  checkpointTestInputID,
 		Identity: identity, Path: current.Path, Offset: 200,
 		LineNumber: 1, NextLineNumber: 2,
 	}); err == nil || !strings.Contains(err.Error(), "does not advance") {
 		t.Fatalf("regressing higher-offset Set error = %v", err)
 	}
-	got, ok, err := store.Get(identity)
+	got, ok, err := store.Get(checkpointTestInputID, identity)
 	if err != nil || !ok || !checkpointPositionEqual(got, current) {
 		t.Fatalf("checkpoint after rejected regression = %+v (ok=%t err=%v)", got, ok, err)
 	}
@@ -252,12 +314,21 @@ func TestCheckpointStoreSetManyRefreshesIdentityMetadataAtEqualOffset(t *testing
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	empty := FileIdentity{Device: 4, Inode: 8, Generation: 1, Fingerprint: "empty", FingerprintLength: 0}
-	grown := FileIdentity{Device: 4, Inode: 8, Generation: 1, Fingerprint: "grown", FingerprintLength: 64}
-	if err := store.Set(Checkpoint{Identity: empty, Path: "/logs/app.log", Offset: 0}); err != nil {
+	empty := FileIdentity{
+		Device: 4, Inode: 8, Generation: 1,
+		Fingerprint: emptyFingerprintSHA256,
+	}
+	grown := canonicalIdentityForTest(4, 8, 1, "ab", 64)
+	if err := store.Set(Checkpoint{
+		InputID: checkpointTestInputID, Identity: empty,
+		Path: "/logs/app.log", Offset: 0,
+	}); err != nil {
 		t.Fatalf("seed empty identity: %v", err)
 	}
-	if err := store.SetMany([]Checkpoint{{Identity: grown, Path: "/logs/app.log", Offset: 0}}); err != nil {
+	if err := store.SetMany([]Checkpoint{{
+		InputID: checkpointTestInputID, Identity: grown,
+		Path: "/logs/app.log", Offset: 0,
+	}}); err != nil {
 		t.Fatalf("refresh identity: %v", err)
 	}
 	if err := store.Close(); err != nil {
@@ -269,7 +340,7 @@ func TestCheckpointStoreSetManyRefreshesIdentityMetadataAtEqualOffset(t *testing
 		t.Fatalf("reopen: %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	cp, ok, err := reopened.Get(grown)
+	cp, ok, err := reopened.Get(checkpointTestInputID, grown)
 	if err != nil || !ok {
 		t.Fatalf("Get grown: ok=%v err=%v", ok, err)
 	}
@@ -288,8 +359,9 @@ func TestCheckpointStoreSetManyPersistenceFailureRollsBackMemory(t *testing.T) {
 	t.Cleanup(func() { _ = storeAPI.Close() })
 	store := storeAPI.(*fileCheckpointStore)
 
-	existingID := FileIdentity{Device: 1, Inode: 1, Generation: 1, Fingerprint: "existing"}
+	existingID := canonicalIdentityForTest(1, 1, 1, "ab", 64)
 	existing := Checkpoint{
+		InputID:    checkpointTestInputID,
 		Identity:   existingID,
 		Path:       "/logs/existing.log",
 		Offset:     10,
@@ -306,10 +378,10 @@ func TestCheckpointStoreSetManyPersistenceFailureRollsBackMemory(t *testing.T) {
 		persistCalls++
 		return persistErr
 	}
-	newID := FileIdentity{Device: 1, Inode: 2, Generation: 1, Fingerprint: "new"}
+	newID := canonicalIdentityForTest(1, 2, 1, "cd", 64)
 	err = storeAPI.SetMany([]Checkpoint{
-		{Identity: existingID, Path: existing.Path, Offset: 20, LineNumber: 2},
-		{Identity: newID, Path: "/logs/new.log", Offset: 30, LineNumber: 3},
+		{InputID: checkpointTestInputID, Identity: existingID, Path: existing.Path, Offset: 20, LineNumber: 2},
+		{InputID: checkpointTestInputID, Identity: newID, Path: "/logs/new.log", Offset: 30, LineNumber: 3},
 	})
 	if !errors.Is(err, persistErr) {
 		t.Fatalf("SetMany error = %v, want %v", err, persistErr)
@@ -317,14 +389,14 @@ func TestCheckpointStoreSetManyPersistenceFailureRollsBackMemory(t *testing.T) {
 	if persistCalls != 1 {
 		t.Fatalf("persist calls = %d, want 1", persistCalls)
 	}
-	got, ok, err := storeAPI.Get(existingID)
+	got, ok, err := storeAPI.Get(checkpointTestInputID, existingID)
 	if err != nil || !ok {
 		t.Fatalf("Get existing: ok=%v err=%v", ok, err)
 	}
 	if got.Offset != existing.Offset || got.LineNumber != existing.LineNumber || !got.UpdatedAt.Equal(existing.UpdatedAt) {
 		t.Fatalf("existing checkpoint advanced after failure: got %+v want %+v", got, existing)
 	}
-	if _, newExists, err := storeAPI.Get(newID); err != nil || newExists {
+	if _, newExists, err := storeAPI.Get(checkpointTestInputID, newID); err != nil || newExists {
 		t.Fatalf("new checkpoint published after failure: ok=%v err=%v", newExists, err)
 	}
 
@@ -333,14 +405,14 @@ func TestCheckpointStoreSetManyPersistenceFailureRollsBackMemory(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	disk, ok, err := reopened.Get(existingID)
+	disk, ok, err := reopened.Get(checkpointTestInputID, existingID)
 	if err != nil || !ok {
 		t.Fatalf("Get reopened existing: ok=%v err=%v", ok, err)
 	}
 	if disk.Offset != existing.Offset || disk.LineNumber != existing.LineNumber {
 		t.Fatalf("disk checkpoint changed after failure: got %+v want %+v", disk, existing)
 	}
-	if _, ok, err := reopened.Get(newID); err != nil || ok {
+	if _, ok, err := reopened.Get(checkpointTestInputID, newID); err != nil || ok {
 		t.Fatalf("new disk checkpoint present after failure: ok=%v err=%v", ok, err)
 	}
 }
@@ -363,7 +435,9 @@ func TestCheckpointStoreSetDelegatesToSetMany(t *testing.T) {
 		return nil
 	}
 	if err := storeAPI.Set(Checkpoint{
-		Identity: FileIdentity{Device: 1, Inode: 1, Fingerprint: "one"},
+		InputID:  checkpointTestInputID,
+		Identity: canonicalIdentityForTest(1, 1, 1, "ab", 64),
+		Path:     "/logs/app.log",
 		Offset:   42,
 	}); err != nil {
 		t.Fatalf("Set: %v", err)
@@ -383,8 +457,11 @@ func TestCheckpointStoreAtomicRewriteNoTempLeak(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	for i := 0; i < 5; i++ {
-		id := FileIdentity{Device: 1, Inode: uint64(i), Fingerprint: "fp"}
-		if err := store.Set(Checkpoint{Identity: id, Offset: uint64(i * 10)}); err != nil {
+		id := canonicalIdentityForTest(1, uint64(i), 1, "ab", 64)
+		if err := store.Set(Checkpoint{
+			InputID: checkpointTestInputID, Identity: id,
+			Path: "/logs/app.log", Offset: uint64(i * 10),
+		}); err != nil {
 			t.Fatalf("set %d: %v", i, err)
 		}
 	}
@@ -420,18 +497,21 @@ func TestCheckpointStoreDelete(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	id := FileIdentity{Device: 1, Inode: 1, Fingerprint: "x"}
-	if err := store.Set(Checkpoint{Identity: id, Offset: 5}); err != nil {
+	id := canonicalIdentityForTest(1, 1, 1, "ab", 64)
+	if err := store.Set(Checkpoint{
+		InputID: checkpointTestInputID, Identity: id,
+		Path: "/logs/app.log", Offset: 5,
+	}); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	if err := store.Delete(id); err != nil {
+	if err := store.Delete(checkpointTestInputID, id); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, ok, _ := store.Get(id); ok {
+	if _, ok, _ := store.Get(checkpointTestInputID, id); ok {
 		t.Fatalf("checkpoint present after delete")
 	}
 	// Deleting a missing checkpoint is a no-op.
-	if err := store.Delete(id); err != nil {
+	if err := store.Delete(checkpointTestInputID, id); err != nil {
 		t.Fatalf("delete missing: %v", err)
 	}
 }

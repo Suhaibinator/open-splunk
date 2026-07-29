@@ -41,6 +41,9 @@ const (
 	e2eCollectorID = "11111111-1111-4111-8111-111111111111"
 	// e2eIndex is the single index the token is authorized for.
 	e2eIndex = "gradethis"
+	// e2eSecondaryIndex lets the input-scoping acceptance test prove that two
+	// logical inputs over one physical file retain independent routing metadata.
+	e2eSecondaryIndex = "gradethis-archive"
 	// e2eSecret is a token *value* embedded in a payload field; it must never
 	// reach the store in any form.
 	e2eSecret = "SUPERSECRETTOKENVALUE-do-not-leak"
@@ -55,6 +58,51 @@ type recordingStore struct {
 	committed []*opensplunkv1.LogEvent
 	batches   int
 	duplicate int
+}
+
+// blockingEventStore holds every Store call until release is closed. It lets
+// the input-scoping acceptance test stop with a deterministic mixed-input batch
+// durable in the WAL but not yet acknowledged by the server.
+type blockingEventStore struct {
+	delegate    ingest.EventStore
+	entered     chan struct{}
+	exited      chan struct{}
+	release     chan struct{}
+	once        sync.Once
+	releaseOnce sync.Once
+}
+
+func newBlockingEventStore(delegate ingest.EventStore) *blockingEventStore {
+	return &blockingEventStore{
+		delegate: delegate,
+		entered:  make(chan struct{}),
+		exited:   make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+}
+
+func (store *blockingEventStore) unblock() {
+	store.releaseOnce.Do(func() { close(store.release) })
+}
+
+func (store *blockingEventStore) Store(
+	ctx context.Context,
+	batch ingest.StoreBatch,
+) (ingest.StoreResult, error) {
+	firstCall := false
+	store.once.Do(func() {
+		firstCall = true
+		close(store.entered)
+	})
+	if firstCall {
+		defer close(store.exited)
+	}
+	select {
+	case <-store.release:
+		return store.delegate.Store(ctx, batch)
+	case <-ctx.Done():
+		return ingest.StoreResult{}, ctx.Err()
+	}
 }
 
 func newRecordingStore() *recordingStore {
@@ -110,6 +158,12 @@ func (s *recordingStore) duplicates() int {
 // supplied store. It returns the dial address; the server is stopped on cleanup.
 func startIngestServer(t *testing.T, store ingest.EventStore) string {
 	t.Helper()
+	return startIngestServerForIndexes(t, store, []string{e2eIndex})
+}
+
+func startIngestServerForIndexes(t *testing.T, store ingest.EventStore, indexes []string) string {
+	t.Helper()
+	authorizedIndexes := append([]string(nil), indexes...)
 	authorizer := ingest.AuthorizerFunc(func(_ context.Context, token string) (ingest.Authorization, error) {
 		if token != e2eToken {
 			return ingest.Authorization{}, fmt.Errorf("unexpected token")
@@ -118,14 +172,14 @@ func startIngestServer(t *testing.T, store ingest.EventStore) string {
 			SubjectID:         "e2e-subject",
 			TenantID:          "e2e-tenant",
 			CollectorID:       e2eCollectorID,
-			AuthorizedIndexes: []string{e2eIndex},
+			AuthorizedIndexes: authorizedIndexes,
 		}, nil
 	})
 	authorization := ingest.Authorization{
 		SubjectID:         "e2e-subject",
 		TenantID:          "e2e-tenant",
 		CollectorID:       e2eCollectorID,
-		AuthorizedIndexes: []string{e2eIndex},
+		AuthorizedIndexes: authorizedIndexes,
 	}
 	config := ingest.DefaultConfig()
 	config.SessionManager = &e2eCollectorSessionManager{
@@ -237,6 +291,61 @@ processors:
       - token
     replacement: "[REDACTED]"
 `, addr, tokenFile, stateDir, logGlob, e2eIndex)
+	path := filepath.Join(t.TempDir(), "collector.yaml")
+	writeFile(t, path, yaml)
+	return path
+}
+
+// writeInputScopedE2EConfig writes either the initial one-input configuration
+// or the two-input restart configuration used to prove that logical inputs over
+// one physical file have independent durable cursors.
+func writeInputScopedE2EConfig(
+	t *testing.T,
+	addr, stateDir, logGlob, tokenFile string,
+	includeSecond bool,
+) string {
+	t.Helper()
+	writeFile(t, tokenFile, e2eToken+"\n")
+	writeFile(t, filepath.Join(stateDir, collectorIDFile), e2eCollectorID+"\n")
+
+	secondInput := ""
+	if includeSecond {
+		secondInput = fmt.Sprintf(`  - id: input-b
+    type: file
+    include:
+      - "%s"
+    format: ndjson
+    start_at: beginning
+    index: %s
+    source: shared-file-b
+    sourcetype: json
+    host: input-b-host
+    poll_interval: 15ms
+`, logGlob, e2eSecondaryIndex)
+	}
+
+	yaml := fmt.Sprintf(`server:
+  address: "%s"
+  transport: grpc
+  token_file: "%s"
+  tls:
+    enabled: false
+state:
+  directory: "%s"
+  max_queue_bytes: 8MiB
+inputs:
+  - id: input-a
+    type: file
+    include:
+      - "%s"
+    format: ndjson
+    start_at: beginning
+    index: %s
+    source: shared-file-a
+    sourcetype: json
+    host: input-a-host
+    poll_interval: 15ms
+%s`, addr, tokenFile, stateDir, logGlob, e2eIndex, secondInput)
 	path := filepath.Join(t.TempDir(), "collector.yaml")
 	writeFile(t, path, yaml)
 	return path
@@ -584,6 +693,253 @@ func TestE2ECollectorCrashRestartResumesWithoutDuplicates(t *testing.T) {
 	}
 	if off := diskCheckpointOffset(t, stateDir); off != uint64(len(phase1)+len(phase2)) {
 		t.Fatalf("final on-disk checkpoint = %d, want %d", off, len(phase1)+len(phase2))
+	}
+}
+
+// TestE2ECollectorCheckpointsAreScopedByInput proves that adding a second
+// logical input over an already-acknowledged physical file does not inherit the
+// first input's cursor. Each input must ingest the historical lines once,
+// retain its own routing metadata, and recover one mixed-input pending WAL
+// batch without rereading or collapsing either cursor.
+func TestE2ECollectorCheckpointsAreScopedByInput(t *testing.T) {
+	t.Parallel()
+
+	store := newRecordingStore()
+	directAddr := startIngestServerForIndexes(t, store, []string{e2eIndex, e2eSecondaryIndex})
+
+	stateDir := t.TempDir()
+	logDir := t.TempDir()
+	logPath := filepath.Join(logDir, "shared.log")
+	logGlob := filepath.Join(logDir, "*.log")
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	oneInputConfig := writeInputScopedE2EConfig(t, directAddr, stateDir, logGlob, tokenFile, false)
+	twoInputConfig := writeInputScopedE2EConfig(t, directAddr, stateDir, logGlob, tokenFile, true)
+
+	// Keep the identity fingerprint stable when the pending-WAL phase appends a
+	// line.
+	padding := strings.Repeat("S", 1200)
+	historical := `{"message":"shared-old-a","padding":"` + padding + `"}` + "\n" +
+		`{"message":"shared-old-b"}` + "\n"
+	writeFile(t, logPath, historical)
+
+	runUntilDurable := func(configPath, phase string, eventCount, checkpointCount int, offset uint64) {
+		t.Helper()
+		d := newE2EDaemon(t, configPath)
+		ctx, cancel := context.WithCancel(context.Background())
+		runErr := make(chan error, 1)
+		go func() { runErr <- d.Run(ctx) }()
+
+		waitFor(t, 10*time.Second, phase+" events committed", func() bool {
+			return store.count() == eventCount
+		})
+		waitFor(t, 5*time.Second, phase+" WAL drained", func() bool {
+			return d.queue.Stats().QueuedBatches == 0
+		})
+		waitFor(t, 5*time.Second, phase+" checkpoints durable", func() bool {
+			checkpoints, err := d.checkpoints.List()
+			if err != nil || len(checkpoints) != checkpointCount {
+				return false
+			}
+			for _, checkpoint := range checkpoints {
+				if checkpoint.Offset != offset {
+					return false
+				}
+			}
+			return true
+		})
+
+		cancel()
+		if err := <-runErr; err != nil {
+			t.Fatalf("%s Run error: %v", phase, err)
+		}
+	}
+
+	// Input A owns the first durable cursor.
+	runUntilDurable(oneInputConfig, "one-input phase", 2, 1, uint64(len(historical)))
+
+	// Adding B over the exact same inode must ingest B's historical view while A
+	// resumes at EOF. The old physical-only keying skipped both B events here.
+	runUntilDurable(twoInputConfig, "two-input phase", 4, 2, uint64(len(historical)))
+
+	// Hold the next server write so the append from A and B remains one
+	// deterministic mixed-input WAL batch across a restart.
+	blockedStore := newBlockingEventStore(store)
+	t.Cleanup(blockedStore.unblock)
+	blockedAddr := startIngestServerForIndexes(
+		t,
+		blockedStore,
+		[]string{e2eIndex, e2eSecondaryIndex},
+	)
+	pendingConfig := writeInputScopedE2EConfig(
+		t,
+		blockedAddr,
+		stateDir,
+		logGlob,
+		tokenFile,
+		true,
+	)
+	d := newE2EDaemon(t, pendingConfig)
+	d.batchMaxEvents = 2
+	d.batchLinger = time.Hour
+	d.drainWindow = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+	waitFor(t, 5*time.Second, "both scoped inputs rediscover the shared file", func() bool {
+		if len(d.inputs) != 2 {
+			return false
+		}
+		for _, runtime := range d.inputs {
+			if runtime.manager.Health().DiscoveredSources != 1 {
+				return false
+			}
+		}
+		return true
+	})
+
+	appended := `{"message":"shared-new"}` + "\n"
+	appendFile(t, logPath, appended)
+	finalOffset := uint64(len(historical) + len(appended))
+	waitFor(t, 10*time.Second, "one mixed-input WAL batch becomes pending", func() bool {
+		stats := d.queue.Stats()
+		return stats.QueuedBatches == 1 && stats.QueuedEvents == 2
+	})
+	select {
+	case <-blockedStore.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked server never received the mixed-input WAL batch")
+	}
+	resumeQueue, ok := d.queue.(wal.ResumeQueue)
+	if !ok {
+		t.Fatal("collector WAL does not expose pending source marks")
+	}
+	pendingMarks, err := resumeQueue.PendingSourceMarks()
+	if err != nil {
+		t.Fatalf("read mixed-input pending marks: %v", err)
+	}
+	if len(pendingMarks) != 2 ||
+		pendingMarks[0].InputID != "input-a" || pendingMarks[0].EndOffset != finalOffset ||
+		pendingMarks[1].InputID != "input-b" || pendingMarks[1].EndOffset != finalOffset {
+		t.Fatalf(
+			"pending source marks = %+v, want input-a and input-b at %d",
+			pendingMarks,
+			finalOffset,
+		)
+	}
+	if got := store.count(); got != 4 {
+		t.Fatalf("events committed while server write was blocked = %d, want 4", got)
+	}
+	historicalOffset := uint64(len(historical))
+	checkpointsBeforeRestart, err := d.checkpoints.List()
+	if err != nil {
+		t.Fatalf("list checkpoints before pending restart: %v", err)
+	}
+	if len(checkpointsBeforeRestart) != 2 ||
+		checkpointsBeforeRestart[0].Offset != historicalOffset ||
+		checkpointsBeforeRestart[1].Offset != historicalOffset {
+		t.Fatalf(
+			"checkpoints advanced before terminal acknowledgment: %+v",
+			checkpointsBeforeRestart,
+		)
+	}
+
+	// Stop while the server call is blocked. The batch remains the sole durable
+	// owner of both append events and both source positions.
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("pending-WAL Run error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pending-WAL collector did not stop within its drain bound")
+	}
+	select {
+	case <-blockedStore.exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked server Store call did not exit after collector shutdown")
+	}
+	if stats := d.queue.Stats(); stats.QueuedBatches != 1 || stats.QueuedEvents != 2 {
+		t.Fatalf("pending WAL after stop = %+v, want one two-event batch", stats)
+	}
+
+	// Let the restarted sender deliver the existing WAL batch. Startup must
+	// overlay both input-scoped positions before either manager begins reading,
+	// so neither input rebatches the append.
+	blockedStore.unblock()
+	runUntilDurable(
+		pendingConfig,
+		"pending-WAL recovery phase",
+		6,
+		2,
+		finalOffset,
+	)
+
+	events := store.snapshot()
+	assertNoDuplicateEventIDs(t, events)
+	if duplicates := store.duplicates(); duplicates != 0 {
+		t.Fatalf("store observed %d duplicate deliveries across scoped restarts", duplicates)
+	}
+
+	checkpoints, err := input.NewCheckpointStore(filepath.Join(stateDir, checkpointsSubdir))
+	if err != nil {
+		t.Fatalf("reopen scoped checkpoints: %v", err)
+	}
+	defer checkpoints.Close()
+	list, err := checkpoints.List()
+	if err != nil {
+		t.Fatalf("list scoped checkpoints: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("scoped checkpoint count = %d, want 2", len(list))
+	}
+	for i, inputID := range []string{"input-a", "input-b"} {
+		if list[i].InputID != inputID {
+			t.Errorf("checkpoint[%d].InputID = %q, want %q", i, list[i].InputID, inputID)
+		}
+		if list[i].Offset != finalOffset {
+			t.Errorf("checkpoint[%d].Offset = %d, want %d", i, list[i].Offset, finalOffset)
+		}
+	}
+
+	wantRouting := map[string]struct {
+		index  string
+		source string
+		host   string
+	}{
+		"input-a": {index: e2eIndex, source: "shared-file-a", host: "input-a-host"},
+		"input-b": {index: e2eSecondaryIndex, source: "shared-file-b", host: "input-b-host"},
+	}
+	seenMessages := make(map[string]map[string]int, len(wantRouting))
+	for _, event := range events {
+		inputID := event.GetOrigin().GetInputId()
+		routing, ok := wantRouting[inputID]
+		if !ok {
+			t.Fatalf("event %s has unexpected input id %q", event.GetEventId(), inputID)
+		}
+		if event.GetIndexName() != routing.index || event.GetSource() != routing.source || event.GetHost() != routing.host {
+			t.Errorf(
+				"event %s routing = (%q, %q, %q), want (%q, %q, %q)",
+				event.GetEventId(),
+				event.GetIndexName(),
+				event.GetSource(),
+				event.GetHost(),
+				routing.index,
+				routing.source,
+				routing.host,
+			)
+		}
+		if seenMessages[inputID] == nil {
+			seenMessages[inputID] = make(map[string]int)
+		}
+		seenMessages[inputID][event.GetMessage()]++
+	}
+	for inputID := range wantRouting {
+		for _, message := range []string{"shared-old-a", "shared-old-b", "shared-new"} {
+			if got := seenMessages[inputID][message]; got != 1 {
+				t.Errorf("input %q message %q count = %d, want 1", inputID, message, got)
+			}
+		}
 	}
 }
 

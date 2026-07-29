@@ -93,16 +93,17 @@ type Stats struct {
 	QuarantinedSegments uint64
 }
 
-// SourceCheckpointMark is the compact source coordinate retained alongside a
-// durable batch descriptor. It contains no event payload, so planning a large
-// cumulative acknowledgment is bounded by the number of distinct file
-// generations rather than the byte size of the WAL.
+// SourceCheckpointMark is the compact input-scoped source coordinate retained
+// alongside a durable batch descriptor. It contains no event payload, so
+// planning a large cumulative acknowledgment is bounded by the number of
+// distinct (input, file-generation) pairs rather than the byte size of the WAL.
 //
 // Presence bits are deliberate. Older WAL records predate source_path,
 // file_fingerprint_length, and next_line_number and can be reconciled against
 // their discovery checkpoint, while a malformed new record must not be
 // mistaken for a valid zero value.
 type SourceCheckpointMark struct {
+	InputID              string
 	FileIdentity         string
 	SourcePath           string
 	BatchSequence        uint64
@@ -119,7 +120,8 @@ type SourceCheckpointMark struct {
 }
 
 // AckPreview is a read-only plan for the newly contiguous terminal WAL prefix.
-// Marks are coalesced to the highest source coordinate per exact file identity.
+// Marks are coalesced to the highest source coordinate per input and exact file
+// identity.
 type AckPreview struct {
 	ThroughBatchSequence uint64
 	BatchCount           uint64
@@ -185,9 +187,9 @@ type Queue interface {
 type ResumeQueue interface {
 	Queue
 	// PendingSourceMarks returns the highest source coordinate retained by all
-	// currently unacknowledged batches, coalesced per exact file identity. It
-	// is read-only and is intended for startup resume before queue consumers
-	// begin running.
+	// currently unacknowledged batches, coalesced per input and exact file
+	// identity. It is read-only and is intended for startup resume before queue
+	// consumers begin running.
 	PendingSourceMarks() ([]SourceCheckpointMark, error)
 }
 

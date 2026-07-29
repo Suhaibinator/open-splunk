@@ -137,3 +137,13 @@ func TestFingerprintOfShortFileChangesAsItGrows(t *testing.T) {
 		t.Fatalf("dev/ino changed across in-place growth")
 	}
 }
+
+func TestIdentityCreationRejectsFingerprintLimitAboveAbsoluteMaximum(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "app.log")
+	writeFileT(t, path, "content")
+
+	if _, err := NewFileIdentity(path, maximumFingerprintBytes+1); err == nil {
+		t.Fatal("NewFileIdentity accepted fingerprint limit above absolute maximum")
+	}
+}

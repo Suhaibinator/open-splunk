@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	collectorinput "github.com/Suhaibinator/open-splunk/internal/collector/input"
 	yaml "go.yaml.in/yaml/v3"
 )
 
@@ -264,6 +265,9 @@ func (c *Config) Validate() error {
 		id := in.ID
 		if strings.TrimSpace(id) == "" {
 			return fmt.Errorf("inputs[%d].id is required", i)
+		}
+		if !collectorinput.ValidInputID(id) {
+			return fmt.Errorf("inputs[%d].id %q is not a canonical identifier", i, id)
 		}
 		if prev, ok := seen[id]; ok {
 			return fmt.Errorf("duplicate input id %q (inputs[%d] and inputs[%d])", id, prev, i)

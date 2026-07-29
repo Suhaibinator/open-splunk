@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 )
 
 // checkpointFileName is the single JSON document holding every checkpoint for a
@@ -17,12 +20,22 @@ const checkpointFileName = "checkpoints.json"
 
 // checkpointFormatVersion is written into the store file so a future format
 // change can be detected on load.
-const checkpointFormatVersion = 1
+const checkpointFormatVersion = 2
+
+const maximumCheckpointInputIDBytes = int(protocolid.MaximumBytes)
 
 // checkpointDoc is the on-disk shape of the checkpoint store.
 type checkpointDoc struct {
 	Version     int          `json:"version"`
 	Checkpoints []Checkpoint `json:"checkpoints"`
+}
+
+// checkpointKey is deliberately a struct rather than a concatenated string:
+// input IDs and tracking keys are independently validated values, and keeping
+// them as separate comparable fields makes key boundaries unambiguous.
+type checkpointKey struct {
+	inputID     string
+	trackingKey string
 }
 
 // fileCheckpointStore is a CheckpointStore backed by one atomically-rewritten
@@ -33,7 +46,7 @@ type fileCheckpointStore struct {
 	path string
 
 	mu              sync.Mutex
-	entries         map[string]Checkpoint // keyed by FileIdentity.TrackingKey()
+	entries         map[checkpointKey]Checkpoint
 	persistSnapshot func([]Checkpoint) error
 }
 
@@ -55,7 +68,7 @@ func NewCheckpointStore(dir string) (CheckpointStore, error) {
 	s := &fileCheckpointStore{
 		dir:     dir,
 		path:    filepath.Join(dir, checkpointFileName),
-		entries: make(map[string]Checkpoint),
+		entries: make(map[checkpointKey]Checkpoint),
 	}
 	s.persistSnapshot = s.writeSnapshot
 	if err := s.load(); err != nil {
@@ -77,17 +90,60 @@ func (s *fileCheckpointStore) load() error {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return fmt.Errorf("collector/input: corrupt checkpoint file %s: %w", s.path, err)
 	}
+	switch doc.Version {
+	case checkpointFormatVersion:
+	case 1:
+		if len(doc.Checkpoints) != 0 {
+			return fmt.Errorf(
+				"collector/input: checkpoint file %s uses unsupported version 1 with %d checkpoints; remove or reset it before starting this greenfield version",
+				s.path,
+				len(doc.Checkpoints),
+			)
+		}
+		return nil
+	default:
+		return fmt.Errorf(
+			"collector/input: checkpoint file %s uses unsupported version %d",
+			s.path,
+			doc.Version,
+		)
+	}
 	for _, cp := range doc.Checkpoints {
-		s.entries[cp.Identity.TrackingKey()] = cp
+		if checkpointErr := validateCheckpoint(cp); checkpointErr != nil {
+			return fmt.Errorf(
+				"collector/input: invalid checkpoint in %s: %w",
+				s.path,
+				checkpointErr,
+			)
+		}
+		key, keyErr := checkpointKeyFor(cp.InputID, cp.Identity)
+		if keyErr != nil {
+			return fmt.Errorf("collector/input: invalid checkpoint in %s: %w", s.path, keyErr)
+		}
+		if _, duplicate := s.entries[key]; duplicate {
+			return fmt.Errorf(
+				"collector/input: checkpoint file %s contains duplicate input/file checkpoint for input ID %q",
+				s.path,
+				cp.InputID,
+			)
+		}
+		s.entries[key] = cp
 	}
 	return nil
 }
 
-// Get returns the checkpoint for id and whether one exists.
-func (s *fileCheckpointStore) Get(id FileIdentity) (Checkpoint, bool, error) {
+// Get returns the checkpoint for inputID and id and whether one exists.
+func (s *fileCheckpointStore) Get(
+	inputID string,
+	id FileIdentity,
+) (Checkpoint, bool, error) {
+	key, err := checkpointKeyFor(inputID, id)
+	if err != nil {
+		return Checkpoint{}, false, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cp, ok := s.entries[id.TrackingKey()]
+	cp, ok := s.entries[key]
 	return cp, ok, nil
 }
 
@@ -103,6 +159,17 @@ func (s *fileCheckpointStore) SetMany(checkpoints []Checkpoint) error {
 	if len(checkpoints) == 0 {
 		return nil
 	}
+	keys := make([]checkpointKey, len(checkpoints))
+	for index, cp := range checkpoints {
+		if err := validateCheckpoint(cp); err != nil {
+			return fmt.Errorf("collector/input: checkpoint %d: %w", index, err)
+		}
+		key, err := checkpointKeyFor(cp.InputID, cp.Identity)
+		if err != nil {
+			return fmt.Errorf("collector/input: checkpoint %d: %w", index, err)
+		}
+		keys[index] = key
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -110,8 +177,9 @@ func (s *fileCheckpointStore) SetMany(checkpoints []Checkpoint) error {
 	next := cloneCheckpoints(s.entries)
 	now := time.Now().UTC()
 	changed := false
-	for _, cp := range checkpoints {
-		key := cp.Identity.TrackingKey()
+	for index, cp := range checkpoints {
+		key := keys[index]
+		normalized := false
 		if current, ok := next[key]; ok {
 			switch {
 			case cp.Identity.Generation < current.Identity.Generation:
@@ -125,15 +193,28 @@ func (s *fileCheckpointStore) SetMany(checkpoints []Checkpoint) error {
 				cp.NextLineNumber <= current.NextLineNumber:
 				return errors.New("collector/input: next line number does not advance with checkpoint offset")
 			case cp.Identity.Generation == current.Identity.Generation && cp.Offset == current.Offset:
+				if cp.LineNumber != current.LineNumber {
+					return errors.New("collector/input: conflicting line number at the same checkpoint offset")
+				}
 				switch {
 				case cp.NextLineNumber == 0:
 					cp.NextLineNumber = current.NextLineNumber
+					normalized = cp.NextLineNumber != 0
 				case current.NextLineNumber != 0 && cp.NextLineNumber != current.NextLineNumber:
 					return errors.New("collector/input: conflicting next line number at the same checkpoint offset")
 				}
 				if checkpointPositionEqual(cp, current) {
 					continue
 				}
+			}
+		}
+		if normalized {
+			if err := validateCheckpoint(cp); err != nil {
+				return fmt.Errorf(
+					"collector/input: checkpoint %d is invalid after monotonic merge: %w",
+					index,
+					err,
+				)
 			}
 		}
 		if cp.UpdatedAt.IsZero() {
@@ -153,16 +234,21 @@ func (s *fileCheckpointStore) SetMany(checkpoints []Checkpoint) error {
 }
 
 func checkpointPositionEqual(left, right Checkpoint) bool {
-	return left.Identity == right.Identity && left.Path == right.Path &&
+	return left.InputID == right.InputID &&
+		left.Identity == right.Identity && left.Path == right.Path &&
 		left.Offset == right.Offset && left.LineNumber == right.LineNumber &&
 		left.NextLineNumber == right.NextLineNumber
 }
 
-// Delete removes the checkpoint for id, if any, and persists the result.
-func (s *fileCheckpointStore) Delete(id FileIdentity) error {
+// Delete removes the checkpoint for inputID and id, if any, and persists the
+// result.
+func (s *fileCheckpointStore) Delete(inputID string, id FileIdentity) error {
+	key, err := checkpointKeyFor(inputID, id)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := id.TrackingKey()
 	if _, ok := s.entries[key]; !ok {
 		return nil
 	}
@@ -175,7 +261,8 @@ func (s *fileCheckpointStore) Delete(id FileIdentity) error {
 	return nil
 }
 
-// List returns all persisted checkpoints, ordered by identity for determinism.
+// List returns all persisted checkpoints, ordered by input and identity for
+// determinism.
 func (s *fileCheckpointStore) List() ([]Checkpoint, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -186,33 +273,103 @@ func (s *fileCheckpointStore) List() ([]Checkpoint, error) {
 // there is nothing to flush.
 func (s *fileCheckpointStore) Close() error { return nil }
 
-// snapshotLocked returns the entries as an identity-sorted slice.
+// snapshotLocked returns the entries as an input/identity-sorted slice.
 func (s *fileCheckpointStore) snapshotLocked() []Checkpoint {
 	return checkpointSnapshot(s.entries)
 }
 
-func checkpointSnapshot(entries map[string]Checkpoint) []Checkpoint {
+func checkpointSnapshot(entries map[checkpointKey]Checkpoint) []Checkpoint {
 	out := make([]Checkpoint, 0, len(entries))
 	for _, cp := range entries {
 		out = append(out, cp)
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].InputID != out[j].InputID {
+			return out[i].InputID < out[j].InputID
+		}
 		return out[i].Identity.String() < out[j].Identity.String()
 	})
 	return out
 }
 
-func cloneCheckpoints(entries map[string]Checkpoint) map[string]Checkpoint {
-	cloned := make(map[string]Checkpoint, len(entries))
+func cloneCheckpoints(
+	entries map[checkpointKey]Checkpoint,
+) map[checkpointKey]Checkpoint {
+	cloned := make(map[checkpointKey]Checkpoint, len(entries))
 	for key, cp := range entries {
 		cloned[key] = cp
 	}
 	return cloned
 }
 
-// persistEntriesLocked persists entries in deterministic identity order.
-func (s *fileCheckpointStore) persistEntriesLocked(entries map[string]Checkpoint) error {
+// persistEntriesLocked persists entries in deterministic input/identity order.
+func (s *fileCheckpointStore) persistEntriesLocked(
+	entries map[checkpointKey]Checkpoint,
+) error {
 	return s.persistSnapshot(checkpointSnapshot(entries))
+}
+
+func checkpointKeyFor(
+	inputID string,
+	identity FileIdentity,
+) (checkpointKey, error) {
+	if !ValidInputID(inputID) {
+		return checkpointKey{}, fmt.Errorf(
+			"input ID %q is not a canonical identifier",
+			inputID,
+		)
+	}
+	return checkpointKey{
+		inputID:     inputID,
+		trackingKey: identity.TrackingKey(),
+	}, nil
+}
+
+// ValidInputID reports whether inputID uses the collector protocol's canonical
+// identifier grammar: 1..128 ASCII bytes, beginning with an alphanumeric byte,
+// followed by alphanumeric bytes or '.', '_', ':', and '-'.
+func ValidInputID(inputID string) bool {
+	return protocolid.Valid(inputID)
+}
+
+func validateCheckpoint(checkpoint Checkpoint) error {
+	if !ValidInputID(checkpoint.InputID) {
+		return fmt.Errorf(
+			"input ID %q is not a canonical identifier",
+			checkpoint.InputID,
+		)
+	}
+	if _, err := ParseFileIdentity(checkpoint.Identity.String()); err != nil {
+		return fmt.Errorf("identity is not canonical: %w", err)
+	}
+	if checkpoint.Path == "" {
+		return errors.New("source path is empty")
+	}
+	if checkpoint.Offset > math.MaxInt64 {
+		return fmt.Errorf(
+			"offset %d exceeds maximum supported file offset %d",
+			checkpoint.Offset,
+			uint64(math.MaxInt64),
+		)
+	}
+	if checkpoint.Identity.FingerprintLength > maximumFingerprintBytes {
+		return fmt.Errorf(
+			"fingerprint length %d exceeds absolute maximum %d",
+			checkpoint.Identity.FingerprintLength,
+			maximumFingerprintBytes,
+		)
+	}
+	if checkpoint.Identity.FingerprintLength == 0 &&
+		(checkpoint.Identity.Fingerprint != emptyFingerprintSHA256 ||
+			checkpoint.Offset != 0) {
+		return errors.New(
+			"zero-length fingerprint requires the canonical empty digest at offset zero",
+		)
+	}
+	if _, _, err := checkpointNextLine(checkpoint, false); err != nil {
+		return fmt.Errorf("line cursor is invalid: %w", err)
+	}
+	return nil
 }
 
 // writeSnapshot writes the whole store atomically: marshal, write a temp file

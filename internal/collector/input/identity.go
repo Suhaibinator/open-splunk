@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -16,6 +15,15 @@ import (
 // fingerprint when Config.FingerprintBytes is unset.
 const defaultFingerprintBytes = 1024
 
+// maximumFingerprintBytes is an absolute allocation and checkpoint-validation
+// bound. Fingerprints are read on discovery and restart, so accepting an
+// attacker-sized persisted length would turn state-file corruption into an
+// unbounded startup allocation.
+const maximumFingerprintBytes = 1 << 20
+
+const emptyFingerprintSHA256 = "e3b0c44298fc1c149afbf4c8996fb924" +
+	"27ae41e4649b934ca495991b7852b855"
+
 type fingerprintDigest [sha256.Size]byte
 
 // fingerprintBytesOr returns n when positive, else the package default.
@@ -24,6 +32,18 @@ func fingerprintBytesOr(n int) int {
 		return defaultFingerprintBytes
 	}
 	return n
+}
+
+func validatedFingerprintBytes(n int) (int, error) {
+	limit := fingerprintBytesOr(n)
+	if limit > maximumFingerprintBytes {
+		return 0, fmt.Errorf(
+			"collector/input: fingerprint byte limit %d exceeds absolute maximum %d",
+			limit,
+			maximumFingerprintBytes,
+		)
+	}
+	return limit, nil
 }
 
 // computeFingerprintWithLength returns the hex-encoded SHA-256 over the first
@@ -38,9 +58,9 @@ func fingerprintBytesOr(n int) int {
 // the fingerprint as a secondary signal used to detect copy-truncate and inode
 // reuse rather than as the primary key.
 func computeFingerprintWithLength(f *os.File, fingerprintBytes int) (string, uint32, error) {
-	limit := fingerprintBytesOr(fingerprintBytes)
-	if int64(limit) > int64(math.MaxUint32) {
-		return "", 0, fmt.Errorf("collector/input: fingerprint byte limit %d exceeds uint32", limit)
+	limit, err := validatedFingerprintBytes(fingerprintBytes)
+	if err != nil {
+		return "", 0, err
 	}
 	buf := make([]byte, limit)
 	n, err := f.ReadAt(buf, 0)
@@ -48,7 +68,7 @@ func computeFingerprintWithLength(f *os.File, fingerprintBytes int) (string, uin
 		return "", 0, err
 	}
 	sum := sha256.Sum256(buf[:n])
-	// #nosec G115 -- n cannot exceed the buffer limit checked against MaxUint32.
+	// #nosec G115 -- n cannot exceed the 1 MiB absolute buffer limit.
 	return hex.EncodeToString(sum[:]), uint32(n), nil
 }
 
@@ -56,6 +76,13 @@ func computeFingerprintWithLength(f *os.File, fingerprintBytes int) (string, uin
 // short read is reported as an error because callers use this to prove that an
 // already-consumed region has not been replaced.
 func computeFingerprintRange(f *os.File, offset int64, length uint32) (string, error) {
+	if length > maximumFingerprintBytes {
+		return "", fmt.Errorf(
+			"collector/input: fingerprint length %d exceeds absolute maximum %d",
+			length,
+			maximumFingerprintBytes,
+		)
+	}
 	buf := make([]byte, int(length))
 	digest, err := computeFingerprintRangeDigest(f, offset, length, buf)
 	if err != nil {
@@ -73,6 +100,13 @@ func computeFingerprintRangeDigest(
 	length uint32,
 	scratch []byte,
 ) (fingerprintDigest, error) {
+	if length > maximumFingerprintBytes {
+		return fingerprintDigest{}, fmt.Errorf(
+			"collector/input: fingerprint length %d exceeds absolute maximum %d",
+			length,
+			maximumFingerprintBytes,
+		)
+	}
 	if int(length) > len(scratch) {
 		return fingerprintDigest{}, errors.New("fingerprint scratch is shorter than requested range")
 	}

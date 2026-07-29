@@ -10,6 +10,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 )
 
 const (
@@ -24,7 +25,7 @@ const (
 	HardMaxFields            uint32 = eventfields.MaximumStoredFieldsPerEvent
 	HardMaxNestingDepth      uint32 = eventfields.MaximumDynamicPathSegments
 	HardMaxFieldNameBytes    uint32 = eventfields.MaximumDynamicPathSegmentBytes
-	HardMaxIDBytes           uint32 = 128
+	HardMaxIDBytes           uint32 = protocolid.MaximumBytes
 	HardMaxInFlightBatches   uint32 = 64
 	HardMaxStreamsPerSubject uint32 = 16
 	// HardMaxDurable*Bytes mirror the bounded server-owned replay formats. A

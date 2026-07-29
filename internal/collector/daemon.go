@@ -118,9 +118,10 @@ type Daemon struct {
 	shutdownFlushGrace time.Duration
 	drainWindow        time.Duration
 
-	// lastOffsets guards checkpoint monotonicity per file identity. Only the
-	// single batcher goroutine touches it, so it needs no lock.
-	lastOffsets map[string]uint64
+	// lastOffsets guards checkpoint monotonicity per input-scoped file
+	// generation. Only the single batcher goroutine touches it, so it needs no
+	// lock.
+	lastOffsets map[inputFileKey]uint64
 
 	decodeFailures atomic.Uint64
 
@@ -355,7 +356,7 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		queueFullRetry:     defaultQueueFullRetry,
 		shutdownFlushGrace: defaultShutdownFlushGrace,
 		drainWindow:        defaultDrainWindow,
-		lastOffsets:        make(map[string]uint64),
+		lastOffsets:        make(map[inputFileKey]uint64),
 	}
 	return d, nil
 }

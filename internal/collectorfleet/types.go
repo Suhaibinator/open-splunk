@@ -14,7 +14,6 @@ const (
 	MaximumDurableCollectorsPerTenant = 256
 
 	maximumTenantIDBytes          = 255
-	maximumIdentifierBytes        = 128
 	maximumDisplayNameBytes       = 255
 	maximumCollectorVersionBytes  = 128
 	maximumHostnameBytes          = 255

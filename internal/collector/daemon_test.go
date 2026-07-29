@@ -1136,7 +1136,10 @@ func testDecoder(t *testing.T) *Decoder {
 func TestDaemonBackpressureNoDrop(t *testing.T) {
 	t.Parallel()
 	dec := testDecoder(t)
-	identity := input.FileIdentity{Device: 1, Inode: 2, Fingerprint: "abc"}
+	identity := input.FileIdentity{
+		Device: 1, Inode: 2, Generation: 1,
+		Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 64,
+	}
 	raw := `{"k":"v"}`
 
 	// Size one batch, then bound the real queue just above it so a second batch
@@ -1171,7 +1174,7 @@ func TestDaemonBackpressureNoDrop(t *testing.T) {
 		batchLinger:        time.Hour, // disabled; flush by count
 		queueFullRetry:     5 * time.Millisecond,
 		shutdownFlushGrace: time.Second,
-		lastOffsets:        make(map[string]uint64),
+		lastOffsets:        make(map[inputFileKey]uint64),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1182,13 +1185,15 @@ func TestDaemonBackpressureNoDrop(t *testing.T) {
 
 	mk := func(start, end, line uint64) processedEvent {
 		return processedEvent{
-			event: testEvent(t, dec, start, end, line, raw), identity: identity,
+			event: testEvent(t, dec, start, end, line, raw), inputID: "app", identity: identity,
 			path: "/x.log", endOffset: end, lineNumber: line, nextLineNumber: line + 1,
 			size: proto.Size(testEvent(t, dec, start, end, line, raw)),
 		}
 	}
 
-	if err := cps.Set(input.Checkpoint{Identity: identity, Path: "/x.log", Offset: 0}); err != nil {
+	if err := cps.Set(input.Checkpoint{
+		InputID: "app", Identity: identity, Path: "/x.log", Offset: 0,
+	}); err != nil {
 		t.Fatalf("seed discovery checkpoint: %v", err)
 	}
 
@@ -1197,7 +1202,7 @@ func TestDaemonBackpressureNoDrop(t *testing.T) {
 	waitFor(t, time.Second, "first batch appended", func() bool {
 		return q.Stats().QueuedBatches == 1
 	})
-	if cp, ok, _ := cps.Get(identity); !ok || cp.Offset != 0 {
+	if cp, ok, _ := cps.Get("app", identity); !ok || cp.Offset != 0 {
 		t.Fatalf("checkpoint after first append = %+v (ok=%t), want discovery offset 0", cp, ok)
 	}
 
@@ -1215,7 +1220,7 @@ func TestDaemonBackpressureNoDrop(t *testing.T) {
 	if got := q.Stats().QueuedBatches; got != 1 {
 		t.Fatalf("QueuedBatches while full = %d, want 1", got)
 	}
-	if cp, _, _ := cps.Get(identity); cp.Offset != 0 {
+	if cp, _, _ := cps.Get("app", identity); cp.Offset != 0 {
 		t.Fatalf("checkpoint advanced to %d without terminal ack, want 0", cp.Offset)
 	}
 
@@ -1227,7 +1232,7 @@ func TestDaemonBackpressureNoDrop(t *testing.T) {
 	waitFor(t, time.Second, "second batch appended after ack", func() bool {
 		return q.Stats().QueuedBatches == 1 && q.Stats().NextBatchSequence == 3
 	})
-	if cp, ok, _ := cps.Get(identity); !ok || cp.Offset != 0 {
+	if cp, ok, _ := cps.Get("app", identity); !ok || cp.Offset != 0 {
 		t.Fatalf("checkpoint after second append = %+v (ok=%t), want discovery offset 0", cp, ok)
 	}
 
@@ -1245,7 +1250,7 @@ func TestDaemonTerminalAckAdvancesCheckpointOnlyAfterDisposition(t *testing.T) {
 	if err := d.flush(context.Background(), terminalPendingBatch(identity, 0, 100, 1)); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	if cp, ok, _ := d.checkpoints.Get(identity); !ok || cp.Offset != 0 {
+	if cp, ok, _ := d.checkpoints.Get(testCheckpointInputID, identity); !ok || cp.Offset != 0 {
 		t.Fatalf("checkpoint after withheld ack = %+v (ok=%t), want 0", cp, ok)
 	}
 
@@ -1259,7 +1264,7 @@ func TestDaemonTerminalAckAdvancesCheckpointOnlyAfterDisposition(t *testing.T) {
 	if err := d.queue.Ack(1); err != nil {
 		t.Fatalf("Ack: %v", err)
 	}
-	if cp, ok, _ := d.checkpoints.Get(identity); !ok || cp.Offset != 100 {
+	if cp, ok, _ := d.checkpoints.Get(testCheckpointInputID, identity); !ok || cp.Offset != 100 {
 		t.Fatalf("checkpoint after terminal ack = %+v (ok=%t), want 100", cp, ok)
 	}
 }
@@ -1283,7 +1288,7 @@ func TestDaemonOutOfOrderTerminalAckDoesNotAdvancePastGap(t *testing.T) {
 	if err := d.queue.Ack(2); err != nil {
 		t.Fatalf("Ack(2): %v", err)
 	}
-	if cp, _, _ := d.checkpoints.Get(identity); cp.Offset != 0 {
+	if cp, _, _ := d.checkpoints.Get(testCheckpointInputID, identity); cp.Offset != 0 {
 		t.Fatalf("out-of-order ack advanced checkpoint to %d, want 0", cp.Offset)
 	}
 
@@ -1300,7 +1305,7 @@ func TestDaemonOutOfOrderTerminalAckDoesNotAdvancePastGap(t *testing.T) {
 	if err := d.queue.Ack(1); err != nil {
 		t.Fatalf("Ack(1): %v", err)
 	}
-	if cp, ok, _ := d.checkpoints.Get(identity); !ok || cp.Offset != 200 {
+	if cp, ok, _ := d.checkpoints.Get(testCheckpointInputID, identity); !ok || cp.Offset != 200 {
 		t.Fatalf("checkpoint after gap closure = %+v (ok=%t), want 200", cp, ok)
 	}
 }
@@ -1323,12 +1328,14 @@ func newTerminalCheckpointTestDaemon(t *testing.T) (*Daemon, input.FileIdentity)
 		Device: 1, Inode: 2, Generation: 1,
 		Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 128,
 	}
-	if err := cps.Set(input.Checkpoint{Identity: identity, Path: "/x.log", Offset: 0}); err != nil {
+	if err := cps.Set(input.Checkpoint{
+		InputID: testCheckpointInputID, Identity: identity, Path: "/x.log", Offset: 0,
+	}); err != nil {
 		t.Fatalf("seed discovery checkpoint: %v", err)
 	}
 	return &Daemon{
 		log: discardLogger(), now: time.Now, queue: q, checkpoints: cps,
-		lastOffsets: make(map[string]uint64),
+		lastOffsets: make(map[inputFileKey]uint64),
 	}, identity
 }
 
@@ -1336,11 +1343,39 @@ func terminalPendingBatch(identity input.FileIdentity, start, end, line uint64) 
 	event := checkpointBatch(0, identity, "/x.log", start, end, line).GetEvents()[0]
 	batch := &pendingBatch{}
 	batch.add(processedEvent{
-		event: event, identity: identity, path: "/x.log",
+		event: event, inputID: testCheckpointInputID, identity: identity, path: "/x.log",
 		endOffset: end, lineNumber: line, nextLineNumber: line + 1,
 		size: proto.Size(event),
 	})
 	return batch
+}
+
+func TestPendingBatchKeepsIdenticalFilesIndependentByInput(t *testing.T) {
+	t.Parallel()
+	identity := input.FileIdentity{
+		Device: 3, Inode: 5, Generation: 1,
+		Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 64,
+	}
+	batch := &pendingBatch{}
+	for inputID, offset := range map[string]uint64{"input-a": 100, "input-b": 200} {
+		batch.add(processedEvent{
+			event:   &opensplunkv1.LogEvent{EventId: inputID},
+			inputID: inputID, identity: identity, path: "/logs/shared.log",
+			endOffset: offset, lineNumber: 1, nextLineNumber: 2, size: 1,
+		})
+	}
+	if len(batch.marks) != 2 {
+		t.Fatalf("pending marks = %+v, want one for each input", batch.marks)
+	}
+	for inputID, wantOffset := range map[string]uint64{"input-a": 100, "input-b": 200} {
+		mark, ok := batch.marks[inputFileTrackingKey(inputID, identity)]
+		if !ok || mark.inputID != inputID || mark.offset != wantOffset {
+			t.Fatalf(
+				"pending mark for %q = (%+v, %t), want offset %d",
+				inputID, mark, ok, wantOffset,
+			)
+		}
+	}
 }
 
 type appendFailQueue struct{ wal.Queue }
@@ -1378,14 +1413,14 @@ func TestBatcherFlushesBeforeCrossingByteCap(t *testing.T) {
 	d := &Daemon{
 		log: discardLogger(), queue: q, checkpoints: cps,
 		batchMaxEvents: 100, batchMaxBytes: 10, batchLinger: time.Hour,
-		lastOffsets: make(map[string]uint64),
+		lastOffsets: make(map[inputFileKey]uint64),
 	}
 	identity := input.FileIdentity{Device: 1, Inode: 2, Generation: 1, Fingerprint: "fp"}
 	processed := make(chan processedEvent, 2)
 	for i := 0; i < 2; i++ {
 		processed <- processedEvent{
-			event:    &opensplunkv1.LogEvent{EventId: fmt.Sprintf("e%d", i)},
-			identity: identity, endOffset: uint64(i + 1), size: 6,
+			event:   &opensplunkv1.LogEvent{EventId: fmt.Sprintf("e%d", i)},
+			inputID: "input", identity: identity, endOffset: uint64(i + 1), size: 6,
 		}
 	}
 	close(processed)
@@ -1425,7 +1460,7 @@ func TestDaemonGracefulShutdownFlushesPartialBatch(t *testing.T) {
 		batchLinger:        time.Hour, // never fires
 		queueFullRetry:     5 * time.Millisecond,
 		shutdownFlushGrace: time.Second,
-		lastOffsets:        make(map[string]uint64),
+		lastOffsets:        make(map[inputFileKey]uint64),
 	}
 
 	ctx := context.Background()
@@ -1434,7 +1469,7 @@ func TestDaemonGracefulShutdownFlushesPartialBatch(t *testing.T) {
 	go func() { batcherDone <- d.runBatcher(ctx, processed) }()
 
 	processed <- processedEvent{
-		event: testEvent(t, dec, 0, 42, 1, `{"k":"v"}`), identity: identity,
+		event: testEvent(t, dec, 0, 42, 1, `{"k":"v"}`), inputID: "app", identity: identity,
 		path: "/x.log", endOffset: 42, lineNumber: 1, nextLineNumber: 2,
 		size: proto.Size(testEvent(t, dec, 0, 42, 1, `{"k":"v"}`)),
 	}
@@ -1453,7 +1488,7 @@ func TestDaemonGracefulShutdownFlushesPartialBatch(t *testing.T) {
 	if got := q.Stats().QueuedEvents; got != 1 {
 		t.Fatalf("QueuedEvents after shutdown flush = %d, want 1", got)
 	}
-	if _, ok, _ := cps.Get(identity); ok {
+	if _, ok, _ := cps.Get("app", identity); ok {
 		t.Fatal("shutdown WAL flush advanced a checkpoint without terminal acknowledgment")
 	}
 }

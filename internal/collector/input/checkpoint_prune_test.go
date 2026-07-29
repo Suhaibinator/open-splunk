@@ -19,19 +19,22 @@ func TestCheckpointStorePreservesStaleEntriesAtOpen(t *testing.T) {
 	}
 
 	stale := Checkpoint{
-		Identity:  FileIdentity{Device: 1, Inode: 10, Generation: 1, Fingerprint: "aa", FingerprintLength: 2},
+		InputID:   "input-a",
+		Identity:  canonicalIdentityForTest(1, 10, 1, "aa", 2),
 		Path:      "/log/rotated-away.log",
 		Offset:    100,
 		UpdatedAt: time.Now().UTC().Add(-staleCheckpointAge),
 	}
 	fresh := Checkpoint{
-		Identity:  FileIdentity{Device: 1, Inode: 11, Generation: 1, Fingerprint: "bb", FingerprintLength: 2},
+		InputID:   "input-a",
+		Identity:  canonicalIdentityForTest(1, 11, 1, "bb", 2),
 		Path:      "/log/active.log",
 		Offset:    200,
 		UpdatedAt: time.Now().UTC(),
 	}
 	legacy := Checkpoint{
-		Identity: FileIdentity{Device: 1, Inode: 12, Generation: 1, Fingerprint: "cc", FingerprintLength: 2},
+		InputID:  "input-a",
+		Identity: canonicalIdentityForTest(1, 12, 1, "cc", 2),
 		Path:     "/log/legacy.log",
 		Offset:   300,
 		// Zero UpdatedAt models a store written before the field existed.
@@ -51,13 +54,13 @@ func TestCheckpointStorePreservesStaleEntriesAtOpen(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
 
-	if got, ok, getErr := reopened.Get(stale.Identity); getErr != nil || !ok || got.Offset != stale.Offset {
+	if got, ok, getErr := reopened.Get(stale.InputID, stale.Identity); getErr != nil || !ok || got.Offset != stale.Offset {
 		t.Fatalf("stale checkpoint after reopen = (%+v, %t, %v), want preserved offset %d", got, ok, getErr, stale.Offset)
 	}
-	if _, ok, _ := reopened.Get(fresh.Identity); !ok {
+	if _, ok, _ := reopened.Get(fresh.InputID, fresh.Identity); !ok {
 		t.Fatal("fresh checkpoint was lost")
 	}
-	if _, ok, _ := reopened.Get(legacy.Identity); !ok {
+	if _, ok, _ := reopened.Get(legacy.InputID, legacy.Identity); !ok {
 		t.Fatal("legacy checkpoint was lost")
 	}
 

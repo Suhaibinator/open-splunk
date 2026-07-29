@@ -15,6 +15,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -699,17 +700,7 @@ func validateFieldName(name string, maxBytes uint32) string {
 }
 
 func validIdentifier(value string, maxBytes uint32) bool {
-	length, ok := nonNegativeIntUint64(len(value))
-	if value == "" || !ok || length > uint64(maxBytes) || !utf8.ValidString(value) {
-		return false
-	}
-	for i, r := range value {
-		if r > unicode.MaxASCII ||
-			(!unicode.IsLetter(r) && !unicode.IsDigit(r) && (i == 0 || !strings.ContainsRune("._:-", r))) {
-			return false
-		}
-	}
-	return true
+	return protocolid.ValidWithMaximum(value, maxBytes)
 }
 
 func validIndexName(value string) bool {

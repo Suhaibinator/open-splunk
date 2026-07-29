@@ -19,6 +19,7 @@ import (
 // path when one oversized event cannot enter the WAL.
 type processedEvent struct {
 	event          *opensplunkv1.LogEvent
+	inputID        string
 	identity       input.FileIdentity
 	path           string
 	endOffset      uint64
@@ -27,9 +28,11 @@ type processedEvent struct {
 	size           int
 }
 
-// checkpointMark is the highest source position seen for one file identity
-// within a pending batch that may need local oversized-event disposition.
+// checkpointMark is the highest source position seen for one input-scoped file
+// identity within a pending batch that may need local oversized-event
+// disposition.
 type checkpointMark struct {
+	inputID        string
 	identity       input.FileIdentity
 	path           string
 	offset         uint64
@@ -45,7 +48,7 @@ type pendingBatch struct {
 	items  []processedEvent
 	events []*opensplunkv1.LogEvent
 	bytes  int
-	marks  map[string]checkpointMark
+	marks  map[inputFileKey]checkpointMark
 }
 
 func (b *pendingBatch) empty() bool { return len(b.events) == 0 }
@@ -55,12 +58,12 @@ func (b *pendingBatch) add(pe processedEvent) {
 	b.events = append(b.events, pe.event)
 	b.bytes += pe.size
 	if b.marks == nil {
-		b.marks = make(map[string]checkpointMark)
+		b.marks = make(map[inputFileKey]checkpointMark)
 	}
-	key := pe.identity.TrackingKey()
+	key := inputFileTrackingKey(pe.inputID, pe.identity)
 	if m, ok := b.marks[key]; !ok || m.identity.String() != pe.identity.String() || pe.endOffset > m.offset {
 		b.marks[key] = checkpointMark{
-			identity: pe.identity, path: pe.path, offset: pe.endOffset,
+			inputID: pe.inputID, identity: pe.identity, path: pe.path, offset: pe.endOffset,
 			lineNumber: pe.lineNumber, nextLineNumber: pe.nextLineNumber,
 		}
 	}
@@ -124,6 +127,7 @@ func (d *Daemon) readInput(ctx context.Context, ir *inputRuntime, processed chan
 		}
 		pe := processedEvent{
 			event:          out,
+			inputID:        ir.id,
 			identity:       raw.Source.Identity,
 			path:           raw.Source.Path,
 			endOffset:      raw.Source.EndOffset,
@@ -326,11 +330,12 @@ func minDuration(a, b time.Duration) time.Duration {
 // write. Ordinary queued batches advance only via commitTerminalCheckpoints.
 func (d *Daemon) advanceCheckpoints(b *pendingBatch) error {
 	for _, m := range b.marks {
-		generationKey := m.identity.String()
+		generationKey := inputFileGenerationKey(m.inputID, m.identity)
 		if last, ok := d.lastOffsets[generationKey]; ok && m.offset <= last {
 			continue
 		}
 		cp := input.Checkpoint{
+			InputID:        m.inputID,
 			Identity:       m.identity,
 			Path:           m.path,
 			Offset:         m.offset,
@@ -339,8 +344,8 @@ func (d *Daemon) advanceCheckpoints(b *pendingBatch) error {
 		}
 		if err := d.checkpoints.Set(cp); err != nil {
 			return fmt.Errorf(
-				"collector: persist terminal oversized-event checkpoint for %s at offset %d: %w",
-				generationKey, m.offset, err,
+				"collector: persist terminal oversized-event checkpoint for input %q file %s at offset %d: %w",
+				m.inputID, m.identity.String(), m.offset, err,
 			)
 		}
 		d.lastOffsets[generationKey] = m.offset

@@ -29,6 +29,7 @@ type manager struct {
 	checkpoints ManagerCheckpointStore
 	fpBytes     int
 	poll        time.Duration
+	identityFn  func(*os.File, os.FileInfo, int) (FileIdentity, error)
 
 	events chan RawEvent
 
@@ -55,6 +56,12 @@ type manager struct {
 // positions, though it may enrich a legacy checkpoint with a stable
 // compatibility cursor in one batched discovery write.
 func NewManager(cfg Config, checkpoints ManagerCheckpointStore) (Manager, error) {
+	if !ValidInputID(cfg.InputID) {
+		return nil, fmt.Errorf(
+			"collector/input: input ID %q is not a canonical identifier",
+			cfg.InputID,
+		)
+	}
 	if len(cfg.Include) == 0 {
 		return nil, errors.New("collector/input: at least one include glob is required")
 	}
@@ -64,6 +71,10 @@ func NewManager(cfg Config, checkpoints ManagerCheckpointStore) (Manager, error)
 	if cfg.Multiline && cfg.Framing.LineStartPattern == nil {
 		return nil, errors.New("collector/input: multiline line-start pattern is required")
 	}
+	fpBytes, err := validatedFingerprintBytes(cfg.FingerprintBytes)
+	if err != nil {
+		return nil, err
+	}
 	poll := cfg.PollInterval
 	if poll <= 0 {
 		poll = defaultPollInterval
@@ -71,7 +82,7 @@ func NewManager(cfg Config, checkpoints ManagerCheckpointStore) (Manager, error)
 	m := &manager{
 		cfg:         cfg,
 		checkpoints: checkpoints,
-		fpBytes:     fingerprintBytesOr(cfg.FingerprintBytes),
+		fpBytes:     fpBytes,
 		poll:        poll,
 		events:      make(chan RawEvent),
 		tailers:     make(map[string]*tailer),
@@ -187,7 +198,7 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 			m.lastErrorNs.Store(time.Now().UnixNano())
 			continue
 		}
-		id, err := identityFor(f, fi2, m.fpBytes)
+		id, err := m.identifyFile(f, fi2)
 		if err != nil {
 			_ = f.Close()
 			openErr = fmt.Sprintf("fingerprint %s: %v", p, err)
@@ -282,7 +293,7 @@ func (m *manager) resolveStart(
 	initial bool,
 	f *os.File,
 ) (resolvedStart, error) {
-	cp, ok, err := m.checkpoints.Get(id)
+	cp, ok, err := m.checkpoints.Get(m.cfg.InputID, id)
 	if err != nil {
 		return resolvedStart{}, err
 	}
@@ -313,7 +324,8 @@ func (m *manager) resolveStart(
 			return resolvedStart{}, errors.New("file generation exhausted")
 		}
 		if err := m.checkpoints.Set(Checkpoint{
-			Identity: id, Path: path, Offset: 0, NextLineNumber: 1,
+			InputID: m.cfg.InputID, Identity: id, Path: path,
+			Offset: 0, NextLineNumber: 1,
 		}); err != nil {
 			return resolvedStart{}, err
 		}
@@ -328,7 +340,8 @@ func (m *manager) resolveStart(
 	}
 	nextLine := uint64(1)
 	if err := m.checkpoints.Set(Checkpoint{
-		Identity: id, Path: path, Offset: start, NextLineNumber: nextLine,
+		InputID: m.cfg.InputID, Identity: id, Path: path,
+		Offset: start, NextLineNumber: nextLine,
 	}); err != nil {
 		return resolvedStart{}, err
 	}
@@ -343,6 +356,7 @@ func checkpointNextLine(
 ) (nextLine uint64, known bool, err error) {
 	if checkpoint.NextLineNumber != 0 {
 		if checkpoint.NextLineNumber == ^uint64(0) ||
+			(checkpoint.LineNumber == 0 && checkpoint.NextLineNumber != 1) ||
 			(checkpoint.LineNumber != 0 && checkpoint.NextLineNumber <= checkpoint.LineNumber) {
 			return 0, false, errors.New("checkpoint has invalid next line number")
 		}
@@ -487,6 +501,13 @@ func (m *manager) newFramer(f *os.File, start, nextLine uint64) (framing.Framer,
 		return framing.NewMultilineFramer(f, start, options)
 	}
 	return framing.NewLineFramer(f, start, options)
+}
+
+func (m *manager) identifyFile(f *os.File, info os.FileInfo) (FileIdentity, error) {
+	if m.identityFn != nil {
+		return m.identityFn(f, info, m.fpBytes)
+	}
+	return identityFor(f, info, m.fpBytes)
 }
 
 // timeFromNanos converts a stored UnixNano (0 = never) to a time.Time.
@@ -710,7 +731,7 @@ func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 		changed = ferr != nil || fp != t.guardFingerprint
 	}
 	if changed {
-		next, ierr := identityFor(t.f, fi, t.m.fpBytes)
+		next, ierr := t.m.identifyFile(t.f, fi)
 		if ierr != nil {
 			t.m.setReadError(t.pathStr(), ierr)
 			return 0, false
@@ -721,7 +742,8 @@ func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 			return 0, false
 		}
 		if err := t.m.checkpoints.Set(Checkpoint{
-			Identity: next, Path: t.pathStr(), Offset: 0, NextLineNumber: 1,
+			InputID: t.m.cfg.InputID, Identity: next, Path: t.pathStr(),
+			Offset: 0, NextLineNumber: 1,
 		}); err != nil {
 			t.m.setReadError(t.pathStr(), err)
 			return 0, false
@@ -737,15 +759,20 @@ func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 	} else if t.offset == 0 && t.id.FingerprintLength == 0 && size > 0 {
 		// A file discovered empty has no distinguishing prefix. Establish one
 		// before its first event is emitted, retaining the same generation number.
-		next, ierr := identityFor(t.f, fi, t.m.fpBytes)
-		if ierr == nil {
-			next.Generation = t.id.Generation
-			if err := t.m.checkpoints.Set(Checkpoint{
-				Identity: next, Path: t.pathStr(), Offset: 0, NextLineNumber: 1,
-			}); err == nil {
-				t.id = next
-			}
+		next, ierr := t.m.identifyFile(t.f, fi)
+		if ierr != nil {
+			t.m.setReadError(t.pathStr(), ierr)
+			return 0, false
 		}
+		next.Generation = t.id.Generation
+		if err := t.m.checkpoints.Set(Checkpoint{
+			InputID: t.m.cfg.InputID, Identity: next, Path: t.pathStr(),
+			Offset: 0, NextLineNumber: 1,
+		}); err != nil {
+			t.m.setReadError(t.pathStr(), err)
+			return 0, false
+		}
+		t.id = next
 	}
 	if changed || size != t.lastSize {
 		t.lastSize = size
@@ -758,7 +785,7 @@ func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 // called only by the tailer goroutine, after offset changes.
 func (t *tailer) refreshGuard() error {
 	length := t.offset
-	// fingerprintBytesOr guarantees a positive int before manager construction.
+	// validatedFingerprintBytes guarantees a positive bounded int at construction.
 	// #nosec G115 -- positive int values are exactly representable as uint64.
 	if maximum := uint64(t.m.fpBytes); length > maximum {
 		length = maximum

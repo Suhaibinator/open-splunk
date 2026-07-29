@@ -17,7 +17,7 @@ type checkpointResumeView struct {
 	durable input.CheckpointStore
 
 	mu      sync.RWMutex
-	pending map[string]input.Checkpoint
+	pending map[inputFileKey]input.Checkpoint
 	active  atomic.Bool
 }
 
@@ -28,9 +28,9 @@ func newCheckpointResumeView(
 	if len(pending) == 0 {
 		return durable, nil
 	}
-	byTrackingKey := make(map[string]input.Checkpoint, len(pending))
+	byTrackingKey := make(map[inputFileKey]input.Checkpoint, len(pending))
 	for _, checkpoint := range pending {
-		key := checkpoint.Identity.TrackingKey()
+		key := inputFileTrackingKey(checkpoint.InputID, checkpoint.Identity)
 		if current, ok := byTrackingKey[key]; !ok || checkpointAfter(checkpoint, current) {
 			byTrackingKey[key] = checkpoint
 		}
@@ -41,10 +41,11 @@ func newCheckpointResumeView(
 }
 
 func (view *checkpointResumeView) Get(
+	inputID string,
 	identity input.FileIdentity,
 ) (input.Checkpoint, bool, error) {
 	if !view.active.Load() {
-		return view.durable.Get(identity)
+		return view.durable.Get(inputID, identity)
 	}
 	// Keep the pending coordinate visible for the entire durable lookup. A
 	// terminal callback persists before pruning; this read lock makes a lookup
@@ -52,11 +53,11 @@ func (view *checkpointResumeView) Get(
 	// never the old durable coordinate after its overlay was removed.
 	view.mu.RLock()
 	defer view.mu.RUnlock()
-	durable, found, err := view.durable.Get(identity)
+	durable, found, err := view.durable.Get(inputID, identity)
 	if err != nil {
 		return input.Checkpoint{}, false, err
 	}
-	pending, pendingFound := view.pending[identity.TrackingKey()]
+	pending, pendingFound := view.pending[inputFileTrackingKey(inputID, identity)]
 	if pendingFound && (!found || checkpointAfter(pending, durable)) {
 		return pending, true, nil
 	}
@@ -98,14 +99,14 @@ func (view *checkpointResumeView) suppressPendingMutation(
 		return false, nil
 	}
 	view.mu.RLock()
-	pending, found := view.pending[checkpoint.Identity.TrackingKey()]
+	pending, found := view.pending[inputFileTrackingKey(checkpoint.InputID, checkpoint.Identity)]
 	view.mu.RUnlock()
 	if !found ||
 		checkpoint.Identity.Generation != pending.Identity.Generation ||
 		checkpoint.Offset > pending.Offset {
 		return false, nil
 	}
-	durable, durableFound, err := view.durable.Get(checkpoint.Identity)
+	durable, durableFound, err := view.durable.Get(checkpoint.InputID, checkpoint.Identity)
 	if err != nil {
 		return false, err
 	}
@@ -121,7 +122,7 @@ func (view *checkpointResumeView) pruneCovered(checkpoints []input.Checkpoint) {
 	view.mu.Lock()
 	defer view.mu.Unlock()
 	for _, checkpoint := range checkpoints {
-		key := checkpoint.Identity.TrackingKey()
+		key := inputFileTrackingKey(checkpoint.InputID, checkpoint.Identity)
 		pending, found := view.pending[key]
 		if found && !checkpointAfter(pending, checkpoint) {
 			delete(view.pending, key)

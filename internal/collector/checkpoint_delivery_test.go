@@ -10,6 +10,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const testCheckpointInputID = "input"
+
 func TestCommitTerminalCheckpointsAdvancesFromDurableBatchOrigin(t *testing.T) {
 	t.Parallel()
 	store, err := input.NewCheckpointStore(t.TempDir())
@@ -24,7 +26,9 @@ func TestCommitTerminalCheckpointsAdvancesFromDurableBatchOrigin(t *testing.T) {
 		Fingerprint:       strings.Repeat("ab", 32),
 		FingerprintLength: 913,
 	}
-	if err := store.Set(input.Checkpoint{Identity: identity, Path: "/logs/app.log", Offset: 0}); err != nil {
+	if err := store.Set(input.Checkpoint{
+		InputID: testCheckpointInputID, Identity: identity, Path: "/logs/app.log", Offset: 0,
+	}); err != nil {
 		t.Fatalf("seed discovery checkpoint: %v", err)
 	}
 	marks := []wal.SourceCheckpointMark{
@@ -35,7 +39,7 @@ func TestCommitTerminalCheckpointsAdvancesFromDurableBatchOrigin(t *testing.T) {
 	if _, err := commitTerminalCheckpoints(store, marks); err != nil {
 		t.Fatalf("commitTerminalCheckpoints: %v", err)
 	}
-	got, ok, err := store.Get(identity)
+	got, ok, err := store.Get(testCheckpointInputID, identity)
 	if err != nil || !ok {
 		t.Fatalf("Get = (%+v, %t, %v)", got, ok, err)
 	}
@@ -63,7 +67,10 @@ func TestCommitTerminalCheckpointsFencesDelayedPreCopytruncateGeneration(t *test
 		Device: 5, Inode: 9, Generation: 2,
 		Fingerprint: strings.Repeat("22", 32), FingerprintLength: 64,
 	}
-	if err := store.Set(input.Checkpoint{Identity: newIdentity, Path: "/logs/app.log", Offset: 20, LineNumber: 1}); err != nil {
+	if err := store.Set(input.Checkpoint{
+		InputID: testCheckpointInputID, Identity: newIdentity,
+		Path: "/logs/app.log", Offset: 20, LineNumber: 1,
+	}); err != nil {
 		t.Fatalf("seed new generation checkpoint: %v", err)
 	}
 
@@ -72,7 +79,7 @@ func TestCommitTerminalCheckpointsFencesDelayedPreCopytruncateGeneration(t *test
 	}); err != nil {
 		t.Fatalf("commit old generation: %v", err)
 	}
-	got, ok, err := store.Get(newIdentity)
+	got, ok, err := store.Get(testCheckpointInputID, newIdentity)
 	if err != nil || !ok {
 		t.Fatalf("Get = (%+v, %t, %v)", got, ok, err)
 	}
@@ -93,6 +100,7 @@ func TestCommitTerminalCheckpointsRejectsInvalidNextLine(t *testing.T) {
 		Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 64,
 	}
 	if err := store.Set(input.Checkpoint{
+		InputID:  testCheckpointInputID,
 		Identity: identity, Path: "/logs/app.log", NextLineNumber: 1,
 	}); err != nil {
 		t.Fatalf("seed discovery checkpoint: %v", err)
@@ -120,6 +128,7 @@ func TestSourceCheckpointsFromWALRejectsCursorConflictWithDurableCheckpoint(t *t
 		Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 64,
 	}
 	if err := store.Set(input.Checkpoint{
+		InputID:  testCheckpointInputID,
 		Identity: identity, Path: "/logs/app.log", Offset: 100,
 		LineNumber: 9, NextLineNumber: 10,
 	}); err != nil {
@@ -160,8 +169,59 @@ func TestSourceCheckpointsFromWALRejectsConflictingPendingIdentities(t *testing.
 	}
 }
 
+func TestCommitTerminalCheckpointsKeepsIdenticalFilesIndependentByInput(t *testing.T) {
+	t.Parallel()
+	store, err := input.NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCheckpointStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	identity := input.FileIdentity{
+		Device: 31, Inode: 41, Generation: 1,
+		Fingerprint: strings.Repeat("ef", 32), FingerprintLength: 64,
+	}
+
+	markA := checkpointSourceMarkForInput("input-a", 1, identity, "/logs/shared.log", 100, 1)
+	markB := checkpointSourceMarkForInput("input-b", 2, identity, "/logs/shared.log", 240, 2)
+	committed, err := commitTerminalCheckpoints(store, []wal.SourceCheckpointMark{markA, markB})
+	if err != nil {
+		t.Fatalf("commitTerminalCheckpoints: %v", err)
+	}
+	if len(committed) != 2 {
+		t.Fatalf("committed checkpoints = %+v, want one per input", committed)
+	}
+
+	for inputID, wantOffset := range map[string]uint64{"input-a": 100, "input-b": 240} {
+		got, ok, getErr := store.Get(inputID, identity)
+		if getErr != nil || !ok || got.InputID != inputID || got.Offset != wantOffset {
+			t.Fatalf(
+				"Get(%q) = (%+v, %t, %v), want input-scoped offset %d",
+				inputID, got, ok, getErr, wantOffset,
+			)
+		}
+	}
+}
+
 func checkpointSourceMark(sequence uint64, identity input.FileIdentity, path string, end, line uint64) wal.SourceCheckpointMark {
+	return checkpointSourceMarkForInput(
+		testCheckpointInputID,
+		sequence,
+		identity,
+		path,
+		end,
+		line,
+	)
+}
+
+func checkpointSourceMarkForInput(
+	inputID string,
+	sequence uint64,
+	identity input.FileIdentity,
+	path string,
+	end, line uint64,
+) wal.SourceCheckpointMark {
 	return wal.SourceCheckpointMark{
+		InputID:       inputID,
 		BatchSequence: sequence, FileIdentity: identity.String(),
 		SourcePath: path, HasSourcePath: true,
 		EndOffset: end, HasEndOffset: true, LineNumber: line,
