@@ -7,7 +7,113 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded WebSocket snapshot shutdown
+## Latest checkpoint: explicit SQLite visibility ownership
+
+Date: 2026-07-29
+
+Committed and pushed checkpoint:
+
+- `ab0514e` — physical-file visibility ownership, bounded autonomous
+  shutdown, durable attempt-lease recovery, and explicit fixture lifecycle.
+
+This test-first slice closes the process-global visibility lease-registry
+lifecycle finding:
+
+1. Exactly one live `SQLiteSequencer` may own a physical control database file
+   in a process. `control.DB` retains immutable `os.FileInfo` identity and
+   compares handles with `os.SameFile`, so opening the same path through two
+   separate `*sql.DB` pools cannot bypass ownership. The production
+   process-wide server lock continues to fence separate processes.
+2. Ownership is claimed before stale-lease recovery. A duplicate constructor
+   returns `ErrOwnerExists` without mutating durable attempt IDs; constructor
+   failures unregister their claim. Successful or terminal shutdown removes
+   the registry entry and releases borrowed database and lease references.
+3. Every public sequencer operation joins one mutex/`sync.WaitGroup`
+   admission barrier. Shutdown closes admission before waiting, so an
+   operation admitted earlier may finish but no later operation can race
+   final lease cleanup.
+4. One autonomous finalizer owns drain, a separately bounded ten-second
+   durable cleanup attempt, ownership unregister, and terminal publication.
+   Each `Shutdown(ctx)` caller independently observes its own cancellation or
+   the shared terminal result; a short caller deadline neither relinquishes
+   ownership nor requires a second shutdown call to start finalization.
+5. Attempt acquisition marks durable-risk state before its SQLite transaction.
+   This deliberately treats a failed `Commit` as outcome-ambiguous: even if
+   the live process lease is dropped, shutdown still clears any attempt ID
+   that may have persisted. Owners with no acquisition attempt avoid an
+   unnecessary shutdown transaction.
+6. Runtime ownership remains explicit and borrowed. LIFO shutdown closes
+   search/ingest consumers and the ClickHouse Store before the sequencer, then
+   closes the control database. If the sequencer exhausts the process shutdown
+   budget, `Shutdown` returns while its finalizer retains ownership until
+   admitted work and bounded cleanup complete; the subsequent database close
+   follows `database/sql` semantics and may overlap that completion.
+7. Every unit and ClickHouse integration fixture that constructs a visibility
+   sequencer now closes it before its control database. Resource-owning
+   Store/reconciler fixtures close those active consumers first. The restart
+   fixture performs the full ordering explicitly before reopening.
+8. Deterministic coverage includes same-handle and separate-handle duplicate
+   constructors, live-attempt non-stealing, constructor failure, zero/nil and
+   repeated close, all post-close operations, an admitted real SQLite write
+   blocked past a caller deadline, independently blocked durable cleanup,
+   autonomous post-timeout unregister, outcome-ambiguous pre-bind cleanup,
+   clean reopen, and crash-style restart recovery.
+
+Validation on the exact implementation tree committed as `ab0514e`:
+
+```sh
+go test ./... -count=1 -timeout=20m
+go test ./internal/control ./internal/visibility -count=20 -timeout=8m
+go test -race \
+  ./internal/control ./internal/visibility ./internal/clickhouse \
+  ./cmd/open-splunk-server \
+  -count=3 -timeout=10m
+go vet ./...
+go build ./...
+GOLANGCI_LINT_CACHE=/private/tmp/open-splunk-lint-visibility-owner-final-2 \
+  go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+    run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=8m
+git diff --check
+```
+
+The repository-wide Go suite, repeated control/visibility suite, repeated
+race-enabled lifecycle/storage/runtime suite, vet, build, and CI-pinned
+golangci-lint v2.12.2 all passed; lint reported `0 issues`. The
+digest-pinned ClickHouse Store integration passed in 64.369 seconds.
+
+Three independent final reviewers verified the unchanged 796-insertion and
+82-deletion implementation diff at SHA-256
+`9f9b1cbe2f6034dbd551e2d9aecd106e8b7d85202a3750a59481695d0c5b60ee`.
+They reviewed physical-file identity, registry and operation linearizability,
+outcome-ambiguous commits, autonomous finalization, database-close races,
+durable recovery, SQL/resource cost, fixture cleanup, reuse, and test quality;
+no P0/P1/P2/P3 finding remained. Earlier frozen reviews found and drove the
+same-file-handle fence, conservative pre-commit durable-risk marking,
+autonomous post-timeout finalization, and complete test-fixture ownership.
+
+GORM remains confined to persistent SQLite control-plane stores. Physical-file
+identity is in-memory control-handle metadata, while visibility fencing
+continues to use its narrow transactional SQLite SQL. ClickHouse storage and
+SPL execution remain native bounded SQL and have no GORM dependency. The
+user's dependency upgrades remain separately committed as `347a015`.
+
+Explicit pause point:
+
+1. SQLite visibility ownership and bounded shutdown are complete for this
+   unit.
+2. Do not begin another implementation slice until the user gives further
+   instructions.
+3. Preserve the GORM-only SQLite control-plane boundary; do not introduce GORM
+   into ClickHouse persistence.
+4. Continue test-first checkpoints, digest-pinned ClickHouse acceptance when
+   storage behavior changes, frozen adversarial review, and commit/push after
+   each cohesive green unit.
+
+## Previous checkpoint: bounded WebSocket snapshot shutdown
 
 Date: 2026-07-29
 
@@ -5771,19 +5877,20 @@ priority is the measured sustained-load proof. Known longer-term lifecycle
 items remain explicitly listed under **Remaining work, in priority order**.
 The overall backend goal remains active.
 
-## Previous checkpoint: sanitized current GradeThis collector migration
+## Previous checkpoint: sanitized current GradeThis Open Splunk path proof
 
 Date: 2026-07-26
 
 Implementation/proof commit:
-`c576e85` (`prove current GradeThis collector migration`)
+`c576e85` (historical commit subject: `prove current GradeThis collector migration`)
 
 Retention foundation:
 `458c8b4` (`enforce logical event retention`)
 
-This slice proves the current GradeThis/go-common log source through the real
-collector and public backend search path without changing the exact product
-plan v0.1 corpus:
+This slice proves a replacement path for the current GradeThis/go-common log
+source through the real collector and public backend search path without
+changing the exact product-plan v0.1 corpus. It does not modify the target
+GradeThis repository's active Compose deployment:
 
 1. `configs/examples/collector.yaml` is now a runnable environment-substituted
    GradeThis profile with gzip transport, an explicit application host,
@@ -7564,7 +7671,7 @@ The frozen staged implementation patch had SHA-256
 Independent final reviewers confirmed that checksum, traced every artifact
 remover and shutdown interleaving, and reported no remaining finding.
 
-### Sanitized current GradeThis collector migration
+### Sanitized current GradeThis Open Splunk path proof
 
 The exact implementation at `c576e85` passed:
 
@@ -8412,16 +8519,17 @@ independent stacks.
    CI lint repair commits recorded at the top of this file. The bounded
    `relative_time` execution checkpoint is complete at `2a1245c`; bounded SPL1
    concatenation is complete through `875ddad`, `bc80006`, and `0b3f073`; and
-   side-effect-free search validation is complete at `1919e2b`. If Phase 2
-   remains the priority, implement bounded `/search/suggestions` and scoped
-   field completion next; broader `count` syntax remains a separate aggregate
-   contract. The current preview-to-final resource-release audit pass is
-   complete at `961cba2`, the sanitized current GradeThis collector/config
-   migration at `c576e85`, logical event retention at `458c8b4`, clock-driven
-   job/result/export expiration at `b2b2839`, and stale-duplicate injection at
-   `b80bf0a`. Add a red unit or integration test before implementation, run
-   read-only adversarial reviews, fix concrete findings, then commit and push
-   `main`.
+   side-effect-free search validation is complete at `1919e2b`. Bounded search
+   suggestions, scoped field completion, inline diagnostics, and connected
+   time-picker semantics are complete through `9115465`, `2a82932`, `076ff43`,
+   and `7eba237`; do not schedule those slices again. Broader `count` syntax
+   remains a separate aggregate contract. The current preview-to-final
+   resource-release audit pass is complete at `961cba2`, the sanitized current
+   GradeThis Open Splunk path proof at `c576e85`, logical event retention at
+   `458c8b4`, clock-driven job/result/export expiration at `b2b2839`, and
+   stale-duplicate injection at `b80bf0a`. Add a red unit or integration test
+   before implementation, run read-only adversarial reviews, fix concrete
+   findings, then commit and push `main`.
 
 ## Remaining work, in priority order
 
@@ -8464,11 +8572,21 @@ metadata, and legacy SQLite migration boundaries are also pinned. ClickHouse
 TTL remains merge-driven physical reclamation rather than the visibility
 contract.
 
-The sanitized current GradeThis migration is complete at `c576e85`. The
-committed config, real collector binary, scoped token, checkpoint/WAL path,
-trusted metadata, 20-event sanitized manifest, and six representative
-investigations are exercised through the public backend. The separate exact
-v0.1 corpus remains unchanged and green.
+The sanitized current GradeThis Open Splunk path proof is complete at
+`c576e85`. The committed config, real collector binary, scoped token,
+checkpoint/WAL path, trusted metadata, 20-event sanitized manifest, and six
+representative investigations are exercised through the public backend. The
+separate exact v0.1 corpus remains unchanged and green. This proves the
+replacement path inside Open Splunk; it does not cut over the target
+GradeThis Compose deployment, which still uses its OTel filelog-to-ClickHouse
+service.
+
+Remaining first-release deployment work is the target GradeThis Compose
+cutover from OTel filelog → direct ClickHouse to Open Splunk Collector →
+Open Splunk server → ClickHouse. Perform that external-repository change in a
+dedicated GradeThis worktree/branch, then rerun acknowledgment, public search,
+and browser acceptance. Do not treat the Open Splunk harness proof as that
+deployment mutation.
 
 The current preview-to-final resource-release audit pass is complete at
 `961cba2`. Search-job, executor, snapshot, and retained-result ownership were
@@ -8559,14 +8677,14 @@ PostCSS/Sharp chain. npm's offered force-fix would install the breaking
 `next@9.3.3` downgrade; do not apply it blindly. Re-evaluate a safe Next.js,
 PostCSS, or Sharp upgrade/override with the complete frontend and browser gates.
 
-### 2. Finish Phase 2 search assistance, then continue aggregate correctness
+### 2. Continue explicitly selected Phase 2 aggregate correctness
 
 The architecture plan's initial eval-function list, including bounded SPL1
-period concatenation, is complete. Side-effect-free `/search/validate` is also
-complete. Keep the remaining Phase 2 order: add bounded
-`/search/suggestions` with index/time-scoped field completion, then resolve
-the connected time-picker expressions described at the latest checkpoint
-before expanding second-tier aggregates.
+period concatenation, is complete. Side-effect-free `/search/validate`,
+bounded `/search/suggestions`, index/time-scoped field completion, inline
+diagnostics, and the connected time-picker semantics are also complete.
+Select any further aggregate/compiler slice explicitly; do not schedule those
+completed search-assistance slices again.
 
 The scalar-String extrema optimization, bounded ordered `list(field)`, and
 bounded chronological `earliest(field)` / `latest(field)` are complete.
@@ -8625,9 +8743,7 @@ multivalue output, XML, terminal containers, escaped literal-dot keys, and the
 
 Resource/lifecycle audit findings to retain in the backlog:
 
-- Physically prune idle search-history owner rows and replace the
-  process-global SQLite visibility lease registry with ownership that cannot
-  retain closed database pointers indefinitely.
+- Physically prune idle search-history owner rows.
 - Finish the deleting-index lifecycle instead of leaving indexes permanently
   in an intermediate state.
 
@@ -8680,7 +8796,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `67689e8`, `a03aa33`, `72b1b11`, `347a015`, `e312ae9`,
+   commits, especially `ab0514e`, `67689e8`, `a03aa33`, `72b1b11`, `347a015`,
+   `e312ae9`, `9115465`, `2a82932`, `076ff43`, `7eba237`,
    `782da43`, `125b2bc`, `f3fc981`,
    `c84de56`, `f7a06b7`, `8161f2d`, `2a1245c`, `72b7936`, `421ba4d`, `6e18333`,
    `7dd3209`, `825c1e4`, `4966a7d`, `fe4b7bc`, `983e125`, `4d34c8a`,
@@ -8745,12 +8862,13 @@ Do not guess those decisions if they materially affect the implementation.
    `2a1245c`. Bounded SPL1 period concatenation is complete through `875ddad`,
    `bc80006`, and `0b3f073`, and side-effect-free search validation is
    complete at `1919e2b`. Exact mixed numeric comparison, automatic sort, and
-   extrema are complete at `a03aa33`. Do not infer the next slice from this
-   historical list; wait for the user's next instruction.
+   extrema are complete at `a03aa33`. Explicit physical-file visibility
+   ownership and bounded shutdown are complete at `ab0514e`. Do not infer the
+   next slice from this historical list; wait for the user's next instruction.
    The
    generator foundation, current preview-to-final
-   resource-release audit pass, sanitized current GradeThis collector/config
-   migration, logical event retention,
+   resource-release audit pass, sanitized current GradeThis Open Splunk path
+   proof, logical event retention,
    clock-driven job/result/export expiration,
    recovered-socket stale-duplicate fencing, authoritative browser
    cancellation, versioned
