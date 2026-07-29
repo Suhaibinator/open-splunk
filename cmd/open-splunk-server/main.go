@@ -57,25 +57,27 @@ const (
 )
 
 type options struct {
-	verifyEmbeddedRelease      bool
-	httpAddress                string
-	httpAllowedHosts           []string
-	httpAllowedHostsCSV        string
-	httpInsecureTrustedNetwork bool
-	controlDBPath              string
-	masterKeyPath              string
-	administratorTokenFile     string
-	exportArtifactDir          string
-	clickhouseAddress          string
-	clickhouseDatabase         string
-	clickhouseUsername         string
-	clickhouseSecure           bool
-	collectorAddress           string
-	collectorInsecure          bool
-	collectorTLSCert           string
-	collectorTLSKey            string
-	indexRetention             time.Duration
-	tenantID                   string
+	verifyEmbeddedRelease               bool
+	httpAddress                         string
+	httpAllowedHosts                    []string
+	httpAllowedHostsCSV                 string
+	httpInsecureTrustedNetwork          bool
+	controlDBPath                       string
+	masterKeyPath                       string
+	administratorTokenFile              string
+	exportArtifactDir                   string
+	clickhouseAddress                   string
+	clickhouseDatabase                  string
+	clickhouseUsername                  string
+	clickhouseSecure                    bool
+	collectorAddress                    string
+	collectorInsecure                   bool
+	collectorTLSCert                    string
+	collectorTLSKey                     string
+	indexRetention                      time.Duration
+	searchHistoryMaximumAge             time.Duration
+	searchHistoryMaximumEntriesPerOwner int
+	tenantID                            string
 }
 
 type visibilitySnapshotter struct {
@@ -218,20 +220,65 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("open collector admission coordinator: %w", err)
 	}
-	searchHistory, err := openSearchHistoryStore(startupContext, controlDB, config.masterKeyPath)
+	searchHistory, err := openSearchHistoryStore(
+		startupContext,
+		controlDB,
+		config.masterKeyPath,
+		searchhistory.Options{
+			MaximumAge:             config.searchHistoryMaximumAge,
+			MaximumEntriesPerOwner: config.searchHistoryMaximumEntriesPerOwner,
+		},
+	)
 	if err != nil {
 		return err
 	}
-	recoveredSearches, err := searchHistory.RecoverInterrupted(startupContext, searchhistory.AccessScope{
+	searchHistoryScope := searchhistory.AccessScope{
 		TenantID: config.tenantID,
 		OwnerID:  defaultOwnerID,
-	})
+	}
+	recoveredSearches, err := searchHistory.RecoverInterrupted(
+		startupContext,
+		searchHistoryScope,
+	)
 	if err != nil {
 		return fmt.Errorf("recover interrupted search history: %w", err)
 	}
 	if recoveredSearches != 0 {
 		log.Printf("recovered %d interrupted search attempts", recoveredSearches)
 	}
+	startupHistoryPrune, err := pruneSearchHistoryAtStartup(
+		startupContext,
+		searchHistory,
+	)
+	if err != nil {
+		return err
+	}
+	if startupHistoryPrune.deleted != 0 {
+		log.Printf(
+			"pruned %d terminal search-history entries during startup",
+			startupHistoryPrune.deleted,
+		)
+	}
+	searchHistoryMaintenanceConfig := defaultSearchHistoryMaintenanceConfig()
+	searchHistoryMaintenanceConfig.initialCursor = startupHistoryPrune.cursor
+	searchHistoryMaintenanceConfig.runImmediately = startupHistoryPrune.more
+	searchHistoryMaintenanceConfig.onError = func(err error) {
+		log.Printf("maintain search-history retention: %v", err)
+	}
+	searchHistoryMaintenance, err := newSearchHistoryMaintenance(
+		searchHistory,
+		searchHistoryMaintenanceConfig,
+	)
+	if err != nil {
+		return fmt.Errorf("create search-history maintenance: %w", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := searchHistoryMaintenance.Close(ctx); err != nil {
+			log.Printf("close search-history maintenance: %v", err)
+		}
+	}()
 	clickHouseOptions, err := newClickHouseOptions(config)
 	if err != nil {
 		return err
@@ -599,6 +646,18 @@ func parseFlags() options {
 	flag.StringVar(&result.collectorTLSCert, "collector-tls-cert", "", "PEM certificate for collector gRPC TLS")
 	flag.StringVar(&result.collectorTLSKey, "collector-tls-key", "", "PEM private key for collector gRPC TLS")
 	flag.DurationVar(&result.indexRetention, "default-index-retention", defaultIndexRetention, "retention used when an index does not override it")
+	flag.DurationVar(
+		&result.searchHistoryMaximumAge,
+		"search-history-maximum-age",
+		searchhistory.DefaultMaximumAge,
+		"maximum age of terminal search-history entries",
+	)
+	flag.IntVar(
+		&result.searchHistoryMaximumEntriesPerOwner,
+		"search-history-maximum-entries-per-owner",
+		searchhistory.DefaultMaximumEntriesPerOwner,
+		"maximum terminal entries retained per owner (pending attempts are capped separately at the same value)",
+	)
 	flag.StringVar(&result.tenantID, "tenant-id", "default", "single-node tenant identifier")
 	flag.Parse()
 	if strings.TrimSpace(result.masterKeyPath) == "" {
@@ -635,7 +694,12 @@ func openSecurityStores(ctx context.Context, db *control.DB, masterKeyPath strin
 	return savedSearches, tokens, nil
 }
 
-func openSearchHistoryStore(ctx context.Context, db *control.DB, masterKeyPath string) (*searchhistory.Store, error) {
+func openSearchHistoryStore(
+	ctx context.Context,
+	db *control.DB,
+	masterKeyPath string,
+	options searchhistory.Options,
+) (*searchhistory.Store, error) {
 	masterKey, err := loadVerifiedMasterKey(ctx, db, masterKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("open search-history master key: %w", err)
@@ -646,7 +710,8 @@ func openSearchHistoryStore(ctx context.Context, db *control.DB, masterKeyPath s
 		return nil, err
 	}
 	defer clear(cursorKey)
-	store, err := searchhistory.New(db, searchhistory.Options{CursorKey: cursorKey})
+	options.CursorKey = cursorKey
+	store, err := searchhistory.New(db, options)
 	if err != nil {
 		return nil, fmt.Errorf("create search-history store: %w", err)
 	}

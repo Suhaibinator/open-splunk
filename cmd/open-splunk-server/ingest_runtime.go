@@ -17,6 +17,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 )
 
 const maximumDurableTenantIDBytes = 255
@@ -39,6 +40,16 @@ func normalizeRuntimeOptions(config *options) error {
 	if config.indexRetention%time.Millisecond != 0 {
 		return errors.New("default index retention must use whole milliseconds")
 	}
+	searchHistoryRetention, err := searchhistory.ResolveRetentionPolicy(
+		config.searchHistoryMaximumAge,
+		config.searchHistoryMaximumEntriesPerOwner,
+	)
+	if err != nil {
+		return fmt.Errorf("validate search-history retention: %w", err)
+	}
+	config.searchHistoryMaximumAge = searchHistoryRetention.MaximumAge
+	config.searchHistoryMaximumEntriesPerOwner =
+		searchHistoryRetention.MaximumEntriesPerOwner
 	config.exportArtifactDir = strings.TrimSpace(config.exportArtifactDir)
 	if config.exportArtifactDir == "" {
 		controlDBPath := strings.TrimSpace(config.controlDBPath)

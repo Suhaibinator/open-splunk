@@ -17,7 +17,9 @@ import (
 )
 
 // New constructs a bounded history store over an already configured control
-// database. Retention is enforced transactionally after every new record.
+// database. Terminal writes enforce ordinary per-owner count growth and
+// advance age cleanup transactionally; the database owner must also schedule
+// PruneMaintenanceBatch so scopes remain physically bounded while idle.
 func New(database *control.DB, options Options) (*Store, error) {
 	if database == nil || database.GORMDB() == nil {
 		return nil, invalid("control database is required")
@@ -25,19 +27,12 @@ func New(database *control.DB, options Options) (*Store, error) {
 	if len(options.CursorKey) < minimumCursorKeyBytes {
 		return nil, invalid(fmt.Sprintf("cursor key must contain at least %d bytes", minimumCursorKeyBytes))
 	}
-	maximumAge := options.MaximumAge
-	if maximumAge < 0 || maximumAge > hardMaximumAge {
-		return nil, invalid(fmt.Sprintf("maximum age must be between zero and %s", hardMaximumAge))
-	}
-	if maximumAge == 0 {
-		maximumAge = defaultMaximumAge
-	}
-	maximumEntries := options.MaximumEntriesPerOwner
-	if maximumEntries < 0 || maximumEntries > hardMaximumEntriesPerOwner {
-		return nil, invalid(fmt.Sprintf("maximum entries per owner must be between zero and %d", hardMaximumEntriesPerOwner))
-	}
-	if maximumEntries == 0 {
-		maximumEntries = defaultMaximumEntriesPerOwner
+	retention, err := ResolveRetentionPolicy(
+		options.MaximumAge,
+		options.MaximumEntriesPerOwner,
+	)
+	if err != nil {
+		return nil, err
 	}
 	clock := options.Clock
 	if clock == nil {
@@ -45,12 +40,13 @@ func New(database *control.DB, options Options) (*Store, error) {
 	}
 	return &Store{
 		orm: database.GORMDB(), clock: clock, cursorKey: slices.Clone(options.CursorKey),
-		maximumAge: maximumAge, maximumEntriesPerOwner: maximumEntries,
+		maximumAge: retention.MaximumAge, maximumEntriesPerOwner: retention.MaximumEntriesPerOwner,
 	}, nil
 }
 
-// Record atomically inserts one immutable terminal search snapshot and prunes
-// that owner's history to its configured age and row-count bounds. Retrying an
+// Record atomically inserts one immutable terminal search snapshot and advances
+// bounded physical retention for that owner. Normal sequential growth remains
+// count-bounded; maintenance completes any inherited backlog. Retrying an
 // identical terminal callback is idempotent; different content for an existing
 // search ID returns ErrVersionConflict instead of rewriting audit metadata.
 func (store *Store) Record(ctx context.Context, scope AccessScope, input *opensplunkv1.SearchHistoryEntry) (result *opensplunkv1.SearchHistoryEntry, returnedErr error) {
@@ -95,10 +91,10 @@ func (store *Store) Get(ctx context.Context, scope AccessScope, searchJobID stri
 }
 
 // Prune applies both age and row-count retention for one owner immediately.
-// Record calls it automatically; it is also exposed so runtime maintenance can
-// reclaim expired disk rows while an owner is otherwise idle. Read paths apply
-// a non-mutating retention predicate instead of acquiring a SQLite write lock.
-func (store *Store) Prune(ctx context.Context, scope AccessScope) (deleted uint64, returnedErr error) {
+// Each transaction deletes only a fixed-size batch so other control-plane
+// writers can make progress between batches. Read paths apply a non-mutating
+// retention predicate instead of acquiring a SQLite write lock.
+func (store *Store) Prune(ctx context.Context, scope AccessScope) (deleted int64, returnedErr error) {
 	if err := validateContext(ctx); err != nil {
 		return 0, err
 	}
@@ -110,49 +106,21 @@ func (store *Store) Prune(ctx context.Context, scope AccessScope) (deleted uint6
 	if timestamppb.New(now).CheckValid() != nil {
 		return 0, errors.New("prune search history: clock returned an invalid timestamp")
 	}
-	tx := store.orm.WithContext(ctx).Begin()
-	if tx.Error != nil {
-		return 0, mapContextError(ctx, "begin search-history prune", tx.Error)
+	for {
+		batchDeleted, more, err := store.pruneScopeTransaction(
+			ctx,
+			scope,
+			now,
+			retentionPruneBatchSize,
+		)
+		deleted += batchDeleted
+		if err != nil {
+			return deleted, err
+		}
+		if !more {
+			return deleted, nil
+		}
 	}
-	defer finishGORMTx(tx, &returnedErr)
-	deleted, err = store.pruneScope(tx, scope, now)
-	if err != nil {
-		return 0, err
-	}
-	if err := tx.Commit().Error; err != nil {
-		return 0, fmt.Errorf("commit search-history prune: %w", err)
-	}
-	return deleted, nil
-}
-
-func (store *Store) pruneScope(database *gorm.DB, scope AccessScope, now time.Time) (uint64, error) {
-	cutoff := now.Add(-store.maximumAge).UnixMicro()
-	ageResult := database.
-		Where("tenant_id = ? AND owner_id = ? AND created_at_unix_micro < ?", scope.TenantID, scope.OwnerID, cutoff).
-		Delete(&historyRecord{})
-	if ageResult.Error != nil {
-		return 0, fmt.Errorf("prune search history by age: %w", ageResult.Error)
-	}
-	if ageResult.RowsAffected < 0 {
-		return 0, errors.New("prune search history by age: invalid affected row count")
-	}
-	overflow := database.Model(&historyRecord{}).
-		Select("search_job_id").
-		Where("tenant_id = ? AND owner_id = ?", scope.TenantID, scope.OwnerID).
-		Order("created_at_unix_micro DESC").
-		Order("search_job_id DESC").
-		Limit(-1).
-		Offset(store.maximumEntriesPerOwner)
-	countResult := database.
-		Where("search_job_id IN (?)", overflow).
-		Delete(&historyRecord{})
-	if countResult.Error != nil {
-		return 0, fmt.Errorf("prune search history by count: %w", countResult.Error)
-	}
-	if countResult.RowsAffected < 0 {
-		return 0, errors.New("prune search history by count: invalid affected row count")
-	}
-	return uint64(ageResult.RowsAffected) + uint64(countResult.RowsAffected), nil
 }
 
 // Delete removes one entry without disclosing cross-scope existence.

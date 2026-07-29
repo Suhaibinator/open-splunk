@@ -10,6 +10,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 )
 
 func TestLoadOrCreateMasterKeyPersistsPrivateStableKey(t *testing.T) {
@@ -121,11 +122,11 @@ func TestOpenSearchHistoryStoreUsesRegisteredStableMasterKey(t *testing.T) {
 	if _, _, err := openSecurityStores(ctx, db, keyPath); err != nil {
 		t.Fatal(err)
 	}
-	first, err := openSearchHistoryStore(ctx, db, keyPath)
+	first, err := openSearchHistoryStore(ctx, db, keyPath, searchhistory.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := openSearchHistoryStore(ctx, db, keyPath)
+	second, err := openSearchHistoryStore(ctx, db, keyPath, searchhistory.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

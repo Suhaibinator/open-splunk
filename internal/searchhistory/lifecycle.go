@@ -189,7 +189,12 @@ func (store *Store) CompleteAttempt(ctx context.Context, scope AccessScope, inpu
 			return nil, err
 		}
 	}
-	if _, err := store.pruneScope(tx, scope, now); err != nil {
+	if _, _, err := store.pruneScopeBatch(
+		tx,
+		scope,
+		now,
+		retentionPruneBatchSize,
+	); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit().Error; err != nil {
@@ -285,7 +290,12 @@ func (store *Store) RecoverInterrupted(ctx context.Context, scope AccessScope) (
 		recovered++
 	}
 
-	if _, err := store.pruneScope(tx, scope, now); err != nil {
+	if _, _, err := store.pruneScopeBatch(
+		tx,
+		scope,
+		now,
+		retentionPruneBatchSize,
+	); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit().Error; err != nil {

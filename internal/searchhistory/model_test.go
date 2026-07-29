@@ -28,15 +28,20 @@ func TestGORMModelsMatchMigratedSearchHistorySchema(t *testing.T) {
 
 	database, _ := openTestStore(t, Options{})
 	tests := []struct {
-		table   string
-		model   any
-		indexes map[string][]modelIndexColumn
-		checks  map[string]string
+		table       string
+		model       any
+		indexes     map[string][]modelIndexColumn
+		checks      map[string]string
+		primaryKeys []string
 	}{
 		{
-			table: "search_history",
-			model: &historyRecord{},
+			table:       "search_history",
+			model:       &historyRecord{},
+			primaryKeys: []string{"search_job_id"},
 			indexes: map[string][]modelIndexColumn{
+				"search_history_created_idx": {
+					{name: "created_at_unix_micro"}, {name: "search_job_id"},
+				},
 				"search_history_owner_created_idx": {
 					{name: "tenant_id"}, {name: "owner_id"},
 					{name: "created_at_unix_micro", descending: true},
@@ -85,8 +90,20 @@ func TestGORMModelsMatchMigratedSearchHistorySchema(t *testing.T) {
 			},
 		},
 		{
-			table: "search_history_pending",
-			model: &pendingHistoryRecord{},
+			table:       "search_history_owner_counts",
+			model:       &historyOwnerCountRecord{},
+			indexes:     map[string][]modelIndexColumn{},
+			primaryKeys: []string{"tenant_id", "owner_id"},
+			checks: map[string]string{
+				"search_history_owner_count_tenant_id_length": "length(tenant_id) BETWEEN 1 AND 1024",
+				"search_history_owner_count_owner_id_length":  "length(owner_id) BETWEEN 1 AND 255",
+				"search_history_owner_count_positive":         "terminal_count > 0",
+			},
+		},
+		{
+			table:       "search_history_pending",
+			model:       &pendingHistoryRecord{},
+			primaryKeys: []string{"search_job_id"},
 			indexes: map[string][]modelIndexColumn{
 				"search_history_pending_owner_created_idx": {
 					{name: "tenant_id"}, {name: "owner_id"},
@@ -127,9 +144,16 @@ func TestGORMModelsMatchMigratedSearchHistorySchema(t *testing.T) {
 			if !slices.Equal(statement.Schema.DBNames, columnNames) {
 				t.Fatalf("GORM columns = %v, migrated columns = %v", statement.Schema.DBNames, columnNames)
 			}
-			id := statement.Schema.LookUpField("SearchJobID")
-			if id == nil || !id.PrimaryKey {
-				t.Fatalf("GORM search-job primary key is not explicit: %#v", id)
+			primaryKeys := make([]string, len(statement.Schema.PrimaryFields))
+			for index, field := range statement.Schema.PrimaryFields {
+				primaryKeys[index] = field.DBName
+			}
+			if !slices.Equal(primaryKeys, test.primaryKeys) {
+				t.Fatalf(
+					"GORM primary keys = %v, want %v",
+					primaryKeys,
+					test.primaryKeys,
+				)
 			}
 			assertSearchHistoryIndexesMatchModel(t, database, statement, test.indexes)
 			assertSearchHistoryChecksMatchModel(t, database, statement, test.table, test.checks)

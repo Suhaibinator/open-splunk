@@ -37,8 +37,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 14 {
-		t.Fatalf("schema migration count = %d, want 14", migrationCount)
+	if migrationCount != 15 {
+		t.Fatalf("schema migration count = %d, want 15", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -86,8 +86,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 14 {
-		t.Fatalf("schema migration count after reopen = %d, want 14", migrationCount)
+	if migrationCount != 15 {
+		t.Fatalf("schema migration count after reopen = %d, want 15", migrationCount)
 	}
 }
 
@@ -258,8 +258,148 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 14 {
-		t.Fatalf("schema migration count = %d, want 14", count)
+	if count != 15 {
+		t.Fatalf("schema migration count = %d, want 15", count)
+	}
+}
+
+func TestSearchHistoryRetentionIndexMigrationUpgradesExistingSchema(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	raw, err := sql.Open(
+		"sqlite",
+		filepath.Join(t.TempDir(), "history-retention-upgrade.sqlite")+
+			"?_txlock=immediate",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+
+	if err := ApplyMigrations(ctx, raw, migrationsBefore(t, "0015_")); err != nil {
+		t.Fatalf("apply pre-retention-index migrations: %v", err)
+	}
+	var before int
+	if err := raw.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM sqlite_schema
+		WHERE type = 'index' AND name = 'search_history_created_idx'`,
+	).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if before != 0 {
+		t.Fatalf("pre-upgrade retention indexes = %d, want 0", before)
+	}
+	for _, row := range []struct {
+		jobID    string
+		tenantID string
+		ownerID  string
+	}{
+		{jobID: "legacy-a-1", tenantID: "tenant-a", ownerID: "owner-a"},
+		{jobID: "legacy-a-2", tenantID: "tenant-a", ownerID: "owner-a"},
+		{jobID: "legacy-b-1", tenantID: "tenant-b", ownerID: "owner-b"},
+	} {
+		if _, err := raw.ExecContext(ctx, `
+			INSERT INTO search_history (
+				search_job_id,
+				tenant_id,
+				owner_id,
+				app_id,
+				saved_search_id,
+				final_state,
+				search_text,
+				created_at_unix_micro,
+				finished_at_unix_micro,
+				duration_nanoseconds,
+				matched_events,
+				entry_proto,
+				entry_sha256
+			) VALUES (?, ?, ?, '', '', 6, 'index=main', 1, 1, 0, 0, X'01', zeroblob(32))`,
+			row.jobID,
+			row.tenantID,
+			row.ownerID,
+		); err != nil {
+			t.Fatalf("seed legacy search history %s: %v", row.jobID, err)
+		}
+	}
+
+	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+		t.Fatalf("apply search-history retention index migration: %v", err)
+	}
+	var definition string
+	if err := raw.QueryRowContext(ctx, `
+		SELECT sql
+		FROM sqlite_schema
+		WHERE type = 'index' AND name = 'search_history_created_idx'`,
+	).Scan(&definition); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(
+		definition,
+		"(created_at_unix_micro, search_job_id)",
+	) {
+		t.Fatalf("search-history retention index = %q", definition)
+	}
+	rows, err := raw.QueryContext(ctx, `
+		SELECT tenant_id, owner_id, terminal_count
+		FROM search_history_owner_counts
+		ORDER BY tenant_id, owner_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var counts []string
+	for rows.Next() {
+		var tenantID, ownerID string
+		var count int64
+		if err := rows.Scan(&tenantID, &ownerID, &count); err != nil {
+			t.Fatal(err)
+		}
+		counts = append(counts, fmt.Sprintf("%s/%s=%d", tenantID, ownerID, count))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(counts, []string{
+		"tenant-a/owner-a=2",
+		"tenant-b/owner-b=1",
+	}) {
+		t.Fatalf("backfilled search-history owner counts = %v", counts)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		DELETE FROM search_history
+		WHERE search_job_id = 'legacy-b-1'`); err != nil {
+		t.Fatalf("delete trigger-maintained search history: %v", err)
+	}
+	var removedOwnerCount int
+	if err := raw.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM search_history_owner_counts
+		WHERE tenant_id = 'tenant-b' AND owner_id = 'owner-b'`,
+	).Scan(&removedOwnerCount); err != nil {
+		t.Fatal(err)
+	}
+	if removedOwnerCount != 0 {
+		t.Fatalf("empty owner counter rows = %d, want 0", removedOwnerCount)
+	}
+	var triggerCount int
+	if err := raw.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM sqlite_schema
+		WHERE type = 'trigger'
+		  AND name IN (
+		      'search_history_owner_count_after_insert',
+		      'search_history_owner_count_after_delete'
+		  )`,
+	).Scan(&triggerCount); err != nil {
+		t.Fatal(err)
+	}
+	if triggerCount != 2 {
+		t.Fatalf("search-history owner-count triggers = %d, want 2", triggerCount)
 	}
 }
 
