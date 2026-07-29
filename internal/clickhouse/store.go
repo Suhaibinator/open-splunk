@@ -142,7 +142,9 @@ func Open(config Config, retention RetentionProvider, sequencer visibility.Seque
 	return store, nil
 }
 
-// NewStore wraps an existing clickhouse-go connection.
+// NewStore wraps an existing clickhouse-go connection. A caller that uses
+// WithWritesFrozen must route every writer for the physical events table
+// through the returned Store for the lifetime of the frozen callback.
 func NewStore(connection clickhousedriver.Conn, retention RetentionProvider, sequencer visibility.Sequencer) (*Store, error) {
 	if connection == nil {
 		return nil, errors.New("ClickHouse connection is required")
@@ -167,24 +169,27 @@ func NewStore(connection clickhousedriver.Conn, retention RetentionProvider, seq
 // Store implements ingest.EventStore using one synchronous native insert per
 // accepted protocol batch.
 type Store struct {
-	connection      storeConnection
-	insertSQL       string
-	retention       RetentionProvider
-	visibility      visibility.Sequencer
-	attemptID       func() (string, error)
-	clock           func() time.Time
-	retryAfter      time.Duration
-	reconcileSlot   chan struct{}
-	reconcileWG     sync.WaitGroup
-	lifecycleMu     sync.Mutex
-	reconcileWake   chan struct{}
-	reconcileDone   chan struct{}
-	reconcileCancel context.CancelFunc
-	reconcileErr    error
-	closed          bool
-	closeOnce       sync.Once
-	closeErr        error
-	terminalCount   atomic.Uint64
+	connection       storeConnection
+	insertSQL        string
+	retention        RetentionProvider
+	visibility       visibility.Sequencer
+	attemptID        func() (string, error)
+	clock            func() time.Time
+	retryAfter       time.Duration
+	writeAdmission   *writeAdmission
+	reconcileSlot    chan struct{}
+	lifecycleMu      sync.Mutex
+	lifecycleContext context.Context
+	lifecycleCancel  context.CancelFunc
+	operations       sync.WaitGroup
+	reconcileWake    chan struct{}
+	reconcileDone    chan struct{}
+	reconcileCancel  context.CancelFunc
+	reconcileErr     error
+	closed           bool
+	closeOnce        sync.Once
+	closeErr         error
+	terminalCount    atomic.Uint64
 }
 
 var _ ingest.EventStore = (*Store)(nil)
@@ -218,21 +223,41 @@ func newStore(
 	}
 	reconcileSlot := make(chan struct{}, 1)
 	reconcileSlot <- struct{}{}
+	// #nosec G118 -- lifecycleCancel is retained on Store and invoked by Close.
+	lifecycleContext, lifecycleCancel := context.WithCancel(context.Background())
 	return &Store{
-		connection:    connection,
-		insertSQL:     buildEventsInsertSQL(database, table),
-		retention:     retention,
-		visibility:    sequencer,
-		attemptID:     randomAttemptID,
-		clock:         clock,
-		retryAfter:    retryAfter,
-		reconcileSlot: reconcileSlot,
+		connection:       connection,
+		insertSQL:        buildEventsInsertSQL(database, table),
+		retention:        retention,
+		visibility:       sequencer,
+		attemptID:        randomAttemptID,
+		clock:            clock,
+		retryAfter:       retryAfter,
+		writeAdmission:   newWriteAdmission(),
+		reconcileSlot:    reconcileSlot,
+		lifecycleContext: lifecycleContext,
+		lifecycleCancel:  lifecycleCancel,
 	}, nil
 }
 
 // LookupBatch finds the durable disposition of an exact collector wire batch
 // before mutable authorization and validation policy is applied again.
-func (s *Store) LookupBatch(ctx context.Context, identity ingest.StoreBatchIdentity) (ingest.StoredBatchState, ingest.StoreResult, error) {
+func (s *Store) LookupBatch(
+	ctx context.Context,
+	identity ingest.StoreBatchIdentity,
+) (state ingest.StoredBatchState, result ingest.StoreResult, resultErr error) {
+	operationContext, finishOperation, err := s.beginOperation(ctx, &resultErr)
+	if err != nil {
+		return ingest.StoredBatchNotFound, ingest.StoreResult{}, err
+	}
+	defer finishOperation()
+	return s.lookupBatch(operationContext, identity)
+}
+
+func (s *Store) lookupBatch(
+	ctx context.Context,
+	identity ingest.StoreBatchIdentity,
+) (ingest.StoredBatchState, ingest.StoreResult, error) {
 	batch := storeBatchFromIdentity(identity)
 	deduplicationKey := deduplicationToken(batch)
 	sequenceKey := sequenceIdentityKey(batch)
@@ -270,7 +295,31 @@ func (s *Store) Store(ctx context.Context, batch ingest.StoreBatch) (ingest.Stor
 	return s.store(ctx, batch, false)
 }
 
-func (s *Store) store(ctx context.Context, batch ingest.StoreBatch, resumeOnly bool) (ingest.StoreResult, error) {
+func (s *Store) store(
+	ctx context.Context,
+	batch ingest.StoreBatch,
+	resumeOnly bool,
+) (result ingest.StoreResult, resultErr error) {
+	if frozenCallbackActive(ctx, s) {
+		return ingest.StoreResult{}, ErrWriteFreezeReentrant
+	}
+	operationContext, finishOperation, err := s.beginOperation(ctx, &resultErr)
+	if err != nil {
+		return ingest.StoreResult{}, err
+	}
+	defer finishOperation()
+	if err := s.writeAdmission.enter(operationContext); err != nil {
+		return ingest.StoreResult{}, err
+	}
+	defer s.writeAdmission.leave()
+	return s.storeAdmitted(operationContext, batch, resumeOnly)
+}
+
+func (s *Store) storeAdmitted(
+	ctx context.Context,
+	batch ingest.StoreBatch,
+	resumeOnly bool,
+) (ingest.StoreResult, error) {
 	deduplicationKey := deduplicationToken(batch)
 	sequenceKey := sequenceIdentityKey(batch)
 	payloadDigest, err := storePayloadDigest(batch)
@@ -434,28 +483,33 @@ func (s *Store) writeReservation(
 }
 
 // ReconcilePending drains durable outbox records without any collector or
-// bearer-token dependency. It is safe to call concurrently; the SQLite attempt
-// lease and this process-local context-aware slot ensure one replay owns each
-// reservation. A canceled background reconciler never waits behind a caller
-// that is performing a manual drain.
-func (s *Store) ReconcilePending(ctx context.Context) error {
-	if ctx == nil {
-		return errors.New("reconcile ClickHouse outbox: context is required")
+// bearer-token dependency. Normal reconciliation is serialized before it
+// joins shared write admission, so an exclusive frozen drain can bypass this
+// slot without deadlocking behind a queued reconciler.
+func (s *Store) ReconcilePending(ctx context.Context) (resultErr error) {
+	if frozenCallbackActive(ctx, s) {
+		return ErrWriteFreezeReentrant
 	}
-	s.lifecycleMu.Lock()
-	if s.closed {
-		s.lifecycleMu.Unlock()
-		return errors.New("reconcile ClickHouse outbox: store is closed")
+	operationContext, finishOperation, err := s.beginOperation(ctx, &resultErr)
+	if err != nil {
+		return err
 	}
-	s.reconcileWG.Add(1)
-	s.lifecycleMu.Unlock()
-	defer s.reconcileWG.Done()
+	defer finishOperation()
 	select {
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-operationContext.Done():
+		return operationContext.Err()
 	case <-s.reconcileSlot:
 	}
 	defer func() { s.reconcileSlot <- struct{}{} }()
+	if err := s.writeAdmission.enter(operationContext); err != nil {
+		return err
+	}
+	defer s.writeAdmission.leave()
+	return s.reconcilePending(operationContext, false)
+}
+
+func (s *Store) reconcilePending(ctx context.Context, proveDrained bool) error {
+	var replayed uint32
 	for {
 		attemptID, err := s.attemptID()
 		if err != nil {
@@ -466,6 +520,16 @@ func (s *Store) ReconcilePending(ctx context.Context) error {
 			return s.visibilityFailure("acquire pending ClickHouse outbox", err)
 		}
 		if !found {
+			if proveDrained {
+				usage, usageErr := s.visibility.PendingUsage(ctx)
+				if usageErr != nil {
+					return s.visibilityFailure("prove pending ClickHouse outbox is empty", usageErr)
+				}
+				if usage.Reservations != 0 || usage.OutboxBytes != 0 {
+					return pendingOutboxError(usage.Reservations, usage.OutboxBytes)
+				}
+				return nil
+			}
 			deleted, pruneErr := s.visibility.PruneTerminal(ctx, durableIdempotencyWindow, visibilityPruneBatch)
 			if pruneErr != nil {
 				return s.visibilityFailure("prune terminal ClickHouse visibility records", pruneErr)
@@ -474,6 +538,17 @@ func (s *Store) ReconcilePending(ctx context.Context) error {
 				s.wakeReconciler()
 			}
 			return nil
+		}
+		if proveDrained && replayed == visibility.MaxPendingReservations {
+			invariantErr := fmt.Errorf(
+				"%w: acquired more than %d reservations during one exclusive drain",
+				ErrPendingOutboxNotDrained,
+				visibility.MaxPendingReservations,
+			)
+			return s.releaseAttempt(reservation.Sequence, attemptID, invariantErr)
+		}
+		if proveDrained {
+			replayed++
 		}
 		if _, err := s.writeReservation(ctx, reservation, attemptID, true); err != nil {
 			return err
@@ -573,7 +648,16 @@ func resultForReservation(reservation visibility.Reservation, duplicate bool) (i
 
 // VisibilityCutoff captures the highest fully committed batch visible to a
 // new search job. The sequencer allocates only above this monotonic boundary.
-func (s *Store) VisibilityCutoff(ctx context.Context) (uint64, error) {
+func (s *Store) VisibilityCutoff(ctx context.Context) (cutoff uint64, resultErr error) {
+	operationContext, finishOperation, err := s.beginOperation(ctx, &resultErr)
+	if err != nil {
+		return 0, err
+	}
+	defer finishOperation()
+	return s.visibilityCutoff(operationContext)
+}
+
+func (s *Store) visibilityCutoff(ctx context.Context) (uint64, error) {
 	cutoff, err := s.visibility.Cutoff(ctx)
 	if err != nil {
 		return 0, s.visibilityFailure("read ClickHouse visibility cutoff", err)
@@ -687,8 +771,13 @@ func (s *Store) visibilityFailure(operation string, err error) error {
 }
 
 // Ping verifies network reachability and authentication.
-func (s *Store) Ping(ctx context.Context) error {
-	if err := s.connection.Ping(ctx); err != nil {
+func (s *Store) Ping(ctx context.Context) (resultErr error) {
+	operationContext, finishOperation, err := s.beginOperation(ctx, &resultErr)
+	if err != nil {
+		return err
+	}
+	defer finishOperation()
+	if err := s.connection.Ping(operationContext); err != nil {
 		return fmt.Errorf("ping ClickHouse: %w", err)
 	}
 	s.lifecycleMu.Lock()
@@ -705,14 +794,22 @@ func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
 		s.lifecycleMu.Lock()
 		s.closed = true
+		lifecycleCancel := s.lifecycleCancel
+		writeAdmission := s.writeAdmission
+		if writeAdmission != nil {
+			writeAdmission.close()
+		}
 		cancel := s.reconcileCancel
 		done := s.reconcileDone
 		s.lifecycleMu.Unlock()
+		if lifecycleCancel != nil {
+			lifecycleCancel()
+		}
 		if cancel != nil {
 			cancel()
 			<-done
 		}
-		s.reconcileWG.Wait()
+		s.operations.Wait()
 		if err := s.connection.Close(); err != nil {
 			s.closeErr = fmt.Errorf("close ClickHouse: %w", err)
 		}

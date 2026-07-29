@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -153,6 +154,9 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	t.Cleanup(func() { _ = queryConnection.Close() })
 	t.Run("ambiguous committed insert recovers after server restart", func(t *testing.T) {
 		testAmbiguousCommittedInsertRecovery(t, ctx, config, queryConnection, indexTime)
+	})
+	t.Run("write freeze drains ambiguous multi-index insert", func(t *testing.T) {
+		testWriteFreezeDrainsAmbiguousInsert(t, ctx, config, queryConnection, indexTime)
 	})
 	t.Run("legacy v3 unaligned retention replays through native encoder", func(t *testing.T) {
 		testLegacyUnalignedRetentionNativeReplay(t, ctx, store.connection, queryConnection)
@@ -335,6 +339,110 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 			t.Fatalf("retained keep-data rows = %d, want 1", retainedRows)
 		}
 	})
+}
+
+func testWriteFreezeDrainsAmbiguousInsert(
+	t *testing.T,
+	ctx context.Context,
+	config Config,
+	queryConnection clickhousedriver.Conn,
+	indexTime time.Time,
+) {
+	t.Helper()
+
+	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "freeze-control.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlDB.Close()
+	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sequencer.Close() }()
+	options, normalized, err := config.clickHouseOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeConnection, err := clickhousedriver.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := newStore(
+		&commitThenErrorStoreConnection{
+			delegate: &nativeStoreConnection{connection: nativeConnection},
+		},
+		normalized.Database,
+		normalized.Table,
+		fixedRetention(30*24*time.Hour),
+		sequencer,
+		time.Now,
+		normalized.RetryAfter,
+	)
+	if err != nil {
+		_ = nativeConnection.Close()
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	first := testStoredEvent("freeze-ambiguous-main", "main", indexTime.Add(3*time.Second))
+	second := testStoredEvent("freeze-ambiguous-secondary", "secondary", indexTime.Add(3*time.Second))
+	for _, event := range []*ingest.StoredEvent{first, second} {
+		event.CollectorID = "freeze-collector"
+		event.BatchID = "freeze-ambiguous-batch"
+	}
+	batch := ingest.StoreBatch{
+		TenantID:           "tenant",
+		CollectorID:        "freeze-collector",
+		BatchID:            "freeze-ambiguous-batch",
+		BatchSequence:      1,
+		OriginalEventCount: 2,
+		SourceBatchSHA256:  testSourceBatchDigest("freeze-ambiguous-batch"),
+		ReceivedAt:         indexTime.Add(3 * time.Second),
+		Events:             []*ingest.StoredEvent{first, second},
+	}
+	if _, err := store.Store(ctx, batch); !isTransient(err) || !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("outcome-ambiguous Store error = %v, want wrapped transient EOF", err)
+	}
+	if cutoff, err := store.VisibilityCutoff(ctx); err != nil || cutoff != 0 {
+		t.Fatalf("cutoff before frozen drain = %d, error = %v, want 0", cutoff, err)
+	}
+
+	for _, eventID := range []string{first.Event.GetEventId(), second.Event.GetEventId()} {
+		var count uint64
+		if err := queryConnection.QueryRow(
+			ctx,
+			"SELECT count() FROM open_splunk.events WHERE event_id = ?",
+			eventID,
+		).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("ambiguous physical row %q count = %d, error = %v, want 1", eventID, count, err)
+		}
+	}
+
+	if err := store.WithWritesFrozen(
+		ctx,
+		func(ctx context.Context, frozen FrozenWrites) error {
+			return frozen.DrainPending(ctx)
+		},
+	); err != nil {
+		t.Fatalf("frozen outbox drain: %v", err)
+	}
+	if cutoff, err := store.VisibilityCutoff(ctx); err != nil || cutoff != 1 {
+		t.Fatalf("cutoff after frozen drain = %d, error = %v, want 1", cutoff, err)
+	}
+	if usage, err := sequencer.PendingUsage(ctx); err != nil || usage != (visibility.PendingUsage{}) {
+		t.Fatalf("pending usage after frozen drain = %+v, error = %v, want zero", usage, err)
+	}
+	for _, eventID := range []string{first.Event.GetEventId(), second.Event.GetEventId()} {
+		var count uint64
+		if err := queryConnection.QueryRow(
+			ctx,
+			"SELECT count() FROM open_splunk.events WHERE event_id = ?",
+			eventID,
+		).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("deduplicated row %q count = %d, error = %v, want 1", eventID, count, err)
+		}
+	}
 }
 
 func testLegacyUnalignedRetentionNativeReplay(
@@ -649,6 +757,7 @@ func testAmbiguousCommittedInsertRecovery(
 
 type commitThenErrorStoreConnection struct {
 	delegate storeConnection
+	failOnce sync.Once
 }
 
 func (connection *commitThenErrorStoreConnection) prepare(
@@ -660,7 +769,14 @@ func (connection *commitThenErrorStoreConnection) prepare(
 	if err != nil {
 		return nil, err
 	}
-	return &commitThenErrorWriteBatch{writeBatch: batch}, nil
+	return &commitThenErrorWriteBatch{
+		writeBatch: batch,
+		failAfterCommit: func() bool {
+			fail := false
+			connection.failOnce.Do(func() { fail = true })
+			return fail
+		},
+	}, nil
 }
 
 func (connection *commitThenErrorStoreConnection) Ping(ctx context.Context) error {
@@ -673,13 +789,17 @@ func (connection *commitThenErrorStoreConnection) Close() error {
 
 type commitThenErrorWriteBatch struct {
 	writeBatch
+	failAfterCommit func() bool
 }
 
 func (batch *commitThenErrorWriteBatch) Send() error {
 	if err := batch.writeBatch.Send(); err != nil {
 		return err
 	}
-	return io.ErrUnexpectedEOF
+	if batch.failAfterCommit() {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
 }
 
 func testCompiledQueriesAgainstClickHouse(

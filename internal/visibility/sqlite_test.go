@@ -74,6 +74,168 @@ func TestSQLiteSequencerTerminalRowsClearOutboxAndPersistCommitTime(t *testing.T
 	}
 }
 
+func TestSQLiteSequencerPendingUsageCountsLeasedAndUnleasedReservations(t *testing.T) {
+	t.Parallel()
+	sequencer, _ := openTestSequencer(t)
+	ctx := context.Background()
+
+	leasedRequest := reserveRequest("leased-usage", "leased-owner")
+	leasedRequest.Outbox = []byte("leased")
+	leased, err := sequencer.Reserve(ctx, leasedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unleasedRequest := reserveRequest("unleased-usage", "unleased-owner")
+	unleasedRequest.Outbox = []byte("unleased")
+	unleased, err := sequencer.Reserve(ctx, unleasedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sequencer.Release(ctx, unleased.Sequence, unleasedRequest.AttemptID); err != nil {
+		t.Fatal(err)
+	}
+
+	usage, err := sequencer.PendingUsage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBytes := len(leasedRequest.Outbox) + len(unleasedRequest.Outbox)
+	if usage.Reservations != 2 || usage.OutboxBytes != uint64(wantBytes) {
+		t.Fatalf(
+			"PendingUsage() = %+v, want 2 reservations and %d bytes",
+			usage,
+			wantBytes,
+		)
+	}
+
+	markAndCommit(t, sequencer, leased.Sequence, leasedRequest.AttemptID, testCommittedAt)
+	usage, err = sequencer.PendingUsage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Reservations != 1 || usage.OutboxBytes != uint64(len(unleasedRequest.Outbox)) {
+		t.Fatalf(
+			"PendingUsage() after commit = %+v, want 1 reservation and %d bytes",
+			usage,
+			len(unleasedRequest.Outbox),
+		)
+	}
+
+	finalizerRequest := unleasedRequest
+	finalizerRequest.AttemptID = "unleased-finalizer"
+	finalizer, err := sequencer.Reserve(ctx, finalizerRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sequencer.Abandon(ctx, finalizer.Sequence, finalizerRequest.AttemptID); err != nil {
+		t.Fatal(err)
+	}
+	usage, err = sequencer.PendingUsage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage != (PendingUsage{}) {
+		t.Fatalf("PendingUsage() after finalization = %+v, want zero", usage)
+	}
+}
+
+func TestSQLiteSequencerPendingUsageValidatesContextAndLifecycle(t *testing.T) {
+	t.Parallel()
+	sequencer, _ := openTestSequencer(t)
+
+	//nolint:staticcheck // Deliberately verify that the package rejects a nil context.
+	if _, err := sequencer.PendingUsage(nil); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("nil-context PendingUsage() error = %v, want ErrInvalidArgument", err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := sequencer.PendingUsage(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled PendingUsage() error = %v, want context.Canceled", err)
+	}
+	if err := sequencer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sequencer.PendingUsage(context.Background()); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed PendingUsage() error = %v, want ErrClosed", err)
+	}
+}
+
+func TestDecodePendingUsageRejectsHostileValues(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		reservations  int64
+		outboxBytes   int64
+		validOutboxes int64
+		want          PendingUsage
+		wantError     bool
+	}{
+		{name: "empty"},
+		{
+			name:          "valid",
+			reservations:  2,
+			outboxBytes:   3,
+			validOutboxes: 2,
+			want:          PendingUsage{Reservations: 2, OutboxBytes: 3},
+		},
+		{name: "negative reservations", reservations: -1, wantError: true},
+		{name: "negative bytes", outboxBytes: -1, wantError: true},
+		{name: "negative valid count", validOutboxes: -1, wantError: true},
+		{
+			name:          "reservation limit",
+			reservations:  MaxPendingReservations + 1,
+			outboxBytes:   MaxPendingReservations + 1,
+			validOutboxes: MaxPendingReservations + 1,
+			wantError:     true,
+		},
+		{
+			name:          "byte limit",
+			reservations:  1,
+			outboxBytes:   MaxPendingOutboxBytes + 1,
+			validOutboxes: 1,
+			wantError:     true,
+		},
+		{name: "bytes without reservations", outboxBytes: 1, wantError: true},
+		{name: "reservation without bytes", reservations: 1, validOutboxes: 1, wantError: true},
+		{
+			name:          "invalid reserved outbox",
+			reservations:  2,
+			outboxBytes:   2,
+			validOutboxes: 1,
+			wantError:     true,
+		},
+		{
+			name:          "fewer bytes than reservations",
+			reservations:  2,
+			outboxBytes:   1,
+			validOutboxes: 2,
+			wantError:     true,
+		},
+		{
+			name:          "one reservation exceeds per-outbox limit",
+			reservations:  1,
+			outboxBytes:   MaxOutboxBytes + 1,
+			validOutboxes: 1,
+			wantError:     true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := decodePendingUsage(
+				test.reservations,
+				test.outboxBytes,
+				test.validOutboxes,
+			)
+			if (err != nil) != test.wantError {
+				t.Fatalf("decodePendingUsage() error = %v, wantError %v", err, test.wantError)
+			}
+			if got != test.want {
+				t.Fatalf("decodePendingUsage() = %+v, want %+v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestSQLiteSequencerAttemptLeaseFencesConcurrentSameBatch(t *testing.T) {
 	t.Parallel()
 	sequencer, _ := openTestSequencer(t)

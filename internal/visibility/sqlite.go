@@ -620,6 +620,20 @@ func (sequencer *SQLiteSequencer) AcquirePending(ctx context.Context, attemptID 
 	return reservation, true, nil
 }
 
+// PendingUsage reports every durable non-terminal reservation, even when a
+// live in-process attempt lease makes the reservation ineligible for
+// AcquirePending.
+func (sequencer *SQLiteSequencer) PendingUsage(ctx context.Context) (PendingUsage, error) {
+	if err := sequencer.beginOperation(); err != nil {
+		return PendingUsage{}, err
+	}
+	defer sequencer.endOperation()
+	if err := validateContext(ctx); err != nil {
+		return PendingUsage{}, err
+	}
+	return readPendingUsage(ctx, sequencer.db)
+}
+
 type scanner interface{ Scan(...any) error }
 
 type queryer interface {
@@ -804,14 +818,18 @@ func validateAttemptID(ctx context.Context, attemptID string) error {
 }
 
 func ensurePendingCapacity(ctx context.Context, tx *sql.Tx, additionalBytes int) error {
-	var count, totalBytes int64
-	if err := tx.QueryRowContext(ctx, `
-		SELECT count(*), COALESCE(sum(length(outbox)), 0)
-		FROM ingest_visibility_reservations
-		WHERE state = 'reserved'`).Scan(&count, &totalBytes); err != nil {
+	usage, err := readPendingUsage(ctx, tx)
+	if err != nil {
 		return fmt.Errorf("read pending visibility capacity: %w", err)
 	}
-	if pendingCapacityExceeded(count, totalBytes, int64(additionalBytes)) {
+	// #nosec G115 -- readPendingUsage bounds the unsigned value by the
+	// 256 MiB pending-outbox limit before returning it.
+	totalBytes := int64(usage.OutboxBytes)
+	if pendingCapacityExceeded(
+		int64(usage.Reservations),
+		totalBytes,
+		int64(additionalBytes),
+	) {
 		return ErrPendingCapacity
 	}
 	return nil
@@ -820,6 +838,82 @@ func ensurePendingCapacity(ctx context.Context, tx *sql.Tx, additionalBytes int)
 func pendingCapacityExceeded(count, totalBytes, additionalBytes int64) bool {
 	return count >= MaxPendingReservations ||
 		totalBytes > MaxPendingOutboxBytes-additionalBytes
+}
+
+func readPendingUsage(ctx context.Context, q queryer) (PendingUsage, error) {
+	var reservations, outboxBytes, validOutboxes int64
+	if err := q.QueryRowContext(ctx, `
+		SELECT
+			count(*),
+			COALESCE(sum(length(outbox)), 0),
+			COALESCE(sum(
+				CASE WHEN length(outbox) BETWEEN 1 AND ? THEN 1 ELSE 0 END
+			), 0)
+		FROM ingest_visibility_reservations
+		WHERE state = 'reserved'`, MaxOutboxBytes).Scan(
+		&reservations,
+		&outboxBytes,
+		&validOutboxes,
+	); err != nil {
+		return PendingUsage{}, fmt.Errorf("read pending visibility usage: %w", err)
+	}
+	return decodePendingUsage(reservations, outboxBytes, validOutboxes)
+}
+
+func decodePendingUsage(
+	reservations int64,
+	outboxBytes int64,
+	validOutboxes int64,
+) (PendingUsage, error) {
+	switch {
+	case reservations < 0:
+		return PendingUsage{}, fmt.Errorf("invalid pending visibility reservation count %d", reservations)
+	case outboxBytes < 0:
+		return PendingUsage{}, fmt.Errorf("invalid pending visibility outbox byte count %d", outboxBytes)
+	case validOutboxes < 0:
+		return PendingUsage{}, fmt.Errorf("invalid valid pending visibility outbox count %d", validOutboxes)
+	case reservations > MaxPendingReservations:
+		return PendingUsage{}, fmt.Errorf(
+			"pending visibility reservation count %d exceeds limit %d",
+			reservations,
+			MaxPendingReservations,
+		)
+	case outboxBytes > MaxPendingOutboxBytes:
+		return PendingUsage{}, fmt.Errorf(
+			"pending visibility outbox byte count %d exceeds limit %d",
+			outboxBytes,
+			MaxPendingOutboxBytes,
+		)
+	case (reservations == 0) != (outboxBytes == 0):
+		return PendingUsage{}, fmt.Errorf(
+			"inconsistent pending visibility usage: %d reservations contain %d outbox bytes",
+			reservations,
+			outboxBytes,
+		)
+	case validOutboxes != reservations:
+		return PendingUsage{}, fmt.Errorf(
+			"inconsistent pending visibility outboxes: %d of %d are valid",
+			validOutboxes,
+			reservations,
+		)
+	case outboxBytes < reservations:
+		return PendingUsage{}, fmt.Errorf(
+			"inconsistent pending visibility usage: %d reservations contain only %d outbox bytes",
+			reservations,
+			outboxBytes,
+		)
+	case outboxBytes > reservations*MaxOutboxBytes:
+		return PendingUsage{}, fmt.Errorf(
+			"inconsistent pending visibility usage: %d reservations contain %d outbox bytes",
+			reservations,
+			outboxBytes,
+		)
+	default:
+		return PendingUsage{
+			Reservations: uint32(reservations),
+			OutboxBytes:  uint64(outboxBytes),
+		}, nil
+	}
 }
 
 func allocateSequence(ctx context.Context, tx *sql.Tx) (int64, error) {

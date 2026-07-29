@@ -372,7 +372,7 @@ func TestReconcilePendingAdmissionIsContextCancelable(t *testing.T) {
 	}
 }
 
-func TestCloseWaitsForManualReconciliationBeforeClosingConnection(t *testing.T) {
+func TestCloseCancelsAndWaitsForManualReconciliationBeforeClosingConnection(t *testing.T) {
 	t.Parallel()
 	sequencer := &fakeVisibilitySequencer{reservation: visibility.Reservation{Sequence: 1}}
 	store := mustTestStoreWithVisibility(
@@ -384,11 +384,15 @@ func TestCloseWaitsForManualReconciliationBeforeClosingConnection(t *testing.T) 
 	if _, err := store.Store(context.Background(), validStoreBatch()); !isTransient(err) {
 		t.Fatalf("seed pending Store error = %v, want transient", err)
 	}
-	gate := &gatedStoreConnection{entered: make(chan struct{}), resume: make(chan struct{})}
+	gate := &gatedStoreConnection{
+		entered: make(chan struct{}),
+		resume:  make(chan struct{}),
+		exited:  make(chan struct{}),
+		closed:  make(chan struct{}),
+	}
 	store.connection = gate
-	ctx, cancel := context.WithCancel(context.Background())
 	reconcileDone := make(chan error, 1)
-	go func() { reconcileDone <- store.ReconcilePending(ctx) }()
+	go func() { reconcileDone <- store.ReconcilePending(context.Background()) }()
 	select {
 	case <-gate.entered:
 	case <-time.After(5 * time.Second):
@@ -398,21 +402,22 @@ func TestCloseWaitsForManualReconciliationBeforeClosingConnection(t *testing.T) 
 	closeDone := make(chan error, 1)
 	go func() { closeDone <- store.Close() }()
 	select {
-	case err := <-closeDone:
-		t.Fatalf("Close returned before manual reconciliation stopped: %v", err)
-	case <-time.After(25 * time.Millisecond):
+	case <-gate.closed:
+		t.Fatal("connection closed before manual reconciliation left ClickHouse")
+	case <-gate.exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not cancel manual reconciliation")
 	}
-	cancel()
-	if err := <-reconcileDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("manual reconciliation error = %v, want context canceled", err)
+	if err := <-reconcileDone; !errors.Is(err, ErrStoreClosed) {
+		t.Fatalf("manual reconciliation error = %v, want ErrStoreClosed", err)
 	}
 	select {
-	case err := <-closeDone:
-		if err != nil {
-			t.Fatal(err)
-		}
+	case <-gate.closed:
 	case <-time.After(5 * time.Second):
-		t.Fatal("Close did not finish after manual reconciliation stopped")
+		t.Fatal("connection did not close after manual reconciliation stopped")
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1412,11 +1417,16 @@ func (c *fakeStoreConnection) Close() error {
 type gatedStoreConnection struct {
 	entered chan struct{}
 	resume  chan struct{}
+	exited  chan struct{}
+	closed  chan struct{}
 	err     error
 }
 
 func (connection *gatedStoreConnection) prepare(ctx context.Context, _ string, _ clickhousedriver.Settings) (writeBatch, error) {
 	close(connection.entered)
+	if connection.exited != nil {
+		defer close(connection.exited)
+	}
 	select {
 	case <-connection.resume:
 		return nil, connection.err
@@ -1426,7 +1436,12 @@ func (connection *gatedStoreConnection) prepare(ctx context.Context, _ string, _
 }
 
 func (*gatedStoreConnection) Ping(context.Context) error { return nil }
-func (*gatedStoreConnection) Close() error               { return nil }
+func (connection *gatedStoreConnection) Close() error {
+	if connection.closed != nil {
+		close(connection.closed)
+	}
+	return nil
+}
 
 type fakeWriteBatch struct {
 	rows                              [][]any
@@ -1484,6 +1499,9 @@ type fakeVisibilitySequencer struct {
 	releaseErr     error
 	markErr        error
 	abandonErr     error
+	pendingUsage   *visibility.PendingUsage
+	pendingErr     error
+	acquireBlocked bool
 	cutoff         uint64
 	cutoffErr      error
 	reserveKeys    []string
@@ -1491,14 +1509,17 @@ type fakeVisibilitySequencer struct {
 	released       []uint64
 	marked         []uint64
 	abandoned      []uint64
+	lookupCalls    int
 	cutoffCalls    int
 	acquireCalls   int
+	pendingCalls   int
 	pruneRetain    uint64
 	pruneLimit     uint32
 	pruneNotify    chan<- struct{}
 }
 
 func (sequencer *fakeVisibilitySequencer) Lookup(_ context.Context, _, _ string, _ [32]byte) (visibility.Reservation, bool, error) {
+	sequencer.lookupCalls++
 	return sequencer.reservation, sequencer.hasReservation, sequencer.lookupErr
 }
 
@@ -1537,10 +1558,27 @@ func (sequencer *fakeVisibilitySequencer) Reserve(_ context.Context, request vis
 }
 func (sequencer *fakeVisibilitySequencer) AcquirePending(_ context.Context, _ string) (visibility.Reservation, bool, error) {
 	sequencer.acquireCalls++
-	if !sequencer.hasReservation || sequencer.reservation.AlreadyCommitted {
+	if sequencer.acquireBlocked || !sequencer.hasReservation ||
+		sequencer.reservation.AlreadyCommitted {
 		return visibility.Reservation{}, false, nil
 	}
 	return sequencer.reservation, true, nil
+}
+func (sequencer *fakeVisibilitySequencer) PendingUsage(context.Context) (visibility.PendingUsage, error) {
+	sequencer.pendingCalls++
+	if sequencer.pendingErr != nil {
+		return visibility.PendingUsage{}, sequencer.pendingErr
+	}
+	if sequencer.pendingUsage != nil {
+		return *sequencer.pendingUsage, nil
+	}
+	if !sequencer.hasReservation || sequencer.reservation.AlreadyCommitted {
+		return visibility.PendingUsage{}, nil
+	}
+	return visibility.PendingUsage{
+		Reservations: 1,
+		OutboxBytes:  uint64(len(sequencer.reservation.Outbox)),
+	}, nil
 }
 func (sequencer *fakeVisibilitySequencer) MarkSending(_ context.Context, sequence uint64, _ string) error {
 	sequencer.marked = append(sequencer.marked, sequence)
@@ -1564,6 +1602,9 @@ func (sequencer *fakeVisibilitySequencer) Release(_ context.Context, sequence ui
 }
 func (sequencer *fakeVisibilitySequencer) Abandon(_ context.Context, sequence uint64, _ string) error {
 	sequencer.abandoned = append(sequencer.abandoned, sequence)
+	if sequencer.abandonErr == nil {
+		sequencer.hasReservation = false
+	}
 	return sequencer.abandonErr
 }
 func (sequencer *fakeVisibilitySequencer) Cutoff(context.Context) (uint64, error) {

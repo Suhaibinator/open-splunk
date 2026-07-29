@@ -87,12 +87,20 @@ type Reservation struct {
 	CommittedAt           time.Time
 }
 
+// PendingUsage reports durable reservations that have not reached a terminal
+// state, including reservations currently owned by a live attempt.
+type PendingUsage struct {
+	Reservations uint32
+	OutboxBytes  uint64
+}
+
 // Sequencer establishes one persistent total order across all Store instances
 // sharing a single-node control database.
 type Sequencer interface {
 	Lookup(context.Context, string, string, [32]byte) (Reservation, bool, error)
 	Reserve(context.Context, ReserveRequest) (Reservation, error)
 	AcquirePending(context.Context, string) (Reservation, bool, error)
+	PendingUsage(context.Context) (PendingUsage, error)
 	MarkSending(context.Context, uint64, string) error
 	Commit(context.Context, uint64, string, time.Time) error
 	Release(context.Context, uint64, string) error
