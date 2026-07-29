@@ -7,7 +7,102 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: durable GORM collector fleet persistence
+## Latest checkpoint: durable collector runtime fencing
+
+Date: 2026-07-28
+
+Committed and pushed checkpoints:
+
+- `7216009` — atomic token revalidation, token-use recording, enabled-state
+  validation, and durable lease allocation;
+- `070b47a` — fresh credential and exact-lease authorization in one read-only
+  GORM snapshot; and
+- `48c8b7d` — production startup, gRPC lifecycle, heartbeat, batch, and cleanup
+  wiring for the exact durable lease.
+
+This slice makes the persisted GORM fleet lease non-bypassable in production:
+
+1. Server startup generates one cryptographically random boot epoch, opens the
+   migrated GORM fleet store, and invalidates every prior-boot active lease
+   before constructing the collector listener. Startup fails closed if that
+   invalidation cannot commit.
+2. A validated `CollectorHello` is mapped into a bounded detached snapshot.
+   The admission coordinator uses one immediate GORM transaction to freshly
+   revalidate the bound bearer token, record its last use, verify enabled fleet
+   state, and allocate the exact tenant/collector/boot/stream/generation lease
+   before `CollectorReady`.
+3. Admission through process activation is serialized per trusted
+   tenant/collector identity. This prevents an older committed generation from
+   becoming process-current after a newer durable generation committed but did
+   not reach activation.
+4. The process registry never invents a durable generation. It retains the
+   highest observed generation per administratively provisioned collector and
+   conditionally releases the complete lease plus its process activation
+   token, so delayed cleanup cannot remove or revive a successor.
+5. Every heartbeat and event batch freshly revalidates credential state,
+   authorized indexes, and the exact enabled durable lease from one GORM
+   snapshot before operational work. A stale or disabled lease aborts before
+   ClickHouse. Heartbeats are synchronously and conditionally persisted with
+   the server receive time and stream request sequence.
+6. Deferred disconnect uses a detached bounded context, the complete durable
+   lease, and a stable server timestamp. It retries transient failures three
+   times; commit-ambiguous cleanup is safe because the exact conditional
+   mutation is idempotent and a successor cannot be cleared.
+7. Boot, Hello, heartbeat, lease, timestamp, duration, collection, enum, and
+   optional-value mappings fail closed on lossy or unbounded protobuf state.
+   Canonical index names use the control-plane 255-byte contract instead of
+   the unrelated 128-byte protocol-ID bound.
+8. Real migrated SQLite/GORM plus native bufconn gRPC tests prove
+   Hello/Ready, exact lease persistence, full heartbeat projection,
+   administrator disable, pre-ClickHouse batch fencing, and active
+   Goodbye-to-disconnect cleanup. Forced-order tests cover reverse durable
+   generation activation and token expiry while waiting on the finalizer.
+
+Validation on pushed commit `48c8b7d`:
+
+```sh
+go test ./... -count=1
+go test -race \
+  ./internal/ingest ./cmd/open-splunk-server \
+  ./internal/collector ./internal/collector/sender -count=1
+go vet ./...
+go build ./...
+/private/tmp/open-splunk-golangci-lint-v2.12.2 \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse \
+    -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m -v
+git diff --check
+```
+
+All Go packages passed. The touched runtime packages passed under the race
+detector, vet and build passed, pinned golangci-lint v2.12.2 reported
+`0 issues`, and the pinned ClickHouse store suite passed all subtests.
+Independent adversarial review found and drove fixes for reverse-generation
+activation, stale acceptance time after finalizer wait, best-effort one-shot
+cleanup, lossy enum conversion, and two false-positive tests. The stable diff
+has no remaining P0/P1/P2 lifecycle or coverage finding.
+
+Next implementation checkpoints:
+
+1. Add fleet-only GORM administrator reads and partial CAS mutations so display
+   updates and state changes preserve unspecified fields without loading
+   operational children. Disable must still commit when runtime or telemetry
+   rows are corrupt.
+2. Add a bounded latest-wins, generation-conditional heartbeat coalescer and a
+   monotonic process liveness tracker with explicit stale grace and shutdown
+   semantics.
+3. Add a bounded storage-side fleet catalog with batched child loading,
+   migration-backed sort/filter indexes, signed snapshot-bound keyset cursors,
+   and SQLite query-plan tests.
+4. Wire the four authenticated collector administrator routes and advertise
+   `SERVER_FEATURE_COLLECTOR_ADMIN` only after get/list/mutations and liveness
+   semantics are complete.
+5. Repeat real HTTP/native-gRPC/SQLite/reopen acceptance, the pinned
+   ClickHouse suite, and independent adversarial review.
+
+## Previous checkpoint: durable GORM collector fleet persistence
 
 Date: 2026-07-28
 
