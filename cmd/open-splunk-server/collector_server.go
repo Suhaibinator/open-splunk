@@ -11,6 +11,7 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -23,7 +24,7 @@ import (
 const (
 	collectorMaxConcurrentStreams = 8
 	collectorMaxConnections       = 64
-	collectorMaxActiveStreams     = 16
+	collectorMaxActiveStreams     = collectorfleet.MaximumActiveCollectors
 	collectorMaxHeaderBytes       = 16 << 10
 	collectorConnectionTimeout    = 10 * time.Second
 )

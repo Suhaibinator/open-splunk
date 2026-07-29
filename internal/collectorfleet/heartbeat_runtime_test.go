@@ -36,6 +36,13 @@ func TestHeartbeatRuntimeConfigValidation(t *testing.T) {
 			mutate: func(config *HeartbeatRuntimeConfig) { config.MaxCollectors = -1 },
 		},
 		{
+			name:   "collector capacity above catalog bound",
+			writer: writer,
+			mutate: func(config *HeartbeatRuntimeConfig) {
+				config.MaxCollectors = MaximumActiveCollectors + 1
+			},
+		},
+		{
 			name:   "zero heartbeat interval",
 			writer: writer,
 			mutate: func(config *HeartbeatRuntimeConfig) { config.HeartbeatInterval = 0 },

@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	defaultCollectorListPageSize   = 4
-	maximumCollectorListPageSize   = 4
+	defaultCollectorListPageSize   = maximumCollectorBatchSize
+	maximumCollectorListPageSize   = maximumCollectorBatchSize
 	maximumCollectorListTextBytes  = 255
-	maximumCollectorListLiveness   = 16
+	maximumCollectorListLiveness   = MaximumActiveCollectors
 	maximumCollectorCursorBytes    = 2 << 10
 	minimumCollectorCursorKeyBytes = 32
 	maximumCollectorCursorKeyBytes = 1 << 10

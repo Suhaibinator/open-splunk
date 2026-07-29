@@ -351,6 +351,7 @@ func TestCollectorListCursorRoundTripsTypedNullableKeys(t *testing.T) {
 				cursor.Revision,
 				livenessDigest,
 				test.sortBy,
+				false,
 			)
 			if err != nil {
 				t.Fatalf("decodeCollectorListCursor(): %v", err)
@@ -359,6 +360,151 @@ func TestCollectorListCursorRoundTripsTypedNullableKeys(t *testing.T) {
 				t.Fatalf("decoded = %#v, want %#v", decoded, cursor)
 			}
 		})
+	}
+}
+
+func TestCollectorListCursorBindsOptionalExactTotal(t *testing.T) {
+	t.Parallel()
+
+	key := bytes.Repeat([]byte{0x52}, minimumCollectorCursorKeyBytes)
+	livenessDigest := collectorSHA256Digest([]byte("liveness"))
+	zero := uint64(0)
+	tests := []struct {
+		name         string
+		includeTotal bool
+		totalSize    *uint64
+		wantErr      bool
+	}{
+		{
+			name:         "included zero total",
+			includeTotal: true,
+			totalSize:    &zero,
+		},
+		{
+			name:         "included total missing",
+			includeTotal: true,
+			wantErr:      true,
+		},
+		{
+			name:      "unrequested total present",
+			totalSize: &zero,
+			wantErr:   true,
+		},
+		{
+			name: "unrequested total absent",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			request, err := normalizeListRequest(
+				Scope{TenantID: "tenant-a"},
+				ListRequest{
+					PageSize:     2,
+					IncludeTotal: test.includeTotal,
+				},
+			)
+			if err != nil {
+				t.Fatalf("normalize request: %v", err)
+			}
+			requestHash, err := collectorListFilterHash(request)
+			if err != nil {
+				t.Fatalf("hash request: %v", err)
+			}
+			cursor := collectorListCursor{
+				RequestHash:    requestHash,
+				Revision:       3,
+				LivenessDigest: livenessDigest,
+				TotalSize:      test.totalSize,
+				StringKey: &collectorListNullableString{
+					Valid: true,
+					Value: "Edge",
+				},
+				CollectorID: "collector-a",
+			}
+			token, err := encodeCollectorListCursor(
+				key,
+				cursor,
+				CollectorSortByDisplayName,
+			)
+			if err != nil {
+				t.Fatalf("encode cursor: %v", err)
+			}
+			decoded, err := decodeCollectorListCursor(
+				key,
+				token,
+				requestHash,
+				cursor.Revision,
+				livenessDigest,
+				CollectorSortByDisplayName,
+				test.includeTotal,
+			)
+			if test.wantErr {
+				if !errors.Is(err, control.ErrInvalidArgument) {
+					t.Fatalf(
+						"decode total-presence mismatch error = %v, want ErrInvalidArgument",
+						err,
+					)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("decode cursor: %v", err)
+			}
+			if !reflect.DeepEqual(decoded.TotalSize, test.totalSize) {
+				t.Fatalf(
+					"decoded total = %v, want %v",
+					decoded.TotalSize,
+					test.totalSize,
+				)
+			}
+		})
+	}
+
+	request, err := normalizeListRequest(
+		Scope{TenantID: "tenant-a"},
+		ListRequest{PageSize: 2, IncludeTotal: true},
+	)
+	if err != nil {
+		t.Fatalf("normalize negative-total request: %v", err)
+	}
+	requestHash, err := collectorListFilterHash(request)
+	if err != nil {
+		t.Fatalf("hash negative-total request: %v", err)
+	}
+	negativeToken, err := cursorcodec.Encode(
+		key,
+		collectorListCursorPurpose,
+		collectorListCursorVersion,
+		maximumCollectorCursorBytes,
+		map[string]any{
+			"v": collectorListCursorVersion,
+			"f": requestHash,
+			"r": 3,
+			"l": livenessDigest,
+			"t": -1,
+			"s": map[string]any{"v": true, "x": "Edge"},
+			"i": "collector-a",
+		},
+	)
+	if err != nil {
+		t.Fatalf("sign negative-total cursor: %v", err)
+	}
+	if _, err := decodeCollectorListCursor(
+		key,
+		negativeToken,
+		requestHash,
+		3,
+		livenessDigest,
+		CollectorSortByDisplayName,
+		true,
+	); !errors.Is(err, control.ErrInvalidArgument) {
+		t.Fatalf(
+			"decode negative total error = %v, want ErrInvalidArgument",
+			err,
+		)
 	}
 }
 
@@ -574,6 +720,7 @@ func TestCollectorListCursorRejectsTamperingAndRequestReplay(t *testing.T) {
 				cursor.Revision,
 				livenessDigest,
 				CollectorSortByDisplayName,
+				false,
 			)
 			if !errors.Is(decodeErr, control.ErrInvalidArgument) {
 				t.Fatalf(
@@ -653,6 +800,7 @@ func TestCollectorListCursorRevisionAndLivenessChangesInvalidatePage(
 				test.revision,
 				test.liveness,
 				CollectorSortByQueueBytes,
+				false,
 			)
 			if !errors.Is(decodeErr, test.want) {
 				t.Fatalf(
@@ -892,6 +1040,7 @@ func TestCollectorListCursorRejectsInvalidPayloadShape(t *testing.T) {
 				base.Revision,
 				livenessDigest,
 				test.sortBy,
+				false,
 			); !errors.Is(err, control.ErrInvalidArgument) {
 				t.Fatalf(
 					"decodeCollectorListCursor() error = %v, want ErrInvalidArgument",

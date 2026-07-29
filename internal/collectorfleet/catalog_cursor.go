@@ -23,6 +23,7 @@ type collectorListCursor struct {
 	RequestHash    string                       `json:"f"`
 	Revision       int64                        `json:"r"`
 	LivenessDigest string                       `json:"l"`
+	TotalSize      *uint64                      `json:"t,omitempty"`
 	StringKey      *collectorListNullableString `json:"s,omitempty"`
 	IntegerKey     *collectorListNullableInt64  `json:"n,omitempty"`
 	CollectorID    string                       `json:"i"`
@@ -215,6 +216,7 @@ func decodeCollectorListCursor(
 	currentRevision int64,
 	currentLivenessDigest string,
 	sortBy CollectorSortBy,
+	includeTotal bool,
 ) (collectorListCursor, error) {
 	invalidCursor := func() (collectorListCursor, error) {
 		return collectorListCursor{}, invalid(
@@ -243,7 +245,8 @@ func decodeCollectorListCursor(
 		return invalidCursor()
 	}
 	if !validCollectorListCursor(cursor, sortBy) ||
-		cursor.RequestHash != requestHash {
+		cursor.RequestHash != requestHash ||
+		(cursor.TotalSize != nil) != includeTotal {
 		return invalidCursor()
 	}
 	if cursor.Revision != currentRevision ||

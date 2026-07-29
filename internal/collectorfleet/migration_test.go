@@ -67,7 +67,7 @@ func TestGORMModelsMatchAuthoritativeCollectorFleetMigration(t *testing.T) {
 			rows, err := database.SQLDB().QueryContext(
 				ctx,
 				fmt.Sprintf(
-					"SELECT name FROM pragma_table_info('%s') ORDER BY cid",
+					"SELECT name FROM pragma_table_xinfo('%s') ORDER BY cid",
 					test.table,
 				),
 			)
@@ -189,6 +189,53 @@ func TestGORMModelsMatchAuthoritativeCollectorFleetMigration(t *testing.T) {
 		!strings.Contains(displayCheck.Constraint, "CAST(display_name AS BLOB)") {
 		t.Fatalf("GORM byte-bound display check drifted: %#v", displayCheck)
 	}
+	displaySortField := statement.Schema.LookUpField("DisplayNameSortKey")
+	if displaySortField == nil {
+		t.Fatal("GORM display-name sort key field is missing")
+	}
+	if displaySortField.DBName != "display_name_sort_key" ||
+		displaySortField.Creatable ||
+		displaySortField.Updatable ||
+		!displaySortField.Readable ||
+		!displaySortField.NotNull {
+		t.Fatalf(
+			"GORM display-name sort key is not modeled as read-only generated state: %#v",
+			displaySortField,
+		)
+	}
+	var displaySortGeneratedKind int
+	var displaySortNotNull int
+	if err := database.SQLDB().QueryRowContext(ctx, `
+		SELECT hidden, "notnull"
+		FROM pragma_table_xinfo('collector_fleet')
+		WHERE name = 'display_name_sort_key'
+	`).Scan(&displaySortGeneratedKind, &displaySortNotNull); err != nil {
+		t.Fatalf("read migrated display-name sort key: %v", err)
+	}
+	if displaySortGeneratedKind != 3 || displaySortNotNull != 1 {
+		t.Fatalf(
+			"migrated display-name sort key = (hidden %d, not-null %d), want stored generated and non-null",
+			displaySortGeneratedKind,
+			displaySortNotNull,
+		)
+	}
+	var fleetCreateSQL string
+	if err := database.SQLDB().QueryRowContext(ctx, `
+		SELECT sql
+		FROM sqlite_schema
+		WHERE type = 'table' AND name = 'collector_fleet'
+	`).Scan(&fleetCreateSQL); err != nil {
+		t.Fatalf("read collector fleet schema: %v", err)
+	}
+	if !strings.Contains(
+		fleetCreateSQL,
+		"GENERATED ALWAYS AS (coalesce(display_name, '')) STORED",
+	) {
+		t.Fatalf(
+			"migrated display-name sort key expression drifted: %s",
+			fleetCreateSQL,
+		)
+	}
 }
 
 func assertCollectorCatalogIndexesMatchModels(
@@ -203,7 +250,7 @@ func assertCollectorCatalogIndexesMatchModels(
 			"tenant_id", "administrative_state", "collector_id",
 		},
 		"collector_fleet_tenant_display_id_idx": {
-			"tenant_id", "display_name", "collector_id",
+			"tenant_id", "display_name_sort_key", "collector_id",
 		},
 		"collector_runtime_tenant_hostname_id_idx": {
 			"tenant_id", "hostname", "collector_id",
@@ -400,7 +447,7 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 		SELECT name
 		FROM sqlite_schema
 		WHERE type = 'trigger'
-		  AND name GLOB 'collector_catalog_revision_after_*'
+		  AND name GLOB 'collector_catalog_revision_*'
 		ORDER BY name`)
 	if err != nil {
 		t.Fatal(err)
@@ -424,19 +471,35 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 		"collector_catalog_revision_after_runtime_delete",
 		"collector_catalog_revision_after_runtime_insert",
 		"collector_catalog_revision_after_runtime_update",
+		"collector_catalog_revision_before_fleet_insert",
+		"collector_catalog_revision_marker_is_undeletable",
 	}
 	if !slices.Equal(triggers, wantTriggers) {
 		t.Fatalf("catalog revision triggers = %v, want %v", triggers, wantTriggers)
 	}
 
-	assertCatalogRevision(t, database.SQLDB(), lease.TenantID, 2)
+	assertCatalogRevision(t, database.SQLDB(), lease.TenantID, 2, 1, 1)
+	if _, err := database.SQLDB().ExecContext(ctx, `
+		DELETE FROM collector_catalog_revisions
+		WHERE tenant_id = ?`,
+		lease.TenantID,
+	); err == nil ||
+		!strings.Contains(err.Error(), "revision marker cannot be deleted") {
+		t.Fatalf("delete catalog revision marker error = %v", err)
+	}
+	assertCatalogRevision(t, database.SQLDB(), lease.TenantID, 2, 1, 1)
+
 	mutations := []struct {
-		name string
-		sql  string
-		args []any
+		name             string
+		sql              string
+		args             []any
+		wantFleetCount   int64
+		wantRuntimeCount int64
 	}{
 		{
-			name: "fleet update",
+			name:             "fleet update",
+			wantFleetCount:   1,
+			wantRuntimeCount: 1,
 			sql: `
 				UPDATE collector_fleet
 				SET display_name = 'renamed'
@@ -444,7 +507,9 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 			args: []any{lease.TenantID, lease.CollectorID},
 		},
 		{
-			name: "runtime update",
+			name:             "runtime update",
+			wantFleetCount:   1,
+			wantRuntimeCount: 1,
 			sql: `
 				UPDATE collector_runtime
 				SET queued_bytes = 1
@@ -452,7 +517,9 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 			args: []any{lease.TenantID, lease.CollectorID},
 		},
 		{
-			name: "fleet insert",
+			name:             "fleet insert",
+			wantFleetCount:   2,
+			wantRuntimeCount: 1,
 			sql: `
 				INSERT INTO collector_fleet (
 					tenant_id, collector_id, admin_version, display_name,
@@ -462,7 +529,9 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 			args: []any{lease.TenantID},
 		},
 		{
-			name: "runtime insert",
+			name:             "runtime insert",
+			wantFleetCount:   2,
+			wantRuntimeCount: 2,
 			sql: `
 				INSERT INTO collector_runtime (
 					tenant_id, collector_id, telemetry_revision, lease_generation,
@@ -477,14 +546,18 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 			args: []any{lease.TenantID},
 		},
 		{
-			name: "runtime delete",
+			name:             "runtime delete",
+			wantFleetCount:   2,
+			wantRuntimeCount: 1,
 			sql: `
 				DELETE FROM collector_runtime
 				WHERE tenant_id = ? AND collector_id = 'catalog-second'`,
 			args: []any{lease.TenantID},
 		},
 		{
-			name: "fleet delete",
+			name:             "fleet delete",
+			wantFleetCount:   1,
+			wantRuntimeCount: 1,
 			sql: `
 				DELETE FROM collector_fleet
 				WHERE tenant_id = ? AND collector_id = 'catalog-second'`,
@@ -504,6 +577,8 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 			database.SQLDB(),
 			lease.TenantID,
 			int64(index+3),
+			mutation.wantFleetCount,
+			mutation.wantRuntimeCount,
 		)
 	}
 }
@@ -521,7 +596,14 @@ func TestCollectorFleetCatalogRevisionFencesChildSnapshotTransactionsOnce(
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertCatalogRevision(t, database.SQLDB(), firstRequest.TenantID, 2)
+	assertCatalogRevision(
+		t,
+		database.SQLDB(),
+		firstRequest.TenantID,
+		2,
+		1,
+		1,
+	)
 
 	replacement := testClaim(now.Add(time.Minute))
 	replacement.BootEpoch = "replacement-boot"
@@ -536,7 +618,14 @@ func TestCollectorFleetCatalogRevisionFencesChildSnapshotTransactionsOnce(
 	}
 	// Replacing every Hello child table is fenced by the single runtime-parent
 	// update, not by one revision write for each deleted or inserted child.
-	assertCatalogRevision(t, database.SQLDB(), replacement.TenantID, 3)
+	assertCatalogRevision(
+		t,
+		database.SQLDB(),
+		replacement.TenantID,
+		3,
+		1,
+		1,
+	)
 
 	heartbeat := testHeartbeat(now.Add(2*time.Minute), 1)
 	applied, err := store.RecordHeartbeat(ctx, lease, heartbeat)
@@ -544,7 +633,84 @@ func TestCollectorFleetCatalogRevisionFencesChildSnapshotTransactionsOnce(
 		t.Fatalf("RecordHeartbeat() = %t, %v", applied, err)
 	}
 	// Replacing input health is likewise paired with one runtime-parent update.
-	assertCatalogRevision(t, database.SQLDB(), replacement.TenantID, 4)
+	assertCatalogRevision(
+		t,
+		database.SQLDB(),
+		replacement.TenantID,
+		4,
+		1,
+		1,
+	)
+}
+
+func TestCollectorFleetCatalogCountsSurviveCascadeDeleteAndTenantReuse(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	database, store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 29, 3, 11, 30, 0, time.UTC)
+	request := testClaim(now)
+	_, lease, err := store.Claim(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCatalogRevision(
+		t,
+		database.SQLDB(),
+		lease.TenantID,
+		2,
+		1,
+		1,
+	)
+
+	if _, err := database.SQLDB().ExecContext(ctx, `
+		DELETE FROM collector_fleet
+		WHERE tenant_id = ? AND collector_id = ?`,
+		lease.TenantID,
+		lease.CollectorID,
+	); err != nil {
+		t.Fatalf("cascade-delete collector: %v", err)
+	}
+	assertCatalogRevision(
+		t,
+		database.SQLDB(),
+		lease.TenantID,
+		4,
+		0,
+		0,
+	)
+	assertCollectorParentCounts(
+		t,
+		database.SQLDB(),
+		lease.TenantID,
+		0,
+		0,
+	)
+
+	request.ReceivedAt = now.Add(time.Minute)
+	request.BootEpoch = "reused-tenant-boot"
+	request.StreamID = "reused-tenant-stream"
+	request.Hello.InstanceID = "reused-tenant-instance"
+	if _, _, err := store.Claim(ctx, request); err != nil {
+		t.Fatalf("claim reused tenant: %v", err)
+	}
+	assertCatalogRevision(
+		t,
+		database.SQLDB(),
+		lease.TenantID,
+		6,
+		1,
+		1,
+	)
+	assertCollectorParentCounts(
+		t,
+		database.SQLDB(),
+		lease.TenantID,
+		1,
+		1,
+	)
 }
 
 func TestCollectorFleetCatalogRevisionOverflowAbortsMutationAtomically(
@@ -627,6 +793,211 @@ func TestCollectorFleetCatalogRevisionOverflowAbortsMutationAtomically(
 				database.SQLDB(),
 				lease.TenantID,
 				int64(math.MaxInt64),
+				1,
+				1,
+			)
+		})
+	}
+}
+
+func TestCollectorFleetCatalogCountGuardsAbortMutationsAtomically(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		corruptionSQL    string
+		corruptionValue  int64
+		mutation         string
+		errorFragment    string
+		wantFleetCount   int64
+		wantRuntimeCount int64
+	}{
+		{
+			name: "fleet count overflow",
+			corruptionSQL: `
+				UPDATE collector_catalog_revisions
+				SET fleet_count = ?
+				WHERE tenant_id = ?`,
+			corruptionValue:  math.MaxInt64,
+			mutation:         "claim",
+			errorFragment:    "fleet count exhausted",
+			wantFleetCount:   math.MaxInt64,
+			wantRuntimeCount: 1,
+		},
+		{
+			name: "runtime count overflow",
+			corruptionSQL: `
+				UPDATE collector_catalog_revisions
+				SET runtime_count = ?
+				WHERE tenant_id = ?`,
+			corruptionValue:  math.MaxInt64,
+			mutation:         "claim",
+			errorFragment:    "runtime count exhausted",
+			wantFleetCount:   1,
+			wantRuntimeCount: math.MaxInt64,
+		},
+		{
+			name: "fleet count underflow",
+			corruptionSQL: `
+				UPDATE collector_catalog_revisions
+				SET fleet_count = ?
+				WHERE tenant_id = ?`,
+			mutation:         "delete fleet",
+			errorFragment:    "fleet count underflow",
+			wantFleetCount:   0,
+			wantRuntimeCount: 1,
+		},
+		{
+			name: "runtime count underflow",
+			corruptionSQL: `
+				UPDATE collector_catalog_revisions
+				SET runtime_count = ?
+				WHERE tenant_id = ?`,
+			mutation:         "delete runtime",
+			errorFragment:    "runtime count underflow",
+			wantFleetCount:   1,
+			wantRuntimeCount: 0,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			database, store := openTestStore(t)
+			ctx := context.Background()
+			now := time.Date(2026, 7, 29, 3, 13, 0, 0, time.UTC)
+			_, lease, err := store.Claim(ctx, testClaim(now))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.SQLDB().ExecContext(
+				ctx,
+				test.corruptionSQL,
+				test.corruptionValue,
+				lease.TenantID,
+			); err != nil {
+				t.Fatalf("install count boundary: %v", err)
+			}
+
+			switch test.mutation {
+			case "claim":
+				second := testClaim(now.Add(time.Minute))
+				second.CollectorID = "collector-count-guard-second"
+				second.BootEpoch = "count-guard-second-boot"
+				second.StreamID = "count-guard-second-stream"
+				second.Hello.InstanceID = "count-guard-second-instance"
+				_, _, err = store.Claim(ctx, second)
+			case "delete fleet":
+				_, err = database.SQLDB().ExecContext(ctx, `
+					DELETE FROM collector_fleet
+					WHERE tenant_id = ? AND collector_id = ?`,
+					lease.TenantID,
+					lease.CollectorID,
+				)
+			case "delete runtime":
+				_, err = database.SQLDB().ExecContext(ctx, `
+					DELETE FROM collector_runtime
+					WHERE tenant_id = ? AND collector_id = ?`,
+					lease.TenantID,
+					lease.CollectorID,
+				)
+			default:
+				t.Fatalf("unhandled mutation %q", test.mutation)
+			}
+			if err == nil || !strings.Contains(err.Error(), test.errorFragment) {
+				t.Fatalf(
+					"%s error = %v, want %q",
+					test.mutation,
+					err,
+					test.errorFragment,
+				)
+			}
+			assertCatalogRevision(
+				t,
+				database.SQLDB(),
+				lease.TenantID,
+				2,
+				test.wantFleetCount,
+				test.wantRuntimeCount,
+			)
+			assertCollectorParentCounts(
+				t,
+				database.SQLDB(),
+				lease.TenantID,
+				1,
+				1,
+			)
+		})
+	}
+}
+
+func TestCollectorFleetCatalogMissingRevisionAbortsParentUpdates(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	for _, target := range []string{"fleet", "runtime"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+
+			database, store := openTestStore(t)
+			ctx := context.Background()
+			now := time.Date(2026, 7, 29, 3, 14, 0, 0, time.UTC)
+			_, lease, err := store.Claim(ctx, testClaim(now))
+			if err != nil {
+				t.Fatal(err)
+			}
+			forceCatalogRevisionMarkerLossForTest(
+				t,
+				database.SQLDB(),
+				lease.TenantID,
+			)
+
+			var mutation string
+			switch target {
+			case "fleet":
+				mutation = `
+					UPDATE collector_fleet
+					SET display_name = 'must-roll-back'
+					WHERE tenant_id = ? AND collector_id = ?`
+			case "runtime":
+				mutation = `
+					UPDATE collector_runtime
+					SET queued_bytes = 99
+					WHERE tenant_id = ? AND collector_id = ?`
+			default:
+				t.Fatalf("unhandled target %q", target)
+			}
+			if _, err := database.SQLDB().ExecContext(
+				ctx,
+				mutation,
+				lease.TenantID,
+				lease.CollectorID,
+			); err == nil ||
+				!strings.Contains(err.Error(), "fleet/runtime revision is missing") {
+				t.Fatalf("missing-revision mutation error = %v", err)
+			}
+
+			var markerCount int64
+			if err := database.SQLDB().QueryRowContext(ctx, `
+				SELECT count(*)
+				FROM collector_catalog_revisions
+				WHERE tenant_id = ?`,
+				lease.TenantID,
+			).Scan(&markerCount); err != nil {
+				t.Fatalf("count revision markers: %v", err)
+			}
+			if markerCount != 0 {
+				t.Fatalf("revision marker count = %d, want 0", markerCount)
+			}
+			assertCollectorParentCounts(
+				t,
+				database.SQLDB(),
+				lease.TenantID,
+				1,
+				1,
 			)
 		})
 	}
@@ -636,21 +1007,100 @@ func assertCatalogRevision(
 	t *testing.T,
 	database *sql.DB,
 	tenantID string,
-	want int64,
+	wantRevision int64,
+	wantFleetCount int64,
+	wantRuntimeCount int64,
 ) {
 	t.Helper()
 
-	var got int64
+	var gotRevision int64
+	var gotFleetCount int64
+	var gotRuntimeCount int64
 	if err := database.QueryRowContext(context.Background(), `
-		SELECT revision
+		SELECT revision, fleet_count, runtime_count
 		FROM collector_catalog_revisions
 		WHERE tenant_id = ?`,
 		tenantID,
-	).Scan(&got); err != nil {
+	).Scan(
+		&gotRevision,
+		&gotFleetCount,
+		&gotRuntimeCount,
+	); err != nil {
 		t.Fatalf("read collector catalog revision: %v", err)
 	}
-	if got != want {
-		t.Fatalf("collector catalog revision = %d, want %d", got, want)
+	if gotRevision != wantRevision ||
+		gotFleetCount != wantFleetCount ||
+		gotRuntimeCount != wantRuntimeCount {
+		t.Fatalf(
+			"collector catalog revision state = (%d, %d, %d), want (%d, %d, %d)",
+			gotRevision,
+			gotFleetCount,
+			gotRuntimeCount,
+			wantRevision,
+			wantFleetCount,
+			wantRuntimeCount,
+		)
+	}
+}
+
+func assertCollectorParentCounts(
+	t *testing.T,
+	database *sql.DB,
+	tenantID string,
+	wantFleetCount int64,
+	wantRuntimeCount int64,
+) {
+	t.Helper()
+
+	var fleetCount int64
+	var runtimeCount int64
+	if err := database.QueryRowContext(context.Background(), `
+		SELECT
+			(SELECT count(*) FROM collector_fleet WHERE tenant_id = ?),
+			(SELECT count(*) FROM collector_runtime WHERE tenant_id = ?)`,
+		tenantID,
+		tenantID,
+	).Scan(&fleetCount, &runtimeCount); err != nil {
+		t.Fatalf("read collector parent counts: %v", err)
+	}
+	if fleetCount != wantFleetCount || runtimeCount != wantRuntimeCount {
+		t.Fatalf(
+			"collector parent counts = (%d, %d), want (%d, %d)",
+			fleetCount,
+			runtimeCount,
+			wantFleetCount,
+			wantRuntimeCount,
+		)
+	}
+}
+
+func forceCatalogRevisionMarkerLossForTest(
+	t *testing.T,
+	database *sql.DB,
+	tenantID string,
+) {
+	t.Helper()
+
+	ctx := context.Background()
+	if _, err := database.ExecContext(ctx, `
+		DROP TRIGGER collector_catalog_revision_marker_is_undeletable`,
+	); err != nil {
+		t.Fatalf("drop catalog revision delete guard: %v", err)
+	}
+	result, err := database.ExecContext(ctx, `
+		DELETE FROM collector_catalog_revisions
+		WHERE tenant_id = ?`,
+		tenantID,
+	)
+	if err != nil {
+		t.Fatalf("force catalog revision marker loss: %v", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		t.Fatalf("read forced marker-loss rows affected: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("forced marker-loss rows affected = %d, want 1", rows)
 	}
 }
 

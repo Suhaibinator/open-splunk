@@ -34,6 +34,10 @@ const (
 	LivenessStateOffline LivenessState = "offline"
 	LivenessStateOnline  LivenessState = "online"
 	LivenessStateStale   LivenessState = "stale"
+
+	// MaximumActiveCollectors is the largest process-local collector set that
+	// can be projected atomically into one bounded catalog request.
+	MaximumActiveCollectors = 16
 )
 
 // CollectorLiveness is one detached process-local state for an exact durable
@@ -52,6 +56,7 @@ type HeartbeatWriter interface {
 // HeartbeatRuntimeConfig bounds the process-local latest-wins buffer and its
 // independently owned persistence and monotonic liveness clocks.
 type HeartbeatRuntimeConfig struct {
+	// MaxCollectors must be between one and MaximumActiveCollectors.
 	MaxCollectors     int
 	HeartbeatInterval time.Duration
 	StaleGrace        time.Duration
@@ -120,6 +125,12 @@ func NewHeartbeatRuntime(
 	}
 	if config.MaxCollectors <= 0 {
 		return nil, invalid("heartbeat runtime collector capacity must be positive")
+	}
+	if config.MaxCollectors > MaximumActiveCollectors {
+		return nil, invalid(
+			"heartbeat runtime collector capacity must not exceed %d",
+			MaximumActiveCollectors,
+		)
 	}
 	if config.HeartbeatInterval <= 0 {
 		return nil, invalid("heartbeat interval must be positive")
