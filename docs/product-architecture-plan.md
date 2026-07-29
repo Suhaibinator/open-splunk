@@ -499,8 +499,8 @@ outstanding operation snapshots the exact archived index ID, canonical name,
 version, and timestamp, and its insert trigger atomically advances the index
 to `DELETING` at version `N+1`. Exact retries return the same operation,
 including after restart, and oldest-first discovery returns one indexed row
-at a time. The operation and its deleting index are immutable until a future
-terminal transaction replaces the outstanding marker.
+at a time. The operation and its deleting index are immutable until
+`CompleteIndexDataDeletion` consumes the outstanding marker.
 
 The ClickHouse Store separately provides a writer-preferring, context-aware
 `WithWritesFrozen` scope that covers `Store`, `ResumeBatch`,
@@ -530,6 +530,30 @@ current UUID/engine and proves no `(tenant_id, index_name)` row exists. Only the
 initial `MergeTree` engine is supported. ClickHouse persistence, mutation
 execution, and reconciliation remain native and do not use GORM.
 
+Migration 0019 and the explicit GORM
+`indexDataDeletionCompletionRecord` provide that terminal control-plane
+transaction. `CompleteIndexDataDeletion` accepts the exact immutable mutation
+attempt whose native request was just proven physically empty. One completion
+insert atomically creates the ordinary catalog tombstone, deletes the matching
+outstanding operation, and cascades deletion of its mutation attempt. The
+retained index stays `DELETING` at version `N+1`; terminal completion does not
+require an `N+2` bump, so an archived `MaxInt64-1` generation can safely finish
+at SQLite's final version. The immutable completion permanently copies the
+operation identity, correlation, logical index identity, archived/deleting
+versions, tenant, physical database/table/UUID, protocol, and timestamps.
+Exact concurrent and restart retries return that audit row through a read-only
+fast path, completed protocol identities cannot be recycled, stale outstanding
+reads converge to not found, and the retained row continues to preserve
+foreign keys and reserve the canonical name.
+
+This SQLite transaction is a trusted terminal boundary, not independent proof
+of ClickHouse state. The runtime coordinator must invoke it inside the same
+drained `WithWritesFrozen` callback in which
+`AdvanceIndexDataDeletion` returns physical emptiness. If the terminal commit
+fails or has an ambiguous outcome and no completion audit can be read, the
+coordinator must reacquire the freeze, drain, and prove zero again rather than
+reuse cached evidence.
+
 This initial catalog belongs to one configured deployment tenant. A physical
 deletion targets that tenant plus the canonical index name and deliberately
 preserves rows under every other tenant key. Before supporting several tenant
@@ -548,9 +572,9 @@ out-of-band DDL.
 These primitives still do not enable the route. `DELETE_DATA` must continue to
 fail explicitly until the runtime coordinator composes oldest-operation
 recovery, durable-attempt creation, mutation polling, and frozen zero proof;
-atomically replaces the outstanding operation with terminal tombstone/audit
-state only after that proof; and crash-tests every boundary. The authenticated
-HTTP route is enabled last.
+invokes the available terminal transaction inside that same frozen proof
+callback; and crash-tests every boundary. The authenticated HTTP route is
+enabled last.
 
 ## ClickHouse event model
 

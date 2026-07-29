@@ -7,7 +7,128 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: durable native ClickHouse deletion mutations
+## Latest checkpoint: atomic GORM physical-deletion terminality
+
+Date: 2026-07-29
+
+Committed and pushed implementation checkpoint:
+
+- `b497b73` — immutable physical-deletion completion audit, atomic terminal
+  tombstoning/cleanup, exact retries, and hardened SQLite integrity guards.
+
+This test-first unit completes the terminal control-plane prerequisite for
+physical `DELETE_DATA` without starting the coordinator or enabling the route:
+
+1. SQLite migration 0019 and the explicit GORM
+   `indexDataDeletionCompletionRecord` add one immutable terminal audit row per
+   physically deleted index. It permanently copies the operation ID,
+   correlation ID, index ID/name, archived and deleting versions, tenant,
+   ClickHouse database/table/UUID, protocol, operation/attempt timestamps, and
+   completion time.
+2. `CompleteIndexDataDeletion` accepts the full expected immutable mutation
+   attempt. A single GORM completion insert invokes trigger-owned terminality:
+   create the catalog tombstone, delete the exact outstanding operation, and
+   cascade deletion of the mutation attempt. Failure at completion insertion,
+   tombstone creation, operation cleanup, or attempt cleanup rolls the entire
+   statement/transaction back. A commit-outcome ambiguity is resolved by
+   reading or exactly retrying the immutable completion.
+3. The retained raw index remains `DELETING` at its already-admitted `N+1`
+   version. There is deliberately no `N+2` update: archived version
+   `MaxInt64-1` can enter and finish at SQLite `MaxInt64`. The tombstone hides
+   the row from live Get/List calls while preserving foreign keys and
+   permanently reserving its canonical ClickHouse-facing name.
+4. Exact sequential, concurrent, and restart retries return the same audit.
+   The common completed retry is a read-only fast path and does not reserve
+   SQLite's writer. A transaction recheck closes the read-miss race before
+   insertion.
+5. Completion insertion validates the exact immutable operation, attempt, and
+   deleting-index relationship. Downstream triggers rely on that already
+   validated immutable audit while separately guarding tombstone replacement,
+   operation/attempt deletion, completion update/delete, and completed
+   operation/correlation identity reuse. `INSERT OR REPLACE`, UPSERT-like
+   identity replacement, forged copied fields, and direct physical
+   tombstoning fail closed.
+6. Completion preserves every opaque index ID accepted by the existing index
+   schema, including IDs longer than 255 bytes and embedded NULs. The terminal
+   schema does not introduce a narrower completion-only grammar that could
+   strand an admitted index.
+7. A completion racing a previously read operation or mutation-attempt row is
+   monotonic, not corruption: stale validators converge to `ErrNotFound`, and
+   oldest-first discovery retries past a just-completed stale row. Context,
+   deadline, and operational SQLite errors retain their error identity; only
+   sentinel-identified invalid relationships are classified as corruption.
+8. Random operation/correlation collision probes now inspect both outstanding
+   rows and immutable completions with one indexed `EXISTS` query. Completed
+   protocol identities can never be recycled, while genuine unrelated insert
+   failures keep their original errors.
+9. GORM model/SQLite column order and key parity is tested explicitly, and the
+   embedded migration count advances to 19. SQL migrations remain schema
+   authority; ClickHouse persistence and mutation reconciliation remain native
+   and do not use GORM.
+
+Validation on implementation commit `b497b73`:
+
+```sh
+go test ./... -count=1
+go test ./internal/control -count=10
+go test -race ./internal/control -count=1
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse \
+  -run TestStoreAgainstClickHouse/durable_physical_deletion_mutation_is_scoped_and_restartable \
+  -count=1 -v
+git show --check --oneline b497b73
+```
+
+The exact implementation tree passed the full suite, ten repeated
+control-plane runs, the full control-plane race detector, repository-wide vet
+and build, and pinned repository-wide lint with `0 issues`. The approved
+ClickHouse 26.3.17.4 digest-pinned mutation integration also passed, preserving
+the previously proven table-UUID binding, restart reconciliation,
+multi-partition deletion, and foreign-tenant/index isolation. This unit changes
+only GORM/SQLite terminality; the next coordinator checkpoint must add the
+composed pinned test that invokes this terminal transaction inside the
+callback-scoped frozen zero proof.
+
+Independent SQLite, GORM/concurrency, and coverage adversaries drove fixes for
+a completion-only opaque-index-ID restriction, untested cascade-attempt
+failure, stale-read corruption misclassification, swallowed operational
+errors, and writer-locking completed retries. The simplify pass additionally
+collapsed redundant relationship reads, completion decoding, collision
+lookups, and downstream trigger predicates. Final targeted re-reviews are
+clean across trigger order, replacement bypass, cascade/FK rollback,
+MaxInt64, KEEP_DATA compatibility, concurrency, restart, context, and schema
+parity.
+
+Remaining `DELETE_DATA` work:
+
+1. add the serialized production coordinator in `internal/indexes`: discover
+   the oldest operation, resolve/ensure its immutable attempt, poll native
+   progress outside the freeze, and reacquire the frozen drain before
+   advancement;
+2. call `CompleteIndexDataDeletion` inside the exact drained
+   `WithWritesFrozen` callback that returns physical emptiness, and require a
+   fresh freeze/drain/zero proof after any nonterminal or ambiguous commit;
+3. bind recovery to the configured deployment tenant and crash-test every
+   attempt, mutation, zero-proof, terminal-commit, shutdown, and restart
+   boundary with a digest-pinned composed ClickHouse test;
+4. enforce the documented migration/runtime DDL-principal lifecycle; and
+5. enable the authenticated `DELETE_DATA` handler only after those coordinator
+   and runtime guarantees are proven.
+
+Explicit pause point:
+
+1. Terminal GORM/SQLite completion is implemented, validated, committed, and
+   pushed.
+2. No coordinator or production lifecycle wiring was started in this unit.
+3. `DELETE_DATA` still returns its explicit disabled response.
+4. Pause here until the user gives further instructions.
+
+## Previous checkpoint: durable native ClickHouse deletion mutations
 
 Date: 2026-07-29
 
