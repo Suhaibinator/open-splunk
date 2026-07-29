@@ -380,7 +380,7 @@ Its responsibilities are:
 
 The ingestion API should be independently scalable later, but the MVP can run it in the same server process as the search and administrative APIs.
 
-The first deployment is single-user on a trusted network, so end-user authentication and RBAC are not release blockers. Collector ingestion tokens remain necessary: even on a trusted network, they prevent accidental cross-index writes and establish a protocol that can be hardened later. SQLite is sufficient for this single-node control plane and should run in WAL mode with explicit backup and migration tooling.
+The first deployment is single-user on a trusted network, so end-user authentication and RBAC are not release blockers. Collector ingestion tokens remain necessary: even on a trusted network, they prevent accidental cross-index writes and establish a protocol that can be hardened later. SQLite is sufficient for this single-node control plane and should run in WAL mode with explicit backup and migration tooling. Checked-in SQL migrations remain the sole schema authority, while explicit GORM models make control-plane keys, relationships, constraints, and bounded projections legible in Go. `AutoMigrate` is not used in production. Narrow raw SQL remains appropriate for SQLite transaction modes and conditional compare-and-swap or fencing operations that GORM cannot express safely or efficiently.
 
 ### Collector identity and active-instance fencing
 

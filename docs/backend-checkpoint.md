@@ -7,7 +7,99 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: collector identity and fencing contract
+## Latest checkpoint: durable GORM collector fleet persistence
+
+Date: 2026-07-28
+
+Committed and pushed checkpoint:
+
+- `e51c27e` — normalized collector-fleet persistence, durable stream leases,
+  administrator state, and bounded telemetry through explicit GORM models.
+
+This slice implements the persisted fleet primitive required by the collector
+identity and fencing contract:
+
+1. SQLite migration `0013_collector_fleet.sql` adds tenant-scoped fleet,
+   runtime, capability, authorized-index, input-registration, and input-health
+   tables. Checked-in SQL remains the sole schema authority; production never
+   calls `AutoMigrate`.
+2. Explicit GORM models make keys, relationships, bounds, and named checks
+   legible beside the Go domain. Tests compare every model-declared named
+   check with the authoritative migration and spot-check the critical active
+   lease and observation-pair invariants.
+3. `collectorfleet.Store` provides durable claim, heartbeat, conditional
+   disconnect, administrator update, boot invalidation, and bounded get
+   operations. Claims allocate a monotonic lease generation and require the
+   already authenticated collector identity; this package does not implement
+   trust-on-first-use.
+4. Every mutable runtime operation is fenced by the exact tenant, collector,
+   server boot ID, lease generation, and stream ID tuple. Telemetry revisions
+   and administrator optimistic-lock versions are independent and monotonic.
+5. Disablement is fail-safe and authoritative even if unrelated persisted
+   runtime or child rows are corrupt. Re-enablement requires a valid inactive
+   runtime, so it cannot revive a dormant lease. Terminal revision capacity
+   is reserved so disconnect, disable, and boot invalidation can still fence
+   a live collector at `MaxInt64`.
+6. Process startup can durably invalidate prior-boot leases without allowing a
+   corrupt disabled row to block healthy collectors. This invalidation is
+   mandatory before the server admits collector traffic.
+7. Public timestamps, identifiers, encoded payloads, strings, collections,
+   relationships, aggregates, and child cardinalities are bounded. Reads and
+   writes fail closed on constraint-valid corruption rather than projecting a
+   partially authoritative fleet view.
+8. Ordinary reads use a read-only WAL transaction. Mutations use immediate
+   SQLite transactions where ordering matters, and child reads are capped at
+   their protocol maximum plus one so corrupt databases cannot force
+   unbounded allocations.
+
+This is intentionally an unwired persistence primitive. Production must not
+sequence token refresh, token-use recording, enabled-state validation, and
+`Claim` as separate transactions: administrator disablement or credential
+changes could interleave between them. The integration layer must perform
+those decisions and durable lease allocation in one immediate SQLite
+transaction before replacing the current process-local admission result.
+
+Validation on pushed commit `e51c27e`:
+
+```sh
+go test ./... -count=1 -timeout=20m
+go test -race ./internal/collectorfleet ./internal/control -count=1
+go vet ./...
+go build ./...
+/private/tmp/open-splunk-golangci-lint-v2.12.2 \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+git diff --check
+```
+
+All Go packages passed, the focused race suite passed, vet and build passed,
+and pinned golangci-lint v2.12.2 reported `0 issues` with fresh caches.
+Independent adversarial reviewers additionally repeated the collector-fleet
+suite 30 times normally and 10 times under the race detector. They reviewed
+tenant isolation, takeover and cleanup races, disable/re-enable ordering,
+restart invalidation, revision saturation, corruption handling, timestamp and
+byte bounds, and GORM/migration parity; no P0/P1/P2 findings remain. The pinned
+ClickHouse GradeThis compatibility, inspection-service, and inspection-route
+acceptance tests also passed with
+`clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49`.
+
+Next implementation checkpoints:
+
+1. Add one immediate-transaction admission coordinator that revalidates the
+   bound token, records last use, verifies fleet enabled state, and allocates
+   the durable lease atomically.
+2. Invalidate prior-boot leases before opening collector traffic, then replace
+   process-local heartbeat, batch, goodbye, and deferred-cleanup checks with
+   the exact durable lease boundary.
+3. Add a bounded latest-wins heartbeat coalescer whose flush remains
+   generation-conditional and whose shutdown cannot resurrect stale state.
+4. Expose bounded fleet get/list and administrator mutation APIs only after
+   production fencing is non-bypassable; add cursor snapshot and SQLite
+   query-plan coverage for the actual sort/filter shapes.
+5. Re-run the full Go, race, vet, build, pinned lint, pinned ClickHouse, and
+   real HTTP/native-gRPC/SQLite restart gates, followed by independent
+   adversarial re-review.
+
+## Previous checkpoint: collector identity and fencing contract
 
 Date: 2026-07-28
 
