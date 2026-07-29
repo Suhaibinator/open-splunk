@@ -493,11 +493,22 @@ unique name reservation. The name is not reusable because ClickHouse events
 and search scopes currently identify a logical index by `tenant_id` and
 `index_name`; freeing it would expose retained events through a replacement
 index. Generic state administration cannot set `DELETING`, which is reserved
-for a future physical-deletion coordinator. `DELETE_DATA` must fail explicitly
-until that coordinator can fence every ClickHouse Store/replay writer, drain
-the bounded durable outbox, persist and restart a GORM deletion operation,
-reconcile outcome-ambiguous ClickHouse mutations, and verify physical removal.
-ClickHouse persistence and mutation execution do not use GORM.
+for a future physical-deletion coordinator. The ClickHouse Store now provides
+a writer-preferring, context-aware `WithWritesFrozen` scope that covers
+`Store`, `ResumeBatch`, manual/background reconciliation, and shutdown. Its
+privileged drain replays at most the visibility layer's 64 pending
+reservations / 256 MiB durable-outbox bound, then separately counts every
+reserved row—including live-leased rows—and succeeds only after proving the
+count and bytes are both zero. The production runtime's single Store owner is
+part of that fence contract; every writer for the physical events table must
+use it.
+
+This primitive is necessary but does not itself enable physical deletion.
+`DELETE_DATA` must continue to fail explicitly until the coordinator can
+atomically persist and restart a GORM deletion operation, reconcile
+outcome-ambiguous ClickHouse mutations, and verify physical removal before
+terminal tombstoning. ClickHouse persistence and mutation execution do not use
+GORM.
 
 ## ClickHouse event model
 

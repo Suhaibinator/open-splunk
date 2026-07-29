@@ -7,7 +7,103 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: terminal KEEP_DATA index deletion
+## Latest checkpoint: scoped ClickHouse write freeze and proven outbox drain
+
+Date: 2026-07-29
+
+Committed implementation checkpoint:
+
+- `8676b4d` — writer-preferring Store freeze, bounded durable-outbox drain,
+  explicit SQLite pending-usage proof, lifecycle fencing, and real ClickHouse
+  ambiguity/deduplication coverage.
+
+This test-first unit completes the first two physical `DELETE_DATA`
+prerequisites without exposing the route prematurely:
+
+1. `Store.WithWritesFrozen` owns a fair FIFO exclusive scope. A queued freeze
+   prevents later `Store`, `ResumeBatch`, and manual/background reconciliation
+   calls from bypassing it, while already-admitted writers may finish. Waiting
+   writers and freezes remain context-cancelable.
+2. The callback-scoped `FrozenWrites` capability is the only replay path while
+   exclusivity is held. It serializes concurrent drains context-sensitively,
+   expires before the gate is released, rejects escaped use, and rejects
+   ordinary/nested writer reentry when callers propagate the supplied
+   callback context.
+3. The drain replays no more than the visibility admission ceiling of 64
+   reservations / 256 MiB. A defensive 65th acquisition is released and fails
+   closed. Terminal-ledger pruning is deliberately deferred until after the
+   global freeze is released.
+4. `visibility.PendingUsage` counts all durable `reserved` rows and outbox
+   bytes, including reservations hidden from `AcquirePending` by a live
+   in-process attempt lease. It validates aggregate and per-row bounds and
+   makes zero reservations plus zero bytes the explicit success proof.
+   Therefore `AcquirePending(found=false)` alone is never treated as drained.
+5. Store lifecycle admission now covers ordinary writes, replay, lookup,
+   visibility cutoff, and ping. `Close` synchronously rejects queued gate
+   entrants, cancels admitted operation contexts, waits for visibility
+   finalization/capability invalidation, and only then closes the native
+   ClickHouse connection.
+6. The production runtime's single Store owner is part of the safety
+   contract. Every writer for the physical events table must use that Store
+   during a frozen callback; the primitive is global across that owner, not an
+   index-specific lock. This is required because one opaque durable outbox may
+   contain several indexes.
+7. The pinned ClickHouse integration forces a two-index batch to commit
+   physically and then report an ambiguous EOF. The frozen drain replays the
+   exact persisted block/token, advances the visibility cutoff, proves zero
+   pending usage, and leaves exactly one physical row per event through
+   ClickHouse deduplication.
+
+Validation on implementation commit `8676b4d`:
+
+```sh
+go test ./...
+go test -race ./internal/clickhouse ./internal/visibility \
+  ./internal/control ./internal/server
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' \
+    -count=1 -timeout=10m
+git diff --check
+```
+
+The full suite, cross-package race gate, vet, build, and pinned
+golangci-lint v2.12.2 passed; lint reported `0 issues`. The digest-pinned
+ClickHouse integration passed in 60.051 seconds.
+
+Three design/adversarial agents first audited every writer, replay,
+visibility, and shutdown edge. Their key finding was that a live attempt lease
+can make `AcquirePending` return no row while durable work still exists.
+Three frozen-diff simplify reviewers then found and drove fixes for zero-sized
+waiter identity, broadcast wake storms, cancellation-blind drain
+serialization, O(n) waiter removal, pruning under exclusivity, duplicated
+lifecycle/query logic, and callback reentrancy. Final adversarial review found
+the nested different-Store context-shadowing case; per-Store context keys and
+a regression test close it. No unresolved blocker remains in this unit.
+
+Remaining `DELETE_DATA` work:
+
+1. atomically set `DELETING` and create a restartable GORM deletion-operation
+   record;
+2. submit and reconcile heavyweight ClickHouse mutations, including
+   outcome-ambiguous responses and restart;
+3. verify zero physical rows before terminal tombstoning; and
+4. compose and crash-test the coordinator while keeping GORM confined to the
+   SQLite control plane.
+
+Explicit pause point:
+
+1. The scoped Store fence and proven bounded outbox drain are complete and
+   pushed as one cohesive prerequisite.
+2. `DELETE_DATA` remains intentionally unavailable.
+3. Do not begin the durable deletion-operation/mutation unit until the user
+   gives further instructions.
+
+## Previous checkpoint: terminal KEEP_DATA index deletion
 
 Date: 2026-07-29
 
@@ -8969,10 +9065,11 @@ multivalue output, XML, terminal containers, escaped literal-dot keys, and the
 
 Resource/lifecycle audit findings to retain in the backlog:
 
-- Implement physical `DELETE_DATA` only with Store/replay fencing, bounded
-  outbox drain, a durable restartable operation, outcome-ambiguous ClickHouse
-  mutation reconciliation, and terminal zero-row verification. Synchronous
-  `KEEP_DATA` deletion is complete in `66f36d1`.
+- Implement physical `DELETE_DATA` only after composing the Store/replay fence
+  and proven bounded outbox drain from `8676b4d` with a durable restartable
+  operation, outcome-ambiguous ClickHouse mutation reconciliation, and
+  terminal zero-row verification. Synchronous `KEEP_DATA` deletion is complete
+  in `66f36d1`.
 
 The architecture plan still requires product decisions for capacity-planning
 retention/event size, target hardware, concurrent search load, immediate
