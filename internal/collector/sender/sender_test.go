@@ -1370,7 +1370,12 @@ func TestSenderAgainstRealService(t *testing.T) {
 		if token != "good-token" {
 			return ingest.Authorization{}, errors.New("bad token")
 		}
-		return ingest.Authorization{SubjectID: "s1", TenantID: "t1", AuthorizedIndexes: []string{"main"}}, nil
+		return ingest.Authorization{
+			SubjectID:         "s1",
+			TenantID:          "t1",
+			CollectorID:       "collector-a",
+			AuthorizedIndexes: []string{"main"},
+		}, nil
 	})
 	svc, err := ingest.NewService(ingest.DefaultConfig(), authorizer, store)
 	if err != nil {
@@ -1413,7 +1418,12 @@ func TestSenderAgainstRealServicePartialRejectDeadLetters(t *testing.T) {
 		if token != "good-token" {
 			return ingest.Authorization{}, errors.New("bad token")
 		}
-		return ingest.Authorization{SubjectID: "s1", TenantID: "t1", AuthorizedIndexes: []string{"main"}}, nil
+		return ingest.Authorization{
+			SubjectID:         "s1",
+			TenantID:          "t1",
+			CollectorID:       "collector-a",
+			AuthorizedIndexes: []string{"main"},
+		}, nil
 	})
 	svc, err := ingest.NewService(ingest.DefaultConfig(), authorizer, store)
 	if err != nil {

@@ -34,6 +34,7 @@ func TestCollectRecordsTokenUseOncePerValidStreamAdmission(t *testing.T) {
 		return Authorization{
 			SubjectID:         "token-safe-id",
 			TenantID:          "tenant-a",
+			CollectorID:       "collector-a",
 			AuthorizedIndexes: []string{"main"},
 		}, nil
 	})
@@ -183,6 +184,7 @@ func TestCollectDoesNotRecordRejectedStreamAdmission(t *testing.T) {
 			authorizer: AuthorizerFunc(func(context.Context, string) (Authorization, error) {
 				return Authorization{
 					TenantID:          "tenant-a",
+					CollectorID:       "collector-a",
 					AuthorizedIndexes: []string{"main"},
 				}, nil
 			}),

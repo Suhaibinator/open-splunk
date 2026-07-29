@@ -165,7 +165,9 @@ func (e *EventError) Error() string {
 }
 
 // Authorization is the result of authenticating one ingestion bearer token.
-// CollectorID is optional; when set, the token is bound to that collector.
+// The native collector protocol requires a stable SubjectID, TenantID, and
+// CollectorID. An empty CollectorID represents a legacy unbound credential and
+// fails closed before CollectorHello is accepted.
 type Authorization struct {
 	SubjectID         string
 	TenantID          string

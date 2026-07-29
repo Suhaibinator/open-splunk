@@ -30,6 +30,7 @@ func TestCollectAuthenticatesBearerTokenAndNegotiatesReady(t *testing.T) {
 		return Authorization{
 			SubjectID:         "token-1",
 			TenantID:          "tenant-a",
+			CollectorID:       "collector-a",
 			AuthorizedIndexes: []string{"z-last", "main"},
 		}, nil
 	})
@@ -147,32 +148,50 @@ func TestCollectReportsAuthenticationBackendFailureAsUnavailable(t *testing.T) {
 	}
 }
 
-func TestCollectLimitsConcurrentStreamsPerCredential(t *testing.T) {
+func TestCollectLimitsConcurrentPreHelloStreamsPerCredential(t *testing.T) {
 	t.Parallel()
 	config := testServiceConfig()
 	config.MaxStreamsPerSubject = 1
-	harness := newServiceHarness(t, config, staticTestAuthorizer(), acceptingStore())
+	authorizer := mappedCollectorAuthorizer(map[string]Authorization{
+		"collector-a-token": boundTestAuthorization("shared-subject", "tenant-a", "collector-a"),
+		"collector-b-token": boundTestAuthorization("shared-subject", "tenant-a", "collector-b"),
+	})
+	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 
-	first := harness.stream(t, "Bearer good-token")
-	sendHello(t, first, 1, 1, 0)
-	_ = recvResponse(t, first)
-	second := harness.stream(t, "Bearer good-token")
-	if _, err := second.Recv(); status.Code(err) != codes.ResourceExhausted {
-		t.Fatalf("second stream error = %v, want ResourceExhausted", err)
+	streams := []opensplunkv1.CollectorIngestService_CollectClient{
+		harness.stream(t, "Bearer collector-a-token"),
+		harness.stream(t, "Bearer collector-b-token"),
 	}
-	if err := first.Send(&opensplunkv1.CollectRequest{
-		StreamSequence: 2,
-		SentAt:         timestamppb.New(validationTestNow),
-		Payload: &opensplunkv1.CollectRequest_Goodbye{Goodbye: &opensplunkv1.CollectorGoodbye{
-			Reason: opensplunkv1.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
-		}},
-	}); err != nil {
-		t.Fatal(err)
+	results := make(chan error, len(streams))
+	for _, stream := range streams {
+		go func() {
+			_, err := stream.Recv()
+			results <- err
+		}()
 	}
-	if _, err := first.Recv(); !errors.Is(err, io.EOF) {
-		t.Fatalf("first stream close error = %v, want EOF", err)
+	select {
+	case err := <-results:
+		if status.Code(err) != codes.ResourceExhausted {
+			t.Fatalf("quota loser error = %v, want ResourceExhausted", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("distinct pre-Hello admission did not hit subject quota")
 	}
-	third := harness.stream(t, "Bearer good-token")
+	for _, stream := range streams {
+		if err := stream.CloseSend(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case err := <-results:
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("quota winner close error = %v, want InvalidArgument", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("quota winner did not exit after CloseSend")
+	}
+
+	third := harness.stream(t, "Bearer collector-a-token")
 	sendHello(t, third, 1, 1, 0)
 	if ready := recvResponse(t, third).GetReady(); ready == nil {
 		t.Fatal("released per-credential stream capacity was not reusable")
@@ -258,6 +277,7 @@ func TestCollectEnforcesHelloFirstProtocolAndStreamSequence(t *testing.T) {
 func TestCollectEnforcesTokenAndPayloadCollectorIdentity(t *testing.T) {
 	authorizer := AuthorizerFunc(func(context.Context, string) (Authorization, error) {
 		return Authorization{
+			SubjectID:         "token-1",
 			TenantID:          "tenant-a",
 			CollectorID:       "bound-collector",
 			AuthorizedIndexes: []string{"main"},
@@ -303,6 +323,7 @@ func TestCollectReauthorizesEveryBatch(t *testing.T) {
 		return Authorization{
 			SubjectID:         "token-1",
 			TenantID:          "tenant-a",
+			CollectorID:       "collector-a",
 			AuthorizedIndexes: []string{"main"},
 		}, nil
 	})
@@ -386,7 +407,8 @@ func TestCollectLostAckUsesOriginalDispositionAfterAuthorizationExpansion(t *tes
 			indexes = []string{"audit", "main"}
 		}
 		return Authorization{
-			SubjectID: "token-1", TenantID: "tenant-a", AuthorizedIndexes: indexes,
+			SubjectID: "token-1", TenantID: "tenant-a", CollectorID: "collector-a",
+			AuthorizedIndexes: indexes,
 		}, nil
 	})
 	store := &recoverableTestStore{}
@@ -1008,6 +1030,7 @@ func TestCollectClosesCleanlyAfterGoodbye(t *testing.T) {
 
 type serviceHarness struct {
 	client opensplunkv1.CollectorIngestServiceClient
+	server *Service
 }
 
 func newServiceHarness(t *testing.T, cfg Config, authorizer Authorizer, store EventStore) *serviceHarness {
@@ -1034,7 +1057,10 @@ func newServiceHarness(t *testing.T, cfg Config, authorizer Authorizer, store Ev
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return &serviceHarness{client: opensplunkv1.NewCollectorIngestServiceClient(conn)}
+	return &serviceHarness{
+		client: opensplunkv1.NewCollectorIngestServiceClient(conn),
+		server: service,
+	}
 }
 
 func (h *serviceHarness) stream(t *testing.T, authorization string) opensplunkv1.CollectorIngestService_CollectClient {
@@ -1069,6 +1095,7 @@ func staticTestAuthorizer() Authorizer {
 		return Authorization{
 			SubjectID:         "token-1",
 			TenantID:          "tenant-a",
+			CollectorID:       "collector-a",
 			AuthorizedIndexes: []string{"main"},
 		}, nil
 	})

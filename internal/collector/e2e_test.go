@@ -34,6 +34,9 @@ import (
 const (
 	// e2eToken is the bearer token on disk that the authorizer accepts.
 	e2eToken = "e2e-super-token"
+	// e2eCollectorID is persisted in the state directory and is the exact
+	// identity to which the native ingestion credential is bound.
+	e2eCollectorID = "11111111-1111-4111-8111-111111111111"
 	// e2eIndex is the single index the token is authorized for.
 	e2eIndex = "gradethis"
 	// e2eSecret is a token *value* embedded in a payload field; it must never
@@ -112,6 +115,7 @@ func startIngestServer(t *testing.T, store ingest.EventStore) string {
 		return ingest.Authorization{
 			SubjectID:         "e2e-subject",
 			TenantID:          "e2e-tenant",
+			CollectorID:       e2eCollectorID,
 			AuthorizedIndexes: []string{e2eIndex},
 		}, nil
 	})
@@ -137,6 +141,7 @@ func startIngestServer(t *testing.T, store ingest.EventStore) string {
 func writeE2EConfig(t *testing.T, addr, stateDir, logGlob, tokenFile string) string {
 	t.Helper()
 	writeFile(t, tokenFile, e2eToken+"\n")
+	writeFile(t, filepath.Join(stateDir, collectorIDFile), e2eCollectorID+"\n")
 	yaml := fmt.Sprintf(`server:
   address: "%s"
   transport: grpc

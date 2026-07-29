@@ -3,7 +3,6 @@ package ingest
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
@@ -41,9 +40,12 @@ type Config struct {
 	Clock                func() time.Time
 	NewStreamID          func() string
 	TokenUseRecorder     CollectorTokenUseRecorder
+	StreamRegistry       CollectorStreamRegistry
 }
 
 const defaultServerVersion = "development"
+
+const maximumTrustedAuthorizationIdentityBytes = 255
 
 func DefaultConfig() Config {
 	return Config{
@@ -67,9 +69,11 @@ type Service struct {
 	validator        *Validator
 	authorizer       Authorizer
 	tokenUseRecorder CollectorTokenUseRecorder
+	streamRegistry   CollectorStreamRegistry
 	store            EventStore
-	streamMu         sync.Mutex
-	streamsBySubject map[string]uint32
+	admissionMu      sync.Mutex
+	nextAdmission    uint64
+	admissions       map[string]map[CollectorStreamKey]collectorStreamAdmissionEntry
 }
 
 func NewService(config Config, authorizer Authorizer, store EventStore) (*Service, error) {
@@ -115,6 +119,9 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 	if config.NewStreamID == nil {
 		config.NewStreamID = defaults.NewStreamID
 	}
+	if config.StreamRegistry == nil {
+		config.StreamRegistry = NewInMemoryCollectorStreamRegistry()
+	}
 	if authorizer == nil {
 		return nil, errors.New("ingest authorizer is required")
 	}
@@ -145,8 +152,9 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 		validator:        validator,
 		authorizer:       authorizer,
 		tokenUseRecorder: config.TokenUseRecorder,
+		streamRegistry:   config.StreamRegistry,
 		store:            store,
-		streamsBySubject: make(map[string]uint32),
+		admissions:       make(map[string]map[CollectorStreamKey]collectorStreamAdmissionEntry),
 	}, nil
 }
 
@@ -159,18 +167,48 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 	if err != nil {
 		return authorizationRPCError(err, "collector authentication failed")
 	}
-	subjectKey := authorizationSubjectKey(authorization.SubjectID, token)
-	if !s.acquireSubjectStream(subjectKey) {
+	if authorization.CollectorID == "" {
+		return status.Error(codes.Unauthenticated, "collector authentication failed")
+	}
+	if !validTrustedAuthorizationIdentity(authorization.SubjectID) ||
+		!validTrustedAuthorizationIdentity(authorization.TenantID) ||
+		!validIdentifier(authorization.CollectorID, s.config.Limits.MaxIDBytes) {
+		return status.Error(codes.Unavailable, "collector authentication service is unavailable")
+	}
+	collectorKey := CollectorStreamKey{
+		TenantID:    authorization.TenantID,
+		CollectorID: authorization.CollectorID,
+	}
+	subjectKey := authorizationSubjectKey(authorization.SubjectID)
+	admission, ok := s.acquireStreamAdmission(subjectKey, collectorKey)
+	if !ok {
 		return status.Error(codes.ResourceExhausted, "collector credential stream capacity is exhausted")
 	}
-	defer s.releaseSubjectStream(subjectKey)
+	defer s.releaseStreamAdmission(admission)
+	admissionContext, cancelAdmission := collectorSupersessionContext(
+		stream.Context(),
+		admission.Superseded,
+	)
+	defer cancelAdmission()
 	authorizedIndexes := normalizedAuthorizedIndexes(authorization.AuthorizedIndexes, s.config.Limits.MaxIDBytes)
 	authorizedSet := make(map[string]struct{}, len(authorizedIndexes))
 	for _, index := range authorizedIndexes {
 		authorizedSet[index] = struct{}{}
 	}
 
-	request, err := stream.Recv()
+	received, stopReceiving := receiveCollectRequests(stream)
+	defer stopReceiving()
+	var firstResult collectRequestResult
+	select {
+	case <-admission.Superseded:
+		return supersededStreamRPCError()
+	case result, open := <-received:
+		if !open {
+			return status.Error(codes.InvalidArgument, "first request must be CollectorHello")
+		}
+		firstResult = result
+	}
+	request, err := firstResult.request, firstResult.err
 	if errors.Is(err, io.EOF) {
 		return status.Error(codes.InvalidArgument, "first request must be CollectorHello")
 	}
@@ -194,17 +232,33 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 	}
 	acceptedAt := s.config.Clock().UTC()
 	if s.tokenUseRecorder != nil {
-		if authorization.SubjectID == "" {
-			return status.Error(codes.Unavailable, "collector admission service is unavailable")
-		}
 		if err := s.tokenUseRecorder.RecordCollectorTokenUse(
-			stream.Context(),
+			admissionContext,
 			authorization.SubjectID,
 			acceptedAt,
 		); err != nil {
+			select {
+			case <-admission.Superseded:
+				return supersededStreamRPCError()
+			default:
+			}
 			return tokenUseRPCError(err)
 		}
 	}
+	lease, err := s.promoteStreamAdmission(admission, streamID)
+	if errors.Is(err, errStreamAdmissionSuperseded) {
+		return supersededStreamRPCError()
+	}
+	if err != nil {
+		return status.Error(codes.Unavailable, "collector stream admission is unavailable")
+	}
+	cancelAdmission()
+	defer s.streamRegistry.Release(lease)
+	authorizationContext, cancelAuthorization := collectorSupersessionContext(
+		stream.Context(),
+		lease.Superseded,
+	)
+	defer cancelAuthorization()
 
 	state := streamState{
 		collectorID:       hello.GetCollectorId(),
@@ -240,7 +294,17 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 
 	expectedRequestSequence := uint64(2)
 	for {
-		request, err = stream.Recv()
+		var result collectRequestResult
+		var ok bool
+		select {
+		case <-lease.Superseded:
+			return supersededStreamRPCError()
+		case result, ok = <-received:
+			if !ok {
+				return nil
+			}
+		}
+		request, err = result.request, result.err
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
@@ -252,6 +316,17 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 		}
 		if expectedRequestSequence == math.MaxUint64 {
 			return status.Error(codes.ResourceExhausted, "collector stream sequence exhausted")
+		}
+		var authorizationErr error
+		switch request.GetPayload().(type) {
+		case *opensplunkv1.CollectRequest_Heartbeat, *opensplunkv1.CollectRequest_Batch:
+			authorizationErr = s.refreshAuthorization(authorizationContext, token, &state)
+		}
+		if !s.streamRegistry.IsCurrent(lease) {
+			return supersededStreamRPCError()
+		}
+		if authorizationErr != nil {
+			return authorizationErr
 		}
 		expectedRequestSequence++
 
@@ -269,9 +344,6 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 			}
 			return nil
 		case *opensplunkv1.CollectRequest_Batch:
-			if err := s.refreshAuthorization(stream.Context(), token, &state); err != nil {
-				return err
-			}
 			response, err := s.processBatch(stream.Context(), payload.Batch, &state)
 			if err != nil {
 				return err
@@ -291,32 +363,166 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 	}
 }
 
-func authorizationSubjectKey(subjectID, token string) string {
-	if subjectID != "" {
-		return "subject:" + subjectID
-	}
-	digest := sha256.Sum256([]byte(token))
-	return "credential:" + string(digest[:])
+type collectRequestResult struct {
+	request *opensplunkv1.CollectRequest
+	err     error
 }
 
-func (s *Service) acquireSubjectStream(subject string) bool {
-	s.streamMu.Lock()
-	defer s.streamMu.Unlock()
-	if s.streamsBySubject[subject] >= s.config.MaxStreamsPerSubject {
-		return false
+func receiveCollectRequests(
+	stream interface {
+		Recv() (*opensplunkv1.CollectRequest, error)
+	},
+) (<-chan collectRequestResult, func()) {
+	received := make(chan collectRequestResult)
+	stopped := make(chan struct{})
+	go func() {
+		defer close(received)
+		for {
+			request, err := stream.Recv()
+			select {
+			case <-stopped:
+				return
+			default:
+			}
+			select {
+			case received <- collectRequestResult{request: request, err: err}:
+			case <-stopped:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	var stopOnce sync.Once
+	return received, func() {
+		stopOnce.Do(func() {
+			close(stopped)
+		})
 	}
-	s.streamsBySubject[subject]++
-	return true
 }
 
-func (s *Service) releaseSubjectStream(subject string) {
-	s.streamMu.Lock()
-	defer s.streamMu.Unlock()
-	if s.streamsBySubject[subject] <= 1 {
-		delete(s.streamsBySubject, subject)
+func supersededStreamRPCError() error {
+	return status.Error(codes.Aborted, "collector stream was superseded")
+}
+
+func collectorSupersessionContext(
+	parent context.Context,
+	superseded <-chan struct{},
+) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	go func() {
+		select {
+		case <-superseded:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
+}
+
+func authorizationSubjectKey(subjectID string) string {
+	return "subject:" + subjectID
+}
+
+func validTrustedAuthorizationIdentity(value string) bool {
+	return value != "" &&
+		len(value) <= maximumTrustedAuthorizationIdentityBytes &&
+		utf8.ValidString(value) &&
+		strings.IndexByte(value, 0) < 0
+}
+
+var errStreamAdmissionSuperseded = errors.New("collector stream admission was superseded")
+
+type collectorStreamAdmission struct {
+	SubjectKey   string
+	CollectorKey CollectorStreamKey
+	Generation   uint64
+	Superseded   <-chan struct{}
+}
+
+type collectorStreamAdmissionEntry struct {
+	admission  collectorStreamAdmission
+	superseded chan struct{}
+}
+
+func (s *Service) acquireStreamAdmission(
+	subjectKey string,
+	collectorKey CollectorStreamKey,
+) (collectorStreamAdmission, bool) {
+	s.admissionMu.Lock()
+	defer s.admissionMu.Unlock()
+
+	byCollector := s.admissions[subjectKey]
+	previous, replacing := byCollector[collectorKey]
+	var distinctAdmissions uint32
+	for range byCollector {
+		distinctAdmissions++
+	}
+	if !replacing && distinctAdmissions >= s.config.MaxStreamsPerSubject {
+		return collectorStreamAdmission{}, false
+	}
+	if s.nextAdmission == math.MaxUint64 {
+		return collectorStreamAdmission{}, false
+	}
+	s.nextAdmission++
+	superseded := make(chan struct{})
+	admission := collectorStreamAdmission{
+		SubjectKey:   subjectKey,
+		CollectorKey: collectorKey,
+		Generation:   s.nextAdmission,
+		Superseded:   superseded,
+	}
+	if byCollector == nil {
+		byCollector = make(map[CollectorStreamKey]collectorStreamAdmissionEntry)
+		s.admissions[subjectKey] = byCollector
+	}
+	if replacing {
+		close(previous.superseded)
+	}
+	byCollector[collectorKey] = collectorStreamAdmissionEntry{
+		admission:  admission,
+		superseded: superseded,
+	}
+	return admission, true
+}
+
+func (s *Service) promoteStreamAdmission(
+	admission collectorStreamAdmission,
+	streamID string,
+) (CollectorStreamLease, error) {
+	s.admissionMu.Lock()
+	defer s.admissionMu.Unlock()
+
+	byCollector := s.admissions[admission.SubjectKey]
+	current, ok := byCollector[admission.CollectorKey]
+	if !ok || current.admission.Generation != admission.Generation {
+		return CollectorStreamLease{}, errStreamAdmissionSuperseded
+	}
+	lease, err := s.streamRegistry.Claim(admission.CollectorKey, streamID)
+	if err != nil {
+		return CollectorStreamLease{}, err
+	}
+	delete(byCollector, admission.CollectorKey)
+	if len(byCollector) == 0 {
+		delete(s.admissions, admission.SubjectKey)
+	}
+	return lease, nil
+}
+
+func (s *Service) releaseStreamAdmission(admission collectorStreamAdmission) {
+	s.admissionMu.Lock()
+	defer s.admissionMu.Unlock()
+
+	byCollector := s.admissions[admission.SubjectKey]
+	current, ok := byCollector[admission.CollectorKey]
+	if !ok || current.admission.Generation != admission.Generation {
 		return
 	}
-	s.streamsBySubject[subject]--
+	delete(byCollector, admission.CollectorKey)
+	if len(byCollector) == 0 {
+		delete(s.admissions, admission.SubjectKey)
+	}
 }
 
 func (s *Service) refreshAuthorization(ctx context.Context, token string, state *streamState) error {
@@ -324,7 +530,15 @@ func (s *Service) refreshAuthorization(ctx context.Context, token string, state 
 	if err != nil {
 		return authorizationRPCError(err, "collector authentication is no longer valid")
 	}
-	if authorization.CollectorID != "" && authorization.CollectorID != state.collectorID {
+	if authorization.CollectorID == "" {
+		return status.Error(codes.Unauthenticated, "collector authentication is no longer valid")
+	}
+	if !validTrustedAuthorizationIdentity(authorization.SubjectID) ||
+		!validTrustedAuthorizationIdentity(authorization.TenantID) ||
+		!validIdentifier(authorization.CollectorID, s.config.Limits.MaxIDBytes) {
+		return status.Error(codes.Unavailable, "collector authentication service is unavailable")
+	}
+	if authorization.CollectorID != state.collectorID {
 		return status.Error(codes.PermissionDenied, "token is not authorized for this collector_id")
 	}
 	if authorization.CollectorID != state.authorization.CollectorID {
@@ -396,7 +610,7 @@ func (s *Service) validateHello(hello *opensplunkv1.CollectorHello, authorizatio
 	if !validIdentifier(hello.GetInstanceId(), s.config.Limits.MaxIDBytes) {
 		return status.Error(codes.InvalidArgument, "instance_id has an invalid format")
 	}
-	if authorization.CollectorID != "" && authorization.CollectorID != hello.GetCollectorId() {
+	if authorization.CollectorID != hello.GetCollectorId() {
 		return status.Error(codes.PermissionDenied, "token is not authorized for this collector_id")
 	}
 	if hello.GetProtocolMajor() != s.config.ProtocolMajor || hello.GetProtocolMinor() > s.config.ProtocolMinor {
