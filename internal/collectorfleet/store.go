@@ -1312,61 +1312,18 @@ func loadCollector(
 	scope Scope,
 	collectorID string,
 ) (Collector, error) {
-	var fleet fleetRecord
-	queryErr := database.
-		Where("tenant_id = ? AND collector_id = ?", scope.TenantID, collectorID).
-		Take(&fleet).Error
-	if errors.Is(queryErr, gorm.ErrRecordNotFound) {
+	collectors, err := loadCollectors(
+		database,
+		scope,
+		[]string{collectorID},
+	)
+	if errors.Is(err, errCollectorBatchMissingIdentity) {
 		return Collector{}, control.ErrNotFound
 	}
-	if queryErr != nil {
-		return Collector{}, mapContextError(database.Statement.Context, "get collector identity", queryErr)
+	if err != nil {
+		return Collector{}, err
 	}
-	var runtime runtimeRecord
-	if err := database.
-		Where("tenant_id = ? AND collector_id = ?", scope.TenantID, collectorID).
-		Take(&runtime).Error; err != nil {
-		return Collector{}, mapContextError(database.Statement.Context, "get collector runtime", err)
-	}
-	var capabilities []capabilityRecord
-	if err := database.
-		Where("tenant_id = ? AND collector_id = ?", scope.TenantID, collectorID).
-		Order("capability").
-		Limit(maximumCapabilities + 1).
-		Find(&capabilities).Error; err != nil {
-		return Collector{}, mapContextError(database.Statement.Context, "get collector capabilities", err)
-	}
-	var indexes []authorizedIndexRecord
-	if err := database.
-		Where("tenant_id = ? AND collector_id = ?", scope.TenantID, collectorID).
-		Order("index_name").
-		Limit(maximumAuthorizedIndexes + 1).
-		Find(&indexes).Error; err != nil {
-		return Collector{}, mapContextError(database.Statement.Context, "get collector authorized indexes", err)
-	}
-	var inputs []inputRecord
-	if err := database.
-		Where("tenant_id = ? AND collector_id = ?", scope.TenantID, collectorID).
-		Order("input_id").
-		Limit(maximumInputs + 1).
-		Find(&inputs).Error; err != nil {
-		return Collector{}, mapContextError(database.Statement.Context, "get collector inputs", err)
-	}
-	var health []inputHealthRecord
-	if err := database.
-		Where("tenant_id = ? AND collector_id = ?", scope.TenantID, collectorID).
-		Order("input_id").
-		Limit(maximumInputs + 1).
-		Find(&health).Error; err != nil {
-		return Collector{}, mapContextError(database.Statement.Context, "get collector input health", err)
-	}
-	if len(capabilities) > maximumCapabilities ||
-		len(indexes) > maximumAuthorizedIndexes ||
-		len(inputs) > maximumInputs ||
-		len(health) > maximumInputs {
-		return Collector{}, errors.New("collector child snapshot exceeds persisted bounds")
-	}
-	return collectorFromRecords(fleet, runtime, capabilities, indexes, inputs, health)
+	return collectors[0], nil
 }
 
 func collectorFromRecords(
