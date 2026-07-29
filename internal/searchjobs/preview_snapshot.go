@@ -1,5 +1,10 @@
 package searchjobs
 
+import (
+	"context"
+	"errors"
+)
+
 // PreviewSnapshot is one detached, coherent view of a running or completed
 // search. Job, including its schema, and Rows are captured in the same manager
 // entry critical section. Revision changes only when the result schema,
@@ -67,7 +72,59 @@ func (manager *Manager) PreviewForBytes(
 
 	manager.acquireRead()
 	defer manager.releaseRead()
+	return manager.previewForBytesWithPermit(nil, access, id, limit, maximumBytes)
+}
 
+// PreviewForBytesContext applies the same row and byte bounds as
+// PreviewForBytes while making read-budget admission cancellation-aware.
+// Manager.Close cancels blocked admission and waits for an already admitted
+// bounded clone to leave its operation barrier.
+func (manager *Manager) PreviewForBytesContext(
+	ctx context.Context,
+	access AccessScope,
+	id string,
+	limit int,
+	maximumBytes uint64,
+) (PreviewSnapshot, error) {
+	if ctx == nil {
+		return PreviewSnapshot{}, errors.New("read search preview snapshot: context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return PreviewSnapshot{}, err
+	}
+	if limit <= 0 || limit > manager.maxPageSize {
+		return PreviewSnapshot{}, ErrPageSize
+	}
+	if maximumBytes == 0 {
+		return PreviewSnapshot{}, ErrByteLimit
+	}
+	if !validAccessScope(access) {
+		return PreviewSnapshot{}, ErrNotFound
+	}
+	if err := manager.beginOperation(); err != nil {
+		return PreviewSnapshot{}, err
+	}
+	defer manager.endOperation()
+	if err := manager.acquireReadContext(ctx); err != nil {
+		return PreviewSnapshot{}, err
+	}
+	defer manager.releaseRead()
+	return manager.previewForBytesWithPermit(
+		func() error { return manager.operationContextError(ctx) },
+		access,
+		id,
+		limit,
+		maximumBytes,
+	)
+}
+
+func (manager *Manager) previewForBytesWithPermit(
+	contextError func() error,
+	access AccessScope,
+	id string,
+	limit int,
+	maximumBytes uint64,
+) (PreviewSnapshot, error) {
 	// Retain manager.mu until entry.mu is acquired so tombstone removal is
 	// ordered with this read. This follows the manager -> entry lock order used
 	// by result-lease admission while keeping the entry lock hold bounded.
@@ -79,6 +136,12 @@ func (manager *Manager) PreviewForBytes(
 	}
 	entry.mu.Lock()
 	manager.mu.RUnlock()
+	if contextError != nil {
+		if err := contextError(); err != nil {
+			entry.mu.Unlock()
+			return PreviewSnapshot{}, err
+		}
+	}
 
 	if entry.job.TenantID != access.TenantID || entry.job.OwnerID != access.OwnerID {
 		entry.mu.Unlock()
@@ -134,10 +197,16 @@ func (manager *Manager) PreviewForBytes(
 	rows := entry.rows[:end:end]
 	entry.mu.Unlock()
 
-	return PreviewSnapshot{
+	result := PreviewSnapshot{
 		Job:       cloneJob(jobSource),
 		Rows:      cloneRows(rows),
 		Revision:  revision,
 		Truncated: truncated,
-	}, nil
+	}
+	if contextError != nil {
+		if err := contextError(); err != nil {
+			return PreviewSnapshot{}, err
+		}
+	}
+	return result, nil
 }

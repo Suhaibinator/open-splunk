@@ -1058,6 +1058,63 @@ func (manager *Manager) GetFor(access AccessScope, id string) (Job, error) {
 	return manager.getEntry(entry)
 }
 
+// GetForContext returns a bounded detached metadata snapshot owned by access.
+// Unlike GetFor, admission to the manager's read budget observes both caller
+// cancellation and manager shutdown. Callers that hold another component's
+// shutdown barrier should use this method so they cannot remain stuck behind
+// saturated read capacity.
+func (manager *Manager) GetForContext(ctx context.Context, access AccessScope, id string) (Job, error) {
+	if ctx == nil {
+		return Job{}, errors.New("get search job snapshot: context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return Job{}, err
+	}
+	if !validAccessScope(access) {
+		return Job{}, ErrNotFound
+	}
+	if err := manager.beginOperation(); err != nil {
+		return Job{}, err
+	}
+	defer manager.endOperation()
+	if err := manager.acquireReadContext(ctx); err != nil {
+		return Job{}, err
+	}
+	defer manager.releaseRead()
+
+	// Retain manager.mu until entry.mu is acquired so this admitted read is
+	// ordered with tombstone removal. Manager.Close waits for the operation
+	// after canceling manager.ctx, while the bounded clone happens lock-free.
+	manager.mu.RLock()
+	entry := manager.jobs[id]
+	if entry == nil {
+		manager.mu.RUnlock()
+		return Job{}, ErrNotFound
+	}
+	entry.mu.Lock()
+	manager.mu.RUnlock()
+	if err := manager.operationContextError(ctx); err != nil {
+		entry.mu.Unlock()
+		return Job{}, err
+	}
+	if entry.job.TenantID != access.TenantID || entry.job.OwnerID != access.OwnerID {
+		entry.mu.Unlock()
+		return Job{}, ErrNotFound
+	}
+	now := manager.nowUTC()
+	if canExpireLocked(entry, now) {
+		manager.expireLocked(entry, now)
+	}
+	source := entry.job
+	entry.mu.Unlock()
+
+	result := cloneJob(source)
+	if err := manager.operationContextError(ctx); err != nil {
+		return Job{}, err
+	}
+	return result, nil
+}
+
 func (manager *Manager) getEntry(entry *jobEntry) (Job, error) {
 	manager.acquireRead()
 	defer manager.releaseRead()
@@ -1219,6 +1276,27 @@ func boundedResultRowEnd(rows []ResultRow, start, limit int, initialBytes, maxim
 }
 
 func (manager *Manager) acquireRead() { manager.readGate <- struct{}{} }
+
+func (manager *Manager) acquireReadContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("acquire search job read capacity: context is nil")
+	}
+	if err := manager.operationContextError(ctx); err != nil {
+		return err
+	}
+	select {
+	case manager.readGate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-manager.ctx.Done():
+		return ErrClosed
+	}
+	if err := manager.operationContextError(ctx); err != nil {
+		manager.releaseRead()
+		return err
+	}
+	return nil
+}
 
 func (manager *Manager) releaseRead() { <-manager.readGate }
 

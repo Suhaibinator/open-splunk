@@ -37,67 +37,7 @@ type previewEdgeProjectionGateSnapshots struct {
 	maximum atomic.Int32
 }
 
-func (reader *previewEdgeProjectionGateSnapshots) GetFor(
-	scope searchjobs.AccessScope,
-	id string,
-) (searchjobs.Job, error) {
-	job := scopedSearchJob(id)
-	if scope.TenantID != job.TenantID || scope.OwnerID != job.OwnerID {
-		return searchjobs.Job{}, searchjobs.ErrNotFound
-	}
-	active := reader.active.Add(1)
-	defer reader.active.Add(-1)
-	for {
-		maximum := reader.maximum.Load()
-		if active <= maximum || reader.maximum.CompareAndSwap(maximum, active) {
-			break
-		}
-	}
-	reader.entered <- id
-	<-reader.release
-	return job, nil
-}
-
-func (*previewEdgeProjectionGateSnapshots) PreviewForBytes(
-	searchjobs.AccessScope,
-	string,
-	int,
-	uint64,
-) (searchjobs.PreviewSnapshot, error) {
-	return searchjobs.PreviewSnapshot{}, searchjobs.ErrResultsNotReady
-}
-
 func (*previewEdgeProjectionGateSnapshots) MaximumPreviewRows() uint32 { return 1 }
-
-func (reader *previewEdgeBarrierSnapshots) GetFor(
-	scope searchjobs.AccessScope,
-	id string,
-) (searchjobs.Job, error) {
-	job, ok := reader.jobs[id]
-	if !ok || scope.TenantID != job.TenantID || scope.OwnerID != job.OwnerID {
-		return searchjobs.Job{}, searchjobs.ErrNotFound
-	}
-	reader.entered <- id
-	<-reader.releases[id]
-	return cloneSearchSnapshot(job), nil
-}
-
-func (*previewEdgeBarrierSnapshots) PreviewFor(
-	searchjobs.AccessScope,
-	string,
-	int,
-) (searchjobs.PreviewSnapshot, error) {
-	return searchjobs.PreviewSnapshot{}, searchjobs.ErrResultsNotReady
-}
-
-func (reader *previewEdgeBarrierSnapshots) PreviewForBytes(
-	scope searchjobs.AccessScope,
-	id string,
-	limit int,
-	_ uint64,
-) (searchjobs.PreviewSnapshot, error) {
-	return reader.PreviewFor(scope, id, limit)
-}
 
 func (*previewEdgeBarrierSnapshots) MaximumPreviewRows() uint32 { return 1 }
 
@@ -330,7 +270,9 @@ func TestPreviewDemandClearPrecedesTerminalReplay(t *testing.T) {
 
 func TestCurrentBootstrapDoesNotRebroadcastDiscontinuousStateToExistingSubscriber(t *testing.T) {
 	reader := &adversarialSearchSnapshots{}
-	service := adversarialNewService(t, func(config *Config) { config.Searches = reader })
+	service := adversarialNewService(t, func(config *Config) {
+		config.Searches = adaptSynchronousSearchSnapshots(reader)
+	})
 	target := adversarialNewTarget(service, "existing-subscriber")
 	adversarialApply(t, target, adversarialProjection(
 		1,
@@ -580,6 +522,39 @@ func TestProjectionGateBoundsConcurrencyAndHonorsCancellation(t *testing.T) {
 			t.Fatalf("first loadProjection() = %v", err)
 		}
 	})
+
+	t.Run("timeout while waiting", func(t *testing.T) {
+		reader := &adversarialSearchSnapshots{}
+		service := adversarialNewService(t, func(config *Config) {
+			config.Searches = adaptSynchronousSearchSnapshots(reader)
+			config.MaximumConcurrentProjections = 1
+			config.ProjectionTimeout = minimumProjectionTimeout
+		})
+		service.projectionGate <- struct{}{}
+		gateHeld := true
+		defer func() {
+			if gateHeld {
+				<-service.projectionGate
+			}
+		}()
+
+		_, err := service.loadProjection(
+			context.Background(),
+			targetKey{kind: targetKindSearch, id: "projection-timeout-waiter"},
+			0,
+		)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("loadProjection() = %v, want context deadline exceeded", err)
+		}
+		if calls := reader.calls.Load(); calls != 0 {
+			t.Fatalf("timed-out gate waiter entered snapshot provider %d times", calls)
+		}
+		if got := len(service.projectionGate); got != 1 {
+			t.Fatalf("projection gate occupancy = %d, want held permit only", got)
+		}
+		<-service.projectionGate
+		gateHeld = false
+	})
 }
 
 func TestCurrentSubscriptionRechecksContinuityAfterRefreshBarrier(t *testing.T) {
@@ -680,7 +655,7 @@ func TestPendingPreviewDemandCannotBeRegressedByMetadataPoll(t *testing.T) {
 	}}}
 	reader := &previewEdgeDemandSnapshots{job: job}
 	service := adversarialNewService(t, func(config *Config) {
-		config.Searches = reader
+		config.Searches = adaptSynchronousSearchSnapshots(reader)
 		config.MaximumPreviewRows = 32
 	})
 	target := adversarialNewTarget(service, job.ID)

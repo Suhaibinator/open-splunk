@@ -35,6 +35,7 @@ const (
 	defaultPollInterval            = 250 * time.Millisecond
 	defaultTombstonePollInterval   = time.Minute
 	defaultWriteTimeout            = 10 * time.Second
+	defaultProjectionTimeout       = 10 * time.Second
 	defaultPongTimeout             = 60 * time.Second
 	defaultPingInterval            = 20 * time.Second
 
@@ -57,6 +58,7 @@ const (
 	maximumTransportTimeout             = 10 * time.Minute
 	minimumPollInterval                 = 5 * time.Millisecond
 	minimumWriteTimeout                 = 50 * time.Millisecond
+	minimumProjectionTimeout            = 50 * time.Millisecond
 	minimumPongTimeout                  = 100 * time.Millisecond
 	minimumPingInterval                 = 25 * time.Millisecond
 	maximumRequestIDBytes               = 256
@@ -66,19 +68,23 @@ const (
 	maximumPingNonceBytes               = 256
 )
 
-// SearchSnapshots is the only search-job capability used by Service. Manager
-// satisfies it directly, including cross-scope non-disclosure through
+// SearchSnapshots is the only search-job capability used by Service. Methods
+// must return promptly when ctx is canceled. They may finish an already-entered,
+// resource-bounded in-memory critical section, but must not perform blocking I/O
+// without cancellation or leave detached work running after they return.
+// Manager satisfies it directly, including cross-scope non-disclosure through
 // searchjobs.ErrNotFound.
 type SearchSnapshots interface {
-	GetFor(searchjobs.AccessScope, string) (searchjobs.Job, error)
-	PreviewForBytes(searchjobs.AccessScope, string, int, uint64) (searchjobs.PreviewSnapshot, error)
+	GetForContext(context.Context, searchjobs.AccessScope, string) (searchjobs.Job, error)
+	PreviewForBytesContext(context.Context, searchjobs.AccessScope, string, int, uint64) (searchjobs.PreviewSnapshot, error)
 	MaximumPreviewRows() uint32
 }
 
-// ExportSnapshots is the only export-job capability used by Service. Manager
-// satisfies it directly and observes the polling context during shutdown.
+// ExportSnapshots is the only export-job capability used by Service. Snapshot
+// must be cancellation-aware and side-effect-free with respect to blocking
+// artifact cleanup. Manager satisfies it directly.
 type ExportSnapshots interface {
-	Get(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error)
+	Snapshot(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error)
 }
 
 // Limits is the drift-free subset advertised by the browser bootstrap API.
@@ -116,10 +122,15 @@ type Config struct {
 	// TombstonePollInterval bounds how often an actively subscribed expired
 	// target is checked for backing-store deletion.
 	TombstonePollInterval time.Duration
-	WriteTimeout          time.Duration
-	PongTimeout           time.Duration
-	PingInterval          time.Duration
-	Now                   func() time.Time
+	// ProjectionTimeout bounds concurrency admission, snapshot and fallback
+	// reads, and local materialization. Publication begins only while that
+	// deadline remains live; its resource-bounded critical sections are
+	// separately canceled by service shutdown. A shorter caller deadline wins.
+	ProjectionTimeout time.Duration
+	WriteTimeout      time.Duration
+	PongTimeout       time.Duration
+	PingInterval      time.Duration
+	Now               func() time.Time
 	// Wait blocks poll scheduling for delay or until ctx is canceled. Nil uses
 	// a stoppable wall-clock timer. Tests may pair an injected clock with a
 	// deterministic waiter; implementations must return promptly on
@@ -149,6 +160,7 @@ type normalizedConfig struct {
 
 	pollInterval          time.Duration
 	tombstonePollInterval time.Duration
+	projectionTimeout     time.Duration
 	writeTimeout          time.Duration
 	pongTimeout           time.Duration
 	pingInterval          time.Duration
@@ -251,6 +263,16 @@ func normalizeConfig(config Config) (normalizedConfig, error) {
 	if err != nil {
 		return normalizedConfig{}, err
 	}
+	projectionTimeout, err := boundedDuration(
+		config.ProjectionTimeout,
+		defaultProjectionTimeout,
+		minimumProjectionTimeout,
+		maximumTransportTimeout,
+		"projection timeout",
+	)
+	if err != nil {
+		return normalizedConfig{}, err
+	}
 	writeTimeout, err := boundedDuration(config.WriteTimeout, defaultWriteTimeout, minimumWriteTimeout, maximumTransportTimeout, "write timeout")
 	if err != nil {
 		return normalizedConfig{}, err
@@ -294,7 +316,8 @@ func normalizeConfig(config Config) (normalizedConfig, error) {
 		maximumReplayEvents: replayEvents, maximumReplayBytes: replayBytes,
 		maximumTotalReplayBytes: totalReplayBytes,
 		pollInterval:            pollInterval, tombstonePollInterval: tombstonePollInterval,
-		writeTimeout: writeTimeout, pongTimeout: pongTimeout, pingInterval: pingInterval,
+		projectionTimeout: projectionTimeout,
+		writeTimeout:      writeTimeout, pongTimeout: pongTimeout, pingInterval: pingInterval,
 		now: now, wait: wait,
 	}, nil
 }

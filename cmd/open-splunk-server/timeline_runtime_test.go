@@ -108,12 +108,36 @@ func (runtimeSearchJobs) GetFor(searchjobs.AccessScope, string) (searchjobs.Job,
 	return searchjobs.Job{}, searchjobs.ErrNotFound
 }
 
+func (jobs runtimeSearchJobs) GetForContext(
+	ctx context.Context,
+	scope searchjobs.AccessScope,
+	id string,
+) (searchjobs.Job, error) {
+	if err := ctx.Err(); err != nil {
+		return searchjobs.Job{}, err
+	}
+	return jobs.GetFor(scope, id)
+}
+
 func (runtimeSearchJobs) PreviewFor(searchjobs.AccessScope, string, int) (searchjobs.PreviewSnapshot, error) {
 	return searchjobs.PreviewSnapshot{}, searchjobs.ErrNotFound
 }
 
 func (jobs runtimeSearchJobs) PreviewForBytes(scope searchjobs.AccessScope, id string, limit int, _ uint64) (searchjobs.PreviewSnapshot, error) {
 	return jobs.PreviewFor(scope, id, limit)
+}
+
+func (jobs runtimeSearchJobs) PreviewForBytesContext(
+	ctx context.Context,
+	scope searchjobs.AccessScope,
+	id string,
+	limit int,
+	maximumBytes uint64,
+) (searchjobs.PreviewSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return searchjobs.PreviewSnapshot{}, err
+	}
+	return jobs.PreviewForBytes(scope, id, limit, maximumBytes)
 }
 
 func (runtimeSearchJobs) MaximumPreviewRows() uint32 { return 100 }

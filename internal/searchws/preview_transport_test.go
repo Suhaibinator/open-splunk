@@ -24,39 +24,14 @@ type blockingPreviewRefreshSnapshots struct {
 	maximum  atomic.Int32
 }
 
-func (reader *blockingPreviewRefreshSnapshots) GetFor(scope searchjobs.AccessScope, id string) (searchjobs.Job, error) {
+func (reader *blockingPreviewRefreshSnapshots) snapshotFor(
+	scope searchjobs.AccessScope,
+	id string,
+) (searchjobs.Job, error) {
 	if id != reader.job.ID || scope.TenantID != reader.job.TenantID || scope.OwnerID != reader.job.OwnerID {
 		return searchjobs.Job{}, searchjobs.ErrNotFound
 	}
 	return cloneSearchSnapshot(reader.job), nil
-}
-
-func (reader *blockingPreviewRefreshSnapshots) PreviewFor(scope searchjobs.AccessScope, id string, limit int) (searchjobs.PreviewSnapshot, error) {
-	if _, err := reader.GetFor(scope, id); err != nil {
-		return searchjobs.PreviewSnapshot{}, err
-	}
-	if limit != 1 {
-		return searchjobs.PreviewSnapshot{}, searchjobs.ErrPageSize
-	}
-	reader.calls.Add(1)
-	active := reader.active.Add(1)
-	for {
-		maximum := reader.maximum.Load()
-		if active <= maximum || reader.maximum.CompareAndSwap(maximum, active) {
-			break
-		}
-	}
-	select {
-	case reader.entered <- struct{}{}:
-	default:
-	}
-	<-reader.release
-	reader.active.Add(-1)
-	return clonePreviewSnapshot(reader.snapshot), nil
-}
-
-func (reader *blockingPreviewRefreshSnapshots) PreviewForBytes(scope searchjobs.AccessScope, id string, limit int, _ uint64) (searchjobs.PreviewSnapshot, error) {
-	return reader.PreviewFor(scope, id, limit)
 }
 
 func (*blockingPreviewRefreshSnapshots) MaximumPreviewRows() uint32 { return 1 }
@@ -111,21 +86,6 @@ func (reader *mutableSearchSnapshots) PreviewForBytes(scope searchjobs.AccessSco
 }
 
 func (*mutableSearchSnapshots) MaximumPreviewRows() uint32 { return defaultMaximumPreviewRows }
-
-func (reader *blockingSearchSnapshots) PreviewFor(scope searchjobs.AccessScope, id string, _ int) (searchjobs.PreviewSnapshot, error) {
-	job, err := reader.GetFor(scope, id)
-	if err != nil {
-		return searchjobs.PreviewSnapshot{}, err
-	}
-	if job.Schema == nil {
-		return searchjobs.PreviewSnapshot{}, searchjobs.ErrResultsNotReady
-	}
-	return searchjobs.PreviewSnapshot{Job: job, Revision: job.Version}, nil
-}
-
-func (reader *blockingSearchSnapshots) PreviewForBytes(scope searchjobs.AccessScope, id string, limit int, _ uint64) (searchjobs.PreviewSnapshot, error) {
-	return reader.PreviewFor(scope, id, limit)
-}
 
 func (*blockingSearchSnapshots) MaximumPreviewRows() uint32 { return defaultMaximumPreviewRows }
 
@@ -1007,10 +967,13 @@ func TestWebSocketPreviewHonorsTighterReplayBudget(t *testing.T) {
 	}
 }
 
-var _ SearchSnapshots = (*previewSearchSnapshots)(nil)
-var _ SearchSnapshots = (*mutableSearchSnapshots)(nil)
+var _ synchronousSearchSnapshots = (*previewSearchSnapshots)(nil)
+var _ synchronousSearchSnapshots = (*mutableSearchSnapshots)(nil)
 var _ SearchSnapshots = (*blockingSearchSnapshots)(nil)
-var _ SearchSnapshots = (*stagedTerminalSnapshots)(nil)
-var _ SearchSnapshots = (*adversarialSearchSnapshots)(nil)
+var _ SearchSnapshots = (*blockingPreviewRefreshSnapshots)(nil)
+var _ SearchSnapshots = (*previewEdgeBarrierSnapshots)(nil)
+var _ SearchSnapshots = (*previewEdgeProjectionGateSnapshots)(nil)
+var _ synchronousSearchSnapshots = (*stagedTerminalSnapshots)(nil)
+var _ synchronousSearchSnapshots = (*adversarialSearchSnapshots)(nil)
 var _ SearchSnapshots = configTestSearchSnapshots{}
-var _ SearchSnapshots = stubSearchSnapshots{}
+var _ synchronousSearchSnapshots = stubSearchSnapshots{}

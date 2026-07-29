@@ -19,13 +19,13 @@ func (stubSearchSnapshots) GetFor(searchjobs.AccessScope, string) (searchjobs.Jo
 
 type stubExportSnapshots struct{}
 
-func (stubExportSnapshots) Get(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error) {
+func (stubExportSnapshots) Snapshot(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error) {
 	return exportjobs.Job{}, exportjobs.ErrNotFound
 }
 
 func TestNewNormalizesHardBoundsAndReportsBootstrapLimits(t *testing.T) {
 	service, err := New(Config{
-		Searches: stubSearchSnapshots{},
+		Searches: adaptSynchronousSearchSnapshots(stubSearchSnapshots{}),
 		Exports:  stubExportSnapshots{},
 		Access:   searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"},
 	})
@@ -59,7 +59,7 @@ func TestNewNormalizesHardBoundsAndReportsBootstrapLimits(t *testing.T) {
 
 func TestNewRejectsMissingDependenciesUnsafeScopeAndUnusableLimits(t *testing.T) {
 	valid := Config{
-		Searches: stubSearchSnapshots{},
+		Searches: adaptSynchronousSearchSnapshots(stubSearchSnapshots{}),
 		Exports:  stubExportSnapshots{},
 		Access:   searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"},
 	}
@@ -101,7 +101,7 @@ func TestNewRejectsMissingDependenciesUnsafeScopeAndUnusableLimits(t *testing.T)
 
 func TestServeHTTPRejectsBeforeUpgradeAfterClose(t *testing.T) {
 	service, err := New(Config{
-		Searches: stubSearchSnapshots{},
+		Searches: adaptSynchronousSearchSnapshots(stubSearchSnapshots{}),
 		Exports:  stubExportSnapshots{},
 		Access:   searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"},
 	})

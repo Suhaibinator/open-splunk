@@ -58,6 +58,14 @@ func (service *fakeExports) Get(ctx context.Context, scope searchjobs.AccessScop
 	return fn(ctx, scope, id)
 }
 
+func (service *fakeExports) Snapshot(
+	ctx context.Context,
+	scope searchjobs.AccessScope,
+	id string,
+) (exportjobs.Job, error) {
+	return service.Get(ctx, scope, id)
+}
+
 func (service *fakeExports) Cancel(ctx context.Context, scope searchjobs.AccessScope, id string) (exportjobs.Job, error) {
 	service.mu.Lock()
 	service.cancelCalls++

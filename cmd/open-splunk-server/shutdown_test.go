@@ -10,10 +10,12 @@ import (
 	"testing"
 	"time"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchws"
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestTrackedHandlerRejectsNewWorkAndWaitsForActiveWork(t *testing.T) {
@@ -163,8 +165,12 @@ func TestShutdownHTTPServerUnblocksActiveWebSocketHandlerEvenOnCloseError(t *tes
 }
 
 func TestShutdownHTTPServerClosesActualUpgradedWebSocket(t *testing.T) {
+	blockingSearches := &shutdownBlockingSearchSnapshots{
+		started: make(chan struct{}),
+		exited:  make(chan struct{}),
+	}
 	webSockets, err := searchws.New(searchws.Config{
-		Searches: shutdownSearchSnapshots{},
+		Searches: blockingSearches,
 		Exports:  shutdownExportSnapshots{},
 		Access: searchjobs.AccessScope{
 			TenantID: "shutdown-tenant",
@@ -215,6 +221,34 @@ func TestShutdownHTTPServerClosesActualUpgradedWebSocket(t *testing.T) {
 	}
 	_ = response.Body.Close()
 
+	command := &opensplunkv1.SearchWebSocketCommand{
+		RequestId: "shutdown-blocked-provider",
+		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{
+			Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{
+				Subscriptions: []*opensplunkv1.SearchSubscription{{
+					SubscriptionId: "shutdown-subscription",
+					Target: &opensplunkv1.JobTarget{
+						Target: &opensplunkv1.JobTarget_SearchJobId{
+							SearchJobId: "shutdown-search",
+						},
+					},
+				}},
+			},
+		},
+	}
+	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(command)
+	if err != nil {
+		t.Fatalf("marshal subscribe command: %v", err)
+	}
+	if err := connection.WriteMessage(websocket.BinaryMessage, payload); err != nil {
+		t.Fatalf("write subscribe command: %v", err)
+	}
+	select {
+	case <-blockingSearches.started:
+	case <-time.After(time.Second):
+		t.Fatal("websocket subscription did not enter the snapshot provider")
+	}
+
 	shutdownDone := make(chan error, 1)
 	go func() {
 		shutdownDone <- shutdownHTTPServer(httpServer.Config, requests, webSockets, 2*time.Second)
@@ -234,28 +268,57 @@ func TestShutdownHTTPServerClosesActualUpgradedWebSocket(t *testing.T) {
 	if _, _, err := connection.ReadMessage(); err == nil {
 		t.Fatal("upgraded websocket remained readable after shutdownHTTPServer returned")
 	}
+	select {
+	case <-blockingSearches.exited:
+	default:
+		t.Fatal("runtime shutdown returned before the snapshot provider exited")
+	}
 }
 
-type shutdownSearchSnapshots struct{}
-
-func (shutdownSearchSnapshots) GetFor(searchjobs.AccessScope, string) (searchjobs.Job, error) {
-	return searchjobs.Job{}, searchjobs.ErrNotFound
+type shutdownBlockingSearchSnapshots struct {
+	started chan struct{}
+	exited  chan struct{}
+	once    sync.Once
 }
 
-func (shutdownSearchSnapshots) PreviewFor(searchjobs.AccessScope, string, int) (searchjobs.PreviewSnapshot, error) {
-	return searchjobs.PreviewSnapshot{}, searchjobs.ErrNotFound
+func (snapshots *shutdownBlockingSearchSnapshots) GetForContext(
+	ctx context.Context,
+	_ searchjobs.AccessScope,
+	_ string,
+) (searchjobs.Job, error) {
+	snapshots.once.Do(func() { close(snapshots.started) })
+	<-ctx.Done()
+	close(snapshots.exited)
+	return searchjobs.Job{}, ctx.Err()
 }
 
-func (jobs shutdownSearchSnapshots) PreviewForBytes(scope searchjobs.AccessScope, id string, limit int, _ uint64) (searchjobs.PreviewSnapshot, error) {
-	return jobs.PreviewFor(scope, id, limit)
+func (*shutdownBlockingSearchSnapshots) PreviewForBytesContext(
+	ctx context.Context,
+	_ searchjobs.AccessScope,
+	_ string,
+	_ int,
+	_ uint64,
+) (searchjobs.PreviewSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return searchjobs.PreviewSnapshot{}, err
+	}
+	return searchjobs.PreviewSnapshot{}, searchjobs.ErrResultsNotReady
 }
 
-func (shutdownSearchSnapshots) MaximumPreviewRows() uint32 { return 100 }
+func (*shutdownBlockingSearchSnapshots) MaximumPreviewRows() uint32 { return 100 }
 
 type shutdownExportSnapshots struct{}
 
 func (shutdownExportSnapshots) Get(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error) {
 	return exportjobs.Job{}, exportjobs.ErrNotFound
+}
+
+func (jobs shutdownExportSnapshots) Snapshot(
+	ctx context.Context,
+	scope searchjobs.AccessScope,
+	id string,
+) (exportjobs.Job, error) {
+	return jobs.Get(ctx, scope, id)
 }
 
 type activeWebSocketShutdown struct {

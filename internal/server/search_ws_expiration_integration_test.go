@@ -124,6 +124,15 @@ func (snapshots *countedSearchSnapshots) GetFor(access searchjobs.AccessScope, i
 	return snapshots.manager.GetFor(access, id)
 }
 
+func (snapshots *countedSearchSnapshots) GetForContext(
+	ctx context.Context,
+	access searchjobs.AccessScope,
+	id string,
+) (searchjobs.Job, error) {
+	snapshots.gets.Add(1)
+	return snapshots.manager.GetForContext(ctx, access, id)
+}
+
 func (snapshots *countedSearchSnapshots) PreviewForBytes(
 	access searchjobs.AccessScope,
 	id string,
@@ -132,6 +141,17 @@ func (snapshots *countedSearchSnapshots) PreviewForBytes(
 ) (searchjobs.PreviewSnapshot, error) {
 	snapshots.previewReads.Add(1)
 	return snapshots.manager.PreviewForBytes(access, id, limit, maximumBytes)
+}
+
+func (snapshots *countedSearchSnapshots) PreviewForBytesContext(
+	ctx context.Context,
+	access searchjobs.AccessScope,
+	id string,
+	limit int,
+	maximumBytes uint64,
+) (searchjobs.PreviewSnapshot, error) {
+	snapshots.previewReads.Add(1)
+	return snapshots.manager.PreviewForBytesContext(ctx, access, id, limit, maximumBytes)
 }
 
 func (snapshots *countedSearchSnapshots) MaximumPreviewRows() uint32 {
@@ -154,6 +174,15 @@ func (snapshots *countedExportSnapshots) Get(
 ) (exportjobs.Job, error) {
 	snapshots.gets.Add(1)
 	return snapshots.manager.Get(ctx, access, id)
+}
+
+func (snapshots *countedExportSnapshots) Snapshot(
+	ctx context.Context,
+	access searchjobs.AccessScope,
+	id string,
+) (exportjobs.Job, error) {
+	snapshots.gets.Add(1)
+	return snapshots.manager.Snapshot(ctx, access, id)
 }
 
 type expirationWebSocketFixture struct {

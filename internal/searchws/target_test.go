@@ -29,7 +29,8 @@ func TestIncompleteRetentionHasTruthfulBoundsAndNeverPublishesUnreplayableEvents
 	}
 	reader := newMutableSearchSnapshots(job)
 	service, err := New(Config{
-		Searches: reader, Exports: notFoundExportSnapshots{},
+		Searches:           adaptSynchronousSearchSnapshots(reader),
+		Exports:            notFoundExportSnapshots{},
 		Access:             searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"},
 		MaximumReplayBytes: minimumFrameBytes,
 		PollInterval:       time.Second,
@@ -143,8 +144,9 @@ func TestResolvedTargetPinClosesEvictionAttachRace(t *testing.T) {
 	secondJob := scopedSearchJob("search-second")
 	reader := newMutableSearchSnapshots(firstJob, secondJob)
 	service, err := New(Config{
-		Searches: reader, Exports: notFoundExportSnapshots{},
-		Access: searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"}, MaximumTargets: 1,
+		Searches: adaptSynchronousSearchSnapshots(reader),
+		Exports:  notFoundExportSnapshots{},
+		Access:   searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"}, MaximumTargets: 1,
 	})
 	if err != nil {
 		t.Fatal(err)

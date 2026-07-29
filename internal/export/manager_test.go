@@ -1843,6 +1843,58 @@ func TestManagerGetDeletionDoesNotBlockShutdownAdmission(t *testing.T) {
 	})
 }
 
+func TestManagerSnapshotDefersExpiredArtifactDeletionToCleanup(t *testing.T) {
+	t.Parallel()
+	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"search": {schema: basicExportSchema(), rows: basicExportRows()[:1]},
+	}}
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.ArtifactTTL = time.Minute
+		config.Now = clock.Now
+	})
+	created, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "search",
+		Format:      FormatCSV,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := waitExportState(t, manager, testAccess, created.ID, StateCompleted)
+	artifactPath := filepath.Join(manager.artifactDir, completed.Artifact.FileName)
+
+	originalRemove := manager.removePath
+	var removals atomic.Int32
+	manager.removePath = func(path string) error {
+		removals.Add(1)
+		return originalRemove(path)
+	}
+	clock.Advance(time.Minute)
+	snapshot, err := manager.Snapshot(context.Background(), testAccess, created.ID)
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if snapshot.State != StateExpired || snapshot.Artifact != nil {
+		t.Fatalf("expired snapshot = %#v", snapshot)
+	}
+	if got := removals.Load(); got != 0 {
+		t.Fatalf("Snapshot() filesystem removals = %d, want 0", got)
+	}
+	if _, err := os.Stat(artifactPath); err != nil {
+		t.Fatalf("expired artifact should remain for cleanup: %v", err)
+	}
+
+	if err := manager.Cleanup(context.Background()); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if got := removals.Load(); got != 1 {
+		t.Fatalf("Cleanup() filesystem removals = %d, want 1", got)
+	}
+	if _, err := os.Stat(artifactPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired artifact Stat() after cleanup = %v, want not exist", err)
+	}
+}
+
 func testManagerExpirationDeletionDoesNotBlockShutdownAdmission(
 	t *testing.T,
 	expire func(*Manager, string) error,
@@ -2087,6 +2139,45 @@ func TestManagerAtomicPublicationDoesNotReplaceUnexpectedDestination(t *testing.
 	}
 }
 
+func TestManagerAdmissionSkipsExistingArtifactDestination(t *testing.T) {
+	t.Parallel()
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"search": {schema: basicExportSchema(), rows: basicExportRows()[:1]},
+	}}
+	var generated atomic.Uint32
+	manager := newExportTestManager(t, source, func(config *Config) {
+		config.NewID = func() string {
+			if generated.Add(1) == 1 {
+				return "existing-destination"
+			}
+			return "available-destination"
+		}
+	})
+	existingPath := manager.artifactPath("existing-destination", FormatCSV)
+	if err := os.WriteFile(existingPath, []byte("sentinel"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := manager.Create(
+		context.Background(),
+		testAccess,
+		CreateRequest{SearchJobID: "search", Format: FormatCSV},
+	)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if created.ID != "available-destination" {
+		t.Fatalf("Create() ID = %q, want available-destination", created.ID)
+	}
+	contents, err := os.ReadFile(existingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "sentinel" {
+		t.Fatalf("existing artifact contents = %q, want sentinel", contents)
+	}
+}
+
 func TestManagerRetriesPostPublishTemporaryUnlink(t *testing.T) {
 	t.Parallel()
 	clock := &exportTestClock{now: time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)}
@@ -2239,6 +2330,59 @@ func TestManagerCloseCancelsWorkRemovesFilesAndRejectsAdmission(t *testing.T) {
 	}
 	if source.closedLeases() != 1 {
 		t.Fatalf("closed leases = %d, want 1", source.closedLeases())
+	}
+}
+
+func TestManagerCloseDoesNotWaitForAdmissionCollisionInspection(t *testing.T) {
+	t.Parallel()
+	source := &exportTestSource{datasets: map[string]exportTestDataset{
+		"search": {schema: basicExportSchema(), rows: basicExportRows()},
+	}}
+	manager := newExportTestManager(t, source, nil)
+	inspectionStarted := make(chan struct{})
+	releaseInspection := make(chan struct{})
+	var startedOnce sync.Once
+	manager.pathExists = func(string) bool {
+		startedOnce.Do(func() { close(inspectionStarted) })
+		<-releaseInspection
+		return false
+	}
+
+	createResult := make(chan error, 1)
+	go func() {
+		_, err := manager.Create(
+			context.Background(),
+			testAccess,
+			CreateRequest{SearchJobID: "search", Format: FormatCSV},
+		)
+		createResult <- err
+	}()
+	select {
+	case <-inspectionStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("admission did not reach artifact collision inspection")
+	}
+
+	closeResult := make(chan error, 1)
+	go func() { closeResult <- manager.Close() }()
+	select {
+	case err := <-closeResult:
+		if err != nil {
+			t.Fatalf("Close() = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		close(releaseInspection)
+		t.Fatal("Close waited for admission artifact collision inspection")
+	}
+
+	close(releaseInspection)
+	select {
+	case err := <-createResult:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("Create() after concurrent Close = %v, want ErrClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Create did not return after artifact collision inspection")
 	}
 }
 

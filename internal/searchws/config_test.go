@@ -21,7 +21,7 @@ func (configTestSearchSnapshots) GetFor(searchjobs.AccessScope, string) (searchj
 
 type configTestExportSnapshots struct{}
 
-func (configTestExportSnapshots) Get(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error) {
+func (configTestExportSnapshots) Snapshot(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error) {
 	return exportjobs.Job{}, exportjobs.ErrNotFound
 }
 
@@ -61,6 +61,7 @@ func TestNormalizeConfigDefaultsAndInjectedFunctions(t *testing.T) {
 		normalized.maximumTotalReplayBytes != defaultMaximumTotalReplayBytes ||
 		normalized.pollInterval != defaultPollInterval ||
 		normalized.tombstonePollInterval != defaultTombstonePollInterval ||
+		normalized.projectionTimeout != defaultProjectionTimeout ||
 		normalized.writeTimeout != defaultWriteTimeout ||
 		normalized.pongTimeout != defaultPongTimeout ||
 		normalized.pingInterval != defaultPingInterval {
@@ -371,6 +372,13 @@ func TestNormalizeConfigDurationBoundsAndPingPongRelationship(t *testing.T) {
 		{name: "tombstone poll/maximum", mutate: func(config *Config) { config.TombstonePollInterval = maximumPollInterval }, read: func(config normalizedConfig) time.Duration { return config.tombstonePollInterval }, want: maximumPollInterval},
 		{name: "tombstone poll/below minimum", mutate: func(config *Config) { config.TombstonePollInterval = minimumPollInterval - time.Nanosecond }, wantErr: true},
 		{name: "tombstone poll/over maximum", mutate: func(config *Config) { config.TombstonePollInterval = maximumPollInterval + time.Nanosecond }, wantErr: true},
+
+		{name: "projection/zero uses default", mutate: func(config *Config) { config.ProjectionTimeout = 0 }, read: func(config normalizedConfig) time.Duration { return config.projectionTimeout }, want: defaultProjectionTimeout},
+		{name: "projection/explicit default", mutate: func(config *Config) { config.ProjectionTimeout = defaultProjectionTimeout }, read: func(config normalizedConfig) time.Duration { return config.projectionTimeout }, want: defaultProjectionTimeout},
+		{name: "projection/minimum", mutate: func(config *Config) { config.ProjectionTimeout = minimumProjectionTimeout }, read: func(config normalizedConfig) time.Duration { return config.projectionTimeout }, want: minimumProjectionTimeout},
+		{name: "projection/maximum", mutate: func(config *Config) { config.ProjectionTimeout = maximumTransportTimeout }, read: func(config normalizedConfig) time.Duration { return config.projectionTimeout }, want: maximumTransportTimeout},
+		{name: "projection/below minimum", mutate: func(config *Config) { config.ProjectionTimeout = minimumProjectionTimeout - time.Nanosecond }, wantErr: true},
+		{name: "projection/over maximum", mutate: func(config *Config) { config.ProjectionTimeout = maximumTransportTimeout + time.Nanosecond }, wantErr: true},
 
 		{name: "write/zero uses default", mutate: func(config *Config) { config.WriteTimeout = 0 }, read: func(config normalizedConfig) time.Duration { return config.writeTimeout }, want: defaultWriteTimeout},
 		{name: "write/explicit default", mutate: func(config *Config) { config.WriteTimeout = defaultWriteTimeout }, read: func(config normalizedConfig) time.Duration { return config.writeTimeout }, want: defaultWriteTimeout},

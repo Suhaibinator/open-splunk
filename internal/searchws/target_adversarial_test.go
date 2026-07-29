@@ -32,14 +32,14 @@ func (reader *adversarialSearchSnapshots) GetFor(searchjobs.AccessScope, string)
 
 type adversarialExportSnapshots struct{}
 
-func (*adversarialExportSnapshots) Get(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error) {
+func (*adversarialExportSnapshots) Snapshot(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error) {
 	return exportjobs.Job{}, exportjobs.ErrNotFound
 }
 
 func adversarialNewService(t *testing.T, mutate func(*Config)) *Service {
 	t.Helper()
 	config := Config{
-		Searches:                &adversarialSearchSnapshots{},
+		Searches:                adaptSynchronousSearchSnapshots(&adversarialSearchSnapshots{}),
 		Exports:                 &adversarialExportSnapshots{},
 		Access:                  searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"},
 		MaximumFrameBytes:       minimumFrameBytes,
@@ -813,7 +813,7 @@ func TestPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget(t *testing.T) {
 func TestInitialPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget(t *testing.T) {
 	reader := &adversarialSearchSnapshots{}
 	service := adversarialNewService(t, func(config *Config) {
-		config.Searches = reader
+		config.Searches = adaptSynchronousSearchSnapshots(reader)
 		config.MaximumQueuedBytes = minimumFrameBytes
 		config.MaximumTotalQueuedBytes = minimumFrameBytes
 		config.MaximumReplayBytes = 8 * minimumFrameBytes
@@ -1171,7 +1171,7 @@ func TestAdversarialRestartSequenceEpochRejectsOldNumericSequenceAfterEstablishm
 func TestAdversarialPermanentNotFoundPollBacksOffAndNotifiesOnce(t *testing.T) {
 	reader := &adversarialSearchSnapshots{}
 	service := adversarialNewService(t, func(config *Config) {
-		config.Searches = reader
+		config.Searches = adaptSynchronousSearchSnapshots(reader)
 		config.PollInterval = minimumPollInterval
 	})
 	target := adversarialNewTarget(service, "gone")

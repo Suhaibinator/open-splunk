@@ -113,6 +113,17 @@ func (jobs *fakeSearchJobs) GetFor(scope searchjobs.AccessScope, id string) (sea
 	return jobs.getJob, jobs.getErr
 }
 
+func (jobs *fakeSearchJobs) GetForContext(
+	ctx context.Context,
+	scope searchjobs.AccessScope,
+	id string,
+) (searchjobs.Job, error) {
+	if err := ctx.Err(); err != nil {
+		return searchjobs.Job{}, err
+	}
+	return jobs.GetFor(scope, id)
+}
+
 func (jobs *fakeSearchJobs) PreviewFor(scope searchjobs.AccessScope, id string, limit int) (searchjobs.PreviewSnapshot, error) {
 	jobs.mu.Lock()
 	defer jobs.mu.Unlock()
@@ -138,6 +149,19 @@ func (jobs *fakeSearchJobs) PreviewFor(scope searchjobs.AccessScope, id string, 
 
 func (jobs *fakeSearchJobs) PreviewForBytes(scope searchjobs.AccessScope, id string, limit int, _ uint64) (searchjobs.PreviewSnapshot, error) {
 	return jobs.PreviewFor(scope, id, limit)
+}
+
+func (jobs *fakeSearchJobs) PreviewForBytesContext(
+	ctx context.Context,
+	scope searchjobs.AccessScope,
+	id string,
+	limit int,
+	maximumBytes uint64,
+) (searchjobs.PreviewSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return searchjobs.PreviewSnapshot{}, err
+	}
+	return jobs.PreviewForBytes(scope, id, limit, maximumBytes)
 }
 
 func (*fakeSearchJobs) MaximumPreviewRows() uint32 { return 100 }

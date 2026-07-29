@@ -81,7 +81,7 @@ func cloneSearchSnapshot(job searchjobs.Job) searchjobs.Job {
 
 type notFoundExportSnapshots struct{}
 
-func (notFoundExportSnapshots) Get(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error) {
+func (notFoundExportSnapshots) Snapshot(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error) {
 	return exportjobs.Job{}, exportjobs.ErrNotFound
 }
 
@@ -98,7 +98,7 @@ func newMutableExportSnapshots(jobs ...exportjobs.Job) *mutableExportSnapshots {
 	return reader
 }
 
-func (reader *mutableExportSnapshots) Get(ctx context.Context, scope searchjobs.AccessScope, id string) (exportjobs.Job, error) {
+func (reader *mutableExportSnapshots) Snapshot(ctx context.Context, scope searchjobs.AccessScope, id string) (exportjobs.Job, error) {
 	if err := ctx.Err(); err != nil {
 		return exportjobs.Job{}, err
 	}
@@ -142,14 +142,20 @@ type webSocketFixture struct {
 	once    sync.Once
 }
 
-func newWebSocketFixture(t *testing.T, reader SearchSnapshots, configure func(*Config)) *webSocketFixture {
+func newWebSocketFixture(t *testing.T, reader synchronousSearchSnapshots, configure func(*Config)) *webSocketFixture {
 	return newWebSocketFixtureWithReaders(t, reader, notFoundExportSnapshots{}, configure)
 }
 
-func newWebSocketFixtureWithReaders(t *testing.T, searches SearchSnapshots, exports ExportSnapshots, configure func(*Config)) *webSocketFixture {
+func newWebSocketFixtureWithReaders(
+	t *testing.T,
+	searches synchronousSearchSnapshots,
+	exports ExportSnapshots,
+	configure func(*Config),
+) *webSocketFixture {
 	t.Helper()
+	contextualSearches := adaptSynchronousSearchSnapshots(searches)
 	config := Config{
-		Searches:     searches,
+		Searches:     contextualSearches,
 		Exports:      exports,
 		Access:       searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"},
 		PollInterval: 10 * time.Millisecond,
@@ -164,7 +170,7 @@ func newWebSocketFixtureWithReaders(t *testing.T, searches SearchSnapshots, expo
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := &webSocketFixture{t: t, service: service, reader: searches}
+	fixture := &webSocketFixture{t: t, service: service, reader: contextualSearches}
 	fixture.server = httptest.NewServer(service)
 	t.Cleanup(fixture.close)
 	return fixture
@@ -789,10 +795,20 @@ func TestWebSocketTransportPingReceivesPong(t *testing.T) {
 	}
 }
 
-func TestServiceCloseWaitsForBlockingScopedLookupAndClearsAccounting(t *testing.T) {
+func TestServiceCloseCancelsBlockingScopedLookupWaitsForExitAndClearsAccounting(t *testing.T) {
 	job := scopedSearchJob("search-blocking")
+	cancelObserved := make(chan struct{})
+	exitRelease := make(chan struct{})
+	var exitReleaseOnce sync.Once
+	releaseExit := func() { exitReleaseOnce.Do(func() { close(exitRelease) }) }
+	t.Cleanup(releaseExit)
 	reader := &blockingSearchSnapshots{
-		job: job, started: make(chan struct{}), release: make(chan struct{}),
+		job:            job,
+		started:        make(chan struct{}),
+		release:        make(chan struct{}),
+		cancelObserved: cancelObserved,
+		exitRelease:    exitRelease,
+		exited:         make(chan struct{}),
 	}
 	t.Cleanup(reader.unblock)
 	service, err := New(Config{
@@ -819,23 +835,54 @@ func TestServiceCloseWaitsForBlockingScopedLookupAndClearsAccounting(t *testing.
 		t.Fatal("scoped lookup did not start")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	closed := make(chan error, 1)
-	go func() { closed <- service.Close(ctx) }()
+	canceledContext, cancelCanceled := context.WithCancel(context.Background())
+	cancelCanceled()
+	canceledClose := make(chan error, 1)
+	go func() { canceledClose <- service.Close(canceledContext) }()
 	select {
-	case err := <-closed:
-		t.Fatalf("Close returned before scoped lookup completed: %v", err)
+	case <-cancelObserved:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel the scoped lookup")
+	}
+
+	healthyContext, cancelHealthy := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelHealthy()
+	healthyClose := make(chan error, 1)
+	go func() { healthyClose <- service.Close(healthyContext) }()
+	select {
+	case err := <-canceledClose:
+		t.Fatalf("canceled Close returned before the provider exited: %v", err)
+	case err := <-healthyClose:
+		t.Fatalf("healthy Close returned before the provider exited: %v", err)
 	case <-time.After(40 * time.Millisecond):
 	}
-	reader.unblock()
+
+	releaseExit()
 	select {
-	case err := <-closed:
+	case err := <-canceledClose:
 		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("Close() = %v, want context canceled", err)
+			t.Fatalf("canceled Close() = %v, want context canceled", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("Close did not finish after scoped lookup was released")
+		t.Fatal("canceled Close did not join the scoped lookup")
+	}
+	select {
+	case err := <-healthyClose:
+		if err != nil {
+			t.Fatalf("healthy Close() = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("healthy Close did not share the completed ownership barrier")
+	}
+	finalContext, cancelFinal := context.WithTimeout(context.Background(), time.Second)
+	defer cancelFinal()
+	if err := service.Close(finalContext); err != nil {
+		t.Fatalf("Close() after completion = %v", err)
+	}
+	select {
+	case <-reader.exited:
+	default:
+		t.Fatal("Close returned before the scoped lookup provider exited")
 	}
 	service.mu.Lock()
 	active, targets, loads := service.activeConnections, len(service.targets), len(service.loads)
@@ -849,29 +896,110 @@ func TestServiceCloseWaitsForBlockingScopedLookupAndClearsAccounting(t *testing.
 	if active != 0 || targets != 0 || loads != 0 || replayBytes != 0 || queuedBytes != 0 {
 		t.Fatalf("post-close accounting = active:%d targets:%d loads:%d replay:%d queued:%d", active, targets, loads, replayBytes, queuedBytes)
 	}
+	if calls := reader.calls.Load(); calls != 1 {
+		t.Fatalf("snapshot provider calls = %d, want 1", calls)
+	}
 }
 
 type blockingSearchSnapshots struct {
-	job         searchjobs.Job
-	started     chan struct{}
-	release     chan struct{}
-	once        sync.Once
-	releaseOnce sync.Once
-	calls       atomic.Int32
+	job            searchjobs.Job
+	started        chan struct{}
+	release        chan struct{}
+	once           sync.Once
+	releaseOnce    sync.Once
+	cancelOnce     sync.Once
+	exitOnce       sync.Once
+	calls          atomic.Int32
+	active         atomic.Int32
+	cancelObserved chan struct{}
+	exitRelease    chan struct{}
+	exited         chan struct{}
 }
 
 func (reader *blockingSearchSnapshots) unblock() {
 	reader.releaseOnce.Do(func() { close(reader.release) })
 }
 
-func (reader *blockingSearchSnapshots) GetFor(scope searchjobs.AccessScope, id string) (searchjobs.Job, error) {
+func (reader *blockingSearchSnapshots) GetForContext(
+	ctx context.Context,
+	scope searchjobs.AccessScope,
+	id string,
+) (searchjobs.Job, error) {
+	return reader.getForContext(ctx, scope, id)
+}
+
+func (reader *blockingSearchSnapshots) getForContext(
+	ctx context.Context,
+	scope searchjobs.AccessScope,
+	id string,
+) (searchjobs.Job, error) {
 	reader.calls.Add(1)
+	reader.active.Add(1)
+	defer func() {
+		reader.active.Add(-1)
+		if reader.exited != nil {
+			reader.exitOnce.Do(func() { close(reader.exited) })
+		}
+	}()
 	reader.once.Do(func() { close(reader.started) })
-	<-reader.release
+	select {
+	case <-reader.release:
+	case <-ctx.Done():
+		if reader.cancelObserved != nil {
+			reader.cancelOnce.Do(func() { close(reader.cancelObserved) })
+		}
+		if reader.exitRelease != nil {
+			<-reader.exitRelease
+		}
+		return searchjobs.Job{}, ctx.Err()
+	}
 	if id != reader.job.ID || scope.TenantID != reader.job.TenantID || scope.OwnerID != reader.job.OwnerID {
 		return searchjobs.Job{}, searchjobs.ErrNotFound
 	}
 	return cloneSearchSnapshot(reader.job), nil
+}
+
+func TestProjectionTimeoutCancelsSnapshotAndReleasesPermit(t *testing.T) {
+	job := scopedSearchJob("search-projection-timeout")
+	reader := &blockingSearchSnapshots{
+		job: job, started: make(chan struct{}), release: make(chan struct{}), exited: make(chan struct{}),
+	}
+	t.Cleanup(reader.unblock)
+	service, err := New(Config{
+		Searches: reader, Exports: notFoundExportSnapshots{},
+		Access:            searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"},
+		ProjectionTimeout: minimumProjectionTimeout,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if closeErr := service.Close(ctx); closeErr != nil {
+			t.Errorf("Close() = %v", closeErr)
+		}
+	})
+
+	_, err = service.loadProjection(
+		context.Background(),
+		targetKey{kind: targetKindSearch, id: job.ID},
+		0,
+	)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("loadProjection() error = %v, want context deadline exceeded", err)
+	}
+	select {
+	case <-reader.exited:
+	default:
+		t.Fatal("timed-out projection returned before its provider exited")
+	}
+	if got := reader.active.Load(); got != 0 {
+		t.Fatalf("active snapshot calls = %d, want 0", got)
+	}
+	if got := len(service.projectionGate); got != 0 {
+		t.Fatalf("projection gate occupancy = %d, want 0", got)
+	}
 }
 
 func TestCoalescedLoadSurvivesInitiatorCancellationAndPinsForWaiter(t *testing.T) {
@@ -951,7 +1079,8 @@ func TestCoalescedLoadSurvivesInitiatorCancellationAndPinsForWaiter(t *testing.T
 
 func TestConnectionQueueEnforcesIntrinsicAndGlobalByteBounds(t *testing.T) {
 	service, err := New(Config{
-		Searches: newMutableSearchSnapshots(), Exports: notFoundExportSnapshots{},
+		Searches:          adaptSynchronousSearchSnapshots(newMutableSearchSnapshots()),
+		Exports:           notFoundExportSnapshots{},
 		Access:            searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"},
 		MaximumFrameBytes: minimumFrameBytes, MaximumQueuedFrames: minimumQueuedFrames,
 		MaximumQueuedBytes: minimumFrameBytes, MaximumTotalQueuedBytes: minimumFrameBytes,
@@ -1006,8 +1135,9 @@ func TestDefaultQueueCanAtomicallyHoldMaximumTerminalSubscriptionSnapshots(t *te
 		t.Fatalf("default queued frames = %d, want at least %d", defaultMaximumQueuedFrames, worstNormalFrames)
 	}
 	service, err := New(Config{
-		Searches: newMutableSearchSnapshots(), Exports: notFoundExportSnapshots{},
-		Access: searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"},
+		Searches: adaptSynchronousSearchSnapshots(newMutableSearchSnapshots()),
+		Exports:  notFoundExportSnapshots{},
+		Access:   searchjobs.AccessScope{TenantID: "tenant", OwnerID: "owner"},
 	})
 	if err != nil {
 		t.Fatal(err)

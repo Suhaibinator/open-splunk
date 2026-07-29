@@ -52,6 +52,14 @@ func (browserRecoveryExportSnapshots) Get(
 	return exportjobs.Job{}, exportjobs.ErrNotFound
 }
 
+func (snapshots browserRecoveryExportSnapshots) Snapshot(
+	ctx context.Context,
+	scope searchjobs.AccessScope,
+	id string,
+) (exportjobs.Job, error) {
+	return snapshots.Get(ctx, scope, id)
+}
+
 type browserRecoveryCommandKind uint8
 
 const (

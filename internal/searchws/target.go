@@ -205,13 +205,19 @@ func (service *Service) cancelTargetLoadWaiter(load *targetLoad) {
 
 func (service *Service) performTargetLoad(key targetKey, load *targetLoad) {
 	defer service.loadWG.Done()
-	releaseProjection, err := service.acquireProjection(service.ctx)
+	projectionContext, cancelProjection, releaseProjection, err := service.beginProjection(service.ctx)
 	if err == nil {
-		defer releaseProjection()
+		defer func() {
+			releaseProjection()
+			cancelProjection()
+		}()
 	}
 	var projection targetProjection
 	if err == nil {
-		projection, err = service.loadProjectionWithPermit(service.ctx, key, 0)
+		projection, err = service.loadProjectionWithPermit(projectionContext, key, 0)
+	}
+	if err == nil {
+		err = projectionContext.Err()
 	}
 	var target *targetState
 	sequenceBase := uint64(0)
@@ -220,6 +226,9 @@ func (service *Service) performTargetLoad(key targetKey, load *targetLoad) {
 		if err != nil {
 			err = errors.New("search websocket sequence epoch unavailable")
 		}
+	}
+	if err == nil {
+		err = projectionContext.Err()
 	}
 	if err == nil {
 		targetContext, cancel := context.WithCancel(service.ctx)
@@ -279,12 +288,30 @@ func (service *Service) inactiveTargetLocked() *targetState {
 }
 
 func (service *Service) loadProjection(ctx context.Context, key targetKey, previewRows uint32) (targetProjection, error) {
-	release, err := service.acquireProjection(ctx)
+	projectionContext, cancel, release, err := service.beginProjection(ctx)
 	if err != nil {
 		return targetProjection{}, err
 	}
-	defer release()
-	return service.loadProjectionWithPermit(ctx, key, previewRows)
+	defer func() {
+		release()
+		cancel()
+	}()
+	return service.loadProjectionWithPermit(projectionContext, key, previewRows)
+}
+
+func (service *Service) beginProjection(
+	ctx context.Context,
+) (context.Context, context.CancelFunc, func(), error) {
+	if ctx == nil {
+		return nil, nil, nil, errors.New("search websocket projection context is required")
+	}
+	projectionContext, cancel := context.WithTimeout(ctx, service.config.projectionTimeout)
+	release, err := service.acquireProjection(projectionContext)
+	if err != nil {
+		cancel()
+		return nil, nil, nil, err
+	}
+	return projectionContext, cancel, release, nil
 }
 
 func (service *Service) acquireProjection(ctx context.Context) (func(), error) {
@@ -342,8 +369,8 @@ func (service *Service) loadProjectionWithPermit(
 		)
 		if previewRows > 0 {
 			previewBytes := min(service.config.maximumFrameBytes, service.config.maximumReplayBytes)
-			snapshot, previewErr := service.config.searches.PreviewForBytes(
-				service.config.access, key.id, int(previewRows), previewBytes,
+			snapshot, previewErr := service.config.searches.PreviewForBytesContext(
+				ctx, service.config.access, key.id, int(previewRows), previewBytes,
 			)
 			if previewErr == nil {
 				job = snapshot.Job
@@ -351,14 +378,17 @@ func (service *Service) loadProjectionWithPermit(
 			} else if errors.Is(previewErr, searchjobs.ErrResultsNotReady) ||
 				errors.Is(previewErr, searchjobs.ErrResultsUnavailable) ||
 				errors.Is(previewErr, searchjobs.ErrExpired) {
-				job, err = service.config.searches.GetFor(service.config.access, key.id)
+				job, err = service.config.searches.GetForContext(ctx, service.config.access, key.id)
 			} else {
 				err = previewErr
 			}
 		} else {
-			job, err = service.config.searches.GetFor(service.config.access, key.id)
+			job, err = service.config.searches.GetForContext(ctx, service.config.access, key.id)
 		}
 		if err != nil || job.ID != key.id {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return targetProjection{}, contextErr
+			}
 			return targetProjection{}, errTargetNotFound
 		}
 		if err := ctx.Err(); err != nil {
@@ -366,11 +396,17 @@ func (service *Service) loadProjectionWithPermit(
 		}
 		projection, err := projectSearchWithPreview(ctx, job, preview, previewRows, now)
 		if err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return targetProjection{}, contextErr
+			}
 			return targetProjection{}, errTargetNotFound
+		}
+		if err := ctx.Err(); err != nil {
+			return targetProjection{}, err
 		}
 		return projection, nil
 	}
-	job, err := service.config.exports.Get(ctx, service.config.access, key.id)
+	job, err := service.config.exports.Snapshot(ctx, service.config.access, key.id)
 	if err != nil || job.ID != key.id {
 		if ctx.Err() != nil {
 			return targetProjection{}, ctx.Err()
@@ -380,6 +416,9 @@ func (service *Service) loadProjectionWithPermit(
 	projection, err := projectExport(job, now)
 	if err != nil {
 		return targetProjection{}, errTargetNotFound
+	}
+	if err := ctx.Err(); err != nil {
+		return targetProjection{}, err
 	}
 	return projection, nil
 }
@@ -629,14 +668,20 @@ func (target *targetState) refreshForSubscription(
 	}
 	target.mu.Unlock()
 
-	release, err := target.service.acquireProjection(ctx)
+	projectionContext, cancelProjection, release, err := target.service.beginProjection(ctx)
 	if err != nil {
 		return false, err
 	}
-	defer release()
-	projection, err := target.service.loadProjectionWithPermit(ctx, target.key, previewRows)
+	defer func() {
+		release()
+		cancelProjection()
+	}()
+	projection, err := target.service.loadProjectionWithPermit(projectionContext, target.key, previewRows)
 	if err != nil {
 		target.retireMissingExpiredTombstone(err)
+		return false, err
+	}
+	if err := projectionContext.Err(); err != nil {
 		return false, err
 	}
 	return target.applyProjection(projection, exclusiveBootstrap)
@@ -648,14 +693,20 @@ func (target *targetState) refreshCurrentProjection(ctx context.Context) (bool, 
 	target.mu.Lock()
 	previewRows := target.maximumPreviewRowsLocked()
 	target.mu.Unlock()
-	release, err := target.service.acquireProjection(ctx)
+	projectionContext, cancelProjection, release, err := target.service.beginProjection(ctx)
 	if err != nil {
 		return false, err
 	}
-	defer release()
-	projection, err := target.service.loadProjectionWithPermit(ctx, target.key, previewRows)
+	defer func() {
+		release()
+		cancelProjection()
+	}()
+	projection, err := target.service.loadProjectionWithPermit(projectionContext, target.key, previewRows)
 	if err != nil {
 		target.retireMissingExpiredTombstone(err)
+		return false, err
+	}
+	if err := projectionContext.Err(); err != nil {
 		return false, err
 	}
 	return target.applyProjection(projection, false)

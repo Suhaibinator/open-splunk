@@ -207,6 +207,7 @@ type Manager struct {
 	cleanupErrorHookGate   chan struct{}
 	closeOnce              sync.Once
 	closeErr               error
+	pathExists             func(string) bool
 	removePath             func(string) error
 }
 
@@ -423,6 +424,7 @@ func New(config Config) (*Manager, error) {
 		cancel:               cancel,
 		cleanupGate:          make(chan struct{}, 1),
 		cleanupErrorHookGate: make(chan struct{}, 1),
+		pathExists:           fileExists,
 		removePath:           removeFile,
 	}
 	manager.cleanupGate <- struct{}{}
@@ -1016,6 +1018,34 @@ func (manager *Manager) reserveAdmission(byteLimit, metadataLimit uint64) (strin
 		if !validID(id) {
 			return "", ErrInvalidID
 		}
+		manager.mu.RLock()
+		if manager.closed {
+			manager.mu.RUnlock()
+			return "", ErrClosed
+		}
+		if len(manager.jobs)+manager.reservations >= manager.maxJobs {
+			manager.mu.RUnlock()
+			return "", ErrCapacity
+		}
+		if manager.queueReservations >= manager.maxQueued {
+			manager.mu.RUnlock()
+			return "", ErrQueueFull
+		}
+		_, jobExists := manager.jobs[id]
+		_, reserved := manager.reservedIDs[id]
+		manager.mu.RUnlock()
+		if jobExists || reserved {
+			continue
+		}
+		// The session directory is private to this manager. Check for stale or
+		// externally introduced destinations before taking manager.mu, then
+		// revalidate all manager-owned identity state while reserving the ID
+		// below. Publication still uses no-replace semantics as a final defense.
+		csvExists := manager.pathExists(manager.artifactPath(id, FormatCSV))
+		jsonExists := manager.pathExists(manager.artifactPath(id, FormatJSONLines))
+		if csvExists || jsonExists {
+			continue
+		}
 		manager.mu.Lock()
 		if manager.closed {
 			manager.mu.Unlock()
@@ -1029,11 +1059,9 @@ func (manager *Manager) reserveAdmission(byteLimit, metadataLimit uint64) (strin
 			manager.mu.Unlock()
 			return "", ErrQueueFull
 		}
-		_, jobExists := manager.jobs[id]
-		_, reserved := manager.reservedIDs[id]
-		csvExists := fileExists(manager.artifactPath(id, FormatCSV))
-		jsonExists := fileExists(manager.artifactPath(id, FormatJSONLines))
-		if jobExists || reserved || csvExists || jsonExists {
+		_, jobExists = manager.jobs[id]
+		_, reserved = manager.reservedIDs[id]
+		if jobExists || reserved {
 			manager.mu.Unlock()
 			continue
 		}
@@ -1182,6 +1210,54 @@ func (manager *Manager) Get(ctx context.Context, access searchjobs.AccessScope, 
 	}
 	_ = manager.removeTrackedArtifact(entry, artifactPath)
 	_ = manager.removeTrackedTemp(entry, tempPath)
+	return result, nil
+}
+
+// Snapshot returns the detached scoped metadata used by progress transports.
+// Due expiration is published atomically, but filesystem reclamation is left
+// to the manager's cleanup lifecycle so a blocked unlink cannot strand a
+// transport shutdown barrier. Implementations of transport snapshot
+// interfaces must return promptly after ctx cancellation once any currently
+// held resource-bounded in-memory critical section completes.
+func (manager *Manager) Snapshot(ctx context.Context, access searchjobs.AccessScope, id string) (Job, error) {
+	if ctx == nil {
+		return Job{}, errors.New("snapshot export job: context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return Job{}, err
+	}
+	manager.mu.RLock()
+	if manager.closed {
+		manager.mu.RUnlock()
+		return Job{}, ErrClosed
+	}
+	entry := manager.jobs[id]
+	if entry == nil {
+		manager.mu.RUnlock()
+		return Job{}, ErrNotFound
+	}
+	entry.mu.Lock()
+	if entry.access != access {
+		entry.mu.Unlock()
+		manager.mu.RUnlock()
+		return Job{}, ErrNotFound
+	}
+	if err := ctx.Err(); err != nil {
+		entry.mu.Unlock()
+		manager.mu.RUnlock()
+		return Job{}, err
+	}
+	priorState := entry.job.State
+	_, _ = manager.expireLocked(entry, manager.nowUTC())
+	if entry.job.State != priorState {
+		manager.noteCleanupStateChange()
+	}
+	result := cloneJob(entry.job)
+	entry.mu.Unlock()
+	manager.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return Job{}, err
+	}
 	return result, nil
 }
 
