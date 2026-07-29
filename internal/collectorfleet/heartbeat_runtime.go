@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"time"
 
@@ -34,6 +35,13 @@ const (
 	LivenessStateOnline  LivenessState = "online"
 	LivenessStateStale   LivenessState = "stale"
 )
+
+// CollectorLiveness is one detached process-local state for an exact durable
+// lease. Snapshots are bounded by HeartbeatRuntimeConfig.MaxCollectors.
+type CollectorLiveness struct {
+	Lease Lease
+	State LivenessState
+}
 
 // HeartbeatWriter conditionally persists one normalized, complete telemetry
 // snapshot under the exact durable lease.
@@ -329,6 +337,49 @@ func (runtime *HeartbeatRuntime) Liveness(lease Lease) (LivenessState, bool) {
 		return LivenessStateStale, true
 	}
 	return LivenessStateOnline, true
+}
+
+// SnapshotLiveness returns every active exact lease for one trusted tenant,
+// sorted by collector ID. It samples the monotonic clock once, copies only
+// value fields while holding the read lock, and never exposes internal
+// deadlines or mutable runtime state.
+func (runtime *HeartbeatRuntime) SnapshotLiveness(
+	scope Scope,
+) ([]CollectorLiveness, error) {
+	if runtime == nil {
+		return nil, ErrHeartbeatRuntimeClosed
+	}
+	normalizedScope, err := normalizeScope(scope)
+	if err != nil {
+		return nil, err
+	}
+
+	runtime.mu.RLock()
+	if runtime.closed {
+		runtime.mu.RUnlock()
+		return nil, ErrHeartbeatRuntimeClosed
+	}
+	now := runtime.monotonicNow()
+	snapshot := make([]CollectorLiveness, 0, len(runtime.entries))
+	for _, entry := range runtime.entries {
+		if !entry.active || entry.lease.TenantID != normalizedScope.TenantID {
+			continue
+		}
+		state := LivenessStateOnline
+		if !now.Before(entry.deadline) {
+			state = LivenessStateStale
+		}
+		snapshot = append(snapshot, CollectorLiveness{
+			Lease: entry.lease,
+			State: state,
+		})
+	}
+	runtime.mu.RUnlock()
+
+	sort.Slice(snapshot, func(left, right int) bool {
+		return snapshot[left].Lease.CollectorID < snapshot[right].Lease.CollectorID
+	})
+	return snapshot, nil
 }
 
 // Flush makes one caller-bounded attempt to persist every currently pending

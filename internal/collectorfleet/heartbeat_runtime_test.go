@@ -589,6 +589,188 @@ func TestHeartbeatRuntimeLivenessUsesMonotonicAcceptanceDeadline(t *testing.T) {
 	}
 }
 
+func TestHeartbeatRuntimeSnapshotLivenessIsTenantScopedSortedAndDetached(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	clock := newHeartbeatRuntimeClock(time.Date(2040, 1, 1, 6, 0, 0, 0, time.UTC))
+	writer := newHeartbeatRuntimeWriter()
+	config := heartbeatRuntimeConfig(clock)
+	runtime := newHeartbeatRuntimeForTest(t, writer, config)
+
+	staleLease := heartbeatRuntimeLease("tenant-a", "collector-z", 7)
+	if err := runtime.Activate(staleLease); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(config.HeartbeatInterval + config.StaleGrace)
+
+	onlineLease := heartbeatRuntimeLease("tenant-a", "collector-a", 3)
+	if err := runtime.Activate(onlineLease); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Activate(
+		heartbeatRuntimeLease("tenant-b", "collector-b", 1),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := runtime.SnapshotLiveness(Scope{TenantID: "tenant-a"})
+	if err != nil {
+		t.Fatalf("SnapshotLiveness(): %v", err)
+	}
+	if len(snapshot) != 2 {
+		t.Fatalf("snapshot length = %d, want 2", len(snapshot))
+	}
+	if snapshot[0].Lease != onlineLease ||
+		snapshot[0].State != LivenessStateOnline {
+		t.Fatalf("snapshot[0] = %+v, want online lease %+v", snapshot[0], onlineLease)
+	}
+	if snapshot[1].Lease != staleLease ||
+		snapshot[1].State != LivenessStateStale {
+		t.Fatalf("snapshot[1] = %+v, want stale lease %+v", snapshot[1], staleLease)
+	}
+
+	snapshot[0].Lease.CollectorID = "mutated"
+	fresh, err := runtime.SnapshotLiveness(Scope{TenantID: "tenant-a"})
+	if err != nil {
+		t.Fatalf("SnapshotLiveness() after mutation: %v", err)
+	}
+	if fresh[0].Lease != onlineLease {
+		t.Fatalf("fresh snapshot was aliased: %+v", fresh[0])
+	}
+
+	if err := runtime.Release(context.Background(), onlineLease); err != nil {
+		t.Fatalf("Release(): %v", err)
+	}
+	afterRelease, err := runtime.SnapshotLiveness(Scope{TenantID: "tenant-a"})
+	if err != nil {
+		t.Fatalf("SnapshotLiveness() after Release: %v", err)
+	}
+	if len(afterRelease) != 1 || afterRelease[0].Lease != staleLease {
+		t.Fatalf("snapshot after Release = %+v, want only stale lease", afterRelease)
+	}
+}
+
+func TestHeartbeatRuntimeSnapshotLivenessRejectsInvalidScopeAndClosedRuntime(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	clock := newHeartbeatRuntimeClock(time.Date(2040, 1, 1, 6, 0, 0, 0, time.UTC))
+	runtime := newHeartbeatRuntimeForTest(
+		t,
+		newHeartbeatRuntimeWriter(),
+		heartbeatRuntimeConfig(clock),
+	)
+	if _, err := runtime.SnapshotLiveness(Scope{TenantID: " tenant-a"}); !errors.Is(
+		err,
+		control.ErrInvalidArgument,
+	) {
+		t.Fatalf("SnapshotLiveness(invalid scope) error = %v, want ErrInvalidArgument", err)
+	}
+	if err := runtime.Close(context.Background()); err != nil {
+		t.Fatalf("Close(): %v", err)
+	}
+	if _, err := runtime.SnapshotLiveness(Scope{TenantID: "tenant-a"}); !errors.Is(
+		err,
+		ErrHeartbeatRuntimeClosed,
+	) {
+		t.Fatalf("SnapshotLiveness(closed) error = %v, want ErrHeartbeatRuntimeClosed", err)
+	}
+
+	var nilRuntime *HeartbeatRuntime
+	if _, err := nilRuntime.SnapshotLiveness(Scope{TenantID: "tenant-a"}); !errors.Is(
+		err,
+		ErrHeartbeatRuntimeClosed,
+	) {
+		t.Fatalf("nil SnapshotLiveness() error = %v, want ErrHeartbeatRuntimeClosed", err)
+	}
+}
+
+func TestHeartbeatRuntimeSnapshotLivenessSamplesClockUnderReadLock(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2040, 1, 1, 6, 0, 0, 0, time.UTC)
+	snapshotClockEntered := make(chan struct{})
+	allowSnapshotClock := make(chan struct{})
+	var allowSnapshotOnce sync.Once
+	allowSnapshot := func() {
+		allowSnapshotOnce.Do(func() { close(allowSnapshotClock) })
+	}
+	activationClockCalled := make(chan struct{})
+	var clockMu sync.Mutex
+	clockCalls := 0
+	monotonicNow := func() time.Time {
+		clockMu.Lock()
+		clockCalls++
+		call := clockCalls
+		clockMu.Unlock()
+		switch call {
+		case 2:
+			close(snapshotClockEntered)
+			<-allowSnapshotClock
+		case 3:
+			close(activationClockCalled)
+		}
+		return now
+	}
+	config := HeartbeatRuntimeConfig{
+		MaxCollectors:     4,
+		HeartbeatInterval: 10 * time.Second,
+		StaleGrace:        5 * time.Second,
+		FlushInterval:     time.Hour,
+		WriteTimeout:      5 * time.Second,
+		MonotonicNow:      monotonicNow,
+	}
+	runtime := newHeartbeatRuntimeForTest(
+		t,
+		newHeartbeatRuntimeWriter(),
+		config,
+	)
+	t.Cleanup(allowSnapshot)
+	first := heartbeatRuntimeLease("tenant-a", "collector-a", 1)
+	if err := runtime.Activate(first); err != nil {
+		t.Fatal(err)
+	}
+
+	type snapshotResult struct {
+		entries []CollectorLiveness
+		err     error
+	}
+	snapshotDone := make(chan snapshotResult, 1)
+	go func() {
+		entries, err := runtime.SnapshotLiveness(Scope{TenantID: "tenant-a"})
+		snapshotDone <- snapshotResult{entries: entries, err: err}
+	}()
+	heartbeatRuntimeAwaitSignal(t, snapshotClockEntered, "snapshot clock entry")
+
+	activateDone := make(chan error, 1)
+	go func() {
+		activateDone <- runtime.Activate(
+			heartbeatRuntimeLease("tenant-a", "collector-b", 1),
+		)
+	}()
+	heartbeatRuntimeAwaitSignal(t, activationClockCalled, "activation clock call")
+	select {
+	case err := <-activateDone:
+		t.Fatalf("Activate completed inside snapshot sample: %v", err)
+	default:
+	}
+
+	allowSnapshot()
+	result := <-snapshotDone
+	if result.err != nil {
+		t.Fatalf("SnapshotLiveness(): %v", result.err)
+	}
+	if len(result.entries) != 1 || result.entries[0].Lease != first {
+		t.Fatalf("snapshot = %+v, want only initial lease", result.entries)
+	}
+	if err := <-activateDone; err != nil {
+		t.Fatalf("Activate() after snapshot: %v", err)
+	}
+}
+
 func TestHeartbeatRuntimeWriterErrorRetainsOnlyLatestForRetry(t *testing.T) {
 	t.Parallel()
 
