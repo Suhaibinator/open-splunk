@@ -155,10 +155,10 @@ func (db *DB) GetIndexByName(ctx context.Context, name string) (Index, error) {
 	return index, indexLookupError(err)
 }
 
-// ListIndexes lists every index in normalized-name order.
+// ListIndexes lists every live, non-tombstoned index in normalized-name order.
 func (db *DB) ListIndexes(ctx context.Context) ([]Index, error) {
 	var records []indexRecord
-	query := db.orm.WithContext(ctx).Order("name").Find(&records)
+	query := visibleIndexRecords(db.orm.WithContext(ctx)).Order("name").Find(&records)
 	if query.Error != nil {
 		return nil, fmt.Errorf("list indexes: %w", query.Error)
 	}
@@ -250,6 +250,9 @@ func (db *DB) SetIndexState(ctx context.Context, id string, expectedVersion uint
 	if !validIndexState(state) {
 		return Index{}, fmt.Errorf("%w: unknown index state", ErrInvalidArgument)
 	}
+	if state == IndexStateDeleting {
+		return Index{}, fmt.Errorf("%w: deleting is reserved for the physical deletion coordinator", ErrInvalidArgument)
+	}
 	tx := db.orm.WithContext(ctx).Begin()
 	if tx.Error != nil {
 		return Index{}, fmt.Errorf("begin index state update: %w", tx.Error)
@@ -320,6 +323,68 @@ func (db *DB) SetIndexState(ctx context.Context, id string, expectedVersion uint
 	return result, nil
 }
 
+// DeleteIndex performs a terminal logical deletion while retaining physical
+// event data. The archived index row remains in place to preserve references
+// and permanently reserve its ClickHouse-facing canonical name; a durable
+// tombstone hides it from the live catalog and makes it immutable.
+func (db *DB) DeleteIndex(
+	ctx context.Context,
+	id string,
+	expectedVersion uint64,
+	confirmationName string,
+) (deletedID string, err error) {
+	if err := validateExpectedVersion(expectedVersion); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(id) == "" {
+		return "", fmt.Errorf("%w: index ID is required", ErrInvalidArgument)
+	}
+	canonicalConfirmation, err := NormalizeIndexName(confirmationName)
+	if err != nil || canonicalConfirmation != confirmationName {
+		return "", fmt.Errorf("%w: index deletion confirmation is invalid", ErrInvalidArgument)
+	}
+	tx := db.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return "", fmt.Errorf("begin index deletion: %w", tx.Error)
+	}
+	defer finishGORMTx(tx, &err)
+
+	currentRecord, err := takeIndexRecord(tx, "index_id = ?", id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("read index for deletion: %w", err)
+	}
+	current, err := indexFromRecord(currentRecord)
+	if err != nil {
+		return "", fmt.Errorf("read index for deletion: %w", err)
+	}
+	if current.Version != expectedVersion {
+		return "", ErrVersionConflict
+	}
+	if current.State != IndexStateArchived {
+		return "", ErrDependencyConflict
+	}
+	if canonicalConfirmation != current.Definition.Name {
+		return "", fmt.Errorf("%w: confirmation name must exactly match the canonical index name", ErrInvalidArgument)
+	}
+
+	tombstone := indexDeletionTombstoneRecord{
+		IndexID:            current.ID,
+		Name:               current.Definition.Name,
+		DeletedVersion:     currentRecord.Version,
+		DeletedAtUnixMicro: databaseTime(time.Now()).UnixMicro(),
+	}
+	if create := tx.Create(&tombstone); create.Error != nil {
+		return "", fmt.Errorf("create index deletion tombstone: %w", create.Error)
+	}
+	if commitErr := tx.Commit().Error; commitErr != nil {
+		return "", fmt.Errorf("commit index deletion: %w", commitErr)
+	}
+	return current.ID, nil
+}
+
 func activeAppUsesIndex(database *gorm.DB, indexID string) (bool, error) {
 	var dependency appDefaultIndexRecord
 	result := database.Table("app_default_indexes AS app_index").
@@ -341,8 +406,17 @@ func activeAppUsesIndex(database *gorm.DB, indexID string) (bool, error) {
 
 func takeIndexRecord(database *gorm.DB, query string, args ...any) (indexRecord, error) {
 	var record indexRecord
-	result := database.Where(query, args...).Take(&record)
+	result := visibleIndexRecords(database).Where(query, args...).Take(&record)
 	return record, result.Error
+}
+
+func visibleIndexRecords(database *gorm.DB) *gorm.DB {
+	return database.Where(`
+		NOT EXISTS (
+			SELECT 1
+			FROM index_deletion_tombstones
+			WHERE index_deletion_tombstones.index_id = indexes.index_id
+		)`)
 }
 
 func newIndexRecord(id string, definition IndexDefinition, now time.Time) indexRecord {

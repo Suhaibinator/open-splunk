@@ -30,3 +30,18 @@ type indexRecord struct {
 func (indexRecord) TableName() string {
 	return "indexes"
 }
+
+// indexDeletionTombstoneRecord is the GORM representation of the terminal
+// KEEP_DATA deletion marker introduced by 0016_index_deletion_tombstones.sql.
+// The archived indexes row remains the source of truth for name reservation
+// and existing foreign-key references.
+type indexDeletionTombstoneRecord struct {
+	IndexID            string `gorm:"column:index_id;type:text;primaryKey;not null"`
+	Name               string `gorm:"column:name;type:text;not null"`
+	DeletedVersion     int64  `gorm:"column:deleted_version;type:integer;not null;check:index_deletion_tombstones_version_positive,deleted_version >= 1"`
+	DeletedAtUnixMicro int64  `gorm:"column:deleted_at_unix_micro;type:integer;not null;check:index_deletion_tombstones_timestamp_positive,deleted_at_unix_micro > 0"`
+}
+
+func (indexDeletionTombstoneRecord) TableName() string {
+	return "index_deletion_tombstones"
+}

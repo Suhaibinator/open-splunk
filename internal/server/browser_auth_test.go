@@ -30,6 +30,7 @@ var browserGateAdministratorPaths = []string{
 	"/api/v1/indexes/list",
 	"/api/v1/indexes/update",
 	"/api/v1/indexes/state/set",
+	"/api/v1/indexes/delete",
 	"/api/v1/ingestion-tokens/create",
 	"/api/v1/ingestion-tokens/get",
 	"/api/v1/ingestion-tokens/list",
@@ -166,6 +167,16 @@ func (administration *browserGateIndexAdministration) SetIndexState(
 ) (control.Index, error) {
 	administration.record(ctx)
 	return control.Index{}, errors.New("unexpected index state update")
+}
+
+func (administration *browserGateIndexAdministration) DeleteIndex(
+	ctx context.Context,
+	_ string,
+	_ uint64,
+	_ string,
+) (string, error) {
+	administration.record(ctx)
+	return "", errors.New("unexpected index deletion")
 }
 
 type browserGateTokenAdministration struct {

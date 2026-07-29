@@ -400,15 +400,20 @@ func TestAppDefaultIndexesMustExistAndRemainSearchable(t *testing.T) {
 	ingestionOnlyDefinition.SearchEnabled = false
 	ingestionOnly := mustCreateIndex(t, db, ingestionOnlyDefinition)
 	deleting := mustCreateIndex(t, db, enabledIndex("deleting"))
-	deleting, err := db.SetIndexState(ctx, deleting.ID, deleting.Version, IndexStateDeleting)
-	if err != nil {
-		t.Fatalf("mark index deleting: %v", err)
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		UPDATE indexes
+		SET state = 'deleting', version = version + 1
+		WHERE index_id = ?`,
+		deleting.ID,
+	); err != nil {
+		t.Fatalf("seed deleting index state: %v", err)
 	}
 	archived := mustCreateIndex(t, db, enabledIndex("archived"))
-	archived, err = db.SetIndexState(ctx, archived.ID, archived.Version, IndexStateArchived)
+	archivedState, err := db.SetIndexState(ctx, archived.ID, archived.Version, IndexStateArchived)
 	if err != nil {
 		t.Fatalf("archive index: %v", err)
 	}
+	archived = archivedState
 	scope := AppAccessScope{TenantID: "tenant"}
 
 	for name, indexName := range map[string]string{
@@ -456,10 +461,10 @@ func TestAppDefaultIndexesMustExistAndRemainSearchable(t *testing.T) {
 	if _, err := db.UpdateIndex(ctx, queryable.ID, queryable.Version, queryableUpdate); !errors.Is(err, ErrDependencyConflict) {
 		t.Fatalf("disabling an app-default index error = %v, want ErrDependencyConflict", err)
 	}
-	if _, err := db.SetIndexState(ctx, queryable.ID, queryable.Version, IndexStateDeleting); !errors.Is(err, ErrDependencyConflict) {
-		t.Fatalf("deleting an app-default index error = %v, want ErrDependencyConflict", err)
+	if _, err := db.SetIndexState(ctx, queryable.ID, queryable.Version, IndexStateArchived); !errors.Is(err, ErrDependencyConflict) {
+		t.Fatalf("archiving an app-default index error = %v, want ErrDependencyConflict", err)
 	}
-	if _, err := db.SetIndexState(ctx, queryable.ID, queryable.Version+1, IndexStateDeleting); !errors.Is(err, ErrVersionConflict) {
+	if _, err := db.SetIndexState(ctx, queryable.ID, queryable.Version+1, IndexStateArchived); !errors.Is(err, ErrVersionConflict) {
 		t.Fatalf("stale app-default index state error = %v, want ErrVersionConflict", err)
 	}
 	archivedApp, err := catalog.SetAppState(

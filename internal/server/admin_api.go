@@ -261,6 +261,11 @@ func (handler *apiHandler) indexAdministrationRoutes(noAuth router.AuthLevel, sm
 			Codec: codec.NewProtoCodec[*opensplunkv1.SetIndexStateRequest, *opensplunkv1.SetIndexStateResponse](), Handler: handler.setIndexState,
 			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.SetIndexStateRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
+		router.NewGenericRouteDefinition[*opensplunkv1.DeleteIndexRequest, *opensplunkv1.DeleteIndexResponse, string, struct{}](router.RouteConfig[*opensplunkv1.DeleteIndexRequest, *opensplunkv1.DeleteIndexResponse]{
+			Path: "/indexes/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: codec.NewProtoCodec[*opensplunkv1.DeleteIndexRequest, *opensplunkv1.DeleteIndexResponse](), Handler: handler.deleteIndex,
+			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.DeleteIndexRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+		}),
 	}
 }
 
@@ -431,6 +436,50 @@ func (handler *apiHandler) setIndexState(request *http.Request, input *opensplun
 		return nil, internalError()
 	}
 	return &opensplunkv1.SetIndexStateResponse{Index: converted}, nil
+}
+
+func (handler *apiHandler) deleteIndex(request *http.Request, input *opensplunkv1.DeleteIndexRequest) (*opensplunkv1.DeleteIndexResponse, error) {
+	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
+		return nil, badRequestError(err.Error())
+	}
+	switch input.GetDataDeletionMode() {
+	case opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA:
+	case opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_DELETE_DATA:
+		return nil, badRequestError("physical index data deletion is not available")
+	default:
+		return nil, badRequestError("index data deletion mode is invalid")
+	}
+	confirmation := input.GetConfirmationName()
+	canonicalConfirmation, err := control.NormalizeIndexName(confirmation)
+	if err != nil || canonicalConfirmation != confirmation {
+		return nil, badRequestError("index delete confirmation is invalid")
+	}
+	current, err := handler.resolveIndex(request.Context(), input.GetSelector())
+	if err := mapAdministrativeCallError(request.Context(), err, "index"); err != nil {
+		return nil, err
+	}
+	if _, err := indexToProto(current); err != nil {
+		return nil, internalError()
+	}
+	if current.Version != input.GetExpectedVersion() || current.State != control.IndexStateArchived {
+		return nil, router.NewHTTPError(http.StatusConflict, "index version or state conflict")
+	}
+	if current.Definition.Name != confirmation {
+		return nil, badRequestError("index delete confirmation is invalid")
+	}
+	deletedID, err := handler.indexAdmin.DeleteIndex(
+		request.Context(),
+		current.ID,
+		input.GetExpectedVersion(),
+		confirmation,
+	)
+	if err := mapAdministrativeCallError(request.Context(), err, "index"); err != nil {
+		return nil, err
+	}
+	if deletedID != current.ID {
+		return nil, internalError()
+	}
+	return &opensplunkv1.DeleteIndexResponse{IndexId: strings.Clone(deletedID)}, nil
 }
 
 func (handler *apiHandler) createIngestionToken(request *http.Request, input *opensplunkv1.CreateIngestionTokenRequest) (*opensplunkv1.CreateIngestionTokenResponse, error) {
@@ -1092,7 +1141,7 @@ func indexStateFromProto(state opensplunkv1.IndexState) (control.IndexState, err
 	case opensplunkv1.IndexState_INDEX_STATE_ARCHIVED:
 		return control.IndexStateArchived, nil
 	case opensplunkv1.IndexState_INDEX_STATE_DELETING:
-		return control.IndexStateDeleting, nil
+		return "", errors.New("deleting state is managed by index deletion")
 	default:
 		return "", errors.New("index state is invalid")
 	}
@@ -1177,7 +1226,10 @@ func mapAdministrativeCallError(ctx context.Context, operationErr error, object 
 		return router.NewHTTPError(http.StatusNotFound, object+" not found")
 	case errors.Is(operationErr, control.ErrAlreadyExists):
 		return router.NewHTTPError(http.StatusConflict, object+" already exists")
-	case errors.Is(operationErr, control.ErrVersionConflict), errors.Is(operationErr, control.ErrImmutableName), errors.Is(operationErr, auth.ErrInactiveToken):
+	case errors.Is(operationErr, control.ErrVersionConflict),
+		errors.Is(operationErr, control.ErrDependencyConflict),
+		errors.Is(operationErr, control.ErrImmutableName),
+		errors.Is(operationErr, auth.ErrInactiveToken):
 		return router.NewHTTPError(http.StatusConflict, object+" version or state conflict")
 	case errors.Is(operationErr, control.ErrCapacityExceeded):
 		return router.NewHTTPError(http.StatusTooManyRequests, object+" capacity is exhausted")

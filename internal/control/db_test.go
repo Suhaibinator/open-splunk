@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -37,8 +38,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 15 {
-		t.Fatalf("schema migration count = %d, want 15", migrationCount)
+	if migrationCount != 16 {
+		t.Fatalf("schema migration count = %d, want 16", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -86,8 +87,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 15 {
-		t.Fatalf("schema migration count after reopen = %d, want 15", migrationCount)
+	if migrationCount != 16 {
+		t.Fatalf("schema migration count after reopen = %d, want 16", migrationCount)
 	}
 }
 
@@ -169,6 +170,55 @@ func TestIndexRecordMatchesMigratedSQLiteColumns(t *testing.T) {
 	nameField := statement.Schema.LookUpField("Name")
 	if idField == nil || !idField.PrimaryKey || nameField == nil || !nameField.Unique {
 		t.Fatalf("GORM index keys are not explicit: ID=%#v name=%#v", idField, nameField)
+	}
+}
+
+func TestIndexDeletionTombstoneRecordMatchesMigratedSQLiteColumns(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer db.Close()
+
+	statement := &gorm.Statement{DB: db.GORMDB()}
+	if err := statement.Parse(&indexDeletionTombstoneRecord{}); err != nil {
+		t.Fatalf("parse GORM index-deletion tombstone model: %v", err)
+	}
+
+	rows, err := db.SQLDB().QueryContext(ctx, `
+		SELECT name
+		FROM pragma_table_info('index_deletion_tombstones')
+		ORDER BY cid`)
+	if err != nil {
+		t.Fatalf("read migrated index-deletion tombstone columns: %v", err)
+	}
+	defer rows.Close()
+	var migratedColumns []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan migrated index-deletion tombstone column: %v", err)
+		}
+		migratedColumns = append(migratedColumns, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate migrated index-deletion tombstone columns: %v", err)
+	}
+	if !slices.Equal(statement.Schema.DBNames, migratedColumns) {
+		t.Fatalf(
+			"GORM index-deletion tombstone columns = %v, migrated columns = %v",
+			statement.Schema.DBNames,
+			migratedColumns,
+		)
+	}
+
+	idField := statement.Schema.LookUpField("IndexID")
+	nameField := statement.Schema.LookUpField("Name")
+	if idField == nil || !idField.PrimaryKey || nameField == nil || nameField.Unique {
+		t.Fatalf("GORM index-deletion tombstone keys are not explicit: ID=%#v name=%#v", idField, nameField)
 	}
 }
 
@@ -258,8 +308,151 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 15 {
-		t.Fatalf("schema migration count = %d, want 15", count)
+	if count != 16 {
+		t.Fatalf("schema migration count = %d, want 16", count)
+	}
+}
+
+func TestIndexDeletionTombstoneMigrationUpgradesExistingSchema(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	raw, err := sql.Open(
+		"sqlite",
+		filepath.Join(t.TempDir(), "index-deletion-upgrade.sqlite")+"?_txlock=immediate",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+
+	if _, err := raw.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMigrations(ctx, raw, migrationsBefore(t, "0016_")); err != nil {
+		t.Fatalf("apply pre-index-deletion migrations: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO indexes (
+			index_id,
+			version,
+			name,
+			display_name,
+			ingestion_enabled,
+			search_enabled,
+			state,
+			created_at_unix_micro,
+			updated_at_unix_micro
+		) VALUES ('legacy-index', 2, 'legacy', 'Legacy', 0, 0, 'archived', 1, 2)`,
+	); err != nil {
+		t.Fatalf("seed legacy index: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO indexes (
+			index_id,
+			version,
+			name,
+			display_name,
+			ingestion_enabled,
+			search_enabled,
+			state,
+			created_at_unix_micro,
+			updated_at_unix_micro
+		) VALUES ('stranded-index', 7, 'stranded', 'Stranded', 0, 0, 'deleting', 4, 5)`,
+	); err != nil {
+		t.Fatalf("seed stranded deleting index: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO indexes (
+			index_id,
+			version,
+			name,
+			display_name,
+			ingestion_enabled,
+			search_enabled,
+			state,
+			created_at_unix_micro,
+			updated_at_unix_micro
+		) VALUES (
+			'ceiling-index',
+			9223372036854775807,
+			'ceiling',
+			'Ceiling',
+			0,
+			0,
+			'deleting',
+			9223372036854775807,
+			9223372036854775807
+		)`,
+	); err != nil {
+		t.Fatalf("seed ceiling deleting index: %v", err)
+	}
+
+	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+		t.Fatalf("apply index-deletion tombstone migration: %v", err)
+	}
+	var recoveredState IndexState
+	var recoveredVersion, recoveredUpdatedAt int64
+	if err := raw.QueryRowContext(ctx, `
+		SELECT state, version, updated_at_unix_micro
+		FROM indexes
+		WHERE index_id = 'stranded-index'`,
+	).Scan(&recoveredState, &recoveredVersion, &recoveredUpdatedAt); err != nil {
+		t.Fatalf("read recovered deleting index: %v", err)
+	}
+	if recoveredState != IndexStateArchived || recoveredVersion != 8 || recoveredUpdatedAt != 6 {
+		t.Fatalf(
+			"recovered deleting index = state %q version %d updated %d",
+			recoveredState,
+			recoveredVersion,
+			recoveredUpdatedAt,
+		)
+	}
+	if err := raw.QueryRowContext(ctx, `
+		SELECT state, version, updated_at_unix_micro
+		FROM indexes
+		WHERE index_id = 'ceiling-index'`,
+	).Scan(&recoveredState, &recoveredVersion, &recoveredUpdatedAt); err != nil {
+		t.Fatalf("read recovered ceiling index: %v", err)
+	}
+	if recoveredState != IndexStateArchived ||
+		recoveredVersion != math.MaxInt64 ||
+		recoveredUpdatedAt != math.MaxInt64 {
+		t.Fatalf(
+			"recovered ceiling index = state %q version %d updated %d",
+			recoveredState,
+			recoveredVersion,
+			recoveredUpdatedAt,
+		)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO index_deletion_tombstones (
+			index_id,
+			name,
+			deleted_version,
+			deleted_at_unix_micro
+		) VALUES ('legacy-index', 'legacy', 2, 3)`,
+	); err != nil {
+		t.Fatalf("insert upgraded tombstone: %v", err)
+	}
+
+	var triggerCount int
+	if err := raw.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM sqlite_schema
+		WHERE type = 'trigger'
+		  AND name IN (
+		      'index_deletion_tombstone_insert_is_valid',
+		      'tombstoned_index_update_is_forbidden',
+		      'tombstoned_index_delete_is_forbidden',
+		      'index_deletion_tombstone_update_is_forbidden',
+		      'index_deletion_tombstone_delete_is_forbidden'
+		  )`,
+	).Scan(&triggerCount); err != nil {
+		t.Fatal(err)
+	}
+	if triggerCount != 5 {
+		t.Fatalf("index-deletion tombstone triggers = %d, want 5", triggerCount)
 	}
 }
 

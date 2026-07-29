@@ -100,6 +100,7 @@ type IndexAdministration interface {
 	ListIndexes(context.Context) ([]control.Index, error)
 	UpdateIndex(context.Context, string, uint64, control.IndexDefinition) (control.Index, error)
 	SetIndexState(context.Context, string, uint64, control.IndexState) (control.Index, error)
+	DeleteIndex(context.Context, string, uint64, string) (string, error)
 }
 
 // IngestionTokenAdministration is the secret-safe collector credential
@@ -704,6 +705,7 @@ func NewHandler(config Config) (*Handler, error) {
 			"/api/v1/indexes/list",
 			"/api/v1/indexes/update",
 			"/api/v1/indexes/state/set",
+			"/api/v1/indexes/delete",
 		} {
 			apiRoutes[path] = http.MethodPost
 			administratorRoutes[path] = struct{}{}

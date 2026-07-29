@@ -97,6 +97,45 @@ func TestIndexAdministrationLifecycleAgainstSQLite(t *testing.T) {
 	if state.GetIndex().GetVersion() != 3 || state.GetIndex().GetState() != opensplunkv1.IndexState_INDEX_STATE_ARCHIVED {
 		t.Fatalf("state response = %+v", state.GetIndex())
 	}
+
+	response = postProto(t, handler, "/api/v1/indexes/delete", &opensplunkv1.DeleteIndexRequest{
+		Selector: &opensplunkv1.IndexSelector{
+			Selector: &opensplunkv1.IndexSelector_IndexName{IndexName: "GRADETHIS-PROD"},
+		},
+		ExpectedVersion:  3,
+		DataDeletionMode: opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
+		ConfirmationName: "gradethis-prod",
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var deleted opensplunkv1.DeleteIndexResponse
+	unmarshalResponse(t, response, &deleted)
+	if deleted.GetIndexId() != index.GetIndexId() || deleted.DeletionOperationId != nil {
+		t.Fatalf("delete response = %+v", &deleted)
+	}
+
+	response = postProto(t, handler, "/api/v1/indexes/get", &opensplunkv1.GetIndexRequest{Selector: &opensplunkv1.IndexSelector{
+		Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: index.GetIndexId()},
+	}})
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("deleted get status = %d, body = %s", response.Code, response.Body.String())
+	}
+	response = postProto(t, handler, "/api/v1/indexes/list", &opensplunkv1.ListIndexesRequest{})
+	if response.Code != http.StatusOK {
+		t.Fatalf("post-delete list status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var listed opensplunkv1.ListIndexesResponse
+	unmarshalResponse(t, response, &listed)
+	if len(listed.GetIndexes()) != 0 {
+		t.Fatalf("post-delete indexes = %+v", listed.GetIndexes())
+	}
+	response = postProto(t, handler, "/api/v1/indexes/create", &opensplunkv1.CreateIndexRequest{
+		Definition: adminTestIndexProto("gradethis-prod"),
+	})
+	if response.Code != http.StatusConflict {
+		t.Fatalf("reused name status = %d, body = %s", response.Code, response.Body.String())
+	}
 }
 
 func TestAdministrativeListPaginationIsBoundAndTamperSafe(t *testing.T) {
@@ -919,6 +958,19 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 	if _, err := db.CreateIndex(ctx, adminTestIndex("main")); err != nil {
 		t.Fatalf("CreateIndex(main): %v", err)
 	}
+	deletionTarget, err := db.CreateIndex(ctx, adminTestIndex("delete-target"))
+	if err != nil {
+		t.Fatalf("CreateIndex(delete-target): %v", err)
+	}
+	deletionTarget, err = db.SetIndexState(
+		ctx,
+		deletionTarget.ID,
+		deletionTarget.Version,
+		control.IndexStateArchived,
+	)
+	if err != nil {
+		t.Fatalf("archive delete-target: %v", err)
+	}
 
 	tests := []struct {
 		name    string
@@ -978,6 +1030,73 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 				definition.RetentionPeriod = durationpb.New(time.Nanosecond)
 				return &opensplunkv1.CreateIndexRequest{Definition: definition}
 			}(),
+			status: http.StatusBadRequest,
+		},
+		{
+			name: "unspecified index deletion mode", path: "/api/v1/indexes/delete",
+			request: &opensplunkv1.DeleteIndexRequest{
+				Selector:        &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
+				ExpectedVersion: deletionTarget.Version, ConfirmationName: deletionTarget.Definition.Name,
+			},
+			status: http.StatusBadRequest,
+		},
+		{
+			name: "physical index deletion is unavailable", path: "/api/v1/indexes/delete",
+			request: &opensplunkv1.DeleteIndexRequest{
+				Selector:         &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
+				ExpectedVersion:  deletionTarget.Version,
+				DataDeletionMode: opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_DELETE_DATA,
+				ConfirmationName: deletionTarget.Definition.Name,
+			},
+			status: http.StatusBadRequest,
+		},
+		{
+			name: "noncanonical index delete confirmation", path: "/api/v1/indexes/delete",
+			request: &opensplunkv1.DeleteIndexRequest{
+				Selector:         &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
+				ExpectedVersion:  deletionTarget.Version,
+				DataDeletionMode: opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
+				ConfirmationName: " DELETE-TARGET ",
+			},
+			status: http.StatusBadRequest,
+		},
+		{
+			name: "wrong index delete confirmation", path: "/api/v1/indexes/delete",
+			request: &opensplunkv1.DeleteIndexRequest{
+				Selector:         &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
+				ExpectedVersion:  deletionTarget.Version,
+				DataDeletionMode: opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
+				ConfirmationName: "main",
+			},
+			status: http.StatusBadRequest,
+		},
+		{
+			name: "stale index deletion", path: "/api/v1/indexes/delete",
+			request: &opensplunkv1.DeleteIndexRequest{
+				Selector:         &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
+				ExpectedVersion:  deletionTarget.Version - 1,
+				DataDeletionMode: opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
+				ConfirmationName: deletionTarget.Definition.Name,
+			},
+			status: http.StatusConflict,
+		},
+		{
+			name: "active index deletion", path: "/api/v1/indexes/delete",
+			request: &opensplunkv1.DeleteIndexRequest{
+				Selector:         &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexName{IndexName: "main"}},
+				ExpectedVersion:  1,
+				DataDeletionMode: opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
+				ConfirmationName: "main",
+			},
+			status: http.StatusConflict,
+		},
+		{
+			name: "managed deleting state", path: "/api/v1/indexes/state/set",
+			request: &opensplunkv1.SetIndexStateRequest{
+				Selector:        &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexName{IndexName: "main"}},
+				ExpectedVersion: 1,
+				State:           opensplunkv1.IndexState_INDEX_STATE_DELETING,
+			},
 			status: http.StatusBadRequest,
 		},
 		{
@@ -1056,6 +1175,15 @@ func TestCommittedAdministrativeSuccessWinsContextCancellationRace(t *testing.T)
 	if err := mapAdministrativeCallError(ctx, nil, "ingestion token"); err != nil {
 		t.Fatalf("committed operation mapped to error = %v", err)
 	}
+	assertHTTPErrorStatus(
+		t,
+		mapAdministrativeCallError(
+			context.Background(),
+			control.ErrDependencyConflict,
+			"index",
+		),
+		http.StatusConflict,
+	)
 }
 
 func TestAdministrativeRoutesRejectDNSRebindingAndCrossOriginBrowsers(t *testing.T) {

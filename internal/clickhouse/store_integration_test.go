@@ -270,6 +270,71 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	})
 
 	testCompiledQueriesAgainstClickHouse(t, ctx, store, queryConnection, indexTime)
+	t.Run("keep-data index deletion retains physical rows and reserves the name", func(t *testing.T) {
+		index, err := controlDB.CreateIndex(ctx, control.IndexDefinition{
+			Name:             "keep-data",
+			DisplayName:      "Keep data",
+			IngestionEnabled: true,
+			SearchEnabled:    true,
+		})
+		if err != nil {
+			t.Fatalf("create keep-data index: %v", err)
+		}
+		retained := testStoredEvent("keep-data-event", index.Definition.Name, indexTime)
+		retained.BatchID = "keep-data-batch"
+		retained.CollectorID = "keep-data-collector"
+		if _, err := store.Store(ctx, ingest.StoreBatch{
+			TenantID:          "tenant",
+			CollectorID:       retained.CollectorID,
+			BatchID:           retained.BatchID,
+			BatchSequence:     1,
+			SourceBatchSHA256: testSourceBatchDigest(retained.BatchID),
+			ReceivedAt:        indexTime,
+			Events:            []*ingest.StoredEvent{retained},
+		}); err != nil {
+			t.Fatalf("store keep-data event: %v", err)
+		}
+		index, err = controlDB.SetIndexState(
+			ctx,
+			index.ID,
+			index.Version,
+			control.IndexStateArchived,
+		)
+		if err != nil {
+			t.Fatalf("archive keep-data index: %v", err)
+		}
+		deletedID, err := controlDB.DeleteIndex(
+			ctx,
+			index.ID,
+			index.Version,
+			index.Definition.Name,
+		)
+		if err != nil {
+			t.Fatalf("delete keep-data index: %v", err)
+		}
+		if deletedID != index.ID {
+			t.Fatalf("deleted index ID = %q, want %q", deletedID, index.ID)
+		}
+		if _, err := controlDB.GetIndexByName(ctx, index.Definition.Name); !errors.Is(err, control.ErrNotFound) {
+			t.Fatalf("get deleted index error = %v, want ErrNotFound", err)
+		}
+		if _, err := controlDB.CreateIndex(ctx, index.Definition); !errors.Is(err, control.ErrAlreadyExists) {
+			t.Fatalf("reuse deleted index name error = %v, want ErrAlreadyExists", err)
+		}
+		var retainedRows uint64
+		if err := queryConnection.QueryRow(
+			ctx,
+			"SELECT count() FROM open_splunk.events WHERE tenant_id = ? AND index_name = ? AND event_id = ?",
+			"tenant",
+			index.Definition.Name,
+			retained.Event.GetEventId(),
+		).Scan(&retainedRows); err != nil {
+			t.Fatalf("query retained keep-data event: %v", err)
+		}
+		if retainedRows != 1 {
+			t.Fatalf("retained keep-data rows = %d, want 1", retainedRows)
+		}
+	})
 }
 
 func testLegacyUnalignedRetentionNativeReplay(

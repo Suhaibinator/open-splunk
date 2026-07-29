@@ -175,6 +175,348 @@ func TestCreateAndListIndexes(t *testing.T) {
 	}
 }
 
+func TestDeleteIndexKeepDataCreatesTerminalTombstone(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	created, err := db.CreateIndex(ctx, enabledIndex("retained-events"))
+	if err != nil {
+		t.Fatalf("CreateIndex(): %v", err)
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		INSERT INTO ingestion_tokens (
+			ingestion_token_id,
+			version,
+			name,
+			token_prefix,
+			token_digest,
+			state,
+			created_at_unix_micro,
+			updated_at_unix_micro,
+			bound_collector_id
+		) VALUES (
+			'token-retained',
+			1,
+			'retained',
+			'prefix123',
+			zeroblob(32),
+			'active',
+			1,
+			1,
+			'collector-1'
+		)`,
+	); err != nil {
+		t.Fatalf("seed ingestion token: %v", err)
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
+		VALUES ('token-retained', ?)`,
+		created.ID,
+	); err != nil {
+		t.Fatalf("seed ingestion token index: %v", err)
+	}
+	archived, err := db.SetIndexState(ctx, created.ID, created.Version, IndexStateArchived)
+	if err != nil {
+		t.Fatalf("archive index: %v", err)
+	}
+
+	deletedID, err := db.DeleteIndex(
+		ctx,
+		archived.ID,
+		archived.Version,
+		archived.Definition.Name,
+	)
+	if err != nil {
+		t.Fatalf("DeleteIndex(): %v", err)
+	}
+	if deletedID != archived.ID {
+		t.Fatalf("DeleteIndex() ID = %q, want %q", deletedID, archived.ID)
+	}
+
+	if _, err := db.GetIndex(ctx, archived.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetIndex(tombstoned) error = %v, want ErrNotFound", err)
+	}
+	if _, err := db.GetIndexByName(ctx, archived.Definition.Name); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetIndexByName(tombstoned) error = %v, want ErrNotFound", err)
+	}
+	listed, err := db.ListIndexes(ctx)
+	if err != nil {
+		t.Fatalf("ListIndexes(): %v", err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("ListIndexes() = %#v, want no visible indexes", listed)
+	}
+
+	var storedState IndexState
+	var storedName string
+	if err := db.SQLDB().QueryRowContext(ctx, `
+		SELECT state, name
+		FROM indexes
+		WHERE index_id = ?`,
+		archived.ID,
+	).Scan(&storedState, &storedName); err != nil {
+		t.Fatalf("read retained index row: %v", err)
+	}
+	if storedState != IndexStateArchived || storedName != archived.Definition.Name {
+		t.Fatalf("retained index row = state %q name %q", storedState, storedName)
+	}
+	var tombstone indexDeletionTombstoneRecord
+	if err := db.GORMDB().WithContext(ctx).
+		Where("index_id = ?", archived.ID).
+		Take(&tombstone).Error; err != nil {
+		t.Fatalf("read deletion tombstone: %v", err)
+	}
+	if tombstone.IndexID != archived.ID ||
+		tombstone.Name != archived.Definition.Name ||
+		tombstone.DeletedVersion != int64(archived.Version) ||
+		tombstone.DeletedAtUnixMicro <= 0 {
+		t.Fatalf("deletion tombstone = %#v", tombstone)
+	}
+	var tokenReferenceCount int
+	if err := db.SQLDB().QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM ingestion_token_indexes
+		WHERE ingestion_token_id = 'token-retained' AND index_id = ?`,
+		archived.ID,
+	).Scan(&tokenReferenceCount); err != nil {
+		t.Fatalf("count retained token references: %v", err)
+	}
+	if tokenReferenceCount != 1 {
+		t.Fatalf("retained token references = %d, want 1", tokenReferenceCount)
+	}
+
+	if _, err := db.CreateIndex(ctx, enabledIndex(archived.Definition.Name)); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("CreateIndex(tombstoned name) error = %v, want ErrAlreadyExists", err)
+	}
+	if _, err := db.UpdateIndex(ctx, archived.ID, archived.Version, archived.Definition); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("UpdateIndex(tombstoned) error = %v, want ErrNotFound", err)
+	}
+	if _, err := db.SetIndexState(ctx, archived.ID, archived.Version, IndexStateActive); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetIndexState(tombstoned) error = %v, want ErrNotFound", err)
+	}
+	if _, err := db.DeleteIndex(ctx, archived.ID, archived.Version, archived.Definition.Name); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteIndex(tombstoned) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteIndexValidatesConfirmationVersionAndState(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	active, err := db.CreateIndex(ctx, enabledIndex("active-delete"))
+	if err != nil {
+		t.Fatalf("CreateIndex(active): %v", err)
+	}
+	archived, err := db.CreateIndex(ctx, enabledIndex("archived-delete"))
+	if err != nil {
+		t.Fatalf("CreateIndex(archived): %v", err)
+	}
+	archived, err = db.SetIndexState(ctx, archived.ID, archived.Version, IndexStateArchived)
+	if err != nil {
+		t.Fatalf("archive index: %v", err)
+	}
+	deleting, err := db.CreateIndex(ctx, enabledIndex("physical-delete"))
+	if err != nil {
+		t.Fatalf("CreateIndex(deleting): %v", err)
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		UPDATE indexes
+		SET state = 'deleting', version = version + 1
+		WHERE index_id = ?`,
+		deleting.ID,
+	); err != nil {
+		t.Fatalf("seed deleting state: %v", err)
+	}
+
+	tests := map[string]struct {
+		id           string
+		version      uint64
+		confirmation string
+		want         error
+	}{
+		"zero version": {
+			id:           archived.ID,
+			confirmation: archived.Definition.Name,
+			want:         ErrInvalidArgument,
+		},
+		"blank index ID": {
+			id:           " ",
+			version:      1,
+			confirmation: archived.Definition.Name,
+			want:         ErrInvalidArgument,
+		},
+		"missing index": {
+			id:           "missing",
+			version:      1,
+			confirmation: "missing",
+			want:         ErrNotFound,
+		},
+		"stale version": {
+			id:           archived.ID,
+			version:      archived.Version - 1,
+			confirmation: archived.Definition.Name,
+			want:         ErrVersionConflict,
+		},
+		"active state": {
+			id:           active.ID,
+			version:      active.Version,
+			confirmation: active.Definition.Name,
+			want:         ErrDependencyConflict,
+		},
+		"deleting state": {
+			id:           deleting.ID,
+			version:      deleting.Version + 1,
+			confirmation: deleting.Definition.Name,
+			want:         ErrDependencyConflict,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, deleteErr := db.DeleteIndex(
+				ctx,
+				test.id,
+				test.version,
+				test.confirmation,
+			)
+			if !errors.Is(deleteErr, test.want) {
+				t.Fatalf("DeleteIndex() error = %v, want %v", deleteErr, test.want)
+			}
+		})
+	}
+
+	for _, confirmation := range []string{
+		"",
+		" archived-delete",
+		"ARCHIVED-DELETE",
+		"archived-delete ",
+		"different-index",
+	} {
+		_, deleteErr := db.DeleteIndex(
+			ctx,
+			archived.ID,
+			archived.Version,
+			confirmation,
+		)
+		if !errors.Is(deleteErr, ErrInvalidArgument) {
+			t.Errorf("DeleteIndex(confirmation %q) error = %v, want ErrInvalidArgument", confirmation, deleteErr)
+		}
+	}
+}
+
+func TestConcurrentIndexDeletionAllowsOneTerminalWinner(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	created, err := db.CreateIndex(ctx, enabledIndex("concurrent-delete"))
+	if err != nil {
+		t.Fatalf("CreateIndex(): %v", err)
+	}
+	archived, err := db.SetIndexState(ctx, created.ID, created.Version, IndexStateArchived)
+	if err != nil {
+		t.Fatalf("archive index: %v", err)
+	}
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wait sync.WaitGroup
+	wait.Add(2)
+	for range 2 {
+		go func() {
+			defer wait.Done()
+			<-start
+			_, deleteErr := db.DeleteIndex(
+				ctx,
+				archived.ID,
+				archived.Version,
+				archived.Definition.Name,
+			)
+			results <- deleteErr
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+
+	var successes, notFound int
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrNotFound):
+			notFound++
+		default:
+			t.Errorf("DeleteIndex() unexpected error = %v", err)
+		}
+	}
+	if successes != 1 || notFound != 1 {
+		t.Fatalf("concurrent results: successes=%d not-found=%d, want 1/1", successes, notFound)
+	}
+}
+
+func TestIndexDeletionTombstoneSQLGuards(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	active, err := db.CreateIndex(ctx, enabledIndex("guard-active"))
+	if err != nil {
+		t.Fatalf("CreateIndex(active): %v", err)
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		INSERT INTO index_deletion_tombstones (
+			index_id, name, deleted_version, deleted_at_unix_micro
+		) VALUES (?, ?, ?, ?)`,
+		active.ID,
+		active.Definition.Name,
+		active.Version,
+		time.Now().UnixMicro(),
+	); err == nil {
+		t.Fatal("tombstone for active index unexpectedly succeeded")
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		INSERT INTO index_deletion_tombstones (
+			index_id, name, deleted_version, deleted_at_unix_micro
+		) VALUES ('missing', 'missing', 1, ?)`,
+		time.Now().UnixMicro(),
+	); err == nil {
+		t.Fatal("tombstone for missing index unexpectedly succeeded")
+	}
+
+	archived, err := db.SetIndexState(ctx, active.ID, active.Version, IndexStateArchived)
+	if err != nil {
+		t.Fatalf("archive index: %v", err)
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		INSERT INTO index_deletion_tombstones (
+			index_id, name, deleted_version, deleted_at_unix_micro
+		) VALUES (?, 'wrong-name', ?, ?)`,
+		archived.ID,
+		archived.Version,
+		time.Now().UnixMicro(),
+	); err == nil {
+		t.Fatal("tombstone with mismatched name unexpectedly succeeded")
+	}
+	if _, err := db.DeleteIndex(ctx, archived.ID, archived.Version, archived.Definition.Name); err != nil {
+		t.Fatalf("DeleteIndex(): %v", err)
+	}
+
+	for name, statement := range map[string]string{
+		"update index":     `UPDATE indexes SET state = 'active' WHERE index_id = ?`,
+		"delete index":     `DELETE FROM indexes WHERE index_id = ?`,
+		"update tombstone": `UPDATE index_deletion_tombstones SET name = 'changed' WHERE index_id = ?`,
+		"delete tombstone": `DELETE FROM index_deletion_tombstones WHERE index_id = ?`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := db.SQLDB().ExecContext(ctx, statement, archived.ID); err == nil {
+				t.Fatal("direct SQL mutation unexpectedly succeeded")
+			}
+		})
+	}
+}
+
 func TestNormalizeIndexNameHonorsSplunkRestrictions(t *testing.T) {
 	t.Parallel()
 
@@ -258,6 +600,9 @@ func TestIndexValidationAndNotFoundErrors(t *testing.T) {
 	if _, err := db.SetIndexState(ctx, created.ID, created.Version, IndexState("invented")); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("SetIndexState(invalid) error = %v, want ErrInvalidArgument", err)
 	}
+	if _, err := db.SetIndexState(ctx, created.ID, created.Version, IndexStateDeleting); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("SetIndexState(deleting) error = %v, want ErrInvalidArgument", err)
+	}
 }
 
 func TestIndexOperationsPreserveCanceledContextIdentity(t *testing.T) {
@@ -294,6 +639,10 @@ func TestIndexOperationsPreserveCanceledContextIdentity(t *testing.T) {
 		},
 		"set state": func() error {
 			_, operationErr := db.SetIndexState(ctx, created.ID, created.Version, IndexStateArchived)
+			return operationErr
+		},
+		"delete": func() error {
+			_, operationErr := db.DeleteIndex(ctx, created.ID, created.Version, created.Definition.Name)
 			return operationErr
 		},
 	}
