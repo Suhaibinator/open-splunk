@@ -7,7 +7,115 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: observable export cleanup and capacity reclamation
+## Latest checkpoint: bounded WebSocket snapshot shutdown
+
+Date: 2026-07-29
+
+Committed and pushed checkpoint:
+
+- `67689e8` — cancellation-aware search/export snapshots, one bounded
+  projection deadline, lock-free artifact collision inspection, and
+  end-to-end WebSocket shutdown coverage.
+
+This slice closes the WebSocket dependency/shutdown backlog finding:
+
+1. The WebSocket service now depends on explicit context-aware search metadata
+   and preview methods. Search-manager implementations join the manager
+   operation barrier, honor caller and manager cancellation while waiting for
+   bounded read capacity, and release every permit on error or shutdown.
+2. `ProjectionTimeout` is hard-validated between 50 milliseconds and 10
+   minutes, with a conservative 10-second default. One derived context covers
+   projection-gate admission, preview lookup, metadata fallback, export
+   lookup, and local materialization; a shorter caller deadline still wins.
+3. Cancellation and deadline errors retain their identity after preview row
+   materialization and initial target loading. They are no longer converted
+   into target disappearance, so an expired projection cannot retire the
+   wrong target.
+4. Export progress polling uses a dedicated `Snapshot` operation. Due
+   expiration is still published atomically, including artifact invalidation,
+   while filesystem unlink is deferred to the cleanup lifecycle. A stalled
+   artifact removal therefore cannot hold the WebSocket ownership barrier.
+5. Export admission no longer performs `Lstat` while holding the manager
+   mutex. It performs a bounded state precheck, inspects the private artifact
+   session outside the lock, then atomically revalidates capacity and ID state
+   while reserving. No-replace publication remains the final collision
+   defense.
+6. A stalled collision inspection can now outlive `export.Manager.Close`
+   without holding manager state or artifact teardown. When inspection
+   returns, it observes the closed manager and returns `ErrClosed`; completed
+   shutdown never waits on that filesystem call.
+7. WebSocket close cancels blocked snapshot providers, waits for their actual
+   exit, shares one completion barrier across repeated callers, hard-closes
+   hijacked sockets, and clears target/load/replay/queue accounting before
+   runtime teardown proceeds.
+8. Deterministic coverage includes read-capacity cancellation, admitted
+   entry-lock ordering, projection-gate timeout, shared preview/fallback
+   deadlines, search/export provider cancellation, mid-materialization
+   cancellation identity, deferred artifact deletion, stalled collision
+   inspection, repeated service close, and an actual upgraded socket blocked
+   inside its provider.
+9. The simplify pass consolidated bounded synchronous test readers behind one
+   adapter while retaining direct context-aware implementations for every
+   blocking fake. Compile-time assertions prevent those fakes from
+   accidentally bypassing cancellation. A diagnostic full-suite run also
+   exposed and removed a test-only lock observation that could invert the
+   deliberate entry-lock barrier under queued-writer pressure.
+
+Validation on the exact staged tree committed as `67689e8`:
+
+```sh
+go test ./... -count=1 -timeout=20m
+go test -race \
+  ./internal/searchjobs ./internal/export ./internal/searchws \
+  ./internal/server ./cmd/open-splunk-server \
+  -count=1 -timeout=20m
+go test ./internal/searchjobs -count=20 -timeout=3m
+go test ./internal/searchjobs \
+  -run '^TestContextSnapshotReadHonorsCancellationAfterReadAdmission$' \
+  -count=100 -timeout=2m
+go vet ./...
+go build ./...
+GOLANGCI_LINT_CACHE=/private/tmp/open-splunk-lint-ws-final-2 \
+  go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+    run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+git diff --check
+```
+
+The repository-wide Go suite, touched-package race suite, repeated
+search-manager package and lock-order regression runs, vet, build, and
+CI-pinned golangci-lint v2.12.2 all passed; lint reported `0 issues`.
+
+No digest-pinned ClickHouse container run was warranted for this checkpoint:
+the slice changes Go lifecycle, snapshot, and transport behavior only, with no
+ClickHouse SQL, schema, storage, or SPL semantic change.
+
+Three independent final reviewers verified the unchanged 1,606-insertion and
+198-deletion staged diff at SHA-256
+`79e372614f181273d42478fb21eba0897cb4fb57eb4ae27c72011e990f712ca4`.
+They reviewed lock/I/O ordering, cancellation and deadline identity, scoped
+non-disclosure, export expiration/download semantics, runtime ownership,
+resource accounting, reuse, and test-boundary quality; no P0/P1/P2 finding or
+remaining concrete simplify issue remains. Earlier frozen reviews found and
+prompted the export lock-held `Lstat` repair, materialization-error identity
+repair, synchronous-fake consolidation, and cancellation-fake hardening.
+
+GORM remains confined to the SQLite control plane. ClickHouse storage and SPL
+execution continue to use native bounded SQL; this slice introduces no GORM
+dependency there. The user's dependency upgrades remain committed separately
+as `347a015`, and this slice leaves `go.mod` and `go.sum` unchanged.
+
+Explicit pause point:
+
+1. The bounded WebSocket snapshot dependency and shutdown unit is complete.
+2. Do not begin another implementation slice until the user gives further
+   instructions.
+3. Preserve the GORM-only SQLite control-plane boundary; do not introduce GORM
+   into ClickHouse persistence.
+4. Continue test-first checkpoints, digest-pinned ClickHouse acceptance when
+   SQL behavior changes, frozen adversarial review, and commit/push after each
+   cohesive green unit.
+
+## Previous checkpoint: observable export cleanup and capacity reclamation
 
 Date: 2026-07-29
 
@@ -8522,9 +8630,6 @@ Resource/lifecycle audit findings to retain in the backlog:
   retain closed database pointers indefinitely.
 - Finish the deleting-index lifecycle instead of leaving indexes permanently
   in an intermediate state.
-- Give WebSocket service shutdown a bounded dependency contract; `Close`
-  currently relies on snapshot providers honoring cancellation before its
-  ownership barrier can complete.
 
 The architecture plan still requires product decisions for capacity-planning
 retention/event size, target hardware, concurrent search load, immediate
@@ -8575,7 +8680,7 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `a03aa33`, `72b1b11`, `347a015`, `e312ae9`,
+   commits, especially `67689e8`, `a03aa33`, `72b1b11`, `347a015`, `e312ae9`,
    `782da43`, `125b2bc`, `f3fc981`,
    `c84de56`, `f7a06b7`, `8161f2d`, `2a1245c`, `72b7936`, `421ba4d`, `6e18333`,
    `7dd3209`, `825c1e4`, `4966a7d`, `fe4b7bc`, `983e125`, `4d34c8a`,
