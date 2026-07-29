@@ -7,7 +7,133 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: explicit SQLite visibility ownership
+## Latest checkpoint: production-owned bounded search-history retention
+
+Date: 2026-07-29
+
+Committed and pushed checkpoint:
+
+- `ca48ca2` — configurable, database-wide physical search-history retention
+  with bounded GORM transactions and production lifecycle ownership.
+
+This test-first slice closes the idle search-history physical-retention
+backlog:
+
+1. Operators can configure terminal-history age and per-owner capacity with
+   `-search-history-maximum-age` and
+   `-search-history-maximum-entries-per-owner`. Zero-valued programmatic
+   options resolve centrally to 30 days and 10,000 entries; hard bounds are
+   ten years and one million entries. The terminal table and durable pending
+   journal are capped independently at the configured entry count, so one
+   owner may physically have up to twice that count while every admitted
+   attempt is still awaiting recovery.
+2. Startup first recovers the current authenticated owner's pending attempts,
+   then performs at most four 256-row database-wide terminal-retention
+   batches. Readiness is therefore not coupled to an inherited backlog.
+   Remaining work transfers through an opaque cursor to one non-overlapping
+   background worker.
+3. The worker performs at most 64 fixed-size batches under one ten-second
+   operation deadline. If work remains, it schedules another bounded run
+   after a 100-millisecond duty-cycle gap instead of waiting for the hourly
+   maintenance tick. Shutdown cancels and drains the worker idempotently.
+   Error callbacks are asynchronous, single-flight, panic-contained, and
+   cannot stall retention or shutdown.
+4. Age retention uses the new
+   `(created_at_unix_micro, search_job_id)` global index and one bounded
+   transaction per batch. It deletes terminal rows across every persisted
+   tenant/owner scope only when `created_at < now - maximum_age`; the exact
+   cutoff remains visible. Pending attempts are never age-pruned because they
+   must first become terminal crash-audit records.
+5. `search_history_owner_counts` is a GORM-modeled, trigger-maintained SQLite
+   control-plane table. Migration 0015 backfills existing owners, and
+   insert/delete triggers update counts in the same transaction as terminal
+   history mutations, including filtered clears. Count retention therefore
+   performs a primary-key counter read and deletes the oldest excess rows
+   directly; it never repeatedly counts a million-row owner or walks
+   `OFFSET maximumEntriesPerOwner` while holding SQLite's write lock.
+6. An ordered in-memory cursor resumes one over-capacity owner and then scans
+   later owner keys without revisiting completed scopes. Every cursor batch
+   reserves bounded work for global age deletion, so a large count-policy
+   reduction cannot starve rows that expire while the count backlog drains.
+   Counter reads are repeated transactionally between batches, preventing
+   concurrent completion or clear operations from causing over-pruning.
+7. Ordinary terminal completion, interrupted-attempt recovery, explicit
+   owner pruning, startup pruning, and periodic pruning all use bounded
+   delete statements. Explicit owner pruning commits each 256-row batch
+   independently; a later injected failure preserves earlier committed
+   progress and a retry finishes the remainder.
+8. Deterministic coverage pins default and invalid configuration, option
+   propagation, independent terminal/pending capacity, exact age boundaries,
+   prior tenant/owner cleanup, pending preservation, count-policy shrink,
+   ordered cursor continuation, age/count interleaving, counter backfill and
+   trigger consistency, query-plan index selection, per-transaction work
+   bounds, partial-commit retry, bounded startup readiness, prompt backlog
+   continuation, non-overlap, retry, timeout cancellation, repeated close,
+   blocked callbacks, and callback panic recovery.
+
+Physical deletion makes SQLite pages reusable; this checkpoint does not claim
+that the database file shrinks immediately and deliberately does not run
+`VACUUM` in the server lifecycle.
+
+Validation on the exact implementation tree committed as `ca48ca2`:
+
+```sh
+go test ./internal/control ./internal/searchhistory \
+  ./cmd/open-splunk-server -count=20
+go test -race ./internal/control ./internal/searchhistory \
+  ./cmd/open-splunk-server -count=10
+go test ./... -count=1
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/queryexec \
+    -run '^TestGradeThisCompatibilityV0_1AgainstClickHouse$' \
+    -count=1 -timeout=6m -v
+git diff --check
+```
+
+The repeated focused suite, repeated race-enabled suite, repository-wide Go
+suite, vet, build, and CI-pinned golangci-lint v2.12.2 all passed; lint
+reported `0 issues`. The digest-pinned ClickHouse GradeThis v0.1 corpus passed
+all ten investigations in 6.076 seconds.
+
+Frozen adversarial reviews first found and drove database-wide cleanup,
+fixed-size transactions, callback containment, flag-contract clarification,
+global age indexing, count continuation, bounded startup readiness, and reuse
+of shared policy/batch drivers. A later three-lens review exposed age
+starvation, repeated whole-owner counts, steady-state `OFFSET` cost, and
+hourly backlog delay; the transactional owner counter, interleaving, and
+prompt duty-cycled continuation close those findings. Three final reviewers
+reported no remaining correctness, SQLite/GORM efficiency, runtime-lifecycle,
+or test-quality finding in the exact `ca48ca2` commit, whose code diff is
+SHA-256 `b513dc2694d735621c9849f41ad9b57c0519a86649a2ed246f8b31bba5ddf584`.
+The final compatibility adjustment removed only an optional scope-update
+trigger that interfered with the existing persisted-corruption classifier;
+insert/delete counter ownership is unchanged.
+
+The simplify pass directly produced the shared batch runner, centralized
+retention-policy resolution, indexed global age deletion, ordered count
+cursor, transactional owner counter, bounded startup pass, prompt backlog
+continuation, and corrected ownership comments. GORM remains confined to the
+SQLite control plane. ClickHouse storage and SPL execution retain native
+bounded SQL and have no GORM dependency. The user's dependency upgrades remain
+separately committed as `347a015`.
+
+Explicit pause point:
+
+1. Production-owned physical search-history retention is complete for this
+   unit.
+2. Do not begin another implementation slice until the user gives further
+   instructions.
+3. Preserve the GORM-only SQLite control-plane boundary; do not introduce GORM
+   into ClickHouse persistence.
+4. Continue test-first checkpoints, digest-pinned ClickHouse acceptance,
+   frozen adversarial review, and commit/push after each cohesive green unit.
+
+## Previous checkpoint: explicit SQLite visibility ownership
 
 Date: 2026-07-29
 
@@ -8743,7 +8869,6 @@ multivalue output, XML, terminal containers, escaped literal-dot keys, and the
 
 Resource/lifecycle audit findings to retain in the backlog:
 
-- Physically prune idle search-history owner rows.
 - Finish the deleting-index lifecycle instead of leaving indexes permanently
   in an intermediate state.
 
