@@ -7,7 +7,111 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: exact mixed numeric ordering
+## Latest checkpoint: observable export cleanup and capacity reclamation
+
+Date: 2026-07-29
+
+Committed and pushed checkpoint:
+
+- `9d00f98` — safe due-capacity reclamation, coalesced cleanup, bounded
+  deletion-failure observability, and adversarial lifecycle coverage.
+
+This slice closes the retained export resource/lifecycle finding:
+
+1. Export admission that reaches `ErrCapacity` now attempts due cleanup once
+   and retries the reservation once. Queue saturation remains distinct and
+   does not trigger an O(n) cleanup scan.
+2. A single cleanup gate coalesces concurrent admission and periodic work.
+   Waiters honor request cancellation and manager shutdown, while `Close`
+   waits for admitted filesystem work before tearing down private artifact
+   storage.
+3. Cleanup recovers all three bounded resources: retained artifact bytes,
+   expired job slots, and job/grant metadata. Active downloads continue to
+   pin their artifact until the final lease closes.
+4. Admission-cleanup timing separates advisory scheduling from the strict
+   retry floor after an unlink failure. The floor is anchored to filesystem
+   completion, so a slow failing unlink cannot erase its own backoff.
+5. A lifecycle generation validates the cleanup snapshot. New earlier grant
+   expirations, terminal worker/lease release, external expiration, final
+   expired-download unpin, and external unlink completion invalidate stale
+   advisory timing. Final path clearing and byte-accounting release publish
+   atomically under the job lock.
+6. Known artifact, tombstone, and grant deadlines can trigger reclamation
+   earlier than the generic admission throttle. Partial or canceled cleanups
+   do not publish a complete snapshot or suppress the next eligible attempt.
+7. Failed unlink state retains the private path and charged bytes for retry;
+   callers still receive only stable `ErrCapacity`. `LastCleanupError`
+   preserves trusted operational detail, while `OnCleanupError` provides a
+   bounded asynchronous background notification with panic containment and
+   at most one callback in flight.
+8. The server logs one fixed, path-free cleanup message. Raw filesystem
+   errors never reach the API or logger, and cleanup error aggregation retains
+   at most 16 samples plus one omitted-count summary.
+9. Unit and race coverage includes byte/job/metadata reclamation, earlier
+   deadlines, expired grants, active and closing download pins, unlink
+   failures, completion-anchored retry, stale-snapshot invalidation,
+   cancellation, cleanup coalescing, shutdown waits, callback blocking and
+   panic recovery, mixed cancellation/failure classification, bounded error
+   aggregation, and actual logger path secrecy.
+
+Validation on the exact staged tree committed as `9d00f98`:
+
+```sh
+go test ./... -count=1 -timeout=20m
+go test -race ./internal/export ./cmd/open-splunk-server -count=1
+go vet ./...
+go build ./...
+GOLANGCI_LINT_CACHE=/private/tmp/open-splunk-golangci-cache-export-cleanup-exact-20260729 \
+  go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+    run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+make proto
+npm run lint
+npm run typecheck
+npm run test:frontend
+go mod tidy
+git diff --check
+```
+
+The final repository-wide Go suite, targeted export/server race suite, vet,
+build, and CI-pinned golangci-lint v2.12.2 all passed; lint reported
+`0 issues`. Protobuf generation, frontend lint/type checking, all 183
+frontend/release tests, and module normalization also passed during this
+slice and remained unaffected by the final Go-only lifecycle repair.
+`go mod tidy` produced no module-file diff.
+
+No digest-pinned ClickHouse container run was warranted for this checkpoint:
+the slice changes only the Go export manager and server-side cleanup
+reporting, with no ClickHouse SQL, schema, storage, or SPL behavior change.
+
+Three independent final reviewers verified the unchanged 1,192-insertion and
+71-deletion staged diff at SHA-256
+`da27b9b5b5a307fe7841370ff30cca112616a8948496b182d48dc7b57fe2ff7c`.
+They reviewed accounting/deadlines, concurrency/resource lifecycle, and
+observability/path secrecy; no P0/P1/P2 finding remains. Earlier frozen
+reviews found and prompted completion-anchored unlink backoff, preservation of
+that floor across stale deadlines, lifecycle cache invalidation, and atomic
+unlink/accounting publication. The `simplify` review also drove recursive
+mixed-error classification, capped flat aggregation, actual logger testing,
+panic-safe callback reuse, and minimal lifecycle invalidations.
+
+GORM remains confined to the SQLite control plane. ClickHouse storage and SPL
+execution continue to use native bounded SQL; this slice introduces no GORM
+dependency there. The user's dependency upgrades remain committed separately
+as `347a015`, and this slice leaves `go.mod` and `go.sum` unchanged.
+
+Explicit pause point:
+
+1. Export cleanup observability and due-capacity reclamation are complete for
+   this unit.
+2. Do not begin another implementation slice until the user gives further
+   instructions.
+3. Preserve the GORM-only SQLite control-plane boundary; do not introduce GORM
+   into ClickHouse persistence.
+4. Continue test-first checkpoints, digest-pinned ClickHouse acceptance when
+   SQL behavior changes, frozen adversarial review, and commit/push after each
+   cohesive green unit.
+
+## Previous checkpoint: exact mixed numeric ordering
 
 Date: 2026-07-29
 
@@ -8413,8 +8517,6 @@ multivalue output, XML, terminal containers, escaped literal-dot keys, and the
 
 Resource/lifecycle audit findings to retain in the backlog:
 
-- Surface background export-deletion failures, and let admission perform due
-  cleanup before reporting capacity exhaustion.
 - Physically prune idle search-history owner rows and replace the
   process-global SQLite visibility lease registry with ownership that cannot
   retain closed database pointers indefinitely.
