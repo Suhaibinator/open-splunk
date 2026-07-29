@@ -43,8 +43,30 @@ CREATE TABLE collector_fleet (
     PRIMARY KEY (tenant_id, collector_id)
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE collector_catalog_revisions (
+    tenant_id TEXT PRIMARY KEY NOT NULL COLLATE BINARY,
+    revision INTEGER NOT NULL
+        CONSTRAINT collector_catalog_revisions_revision_positive
+        CHECK (revision >= 1),
+    CONSTRAINT collector_catalog_revisions_tenant_id_bounded
+        CHECK (
+            length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 255
+            AND instr(tenant_id, char(0)) = 0
+        )
+) STRICT, WITHOUT ROWID;
+
+-- Fleet/runtime rows are the catalog's independently mutable parents.
+-- CollectorHello and CollectorHeartbeat child snapshots are replaced only in
+-- the same transaction as a runtime insert/update, so child-row triggers would
+-- multiply one bounded snapshot replacement into hundreds of revision writes.
+-- The runtime parent trigger intentionally fences last-seen/queue sorts and
+-- child projections on every coalesced durable heartbeat.
+
 CREATE INDEX collector_fleet_tenant_state_id_idx
     ON collector_fleet (tenant_id, administrative_state, collector_id);
+
+CREATE INDEX collector_fleet_tenant_display_id_idx
+    ON collector_fleet (tenant_id, display_name, collector_id);
 
 CREATE TRIGGER collector_fleet_identity_is_immutable
 BEFORE UPDATE OF tenant_id, collector_id ON collector_fleet
@@ -60,6 +82,45 @@ BEFORE UPDATE OF admin_version ON collector_fleet
 WHEN NEW.admin_version < OLD.admin_version
 BEGIN
     SELECT RAISE(ABORT, 'collector administrator version cannot move backward');
+END;
+
+CREATE TRIGGER collector_catalog_revision_after_fleet_insert
+AFTER INSERT ON collector_fleet
+BEGIN
+    INSERT INTO collector_catalog_revisions (tenant_id, revision)
+    VALUES (NEW.tenant_id, 1)
+    ON CONFLICT (tenant_id) DO UPDATE SET revision =
+        CASE
+            WHEN collector_catalog_revisions.revision = 9223372036854775807
+                THEN RAISE(ABORT, 'collector catalog revision exhausted')
+            ELSE collector_catalog_revisions.revision + 1
+        END;
+END;
+
+CREATE TRIGGER collector_catalog_revision_after_fleet_update
+AFTER UPDATE ON collector_fleet
+BEGIN
+    INSERT INTO collector_catalog_revisions (tenant_id, revision)
+    VALUES (NEW.tenant_id, 1)
+    ON CONFLICT (tenant_id) DO UPDATE SET revision =
+        CASE
+            WHEN collector_catalog_revisions.revision = 9223372036854775807
+                THEN RAISE(ABORT, 'collector catalog revision exhausted')
+            ELSE collector_catalog_revisions.revision + 1
+        END;
+END;
+
+CREATE TRIGGER collector_catalog_revision_after_fleet_delete
+AFTER DELETE ON collector_fleet
+BEGIN
+    INSERT INTO collector_catalog_revisions (tenant_id, revision)
+    VALUES (OLD.tenant_id, 1)
+    ON CONFLICT (tenant_id) DO UPDATE SET revision =
+        CASE
+            WHEN collector_catalog_revisions.revision = 9223372036854775807
+                THEN RAISE(ABORT, 'collector catalog revision exhausted')
+            ELSE collector_catalog_revisions.revision + 1
+        END;
 END;
 
 CREATE TABLE collector_runtime (
@@ -237,6 +298,15 @@ CREATE TABLE collector_runtime (
         REFERENCES collector_fleet (tenant_id, collector_id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
 
+CREATE INDEX collector_runtime_tenant_hostname_id_idx
+    ON collector_runtime (tenant_id, hostname, collector_id);
+
+CREATE INDEX collector_runtime_tenant_last_seen_id_idx
+    ON collector_runtime (tenant_id, last_seen_at_unix_micro, collector_id);
+
+CREATE INDEX collector_runtime_tenant_queued_bytes_id_idx
+    ON collector_runtime (tenant_id, queued_bytes, collector_id);
+
 CREATE TRIGGER collector_runtime_identity_is_immutable
 BEFORE UPDATE OF tenant_id, collector_id ON collector_runtime
 WHEN
@@ -253,6 +323,45 @@ WHEN
     OR NEW.lease_generation < OLD.lease_generation
 BEGIN
     SELECT RAISE(ABORT, 'collector runtime revisions cannot move backward');
+END;
+
+CREATE TRIGGER collector_catalog_revision_after_runtime_insert
+AFTER INSERT ON collector_runtime
+BEGIN
+    INSERT INTO collector_catalog_revisions (tenant_id, revision)
+    VALUES (NEW.tenant_id, 1)
+    ON CONFLICT (tenant_id) DO UPDATE SET revision =
+        CASE
+            WHEN collector_catalog_revisions.revision = 9223372036854775807
+                THEN RAISE(ABORT, 'collector catalog revision exhausted')
+            ELSE collector_catalog_revisions.revision + 1
+        END;
+END;
+
+CREATE TRIGGER collector_catalog_revision_after_runtime_update
+AFTER UPDATE ON collector_runtime
+BEGIN
+    INSERT INTO collector_catalog_revisions (tenant_id, revision)
+    VALUES (NEW.tenant_id, 1)
+    ON CONFLICT (tenant_id) DO UPDATE SET revision =
+        CASE
+            WHEN collector_catalog_revisions.revision = 9223372036854775807
+                THEN RAISE(ABORT, 'collector catalog revision exhausted')
+            ELSE collector_catalog_revisions.revision + 1
+        END;
+END;
+
+CREATE TRIGGER collector_catalog_revision_after_runtime_delete
+AFTER DELETE ON collector_runtime
+BEGIN
+    INSERT INTO collector_catalog_revisions (tenant_id, revision)
+    VALUES (OLD.tenant_id, 1)
+    ON CONFLICT (tenant_id) DO UPDATE SET revision =
+        CASE
+            WHEN collector_catalog_revisions.revision = 9223372036854775807
+                THEN RAISE(ABORT, 'collector catalog revision exhausted')
+            ELSE collector_catalog_revisions.revision + 1
+        END;
 END;
 
 CREATE TABLE collector_capabilities (
@@ -282,6 +391,9 @@ CREATE TABLE collector_authorized_indexes (
     FOREIGN KEY (tenant_id, collector_id)
         REFERENCES collector_fleet (tenant_id, collector_id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
+
+CREATE INDEX collector_authorized_indexes_tenant_index_name_collector_idx
+    ON collector_authorized_indexes (tenant_id, index_name, collector_id);
 
 CREATE TABLE collector_inputs (
     tenant_id TEXT NOT NULL COLLATE BINARY,

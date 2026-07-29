@@ -2,6 +2,7 @@ package collectorfleet
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math"
@@ -50,6 +51,11 @@ func TestGORMModelsMatchAuthoritativeCollectorFleetMigration(t *testing.T) {
 		{
 			table: "collector_input_health", model: &inputHealthRecord{},
 			primaryKeys: []string{"tenant_id", "collector_id", "input_id"},
+		},
+		{
+			table:       "collector_catalog_revisions",
+			model:       &collectorCatalogRevisionRecord{},
+			primaryKeys: []string{"tenant_id"},
 		},
 	}
 	for _, test := range tests {
@@ -139,46 +145,24 @@ func TestGORMModelsMatchAuthoritativeCollectorFleetMigration(t *testing.T) {
 	if err := statement.Parse(&fleetRecord{}); err != nil {
 		t.Fatal(err)
 	}
-	var indexedColumns []string
-	for _, index := range statement.Schema.ParseIndexes() {
-		if index.Name != "collector_fleet_tenant_state_id_idx" {
-			continue
-		}
-		for _, field := range index.Fields {
-			indexedColumns = append(indexedColumns, field.DBName)
-		}
-	}
-	wantIndex := []string{"tenant_id", "administrative_state", "collector_id"}
-	if !slices.Equal(indexedColumns, wantIndex) {
-		t.Fatalf("GORM fleet list index = %v, want %v", indexedColumns, wantIndex)
-	}
-	rows, err := database.SQLDB().QueryContext(ctx, `
-		SELECT name
-		FROM pragma_index_info('collector_fleet_tenant_state_id_idx')
-		ORDER BY seqno`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var migratedIndex []string
-	for rows.Next() {
-		var column string
-		if err := rows.Scan(&column); err != nil {
-			_ = rows.Close()
-			t.Fatal(err)
-		}
-		migratedIndex = append(migratedIndex, column)
-	}
-	if err := rows.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(migratedIndex, wantIndex) {
-		t.Fatalf("migrated fleet list index = %v, want %v", migratedIndex, wantIndex)
-	}
-
 	runtimeStatement := &gorm.Statement{DB: database.GORMDB()}
 	if err := runtimeStatement.Parse(&runtimeRecord{}); err != nil {
 		t.Fatal(err)
 	}
+	authorizedIndexStatement := &gorm.Statement{DB: database.GORMDB()}
+	if err := authorizedIndexStatement.Parse(&authorizedIndexRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	assertCollectorCatalogIndexesMatchModels(
+		t,
+		database.SQLDB(),
+		map[string]*gorm.Statement{
+			"collector_fleet":              statement,
+			"collector_runtime":            runtimeStatement,
+			"collector_authorized_indexes": authorizedIndexStatement,
+		},
+	)
+
 	runtimeChecks := runtimeStatement.Schema.ParseCheckConstraints()
 	observationCheck, exists := runtimeChecks["collector_runtime_observation_snapshot_valid"]
 	if !exists ||
@@ -204,6 +188,75 @@ func TestGORMModelsMatchAuthoritativeCollectorFleetMigration(t *testing.T) {
 	if !exists ||
 		!strings.Contains(displayCheck.Constraint, "CAST(display_name AS BLOB)") {
 		t.Fatalf("GORM byte-bound display check drifted: %#v", displayCheck)
+	}
+}
+
+func assertCollectorCatalogIndexesMatchModels(
+	t *testing.T,
+	sqlDatabase *sql.DB,
+	statements map[string]*gorm.Statement,
+) {
+	t.Helper()
+
+	expected := map[string][]string{
+		"collector_fleet_tenant_state_id_idx": {
+			"tenant_id", "administrative_state", "collector_id",
+		},
+		"collector_fleet_tenant_display_id_idx": {
+			"tenant_id", "display_name", "collector_id",
+		},
+		"collector_runtime_tenant_hostname_id_idx": {
+			"tenant_id", "hostname", "collector_id",
+		},
+		"collector_runtime_tenant_last_seen_id_idx": {
+			"tenant_id", "last_seen_at_unix_micro", "collector_id",
+		},
+		"collector_runtime_tenant_queued_bytes_id_idx": {
+			"tenant_id", "queued_bytes", "collector_id",
+		},
+		"collector_authorized_indexes_tenant_index_name_collector_idx": {
+			"tenant_id", "index_name", "collector_id",
+		},
+	}
+	modelIndexes := make(map[string][]string, len(expected))
+	for _, statement := range statements {
+		for _, index := range statement.Schema.ParseIndexes() {
+			fields := make([]string, len(index.Fields))
+			for fieldIndex, field := range index.Fields {
+				fields[fieldIndex] = field.DBName
+			}
+			modelIndexes[index.Name] = fields
+		}
+	}
+	for name, want := range expected {
+		if got := modelIndexes[name]; !slices.Equal(got, want) {
+			t.Errorf("GORM index %s columns = %v, want %v", name, got, want)
+		}
+		rows, err := sqlDatabase.QueryContext(
+			context.Background(),
+			fmt.Sprintf(
+				"SELECT name FROM pragma_index_info('%s') ORDER BY seqno",
+				name,
+			),
+		)
+		if err != nil {
+			t.Fatalf("read migrated index %s: %v", name, err)
+		}
+		var migrated []string
+		for rows.Next() {
+			var column string
+			if err := rows.Scan(&column); err != nil {
+				_ = rows.Close()
+				t.Fatal(err)
+			}
+			migrated = append(migrated, column)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(migrated, want) {
+			t.Errorf("migrated index %s columns = %v, want %v", name, migrated, want)
+		}
 	}
 }
 
@@ -329,6 +382,275 @@ func TestCollectorFleetMigrationInstallsStrictFencingConstraints(t *testing.T) {
 		got.TelemetryRevision != collector.TelemetryRevision ||
 		got.ActiveLease == nil {
 		t.Fatalf("rejected direct mutations changed collector: %#v", got)
+	}
+}
+
+func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T) {
+	t.Parallel()
+
+	database, store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 29, 3, 10, 0, 0, time.UTC)
+	_, lease, err := store.Claim(ctx, testClaim(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := database.SQLDB().QueryContext(ctx, `
+		SELECT name
+		FROM sqlite_schema
+		WHERE type = 'trigger'
+		  AND name GLOB 'collector_catalog_revision_after_*'
+		ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var triggers []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			_ = rows.Close()
+			t.Fatal(err)
+		}
+		triggers = append(triggers, name)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wantTriggers := []string{
+		"collector_catalog_revision_after_fleet_delete",
+		"collector_catalog_revision_after_fleet_insert",
+		"collector_catalog_revision_after_fleet_update",
+		"collector_catalog_revision_after_runtime_delete",
+		"collector_catalog_revision_after_runtime_insert",
+		"collector_catalog_revision_after_runtime_update",
+	}
+	if !slices.Equal(triggers, wantTriggers) {
+		t.Fatalf("catalog revision triggers = %v, want %v", triggers, wantTriggers)
+	}
+
+	assertCatalogRevision(t, database.SQLDB(), lease.TenantID, 2)
+	mutations := []struct {
+		name string
+		sql  string
+		args []any
+	}{
+		{
+			name: "fleet update",
+			sql: `
+				UPDATE collector_fleet
+				SET display_name = 'renamed'
+				WHERE tenant_id = ? AND collector_id = ?`,
+			args: []any{lease.TenantID, lease.CollectorID},
+		},
+		{
+			name: "runtime update",
+			sql: `
+				UPDATE collector_runtime
+				SET queued_bytes = 1
+				WHERE tenant_id = ? AND collector_id = ?`,
+			args: []any{lease.TenantID, lease.CollectorID},
+		},
+		{
+			name: "fleet insert",
+			sql: `
+				INSERT INTO collector_fleet (
+					tenant_id, collector_id, admin_version, display_name,
+					administrative_state, first_seen_at_unix_micro,
+					updated_at_unix_micro
+				) VALUES (?, 'catalog-second', 1, NULL, 'enabled', 1, 1)`,
+			args: []any{lease.TenantID},
+		},
+		{
+			name: "runtime insert",
+			sql: `
+				INSERT INTO collector_runtime (
+					tenant_id, collector_id, telemetry_revision, lease_generation,
+					boot_epoch, stream_id, active_instance_id,
+					protocol_major, protocol_minor, collector_version, hostname,
+					operating_system, architecture, started_at_unix_micro,
+					connected_at_unix_micro, last_seen_at_unix_micro
+				) VALUES (
+					?, 'catalog-second', 1, 1, 'boot', 'stream', 'instance',
+					1, 0, '1.0.0', 'host', 'linux', 'amd64', 1, 1, 1
+				)`,
+			args: []any{lease.TenantID},
+		},
+		{
+			name: "runtime delete",
+			sql: `
+				DELETE FROM collector_runtime
+				WHERE tenant_id = ? AND collector_id = 'catalog-second'`,
+			args: []any{lease.TenantID},
+		},
+		{
+			name: "fleet delete",
+			sql: `
+				DELETE FROM collector_fleet
+				WHERE tenant_id = ? AND collector_id = 'catalog-second'`,
+			args: []any{lease.TenantID},
+		},
+	}
+	for index, mutation := range mutations {
+		if _, err := database.SQLDB().ExecContext(
+			ctx,
+			mutation.sql,
+			mutation.args...,
+		); err != nil {
+			t.Fatalf("%s: %v", mutation.name, err)
+		}
+		assertCatalogRevision(
+			t,
+			database.SQLDB(),
+			lease.TenantID,
+			int64(index+3),
+		)
+	}
+}
+
+func TestCollectorFleetCatalogRevisionFencesChildSnapshotTransactionsOnce(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	database, store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 29, 3, 11, 0, 0, time.UTC)
+	firstRequest := testClaim(now)
+	_, _, err := store.Claim(ctx, firstRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCatalogRevision(t, database.SQLDB(), firstRequest.TenantID, 2)
+
+	replacement := testClaim(now.Add(time.Minute))
+	replacement.BootEpoch = "replacement-boot"
+	replacement.StreamID = "replacement-stream"
+	replacement.Hello.InstanceID = "replacement-instance"
+	replacement.Hello.Capabilities = []uint32{4, 9}
+	replacement.Hello.AuthorizedIndexes = []string{"main"}
+	replacement.Hello.Inputs = replacement.Hello.Inputs[:1]
+	_, lease, err := store.Claim(ctx, replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Replacing every Hello child table is fenced by the single runtime-parent
+	// update, not by one revision write for each deleted or inserted child.
+	assertCatalogRevision(t, database.SQLDB(), replacement.TenantID, 3)
+
+	heartbeat := testHeartbeat(now.Add(2*time.Minute), 1)
+	applied, err := store.RecordHeartbeat(ctx, lease, heartbeat)
+	if err != nil || !applied {
+		t.Fatalf("RecordHeartbeat() = %t, %v", applied, err)
+	}
+	// Replacing input health is likewise paired with one runtime-parent update.
+	assertCatalogRevision(t, database.SQLDB(), replacement.TenantID, 4)
+}
+
+func TestCollectorFleetCatalogRevisionOverflowAbortsMutationAtomically(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	for _, target := range []string{"fleet", "runtime"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+
+			database, store := openTestStore(t)
+			ctx := context.Background()
+			now := time.Date(2026, 7, 29, 3, 12, 0, 0, time.UTC)
+			_, lease, err := store.Claim(ctx, testClaim(now))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.SQLDB().ExecContext(ctx, `
+				UPDATE collector_catalog_revisions
+				SET revision = ?
+				WHERE tenant_id = ?`,
+				int64(math.MaxInt64),
+				lease.TenantID,
+			); err != nil {
+				t.Fatalf("saturate catalog revision: %v", err)
+			}
+
+			var mutation string
+			var unchangedQuery string
+			var unchangedValue int64
+			switch target {
+			case "fleet":
+				mutation = `
+					UPDATE collector_fleet
+					SET display_name = 'must-roll-back'
+					WHERE tenant_id = ? AND collector_id = ?`
+				unchangedQuery = `
+					SELECT display_name IS NULL
+					FROM collector_fleet
+					WHERE tenant_id = ? AND collector_id = ?`
+				unchangedValue = int64(1)
+			case "runtime":
+				mutation = `
+					UPDATE collector_runtime
+					SET queued_bytes = 99
+					WHERE tenant_id = ? AND collector_id = ?`
+				unchangedQuery = `
+					SELECT queued_bytes
+					FROM collector_runtime
+					WHERE tenant_id = ? AND collector_id = ?`
+				unchangedValue = int64(0)
+			default:
+				t.Fatalf("unhandled target %q", target)
+			}
+			if _, err := database.SQLDB().ExecContext(
+				ctx,
+				mutation,
+				lease.TenantID,
+				lease.CollectorID,
+			); err == nil ||
+				!strings.Contains(err.Error(), "catalog revision exhausted") {
+				t.Fatalf("overflow mutation error = %v", err)
+			}
+
+			var got int64
+			if err := database.SQLDB().QueryRowContext(
+				ctx,
+				unchangedQuery,
+				lease.TenantID,
+				lease.CollectorID,
+			).Scan(&got); err != nil {
+				t.Fatalf("read rolled-back mutation: %v", err)
+			}
+			if got != unchangedValue {
+				t.Fatalf("value after rejected mutation = %d, want %d", got, unchangedValue)
+			}
+			assertCatalogRevision(
+				t,
+				database.SQLDB(),
+				lease.TenantID,
+				int64(math.MaxInt64),
+			)
+		})
+	}
+}
+
+func assertCatalogRevision(
+	t *testing.T,
+	database *sql.DB,
+	tenantID string,
+	want int64,
+) {
+	t.Helper()
+
+	var got int64
+	if err := database.QueryRowContext(context.Background(), `
+		SELECT revision
+		FROM collector_catalog_revisions
+		WHERE tenant_id = ?`,
+		tenantID,
+	).Scan(&got); err != nil {
+		t.Fatalf("read collector catalog revision: %v", err)
+	}
+	if got != want {
+		t.Fatalf("collector catalog revision = %d, want %d", got, want)
 	}
 }
 
