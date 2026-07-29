@@ -27,43 +27,46 @@ import (
 
 // Config controls collector protocol negotiation and ingestion enforcement.
 type Config struct {
-	Limits               Limits
-	Redaction            RedactionPolicy
-	ProtocolMajor        uint32
-	ProtocolMinor        uint32
-	ServerInstanceID     string
-	ServerVersion        string
-	Build                *opensplunkv1.BuildMetadata
-	HeartbeatInterval    time.Duration
-	MaxInFlightBatches   uint32
-	MaxStreamsPerSubject uint32
-	DefaultRetryAfter    time.Duration
-	Clock                func() time.Time
-	NewStreamID          func() string
-	SessionManager       CollectorSessionManager
-	StreamRegistry       CollectorStreamRegistry
-	SessionErrorHandler  func(error)
+	Limits                Limits
+	Redaction             RedactionPolicy
+	ProtocolMajor         uint32
+	ProtocolMinor         uint32
+	ServerInstanceID      string
+	ServerVersion         string
+	Build                 *opensplunkv1.BuildMetadata
+	HeartbeatInterval     time.Duration
+	MaxInFlightBatches    uint32
+	MaxStreamsPerSubject  uint32
+	DefaultRetryAfter     time.Duration
+	SessionCleanupTimeout time.Duration
+	Clock                 func() time.Time
+	NewStreamID           func() string
+	SessionManager        CollectorSessionManager
+	StreamRegistry        CollectorStreamRegistry
+	SessionErrorHandler   func(error)
 }
 
 const defaultServerVersion = "development"
 
 const maximumTrustedAuthorizationIdentityBytes = 255
 const maximumAuthorizedCollectorIndexes = 256
-const collectorSessionCleanupTimeout = 5 * time.Second
+
+const defaultCollectorSessionCleanupTimeout = 15 * time.Second
 const collectorSessionCleanupAttempts = 3
 const collectorSessionCleanupRetryDelay = 10 * time.Millisecond
 
 func DefaultConfig() Config {
 	return Config{
-		Limits:               DefaultLimits(),
-		ProtocolMajor:        1,
-		ProtocolMinor:        0,
-		HeartbeatInterval:    15 * time.Second,
-		MaxInFlightBatches:   1,
-		MaxStreamsPerSubject: 4,
-		DefaultRetryAfter:    time.Second,
-		Clock:                time.Now,
-		NewStreamID:          randomID,
+		Limits:                DefaultLimits(),
+		ProtocolMajor:         1,
+		ProtocolMinor:         0,
+		HeartbeatInterval:     15 * time.Second,
+		MaxInFlightBatches:    1,
+		MaxStreamsPerSubject:  4,
+		DefaultRetryAfter:     time.Second,
+		SessionCleanupTimeout: defaultCollectorSessionCleanupTimeout,
+		Clock:                 time.Now,
+		NewStreamID:           randomID,
 	}
 }
 
@@ -121,6 +124,9 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 	if config.DefaultRetryAfter == 0 {
 		config.DefaultRetryAfter = defaults.DefaultRetryAfter
 	}
+	if config.SessionCleanupTimeout == 0 {
+		config.SessionCleanupTimeout = defaults.SessionCleanupTimeout
+	}
 	if config.Clock == nil {
 		config.Clock = defaults.Clock
 	}
@@ -144,6 +150,9 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 	}
 	if config.DefaultRetryAfter <= 0 {
 		return nil, errors.New("default retry delay must be positive")
+	}
+	if config.SessionCleanupTimeout <= 0 {
+		return nil, errors.New("collector session cleanup timeout must be positive")
 	}
 	if config.MaxInFlightBatches > HardMaxInFlightBatches {
 		return nil, fmt.Errorf("max in-flight batches cannot exceed hard limit %d", HardMaxInFlightBatches)
@@ -313,10 +322,17 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 	if err != nil {
 		return status.Error(codes.Unavailable, "collector stream admission is unavailable")
 	}
+	// Process activation is already authoritative at this point. Arm its exact
+	// release before installing the same durable lease in the heartbeat
+	// runtime, so an activation failure cannot leak either process authority or
+	// the durable lease whose cleanup was armed immediately after Admit.
+	defer s.streamRegistry.Release(lease)
+	if err := s.sessionManager.Activate(session.Lease); err != nil {
+		return sessionActivationRPCError(err)
+	}
 	releaseFinalization()
 	finalizationLocked = false
 	cancelAdmission()
-	defer s.streamRegistry.Release(lease)
 	authorizationContext, cancelAuthorization := collectorSupersessionContext(
 		stream.Context(),
 		lease.Superseded,
@@ -705,7 +721,7 @@ func (s *Service) validateAdmittedSession(
 func (s *Service) disconnectCollectorSession(lease collectorfleet.Lease) {
 	ctx, cancel := context.WithTimeout(
 		context.Background(),
-		collectorSessionCleanupTimeout,
+		s.config.SessionCleanupTimeout,
 	)
 	defer cancel()
 	disconnectedAt := s.config.Clock().UTC()
@@ -844,6 +860,17 @@ func sessionAdmissionRPCError(err error) error {
 		return status.Error(codes.DeadlineExceeded, context.DeadlineExceeded.Error())
 	default:
 		return status.Error(codes.Unavailable, "collector admission service is unavailable")
+	}
+}
+
+func sessionActivationRPCError(err error) error {
+	switch {
+	case errors.Is(err, ErrCollectorLeaseNotCurrent):
+		return supersededStreamRPCError()
+	case errors.Is(err, ErrCollectorSessionCapacity):
+		return status.Error(codes.ResourceExhausted, "collector heartbeat capacity is exhausted")
+	default:
+		return status.Error(codes.Unavailable, "collector heartbeat runtime is unavailable")
 	}
 }
 

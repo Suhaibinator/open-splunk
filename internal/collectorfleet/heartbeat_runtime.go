@@ -18,6 +18,11 @@ var (
 	// ErrHeartbeatLeaseNotActive means the complete lease is not the runtime's
 	// current active lease for its trusted tenant and collector key.
 	ErrHeartbeatLeaseNotActive = errors.New("collector heartbeat lease is not active")
+	// errHeartbeatRuntimeWriteTimeout distinguishes an owned persistence-cycle
+	// deadline from ordinary caller lifecycle cancellation for error reporting.
+	errHeartbeatRuntimeWriteTimeout = errors.New(
+		"collector heartbeat persistence cycle timed out",
+	)
 )
 
 // LivenessState is the process-local connection state for an exact durable
@@ -43,8 +48,10 @@ type HeartbeatRuntimeConfig struct {
 	HeartbeatInterval time.Duration
 	StaleGrace        time.Duration
 	FlushInterval     time.Duration
-	WriteTimeout      time.Duration
-	MonotonicNow      func() time.Time
+	// WriteTimeout bounds an entire periodic or public Flush cycle and each
+	// standalone Release or Close persistence attempt.
+	WriteTimeout time.Duration
+	MonotonicNow func() time.Time
 	// OnError runs asynchronously without runtime locks. At most one callback
 	// runs at a time; repeated errors are coalesced while it is still running.
 	OnError func(error)
@@ -227,7 +234,9 @@ func (runtime *HeartbeatRuntime) Offer(
 
 // Release conditionally marks the exact lease offline, serializes with any
 // in-flight flush, and makes one caller-bounded attempt to persist its latest
-// pending snapshot. Delayed release for a predecessor cannot touch a successor.
+// pending snapshot. A discarded or failed final snapshot is also reported to
+// OnError after runtime locks are released. Delayed release for a predecessor
+// cannot touch a successor.
 func (runtime *HeartbeatRuntime) Release(ctx context.Context, lease Lease) error {
 	if runtime == nil {
 		return ErrHeartbeatRuntimeClosed
@@ -257,13 +266,23 @@ func (runtime *HeartbeatRuntime) Release(ctx context.Context, lease Lease) error
 	runtime.flushMu.Lock()
 	runtime.mu.Lock()
 	if err := ctx.Err(); err != nil {
+		var droppedErr error
 		if current, ok := runtime.entries[key]; ok &&
 			sameHeartbeatLease(current.lease, normalized) &&
 			!runtime.closed {
+			if current.hasPendingHeartbeat {
+				droppedErr = fmt.Errorf(
+					"drop collector %q heartbeat observation %d during release: %w",
+					normalized.CollectorID,
+					current.pending.ObservationSequence,
+					err,
+				)
+			}
 			delete(runtime.entries, key)
 		}
 		runtime.mu.Unlock()
 		runtime.flushMu.Unlock()
+		runtime.reportError(droppedErr)
 		return err
 	}
 	write, hasWrite := runtime.takeExactPendingLocked(key, normalized)
@@ -280,6 +299,7 @@ func (runtime *HeartbeatRuntime) Release(ctx context.Context, lease Lease) error
 	}
 	runtime.mu.Unlock()
 	runtime.flushMu.Unlock()
+	runtime.reportError(flushErr)
 	return flushErr
 }
 
@@ -312,8 +332,10 @@ func (runtime *HeartbeatRuntime) Liveness(lease Lease) (LivenessState, bool) {
 }
 
 // Flush makes one caller-bounded attempt to persist every currently pending
-// active snapshot. Failed snapshots remain boundedly retained only when the
-// same exact lease is still active and no newer snapshot replaced them.
+// active snapshot. Failed snapshots remain boundedly retained only while the
+// same exact lease still owns the entry and no newer snapshot replaced them.
+// An inactive entry may be waiting behind this flush for its final Release
+// drain, so failed writes remain available to that exact lifecycle operation.
 func (runtime *HeartbeatRuntime) Flush(ctx context.Context) error {
 	if runtime == nil {
 		return ErrHeartbeatRuntimeClosed
@@ -407,20 +429,30 @@ func (runtime *HeartbeatRuntime) flush(ctx context.Context) error {
 	}
 	writes := runtime.takePendingLocked(false)
 	runtime.mu.Unlock()
+	if len(writes) == 0 {
+		return nil
+	}
 
+	cycleContext, cancelCycle := context.WithTimeout(ctx, runtime.writeTimeout)
+	defer cancelCycle()
 	var flushErr error
 	for index, write := range writes {
-		if err := ctx.Err(); err != nil {
+		if err := cycleContext.Err(); err != nil {
 			runtime.requeueWrites(writes[index:])
 			flushErr = errors.Join(flushErr, err)
 			break
 		}
-		err := runtime.persistWrite(ctx, write)
+		err := runtime.persistWriteContext(cycleContext, write)
 		if err == nil {
 			continue
 		}
 		runtime.requeueWrite(write)
 		flushErr = errors.Join(flushErr, err)
+	}
+	if flushErr != nil &&
+		errors.Is(cycleContext.Err(), context.DeadlineExceeded) &&
+		ctx.Err() == nil {
+		flushErr = errors.Join(flushErr, errHeartbeatRuntimeWriteTimeout)
 	}
 	return flushErr
 }
@@ -431,8 +463,18 @@ func (runtime *HeartbeatRuntime) persistWrite(
 ) error {
 	writeContext, cancel := context.WithTimeout(ctx, runtime.writeTimeout)
 	defer cancel()
+	return runtime.persistWriteContext(writeContext, write)
+}
+
+// persistWriteContext uses an already bounded persistence context. Periodic
+// flushes share one cycle deadline; standalone Release and Close calls use
+// persistWrite above to install their own per-write bound.
+func (runtime *HeartbeatRuntime) persistWriteContext(
+	ctx context.Context,
+	write heartbeatRuntimeWrite,
+) error {
 	_, err := runtime.writer.RecordHeartbeat(
-		writeContext,
+		ctx,
 		write.lease,
 		write.heartbeat,
 	)
@@ -452,10 +494,17 @@ func (runtime *HeartbeatRuntime) persistWrite(
 func (runtime *HeartbeatRuntime) takePendingLocked(
 	includeInactive bool,
 ) []heartbeatRuntimeWrite {
-	writes := make([]heartbeatRuntimeWrite, 0, len(runtime.entries))
+	var writes []heartbeatRuntimeWrite
 	for key, entry := range runtime.entries {
 		if !entry.hasPendingHeartbeat || (!includeInactive && !entry.active) {
 			continue
+		}
+		if writes == nil {
+			writes = make(
+				[]heartbeatRuntimeWrite,
+				0,
+				len(runtime.entries),
+			)
 		}
 		writes = append(writes, heartbeatRuntimeWrite{
 			key:       key,
@@ -497,7 +546,7 @@ func (runtime *HeartbeatRuntime) requeueWrite(write heartbeatRuntimeWrite) {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	entry, exists := runtime.entries[write.key]
-	if !exists || !entry.active || !sameHeartbeatLease(entry.lease, write.lease) {
+	if !exists || !sameHeartbeatLease(entry.lease, write.lease) {
 		return
 	}
 	if entry.hasPendingHeartbeat &&

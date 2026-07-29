@@ -1506,6 +1506,10 @@ func (manager *realServiceSessionManager) Admit(
 	}, nil
 }
 
+func (*realServiceSessionManager) Activate(collectorfleet.Lease) error {
+	return nil
+}
+
 func (manager *realServiceSessionManager) AuthorizeLease(
 	context.Context,
 	string,

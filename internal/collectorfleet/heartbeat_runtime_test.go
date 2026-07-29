@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -218,6 +219,36 @@ func TestHeartbeatRuntimeCoalescesThousandOffersToOneWrite(t *testing.T) {
 	}
 }
 
+func TestHeartbeatRuntimeIdleFlushDoesNotAllocate(t *testing.T) {
+	clock := newHeartbeatRuntimeClock(
+		time.Date(2040, 1, 1, 2, 15, 0, 0, time.UTC),
+	)
+	writer := newHeartbeatRuntimeWriter()
+	runtime := newHeartbeatRuntimeForTest(
+		t,
+		writer,
+		heartbeatRuntimeConfig(clock),
+	)
+	lease := heartbeatRuntimeLease("tenant-a", "collector-idle", 1)
+	if err := runtime.Activate(lease); err != nil {
+		t.Fatal(err)
+	}
+
+	var flushErr error
+	allocations := testing.AllocsPerRun(1_000, func() {
+		flushErr = runtime.flush(context.Background())
+	})
+	if flushErr != nil {
+		t.Fatalf("idle flush: %v", flushErr)
+	}
+	if allocations != 0 {
+		t.Fatalf("idle flush allocations = %v, want 0", allocations)
+	}
+	if calls := writer.Calls(); len(calls) != 0 {
+		t.Fatalf("idle flush writer calls = %#v", calls)
+	}
+}
+
 func TestHeartbeatRuntimeConcurrentOffersFlushOnlyMaximumSequence(t *testing.T) {
 	t.Parallel()
 
@@ -287,6 +318,95 @@ func TestHeartbeatRuntimeConcurrentOffersFlushOnlyMaximumSequence(t *testing.T) 
 	if len(calls) != 1 ||
 		calls[0].heartbeat.ObservationSequence != offerCount {
 		t.Fatalf("concurrent latest-wins writer calls = %#v", calls)
+	}
+}
+
+func TestHeartbeatRuntimeBoundsWholeFlushCycleAndRequeuesUnattemptedEntries(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	blocked := make(chan struct{})
+	writer := newHeartbeatRuntimeWriter(heartbeatRuntimeWriteResponse{
+		release: blocked,
+	})
+	clock := newHeartbeatRuntimeClock(
+		time.Date(2040, 1, 1, 2, 30, 0, 0, time.UTC),
+	)
+	config := heartbeatRuntimeConfig(clock)
+	config.MaxCollectors = 16
+	config.WriteTimeout = 25 * time.Millisecond
+	reported := make(chan error, 1)
+	config.OnError = func(err error) {
+		reported <- err
+	}
+	runtime := newHeartbeatRuntimeForTest(t, writer, config)
+
+	for index := 0; index < config.MaxCollectors; index++ {
+		lease := heartbeatRuntimeLease(
+			"tenant-a",
+			fmt.Sprintf("collector-cycle-%02d", index),
+			1,
+		)
+		if err := runtime.Activate(lease); err != nil {
+			t.Fatalf("Activate(%d): %v", index, err)
+		}
+		if accepted, err := runtime.Offer(
+			context.Background(),
+			lease,
+			heartbeatRuntimeHeartbeat(1),
+		); err != nil || !accepted {
+			t.Fatalf("Offer(%d) = %t, %v", index, accepted, err)
+		}
+	}
+
+	if err := runtime.Flush(context.Background()); !errors.Is(
+		err,
+		context.DeadlineExceeded,
+	) {
+		t.Fatalf("Flush(blocked cycle) error = %v, want DeadlineExceeded", err)
+	}
+	if calls := writer.Calls(); len(calls) != 1 {
+		t.Fatalf(
+			"blocked cycle made %d writer calls, want exactly 1",
+			len(calls),
+		)
+	}
+	reportedErr := heartbeatRuntimeAwaitError(
+		t,
+		reported,
+		"owned flush-cycle timeout callback",
+	)
+	if !errors.Is(reportedErr, errHeartbeatRuntimeWriteTimeout) ||
+		!errors.Is(reportedErr, context.DeadlineExceeded) {
+		t.Fatalf(
+			"OnError timeout = %v, want owned timeout and DeadlineExceeded",
+			reportedErr,
+		)
+	}
+
+	if err := runtime.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush(retry all): %v", err)
+	}
+	calls := writer.Calls()
+	if len(calls) != config.MaxCollectors+1 {
+		t.Fatalf(
+			"writer calls after retry = %d, want %d",
+			len(calls),
+			config.MaxCollectors+1,
+		)
+	}
+	retried := make(map[string]struct{}, config.MaxCollectors)
+	for _, call := range calls[1:] {
+		retried[call.lease.CollectorID] = struct{}{}
+	}
+	if len(retried) != config.MaxCollectors {
+		t.Fatalf(
+			"retry persisted %d distinct collectors, want %d: %#v",
+			len(retried),
+			config.MaxCollectors,
+			retried,
+		)
 	}
 }
 
@@ -1088,6 +1208,342 @@ func TestHeartbeatRuntimeReleaseMarksOfflineDrainsLatestAndPreservesSuccessor(t 
 	}
 }
 
+func TestHeartbeatRuntimeReleaseRetriesWriteFailedDuringConcurrentFlush(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	writeErr := errors.New("transient heartbeat write failure")
+	entered := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	writer := newHeartbeatRuntimeWriter(
+		heartbeatRuntimeWriteResponse{
+			err:     writeErr,
+			entered: entered,
+			release: releaseWriter,
+		},
+		heartbeatRuntimeWriteResponse{applied: true},
+	)
+	clock := newHeartbeatRuntimeClock(
+		time.Date(2040, 1, 1, 11, 15, 0, 0, time.UTC),
+	)
+	runtime := newHeartbeatRuntimeForTest(
+		t,
+		writer,
+		heartbeatRuntimeConfig(clock),
+	)
+	lease := heartbeatRuntimeLease(
+		"tenant-a",
+		"collector-release-retry",
+		1,
+	)
+	heartbeat := heartbeatRuntimeHeartbeat(9)
+	if err := runtime.Activate(lease); err != nil {
+		t.Fatal(err)
+	}
+	if accepted, err := runtime.Offer(
+		context.Background(),
+		lease,
+		heartbeat,
+	); err != nil || !accepted {
+		t.Fatalf("Offer() = %t, %v", accepted, err)
+	}
+
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- runtime.Flush(context.Background())
+	}()
+	heartbeatRuntimeAwaitSignal(t, entered, "concurrent flush writer entry")
+
+	releaseDone := make(chan error, 1)
+	go func() {
+		releaseDone <- runtime.Release(context.Background(), lease)
+	}()
+	heartbeatRuntimeEventually(t, "release to mark exact lease offline", func() bool {
+		state, ok := runtime.Liveness(lease)
+		return !ok && state == LivenessStateOffline
+	})
+	close(releaseWriter)
+
+	if err := heartbeatRuntimeAwaitError(
+		t,
+		flushDone,
+		"failed concurrent flush",
+	); !errors.Is(err, writeErr) {
+		t.Fatalf("Flush() error = %v, want %v", err, writeErr)
+	}
+	if err := heartbeatRuntimeAwaitError(
+		t,
+		releaseDone,
+		"release retry",
+	); err != nil {
+		t.Fatalf("Release() retry: %v", err)
+	}
+	calls := writer.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("writer calls = %d, want failed flush plus release retry", len(calls))
+	}
+	for index, call := range calls {
+		if call.lease != lease ||
+			call.heartbeat.ObservationSequence != heartbeat.ObservationSequence {
+			t.Fatalf("writer call %d = %#v, want exact latest snapshot", index, call)
+		}
+	}
+}
+
+func TestHeartbeatRuntimeReleaseReportsFinalWriteFailure(t *testing.T) {
+	t.Parallel()
+
+	writeErr := errors.New("final heartbeat write failed")
+	writer := newHeartbeatRuntimeWriter(
+		heartbeatRuntimeWriteResponse{err: writeErr},
+	)
+	clock := newHeartbeatRuntimeClock(
+		time.Date(2040, 1, 1, 11, 20, 0, 0, time.UTC),
+	)
+	reported := make(chan error, 1)
+	config := heartbeatRuntimeConfig(clock)
+	config.OnError = func(err error) {
+		reported <- err
+	}
+	runtime := newHeartbeatRuntimeForTest(t, writer, config)
+	lease := heartbeatRuntimeLease(
+		"tenant-a",
+		"collector-release-report",
+		1,
+	)
+	if err := runtime.Activate(lease); err != nil {
+		t.Fatal(err)
+	}
+	if accepted, err := runtime.Offer(
+		context.Background(),
+		lease,
+		heartbeatRuntimeHeartbeat(4),
+	); err != nil || !accepted {
+		t.Fatalf("Offer() = %t, %v", accepted, err)
+	}
+
+	if err := runtime.Release(context.Background(), lease); !errors.Is(
+		err,
+		writeErr,
+	) {
+		t.Fatalf("Release() error = %v, want %v", err, writeErr)
+	}
+	reportedErr := heartbeatRuntimeAwaitError(
+		t,
+		reported,
+		"failed final heartbeat callback",
+	)
+	if !errors.Is(reportedErr, writeErr) {
+		t.Fatalf("OnError() = %v, want %v", reportedErr, writeErr)
+	}
+	if err := runtime.Release(context.Background(), lease); err != nil {
+		t.Fatalf("second Release(): %v", err)
+	}
+	if calls := writer.Calls(); len(calls) != 1 {
+		t.Fatalf("writer calls after second Release = %#v, want one", calls)
+	}
+}
+
+func TestHeartbeatRuntimeReleaseReportsOnlyPendingSnapshotDroppedAtDeadline(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	for _, pending := range []bool{false, true} {
+		pending := pending
+		t.Run(fmt.Sprintf("pending=%t", pending), func(t *testing.T) {
+			t.Parallel()
+
+			entered := make(chan struct{})
+			releaseWriter := make(chan struct{})
+			writer := newHeartbeatRuntimeWriter(
+				heartbeatRuntimeWriteResponse{
+					applied:       true,
+					entered:       entered,
+					release:       releaseWriter,
+					ignoreContext: true,
+				},
+			)
+			clock := newHeartbeatRuntimeClock(
+				time.Date(2040, 1, 1, 11, 25, 0, 0, time.UTC),
+			)
+			reported := make(chan error, 1)
+			config := heartbeatRuntimeConfig(clock)
+			config.OnError = func(err error) {
+				reported <- err
+			}
+			runtime := newHeartbeatRuntimeForTest(t, writer, config)
+			blocker := heartbeatRuntimeLease(
+				"tenant-a",
+				fmt.Sprintf("collector-release-deadline-blocker-%t", pending),
+				1,
+			)
+			releasing := heartbeatRuntimeLease(
+				"tenant-a",
+				fmt.Sprintf("collector-release-deadline-%t", pending),
+				1,
+			)
+			if err := runtime.Activate(blocker); err != nil {
+				t.Fatal(err)
+			}
+			if err := runtime.Activate(releasing); err != nil {
+				t.Fatal(err)
+			}
+			if accepted, err := runtime.Offer(
+				context.Background(),
+				blocker,
+				heartbeatRuntimeHeartbeat(1),
+			); err != nil || !accepted {
+				t.Fatalf("Offer(blocker) = %t, %v", accepted, err)
+			}
+			flushDone := make(chan error, 1)
+			go func() {
+				flushDone <- runtime.Flush(context.Background())
+			}()
+			heartbeatRuntimeAwaitSignal(t, entered, "gated unrelated flush")
+			if pending {
+				if accepted, err := runtime.Offer(
+					context.Background(),
+					releasing,
+					heartbeatRuntimeHeartbeat(2),
+				); err != nil || !accepted {
+					t.Fatalf("Offer(releasing) = %t, %v", accepted, err)
+				}
+			}
+
+			releaseContext, cancelRelease := context.WithCancel(
+				context.Background(),
+			)
+			releaseDone := make(chan error, 1)
+			go func() {
+				releaseDone <- runtime.Release(releaseContext, releasing)
+			}()
+			heartbeatRuntimeEventually(
+				t,
+				"Release to mark exact lease inactive",
+				func() bool {
+					state, ok := runtime.Liveness(releasing)
+					return !ok && state == LivenessStateOffline
+				},
+			)
+			cancelRelease()
+			close(releaseWriter)
+			if err := heartbeatRuntimeAwaitError(
+				t,
+				flushDone,
+				"unrelated flush completion",
+			); err != nil {
+				t.Fatalf("Flush(blocker): %v", err)
+			}
+			if err := heartbeatRuntimeAwaitError(
+				t,
+				releaseDone,
+				"expired Release",
+			); !errors.Is(err, context.Canceled) {
+				t.Fatalf("Release() error = %v, want context.Canceled", err)
+			}
+
+			if pending {
+				reportedErr := heartbeatRuntimeAwaitError(
+					t,
+					reported,
+					"dropped pending heartbeat callback",
+				)
+				if !errors.Is(reportedErr, context.Canceled) ||
+					!strings.Contains(reportedErr.Error(), "observation 2") {
+					t.Fatalf(
+						"OnError() = %v, want canceled observation 2 drop",
+						reportedErr,
+					)
+				}
+			} else {
+				select {
+				case err := <-reported:
+					t.Fatalf("OnError() without pending heartbeat = %v", err)
+				default:
+				}
+			}
+		})
+	}
+}
+
+func TestHeartbeatRuntimeStandaloneDrainsInstallWriteDeadline(t *testing.T) {
+	t.Parallel()
+
+	t.Run("release", func(t *testing.T) {
+		t.Parallel()
+		clock := newHeartbeatRuntimeClock(
+			time.Date(2040, 1, 1, 11, 30, 0, 0, time.UTC),
+		)
+		writer := newHeartbeatRuntimeWriter()
+		runtime := newHeartbeatRuntimeForTest(
+			t,
+			writer,
+			heartbeatRuntimeConfig(clock),
+		)
+		lease := heartbeatRuntimeLease(
+			"tenant-a",
+			"collector-release-deadline",
+			1,
+		)
+		if err := runtime.Activate(lease); err != nil {
+			t.Fatal(err)
+		}
+		if accepted, err := runtime.Offer(
+			context.Background(),
+			lease,
+			heartbeatRuntimeHeartbeat(1),
+		); err != nil || !accepted {
+			t.Fatalf("Offer() = %t, %v", accepted, err)
+		}
+		if err := runtime.Release(context.Background(), lease); err != nil {
+			t.Fatalf("Release(): %v", err)
+		}
+		calls := writer.Calls()
+		if len(calls) != 1 || !calls[0].contextHasDeadline {
+			t.Fatalf("Release writer context = %#v, want deadline", calls)
+		}
+	})
+
+	t.Run("close", func(t *testing.T) {
+		t.Parallel()
+		clock := newHeartbeatRuntimeClock(
+			time.Date(2040, 1, 1, 11, 45, 0, 0, time.UTC),
+		)
+		writer := newHeartbeatRuntimeWriter()
+		runtime, err := NewHeartbeatRuntime(
+			writer,
+			heartbeatRuntimeConfig(clock),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lease := heartbeatRuntimeLease(
+			"tenant-a",
+			"collector-close-deadline",
+			1,
+		)
+		if err := runtime.Activate(lease); err != nil {
+			t.Fatal(err)
+		}
+		if accepted, err := runtime.Offer(
+			context.Background(),
+			lease,
+			heartbeatRuntimeHeartbeat(1),
+		); err != nil || !accepted {
+			t.Fatalf("Offer() = %t, %v", accepted, err)
+		}
+		if err := runtime.Close(context.Background()); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+		calls := writer.Calls()
+		if len(calls) != 1 || !calls[0].contextHasDeadline {
+			t.Fatalf("Close writer context = %#v, want deadline", calls)
+		}
+	})
+}
+
 func TestHeartbeatRuntimeCloseFinalFlushRejectsAndIsIdempotent(t *testing.T) {
 	t.Parallel()
 
@@ -1447,9 +1903,10 @@ type heartbeatRuntimeWriteResponse struct {
 }
 
 type heartbeatRuntimeWriteCall struct {
-	lease          Lease
-	heartbeat      Heartbeat
-	contextAtEntry error
+	lease              Lease
+	heartbeat          Heartbeat
+	contextAtEntry     error
+	contextHasDeadline bool
 }
 
 type heartbeatRuntimeWriter struct {
@@ -1478,12 +1935,14 @@ func (writer *heartbeatRuntimeWriter) RecordHeartbeat(
 	if err != nil {
 		return false, fmt.Errorf("fake writer received invalid heartbeat: %w", err)
 	}
+	_, contextHasDeadline := ctx.Deadline()
 	writer.mu.Lock()
 	callIndex := len(writer.calls)
 	writer.calls = append(writer.calls, heartbeatRuntimeWriteCall{
-		lease:          lease,
-		heartbeat:      snapshot,
-		contextAtEntry: ctx.Err(),
+		lease:              lease,
+		heartbeat:          snapshot,
+		contextAtEntry:     ctx.Err(),
+		contextHasDeadline: contextHasDeadline,
 	})
 	response := heartbeatRuntimeWriteResponse{applied: true}
 	if callIndex < len(writer.responses) {

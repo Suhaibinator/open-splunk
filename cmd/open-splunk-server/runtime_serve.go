@@ -32,13 +32,19 @@ func serveRuntime(
 	webSockets webSocketShutdown,
 	collectorServer runtimeGRPCServer,
 	collectorListener net.Listener,
-	timeout time.Duration,
+	httpShutdownTimeout time.Duration,
+	collectorShutdownGraceTimeout time.Duration,
 ) error {
 	if ctx == nil || httpServer == nil || requests == nil || isNilWebSocketShutdown(webSockets) {
 		return errors.New("serve runtime: context, HTTP server, request tracker, and websocket service are required")
 	}
-	if timeout <= 0 {
-		return errors.New("serve runtime: shutdown timeout must be positive")
+	if httpShutdownTimeout <= 0 {
+		return errors.New("serve runtime: HTTP shutdown timeout must be positive")
+	}
+	if collectorShutdownGraceTimeout <= 0 {
+		return errors.New(
+			"serve runtime: collector shutdown grace timeout must be positive",
+		)
 	}
 	if (collectorServer == nil) != (collectorListener == nil) {
 		return errors.New("serve runtime: collector server and listener must be configured together")
@@ -70,7 +76,12 @@ func serveRuntime(
 	shutdownWG.Add(1)
 	go func() {
 		defer shutdownWG.Done()
-		httpShutdown <- shutdownHTTPServer(httpServer, requests, webSockets, timeout)
+		httpShutdown <- shutdownHTTPServer(
+			httpServer,
+			requests,
+			webSockets,
+			httpShutdownTimeout,
+		)
 	}()
 	var collectorShutdown chan error
 	if collectorServer != nil {
@@ -78,7 +89,10 @@ func serveRuntime(
 		shutdownWG.Add(1)
 		go func() {
 			defer shutdownWG.Done()
-			collectorShutdown <- shutdownGRPCServer(collectorServer, timeout)
+			collectorShutdown <- shutdownGRPCServer(
+				collectorServer,
+				collectorShutdownGraceTimeout,
+			)
 		}()
 	}
 	shutdownWG.Wait()

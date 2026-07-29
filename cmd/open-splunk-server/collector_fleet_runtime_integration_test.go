@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -100,9 +101,15 @@ func TestRuntimeCollectorLifecyclePersistsHeartbeatAndFencesDisabledBatch(
 	config.NewStreamID = func() string { return streamID }
 	config.ServerInstanceID = bootEpoch
 	config.ServerVersion = "runtime-fleet-test"
+	heartbeatRuntime := newCommandHeartbeatRuntime(
+		t,
+		fleet,
+		config.HeartbeatInterval,
+	)
 	config.SessionManager = collectorSessionManager{
-		admission: admissions,
-		fleet:     fleet,
+		admission:  admissions,
+		fleet:      fleet,
+		heartbeats: heartbeatRuntime,
 	}
 	service, err := ingest.NewService(
 		config,
@@ -459,9 +466,16 @@ func TestRuntimeCollectorLifecycleDisconnectsActiveLeaseOnGoodbye(
 	config.NewStreamID = func() string { return streamID }
 	config.ServerInstanceID = bootEpoch
 	config.ServerVersion = "runtime-cleanup-test"
+	heartbeatRuntime := newCommandHeartbeatRuntimeWithFlush(
+		t,
+		fleet,
+		config.HeartbeatInterval,
+		time.Hour,
+	)
 	config.SessionManager = collectorSessionManager{
-		admission: admissions,
-		fleet:     fleet,
+		admission:  admissions,
+		fleet:      fleet,
+		heartbeats: heartbeatRuntime,
 	}
 	service, err := ingest.NewService(
 		config,
@@ -576,10 +590,30 @@ func TestRuntimeCollectorLifecycleDisconnectsActiveLeaseOnGoodbye(
 		t.Fatalf("active collector before Goodbye = %#v", active)
 	}
 
+	heartbeatAt := base.Add(time.Second)
+	clockUnixMicro.Store(heartbeatAt.UnixMicro())
+	if err := stream.Send(&opensplunkv1.CollectRequest{
+		StreamSequence: 2,
+		SentAt:         timestamppb.New(heartbeatAt),
+		Payload: &opensplunkv1.CollectRequest_Heartbeat{
+			Heartbeat: &opensplunkv1.CollectorHeartbeat{
+				CollectorId: collectorID,
+				InstanceId:  instanceID,
+				ObservedAt:  timestamppb.New(heartbeatAt),
+				Queue: &opensplunkv1.CollectorQueueStats{
+					QueuedEvents: 4,
+					QueuedBytes:  1024,
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	disconnectedAt := base.Add(2 * time.Second)
 	clockUnixMicro.Store(disconnectedAt.UnixMicro())
 	if err := stream.Send(&opensplunkv1.CollectRequest{
-		StreamSequence: 2,
+		StreamSequence: 3,
 		SentAt:         timestamppb.New(disconnectedAt),
 		Payload: &opensplunkv1.CollectRequest_Goodbye{
 			Goodbye: &opensplunkv1.CollectorGoodbye{
@@ -597,6 +631,9 @@ func TestRuntimeCollectorLifecycleDisconnectsActiveLeaseOnGoodbye(
 			err,
 		)
 	}
+	if err := heartbeatRuntime.Flush(ctx); err != nil {
+		t.Fatalf("flush heartbeat runtime after Goodbye: %v", err)
+	}
 
 	disconnected, err := fleet.Get(ctx, scope, collectorID)
 	if err != nil {
@@ -606,15 +643,313 @@ func TestRuntimeCollectorLifecycleDisconnectsActiveLeaseOnGoodbye(
 		disconnected.DisconnectedAt == nil ||
 		!disconnected.DisconnectedAt.Equal(disconnectedAt) ||
 		!disconnected.LastSeenAt.Equal(disconnectedAt) ||
-		disconnected.TelemetryRevision != active.TelemetryRevision+1 ||
+		disconnected.TelemetryRevision != active.TelemetryRevision+2 ||
 		disconnected.LeaseGeneration != active.LeaseGeneration ||
-		disconnected.Version != active.Version {
+		disconnected.Version != active.Version ||
+		disconnected.ObservationSequence != 2 ||
+		!disconnected.ObservedAt.Equal(heartbeatAt) ||
+		disconnected.Queue.QueuedEvents != 4 ||
+		disconnected.Queue.QueuedBytes != 1024 {
 		t.Fatalf(
 			"collector after exact Goodbye cleanup = before:%#v after:%#v",
 			active,
 			disconnected,
 		)
 	}
+}
+
+func TestRuntimeCollectorForcedStopDrainsHeartbeatBeforeDisconnect(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	database, err := control.Open(
+		ctx,
+		filepath.Join(t.TempDir(), "collector-fleet-forced-stop.db"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := database.CreateIndex(ctx, control.IndexDefinition{
+		Name:             "main",
+		DisplayName:      "Main",
+		IngestionEnabled: true,
+		SearchEnabled:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		tenantID    = "tenant-runtime-forced-stop"
+		collectorID = "collector-runtime-forced-stop"
+		instanceID  = "instance-runtime-forced-stop"
+		bootEpoch   = "boot-runtime-forced-stop"
+		streamID    = "stream-runtime-forced-stop"
+	)
+	tokens, err := auth.NewStore(
+		database,
+		[]byte("collector-forced-stop-digest-key"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := tokens.CreateCollectorToken(
+		ctx,
+		auth.CreateCollectorTokenRequest{
+			Name:              "forced stop collector",
+			AllowedIndexNames: []string{"main"},
+			BoundCollectorID:  collectorID,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleet, err := collectorfleet.New(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admissions, err := collectoradmission.New(database, tokens, tenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := issued.Token.CreatedAt.
+		Add(time.Second).
+		Truncate(time.Microsecond).
+		UTC()
+	var clockUnixMicro atomic.Int64
+	clockUnixMicro.Store(base.UnixMicro())
+	config := ingest.DefaultConfig()
+	config.Clock = func() time.Time {
+		return time.UnixMicro(clockUnixMicro.Load()).UTC()
+	}
+	config.NewStreamID = func() string { return streamID }
+	config.ServerInstanceID = bootEpoch
+	config.ServerVersion = "runtime-forced-stop-test"
+	heartbeatRuntime := newCommandHeartbeatRuntimeWithFlush(
+		t,
+		fleet,
+		config.HeartbeatInterval,
+		time.Hour,
+	)
+	signaledHeartbeats := &signaledCollectorHeartbeatRuntime{
+		HeartbeatRuntime: heartbeatRuntime,
+		offered:          make(chan struct{}),
+	}
+	config.SessionManager = collectorSessionManager{
+		admission:  admissions,
+		fleet:      fleet,
+		heartbeats: signaledHeartbeats,
+	}
+	service, err := ingest.NewService(
+		config,
+		collectorAuthorizer{store: tokens, tenantID: tenantID},
+		ingest.EventStoreFunc(func(
+			context.Context,
+			ingest.StoreBatch,
+		) (ingest.StoreResult, error) {
+			return ingest.StoreResult{}, errors.New(
+				"event storage is unexpected in collector forced-stop test",
+			)
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listener := bufconn.Listen(1 << 20)
+	grpcServer := grpc.NewServer()
+	opensplunkv1.RegisterCollectorIngestServiceServer(grpcServer, service)
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- grpcServer.Serve(listener)
+	}()
+	var stopServerOnce sync.Once
+	var stopServerErr error
+	stopServer := func() {
+		stopServerOnce.Do(func() {
+			stopServerErr = shutdownGRPCServer(
+				grpcServer,
+				5*time.Millisecond,
+			)
+			if err := listener.Close(); err != nil {
+				t.Error(err)
+			}
+			select {
+			case err := <-serveDone:
+				if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+					t.Errorf("serve collector: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Error("collector gRPC server did not stop")
+			}
+		})
+	}
+	t.Cleanup(stopServer)
+
+	connection, err := grpc.NewClient(
+		"passthrough:///runtime-collector-forced-stop",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := connection.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	streamContext, cancelStream := context.WithTimeout(
+		metadata.NewOutgoingContext(
+			context.Background(),
+			metadata.Pairs(
+				"authorization",
+				"Bearer "+issued.Secret.Plaintext(),
+			),
+		),
+		10*time.Second,
+	)
+	t.Cleanup(cancelStream)
+	stream, err := opensplunkv1.NewCollectorIngestServiceClient(connection).
+		Collect(streamContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&opensplunkv1.CollectRequest{
+		StreamSequence: 1,
+		SentAt:         timestamppb.New(base),
+		Payload: &opensplunkv1.CollectRequest_Hello{
+			Hello: &opensplunkv1.CollectorHello{
+				CollectorId:      collectorID,
+				InstanceId:       instanceID,
+				ProtocolMajor:    1,
+				ProtocolMinor:    0,
+				CollectorVersion: "runtime-forced-stop-test",
+				Hostname:         "runtime-forced-stop-host",
+				StartedAt:        timestamppb.New(base.Add(-time.Minute)),
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readyResponse, err := stream.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready := readyResponse.GetReady(); ready == nil ||
+		ready.GetStreamId() != streamID ||
+		ready.GetServerInstanceId() != bootEpoch {
+		t.Fatalf("collector Ready = %#v", readyResponse)
+	}
+
+	scope := collectorfleet.Scope{TenantID: tenantID}
+	active, err := fleet.Get(ctx, scope, collectorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.ActiveLease == nil || active.DisconnectedAt != nil {
+		t.Fatalf("active collector before forced stop = %#v", active)
+	}
+
+	heartbeatAt := base.Add(time.Second)
+	clockUnixMicro.Store(heartbeatAt.UnixMicro())
+	if err := stream.Send(&opensplunkv1.CollectRequest{
+		StreamSequence: 2,
+		SentAt:         timestamppb.New(heartbeatAt),
+		Payload: &opensplunkv1.CollectRequest_Heartbeat{
+			Heartbeat: &opensplunkv1.CollectorHeartbeat{
+				CollectorId: collectorID,
+				InstanceId:  instanceID,
+				ObservedAt:  timestamppb.New(heartbeatAt),
+				Queue: &opensplunkv1.CollectorQueueStats{
+					QueuedEvents: 6,
+					QueuedBytes:  2048,
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-signaledHeartbeats.offered:
+	case <-time.After(time.Second):
+		t.Fatal("collector heartbeat was not accepted into the runtime")
+	}
+
+	forcedStopAt := base.Add(2 * time.Second)
+	clockUnixMicro.Store(forcedStopAt.UnixMicro())
+	stopServer()
+	if stopServerErr == nil {
+		t.Fatal("open collector stream shut down gracefully without timing out")
+	}
+
+	disconnected, err := fleet.Get(ctx, scope, collectorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeCommandHeartbeatRuntime(t, heartbeatRuntime)
+	if disconnected.ActiveLease != nil ||
+		disconnected.DisconnectedAt == nil ||
+		!disconnected.DisconnectedAt.Equal(forcedStopAt) ||
+		!disconnected.LastSeenAt.Equal(forcedStopAt) ||
+		disconnected.TelemetryRevision != active.TelemetryRevision+2 ||
+		disconnected.ObservationSequence != 2 ||
+		!disconnected.ObservedAt.Equal(heartbeatAt) ||
+		disconnected.Queue.QueuedEvents != 6 ||
+		disconnected.Queue.QueuedBytes != 2048 {
+		t.Fatalf(
+			"collector after forced-stop cleanup = before:%#v after:%#v",
+			active,
+			disconnected,
+		)
+	}
+	if err := heartbeatRuntime.Flush(ctx); !errors.Is(
+		err,
+		collectorfleet.ErrHeartbeatRuntimeClosed,
+	) {
+		t.Fatalf("Flush() after Close error = %v, want runtime closed", err)
+	}
+	closeCommandHeartbeatRuntime(t, heartbeatRuntime)
+	unchanged, err := fleet.Get(ctx, scope, collectorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.TelemetryRevision != disconnected.TelemetryRevision ||
+		unchanged.ObservationSequence != disconnected.ObservationSequence ||
+		unchanged.ActiveLease != nil ||
+		unchanged.DisconnectedAt == nil ||
+		!unchanged.DisconnectedAt.Equal(*disconnected.DisconnectedAt) {
+		t.Fatalf(
+			"collector resurrected after runtime close = before:%#v after:%#v",
+			disconnected,
+			unchanged,
+		)
+	}
+}
+
+type signaledCollectorHeartbeatRuntime struct {
+	*collectorfleet.HeartbeatRuntime
+	offered chan struct{}
+	once    sync.Once
+}
+
+func (runtime *signaledCollectorHeartbeatRuntime) Offer(
+	ctx context.Context,
+	lease collectorfleet.Lease,
+	heartbeat collectorfleet.Heartbeat,
+) (bool, error) {
+	accepted, err := runtime.HeartbeatRuntime.Offer(ctx, lease, heartbeat)
+	if accepted {
+		runtime.once.Do(func() { close(runtime.offered) })
+	}
+	return accepted, err
 }
 
 func waitForRuntimeFleetObservation(

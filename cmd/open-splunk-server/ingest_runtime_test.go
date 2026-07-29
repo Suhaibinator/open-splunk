@@ -206,6 +206,12 @@ func TestCollectorSessionManagerMapsOnlyKnownBoundaryErrors(t *testing.T) {
 			knownBoundary: true,
 		},
 		{
+			name:          "heartbeat lease",
+			err:           collectorfleet.ErrHeartbeatLeaseNotActive,
+			want:          ingest.ErrCollectorLeaseNotCurrent,
+			knownBoundary: true,
+		},
+		{
 			name:          "disabled",
 			err:           collectorfleet.ErrCollectorDisabled,
 			want:          ingest.ErrCollectorDisabled,
@@ -235,6 +241,185 @@ func TestCollectorSessionManagerMapsOnlyKnownBoundaryErrors(t *testing.T) {
 				t.Fatalf("known error mapped as backend failure: %v", mapped)
 			}
 		})
+	}
+}
+
+func TestCollectorSessionManagerDelegatesHeartbeatLifecycle(t *testing.T) {
+	t.Parallel()
+	lease := collectorfleet.Lease{
+		Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+		CollectorID: "collector-a",
+		BootEpoch:   "boot-a",
+		StreamID:    "stream-a",
+		Generation:  3,
+	}
+	heartbeat := collectorfleet.Heartbeat{ObservationSequence: 7}
+	runtime := &fakeCollectorHeartbeatRuntime{offerAccepted: true}
+	manager := collectorSessionManager{heartbeats: runtime}
+
+	if err := manager.Activate(lease); err != nil {
+		t.Fatalf("Activate(): %v", err)
+	}
+	accepted, err := manager.RecordHeartbeat(
+		context.Background(),
+		lease,
+		heartbeat,
+	)
+	if err != nil || !accepted {
+		t.Fatalf("RecordHeartbeat() = (%t, %v), want (true, nil)", accepted, err)
+	}
+	if runtime.activatedLease != lease ||
+		runtime.offeredLease != lease ||
+		runtime.offeredHeartbeat.ObservationSequence !=
+			heartbeat.ObservationSequence {
+		t.Fatalf("heartbeat runtime calls = %#v", runtime)
+	}
+}
+
+func TestCollectorSessionManagerAlwaysDurablyDisconnectsAfterReleaseFailure(
+	t *testing.T,
+) {
+	t.Parallel()
+	releaseErr := errors.New("release failed")
+	disconnectErr := errors.New("durable disconnect failed")
+	lease := collectorfleet.Lease{
+		Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+		CollectorID: "collector-a",
+		BootEpoch:   "boot-a",
+		StreamID:    "stream-a",
+		Generation:  9,
+	}
+	receivedAt := time.Date(2026, 7, 28, 13, 0, 0, 0, time.UTC)
+	calls := make([]string, 0, 2)
+	runtime := &fakeCollectorHeartbeatRuntime{
+		releaseErr: releaseErr,
+		calls:      &calls,
+	}
+	fleet := &fakeCollectorFleetRuntimeStore{
+		disconnectApplied: true,
+		disconnectErr:     disconnectErr,
+		calls:             &calls,
+	}
+	manager := collectorSessionManager{
+		fleet:      fleet,
+		heartbeats: runtime,
+	}
+
+	applied, err := manager.Disconnect(
+		context.Background(),
+		lease,
+		receivedAt,
+	)
+	if !applied ||
+		!errors.Is(err, releaseErr) ||
+		!errors.Is(err, disconnectErr) {
+		t.Fatalf(
+			"Disconnect() = (%t, %v), want applied and joined errors",
+			applied,
+			err,
+		)
+	}
+	if len(calls) != 2 || calls[0] != "release" || calls[1] != "disconnect" {
+		t.Fatalf("disconnect call order = %v, want [release disconnect]", calls)
+	}
+	if runtime.releasedLease != lease ||
+		fleet.disconnectedLease != lease ||
+		!fleet.disconnectedAt.Equal(receivedAt) {
+		t.Fatalf(
+			"disconnect arguments = runtime:%#v fleet:%#v",
+			runtime,
+			fleet,
+		)
+	}
+}
+
+func TestCollectorSessionManagerMissingHeartbeatRuntimeStillDisconnectsDurably(
+	t *testing.T,
+) {
+	t.Parallel()
+	fleet := &fakeCollectorFleetRuntimeStore{disconnectApplied: true}
+	manager := collectorSessionManager{fleet: fleet}
+	applied, err := manager.Disconnect(
+		context.Background(),
+		collectorfleet.Lease{
+			Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+			CollectorID: "collector-a",
+			BootEpoch:   "boot-a",
+			StreamID:    "stream-a",
+			Generation:  1,
+		},
+		time.Now().UTC(),
+	)
+	if !applied || err == nil || fleet.disconnectCalls != 1 {
+		t.Fatalf(
+			"Disconnect() = (%t, %v), durable calls = %d",
+			applied,
+			err,
+			fleet.disconnectCalls,
+		)
+	}
+}
+
+func TestCollectorSessionManagerReservesParentContextForDurableDisconnect(
+	t *testing.T,
+) {
+	t.Parallel()
+	runtime := &fakeCollectorHeartbeatRuntime{
+		waitForReleaseContext: true,
+	}
+	fleet := &fakeCollectorFleetRuntimeStore{disconnectApplied: true}
+	manager := collectorSessionManager{
+		fleet:                   fleet,
+		heartbeats:              runtime,
+		heartbeatReleaseTimeout: 5 * time.Millisecond,
+	}
+	parentContext, cancelParent := context.WithTimeout(
+		context.Background(),
+		time.Second,
+	)
+	defer cancelParent()
+	parentDeadline, parentHasDeadline := parentContext.Deadline()
+	if !parentHasDeadline {
+		t.Fatal("parent disconnect context has no deadline")
+	}
+
+	applied, err := manager.Disconnect(
+		parentContext,
+		collectorfleet.Lease{
+			Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+			CollectorID: "collector-a",
+			BootEpoch:   "boot-a",
+			StreamID:    "stream-a",
+			Generation:  1,
+		},
+		time.Now().UTC(),
+	)
+	if !applied || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf(
+			"Disconnect() = (%t, %v), want applied/deadline",
+			applied,
+			err,
+		)
+	}
+	if fleet.disconnectCalls != 1 || fleet.disconnectContextErr != nil {
+		t.Fatalf(
+			"durable disconnect = calls:%d context:%v",
+			fleet.disconnectCalls,
+			fleet.disconnectContextErr,
+		)
+	}
+	if !runtime.releaseHasDeadline ||
+		!fleet.disconnectHasDeadline ||
+		!runtime.releaseDeadline.Before(fleet.disconnectDeadline) ||
+		!fleet.disconnectDeadline.Equal(parentDeadline) {
+		t.Fatalf(
+			"disconnect deadlines = release:%v/%t durable:%v/%t parent:%v",
+			runtime.releaseDeadline,
+			runtime.releaseHasDeadline,
+			fleet.disconnectDeadline,
+			fleet.disconnectHasDeadline,
+			parentDeadline,
+		)
 	}
 }
 
@@ -306,6 +491,82 @@ func (*fakeCollectorAdmissionRuntimeStore) AuthorizeLease(
 	time.Time,
 ) (auth.Authentication, error) {
 	return auth.Authentication{}, errors.New("unexpected lease authorization")
+}
+
+type fakeCollectorHeartbeatRuntime struct {
+	activatedLease        collectorfleet.Lease
+	activateErr           error
+	offeredLease          collectorfleet.Lease
+	offeredHeartbeat      collectorfleet.Heartbeat
+	offerAccepted         bool
+	offerErr              error
+	releasedLease         collectorfleet.Lease
+	releaseErr            error
+	waitForReleaseContext bool
+	releaseDeadline       time.Time
+	releaseHasDeadline    bool
+	calls                 *[]string
+}
+
+func (runtime *fakeCollectorHeartbeatRuntime) Activate(
+	lease collectorfleet.Lease,
+) error {
+	runtime.activatedLease = lease
+	return runtime.activateErr
+}
+
+func (runtime *fakeCollectorHeartbeatRuntime) Offer(
+	_ context.Context,
+	lease collectorfleet.Lease,
+	heartbeat collectorfleet.Heartbeat,
+) (bool, error) {
+	runtime.offeredLease = lease
+	runtime.offeredHeartbeat = heartbeat
+	return runtime.offerAccepted, runtime.offerErr
+}
+
+func (runtime *fakeCollectorHeartbeatRuntime) Release(
+	ctx context.Context,
+	lease collectorfleet.Lease,
+) error {
+	if runtime.calls != nil {
+		*runtime.calls = append(*runtime.calls, "release")
+	}
+	runtime.releasedLease = lease
+	runtime.releaseDeadline, runtime.releaseHasDeadline = ctx.Deadline()
+	if runtime.waitForReleaseContext {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return runtime.releaseErr
+}
+
+type fakeCollectorFleetRuntimeStore struct {
+	disconnectApplied     bool
+	disconnectErr         error
+	disconnectedLease     collectorfleet.Lease
+	disconnectedAt        time.Time
+	disconnectCalls       int
+	disconnectContextErr  error
+	disconnectDeadline    time.Time
+	disconnectHasDeadline bool
+	calls                 *[]string
+}
+
+func (store *fakeCollectorFleetRuntimeStore) Disconnect(
+	ctx context.Context,
+	lease collectorfleet.Lease,
+	receivedAt time.Time,
+) (bool, error) {
+	if store.calls != nil {
+		*store.calls = append(*store.calls, "disconnect")
+	}
+	store.disconnectCalls++
+	store.disconnectContextErr = ctx.Err()
+	store.disconnectDeadline, store.disconnectHasDeadline = ctx.Deadline()
+	store.disconnectedLease = lease
+	store.disconnectedAt = receivedAt
+	return store.disconnectApplied, store.disconnectErr
 }
 
 type fakeIndexRetentionCatalog struct {

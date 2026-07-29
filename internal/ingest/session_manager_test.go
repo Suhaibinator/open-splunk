@@ -15,6 +15,7 @@ type testCollectorSessionManager struct {
 	preliminary    map[string][]Authorization
 	nextGeneration uint64
 	admitFunc      func(context.Context, string, CollectorSessionAdmissionRequest) (CollectorSessionAdmission, error)
+	activateFunc   func(collectorfleet.Lease) error
 	authorizeFunc  func(context.Context, string, collectorfleet.Lease, time.Time) (Authorization, error)
 	heartbeatFunc  func(context.Context, collectorfleet.Lease, collectorfleet.Heartbeat) (bool, error)
 	disconnectFunc func(context.Context, collectorfleet.Lease, time.Time) (bool, error)
@@ -93,6 +94,15 @@ func (manager *testCollectorSessionManager) admissionLocked(
 			Generation:  manager.nextGeneration,
 		},
 	}
+}
+
+func (manager *testCollectorSessionManager) Activate(
+	lease collectorfleet.Lease,
+) error {
+	if manager.activateFunc != nil {
+		return manager.activateFunc(lease)
+	}
+	return nil
 }
 
 func (manager *testCollectorSessionManager) AuthorizeLease(

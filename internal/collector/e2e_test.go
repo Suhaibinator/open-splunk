@@ -171,6 +171,10 @@ func (manager *e2eCollectorSessionManager) Admit(
 	}, nil
 }
 
+func (*e2eCollectorSessionManager) Activate(collectorfleet.Lease) error {
+	return nil
+}
+
 func (manager *e2eCollectorSessionManager) AuthorizeLease(
 	context.Context,
 	string,

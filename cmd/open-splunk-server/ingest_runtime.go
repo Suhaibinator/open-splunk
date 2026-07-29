@@ -141,11 +141,6 @@ type collectorAdmissionRuntimeStore interface {
 }
 
 type collectorFleetRuntimeStore interface {
-	RecordHeartbeat(
-		context.Context,
-		collectorfleet.Lease,
-		collectorfleet.Heartbeat,
-	) (bool, error)
 	Disconnect(
 		context.Context,
 		collectorfleet.Lease,
@@ -153,9 +148,21 @@ type collectorFleetRuntimeStore interface {
 	) (bool, error)
 }
 
+type collectorHeartbeatRuntime interface {
+	Activate(collectorfleet.Lease) error
+	Offer(
+		context.Context,
+		collectorfleet.Lease,
+		collectorfleet.Heartbeat,
+	) (bool, error)
+	Release(context.Context, collectorfleet.Lease) error
+}
+
 type collectorSessionManager struct {
-	admission collectorAdmissionRuntimeStore
-	fleet     collectorFleetRuntimeStore
+	admission               collectorAdmissionRuntimeStore
+	fleet                   collectorFleetRuntimeStore
+	heartbeats              collectorHeartbeatRuntime
+	heartbeatReleaseTimeout time.Duration
 }
 
 func (manager collectorSessionManager) Admit(
@@ -222,11 +229,20 @@ func (manager collectorSessionManager) RecordHeartbeat(
 	lease collectorfleet.Lease,
 	heartbeat collectorfleet.Heartbeat,
 ) (bool, error) {
-	if manager.fleet == nil {
-		return false, errors.New("collector fleet persistence is unavailable")
+	if manager.heartbeats == nil {
+		return false, errors.New("collector heartbeat runtime is unavailable")
 	}
-	applied, err := manager.fleet.RecordHeartbeat(ctx, lease, heartbeat)
-	return applied, mapCollectorSessionError(err)
+	accepted, err := manager.heartbeats.Offer(ctx, lease, heartbeat)
+	return accepted, mapCollectorSessionError(err)
+}
+
+func (manager collectorSessionManager) Activate(
+	lease collectorfleet.Lease,
+) error {
+	if manager.heartbeats == nil {
+		return errors.New("collector heartbeat runtime is unavailable")
+	}
+	return mapCollectorSessionError(manager.heartbeats.Activate(lease))
 }
 
 func (manager collectorSessionManager) Disconnect(
@@ -234,11 +250,32 @@ func (manager collectorSessionManager) Disconnect(
 	lease collectorfleet.Lease,
 	receivedAt time.Time,
 ) (bool, error) {
+	var releaseErr error
+	if manager.heartbeats == nil {
+		releaseErr = errors.New("collector heartbeat runtime is unavailable")
+	} else {
+		releaseTimeout := manager.heartbeatReleaseTimeout
+		if releaseTimeout <= 0 {
+			releaseTimeout = collectorHeartbeatReleaseTimeout
+		}
+		releaseContext, cancelRelease := context.WithTimeout(
+			ctx,
+			releaseTimeout,
+		)
+		releaseErr = manager.heartbeats.Release(releaseContext, lease)
+		cancelRelease()
+	}
 	if manager.fleet == nil {
-		return false, errors.New("collector fleet persistence is unavailable")
+		return false, errors.Join(
+			mapCollectorSessionError(releaseErr),
+			errors.New("collector fleet persistence is unavailable"),
+		)
 	}
 	applied, err := manager.fleet.Disconnect(ctx, lease, receivedAt)
-	return applied, mapCollectorSessionError(err)
+	return applied, errors.Join(
+		mapCollectorSessionError(releaseErr),
+		mapCollectorSessionError(err),
+	)
 }
 
 func collectorAuthenticationAuthorization(
@@ -261,6 +298,8 @@ func mapCollectorSessionError(err error) error {
 		errors.Is(err, auth.ErrInactiveToken):
 		return ingest.ErrUnauthorized
 	case errors.Is(err, collectoradmission.ErrLeaseNotCurrent):
+		return ingest.ErrCollectorLeaseNotCurrent
+	case errors.Is(err, collectorfleet.ErrHeartbeatLeaseNotActive):
 		return ingest.ErrCollectorLeaseNotCurrent
 	case errors.Is(err, collectorfleet.ErrCollectorDisabled):
 		return ingest.ErrCollectorDisabled

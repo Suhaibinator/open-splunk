@@ -235,13 +235,16 @@ type CollectorSessionAdmission struct {
 // native collector stream. Admit must atomically revalidate the bearer, record
 // accepted use, verify enabled fleet state, and allocate Lease. AuthorizeLease
 // must read fresh credential and exact lease state from one consistent
-// snapshot. Heartbeat and Disconnect must condition every mutation on Lease.
+// snapshot. Activate must install that exact already-committed Lease in the
+// bounded process runtime before CollectorReady is sent. Heartbeat and
+// Disconnect must condition every mutation on Lease.
 type CollectorSessionManager interface {
 	Admit(
 		context.Context,
 		string,
 		CollectorSessionAdmissionRequest,
 	) (CollectorSessionAdmission, error)
+	Activate(collectorfleet.Lease) error
 	AuthorizeLease(
 		context.Context,
 		string,

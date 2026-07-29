@@ -29,6 +29,297 @@ func TestNewServiceRequiresCollectorSessionManager(t *testing.T) {
 	}
 }
 
+func TestNewServiceDefaultsAndValidatesSessionCleanupTimeout(t *testing.T) {
+	t.Parallel()
+	authorizer := staticTestAuthorizer()
+	config := testServiceConfig()
+	config.SessionManager = newTestCollectorSessionManager(authorizer)
+	config.SessionCleanupTimeout = 0
+	service, err := NewService(config, authorizer, acceptingStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.config.SessionCleanupTimeout !=
+		defaultCollectorSessionCleanupTimeout {
+		t.Fatalf(
+			"default session cleanup timeout = %v, want %v",
+			service.config.SessionCleanupTimeout,
+			defaultCollectorSessionCleanupTimeout,
+		)
+	}
+
+	config.SessionCleanupTimeout = -time.Nanosecond
+	if _, err := NewService(
+		config,
+		authorizer,
+		acceptingStore(),
+	); err == nil ||
+		err.Error() != "collector session cleanup timeout must be positive" {
+		t.Fatalf("negative session cleanup timeout error = %v", err)
+	}
+}
+
+func TestCollectActivatesExactLeaseWhileProcessPromotionIsCurrentAndFinalized(t *testing.T) {
+	t.Parallel()
+
+	authorization := boundTestAuthorization(
+		"subject-a",
+		"tenant-a",
+		"collector-a",
+	)
+	authorizer := AuthorizerFunc(func(context.Context, string) (Authorization, error) {
+		return authorization, nil
+	})
+	manager := newTestCollectorSessionManager(authorizer)
+	manager.admitFunc = func(
+		_ context.Context,
+		_ string,
+		request CollectorSessionAdmissionRequest,
+	) (CollectorSessionAdmission, error) {
+		return manager.admissionFor(authorization, request), nil
+	}
+	registry := NewInMemoryCollectorStreamRegistry()
+	type activationObservation struct {
+		lease               collectorfleet.Lease
+		processLeaseCurrent bool
+		finalizationLocked  bool
+	}
+	activated := make(chan activationObservation, 1)
+	var servicePointer atomic.Pointer[Service]
+	manager.activateFunc = func(lease collectorfleet.Lease) error {
+		service := servicePointer.Load()
+		if service == nil {
+			activated <- activationObservation{lease: lease}
+			return nil
+		}
+
+		key := streamKey(lease)
+		registry.mu.RLock()
+		entry, exists := registry.entries[key]
+		processLeaseCurrent := exists &&
+			entry.active &&
+			entry.lease.Lease == lease
+		registry.mu.RUnlock()
+
+		service.finalizersMu.Lock()
+		finalizer := service.finalizers[CollectorStreamKey{
+			TenantID:    lease.TenantID,
+			CollectorID: lease.CollectorID,
+		}]
+		finalizationLocked := finalizer != nil && !finalizer.mu.TryLock()
+		if finalizer != nil && !finalizationLocked {
+			finalizer.mu.Unlock()
+		}
+		service.finalizersMu.Unlock()
+
+		activated <- activationObservation{
+			lease:               lease,
+			processLeaseCurrent: processLeaseCurrent,
+			finalizationLocked:  finalizationLocked,
+		}
+		return nil
+	}
+	config := testServiceConfig()
+	config.SessionManager = manager
+	config.StreamRegistry = registry
+	harness := newServiceHarness(t, config, authorizer, acceptingStore())
+	servicePointer.Store(harness.server)
+
+	stream := harness.stream(t, "Bearer good-token")
+	sendHello(t, stream, 1, 1, 0)
+	ready := recvResponse(t, stream).GetReady()
+	if ready == nil {
+		t.Fatal("first response was not Ready")
+	}
+	select {
+	case observation := <-activated:
+		if observation.lease.TenantID != "tenant-a" ||
+			observation.lease.CollectorID != "collector-a" ||
+			observation.lease.BootEpoch != config.ServerInstanceID ||
+			observation.lease.StreamID != ready.GetStreamId() ||
+			observation.lease.Generation == 0 {
+			t.Fatalf("activated lease = %+v", observation.lease)
+		}
+		if !observation.processLeaseCurrent {
+			t.Fatal("heartbeat activation ran before exact process promotion")
+		}
+		if !observation.finalizationLocked {
+			t.Fatal("heartbeat activation ran outside the collector finalization lock")
+		}
+	default:
+		t.Fatal("Ready was sent without heartbeat runtime activation")
+	}
+
+	sendGoodbye(t, stream, 2)
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+		t.Fatalf("stream goodbye error = %v, want EOF", err)
+	}
+}
+
+func TestCollectMapsHeartbeatActivationFailuresBeforeReadyAndCleansExactLease(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		wantCode codes.Code
+		wantText string
+	}{
+		{
+			name:     "stale lease",
+			err:      fmt.Errorf("private predecessor detail: %w", ErrCollectorLeaseNotCurrent),
+			wantCode: codes.Aborted,
+			wantText: "collector stream was superseded",
+		},
+		{
+			name:     "runtime capacity",
+			err:      fmt.Errorf("private capacity detail: %w", ErrCollectorSessionCapacity),
+			wantCode: codes.ResourceExhausted,
+			wantText: "collector heartbeat capacity is exhausted",
+		},
+		{
+			name:     "runtime unavailable",
+			err:      errors.New("private runtime topology detail"),
+			wantCode: codes.Unavailable,
+			wantText: "collector heartbeat runtime is unavailable",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			authorization := boundTestAuthorization(
+				"subject-a",
+				"tenant-a",
+				"collector-a",
+			)
+			authorizer := AuthorizerFunc(func(
+				context.Context,
+				string,
+			) (Authorization, error) {
+				return authorization, nil
+			})
+			manager := newTestCollectorSessionManager(authorizer)
+			manager.admitFunc = func(
+				_ context.Context,
+				_ string,
+				request CollectorSessionAdmissionRequest,
+			) (CollectorSessionAdmission, error) {
+				return manager.admissionFor(authorization, request), nil
+			}
+			activationStarted := make(chan collectorfleet.Lease, 1)
+			finishActivation := make(chan struct{})
+			manager.activateFunc = func(lease collectorfleet.Lease) error {
+				activationStarted <- lease
+				<-finishActivation
+				return tt.err
+			}
+			registry := NewInMemoryCollectorStreamRegistry()
+			type disconnectObservation struct {
+				lease                collectorfleet.Lease
+				exactProcessReleased bool
+			}
+			disconnected := make(chan disconnectObservation, 1)
+			manager.disconnectFunc = func(
+				_ context.Context,
+				lease collectorfleet.Lease,
+				_ time.Time,
+			) (bool, error) {
+				key := streamKey(lease)
+				registry.mu.RLock()
+				processEntry, exists := registry.entries[key]
+				exactProcessReleased := exists &&
+					processEntry.lease.Lease == lease &&
+					!processEntry.active
+				registry.mu.RUnlock()
+				disconnected <- disconnectObservation{
+					lease:                lease,
+					exactProcessReleased: exactProcessReleased,
+				}
+				return true, nil
+			}
+			var storeCalls atomic.Uint32
+			store := EventStoreFunc(func(
+				context.Context,
+				StoreBatch,
+			) (StoreResult, error) {
+				storeCalls.Add(1)
+				return StoreResult{}, nil
+			})
+			config := testServiceConfig()
+			config.SessionManager = manager
+			config.StreamRegistry = registry
+			harness := newServiceHarness(t, config, authorizer, store)
+			stream := harness.stream(t, "Bearer good-token")
+
+			sendHello(t, stream, 1, 1, 0)
+			var activatedLease collectorfleet.Lease
+			select {
+			case activatedLease = <-activationStarted:
+			case <-time.After(time.Second):
+				t.Fatal("heartbeat activation was not called")
+			}
+			batch := validTestBatch(
+				"collector-a",
+				"batch-before-ready",
+				1,
+				validTestEvent("event-a", "main"),
+			)
+			if err := stream.Send(batchRequest(2, batch)); err != nil {
+				t.Fatal(err)
+			}
+			close(finishActivation)
+
+			response, err := stream.Recv()
+			if response != nil || status.Code(err) != tt.wantCode {
+				t.Fatalf(
+					"Recv() = (%#v, %v), want nil/%v",
+					response,
+					err,
+					tt.wantCode,
+				)
+			}
+			if got := status.Convert(err).Message(); got != tt.wantText {
+				t.Fatalf("status message = %q, want %q", got, tt.wantText)
+			}
+			if got := storeCalls.Load(); got != 0 {
+				t.Fatalf("event store calls = %d, want 0", got)
+			}
+
+			select {
+			case observation := <-disconnected:
+				if observation.lease != activatedLease {
+					t.Fatalf(
+						"disconnected lease = %+v, want activated %+v",
+						observation.lease,
+						activatedLease,
+					)
+				}
+				if !observation.exactProcessReleased {
+					t.Fatal("durable disconnect ran before exact process release")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("activation failure leaked its durable lease")
+			}
+			key := streamKey(activatedLease)
+			registry.mu.RLock()
+			processEntry, exists := registry.entries[key]
+			registry.mu.RUnlock()
+			if !exists ||
+				processEntry.lease.Lease != activatedLease ||
+				processEntry.active {
+				t.Fatalf(
+					"process lease after activation failure = %+v, exists %t",
+					processEntry,
+					exists,
+				)
+			}
+		})
+	}
+}
+
 func TestCollectUsesFreshAdmissionAuthorityAndDetachedExactCleanup(t *testing.T) {
 	t.Parallel()
 	preliminary := boundTestAuthorization(
@@ -218,6 +509,69 @@ func TestDisconnectCollectorSessionRetriesTransientFailure(t *testing.T) {
 		!observedTimes[0].Equal(validationTestNow) ||
 		!observedTimes[1].Equal(validationTestNow) {
 		t.Fatalf("disconnect times = %v, want stable request time", observedTimes)
+	}
+}
+
+func TestDisconnectCollectorSessionUsesConfiguredTimeout(t *testing.T) {
+	t.Parallel()
+	authorization := boundTestAuthorization(
+		"subject-a",
+		"tenant-a",
+		"collector-a",
+	)
+	authorizer := AuthorizerFunc(func(context.Context, string) (Authorization, error) {
+		return authorization, nil
+	})
+	manager := newTestCollectorSessionManager(authorizer)
+	lease := collectorfleet.Lease{
+		Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+		CollectorID: "collector-a",
+		BootEpoch:   "server-test",
+		StreamID:    "stream-a",
+		Generation:  1,
+	}
+	const cleanupTimeout = 37 * time.Second
+	var (
+		observedDeadline time.Time
+		observedAt       time.Time
+		observedContext  error
+		hasDeadline      bool
+	)
+	manager.disconnectFunc = func(
+		ctx context.Context,
+		got collectorfleet.Lease,
+		_ time.Time,
+	) (bool, error) {
+		if got != lease {
+			return false, errors.New("unexpected lease")
+		}
+		observedAt = time.Now()
+		observedDeadline, hasDeadline = ctx.Deadline()
+		observedContext = ctx.Err()
+		return true, nil
+	}
+	config := testServiceConfig()
+	config.SessionManager = manager
+	config.SessionCleanupTimeout = cleanupTimeout
+	service, err := NewService(config, authorizer, acceptingStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service.disconnectCollectorSession(lease)
+
+	remaining := observedDeadline.Sub(observedAt)
+	if !hasDeadline ||
+		observedContext != nil ||
+		remaining <= cleanupTimeout-time.Second ||
+		remaining > cleanupTimeout {
+		t.Fatalf(
+			"cleanup context = deadline:%v remaining:%v err:%v, want configured %v",
+			hasDeadline,
+			remaining,
+			observedContext,
+			cleanupTimeout,
+		)
 	}
 }
 

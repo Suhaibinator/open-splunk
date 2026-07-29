@@ -311,9 +311,15 @@ func runtimeCollectorHello(
 	if err != nil {
 		t.Fatal(err)
 	}
+	heartbeatRuntime := newCommandHeartbeatRuntime(
+		t,
+		fleet,
+		config.HeartbeatInterval,
+	)
 	config.SessionManager = collectorSessionManager{
-		admission: admissions,
-		fleet:     fleet,
+		admission:  admissions,
+		fleet:      fleet,
+		heartbeats: heartbeatRuntime,
 	}
 	service, err := ingest.NewService(
 		config,
@@ -336,6 +342,11 @@ func runtimeCollectorHello(
 	go func() {
 		serveDone <- grpcServer.Serve(listener)
 	}()
+	shutdownCollector := func() {
+		if err := shutdownGRPCServer(grpcServer, time.Second); err != nil {
+			t.Error(err)
+		}
+	}
 	connection, err := grpc.NewClient(
 		"passthrough:///runtime-token-use",
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
@@ -344,7 +355,7 @@ func runtimeCollectorHello(
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
-		grpcServer.Stop()
+		shutdownCollector()
 		_ = listener.Close()
 		t.Fatal(err)
 	}
@@ -359,7 +370,7 @@ func runtimeCollectorHello(
 	if err != nil {
 		cancel()
 		_ = connection.Close()
-		grpcServer.Stop()
+		shutdownCollector()
 		_ = listener.Close()
 		t.Fatal(err)
 	}
@@ -380,7 +391,7 @@ func runtimeCollectorHello(
 	}); err != nil {
 		cancel()
 		_ = connection.Close()
-		grpcServer.Stop()
+		shutdownCollector()
 		_ = listener.Close()
 		t.Fatal(err)
 	}
@@ -389,13 +400,14 @@ func runtimeCollectorHello(
 	if err := connection.Close(); err != nil {
 		t.Error(err)
 	}
-	grpcServer.Stop()
+	shutdownCollector()
 	if err := listener.Close(); err != nil {
 		t.Error(err)
 	}
 	if err := <-serveDone; err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 		t.Fatalf("serve collector: %v", err)
 	}
+	closeCommandHeartbeatRuntime(t, heartbeatRuntime)
 	return response, err
 }
 

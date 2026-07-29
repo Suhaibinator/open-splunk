@@ -43,18 +43,15 @@ func openCollectorServer(
 	config collectorServerConfig,
 	service opensplunkv1.CollectorIngestServiceServer,
 ) (*grpc.Server, net.Listener, error) {
+	if err := validateCollectorServerConfig(config); err != nil {
+		return nil, nil, err
+	}
 	address := strings.TrimSpace(config.Address)
 	if address == "" {
-		if config.Insecure || strings.TrimSpace(config.TLSCertFile) != "" || strings.TrimSpace(config.TLSKeyFile) != "" {
-			return nil, nil, errors.New("collector gRPC address is required when transport options are configured")
-		}
 		return nil, nil, nil
 	}
 	if service == nil {
 		return nil, nil, errors.New("collector gRPC service is required")
-	}
-	if _, _, err := net.SplitHostPort(address); err != nil {
-		return nil, nil, fmt.Errorf("collector gRPC address must be host:port: %w", err)
 	}
 
 	serverOptions, err := collectorGRPCServerOptions(config)
@@ -71,20 +68,51 @@ func openCollectorServer(
 	return server, listener, nil
 }
 
-func collectorGRPCServerOptions(config collectorServerConfig) ([]grpc.ServerOption, error) {
+// validateCollectorServerConfig is pure so run can reject an invalid disabled
+// or configured transport before opening or mutating either persistence plane.
+func validateCollectorServerConfig(config collectorServerConfig) error {
+	address := strings.TrimSpace(config.Address)
 	certFile := strings.TrimSpace(config.TLSCertFile)
 	keyFile := strings.TrimSpace(config.TLSKeyFile)
+	if address == "" {
+		if config.Insecure || certFile != "" || keyFile != "" {
+			return errors.New(
+				"collector gRPC address is required when transport options are configured",
+			)
+		}
+		return nil
+	}
+	if _, _, err := net.SplitHostPort(address); err != nil {
+		return fmt.Errorf("collector gRPC address must be host:port: %w", err)
+	}
 	if config.Insecure {
 		if certFile != "" || keyFile != "" {
-			return nil, errors.New("collector gRPC cannot combine plaintext mode with TLS certificate options")
+			return errors.New(
+				"collector gRPC cannot combine plaintext mode with TLS certificate options",
+			)
 		}
-		if !loopbackAddress(strings.TrimSpace(config.Address)) {
-			return nil, errors.New("collector gRPC plaintext is allowed only for a loopback address")
+		if !loopbackAddress(address) {
+			return errors.New(
+				"collector gRPC plaintext is allowed only for a loopback address",
+			)
 		}
-	} else {
-		if certFile == "" || keyFile == "" {
-			return nil, errors.New("collector gRPC TLS certificate and key are required; use -collector-grpc-insecure only for loopback development")
-		}
+		return nil
+	}
+	if certFile == "" || keyFile == "" {
+		return errors.New(
+			"collector gRPC TLS certificate and key are required; use -collector-grpc-insecure only for loopback development",
+		)
+	}
+	return nil
+}
+
+func collectorGRPCServerOptions(config collectorServerConfig) ([]grpc.ServerOption, error) {
+	if err := validateCollectorServerConfig(config); err != nil {
+		return nil, err
+	}
+	certFile := strings.TrimSpace(config.TLSCertFile)
+	keyFile := strings.TrimSpace(config.TLSKeyFile)
+	if !config.Insecure {
 		certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load collector gRPC TLS certificate: %w", err)

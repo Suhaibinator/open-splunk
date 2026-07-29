@@ -38,11 +38,22 @@ import (
 )
 
 const (
-	startupTimeout        = 2 * time.Minute
-	shutdownTimeout       = 35 * time.Second
-	defaultIndexRetention = 30 * 24 * time.Hour
-	defaultOwnerID        = "single-user"
-	splCompatibility      = "tier-1-dev"
+	startupTimeout                   = 2 * time.Minute
+	shutdownTimeout                  = 35 * time.Second
+	defaultIndexRetention            = 30 * 24 * time.Hour
+	defaultOwnerID                   = "single-user"
+	splCompatibility                 = "tier-1-dev"
+	collectorHeartbeatFlushInterval  = time.Second
+	collectorHeartbeatWriteTimeout   = 5 * time.Second
+	collectorHeartbeatReleaseTimeout = 2 * collectorHeartbeatWriteTimeout
+	// SQLite may spend five seconds waiting on a competing writer. Reserve a
+	// second write window for transaction overhead and a useful retry after
+	// heartbeat Release has consumed its own bound.
+	collectorDurableDisconnectReserve = 2 * collectorHeartbeatWriteTimeout
+	collectorSessionCleanupTimeout    = collectorHeartbeatReleaseTimeout +
+		collectorDurableDisconnectReserve
+	collectorShutdownGraceTimeout = shutdownTimeout -
+		collectorSessionCleanupTimeout
 )
 
 type options struct {
@@ -84,6 +95,15 @@ func main() {
 func run() error {
 	config := parseFlags()
 	if err := normalizeRuntimeOptions(&config); err != nil {
+		return err
+	}
+	collectorTransportConfig := collectorServerConfig{
+		Address:     config.collectorAddress,
+		Insecure:    config.collectorInsecure,
+		TLSCertFile: config.collectorTLSCert,
+		TLSKeyFile:  config.collectorTLSKey,
+	}
+	if err := validateCollectorServerConfig(collectorTransportConfig); err != nil {
 		return err
 	}
 	release, err := opensplunk.EmbeddedRelease()
@@ -233,28 +253,61 @@ func run() error {
 			log.Printf("close ClickHouse: %v", err)
 		}
 	}()
-	ingestConfig := ingest.DefaultConfig()
-	ingestConfig.Build = buildMetadata
-	ingestConfig.ServerInstanceID = collectorBootEpoch
-	ingestConfig.SessionManager = collectorSessionManager{
-		admission: collectorAdmissions,
-		fleet:     collectorFleet,
+	var collectorHeartbeats *collectorfleet.HeartbeatRuntime
+	var ingestService opensplunkv1.CollectorIngestServiceServer
+	if strings.TrimSpace(config.collectorAddress) != "" {
+		ingestConfig := ingest.DefaultConfig()
+		ingestConfig.SessionCleanupTimeout = collectorSessionCleanupTimeout
+		collectorHeartbeats, err = collectorfleet.NewHeartbeatRuntime(
+			collectorFleet,
+			collectorfleet.HeartbeatRuntimeConfig{
+				MaxCollectors:     collectorMaxActiveStreams,
+				HeartbeatInterval: ingestConfig.HeartbeatInterval,
+				StaleGrace:        2 * ingestConfig.HeartbeatInterval,
+				FlushInterval:     collectorHeartbeatFlushInterval,
+				WriteTimeout:      collectorHeartbeatWriteTimeout,
+				MonotonicNow:      time.Now,
+				OnError: func(err error) {
+					log.Printf("persist collector heartbeat: %v", err)
+				},
+			},
+		)
+		if err != nil {
+			return fmt.Errorf("create collector heartbeat runtime: %w", err)
+		}
+		defer func() {
+			if collectorHeartbeats == nil {
+				return
+			}
+			if err := closeCollectorHeartbeatRuntime(
+				collectorHeartbeats,
+				shutdownTimeout,
+			); err != nil {
+				log.Printf("close collector heartbeat runtime after failed startup: %v", err)
+			}
+		}()
+		ingestConfig.Build = buildMetadata
+		ingestConfig.ServerInstanceID = collectorBootEpoch
+		ingestConfig.SessionManager = collectorSessionManager{
+			admission:  collectorAdmissions,
+			fleet:      collectorFleet,
+			heartbeats: collectorHeartbeats,
+		}
+		ingestConfig.SessionErrorHandler = func(err error) {
+			log.Printf("collector session cleanup: %v", err)
+		}
+		ingestService, err = ingest.NewService(ingestConfig, collectorAuthorizer{
+			store: tokenStore, tenantID: config.tenantID,
+		}, eventStore)
+		if err != nil {
+			return fmt.Errorf("create collector ingestion service: %w", err)
+		}
 	}
-	ingestConfig.SessionErrorHandler = func(err error) {
-		log.Printf("collector session cleanup: %v", err)
-	}
-	ingestService, err := ingest.NewService(ingestConfig, collectorAuthorizer{
-		store: tokenStore, tenantID: config.tenantID,
-	}, eventStore)
-	if err != nil {
-		return fmt.Errorf("create collector ingestion service: %w", err)
-	}
-	collectorServer, collectorListener, err := openCollectorServer(startupContext, collectorServerConfig{
-		Address:     config.collectorAddress,
-		Insecure:    config.collectorInsecure,
-		TLSCertFile: config.collectorTLSCert,
-		TLSKeyFile:  config.collectorTLSKey,
-	}, ingestService)
+	collectorServer, collectorListener, err := openCollectorServer(
+		startupContext,
+		collectorTransportConfig,
+		ingestService,
+	)
 	if err != nil {
 		return err
 	}
@@ -450,7 +503,40 @@ func run() error {
 		}
 		log.Printf("collector gRPC server listening on %s (%s)", collectorListener.Addr(), transport)
 	}
-	return serveRuntime(shutdownContext, httpServer, requests, handler, collectorServer, collectorListener, shutdownTimeout)
+	serveErr := serveRuntime(
+		shutdownContext,
+		httpServer,
+		requests,
+		handler,
+		collectorServer,
+		collectorListener,
+		shutdownTimeout,
+		collectorShutdownGraceTimeout,
+	)
+	heartbeatCloseErr := closeCollectorHeartbeatRuntime(
+		collectorHeartbeats,
+		shutdownTimeout,
+	)
+	collectorHeartbeats = nil
+	if heartbeatCloseErr != nil {
+		heartbeatCloseErr = fmt.Errorf(
+			"close collector heartbeat runtime: %w",
+			heartbeatCloseErr,
+		)
+	}
+	return errors.Join(serveErr, heartbeatCloseErr)
+}
+
+func closeCollectorHeartbeatRuntime(
+	runtime *collectorfleet.HeartbeatRuntime,
+	timeout time.Duration,
+) error {
+	if runtime == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return runtime.Close(ctx)
 }
 
 func parseFlags() options {
