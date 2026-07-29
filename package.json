@@ -16,18 +16,18 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.12.1",
-    "next": "^16.2.10",
+    "next": "^16.2.12",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "@bufbuild/buf": "1.72.0",
     "@playwright/test": "1.62.0",
-    "@types/node": "^26.0.0",
+    "@types/node": "^26.1.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "oxlint": "^1.75.0",
+    "oxlint": "^1.76.0",
     "ts-proto": "^2.12.0",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }
