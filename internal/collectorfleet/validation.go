@@ -200,24 +200,41 @@ func normalizeLease(lease Lease) (Lease, error) {
 }
 
 func normalizeAdministration(input Administration) (Administration, error) {
-	if input.State != AdministrativeStateEnabled &&
-		input.State != AdministrativeStateDisabled {
-		return Administration{}, invalid("administrative state is invalid")
+	state, err := normalizeAdministrativeState(input.State)
+	if err != nil {
+		return Administration{}, err
 	}
-	result := Administration{State: input.State}
-	if input.DisplayName != nil {
-		displayName := strings.TrimSpace(*input.DisplayName)
-		if err := validateText(
-			"display name",
-			displayName,
-			maximumDisplayNameBytes,
-			false,
-		); err != nil {
-			return Administration{}, err
-		}
-		result.DisplayName = &displayName
+	displayName, err := normalizeAdministrativeDisplayName(input.DisplayName)
+	if err != nil {
+		return Administration{}, err
 	}
-	return result, nil
+	return Administration{DisplayName: displayName, State: state}, nil
+}
+
+func normalizeAdministrativeState(
+	input AdministrativeState,
+) (AdministrativeState, error) {
+	if input != AdministrativeStateEnabled &&
+		input != AdministrativeStateDisabled {
+		return "", invalid("administrative state is invalid")
+	}
+	return input, nil
+}
+
+func normalizeAdministrativeDisplayName(input *string) (*string, error) {
+	if input == nil {
+		return nil, nil
+	}
+	displayName := strings.TrimSpace(*input)
+	if err := validateText(
+		"display name",
+		displayName,
+		maximumDisplayNameBytes,
+		false,
+	); err != nil {
+		return nil, err
+	}
+	return &displayName, nil
 }
 
 func normalizeHeartbeat(input Heartbeat) (Heartbeat, error) {

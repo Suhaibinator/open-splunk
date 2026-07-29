@@ -542,6 +542,109 @@ func TestAdministrativeCASDisableInvalidatesLeaseAndRequiresFreshClaim(t *testin
 	}
 }
 
+func TestUpdateDisplayNameDoesNotTouchDisabledRuntime(t *testing.T) {
+	t.Parallel()
+
+	database, store := openTestStore(t)
+	ctx := context.Background()
+	connectedAt := time.Date(2026, 7, 28, 21, 20, 0, 0, time.UTC)
+	collector, lease, err := store.Claim(ctx, testClaim(connectedAt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.SQLDB().ExecContext(ctx, `
+		UPDATE collector_fleet
+		SET administrative_state = 'disabled'
+		WHERE tenant_id = ? AND collector_id = ?`,
+		lease.TenantID,
+		lease.CollectorID,
+	); err != nil {
+		t.Fatalf("install disabled active-runtime fixture: %v", err)
+	}
+
+	type runtimeSnapshot struct {
+		telemetryRevision int64
+		bootEpoch         string
+		streamID          string
+		activeInstanceID  string
+		lastSeenAt        int64
+	}
+	readRuntime := func() runtimeSnapshot {
+		t.Helper()
+		var snapshot runtimeSnapshot
+		if err := database.SQLDB().QueryRowContext(ctx, `
+			SELECT telemetry_revision,
+			       boot_epoch,
+			       stream_id,
+			       active_instance_id,
+			       last_seen_at_unix_micro
+			FROM collector_runtime
+			WHERE tenant_id = ? AND collector_id = ?`,
+			lease.TenantID,
+			lease.CollectorID,
+		).Scan(
+			&snapshot.telemetryRevision,
+			&snapshot.bootEpoch,
+			&snapshot.streamID,
+			&snapshot.activeInstanceID,
+			&snapshot.lastSeenAt,
+		); err != nil {
+			t.Fatalf("read collector runtime: %v", err)
+		}
+		return snapshot
+	}
+	before := readRuntime()
+
+	displayName := "Renamed while disabled"
+	updated, err := store.UpdateDisplayName(
+		ctx,
+		lease.Scope,
+		lease.CollectorID,
+		collector.Version,
+		&displayName,
+		connectedAt.Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("UpdateDisplayName(): %v", err)
+	}
+	if updated.Version != collector.Version+1 ||
+		updated.AdministrativeState != AdministrativeStateDisabled ||
+		updated.DisplayName == nil ||
+		*updated.DisplayName != displayName {
+		t.Fatalf("updated administration = %#v", updated)
+	}
+	readBack, err := store.GetAdministration(
+		ctx,
+		lease.Scope,
+		lease.CollectorID,
+	)
+	if err != nil {
+		t.Fatalf("GetAdministration(): %v", err)
+	}
+	if readBack.Version != updated.Version ||
+		readBack.AdministrativeState != updated.AdministrativeState ||
+		readBack.DisplayName == nil ||
+		*readBack.DisplayName != displayName {
+		t.Fatalf("read-back administration = %#v", readBack)
+	}
+	after := readRuntime()
+	if after != before {
+		t.Fatalf(
+			"display-only CAS changed disabled runtime: before=%#v after=%#v",
+			before,
+			after,
+		)
+	}
+	if _, err := store.Get(
+		ctx,
+		lease.Scope,
+		lease.CollectorID,
+	); err == nil ||
+		!strings.Contains(err.Error(), "disabled collector has an active lease") {
+		t.Fatalf("Get(corrupt disabled runtime) error = %v", err)
+	}
+}
+
 func TestAdministrativeDisableWinsAtTelemetryRevisionCapacity(t *testing.T) {
 	t.Parallel()
 

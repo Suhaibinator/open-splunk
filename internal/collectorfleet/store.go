@@ -515,6 +515,97 @@ func (store *Store) Disconnect(
 	return true, nil
 }
 
+// GetAdministration returns only administrator-owned collector metadata.
+// Operational runtime and child telemetry are deliberately not loaded, so a
+// corrupt operational projection cannot prevent an administrator from
+// inspecting the version needed for a security-critical disable.
+func (store *Store) GetAdministration(
+	ctx context.Context,
+	scope Scope,
+	collectorID string,
+) (AdministrationSnapshot, error) {
+	if err := validateContext(ctx); err != nil {
+		return AdministrationSnapshot{}, err
+	}
+	scope, err := normalizeScope(scope)
+	if err != nil {
+		return AdministrationSnapshot{}, err
+	}
+	if !validIdentifier(collectorID) {
+		return AdministrationSnapshot{}, invalid("collector ID is not a canonical identifier")
+	}
+	var fleet fleetRecord
+	queryErr := store.orm.WithContext(ctx).
+		Select(
+			"tenant_id",
+			"collector_id",
+			"admin_version",
+			"display_name",
+			"administrative_state",
+		).
+		Where("tenant_id = ? AND collector_id = ?", scope.TenantID, collectorID).
+		Take(&fleet).Error
+	if errors.Is(queryErr, gorm.ErrRecordNotFound) {
+		return AdministrationSnapshot{}, control.ErrNotFound
+	}
+	if queryErr != nil {
+		return AdministrationSnapshot{}, mapContextError(
+			ctx,
+			"get collector administration",
+			queryErr,
+		)
+	}
+	return administrationSnapshotFromRecord(fleet, scope, collectorID)
+}
+
+// UpdateDisplayName replaces only the optional display name under
+// administrator optimistic locking. A nil display name clears it; the current
+// enabled/disabled state is preserved in the same transaction.
+func (store *Store) UpdateDisplayName(
+	ctx context.Context,
+	scope Scope,
+	collectorID string,
+	expectedVersion uint64,
+	displayName *string,
+	receivedAt time.Time,
+) (AdministrationSnapshot, error) {
+	return store.updateAdministration(
+		ctx,
+		scope,
+		collectorID,
+		expectedVersion,
+		administrationPatch{
+			updateDisplayName: true,
+			displayName:       displayName,
+		},
+		receivedAt,
+	)
+}
+
+// SetAdministrativeState replaces only enabled/disabled state under
+// administrator optimistic locking. Display metadata is preserved. Disabling
+// remains the authoritative lease fence even if runtime telemetry is corrupt.
+func (store *Store) SetAdministrativeState(
+	ctx context.Context,
+	scope Scope,
+	collectorID string,
+	expectedVersion uint64,
+	state AdministrativeState,
+	receivedAt time.Time,
+) (AdministrationSnapshot, error) {
+	return store.updateAdministration(
+		ctx,
+		scope,
+		collectorID,
+		expectedVersion,
+		administrationPatch{
+			updateState: true,
+			state:       state,
+		},
+		receivedAt,
+	)
+}
+
 // UpdateAdministration replaces display metadata and enabled/disabled state
 // under administrator optimistic locking. The disabled fleet state is the
 // authoritative lease fence and commits even when unrelated persisted runtime
@@ -527,6 +618,36 @@ func (store *Store) UpdateAdministration(
 	collectorID string,
 	expectedVersion uint64,
 	administration Administration,
+	receivedAt time.Time,
+) (AdministrationSnapshot, error) {
+	return store.updateAdministration(
+		ctx,
+		scope,
+		collectorID,
+		expectedVersion,
+		administrationPatch{
+			updateDisplayName: true,
+			displayName:       administration.DisplayName,
+			updateState:       true,
+			state:             administration.State,
+		},
+		receivedAt,
+	)
+}
+
+type administrationPatch struct {
+	updateDisplayName bool
+	displayName       *string
+	updateState       bool
+	state             AdministrativeState
+}
+
+func (store *Store) updateAdministration(
+	ctx context.Context,
+	scope Scope,
+	collectorID string,
+	expectedVersion uint64,
+	patch administrationPatch,
 	receivedAt time.Time,
 ) (result AdministrationSnapshot, returnedErr error) {
 	if err := validateContext(ctx); err != nil {
@@ -544,11 +665,31 @@ func (store *Store) UpdateAdministration(
 			"expected administrator version is outside the supported range",
 		)
 	}
-	administration, err = normalizeAdministration(administration)
-	if err != nil {
-		return AdministrationSnapshot{}, err
+	if !patch.updateDisplayName && !patch.updateState {
+		return AdministrationSnapshot{}, invalid(
+			"collector administration patch is empty",
+		)
 	}
-	receivedAt, err = normalizeTimestamp("administrator update receive time", receivedAt)
+	var normalizedState AdministrativeState
+	if patch.updateState {
+		normalizedState, err = normalizeAdministrativeState(patch.state)
+		if err != nil {
+			return AdministrationSnapshot{}, err
+		}
+	}
+	var normalizedDisplayName *string
+	if patch.updateDisplayName {
+		normalizedDisplayName, err = normalizeAdministrativeDisplayName(
+			patch.displayName,
+		)
+		if err != nil {
+			return AdministrationSnapshot{}, err
+		}
+	}
+	receivedAt, err = normalizeTimestamp(
+		"administrator update receive time",
+		receivedAt,
+	)
 	if err != nil {
 		return AdministrationSnapshot{}, err
 	}
@@ -565,6 +706,14 @@ func (store *Store) UpdateAdministration(
 
 	var fleet fleetRecord
 	queryErr := tx.
+		Select(
+			"tenant_id",
+			"collector_id",
+			"admin_version",
+			"display_name",
+			"administrative_state",
+			"updated_at_unix_micro",
+		).
 		Where("tenant_id = ? AND collector_id = ?", scope.TenantID, collectorID).
 		Take(&fleet).Error
 	if errors.Is(queryErr, gorm.ErrRecordNotFound) {
@@ -591,9 +740,18 @@ func (store *Store) UpdateAdministration(
 	if uint64(fleet.AdminVersion) != expectedVersion {
 		return AdministrationSnapshot{}, control.ErrVersionConflict
 	}
+	resultState := fleet.AdministrativeState
+	if patch.updateState {
+		resultState = normalizedState
+	}
+	resultDisplayName := cloneString(fleet.DisplayName)
+	if patch.updateDisplayName {
+		resultDisplayName = normalizedDisplayName
+	}
 	terminalDisable := fleet.AdminVersion == math.MaxInt64 &&
 		fleet.AdministrativeState == AdministrativeStateEnabled &&
-		administration.State == AdministrativeStateDisabled
+		patch.updateState &&
+		normalizedState == AdministrativeStateDisabled
 	if fleet.AdminVersion == math.MaxInt64 && !terminalDisable {
 		return AdministrationSnapshot{}, control.ErrCapacityExceeded
 	}
@@ -601,7 +759,7 @@ func (store *Store) UpdateAdministration(
 		receivedAt = time.UnixMicro(fleet.UpdatedAtUnixMicro).UTC()
 	}
 	if fleet.AdministrativeState == AdministrativeStateDisabled &&
-		administration.State == AdministrativeStateEnabled {
+		resultState == AdministrativeStateEnabled {
 		if err := requireInactiveRuntimeLease(
 			tx,
 			scope,
@@ -629,14 +787,15 @@ func (store *Store) UpdateAdministration(
 	}
 	updateValues := map[string]any{
 		"admin_version":         nextAdminVersion,
-		"administrative_state":  administration.State,
 		"updated_at_unix_micro": receivedAt.UnixMicro(),
 	}
-	resultDisplayName := administration.DisplayName
 	if terminalDisable {
-		resultDisplayName = fleet.DisplayName
-	} else {
-		updateValues["display_name"] = administration.DisplayName
+		resultDisplayName = cloneString(fleet.DisplayName)
+	} else if patch.updateDisplayName {
+		updateValues["display_name"] = normalizedDisplayName
+	}
+	if patch.updateState {
+		updateValues["administrative_state"] = normalizedState
 	}
 	update := fleetUpdate.Updates(updateValues)
 	if update.Error != nil {
@@ -649,7 +808,7 @@ func (store *Store) UpdateAdministration(
 	if update.RowsAffected != 1 {
 		return AdministrationSnapshot{}, control.ErrVersionConflict
 	}
-	if administration.State == AdministrativeStateDisabled {
+	if patch.updateState && resultState == AdministrativeStateDisabled {
 		bestEffortInvalidateRuntimeLease(tx, scope, collectorID, receivedAt)
 	}
 	if err := tx.Commit().Error; err != nil {
@@ -665,7 +824,45 @@ func (store *Store) UpdateAdministration(
 		CollectorID:         collectorID,
 		Version:             uint64(nextAdminVersion),
 		DisplayName:         cloneString(resultDisplayName),
-		AdministrativeState: administration.State,
+		AdministrativeState: resultState,
+	}, nil
+}
+
+func administrationSnapshotFromRecord(
+	fleet fleetRecord,
+	scope Scope,
+	collectorID string,
+) (AdministrationSnapshot, error) {
+	if fleet.TenantID != scope.TenantID ||
+		fleet.CollectorID != collectorID {
+		return AdministrationSnapshot{}, errors.New(
+			"invalid collector administration identity in control-plane database",
+		)
+	}
+	if fleet.AdminVersion < 1 {
+		return AdministrationSnapshot{}, errors.New(
+			"invalid collector administration version in control-plane database",
+		)
+	}
+	state, err := normalizeAdministrativeState(fleet.AdministrativeState)
+	if err != nil {
+		return AdministrationSnapshot{}, errors.New(
+			"invalid collector administration state in control-plane database",
+		)
+	}
+	displayName, err := normalizeAdministrativeDisplayName(fleet.DisplayName)
+	if err != nil ||
+		(displayName != nil && *displayName != *fleet.DisplayName) {
+		return AdministrationSnapshot{}, errors.New(
+			"invalid collector administration display name in control-plane database",
+		)
+	}
+	return AdministrationSnapshot{
+		TenantID:            fleet.TenantID,
+		CollectorID:         fleet.CollectorID,
+		Version:             uint64(fleet.AdminVersion),
+		DisplayName:         displayName,
+		AdministrativeState: state,
 	}, nil
 }
 

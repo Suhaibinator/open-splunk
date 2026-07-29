@@ -52,9 +52,10 @@ type Administration struct {
 	State       AdministrativeState
 }
 
-// AdministrationSnapshot is the detached result of one administrator CAS.
-// It intentionally excludes operational telemetry so unrelated telemetry or
-// child-snapshot corruption cannot roll back a security-critical disable.
+// AdministrationSnapshot is a detached administrator-owned projection
+// returned by admin-only reads and mutations. It intentionally excludes
+// operational telemetry so unrelated telemetry or child-snapshot corruption
+// cannot prevent or roll back a security-critical disable.
 type AdministrationSnapshot struct {
 	TenantID            string
 	CollectorID         string
