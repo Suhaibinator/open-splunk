@@ -174,6 +174,76 @@ func TestBeginIndexDataDeletionSupportsFinalSQLiteVersion(t *testing.T) {
 	}
 }
 
+func TestBeginIndexDataDeletionClassifiesCompletedOperationIDCollision(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	completedOperation := createIndexDeletionOperation(
+		t,
+		db,
+		"completed-operation-id",
+	)
+	completedAttempt, err := db.EnsureIndexDeletionMutationAttempt(
+		ctx,
+		completedOperation.ID,
+		IndexDeletionMutationTarget{
+			TenantID:  "tenant",
+			Database:  "open_splunk",
+			Table:     "events",
+			TableUUID: "81234567-89ab-4cde-8fab-0123456789ab",
+		},
+	)
+	if err != nil {
+		t.Fatalf("EnsureIndexDeletionMutationAttempt(): %v", err)
+	}
+	if _, err := db.CompleteIndexDataDeletion(
+		ctx,
+		completedAttempt,
+	); err != nil {
+		t.Fatalf("CompleteIndexDataDeletion(): %v", err)
+	}
+
+	created, err := db.CreateIndex(ctx, enabledIndex("operation-id-collision"))
+	if err != nil {
+		t.Fatalf("CreateIndex(): %v", err)
+	}
+	archived, err := db.SetIndexState(
+		ctx,
+		created.ID,
+		created.Version,
+		IndexStateArchived,
+	)
+	if err != nil {
+		t.Fatalf("archive index: %v", err)
+	}
+	if _, err := db.beginIndexDataDeletion(
+		ctx,
+		completedOperation.ID,
+		archived.ID,
+		archived.Version,
+		archived.Definition.Name,
+	); !errors.Is(err, errIndexDeletionOperationIDCollision) {
+		t.Fatalf(
+			"completed operation ID collision error = %v, want %v",
+			err,
+			errIndexDeletionOperationIDCollision,
+		)
+	}
+
+	unchanged, err := db.GetIndex(ctx, archived.ID)
+	if err != nil {
+		t.Fatalf("GetIndex(after collision): %v", err)
+	}
+	if unchanged != archived {
+		t.Fatalf(
+			"completed ID collision changed index: got %#v, want %#v",
+			unchanged,
+			archived,
+		)
+	}
+}
+
 func TestBeginIndexDataDeletionValidatesExactArchivedIntent(t *testing.T) {
 	t.Parallel()
 

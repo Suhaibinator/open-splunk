@@ -80,3 +80,28 @@ type indexDeletionMutationAttemptRecord struct {
 func (indexDeletionMutationAttemptRecord) TableName() string {
 	return "index_deletion_mutation_attempts"
 }
+
+// indexDataDeletionCompletionRecord is the immutable terminal audit introduced
+// by 0019_index_data_deletion_completions.sql. It copies every operation and
+// mutation-attempt field needed to reconstruct the native request after the
+// outstanding rows have been consumed.
+type indexDataDeletionCompletionRecord struct {
+	DeletionOperationID         string `gorm:"column:deletion_operation_id;type:text;primaryKey;not null"`
+	CorrelationID               string `gorm:"column:correlation_id;type:text;not null;unique"`
+	IndexID                     string `gorm:"column:index_id;type:text;not null;unique"`
+	IndexName                   string `gorm:"column:index_name;type:text;not null"`
+	ArchivedIndexVersion        int64  `gorm:"column:archived_index_version;type:integer;not null"`
+	DeletingIndexVersion        int64  `gorm:"column:deleting_index_version;type:integer;not null"`
+	TenantID                    string `gorm:"column:tenant_id;type:text;not null"`
+	ClickHouseDatabase          string `gorm:"column:clickhouse_database;type:text;not null"`
+	ClickHouseTable             string `gorm:"column:clickhouse_table;type:text;not null"`
+	ClickHouseTableUUID         string `gorm:"column:clickhouse_table_uuid;type:text;not null"`
+	ProtocolVersion             int64  `gorm:"column:protocol_version;type:integer;not null"`
+	OperationCreatedAtUnixMicro int64  `gorm:"column:operation_created_at_unix_micro;type:integer;not null"`
+	AttemptCreatedAtUnixMicro   int64  `gorm:"column:attempt_created_at_unix_micro;type:integer;not null"`
+	CompletedAtUnixMicro        int64  `gorm:"column:completed_at_unix_micro;type:integer;not null"`
+}
+
+func (indexDataDeletionCompletionRecord) TableName() string {
+	return "index_data_deletion_completions"
+}

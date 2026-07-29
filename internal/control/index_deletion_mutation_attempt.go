@@ -25,6 +25,10 @@ var errIndexDeletionMutationCorrelationCollision = errors.New(
 	"index deletion mutation correlation ID collision",
 )
 
+var errInvalidIndexDeletionMutationAttempt = errors.New(
+	"invalid index deletion mutation attempt in control-plane database",
+)
+
 // IndexDeletionMutationTarget binds a durable deletion attempt to the exact
 // tenant and physical ClickHouse table generation resolved before submission.
 type IndexDeletionMutationTarget struct {
@@ -195,16 +199,11 @@ func (db *DB) ensureIndexDeletionMutationAttempt(
 	}
 	create := tx.Create(&record)
 	if create.Error != nil {
-		var collision indexDeletionMutationAttemptRecord
-		collisionResult := tx.
-			Select("correlation_id").
-			Where("correlation_id = ?", correlationID).
-			Take(&collision)
-		if collisionResult.Error == nil {
-			return IndexDeletionMutationAttempt{},
-				errIndexDeletionMutationCorrelationCollision
-		}
-		if !errors.Is(collisionResult.Error, gorm.ErrRecordNotFound) {
+		collision, collisionErr := indexDeletionMutationCorrelationIDInUse(
+			tx,
+			correlationID,
+		)
+		if collisionErr != nil {
 			return IndexDeletionMutationAttempt{}, errors.Join(
 				fmt.Errorf(
 					"create index deletion mutation attempt: %w",
@@ -212,9 +211,13 @@ func (db *DB) ensureIndexDeletionMutationAttempt(
 				),
 				fmt.Errorf(
 					"check mutation correlation ID collision: %w",
-					collisionResult.Error,
+					collisionErr,
 				),
 			)
+		}
+		if collision {
+			return IndexDeletionMutationAttempt{},
+				errIndexDeletionMutationCorrelationCollision
 		}
 		return IndexDeletionMutationAttempt{}, fmt.Errorf(
 			"create index deletion mutation attempt: %w",
@@ -239,6 +242,27 @@ func (db *DB) ensureIndexDeletionMutationAttempt(
 		)
 	}
 	return attempt, nil
+}
+
+func indexDeletionMutationCorrelationIDInUse(
+	database *gorm.DB,
+	correlationID string,
+) (bool, error) {
+	return queryIndexDeletionIdentityInUse(
+		database,
+		`
+			SELECT EXISTS (
+				SELECT 1
+				FROM index_deletion_mutation_attempts
+				WHERE correlation_id = ?
+				UNION ALL
+				SELECT 1
+				FROM index_data_deletion_completions
+				WHERE correlation_id = ?
+			)`,
+		correlationID,
+		correlationID,
+	)
 }
 
 // GetIndexDeletionMutationAttempt returns the immutable attempt for one
@@ -321,6 +345,21 @@ func validatedIndexDeletionMutationAttempt(
 	database *gorm.DB,
 	record indexDeletionMutationAttemptRecord,
 ) (IndexDeletionMutationAttempt, error) {
+	attempt, _, err := validatedIndexDeletionMutationAttemptWithOperation(
+		database,
+		record,
+	)
+	return attempt, err
+}
+
+func validatedIndexDeletionMutationAttemptWithOperation(
+	database *gorm.DB,
+	record indexDeletionMutationAttemptRecord,
+) (
+	IndexDeletionMutationAttempt,
+	IndexDeletionOperation,
+	error,
+) {
 	var operationRecord indexDeletionOperationRecord
 	result := database.
 		Where(
@@ -330,19 +369,35 @@ func validatedIndexDeletionMutationAttempt(
 		Take(&operationRecord)
 	if result.Error != nil {
 		if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			return IndexDeletionMutationAttempt{}, result.Error
+			return IndexDeletionMutationAttempt{},
+				IndexDeletionOperation{},
+				result.Error
 		}
-		return IndexDeletionMutationAttempt{}, errors.New(
-			"invalid index deletion mutation attempt in control-plane database",
-		)
+		return IndexDeletionMutationAttempt{},
+			IndexDeletionOperation{},
+			indexDeletionMutationAttemptRelationshipError(
+				database,
+				record.DeletionOperationID,
+			)
 	}
 	operation, err := validatedIndexDeletionOperation(database, operationRecord)
 	if err != nil {
-		return IndexDeletionMutationAttempt{}, errors.New(
-			"invalid index deletion mutation attempt in control-plane database",
-		)
+		if !errors.Is(err, errInvalidIndexDeletionOperation) {
+			return IndexDeletionMutationAttempt{},
+				IndexDeletionOperation{},
+				err
+		}
+		return IndexDeletionMutationAttempt{},
+			IndexDeletionOperation{},
+			invalidIndexDeletionMutationAttempt()
 	}
-	return indexDeletionMutationAttemptForOperation(record, operation)
+	attempt, err := indexDeletionMutationAttemptForOperation(record, operation)
+	if err != nil {
+		return IndexDeletionMutationAttempt{},
+			IndexDeletionOperation{},
+			err
+	}
+	return attempt, operation, nil
 }
 
 func indexDeletionMutationAttemptForOperation(
@@ -353,9 +408,8 @@ func indexDeletionMutationAttemptForOperation(
 	if err != nil ||
 		attempt.DeletionOperationID != operation.ID ||
 		attempt.CreatedAt.Before(operation.CreatedAt) {
-		return IndexDeletionMutationAttempt{}, errors.New(
-			"invalid index deletion mutation attempt in control-plane database",
-		)
+		return IndexDeletionMutationAttempt{},
+			invalidIndexDeletionMutationAttempt()
 	}
 	attempt.IndexID = operation.IndexID
 	attempt.IndexName = operation.IndexName
@@ -378,9 +432,8 @@ func indexDeletionMutationAttemptFromRecord(
 			int64(IndexDeletionMutationProtocolVersion) ||
 		record.CreatedAtUnixMicro < 1 ||
 		record.CreatedAtUnixMicro > maximumControlTimestampUnixMicro {
-		return IndexDeletionMutationAttempt{}, errors.New(
-			"invalid index deletion mutation attempt in control-plane database",
-		)
+		return IndexDeletionMutationAttempt{},
+			invalidIndexDeletionMutationAttempt()
 	}
 	return IndexDeletionMutationAttempt{
 		CorrelationID:       record.CorrelationID,
@@ -449,4 +502,25 @@ func validClickHousePhysicalIdentifier(value string) bool {
 		}
 	}
 	return true
+}
+
+func invalidIndexDeletionMutationAttempt() error {
+	return errInvalidIndexDeletionMutationAttempt
+}
+
+func indexDeletionMutationAttemptRelationshipError(
+	database *gorm.DB,
+	operationID string,
+) error {
+	_, completed, err := takeIndexDataDeletionCompletion(
+		database,
+		operationID,
+	)
+	if err != nil {
+		return err
+	}
+	if completed {
+		return ErrNotFound
+	}
+	return errInvalidIndexDeletionMutationAttempt
 }

@@ -12,7 +12,14 @@ import (
 	"gorm.io/gorm"
 )
 
-var errIndexDeletionOperationIDCollision = errors.New("index deletion operation ID collision")
+var (
+	errIndexDeletionOperationIDCollision = errors.New(
+		"index deletion operation ID collision",
+	)
+	errInvalidIndexDeletionOperation = errors.New(
+		"invalid index deletion operation in control-plane database",
+	)
+)
 
 // IndexDeletionOperation is the durable control-plane intent for one physical
 // index deletion. Every row is outstanding coordinator work; a future terminal
@@ -205,22 +212,18 @@ func (db *DB) beginIndexDataDeletion(
 	}
 	create := tx.Create(&record)
 	if create.Error != nil {
-		var collision indexDeletionOperationRecord
-		collisionResult := tx.
-			Select("deletion_operation_id").
-			Where("deletion_operation_id = ?", operationID).
-			Take(&collision)
-		if collisionResult.Error == nil {
-			return IndexDeletionOperation{}, errIndexDeletionOperationIDCollision
-		}
-		if !errors.Is(collisionResult.Error, gorm.ErrRecordNotFound) {
+		collision, collisionErr := indexDeletionOperationIDInUse(tx, operationID)
+		if collisionErr != nil {
 			return IndexDeletionOperation{}, errors.Join(
 				fmt.Errorf("create index deletion operation: %w", create.Error),
 				fmt.Errorf(
 					"check index deletion operation ID collision: %w",
-					collisionResult.Error,
+					collisionErr,
 				),
 			)
+		}
+		if collision {
+			return IndexDeletionOperation{}, errIndexDeletionOperationIDCollision
 		}
 		return IndexDeletionOperation{}, fmt.Errorf(
 			"create index deletion operation: %w",
@@ -241,6 +244,27 @@ func (db *DB) beginIndexDataDeletion(
 		)
 	}
 	return operation, nil
+}
+
+func indexDeletionOperationIDInUse(
+	database *gorm.DB,
+	operationID string,
+) (bool, error) {
+	return queryIndexDeletionIdentityInUse(
+		database,
+		`
+			SELECT EXISTS (
+				SELECT 1
+				FROM index_deletion_operations
+				WHERE deletion_operation_id = ?
+				UNION ALL
+				SELECT 1
+				FROM index_data_deletion_completions
+				WHERE deletion_operation_id = ?
+			)`,
+		operationID,
+		operationID,
+	)
 }
 
 func takeIndexDeletionOperationByIndex(
@@ -320,28 +344,34 @@ func (db *DB) GetIndexDeletionOperation(
 func (db *DB) NextIndexDeletionOperation(
 	ctx context.Context,
 ) (IndexDeletionOperation, error) {
-	var record indexDeletionOperationRecord
-	result := db.orm.WithContext(ctx).
-		Order("created_at_unix_micro").
-		Order("deletion_operation_id").
-		Take(&record)
-	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		return IndexDeletionOperation{}, ErrNotFound
+	database := db.orm.WithContext(ctx)
+	for {
+		var record indexDeletionOperationRecord
+		result := database.
+			Order("created_at_unix_micro").
+			Order("deletion_operation_id").
+			Take(&record)
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return IndexDeletionOperation{}, ErrNotFound
+		}
+		if result.Error != nil {
+			return IndexDeletionOperation{}, fmt.Errorf(
+				"get next index deletion operation: %w",
+				result.Error,
+			)
+		}
+		operation, err := validatedIndexDeletionOperation(database, record)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return IndexDeletionOperation{}, fmt.Errorf(
+				"get next index deletion operation: %w",
+				err,
+			)
+		}
+		return operation, nil
 	}
-	if result.Error != nil {
-		return IndexDeletionOperation{}, fmt.Errorf(
-			"get next index deletion operation: %w",
-			result.Error,
-		)
-	}
-	operation, err := validatedIndexDeletionOperation(db.orm.WithContext(ctx), record)
-	if err != nil {
-		return IndexDeletionOperation{}, fmt.Errorf(
-			"get next index deletion operation: %w",
-			err,
-		)
-	}
-	return operation, nil
 }
 
 func validatedIndexDeletionOperation(
@@ -360,8 +390,9 @@ func validatedIndexDeletionOperation(
 		if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return IndexDeletionOperation{}, result.Error
 		}
-		return IndexDeletionOperation{}, errors.New(
-			"invalid index deletion operation in control-plane database",
+		return IndexDeletionOperation{}, indexDeletionOperationRelationshipError(
+			database,
+			operation.ID,
 		)
 	}
 	current, err := indexFromRecord(currentRecord)
@@ -371,8 +402,9 @@ func validatedIndexDeletionOperation(
 		current.Version != operation.DeletingVersion ||
 		current.State != IndexStateDeleting ||
 		currentRecord.UpdatedAtUnixMicro != record.CreatedAtUnixMicro {
-		return IndexDeletionOperation{}, errors.New(
-			"invalid index deletion operation in control-plane database",
+		return IndexDeletionOperation{}, indexDeletionOperationRelationshipError(
+			database,
+			operation.ID,
 		)
 	}
 	return operation, nil
@@ -389,9 +421,7 @@ func indexDeletionOperationFromRecord(
 		record.ArchivedIndexVersion < 1 ||
 		record.ArchivedIndexVersion == math.MaxInt64 ||
 		record.CreatedAtUnixMicro <= 0 {
-		return IndexDeletionOperation{}, errors.New(
-			"invalid index deletion operation in control-plane database",
-		)
+		return IndexDeletionOperation{}, errInvalidIndexDeletionOperation
 	}
 	return IndexDeletionOperation{
 		ID:              record.DeletionOperationID,
@@ -401,6 +431,23 @@ func indexDeletionOperationFromRecord(
 		DeletingVersion: uint64(record.ArchivedIndexVersion + 1),
 		CreatedAt:       time.UnixMicro(record.CreatedAtUnixMicro).UTC(),
 	}, nil
+}
+
+func indexDeletionOperationRelationshipError(
+	database *gorm.DB,
+	operationID string,
+) error {
+	_, completed, err := takeIndexDataDeletionCompletion(
+		database,
+		operationID,
+	)
+	if err != nil {
+		return err
+	}
+	if completed {
+		return ErrNotFound
+	}
+	return errInvalidIndexDeletionOperation
 }
 
 func validateIndexDataDeletionVersion(version uint64) error {

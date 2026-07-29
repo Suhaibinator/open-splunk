@@ -152,6 +152,67 @@ func TestEnsureIndexDeletionMutationAttemptConvergesConcurrently(t *testing.T) {
 	}
 }
 
+func TestEnsureIndexDeletionMutationAttemptClassifiesCompletedCorrelationCollision(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	completedOperation := createIndexDeletionOperation(
+		t,
+		db,
+		"completed-correlation-id",
+	)
+	target := IndexDeletionMutationTarget{
+		TenantID:  "tenant",
+		Database:  "open_splunk",
+		Table:     "events",
+		TableUUID: "91234567-89ab-4cde-8fab-0123456789ab",
+	}
+	completedAttempt, err := db.EnsureIndexDeletionMutationAttempt(
+		ctx,
+		completedOperation.ID,
+		target,
+	)
+	if err != nil {
+		t.Fatalf("EnsureIndexDeletionMutationAttempt(): %v", err)
+	}
+	if _, err := db.CompleteIndexDataDeletion(
+		ctx,
+		completedAttempt,
+	); err != nil {
+		t.Fatalf("CompleteIndexDataDeletion(): %v", err)
+	}
+
+	outstandingOperation := createIndexDeletionOperation(
+		t,
+		db,
+		"correlation-id-collision",
+	)
+	if _, err := db.ensureIndexDeletionMutationAttempt(
+		ctx,
+		outstandingOperation.ID,
+		completedAttempt.CorrelationID,
+		target,
+	); !errors.Is(err, errIndexDeletionMutationCorrelationCollision) {
+		t.Fatalf(
+			"completed correlation collision error = %v, want %v",
+			err,
+			errIndexDeletionMutationCorrelationCollision,
+		)
+	}
+	if _, err := db.GetIndexDeletionMutationAttempt(
+		ctx,
+		outstandingOperation.ID,
+	); !errors.Is(err, ErrNotFound) {
+		t.Fatalf(
+			"GetIndexDeletionMutationAttempt(after collision) error = %v, want ErrNotFound",
+			err,
+		)
+	}
+}
+
 func TestIndexDeletionMutationAttemptValidatesInputsAndParent(t *testing.T) {
 	t.Parallel()
 
