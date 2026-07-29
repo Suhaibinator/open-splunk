@@ -7,7 +7,122 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: durable GORM physical-deletion admission
+## Latest checkpoint: durable native ClickHouse deletion mutations
+
+Date: 2026-07-29
+
+Committed implementation checkpoint:
+
+- `d98a741` — immutable GORM mutation attempts, native ClickHouse
+  reconciliation, asynchronous scoped deletion, and frozen physical proof.
+
+This test-first unit completes the outcome-ambiguous ClickHouse mutation
+primitive without enabling the `DELETE_DATA` route or prematurely completing
+the outstanding control-plane operation:
+
+1. SQLite migration 0018 and the explicit GORM
+   `indexDeletionMutationAttemptRecord` add exactly one immutable child row per
+   outstanding deletion operation. It persists a stable correlation ID,
+   configured deployment tenant, ClickHouse database/table and canonical
+   nonzero table UUID, protocol version, and creation time before any native
+   side effect. ClickHouse state is not persisted through GORM.
+2. `EnsureIndexDeletionMutationAttempt` is exactly idempotent sequentially,
+   concurrently, and across database restart. It validates the deleting parent
+   snapshot, reuses the shared bounded tenant and index-name grammars, and
+   returns `ErrDependencyConflict` on any durable-target drift.
+3. SQL constraints and triggers reject malformed byte lengths, embedded NULs,
+   unsupported protocol versions, nil/noncanonical UUIDs, invalid parents,
+   direct update/delete, and `INSERT OR REPLACE` identity collisions. The
+   child delete guard permits only a future parent-owned cascade after the
+   parent has been removed.
+4. The frozen native Store resolves the configured `MergeTree` generation
+   through `system.tables` only after the durable outbox is drained.
+   `AdvanceIndexDataDeletion` validates the exact durable request, reconciles
+   correlated `system.mutations` rows, and submits at most one asynchronous
+   heavyweight `ALTER DELETE` with `mutations_sync=0`.
+5. The mutation marker and query ID share a domain-separated SHA-256 digest of
+   length-prefixed operation, correlation, tenant, index, database, table,
+   table UUID, and protocol fields. Correlated command shape is checked, and an
+   observed newer mutation block resolves an outcome-ambiguous `Exec` result.
+6. Pending mutations return immediately so the global write freeze is
+   released while ClickHouse rewrites parts. `IndexDataDeletionStatus` polls
+   read-only progress outside the freeze. When no mutation is pending, the
+   coordinator must reacquire the freeze and drain before advancing.
+7. Missing or pruned mutation history never proves completion. The terminal
+   physical candidate is one bounded, key-aligned query that jointly reads the
+   current table UUID/engine and tests for a row under the exact
+   `(tenant_id, index_name)` key. Zero is accepted only while Store writers and
+   outbox replay remain frozen.
+8. The Store contract now states the necessary DDL ownership boundary:
+   migrations run before Store construction, and the configured table name
+   remains bound to that generation until shutdown. UUID checks fail closed on
+   observable drift; privileged out-of-band rename/drop/exchange/replace DDL
+   is forbidden because ClickHouse `ALTER TABLE` is name-targeted.
+9. The current global index catalog belongs to one configured deployment
+   tenant. Physical deletion is tenant/index scoped and intentionally preserves
+   foreign-tenant rows. A future multi-tenant catalog must first tenant-scope
+   indexes, tombstones, and deletion operations.
+
+Validation on implementation commit `d98a741`:
+
+```sh
+go test ./... -count=1
+go test ./internal/control ./internal/clickhouse ./internal/indexname -count=10
+go test -race ./internal/control ./internal/clickhouse ./internal/indexname -count=1
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse \
+  -run TestStoreAgainstClickHouse/durable_physical_deletion_mutation_is_scoped_and_restartable \
+  -count=1 -v
+git show --check --oneline d98a741
+```
+
+The exact tree passed the full suite, ten repeated control/native/name-grammar
+runs, focused race detector, vet, build, pinned repository-wide lint with
+`0 issues`, and the digest-pinned ClickHouse 26.3.17.4 integration. The live
+test proves table-UUID binding, restart persistence, durable marker recovery,
+multi-partition deletion, foreign-tenant/index preservation, and that the
+operation remains outstanding until a later terminal transaction.
+
+Independent SQLite, ClickHouse, and crash-schedule adversaries drove fixes for
+an embedded-NUL UUID CHECK bypass, request-scope marker aliasing, separate
+UUID/zero-proof round trips, and an undocumented table-swap assumption. The
+final re-reviews are clean under the explicit single configured tenant, single
+Store writer/mutation owner, and exclusive table-DDL contract. The official
+and pinned `system.mutations.parts_to_do` type is `Int64`, matching the native
+scan.
+
+Remaining `DELETE_DATA` work:
+
+1. add the production coordinator that serially discovers the oldest
+   operation, resolves/ensures its immutable attempt, polls native progress,
+   and reacquires the frozen drain only when advancement is ready;
+2. add one terminal GORM/SQLite transaction that consumes the outstanding
+   operation and creates the immutable tombstone/audit state only after a
+   callback-scoped frozen zero proof;
+3. crash-test every boundary: attempt-before-ALTER, ambiguous submission,
+   pending restart, completed-history loss, zero-proof-before-terminal commit,
+   terminal commit ambiguity, shutdown, and retry;
+4. enforce the documented DDL/principal lifecycle in production startup and
+   deployment configuration; and
+5. enable the authenticated `DELETE_DATA` handler only after the coordinator
+   and terminal transaction are proven.
+
+Explicit pause point:
+
+1. Durable mutation identity and native ClickHouse reconciliation are complete,
+   committed, and pushed.
+2. The operation intentionally remains outstanding after physical zero proof;
+   no terminal tombstone is written by this unit.
+3. The route still returns its explicit disabled response.
+4. Do not begin the runtime coordinator until the user gives further
+   instructions.
+
+## Previous checkpoint: durable GORM physical-deletion admission
 
 Date: 2026-07-29
 

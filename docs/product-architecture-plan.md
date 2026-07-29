@@ -511,12 +511,46 @@ live-leased rows—and succeeds only after proving the count and bytes are both
 zero. The production runtime's single Store owner is part of that fence
 contract; every writer for the physical events table must use it.
 
-These primitives are necessary but do not themselves enable physical
-deletion. `DELETE_DATA` must continue to fail explicitly until the runtime
-coordinator composes durable operation recovery with the Store fence and
-drain, reconciles outcome-ambiguous native ClickHouse mutations, verifies
-physical removal, and only then performs terminal tombstoning. ClickHouse
-persistence and mutation execution do not use GORM.
+Before the first outcome-ambiguous ClickHouse `ALTER`, migration 0018 and an
+explicit GORM model now persist exactly one immutable mutation attempt beneath
+the outstanding deletion operation. It binds a stable correlation ID and
+protocol version to the deployment tenant, ClickHouse database/table, and the
+table's canonical nonzero UUID. Exact retries converge on that row across
+concurrency and restart; any target drift fails closed. SQLite stores only the
+durable intent and physical generation. Live mutation progress remains native
+ClickHouse state and is never mirrored through GORM.
+
+The native Store can resolve the physical target only after the frozen outbox
+drain, reconcile the full-request SHA-256 correlation marker against
+`system.mutations`, submit at most one asynchronous heavyweight `ALTER DELETE`,
+and poll pending progress without repeatedly freezing writers. Missing
+mutation history is never completion evidence. A terminal candidate requires a
+new frozen drain followed by one key-aligned query that both resolves the
+current UUID/engine and proves no `(tenant_id, index_name)` row exists. Only the
+initial `MergeTree` engine is supported. ClickHouse persistence, mutation
+execution, and reconciliation remain native and do not use GORM.
+
+This initial catalog belongs to one configured deployment tenant. A physical
+deletion targets that tenant plus the canonical index name and deliberately
+preserves rows under every other tenant key. Before supporting several tenant
+catalogs in one process, indexes, tombstones, and deletion operations must
+become tenant-scoped control-plane entities; the current global catalog must
+not be treated as a multi-tenant deletion model.
+
+The configured ClickHouse database/table name must remain exclusively bound to
+one physical table generation from Store construction through Store shutdown.
+All migrations and rename/drop/exchange/replace DDL run before the Store opens,
+and the runtime principal should be limited to the required data, mutation,
+and system-table privileges. UUID checks detect observable drift, but
+ClickHouse targets `ALTER TABLE` by name and cannot atomically fence privileged
+out-of-band DDL.
+
+These primitives still do not enable the route. `DELETE_DATA` must continue to
+fail explicitly until the runtime coordinator composes oldest-operation
+recovery, durable-attempt creation, mutation polling, and frozen zero proof;
+atomically replaces the outstanding operation with terminal tombstone/audit
+state only after that proof; and crash-tests every boundary. The authenticated
+HTTP route is enabled last.
 
 ## ClickHouse event model
 
