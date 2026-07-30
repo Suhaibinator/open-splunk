@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -307,7 +308,7 @@ func (s *Store) indexDataDeletionTarget(
 		"table":    s.table,
 	}
 	var tableUUID, engine string
-	err := s.connection.queryRow(
+	err := s.indexDataDeletionConnection().queryRow(
 		ctx,
 		`SELECT toString(uuid), engine
 FROM system.tables
@@ -337,7 +338,7 @@ func (s *Store) indexDataDeletionReconciliation(
 	}
 	var tableUUID, engine string
 	var summary indexDataDeletionMutationSummary
-	err := s.connection.queryRow(
+	err := s.indexDataDeletionConnection().queryRow(
 		ctx,
 		`SELECT
     any(toString(target.uuid)),
@@ -535,7 +536,7 @@ WHERE target.database = {database:String}
 LIMIT 1`
 	var tableUUID, engine string
 	var count uint64
-	if err := s.connection.queryRow(
+	if err := s.indexDataDeletionConnection().queryRow(
 		ctx,
 		query,
 		parameters,
@@ -585,13 +586,20 @@ func (s *Store) submitIndexDataDeletionMutation(
 	settings := clickhousedriver.Settings{
 		"mutations_sync": uint8(0),
 	}
-	return s.connection.exec(
+	return s.indexDataDeletionConnection().exec(
 		ctx,
 		query,
 		settings,
 		parameters,
 		indexDataDeletionQueryID(request),
 	)
+}
+
+func (s *Store) indexDataDeletionConnection() storeConnection {
+	if s.deletionConnection != nil {
+		return s.deletionConnection
+	}
+	return s.connection
 }
 
 func progressForIndexDataDeletionSummary(
@@ -624,7 +632,8 @@ func validateIndexDataDeletionRequest(
 	if request.TenantID == "" ||
 		len(request.TenantID) > maximumDeletionTenantBytes ||
 		!utf8.ValidString(request.TenantID) ||
-		strings.IndexByte(request.TenantID, 0) >= 0 {
+		strings.TrimSpace(request.TenantID) != request.TenantID ||
+		strings.ContainsFunc(request.TenantID, unicode.IsControl) {
 		return errors.New(
 			"advance ClickHouse index data deletion: invalid tenant ID",
 		)

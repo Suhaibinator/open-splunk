@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const pinnedClickHouseImage = "clickhouse/clickhouse-server:26.3.17.4"
+const pinnedClickHouseImage = "clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49"
 
 var migrationNamePattern = regexp.MustCompile(`^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$`)
 
@@ -129,7 +129,16 @@ func TestComposeIsPinnedAndLoopbackOnly(t *testing.T) {
 		"image: " + pinnedClickHouseImage,
 		"127.0.0.1:${OPEN_SPLUNK_CLICKHOUSE_HTTP_PORT:-8123}:8123",
 		"127.0.0.1:${OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT:-9000}:9000",
-		"OPEN_SPLUNK_CLICKHOUSE_PASSWORD:?",
+		"OPEN_SPLUNK_CLICKHOUSE_BOOTSTRAP_PASSWORD:?",
+		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD:?",
+		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD:?",
+		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD:?",
+		"./clickhouse-init.sh:/docker-entrypoint-initdb.d/0100_open_splunk.sh:ro",
+		"../migrations/clickhouse:/open-splunk-migrations:ro",
+		"./clickhouse-config/access.xml:/etc/clickhouse-server/config.d/open_splunk_access.xml:ro",
+		"./clickhouse-config/bootstrap-user.xml:/etc/clickhouse-server/users.d/open_splunk_bootstrap.xml:ro",
+		"CLICKHOUSE_SKIP_USER_SETUP: \"1\"",
+		"CLICKHOUSE_ALWAYS_RUN_INITDB_SCRIPTS: \"1\"",
 		"healthcheck:",
 	} {
 		if !strings.Contains(compose, fragment) {
@@ -138,6 +147,138 @@ func TestComposeIsPinnedAndLoopbackOnly(t *testing.T) {
 	}
 	if strings.Contains(compose, ":latest") || strings.Contains(compose, "0.0.0.0:") {
 		t.Error("deployment compose file must not use a floating image or a wildcard host bind")
+	}
+	if strings.Contains(compose, "CLICKHOUSE_DB:") ||
+		strings.Contains(compose, "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT:") ||
+		strings.Contains(compose, "../migrations/clickhouse:/docker-entrypoint-initdb.d") {
+		t.Error("bootstrap principal must not create or migrate the application schema")
+	}
+}
+
+func TestDeploymentClickHouseBootstrapSeparatesServicePrincipals(t *testing.T) {
+	t.Parallel()
+
+	bootstrap := readFile(
+		t,
+		filepath.Join("..", "..", "deploy", "clickhouse-init.sh"),
+	)
+	for _, fragment := range []string{
+		"CREATE USER IF NOT EXISTS open_splunk_migrator",
+		"GRANT CREATE DATABASE ON open_splunk.* TO open_splunk_migrator",
+		"GRANT CREATE TABLE ON open_splunk.schema_migrations TO open_splunk_migrator",
+		"GRANT CREATE TABLE ON open_splunk.events TO open_splunk_migrator",
+		"GRANT ALTER ADD COLUMN, ALTER ADD CONSTRAINT, ALTER ADD INDEX ON open_splunk.events TO open_splunk_migrator",
+		"--user open_splunk_migrator",
+		"/open-splunk-migrations/*.sql",
+		"CREATE USER IF NOT EXISTS open_splunk_runtime",
+		"GRANT SELECT, INSERT ON open_splunk.events TO open_splunk_runtime",
+		"CREATE USER IF NOT EXISTS open_splunk_deletion",
+		"GRANT ALTER DELETE, SELECT(tenant_id, index_name) ON open_splunk.events TO open_splunk_deletion",
+		"GRANT SELECT ON system.tables TO open_splunk_deletion",
+		"GRANT SELECT ON system.mutations TO open_splunk_deletion",
+		"expected_server_version=26.3.17.4",
+		"SELECT version()",
+	} {
+		if !strings.Contains(bootstrap, fragment) {
+			t.Errorf(
+				"ClickHouse bootstrap is missing principal contract fragment %q",
+				fragment,
+			)
+		}
+	}
+	for _, prohibited := range []string{
+		"GRANT ALL",
+		"GRANT ALTER ON open_splunk.events",
+		"GRANT DROP",
+		"GRANT TRUNCATE",
+		"WITH GRANT OPTION",
+		"WITH ADMIN OPTION",
+		"CREATE ROLE ",
+		"DEFAULT ROLE",
+	} {
+		if strings.Contains(bootstrap, prohibited) {
+			t.Errorf(
+				"ClickHouse bootstrap contains prohibited broad grant %q",
+				prohibited,
+			)
+		}
+	}
+
+	accessConfig := readFile(
+		t,
+		filepath.Join(
+			"..",
+			"..",
+			"deploy",
+			"clickhouse-config",
+			"access.xml",
+		),
+	)
+	if !strings.Contains(
+		accessConfig,
+		"<select_from_system_db_requires_grant>true</select_from_system_db_requires_grant>",
+	) {
+		t.Error("ClickHouse deployment does not require explicit system-table grants")
+	}
+
+	bootstrapUser := readFile(
+		t,
+		filepath.Join(
+			"..",
+			"..",
+			"deploy",
+			"clickhouse-config",
+			"bootstrap-user.xml",
+		),
+	)
+	for _, fragment := range []string{
+		`<password from_env="CLICKHOUSE_PASSWORD"/>`,
+		"<ip>127.0.0.1</ip>",
+		"<ip>::1</ip>",
+		"<access_management>1</access_management>",
+	} {
+		if !strings.Contains(bootstrapUser, fragment) {
+			t.Errorf(
+				"ClickHouse bootstrap user is missing safety fragment %q",
+				fragment,
+			)
+		}
+	}
+	if strings.Contains(bootstrapUser, "::/0") ||
+		strings.Contains(bootstrapUser, "0.0.0.0/0") {
+		t.Error("ClickHouse bootstrap administrator must remain loopback-only")
+	}
+}
+
+func TestDeploymentClickHouseBootstrapRejectsReusedCredentials(t *testing.T) {
+	t.Parallel()
+
+	sharedPassword := strings.Repeat("a", 64)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	command := exec.CommandContext(
+		ctx,
+		"sh",
+		filepath.Join("..", "..", "deploy", "clickhouse-init.sh"),
+	)
+	command.WaitDelay = time.Second
+	command.Env = append(
+		os.Environ(),
+		"CLICKHOUSE_USER=open_splunk_bootstrap",
+		"CLICKHOUSE_PASSWORD="+sharedPassword,
+		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD="+sharedPassword,
+		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD="+strings.Repeat("b", 64),
+		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD="+strings.Repeat("c", 64),
+	)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatal("clickhouse-init.sh accepted a reused bootstrap credential")
+	}
+	if !strings.Contains(
+		string(output),
+		"bootstrap, migration, runtime, and deletion passwords must be distinct",
+	) {
+		t.Fatalf("clickhouse-init.sh output = %q", output)
 	}
 }
 

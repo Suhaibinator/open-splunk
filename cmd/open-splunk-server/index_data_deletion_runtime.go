@@ -1,0 +1,132 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/indexes"
+)
+
+// indexDataDeletionRuntimeStore is the single native ClickHouse Store shared
+// by ingestion and physical index deletion. The runtime owns its final close.
+type indexDataDeletionRuntimeStore interface {
+	indexes.DeletionStore
+	Close() error
+}
+
+// indexDataDeletionRuntime owns exactly one physical-deletion coordinator and
+// the native Store borrowed by that worker. HTTP admission remains separate:
+// composing this recovery runtime does not enable the DELETE_DATA endpoint.
+type indexDataDeletionRuntime struct {
+	coordinator *indexes.IndexDataDeletionCoordinator
+	store       indexDataDeletionRuntimeStore
+
+	closeOnce sync.Once
+	closeDone chan struct{}
+	closeErr  error
+}
+
+func newIndexDataDeletionRuntime(
+	controlPlane indexes.DeletionControl,
+	store indexDataDeletionRuntimeStore,
+	tenantID string,
+	onError func(error),
+) (*indexDataDeletionRuntime, error) {
+	coordinator, err := indexes.NewIndexDataDeletionCoordinator(
+		controlPlane,
+		store,
+		indexes.IndexDataDeletionCoordinatorConfig{
+			TenantID: tenantID,
+			OnError:  onError,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"create index data deletion coordinator: %w",
+			err,
+		)
+	}
+	return &indexDataDeletionRuntime{
+		coordinator: coordinator,
+		store:       store,
+		closeDone:   make(chan struct{}),
+	}, nil
+}
+
+// Close starts one asynchronous shutdown that joins the coordinator before
+// closing the shared Store. A caller deadline remains effective even if a
+// worker or driver close blocks; later callers wait for the same final result.
+func (runtime *indexDataDeletionRuntime) Close(ctx context.Context) error {
+	if runtime == nil {
+		return nil
+	}
+	if ctx == nil {
+		return errors.New(
+			"index data deletion runtime close context is required",
+		)
+	}
+	runtime.closeOnce.Do(func() {
+		go runtime.close()
+	})
+	select {
+	case <-runtime.closeDone:
+		return runtime.closeErr
+	default:
+	}
+	select {
+	case <-runtime.closeDone:
+		return runtime.closeErr
+	case <-ctx.Done():
+		select {
+		case <-runtime.closeDone:
+			return runtime.closeErr
+		default:
+		}
+		return fmt.Errorf(
+			"close index data deletion runtime: %w",
+			ctx.Err(),
+		)
+	}
+}
+
+func (runtime *indexDataDeletionRuntime) close() {
+	defer close(runtime.closeDone)
+	if err := runtime.coordinator.Close(context.Background()); err != nil {
+		runtime.closeErr = fmt.Errorf(
+			"close index data deletion coordinator: %w",
+			err,
+		)
+		return
+	}
+	if err := runtime.store.Close(); err != nil {
+		runtime.closeErr = fmt.Errorf(
+			"close index data deletion ClickHouse store: %w",
+			err,
+		)
+	}
+}
+
+// finalizeIndexDataDeletionRuntime gives graceful shutdown a bounded attempt,
+// then retains all borrowed dependencies behind an unbounded retry when that
+// budget expires. The process restores default signal handling before deferred
+// finalizers run, so an operator can still force termination with a second
+// signal if a dependency ignores cancellation forever.
+func finalizeIndexDataDeletionRuntime(
+	runtime *indexDataDeletionRuntime,
+	timeout time.Duration,
+) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	closeErr := runtime.Close(ctx)
+	retry := closeErr != nil && ctx.Err() != nil
+	cancel()
+	if !retry {
+		return closeErr
+	}
+	return errors.Join(
+		closeErr,
+		runtime.Close(context.Background()),
+	)
+}

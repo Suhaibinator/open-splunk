@@ -1149,6 +1149,28 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 			}
 		})
 	}
+	unchangedDeletionTarget, err := db.GetIndex(ctx, deletionTarget.ID)
+	if err != nil {
+		t.Fatalf("GetIndex(delete-target after rejected DELETE_DATA): %v", err)
+	}
+	if unchangedDeletionTarget.State != control.IndexStateArchived ||
+		unchangedDeletionTarget.Version != deletionTarget.Version {
+		t.Fatalf(
+			"delete-target after rejected DELETE_DATA = state %q version %d, want archived version %d",
+			unchangedDeletionTarget.State,
+			unchangedDeletionTarget.Version,
+			deletionTarget.Version,
+		)
+	}
+	if _, err := db.NextIndexDeletionOperation(ctx); !errors.Is(
+		err,
+		control.ErrNotFound,
+	) {
+		t.Fatalf(
+			"NextIndexDeletionOperation after rejected DELETE_DATA error = %v, want ErrNotFound",
+			err,
+		)
+	}
 }
 
 func TestAdministrativeCapabilitiesDoNotOverstatePartialRouteFamilies(t *testing.T) {

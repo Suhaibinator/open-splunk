@@ -4,13 +4,20 @@ services:
   clickhouse:
     # Current tested LTS patch. Do not replace this with latest/lts: schema
     # migrations depend on the production JSON type and GA native text index.
-    image: clickhouse/clickhouse-server:26.3.17.4
+    image: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
     restart: unless-stopped
     environment:
-      CLICKHOUSE_DB: open_splunk
-      CLICKHOUSE_USER: open_splunk
-      CLICKHOUSE_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_PASSWORD:?run ./generate-env.sh before docker compose up}"
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      CLICKHOUSE_USER: open_splunk_bootstrap
+      CLICKHOUSE_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_BOOTSTRAP_PASSWORD:?run ./generate-env.sh before docker compose up}"
+      # The official entrypoint otherwise writes a network-wide administrator
+      # on every restart. Our users.d definition is loopback-only instead.
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+      # Every migration is idempotent and ledger-last. Re-running initialization
+      # recovers partial provisioning and rotates service credentials.
+      CLICKHOUSE_ALWAYS_RUN_INITDB_SCRIPTS: "1"
+      OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD:?run ./generate-env.sh before docker compose up}"
+      OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD:?run ./generate-env.sh before docker compose up}"
+      OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD:?run ./generate-env.sh before docker compose up}"
     ports:
       # Local development never listens on every host interface. Override only
       # the host-side port if the default is already occupied.
@@ -19,15 +26,18 @@ services:
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-logs:/var/log/clickhouse-server
-      - ../migrations/clickhouse:/docker-entrypoint-initdb.d:ro
+      - ./clickhouse-init.sh:/docker-entrypoint-initdb.d/0100_open_splunk.sh:ro
+      - ../migrations/clickhouse:/open-splunk-migrations:ro
+      - ./clickhouse-config/access.xml:/etc/clickhouse-server/config.d/open_splunk_access.xml:ro
+      - ./clickhouse-config/bootstrap-user.xml:/etc/clickhouse-server/users.d/open_splunk_bootstrap.xml:ro
     healthcheck:
       test:
         - CMD-SHELL
         - >-
           clickhouse-client
           --host 127.0.0.1
-          --user "$${CLICKHOUSE_USER}"
-          --password "$${CLICKHOUSE_PASSWORD}"
+          --user open_splunk_runtime
+          --password "$${OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD}"
           --query "SELECT 1"
           >/dev/null
       interval: 5s

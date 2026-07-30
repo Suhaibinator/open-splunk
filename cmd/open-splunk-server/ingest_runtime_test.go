@@ -30,6 +30,10 @@ func TestNormalizeRuntimeOptionsCanonicalizesAndBoundsTenantIdentity(t *testing.
 		"oversized":                 {httpAddress: "127.0.0.1:8080", tenantID: strings.Repeat("t", maximumDurableTenantIDBytes+1), indexRetention: time.Hour},
 		"invalid UTF-8":             {httpAddress: "127.0.0.1:8080", tenantID: string([]byte{0xff}), indexRetention: time.Hour},
 		"embedded NUL":              {httpAddress: "127.0.0.1:8080", tenantID: "tenant\x00other", indexRetention: time.Hour},
+		"embedded newline":          {httpAddress: "127.0.0.1:8080", tenantID: "tenant\nother", indexRetention: time.Hour},
+		"embedded C1 control":       {httpAddress: "127.0.0.1:8080", tenantID: "tenant\u0080other", indexRetention: time.Hour},
+		"trailing newline":          {httpAddress: "127.0.0.1:8080", tenantID: "tenant\n", indexRetention: time.Hour},
+		"leading C1 control":        {httpAddress: "127.0.0.1:8080", tenantID: "\u0085tenant", indexRetention: time.Hour},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := normalizeRuntimeOptions(&candidate); err == nil {

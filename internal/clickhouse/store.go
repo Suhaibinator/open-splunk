@@ -14,6 +14,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -148,11 +149,16 @@ func Open(config Config, retention RetentionProvider, sequencer visibility.Seque
 	return store, nil
 }
 
-// NewStore wraps an existing clickhouse-go connection. A caller that uses
-// WithWritesFrozen must route every writer for the physical events table
-// through the returned Store for the lifetime of the frozen callback. It must
-// also apply table-changing DDL before NewStore and keep the configured table
-// name exclusively bound to that generation until Store.Close; see Open.
+// NewStore wraps one existing clickhouse-go connection for both ordinary
+// runtime traffic and index deletion. It remains useful for tests and
+// compatibility; production callers that isolate ALTER DELETE privileges
+// should use NewStoreWithDeletionConnection.
+//
+// A caller that uses WithWritesFrozen must route every writer for the physical
+// events table through the returned Store for the lifetime of the frozen
+// callback. It must also apply table-changing DDL before NewStore and keep the
+// configured table name exclusively bound to that generation until Store.Close;
+// see Open.
 func NewStore(connection clickhousedriver.Conn, retention RetentionProvider, sequencer visibility.Sequencer) (*Store, error) {
 	if connection == nil {
 		return nil, errors.New("ClickHouse connection is required")
@@ -174,32 +180,76 @@ func NewStore(connection clickhousedriver.Conn, retention RetentionProvider, seq
 	return store, nil
 }
 
+// NewStoreWithDeletionConnection wraps distinct ordinary-runtime and
+// deletion-only clickhouse-go connections. Inserts and other Store traffic use
+// connection. Physical index-deletion target resolution, reconciliation,
+// absence proofs, and ALTER DELETE use deletionConnection exclusively.
+//
+// The caller retains ownership of both connections when construction fails.
+// After construction succeeds, Store owns both and closes the deletion
+// connection before the ordinary connection.
+func NewStoreWithDeletionConnection(
+	connection clickhousedriver.Conn,
+	deletionConnection clickhousedriver.Conn,
+	retention RetentionProvider,
+	sequencer visibility.Sequencer,
+) (*Store, error) {
+	if connection == nil {
+		return nil, errors.New("ClickHouse connection is required")
+	}
+	if deletionConnection == nil {
+		return nil, errors.New("ClickHouse deletion connection is required")
+	}
+	if sameConnectionIdentity(connection, deletionConnection) {
+		return nil, errors.New(
+			"ClickHouse deletion connection must be distinct from the ordinary connection",
+		)
+	}
+	defaults := DefaultConfig()
+	store, err := newStoreWithDeletionConnection(
+		&nativeStoreConnection{connection: connection},
+		&nativeStoreConnection{connection: deletionConnection},
+		defaults.Database,
+		defaults.Table,
+		retention,
+		sequencer,
+		time.Now,
+		defaults.RetryAfter,
+	)
+	if err != nil {
+		return nil, err
+	}
+	store.startReconciler()
+	return store, nil
+}
+
 // Store implements ingest.EventStore using one synchronous native insert per
 // accepted protocol batch.
 type Store struct {
-	connection       storeConnection
-	database         string
-	table            string
-	insertSQL        string
-	retention        RetentionProvider
-	visibility       visibility.Sequencer
-	attemptID        func() (string, error)
-	clock            func() time.Time
-	retryAfter       time.Duration
-	writeAdmission   *writeAdmission
-	reconcileSlot    chan struct{}
-	lifecycleMu      sync.Mutex
-	lifecycleContext context.Context
-	lifecycleCancel  context.CancelFunc
-	operations       sync.WaitGroup
-	reconcileWake    chan struct{}
-	reconcileDone    chan struct{}
-	reconcileCancel  context.CancelFunc
-	reconcileErr     error
-	closed           bool
-	closeOnce        sync.Once
-	closeErr         error
-	terminalCount    atomic.Uint64
+	connection         storeConnection
+	deletionConnection storeConnection
+	database           string
+	table              string
+	insertSQL          string
+	retention          RetentionProvider
+	visibility         visibility.Sequencer
+	attemptID          func() (string, error)
+	clock              func() time.Time
+	retryAfter         time.Duration
+	writeAdmission     *writeAdmission
+	reconcileSlot      chan struct{}
+	lifecycleMu        sync.Mutex
+	lifecycleContext   context.Context
+	lifecycleCancel    context.CancelFunc
+	operations         sync.WaitGroup
+	reconcileWake      chan struct{}
+	reconcileDone      chan struct{}
+	reconcileCancel    context.CancelFunc
+	reconcileErr       error
+	closed             bool
+	closeOnce          sync.Once
+	closeErr           error
+	terminalCount      atomic.Uint64
 }
 
 var _ ingest.EventStore = (*Store)(nil)
@@ -207,6 +257,56 @@ var _ ingest.RecoverableEventStore = (*Store)(nil)
 
 func newStore(
 	connection storeConnection,
+	database, table string,
+	retention RetentionProvider,
+	sequencer visibility.Sequencer,
+	clock func() time.Time,
+	retryAfter time.Duration,
+) (*Store, error) {
+	return newStoreWithConnections(
+		connection,
+		nil,
+		database,
+		table,
+		retention,
+		sequencer,
+		clock,
+		retryAfter,
+	)
+}
+
+func newStoreWithDeletionConnection(
+	connection storeConnection,
+	deletionConnection storeConnection,
+	database, table string,
+	retention RetentionProvider,
+	sequencer visibility.Sequencer,
+	clock func() time.Time,
+	retryAfter time.Duration,
+) (*Store, error) {
+	if deletionConnection == nil {
+		return nil, errors.New("ClickHouse deletion connection is required")
+	}
+	if sameConnectionIdentity(connection, deletionConnection) {
+		return nil, errors.New(
+			"ClickHouse deletion connection must be distinct from the ordinary connection",
+		)
+	}
+	return newStoreWithConnections(
+		connection,
+		deletionConnection,
+		database,
+		table,
+		retention,
+		sequencer,
+		clock,
+		retryAfter,
+	)
+}
+
+func newStoreWithConnections(
+	connection storeConnection,
+	deletionConnection storeConnection,
 	database, table string,
 	retention RetentionProvider,
 	sequencer visibility.Sequencer,
@@ -236,20 +336,31 @@ func newStore(
 	// #nosec G118 -- lifecycleCancel is retained on Store and invoked by Close.
 	lifecycleContext, lifecycleCancel := context.WithCancel(context.Background())
 	return &Store{
-		connection:       connection,
-		database:         database,
-		table:            table,
-		insertSQL:        buildEventsInsertSQL(database, table),
-		retention:        retention,
-		visibility:       sequencer,
-		attemptID:        randomAttemptID,
-		clock:            clock,
-		retryAfter:       retryAfter,
-		writeAdmission:   newWriteAdmission(),
-		reconcileSlot:    reconcileSlot,
-		lifecycleContext: lifecycleContext,
-		lifecycleCancel:  lifecycleCancel,
+		connection:         connection,
+		deletionConnection: deletionConnection,
+		database:           database,
+		table:              table,
+		insertSQL:          buildEventsInsertSQL(database, table),
+		retention:          retention,
+		visibility:         sequencer,
+		attemptID:          randomAttemptID,
+		clock:              clock,
+		retryAfter:         retryAfter,
+		writeAdmission:     newWriteAdmission(),
+		reconcileSlot:      reconcileSlot,
+		lifecycleContext:   lifecycleContext,
+		lifecycleCancel:    lifecycleCancel,
 	}, nil
+}
+
+func sameConnectionIdentity(left, right any) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	leftType := reflect.TypeOf(left)
+	return leftType == reflect.TypeOf(right) &&
+		leftType.Comparable() &&
+		left == right
 }
 
 // LookupBatch finds the durable disposition of an exact collector wire batch
@@ -789,16 +900,31 @@ func (s *Store) Ping(ctx context.Context) (resultErr error) {
 		return err
 	}
 	defer finishOperation()
+	var pingErrors []error
 	if err := s.connection.Ping(operationContext); err != nil {
-		return fmt.Errorf("ping ClickHouse: %w", err)
+		pingErrors = append(
+			pingErrors,
+			fmt.Errorf("ping ClickHouse: %w", err),
+		)
+	}
+	if s.deletionConnection != nil {
+		if err := s.deletionConnection.Ping(operationContext); err != nil {
+			pingErrors = append(
+				pingErrors,
+				fmt.Errorf("ping ClickHouse deletion connection: %w", err),
+			)
+		}
 	}
 	s.lifecycleMu.Lock()
 	reconcileErr := s.reconcileErr
 	s.lifecycleMu.Unlock()
 	if reconcileErr != nil {
-		return fmt.Errorf("reconcile ClickHouse outbox: %w", reconcileErr)
+		pingErrors = append(
+			pingErrors,
+			fmt.Errorf("reconcile ClickHouse outbox: %w", reconcileErr),
+		)
 	}
-	return nil
+	return errors.Join(pingErrors...)
 }
 
 // Close releases all pooled ClickHouse connections.
@@ -822,9 +948,25 @@ func (s *Store) Close() error {
 			<-done
 		}
 		s.operations.Wait()
-		if err := s.connection.Close(); err != nil {
-			s.closeErr = fmt.Errorf("close ClickHouse: %w", err)
+		var closeErrors []error
+		if s.deletionConnection != nil {
+			if err := s.deletionConnection.Close(); err != nil {
+				closeErrors = append(
+					closeErrors,
+					fmt.Errorf(
+						"close ClickHouse deletion connection: %w",
+						err,
+					),
+				)
+			}
 		}
+		if err := s.connection.Close(); err != nil {
+			closeErrors = append(
+				closeErrors,
+				fmt.Errorf("close ClickHouse: %w", err),
+			)
+		}
+		s.closeErr = errors.Join(closeErrors...)
 	})
 	return s.closeErr
 }

@@ -242,6 +242,50 @@ func TestAdvanceIndexDataDeletionSubmitsStableScopedMutation(t *testing.T) {
 	}
 }
 
+func TestIndexDataDeletionStatusRejectsNonCanonicalTenantBeforeClickHouse(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	for name, tenantID := range map[string]string{
+		"leading space":    " tenant",
+		"trailing space":   "tenant ",
+		"leading newline":  "\ntenant",
+		"trailing newline": "tenant\n",
+		"C1 control":       "tenant\u0085",
+	} {
+		name := name
+		tenantID := tenantID
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			connection := newMutationScriptConnection()
+			store := mustTestStore(t, connection, fixedRetention(1))
+			request := validIndexDataDeletionRequest()
+			request.TenantID = tenantID
+
+			if _, err := store.IndexDataDeletionStatus(
+				context.Background(),
+				request,
+			); err == nil {
+				t.Fatal("IndexDataDeletionStatus() error = nil")
+			}
+			if connection.targetCalls != 0 ||
+				connection.summaryCalls != 0 ||
+				connection.existenceCalls != 0 ||
+				connection.execCalls != 0 {
+				t.Fatalf(
+					"invalid tenant reached ClickHouse: target=%d summary=%d existence=%d exec=%d",
+					connection.targetCalls,
+					connection.summaryCalls,
+					connection.existenceCalls,
+					connection.execCalls,
+				)
+			}
+		})
+	}
+}
+
 func TestIndexDataDeletionCorrelationMarkerBindsImmutableRequest(t *testing.T) {
 	t.Parallel()
 

@@ -86,7 +86,7 @@ func TestBackendVertical(t *testing.T) {
 	stagedBackendRepository := buildBackendFrontend(t, ctx, repository)
 
 	image := os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE")
-	clickhouse, err := testsupport.StartClickHouse(ctx, image)
+	clickhouse, err := testsupport.StartClickHouseWithServicePrincipals(ctx, image)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,10 @@ func TestBackendVertical(t *testing.T) {
 		work,
 	)
 	assertEmptyDirectory(t, serverRuntimeDir)
-	serverEnvironment := environmentWithValue(os.Environ(), "OPEN_SPLUNK_CLICKHOUSE_PASSWORD", clickhouse.Password)
+	serverEnvironment := clickHouseServerEnvironment(
+		os.Environ(),
+		clickhouse,
+	)
 	serverEnvironment = environmentWithValue(
 		serverEnvironment,
 		"PATH",
@@ -123,13 +126,14 @@ func TestBackendVertical(t *testing.T) {
 		"-control-db=" + controlDBPath,
 		"-master-key=" + filepath.Join(work, "server.key"),
 		"-administrator-token-file=" + administratorTokenPath,
-		"-clickhouse-address=" + clickhouse.Address,
-		"-clickhouse-database=" + clickhouse.Database,
-		"-clickhouse-username=" + clickhouse.Username,
 		"-collector-grpc-address=" + collectorAddress,
 		"-collector-grpc-insecure",
 		"-tenant-id=" + verticalTenantID,
 	}
+	serverArguments = append(
+		serverArguments,
+		clickHouseServerArguments(clickhouse)...,
+	)
 	serverProcess := startProcess(t, serverRuntimeDir, serverArguments, serverEnvironment)
 	serverProcesses := []*managedProcess{serverProcess}
 	baseURL := "http://" + httpAddress
@@ -202,8 +206,8 @@ func TestBackendVertical(t *testing.T) {
 		Addr: []string{clickhouse.Address},
 		Auth: clickhousedriver.Auth{
 			Database: clickhouse.Database,
-			Username: clickhouse.Username,
-			Password: clickhouse.Password,
+			Username: clickhouse.RuntimeUsername,
+			Password: clickhouse.RuntimePassword,
 		},
 		DialTimeout: 5 * time.Second,
 	})

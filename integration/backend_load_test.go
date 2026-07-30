@@ -253,7 +253,7 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 	stagedBackendRepository := buildBackendFrontend(t, ctx, repository)
 
 	image := os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE")
-	clickhouse, err := testsupport.StartClickHouse(ctx, image)
+	clickhouse, err := testsupport.StartClickHouseWithServicePrincipals(ctx, image)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,10 +280,9 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		work,
 	)
 	assertEmptyDirectory(t, serverRuntimeDir)
-	serverEnvironment := environmentWithValue(
+	serverEnvironment := clickHouseServerEnvironment(
 		os.Environ(),
-		"OPEN_SPLUNK_CLICKHOUSE_PASSWORD",
-		clickhouse.Password,
+		clickhouse,
 	)
 	serverEnvironment = environmentWithValue(
 		serverEnvironment,
@@ -296,13 +295,14 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		"-control-db=" + controlDBPath,
 		"-master-key=" + filepath.Join(work, "server.key"),
 		"-administrator-token-file=" + administratorTokenPath,
-		"-clickhouse-address=" + clickhouse.Address,
-		"-clickhouse-database=" + clickhouse.Database,
-		"-clickhouse-username=" + clickhouse.Username,
 		"-collector-grpc-address=" + collectorAddress,
 		"-collector-grpc-insecure",
 		"-tenant-id=" + plan.TenantID,
 	}
+	serverArguments = append(
+		serverArguments,
+		clickHouseServerArguments(clickhouse)...,
+	)
 	var serverProcesses []*managedProcess
 	startServer := func() *managedProcess {
 		process := startProcess(t, serverRuntimeDir, serverArguments, serverEnvironment)
@@ -378,8 +378,8 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		Addr: []string{clickhouse.Address},
 		Auth: clickhousedriver.Auth{
 			Database: clickhouse.Database,
-			Username: clickhouse.Username,
-			Password: clickhouse.Password,
+			Username: clickhouse.RuntimeUsername,
+			Password: clickhouse.RuntimePassword,
 		},
 		DialTimeout: 5 * time.Second,
 	})

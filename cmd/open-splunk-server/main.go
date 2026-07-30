@@ -68,7 +68,9 @@ type options struct {
 	exportArtifactDir                   string
 	clickhouseAddress                   string
 	clickhouseDatabase                  string
-	clickhouseUsername                  string
+	clickhouseRuntimeUsername           string
+	clickhouseDeletionUsername          string
+	clickhouseMigrationUsername         string
 	clickhouseSecure                    bool
 	collectorAddress                    string
 	collectorInsecure                   bool
@@ -279,40 +281,117 @@ func run() error {
 			log.Printf("close search-history maintenance: %v", err)
 		}
 	}()
-	clickHouseOptions, err := newClickHouseOptions(config)
+	clickHouseOptions, err := newClickHouseConnectionOptions(config)
 	if err != nil {
 		return err
 	}
-	connection, err := openClickHouse(clickHouseOptions)
+	defer discardClickHouseMigrationCredentials(&clickHouseOptions)
+	if err := os.Unsetenv(
+		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD",
+	); err != nil {
+		return fmt.Errorf(
+			"discard ClickHouse migration password from process environment: %w",
+			err,
+		)
+	}
+	if err := applyStartupClickHouseMigrations(
+		startupContext,
+		clickHouseOptions.migration,
+		migrations.ClickHouse(),
+		func(
+			options *clickhousedriver.Options,
+		) (clickHouseMigrationSession, error) {
+			return openClickHouse(options)
+		},
+		server.ApplyClickHouseMigrations,
+	); err != nil {
+		return err
+	}
+	discardClickHouseMigrationCredentials(&clickHouseOptions)
+
+	connection, err := openClickHouse(clickHouseOptions.runtime)
 	if err != nil {
 		return err
 	}
+	var deletionConnection clickhousedriver.Conn
 	var eventStore *internalclickhouse.Store
+	var indexDataDeletion *indexDataDeletionRuntime
 	defer func() {
-		// Once NewStore succeeds, it owns the shared native connection and its
-		// later defer closes it after search jobs and transports have stopped.
-		if eventStore == nil {
-			if err := connection.Close(); err != nil {
-				log.Printf("close ClickHouse after failed startup: %v", err)
+		// A successful runtime owner closes both Store connections. Before
+		// ownership transfers, this guard unwinds partial startup in reverse
+		// privilege order.
+		if indexDataDeletion != nil {
+			return
+		}
+		if eventStore != nil {
+			if err := eventStore.Close(); err != nil {
+				log.Printf("close ClickHouse Store after failed startup: %v", err)
 			}
+			return
+		}
+		if deletionConnection != nil {
+			if err := deletionConnection.Close(); err != nil {
+				log.Printf(
+					"close ClickHouse deletion session after failed startup: %v",
+					err,
+				)
+			}
+		}
+		if err := connection.Close(); err != nil {
+			log.Printf("close ClickHouse runtime session after failed startup: %v", err)
 		}
 	}()
 	if err := connection.Ping(startupContext); err != nil {
-		return fmt.Errorf("ping ClickHouse: %w", err)
+		return fmt.Errorf("ping ClickHouse runtime session: %w", err)
 	}
-	if err := server.ApplyClickHouseMigrations(startupContext, connection, migrations.ClickHouse()); err != nil {
-		return fmt.Errorf("migrate ClickHouse: %w", err)
+	if err := server.ValidateClickHouseRuntimePrivileges(
+		startupContext,
+		connection,
+	); err != nil {
+		return err
+	}
+	deletionConnection, err = openClickHouse(clickHouseOptions.deletion)
+	if err != nil {
+		return err
+	}
+	if err := deletionConnection.Ping(startupContext); err != nil {
+		return fmt.Errorf("ping ClickHouse deletion session: %w", err)
+	}
+	if err := server.ValidateClickHouseDeletionWorkerPrivileges(
+		startupContext,
+		deletionConnection,
+	); err != nil {
+		return err
 	}
 
-	eventStore, err = internalclickhouse.NewStore(connection, controlRetentionProvider{
-		catalog: controlDB, tenantID: config.tenantID, defaultRetention: config.indexRetention,
-	}, sequencer)
+	eventStore, err = internalclickhouse.NewStoreWithDeletionConnection(
+		connection,
+		deletionConnection,
+		controlRetentionProvider{
+			catalog: controlDB, tenantID: config.tenantID, defaultRetention: config.indexRetention,
+		},
+		sequencer,
+	)
 	if err != nil {
 		return fmt.Errorf("create ClickHouse ingestion store: %w", err)
 	}
+	indexDataDeletion, err = newIndexDataDeletionRuntime(
+		controlDB,
+		eventStore,
+		config.tenantID,
+		func(err error) {
+			log.Printf("reconcile index data deletion: %v", err)
+		},
+	)
+	if err != nil {
+		return err
+	}
 	defer func() {
-		if err := eventStore.Close(); err != nil {
-			log.Printf("close ClickHouse: %v", err)
+		if err := finalizeIndexDataDeletionRuntime(
+			indexDataDeletion,
+			shutdownTimeout,
+		); err != nil {
+			log.Printf("close index data deletion runtime: %v", err)
 		}
 	}()
 	var collectorHeartbeats *collectorfleet.HeartbeatRuntime
@@ -414,7 +493,7 @@ func run() error {
 		runtimeSearchInspectionConfig{
 			Searches:          jobs,
 			Compiler:          compiler,
-			ClickHouseOptions: clickHouseOptions,
+			ClickHouseOptions: clickHouseOptions.runtime,
 		},
 	)
 	if err != nil {
@@ -639,7 +718,24 @@ func parseFlags() options {
 	flag.StringVar(&result.exportArtifactDir, "export-artifact-dir", "", "private export-artifact base directory (default: <control-db>.exports)")
 	flag.StringVar(&result.clickhouseAddress, "clickhouse-address", "127.0.0.1:9000", "ClickHouse native-protocol address")
 	flag.StringVar(&result.clickhouseDatabase, "clickhouse-database", "open_splunk", "ClickHouse database")
-	flag.StringVar(&result.clickhouseUsername, "clickhouse-username", "open_splunk", "ClickHouse username")
+	flag.StringVar(
+		&result.clickhouseRuntimeUsername,
+		"clickhouse-runtime-username",
+		"open_splunk_runtime",
+		"least-privilege ClickHouse username for ingestion, search, and inspection",
+	)
+	flag.StringVar(
+		&result.clickhouseDeletionUsername,
+		"clickhouse-deletion-username",
+		"open_splunk_deletion",
+		"ClickHouse username limited to physical index deletion",
+	)
+	flag.StringVar(
+		&result.clickhouseMigrationUsername,
+		"clickhouse-migration-username",
+		"open_splunk_migrator",
+		"short-lived ClickHouse schema-migration username",
+	)
 	flag.BoolVar(&result.clickhouseSecure, "clickhouse-secure", false, "use TLS for ClickHouse")
 	flag.StringVar(&result.collectorAddress, "collector-grpc-address", "", "collector gRPC listen address (disabled when empty)")
 	flag.BoolVar(&result.collectorInsecure, "collector-grpc-insecure", false, "explicitly allow plaintext collector gRPC on loopback only")
@@ -718,45 +814,85 @@ func openSearchHistoryStore(
 	return store, nil
 }
 
-func newClickHouseOptions(
+type clickHouseConnectionOptions struct {
+	migration *clickhousedriver.Options
+	runtime   *clickhousedriver.Options
+	deletion  *clickhousedriver.Options
+}
+
+func discardClickHouseMigrationCredentials(
+	options *clickHouseConnectionOptions,
+) {
+	if options == nil || options.migration == nil {
+		return
+	}
+	options.migration.Auth.Password = ""
+	options.migration = nil
+}
+
+func newClickHouseConnectionOptions(
 	config options,
-) (*clickhousedriver.Options, error) {
+) (clickHouseConnectionOptions, error) {
 	address := strings.TrimSpace(config.clickhouseAddress)
 	if address == "" {
-		return nil, errors.New(
+		return clickHouseConnectionOptions{}, errors.New(
 			"configure ClickHouse: address is required",
 		)
 	}
 	if !config.clickhouseSecure && !loopbackAddress(address) {
-		return nil, errors.New(
+		return clickHouseConnectionOptions{}, errors.New(
 			"configure ClickHouse: plaintext is allowed only for a " +
 				"loopback address; enable -clickhouse-secure",
 		)
 	}
 	database := strings.TrimSpace(config.clickhouseDatabase)
 	if database != "open_splunk" {
-		return nil, errors.New(
+		return clickHouseConnectionOptions{}, errors.New(
 			"configure ClickHouse: database must be open_splunk for " +
 				"the embedded schema",
 		)
 	}
-	username := strings.TrimSpace(config.clickhouseUsername)
-	if username == "" {
-		return nil, errors.New(
-			"configure ClickHouse: username is required",
+	runtimeUsername := strings.TrimSpace(config.clickhouseRuntimeUsername)
+	deletionUsername := strings.TrimSpace(config.clickhouseDeletionUsername)
+	migrationUsername := strings.TrimSpace(config.clickhouseMigrationUsername)
+	if runtimeUsername == "" || deletionUsername == "" ||
+		migrationUsername == "" {
+		return clickHouseConnectionOptions{}, errors.New(
+			"configure ClickHouse: runtime, deletion, and migration usernames are required",
 		)
 	}
-	result := &clickhousedriver.Options{
-		Protocol: clickhousedriver.Native,
-		Addr:     []string{address},
-		Auth: clickhousedriver.Auth{
-			// Connect through ClickHouse's always-present bootstrap database so
-			// the first migration can create open_splunk on a clean server. All
-			// runtime SQL uses the fully qualified open_splunk schema.
-			Database: "default",
-			Username: username,
-			Password: os.Getenv("OPEN_SPLUNK_CLICKHOUSE_PASSWORD"),
-		},
+	if runtimeUsername == deletionUsername ||
+		runtimeUsername == migrationUsername ||
+		deletionUsername == migrationUsername {
+		return clickHouseConnectionOptions{}, errors.New(
+			"configure ClickHouse: runtime, deletion, and migration usernames must be distinct",
+		)
+	}
+	runtimePassword := os.Getenv(
+		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD",
+	)
+	deletionPassword := os.Getenv(
+		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
+	)
+	migrationPassword := os.Getenv(
+		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD",
+	)
+	if runtimePassword == "" || deletionPassword == "" ||
+		migrationPassword == "" {
+		return clickHouseConnectionOptions{}, errors.New(
+			"configure ClickHouse: OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD, OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD, and OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD are required",
+		)
+	}
+	if runtimePassword == deletionPassword ||
+		runtimePassword == migrationPassword ||
+		deletionPassword == migrationPassword {
+		return clickHouseConnectionOptions{}, errors.New(
+			"configure ClickHouse: runtime, deletion, and migration passwords must be distinct",
+		)
+	}
+	base := clickhousedriver.Options{
+		Protocol:         clickhousedriver.Native,
+		Addr:             []string{address},
 		DialTimeout:      5 * time.Second,
 		ReadTimeout:      30 * time.Second,
 		MaxOpenConns:     8,
@@ -765,9 +901,39 @@ func newClickHouseOptions(
 		ConnOpenStrategy: clickhousedriver.ConnOpenInOrder,
 	}
 	if config.clickhouseSecure {
-		result.TLS = &tls.Config{MinVersion: tls.VersionTLS12}
+		base.TLS = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
-	return result, nil
+
+	runtimeOptions := base
+	runtimeOptions.Auth = clickhousedriver.Auth{
+		Database: database,
+		Username: runtimeUsername,
+		Password: runtimePassword,
+	}
+	deletionOptions := base
+	deletionOptions.Auth = clickhousedriver.Auth{
+		Database: database,
+		Username: deletionUsername,
+		Password: deletionPassword,
+	}
+	// The deletion coordinator is serialized and the startup contract uses
+	// bounded sequential probes, so one privileged session is sufficient.
+	deletionOptions.MaxOpenConns = 1
+	deletionOptions.MaxIdleConns = 1
+	migrationOptions := base
+	migrationOptions.Auth = clickhousedriver.Auth{
+		// The first migration owns creation of the embedded database.
+		Database: "default",
+		Username: migrationUsername,
+		Password: migrationPassword,
+	}
+	migrationOptions.MaxOpenConns = 1
+	migrationOptions.MaxIdleConns = 1
+	return clickHouseConnectionOptions{
+		migration: &migrationOptions,
+		runtime:   &runtimeOptions,
+		deletion:  &deletionOptions,
+	}, nil
 }
 
 func openClickHouse(

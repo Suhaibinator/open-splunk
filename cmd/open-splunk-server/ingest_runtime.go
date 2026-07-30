@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/auth"
@@ -97,10 +98,19 @@ func normalizeRuntimeOptions(config *options) error {
 			config.httpAllowedHosts = append(config.httpAllowedHosts, "localhost", "127.0.0.1", "::1")
 		}
 	}
+	if !utf8.ValidString(config.tenantID) ||
+		strings.ContainsFunc(config.tenantID, unicode.IsControl) {
+		return fmt.Errorf(
+			"tenant ID must be non-empty valid UTF-8 without control characters and at most %d bytes",
+			maximumDurableTenantIDBytes,
+		)
+	}
 	config.tenantID = strings.TrimSpace(config.tenantID)
-	if config.tenantID == "" || len(config.tenantID) > maximumDurableTenantIDBytes ||
-		!utf8.ValidString(config.tenantID) || strings.IndexByte(config.tenantID, 0) >= 0 {
-		return fmt.Errorf("tenant ID must be non-empty valid UTF-8 without NUL bytes and at most %d bytes", maximumDurableTenantIDBytes)
+	if config.tenantID == "" || len(config.tenantID) > maximumDurableTenantIDBytes {
+		return fmt.Errorf(
+			"tenant ID must be non-empty valid UTF-8 without control characters and at most %d bytes",
+			maximumDurableTenantIDBytes,
+		)
 	}
 	return nil
 }
