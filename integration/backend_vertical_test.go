@@ -572,12 +572,15 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 	limits := bootstrap.GetLimits()
 	timelineFeatures := 0
 	previewFeatures := 0
+	indexAdministrationFeatures := 0
 	for _, feature := range bootstrap.GetFeatures() {
 		switch feature {
 		case opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE:
 			timelineFeatures++
 		case opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW:
 			previewFeatures++
+		case opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN:
+			indexAdministrationFeatures++
 		}
 	}
 	build := bootstrap.GetBuild()
@@ -594,7 +597,7 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 		build.GetAssetManifestFormatVersion() != 1 ||
 		limits.GetMaximumPreviewRows() == 0 || limits.GetMaximumWebsocketSubscriptions() == 0 ||
 		limits.GetMaximumWebsocketFrameBytes() < 1<<10 || limits.GetMaximumWebsocketFrameBytes() > 1<<20 ||
-		timelineFeatures != 1 || previewFeatures != 1 ||
+		timelineFeatures != 1 || previewFeatures != 1 || indexAdministrationFeatures != 1 ||
 		limits.GetMaximumTimelineBuckets() != verticalTimelineMaximumBuckets {
 		t.Fatalf("standalone bootstrap response = %+v", &bootstrap)
 	}

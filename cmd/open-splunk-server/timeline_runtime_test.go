@@ -372,6 +372,12 @@ func TestRuntimeHTTPHandlerAdvertisesEnforcedTimelineService(t *testing.T) {
 	if !slices.Contains(decoded.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY) {
 		t.Fatalf("bootstrap features = %v, want field discovery", decoded.GetFeatures())
 	}
+	if slices.Contains(decoded.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN) {
+		t.Fatalf(
+			"partial index administration advertised as complete: %v",
+			decoded.GetFeatures(),
+		)
+	}
 	if decoded.GetLimits().GetMaximumFieldSummaryValues() != clickhouse.MaximumFieldSummaryValues {
 		t.Fatalf(
 			"maximum field summary values = %d, want enforcing service default %d",

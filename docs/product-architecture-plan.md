@@ -790,6 +790,24 @@ runtime event-table `SELECT` privilege is sufficient. No ClickHouse migration
 or grant is added: GORM remains control-plane-only and ClickHouse remains
 native-only.
 
+### Complete index administration capability
+
+`SERVER_FEATURE_INDEX_ADMIN` is advertised only when the complete
+index-administration family is configured: GORM-backed create, get, list,
+update, state, and deletion admission; native ClickHouse single/page-batched
+statistics; native index field discovery; and the durable physical-deletion
+runtime. Partial embedded or test compositions remain valid but do not
+advertise the broad feature, even when it was requested in static bootstrap
+configuration. Duplicate requested feature values collapse to one.
+
+This flag describes a configured API family. It is not a live ClickHouse
+health signal and is not an authorization entitlement for future RBAC.
+Transient dependency failures remain operation errors, while every
+administrator route continues to enforce browser authentication independently.
+The boundary does not change persistence ownership: GORM remains limited to
+SQLite control-plane records, and ClickHouse statistics, field analysis, and
+physical mutations continue through native services.
+
 ## ClickHouse event model
 
 The storage model should preserve Splunk’s canonical event fields while retaining typed application data.

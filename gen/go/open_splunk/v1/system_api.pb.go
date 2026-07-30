@@ -36,9 +36,12 @@ const (
 	ServerFeature_SERVER_FEATURE_EXPORT_CSV        ServerFeature = 7
 	ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES ServerFeature = 8
 	ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN   ServerFeature = 9
-	ServerFeature_SERVER_FEATURE_INDEX_ADMIN       ServerFeature = 10
-	ServerFeature_SERVER_FEATURE_APP_ADMIN         ServerFeature = 11
-	ServerFeature_SERVER_FEATURE_PLAN_INSPECTION   ServerFeature = 12
+	// The complete configured index-administration family is available:
+	// CRUD/state, statistics, field catalog, and physical deletion. This is
+	// capability discovery, not a dependency-health or caller-entitlement flag.
+	ServerFeature_SERVER_FEATURE_INDEX_ADMIN     ServerFeature = 10
+	ServerFeature_SERVER_FEATURE_APP_ADMIN       ServerFeature = 11
+	ServerFeature_SERVER_FEATURE_PLAN_INSPECTION ServerFeature = 12
 )
 
 // Enum value maps for ServerFeature.

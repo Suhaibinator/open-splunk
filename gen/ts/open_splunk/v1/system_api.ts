@@ -23,6 +23,11 @@ export enum ServerFeature {
   SERVER_FEATURE_EXPORT_CSV = 7,
   SERVER_FEATURE_EXPORT_JSON_LINES = 8,
   SERVER_FEATURE_COLLECTOR_ADMIN = 9,
+  /**
+   * SERVER_FEATURE_INDEX_ADMIN - The complete configured index-administration family is available:
+   * CRUD/state, statistics, field catalog, and physical deletion. This is
+   * capability discovery, not a dependency-health or caller-entitlement flag.
+   */
   SERVER_FEATURE_INDEX_ADMIN = 10,
   SERVER_FEATURE_APP_ADMIN = 11,
   SERVER_FEATURE_PLAN_INSPECTION = 12,

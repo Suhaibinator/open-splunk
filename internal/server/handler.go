@@ -760,6 +760,12 @@ func NewHandler(config Config) (*Handler, error) {
 		exports:        exportService != nil,
 		timeline:       timelineService != nil,
 		collectorAdmin: collectorAdmin != nil,
+		indexAdmin: indexAdmin != nil &&
+			indexStatistics != nil &&
+			indexStatisticsSnapshotter != nil &&
+			indexFields != nil &&
+			indexDataDeletionAdmission != nil &&
+			indexDataDeletionWaker != nil,
 		appAdmin:       appAdmin != nil,
 		planInspection: inspectionService != nil,
 		fieldDiscovery: fieldService != nil,
@@ -1056,6 +1062,7 @@ type serviceCapabilities struct {
 	exports        bool
 	timeline       bool
 	collectorAdmin bool
+	indexAdmin     bool
 	appAdmin       bool
 	planInspection bool
 	fieldDiscovery bool
@@ -1063,9 +1070,9 @@ type serviceCapabilities struct {
 }
 
 func featuresForServices(features []opensplunkv1.ServerFeature, capabilities serviceCapabilities) []opensplunkv1.ServerFeature {
-	// The current handlers intentionally expose only the clean-install
-	// provisioning subset of these API families. Do not advertise either broad
-	// capability until every route in the corresponding proto family exists.
+	// Managed features describe complete configured API families, not current
+	// dependency health or caller authorization. Partial service compositions
+	// remain legal but must not overstate their browser contract.
 	managed := []struct {
 		feature opensplunkv1.ServerFeature
 		enabled bool
@@ -1075,6 +1082,7 @@ func featuresForServices(features []opensplunkv1.ServerFeature, capabilities ser
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES, capabilities.exports},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE, capabilities.timeline},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN, capabilities.collectorAdmin},
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN, capabilities.indexAdmin},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN, capabilities.appAdmin},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION, capabilities.planInspection},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY, capabilities.fieldDiscovery},
@@ -1084,15 +1092,9 @@ func featuresForServices(features []opensplunkv1.ServerFeature, capabilities ser
 	for _, item := range managed {
 		enabled[item.feature] = item.enabled
 	}
-	unsupported := map[opensplunkv1.ServerFeature]struct{}{
-		opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN: {},
-	}
 	result := make([]opensplunkv1.ServerFeature, 0, len(features)+len(managed))
 	seen := make(map[opensplunkv1.ServerFeature]struct{}, len(managed))
 	for _, feature := range features {
-		if _, blocked := unsupported[feature]; blocked {
-			continue
-		}
 		if available, controlled := enabled[feature]; controlled {
 			if available {
 				if _, duplicate := seen[feature]; !duplicate {
