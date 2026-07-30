@@ -30,7 +30,8 @@ var errInvalidIndexDeletionMutationAttempt = errors.New(
 )
 
 // IndexDeletionMutationTarget binds a durable deletion attempt to the exact
-// tenant and physical ClickHouse table generation resolved before submission.
+// admission tenant and physical ClickHouse table generation resolved before
+// submission.
 type IndexDeletionMutationTarget struct {
 	TenantID  string
 	Database  string
@@ -181,6 +182,12 @@ func (db *DB) ensureIndexDeletionMutationAttempt(
 		return IndexDeletionMutationAttempt{}, fmt.Errorf(
 			"read index deletion operation for mutation attempt: %w",
 			conversionErr,
+		)
+	}
+	if target.TenantID != operation.TenantID {
+		return IndexDeletionMutationAttempt{}, fmt.Errorf(
+			"%w: index deletion mutation tenant changed",
+			ErrDependencyConflict,
 		)
 	}
 	createdAt := databaseTime(time.Now())
@@ -407,6 +414,7 @@ func indexDeletionMutationAttemptForOperation(
 	attempt, err := indexDeletionMutationAttemptFromRecord(record)
 	if err != nil ||
 		attempt.DeletionOperationID != operation.ID ||
+		attempt.Target.TenantID != operation.TenantID ||
 		attempt.CreatedAt.Before(operation.CreatedAt) {
 		return IndexDeletionMutationAttempt{},
 			invalidIndexDeletionMutationAttempt()
@@ -447,10 +455,7 @@ func indexDeletionMutationAttemptFromRecord(
 func validateIndexDeletionMutationTarget(
 	target IndexDeletionMutationTarget,
 ) error {
-	if validateAppIdentity(
-		target.TenantID,
-		maximumAppTenantIDBytes,
-	) != nil {
+	if validateTenantID(target.TenantID) != nil {
 		return fmt.Errorf(
 			"%w: index deletion mutation tenant ID is invalid",
 			ErrInvalidArgument,

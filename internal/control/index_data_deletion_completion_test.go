@@ -222,6 +222,7 @@ func TestCompleteIndexDataDeletionSupportsFinalSQLiteVersion(t *testing.T) {
 	}
 	operation, err := db.BeginIndexDataDeletion(
 		ctx,
+		IndexDataDeletionScope{TenantID: "tenant"},
 		archived.ID,
 		math.MaxInt64-1,
 		archived.Definition.Name,
@@ -287,6 +288,7 @@ func TestCompleteIndexDataDeletionSupportsOpaqueSchemaValidIndexID(
 	}
 	operation, err := db.BeginIndexDataDeletion(
 		ctx,
+		IndexDataDeletionScope{TenantID: "tenant"},
 		opaqueID,
 		archived.Version,
 		archived.Definition.Name,

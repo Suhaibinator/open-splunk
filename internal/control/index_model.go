@@ -48,12 +48,13 @@ func (indexDeletionTombstoneRecord) TableName() string {
 
 // indexDeletionOperationRecord is the GORM representation of the immutable
 // DELETE_DATA request admitted by 0017_index_deletion_operations.sql. The
-// operation snapshots the archived index generation; every row is a
-// restartable outstanding-work marker.
+// operation snapshots its trusted tenant and archived index generation; every
+// row is a restartable outstanding-work marker.
 type indexDeletionOperationRecord struct {
 	DeletionOperationID  string `gorm:"column:deletion_operation_id;type:text;primaryKey;not null;index:index_deletion_operations_created_id_idx,priority:2;check:index_deletion_operations_id_byte_length,length(CAST(deletion_operation_id AS BLOB)) BETWEEN 1 AND 128"`
 	IndexID              string `gorm:"column:index_id;type:text;not null;unique"`
 	IndexName            string `gorm:"column:index_name;type:text;not null"`
+	TenantID             string `gorm:"column:tenant_id;type:text;not null;check:index_deletion_operations_tenant_id_byte_length,length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 255"`
 	ArchivedIndexVersion int64  `gorm:"column:archived_index_version;type:integer;not null;check:index_deletion_operations_archived_version_supported,archived_index_version >= 1 AND archived_index_version < 9223372036854775807"`
 	CreatedAtUnixMicro   int64  `gorm:"column:created_at_unix_micro;type:integer;not null;index:index_deletion_operations_created_id_idx,priority:1;check:index_deletion_operations_created_at_positive,created_at_unix_micro > 0"`
 }

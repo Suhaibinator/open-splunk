@@ -23,11 +23,13 @@ var (
 
 // IndexDeletionOperation is the durable control-plane intent for one physical
 // index deletion. Every row is outstanding coordinator work; a future terminal
-// transaction will replace it with the appropriate audit marker.
+// transaction will replace it with the appropriate audit marker. TenantID is
+// the immutable trusted scope captured when the request is admitted.
 // ClickHouse-specific progress is deliberately not represented by this
 // control-plane admission record.
 type IndexDeletionOperation struct {
 	ID              string
+	TenantID        string
 	IndexID         string
 	IndexName       string
 	ArchivedVersion uint64
@@ -35,15 +37,29 @@ type IndexDeletionOperation struct {
 	CreatedAt       time.Time
 }
 
+// IndexDataDeletionScope is the trusted tenant boundary captured by physical
+// deletion admission. It must come from authenticated process state, never
+// from request payload data.
+type IndexDataDeletionScope struct {
+	TenantID string
+}
+
 // BeginIndexDataDeletion atomically records an exact archived index generation
 // and transitions that index to the coordinator-owned deleting state. An exact
 // retry returns the original operation, including after process restart.
 func (db *DB) BeginIndexDataDeletion(
 	ctx context.Context,
+	scope IndexDataDeletionScope,
 	indexID string,
 	expectedVersion uint64,
 	confirmationName string,
 ) (IndexDeletionOperation, error) {
+	if validateTenantID(scope.TenantID) != nil {
+		return IndexDeletionOperation{}, fmt.Errorf(
+			"%w: index data deletion tenant ID is invalid",
+			ErrInvalidArgument,
+		)
+	}
 	if err := validateIndexDataDeletionVersion(expectedVersion); err != nil {
 		return IndexDeletionOperation{}, err
 	}
@@ -59,6 +75,7 @@ func (db *DB) BeginIndexDataDeletion(
 	}
 	existing, found, err := db.findIndexDeletionOperation(
 		ctx,
+		scope.TenantID,
 		indexID,
 		expectedVersion,
 		canonicalConfirmation,
@@ -78,6 +95,7 @@ func (db *DB) BeginIndexDataDeletion(
 		operation, beginErr := db.beginIndexDataDeletion(
 			ctx,
 			operationID,
+			scope.TenantID,
 			indexID,
 			expectedVersion,
 			canonicalConfirmation,
@@ -93,6 +111,7 @@ func (db *DB) BeginIndexDataDeletion(
 
 func (db *DB) findIndexDeletionOperation(
 	ctx context.Context,
+	tenantID string,
 	indexID string,
 	expectedVersion uint64,
 	confirmationName string,
@@ -113,6 +132,7 @@ func (db *DB) findIndexDeletionOperation(
 	operation, err := matchingIndexDeletionOperation(
 		db.orm.WithContext(ctx),
 		record,
+		tenantID,
 		expectedVersion,
 		confirmationName,
 	)
@@ -128,6 +148,7 @@ func (db *DB) findIndexDeletionOperation(
 func (db *DB) beginIndexDataDeletion(
 	ctx context.Context,
 	operationID string,
+	tenantID string,
 	indexID string,
 	expectedVersion uint64,
 	confirmationName string,
@@ -152,6 +173,7 @@ func (db *DB) beginIndexDataDeletion(
 		operation, conversionErr := matchingIndexDeletionOperation(
 			tx,
 			existing,
+			tenantID,
 			expectedVersion,
 			confirmationName,
 		)
@@ -207,6 +229,7 @@ func (db *DB) beginIndexDataDeletion(
 		DeletionOperationID:  operationID,
 		IndexID:              current.ID,
 		IndexName:            current.Definition.Name,
+		TenantID:             tenantID,
 		ArchivedIndexVersion: currentRecord.Version,
 		CreatedAtUnixMicro:   createdAt.UnixMicro(),
 	}
@@ -285,12 +308,19 @@ func takeIndexDeletionOperationByIndex(
 func matchingIndexDeletionOperation(
 	database *gorm.DB,
 	record indexDeletionOperationRecord,
+	tenantID string,
 	expectedVersion uint64,
 	confirmationName string,
 ) (IndexDeletionOperation, error) {
 	operation, err := validatedIndexDeletionOperation(database, record)
 	if err != nil {
 		return IndexDeletionOperation{}, err
+	}
+	if operation.TenantID != tenantID {
+		return IndexDeletionOperation{}, fmt.Errorf(
+			"%w: index data deletion tenant changed",
+			ErrDependencyConflict,
+		)
 	}
 	if operation.ArchivedVersion != expectedVersion {
 		return IndexDeletionOperation{}, ErrVersionConflict
@@ -415,6 +445,7 @@ func indexDeletionOperationFromRecord(
 ) (IndexDeletionOperation, error) {
 	canonicalName, nameErr := NormalizeIndexName(record.IndexName)
 	if !protocolid.Valid(record.DeletionOperationID) ||
+		validateTenantID(record.TenantID) != nil ||
 		strings.TrimSpace(record.IndexID) == "" ||
 		nameErr != nil ||
 		canonicalName != record.IndexName ||
@@ -425,6 +456,7 @@ func indexDeletionOperationFromRecord(
 	}
 	return IndexDeletionOperation{
 		ID:              record.DeletionOperationID,
+		TenantID:        record.TenantID,
 		IndexID:         record.IndexID,
 		IndexName:       record.IndexName,
 		ArchivedVersion: uint64(record.ArchivedIndexVersion),

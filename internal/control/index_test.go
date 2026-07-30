@@ -334,6 +334,7 @@ func TestDeleteIndexValidatesConfirmationVersionAndState(t *testing.T) {
 	}
 	if _, err := db.BeginIndexDataDeletion(
 		ctx,
+		IndexDataDeletionScope{TenantID: "tenant"},
 		deleting.ID,
 		deleting.Version,
 		deleting.Definition.Name,

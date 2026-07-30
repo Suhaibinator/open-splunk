@@ -411,6 +411,7 @@ func TestAppDefaultIndexesMustExistAndRemainSearchable(t *testing.T) {
 	}
 	if _, err := db.BeginIndexDataDeletion(
 		ctx,
+		IndexDataDeletionScope{TenantID: "tenant"},
 		deleting.ID,
 		deleting.Version,
 		deleting.Definition.Name,
@@ -1200,7 +1201,7 @@ func TestAppValidationIsCanonicalAndBounded(t *testing.T) {
 		{name: "empty tenant", scope: AppAccessScope{}},
 		{name: "padded tenant", scope: AppAccessScope{TenantID: " tenant "}},
 		{name: "control tenant", scope: AppAccessScope{TenantID: "ten\nant"}},
-		{name: "oversized tenant", scope: AppAccessScope{TenantID: strings.Repeat("t", maximumAppTenantIDBytes+1)}},
+		{name: "oversized tenant", scope: AppAccessScope{TenantID: strings.Repeat("t", maximumTenantIDBytes+1)}},
 		{name: "invalid tenant utf8", scope: AppAccessScope{TenantID: invalidUTF8}},
 		{name: "empty slug", scope: scope, mutate: func(definition *AppDefinition) { definition.Slug = " " }},
 		{name: "invalid slug", scope: scope, mutate: func(definition *AppDefinition) { definition.Slug = "_private" }},

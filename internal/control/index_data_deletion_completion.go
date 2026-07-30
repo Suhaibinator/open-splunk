@@ -318,6 +318,7 @@ func indexDataDeletionCompletionFromRecord(
 			DeletionOperationID:  record.DeletionOperationID,
 			IndexID:              record.IndexID,
 			IndexName:            record.IndexName,
+			TenantID:             record.TenantID,
 			ArchivedIndexVersion: record.ArchivedIndexVersion,
 			CreatedAtUnixMicro:   record.OperationCreatedAtUnixMicro,
 		},

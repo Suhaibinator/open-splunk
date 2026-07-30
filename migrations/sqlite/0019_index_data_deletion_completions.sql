@@ -135,6 +135,7 @@ WHEN NOT EXISTS (
           NEW.deletion_operation_id
       AND deletion_operation.index_id = NEW.index_id
       AND deletion_operation.index_name = NEW.index_name
+      AND deletion_operation.tenant_id = NEW.tenant_id
       AND deletion_operation.archived_index_version =
           NEW.archived_index_version
       AND deletion_operation.created_at_unix_micro =
@@ -281,6 +282,7 @@ WHEN NOT EXISTS (
           OLD.deletion_operation_id
       AND completion.index_id = OLD.index_id
       AND completion.index_name = OLD.index_name
+      AND completion.tenant_id = OLD.tenant_id
       AND completion.archived_index_version =
           OLD.archived_index_version
       AND completion.operation_created_at_unix_micro =
@@ -320,6 +322,7 @@ BEGIN
     WHERE deletion_operation_id = NEW.deletion_operation_id
       AND index_id = NEW.index_id
       AND index_name = NEW.index_name
+      AND tenant_id = NEW.tenant_id
       AND archived_index_version = NEW.archived_index_version
       AND created_at_unix_micro =
           NEW.operation_created_at_unix_micro;

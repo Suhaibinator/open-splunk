@@ -67,6 +67,8 @@ type DeletionStore interface {
 // fresh StepTimeout after the frozen step returns. Zero durations select
 // conservative defaults.
 type IndexDataDeletionCoordinatorConfig struct {
+	// TenantID must equal the immutable tenant on every admitted operation.
+	// Drift is rejected before the mutation-attempt read or any native call.
 	TenantID         string
 	PollInterval     time.Duration
 	RecoveryInterval time.Duration
@@ -317,6 +319,9 @@ func (coordinator *IndexDataDeletionCoordinator) reconcileStep(
 		}
 		current = &indexDataDeletionWork{operation: operation}
 	}
+	if err := coordinator.validateOperation(current.operation); err != nil {
+		return current, indexDataDeletionContinue, err
+	}
 
 	if current.attempt == nil {
 		attempt, err := coordinator.control.GetIndexDeletionMutationAttempt(
@@ -393,7 +398,7 @@ func (coordinator *IndexDataDeletionCoordinator) advanceFrozen(
 					)
 				}
 				resolvedTarget := control.IndexDeletionMutationTarget{
-					TenantID:  coordinator.tenantID,
+					TenantID:  current.operation.TenantID,
 					Database:  target.Database,
 					Table:     target.Table,
 					TableUUID: target.TableUUID,
@@ -590,18 +595,35 @@ func (coordinator *IndexDataDeletionCoordinator) validateAttempt(
 			errors.New("attempt does not match the oldest deletion operation"),
 		)
 	}
-	if attempt.Target.TenantID != coordinator.tenantID {
+	if attempt.Target.TenantID != operation.TenantID {
 		return coordinator.operationError(
 			operation,
 			"validate durable mutation attempt",
 			fmt.Errorf(
-				"attempt tenant %q does not match configured tenant %q",
+				"attempt tenant %q does not match operation tenant %q",
 				attempt.Target.TenantID,
-				coordinator.tenantID,
+				operation.TenantID,
 			),
 		)
 	}
 	return nil
+}
+
+func (coordinator *IndexDataDeletionCoordinator) validateOperation(
+	operation control.IndexDeletionOperation,
+) error {
+	if operation.TenantID == coordinator.tenantID {
+		return nil
+	}
+	return coordinator.operationError(
+		operation,
+		"validate durable deletion operation",
+		fmt.Errorf(
+			"operation tenant %q does not match configured tenant %q",
+			operation.TenantID,
+			coordinator.tenantID,
+		),
+	)
 }
 
 func (coordinator *IndexDataDeletionCoordinator) operationError(
@@ -690,6 +712,7 @@ func completionMatchesWork(
 		completion,
 		attempt,
 	) &&
+		completion.Target.TenantID == operation.TenantID &&
 		completion.ArchivedVersion == operation.ArchivedVersion &&
 		completion.DeletedVersion == operation.DeletingVersion &&
 		completion.OperationCreatedAt.Equal(operation.CreatedAt)
@@ -706,6 +729,7 @@ func completionMatchesOperation(
 		completion.ArchivedVersion == operation.ArchivedVersion &&
 		completion.DeletedVersion == operation.DeletingVersion &&
 		completion.OperationCreatedAt.Equal(operation.CreatedAt) &&
+		completion.Target.TenantID == operation.TenantID &&
 		completion.Target == target &&
 		completion.ProtocolVersion ==
 			control.IndexDeletionMutationProtocolVersion

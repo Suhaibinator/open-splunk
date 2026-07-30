@@ -694,6 +694,50 @@ func TestIndexDataDeletionCoordinatorRejectsAttemptTenantBeforeNativeCall(
 	}
 }
 
+func TestIndexDataDeletionCoordinatorRejectsOperationTenantBeforeAttemptRead(
+	t *testing.T,
+) {
+	operation, _, _, _ := coordinatorTestRecords("operation-tenant-drift")
+	operation.TenantID = "other-tenant"
+	recorder := newCoordinatorTestRecorder()
+	reported := make(chan error, 4)
+	var nextCalls atomic.Int32
+	controlPlane := &coordinatorTestControl{
+		recorder: recorder,
+		next: func(context.Context) (control.IndexDeletionOperation, error) {
+			nextCalls.Add(1)
+			return operation, nil
+		},
+	}
+	store := &coordinatorTestStore{recorder: recorder}
+	config := coordinatorTestConfig()
+	config.RetryInitial = time.Millisecond
+	config.RetryMaximum = time.Millisecond
+	config.OnError = func(err error) { reported <- err }
+	coordinator := startCoordinatorTest(t, controlPlane, store, config)
+
+	for range 2 {
+		select {
+		case err := <-reported:
+			if err == nil || !strings.Contains(err.Error(), "tenant") {
+				t.Fatalf("reported error = %v, want tenant mismatch", err)
+			}
+		case <-time.After(coordinatorTestTimeout):
+			t.Fatal("coordinator did not retain and retry tenant mismatch")
+		}
+	}
+	closeCoordinatorTest(t, coordinator)
+
+	events := recorder.snapshot()
+	assertCoordinatorTestCount(t, events, "control.next", 1)
+	assertCoordinatorTestCount(t, events, "control.get-attempt", 0)
+	assertCoordinatorTestCount(t, events, "store.status", 0)
+	assertCoordinatorTestCount(t, events, "store.freeze.enter", 0)
+	if got := nextCalls.Load(); got != 1 {
+		t.Fatalf("oldest-operation discovery calls = %d, want cached retry", got)
+	}
+}
+
 func TestIndexDataDeletionCoordinatorOldestFailureBlocksYoungerOperation(
 	t *testing.T,
 ) {
@@ -1862,6 +1906,7 @@ func coordinatorTestRecords(
 		ID:              "idxdel_" + suffix,
 		IndexID:         "index-" + suffix,
 		IndexName:       "index-" + suffix,
+		TenantID:        "tenant-a",
 		ArchivedVersion: 4,
 		DeletingVersion: 5,
 		CreatedAt:       operationCreatedAt,

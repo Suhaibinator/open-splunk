@@ -1,12 +1,13 @@
 -- DELETE_DATA begins as one immutable control-plane operation. The retained
 -- index row continues to own its canonical ClickHouse-facing name; the
--- operation snapshots the exact archived generation that entered the
--- coordinator-owned deleting state.
+-- operation snapshots the trusted admission tenant and exact archived
+-- generation that entered the coordinator-owned deleting state.
 CREATE TABLE index_deletion_operations (
     deletion_operation_id TEXT PRIMARY KEY NOT NULL,
     index_id TEXT NOT NULL UNIQUE
         REFERENCES indexes (index_id) ON DELETE RESTRICT,
     index_name TEXT NOT NULL COLLATE BINARY,
+    tenant_id TEXT NOT NULL COLLATE BINARY,
     archived_index_version INTEGER NOT NULL
         CHECK (
             archived_index_version >= 1
@@ -22,7 +23,23 @@ CREATE TABLE index_deletion_operations (
         ) = 0
         AND substr(deletion_operation_id, 1, 1) GLOB '[A-Za-z0-9]'
         AND deletion_operation_id NOT GLOB '*[^A-Za-z0-9._:-]*'
-    )
+    ),
+    CONSTRAINT index_deletion_operations_tenant_id_bounded
+        CHECK (
+            length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 255
+            AND instr(CAST(tenant_id AS BLOB), X'00') = 0
+            AND tenant_id = trim(tenant_id)
+            AND tenant_id NOT GLOB (
+                '*['
+                || char(1)
+                || '-'
+                || char(31)
+                || char(127)
+                || '-'
+                || char(159)
+                || ']*'
+            )
+        )
 ) STRICT;
 
 CREATE INDEX index_deletion_operations_created_id_idx

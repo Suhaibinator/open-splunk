@@ -16,6 +16,7 @@ func TestBeginIndexDataDeletionAtomicallyPersistsRestartableIntent(t *testing.T)
 	t.Parallel()
 
 	ctx := context.Background()
+	scope := IndexDataDeletionScope{TenantID: "tenant-a"}
 	path := filepath.Join(t.TempDir(), "control.sqlite")
 	db, err := Open(ctx, path)
 	if err != nil {
@@ -32,6 +33,7 @@ func TestBeginIndexDataDeletionAtomicallyPersistsRestartableIntent(t *testing.T)
 	}
 	operation, err := db.BeginIndexDataDeletion(
 		ctx,
+		scope,
 		archived.ID,
 		archived.Version,
 		archived.Definition.Name,
@@ -40,6 +42,7 @@ func TestBeginIndexDataDeletionAtomicallyPersistsRestartableIntent(t *testing.T)
 		t.Fatalf("BeginIndexDataDeletion(): %v", err)
 	}
 	if operation.ID == "" ||
+		operation.TenantID != scope.TenantID ||
 		operation.IndexID != archived.ID ||
 		operation.IndexName != archived.Definition.Name ||
 		operation.ArchivedVersion != archived.Version ||
@@ -62,6 +65,7 @@ func TestBeginIndexDataDeletionAtomicallyPersistsRestartableIntent(t *testing.T)
 
 	retried, err := db.BeginIndexDataDeletion(
 		ctx,
+		scope,
 		archived.ID,
 		archived.Version,
 		archived.Definition.Name,
@@ -81,6 +85,7 @@ func TestBeginIndexDataDeletionAtomicallyPersistsRestartableIntent(t *testing.T)
 	}
 	if _, err := db.BeginIndexDataDeletion(
 		ctx,
+		scope,
 		archived.ID,
 		operation.DeletingVersion,
 		archived.Definition.Name,
@@ -89,11 +94,21 @@ func TestBeginIndexDataDeletionAtomicallyPersistsRestartableIntent(t *testing.T)
 	}
 	if _, err := db.BeginIndexDataDeletion(
 		ctx,
+		scope,
 		archived.ID,
 		archived.Version,
 		"different-index",
 	); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("retry with changed confirmation error = %v, want ErrInvalidArgument", err)
+	}
+	if _, err := db.BeginIndexDataDeletion(
+		ctx,
+		IndexDataDeletionScope{TenantID: "tenant-b"},
+		archived.ID,
+		archived.Version,
+		archived.Definition.Name,
+	); !errors.Is(err, ErrDependencyConflict) {
+		t.Fatalf("retry with changed tenant error = %v, want ErrDependencyConflict", err)
 	}
 
 	got, err := db.GetIndexDeletionOperation(ctx, operation.ID)
@@ -126,6 +141,80 @@ func TestBeginIndexDataDeletionAtomicallyPersistsRestartableIntent(t *testing.T)
 	if restarted != operation {
 		t.Fatalf("restarted operation = %#v, want %#v", restarted, operation)
 	}
+	if _, err := db.BeginIndexDataDeletion(
+		ctx,
+		IndexDataDeletionScope{TenantID: "tenant-b"},
+		archived.ID,
+		archived.Version,
+		archived.Definition.Name,
+	); !errors.Is(err, ErrDependencyConflict) {
+		t.Fatalf(
+			"cross-tenant retry after restart error = %v, want ErrDependencyConflict",
+			err,
+		)
+	}
+}
+
+func TestBeginIndexDataDeletionRejectsInvalidTenantWithoutMutation(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	created, err := db.CreateIndex(ctx, enabledIndex("tenant-validation"))
+	if err != nil {
+		t.Fatalf("CreateIndex(): %v", err)
+	}
+	archived, err := db.SetIndexState(
+		ctx,
+		created.ID,
+		created.Version,
+		IndexStateArchived,
+	)
+	if err != nil {
+		t.Fatalf("archive index: %v", err)
+	}
+
+	invalidUTF8 := string([]byte{0xff})
+	for name, tenantID := range map[string]string{
+		"empty":               "",
+		"leading whitespace":  " tenant",
+		"trailing whitespace": "tenant ",
+		"unicode whitespace":  "\u00a0tenant",
+		"ASCII control":       "tenant\nother",
+		"Unicode control":     "tenant\u0085other",
+		"NUL":                 "tenant\x00other",
+		"invalid UTF-8":       invalidUTF8,
+		"oversized":           strings.Repeat("t", maximumTenantIDBytes+1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := db.BeginIndexDataDeletion(
+				ctx,
+				IndexDataDeletionScope{TenantID: tenantID},
+				archived.ID,
+				archived.Version,
+				archived.Definition.Name,
+			); !errors.Is(err, ErrInvalidArgument) {
+				t.Fatalf("error = %v, want ErrInvalidArgument", err)
+			}
+		})
+	}
+
+	var count int64
+	if err := db.GORMDB().WithContext(ctx).
+		Model(&indexDeletionOperationRecord{}).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count operations: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("invalid tenants persisted %d operations, want 0", count)
+	}
+	current, err := db.GetIndex(ctx, archived.ID)
+	if err != nil {
+		t.Fatalf("GetIndex(): %v", err)
+	}
+	if current != archived {
+		t.Fatalf("invalid tenants changed index: got %#v, want %#v", current, archived)
+	}
 }
 
 func TestBeginIndexDataDeletionSupportsFinalSQLiteVersion(t *testing.T) {
@@ -153,6 +242,7 @@ func TestBeginIndexDataDeletionSupportsFinalSQLiteVersion(t *testing.T) {
 
 	operation, err := db.BeginIndexDataDeletion(
 		ctx,
+		IndexDataDeletionScope{TenantID: "tenant"},
 		archived.ID,
 		math.MaxInt64-1,
 		archived.Definition.Name,
@@ -220,6 +310,7 @@ func TestBeginIndexDataDeletionClassifiesCompletedOperationIDCollision(t *testin
 	if _, err := db.beginIndexDataDeletion(
 		ctx,
 		completedOperation.ID,
+		"tenant",
 		archived.ID,
 		archived.Version,
 		archived.Definition.Name,
@@ -325,6 +416,7 @@ func TestBeginIndexDataDeletionValidatesExactArchivedIntent(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, beginErr := db.BeginIndexDataDeletion(
 				ctx,
+				IndexDataDeletionScope{TenantID: "tenant"},
 				test.id,
 				test.version,
 				test.confirmation,
@@ -344,6 +436,7 @@ func TestBeginIndexDataDeletionValidatesExactArchivedIntent(t *testing.T) {
 	} {
 		_, beginErr := db.BeginIndexDataDeletion(
 			ctx,
+			IndexDataDeletionScope{TenantID: "tenant"},
 			archived.ID,
 			archived.Version,
 			confirmation,
@@ -401,6 +494,7 @@ func TestConcurrentIndexDataDeletionAdmissionsConvergeOnOneOperation(t *testing.
 			<-start
 			operation, beginErr := db.BeginIndexDataDeletion(
 				ctx,
+				IndexDataDeletionScope{TenantID: "tenant"},
 				archived.ID,
 				archived.Version,
 				archived.Definition.Name,
@@ -447,6 +541,90 @@ func TestConcurrentIndexDataDeletionAdmissionsConvergeOnOneOperation(t *testing.
 	}
 }
 
+func TestConcurrentIndexDataDeletionAdmissionsCannotRebindTenant(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	created, err := db.CreateIndex(ctx, enabledIndex("concurrent-tenants"))
+	if err != nil {
+		t.Fatalf("CreateIndex(): %v", err)
+	}
+	archived, err := db.SetIndexState(
+		ctx,
+		created.ID,
+		created.Version,
+		IndexStateArchived,
+	)
+	if err != nil {
+		t.Fatalf("archive index: %v", err)
+	}
+
+	type admissionResult struct {
+		tenantID  string
+		operation IndexDeletionOperation
+		err       error
+	}
+	start := make(chan struct{})
+	results := make(chan admissionResult, 2)
+	for _, tenantID := range []string{"tenant-a", "tenant-b"} {
+		go func() {
+			<-start
+			operation, beginErr := db.BeginIndexDataDeletion(
+				ctx,
+				IndexDataDeletionScope{TenantID: tenantID},
+				archived.ID,
+				archived.Version,
+				archived.Definition.Name,
+			)
+			results <- admissionResult{
+				tenantID:  tenantID,
+				operation: operation,
+				err:       beginErr,
+			}
+		}()
+	}
+	close(start)
+
+	var winner admissionResult
+	var loser admissionResult
+	for range 2 {
+		result := <-results
+		if result.err == nil {
+			if winner.tenantID != "" {
+				t.Fatalf("multiple tenant admissions succeeded: %#v and %#v", winner, result)
+			}
+			winner = result
+			continue
+		}
+		loser = result
+	}
+	if winner.tenantID == "" {
+		t.Fatalf("no tenant admission succeeded; loser = %#v", loser)
+	}
+	if !errors.Is(loser.err, ErrDependencyConflict) {
+		t.Fatalf("losing tenant error = %v, want ErrDependencyConflict", loser.err)
+	}
+	if winner.operation.TenantID != winner.tenantID {
+		t.Fatalf("winner operation = %#v, tenant = %q", winner.operation, winner.tenantID)
+	}
+	stored, err := db.GetIndexDeletionOperation(ctx, winner.operation.ID)
+	if err != nil {
+		t.Fatalf("GetIndexDeletionOperation(): %v", err)
+	}
+	if stored != winner.operation {
+		t.Fatalf("stored operation = %#v, want %#v", stored, winner.operation)
+	}
+	deleting, err := db.GetIndex(ctx, archived.ID)
+	if err != nil {
+		t.Fatalf("GetIndex(): %v", err)
+	}
+	if deleting.State != IndexStateDeleting ||
+		deleting.Version != archived.Version+1 {
+		t.Fatalf("deleting index = %#v", deleting)
+	}
+}
+
 func TestConcurrentPhysicalAndKeepDataDeletionLeaveOneDurableWinner(t *testing.T) {
 	t.Parallel()
 
@@ -468,6 +646,7 @@ func TestConcurrentPhysicalAndKeepDataDeletionLeaveOneDurableWinner(t *testing.T
 		<-start
 		_, beginErr := db.BeginIndexDataDeletion(
 			ctx,
+			IndexDataDeletionScope{TenantID: "tenant"},
 			archived.ID,
 			archived.Version,
 			archived.Definition.Name,
@@ -568,6 +747,7 @@ func TestBeginIndexDataDeletionRollsBackWhenTransitionFails(t *testing.T) {
 
 	if _, err := db.BeginIndexDataDeletion(
 		ctx,
+		IndexDataDeletionScope{TenantID: "tenant"},
 		archived.ID,
 		archived.Version,
 		archived.Definition.Name,
@@ -609,6 +789,7 @@ func TestIndexDeletionOperationDiscoveryIsBoundedAndDeterministic(t *testing.T) 
 		}
 		operation, err := db.BeginIndexDataDeletion(
 			ctx,
+			IndexDataDeletionScope{TenantID: "tenant"},
 			archived.ID,
 			archived.Version,
 			archived.Definition.Name,
@@ -686,23 +867,23 @@ func TestIndexDeletionOperationSQLGuards(t *testing.T) {
 			statement: `
 			INSERT INTO index_deletion_operations (
 				deletion_operation_id, index_id, index_name,
-				archived_index_version, created_at_unix_micro
-			) VALUES ('idxdel_missing', 'missing', 'missing', 1, 1)`,
+				tenant_id, archived_index_version, created_at_unix_micro
+			) VALUES ('idxdel_missing', 'missing', 'missing', 'tenant', 1, 1)`,
 		},
 		"wrong name": {
 			statement: `
 			INSERT INTO index_deletion_operations (
 				deletion_operation_id, index_id, index_name,
-				archived_index_version, created_at_unix_micro
-			) VALUES ('idxdel_wrong_name', ?, 'wrong-name', ?, ?)`,
+				tenant_id, archived_index_version, created_at_unix_micro
+			) VALUES ('idxdel_wrong_name', ?, 'wrong-name', 'tenant', ?, ?)`,
 			arguments: []any{archived.ID, archived.Version, createdAt},
 		},
 		"wrong version": {
 			statement: `
 			INSERT INTO index_deletion_operations (
 				deletion_operation_id, index_id, index_name,
-				archived_index_version, created_at_unix_micro
-			) VALUES ('idxdel_wrong_version', ?, ?, ?, ?)`,
+				tenant_id, archived_index_version, created_at_unix_micro
+			) VALUES ('idxdel_wrong_version', ?, ?, 'tenant', ?, ?)`,
 			arguments: []any{
 				archived.ID,
 				archived.Definition.Name,
@@ -714,8 +895,8 @@ func TestIndexDeletionOperationSQLGuards(t *testing.T) {
 			statement: `
 			INSERT INTO index_deletion_operations (
 				deletion_operation_id, index_id, index_name,
-				archived_index_version, created_at_unix_micro
-			) VALUES ('idxdel_old_timestamp', ?, ?, ?, 1)`,
+				tenant_id, archived_index_version, created_at_unix_micro
+			) VALUES ('idxdel_old_timestamp', ?, ?, 'tenant', ?, 1)`,
 			arguments: []any{
 				archived.ID,
 				archived.Definition.Name,
@@ -726,8 +907,8 @@ func TestIndexDeletionOperationSQLGuards(t *testing.T) {
 			statement: `
 			INSERT INTO index_deletion_operations (
 				deletion_operation_id, index_id, index_name,
-				archived_index_version, created_at_unix_micro
-			) VALUES (?, ?, ?, ?, ?)`,
+				tenant_id, archived_index_version, created_at_unix_micro
+			) VALUES (?, ?, ?, 'tenant', ?, ?)`,
 			arguments: []any{
 				" ",
 				archived.ID,
@@ -740,8 +921,8 @@ func TestIndexDeletionOperationSQLGuards(t *testing.T) {
 			statement: `
 			INSERT INTO index_deletion_operations (
 				deletion_operation_id, index_id, index_name,
-				archived_index_version, created_at_unix_micro
-			) VALUES (?, ?, ?, ?, ?)`,
+				tenant_id, archived_index_version, created_at_unix_micro
+			) VALUES (?, ?, ?, 'tenant', ?, ?)`,
 			arguments: []any{
 				strings.Repeat("é", 64),
 				archived.ID,
@@ -754,8 +935,8 @@ func TestIndexDeletionOperationSQLGuards(t *testing.T) {
 			statement: `
 			INSERT INTO index_deletion_operations (
 				deletion_operation_id, index_id, index_name,
-				archived_index_version, created_at_unix_micro
-			) VALUES (?, ?, ?, ?, ?)`,
+				tenant_id, archived_index_version, created_at_unix_micro
+			) VALUES (?, ?, ?, 'tenant', ?, ?)`,
 			arguments: []any{
 				"a\x00",
 				archived.ID,
@@ -776,9 +957,55 @@ func TestIndexDeletionOperationSQLGuards(t *testing.T) {
 			}
 		})
 	}
+	for name, tenant := range map[string]struct {
+		operationID string
+		tenantID    string
+	}{
+		"blank": {
+			operationID: "idxdel_blank_tenant",
+		},
+		"padded": {
+			operationID: "idxdel_padded_tenant",
+			tenantID:    " tenant",
+		},
+		"control": {
+			operationID: "idxdel_control_tenant",
+			tenantID:    "tenant\nother",
+		},
+		"unicode control": {
+			operationID: "idxdel_unicode_control_tenant",
+			tenantID:    "tenant\u0085other",
+		},
+		"NUL": {
+			operationID: "idxdel_nul_tenant",
+			tenantID:    "tenant\x00other",
+		},
+		"oversized": {
+			operationID: "idxdel_large_tenant",
+			tenantID:    strings.Repeat("t", maximumTenantIDBytes+1),
+		},
+	} {
+		t.Run("tenant/"+name, func(t *testing.T) {
+			if _, err := db.SQLDB().ExecContext(ctx, `
+				INSERT INTO index_deletion_operations (
+					deletion_operation_id, index_id, index_name,
+					tenant_id, archived_index_version, created_at_unix_micro
+				) VALUES (?, ?, ?, ?, ?, ?)`,
+				tenant.operationID,
+				archived.ID,
+				archived.Definition.Name,
+				tenant.tenantID,
+				archived.Version,
+				createdAt,
+			); err == nil {
+				t.Fatal("invalid tenant insert unexpectedly succeeded")
+			}
+		})
+	}
 
 	operation, err := db.BeginIndexDataDeletion(
 		ctx,
+		IndexDataDeletionScope{TenantID: "tenant"},
 		archived.ID,
 		archived.Version,
 		archived.Definition.Name,
@@ -790,6 +1017,10 @@ func TestIndexDeletionOperationSQLGuards(t *testing.T) {
 		"update operation": `
 			UPDATE index_deletion_operations
 			SET index_name = 'changed'
+			WHERE deletion_operation_id = ?`,
+		"update operation tenant": `
+			UPDATE index_deletion_operations
+			SET tenant_id = 'other'
 			WHERE deletion_operation_id = ?`,
 		"delete operation": `
 			DELETE FROM index_deletion_operations
@@ -841,6 +1072,40 @@ func TestIndexDeletionOperationSQLGuards(t *testing.T) {
 	}
 }
 
+func TestIndexDeletionOperationDecoderRejectsInvalidTenant(t *testing.T) {
+	t.Parallel()
+
+	base := indexDeletionOperationRecord{
+		DeletionOperationID:  "idxdel_decoder",
+		IndexID:              "index-decoder",
+		IndexName:            "index-decoder",
+		TenantID:             "tenant",
+		ArchivedIndexVersion: 1,
+		CreatedAtUnixMicro:   1,
+	}
+	invalidUTF8 := string([]byte{0xff})
+	for name, tenantID := range map[string]string{
+		"empty":              "",
+		"padded":             " tenant",
+		"Unicode whitespace": "\u00a0tenant",
+		"control":            "tenant\u0085other",
+		"NUL":                "tenant\x00other",
+		"invalid UTF-8":      invalidUTF8,
+		"oversized":          strings.Repeat("t", maximumTenantIDBytes+1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			record := base
+			record.TenantID = tenantID
+			if _, err := indexDeletionOperationFromRecord(record); !errors.Is(
+				err,
+				errInvalidIndexDeletionOperation,
+			) {
+				t.Fatalf("error = %v, want errInvalidIndexDeletionOperation", err)
+			}
+		})
+	}
+}
+
 func TestIndexDeletionOperationReplaceCannotOrphanDeletingIndex(t *testing.T) {
 	t.Parallel()
 
@@ -856,6 +1121,7 @@ func TestIndexDeletionOperationReplaceCannotOrphanDeletingIndex(t *testing.T) {
 	}
 	operation, err := db.BeginIndexDataDeletion(
 		ctx,
+		IndexDataDeletionScope{TenantID: "tenant"},
 		first.ID,
 		first.Version,
 		first.Definition.Name,
@@ -881,12 +1147,14 @@ func TestIndexDeletionOperationReplaceCannotOrphanDeletingIndex(t *testing.T) {
 			deletion_operation_id,
 			index_id,
 			index_name,
+			tenant_id,
 			archived_index_version,
 			created_at_unix_micro
-		) VALUES (?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?)`,
 		operation.ID,
 		second.ID,
 		second.Definition.Name,
+		"tenant",
 		second.Version,
 		createdAt,
 	); err == nil {
@@ -948,6 +1216,7 @@ func TestIndexDeletionOperationsPreserveCanceledContextAndAtomicity(t *testing.T
 
 	if _, err := db.BeginIndexDataDeletion(
 		ctx,
+		IndexDataDeletionScope{TenantID: "tenant"},
 		archived.ID,
 		archived.Version,
 		archived.Definition.Name,
@@ -993,6 +1262,7 @@ func TestIndexDeletionOperationRelationshipReadPreservesCancellation(t *testing.
 	}
 	operation, err := db.BeginIndexDataDeletion(
 		ctx,
+		IndexDataDeletionScope{TenantID: "tenant"},
 		archived.ID,
 		archived.Version,
 		archived.Definition.Name,

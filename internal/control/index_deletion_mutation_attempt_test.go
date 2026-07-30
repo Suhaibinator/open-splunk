@@ -21,7 +21,7 @@ func TestEnsureIndexDeletionMutationAttemptPersistsExactTargetAcrossRestart(t *t
 	}
 	operation := createIndexDeletionOperation(t, db, "mutation-target")
 	target := IndexDeletionMutationTarget{
-		TenantID:  "tenant-a",
+		TenantID:  operation.TenantID,
 		Database:  "open_splunk",
 		Table:     "events",
 		TableUUID: "01234567-89ab-4cde-8fab-0123456789ab",
@@ -87,6 +87,23 @@ func TestEnsureIndexDeletionMutationAttemptPersistsExactTargetAcrossRestart(t *t
 		); !errors.Is(err, ErrDependencyConflict) {
 			t.Errorf("target drift %+v error = %v, want ErrDependencyConflict", drifted, err)
 		}
+	}
+	var record indexDeletionMutationAttemptRecord
+	if err := db.GORMDB().WithContext(ctx).
+		Where("deletion_operation_id = ?", operation.ID).
+		Take(&record).Error; err != nil {
+		t.Fatalf("read mutation attempt record: %v", err)
+	}
+	foreignOperation := operation
+	foreignOperation.TenantID = "tenant-b"
+	if _, err := indexDeletionMutationAttemptForOperation(
+		record,
+		foreignOperation,
+	); !errors.Is(err, errInvalidIndexDeletionMutationAttempt) {
+		t.Fatalf(
+			"attempt/operation tenant mismatch error = %v, want errInvalidIndexDeletionMutationAttempt",
+			err,
+		)
 	}
 }
 
@@ -237,6 +254,7 @@ func TestIndexDeletionMutationAttemptValidatesInputsAndParent(t *testing.T) {
 		{name: "padded tenant", operation: operation.ID, target: withMutationTarget(valid, func(target *IndexDeletionMutationTarget) { target.TenantID = " tenant" }), want: ErrInvalidArgument},
 		{name: "control tenant", operation: operation.ID, target: withMutationTarget(valid, func(target *IndexDeletionMutationTarget) { target.TenantID = "tenant\nother" }), want: ErrInvalidArgument},
 		{name: "nul tenant", operation: operation.ID, target: withMutationTarget(valid, func(target *IndexDeletionMutationTarget) { target.TenantID = "tenant\x00other" }), want: ErrInvalidArgument},
+		{name: "different parent tenant", operation: operation.ID, target: withMutationTarget(valid, func(target *IndexDeletionMutationTarget) { target.TenantID = "other-tenant" }), want: ErrDependencyConflict},
 		{name: "bad database", operation: operation.ID, target: withMutationTarget(valid, func(target *IndexDeletionMutationTarget) { target.Database = "open-splunk" }), want: ErrInvalidArgument},
 		{name: "bad table", operation: operation.ID, target: withMutationTarget(valid, func(target *IndexDeletionMutationTarget) { target.Table = "events.table" }), want: ErrInvalidArgument},
 		{name: "uppercase uuid", operation: operation.ID, target: withMutationTarget(valid, func(target *IndexDeletionMutationTarget) { target.TableUUID = "31234567-89AB-4CDE-8FAB-0123456789AB" }), want: ErrInvalidArgument},
@@ -268,6 +286,15 @@ func TestIndexDeletionMutationAttemptValidatesInputsAndParent(t *testing.T) {
 		operation.ID,
 	); !errors.Is(err, context.Canceled) {
 		t.Fatalf("GetIndexDeletionMutationAttempt(canceled) error = %v, want context.Canceled", err)
+	}
+	var count int64
+	if err := db.GORMDB().WithContext(ctx).
+		Model(&indexDeletionMutationAttemptRecord{}).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count mutation attempts: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("invalid attempts persisted %d rows, want 0", count)
 	}
 }
 
@@ -302,6 +329,28 @@ func TestIndexDeletionMutationAttemptSchemaPreventsMutationAndReplacement(t *tes
 				t.Fatalf("%s unexpectedly succeeded", name)
 			}
 		})
+	}
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		INSERT INTO index_deletion_mutation_attempts (
+			deletion_operation_id,
+			correlation_id,
+			tenant_id,
+			clickhouse_database,
+			clickhouse_table,
+			clickhouse_table_uuid,
+			protocol_version,
+			created_at_unix_micro
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		secondOperation.ID,
+		"idxmut_wrong_tenant",
+		"other-tenant",
+		target.Database,
+		target.Table,
+		target.TableUUID,
+		IndexDeletionMutationProtocolVersion,
+		secondOperation.CreatedAt.UnixMicro(),
+	); err == nil {
+		t.Fatal("cross-tenant mutation attempt unexpectedly succeeded")
 	}
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		INSERT OR REPLACE INTO index_deletion_mutation_attempts (
@@ -376,6 +425,7 @@ func createIndexDeletionOperation(t *testing.T, db *DB, name string) IndexDeleti
 	}
 	operation, err := db.BeginIndexDataDeletion(
 		ctx,
+		IndexDataDeletionScope{TenantID: "tenant"},
 		index.ID,
 		index.Version,
 		index.Definition.Name,

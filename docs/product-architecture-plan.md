@@ -495,12 +495,14 @@ and search scopes currently identify a logical index by `tenant_id` and
 index. Generic state administration cannot set `DELETING`, which is reserved
 for the physical-deletion coordinator. The GORM-backed SQLite control plane
 now admits that transition through `BeginIndexDataDeletion`: one immutable
-outstanding operation snapshots the exact archived index ID, canonical name,
-version, and timestamp, and its insert trigger atomically advances the index
-to `DELETING` at version `N+1`. Exact retries return the same operation,
-including after restart, and oldest-first discovery returns one indexed row
-at a time. The operation and its deleting index are immutable until
-`CompleteIndexDataDeletion` consumes the outstanding marker.
+outstanding operation snapshots the trusted tenant scope together with the
+exact archived index ID, canonical name, version, and timestamp, and its insert
+trigger atomically advances the index to `DELETING` at version `N+1`. Exact
+same-tenant retries return the same operation, including after restart;
+changing a valid tenant fails closed rather than rebinding the work.
+Oldest-first discovery returns one indexed row at a time. The operation and
+its deleting index are immutable until `CompleteIndexDataDeletion` consumes
+the outstanding marker.
 
 The ClickHouse Store separately provides a writer-preferring, context-aware
 `WithWritesFrozen` scope that covers `Store`, `ResumeBatch`,
@@ -514,11 +516,13 @@ contract; every writer for the physical events table must use it.
 Before the first outcome-ambiguous ClickHouse `ALTER`, migration 0018 and an
 explicit GORM model now persist exactly one immutable mutation attempt beneath
 the outstanding deletion operation. It binds a stable correlation ID and
-protocol version to the deployment tenant, ClickHouse database/table, and the
-table's canonical nonzero UUID. Exact retries converge on that row across
-concurrency and restart; any target drift fails closed. SQLite stores only the
-durable intent and physical generation. Live mutation progress remains native
-ClickHouse state and is never mirrored through GORM.
+protocol version to the operation's admission tenant, ClickHouse
+database/table, and the table's canonical nonzero UUID. Both Go validation and
+SQLite triggers reject any operation/attempt tenant mismatch. Exact retries
+converge on that row across concurrency and restart; any target drift fails
+closed. SQLite stores only the durable intent and physical generation. Live
+mutation progress remains native ClickHouse state and is never mirrored
+through GORM.
 
 The native Store can resolve the physical target only after the frozen outbox
 drain, reconcile the full-request SHA-256 correlation marker against
@@ -573,25 +577,24 @@ The `internal/indexes` coordinator now composes these primitives with one
 owned, serialized worker. It immediately recovers the oldest operation at
 startup, periodically rescans SQLite so correctness never depends on a wake,
 and retains the oldest pending or failing operation so younger work cannot
-bypass it. An existing attempt is checked against the configured deployment
-tenant before any native call and polled outside the freeze. Every advancement
-reacquires `WithWritesFrozen`, drains the durable outbox, and, for a new
-attempt, resolves and persists the immutable physical target before the first
-possible `ALTER`. Only a `PhysicallyEmpty` result with no error can invoke
+bypass it. The admitted operation tenant is checked against the configured
+deployment tenant before even reading a mutation attempt or making a native
+call. An existing attempt must then match that same operation tenant and is
+polled outside the freeze. Every advancement reacquires `WithWritesFrozen`,
+drains the durable outbox, and, for a new attempt, resolves and persists the
+immutable physical target before the first possible `ALTER`. Only a
+`PhysicallyEmpty` result with no error can invoke
 `CompleteIndexDataDeletion`, and that invocation occurs inside the same frozen
 callback. A failed or outcome-ambiguous terminal commit is accepted only when
-the exact immutable audit can be read; otherwise the next cycle must drain and
-prove zero again. Pending and error retries are rate-limited, wakes are
-coalesced, and shutdown cancels and joins the sole worker.
+the exact tenant-bound immutable audit can be read; otherwise the next cycle
+must drain and prove zero again. Pending and error retries are rate-limited,
+wakes are coalesced, and shutdown cancels and joins the sole worker.
 
 This coordinator is deliberately not wired into the server runtime and does
-not yet enable the route. The outstanding pre-attempt operation does not
-snapshot tenant identity, so changing the configured deployment tenant after
-admission but before attempt creation cannot be detected by coordinator
-inference. Before `DELETE_DATA` is activated, admission must atomically
-snapshot the tenant or startup must enforce an immutable deployment-tenant
-binding. Runtime construction must also enforce migrations and table-changing
-DDL before Store creation, one Store/coordinator owner, shutdown ordering that
+not yet enable the route. Admission-time tenant identity is now durable and
+pre-attempt configuration drift is rejected without touching ClickHouse.
+Runtime construction must still enforce migrations and table-changing DDL
+before Store creation, one Store/coordinator owner, shutdown ordering that
 closes the coordinator before the Store, and a restricted runtime DDL
 principal. The authenticated HTTP route is enabled last.
 

@@ -266,14 +266,18 @@ func TestIndexDeletionOperationRecordMatchesMigratedSQLiteColumns(t *testing.T) 
 
 	operationIDField := statement.Schema.LookUpField("DeletionOperationID")
 	indexIDField := statement.Schema.LookUpField("IndexID")
+	tenantIDField := statement.Schema.LookUpField("TenantID")
 	if operationIDField == nil ||
 		!operationIDField.PrimaryKey ||
 		indexIDField == nil ||
-		!indexIDField.Unique {
+		!indexIDField.Unique ||
+		tenantIDField == nil ||
+		!tenantIDField.NotNull {
 		t.Fatalf(
-			"GORM index-deletion operation keys are not explicit: operation ID=%#v index ID=%#v",
+			"GORM index-deletion operation keys/scope are not explicit: operation ID=%#v index ID=%#v tenant ID=%#v",
 			operationIDField,
 			indexIDField,
+			tenantIDField,
 		)
 	}
 

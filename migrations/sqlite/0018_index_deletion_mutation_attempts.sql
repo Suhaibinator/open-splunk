@@ -95,6 +95,7 @@ WHEN NOT EXISTS (
          deletion_operation.created_at_unix_micro
     WHERE deletion_operation.deletion_operation_id =
           NEW.deletion_operation_id
+      AND deletion_operation.tenant_id = NEW.tenant_id
       AND NEW.created_at_unix_micro >=
           deletion_operation.created_at_unix_micro
       AND NOT EXISTS (

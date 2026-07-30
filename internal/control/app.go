@@ -20,7 +20,6 @@ import (
 )
 
 const (
-	maximumAppTenantIDBytes       = 255
 	maximumAppSlugBytes           = 128
 	maximumAppDisplayNameBytes    = 255
 	maximumAppDescriptionBytes    = 16_384
@@ -644,7 +643,7 @@ func appDefinitionUpdates(definition AppDefinition, now time.Time) map[string]an
 
 func appFromRecord(record appRecord, defaultIndexes []string) (AppWorkspace, error) {
 	if !validCanonicalAppID(record.AppID) ||
-		validateAppIdentity(record.TenantID, maximumAppTenantIDBytes) != nil ||
+		validateTenantID(record.TenantID) != nil ||
 		record.Version < 1 ||
 		record.DefaultTimeRangePresent < 0 ||
 		record.DefaultTimeRangePresent > 1 ||
@@ -1074,7 +1073,7 @@ func loadAppDefaultIndexNames(
 }
 
 func normalizeAppScope(scope AppAccessScope) (string, error) {
-	if err := validateAppIdentity(scope.TenantID, maximumAppTenantIDBytes); err != nil {
+	if err := validateTenantID(scope.TenantID); err != nil {
 		return "", fmt.Errorf("%w: tenant identity is invalid", ErrInvalidArgument)
 	}
 	return strings.Clone(scope.TenantID), nil
@@ -1100,19 +1099,6 @@ func normalizeAppSelector(selector AppSelector) (AppSelector, error) {
 		return AppSelector{}, err
 	}
 	return AppSelector{Slug: slug}, nil
-}
-
-func validateAppIdentity(value string, maximum int) error {
-	if value == "" || len(value) > maximum || !utf8.ValidString(value) ||
-		strings.TrimSpace(value) != value || strings.IndexByte(value, 0) >= 0 {
-		return ErrInvalidArgument
-	}
-	for _, character := range value {
-		if unicode.IsControl(character) {
-			return ErrInvalidArgument
-		}
-	}
-	return nil
 }
 
 func validateCanonicalAppText(value string, maximum int, allowEmpty bool) error {

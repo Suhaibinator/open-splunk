@@ -219,12 +219,20 @@ func TestIndexDataDeletionCoordinatorAgainstClickHouse(t *testing.T) {
 	}
 	operation, err := firstProcess.control.BeginIndexDataDeletion(
 		ctx,
+		control.IndexDataDeletionScope{TenantID: targetTenant},
 		index.ID,
 		index.Version,
 		index.Definition.Name,
 	)
 	if err != nil {
 		t.Fatalf("begin coordinator deletion: %v", err)
+	}
+	if operation.TenantID != targetTenant {
+		t.Fatalf(
+			"admitted operation tenant = %q, want %q",
+			operation.TenantID,
+			targetTenant,
+		)
 	}
 	if _, err := firstProcess.control.GetIndexDeletionMutationAttempt(
 		ctx,
@@ -319,6 +327,113 @@ func TestIndexDataDeletionCoordinatorAgainstClickHouse(t *testing.T) {
 		replayGate.blocked,
 		"restarted background reconciler outbox hold",
 	)
+	restartedOperation, err := secondProcess.control.GetIndexDeletionOperation(
+		ctx,
+		operation.ID,
+	)
+	if err != nil {
+		t.Fatalf("read deletion operation after first restart: %v", err)
+	}
+	if restartedOperation != operation ||
+		restartedOperation.TenantID != targetTenant {
+		t.Fatalf(
+			"first-restart operation = %#v, want %#v with tenant %q",
+			restartedOperation,
+			operation,
+			targetTenant,
+		)
+	}
+
+	// A process restarted under a different deployment tenant must fail closed
+	// from the admission snapshot before polling or freezing ClickHouse. The
+	// original tenant can then recover the same oldest operation.
+	wrongTenantStore := &countingCoordinatorDeletionStore{}
+	wrongTenantErrors := make(chan error, 1)
+	wrongTenantCoordinator := startCoordinatorIntegration(
+		t,
+		secondProcess.control,
+		wrongTenantStore,
+		indexes.IndexDataDeletionCoordinatorConfig{
+			TenantID:         foreignTenant,
+			PollInterval:     time.Hour,
+			RecoveryInterval: time.Hour,
+			RetryInitial:     time.Hour,
+			RetryMaximum:     time.Hour,
+			StepTimeout:      30 * time.Second,
+			OnError: func(err error) {
+				select {
+				case wrongTenantErrors <- err:
+				default:
+				}
+			},
+		},
+	)
+	select {
+	case wrongTenantErr := <-wrongTenantErrors:
+		if wrongTenantErr == nil ||
+			!strings.Contains(wrongTenantErr.Error(), operation.ID) ||
+			!strings.Contains(wrongTenantErr.Error(), "operation tenant") ||
+			!strings.Contains(wrongTenantErr.Error(), targetTenant) ||
+			!strings.Contains(wrongTenantErr.Error(), foreignTenant) {
+			t.Fatalf(
+				"wrong-tenant coordinator error = %v, want operation %q and tenant drift",
+				wrongTenantErr,
+				operation.ID,
+			)
+		}
+	case <-ctx.Done():
+		t.Fatalf(
+			"wait for wrong-tenant coordinator failure: %v",
+			ctx.Err(),
+		)
+	case <-time.After(time.Minute):
+		t.Fatal("timed out waiting for wrong-tenant coordinator failure")
+	}
+	closeCoordinatorIntegration(t, wrongTenantCoordinator)
+	if statusCalls, freezeCalls := wrongTenantStore.calls(); statusCalls != 0 || freezeCalls != 0 {
+		t.Fatalf(
+			"wrong-tenant native calls = status %d, freeze %d; want 0/0",
+			statusCalls,
+			freezeCalls,
+		)
+	}
+	if _, err := secondProcess.control.GetIndexDeletionMutationAttempt(
+		ctx,
+		operation.ID,
+	); !errors.Is(err, control.ErrNotFound) {
+		t.Fatalf(
+			"wrong-tenant mutation attempt error = %v, want ErrNotFound",
+			err,
+		)
+	}
+	unchangedOperation, err := secondProcess.control.GetIndexDeletionOperation(
+		ctx,
+		operation.ID,
+	)
+	if err != nil || unchangedOperation != operation {
+		t.Fatalf(
+			"operation after wrong-tenant restart = %#v, error=%v; want %#v",
+			unchangedOperation,
+			err,
+			operation,
+		)
+	}
+	if usage, err := replayGate.PendingUsage(ctx); err != nil ||
+		usage.Reservations != 1 || usage.OutboxBytes == 0 {
+		t.Fatalf(
+			"outbox after wrong-tenant restart = %#v, error=%v; want one durable reservation",
+			usage,
+			err,
+		)
+	}
+	assertCoordinatorEventCount(
+		t,
+		ctx,
+		queryConnection,
+		ambiguousFixture.eventID,
+		0,
+	)
+
 	firstDeletionStore := &recordingCoordinatorDeletionStore{
 		delegate:      secondProcess.store,
 		query:         queryConnection,
@@ -422,6 +537,22 @@ func TestIndexDataDeletionCoordinatorAgainstClickHouse(t *testing.T) {
 		storeConfig,
 		nil,
 	)
+	restartedOperation, err = thirdProcess.control.GetIndexDeletionOperation(
+		ctx,
+		operation.ID,
+	)
+	if err != nil {
+		t.Fatalf("read deletion operation after second restart: %v", err)
+	}
+	if restartedOperation != operation ||
+		restartedOperation.TenantID != targetTenant {
+		t.Fatalf(
+			"second-restart operation = %#v, want %#v with tenant %q",
+			restartedOperation,
+			operation,
+			targetTenant,
+		)
+	}
 	secondDeletionStore := &recordingCoordinatorDeletionStore{
 		delegate: thirdProcess.store,
 		phase:    "second",
@@ -512,6 +643,7 @@ func TestIndexDataDeletionCoordinatorAgainstClickHouse(t *testing.T) {
 		completion.ArchivedVersion != operation.ArchivedVersion ||
 		completion.DeletedVersion != operation.DeletingVersion ||
 		completion.Target != wantTarget ||
+		completion.Target.TenantID != operation.TenantID ||
 		completion.ProtocolVersion !=
 			control.IndexDeletionMutationProtocolVersion ||
 		!completion.OperationCreatedAt.Equal(operation.CreatedAt) ||
@@ -563,6 +695,13 @@ func TestIndexDataDeletionCoordinatorAgainstClickHouse(t *testing.T) {
 			"restarted completion = %#v, want %#v",
 			restartedCompletion,
 			completion,
+		)
+	}
+	if restartedCompletion.Target.TenantID != operation.TenantID {
+		t.Fatalf(
+			"restarted completion tenant = %q, want admitted tenant %q",
+			restartedCompletion.Target.TenantID,
+			operation.TenantID,
 		)
 	}
 	assertCoordinatorTerminalControlState(
@@ -1028,6 +1167,35 @@ type recordingCoordinatorDeletionStore struct {
 	phase         string
 	trace         *coordinatorIntegrationTrace
 	replayChecked atomic.Bool
+}
+
+type countingCoordinatorDeletionStore struct {
+	statusCalls atomic.Uint32
+	freezeCalls atomic.Uint32
+}
+
+func (store *countingCoordinatorDeletionStore) IndexDataDeletionStatus(
+	_ context.Context,
+	_ clickhouse.IndexDataDeletionRequest,
+) (clickhouse.IndexDataDeletionProgress, error) {
+	store.statusCalls.Add(1)
+	return clickhouse.IndexDataDeletionProgress{}, errors.New(
+		"wrong-tenant coordinator unexpectedly polled ClickHouse",
+	)
+}
+
+func (store *countingCoordinatorDeletionStore) WithWritesFrozen(
+	_ context.Context,
+	_ func(context.Context, clickhouse.FrozenWrites) error,
+) error {
+	store.freezeCalls.Add(1)
+	return errors.New(
+		"wrong-tenant coordinator unexpectedly froze ClickHouse writes",
+	)
+}
+
+func (store *countingCoordinatorDeletionStore) calls() (uint32, uint32) {
+	return store.statusCalls.Load(), store.freezeCalls.Load()
 }
 
 func (store *recordingCoordinatorDeletionStore) IndexDataDeletionStatus(

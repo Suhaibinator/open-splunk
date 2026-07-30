@@ -479,6 +479,7 @@ func testIndexDataDeletionMutationAgainstClickHouse(
 	}
 	operation, err := controlDB.BeginIndexDataDeletion(
 		ctx,
+		control.IndexDataDeletionScope{TenantID: targetTenant},
 		index.ID,
 		index.Version,
 		index.Definition.Name,
