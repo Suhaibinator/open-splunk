@@ -7,7 +7,115 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded owner-scoped export job listing
+## Latest checkpoint: truthful complete index administration capability
+
+Date: 2026-07-30
+
+Committed implementation checkpoint:
+
+- `a219074` — complete-family `SERVER_FEATURE_INDEX_ADMIN` advertisement,
+  fail-closed partial compositions, wire-stable protobuf documentation, and
+  unit/runtime/live-production coverage.
+
+This test-first unit closes the deliberate bootstrap suppression left while
+the index route family was incomplete:
+
+1. The first focused test failed because a fully configured handler still
+   returned zero `SERVER_FEATURE_INDEX_ADMIN` values. The implementation now
+   manages that feature through the same normalization path as the other
+   service-derived capabilities.
+2. Advertisement requires the entire configured family: base index
+   administration, native single and page-batched statistics plus its
+   visibility snapshotter, native index field discovery, and durable physical
+   deletion admission plus its running coordinator wake boundary.
+3. Partial embedded and test configurations remain valid. Administration
+   alone, or any valid pair of the statistics, field, and physical-deletion
+   groups, remains feature-suppressed rather than overstating
+   `include_stats`, `stats/get`, `fields/list`, or `DELETE_DATA`.
+4. A statically requested feature cannot bypass service composition.
+   Incomplete configurations remove it, while a complete configuration
+   collapses duplicate requested values to exactly one.
+5. Typed-nil dependencies are normalized before capability calculation, and
+   the existing statistics/snapshotter and deletion-admission/waker pairing
+   invariants still fail invalid half-configurations during construction.
+6. The feature is server capability discovery, not a live ClickHouse health
+   signal or a future RBAC entitlement. Transient dependency failures remain
+   per-operation errors, and every index route independently retains the
+   administrator browser-authentication and Host/Origin boundary.
+7. Production composition is covered at both seams. The runtime unit proves
+   that base administration plus the indirectly injected index-field service
+   is still partial, while the real server supplies GORM administration,
+   native statistics/snapshotting and fields, and the durable deletion
+   coordinator before handler construction.
+8. The digest-pinned backend vertical requires the standalone production
+   bootstrap to advertise the feature exactly once. That same fixture already
+   executes index creation, single statistics, page-batched list statistics,
+   field-catalog paging, and authenticated production routing before its
+   GradeThis collector/search proof.
+9. The protobuf enum number and wire format are unchanged. Its source comment
+   now defines complete-family/configuration semantics, and both generated Go
+   and TypeScript bindings were regenerated reproducibly.
+10. Persistence ownership is unchanged. GORM remains restricted to the
+    SQLite control plane; index statistics, field analysis, event storage, and
+    physical mutations continue through native ClickHouse services. This unit
+    adds no migration.
+11. Independent reuse, quality/correctness, and efficiency reviews found no
+    actionable reuse, configuration, typed-nil, auth, production-composition,
+    protobuf, concurrency, boundedness, or ORM-boundary defect. The explicit
+    paired-dependency checks remain because they state the complete-family
+    contract and cost only two startup pointer comparisons.
+12. The next in-repository control-plane debt is bounding the index catalog
+    and replacing its serialized full-catalog filtering/sorting with bounded
+    GORM admission and keyset pagination. The actual GradeThis Compose cutover
+    remains the highest first-release deployment milestone and belongs in its
+    own GradeThis worktree/branch. The next selected SPL expansion candidate is
+    a separately bounded `eventstats count` contract.
+
+Validation on implementation commit `a219074`:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/server ./cmd/open-splunk-server ./integration \
+  -count=1
+go vet ./...
+go build ./...
+npm run typecheck
+npm run lint
+npm run test:frontend
+make proto
+make proto-lint
+BUF_CACHE_DIR="$PWD/.cache/buf" npx --no-install buf breaking \
+  --against '.git#branch=main'
+
+# Executed with this already-cached binary reporting exactly v2.12.2.
+INDEX_ADMIN_LINTER=/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint
+"$INDEX_ADMIN_LINTER" run --timeout=10m \
+  --max-issues-per-linter=0 --max-same-issues=0
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./integration -run '^TestBackendVertical$' \
+  -count=1 -timeout=10m -v
+
+git show --check --oneline a219074
+```
+
+The full repository suite, complete affected race suite, vet/build,
+TypeScript typecheck/lint, all 47 release/build tests, all 136 frontend runtime
+tests, protobuf generation/lint/breaking checks, and exact cached v2.12.2
+linter passed; lint reported `0 issues`. The digest-pinned backend vertical
+passed in 24.39 seconds and cleaned up every test-owned container and volume.
+
+Explicit pause point:
+
+1. Complete index administration is truthfully discoverable, committed, and
+   live-proven.
+2. Partial service compositions remain legal and fail closed at discovery.
+3. GORM remains control-plane-only; ClickHouse remains native-only.
+4. Commit and push this handoff, then pause until the user gives further
+   instructions.
+
+## Previous checkpoint: bounded owner-scoped export job listing
 
 Date: 2026-07-30
 
