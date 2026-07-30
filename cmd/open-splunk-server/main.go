@@ -610,6 +610,7 @@ func run() error {
 		SearchWebSocket:            searchWebSocket,
 		Exports:                    exports,
 		Indexes:                    controlDB,
+		IndexAdmin:                 controlDB,
 		IndexStatistics:            indexStatistics,
 		IndexStatisticsSnapshotter: visibilitySnapshotter{sequencer: sequencer},
 		IndexDataDeletionAdmission: controlDB,

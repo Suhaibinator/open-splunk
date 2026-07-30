@@ -999,8 +999,11 @@ func fieldSummaryTestSpec(fieldName string, maximumValues uint32) clickhouse.Fie
 
 func fieldSummaryTestKey(fieldName string) fieldSummaryCacheKey {
 	return fieldSummaryCacheKey{
-		fieldCacheKey: fieldCacheKey{tenantID: "tenant", ownerID: "owner", jobID: "job"},
-		fieldName:     fieldName,
+		fieldCacheKey: fieldCacheKey{
+			domain: fieldCatalogCompletedSearch, tenantID: "tenant",
+			ownerID: "owner", jobID: "job",
+		},
+		fieldName: fieldName,
 	}
 }
 

@@ -40,6 +40,8 @@ const (
 	searchJobsListPath                = apiV1PathPrefix + searchJobsListRoute
 	searchFieldsListRoute             = "/search/jobs/fields/list"
 	searchFieldsListPath              = apiV1PathPrefix + searchFieldsListRoute
+	indexFieldsListRoute              = "/indexes/fields/list"
+	indexFieldsListPath               = apiV1PathPrefix + indexFieldsListRoute
 	searchFieldSummaryRoute           = "/search/jobs/field-summary"
 	searchFieldSummaryPath            = apiV1PathPrefix + searchFieldSummaryRoute
 	searchTimelinePath                = "/api/v1/search/jobs/timeline"
@@ -287,6 +289,20 @@ type SearchFields interface {
 	MaximumSummaryValues() uint32
 }
 
+// IndexFields is the bounded administrator field-catalog surface for one
+// already-resolved logical index and immutable storage snapshot. The handler
+// snapshots both enforced limits during construction so transport validation
+// cannot drift from the service contract while requests are live.
+type IndexFields interface {
+	ListIndexFields(
+		context.Context,
+		searchjobs.AccessScope,
+		searchanalysis.ListIndexFieldsRequest,
+	) (searchanalysis.FieldPage, error)
+	MaximumFields() uint32
+	MaximumPageSize() uint32
+}
+
 // SearchSuggestions is the bounded, no-job SPL editor-completion surface. The
 // handler snapshots the enforced maximum during construction so transport
 // validation cannot drift while a request is live.
@@ -379,6 +395,7 @@ type Config struct {
 	SearchTimelines            SearchTimelines
 	SearchInspections          SearchInspections
 	SearchFields               SearchFields
+	IndexFields                IndexFields
 	SearchSuggestions          SearchSuggestions
 	SearchWebSocket            SearchWebSocket
 	BrowserAuthenticator       auth.BrowserAuthenticator
@@ -421,6 +438,7 @@ type apiHandler struct {
 	searchTimelines            SearchTimelines
 	searchInspections          SearchInspections
 	searchFields               SearchFields
+	indexFields                IndexFields
 	searchSuggestions          SearchSuggestions
 	searchWebSocket            SearchWebSocket
 	browserAuthenticator       auth.BrowserAuthenticator
@@ -432,6 +450,8 @@ type apiHandler struct {
 	maximumFieldPageSize       uint32
 	maximumFieldCatalogFields  uint32
 	maximumFieldSummaryValues  uint32
+	maxIndexFieldPageSize      uint32
+	maxIndexFieldCatalogFields uint32
 	maximumSuggestions         uint32
 	routeTimeout               time.Duration
 	bootstrap                  BootstrapConfig
@@ -478,6 +498,15 @@ func NewHandler(config Config) (*Handler, error) {
 	if indexStatistics != nil && indexAdmin == nil {
 		return nil, errors.New(
 			"create server handler: index statistics requires index administration",
+		)
+	}
+	indexFields := config.IndexFields
+	if isNilDependency(indexFields) {
+		indexFields = nil
+	}
+	if indexFields != nil && indexAdmin == nil {
+		return nil, errors.New(
+			"create server handler: index fields require index administration",
 		)
 	}
 	indexDataDeletionAdmission := config.IndexDataDeletionAdmission
@@ -530,6 +559,7 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 	if (indexAdmin != nil ||
 		indexStatistics != nil ||
+		indexFields != nil ||
 		ingestionTokens != nil ||
 		collectorAdmin != nil ||
 		appAdmin != nil ||
@@ -591,6 +621,27 @@ func NewHandler(config Config) (*Handler, error) {
 			return nil, fmt.Errorf("create server handler: field summary maximum values must be between 1 and %d", clickhouse.MaximumFieldSummaryValues)
 		}
 	}
+	maxIndexFieldCatalogFields := uint32(0)
+	maxIndexFieldPageSize := uint32(0)
+	if indexFields != nil {
+		maxIndexFieldCatalogFields = indexFields.MaximumFields()
+		maxIndexFieldPageSize = indexFields.MaximumPageSize()
+		if maxIndexFieldCatalogFields == 0 ||
+			maxIndexFieldCatalogFields > clickhouse.MaximumFieldCatalogFields {
+			return nil, fmt.Errorf(
+				"create server handler: index field catalog maximum fields must be between 1 and %d",
+				clickhouse.MaximumFieldCatalogFields,
+			)
+		}
+		if maxIndexFieldPageSize == 0 ||
+			maxIndexFieldPageSize > maxIndexFieldCatalogFields ||
+			maxIndexFieldPageSize > maximumSearchFieldPageSize {
+			return nil, fmt.Errorf(
+				"create server handler: index field catalog maximum page size must be between 1 and %d and cannot exceed maximum fields",
+				maximumSearchFieldPageSize,
+			)
+		}
+	}
 	suggestionService := config.SearchSuggestions
 	if isNilDependency(suggestionService) {
 		suggestionService = nil
@@ -628,6 +679,9 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 	if maximumFieldPageSize > pageSize {
 		return nil, errors.New("create server handler: field catalog maximum page size cannot exceed browser maximum page size")
+	}
+	if maxIndexFieldPageSize > pageSize {
+		return nil, errors.New("create server handler: index field catalog maximum page size cannot exceed browser maximum page size")
 	}
 	concurrentResponses := config.MaximumConcurrentResponses
 	if concurrentResponses < 0 || concurrentResponses > maximumConcurrentResponses {
@@ -741,6 +795,7 @@ func NewHandler(config Config) (*Handler, error) {
 		searchTimelines:            timelineService,
 		searchInspections:          inspectionService,
 		searchFields:               fieldService,
+		indexFields:                indexFields,
 		searchSuggestions:          suggestionService,
 		searchWebSocket:            searchWebSocket,
 		browserAuthenticator:       browserAuthenticator,
@@ -751,6 +806,8 @@ func NewHandler(config Config) (*Handler, error) {
 		maximumFieldPageSize:       maximumFieldPageSize,
 		maximumFieldCatalogFields:  maximumFieldCatalogFields,
 		maximumFieldSummaryValues:  maximumFieldSummaryValues,
+		maxIndexFieldPageSize:      maxIndexFieldPageSize,
+		maxIndexFieldCatalogFields: maxIndexFieldCatalogFields,
 		maximumSuggestions:         maximumSuggestions,
 		routeTimeout:               routeTimeout,
 		bootstrap:                  bootstrap,
@@ -805,6 +862,10 @@ func NewHandler(config Config) (*Handler, error) {
 	if api.indexStatistics != nil {
 		apiRoutes["/api/v1/indexes/stats/get"] = http.MethodPost
 		administratorRoutes["/api/v1/indexes/stats/get"] = struct{}{}
+	}
+	if api.indexFields != nil {
+		apiRoutes[indexFieldsListPath] = http.MethodPost
+		administratorRoutes[indexFieldsListPath] = struct{}{}
 	}
 	if api.ingestionTokens != nil {
 		for _, path := range []string{

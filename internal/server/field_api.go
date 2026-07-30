@@ -115,8 +115,46 @@ func searchFieldPageToProto(
 	maximumPageSize uint32,
 	maximumCatalogFields uint32,
 ) (*opensplunkv1.ListSearchFieldsResponse, error) {
+	fields, page, err := fieldPageToProto(
+		ctx,
+		result,
+		fieldPageResponseContract{
+			PageSize:        request.PageSize,
+			PageToken:       request.PageToken,
+			NameFilter:      request.NameFilter,
+			InterestingOnly: request.InterestingOnly,
+		},
+		includeTotal,
+		maximumPageSize,
+		maximumCatalogFields,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &opensplunkv1.ListSearchFieldsResponse{
+		Fields: fields,
+		Page:   page,
+	}, nil
+}
+
+type fieldPageResponseContract struct {
+	PageSize             *uint32
+	PageToken            string
+	NameFilter           string
+	InterestingOnly      bool
+	ForbidDistinctCounts bool
+}
+
+func fieldPageToProto(
+	ctx context.Context,
+	result searchanalysis.FieldPage,
+	request fieldPageResponseContract,
+	includeTotal bool,
+	maximumPageSize uint32,
+	maximumCatalogFields uint32,
+) ([]*opensplunkv1.FieldProfile, *opensplunkv1.PageResponse, error) {
 	if ctx == nil {
-		return nil, errors.New("search field conversion context is required")
+		return nil, nil, errors.New("field conversion context is required")
 	}
 	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
 	fieldCount := uint64(len(result.Fields))
@@ -124,26 +162,26 @@ func searchFieldPageToProto(
 		fieldCount > uint64(maximumPageSize) ||
 		result.TotalFields > uint64(maximumCatalogFields) ||
 		result.TotalFields < fieldCount {
-		return nil, errors.New("invalid search field page")
+		return nil, nil, errors.New("invalid field page")
 	}
 	if request.PageSize != nil {
 		if *request.PageSize == 0 || *request.PageSize > maximumPageSize || fieldCount > uint64(*request.PageSize) {
-			return nil, errors.New("search field page exceeds requested size")
+			return nil, nil, errors.New("field page exceeds requested size")
 		}
 	}
 	emptyPageCannotProgress := len(result.Fields) == 0 && (result.TotalFields != 0 || request.PageToken != "")
 	truncatedFirstPage := request.PageToken == "" && result.TotalFields > fieldCount && result.NextPageToken == ""
 	contradictoryContinuation := request.PageToken != "" && result.TotalFields <= fieldCount
 	if emptyPageCannotProgress || truncatedFirstPage || contradictoryContinuation {
-		return nil, errors.New("search field page does not make progress")
+		return nil, nil, errors.New("field page does not make progress")
 	}
 	invalidContinuation := result.NextPageToken != "" &&
 		(len(result.Fields) == 0 || result.TotalFields <= fieldCount || result.NextPageToken == request.PageToken)
 	if len(result.NextPageToken) > maximumPageTokenBytes || !utf8.ValidString(result.NextPageToken) || invalidContinuation {
-		return nil, errors.New("invalid search field page token")
+		return nil, nil, errors.New("invalid field page token")
 	}
 	if request.PageSize != nil && result.NextPageToken != "" && fieldCount != uint64(*request.PageSize) {
-		return nil, errors.New("short search field page has a continuation")
+		return nil, nil, errors.New("short field page has a continuation")
 	}
 
 	fields := make([]*opensplunkv1.FieldProfile, len(result.Fields))
@@ -151,7 +189,7 @@ func searchFieldPageToProto(
 	var totalEvents uint64
 	for index := range result.Fields {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		profile := result.Fields[index]
 		if profile.FieldName == "" ||
@@ -163,15 +201,22 @@ func searchFieldPageToProto(
 			index > 0 && profile.FieldName <= previousName ||
 			request.NameFilter != "" && !strings.Contains(profile.FieldName, request.NameFilter) ||
 			request.InterestingOnly && !profile.Interesting {
-			return nil, errors.New("invalid search field profile")
+			return nil, nil, errors.New("invalid field profile")
+		}
+		if request.ForbidDistinctCounts &&
+			(profile.DistinctCount != nil ||
+				profile.DistinctCountIsApproximate) {
+			return nil, nil, errors.New(
+				"field profile contains a forbidden distinct count",
+			)
 		}
 		converted, err := searchFieldProfileToProto(profile)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		profileTotalEvents := profile.EventCount + profile.MissingCount
 		if index > 0 && profileTotalEvents != totalEvents {
-			return nil, errors.New("inconsistent search field profile totals")
+			return nil, nil, errors.New("inconsistent field profile totals")
 		}
 		fields[index] = converted
 		previousName = profile.FieldName
@@ -186,7 +231,7 @@ func searchFieldPageToProto(
 		page.TotalSize = uint64Pointer(result.TotalFields)
 		page.TotalSizeExact = true
 	}
-	return &opensplunkv1.ListSearchFieldsResponse{Fields: fields, Page: page}, nil
+	return fields, page, nil
 }
 
 func searchFieldProfileToProto(profile searchanalysis.FieldProfile) (*opensplunkv1.FieldProfile, error) {

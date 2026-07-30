@@ -714,6 +714,82 @@ TTL deletion, and changing `system.parts` metadata can otherwise cause skips
 or duplicates. Those catalog-admission and snapshot semantics require a
 separate design; page-local statistics do not imply them.
 
+### Administrator index field catalog
+
+The authenticated administrator
+`POST /api/v1/indexes/fields/list` route provides field discovery without
+creating a search job or accepting caller-written SPL. Every request first
+resolves its ID or canonical-name selector through the GORM/SQLite control
+plane. The resolved stable ID, canonical name, and current version become
+trusted service inputs. Resolution deliberately adds no active/search-enabled
+policy: `ACTIVE`, `ARCHIVED`, and outstanding `DELETING` records, including
+records with disabled search access, remain eligible while they are current
+and non-tombstoned. Terminal tombstones remain invisible. This keeps catalog
+identity and lifecycle policy in GORM without making GORM responsible for
+event analysis.
+
+Executable index-field requests require the `TimeRangeSpec` message and both
+of its bounds. Absolute or relative expressions are resolved once to a
+half-open interval before analysis admission. The server then calls
+`SnapshotAnalysisScope` with only the configured tenant and resolved canonical
+index: it captures the committed visibility cutoff first and then one UTC
+clock anchor used for both `SearchStart` and `IndexTimeCutoff`. A server-owned
+empty-AST raw-event plan is built from that immutable snapshot, so neither SPL
+nor a physical tenant/index scope can be injected by the browser.
+
+The ordinary native ClickHouse compiler emits one parameterized field-catalog
+query over the untransformed event relation. Its base scan requires the trusted
+tenant and index, `event_time` in `[earliest, latest)`,
+`index_time <= snapshot_anchor`, `expires_at > snapshot_anchor`, and
+`visibility_seq <= visibility_cutoff`. The field-catalog compiler and executor
+remain the same native path used for completed-search field analysis; they do
+not route ClickHouse through GORM. Materialized common subexpressions and
+short-circuit evaluation are mandatory, and the query disables async insertion
+and all result/query caches.
+
+The executor buffers the complete result and validates its header, bytewise
+field order, metadata version, durable value-type codes, and count invariants
+before publishing a page. Presence, explicit-null, and missing counts are
+exact, observed types are complete and sorted, and known canonical schema
+fields still appear with zero counts when the index is empty. The catalog does
+not calculate or estimate distinct counts. At most 10,000 profiles are
+admitted; the compiler requests one extra ordered profile as a sentinel and an
+overflow rejects the entire catalog rather than returning a misleading
+truncation.
+
+The complete immutable catalog, rather than individual pages, is held in the
+bounded field-analysis LRU. Exact-key computations coalesce behind one flight;
+the first miss uses one ClickHouse query, while continuations page the retained
+memory without native reads. Defaults are 128 entries, 64 MiB, and a five
+minute absolute TTL. A shared nonblocking computation gate defaults to four
+slots and fails saturation fast. Native settings further cap a catalog query
+at fifteen seconds, 128 MiB, five million source rows, 1 GiB read, two threads,
+10,001 groups, and 32 MiB of result data. Query/snapshot work is completed
+before acquiring the global large-response serialization permit, and the
+protobuf response has its own 32 MiB limit.
+
+Filtering is a case-sensitive UTF-8 field-name substring applied to the
+validated in-memory catalog. Pages default to 100 and are capped at 1,000;
+requesting `include_total_size` exposes the exact filtered total. The signed
+cursor is scoped to the service instance and caller and authenticates the
+resolved index ID/name/version, original time intent, snapshot fingerprint,
+filter fingerprint, cache generation, result offset, scan position, and exact
+total. Page size, the include-total response preference, and use of the
+equivalent ID/name selector may change on a continuation; analysis-scope
+changes fail. Cursors work only while that exact cache generation remains live,
+so expiry, eviction, restart, index version changes, or tombstoning fail
+closed. Because the cursor resumes a scan position in one immutable catalog,
+all filtered continuation pages together remain linear in catalog size and
+cannot drift as ingestion, retention, or TTL removal proceeds.
+
+No schema expansion accompanies this feature. The greenfield control plane
+uses its existing explicit GORM index model and therefore needs no migration.
+ClickHouse migration `0003_add_field_metadata.sql` already supplies
+`field_names`, `field_types`, and `field_metadata_version`, and the existing
+runtime event-table `SELECT` privilege is sufficient. No ClickHouse migration
+or grant is added: GORM remains control-plane-only and ClickHouse remains
+native-only.
+
 ## ClickHouse event model
 
 The storage model should preserve Splunk’s canonical event fields while retaining typed application data.

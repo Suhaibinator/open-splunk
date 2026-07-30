@@ -303,6 +303,16 @@ func TestBackendVertical(t *testing.T) {
 		createdIndex.GetIndex().GetIndexId(),
 		visibilityCutoff,
 	)
+	assertBackendIndexFields(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		administratorToken,
+		storage,
+		createdIndex.GetIndex().GetIndexId(),
+		fixtureStart,
+	)
 	for _, process := range collectorProcesses {
 		assertProcessLogsDoNotLeak(t, process.Logs(), plaintextToken,
 			redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
@@ -2045,6 +2055,169 @@ func assertBackendIndexStatistics(
 		indexID,
 		visibilityCutoff,
 	)
+}
+
+func assertBackendIndexFields(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	administratorToken string,
+	connection clickhousedriver.Conn,
+	indexID string,
+	fixtureStart time.Time,
+) {
+	t.Helper()
+	if indexID == "" || fixtureStart.IsZero() {
+		t.Fatalf(
+			"invalid index field fixture identity: index=%q start=%s",
+			indexID,
+			fixtureStart,
+		)
+	}
+
+	earliest := fixtureStart.Format(time.RFC3339Nano)
+	latest := fixtureStart.Add(4 * time.Second).Format(time.RFC3339Nano)
+	timezone := "UTC"
+	nameFilter := "customer_"
+	pageSize := uint32(1)
+	includeTotal := true
+	request := &opensplunkv1.ListIndexFieldsRequest{
+		Selector: &opensplunkv1.IndexSelector{
+			Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: indexID},
+		},
+		TimeRange: &opensplunkv1.TimeRangeSpec{
+			Earliest: &earliest,
+			Latest:   &latest,
+			Timezone: &timezone,
+		},
+		Page: &opensplunkv1.PageRequest{
+			PageSize:         &pageSize,
+			IncludeTotalSize: includeTotal,
+		},
+		NameFilter: &nameFilter,
+	}
+	var first opensplunkv1.ListIndexFieldsResponse
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/indexes/fields/list",
+		administratorToken,
+		request,
+		&first,
+	)
+	if len(first.GetFields()) != 1 ||
+		first.GetFields()[0].GetFieldName() != "customer_credential" ||
+		first.GetPage().GetNextPageToken() == "" ||
+		first.GetPage().TotalSize == nil ||
+		first.GetPage().GetTotalSize() != 2 ||
+		!first.GetPage().GetTotalSizeExact() {
+		t.Fatalf("first backend index-field page = %+v", &first)
+	}
+
+	token := first.GetPage().GetNextPageToken()
+	secondPageSize := uint32(2)
+	request.Selector = &opensplunkv1.IndexSelector{
+		Selector: &opensplunkv1.IndexSelector_IndexName{
+			IndexName: strings.ToUpper(verticalIndexName),
+		},
+	}
+	request.Page = &opensplunkv1.PageRequest{
+		PageSize:  &secondPageSize,
+		PageToken: &token,
+	}
+	var second opensplunkv1.ListIndexFieldsResponse
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/indexes/fields/list",
+		administratorToken,
+		request,
+		&second,
+	)
+	if len(second.GetFields()) != 1 ||
+		second.GetFields()[0].GetFieldName() != "customer_pin" ||
+		second.GetPage().NextPageToken != nil ||
+		second.GetPage().TotalSize != nil ||
+		second.GetPage().GetTotalSizeExact() {
+		t.Fatalf("second backend index-field page = %+v", &second)
+	}
+
+	var totalEvents, credentialEvents, pinEvents uint64
+	if err := connection.QueryRow(
+		ctx,
+		`SELECT count(),
+		        countIf(has(field_names, 'customer_credential')),
+		        countIf(has(field_names, 'customer_pin'))
+		   FROM open_splunk.events
+		  PREWHERE tenant_id = ? AND index_name = ?
+		  WHERE event_time >= ? AND event_time < ?`,
+		verticalTenantID,
+		verticalIndexName,
+		fixtureStart,
+		fixtureStart.Add(4*time.Second),
+	).Scan(&totalEvents, &credentialEvents, &pinEvents); err != nil {
+		t.Fatalf("read backend index-field reference counts: %v", err)
+	}
+	if totalEvents == 0 || credentialEvents == 0 || credentialEvents != pinEvents ||
+		credentialEvents > totalEvents {
+		t.Fatalf(
+			"backend index-field reference counts = total:%d credential:%d pin:%d",
+			totalEvents,
+			credentialEvents,
+			pinEvents,
+		)
+	}
+	assertBackendIndexFieldProfile(
+		t,
+		first.GetFields()[0],
+		"customer_credential",
+		totalEvents,
+		credentialEvents,
+	)
+	assertBackendIndexFieldProfile(
+		t,
+		second.GetFields()[0],
+		"customer_pin",
+		totalEvents,
+		pinEvents,
+	)
+}
+
+func assertBackendIndexFieldProfile(
+	t *testing.T,
+	profile *opensplunkv1.FieldProfile,
+	name string,
+	totalEvents, eventCount uint64,
+) {
+	t.Helper()
+	interestingThreshold := totalEvents / 5
+	if totalEvents%5 != 0 {
+		interestingThreshold++
+	}
+	if profile == nil ||
+		profile.GetFieldName() != name ||
+		profile.GetDisplayName() != name ||
+		profile.GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_STRING ||
+		len(profile.GetObservedValueTypes()) != 1 ||
+		profile.GetObservedValueTypes()[0] != opensplunkv1.ValueType_VALUE_TYPE_STRING ||
+		profile.GetEventCount() != eventCount ||
+		profile.GetNullCount() != 0 ||
+		profile.GetMissingCount() != totalEvents-eventCount ||
+		profile.DistinctCount != nil ||
+		profile.GetDistinctCountIsApproximate() ||
+		profile.GetSelected() ||
+		profile.GetInteresting() != (eventCount >= interestingThreshold) {
+		t.Fatalf(
+			"backend index field %q = %+v, total=%d present=%d",
+			name,
+			profile,
+			totalEvents,
+			eventCount,
+		)
+	}
 }
 
 func assertBackendIndexListStatistics(

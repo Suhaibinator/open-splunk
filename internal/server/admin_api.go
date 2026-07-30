@@ -279,6 +279,16 @@ func (handler *apiHandler) indexAdministrationRoutes(noAuth router.AuthLevel, sm
 			}),
 		)
 	}
+	if handler.indexFields != nil {
+		routes = append(
+			routes,
+			router.NewGenericRouteDefinition[*opensplunkv1.ListIndexFieldsRequest, *serializedIndexFieldsResponse, string, struct{}](router.RouteConfig[*opensplunkv1.ListIndexFieldsRequest, *serializedIndexFieldsResponse]{
+				Path: indexFieldsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+				Codec: newSerializedIndexFieldsCodec(), Handler: handler.listIndexFields,
+				SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.ListIndexFieldsRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			}),
+		)
+	}
 	return routes
 }
 

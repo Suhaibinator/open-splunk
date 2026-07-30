@@ -51,6 +51,7 @@ const (
 	maximumFieldProfileNameBytes  = eventfields.MaximumNormalizedFieldNameBytes
 	maximumFieldAccessIdentityLen = 1 << 10
 	fieldCursorVersion            = 1
+	indexFieldCursorVersion       = 1
 )
 
 var (
@@ -115,13 +116,24 @@ type fieldExecutor interface {
 	ExecuteFieldSummary(context.Context, clickhouse.CompiledFieldSummary) (queryexec.FieldSummaryResult, error)
 }
 
+// ScopeSnapshotter captures one immutable no-job storage scope. It is
+// optional so deployments that expose only completed-search field analysis do
+// not acquire a capability they do not serve.
+type ScopeSnapshotter interface {
+	SnapshotAnalysisScope(
+		context.Context,
+		searchjobs.AnalysisScopeRequest,
+	) (searchjobs.AnalysisScopeSnapshot, error)
+}
+
 // FieldConfig controls catalog and exact-summary execution, pagination
 // integrity, and their independent caches. Zero numeric values select
 // conservative defaults.
 type FieldConfig struct {
-	Searches completedSearches
-	Compiler fieldCompiler
-	Executor fieldExecutor
+	Searches         completedSearches
+	ScopeSnapshotter ScopeSnapshotter
+	Compiler         fieldCompiler
+	Executor         fieldExecutor
 
 	CursorKey   []byte
 	CursorScope string
@@ -144,9 +156,11 @@ type FieldConfig struct {
 	SummaryCacheTTL        time.Duration
 }
 
-// FieldService owns bounded, coalesced analyses of immutable completed jobs.
+// FieldService owns bounded, coalesced analyses of immutable completed jobs
+// and, when configured, immutable no-job index scopes.
 type FieldService struct {
 	searches         completedSearches
+	scopeSnapshotter ScopeSnapshotter
 	compiler         fieldCompiler
 	executor         fieldExecutor
 	lifecycleContext context.Context
@@ -190,10 +204,22 @@ type FieldService struct {
 	shutdownDone          chan struct{}
 }
 
+type fieldCatalogDomain uint8
+
+const (
+	fieldCatalogCompletedSearch fieldCatalogDomain = iota + 1
+	fieldCatalogIndex
+)
+
 type fieldCacheKey struct {
+	domain              fieldCatalogDomain
 	tenantID            string
 	ownerID             string
 	jobID               string
+	indexID             string
+	indexName           string
+	indexVersion        uint64
+	indexIntent         [sha256.Size]byte
 	snapshotFingerprint [sha256.Size]byte
 }
 
@@ -248,12 +274,19 @@ type fieldFlight struct {
 	waiters int
 }
 
+type fieldCatalogPlanSource struct {
+	completedExecution bool
+	execution          searchjobs.ExecutionSnapshot
+	logical            *plan.Query
+}
+
 type normalizedFieldRequest struct {
 	jobID           string
 	pageSize        uint32
 	pageToken       string
 	nameFilter      string
 	interestingOnly bool
+	indexScope      *normalizedIndexFieldScope
 }
 
 type fieldCursorPayload struct {
@@ -401,11 +434,16 @@ func NewFieldService(config FieldConfig) (*FieldService, error) {
 	if clock == nil {
 		clock = time.Now
 	}
+	scopeSnapshotter := config.ScopeSnapshotter
+	if nilInterface(scopeSnapshotter) {
+		scopeSnapshotter = nil
+	}
 
 	// #nosec G118 -- lifecycleCancel is retained on FieldService and invoked by Close.
 	lifecycleContext, lifecycleCancel := context.WithCancel(context.Background())
 	return &FieldService{
-		searches: config.Searches, compiler: config.Compiler, executor: config.Executor,
+		searches: config.Searches, scopeSnapshotter: scopeSnapshotter,
+		compiler: config.Compiler, executor: config.Executor,
 		lifecycleContext: lifecycleContext, lifecycleCancel: lifecycleCancel,
 		cursorKey: cursorKey, serviceFingerprint: fingerprintStrings(
 			"field-service", cursorScope, base64.RawURLEncoding.EncodeToString(instanceEpoch[:]),
@@ -567,8 +605,9 @@ func (service *FieldService) ListFields(ctx context.Context, access searchjobs.A
 	}
 	fingerprint := fieldSnapshotFingerprint(snapshot)
 	key := fieldCacheKey{
-		tenantID: strings.Clone(access.TenantID), ownerID: strings.Clone(access.OwnerID),
-		jobID: strings.Clone(normalized.jobID), snapshotFingerprint: fingerprint,
+		domain: fieldCatalogCompletedSearch, tenantID: strings.Clone(access.TenantID),
+		ownerID: strings.Clone(access.OwnerID), jobID: strings.Clone(normalized.jobID),
+		snapshotFingerprint: fingerprint,
 	}
 	now := service.clock()
 	if snapshot.ExpiresAt.IsZero() || !now.Before(snapshot.ExpiresAt) {
@@ -586,7 +625,15 @@ func (service *FieldService) ListFields(ctx context.Context, access searchjobs.A
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
-		entry, err := service.catalogFor(ctx, key, snapshot)
+		entry, err := service.catalogFor(
+			ctx,
+			key,
+			fieldCatalogPlanSource{
+				completedExecution: true,
+				execution:          snapshot,
+			},
+			snapshot.ExpiresAt,
+		)
 		if err != nil {
 			return FieldPage{}, err
 		}
@@ -624,7 +671,12 @@ func (service *FieldService) normalizeListRequest(access searchjobs.AccessScope,
 	}, nil
 }
 
-func (service *FieldService) catalogFor(ctx context.Context, key fieldCacheKey, snapshot searchjobs.ExecutionSnapshot) (*fieldCacheEntry, error) {
+func (service *FieldService) catalogFor(
+	ctx context.Context,
+	key fieldCacheKey,
+	source fieldCatalogPlanSource,
+	validUntil time.Time,
+) (*fieldCacheEntry, error) {
 	now := service.clock()
 	service.mu.Lock()
 	if service.closed {
@@ -647,7 +699,14 @@ func (service *FieldService) catalogFor(ctx context.Context, key fieldCacheKey, 
 			flight = &fieldFlight{done: make(chan struct{}), cancel: cancelAnalysis, waiters: 1}
 			service.flights[key] = flight
 			service.workers.Add(1)
-			go service.runFieldFlight(analysisContext, stopLifecycleCancel, key, snapshot, flight)
+			go service.runFieldFlight(
+				analysisContext,
+				stopLifecycleCancel,
+				key,
+				source,
+				validUntil,
+				flight,
+			)
 		default:
 			service.mu.Unlock()
 			return nil, ErrFieldAnalysisCapacity
@@ -690,11 +749,12 @@ func (service *FieldService) runFieldFlight(
 	analysisContext context.Context,
 	stopLifecycleCancel func() bool,
 	key fieldCacheKey,
-	snapshot searchjobs.ExecutionSnapshot,
+	source fieldCatalogPlanSource,
+	validUntil time.Time,
 	flight *fieldFlight,
 ) {
 	defer service.workers.Done()
-	entry, err := service.buildFieldCatalog(analysisContext, key, snapshot)
+	entry, err := service.buildFieldCatalog(analysisContext, key, source)
 	if contextErr := analysisContext.Err(); contextErr != nil {
 		entry = nil
 		err = contextErr
@@ -716,7 +776,7 @@ func (service *FieldService) runFieldFlight(
 	if err == nil {
 		now := service.clock()
 		service.expireCacheLocked(now)
-		if !now.Before(snapshot.ExpiresAt) {
+		if !validUntil.IsZero() && !now.Before(validUntil) {
 			err = searchjobs.ErrExpired
 			entry = nil
 		} else if entry.retained > service.maxCacheBytes {
@@ -730,8 +790,8 @@ func (service *FieldService) runFieldFlight(
 				service.nextGeneration++
 				entry.generation = service.nextGeneration
 				entry.expiresAt = now.Add(service.cacheTTL)
-				if snapshot.ExpiresAt.Before(entry.expiresAt) {
-					entry.expiresAt = snapshot.ExpiresAt
+				if !validUntil.IsZero() && validUntil.Before(entry.expiresAt) {
+					entry.expiresAt = validUntil
 				}
 				entry.element = service.lru.PushFront(entry)
 				service.cache[key] = entry
@@ -754,10 +814,40 @@ func (service *FieldService) runFieldFlight(
 	service.mu.Unlock()
 }
 
-func (service *FieldService) buildFieldCatalog(ctx context.Context, key fieldCacheKey, snapshot searchjobs.ExecutionSnapshot) (*fieldCacheEntry, error) {
-	logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
-	if err != nil {
-		return nil, fmt.Errorf("rebuild completed search for field analysis: %w", err)
+func (service *FieldService) buildFieldCatalog(
+	ctx context.Context,
+	key fieldCacheKey,
+	source fieldCatalogPlanSource,
+) (*fieldCacheEntry, error) {
+	logical := source.logical
+	switch key.domain {
+	case fieldCatalogCompletedSearch:
+		if !source.completedExecution || logical != nil {
+			return nil, fmt.Errorf(
+				"%w: completed-search field catalog source is invalid",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+		var err error
+		logical, err = searchsnapshot.BuildExecutionPlan(source.execution)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"rebuild completed search for field analysis: %w",
+				err,
+			)
+		}
+	case fieldCatalogIndex:
+		if source.completedExecution || logical == nil {
+			return nil, fmt.Errorf(
+				"%w: index field catalog source is invalid",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+	default:
+		return nil, fmt.Errorf(
+			"%w: field catalog domain is invalid",
+			searchjobs.ErrInvalidResult,
+		)
 	}
 	if err := plan.ValidateFieldAnalysisEligibility(logical); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrFieldAnalysisUnsupported, err)
@@ -776,7 +866,7 @@ func (service *FieldService) buildFieldCatalog(ctx context.Context, key fieldCac
 	}
 	if err != nil {
 		if errors.Is(err, queryexec.ErrFieldMetadataUnavailable) {
-			return nil, fmt.Errorf("%w: completed search uses legacy field metadata", ErrFieldAnalysisUnsupported)
+			return nil, fmt.Errorf("%w: event relation uses legacy field metadata", ErrFieldAnalysisUnsupported)
 		}
 		return nil, err
 	}
@@ -1117,13 +1207,33 @@ func (service *FieldService) finishFieldPage(
 		if nextScanIndex == 0 {
 			return FieldPage{}, ErrInvalidFieldCursor
 		}
-		token, err := service.encodeFieldCursor(fieldCursorPayload{
-			Version: fieldCursorVersion, ServiceFingerprint: service.serviceFingerprint,
-			AccessFingerprint: fieldAccessFingerprint(key.tenantID, key.ownerID), JobID: key.jobID,
-			SnapshotFingerprint: encodeFieldFingerprint(key.snapshotFingerprint), Generation: entry.generation,
-			FilterFingerprint: fieldFilterFingerprint(request.nameFilter), InterestingOnly: request.interestingOnly,
-			Offset: nextOffset, ScanIndex: nextScanIndex, TotalFields: totalFields,
-		})
+		var token string
+		var err error
+		if request.indexScope != nil {
+			if key.domain != fieldCatalogIndex {
+				return FieldPage{}, ErrInvalidFieldCursor
+			}
+			token, err = service.encodeIndexFieldCursor(indexFieldCursorPayload{
+				Version: indexFieldCursorVersion, ServiceFingerprint: service.serviceFingerprint,
+				AccessFingerprint: fieldAccessFingerprint(key.tenantID, key.ownerID),
+				IndexID:           key.indexID, IndexName: key.indexName, IndexVersion: key.indexVersion,
+				IntentFingerprint:   encodeFieldFingerprint(key.indexIntent),
+				SnapshotFingerprint: encodeFieldFingerprint(key.snapshotFingerprint),
+				FilterFingerprint:   fieldFilterFingerprint(request.nameFilter), Generation: entry.generation,
+				Offset: nextOffset, ScanIndex: nextScanIndex, TotalFields: totalFields,
+			})
+		} else {
+			if key.domain != fieldCatalogCompletedSearch {
+				return FieldPage{}, ErrInvalidFieldCursor
+			}
+			token, err = service.encodeFieldCursor(fieldCursorPayload{
+				Version: fieldCursorVersion, ServiceFingerprint: service.serviceFingerprint,
+				AccessFingerprint: fieldAccessFingerprint(key.tenantID, key.ownerID), JobID: key.jobID,
+				SnapshotFingerprint: encodeFieldFingerprint(key.snapshotFingerprint), Generation: entry.generation,
+				FilterFingerprint: fieldFilterFingerprint(request.nameFilter), InterestingOnly: request.interestingOnly,
+				Offset: nextOffset, ScanIndex: nextScanIndex, TotalFields: totalFields,
+			})
+		}
 		if err != nil {
 			return FieldPage{}, fmt.Errorf("encode search field cursor: %w", err)
 		}
@@ -1194,7 +1304,14 @@ func retainedFieldCatalogBytes(key fieldCacheKey, profiles []FieldProfile) (uint
 	// These fixed allowances intentionally overestimate Go struct, map-bucket,
 	// list-node, allocator, and slice overhead so MaxCacheBytes is a real upper
 	// bound rather than merely a payload-size target.
-	total := uint64(512 + len(key.tenantID) + len(key.ownerID) + len(key.jobID))
+	total := uint64(
+		640 +
+			len(key.tenantID) +
+			len(key.ownerID) +
+			len(key.jobID) +
+			len(key.indexID) +
+			len(key.indexName),
+	)
 	for _, profile := range profiles {
 		increment := uint64(192 + len(profile.FieldName) + len(profile.DisplayName) + len(profile.ObservedValueKinds))
 		if ^uint64(0)-total < increment {
@@ -1210,7 +1327,9 @@ func invalidFieldCatalog(message string) error {
 }
 
 func (service *FieldService) cursorMatches(cursor fieldCursorPayload, key fieldCacheKey, request normalizedFieldRequest) bool {
-	return cursor.Version == fieldCursorVersion &&
+	return key.domain == fieldCatalogCompletedSearch &&
+		request.indexScope == nil &&
+		cursor.Version == fieldCursorVersion &&
 		cursor.ServiceFingerprint == service.serviceFingerprint &&
 		cursor.AccessFingerprint == fieldAccessFingerprint(key.tenantID, key.ownerID) &&
 		cursor.JobID == key.jobID &&

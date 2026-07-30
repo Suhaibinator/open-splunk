@@ -14,6 +14,7 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
@@ -28,6 +29,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
+
+const runtimeAdministratorToken = "open-splunk-runtime-administrator-test-token"
 
 type runtimeCompletedSearches struct{}
 
@@ -162,6 +165,86 @@ func (runtimeIndexCatalog) ListIndexes(context.Context) ([]control.Index, error)
 
 func (runtimeIndexCatalog) GetIndexByName(context.Context, string) (control.Index, error) {
 	return control.Index{}, control.ErrNotFound
+}
+
+type runtimeIndexAdministration struct{}
+
+func (runtimeIndexAdministration) CreateIndex(
+	context.Context,
+	control.IndexDefinition,
+) (control.Index, error) {
+	return control.Index{}, errors.New("unexpected index creation")
+}
+
+func (runtimeIndexAdministration) GetIndex(
+	_ context.Context,
+	id string,
+) (control.Index, error) {
+	record := runtimeIndexRecord()
+	if id != record.ID {
+		return control.Index{}, control.ErrNotFound
+	}
+	return record, nil
+}
+
+func (runtimeIndexAdministration) GetIndexByName(
+	_ context.Context,
+	name string,
+) (control.Index, error) {
+	record := runtimeIndexRecord()
+	if name != record.Definition.Name {
+		return control.Index{}, control.ErrNotFound
+	}
+	return record, nil
+}
+
+func (runtimeIndexAdministration) ListIndexes(
+	context.Context,
+) ([]control.Index, error) {
+	return []control.Index{runtimeIndexRecord()}, nil
+}
+
+func (runtimeIndexAdministration) UpdateIndex(
+	context.Context,
+	string,
+	uint64,
+	control.IndexDefinition,
+) (control.Index, error) {
+	return control.Index{}, errors.New("unexpected index update")
+}
+
+func (runtimeIndexAdministration) SetIndexState(
+	context.Context,
+	string,
+	uint64,
+	control.IndexState,
+) (control.Index, error) {
+	return control.Index{}, errors.New("unexpected index state update")
+}
+
+func (runtimeIndexAdministration) DeleteIndex(
+	context.Context,
+	string,
+	uint64,
+	string,
+) (string, error) {
+	return "", errors.New("unexpected index deletion")
+}
+
+func runtimeIndexRecord() control.Index {
+	return control.Index{
+		ID:      "idx_runtime_main",
+		Version: 1,
+		Definition: control.IndexDefinition{
+			Name:             "main",
+			DisplayName:      "Main",
+			IngestionEnabled: true,
+			SearchEnabled:    true,
+		},
+		State:     control.IndexStateActive,
+		CreatedAt: time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
+	}
 }
 
 type runtimeSuggestionSearches struct {
@@ -419,6 +502,79 @@ func TestRuntimeHTTPHandlerServesConfiguredFieldCatalog(t *testing.T) {
 	}
 }
 
+func TestRuntimeHTTPHandlerServesConfiguredIndexFieldCatalog(t *testing.T) {
+	snapshot := runtimeFieldExecutionSnapshot()
+	analysis, err := newRuntimeSearchAnalysis(runtimeSearchAnalysisConfig{
+		Searches: runtimeSnapshotSearches{snapshot: snapshot},
+		Compiler: runtimeTimelineCompiler{},
+		Executor: runtimeTimelineExecutor{},
+	})
+	if err != nil {
+		t.Fatalf("newRuntimeSearchAnalysis: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := analysis.Close(); err != nil {
+			t.Errorf("analysis.Close: %v", err)
+		}
+	})
+	config := runtimeServerConfig()
+	config.OwnerID = snapshot.OwnerID
+	config.TenantID = snapshot.TenantID
+	handler, err := newRuntimeHTTPHandler(config, analysis)
+	if err != nil {
+		t.Fatalf("newRuntimeHTTPHandler: %v", err)
+	}
+
+	earliest := "2026-07-22T01:00:00Z"
+	latest := "2026-07-22T02:00:00Z"
+	payload, err := proto.Marshal(&opensplunkv1.ListIndexFieldsRequest{
+		Selector: &opensplunkv1.IndexSelector{
+			Selector: &opensplunkv1.IndexSelector_IndexName{
+				IndexName: "main",
+			},
+		},
+		TimeRange: &opensplunkv1.TimeRangeSpec{
+			Earliest: &earliest,
+			Latest:   &latest,
+		},
+		Page: &opensplunkv1.PageRequest{IncludeTotalSize: true},
+	})
+	if err != nil {
+		t.Fatalf("marshal index field request: %v", err)
+	}
+	request := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"http://127.0.0.1/api/v1/indexes/fields/list",
+		bytes.NewReader(payload),
+	)
+	request.Header.Set("Content-Type", "application/x-protobuf")
+	request.Header.Set(
+		"Authorization",
+		"Bearer "+runtimeAdministratorToken,
+	)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"index field-list status = %d, body = %s",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+	var decoded opensplunkv1.ListIndexFieldsResponse
+	if err := proto.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("unmarshal index field response: %v", err)
+	}
+	if len(decoded.GetFields()) != 0 ||
+		decoded.GetPage() == nil ||
+		decoded.GetPage().TotalSize == nil ||
+		decoded.GetPage().GetTotalSize() != 0 ||
+		!decoded.GetPage().GetTotalSizeExact() {
+		t.Fatalf("index field-list response = %+v", &decoded)
+	}
+}
+
 func TestRuntimeHTTPHandlerServesConfiguredFieldSummary(t *testing.T) {
 	snapshot := runtimeFieldExecutionSnapshot()
 	analysis, err := newRuntimeSearchAnalysis(runtimeSearchAnalysisConfig{
@@ -525,6 +681,12 @@ func TestRuntimeHTTPHandlerRejectsPreconfiguredFieldServiceAndMissingAnalysis(t 
 	config.SearchFields = &runtimeConfiguredFields{}
 	if _, err := newRuntimeHTTPHandler(config, analysis); err == nil || !strings.Contains(err.Error(), "already configured") {
 		t.Fatalf("preconfigured field error = %v", err)
+	}
+	config = runtimeServerConfig()
+	config.IndexFields = &runtimeConfiguredFields{}
+	if _, err := newRuntimeHTTPHandler(config, analysis); err == nil ||
+		!strings.Contains(err.Error(), "already configured") {
+		t.Fatalf("preconfigured index field error = %v", err)
 	}
 	config = runtimeServerConfig()
 	config.SearchSuggestions = &runtimeConfiguredSuggestions{}
@@ -798,6 +960,14 @@ func (*runtimeConfiguredFields) ListFields(context.Context, searchjobs.AccessSco
 	return searchanalysis.FieldPage{}, nil
 }
 
+func (*runtimeConfiguredFields) ListIndexFields(
+	context.Context,
+	searchjobs.AccessScope,
+	searchanalysis.ListIndexFieldsRequest,
+) (searchanalysis.FieldPage, error) {
+	return searchanalysis.FieldPage{}, nil
+}
+
 func (*runtimeConfiguredFields) GetFieldSummary(context.Context, searchjobs.AccessScope, searchanalysis.GetFieldSummaryRequest) (searchanalysis.FieldSummary, error) {
 	return searchanalysis.FieldSummary{}, nil
 }
@@ -835,6 +1005,22 @@ func runtimeFieldExecutionSnapshot() searchjobs.ExecutionSnapshot {
 
 func (searches runtimeSnapshotSearches) CompletedExecutionSnapshotFor(_ context.Context, _ searchjobs.AccessScope, _ string) (searchjobs.ExecutionSnapshot, error) {
 	return searches.snapshot, nil
+}
+
+func (searches runtimeSnapshotSearches) SnapshotAnalysisScope(
+	_ context.Context,
+	request searchjobs.AnalysisScopeRequest,
+) (searchjobs.AnalysisScopeSnapshot, error) {
+	anchor := searches.snapshot.IndexTimeCutoff
+	return searchjobs.AnalysisScopeSnapshot{
+		TenantID:          request.TenantID,
+		AuthorizedIndexes: slices.Clone(request.AuthorizedIndexes),
+		RequestedIndexes:  slices.Clone(request.RequestedIndexes),
+		TimeRange:         request.TimeRange,
+		SearchStart:       anchor,
+		IndexTimeCutoff:   anchor,
+		VisibilityCutoff:  searches.snapshot.VisibilityCutoff,
+	}, nil
 }
 
 type runtimeBlockingFieldExecutor struct {
@@ -920,10 +1106,23 @@ func newRuntimeSearchAnalysisForTest(t *testing.T) *runtimeSearchAnalysis {
 }
 
 func runtimeServerConfig() server.Config {
+	authenticator, err := auth.NewBearerTokenAuthenticator(
+		[]byte(runtimeAdministratorToken),
+		"tenant",
+		"owner",
+		auth.BrowserRoleAdministrator,
+	)
+	if err != nil {
+		panic("construct runtime test browser authenticator: " + err.Error())
+	}
 	return server.Config{
-		SearchJobs:    runtimeSearchJobs{},
-		Indexes:       runtimeIndexCatalog{},
-		SavedSearches: runtimeSavedSearches{},
+		SearchJobs:           runtimeSearchJobs{},
+		Indexes:              runtimeIndexCatalog{},
+		IndexAdmin:           runtimeIndexAdministration{},
+		SavedSearches:        runtimeSavedSearches{},
+		BrowserAuthenticator: authenticator,
+		TenantID:             "tenant",
+		OwnerID:              "owner",
 		WebUI: fstest.MapFS{
 			"index.html": &fstest.MapFile{Data: []byte("<html>runtime</html>")},
 		},

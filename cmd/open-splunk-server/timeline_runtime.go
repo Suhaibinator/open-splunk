@@ -75,10 +75,11 @@ func newRuntimeSearchAnalysis(config runtimeSearchAnalysisConfig) (*runtimeSearc
 		return nil, fmt.Errorf("compose search analysis runtime: %w", err)
 	}
 	fields, err := searchanalysis.NewFieldService(searchanalysis.FieldConfig{
-		Searches:    config.Searches,
-		Compiler:    config.Compiler,
-		Executor:    config.Executor,
-		CursorScope: config.FieldCursorScope,
+		Searches:         config.Searches,
+		ScopeSnapshotter: config.Searches,
+		Compiler:         config.Compiler,
+		Executor:         config.Executor,
+		CursorScope:      config.FieldCursorScope,
 	})
 	if err != nil {
 		_ = suggestions.Close(context.Background())
@@ -139,11 +140,15 @@ func newRuntimeHTTPHandler(config server.Config, analysis *runtimeSearchAnalysis
 	if config.SearchFields != nil {
 		return nil, errors.New("compose HTTP runtime: search field service is already configured")
 	}
+	if config.IndexFields != nil {
+		return nil, errors.New("compose HTTP runtime: index field service is already configured")
+	}
 	if config.SearchSuggestions != nil {
 		return nil, errors.New("compose HTTP runtime: search suggestion service is already configured")
 	}
 	config.SearchTimelines = analysis.timelines
 	config.SearchFields = analysis.fields
+	config.IndexFields = analysis.fields
 	config.SearchSuggestions = analysis.suggestions
 	return server.NewHandler(config)
 }

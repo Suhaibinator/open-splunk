@@ -109,14 +109,35 @@ message GetIndexStatsResponse {
 }
 
 // POST /api/v1/indexes/fields/list
+//
+// This administrator-only operation resolves selector through the current,
+// non-tombstoned GORM control-plane catalog before capturing one immutable
+// native ClickHouse analysis snapshot. It does not require an active or
+// search-enabled index.
 message ListIndexFieldsRequest {
+  // selector accepts the stable ID or canonical name of the same current
+  // catalog record.
   IndexSelector selector = 1;
+
+  // time_range is required, and both earliest and latest must be present.
+  // Relative expressions are resolved once for the initial catalog snapshot.
   TimeRangeSpec time_range = 2;
+
+  // page uses an opaque cursor over that cached snapshot. A continuation may
+  // change page_size but must preserve the selector identity, time intent, and
+  // name_filter that produced it.
   PageRequest page = 3;
+
+  // name_filter is an optional case-sensitive substring match on field names.
   optional string name_filter = 4;
 }
 
+// Fields are exact, bytewise-name-sorted profiles from one bounded snapshot.
+// This catalog does not populate FieldProfile.distinct_count or claim a
+// distinct-count approximation.
 message ListIndexFieldsResponse {
   repeated FieldProfile fields = 1;
+
+  // total_size is exact when the request asks for it.
   PageResponse page = 2;
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -331,12 +332,22 @@ func TestExecutorExecuteFieldCatalogValidatesStateAndCompiledQueryBeforeExecutio
 	}
 }
 
-func TestSettingsForFieldCatalogClonesAndTightensEveryCardinalityCap(t *testing.T) {
+func TestSettingsForFieldCatalogClonesAndTightensEveryResourceCap(t *testing.T) {
 	t.Parallel()
-	base, err := querySettings(Config{MaxResultRows: 50_000, MaxResultBytes: 64 << 20, MaxRowsToGroupBy: 20_000})
+	base, err := querySettings(Config{
+		MaxExecutionTime: 2 * maximumFieldCatalogExecutionTime,
+		MaxMemoryBytes:   2 * maximumFieldCatalogMemoryBytes,
+		MaxRowsToRead:    2 * maximumFieldCatalogRowsToRead,
+		MaxBytesToRead:   2 * maximumFieldCatalogBytesToRead,
+		MaxResultRows:    50_000,
+		MaxResultBytes:   64 << 20,
+		MaxRowsToGroupBy: 20_000,
+		MaxThreads:       8,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	base["use_query_cache"] = uint8(1)
 	before := clickhousedriver.Settings{}
 	for key, value := range base {
 		before[key] = value
@@ -345,15 +356,28 @@ func TestSettingsForFieldCatalogClonesAndTightensEveryCardinalityCap(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got["max_result_rows"] != uint64(75) || got["max_result_bytes"] != maximumFieldCatalogBytes ||
-		got["max_rows_to_group_by"] != uint64(74) || got["readonly"] != uint8(2) {
+	if got["max_execution_time"] != uint64(maximumFieldCatalogExecutionTime/time.Second) ||
+		got["max_memory_usage"] != maximumFieldCatalogMemoryBytes ||
+		got["max_rows_to_read"] != maximumFieldCatalogRowsToRead ||
+		got["max_bytes_to_read"] != maximumFieldCatalogBytesToRead ||
+		got["max_result_rows"] != uint64(75) ||
+		got["max_result_bytes"] != maximumFieldCatalogBytes ||
+		got["max_rows_to_group_by"] != uint64(74) ||
+		got["max_threads"] != maximumFieldCatalogThreads ||
+		got["use_query_cache"] != uint8(0) ||
+		got["readonly"] != uint8(2) {
 		t.Fatalf("field catalog settings = %#v", got)
 	}
 	if !reflect.DeepEqual(base, before) {
 		t.Fatalf("base settings mutated: got %#v, want %#v", base, before)
 	}
+	tightened := map[string]struct{}{
+		"max_execution_time": {}, "max_memory_usage": {}, "max_rows_to_read": {},
+		"max_bytes_to_read": {}, "max_result_rows": {}, "max_result_bytes": {},
+		"max_rows_to_group_by": {}, "max_threads": {}, "use_query_cache": {},
+	}
 	for key, value := range before {
-		if key == "max_result_rows" || key == "max_result_bytes" || key == "max_rows_to_group_by" {
+		if _, changed := tightened[key]; changed {
 			continue
 		}
 		if !reflect.DeepEqual(got[key], value) {
@@ -361,14 +385,26 @@ func TestSettingsForFieldCatalogClonesAndTightensEveryCardinalityCap(t *testing.
 		}
 	}
 
+	base["max_execution_time"] = uint64(3)
+	base["max_memory_usage"] = uint64(64 << 20)
+	base["max_rows_to_read"] = uint64(1_000)
+	base["max_bytes_to_read"] = uint64(2 << 20)
 	base["max_result_rows"] = uint64(7)
 	base["max_result_bytes"] = uint64(1024)
 	base["max_rows_to_group_by"] = uint64(5)
+	base["max_threads"] = uint64(1)
 	strict, err := settingsForFieldCatalog(base, 73)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strict["max_result_rows"] != uint64(7) || strict["max_result_bytes"] != uint64(1024) || strict["max_rows_to_group_by"] != uint64(5) {
+	if strict["max_execution_time"] != uint64(3) ||
+		strict["max_memory_usage"] != uint64(64<<20) ||
+		strict["max_rows_to_read"] != uint64(1_000) ||
+		strict["max_bytes_to_read"] != uint64(2<<20) ||
+		strict["max_result_rows"] != uint64(7) ||
+		strict["max_result_bytes"] != uint64(1024) ||
+		strict["max_rows_to_group_by"] != uint64(5) ||
+		strict["max_threads"] != uint64(1) {
 		t.Fatalf("stricter base caps were raised: %#v", strict)
 	}
 }
@@ -411,6 +447,22 @@ func TestSettingsForFieldCatalogRejectsInvalidBaseSettings(t *testing.T) {
 			malformed[name] = "break"
 			if _, err := settingsForFieldCatalog(malformed, 1); err == nil {
 				t.Fatalf("unsafe %s unexpectedly accepted", name)
+			}
+		})
+	}
+	for _, test := range []struct {
+		name  string
+		value any
+	}{
+		{name: "enable_materialized_cte", value: uint8(0)},
+		{name: "short_circuit_function_evaluation", value: "disable"},
+		{name: "async_insert", value: uint8(1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			malformed := cloneFieldCatalogSettings(base)
+			malformed[test.name] = test.value
+			if _, err := settingsForFieldCatalog(malformed, 1); err == nil {
+				t.Fatalf("unsafe %s unexpectedly accepted", test.name)
 			}
 		})
 	}

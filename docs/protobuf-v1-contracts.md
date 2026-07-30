@@ -172,6 +172,75 @@ ingestion, retention, TTL removal, and changing part metadata. It therefore
 requires a separately designed catalog admission limit or immutable bounded
 snapshot, not the page-local enrichment contract.
 
+### Index field catalog
+
+`POST /api/v1/indexes/fields/list` is administrator-only. On every request the
+server resolves the supplied stable ID or canonical name through the
+GORM/SQLite index catalog before doing any native work. Resolution admits every
+current, non-tombstoned catalog record: `ACTIVE`, `ARCHIVED`, and outstanding
+`DELETING` records remain inspectable regardless of whether their search access
+is enabled or disabled. A completed deletion is hidden by its tombstone and
+returns `404 Not Found`. The resolved ID, canonical name, and current version,
+not browser-provided physical scope, bind the analysis and its cursor.
+
+`time_range`, `time_range.earliest`, and `time_range.latest` are all required.
+Bounds may still use the absolute or relative SPL time syntax represented by
+`TimeRangeSpec`. The initial request resolves them once to an absolute
+half-open interval `[earliest, latest)`, then captures one
+`SnapshotAnalysisScope`: the largest committed visibility sequence is captured
+before one clock anchor supplies both the search-start and index-time cutoffs.
+The server builds an empty-AST raw-event scan with its trusted tenant and the
+single resolved canonical index; callers cannot supply SPL or widen that
+scope. The one native ClickHouse catalog query applies tenant/index equality,
+the resolved event-time interval, `index_time <= snapshot_anchor`,
+`expires_at > snapshot_anchor`, and
+`visibility_seq <= visibility_cutoff`.
+
+The query buffers and validates the complete bytewise-name-sorted catalog
+before returning anything. Each `FieldProfile` has exact presence,
+explicit-null, and missing-event counts plus the complete sorted set of
+observed durable value types for this snapshot. Known canonical fields remain
+represented with zero counts for an empty index. `selected` and `interesting`
+use the same deterministic field-profile rules as completed-search catalogs.
+This endpoint deliberately leaves `distinct_count` absent and
+`distinct_count_is_approximate` false; it neither computes nor estimates
+cardinality.
+
+One complete catalog is limited to 10,000 profiles. ClickHouse reads one extra
+ordered profile as an overflow sentinel, and the server rejects the whole
+analysis instead of returning a truncated catalog. Unsupported legacy or
+inconsistent field metadata likewise fails the complete request. Filtering is
+an optional case-sensitive UTF-8 substring match over the validated catalog.
+Pages default to 100 fields and may request at most 1,000; changing page size
+between continuations is allowed. `total_size` is the exact filtered count when
+`include_total_size` requests it and is otherwise omitted.
+
+Continuation tokens are authenticated, service-instance-scoped opaque values.
+They bind the caller tenant and owner, resolved index ID/name/version, original
+time intent, immutable analysis snapshot, name filter, cache generation, and
+paging positions. An equivalent ID/name selector may continue the same record,
+but an index version change, different filter or time intent, another caller,
+server restart, cache expiry, or cache eviction makes the token invalid. All
+pages therefore read the exact complete in-memory result created for the first
+page even if ingestion, retention, TTL removal, or relative wall-clock time
+changes later.
+
+The complete catalog is stored in the bounded field-analysis LRU and
+computations for the same exact snapshot key coalesce, so a cache miss performs
+one ClickHouse query and continuations perform none. The default cache admits
+at most 128 entries and 64 MiB for five minutes. A shared fail-fast
+field-analysis gate defaults to four concurrent native computations. The
+catalog query is hard-capped at fifteen seconds, 128 MiB memory, five million
+source rows, 1 GiB source bytes, two threads, and a 32 MiB result; the protobuf
+response has a separate 32 MiB ceiling.
+
+The persistence boundary is deliberate: GORM is used only to resolve the
+control-plane index record, while compilation and event reads use the native
+ClickHouse driver only. Existing ClickHouse migration `0003` already provides
+the field metadata needed by the catalog, and the runtime event-table `SELECT`
+grant already covers the scan, so this endpoint adds neither a control-plane
+migration nor a ClickHouse migration or grant.
+
 ### Search validation
 
 `POST /api/v1/search/validate` accepts the same bounded `SearchDefinition`

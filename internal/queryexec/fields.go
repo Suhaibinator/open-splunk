@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -17,8 +18,13 @@ import (
 )
 
 const (
-	maximumFieldCatalogNameBytes = eventfields.MaximumNormalizedFieldNameBytes
-	maximumFieldCatalogBytes     = uint64(32 << 20)
+	maximumFieldCatalogExecutionTime = 15 * time.Second
+	maximumFieldCatalogMemoryBytes   = uint64(128 << 20)
+	maximumFieldCatalogRowsToRead    = uint64(5_000_000)
+	maximumFieldCatalogBytesToRead   = uint64(1 << 30)
+	maximumFieldCatalogNameBytes     = eventfields.MaximumNormalizedFieldNameBytes
+	maximumFieldCatalogBytes         = uint64(32 << 20)
+	maximumFieldCatalogThreads       = uint64(2)
 )
 
 var ErrFieldMetadataUnavailable = errors.New("field catalog metadata is unavailable")
@@ -250,11 +256,41 @@ func settingsForFieldCatalog(base clickhousedriver.Settings, maximumFields uint3
 			return nil, fmt.Errorf("execute ClickHouse field catalog: executor setting %s is unsafe", name)
 		}
 	}
+	if base["enable_materialized_cte"] != uint8(1) {
+		return nil, errors.New("execute ClickHouse field catalog: materialized CTEs are not enabled")
+	}
+	if base["short_circuit_function_evaluation"] != "enable" {
+		return nil, errors.New("execute ClickHouse field catalog: short-circuit evaluation is not enabled")
+	}
+	if base["async_insert"] != uint8(0) {
+		return nil, errors.New("execute ClickHouse field catalog: asynchronous inserts must remain disabled")
+	}
 
 	settings := maps.Clone(base)
+	settings["max_execution_time"] = min(
+		base["max_execution_time"].(uint64),
+		uint64(maximumFieldCatalogExecutionTime/time.Second),
+	)
+	settings["max_memory_usage"] = min(
+		base["max_memory_usage"].(uint64),
+		maximumFieldCatalogMemoryBytes,
+	)
+	settings["max_rows_to_read"] = min(
+		base["max_rows_to_read"].(uint64),
+		maximumFieldCatalogRowsToRead,
+	)
+	settings["max_bytes_to_read"] = min(
+		base["max_bytes_to_read"].(uint64),
+		maximumFieldCatalogBytesToRead,
+	)
 	settings["max_result_rows"] = min(base["max_result_rows"].(uint64), uint64(maximumFields)+2)
 	settings["max_result_bytes"] = min(base["max_result_bytes"].(uint64), maximumFieldCatalogBytes)
 	settings["max_rows_to_group_by"] = min(base["max_rows_to_group_by"].(uint64), uint64(maximumFields)+1)
+	settings["max_threads"] = min(
+		base["max_threads"].(uint64),
+		maximumFieldCatalogThreads,
+	)
+	settings["use_query_cache"] = uint8(0)
 	return settings, nil
 }
 

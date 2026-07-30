@@ -38,6 +38,11 @@ export const indexRoutes = {
     IndexApi.ListIndexesRequest,
     IndexApi.ListIndexesResponse,
   ),
+  fields: defineProtobufRoute(
+    "/api/v1/indexes/fields/list",
+    IndexApi.ListIndexFieldsRequest,
+    IndexApi.ListIndexFieldsResponse,
+  ),
   update: defineProtobufRoute(
     "/api/v1/indexes/update",
     IndexApi.UpdateIndexRequest,

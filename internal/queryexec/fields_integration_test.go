@@ -98,6 +98,41 @@ func queryIntegrationTestFieldCatalog(
 			})
 		})
 
+		t.Run("bare single-index scope excludes every poisoned boundary", func(t *testing.T) {
+			compiled := queryIntegrationCompileBareIndexFieldCatalog(
+				t,
+				"field-suggestions-scope",
+				indexTime,
+			)
+			catalog, err := executor.ExecuteFieldCatalog(ctx, compiled)
+			if err != nil {
+				t.Fatalf(
+					"execute bare single-index catalog: %v\nSQL: %s\nargs: %#v",
+					err,
+					compiled.SQL,
+					compiled.Args,
+				)
+			}
+			if catalog.TotalEvents != 1 {
+				t.Fatalf("bare single-index total events = %d, want 1", catalog.TotalEvents)
+			}
+			assertFieldCatalogProfile(t, catalog, FieldProfileRow{
+				FieldName: "scope_visible",
+				ObservedTypes: []eventfields.StoredValueType{
+					eventfields.StoredValueTypeString,
+				},
+				EventCount: 1,
+			})
+			for _, profile := range catalog.Fields {
+				if strings.HasPrefix(profile.FieldName, "scope_poison_") {
+					t.Fatalf(
+						"bare single-index catalog exposed out-of-snapshot profile: %#v",
+						profile,
+					)
+				}
+			}
+		})
+
 		t.Run("dynamic eval preserves types and materializes missing as null", func(t *testing.T) {
 			compiled := queryIntegrationCompileFieldCatalog(
 				t, "field-catalog-v1", indexTime,
@@ -1067,6 +1102,44 @@ func queryIntegrationCompileFieldCatalog(
 		t.Fatal(err)
 	}
 	compiled, err := (clickhouse.Compiler{}).CompileFieldCatalog(logical, clickhouse.FieldCatalogSpec{MaximumFields: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiled
+}
+
+func queryIntegrationCompileBareIndexFieldCatalog(
+	t *testing.T,
+	indexName string,
+	indexTime time.Time,
+) clickhouse.CompiledFieldCatalog {
+	t.Helper()
+	visibility := uint64(1)
+	snapshotAnchor := indexTime.Add(time.Second)
+	logical, err := plan.Build(&spl.Query{}, plan.Scope{
+		TenantID:          "tenant",
+		AuthorizedIndexes: []string{indexName},
+		RequestedIndexes:  []string{indexName},
+		Earliest:          indexTime.Add(-time.Minute),
+		Latest:            indexTime.Add(time.Minute),
+		SearchStart:       snapshotAnchor,
+		SearchTimezone:    "UTC",
+		IndexTimeCutoff:   snapshotAnchor,
+		VisibilityCutoff:  &visibility,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logical.Operators) != 1 {
+		t.Fatalf(
+			"bare single-index plan operator count = %d, want one Scan",
+			len(logical.Operators),
+		)
+	}
+	compiled, err := (clickhouse.Compiler{}).CompileFieldCatalog(
+		logical,
+		clickhouse.FieldCatalogSpec{MaximumFields: 100},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

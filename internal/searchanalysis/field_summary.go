@@ -203,6 +203,7 @@ func (service *FieldService) GetFieldSummary(
 	}
 
 	baseKey := fieldCacheKey{
+		domain:              fieldCatalogCompletedSearch,
 		tenantID:            strings.Clone(access.TenantID),
 		ownerID:             strings.Clone(access.OwnerID),
 		jobID:               strings.Clone(normalized.jobID),
