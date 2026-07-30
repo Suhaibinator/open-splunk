@@ -78,6 +78,34 @@ projection.
 | `/ingestion-tokens/update` | `UpdateIngestionTokenRequest` | `UpdateIngestionTokenResponse` |
 | `/ingestion-tokens/revoke` | `RevokeIngestionTokenRequest` | `RevokeIngestionTokenResponse` |
 
+### Index deletion
+
+`POST /api/v1/indexes/delete` is administrator-only. Every request supplies the
+original archived optimistic version and a `confirmation_name` equal to the
+canonical stored index name. `KEEP_DATA` requires the index still to be
+archived at that version, completes synchronously, returns only `index_id`,
+hides the catalog entry behind a permanent tombstone, and retains its
+ClickHouse events.
+
+`DELETE_DATA` is asynchronous. A fresh admission requires archived version
+`N`; `N = MaxInt64` is rejected because the durable transition must create
+deleting generation `N+1`. Tenant scope never comes from the protobuf request:
+the server binds the operation to its trusted authenticated/configured tenant.
+On success, HTTP 200 returns `index_id` and a nonempty
+`deletion_operation_id` after the operation is durable. A nonblocking
+postcommit wake asks the deletion coordinator to reconcile promptly, while its
+periodic scan provides restart recovery and is the correctness backstop.
+
+Exact retries using the original archived version are idempotent only while
+the durable operation remains outstanding. Sequential and concurrent retries,
+including after process restart and through the equivalent ID or canonical
+name selector, return the same operation ID. A stale version, wrong state, or
+different confirmation is rejected without starting another operation.
+Terminal completion consumes the outstanding operation and tombstones the
+catalog entry; after that point the same request returns `404 Not Found`.
+Clients must not treat this route as an indefinite completion-status or
+terminal-response replay API.
+
 ### Search validation
 
 `POST /api/v1/search/validate` accepts the same bounded `SearchDefinition`

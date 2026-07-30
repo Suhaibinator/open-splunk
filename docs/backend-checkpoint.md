@@ -7,7 +7,125 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: production deletion runtime and ClickHouse privilege isolation
+## Latest checkpoint: authenticated physical index deletion admission
+
+Date: 2026-07-29
+
+Committed and pushed implementation checkpoint:
+
+- `d687acf` — authenticated `DELETE_DATA` admission, trusted-tenant binding,
+  postcommit coordinator wake, shutdown ordering, and unit/live lifecycle
+  coverage.
+
+This test-first unit exposes the previously isolated physical-deletion
+pipeline through the production administrator API:
+
+1. `POST /api/v1/indexes/delete` admits `DELETE_DATA` only when the handler has
+   a complete index-administration, deletion-admission, and wake dependency
+   set. Typed-nil and partial configurations fail closed during construction;
+   `KEEP_DATA` remains available with index administration alone.
+2. Authentication and administrator authorization run before admission.
+   Physical scope is constructed only from the handler's trusted deployment
+   tenant; no request field can select or replace it.
+3. The route validates the optimistic version and mode before selector lookup,
+   requires an exact canonical-name confirmation, rejects `MaxInt64`, and
+   accepts only archived generation `N` or the exact outstanding retry seen as
+   deleting generation `N+1`.
+4. `BeginIndexDataDeletion` remains the GORM/SQLite transaction boundary. The
+   handler validates the returned protocol ID, tenant, logical identity,
+   archived/deleting versions, and positive, protobuf-range,
+   microsecond-aligned timestamp before returning the index ID and deletion
+   operation ID.
+5. A successful durable admission always reaches a synchronous, nonblocking
+   wake call, including when response-context cancellation races after the
+   commit. Pre-admission rejections and `BeginIndexDataDeletion` errors never
+   wake. Periodic coordinator recovery remains the correctness path.
+6. Sequential, 24-way concurrent, selector-equivalent, and SQLite-restart
+   handler tests require every exact outstanding retry to return one stable
+   operation ID and leave one durable operation.
+7. Deterministic KEEP-versus-DELETE race tests exercise both commit orders and
+   require exactly one HTTP winner, preventing the synchronous tombstone path
+   and asynchronous physical path from both succeeding.
+8. Success-output adversarial tests require the wake even when a dependency
+   returns malformed operation metadata; the handler then fails closed rather
+   than exposing an untrusted operation identity.
+9. Production startup passes the single GORM-backed control DB as deletion
+   admission and the already-owned coordinator runtime as a narrow wake
+   capability. ClickHouse target resolution, mutation submission/status, and
+   physical proof remain native and do not use GORM.
+10. Runtime `Wake` and `Close` are linearized: wake calls admitted before close
+    finish before shutdown begins, while calls after close starts are ignored.
+    HTTP shutdown first stops new requests and drains all active handlers, so
+    each successfully admitted deletion completes its postcommit wake before
+    runtime/Store teardown.
+11. The digest-pinned live process test starts the compiled server with real
+    SQLite and ClickHouse, rejects malformed/unauthorized/missing/stale/active
+    requests without effects, and sends 16 simultaneous exact admissions that
+    converge on one operation and one correlated mutation.
+12. `SYSTEM STOP MERGES` holds the mutation while the test hard-kills the
+    server. Reopened SQLite proves the operation and attempt survived; a
+    restarted server and normalized-name retry recover the same operation
+    before merges resume.
+13. Terminal proof waits on the authoritative correlated mutation state, then
+    checks physical scope once: only the trusted tenant/canonical index rows
+    disappear, while a foreign tenant's same-name row and the trusted tenant's
+    neighboring-index row survive.
+14. A final hard stop and repeated SQLite reopen prove the immutable completion
+    audit, consumed operation/attempt, retained deleting generation, catalog
+    tombstone, and permanent name reservation.
+15. HTTP replay is intentionally bounded to the outstanding operation. Once
+    terminal completion consumes it and hides the catalog entry, the same
+    request returns `404 Not Found`; no indefinite terminal replay/status
+    contract is claimed.
+16. CI now includes this lifecycle in the backend integration job and supplies
+    the exact audited ClickHouse image digest. Process startup/poll failure
+    diagnostics redact the administrator token and every ClickHouse password.
+
+Validation on implementation commit `d687acf`:
+
+```sh
+go test ./... -count=1
+go test ./cmd/open-splunk-server ./internal/server \
+  -run 'Test(ShutdownDrainsDeletionAdmissionWakeBeforeRuntimeClose|TrackedHandlerRejectsNewWorkAndWaitsForActiveWork|IndexDataDeletion|DeleteIndex)' \
+  -count=10
+go test -race ./cmd/open-splunk-server ./internal/server \
+  ./internal/control ./internal/indexes -count=1
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./integration \
+  -run '^TestBackendIndexDataDeletionLifecycle$' -count=1 -timeout=10m -v
+
+git show --check --oneline d687acf
+```
+
+The exact implementation passed the full repository suite, repeated focused
+tests, selected race detection, repository-wide vet/build, and pinned lint
+with `0 issues`. The final digest-pinned real-process lifecycle passed in
+18.87 seconds.
+
+Three parallel adversarial review lenses over the staged implementation drove
+fixes for shutdown/wake races, timing-dependent assertions, duplicate polling
+and transport helpers, unbounded probe contexts, redundant full-table polling
+and INSERT round trips, duplicate process cleanup, raw secret-bearing failure
+logs, opaque test tuples, and misplaced cross-suite fixtures. Post-fix reviews
+found no remaining route, tenant, idempotency, shutdown, resource-bound, or
+ClickHouse-scope defect.
+
+Explicit pause point:
+
+1. Authenticated physical-deletion admission and its production wake/shutdown
+   lifecycle are implemented, committed, pushed, and live-proven.
+2. Exact retry identity is guaranteed while an operation is outstanding;
+   terminal replay is deliberately not part of this route.
+3. GORM remains limited to the SQLite control plane; ClickHouse remains native.
+4. Pause here until the user gives further instructions.
+
+## Previous checkpoint: production deletion runtime and ClickHouse privilege isolation
 
 Date: 2026-07-29
 

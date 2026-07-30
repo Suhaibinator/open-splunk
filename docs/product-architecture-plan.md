@@ -625,12 +625,32 @@ real checked-in stack, validates every principal and the migrated schema,
 rotates all credentials while retaining the data volume, rejects the old
 credentials, and revalidates the recovered stack.
 
-The authenticated HTTP `DELETE_DATA` route remains deliberately disabled. It
-still rejects the mode before selector validation or control-plane mutation.
-The next deletion unit may enable admission only by passing the handler's
-trusted tenant scope into `BeginIndexDataDeletion` and issuing a best-effort
-postcommit coordinator wake; the periodic recovery scan remains the
-correctness fallback.
+The authenticated administrator `POST /api/v1/indexes/delete` route now admits
+`DELETE_DATA`. It validates the optimistic version and deletion mode before
+selector lookup, requires an exact canonical-name confirmation, and rejects an
+archived `MaxInt64` generation because admission must create generation
+`N+1`. A fresh request must observe the index archived at version `N`; an exact
+retry may instead observe the same index deleting at `N+1`. The handler derives
+`IndexDataDeletionScope` only from its trusted configured tenant, calls
+`BeginIndexDataDeletion`, validates the returned immutable identity, and
+returns HTTP 200 with both the index ID and deletion operation ID.
+
+After durable admission the handler synchronously issues a nonblocking,
+best-effort coordinator wake. The periodic recovery scan remains the
+correctness path if that hint is coalesced or the process stops. HTTP shutdown
+stops new admissions and drains every active handler, guaranteeing that each
+successfully admitted deletion completes its postcommit wake before the
+deletion runtime closes; the runtime rejects new wake hints once close begins.
+
+HTTP idempotency is deliberately bounded by the outstanding operation.
+Sequential, concurrent, selector-equivalent, and restart retries with the
+original archived version return the same operation ID while that operation
+exists. Terminal completion consumes the outstanding row and tombstones the
+catalog entry, so the same HTTP request then fails selector resolution with
+`404 Not Found`; this route is not a terminal operation-status or replay API.
+If clients later require indefinite response replay, it must be added as an
+operation-ID-backed contract without weakening the permanent catalog
+tombstone.
 
 ## ClickHouse event model
 
