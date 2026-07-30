@@ -1,2 +1,3 @@
-// Package indexes owns logical index configuration, retention, and routing policy.
+// Package indexes owns logical index policy and serialized physical-deletion
+// reconciliation.
 package indexes

@@ -163,7 +163,7 @@ func (db *DB) CompleteIndexDataDeletion(
 			conversionErr,
 		)
 	}
-	if !indexDataDeletionCompletionMatchesAttempt(completion, expected) {
+	if !IndexDataDeletionCompletionMatchesAttempt(completion, expected) {
 		return IndexDataDeletionCompletion{}, errors.New(
 			"created index data deletion completion does not match expected attempt",
 		)
@@ -244,7 +244,7 @@ func matchingIndexDataDeletionCompletion(
 			err,
 		)
 	}
-	if !indexDataDeletionCompletionMatchesAttempt(completion, expected) {
+	if !IndexDataDeletionCompletionMatchesAttempt(completion, expected) {
 		return IndexDataDeletionCompletion{}, fmt.Errorf(
 			"%w: completed index deletion mutation attempt changed",
 			ErrDependencyConflict,
@@ -395,7 +395,9 @@ func sameIndexDeletionMutationAttempt(
 		left.CreatedAt.Equal(right.CreatedAt)
 }
 
-func indexDataDeletionCompletionMatchesAttempt(
+// IndexDataDeletionCompletionMatchesAttempt reports whether a validated
+// immutable completion copies the exact durable mutation-attempt identity.
+func IndexDataDeletionCompletionMatchesAttempt(
 	completion IndexDataDeletionCompletion,
 	attempt IndexDeletionMutationAttempt,
 ) bool {

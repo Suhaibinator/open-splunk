@@ -569,12 +569,31 @@ and system-table privileges. UUID checks detect observable drift, but
 ClickHouse targets `ALTER TABLE` by name and cannot atomically fence privileged
 out-of-band DDL.
 
-These primitives still do not enable the route. `DELETE_DATA` must continue to
-fail explicitly until the runtime coordinator composes oldest-operation
-recovery, durable-attempt creation, mutation polling, and frozen zero proof;
-invokes the available terminal transaction inside that same frozen proof
-callback; and crash-tests every boundary. The authenticated HTTP route is
-enabled last.
+The `internal/indexes` coordinator now composes these primitives with one
+owned, serialized worker. It immediately recovers the oldest operation at
+startup, periodically rescans SQLite so correctness never depends on a wake,
+and retains the oldest pending or failing operation so younger work cannot
+bypass it. An existing attempt is checked against the configured deployment
+tenant before any native call and polled outside the freeze. Every advancement
+reacquires `WithWritesFrozen`, drains the durable outbox, and, for a new
+attempt, resolves and persists the immutable physical target before the first
+possible `ALTER`. Only a `PhysicallyEmpty` result with no error can invoke
+`CompleteIndexDataDeletion`, and that invocation occurs inside the same frozen
+callback. A failed or outcome-ambiguous terminal commit is accepted only when
+the exact immutable audit can be read; otherwise the next cycle must drain and
+prove zero again. Pending and error retries are rate-limited, wakes are
+coalesced, and shutdown cancels and joins the sole worker.
+
+This coordinator is deliberately not wired into the server runtime and does
+not yet enable the route. The outstanding pre-attempt operation does not
+snapshot tenant identity, so changing the configured deployment tenant after
+admission but before attempt creation cannot be detected by coordinator
+inference. Before `DELETE_DATA` is activated, admission must atomically
+snapshot the tenant or startup must enforce an immutable deployment-tenant
+binding. Runtime construction must also enforce migrations and table-changing
+DDL before Store creation, one Store/coordinator owner, shutdown ordering that
+closes the coordinator before the Store, and a restricted runtime DDL
+principal. The authenticated HTTP route is enabled last.
 
 ## ClickHouse event model
 
