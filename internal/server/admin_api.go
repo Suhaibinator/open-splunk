@@ -480,9 +480,6 @@ func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunkv
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
-	if input.GetIncludeStats() {
-		return nil, badRequestError("index statistics are not available in this API version")
-	}
 	states, err := normalizeIndexStateFilters(input.GetStateFilters())
 	if err != nil {
 		return nil, badRequestError(err.Error())
@@ -495,39 +492,122 @@ func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunkv
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
+	if input.GetIncludeStats() &&
+		(handler.indexStatistics == nil ||
+			handler.indexStatisticsSnapshotter == nil) {
+		return nil, unavailableError(
+			"index statistics service is unavailable",
+		)
+	}
 
 	release, acquired := handler.acquireSerialization()
 	if !acquired {
-		return nil, unavailableError("administrative response capacity is exhausted")
+		return nil, unavailableError(
+			"administrative response capacity is exhausted",
+		)
 	}
+	permitHeld := true
 	transferred := false
 	defer func() {
-		if !transferred {
+		if permitHeld && !transferred {
 			release()
 		}
 	}()
+
 	records, err := handler.indexAdmin.ListIndexes(request.Context())
 	if err := mapAdministrativeCallError(request.Context(), err, "index"); err != nil {
 		return nil, err
 	}
 	filtered := filterAndSortIndexes(records, states, textFilter, sortBy, direction)
-	fingerprint := adminFilterFingerprint("indexes", pageSize, includeTotal, states, textFilter, int32(sortBy), int32(direction), "")
-	start, err := handler.adminPageStart(pageToken, "indexes", fingerprint, indexSnapshot(filtered), len(filtered))
+	snapshot := indexSnapshot(filtered)
+	fingerprint := indexListFilterFingerprint(
+		"indexes",
+		pageSize,
+		includeTotal,
+		states,
+		textFilter,
+		int32(sortBy),
+		int32(direction),
+		"",
+		input.GetIncludeStats(),
+	)
+	total := len(filtered)
+	start, err := handler.adminPageStart(
+		pageToken,
+		"indexes",
+		fingerprint,
+		snapshot,
+		total,
+	)
 	if err != nil {
 		return nil, badRequestError(err.Error())
 	}
-	end := min(start+pageSize, len(filtered))
+	end := min(start+pageSize, total)
+	selected := slices.Clone(filtered[start:end])
+	// Do not retain a potentially large catalog backing array while the native
+	// statistics service runs. Only this already-bounded page crosses that
+	// dependency boundary.
+	filtered = nil
 	items := make([]*opensplunkv1.IndexListItem, 0, end-start)
-	for _, record := range filtered[start:end] {
+	for _, record := range selected {
 		converted, err := indexToProto(record)
 		if err != nil {
 			return nil, internalError()
 		}
 		items = append(items, &opensplunkv1.IndexListItem{Index: converted})
 	}
-	page, err := handler.adminPageResponse("indexes", fingerprint, indexSnapshot(filtered), end, len(filtered), includeTotal)
+	page, err := handler.adminPageResponse(
+		"indexes",
+		fingerprint,
+		snapshot,
+		end,
+		total,
+		includeTotal,
+	)
 	if err != nil {
 		return nil, internalError()
+	}
+	var statisticsBatch clickhouse.IndexStatisticsBatchRequest
+	var statisticsResults []clickhouse.IndexStatisticsResult
+	if input.GetIncludeStats() && len(selected) > 0 {
+		statisticsBatch, err = handler.indexListStatisticsBatch(
+			selected,
+			items,
+		)
+		if err != nil {
+			return nil, internalError()
+		}
+
+		// The native read can take most of the route deadline. Release the
+		// serialization permit after the unbounded catalog has been reduced
+		// to one bounded page, then reacquire it before validating and
+		// materializing the response.
+		release()
+		permitHeld = false
+		statisticsBatch, statisticsResults, err =
+			handler.readIndexListStatistics(
+				request.Context(),
+				statisticsBatch,
+			)
+		if err != nil {
+			return nil, err
+		}
+		nextRelease, reacquired := handler.acquireSerialization()
+		if !reacquired {
+			return nil, unavailableError(
+				"administrative response capacity is exhausted",
+			)
+		}
+		release = nextRelease
+		permitHeld = true
+		if err := handler.attachIndexListStatistics(
+			statisticsBatch,
+			selected,
+			items,
+			statisticsResults,
+		); err != nil {
+			return nil, internalError()
+		}
 	}
 	message := &opensplunkv1.ListIndexesResponse{Indexes: items, Page: page}
 	if proto.Size(message) > maximumAdminListResponseBytes {
@@ -535,6 +615,149 @@ func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunkv
 	}
 	transferred = true
 	return &serializedIndexListResponse{message: message, ctx: request.Context(), release: release}, nil
+}
+
+func (handler *apiHandler) indexListStatisticsBatch(
+	records []control.Index,
+	items []*opensplunkv1.IndexListItem,
+) (clickhouse.IndexStatisticsBatchRequest, error) {
+	if len(records) == 0 ||
+		len(records) > maximumIndexRowsPerResponse ||
+		len(items) != len(records) {
+		return clickhouse.IndexStatisticsBatchRequest{},
+			errors.New("invalid index statistics page")
+	}
+
+	batch := clickhouse.IndexStatisticsBatchRequest{
+		TenantID: handler.tenantID,
+		Indexes:  make([]clickhouse.IndexStatisticsScope, 0, len(records)),
+	}
+	expected := make(map[string]clickhouse.IndexStatisticsScope, len(records))
+	names := make(map[string]struct{}, len(records))
+	for position, record := range records {
+		if items[position] == nil ||
+			items[position].GetIndex() == nil ||
+			items[position].GetIndex().GetIndexId() != record.ID ||
+			record.ID == "" ||
+			record.Definition.Name == "" {
+			return clickhouse.IndexStatisticsBatchRequest{},
+				errors.New("invalid index statistics page identity")
+		}
+		scope := clickhouse.IndexStatisticsScope{
+			IndexID:   record.ID,
+			IndexName: record.Definition.Name,
+		}
+		if _, exists := expected[scope.IndexID]; exists {
+			return clickhouse.IndexStatisticsBatchRequest{},
+				errors.New("duplicate index statistics page identity")
+		}
+		if _, exists := names[scope.IndexName]; exists {
+			return clickhouse.IndexStatisticsBatchRequest{},
+				errors.New("duplicate index statistics page name")
+		}
+		expected[scope.IndexID] = scope
+		names[scope.IndexName] = struct{}{}
+		batch.Indexes = append(batch.Indexes, scope)
+	}
+	return batch, nil
+}
+
+func (handler *apiHandler) readIndexListStatistics(
+	ctx context.Context,
+	batch clickhouse.IndexStatisticsBatchRequest,
+) (
+	clickhouse.IndexStatisticsBatchRequest,
+	[]clickhouse.IndexStatisticsResult,
+	error,
+) {
+	visibilityCutoff, err :=
+		handler.indexStatisticsSnapshotter.VisibilityCutoff(ctx)
+	if err != nil {
+		return batch, nil, mapIndexStatisticsCallError(ctx, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return batch, nil, mapIndexStatisticsCallError(ctx, err)
+	}
+	measuredAt := handler.now().Round(0).UTC().Truncate(time.Millisecond)
+	if measuredAt.IsZero() ||
+		!clickhouse.SupportsSearchTimeRange(measuredAt, measuredAt) {
+		return batch, nil, internalError()
+	}
+	batch.MeasuredAt = measuredAt
+	batch.VisibilityCutoff = visibilityCutoff
+	call := batch
+	call.Indexes = slices.Clone(batch.Indexes)
+	results, err := handler.indexStatistics.GetIndexStatisticsBatch(ctx, call)
+	if err != nil {
+		return batch, nil, mapIndexStatisticsCallError(ctx, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return batch, nil, mapIndexStatisticsCallError(ctx, err)
+	}
+	return batch, results, nil
+}
+
+func (handler *apiHandler) attachIndexListStatistics(
+	batch clickhouse.IndexStatisticsBatchRequest,
+	records []control.Index,
+	items []*opensplunkv1.IndexListItem,
+	results []clickhouse.IndexStatisticsResult,
+) error {
+	if len(records) == 0 ||
+		len(records) > maximumIndexRowsPerResponse ||
+		len(items) != len(records) ||
+		len(batch.Indexes) != len(records) ||
+		len(results) != len(records) ||
+		batch.TenantID != handler.tenantID {
+		return errors.New("invalid index statistics batch")
+	}
+	expected := make(map[string]clickhouse.IndexStatisticsScope, len(records))
+	for position, record := range records {
+		scope := batch.Indexes[position]
+		if items[position] == nil ||
+			items[position].GetIndex() == nil ||
+			items[position].GetIndex().GetIndexId() != record.ID ||
+			scope.IndexID != record.ID ||
+			scope.IndexName != record.Definition.Name {
+			return errors.New("invalid index statistics batch identity")
+		}
+		if _, duplicate := expected[scope.IndexID]; duplicate {
+			return errors.New("duplicate index statistics batch identity")
+		}
+		expected[scope.IndexID] = scope
+	}
+	converted := make(map[string]*opensplunkv1.IndexStats, len(results))
+	for _, result := range results {
+		scope, exists := expected[result.IndexID]
+		if !exists || scope.IndexName != result.IndexName {
+			return errors.New("unexpected index statistics result")
+		}
+		if _, duplicate := converted[result.IndexID]; duplicate {
+			return errors.New("duplicate index statistics result")
+		}
+		protoStats, err := indexStatisticsToProto(
+			clickhouse.IndexStatisticsRequest{
+				TenantID:         batch.TenantID,
+				IndexID:          scope.IndexID,
+				IndexName:        scope.IndexName,
+				MeasuredAt:       batch.MeasuredAt,
+				VisibilityCutoff: batch.VisibilityCutoff,
+			},
+			result,
+		)
+		if err != nil {
+			return err
+		}
+		converted[result.IndexID] = protoStats
+	}
+	for position, record := range records {
+		stats, exists := converted[record.ID]
+		if !exists {
+			return errors.New("missing index statistics result")
+		}
+		items[position].Stats = stats
+	}
+	return nil
 }
 
 func (handler *apiHandler) updateIndex(request *http.Request, input *opensplunkv1.UpdateIndexRequest) (*opensplunkv1.UpdateIndexResponse, error) {
@@ -797,7 +1020,16 @@ func (handler *apiHandler) listIngestionTokens(request *http.Request, input *ope
 		return nil, err
 	}
 	filtered := filterAndSortTokens(records, states, indexFilter, textFilter, sortBy, direction)
-	fingerprint := adminFilterFingerprint("tokens", pageSize, includeTotal, states, textFilter, int32(sortBy), int32(direction), indexFilter)
+	fingerprint := adminFilterFingerprint(
+		"tokens",
+		pageSize,
+		includeTotal,
+		states,
+		textFilter,
+		int32(sortBy),
+		int32(direction),
+		indexFilter,
+	)
 	snapshot := tokenSnapshot(filtered)
 	start, err := handler.adminPageStart(pageToken, "tokens", fingerprint, snapshot, len(filtered))
 	if err != nil {
@@ -1716,8 +1948,47 @@ func adminFilterFingerprint(endpoint string, pageSize int, includeTotal bool, st
 		SortBy       int32  `json:"b"`
 		Direction    int32  `json:"d"`
 		IndexName    string `json:"i"`
-	}{adminCursorVersion, endpoint, pageSize, includeTotal, states, text, sortBy, direction, indexName})
+	}{
+		adminCursorVersion,
+		endpoint,
+		pageSize,
+		includeTotal,
+		states,
+		text,
+		sortBy,
+		direction,
+		indexName,
+	})
 	digest := sha256.Sum256(payload)
+	return base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
+func indexListFilterFingerprint(
+	endpoint string,
+	pageSize int,
+	includeTotal bool,
+	states any,
+	text string,
+	sortBy, direction int32,
+	indexName string,
+	includeStats bool,
+) string {
+	base := adminFilterFingerprint(
+		endpoint,
+		pageSize,
+		includeTotal,
+		states,
+		text,
+		sortBy,
+		direction,
+		indexName,
+	)
+	if !includeStats {
+		return base
+	}
+	digest := sha256.Sum256(
+		[]byte("open-splunk/index-list-include-stats/v1\x00" + base),
+	)
 	return base64.RawURLEncoding.EncodeToString(digest[:])
 }
 

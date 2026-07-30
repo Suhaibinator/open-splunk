@@ -2026,13 +2026,101 @@ func assertBackendIndexStatistics(
 		},
 		&response,
 	)
-	statistics := response.GetStats()
+	assertBackendIndexStatisticsValue(
+		t,
+		ctx,
+		connection,
+		"get",
+		response.GetStats(),
+		indexID,
+		visibilityCutoff,
+	)
+	assertBackendIndexListStatistics(
+		t,
+		ctx,
+		client,
+		baseURL,
+		administratorToken,
+		connection,
+		indexID,
+		visibilityCutoff,
+	)
+}
+
+func assertBackendIndexListStatistics(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	administratorToken string,
+	connection clickhousedriver.Conn,
+	indexID string,
+	visibilityCutoff uint64,
+) {
+	t.Helper()
+	pageSize := uint32(64)
+	textFilter := verticalIndexName
+	var response opensplunkv1.ListIndexesResponse
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/indexes/list",
+		administratorToken,
+		&opensplunkv1.ListIndexesRequest{
+			Page:         &opensplunkv1.PageRequest{PageSize: &pageSize},
+			TextFilter:   &textFilter,
+			IncludeStats: true,
+		},
+		&response,
+	)
+
+	var matchingItem *opensplunkv1.IndexListItem
+	for _, item := range response.GetIndexes() {
+		if item.GetIndex().GetIndexId() != indexID {
+			continue
+		}
+		if matchingItem != nil {
+			t.Fatalf("backend index list returned duplicate index ID %q", indexID)
+		}
+		matchingItem = item
+	}
+	if matchingItem == nil ||
+		matchingItem.GetIndex().GetDefinition().GetName() != verticalIndexName {
+		t.Fatalf(
+			"backend index list did not return index %q (%q): %#v",
+			verticalIndexName,
+			indexID,
+			response.GetIndexes(),
+		)
+	}
+	assertBackendIndexStatisticsValue(
+		t,
+		ctx,
+		connection,
+		"list",
+		matchingItem.GetStats(),
+		indexID,
+		visibilityCutoff,
+	)
+}
+
+func assertBackendIndexStatisticsValue(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	source string,
+	statistics *opensplunkv1.IndexStats,
+	indexID string,
+	visibilityCutoff uint64,
+) {
+	t.Helper()
 	if statistics == nil ||
 		statistics.GetIndexId() != indexID ||
 		statistics.GetMeasuredAt() == nil ||
 		statistics.GetMeasuredAt().CheckValid() != nil ||
 		!statistics.GetEstimates() {
-		t.Fatalf("backend index statistics metadata = %#v", statistics)
+		t.Fatalf("backend index %s statistics metadata = %#v", source, statistics)
 	}
 	measuredAt := statistics.GetMeasuredAt().AsTime().UTC()
 	cutoffText := measuredAt.Format("2006-01-02 15:04:05.000")
@@ -2056,7 +2144,7 @@ func assertBackendIndexStatistics(
 		&expectedEarliest,
 		&expectedLatest,
 	); err != nil {
-		t.Fatalf("read expected backend index statistics: %v", err)
+		t.Fatalf("read expected backend index %s statistics: %v", source, err)
 	}
 	if expectedCount == 0 ||
 		expectedEarliest == nil ||
@@ -2067,7 +2155,8 @@ func assertBackendIndexStatistics(
 		!statistics.GetEarliestEventTime().AsTime().Equal(*expectedEarliest) ||
 		!statistics.GetLatestEventTime().AsTime().Equal(*expectedLatest) {
 		t.Fatalf(
-			"backend index statistics = %#v, want count=%d bounds=%v..%v",
+			"backend index %s statistics = %#v, want count=%d bounds=%v..%v",
+			source,
 			statistics,
 			expectedCount,
 			expectedEarliest,
@@ -2083,12 +2172,13 @@ func assertBackendIndexStatistics(
 		"open_splunk",
 		"events",
 	).Scan(&activeTableBytes); err != nil {
-		t.Fatalf("read backend index statistics storage bound: %v", err)
+		t.Fatalf("read backend index %s statistics storage bound: %v", source, err)
 	}
 	if statistics.GetStorageBytes() == 0 ||
 		statistics.GetStorageBytes() > activeTableBytes {
 		t.Fatalf(
-			"backend index storage estimate = %d, want 0 < estimate <= %d",
+			"backend index %s storage estimate = %d, want 0 < estimate <= %d",
+			source,
 			statistics.GetStorageBytes(),
 			activeTableBytes,
 		)

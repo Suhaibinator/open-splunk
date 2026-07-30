@@ -103,15 +103,19 @@ type IndexAdministration interface {
 	DeleteIndex(context.Context, string, uint64, string) (string, error)
 }
 
-// IndexStatistics reads one already-resolved logical index from the native
-// event store. The echoed result scope lets the browser boundary reject a
-// dependency response produced for a different tenant, index, snapshot, or
-// measurement instant.
+// IndexStatistics reads already-resolved logical indexes from the native event
+// store. Echoed result scopes let the browser boundary reject dependency
+// responses produced for a different tenant, index, snapshot, or measurement
+// instant.
 type IndexStatistics interface {
 	GetIndexStatistics(
 		context.Context,
 		clickhouse.IndexStatisticsRequest,
 	) (clickhouse.IndexStatisticsResult, error)
+	GetIndexStatisticsBatch(
+		context.Context,
+		clickhouse.IndexStatisticsBatchRequest,
+	) ([]clickhouse.IndexStatisticsResult, error)
 }
 
 // IndexStatisticsSnapshotter captures the largest committed visibility

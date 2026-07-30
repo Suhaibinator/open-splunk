@@ -20,16 +20,25 @@ import (
 const indexStatisticsPath = "/api/v1/indexes/stats/get"
 
 type recordingIndexStatistics struct {
-	mu       sync.Mutex
-	calls    int
-	contexts []context.Context
-	requests []clickhouse.IndexStatisticsRequest
-	result   clickhouse.IndexStatisticsResult
-	err      error
-	fn       func(
+	mu            sync.Mutex
+	calls         int
+	contexts      []context.Context
+	requests      []clickhouse.IndexStatisticsRequest
+	result        clickhouse.IndexStatisticsResult
+	err           error
+	batchCalls    int
+	batchContexts []context.Context
+	batchRequests []clickhouse.IndexStatisticsBatchRequest
+	batchResults  []clickhouse.IndexStatisticsResult
+	batchErr      error
+	fn            func(
 		context.Context,
 		clickhouse.IndexStatisticsRequest,
 	) (clickhouse.IndexStatisticsResult, error)
+	batchFn func(
+		context.Context,
+		clickhouse.IndexStatisticsBatchRequest,
+	) ([]clickhouse.IndexStatisticsResult, error)
 }
 
 func (statistics *recordingIndexStatistics) GetIndexStatistics(
@@ -49,6 +58,30 @@ func (statistics *recordingIndexStatistics) GetIndexStatistics(
 	return result, err
 }
 
+func (statistics *recordingIndexStatistics) GetIndexStatisticsBatch(
+	ctx context.Context,
+	request clickhouse.IndexStatisticsBatchRequest,
+) ([]clickhouse.IndexStatisticsResult, error) {
+	statistics.mu.Lock()
+	statistics.batchCalls++
+	statistics.batchContexts = append(statistics.batchContexts, ctx)
+	statistics.batchRequests = append(
+		statistics.batchRequests,
+		request,
+	)
+	fn := statistics.batchFn
+	results := append(
+		[]clickhouse.IndexStatisticsResult(nil),
+		statistics.batchResults...,
+	)
+	err := statistics.batchErr
+	statistics.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, request)
+	}
+	return results, err
+}
+
 func (statistics *recordingIndexStatistics) callCount() int {
 	statistics.mu.Lock()
 	defer statistics.mu.Unlock()
@@ -59,6 +92,21 @@ func (statistics *recordingIndexStatistics) capturedRequests() []clickhouse.Inde
 	statistics.mu.Lock()
 	defer statistics.mu.Unlock()
 	return append([]clickhouse.IndexStatisticsRequest(nil), statistics.requests...)
+}
+
+func (statistics *recordingIndexStatistics) batchCallCount() int {
+	statistics.mu.Lock()
+	defer statistics.mu.Unlock()
+	return statistics.batchCalls
+}
+
+func (statistics *recordingIndexStatistics) capturedBatchRequests() []clickhouse.IndexStatisticsBatchRequest {
+	statistics.mu.Lock()
+	defer statistics.mu.Unlock()
+	return append(
+		[]clickhouse.IndexStatisticsBatchRequest(nil),
+		statistics.batchRequests...,
+	)
 }
 
 type recordingIndexStatisticsSnapshotter struct {

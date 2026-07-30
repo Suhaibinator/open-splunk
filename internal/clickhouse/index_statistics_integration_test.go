@@ -2,6 +2,7 @@ package clickhouse_test
 
 import (
 	"context"
+	"math/bits"
 	"os"
 	"os/exec"
 	"strings"
@@ -94,11 +95,15 @@ func TestIndexStatisticsReaderAgainstClickHouse(t *testing.T) {
 		foreignTenant    = "statistics-foreign-tenant"
 		targetIndexID    = "statistics-target-id"
 		targetIndexName  = "statistics-target-index"
+		emptyIndexID     = "statistics-empty-id"
+		emptyIndexName   = "statistics-empty-index"
+		neighborIndexID  = "statistics-neighbor-id"
 		neighborIndex    = "statistics-neighbor-index"
 		visibilityCutoff = uint64(41)
 	)
 	earliest := measuredAt.Add(-4 * time.Hour)
 	latest := measuredAt.Add(-time.Hour)
+	neighborEventTime := measuredAt.Add(10 * time.Hour)
 	rows := []indexStatisticsFixtureRow{
 		{
 			eventID:       "included-earliest",
@@ -155,10 +160,19 @@ func TestIndexStatisticsReaderAgainstClickHouse(t *testing.T) {
 			visibilitySeq: visibilityCutoff,
 		},
 		{
+			eventID:       "excluded-foreign-tenant-empty-index",
+			tenantID:      foreignTenant,
+			indexName:     emptyIndexName,
+			eventTime:     measuredAt.Add(-20 * time.Hour),
+			indexTime:     measuredAt,
+			expiresAt:     measuredAt.Add(time.Millisecond),
+			visibilitySeq: visibilityCutoff,
+		},
+		{
 			eventID:       "excluded-neighbor-index",
 			tenantID:      targetTenant,
 			indexName:     neighborIndex,
-			eventTime:     measuredAt.Add(10 * time.Hour),
+			eventTime:     neighborEventTime,
 			indexTime:     measuredAt,
 			expiresAt:     measuredAt.Add(time.Millisecond),
 			visibilitySeq: visibilityCutoff,
@@ -211,27 +225,39 @@ func TestIndexStatisticsReaderAgainstClickHouse(t *testing.T) {
 		t.Fatal("Estimates = false, want true")
 	}
 
-	var tableStorageBytes uint64
+	var tablePhysicalRows, tableStorageBytes uint64
 	if err := connection.QueryRow(
 		ctx,
-		`SELECT coalesce(sum(bytes_on_disk), toUInt64(0))
+		`SELECT
+		     coalesce(sum(rows), toUInt64(0)),
+		     coalesce(sum(bytes_on_disk), toUInt64(0))
 		   FROM system.parts
 		  WHERE database = ?
 		    AND table = ?
 		    AND active = 1`,
 		container.Database,
 		"events",
-	).Scan(&tableStorageBytes); err != nil {
+	).Scan(&tablePhysicalRows, &tableStorageBytes); err != nil {
 		t.Fatalf("read table storage bound: %v", err)
 	}
-	if tableStorageBytes == 0 {
-		t.Fatal("active table storage bytes = 0, want a nonzero fixture bound")
-	}
-	if result.StorageBytes == 0 || result.StorageBytes > tableStorageBytes {
+	if tablePhysicalRows == 0 || tableStorageBytes == 0 {
 		t.Fatalf(
-			"StorageBytes = %d, want a nonzero estimate no greater than table bytes %d",
-			result.StorageBytes,
+			"active table sample = (%d rows, %d bytes), want nonzero counters",
+			tablePhysicalRows,
 			tableStorageBytes,
+		)
+	}
+	targetStorageBytes := proportionalStorageFixtureEstimate(
+		t,
+		2,
+		tablePhysicalRows,
+		tableStorageBytes,
+	)
+	if result.StorageBytes != targetStorageBytes {
+		t.Fatalf(
+			"StorageBytes = %d, want shared-sample estimate %d",
+			result.StorageBytes,
+			targetStorageBytes,
 		)
 	}
 
@@ -248,6 +274,103 @@ func TestIndexStatisticsReaderAgainstClickHouse(t *testing.T) {
 		emptyResult.LatestEventTime != nil ||
 		!emptyResult.Estimates {
 		t.Fatalf("empty statistics = %#v, want zero estimates and nil bounds", emptyResult)
+	}
+
+	batchRequest := internalclickhouse.IndexStatisticsBatchRequest{
+		TenantID: targetTenant,
+		Indexes: []internalclickhouse.IndexStatisticsScope{
+			{
+				IndexID:   neighborIndexID,
+				IndexName: neighborIndex,
+			},
+			{
+				IndexID:   emptyIndexID,
+				IndexName: emptyIndexName,
+			},
+			{
+				IndexID:   targetIndexID,
+				IndexName: targetIndexName,
+			},
+		},
+		MeasuredAt:       measuredAt,
+		VisibilityCutoff: visibilityCutoff,
+	}
+	batchResults, err := reader.GetIndexStatisticsBatch(ctx, batchRequest)
+	if err != nil {
+		t.Fatalf("GetIndexStatisticsBatch: %v", err)
+	}
+	if len(batchResults) != len(batchRequest.Indexes) {
+		t.Fatalf(
+			"batch result count = %d, want %d",
+			len(batchResults),
+			len(batchRequest.Indexes),
+		)
+	}
+	for index, scope := range batchRequest.Indexes {
+		assertIndexStatisticsScope(
+			t,
+			batchResults[index],
+			internalclickhouse.IndexStatisticsRequest{
+				TenantID:         batchRequest.TenantID,
+				IndexID:          scope.IndexID,
+				IndexName:        scope.IndexName,
+				MeasuredAt:       batchRequest.MeasuredAt,
+				VisibilityCutoff: batchRequest.VisibilityCutoff,
+			},
+		)
+		if !batchResults[index].Estimates {
+			t.Fatalf("batch result %d Estimates = false, want true", index)
+		}
+	}
+
+	neighborResult := batchResults[0]
+	if neighborResult.EventCount != 1 ||
+		neighborResult.EarliestEventTime == nil ||
+		!neighborResult.EarliestEventTime.Equal(neighborEventTime) ||
+		neighborResult.LatestEventTime == nil ||
+		!neighborResult.LatestEventTime.Equal(neighborEventTime) {
+		t.Fatalf(
+			"neighbor statistics = %#v, want one isolated event at %v",
+			neighborResult,
+			neighborEventTime,
+		)
+	}
+	neighborStorageBytes := proportionalStorageFixtureEstimate(
+		t,
+		1,
+		tablePhysicalRows,
+		tableStorageBytes,
+	)
+	if neighborResult.StorageBytes != neighborStorageBytes {
+		t.Fatalf(
+			"neighbor StorageBytes = %d, want shared-sample estimate %d",
+			neighborResult.StorageBytes,
+			neighborStorageBytes,
+		)
+	}
+
+	batchEmptyResult := batchResults[1]
+	if batchEmptyResult.EventCount != 0 ||
+		batchEmptyResult.StorageBytes != 0 ||
+		batchEmptyResult.EarliestEventTime != nil ||
+		batchEmptyResult.LatestEventTime != nil {
+		t.Fatalf(
+			"missing-group statistics = %#v, want explicit empty result",
+			batchEmptyResult,
+		)
+	}
+
+	batchTargetResult := batchResults[2]
+	if batchTargetResult.EventCount != 2 ||
+		batchTargetResult.EarliestEventTime == nil ||
+		!batchTargetResult.EarliestEventTime.Equal(earliest) ||
+		batchTargetResult.LatestEventTime == nil ||
+		!batchTargetResult.LatestEventTime.Equal(latest) ||
+		batchTargetResult.StorageBytes != targetStorageBytes {
+		t.Fatalf(
+			"target batch statistics = %#v, want isolated count/range/storage",
+			batchTargetResult,
+		)
 	}
 }
 
@@ -315,4 +438,28 @@ func assertIndexStatisticsScope(
 			request,
 		)
 	}
+}
+
+func proportionalStorageFixtureEstimate(
+	t *testing.T,
+	eventCount uint64,
+	physicalRows uint64,
+	physicalBytes uint64,
+) uint64 {
+	t.Helper()
+
+	high, low := bits.Mul64(eventCount, physicalBytes)
+	if high >= physicalRows {
+		t.Fatalf(
+			"fixture storage estimate overflows: count=%d rows=%d bytes=%d",
+			eventCount,
+			physicalRows,
+			physicalBytes,
+		)
+	}
+	quotient, remainder := bits.Div64(high, low, physicalRows)
+	if remainder != 0 {
+		quotient++
+	}
+	return quotient
 }

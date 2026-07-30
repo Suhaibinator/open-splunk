@@ -994,9 +994,9 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 			status:  http.StatusConflict,
 		},
 		{
-			name: "unsupported stats", path: "/api/v1/indexes/list",
+			name: "unconfigured stats", path: "/api/v1/indexes/list",
 			request: &opensplunkv1.ListIndexesRequest{IncludeStats: true},
-			status:  http.StatusBadRequest,
+			status:  http.StatusServiceUnavailable,
 		},
 		{
 			name: "present empty index idempotency key", path: "/api/v1/indexes/create",
