@@ -681,16 +681,41 @@ plus column-scoped reads of `database`, `table`, `active`, `rows`, and
 serving. ClickHouse statistics do not use GORM.
 
 `POST /api/v1/indexes/list` supports page-local statistics enrichment for the
-existing name/created/updated catalog sorts. GORM/SQLite first performs the
-existing catalog load, filtering, deterministic ordering, cursor validation,
-and pagination under the serialized administrative response permit. The
-server then clones only the selected page (at most 64 records), drops the full
-filtered backing slice, releases that permit, and captures one committed
+existing name/created/updated catalog sorts. The SQLite control plane admits
+at most 1,024 physical index identities globally. Active, archived, deleting,
+and terminal tombstoned rows all consume that permanent bound because freeing
+a row would allow a canonical ClickHouse-facing name to be reused. A
+trigger-maintained singleton records the physical count and a global catalog
+revision; product deletion never physically removes an index row.
+
+Creation checks the bounded count, duplicate name, and random ID and inserts
+the row in one explicit GORM transaction. SQLite's immediate writer admission
+serializes concurrent creators, so exactly one caller can consume the last
+slot. Duplicate names, including terminal names, remain conflicts even when
+the catalog is full. SQL triggers independently reject overflow, identity
+replacement, physical deletion, and unbounded persisted metadata.
+
+List requests authenticate a server-signed composite keyset before storage
+work. GORM/SQLite then reads the catalog marker, at most 65 candidate rows, and
+an optional exact filtered count in one read-only WAL transaction. State and
+literal substring filters, deterministic name/created/updated ordering, and
+the matching `(sort_key, index_id)` continuation predicate execute in SQLite;
+there is no offset or full-record catalog materialization. Text filtering uses
+SQLite's deterministic contract: ASCII letters are case-insensitive,
+non-ASCII code points are case-sensitive, and `%`/`_` are literal. Any
+definition, state, deletion-admission, or tombstone mutation advances the
+global revision and makes an outstanding cursor fail closed rather than
+silently duplicate or omit a row.
+
+After SQLite fixes the metadata page, the server acquires the serialized
+administrative response permit for bounded defensive validation and
+materialization. It then releases that permit and captures one committed
 visibility cutoff followed by one UTC millisecond measurement instant. One
 native grouped event query returns every nonempty page scope; absent groups
 become exact empty results. At most one shared active-parts query then supplies
 the proportional storage basis for every nonempty result, preventing N+1
-behavior and making estimates on the same page comparable.
+behavior and making estimates on the same page comparable. A SQLite busy wait
+therefore cannot occupy response capacity.
 
 The batch operation shares the single-index reader's ten-second overall
 deadline and one-slot fail-fast native gate. It bounds scopes, groups, and
@@ -707,12 +732,12 @@ app lists.
 
 Sorting by event count or storage bytes remains deliberately unsupported.
 Global statistics ordering would require measuring every filtered catalog
-candidate, but the current GORM catalog list has no product-owned row cap and
-is intentionally a serialized full-catalog scan. It would also need an
-immutable bounded ordering snapshot across pages because ingestion, retention,
-TTL deletion, and changing `system.parts` metadata can otherwise cause skips
-or duplicates. Those catalog-admission and snapshot semantics require a
-separate design; page-local statistics do not imply them.
+candidate and retaining an immutable statistics ordering snapshot across
+pages because ingestion, retention, TTL deletion, and changing `system.parts`
+metadata can otherwise cause skips or duplicates. The metadata catalog is now
+physically bounded, but its revision cannot freeze native event and part
+statistics. That separately bounded snapshot design remains future work;
+page-local statistics do not imply it.
 
 ### Administrator index field catalog
 

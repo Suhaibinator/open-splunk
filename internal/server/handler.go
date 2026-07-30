@@ -101,7 +101,7 @@ type IndexAdministration interface {
 	CreateIndex(context.Context, control.IndexDefinition) (control.Index, error)
 	GetIndex(context.Context, string) (control.Index, error)
 	GetIndexByName(context.Context, string) (control.Index, error)
-	ListIndexes(context.Context) ([]control.Index, error)
+	ListIndexPage(context.Context, control.IndexListRequest) (control.IndexListResult, error)
 	UpdateIndex(context.Context, string, uint64, control.IndexDefinition) (control.Index, error)
 	SetIndexState(context.Context, string, uint64, control.IndexState) (control.Index, error)
 	DeleteIndex(context.Context, string, uint64, string) (string, error)

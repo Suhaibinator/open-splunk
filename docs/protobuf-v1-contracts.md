@@ -145,14 +145,32 @@ and part-statistics reads remain native ClickHouse operations.
 `ListIndexesRequest.include_stats` enriches only the already-filtered,
 metadata-sorted catalog page, whose endpoint maximum is 64 indexes. The
 GORM/SQLite control plane remains responsible for catalog filtering, ordering,
-cursor validation, and pagination. After that page is fixed, the server
-captures one committed visibility cutoff followed by one UTC millisecond
-measurement instant and submits the page's trusted tenant/index scopes to one
-native grouped ClickHouse query. Missing groups become explicit empty
-statistics. If any group is nonempty, one additional `system.parts` aggregate
-provides a common proportional-storage sample for the whole page. The
-operation is therefore zero queries for an empty page, one for an all-empty
-page, and two otherwise; it never issues one query per index.
+cursor validation, and pagination. The catalog has a hard ceiling of 1,024
+physical index identities, including permanently retained terminal rows. One
+trigger-maintained singleton holds its physical count and global revision.
+Index creation checks capacity and inserts under one immediate GORM
+transaction; concurrent callers cannot both consume the last slot, tombstones
+do not release capacity, and physical identity deletion/replacement is
+forbidden.
+
+The signed continuation contains the catalog revision and the final
+`(name|created_at|updated_at, index_id)` key. GORM applies state and literal
+text filters, the matching keyset predicate, deterministic ordering, and
+`LIMIT page_size + 1` in SQLite under one read-only transaction. Exact totals
+are counted only when requested. No offset or full-record catalog scan is
+used. Text filtering is ASCII-case-insensitive and non-ASCII-case-sensitive
+across name, display name, and description; `%` and `_` remain literal.
+Create, definition update, state transition, deletion admission, and terminal
+tombstone insertion all invalidate an outstanding continuation.
+
+After that page is fixed, the server captures one committed visibility cutoff
+followed by one UTC millisecond measurement instant and submits the page's
+trusted tenant/index scopes to one native grouped ClickHouse query. Missing
+groups become explicit empty statistics. If any group is nonempty, one
+additional `system.parts` aggregate provides a common proportional-storage
+sample for the whole page. The operation is therefore zero queries for an
+empty page, one for an all-empty page, and two otherwise; it never issues one
+query per index.
 
 Every enriched item on one page shares the same measurement instant and
 visibility cutoff. A later continuation page is measured independently because
@@ -162,15 +180,17 @@ list-wide immutable statistics snapshot. The signed catalog cursor binds
 modes. Native batching shares the single-index reader's ten-second deadline
 and fail-fast one-slot gate, limits scopes/groups/results to 64, and uses
 explicit read, memory, output, thread, and expanded-query-size bounds. The
-pre-existing full-catalog GORM scan remains serialized and is released before
-native work begins.
+bounded GORM page is selected before the administrative response permit is
+acquired, so a SQLite busy wait cannot occupy response capacity. The permit
+then covers defensive page validation and materialization and is released
+before native work begins.
 
 `INDEX_SORT_BY_EVENT_COUNT` and `INDEX_SORT_BY_STORAGE_BYTES` remain rejected.
 Correct global statistics ordering would have to measure every filtered
 catalog candidate and preserve that ordering across continuation pages despite
 ingestion, retention, TTL removal, and changing part metadata. It therefore
-requires a separately designed catalog admission limit or immutable bounded
-snapshot, not the page-local enrichment contract.
+requires an immutable bounded native-statistics snapshot in addition to the
+now-enforced metadata catalog ceiling, not the page-local enrichment contract.
 
 ### Index field catalog
 

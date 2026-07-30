@@ -143,8 +143,19 @@ export interface GetIndexResponse {
 
 /** POST /api/v1/indexes/list */
 export interface ListIndexesRequest {
+  /**
+   * page tokens are authenticated metadata keysets bound to one catalog
+   * revision. Any index definition, state, or visibility mutation invalidates
+   * an outstanding continuation rather than allowing duplicate or skipped
+   * rows.
+   */
   page: PageRequest | undefined;
   stateFilters: IndexState[];
+  /**
+   * text_filter is a literal substring match across name, display name, and
+   * description. ASCII letters are case-insensitive; non-ASCII code points
+   * are case-sensitive. '%' and '_' have no wildcard meaning.
+   */
   textFilter?: string | undefined;
   sortBy: IndexSortBy;
   sortDirection: SortDirection;

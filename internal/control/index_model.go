@@ -8,9 +8,9 @@ package control
 // keys, and physical scalar types in sync with 0001_control_plane.sql and
 // subsequent index migrations.
 type indexRecord struct {
-	IndexID                      string     `gorm:"column:index_id;type:text;primaryKey;not null"`
+	IndexID                      string     `gorm:"column:index_id;type:text;primaryKey;not null;index:indexes_name_id_idx,priority:2;index:indexes_created_id_idx,priority:2;index:indexes_updated_id_idx,priority:2"`
 	Version                      int64      `gorm:"column:version;type:integer;not null;check:indexes_version_positive,version >= 1"`
-	Name                         string     `gorm:"column:name;type:text;not null;unique;index:indexes_state_name_idx,priority:2"`
+	Name                         string     `gorm:"column:name;type:text;not null;unique;index:indexes_state_name_idx,priority:2;index:indexes_name_id_idx,priority:1"`
 	DisplayName                  string     `gorm:"column:display_name;type:text;not null"`
 	Description                  string     `gorm:"column:description;type:text;not null"`
 	RetentionNanoseconds         int64      `gorm:"column:retention_nanoseconds;type:integer;not null;check:indexes_retention_nonnegative,retention_nanoseconds >= 0"`
@@ -23,12 +23,25 @@ type indexRecord struct {
 	MaximumFutureSkewNanoseconds int64      `gorm:"column:maximum_future_skew_nanoseconds;type:integer;not null;check:indexes_future_skew_nonnegative,maximum_future_skew_nanoseconds >= 0"`
 	MaximumEventAgeNanoseconds   int64      `gorm:"column:maximum_event_age_nanoseconds;type:integer;not null;check:indexes_event_age_nonnegative,maximum_event_age_nanoseconds >= 0"`
 	State                        IndexState `gorm:"column:state;type:text;not null;index:indexes_state_name_idx,priority:1"`
-	CreatedAtUnixMicro           int64      `gorm:"column:created_at_unix_micro;type:integer;not null"`
-	UpdatedAtUnixMicro           int64      `gorm:"column:updated_at_unix_micro;type:integer;not null;check:indexes_update_not_before_create,updated_at_unix_micro >= created_at_unix_micro"`
+	CreatedAtUnixMicro           int64      `gorm:"column:created_at_unix_micro;type:integer;not null;index:indexes_created_id_idx,priority:1"`
+	UpdatedAtUnixMicro           int64      `gorm:"column:updated_at_unix_micro;type:integer;not null;check:indexes_update_not_before_create,updated_at_unix_micro >= created_at_unix_micro;index:indexes_updated_id_idx,priority:1"`
 }
 
 func (indexRecord) TableName() string {
 	return "indexes"
+}
+
+// indexCatalogStateRecord is the singleton bound/revision marker introduced
+// by 0020_index_catalog_bounds.sql. SQL triggers, not application callbacks,
+// update it in the same transaction as every catalog mutation.
+type indexCatalogStateRecord struct {
+	SingletonID   int64 `gorm:"column:singleton_id;type:integer;primaryKey;not null;check:index_catalog_state_singleton,singleton_id = 1"`
+	Revision      int64 `gorm:"column:revision;type:integer;not null;check:index_catalog_state_revision,revision BETWEEN 1 AND 9223372036854775807"`
+	PhysicalCount int64 `gorm:"column:physical_count;type:integer;not null;check:index_catalog_state_count,physical_count BETWEEN 0 AND 1024"`
+}
+
+func (indexCatalogStateRecord) TableName() string {
+	return "index_catalog_state"
 }
 
 // indexDeletionTombstoneRecord is the GORM representation of the terminal

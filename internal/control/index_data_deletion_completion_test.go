@@ -263,19 +263,18 @@ func TestCompleteIndexDataDeletionSupportsOpaqueSchemaValidIndexID(
 
 	ctx := context.Background()
 	db := openTestDB(t)
-	created, err := db.CreateIndex(ctx, enabledIndex("terminal-opaque-id"))
-	if err != nil {
-		t.Fatalf("CreateIndex(): %v", err)
-	}
-	opaqueID := strings.Repeat("i", 256) + "\x00opaque"
-	if _, err := db.SQLDB().ExecContext(ctx, `
-		UPDATE indexes
-		SET index_id = ?
-		WHERE index_id = ?`,
+	opaqueID := strings.Repeat("i", 120) + "-opaque"
+	record := newIndexRecord(
 		opaqueID,
-		created.ID,
-	); err != nil {
+		enabledIndex("terminal-opaque-id"),
+		databaseTime(time.Now()),
+	)
+	if err := db.GORMDB().WithContext(ctx).Create(&record).Error; err != nil {
 		t.Fatalf("seed opaque index ID: %v", err)
+	}
+	created, err := db.GetIndex(ctx, opaqueID)
+	if err != nil {
+		t.Fatalf("GetIndex(opaque): %v", err)
 	}
 	archived, err := db.SetIndexState(
 		ctx,

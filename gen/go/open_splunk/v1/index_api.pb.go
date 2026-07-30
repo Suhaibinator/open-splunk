@@ -317,13 +317,20 @@ func (x *GetIndexResponse) GetIndex() *Index {
 
 // POST /api/v1/indexes/list
 type ListIndexesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Page          *PageRequest           `protobuf:"bytes,1,opt,name=page,proto3" json:"page,omitempty"`
-	StateFilters  []IndexState           `protobuf:"varint,2,rep,packed,name=state_filters,json=stateFilters,proto3,enum=open_splunk.v1.IndexState" json:"state_filters,omitempty"`
-	TextFilter    *string                `protobuf:"bytes,3,opt,name=text_filter,json=textFilter,proto3,oneof" json:"text_filter,omitempty"`
-	SortBy        IndexSortBy            `protobuf:"varint,4,opt,name=sort_by,json=sortBy,proto3,enum=open_splunk.v1.IndexSortBy" json:"sort_by,omitempty"`
-	SortDirection SortDirection          `protobuf:"varint,5,opt,name=sort_direction,json=sortDirection,proto3,enum=open_splunk.v1.SortDirection" json:"sort_direction,omitempty"`
-	IncludeStats  bool                   `protobuf:"varint,6,opt,name=include_stats,json=includeStats,proto3" json:"include_stats,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// page tokens are authenticated metadata keysets bound to one catalog
+	// revision. Any index definition, state, or visibility mutation invalidates
+	// an outstanding continuation rather than allowing duplicate or skipped
+	// rows.
+	Page         *PageRequest `protobuf:"bytes,1,opt,name=page,proto3" json:"page,omitempty"`
+	StateFilters []IndexState `protobuf:"varint,2,rep,packed,name=state_filters,json=stateFilters,proto3,enum=open_splunk.v1.IndexState" json:"state_filters,omitempty"`
+	// text_filter is a literal substring match across name, display name, and
+	// description. ASCII letters are case-insensitive; non-ASCII code points
+	// are case-sensitive. '%' and '_' have no wildcard meaning.
+	TextFilter    *string       `protobuf:"bytes,3,opt,name=text_filter,json=textFilter,proto3,oneof" json:"text_filter,omitempty"`
+	SortBy        IndexSortBy   `protobuf:"varint,4,opt,name=sort_by,json=sortBy,proto3,enum=open_splunk.v1.IndexSortBy" json:"sort_by,omitempty"`
+	SortDirection SortDirection `protobuf:"varint,5,opt,name=sort_direction,json=sortDirection,proto3,enum=open_splunk.v1.SortDirection" json:"sort_direction,omitempty"`
+	IncludeStats  bool          `protobuf:"varint,6,opt,name=include_stats,json=includeStats,proto3" json:"include_stats,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

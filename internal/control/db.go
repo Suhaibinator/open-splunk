@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	defaultBusyTimeout  = 5 * time.Second
-	defaultMaxOpenConns = 8
+	defaultBusyTimeout               = 5 * time.Second
+	defaultMaxOpenConns              = 8
+	maximumControlTimestampUnixMicro = int64(253_402_300_799_999_999)
 )
 
 // DB is the SQLite-backed single-node control-plane database.
@@ -82,6 +83,9 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	})
 	if err != nil {
 		return closeOnError(fmt.Errorf("configure GORM control plane: %w", err))
+	}
+	if _, err := readIndexCatalogIntegrity(orm.WithContext(ctx)); err != nil {
+		return closeOnError(fmt.Errorf("audit index catalog: %w", err))
 	}
 	if err := secureSQLiteFiles(absPath, false); err != nil {
 		return closeOnError(err)

@@ -17,7 +17,6 @@ const (
 	IndexDeletionMutationProtocolVersion uint32 = 1
 
 	maximumClickHouseIdentifierBytes    = 255
-	maximumControlTimestampUnixMicro    = int64(253402300799999999)
 	indexDeletionMutationCorrelationTag = "idxmut_"
 )
 

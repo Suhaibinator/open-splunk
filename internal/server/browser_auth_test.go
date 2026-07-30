@@ -95,6 +95,10 @@ type browserGateIndexAdministration struct {
 	mu          sync.Mutex
 	calls       int
 	listContext context.Context
+	listPage    func(
+		context.Context,
+		control.IndexListRequest,
+	) (control.IndexListResult, error)
 }
 
 func (administration *browserGateIndexAdministration) record(
@@ -116,6 +120,17 @@ func (administration *browserGateIndexAdministration) capturedContext() context.
 	administration.mu.Lock()
 	defer administration.mu.Unlock()
 	return administration.listContext
+}
+
+func (administration *browserGateIndexAdministration) setListPage(
+	listPage func(
+		context.Context,
+		control.IndexListRequest,
+	) (control.IndexListResult, error),
+) {
+	administration.mu.Lock()
+	administration.listPage = listPage
+	administration.mu.Unlock()
 }
 
 func (administration *browserGateIndexAdministration) CreateIndex(
@@ -140,6 +155,21 @@ func (administration *browserGateIndexAdministration) GetIndexByName(
 ) (control.Index, error) {
 	administration.record(ctx)
 	return control.Index{}, control.ErrNotFound
+}
+
+func (administration *browserGateIndexAdministration) ListIndexPage(
+	ctx context.Context,
+	request control.IndexListRequest,
+) (control.IndexListResult, error) {
+	administration.mu.Lock()
+	administration.calls++
+	administration.listContext = ctx
+	listPage := administration.listPage
+	administration.mu.Unlock()
+	if listPage != nil {
+		return listPage(ctx, cloneIndexListRequest(request))
+	}
+	return control.IndexListResult{CatalogRevision: 1}, nil
 }
 
 func (administration *browserGateIndexAdministration) ListIndexes(

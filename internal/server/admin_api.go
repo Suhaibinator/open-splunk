@@ -38,7 +38,8 @@ import (
 
 const (
 	defaultAdminPageSize          = 50
-	maximumIndexRowsPerResponse   = 64
+	maximumIndexRowsPerResponse   = control.MaximumIndexListPageSize
+	maximumIndexCatalogRows       = control.MaximumPhysicalIndexRecords
 	maximumTokenRowsPerResponse   = 16
 	maximumAdminListResponseBytes = 8 << 20
 	maximumIndexIDBytes           = 128
@@ -509,6 +510,53 @@ func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunkv
 			"index statistics service is unavailable",
 		)
 	}
+	fingerprint := indexListFilterFingerprint(
+		"indexes",
+		pageSize,
+		includeTotal,
+		states,
+		textFilter,
+		int32(sortBy),
+		int32(direction),
+		"",
+		input.GetIncludeStats(),
+	)
+	var cursor *control.IndexListCursor
+	if pageToken != "" {
+		cursor, err = handler.indexListCursor(
+			pageToken,
+			fingerprint,
+			sortBy,
+		)
+		if err != nil {
+			return nil, badRequestError(
+				"page token is invalid, stale, or does not match the request",
+			)
+		}
+	}
+	listRequest := control.IndexListRequest{
+		// #nosec G115 -- adminPageRequest bounds this value by 64.
+		PageSize:     uint32(pageSize),
+		Cursor:       cloneIndexListCursor(cursor),
+		IncludeTotal: includeTotal,
+		StateFilters: controlIndexStateFilters(states),
+		TextFilter:   optionalIndexListTextFilter(textFilter),
+		SortBy:       controlIndexSortBy(sortBy),
+		Direction:    controlIndexSortDirection(direction),
+	}
+
+	result, err := handler.indexAdmin.ListIndexPage(
+		request.Context(),
+		cloneIndexListRequest(listRequest),
+	)
+	if pageToken != "" && errors.Is(err, control.ErrPageInvalidated) {
+		return nil, badRequestError(
+			"page token is invalid, stale, or does not match the request",
+		)
+	}
+	if err := mapAdministrativeCallError(request.Context(), err, "index"); err != nil {
+		return nil, err
+	}
 
 	release, acquired := handler.acquireSerialization()
 	if !acquired {
@@ -524,55 +572,11 @@ func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunkv
 		}
 	}()
 
-	records, err := handler.indexAdmin.ListIndexes(request.Context())
-	if err := mapAdministrativeCallError(request.Context(), err, "index"); err != nil {
-		return nil, err
-	}
-	filtered := filterAndSortIndexes(records, states, textFilter, sortBy, direction)
-	snapshot := indexSnapshot(filtered)
-	fingerprint := indexListFilterFingerprint(
-		"indexes",
-		pageSize,
-		includeTotal,
-		states,
-		textFilter,
-		int32(sortBy),
-		int32(direction),
-		"",
-		input.GetIncludeStats(),
-	)
-	total := len(filtered)
-	start, err := handler.adminPageStart(
+	selected, items, page, err := handler.indexListResult(
+		listRequest,
+		result,
+		fingerprint,
 		pageToken,
-		"indexes",
-		fingerprint,
-		snapshot,
-		total,
-	)
-	if err != nil {
-		return nil, badRequestError(err.Error())
-	}
-	end := min(start+pageSize, total)
-	selected := slices.Clone(filtered[start:end])
-	// Do not retain a potentially large catalog backing array while the native
-	// statistics service runs. Only this already-bounded page crosses that
-	// dependency boundary.
-	filtered = nil
-	items := make([]*opensplunkv1.IndexListItem, 0, end-start)
-	for _, record := range selected {
-		converted, err := indexToProto(record)
-		if err != nil {
-			return nil, internalError()
-		}
-		items = append(items, &opensplunkv1.IndexListItem{Index: converted})
-	}
-	page, err := handler.adminPageResponse(
-		"indexes",
-		fingerprint,
-		snapshot,
-		end,
-		total,
-		includeTotal,
 	)
 	if err != nil {
 		return nil, internalError()
@@ -589,9 +593,9 @@ func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunkv
 		}
 
 		// The native read can take most of the route deadline. Release the
-		// serialization permit after the unbounded catalog has been reduced
-		// to one bounded page, then reacquire it before validating and
-		// materializing the response.
+		// serialization permit after the bounded control-plane page has been
+		// validated, then reacquire it before validating and materializing the
+		// enriched response.
 		release()
 		permitHeld = false
 		statisticsBatch, statisticsResults, err =
@@ -625,6 +629,399 @@ func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunkv
 	}
 	transferred = true
 	return &serializedIndexListResponse{message: message, ctx: request.Context(), release: release}, nil
+}
+
+func controlIndexStateFilters(
+	input []opensplunkv1.IndexState,
+) []control.IndexState {
+	result := make([]control.IndexState, 0, len(input))
+	for _, state := range input {
+		switch state {
+		case opensplunkv1.IndexState_INDEX_STATE_ACTIVE:
+			result = append(result, control.IndexStateActive)
+		case opensplunkv1.IndexState_INDEX_STATE_ARCHIVED:
+			result = append(result, control.IndexStateArchived)
+		case opensplunkv1.IndexState_INDEX_STATE_DELETING:
+			result = append(result, control.IndexStateDeleting)
+		}
+	}
+	return result
+}
+
+func optionalIndexListTextFilter(input string) *string {
+	if input == "" {
+		return nil
+	}
+	value := strings.Clone(input)
+	return &value
+}
+
+func controlIndexSortBy(input opensplunkv1.IndexSortBy) control.IndexSortBy {
+	switch input {
+	case opensplunkv1.IndexSortBy_INDEX_SORT_BY_CREATED_AT:
+		return control.IndexSortByCreatedAt
+	case opensplunkv1.IndexSortBy_INDEX_SORT_BY_UPDATED_AT:
+		return control.IndexSortByUpdatedAt
+	default:
+		return control.IndexSortByName
+	}
+}
+
+func controlIndexSortDirection(
+	input opensplunkv1.SortDirection,
+) control.IndexSortDirection {
+	if input == opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
+		return control.IndexSortDescending
+	}
+	return control.IndexSortAscending
+}
+
+func cloneIndexListCursor(
+	input *control.IndexListCursor,
+) *control.IndexListCursor {
+	if input == nil {
+		return nil
+	}
+	result := *input
+	result.StringKey = strings.Clone(input.StringKey)
+	result.IndexID = strings.Clone(input.IndexID)
+	if input.TimeKey != nil {
+		value := *input.TimeKey
+		result.TimeKey = &value
+	}
+	return &result
+}
+
+func cloneIndexListRequest(
+	input control.IndexListRequest,
+) control.IndexListRequest {
+	result := input
+	result.Cursor = cloneIndexListCursor(input.Cursor)
+	result.StateFilters = slices.Clone(input.StateFilters)
+	if input.TextFilter != nil {
+		value := strings.Clone(*input.TextFilter)
+		result.TextFilter = &value
+	}
+	return result
+}
+
+func (handler *apiHandler) indexListCursor(
+	token, fingerprint string,
+	sortBy opensplunkv1.IndexSortBy,
+) (*control.IndexListCursor, error) {
+	cursor, err := decodeAdminCursor(handler.adminCursorKey[:], token)
+	if err != nil ||
+		cursor.Endpoint != "indexes" ||
+		cursor.Fingerprint != fingerprint ||
+		cursor.Snapshot != "" ||
+		cursor.Offset != 0 {
+		return nil, errors.New("invalid index page token")
+	}
+	result := &control.IndexListCursor{
+		CatalogRevision: cursor.CatalogRevision,
+		StringKey:       strings.Clone(cursor.StringKey),
+		TimeKey:         cloneInt64(cursor.TimeKey),
+		IndexID:         strings.Clone(cursor.IndexID),
+	}
+	switch sortBy {
+	case opensplunkv1.IndexSortBy_INDEX_SORT_BY_NAME,
+		opensplunkv1.IndexSortBy_INDEX_SORT_BY_CREATED_AT,
+		opensplunkv1.IndexSortBy_INDEX_SORT_BY_UPDATED_AT:
+	default:
+		return nil, errors.New("invalid index page token")
+	}
+	if err := control.ValidateIndexListCursor(
+		result,
+		controlIndexSortBy(sortBy),
+	); err != nil {
+		return nil, errors.New("invalid index page token")
+	}
+	return result, nil
+}
+
+func (handler *apiHandler) indexListResult(
+	request control.IndexListRequest,
+	result control.IndexListResult,
+	fingerprint string,
+	requestToken string,
+) (
+	[]control.Index,
+	[]*opensplunkv1.IndexListItem,
+	*opensplunkv1.PageResponse,
+	error,
+) {
+	if request.PageSize == 0 ||
+		request.PageSize > maximumIndexRowsPerResponse ||
+		result.CatalogRevision == 0 ||
+		result.CatalogRevision > math.MaxInt64 ||
+		uint64(len(result.Indexes)) > uint64(request.PageSize) ||
+		len(result.Indexes) > maximumIndexRowsPerResponse ||
+		(request.Cursor != nil &&
+			request.Cursor.CatalogRevision != result.CatalogRevision) ||
+		(request.Cursor != nil && len(result.Indexes) == 0) ||
+		(result.NextCursor != nil &&
+			(len(result.Indexes) != int(request.PageSize) ||
+				result.NextCursor.CatalogRevision !=
+					result.CatalogRevision)) {
+		return nil, nil, nil, errors.New("invalid index list page")
+	}
+	if result.TotalSize != nil &&
+		*result.TotalSize > maximumIndexCatalogRows {
+		return nil, nil, nil, errors.New("invalid index list total")
+	}
+
+	selected := slices.Clone(result.Indexes)
+	var textMatcher *asciiFoldMatcher
+	if request.TextFilter != nil {
+		matcher := newASCIIFoldMatcher(*request.TextFilter)
+		textMatcher = &matcher
+	}
+	items := make(
+		[]*opensplunkv1.IndexListItem,
+		0,
+		len(selected),
+	)
+	seenIDs := make(map[string]struct{}, len(selected))
+	seenNames := make(map[string]struct{}, len(selected))
+	for position, record := range selected {
+		converted, err := indexToProto(record)
+		if err != nil ||
+			!validIndexListRecordTimes(record) ||
+			!indexListRecordMatchesRequest(
+				record,
+				request,
+				textMatcher,
+			) ||
+			(position == 0 &&
+				request.Cursor != nil &&
+				!indexListRecordFollowsCursor(record, request)) ||
+			(position > 0 &&
+				!indexListRecordsOrdered(
+					selected[position-1],
+					record,
+					request,
+				)) {
+			return nil, nil, nil, errors.New(
+				"invalid index list record",
+			)
+		}
+		if _, duplicate := seenIDs[record.ID]; duplicate {
+			return nil, nil, nil, errors.New(
+				"duplicate index list identity",
+			)
+		}
+		if _, duplicate := seenNames[record.Definition.Name]; duplicate {
+			return nil, nil, nil, errors.New(
+				"duplicate index list name",
+			)
+		}
+		seenIDs[record.ID] = struct{}{}
+		seenNames[record.Definition.Name] = struct{}{}
+		items = append(
+			items,
+			&opensplunkv1.IndexListItem{Index: converted},
+		)
+	}
+	if result.NextCursor != nil {
+		expected := indexListCursorForRecord(
+			result.CatalogRevision,
+			selected[len(selected)-1],
+			request.SortBy,
+		)
+		if !equalIndexListCursor(result.NextCursor, &expected) {
+			return nil, nil, nil, errors.New(
+				"invalid index list continuation",
+			)
+		}
+	}
+
+	nextPageToken := ""
+	if result.NextCursor != nil {
+		next := cloneIndexListCursor(result.NextCursor)
+		token, err := encodeAdminCursor(
+			handler.adminCursorKey[:],
+			adminCursor{
+				Version:         adminCursorVersion,
+				Endpoint:        "indexes",
+				Fingerprint:     fingerprint,
+				CatalogRevision: next.CatalogRevision,
+				StringKey:       strings.Clone(next.StringKey),
+				TimeKey:         cloneInt64(next.TimeKey),
+				IndexID:         strings.Clone(next.IndexID),
+			},
+		)
+		if err != nil || len(token) > maximumPageTokenBytes {
+			return nil, nil, nil, errors.New(
+				"encode index list continuation",
+			)
+		}
+		nextPageToken = token
+	}
+	page, err := boundedListPageResponse(
+		"index administration",
+		boundedListPageMetadata{
+			itemCount:     len(selected),
+			nextPageToken: nextPageToken,
+			totalSize:     result.TotalSize,
+			totalExact:    result.TotalSizeExact,
+		},
+		int(request.PageSize),
+		requestToken,
+		request.IncludeTotal,
+		maximumPageTokenBytes,
+	)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return selected, items, page, nil
+}
+
+func validIndexListRecordTimes(record control.Index) bool {
+	for _, value := range []time.Time{record.CreatedAt, record.UpdatedAt} {
+		unixMicro := value.UnixMicro()
+		if unixMicro <= 0 ||
+			!value.Equal(time.UnixMicro(unixMicro)) {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneInt64(input *int64) *int64 {
+	if input == nil {
+		return nil
+	}
+	value := *input
+	return &value
+}
+
+func indexListRecordMatchesRequest(
+	record control.Index,
+	request control.IndexListRequest,
+	textMatcher *asciiFoldMatcher,
+) bool {
+	if len(request.StateFilters) != 0 &&
+		!slices.Contains(request.StateFilters, record.State) {
+		return false
+	}
+	if textMatcher == nil {
+		return true
+	}
+	return textMatcher.Contains(record.Definition.Name) ||
+		textMatcher.Contains(record.Definition.DisplayName) ||
+		textMatcher.Contains(record.Definition.Description)
+}
+
+func indexListRecordFollowsCursor(
+	record control.Index,
+	request control.IndexListRequest,
+) bool {
+	comparison := compareIndexRecordToCursor(
+		record,
+		*request.Cursor,
+		request.SortBy,
+	)
+	if request.Direction == control.IndexSortDescending {
+		return comparison < 0
+	}
+	return comparison > 0
+}
+
+func indexListRecordsOrdered(
+	left, right control.Index,
+	request control.IndexListRequest,
+) bool {
+	comparison := compareIndexListRecords(left, right, request.SortBy)
+	if request.Direction == control.IndexSortDescending {
+		return comparison > 0
+	}
+	return comparison < 0
+}
+
+func compareIndexListRecords(
+	left, right control.Index,
+	sortBy control.IndexSortBy,
+) int {
+	comparison := 0
+	switch sortBy {
+	case control.IndexSortByName:
+		comparison = strings.Compare(
+			left.Definition.Name,
+			right.Definition.Name,
+		)
+	case control.IndexSortByCreatedAt:
+		comparison = left.CreatedAt.Compare(right.CreatedAt)
+	case control.IndexSortByUpdatedAt:
+		comparison = left.UpdatedAt.Compare(right.UpdatedAt)
+	}
+	if comparison == 0 {
+		comparison = strings.Compare(left.ID, right.ID)
+	}
+	return comparison
+}
+
+func compareIndexRecordToCursor(
+	record control.Index,
+	cursor control.IndexListCursor,
+	sortBy control.IndexSortBy,
+) int {
+	comparison := 0
+	switch sortBy {
+	case control.IndexSortByName:
+		comparison = strings.Compare(
+			record.Definition.Name,
+			cursor.StringKey,
+		)
+	case control.IndexSortByCreatedAt:
+		comparison = record.CreatedAt.Compare(
+			time.UnixMicro(*cursor.TimeKey).UTC(),
+		)
+	case control.IndexSortByUpdatedAt:
+		comparison = record.UpdatedAt.Compare(
+			time.UnixMicro(*cursor.TimeKey).UTC(),
+		)
+	}
+	if comparison == 0 {
+		comparison = strings.Compare(record.ID, cursor.IndexID)
+	}
+	return comparison
+}
+
+func indexListCursorForRecord(
+	revision uint64,
+	record control.Index,
+	sortBy control.IndexSortBy,
+) control.IndexListCursor {
+	result := control.IndexListCursor{
+		CatalogRevision: revision,
+		IndexID:         strings.Clone(record.ID),
+	}
+	switch sortBy {
+	case control.IndexSortByName:
+		result.StringKey = strings.Clone(record.Definition.Name)
+	case control.IndexSortByCreatedAt:
+		value := record.CreatedAt.UnixMicro()
+		result.TimeKey = &value
+	case control.IndexSortByUpdatedAt:
+		value := record.UpdatedAt.UnixMicro()
+		result.TimeKey = &value
+	}
+	return result
+}
+
+func equalIndexListCursor(
+	left, right *control.IndexListCursor,
+) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.CatalogRevision == right.CatalogRevision &&
+		left.StringKey == right.StringKey &&
+		left.IndexID == right.IndexID &&
+		((left.TimeKey == nil && right.TimeKey == nil) ||
+			(left.TimeKey != nil &&
+				right.TimeKey != nil &&
+				*left.TimeKey == *right.TimeKey))
 }
 
 func (handler *apiHandler) indexListStatisticsBatch(
@@ -1323,9 +1720,13 @@ func unsupportedIndexLimitDuration(input *durationpb.Duration, field string) (ti
 
 func indexToProto(record control.Index) (*opensplunkv1.Index, error) {
 	normalizedName, nameErr := control.NormalizeIndexName(record.Definition.Name)
-	if record.ID == "" || validateBoundedIdentifier(record.ID, maximumIndexIDBytes, false) != nil || record.Version == 0 ||
+	if record.ID == "" ||
+		strings.TrimSpace(record.ID) != record.ID ||
+		validateBoundedIdentifier(record.ID, maximumIndexIDBytes, false) != nil ||
+		record.Version == 0 || record.Version > math.MaxInt64 ||
 		nameErr != nil || normalizedName != record.Definition.Name ||
 		validateAdminText(record.Definition.DisplayName, maximumDisplayNameBytes, false, false) != nil ||
+		strings.TrimSpace(record.Definition.DisplayName) != record.Definition.DisplayName ||
 		validateAdminText(record.Definition.Description, maximumDescriptionBytes, true, true) != nil ||
 		validateAdminText(record.Definition.DefaultSourcetype, maximumSourcetypeBytes, true, false) != nil ||
 		record.Definition.DefaultSourcetype != "" || record.Definition.RetentionPeriod < 0 ||
@@ -1795,48 +2196,6 @@ func administrationExpectedVersion(version uint64) error {
 	return nil
 }
 
-func filterAndSortIndexes(input []control.Index, states []opensplunkv1.IndexState, text string, sortBy opensplunkv1.IndexSortBy, direction opensplunkv1.SortDirection) []control.Index {
-	stateSet := make(map[opensplunkv1.IndexState]struct{}, len(states))
-	for _, state := range states {
-		stateSet[state] = struct{}{}
-	}
-	needle := strings.ToLower(text)
-	result := make([]control.Index, 0, len(input))
-	for _, record := range input {
-		if len(stateSet) != 0 {
-			if _, exists := stateSet[indexStateToProto(record.State)]; !exists {
-				continue
-			}
-		}
-		if needle != "" &&
-			!strings.Contains(strings.ToLower(record.Definition.Name), needle) &&
-			!strings.Contains(strings.ToLower(record.Definition.DisplayName), needle) &&
-			!strings.Contains(strings.ToLower(record.Definition.Description), needle) {
-			continue
-		}
-		result = append(result, record)
-	}
-	sort.Slice(result, func(left, right int) bool {
-		comparison := 0
-		switch sortBy {
-		case opensplunkv1.IndexSortBy_INDEX_SORT_BY_NAME:
-			comparison = strings.Compare(result[left].Definition.Name, result[right].Definition.Name)
-		case opensplunkv1.IndexSortBy_INDEX_SORT_BY_CREATED_AT:
-			comparison = result[left].CreatedAt.Compare(result[right].CreatedAt)
-		case opensplunkv1.IndexSortBy_INDEX_SORT_BY_UPDATED_AT:
-			comparison = result[left].UpdatedAt.Compare(result[right].UpdatedAt)
-		}
-		if comparison == 0 {
-			comparison = strings.Compare(result[left].ID, result[right].ID)
-		}
-		if direction == opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
-			return comparison > 0
-		}
-		return comparison < 0
-	})
-	return result
-}
-
 func filterAndSortTokens(input []auth.CollectorToken, states []opensplunkv1.IngestionTokenState, indexName, text string, sortBy opensplunkv1.IngestionTokenSortBy, direction opensplunkv1.SortDirection) []auth.CollectorToken {
 	stateSet := make(map[opensplunkv1.IngestionTokenState]struct{}, len(states))
 	for _, state := range states {
@@ -1909,11 +2268,15 @@ func (handler *apiHandler) adminPageRequest(page *opensplunkv1.PageRequest, endp
 }
 
 type adminCursor struct {
-	Version     int    `json:"v"`
-	Endpoint    string `json:"e"`
-	Fingerprint string `json:"f"`
-	Snapshot    string `json:"s"`
-	Offset      int    `json:"o"`
+	Version         int    `json:"v"`
+	Endpoint        string `json:"e"`
+	Fingerprint     string `json:"f"`
+	Snapshot        string `json:"s,omitempty"`
+	Offset          int    `json:"o,omitempty"`
+	CatalogRevision uint64 `json:"r,omitempty"`
+	StringKey       string `json:"k,omitempty"`
+	TimeKey         *int64 `json:"t,omitempty"`
+	IndexID         string `json:"i,omitempty"`
 }
 
 func (handler *apiHandler) adminPageStart(token, endpoint, fingerprint, snapshot string, total int) (int, error) {
@@ -1921,7 +2284,16 @@ func (handler *apiHandler) adminPageStart(token, endpoint, fingerprint, snapshot
 		return 0, nil
 	}
 	cursor, err := decodeAdminCursor(handler.adminCursorKey[:], token)
-	if err != nil || cursor.Endpoint != endpoint || cursor.Fingerprint != fingerprint || cursor.Snapshot != snapshot || cursor.Offset <= 0 || cursor.Offset >= total {
+	if err != nil ||
+		cursor.Endpoint != endpoint ||
+		cursor.Fingerprint != fingerprint ||
+		cursor.Snapshot != snapshot ||
+		cursor.Offset <= 0 ||
+		cursor.Offset >= total ||
+		cursor.CatalogRevision != 0 ||
+		cursor.StringKey != "" ||
+		cursor.TimeKey != nil ||
+		cursor.IndexID != "" {
 		return 0, errors.New("page token is invalid, stale, or does not match the request")
 	}
 	return cursor.Offset, nil
@@ -2000,14 +2372,6 @@ func indexListFilterFingerprint(
 		[]byte("open-splunk/index-list-include-stats/v1\x00" + base),
 	)
 	return base64.RawURLEncoding.EncodeToString(digest[:])
-}
-
-func indexSnapshot(records []control.Index) string {
-	digest := sha256.New()
-	for _, record := range records {
-		writeSnapshotRecord(digest, record.ID, record.Version)
-	}
-	return base64.RawURLEncoding.EncodeToString(digest.Sum(nil))
 }
 
 func tokenSnapshot(records []auth.CollectorToken) string {

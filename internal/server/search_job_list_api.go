@@ -347,17 +347,30 @@ func validSearchJobListFailure(state searchjobs.State, failure *searchjobs.Failu
 }
 
 type asciiFoldMatcher struct {
-	pattern string
-	skip    [256]int
+	pattern []byte
+	prefix  []int
 }
 
 func newASCIIFoldMatcher(pattern string) asciiFoldMatcher {
-	matcher := asciiFoldMatcher{pattern: pattern}
-	for index := range matcher.skip {
-		matcher.skip[index] = len(pattern)
+	matcher := asciiFoldMatcher{
+		pattern: []byte(pattern),
+		prefix:  make([]int, len(pattern)),
 	}
-	for index := 0; index+1 < len(pattern); index++ {
-		matcher.skip[asciiFoldByte(pattern[index])] = len(pattern) - 1 - index
+	for index := range matcher.pattern {
+		matcher.pattern[index] = asciiFoldByte(matcher.pattern[index])
+	}
+	for index, matched := 1, 0; index < len(matcher.pattern); {
+		if matcher.pattern[index] == matcher.pattern[matched] {
+			matched++
+			matcher.prefix[index] = matched
+			index++
+			continue
+		}
+		if matched > 0 {
+			matched = matcher.prefix[matched-1]
+			continue
+		}
+		index++
 	}
 	return matcher
 }
@@ -369,16 +382,19 @@ func (matcher *asciiFoldMatcher) Contains(value string) bool {
 	if len(matcher.pattern) > len(value) {
 		return false
 	}
-	last := len(matcher.pattern) - 1
-	for offset := 0; offset <= len(value)-len(matcher.pattern); {
-		index := last
-		for index >= 0 && asciiFoldByte(value[offset+index]) == asciiFoldByte(matcher.pattern[index]) {
-			index--
+	matched := 0
+	for index := 0; index < len(value); index++ {
+		character := asciiFoldByte(value[index])
+		for matched > 0 && character != matcher.pattern[matched] {
+			matched = matcher.prefix[matched-1]
 		}
-		if index < 0 {
+		if character != matcher.pattern[matched] {
+			continue
+		}
+		matched++
+		if matched == len(matcher.pattern) {
 			return true
 		}
-		offset += matcher.skip[asciiFoldByte(value[offset+last])]
 	}
 	return false
 }

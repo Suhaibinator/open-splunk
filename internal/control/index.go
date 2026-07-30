@@ -10,12 +10,22 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
 	"gorm.io/gorm"
 )
 
-const maxIndexNameBytes = indexname.MaximumBytes
+const (
+	maxIndexNameBytes            = indexname.MaximumBytes
+	maximumIndexIDBytes          = 128
+	maximumIndexDisplayNameBytes = 255
+	maximumIndexDescriptionBytes = 8 << 10
+	maximumIndexSourcetypeBytes  = 255
+)
+
+var errIndexIDCollision = errors.New("control: index ID collision")
 
 // IndexState is the lifecycle state of a logical event index.
 type IndexState string
@@ -78,6 +88,12 @@ func NormalizeIndexName(input string) (string, error) {
 
 // CreateIndex creates an active logical index at version 1.
 func (db *DB) CreateIndex(ctx context.Context, definition IndexDefinition) (Index, error) {
+	if ctx == nil {
+		return Index{}, fmt.Errorf("%w: nil context", ErrInvalidArgument)
+	}
+	if err := ctx.Err(); err != nil {
+		return Index{}, err
+	}
 	definition, err := validateIndexDefinition(definition)
 	if err != nil {
 		return Index{}, err
@@ -89,41 +105,90 @@ func (db *DB) CreateIndex(ctx context.Context, definition IndexDefinition) (Inde
 		if err != nil {
 			return Index{}, fmt.Errorf("generate index ID: %w", err)
 		}
-		record := newIndexRecord(id, definition, now)
-		create := db.orm.WithContext(ctx).Create(&record)
-		if create.Error == nil {
-			index, conversionErr := indexFromRecord(record)
-			if conversionErr != nil {
-				return Index{}, fmt.Errorf("read created index: %w", conversionErr)
-			}
-			return index, nil
+		created, createErr := db.createIndexOnce(
+			ctx,
+			id,
+			definition,
+			now,
+		)
+		if errors.Is(createErr, errIndexIDCollision) {
+			continue
 		}
-
-		var existing indexRecord
-		nameErr := db.orm.WithContext(ctx).
-			Select("index_id").
-			Where("name = ?", definition.Name).
-			Take(&existing).Error
-		if nameErr == nil {
-			return Index{}, fmt.Errorf("%w: index name %q", ErrAlreadyExists, definition.Name)
-		}
-		if !errors.Is(nameErr, gorm.ErrRecordNotFound) {
-			return Index{}, fmt.Errorf("check duplicate index name: %w", nameErr)
-		}
-		idErr := db.orm.WithContext(ctx).
-			Select("index_id").
-			Where("index_id = ?", id).
-			Take(&existing).Error
-		if errors.Is(idErr, gorm.ErrRecordNotFound) {
-			return Index{}, fmt.Errorf("create index: %w", create.Error)
-		}
-		if idErr != nil {
-			return Index{}, fmt.Errorf("check duplicate index ID: %w", idErr)
-		}
-		// An ID collision is extraordinarily unlikely, but retrying avoids
-		// turning randomness into an availability edge case.
+		return created, createErr
 	}
 	return Index{}, errors.New("create index: repeated random ID collision")
+}
+
+func (db *DB) createIndexOnce(
+	ctx context.Context,
+	id string,
+	definition IndexDefinition,
+	now time.Time,
+) (result Index, returnedErr error) {
+	tx := db.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return Index{}, fmt.Errorf("begin index creation: %w", tx.Error)
+	}
+	defer finishGORMTx(tx, &returnedErr)
+
+	before, err := readIndexCatalogIntegrity(tx)
+	if err != nil {
+		return Index{}, fmt.Errorf("read index catalog before creation: %w", err)
+	}
+	var existing indexRecord
+	nameErr := tx.
+		Select("index_id").
+		Where("name = ?", definition.Name).
+		Take(&existing).Error
+	switch {
+	case nameErr == nil:
+		return Index{}, fmt.Errorf(
+			"%w: index name %q",
+			ErrAlreadyExists,
+			definition.Name,
+		)
+	case !errors.Is(nameErr, gorm.ErrRecordNotFound):
+		return Index{}, fmt.Errorf("check duplicate index name: %w", nameErr)
+	}
+	if before.Revision == math.MaxInt64 {
+		return Index{}, errors.New("index catalog revision is exhausted")
+	}
+	if before.PhysicalCount == MaximumPhysicalIndexRecords {
+		return Index{}, ErrCapacityExceeded
+	}
+	idErr := tx.
+		Select("index_id").
+		Where("index_id = ?", id).
+		Take(&existing).Error
+	switch {
+	case idErr == nil:
+		return Index{}, errIndexIDCollision
+	case !errors.Is(idErr, gorm.ErrRecordNotFound):
+		return Index{}, fmt.Errorf("check duplicate index ID: %w", idErr)
+	}
+
+	record := newIndexRecord(id, definition, now)
+	if err := tx.Create(&record).Error; err != nil {
+		return Index{}, fmt.Errorf("create index: %w", err)
+	}
+	after, err := readIndexCatalogState(tx)
+	if err != nil {
+		return Index{}, fmt.Errorf("read index catalog after creation: %w", err)
+	}
+	if after.Revision != before.Revision+1 ||
+		after.PhysicalCount != before.PhysicalCount+1 {
+		return Index{}, errors.New(
+			"create index: index catalog accounting did not advance",
+		)
+	}
+	result, err = indexFromRecord(record)
+	if err != nil {
+		return Index{}, fmt.Errorf("read created index: %w", err)
+	}
+	if err := tx.Commit().Error; err != nil {
+		return Index{}, fmt.Errorf("commit index creation: %w", err)
+	}
+	return result, nil
 }
 
 // GetIndex gets an index by stable ID.
@@ -154,11 +219,36 @@ func (db *DB) GetIndexByName(ctx context.Context, name string) (Index, error) {
 }
 
 // ListIndexes lists every live, non-tombstoned index in normalized-name order.
-func (db *DB) ListIndexes(ctx context.Context) ([]Index, error) {
+// The hard physical catalog ceiling makes this legacy bootstrap/authorization
+// view bounded; administrative clients should use ListIndexPage.
+func (db *DB) ListIndexes(
+	ctx context.Context,
+) (result []Index, returnedErr error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("%w: nil context", ErrInvalidArgument)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	tx := db.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+	if tx.Error != nil {
+		return nil, fmt.Errorf("begin index list: %w", tx.Error)
+	}
+	defer finishGORMTx(tx, &returnedErr)
+	if _, err := readIndexCatalogIntegrity(tx); err != nil {
+		return nil, fmt.Errorf("read index catalog state: %w", err)
+	}
+
 	var records []indexRecord
-	query := visibleIndexRecords(db.orm.WithContext(ctx)).Order("name").Find(&records)
+	query := visibleIndexRecords(tx).
+		Order("name").
+		Limit(MaximumPhysicalIndexRecords + 1).
+		Find(&records)
 	if query.Error != nil {
 		return nil, fmt.Errorf("list indexes: %w", query.Error)
+	}
+	if len(records) > MaximumPhysicalIndexRecords {
+		return nil, errors.New("list indexes: index catalog exceeds its bound")
 	}
 	indexes := make([]Index, 0, len(records))
 	for _, record := range records {
@@ -167,6 +257,9 @@ func (db *DB) ListIndexes(ctx context.Context) ([]Index, error) {
 			return nil, fmt.Errorf("scan listed index: %w", err)
 		}
 		indexes = append(indexes, index)
+	}
+	if err := tx.Commit().Error; err != nil {
+		return nil, fmt.Errorf("commit index list: %w", err)
 	}
 	return indexes, nil
 }
@@ -464,7 +557,48 @@ func indexDefinitionUpdates(definition IndexDefinition, now time.Time) map[strin
 }
 
 func indexFromRecord(record indexRecord) (Index, error) {
-	if record.Version < 1 || record.RetentionNanoseconds < 0 || record.RetentionNanoseconds%int64(time.Millisecond) != 0 || record.MaxEventBytes < 0 || record.MaxFieldCount < 0 || record.MaxFieldCount > math.MaxUint32 || record.MaxNestingDepth < 0 || record.MaxNestingDepth > math.MaxUint32 || record.MaximumFutureSkewNanoseconds < 0 || record.MaximumEventAgeNanoseconds < 0 || (record.IngestionEnabled != 0 && record.IngestionEnabled != 1) || (record.SearchEnabled != 0 && record.SearchEnabled != 1) || !validIndexState(record.State) {
+	normalizedName, nameErr := NormalizeIndexName(record.Name)
+	if record.Version < 1 ||
+		!validIndexIdentifier(record.IndexID) ||
+		nameErr != nil ||
+		normalizedName != record.Name ||
+		validateIndexText(
+			record.DisplayName,
+			maximumIndexDisplayNameBytes,
+			false,
+			false,
+		) != nil ||
+		strings.TrimSpace(record.DisplayName) != record.DisplayName ||
+		validateIndexText(
+			record.Description,
+			maximumIndexDescriptionBytes,
+			true,
+			true,
+		) != nil ||
+		validateIndexText(
+			record.DefaultSourcetype,
+			maximumIndexSourcetypeBytes,
+			true,
+			false,
+		) != nil ||
+		strings.TrimSpace(record.DefaultSourcetype) !=
+			record.DefaultSourcetype ||
+		record.CreatedAtUnixMicro <= 0 ||
+		record.CreatedAtUnixMicro > maximumControlTimestampUnixMicro ||
+		record.UpdatedAtUnixMicro < record.CreatedAtUnixMicro ||
+		record.UpdatedAtUnixMicro > maximumControlTimestampUnixMicro ||
+		record.RetentionNanoseconds < 0 ||
+		record.RetentionNanoseconds%int64(time.Millisecond) != 0 ||
+		record.MaxEventBytes < 0 ||
+		record.MaxFieldCount < 0 ||
+		record.MaxFieldCount > math.MaxUint32 ||
+		record.MaxNestingDepth < 0 ||
+		record.MaxNestingDepth > math.MaxUint32 ||
+		record.MaximumFutureSkewNanoseconds < 0 ||
+		record.MaximumEventAgeNanoseconds < 0 ||
+		(record.IngestionEnabled != 0 && record.IngestionEnabled != 1) ||
+		(record.SearchEnabled != 0 && record.SearchEnabled != 1) ||
+		!validIndexState(record.State) {
 		return Index{}, errors.New("invalid index record in control-plane database")
 	}
 	return Index{
@@ -514,6 +648,30 @@ func validateIndexDefinition(definition IndexDefinition) (IndexDefinition, error
 		definition.DisplayName = name
 	}
 	definition.DefaultSourcetype = strings.TrimSpace(definition.DefaultSourcetype)
+	if err := validateIndexText(
+		definition.DisplayName,
+		maximumIndexDisplayNameBytes,
+		false,
+		false,
+	); err != nil {
+		return IndexDefinition{}, err
+	}
+	if err := validateIndexText(
+		definition.Description,
+		maximumIndexDescriptionBytes,
+		true,
+		true,
+	); err != nil {
+		return IndexDefinition{}, err
+	}
+	if err := validateIndexText(
+		definition.DefaultSourcetype,
+		maximumIndexSourcetypeBytes,
+		true,
+		false,
+	); err != nil {
+		return IndexDefinition{}, err
+	}
 	if definition.RetentionPeriod < 0 || definition.Limits.MaximumFutureSkew < 0 || definition.Limits.MaximumEventAge < 0 {
 		return IndexDefinition{}, fmt.Errorf("%w: index durations cannot be negative", ErrInvalidArgument)
 	}
@@ -524,6 +682,45 @@ func validateIndexDefinition(definition IndexDefinition) (IndexDefinition, error
 		return IndexDefinition{}, fmt.Errorf("%w: max event bytes exceeds SQLite integer range", ErrInvalidArgument)
 	}
 	return definition, nil
+}
+
+func validIndexIdentifier(value string) bool {
+	if value == "" ||
+		len(value) > maximumIndexIDBytes ||
+		!utf8.ValidString(value) ||
+		strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func validateIndexText(
+	value string,
+	maximumBytes int,
+	allowEmpty bool,
+	allowLineBreaks bool,
+) error {
+	if (!allowEmpty && value == "") ||
+		len(value) > maximumBytes ||
+		!utf8.ValidString(value) ||
+		strings.IndexByte(value, 0) >= 0 {
+		return fmt.Errorf("%w: index text is invalid", ErrInvalidArgument)
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) &&
+			(!allowLineBreaks ||
+				(character != '\n' &&
+					character != '\r' &&
+					character != '\t')) {
+			return fmt.Errorf("%w: index text is invalid", ErrInvalidArgument)
+		}
+	}
+	return nil
 }
 
 func validateExpectedVersion(version uint64) error {

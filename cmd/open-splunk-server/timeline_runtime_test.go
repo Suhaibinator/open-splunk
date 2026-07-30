@@ -198,10 +198,14 @@ func (runtimeIndexAdministration) GetIndexByName(
 	return record, nil
 }
 
-func (runtimeIndexAdministration) ListIndexes(
+func (runtimeIndexAdministration) ListIndexPage(
 	context.Context,
-) ([]control.Index, error) {
-	return []control.Index{runtimeIndexRecord()}, nil
+	control.IndexListRequest,
+) (control.IndexListResult, error) {
+	return control.IndexListResult{
+		Indexes:         []control.Index{runtimeIndexRecord()},
+		CatalogRevision: 1,
+	}, nil
 }
 
 func (runtimeIndexAdministration) UpdateIndex(

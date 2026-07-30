@@ -688,6 +688,17 @@ func TestASCIIFoldMatcherMatchesNaiveReference(t *testing.T) {
 	}
 }
 
+func TestASCIIFoldMatcherAdversarialFallback(t *testing.T) {
+	t.Parallel()
+
+	matcher := newASCIIFoldMatcher(
+		"b" + strings.Repeat("a", maximumAdminTextFilterBytes-1),
+	)
+	if matcher.Contains(strings.Repeat("a", maximumDescriptionBytes)) {
+		t.Fatal("adversarial near-match was accepted")
+	}
+}
+
 func serverFoldASCIIReference(value string) string {
 	folded := []byte(value)
 	for index, character := range folded {

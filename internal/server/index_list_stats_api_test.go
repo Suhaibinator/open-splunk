@@ -806,7 +806,7 @@ func TestIndexListStatisticsDoNotHoldSerializationPermitDuringBatch(
 	}
 }
 
-func TestIndexListSaturatedSerializationGatePreventsCatalogWork(
+func TestIndexListSaturatedSerializationGateDoesNotBlockCatalogRead(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -838,9 +838,9 @@ func TestIndexListSaturatedSerializationGatePreventsCatalogWork(
 			err,
 		)
 	}
-	if administration.callCount() != 0 {
+	if administration.callCount() != 1 {
 		t.Fatalf(
-			"catalog calls with saturated gate = %d, want 0",
+			"catalog calls with saturated gate = %d, want 1",
 			administration.callCount(),
 		)
 	}
