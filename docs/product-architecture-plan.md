@@ -652,6 +652,36 @@ If clients later require indefinite response replay, it must be added as an
 operation-ID-backed contract without weakening the permanent catalog
 tombstone.
 
+The authenticated administrator `POST /api/v1/indexes/stats/get` route now
+provides a bounded statistics view for one current catalog index selected by
+ID or canonical name. The server resolves the selector through the
+GORM/SQLite control plane, captures one committed visibility cutoff followed
+by one UTC millisecond measurement instant, and supplies the trusted
+deployment tenant plus the resolved immutable index identity to a native
+ClickHouse reader. The browser cannot choose the tenant or substitute the
+physical scope.
+
+The reader returns an exact retained-and-committed event count and exact
+event-time bounds using `expires_at > measured_at`,
+`index_time <= measured_at`, and `visibility_seq <= visibility_cutoff`.
+Empty results omit both bounds. Since all logical indexes share the event
+MergeTree, compressed bytes are reported as an overflow-safe proportional
+estimate from active table part bytes and rows; the response therefore always
+sets `estimates`, while inconsistent part counters fail closed. Empty results
+take one parameterized query and nonempty results take two. A reader-owned
+ten-second operation deadline prevents clickhouse-go from widening the
+fifteen-second server execution limit, and read, memory, output, concurrency,
+query-size, cache, and subquery bounds apply to both queries. A single-slot,
+fail-fast native gate ensures statistics can occupy at most one session in the
+shared runtime pool and cannot starve ingestion or search.
+
+Runtime access is limited to the event-table `SELECT` already used by search
+plus column-scoped reads of `database`, `table`, `active`, `rows`, and
+`bytes_on_disk` from `system.parts`; the exact grant surface is checked before
+serving. ClickHouse statistics do not use GORM. Batched list statistics and
+sorting by event count or storage bytes remain deliberately unsupported until
+they receive a separate bounded-query design.
+
 ## ClickHouse event model
 
 The storage model should preserve Splunk’s canonical event fields while retaining typed application data.

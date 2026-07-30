@@ -106,6 +106,48 @@ catalog entry; after that point the same request returns `404 Not Found`.
 Clients must not treat this route as an indefinite completion-status or
 terminal-response replay API.
 
+### Index statistics
+
+`POST /api/v1/indexes/stats/get` is administrator-only and accepts the same ID
+or canonical-name selector as the other index administration routes. The
+server first resolves a current, non-tombstoned catalog record, then captures
+the largest committed storage-visibility sequence and one UTC,
+millisecond-aligned `measured_at` instant. Tenant, index ID, and canonical
+index name are trusted server inputs; none can be supplied or replaced by the
+browser request.
+
+`event_count`, `earliest_event_time`, and `latest_event_time` are exact for
+rows in that logical scope satisfying all three measurement boundaries:
+`expires_at > measured_at`, `index_time <= measured_at`, and
+`visibility_seq <= visibility_cutoff`. An empty index has count and storage
+bytes zero and omits both event-time bounds. A nonempty index always returns
+both bounds.
+
+Because all logical indexes share one MergeTree, attributing compressed part
+bytes exactly to one tenant/index key would require an additional expensive
+scan. `storage_bytes` is therefore the overflow-checked ceiling of
+`active_table_bytes * event_count / active_table_rows`. It is a proportional
+estimate based on active `system.parts` metadata, and `estimates` is always
+true even though the logical count and time bounds are exact. Inconsistent or
+racing physical counters fail closed instead of returning a misleading
+estimate.
+
+The native ClickHouse reader issues exactly one parameterized aggregate for an
+empty result and one additional active-parts aggregate for a nonempty result.
+Only one native statistics operation may use the shared runtime connection at
+a time; concurrent saturation fails fast rather than queueing or occupying the
+sessions needed by ingestion and search. The complete operation owns a
+ten-second deadline, and every query is read-only with explicit execution,
+memory, read, result, thread, query-size, and subquery-depth limits. The
+GORM/SQLite control plane performs only catalog selector resolution; the event
+and part-statistics reads remain native ClickHouse operations.
+
+The existing `ListIndexesRequest.include_stats`,
+`INDEX_SORT_BY_EVENT_COUNT`, and `INDEX_SORT_BY_STORAGE_BYTES` wire fields are
+still rejected. Batched statistics and statistics-based list ordering require
+a separately reviewed bounded query contract and are not implied by this
+single-index route.
+
 ### Search validation
 
 `POST /api/v1/search/validate` accepts the same bounded `SearchDefinition`

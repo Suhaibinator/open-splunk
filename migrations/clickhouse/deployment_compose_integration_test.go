@@ -539,6 +539,44 @@ func validateComposePrincipalsAndSchema(
 	); err != nil {
 		t.Fatalf("validate deployment runtime principal: %v", err)
 	}
+	var activeRows, activeBytes uint64
+	if err := runtimeConnection.QueryRow(
+		ctx,
+		`SELECT
+		     coalesce(sum(rows), 0),
+		     coalesce(sum(bytes_on_disk), 0)
+		 FROM system.parts
+		 WHERE database = ?
+		   AND table = ?
+		   AND active = 1`,
+		"open_splunk",
+		"events",
+	).Scan(&activeRows, &activeBytes); err != nil {
+		t.Fatalf(
+			"query deployment index statistics through runtime principal: %v",
+			err,
+		)
+	}
+	var broadPartsGrant, unrelatedPartsColumnGrant uint8
+	if err := runtimeConnection.QueryRow(
+		ctx,
+		"CHECK GRANT SELECT ON system.parts",
+	).Scan(&broadPartsGrant); err != nil {
+		t.Fatalf("check broad runtime system.parts grant: %v", err)
+	}
+	if err := runtimeConnection.QueryRow(
+		ctx,
+		"CHECK GRANT SELECT(name) ON system.parts",
+	).Scan(&unrelatedPartsColumnGrant); err != nil {
+		t.Fatalf("check unrelated runtime system.parts column grant: %v", err)
+	}
+	if broadPartsGrant != 0 || unrelatedPartsColumnGrant != 0 {
+		t.Fatalf(
+			"runtime system.parts excess grants = broad:%d name:%d, want 0/0",
+			broadPartsGrant,
+			unrelatedPartsColumnGrant,
+		)
+	}
 
 	deletionConnection := openDeploymentComposeConnection(
 		t,

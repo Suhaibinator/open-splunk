@@ -28,6 +28,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 	"google.golang.org/protobuf/proto"
@@ -236,7 +237,7 @@ func canonicalHTTPAuthority(input string) (string, string, error) {
 }
 
 func (handler *apiHandler) indexAdministrationRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
-	return []router.RouteDefinition{
+	routes := []router.RouteDefinition{
 		router.NewGenericRouteDefinition[*opensplunkv1.CreateIndexRequest, *opensplunkv1.CreateIndexResponse, string, struct{}](router.RouteConfig[*opensplunkv1.CreateIndexRequest, *opensplunkv1.CreateIndexResponse]{
 			Path: "/indexes/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.CreateIndexRequest, *opensplunkv1.CreateIndexResponse](), Handler: handler.createIndex,
@@ -268,6 +269,17 @@ func (handler *apiHandler) indexAdministrationRoutes(noAuth router.AuthLevel, sm
 			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.DeleteIndexRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
+	if handler.indexStatistics != nil {
+		routes = append(
+			routes,
+			router.NewGenericRouteDefinition[*opensplunkv1.GetIndexStatsRequest, *opensplunkv1.GetIndexStatsResponse, string, struct{}](router.RouteConfig[*opensplunkv1.GetIndexStatsRequest, *opensplunkv1.GetIndexStatsResponse]{
+				Path: "/indexes/stats/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+				Codec: codec.NewProtoCodec[*opensplunkv1.GetIndexStatsRequest, *opensplunkv1.GetIndexStatsResponse](), Handler: handler.getIndexStatistics,
+				SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.GetIndexStatsRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			}),
+		)
+	}
+	return routes
 }
 
 func (handler *apiHandler) ingestionTokenRoutes(noAuth router.AuthLevel, requestBytes, smallRequestBytes int64) []router.RouteDefinition {
@@ -329,6 +341,138 @@ func (handler *apiHandler) getIndex(request *http.Request, input *opensplunkv1.G
 		return nil, internalError()
 	}
 	return &opensplunkv1.GetIndexResponse{Index: converted}, nil
+}
+
+func (handler *apiHandler) getIndexStatistics(
+	request *http.Request,
+	input *opensplunkv1.GetIndexStatsRequest,
+) (*opensplunkv1.GetIndexStatsResponse, error) {
+	record, err := handler.resolveIndex(
+		request.Context(),
+		input.GetSelector(),
+	)
+	if err := mapAdministrativeCallError(
+		request.Context(),
+		err,
+		"index",
+	); err != nil {
+		return nil, err
+	}
+
+	visibilityCutoff, err := handler.indexStatisticsSnapshotter.VisibilityCutoff(
+		request.Context(),
+	)
+	if err != nil {
+		return nil, mapIndexStatisticsCallError(request.Context(), err)
+	}
+	if err := request.Context().Err(); err != nil {
+		return nil, mapIndexStatisticsCallError(request.Context(), err)
+	}
+	measuredAt := handler.now().Round(0).UTC().Truncate(time.Millisecond)
+	if measuredAt.IsZero() ||
+		!clickhouse.SupportsSearchTimeRange(measuredAt, measuredAt) {
+		return nil, internalError()
+	}
+	scope := clickhouse.IndexStatisticsRequest{
+		TenantID:         handler.tenantID,
+		IndexID:          record.ID,
+		IndexName:        record.Definition.Name,
+		MeasuredAt:       measuredAt,
+		VisibilityCutoff: visibilityCutoff,
+	}
+	result, err := handler.indexStatistics.GetIndexStatistics(
+		request.Context(),
+		scope,
+	)
+	if err != nil {
+		return nil, mapIndexStatisticsCallError(request.Context(), err)
+	}
+	if err := request.Context().Err(); err != nil {
+		return nil, mapIndexStatisticsCallError(request.Context(), err)
+	}
+	converted, err := indexStatisticsToProto(scope, result)
+	if err != nil {
+		return nil, internalError()
+	}
+	return &opensplunkv1.GetIndexStatsResponse{Stats: converted}, nil
+}
+
+func mapIndexStatisticsCallError(ctx context.Context, operationErr error) error {
+	if requestContextFailure(ctx, operationErr) != nil {
+		return router.NewHTTPError(
+			http.StatusRequestTimeout,
+			"index statistics request was canceled",
+		)
+	}
+	return unavailableError("index statistics service is unavailable")
+}
+
+func indexStatisticsToProto(
+	scope clickhouse.IndexStatisticsRequest,
+	result clickhouse.IndexStatisticsResult,
+) (*opensplunkv1.IndexStats, error) {
+	if result.TenantID != scope.TenantID ||
+		result.IndexID != scope.IndexID ||
+		result.IndexName != scope.IndexName ||
+		result.VisibilityCutoff != scope.VisibilityCutoff ||
+		!result.MeasuredAt.Equal(scope.MeasuredAt) ||
+		result.MeasuredAt.Location() != time.UTC ||
+		!result.MeasuredAt.Equal(
+			result.MeasuredAt.Truncate(time.Millisecond),
+		) ||
+		!result.Estimates {
+		return nil, errors.New("invalid index statistics scope")
+	}
+
+	measuredAt, err := validTimestamp(result.MeasuredAt)
+	if err != nil {
+		return nil, errors.New("invalid index statistics measurement time")
+	}
+	converted := &opensplunkv1.IndexStats{
+		IndexId:      result.IndexID,
+		EventCount:   result.EventCount,
+		StorageBytes: result.StorageBytes,
+		MeasuredAt:   measuredAt,
+		Estimates:    true,
+	}
+	if result.EventCount == 0 {
+		if result.StorageBytes != 0 ||
+			result.EarliestEventTime != nil ||
+			result.LatestEventTime != nil {
+			return nil, errors.New(
+				"invalid empty index statistics result",
+			)
+		}
+		return converted, nil
+	}
+	if result.StorageBytes == 0 ||
+		result.EarliestEventTime == nil ||
+		result.LatestEventTime == nil {
+		return nil, errors.New(
+			"invalid nonempty index statistics result",
+		)
+	}
+	earliest := result.EarliestEventTime.Round(0).UTC()
+	latest := result.LatestEventTime.Round(0).UTC()
+	if earliest.After(latest) ||
+		!clickhouse.SupportsSearchTimeRange(earliest, latest) {
+		return nil, errors.New(
+			"invalid index statistics event-time bounds",
+		)
+	}
+	converted.EarliestEventTime, err = validTimestamp(earliest)
+	if err != nil {
+		return nil, errors.New(
+			"invalid index statistics earliest event time",
+		)
+	}
+	converted.LatestEventTime, err = validTimestamp(latest)
+	if err != nil {
+		return nil, errors.New(
+			"invalid index statistics latest event time",
+		)
+	}
+	return converted, nil
 }
 
 func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunkv1.ListIndexesRequest) (*serializedIndexListResponse, error) {

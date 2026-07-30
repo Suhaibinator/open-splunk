@@ -103,6 +103,23 @@ type IndexAdministration interface {
 	DeleteIndex(context.Context, string, uint64, string) (string, error)
 }
 
+// IndexStatistics reads one already-resolved logical index from the native
+// event store. The echoed result scope lets the browser boundary reject a
+// dependency response produced for a different tenant, index, snapshot, or
+// measurement instant.
+type IndexStatistics interface {
+	GetIndexStatistics(
+		context.Context,
+		clickhouse.IndexStatisticsRequest,
+	) (clickhouse.IndexStatisticsResult, error)
+}
+
+// IndexStatisticsSnapshotter captures the largest committed visibility
+// sequence before an index-statistics query starts.
+type IndexStatisticsSnapshotter interface {
+	VisibilityCutoff(context.Context) (uint64, error)
+}
+
 // IndexDataDeletionAdmission durably admits one physical index deletion in
 // the trusted control plane. The tenant scope must be supplied by the server,
 // never by browser input.
@@ -344,6 +361,8 @@ type Config struct {
 	SearchJobs                 SearchJobs
 	Indexes                    IndexCatalog
 	IndexAdmin                 IndexAdministration
+	IndexStatistics            IndexStatistics
+	IndexStatisticsSnapshotter IndexStatisticsSnapshotter
 	IndexDataDeletionAdmission IndexDataDeletionAdmission
 	IndexDataDeletionWaker     IndexDataDeletionWaker
 	IngestionTokens            IngestionTokenAdministration
@@ -384,6 +403,8 @@ type apiHandler struct {
 	jobs                       SearchJobs
 	indexes                    IndexCatalog
 	indexAdmin                 IndexAdministration
+	indexStatistics            IndexStatistics
+	indexStatisticsSnapshotter IndexStatisticsSnapshotter
 	indexDataDeletionAdmission IndexDataDeletionAdmission
 	indexDataDeletionWaker     IndexDataDeletionWaker
 	ingestionTokens            IngestionTokenAdministration
@@ -437,6 +458,24 @@ func NewHandler(config Config) (*Handler, error) {
 			indexAdmin = nil
 		}
 	}
+	indexStatistics := config.IndexStatistics
+	if isNilDependency(indexStatistics) {
+		indexStatistics = nil
+	}
+	indexStatisticsSnapshotter := config.IndexStatisticsSnapshotter
+	if isNilDependency(indexStatisticsSnapshotter) {
+		indexStatisticsSnapshotter = nil
+	}
+	if (indexStatistics == nil) != (indexStatisticsSnapshotter == nil) {
+		return nil, errors.New(
+			"create server handler: index statistics and snapshotter must be configured together",
+		)
+	}
+	if indexStatistics != nil && indexAdmin == nil {
+		return nil, errors.New(
+			"create server handler: index statistics requires index administration",
+		)
+	}
 	indexDataDeletionAdmission := config.IndexDataDeletionAdmission
 	if isNilDependency(indexDataDeletionAdmission) {
 		indexDataDeletionAdmission = nil
@@ -486,6 +525,7 @@ func NewHandler(config Config) (*Handler, error) {
 		inspectionService = nil
 	}
 	if (indexAdmin != nil ||
+		indexStatistics != nil ||
 		ingestionTokens != nil ||
 		collectorAdmin != nil ||
 		appAdmin != nil ||
@@ -683,6 +723,8 @@ func NewHandler(config Config) (*Handler, error) {
 		jobs:                       config.SearchJobs,
 		indexes:                    config.Indexes,
 		indexAdmin:                 indexAdmin,
+		indexStatistics:            indexStatistics,
+		indexStatisticsSnapshotter: indexStatisticsSnapshotter,
 		indexDataDeletionAdmission: indexDataDeletionAdmission,
 		indexDataDeletionWaker:     indexDataDeletionWaker,
 		ingestionTokens:            ingestionTokens,
@@ -755,6 +797,10 @@ func NewHandler(config Config) (*Handler, error) {
 			apiRoutes[path] = http.MethodPost
 			administratorRoutes[path] = struct{}{}
 		}
+	}
+	if api.indexStatistics != nil {
+		apiRoutes["/api/v1/indexes/stats/get"] = http.MethodPost
+		administratorRoutes["/api/v1/indexes/stats/get"] = struct{}{}
 	}
 	if api.ingestionTokens != nil {
 		for _, path := range []string{

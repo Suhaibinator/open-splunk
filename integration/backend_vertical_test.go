@@ -293,6 +293,16 @@ func TestBackendVertical(t *testing.T) {
 	assertDurableCollectorState(t, collectorStateDir, uint64(mustFileSize(t, logPath)), verticalEventCount)
 	visibilityCutoff := assertStoredEventBounds(t, ctx, storage, fixtureStart)
 	assertRestartDeliveryAccounting(t, ctx, storage)
+	assertBackendIndexStatistics(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		administratorToken,
+		storage,
+		createdIndex.GetIndex().GetIndexId(),
+		visibilityCutoff,
+	)
 	for _, process := range collectorProcesses {
 		assertProcessLogsDoNotLeak(t, process.Logs(), plaintextToken,
 			redactionAPIKeySentinel, redactionCookieSentinel, redactionPrivateKeySentinel,
@@ -1979,6 +1989,109 @@ func insertTimelineExclusiveBoundaryEvent(
 	}
 	if !storedTime.Equal(eventTime) {
 		t.Fatalf("stored timeline boundary event time = %s, want %s", storedTime, eventTime)
+	}
+}
+
+func assertBackendIndexStatistics(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	administratorToken string,
+	connection clickhousedriver.Conn,
+	indexID string,
+	visibilityCutoff uint64,
+) {
+	t.Helper()
+	if indexID == "" || visibilityCutoff == 0 {
+		t.Fatalf(
+			"invalid index statistics fixture identity: index=%q visibility=%d",
+			indexID,
+			visibilityCutoff,
+		)
+	}
+	var response opensplunkv1.GetIndexStatsResponse
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/indexes/stats/get",
+		administratorToken,
+		&opensplunkv1.GetIndexStatsRequest{
+			Selector: &opensplunkv1.IndexSelector{
+				Selector: &opensplunkv1.IndexSelector_IndexId{
+					IndexId: indexID,
+				},
+			},
+		},
+		&response,
+	)
+	statistics := response.GetStats()
+	if statistics == nil ||
+		statistics.GetIndexId() != indexID ||
+		statistics.GetMeasuredAt() == nil ||
+		statistics.GetMeasuredAt().CheckValid() != nil ||
+		!statistics.GetEstimates() {
+		t.Fatalf("backend index statistics metadata = %#v", statistics)
+	}
+	measuredAt := statistics.GetMeasuredAt().AsTime().UTC()
+	cutoffText := measuredAt.Format("2006-01-02 15:04:05.000")
+	var expectedCount uint64
+	var expectedEarliest, expectedLatest *time.Time
+	if err := connection.QueryRow(
+		ctx,
+		`SELECT count(), minOrNull(event_time), maxOrNull(event_time)
+		   FROM open_splunk.events
+		  PREWHERE tenant_id = ? AND index_name = ?
+		  WHERE expires_at > parseDateTime64BestEffort(?, 3, 'UTC')
+		    AND index_time <= parseDateTime64BestEffort(?, 3, 'UTC')
+		    AND visibility_seq <= ?`,
+		verticalTenantID,
+		verticalIndexName,
+		cutoffText,
+		cutoffText,
+		visibilityCutoff,
+	).Scan(
+		&expectedCount,
+		&expectedEarliest,
+		&expectedLatest,
+	); err != nil {
+		t.Fatalf("read expected backend index statistics: %v", err)
+	}
+	if expectedCount == 0 ||
+		expectedEarliest == nil ||
+		expectedLatest == nil ||
+		statistics.GetEventCount() != expectedCount ||
+		statistics.GetEarliestEventTime() == nil ||
+		statistics.GetLatestEventTime() == nil ||
+		!statistics.GetEarliestEventTime().AsTime().Equal(*expectedEarliest) ||
+		!statistics.GetLatestEventTime().AsTime().Equal(*expectedLatest) {
+		t.Fatalf(
+			"backend index statistics = %#v, want count=%d bounds=%v..%v",
+			statistics,
+			expectedCount,
+			expectedEarliest,
+			expectedLatest,
+		)
+	}
+	var activeTableBytes uint64
+	if err := connection.QueryRow(
+		ctx,
+		`SELECT coalesce(sum(bytes_on_disk), toUInt64(0))
+		   FROM system.parts
+		  WHERE database = ? AND table = ? AND active = 1`,
+		"open_splunk",
+		"events",
+	).Scan(&activeTableBytes); err != nil {
+		t.Fatalf("read backend index statistics storage bound: %v", err)
+	}
+	if statistics.GetStorageBytes() == 0 ||
+		statistics.GetStorageBytes() > activeTableBytes {
+		t.Fatalf(
+			"backend index storage estimate = %d, want 0 < estimate <= %d",
+			statistics.GetStorageBytes(),
+			activeTableBytes,
+		)
 	}
 }
 

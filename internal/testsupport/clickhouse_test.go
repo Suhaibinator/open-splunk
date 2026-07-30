@@ -116,6 +116,7 @@ func TestServicePrincipalProvisioningSQLUsesOnlyScopedGrants(t *testing.T) {
 		"GRANT SELECT, INSERT ON open_splunk.schema_migrations TO open_splunk_migrator",
 		"CREATE USER IF NOT EXISTS open_splunk_runtime",
 		"GRANT SELECT, INSERT ON open_splunk.events TO open_splunk_runtime",
+		"GRANT SELECT(database, table, active, rows, bytes_on_disk) ON system.parts TO open_splunk_runtime",
 		"CREATE USER IF NOT EXISTS open_splunk_deletion",
 		"GRANT ALTER DELETE, SELECT(tenant_id, index_name) ON open_splunk.events TO open_splunk_deletion",
 		"GRANT SELECT ON system.tables TO open_splunk_deletion",
@@ -136,6 +137,8 @@ func TestServicePrincipalProvisioningSQLUsesOnlyScopedGrants(t *testing.T) {
 		"CREATE DATABASE OPEN_SPLUNK",
 		"CREATE TABLE OPEN_SPLUNK.",
 		"ALTER TABLE OPEN_SPLUNK.",
+		"GRANT SELECT ON SYSTEM.PARTS TO OPEN_SPLUNK_RUNTIME",
+		"GRANT SELECT ON SYSTEM.* TO OPEN_SPLUNK_RUNTIME",
 		"OPEN_SPLUNK_BOOTSTRAP",
 	} {
 		if strings.Contains(upperQuery, forbidden) {

@@ -51,6 +51,12 @@ var clickHouseRuntimeGrantAllowlist = []clickHouseGrant{
 		target:     "open_splunk.events",
 		privileges: []string{"INSERT", "SELECT"},
 	},
+	{
+		target: "system.parts",
+		privileges: []string{
+			"SELECT(active, bytes_on_disk, database, rows, `table`)",
+		},
+	},
 }
 
 var clickHouseMigrationGrantAllowlist = []clickHouseGrant{
@@ -160,7 +166,9 @@ func ValidateClickHouseMigrationPrivileges(
 }
 
 // ValidateClickHouseRuntimePrivileges verifies the ordinary read/write
-// principal. It must have exactly SELECT and INSERT on the events table.
+// principal. In addition to SELECT and INSERT on the events table, it may
+// inspect only the active-part counters used by the bounded index-storage
+// estimate.
 func ValidateClickHouseRuntimePrivileges(
 	ctx context.Context,
 	connection ClickHousePrivilegeConnection,

@@ -158,6 +158,48 @@ func TestClickHouseServicePrincipalLifecycle(t *testing.T) {
 	); err != nil {
 		t.Fatalf("validate deletion principal: %v", err)
 	}
+	var activeRows, activeBytes uint64
+	if err := runtimeConnection.QueryRow(
+		ctx,
+		`SELECT
+		     coalesce(sum(rows), 0),
+		     coalesce(sum(bytes_on_disk), 0)
+		 FROM system.parts
+		 WHERE database = ?
+		   AND table = ?
+		   AND active = 1`,
+		container.Database,
+		"events",
+	).Scan(&activeRows, &activeBytes); err != nil {
+		t.Fatalf(
+			"query index statistics through runtime principal: %v",
+			err,
+		)
+	}
+	expectClickHousePrivilegeDenied(
+		t,
+		ctx,
+		"runtime read outside index-statistics system.parts columns",
+		func() error {
+			var partName string
+			return runtimeConnection.QueryRow(
+				ctx,
+				"SELECT name FROM system.parts LIMIT 1",
+			).Scan(&partName)
+		},
+	)
+	expectClickHousePrivilegeDenied(
+		t,
+		ctx,
+		"deletion principal index-statistics read",
+		func() error {
+			var rows uint64
+			return deletionConnection.QueryRow(
+				ctx,
+				"SELECT coalesce(sum(rows), 0) FROM system.parts",
+			).Scan(&rows)
+		},
+	)
 	var implicitMovePartitionGrant uint8
 	if err := deletionConnection.QueryRow(
 		ctx,

@@ -28,8 +28,10 @@ Initialization creates four identities:
   published native port cannot authenticate this user.
 - `open_splunk_migrator` can create only the embedded database/tables, apply
   the additive event-schema changes, and read/write the migration ledger.
-- `open_splunk_runtime` can only select and insert event rows. Ingestion,
-  search, export, and isolated EXPLAIN lanes share this identity.
+- `open_splunk_runtime` can select and insert event rows and read only
+  `database`, `table`, `active`, `rows`, and `bytes_on_disk` from
+  `system.parts` for the index-storage estimate. Ingestion, search, export,
+  isolated EXPLAIN lanes, and index statistics share this identity.
 - `open_splunk_deletion` can select only `tenant_id` and `index_name`, submit
   `ALTER DELETE`, and read the two system tables needed to reconcile
   mutations. It cannot insert, migrate, drop/rename/truncate the table, or

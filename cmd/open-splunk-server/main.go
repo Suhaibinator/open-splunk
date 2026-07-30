@@ -460,6 +460,16 @@ func run() error {
 		}()
 	}
 
+	indexStatistics, err := internalclickhouse.NewIndexStatisticsReader(
+		connection,
+		internalclickhouse.IndexStatisticsConfig{
+			Database: "open_splunk",
+			Table:    "events",
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("create index statistics reader: %w", err)
+	}
 	executor, err := queryexec.New(connection, queryexec.Config{})
 	if err != nil {
 		return fmt.Errorf("create query executor: %w", err)
@@ -600,6 +610,8 @@ func run() error {
 		SearchWebSocket:            searchWebSocket,
 		Exports:                    exports,
 		Indexes:                    controlDB,
+		IndexStatistics:            indexStatistics,
+		IndexStatisticsSnapshotter: visibilitySnapshotter{sequencer: sequencer},
 		IndexDataDeletionAdmission: controlDB,
 		IndexDataDeletionWaker:     indexDataDeletion,
 		IngestionTokens:            tokenStore,

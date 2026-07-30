@@ -100,6 +100,9 @@ func TestValidateClickHousePrincipalPrivilegesRejectsAdversarialExcess(t *testin
 		"GRANT KILL QUERY ON *.* TO runtime",
 		"GRANT SELECT ON open_splunk.* TO runtime",
 		"GRANT SELECT ON open_splunk.events TO runtime WITH GRANT OPTION",
+		"GRANT SELECT ON system.parts TO runtime",
+		"GRANT SELECT(active, bytes_on_disk, database, name, rows, table) ON system.parts TO runtime",
+		"GRANT SELECT ON system.columns TO runtime",
 		"GRANT unexpected_role TO runtime",
 		"REVOKE INSERT ON open_splunk.events FROM runtime",
 	}
@@ -122,6 +125,43 @@ func TestValidateClickHousePrincipalPrivilegesRejectsAdversarialExcess(t *testin
 				}
 			})
 		}
+	}
+}
+
+func TestValidateClickHouseRuntimePrivilegesRequiresNarrowIndexStatisticsGrant(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	want := []clickHouseGrant{
+		{
+			target:     "open_splunk.events",
+			privileges: []string{"INSERT", "SELECT"},
+		},
+		{
+			target: "system.parts",
+			privileges: []string{
+				"SELECT(active, bytes_on_disk, database, rows, `table`)",
+			},
+		},
+	}
+	if !reflect.DeepEqual(clickHouseRuntimeGrantAllowlist, want) {
+		t.Fatalf(
+			"runtime grant allowlist = %#v, want index-statistics least-privilege contract %#v",
+			clickHouseRuntimeGrantAllowlist,
+			want,
+		)
+	}
+
+	connection := validClickHousePrivilegeConnection(want)
+	if err := ValidateClickHouseRuntimePrivileges(
+		context.Background(),
+		connection,
+	); err != nil {
+		t.Fatalf(
+			"ValidateClickHouseRuntimePrivileges(index statistics) error = %v",
+			err,
+		)
 	}
 }
 

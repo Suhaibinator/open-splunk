@@ -231,12 +231,14 @@ jobs:
       - name: Test backend vertical and deletion lifecycle
         env:
           OPEN_SPLUNK_BACKEND_INTEGRATION: "1"
+          OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
           OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
         run: >-
-          go test ./integration
-          -run '^Test(BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
+          go test ./internal/clickhouse ./integration ./migrations/clickhouse
+          -run '^Test(IndexStatisticsReaderAgainstClickHouse|DeploymentComposePersistentCredentialRotation|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
           -count=1
           -timeout=25m
+          -p=1
           -v
 
       - name: Upload browser failure artifacts

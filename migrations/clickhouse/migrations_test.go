@@ -172,6 +172,7 @@ func TestDeploymentClickHouseBootstrapSeparatesServicePrincipals(t *testing.T) {
 		"/open-splunk-migrations/*.sql",
 		"CREATE USER IF NOT EXISTS open_splunk_runtime",
 		"GRANT SELECT, INSERT ON open_splunk.events TO open_splunk_runtime",
+		"GRANT SELECT(database, table, active, rows, bytes_on_disk) ON system.parts TO open_splunk_runtime",
 		"CREATE USER IF NOT EXISTS open_splunk_deletion",
 		"GRANT ALTER DELETE, SELECT(tenant_id, index_name) ON open_splunk.events TO open_splunk_deletion",
 		"GRANT SELECT ON system.tables TO open_splunk_deletion",
@@ -189,6 +190,8 @@ func TestDeploymentClickHouseBootstrapSeparatesServicePrincipals(t *testing.T) {
 	for _, prohibited := range []string{
 		"GRANT ALL",
 		"GRANT ALTER ON open_splunk.events",
+		"GRANT SELECT ON system.parts TO open_splunk_runtime",
+		"GRANT SELECT ON system.* TO open_splunk_runtime",
 		"GRANT DROP",
 		"GRANT TRUNCATE",
 		"WITH GRANT OPTION",

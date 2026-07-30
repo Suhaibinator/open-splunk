@@ -88,6 +88,7 @@ CREATE USER IF NOT EXISTS open_splunk_runtime
 ALTER USER open_splunk_runtime
     IDENTIFIED WITH sha256_password BY '$OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD';
 GRANT SELECT, INSERT ON open_splunk.events TO open_splunk_runtime;
+GRANT SELECT(database, table, active, rows, bytes_on_disk) ON system.parts TO open_splunk_runtime;
 
 CREATE USER IF NOT EXISTS open_splunk_deletion
     IDENTIFIED WITH sha256_password BY '$OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD';
