@@ -7,7 +7,129 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: truthful complete index administration capability
+## Latest checkpoint: bounded revision-stable index catalog
+
+Date: 2026-07-30
+
+Committed and pushed implementation checkpoint:
+
+- `e85fc3c` — hard-bounded physical index identities, atomic GORM admission,
+  revision-stable keyset pages, server-signed continuations, defensive
+  transport validation, and adversarial unit/live integration coverage.
+
+This test-first unit replaces the last serialized full-catalog
+index-administration path:
+
+1. The catalog now admits at most 1,024 physical index identities. Active,
+   archived, deleting, and terminally tombstoned rows all consume the bound,
+   so a ClickHouse-facing canonical name can never be recycled after product
+   deletion.
+2. Migration 0020 adds the authoritative singleton physical-count/catalog-
+   revision marker, composite name/created/updated keyset indexes, persisted
+   byte and timestamp bounds, and triggers that reject overflow, identity
+   replacement, physical deletion, marker rollback, and accounting drift.
+3. Creation performs duplicate-name, capacity, and random-ID admission plus
+   insertion in one explicit GORM transaction. SQLite's configured immediate
+   writer admission makes the final slot atomic; an N-1 two-creator race
+   proves that exactly one succeeds. A duplicate canonical name still wins
+   over capacity at the error boundary.
+4. Startup and creation admission perform a bounded structural audit of the
+   singleton against physical rows. The keyset page hot path reads only the
+   guarded singleton, and the post-insert check reads only its new revision
+   and count, avoiding an O(catalog) scan while holding a page or writer
+   transaction.
+5. `ListIndexPage` is a GORM/SQLite read-only transaction with page sizes
+   capped at 64, `LIMIT page_size + 1`, optional exact filtered totals, and
+   deterministic `(name|created_at|updated_at, index_id)` keysets in both
+   directions. The legacy full index view remains bounded by the physical
+   ceiling.
+6. State filters and literal text matching execute in SQLite. ASCII letters
+   are case-insensitive, non-ASCII bytes remain case-sensitive, and `%`, `_`,
+   quotes, and other wildcard-looking input remain literal. The transport's
+   defensive alternate-provider validation reuses a guaranteed-linear,
+   one-time-preprocessed ASCII-fold KMP matcher.
+7. Continuations are authenticated before storage work and bind the endpoint,
+   normalized filters, page semantics, sort, direction, statistics mode,
+   global catalog revision, and final composite key. Create, update, lifecycle,
+   deletion-admission, completion, and tombstone mutations invalidate an
+   outstanding cursor instead of risking skips or duplicates.
+8. SQLite page selection now happens before acquiring the shared
+   administrative response permit, so a busy database cannot occupy response
+   capacity. The permit covers only bounded validation/materialization, is
+   released during native page-statistics work, and is reacquired before
+   defensive enrichment and protobuf transfer.
+9. Existing page-local ClickHouse statistics behavior is unchanged: zero
+   native queries for an empty page, one grouped event query for an all-empty
+   nonempty page, and one additional shared `system.parts` query otherwise.
+   Event-count and storage-byte global sorts remain rejected because a
+   metadata revision cannot freeze changing native statistics.
+10. Alternate control providers are checked for revision, page size, totals,
+    cursor identity, ordering, uniqueness, filters, canonical definitions,
+    timestamps, and persisted bounds before serialization or native work.
+    Cursor-shape validation and page-response validation are shared with the
+    GORM and other bounded-list boundaries so their limits cannot drift.
+11. Adversarial tests cover every sort/direction with tied keys, literal and
+    non-ASCII filtering, malformed and stale cursors, every catalog mutation,
+    failed multirow rollback, tombstone capacity retention, marker and
+    identity replacement attempts, direct schema overflow, structural drift,
+    startup auditing, final-slot concurrency, and GORM/schema parity.
+12. Independent reuse, quality/correctness, and efficiency reviews drove the
+    shared cursor/page/matcher validators, canonical display-name check,
+    centralized catalog/time bounds, response-permit ordering, state-only hot
+    path, startup/admission audit split, and linear matcher. All three
+    post-fix reviews reported no remaining concrete issue.
+13. Persistence ownership remains strict: GORM is used only for the SQLite
+    control plane. ClickHouse event storage, statistics, field discovery,
+    search execution, and physical deletion remain native.
+14. The actual GradeThis Compose cutover remains the highest first-release
+    deployment milestone and belongs in its own GradeThis worktree/branch.
+    The next selected in-repository SPL expansion candidate remains a
+    separately bounded `eventstats count` contract.
+
+Validation on implementation commit `e85fc3c`:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/control ./internal/server \
+  ./cmd/open-splunk-server ./integration -count=1
+go vet ./...
+go build ./...
+npm run typecheck
+npm run lint
+npm run test:frontend
+make proto
+make proto-lint
+BUF_CACHE_DIR="$PWD/.cache/buf" npx --no-install buf breaking \
+  --against '.git#branch=main'
+
+# Executed with this already-cached binary reporting exactly v2.12.2.
+INDEX_CATALOG_LINTER=/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint
+"$INDEX_CATALOG_LINTER" run ./...
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./integration -run '^TestBackendVertical$' \
+  -count=1 -timeout=10m -v
+
+git show --check --oneline e85fc3c
+```
+
+The full repository suite, affected race suite, vet/build, TypeScript
+typecheck/lint, all 47 release/build tests, all 136 frontend runtime tests,
+protobuf generation/lint/breaking checks, and exact cached v2.12.2 linter
+passed; lint reported `0 issues`. The digest-pinned backend vertical passed in
+24.51 seconds and left no test-owned container or volume.
+
+Explicit pause point:
+
+1. The bounded, revision-stable index catalog is committed, pushed, and
+   digest-pinned live-proven.
+2. Control-plane indexing and paging use GORM; ClickHouse remains native-only.
+3. The larger architecture plan still has future release and SPL units.
+4. Commit and push this handoff, then pause until the user gives further
+   instructions.
+
+## Previous checkpoint: truthful complete index administration capability
 
 Date: 2026-07-30
 
