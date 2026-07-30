@@ -7,7 +7,162 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: authenticated physical index deletion admission
+## Latest checkpoint: bounded administrator index statistics
+
+Date: 2026-07-29
+
+Committed implementation checkpoint:
+
+- `b9b6c6b` — administrator-only single-index statistics, exact logical
+  visibility/retention semantics, bounded native ClickHouse execution,
+  least-privilege part metadata, and unit/live integration coverage.
+
+This test-first unit implements the previously declared
+`POST /api/v1/indexes/stats/get` contract without broadening list-index
+behavior:
+
+1. The route is registered only when index administration, native statistics,
+   and visibility snapshotting are configured together. Typed-nil,
+   partially-paired, or missing catalog dependencies fail closed during
+   handler construction.
+2. Browser authentication and administrator authorization run before body
+   decoding or any catalog/native work. The request can select only by index ID
+   or canonical name; the server resolves a current non-tombstoned catalog
+   record first.
+3. Scope is built only from the trusted configured tenant plus the resolved
+   immutable index ID/name. Browser input cannot select a tenant or substitute
+   a physical name.
+4. The handler captures the largest committed visibility sequence before it
+   samples one UTC, millisecond-aligned `measured_at` instant. The same
+   snapshot and instant are echoed through the native result and checked again
+   at the protobuf boundary.
+5. One parameterized native aggregate returns exact logical `count`,
+   `minOrNull(event_time)`, and `maxOrNull(event_time)` under
+   `tenant_id/index_name`, `expires_at > measured_at`,
+   `index_time <= measured_at`, and
+   `visibility_seq <= visibility_cutoff`.
+6. Empty results use exactly one query, return zero count/storage, and omit
+   both bounds. Nonempty results require ordered, ClickHouse/protobuf-range
+   bounds and use one additional `system.parts` aggregate.
+7. `storage_bytes` is the overflow-safe ceiling of
+   `active_table_bytes * logical_event_count / active_table_rows`. Positive
+   counts with zero rows/bytes, a logical count above the physical row count,
+   arithmetic overflow, or racing/inconsistent metadata fail closed.
+   `estimates` is always true because only storage attribution is estimated;
+   logical count and event-time bounds remain exact.
+8. A single-slot fail-fast native gate lets statistics occupy at most one
+   session in the shared runtime pool. Concurrent saturation returns an
+   unavailable result without issuing a ClickHouse query, so administrator
+   calls cannot monopolize ingestion/search sessions; cancellation releases
+   the slot and a later call succeeds.
+9. The complete two-query operation owns a ten-second context. This accounts
+   for clickhouse-go's roughly five-second deadline addition and prevents a
+   long caller deadline from widening the configured fifteen-second
+   `max_execution_time`.
+10. Both queries are read-only and carry explicit memory, rows/bytes-read,
+    result rows/bytes, thread, query-size, subquery-depth, cache, async-insert,
+    and overflow bounds. Identifiers are construction-validated and quoted;
+    all scope values are parameters; each query gets a unique protocol-valid
+    query ID.
+11. The runtime principal gains only
+    `SELECT(database, table, active, rows, bytes_on_disk) ON system.parts`.
+    Exact `SHOW GRANTS` validation uses ClickHouse 26.3's canonical backticked
+    `table` spelling and rejects missing, duplicate, broad, role-derived, or
+    option-bearing authority. Reads of other `system.parts` columns and
+    statistics access by the deletion principal are denied live.
+12. Production creates the reader over the already-owned runtime native
+    connection and the existing committed-visibility sequencer. It borrows
+    that connection, owns no second close path, and remains behind the normal
+    HTTP request drain during shutdown.
+13. The GORM/SQLite control plane is used only for selector/catalog resolution
+    and visibility metadata. Event aggregation and part metadata remain
+    native ClickHouse operations; GORM is not introduced into the ClickHouse
+    path.
+14. Dependency/cancellation failures map to sanitized `503`/`408` responses.
+    Malformed echoed tenant/index/snapshot/time scope, zero storage for a
+    positive count, inconsistent empty/nonempty shapes, invalid timestamps,
+    and aliased pointer results are rejected before serialization without
+    leaking dependency details.
+15. `ListIndexesRequest.include_stats`,
+    `INDEX_SORT_BY_EVENT_COUNT`, and `INDEX_SORT_BY_STORAGE_BYTES` remain
+    explicitly rejected. Batched statistics and statistics sorting require a
+    separate bounded query design.
+16. The real backend vertical authenticates the route after collector
+    ingestion and verifies its count and time bounds against direct
+    ClickHouse reads at the captured measurement/snapshot. The standalone
+    native reader, exact service-principal lifecycle, and checked-in Compose
+    credential-rotation stack are separate digest-pinned gates.
+17. CI now runs the standalone reader and the checked-in Compose deployment
+    test serially beside the backend vertical under the exact audited image
+    digest.
+
+Validation on implementation commit `b9b6c6b`:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/clickhouse ./internal/server \
+  ./cmd/open-splunk-server ./internal/testsupport \
+  ./migrations/clickhouse -count=1
+go vet ./...
+go build ./...
+
+# Executed with this already-cached binary reporting exactly v2.12.2.
+INDEX_STATS_LINTER=/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint
+GOTOOLCHAIN=local GOPROXY=off "$INDEX_STATS_LINTER" \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse \
+  -run '^TestIndexStatisticsReaderAgainstClickHouse$' \
+  -count=1 -timeout=10m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/server \
+  -run '^TestClickHouseServicePrincipalLifecycle$' \
+  -count=1 -timeout=10m -v
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./integration -run '^TestBackendVertical$' \
+  -count=1 -timeout=10m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./migrations/clickhouse \
+  -run '^TestDeploymentComposePersistentCredentialRotation$' \
+  -count=1 -timeout=10m -v
+
+git show --check --oneline b9b6c6b
+```
+
+The final implementation passed the full repository suite, the affected race
+suite, repository-wide vet/build, and the exact cached v2.12.2 linter with
+`0 issues`. The final digest-pinned native reader, privilege lifecycle,
+backend vertical, and Compose rotation passed in 6.07, 2.79, 22.20, and 17.55
+seconds respectively.
+
+Three independent adversarial review lenses drove fixes for clickhouse-go
+deadline widening, runtime-pool starvation, nonempty zero-byte results,
+canonical `system.parts` grant spelling, and missing checked-in Compose CI
+coverage. Post-fix re-reviews found no remaining route, scope, predicate,
+overflow, cancellation, concurrency, privilege, deployment, resource-bound,
+or GORM-boundary defect.
+
+Explicit pause point:
+
+1. Bounded single-index administrator statistics are implemented,
+   committed, live-proven, and published with this handoff.
+2. Exact logical count/time semantics share the same committed visibility and
+   retention boundaries as search; compressed storage remains explicitly
+   estimated.
+3. GORM remains limited to SQLite control-plane work; ClickHouse remains
+   native.
+4. Batched list statistics and statistics-based ordering remain unsupported.
+5. Pause here until the user gives further instructions.
+
+## Previous checkpoint: authenticated physical index deletion admission
 
 Date: 2026-07-29
 
