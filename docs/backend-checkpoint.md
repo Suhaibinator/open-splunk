@@ -7,7 +7,136 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: serialized physical-deletion coordinator
+## Latest checkpoint: durable admission-time deletion tenant binding
+
+Date: 2026-07-29
+
+Committed and pushed implementation checkpoint:
+
+- `31d20ac` — immutable admission-tenant snapshots, cross-tenant GORM/SQLite
+  integrity, pre-native coordinator drift rejection, and a live wrong-tenant
+  restart proof.
+
+This test-first unit closes the coordinator's pre-attempt tenant-drift gap
+without wiring the server runtime or enabling the `DELETE_DATA` route:
+
+1. `BeginIndexDataDeletion` now accepts an explicit
+   `IndexDataDeletionScope` derived from trusted process identity. The
+   immutable GORM operation snapshots its validated tenant together with the
+   exact index ID/name, archived generation, and admission time. Same-tenant
+   sequential, concurrent, and restart retries return the original operation;
+   a different valid tenant returns `ErrDependencyConflict` and cannot rebind
+   the work.
+2. The shared control-plane tenant grammar lives in
+   `internal/control/tenant.go`: 1..255 UTF-8 bytes, no surrounding Unicode
+   whitespace, NUL, or Unicode control characters. Invalid admission tenants
+   fail before database reads, entropy, or state transition. Decoder checks
+   make malformed persisted tenant values fail closed.
+3. Because the project is greenfield and unreleased, the existing 0017 schema
+   was strengthened in place rather than adding a fallback/backfill migration.
+   `index_deletion_operations.tenant_id` is non-null and immutable, with
+   byte-length, NUL, ASCII-space, and C0/C1 control guards. An already-created
+   pre-release database with the old 0017 checksum must be rebuilt; no tenant
+   is guessed from runtime configuration.
+4. Migration 0018 and the GORM attempt path both require the mutation target
+   tenant to equal the parent operation tenant. Fresh mismatches return
+   `ErrDependencyConflict` without creating an attempt; a persisted
+   operation/attempt mismatch is invalid durable state. Direct SQL cannot
+   insert a foreign-tenant child.
+5. Migration 0019 now requires the completion, attempt, and outstanding
+   operation tenants to agree before terminal insertion, operation deletion,
+   or trigger-owned cleanup. Completion reconstruction carries the immutable
+   tenant through the synthetic operation/attempt validation, and the terminal
+   audit remains the durable tenant copy after outstanding rows are consumed.
+6. The coordinator validates the oldest operation tenant against its
+   constructor-cloned configured tenant before
+   `GetIndexDeletionMutationAttempt`, `IndexDataDeletionStatus`,
+   `WithWritesFrozen`, drain, target resolution, or mutation advancement. A
+   mismatched oldest operation remains cached and rate-limited, so younger
+   operations cannot bypass the failure. Fresh targets derive tenant from the
+   durable operation rather than inferring it from current configuration.
+7. Existing attempts must match operation identity and admission tenant before
+   native polling. Concurrent-ensure terminal-audit and ambiguous-completion
+   recovery also require the audit tenant to match the admitted operation in
+   addition to the exact logical generation and physical database/table/UUID.
+8. Control-plane tests cover invalid UTF-8/whitespace/control/NUL/oversized
+   tenants, exact retrieval and restart, cross-tenant retries, simultaneous
+   tenant A/B admission with one immutable winner, GORM column parity,
+   direct-SQL constraints and immutability, attempt parent mismatch, completion
+   forgery, cancellation, and unchanged archived/deleting state after every
+   rejected path.
+9. Coordinator units prove a mismatched operation is discovered once, retained
+   across retries, and rejected before even an attempt read; all ClickHouse
+   status/freeze calls remain zero. Existing-attempt tenant rejection and the
+   previously proven frozen advancement/ambiguity paths remain green.
+10. The digest-pinned composed SQLite/ClickHouse test now includes a
+    deliberately misconfigured process lifetime after admission and restart.
+    While one ambiguous outbox row remains durably held, that coordinator
+    reports tenant drift, creates no attempt, makes zero status/freeze calls,
+    leaves the outbox and target event unchanged, and closes cleanly. A
+    correctly configured restart then replays the row, executes the existing
+    precommit-failure and commit-then-EOF schedule, deletes only the admitted
+    tenant/index rows, and recovers a terminal audit whose tenant still equals
+    the original operation after the final SQLite reopen.
+11. GORM remains limited to the SQLite control plane. ClickHouse target
+    resolution, outbox replay, mutation submission/status, physical-zero
+    proof, and audit assertions remain native and unchanged in ownership.
+
+Validation on implementation commit `31d20ac`:
+
+```sh
+go test ./... -count=1
+go test ./internal/control ./internal/indexes -count=10
+go test -race ./internal/control ./internal/indexes -count=1
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/indexes \
+  -run '^TestIndexDataDeletionCoordinatorAgainstClickHouse$' -count=1 -v
+git show --check --oneline 31d20ac
+```
+
+The exact implementation tree passed the full repository suite, ten repeated
+control/coordinator runs, focused race detection, repository-wide vet/build,
+and pinned repository-wide lint with `0 issues`. The approved ClickHouse
+26.3.17.4 digest-pinned composed restart test passed on the final simplified
+tree in 6.56 seconds.
+
+Three identical-diff simplify passes found and fixed an avoidable tenant-string
+clone, moved the newly shared tenant grammar out of the app implementation,
+and collapsed duplicated raw-SQL tenant guard setup. Independent
+control/state, integration/crash, test/lint, reuse, quality, and efficiency
+adversaries found no remaining concrete defect. The exact staged feature diff,
+including the new shared validator file, was clean at SHA-256
+`545d7b4bcde3fce3be357c30ac1b495005132f91fb267830d86084bd7b957f2b`.
+
+Remaining `DELETE_DATA` work:
+
+1. wire exactly one coordinator beside the production ClickHouse Store after
+   migrations/table-changing DDL and before request admission, then close the
+   coordinator before the Store and control plane;
+2. enforce the documented restricted runtime DDL principal and exclusive
+   physical table-generation lifecycle;
+3. enable authenticated `DELETE_DATA` admission only after those runtime
+   ownership guarantees hold, pass the handler's trusted tenant scope rather
+   than request data, and issue the best-effort postcommit wake; and
+4. keep the periodic recovery scan as the correctness fallback for lost wakes.
+
+Explicit pause point:
+
+1. Admission-time tenant binding, cross-layer integrity, wrong-config restart
+   rejection, and the composed pinned live proof are implemented, validated,
+   committed, and pushed.
+2. Runtime ownership and the authenticated `DELETE_DATA` route remain
+   deliberately unwired.
+3. The next correctness unit is production coordinator/Store lifecycle and
+   restricted DDL ownership; do not enable the route before it is complete.
+4. Pause here until the user gives further instructions.
+
+## Previous checkpoint: serialized physical-deletion coordinator
 
 Date: 2026-07-29
 
