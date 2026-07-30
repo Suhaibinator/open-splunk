@@ -7,7 +7,170 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: durable admission-time deletion tenant binding
+## Latest checkpoint: production deletion runtime and ClickHouse privilege isolation
+
+Date: 2026-07-29
+
+Committed and pushed implementation checkpoint:
+
+- `7994dcb` — production coordinator/Store ownership, separate migration,
+  runtime, and deletion principals, restart-safe deployment provisioning, and
+  pinned unit/live integration coverage.
+
+This test-first unit completes the production lifecycle and restricted-DDL
+boundary without enabling HTTP `DELETE_DATA` admission:
+
+1. Server startup opens one short-lived migrator connection, pings it,
+   validates the exact ClickHouse version and complete explicit grant surface,
+   applies the embedded files, and closes it before either long-lived
+   connection or the Store exists.
+2. The ordinary runtime principal has exactly `SELECT, INSERT` on
+   `open_splunk.events`. The deletion principal has column-scoped
+   `SELECT(tenant_id, index_name)`, `ALTER DELETE`, and `SELECT` on
+   `system.tables` and `system.mutations`. All three identities are direct
+   users without roles, grant/admin options, partial revokes, or wildcard
+   authority.
+3. Principal validation pins server version `26.3.17.4`, reads the whole
+   canonical `SHOW GRANTS` result in one round trip, rejects every missing,
+   duplicate, malformed, role, option-bearing, or excessive row, and requires
+   ClickHouse Code 497 from a non-public `system.server_settings` canary.
+   Version validation runs before migration DDL as well as before long-lived
+   principal use.
+4. The application removes
+   `OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD` from its environment immediately
+   after capturing connection options, then clears and releases the privileged
+   options as soon as the migration session closes. All three application
+   usernames and passwords must be pairwise distinct.
+5. `Store` now owns separate ordinary and deletion connections. Ingestion and
+   search stay on the runtime connection. Physical target resolution,
+   mutation status/reconciliation, `ALTER DELETE`, and terminal zero proof use
+   only the serialized deletion connection. Construction-failure ownership,
+   dual ping, close ordering, joined errors, cancellation, and concurrent
+   operation/close behavior have focused tests.
+6. The server constructs exactly one `IndexDataDeletionCoordinator` beside the
+   single Store after migrations and privilege validation. The coordinator
+   owns final Store shutdown, while all later collector/search/export/HTTP
+   consumers unwind first.
+7. Deletion-runtime close starts exactly one asynchronous owner pipeline:
+   unbounded coordinator join followed by exactly-once Store close. Each caller
+   context still bounds its wait, including a blocked driver close. If the
+   graceful budget expires, production performs a later unbounded join before
+   allowing visibility/SQLite dependencies to unwind. A second process signal
+   retains the ordinary forced-termination escape hatch.
+8. The configured tenant is checked for UTF-8 and every Unicode control
+   character before surrounding whitespace is normalized, so boundary
+   newlines and C1 controls cannot be silently canonicalized. Native deletion
+   requests independently require the same unpadded, control-free tenant
+   grammar before any ClickHouse query.
+9. HTTP `DELETE_DATA` remains disabled. The rejection test proves the request
+   fails before selector validation and leaves the archived index, optimistic
+   version, and outstanding-operation state unchanged.
+10. The checked-in Compose image is pinned to
+    `clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49`.
+    Initialization validates that exact version before DDL, validates four
+    independent 256-bit lowercase-hex credentials, and reruns its idempotent
+    migrator-first sequence on every start so partial provisioning and
+    credential rotation recover over an existing volume.
+11. The config-backed bootstrap administrator now reads its password from the
+    container environment and permits only `127.0.0.1` and `::1`.
+    `CLICKHOUSE_SKIP_USER_SETUP=1` prevents the official entrypoint from
+    recreating a `::/0` administrator. Recovery is available through
+    `docker compose exec`, while published ports remain loopback-bound and
+    reject bootstrap authentication.
+12. A new opt-in integration test uses the actual
+    `deploy/docker-compose.yaml`, shell initializer, XML files, migration
+    directory, healthcheck, and persistent named volume. It proves fresh
+    provisioning, external-bootstrap denial/internal recovery, exact grants,
+    migrated schema, data persistence, all-secret rotation through
+    `--force-recreate`, old-credential rejection, and successful revalidation.
+13. The reusable principal fixture retains unexported bootstrap credentials,
+    writes its nonsecret bind-mounted XML with Linux-container-readable
+    permissions, bounds canceled Docker subprocess pipe waits, and supports a
+    narrowly scoped adversarial GRANT/REVOKE hook. Backend vertical/load tests
+    share one principal environment/flag harness.
+14. ClickHouse 26.3 necessarily maps `ALTER DELETE` to destructive partition
+    operations including `DROP PARTITION`; column-scoping `ALTER DELETE`
+    prevents the required fixed mutation from running. That audited residual
+    is contained by the private fixed-SQL deletion connection. Event `SELECT`
+    is separately column-scoped, and the live contract confirms
+    `ALTER MOVE PARTITION` is absent.
+15. GORM remains confined to the SQLite control plane. ClickHouse migrations,
+    grant inspection, target/status queries, mutation submission, physical
+    proof, and deployment validation remain native.
+
+Validation on implementation commit `7994dcb`:
+
+```sh
+go test ./... -count=1
+go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/server \
+  ./internal/testsupport ./migrations/clickhouse -count=10
+go test -race ./cmd/open-splunk-server ./internal/clickhouse \
+  ./internal/server ./internal/testsupport -count=1
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+sh -n deploy/clickhouse-init.sh deploy/generate-env.sh
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/server \
+  -run '^TestClickHouseServicePrincipalLifecycle$' -count=1 -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./migrations/clickhouse \
+  -run '^TestDeploymentComposePersistentCredentialRotation$' -count=1 -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/indexes \
+  -run '^TestIndexDataDeletionCoordinatorAgainstClickHouse$' -count=1 -v
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./integration -run '^TestBackendVertical$' -count=1 -v
+
+git show --check --oneline 7994dcb
+```
+
+The exact implementation passed the full repository suite, ten repeated
+focused runs, race detection, repository-wide vet/build, and pinned lint with
+`0 issues`. The pinned principal lifecycle passed in 3.03 seconds; the actual
+Compose fresh-start/credential-rotation proof passed in 17.66 seconds; the
+composed deletion crash/restart proof passed in 6.17 seconds; and the complete
+backend/browser vertical passed in 21.55 seconds.
+
+Three parallel adversarial review lenses over the staged implementation found
+and drove fixes for unsafe timeout dependency teardown, an unbounded Store
+close, a missing migrator allowlist, tag-only/one-shot deployment
+initialization, a network-wide bootstrap administrator, a fixture permission
+portability bug, boundary control-character canonicalization, weaker native
+tenant validation, stale deployment documentation, duplicated backend
+principal wiring, and five pinned-lint failures. A separate pinned ClickHouse
+privilege audit confirmed the unavoidable `ALTER DELETE` partition blast
+radius. The post-fix automated and live validation found no further failure.
+
+Remaining `DELETE_DATA` work:
+
+1. enable the authenticated route by deriving `IndexDataDeletionScope` only
+   from the trusted handler tenant, never request data;
+2. preserve early confirmation/version/mode checks, call
+   `BeginIndexDataDeletion`, and issue a best-effort postcommit coordinator
+   wake while retaining periodic recovery as the correctness path;
+3. add handler-level concurrency, restart, and live API proofs that admission
+   cannot cross tenants or mutate state on any rejected request; and
+4. keep ClickHouse native and GORM limited to the control plane.
+
+Explicit pause point:
+
+1. Production coordinator/Store ownership, principal isolation, deployment
+   recovery, and their unit/live proofs are implemented, committed, and pushed.
+2. The HTTP `DELETE_DATA` route remains deliberately disabled.
+3. The next cohesive deletion unit is authenticated route admission and wake
+   wiring only.
+4. Pause here until the user gives further instructions.
+
+## Previous checkpoint: durable admission-time deletion tenant binding
 
 Date: 2026-07-29
 

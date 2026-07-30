@@ -568,9 +568,19 @@ not be treated as a multi-tenant deletion model.
 The configured ClickHouse database/table name must remain exclusively bound to
 one physical table generation from Store construction through Store shutdown.
 All migrations and rename/drop/exchange/replace DDL run before the Store opens,
-and the runtime principal should be limited to the required data, mutation,
-and system-table privileges. UUID checks detect observable drift, but
-ClickHouse targets `ALTER TABLE` by name and cannot atomically fence privileged
+and three direct, role-free service principals now divide that authority. The
+short-lived migrator has only the exact create/additive-schema/ledger grants
+needed by the embedded files. The ordinary runtime has only `SELECT` and
+`INSERT` on `open_splunk.events`. The deletion worker has column-scoped
+`SELECT(tenant_id, index_name)`, `ALTER DELETE`, and the two system-table reads
+needed for reconciliation. Every principal is validated through its complete
+explicit `SHOW GRANTS` surface against the exact audited ClickHouse
+`26.3.17.4` contract; a denied `system.server_settings` canary also proves that
+non-public system-table reads require explicit grants. The migrator is
+validated before any DDL, its password is removed from the application
+environment after capture, and its options are cleared as soon as the
+connection closes. UUID checks still detect observable drift, but ClickHouse
+targets `ALTER TABLE` by name and cannot atomically fence privileged
 out-of-band DDL.
 
 The `internal/indexes` coordinator now composes these primitives with one
@@ -590,13 +600,37 @@ the exact tenant-bound immutable audit can be read; otherwise the next cycle
 must drain and prove zero again. Pending and error retries are rate-limited,
 wakes are coalesced, and shutdown cancels and joins the sole worker.
 
-This coordinator is deliberately not wired into the server runtime and does
-not yet enable the route. Admission-time tenant identity is now durable and
-pre-attempt configuration drift is rejected without touching ClickHouse.
-Runtime construction must still enforce migrations and table-changing DDL
-before Store creation, one Store/coordinator owner, shutdown ordering that
-closes the coordinator before the Store, and a restricted runtime DDL
-principal. The authenticated HTTP route is enabled last.
+The production server now wires exactly one coordinator beside exactly one
+Store. Startup opens and validates the short-lived migrator, applies the
+embedded files, and closes it before opening the runtime and deletion
+connections. The Store owns both long-lived pools: ordinary ingestion/search
+uses the runtime connection, while target resolution, mutation
+submission/status, and terminal physical proof use only the private serialized
+deletion connection. The coordinator then owns final Store shutdown.
+
+Shutdown first drains later request/search/collector consumers. The deletion
+runtime starts one asynchronous owner pipeline that joins the coordinator
+before closing the Store, so a caller deadline also bounds a driver close that
+blocks. If the graceful budget expires, the finalizer retains the Store,
+visibility sequencer, and SQLite control plane behind a later unbounded join;
+it never tears borrowed dependencies out from under a live worker. Default
+signal behavior has already been restored, so a second termination signal
+remains the operator escape hatch for a dependency that ignores cancellation.
+
+The local deployment uses the same production contract: a digest-pinned image,
+an exact pre-DDL version check, idempotent initialization on every container
+start, four independent credentials, and a config-backed bootstrap
+administrator limited to container loopback. A composed live test creates the
+real checked-in stack, validates every principal and the migrated schema,
+rotates all credentials while retaining the data volume, rejects the old
+credentials, and revalidates the recovered stack.
+
+The authenticated HTTP `DELETE_DATA` route remains deliberately disabled. It
+still rejects the mode before selector validation or control-plane mutation.
+The next deletion unit may enable admission only by passing the handler's
+trusted tenant scope into `BeginIndexDataDeletion` and issuing a best-effort
+postcommit coordinator wake; the periodic recovery scan remains the
+correctness fallback.
 
 ## ClickHouse event model
 
