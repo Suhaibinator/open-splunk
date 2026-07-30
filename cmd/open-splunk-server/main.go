@@ -600,6 +600,8 @@ func run() error {
 		SearchWebSocket:            searchWebSocket,
 		Exports:                    exports,
 		Indexes:                    controlDB,
+		IndexDataDeletionAdmission: controlDB,
+		IndexDataDeletionWaker:     indexDataDeletion,
 		IngestionTokens:            tokenStore,
 		CollectorAdmin:             collectorAdministration,
 		AppAdmin:                   appCatalog,

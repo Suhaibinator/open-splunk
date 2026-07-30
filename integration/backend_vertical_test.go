@@ -340,7 +340,7 @@ func TestBackendVertical(t *testing.T) {
 		administratorToken,
 	))
 
-	createVerticalIndex(
+	createBackendIndex(
 		t,
 		ctx,
 		httpClient,
@@ -571,7 +571,14 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 	}
 }
 
-func waitForHealth(t *testing.T, ctx context.Context, client *http.Client, baseURL string, process *managedProcess) {
+func waitForHealth(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	process *managedProcess,
+	protectedValues ...string,
+) {
 	t.Helper()
 	deadline := time.NewTimer(45 * time.Second)
 	defer deadline.Stop()
@@ -595,48 +602,29 @@ func waitForHealth(t *testing.T, ctx context.Context, client *http.Client, baseU
 			last = err
 		}
 		if process.Exited() {
-			t.Fatalf("server exited before health check: %v\nlogs:\n%s", process.Err(), process.Logs())
+			t.Fatalf(
+				"server exited before health check: %v (last: %s)\nlogs:\n%s",
+				process.Err(),
+				redactForFailure(fmt.Sprint(last), protectedValues...),
+				redactForFailure(process.Logs(), protectedValues...),
+			)
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("wait for server health: %v (last: %v)\nlogs:\n%s", ctx.Err(), last, process.Logs())
+			t.Fatalf(
+				"wait for server health: %v (last: %s)\nlogs:\n%s",
+				ctx.Err(),
+				redactForFailure(fmt.Sprint(last), protectedValues...),
+				redactForFailure(process.Logs(), protectedValues...),
+			)
 		case <-deadline.C:
-			t.Fatalf("wait for server health: timed out (last: %v)\nlogs:\n%s", last, process.Logs())
+			t.Fatalf(
+				"wait for server health: timed out (last: %s)\nlogs:\n%s",
+				redactForFailure(fmt.Sprint(last), protectedValues...),
+				redactForFailure(process.Logs(), protectedValues...),
+			)
 		case <-ticker.C:
 		}
-	}
-}
-
-func createVerticalIndex(
-	t *testing.T,
-	ctx context.Context,
-	client *http.Client,
-	baseURL string,
-	administratorToken string,
-	name string,
-	displayName string,
-) {
-	t.Helper()
-	var created opensplunkv1.CreateIndexResponse
-	postAdministratorProto(
-		t,
-		ctx,
-		client,
-		baseURL+"/api/v1/indexes/create",
-		administratorToken,
-		&opensplunkv1.CreateIndexRequest{
-			Definition: &opensplunkv1.IndexDefinition{
-				Name:            name,
-				DisplayName:     displayName,
-				RetentionPeriod: durationpb.New(24 * time.Hour),
-				IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
-				SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
-			},
-		},
-		&created,
-	)
-	if created.GetIndex().GetVersion() != 1 || created.GetIndex().GetDefinition().GetName() != name {
-		t.Fatalf("created index %q = %+v", name, created.GetIndex())
 	}
 }
 
@@ -701,7 +689,7 @@ func assertCurrentGradeThisMigration(
 	if err := gradethiscorpus.ValidateMigration(profile); err != nil {
 		t.Fatalf("validate current GradeThis migration fixture: %v", err)
 	}
-	createVerticalIndex(
+	createBackendIndex(
 		t,
 		ctx,
 		client,

@@ -68,8 +68,38 @@ OPEN_SPLUNK_BACKEND_INTEGRATION=1 go test ./integration -run '^TestBackendVertic
 Set `OPEN_SPLUNK_BROWSER_EXECUTABLE` to use a specific Chromium-family browser
 instead of Playwright's pinned download.
 
-The default image is `clickhouse/clickhouse-server:26.3.17.4`. Set
-`OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` to exercise another image deliberately.
+The default image is
+`clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49`.
+Set `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` to exercise another digest-pinned image
+deliberately.
+
+## Physical index deletion API lifecycle
+
+`backend_index_data_deletion_test.go` exercises administrator `DELETE_DATA`
+admission through the compiled server and its real SQLite/ClickHouse
+dependencies. It rejects malformed, unauthorized, missing, stale, active, and
+misconfirmed requests without durable or physical effects; then issues 16
+concurrent exact admissions and requires one stable operation and one
+correlated ClickHouse mutation.
+
+The test uses `SYSTEM STOP MERGES` to hold that mutation deterministically,
+hard-kills the server, reopens SQLite to prove the pending operation and
+mutation attempt are durable, restarts the server, and retries through the
+normalized name selector. After merges resume, only the trusted tenant/index
+rows disappear: same-name rows for a foreign tenant and neighboring-index rows
+for the trusted tenant survive. A terminal hard stop followed by repeated
+SQLite reopen verifies the immutable completion audit, consumed work records,
+retained deleting generation, tombstone, and permanent name reservation.
+Stable operation-ID replay is intentionally bounded to the outstanding
+operation: once terminal completion hides the catalog entry, the exact same
+HTTP request returns `404 Not Found`.
+
+The ClickHouse image must include an exact `@sha256:` digest:
+
+```sh
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+  go test ./integration -run '^TestBackendIndexDataDeletionLifecycle$' -count=1 -v
+```
 
 ## Fixed-result browser rendering
 

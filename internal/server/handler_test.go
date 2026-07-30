@@ -1318,11 +1318,33 @@ func testUI() fs.FS {
 
 func postProto(t *testing.T, handler http.Handler, path string, message proto.Message) *httptest.ResponseRecorder {
 	t.Helper()
+	return postProtoContext(
+		t,
+		context.Background(),
+		handler,
+		path,
+		message,
+	)
+}
+
+func postProtoContext(
+	t *testing.T,
+	ctx context.Context,
+	handler http.Handler,
+	path string,
+	message proto.Message,
+) *httptest.ResponseRecorder {
+	t.Helper()
 	payload, err := proto.Marshal(message)
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, bytes.NewReader(payload))
+	request := httptest.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		path,
+		bytes.NewReader(payload),
+	)
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

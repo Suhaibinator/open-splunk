@@ -22,7 +22,9 @@ import (
 	"testing"
 	"time"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 func TestMain(m *testing.M) {
@@ -84,13 +86,65 @@ func postProtoRequestWithBearer(
 	bearerToken string,
 	input, output proto.Message,
 ) ([]byte, error) {
+	response, err := performProtoRequestWithBearer(
+		ctx,
+		client,
+		url,
+		bearerToken,
+		input,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if response.statusCode != http.StatusOK {
+		return nil, fmt.Errorf(
+			"POST %s status = %d, body = %q",
+			url,
+			response.statusCode,
+			response.body,
+		)
+	}
+	if response.contentType != "application/x-protobuf" {
+		return nil, fmt.Errorf(
+			"POST %s content type = %q",
+			url,
+			response.contentType,
+		)
+	}
+	if err := proto.Unmarshal(response.body, output); err != nil {
+		return nil, fmt.Errorf("decode POST %s: %w", url, err)
+	}
+	return response.body, nil
+}
+
+type protoHTTPResponse struct {
+	statusCode  int
+	contentType string
+	body        []byte
+}
+
+func performProtoRequestWithBearer(
+	ctx context.Context,
+	client *http.Client,
+	url string,
+	bearerToken string,
+	input proto.Message,
+) (protoHTTPResponse, error) {
 	payload, err := proto.Marshal(input)
 	if err != nil {
-		return nil, fmt.Errorf("encode POST %s: %w", url, err)
+		return protoHTTPResponse{}, fmt.Errorf(
+			"encode POST %s: %w",
+			url,
+			err,
+		)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
-		return nil, fmt.Errorf("create POST %s: %w", url, err)
+		return protoHTTPResponse{}, fmt.Errorf(
+			"create POST %s: %w",
+			url,
+			err,
+		)
 	}
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	if bearerToken != "" {
@@ -98,23 +152,61 @@ func postProtoRequestWithBearer(
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("POST %s: %w", url, err)
+		return protoHTTPResponse{}, fmt.Errorf("POST %s: %w", url, err)
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
 	if err != nil {
-		return nil, fmt.Errorf("read POST %s: %w", url, err)
+		return protoHTTPResponse{}, fmt.Errorf(
+			"read POST %s: %w",
+			url,
+			err,
+		)
 	}
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("POST %s status = %d, body = %q", url, response.StatusCode, body)
+	return protoHTTPResponse{
+		statusCode:  response.StatusCode,
+		contentType: response.Header.Get("Content-Type"),
+		body:        body,
+	}, nil
+}
+
+func createBackendIndex(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	administratorToken string,
+	name string,
+	displayName string,
+) *opensplunkv1.Index {
+	t.Helper()
+	var created opensplunkv1.CreateIndexResponse
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/indexes/create",
+		administratorToken,
+		&opensplunkv1.CreateIndexRequest{
+			Definition: &opensplunkv1.IndexDefinition{
+				Name:            name,
+				DisplayName:     displayName,
+				RetentionPeriod: durationpb.New(24 * time.Hour),
+				IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+				SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+			},
+		},
+		&created,
+	)
+	index := created.GetIndex()
+	if index.GetIndexId() == "" ||
+		index.GetVersion() != 1 ||
+		index.GetDefinition().GetName() != name ||
+		index.GetState() !=
+			opensplunkv1.IndexState_INDEX_STATE_ACTIVE {
+		t.Fatalf("created index %q = %+v", name, index)
 	}
-	if contentType := response.Header.Get("Content-Type"); contentType != "application/x-protobuf" {
-		return nil, fmt.Errorf("POST %s content type = %q", url, contentType)
-	}
-	if err := proto.Unmarshal(body, output); err != nil {
-		return nil, fmt.Errorf("decode POST %s: %w", url, err)
-	}
-	return body, nil
+	return index
 }
 
 func provisionAdministratorToken(

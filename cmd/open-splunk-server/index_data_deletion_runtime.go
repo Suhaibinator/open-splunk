@@ -27,6 +27,9 @@ type indexDataDeletionRuntime struct {
 	closeOnce sync.Once
 	closeDone chan struct{}
 	closeErr  error
+
+	lifecycleMu sync.RWMutex
+	closing     bool
 }
 
 func newIndexDataDeletionRuntime(
@@ -56,6 +59,21 @@ func newIndexDataDeletionRuntime(
 	}, nil
 }
 
+// Wake requests prompt reconciliation after HTTP has durably admitted new
+// work. The coordinator coalesces requests and remains safe during or after
+// shutdown; its periodic scan is still the recovery backstop.
+func (runtime *indexDataDeletionRuntime) Wake() {
+	if runtime == nil || runtime.coordinator == nil {
+		return
+	}
+	runtime.lifecycleMu.RLock()
+	defer runtime.lifecycleMu.RUnlock()
+	if runtime.closing {
+		return
+	}
+	runtime.coordinator.Wake()
+}
+
 // Close starts one asynchronous shutdown that joins the coordinator before
 // closing the shared Store. A caller deadline remains effective even if a
 // worker or driver close blocks; later callers wait for the same final result.
@@ -69,6 +87,9 @@ func (runtime *indexDataDeletionRuntime) Close(ctx context.Context) error {
 		)
 	}
 	runtime.closeOnce.Do(func() {
+		runtime.lifecycleMu.Lock()
+		runtime.closing = true
+		runtime.lifecycleMu.Unlock()
 		go runtime.close()
 	})
 	select {

@@ -45,6 +45,118 @@ func TestNewIndexDataDeletionRuntimeStartsImmediateRecoveryScan(t *testing.T) {
 	}
 }
 
+func TestIndexDataDeletionRuntimeWakeInterruptsIdleRecovery(
+	t *testing.T,
+) {
+	scanned := make(chan struct{}, 2)
+	controlPlane := &runtimeDeletionControl{
+		next: func(context.Context) (control.IndexDeletionOperation, error) {
+			scanned <- struct{}{}
+			return control.IndexDeletionOperation{}, control.ErrNotFound
+		},
+	}
+	store := &runtimeDeletionStore{}
+	runtime, err := newIndexDataDeletionRuntime(
+		controlPlane,
+		store,
+		"tenant-a",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("newIndexDataDeletionRuntime(): %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := runtime.Close(context.Background()); closeErr != nil {
+			t.Errorf("Close(): %v", closeErr)
+		}
+	})
+
+	select {
+	case <-scanned:
+	case <-time.After(time.Second):
+		t.Fatal("coordinator did not perform its immediate recovery scan")
+	}
+	runtime.Wake()
+	select {
+	case <-scanned:
+	case <-time.After(time.Second):
+		t.Fatal("Wake did not interrupt the idle recovery interval")
+	}
+}
+
+func TestIndexDataDeletionRuntimeRejectsWakeAfterCloseBegins(t *testing.T) {
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseWorker := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	var scanCalls atomic.Int64
+	controlPlane := &runtimeDeletionControl{
+		next: func(context.Context) (control.IndexDeletionOperation, error) {
+			scanCalls.Add(1)
+			close(blocked)
+			<-release
+			return control.IndexDeletionOperation{}, control.ErrNotFound
+		},
+	}
+	store := &runtimeDeletionStore{}
+	runtime, err := newIndexDataDeletionRuntime(
+		controlPlane,
+		store,
+		"tenant-a",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("newIndexDataDeletionRuntime(): %v", err)
+	}
+	t.Cleanup(func() {
+		releaseWorker()
+		if closeErr := runtime.Close(context.Background()); closeErr != nil {
+			t.Errorf("Close(): %v", closeErr)
+		}
+	})
+
+	select {
+	case <-blocked:
+	case <-time.After(time.Second):
+		t.Fatal("initial recovery scan did not block")
+	}
+
+	closeContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	if closeErr := runtime.Close(closeContext); !errors.Is(
+		closeErr,
+		context.Canceled,
+	) {
+		t.Fatalf("Close() error = %v, want context cancellation", closeErr)
+	}
+	var callers sync.WaitGroup
+	for range 64 {
+		callers.Go(runtime.Wake)
+	}
+	callers.Wait()
+	if got := scanCalls.Load(); got != 1 {
+		t.Fatalf("scan calls while closing = %d, want 1", got)
+	}
+
+	releaseWorker()
+	if closeErr := runtime.Close(context.Background()); closeErr != nil {
+		t.Fatalf("Close(after release): %v", closeErr)
+	}
+	runtime.Wake()
+	var nilRuntime *indexDataDeletionRuntime
+	nilRuntime.Wake()
+	if got := scanCalls.Load(); got != 1 {
+		t.Fatalf("scan calls after close = %d, want 1", got)
+	}
+	if got := store.closeCalls.Load(); got != 1 {
+		t.Fatalf("Store.Close calls = %d, want exactly 1", got)
+	}
+}
+
 func TestNewIndexDataDeletionRuntimeForwardsTenantAndErrorReporter(t *testing.T) {
 	reported := make(chan error, 1)
 	controlPlane := &runtimeDeletionControl{

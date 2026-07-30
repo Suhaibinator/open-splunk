@@ -16,10 +16,16 @@ type trackedHandler struct {
 	mu       sync.Mutex
 	stopping bool
 	active   sync.WaitGroup
+
+	drainStarted chan struct{}
+	drainOnce    sync.Once
 }
 
 func newTrackedHandler(next http.Handler) *trackedHandler {
-	return &trackedHandler{next: next}
+	return &trackedHandler{
+		next:         next,
+		drainStarted: make(chan struct{}),
+	}
 }
 
 func (handler *trackedHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -44,6 +50,9 @@ func (handler *trackedHandler) stopAccepting() {
 }
 
 func (handler *trackedHandler) wait() {
+	handler.drainOnce.Do(func() {
+		close(handler.drainStarted)
+	})
 	handler.active.Wait()
 }
 

@@ -103,6 +103,26 @@ type IndexAdministration interface {
 	DeleteIndex(context.Context, string, uint64, string) (string, error)
 }
 
+// IndexDataDeletionAdmission durably admits one physical index deletion in
+// the trusted control plane. The tenant scope must be supplied by the server,
+// never by browser input.
+type IndexDataDeletionAdmission interface {
+	BeginIndexDataDeletion(
+		context.Context,
+		control.IndexDataDeletionScope,
+		string,
+		uint64,
+		string,
+	) (control.IndexDeletionOperation, error)
+}
+
+// IndexDataDeletionWaker requests prompt reconciliation after a durable
+// physical-deletion admission. Implementations must be nonblocking and safe
+// during shutdown; periodic recovery remains the correctness backstop.
+type IndexDataDeletionWaker interface {
+	Wake()
+}
+
 // IngestionTokenAdministration is the secret-safe collector credential
 // surface exposed to the browser API. Only Create returns a one-time Secret;
 // every other method returns metadata which cannot authenticate a collector.
@@ -324,6 +344,8 @@ type Config struct {
 	SearchJobs                 SearchJobs
 	Indexes                    IndexCatalog
 	IndexAdmin                 IndexAdministration
+	IndexDataDeletionAdmission IndexDataDeletionAdmission
+	IndexDataDeletionWaker     IndexDataDeletionWaker
 	IngestionTokens            IngestionTokenAdministration
 	CollectorAdmin             CollectorAdministration
 	AppAdmin                   AppAdministration
@@ -359,40 +381,42 @@ type Config struct {
 }
 
 type apiHandler struct {
-	jobs                      SearchJobs
-	indexes                   IndexCatalog
-	indexAdmin                IndexAdministration
-	ingestionTokens           IngestionTokenAdministration
-	collectorAdmin            CollectorAdministration
-	appAdmin                  AppAdministration
-	appCatalog                AppCatalog
-	savedSearches             SavedSearches
-	searchHistory             SearchHistory
-	exports                   Exports
-	searchTimelines           SearchTimelines
-	searchInspections         SearchInspections
-	searchFields              SearchFields
-	searchSuggestions         SearchSuggestions
-	searchWebSocket           SearchWebSocket
-	browserAuthenticator      auth.BrowserAuthenticator
-	administratorRoutes       map[string]struct{}
-	ownerID                   string
-	tenantID                  string
-	maximumPageSize           uint32
-	maximumTimelineBuckets    uint32
-	maximumFieldPageSize      uint32
-	maximumFieldCatalogFields uint32
-	maximumFieldSummaryValues uint32
-	maximumSuggestions        uint32
-	routeTimeout              time.Duration
-	bootstrap                 BootstrapConfig
-	now                       func() time.Time
-	requestGate               chan struct{}
-	serializationGate         chan struct{}
-	downloadGate              chan struct{}
-	adminCursorKey            [32]byte
-	appCursorKey              []byte
-	browserAllowedHosts       map[string]struct{}
+	jobs                       SearchJobs
+	indexes                    IndexCatalog
+	indexAdmin                 IndexAdministration
+	indexDataDeletionAdmission IndexDataDeletionAdmission
+	indexDataDeletionWaker     IndexDataDeletionWaker
+	ingestionTokens            IngestionTokenAdministration
+	collectorAdmin             CollectorAdministration
+	appAdmin                   AppAdministration
+	appCatalog                 AppCatalog
+	savedSearches              SavedSearches
+	searchHistory              SearchHistory
+	exports                    Exports
+	searchTimelines            SearchTimelines
+	searchInspections          SearchInspections
+	searchFields               SearchFields
+	searchSuggestions          SearchSuggestions
+	searchWebSocket            SearchWebSocket
+	browserAuthenticator       auth.BrowserAuthenticator
+	administratorRoutes        map[string]struct{}
+	ownerID                    string
+	tenantID                   string
+	maximumPageSize            uint32
+	maximumTimelineBuckets     uint32
+	maximumFieldPageSize       uint32
+	maximumFieldCatalogFields  uint32
+	maximumFieldSummaryValues  uint32
+	maximumSuggestions         uint32
+	routeTimeout               time.Duration
+	bootstrap                  BootstrapConfig
+	now                        func() time.Time
+	requestGate                chan struct{}
+	serializationGate          chan struct{}
+	downloadGate               chan struct{}
+	adminCursorKey             [32]byte
+	appCursorKey               []byte
+	browserAllowedHosts        map[string]struct{}
 }
 
 // NewHandler constructs the complete HTTP handler. API paths are dispatched
@@ -412,6 +436,25 @@ func NewHandler(config Config) (*Handler, error) {
 		} else {
 			indexAdmin = nil
 		}
+	}
+	indexDataDeletionAdmission := config.IndexDataDeletionAdmission
+	if isNilDependency(indexDataDeletionAdmission) {
+		indexDataDeletionAdmission = nil
+	}
+	indexDataDeletionWaker := config.IndexDataDeletionWaker
+	if isNilDependency(indexDataDeletionWaker) {
+		indexDataDeletionWaker = nil
+	}
+	if (indexDataDeletionAdmission == nil) !=
+		(indexDataDeletionWaker == nil) {
+		return nil, errors.New(
+			"create server handler: index data deletion admission and waker must be configured together",
+		)
+	}
+	if indexDataDeletionAdmission != nil && indexAdmin == nil {
+		return nil, errors.New(
+			"create server handler: index data deletion requires index administration",
+		)
 	}
 	ingestionTokens := config.IngestionTokens
 	if isNilDependency(ingestionTokens) {
@@ -637,39 +680,41 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 
 	api := &apiHandler{
-		jobs:                      config.SearchJobs,
-		indexes:                   config.Indexes,
-		indexAdmin:                indexAdmin,
-		ingestionTokens:           ingestionTokens,
-		collectorAdmin:            collectorAdmin,
-		appAdmin:                  appAdmin,
-		appCatalog:                appCatalog,
-		savedSearches:             config.SavedSearches,
-		searchHistory:             searchHistoryService,
-		exports:                   exportService,
-		searchTimelines:           timelineService,
-		searchInspections:         inspectionService,
-		searchFields:              fieldService,
-		searchSuggestions:         suggestionService,
-		searchWebSocket:           searchWebSocket,
-		browserAuthenticator:      browserAuthenticator,
-		ownerID:                   ownerID,
-		tenantID:                  tenantID,
-		maximumPageSize:           pageSize,
-		maximumTimelineBuckets:    maximumTimelineBuckets,
-		maximumFieldPageSize:      maximumFieldPageSize,
-		maximumFieldCatalogFields: maximumFieldCatalogFields,
-		maximumFieldSummaryValues: maximumFieldSummaryValues,
-		maximumSuggestions:        maximumSuggestions,
-		routeTimeout:              routeTimeout,
-		bootstrap:                 bootstrap,
-		now:                       now,
-		requestGate:               make(chan struct{}, concurrentRequests),
-		serializationGate:         make(chan struct{}, concurrentResponses),
-		downloadGate:              make(chan struct{}, concurrentDownloads),
-		adminCursorKey:            adminCursorKey,
-		appCursorKey:              appCursorKey,
-		browserAllowedHosts:       browserAllowedHosts,
+		jobs:                       config.SearchJobs,
+		indexes:                    config.Indexes,
+		indexAdmin:                 indexAdmin,
+		indexDataDeletionAdmission: indexDataDeletionAdmission,
+		indexDataDeletionWaker:     indexDataDeletionWaker,
+		ingestionTokens:            ingestionTokens,
+		collectorAdmin:             collectorAdmin,
+		appAdmin:                   appAdmin,
+		appCatalog:                 appCatalog,
+		savedSearches:              config.SavedSearches,
+		searchHistory:              searchHistoryService,
+		exports:                    exportService,
+		searchTimelines:            timelineService,
+		searchInspections:          inspectionService,
+		searchFields:               fieldService,
+		searchSuggestions:          suggestionService,
+		searchWebSocket:            searchWebSocket,
+		browserAuthenticator:       browserAuthenticator,
+		ownerID:                    ownerID,
+		tenantID:                   tenantID,
+		maximumPageSize:            pageSize,
+		maximumTimelineBuckets:     maximumTimelineBuckets,
+		maximumFieldPageSize:       maximumFieldPageSize,
+		maximumFieldCatalogFields:  maximumFieldCatalogFields,
+		maximumFieldSummaryValues:  maximumFieldSummaryValues,
+		maximumSuggestions:         maximumSuggestions,
+		routeTimeout:               routeTimeout,
+		bootstrap:                  bootstrap,
+		now:                        now,
+		requestGate:                make(chan struct{}, concurrentRequests),
+		serializationGate:          make(chan struct{}, concurrentResponses),
+		downloadGate:               make(chan struct{}, concurrentDownloads),
+		adminCursorKey:             adminCursorKey,
+		appCursorKey:               appCursorKey,
+		browserAllowedHosts:        browserAllowedHosts,
 	}
 	apiRouter := api.newRouter(requestBytes, routeTimeout)
 	apiRoutes := postAPIRoutes(

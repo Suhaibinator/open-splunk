@@ -29,6 +29,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -442,10 +443,20 @@ func (handler *apiHandler) deleteIndex(request *http.Request, input *opensplunkv
 	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
 		return nil, badRequestError(err.Error())
 	}
+	deleteData := false
 	switch input.GetDataDeletionMode() {
 	case opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA:
 	case opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_DELETE_DATA:
-		return nil, badRequestError("physical index data deletion is not available")
+		if handler.indexDataDeletionAdmission == nil ||
+			handler.indexDataDeletionWaker == nil {
+			return nil, badRequestError(
+				"physical index data deletion is not available",
+			)
+		}
+		if input.GetExpectedVersion() == math.MaxInt64 {
+			return nil, badRequestError("expected version is invalid")
+		}
+		deleteData = true
 	default:
 		return nil, badRequestError("index data deletion mode is invalid")
 	}
@@ -461,8 +472,62 @@ func (handler *apiHandler) deleteIndex(request *http.Request, input *opensplunkv
 	if _, err := indexToProto(current); err != nil {
 		return nil, internalError()
 	}
-	if current.Version != input.GetExpectedVersion() || current.State != control.IndexStateArchived {
-		return nil, router.NewHTTPError(http.StatusConflict, "index version or state conflict")
+	if deleteData {
+		expectedVersion := input.GetExpectedVersion()
+		freshAdmission := current.Version == expectedVersion &&
+			current.State == control.IndexStateArchived
+		exactRetry := current.Version == expectedVersion+1 &&
+			current.State == control.IndexStateDeleting
+		if !freshAdmission && !exactRetry {
+			return nil, router.NewHTTPError(
+				http.StatusConflict,
+				"index version or state conflict",
+			)
+		}
+		if current.Definition.Name != confirmation {
+			return nil, badRequestError(
+				"index delete confirmation is invalid",
+			)
+		}
+		operation, err := handler.indexDataDeletionAdmission.
+			BeginIndexDataDeletion(
+				request.Context(),
+				control.IndexDataDeletionScope{
+					TenantID: handler.tenantID,
+				},
+				current.ID,
+				expectedVersion,
+				confirmation,
+			)
+		if err := mapAdministrativeCallError(
+			request.Context(),
+			err,
+			"index",
+		); err != nil {
+			return nil, err
+		}
+		handler.indexDataDeletionWaker.Wake()
+		if !validIndexDeletionAdmission(
+			operation,
+			handler.tenantID,
+			current.ID,
+			confirmation,
+			expectedVersion,
+		) {
+			return nil, internalError()
+		}
+		operationID := strings.Clone(operation.ID)
+		return &opensplunkv1.DeleteIndexResponse{
+			IndexId:             strings.Clone(current.ID),
+			DeletionOperationId: &operationID,
+		}, nil
+	}
+	if current.Version != input.GetExpectedVersion() ||
+		current.State != control.IndexStateArchived {
+		return nil, router.NewHTTPError(
+			http.StatusConflict,
+			"index version or state conflict",
+		)
 	}
 	if current.Definition.Name != confirmation {
 		return nil, badRequestError("index delete confirmation is invalid")
@@ -480,6 +545,31 @@ func (handler *apiHandler) deleteIndex(request *http.Request, input *opensplunkv
 		return nil, internalError()
 	}
 	return &opensplunkv1.DeleteIndexResponse{IndexId: strings.Clone(deletedID)}, nil
+}
+
+func validIndexDeletionAdmission(
+	operation control.IndexDeletionOperation,
+	tenantID string,
+	indexID string,
+	indexName string,
+	archivedVersion uint64,
+) bool {
+	createdAtMicroseconds := operation.CreatedAt.UnixMicro()
+	if createdAtMicroseconds <= 0 ||
+		!operation.CreatedAt.Equal(
+			time.UnixMicro(createdAtMicroseconds).UTC(),
+		) {
+		return false
+	}
+	if _, err := validTimestamp(operation.CreatedAt); err != nil {
+		return false
+	}
+	return protocolid.Valid(operation.ID) &&
+		operation.TenantID == tenantID &&
+		operation.IndexID == indexID &&
+		operation.IndexName == indexName &&
+		operation.ArchivedVersion == archivedVersion &&
+		operation.DeletingVersion == archivedVersion+1
 }
 
 func (handler *apiHandler) createIngestionToken(request *http.Request, input *opensplunkv1.CreateIngestionTokenRequest) (*opensplunkv1.CreateIngestionTokenResponse, error) {

@@ -314,7 +314,7 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	waitForHealth(t, ctx, httpClient, baseURL, serverProcess)
 
-	createVerticalIndex(
+	createBackendIndex(
 		t,
 		ctx,
 		httpClient,

@@ -62,6 +62,116 @@ func TestTrackedHandlerRejectsNewWorkAndWaitsForActiveWork(t *testing.T) {
 	<-waitDone
 }
 
+func TestShutdownDrainsDeletionAdmissionWakeBeforeRuntimeClose(t *testing.T) {
+	t.Parallel()
+
+	wakeEntered := make(chan struct{})
+	releaseWake := make(chan struct{})
+	wakeReturned := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAdmission := func() {
+		releaseOnce.Do(func() {
+			close(releaseWake)
+		})
+	}
+	store := &runtimeDeletionStore{
+		close: func() error {
+			select {
+			case <-wakeReturned:
+				return nil
+			default:
+				return errors.New(
+					"deletion Store closed before admitted request returned from Wake",
+				)
+			}
+		},
+	}
+	runtime, err := newIndexDataDeletionRuntime(
+		&runtimeDeletionControl{},
+		store,
+		"tenant-a",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("newIndexDataDeletionRuntime(): %v", err)
+	}
+	t.Cleanup(func() {
+		closeErr := runtime.Close(context.Background())
+		if closeErr != nil {
+			t.Errorf("Close(): %v", closeErr)
+		}
+	})
+	t.Cleanup(releaseAdmission)
+	tracked := newTrackedHandler(http.HandlerFunc(
+		func(http.ResponseWriter, *http.Request) {
+			close(wakeEntered)
+			<-releaseWake
+			runtime.Wake()
+			close(wakeReturned)
+		},
+	))
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		tracked.ServeHTTP(
+			httptest.NewRecorder(),
+			httptest.NewRequestWithContext(
+				context.Background(),
+				http.MethodPost,
+				"/api/v1/indexes/delete",
+				nil,
+			),
+		)
+	}()
+	select {
+	case <-wakeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("deletion admission handler did not reach postcommit Wake")
+	}
+
+	lifecycleDone := make(chan error, 1)
+	shutdownServer := &immediateShutdownServer{}
+	go func() {
+		shutdownErr := shutdownHTTPServer(
+			shutdownServer,
+			tracked,
+			&fakeWebSocketShutdown{},
+			time.Second,
+		)
+		if shutdownErr != nil {
+			lifecycleDone <- shutdownErr
+			return
+		}
+		lifecycleDone <- runtime.Close(context.Background())
+	}()
+	select {
+	case <-tracked.drainStarted:
+	case <-time.After(time.Second):
+		t.Fatal("HTTP shutdown did not reach the active-request drain")
+	}
+	if calls := store.closeCalls.Load(); calls != 0 {
+		t.Fatalf("Store.Close calls during active admission = %d, want 0", calls)
+	}
+
+	releaseAdmission()
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("deletion admission handler did not return")
+	}
+	select {
+	case lifecycleErr := <-lifecycleDone:
+		if lifecycleErr != nil {
+			t.Fatalf("shutdown lifecycle: %v", lifecycleErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown lifecycle did not close deletion runtime")
+	}
+	if calls := store.closeCalls.Load(); calls != 1 {
+		t.Fatalf("Store.Close calls after request drain = %d, want 1", calls)
+	}
+}
+
 func TestShutdownHTTPServerForceClosesThenWaitsForHandlers(t *testing.T) {
 	t.Parallel()
 	entered := make(chan struct{})
