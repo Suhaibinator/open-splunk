@@ -7,7 +7,148 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded page-batched index list statistics
+## Latest checkpoint: bounded administrator index field catalog
+
+Date: 2026-07-30
+
+Committed and pushed implementation checkpoint:
+
+- `6668cd6` — administrator-only index field discovery, GORM-backed selector
+  resolution, immutable no-job analysis snapshots, native ClickHouse
+  profiling, bounded cache/cursors, and unit/live/vertical coverage.
+
+This test-first unit implements
+`POST /api/v1/indexes/fields/list` without creating a search job or accepting
+caller-written SPL:
+
+1. Browser authentication and administrator authorization complete before
+   request-body decoding, GORM access, snapshotting, or ClickHouse work.
+   Unauthorized, non-administrator, and cross-tenant callers cannot use body
+   parsing or dependencies as an oracle.
+2. Every request resolves its ID or canonical-name selector through the
+   existing GORM/SQLite index catalog. The stable ID, canonical name, and
+   current version become trusted service inputs. Search-disabled,
+   `ARCHIVED`, and outstanding `DELETING` records remain inspectable, while a
+   terminal tombstone returns `404` before analysis.
+3. `time_range`, `earliest`, and `latest` are required. Absolute or relative
+   intent is resolved once for an initial request. The service then captures
+   one committed visibility cutoff followed by one canonical UTC clock anchor
+   used identically for `SearchStart` and `IndexTimeCutoff`.
+4. The service constructs an empty-AST raw-event plan from the trusted tenant,
+   one resolved canonical index, absolute half-open event-time interval, and
+   immutable snapshot. It rejects any planner output other than exactly one
+   scope-preserving `Scan`; browser input cannot inject SPL or widen tenant or
+   index scope.
+5. ClickHouse compilation and execution stay on the existing native field
+   catalog path, not GORM. The parameterized scan enforces
+   `tenant_id/index_name`, `event_time` in `[earliest, latest)`,
+   `index_time <= snapshot_anchor`, `expires_at > snapshot_anchor`, and
+   `visibility_seq <= visibility_cutoff`.
+6. The native executor buffers and validates the complete bytewise-sorted
+   catalog before publishing anything. Metadata version, normalized names,
+   durable observed types, total/present/null/missing count invariants, the
+   header, row ordering, result schema, and overflow sentinel all fail closed.
+   Known canonical fields remain visible with zero counts for an empty index.
+7. Catalogs admit at most 10,000 profiles and request one extra ordered group
+   as a truncation sentinel. A query is capped at 15 seconds, 128 MiB memory,
+   five million source rows, 1 GiB source bytes, 10,001 groups, two threads,
+   32 MiB result data, and the existing bounded query/subquery sizes. Overflow
+   modes throw, materialized CTE and short-circuit behavior are required, and
+   async insertion plus ClickHouse query caching are explicitly disabled.
+8. Index and completed-search catalogs share one `FieldService` lifecycle,
+   fail-fast four-slot computation gate, coalescing, and bounded LRU while
+   retaining explicit cache and cursor domains. The default catalog cache is
+   128 entries and 64 MiB with a five-minute absolute TTL.
+9. A miss captures and executes one immutable catalog. Continuations perform
+   neither snapshot nor native work and require the exact live cache
+   generation. Their domain-separated HMAC cursors bind service instance,
+   caller, index ID/name/version, original time intent, snapshot, filter,
+   generation, exact filtered total, offset, and scan position.
+10. An equivalent ID/name selector and a different valid page size may
+    continue the same catalog. A caller, filter, intent, version, snapshot,
+    restart, eviction, or expiry change fails closed. Authenticated scan
+    positions make all filtered continuation pages together linear in the
+    catalog rather than repeatedly rescanning prefixes.
+11. Field profiles expose exact presence, explicit-null, and missing counts
+    plus the complete sorted observed-type set. `selected` and `interesting`
+    reuse the completed-search rules. Index catalogs deliberately do not
+    calculate distinct counts; the HTTP boundary rejects even otherwise-valid
+    distinct data from a regressed or alternate service implementation.
+12. Native work, snapshotting, coalesced waits, and cache access occur before
+    the global large-response permit. The handler acquires that permit only
+    while validating and serializing the bounded page, enforces an independent
+    32 MiB protobuf ceiling, releases the permit on every malformed response,
+    and sanitizes all dependency and compiler details.
+13. Production wires the same field service to both completed-search and
+    administrator index catalog routes, with the runtime snapshotter supplied
+    explicitly. The frontend route map and protobuf contract comments now
+    advertise the endpoint and its required-time/no-distinct semantics.
+14. GORM remains control-plane-only. ClickHouse field reads use the native
+    driver, existing migration `0003` already contains the required metadata,
+    and the existing event-table `SELECT` grant is sufficient. No migration or
+    grant was added.
+15. The digest-pinned native fixture proves tenant, index, earliest, exclusive
+    latest, index-time, expiry-equality, and visibility isolation with poison
+    rows. The real backend vertical authenticates the production route, pages
+    from ID to an equivalent name selector with a changed page size, and
+    verifies exact profiles against direct ClickHouse counts.
+
+Validation on implementation commit `6668cd6`:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/queryexec ./internal/searchanalysis \
+  ./internal/server ./cmd/open-splunk-server ./integration -count=1
+go vet ./...
+go build ./...
+npm run typecheck
+make proto-lint
+BUF_CACHE_DIR="$PWD/.cache/buf" npx --no-install buf breaking \
+  --against '.git#branch=main'
+
+# Executed with this already-cached binary reporting exactly v2.12.2.
+INDEX_FIELDS_LINTER=/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint
+GOTOOLCHAIN=local GOPROXY=off "$INDEX_FIELDS_LINTER" \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$/field_catalog_compiler_and_executor' \
+  -count=1 -timeout=10m -v
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./integration -run '^TestBackendVertical$' \
+  -count=1 -timeout=10m -v
+
+git show --check --oneline 6668cd6
+```
+
+The final repository suite, affected race suite, vet/build, TypeScript,
+protobuf format/lint/breaking checks, and exact cached v2.12.2 linter all
+passed; lint reported `0 issues`. Both final digest-pinned live suites passed
+and cleaned up their test-owned Docker resources.
+
+Independent native, route/security, and state/cursor adversarial reviews drove
+query-cache hardening, an index-specific no-distinct transport invariant, and
+GORM lifecycle coverage for disabled, archived, deleting, and tombstoned
+records. Post-fix reviews found no remaining actionable authentication,
+identity, snapshot, cursor, cache, lifecycle, predicate, resource-bound,
+response-contract, production-wiring, or GORM/native-boundary defect.
+
+Explicit pause point:
+
+1. Administrator index field discovery is implemented, committed,
+   digest-pinned live-proven, and pushed with this handoff.
+2. The endpoint uses one trusted GORM-resolved index and one immutable native
+   ClickHouse catalog; no search job, caller SPL, migration, or new grant is
+   involved.
+3. GORM remains limited to SQLite control-plane work; ClickHouse remains
+   native.
+4. Pause here until the user gives further instructions.
+
+## Previous checkpoint: bounded page-batched index list statistics
 
 Date: 2026-07-30
 
