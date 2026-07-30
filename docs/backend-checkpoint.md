@@ -7,7 +7,151 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded administrator index statistics
+## Latest checkpoint: bounded page-batched index list statistics
+
+Date: 2026-07-30
+
+Committed and pushed implementation checkpoint:
+
+- `fc3e6e3` — page-local `include_stats` enrichment, one grouped native
+  ClickHouse read plus at most one shared part sample, cursor-mode binding,
+  two-phase response admission, and unit/live/vertical coverage.
+
+This test-first unit enables `ListIndexesRequest.include_stats` without
+pretending that page-local enrichment can safely implement global statistics
+ordering:
+
+1. GORM/SQLite remains the catalog authority. The existing control-plane list,
+   state/text filtering, name/created/updated ordering, catalog snapshot,
+   cursor validation, and page selection all complete before a native
+   statistics request is constructed.
+2. The existing serialization permit still admission-bounds concurrent
+   pre-existing full-catalog GORM materialization and in-memory
+   filtering/sort. Only the selected page is cloned, with an endpoint maximum
+   of 64 records; the full filtered backing slice is dropped and the permit is
+   released before ClickHouse or visibility-snapshot work begins.
+3. An empty selected page performs no visibility, clock, or native work.
+   A nonempty enriched page captures exactly one committed visibility cutoff,
+   then exactly one UTC millisecond `measured_at`, and sends the trusted
+   deployment tenant plus resolved immutable index IDs/canonical names.
+4. The native reader validates at most 64 unique protocol IDs and canonical
+   names before querying. An empty native batch is a non-nil empty result with
+   zero queries; an all-empty page uses one grouped logical query; a page with
+   any events uses that query plus exactly one `system.parts` aggregate.
+5. The grouped query is parameterized and applies the same
+   `tenant_id/index_name`, `expires_at > measured_at`,
+   `index_time <= measured_at`, and
+   `visibility_seq <= visibility_cutoff` predicates as the single-index
+   endpoint. ClickHouse groups that are absent become explicit exact empty
+   results, and output is restored to request/catalog page order.
+6. Unknown, duplicate, zero-count, malformed, or out-of-range ClickHouse
+   groups fail closed. Row scan, iteration, `Err`, and `Close` failures are
+   checked, cancellation wins over driver errors, and every successful query
+   handle is closed exactly once.
+7. Every nonempty page result uses one common active-table rows/bytes sample.
+   The logical count total is overflow-checked and must not exceed the
+   physical row sample before each per-index proportional ceiling estimate is
+   computed. Empty indexes retain zero storage and omitted bounds.
+8. Single and batch statistics share the same one-slot fail-fast operation
+   gate and ten-second overall deadline, so the administrator surface cannot
+   occupy multiple shared runtime sessions or queue behind a saturated
+   statistics read.
+9. The grouped query retains the single-reader memory, rows/bytes-read,
+   result-byte, thread, cache, async-insert, subquery, and overflow bounds. It
+   additionally limits groups and result rows to 64. A batch-only 64 KiB
+   `max_query_size` safely covers clickhouse-go's client-expanded 64
+   maximum-length index parameters; the single-index limit remains 16 KiB.
+10. After native work, the handler reacquires a serialization permit before
+    validating and attaching output. Results must contain exactly one unique
+    echo for every selected index and the exact trusted
+    tenant/name/ID/cutoff/time scope. Existing empty/nonempty shape,
+    timestamp, storage, and response-size validation remains authoritative.
+11. The signed index cursor binds whether statistics were requested, so plain
+    and enriched tokens cannot cross modes. Plain index cursors retain their
+    legacy fingerprint bytes, and the generic token/app fingerprint is
+    unchanged; only `include_stats=true` uses a domain-separated index-list
+    derivation.
+12. Statistics on one response page share one measurement instant and cutoff.
+    A continuation page is measured independently because the protobuf
+    contract exposes `measured_at` per item rather than one persistent
+    list-wide statistics snapshot. Catalog ordering remains stable through
+    the existing ID/version snapshot.
+13. Missing/typed-nil/partially paired statistics dependencies fail closed.
+    Dependency and cancellation failures remain sanitized as `503`/`408`;
+    native work never holds the serialization permit, and saturation before
+    catalog access prevents another full-catalog read from starting.
+14. The GORM boundary did not move into ClickHouse: SQLite performs catalog
+    work only, while event and `system.parts` reads remain native. No schema,
+    migration, or runtime-grant change was required.
+15. `INDEX_SORT_BY_EVENT_COUNT` and `INDEX_SORT_BY_STORAGE_BYTES` remain
+    rejected. Correct global ordering must measure every filtered catalog
+    candidate and freeze that ordering across ingestion, TTL/retention
+    removal, and changing part metadata. The current catalog has no
+    product-owned row cap, so this requires a separate catalog-admission or
+    immutable-snapshot design.
+16. Native integration covers two nonempty indexes and one explicit empty
+    index in request order, including tenant, index, retention, index-time, and
+    visibility isolation plus a shared storage sample. The real backend
+    vertical now authenticates `POST /api/v1/indexes/list` with
+    `include_stats=true` through production wiring and verifies the returned
+    page item against direct ClickHouse reads at its own measurement instant.
+17. The existing CI opt-in regex already selects the extended native reader
+    and backend vertical tests, so no duplicate container gate was added.
+
+Validation on implementation commit `fc3e6e3`:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/clickhouse ./internal/server \
+  ./integration ./cmd/open-splunk-server -count=1
+go vet ./...
+go build ./...
+
+# Executed with this already-cached binary reporting exactly v2.12.2.
+INDEX_LIST_STATS_LINTER=/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint
+GOTOOLCHAIN=local GOPROXY=off "$INDEX_LIST_STATS_LINTER" \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse \
+  -run '^TestIndexStatisticsReaderAgainstClickHouse$' \
+  -count=1 -timeout=10m -v
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./integration -run '^TestBackendVertical$' \
+  -count=1 -timeout=10m -v
+
+git show --check --oneline fc3e6e3
+```
+
+The final implementation passed the full repository suite, the affected race
+suite, repository-wide vet/build, and the exact cached v2.12.2 linter with
+`0 issues`. The final digest-pinned native batch reader and backend vertical
+passed in 6.03 and 24.06 seconds respectively.
+
+Independent native, route-contract, efficiency, and end-to-end adversarial
+reviews drove fixes for driver-expanded query size, serialization-gate
+lifetime, unavailable-dependency admission, and unrelated cursor-fingerprint
+compatibility. Post-fix reviews found no remaining diff-scoped route, identity,
+predicate, overflow, cancellation, concurrency, query-count, resource-bound,
+cursor, production-wiring, or GORM/native-boundary defect.
+
+Explicit pause point:
+
+1. Page-batched index-list statistics are implemented, committed, live-proven,
+   and pushed with this handoff.
+2. Native enrichment is strictly bounded to the selected page: one grouped
+   event query plus at most one active-parts query, never N+1.
+3. GORM remains limited to SQLite control-plane work; ClickHouse remains
+   native.
+4. The serialized full-catalog GORM scan remains pre-existing architectural
+   debt; global statistics ordering is unsupported pending bounded catalog
+   admission/database pagination and immutable ordering semantics.
+5. Pause here until the user gives further instructions.
+
+## Previous checkpoint: bounded administrator index statistics
 
 Date: 2026-07-29
 

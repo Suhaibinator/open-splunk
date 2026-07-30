@@ -678,9 +678,41 @@ shared runtime pool and cannot starve ingestion or search.
 Runtime access is limited to the event-table `SELECT` already used by search
 plus column-scoped reads of `database`, `table`, `active`, `rows`, and
 `bytes_on_disk` from `system.parts`; the exact grant surface is checked before
-serving. ClickHouse statistics do not use GORM. Batched list statistics and
-sorting by event count or storage bytes remain deliberately unsupported until
-they receive a separate bounded-query design.
+serving. ClickHouse statistics do not use GORM.
+
+`POST /api/v1/indexes/list` supports page-local statistics enrichment for the
+existing name/created/updated catalog sorts. GORM/SQLite first performs the
+existing catalog load, filtering, deterministic ordering, cursor validation,
+and pagination under the serialized administrative response permit. The
+server then clones only the selected page (at most 64 records), drops the full
+filtered backing slice, releases that permit, and captures one committed
+visibility cutoff followed by one UTC millisecond measurement instant. One
+native grouped event query returns every nonempty page scope; absent groups
+become exact empty results. At most one shared active-parts query then supplies
+the proportional storage basis for every nonempty result, preventing N+1
+behavior and making estimates on the same page comparable.
+
+The batch operation shares the single-index reader's ten-second overall
+deadline and one-slot fail-fast native gate. It bounds scopes, groups, and
+result rows to 64, uses a batch-only 64 KiB expanded-query limit for 64
+maximum-length parameter values, and retains the existing memory, read,
+result-byte, thread, cache, and subquery limits. The handler reacquires the
+serialization permit before validating echoed tenant/index/snapshot/time
+identity, attaching statistics, enforcing the response-size ceiling, and
+transferring ownership to the protobuf codec. Empty catalog pages perform no
+snapshot or ClickHouse work. Continuation pages receive independent
+measurement instants, and the signed cursor binds whether statistics were
+requested while preserving the legacy fingerprint for plain index, token, and
+app lists.
+
+Sorting by event count or storage bytes remains deliberately unsupported.
+Global statistics ordering would require measuring every filtered catalog
+candidate, but the current GORM catalog list has no product-owned row cap and
+is intentionally a serialized full-catalog scan. It would also need an
+immutable bounded ordering snapshot across pages because ingestion, retention,
+TTL deletion, and changing `system.parts` metadata can otherwise cause skips
+or duplicates. Those catalog-admission and snapshot semantics require a
+separate design; page-local statistics do not imply them.
 
 ## ClickHouse event model
 

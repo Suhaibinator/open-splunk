@@ -142,11 +142,35 @@ memory, read, result, thread, query-size, and subquery-depth limits. The
 GORM/SQLite control plane performs only catalog selector resolution; the event
 and part-statistics reads remain native ClickHouse operations.
 
-The existing `ListIndexesRequest.include_stats`,
-`INDEX_SORT_BY_EVENT_COUNT`, and `INDEX_SORT_BY_STORAGE_BYTES` wire fields are
-still rejected. Batched statistics and statistics-based list ordering require
-a separately reviewed bounded query contract and are not implied by this
-single-index route.
+`ListIndexesRequest.include_stats` enriches only the already-filtered,
+metadata-sorted catalog page, whose endpoint maximum is 64 indexes. The
+GORM/SQLite control plane remains responsible for catalog filtering, ordering,
+cursor validation, and pagination. After that page is fixed, the server
+captures one committed visibility cutoff followed by one UTC millisecond
+measurement instant and submits the page's trusted tenant/index scopes to one
+native grouped ClickHouse query. Missing groups become explicit empty
+statistics. If any group is nonempty, one additional `system.parts` aggregate
+provides a common proportional-storage sample for the whole page. The
+operation is therefore zero queries for an empty page, one for an all-empty
+page, and two otherwise; it never issues one query per index.
+
+Every enriched item on one page shares the same measurement instant and
+visibility cutoff. A later continuation page is measured independently because
+the protobuf response carries measurement time per item rather than a
+list-wide immutable statistics snapshot. The signed catalog cursor binds
+`include_stats`, so plain and enriched continuations cannot be replayed across
+modes. Native batching shares the single-index reader's ten-second deadline
+and fail-fast one-slot gate, limits scopes/groups/results to 64, and uses
+explicit read, memory, output, thread, and expanded-query-size bounds. The
+pre-existing full-catalog GORM scan remains serialized and is released before
+native work begins.
+
+`INDEX_SORT_BY_EVENT_COUNT` and `INDEX_SORT_BY_STORAGE_BYTES` remain rejected.
+Correct global statistics ordering would have to measure every filtered
+catalog candidate and preserve that ordering across continuation pages despite
+ingestion, retention, TTL removal, and changing part metadata. It therefore
+requires a separately designed catalog admission limit or immutable bounded
+snapshot, not the page-local enrichment contract.
 
 ### Search validation
 
