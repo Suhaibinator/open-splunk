@@ -7,7 +7,145 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded administrator index field catalog
+## Latest checkpoint: bounded owner-scoped export job listing
+
+Date: 2026-07-30
+
+Committed implementation checkpoint:
+
+- `6803951` — bounded owner-and-tenant export-job listing, authenticated
+  high-water cursors, deterministic scoped indexes, live lifecycle filtering,
+  exact per-request totals, hardened protobuf projection, and unit/vertical
+  coverage.
+
+This test-first unit implements
+`POST /api/v1/search/exports/list`:
+
+1. The route is present only when the export service is enabled, is exact and
+   POST-only, uses the browser API Host/Origin boundary before body decoding,
+   and is represented in the TypeScript protobuf route map. Disabled
+   deployments return `404`; hostile Host/Origin requests never reach the
+   export service.
+2. Manager requests are scoped by trusted tenant and owner. Admission and
+   listing share the same nonempty, canonical, UTF-8, control-free identity
+   rules, including the exact search-job filter. Cross-scope results are
+   non-disclosing, and the server independently rejects any corrupt service
+   projection carrying the wrong scope.
+3. Results use immutable `created_at DESC, export_job_id DESC` ordering.
+   Each scope owns a deterministic treap keyed by those admission fields, so
+   mutation and keyset seek are expected `O(log N)` and ordinary bounded pages
+   scan in chunks without sorting the manager-wide job map.
+4. The authenticated, purpose-separated cursor binds manager epoch, caller
+   scope, canonical state and exact search-job filters, fixed ordering, last
+   key, and the first page's admission high-water mark. Later admissions are
+   excluded even with reversed clocks or reused IDs; deletion of the anchor
+   does not prevent continuation. Tampered, unsigned, cross-manager,
+   cross-purpose, filter-mismatched, and signed future-high-water cursors fail
+   closed.
+5. Page size defaults to and is capped at 15, while tokens are capped at 4
+   KiB. Page size and exact-total inclusion may change on continuation;
+   filters may not. Exact totals count the currently retained matching jobs at
+   or below that traversal's high-water for the individual request that
+   computes them rather than claiming a frozen lifecycle snapshot.
+6. Lifecycle state remains live between calls. A due terminal job is expired
+   before state filtering, while unacknowledged terminal work is not expired.
+   List-triggered expiry invalidates stale grants but preserves an already
+   pinned download lease. Cancellation and shutdown are rechecked after an
+   entry-lock wait before expiry or cloning, so a canceled read cannot mutate a
+   blocked entry or transfer a response.
+7. List concurrency is a fail-fast four-slot manager gate. Saturation returns
+   a classified `429` instead of accumulating waiters that hold every global
+   serialization permit. Only response candidates are deeply detached;
+   sparse exact totals do not clone every retained column slice.
+8. Metadata accounting includes every treap node and a conservative scope-map
+   allowance. Removing the job that supplied a scope key rebinds storage to a
+   retained entry, and cleanup rebuilds the scope map after any scope deletion
+   so Go's high-water buckets cannot survive after their accounting is
+   released. Generation overflow and cleanup remove every job/index/accounting
+   reservation atomically.
+9. `export.ValidPublicJob` is the shared manager/transport contract for hard
+   IDs, limits, columns, options, lifecycle timestamps, canonical failures,
+   and canonical artifact metadata. Byte limits are checked before UTF-8 or
+   control scans, so a corrupt alternate service cannot cause unbounded work.
+   Progress cannot predate creation, start, or finish. Transport clock skew is
+   not treated as corruption; only protobuf timestamp range and internal
+   ordering are enforced.
+10. The handler acquires one shared serialization permit before calling the
+    bounded manager, validates scope, uniqueness, ordering, filters, totals,
+    tokens, and every public-job invariant, and retains that permit through
+    protobuf serialization. The response has an independent 8 MiB ceiling,
+    cancellation suppresses transfer, and dependency or cursor details are
+    never disclosed.
+11. List responses contain detached export definitions, progress, stable
+    failure metadata, and safe artifact metadata only. They never mint,
+    contain, or serialize a download capability. The backend vertical creates
+    and completes exports, retains an existing grant, pages with an exact
+    state/search filter, changes page size on continuation, proves a later
+    export is excluded by the high-water mark, proves a fresh traversal sees
+    it, and checks that response wire bytes do not contain the grant token.
+12. GORM and ClickHouse boundaries are unchanged: this unit adds no migration
+    and no ClickHouse ORM use. GORM remains limited to SQLite control-plane
+    work, while export execution continues through the existing native
+    ClickHouse-backed search snapshot path.
+
+Validation on implementation commit `6803951`:
+
+```sh
+go test ./... -count=1
+go test -race ./internal/export ./internal/server ./integration \
+  ./cmd/open-splunk-server -count=1
+go vet ./...
+go build ./...
+npm run typecheck
+npm run lint
+npm run test:frontend
+make proto
+make proto-lint
+BUF_CACHE_DIR="$PWD/.cache/buf" npx --no-install buf breaking \
+  --against '.git#branch=main'
+
+# Executed with this already-cached binary reporting exactly v2.12.2.
+EXPORT_LIST_LINTER=/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint
+"$EXPORT_LIST_LINTER" run --timeout=10m \
+  --max-issues-per-linter=0 --max-same-issues=0
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./integration -run '^TestBackendVertical$' \
+  -count=1 -timeout=10m -v
+
+git show --check --oneline 6803951
+```
+
+The full repository suite, affected race suite, vet/build, TypeScript
+typecheck/lint, both frontend test groups, protobuf generation/lint/breaking
+checks, and exact cached v2.12.2 linter all passed; lint reported `0 issues`.
+The digest-pinned backend vertical passed and cleaned up its test-owned Docker
+resources.
+
+Independent reuse, quality/correctness, and efficiency reviews drove shared
+public-job and pagination validation, canonical identifier rules, clock-skew
+handling, post-lock cancellation checks, fail-fast list saturation, exact
+scope-map accounting/compaction, byte-first validation, and monotonic progress
+timestamps. Final post-fix reviews found no remaining actionable reuse,
+correctness, concurrency, boundedness, cursor, route, response, or
+manager/transport-contract defect. The package-local search/export treaps and
+cursor wrappers remain intentionally explicit because their private entry
+types, lock invariants, fingerprints, domains, and error mappings differ; the
+common authenticated codec is already shared.
+
+Explicit pause point:
+
+1. Bounded export-job listing is implemented, committed, digest-pinned
+   live-proven, and ready to push with this handoff.
+2. Listing is owner-and-tenant scoped, high-water stable across admissions,
+   lifecycle-live, resource bounded, and incapable of issuing or leaking
+   download capabilities.
+3. GORM remains control-plane-only; ClickHouse remains native.
+4. Pause after pushing this checkpoint until the user gives further
+   instructions.
+
+## Previous checkpoint: bounded administrator index field catalog
 
 Date: 2026-07-30
 
