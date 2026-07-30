@@ -7,7 +7,140 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: atomic GORM physical-deletion terminality
+## Latest checkpoint: serialized physical-deletion coordinator
+
+Date: 2026-07-29
+
+Committed and pushed implementation checkpoint:
+
+- `77dd8f7` — oldest-first physical-deletion coordination, frozen outbox
+  replay, restart-safe mutation recovery, terminal ambiguity resolution, and
+  adversarial SQLite/ClickHouse coverage.
+
+This test-first unit composes the existing GORM control-plane and native
+ClickHouse deletion primitives without wiring the server runtime or enabling
+the `DELETE_DATA` route:
+
+1. `internal/indexes.IndexDataDeletionCoordinator` owns one immediate-start
+   worker. It discovers and caches the oldest outstanding operation, never
+   skips poisoned or pending head-of-line work, periodically rescans SQLite so
+   correctness does not depend on a wake, and moves directly to the next
+   operation only after terminal completion.
+2. Existing mutation attempts are checked against the exact operation identity
+   and configured deployment tenant before any native call.
+   `IndexDataDeletionStatus` polls pending mutation state outside the global
+   write freeze. Missing mutation history yields `Ready`, never completion, and
+   therefore requires a new frozen advancement.
+3. A new attempt follows one callback-scoped order:
+   `WithWritesFrozen` -> `DrainPending` -> resolve the table generation ->
+   atomically ensure the immutable GORM attempt -> construct the native request
+   from that returned attempt -> `AdvanceIndexDataDeletion`. No `ALTER` is
+   possible before the durable attempt exists.
+4. Every existing-attempt advancement also reacquires the freeze and drains the
+   outbox first. Pending advancement releases the freeze promptly. Only
+   `PhysicallyEmpty` paired with a nil error can call
+   `CompleteIndexDataDeletion`, and completion receives the exact frozen
+   callback context and runs before that callback returns.
+5. A precommit terminal error leaves the operation and attempt outstanding. An
+   outcome-ambiguous commit is accepted only when a fresh, worker-owned,
+   close-cancellable audit read returns the exact immutable completion. A
+   missing or mismatched audit backs off and requires another freeze, drain,
+   and zero proof; old physical-absence evidence is never cached.
+6. A concurrent `EnsureIndexDeletionMutationAttempt` not-found result is not
+   silently treated as success. The coordinator re-reads terminal audit state
+   and clears the cached operation only when the logical operation, configured
+   tenant, and exact database/table/UUID just resolved under the freeze all
+   match.
+7. Polling and error retries are bounded independently, error backoff doubles
+   with an overflow-safe cap, and only idle recovery waits are interruptible.
+   `Wake` is a capacity-one nonblocking hint: pending/error wakes stay
+   coalesced rather than draining into a CPU spin. The worker resets backoff
+   after successful progress.
+8. `Close` is idempotent and retryable after a caller deadline. It rejects
+   future wakes, cancels blocked control, status, freeze, drain, advance, and
+   completion work through the owned context, and joins the sole worker.
+   `OnError` is asynchronous, panic-contained, and limited to one live
+   callback; a deliberately blocked callback may outlive `Close` and is
+   documented accordingly.
+9. The digest-pinned composed test runs three process lifetimes over one
+   persistent `control.sqlite`. It first loses a successful `MarkSending`
+   result and retains one ambiguous durable outbox reservation, restarts with
+   an operation but no attempt, proves the coordinator's frozen drain replays
+   that row before the first `ALTER`, reaches physical zero, injects a
+   precommit completion failure, restarts again, and proves a fresh
+   drain/zero-check before a commit-then-EOF converges through immutable audit.
+10. The composed proof spans three target rows across three monthly partitions
+    including the replayed late row, preserves a same-name foreign-tenant row
+    and a same-tenant neighboring-index row, observes exactly one correlated
+    completed ClickHouse mutation through the native reconciliation API,
+    consumes the operation/attempt, creates the tombstone, retains the
+    `DELETING` N+1 catalog row, reserves the name, and recovers the exact
+    terminal audit after the final SQLite restart.
+11. The control plane now exports its validated
+    `IndexDataDeletionCompletionMatchesAttempt` comparator so coordinator and
+    terminal GORM logic share one protocol-identity definition. ClickHouse
+    persistence, mutation submission, and reconciliation remain native and do
+    not use GORM.
+
+Validation on implementation commit `77dd8f7`:
+
+```sh
+go test ./... -count=1
+go test ./internal/indexes ./internal/control -count=10
+go test -race ./internal/indexes ./internal/control -count=1
+go vet ./...
+go build ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/indexes \
+  -run TestIndexDataDeletionCoordinatorAgainstClickHouse -count=1 -v
+git show --check --oneline 77dd8f7
+```
+
+The exact implementation tree passed the full suite, repeated coordinator and
+control-plane tests, race detection, repository-wide vet/build, and pinned
+repository-wide lint with `0 issues`. The approved ClickHouse 26.3.17.4
+digest-pinned three-process crash schedule passed in 6.16 seconds on the final
+reviewed tree. Focused coordinator package coverage is 87.7% of statements.
+
+Independent state-machine, crash, lifecycle, and integration adversaries drove
+the durable-outbox/restart schedule, fresh terminal-audit context, concurrent
+completion target binding, fixed pending/error wake behavior, and invalid-state
+coverage. The simplify pass replaced coupled callback-result booleans with an
+explicit outcome enum, centralized completion identity matching, reused native
+mutation reconciliation in the integration assertion, documented timeout
+semantics, and removed a wake-storm CPU spin. Final state/integration and
+lifecycle/concurrency reviews are clean at staged diff SHA-256
+`b558c22ce087c1988526e8570d0cb5dd694c128122f69fd23c1916f9c1cb7e98`.
+
+Remaining `DELETE_DATA` work:
+
+1. close the pre-attempt tenant-drift gap before activation. The outstanding
+   operation currently has no tenant field, so a changed configured tenant
+   after admission but before attempt creation cannot be inferred safely.
+   Either snapshot tenant atomically in `BeginIndexDataDeletion` or enforce an
+   immutable deployment-tenant binding at startup;
+2. wire exactly one coordinator beside the single production ClickHouse Store,
+   after migrations/table-changing DDL and before request admission, then close
+   the coordinator before the Store/control plane;
+3. enforce the documented restricted runtime DDL principal and exclusive
+   physical table-generation lifecycle; and
+4. after those invariants are in place, enable authenticated `DELETE_DATA`
+   admission and issue the best-effort postcommit wake. The periodic recovery
+   scan remains the correctness fallback.
+
+Explicit pause point:
+
+1. The coordinator, crash-boundary units, and composed digest-pinned
+   SQLite/ClickHouse proof are implemented, validated, committed, and pushed.
+2. Runtime ownership and the authenticated route remain deliberately unwired.
+3. The pre-attempt tenant binding is the next correctness prerequisite; do not
+   enable `DELETE_DATA` before it is durable.
+4. Pause here until the user gives further instructions.
+
+## Previous checkpoint: atomic GORM physical-deletion terminality
 
 Date: 2026-07-29
 
