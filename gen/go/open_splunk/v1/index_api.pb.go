@@ -933,12 +933,25 @@ func (x *GetIndexStatsResponse) GetStats() *IndexStats {
 }
 
 // POST /api/v1/indexes/fields/list
+//
+// This administrator-only operation resolves selector through the current,
+// non-tombstoned GORM control-plane catalog before capturing one immutable
+// native ClickHouse analysis snapshot. It does not require an active or
+// search-enabled index.
 type ListIndexFieldsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Selector      *IndexSelector         `protobuf:"bytes,1,opt,name=selector,proto3" json:"selector,omitempty"`
-	TimeRange     *TimeRangeSpec         `protobuf:"bytes,2,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
-	Page          *PageRequest           `protobuf:"bytes,3,opt,name=page,proto3" json:"page,omitempty"`
-	NameFilter    *string                `protobuf:"bytes,4,opt,name=name_filter,json=nameFilter,proto3,oneof" json:"name_filter,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// selector accepts the stable ID or canonical name of the same current
+	// catalog record.
+	Selector *IndexSelector `protobuf:"bytes,1,opt,name=selector,proto3" json:"selector,omitempty"`
+	// time_range is required, and both earliest and latest must be present.
+	// Relative expressions are resolved once for the initial catalog snapshot.
+	TimeRange *TimeRangeSpec `protobuf:"bytes,2,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
+	// page uses an opaque cursor over that cached snapshot. A continuation may
+	// change page_size but must preserve the selector identity, time intent, and
+	// name_filter that produced it.
+	Page *PageRequest `protobuf:"bytes,3,opt,name=page,proto3" json:"page,omitempty"`
+	// name_filter is an optional case-sensitive substring match on field names.
+	NameFilter    *string `protobuf:"bytes,4,opt,name=name_filter,json=nameFilter,proto3,oneof" json:"name_filter,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1001,10 +1014,14 @@ func (x *ListIndexFieldsRequest) GetNameFilter() string {
 	return ""
 }
 
+// Fields are exact, bytewise-name-sorted profiles from one bounded snapshot.
+// This catalog does not populate FieldProfile.distinct_count or claim a
+// distinct-count approximation.
 type ListIndexFieldsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Fields        []*FieldProfile        `protobuf:"bytes,1,rep,name=fields,proto3" json:"fields,omitempty"`
-	Page          *PageResponse          `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Fields []*FieldProfile        `protobuf:"bytes,1,rep,name=fields,proto3" json:"fields,omitempty"`
+	// total_size is exact when the request asks for it.
+	Page          *PageResponse `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

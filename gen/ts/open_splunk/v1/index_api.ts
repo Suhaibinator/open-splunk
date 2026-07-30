@@ -206,16 +206,49 @@ export interface GetIndexStatsResponse {
   stats: IndexStats | undefined;
 }
 
-/** POST /api/v1/indexes/fields/list */
+/**
+ * POST /api/v1/indexes/fields/list
+ *
+ * This administrator-only operation resolves selector through the current,
+ * non-tombstoned GORM control-plane catalog before capturing one immutable
+ * native ClickHouse analysis snapshot. It does not require an active or
+ * search-enabled index.
+ */
 export interface ListIndexFieldsRequest {
-  selector: IndexSelector | undefined;
-  timeRange: TimeRangeSpec | undefined;
-  page: PageRequest | undefined;
+  /**
+   * selector accepts the stable ID or canonical name of the same current
+   * catalog record.
+   */
+  selector:
+    | IndexSelector
+    | undefined;
+  /**
+   * time_range is required, and both earliest and latest must be present.
+   * Relative expressions are resolved once for the initial catalog snapshot.
+   */
+  timeRange:
+    | TimeRangeSpec
+    | undefined;
+  /**
+   * page uses an opaque cursor over that cached snapshot. A continuation may
+   * change page_size but must preserve the selector identity, time intent, and
+   * name_filter that produced it.
+   */
+  page:
+    | PageRequest
+    | undefined;
+  /** name_filter is an optional case-sensitive substring match on field names. */
   nameFilter?: string | undefined;
 }
 
+/**
+ * Fields are exact, bytewise-name-sorted profiles from one bounded snapshot.
+ * This catalog does not populate FieldProfile.distinct_count or claim a
+ * distinct-count approximation.
+ */
 export interface ListIndexFieldsResponse {
   fields: FieldProfile[];
+  /** total_size is exact when the request asks for it. */
   page: PageResponse | undefined;
 }
 

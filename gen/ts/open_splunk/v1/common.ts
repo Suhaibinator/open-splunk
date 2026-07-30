@@ -173,7 +173,8 @@ export interface PageResponse {
 /**
  * TimeRangeSpec preserves user-entered SPL time expressions. earliest and
  * latest may be absolute timestamps or relative expressions such as -24h and
- * now. The server default applies when a field is absent.
+ * now. Omission semantics belong to the consuming endpoint; in particular,
+ * /indexes/fields/list requires both bounds.
  */
 export interface TimeRangeSpec {
   earliest?: string | undefined;

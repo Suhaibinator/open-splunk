@@ -193,6 +193,11 @@ export const exportRoutes = {
     ExportApi.GetExportJobRequest,
     ExportApi.GetExportJobResponse,
   ),
+  list: defineProtobufRoute(
+    "/api/v1/search/exports/list",
+    ExportApi.ListExportJobsRequest,
+    ExportApi.ListExportJobsResponse,
+  ),
   cancel: defineProtobufRoute(
     "/api/v1/search/exports/cancel",
     ExportApi.CancelExportJobRequest,

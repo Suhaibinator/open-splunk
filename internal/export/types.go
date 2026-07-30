@@ -51,6 +51,18 @@ var (
 	// ErrArtifactUnavailable is a path-free storage failure returned when an
 	// artifact cannot be securely opened or read.
 	ErrArtifactUnavailable = errors.New("export artifact is unavailable")
+	// ErrInvalidCursor intentionally covers malformed, tampered, stale,
+	// cross-purpose, cross-manager, and cross-scope list cursors.
+	ErrInvalidCursor = errors.New("invalid export pagination cursor")
+	// ErrInvalidListFilter means an export-list access scope or filter is
+	// malformed.
+	ErrInvalidListFilter = errors.New("invalid export job list filter")
+	// ErrPageSize means a requested export-list page is negative or exceeds the
+	// hard response bound.
+	ErrPageSize = errors.New("invalid export page size")
+	// ErrListCapacity means every bounded export-list worker is already in use.
+	// Callers should retry instead of accumulating an unbounded waiter set.
+	ErrListCapacity = errors.New("export job list capacity is exhausted")
 )
 
 // ResultSource supplies immutable, owner-and-tenant-scoped search snapshots.
@@ -133,6 +145,18 @@ type CreateRequest struct {
 	ByteLimit   uint64
 	CSV         CSVOptions
 	JSONLines   JSONLinesOptions
+}
+
+// ListRequest selects one bounded, owner-and-tenant-scoped page of retained
+// export jobs. PageToken is opaque and may only be replayed with the same
+// access scope and canonical filters. PageSize and IncludeTotal may change
+// between pages.
+type ListRequest struct {
+	PageSize          int
+	PageToken         string
+	IncludeTotal      bool
+	StateFilters      []State
+	SearchJobIDFilter *string
 }
 
 // State is the monotonic export lifecycle.
@@ -262,6 +286,26 @@ type Job struct {
 	StartedAt   time.Time
 	FinishedAt  time.Time
 	ExpiresAt   time.Time
+}
+
+// ListItem carries the access scope alongside one detached export-job
+// projection. The manager already enforces this scope; retaining it in the
+// service result lets transports reject a corrupt or regressed cross-scope
+// result before projecting the public Job.
+type ListItem struct {
+	Job
+	TenantID string
+	OwnerID  string
+}
+
+// ListPage is exact for the individual manager read that produced it. Retained
+// job state may change between page requests, while the cursor's admission
+// high-water mark prevents newly admitted jobs from entering a traversal.
+type ListPage struct {
+	Jobs           []ListItem
+	NextPageToken  string
+	TotalSize      *uint64
+	TotalSizeExact bool
 }
 
 func cloneJob(source Job) Job {

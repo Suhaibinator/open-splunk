@@ -310,9 +310,27 @@ data. Execution rows, owner IDs, and mutable planner state are never part of
 this contract. The server validates and bounds every projected collection and
 string before serialization.
 
+Export-job listing is owner-and-tenant scoped and ordered by immutable
+`created_at DESC, export_job_id DESC`. Pages default to and are capped at 15
+jobs. The opaque continuation token is authenticated and manager-instance
+scoped; it binds the caller, canonical state and exact search-job filters,
+fixed ordering, keyset boundary, and the first request's admission high-water
+mark. Jobs admitted later cannot enter that traversal, even if they sort after
+its current boundary. A removed boundary job does not prevent continuation.
+
+Lifecycle state remains live between calls, and a due job is expired before
+state filtering. Consequently, a job may disappear from or enter a state
+filter during one traversal. An exact total is the count of currently retained
+matching jobs at or below that traversal's high-water for the individual
+request that computes it; it is not a frozen snapshot total. Page size and
+whether to compute that total may change between continuation calls, while
+changing a state or search-job filter invalidates the token. List responses are
+detached bounded metadata snapshots and never contain or issue download
+capabilities.
+
 The export download route is a raw `GET` file response rather than protobuf. Its short-lived path and bearer capability are returned only in `ExportDownloadGrant`; the token is sent in the `Authorization` header and never placed in a query string.
 
-The `client_request_id` fields reserve the wire contract for future durable retry handling. The current server does not support them for search jobs, exports, saved searches, indexes, or ingestion tokens: supplying the field, including an explicitly empty value, fails request validation. App administration is not implemented yet. Create requests without the field are not deduplicated, and the server does not currently advertise an idempotency-retention window. When support is added, a key will be scoped to the authenticated caller and operation, and reuse for a different canonical request will be a conflict.
+The `client_request_id` fields reserve the wire contract for future durable retry handling. The current server does not support them for search jobs, exports, saved searches, indexes, ingestion tokens, or apps: supplying the field, including an explicitly empty value, fails request validation. Create requests without the field are not deduplicated, and the server does not currently advertise an idempotency-retention window. When support is added, a key will be scoped to the authenticated caller and operation, and reuse for a different canonical request will be a conflict.
 
 Ingestion-token metadata is a bounded operational catalog, not permanent audit
 history. The hard catalog ceiling is 1,024 physical token records and 16,384

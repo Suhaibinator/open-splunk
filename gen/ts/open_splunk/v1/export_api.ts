@@ -41,7 +41,15 @@ export interface GetExportJobResponse {
   downloadGrant?: ExportDownloadGrant | undefined;
 }
 
-/** POST /api/v1/search/exports/list */
+/**
+ * POST /api/v1/search/exports/list
+ * Lists the caller's retained export jobs in created_at DESC,
+ * export_job_id DESC order. Pagination fixes the admission high-water mark,
+ * while lifecycle state and expiration remain live between calls;
+ * total_size_exact describes only the individual request that produced it.
+ * State and search-job filters are exact. Page size and total-size inclusion
+ * may change between continuation requests.
+ */
 export interface ListExportJobsRequest {
   page: PageRequest | undefined;
   stateFilters: ExportJobState[];

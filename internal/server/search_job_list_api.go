@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
@@ -77,8 +76,8 @@ func (handler *apiHandler) listSearchJobs(
 		PageToken:    pageToken,
 		IncludeTotal: includeTotal,
 		StateFilters: slices.Clone(states),
-		AppIDFilter:  cloneSearchJobListString(appID),
-		TextFilter:   cloneSearchJobListString(text),
+		AppIDFilter:  cloneOptionalString(appID),
+		TextFilter:   cloneOptionalString(text),
 	})
 	if contextErr := requestContextFailure(request.Context(), operationErr); contextErr != nil {
 		return nil, router.NewHTTPError(http.StatusRequestTimeout, "search job list request was canceled")
@@ -187,7 +186,11 @@ func (handler *apiHandler) searchJobListPageRequest(page *opensplunkv1.PageReque
 	if err != nil {
 		return 0, "", false, err
 	}
-	if !validSearchJobListToken(pageToken, true) {
+	if !validBoundedListPageToken(
+		pageToken,
+		maximumSearchJobListPageTokenBytes,
+		true,
+	) {
 		return 0, "", false, errors.New("page token is invalid")
 	}
 	if pageSize == 0 {
@@ -289,31 +292,19 @@ func searchJobListPageResponse(
 	requestToken string,
 	includeTotal bool,
 ) (*opensplunkv1.PageResponse, error) {
-	page := &opensplunkv1.PageResponse{}
-	if result.NextPageToken != "" {
-		if !validSearchJobListToken(result.NextPageToken, false) ||
-			result.NextPageToken == requestToken ||
-			len(result.Jobs) != pageSize {
-			return nil, errors.New("search job service returned an invalid page token")
-		}
-		page.NextPageToken = stringPointer(result.NextPageToken)
-	}
-	if includeTotal {
-		if result.TotalSize == nil || !result.TotalSizeExact || *result.TotalSize < uint64(len(result.Jobs)) {
-			return nil, errors.New("search job service returned an invalid total")
-		}
-		if result.NextPageToken != "" && *result.TotalSize <= uint64(len(result.Jobs)) {
-			return nil, errors.New("search job service returned an invalid total for a continued page")
-		}
-		if requestToken == "" && result.NextPageToken == "" && *result.TotalSize != uint64(len(result.Jobs)) {
-			return nil, errors.New("search job service returned an invalid first-page total")
-		}
-		page.TotalSize = uint64Pointer(*result.TotalSize)
-		page.TotalSizeExact = true
-	} else if result.TotalSize != nil || result.TotalSizeExact {
-		return nil, errors.New("search job service returned an unexpected total")
-	}
-	return page, nil
+	return boundedListPageResponse(
+		"search job",
+		boundedListPageMetadata{
+			itemCount:     len(result.Jobs),
+			nextPageToken: result.NextPageToken,
+			totalSize:     result.TotalSize,
+			totalExact:    result.TotalSizeExact,
+		},
+		pageSize,
+		requestToken,
+		includeTotal,
+		maximumSearchJobListPageTokenBytes,
+	)
 }
 
 func validateSearchJobListRequest(input *opensplunkv1.ListSearchJobsRequest) error {
@@ -325,14 +316,6 @@ func validateSearchJobListRequest(input *opensplunkv1.ListSearchJobsRequest) err
 		return errors.New("search job list request is invalid")
 	}
 	return nil
-}
-
-func cloneSearchJobListString(input *string) *string {
-	if input == nil {
-		return nil
-	}
-	value := strings.Clone(*input)
-	return &value
 }
 
 func validSearchJobListFailure(state searchjobs.State, failure *searchjobs.Failure) bool {
@@ -361,23 +344,6 @@ func validSearchJobListFailure(state searchjobs.State, failure *searchjobs.Failu
 	default:
 		return false
 	}
-}
-
-func validSearchJobListToken(token string, allowEmpty bool) bool {
-	if token == "" {
-		return allowEmpty
-	}
-	if len(token) > maximumSearchJobListPageTokenBytes ||
-		!utf8.ValidString(token) ||
-		strings.TrimSpace(token) != token {
-		return false
-	}
-	for _, character := range token {
-		if unicode.IsControl(character) {
-			return false
-		}
-	}
-	return true
 }
 
 type asciiFoldMatcher struct {

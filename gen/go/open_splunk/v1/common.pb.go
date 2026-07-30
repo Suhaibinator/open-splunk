@@ -417,7 +417,8 @@ func (x *PageResponse) GetTotalSizeExact() bool {
 
 // TimeRangeSpec preserves user-entered SPL time expressions. earliest and
 // latest may be absolute timestamps or relative expressions such as -24h and
-// now. The server default applies when a field is absent.
+// now. Omission semantics belong to the consuming endpoint; in particular,
+// /indexes/fields/list requires both bounds.
 type TimeRangeSpec struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Earliest      *string                `protobuf:"bytes,1,opt,name=earliest,proto3,oneof" json:"earliest,omitempty"`

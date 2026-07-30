@@ -64,11 +64,15 @@ const (
 	artifactBaseLockName       = ".open-splunk-export.lock"
 
 	// Metadata accounting conservatively covers the retained Job column slice,
-	// active column selection, index slice, column-name storage, and fixed job
-	// bookkeeping. It intentionally remains charged after the source lease and
-	// selection are released so terminal tombstones cannot bypass the budget.
+	// active column selection, index slice, column-name storage, fixed job
+	// bookkeeping, and the owner-scoped list index. The list-index charge
+	// includes one treap node plus a full scope/root-map allowance per job,
+	// although the map entry is normally amortized across every job in a scope.
+	// It intentionally remains charged after the source lease and selection are
+	// released so terminal tombstones cannot bypass the budget.
 	metadataContextBytes                 = uint64(1 << 10)
-	metadataBaseBytes                    = uint64(unsafe.Sizeof(jobEntry{})) + metadataContextBytes
+	metadataExportListIndexBytes         = uint64(unsafe.Sizeof(exportListIndexNode{})) + uint64(unsafe.Sizeof(searchjobs.AccessScope{})) + uint64(unsafe.Sizeof((*exportListIndexNode)(nil))) + 64
+	metadataBaseBytes                    = uint64(unsafe.Sizeof(jobEntry{})) + metadataContextBytes + metadataExportListIndexBytes
 	metadataStringBytes                  = uint64(unsafe.Sizeof(""))
 	metadataIdentitySlots                = 3 * metadataStringBytes
 	metadataPerColumnBytes               = uint64(64)
@@ -141,12 +145,15 @@ type Config struct {
 
 // Manager owns a bounded worker pool and temporary export artifacts.
 type Manager struct {
-	mu                sync.RWMutex
-	jobs              map[string]*jobEntry
-	reservedIDs       map[string]admissionReservation
-	closed            bool
-	reservations      int
-	queueReservations int
+	mu                  sync.RWMutex
+	jobs                map[string]*jobEntry
+	jobsByScope         map[searchjobs.AccessScope]*exportListIndexNode
+	scopeIndexHighWater int
+	reservedIDs         map[string]admissionReservation
+	closed              bool
+	nextGeneration      uint64
+	reservations        int
+	queueReservations   int
 	// Capacity-cleanup scheduling state is guarded by cleanupGate. The
 	// reclamation generation invalidates advisory deadlines when a lifecycle
 	// transition makes earlier cleanup possible, but never bypasses a failed
@@ -192,6 +199,9 @@ type Manager struct {
 	downloadsByJob     map[string]int
 	now                func() time.Time
 	newID              func() string
+	cursorKey          []byte
+	listCursorEpoch    string
+	listGate           chan struct{}
 	onCleanupError     func(error)
 
 	ctx    context.Context
@@ -212,13 +222,14 @@ type Manager struct {
 }
 
 type jobEntry struct {
-	mu        sync.RWMutex
-	access    searchjobs.AccessScope
-	job       Job
-	selection columnSelection
-	lease     searchjobs.ResultLease
-	ctx       context.Context
-	cancel    context.CancelFunc
+	mu         sync.RWMutex
+	access     searchjobs.AccessScope
+	generation uint64
+	job        Job
+	selection  columnSelection
+	lease      searchjobs.ResultLease
+	ctx        context.Context
+	cancel     context.CancelFunc
 
 	leaseCloseOnce    sync.Once
 	leaseCloseErr     error
@@ -363,6 +374,14 @@ func New(config Config) (*Manager, error) {
 	if downloadGrantTTL < 0 || downloadGrantTTL > maximumDownloadGrantTTL {
 		return nil, errors.New("create export manager: invalid download grant duration")
 	}
+	cursorKey := make([]byte, minimumExportListCursorKeyBytes)
+	if _, err := rand.Read(cursorKey); err != nil {
+		return nil, fmt.Errorf("create export manager list cursor key: %w", err)
+	}
+	listCursorEpoch := randomID()
+	if listCursorEpoch == "" {
+		return nil, errors.New("create export manager: generate transient list cursor epoch")
+	}
 
 	artifactDirectory, err := prepareArtifactDirectory(config.ArtifactDir)
 	if err != nil {
@@ -391,6 +410,7 @@ func New(config Config) (*Manager, error) {
 	managerContext, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
 		jobs:                 make(map[string]*jobEntry),
+		jobsByScope:          make(map[searchjobs.AccessScope]*exportListIndexNode),
 		reservedIDs:          make(map[string]admissionReservation),
 		source:               config.Source,
 		queue:                make(chan *jobEntry, maxQueued),
@@ -419,6 +439,9 @@ func New(config Config) (*Manager, error) {
 		downloadsByJob:       make(map[string]int),
 		now:                  now,
 		newID:                newID,
+		cursorKey:            cursorKey,
+		listCursorEpoch:      listCursorEpoch,
+		listGate:             make(chan struct{}, defaultMaxConcurrentExportLists),
 		onCleanupError:       config.OnCleanupError,
 		ctx:                  managerContext,
 		cancel:               cancel,
@@ -845,9 +868,17 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		}
 		return Job{}, ErrClosed
 	}
+	if manager.nextGeneration == ^uint64(0) {
+		manager.mu.Unlock()
+		jobCancel()
+		return Job{}, fmt.Errorf("%w: admission generation space is exhausted", ErrCapacity)
+	}
+	manager.nextGeneration++
+	entry.generation = manager.nextGeneration
 	delete(manager.reservedIDs, id)
 	manager.reservations--
 	manager.jobs[id] = entry
+	manager.insertExportListEntryLocked(entry)
 	// Snapshot before publication: a worker may transition the entry as soon
 	// as the channel send completes.
 	result := cloneJob(entry.job)
@@ -870,7 +901,15 @@ func validateResolvedColumns(columns []searchjobs.Column) error {
 		return fmt.Errorf("%w: source exposes too many columns", ErrInvalidColumns)
 	}
 	columnBytes := 0
+	seen := make(map[string]struct{}, len(columns))
 	for _, column := range columns {
+		if !validPublicExportColumnName(column.Name) {
+			return fmt.Errorf("%w: source exposes an invalid column", ErrInvalidColumns)
+		}
+		if _, exists := seen[column.Name]; exists {
+			return fmt.Errorf("%w: source exposes duplicate columns", ErrInvalidColumns)
+		}
+		seen[column.Name] = struct{}{}
 		if len(column.Name) > maximumColumnBytes-columnBytes {
 			return fmt.Errorf("%w: selected columns are too large", ErrInvalidColumns)
 		}
@@ -881,7 +920,7 @@ func validateResolvedColumns(columns []searchjobs.Column) error {
 
 func validateAccessScope(access searchjobs.AccessScope) error {
 	for _, identity := range []string{access.TenantID, access.OwnerID} {
-		if len(identity) > maximumAccessIDBytes || !utf8.ValidString(identity) {
+		if !validExportMetadataIdentifier(identity, maximumAccessIDBytes) {
 			return fmt.Errorf("%w: invalid tenant or owner identity", ErrInvalidRequest)
 		}
 	}
@@ -970,7 +1009,7 @@ func checkedAddUint64(left, right uint64) (uint64, bool) {
 func (manager *Manager) normalizeRequest(request CreateRequest) (CreateRequest, error) {
 	request.SearchJobID = strings.Clone(request.SearchJobID)
 	request.Columns = append([]string(nil), request.Columns...)
-	if request.SearchJobID == "" || len(request.SearchJobID) > maximumSearchIDBytes || !utf8.ValidString(request.SearchJobID) {
+	if !validExportMetadataIdentifier(request.SearchJobID, maximumSearchIDBytes) {
 		return CreateRequest{}, fmt.Errorf("%w: invalid search job ID", ErrInvalidRequest)
 	}
 	if request.Format != FormatCSV && request.Format != FormatJSONLines {
@@ -1625,26 +1664,28 @@ func (manager *Manager) releaseEntryBytesIfUnbackedLocked(entry *jobEntry) {
 }
 
 func safeFailure(cause error) Failure {
+	code := FailureInternal
 	switch {
 	case errors.Is(cause, ErrRowLimit):
-		return Failure{Code: FailureRowLimit, Message: "export exceeded its row limit"}
+		code = FailureRowLimit
 	case errors.Is(cause, ErrByteLimit):
-		return Failure{Code: FailureByteLimit, Message: "export exceeded its byte limit"}
+		code = FailureByteLimit
 	case errors.Is(cause, ErrSourceUnavailable):
-		return Failure{Code: FailureSourceUnavailable, Message: "export source results became unavailable"}
+		code = FailureSourceUnavailable
 	case errors.Is(cause, errArtifactStorage):
-		return Failure{Code: FailureStorageUnavailable, Message: "export artifact storage is unavailable", Retryable: true}
+		code = FailureStorageUnavailable
 	case errors.Is(cause, io.ErrShortWrite), errors.Is(cause, os.ErrPermission):
-		return Failure{Code: FailureStorageUnavailable, Message: "export artifact storage is unavailable", Retryable: true}
+		code = FailureStorageUnavailable
 	default:
 		// Filesystem errors are intentionally not retained; callers receive only
 		// this stable summary.
 		var pathErr *os.PathError
 		if errors.As(cause, &pathErr) {
-			return Failure{Code: FailureStorageUnavailable, Message: "export artifact storage is unavailable", Retryable: true}
+			code = FailureStorageUnavailable
 		}
-		return Failure{Code: FailureInternal, Message: "export serialization failed"}
 	}
+	failure, _ := CanonicalFailure(code)
+	return failure
 }
 
 func (entry *jobEntry) requestLeaseClose() error {
@@ -1671,18 +1712,13 @@ func (entry *jobEntry) finalizeLease() error {
 }
 
 func mediaType(format Format) string {
-	if format == FormatCSV {
-		return "text/csv; charset=utf-8"
-	}
-	return "application/x-ndjson; charset=utf-8"
+	_, value, _ := CanonicalArtifactMetadata("", format)
+	return value
 }
 
 func (manager *Manager) artifactPath(id string, format Format) string {
-	extension := ".jsonl"
-	if format == FormatCSV {
-		extension = ".csv"
-	}
-	return filepath.Join(manager.artifactDir, id+extension)
+	name, _, _ := CanonicalArtifactMetadata(id, format)
+	return filepath.Join(manager.artifactDir, name)
 }
 
 func fileExists(path string) bool {
@@ -1796,10 +1832,12 @@ func (manager *Manager) cleanup(ctx context.Context, capacityTriggered bool) err
 		entry.mu.Unlock()
 		if remove {
 			manager.revokeJobGrantsLocked(id)
+			manager.removeExportListEntryLocked(entry)
 			delete(manager.jobs, id)
 			manager.releaseMetadata(retainedMetadata)
 		}
 	}
+	manager.compactExportListScopeIndexLocked()
 	if len(manager.grantExpirations) != 0 {
 		nextCleanupDue = earlierTime(nextCleanupDue, manager.grantExpirations[0].expiresAt)
 	}
@@ -2102,6 +2140,8 @@ func (manager *Manager) Close() error {
 			entries = append(entries, entry)
 		}
 		manager.jobs = make(map[string]*jobEntry)
+		manager.jobsByScope = make(map[searchjobs.AccessScope]*exportListIndexNode)
+		manager.scopeIndexHighWater = 0
 		manager.reservedIDs = make(map[string]admissionReservation)
 		manager.grants = make(map[[32]byte]*downloadGrantEntry)
 		manager.grantExpirations = nil

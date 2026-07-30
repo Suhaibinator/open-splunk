@@ -346,6 +346,15 @@ func TestBackendVertical(t *testing.T) {
 	)
 	serverSecrets = append(serverSecrets, downloadToken)
 	assertDownloadedRedactedResults(t, completedExport, artifact)
+	assertBackendExportJobList(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		completedExport,
+		downloadToken,
+		verticalEventCount,
+	)
 
 	serverSecrets = append(serverSecrets, assertCurrentGradeThisMigration(
 		t,
@@ -1020,6 +1029,32 @@ func exportAndDownloadJSONLines(
 	expectedRows uint64,
 ) (*opensplunkv1.ExportJob, []byte, string) {
 	t.Helper()
+	completed := createCompletedJSONLinesExport(t, ctx, client, baseURL, searchJobID, columns, expectedRows)
+
+	var granted opensplunkv1.GetExportJobResponse
+	postProto(t, ctx, client, baseURL+"/api/v1/search/exports/get", &opensplunkv1.GetExportJobRequest{
+		ExportJobId:        completed.GetExportJobId(),
+		IssueDownloadGrant: true,
+	}, &granted)
+	grant := granted.GetDownloadGrant()
+	if granted.GetExportJob().GetState() != opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
+		grant.GetDownloadPath() != "/api/v1/search/exports/download" || grant.GetDownloadToken() == "" ||
+		grant.GetExpiresAt() == nil || !grant.GetExpiresAt().AsTime().After(time.Now().UTC()) {
+		t.Fatalf("granted completed export = %+v", granted.GetExportJob())
+	}
+	artifact := downloadGrantedArtifact(t, ctx, client, baseURL, granted.GetExportJob().GetArtifact(), grant)
+	return granted.GetExportJob(), artifact, grant.GetDownloadToken()
+}
+
+func createCompletedJSONLinesExport(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL, searchJobID string,
+	columns []string,
+	expectedRows uint64,
+) *opensplunkv1.ExportJob {
+	t.Helper()
 	// Leave headroom so a broken snapshot predicate cannot hide extra rows
 	// behind a limit equal to the expected cardinality.
 	rowLimit := expectedRows + 32
@@ -1047,20 +1082,165 @@ func exportAndDownloadJSONLines(
 		completed.GetArtifact().GetSizeBytes() == 0 || completed.GetProgress().GetBytesWritten() != completed.GetArtifact().GetSizeBytes() {
 		t.Fatalf("completed export job = %+v", completed)
 	}
+	return completed
+}
 
-	var granted opensplunkv1.GetExportJobResponse
-	postProto(t, ctx, client, baseURL+"/api/v1/search/exports/get", &opensplunkv1.GetExportJobRequest{
-		ExportJobId:        exportID,
-		IssueDownloadGrant: true,
-	}, &granted)
-	grant := granted.GetDownloadGrant()
-	if granted.GetExportJob().GetState() != opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
-		grant.GetDownloadPath() != "/api/v1/search/exports/download" || grant.GetDownloadToken() == "" ||
-		grant.GetExpiresAt() == nil || !grant.GetExpiresAt().AsTime().After(time.Now().UTC()) {
-		t.Fatalf("granted completed export = %+v", granted.GetExportJob())
+func assertBackendExportJobList(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	first *opensplunkv1.ExportJob,
+	forbiddenDownloadToken string,
+	expectedRows uint64,
+) {
+	t.Helper()
+	if first == nil || first.GetExportJobId() == "" || first.GetDefinition().GetSearchJobId() == "" ||
+		forbiddenDownloadToken == "" {
+		t.Fatalf("invalid first export-list fixture = %+v", first)
 	}
-	artifact := downloadGrantedArtifact(t, ctx, client, baseURL, granted.GetExportJob().GetArtifact(), grant)
-	return granted.GetExportJob(), artifact, grant.GetDownloadToken()
+	assertNoDownloadToken := func(wire []byte) {
+		t.Helper()
+		if bytes.Contains(wire, []byte(forbiddenDownloadToken)) {
+			t.Fatal("export-list response exposed an existing download token")
+		}
+	}
+	searchJobID := first.GetDefinition().GetSearchJobId()
+	second := createCompletedJSONLinesExport(
+		t,
+		ctx,
+		client,
+		baseURL,
+		searchJobID,
+		[]string{"message"},
+		expectedRows,
+	)
+
+	pageSize := uint32(1)
+	searchJobIDFilter := searchJobID
+	request := &opensplunkv1.ListExportJobsRequest{
+		Page: &opensplunkv1.PageRequest{
+			PageSize:         &pageSize,
+			IncludeTotalSize: true,
+		},
+		StateFilters: []opensplunkv1.ExportJobState{
+			opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED,
+		},
+		SearchJobIdFilter: &searchJobIDFilter,
+	}
+	var firstPage opensplunkv1.ListExportJobsResponse
+	assertNoDownloadToken(postProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/search/exports/list",
+		request,
+		&firstPage,
+	))
+	if len(firstPage.GetExportJobs()) != 1 ||
+		firstPage.GetExportJobs()[0].GetState() != opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
+		firstPage.GetExportJobs()[0].GetDefinition().GetSearchJobId() != searchJobID ||
+		firstPage.GetPage().GetNextPageToken() == "" ||
+		firstPage.GetPage().TotalSize == nil ||
+		firstPage.GetPage().GetTotalSize() != 2 ||
+		!firstPage.GetPage().GetTotalSizeExact() {
+		t.Fatalf("first backend export-list page = %+v", &firstPage)
+	}
+	firstReturnedID := firstPage.GetExportJobs()[0].GetExportJobId()
+	oldIDs := map[string]struct{}{
+		first.GetExportJobId():  {},
+		second.GetExportJobId(): {},
+	}
+	if _, ok := oldIDs[firstReturnedID]; !ok {
+		t.Fatalf("first backend export-list ID = %q, want one of %+v", firstReturnedID, oldIDs)
+	}
+	delete(oldIDs, firstReturnedID)
+	var remainingOldID string
+	for exportID := range oldIDs {
+		remainingOldID = exportID
+	}
+
+	third := createCompletedJSONLinesExport(
+		t,
+		ctx,
+		client,
+		baseURL,
+		searchJobID,
+		[]string{"status"},
+		expectedRows,
+	)
+	token := firstPage.GetPage().GetNextPageToken()
+	continuationPageSize := uint32(2)
+	request.Page = &opensplunkv1.PageRequest{
+		PageSize:  &continuationPageSize,
+		PageToken: &token,
+	}
+	var continuation opensplunkv1.ListExportJobsResponse
+	assertNoDownloadToken(postProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/search/exports/list",
+		request,
+		&continuation,
+	))
+	if len(continuation.GetExportJobs()) != 1 ||
+		continuation.GetExportJobs()[0].GetExportJobId() != remainingOldID ||
+		continuation.GetExportJobs()[0].GetExportJobId() == third.GetExportJobId() ||
+		continuation.GetPage().NextPageToken != nil ||
+		continuation.GetPage().TotalSize != nil ||
+		continuation.GetPage().GetTotalSizeExact() {
+		t.Fatalf("continued backend export-list page = %+v", &continuation)
+	}
+
+	freshPageSize := uint32(3)
+	request.Page = &opensplunkv1.PageRequest{
+		PageSize:         &freshPageSize,
+		IncludeTotalSize: true,
+	}
+	var fresh opensplunkv1.ListExportJobsResponse
+	assertNoDownloadToken(postProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/search/exports/list",
+		request,
+		&fresh,
+	))
+	if len(fresh.GetExportJobs()) != 3 ||
+		fresh.GetPage().NextPageToken != nil ||
+		fresh.GetPage().TotalSize == nil ||
+		fresh.GetPage().GetTotalSize() != 3 ||
+		!fresh.GetPage().GetTotalSizeExact() {
+		t.Fatalf("fresh backend export-list page = %+v", &fresh)
+	}
+	freshIDs := make(map[string]struct{}, len(fresh.GetExportJobs()))
+	for index, job := range fresh.GetExportJobs() {
+		if job.GetState() != opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
+			job.GetDefinition().GetSearchJobId() != searchJobID ||
+			job.GetCreatedAt() == nil {
+			t.Fatalf("fresh backend export-list job %d = %+v", index, job)
+		}
+		if _, duplicate := freshIDs[job.GetExportJobId()]; duplicate {
+			t.Fatalf("fresh backend export-list repeated ID %q", job.GetExportJobId())
+		}
+		freshIDs[job.GetExportJobId()] = struct{}{}
+		if index == 0 {
+			continue
+		}
+		previous := fresh.GetExportJobs()[index-1]
+		previousCreatedAt := previous.GetCreatedAt().AsTime()
+		currentCreatedAt := job.GetCreatedAt().AsTime()
+		if currentCreatedAt.After(previousCreatedAt) ||
+			(currentCreatedAt.Equal(previousCreatedAt) && job.GetExportJobId() > previous.GetExportJobId()) {
+			t.Fatalf("fresh backend export-list order at %d: previous=%+v current=%+v", index, previous, job)
+		}
+	}
+	for _, exportID := range []string{first.GetExportJobId(), second.GetExportJobId(), third.GetExportJobId()} {
+		if _, ok := freshIDs[exportID]; !ok {
+			t.Fatalf("fresh backend export-list missing ID %q: %+v", exportID, &fresh)
+		}
+	}
 }
 
 func waitForCompletedExport(t *testing.T, ctx context.Context, client *http.Client, baseURL, exportID string) *opensplunkv1.ExportJob {

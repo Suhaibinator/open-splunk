@@ -652,7 +652,16 @@ func TestManagerMapsSourceErrorsAndReleasesInvalidColumnLease(t *testing.T) {
 	t.Parallel()
 	source := &exportTestSource{
 		datasets: map[string]exportTestDataset{
-			"columns": {schema: basicExportSchema(), rows: basicExportRows()},
+			"columns": {
+				schema: basicExportSchema(),
+				rows:   basicExportRows(),
+			},
+			"control-columns": {
+				schema: searchjobs.Schema{Columns: []searchjobs.Column{{
+					Name: "message\n",
+					Kind: searchjobs.ValueKindString,
+				}}},
+			},
 		},
 		errors: map[string]error{
 			"missing":  searchjobs.ErrNotFound,
@@ -687,7 +696,17 @@ func TestManagerMapsSourceErrorsAndReleasesInvalidColumnLease(t *testing.T) {
 	}); !errors.Is(err, ErrInvalidColumns) {
 		t.Fatalf("Create(invalid columns) = %v, want ErrInvalidColumns", err)
 	}
-	waitFor(t, func() bool { return source.closedLeases() == 1 }, "invalid-column lease release")
+	if _, err := manager.Create(context.Background(), testAccess, CreateRequest{
+		SearchJobID: "control-columns",
+		Format:      FormatCSV,
+	}); !errors.Is(err, ErrInvalidColumns) {
+		t.Fatalf("Create(control column) = %v, want ErrInvalidColumns", err)
+	}
+	waitFor(
+		t,
+		func() bool { return source.closedLeases() == 2 },
+		"invalid-column lease release",
+	)
 }
 
 func TestManagerRejectsTruncatedRetainedSourceBeforeAdmission(t *testing.T) {
@@ -774,21 +793,40 @@ func TestManagerBoundsResolvedDefaultColumnSelection(t *testing.T) {
 	waitFor(t, func() bool { return source.closedLeases() == 1 }, "wide-schema lease release")
 }
 
-func TestManagerRejectsInvalidAccessScopeBeforeAdmission(t *testing.T) {
+func TestManagerRejectsNoncanonicalIdentitiesBeforeAdmission(t *testing.T) {
 	t.Parallel()
 	source := &exportTestSource{datasets: map[string]exportTestDataset{
 		"search": {schema: basicExportSchema()},
 	}}
 	manager := newExportTestManager(t, source, nil)
 	invalidScopes := []searchjobs.AccessScope{
+		{TenantID: "", OwnerID: "owner"},
+		{TenantID: " tenant ", OwnerID: "owner"},
+		{TenantID: "ten\nant", OwnerID: "owner"},
 		{TenantID: strings.Repeat("t", maximumAccessIDBytes+1), OwnerID: "owner"},
 		{TenantID: string([]byte{0xff}), OwnerID: "owner"},
+		{TenantID: "tenant", OwnerID: ""},
+		{TenantID: "tenant", OwnerID: " owner "},
+		{TenantID: "tenant", OwnerID: "own\ter"},
 		{TenantID: "tenant", OwnerID: strings.Repeat("o", maximumAccessIDBytes+1)},
 		{TenantID: "tenant", OwnerID: string([]byte{0xff})},
 	}
 	for _, access := range invalidScopes {
 		if _, err := manager.Create(context.Background(), access, CreateRequest{SearchJobID: "search", Format: FormatCSV}); !errors.Is(err, ErrInvalidRequest) {
 			t.Errorf("Create(invalid access) = %v, want ErrInvalidRequest", err)
+		}
+	}
+	for _, searchJobID := range []string{"", " search ", "search\njob"} {
+		if _, err := manager.Create(
+			context.Background(),
+			testAccess,
+			CreateRequest{SearchJobID: searchJobID, Format: FormatCSV},
+		); !errors.Is(err, ErrInvalidRequest) {
+			t.Errorf(
+				"Create(invalid search ID %q) = %v, want ErrInvalidRequest",
+				searchJobID,
+				err,
+			)
 		}
 	}
 	source.mu.Lock()

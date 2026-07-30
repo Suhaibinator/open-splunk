@@ -38,6 +38,8 @@ const (
 	apiV1PathPrefix                   = "/api/v1"
 	searchJobsListRoute               = "/search/jobs/list"
 	searchJobsListPath                = apiV1PathPrefix + searchJobsListRoute
+	exportJobsListRoute               = "/search/exports/list"
+	exportJobsListPath                = apiV1PathPrefix + exportJobsListRoute
 	searchFieldsListRoute             = "/search/jobs/fields/list"
 	searchFieldsListPath              = apiV1PathPrefix + searchFieldsListRoute
 	indexFieldsListRoute              = "/indexes/fields/list"
@@ -258,6 +260,7 @@ type SearchHistory interface {
 type Exports interface {
 	Create(context.Context, searchjobs.AccessScope, exportjobs.CreateRequest) (exportjobs.Job, error)
 	Get(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error)
+	List(context.Context, searchjobs.AccessScope, exportjobs.ListRequest) (exportjobs.ListPage, error)
 	Cancel(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error)
 	CreateDownloadGrant(context.Context, searchjobs.AccessScope, string) (exportjobs.DownloadGrant, error)
 	RedeemDownload(context.Context, string) (exportjobs.ArtifactDownload, error)
@@ -907,6 +910,7 @@ func NewHandler(config Config) (*Handler, error) {
 		for _, path := range []string{
 			"/api/v1/search/exports/create",
 			"/api/v1/search/exports/get",
+			exportJobsListPath,
 			"/api/v1/search/exports/cancel",
 		} {
 			apiRoutes[path] = http.MethodPost
@@ -1236,6 +1240,11 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 				Path: "/search/exports/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: codec.NewProtoCodec[*opensplunkv1.GetExportJobRequest, *opensplunkv1.GetExportJobResponse](), Handler: handler.getExportJob,
 				SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.GetExportJobRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			}),
+			router.NewGenericRouteDefinition[*opensplunkv1.ListExportJobsRequest, *serializedExportListResponse, string, struct{}](router.RouteConfig[*opensplunkv1.ListExportJobsRequest, *serializedExportListResponse]{
+				Path: exportJobsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+				Codec: newSerializedExportListCodec(), Handler: handler.listExportJobs,
+				SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.ListExportJobsRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 			}),
 			router.NewGenericRouteDefinition[*opensplunkv1.CancelExportJobRequest, *opensplunkv1.CancelExportJobResponse, string, struct{}](router.RouteConfig[*opensplunkv1.CancelExportJobRequest, *opensplunkv1.CancelExportJobResponse]{
 				Path: "/search/exports/cancel", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,

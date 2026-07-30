@@ -25,15 +25,20 @@ type fakeExports struct {
 
 	createFn func(context.Context, searchjobs.AccessScope, exportjobs.CreateRequest) (exportjobs.Job, error)
 	getFn    func(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error)
+	listFn   func(context.Context, searchjobs.AccessScope, exportjobs.ListRequest) (exportjobs.ListPage, error)
 	cancelFn func(context.Context, searchjobs.AccessScope, string) (exportjobs.Job, error)
 	grantFn  func(context.Context, searchjobs.AccessScope, string) (exportjobs.DownloadGrant, error)
 	redeemFn func(context.Context, string) (exportjobs.ArtifactDownload, error)
 
 	createCalls int
 	getCalls    int
+	listCalls   int
 	cancelCalls int
 	grantCalls  int
 	redeemCalls int
+
+	listScope   searchjobs.AccessScope
+	listRequest exportjobs.ListRequest
 }
 
 func (service *fakeExports) Create(ctx context.Context, scope searchjobs.AccessScope, request exportjobs.CreateRequest) (exportjobs.Job, error) {
@@ -64,6 +69,23 @@ func (service *fakeExports) Snapshot(
 	id string,
 ) (exportjobs.Job, error) {
 	return service.Get(ctx, scope, id)
+}
+
+func (service *fakeExports) List(
+	ctx context.Context,
+	scope searchjobs.AccessScope,
+	request exportjobs.ListRequest,
+) (exportjobs.ListPage, error) {
+	service.mu.Lock()
+	service.listCalls++
+	service.listScope = scope
+	service.listRequest = request
+	fn := service.listFn
+	service.mu.Unlock()
+	if fn == nil {
+		return exportjobs.ListPage{}, nil
+	}
+	return fn(ctx, scope, request)
 }
 
 func (service *fakeExports) Cancel(ctx context.Context, scope searchjobs.AccessScope, id string) (exportjobs.Job, error) {
@@ -103,6 +125,12 @@ func (service *fakeExports) callCounts() (create, get, cancel, grant, redeem int
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	return service.createCalls, service.getCalls, service.cancelCalls, service.grantCalls, service.redeemCalls
+}
+
+func (service *fakeExports) listCallCount() int {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	return service.listCalls
 }
 
 type memoryArtifactDownload struct {
@@ -505,6 +533,15 @@ func TestExportRoutesAreExactConditionalAndAdvertised(t *testing.T) {
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("disabled typed route status = %d", response.Code)
 	}
+	response = postProto(
+		t,
+		disabled,
+		exportJobsListPath,
+		&opensplunkv1.ListExportJobsRequest{},
+	)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("disabled list route status = %d", response.Code)
+	}
 	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
 	response = httptest.NewRecorder()
 	disabled.ServeHTTP(response, request)
@@ -645,6 +682,13 @@ func TestExportAPIRoutesRejectDNSRebindingBeforeServiceOrGrantUse(t *testing.T) 
 		createFn: func(context.Context, searchjobs.AccessScope, exportjobs.CreateRequest) (exportjobs.Job, error) {
 			return testExportJob("export-created", exportjobs.FormatCSV, exportjobs.StateQueued), nil
 		},
+		listFn: func(
+			context.Context,
+			searchjobs.AccessScope,
+			exportjobs.ListRequest,
+		) (exportjobs.ListPage, error) {
+			return exportjobs.ListPage{}, nil
+		},
 		redeemFn: func(_ context.Context, token string) (exportjobs.ArtifactDownload, error) {
 			if token != "still-valid" {
 				t.Fatalf("token = %q", token)
@@ -670,9 +714,28 @@ func TestExportAPIRoutesRejectDNSRebindingBeforeServiceOrGrantUse(t *testing.T) 
 	if typed.Code != http.StatusForbidden {
 		t.Fatalf("hostile typed status = %d, body = %s", typed.Code, typed.Body.String())
 	}
+	hostileList := postProtoHeaders(
+		t,
+		handler,
+		exportJobsListPath,
+		&opensplunkv1.ListExportJobsRequest{},
+		hostileHeaders,
+	)
+	if hostileList.Code != http.StatusForbidden {
+		t.Fatalf(
+			"hostile list status = %d, body = %s",
+			hostileList.Code,
+			hostileList.Body.String(),
+		)
+	}
 	createCalls, _, _, _, redeemCalls := service.callCounts()
-	if createCalls != 0 || redeemCalls != 0 {
-		t.Fatalf("hostile typed request reached service: create = %d redeem = %d", createCalls, redeemCalls)
+	if createCalls != 0 || service.listCallCount() != 0 || redeemCalls != 0 {
+		t.Fatalf(
+			"hostile typed request reached service: create = %d list = %d redeem = %d",
+			createCalls,
+			service.listCallCount(),
+			redeemCalls,
+		)
 	}
 
 	rawRequest := httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
@@ -695,6 +758,24 @@ func TestExportAPIRoutesRejectDNSRebindingBeforeServiceOrGrantUse(t *testing.T) 
 	if allowedTyped.Code != http.StatusOK {
 		t.Fatalf("allowed typed status = %d, body = %s", allowedTyped.Code, allowedTyped.Body.String())
 	}
+	allowedList := postProtoHeaders(
+		t,
+		handler,
+		exportJobsListPath,
+		&opensplunkv1.ListExportJobsRequest{},
+		map[string]string{
+			"Host":           "example.com",
+			"Origin":         "http://example.com",
+			"Sec-Fetch-Site": "same-origin",
+		},
+	)
+	if allowedList.Code != http.StatusOK {
+		t.Fatalf(
+			"allowed list status = %d, body = %s",
+			allowedList.Code,
+			allowedList.Body.String(),
+		)
+	}
 
 	rawRequest = httptest.NewRequestWithContext(context.Background(), http.MethodGet, exportDownloadPath, nil)
 	rawRequest.Host = "example.com"
@@ -707,8 +788,13 @@ func TestExportAPIRoutesRejectDNSRebindingBeforeServiceOrGrantUse(t *testing.T) 
 		t.Fatalf("allowed raw response = %d %q", rawResponse.Code, rawResponse.Body.Bytes())
 	}
 	createCalls, _, _, _, redeemCalls = service.callCounts()
-	if createCalls != 1 || redeemCalls != 1 {
-		t.Fatalf("allowed requests service calls = create %d redeem %d", createCalls, redeemCalls)
+	if createCalls != 1 || service.listCallCount() != 1 || redeemCalls != 1 {
+		t.Fatalf(
+			"allowed requests service calls = create %d list %d redeem %d",
+			createCalls,
+			service.listCallCount(),
+			redeemCalls,
+		)
 	}
 }
 
