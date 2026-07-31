@@ -7,7 +7,134 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: exact-field eventstats count
+## Latest checkpoint: native HTTPS browser/API listener
+
+Date: 2026-07-30
+
+Committed implementation checkpoint:
+
+- `e0d8b2e` — native HTTPS for the browser UI, protobuf API, and WebSocket
+  surface; fail-closed non-loopback listener policy; shared inbound TLS
+  baseline; digest-pinned backend evidence; and adversarial unit/browser/live
+  integration coverage.
+
+This test-first deployment-foundation unit removes the browser-listener half
+of the normal container-network transport blocker without weakening the local
+development boundary:
+
+1. The server accepts paired `-http-tls-cert` and `-http-tls-key` PEM paths.
+   Both paths are trimmed and must be present together. Plaintext browser/API
+   traffic remains loopback-only; a non-loopback or wildcard bind is accepted
+   only when HTTPS is configured, and a wildcard bind still requires explicit
+   `-http-allowed-hosts`. The dead prerelease
+   `-http-insecure-trusted-network` flag was removed rather than retained as a
+   misleading no-op or revived as a bearer-token plaintext bypass.
+2. Release-payload verification still exits without requiring mounted runtime
+   secrets. After that early exit, the HTTPS certificate/key pair is loaded
+   before the administrator token, server lock, SQLite, or ClickHouse opens.
+   An unreadable, malformed, or mismatched identity therefore fails before
+   either persistence plane can be mutated. The loaded keypair stays in the
+   in-memory `tls.Config`; `ListenAndServeTLS("", "")` never reopens mutable
+   key files after validation.
+3. Browser/API HTTPS and collector gRPC now share one inbound server-identity
+   loader and a TLS 1.2 minimum. A small `http.Server` wrapper selects
+   loopback plaintext or preloaded HTTPS while preserving the existing
+   coordinated HTTP/gRPC lifetime, graceful shutdown, request drain, WebSocket
+   close, and second-signal behavior.
+4. The existing administrative Host/Origin boundary derives its expected
+   scheme from the actual TLS connection, so HTTPS protobuf calls and WSS
+   upgrades retain exact same-origin enforcement. No forwarded-header or
+   trusted-proxy shortcut was introduced. Browser HTTP/2 remains enabled for
+   ordinary HTTPS resources.
+5. The backend vertical now creates an ephemeral ECDSA P-256 identity with an
+   IP SAN. Go HTTPS clients trust only that generated certificate and preserve
+   TLS 1.2 minimum verification. The Playwright harness ignores certificate
+   errors only behind an explicit HTTPS-only integration flag, resets that
+   flag between browser modes, and still restricts the target to a credential-
+   free loopback origin.
+6. The Go WSS client clones the verified HTTP client's TLS trust but pins ALPN
+   to `http/1.1`, which Gorilla WebSocket requires. A real run exposed that
+   reusing HTTP transport state could otherwise carry negotiated `h2` into the
+   WebSocket dialer. Focused tests now pin HTTP/1.1, preserve TLS/version/trust
+   state, prove the source transport is not mutated, and fail closed for
+   missing or untrusted transport shapes.
+7. The real vertical proves HTTPS health/static UI/protobuf traffic, WSS
+   progress and terminal frames, the compiled browser, plaintext rejection on
+   the TLS port, collector and server crash/restart durability, redaction,
+   exports, the exact GradeThis corpus, and current GradeThis searches against
+   the digest-pinned ClickHouse release.
+8. High-value backend fixtures now resolve an empty image override to the
+   repository's pinned ClickHouse image and reject tag-only, missing-name,
+   short, uppercase, or trailing-text digest forms. Lower-level fixture
+   helpers remain flexible for explicitly selected compatibility benchmarks;
+   evidence described as digest-pinned cannot silently inherit a mutable
+   ambient tag.
+9. Simplification review reused the bounded shared Playwright runner, removed
+   unused generated-certificate state, shared the inbound TLS baseline, and
+   removed the dead plaintext override. Independent final security,
+   lifecycle/interoperability, and coverage reviewers found no remaining
+   P0-P2 issue in frozen staged diff
+   `eede24f98108c6a8b2b744bd1f1fcf6cbf758debc9759b75b4c45c2e657f8bfd`.
+10. GORM ownership is unchanged: SQLite/control-plane only. HTTP transport,
+    collector gRPC, ClickHouse connections, ingestion, planning, execution,
+    and integration remain native.
+11. The architecture plan remains unfinished. A normal Compose bridge still
+    needs verified server-to-ClickHouse TLS: explicit CA and server-name
+    options plus the pinned ClickHouse secure native listener. After that
+    checkpoint, build the non-root release OCI targets, full-stack Compose,
+    crash-safe bootstrap, dedicated volumes/schema boundary, and actual
+    GradeThis no-OTel cutover. Do not publish an OCI image first that cannot
+    securely reach ClickHouse on its bridge network.
+
+Validation on implementation commit `e0d8b2e`:
+
+```sh
+go mod tidy -diff
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go test -race -shuffle=on \
+  ./cmd/open-splunk-server ./internal/testsupport ./integration -count=1
+go vet ./...
+go build ./...
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+make proto
+
+# Executed with this already-cached binary reporting exactly v2.12.2.
+HTTPS_LINTER=/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint
+GOLANGCI_LINT_CACHE=/private/tmp/open-splunk-golangci-cache \
+  "$HTTPS_LINTER" run ./...
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./integration -run '^TestBackendVertical$' \
+  -count=1 -timeout=15m -v
+
+git show --check --oneline e0d8b2e
+```
+
+The complete repository unit suite, full race/shuffle suite, final focused
+race suite, tidy verification, vet/build, cached v2.12.2 Go lint, TypeScript
+typecheck/lint, all 47 release/materializer tests, all 137 frontend runtime
+tests, production UI build, and protobuf format/lint/generation checks passed;
+Go lint reported `0 issues`. The final uninterrupted digest-pinned HTTPS/WSS
+backend vertical passed in 19.22 seconds (20.36 seconds including package
+startup), and Docker inspection found no remaining test-owned Open Splunk
+container or volume.
+
+Explicit pause point:
+
+1. Native browser/API HTTPS is committed and live-proven through protobuf,
+   WSS, and the compiled browser.
+2. Plaintext remains loopback-only; no trusted-network bypass exists.
+3. The next deployment-foundation unit is verified ClickHouse client/server
+   TLS, not OCI packaging or more optional SPL.
+4. Commit and push this handoff, then pause until the user gives further
+   instructions.
+
+## Previous checkpoint: exact-field eventstats count
 
 Date: 2026-07-30
 
