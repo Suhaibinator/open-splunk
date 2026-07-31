@@ -337,13 +337,23 @@ release_publication_locks() {
 
 resolve_single_image_id() {
   local reference=$1
+  local filter_reference=$reference
   local image_ids
 
+  # Docker accepts canonical Docker Hub references for tag/inspect, but older
+  # Linux daemons match `image ls --filter reference=...` by familiar names
+  # (for example `image:tag`, not `docker.io/library/image:tag`). Keep canonical
+  # names for locking and mutation, and translate only this lookup.
+  if [[ "$filter_reference" == docker.io/library/* ]]; then
+    filter_reference=${filter_reference#docker.io/library/}
+  elif [[ "$filter_reference" == docker.io/* ]]; then
+    filter_reference=${filter_reference#docker.io/}
+  fi
   if ! image_ids="$(
     docker image ls \
       --quiet \
       --no-trunc \
-      --filter "reference=$reference"
+      --filter "reference=$filter_reference"
   )"; then
     echo "error: could not inspect Docker image reference $reference" >&2
     return 1

@@ -182,6 +182,15 @@ async function installDockerShim(fixture) {
       'if [[ "${1:-}" == image && "${2:-}" == ls ]]; then',
       '  reference="${!#}"',
       '  reference=${reference#reference=}',
+      '  if [[ "${OPEN_SPLUNK_TEST_REQUIRE_FAMILIAR_DOCKER_HUB_FILTER:-0}" == 1 ]]; then',
+      '    if [[ "$reference" == docker.io/* ]]; then',
+      '      exit 0',
+      '    elif [[ "$reference" == */* ]]; then',
+      '      reference="docker.io/$reference"',
+      '    else',
+      '      reference="docker.io/library/$reference"',
+      '    fi',
+      '  fi',
       '  if [[ "$reference" == "$OPEN_SPLUNK_SERVER_IMAGE" ]]; then',
       '    if [[ "${OPEN_SPLUNK_TEST_TAMPER_LOCK_OWNER:-0}" == 1 ]]; then',
       '      for candidate in "$container_root"/*; do',
@@ -570,6 +579,37 @@ test("OCI cold rebuild bypasses cache for both targets and rejects unsafe values
   for (const invocation of buildInvocations) {
     assert.match(invocation, /build --no-cache --file /);
   }
+});
+
+test("OCI publication resolves Docker Hub tags with Linux familiar-name filters", async (t) => {
+  const fixture = await ociFixture(t);
+  const revision = git(fixture, ["rev-parse", "HEAD"]);
+  const docker = await installDockerShim(fixture);
+  const result = runBuildOCI(fixture, revision, docker, {
+    OPEN_SPLUNK_SERVER_IMAGE: "docker.io/library/open-splunk-server:test",
+    OPEN_SPLUNK_COLLECTOR_IMAGE:
+      "docker.io/open-splunk/collector:test",
+    OPEN_SPLUNK_TEST_REQUIRE_FAMILIAR_DOCKER_HUB_FILTER: "1",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const invocations = await readFile(docker.log, "utf8");
+  assert.match(
+    invocations,
+    /image ls --quiet --no-trunc --filter reference=open-splunk-server:test/,
+  );
+  assert.match(
+    invocations,
+    /image ls --quiet --no-trunc --filter reference=open-splunk\/collector:test/,
+  );
+  assert.match(
+    invocations,
+    /image tag .* docker\.io\/library\/open-splunk-server:test/,
+  );
+  assert.match(
+    invocations,
+    /image tag .* docker\.io\/open-splunk\/collector:test/,
+  );
 });
 
 test("OCI build sends Docker only committed materialized source", async (t) => {
