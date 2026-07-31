@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -114,15 +113,14 @@ func collectorGRPCServerOptions(config collectorServerConfig) ([]grpc.ServerOpti
 	certFile := strings.TrimSpace(config.TLSCertFile)
 	keyFile := strings.TrimSpace(config.TLSKeyFile)
 	if !config.Insecure {
-		certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+		tlsConfig, err := loadServerTLSConfig(certFile, keyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load collector gRPC TLS certificate: %w", err)
 		}
-		config := &tls.Config{
-			MinVersion:   tls.VersionTLS12,
-			Certificates: []tls.Certificate{certificate},
-		}
-		return append(collectorResourceServerOptions(), grpc.Creds(credentials.NewTLS(config))), nil
+		return append(
+			collectorResourceServerOptions(),
+			grpc.Creds(credentials.NewTLS(tlsConfig)),
+		), nil
 	}
 	return collectorResourceServerOptions(), nil
 }

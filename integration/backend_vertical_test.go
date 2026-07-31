@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,7 +86,12 @@ func TestBackendVertical(t *testing.T) {
 	serverRuntimeDir := t.TempDir()
 	stagedBackendRepository := buildBackendFrontend(t, ctx, repository)
 
-	image := os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE")
+	image, err := testsupport.ResolvePinnedClickHouseImage(
+		os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	clickhouse, err := testsupport.StartClickHouseWithServicePrincipals(ctx, image)
 	if err != nil {
 		t.Fatal(err)
@@ -105,6 +111,13 @@ func TestBackendVertical(t *testing.T) {
 
 	httpAddress := unusedLoopbackAddress(t)
 	collectorAddress := unusedLoopbackAddress(t)
+	httpTLSIdentity, err := testsupport.WriteServerTLSIdentity(
+		filepath.Join(work, "http-tls"),
+		"127.0.0.1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	controlDBPath := filepath.Join(work, "control.sqlite")
 	administratorTokenPath, administratorToken := provisionAdministratorToken(
 		t,
@@ -123,6 +136,8 @@ func TestBackendVertical(t *testing.T) {
 	serverArguments := []string{
 		serverBinary,
 		"-http-address=" + httpAddress,
+		"-http-tls-cert=" + httpTLSIdentity.CertificateFile,
+		"-http-tls-key=" + httpTLSIdentity.PrivateKeyFile,
 		"-control-db=" + controlDBPath,
 		"-master-key=" + filepath.Join(work, "server.key"),
 		"-administrator-token-file=" + administratorTokenPath,
@@ -136,9 +151,18 @@ func TestBackendVertical(t *testing.T) {
 	)
 	serverProcess := startProcess(t, serverRuntimeDir, serverArguments, serverEnvironment)
 	serverProcesses := []*managedProcess{serverProcess}
-	baseURL := "http://" + httpAddress
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	baseURL := "https://" + httpAddress
+	httpTransport := http.DefaultTransport.(*http.Transport).Clone()
+	httpTransport.TLSClientConfig = &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    httpTLSIdentity.RootCAs,
+	}
+	httpClient := &http.Client{
+		Transport: httpTransport,
+		Timeout:   10 * time.Second,
+	}
 	waitForHealth(t, ctx, httpClient, baseURL, serverProcess)
+	assertPlaintextCannotReachHTTPSHealth(t, ctx, httpAddress)
 	assertStandaloneServerSurface(t, ctx, httpClient, baseURL)
 
 	var createdIndex opensplunkv1.CreateIndexResponse
@@ -493,39 +517,46 @@ func assertBrowserVisibleResults(
 	fixtureStart time.Time,
 ) {
 	t.Helper()
-	browserContext, cancel := context.WithTimeout(ctx, 90*time.Second)
+	runBrowserVerticalSpec(t, ctx, repository, browserVerticalSpecConfig{
+		grepPattern:        "collector event is visible through the compiled backend UI",
+		outputDirectory:    "backend-vertical",
+		failureDescription: "verify browser-visible backend result",
+		environment: map[string]string{
+			"OPEN_SPLUNK_E2E_BASE_URL":            baseURL,
+			"OPEN_SPLUNK_E2E_IGNORE_HTTPS_ERRORS": "1",
+			"OPEN_SPLUNK_E2E_SPL":                 browserVerticalSearchSPL,
+			"OPEN_SPLUNK_E2E_EARLIEST":            fixtureStart.Format(time.RFC3339Nano),
+			"OPEN_SPLUNK_E2E_LATEST":              fixtureStart.Add(4 * time.Second).Format(time.RFC3339Nano),
+			"OPEN_SPLUNK_E2E_EXPECTED_TEXT":       verticalSentinelMessage,
+			"OPEN_SPLUNK_E2E_EXPECTED_ROWS":       strconv.FormatUint(verticalEventCount, 10),
+		},
+	})
+}
+
+func assertPlaintextCannotReachHTTPSHealth(
+	t *testing.T,
+	ctx context.Context,
+	httpAddress string,
+) {
+	t.Helper()
+	requestContext, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	// #nosec G204 -- the executable is the repository-owned Playwright binary,
-	// and every argument is a fixed test path or flag; no shell is involved.
-	command := exec.CommandContext(
-		browserContext,
-		filepath.Join(repository, "node_modules", ".bin", "playwright"),
-		"test",
-		"integration/browser_vertical.spec.ts",
-		"--workers=1",
-		"--reporter=line",
-		"--output="+filepath.Join(repository, "test-results", "backend-vertical"),
+	request, err := http.NewRequestWithContext(
+		requestContext,
+		http.MethodGet,
+		"http://"+httpAddress+"/healthz",
+		nil,
 	)
-	configureProcessGroup(command)
-	command.Dir = repository
-	environment := os.Environ()
-	for name, value := range map[string]string{
-		"OPEN_SPLUNK_E2E_BASE_URL":      baseURL,
-		"OPEN_SPLUNK_E2E_SPL":           browserVerticalSearchSPL,
-		"OPEN_SPLUNK_E2E_EARLIEST":      fixtureStart.Format(time.RFC3339Nano),
-		"OPEN_SPLUNK_E2E_LATEST":        fixtureStart.Add(4 * time.Second).Format(time.RFC3339Nano),
-		"OPEN_SPLUNK_E2E_EXPECTED_TEXT": verticalSentinelMessage,
-		"OPEN_SPLUNK_E2E_EXPECTED_ROWS": strconv.FormatUint(verticalEventCount, 10),
-	} {
-		environment = environmentWithValue(environment, name, value)
-	}
-	command.Env = environment
-	logs := &lockedBuffer{maximum: 1 << 20}
-	command.Stdout = logs
-	command.Stderr = logs
-	err := command.Run()
 	if err != nil {
-		t.Fatalf("verify browser-visible backend result: %v\n%s", err, logs.String())
+		t.Fatal(err)
+	}
+	response, err := (&http.Client{Timeout: 2 * time.Second}).Do(request)
+	if err != nil {
+		return
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusOK {
+		t.Fatal("plaintext request reached HTTPS health endpoint")
 	}
 }
 
@@ -2807,7 +2838,13 @@ func forEachJSONLine(t *testing.T, artifact []byte, visit func(int, map[string]a
 	}
 }
 
-func runSearch(t *testing.T, ctx context.Context, client *http.Client, baseURL string, fixtureStart time.Time) completedSearch {
+func runSearch(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	fixtureStart time.Time,
+) completedSearch {
 	t.Helper()
 	earliest := fixtureStart.Format(time.RFC3339Nano)
 	latest := fixtureStart.Add(5500 * time.Millisecond).Format(time.RFC3339Nano)
@@ -2828,7 +2865,13 @@ func runSearch(t *testing.T, ctx context.Context, client *http.Client, baseURL s
 	if jobID == "" {
 		t.Fatalf("created search job = %+v", created.GetSearchJob())
 	}
-	terminal := observeCompletedSearchWebSocket(t, ctx, baseURL, jobID)
+	terminal := observeCompletedSearchWebSocket(
+		t,
+		ctx,
+		client,
+		baseURL,
+		jobID,
+	)
 
 	// WebSocket events are sequenced notifications, not the source of truth.
 	// Read the authoritative terminal snapshot and full results over HTTP.
@@ -3258,6 +3301,7 @@ func assertCompletedTimeline(
 func observeCompletedSearchWebSocket(
 	t *testing.T,
 	ctx context.Context,
+	client *http.Client,
 	baseURL, jobID string,
 ) *opensplunkv1.SearchJobTerminal {
 	t.Helper()
@@ -3282,6 +3326,13 @@ func observeCompletedSearchWebSocket(
 	endpoint.Fragment = ""
 
 	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
+	if endpoint.Scheme == "wss" {
+		tlsConfig, err := webSocketTLSConfig(client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dialer.TLSClientConfig = tlsConfig
+	}
 	connection, response, err := dialer.DialContext(watchContext, endpoint.String(), http.Header{
 		"Origin":         []string{baseURL},
 		"Sec-Fetch-Site": []string{"same-origin"},
@@ -3491,6 +3542,24 @@ func observeCompletedSearchWebSocket(
 	}
 	t.Fatal("search websocket exceeded the bounded event count before completion")
 	return nil
+}
+
+func webSocketTLSConfig(client *http.Client) (*tls.Config, error) {
+	if client == nil {
+		return nil, errors.New("HTTPS backend requires an HTTP client")
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.TLSClientConfig == nil {
+		return nil, errors.New(
+			"HTTPS backend client requires a trusted TLS transport",
+		)
+	}
+	config := transport.TLSClientConfig.Clone()
+	// WebSocket upgrades use HTTP/1.1. The shared HTTP transport may add h2
+	// after first use; carrying that ALPN value into Gorilla can negotiate a
+	// protocol its dialer does not implement.
+	config.NextProtos = []string{"http/1.1"}
+	return config, nil
 }
 
 func readBackendSearchWebSocketEvent(t *testing.T, connection *websocket.Conn) *opensplunkv1.SearchWebSocketEvent {

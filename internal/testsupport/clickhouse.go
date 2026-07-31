@@ -16,6 +16,30 @@ import (
 
 const DefaultClickHouseImage = "clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49"
 
+// ResolvePinnedClickHouseImage selects the repository default for an empty
+// override and otherwise requires a canonical sha256 digest suffix. High-value
+// integration evidence uses this resolver so an ambient mutable tag cannot
+// silently weaken a run described as digest-pinned.
+func ResolvePinnedClickHouseImage(image string) (string, error) {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return DefaultClickHouseImage, nil
+	}
+	const separator = "@sha256:"
+	offset := strings.LastIndex(image, separator)
+	if offset <= 0 {
+		return "", fmt.Errorf("ClickHouse image %q is not digest-pinned", image)
+	}
+	digest := image[offset+len(separator):]
+	if len(digest) != 64 || strings.Trim(digest, "0123456789abcdef") != "" {
+		return "", fmt.Errorf(
+			"ClickHouse image %q has a noncanonical sha256 digest",
+			image,
+		)
+	}
+	return image, nil
+}
+
 const (
 	clickHouseMigrationUsername = "open_splunk_migrator"
 	clickHouseRuntimeUsername   = "open_splunk_runtime"

@@ -75,12 +75,19 @@ func normalizeRuntimeOptions(config *options) error {
 		return errors.New("export artifact directory cannot be a filesystem root")
 	}
 	config.httpAddress = strings.TrimSpace(config.httpAddress)
+	config.httpTLSCert = strings.TrimSpace(config.httpTLSCert)
+	config.httpTLSKey = strings.TrimSpace(config.httpTLSKey)
+	if (config.httpTLSCert == "") != (config.httpTLSKey == "") {
+		return errors.New("HTTP TLS certificate and key must be configured together")
+	}
 	host, _, err := net.SplitHostPort(config.httpAddress)
 	if err != nil {
 		return errors.New("HTTP listen address must include a valid host and port")
 	}
-	if !loopbackAddress(config.httpAddress) {
-		return errors.New("administrator browser routes require a loopback HTTP listen address until HTTPS is configured")
+	if !loopbackAddress(config.httpAddress) && config.httpTLSCert == "" {
+		return errors.New(
+			"administrator browser routes require TLS outside a loopback HTTP listen address",
+		)
 	}
 	config.httpAllowedHosts = config.httpAllowedHosts[:0]
 	for _, candidate := range strings.Split(config.httpAllowedHostsCSV, ",") {

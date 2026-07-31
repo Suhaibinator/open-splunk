@@ -61,7 +61,8 @@ type options struct {
 	httpAddress                         string
 	httpAllowedHosts                    []string
 	httpAllowedHostsCSV                 string
-	httpInsecureTrustedNetwork          bool
+	httpTLSCert                         string
+	httpTLSKey                          string
 	controlDBPath                       string
 	masterKeyPath                       string
 	administratorTokenFile              string
@@ -127,6 +128,13 @@ func run() error {
 			release.Metadata.UIBuildID,
 			release.Metadata.UI.SHA256,
 		)
+		return err
+	}
+	httpTLSConfig, err := loadHTTPServerTLSConfig(
+		config.httpTLSCert,
+		config.httpTLSKey,
+	)
+	if err != nil {
 		return err
 	}
 	browserAuthenticator, err := newAdministratorBrowserAuthenticator(
@@ -654,18 +662,29 @@ func run() error {
 		<-shutdownContext.Done()
 		stopSignals()
 	}()
-	httpServer := &http.Server{
-		Addr:              config.httpAddress,
-		Handler:           requests,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		// Keep ordinary API writes short. The raw export handler explicitly
-		// extends only its own connection deadline through ResponseController.
-		WriteTimeout:   30 * time.Second,
-		IdleTimeout:    2 * time.Minute,
-		MaxHeaderBytes: 1 << 20,
+	httpServer := &httpRuntimeServer{
+		Server: &http.Server{
+			Addr:              config.httpAddress,
+			Handler:           requests,
+			TLSConfig:         httpTLSConfig,
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			// Keep ordinary API writes short. The raw export handler explicitly
+			// extends only its own connection deadline through ResponseController.
+			WriteTimeout:   30 * time.Second,
+			IdleTimeout:    2 * time.Minute,
+			MaxHeaderBytes: 1 << 20,
+		},
 	}
-	log.Printf("open-splunk server listening on %s", config.httpAddress)
+	httpTransport := "explicit loopback plaintext"
+	if httpTLSConfig != nil {
+		httpTransport = "TLS"
+	}
+	log.Printf(
+		"open-splunk server listening on %s (%s)",
+		config.httpAddress,
+		httpTransport,
+	)
 	if collectorListener == nil {
 		log.Printf("collector gRPC listener disabled; configure -collector-grpc-address and TLS to enable ingestion")
 	} else {
@@ -714,13 +733,19 @@ func closeCollectorHeartbeatRuntime(
 func parseFlags() options {
 	var result options
 	flag.BoolVar(&result.verifyEmbeddedRelease, "verify-embedded-release", false, "verify the embedded release payload and exit before opening runtime resources")
-	flag.StringVar(&result.httpAddress, "http-address", "127.0.0.1:8080", "HTTP listen address (administrator browser routes currently require loopback)")
+	flag.StringVar(&result.httpAddress, "http-address", "127.0.0.1:8080", "browser/API listen address (plaintext is allowed only on loopback; use HTTP TLS for other addresses)")
 	flag.StringVar(&result.httpAllowedHostsCSV, "http-allowed-hosts", "", "comma-separated Host names allowed to use the browser API (defaults to the specific listen host)")
-	flag.BoolVar(
-		&result.httpInsecureTrustedNetwork,
-		"http-insecure-trusted-network",
-		false,
-		"deprecated compatibility flag; administrator browser routes remain loopback-only until HTTPS is configured",
+	flag.StringVar(
+		&result.httpTLSCert,
+		"http-tls-cert",
+		"",
+		"PEM certificate chain for HTTPS browser/API traffic (requires -http-tls-key)",
+	)
+	flag.StringVar(
+		&result.httpTLSKey,
+		"http-tls-key",
+		"",
+		"PEM private key for HTTPS browser/API traffic (requires -http-tls-cert)",
 	)
 	flag.StringVar(&result.controlDBPath, "control-db", "open-splunk.db", "SQLite control-plane path")
 	flag.StringVar(&result.masterKeyPath, "master-key", "", "server master-key path (default: <control-db>.key)")

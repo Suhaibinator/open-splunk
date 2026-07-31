@@ -50,6 +50,7 @@ const latest = requiredEnvironment("OPEN_SPLUNK_E2E_LATEST");
 const expectedText = requiredEnvironment("OPEN_SPLUNK_E2E_EXPECTED_TEXT");
 const expectedRows = parsePositiveInteger(requiredEnvironment("OPEN_SPLUNK_E2E_EXPECTED_ROWS"));
 const browserExecutable = process.env.OPEN_SPLUNK_BROWSER_EXECUTABLE?.trim();
+const ignoreHTTPSErrors = process.env.OPEN_SPLUNK_E2E_IGNORE_HTTPS_ERRORS === "1";
 const recoveryControlURL = optionalLoopbackURL(process.env.OPEN_SPLUNK_E2E_RECOVERY_CONTROL_URL);
 const recoveryControlToken = process.env.OPEN_SPLUNK_E2E_RECOVERY_CONTROL_TOKEN?.trim();
 const recoveryInitialText = process.env.OPEN_SPLUNK_E2E_RECOVERY_INITIAL_TEXT?.trim();
@@ -76,6 +77,7 @@ let browserRecorderSelfTestCompleted = false;
 
 test.use({
   launchOptions: browserExecutable ? { executablePath: browserExecutable } : {},
+  ignoreHTTPSErrors,
   screenshot: "only-on-failure",
   trace: "retain-on-failure",
 });
@@ -2456,7 +2458,12 @@ function parsePositiveInteger(value: string): number {
 
 function validatedOrigin(value: string): string {
   const parsed = new URL(value);
-  if (parsed.protocol !== "http:") throw new Error("the browser vertical test requires an HTTP loopback URL");
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("the browser vertical test requires an HTTP(S) loopback URL");
+  }
+  if (ignoreHTTPSErrors && parsed.protocol !== "https:") {
+    throw new Error("ignoring HTTPS errors requires an HTTPS browser vertical URL");
+  }
   if (parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") {
     throw new Error("the browser vertical test only connects to a loopback server");
   }

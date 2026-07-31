@@ -24,6 +24,51 @@ func TestStartClickHouseWithServicePrincipalsRejectsNilContextWithoutCallingDock
 	}
 }
 
+func TestResolvePinnedClickHouseImage(t *testing.T) {
+	t.Parallel()
+	canonical := "registry.example/clickhouse:test@sha256:" + strings.Repeat("a1", 32)
+	for name, test := range map[string]struct {
+		image string
+		want  string
+		ok    bool
+	}{
+		"default":          {want: DefaultClickHouseImage, ok: true},
+		"canonical":        {image: canonical, want: canonical, ok: true},
+		"trimmed":          {image: " \t" + canonical + "\n", want: canonical, ok: true},
+		"tag only":         {image: "clickhouse/clickhouse-server:latest"},
+		"missing name":     {image: "@sha256:" + strings.Repeat("a", 64)},
+		"short digest":     {image: "clickhouse@sha256:" + strings.Repeat("a", 63)},
+		"uppercase digest": {image: "clickhouse@sha256:" + strings.Repeat("A", 64)},
+		"trailing text":    {image: canonical + "-mutable"},
+	} {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ResolvePinnedClickHouseImage(test.image)
+			if test.ok {
+				if err != nil || got != test.want {
+					t.Fatalf(
+						"ResolvePinnedClickHouseImage(%q) = (%q, %v), want (%q, nil)",
+						test.image,
+						got,
+						err,
+						test.want,
+					)
+				}
+				return
+			}
+			if err == nil || got != "" {
+				t.Fatalf(
+					"ResolvePinnedClickHouseImage(%q) = (%q, %v), want error",
+					test.image,
+					got,
+					err,
+				)
+			}
+		})
+	}
+}
+
 func TestExecuteBootstrapSQLForTestRejectsInvalidInputWithoutCallingDocker(
 	t *testing.T,
 ) {

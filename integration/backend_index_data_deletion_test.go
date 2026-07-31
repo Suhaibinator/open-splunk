@@ -661,35 +661,11 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 func backendIndexDeletionPinnedImage(t *testing.T) string {
 	t.Helper()
 
-	image := strings.TrimSpace(
+	image, err := testsupport.ResolvePinnedClickHouseImage(
 		os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"),
 	)
-	if image == "" {
-		image = testsupport.DefaultClickHouseImage
-	}
-	const separator = "@sha256:"
-	offset := strings.LastIndex(image, separator)
-	if offset <= 0 {
-		t.Fatalf(
-			"backend index deletion ClickHouse image %q is not digest-pinned",
-			image,
-		)
-	}
-	digest := image[offset+len(separator):]
-	if len(digest) != 64 {
-		t.Fatalf(
-			"backend index deletion ClickHouse image %q has an invalid sha256 digest",
-			image,
-		)
-	}
-	for _, character := range digest {
-		if (character < '0' || character > '9') &&
-			(character < 'a' || character > 'f') {
-			t.Fatalf(
-				"backend index deletion ClickHouse image %q has a noncanonical sha256 digest",
-				image,
-			)
-		}
+	if err != nil {
+		t.Fatal(err)
 	}
 	return image
 }

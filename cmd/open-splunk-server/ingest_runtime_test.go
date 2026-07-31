@@ -43,20 +43,16 @@ func TestNormalizeRuntimeOptionsCanonicalizesAndBoundsTenantIdentity(t *testing.
 	}
 }
 
-func TestNormalizeRuntimeOptionsRequiresLoopbackHTTPForAdministratorRoutes(t *testing.T) {
+func TestNormalizeRuntimeOptionsRequiresTLSForNonLoopbackAdministratorRoutes(t *testing.T) {
 	t.Parallel()
 	config := options{httpAddress: "192.0.2.10:8080", tenantID: "tenant", indexRetention: time.Hour}
 	if err := normalizeRuntimeOptions(&config); err == nil {
 		t.Fatal("non-loopback plaintext HTTP unexpectedly succeeded")
 	}
-	config.httpInsecureTrustedNetwork = true
-	if err := normalizeRuntimeOptions(&config); err == nil {
-		t.Fatal("trusted-network override bypassed the administrator loopback boundary")
-	}
 
 	wildcard := options{
-		httpAddress: "0.0.0.0:8080", httpInsecureTrustedNetwork: true,
-		tenantID: "tenant", indexRetention: time.Hour,
+		httpAddress: "0.0.0.0:8080",
+		tenantID:    "tenant", indexRetention: time.Hour,
 	}
 	if err := normalizeRuntimeOptions(&wildcard); err == nil {
 		t.Fatal("wildcard HTTP listener unexpectedly succeeded")
@@ -64,6 +60,68 @@ func TestNormalizeRuntimeOptionsRequiresLoopbackHTTPForAdministratorRoutes(t *te
 	wildcard.httpAllowedHostsCSV = "logs.internal.example, 192.0.2.10"
 	if err := normalizeRuntimeOptions(&wildcard); err == nil {
 		t.Fatal("allowed hosts bypassed the administrator loopback boundary")
+	}
+
+	secure := options{
+		httpAddress:    "192.0.2.10:8443",
+		httpTLSCert:    " server.crt ",
+		httpTLSKey:     " server.key ",
+		tenantID:       "tenant",
+		indexRetention: time.Hour,
+	}
+	if err := normalizeRuntimeOptions(&secure); err != nil {
+		t.Fatalf("non-loopback HTTPS rejected: %v", err)
+	}
+	if secure.httpTLSCert != "server.crt" || secure.httpTLSKey != "server.key" {
+		t.Fatalf(
+			"normalized HTTPS certificate paths = (%q, %q)",
+			secure.httpTLSCert,
+			secure.httpTLSKey,
+		)
+	}
+	if len(secure.httpAllowedHosts) != 1 || secure.httpAllowedHosts[0] != "192.0.2.10" {
+		t.Fatalf("default HTTPS allowed hosts = %v", secure.httpAllowedHosts)
+	}
+
+	secureWildcard := options{
+		httpAddress:    "0.0.0.0:8443",
+		httpTLSCert:    "server.crt",
+		httpTLSKey:     "server.key",
+		tenantID:       "tenant",
+		indexRetention: time.Hour,
+	}
+	if err := normalizeRuntimeOptions(&secureWildcard); err == nil {
+		t.Fatal("wildcard HTTPS listener without allowed hosts unexpectedly succeeded")
+	}
+	secureWildcard.httpAllowedHostsCSV = "logs.internal.example, 192.0.2.10"
+	if err := normalizeRuntimeOptions(&secureWildcard); err != nil {
+		t.Fatalf("explicitly scoped wildcard HTTPS listener rejected: %v", err)
+	}
+	if got := strings.Join(secureWildcard.httpAllowedHosts, ","); got != "logs.internal.example,192.0.2.10" {
+		t.Fatalf("wildcard HTTPS allowed hosts = %q", got)
+	}
+}
+
+func TestNormalizeRuntimeOptionsRejectsIncompleteHTTPTLSIdentity(t *testing.T) {
+	t.Parallel()
+	for name, candidate := range map[string]options{
+		"certificate only": {
+			httpAddress: "127.0.0.1:8443",
+			httpTLSCert: "server.crt",
+		},
+		"key only": {
+			httpAddress: "127.0.0.1:8443",
+			httpTLSKey:  "server.key",
+		},
+	} {
+		candidate.tenantID = "tenant"
+		candidate.indexRetention = time.Hour
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := normalizeRuntimeOptions(&candidate); err == nil {
+				t.Fatal("incomplete HTTP TLS identity unexpectedly succeeded")
+			}
+		})
 	}
 }
 

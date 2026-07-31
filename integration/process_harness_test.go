@@ -951,6 +951,7 @@ func environmentWithValue(environment []string, name, value string) []string {
 
 var browserE2EModeFlags = []string{
 	"OPEN_SPLUNK_E2E_CANCELLATION_TEST",
+	"OPEN_SPLUNK_E2E_IGNORE_HTTPS_ERRORS",
 	"OPEN_SPLUNK_E2E_RENDERING_TEST",
 	"OPEN_SPLUNK_E2E_SEQUENCE_EXPIRATION_TEST",
 	"OPEN_SPLUNK_E2E_SEQUENCE_GAP_TEST",
