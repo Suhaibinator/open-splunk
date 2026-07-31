@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1079,6 +1080,95 @@ func TestValidateTimechartSchemaEnforcesRuntimeWideContract(t *testing.T) {
 				t.Fatalf("validateTimechartSchema() = %v, want ErrInvalidResult", err)
 			}
 		})
+	}
+}
+
+func TestValidateTimechartSchemaEnforcesStaticCountContract(t *testing.T) {
+	t.Parallel()
+
+	output := clickhouse.TimechartOutput{
+		Mode:      clickhouse.TimechartModeFixedCount,
+		MaxSeries: 1,
+	}
+	valid := Schema{Columns: []Column{
+		{Name: "_time", Kind: ValueKindTime},
+		{Name: "count", Kind: ValueKindUnsigned},
+	}}
+	if err := validateTimechartSchema(
+		valid,
+		[]string{"_time", "count"},
+		output,
+	); err != nil {
+		t.Fatalf("valid static timechart schema: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		schema   Schema
+		expected []string
+		output   clickhouse.TimechartOutput
+	}{
+		{name: "missing count", schema: Schema{Columns: valid.Columns[:1]}, expected: []string{"_time", "count"}, output: output},
+		{name: "extra column", schema: Schema{Columns: append(slices.Clone(valid.Columns), Column{Name: "extra", Kind: ValueKindUnsigned})}, expected: []string{"_time", "count"}, output: output},
+		{name: "wrong compiler fields", schema: valid, expected: []string{"_time"}, output: output},
+		{name: "wrong time name", schema: Schema{Columns: []Column{{Name: "time", Kind: ValueKindTime}, valid.Columns[1]}}, expected: []string{"_time", "count"}, output: output},
+		{name: "nullable time", schema: Schema{Columns: []Column{{Name: "_time", Kind: ValueKindTime, Nullable: true}, valid.Columns[1]}}, expected: []string{"_time", "count"}, output: output},
+		{name: "wrong count name", schema: Schema{Columns: []Column{valid.Columns[0], {Name: "events", Kind: ValueKindUnsigned}}}, expected: []string{"_time", "count"}, output: output},
+		{name: "wrong count kind", schema: Schema{Columns: []Column{valid.Columns[0], {Name: "count", Kind: ValueKindSigned}}}, expected: []string{"_time", "count"}, output: output},
+		{name: "nullable count", schema: Schema{Columns: []Column{valid.Columns[0], {Name: "count", Kind: ValueKindUnsigned, Nullable: true}}}, expected: []string{"_time", "count"}, output: output},
+		{name: "multivalue count", schema: Schema{Columns: []Column{valid.Columns[0], {Name: "count", Kind: ValueKindUnsigned, Multivalue: true}}}, expected: []string{"_time", "count"}, output: output},
+		{name: "invalid output mode", schema: valid, expected: []string{"_time", "count"}, output: clickhouse.TimechartOutput{Mode: clickhouse.TimechartMode(255), MaxSeries: 1}},
+		{name: "wrong series bound", schema: valid, expected: []string{"_time", "count"}, output: clickhouse.TimechartOutput{Mode: clickhouse.TimechartModeFixedCount, MaxSeries: 2}},
+		{name: "dynamic label bound", schema: valid, expected: []string{"_time", "count"}, output: clickhouse.TimechartOutput{Mode: clickhouse.TimechartModeFixedCount, MaxSeries: 1, MaxLabelBytes: 1}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateTimechartSchema(
+				test.schema,
+				test.expected,
+				test.output,
+			); !errors.Is(err, ErrInvalidResult) {
+				t.Fatalf("validateTimechartSchema() = %v, want ErrInvalidResult", err)
+			}
+		})
+	}
+}
+
+func TestManagerDetachesStaticTimechartMetadataFromExecutor(t *testing.T) {
+	t.Parallel()
+
+	schema := Schema{Columns: []Column{
+		{Name: "_time", Kind: ValueKindTime},
+		{Name: "count", Kind: ValueKindUnsigned},
+	}}
+	manager := newTestManager(t, Config{
+		Executor: executorFunc(func(
+			_ context.Context,
+			query clickhouse.CompiledQuery,
+			sink ResultSink,
+		) error {
+			if query.Timechart == nil ||
+				query.Timechart.Mode != clickhouse.TimechartModeFixedCount {
+				t.Fatalf("compiled static timechart = %#v", query.Timechart)
+			}
+			query.Timechart.Mode = clickhouse.TimechartModeRuntimeWide
+			return sink.SetSchema(schema)
+		}),
+		CleanupInterval: -1,
+		NewID:           sequenceIDs("static-timechart-detachment"),
+	})
+	created, err := manager.Create(
+		context.Background(),
+		withSPL(validRequest(), "index=main | timechart span=5m count"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := waitForState(t, manager, created.ID, StateCompleted)
+	if completed.Schema == nil ||
+		!reflect.DeepEqual(*completed.Schema, schema) {
+		t.Fatalf("completed schema = %#v, want %#v", completed.Schema, schema)
 	}
 }
 

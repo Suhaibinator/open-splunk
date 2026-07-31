@@ -81,8 +81,12 @@ func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 				Range: sourceRange,
 			},
 			&plan.Timechart{
-				Time: plan.FieldRef{Name: "_time"}, SplitBy: plan.FieldRef{Name: "host"},
-				NullLabel: "private-null-label", OtherLabel: "private-other-label", Range: sourceRange,
+				Time: plan.FieldRef{Name: "_time"},
+				Split: &plan.TimechartSplit{
+					Field:     plan.FieldRef{Name: "host"},
+					NullLabel: "private-null-label", OtherLabel: "private-other-label",
+				},
+				Range: sourceRange,
 			},
 			&plan.Chart{
 				Over: plan.FieldRef{Name: "host"}, SplitBy: plan.FieldRef{Name: "level"},
@@ -235,6 +239,36 @@ func TestProjectLogicalPlanOutputShapesAndDetachment(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestProjectLogicalPlanProjectsStaticTimechartCount(t *testing.T) {
+	snapshot := validInspectionSnapshot()
+	snapshot.SPL = "index=" + snapshot.EffectiveIndexes[0] +
+		" | timechart span=5m count"
+	logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
+	if err != nil {
+		t.Fatalf("BuildExecutionPlan: %v", err)
+	}
+
+	projected, err := projectLogicalPlan(
+		context.Background(),
+		logical,
+		snapshot.SPL,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := projected.Stages[len(projected.Stages)-1]
+	if stage.Operator != "Timechart" {
+		t.Fatalf("last stage = %#v, want Timechart", stage)
+	}
+	assertStringsEqual(t, stage.InputFields, []string{"_time"})
+	assertStringsEqual(t, stage.OutputFields, []string{"_time", "count"})
+	if projected.Output.Kind != OutputKindStatic ||
+		!slices.Equal(projected.Output.Fields, []string{"_time", "count"}) ||
+		projected.Output.MaxDynamicFields != 0 {
+		t.Fatalf("output = %#v, want static _time,count", projected.Output)
 	}
 }
 

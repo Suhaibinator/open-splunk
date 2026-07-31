@@ -249,6 +249,11 @@ func TestAnalyzeSuggestionContextIncompleteGrammar(t *testing.T) {
 			kinds:    []SuggestionKind{SuggestionKindKeyword},
 			keywords: []string{"BY"},
 		},
+		{
+			source:   "| timechart span=5m count ",
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"BY"},
+		},
 		{source: "index=ma", prefix: "ma", kinds: []SuggestionKind{SuggestionKindIndex}},
 		{source: "| table tr", prefix: "tr", kinds: []SuggestionKind{SuggestionKindField}},
 	}
@@ -593,6 +598,14 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 		gotCommands = append(gotCommands, command.Name)
 		if command.Insertion == "" || command.Detail == "" {
 			t.Fatalf("command metadata incomplete: %#v", command)
+		}
+		if command.Name == "timechart" {
+			if command.Insertion != "timechart span=5m count" {
+				t.Fatalf("timechart insertion = %q, want static count form", command.Insertion)
+			}
+			if command.Detail != "Chart count over fixed time buckets, optionally split BY one field." {
+				t.Fatalf("timechart detail = %q, want optional split description", command.Detail)
+			}
 		}
 	}
 	if !slices.Equal(gotCommands, wantCommands) {

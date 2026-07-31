@@ -1706,11 +1706,12 @@ func TestBuildTimechartProducesBoundedRuntimeWideSchema(t *testing.T) {
 	if !ok {
 		t.Fatalf("last operator = %T, want *Timechart", logical.Operators[2])
 	}
-	if operator.Time.Name != "_time" || !operator.Time.Canonical || operator.SplitBy.Name != "level" ||
+	if operator.Time.Name != "_time" || !operator.Time.Canonical || operator.Split == nil ||
+		operator.Split.Field.Name != "level" ||
 		operator.Function != AggregateFunctionCountRows || operator.Span != 5*time.Minute ||
 		!operator.FirstBucket.Equal(time.Date(2026, 7, 21, 8, 0, 0, 0, time.UTC)) || operator.BucketCount != 3 ||
-		operator.SeriesLimit != 10 || !operator.IncludeNull || operator.NullLabel != "NULL" ||
-		!operator.IncludeOther || operator.OtherLabel != "OTHER" || !operator.FixedRange ||
+		operator.Split.SeriesLimit != 10 || !operator.Split.IncludeNull || operator.Split.NullLabel != "NULL" ||
+		!operator.Split.IncludeOther || operator.Split.OtherLabel != "OTHER" || !operator.FixedRange ||
 		!operator.Continuous || !operator.IncludePartial {
 		t.Fatalf("timechart = %#v", operator)
 	}
@@ -1720,6 +1721,46 @@ func TestBuildTimechartProducesBoundedRuntimeWideSchema(t *testing.T) {
 	if logical.DynamicOutput == nil || !slices.Equal(logical.DynamicOutput.FixedFields, []string{"_time"}) ||
 		logical.DynamicOutput.MaxSeries != 12 {
 		t.Fatalf("dynamic output = %#v", logical.DynamicOutput)
+	}
+}
+
+func TestBuildTimechartWithoutSplitProducesStaticCountSchema(t *testing.T) {
+	t.Parallel()
+
+	scope := testScope([]string{"gradethis"}, nil)
+	scope.Earliest = time.Date(2026, 7, 21, 8, 2, 30, 0, time.UTC)
+	scope.Latest = time.Date(2026, 7, 21, 8, 12, 0, 1, time.UTC)
+	logical, err := Build(
+		mustParse(t, `index=gradethis | timechart span=5m count`),
+		scope,
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(logical.Operators) != 3 {
+		t.Fatalf("operator count = %d, want Scan, Filter, Timechart", len(logical.Operators))
+	}
+	operator, ok := logical.Operators[2].(*Timechart)
+	if !ok {
+		t.Fatalf("last operator = %T, want *Timechart", logical.Operators[2])
+	}
+	if operator.Time.Name != "_time" ||
+		!operator.Time.Canonical ||
+		operator.Split != nil ||
+		operator.Function != AggregateFunctionCountRows ||
+		operator.Span != 5*time.Minute ||
+		!operator.FirstBucket.Equal(time.Date(2026, 7, 21, 8, 0, 0, 0, time.UTC)) ||
+		operator.BucketCount != 3 ||
+		!operator.FixedRange ||
+		!operator.Continuous ||
+		!operator.IncludePartial {
+		t.Fatalf("timechart = %#v", operator)
+	}
+	if !slices.Equal(logical.OutputFields, []string{"_time", "count"}) {
+		t.Fatalf("static output fields = %v, want _time/count", logical.OutputFields)
+	}
+	if logical.DynamicOutput != nil {
+		t.Fatalf("dynamic output = %#v, want nil", logical.DynamicOutput)
 	}
 }
 
@@ -1837,8 +1878,9 @@ func TestBuildTimechartResolvesNestedSplitField(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	operator := logical.Operators[len(logical.Operators)-1].(*Timechart)
-	if !slices.Equal(operator.SplitBy.Path, []string{"http", "route"}) {
-		t.Fatalf("split path = %v", operator.SplitBy.Path)
+	if operator.Split == nil ||
+		!slices.Equal(operator.Split.Field.Path, []string{"http", "route"}) {
+		t.Fatalf("split field = %#v", operator.Split)
 	}
 }
 

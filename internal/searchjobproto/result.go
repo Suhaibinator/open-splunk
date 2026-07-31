@@ -32,7 +32,9 @@ func Schema(schemaID string, schema searchjobs.Schema, shape ResultShape) (*open
 			return nil, err
 		}
 		semantic := semanticType(column.Name)
-		if shape.RuntimeNamedColumns && index > 0 {
+		if index > 0 &&
+			(shape.RuntimeNamedColumns ||
+				shape.Kind == opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES) {
 			semantic = opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC
 		}
 		columns[index] = &opensplunkv1.ResultColumn{

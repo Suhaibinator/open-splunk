@@ -262,22 +262,28 @@ func (*EventAggregate) operator()                 {}
 func (*EventAggregate) LogicalName() string       { return "EventAggregate" }
 func (op *EventAggregate) SourceRange() spl.Range { return op.Range }
 
-// Timechart transforms rows into a runtime-wide count series over fixed,
-// epoch-aligned UTC buckets. FirstBucket and BucketCount describe the complete
-// fixed range, including partial boundary buckets and continuous gaps.
+// TimechartSplit is the bounded runtime-wide contract for a timechart BY
+// field. A nil split on Timechart selects the fixed _time/count form.
+type TimechartSplit struct {
+	Field        FieldRef
+	SeriesLimit  uint16
+	IncludeNull  bool
+	IncludeOther bool
+	NullLabel    string
+	OtherLabel   string
+}
+
+// Timechart transforms rows into a count series over fixed, epoch-aligned UTC
+// buckets. FirstBucket and BucketCount describe the complete fixed range,
+// including partial boundary buckets and continuous gaps.
 type Timechart struct {
 	Time        FieldRef
-	SplitBy     FieldRef
+	Split       *TimechartSplit
 	Function    AggregateFunction
 	Span        time.Duration
 	FirstBucket time.Time
 	BucketCount uint64
 
-	SeriesLimit    uint16
-	IncludeNull    bool
-	IncludeOther   bool
-	NullLabel      string
-	OtherLabel     string
 	FixedRange     bool
 	Continuous     bool
 	IncludePartial bool

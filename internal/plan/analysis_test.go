@@ -137,10 +137,19 @@ func TestAnalyzeOperatorReadPositions(t *testing.T) {
 		{
 			name: "timechart axes",
 			operator: &Timechart{
-				Time:    analysisField("_time"),
-				SplitBy: analysisField("timechart_series"),
+				Time: analysisField("_time"),
+				Split: &TimechartSplit{
+					Field: analysisField("timechart_series"),
+				},
 			},
 			want: []string{"_time", "timechart_series"},
+		},
+		{
+			name: "unsplit timechart",
+			operator: &Timechart{
+				Time: analysisField("_time"),
+			},
+			want: []string{"_time"},
 		},
 		{
 			name: "chart axes",
@@ -787,11 +796,11 @@ func TestAnalyzeRejectsEmptyFieldReferences(t *testing.T) {
 		},
 		{
 			name:     "timechart time",
-			operator: &Timechart{SplitBy: valid},
+			operator: &Timechart{Split: &TimechartSplit{Field: valid}},
 		},
 		{
 			name:     "timechart split",
-			operator: &Timechart{Time: valid},
+			operator: &Timechart{Time: valid, Split: &TimechartSplit{}},
 		},
 		{
 			name:     "chart over",

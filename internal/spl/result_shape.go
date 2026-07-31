@@ -33,7 +33,7 @@ func ClassifyResultShape(query *Query) ResultShape {
 		if command == nil || isNilCommand(command) {
 			return ResultShape{}
 		}
-		switch command.(type) {
+		switch command := command.(type) {
 		case *SearchCommand,
 			*WhereCommand,
 			*EvalCommand,
@@ -52,7 +52,7 @@ func ClassifyResultShape(query *Query) ResultShape {
 		case *TimechartCommand:
 			result = ResultShape{
 				Kind:                ResultKindTimeSeries,
-				RuntimeNamedColumns: true,
+				RuntimeNamedColumns: command.SplitBy != nil,
 			}
 		case *ChartCommand:
 			result = ResultShape{

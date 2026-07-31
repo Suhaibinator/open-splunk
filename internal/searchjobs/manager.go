@@ -2279,6 +2279,30 @@ func validateSchema(schema Schema, expected []string) error {
 }
 
 func validateTimechartSchema(schema Schema, expected []string, output clickhouse.TimechartOutput) error {
+	if output.Mode == clickhouse.TimechartModeFixedCount {
+		if output.MaxSeries != 1 ||
+			output.MaxLabelBytes != 0 ||
+			!slices.Equal(expected, []string{"_time", "count"}) ||
+			len(schema.Columns) != 2 {
+			return fmt.Errorf("%w: static timechart schema does not match the compiled output", ErrInvalidResult)
+		}
+		timeColumn := schema.Columns[0]
+		countColumn := schema.Columns[1]
+		if timeColumn.Name != "_time" ||
+			timeColumn.Kind != ValueKindTime ||
+			timeColumn.Nullable ||
+			timeColumn.Multivalue ||
+			countColumn.Name != "count" ||
+			countColumn.Kind != ValueKindUnsigned ||
+			countColumn.Nullable ||
+			countColumn.Multivalue {
+			return fmt.Errorf("%w: static timechart schema is invalid", ErrInvalidResult)
+		}
+		return nil
+	}
+	if output.Mode != clickhouse.TimechartModeRuntimeWide {
+		return fmt.Errorf("%w: timechart output mode is invalid", ErrInvalidResult)
+	}
 	if !slices.Equal(expected, []string{"_time"}) || len(schema.Columns) == 0 || len(schema.Columns)-1 > int(output.MaxSeries) {
 		return fmt.Errorf("%w: timechart schema exceeds the compiled output", ErrInvalidResult)
 	}

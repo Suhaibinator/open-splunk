@@ -92,8 +92,8 @@
     },
     {
       "name": "timechart",
-      "insertion": "timechart span=5m count BY level",
-      "detail": "Chart count over fixed time buckets."
+      "insertion": "timechart span=5m count",
+      "detail": "Chart count over fixed time buckets, optionally split BY one field."
     },
     {
       "name": "chart",

@@ -2378,22 +2378,28 @@ rather than falling back to an approximate or data-dependent bin.
 ### `timechart`
 
 ```spl
+| timechart span=5m count
 | timechart span=5m count BY level
 ```
 
-The initial slice accepts exactly one argument-free `count`, one exact split
-field, and a positive fixed `s`, `m`, or `h` span from one second through 24
-hours. `timechart` must be the final command because its wide output columns
-are derived from runtime field values. Options, aliases, calendar/subsecond
-spans, multiple split fields, and other aggregate functions fail explicitly.
+The initial slice accepts exactly one argument-free `count`, an optional `BY`
+with one exact split field, and a positive fixed `s`, `m`, or `h` span from one
+second through 24 hours. Without `BY`, the result has the fixed `_time,count`
+schema. With `BY`, split values still determine the wide output columns at
+runtime. Both forms are time-series results, but only the split form has
+runtime-named columns. The current `timechart` lowering must be the final
+command in either form. Options, aliases, calendar/subsecond spans, multiple
+split fields, and other aggregate functions fail explicitly.
 
 The search time range remains half-open `[earliest, latest)`. Buckets are
 aligned to Unix epoch boundaries using mathematical floor division, including
-before 1970. Partial first and last buckets are retained, missing buckets are
-filled, and rows are ordered by `_time` ascending. `timechart` requires the
+before 1970. Partial first and last buckets are retained. When at least one
+input event exists, missing buckets are filled with zero counts and rows are
+ordered by `_time` ascending. A completely empty input returns zero rows while
+preserving the known schema: `_time,count` without `BY`, or `_time` with `BY`
+because there are no observed runtime series. `timechart` requires the
 unmodified canonical `_time`; removing, replacing, or transforming it is a
-source-located error. A completely empty input returns an `_time`-only schema
-and zero rows.
+source-located error.
 
 Aligned bucket starts are not constrained to ClickHouse's timestamp storage
 range. For example, a supported search beginning at `1900-01-01T00:00:00Z`
@@ -2401,8 +2407,9 @@ with `span=7h` retains the partial bucket beginning at
 `1899-12-31T19:00:00Z`; the executor reconstructs public bucket timestamps from
 bounded integer ordinals rather than round-tripping them through `DateTime64`.
 
-The public result is wide: `_time` is a non-null timestamp followed by
-non-null unsigned count columns. The ten ordinary string series with the
+Without `BY`, `_time` is a non-null timestamp and `count` is a non-null
+unsigned count. With `BY`, the public result remains wide: `_time` is followed
+by non-null unsigned count columns. The ten ordinary string series with the
 highest total count across the complete range are retained; equal scores use
 UTF-8 lexical order. Ordinary output columns are then ordered lexically,
 followed by `NULL` for missing/explicit-null values and `OTHER` for omitted
@@ -2411,18 +2418,20 @@ with `_` receive Splunk's `VALUE` prefix (`_audit` becomes `VALUE_audit`). An
 upstream projection that removes the split field treats it as missing for all
 retained events.
 
-This version supports string split values plus missing/null. Numeric, Boolean,
-extended, list, and object values fail the whole command before schema or rows
-are published; Splunk's default numeric discretization is not approximated.
-Empty, invalid UTF-8, reserved `NULL`/`OTHER`, or labels over 256 bytes also
-fail atomically, as do collisions after `VALUE` normalization. Results are
-bounded to 10,000 buckets and 12 runtime series (ten ordinary, `NULL`, and
-`OTHER`), for at most 13 public columns. The 10,000-bucket resource policy is
+The split form supports string split values plus missing/null. Numeric,
+Boolean, extended, list, and object split values fail the whole command before
+schema or rows are published; Splunk's default numeric discretization is not
+approximated. Empty, invalid UTF-8, reserved `NULL`/`OTHER`, or labels over 256
+bytes also fail atomically, as do collisions after `VALUE` normalization.
+Results in either form are bounded to 10,000 buckets. The split form is
+additionally bounded to 12 runtime series (ten ordinary, `NULL`, and `OTHER`),
+for at most 13 public columns. The 10,000-bucket resource policy is
 intentionally lower than Splunk's installation-configurable `maxbins` default.
-With default executor settings, the intermediate group budget grows with the
-requested bucket count to at most 130,000 states. Domains with enough distinct
-raw values to exceed that budget fail atomically with an execution-limit error;
-an explicitly configured lower group cap remains authoritative.
+With default executor settings, the split form's intermediate group budget
+grows with the requested bucket count to at most 130,000 states. Domains with
+enough distinct raw values to exceed that budget fail atomically with an
+execution-limit error; an explicitly configured lower group cap remains
+authoritative.
 
 ### `chart`
 

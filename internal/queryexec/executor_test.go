@@ -161,6 +161,216 @@ func TestExecutorBuffersAndPublishesRuntimeWideTimechart(t *testing.T) {
 	}
 }
 
+func TestExecutorBuffersAndPublishesFixedTimechart(t *testing.T) {
+	t.Parallel()
+
+	first := time.Date(1899, time.December, 31, 19, 0, 0, 0, time.UTC)
+	rows := fixedTimechartOrdinalRows([]uint64{2, 0, 1, 0})
+	sink := &fakeSink{}
+	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
+	if err := executor.Execute(context.Background(), fixedTimechartQuery(first, 4), sink); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	wantSchema := []searchjobs.Column{
+		{Name: "_time", Kind: searchjobs.ValueKindTime},
+		{Name: "count", Kind: searchjobs.ValueKindUnsigned},
+	}
+	if sink.setCalls != 1 || !rows.closed || !reflect.DeepEqual(sink.schema.Columns, wantSchema) {
+		t.Fatalf("schema=%#v calls=%d rows closed=%v", sink.schema, sink.setCalls, rows.closed)
+	}
+	if len(sink.rows) != 4 {
+		t.Fatalf("published rows = %d, want 4", len(sink.rows))
+	}
+	for index, row := range sink.rows {
+		bucket, bucketOK := row[0].Time()
+		count, countOK := row[1].Unsigned()
+		if !bucketOK || !bucket.Equal(first.Add(time.Duration(index)*5*time.Minute)) ||
+			!countOK || count != rows.data[index][1].(uint64) {
+			t.Fatalf("row %d = %#v", index, row)
+		}
+	}
+}
+
+func TestExecutorSuppressesWhollyEmptyFixedTimechart(t *testing.T) {
+	t.Parallel()
+
+	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	rows := fixedTimechartOrdinalRows([]uint64{0, 0, 0})
+	sink := &fakeSink{}
+	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
+	if err := executor.Execute(context.Background(), fixedTimechartQuery(first, 3), sink); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if sink.setCalls != 1 || len(sink.schema.Columns) != 2 ||
+		sink.schema.Columns[1].Name != "count" || len(sink.rows) != 0 {
+		t.Fatalf("empty fixed timechart schema=%#v rows=%d calls=%d", sink.schema, len(sink.rows), sink.setCalls)
+	}
+}
+
+func TestExecutorRejectsMalformedFixedTimechartAtomically(t *testing.T) {
+	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		mutate      func(*fakeRows, *clickhouse.CompiledQuery)
+		queryIssued bool
+	}{
+		{
+			name: "wrong count column",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+				rows.columns[1] = "wrong"
+			},
+			queryIssued: true,
+		},
+		{
+			name: "nullable count",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+				rows.types[1] = fakeColumnType{
+					name: clickhouse.TimechartCountColumn, databaseType: "UInt64",
+					scanType: reflect.TypeOf(uint64(0)), nullable: true,
+				}
+			},
+			queryIssued: true,
+		},
+		{
+			name: "wrong count width",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+				rows.types[1] = fakeColumnType{
+					name: clickhouse.TimechartCountColumn, databaseType: "UInt32",
+					scanType: reflect.TypeOf(uint32(0)),
+				}
+				rows.data[0][1] = uint32(1)
+			},
+			queryIssued: true,
+		},
+		{
+			name: "incomplete ordinals",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+				rows.data = rows.data[:1]
+			},
+			queryIssued: true,
+		},
+		{
+			name: "ordinal gap",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+				rows.data[1][0] = uint64(2)
+			},
+			queryIssued: true,
+		},
+		{
+			name: "extra ordinal",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+				rows.data = append(rows.data, []any{uint64(2), uint64(0)})
+			},
+			queryIssued: true,
+		},
+		{
+			name: "invalid output mode",
+			mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
+				query.Timechart.Mode = clickhouse.TimechartMode(255)
+			},
+		},
+		{
+			name: "dynamic label bound on fixed output",
+			mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
+				query.Timechart.MaxLabelBytes = 1
+			},
+		},
+		{
+			name: "wrong public fields",
+			mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
+				query.OutputFields = []string{"_time"}
+			},
+		},
+		{
+			name: "zero bucket origin",
+			mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
+				query.Timechart.FirstBucket = time.Time{}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rows := fixedTimechartOrdinalRows([]uint64{1, 0})
+			query := fixedTimechartQuery(first, 2)
+			test.mutate(rows, &query)
+			connection := &fakeQueryConnection{rows: rows}
+			sink := &fakeSink{}
+			err := mustExecutor(t, connection).Execute(context.Background(), query, sink)
+			if !errors.Is(err, searchjobs.ErrInvalidResult) {
+				t.Fatalf("Execute error = %v, want ErrInvalidResult", err)
+			}
+			if got := connection.query != ""; got != test.queryIssued {
+				t.Fatalf("query issued = %v, want %v", got, test.queryIssued)
+			}
+			if sink.setCalls != 0 || len(sink.rows) != 0 {
+				t.Fatalf("malformed fixed timechart published schema=%d rows=%d", sink.setCalls, len(sink.rows))
+			}
+		})
+	}
+}
+
+func TestExecutorRejectsFixedTimechartStreamFailuresAtomically(t *testing.T) {
+	t.Parallel()
+
+	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name   string
+		mutate func(*fakeRows)
+	}{
+		{
+			name:   "iteration failure",
+			mutate: func(rows *fakeRows) { rows.err = io.ErrUnexpectedEOF },
+		},
+		{
+			name:   "close failure",
+			mutate: func(rows *fakeRows) { rows.closeErr = io.ErrUnexpectedEOF },
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			rows := fixedTimechartOrdinalRows([]uint64{1, 0})
+			test.mutate(rows)
+			sink := &fakeSink{}
+			err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
+				context.Background(),
+				fixedTimechartQuery(first, 2),
+				sink,
+			)
+			if !errors.Is(err, searchjobs.ErrStorageUnavailable) {
+				t.Fatalf("Execute error = %v, want ErrStorageUnavailable", err)
+			}
+			if sink.setCalls != 0 || len(sink.rows) != 0 {
+				t.Fatalf("failed fixed timechart published schema=%d rows=%d", sink.setCalls, len(sink.rows))
+			}
+		})
+	}
+}
+
+func TestExecutorCancelsFixedTimechartBeforePublication(t *testing.T) {
+	t.Parallel()
+
+	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	rows := fixedTimechartOrdinalRows([]uint64{1, 0})
+	ctx, cancel := context.WithCancel(context.Background())
+	rows.afterScan = cancel
+	sink := &fakeSink{}
+	err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
+		ctx,
+		fixedTimechartQuery(first, 2),
+		sink,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute error = %v, want context.Canceled", err)
+	}
+	if !rows.closed || rows.nextCalls != 1 {
+		t.Fatalf("canceled stream closed=%v next calls=%d", rows.closed, rows.nextCalls)
+	}
+	if sink.setCalls != 0 || len(sink.rows) != 0 {
+		t.Fatalf("canceled fixed timechart published schema=%d rows=%d", sink.setCalls, len(sink.rows))
+	}
+}
+
 func TestExecutorBuffersAndPublishesBoundedChartPivot(t *testing.T) {
 	t.Parallel()
 
@@ -561,6 +771,9 @@ func TestExecutorRejectsMalformedTimechartAtomically(t *testing.T) {
 		{name: "close failure", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.closeErr = io.ErrUnexpectedEOF }, want: searchjobs.ErrStorageUnavailable, queryIssued: true},
 		{name: "invalid output prefix", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) { query.OutputFields = []string{"wrong"} }, want: searchjobs.ErrInvalidResult},
 		{name: "zero bucket count", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) { query.Timechart.BucketCount = 0 }, want: searchjobs.ErrInvalidResult},
+		{name: "zero bucket origin", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
+			query.Timechart.FirstBucket = time.Time{}
+		}, want: searchjobs.ErrInvalidResult},
 		{name: "unaligned origin", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
 			query.Timechart.FirstBucket = first.Add(time.Minute)
 		}, want: searchjobs.ErrInvalidResult},
@@ -628,6 +841,36 @@ func timechartOrdinalRows(names []string, counts [][]uint64) *fakeRows {
 	}
 	for index, values := range counts {
 		rows.data[index] = []any{uint64(index), slices.Clone(names), slices.Clone(values), uint8(0)}
+	}
+	return rows
+}
+
+func fixedTimechartQuery(first time.Time, bucketCount uint64) clickhouse.CompiledQuery {
+	return clickhouse.CompiledQuery{
+		SQL:          "SELECT bounded_fixed_timechart",
+		OutputFields: []string{"_time", "count"},
+		Timechart: &clickhouse.TimechartOutput{
+			Mode:        clickhouse.TimechartModeFixedCount,
+			FirstBucket: first, Span: 5 * time.Minute, BucketCount: bucketCount,
+			MaxSeries: 1,
+		},
+	}
+}
+
+func fixedTimechartOrdinalRows(counts []uint64) *fakeRows {
+	rows := &fakeRows{
+		columns: []string{
+			clickhouse.TimechartOrdinalColumn,
+			clickhouse.TimechartCountColumn,
+		},
+		types: []driver.ColumnType{
+			fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+			fakeColumnType{name: clickhouse.TimechartCountColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+		},
+		data: make([][]any, len(counts)),
+	}
+	for index, count := range counts {
+		rows.data[index] = []any{uint64(index), count}
 	}
 	return rows
 }
@@ -1411,6 +1654,10 @@ func TestExecutorExpandsOnlyOptedInTimechartGroupBudget(t *testing.T) {
 	if got, want := executor.settingsFor(maximum)["max_rows_to_group_by"], uint64(130_000); got != want {
 		t.Fatalf("maximum timechart group cap = %v, want %d", got, want)
 	}
+	fixed := fixedTimechartQuery(time.Unix(0, 0).UTC(), maximumTimechartBuckets)
+	if got, want := executor.settingsFor(fixed)["max_rows_to_group_by"], defaultMaxResultRows; got != want {
+		t.Fatalf("fixed timechart group cap = %v, want unchanged base cap %d", got, want)
+	}
 	if got := executor.settingsFor(clickhouse.CompiledQuery{SQL: "SELECT 1"})["max_rows_to_group_by"]; got != defaultMaxResultRows {
 		t.Fatalf("ordinary query group cap = %v, want %d", got, defaultMaxResultRows)
 	}
@@ -1426,6 +1673,10 @@ func TestExecutorExpandsOnlyOptedInTimechartGroupBudget(t *testing.T) {
 	customExpanded := &Executor{settings: customSettings, expandTimechartGroupLimit: true}
 	if got, want := customExpanded.settingsFor(dense)["max_rows_to_group_by"], uint64(15_003); got != want {
 		t.Fatalf("opted-in timechart group cap = %v, want %d", got, want)
+	}
+	fixed.Timechart.BucketCount = 5_001
+	if got, want := customExpanded.settingsFor(fixed)["max_rows_to_group_by"], uint64(5_001); got != want {
+		t.Fatalf("opted-in fixed timechart group cap = %v, want %d", got, want)
 	}
 	if got := customExpanded.settingsFor(clickhouse.CompiledQuery{SQL: "SELECT ordinary"})["max_rows_to_group_by"]; got != uint64(7) {
 		t.Fatalf("opted-in ordinary group cap = %v, want 7", got)
@@ -1567,6 +1818,7 @@ type fakeRows struct {
 	err       error
 	closeErr  error
 	closed    bool
+	afterScan func()
 }
 
 func (rows *fakeRows) Next() bool {
@@ -1589,6 +1841,9 @@ func (rows *fakeRows) Scan(destinations ...any) error {
 		if err := assignFakeScan(destination, values[index]); err != nil {
 			return err
 		}
+	}
+	if rows.afterScan != nil {
+		rows.afterScan()
 	}
 	return nil
 }

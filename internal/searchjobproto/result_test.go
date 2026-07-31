@@ -155,6 +155,27 @@ func TestSchemaPreservesOrderKindsAndSemantics(t *testing.T) {
 	}
 }
 
+func TestSchemaMarksStaticTimeSeriesCountAsMetric(t *testing.T) {
+	t.Parallel()
+
+	converted, err := Schema("schema-static-timechart", searchjobs.Schema{
+		Columns: []searchjobs.Column{
+			{Name: "_time", Kind: searchjobs.ValueKindTime},
+			{Name: "count", Kind: searchjobs.ValueKindUnsigned},
+		},
+	}, ResultShape{
+		Kind:                opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
+		RuntimeNamedColumns: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := converted.GetColumns()[1].GetSemanticType(); got !=
+		opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
+		t.Fatalf("count semantic = %v, want METRIC", got)
+	}
+}
+
 func TestSchemaRejectsMalformedColumns(t *testing.T) {
 	t.Parallel()
 

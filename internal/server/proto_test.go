@@ -301,6 +301,7 @@ func TestResultKindForSPLRecognizesTransformingCommands(t *testing.T) {
 		"index=main | stats count by level | sort -count | head 20":         opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
 		"index=main | top limit=20 message":                                 opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
 		"index=main | rare limit=20 message":                                opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | timechart span=5m count":                              opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
 		"index=main | timechart span=5m count by level":                     opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
 		"index=main | table _time level | timechart span=5m count by level": opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
 		`index=main | eval duration_ms=tonumber(replace(duration, "ms$", "")) | stats count p95(duration_ms) AS p95_ms BY path | where p95_ms>500`: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
@@ -331,5 +332,24 @@ func TestTimeSeriesSchemaMarksWideSeriesAsMetrics(t *testing.T) {
 		if converted.Columns[index].SemanticType != opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
 			t.Fatalf("series %d semantic = %v", index, converted.Columns[index].SemanticType)
 		}
+	}
+}
+
+func TestTimeSeriesSchemaMarksStaticCountAsMetric(t *testing.T) {
+	t.Parallel()
+
+	converted, err := schemaToProto("timechart", searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "_time", Kind: searchjobs.ValueKindTime},
+		{Name: "count", Kind: searchjobs.ValueKindUnsigned},
+	}}, searchjobproto.ResultShape{
+		Kind:                opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
+		RuntimeNamedColumns: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := converted.Columns[1].SemanticType; got !=
+		opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
+		t.Fatalf("count semantic = %v, want METRIC", got)
 	}
 }

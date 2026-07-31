@@ -746,7 +746,7 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 			Code:        "SPL_EXPECTED_EQUAL",
 			Message:     "timechart span must be followed by '='",
 			Range:       spanOption.sourceRange,
-			Suggestions: []string{"timechart span=5m count by field"},
+			Suggestions: []string{timechartSyntaxSuggestion},
 		}
 	}
 	spanToken := p.current()
@@ -755,7 +755,7 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 			Code:        "SPL_INVALID_ARGUMENT",
 			Message:     "timechart span must be a positive integer followed by s, m, or h",
 			Range:       spanToken.sourceRange,
-			Suggestions: []string{"timechart span=5m count by field"},
+			Suggestions: []string{timechartSyntaxSuggestion},
 		}
 	}
 	span, err := parseTimechartSpan(spanToken)
@@ -770,12 +770,23 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 			Code:        "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
 			Message:     "only argument-free count is supported by timechart",
 			Range:       aggregate.sourceRange,
-			Suggestions: []string{"timechart span=5m count by field"},
+			Suggestions: []string{timechartSyntaxSuggestion},
 		}
 	}
 	p.advance()
+	if p.atCommandEnd() {
+		return &TimechartCommand{
+			Span:           span,
+			Function:       AggregateFunctionCount,
+			AggregateRange: aggregate.sourceRange,
+			Range:          Range{Start: name.sourceRange.Start, End: aggregate.sourceRange.End},
+		}, nil
+	}
 	if !p.isKeyword("BY") {
-		return nil, p.unsupportedTimechartSyntax(p.current(), "timechart count requires BY followed by one split field")
+		return nil, p.unsupportedTimechartSyntax(
+			p.current(),
+			"timechart count accepts only an optional BY followed by one split field",
+		)
 	}
 	p.advance()
 
@@ -794,7 +805,7 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 		Span:           span,
 		Function:       AggregateFunctionCount,
 		AggregateRange: aggregate.sourceRange,
-		SplitBy:        StatsGroupField{Name: field.text, Range: field.sourceRange},
+		SplitBy:        &StatsGroupField{Name: field.text, Range: field.sourceRange},
 		Range:          Range{Start: name.sourceRange.Start, End: field.sourceRange.End},
 	}, nil
 }
@@ -851,6 +862,8 @@ type fixedTimeSpanParserConfig struct {
 	logSpanUnsupported bool
 }
 
+const timechartSyntaxSuggestion = "timechart span=5m count"
+
 var (
 	binTimeSpanConfig = fixedTimeSpanParserConfig{
 		commandName:        "bin",
@@ -861,7 +874,7 @@ var (
 	timechartTimeSpanConfig = fixedTimeSpanParserConfig{
 		commandName: "timechart",
 		syntaxCode:  "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
-		suggestion:  "timechart span=5m count by field",
+		suggestion:  timechartSyntaxSuggestion,
 	}
 )
 
@@ -942,7 +955,7 @@ func (p *parser) unsupportedTimechartSyntax(tok token, message string) *Diagnost
 		Code:        "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
 		Message:     message,
 		Range:       tok.sourceRange,
-		Suggestions: []string{"timechart span=5m count by field"},
+		Suggestions: []string{timechartSyntaxSuggestion},
 	}
 }
 

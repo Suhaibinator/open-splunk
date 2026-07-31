@@ -183,46 +183,51 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 }
 
 func validateTimelineSpec(spec TimelineSpec) (int64, error) {
+	return validateFixedTimeGridSpec(spec, "timeline")
+}
+
+func validateFixedTimeGridSpec(spec TimelineSpec, operation string) (int64, error) {
+	prefix := "compile ClickHouse " + operation + ": "
 	if !validTimelineFirstBucket(spec.FirstBucket) || !validTimelineRangeBoundary(spec.Earliest) || !validTimelineRangeBoundary(spec.Latest) {
-		return 0, errors.New("compile ClickHouse timeline: boundaries must be nonzero UTC timestamps and first bucket must use whole seconds")
+		return 0, errors.New(prefix + "boundaries must be nonzero UTC timestamps and first bucket must use whole seconds")
 	}
 	if !SupportsSearchTimeRange(spec.Earliest, spec.Latest) {
-		return 0, errors.New("compile ClickHouse timeline: covered range is outside the supported DateTime64(9) bounds")
+		return 0, errors.New(prefix + "covered range is outside the supported DateTime64(9) bounds")
 	}
 	if spec.SpanSeconds <= 0 || spec.SpanSeconds > math.MaxInt64/int64(time.Second) {
-		return 0, errors.New("compile ClickHouse timeline: span seconds are out of range")
+		return 0, errors.New(prefix + "span seconds are out of range")
 	}
 	if spec.BucketCount == 0 || spec.BucketCount > maxTimelineBuckets {
-		return 0, fmt.Errorf("compile ClickHouse timeline: bucket count must be between 1 and %d", maxTimelineBuckets)
+		return 0, fmt.Errorf("%sbucket count must be between 1 and %d", prefix, maxTimelineBuckets)
 	}
 	if spec.FirstBucket.Unix()%spec.SpanSeconds != 0 {
-		return 0, errors.New("compile ClickHouse timeline: first bucket is not epoch aligned")
+		return 0, errors.New(prefix + "first bucket is not epoch aligned")
 	}
 	if !spec.Earliest.Before(spec.Latest) {
-		return 0, errors.New("compile ClickHouse timeline: covered range must be nonempty")
+		return 0, errors.New(prefix + "covered range must be nonempty")
 	}
 
 	bucketCount := int64(spec.BucketCount)
 	if spec.SpanSeconds > math.MaxInt64/bucketCount {
-		return 0, errors.New("compile ClickHouse timeline: covered seconds overflow")
+		return 0, errors.New(prefix + "covered seconds overflow")
 	}
 	coveredSeconds := spec.SpanSeconds * bucketCount
 	firstSecond := spec.FirstBucket.Unix()
 	if firstSecond > math.MaxInt64-coveredSeconds {
-		return 0, errors.New("compile ClickHouse timeline: grid end overflows Unix seconds")
+		return 0, errors.New(prefix + "grid end overflows Unix seconds")
 	}
 	gridEndSecond := firstSecond + coveredSeconds
 	firstBucketEnd := time.Unix(firstSecond+spec.SpanSeconds, 0).UTC()
 	lastBucketStart := time.Unix(gridEndSecond-spec.SpanSeconds, 0).UTC()
 	gridEnd := time.Unix(gridEndSecond, 0).UTC()
 	if spec.Earliest.Before(spec.FirstBucket) || !spec.Earliest.Before(firstBucketEnd) {
-		return 0, errors.New("compile ClickHouse timeline: earliest must be inside the first bucket")
+		return 0, errors.New(prefix + "earliest must be inside the first bucket")
 	}
 	if !spec.Latest.After(lastBucketStart) || spec.Latest.After(gridEnd) {
-		return 0, errors.New("compile ClickHouse timeline: latest must be inside the final bucket cover")
+		return 0, errors.New(prefix + "latest must be inside the final bucket cover")
 	}
 	if _, ok := ordinalGridFirstBucketNumber(firstSecond, spec.SpanSeconds, spec.BucketCount); !ok {
-		return 0, errors.New("compile ClickHouse timeline: grid bucket number overflows")
+		return 0, errors.New(prefix + "grid bucket number overflows")
 	}
 
 	return spec.SpanSeconds * int64(time.Second), nil

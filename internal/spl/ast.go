@@ -694,14 +694,15 @@ func (*BinCommand) command()             {}
 func (c *BinCommand) Name() string       { return c.CommandName }
 func (c *BinCommand) SourceRange() Range { return c.Range }
 
-// TimechartCommand produces a runtime-wide count series over fixed _time
-// buckets. The initial compatibility slice supports one split field and is a
-// terminal transforming command.
+// TimechartCommand produces a count series over fixed _time buckets. Without
+// SplitBy the output is the static _time/count schema; with SplitBy it is a
+// bounded runtime-wide relation. Both forms are terminal transforming
+// commands in this compatibility slice.
 type TimechartCommand struct {
 	Span           TimeSpan
 	Function       AggregateFunction
 	AggregateRange Range
-	SplitBy        StatsGroupField
+	SplitBy        *StatsGroupField
 	Range          Range
 }
 

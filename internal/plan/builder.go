@@ -988,27 +988,39 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			if timeErr != nil {
 				return nil, timeErr
 			}
-			splitBy, splitErr := ResolveField(command.SplitBy.Name, command.SplitBy.Range)
-			if splitErr != nil {
-				return nil, splitErr
-			}
-			result.OutputFields = nil
-			result.DynamicOutput = &DynamicSeriesOutput{
-				FixedFields: []string{"_time"},
-				MaxSeries:   maxTimechartSeries,
+			var split *TimechartSplit
+			if command.SplitBy != nil {
+				resolved, splitErr := ResolveField(
+					command.SplitBy.Name,
+					command.SplitBy.Range,
+				)
+				if splitErr != nil {
+					return nil, splitErr
+				}
+				split = &TimechartSplit{
+					Field:        resolved,
+					SeriesLimit:  timechartSeriesLimit,
+					IncludeNull:  true,
+					IncludeOther: true,
+					NullLabel:    "NULL",
+					OtherLabel:   "OTHER",
+				}
+				result.OutputFields = nil
+				result.DynamicOutput = &DynamicSeriesOutput{
+					FixedFields: []string{"_time"},
+					MaxSeries:   maxTimechartSeries,
+				}
+			} else {
+				result.OutputFields = []string{"_time", "count"}
+				result.DynamicOutput = nil
 			}
 			result.Operators = append(result.Operators, &Timechart{
 				Time:           timeField,
-				SplitBy:        splitBy,
+				Split:          split,
 				Function:       AggregateFunctionCountRows,
 				Span:           span,
 				FirstBucket:    firstBucket,
 				BucketCount:    bucketCount,
-				SeriesLimit:    timechartSeriesLimit,
-				IncludeNull:    true,
-				IncludeOther:   true,
-				NullLabel:      "NULL",
-				OtherLabel:     "OTHER",
 				FixedRange:     true,
 				Continuous:     true,
 				IncludePartial: true,

@@ -304,6 +304,9 @@ func describeOperator(
 			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")
 		}
 		outputs = []string{"_time"}
+		if concrete.Split == nil {
+			outputs = append(outputs, "count")
+		}
 	case *plan.Chart:
 		if concrete == nil {
 			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")

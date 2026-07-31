@@ -1573,7 +1573,8 @@ func TestParseTimechartFixedSpanCountByField(t *testing.T) {
 				t.Fatalf("command = %T, want *TimechartCommand", query.Commands[0])
 			}
 			if command.Span.Magnitude != test.magnitude || command.Span.Unit != test.unit ||
-				command.Function != AggregateFunctionCount || command.SplitBy.Name != test.field {
+				command.Function != AggregateFunctionCount || command.SplitBy == nil ||
+				command.SplitBy.Name != test.field {
 				t.Fatalf("timechart = %#v", command)
 			}
 			spanText := test.source[command.Span.Range.Start.Offset:command.Span.Range.End.Offset]
@@ -1585,6 +1586,64 @@ func TestParseTimechartFixedSpanCountByField(t *testing.T) {
 			}
 			if fieldText := test.source[command.SplitBy.Range.Start.Offset:command.SplitBy.Range.End.Offset]; fieldText != test.field {
 				t.Fatalf("split field source = %q", fieldText)
+			}
+		})
+	}
+}
+
+func TestParseTimechartFixedSpanCountWithoutSplit(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		source      string
+		commandText string
+		magnitude   uint64
+		unit        TimeSpanUnit
+	}{
+		{
+			source:      `index=gradethis | TIMECHART SPAN = 5M COUNT`,
+			commandText: "TIMECHART SPAN = 5M COUNT",
+			magnitude:   5,
+			unit:        TimeSpanUnitMinute,
+		},
+		{
+			source:      `index=gradethis | timechart span=30s count`,
+			commandText: "timechart span=30s count",
+			magnitude:   30,
+			unit:        TimeSpanUnitSecond,
+		},
+		{
+			source:      `index=gradethis | timechart span=2h count`,
+			commandText: "timechart span=2h count",
+			magnitude:   2,
+			unit:        TimeSpanUnitHour,
+		},
+	} {
+		test := test
+		t.Run(test.commandText, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if len(query.Commands) != 1 {
+				t.Fatalf("command count = %d, want 1", len(query.Commands))
+			}
+			command, ok := query.Commands[0].(*TimechartCommand)
+			if !ok {
+				t.Fatalf("command = %T, want *TimechartCommand", query.Commands[0])
+			}
+			if command.Span.Magnitude != test.magnitude ||
+				command.Span.Unit != test.unit ||
+				command.Function != AggregateFunctionCount ||
+				command.SplitBy != nil {
+				t.Fatalf("timechart = %#v", command)
+			}
+			if got := test.source[command.SourceRange().Start.Offset:command.SourceRange().End.Offset]; got != test.commandText {
+				t.Fatalf("command source = %q", got)
+			}
+			if got := test.source[command.AggregateRange.Start.Offset:command.AggregateRange.End.Offset]; !strings.EqualFold(got, "count") {
+				t.Fatalf("aggregate source = %q", got)
 			}
 		})
 	}

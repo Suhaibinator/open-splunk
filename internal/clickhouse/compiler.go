@@ -35,13 +35,15 @@ const (
 	internalSortVisibilityColumn       = "__os_sort_visibility_seq"
 	internalSortSourceIdentityColumn   = "__os_sort_source_identity"
 	rawEncodingUTF8                    = 1
-	// Timechart physical columns are an executor-only transport. Runtime series
-	// names are data, never SQL identifiers, and are expanded into the public
-	// wide schema only after the complete bounded result has been validated.
-	// The zero-based ordinal keeps epoch-aligned bucket starts out of
-	// DateTime64 conversions: the first bucket may precede ClickHouse's
-	// practical lower bound even though every selected event is representable.
+	// Timechart physical columns are executor-only transports. The fixed-schema
+	// form returns ordinal/count, while runtime series names remain data and are
+	// expanded into the public wide schema only after the complete bounded
+	// result has been validated. The zero-based ordinal keeps epoch-aligned
+	// bucket starts out of DateTime64 conversions: the first bucket may precede
+	// ClickHouse's practical lower bound even though every selected event is
+	// representable.
 	TimechartOrdinalColumn = "__os_timechart_ordinal"
+	TimechartCountColumn   = "__os_timechart_count"
 	TimechartNamesColumn   = "__os_timechart_names"
 	TimechartCountsColumn  = "__os_timechart_counts"
 	TimechartInvalidColumn = "__os_timechart_invalid"
@@ -365,10 +367,20 @@ type ChartOutput struct {
 	MaxLabelBytes   uint16
 }
 
-// TimechartOutput describes the bounded runtime-wide result contract. The SQL
-// result itself has fixed private columns; OutputFields contains only the
-// fixed public prefix, currently _time.
+// TimechartMode identifies the executor transport and public schema contract.
+type TimechartMode uint8
+
+const (
+	// TimechartModeRuntimeWide is the zero value so existing dynamic compiler
+	// fixtures remain explicit through their bounded series metadata.
+	TimechartModeRuntimeWide TimechartMode = iota
+	TimechartModeFixedCount
+)
+
+// TimechartOutput describes either a bounded fixed-count or runtime-wide
+// result contract.
 type TimechartOutput struct {
+	Mode          TimechartMode
 	FirstBucket   time.Time
 	Span          time.Duration
 	BucketCount   uint64
@@ -904,7 +916,16 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			if operatorIndex+1 != len(remainingOperators) {
 				return CompiledQuery{}, errors.New("compile ClickHouse timechart: operator must be terminal")
 			}
-			compiled, compileErr := compileTimechart(relation, state, args, operator, query.DynamicOutput, alias)
+			compiled, compileErr := compileTimechart(
+				relation,
+				state,
+				args,
+				operator,
+				query.OutputFields,
+				query.DynamicOutput,
+				scan,
+				alias,
+			)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
@@ -1259,11 +1280,20 @@ func wrapCompiledChronologicalValidation(
 			ChartInvalidColumn,
 		}
 	case compiled.Timechart != nil && compiled.Chart == nil:
-		resultColumns = []string{
-			TimechartOrdinalColumn,
-			TimechartNamesColumn,
-			TimechartCountsColumn,
-			TimechartInvalidColumn,
+		switch compiled.Timechart.Mode {
+		case TimechartModeFixedCount:
+			resultColumns = []string{TimechartOrdinalColumn, TimechartCountColumn}
+		case TimechartModeRuntimeWide:
+			resultColumns = []string{
+				TimechartOrdinalColumn,
+				TimechartNamesColumn,
+				TimechartCountsColumn,
+				TimechartInvalidColumn,
+			}
+		default:
+			return CompiledQuery{}, errors.New(
+				"compile ClickHouse query: timechart output mode is invalid",
+			)
 		}
 	default:
 		return CompiledQuery{}, errors.New(
@@ -2502,25 +2532,32 @@ func compileTimechart(
 	state compileState,
 	args []any,
 	operator *plan.Timechart,
+	outputFields []string,
 	dynamic *plan.DynamicSeriesOutput,
+	scan *plan.Scan,
 	alias string,
 ) (CompiledQuery, error) {
 	if operator == nil || operator.Function != plan.AggregateFunctionCountRows {
 		return CompiledQuery{}, errors.New("compile ClickHouse timechart: count operator is required")
 	}
-	if dynamic == nil || !slices.Equal(dynamic.FixedFields, []string{"_time"}) || dynamic.MaxSeries == 0 {
-		return CompiledQuery{}, errors.New("compile ClickHouse timechart: dynamic output contract is invalid")
-	}
 	if operator.Span < time.Second || operator.Span > 24*time.Hour || operator.Span%time.Second != 0 || operator.FirstBucket.Nanosecond() != 0 ||
-		operator.FirstBucket.IsZero() || operator.BucketCount == 0 || operator.BucketCount > 10_000 || operator.SeriesLimit != 10 ||
-		dynamic.MaxSeries != 12 || uint32(operator.SeriesLimit)+2 != uint32(dynamic.MaxSeries) || !operator.IncludeNull || !operator.IncludeOther ||
-		operator.NullLabel != "NULL" || operator.OtherLabel != "OTHER" || !operator.FixedRange ||
+		operator.FirstBucket.IsZero() || operator.BucketCount == 0 || operator.BucketCount > 10_000 || !operator.FixedRange ||
 		!operator.Continuous || !operator.IncludePartial {
 		return CompiledQuery{}, errors.New("compile ClickHouse timechart: bounded defaults are invalid")
 	}
+	if scan == nil {
+		return CompiledQuery{}, errors.New("compile ClickHouse timechart: Scan snapshot is required")
+	}
 	spanSeconds := int64(operator.Span / time.Second)
-	if spanSeconds <= 0 || operator.FirstBucket.Unix()%spanSeconds != 0 {
-		return CompiledQuery{}, errors.New("compile ClickHouse timechart: first bucket is not epoch aligned")
+	spanNanoseconds, err := validateFixedTimeGridSpec(TimelineSpec{
+		FirstBucket: operator.FirstBucket,
+		SpanSeconds: spanSeconds,
+		BucketCount: operator.BucketCount,
+		Earliest:    scan.Earliest,
+		Latest:      scan.Latest,
+	}, "timechart")
+	if err != nil {
+		return CompiledQuery{}, err
 	}
 	firstBucketNumber, gridOK := ordinalGridFirstBucketNumber(operator.FirstBucket.Unix(), spanSeconds, operator.BucketCount)
 	if !gridOK {
@@ -2545,7 +2582,31 @@ func compileTimechart(
 		}
 	}
 
-	splitField, splitExists, err := resolveCompiledField(operator.SplitBy, state)
+	if operator.Split == nil {
+		if !slices.Equal(outputFields, []string{"_time", "count"}) || dynamic != nil {
+			return CompiledQuery{}, errors.New("compile ClickHouse timechart: fixed output contract is invalid")
+		}
+		return compileFixedCountTimechart(
+			relation,
+			args,
+			operator,
+			timeField,
+			outputFields,
+			spanNanoseconds,
+			firstBucketNumber,
+			alias,
+		)
+	}
+	if len(outputFields) != 0 || dynamic == nil ||
+		!slices.Equal(dynamic.FixedFields, []string{"_time"}) ||
+		dynamic.MaxSeries != 12 || operator.Split.SeriesLimit != 10 ||
+		uint32(operator.Split.SeriesLimit)+2 != uint32(dynamic.MaxSeries) ||
+		!operator.Split.IncludeNull || !operator.Split.IncludeOther ||
+		operator.Split.NullLabel != "NULL" || operator.Split.OtherLabel != "OTHER" {
+		return CompiledQuery{}, errors.New("compile ClickHouse timechart: dynamic output contract is invalid")
+	}
+
+	splitField, splitExists, err := resolveCompiledField(operator.Split.Field, state)
 	if err != nil {
 		return CompiledQuery{}, err
 	}
@@ -2617,7 +2678,6 @@ func compileTimechart(
 	invalid := q("__os_tc_invalid")
 	ordinal := q(TimechartOrdinalColumn)
 
-	spanNanoseconds := int64(operator.Span)
 	bucketNumberExpression := epochFloorBucketNumberSQL(ticks)
 	validLabel := "isValidUTF8(" + label + ") AND length(" + label + ") BETWEEN 1 AND " +
 		strconv.Itoa(maxTimechartLabelBytes) + " AND " + label + " NOT IN ('NULL', 'OTHER')"
@@ -2667,7 +2727,7 @@ func compileTimechart(
 	sql.WriteString(top)
 	sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", sum(" + frequency + ") AS " + frequency + " FROM " + counts)
 	sql.WriteString(" WHERE " + kind + " = 0 GROUP BY " + label + " ORDER BY " + frequency + " DESC, " + label + " ASC LIMIT ")
-	sql.WriteString(strconv.FormatUint(uint64(operator.SeriesLimit), 10))
+	sql.WriteString(strconv.FormatUint(uint64(operator.Split.SeriesLimit), 10))
 	sql.WriteString("), ")
 
 	sql.WriteString(collapsed)
@@ -2761,11 +2821,112 @@ func compileTimechart(
 		Args:         args,
 		OutputFields: slices.Clone(dynamic.FixedFields),
 		Timechart: &TimechartOutput{
+			Mode:          TimechartModeRuntimeWide,
 			FirstBucket:   operator.FirstBucket.UTC(),
 			Span:          operator.Span,
 			BucketCount:   operator.BucketCount,
 			MaxSeries:     dynamic.MaxSeries,
 			MaxLabelBytes: maxTimechartLabelBytes,
+		},
+	}
+	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
+}
+
+func compileFixedCountTimechart(
+	relation compiledRelation,
+	args []any,
+	operator *plan.Timechart,
+	timeField fieldState,
+	outputFields []string,
+	spanNanoseconds int64,
+	firstBucketNumber int64,
+	alias string,
+) (CompiledQuery, error) {
+	q := quoteIdentifier
+	source := q("__os_timechart_source")
+	counts := q("__os_timechart_group_counts")
+	grid := q("__os_timechart_grid")
+	ticks := q("__os_tc_ticks")
+	bucketNumber := q("__os_tc_bucket_number")
+	ordinal := q(TimechartOrdinalColumn)
+	count := q(TimechartCountColumn)
+
+	var sql strings.Builder
+	sql.Grow(len(relation.sql) + 1_536)
+	sql.WriteString("WITH ")
+	sql.WriteString(source)
+	sql.WriteString(" AS (SELECT reinterpretAsInt64(")
+	sql.WriteString(timeField.valueSQL)
+	sql.WriteString(") AS ")
+	sql.WriteString(ticks)
+	sql.WriteString(" FROM (")
+	sql.WriteString(relation.sql)
+	sql.WriteString(") AS ")
+	sql.WriteString(alias)
+	sql.WriteString("), ")
+
+	sql.WriteString(counts)
+	sql.WriteString(" AS (SELECT ")
+	sql.WriteString(epochFloorBucketNumberSQL(ticks))
+	sql.WriteString(" AS ")
+	sql.WriteString(bucketNumber)
+	sql.WriteString(", count() AS ")
+	sql.WriteString(count)
+	sql.WriteString(" FROM ")
+	sql.WriteString(source)
+	sql.WriteString(" GROUP BY ")
+	sql.WriteString(bucketNumber)
+	sql.WriteString("), ")
+
+	sql.WriteString(grid)
+	sql.WriteString(" AS (")
+	sql.WriteString(ordinalGridSQL(ordinal, bucketNumber))
+	sql.WriteString(") SELECT ")
+	sql.WriteString(grid)
+	sql.WriteString(".")
+	sql.WriteString(ordinal)
+	sql.WriteString(" AS ")
+	sql.WriteString(ordinal)
+	sql.WriteString(", ifNull(")
+	sql.WriteString(counts)
+	sql.WriteString(".")
+	sql.WriteString(count)
+	sql.WriteString(", toUInt64(0)) AS ")
+	sql.WriteString(count)
+	sql.WriteString(" FROM ")
+	sql.WriteString(grid)
+	sql.WriteString(" LEFT JOIN ")
+	sql.WriteString(counts)
+	sql.WriteString(" ON ")
+	sql.WriteString(counts)
+	sql.WriteString(".")
+	sql.WriteString(bucketNumber)
+	sql.WriteString(" = ")
+	sql.WriteString(grid)
+	sql.WriteString(".")
+	sql.WriteString(bucketNumber)
+	sql.WriteString(" ORDER BY ")
+	sql.WriteString(grid)
+	sql.WriteString(".")
+	sql.WriteString(ordinal)
+	sql.WriteString(" ASC")
+
+	args = appendOrdinalGridArgs(args, spanNanoseconds, firstBucketNumber, operator.BucketCount)
+	sourceDepth := relationalNodeDepth(relation.depth)
+	countsDepth := relationalNodeDepth(sourceDepth)
+	gridDepth := relationalNodeDepth()
+	resultDepth := relationalNodeDepth(gridDepth, countsDepth)
+	compiled := CompiledQuery{
+		SQL:          sql.String(),
+		Args:         args,
+		OutputFields: slices.Clone(outputFields),
+		Timechart: &TimechartOutput{
+			Mode:          TimechartModeFixedCount,
+			FirstBucket:   operator.FirstBucket.UTC(),
+			Span:          operator.Span,
+			BucketCount:   operator.BucketCount,
+			MaxSeries:     1,
+			MaxLabelBytes: 0,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil

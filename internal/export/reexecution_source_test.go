@@ -259,6 +259,46 @@ func TestReexecutionSourceAdmitsBoundedDynamicTimechartSchema(t *testing.T) {
 	}
 }
 
+func TestReexecutionSourceAdmitsStaticTimechartSchema(t *testing.T) {
+	t.Parallel()
+	searches, _, access := newReexecutionTestSearches()
+	searches.job.SPL = `index=main | timechart span=5m count`
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "_time", Kind: searchjobs.ValueKindTime},
+		{Name: "count", Kind: searchjobs.ValueKindUnsigned},
+	}}
+	searches.pin.schema = schema
+	bucket := searches.job.Earliest.Truncate(5 * time.Minute)
+	executor := reexecutionTestExecutor(func(_ context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) error {
+		if query.Timechart == nil ||
+			query.Timechart.Mode != clickhouse.TimechartModeFixedCount {
+			t.Fatalf("re-executed query lost its static timechart contract: %#v", query.Timechart)
+		}
+		if err := sink.SetSchema(schema); err != nil {
+			return err
+		}
+		return sink.AddRow([]searchjobs.Value{
+			searchjobs.TimeValue(bucket),
+			searchjobs.UnsignedValue(3),
+		})
+	})
+	source := newReexecutionTestSource(t, searches, executor, nil)
+	lease, err := source.AcquireResultsFor(context.Background(), access, searches.job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, ok, err := lease.Next(context.Background())
+	if err != nil || !ok || len(row.Values) != len(schema.Columns) {
+		t.Fatalf("Next(static timechart) = (%#v, %t, %v)", row, ok, err)
+	}
+	if _, ok, err := lease.Next(context.Background()); err != nil || ok {
+		t.Fatalf("terminal Next(static timechart) = ok %t err %v", ok, err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReexecutionSourceAdmitsBoundedDynamicChartSchema(t *testing.T) {
 	t.Parallel()
 	searches, _, access := newReexecutionTestSearches()
@@ -352,6 +392,75 @@ func TestSchemaMatchesCompiledChartRejectsForeignWideSchemas(t *testing.T) {
 			candidate := compiled
 			chart := *compiled.Chart
 			candidate.Chart = &chart
+			if test.mutate != nil {
+				test.mutate(&candidate)
+			}
+			if schemaMatchesCompiledQuery(test.schema, candidate) {
+				t.Fatalf("schemaMatchesCompiledQuery admitted %q", test.name)
+			}
+		})
+	}
+}
+
+func TestSchemaMatchesCompiledStaticTimechartRejectsForeignSchemas(t *testing.T) {
+	t.Parallel()
+
+	compiled := clickhouse.CompiledQuery{
+		OutputFields: []string{"_time", "count"},
+		Timechart: &clickhouse.TimechartOutput{
+			Mode:      clickhouse.TimechartModeFixedCount,
+			MaxSeries: 1,
+		},
+	}
+	valid := searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "_time", Kind: searchjobs.ValueKindTime},
+		{Name: "count", Kind: searchjobs.ValueKindUnsigned},
+	}}
+	if !schemaMatchesCompiledQuery(valid, compiled) {
+		t.Fatal("valid static timechart schema was rejected")
+	}
+	for _, test := range []struct {
+		name   string
+		schema searchjobs.Schema
+		mutate func(*clickhouse.CompiledQuery)
+	}{
+		{name: "empty schema", schema: searchjobs.Schema{}},
+		{name: "missing count", schema: searchjobs.Schema{Columns: valid.Columns[:1]}},
+		{name: "wrong time kind", schema: searchjobs.Schema{Columns: []searchjobs.Column{{Name: "_time", Kind: searchjobs.ValueKindString}, valid.Columns[1]}}},
+		{name: "nullable time", schema: searchjobs.Schema{Columns: []searchjobs.Column{{Name: "_time", Kind: searchjobs.ValueKindTime, Nullable: true}, valid.Columns[1]}}},
+		{name: "wrong count name", schema: searchjobs.Schema{Columns: []searchjobs.Column{valid.Columns[0], {Name: "events", Kind: searchjobs.ValueKindUnsigned}}}},
+		{name: "wrong count kind", schema: searchjobs.Schema{Columns: []searchjobs.Column{valid.Columns[0], {Name: "count", Kind: searchjobs.ValueKindSigned}}}},
+		{name: "nullable count", schema: searchjobs.Schema{Columns: []searchjobs.Column{valid.Columns[0], {Name: "count", Kind: searchjobs.ValueKindUnsigned, Nullable: true}}}},
+		{
+			name: "invalid output mode", schema: valid,
+			mutate: func(query *clickhouse.CompiledQuery) {
+				query.Timechart.Mode = clickhouse.TimechartMode(255)
+			},
+		},
+		{
+			name: "wrong output fields", schema: valid,
+			mutate: func(query *clickhouse.CompiledQuery) {
+				query.OutputFields = []string{"_time"}
+			},
+		},
+		{
+			name: "wrong series bound", schema: valid,
+			mutate: func(query *clickhouse.CompiledQuery) {
+				query.Timechart.MaxSeries = 2
+			},
+		},
+		{
+			name: "dynamic label bound", schema: valid,
+			mutate: func(query *clickhouse.CompiledQuery) {
+				query.Timechart.MaxLabelBytes = 1
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			candidate := compiled
+			timechart := *compiled.Timechart
+			candidate.Timechart = &timechart
 			if test.mutate != nil {
 				test.mutate(&candidate)
 			}

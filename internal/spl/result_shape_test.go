@@ -25,6 +25,11 @@ func TestClassifyResultShapeAppliesTransformationsInPipelineOrder(t *testing.T) 
 			wantRuntime: true,
 		},
 		{
+			name:     "unsplit timechart",
+			source:   "index=main | timechart span=5m count",
+			wantKind: ResultKindTimeSeries,
+		},
+		{
 			name:        "chart",
 			source:      "index=main | chart count OVER path BY level",
 			wantKind:    ResultKindStatistics,

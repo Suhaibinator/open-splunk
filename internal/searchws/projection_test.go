@@ -347,6 +347,7 @@ func TestProjectSearchSchemaMatchesHTTPResultClassification(t *testing.T) {
 		{name: "stats", spl: "index=main | stats count by level", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS},
 		{name: "top", spl: "index=main | top limit=20 message", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS},
 		{name: "rare", spl: "index=main | rare limit=20 message", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS},
+		{name: "static timechart", spl: "index=main | timechart span=5m count", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES},
 		{name: "timechart wins after table", spl: "index=main | table _time level | timechart span=5m count by level", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES, runtimeNamed: true},
 		// A chart is a categorical pivot: its first column is a runtime row
 		// value, so it is statistics rather than a time series. Its remaining
@@ -381,7 +382,8 @@ func TestProjectSearchSchemaMatchesHTTPResultClassification(t *testing.T) {
 				t.Fatalf("_time semantic = %v", schema.Columns[0].GetSemanticType())
 			}
 			wantSecondSemantic := opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_UNSPECIFIED
-			if test.runtimeNamed {
+			if test.runtimeNamed ||
+				test.want == opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES {
 				wantSecondSemantic = opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC
 			}
 			second := schema.Columns[1]

@@ -1222,7 +1222,8 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 	}
 	if compiled.Timechart.FirstBucket != time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC) ||
 		compiled.Timechart.Span != 5*time.Minute || compiled.Timechart.BucketCount != 288 ||
-		compiled.Timechart.MaxSeries != 12 || compiled.Timechart.MaxLabelBytes != 256 {
+		compiled.Timechart.MaxSeries != 12 || compiled.Timechart.MaxLabelBytes != 256 ||
+		compiled.Timechart.Mode != TimechartModeRuntimeWide {
 		t.Fatalf("compiled timechart metadata = %#v", compiled.Timechart)
 	}
 	for _, required := range []string{
@@ -1261,6 +1262,64 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 	}
 	if got := compiled.Args[len(compiled.Args)-5]; got != "path." {
 		t.Fatalf("dynamic descendant argument = %#v, want path. after nested scan", got)
+	}
+	spanNanoseconds := int64(5 * time.Minute)
+	wantTail := []any{spanNanoseconds, spanNanoseconds, int64(5_948_640), uint64(288)}
+	if got := compiled.Args[len(compiled.Args)-4:]; !reflect.DeepEqual(got, wantTail) {
+		t.Fatalf("grid arguments = %#v, want %#v", got, wantTail)
+	}
+}
+
+func TestCompileTimechartWithoutSplitUsesStaticOneSeriesTransport(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis message="Request metrics" status>=500 | timechart span=5m count`,
+	)
+	if !slices.Equal(compiled.OutputFields, []string{"_time", "count"}) {
+		t.Fatalf("public fields = %v, want _time/count", compiled.OutputFields)
+	}
+	if compiled.Timechart == nil {
+		t.Fatal("compiled timechart metadata is missing")
+	}
+	if compiled.Timechart.FirstBucket != time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC) ||
+		compiled.Timechart.Span != 5*time.Minute ||
+		compiled.Timechart.BucketCount != 288 ||
+		compiled.Timechart.MaxSeries != 1 ||
+		compiled.Timechart.MaxLabelBytes != 0 ||
+		compiled.Timechart.Mode != TimechartModeFixedCount {
+		t.Fatalf("compiled timechart metadata = %#v", compiled.Timechart)
+	}
+	for _, required := range []string{
+		`"__os_timechart_source" AS (`,
+		`"__os_timechart_group_counts" AS (`,
+		`AS "` + TimechartCountColumn + `"`,
+		`FROM numbers(?)`,
+		`AS "` + TimechartOrdinalColumn + `"`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("unsplit timechart SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	for _, unnecessary := range []string{
+		`"__os_timechart_prepared"`,
+		`"__os_timechart_classified"`,
+		`"__os_timechart_top"`,
+		`"__os_timechart_normalization_collisions"`,
+		TimechartNamesColumn,
+		TimechartCountsColumn,
+		TimechartInvalidColumn,
+	} {
+		if strings.Contains(compiled.SQL, unnecessary) {
+			t.Fatalf("unsplit timechart SQL contains dynamic-domain work %q:\n%s", unnecessary, compiled.SQL)
+		}
+	}
+	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
+		t.Fatalf("scoped storage scan occurs %d times, want once:\n%s", got, compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
 	}
 	spanNanoseconds := int64(5 * time.Minute)
 	wantTail := []any{spanNanoseconds, spanNanoseconds, int64(5_948_640), uint64(288)}
@@ -1369,8 +1428,8 @@ func TestCompileTimechartRejectsSignedBucketGridOverflow(t *testing.T) {
 	operator.FirstBucket = time.Unix(math.MaxInt64, 0).UTC()
 	operator.BucketCount = 2
 
-	if _, err := (Compiler{}).Compile(logical); err == nil || !strings.Contains(err.Error(), "bucket grid overflows") {
-		t.Fatalf("Compile() error = %v, want signed bucket-grid overflow rejection", err)
+	if _, err := (Compiler{}).Compile(logical); err == nil || !strings.Contains(err.Error(), "grid end overflows") {
+		t.Fatalf("Compile() error = %v, want signed grid-end overflow rejection", err)
 	}
 }
 
@@ -1383,8 +1442,148 @@ func TestCompileTimechartRejectsUnixGridEndOverflow(t *testing.T) {
 	operator.FirstBucket = time.Unix(math.MaxInt64-math.MaxInt64%spanSeconds, 0).UTC()
 	operator.BucketCount = 2
 
-	if _, err := (Compiler{}).Compile(logical); err == nil || !strings.Contains(err.Error(), "bucket grid overflows") {
+	if _, err := (Compiler{}).Compile(logical); err == nil || !strings.Contains(err.Error(), "grid end overflows") {
 		t.Fatalf("Compile() error = %v, want Unix grid-end overflow rejection", err)
+	}
+}
+
+func TestCompileTimechartRevalidatesExactGridAndOutputContract(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		`index=gradethis | timechart span=5m count`,
+		`index=gradethis | timechart span=5m count BY level`,
+	} {
+		source := source
+		for _, test := range []struct {
+			name    string
+			corrupt func(*plan.Query, *plan.Timechart)
+			want    string
+		}{
+			{
+				name: "grid starts one bucket early",
+				corrupt: func(_ *plan.Query, operator *plan.Timechart) {
+					operator.FirstBucket = operator.FirstBucket.Add(-operator.Span)
+				},
+				want: "earliest must be inside the first bucket",
+			},
+			{
+				name: "grid omits final bucket",
+				corrupt: func(_ *plan.Query, operator *plan.Timechart) {
+					operator.BucketCount--
+				},
+				want: "latest must be inside the final bucket cover",
+			},
+			{
+				name: "bucket origin only looks like UTC",
+				corrupt: func(_ *plan.Query, operator *plan.Timechart) {
+					operator.FirstBucket = operator.FirstBucket.In(time.FixedZone("UTC-copy", 0))
+				},
+				want: "boundaries must be nonzero UTC timestamps",
+			},
+			{
+				name: "aggregate replaced",
+				corrupt: func(_ *plan.Query, operator *plan.Timechart) {
+					operator.Function = plan.AggregateFunctionSum
+				},
+				want: "count operator is required",
+			},
+		} {
+			test := test
+			t.Run(source+"/"+test.name, func(t *testing.T) {
+				t.Parallel()
+				logical := buildPlan(t, source)
+				operator := logical.Operators[len(logical.Operators)-1].(*plan.Timechart)
+				test.corrupt(logical, operator)
+				if _, err := (Compiler{}).Compile(logical); err == nil ||
+					!strings.Contains(err.Error(), test.want) {
+					t.Fatalf("Compile() error = %v, want %q", err, test.want)
+				}
+			})
+		}
+	}
+
+	for _, test := range []struct {
+		name    string
+		corrupt func(*plan.Query, *plan.Timechart)
+		want    string
+	}{
+		{
+			name: "fixed output renamed",
+			corrupt: func(query *plan.Query, _ *plan.Timechart) {
+				query.OutputFields[1] = "events"
+			},
+			want: "fixed output contract is invalid",
+		},
+		{
+			name: "fixed output made dynamic",
+			corrupt: func(query *plan.Query, _ *plan.Timechart) {
+				query.DynamicOutput = &plan.DynamicSeriesOutput{
+					FixedFields: []string{"_time"},
+					MaxSeries:   12,
+				}
+			},
+			want: "fixed output contract is invalid",
+		},
+		{
+			name: "fixed output inherits split defaults",
+			corrupt: func(_ *plan.Query, operator *plan.Timechart) {
+				operator.Split = &plan.TimechartSplit{
+					Field:       plan.FieldRef{Name: "level", Path: []string{"level"}},
+					SeriesLimit: 10,
+					IncludeNull: true,
+				}
+			},
+			want: "dynamic output contract is invalid",
+		},
+	} {
+		test := test
+		t.Run("fixed/"+test.name, func(t *testing.T) {
+			t.Parallel()
+			logical := buildPlan(t, `index=gradethis | timechart span=5m count`)
+			operator := logical.Operators[len(logical.Operators)-1].(*plan.Timechart)
+			test.corrupt(logical, operator)
+			if _, err := (Compiler{}).Compile(logical); err == nil ||
+				!strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Compile() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name    string
+		corrupt func(*plan.Query, *plan.Timechart)
+	}{
+		{
+			name: "dynamic descriptor removed",
+			corrupt: func(query *plan.Query, _ *plan.Timechart) {
+				query.DynamicOutput = nil
+			},
+		},
+		{
+			name: "dynamic output made static",
+			corrupt: func(query *plan.Query, _ *plan.Timechart) {
+				query.OutputFields = []string{"_time", "count"}
+			},
+		},
+		{
+			name: "dynamic series bound changed",
+			corrupt: func(query *plan.Query, _ *plan.Timechart) {
+				query.DynamicOutput.MaxSeries = 11
+			},
+		},
+	} {
+		test := test
+		t.Run("split/"+test.name, func(t *testing.T) {
+			t.Parallel()
+			logical := buildPlan(t, `index=gradethis | timechart span=5m count BY level`)
+			operator := logical.Operators[len(logical.Operators)-1].(*plan.Timechart)
+			test.corrupt(logical, operator)
+			if _, err := (Compiler{}).Compile(logical); err == nil ||
+				!strings.Contains(err.Error(), "dynamic output contract is invalid") {
+				t.Fatalf("Compile() error = %v, want dynamic-contract rejection", err)
+			}
+		})
 	}
 }
 

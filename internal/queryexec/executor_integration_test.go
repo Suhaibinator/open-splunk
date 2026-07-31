@@ -1304,6 +1304,46 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("timechart fixed range count without split through manager", func(t *testing.T) {
+		job, page := queryIntegrationRunSearchRange(
+			t, ctx, executor, timechartIndexTime, "queryexec-timechart-unsplit-count",
+			`index=main source="timechart-level" level=* | timechart span=5m count`,
+			timechartBase.Add(2*time.Minute), timechartBase.Add(18*time.Minute),
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("unsplit timechart state = %v, failure=%#v", job.State, job.Failure)
+		}
+		if len(page.Schema.Columns) != 2 ||
+			page.Schema.Columns[0] != (searchjobs.Column{Name: "_time", Kind: searchjobs.ValueKindTime}) ||
+			page.Schema.Columns[1] != (searchjobs.Column{Name: "count", Kind: searchjobs.ValueKindUnsigned}) {
+			t.Fatalf("unsplit timechart schema = %#v", page.Schema)
+		}
+		queryIntegrationAssertTimechartMatrix(
+			t,
+			page,
+			timechartBase,
+			5*time.Minute,
+			map[string][]uint64{"count": {2, 1, 0, 0}},
+		)
+	})
+
+	t.Run("timechart count without split keeps static schema on empty input", func(t *testing.T) {
+		job, page := queryIntegrationRunSearchRange(
+			t, ctx, executor, timechartIndexTime, "queryexec-timechart-unsplit-empty",
+			`index=main source="timechart-empty" | timechart span=5m count`,
+			timechartBase, timechartBase.Add(11*time.Minute),
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("empty unsplit timechart state = %v, failure=%#v", job.State, job.Failure)
+		}
+		if len(page.Schema.Columns) != 2 ||
+			page.Schema.Columns[0] != (searchjobs.Column{Name: "_time", Kind: searchjobs.ValueKindTime}) ||
+			page.Schema.Columns[1] != (searchjobs.Column{Name: "count", Kind: searchjobs.ValueKindUnsigned}) ||
+			len(page.Rows) != 0 {
+			t.Fatalf("empty unsplit timechart page = %#v", page)
+		}
+	})
+
 	t.Run("timechart reconstructs a bucket before the DateTime64 storage minimum", func(t *testing.T) {
 		earliest := time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
 		job, page := queryIntegrationRunSearchRange(
@@ -1318,6 +1358,19 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			time.Date(1899, time.December, 31, 19, 0, 0, 0, time.UTC),
 			7*time.Hour,
 			map[string][]uint64{"ERROR": {1}},
+		)
+		fixedJob, fixedPage := queryIntegrationRunSearchRange(
+			t, ctx, executor, timechartIndexTime, "queryexec-timechart-storage-floor-fixed",
+			`index=main source="timechart-storage-floor" | timechart span=7h count`,
+			earliest, earliest.Add(time.Hour),
+		)
+		if fixedJob.State != searchjobs.StateCompleted {
+			t.Fatalf("lower-bound fixed timechart state = %v, failure=%#v", fixedJob.State, fixedJob.Failure)
+		}
+		queryIntegrationAssertTimechartMatrix(t, fixedPage,
+			time.Date(1899, time.December, 31, 19, 0, 0, 0, time.UTC),
+			7*time.Hour,
+			map[string][]uint64{"count": {1}},
 		)
 	})
 

@@ -202,7 +202,10 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 		if err := analyzer.addField(operator.Time, depth+1); err != nil {
 			return err
 		}
-		return analyzer.addField(operator.SplitBy, depth+1)
+		if operator.Split != nil {
+			return analyzer.addField(operator.Split.Field, depth+1)
+		}
+		return nil
 	case *Chart:
 		if err := analyzer.addField(operator.Over, depth+1); err != nil {
 			return err
