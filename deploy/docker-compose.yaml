@@ -18,11 +18,13 @@ services:
       OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD:?run ./generate-env.sh before docker compose up}"
       OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD:?run ./generate-env.sh before docker compose up}"
       OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD:?run ./generate-env.sh before docker compose up}"
+      OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME: "${OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME:?run ./generate-env.sh before docker compose up}"
     ports:
       # Local development never listens on every host interface. Override only
       # the host-side port if the default is already occupied.
       - "127.0.0.1:${OPEN_SPLUNK_CLICKHOUSE_HTTP_PORT:-8123}:8123"
       - "127.0.0.1:${OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT:-9000}:9000"
+      - "127.0.0.1:${OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT:-9440}:9440"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-logs:/var/log/clickhouse-server
@@ -30,12 +32,21 @@ services:
       - ../migrations/clickhouse:/open-splunk-migrations:ro
       - ./clickhouse-config/access.xml:/etc/clickhouse-server/config.d/open_splunk_access.xml:ro
       - ./clickhouse-config/bootstrap-user.xml:/etc/clickhouse-server/users.d/open_splunk_bootstrap.xml:ro
+      - ./clickhouse-config/tls.xml:/etc/clickhouse-server/config.d/open_splunk_tls.xml:ro
+      - ./clickhouse-config/client-tls.xml:/etc/clickhouse-client/open-splunk-tls.xml:ro
+      - "${OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE:?run ./generate-env.sh before docker compose up}:/etc/clickhouse-client/open-splunk-ca.crt:ro"
+      - "${OPEN_SPLUNK_CLICKHOUSE_TLS_CERT_FILE:?run ./generate-env.sh before docker compose up}:/etc/clickhouse-server/tls/server.crt:ro"
+      - "${OPEN_SPLUNK_CLICKHOUSE_TLS_KEY_FILE:?run ./generate-env.sh before docker compose up}:/etc/clickhouse-server/tls/server.key:ro"
     healthcheck:
       test:
         - CMD-SHELL
         - >-
           clickhouse-client
+          --config-file /etc/clickhouse-client/open-splunk-tls.xml
+          --secure
           --host 127.0.0.1
+          --port 9440
+          --tls-sni-override "$${OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME}"
           --user open_splunk_runtime
           --password "$${OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD}"
           --query "SELECT 1"

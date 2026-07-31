@@ -28,7 +28,7 @@ func TestNewClickHouseConnectionOptionsSeparatePrincipals(t *testing.T) {
 		clickhouseDeletionUsername:  "deletion-user",
 		clickhouseMigrationUsername: "migration-user",
 		clickhouseSecure:            true,
-	})
+	}, testClickHouseClientTLSProfile(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestNewClickHouseConnectionOptionsRejectsUnsafeConfiguration(t *testing.T) 
 		t.Run(name, func(t *testing.T) {
 			config := valid
 			mutate(&config)
-			result, err := newClickHouseConnectionOptions(config)
+			result, err := newClickHouseConnectionOptions(config, nil)
 			if err == nil || result.runtime != nil ||
 				result.deletion != nil || result.migration != nil {
 				t.Fatalf(
@@ -127,7 +127,7 @@ func TestNewClickHouseConnectionOptionsRejectsUnsafeConfiguration(t *testing.T) 
 
 	t.Run("missing password", func(t *testing.T) {
 		t.Setenv("OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD", "")
-		result, err := newClickHouseConnectionOptions(valid)
+		result, err := newClickHouseConnectionOptions(valid, nil)
 		if err == nil || result.deletion != nil {
 			t.Fatalf(
 				"newClickHouseConnectionOptions(missing password) = (%#v, %v)",
@@ -142,7 +142,7 @@ func TestNewClickHouseConnectionOptionsRejectsUnsafeConfiguration(t *testing.T) 
 			"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
 			"runtime-password",
 		)
-		result, err := newClickHouseConnectionOptions(valid)
+		result, err := newClickHouseConnectionOptions(valid, nil)
 		if err == nil || result.runtime != nil ||
 			result.deletion != nil || result.migration != nil {
 			t.Fatalf(

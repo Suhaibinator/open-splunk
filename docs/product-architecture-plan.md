@@ -625,6 +625,22 @@ real checked-in stack, validates every principal and the migrated schema,
 rotates all credentials while retaining the data volume, rejects the old
 credentials, and revalidates the recovered stack.
 
+Application connections use ClickHouse's secure native listener with TLS 1.2
+or newer. Secure mode requires both an explicit bounded PEM CA bundle and an
+explicit DNS name or IP SAN; it never falls back to the host trust store and
+has no skip-verification mode. The trust material is parsed before the server
+lock, SQLite, or either persistence connection opens. Migration, runtime,
+deletion, and isolated inspection lanes receive independent TLS configurations
+with normal chain and hostname verification. The checked-in local Compose
+deployment generates a private development CA and server identity, exposes
+the verified listener on `9440`, and retains plaintext native `9000` only for
+container-local bootstrap and explicitly loopback-bound diagnostics. Its live
+contract uses that CA-signed generated identity, makes Compose health execute
+an authenticated query over `9440`, and rejects a wrong verification name, a
+wrong trust root, plaintext on the secure listener, and legacy TLS. Generated
+environment publication is shell-safe, no-overwrite, and concurrency-safe; the
+one-use CA signing key is not retained.
+
 The authenticated administrator `POST /api/v1/indexes/delete` route now admits
 `DELETE_DATA`. It validates the optimistic version and deletion mode before
 selector lookup, requires an exact canonical-name confirmation, and rejects an
@@ -1263,6 +1279,7 @@ Security is part of the data model, not a later middleware task.
 - Scope tokens to explicit indexes and optional source/host constraints.
 - Intersect every search with RBAC-authorized indexes in the logical plan.
 - Parameterize values and quote identifiers through a single ClickHouse compiler path.
+- Require authenticated TLS with explicit trust and hostname verification for non-loopback ClickHouse traffic.
 - Never accept user-provided SQL as part of ordinary SPL.
 - Apply query time, memory, row, byte, and concurrency budgets.
 - Maintain audit events for authentication, token changes, index changes, searches, exports, and saved-object changes.

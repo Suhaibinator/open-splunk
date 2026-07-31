@@ -114,10 +114,6 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
-        with:
-          # The fixed lint baseline below must remain available even after many
-          # incremental main pushes.
-          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -130,12 +126,9 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
-          # Ratchet the inherited backlog from the adoption checkpoint. A fixed
-          # revision (rather than each push's "before" SHA) ensures that
-          # concurrency-cancelled intermediate runs cannot hide a new issue.
-          # Do not advance this baseline; reduce the legacy inventory in
-          # separate cleanup waves while every subsequent change stays clean.
-          args: --timeout=5m --new-from-rev=327a1625b7a080c9c52a31b856da03633c4cb102
+          # The inherited inventory is clean; enforce the complete Go tree on
+          # every push rather than retaining a historical diff-only baseline.
+          args: --timeout=5m
 
   go-test:
     name: Go tests
@@ -234,8 +227,8 @@ jobs:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
           OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
         run: >-
-          go test ./internal/clickhouse ./integration ./migrations/clickhouse
-          -run '^Test(IndexStatisticsReaderAgainstClickHouse|DeploymentComposePersistentCredentialRotation|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
+          go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/queryexec ./integration ./migrations/clickhouse
+          -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|IndexStatisticsReaderAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
           -count=1
           -timeout=25m
           -p=1

@@ -24,6 +24,22 @@ func TestStartClickHouseWithServicePrincipalsRejectsNilContextWithoutCallingDock
 	}
 }
 
+func TestStartSecureClickHouseWithServicePrincipalsRejectsInvalidInputsWithoutCallingDocker(
+	t *testing.T,
+) {
+	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
+	if _, err := StartSecureClickHouseWithServicePrincipals(nil, ""); err == nil ||
+		!strings.Contains(err.Error(), "context is required") {
+		t.Fatalf("StartSecureClickHouseWithServicePrincipals(nil) error = %v", err)
+	}
+	if _, err := StartSecureClickHouseWithServicePrincipals(
+		context.Background(),
+		"clickhouse/clickhouse-server:latest",
+	); err == nil || !strings.Contains(err.Error(), "digest-pinned") {
+		t.Fatalf("mutable secure fixture image error = %v", err)
+	}
+}
+
 func TestResolvePinnedClickHouseImage(t *testing.T) {
 	t.Parallel()
 	canonical := "registry.example/clickhouse:test@sha256:" + strings.Repeat("a1", 32)
@@ -129,6 +145,55 @@ func TestServicePrincipalDockerArgumentsDoNotCreateSchema(t *testing.T) {
 	} {
 		if !strings.Contains(joined, required) {
 			t.Errorf("service-principal Docker arguments missing %q:\n%s", required, joined)
+		}
+	}
+}
+
+func TestSecureServicePrincipalDockerArgumentsExposeOnlyTLSNativePort(t *testing.T) {
+	container := &ClickHouseContainer{
+		Name:  "fixture",
+		Image: DefaultClickHouseImage,
+	}
+	identity := &ServerTLSIdentity{
+		CertificateFile: "/tmp/tls/server.crt",
+		PrivateKeyFile:  "/tmp/tls/server.key",
+	}
+	arguments := secureServicePrincipalDockerArguments(
+		container,
+		"/tmp/access.xml",
+		"/tmp/tls.xml",
+		identity,
+		"bootstrap",
+		strings.Repeat("a", 64),
+	)
+	joined := strings.Join(arguments, "\n")
+	for _, required := range []string{
+		"127.0.0.1::9440",
+		"/etc/clickhouse-server/config.d/open-splunk-access.xml:ro",
+		"/etc/clickhouse-server/config.d/open-splunk-tls.xml:ro",
+		"/etc/clickhouse-server/tls/server.crt:ro",
+		"/etc/clickhouse-server/tls/server.key:ro",
+		DefaultClickHouseImage,
+	} {
+		if !strings.Contains(joined, required) {
+			t.Errorf("secure service-principal Docker arguments missing %q:\n%s", required, joined)
+		}
+	}
+	for _, forbidden := range []string{
+		"127.0.0.1::9000",
+		"CLICKHOUSE_DB",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Errorf("secure service-principal Docker arguments contain %q:\n%s", forbidden, joined)
+		}
+	}
+	for _, required := range []string{
+		"<tcp_port_secure>9440</tcp_port_secure>",
+		"<verificationMode>none</verificationMode>",
+		"tlsv1,tlsv1_1",
+	} {
+		if !strings.Contains(secureClickHouseTLSConfig, required) {
+			t.Errorf("secure ClickHouse TLS config missing %q", required)
 		}
 	}
 }

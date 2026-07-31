@@ -53,23 +53,47 @@ const servicePrincipalAccessConfig = `<clickhouse>
 </clickhouse>
 `
 
+const (
+	secureClickHouseTLSServerName = "clickhouse.test"
+	secureClickHouseTLSConfig     = `<clickhouse>
+    <tcp_port_secure>9440</tcp_port_secure>
+    <openSSL>
+        <server>
+            <certificateFile>/etc/clickhouse-server/tls/server.crt</certificateFile>
+            <privateKeyFile>/etc/clickhouse-server/tls/server.key</privateKeyFile>
+            <verificationMode>none</verificationMode>
+            <loadDefaultCAFile>false</loadDefaultCAFile>
+            <cacheSessions>true</cacheSessions>
+            <disableProtocols>sslv2,sslv3,tlsv1,tlsv1_1</disableProtocols>
+            <preferServerCiphers>true</preferServerCiphers>
+            <invalidCertificateHandler>
+                <name>RejectCertificateHandler</name>
+            </invalidCertificateHandler>
+        </server>
+    </openSSL>
+</clickhouse>
+`
+)
+
 // ClickHouseContainer is an ephemeral, loopback-only ClickHouse instance.
 // Passwords are intentionally exposed only as data so callers can connect
 // through the native driver; String must never be added because it could make
 // accidental logging disclose credentials.
 type ClickHouseContainer struct {
-	Name              string
-	Address           string
-	Database          string
-	Username          string
-	Password          string
-	MigrationUsername string
-	MigrationPassword string
-	RuntimeUsername   string
-	RuntimePassword   string
-	DeletionUsername  string
-	DeletionPassword  string
-	Image             string
+	Name                 string
+	Address              string
+	Database             string
+	Username             string
+	Password             string
+	MigrationUsername    string
+	MigrationPassword    string
+	RuntimeUsername      string
+	RuntimePassword      string
+	DeletionUsername     string
+	DeletionPassword     string
+	TLSCACertificateFile string
+	TLSServerName        string
+	Image                string
 
 	configDirectory   string
 	bootstrapUsername string
@@ -141,6 +165,34 @@ func StartClickHouse(ctx context.Context, image string) (*ClickHouseContainer, e
 // The bootstrap administrator is used only during fixture setup and is not
 // returned to callers. An empty image selects the repository's pinned release.
 func StartClickHouseWithServicePrincipals(ctx context.Context, image string) (*ClickHouseContainer, error) {
+	return startClickHouseWithServicePrincipals(ctx, image, false)
+}
+
+// StartSecureClickHouseWithServicePrincipals starts the same disposable,
+// least-privilege fixture as StartClickHouseWithServicePrincipals, but exposes
+// the native protocol only through a loopback-mapped TLS listener. Unlike the
+// plaintext development fixture, every image accepted here must be pinned by
+// canonical sha256 digest. TLSCACertificateFile and TLSServerName are the
+// explicit trust inputs production clients must use.
+func StartSecureClickHouseWithServicePrincipals(
+	ctx context.Context,
+	image string,
+) (*ClickHouseContainer, error) {
+	if ctx == nil {
+		return nil, errors.New("start secure ClickHouse service-principal test container: context is required")
+	}
+	pinnedImage, err := ResolvePinnedClickHouseImage(image)
+	if err != nil {
+		return nil, fmt.Errorf("start secure ClickHouse service-principal test container: %w", err)
+	}
+	return startClickHouseWithServicePrincipals(ctx, pinnedImage, true)
+}
+
+func startClickHouseWithServicePrincipals(
+	ctx context.Context,
+	image string,
+	secure bool,
+) (*ClickHouseContainer, error) {
 	if ctx == nil {
 		return nil, errors.New("start ClickHouse service-principal test container: context is required")
 	}
@@ -189,6 +241,39 @@ func StartClickHouseWithServicePrincipals(ctx context.Context, image string) (*C
 		_ = os.RemoveAll(configDirectory)
 		return nil, fmt.Errorf("start ClickHouse service-principal test container: write access config: %w", err)
 	}
+	var tlsIdentity *ServerTLSIdentity
+	tlsConfigPath := ""
+	if secure {
+		tlsIdentity, err = WriteServerTLSIdentity(
+			filepath.Join(configDirectory, "tls"),
+			secureClickHouseTLSServerName,
+		)
+		if err != nil {
+			_ = os.RemoveAll(configDirectory)
+			return nil, fmt.Errorf(
+				"start secure ClickHouse service-principal test container: create TLS identity: %w",
+				err,
+			)
+		}
+		// #nosec G302 -- this short-lived test key remains below an owner-only
+		// directory but must be readable after ClickHouse drops privileges.
+		if err := os.Chmod(tlsIdentity.PrivateKeyFile, 0o644); err != nil {
+			_ = os.RemoveAll(configDirectory)
+			return nil, fmt.Errorf(
+				"start secure ClickHouse service-principal test container: prepare TLS key: %w",
+				err,
+			)
+		}
+		tlsConfigPath = filepath.Join(configDirectory, "tls.xml")
+		// #nosec G306 -- this nonsecret server config must be container-readable.
+		if err := os.WriteFile(tlsConfigPath, []byte(secureClickHouseTLSConfig), 0o644); err != nil {
+			_ = os.RemoveAll(configDirectory)
+			return nil, fmt.Errorf(
+				"start secure ClickHouse service-principal test container: write TLS config: %w",
+				err,
+			)
+		}
+	}
 
 	const bootstrapUsername = "open_splunk_bootstrap"
 	container := &ClickHouseContainer{
@@ -204,6 +289,10 @@ func StartClickHouseWithServicePrincipals(ctx context.Context, image string) (*C
 		configDirectory:   configDirectory,
 		bootstrapUsername: bootstrapUsername,
 		bootstrapPassword: bootstrapPassword,
+	}
+	if tlsIdentity != nil {
+		container.TLSCACertificateFile = tlsIdentity.CertificateFile
+		container.TLSServerName = secureClickHouseTLSServerName
 	}
 	started := false
 	cleanup := true
@@ -225,6 +314,16 @@ func StartClickHouseWithServicePrincipals(ctx context.Context, image string) (*C
 		bootstrapUsername,
 		bootstrapPassword,
 	)
+	if secure {
+		runArguments = secureServicePrincipalDockerArguments(
+			container,
+			configPath,
+			tlsConfigPath,
+			tlsIdentity,
+			bootstrapUsername,
+			bootstrapPassword,
+		)
+	}
 	if output, runErr := docker(ctx, runArguments...); runErr != nil {
 		return nil, fmt.Errorf(
 			"start ClickHouse service-principal test container: %w: %s",
@@ -247,7 +346,12 @@ func StartClickHouseWithServicePrincipals(ctx context.Context, image string) (*C
 			boundedOutput(output),
 		)
 	}
-	address, err := container.nativeAddress(ctx)
+	var address string
+	if secure {
+		address, err = container.secureNativeAddress(ctx)
+	} else {
+		address, err = container.nativeAddress(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -262,15 +366,57 @@ func servicePrincipalDockerArguments(
 	bootstrapUsername string,
 	bootstrapPassword string,
 ) []string {
-	return []string{
+	return servicePrincipalDockerArgumentsForTransport(
+		container,
+		configPath,
+		"9000",
+		bootstrapUsername,
+		bootstrapPassword,
+	)
+}
+
+func secureServicePrincipalDockerArguments(
+	container *ClickHouseContainer,
+	accessConfigPath string,
+	tlsConfigPath string,
+	tlsIdentity *ServerTLSIdentity,
+	bootstrapUsername string,
+	bootstrapPassword string,
+) []string {
+	return servicePrincipalDockerArgumentsForTransport(
+		container,
+		accessConfigPath,
+		"9440",
+		bootstrapUsername,
+		bootstrapPassword,
+		tlsConfigPath+":/etc/clickhouse-server/config.d/open-splunk-tls.xml:ro",
+		tlsIdentity.CertificateFile+":/etc/clickhouse-server/tls/server.crt:ro",
+		tlsIdentity.PrivateKeyFile+":/etc/clickhouse-server/tls/server.key:ro",
+	)
+}
+
+func servicePrincipalDockerArgumentsForTransport(
+	container *ClickHouseContainer,
+	accessConfigPath string,
+	containerPort string,
+	bootstrapUsername string,
+	bootstrapPassword string,
+	additionalVolumes ...string,
+) []string {
+	arguments := []string{
 		"run", "--detach", "--rm", "--name", container.Name,
-		"--publish", "127.0.0.1::9000",
-		"--volume", configPath + ":/etc/clickhouse-server/config.d/open-splunk-access.xml:ro",
-		"--env", "CLICKHOUSE_USER=" + bootstrapUsername,
-		"--env", "CLICKHOUSE_PASSWORD=" + bootstrapPassword,
+		"--publish", "127.0.0.1::" + containerPort,
+		"--volume", accessConfigPath + ":/etc/clickhouse-server/config.d/open-splunk-access.xml:ro",
+	}
+	for _, volume := range additionalVolumes {
+		arguments = append(arguments, "--volume", volume)
+	}
+	return append(arguments,
+		"--env", "CLICKHOUSE_USER="+bootstrapUsername,
+		"--env", "CLICKHOUSE_PASSWORD="+bootstrapPassword,
 		"--env", "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
 		container.Image,
-	}
+	)
 }
 
 // ExecuteBootstrapSQLForTest runs access-control setup against an ephemeral
@@ -447,9 +593,25 @@ func isLowerHexCredential(value string) bool {
 }
 
 func (container *ClickHouseContainer) nativeAddress(ctx context.Context) (string, error) {
-	output, err := docker(ctx, "port", container.Name, "9000/tcp")
+	return container.publishedAddress(ctx, "9000/tcp")
+}
+
+func (container *ClickHouseContainer) secureNativeAddress(ctx context.Context) (string, error) {
+	return container.publishedAddress(ctx, "9440/tcp")
+}
+
+func (container *ClickHouseContainer) publishedAddress(
+	ctx context.Context,
+	containerPort string,
+) (string, error) {
+	output, err := docker(ctx, "port", container.Name, containerPort)
 	if err != nil {
-		return "", fmt.Errorf("resolve ClickHouse test native port: %w: %s", err, boundedOutput(output))
+		return "", fmt.Errorf(
+			"resolve ClickHouse test native port %s: %w: %s",
+			containerPort,
+			err,
+			boundedOutput(output),
+		)
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		line = strings.TrimSpace(line)
@@ -457,7 +619,11 @@ func (container *ClickHouseContainer) nativeAddress(ctx context.Context) (string
 			return line, nil
 		}
 	}
-	return "", fmt.Errorf("resolve ClickHouse test native port: no loopback mapping in %q", boundedOutput(output))
+	return "", fmt.Errorf(
+		"resolve ClickHouse test native port %s: no loopback mapping in %q",
+		containerPort,
+		boundedOutput(output),
+	)
 }
 
 func docker(ctx context.Context, arguments ...string) ([]byte, error) {

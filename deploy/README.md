@@ -6,8 +6,9 @@ remain separate processes on log-producing hosts.
 
 ## Start ClickHouse
 
-Generate four independent 256-bit development passwords, then start the
-service from this directory so Compose loads `deploy/.env`:
+Generate four independent 256-bit development passwords and a private local
+CA/server identity, then start the service from this directory so Compose
+loads `deploy/.env`:
 
 ```sh
 cd deploy
@@ -15,9 +16,16 @@ cd deploy
 docker compose up --detach --wait clickhouse
 ```
 
-The generator refuses to overwrite an existing file and creates it under a
-restrictive umask. `.env` is ignored by Git. Do not place real passwords in
-`.env.example`.
+The generator refuses to overwrite either an existing environment file or its
+adjacent `.env.tls` directory. Both are created under a restrictive umask and
+ignored by Git. It safely quotes paths containing spaces, rejects
+shell-significant path characters, atomically reserves the identity directory,
+and publishes `.env` without overwriting an existing file; concurrent runs
+therefore cannot replace one another. The server key is readable by the
+unprivileged ClickHouse process only through its owner-only parent directory
+and its read-only container mount. The one-use CA signing key is destroyed
+after the server certificate is issued. Do not place real passwords,
+certificates, or keys in `.env.example`.
 
 Initialization creates four identities:
 
@@ -56,15 +64,51 @@ migration password from its process environment as soon as connection options
 have captured it, then clears and releases those privileged options as soon as
 the short-lived migration session closes.
 
-Both ClickHouse ports are published on `127.0.0.1` only:
+All ClickHouse ports are published on `127.0.0.1` only:
 
 - HTTP: `8123`
-- native protocol: `9000`
+- plaintext native protocol: `9000`, retained only for container-local
+  bootstrap and explicit loopback development diagnostics;
+- verified TLS native protocol: `9440`, used by the application.
 
 Set `OPEN_SPLUNK_CLICKHOUSE_HTTP_PORT` or
-`OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT` in `.env` to change a host-side port; the
-bind address remains loopback. Containers in the same Compose project can use
-`clickhouse:9000` directly.
+`OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT` or
+`OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT` in `.env` to change a host-side
+port; the bind address remains loopback. Containers in the same Compose
+project use `clickhouse:9440` with the generated CA and the explicit
+verification name `clickhouse`; they must not send application credentials to
+`clickhouse:9000`.
+
+Compose health authenticates a real `SELECT 1` over the loopback `9440`
+listener with the generated CA, explicit generated verification name, and the
+runtime principal. Thus
+`docker compose up --wait` does not report ready when only the plaintext
+listener works or the mounted server identity is invalid.
+
+The Open Splunk server requires both explicit trust and an explicit
+certificate name whenever `-clickhouse-secure` is set. For a server process on
+the host, load the generated environment and use:
+
+```sh
+set -a
+. ./.env
+set +a
+
+open-splunk-server \
+  -clickhouse-address "127.0.0.1:${OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT:-9440}" \
+  -clickhouse-secure \
+  -clickhouse-ca-cert "$OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE" \
+  -clickhouse-server-name "$OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME"
+```
+
+Add the required browser administrator and other runtime flags for the local
+server invocation.
+
+The CA bundle is bounded and parsed strictly before SQLite or ClickHouse is
+opened. The migration, runtime, deletion, and isolated inspection connections
+all use independently owned TLS configurations with TLS 1.2 or newer, normal
+chain validation, and hostname/IP SAN verification. There is no
+skip-verification option.
 
 Check runtime data access with the password kept in the environment file:
 
@@ -73,6 +117,11 @@ set -a
 . ./.env
 set +a
 docker compose exec clickhouse clickhouse-client \
+  --config-file /etc/clickhouse-client/open-splunk-tls.xml \
+  --secure \
+  --host 127.0.0.1 \
+  --port 9440 \
+  --tls-sni-override "$OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME" \
   --user open_splunk_runtime \
   --password "$OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD" \
   --query "SELECT count() FROM open_splunk.events"

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -129,17 +131,29 @@ func TestComposeIsPinnedAndLoopbackOnly(t *testing.T) {
 		"image: " + pinnedClickHouseImage,
 		"127.0.0.1:${OPEN_SPLUNK_CLICKHOUSE_HTTP_PORT:-8123}:8123",
 		"127.0.0.1:${OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT:-9000}:9000",
+		"127.0.0.1:${OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT:-9440}:9440",
 		"OPEN_SPLUNK_CLICKHOUSE_BOOTSTRAP_PASSWORD:?",
 		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD:?",
 		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD:?",
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD:?",
+		"OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME:?",
 		"./clickhouse-init.sh:/docker-entrypoint-initdb.d/0100_open_splunk.sh:ro",
 		"../migrations/clickhouse:/open-splunk-migrations:ro",
 		"./clickhouse-config/access.xml:/etc/clickhouse-server/config.d/open_splunk_access.xml:ro",
 		"./clickhouse-config/bootstrap-user.xml:/etc/clickhouse-server/users.d/open_splunk_bootstrap.xml:ro",
+		"./clickhouse-config/tls.xml:/etc/clickhouse-server/config.d/open_splunk_tls.xml:ro",
+		"./clickhouse-config/client-tls.xml:/etc/clickhouse-client/open-splunk-tls.xml:ro",
+		"OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE:?",
+		"OPEN_SPLUNK_CLICKHOUSE_TLS_CERT_FILE:?",
+		"OPEN_SPLUNK_CLICKHOUSE_TLS_KEY_FILE:?",
 		"CLICKHOUSE_SKIP_USER_SETUP: \"1\"",
 		"CLICKHOUSE_ALWAYS_RUN_INITDB_SCRIPTS: \"1\"",
 		"healthcheck:",
+		"--config-file /etc/clickhouse-client/open-splunk-tls.xml",
+		"--secure",
+		"--host 127.0.0.1",
+		"--port 9440",
+		"--tls-sni-override",
 	} {
 		if !strings.Contains(compose, fragment) {
 			t.Errorf("deployment compose file is missing safety contract fragment %q", fragment)
@@ -153,6 +167,396 @@ func TestComposeIsPinnedAndLoopbackOnly(t *testing.T) {
 		strings.Contains(compose, "../migrations/clickhouse:/docker-entrypoint-initdb.d") {
 		t.Error("bootstrap principal must not create or migrate the application schema")
 	}
+}
+
+func deploymentDirectory(t *testing.T) string {
+	t.Helper()
+	directory, err := filepath.Abs(filepath.Join("..", "..", "deploy"))
+	if err != nil {
+		t.Fatalf("resolve deployment directory: %v", err)
+	}
+	return directory
+}
+
+func newGenerateEnvCommand(
+	ctx context.Context,
+	deployDirectory string,
+	envFile string,
+) *exec.Cmd {
+	command := exec.CommandContext(
+		ctx,
+		"sh",
+		filepath.Join(deployDirectory, "generate-env.sh"),
+		envFile,
+	)
+	command.WaitDelay = 5 * time.Second
+	return command
+}
+
+func mustGenerateDeploymentEnvironment(
+	t *testing.T,
+	ctx context.Context,
+	deployDirectory string,
+	envFile string,
+) map[string]string {
+	t.Helper()
+	output, err := newGenerateEnvCommand(
+		ctx,
+		deployDirectory,
+		envFile,
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("generate deployment environment: %v: %s", err, output)
+	}
+	return parseDeploymentEnvironment(t, readFile(t, envFile))
+}
+
+func TestGenerateEnvCreatesVerifiedClickHouseTLSIdentity(t *testing.T) {
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skipf("openssl is unavailable: %v", err)
+	}
+	deployDirectory := deploymentDirectory(t)
+	envFile := filepath.Join(t.TempDir(), "open-splunk.env")
+	commandContext, cancelCommand := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelCommand()
+	values := mustGenerateDeploymentEnvironment(
+		t,
+		commandContext,
+		deployDirectory,
+		envFile,
+	)
+	for _, name := range []string{
+		"OPEN_SPLUNK_CLICKHOUSE_BOOTSTRAP_PASSWORD",
+		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD",
+		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD",
+		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
+	} {
+		if password := values[name]; len(password) != 64 ||
+			strings.Trim(password, "0123456789abcdef") != "" {
+			t.Fatalf("generated %s is not 256-bit lowercase hex", name)
+		}
+	}
+	if values["OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME"] != "clickhouse" {
+		t.Fatalf(
+			"generated ClickHouse TLS server name = %q, want clickhouse",
+			values["OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME"],
+		)
+	}
+	caFile := values["OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE"]
+	certificateFile := values["OPEN_SPLUNK_CLICKHOUSE_TLS_CERT_FILE"]
+	privateKeyFile := values["OPEN_SPLUNK_CLICKHOUSE_TLS_KEY_FILE"]
+	for name, path := range map[string]string{
+		"CA":          caFile,
+		"certificate": certificateFile,
+		"private key": privateKeyFile,
+	} {
+		if !filepath.IsAbs(path) {
+			t.Fatalf("generated ClickHouse TLS %s path = %q, want absolute", name, path)
+		}
+	}
+	pair, err := tls.LoadX509KeyPair(certificateFile, privateKeyFile)
+	if err != nil {
+		t.Fatalf("load generated ClickHouse TLS identity: %v", err)
+	}
+	if len(pair.Certificate) != 1 {
+		t.Fatalf("generated server certificate chain length = %d, want 1", len(pair.Certificate))
+	}
+	certificate, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		t.Fatalf("parse generated ClickHouse server certificate: %v", err)
+	}
+	for _, serverName := range []string{"clickhouse", "localhost", "127.0.0.1"} {
+		if err := certificate.VerifyHostname(serverName); err != nil {
+			t.Fatalf("verify generated ClickHouse server name %q: %v", serverName, err)
+		}
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(readFile(t, caFile))) {
+		t.Fatal("generated ClickHouse CA file contains no certificates")
+	}
+	chains, err := certificate.Verify(x509.VerifyOptions{
+		Roots:     roots,
+		DNSName:   "clickhouse",
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	})
+	if err != nil {
+		t.Fatalf("verify generated ClickHouse TLS chain: %v", err)
+	}
+	if len(chains) != 1 || len(chains[0]) != 2 {
+		t.Fatalf("generated ClickHouse TLS chains = %#v, want one leaf+CA chain", chains)
+	}
+	for name, path := range map[string]string{
+		"environment": envFile,
+		"private key": privateKeyFile,
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat generated %s: %v", name, err)
+		}
+		if info.Mode().Perm()&0o022 != 0 {
+			t.Fatalf("generated %s permissions = %#o, want no group/other writes", name, info.Mode().Perm())
+		}
+	}
+	tlsDirectoryInfo, err := os.Stat(filepath.Dir(privateKeyFile))
+	if err != nil {
+		t.Fatalf("stat generated TLS directory: %v", err)
+	}
+	if tlsDirectoryInfo.Mode().Perm() != 0o700 {
+		t.Fatalf(
+			"generated TLS directory permissions = %#o, want 0700",
+			tlsDirectoryInfo.Mode().Perm(),
+		)
+	}
+	tlsEntries, err := os.ReadDir(filepath.Dir(privateKeyFile))
+	if err != nil {
+		t.Fatalf("read generated TLS directory: %v", err)
+	}
+	generatedTLSFiles := make([]string, 0, len(tlsEntries))
+	for _, entry := range tlsEntries {
+		generatedTLSFiles = append(generatedTLSFiles, entry.Name())
+	}
+	sort.Strings(generatedTLSFiles)
+	wantedTLSFiles := []string{"ca.crt", "server.crt", "server.key"}
+	if len(generatedTLSFiles) != len(wantedTLSFiles) {
+		t.Fatalf(
+			"generated TLS files = %v, want %v",
+			generatedTLSFiles,
+			wantedTLSFiles,
+		)
+	}
+	for index := range wantedTLSFiles {
+		if generatedTLSFiles[index] != wantedTLSFiles[index] {
+			t.Fatalf(
+				"generated TLS files = %v, want %v",
+				generatedTLSFiles,
+				wantedTLSFiles,
+			)
+		}
+	}
+
+	secondContext, cancelSecond := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelSecond()
+	second := newGenerateEnvCommand(secondContext, deployDirectory, envFile)
+	if secondOutput, secondErr := second.CombinedOutput(); secondErr == nil ||
+		!strings.Contains(string(secondOutput), "refusing to overwrite") {
+		t.Fatalf(
+			"second environment generation = (%v, %q), want overwrite rejection",
+			secondErr,
+			secondOutput,
+		)
+	}
+}
+
+func TestGenerateEnvQuotesSafePathsAndRejectsShellMetacharacters(t *testing.T) {
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skipf("openssl is unavailable: %v", err)
+	}
+	deployDirectory := deploymentDirectory(t)
+	spaceDirectory := filepath.Join(t.TempDir(), "directory with spaces")
+	if err := os.Mkdir(spaceDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(spaceDirectory, "open splunk.env")
+	commandContext, cancelCommand := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelCommand()
+	values := mustGenerateDeploymentEnvironment(
+		t,
+		commandContext,
+		deployDirectory,
+		envFile,
+	)
+	wantedCAFile := envFile + ".tls/ca.crt"
+	if values["OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE"] != wantedCAFile {
+		t.Fatalf(
+			"generated CA path = %q, want %q",
+			values["OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE"],
+			wantedCAFile,
+		)
+	}
+	sourceContext, cancelSource := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelSource()
+	source := exec.CommandContext(
+		sourceContext,
+		"sh",
+		"-c",
+		`. "$1" && test "$OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE" = "$2"`,
+		"open-splunk-env-check",
+		envFile,
+		wantedCAFile,
+	)
+	if output, err := source.CombinedOutput(); err != nil {
+		t.Fatalf("source generated environment safely: %v: %s", err, output)
+	}
+
+	unsafeDirectory := filepath.Join(t.TempDir(), "unsafe;directory")
+	if err := os.Mkdir(unsafeDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unsafeEnvFile := filepath.Join(unsafeDirectory, "open-splunk.env")
+	unsafeContext, cancelUnsafe := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelUnsafe()
+	unsafe := newGenerateEnvCommand(unsafeContext, deployDirectory, unsafeEnvFile)
+	unsafeOutput, unsafeErr := unsafe.CombinedOutput()
+	if unsafeErr == nil ||
+		!strings.Contains(string(unsafeOutput), "shell-unsafe characters") {
+		t.Fatalf(
+			"unsafe output path generation = (%v, %q), want rejection",
+			unsafeErr,
+			unsafeOutput,
+		)
+	}
+	for _, path := range []string{unsafeEnvFile, unsafeEnvFile + ".tls"} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("unsafe generation path %q exists: %v", path, err)
+		}
+	}
+}
+
+func TestGenerateEnvConcurrentInvocationsCannotOverwrite(t *testing.T) {
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skipf("openssl is unavailable: %v", err)
+	}
+	deployDirectory := deploymentDirectory(t)
+	envFile := filepath.Join(t.TempDir(), "open-splunk.env")
+	commandContext, cancelCommands := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelCommands()
+	type commandResult struct {
+		output []byte
+		err    error
+	}
+	results := make(chan commandResult, 2)
+	start := make(chan struct{})
+	for range 2 {
+		go func() {
+			<-start
+			command := newGenerateEnvCommand(
+				commandContext,
+				deployDirectory,
+				envFile,
+			)
+			output, commandErr := command.CombinedOutput()
+			results <- commandResult{output: output, err: commandErr}
+		}()
+	}
+	close(start)
+	successes := 0
+	for range 2 {
+		result := <-results
+		if result.err == nil {
+			successes++
+			continue
+		}
+		if !strings.Contains(string(result.output), "refusing to overwrite") {
+			t.Fatalf(
+				"concurrent generator failure = %v: %s",
+				result.err,
+				result.output,
+			)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("concurrent generator successes = %d, want 1", successes)
+	}
+	values := parseDeploymentEnvironment(t, readFile(t, envFile))
+	for _, name := range []string{
+		"OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE",
+		"OPEN_SPLUNK_CLICKHOUSE_TLS_CERT_FILE",
+		"OPEN_SPLUNK_CLICKHOUSE_TLS_KEY_FILE",
+	} {
+		if _, err := os.Stat(values[name]); err != nil {
+			t.Fatalf("stat concurrently generated %s: %v", name, err)
+		}
+	}
+}
+
+func TestDeploymentClickHouseTLSListenerContract(t *testing.T) {
+	t.Parallel()
+
+	config := readFile(
+		t,
+		filepath.Join(
+			"..",
+			"..",
+			"deploy",
+			"clickhouse-config",
+			"tls.xml",
+		),
+	)
+	for _, fragment := range []string{
+		"<tcp_port_secure>9440</tcp_port_secure>",
+		"<certificateFile>/etc/clickhouse-server/tls/server.crt</certificateFile>",
+		"<privateKeyFile>/etc/clickhouse-server/tls/server.key</privateKeyFile>",
+		"<verificationMode>none</verificationMode>",
+		"<loadDefaultCAFile>false</loadDefaultCAFile>",
+		"<disableProtocols>sslv2,sslv3,tlsv1,tlsv1_1</disableProtocols>",
+		"<name>RejectCertificateHandler</name>",
+	} {
+		if !strings.Contains(config, fragment) {
+			t.Errorf("ClickHouse TLS config is missing contract fragment %q", fragment)
+		}
+	}
+	for _, prohibited := range []string{
+		"AcceptCertificateHandler",
+		"<verificationMode>relaxed</verificationMode>",
+		"<verificationMode>once</verificationMode>",
+	} {
+		if strings.Contains(config, prohibited) {
+			t.Errorf("ClickHouse TLS config contains prohibited fragment %q", prohibited)
+		}
+	}
+
+	clientConfig := readFile(
+		t,
+		filepath.Join(
+			"..",
+			"..",
+			"deploy",
+			"clickhouse-config",
+			"client-tls.xml",
+		),
+	)
+	for _, fragment := range []string{
+		"<caConfig>/etc/clickhouse-client/open-splunk-ca.crt</caConfig>",
+		"<loadDefaultCAFile>false</loadDefaultCAFile>",
+		"<verificationMode>strict</verificationMode>",
+		"<disableProtocols>sslv2,sslv3,tlsv1,tlsv1_1</disableProtocols>",
+		"<name>RejectCertificateHandler</name>",
+	} {
+		if !strings.Contains(clientConfig, fragment) {
+			t.Errorf("ClickHouse TLS client config is missing contract fragment %q", fragment)
+		}
+	}
+	if strings.Contains(clientConfig, "AcceptCertificateHandler") ||
+		strings.Contains(clientConfig, "<verificationMode>none</verificationMode>") {
+		t.Error("ClickHouse TLS client config weakens certificate verification")
+	}
+}
+
+func parseDeploymentEnvironment(t *testing.T, contents string) map[string]string {
+	t.Helper()
+	values := make(map[string]string)
+	for _, line := range strings.Split(contents, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, value, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(name) != name || name == "" || value == "" {
+			t.Fatalf("generated environment line is invalid: %q", line)
+		}
+		if strings.HasPrefix(value, "\"") {
+			decoded, err := strconv.Unquote(value)
+			if err != nil {
+				t.Fatalf("generated environment value is invalid: %q: %v", line, err)
+			}
+			value = decoded
+		}
+		if _, exists := values[name]; exists {
+			t.Fatalf("generated environment repeats %q", name)
+		}
+		values[name] = value
+	}
+	return values
 }
 
 func TestDeploymentClickHouseBootstrapSeparatesServicePrincipals(t *testing.T) {

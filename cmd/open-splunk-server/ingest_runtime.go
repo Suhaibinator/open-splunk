@@ -77,6 +77,12 @@ func normalizeRuntimeOptions(config *options) error {
 	config.httpAddress = strings.TrimSpace(config.httpAddress)
 	config.httpTLSCert = strings.TrimSpace(config.httpTLSCert)
 	config.httpTLSKey = strings.TrimSpace(config.httpTLSKey)
+	config.clickhouseCACertFile = strings.TrimSpace(
+		config.clickhouseCACertFile,
+	)
+	config.clickhouseServerName = strings.TrimSpace(
+		config.clickhouseServerName,
+	)
 	if (config.httpTLSCert == "") != (config.httpTLSKey == "") {
 		return errors.New("HTTP TLS certificate and key must be configured together")
 	}

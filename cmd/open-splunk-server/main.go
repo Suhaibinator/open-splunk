@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -73,6 +72,8 @@ type options struct {
 	clickhouseDeletionUsername          string
 	clickhouseMigrationUsername         string
 	clickhouseSecure                    bool
+	clickhouseCACertFile                string
+	clickhouseServerName                string
 	collectorAddress                    string
 	collectorInsecure                   bool
 	collectorTLSCert                    string
@@ -99,6 +100,10 @@ func main() {
 
 func run() error {
 	config := parseFlags()
+	return runWithOptions(config)
+}
+
+func runWithOptions(config options) error {
 	if err := normalizeRuntimeOptions(&config); err != nil {
 		return err
 	}
@@ -110,6 +115,18 @@ func run() error {
 	}
 	if err := validateCollectorServerConfig(collectorTransportConfig); err != nil {
 		return err
+	}
+	var clickHouseTLSProfile *clickHouseClientTLSProfile
+	if !config.verifyEmbeddedRelease {
+		var err error
+		clickHouseTLSProfile, err = loadClickHouseClientTLSProfile(
+			config.clickhouseSecure,
+			config.clickhouseCACertFile,
+			config.clickhouseServerName,
+		)
+		if err != nil {
+			return err
+		}
 	}
 	release, err := opensplunk.EmbeddedRelease()
 	if err != nil {
@@ -136,6 +153,22 @@ func run() error {
 	)
 	if err != nil {
 		return err
+	}
+	clickHouseOptions, err := newClickHouseConnectionOptions(
+		config,
+		clickHouseTLSProfile,
+	)
+	if err != nil {
+		return err
+	}
+	defer discardClickHouseMigrationCredentials(&clickHouseOptions)
+	if err := os.Unsetenv(
+		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD",
+	); err != nil {
+		return fmt.Errorf(
+			"discard ClickHouse migration password from process environment: %w",
+			err,
+		)
 	}
 	browserAuthenticator, err := newAdministratorBrowserAuthenticator(
 		config.administratorTokenFile,
@@ -289,19 +322,6 @@ func run() error {
 			log.Printf("close search-history maintenance: %v", err)
 		}
 	}()
-	clickHouseOptions, err := newClickHouseConnectionOptions(config)
-	if err != nil {
-		return err
-	}
-	defer discardClickHouseMigrationCredentials(&clickHouseOptions)
-	if err := os.Unsetenv(
-		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD",
-	); err != nil {
-		return fmt.Errorf(
-			"discard ClickHouse migration password from process environment: %w",
-			err,
-		)
-	}
 	if err := applyStartupClickHouseMigrations(
 		startupContext,
 		clickHouseOptions.migration,
@@ -777,6 +797,18 @@ func parseFlags() options {
 		"short-lived ClickHouse schema-migration username",
 	)
 	flag.BoolVar(&result.clickhouseSecure, "clickhouse-secure", false, "use TLS for ClickHouse")
+	flag.StringVar(
+		&result.clickhouseCACertFile,
+		"clickhouse-ca-cert",
+		"",
+		"PEM trust bundle for verified ClickHouse TLS (requires -clickhouse-secure)",
+	)
+	flag.StringVar(
+		&result.clickhouseServerName,
+		"clickhouse-server-name",
+		"",
+		"explicit DNS name or IP SAN to verify for ClickHouse TLS (requires -clickhouse-secure)",
+	)
 	flag.StringVar(&result.collectorAddress, "collector-grpc-address", "", "collector gRPC listen address (disabled when empty)")
 	flag.BoolVar(&result.collectorInsecure, "collector-grpc-insecure", false, "explicitly allow plaintext collector gRPC on loopback only")
 	flag.StringVar(&result.collectorTLSCert, "collector-tls-cert", "", "PEM certificate for collector gRPC TLS")
@@ -872,7 +904,14 @@ func discardClickHouseMigrationCredentials(
 
 func newClickHouseConnectionOptions(
 	config options,
+	tlsProfile *clickHouseClientTLSProfile,
 ) (clickHouseConnectionOptions, error) {
+	if err := validateClickHouseClientTLSProfile(
+		config.clickhouseSecure,
+		tlsProfile,
+	); err != nil {
+		return clickHouseConnectionOptions{}, err
+	}
 	address := strings.TrimSpace(config.clickhouseAddress)
 	if address == "" {
 		return clickHouseConnectionOptions{}, errors.New(
@@ -940,17 +979,15 @@ func newClickHouseConnectionOptions(
 		ConnMaxLifetime:  30 * time.Minute,
 		ConnOpenStrategy: clickhousedriver.ConnOpenInOrder,
 	}
-	if config.clickhouseSecure {
-		base.TLS = &tls.Config{MinVersion: tls.VersionTLS12}
-	}
-
 	runtimeOptions := base
+	runtimeOptions.TLS = tlsProfile.newConfig()
 	runtimeOptions.Auth = clickhousedriver.Auth{
 		Database: database,
 		Username: runtimeUsername,
 		Password: runtimePassword,
 	}
 	deletionOptions := base
+	deletionOptions.TLS = tlsProfile.newConfig()
 	deletionOptions.Auth = clickhousedriver.Auth{
 		Database: database,
 		Username: deletionUsername,
@@ -961,6 +998,7 @@ func newClickHouseConnectionOptions(
 	deletionOptions.MaxOpenConns = 1
 	deletionOptions.MaxIdleConns = 1
 	migrationOptions := base
+	migrationOptions.TLS = tlsProfile.newConfig()
 	migrationOptions.Auth = clickhousedriver.Auth{
 		// The first migration owns creation of the embedded database.
 		Database: "default",

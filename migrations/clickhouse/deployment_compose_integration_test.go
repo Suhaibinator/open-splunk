@@ -2,6 +2,8 @@ package clickhouse_test
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -15,6 +17,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/server"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	shippedmigrations "github.com/Suhaibinator/open-splunk/migrations"
 )
 
@@ -36,7 +39,7 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 		)
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("docker CLI is unavailable: %v", err)
+		t.Fatalf("Docker integration was requested but the CLI is unavailable: %v", err)
 	}
 	composeProbeContext, composeProbeCancel := context.WithTimeout(
 		context.Background(),
@@ -51,18 +54,24 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 	)
 	composeProbe.WaitDelay = 5 * time.Second
 	if output, err := composeProbe.CombinedOutput(); err != nil {
-		t.Skipf("Docker Compose is unavailable: %v: %s", err, boundedComposeOutput(output))
+		t.Fatalf(
+			"Docker integration was requested but Compose is unavailable: %v: %s",
+			err,
+			boundedComposeOutput(output),
+		)
 	}
 
-	deployDirectory, err := filepath.Abs(filepath.Join("..", "..", "deploy"))
-	if err != nil {
-		t.Fatalf("resolve deployment directory: %v", err)
-	}
+	deployDirectory := deploymentDirectory(t)
+	credentials, tlsIdentity := generateDeploymentComposeEnvironment(
+		t,
+		deployDirectory,
+	)
 	stack := &deploymentComposeStack{
 		project:          "open-splunk-compose-test-" + randomHex(t, 6),
 		projectDirectory: deployDirectory,
 		composeFile:      filepath.Join(deployDirectory, "docker-compose.yaml"),
-		credentials:      newDeploymentComposeCredentials(t, nil),
+		credentials:      credentials,
+		tlsIdentity:      tlsIdentity,
 	}
 	t.Cleanup(func() {
 		cleanupContext, cleanupCancel := context.WithTimeout(
@@ -111,14 +120,17 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 		t.Fatal("fresh Docker Compose deployment returned an empty container ID")
 	}
 	firstDataVolume := inspectComposeDataVolume(t, ctx, firstContainerID)
-	firstAddress := stack.publishedAddress(t, ctx, "9000")
+	firstAddress := stack.publishedAddress(t, ctx, "9440")
+	_ = stack.publishedAddress(t, ctx, "9000")
 	_ = stack.publishedAddress(t, ctx, "8123")
 
 	verifyComposeBootstrapBoundary(t, ctx, stack, firstAddress)
+	verifyComposeTLSBoundary(t, ctx, stack, firstAddress)
 	markerEventID := "compose-persistence-" + randomHex(t, 8)
 	validateComposePrincipalsAndSchema(
 		t,
 		ctx,
+		stack,
 		firstAddress,
 		stack.credentials,
 		markerEventID,
@@ -162,7 +174,8 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 			firstDataVolume,
 		)
 	}
-	secondAddress := stack.publishedAddress(t, ctx, "9000")
+	secondAddress := stack.publishedAddress(t, ctx, "9440")
+	_ = stack.publishedAddress(t, ctx, "9000")
 	_ = stack.publishedAddress(t, ctx, "8123")
 
 	expectComposeBootstrapPasswordRejected(
@@ -174,6 +187,7 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 	expectComposePrincipalCredentialsRejected(
 		t,
 		ctx,
+		stack,
 		secondAddress,
 		oldCredentials,
 	)
@@ -181,6 +195,7 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 	validateComposePrincipalsAndSchema(
 		t,
 		ctx,
+		stack,
 		secondAddress,
 		stack.credentials,
 		markerEventID,
@@ -193,6 +208,58 @@ type deploymentComposeCredentials struct {
 	migrationPassword string
 	runtimePassword   string
 	deletionPassword  string
+}
+
+type deploymentComposeTLSIdentity struct {
+	caCertificateFile string
+	certificateFile   string
+	privateKeyFile    string
+	serverName        string
+	rootCAs           *x509.CertPool
+}
+
+func generateDeploymentComposeEnvironment(
+	t *testing.T,
+	deployDirectory string,
+) (deploymentComposeCredentials, *deploymentComposeTLSIdentity) {
+	t.Helper()
+	envFile := filepath.Join(t.TempDir(), "open-splunk.env")
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	values := mustGenerateDeploymentEnvironment(
+		t,
+		ctx,
+		deployDirectory,
+		envFile,
+	)
+	caCertificateFile := values["OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE"]
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(readFile(t, caCertificateFile))) {
+		t.Fatal("generated deployment CA bundle contains no certificates")
+	}
+	credentials := deploymentComposeCredentials{
+		bootstrapPassword: values["OPEN_SPLUNK_CLICKHOUSE_BOOTSTRAP_PASSWORD"],
+		migrationPassword: values["OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD"],
+		runtimePassword:   values["OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD"],
+		deletionPassword:  values["OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD"],
+	}
+	for name, password := range map[string]string{
+		"bootstrap": credentials.bootstrapPassword,
+		"migration": credentials.migrationPassword,
+		"runtime":   credentials.runtimePassword,
+		"deletion":  credentials.deletionPassword,
+	} {
+		if len(password) != 64 || strings.Trim(password, "0123456789abcdef") != "" {
+			t.Fatalf("generated deployment %s password is invalid", name)
+		}
+	}
+	return credentials, &deploymentComposeTLSIdentity{
+		caCertificateFile: caCertificateFile,
+		certificateFile:   values["OPEN_SPLUNK_CLICKHOUSE_TLS_CERT_FILE"],
+		privateKeyFile:    values["OPEN_SPLUNK_CLICKHOUSE_TLS_KEY_FILE"],
+		serverName:        values["OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME"],
+		rootCAs:           roots,
+	}
 }
 
 func newDeploymentComposeCredentials(
@@ -236,6 +303,7 @@ type deploymentComposeStack struct {
 	projectDirectory string
 	composeFile      string
 	credentials      deploymentComposeCredentials
+	tlsIdentity      *deploymentComposeTLSIdentity
 }
 
 func (stack *deploymentComposeStack) run(
@@ -277,6 +345,11 @@ func (stack *deploymentComposeStack) environment(
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD":  stack.credentials.deletionPassword,
 		"OPEN_SPLUNK_CLICKHOUSE_HTTP_PORT":          "0",
 		"OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT":        "0",
+		"OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT": "0",
+		"OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE":        stack.tlsIdentity.caCertificateFile,
+		"OPEN_SPLUNK_CLICKHOUSE_TLS_CERT_FILE":      stack.tlsIdentity.certificateFile,
+		"OPEN_SPLUNK_CLICKHOUSE_TLS_KEY_FILE":       stack.tlsIdentity.privateKeyFile,
+		"OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME":    stack.tlsIdentity.serverName,
 	}
 	for key, value := range additionalEnvironment {
 		values[key] = value
@@ -426,6 +499,7 @@ func verifyComposeBootstrapBoundary(
 		"default",
 		composeBootstrapUsername,
 		stack.credentials.bootstrapPassword,
+		stack.clientTLSConfig(),
 	)
 	if err := connection.Ping(ctx); err == nil {
 		_ = connection.Close()
@@ -449,6 +523,127 @@ func verifyComposeBootstrapBoundary(
 			"bootstrap docker compose exec query = %q, want 1",
 			strings.TrimSpace(string(output)),
 		)
+	}
+}
+
+func verifyComposeTLSBoundary(
+	t *testing.T,
+	ctx context.Context,
+	stack *deploymentComposeStack,
+	address string,
+) {
+	t.Helper()
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	verifiedDialer := &tls.Dialer{
+		NetDialer: dialer,
+		Config:    stack.clientTLSConfig(),
+	}
+	rawTLSConnection, err := verifiedDialer.DialContext(
+		ctx,
+		"tcp",
+		address,
+	)
+	if err != nil {
+		t.Fatalf("perform verified ClickHouse TLS handshake: %v", err)
+	}
+	tlsConnection, ok := rawTLSConnection.(*tls.Conn)
+	if !ok {
+		_ = rawTLSConnection.Close()
+		t.Fatalf("verified ClickHouse TLS connection type = %T", rawTLSConnection)
+	}
+	state := tlsConnection.ConnectionState()
+	if state.Version < tls.VersionTLS12 || len(state.PeerCertificates) == 0 ||
+		state.ServerName != stack.tlsIdentity.serverName {
+		_ = tlsConnection.Close()
+		t.Fatalf("verified ClickHouse TLS state = %#v", state)
+	}
+	if err := tlsConnection.Close(); err != nil {
+		t.Fatalf("close verified ClickHouse TLS connection: %v", err)
+	}
+	legacyTLS := stack.clientTLSConfig()
+	legacyTLS.MinVersion = tls.VersionTLS10 // #nosec G402 -- rejection probe.
+	legacyTLS.MaxVersion = tls.VersionTLS11
+	legacyDialer := &tls.Dialer{
+		NetDialer: dialer,
+		Config:    legacyTLS,
+	}
+	if legacyConnection, legacyErr := legacyDialer.DialContext(
+		ctx,
+		"tcp",
+		address,
+	); legacyErr == nil {
+		_ = legacyConnection.Close()
+		t.Fatal("ClickHouse TLS listener unexpectedly accepted TLS 1.1")
+	}
+
+	wrongName := stack.clientTLSConfig()
+	wrongName.ServerName = "wrong-clickhouse.internal"
+	expectDeploymentComposeConnectionRejected(
+		t,
+		ctx,
+		address,
+		stack.credentials.runtimePassword,
+		wrongName,
+		"wrong ClickHouse TLS server name",
+	)
+	wrongIdentity, err := testsupport.WriteServerTLSIdentity(
+		t.TempDir(),
+		stack.tlsIdentity.serverName,
+	)
+	if err != nil {
+		t.Fatalf("create wrong ClickHouse TLS trust root: %v", err)
+	}
+	wrongTrust := stack.clientTLSConfig()
+	wrongTrust.RootCAs = wrongIdentity.RootCAs
+	expectDeploymentComposeConnectionRejected(
+		t,
+		ctx,
+		address,
+		stack.credentials.runtimePassword,
+		wrongTrust,
+		"wrong ClickHouse TLS trust root",
+	)
+	expectDeploymentComposeConnectionRejected(
+		t,
+		ctx,
+		address,
+		stack.credentials.runtimePassword,
+		nil,
+		"plaintext on ClickHouse TLS listener",
+	)
+}
+
+func expectDeploymentComposeConnectionRejected(
+	t *testing.T,
+	ctx context.Context,
+	address string,
+	password string,
+	tlsConfig *tls.Config,
+	name string,
+) {
+	t.Helper()
+	connection := openDeploymentComposeConnection(
+		t,
+		address,
+		"open_splunk",
+		composeRuntimeUsername,
+		password,
+		tlsConfig,
+	)
+	if err := connection.Ping(ctx); err == nil {
+		_ = connection.Close()
+		t.Fatalf("%s unexpectedly connected", name)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatalf("close rejected %s connection: %v", name, err)
+	}
+}
+
+func (stack *deploymentComposeStack) clientTLSConfig() *tls.Config {
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    stack.tlsIdentity.rootCAs.Clone(),
+		ServerName: stack.tlsIdentity.serverName,
 	}
 }
 
@@ -491,6 +686,7 @@ func expectComposeBootstrapPasswordRejected(
 func validateComposePrincipalsAndSchema(
 	t *testing.T,
 	ctx context.Context,
+	stack *deploymentComposeStack,
 	address string,
 	credentials deploymentComposeCredentials,
 	markerEventID string,
@@ -503,6 +699,7 @@ func validateComposePrincipalsAndSchema(
 		"default",
 		composeMigrationUsername,
 		credentials.migrationPassword,
+		stack.clientTLSConfig(),
 	)
 	defer closeDeploymentComposeConnection(t, "migration", migrationConnection)
 	if err := migrationConnection.Ping(ctx); err != nil {
@@ -528,6 +725,7 @@ func validateComposePrincipalsAndSchema(
 		"open_splunk",
 		composeRuntimeUsername,
 		credentials.runtimePassword,
+		stack.clientTLSConfig(),
 	)
 	defer closeDeploymentComposeConnection(t, "runtime", runtimeConnection)
 	if err := runtimeConnection.Ping(ctx); err != nil {
@@ -584,6 +782,7 @@ func validateComposePrincipalsAndSchema(
 		"open_splunk",
 		composeDeletionUsername,
 		credentials.deletionPassword,
+		stack.clientTLSConfig(),
 	)
 	defer closeDeploymentComposeConnection(t, "deletion", deletionConnection)
 	if err := deletionConnection.Ping(ctx); err != nil {
@@ -644,6 +843,7 @@ func validateComposePrincipalsAndSchema(
 func expectComposePrincipalCredentialsRejected(
 	t *testing.T,
 	ctx context.Context,
+	stack *deploymentComposeStack,
 	address string,
 	credentials deploymentComposeCredentials,
 ) {
@@ -675,6 +875,7 @@ func expectComposePrincipalCredentialsRejected(
 			principal.database,
 			principal.name,
 			principal.password,
+			stack.clientTLSConfig(),
 		)
 		err := connection.Ping(ctx)
 		closeErr := connection.Close()
@@ -700,6 +901,7 @@ func openDeploymentComposeConnection(
 	database string,
 	username string,
 	password string,
+	tlsConfig *tls.Config,
 ) clickhousedriver.Conn {
 	t.Helper()
 	connection, err := clickhousedriver.Open(&clickhousedriver.Options{
@@ -710,6 +912,7 @@ func openDeploymentComposeConnection(
 			Username: username,
 			Password: password,
 		},
+		TLS:          tlsConfig,
 		DialTimeout:  5 * time.Second,
 		ReadTimeout:  30 * time.Second,
 		MaxOpenConns: 2,
