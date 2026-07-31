@@ -7,7 +7,138 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded row-preserving eventstats count
+## Latest checkpoint: exact-field eventstats count
+
+Date: 2026-07-30
+
+Committed and pushed implementation checkpoint:
+
+- `711a6b1` — exact-field `eventstats count(field) AS output`, optional exact
+  `BY`, shared occurrence semantics with `stats`, bounded row-preserving
+  ClickHouse lowering, and adversarial unit/live integration coverage.
+
+This test-first unit extends the deliberately narrow `eventstats` surface
+without widening its execution envelope:
+
+1. The accepted field form has exactly one unquoted exact input in
+   `count(field)`, followed by `AS exact_output` and optionally one through
+   sixteen distinct exact `BY` fields. `c(field)`, quoted or wildcard inputs,
+   empty or multiple inputs, eval expressions, omitted aliases, other
+   functions, multiple measures, and options fail at their source ranges.
+   Argument-free `eventstats count` remains unchanged.
+2. The parser, AST, planner, referenced-field analysis, defensive validators,
+   suggestions, and result-shape metadata now distinguish row count from
+   field-occurrence count. A forged plan with noncanonical input metadata,
+   predicate metadata, percentile metadata, or another aggregate function
+   still fails closed.
+3. `count(field)` resolves and counts the upstream field before applying the
+   output alias. Alias replacement therefore cannot make a measure read its
+   own result. A projected-away input remains missing and contributes zero
+   instead of being recovered from hidden event storage.
+4. Missing values, explicit nulls, empty multivalues, and null multivalue
+   members contribute zero. Other scalars and typed containers contribute one.
+   A top-level multivalue contributes its immediate non-null member count,
+   including duplicates and without recursive traversal. Fixed
+   `Array(String)`, stored `Array(Dynamic)`, and calculated homogeneous
+   `Array(String)` values are live-proven.
+5. Global totals are non-null `UInt64` values attached to every upstream row.
+   Grouped totals are attached only to rows with complete eligible `BY`
+   tuples; an eligible group whose members all contribute zero receives a
+   present zero, while an incomplete tuple leaves the output absent. Existing
+   container poisoning and lexical Dynamic grouping rules are unchanged.
+6. The occurrence input is projected once into the existing 10,001-row
+   sentinel relation. Occurrences aggregate through `UInt128` and convert to
+   `UInt64` only at the bounded output. The independent row-count guard still
+   rejects 10,001 upstream rows even when every occurrence contribution is
+   zero, so a low measure total cannot bypass the stage limit.
+7. Global lowering adds one constant-size sum to the existing materialized
+   total. Grouped lowering adds the same sum to the existing bounded group
+   aggregate and left join. It performs no `ARRAY JOIN`, `groupArray`,
+   per-group query, Go-side buffering, or row expansion.
+8. The reserved open-event `fields` payload remains unreadable as a measure
+   and unusable as an output alias until an upstream transforming command
+   establishes a closed schema. GORM ownership is unchanged: SQLite/control
+   plane only; ClickHouse ingestion, compilation, execution, and integration
+   remain native.
+9. A pinned ClickHouse run exposed that `length(Dynamic)` is statically
+   `Nullable(UInt64)`. The homogeneous-array branch now normalizes only that
+   dispatch result with `ifNull(..., 0)`, preserving a definite `UInt64`
+   measure without changing `Array(Dynamic)` non-null-member semantics.
+   Integration assertions pin both values and database column types.
+10. Adversarial review also found that the first calculated-array live cases
+    were vacuous: a two-member array plus an empty array had the same total as
+    two incorrectly scalar-counted values. Final tests isolate the nonempty
+    value at two and the empty value at zero, group them independently by
+    `event_id`, and prove the shared `stats count(lowered)` path with an
+    eight-member array and a `UInt64` result.
+11. Simplification review removed an unused global occurrence aggregate from
+    grouped plans, removed redundant parser state, shared forged-plan cloning,
+    and consolidated live-result collection. Final independent semantics,
+    ClickHouse/boundedness, and test-coverage reviews confirmed frozen staged
+    diff
+    `aff91744a27ef3d6c937d4bde2e12fcf50ebe720536a53521751c664a1e9fa58`
+    with no remaining P0–P2 finding.
+12. The architecture plan remains unfinished. The highest first-release
+    deployment milestone is still the actual GradeThis Compose cutover. It
+    first needs the Open Splunk deployment foundation: a release OCI image and
+    full-stack Compose contract, explicit listener/TLS topology, bootstrap
+    tooling, a dedicated ClickHouse schema/volume boundary, and current
+    dashboard wiring. That work belongs in a dedicated GradeThis branch after
+    the foundation exists; no next unit is selected here.
+
+Validation on implementation commit `711a6b1`:
+
+```sh
+go mod tidy -diff
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go vet ./...
+go build ./...
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+make proto
+BUF_CACHE_DIR="$PWD/.cache/buf" npx --no-install buf breaking \
+  --against '.git#branch=main'
+
+# Executed with this already-cached binary reporting exactly v2.12.2.
+EVENTSTATS_LINTER=/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint
+GOLANGCI_LINT_CACHE=/private/tmp/open-splunk-golangci-cache \
+  "$EVENTSTATS_LINTER" run ./...
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -v
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./integration -run '^TestBackendVertical$' \
+  -count=1 -timeout=15m -v
+
+git show --check --oneline 711a6b1
+```
+
+The full repository unit and race/shuffle suites, tidy verification, vet/build,
+cached v2.12.2 Go lint, TypeScript typecheck/lint, all 47 release/materializer
+tests, all 137 frontend runtime tests, production UI build, and protobuf
+format/lint/generation/breaking checks passed; Go lint reported `0 issues`.
+The digest-pinned Store/compiler integration passed in 61.44 seconds, the
+digest-pinned backend vertical passed in 24.57 seconds, and Docker inspection
+found no remaining test-owned container or volume.
+
+Explicit pause point:
+
+1. Exact-field `eventstats count(field)` is committed, pushed, and
+   digest-pinned live-proven.
+2. Its occurrence semantics, zero-versus-absent grouped behavior, output
+   types, row ceiling, and composition with `stats` are pinned.
+3. GORM remains control-plane-only; ClickHouse remains native-only.
+4. Commit and push this handoff, then pause until the user gives further
+   instructions.
+
+## Previous checkpoint: bounded row-preserving eventstats count
 
 Date: 2026-07-30
 
