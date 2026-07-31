@@ -227,8 +227,8 @@ jobs:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
           OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
         run: >-
-          go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/queryexec ./integration ./migrations/clickhouse
-          -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|IndexStatisticsReaderAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
+          go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse
+          -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexStatisticsReaderAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
           -count=1
           -timeout=25m
           -p=1
@@ -258,6 +258,106 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  release-oci:
+    name: Release OCI contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+
+      - name: Build and test release images with production Compose
+        env:
+          OPEN_SPLUNK_OCI_INTEGRATION: "1"
+          OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
+        run: >-
+          go test ./integration
+          -run '^TestReleaseOCIComposeContract$'
+          -count=1
+          -timeout=20m
+          -v
+
+      - name: Cross-build exact release images for Linux ARM64
+        env:
+          OPEN_SPLUNK_APPLICATION_VERSION: 0.1.0
+          OPEN_SPLUNK_SOURCE_REVISION: ${{ github.sha }}
+          OPEN_SPLUNK_OCI_PLATFORM: linux/arm64
+          OPEN_SPLUNK_SERVER_IMAGE: open-splunk-ci/server-arm64:${{ github.sha }}
+          OPEN_SPLUNK_COLLECTOR_IMAGE: open-splunk-ci/collector-arm64:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          oci_proof_root=""
+          server_container=""
+          collector_container=""
+          reproducible_server_image="${OPEN_SPLUNK_SERVER_IMAGE}-repro"
+          reproducible_collector_image="${OPEN_SPLUNK_COLLECTOR_IMAGE}-repro"
+          cleanup() {
+            if [[ -n "$server_container" ]]; then
+              docker container rm --force "$server_container" >/dev/null 2>&1 || true
+            fi
+            if [[ -n "$collector_container" ]]; then
+              docker container rm --force "$collector_container" >/dev/null 2>&1 || true
+            fi
+            docker image rm --force \
+              "$OPEN_SPLUNK_SERVER_IMAGE" \
+              "$OPEN_SPLUNK_COLLECTOR_IMAGE" \
+              "$reproducible_server_image" \
+              "$reproducible_collector_image" >/dev/null 2>&1 || true
+            if [[ -n "$oci_proof_root" ]]; then
+              rm -rf -- "$oci_proof_root"
+            fi
+          }
+          trap cleanup EXIT
+          make oci
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$OPEN_SPLUNK_SERVER_IMAGE")" = "linux/arm64"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$OPEN_SPLUNK_COLLECTOR_IMAGE")" = "linux/arm64"
+
+          # Local image IDs digest the runtime config; the ordered RootFS diff IDs
+          # independently cover canonical filesystem content without attestations.
+          server_config_digest="$(docker image inspect --format '{{.Id}}' "$OPEN_SPLUNK_SERVER_IMAGE")"
+          collector_config_digest="$(docker image inspect --format '{{.Id}}' "$OPEN_SPLUNK_COLLECTOR_IMAGE")"
+          server_layer_digests="$(docker image inspect --format '{{json .RootFS.Layers}}' "$OPEN_SPLUNK_SERVER_IMAGE")"
+          collector_layer_digests="$(docker image inspect --format '{{json .RootFS.Layers}}' "$OPEN_SPLUNK_COLLECTOR_IMAGE")"
+
+          oci_proof_root="$(mktemp -d)"
+          server_container="$(docker container create --platform linux/arm64 "$OPEN_SPLUNK_SERVER_IMAGE")"
+          collector_container="$(docker container create --platform linux/arm64 "$OPEN_SPLUNK_COLLECTOR_IMAGE")"
+          docker cp \
+            "${server_container}:/usr/local/bin/open-splunk-server" \
+            "$oci_proof_root/open-splunk-server"
+          docker cp \
+            "${collector_container}:/usr/local/bin/open-splunk-collector" \
+            "$oci_proof_root/open-splunk-collector"
+          node scripts/verify-elf-architecture.mjs \
+            arm64 \
+            "$oci_proof_root/open-splunk-server" \
+            "$oci_proof_root/open-splunk-collector"
+
+          OPEN_SPLUNK_SERVER_IMAGE="$reproducible_server_image" \
+          OPEN_SPLUNK_COLLECTOR_IMAGE="$reproducible_collector_image" \
+          OPEN_SPLUNK_OCI_NO_CACHE=1 \
+            make oci
+          test "$server_config_digest" = \
+            "$(docker image inspect --format '{{.Id}}' "$reproducible_server_image")"
+          test "$collector_config_digest" = \
+            "$(docker image inspect --format '{{.Id}}' "$reproducible_collector_image")"
+          test "$server_layer_digests" = \
+            "$(docker image inspect --format '{{json .RootFS.Layers}}' "$reproducible_server_image")"
+          test "$collector_layer_digests" = \
+            "$(docker image inspect --format '{{json .RootFS.Layers}}' "$reproducible_collector_image")"
+
   go-vulnerability:
     name: Go vulnerability scan
     runs-on: ubuntu-latest
@@ -281,6 +381,7 @@ jobs:
       - go-test
       - go-vulnerability
       - protobuf
+      - release-oci
     strategy:
       fail-fast: false
       matrix:
@@ -305,6 +406,18 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
+
+      - name: Verify OCI launcher portability on macOS Bash
+        if: runner.os == 'macOS'
+        run: node --test scripts/build-oci.test.mjs
+
+      - name: Verify macOS generated-secret ACL hardening
+        if: runner.os == 'macOS'
+        run: >-
+          go test ./migrations/clickhouse
+          -run '^TestGenerateEnvClearsDarwinInheritedACLs$'
+          -count=1
+          -v
 
       - name: Build server, collector, and log generator
         env:

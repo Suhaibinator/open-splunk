@@ -42,6 +42,24 @@ func TestReadAdministratorTokenRejectsDarwinExtendedACLs(t *testing.T) {
 	})
 }
 
+func TestProvisionAdministratorTokenRejectsDarwinParentACL(t *testing.T) {
+	t.Parallel()
+
+	token := []byte(strings.Repeat(
+		"A",
+		auth.MinimumBrowserBearerTokenBytes,
+	))
+	source := writeProvisioningTokenSource(t, token, 0o444)
+	directory := secureProvisioningDirectory(t)
+	addDarwinACL(t, directory, "everyone allow read")
+	if err := provisionAdministratorToken(
+		source,
+		filepath.Join(directory, "administrator-token"),
+	); err == nil || !strings.Contains(err.Error(), "ACL") {
+		t.Fatalf("ACL-bearing destination parent error = %v", err)
+	}
+}
+
 func addDarwinACL(t *testing.T, path string, entry string) {
 	t.Helper()
 

@@ -1,7 +1,8 @@
 <clickhouse>
-    <!-- Native TLS is the application-facing transport. Plain native port
-         9000 remains available for container-local bootstrap and the
-         explicitly loopback-only development port. -->
+    <!-- Native TLS is the application-facing transport. The official image
+         still needs plaintext native port 9000 during its entrypoint bootstrap;
+         Compose never publishes it and limits it to the private two-service
+         backend network. The application is fixed to verified port 9440. -->
     <tcp_port_secure>9440</tcp_port_secure>
     <openSSL>
         <server>

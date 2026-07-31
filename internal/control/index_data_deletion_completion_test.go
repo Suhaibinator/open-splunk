@@ -668,7 +668,13 @@ func TestCompleteIndexDataDeletionRetryDoesNotReserveSQLiteWriter(
 		}
 	}()
 
-	retryContext, cancel := context.WithTimeout(ctx, time.Second)
+	// Leave enough headroom for connection setup under the race detector. A
+	// retry that incorrectly reserves a writer still fails when SQLite's
+	// shorter busy timeout expires while the writer above remains reserved.
+	retryContext, cancel := context.WithTimeout(
+		ctx,
+		defaultBusyTimeout+time.Second,
+	)
 	defer cancel()
 	retried, err := db.CompleteIndexDataDeletion(retryContext, attempt)
 	if err != nil {

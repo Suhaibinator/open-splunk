@@ -105,6 +105,10 @@ func TestLoadClickHouseClientTLSProfileRejectsIncompleteOrUnsafeTrust(
 	); err != nil {
 		t.Fatal(err)
 	}
+	symlink := filepath.Join(directory, "symlink.pem")
+	if err := os.Symlink(identity.CertificateFile, symlink); err != nil {
+		t.Fatal(err)
+	}
 
 	for name, testCase := range map[string]struct {
 		secure     bool
@@ -140,6 +144,9 @@ func TestLoadClickHouseClientTLSProfileRejectsIncompleteOrUnsafeTrust(
 		},
 		"nonregular CA file": {
 			secure: true, caFile: directory, serverName: "clickhouse",
+		},
+		"symlink CA file": {
+			secure: true, caFile: symlink, serverName: "clickhouse",
 		},
 		"server name contains port": {
 			secure: true, caFile: identity.CertificateFile, serverName: "clickhouse:9440",

@@ -40,12 +40,16 @@ if [ "$CLICKHOUSE_PASSWORD" = "$OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD" ] ||
     exit 1
 fi
 
+# The official image creates fresh volume roots with permissive modes. This
+# script runs as the fixed ClickHouse UID, so tighten both durable roots before
+# provisioning work and fail closed if either mount is not owned by that UID.
+chmod 0700 /var/lib/clickhouse /var/log/clickhouse-server
+
 expected_server_version=26.3.17.4
 server_version=$(
     clickhouse-client \
         --host 127.0.0.1 \
         --user "$CLICKHOUSE_USER" \
-        --password "$CLICKHOUSE_PASSWORD" \
         --query "SELECT version()"
 )
 if [ "$server_version" != "$expected_server_version" ]; then
@@ -56,33 +60,19 @@ fi
 clickhouse-client \
     --host 127.0.0.1 \
     --user "$CLICKHOUSE_USER" \
-    --password "$CLICKHOUSE_PASSWORD" \
     --multiquery <<SQL
 CREATE USER IF NOT EXISTS open_splunk_migrator
     IDENTIFIED WITH sha256_password BY '$OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD';
 ALTER USER open_splunk_migrator
     IDENTIFIED WITH sha256_password BY '$OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD';
 GRANT CREATE DATABASE ON open_splunk.* TO open_splunk_migrator;
+GRANT SHOW TABLES ON open_splunk.* TO open_splunk_migrator;
 GRANT CREATE TABLE ON open_splunk.schema_migrations TO open_splunk_migrator;
 GRANT CREATE TABLE ON open_splunk.events TO open_splunk_migrator;
 GRANT ALTER ADD COLUMN, ALTER ADD CONSTRAINT, ALTER ADD INDEX ON open_splunk.events TO open_splunk_migrator;
 GRANT SELECT ON system.tables TO open_splunk_migrator;
 GRANT SELECT, INSERT ON open_splunk.schema_migrations TO open_splunk_migrator;
-SQL
 
-for migration in /open-splunk-migrations/*.sql; do
-    clickhouse-client \
-        --host 127.0.0.1 \
-        --user open_splunk_migrator \
-        --password "$OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD" \
-        --multiquery <"$migration"
-done
-
-clickhouse-client \
-    --host 127.0.0.1 \
-    --user "$CLICKHOUSE_USER" \
-    --password "$CLICKHOUSE_PASSWORD" \
-    --multiquery <<SQL
 CREATE USER IF NOT EXISTS open_splunk_runtime
     IDENTIFIED WITH sha256_password BY '$OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD';
 ALTER USER open_splunk_runtime

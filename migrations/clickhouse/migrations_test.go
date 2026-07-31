@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -124,21 +125,23 @@ func TestFieldMetadataMigrationContract(t *testing.T) {
 	}
 }
 
-func TestComposeIsPinnedAndLoopbackOnly(t *testing.T) {
+func TestComposeFullStackSecurityContract(t *testing.T) {
 	compose := readFile(t, filepath.Join("..", "..", "deploy", "docker-compose.yaml"))
 
 	for _, fragment := range []string{
 		"image: " + pinnedClickHouseImage,
-		"127.0.0.1:${OPEN_SPLUNK_CLICKHOUSE_HTTP_PORT:-8123}:8123",
-		"127.0.0.1:${OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT:-9000}:9000",
-		"127.0.0.1:${OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT:-9440}:9440",
+		"user: \"101:101\"",
+		"read_only: true",
+		"cap_drop:",
+		"- ALL",
+		"no-new-privileges:true",
+		"/tmp:rw,noexec,nosuid,nodev,mode=0700,uid=101,gid=101",
 		"OPEN_SPLUNK_CLICKHOUSE_BOOTSTRAP_PASSWORD:?",
 		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD:?",
 		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD:?",
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD:?",
 		"OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME:?",
 		"./clickhouse-init.sh:/docker-entrypoint-initdb.d/0100_open_splunk.sh:ro",
-		"../migrations/clickhouse:/open-splunk-migrations:ro",
 		"./clickhouse-config/access.xml:/etc/clickhouse-server/config.d/open_splunk_access.xml:ro",
 		"./clickhouse-config/bootstrap-user.xml:/etc/clickhouse-server/users.d/open_splunk_bootstrap.xml:ro",
 		"./clickhouse-config/tls.xml:/etc/clickhouse-server/config.d/open_splunk_tls.xml:ro",
@@ -154,18 +157,154 @@ func TestComposeIsPinnedAndLoopbackOnly(t *testing.T) {
 		"--host 127.0.0.1",
 		"--port 9440",
 		"--tls-sni-override",
+		"CLICKHOUSE_PASSWORD=\"$${OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD}\"",
+		"clickhouse-migrator:",
+		"migrate-clickhouse",
+		"/run/open-splunk/clickhouse/migration.password",
+		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD_FILE:?",
+		"server-bootstrap:",
+		"user: \"65532:65532\"",
+		"network_mode: none",
+		"provision-administrator-token",
+		"/var/lib/open-splunk/state/administrator.token",
+		"server:",
+		"condition: service_completed_successfully",
+		"condition: service_healthy",
+		"127.0.0.1:${OPEN_SPLUNK_SERVER_HTTP_PORT:-8080}:8080",
+		"127.0.0.1:${OPEN_SPLUNK_SERVER_GRPC_PORT:-4317}:4317",
+		"-http-address",
+		"0.0.0.0:8080",
+		"-collector-grpc-address",
+		"0.0.0.0:4317",
+		"-clickhouse-address",
+		"clickhouse:9440",
+		"-clickhouse-secure",
+		"-clickhouse-server-name",
+		"-clickhouse-skip-migrations",
+		"-clickhouse-runtime-password-file",
+		"/run/open-splunk/clickhouse/runtime.password",
+		"-clickhouse-deletion-password-file",
+		"/run/open-splunk/clickhouse/deletion.password",
+		"/var/lib/open-splunk/state/open-splunk.db",
+		"/var/lib/open-splunk/exports",
+		"/run/open-splunk/tls/server.crt",
+		"/run/open-splunk/tls/server.key",
+		"/run/open-splunk/tls/ca.crt",
+		"healthcheck",
+		"https://127.0.0.1:8080/readyz",
+		"server-state:",
+		"server-exports:",
+		"internal: true",
+		"TMPDIR: /tmp",
 	} {
 		if !strings.Contains(compose, fragment) {
 			t.Errorf("deployment compose file is missing safety contract fragment %q", fragment)
 		}
 	}
-	if strings.Contains(compose, ":latest") || strings.Contains(compose, "0.0.0.0:") {
-		t.Error("deployment compose file must not use a floating image or a wildcard host bind")
+	if strings.Contains(compose, ":latest") {
+		t.Error("deployment compose file must not use a floating image")
+	}
+	if regexp.MustCompile(`(?m)^[ \t]+build[ \t]*:`).MatchString(compose) {
+		t.Error("deployment Compose must use only images published by make oci")
+	}
+	if strings.Contains(compose, "0.0.0.0:${") {
+		t.Error("deployment compose file must not use a wildcard host publication")
 	}
 	if strings.Contains(compose, "CLICKHOUSE_DB:") ||
 		strings.Contains(compose, "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT:") ||
-		strings.Contains(compose, "../migrations/clickhouse:/docker-entrypoint-initdb.d") {
+		strings.Contains(compose, "../migrations/clickhouse") ||
+		strings.Contains(compose, "/open-splunk-migrations") {
 		t.Error("bootstrap principal must not create or migrate the application schema")
+	}
+	if strings.Contains(compose, "OPEN_SPLUNK_CLICKHOUSE_HTTP_PORT") ||
+		strings.Contains(compose, "OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT") ||
+		strings.Contains(compose, "OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT") {
+		t.Error("ClickHouse ports must not be published by the full-stack deployment")
+	}
+	if count := strings.Count(compose, "OPEN_SPLUNK_CLICKHOUSE_BOOTSTRAP_PASSWORD"); count != 1 {
+		t.Fatalf("bootstrap password references = %d, want only the ClickHouse service", count)
+	}
+	migratorStart := strings.Index(compose, "\n  clickhouse-migrator:\n")
+	bootstrapStart := strings.Index(compose, "\n  server-bootstrap:\n")
+	if migratorStart < 0 || bootstrapStart <= migratorStart {
+		t.Fatal("deployment compose file has no bounded one-shot migrator service")
+	}
+	migratorSection := compose[migratorStart:bootstrapStart]
+	for _, fragment := range []string{
+		"*open-splunk-server-image",
+		"*open-splunk-server-security",
+		"condition: service_healthy",
+		"restart: \"no\"",
+		"migrate-clickhouse",
+		"clickhouse:9440",
+		"/run/open-splunk/clickhouse/ca.crt:ro",
+		"/run/open-splunk/clickhouse/migration.password:ro",
+		"      - backend",
+		"pids_limit: 64",
+	} {
+		if !strings.Contains(migratorSection, fragment) {
+			t.Errorf("one-shot migrator is missing safety contract fragment %q", fragment)
+		}
+	}
+	if strings.Contains(migratorSection, "\n    ports:") ||
+		strings.Contains(migratorSection, "server-state:") ||
+		strings.Contains(migratorSection, "runtime.password") ||
+		strings.Contains(migratorSection, "deletion.password") ||
+		strings.Contains(migratorSection, "      - frontend") {
+		t.Error("one-shot migrator has ports, durable state, or non-migration credentials")
+	}
+	serverStart := strings.Index(compose, "\n  server:\n")
+	if serverStart < 0 {
+		t.Fatal("deployment compose file has no server service")
+	}
+	serverSection := compose[serverStart:]
+	for _, fragment := range []string{
+		"clickhouse-migrator:\n        condition: service_completed_successfully",
+		"-clickhouse-skip-migrations",
+	} {
+		if !strings.Contains(serverSection, fragment) {
+			t.Errorf("long-running server is missing migration boundary fragment %q", fragment)
+		}
+	}
+	const portsStartMarker = "\n    ports:\n"
+	if count := strings.Count(serverSection, portsStartMarker); count != 1 {
+		t.Fatalf("server ports blocks = %d, want exactly one", count)
+	}
+	portsStart := strings.Index(serverSection, portsStartMarker)
+	portsEndOffset := strings.Index(serverSection[portsStart+len(portsStartMarker):], "\n    volumes:\n")
+	if portsEndOffset < 0 {
+		t.Fatal("server ports block is not followed by its volumes block")
+	}
+	portsEnd := portsStart + len(portsStartMarker) + portsEndOffset
+	gotPortsBlock := serverSection[portsStart:portsEnd]
+	const wantPortsBlock = `
+    ports:
+      - "127.0.0.1:${OPEN_SPLUNK_SERVER_HTTP_PORT:-8080}:8080"
+      - "127.0.0.1:${OPEN_SPLUNK_SERVER_GRPC_PORT:-4317}:4317"`
+	if gotPortsBlock != wantPortsBlock {
+		t.Fatalf(
+			"server ports block = %q, want exactly %q",
+			gotPortsBlock,
+			wantPortsBlock,
+		)
+	}
+	for _, name := range []string{
+		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD",
+		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
+	} {
+		if strings.Contains(serverSection, name+`: "${`) {
+			t.Errorf("server service exposes %s through its environment", name)
+		}
+		if !strings.Contains(serverSection, name+"_FILE:?") {
+			t.Errorf("server service does not mount generated %s_FILE", name)
+		}
+	}
+	if strings.Contains(serverSection, "OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD") ||
+		strings.Contains(serverSection, "/run/open-splunk/clickhouse/migration.password") {
+		t.Error("long-running server retains the short-lived migration credential")
+	}
+	if strings.Contains(compose, "\n  collector:") {
+		t.Error("the default deployment must not run a collector before explicit onboarding")
 	}
 }
 
@@ -236,23 +375,78 @@ func TestGenerateEnvCreatesVerifiedClickHouseTLSIdentity(t *testing.T) {
 			t.Fatalf("generated %s is not 256-bit lowercase hex", name)
 		}
 	}
+	for role, variable := range map[string]string{
+		"migration": "OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD_FILE",
+		"runtime":   "OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD_FILE",
+		"deletion":  "OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD_FILE",
+	} {
+		path := values[variable]
+		if !filepath.IsAbs(path) {
+			t.Fatalf("generated %s password file path = %q, want absolute", role, path)
+		}
+		contents := readFile(t, path)
+		if contents != values["OPEN_SPLUNK_CLICKHOUSE_"+strings.ToUpper(role)+"_PASSWORD"] {
+			t.Fatalf("generated %s password file does not match its bootstrap credential", role)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat generated %s password file: %v", role, err)
+		}
+		if info.Mode().Perm() != 0o644 {
+			t.Fatalf(
+				"generated %s password permissions = %#o, want 0644 inside owner-only directory",
+				role,
+				info.Mode().Perm(),
+			)
+		}
+	}
 	if values["OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME"] != "clickhouse" {
 		t.Fatalf(
 			"generated ClickHouse TLS server name = %q, want clickhouse",
 			values["OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME"],
 		)
 	}
+	if values["OPEN_SPLUNK_SERVER_TLS_SERVER_NAME"] != "open-splunk-server" {
+		t.Fatalf(
+			"generated server TLS name = %q, want open-splunk-server",
+			values["OPEN_SPLUNK_SERVER_TLS_SERVER_NAME"],
+		)
+	}
+	if version := values["OPEN_SPLUNK_APPLICATION_VERSION"]; version != "0.1.0" {
+		t.Fatalf("generated application version = %q, want 0.1.0", version)
+	}
+	if revision := values["OPEN_SPLUNK_SOURCE_REVISION"]; len(revision) != 40 && len(revision) != 64 ||
+		strings.Trim(revision, "0123456789abcdef") != "" {
+		t.Fatalf("generated source revision is not a full lowercase Git object ID: %q", revision)
+	}
+	if _, err := time.Parse(time.RFC3339, values["OPEN_SPLUNK_IMAGE_CREATED"]); err != nil {
+		t.Fatalf("generated OCI creation time is invalid: %v", err)
+	}
+	if epoch, err := strconv.ParseInt(values["OPEN_SPLUNK_SOURCE_DATE_EPOCH"], 10, 64); err != nil || epoch <= 0 {
+		t.Fatalf("generated source epoch = %q, want positive Unix seconds", values["OPEN_SPLUNK_SOURCE_DATE_EPOCH"])
+	}
 	caFile := values["OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE"]
 	certificateFile := values["OPEN_SPLUNK_CLICKHOUSE_TLS_CERT_FILE"]
 	privateKeyFile := values["OPEN_SPLUNK_CLICKHOUSE_TLS_KEY_FILE"]
+	serverCAFile := values["OPEN_SPLUNK_SERVER_TLS_CA_FILE"]
+	serverCertificateFile := values["OPEN_SPLUNK_SERVER_TLS_CERT_FILE"]
+	serverPrivateKeyFile := values["OPEN_SPLUNK_SERVER_TLS_KEY_FILE"]
+	administratorTokenFile := values["OPEN_SPLUNK_ADMINISTRATOR_TOKEN_FILE"]
 	for name, path := range map[string]string{
-		"CA":          caFile,
-		"certificate": certificateFile,
-		"private key": privateKeyFile,
+		"ClickHouse CA":            caFile,
+		"ClickHouse certificate":   certificateFile,
+		"ClickHouse private key":   privateKeyFile,
+		"server CA":                serverCAFile,
+		"server certificate":       serverCertificateFile,
+		"server private key":       serverPrivateKeyFile,
+		"administrator token file": administratorTokenFile,
 	} {
 		if !filepath.IsAbs(path) {
-			t.Fatalf("generated ClickHouse TLS %s path = %q, want absolute", name, path)
+			t.Fatalf("generated %s path = %q, want absolute", name, path)
 		}
+	}
+	if serverCAFile != caFile {
+		t.Fatalf("server CA file = %q, want shared deployment CA %q", serverCAFile, caFile)
 	}
 	pair, err := tls.LoadX509KeyPair(certificateFile, privateKeyFile)
 	if err != nil {
@@ -285,9 +479,65 @@ func TestGenerateEnvCreatesVerifiedClickHouseTLSIdentity(t *testing.T) {
 	if len(chains) != 1 || len(chains[0]) != 2 {
 		t.Fatalf("generated ClickHouse TLS chains = %#v, want one leaf+CA chain", chains)
 	}
+	serverPair, err := tls.LoadX509KeyPair(serverCertificateFile, serverPrivateKeyFile)
+	if err != nil {
+		t.Fatalf("load generated Open Splunk server TLS identity: %v", err)
+	}
+	if len(serverPair.Certificate) != 1 {
+		t.Fatalf("generated Open Splunk server certificate chain length = %d, want 1", len(serverPair.Certificate))
+	}
+	serverCertificate, err := x509.ParseCertificate(serverPair.Certificate[0])
+	if err != nil {
+		t.Fatalf("parse generated Open Splunk server certificate: %v", err)
+	}
+	for _, serverName := range []string{"open-splunk-server", "localhost", "127.0.0.1"} {
+		if err := serverCertificate.VerifyHostname(serverName); err != nil {
+			t.Fatalf("verify generated Open Splunk server name %q: %v", serverName, err)
+		}
+	}
+	serverChains, err := serverCertificate.Verify(x509.VerifyOptions{
+		Roots:     roots,
+		DNSName:   "open-splunk-server",
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	})
+	if err != nil {
+		t.Fatalf("verify generated Open Splunk server TLS chain: %v", err)
+	}
+	if len(serverChains) != 1 || len(serverChains[0]) != 2 {
+		t.Fatalf("generated Open Splunk server TLS chains = %#v, want one leaf+CA chain", serverChains)
+	}
+	administratorToken := strings.TrimSuffix(readFile(t, administratorTokenFile), "\n")
+	if len(administratorToken) < 32 || len(administratorToken) > 512 ||
+		strings.ContainsAny(administratorToken, " \t\r\n") {
+		t.Fatal("generated administrator token does not satisfy the browser bearer-token boundary")
+	}
+	for name, password := range map[string]string{
+		"bootstrap": values["OPEN_SPLUNK_CLICKHOUSE_BOOTSTRAP_PASSWORD"],
+		"migration": values["OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD"],
+		"runtime":   values["OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD"],
+		"deletion":  values["OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD"],
+	} {
+		if administratorToken == password {
+			t.Fatalf("administrator token duplicates the %s ClickHouse password", name)
+		}
+	}
+	environmentInfo, err := os.Stat(envFile)
+	if err != nil {
+		t.Fatalf("stat generated environment: %v", err)
+	}
+	if environmentInfo.Mode().Perm() != 0o600 {
+		t.Fatalf(
+			"generated environment permissions = %#o, want 0600",
+			environmentInfo.Mode().Perm(),
+		)
+	}
 	for name, path := range map[string]string{
-		"environment": envFile,
-		"private key": privateKeyFile,
+		"ClickHouse key":      privateKeyFile,
+		"server key":          serverPrivateKeyFile,
+		"administrator token": administratorTokenFile,
+		"migration password":  values["OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD_FILE"],
+		"runtime password":    values["OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD_FILE"],
+		"deletion password":   values["OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD_FILE"],
 	} {
 		info, err := os.Stat(path)
 		if err != nil {
@@ -316,7 +566,17 @@ func TestGenerateEnvCreatesVerifiedClickHouseTLSIdentity(t *testing.T) {
 		generatedTLSFiles = append(generatedTLSFiles, entry.Name())
 	}
 	sort.Strings(generatedTLSFiles)
-	wantedTLSFiles := []string{"ca.crt", "server.crt", "server.key"}
+	wantedTLSFiles := []string{
+		"administrator.token",
+		"ca.crt",
+		"clickhouse-deletion.password",
+		"clickhouse-migration.password",
+		"clickhouse-runtime.password",
+		"open-splunk-server.crt",
+		"open-splunk-server.key",
+		"server.crt",
+		"server.key",
+	}
 	if len(generatedTLSFiles) != len(wantedTLSFiles) {
 		t.Fatalf(
 			"generated TLS files = %v, want %v",
@@ -469,6 +729,65 @@ func TestGenerateEnvConcurrentInvocationsCannotOverwrite(t *testing.T) {
 	}
 }
 
+func TestGenerateEnvClearsDarwinInheritedACLs(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Darwin extended ACL inheritance is platform-specific")
+	}
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skipf("openssl is unavailable: %v", err)
+	}
+
+	parent := t.TempDir()
+	aclCommand := exec.CommandContext(
+		t.Context(),
+		"/bin/chmod",
+		"+a",
+		"everyone allow read,file_inherit,directory_inherit",
+		parent,
+	)
+	if output, err := aclCommand.CombinedOutput(); err != nil {
+		t.Fatalf("add inherited Darwin ACL: %v: %s", err, output)
+	}
+	if !hasDarwinExtendedACL(t, parent) {
+		t.Fatal("Darwin ACL fixture has no extended ACL")
+	}
+
+	envFile := filepath.Join(parent, "open-splunk.env")
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	values := mustGenerateDeploymentEnvironment(
+		t,
+		ctx,
+		deploymentDirectory(t),
+		envFile,
+	)
+	for name, path := range map[string]string{
+		"environment":         envFile,
+		"TLS directory":       envFile + ".tls",
+		"administrator token": values["OPEN_SPLUNK_ADMINISTRATOR_TOKEN_FILE"],
+		"ClickHouse key":      values["OPEN_SPLUNK_CLICKHOUSE_TLS_KEY_FILE"],
+		"migration password":  values["OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD_FILE"],
+	} {
+		if hasDarwinExtendedACL(t, path) {
+			t.Errorf("generated %s retains an inherited extended ACL", name)
+		}
+	}
+}
+
+func hasDarwinExtendedACL(t *testing.T, path string) bool {
+	t.Helper()
+	command := exec.CommandContext(t.Context(), "/bin/ls", "-lde", path)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("inspect Darwin ACL on %q: %v: %s", path, err, output)
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) == "" {
+		t.Fatalf("inspect Darwin ACL on %q returned no mode", path)
+	}
+	return len(lines) > 1
+}
+
 func TestDeploymentClickHouseTLSListenerContract(t *testing.T) {
 	t.Parallel()
 
@@ -569,11 +888,10 @@ func TestDeploymentClickHouseBootstrapSeparatesServicePrincipals(t *testing.T) {
 	for _, fragment := range []string{
 		"CREATE USER IF NOT EXISTS open_splunk_migrator",
 		"GRANT CREATE DATABASE ON open_splunk.* TO open_splunk_migrator",
+		"GRANT SHOW TABLES ON open_splunk.* TO open_splunk_migrator",
 		"GRANT CREATE TABLE ON open_splunk.schema_migrations TO open_splunk_migrator",
 		"GRANT CREATE TABLE ON open_splunk.events TO open_splunk_migrator",
 		"GRANT ALTER ADD COLUMN, ALTER ADD CONSTRAINT, ALTER ADD INDEX ON open_splunk.events TO open_splunk_migrator",
-		"--user open_splunk_migrator",
-		"/open-splunk-migrations/*.sql",
 		"CREATE USER IF NOT EXISTS open_splunk_runtime",
 		"GRANT SELECT, INSERT ON open_splunk.events TO open_splunk_runtime",
 		"GRANT SELECT(database, table, active, rows, bytes_on_disk) ON system.parts TO open_splunk_runtime",
@@ -583,6 +901,7 @@ func TestDeploymentClickHouseBootstrapSeparatesServicePrincipals(t *testing.T) {
 		"GRANT SELECT ON system.mutations TO open_splunk_deletion",
 		"expected_server_version=26.3.17.4",
 		"SELECT version()",
+		"chmod 0700 /var/lib/clickhouse /var/log/clickhouse-server",
 	} {
 		if !strings.Contains(bootstrap, fragment) {
 			t.Errorf(
@@ -592,6 +911,13 @@ func TestDeploymentClickHouseBootstrapSeparatesServicePrincipals(t *testing.T) {
 		}
 	}
 	for _, prohibited := range []string{
+		"--password",
+		"/open-splunk-migrations",
+		"for migration",
+		"CREATE DATABASE IF NOT EXISTS",
+		"CREATE TABLE IF NOT EXISTS",
+		"ALTER TABLE open_splunk",
+		"INSERT INTO open_splunk.schema_migrations",
 		"GRANT ALL",
 		"GRANT ALTER ON open_splunk.events",
 		"GRANT SELECT ON system.parts TO open_splunk_runtime",
@@ -639,6 +965,7 @@ func TestDeploymentClickHouseBootstrapSeparatesServicePrincipals(t *testing.T) {
 		),
 	)
 	for _, fragment := range []string{
+		`<default remove="remove"/>`,
 		`<password from_env="CLICKHOUSE_PASSWORD"/>`,
 		"<ip>127.0.0.1</ip>",
 		"<ip>::1</ip>",

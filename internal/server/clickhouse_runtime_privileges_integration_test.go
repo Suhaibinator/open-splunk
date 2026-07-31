@@ -93,6 +93,79 @@ func TestClickHouseServicePrincipalLifecycle(t *testing.T) {
 	); err != nil {
 		t.Fatalf("apply clean migrations as migration principal: %v", err)
 	}
+	if err := server.ValidateClickHousePhysicalSchema(
+		ctx,
+		migrationConnection,
+	); err != nil {
+		t.Fatalf("validate exact release physical schema: %v", err)
+	}
+
+	// The migration ledger remains complete throughout these adversarial
+	// mutations. The release contract must independently detect a missing data
+	// table, either table's physical-definition drift, and an unexpected object.
+	physicalSchemaMutations := []struct {
+		name    string
+		apply   string
+		restore string
+	}{
+		{
+			name: "missing events table",
+			apply: "RENAME TABLE open_splunk.events TO " +
+				"open_splunk.events_schema_contract_hidden",
+			restore: "RENAME TABLE open_splunk.events_schema_contract_hidden TO " +
+				"open_splunk.events",
+		},
+		{
+			name: "mutated events definition",
+			apply: "ALTER TABLE open_splunk.events " +
+				"ADD COLUMN physical_schema_drift UInt8 DEFAULT 0",
+			restore: "ALTER TABLE open_splunk.events " +
+				"DROP COLUMN physical_schema_drift",
+		},
+		{
+			name: "mutated migration ledger definition",
+			apply: "ALTER TABLE open_splunk.schema_migrations " +
+				"ADD COLUMN physical_schema_drift UInt8 DEFAULT 0",
+			restore: "ALTER TABLE open_splunk.schema_migrations " +
+				"DROP COLUMN physical_schema_drift",
+		},
+		{
+			name: "unexpected third table",
+			apply: "CREATE TABLE open_splunk.physical_schema_drift " +
+				"(value UInt8) ENGINE = Memory",
+			restore: "DROP TABLE open_splunk.physical_schema_drift",
+		},
+	}
+	for _, mutation := range physicalSchemaMutations {
+		if err := container.ExecuteBootstrapSQLForTest(
+			ctx,
+			mutation.apply,
+		); err != nil {
+			t.Fatalf("apply %s: %v", mutation.name, err)
+		}
+		if err := server.ValidateClickHousePhysicalSchema(
+			ctx,
+			migrationConnection,
+		); !errors.Is(err, server.ErrClickHousePhysicalSchemaDrift) {
+			t.Fatalf(
+				"%s validation error = %v, want physical schema drift",
+				mutation.name,
+				err,
+			)
+		}
+		if err := container.ExecuteBootstrapSQLForTest(
+			ctx,
+			mutation.restore,
+		); err != nil {
+			t.Fatalf("restore %s: %v", mutation.name, err)
+		}
+		if err := server.ValidateClickHousePhysicalSchema(
+			ctx,
+			migrationConnection,
+		); err != nil {
+			t.Fatalf("validate restored schema after %s: %v", mutation.name, err)
+		}
+	}
 	if err := server.ValidateClickHouseRuntimePrivileges(
 		ctx,
 		migrationConnection,

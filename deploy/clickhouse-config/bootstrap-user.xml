@@ -1,5 +1,9 @@
 <clickhouse>
     <users>
+        <!-- The official image's base default user is network-wide and
+             passwordless when user setup is skipped. Remove it completely;
+             every deployment connection must use an explicit principal. -->
+        <default remove="remove"/>
         <open_splunk_bootstrap>
             <password from_env="CLICKHOUSE_PASSWORD"/>
             <networks>

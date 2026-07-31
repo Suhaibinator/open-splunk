@@ -338,6 +338,7 @@ func TestServicePrincipalProvisioningSQLUsesOnlyScopedGrants(t *testing.T) {
 	for _, required := range []string{
 		"CREATE USER IF NOT EXISTS open_splunk_migrator",
 		"GRANT CREATE DATABASE ON open_splunk.* TO open_splunk_migrator",
+		"GRANT SHOW TABLES ON open_splunk.* TO open_splunk_migrator",
 		"GRANT CREATE TABLE ON open_splunk.schema_migrations TO open_splunk_migrator",
 		"GRANT CREATE TABLE ON open_splunk.events TO open_splunk_migrator",
 		"GRANT ALTER ADD COLUMN, ALTER ADD CONSTRAINT, ALTER ADD INDEX ON open_splunk.events TO open_splunk_migrator",

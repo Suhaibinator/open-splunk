@@ -1,4 +1,4 @@
-.PHONY: build release build-ui build-server build-collector build-loggen lint proto proto-lint proto-tools release-go-deps test clean
+.PHONY: build release oci build-ui build-server build-collector build-loggen lint proto proto-lint proto-tools release-go-deps test clean
 
 override PROTOC_GEN_GO_VERSION := v1.36.11
 override PROTOC_GEN_GO_GRPC_VERSION := v1.6.2
@@ -79,6 +79,41 @@ release:
 			awk '$$1 == "100755" && $$2 == "blob" && $$4 == "scripts/build-release.sh" && NF == 4 { print $$3 }')"; \
 		test -n "$$launcher_object"; \
 		launcher="$$launcher_root/build-release.sh"; \
+		git_repo cat-file blob "$$launcher_object" >"$$launcher"; \
+		chmod 0500 "$$launcher"; \
+		env -u BASH_ENV -u ENV \
+			BASH_ENV= \
+			ENV= \
+			OPEN_SPLUNK_REPOSITORY_ROOT="$$repo_root" \
+			bash "$$launcher"
+
+oci: export OPEN_SPLUNK_APPLICATION_VERSION := $(value OPEN_SPLUNK_APPLICATION_VERSION)
+oci: export OPEN_SPLUNK_SOURCE_REVISION := $(value OPEN_SPLUNK_SOURCE_REVISION)
+oci: export OPEN_SPLUNK_SERVER_IMAGE := $(value OPEN_SPLUNK_SERVER_IMAGE)
+oci: export OPEN_SPLUNK_COLLECTOR_IMAGE := $(value OPEN_SPLUNK_COLLECTOR_IMAGE)
+oci: export OPEN_SPLUNK_OCI_PLATFORM := $(value OPEN_SPLUNK_OCI_PLATFORM)
+oci: export OPEN_SPLUNK_OCI_NO_CACHE := $(value OPEN_SPLUNK_OCI_NO_CACHE)
+oci:
+	@umask 077; set -eu; \
+		repo_root="$$(pwd -P)"; \
+		launcher_root="$$(mktemp -d "$${TMPDIR:-/tmp}/open-splunk-oci-launcher.XXXXXX")"; \
+		launcher_root="$$(cd "$$launcher_root" && pwd -P)"; \
+		trap 'rm -rf "$$launcher_root"' EXIT HUP INT TERM; \
+		git_repo() { \
+			$(RELEASE_GIT_ENV) git \
+				-c core.fsmonitor=false \
+				-c core.hooksPath=/dev/null \
+				-C "$$repo_root" \
+				"$$@"; \
+		}; \
+		resolved_root="$$(git_repo rev-parse --show-toplevel)"; \
+		resolved_root="$$(cd "$$resolved_root" && pwd -P)"; \
+		test "$$resolved_root" = "$$repo_root"; \
+		head_revision="$$(git_repo rev-parse --verify HEAD)"; \
+		launcher_object="$$(git_repo ls-tree "$$head_revision" -- scripts/build-oci.sh | \
+			awk '$$1 == "100755" && $$2 == "blob" && $$4 == "scripts/build-oci.sh" && NF == 4 { print $$3 }')"; \
+		test -n "$$launcher_object"; \
+		launcher="$$launcher_root/build-oci.sh"; \
 		git_repo cat-file blob "$$launcher_object" >"$$launcher"; \
 		chmod 0500 "$$launcher"; \
 		env -u BASH_ENV -u ENV \

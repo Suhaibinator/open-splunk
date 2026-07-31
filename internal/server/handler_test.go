@@ -26,6 +26,34 @@ import (
 
 var testNow = time.Date(2026, 7, 22, 12, 0, 0, 123_000_000, time.UTC)
 
+type fakeRuntimeReadiness struct {
+	mu          sync.Mutex
+	err         error
+	deadline    time.Time
+	hasDeadline bool
+	calls       int
+}
+
+func (probe *fakeRuntimeReadiness) Ping(ctx context.Context) error {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	probe.deadline, probe.hasDeadline = ctx.Deadline()
+	probe.calls++
+	return probe.err
+}
+
+func (probe *fakeRuntimeReadiness) setError(err error) {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	probe.err = err
+}
+
+func (probe *fakeRuntimeReadiness) snapshot() (time.Time, bool, int) {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	return probe.deadline, probe.hasDeadline, probe.calls
+}
+
 type fakeSearchJobs struct {
 	mu sync.Mutex
 
@@ -1291,6 +1319,111 @@ func TestSPAFallbackNeverShadowsAPI(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("missing asset status = %d", response.Code)
+	}
+}
+
+func TestRuntimeReadinessFailsClosedAndRecoversWithoutChangingLiveness(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	probe := &fakeRuntimeReadiness{
+		err: errors.New("sensitive ClickHouse failure at clickhouse.internal"),
+	}
+	handler := newTestHandler(t, Config{
+		SearchJobs:       &fakeSearchJobs{},
+		RuntimeReadiness: probe,
+		Indexes:          fakeIndexCatalog{},
+		WebUI:            testUI(),
+	})
+	request := func(path string) *httptest.ResponseRecorder {
+		t.Helper()
+		result := httptest.NewRecorder()
+		handler.ServeHTTP(
+			result,
+			httptest.NewRequestWithContext(
+				context.Background(),
+				http.MethodGet,
+				path,
+				nil,
+			),
+		)
+		return result
+	}
+
+	liveness := request("/healthz")
+	if liveness.Code != http.StatusOK || liveness.Body.String() != "ok\n" {
+		t.Fatalf(
+			"liveness during dependency failure = %d %q",
+			liveness.Code,
+			liveness.Body.String(),
+		)
+	}
+	failed := request("/readyz")
+	if failed.Code != http.StatusServiceUnavailable ||
+		failed.Body.String() != "not ready\n" ||
+		strings.Contains(failed.Body.String(), "ClickHouse") ||
+		failed.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf(
+			"failed readiness = status %d headers %v body %q",
+			failed.Code,
+			failed.Header(),
+			failed.Body.String(),
+		)
+	}
+	deadline, hasDeadline, calls := probe.snapshot()
+	if !hasDeadline || calls != 1 || time.Until(deadline) <= 0 ||
+		time.Until(deadline) > runtimeReadinessTimeout {
+		t.Fatalf(
+			"readiness probe bound = deadline %v present %t calls %d",
+			deadline,
+			hasDeadline,
+			calls,
+		)
+	}
+
+	probe.setError(nil)
+	recovered := request("/readyz")
+	if recovered.Code != http.StatusOK || recovered.Body.String() != "ok\n" {
+		t.Fatalf(
+			"recovered readiness = %d %q",
+			recovered.Code,
+			recovered.Body.String(),
+		)
+	}
+
+	probe.setError(errors.New("failed again"))
+	failedAgain := request("/readyz")
+	if failedAgain.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness after second failure = %d", failedAgain.Code)
+	}
+}
+
+func TestRuntimeReadinessWithoutProbeIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	var typedNil *fakeRuntimeReadiness
+	handler := newTestHandler(t, Config{
+		SearchJobs:       &fakeSearchJobs{},
+		RuntimeReadiness: typedNil,
+		Indexes:          fakeIndexCatalog{},
+		WebUI:            testUI(),
+	})
+	request := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		"/readyz",
+		nil,
+	)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable ||
+		response.Body.String() != "not ready\n" {
+		t.Fatalf(
+			"readiness without probe = %d %q",
+			response.Code,
+			response.Body.String(),
+		)
 	}
 }
 

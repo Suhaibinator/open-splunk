@@ -71,6 +71,10 @@ type options struct {
 	clickhouseRuntimeUsername           string
 	clickhouseDeletionUsername          string
 	clickhouseMigrationUsername         string
+	clickhouseSkipMigrations            bool
+	clickhouseRuntimePasswordFile       string
+	clickhouseDeletionPasswordFile      string
+	clickhouseMigrationPasswordFile     string
 	clickhouseSecure                    bool
 	clickhouseCACertFile                string
 	clickhouseServerName                string
@@ -99,6 +103,9 @@ func main() {
 }
 
 func run() error {
+	if handled, err := runDeploymentSubcommand(os.Args[1:]); handled {
+		return err
+	}
 	config := parseFlags()
 	return runWithOptions(config)
 }
@@ -154,7 +161,7 @@ func runWithOptions(config options) error {
 	if err != nil {
 		return err
 	}
-	clickHouseOptions, err := newClickHouseConnectionOptions(
+	clickHouseOptions, err := configureClickHouseConnectionOptions(
 		config,
 		clickHouseTLSProfile,
 	)
@@ -162,14 +169,6 @@ func runWithOptions(config options) error {
 		return err
 	}
 	defer discardClickHouseMigrationCredentials(&clickHouseOptions)
-	if err := os.Unsetenv(
-		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD",
-	); err != nil {
-		return fmt.Errorf(
-			"discard ClickHouse migration password from process environment: %w",
-			err,
-		)
-	}
 	browserAuthenticator, err := newAdministratorBrowserAuthenticator(
 		config.administratorTokenFile,
 		config.tenantID,
@@ -322,8 +321,9 @@ func runWithOptions(config options) error {
 			log.Printf("close search-history maintenance: %v", err)
 		}
 	}()
-	if err := applyStartupClickHouseMigrations(
+	if err := applyConfiguredStartupClickHouseMigrations(
 		startupContext,
+		config.clickhouseSkipMigrations,
 		clickHouseOptions.migration,
 		migrations.ClickHouse(),
 		func(
@@ -637,6 +637,7 @@ func runWithOptions(config options) error {
 	}
 	handler, err := newRuntimeHTTPHandler(server.Config{
 		SearchJobs:                 jobs,
+		RuntimeReadiness:           connection,
 		SearchInspections:          inspection.service,
 		SearchWebSocket:            searchWebSocket,
 		Exports:                    exports,
@@ -799,6 +800,25 @@ func parseFlags() options {
 		"open_splunk_migrator",
 		"short-lived ClickHouse schema-migration username",
 	)
+	registerClickHouseSkipMigrationsFlag(flag.CommandLine, &result)
+	flag.StringVar(
+		&result.clickhouseRuntimePasswordFile,
+		"clickhouse-runtime-password-file",
+		"",
+		"file containing the ClickHouse runtime password (mutually exclusive with OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD)",
+	)
+	flag.StringVar(
+		&result.clickhouseDeletionPasswordFile,
+		"clickhouse-deletion-password-file",
+		"",
+		"file containing the ClickHouse deletion password (mutually exclusive with OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD)",
+	)
+	flag.StringVar(
+		&result.clickhouseMigrationPasswordFile,
+		"clickhouse-migration-password-file",
+		"",
+		"file containing the ClickHouse migration password (mutually exclusive with OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD)",
+	)
 	flag.BoolVar(&result.clickhouseSecure, "clickhouse-secure", false, "use TLS for ClickHouse")
 	flag.StringVar(
 		&result.clickhouseCACertFile,
@@ -895,6 +915,21 @@ type clickHouseConnectionOptions struct {
 	deletion  *clickhousedriver.Options
 }
 
+// #nosec G101 -- this is an environment-variable name, not a credential.
+const clickHouseMigrationPasswordEnvironment = "OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD"
+
+func registerClickHouseSkipMigrationsFlag(
+	flags *flag.FlagSet,
+	config *options,
+) {
+	flags.BoolVar(
+		&config.clickhouseSkipMigrations,
+		"clickhouse-skip-migrations",
+		false,
+		"skip embedded ClickHouse migrations for a pre-provisioned schema",
+	)
+}
+
 func discardClickHouseMigrationCredentials(
 	options *clickHouseConnectionOptions,
 ) {
@@ -903,6 +938,43 @@ func discardClickHouseMigrationCredentials(
 	}
 	options.migration.Auth.Password = ""
 	options.migration = nil
+}
+
+func discardClickHouseConnectionCredentials(
+	options *clickHouseConnectionOptions,
+) {
+	if options == nil {
+		return
+	}
+	for _, connectionOptions := range []*clickhousedriver.Options{
+		options.migration,
+		options.runtime,
+		options.deletion,
+	} {
+		if connectionOptions != nil {
+			connectionOptions.Auth.Password = ""
+		}
+	}
+	*options = clickHouseConnectionOptions{}
+}
+
+func configureClickHouseConnectionOptions(
+	config options,
+	tlsProfile *clickHouseClientTLSProfile,
+) (clickHouseConnectionOptions, error) {
+	result, configureErr := newClickHouseConnectionOptions(config, tlsProfile)
+	unsetErr := os.Unsetenv(clickHouseMigrationPasswordEnvironment)
+	if unsetErr != nil {
+		unsetErr = fmt.Errorf(
+			"discard ClickHouse migration password from process environment: %w",
+			unsetErr,
+		)
+	}
+	if configureErr == nil && unsetErr == nil {
+		return result, nil
+	}
+	discardClickHouseConnectionCredentials(&result)
+	return clickHouseConnectionOptions{}, errors.Join(configureErr, unsetErr)
 }
 
 func newClickHouseConnectionOptions(
@@ -936,38 +1008,84 @@ func newClickHouseConnectionOptions(
 	}
 	runtimeUsername := strings.TrimSpace(config.clickhouseRuntimeUsername)
 	deletionUsername := strings.TrimSpace(config.clickhouseDeletionUsername)
-	migrationUsername := strings.TrimSpace(config.clickhouseMigrationUsername)
-	if runtimeUsername == "" || deletionUsername == "" ||
-		migrationUsername == "" {
-		return clickHouseConnectionOptions{}, errors.New(
-			"configure ClickHouse: runtime, deletion, and migration usernames are required",
+	var migrationUsername string
+	if config.clickhouseSkipMigrations {
+		if strings.TrimSpace(config.clickhouseMigrationPasswordFile) != "" {
+			return clickHouseConnectionOptions{}, errors.New(
+				"configure ClickHouse: -clickhouse-migration-password-file must not be set with -clickhouse-skip-migrations",
+			)
+		}
+		if os.Getenv(clickHouseMigrationPasswordEnvironment) != "" {
+			return clickHouseConnectionOptions{}, fmt.Errorf(
+				"configure ClickHouse: %s must not be set with -clickhouse-skip-migrations",
+				clickHouseMigrationPasswordEnvironment,
+			)
+		}
+		if runtimeUsername == "" || deletionUsername == "" {
+			return clickHouseConnectionOptions{}, errors.New(
+				"configure ClickHouse: runtime and deletion usernames are required",
+			)
+		}
+		if runtimeUsername == deletionUsername {
+			return clickHouseConnectionOptions{}, errors.New(
+				"configure ClickHouse: runtime and deletion usernames must be distinct",
+			)
+		}
+	} else {
+		migrationUsername = strings.TrimSpace(
+			config.clickhouseMigrationUsername,
 		)
+		if runtimeUsername == "" || deletionUsername == "" ||
+			migrationUsername == "" {
+			return clickHouseConnectionOptions{}, errors.New(
+				"configure ClickHouse: runtime, deletion, and migration usernames are required",
+			)
+		}
+		if runtimeUsername == deletionUsername ||
+			runtimeUsername == migrationUsername ||
+			deletionUsername == migrationUsername {
+			return clickHouseConnectionOptions{}, errors.New(
+				"configure ClickHouse: runtime, deletion, and migration usernames must be distinct",
+			)
+		}
 	}
-	if runtimeUsername == deletionUsername ||
-		runtimeUsername == migrationUsername ||
-		deletionUsername == migrationUsername {
-		return clickHouseConnectionOptions{}, errors.New(
-			"configure ClickHouse: runtime, deletion, and migration usernames must be distinct",
-		)
-	}
-	runtimePassword := os.Getenv(
+	runtimePassword, err := loadClickHouseCredential(
+		config.clickhouseRuntimePasswordFile,
 		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD",
+		"runtime",
 	)
-	deletionPassword := os.Getenv(
+	if err != nil {
+		return clickHouseConnectionOptions{}, err
+	}
+	deletionPassword, err := loadClickHouseCredential(
+		config.clickhouseDeletionPasswordFile,
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
+		"deletion",
 	)
-	migrationPassword := os.Getenv(
-		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD",
-	)
-	if runtimePassword == "" || deletionPassword == "" ||
-		migrationPassword == "" {
+	if err != nil {
+		return clickHouseConnectionOptions{}, err
+	}
+	if config.clickhouseSkipMigrations &&
+		runtimePassword == deletionPassword {
 		return clickHouseConnectionOptions{}, errors.New(
-			"configure ClickHouse: OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD, OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD, and OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD are required",
+			"configure ClickHouse: runtime and deletion passwords must be distinct",
 		)
 	}
-	if runtimePassword == deletionPassword ||
-		runtimePassword == migrationPassword ||
-		deletionPassword == migrationPassword {
+	var migrationPassword string
+	if !config.clickhouseSkipMigrations {
+		migrationPassword, err = loadClickHouseCredential(
+			config.clickhouseMigrationPasswordFile,
+			clickHouseMigrationPasswordEnvironment,
+			"migration",
+		)
+		if err != nil {
+			return clickHouseConnectionOptions{}, err
+		}
+	}
+	if !config.clickhouseSkipMigrations &&
+		(runtimePassword == deletionPassword ||
+			runtimePassword == migrationPassword ||
+			deletionPassword == migrationPassword) {
 		return clickHouseConnectionOptions{}, errors.New(
 			"configure ClickHouse: runtime, deletion, and migration passwords must be distinct",
 		)
@@ -1000,6 +1118,13 @@ func newClickHouseConnectionOptions(
 	// bounded sequential probes, so one privileged session is sufficient.
 	deletionOptions.MaxOpenConns = 1
 	deletionOptions.MaxIdleConns = 1
+	result := clickHouseConnectionOptions{
+		runtime:  &runtimeOptions,
+		deletion: &deletionOptions,
+	}
+	if config.clickhouseSkipMigrations {
+		return result, nil
+	}
 	migrationOptions := base
 	migrationOptions.TLS = tlsProfile.newConfig()
 	migrationOptions.Auth = clickhousedriver.Auth{
@@ -1010,11 +1135,8 @@ func newClickHouseConnectionOptions(
 	}
 	migrationOptions.MaxOpenConns = 1
 	migrationOptions.MaxIdleConns = 1
-	return clickHouseConnectionOptions{
-		migration: &migrationOptions,
-		runtime:   &runtimeOptions,
-		deletion:  &deletionOptions,
-	}, nil
+	result.migration = &migrationOptions
+	return result, nil
 }
 
 func openClickHouse(

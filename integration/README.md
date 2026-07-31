@@ -73,6 +73,45 @@ The default image is
 Set `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` to exercise another digest-pinned image
 deliberately.
 
+## Release OCI and full-stack Compose
+
+`release_oci_integration_test.go` builds the production `server` and
+`collector` images for the host Linux architecture through the production
+`make oci` launcher. That launcher requires a clean worktree and materializes
+the exact committed `HEAD` snapshot before either Docker target is built. The
+test verifies both images' OCI identity and fixed non-root process contract,
+then starts the canonical four-service Compose graph: ClickHouse, the
+exact-image one-shot ClickHouse migrator, the network-disabled administrator
+bootstrap, and the long-running server. It does not add a collector to the
+default stack.
+
+The test requires verified HTTPS health and embedded build identity, exact
+container hardening, no published ClickHouse port, no ClickHouse or
+administrator secret in the server environment/arguments, no migrator
+credential in the long-running server, an isolated successful migrator with
+only its CA/secret mounts, read-only runtime/deletion credential files,
+rejection of the passwordless base ClickHouse user, and a successful
+administrator API mutation. It reapplies the exact embedded release migrations
+to prove the current ledger is idempotent, stops ClickHouse to prove readiness
+becomes unavailable while HTTP liveness remains available, and requires
+sustained readiness after ClickHouse restarts. It then rotates all four
+ClickHouse credentials, atomically replaces all three application credential
+files, and force-recreates ClickHouse, migrator, bootstrap, and server. The
+recreated application must be healthy with the same state volume and expose
+both pre- and post-rotation SQLite records through the live protobuf API. The
+separate ClickHouse principal integration mutates and restores both physical
+table definitions and an unexpected third table while the ledger remains
+complete; every mutation must fail the release schema validator. The Compose
+integration rejects all previous principal credentials on the persistent
+volume. Cleanup removes every test-owned container, network, volume, and image.
+
+```sh
+OPEN_SPLUNK_OCI_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./integration -run '^TestReleaseOCIComposeContract$' \
+    -count=1 -timeout=20m -v
+```
+
 ## Physical index deletion API lifecycle
 
 `backend_index_data_deletion_test.go` exercises administrator `DELETE_DATA`

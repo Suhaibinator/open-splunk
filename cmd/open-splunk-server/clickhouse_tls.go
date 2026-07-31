@@ -7,12 +7,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"os"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 )
 
 const maximumClickHouseCABundleBytes = 1 << 20
@@ -66,44 +62,44 @@ func loadClickHouseClientTLSProfile(
 }
 
 func readBoundedClickHouseCABundle(path string) ([]byte, error) {
-	// #nosec G703 -- this operator-supplied flag intentionally names a CA
-	// bundle anywhere the server process can read; the path is never written.
-	pathInfo, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("configure ClickHouse TLS: stat CA file: %w", err)
+	validate := func(info os.FileInfo) error {
+		if info == nil || !info.Mode().IsRegular() {
+			return errors.New("configure ClickHouse TLS: CA file must be regular")
+		}
+		if info.Size() > maximumClickHouseCABundleBytes {
+			return fmt.Errorf(
+				"configure ClickHouse TLS: CA file exceeds %d bytes",
+				maximumClickHouseCABundleBytes,
+			)
+		}
+		return nil
 	}
-	if !pathInfo.Mode().IsRegular() {
-		return nil, errors.New("configure ClickHouse TLS: CA file must be regular")
-	}
-	// #nosec G703 -- this operator-supplied flag intentionally names a CA
-	// bundle anywhere the server process can read; contents and size are
-	// validated below and the path is never used for writes.
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("configure ClickHouse TLS: open CA file: %w", err)
-	}
-	defer file.Close()
-	openedInfo, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("configure ClickHouse TLS: inspect CA file: %w", err)
-	}
-	if !openedInfo.Mode().IsRegular() || !os.SameFile(pathInfo, openedInfo) {
-		return nil, errors.New("configure ClickHouse TLS: CA file changed while opening")
-	}
-	bundle, err := io.ReadAll(io.LimitReader(
-		file,
-		maximumClickHouseCABundleBytes+1,
-	))
-	if err != nil {
-		return nil, fmt.Errorf("configure ClickHouse TLS: read CA file: %w", err)
-	}
-	if len(bundle) > maximumClickHouseCABundleBytes {
-		return nil, fmt.Errorf(
-			"configure ClickHouse TLS: CA file exceeds %d bytes",
-			maximumClickHouseCABundleBytes,
-		)
-	}
-	return bundle, nil
+	return readStablePathFile(stablePathFileReadConfig{
+		path:             path,
+		maximumReadBytes: maximumClickHouseCABundleBytes,
+		validateBefore:   validate,
+		validateOpen: func(_ *os.File, info os.FileInfo) error {
+			return validate(info)
+		},
+		validateAfterPath: validate,
+		sameState:         sameClickHouseCredentialFileState,
+		messages: stablePathFileReadMessages{
+			inspectPath:         "configure ClickHouse TLS: inspect CA file",
+			openPath:            "configure ClickHouse TLS: open CA file",
+			invalidDescriptor:   "configure ClickHouse TLS: invalid CA file descriptor",
+			inspectOpen:         "configure ClickHouse TLS: inspect open CA file",
+			changedWhileOpening: "configure ClickHouse TLS: CA file changed while opening",
+			read:                "configure ClickHouse TLS: read CA file",
+			overflow: fmt.Sprintf(
+				"configure ClickHouse TLS: CA file exceeds %d bytes",
+				maximumClickHouseCABundleBytes,
+			),
+			changedWhileReading: "configure ClickHouse TLS: CA file changed while reading",
+			reinspectOpen:       "configure ClickHouse TLS: reinspect open CA file",
+			reinspectPath:       "configure ClickHouse TLS: reinspect CA file",
+			close:               "configure ClickHouse TLS: close CA file",
+		},
+	})
 }
 
 func parseClickHouseCABundle(bundle []byte) (*x509.CertPool, error) {
@@ -140,41 +136,12 @@ func parseClickHouseCABundle(bundle []byte) (*x509.CertPool, error) {
 }
 
 func validateClickHouseTLSServerName(serverName string) error {
-	if !utf8.ValidString(serverName) || len(serverName) > 253 ||
-		strings.ContainsFunc(serverName, unicode.IsControl) ||
-		strings.ContainsFunc(serverName, unicode.IsSpace) {
+	if !validExplicitTLSServerName(serverName) {
 		return errors.New(
 			"configure ClickHouse TLS: server name must be a valid bounded DNS name or IP address",
 		)
 	}
-	if net.ParseIP(serverName) != nil {
-		return nil
-	}
-	labels := strings.Split(serverName, ".")
-	for _, label := range labels {
-		if len(label) == 0 || len(label) > 63 ||
-			!isASCIIAlphaNumeric(label[0]) ||
-			!isASCIIAlphaNumeric(label[len(label)-1]) {
-			return errors.New(
-				"configure ClickHouse TLS: server name must be a valid bounded DNS name or IP address",
-			)
-		}
-		for index := 1; index < len(label)-1; index++ {
-			character := label[index]
-			if !isASCIIAlphaNumeric(character) && character != '-' {
-				return errors.New(
-					"configure ClickHouse TLS: server name must be a valid bounded DNS name or IP address",
-				)
-			}
-		}
-	}
 	return nil
-}
-
-func isASCIIAlphaNumeric(character byte) bool {
-	return character >= 'a' && character <= 'z' ||
-		character >= 'A' && character <= 'Z' ||
-		character >= '0' && character <= '9'
 }
 
 func validateClickHouseClientTLSProfile(

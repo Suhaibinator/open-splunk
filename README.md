@@ -71,6 +71,14 @@ checkout file is used as a release build input:
 OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" make release
 ```
 
+For the production-shaped, non-root server and collector OCI images plus the
+digest-pinned server/ClickHouse Compose stack, follow
+[`deploy/README.md`](deploy/README.md). The OCI build is separately anchored to
+a clean committed snapshot, serializes equivalent destination references in
+the Docker daemon across independent clones, and transactionally restores both
+prior tags if pair publication fails. The production Compose file consumes
+that prebuilt image and cannot silently rebuild a dirty checkout.
+
 For frontend-only design work, build the deterministic demo workspace
 explicitly:
 
@@ -125,6 +133,10 @@ go test ./internal/queryexec -run TestExecutorAndManagerAgainstClickHouse
 npm ci
 npx --no-install playwright install chromium
 OPEN_SPLUNK_BACKEND_INTEGRATION=1 go test ./integration -run TestBackendVertical
+
+OPEN_SPLUNK_OCI_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+go test ./integration -run '^TestReleaseOCIComposeContract$' -count=1 -timeout=20m -v
 ```
 
 See [`integration/README.md`](integration/README.md) for the exact vertical

@@ -3,22 +3,17 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 
 	"github.com/Suhaibinator/open-splunk/internal/auth"
-	"golang.org/x/sys/unix"
 )
 
 const maximumAdministratorTokenFileBytes = auth.MaximumBrowserBearerTokenBytes + 2
 
-type administratorTokenReadHooks struct {
-	afterOpen func()
-	afterRead func()
-}
+type administratorTokenReadHooks = stablePathFileReadHooks
 
 func newAdministratorBrowserAuthenticator(
 	path string,
@@ -55,96 +50,48 @@ func readAdministratorTokenWithHooks(
 	if err != nil {
 		return nil, err
 	}
-	before, err := os.Lstat(absolutePath)
+	contents, err := readStablePathFile(stablePathFileReadConfig{
+		path:             absolutePath,
+		maximumReadBytes: maximumAdministratorTokenFileBytes,
+		hooks:            hooks,
+		validateBefore: func(info os.FileInfo) error {
+			return validateAdministratorTokenFile(info, os.Geteuid())
+		},
+		validateOpen: func(file *os.File, info os.FileInfo) error {
+			if err := validateAdministratorTokenFile(info, os.Geteuid()); err != nil {
+				return err
+			}
+			if err := validateAdministratorTokenACL(file); err != nil {
+				return err
+			}
+			if info.Size() < auth.MinimumBrowserBearerTokenBytes ||
+				info.Size() > maximumAdministratorTokenFileBytes {
+				return errors.New("administrator token file has an invalid size")
+			}
+			return nil
+		},
+		validateAfterPath: func(info os.FileInfo) error {
+			return validateAdministratorTokenFile(info, os.Geteuid())
+		},
+		sameState: sameAdministratorTokenFileState,
+		messages: stablePathFileReadMessages{
+			inspectPath:         "inspect administrator token file",
+			openPath:            "open administrator token file",
+			invalidDescriptor:   "open administrator token file: invalid file descriptor",
+			inspectOpen:         "inspect open administrator token file",
+			changedWhileOpening: "administrator token file changed while it was opened",
+			read:                "read administrator token file",
+			overflow:            "administrator token file changed while it was read",
+			changedWhileReading: "administrator token file changed while it was read",
+			reinspectOpen:       "reinspect open administrator token file",
+			reinspectPath:       "reinspect administrator token file",
+			close:               "close administrator token file",
+		},
+	})
 	if err != nil {
-		return nil, fmt.Errorf("inspect administrator token file: %w", err)
-	}
-	if err := validateAdministratorTokenFile(before, os.Geteuid()); err != nil {
 		return nil, err
-	}
-
-	fd, err := unix.Open(
-		absolutePath,
-		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
-		0,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("open administrator token file: %w", err)
-	}
-	// #nosec G115 -- unix.Open succeeded, so fd is a non-negative native file descriptor.
-	file := os.NewFile(uintptr(fd), absolutePath)
-	if file == nil {
-		_ = unix.Close(fd)
-		return nil, errors.New("open administrator token file: invalid file descriptor")
-	}
-	closed := false
-	defer func() {
-		if !closed {
-			_ = file.Close()
-		}
-	}()
-	if hooks.afterOpen != nil {
-		hooks.afterOpen()
-	}
-
-	opened, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("inspect open administrator token file: %w", err)
-	}
-	if !os.SameFile(before, opened) {
-		return nil, errors.New("administrator token file changed while it was opened")
-	}
-	if err := validateAdministratorTokenFile(opened, os.Geteuid()); err != nil {
-		return nil, err
-	}
-	if err := validateAdministratorTokenACL(file); err != nil {
-		return nil, err
-	}
-	if opened.Size() < auth.MinimumBrowserBearerTokenBytes ||
-		opened.Size() > maximumAdministratorTokenFileBytes {
-		return nil, errors.New("administrator token file has an invalid size")
-	}
-
-	contents, err := io.ReadAll(io.LimitReader(file, maximumAdministratorTokenFileBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("read administrator token file: %w", err)
 	}
 	defer clear(contents)
-	if len(contents) > maximumAdministratorTokenFileBytes ||
-		int64(len(contents)) != opened.Size() {
-		return nil, errors.New("administrator token file changed while it was read")
-	}
-	if hooks.afterRead != nil {
-		hooks.afterRead()
-	}
-
-	afterOpen, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("reinspect open administrator token file: %w", err)
-	}
-	if !sameAdministratorTokenFileState(opened, afterOpen) {
-		return nil, errors.New("administrator token file changed while it was read")
-	}
-	if err := validateAdministratorTokenFile(afterOpen, os.Geteuid()); err != nil {
-		return nil, err
-	}
-	if err := validateAdministratorTokenACL(file); err != nil {
-		return nil, err
-	}
-	afterPath, err := os.Lstat(absolutePath)
-	if err != nil {
-		return nil, fmt.Errorf("reinspect administrator token file: %w", err)
-	}
-	if !sameAdministratorTokenFileState(afterOpen, afterPath) {
-		return nil, errors.New("administrator token file changed while it was read")
-	}
-	if err := validateAdministratorTokenFile(afterPath, os.Geteuid()); err != nil {
-		return nil, err
-	}
-	if err := file.Close(); err != nil {
-		return nil, fmt.Errorf("close administrator token file: %w", err)
-	}
-	closed = true
 
 	token := stripAdministratorTokenTerminator(contents)
 	if err := auth.ValidateBrowserBearerToken(token); err != nil {

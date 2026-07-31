@@ -62,7 +62,7 @@ var clickHouseRuntimeGrantAllowlist = []clickHouseGrant{
 var clickHouseMigrationGrantAllowlist = []clickHouseGrant{
 	{
 		target:     "open_splunk.*",
-		privileges: []string{"CREATE DATABASE"},
+		privileges: []string{"CREATE DATABASE", "SHOW TABLES"},
 	},
 	{
 		target: "open_splunk.events",

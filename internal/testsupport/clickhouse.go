@@ -708,6 +708,7 @@ func servicePrincipalProvisioningSQL(
 ALTER USER open_splunk_migrator
     IDENTIFIED WITH sha256_password BY '%s';
 GRANT CREATE DATABASE ON open_splunk.* TO open_splunk_migrator;
+GRANT SHOW TABLES ON open_splunk.* TO open_splunk_migrator;
 GRANT CREATE TABLE ON open_splunk.schema_migrations TO open_splunk_migrator;
 GRANT CREATE TABLE ON open_splunk.events TO open_splunk_migrator;
 GRANT ALTER ADD COLUMN, ALTER ADD CONSTRAINT, ALTER ADD INDEX ON open_splunk.events TO open_splunk_migrator;

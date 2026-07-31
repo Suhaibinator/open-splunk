@@ -46,6 +46,7 @@ try {
     path.join(workspace, "scripts", "compile-protos.test.mjs"),
     path.join(workspace, "scripts", "materialize-git-snapshot.test.mjs"),
     path.join(workspace, "scripts", "build-release.test.mjs"),
+    path.join(workspace, "scripts", "build-oci.test.mjs"),
   ]);
   const compilerConfig = path.join(outputDirectory, "tsconfig.json");
   await writeFile(compilerConfig, JSON.stringify({

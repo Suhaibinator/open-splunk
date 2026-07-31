@@ -6,12 +6,14 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,11 +24,26 @@ import (
 )
 
 const (
-	composeBootstrapUsername = "open_splunk_bootstrap"
-	composeMigrationUsername = "open_splunk_migrator"
-	composeRuntimeUsername   = "open_splunk_runtime"
-	composeDeletionUsername  = "open_splunk_deletion"
+	composeBootstrapUsername              = "open_splunk_bootstrap"
+	composeMigrationUsername              = "open_splunk_migrator"
+	composeRuntimeUsername                = "open_splunk_runtime"
+	composeDeletionUsername               = "open_splunk_deletion"
+	maximumDeploymentComposeCommandOutput = 1 << 20
 )
+
+var errDeploymentComposeOutputTruncated = errors.New("command output exceeded 1 MiB limit")
+
+func TestDeploymentComposeOutputBufferIsBounded(t *testing.T) {
+	output := &deploymentComposeOutputBuffer{maximum: 4}
+	written, err := output.Write([]byte("abcdef"))
+	if err != nil || written != 6 {
+		t.Fatalf("Write() = (%d, %v), want (6, nil)", written, err)
+	}
+	captured, truncated := output.snapshot()
+	if string(captured) != "abcd" || !truncated {
+		t.Fatalf("snapshot() = (%q, %t), want (abcd, true)", captured, truncated)
+	}
+}
 
 // TestDeploymentComposePersistentCredentialRotation is opt-in because it
 // exercises the checked-in Compose deployment, including its persistent named
@@ -53,7 +70,7 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 		"version",
 	)
 	composeProbe.WaitDelay = 5 * time.Second
-	if output, err := composeProbe.CombinedOutput(); err != nil {
+	if output, err := runDeploymentComposeCommand(composeProbe); err != nil {
 		t.Fatalf(
 			"Docker integration was requested but Compose is unavailable: %v: %s",
 			err,
@@ -62,16 +79,17 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 	}
 
 	deployDirectory := deploymentDirectory(t)
-	credentials, tlsIdentity := generateDeploymentComposeEnvironment(
+	credentials, generatedEnvironment := generateDeploymentComposeEnvironment(
 		t,
 		deployDirectory,
 	)
 	stack := &deploymentComposeStack{
-		project:          "open-splunk-compose-test-" + randomHex(t, 6),
-		projectDirectory: deployDirectory,
-		composeFile:      filepath.Join(deployDirectory, "docker-compose.yaml"),
-		credentials:      credentials,
-		tlsIdentity:      tlsIdentity,
+		project:              "open-splunk-compose-test-" + randomHex(t, 6),
+		projectDirectory:     deployDirectory,
+		composeFile:          filepath.Join(deployDirectory, "docker-compose.yaml"),
+		composeOverrides:     []string{filepath.Join(deployDirectory, "docker-compose.integration.yaml")},
+		credentials:          credentials,
+		generatedEnvironment: generatedEnvironment,
 	}
 	t.Cleanup(func() {
 		cleanupContext, cleanupCancel := context.WithTimeout(
@@ -99,7 +117,7 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
-	images := stack.mustRun(t, ctx, "resolve deployment image", "config", "--images")
+	images := stack.mustRun(t, ctx, "resolve deployment image", "config", "--images", "clickhouse")
 	requireDigestPinnedComposeImage(t, images)
 
 	stack.mustRun(
@@ -120,9 +138,7 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 		t.Fatal("fresh Docker Compose deployment returned an empty container ID")
 	}
 	firstDataVolume := inspectComposeDataVolume(t, ctx, firstContainerID)
-	firstAddress := stack.publishedAddress(t, ctx, "9440")
-	_ = stack.publishedAddress(t, ctx, "9000")
-	_ = stack.publishedAddress(t, ctx, "8123")
+	firstAddress := stack.publishedAddress(t, ctx, firstContainerID, "9440")
 
 	verifyComposeBootstrapBoundary(t, ctx, stack, firstAddress)
 	verifyComposeTLSBoundary(t, ctx, stack, firstAddress)
@@ -174,9 +190,7 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 			firstDataVolume,
 		)
 	}
-	secondAddress := stack.publishedAddress(t, ctx, "9440")
-	_ = stack.publishedAddress(t, ctx, "9000")
-	_ = stack.publishedAddress(t, ctx, "8123")
+	secondAddress := stack.publishedAddress(t, ctx, secondContainerID, "9440")
 
 	expectComposeBootstrapPasswordRejected(
 		t,
@@ -210,18 +224,20 @@ type deploymentComposeCredentials struct {
 	deletionPassword  string
 }
 
-type deploymentComposeTLSIdentity struct {
-	caCertificateFile string
-	certificateFile   string
-	privateKeyFile    string
-	serverName        string
-	rootCAs           *x509.CertPool
+type deploymentComposeClientTLSIdentity struct {
+	rootCAs    *x509.CertPool
+	serverName string
+}
+
+type deploymentComposeGeneratedEnvironment struct {
+	values        map[string]string
+	clickHouseTLS deploymentComposeClientTLSIdentity
 }
 
 func generateDeploymentComposeEnvironment(
 	t *testing.T,
 	deployDirectory string,
-) (deploymentComposeCredentials, *deploymentComposeTLSIdentity) {
+) (deploymentComposeCredentials, *deploymentComposeGeneratedEnvironment) {
 	t.Helper()
 	envFile := filepath.Join(t.TempDir(), "open-splunk.env")
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -253,12 +269,12 @@ func generateDeploymentComposeEnvironment(
 			t.Fatalf("generated deployment %s password is invalid", name)
 		}
 	}
-	return credentials, &deploymentComposeTLSIdentity{
-		caCertificateFile: caCertificateFile,
-		certificateFile:   values["OPEN_SPLUNK_CLICKHOUSE_TLS_CERT_FILE"],
-		privateKeyFile:    values["OPEN_SPLUNK_CLICKHOUSE_TLS_KEY_FILE"],
-		serverName:        values["OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME"],
-		rootCAs:           roots,
+	return credentials, &deploymentComposeGeneratedEnvironment{
+		values: values,
+		clickHouseTLS: deploymentComposeClientTLSIdentity{
+			rootCAs:    roots,
+			serverName: values["OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME"],
+		},
 	}
 }
 
@@ -299,11 +315,12 @@ func (credentials deploymentComposeCredentials) passwordSet() map[string]struct{
 }
 
 type deploymentComposeStack struct {
-	project          string
-	projectDirectory string
-	composeFile      string
-	credentials      deploymentComposeCredentials
-	tlsIdentity      *deploymentComposeTLSIdentity
+	project              string
+	projectDirectory     string
+	composeFile          string
+	composeOverrides     []string
+	credentials          deploymentComposeCredentials
+	generatedEnvironment *deploymentComposeGeneratedEnvironment
 }
 
 func (stack *deploymentComposeStack) run(
@@ -327,30 +344,73 @@ func (stack *deploymentComposeStack) runWithEnvironment(
 		"--file",
 		stack.composeFile,
 	}
+	for _, override := range stack.composeOverrides {
+		composeArguments = append(composeArguments, "--file", override)
+	}
 	composeArguments = append(composeArguments, arguments...)
 	command := exec.CommandContext(ctx, "docker", composeArguments...)
 	command.Env = stack.environment(additionalEnvironment)
 	command.WaitDelay = 5 * time.Second
-	return command.CombinedOutput()
+	return runDeploymentComposeCommand(command)
+}
+
+type deploymentComposeOutputBuffer struct {
+	mutex     sync.Mutex
+	output    []byte
+	maximum   int
+	truncated bool
+}
+
+func (output *deploymentComposeOutputBuffer) Write(value []byte) (int, error) {
+	output.mutex.Lock()
+	defer output.mutex.Unlock()
+
+	written := len(value)
+	remaining := output.maximum - len(output.output)
+	if remaining > len(value) {
+		remaining = len(value)
+	}
+	if remaining > 0 {
+		output.output = append(output.output, value[:remaining]...)
+	}
+	if remaining < len(value) {
+		output.truncated = true
+	}
+	return written, nil
+}
+
+func (output *deploymentComposeOutputBuffer) snapshot() ([]byte, bool) {
+	output.mutex.Lock()
+	defer output.mutex.Unlock()
+	return append([]byte(nil), output.output...), output.truncated
+}
+
+func runDeploymentComposeCommand(command *exec.Cmd) ([]byte, error) {
+	output := &deploymentComposeOutputBuffer{
+		maximum: maximumDeploymentComposeCommandOutput,
+	}
+	command.Stdout = output
+	command.Stderr = output
+	err := command.Run()
+	captured, truncated := output.snapshot()
+	if truncated {
+		err = errors.Join(err, errDeploymentComposeOutputTruncated)
+	}
+	return captured, err
 }
 
 func (stack *deploymentComposeStack) environment(
 	additionalEnvironment map[string]string,
 ) []string {
-	values := map[string]string{
-		"COMPOSE_ANSI": "never",
-		"OPEN_SPLUNK_CLICKHOUSE_BOOTSTRAP_PASSWORD": stack.credentials.bootstrapPassword,
-		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD": stack.credentials.migrationPassword,
-		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD":   stack.credentials.runtimePassword,
-		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD":  stack.credentials.deletionPassword,
-		"OPEN_SPLUNK_CLICKHOUSE_HTTP_PORT":          "0",
-		"OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT":        "0",
-		"OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT": "0",
-		"OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE":        stack.tlsIdentity.caCertificateFile,
-		"OPEN_SPLUNK_CLICKHOUSE_TLS_CERT_FILE":      stack.tlsIdentity.certificateFile,
-		"OPEN_SPLUNK_CLICKHOUSE_TLS_KEY_FILE":       stack.tlsIdentity.privateKeyFile,
-		"OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME":    stack.tlsIdentity.serverName,
-	}
+	values := maps.Clone(stack.generatedEnvironment.values)
+	values["COMPOSE_ANSI"] = "never"
+	values["OPEN_SPLUNK_CLICKHOUSE_BOOTSTRAP_PASSWORD"] = stack.credentials.bootstrapPassword
+	values["OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD"] = stack.credentials.migrationPassword
+	values["OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD"] = stack.credentials.runtimePassword
+	values["OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD"] = stack.credentials.deletionPassword
+	values["OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT"] = "0"
+	values["OPEN_SPLUNK_SERVER_HTTP_PORT"] = "0"
+	values["OPEN_SPLUNK_SERVER_GRPC_PORT"] = "0"
 	for key, value := range additionalEnvironment {
 		values[key] = value
 	}
@@ -392,17 +452,22 @@ func (stack *deploymentComposeStack) mustRun(
 func (stack *deploymentComposeStack) publishedAddress(
 	t *testing.T,
 	ctx context.Context,
+	containerID string,
 	containerPort string,
 ) string {
 	t.Helper()
-	output := stack.mustRun(
-		t,
-		ctx,
-		"resolve published ClickHouse port "+containerPort,
-		"port",
-		"clickhouse",
-		containerPort,
-	)
+	command := exec.CommandContext(ctx, "docker", "port", containerID, containerPort+"/tcp")
+	command.WaitDelay = 5 * time.Second
+	rawOutput, err := runDeploymentComposeCommand(command)
+	if err != nil {
+		t.Fatalf(
+			"resolve published ClickHouse port %s: %v: %s",
+			containerPort,
+			err,
+			boundedComposeOutput(rawOutput),
+		)
+	}
+	output := strings.TrimSpace(string(rawOutput))
 	lines := strings.Fields(output)
 	if len(lines) != 1 {
 		t.Fatalf(
@@ -466,7 +531,7 @@ func inspectComposeDataVolume(
 		containerID,
 	)
 	command.WaitDelay = 5 * time.Second
-	output, err := command.CombinedOutput()
+	output, err := runDeploymentComposeCommand(command)
 	if err != nil {
 		t.Fatalf(
 			"inspect ClickHouse data mount: %v: %s",
@@ -493,6 +558,22 @@ func verifyComposeBootstrapBoundary(
 	address string,
 ) {
 	t.Helper()
+	defaultConnection := openDeploymentComposeConnection(
+		t,
+		address,
+		"default",
+		"default",
+		"",
+		stack.clientTLSConfig(),
+	)
+	if err := defaultConnection.Ping(ctx); err == nil {
+		_ = defaultConnection.Close()
+		t.Fatal("base ClickHouse default principal unexpectedly connected")
+	}
+	if err := defaultConnection.Close(); err != nil {
+		t.Fatalf("close denied ClickHouse default-principal connection: %v", err)
+	}
+
 	connection := openDeploymentComposeConnection(
 		t,
 		address,
@@ -509,7 +590,7 @@ func verifyComposeBootstrapBoundary(
 		t.Fatalf("close denied published bootstrap connection: %v", err)
 	}
 
-	const query = `clickhouse-client --host 127.0.0.1 --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --query "SELECT 1"`
+	const query = `clickhouse-client --host 127.0.0.1 --user "$CLICKHOUSE_USER" --query "SELECT 1"`
 	output, err := stack.run(ctx, "exec", "--no-TTY", "clickhouse", "sh", "-ec", query)
 	if err != nil {
 		t.Fatalf(
@@ -553,7 +634,7 @@ func verifyComposeTLSBoundary(
 	}
 	state := tlsConnection.ConnectionState()
 	if state.Version < tls.VersionTLS12 || len(state.PeerCertificates) == 0 ||
-		state.ServerName != stack.tlsIdentity.serverName {
+		state.ServerName != stack.generatedEnvironment.clickHouseTLS.serverName {
 		_ = tlsConnection.Close()
 		t.Fatalf("verified ClickHouse TLS state = %#v", state)
 	}
@@ -588,7 +669,7 @@ func verifyComposeTLSBoundary(
 	)
 	wrongIdentity, err := testsupport.WriteServerTLSIdentity(
 		t.TempDir(),
-		stack.tlsIdentity.serverName,
+		stack.generatedEnvironment.clickHouseTLS.serverName,
 	)
 	if err != nil {
 		t.Fatalf("create wrong ClickHouse TLS trust root: %v", err)
@@ -642,8 +723,8 @@ func expectDeploymentComposeConnectionRejected(
 func (stack *deploymentComposeStack) clientTLSConfig() *tls.Config {
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		RootCAs:    stack.tlsIdentity.rootCAs.Clone(),
-		ServerName: stack.tlsIdentity.serverName,
+		RootCAs:    stack.generatedEnvironment.clickHouseTLS.rootCAs.Clone(),
+		ServerName: stack.generatedEnvironment.clickHouseTLS.serverName,
 	}
 }
 
@@ -654,8 +735,8 @@ func expectComposeBootstrapPasswordRejected(
 	oldPassword string,
 ) {
 	t.Helper()
-	const passwordEnvironment = "OPEN_SPLUNK_CLICKHOUSE_OLD_PASSWORD_PROBE"
-	const query = `clickhouse-client --host 127.0.0.1 --user "$CLICKHOUSE_USER" --password "$OPEN_SPLUNK_CLICKHOUSE_OLD_PASSWORD_PROBE" --query "SELECT 1"`
+	const passwordEnvironment = "CLICKHOUSE_PASSWORD"
+	const query = `clickhouse-client --host 127.0.0.1 --user "$CLICKHOUSE_USER" --query "SELECT 1"`
 	output, err := stack.runWithEnvironment(
 		ctx,
 		map[string]string{passwordEnvironment: oldPassword},
@@ -671,6 +752,12 @@ func expectComposeBootstrapPasswordRejected(
 	if err == nil {
 		t.Fatalf(
 			"old bootstrap credential unexpectedly succeeded through docker compose exec: %s",
+			boundedComposeOutput(output),
+		)
+	}
+	if errors.Is(err, errDeploymentComposeOutputTruncated) {
+		t.Fatalf(
+			"old bootstrap credential probe produced excessive output: %s",
 			boundedComposeOutput(output),
 		)
 	}

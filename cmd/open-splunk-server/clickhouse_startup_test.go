@@ -14,6 +14,79 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/server"
 )
 
+func TestApplyConfiguredStartupClickHouseMigrationsSkipsWithoutDependencies(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	openCalls := 0
+	applyCalls := 0
+	err := applyConfiguredStartupClickHouseMigrations(
+		context.Background(),
+		true,
+		nil,
+		nil,
+		func(*clickhousedriver.Options) (clickHouseMigrationSession, error) {
+			openCalls++
+			return nil, errors.New("migration opener must not run")
+		},
+		func(
+			context.Context,
+			server.ClickHouseMigrationConnection,
+			fs.FS,
+		) error {
+			applyCalls++
+			return errors.New("migration applier must not run")
+		},
+	)
+	if err != nil {
+		t.Fatalf("applyConfiguredStartupClickHouseMigrations(skip) = %v", err)
+	}
+	if openCalls != 0 || applyCalls != 0 {
+		t.Fatalf(
+			"skipped migration calls = (open %d, apply %d), want zero",
+			openCalls,
+			applyCalls,
+		)
+	}
+}
+
+func TestApplyConfiguredStartupClickHouseMigrationsDefaultsToApplying(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	connection := &startupMigrationConnection{}
+	applyCalls := 0
+	err := applyConfiguredStartupClickHouseMigrations(
+		context.Background(),
+		false,
+		&clickhousedriver.Options{},
+		fstest.MapFS{"migration.sql": &fstest.MapFile{}},
+		func(*clickhousedriver.Options) (clickHouseMigrationSession, error) {
+			return connection, nil
+		},
+		func(
+			context.Context,
+			server.ClickHouseMigrationConnection,
+			fs.FS,
+		) error {
+			applyCalls++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("applyConfiguredStartupClickHouseMigrations(default) = %v", err)
+	}
+	if applyCalls != 1 || connection.closeCalls != 1 {
+		t.Fatalf(
+			"default migration calls = (apply %d, close %d), want (1, 1)",
+			applyCalls,
+			connection.closeCalls,
+		)
+	}
+}
+
 func TestApplyStartupClickHouseMigrationsClosesBeforeReturning(t *testing.T) {
 	t.Parallel()
 
@@ -64,6 +137,86 @@ func TestApplyStartupClickHouseMigrationsClosesBeforeReturning(t *testing.T) {
 	}
 	if want := []string{"open", "ping", "version", "migrate", "close"}; !reflect.DeepEqual(events, want) {
 		t.Fatalf("startup migration events = %v, want %v", events, want)
+	}
+}
+
+func TestApplyDeploymentClickHouseMigrationsRejectsPhysicalSchemaDriftBeforeClose(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	var events []string
+	connection := &startupMigrationConnection{
+		ping: func(context.Context) error {
+			events = append(events, "ping")
+			return nil
+		},
+		versionCheck: func() {
+			events = append(events, "version")
+		},
+		close: func() error {
+			events = append(events, "close")
+			return nil
+		},
+	}
+	physicalSchemaErr := fmt.Errorf(
+		"%w: injected mutation",
+		server.ErrClickHousePhysicalSchemaDrift,
+	)
+	err := applyDeploymentClickHouseMigrations(
+		context.Background(),
+		&clickhousedriver.Options{},
+		fstest.MapFS{"migration.sql": &fstest.MapFile{}},
+		func(*clickhousedriver.Options) (clickHouseMigrationSession, error) {
+			events = append(events, "open")
+			return connection, nil
+		},
+		func(context.Context, server.ClickHouseMigrationConnection, fs.FS) error {
+			events = append(events, "migrate")
+			return nil
+		},
+		func(context.Context, server.ClickHouseVersionConnection) error {
+			events = append(events, "validate")
+			return physicalSchemaErr
+		},
+	)
+	if !errors.Is(err, server.ErrClickHousePhysicalSchemaDrift) {
+		t.Fatalf(
+			"applyDeploymentClickHouseMigrations() error = %v, want physical drift",
+			err,
+		)
+	}
+	if want := []string{
+		"open", "ping", "version", "migrate", "validate", "close",
+	}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("deployment migration events = %v, want %v", events, want)
+	}
+}
+
+func TestApplyDeploymentClickHouseMigrationsRequiresPhysicalSchemaValidator(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	openCalls := 0
+	err := applyDeploymentClickHouseMigrations(
+		context.Background(),
+		&clickhousedriver.Options{},
+		fstest.MapFS{"migration.sql": &fstest.MapFile{}},
+		func(*clickhousedriver.Options) (clickHouseMigrationSession, error) {
+			openCalls++
+			return &startupMigrationConnection{}, nil
+		},
+		func(context.Context, server.ClickHouseMigrationConnection, fs.FS) error {
+			return nil
+		},
+		nil,
+	)
+	if err == nil {
+		t.Fatal("applyDeploymentClickHouseMigrations(nil validator) succeeded")
+	}
+	if openCalls != 0 {
+		t.Fatalf("open calls with nil physical-schema validator = %d, want 0", openCalls)
 	}
 }
 
@@ -422,7 +575,7 @@ func (rows *startupMigrationRows) HasData() bool {
 
 func startupMigrationGrants() []string {
 	return []string{
-		"GRANT CREATE DATABASE ON open_splunk.* TO principal",
+		"GRANT CREATE DATABASE, SHOW TABLES ON open_splunk.* TO principal",
 		"GRANT ALTER ADD COLUMN, ALTER ADD CONSTRAINT, ALTER ADD INDEX, CREATE TABLE ON open_splunk.events TO principal",
 		"GRANT CREATE TABLE, INSERT, SELECT ON open_splunk.schema_migrations TO principal",
 		"GRANT SELECT ON system.tables TO principal",

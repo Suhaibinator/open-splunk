@@ -27,6 +27,31 @@ type clickHouseMigrationApplier func(
 	fs.FS,
 ) error
 
+type clickHousePhysicalSchemaValidator func(
+	context.Context,
+	server.ClickHouseVersionConnection,
+) error
+
+func applyConfiguredStartupClickHouseMigrations(
+	ctx context.Context,
+	skip bool,
+	options *clickhousedriver.Options,
+	migrationFiles fs.FS,
+	open clickHouseMigrationOpener,
+	apply clickHouseMigrationApplier,
+) error {
+	if skip {
+		return nil
+	}
+	return applyStartupClickHouseMigrations(
+		ctx,
+		options,
+		migrationFiles,
+		open,
+		apply,
+	)
+}
+
 // applyStartupClickHouseMigrations owns only the short-lived migration
 // session. It closes that privileged connection before returning, so the
 // long-lived Store, search, and deletion sessions can be opened afterward
@@ -37,6 +62,51 @@ func applyStartupClickHouseMigrations(
 	migrationFiles fs.FS,
 	open clickHouseMigrationOpener,
 	apply clickHouseMigrationApplier,
+) (resultErr error) {
+	return applyStartupClickHouseMigrationsWithPhysicalSchemaValidation(
+		ctx,
+		options,
+		migrationFiles,
+		open,
+		apply,
+		nil,
+	)
+}
+
+// applyDeploymentClickHouseMigrations keeps the release-owned physical-schema
+// proof on the same short-lived privileged session as its migrations. The
+// deployment one-shot must not report success from a complete ledger while the
+// events table is missing or was changed out of band.
+func applyDeploymentClickHouseMigrations(
+	ctx context.Context,
+	options *clickhousedriver.Options,
+	migrationFiles fs.FS,
+	open clickHouseMigrationOpener,
+	apply clickHouseMigrationApplier,
+	validatePhysicalSchema clickHousePhysicalSchemaValidator,
+) error {
+	if validatePhysicalSchema == nil {
+		return errors.New(
+			"apply deployment ClickHouse migrations: physical-schema validator is required",
+		)
+	}
+	return applyStartupClickHouseMigrationsWithPhysicalSchemaValidation(
+		ctx,
+		options,
+		migrationFiles,
+		open,
+		apply,
+		validatePhysicalSchema,
+	)
+}
+
+func applyStartupClickHouseMigrationsWithPhysicalSchemaValidation(
+	ctx context.Context,
+	options *clickhousedriver.Options,
+	migrationFiles fs.FS,
+	open clickHouseMigrationOpener,
+	apply clickHouseMigrationApplier,
+	validatePhysicalSchema clickHousePhysicalSchemaValidator,
 ) (resultErr error) {
 	if ctx == nil || options == nil || migrationFiles == nil ||
 		open == nil || apply == nil {
@@ -70,6 +140,11 @@ func applyStartupClickHouseMigrations(
 	}
 	if err := apply(ctx, connection, migrationFiles); err != nil {
 		return fmt.Errorf("migrate ClickHouse: %w", err)
+	}
+	if validatePhysicalSchema != nil {
+		if err := validatePhysicalSchema(ctx, connection); err != nil {
+			return fmt.Errorf("validate migrated ClickHouse physical schema: %w", err)
+		}
 	}
 	return nil
 }

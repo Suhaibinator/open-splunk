@@ -75,6 +75,7 @@ const (
 	maximumWebSocketSubscriptions = uint32(256)
 	minimumWebSocketFrameBytes    = uint64(1 << 10)
 	maximumWebSocketFrameBytes    = uint64(1 << 20)
+	runtimeReadinessTimeout       = time.Second
 )
 
 // SearchJobs is the scoped search-job surface exposed to the browser API.
@@ -126,6 +127,14 @@ type IndexStatistics interface {
 // sequence before an index-statistics query starts.
 type IndexStatisticsSnapshotter interface {
 	VisibilityCutoff(context.Context) (uint64, error)
+}
+
+// RuntimeReadiness checks whether the server's ordinary ClickHouse runtime
+// session can still reach its dependency. Implementations must honor the
+// supplied context and perform no mutation; clickhouse-go's Conn satisfies the
+// interface directly through Ping.
+type RuntimeReadiness interface {
+	Ping(context.Context) error
 }
 
 // IndexDataDeletionAdmission durably admits one physical index deletion in
@@ -382,6 +391,7 @@ type BootstrapConfig struct {
 // search-job ownership boundary.
 type Config struct {
 	SearchJobs                 SearchJobs
+	RuntimeReadiness           RuntimeReadiness
 	Indexes                    IndexCatalog
 	IndexAdmin                 IndexAdministration
 	IndexStatistics            IndexStatistics
@@ -476,6 +486,10 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 	if isNilDependency(config.Indexes) {
 		return nil, errors.New("create server handler: index catalog is required")
+	}
+	runtimeReadiness := config.RuntimeReadiness
+	if isNilDependency(runtimeReadiness) {
+		runtimeReadiness = nil
 	}
 	indexAdmin := config.IndexAdmin
 	if isNilDependency(indexAdmin) {
@@ -947,6 +961,26 @@ func NewHandler(config Config) (*Handler, error) {
 	mux.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		response.Header().Set("Cache-Control", "no-store")
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write([]byte("ok\n"))
+	})
+	mux.HandleFunc("GET /readyz", func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		response.Header().Set("Cache-Control", "no-store")
+		if runtimeReadiness == nil {
+			response.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = response.Write([]byte("not ready\n"))
+			return
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), runtimeReadinessTimeout)
+		defer cancel()
+		if err := runtimeReadiness.Ping(ctx); err != nil {
+			// Dependency errors can contain addresses and driver internals. The
+			// unauthenticated readiness surface exposes only a fixed marker.
+			response.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = response.Write([]byte("not ready\n"))
+			return
+		}
 		response.WriteHeader(http.StatusOK)
 		_, _ = response.Write([]byte("ok\n"))
 	})
