@@ -329,6 +329,8 @@ func classifySuggestionContext(tokens []token, prefix string, replacement Range)
 		return classifyRenameSuggestion(base, body)
 	case "stats":
 		return classifyStatsSuggestion(base, body)
+	case "eventstats":
+		return classifyEventStatsSuggestion(base, body)
 	case "chart":
 		return classifyChartSuggestion(base, body)
 	case "timechart":
@@ -467,6 +469,33 @@ func classifyStatsSuggestion(context SuggestionContext, tokens []token) Suggesti
 	context = aggregateSuggestionContext(context)
 	context.Kinds = append(context.Kinds, SuggestionKindKeyword)
 	context.Keywords = []string{"AS", "BY"}
+	return context
+}
+
+func classifyEventStatsSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
+	if topLevelWordIndex(tokens, "BY") >= 0 {
+		context.Kinds = []SuggestionKind{SuggestionKindField}
+		return context
+	}
+	if parenthesisDepth(tokens) > 0 {
+		return context
+	}
+	if len(tokens) == 0 {
+		context = aggregateSuggestionContext(context)
+		context.FunctionNames = []string{"count"}
+		return context
+	}
+	last := tokens[len(tokens)-1]
+	if tokenWordEqual(last, "AS") {
+		context.Kinds = []SuggestionKind{SuggestionKindField}
+		return context
+	}
+	context.Kinds = []SuggestionKind{SuggestionKindKeyword}
+	if len(tokens) == 1 {
+		context.Keywords = []string{"AS", "BY"}
+	} else {
+		context.Keywords = []string{"BY"}
+	}
 	return context
 }
 

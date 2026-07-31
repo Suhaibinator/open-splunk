@@ -76,6 +76,11 @@
       "detail": "Aggregate with row count, true-only count(eval(predicate)) AS output, count/c field occurrences, dc/distinct_count, values, list, min, max, chronological earliest/latest, pN/percN percentiles (1-99), sum, and avg."
     },
     {
+      "name": "eventstats",
+      "insertion": "eventstats count AS event_count BY level",
+      "detail": "Add one argument-free count to every input row globally or within up to 16 exact BY fields while preserving the current result shape."
+    },
+    {
       "name": "top",
       "insertion": "top limit=20 message",
       "detail": "Find the most frequent values."

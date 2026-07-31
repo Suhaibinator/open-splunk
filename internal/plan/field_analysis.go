@@ -31,6 +31,10 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 		case *Filter, *Extend, *Extract, *ExtractJSON, *Rename, *TimeBucket, *NumericBucket, *Sort, *Deduplicate, *Limit:
 			// These preserve source-event identity while changing the final
 			// relation, schema, values, or order consumed by field analysis.
+		case *EventAggregate:
+			if !validEventAggregateContract(operator) {
+				return fieldAnalysisPipelineDiagnostic(operator.Range)
+			}
 		case *Project:
 			switch operator.Mode {
 			case ProjectModeInclude, ProjectModeExclude, ProjectModeTable:

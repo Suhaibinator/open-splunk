@@ -27,11 +27,12 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const storeIntegrationImage = "clickhouse/clickhouse-server:26.3.17.4"
+const storeIntegrationImage = testsupport.DefaultClickHouseImage
 
 // TestStoreAgainstClickHouse is opt-in because it starts an ephemeral Docker
 // container and may pull the pinned ClickHouse image.
@@ -2239,6 +2240,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testCaseAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testStatsCountEvalAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testStatsAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime)
+	testEventStatsAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testStatsPercentilesAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testStatsExtremaAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testExactNumericOrderingAgainstClickHouse(t, ctx, store, connection, indexTime)

@@ -44,7 +44,8 @@ func ClassifyResultShape(query *Query) ResultShape {
 			*SortCommand,
 			*DedupCommand,
 			*LimitCommand,
-			*BinCommand:
+			*BinCommand,
+			*EventStatsCommand:
 			// These commands preserve the current relation shape.
 		case *TableCommand, *StatsCommand, *TopCommand, *RareCommand:
 			result = ResultShape{Kind: ResultKindStatistics}

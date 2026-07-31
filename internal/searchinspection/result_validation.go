@@ -161,6 +161,7 @@ func supportedInspectionOperator(value string) bool {
 		"ExtractJSON",
 		"Rename",
 		"Aggregate",
+		"EventAggregate",
 		"Timechart",
 		"Chart",
 		"Window",

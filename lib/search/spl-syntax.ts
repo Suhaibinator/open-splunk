@@ -35,7 +35,6 @@ export const SPL_FUNCTIONS = SHARED_SPL_COMPLETION_CATALOG.functions;
 export const SPL_KEYWORDS = SHARED_SPL_COMPLETION_CATALOG.keywords;
 
 export const UNSUPPORTED_SPL_PIPELINE_COMMANDS = [
-  "eventstats",
   "streamstats",
   "transaction",
   "join",

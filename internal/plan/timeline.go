@@ -41,6 +41,13 @@ func ValidateTimelineEligibility(query *Query) error {
 			}
 		case *Filter, *Sort, *Deduplicate, *Limit:
 			// These retain event identity and canonical-time provenance.
+		case *EventAggregate:
+			if !validEventAggregateContract(operator) {
+				return timelinePipelineDiagnostic(operator.Range)
+			}
+			if operator.Measure.Output == "_time" {
+				return timelineTimeDiagnostic(operator.Range)
+			}
 		case *Extend:
 			for _, assignment := range operator.Assignments {
 				if assignment.Output.Name == "_time" {

@@ -586,7 +586,7 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 	wantCommands := []string{
 		"search", "where", "eval", "rename", "fields", "table", "sort",
 		"dedup", "rex", "spath", "bin", "bucket", "head", "tail", "stats",
-		"top", "rare", "timechart", "chart",
+		"eventstats", "top", "rare", "timechart", "chart",
 	}
 	gotCommands := make([]string, 0, len(completionCatalog.Commands))
 	for _, command := range completionCatalog.Commands {

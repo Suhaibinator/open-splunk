@@ -550,8 +550,8 @@ const (
 	// logical plan so hand-built inputs cannot bypass the parser's resource
 	// ceiling.
 	MaximumStatsMeasures = 16
-	// MaximumStatsGroupFields is the corresponding ceiling for one stats BY
-	// tuple.
+	// MaximumStatsGroupFields is the corresponding ceiling for one stats or
+	// eventstats BY tuple.
 	MaximumStatsGroupFields = 16
 )
 
@@ -607,6 +607,20 @@ type StatsCommand struct {
 func (*StatsCommand) command()             {}
 func (*StatsCommand) Name() string         { return "stats" }
 func (c *StatsCommand) SourceRange() Range { return c.Range }
+
+// EventStatsCommand adds one row-count aggregate to every input row, either
+// globally or within an exact BY tuple. The first compatibility slice keeps
+// the singular aggregate source-located through StatsAggregate while limiting
+// Function to argument-free AggregateFunctionCount.
+type EventStatsCommand struct {
+	Aggregate StatsAggregate
+	GroupBy   []StatsGroupField
+	Range     Range
+}
+
+func (*EventStatsCommand) command()             {}
+func (*EventStatsCommand) Name() string         { return "eventstats" }
+func (c *EventStatsCommand) SourceRange() Range { return c.Range }
 
 // TimeSpanUnit identifies the fixed-duration units shared by the initial bin
 // and timechart compatibility slices. Calendar and subsecond spans require

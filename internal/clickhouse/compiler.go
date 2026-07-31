@@ -212,6 +212,10 @@ const (
 	maxCompiledPredicateNodes = 2048
 	maxCompiledPredicateDepth = 1024
 	maxTimechartLabelBytes    = 256
+	// MaximumEventStatsInputRows bounds the complete relation enriched by one
+	// eventstats stage. The compiler reads one additional sentinel row and
+	// fails the whole search instead of annotating a partial relation.
+	MaximumEventStatsInputRows uint64 = 10_000
 	// maxChartRowValues bounds the chart pivot's runtime row axis. It is a
 	// deliberate resource policy rather than Splunk's configurable
 	// maxresultrows truncation: exceeding it fails the whole search.
@@ -249,6 +253,9 @@ const (
 	// guard so the executor can classify the ClickHouse exception without
 	// exposing generated SQL or storage details.
 	UnsupportedStatsByValueMarker = "open-splunk: stats BY requires a scalar field"
+	// EventStatsInputLimitMarker classifies an eventstats stage whose upstream
+	// relation exceeded the bounded row-enrichment contract.
+	EventStatsInputLimitMarker = "open-splunk: eventstats input exceeds the supported limit"
 	// UnsupportedStatsMeasureValueMarker is emitted when a string-oriented
 	// stats measure encounters an object or nested container that has no
 	// scalar SPL representation.
@@ -876,6 +883,19 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				aliasSequence += additionalAliases
 				nextState.postAggregateOrderedStrings = nil
 			}
+			state = nextState
+		case *plan.EventAggregate:
+			enriched, nextState, prefixArgs, compileErr := compileEventAggregate(
+				relation,
+				operator,
+				state,
+				aliasSequence,
+			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			relation = enriched
+			args = prependArguments(prefixArgs, args)
 			state = nextState
 		case *plan.Timechart:
 			if !permitTerminalWideOperators {
@@ -10878,6 +10898,336 @@ func rewriteExistenceForProjection(field fieldState, name string) string {
 	return field.existsSQL
 }
 
+type compiledExactScalarGroup struct {
+	field           fieldState
+	keySQL          string
+	presenceSQL     string
+	presenceArgs    []any
+	unsupportedSQL  string
+	unsupportedArgs []any
+}
+
+// compileExactScalarGroup resolves one stats-like BY field into the common SPL
+// scalar grouping contract. Both transforming stats and row-preserving
+// eventstats intentionally use the same missing/null eligibility, lexical
+// Dynamic key, and descendant-aware unsupported-container check.
+func compileExactScalarGroup(
+	group plan.FieldRef,
+	state compileState,
+	multivalueOperation string,
+) (compiledExactScalarGroup, error) {
+	field, exists, resolveErr := resolveCompiledField(group, state)
+	if resolveErr != nil {
+		return compiledExactScalarGroup{}, resolveErr
+	}
+	if !exists {
+		// A prior projection is authoritative. The typed missing key preserves
+		// the declared downstream schema without consulting private event data.
+		field = fieldState{
+			valueSQL:   "CAST(NULL AS Nullable(String))",
+			existsSQL:  "0",
+			kind:       fieldKindString,
+			alwaysNull: true,
+		}
+	}
+	if field.kind == fieldKindStringArray {
+		return compiledExactScalarGroup{}, unsupportedMultivalueUsage(
+			multivalueOperation,
+			group.Range,
+		)
+	}
+
+	existsSQL := field.existsSQL
+	if existsSQL == "" {
+		existsSQL = "1"
+	}
+	presenceSQL := "(" + existsSQL + " AND isNotNull(" + field.valueSQL + "))"
+	presenceArgs := append([]any(nil), field.existsArgs...)
+	if field.kind == fieldKindDynamic && field.descendantSQL != "" {
+		// Flattened non-empty objects have no exact parent leaf. Keep them
+		// present until the scoped scalar validation rejects the container.
+		presenceSQL = "(" + presenceSQL + " OR " + field.descendantSQL + ")"
+		presenceArgs = append(presenceArgs, field.descendantArgs...)
+	}
+	compiled := compiledExactScalarGroup{
+		field:        field,
+		keySQL:       field.valueSQL,
+		presenceSQL:  presenceSQL,
+		presenceArgs: presenceArgs,
+	}
+	if field.kind == fieldKindDynamic {
+		supported, lexical := statsByScalarExpressions(field)
+		compiled.keySQL = "if(" + supported + ", " + lexical + ", '')"
+		compiled.unsupportedSQL = "(" + presenceSQL + ") AND NOT (" + supported + ")"
+		compiled.unsupportedArgs = presenceArgs
+	}
+	return compiled, nil
+}
+
+type compiledEventStatsGroup struct {
+	scalar   compiledExactScalarGroup
+	keyAlias string
+}
+
+func compileEventAggregate(
+	relation compiledRelation,
+	operator *plan.EventAggregate,
+	state compileState,
+	stage int,
+) (compiledRelation, compileState, []any, error) {
+	output, validateErr := validateEventAggregate(operator)
+	if validateErr != nil {
+		return compiledRelation{}, compileState{}, nil, validateErr
+	}
+	if state.eventRows && state.allowDynamic && output.Name == "fields" {
+		return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
+			Code: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
+			Message: "eventstats cannot replace the event result's " +
+				"reserved fields payload without an exact upstream schema",
+			Range: output.Range,
+		}
+	}
+
+	groups := make([]compiledEventStatsGroup, 0, len(operator.GroupBy))
+	seenGroups := make(map[string]struct{}, len(operator.GroupBy))
+	for index, group := range operator.GroupBy {
+		if validateErr := validateCanonicalFieldRef("eventstats", "group", group); validateErr != nil {
+			return compiledRelation{}, compileState{}, nil, validateErr
+		}
+		if _, duplicate := seenGroups[group.Name]; duplicate {
+			return compiledRelation{}, compileState{}, nil, fmt.Errorf(
+				"compile ClickHouse eventstats: grouping field %q is repeated",
+				group.Name,
+			)
+		}
+		seenGroups[group.Name] = struct{}{}
+		if state.eventRows && state.allowDynamic && group.Name == "fields" {
+			return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
+				Code:    "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
+				Message: "eventstats cannot group by the event result's reserved fields payload without an exact upstream schema",
+				Range:   group.Range,
+			}
+		}
+
+		scalar, compileErr := compileExactScalarGroup(group, state, "eventstats BY")
+		if compileErr != nil {
+			return compiledRelation{}, compileState{}, nil, compileErr
+		}
+		groups = append(groups, compiledEventStatsGroup{
+			scalar:   scalar,
+			keyAlias: quoteIdentifier(fmt.Sprintf("__os_eventstats_group_%d", index)),
+		})
+	}
+
+	next := eventAggregateCompileState(state, output, len(groups) > 0, stage)
+	inputName := quoteIdentifier(fmt.Sprintf("__os_eventstats_input_%d", stage))
+	totalName := quoteIdentifier(fmt.Sprintf("__os_eventstats_total_%d", stage))
+	inputAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_rows_%d", stage))
+	totalAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_total_row_%d", stage))
+	totalColumn := quoteIdentifier(fmt.Sprintf("__os_eventstats_input_count_%d", stage))
+	maximumRows := strconv.FormatUint(MaximumEventStatsInputRows, 10)
+	sentinelRows := strconv.FormatUint(MaximumEventStatsInputRows+1, 10)
+
+	inputProjection := []string{"*"}
+	var eligibilityArgs, unsupportedArgs []any
+	eligibility := make([]string, 0, len(groups))
+	unsupported := make([]string, 0, len(groups))
+	for _, group := range groups {
+		inputProjection = append(inputProjection, group.scalar.keySQL+" AS "+group.keyAlias)
+		eligibility = append(eligibility, group.scalar.presenceSQL)
+		eligibilityArgs = append(eligibilityArgs, group.scalar.presenceArgs...)
+		if group.scalar.unsupportedSQL != "" {
+			unsupported = append(unsupported, group.scalar.unsupportedSQL)
+			unsupportedArgs = append(unsupportedArgs, group.scalar.unsupportedArgs...)
+		}
+	}
+	eligibleAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_eligible_%d", stage))
+	unsupportedAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_unsupported_%d", stage))
+	if len(groups) > 0 {
+		inputProjection = append(
+			inputProjection,
+			"toUInt8("+strings.Join(eligibility, " AND ")+") AS "+eligibleAlias,
+		)
+		unsupportedSQL := "0"
+		if len(unsupported) > 0 {
+			unsupportedSQL = "(" + strings.Join(unsupported, ") OR (") + ")"
+		}
+		inputProjection = append(
+			inputProjection,
+			"toUInt8("+unsupportedSQL+") AS "+unsupportedAlias,
+		)
+	}
+
+	inputSourceAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_source_%d", stage))
+	inputSQL := "SELECT " + strings.Join(inputProjection, ", ") + " FROM (" +
+		relation.sql + ") AS " + inputSourceAlias + " LIMIT " + sentinelRows
+	prefixArgs := append(eligibilityArgs, unsupportedArgs...)
+	definitions := []string{
+		inputName + " AS MATERIALIZED (" + inputSQL + ")",
+		totalName + " AS MATERIALIZED (SELECT " +
+			boundedEventStatsCountSQL("count()") + " AS " + totalColumn +
+			" FROM " + inputName + ")",
+	}
+
+	outputValue := totalAlias + "." + totalColumn
+	outputExistsSQL := "1"
+	fromSQL := inputName + " AS " + inputAlias + " CROSS JOIN " +
+		totalName + " AS " + totalAlias
+	if len(groups) > 0 {
+		groupCountsName := quoteIdentifier(fmt.Sprintf("__os_eventstats_counts_%d", stage))
+		groupCountsAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_group_row_%d", stage))
+		groupCountColumn := quoteIdentifier(fmt.Sprintf("__os_eventstats_group_count_%d", stage))
+		groupKeys := make([]string, 0, len(groups))
+		joinPredicates := make([]string, 0, len(groups))
+		for _, group := range groups {
+			groupKeys = append(groupKeys, group.keyAlias)
+			joinPredicates = append(
+				joinPredicates,
+				inputAlias+"."+group.keyAlias+" = "+groupCountsAlias+"."+group.keyAlias,
+			)
+		}
+		validGroup := eligibleAlias + " != 0"
+		if len(unsupported) > 0 {
+			validGroup = "if(" + unsupportedAlias + " != 0, throwIf(toUInt8(1), '" +
+				UnsupportedStatsByValueMarker + "') = 0, " + validGroup + ")"
+		}
+		definitions = append(
+			definitions,
+			groupCountsName+" AS MATERIALIZED (SELECT "+
+				strings.Join(groupKeys, ", ")+", toUInt64(count()) AS "+groupCountColumn+
+				" FROM "+inputName+" WHERE "+validGroup+
+				" GROUP BY "+strings.Join(groupKeys, ", ")+")",
+		)
+		fromSQL += " LEFT JOIN " + groupCountsName + " AS " + groupCountsAlias +
+			" ON " + strings.Join(joinPredicates, " AND ")
+		outputExistsSQL = inputAlias + "." + eligibleAlias + " != 0"
+		outputValue = "if(" + outputExistsSQL + ", " +
+			groupCountsAlias + "." + groupCountColumn +
+			", CAST(NULL AS Nullable(UInt64)))"
+	}
+
+	projection := eventAggregateProjection(
+		state,
+		next,
+		output.Name,
+		outputValue,
+		outputExistsSQL,
+	)
+	sql := "WITH " + strings.Join(definitions, ", ") + " SELECT " +
+		strings.Join(projection, ", ") + " FROM " + fromSQL +
+		" WHERE " + totalAlias + "." + totalColumn + " <= " + maximumRows +
+		materializedCTESettingsSQL
+
+	return compiledRelation{
+		sql:        sql,
+		depth:      relation.depth + 3,
+		ownerRange: operator.Range,
+	}, next, prefixArgs, nil
+}
+
+func validateEventAggregate(operator *plan.EventAggregate) (plan.FieldRef, error) {
+	if operator == nil {
+		return plan.FieldRef{}, errors.New("compile ClickHouse eventstats: operator is missing")
+	}
+	if len(operator.GroupBy) > spl.MaximumStatsGroupFields {
+		return plan.FieldRef{}, fmt.Errorf(
+			"compile ClickHouse eventstats: more than %d grouping fields",
+			spl.MaximumStatsGroupFields,
+		)
+	}
+	measure := operator.Measure
+	if measure.Function != plan.AggregateFunctionCountRows ||
+		measure.Input.Name != "" ||
+		measure.Input.Canonical ||
+		measure.Input.Path != nil ||
+		measure.Input.Range != (spl.Range{}) ||
+		measure.Predicate != nil ||
+		measure.Percentile != 0 {
+		return plan.FieldRef{}, errors.New(
+			"compile ClickHouse eventstats: only argument-free count without additional metadata is supported",
+		)
+	}
+	output, err := plan.ResolveField(measure.Output, operator.Range)
+	if err != nil {
+		return plan.FieldRef{}, fmt.Errorf(
+			"compile ClickHouse eventstats: invalid output field %q: %w",
+			measure.Output,
+			err,
+		)
+	}
+	return output, nil
+}
+
+func eventAggregateCompileState(
+	state compileState,
+	output plan.FieldRef,
+	grouped bool,
+	stage int,
+) compileState {
+	next := cloneCompileState(state)
+	if exposesRawFieldsPayload(state) && !output.Canonical {
+		dropRawFieldsPayload(&next)
+	}
+	delete(next.blocked, output.Name)
+	if !slices.Contains(next.publicOrder, output.Name) {
+		next.publicOrder = append(next.publicOrder, output.Name)
+	}
+	existsSQL := "1"
+	if grouped {
+		existsSQL = quoteIdentifier(fmt.Sprintf("__os_eventstats_exists_%d", stage))
+	}
+	next.visible[output.Name] = fieldState{
+		valueSQL:        quoteIdentifier(output.Name),
+		existsSQL:       existsSQL,
+		kind:            fieldKindNumber,
+		numberType:      "UInt64",
+		numericIntegral: true,
+	}
+	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
+	if grouped {
+		next.privateColumns = append(next.privateColumns, existsSQL)
+	}
+	return next
+}
+
+func eventAggregateProjection(
+	state, next compileState,
+	outputName, outputValue, outputExistsSQL string,
+) []string {
+	names := orderedVisibleNames(next)
+	projection := make([]string, 0, len(names)+12+len(next.privateColumns))
+	for _, name := range names {
+		publicName := quoteIdentifier(name)
+		if name == outputName {
+			projection = append(projection, outputValue+" AS "+publicName)
+			continue
+		}
+		field := state.visible[name]
+		if field.valueSQL == publicName {
+			projection = append(projection, publicName)
+		} else {
+			projection = append(projection, field.valueSQL+" AS "+publicName)
+		}
+	}
+	projectionState := next
+	projectionState.privateColumns = livePrivateColumns(state.privateColumns, next.visible)
+	projection = appendPrivateEventProjection(projection, projectionState)
+	if outputExistsSQL != "1" {
+		projection = append(
+			projection,
+			"toUInt8("+outputExistsSQL+") AS "+next.visible[outputName].existsSQL,
+		)
+	}
+	return projection
+}
+
+func boundedEventStatsCountSQL(countSQL string) string {
+	maximum := strconv.FormatUint(MaximumEventStatsInputRows, 10)
+	return "arrayElement(arrayMap(total -> total + toUInt64(throwIf(toUInt8(total > " +
+		maximum + "), '" + EventStatsInputLimitMarker + "')), [toUInt64(" +
+		countSQL + ")]), 1)"
+}
+
 func validateAggregatePredicateMeasures(
 	operator *plan.Aggregate,
 	state compileState,
@@ -11020,71 +11370,40 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: output field %q is duplicated", group.Name)
 		}
 		seen[group.Name] = struct{}{}
-		field, ok, resolveErr := resolveCompiledField(group, state)
-		if resolveErr != nil {
-			return nil, nil, nil, compileState{}, nil, resolveErr
+		scalarGroup, compileErr := compileExactScalarGroup(group, state, "stats BY")
+		if compileErr != nil {
+			return nil, nil, nil, compileState{}, nil, compileErr
 		}
-		if !ok {
-			// A transforming command retains its declared output schema even when
-			// an upstream projection removed the grouping field. SPL emits no
-			// groups in that case; use a typed NULL plus an always-false predicate
-			// rather than resurrecting the private source document or surfacing an
-			// internal compiler error.
-			field = fieldState{
-				valueSQL:   "CAST(NULL AS Nullable(String))",
-				existsSQL:  "0",
-				kind:       fieldKindString,
-				alwaysNull: true,
-			}
-		}
-		if field.kind == fieldKindStringArray {
-			return nil, nil, nil, compileState{}, nil, unsupportedMultivalueUsage(
-				"stats BY",
-				group.Range,
-			)
-		}
-		valueSQL := field.valueSQL
+		field := scalarGroup.field
+		valueSQL := scalarGroup.keySQL
 		kind := field.kind
 		numericSort := field.numericSort
 		maxStringBytes := fieldStateStringByteBound(field)
-		supportedSQL := ""
 		if kind == fieldKindDynamic {
-			// SPL fields are compared and grouped by their lexical value. Dynamic
-			// scalar storage types therefore intentionally converge on the same
-			// UTF-8 group key (for example integer 500 and string "500").
-			// Missing and explicit-null values are removed below.
-			supported, lexical := statsByScalarExpressions(field)
 			// Unsupported containers use one private placeholder group. A scoped
 			// whole-input window below fails the search before any key is exposed.
 			valueAlias := quoteIdentifier(fmt.Sprintf("__os_group_value_%d", len(groups)))
 			next.preAggregateColumns = append(next.preAggregateColumns,
-				"if("+supported+", "+lexical+", '') AS "+valueAlias,
+				scalarGroup.keySQL+" AS "+valueAlias,
 			)
 			valueSQL = valueAlias
 			kind = fieldKindString
 			numericSort = true
-			supportedSQL = supported
 		}
 		groupOutput := fmt.Sprintf("__os_group_%d", len(groups))
 		projection = append(projection, valueSQL+" AS "+quoteIdentifier(groupOutput))
-		presence := "(" + field.existsSQL + " AND isNotNull(" + field.valueSQL + "))"
-		presenceArgs := append([]any(nil), field.existsArgs...)
-		if field.kind == fieldKindDynamic && field.descendantSQL != "" {
-			// Non-empty objects are stored as flattened leaf paths, so the parent
-			// itself is absent from field_names. Retain those rows until the scoped
-			// aggregate support check can reject the container explicitly.
-			presence = "(" + presence + " OR " + field.descendantSQL + ")"
-			presenceArgs = append(presenceArgs, field.descendantArgs...)
-		}
-		if supportedSQL != "" {
+		if scalarGroup.unsupportedSQL != "" {
 			// Validate each key against its own presence rather than the combined
 			// group eligibility predicate. A container must fail the whole scoped
 			// search even when another BY key is missing on the same row.
-			dynamicGroupInvalid = append(dynamicGroupInvalid, "("+presence+") AND NOT ("+supportedSQL+")")
-			dynamicGroupInvalidArgs = append(dynamicGroupInvalidArgs, presenceArgs...)
+			dynamicGroupInvalid = append(dynamicGroupInvalid, scalarGroup.unsupportedSQL)
+			dynamicGroupInvalidArgs = append(
+				dynamicGroupInvalidArgs,
+				scalarGroup.unsupportedArgs...,
+			)
 		}
-		predicates = append(predicates, presence)
-		args = append(args, presenceArgs...)
+		predicates = append(predicates, scalarGroup.presenceSQL)
+		args = append(args, scalarGroup.presenceArgs...)
 		groups = append(groups, valueSQL)
 		privateGroup := quoteIdentifier(groupOutput)
 		next.visible[group.Name] = fieldState{

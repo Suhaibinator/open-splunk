@@ -162,6 +162,8 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseLimitCommand(name, nameToken)
 	case "stats":
 		return p.parseStatsCommand(nameToken)
+	case "eventstats":
+		return p.parseEventStatsCommand(nameToken)
 	case "top":
 		return p.parseTopCommand(nameToken)
 	case "rare":
@@ -1319,7 +1321,12 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 	if p.isKeyword("BY") {
 		p.advance()
 		var err error
-		groupBy, end, err = p.parseStatsGroupFields()
+		groupBy, end, err = p.parseBoundedAggregateGroupFields(
+			"stats",
+			"a",
+			false,
+			p.unsupportedStatsGroupSyntax,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -1329,6 +1336,105 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 		GroupBy:    groupBy,
 		Range:      Range{Start: name.sourceRange.Start, End: end},
 	}, nil
+}
+
+func (p *parser) parseEventStatsCommand(name token) (Command, error) {
+	if p.atCommandEnd() {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "eventstats requires argument-free count")
+	}
+
+	functionToken := p.current()
+	if functionToken.kind != tokenWord {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "eventstats requires argument-free count")
+	}
+	if !strings.EqualFold(functionToken.text, "count") {
+		if p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
+			return nil, p.unsupportedEventStatsSyntax(
+				functionToken,
+				fmt.Sprintf("eventstats option %q is not supported", functionToken.text),
+			)
+		}
+		return nil, p.unsupportedEventStatsAggregate(
+			functionToken,
+			fmt.Sprintf("eventstats aggregate %q is not supported; this compatibility slice accepts only argument-free count", functionToken.text),
+		)
+	}
+	p.advance()
+
+	aggregate := StatsAggregate{
+		Function:   AggregateFunctionCount,
+		Alias:      "count",
+		Range:      functionToken.sourceRange,
+		AliasRange: functionToken.sourceRange,
+	}
+	end := functionToken.sourceRange.End
+	if p.current().kind == tokenLeftParen {
+		return nil, p.unsupportedEventStatsSyntax(
+			p.current(),
+			"eventstats supports only argument-free count; count(), count(field), and count(eval(...)) are not supported",
+		)
+	}
+
+	if p.isKeyword("AS") {
+		p.advance()
+		alias := p.current()
+		if alias.kind != tokenWord || p.isKeyword("BY") {
+			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected an eventstats output field name after AS")
+		}
+		if strings.Contains(alias.text, "*") {
+			return nil, p.unsupportedEventStatsSyntax(alias, "wildcard eventstats output fields are not supported")
+		}
+		aggregate.Alias = alias.text
+		aggregate.ExplicitAlias = true
+		aggregate.AliasRange = alias.sourceRange
+		aggregate.Range.End = alias.sourceRange.End
+		end = alias.sourceRange.End
+		p.advance()
+	}
+
+	var groupBy []StatsGroupField
+	if p.isKeyword("BY") {
+		p.advance()
+		var err error
+		groupBy, end, err = p.parseBoundedAggregateGroupFields(
+			"eventstats",
+			"an",
+			true,
+			p.unsupportedEventStatsSyntax,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !p.atCommandEnd() {
+		return nil, p.unsupportedEventStatsSyntax(
+			p.current(),
+			fmt.Sprintf("unsupported eventstats syntax at %q; this compatibility slice accepts one argument-free count, optional AS, and optional BY", p.current().text),
+		)
+	}
+	return &EventStatsCommand{
+		Aggregate: aggregate,
+		GroupBy:   groupBy,
+		Range:     Range{Start: name.sourceRange.Start, End: end},
+	}, nil
+}
+
+func (p *parser) unsupportedEventStatsAggregate(tok token, message string) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+		Message:     message,
+		Range:       tok.sourceRange,
+		Suggestions: []string{"eventstats count", "eventstats count AS event_count BY group"},
+	}
+}
+
+func (p *parser) unsupportedEventStatsSyntax(tok token, message string) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
+		Message:     message,
+		Range:       tok.sourceRange,
+		Suggestions: []string{"eventstats count", "eventstats count AS event_count BY group"},
+	}
 }
 
 func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
@@ -1546,7 +1652,12 @@ func supportedStatsAggregateName(name string) bool {
 	return supported
 }
 
-func (p *parser) parseStatsGroupFields() ([]StatsGroupField, Position, error) {
+func (p *parser) parseBoundedAggregateGroupFields(
+	commandName string,
+	article string,
+	rejectWildcards bool,
+	unsupportedSyntax func(token, string) *Diagnostic,
+) ([]StatsGroupField, Position, error) {
 	fields := make([]StatsGroupField, 0, 4)
 	end := p.current().sourceRange.Start
 	wantField := true
@@ -1554,27 +1665,37 @@ func (p *parser) parseStatsGroupFields() ([]StatsGroupField, Position, error) {
 		tok := p.current()
 		if tok.kind == tokenComma {
 			if wantField {
-				return nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a stats grouping field")
+				return nil, end, p.errorAtCurrent(
+					"SPL_EXPECTED_FIELD",
+					fmt.Sprintf("expected %s %s grouping field", article, commandName),
+				)
 			}
 			wantField = true
 			p.advance()
 			continue
 		}
 		if tok.kind != tokenWord {
-			return nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a stats grouping field")
+			return nil, end, p.errorAtCurrent(
+				"SPL_EXPECTED_FIELD",
+				fmt.Sprintf("expected %s %s grouping field", article, commandName),
+			)
 		}
 		if strings.EqualFold(tok.text, "AS") {
-			return nil, end, &Diagnostic{
-				Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
-				Message:     "a stats aggregate alias must appear before the BY clause",
-				Range:       tok.sourceRange,
-				Suggestions: []string{"stats count AS total BY field"},
-			}
+			return nil, end, unsupportedSyntax(
+				tok,
+				fmt.Sprintf("%s %s aggregate alias must appear before the BY clause", article, commandName),
+			)
+		}
+		if rejectWildcards && strings.Contains(tok.text, "*") {
+			return nil, end, unsupportedSyntax(
+				tok,
+				fmt.Sprintf("wildcard %s grouping fields are not supported", commandName),
+			)
 		}
 		if len(fields) >= MaximumStatsGroupFields {
 			return nil, end, &Diagnostic{
 				Code:    "SPL_QUERY_TOO_COMPLEX",
-				Message: fmt.Sprintf("stats BY contains more than %d grouping fields", MaximumStatsGroupFields),
+				Message: fmt.Sprintf("%s BY contains more than %d grouping fields", commandName, MaximumStatsGroupFields),
 				Range:   tok.sourceRange,
 			}
 		}
@@ -1584,9 +1705,21 @@ func (p *parser) parseStatsGroupFields() ([]StatsGroupField, Position, error) {
 		p.advance()
 	}
 	if len(fields) == 0 || wantField {
-		return nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "stats BY requires at least one field")
+		return nil, end, p.errorAtCurrent(
+			"SPL_EXPECTED_FIELD",
+			fmt.Sprintf("%s BY requires at least one field", commandName),
+		)
 	}
 	return fields, end, nil
+}
+
+func (p *parser) unsupportedStatsGroupSyntax(tok token, message string) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
+		Message:     message,
+		Range:       tok.sourceRange,
+		Suggestions: []string{"stats count AS total BY field"},
+	}
 }
 
 func (p *parser) unsupportedStatsAggregate(tok token, message string) *Diagnostic {

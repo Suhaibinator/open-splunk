@@ -13,6 +13,7 @@ func TestClassifyResultShapeAppliesTransformationsInPipelineOrder(t *testing.T) 
 	}{
 		{name: "events", source: "index=main", wantKind: ResultKindEvents},
 		{name: "row preserving", source: `index=main | rex "(?<id>id=\w+)"`, wantKind: ResultKindEvents},
+		{name: "eventstats preserves events", source: "index=main | eventstats count BY level", wantKind: ResultKindEvents},
 		{name: "table", source: "index=main | table level count", wantKind: ResultKindStatistics},
 		{name: "stats", source: "index=main | stats count BY level", wantKind: ResultKindStatistics},
 		{name: "top", source: "index=main | top limit=20 message", wantKind: ResultKindStatistics},
@@ -43,6 +44,12 @@ func TestClassifyResultShapeAppliesTransformationsInPipelineOrder(t *testing.T) 
 		{
 			name:        "row preserving command retains timechart",
 			source:      "index=main | timechart span=5m count BY level | head 10",
+			wantKind:    ResultKindTimeSeries,
+			wantRuntime: true,
+		},
+		{
+			name:        "eventstats retains timechart shape",
+			source:      "index=main | timechart span=5m count BY level | eventstats count BY _time",
 			wantKind:    ResultKindTimeSeries,
 			wantRuntime: true,
 		},

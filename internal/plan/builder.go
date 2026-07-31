@@ -544,6 +544,92 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			result.Operators = append(result.Operators, &Deduplicate{Count: command.Count, Keys: keys, Range: command.Range})
 		case *spl.LimitCommand:
 			result.Operators = append(result.Operators, &Limit{Count: command.Count, FromEnd: command.Name() == "tail", Range: command.Range})
+		case *spl.EventStatsCommand:
+			if command == nil {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_QUERY",
+					Message: "eventstats command is nil",
+				}
+			}
+			if len(command.GroupBy) > spl.MaximumStatsGroupFields {
+				return nil, &Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"eventstats BY contains more than %d grouping fields",
+						spl.MaximumStatsGroupFields,
+					),
+					Range: command.Range,
+				}
+			}
+			aggregate := command.Aggregate
+			if aggregate.Function != spl.AggregateFunctionCount ||
+				aggregate.Input != "" ||
+				aggregate.InputRange != (spl.Range{}) ||
+				aggregate.Predicate != nil ||
+				aggregate.Percentile != 0 ||
+				aggregate.Alias == "" ||
+				(!aggregate.ExplicitAlias && aggregate.Alias != "count") {
+				return nil, &Diagnostic{
+					Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+					Message: "eventstats currently supports exactly one " +
+						"argument-free count measure",
+					Range: aggregate.Range,
+				}
+			}
+			if !outputSchemaKnown {
+				if aggregate.Alias == "fields" {
+					return nil, &Diagnostic{
+						Code: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
+						Message: "eventstats cannot replace the event result's " +
+							"reserved fields payload without an exact upstream schema",
+						Range: aggregate.AliasRange,
+					}
+				}
+				for _, group := range command.GroupBy {
+					if group.Name == "fields" {
+						return nil, &Diagnostic{
+							Code: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
+							Message: "eventstats cannot group by the event result's " +
+								"reserved fields payload without an exact upstream schema",
+							Range: group.Range,
+						}
+					}
+				}
+			}
+			if _, aliasErr := ResolveField(
+				aggregate.Alias,
+				aggregate.AliasRange,
+			); aliasErr != nil {
+				return nil, aliasErr
+			}
+			groupBy, groupErr := convertStatsGroupFields(
+				"eventstats",
+				command.GroupBy,
+			)
+			if groupErr != nil {
+				return nil, groupErr
+			}
+			result.Operators = append(
+				result.Operators,
+				&EventAggregate{
+					GroupBy: groupBy,
+					Measure: AggregateMeasure{
+						Function: AggregateFunctionCountRows,
+						Output:   aggregate.Alias,
+					},
+					Range: command.Range,
+				},
+			)
+			if outputSchemaKnown &&
+				!slices.Contains(result.OutputFields, aggregate.Alias) {
+				result.OutputFields = append(
+					result.OutputFields,
+					aggregate.Alias,
+				)
+			}
+			if aggregate.Alias == "_time" {
+				canonicalTimeAvailable = false
+			}
 		case *spl.StatsCommand:
 			if len(command.Aggregates) == 0 {
 				return nil, &Diagnostic{
@@ -586,7 +672,10 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 				}
 			}
-			groupBy, groupErr := convertStatsGroupFields(command.GroupBy)
+			groupBy, groupErr := convertStatsGroupFields(
+				"stats",
+				command.GroupBy,
+			)
 			if groupErr != nil {
 				return nil, groupErr
 			}
@@ -1240,15 +1329,22 @@ func convertRenameAssignments(command *spl.RenameCommand) ([]RenameAssignment, e
 	return result, nil
 }
 
-func convertStatsGroupFields(fields []spl.StatsGroupField) ([]FieldRef, error) {
+func convertStatsGroupFields(
+	commandName string,
+	fields []spl.StatsGroupField,
+) ([]FieldRef, error) {
 	result := make([]FieldRef, 0, len(fields))
 	seen := make(map[string]struct{}, len(fields))
 	for _, field := range fields {
 		if _, duplicate := seen[field.Name]; duplicate {
 			return nil, &Diagnostic{
-				Code:    "SPL_DUPLICATE_FIELD",
-				Message: fmt.Sprintf("stats grouping field %q is repeated", field.Name),
-				Range:   field.Range,
+				Code: "SPL_DUPLICATE_FIELD",
+				Message: fmt.Sprintf(
+					"%s grouping field %q is repeated",
+					commandName,
+					field.Name,
+				),
+				Range: field.Range,
 			}
 		}
 		seen[field.Name] = struct{}{}
@@ -1348,6 +1444,10 @@ func positiveIndexReferences(
 				if assignment.Source == "index" || assignment.Destination == "index" {
 					return references
 				}
+			}
+		case *spl.EventStatsCommand:
+			if command == nil || command.Aggregate.Alias == "index" {
+				return references
 			}
 		case *spl.StatsCommand, *spl.TopCommand, *spl.RareCommand, *spl.TimechartCommand, *spl.ChartCommand:
 			return references

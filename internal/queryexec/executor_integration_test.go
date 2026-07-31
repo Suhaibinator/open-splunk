@@ -1967,6 +1967,7 @@ ORDER BY grid.number`,
 		for _, marker := range []string{
 			clickhouse.RexCaptureLimitMarker,
 			clickhouse.SpathInputLimitMarker,
+			clickhouse.EventStatsInputLimitMarker,
 			clickhouse.UnsupportedStatsDistinctLimitMarker,
 			clickhouse.StatsValuesBytesLimitMarker,
 			clickhouse.StatsValuesLimitMarker,

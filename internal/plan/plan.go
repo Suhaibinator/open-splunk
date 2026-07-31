@@ -246,6 +246,21 @@ func (*Aggregate) operator()                 {}
 func (*Aggregate) LogicalName() string       { return "Aggregate" }
 func (op *Aggregate) SourceRange() spl.Range { return op.Range }
 
+// EventAggregate adds one aggregate value to every input row. GroupBy
+// partitions the input when non-empty, while Measure names the single
+// row-count output supported by the initial eventstats compatibility slice.
+// Unlike Aggregate, it preserves row cardinality, event identity, established
+// ordering, and every other visible field.
+type EventAggregate struct {
+	GroupBy []FieldRef
+	Measure AggregateMeasure
+	Range   spl.Range
+}
+
+func (*EventAggregate) operator()                 {}
+func (*EventAggregate) LogicalName() string       { return "EventAggregate" }
+func (op *EventAggregate) SourceRange() spl.Range { return op.Range }
+
 // Timechart transforms rows into a runtime-wide count series over fixed,
 // epoch-aligned UTC buckets. FirstBucket and BucketCount describe the complete
 // fixed range, including partial boundary buckets and continuous gaps.

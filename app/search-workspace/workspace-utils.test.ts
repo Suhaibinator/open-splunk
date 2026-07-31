@@ -286,6 +286,18 @@ test("stats completion advertises true-only conditional count with an explicit a
   assert.match(statsCompletion.detail, /true-only count\(eval\(predicate\)\) AS output/);
 });
 
+test("eventstats completion advertises the bounded row-count surface", () => {
+  const eventstatsCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eventstats");
+  assert.ok(eventstatsCompletion);
+  assert.equal(eventstatsCompletion.insertion, "eventstats count AS event_count BY level");
+  assert.match(eventstatsCompletion.detail, /argument-free count/i);
+  assert.match(eventstatsCompletion.detail, /preserv/i);
+
+  const commandToken = classifiedTokens("index=main | eventstats count")
+    .find((token) => token.text.toLowerCase() === "eventstats");
+  assert.deepEqual(commandToken, { className: "spl-command", text: "eventstats" });
+});
+
 test("where completion advertises direct bounded match and like predicates", () => {
   const whereCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "where");
   assert.ok(whereCompletion);

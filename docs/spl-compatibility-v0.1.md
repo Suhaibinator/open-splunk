@@ -2130,6 +2130,65 @@ Downstream `search`, `where`, `eval`, `fields`, `table`, `sort`, `head`, `tail`,
 and another supported transforming command operate on the statistical schema,
 never on hidden event columns.
 
+### `eventstats`
+
+Version 0.1 supports one deliberately bounded row-preserving aggregate:
+
+```spl
+eventstats count
+eventstats count AS total
+eventstats count BY host
+eventstats count AS peers BY host source
+```
+
+Exactly one argument-free `count` is accepted. Its default output field is
+`count`; `AS` may provide one exact field name, and `BY` may contain from one
+through 16 distinct exact fields. Command and keyword spelling is
+case-insensitive, while field names remain case-sensitive. Parenthesized
+`count()`, `count(field)`, `count(eval(...))`, every non-count function,
+multiple measures, quoted or wildcard field names, and command options fail
+with source-located unsupported-syntax or unsupported-aggregate diagnostics.
+
+Unlike `stats`, `eventstats` does not collapse or generate rows. A global count
+is added to every row in the complete upstream relation; grouped counts are
+added to every row with the corresponding complete grouping tuple. Empty input
+stays empty. Sorting, filtering, projection, `head`/`tail`, and `dedup` before
+the command determine what it counts, while the same commands after it consume
+the already-computed value. All original fields, deterministic ordering
+identity, and the current result kind are preserved: event input remains
+events, and rows produced by an earlier transforming command remain
+statistics. Result-shape classification also preserves an existing time-series
+kind, but the currently supported `timechart` and `chart` lowerings are
+terminal and therefore cannot precede `eventstats`.
+
+A missing or explicit-null `BY` field makes only that row ineligible for a
+group. The row remains in the result, but the eventstats output is logically
+absent and physically nullable. Complete Dynamic scalar keys reuse the exact
+`stats BY` lexical normalization, so the integer `500` and string `"500"`
+share a group. Fixed multivalues are rejected during compilation. A runtime
+Dynamic list, object, flattened object parent, or nested container poisons the
+complete scoped command atomically, even if another key is missing or a later
+filter, limit, or projection would hide that row.
+
+The output replaces an existing field of the same name rather than creating a
+duplicate. As with `eval`, replacing a dynamic-schema name closes the public
+raw `fields` convenience payload so an immutable member cannot contradict the
+calculated value. The literal output name `fields` is rejected while the event
+schema is open, but is ordinary replaceable data after `table` or another
+transforming command closes the schema. Replacing `_time` preserves rows but
+makes timeline analysis ineligible; replacing `index` creates ordinary
+pipeline data and never changes the authorization-constrained physical scan.
+
+One eventstats stage accepts at most 10,000 upstream rows. The compiler
+materializes at most 10,001 rows once, uses the additional row only as an
+overflow sentinel, and fails the whole search with an execution-limit error
+above the boundary instead of annotating a prefix. Global count uses one
+constant-size aggregate. Grouped count uses one bounded `GROUP BY` over the
+materialized relation and one left join back to those same rows; it performs no
+per-group query, row expansion, `groupArray`, or Go-side buffering. The
+executor's memory, read, query-size, relational-depth, result, and
+`max_rows_to_group_by` ceilings remain authoritative.
+
 ### `top`
 
 ```spl
@@ -2641,7 +2700,7 @@ the differential that every published row's cells sum to the count
 The following planned commands are not implemented in this version:
 
 ```text
-eventstats, streamstats
+streamstats
 ```
 
 The supported `stats` functions are argument-free `count`, exact-field
@@ -2670,6 +2729,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [`stats`](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/stats),
 [`stats` with eval expressions](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.2/calculate-statistics/use-stats-with-eval-expressions-and-functions),
 [`stats` multivalue aggregation](https://help.splunk.com/en/splunk-cloud-platform/search/spl2-search-reference/stats-command/stats-command-overview-syntax-and-usage),
+[`eventstats`](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.4/search-commands/eventstats),
 [`min` and `max` aggregate functions](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/statistical-and-charting-functions/aggregate-functions),
 [`earliest` and `latest` time functions](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/statistical-and-charting-functions/time-functions),
 [`first` and `last` event-order functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/statistical-and-charting-functions/event-order-functions),

@@ -150,6 +150,24 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 			}
 		}
 		return nil
+	case *EventAggregate:
+		if !validEventAggregateContract(operator) {
+			return errors.New(
+				"analyze logical query: event aggregate is invalid",
+			)
+		}
+		if err := analyzer.validateOutputName(
+			operator.Measure.Output,
+			depth+1,
+		); err != nil {
+			return err
+		}
+		for _, field := range operator.GroupBy {
+			if err := analyzer.addField(field, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
 	case *Aggregate:
 		if err := analyzer.addFields(operator.GroupBy, depth+1); err != nil {
 			return err
