@@ -1817,6 +1817,10 @@ func TestAppAdministrationFeaturesTypedNilAndCursorKeyConfiguration(
 func TestAppAdministrationCancellationAndCommittedSuccess(t *testing.T) {
 	t.Parallel()
 
+	createContext, cancelCreate := context.WithCancel(context.Background())
+	t.Cleanup(cancelCreate)
+	getContext, cancelGet := context.WithCancel(context.Background())
+	t.Cleanup(cancelGet)
 	validDefinition := AppAdministrationDefinition{
 		Slug:        "committed",
 		DisplayName: "Committed",
@@ -1827,6 +1831,7 @@ func TestAppAdministrationCancellationAndCommittedSuccess(t *testing.T) {
 			_ AppAdministrationScope,
 			_ AppAdministrationDefinition,
 		) (AppAdministrationWorkspace, error) {
+			cancelCreate()
 			<-ctx.Done()
 			return appAdministrationFixture(
 				"app_0123456789ABCDEFGHIJKL",
@@ -1840,6 +1845,7 @@ func TestAppAdministrationCancellationAndCommittedSuccess(t *testing.T) {
 			_ AppAdministrationScope,
 			_ AppAdministrationSelector,
 		) (AppAdministrationWorkspace, error) {
+			cancelGet()
 			<-ctx.Done()
 			return AppAdministrationWorkspace{}, ctx.Err()
 		},
@@ -1855,10 +1861,11 @@ func TestAppAdministrationCancellationAndCommittedSuccess(t *testing.T) {
 				auth.BrowserRoleAdministrator,
 			),
 		},
-		time.Millisecond,
+		5*time.Second,
 	)
-	committed := postAppAdministrationProto(
+	committed := postAppAdministrationProtoContext(
 		t,
+		createContext,
 		handler,
 		"/api/v1/apps/create",
 		&opensplunkv1.CreateAppRequest{
@@ -1875,8 +1882,9 @@ func TestAppAdministrationCancellationAndCommittedSuccess(t *testing.T) {
 			committed.Body,
 		)
 	}
-	canceledRead := postAppAdministrationProto(
+	canceledRead := postAppAdministrationProtoContext(
 		t,
+		getContext,
 		handler,
 		"/api/v1/apps/get",
 		&opensplunkv1.GetAppRequest{
@@ -1897,6 +1905,9 @@ func TestAppAdministrationCancellationAndCommittedSuccess(t *testing.T) {
 			canceledRead.Code,
 			canceledRead.Body,
 		)
+	}
+	if calls := service.calls(); calls != [6]int{1, 1, 0, 0, 0, 0} {
+		t.Fatalf("cancellation service calls = %v", calls)
 	}
 }
 
@@ -2219,12 +2230,29 @@ func postAppAdministrationProto(
 	message proto.Message,
 ) *httptest.ResponseRecorder {
 	t.Helper()
+	return postAppAdministrationProtoContext(
+		t,
+		context.Background(),
+		handler,
+		path,
+		message,
+	)
+}
+
+func postAppAdministrationProtoContext(
+	t *testing.T,
+	ctx context.Context,
+	handler http.Handler,
+	path string,
+	message proto.Message,
+) *httptest.ResponseRecorder {
+	t.Helper()
 	payload, err := proto.Marshal(message)
 	if err != nil {
 		t.Fatalf("marshal app request: %v", err)
 	}
 	request := httptest.NewRequestWithContext(
-		context.Background(),
+		ctx,
 		http.MethodPost,
 		path,
 		bytes.NewReader(payload),
