@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/Suhaibinator/open-splunk/migrations"
 	"gorm.io/gorm"
@@ -471,6 +472,120 @@ func TestApplyMigrationsIsVersionedAndDetectsDrift(t *testing.T) {
 	if !errors.Is(err, ErrMigrationDrift) {
 		t.Fatalf("ApplyMigrations(gapped history) error = %v, want ErrMigrationDrift", err)
 	}
+}
+
+func TestApplyMigrationsRetriesBusyStartupLock(t *testing.T) {
+	t.Parallel()
+
+	migrationFS := fstest.MapFS{
+		"0001_first.sql": &fstest.MapFile{
+			Data: []byte(`CREATE TABLE example (value TEXT NOT NULL) STRICT;`),
+		},
+	}
+
+	t.Run("released", func(t *testing.T) {
+		waiter, lock := openLockedMigrationDatabases(t)
+		released := make(chan error, 1)
+		go func() {
+			timer := time.NewTimer(50 * time.Millisecond)
+			defer timer.Stop()
+			<-timer.C
+			_, err := lock.ExecContext(context.Background(), `ROLLBACK`)
+			released <- err
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		migrationErr := ApplyMigrations(ctx, waiter, migrationFS)
+		if releaseErr := <-released; releaseErr != nil {
+			t.Fatalf("release migration lock: %v", releaseErr)
+		}
+		if migrationErr != nil {
+			t.Fatalf("ApplyMigrations() with released lock: %v", migrationErr)
+		}
+
+		var count int
+		if err := waiter.QueryRowContext(
+			ctx,
+			`SELECT count(*) FROM schema_migrations`,
+		).Scan(&count); err != nil {
+			t.Fatalf("count migrations: %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("migration count = %d, want 1", count)
+		}
+	})
+
+	t.Run("canceled", func(t *testing.T) {
+		waiter, lock := openLockedMigrationDatabases(t)
+		defer func() {
+			if _, err := lock.ExecContext(context.Background(), `ROLLBACK`); err != nil {
+				t.Errorf("release migration lock: %v", err)
+			}
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		err := ApplyMigrations(ctx, waiter, migrationFS)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf(
+				"ApplyMigrations() with canceled lock wait error = %v, want context deadline",
+				err,
+			)
+		}
+	})
+}
+
+func TestRetrySQLiteBusySuccessfulOperationWinsCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	err := retrySQLiteBusy(ctx, time.Second, func() error {
+		cancel()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("retrySQLiteBusy() successful operation error = %v", err)
+	}
+}
+
+func openLockedMigrationDatabases(t *testing.T) (*sql.DB, *sql.Conn) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "locked-migrations.sqlite")
+	dsn := path + "?_pragma=busy_timeout(1)&_txlock=immediate"
+	holder, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open migration lock holder: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := holder.Close(); err != nil {
+			t.Errorf("close migration lock holder: %v", err)
+		}
+	})
+	waiter, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open waiting migration database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := waiter.Close(); err != nil {
+			t.Errorf("close waiting migration database: %v", err)
+		}
+	})
+
+	lock, err := holder.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("acquire migration lock connection: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := lock.Close(); err != nil {
+			t.Errorf("close migration lock connection: %v", err)
+		}
+	})
+	if _, err := lock.ExecContext(context.Background(), `BEGIN IMMEDIATE`); err != nil {
+		t.Fatalf("hold migration write lock: %v", err)
+	}
+	return waiter, lock
 }
 
 func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {

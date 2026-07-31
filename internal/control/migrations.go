@@ -12,7 +12,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
+
+const migrationLockRetryWindow = 30 * time.Second
 
 var migrationFilename = regexp.MustCompile(`^([0-9]{4})_([a-z0-9][a-z0-9_]*)\.sql$`)
 
@@ -45,7 +48,10 @@ func ApplyMigrations(ctx context.Context, db *sql.DB, migrations fs.FS) (err err
 			err = errors.Join(err, fmt.Errorf("close SQLite migration connection: %w", closeErr))
 		}
 	}()
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+	if err := retrySQLiteBusy(ctx, migrationLockRetryWindow, func() error {
+		_, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`)
+		return err
+	}); err != nil {
 		return fmt.Errorf("begin SQLite migrations: %w", err)
 	}
 	committed := false
@@ -67,12 +73,13 @@ func ApplyMigrations(ctx context.Context, db *sql.DB, migrations fs.FS) (err err
 		return fmt.Errorf("create SQLite migration ledger: %w", err)
 	}
 
-	if err := verifyMigrationHistory(ctx, conn, loaded); err != nil {
+	appliedCount, err := verifyMigrationHistory(ctx, conn, loaded)
+	if err != nil {
 		return err
 	}
 
-	for _, next := range loaded {
-		if err := applyMigration(ctx, conn, next); err != nil {
+	for _, next := range loaded[appliedCount:] {
+		if err := applyPendingMigration(ctx, conn, next); err != nil {
 			return err
 		}
 	}
@@ -87,10 +94,14 @@ type migrationQuerier interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
-func verifyMigrationHistory(ctx context.Context, db migrationQuerier, loaded []migration) error {
+func verifyMigrationHistory(
+	ctx context.Context,
+	db migrationQuerier,
+	loaded []migration,
+) (int, error) {
 	rows, err := db.QueryContext(ctx, `SELECT version, name, checksum FROM schema_migrations ORDER BY version`)
 	if err != nil {
-		return fmt.Errorf("read SQLite migration history: %w", err)
+		return 0, fmt.Errorf("read SQLite migration history: %w", err)
 	}
 	defer rows.Close()
 
@@ -100,50 +111,39 @@ func verifyMigrationHistory(ctx context.Context, db migrationQuerier, loaded []m
 		var name string
 		var checksum []byte
 		if err := rows.Scan(&version, &name, &checksum); err != nil {
-			return fmt.Errorf("scan SQLite migration history: %w", err)
+			return 0, fmt.Errorf("scan SQLite migration history: %w", err)
 		}
 		if version > len(loaded) {
-			return fmt.Errorf("%w: database version %d, latest embedded version %d", ErrDatabaseTooNew, version, loaded[len(loaded)-1].version)
+			return 0, fmt.Errorf("%w: database version %d, latest embedded version %d", ErrDatabaseTooNew, version, loaded[len(loaded)-1].version)
 		}
 		if version != expectedVersion {
-			return fmt.Errorf("%w: migration history skips version %04d", ErrMigrationDrift, expectedVersion)
+			return 0, fmt.Errorf("%w: migration history skips version %04d", ErrMigrationDrift, expectedVersion)
 		}
 		embedded := loaded[version-1]
 		if name != embedded.name || !bytes.Equal(checksum, embedded.checksum[:]) {
-			return fmt.Errorf("%w: version %04d", ErrMigrationDrift, version)
+			return 0, fmt.Errorf("%w: version %04d", ErrMigrationDrift, version)
 		}
 		expectedVersion++
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate SQLite migration history: %w", err)
+		return 0, fmt.Errorf("iterate SQLite migration history: %w", err)
 	}
-	return nil
+	return expectedVersion - 1, nil
 }
 
-func applyMigration(ctx context.Context, conn *sql.Conn, next migration) error {
-	var appliedName string
-	var appliedChecksum []byte
-	queryErr := conn.QueryRowContext(ctx, `
-		SELECT name, checksum
-		FROM schema_migrations
-		WHERE version = ?`, next.version).Scan(&appliedName, &appliedChecksum)
-	switch {
-	case queryErr == nil:
-		if appliedName != next.name || !bytes.Equal(appliedChecksum, next.checksum[:]) {
-			return fmt.Errorf("%w: version %04d", ErrMigrationDrift, next.version)
-		}
-	case errors.Is(queryErr, sql.ErrNoRows):
-		if _, err := conn.ExecContext(ctx, string(next.contents)); err != nil {
-			return fmt.Errorf("apply SQLite migration %s: %w", next.name, err)
-		}
-		if _, err := conn.ExecContext(ctx, `
-			INSERT INTO schema_migrations (version, name, checksum, applied_at_unix_micro)
-			VALUES (?, ?, ?, CAST(unixepoch('subsec') * 1000000 AS INTEGER))`,
-			next.version, next.name, next.checksum[:]); err != nil {
-			return fmt.Errorf("record SQLite migration %s: %w", next.name, err)
-		}
-	default:
-		return fmt.Errorf("inspect SQLite migration %s: %w", next.name, queryErr)
+func applyPendingMigration(
+	ctx context.Context,
+	conn *sql.Conn,
+	next migration,
+) error {
+	if _, err := conn.ExecContext(ctx, string(next.contents)); err != nil {
+		return fmt.Errorf("apply SQLite migration %s: %w", next.name, err)
+	}
+	if _, err := conn.ExecContext(ctx, `
+		INSERT INTO schema_migrations (version, name, checksum, applied_at_unix_micro)
+		VALUES (?, ?, ?, CAST(unixepoch('subsec') * 1000000 AS INTEGER))`,
+		next.version, next.name, next.checksum[:]); err != nil {
+		return fmt.Errorf("record SQLite migration %s: %w", next.name, err)
 	}
 
 	return nil

@@ -135,22 +135,46 @@ func secureSQLiteFiles(path string, create bool) error {
 }
 
 func enableWAL(ctx context.Context, db *sql.DB) error {
-	deadline := time.Now().Add(defaultBusyTimeout)
+	var journalMode string
+	err := retrySQLiteBusy(ctx, defaultBusyTimeout, func() error {
+		journalMode = ""
+		return db.QueryRowContext(ctx, `PRAGMA journal_mode = WAL`).Scan(&journalMode)
+	})
+	if err != nil {
+		return fmt.Errorf("enable SQLite WAL: %w", err)
+	}
+	if !strings.EqualFold(journalMode, "wal") {
+		return fmt.Errorf("enable SQLite WAL: database selected %q journal mode", journalMode)
+	}
+	return nil
+}
+
+func retrySQLiteBusy(
+	ctx context.Context,
+	retryWindow time.Duration,
+	operation func() error,
+) error {
+	// The window bounds when another attempt may begin. The operation itself
+	// remains bounded by its context and any driver-level busy timeout.
+	deadline := time.Now().Add(retryWindow)
 	delay := 2 * time.Millisecond
 	for {
-		var journalMode string
-		err := db.QueryRowContext(ctx, `PRAGMA journal_mode = WAL`).Scan(&journalMode)
+		err := operation()
 		if err == nil {
-			if !strings.EqualFold(journalMode, "wal") {
-				return fmt.Errorf("enable SQLite WAL: database selected %q journal mode", journalMode)
-			}
 			return nil
 		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if !sqliteBusyOrLocked(err) || !time.Now().Before(deadline) {
-			return fmt.Errorf("enable SQLite WAL: %w", err)
+			return err
 		}
 
-		timer := time.NewTimer(delay)
+		wait := min(delay, time.Until(deadline))
+		if wait <= 0 {
+			return err
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			if !timer.Stop() {
@@ -159,12 +183,10 @@ func enableWAL(ctx context.Context, db *sql.DB) error {
 				default:
 				}
 			}
-			return fmt.Errorf("enable SQLite WAL: %w", ctx.Err())
+			return ctx.Err()
 		case <-timer.C:
 		}
-		if delay < 100*time.Millisecond {
-			delay *= 2
-		}
+		delay = min(delay*2, 100*time.Millisecond)
 	}
 }
 
