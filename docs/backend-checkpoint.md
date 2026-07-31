@@ -17,6 +17,8 @@ Committed implementation checkpoint:
   production four-service Compose deployment, crash-safe bootstrap and secret
   rotation, exact ClickHouse physical-schema validation, storage-aware
   readiness, and release-level Docker acceptance.
+- `bf8da4e` — Linux Docker Hub publication lookup compatibility after the first
+  pushed release job exposed older-daemon familiar-name filter behavior.
 
 This test-first deployment unit completes the Open Splunk repository side of
 the first-release container foundation:
@@ -41,7 +43,11 @@ the first-release container foundation:
    cross-built ARM64 executables and validates their ELF64 little-endian
    machine identifiers. Its second identity/layer comparison sets
    `OPEN_SPLUNK_OCI_NO_CACHE=1`, so it is an independent cold rebuild rather
-   than a BuildKit cache replay; the launcher rejects every other value.
+   than a BuildKit cache replay; the launcher rejects every other value. Image
+   locks, tags, rollback, and removal retain canonical Docker Hub references,
+   while read-only `image ls` lookup uses the familiar form required by older
+   Linux daemons. Library and namespaced Hub regressions pin that compatibility
+   boundary.
 4. Production Compose now contains ClickHouse, the exact server-image one-shot
    migrator, the network-disabled administrator bootstrap, and the long-lived
    server. It deliberately does not start a collector. Release services use
@@ -79,9 +85,11 @@ the first-release container foundation:
 9. CI backend-vertical coverage now includes the live adversarial physical
    schema/principal lifecycle from `./internal/server`. The selected test
    proves missing, mutated, and extra-table rejection against the exact pinned
-   ClickHouse release. The prior lint and backend-vertical failures from run
-   `30610447133` were already repaired on `main`; baseline run `30659304955`
-   is green, and the exact expanded command passes locally.
+   ClickHouse release. Run `30673046110` passed lint, race/atomic coverage,
+   backend vertical, frontend, protobuf, GradeThis, and vulnerability jobs. Its
+   release job built both images, then exposed an older-daemon Docker Hub
+   filter false negative before Compose startup. Repair `bf8da4e` translates
+   only the lookup copy and its clean-HEAD release contract passes locally.
 10. A race-only one-second SQLite test deadline was widened to exceed the
     driver's five-second busy timeout. The contract remains strict: a retry
     that incorrectly reserves the already-held writer still fails at the
@@ -102,7 +110,7 @@ the first-release container foundation:
     that external-repository change until explicitly instructed. Additional
     SPL remains a later explicitly selected semantic unit.
 
-Validation on implementation commit `aa1f9fe`:
+Validation on implementation commits `aa1f9fe` and `bf8da4e`:
 
 ```sh
 go mod tidy -diff
@@ -140,7 +148,7 @@ OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:
 
 All ordinary Go tests, the exact CI race/atomic-coverage command, tidy, vet,
 build, protobuf generation, cached v2.12.2 full-tree lint, TypeScript checks,
-all 62 release/materializer tests, all 137 frontend runtime tests, and the
+all 63 release/materializer tests, all 137 frontend runtime tests, and the
 production UI build passed. Lint reported `0 issues`. The exact expanded
 backend-vertical command and clean-HEAD release OCI/Compose contract passed
 against the digest-pinned ClickHouse image. Final Docker inventory contained
