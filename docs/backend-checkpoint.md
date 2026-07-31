@@ -7,7 +7,156 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: authenticated ClickHouse TLS
+## Latest checkpoint: hardened OCI full-stack deployment
+
+Date: 2026-07-31
+
+Committed implementation checkpoint:
+
+- `aa1f9fe` — exact-snapshot non-root server/collector OCI images, the
+  production four-service Compose deployment, crash-safe bootstrap and secret
+  rotation, exact ClickHouse physical-schema validation, storage-aware
+  readiness, and release-level Docker acceptance.
+
+This test-first deployment unit completes the Open Splunk repository side of
+the first-release container foundation:
+
+1. `make oci` accepts a clean committed `HEAD` only. It bootstraps the
+   committed launcher and materializer by Git object ID, reconstructs a
+   disposable allowlisted source tree from raw committed blobs, and builds
+   both targets from that tree under a scrubbed build environment. Version,
+   full revision, platform, and image references are bounded and validated
+   before Docker runs. The digest-pinned Node and Go builders produce fixed
+   `scratch` runtimes whose only process identity is UID/GID `65532:65532`.
+2. Publication of the server and collector tags is one transaction. Sorted,
+   daemon-global named-container locks coordinate independent clones targeting
+   the same normalized Docker references. Exact owner, reference, and
+   container IDs are revalidated throughout publication. A second-tag failure,
+   post-publication verification failure, or deferred signal restores both
+   prior references and removes temporary state; interrupted lock creation is
+   reconciled for a bounded interval before cleanup.
+3. The release image contract pins Linux OS/architecture, fixed non-root user,
+   entrypoint, empty command, immutable build labels, absence of ambient
+   secrets, and the expected server/collector binaries. CI extracts both
+   cross-built ARM64 executables and validates their ELF64 little-endian
+   machine identifiers. Its second identity/layer comparison sets
+   `OPEN_SPLUNK_OCI_NO_CACHE=1`, so it is an independent cold rebuild rather
+   than a BuildKit cache replay; the launcher rejects every other value.
+4. Production Compose now contains ClickHouse, the exact server-image one-shot
+   migrator, the network-disabled administrator bootstrap, and the long-lived
+   server. It deliberately does not start a collector. Release services use
+   prebuilt images with `pull_policy: never`; ClickHouse has no host-published
+   port, the default user is removed, runtime processes are non-root, and
+   ClickHouse data plus server state use independent named volumes.
+5. Four ClickHouse identities retain separate bootstrap, migration, runtime,
+   and deletion authority. Passwords are supplied by environment or stable
+   bounded files and never placed in client arguments. The bootstrap writes
+   only the principal/grant boundary, then a networkless one-shot service
+   creates the administrator token and SQLite control plane without any
+   ClickHouse or external network access.
+6. `migrate-clickhouse` is the only release migration path. It opens a
+   short-lived verified-TLS migration connection, applies the embedded
+   migration ledger, checks the exact release version and grants, and then
+   validates the complete canonical definitions of both `events` and
+   `schema_migrations`. Missing, altered, or unexpected tables and any column,
+   default, codec, index, constraint, engine, key, TTL, or setting drift fail
+   closed before the service can become ready. The long-running server opens
+   runtime/deletion connections only and never receives migration authority.
+7. `/healthz` remains process liveness. `/readyz` performs a one-second
+   storage probe through the already validated runtime ClickHouse connection,
+   returns a fixed no-store `503` without leaking backend details, and is the
+   image/Compose health boundary. Release acceptance proves readiness changes
+   `200 -> 503 -> 200` during a real ClickHouse stop/start while liveness stays
+   `200`.
+8. `TestReleaseOCIComposeContract` now invokes production `make oci`, so a
+   dirty mutable checkout cannot be certified as its labeled revision. From
+   clean implementation commit `aa1f9fe` it built both Linux/ARM64 images,
+   started the canonical stack, checked hardening, TLS, principals, migration,
+   bootstrap isolation, HTTPS/gRPC behavior, embedded identity, readiness
+   outage/recovery, durable state, credential rotation with old-secret
+   rejection, and exact cleanup of test images, containers, networks, and
+   volumes.
+9. CI backend-vertical coverage now includes the live adversarial physical
+   schema/principal lifecycle from `./internal/server`. The selected test
+   proves missing, mutated, and extra-table rejection against the exact pinned
+   ClickHouse release. The prior lint and backend-vertical failures from run
+   `30610447133` were already repaired on `main`; baseline run `30659304955`
+   is green, and the exact expanded command passes locally.
+10. A race-only one-second SQLite test deadline was widened to exceed the
+    driver's five-second busy timeout. The contract remains strict: a retry
+    that incorrectly reserves the already-held writer still fails at the
+    shorter driver timeout, while the intended read-only completion path no
+    longer flakes under full atomic-coverage scheduling.
+11. Simplification review kept one schema validator, one stable file reader,
+    one release migration entrypoint, and one readiness connection instead of
+    parallel deployment-only implementations. Three independent final
+    security, Compose/ClickHouse, and CI/reliability reviews found no remaining
+    P0-P2 issue in frozen staged diff
+    `3d9328a2ecee988b92a58914567dcf89e7d716535d8ccee772032aec4abdb5b2`.
+12. GORM remains limited to SQLite/control-plane code. ClickHouse connections,
+    migrations, physical schema validation, ingestion, querying, statistics,
+    and deletion continue to use the native ClickHouse driver and SQL.
+13. The architecture plan is not complete. The next deployment unit is the
+    separate GradeThis Compose cutover from OTel filelog/direct ClickHouse to
+    Open Splunk Collector -> Open Splunk server -> ClickHouse. Do not start
+    that external-repository change until explicitly instructed. Additional
+    SPL remains a later explicitly selected semantic unit.
+
+Validation on implementation commit `aa1f9fe`:
+
+```sh
+go mod tidy -diff
+go test ./... -count=1
+go test -race -shuffle=1785539065997569000 ./... -count=1
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/private/tmp/open-splunk-oci-final-coverage.out ./...
+go vet ./...
+go build ./...
+make proto
+
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+node --test scripts/build-oci.test.mjs
+
+GOLANGCI_LINT_CACHE=/private/tmp/open-splunk-golangci-cache-oci-frozen \
+  /Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run ./...
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./cmd/open-splunk-server ./internal/clickhouse \
+  ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse \
+  -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexStatisticsReaderAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=25m -p=1 -v
+
+OPEN_SPLUNK_OCI_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./integration -run '^TestReleaseOCIComposeContract$' \
+  -count=1 -timeout=20m -v
+```
+
+All ordinary Go tests, the exact CI race/atomic-coverage command, tidy, vet,
+build, protobuf generation, cached v2.12.2 full-tree lint, TypeScript checks,
+all 62 release/materializer tests, all 137 frontend runtime tests, and the
+production UI build passed. Lint reported `0 issues`. The exact expanded
+backend-vertical command and clean-HEAD release OCI/Compose contract passed
+against the digest-pinned ClickHouse image. Final Docker inventory contained
+no test-owned container, volume, or network.
+
+Explicit pause point:
+
+1. The Open Splunk repository's release OCI/full-stack deployment foundation
+   is committed and locally proven from exact `HEAD`.
+2. CI must pass on the pushed implementation and handoff commits.
+3. The next unit is the external GradeThis collector cutover; do not begin it
+   in this unit.
+4. Push this handoff, verify CI, then pause until the user gives further
+   instructions.
+
+## Previous checkpoint: authenticated ClickHouse TLS
 
 Date: 2026-07-31
 
