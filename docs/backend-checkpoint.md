@@ -7,7 +7,149 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded revision-stable index catalog
+## Latest checkpoint: bounded row-preserving eventstats count
+
+Date: 2026-07-30
+
+Committed and pushed implementation checkpoint:
+
+- `490451b` — exact argument-free `eventstats count`, optional `AS` and exact
+  `BY`, row-preserving logical planning, bounded materialized ClickHouse
+  aggregation, atomic runtime guards, and adversarial unit/live integration
+  coverage.
+
+This test-first unit adds the first deliberately narrow `eventstats`
+compatibility slice:
+
+1. The accepted grammar is exactly one argument-free `count`, an optional
+   exact `AS` alias, and an optional `BY` tuple of one through sixteen exact
+   fields. `count()`, field and eval arguments, other functions, multiple
+   measures, options, quoted fields, wildcard fields, and aliases after `BY`
+   fail at their source ranges with bounded command-specific diagnostics and
+   suggestions.
+2. A dedicated `EventAggregate` logical operator makes the row-preserving
+   contract explicit. It preserves input cardinality, source-event identity,
+   established order, every other visible field, the current result kind, and
+   the existing index authorization scope. It participates fail-closed in
+   dependency analysis, field-analysis eligibility, timeline eligibility,
+   inspection projection, and defensive result validation.
+3. Global `count` is attached to every upstream row. Grouped count is attached
+   only to rows with a complete non-null `BY` tuple; rows with a missing or
+   explicit-null key remain in the result with a logically absent/nullable
+   aggregate. Dynamic scalar groups reuse stats' lexical normalization, so
+   integer `500` and string `"500"` converge on the same key.
+4. A runtime list, object, or flattened object parent in any scoped Dynamic
+   grouping field poisons the whole command before output, including when
+   another key is missing or a downstream predicate would otherwise hide the
+   row. Fixed multivalue groups are rejected at compilation. These boundaries
+   prevent containers from being silently stringified into misleading groups.
+5. An alias replaces an existing field in place. Replacing `_time` correctly
+   invalidates timeline eligibility, while replacing `index` remains
+   calculated pipeline data and cannot alter the physical authorization
+   selector. The reserved open-event `fields` payload cannot be read or
+   replaced until an upstream table or transforming command establishes an
+   exact closed schema.
+6. Each eventstats stage accepts at most 10,000 input rows. Its scoped input is
+   materialized once with a 10,001-row sentinel, and the guarded aggregate
+   fails the whole query before any result row when the boundary is exceeded.
+   The executor classifies the private marker as `ErrExecutionLimit` without
+   leaking it to the user.
+7. Global lowering reads the bounded materialized relation for its rows and
+   total. Grouped lowering adds one unique-key aggregate and a left join back
+   to those rows. It performs no per-group query, row expansion, `groupArray`,
+   Go-side buffering, or unbounded window state; existing read, time, memory,
+   query-depth, subquery, result, and group-cardinality limits remain active.
+8. Stats and eventstats now share one parameterized exact-`BY` parser and one
+   ClickHouse scalar-group descriptor for resolution, presence, lexical keys,
+   descendant-aware validation, and bind ordering. Command-specific syntax
+   and multivalue diagnostics remain exact, preventing future stats fixes from
+   drifting away from eventstats.
+9. Composition is live-proven in both directions: stats followed by
+   eventstats, eventstats followed by stats, and grouped eventstats followed by
+   a second global eventstats. Downstream `head` cannot change the upstream
+   total, upstream `head` does, empty input produces no rows, aliases replace
+   prior values, and `where isnull(...)` observes missing/null group outputs.
+10. Parser, source-range, suggestion, result-shape, plan, analysis, timeline,
+    inspection, compiler SQL/bind-order, forged-plan, fixed-multivalue,
+    executor-marker, and frontend completion tests cover the entire bounded
+    surface. Forged wrong-function, duplicate-group, malformed-field,
+    invalid-output, empty-metadata, and typed-nil operators fail closed in
+    every metadata consumer and at the compiler boundary.
+11. The pinned ClickHouse fixture stores 10,001 real events in a dedicated
+    `eventstats-boundary` index. Compiler-produced queries prove the exact
+    10,000-row success boundary, visible and downstream-pruned 10,001-row
+    atomic failure, consecutive materialized CTE stages, sparse group
+    presence, numeric/string convergence, tenant scoping, and whole-query
+    container poisoning. The dedicated index and collector keep this large
+    adversarial fixture out of unrelated compiler scans.
+12. Independent correctness, efficiency/boundedness, and reuse/test-quality
+    reviews first found a misleading duplicate-field message, duplicated
+    parser/lowering logic, incomplete forged-validator coverage, missing
+    compiler-produced boundary coverage, and boundary-fixture scan overhead.
+    All were fixed. The final frozen-diff reviews reported no remaining
+    production, correctness, reuse, test-quality, allocation, bind-order,
+    query-plan, or fixture-isolation finding.
+13. Persistence ownership remains unchanged. GORM is used only for the SQLite
+    control plane; ClickHouse event ingestion, search compilation/execution,
+    statistics, field discovery, and physical deletion remain native.
+14. The architecture plan remains unfinished. The actual GradeThis Compose
+    cutover is still the highest first-release deployment milestone and
+    belongs in its own GradeThis worktree/branch. No next implementation unit
+    is selected here; this checkpoint intentionally pauses for user direction.
+
+Validation on implementation commit `490451b`:
+
+```sh
+go mod tidy -diff
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go vet ./...
+go build ./...
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+make proto
+make proto-lint
+BUF_CACHE_DIR="$PWD/.cache/buf" npx --no-install buf breaking \
+  --against '.git#branch=main'
+
+# Executed with this already-cached binary reporting exactly v2.12.2.
+EVENTSTATS_LINTER=/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint
+"$EVENTSTATS_LINTER" run ./...
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=10m -v
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./integration -run '^TestBackendVertical$' \
+  -count=1 -timeout=10m -v
+
+git show --check --oneline 490451b
+```
+
+The full repository unit and race suites, tidy verification, vet/build, exact
+cached v2.12.2 linter, TypeScript typecheck/lint, all 47 release/build
+transaction tests, all 137 frontend runtime tests, production UI build, and
+protobuf generation/lint/breaking checks passed; Go lint reported `0 issues`.
+The final digest-pinned Store/compiler integration passed in 64.10 seconds,
+the digest-pinned backend vertical passed in 24.19 seconds, and Docker
+inspection found no remaining test-owned container or volume.
+
+Explicit pause point:
+
+1. Bounded row-preserving `eventstats count` is committed, pushed, and
+   digest-pinned live-proven.
+2. Its runtime boundary is atomic and its global/grouped semantics compose
+   with existing event and stats pipelines.
+3. GORM remains control-plane-only; ClickHouse remains native-only.
+4. Commit and push this handoff, then pause until the user gives further
+   instructions.
+
+## Previous checkpoint: bounded revision-stable index catalog
 
 Date: 2026-07-30
 
