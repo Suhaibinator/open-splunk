@@ -7,7 +7,140 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: native HTTPS browser/API listener
+## Latest checkpoint: authenticated ClickHouse TLS
+
+Date: 2026-07-31
+
+Committed implementation checkpoint:
+
+- `772837b` — verified server-to-ClickHouse TLS, secure Compose health,
+  generated CA/server identity, production-client live coverage, full-tree Go
+  lint, and restored fixed-timechart ClickHouse CI coverage.
+
+This test-first deployment-foundation unit removes the remaining normal
+container-network transport blocker without weakening the existing local
+plaintext boundary:
+
+1. `open-splunk-server` accepts `-clickhouse-ca-cert` and
+   `-clickhouse-server-name` only with `-clickhouse-secure`. Secure mode
+   requires both values. The CA input is a regular file capped at 1 MiB and is
+   parsed as certificate-only PEM with no trailing data. Server names are
+   bounded ASCII DNS names or IP addresses; ports, wildcards, controls,
+   whitespace, empty labels, and malformed names fail closed.
+2. The loader returns an unexported verified TLS profile rather than accepting
+   caller-built `tls.Config` values. The profile is the only path that can mint
+   ClickHouse client configurations, so custom clocks, entropy, callbacks,
+   client certificates, session state, key logging, mutable policy slices, and
+   skip-verification cannot enter the application path. Every migrator,
+   runtime, deletion, and isolated EXPLAIN lane receives independently owned
+   roots and a TLS 1.2 minimum with ordinary Go chain and hostname/SAN
+   verification.
+3. Normal startup loads trust and builds all three principal options before
+   the administrator token, server lock, SQLite, collector recovery, or either
+   ClickHouse persistence connection opens. Malformed trust therefore creates
+   no control database, key, WAL, or export directory. Embedded-release
+   verification remains independent of mounted runtime secrets. The migration
+   password is still removed from the process environment after options capture
+   and cleared with the short-lived migration options after schema startup.
+4. The checked-in digest-pinned Compose stack enables secure native port 9440,
+   mounts the server certificate/key and explicit CA read-only, and gives the
+   container healthcheck a strict client configuration. Health executes an
+   authenticated `SELECT 1` over 9440 with the configured explicit SNI name and
+   runtime principal; `up --wait` cannot succeed merely because plaintext 9000
+   is alive. Host publication remains loopback-only. Plaintext 9000 remains
+   only for container-local bootstrap and explicit loopback diagnostics; the
+   application must use 9440.
+5. `deploy/generate-env.sh` creates four independent 256-bit credentials, a
+   P-256 path-length-zero local CA, and a CA-signed P-256 server certificate
+   with `clickhouse`, `localhost`, IPv4 loopback, and IPv6 loopback SANs. The
+   one-use CA signing key and request/config intermediates are destroyed. The
+   owner-only identity directory is atomically reserved, `.env` publication is
+   no-overwrite, concurrent generators cannot replace each other, paths with
+   spaces are safely quoted for POSIX sourcing and Compose, and
+   shell-significant output paths are rejected.
+6. `TestClickHouseTLSServicePrincipalStartupLifecycle` starts only the
+   canonical digest-pinned ClickHouse image with secure native publication. It
+   live-proves the production trust loader and option builder, startup
+   migrations, migration-credential disposal, runtime and deletion privilege
+   validation, a runtime query, a deletion operation, and the separate custom
+   EXPLAIN TLS dialer. Wrong hostname, wrong CA, and plaintext-to-9440 attempts
+   fail.
+7. `TestDeploymentComposePersistentCredentialRotation` now uses the actual
+   CA-signed identity and credentials emitted by `generate-env.sh`. It proves
+   strict health, verified TLS state, TLS 1.0/1.1 rejection, wrong-name,
+   wrong-root, and plaintext rejection; validates every principal and schema;
+   preserves the named data volume across container replacement; rotates all
+   credentials; rejects every old credential; and revalidates the recovered
+   stack. Opted-in Docker/Compose tests fail rather than silently skip when a
+   prerequisite is missing.
+8. CI Go lint now enforces the complete tree with golangci-lint v2.12.2 instead
+   of a historical `--new-from-rev` baseline. The backend-vertical job now
+   selects the production TLS lifecycle and the previously omitted
+   `TestExecutorAndManagerAgainstClickHouse`, including fixed unsplit
+   `timechart count`, empty-input schema, and pre-storage-floor bucket cases.
+9. Simplification reviewers removed duplicated fixture argument construction,
+   consolidated generator test helpers, closed the TLS-policy abstraction,
+   bounded non-regular CA inputs, and removed a redundant post-rotation
+   negative handshake suite. Independent final security,
+   deployment/lifecycle, and CI/coverage reviewers reported no remaining
+   P0-P2 findings in the frozen implementation diff.
+10. GORM ownership is unchanged: SQLite/control-plane only. ClickHouse schema,
+    event persistence, transport, migration, query, statistics, inspection,
+    and deletion remain native ClickHouse paths.
+11. The architecture plan remains unfinished. The next deployment unit is the
+    non-root release OCI image and full-stack Compose wiring, followed by the
+    actual GradeThis collector cutover with no OpenTelemetry component in the
+    log path. Additional SPL such as unsplit percentile timecharts remains a
+    later semantic expansion, not the next release blocker.
+
+Validation on implementation commit `772837b`:
+
+```sh
+go mod tidy -diff
+go test ./... -count=1
+go test -race -shuffle=on \
+  ./cmd/open-splunk-server ./internal/testsupport \
+  ./migrations/clickhouse -count=1
+go vet ./...
+go build ./...
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+make proto
+
+GOLANGCI_LINT_CACHE=/private/tmp/open-splunk-golangci-cache \
+  /Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run ./...
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+  go test ./cmd/open-splunk-server ./internal/clickhouse \
+  ./internal/queryexec ./integration ./migrations/clickhouse \
+  -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|IndexStatisticsReaderAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=25m -p=1 -v
+```
+
+The complete Go unit suite, focused race/shuffle suite, tidy verification,
+vet/build, cached v2.12.2 full-tree lint, TypeScript typecheck/lint, all 47
+release/materializer tests, all 137 frontend runtime tests, production UI
+build, and protobuf format/lint/generation checks passed. Go lint reported
+`0 issues`. The exact serial backend-vertical command passed every selected
+package and live contract. Docker inspection found no remaining test-owned
+container or volume.
+
+Explicit pause point:
+
+1. Authenticated ClickHouse TLS is committed and live-proven through every
+   production principal plus isolated EXPLAIN.
+2. Compose readiness now proves the generated identity and secure native query
+   path; transport failures cannot hide behind plaintext health.
+3. The next unit is non-root release OCI/full-stack Compose, not optional SPL.
+4. Commit and push this handoff, verify CI, then pause until the user gives
+   further instructions.
+
+## Previous checkpoint: native HTTPS browser/API listener
 
 Date: 2026-07-30
 
