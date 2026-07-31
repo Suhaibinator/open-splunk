@@ -168,7 +168,7 @@ func TestBrowserFixedResultRendering(t *testing.T) {
 
 	handler, err := server.NewHandler(server.Config{
 		SearchJobs:      manager,
-		Indexes:         controlDB,
+		Indexes:         browserSearchOnlyCatalog(controlDB),
 		SavedSearches:   savedSearches,
 		WebUI:           os.DirFS(filepath.Join(stagedBackendRepository, "out")),
 		OwnerID:         "browser-rendering-owner",

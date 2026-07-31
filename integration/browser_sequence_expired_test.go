@@ -423,7 +423,7 @@ func runBrowserRecoveryFixture(
 	handler, err := server.NewHandler(server.Config{
 		SearchJobs:      manager,
 		SearchWebSocket: searchSocket,
-		Indexes:         controlDB,
+		Indexes:         browserSearchOnlyCatalog(controlDB),
 		SavedSearches:   savedSearches,
 		WebUI:           os.DirFS(filepath.Join(stagedBackendRepository, "out")),
 		OwnerID:         browserSequenceExpiredOwner,

@@ -197,7 +197,7 @@ func validateAdministratorTokenFile(info os.FileInfo, effectiveUID int) error {
 	if effectiveUID < 0 || int64(stat.Uid) != int64(effectiveUID) {
 		return errors.New("administrator token file must be owned by the server user")
 	}
-	if uint64(stat.Nlink) != 1 {
+	if stat.Nlink != 1 {
 		return errors.New("administrator token file must have exactly one hard link")
 	}
 	return nil

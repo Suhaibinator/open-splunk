@@ -1377,8 +1377,10 @@ func backendIndexDeletionWaitForMutation(
 				wantMatching,
 				wantPending,
 			)
-			if err == nil &&
-				(matching > wantMatching || pending > wantPending) {
+			// A submitted asynchronous mutation remains pending while it
+			// converges to a zero-pending target. Only another matching row
+			// proves that the coordinator submitted a duplicate mutation.
+			if err == nil && matching > wantMatching {
 				t.Fatalf(
 					"correlated deletion mutations = %s",
 					diagnostic,
