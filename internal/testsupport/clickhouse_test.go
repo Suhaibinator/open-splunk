@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -200,6 +201,41 @@ func TestSecureServicePrincipalDockerArgumentsExposeOnlyTLSNativePort(t *testing
 		if !strings.Contains(secureClickHouseTLSConfig, required) {
 			t.Errorf("secure ClickHouse TLS config missing %q", required)
 		}
+	}
+}
+
+func TestPrepareSecureClickHouseIdentityFilesAreReadableAfterPrivilegeDrop(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix permission bits")
+	}
+
+	directory := filepath.Join(t.TempDir(), "tls")
+	identity, err := WriteServerTLSIdentity(directory, secureClickHouseTLSServerName)
+	if err != nil {
+		t.Fatalf("WriteServerTLSIdentity(): %v", err)
+	}
+	if err := prepareSecureClickHouseIdentityFiles(identity); err != nil {
+		t.Fatalf("prepareSecureClickHouseIdentityFiles(): %v", err)
+	}
+	for name, path := range map[string]string{
+		"certificate": identity.CertificateFile,
+		"private key": identity.PrivateKeyFile,
+	} {
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			t.Fatalf("stat TLS %s: %v", name, statErr)
+		}
+		if got := info.Mode().Perm(); got != 0o644 {
+			t.Fatalf("TLS %s mode = %#o, want 0644", name, got)
+		}
+	}
+	directoryInfo, err := os.Stat(directory)
+	if err != nil {
+		t.Fatalf("stat TLS directory: %v", err)
+	}
+	if got := directoryInfo.Mode().Perm(); got != 0o700 {
+		t.Fatalf("TLS directory mode = %#o, want 0700", got)
 	}
 }
 

@@ -258,12 +258,10 @@ func startClickHouseWithServicePrincipals(
 				err,
 			)
 		}
-		// #nosec G302 -- this short-lived test key remains below an owner-only
-		// directory but must be readable after ClickHouse drops privileges.
-		if err := os.Chmod(tlsIdentity.PrivateKeyFile, 0o644); err != nil {
+		if err := prepareSecureClickHouseIdentityFiles(tlsIdentity); err != nil {
 			_ = os.RemoveAll(configDirectory)
 			return nil, fmt.Errorf(
-				"start secure ClickHouse service-principal test container: prepare TLS key: %w",
+				"start secure ClickHouse service-principal test container: prepare TLS identity: %w",
 				err,
 			)
 		}
@@ -366,6 +364,30 @@ func startClickHouseWithServicePrincipals(
 	}
 	cleanup = false
 	return container, nil
+}
+
+func prepareSecureClickHouseIdentityFiles(identity *ServerTLSIdentity) error {
+	if identity == nil {
+		return errors.New("secure ClickHouse TLS identity is required")
+	}
+	for _, file := range []struct {
+		name string
+		path string
+	}{
+		{name: "certificate", path: identity.CertificateFile},
+		{name: "private key", path: identity.PrivateKeyFile},
+	} {
+		if strings.TrimSpace(file.path) == "" {
+			return fmt.Errorf("secure ClickHouse TLS %s file is required", file.name)
+		}
+		// #nosec G302 -- both short-lived fixture files remain below an
+		// owner-only directory but must be readable after ClickHouse drops from
+		// the rootful Linux entrypoint user to its unprivileged service user.
+		if err := os.Chmod(file.path, 0o644); err != nil {
+			return fmt.Errorf("make secure ClickHouse TLS %s container-readable: %w", file.name, err)
+		}
+	}
+	return nil
 }
 
 func servicePrincipalDockerArguments(
@@ -629,11 +651,31 @@ func secureClickHouseReadinessOptions(
 }
 
 func (container *ClickHouseContainer) secureReadinessDiagnostics(ctx context.Context) string {
-	output, err := docker(ctx, "logs", "--tail", "80", container.Name)
-	if err != nil && len(output) == 0 {
-		return fmt.Sprintf("; docker logs unavailable: %v", err)
+	var sections []string
+	dockerOutput, dockerErr := docker(ctx, "logs", "--tail", "80", container.Name)
+	if len(dockerOutput) > 0 {
+		sections = append(sections, "docker logs:\n"+string(dockerOutput))
+	} else if dockerErr != nil {
+		sections = append(sections, fmt.Sprintf("docker logs unavailable: %v", dockerErr))
 	}
-	value := string(output)
+	serverOutput, serverErr := docker(
+		ctx,
+		"exec",
+		container.Name,
+		"tail",
+		"-n",
+		"80",
+		"/var/log/clickhouse-server/clickhouse-server.err.log",
+	)
+	if len(serverOutput) > 0 {
+		sections = append(sections, "server error log:\n"+string(serverOutput))
+	} else if serverErr != nil {
+		sections = append(sections, fmt.Sprintf("server error log unavailable: %v", serverErr))
+	}
+	if len(sections) == 0 {
+		sections = append(sections, "no ClickHouse startup diagnostics were emitted")
+	}
+	value := strings.Join(sections, "\n")
 	for _, secret := range []string{
 		container.bootstrapPassword,
 		container.MigrationPassword,
@@ -644,7 +686,7 @@ func (container *ClickHouseContainer) secureReadinessDiagnostics(ctx context.Con
 			value = strings.ReplaceAll(value, secret, "[REDACTED]")
 		}
 	}
-	return "; ClickHouse logs: " + boundedOutput([]byte(value))
+	return "; ClickHouse diagnostics: " + boundedOutput([]byte(value))
 }
 
 func servicePrincipalProvisioningSQL(
