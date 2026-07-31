@@ -162,6 +162,14 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 		); err != nil {
 			return err
 		}
+		if operator.Measure.Function == AggregateFunctionCountValues {
+			if err := analyzer.addField(
+				operator.Measure.Input,
+				depth+1,
+			); err != nil {
+				return err
+			}
+		}
 		for _, field := range operator.GroupBy {
 			if err := analyzer.addField(field, depth+1); err != nil {
 				return err

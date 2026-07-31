@@ -47,22 +47,45 @@ func testEventStatsAgainstClickHouse(
 			"eventstats-fixture",
 			typedField("eventstats_group", typedString("500")),
 			typedField("eventstats_existing", typedString("shadowed")),
+			typedField("eventstats_value", typedString("scalar")),
+			typedField(
+				"eventstats_letters",
+				typedList(typedString("ALPHA"), typedString("BETA")),
+			),
 		),
 		newEvent(
 			"eventstats-2",
 			"eventstats-fixture",
 			typedField("eventstats_group", typedSint(500)),
+			typedField(
+				"eventstats_value",
+				typedList(
+					typedString("immediate"),
+					typedNull(),
+					typedObject(typedField("child", typedString("container"))),
+				),
+			),
+			typedField("eventstats_letters", typedList()),
 		),
 		newEvent(
 			"eventstats-3",
 			"eventstats-fixture",
 			typedField("eventstats_group", typedBool(true)),
+			typedField(
+				"eventstats_value",
+				typedObject(typedField("child", typedString("flattened"))),
+			),
 		),
-		newEvent("eventstats-4", "eventstats-fixture"),
+		newEvent(
+			"eventstats-4",
+			"eventstats-fixture",
+			typedField("eventstats_value", typedList()),
+		),
 		newEvent(
 			"eventstats-5",
 			"eventstats-fixture",
 			typedField("eventstats_group", typedNull()),
+			typedField("eventstats_value", typedNull()),
 		),
 		newEvent(
 			"eventstats-poison",
@@ -175,41 +198,102 @@ func testEventStatsAgainstClickHouse(
 	}
 	base := `index=compiler source="eventstats-fixture"`
 
-	global := compile(base + ` | eventstats count AS total | sort event_id | table event_id total`)
-	globalRows, err := connection.Query(ctx, global.SQL, global.Args...)
-	if err != nil {
-		t.Fatalf("execute global eventstats: %v\nSQL: %s\nargs: %#v", err, global.SQL, global.Args)
-	}
-	var globalIDs []string
-	for globalRows.Next() {
-		var id string
-		var total uint64
-		if scanErr := globalRows.Scan(&id, &total); scanErr != nil {
-			_ = globalRows.Close()
-			t.Fatalf("scan global eventstats: %v", scanErr)
-		}
-		globalIDs = append(globalIDs, id)
-		if total != 5 {
-			_ = globalRows.Close()
-			t.Fatalf("global eventstats %s total = %d, want 5", id, total)
-		}
-	}
-	if rowsErr := globalRows.Err(); rowsErr != nil {
-		_ = globalRows.Close()
-		t.Fatalf("iterate global eventstats: %v", rowsErr)
-	}
-	if closeErr := globalRows.Close(); closeErr != nil {
-		t.Fatalf("close global eventstats rows: %v", closeErr)
-	}
-	if want := []string{
+	eventstatsIDs := []string{
 		"eventstats-1",
 		"eventstats-2",
 		"eventstats-3",
 		"eventstats-4",
 		"eventstats-5",
-	}; !reflect.DeepEqual(globalIDs, want) {
-		t.Fatalf("global eventstats IDs = %v, want %v", globalIDs, want)
 	}
+	assertIDTotals := func(
+		name string,
+		query CompiledQuery,
+		wantIDs []string,
+		wantTotal uint64,
+	) {
+		t.Helper()
+		rows, queryErr := connection.Query(ctx, query.SQL, query.Args...)
+		if queryErr != nil {
+			t.Fatalf(
+				"execute %s: %v\nSQL: %s\nargs: %#v",
+				name,
+				queryErr,
+				query.SQL,
+				query.Args,
+			)
+		}
+		types := rows.ColumnTypes()
+		if len(types) != 2 ||
+			types[0].DatabaseTypeName() != "String" ||
+			types[1].DatabaseTypeName() != "UInt64" {
+			typeNames := make([]string, len(types))
+			for index, columnType := range types {
+				typeNames[index] = columnType.DatabaseTypeName()
+			}
+			_ = rows.Close()
+			t.Fatalf("%s column types = %#v", name, typeNames)
+		}
+		var gotIDs []string
+		for rows.Next() {
+			var id string
+			var total uint64
+			if scanErr := rows.Scan(&id, &total); scanErr != nil {
+				_ = rows.Close()
+				t.Fatalf("scan %s: %v", name, scanErr)
+			}
+			gotIDs = append(gotIDs, id)
+			if total != wantTotal {
+				_ = rows.Close()
+				t.Fatalf(
+					"%s %s total = %d, want %d",
+					name,
+					id,
+					total,
+					wantTotal,
+				)
+			}
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			_ = rows.Close()
+			t.Fatalf("iterate %s: %v", name, rowsErr)
+		}
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Fatalf("close %s rows: %v", name, closeErr)
+		}
+		if !reflect.DeepEqual(gotIDs, wantIDs) {
+			t.Fatalf("%s IDs = %v, want %v", name, gotIDs, wantIDs)
+		}
+	}
+	assertIDTotals(
+		"global eventstats",
+		compile(base+` | eventstats count AS total | sort event_id | table event_id total`),
+		eventstatsIDs,
+		5,
+	)
+	assertIDTotals(
+		"global eventstats count(field)",
+		compile(
+			base+` | eventstats count(eventstats_value) AS occurrences | sort event_id | table event_id occurrences`,
+		),
+		eventstatsIDs,
+		4,
+	)
+	assertIDTotals(
+		"global eventstats count(nonempty calculated homogeneous array)",
+		compile(
+			base+` event_id="eventstats-1" | eval lowered=lower(eventstats_letters) | eventstats count(lowered) AS occurrences | table event_id occurrences`,
+		),
+		[]string{"eventstats-1"},
+		2,
+	)
+	assertIDTotals(
+		"global eventstats count(empty calculated homogeneous array)",
+		compile(
+			base+` event_id="eventstats-2" | eval lowered=lower(eventstats_letters) | eventstats count(lowered) AS occurrences | table event_id occurrences`,
+		),
+		[]string{"eventstats-2"},
+		0,
+	)
 
 	grouped := compile(
 		base + ` | eventstats count AS peers BY eventstats_group | eventstats count AS total | sort event_id | table event_id peers total`,
@@ -254,6 +338,108 @@ func testEventStatsAgainstClickHouse(
 	}
 	if !reflect.DeepEqual(groupedGot, groupedWant) {
 		t.Fatalf("grouped eventstats = %#v, want %#v", groupedGot, groupedWant)
+	}
+
+	type groupedValueResult struct {
+		id          string
+		occurrences *uint64
+	}
+	collectGroupedValues := func(
+		name string,
+		query CompiledQuery,
+	) []groupedValueResult {
+		t.Helper()
+		rows, queryErr := connection.Query(ctx, query.SQL, query.Args...)
+		if queryErr != nil {
+			t.Fatalf(
+				"execute %s: %v\nSQL: %s\nargs: %#v",
+				name,
+				queryErr,
+				query.SQL,
+				query.Args,
+			)
+		}
+		var got []groupedValueResult
+		for rows.Next() {
+			var row groupedValueResult
+			if scanErr := rows.Scan(&row.id, &row.occurrences); scanErr != nil {
+				_ = rows.Close()
+				t.Fatalf("scan %s: %v", name, scanErr)
+			}
+			got = append(got, row)
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			_ = rows.Close()
+			t.Fatalf("iterate %s: %v", name, rowsErr)
+		}
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Fatalf("close %s rows: %v", name, closeErr)
+		}
+		return got
+	}
+	groupThree := uint64(3)
+	groupedValueWant := []groupedValueResult{
+		{id: "eventstats-1", occurrences: &groupThree},
+		{id: "eventstats-2", occurrences: &groupThree},
+		{id: "eventstats-3", occurrences: &groupOne},
+		{id: "eventstats-4"},
+		{id: "eventstats-5"},
+	}
+	groupedValueGot := collectGroupedValues(
+		"grouped eventstats count(field)",
+		compile(
+			base+` | eventstats count(eventstats_value) AS occurrences BY eventstats_group | sort event_id | table event_id occurrences`,
+		),
+	)
+	if !reflect.DeepEqual(groupedValueGot, groupedValueWant) {
+		t.Fatalf(
+			"grouped eventstats count(field) = %#v, want %#v",
+			groupedValueGot,
+			groupedValueWant,
+		)
+	}
+
+	groupZero := uint64(0)
+	groupedZeroWant := []groupedValueResult{
+		{id: "eventstats-1", occurrences: &groupZero},
+		{id: "eventstats-2", occurrences: &groupZero},
+		{id: "eventstats-3", occurrences: &groupZero},
+		{id: "eventstats-4"},
+		{id: "eventstats-5"},
+	}
+	groupedZeroGot := collectGroupedValues(
+		"grouped zero eventstats count(field)",
+		compile(
+			base+` | eventstats count(eventstats_zero) AS occurrences BY eventstats_group | sort event_id | table event_id occurrences`,
+		),
+	)
+	if !reflect.DeepEqual(groupedZeroGot, groupedZeroWant) {
+		t.Fatalf(
+			"grouped zero eventstats count(field) = %#v, want %#v",
+			groupedZeroGot,
+			groupedZeroWant,
+		)
+	}
+
+	calculatedGroupedWant := []groupedValueResult{
+		{id: "eventstats-1", occurrences: &groupTwo},
+		{id: "eventstats-2", occurrences: &groupZero},
+		{id: "eventstats-3", occurrences: &groupZero},
+		{id: "eventstats-4", occurrences: &groupZero},
+		{id: "eventstats-5", occurrences: &groupZero},
+	}
+	calculatedGroupedGot := collectGroupedValues(
+		"grouped eventstats count(calculated homogeneous array)",
+		compile(
+			base+` | eval lowered=lower(eventstats_letters) | eventstats count(lowered) AS occurrences BY event_id | sort event_id | table event_id occurrences`,
+		),
+	)
+	if !reflect.DeepEqual(calculatedGroupedGot, calculatedGroupedWant) {
+		t.Fatalf(
+			"grouped calculated-array eventstats = %#v, want %#v",
+			calculatedGroupedGot,
+			calculatedGroupedWant,
+		)
 	}
 
 	assertTotals := func(
@@ -316,6 +502,22 @@ func testEventStatsAgainstClickHouse(
 		5,
 	)
 	assertTotals(
+		"count(field) projected input",
+		compile(
+			base+` | fields event_id | eventstats count(eventstats_value) AS total | head 1 | table total`,
+		),
+		1,
+		0,
+	)
+	assertTotals(
+		"count(field) alias replacement",
+		compile(
+			base+` | eventstats count(eventstats_value) AS eventstats_value | head 1 | table eventstats_value`,
+		),
+		1,
+		4,
+	)
+	assertTotals(
 		"generated exact row boundary",
 		compileBoundary(
 			`index=eventstats-boundary source="eventstats-boundary" host="in" | eventstats count AS total | head 1 | table total`,
@@ -323,10 +525,19 @@ func testEventStatsAgainstClickHouse(
 		1,
 		MaximumEventStatsInputRows,
 	)
+	assertTotals(
+		"count(field) generated exact row boundary",
+		compileBoundary(
+			`index=eventstats-boundary source="eventstats-boundary" host="in" | eventstats count(eventstats_missing) AS total | head 1 | table total`,
+		),
+		1,
+		0,
+	)
 
 	for name, source := range map[string]string{
 		"visible generated overflow":           `index=eventstats-boundary source="eventstats-boundary" | eventstats count AS total | table event_id total`,
 		"downstream-pruned generated overflow": `index=eventstats-boundary source="eventstats-boundary" | eventstats count AS total | search event_id="not-present" | table total`,
+		"zero-occurrence generated overflow":   `index=eventstats-boundary source="eventstats-boundary" | eventstats count(eventstats_missing) AS total | table total`,
 	} {
 		queryErr := executeCompiledExpectingNoRows(
 			ctx,
@@ -380,6 +591,29 @@ func testEventStatsAgainstClickHouse(
 			"stats after eventstats = total %d rows %d, want 5/5",
 			total,
 			rows,
+		)
+	}
+
+	postValues := compile(
+		base + ` | stats values(eventstats_group) AS groups | eventstats count(groups) AS occurrences | table occurrences`,
+	)
+	var fixedOccurrences uint64
+	if err := connection.QueryRow(
+		ctx,
+		postValues.SQL,
+		postValues.Args...,
+	).Scan(&fixedOccurrences); err != nil {
+		t.Fatalf(
+			"execute fixed multivalue eventstats count(field): %v\nSQL: %s\nargs: %#v",
+			err,
+			postValues.SQL,
+			postValues.Args,
+		)
+	}
+	if fixedOccurrences != 2 {
+		t.Fatalf(
+			"fixed multivalue eventstats count(field) = %d, want 2",
+			fixedOccurrences,
 		)
 	}
 

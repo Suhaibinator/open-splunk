@@ -52,6 +52,53 @@ func TestBuildEventStatsCountProducesRowPreservingAggregate(t *testing.T) {
 	}
 }
 
+func TestBuildEventStatsCountFieldProducesRowPreservingAggregate(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(
+			t,
+			`index=gradethis | eventstats count(status) AS populated BY host`,
+		),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	eventAggregate, ok :=
+		logical.Operators[len(logical.Operators)-1].(*EventAggregate)
+	if !ok {
+		t.Fatalf(
+			"last operator = %T, want *EventAggregate",
+			logical.Operators[len(logical.Operators)-1],
+		)
+	}
+	if eventAggregate.Measure.Function != AggregateFunctionCountValues ||
+		eventAggregate.Measure.Input.Name != "status" ||
+		eventAggregate.Measure.Input.Range == (spl.Range{}) ||
+		eventAggregate.Measure.Predicate != nil ||
+		eventAggregate.Measure.Percentile != 0 ||
+		eventAggregate.Measure.Output != "populated" ||
+		len(eventAggregate.GroupBy) != 1 ||
+		eventAggregate.GroupBy[0].Name != "host" {
+		t.Fatalf("event aggregate = %#v", eventAggregate)
+	}
+
+	analysis, err := Analyze(logical)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if !slices.Equal(
+		analysis.ReferencedFields,
+		[]string{"host", "index", "status"},
+	) {
+		t.Fatalf(
+			"referenced fields = %v, want [host index status]",
+			analysis.ReferencedFields,
+		)
+	}
+}
+
 func TestBuildEventStatsCountUpsertsKnownOutputSchema(t *testing.T) {
 	t.Parallel()
 
@@ -77,6 +124,18 @@ func TestBuildEventStatsCountUpsertsKnownOutputSchema(t *testing.T) {
 			source: `index=gradethis | stats count BY host` +
 				` | eventstats count AS groups`,
 			want: []string{"host", "count", "groups"},
+		},
+		{
+			name: "field count append",
+			source: `index=gradethis | table _time,host,status` +
+				` | eventstats count(status) AS populated BY host`,
+			want: []string{"_time", "host", "status", "populated"},
+		},
+		{
+			name: "field count replace in place",
+			source: `index=gradethis | table _time,populated,host,status` +
+				` | eventstats count(status) AS populated BY host`,
+			want: []string{"_time", "populated", "host", "status"},
 		},
 	}
 	for _, test := range tests {
@@ -108,6 +167,7 @@ func TestBuildEventStatsCountEnforcesReservedOpenSchemaBoundary(t *testing.T) {
 	for _, source := range []string{
 		`index=gradethis | eventstats count AS fields`,
 		`index=gradethis | eventstats count BY fields`,
+		`index=gradethis | eventstats count(fields) AS populated`,
 	} {
 		_, err := Build(
 			mustParse(t, source),
@@ -129,6 +189,27 @@ func TestBuildEventStatsCountEnforcesReservedOpenSchemaBoundary(t *testing.T) {
 	}
 	if !slices.Equal(logical.OutputFields, []string{"fields", "host"}) {
 		t.Fatalf("closed output fields = %v", logical.OutputFields)
+	}
+
+	logical, err = Build(
+		mustParse(
+			t,
+			`index=gradethis | table fields,host`+
+				` | eventstats count(fields) AS populated BY host`,
+		),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build closed-schema field count: %v", err)
+	}
+	if !slices.Equal(
+		logical.OutputFields,
+		[]string{"fields", "host", "populated"},
+	) {
+		t.Fatalf(
+			"closed field-count output fields = %v",
+			logical.OutputFields,
+		)
 	}
 }
 
@@ -205,11 +286,36 @@ func TestBuildEventStatsCountRejectsForgedMetadata(t *testing.T) {
 		aggregate spl.StatsAggregate
 	}{
 		{
-			name: "unsupported function",
+			name: "count field without source range or alias",
 			aggregate: spl.StatsAggregate{
 				Function: spl.AggregateFunctionCountValues,
 				Input:    "status",
 				Alias:    "count",
+			},
+		},
+		{
+			name: "count field without explicit alias",
+			aggregate: spl.StatsAggregate{
+				Function:   spl.AggregateFunctionCountValues,
+				Input:      "status",
+				InputRange: fieldRange,
+				Alias:      "populated",
+			},
+		},
+		{
+			name: "count field without input",
+			aggregate: spl.StatsAggregate{
+				Function:      spl.AggregateFunctionCountValues,
+				Alias:         "populated",
+				ExplicitAlias: true,
+			},
+		},
+		{
+			name: "unsupported function",
+			aggregate: spl.StatsAggregate{
+				Function:      spl.AggregateFunctionCountPredicate,
+				Alias:         "matches",
+				ExplicitAlias: true,
 			},
 		},
 		{
@@ -333,7 +439,7 @@ func TestBuildEventStatsCountRejectsForgedMetadata(t *testing.T) {
 	assertDiagnosticCode(t, err, "SPL_QUERY_TOO_COMPLEX")
 }
 
-func TestAnalyzeEventAggregateReadsOnlyGroupsAndValidatesContract(
+func TestAnalyzeEventAggregateReadsGroupsAndCountFieldAndValidatesContract(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -358,6 +464,28 @@ func TestAnalyzeEventAggregateReadsOnlyGroupsAndValidatesContract(
 		t.Fatalf("referenced fields = %v", analysis.ReferencedFields)
 	}
 
+	fieldOperator := &EventAggregate{
+		GroupBy: []FieldRef{host},
+		Measure: AggregateMeasure{
+			Function: AggregateFunctionCountValues,
+			Input:    status,
+			Output:   "populated",
+		},
+	}
+	analysis, err = Analyze(&Query{Operators: []Operator{fieldOperator}})
+	if err != nil {
+		t.Fatalf("Analyze count(field): %v", err)
+	}
+	if !slices.Equal(
+		analysis.ReferencedFields,
+		[]string{"host", "status"},
+	) {
+		t.Fatalf(
+			"count(field) referenced fields = %v",
+			analysis.ReferencedFields,
+		)
+	}
+
 	malformed := []struct {
 		name     string
 		operator *EventAggregate
@@ -376,6 +504,25 @@ func TestAnalyzeEventAggregateReadsOnlyGroupsAndValidatesContract(
 				Measure: AggregateMeasure{
 					Function: AggregateFunctionSum,
 					Output:   "events",
+				},
+			},
+		},
+		{
+			name: "count field missing input",
+			operator: &EventAggregate{
+				Measure: AggregateMeasure{
+					Function: AggregateFunctionCountValues,
+					Output:   "populated",
+				},
+			},
+		},
+		{
+			name: "count field malformed input",
+			operator: &EventAggregate{
+				Measure: AggregateMeasure{
+					Function: AggregateFunctionCountValues,
+					Input:    FieldRef{Name: "status"},
+					Output:   "populated",
 				},
 			},
 		},
@@ -496,6 +643,15 @@ func TestEventAggregateEligibilityRejectsForgedContracts(t *testing.T) {
 			},
 		},
 		{
+			name: "count field missing input",
+			operator: &EventAggregate{
+				Measure: AggregateMeasure{
+					Function: AggregateFunctionCountValues,
+					Output:   "events",
+				},
+			},
+		},
+		{
 			name: "duplicate group",
 			operator: &EventAggregate{
 				GroupBy: []FieldRef{host, host},
@@ -603,6 +759,23 @@ func TestEventAggregatePreservesEventAnalysisAndCanonicalTimeline(
 	}
 	if err := ValidateTimelineEligibility(logical); err != nil {
 		t.Fatalf("timeline eligibility: %v", err)
+	}
+
+	fieldCount, err := Build(
+		mustParse(
+			t,
+			`index=gradethis | eventstats count(status) AS populated BY host`,
+		),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build count(field): %v", err)
+	}
+	if err := ValidateFieldAnalysisEligibility(fieldCount); err != nil {
+		t.Fatalf("field analysis eligibility for count(field): %v", err)
+	}
+	if err := ValidateTimelineEligibility(fieldCount); err != nil {
+		t.Fatalf("timeline eligibility for count(field): %v", err)
 	}
 
 	overwritten, err := Build(

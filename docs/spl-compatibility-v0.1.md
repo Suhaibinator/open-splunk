@@ -2139,14 +2139,19 @@ eventstats count
 eventstats count AS total
 eventstats count BY host
 eventstats count AS peers BY host source
+eventstats count(status) AS populated
+eventstats count(status) AS populated BY host
 ```
 
-Exactly one argument-free `count` is accepted. Its default output field is
-`count`; `AS` may provide one exact field name, and `BY` may contain from one
-through 16 distinct exact fields. Command and keyword spelling is
-case-insensitive, while field names remain case-sensitive. Parenthesized
-`count()`, `count(field)`, `count(eval(...))`, every non-count function,
-multiple measures, quoted or wildcard field names, and command options fail
+Exactly one `count` is accepted. Argument-free row count uses the default
+output field `count` and may provide one exact output with `AS`. The
+field-occurrence form accepts exactly one unquoted exact field in
+`count(field)` and requires `AS` followed by one exact output field. `BY` may
+contain from one through 16 distinct exact fields. Command and keyword
+spelling is case-insensitive, while field names remain case-sensitive.
+Parenthesized `count()`, `count(eval(...))`, `c(field)`, wildcard or quoted
+input fields, empty or multiple inputs, every non-count function, multiple
+measures, quoted or wildcard output/grouping fields, and command options fail
 with source-located unsupported-syntax or unsupported-aggregate diagnostics.
 
 Unlike `stats`, `eventstats` does not collapse or generate rows. A global count
@@ -2161,6 +2166,16 @@ statistics. Result-shape classification also preserves an existing time-series
 kind, but the currently supported `timechart` and `chart` lowerings are
 terminal and therefore cannot precede `eventstats`.
 
+`eventstats count(field)` uses the same immediate-occurrence semantics as
+`stats count(field)`: missing values, explicit nulls, empty multivalues, and
+null multivalue members contribute zero; every other scalar contributes one;
+each immediate non-null top-level multivalue member contributes one, including
+duplicates; and typed containers contribute once without recursive traversal.
+The complete global or grouped total is a non-null `UInt64` on every row
+eligible for annotation, including zero when no row in that scope contributes
+an occurrence. Projected-away inputs remain missing rather than being
+recovered from hidden event columns.
+
 A missing or explicit-null `BY` field makes only that row ineligible for a
 group. The row remains in the result, but the eventstats output is logically
 absent and physically nullable. Complete Dynamic scalar keys reuse the exact
@@ -2174,7 +2189,8 @@ The output replaces an existing field of the same name rather than creating a
 duplicate. As with `eval`, replacing a dynamic-schema name closes the public
 raw `fields` convenience payload so an immutable member cannot contradict the
 calculated value. The literal output name `fields` is rejected while the event
-schema is open, but is ordinary replaceable data after `table` or another
+schema is open, and `count(fields)` cannot read that ambiguous payload while
+the schema is open. Both are ordinary data after `table` or another
 transforming command closes the schema. Replacing `_time` preserves rows but
 makes timeline analysis ineligible; replacing `index` creates ordinary
 pipeline data and never changes the authorization-constrained physical scan.

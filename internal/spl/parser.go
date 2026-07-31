@@ -1340,12 +1340,12 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 
 func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	if p.atCommandEnd() {
-		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "eventstats requires argument-free count")
+		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "eventstats requires count or count(field) AS output")
 	}
 
 	functionToken := p.current()
 	if functionToken.kind != tokenWord {
-		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "eventstats requires argument-free count")
+		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "eventstats requires count or count(field) AS output")
 	}
 	if !strings.EqualFold(functionToken.text, "count") {
 		if p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
@@ -1356,7 +1356,7 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		}
 		return nil, p.unsupportedEventStatsAggregate(
 			functionToken,
-			fmt.Sprintf("eventstats aggregate %q is not supported; this compatibility slice accepts only argument-free count", functionToken.text),
+			fmt.Sprintf("eventstats aggregate %q is not supported; this compatibility slice accepts count or count(field) AS output", functionToken.text),
 		)
 	}
 	p.advance()
@@ -1369,10 +1369,53 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	}
 	end := functionToken.sourceRange.End
 	if p.current().kind == tokenLeftParen {
-		return nil, p.unsupportedEventStatsSyntax(
-			p.current(),
-			"eventstats supports only argument-free count; count(), count(field), and count(eval(...)) are not supported",
-		)
+		openParen := p.current()
+		p.advance()
+		if p.current().kind == tokenRightParen {
+			return nil, p.unsupportedEventStatsSyntax(
+				openParen,
+				"eventstats count() is not supported; omit the parentheses for a row count",
+			)
+		}
+		if p.current().kind == tokenWord &&
+			strings.EqualFold(p.current().text, "eval") &&
+			p.index+1 < len(p.tokens) &&
+			p.tokens[p.index+1].kind == tokenLeftParen {
+			return nil, p.unsupportedEventStatsSyntax(
+				openParen,
+				"eventstats count(eval(...)) is not supported",
+			)
+		}
+		input := p.current()
+		if input.kind != tokenWord {
+			return nil, p.errorAtCurrent(
+				"SPL_EXPECTED_FIELD",
+				"eventstats count(field) requires one exact unquoted input field",
+			)
+		}
+		if strings.Contains(input.text, "*") {
+			return nil, p.unsupportedEventStatsSyntax(
+				input,
+				"wildcard eventstats count fields are not supported",
+			)
+		}
+		aggregate.Function = AggregateFunctionCountValues
+		aggregate.Input = input.text
+		aggregate.InputRange = input.sourceRange
+		p.advance()
+		if !p.match(tokenRightParen) {
+			return nil, p.errorAtCurrent(
+				"SPL_EXPECTED_RIGHT_PAREN",
+				"expected ')' after the eventstats count input field",
+			)
+		}
+		end = p.previous().sourceRange.End
+		aggregate.Range.End = end
+		aggregate.Alias = ""
+		aggregate.AliasRange = Range{
+			Start: functionToken.sourceRange.Start,
+			End:   end,
+		}
 	}
 
 	if p.isKeyword("AS") {
@@ -1390,6 +1433,17 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		aggregate.Range.End = alias.sourceRange.End
 		end = alias.sourceRange.End
 		p.advance()
+	}
+	if aggregate.Function == AggregateFunctionCountValues &&
+		!aggregate.ExplicitAlias {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
+			Message: "eventstats count(field) requires AS followed by an output field name",
+			Range:   aggregate.Range,
+			Suggestions: []string{
+				"eventstats count(field) AS occurrences",
+			},
+		}
 	}
 
 	var groupBy []StatsGroupField
@@ -1409,7 +1463,7 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	if !p.atCommandEnd() {
 		return nil, p.unsupportedEventStatsSyntax(
 			p.current(),
-			fmt.Sprintf("unsupported eventstats syntax at %q; this compatibility slice accepts one argument-free count, optional AS, and optional BY", p.current().text),
+			fmt.Sprintf("unsupported eventstats syntax at %q; this compatibility slice accepts one count, optional AS for row count, required AS for count(field), and optional BY", p.current().text),
 		)
 	}
 	return &EventStatsCommand{
@@ -1421,19 +1475,27 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 
 func (p *parser) unsupportedEventStatsAggregate(tok token, message string) *Diagnostic {
 	return &Diagnostic{
-		Code:        "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
-		Message:     message,
-		Range:       tok.sourceRange,
-		Suggestions: []string{"eventstats count", "eventstats count AS event_count BY group"},
+		Code:    "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+		Message: message,
+		Range:   tok.sourceRange,
+		Suggestions: []string{
+			"eventstats count",
+			"eventstats count AS event_count BY group",
+			"eventstats count(field) AS occurrences BY group",
+		},
 	}
 }
 
 func (p *parser) unsupportedEventStatsSyntax(tok token, message string) *Diagnostic {
 	return &Diagnostic{
-		Code:        "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
-		Message:     message,
-		Range:       tok.sourceRange,
-		Suggestions: []string{"eventstats count", "eventstats count AS event_count BY group"},
+		Code:    "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
+		Message: message,
+		Range:   tok.sourceRange,
+		Suggestions: []string{
+			"eventstats count",
+			"eventstats count AS event_count BY group",
+			"eventstats count(field) AS occurrences BY group",
+		},
 	}
 }
 

@@ -3395,16 +3395,21 @@ func testStatsAggregatesAgainstClickHouse(
 	if err != nil {
 		t.Fatalf("execute grouped count(field): %v\nSQL: %s\nargs: %#v", err, counted.SQL, counted.Args)
 	}
-	if types := countedRows.ColumnTypes(); len(types) != 7 ||
-		types[0].DatabaseTypeName() != "String" ||
-		types[1].DatabaseTypeName() != "UInt64" ||
-		types[2].DatabaseTypeName() != "UInt64" ||
-		types[3].DatabaseTypeName() != "UInt64" ||
-		types[4].DatabaseTypeName() != "UInt64" ||
-		types[5].DatabaseTypeName() != "UInt64" ||
-		types[6].DatabaseTypeName() != "UInt64" {
+	types := countedRows.ColumnTypes()
+	typeNames := make([]string, len(types))
+	for index, columnType := range types {
+		typeNames[index] = columnType.DatabaseTypeName()
+	}
+	if len(types) != 7 ||
+		typeNames[0] != "String" ||
+		typeNames[1] != "UInt64" ||
+		typeNames[2] != "UInt64" ||
+		typeNames[3] != "UInt64" ||
+		typeNames[4] != "UInt64" ||
+		typeNames[5] != "UInt64" ||
+		typeNames[6] != "UInt64" {
 		_ = countedRows.Close()
-		t.Fatalf("grouped count(field) column types = %#v", types)
+		t.Fatalf("grouped count(field) column types = %#v", typeNames)
 	}
 	type countValuesRow struct {
 		group                                                  string
@@ -3453,6 +3458,66 @@ func testStatsAggregatesAgainstClickHouse(
 	}
 	if copiedObjectOccurrences != 1 {
 		t.Fatalf("count(eval-copied flattened object) = %d, want 1", copiedObjectOccurrences)
+	}
+
+	calculatedArray := compile(
+		base + ` | eval lowered=lower(ordering_value) | stats count(lowered) AS occurrences`,
+	)
+	calculatedArrayRows, err := connection.Query(
+		ctx,
+		calculatedArray.SQL,
+		calculatedArray.Args...,
+	)
+	if err != nil {
+		t.Fatalf(
+			"execute count(calculated homogeneous array): %v\nSQL: %s\nargs: %#v",
+			err,
+			calculatedArray.SQL,
+			calculatedArray.Args,
+		)
+	}
+	calculatedArrayTypes := calculatedArrayRows.ColumnTypes()
+	calculatedArrayTypeNames := make([]string, len(calculatedArrayTypes))
+	for index, columnType := range calculatedArrayTypes {
+		calculatedArrayTypeNames[index] = columnType.DatabaseTypeName()
+	}
+	if len(calculatedArrayTypes) != 1 ||
+		calculatedArrayTypeNames[0] != "UInt64" {
+		_ = calculatedArrayRows.Close()
+		t.Fatalf(
+			"count(calculated homogeneous array) column types = %#v",
+			calculatedArrayTypeNames,
+		)
+	}
+	var calculatedArrayOccurrences uint64
+	if !calculatedArrayRows.Next() {
+		rowsErr := calculatedArrayRows.Err()
+		_ = calculatedArrayRows.Close()
+		t.Fatalf(
+			"count(calculated homogeneous array) returned no row: %v",
+			rowsErr,
+		)
+	}
+	if err := calculatedArrayRows.Scan(&calculatedArrayOccurrences); err != nil {
+		_ = calculatedArrayRows.Close()
+		t.Fatalf("scan count(calculated homogeneous array): %v", err)
+	}
+	if calculatedArrayRows.Next() {
+		_ = calculatedArrayRows.Close()
+		t.Fatal("count(calculated homogeneous array) returned multiple rows")
+	}
+	if err := calculatedArrayRows.Err(); err != nil {
+		_ = calculatedArrayRows.Close()
+		t.Fatalf("iterate count(calculated homogeneous array): %v", err)
+	}
+	if err := calculatedArrayRows.Close(); err != nil {
+		t.Fatalf("close count(calculated homogeneous array): %v", err)
+	}
+	if calculatedArrayOccurrences != 8 {
+		t.Fatalf(
+			"count(calculated homogeneous array) = %d, want 8",
+			calculatedArrayOccurrences,
+		)
 	}
 
 	scalarKinds := compile(base + ` | stats count(ignored_metric) AS scalar_occurrences count(decimal_metric) AS decimal_occurrences count(zero_metric) AS zero_occurrences count(false_metric) AS false_occurrences count(timestamp_metric) AS timestamp_occurrences count(duration_metric) AS duration_occurrences count(empty_list) AS empty_list_occurrences count(null_list) AS null_list_occurrences BY aggregate_group | sort aggregate_group`)

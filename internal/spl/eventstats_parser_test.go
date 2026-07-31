@@ -71,6 +71,69 @@ func TestParseEventStatsCount(t *testing.T) {
 	}
 }
 
+func TestParseEventStatsCountFieldRequiresExplicitAlias(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		input      string
+		alias      string
+		groupNames []string
+	}{
+		{
+			name:   "global",
+			source: `index=main | eventstats count(status) AS populated`,
+			input:  "status",
+			alias:  "populated",
+		},
+		{
+			name:       "grouped case insensitive function",
+			source:     "index=main\n| EvEnTsTaTs CoUnT(productId) AS products BY host, source",
+			input:      "productId",
+			alias:      "products",
+			groupNames: []string{"host", "source"},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command, ok := query.Commands[0].(*EventStatsCommand)
+			if !ok {
+				t.Fatalf("command = %T, want *EventStatsCommand", query.Commands[0])
+			}
+			if command.Aggregate.Function != AggregateFunctionCountValues ||
+				command.Aggregate.Input != test.input ||
+				command.Aggregate.InputRange == (Range{}) ||
+				command.Aggregate.Predicate != nil ||
+				command.Aggregate.Percentile != 0 ||
+				command.Aggregate.Alias != test.alias ||
+				!command.Aggregate.ExplicitAlias {
+				t.Fatalf(
+					"aggregate = %#v, want count(%s) AS %s",
+					command.Aggregate,
+					test.input,
+					test.alias,
+				)
+			}
+			if len(command.GroupBy) != len(test.groupNames) {
+				t.Fatalf("group fields = %#v, want %v", command.GroupBy, test.groupNames)
+			}
+			for index, want := range test.groupNames {
+				if command.GroupBy[index].Name != want {
+					t.Fatalf("group field %d = %q, want %q", index, command.GroupBy[index].Name, want)
+				}
+			}
+		})
+	}
+}
+
 func TestParseEventStatsCountPreservesSourceRanges(t *testing.T) {
 	t.Parallel()
 
@@ -87,6 +150,22 @@ func TestParseEventStatsCountPreservesSourceRanges(t *testing.T) {
 	assertSourceRangeText(t, source, command.GroupBy[1].Range, "source")
 }
 
+func TestParseEventStatsCountFieldPreservesSourceRanges(t *testing.T) {
+	t.Parallel()
+
+	source := "index=main\n| eventstats count(status) AS populated BY host"
+	query, err := Parse(source)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	command := query.Commands[0].(*EventStatsCommand)
+	assertSourceRangeText(t, source, command.Range, "eventstats count(status) AS populated BY host")
+	assertSourceRangeText(t, source, command.Aggregate.Range, "count(status) AS populated")
+	assertSourceRangeText(t, source, command.Aggregate.InputRange, "status")
+	assertSourceRangeText(t, source, command.Aggregate.AliasRange, "populated")
+	assertSourceRangeText(t, source, command.GroupBy[0].Range, "host")
+}
+
 func TestParseEventStatsRejectsUnsupportedSurfaceAtSource(t *testing.T) {
 	t.Parallel()
 
@@ -99,12 +178,6 @@ func TestParseEventStatsRejectsUnsupportedSurfaceAtSource(t *testing.T) {
 		{
 			name:      "empty call",
 			source:    `index=main | eventstats count()`,
-			code:      "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
-			rangeText: "(",
-		},
-		{
-			name:      "field count",
-			source:    `index=main | eventstats count(status)`,
 			code:      "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
 			rangeText: "(",
 		},
@@ -190,6 +263,97 @@ func TestParseEventStatsRejectsUnsupportedSurfaceAtSource(t *testing.T) {
 	}
 }
 
+func TestParseEventStatsRejectsUnsupportedCountFieldForms(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		source    string
+		code      string
+		rangeText string
+	}{
+		{
+			name:      "missing required alias",
+			source:    `index=main | eventstats count(status)`,
+			code:      "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
+			rangeText: "count(status)",
+		},
+		{
+			name:      "missing required alias before BY",
+			source:    `index=main | eventstats count(status) BY host`,
+			code:      "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
+			rangeText: "count(status)",
+		},
+		{
+			name:      "short alias",
+			source:    `index=main | eventstats c(status) AS populated`,
+			code:      "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+			rangeText: "c",
+		},
+		{
+			name:      "short alias empty call",
+			source:    `index=main | eventstats c() AS populated`,
+			code:      "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+			rangeText: "c",
+		},
+		{
+			name:      "wildcard",
+			source:    `index=main | eventstats count(*) AS populated`,
+			code:      "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
+			rangeText: "*",
+		},
+		{
+			name:      "prefix wildcard",
+			source:    `index=main | eventstats count(status*) AS populated`,
+			code:      "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
+			rangeText: "status*",
+		},
+		{
+			name:      "quoted field",
+			source:    `index=main | eventstats count("status") AS populated`,
+			code:      "SPL_EXPECTED_FIELD",
+			rangeText: `"status"`,
+		},
+		{
+			name:      "multiple fields",
+			source:    `index=main | eventstats count(status,host) AS populated`,
+			code:      "SPL_EXPECTED_RIGHT_PAREN",
+			rangeText: ",",
+		},
+		{
+			name:      "missing right parenthesis",
+			source:    `index=main | eventstats count(status AS populated`,
+			code:      "SPL_EXPECTED_RIGHT_PAREN",
+			rangeText: "AS",
+		},
+		{
+			name:      "second measure after field count",
+			source:    `index=main | eventstats count(status) AS populated count`,
+			code:      "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
+			rangeText: "count",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Parse(test.source)
+			if err == nil {
+				t.Fatal("Parse succeeded, want error")
+			}
+			var diagnostic *Diagnostic
+			if !errors.As(err, &diagnostic) {
+				t.Fatalf("error = %T, want *Diagnostic", err)
+			}
+			if diagnostic.Code != test.code {
+				t.Fatalf("code = %q, want %q (diagnostic: %v)", diagnostic.Code, test.code, diagnostic)
+			}
+			assertSourceRangeText(t, test.source, diagnostic.Range, test.rangeText)
+		})
+	}
+}
+
 func TestParseAggregateGroupFieldsKeepCommandSpecificDiagnostics(t *testing.T) {
 	t.Parallel()
 
@@ -220,18 +384,26 @@ func TestParseAggregateGroupFieldsKeepCommandSpecificDiagnostics(t *testing.T) {
 			suggestions: []string{"stats count AS total BY field"},
 		},
 		{
-			name:        "eventstats alias after BY",
-			source:      `index=main | eventstats count BY host AS total`,
-			code:        "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
-			message:     "an eventstats aggregate alias must appear before the BY clause",
-			suggestions: []string{"eventstats count", "eventstats count AS event_count BY group"},
+			name:    "eventstats alias after BY",
+			source:  `index=main | eventstats count BY host AS total`,
+			code:    "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
+			message: "an eventstats aggregate alias must appear before the BY clause",
+			suggestions: []string{
+				"eventstats count",
+				"eventstats count AS event_count BY group",
+				"eventstats count(field) AS occurrences BY group",
+			},
 		},
 		{
-			name:        "eventstats wildcard field",
-			source:      `index=main | eventstats count BY host*`,
-			code:        "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
-			message:     "wildcard eventstats grouping fields are not supported",
-			suggestions: []string{"eventstats count", "eventstats count AS event_count BY group"},
+			name:    "eventstats wildcard field",
+			source:  `index=main | eventstats count BY host*`,
+			code:    "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
+			message: "wildcard eventstats grouping fields are not supported",
+			suggestions: []string{
+				"eventstats count",
+				"eventstats count AS event_count BY group",
+				"eventstats count(field) AS occurrences BY group",
+			},
 		},
 		{
 			name:    "stats trailing comma",
@@ -350,8 +522,11 @@ func TestAnalyzeEventStatsSuggestionContextStaysWithinBoundedGrammar(t *testing.
 		words  []string
 	}{
 		{source: "| eventstats count A", kind: SuggestionKindKeyword, words: []string{"AS", "BY"}},
+		{source: "| eventstats count(", kind: SuggestionKindField},
+		{source: "| eventstats count(status)", kind: SuggestionKindKeyword, words: []string{"AS"}},
 		{source: "| eventstats count AS event_", kind: SuggestionKindField},
 		{source: "| eventstats count AS events B", kind: SuggestionKindKeyword, words: []string{"BY"}},
+		{source: "| eventstats count(status) AS populated B", kind: SuggestionKindKeyword, words: []string{"BY"}},
 		{source: "| eventstats count BY ho", kind: SuggestionKindField},
 	}
 	for _, test := range tests {

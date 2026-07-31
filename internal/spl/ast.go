@@ -608,10 +608,11 @@ func (*StatsCommand) command()             {}
 func (*StatsCommand) Name() string         { return "stats" }
 func (c *StatsCommand) SourceRange() Range { return c.Range }
 
-// EventStatsCommand adds one row-count aggregate to every input row, either
-// globally or within an exact BY tuple. The first compatibility slice keeps
-// the singular aggregate source-located through StatsAggregate while limiting
-// Function to argument-free AggregateFunctionCount.
+// EventStatsCommand adds one count aggregate to every input row, either
+// globally or within an exact BY tuple. The bounded compatibility surface
+// accepts either argument-free AggregateFunctionCount or exact-field
+// AggregateFunctionCountValues while retaining the singular aggregate's
+// source locations through StatsAggregate.
 type EventStatsCommand struct {
 	Aggregate StatsAggregate
 	GroupBy   []StatsGroupField

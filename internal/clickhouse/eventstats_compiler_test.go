@@ -144,7 +144,6 @@ func TestCompileEventStatsDefensivelyRejectsForgedOperators(t *testing.T) {
 	t.Parallel()
 
 	base := buildPlan(t, `index=gradethis | eventstats count AS total`)
-	eventAggregate := base.Operators[len(base.Operators)-1].(*plan.EventAggregate)
 
 	tests := []struct {
 		name   string
@@ -204,18 +203,39 @@ func TestCompileEventStatsDefensivelyRejectsForgedOperators(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
+		test := test
 		t.Run(test.name, func(t *testing.T) {
-			logical := *base
-			logical.Operators = append([]plan.Operator(nil), base.Operators...)
-			copyOperator := *eventAggregate
-			copyOperator.GroupBy = append([]plan.FieldRef(nil), eventAggregate.GroupBy...)
-			logical.Operators[len(logical.Operators)-1] = &copyOperator
-			test.mutate(&copyOperator)
-			if _, err := (Compiler{}).Compile(&logical); err == nil {
+			logical, operator := cloneEventAggregatePlan(t, base)
+			test.mutate(operator)
+			if _, err := (Compiler{}).Compile(logical); err == nil {
 				t.Fatal("Compile() succeeded for forged eventstats operator")
 			}
 		})
 	}
+}
+
+func cloneEventAggregatePlan(
+	t *testing.T,
+	base *plan.Query,
+) (*plan.Query, *plan.EventAggregate) {
+	t.Helper()
+	logical := *base
+	logical.Operators = append([]plan.Operator(nil), base.Operators...)
+	for index, operator := range logical.Operators {
+		eventAggregate, ok := operator.(*plan.EventAggregate)
+		if !ok {
+			continue
+		}
+		copyOperator := *eventAggregate
+		copyOperator.GroupBy = append(
+			[]plan.FieldRef(nil),
+			eventAggregate.GroupBy...,
+		)
+		logical.Operators[index] = &copyOperator
+		return &logical, &copyOperator
+	}
+	t.Fatal("logical plan has no EventAggregate")
+	return nil, nil
 }
 
 func TestCompileEventStatsDefensivelyRejectsOpenFieldsPayload(t *testing.T) {

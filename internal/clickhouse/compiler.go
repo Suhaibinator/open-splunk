@@ -10988,6 +10988,28 @@ func compileEventAggregate(
 		}
 	}
 
+	measure := operator.Measure
+	measureInputSQL := ""
+	var measureInputArgs []any
+	if measure.Function == plan.AggregateFunctionCountValues {
+		if state.eventRows && state.allowDynamic && measure.Input.Name == "fields" {
+			return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
+				Code: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
+				Message: "eventstats cannot read the event result's " +
+					"reserved fields payload without an exact upstream schema",
+				Range: measure.Input.Range,
+			}
+		}
+		input, exists, resolveErr := resolveCompiledField(measure.Input, state)
+		if resolveErr != nil {
+			return compiledRelation{}, compileState{}, nil, resolveErr
+		}
+		measureInputSQL = "toUInt64(0)"
+		if exists {
+			measureInputSQL, measureInputArgs = countValueInputSQL(input)
+		}
+	}
+
 	groups := make([]compiledEventStatsGroup, 0, len(operator.GroupBy))
 	seenGroups := make(map[string]struct{}, len(operator.GroupBy))
 	for index, group := range operator.GroupBy {
@@ -11029,6 +11051,14 @@ func compileEventAggregate(
 	sentinelRows := strconv.FormatUint(MaximumEventStatsInputRows+1, 10)
 
 	inputProjection := []string{"*"}
+	measureAlias := ""
+	if measure.Function == plan.AggregateFunctionCountValues {
+		measureAlias = quoteIdentifier(fmt.Sprintf("__os_eventstats_measure_%d", stage))
+		inputProjection = append(
+			inputProjection,
+			measureInputSQL+" AS "+measureAlias,
+		)
+	}
 	var eligibilityArgs, unsupportedArgs []any
 	eligibility := make([]string, 0, len(groups))
 	unsupported := make([]string, 0, len(groups))
@@ -11061,15 +11091,35 @@ func compileEventAggregate(
 	inputSourceAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_source_%d", stage))
 	inputSQL := "SELECT " + strings.Join(inputProjection, ", ") + " FROM (" +
 		relation.sql + ") AS " + inputSourceAlias + " LIMIT " + sentinelRows
-	prefixArgs := append(eligibilityArgs, unsupportedArgs...)
+	prefixArgs := make(
+		[]any,
+		0,
+		len(measureInputArgs)+len(eligibilityArgs)+len(unsupportedArgs),
+	)
+	prefixArgs = append(prefixArgs, measureInputArgs...)
+	prefixArgs = append(prefixArgs, eligibilityArgs...)
+	prefixArgs = append(prefixArgs, unsupportedArgs...)
+	totalProjection := []string{
+		boundedEventStatsCountSQL("count()") + " AS " + totalColumn,
+	}
+	valueColumn := totalColumn
+	if measure.Function == plan.AggregateFunctionCountValues && len(groups) == 0 {
+		valueColumn = quoteIdentifier(fmt.Sprintf(
+			"__os_eventstats_value_count_%d",
+			stage,
+		))
+		totalProjection = append(
+			totalProjection,
+			"toUInt64(sum(toUInt128("+measureAlias+"))) AS "+valueColumn,
+		)
+	}
 	definitions := []string{
 		inputName + " AS MATERIALIZED (" + inputSQL + ")",
 		totalName + " AS MATERIALIZED (SELECT " +
-			boundedEventStatsCountSQL("count()") + " AS " + totalColumn +
-			" FROM " + inputName + ")",
+			strings.Join(totalProjection, ", ") + " FROM " + inputName + ")",
 	}
 
-	outputValue := totalAlias + "." + totalColumn
+	outputValue := totalAlias + "." + valueColumn
 	outputExistsSQL := "1"
 	fromSQL := inputName + " AS " + inputAlias + " CROSS JOIN " +
 		totalName + " AS " + totalAlias
@@ -11091,10 +11141,14 @@ func compileEventAggregate(
 			validGroup = "if(" + unsupportedAlias + " != 0, throwIf(toUInt8(1), '" +
 				UnsupportedStatsByValueMarker + "') = 0, " + validGroup + ")"
 		}
+		groupValueSQL := "toUInt64(count())"
+		if measure.Function == plan.AggregateFunctionCountValues {
+			groupValueSQL = "toUInt64(sum(toUInt128(" + measureAlias + ")))"
+		}
 		definitions = append(
 			definitions,
 			groupCountsName+" AS MATERIALIZED (SELECT "+
-				strings.Join(groupKeys, ", ")+", toUInt64(count()) AS "+groupCountColumn+
+				strings.Join(groupKeys, ", ")+", "+groupValueSQL+" AS "+groupCountColumn+
 				" FROM "+inputName+" WHERE "+validGroup+
 				" GROUP BY "+strings.Join(groupKeys, ", ")+")",
 		)
@@ -11136,15 +11190,34 @@ func validateEventAggregate(operator *plan.EventAggregate) (plan.FieldRef, error
 		)
 	}
 	measure := operator.Measure
-	if measure.Function != plan.AggregateFunctionCountRows ||
-		measure.Input.Name != "" ||
-		measure.Input.Canonical ||
-		measure.Input.Path != nil ||
-		measure.Input.Range != (spl.Range{}) ||
-		measure.Predicate != nil ||
-		measure.Percentile != 0 {
+	switch measure.Function {
+	case plan.AggregateFunctionCountRows:
+		if measure.Input.Name != "" ||
+			measure.Input.Canonical ||
+			measure.Input.Path != nil ||
+			measure.Input.Range != (spl.Range{}) ||
+			measure.Predicate != nil ||
+			measure.Percentile != 0 {
+			return plan.FieldRef{}, errors.New(
+				"compile ClickHouse eventstats: argument-free count contains unsupported metadata",
+			)
+		}
+	case plan.AggregateFunctionCountValues:
+		if measure.Predicate != nil || measure.Percentile != 0 {
+			return plan.FieldRef{}, errors.New(
+				"compile ClickHouse eventstats: count(field) contains unsupported predicate or percentile metadata",
+			)
+		}
+		if err := validateCanonicalFieldRef(
+			"eventstats",
+			"input",
+			measure.Input,
+		); err != nil {
+			return plan.FieldRef{}, err
+		}
+	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse eventstats: only argument-free count without additional metadata is supported",
+			"compile ClickHouse eventstats: only count or count(field) is supported",
 		)
 	}
 	output, err := plan.ResolveField(measure.Output, operator.Range)
@@ -12266,7 +12339,11 @@ func countValueInputSQL(field fieldState) (string, []any) {
 		args = append(args, field.descendantArgs...)
 	}
 	return "if((" + existsSQL + ") AND " + typeSQL + " != 'None', " +
-		"if(" + typeSQL + " = 'Array(Dynamic)', " + arrayCount + ", toUInt64(1)), " +
+		"multiIf(" +
+		typeSQL + " = 'Array(Dynamic)', " + arrayCount + ", " +
+		"startsWith(" + typeSQL + ", 'Array('), " +
+		"ifNull(toUInt64(length(" + field.valueSQL + ")), toUInt64(0)), " +
+		"toUInt64(1)), " +
 		descendantCount + ")", args
 }
 

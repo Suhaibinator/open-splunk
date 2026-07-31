@@ -562,17 +562,55 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 			}
 			aggregate := command.Aggregate
-			if aggregate.Function != spl.AggregateFunctionCount ||
-				aggregate.Input != "" ||
-				aggregate.InputRange != (spl.Range{}) ||
-				aggregate.Predicate != nil ||
+			if aggregate.Predicate != nil ||
 				aggregate.Percentile != 0 ||
-				aggregate.Alias == "" ||
-				(!aggregate.ExplicitAlias && aggregate.Alias != "count") {
+				aggregate.Alias == "" {
 				return nil, &Diagnostic{
 					Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
-					Message: "eventstats currently supports exactly one " +
-						"argument-free count measure",
+					Message: "eventstats currently supports exactly one count " +
+						"or count(field) AS output measure",
+					Range: aggregate.Range,
+				}
+			}
+			measure := AggregateMeasure{Output: aggregate.Alias}
+			switch aggregate.Function {
+			case spl.AggregateFunctionCount:
+				if aggregate.Input != "" ||
+					aggregate.InputRange != (spl.Range{}) ||
+					(!aggregate.ExplicitAlias && aggregate.Alias != "count") {
+					return nil, &Diagnostic{
+						Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+						Message: "eventstats row count requires no input " +
+							"metadata and uses either its count default or an explicit alias",
+						Range: aggregate.Range,
+					}
+				}
+				measure.Function = AggregateFunctionCountRows
+			case spl.AggregateFunctionCountValues:
+				if aggregate.Input == "" ||
+					aggregate.InputRange == (spl.Range{}) ||
+					!aggregate.ExplicitAlias {
+					return nil, &Diagnostic{
+						Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+						Message: "eventstats count(field) requires one exact " +
+							"input field and an explicit alias",
+						Range: aggregate.Range,
+					}
+				}
+				input, inputErr := ResolveField(
+					aggregate.Input,
+					aggregate.InputRange,
+				)
+				if inputErr != nil {
+					return nil, inputErr
+				}
+				measure.Function = AggregateFunctionCountValues
+				measure.Input = input
+			default:
+				return nil, &Diagnostic{
+					Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+					Message: "eventstats currently supports exactly one count " +
+						"or count(field) AS output measure",
 					Range: aggregate.Range,
 				}
 			}
@@ -583,6 +621,14 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 						Message: "eventstats cannot replace the event result's " +
 							"reserved fields payload without an exact upstream schema",
 						Range: aggregate.AliasRange,
+					}
+				}
+				if aggregate.Input == "fields" {
+					return nil, &Diagnostic{
+						Code: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
+						Message: "eventstats cannot read the event result's " +
+							"reserved fields payload without an exact upstream schema",
+						Range: aggregate.InputRange,
 					}
 				}
 				for _, group := range command.GroupBy {
@@ -613,11 +659,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				result.Operators,
 				&EventAggregate{
 					GroupBy: groupBy,
-					Measure: AggregateMeasure{
-						Function: AggregateFunctionCountRows,
-						Output:   aggregate.Alias,
-					},
-					Range: command.Range,
+					Measure: measure,
+					Range:   command.Range,
 				},
 			)
 			if outputSchemaKnown &&
