@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	sqldriver "database/sql/driver"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -1778,6 +1779,7 @@ func transientStoreReason(err error) (opensplunkv1.RetryBatchReason, bool) {
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, clickhousedriver.ErrConnectionClosed) ||
+		errors.Is(err, sqldriver.ErrBadConn) ||
 		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) ||
 		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ETIMEDOUT) {
 		return opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE, true

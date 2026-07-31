@@ -2,11 +2,16 @@ package testsupport
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/xml"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 )
 
 func TestStartClickHouseRejectsNilContextWithoutCallingDocker(t *testing.T) {
@@ -195,6 +200,84 @@ func TestSecureServicePrincipalDockerArgumentsExposeOnlyTLSNativePort(t *testing
 		if !strings.Contains(secureClickHouseTLSConfig, required) {
 			t.Errorf("secure ClickHouse TLS config missing %q", required)
 		}
+	}
+}
+
+func TestSecureClickHouseReadinessOptionsUsePublishedTLSMigrationPrincipal(t *testing.T) {
+	t.Parallel()
+
+	roots := x509.NewCertPool()
+	container := &ClickHouseContainer{
+		Address:           " 127.0.0.1:19440 ",
+		MigrationUsername: " open_splunk_migrator ",
+		MigrationPassword: strings.Repeat("a", 64),
+		TLSServerName:     " clickhouse.test ",
+	}
+	options, err := secureClickHouseReadinessOptions(
+		container,
+		&ServerTLSIdentity{RootCAs: roots},
+	)
+	if err != nil {
+		t.Fatalf("secureClickHouseReadinessOptions(): %v", err)
+	}
+	if options.Protocol != clickhousedriver.Native ||
+		len(options.Addr) != 1 || options.Addr[0] != "127.0.0.1:19440" ||
+		options.Auth.Database != "default" ||
+		options.Auth.Username != "open_splunk_migrator" ||
+		options.Auth.Password != container.MigrationPassword {
+		t.Fatalf("secure readiness options = %#v", options)
+	}
+	if options.TLS == nil || options.TLS.MinVersion != tls.VersionTLS12 ||
+		options.TLS.ServerName != "clickhouse.test" ||
+		options.TLS.RootCAs == nil || options.TLS.RootCAs == roots ||
+		options.TLS.InsecureSkipVerify {
+		t.Fatalf("secure readiness TLS config = %#v", options.TLS)
+	}
+	if options.DialTimeout != 5*time.Second ||
+		options.ReadTimeout != 5*time.Second ||
+		options.MaxOpenConns != 1 || options.MaxIdleConns != 1 {
+		t.Fatalf("secure readiness bounds = %#v", options)
+	}
+}
+
+func TestSecureClickHouseReadinessOptionsRejectIncompleteFixture(t *testing.T) {
+	t.Parallel()
+
+	valid := &ClickHouseContainer{
+		Address:           "127.0.0.1:19440",
+		MigrationUsername: "open_splunk_migrator",
+		MigrationPassword: strings.Repeat("a", 64),
+		TLSServerName:     "clickhouse.test",
+	}
+	identity := &ServerTLSIdentity{RootCAs: x509.NewCertPool()}
+	for name, test := range map[string]struct {
+		container *ClickHouseContainer
+		identity  *ServerTLSIdentity
+	}{
+		"nil container": {identity: identity},
+		"nil identity":  {container: valid},
+		"nil roots": {
+			container: valid,
+			identity:  &ServerTLSIdentity{},
+		},
+		"empty endpoint": {
+			container: &ClickHouseContainer{
+				MigrationUsername: valid.MigrationUsername,
+				MigrationPassword: valid.MigrationPassword,
+				TLSServerName:     valid.TLSServerName,
+			},
+			identity: identity,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if options, err := secureClickHouseReadinessOptions(
+				test.container,
+				test.identity,
+			); err == nil || options != nil {
+				t.Fatalf("secure readiness options = (%#v, %v), want nil/error", options, err)
+			}
+		})
 	}
 }
 

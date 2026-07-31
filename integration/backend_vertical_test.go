@@ -203,6 +203,9 @@ func TestBackendVertical(t *testing.T) {
 	serverSecrets := []string{
 		administratorToken,
 		plaintextToken,
+		clickhouse.MigrationPassword,
+		clickhouse.RuntimePassword,
+		clickhouse.DeletionPassword,
 		redactionAPIKeySentinel,
 		redactionCookieSentinel,
 		redactionPrivateKeySentinel,
@@ -347,7 +350,14 @@ func TestBackendVertical(t *testing.T) {
 	search := runSearch(t, ctx, httpClient, baseURL, fixtureStart)
 	assertCompletedTimeline(t, ctx, httpClient, baseURL, search.jobID, fixtureStart)
 	assertTypedRedactedResults(t, search.results)
-	assertBrowserVisibleResults(t, ctx, repository, baseURL, fixtureStart)
+	assertBrowserVisibleResults(
+		t,
+		ctx,
+		repository,
+		baseURL,
+		fixtureStart,
+		serverProcess,
+	)
 	for pageIndex, wire := range search.results.responseWire {
 		for _, sentinel := range []string{
 			redactionAPIKeySentinel,
@@ -515,10 +525,12 @@ func assertBrowserVisibleResults(
 	ctx context.Context,
 	repository, baseURL string,
 	fixtureStart time.Time,
+	serverProcess *managedProcess,
 ) {
 	t.Helper()
 	runBrowserVerticalSpec(t, ctx, repository, browserVerticalSpecConfig{
-		grepPattern:        "collector event is visible through the compiled backend UI",
+		grepPattern: "collector event is visible through the compiled backend UI|" +
+			"failed search terminal rejects without waiting for results",
 		outputDirectory:    "backend-vertical",
 		failureDescription: "verify browser-visible backend result",
 		environment: map[string]string{
@@ -529,6 +541,9 @@ func assertBrowserVisibleResults(
 			"OPEN_SPLUNK_E2E_LATEST":              fixtureStart.Add(4 * time.Second).Format(time.RFC3339Nano),
 			"OPEN_SPLUNK_E2E_EXPECTED_TEXT":       verticalSentinelMessage,
 			"OPEN_SPLUNK_E2E_EXPECTED_ROWS":       strconv.FormatUint(verticalEventCount, 10),
+		},
+		failureDiagnostics: func() string {
+			return managedProcessSearchFailureDiagnostics(serverProcess)
 		},
 	})
 }

@@ -1727,6 +1727,158 @@ func TestExecutionDeadlinePropagatesAndFailsAsTimeout(t *testing.T) {
 	}
 }
 
+func TestExecutionErrorHookRunsAfterFailureAndContainsPanics(t *testing.T) {
+	t.Parallel()
+
+	type observation struct {
+		jobID    string
+		code     FailureCode
+		cause    error
+		jobState State
+		getErr   error
+	}
+	cause := errors.New("private ClickHouse message containing generated SQL and password")
+	reported := make(chan observation, 2)
+	var manager *Manager
+	manager = newTestManager(t, Config{
+		Executor: executorFunc(func(context.Context, clickhouse.CompiledQuery, ResultSink) error {
+			return cause
+		}),
+		MaxConcurrent:   1,
+		CleanupInterval: -1,
+		NewID:           sequenceIDs("execution-hook"),
+		OnExecutionError: func(jobID string, code FailureCode, gotCause error) {
+			job, getErr := manager.Get(jobID)
+			reported <- observation{
+				jobID:    jobID,
+				code:     code,
+				cause:    gotCause,
+				jobState: job.State,
+				getErr:   getErr,
+			}
+			panic("private execution hook panic")
+		},
+	})
+
+	for range 2 {
+		created, err := manager.Create(context.Background(), validRequest())
+		if err != nil {
+			t.Fatal(err)
+		}
+		failed := waitForState(t, manager, created.ID, StateFailed)
+		if failed.Failure == nil || failed.Failure.Code != FailureExecution {
+			t.Fatalf("failure = %#v", failed.Failure)
+		}
+		select {
+		case got := <-reported:
+			if got.jobID != created.ID || got.code != FailureExecution || !errors.Is(got.cause, cause) ||
+				got.jobState != StateFailed || got.getErr != nil {
+				t.Fatalf("execution error observation = %#v", got)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("execution error hook was not called")
+		}
+		deadline := time.Now().Add(time.Second)
+		for len(manager.executionErrorHookGate) != 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("execution error hook gate was not released after panic")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+func TestBlockedExecutionErrorHookCannotBlockShutdown(t *testing.T) {
+	t.Parallel()
+
+	hookStarted := make(chan struct{}, 1)
+	releaseHook := make(chan struct{})
+	manager := newTestManager(t, Config{
+		Executor: executorFunc(func(context.Context, clickhouse.CompiledQuery, ResultSink) error {
+			return errors.New("private execution error")
+		}),
+		MaxConcurrent:   1,
+		CleanupInterval: -1,
+		NewID:           sequenceIDs("blocked-execution-hook"),
+		OnExecutionError: func(string, FailureCode, error) {
+			hookStarted <- struct{}{}
+			<-releaseHook
+		},
+	})
+
+	created, err := manager.Create(context.Background(), validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForState(t, manager, created.ID, StateFailed)
+	select {
+	case <-hookStarted:
+	case <-time.After(time.Second):
+		t.Fatal("execution error hook did not start")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- manager.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			close(releaseHook)
+			t.Fatalf("Close() error = %v", err)
+		}
+		close(releaseHook)
+	case <-time.After(time.Second):
+		close(releaseHook)
+		<-closed
+		t.Fatal("blocked execution error hook stalled manager shutdown")
+	}
+}
+
+func TestCanceledExecutionDoesNotCallExecutionErrorHook(t *testing.T) {
+	t.Parallel()
+
+	var executions atomic.Uint64
+	reported := make(chan struct{}, 1)
+	manager := newTestManager(t, Config{
+		Executor: executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
+			if executions.Add(1) == 1 {
+				<-ctx.Done()
+				return errors.New("private transport failure after cancellation")
+			}
+			return sink.SetSchema(messageSchema())
+		}),
+		MaxConcurrent:   1,
+		CleanupInterval: -1,
+		NewID:           sequenceIDs("canceled-execution-hook"),
+		OnExecutionError: func(string, FailureCode, error) {
+			reported <- struct{}{}
+		},
+	})
+
+	canceled, err := manager.Create(context.Background(), validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForState(t, manager, canceled.ID, StateRunning)
+	if err := manager.Cancel(canceled.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitForState(t, manager, canceled.ID, StateCanceled)
+
+	completed, err := manager.Create(context.Background(), validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForState(t, manager, completed.ID, StateCompleted)
+	if got := len(manager.executionErrorHookGate); got != 0 {
+		t.Fatalf("canceled execution acquired the error-hook gate: len = %d", got)
+	}
+	select {
+	case <-reported:
+		t.Fatal("canceled execution reported an execution failure")
+	default:
+	}
+}
+
 func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 	t.Parallel()
 

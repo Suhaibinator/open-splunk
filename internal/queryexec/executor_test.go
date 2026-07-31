@@ -2,6 +2,7 @@ package queryexec
 
 import (
 	"context"
+	sqldriver "database/sql/driver"
 	"errors"
 	"fmt"
 	"io"
@@ -1707,6 +1708,12 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 	t.Parallel()
 	if err := classifyQueryError(context.Background(), io.ErrUnexpectedEOF); !errors.Is(err, searchjobs.ErrStorageUnavailable) {
 		t.Fatalf("network error = %v", err)
+	}
+	if err := classifyQueryError(context.Background(), clickhousedriver.ErrAcquireConnTimeout); !errors.Is(err, searchjobs.ErrStorageUnavailable) {
+		t.Fatalf("connection-pool timeout = %v", err)
+	}
+	if err := classifyQueryError(context.Background(), sqldriver.ErrBadConn); !errors.Is(err, searchjobs.ErrStorageUnavailable) {
+		t.Fatalf("bad connection = %v", err)
 	}
 	resource := &clickhousedriver.Exception{Code: 241, Name: "MEMORY_LIMIT_EXCEEDED"}
 	if err := classifyQueryError(context.Background(), resource); !errors.Is(err, searchjobs.ErrExecutionLimit) {

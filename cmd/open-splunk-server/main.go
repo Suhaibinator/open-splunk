@@ -517,6 +517,9 @@ func runWithOptions(config options) error {
 		OnJournalError: func(err error) {
 			log.Printf("persist search-job history: %v", err)
 		},
+		OnExecutionError: func(jobID string, code searchjobs.FailureCode, cause error) {
+			log.Print(formatSearchExecutionFailure(jobID, code, cause))
+		},
 		Compiler: compiler,
 	})
 	if err != nil {

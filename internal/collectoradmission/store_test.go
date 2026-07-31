@@ -2,6 +2,7 @@ package collectoradmission
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -1163,6 +1164,59 @@ func TestCanceledAdmissionWaitingForWriterLeavesNoPartialState(t *testing.T) {
 		testCollectorID,
 	); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("fleet Get() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestPreferContextCancellationDoesNotMaskUnrelatedStorageError(t *testing.T) {
+	t.Parallel()
+
+	storageErr := errors.New("unrelated storage failure")
+	canceledContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	for name, ctx := range map[string]context.Context{
+		"active":   context.Background(),
+		"canceled": canceledContext,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := preferContextCancellation(ctx, storageErr)
+			if !errors.Is(got, storageErr) || errors.Is(got, context.Canceled) {
+				t.Fatalf("preferContextCancellation() = %v, want original storage error", got)
+			}
+		})
+	}
+}
+
+func TestPreferContextCancellationMapsContextRolledBackTransaction(t *testing.T) {
+	t.Parallel()
+
+	canceledContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	deadlineContext, deadlineCancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(-time.Second),
+	)
+	t.Cleanup(deadlineCancel)
+
+	for name, ctx := range map[string]context.Context{
+		"canceled": canceledContext,
+		"deadline": deadlineContext,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := preferContextCancellation(ctx, sql.ErrTxDone)
+			if !errors.Is(got, ctx.Err()) {
+				t.Fatalf("preferContextCancellation() = %v, want %v", got, ctx.Err())
+			}
+			if errors.Is(got, sql.ErrTxDone) {
+				t.Fatalf("preferContextCancellation() retained sql.ErrTxDone: %v", got)
+			}
+		})
+	}
+
+	got := preferContextCancellation(context.Background(), sql.ErrTxDone)
+	if !errors.Is(got, sql.ErrTxDone) {
+		t.Fatalf("active-context error = %v, want sql.ErrTxDone", got)
 	}
 }
 

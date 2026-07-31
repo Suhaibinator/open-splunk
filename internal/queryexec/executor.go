@@ -5,6 +5,7 @@ package queryexec
 import (
 	"context"
 	"crypto/rand"
+	sqldriver "database/sql/driver"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -1678,7 +1679,9 @@ func classifyQueryError(ctx context.Context, err error) error {
 		}
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, clickhousedriver.ErrAcquireConnTimeout) ||
 		errors.Is(err, clickhousedriver.ErrConnectionClosed) ||
+		errors.Is(err, sqldriver.ErrBadConn) ||
 		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) ||
 		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ETIMEDOUT) {
 		return fmt.Errorf("%w: %w", searchjobs.ErrStorageUnavailable, err)

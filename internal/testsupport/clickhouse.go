@@ -4,6 +4,7 @@ package testsupport
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 )
 
 const DefaultClickHouseImage = "clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49"
@@ -356,6 +359,11 @@ func startClickHouseWithServicePrincipals(
 		return nil, err
 	}
 	container.Address = address
+	if secure {
+		if err := container.waitSecureReady(ctx, tlsIdentity); err != nil {
+			return nil, err
+		}
+	}
 	cleanup = false
 	return container, nil
 }
@@ -529,6 +537,114 @@ func (container *ClickHouseContainer) waitReadyWithCredentials(
 		case <-ticker.C:
 		}
 	}
+}
+
+func (container *ClickHouseContainer) waitSecureReady(
+	ctx context.Context,
+	identity *ServerTLSIdentity,
+) error {
+	options, err := secureClickHouseReadinessOptions(container, identity)
+	if err != nil {
+		return err
+	}
+	deadline := time.NewTimer(90 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	stable := 0
+	var last error
+	for {
+		probeContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+		connection, openErr := clickhousedriver.Open(options)
+		probeErr := openErr
+		if probeErr == nil {
+			probeErr = connection.Ping(probeContext)
+			if closeErr := connection.Close(); probeErr == nil {
+				probeErr = closeErr
+			}
+		}
+		cancel()
+		last = probeErr
+		if probeErr == nil {
+			stable++
+			if stable == 4 {
+				return nil
+			}
+		} else {
+			stable = 0
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for secure ClickHouse test endpoint: %w", ctx.Err())
+		case <-deadline.C:
+			diagnosticsContext, diagnosticsCancel := context.WithTimeout(ctx, 5*time.Second)
+			diagnostics := container.secureReadinessDiagnostics(diagnosticsContext)
+			diagnosticsCancel()
+			if last == nil {
+				last = errors.New("fewer than four consecutive successful probes")
+			}
+			return fmt.Errorf(
+				"wait for secure ClickHouse test endpoint: timed out: %w%s",
+				last,
+				diagnostics,
+			)
+		case <-ticker.C:
+		}
+	}
+}
+
+func secureClickHouseReadinessOptions(
+	container *ClickHouseContainer,
+	identity *ServerTLSIdentity,
+) (*clickhousedriver.Options, error) {
+	if container == nil || identity == nil || identity.RootCAs == nil {
+		return nil, errors.New("configure secure ClickHouse readiness: fixture TLS identity is required")
+	}
+	address := strings.TrimSpace(container.Address)
+	serverName := strings.TrimSpace(container.TLSServerName)
+	username := strings.TrimSpace(container.MigrationUsername)
+	if address == "" || serverName == "" || username == "" ||
+		container.MigrationPassword == "" {
+		return nil, errors.New("configure secure ClickHouse readiness: fixture endpoint and migration principal are required")
+	}
+	return &clickhousedriver.Options{
+		Protocol: clickhousedriver.Native,
+		Addr:     []string{address},
+		Auth: clickhousedriver.Auth{
+			Database: "default",
+			Username: username,
+			Password: container.MigrationPassword,
+		},
+		TLS: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			ServerName: serverName,
+			RootCAs:    identity.RootCAs.Clone(),
+		},
+		DialTimeout:     5 * time.Second,
+		ReadTimeout:     5 * time.Second,
+		MaxOpenConns:    1,
+		MaxIdleConns:    1,
+		ConnMaxLifetime: time.Minute,
+	}, nil
+}
+
+func (container *ClickHouseContainer) secureReadinessDiagnostics(ctx context.Context) string {
+	output, err := docker(ctx, "logs", "--tail", "80", container.Name)
+	if err != nil && len(output) == 0 {
+		return fmt.Sprintf("; docker logs unavailable: %v", err)
+	}
+	value := string(output)
+	for _, secret := range []string{
+		container.bootstrapPassword,
+		container.MigrationPassword,
+		container.RuntimePassword,
+		container.DeletionPassword,
+	} {
+		if secret != "" {
+			value = strings.ReplaceAll(value, secret, "[REDACTED]")
+		}
+	}
+	return "; ClickHouse logs: " + boundedOutput([]byte(value))
 }
 
 func servicePrincipalProvisioningSQL(

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -22,6 +23,7 @@ import {
 } from "../gen/ts/open_splunk/v1/search_api";
 import {
   SearchExecutionPhase,
+  SearchFailureCode,
   SearchJobState,
   type SearchProgress,
 } from "../gen/ts/open_splunk/v1/search";
@@ -87,7 +89,7 @@ test("collector event is visible through the compiled backend UI", async ({ page
   const safety = observeBrowserSafety(page);
   const runSearch = await openSearchWorkspace(page);
   const { createResponsePromise, resultsResponsePromise } = waitForSearchResponses(page);
-  const protocolObservation = observeSearchProtocol(page, origin, timeout);
+  const protocolObservation = observeSearchProtocol(page, origin, timeout, true);
   try {
     await runSearch.click();
 
@@ -130,6 +132,86 @@ test("collector event is visible through the compiled backend UI", async ({ page
     /Live job updates failed|Live job updates skipped a sequence|resynchronizing from the server/i,
   );
   assertBrowserSafety(safety);
+});
+
+test("failed search terminal rejects without waiting for results", async () => {
+  test.setTimeout(10_000);
+  const searchJobID = "browser-controlled-failed-search";
+  const subscriptionID = "browser-controlled-failed-subscription";
+  const failureMessage = "controlled storage outage";
+  const subscribeFrame = SearchWebSocketCommand.encode({
+    requestId: "browser-controlled-failed-request",
+    payload: {
+      $case: "subscribe",
+      value: {
+        subscriptions: [{
+          subscriptionId: subscriptionID,
+          target: { target: { $case: "searchJobId", value: searchJobID } },
+          afterSequence: 0n,
+          includePreviews: true,
+          previewRowLimit: undefined,
+        }],
+      },
+    },
+  }).finish();
+  const terminalFrame = SearchWebSocketEvent.encode({
+    sequence: 1n,
+    occurredAt: new Date(0),
+    subscriptionId: subscriptionID,
+    target: { target: { $case: "searchJobId", value: searchJobID } },
+    payload: {
+      $case: "searchTerminal",
+      value: {
+        searchJobId: searchJobID,
+        state: SearchJobState.SEARCH_JOB_STATE_FAILED,
+        stateVersion: 2n,
+        finalProgress: undefined,
+        failure: {
+          code: SearchFailureCode.SEARCH_FAILURE_CODE_STORAGE_UNAVAILABLE,
+          message: failureMessage,
+          retryable: true,
+          diagnostics: [],
+        },
+        resultsExpireAt: undefined,
+      },
+    },
+  }).finish();
+  const pageEvents = new EventEmitter();
+  const socketEvents = new EventEmitter();
+  const controlledSocket = Object.assign(socketEvents, {
+    url: () => `${origin.replace(/^http/, "ws")}/api/v1/search/ws`,
+  });
+  const protocolObservation = observeSearchProtocol(
+    pageEvents as unknown as Page,
+    origin,
+    5_000,
+    true,
+  );
+  // Model the results response as deliberately unavailable. Promise.all must
+  // still reject from the failed terminal instead of waiting for this gate.
+  const unavailableResultsResponse = new Promise<never>(() => undefined);
+  const failedSearch = Promise.all([
+    unavailableResultsResponse,
+    protocolObservation.waitForJob(searchJobID),
+  ]);
+  void failedSearch.catch(() => undefined);
+
+  try {
+    pageEvents.emit("websocket", controlledSocket as unknown as WebSocket);
+    socketEvents.emit("framesent", { payload: Buffer.from(subscribeFrame) });
+    socketEvents.emit("framereceived", { payload: Buffer.from(terminalFrame) });
+    const failure = await failedSearch.then(
+      () => new Error("failed search unexpectedly completed"),
+      (error: unknown) => normalizeError(error),
+    );
+    expect(failure.message).toBe(
+      `browser search ${searchJobID} terminated in state ${SearchJobState.SEARCH_JOB_STATE_FAILED}`
+      + ` with failure code ${SearchFailureCode.SEARCH_FAILURE_CODE_STORAGE_UNAVAILABLE}`
+      + `: ${failureMessage}`,
+    );
+  } finally {
+    protocolObservation.dispose();
+  }
 });
 
 test("renders a fixed 1,000-row statistics result with bounded browser work", async ({
@@ -3190,6 +3272,15 @@ interface ObservedProgress {
   searchJobID: string;
 }
 
+interface ObservedSearchTerminal {
+  sequence: bigint;
+  subscriptionID: string;
+  searchJobID: string;
+  state: SearchJobState;
+  failureCode: number | undefined;
+  failureMessage: string | undefined;
+}
+
 type FrameEvent = { payload: string | Buffer };
 
 interface SocketListeners {
@@ -4747,7 +4838,11 @@ function observeSearchProtocol(
   page: Page,
   expectedOrigin: string,
   timeoutMilliseconds: number,
+  requireCompletedTerminal = false,
 ): SearchProtocolObservation {
+  const expectedEventDescription = requireCompletedTerminal
+    ? "sequenced search-terminal event"
+    : "sequenced search-progress event";
   let expectedJobID: string | undefined;
   let settled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -4755,6 +4850,7 @@ function observeSearchProtocol(
   let rejectCompletion!: (reason: Error) => void;
   const subscriptions: ObservedSubscription[] = [];
   const progressEvents: ObservedProgress[] = [];
+  const terminalEvents: ObservedSearchTerminal[] = [];
   const socketObservers = new BoundedObservationRegistry<WebSocket>();
   const completion = new Promise<void>((resolve, reject) => {
     resolveCompletion = resolve;
@@ -4778,6 +4874,23 @@ function observeSearchProtocol(
     if (!expectedJobID) return;
     const subscription = subscriptions.find((candidate) => candidate.searchJobID === expectedJobID);
     if (!subscription) return;
+    if (requireCompletedTerminal) {
+      const terminal = terminalEvents.find((event) =>
+        event.searchJobID === expectedJobID
+        && event.subscriptionID === subscription.subscriptionID
+        && event.sequence > 0n);
+      if (!terminal) return;
+      if (terminal.state !== SearchJobState.SEARCH_JOB_STATE_COMPLETED) {
+        finish(new Error(
+          `browser search ${terminal.searchJobID} terminated in state ${terminal.state}`
+          + ` with failure code ${terminal.failureCode ?? "missing"}`
+          + `: ${terminal.failureMessage ?? "no failure message"}`,
+        ));
+        return;
+      }
+      finish();
+      return;
+    }
     const progress = progressEvents.find((event) =>
       event.searchJobID === expectedJobID
       && event.subscriptionID === subscription.subscriptionID
@@ -4806,13 +4919,16 @@ function observeSearchProtocol(
           const progress = decodeSearchProgress(payload);
           if (progress !== undefined) progressEvents.push(progress);
           if (progressEvents.length > 256) throw new Error("search WebSocket received too many progress events");
+          const terminal = decodeSearchTerminal(payload);
+          if (terminal !== undefined) terminalEvents.push(terminal);
+          if (terminalEvents.length > 32) throw new Error("search WebSocket received too many terminal events");
           checkCompletion();
         } catch (error) {
           finish(normalizeError(error));
         }
       },
       error: (error) => finish(new Error(`search WebSocket failed: ${error}`)),
-      close: () => finish(new Error("search WebSocket closed before a sequenced search-progress event arrived")),
+      close: () => finish(new Error(`search WebSocket closed before a ${expectedEventDescription} arrived`)),
     };
     if (!socketObservers.tryObserve(socket, () => {
       socket.on("framesent", listeners.sent);
@@ -4836,7 +4952,7 @@ function observeSearchProtocol(
   };
 
   timer = setTimeout(
-    () => finish(new Error("timed out waiting for the browser's sequenced protobuf search-progress event")),
+    () => finish(new Error(`timed out waiting for the browser's protobuf ${expectedEventDescription}`)),
     timeoutMilliseconds,
   );
   page.on("websocket", observeSocket);
@@ -4900,6 +5016,28 @@ function decodeSearchProgress(payload: Uint8Array): ObservedProgress | undefined
     sequence: event.sequence,
     subscriptionID: event.subscriptionId,
     searchJobID: target.value,
+  };
+}
+
+function decodeSearchTerminal(payload: Uint8Array): ObservedSearchTerminal | undefined {
+  const event = SearchWebSocketEvent.decode(payload);
+  if (event.payload?.$case !== "searchTerminal") return undefined;
+  const target = event.target?.target;
+  const terminal = event.payload.value;
+  if (!event.subscriptionId) throw new Error("SearchWebSocketEvent.subscription_id is empty");
+  if (target?.$case !== "searchJobId" || !target.value) {
+    throw new Error("search-terminal event search_job_id is empty");
+  }
+  if (!terminal.searchJobId || terminal.searchJobId !== target.value) {
+    throw new Error("search-terminal payload does not match its target");
+  }
+  return {
+    sequence: event.sequence,
+    subscriptionID: event.subscriptionId,
+    searchJobID: terminal.searchJobId,
+    state: terminal.state,
+    failureCode: terminal.failure?.code,
+    failureMessage: terminal.failure?.message,
   };
 }
 

@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -237,6 +238,33 @@ func TestRedactForFailure(t *testing.T) {
 	}
 }
 
+func TestManagedProcessSearchFailureDiagnosticsAllowlistCompleteLines(t *testing.T) {
+	t.Parallel()
+
+	const safeLine = `2026/07/31 11:22:33 search execution failed: job_id="safe-job_1" failure_code="execution" cause_class="clickhouse_exception" clickhouse_code=47`
+	process := &managedProcess{logs: &lockedBuffer{maximum: 512}}
+	if _, err := process.logs.Write([]byte("untrusted private prefix\n" + safeLine + "\npartial-secret")); err != nil {
+		t.Fatal(err)
+	}
+	if got := managedProcessSearchFailureDiagnostics(process); got != safeLine {
+		t.Fatalf("managed process search diagnostics = %q, want %q", got, safeLine)
+	}
+
+	for name, logs := range map[string]string{
+		"incomplete safe line": strings.TrimSuffix(safeLine, "47"),
+		"untrusted prefix":     "private password " + safeLine + "\n",
+		"untrusted suffix":     safeLine + " private password\n",
+		"injected job":         strings.Replace(safeLine, "safe-job_1", "safe-job\\nprivate", 1) + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := extractSearchExecutionFailureDiagnostic(logs); got != "" {
+				t.Fatalf("unsafe diagnostic = %q", got)
+			}
+		})
+	}
+}
+
 func TestEnvironmentWithValueReplacesEveryExistingValue(t *testing.T) {
 	got := environmentWithValue([]string{"PATH=/bin", "MODE=demo", "OTHER=value", "MODE=stale"}, "MODE", "backend")
 	want := []string{"PATH=/bin", "OTHER=value", "MODE=backend"}
@@ -382,7 +410,12 @@ func TestRunCommandWithBoundedOutputBoundaries(t *testing.T) {
 				)
 			}
 			if len(output) != test.wantLength {
-				t.Fatalf("len(output) = %d, want %d", len(output), test.wantLength)
+				t.Fatalf(
+					"len(output) = %d, want %d; output=%q",
+					len(output),
+					test.wantLength,
+					output,
+				)
 			}
 			if test.mode == "success" || test.mode == "failure" {
 				if !strings.Contains(output, "stdout") || !strings.Contains(output, "stderr") {
@@ -423,24 +456,26 @@ func TestFormatBoundedCommandOutputIncludesMarkerWithinLimit(t *testing.T) {
 }
 
 func TestHarnessOutputEmitter(t *testing.T) {
+	// Direct syscall exit deliberately bypasses Go's race/coverage shutdown
+	// diagnostics so the parent observes only this fixture's exact payload.
 	switch os.Getenv("OPEN_SPLUNK_TEST_HARNESS_OUTPUT_EMITTER") {
 	case "":
 		return
 	case "success":
 		_, _ = os.Stdout.WriteString("stdout")
 		_, _ = os.Stderr.WriteString("stderr")
-		os.Exit(0)
+		syscall.Exit(0)
 	case "failure":
 		_, _ = os.Stdout.WriteString("stdout")
 		_, _ = os.Stderr.WriteString("stderr")
-		os.Exit(23)
+		syscall.Exit(23)
 	case "exact":
 		_, _ = os.Stdout.Write(bytes.Repeat([]byte("x"), 1<<10))
-		os.Exit(0)
+		syscall.Exit(0)
 	case "overflow":
 		_, _ = os.Stdout.Write(bytes.Repeat([]byte("o"), 2<<10))
 		_, _ = os.Stderr.Write(bytes.Repeat([]byte("e"), 2<<10))
-		os.Exit(23)
+		syscall.Exit(23)
 	default:
 		t.Fatalf("unknown harness output emitter mode")
 	}
@@ -964,6 +999,7 @@ type browserVerticalSpecConfig struct {
 	outputDirectory    string
 	failureDescription string
 	environment        map[string]string
+	failureDiagnostics func() string
 }
 
 func runBrowserVerticalSpec(
@@ -997,11 +1033,23 @@ func runBrowserVerticalSpec(
 	command.Env = environment
 	logs, truncated, runErr := runCommandWithBoundedOutput(command, maximumHarnessOutputBytes)
 	if runErr != nil {
+		diagnostics := ""
+		if config.failureDiagnostics != nil {
+			value := config.failureDiagnostics()
+			if value != "" {
+				diagnostics = "\nbackend diagnostics:\n" + formatBoundedCommandOutput(
+					value,
+					len(value) > maximumHarnessOutputBytes,
+					maximumHarnessOutputBytes,
+				)
+			}
+		}
 		t.Fatalf(
-			"%s: %v\n%s",
+			"%s: %v\n%s%s",
 			config.failureDescription,
 			runErr,
 			formatBoundedCommandOutput(logs, truncated, maximumHarnessOutputBytes),
+			diagnostics,
 		)
 	}
 	if truncated {
@@ -1043,6 +1091,43 @@ func redactForFailure(value string, secrets ...string) string {
 		}
 	}
 	return value
+}
+
+var safeSearchExecutionLogLine = regexp.MustCompile(
+	`^(?:[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} )?` +
+		`search execution failed: job_id="[A-Za-z0-9_-]{1,256}" ` +
+		`failure_code="[a-z_]{1,32}" cause_class="[a-z_]{1,64}"` +
+		`(?: clickhouse_code=-?[0-9]{1,10})?$`,
+)
+
+func managedProcessSearchFailureDiagnostics(process *managedProcess) string {
+	if process == nil || process.logs == nil {
+		return "[backend process logs unavailable]"
+	}
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for {
+		logs, _ := process.logs.Snapshot()
+		if diagnostic := extractSearchExecutionFailureDiagnostic(logs); diagnostic != "" {
+			return diagnostic
+		}
+		if time.Now().After(deadline) {
+			return "[no safe search execution diagnostic was captured]"
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func extractSearchExecutionFailureDiagnostic(logs string) string {
+	lines := strings.Split(logs, "\n")
+	var diagnostic string
+	// The final element is either empty or an in-progress write. Only complete,
+	// strict-allowlisted lines can cross the live process boundary.
+	for _, line := range lines[:max(0, len(lines)-1)] {
+		if safeSearchExecutionLogLine.MatchString(line) {
+			diagnostic = line
+		}
+	}
+	return diagnostic
 }
 
 type managedProcess struct {

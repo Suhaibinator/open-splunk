@@ -13,6 +13,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"gorm.io/gorm"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const maximumTenantIDBytes = 255
@@ -128,7 +130,7 @@ func (store *Store) AuthorizeLease(
 	if tx.Error != nil {
 		return auth.Authentication{}, fmt.Errorf(
 			"begin collector lease authorization: %w",
-			tx.Error,
+			preferContextCancellation(ctx, tx.Error),
 		)
 	}
 	finished := false
@@ -141,7 +143,7 @@ func (store *Store) AuthorizeLease(
 		checkedAt,
 	)
 	if err != nil {
-		return auth.Authentication{}, err
+		return auth.Authentication{}, preferContextCancellation(ctx, err)
 	}
 	if authentication.BoundCollectorID != lease.CollectorID {
 		return auth.Authentication{}, auth.ErrUnauthorized
@@ -152,7 +154,7 @@ func (store *Store) AuthorizeLease(
 		lease,
 	)
 	if err != nil {
-		return auth.Authentication{}, err
+		return auth.Authentication{}, preferContextCancellation(ctx, err)
 	}
 	if !current {
 		return auth.Authentication{}, ErrLeaseNotCurrent
@@ -160,7 +162,7 @@ func (store *Store) AuthorizeLease(
 	if err := tx.Commit().Error; err != nil {
 		return auth.Authentication{}, fmt.Errorf(
 			"commit collector lease authorization: %w",
-			err,
+			preferContextCancellation(ctx, err),
 		)
 	}
 	finished = true
@@ -195,7 +197,10 @@ func (store *Store) Admit(
 
 	tx := store.orm.WithContext(ctx).Begin()
 	if tx.Error != nil {
-		return Result{}, fmt.Errorf("begin collector admission: %w", tx.Error)
+		return Result{}, fmt.Errorf(
+			"begin collector admission: %w",
+			preferContextCancellation(ctx, tx.Error),
+		)
 	}
 	finished := false
 	defer finishTransaction(tx, &finished, &returnedErr)
@@ -208,7 +213,7 @@ func (store *Store) Admit(
 			request.AcceptedAt,
 		)
 	if err != nil {
-		return Result{}, err
+		return Result{}, preferContextCancellation(ctx, err)
 	}
 	if authentication.BoundCollectorID != request.CollectorID {
 		return Result{}, auth.ErrUnauthorized
@@ -221,10 +226,13 @@ func (store *Store) Admit(
 		authentication.AllowedIndexNames,
 	)
 	if err != nil {
-		return Result{}, err
+		return Result{}, preferContextCancellation(ctx, err)
 	}
 	if err := tx.Commit().Error; err != nil {
-		return Result{}, fmt.Errorf("commit collector admission: %w", err)
+		return Result{}, fmt.Errorf(
+			"commit collector admission: %w",
+			preferContextCancellation(ctx, err),
+		)
 	}
 	finished = true
 	return Result{
@@ -232,6 +240,33 @@ func (store *Store) Admit(
 		Collector:      collector,
 		Lease:          lease,
 	}, nil
+}
+
+func preferContextCancellation(ctx context.Context, err error) error {
+	if err == nil || ctx == nil {
+		return err
+	}
+	contextErr := ctx.Err()
+	if contextErr == nil {
+		return err
+	}
+	if errors.Is(err, sql.ErrTxDone) {
+		// database/sql rolls a context-bound transaction back asynchronously.
+		// If that rollback wins a race with our next operation, ErrTxDone is the
+		// transport symptom of the already-observed context cancellation. These
+		// transactions are private to this operation, so they cannot otherwise
+		// have been completed by another caller.
+		return contextErr
+	}
+	var sqliteErr *sqlite.Error
+	if errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqlite3.SQLITE_INTERRUPT {
+		// modernc cancels in-flight work with sqlite3_interrupt and may return
+		// its native code rather than wrapping ctx.Err().
+		// Prefer the causal context sentinel only for that exact base code; an
+		// unrelated storage failure racing with cancellation remains visible.
+		return contextErr
+	}
+	return err
 }
 
 func finishTransaction(

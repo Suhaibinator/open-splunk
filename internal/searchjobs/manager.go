@@ -210,8 +210,15 @@ type Config struct {
 	// search workers or shutdown. It runs without manager or job locks, and a
 	// panic is contained.
 	OnJournalError func(error)
-	CursorKey      []byte
-	CursorScope    string
+	// OnExecutionError receives the trusted executor cause after a job has
+	// atomically entered StateFailed. Code is the exact public category while
+	// cause remains private. At most one asynchronous callback is in flight;
+	// further notifications are dropped while it is active so a blocked callback
+	// cannot stall search workers or shutdown. It runs without manager or job
+	// locks, is not joined by Close, and a panic is contained.
+	OnExecutionError func(jobID string, code FailureCode, cause error)
+	CursorKey        []byte
+	CursorScope      string
 }
 
 // Manager owns a bounded worker pool and retained in-memory result snapshots.
@@ -229,6 +236,7 @@ type Manager struct {
 	journal               JobJournal
 	journalTimeout        time.Duration
 	onJournalError        func(error)
+	onExecutionError      func(string, FailureCode, error)
 	compiler              clickhouse.Compiler
 	maxRows               uint64
 	maxBytes              uint64
@@ -270,14 +278,15 @@ type Manager struct {
 	operationWG       sync.WaitGroup
 	closeOnce         sync.Once
 
-	budgetMu             sync.Mutex
-	retainedBytes        uint64
-	metadataBytes        uint64
-	activeResultLeases   int
-	cleanupMu            sync.Mutex
-	journalErrMu         sync.RWMutex
-	lastJournalErr       *JournalError
-	journalErrorHookGate chan struct{}
+	budgetMu               sync.Mutex
+	retainedBytes          uint64
+	metadataBytes          uint64
+	activeResultLeases     int
+	cleanupMu              sync.Mutex
+	journalErrMu           sync.RWMutex
+	lastJournalErr         *JournalError
+	journalErrorHookGate   chan struct{}
+	executionErrorHookGate chan struct{}
 }
 
 type jobEntry struct {
@@ -472,45 +481,47 @@ func New(config Config) (*Manager, error) {
 	// #nosec G118 -- cancel is retained on Manager and invoked by Close.
 	managerContext, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
-		jobs:                  make(map[string]*jobEntry),
-		jobsByScope:           make(map[AccessScope]*jobListIndexNode),
-		reservedIDs:           make(map[string]struct{}),
-		executor:              config.Executor,
-		snapshotter:           config.Snapshotter,
-		journal:               config.Journal,
-		journalTimeout:        journalTimeout,
-		onJournalError:        config.OnJournalError,
-		journalErrorHookGate:  make(chan struct{}, 1),
-		compiler:              config.Compiler,
-		maxRows:               maxRows,
-		maxBytes:              maxBytes,
-		maxJobs:               maxJobs,
-		maxResultLeases:       maxResultLeases,
-		maxResultLeasesPerJob: maxResultLeasesPerJob,
-		maxTotalBytes:         maxTotalBytes,
-		maxMetadataBytes:      maxMetadataBytes,
-		defaultPageSize:       pageSize,
-		maxPageSize:           maxPageSize,
-		maxPageBytes:          maxPageBytes,
-		maxRuntime:            maxRuntime,
-		snapshotTimeout:       snapshotTimeout,
-		maxSPLBytes:           maxSPLBytes,
-		maxScopeIndexes:       maxScopeIndexes,
-		retentionTTL:          retentionTTL,
-		expiredRetention:      expiredRetention,
-		cleanupInterval:       cleanupInterval,
-		now:                   now,
-		newID:                 newID,
-		cursorKey:             cursorKey,
-		cursorScope:           cursorScope,
-		listCursorEpoch:       listCursorEpoch,
-		readGate:              make(chan struct{}, maxConcurrentReads),
-		listGate:              make(chan struct{}, defaultMaxConcurrentLists),
-		snapshotGate:          make(chan struct{}, maxConcurrentSnapshots),
-		validationGate:        make(chan struct{}, maxConcurrent),
-		ctx:                   managerContext,
-		cancel:                cancel,
-		queueCapacity:         maxQueued,
+		jobs:                   make(map[string]*jobEntry),
+		jobsByScope:            make(map[AccessScope]*jobListIndexNode),
+		reservedIDs:            make(map[string]struct{}),
+		executor:               config.Executor,
+		snapshotter:            config.Snapshotter,
+		journal:                config.Journal,
+		journalTimeout:         journalTimeout,
+		onJournalError:         config.OnJournalError,
+		onExecutionError:       config.OnExecutionError,
+		journalErrorHookGate:   make(chan struct{}, 1),
+		executionErrorHookGate: make(chan struct{}, 1),
+		compiler:               config.Compiler,
+		maxRows:                maxRows,
+		maxBytes:               maxBytes,
+		maxJobs:                maxJobs,
+		maxResultLeases:        maxResultLeases,
+		maxResultLeasesPerJob:  maxResultLeasesPerJob,
+		maxTotalBytes:          maxTotalBytes,
+		maxMetadataBytes:       maxMetadataBytes,
+		defaultPageSize:        pageSize,
+		maxPageSize:            maxPageSize,
+		maxPageBytes:           maxPageBytes,
+		maxRuntime:             maxRuntime,
+		snapshotTimeout:        snapshotTimeout,
+		maxSPLBytes:            maxSPLBytes,
+		maxScopeIndexes:        maxScopeIndexes,
+		retentionTTL:           retentionTTL,
+		expiredRetention:       expiredRetention,
+		cleanupInterval:        cleanupInterval,
+		now:                    now,
+		newID:                  newID,
+		cursorKey:              cursorKey,
+		cursorScope:            cursorScope,
+		listCursorEpoch:        listCursorEpoch,
+		readGate:               make(chan struct{}, maxConcurrentReads),
+		listGate:               make(chan struct{}, defaultMaxConcurrentLists),
+		snapshotGate:           make(chan struct{}, maxConcurrentSnapshots),
+		validationGate:         make(chan struct{}, maxConcurrent),
+		ctx:                    managerContext,
+		cancel:                 cancel,
+		queueCapacity:          maxQueued,
 	}
 	manager.queueCond = sync.NewCond(&manager.mu)
 	manager.wg.Add(maxConcurrent)
@@ -897,18 +908,20 @@ func (manager *Manager) reportJournalError(operation JournalOperation, job Job, 
 	manager.journalErrMu.Lock()
 	manager.lastJournalErr = &stored
 	manager.journalErrMu.Unlock()
-	if manager.onJournalError == nil {
+	hook := manager.onJournalError
+	if hook == nil {
 		return
 	}
+	gate := manager.journalErrorHookGate
 	select {
-	case manager.journalErrorHookGate <- struct{}{}:
+	case gate <- struct{}{}:
 		hookErr := *journalErr
 		go func() {
 			defer func() {
 				_ = recover()
-				<-manager.journalErrorHookGate
+				<-gate
 			}()
-			manager.onJournalError(&hookErr)
+			hook(&hookErr)
 		}()
 	default:
 		// LastJournalError remains lossless for the newest failure even when a
@@ -1667,10 +1680,22 @@ func (manager *Manager) executionFailed(entry *jobEntry, err error) {
 	default:
 		failure = Failure{Code: FailureExecution, Message: "search execution failed"}
 	}
-	manager.failOrCancel(entry, failure, manager.nowUTC())
+	manager.failOrCancelWithHook(entry, failure, manager.nowUTC(), func(jobID string) {
+		manager.reportExecutionError(jobID, failure.Code, err)
+	})
 }
 
 func (manager *Manager) failOrCancel(entry *jobEntry, failure Failure, now time.Time) {
+	manager.failOrCancelWithHook(entry, failure, now, nil)
+}
+
+func (manager *Manager) failOrCancelWithHook(
+	entry *jobEntry,
+	failure Failure,
+	now time.Time,
+	afterFailure func(string),
+) {
+	var failedJobID string
 	entry.mu.Lock()
 	if !entry.job.State.terminal() {
 		if entry.ctx.Err() != nil {
@@ -1683,13 +1708,44 @@ func (manager *Manager) failOrCancel(entry *jobEntry, failure Failure, now time.
 			entry.job.ExpiresAt = now.Add(manager.retentionTTL)
 			manager.clearResultsLocked(entry)
 			entry.history = append(entry.history, StateFailed)
+			failedJobID = strings.Clone(entry.job.ID)
 		}
 	}
 	terminal, finalize := manager.claimTerminalJournalLocked(entry)
 	entry.mu.Unlock()
+	if failedJobID != "" && afterFailure != nil {
+		afterFailure(failedJobID)
+	}
 	entry.cancel()
 	if finalize {
 		manager.finalizeJournal(terminal)
+	}
+}
+
+func (manager *Manager) reportExecutionError(
+	jobID string,
+	code FailureCode,
+	cause error,
+) {
+	hook := manager.onExecutionError
+	if hook == nil {
+		return
+	}
+	gate := manager.executionErrorHookGate
+	detachedJobID := strings.Clone(jobID)
+	select {
+	case gate <- struct{}{}:
+		go func() {
+			defer func() {
+				// Never retain the panic value: it may contain a storage secret.
+				_ = recover()
+				<-gate
+			}()
+			hook(detachedJobID, code, cause)
+		}()
+	default:
+		// Operational notification is deliberately best-effort. A stuck hook
+		// cannot create unbounded goroutines or retain unbounded private causes.
 	}
 }
 

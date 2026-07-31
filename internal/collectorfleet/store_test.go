@@ -1278,7 +1278,11 @@ func TestGetUsesWALReadTransactionAlongsideWriter(t *testing.T) {
 	}
 	defer writer.Rollback()
 
-	readContext, cancel := context.WithTimeout(ctx, time.Second)
+	// Keep the liveness guard above SQLite's five-second busy timeout so a
+	// heavily loaded race runner cannot turn scheduler delay into a false lock
+	// failure. A real read/write lock regression still returns before this
+	// deadline and fails the assertion below.
+	readContext, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	got, err := store.Get(readContext, lease.Scope, lease.CollectorID)
 	if err != nil {

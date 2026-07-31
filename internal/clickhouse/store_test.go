@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	sqldriver "database/sql/driver"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -1126,6 +1127,7 @@ func TestStoreClassifiesErrorsAndReleasesBatch(t *testing.T) {
 	}{
 		{name: "network", prepareErr: &net.OpError{Op: "dial", Net: "tcp", Err: io.EOF}, wantReason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE},
 		{name: "pool busy", prepareErr: clickhousedriver.ErrAcquireConnTimeout, wantReason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY},
+		{name: "bad connection", prepareErr: sqldriver.ErrBadConn, wantReason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE},
 		{name: "rate limited", prepareErr: &clickhousedriver.Exception{Code: 364, Name: "RECEIVED_ERROR_TOO_MANY_REQUESTS"}, wantReason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED},
 		{name: "send EOF", sendErr: io.ErrUnexpectedEOF, wantReason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE},
 		{name: "schema", prepareErr: &clickhousedriver.Exception{Code: 60, Name: "UNKNOWN_TABLE"}, permanent: true},
