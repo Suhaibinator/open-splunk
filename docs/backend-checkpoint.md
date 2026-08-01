@@ -7,7 +7,96 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: hardened OCI full-stack deployment
+## Latest checkpoint: fixed-span percentile timechart
+
+Date: 2026-07-31
+
+Committed implementation checkpoint:
+
+- `e46152e` — fixed-span, unsplit `pN(field)` / `percN(field)` timechart
+  support from parser and suggestions through planning, inspection, ClickHouse,
+  execution, result validation, export re-execution, and the compatibility
+  contract.
+
+This test-first SPL unit adds one bounded percentile series without changing
+the existing count contracts:
+
+1. `timechart span=<fixed s|m|h> pN(field)` and `percN(field)` accept integer
+   levels 1 through 99, one exact unquoted input, and an optional exact `AS`
+   alias. The default output is canonical `percN(field)`. Percentile `BY`,
+   multiple measures, wildcard/quoted/eval inputs, invalid suffixes, and other
+   aggregates fail with source-located diagnostics. Existing `count` and
+   `count BY` remain unchanged; count aliases remain unsupported.
+2. Percentile timechart reuses the stats numeric normalization and GK
+   approximation contract. Finite numeric scalars and immediate multivalue
+   members contribute; missing, null, nonnumeric, nested-container, NaN, and
+   infinite values do not. The public value is `Nullable(Float64)`.
+3. A nonempty input publishes the complete epoch-aligned fixed grid with null
+   gaps. A nonempty but wholly ineligible input publishes a complete null grid;
+   a wholly empty input publishes the static schema and zero rows. The existing
+   10,000-bucket limit and atomic publish-after-validation boundary remain.
+4. ClickHouse performs one tenant/index/time/snapshot-scoped storage scan,
+   streams it into one materialized aggregate relation bounded to 10,000
+   bucket rows, emits one `quantilesGKOrNullArray(100, level)` state, and never
+   uses `ARRAY JOIN`. The final join and input-presence proof reuse the bounded
+   aggregate instead of rescanning or materializing the event relation.
+5. The executor validates exact private column names, database and scan types,
+   ordinal continuity, repeated input-presence proof, finite values, complete
+   bucket count, and the compiled output name before publishing schema. Values
+   are buffered inline without per-populated-bucket heap allocation. Manager
+   and export re-execution share `searchjobs.ValidateTimechartSchema`, so a
+   completed percentile search exports with the same strict schema boundary as
+   its ordinary result job.
+6. Unit coverage spans parser ranges and suggestions, forged AST/logical-plan
+   contracts, compiler shape and arguments, executor atomicity/cancellation,
+   manager schema detachment, inspection projection, and export admission.
+   Digest-pinned ClickHouse coverage proves stats-normalization parity,
+   nullable gaps, empty versus all-ineligible behavior, tenant/index/time and
+   visibility isolation, one physical GK state, one storage scan, and no
+   `ArrayJoin`.
+7. Simplification and adversarial review first found and fixed the export
+   outage, a second pass over the materialized event relation, unnecessary
+   full-source materialization, per-bucket pointer allocations, unfilterable
+   integration setup, and duplicate test helpers. Three independent final
+   closure reviews verified staged digest
+   `b22126aa19154a2cf87536fcc27b2fb6966f4520e5ba2a1b575ff909cf76249b`
+   and reported no remaining P0-P3 correctness, reuse, maintainability, or
+   scaling finding.
+8. GORM remains limited to SQLite/control-plane code. Percentile execution and
+   every other ClickHouse path continue to use the native driver and SQL.
+9. The architecture plan is not complete. The external GradeThis collector
+   cutover remains excluded until explicitly requested. Select the next SPL or
+   product phase as a separate bounded unit.
+
+Validation on implementation commit `e46152e`:
+
+```sh
+go mod tidy -diff
+go test ./... -count=1
+go test -race -shuffle=on -p=1 ./... -count=1
+go vet ./...
+go build ./...
+
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+
+GOLANGCI_LINT_CACHE=/private/tmp/open-splunk-golangci-cache-timechart-percentile-final \
+  /Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run ./...
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run 'TestExecutorAndManagerAgainstClickHouse/fixed_percentile_timechart' \
+  -count=1 -timeout=10m -v
+```
+
+The cached linter reported `0 issues`; every command above passed. Docker
+inspection found no test-owned Open Splunk container after integration cleanup.
+
+## Previous checkpoint: hardened OCI full-stack deployment
 
 Date: 2026-07-31
 
