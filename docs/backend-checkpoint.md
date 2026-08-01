@@ -7,7 +7,130 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded numeric eventstats average
+## Latest checkpoint: first-start collector identity bootstrap
+
+Date: 2026-08-01
+
+Committed implementation checkpoint:
+
+- `75db36f` — durable first-start collector identity discovery and enrollment
+  bridge.
+- `ceab244` — adversarial working-directory inode-alias rejection.
+
+This test-first collector, WAL, operator, and integration unit closes the
+first-start ordering gap without adding a control-plane migration, changing
+the ClickHouse schema, or putting GORM on the ClickHouse path:
+
+1. `open-splunk-collector identity -config PATH` loads and validates the final
+   collector configuration without reading the not-yet-issued token. It
+   durably creates or reuses the stable collector ID, writes exactly one
+   canonical ID plus newline to stdout, reports bounded failures on stderr,
+   and does not scan inputs, open checkpoints/WAL/dead-letter state, or contact
+   the server.
+2. The operator can now initialize the ID, create an ingestion token whose
+   immutable `bound_collector_id` is that exact value through the existing
+   authenticated token API, atomically install the one-time token secret, run
+   validation, and start the collector. The already-complete token and fleet
+   backend made a new GORM model, route, or SQLite migration unnecessary.
+3. Bootstrap and normal daemon startup share one identity implementation and
+   the same state-directory lock. The state path is owner-controlled and
+   tightened to `0700`; the identity is exact, bounded, owner-only, and
+   durably published with file and directory synchronization. Existing
+   canonical identities are synchronized again so a retry repairs an earlier
+   interrupted durability boundary.
+4. Startup rejects final state-directory symlinks, trailing-separator and
+   trailing-dot symlink aliases, filesystem roots/current-directory state,
+   unsafe directory-creation parents, foreign ownership, external hard links,
+   corrupt or oversized identities, and missing identity beside prior WAL,
+   checkpoint, or dead-letter state. Linux and macOS implement the ownership
+   and link-count contract; other targets fail closed instead of weakening it.
+5. First publication uses a unique owner-only temporary file, checked complete
+   write, file sync, no-overwrite hard-link publication, temporary unlink, and
+   state-directory sync. Crash leftovers are cleaned under the state lock with
+   a 1,024-entry top-level inspection bound. Missing directory components are
+   created and parent-synced in order under the documented trusted-parent
+   threat model.
+6. WAL recovery now validates every intact recovered record against the
+   configured collector ID before any recovery-driven sequence-floor
+   persistence or segment quarantine. That includes acknowledged-but-not-
+   reclaimed records and intact successor segments behind a corrupt segment,
+   preventing changed identity from disguising valid foreign batches as
+   corruption.
+7. The backend vertical, current GradeThis corpus leg, and sustained-load
+   harness no longer manufacture `collector_id`. Each uses the compiled
+   collector's real `identity` command with an absent token, binds the
+   authenticated token creation to its output, installs the secret, and only
+   then validates/runs. WAL inspection helpers reopen with the persisted ID.
+8. CLI, identity, daemon, WAL, and collector E2E regressions cover exact
+   output/exit codes, stable retries, absent-token operation, no runtime/network
+   side effects, unsafe path/inode forms, prior-state continuity, lock
+   contention, crash leftovers, acknowledged identity fencing, corrupt-prefix
+   successor fencing without mutation, and normal restart behavior.
+9. Deployment, example configuration, product architecture, and the admin
+   token form all describe the same exact operator sequence. This checkpoint
+   does not claim unauthenticated or browser self-service enrollment: an
+   authenticated administrator still creates and delivers the bound token.
+10. Three independent adversarial passes found and drove fixes for successor
+    WAL identity loss, warn-only daemon hardening, publication/parent-sync
+    retry gaps, owner/link validation, temp cleanup bounds, destructive root
+    paths, current-directory inode aliases, unsupported-platform weakening, and
+    trailing-path symlink bypasses.
+    The final reviews found no remaining concrete bootstrap/WAL defect inside
+    the supported trusted-parent contract.
+
+Validation on implementation commits `75db36f` and `ceab244`:
+
+```sh
+git diff --check
+go mod tidy
+git diff --exit-code HEAD -- go.mod go.sum
+go test ./internal/collector/... ./cmd/open-splunk-collector -count=1
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/tmp/open-splunk-identity-bootstrap-final-coverage.out ./...
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run ./...
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/queryexec \
+  ./internal/server ./integration ./migrations/clickhouse \
+  -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=25m -p=1 -v
+```
+
+Every command above passed. The final shuffled race run reported 74.8%
+aggregate statement coverage (`collector` 79.9%, `collector/wal` 79.0%, and
+collector CLI 60.0%); cached golangci-lint v2.12.2 reported `0 issues`; all
+202 frontend tests passed; and the exact digest-pinned backend-vertical
+selector passed, including `TestBackendVertical` in 10.86 seconds and the
+integration package in 59.912 seconds. Cleanup found no test-owned
+`open-splunk-clickhouse-*` container or `open-splunk-compose-test-*` volume.
+The dependency upgrades are already committed at `347a015`; `go mod tidy`
+made no additional `go.mod` or `go.sum` change.
+
+GitHub Actions runs `30717668568` and `30719870293` passed the complete
+workflow for `75db36f` and `ceab244`, respectively, including Go lint, the
+race/coverage suite, Backend vertical, the GradeThis corpus, frontend checks,
+vulnerability scanning, release OCI proof, Linux and macOS production builds,
+and cross-platform embedded-asset consistency. On the final commit, Go lint
+passed in 2m08s and Backend vertical passed in 9m14s.
+
+The external GradeThis Compose collector cutover remains intentionally
+deferred pending explicit user direction. Separate frontend product work may
+replace the current in-memory administrator unlock/authentication experience
+and expose already-implemented fleet operations, but it must preserve the
+authenticated administrator boundary and exact immutable collector binding.
+
+## Previous checkpoint: bounded numeric eventstats average
 
 Date: 2026-08-01
 
@@ -12322,14 +12445,12 @@ multivalue output, XML, terminal containers, escaped literal-dot keys, and the
 
 ### 4. Continue Phase 3/4 product hardening
 
-- The architecture audit's recommended next non-SPL slice is the first-start
-  collector identity/enrollment bootstrap: turn the existing immutable
-  `bound_collector_id` security contract into a complete operator workflow for
-  discovering the collector's locally persisted stable ID and issuing and
-  delivering a token bound to it. Reuse the existing collector-fleet and token
-  APIs, cover restart/rotation/revocation and capacity boundaries, and keep
-  GORM confined to the SQLite control plane. Re-audit current endpoints before
-  implementation so already-complete identity work is not duplicated.
+- First-start collector identity/enrollment bootstrap is complete at
+  `75db36f`, with adversarial path-alias hardening at `ceab244`. It reuses the
+  existing token/fleet APIs, keeps GORM confined to the SQLite control plane,
+  and proves the real absent-token identity → bound token → validation/run
+  sequence in the backend vertical and load harnesses. Do not rebuild this as
+  a second schema or browser-unauthenticated enrollment path.
 - Per-index retention and permissions, index/app administration, collector
   fleet operations, reports/dashboards, HEC compatibility, RBAC, and audit
   search.
@@ -12396,7 +12517,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `1a94faf`, `fbdb99f`, `0c78cb7`, `ab0514e`, `67689e8`,
+   commits, especially `ceab244`, `75db36f`, `3f83414`, `1a94faf`, `fbdb99f`,
+   `0c78cb7`, `ab0514e`, `67689e8`,
    `a03aa33`, `72b1b11`, `347a015`,
    `e312ae9`, `9115465`, `2a82932`, `076ff43`, `7eba237`,
    `782da43`, `125b2bc`, `f3fc981`,
@@ -12456,7 +12578,9 @@ Do not guess those decisions if they materially affect the implementation.
    Bounded argument-free, exact-field, and conditional `eventstats` counts are
    complete through `0c78cb7`; bounded exact-field numeric eventstats sum is
    complete at `1a94faf`, and bounded exact-field numeric eventstats average is
-   complete at `3f83414`.
+   complete at `3f83414`. First-start collector identity bootstrap and real
+   absent-token enrollment proof are complete at `75db36f`, with the final
+   working-directory inode-alias fence at `ceab244`.
    Typed Unicode `lower`/`upper` is complete through `8e68c7e`, `3d9d5f8`,
    `53b1f55`, and `8e4cf5f`; typed UTF-8 `len`/`length` is complete through
    `64004dc`, `e3a32e2`, and `5aebc70`. Subsequent bounded `substr`,
