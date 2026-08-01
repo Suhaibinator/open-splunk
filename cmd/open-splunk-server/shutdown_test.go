@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -375,8 +376,22 @@ func TestShutdownHTTPServerClosesActualUpgradedWebSocket(t *testing.T) {
 	if err := connection.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatalf("set post-shutdown read deadline: %v", err)
 	}
-	if _, _, err := connection.ReadMessage(); err == nil {
-		t.Fatal("upgraded websocket remained readable after shutdownHTTPServer returned")
+	bufferedFrames := 0
+	for {
+		_, _, readErr := connection.ReadMessage()
+		if readErr == nil {
+			bufferedFrames++
+			continue
+		}
+		var networkError net.Error
+		if errors.As(readErr, &networkError) && networkError.Timeout() {
+			t.Fatalf(
+				"upgraded websocket remained open after shutdownHTTPServer returned (%d buffered frames): %v",
+				bufferedFrames,
+				readErr,
+			)
+		}
+		break
 	}
 	select {
 	case <-blockingSearches.exited:

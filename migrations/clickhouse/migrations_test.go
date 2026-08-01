@@ -166,7 +166,7 @@ func TestComposeFullStackSecurityContract(t *testing.T) {
 		"user: \"65532:65532\"",
 		"network_mode: none",
 		"provision-administrator-token",
-		"/var/lib/open-splunk/state/administrator.token",
+		"/var/lib/open-splunk/state/private/administrator.token",
 		"server:",
 		"condition: service_completed_successfully",
 		"condition: service_healthy",
@@ -185,15 +185,16 @@ func TestComposeFullStackSecurityContract(t *testing.T) {
 		"/run/open-splunk/clickhouse/runtime.password",
 		"-clickhouse-deletion-password-file",
 		"/run/open-splunk/clickhouse/deletion.password",
-		"/var/lib/open-splunk/state/open-splunk.db",
-		"/var/lib/open-splunk/exports",
+		"/var/lib/open-splunk/state/private/open-splunk.db",
+		"/var/lib/open-splunk/state/private/master.key",
+		"/var/lib/open-splunk/exports/private",
 		"/run/open-splunk/tls/server.crt",
 		"/run/open-splunk/tls/server.key",
 		"/run/open-splunk/tls/ca.crt",
 		"healthcheck",
 		"https://127.0.0.1:8080/readyz",
-		"server-state:",
-		"server-exports:",
+		"server-state:/var/lib/open-splunk/state",
+		"server-exports:/var/lib/open-splunk/exports",
 		"internal: true",
 		"TMPDIR: /tmp",
 	} {
@@ -257,10 +258,32 @@ func TestComposeFullStackSecurityContract(t *testing.T) {
 	if serverStart < 0 {
 		t.Fatal("deployment compose file has no server service")
 	}
+	bootstrapSection := compose[bootstrapStart:serverStart]
+	for _, fragment := range []string{
+		"*open-splunk-server-security",
+		"network_mode: none",
+		"-destination\n      - /var/lib/open-splunk/state/private/administrator.token",
+		"- server-state:/var/lib/open-splunk/state",
+	} {
+		if !strings.Contains(bootstrapSection, fragment) {
+			t.Errorf("administrator bootstrap is missing non-root volume contract fragment %q", fragment)
+		}
+	}
+	if strings.Contains(bootstrapSection, "\n    user:") ||
+		strings.Contains(bootstrapSection, "privileged: true") ||
+		strings.Contains(bootstrapSection, "volume:\n          nocopy: true") {
+		t.Error("administrator bootstrap overrides its fixed non-root identity or disables image-seeded volume population")
+	}
 	serverSection := compose[serverStart:]
 	for _, fragment := range []string{
 		"clickhouse-migrator:\n        condition: service_completed_successfully",
 		"-clickhouse-skip-migrations",
+		"-control-db\n      - /var/lib/open-splunk/state/private/open-splunk.db",
+		"-master-key\n      - /var/lib/open-splunk/state/private/master.key",
+		"-administrator-token-file\n      - /var/lib/open-splunk/state/private/administrator.token",
+		"-export-artifact-dir\n      - /var/lib/open-splunk/exports/private",
+		"- server-state:/var/lib/open-splunk/state",
+		"- server-exports:/var/lib/open-splunk/exports",
 	} {
 		if !strings.Contains(serverSection, fragment) {
 			t.Errorf("long-running server is missing migration boundary fragment %q", fragment)

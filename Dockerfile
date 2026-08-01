@@ -94,8 +94,8 @@ RUN set -eu; \
       ./cmd/open-splunk-collector; \
     chmod 0555 /artifacts/open-splunk-server /artifacts/open-splunk-collector; \
     install -d -m 0700 \
-      /image-layout/server/state \
-      /image-layout/server/exports \
+      /image-layout/server/state/private \
+      /image-layout/server/exports/private \
       /image-layout/collector
 RUN set -eu; \
     if [ "${TARGETOS}" = "$(go env GOHOSTOS)" ] && \
@@ -130,7 +130,7 @@ COPY --from=binaries --chown=0:0 --chmod=0555 /artifacts/open-splunk-server /usr
 COPY --from=binaries --chown=65532:65532 --chmod=0700 /image-layout/server/state/ /var/lib/open-splunk/state/
 COPY --from=binaries --chown=65532:65532 --chmod=0700 /image-layout/server/exports/ /var/lib/open-splunk/exports/
 USER 65532:65532
-WORKDIR /var/lib/open-splunk/state
+WORKDIR /var/lib/open-splunk/state/private
 EXPOSE 8080 4317
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=12 \

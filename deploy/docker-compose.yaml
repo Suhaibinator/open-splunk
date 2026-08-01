@@ -104,10 +104,11 @@ services:
       - backend
     pids_limit: 64
 
-  # This one-shot service copies the host-retained token into fixed-UID state.
-  # The source is readable only through its owner-only host directory. The
-  # provisioner atomically creates an EUID-owned 0600, single-link destination
-  # and idempotently refuses to replace it with different material.
+  # This one-shot service copies the host-retained token into the image-seeded,
+  # fixed-UID private directory below the named-volume root. The source is
+  # readable only through its owner-only host directory. The provisioner
+  # atomically creates an EUID-owned 0600, single-link destination and
+  # idempotently refuses to replace it with different material.
   server-bootstrap:
     <<:
       - *open-splunk-server-image
@@ -121,7 +122,7 @@ services:
       - -source
       - /run/open-splunk-bootstrap/administrator.token
       - -destination
-      - /var/lib/open-splunk/state/administrator.token
+      - /var/lib/open-splunk/state/private/administrator.token
     volumes:
       - server-state:/var/lib/open-splunk/state
       - "${OPEN_SPLUNK_ADMINISTRATOR_TOKEN_FILE:?run ./generate-env.sh before docker compose up}:/run/open-splunk-bootstrap/administrator.token:ro"
@@ -157,13 +158,13 @@ services:
       - -collector-tls-key
       - /run/open-splunk/tls/server.key
       - -control-db
-      - /var/lib/open-splunk/state/open-splunk.db
+      - /var/lib/open-splunk/state/private/open-splunk.db
       - -master-key
-      - /var/lib/open-splunk/state/master.key
+      - /var/lib/open-splunk/state/private/master.key
       - -administrator-token-file
-      - /var/lib/open-splunk/state/administrator.token
+      - /var/lib/open-splunk/state/private/administrator.token
       - -export-artifact-dir
-      - /var/lib/open-splunk/exports
+      - /var/lib/open-splunk/exports/private
       - -clickhouse-address
       - clickhouse:9440
       - -clickhouse-secure

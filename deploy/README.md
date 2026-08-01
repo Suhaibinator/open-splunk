@@ -118,10 +118,11 @@ both `server-bootstrap` and `clickhouse-migrator` exited with code zero.
 
 `generate-env.sh` creates a high-entropy browser administrator token. A
 network-disabled, one-shot `server-bootstrap` container copies it into the
-persistent server-state volume as an EUID-owned, mode-`0600`, single-link
-file. Publication is atomic and no-overwrite; repeating bootstrap with the
-same token is idempotent, while different or unsafe existing material fails
-closed.
+persistent `server-state` volume's image-seeded `private` directory as an
+EUID-owned, mode-`0600`, single-link file. The directory itself is owned by
+UID/GID `65532:65532` with mode `0700`. Publication is atomic and
+no-overwrite; repeating bootstrap with the same token is idempotent, while
+different or unsafe existing material fails closed.
 
 The host-retained source path is
 `OPEN_SPLUNK_ADMINISTRATOR_TOKEN_FILE` in `.env`. Do not print it, place it in
@@ -141,7 +142,11 @@ entries, one mode-`0555` binary, and their private state directories. They run
 as numeric UID/GID `65532:65532`. The Compose server and bootstrap use a
 read-only root filesystem, drop all capabilities, set
 `no-new-privileges`, and mount only their required writable volumes or
-read-only inputs. Bootstrap has no network namespace.
+read-only inputs. Bootstrap has no network namespace. The server image seeds
+owner-only `private` directory entries below the state and export mountpoints.
+Docker copies those entries into a newly initialized named volume, so the
+fixed non-root identity writes below the volume roots without requiring the
+roots themselves to be writable or changing ownership as root.
 
 ClickHouse is pinned to:
 
@@ -258,9 +263,10 @@ The stack owns four named volumes:
 
 - `clickhouse-data`;
 - `clickhouse-logs`;
-- `server-state` for the administrator token, master key, SQLite database,
-  WAL, and singleton lock;
-- `server-exports` for bounded export artifacts.
+- `server-state`, whose owner-only `private` child holds the administrator
+  token, master key, SQLite database, WAL, and singleton lock;
+- `server-exports`, whose owner-only `private` child holds bounded export
+  artifacts.
 
 `docker compose up --detach --wait` is safe to repeat. An unchanged successful
 one-shot migrator remains completed; changing the release image reruns it.

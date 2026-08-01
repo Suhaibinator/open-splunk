@@ -438,6 +438,29 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
   }
 });
 
+test("server image seeds secure writable children below named-volume roots", async () => {
+  const dockerfile = await readFile(path.join(workspace, "Dockerfile"), "utf8");
+  const serverTarget = dockerfile.split("FROM scratch AS server")[1]
+    .split("FROM scratch AS collector")[0];
+
+  assert.match(
+    dockerfile,
+    /install -d -m 0700 \\\n+\s*\/image-layout\/server\/state\/private \\\n+\s*\/image-layout\/server\/exports\/private \\/,
+  );
+  assert.match(
+    serverTarget,
+    /^COPY --from=binaries --chown=65532:65532 --chmod=0700 \/image-layout\/server\/state\/ \/var\/lib\/open-splunk\/state\/$/m,
+  );
+  assert.match(
+    serverTarget,
+    /^COPY --from=binaries --chown=65532:65532 --chmod=0700 \/image-layout\/server\/exports\/ \/var\/lib\/open-splunk\/exports\/$/m,
+  );
+  assert.match(
+    serverTarget,
+    /^WORKDIR \/var\/lib\/open-splunk\/state\/private$/m,
+  );
+});
+
 test("Docker context is a deny-by-default source allowlist", async () => {
   const dockerignore = await readFile(
     path.join(workspace, ".dockerignore"),
