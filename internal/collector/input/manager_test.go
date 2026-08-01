@@ -3,6 +3,7 @@ package input
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -50,6 +51,25 @@ func (c *collected) snapshot() []RawEvent {
 	return out
 }
 
+func (c *collected) descriptions() []string {
+	events := c.snapshot()
+	out := make([]string, len(events))
+	for i, event := range events {
+		identity := event.Source.Identity
+		out[i] = fmt.Sprintf(
+			"%q path=%q dev=%d ino=%d gen=%d offsets=%d:%d",
+			event.Bytes,
+			event.Source.Path,
+			identity.Device,
+			identity.Inode,
+			identity.Generation,
+			event.Source.StartOffset,
+			event.Source.EndOffset,
+		)
+	}
+	return out
+}
+
 type harness struct {
 	t     *testing.T
 	mgr   Manager
@@ -58,6 +78,35 @@ type harness struct {
 }
 
 func startManager(t *testing.T, cfg Config, store CheckpointStore) *harness {
+	return startManagerWithAfterDrainObserver(t, cfg, store, nil)
+}
+
+func startManagerWithAfterDrainObserver(
+	t *testing.T,
+	cfg Config,
+	store CheckpointStore,
+	observer func(tailerPollObservation),
+) *harness {
+	return startManagerWithHooks(t, cfg, store, managerTestHooks{
+		afterDrain: observer,
+	})
+}
+
+type managerTestHooks struct {
+	afterDrain         func(tailerPollObservation)
+	beforeStartGuard   func(tailerPollObservation)
+	beforeSnapshotRead func(tailerPollObservation)
+	afterSnapshotChunk func(tailerPollObservation)
+	beforeRetireCommit func(tailerPollObservation)
+	afterRetireCancel  func(tailerPollObservation)
+}
+
+func startManagerWithHooks(
+	t *testing.T,
+	cfg Config,
+	store CheckpointStore,
+	hooks managerTestHooks,
+) *harness {
 	t.Helper()
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = testPoll
@@ -66,6 +115,16 @@ func startManager(t *testing.T, cfg Config, store CheckpointStore) *harness {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
+	concrete, ok := mgr.(*manager)
+	if !ok {
+		t.Fatalf("NewManager returned %T, want *manager", mgr)
+	}
+	concrete.afterDrainObserver = hooks.afterDrain
+	concrete.beforeStartGuardObserver = hooks.beforeStartGuard
+	concrete.beforeSnapshotReadObserver = hooks.beforeSnapshotRead
+	concrete.afterSnapshotChunkObserver = hooks.afterSnapshotChunk
+	concrete.beforeRetireCommitObserver = hooks.beforeRetireCommit
+	concrete.afterRetireCancelObserver = hooks.afterRetireCancel
 	ctx, cancel := context.WithCancel(context.Background())
 	col := &collected{}
 	drained := make(chan struct{})
@@ -126,19 +185,36 @@ func (h *harness) waitForTexts(want []string) {
 	h.t.Helper()
 	sortedWant := append([]string(nil), want...)
 	sort.Strings(sortedWant)
-	waitFor(h.t, "events "+joinq(sortedWant), func() bool {
-		got := h.col.texts()
+	deadline := time.Now().Add(3 * time.Second)
+	var got []string
+	for time.Now().Before(deadline) {
+		got = h.col.texts()
 		if len(got) != len(sortedWant) {
-			return false
+			time.Sleep(2 * time.Millisecond)
+			continue
 		}
 		sort.Strings(got)
+		matched := true
 		for i := range got {
 			if got[i] != sortedWant[i] {
-				return false
+				matched = false
+				break
 			}
 		}
-		return true
-	})
+		if matched {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	got = h.col.texts()
+	sort.Strings(got)
+	h.t.Fatalf(
+		"timed out waiting for events %s; got %s; sources=%v; health=%+v",
+		joinq(sortedWant),
+		joinq(got),
+		h.col.descriptions(),
+		h.mgr.Health(),
+	)
 }
 
 func joinq(s []string) string {
@@ -203,6 +279,195 @@ func TestTailerPollTimerDropsConsumedTickAndHonorsCancellation(t *testing.T) {
 	}
 	if preCanceled.timer != nil {
 		t.Fatal("pre-canceled poll wait allocated and armed a timer")
+	}
+}
+
+func TestManagerReconcileTailersRequiresConfirmedMiss(t *testing.T) {
+	t.Parallel()
+	const key = "dev=1;ino=2"
+	tracked := &tailer{}
+	mgr := &manager{tailers: map[string]*tailer{key: tracked}}
+
+	mgr.reconcileTailers(map[string]struct{}{})
+	if tracked.retireRequested.Load() || tracked.missingDiscoveries != 1 {
+		t.Fatalf(
+			"first miss = drain:%t misses:%d, want false/1",
+			tracked.retireRequested.Load(),
+			tracked.missingDiscoveries,
+		)
+	}
+
+	// Seeing the inode at a renamed path on the next complete scan cancels the
+	// stale miss without ever making the drain request visible to its tailer.
+	mgr.reconcileTailers(map[string]struct{}{key: {}})
+	if tracked.retireRequested.Load() || tracked.missingDiscoveries != 0 {
+		t.Fatalf(
+			"seen after miss = drain:%t misses:%d, want false/0",
+			tracked.retireRequested.Load(),
+			tracked.missingDiscoveries,
+		)
+	}
+
+	mgr.reconcileTailers(map[string]struct{}{})
+	mgr.reconcileTailers(map[string]struct{}{})
+	if !tracked.retireRequested.Load() {
+		t.Fatal("two consecutive misses did not request a drain")
+	}
+}
+
+func TestManagerClaimTailerReapsFinishedEntryImmediately(t *testing.T) {
+	t.Parallel()
+	const key = "dev=1;ino=2"
+	tracked := &tailer{}
+	tracked.finished.Store(true)
+	mgr := &manager{tailers: map[string]*tailer{key: tracked}}
+
+	if mgr.claimTailer(key, tracked, "renamed.log") {
+		t.Fatal("finished tailer claimed a live discovery")
+	}
+	if _, exists := mgr.tailers[key]; exists {
+		t.Fatal("finished tailer remained in map and would suppress same-pass open")
+	}
+}
+
+func TestManagerClaimTailerSteadyFastPathAvoidsLockAndPathStore(t *testing.T) {
+	t.Parallel()
+	const key = "dev=1;ino=2"
+	const path = "app.log"
+	tracked := &tailer{}
+	tracked.setPath(path)
+	originalPath := tracked.path.Load()
+	mgr := &manager{tailers: map[string]*tailer{key: tracked}}
+
+	tracked.retireMu.Lock()
+	claimed := make(chan bool, 1)
+	go func() { claimed <- mgr.claimTailer(key, tracked, path) }()
+	select {
+	case ok := <-claimed:
+		tracked.retireMu.Unlock()
+		if !ok {
+			t.Fatal("steady live tailer was not claimed")
+		}
+	case <-time.After(time.Second):
+		tracked.retireMu.Unlock()
+		<-claimed
+		t.Fatal("steady claim waited for retirement lock")
+	}
+	if got := tracked.path.Load(); got != originalPath {
+		t.Fatal("unchanged path replaced its atomic pointer")
+	}
+}
+
+func TestManagerStagedTransactionPermitBoundsTailersAndCancels(t *testing.T) {
+	t.Parallel()
+	mgr := &manager{stagedTransaction: make(chan struct{}, 1)}
+	first := &tailer{m: mgr}
+	second := &tailer{m: mgr}
+	if !first.m.acquireStagedTransaction(context.Background()) {
+		t.Fatal("first tailer did not acquire staged transaction permit")
+	}
+	if got := len(mgr.stagedTransaction); got != 1 {
+		t.Fatalf("held staged transaction permits = %d, want 1", got)
+	}
+
+	waitCtx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	result := make(chan bool, 1)
+	go func() {
+		close(started)
+		result <- second.m.acquireStagedTransaction(waitCtx)
+	}()
+	<-started
+	cancel()
+	select {
+	case acquired := <-result:
+		if acquired {
+			second.m.releaseStagedTransaction()
+			t.Fatal("second tailer acquired a full staged transaction permit")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled second tailer remained blocked on staged transaction permit")
+	}
+	first.m.releaseStagedTransaction()
+	preCanceled, cancelPreCanceled := context.WithCancel(context.Background())
+	cancelPreCanceled()
+	if second.m.acquireStagedTransaction(preCanceled) {
+		second.m.releaseStagedTransaction()
+		t.Fatal("pre-canceled tailer acquired a free staged transaction permit")
+	}
+
+	retryCtx, retryCancel := context.WithTimeout(context.Background(), time.Second)
+	defer retryCancel()
+	if !second.m.acquireStagedTransaction(retryCtx) {
+		t.Fatal("permit was not reusable after the first tailer released it")
+	}
+	second.m.releaseStagedTransaction()
+}
+
+func TestManagerStagedTransactionPermitIsHeldThroughPublication(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "a.log")
+	secondPath := filepath.Join(dir, "b.log")
+	writeFileT(t, firstPath, "first\n")
+	writeFileT(t, secondPath, "second\n")
+
+	store := newStore(t)
+	mgrInterface, err := NewManager(Config{
+		InputID:      "in",
+		Include:      []string{filepath.Join(dir, "*.log")},
+		StartAt:      StartAtBeginning,
+		PollInterval: testPoll,
+	}, store)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	mgr := mgrInterface.(*manager)
+	staged := make(chan string, 2)
+	mgr.afterDrainObserver = func(observation tailerPollObservation) {
+		staged <- observation.path
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- mgr.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("manager did not stop after staged-permit test cancellation")
+		}
+	})
+
+	select {
+	case <-staged:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no tailer staged its first transaction")
+	}
+	if got := len(mgr.stagedTransaction); got != 1 {
+		t.Fatalf("publication-held staged permits = %d, want 1", got)
+	}
+	select {
+	case path := <-staged:
+		t.Fatalf("second tailer staged before first publication completed: %s", path)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	select {
+	case <-mgr.Events():
+	case <-time.After(3 * time.Second):
+		t.Fatal("first staged event was not published")
+	}
+	select {
+	case <-staged:
+	case <-time.After(3 * time.Second):
+		t.Fatal("second tailer did not stage after first publication released the permit")
+	}
+	select {
+	case <-mgr.Events():
+	case <-time.After(3 * time.Second):
+		t.Fatal("second staged event was not published")
 	}
 }
 
@@ -816,12 +1081,14 @@ func TestManagerCopyTruncateRewriteLargerBetweenPolls(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	p := filepath.Join(dir, "app.log")
-	writeFileT(t, p, "old-one\nold-two\n")
+	const oldContent = "old-one\nold-two\n"
+	writeFileT(t, p, oldContent)
 
 	h := startManager(t, Config{
 		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
 		PollInterval: 30 * time.Millisecond,
 	}, newStore(t))
+
 	h.waitForTexts([]string{"old-one", "old-two"})
 	before := h.col.snapshot()[0].Source.Identity
 
@@ -834,6 +1101,289 @@ func TestManagerCopyTruncateRewriteLargerBetweenPolls(t *testing.T) {
 	after := afterEvents[len(afterEvents)-1].Source.Identity
 	if after.Generation <= before.Generation {
 		t.Fatalf("generation did not advance across copy-truncate: %d -> %d", before.Generation, after.Generation)
+	}
+}
+
+func TestManagerRewriteWhileBatchStagedValidatesExactSpanBeforePublish(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	const original = "a-old\n"
+	const replacement = "a-new\n"
+	writeFileT(t, p, original)
+
+	batchStaged := make(chan tailerPollObservation, 1)
+	rewriteDone := make(chan struct{})
+	var observeOnce sync.Once
+	observer := func(observation tailerPollObservation) {
+		if observation.path != p || observation.offset != uint64(len(original)) {
+			return
+		}
+		observeOnce.Do(func() {
+			batchStaged <- observation
+			<-rewriteDone
+		})
+	}
+	h := startManagerWithAfterDrainObserver(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+		FingerprintBytes: 1,
+	}, newStore(t), observer)
+	release := sync.OnceFunc(func() { close(rewriteDone) })
+	t.Cleanup(release)
+
+	var staged tailerPollObservation
+	select {
+	case staged = <-batchStaged:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for staged batch; health=%+v", h.mgr.Health())
+	}
+	if events := h.col.snapshot(); len(events) != 0 {
+		t.Fatalf("unvalidated events were published: %v", h.col.descriptions())
+	}
+	// Prefix and trailing one-byte guards both remain identical ('a' and '\n').
+	// Only validation of the complete raw dependency span detects this rewrite.
+	writeFileT(t, p, replacement)
+	release()
+	h.waitForTexts([]string{"a-new"})
+	event := h.col.snapshot()[0]
+	if event.Source.Identity.Generation <= staged.generation {
+		t.Fatalf(
+			"replacement generation = %d, want greater than staged generation %d",
+			event.Source.Identity.Generation,
+			staged.generation,
+		)
+	}
+}
+
+func TestManagerRewritePriorGuardDuringValidationResetsBeforePublish(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	const first = "first\n"
+	const second = "second\n"
+	writeFileT(t, p, first)
+
+	batchStaged := make(chan tailerPollObservation, 1)
+	rewriteDone := make(chan struct{})
+	var observeOnce sync.Once
+	observer := func(observation tailerPollObservation) {
+		if observation.path != p || observation.offset != uint64(len(first+second)) {
+			return
+		}
+		observeOnce.Do(func() {
+			batchStaged <- observation
+			<-rewriteDone
+		})
+	}
+	h := startManagerWithAfterDrainObserver(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+		FingerprintBytes: len(first),
+	}, newStore(t), observer)
+	release := sync.OnceFunc(func() { close(rewriteDone) })
+	t.Cleanup(release)
+
+	h.waitForTexts([]string{"first"})
+	oldGeneration := h.col.snapshot()[0].Source.Identity.Generation
+	appendFileT(t, p, second)
+	select {
+	case <-batchStaged:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for appended batch; health=%+v", h.mgr.Health())
+	}
+	// Mutate only the previously consumed guard while leaving the newly staged
+	// second record unchanged. The combined guard+raw validation must fail.
+	writeFileT(t, p, "FIRST\n"+second)
+	release()
+	h.waitForTexts([]string{"first", "FIRST", "second"})
+	events := h.col.snapshot()
+	if events[1].Source.Identity.Generation <= oldGeneration ||
+		events[2].Source.Identity.Generation != events[1].Source.Identity.Generation {
+		t.Fatalf("replacement generations = %v", h.col.descriptions())
+	}
+}
+
+func TestManagerMultilineLookaheadRewriteIsValidatedBeforePublish(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	const firstEvent = "START a\nline\n"
+	const original = firstEvent + "START b\n"
+	const replacement = firstEvent + "other b\n"
+	writeFileT(t, p, original)
+
+	batchStaged := make(chan tailerPollObservation, 1)
+	rewriteDone := make(chan struct{})
+	var observeOnce sync.Once
+	observer := func(observation tailerPollObservation) {
+		if observation.path != p || observation.offset != uint64(len(firstEvent)) {
+			return
+		}
+		observeOnce.Do(func() {
+			batchStaged <- observation
+			<-rewriteDone
+		})
+	}
+	h := startManagerWithAfterDrainObserver(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+		FingerprintBytes: 1,
+		Multiline:        true,
+		FlushAfter:       20 * time.Millisecond,
+		Framing: framing.Options{
+			LineStartPattern: regexp.MustCompile(`^START`),
+		},
+	}, newStore(t), observer)
+	release := sync.OnceFunc(func() { close(rewriteDone) })
+	t.Cleanup(release)
+
+	var staged tailerPollObservation
+	select {
+	case staged = <-batchStaged:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for multiline batch; health=%+v", h.mgr.Health())
+	}
+	if events := h.col.snapshot(); len(events) != 0 {
+		t.Fatalf("lookahead-dependent event published early: %v", h.col.descriptions())
+	}
+	writeFileT(t, p, replacement)
+	release()
+	h.waitForTexts([]string{"START a\nline\nother b"})
+	if generation := h.col.snapshot()[0].Source.Identity.Generation; generation <= staged.generation {
+		t.Fatalf("lookahead replacement generation = %d, want > %d", generation, staged.generation)
+	}
+}
+
+func TestManagerRewriteDuringSnapshotReadCannotPublishMixedFrame(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	const payloadBytes = validationChunkBytes + 1024
+	original := repeatByte('A', payloadBytes) + "\n"
+	replacement := repeatByte('B', payloadBytes) + "\n"
+	writeFileT(t, p, original)
+
+	chunkRead := make(chan tailerPollObservation, 1)
+	rewriteDone := make(chan struct{})
+	var observeOnce sync.Once
+	observer := func(observation tailerPollObservation) {
+		if observation.path != p || observation.offset < validationChunkBytes {
+			return
+		}
+		observeOnce.Do(func() {
+			chunkRead <- observation
+			<-rewriteDone
+		})
+	}
+	h := startManagerWithHooks(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+		FingerprintBytes: 1,
+		Framing:          framing.Options{MaxEventBytes: payloadBytes},
+	}, newStore(t), managerTestHooks{afterSnapshotChunk: observer})
+	release := sync.OnceFunc(func() { close(rewriteDone) })
+	t.Cleanup(release)
+
+	var staged tailerPollObservation
+	select {
+	case staged = <-chunkRead:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for snapshot chunk; health=%+v", h.mgr.Health())
+	}
+	writeFileT(t, p, replacement)
+	release()
+	waitFor(t, "replacement frame", func() bool { return len(h.col.snapshot()) == 1 })
+	event := h.col.snapshot()[0]
+	if string(event.Bytes) != replacement[:len(replacement)-1] {
+		t.Fatalf("published mixed snapshot: length=%d prefix=%q", len(event.Bytes), event.Bytes[:8])
+	}
+	if event.Source.Identity.Generation <= staged.generation {
+		t.Fatalf("snapshot replacement generation = %d, want > %d", event.Source.Identity.Generation, staged.generation)
+	}
+}
+
+func TestManagerTruncateBeforeSnapshotReadArmsGenerationReset(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	const original = "old\n"
+	writeFileT(t, p, original)
+
+	readReady := make(chan tailerPollObservation, 1)
+	truncateDone := make(chan struct{})
+	var observeOnce sync.Once
+	observer := func(observation tailerPollObservation) {
+		if observation.path != p || observation.offset != uint64(len(original)) {
+			return
+		}
+		observeOnce.Do(func() {
+			readReady <- observation
+			<-truncateDone
+		})
+	}
+	h := startManagerWithHooks(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+	}, newStore(t), managerTestHooks{beforeSnapshotRead: observer})
+	release := sync.OnceFunc(func() { close(truncateDone) })
+	t.Cleanup(release)
+
+	var staged tailerPollObservation
+	select {
+	case staged = <-readReady:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting before snapshot read; health=%+v", h.mgr.Health())
+	}
+	if err := os.Truncate(p, 0); err != nil {
+		t.Fatalf("truncate staged source: %v", err)
+	}
+	release()
+	waitFor(t, "short snapshot reset", func() bool { return !h.mgr.Health().LastErrorAt.IsZero() })
+	appendFileT(t, p, "new\n")
+	h.waitForTexts([]string{"new"})
+	if generation := h.col.snapshot()[0].Source.Identity.Generation; generation <= staged.generation {
+		t.Fatalf("post-short-read generation = %d, want > %d", generation, staged.generation)
+	}
+}
+
+func TestManagerRewriteBetweenResumeAndInitialGuardBurnsGeneration(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	const original = "old\n"
+	const replacement = "new\n"
+	writeFileT(t, p, original)
+	store := newStore(t)
+	identity, err := NewFileIdentity(p, 0)
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	if err := store.Set(Checkpoint{
+		InputID: "in", Identity: identity, Path: p,
+		Offset: uint64(len(original)), LineNumber: 1, NextLineNumber: 2,
+	}); err != nil {
+		t.Fatalf("seed resume checkpoint: %v", err)
+	}
+
+	rewriteResult := make(chan error, 1)
+	var rewriteOnce sync.Once
+	h := startManagerWithHooks(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+	}, store, managerTestHooks{
+		beforeStartGuard: func(tailerPollObservation) {
+			rewriteOnce.Do(func() {
+				err := os.WriteFile(p, []byte(replacement), 0o644)
+				rewriteResult <- err
+			})
+		},
+	})
+	h.waitForTexts([]string{"new"})
+	if err := <-rewriteResult; err != nil {
+		t.Fatalf("rewrite during start: %v", err)
+	}
+	event := h.col.snapshot()[0]
+	if event.Source.Identity.Generation <= identity.Generation {
+		t.Fatalf(
+			"resume-race generation = %d, want > %d",
+			event.Source.Identity.Generation,
+			identity.Generation,
+		)
 	}
 }
 
@@ -866,6 +1416,7 @@ func newTrackedTailerForTest(
 		cfg:         Config{InputID: "in"},
 		checkpoints: store,
 		fpBytes:     defaultFingerprintBytes,
+		readWindow:  framing.DefaultMaxEventBytes + framingReadSlop,
 		events:      make(chan RawEvent, 8),
 	}
 	tracked := &tailer{
@@ -903,6 +1454,213 @@ func TestTailerGuardFingerprintReusesScratchWithoutAllocating(t *testing.T) {
 	})
 	if allocations != 0 {
 		t.Fatalf("steady guard fingerprint allocated %.0f objects, want 0", allocations)
+	}
+}
+
+func TestTailerSmallAppendPreservesFullRewriteGuard(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "app.log")
+	initial := repeatByte('a', 2*defaultFingerprintBytes-1) + "\n"
+	writeFileT(t, path, initial)
+	tracked, identity := newTrackedTailerForTest(t, path, uint64(len(initial)), 2)
+	if tracked.guardLength != defaultFingerprintBytes {
+		t.Fatalf(
+			"initial guard length = %d, want %d",
+			tracked.guardLength,
+			defaultFingerprintBytes,
+		)
+	}
+
+	const appended = "x\n"
+	appendFileT(t, path, appended)
+	observedEnd := uint64(len(initial + appended))
+	batch, err := tracked.stageRead(context.Background(), observedEnd, false)
+	if err != nil {
+		t.Fatalf("stage small append: %v", err)
+	}
+	matches, err := tracked.stagedBatchMatches(batch)
+	if err != nil || !matches {
+		t.Fatalf("validate small append: matches=%t err=%v", matches, err)
+	}
+	if !tracked.commitBatch(context.Background(), batch) {
+		t.Fatal("commit small append canceled")
+	}
+	if tracked.guardLength != defaultFingerprintBytes {
+		t.Fatalf(
+			"post-append guard length = %d, want retained %d",
+			tracked.guardLength,
+			defaultFingerprintBytes,
+		)
+	}
+
+	// Preserve the appended suffix while replacing every byte covered only by
+	// the prior guard. A guard incorrectly shrunk to len(appended) would miss it.
+	writeFileT(t, path, repeatByte('b', len(initial))+appended)
+	size, trackable := tracked.trackGrowthAndTruncate()
+	if !trackable || size != observedEnd {
+		t.Fatalf(
+			"same-size replacement tracking = size %d trackable %t, want %d/true",
+			size,
+			trackable,
+			observedEnd,
+		)
+	}
+	if tracked.offset != 0 || tracked.id.Generation != identity.Generation+1 {
+		t.Fatalf(
+			"same-size replacement state = offset %d generation %d, want 0/%d",
+			tracked.offset,
+			tracked.id.Generation,
+			identity.Generation+1,
+		)
+	}
+}
+
+func TestTailerArtificialWindowEOFDoesNotFlushMultilinePartial(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "app.log")
+	const firstLine = "START a\n"
+	content := firstLine + "continuation beyond the staged window\n"
+	writeFileT(t, path, content)
+	tracked, _ := newTrackedTailerForTest(t, path, 0, 1)
+	tracked.id.Fingerprint = ""
+	tracked.id.FingerprintLength = 0
+	tracked.m.cfg.Multiline = true
+	tracked.m.cfg.FlushAfter = time.Nanosecond
+	tracked.m.cfg.Framing.LineStartPattern = regexp.MustCompile(`^START`)
+	tracked.m.readWindow = uint64(len(firstLine))
+	tracked.lastSizeChange = time.Now().Add(-time.Hour)
+
+	batch, err := tracked.stageRead(context.Background(), uint64(len(content)), false)
+	if err != nil {
+		t.Fatalf("stage bounded multiline read: %v", err)
+	}
+	if batch.reachedObservedEnd() || batch.flushed || len(batch.events) != 0 ||
+		batch.cursor.offset != 0 {
+		t.Fatalf(
+			"artificial EOF batch = reached:%t flushed:%t events:%d offset:%d",
+			batch.reachedObservedEnd(),
+			batch.flushed,
+			len(batch.events),
+			batch.cursor.offset,
+		)
+	}
+}
+
+func TestTailerDenseInputUsesSmallInitialSnapshot(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "dense.log")
+	content := repeatByte('\n', 64<<10)
+	writeFileT(t, path, content)
+	tracked, _ := newTrackedTailerForTest(t, path, 0, 1)
+	tracked.id.Fingerprint = ""
+	tracked.id.FingerprintLength = 0
+
+	batch, err := tracked.stageRead(context.Background(), uint64(len(content)), false)
+	if err != nil {
+		t.Fatalf("stage dense input: %v", err)
+	}
+	if got := len(batch.raw); got != initialStagedReadBytes {
+		t.Fatalf("dense initial snapshot bytes = %d, want %d", got, initialStagedReadBytes)
+	}
+	if got := len(batch.events); got != maxStagedEvents {
+		t.Fatalf("dense staged events = %d, want cap %d", got, maxStagedEvents)
+	}
+	if got := batch.cursor.offset; got != maxStagedEvents {
+		t.Fatalf("dense staged cursor = %d, want %d", got, maxStagedEvents)
+	}
+}
+
+func TestTailerStagedReadWindowEvolution(t *testing.T) {
+	t.Parallel()
+	tracked := &tailer{m: &manager{readWindow: 64 << 10}}
+	if got := tracked.currentStagedReadWindow(); got != initialStagedReadBytes {
+		t.Fatalf("initial staged window = %d, want %d", got, initialStagedReadBytes)
+	}
+	probe := &stagedBatch{
+		start:       0,
+		snapshotEnd: initialStagedReadBytes,
+		observedEnd: 2 * initialStagedReadBytes,
+		cursor:      tailerCursor{offset: 0},
+	}
+	if !probe.stoppedAtArtificialBoundary() {
+		t.Fatal("zero-progress bounded probe was not classified as artificial")
+	}
+	for _, want := range []uint64{8 << 10, 16 << 10, 32 << 10} {
+		if !tracked.growStagedReadWindow() || tracked.stagedWindow != want {
+			t.Fatalf("grown staged window = %d, want %d", tracked.stagedWindow, want)
+		}
+	}
+
+	large := &stagedBatch{start: 0, cursor: tailerCursor{offset: 24 << 10}}
+	tracked.tuneProductiveStagedReadWindow(large)
+	if got := tracked.stagedWindow; got != 32<<10 {
+		t.Fatalf("productive large-record window = %d, want retained %d", got, 32<<10)
+	}
+
+	lowUtilization := &stagedBatch{
+		start:  24 << 10,
+		cursor: tailerCursor{offset: 28 << 10},
+	}
+	tracked.tuneProductiveStagedReadWindow(lowUtilization)
+	if got := tracked.currentStagedReadWindow(); got != initialStagedReadBytes {
+		t.Fatalf("low-utilization window = %d, want %d", got, initialStagedReadBytes)
+	}
+
+	tracked.stagedWindow = 32 << 10
+	eventLimited := &stagedBatch{
+		start:      0,
+		cursor:     tailerCursor{offset: 24 << 10},
+		eventLimit: true,
+	}
+	tracked.tuneProductiveStagedReadWindow(eventLimited)
+	if got := tracked.currentStagedReadWindow(); got != initialStagedReadBytes {
+		t.Fatalf("event-limited window = %d, want %d", got, initialStagedReadBytes)
+	}
+}
+
+func TestManagerFramingErrorDoesNotBurnGenerationOrReplay(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	const consumed = "old\n"
+	writeFileT(t, path, consumed+"new\n")
+	store := newStore(t)
+	identity, err := NewFileIdentity(path, 0)
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	checkpoint := Checkpoint{
+		InputID: "in", Identity: identity, Path: path,
+		Offset:         uint64(len(consumed)),
+		LineNumber:     ^uint64(0) - 2,
+		NextLineNumber: ^uint64(0) - 1,
+	}
+	if err := store.Set(checkpoint); err != nil {
+		t.Fatalf("seed exhausted-line checkpoint: %v", err)
+	}
+
+	h := startManager(t, Config{
+		InputID: "in", Include: []string{path}, StartAt: StartAtBeginning,
+	}, store)
+	waitFor(t, "framing error", func() bool {
+		return !h.mgr.Health().LastErrorAt.IsZero()
+	})
+	time.Sleep(3 * testPoll)
+	if events := h.col.descriptions(); len(events) != 0 {
+		t.Fatalf("framing error replayed events: %v", events)
+	}
+	got, ok, err := store.Get("in", identity)
+	if err != nil || !ok {
+		t.Fatalf("get checkpoint after framing error: ok=%t err=%v", ok, err)
+	}
+	if got.Identity.Generation != identity.Generation || got.Offset != checkpoint.Offset {
+		t.Fatalf(
+			"checkpoint after framing error = gen %d offset %d, want gen %d offset %d",
+			got.Identity.Generation,
+			got.Offset,
+			identity.Generation,
+			checkpoint.Offset,
+		)
 	}
 }
 
@@ -974,13 +1732,20 @@ func TestTailerDrainReframesAfterAppendRacesWithEOFStat(t *testing.T) {
 	if tracked.canWaitAtCleanBoundary(observedSize) {
 		t.Fatal("draining tailer trusted a stale EOF observation")
 	}
-	framer, err := tracked.reframe()
-	if err != nil {
-		t.Fatalf("reframe after stale EOF: %v", err)
+	latestSize, trackable := tracked.trackGrowthAndTruncate()
+	if !trackable {
+		t.Fatal("late append was not trackable")
 	}
-	pending, continued := tracked.drain(context.Background(), framer)
-	if !continued || pending != 0 {
-		t.Fatalf("drain result = pending %d continued %t, want 0/true", pending, continued)
+	batch, err := tracked.stageRead(context.Background(), latestSize, false)
+	if err != nil {
+		t.Fatalf("stage after stale EOF: %v", err)
+	}
+	matches, err := tracked.stagedBatchMatches(batch)
+	if err != nil || !matches {
+		t.Fatalf("validate staged append: matches=%t err=%v", matches, err)
+	}
+	if !tracked.commitBatch(context.Background(), batch) {
+		t.Fatal("commit staged append canceled")
 	}
 	select {
 	case event := <-tracked.m.events:
@@ -1038,6 +1803,107 @@ func TestManagerDeletionFlushesTrailingPartialLine(t *testing.T) {
 		t.Fatalf("remove: %v", err)
 	}
 	h.waitForTexts([]string{"done", "partial-no-newline"})
+}
+
+func TestManagerRetirementDrainsAppendBeforeFinalBoundaryWithoutReset(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	writeFileT(t, p, "old\n")
+	writer, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open retained writer: %v", err)
+	}
+	t.Cleanup(func() { _ = writer.Close() })
+
+	appendResult := make(chan error, 1)
+	var appendOnce sync.Once
+	observer := func(tailerPollObservation) {
+		appendOnce.Do(func() {
+			_, err := writer.WriteString("late\n")
+			appendResult <- err
+		})
+	}
+	h := startManagerWithHooks(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+	}, newStore(t), managerTestHooks{beforeRetireCommit: observer})
+	h.waitForTexts([]string{"old"})
+	originalGeneration := h.col.snapshot()[0].Source.Identity.Generation
+
+	if err := os.Remove(p); err != nil {
+		t.Fatalf("remove source with retained writer: %v", err)
+	}
+	h.waitForTexts([]string{"old", "late"})
+	select {
+	case err := <-appendResult:
+		if err != nil {
+			t.Fatalf("append at retirement boundary: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("retirement boundary hook did not run")
+	}
+	waitFor(t, "retired after appended suffix", func() bool {
+		return h.mgr.Health().ActiveSources == 0
+	})
+	events := h.col.snapshot()
+	if len(events) != 2 || events[1].Source.Identity.Generation != originalGeneration {
+		t.Fatalf("retirement append replayed/reset generation: %v", h.col.descriptions())
+	}
+}
+
+func TestManagerRediscoveryCancelsFinalizingRetirementWithoutPartialSplit(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	outside := filepath.Join(dir, "outside")
+	writeFileT(t, p, "done\npartial")
+
+	finalizing := make(chan struct{}, 1)
+	releaseFinalizer := make(chan struct{})
+	canceled := make(chan struct{}, 1)
+	var finalizerOnce sync.Once
+	h := startManagerWithHooks(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+	}, newStore(t), managerTestHooks{
+		beforeRetireCommit: func(tailerPollObservation) {
+			finalizerOnce.Do(func() {
+				finalizing <- struct{}{}
+				<-releaseFinalizer
+			})
+		},
+		afterRetireCancel: func(tailerPollObservation) {
+			select {
+			case canceled <- struct{}{}:
+			default:
+			}
+		},
+	})
+	release := sync.OnceFunc(func() { close(releaseFinalizer) })
+	t.Cleanup(release)
+	h.waitForTexts([]string{"done"})
+
+	if err := os.Rename(p, outside); err != nil {
+		t.Fatalf("move source outside include: %v", err)
+	}
+	select {
+	case <-finalizing:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for provisional finalization; health=%+v", h.mgr.Health())
+	}
+	if err := os.Rename(outside, p); err != nil {
+		t.Fatalf("rediscover source: %v", err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("rediscovery did not cancel retirement; health=%+v", h.mgr.Health())
+	}
+	release()
+	appendFileT(t, p, "-continued\n")
+	h.waitForTexts([]string{"done", "partial-continued"})
+	if events := h.col.snapshot(); len(events) != 2 {
+		t.Fatalf("rediscovery split or replayed partial: %v", h.col.descriptions())
+	}
 }
 
 func TestManagerPartialAcrossPollsAdvancesLineOnlyWhenCompleted(t *testing.T) {

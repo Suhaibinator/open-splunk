@@ -1,7 +1,6 @@
 package input
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -21,6 +20,22 @@ import (
 // defaultPollInterval is used when Config.PollInterval is unset.
 const defaultPollInterval = 250 * time.Millisecond
 
+// errSourceSnapshotChanged classifies a short exact read as evidence that the
+// source changed while a transaction was being assembled or validated. Other
+// I/O errors are transient failures: callers report them without burning a
+// generation or replaying already-consumed bytes.
+var errSourceSnapshotChanged = errors.New("collector/input: source snapshot changed")
+
+func classifyExactReadError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return fmt.Errorf("%w: %w", errSourceSnapshotChanged, err)
+	}
+	return err
+}
+
 // manager is the concrete Manager for one file input. It is poll-driven: every
 // PollInterval it re-globs, starts a per-file tailer goroutine for newly seen
 // files, and asks tailers whose file left the discovery set to drain and stop.
@@ -29,9 +44,33 @@ type manager struct {
 	checkpoints ManagerCheckpointStore
 	fpBytes     int
 	poll        time.Duration
+	readWindow  uint64
 	identityFn  func(*os.File, os.FileInfo, int) (FileIdentity, error)
+	// afterDrainObserver is an internal test seam installed before Run starts.
+	// It runs after a tailer stages a bounded read but before validation and
+	// publication.
+	afterDrainObserver func(tailerPollObservation)
+	// afterSnapshotChunkObserver is an internal test seam invoked while a
+	// bounded immutable source snapshot is being assembled.
+	afterSnapshotChunkObserver func(tailerPollObservation)
+	// beforeSnapshotReadObserver is an internal test seam after Stat selected a
+	// bounded end but before the exact snapshot is read.
+	beforeSnapshotReadObserver func(tailerPollObservation)
+	// beforeStartGuardObserver is an internal test seam between durable resume
+	// resolution and the new tailer's initial trailing-guard capture.
+	beforeStartGuardObserver func(tailerPollObservation)
+	// beforeRetireCommitObserver is an internal test seam at the finite
+	// retirement boundary, before the final exact snapshot validation.
+	beforeRetireCommitObserver func(tailerPollObservation)
+	// afterRetireCancelObserver is an internal test seam for the manager/tailer
+	// cancellation handoff.
+	afterRetireCancelObserver func(tailerPollObservation)
 
 	events chan RawEvent
+	// stagedTransaction is a capacity-one manager-wide permit. A tailer holds it
+	// from snapshot allocation through validation and publication, bounding
+	// aggregate staged memory while the shared event consumer is backpressured.
+	stagedTransaction chan struct{}
 
 	wg      sync.WaitGroup
 	tailers map[string]*tailer // keyed by tracking key (dev/ino or fingerprint)
@@ -75,18 +114,24 @@ func NewManager(cfg Config, checkpoints ManagerCheckpointStore) (Manager, error)
 	if err != nil {
 		return nil, err
 	}
+	readWindow, err := stagedReadWindow(cfg)
+	if err != nil {
+		return nil, err
+	}
 	poll := cfg.PollInterval
 	if poll <= 0 {
 		poll = defaultPollInterval
 	}
 	m := &manager{
-		cfg:         cfg,
-		checkpoints: checkpoints,
-		fpBytes:     fpBytes,
-		poll:        poll,
-		events:      make(chan RawEvent),
-		tailers:     make(map[string]*tailer),
-		state:       opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_STARTING,
+		cfg:               cfg,
+		checkpoints:       checkpoints,
+		fpBytes:           fpBytes,
+		poll:              poll,
+		readWindow:        readWindow,
+		events:            make(chan RawEvent),
+		stagedTransaction: make(chan struct{}, 1),
+		tailers:           make(map[string]*tailer),
+		state:             opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_STARTING,
 	}
 	return m, nil
 }
@@ -171,9 +216,10 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 		if haveID {
 			key := fmt.Sprintf("dev=%d;ino=%d", dev, ino)
 			if t, ok := m.tailers[key]; ok {
-				seen[key] = struct{}{}
-				t.setPath(p) // rename continuity: same inode, new path, keep offset
-				continue
+				if m.claimTailer(key, t, p) {
+					seen[key] = struct{}{}
+					continue
+				}
 			}
 		}
 
@@ -210,11 +256,13 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 		if haveID {
 			key = fmt.Sprintf("dev=%d;ino=%d", id.Device, id.Inode)
 		}
-		if _, ok := m.tailers[key]; ok {
-			// Race: another path with the same inode created it this cycle.
-			_ = f.Close()
-			seen[key] = struct{}{}
-			continue
+		if existing, ok := m.tailers[key]; ok {
+			if m.claimTailer(key, existing, p) {
+				// Race: another path with the same inode created it this cycle.
+				_ = f.Close()
+				seen[key] = struct{}{}
+				continue
+			}
 		}
 
 		// #nosec G115 -- the negative-size case is rejected above.
@@ -260,18 +308,71 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 		m.lastErrorNs.Store(time.Now().UnixNano())
 	}
 
-	// Reap finished tailers; ask tailers whose file left the set to drain.
+	m.reconcileTailers(seen)
+
+	m.updateState(len(paths), openErr)
+}
+
+// claimTailer reuses a live lifecycle for a discovered inode. Cancellation and
+// the finished check deliberately bracket the retirement lock: a finalizer may
+// finish while discovery waits for that lock, and such a finished entry must
+// be removed so this same discovery pass can open its replacement.
+func (m *manager) claimTailer(key string, t *tailer, path string) bool {
+	if t.finished.Load() {
+		delete(m.tailers, key)
+		return false
+	}
+	wasRetiring := t.retireRequested.Load()
+	if !wasRetiring {
+		t.setPath(path)
+		if t.finished.Load() {
+			delete(m.tailers, key)
+			return false
+		}
+		return true
+	}
+	canceled := t.cancelDrain()
+	if t.finished.Load() {
+		delete(m.tailers, key)
+		return false
+	}
+	if !canceled {
+		// Retirement already crossed its exact-validation boundary. It owns the
+		// inode until its staged terminal publication completes.
+		return true
+	}
+	t.setPath(path) // rename continuity: same inode, new path, keep offset
+	if wasRetiring && m.afterRetireCancelObserver != nil {
+		m.afterRetireCancelObserver(tailerPollObservation{
+			path: path,
+		})
+	}
+	return true
+}
+
+// reconcileTailers requires two consecutive discovery misses before retiring
+// a source. A glob result is not an atomic directory snapshot: a rename can
+// move a matched path after matchPaths returns but before Stat, making a live
+// inode appear absent for one pass. Immediately draining on that stale pass
+// would later rediscover the inode at its new path and replay its durable
+// checkpoint. One complete confirmation pass closes that race without adding
+// extra directory scans to steady-state polling.
+func (m *manager) reconcileTailers(seen map[string]struct{}) {
 	for key, t := range m.tailers {
 		if t.finished.Load() {
 			delete(m.tailers, key)
 			continue
 		}
-		if _, ok := seen[key]; !ok {
-			t.requestDrain()
+		if _, ok := seen[key]; ok {
+			t.missingDiscoveries = 0
+			continue
 		}
+		if t.missingDiscoveries == 0 {
+			t.missingDiscoveries = 1
+			continue
+		}
+		t.requestDrain()
 	}
-
-	m.updateState(len(paths), openErr)
 }
 
 type resolvedStart struct {
@@ -298,7 +399,14 @@ func (m *manager) resolveStart(
 		return resolvedStart{}, err
 	}
 	if ok {
-		sameGeneration := cp.Offset <= size && persistedPrefixMatches(f, cp.Identity)
+		sameGeneration := false
+		if cp.Offset <= size {
+			prefixMatches, prefixErr := persistedPrefixMatches(f, cp.Identity)
+			if prefixErr != nil && !errors.Is(prefixErr, errSourceSnapshotChanged) {
+				return resolvedStart{}, prefixErr
+			}
+			sameGeneration = prefixErr == nil && prefixMatches
+		}
 		if sameGeneration {
 			nextLine, lineCursorKnown, lineErr := checkpointNextLine(cp, m.cfg.Multiline)
 			if lineErr != nil {
@@ -386,14 +494,17 @@ func checkpointNextLine(
 // persistedPrefixMatches compares exactly the bytes covered by the persisted
 // fingerprint. Hashing a fixed prefix length avoids mistaking ordinary append
 // growth for a rewrite when the file was initially shorter than fpBytes.
-func persistedPrefixMatches(f *os.File, id FileIdentity) bool {
+func persistedPrefixMatches(f *os.File, id FileIdentity) (bool, error) {
 	if id.FingerprintLength == 0 {
 		// Zero-length fingerprints are valid for files discovered empty and for
 		// checkpoints written by the format predating FingerprintLength.
-		return true
+		return true, nil
 	}
 	fp, err := computeFingerprintRange(f, 0, id.FingerprintLength)
-	return err == nil && fp == id.Fingerprint
+	if err != nil {
+		return false, classifyExactReadError(err)
+	}
+	return fp == id.Fingerprint, nil
 }
 
 // updateState recomputes the aggregate health state after a poll.
@@ -484,8 +595,24 @@ func (m *manager) startTailer(
 		lineCursorKnown: lineCursorKnown,
 		lastSizeChange:  time.Now(),
 	}
+	if observer := m.beforeStartGuardObserver; observer != nil {
+		observer(tailerPollObservation{
+			path:       path,
+			offset:     start,
+			generation: id.Generation,
+		})
+	}
 	if err := t.refreshGuard(); err != nil {
 		return nil, err
+	}
+	if id.FingerprintLength > 0 {
+		matches, matchErr := persistedPrefixMatches(f, id)
+		if matchErr != nil && !errors.Is(matchErr, errSourceSnapshotChanged) {
+			return nil, matchErr
+		}
+		if matchErr != nil || !matches {
+			return nil, errors.New("collector/input: file identity changed while starting tailer")
+		}
 	}
 	t.path.Store(&path)
 	m.wg.Add(1)
@@ -494,13 +621,13 @@ func (m *manager) startTailer(
 }
 
 // newFramer selects and constructs the framer for a file at the given offset.
-func (m *manager) newFramer(f *os.File, start, nextLine uint64) (framing.Framer, error) {
+func (m *manager) newFramer(r io.Reader, start, nextLine uint64) (framing.Framer, error) {
 	options := m.cfg.Framing
 	options.StartLineNumber = nextLine
 	if m.cfg.Multiline {
-		return framing.NewMultilineFramer(f, start, options)
+		return framing.NewMultilineFramer(r, start, options)
 	}
-	return framing.NewLineFramer(f, start, options)
+	return framing.NewLineFramer(r, start, options)
 }
 
 func (m *manager) identifyFile(f *os.File, info os.FileInfo) (FileIdentity, error) {
@@ -526,13 +653,12 @@ func max64(a, b int64) int64 {
 }
 
 // tailer reads one physical file and emits RawEvents. One tailer goroutine owns
-// its *os.File, offset, and identity; the manager only touches the atomic path
-// pointer, drainReq, and finished flags.
+// its *os.File, cursor, identity, framing, and quiescence state. The discovery
+// goroutine only updates the atomic path and coordinates retirement through
+// retireMu/retireRequested before observing finished.
 //
-// Because the framing package caches EOF (once its reader reports io.EOF it
-// will not re-read), the tailer builds a fresh framer whenever observed bytes
-// require reading, seeked to the last durable offset. This makes appended bytes
-// visible while avoiding a framer and EOF read at a proven clean boundary.
+// Each active poll frames a bounded private snapshot and publishes it only
+// after an exact reread proves every dependency byte is unchanged.
 type tailer struct {
 	m   *manager
 	key string
@@ -561,19 +687,52 @@ type tailer struct {
 
 	// guard fingerprints a bounded window immediately before offset. It detects
 	// copy-truncate-and-rewrite even when the replacement reaches the old size
-	// before the next poll, while costing at most fpBytes of IO per poll.
-	guardOffset      uint64
-	guardLength      uint32
-	guardFingerprint fingerprintDigest
-	guardScratch     []byte
+	// before the next poll. Every guard read is independently capped at fpBytes;
+	// a read-active poll uses two-phase capture and validation around the drain.
+	guardOffset       uint64
+	guardLength       uint64
+	guardFingerprint  fingerprintDigest
+	guardScratch      []byte
+	validationScratch []byte
+	// stagedWindow grows exponentially only when an artificial transaction
+	// boundary cannot reach a frame boundary. Large productive batches retain
+	// it; low-utilization and event-limited batches shrink it to the small base.
+	stagedWindow uint64
+	// rewritePending forces a generation reset retry after guard validation
+	// detected a rewrite but the durable zero checkpoint could not be stored.
+	rewritePending bool
 
-	drainReq atomic.Bool
+	// missingDiscoveries is owned by the manager discovery goroutine. A single
+	// miss is tolerated because glob and Stat do not form an atomic snapshot.
+	missingDiscoveries uint8
+
+	retireMu        sync.Mutex
+	retireRequested atomic.Bool
+	retireVersion   atomic.Uint64
+	retireCommitted bool
+	retireStable    uint8  // tailer goroutine only
+	retireSize      uint64 // tailer goroutine only
+	retireSeen      uint64 // tailer goroutine's observed retireVersion
+
 	finished atomic.Bool
 }
 
+type tailerPollObservation struct {
+	path       string
+	offset     uint64
+	generation uint64
+}
+
 // setPath updates the path the tailer reports in emitted SourceRefs after a
-// rename keeps the same inode.
-func (t *tailer) setPath(p string) { t.path.Store(&p) }
+// rename keeps the same inode. Steady discovery polls retain the existing
+// pointer and avoid an escaping string allocation.
+func (t *tailer) setPath(p string) {
+	current := t.path.Load()
+	if current != nil && *current == p {
+		return
+	}
+	t.path.Store(&p)
+}
 
 // pathStr returns the tailer's current path.
 func (t *tailer) pathStr() string {
@@ -583,9 +742,61 @@ func (t *tailer) pathStr() string {
 	return ""
 }
 
-// requestDrain asks the tailer to drain any remaining bytes and exit. Used when
-// the file left the discovery set (deletion or rotation out of the glob).
-func (t *tailer) requestDrain() { t.drainReq.Store(true) }
+// requestDrain begins a provisional retirement. It remains cancellable until
+// the tailer commits a final validated snapshot, so rediscovery cannot split a
+// buffered partial frame merely because one discovery snapshot was stale.
+func (t *tailer) requestDrain() {
+	t.retireMu.Lock()
+	if !t.retireCommitted && !t.retireRequested.Load() {
+		t.retireRequested.Store(true)
+		t.retireVersion.Add(1)
+	}
+	t.retireMu.Unlock()
+}
+
+func (t *tailer) cancelDrain() bool {
+	t.retireMu.Lock()
+	defer t.retireMu.Unlock()
+	if t.retireCommitted {
+		return false
+	}
+	if t.retireRequested.Load() {
+		t.retireRequested.Store(false)
+		t.retireVersion.Add(1)
+	}
+	return true
+}
+
+func (t *tailer) observeAfterDrain(offset uint64) {
+	if t.m.afterDrainObserver == nil {
+		return
+	}
+	t.m.afterDrainObserver(tailerPollObservation{
+		path:       t.pathStr(),
+		offset:     offset,
+		generation: t.id.Generation,
+	})
+}
+
+func (m *manager) acquireStagedTransaction(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	select {
+	case m.stagedTransaction <- struct{}{}:
+		if ctx.Err() != nil {
+			m.releaseStagedTransaction()
+			return false
+		}
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (m *manager) releaseStagedTransaction() {
+	<-m.stagedTransaction
+}
 
 // tailerPollTimer owns the delay between one tailer's poll attempts.
 type tailerPollTimer struct {
@@ -622,7 +833,7 @@ func (timer *tailerPollTimer) stop() {
 // there is no work and no drain handoff to complete. A drain request must
 // reframe even at an observed EOF because a writer can append after Stat.
 func (t *tailer) canWaitAtCleanBoundary(size uint64) bool {
-	return size == t.offset && !t.drainReq.Load()
+	return size == t.offset && !t.retireRequested.Load()
 }
 
 // run is the tailer goroutine.
@@ -639,71 +850,137 @@ func (t *tailer) run(ctx context.Context) {
 	for {
 		size, trackable := t.trackGrowthAndTruncate()
 		if !trackable {
+			t.retireStable = 0
 			if !pollTimer.wait(ctx) {
 				return
 			}
 			continue
 		}
 		if t.canWaitAtCleanBoundary(size) {
-			// An ordinary partial record retains an offset below size. An
-			// incomplete oversized record may sit exactly at EOF, but its
-			// discard state remains armed and resumes when the file grows.
+			t.retireStable = 0
 			if !pollTimer.wait(ctx) {
 				return
 			}
 			continue
 		}
 
-		if t.discardingOversize {
-			complete, err := t.discardOversizedRemainder(ctx)
-			if errors.Is(err, context.Canceled) {
+		if !t.m.acquireStagedTransaction(ctx) {
+			return
+		}
+		// Another tailer may have held the manager permit for an arbitrary
+		// interval. Refresh size and rewrite evidence before choosing this
+		// transaction's immutable endpoint or inactivity behavior.
+		size, trackable = t.trackGrowthAndTruncate()
+		if !trackable {
+			t.m.releaseStagedTransaction()
+			t.retireStable = 0
+			if !pollTimer.wait(ctx) {
 				return
 			}
-			if err != nil {
-				t.m.setReadError(t.pathStr(), err)
+			continue
+		}
+		if t.canWaitAtCleanBoundary(size) {
+			t.m.releaseStagedTransaction()
+			t.retireStable = 0
+			if !pollTimer.wait(ctx) {
+				return
 			}
-			if !complete {
-				if refreshErr := t.refreshGuard(); refreshErr != nil {
-					t.m.setReadError(t.pathStr(), refreshErr)
-				}
-				if t.drainReq.Load() {
-					return
-				}
-				if !pollTimer.wait(ctx) {
-					return
-				}
+			continue
+		}
+		batch, err := t.stageRead(ctx, size, false)
+		if errors.Is(err, context.Canceled) {
+			t.m.releaseStagedTransaction()
+			return
+		}
+		if err != nil {
+			t.m.releaseStagedTransaction()
+			t.retireStable = 0
+			if t.handleSourceValidationFailure(false, err) {
 				continue
 			}
-		}
-
-		fr, err := t.reframe()
-		if err != nil {
-			t.m.setReadError(t.pathStr(), err)
-		} else {
-			pendingLen, cont := t.drain(ctx, fr)
-			if !cont {
-				return // ctx canceled mid-emit
-			}
-			if err := t.refreshGuard(); err != nil {
-				t.m.setReadError(t.pathStr(), err)
-			}
-			if t.drainReq.Load() {
-				// File left the discovery set: emit any buffered remainder (a
-				// trailing partial line, or an unterminated multiline event) so a
-				// deleted/rotated file loses nothing, then stop tracking it.
-				if pendingLen > 0 {
-					t.emitFlush(ctx, fr)
-				}
+			if !pollTimer.wait(ctx) {
 				return
 			}
-			if t.shouldFlushInactive(pendingLen) {
-				if _, ctxOK := t.emitFlush(ctx, fr); !ctxOK {
-					return
-				}
-				continue // recheck immediately in case more is now readable
+			continue
+		}
+		t.observeAfterDrain(batch.cursor.offset)
+		if batch.stoppedAtArtificialBoundary() {
+			grew := t.growStagedReadWindow()
+			batch = nil
+			t.m.releaseStagedTransaction()
+			t.retireStable = 0
+			if grew {
+				continue
 			}
+			t.m.setReadError(
+				t.pathStr(),
+				fmt.Errorf(
+					"staged read window %d cannot reach a frame boundary at offset %d",
+					t.m.readWindow,
+					t.offset,
+				),
+			)
+			if !pollTimer.wait(ctx) {
+				return
+			}
+			continue
+		}
+		matches, validationErr := t.stagedBatchMatches(batch)
+		if validationErr != nil || !matches {
+			batch = nil
+			t.m.releaseStagedTransaction()
+			t.retireStable = 0
+			if t.handleSourceValidationFailure(matches, validationErr) {
+				continue
+			}
+			if !pollTimer.wait(ctx) {
+				return
+			}
+			continue
+		}
+		if !t.commitBatch(ctx, batch) {
+			t.m.releaseStagedTransaction()
+			return
+		}
+		reachedObservedEnd := batch.reachedObservedEnd()
+		flushed := batch.flushed
+		if t.offset > batch.start {
+			t.tuneProductiveStagedReadWindow(batch)
+		}
+		batch = nil
+		t.m.releaseStagedTransaction()
+		if !reachedObservedEnd {
+			t.retireStable = 0
+			continue
 		}
 
+		if t.retireRequested.Load() {
+			version := t.retireVersion.Load()
+			if t.retireSeen != version {
+				t.retireSeen = version
+				t.retireStable = 0
+			}
+			if t.retireStable == 0 || t.retireSize != size {
+				t.retireSize = size
+				t.retireStable = 1
+			} else {
+				t.retireStable++
+			}
+			if t.retireStable >= 2 {
+				done, retryNow := t.finalizeRetirement(ctx, size, version)
+				if done {
+					return
+				}
+				if retryNow {
+					continue
+				}
+			}
+		} else {
+			t.retireStable = 0
+		}
+		if flushed {
+			continue
+		}
 		if !pollTimer.wait(ctx) {
 			return
 		}
@@ -725,37 +1002,21 @@ func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 	}
 	// #nosec G115 -- the negative-size case is rejected above.
 	size = uint64(fi.Size())
-	changed := size < t.offset
-	if !changed && t.guardLength > 0 {
-		fp, ferr := t.readGuardFingerprint()
-		changed = ferr != nil || fp != t.guardFingerprint
+	changed := t.rewritePending || size < t.offset
+	if !changed {
+		guardMatches, guardErr := t.installedGuardMatches()
+		if guardErr != nil && !errors.Is(guardErr, errSourceSnapshotChanged) {
+			t.m.setReadError(t.pathStr(), guardErr)
+			return 0, false
+		}
+		changed = guardErr != nil || !guardMatches
 	}
 	if changed {
-		next, ierr := t.m.identifyFile(t.f, fi)
-		if ierr != nil {
-			t.m.setReadError(t.pathStr(), ierr)
-			return 0, false
-		}
-		next.Generation = t.id.Generation + 1
-		if next.Generation == 0 {
-			t.m.setReadError(t.pathStr(), errors.New("file generation exhausted"))
-			return 0, false
-		}
-		if err := t.m.checkpoints.Set(Checkpoint{
-			InputID: t.m.cfg.InputID, Identity: next, Path: t.pathStr(),
-			Offset: 0, NextLineNumber: 1,
-		}); err != nil {
+		if err := t.resetGeneration(fi); err != nil {
+			t.rewritePending = true
 			t.m.setReadError(t.pathStr(), err)
 			return 0, false
 		}
-		t.id = next
-		t.offset = 0
-		t.nextLineNumber = 1
-		t.lineCursorKnown = true
-		t.discardingOversize = false
-		t.guardOffset = 0
-		t.guardLength = 0
-		t.guardFingerprint = fingerprintDigest{}
 	} else if t.offset == 0 && t.id.FingerprintLength == 0 && size > 0 {
 		// A file discovered empty has no distinguishing prefix. Establish one
 		// before its first event is emitted, retaining the same generation number.
@@ -781,102 +1042,161 @@ func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 	return size, true
 }
 
+func (t *tailer) resetGeneration(fi os.FileInfo) error {
+	next, err := t.m.identifyFile(t.f, fi)
+	if err != nil {
+		return err
+	}
+	next.Generation = t.id.Generation + 1
+	if next.Generation == 0 {
+		return errors.New("file generation exhausted")
+	}
+	if err := t.m.checkpoints.Set(Checkpoint{
+		InputID: t.m.cfg.InputID, Identity: next, Path: t.pathStr(),
+		Offset: 0, NextLineNumber: 1,
+	}); err != nil {
+		return err
+	}
+	t.id = next
+	t.offset = 0
+	t.nextLineNumber = 1
+	t.lineCursorKnown = true
+	t.discardingOversize = false
+	t.guardOffset = 0
+	t.guardLength = 0
+	t.guardFingerprint = fingerprintDigest{}
+	t.rewritePending = false
+	t.resetStagedReadWindow()
+	return nil
+}
+
+// resetCurrentGeneration records a rewrite against the file's latest state.
+// It leaves rewritePending armed on failure so a zero-length prior guard cannot
+// accidentally make a later retry accept the rewritten bytes as unchanged.
+func (t *tailer) resetCurrentGeneration() bool {
+	t.rewritePending = true
+	fi, err := t.f.Stat()
+	if err != nil {
+		t.m.setReadError(t.pathStr(), err)
+		return false
+	}
+	if fi.Size() < 0 {
+		t.m.setReadError(t.pathStr(), errors.New("file has a negative size"))
+		return false
+	}
+	if err := t.resetGeneration(fi); err != nil {
+		t.m.setReadError(t.pathStr(), err)
+		return false
+	}
+	// #nosec G115 -- the negative-size case is rejected above.
+	t.lastSize = uint64(fi.Size())
+	t.lastSizeChange = time.Now()
+	return true
+}
+
+// handleSourceValidationFailure reports a failed snapshot check and resets the
+// generation only when byte mismatch or a short exact read proves mutation.
+// Callers must not hold retireMu: resetCurrentGeneration performs file and
+// checkpoint I/O.
+func (t *tailer) handleSourceValidationFailure(matches bool, err error) bool {
+	if err != nil {
+		t.m.setReadError(t.pathStr(), err)
+	}
+	changed := !matches &&
+		(err == nil || errors.Is(err, errSourceSnapshotChanged))
+	return changed && t.resetCurrentGeneration()
+}
+
+type tailerRewriteGuard struct {
+	offset      uint64
+	length      uint64
+	fingerprint fingerprintDigest
+}
+
 // refreshGuard fingerprints the trailing part of the consumed prefix. It is
 // called only by the tailer goroutine, after offset changes.
 func (t *tailer) refreshGuard() error {
-	length := t.offset
+	guard, err := t.captureGuard(t.offset)
+	if err != nil {
+		return err
+	}
+	t.installGuard(guard)
+	return nil
+}
+
+func (t *tailer) captureGuard(end uint64) (tailerRewriteGuard, error) {
+	length := end
 	// validatedFingerprintBytes guarantees a positive bounded int at construction.
 	// #nosec G115 -- positive int values are exactly representable as uint64.
 	if maximum := uint64(t.m.fpBytes); length > maximum {
 		length = maximum
 	}
-	if length > math.MaxUint32 {
-		return fmt.Errorf("fingerprint guard length %d exceeds uint32", length)
-	}
-	// #nosec G115 -- length is checked against math.MaxUint32 immediately above.
-	t.guardLength = uint32(length)
-	t.guardOffset = t.offset - length
+	guard := tailerRewriteGuard{offset: end - length, length: length}
 	if length == 0 {
-		t.guardFingerprint = fingerprintDigest{}
-		return nil
+		return guard, nil
 	}
-	fp, err := t.readGuardFingerprint()
+	fp, err := t.readFingerprintRange(guard.offset, guard.length)
 	if err != nil {
-		return err
+		return tailerRewriteGuard{}, err
 	}
-	t.guardFingerprint = fp
-	return nil
+	guard.fingerprint = fp
+	return guard, nil
+}
+
+func (t *tailer) installGuard(guard tailerRewriteGuard) {
+	t.guardOffset = guard.offset
+	t.guardLength = guard.length
+	t.guardFingerprint = guard.fingerprint
 }
 
 func (t *tailer) readGuardFingerprint() (fingerprintDigest, error) {
-	length := int(t.guardLength)
-	t.guardScratch = slices.Grow(t.guardScratch[:0], length)[:length]
-	guardOffset, err := checkedFileOffset(t.guardOffset)
-	if err != nil {
-		return fingerprintDigest{}, err
-	}
-	return computeFingerprintRangeDigest(
-		t.f,
-		guardOffset,
-		t.guardLength,
-		t.guardScratch,
-	)
+	return t.readFingerprintRange(t.guardOffset, t.guardLength)
 }
 
-// reframe seeks the file to the current offset and returns a fresh framer whose
-// offsets are seeded there.
-func (t *tailer) reframe() (framing.Framer, error) {
-	offset, err := checkedFileOffset(t.offset)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := t.f.Seek(offset, io.SeekStart); err != nil {
-		return nil, err
-	}
-	return t.m.newFramer(t.f, t.offset, t.nextLineNumber)
-}
-
-// discardOversizedRemainder advances through bytes belonging to an oversized
-// physical line without buffering them. It returns complete only after the
-// delimiter is consumed, at which point framing may safely resume. This state
-// is in-memory only: after a crash the older durable checkpoint replays from a
-// true event boundary and reconstructs the same skip.
-func (t *tailer) discardOversizedRemainder(ctx context.Context) (bool, error) {
-	offset, err := checkedFileOffset(t.offset)
-	if err != nil {
-		return false, err
-	}
-	if _, err := t.f.Seek(offset, io.SeekStart); err != nil {
-		return false, err
-	}
-	var buffer [32 << 10]byte
-	for {
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		n, err := t.f.Read(buffer[:])
-		if n > 0 {
-			if delimiter := bytes.IndexByte(buffer[:n], '\n'); delimiter >= 0 {
-				if t.nextLineNumber >= ^uint64(0)-1 {
-					return false, framing.ErrLineNumberOverflow
-				}
-				t.offset += uint64(delimiter + 1)
-				t.nextLineNumber++
-				t.discardingOversize = false
-				return true, nil
-			}
-			t.offset += uint64(n)
-		}
-		if errors.Is(err, io.EOF) {
-			return false, nil
-		}
+func (t *tailer) installedGuardMatches() (bool, error) {
+	if t.guardLength > 0 {
+		fingerprint, err := t.readGuardFingerprint()
 		if err != nil {
 			return false, err
 		}
-		if n == 0 {
-			return false, io.ErrNoProgress
-		}
+		return fingerprint == t.guardFingerprint, nil
 	}
+	if t.id.FingerprintLength > 0 {
+		return persistedPrefixMatches(t.f, t.id)
+	}
+	return true, nil
+}
+
+func (t *tailer) readFingerprintRange(
+	offset uint64,
+	lengthUint64 uint64,
+) (fingerprintDigest, error) {
+	if lengthUint64 > maximumFingerprintBytes {
+		return fingerprintDigest{}, fmt.Errorf(
+			"fingerprint guard length %d exceeds absolute maximum %d",
+			lengthUint64,
+			maximumFingerprintBytes,
+		)
+	}
+	// #nosec G115 -- lengthUint64 is bounded by maximumFingerprintBytes above.
+	length := int(lengthUint64)
+	t.guardScratch = slices.Grow(t.guardScratch[:0], length)[:length]
+	guardOffset, err := checkedFileOffset(offset)
+	if err != nil {
+		return fingerprintDigest{}, err
+	}
+	// #nosec G115 -- lengthUint64 is bounded by maximumFingerprintBytes above.
+	lengthUint32 := uint32(lengthUint64)
+	digest, err := computeFingerprintRangeDigest(
+		t.f,
+		guardOffset,
+		lengthUint32,
+		t.guardScratch,
+	)
+	if err != nil {
+		return fingerprintDigest{}, classifyExactReadError(err)
+	}
+	return digest, nil
 }
 
 func checkedFileOffset(offset uint64) (int64, error) {
@@ -887,42 +1207,6 @@ func checkedFileOffset(offset uint64) (int64, error) {
 	return int64(offset), nil
 }
 
-// drain reads every complete frame currently available from fr and emits each.
-// It returns the length of any buffered partial record (from Pending) and false
-// only when a ctx cancellation interrupted an emit.
-func (t *tailer) drain(ctx context.Context, fr framing.Framer) (pendingLen int, cont bool) {
-	for {
-		frame, err := fr.Next()
-		switch {
-		case err == nil:
-			if !t.emit(ctx, frame) {
-				return 0, false
-			}
-		case errors.Is(err, framing.ErrEventTooLargeIncomplete):
-			// The current EOF is not a record boundary. Retain an explicit
-			// discard state so later suffix bytes cannot become a new event.
-			t.offset = frame.EndOffset
-			t.nextLineNumber = frame.NextLineNumber
-			t.discardingOversize = true
-			t.m.lastErrorNs.Store(time.Now().UnixNano())
-			return 0, true
-		case errors.Is(err, framing.ErrEventTooLarge):
-			// Oversized event: skip it but advance past it so we do not stall.
-			t.offset = frame.EndOffset
-			t.nextLineNumber = frame.NextLineNumber
-			t.m.lastErrorNs.Store(time.Now().UnixNano())
-		case errors.Is(err, framing.ErrPartialFrame):
-			_, length := fr.Pending()
-			return length, true
-		case errors.Is(err, io.EOF):
-			return 0, true
-		default:
-			t.m.setReadError(t.pathStr(), err)
-			return 0, true
-		}
-	}
-}
-
 // shouldFlushInactive reports whether a buffered multiline partial has sat
 // unchanged (the file stopped growing) for at least Config.FlushAfter.
 func (t *tailer) shouldFlushInactive(pendingLen int) bool {
@@ -930,51 +1214,4 @@ func (t *tailer) shouldFlushInactive(pendingLen int) bool {
 		return false
 	}
 	return time.Since(t.lastSizeChange) >= t.m.cfg.FlushAfter
-}
-
-// emitFlush force-emits fr's buffered partial record.
-// It returns whether a frame was emitted and whether ctx is still live.
-func (t *tailer) emitFlush(ctx context.Context, fr framing.Framer) (emitted, ctxOK bool) {
-	frame, has := fr.Flush()
-	if !has {
-		return false, true
-	}
-	if !t.emit(ctx, frame) {
-		return false, false
-	}
-	return true, true
-}
-
-// emit copies the frame bytes (the receiver owns them), tags the event with the
-// tailer's current path and identity, and sends it. It returns false only when
-// ctx is canceled before the send completes.
-func (t *tailer) emit(ctx context.Context, fr framing.Frame) bool {
-	b := make([]byte, len(fr.Bytes))
-	copy(b, fr.Bytes)
-	lineNumber, nextLineNumber := fr.LineNumber, fr.NextLineNumber
-	if !t.lineCursorKnown {
-		lineNumber, nextLineNumber = 0, 0
-	}
-	ev := RawEvent{
-		Bytes: b,
-		Source: SourceRef{
-			Path:           t.pathStr(),
-			Identity:       t.id,
-			StartOffset:    fr.StartOffset,
-			EndOffset:      fr.EndOffset,
-			LineNumber:     lineNumber,
-			NextLineNumber: nextLineNumber,
-		},
-	}
-	select {
-	case t.m.events <- ev:
-	case <-ctx.Done():
-		return false
-	}
-	t.offset = fr.EndOffset
-	t.nextLineNumber = fr.NextLineNumber
-	t.m.eventsRead.Add(1)
-	t.m.bytesRead.Add(uint64(len(b)))
-	t.m.lastEventNs.Store(time.Now().UnixNano())
-	return true
 }

@@ -32,8 +32,9 @@ var (
 	ErrLineNumberOverflow = errors.New("collector/framing: source line number exhausted")
 )
 
-// defaultMaxEventBytes caps a single frame when Options.MaxEventBytes is zero.
-const defaultMaxEventBytes = 1 << 20
+// DefaultMaxEventBytes caps a single frame when Options.MaxEventBytes is zero.
+// Callers that size framing-adjacent buffers should use this same value.
+const DefaultMaxEventBytes = 1 << 20
 
 // readChunkSize is the working buffer size used per underlying Read.
 const readChunkSize = 4096
@@ -149,7 +150,7 @@ func NewLineFramer(r io.Reader, startOffset uint64, opts Options) (Framer, error
 	}
 	maxBytes := opts.MaxEventBytes
 	if maxBytes <= 0 {
-		maxBytes = defaultMaxEventBytes
+		maxBytes = DefaultMaxEventBytes
 	}
 	return &lineFramer{
 		source:   source{r: r, off: startOffset},
@@ -177,7 +178,7 @@ func NewMultilineFramer(r io.Reader, startOffset uint64, opts Options) (Framer, 
 	}
 	maxBytes := opts.MaxEventBytes
 	if maxBytes <= 0 {
-		maxBytes = defaultMaxEventBytes
+		maxBytes = DefaultMaxEventBytes
 	}
 	return &multilineFramer{
 		source:     source{r: r, off: startOffset},
