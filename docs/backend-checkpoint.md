@@ -19,6 +19,9 @@ Committed implementation checkpoint:
   readiness, and release-level Docker acceptance.
 - `bf8da4e` — Linux Docker Hub publication lookup compatibility after the first
   pushed release job exposed older-daemon familiar-name filter behavior.
+- `3f0a8c9` — portable non-root named-volume initialization and deterministic
+  WebSocket shutdown verification after the second pushed release/race run
+  exposed Linux volume-root metadata and a buffered-frame test assumption.
 
 This test-first deployment unit completes the Open Splunk repository side of
 the first-release container foundation:
@@ -53,7 +56,13 @@ the first-release container foundation:
    server. It deliberately does not start a collector. Release services use
    prebuilt images with `pull_policy: never`; ClickHouse has no host-published
    port, the default user is removed, runtime processes are non-root, and
-   ClickHouse data plus server state use independent named volumes.
+   ClickHouse data plus server state use independent named volumes. The server
+   image seeds real `state/private` and `exports/private` child entries as
+   UID/GID `65532:65532`, mode `0700`; Docker copies those entries into fresh
+   named volumes even though their daemon-created mount roots remain
+   root-owned `0755`. Every sensitive server path and the image working
+   directory stays below those owner-only children, without a root init step
+   or weakened bootstrap validation.
 5. Four ClickHouse identities retain separate bootstrap, migration, runtime,
    and deletion authority. Passwords are supplied by environment or stable
    bounded files and never placed in client arguments. The bootstrap writes
@@ -89,7 +98,13 @@ the first-release container foundation:
    backend vertical, frontend, protobuf, GradeThis, and vulnerability jobs. Its
    release job built both images, then exposed an older-daemon Docker Hub
    filter false negative before Compose startup. Repair `bf8da4e` translates
-   only the lookup copy and its clean-HEAD release contract passes locally.
+   only the lookup copy. Run `30673913814` then passed every completed job
+   except Release OCI and Go tests: Release OCI exposed the Linux named-volume
+   root as `0755`, and the race job observed one valid WebSocket frame buffered
+   before hard close. Repair `3f0a8c9` makes the secure child directory an
+   actual parent-COPY archive entry and drains already-buffered frames under an
+   absolute deadline while requiring a non-timeout terminal read error. Its
+   clean-HEAD release contract passes locally on genuinely fresh volumes.
 10. A race-only one-second SQLite test deadline was widened to exceed the
     driver's five-second busy timeout. The contract remains strict: a retry
     that incorrectly reserves the already-held writer still fails at the
@@ -101,6 +116,11 @@ the first-release container foundation:
     security, Compose/ClickHouse, and CI/reliability reviews found no remaining
     P0-P2 issue in frozen staged diff
     `3d9328a2ecee988b92a58914567dcf89e7d716535d8ccee772032aec4abdb5b2`.
+    Two additional adversarial passes found no remaining P0-P2 issue in the
+    Linux CI repair diff
+    `03ff529e35195d88a6b169c9da663cd8c181f02787a49634cc881b85576e83e8`;
+    one pass first caught and corrected an ambiguous empty-directory COPY
+    before commit.
 12. GORM remains limited to SQLite/control-plane code. ClickHouse connections,
     migrations, physical schema validation, ingestion, querying, statistics,
     and deletion continue to use the native ClickHouse driver and SQL.
@@ -110,7 +130,7 @@ the first-release container foundation:
     that external-repository change until explicitly instructed. Additional
     SPL remains a later explicitly selected semantic unit.
 
-Validation on implementation commits `aa1f9fe` and `bf8da4e`:
+Validation on implementation commits `aa1f9fe`, `bf8da4e`, and `3f0a8c9`:
 
 ```sh
 go mod tidy -diff
@@ -148,11 +168,13 @@ OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:
 
 All ordinary Go tests, the exact CI race/atomic-coverage command, tidy, vet,
 build, protobuf generation, cached v2.12.2 full-tree lint, TypeScript checks,
-all 63 release/materializer tests, all 137 frontend runtime tests, and the
+all 64 release/materializer tests, all 137 frontend runtime tests, and the
 production UI build passed. Lint reported `0 issues`. The exact expanded
 backend-vertical command and clean-HEAD release OCI/Compose contract passed
-against the digest-pinned ClickHouse image. Final Docker inventory contained
-no test-owned container, volume, or network.
+against the digest-pinned ClickHouse image. On `3f0a8c9`, the fresh-volume
+release contract passed in 161 seconds, including bootstrap, readiness,
+credential rotation, persistence, export, and recreation. Final Docker
+inventory contained no test-owned container, volume, or network.
 
 Explicit pause point:
 
