@@ -7,7 +7,110 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: fixed-span sum and average timechart
+## Latest checkpoint: transactional per-index native ingestion policies
+
+Date: 2026-07-31
+
+Committed implementation checkpoint:
+
+- `db67c26` — transactional control-plane policy snapshots and end-to-end
+  native enforcement of each index's sourcetype, validation limits, and
+  retention.
+
+This test-first backend unit activates the previously persisted per-index
+ingestion policy without introducing ClickHouse ORM access:
+
+1. Collector token and exact durable-lease revalidation now read one bounded,
+   versioned index-policy projection from the same read-only SQLite transaction.
+   The projection includes active/ingestion-enabled state, default sourcetype,
+   explicit retention, and all five optional validation limits. GORM is used
+   only for the SQLite/control-plane path; ClickHouse remains native SQL and
+   driver code.
+2. Index create, update, get, and list routes round-trip the complete policy.
+   One dependency-neutral `internal/indexpolicy` contract owns canonical names,
+   sourcetype safety, storage-compatible retention, zero-as-inheritance, and
+   hard ceilings. Control hydration and admin serialization fail closed on
+   corrupt/manual rows, using the persisted update time as the stable retention
+   reference.
+3. Native ingestion refreshes the complete policy once per protected request
+   boundary, never once per event. Nonzero per-index values may only tighten
+   the deployment-wide maximum event bytes, field count, nesting depth, future
+   skew, and event age. Empty event sourcetype inherits the admitted default;
+   an explicit sourcetype is preserved.
+4. One server-owned `boundaryAt` is reused for request and heartbeat validation,
+   token/lease/policy refresh, batch identity, `ReceivedAt`, and event
+   `IndexTime`. A clock-step regression proves a slow authorization lookup
+   cannot move the ingestion decision or retention boundary.
+5. Accepted native batches carry an exact detached retention map into durable
+   reservation metadata and ClickHouse. A non-nil map is authoritative and
+   never consults mutable SQLite policy; nil deliberately retains the legacy
+   trusted-caller fallback. Snapshot maps and admitted-index sets are bounded
+   before allocation and unchanged versioned policy slices reuse compiled
+   validators across batches.
+6. Exact committed or pending durable identities are recovered before mutable
+   index viability, preserving a lost acknowledgement after the last scoped
+   index is disabled or its policy becomes invalid. Credential revocation,
+   expiration, binding changes, malformed partial identities, stale/disabled
+   leases, transaction failures, durable misses/conflicts, and fresh batches
+   still fail before storage. Pending replay can use only the server-owned
+   persisted outbox.
+7. Corrupt, orphaned, over-capacity, and duplicate scope projections are
+   classified without leaking row values or authorizing a valid subset. Strict
+   preliminary authentication and new stream admission still require at least
+   one active index; the narrow partial identity exists only for an already
+   current lease's exact durable recovery path. Heartbeats never use that
+   exception.
+8. Unit and real SQLite-to-bufconn integration coverage proves two-index policy
+   refresh without reconnect, default and explicit sourcetypes, per-index limit
+   isolation, retention snapshots, index disablement, disable-all durable
+   replay, and a fresh-batch denial. ClickHouse tests prove exact snapshot
+   persistence/replay, legacy fallback separation, horizon enforcement, and
+   bounded nil-versus-empty behavior.
+9. Three simplify reviews and independent boundary, storage, transaction, and
+   security audits drove the single-clock snapshot, shared horizon validation,
+   orphan-safe scope hydration, and exact replay precedence. The final reviewed
+   implementation diff digest was
+   `2653bcfcb9bb59fd33e3c351e75a2c6f327463bec3f5b832d6fc84c302b6931e`;
+   reviewers reported no remaining correctness or security finding in this
+   unit.
+10. The architecture plan is not complete. Per-index quotas, broader SPL/HEC
+    compatibility, and the external GradeThis collector cutover remain separate
+    work. An all-invalid batch still has a non-durable terminal rejection, so a
+    lost response can be recomputed after mutable policy changes. Separate
+    preexisting timestamp hardening remains for shared event-time horizon
+    checks, signed pre-epoch outbox time, and terminal handling of impossible
+    legacy v3 reservation expirations.
+
+Validation on implementation commit `db67c26`:
+
+```sh
+go mod tidy -diff
+go test ./... -count=1
+go test -race -shuffle=on -p=1 ./... -count=1 -timeout=20m
+go vet ./...
+go build ./...
+
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=10m -v
+```
+
+The cached v2.12.2 linter reported `0 issues`; every command above passed.
+Frontend files were unchanged after their gates. The digest-pinned ClickHouse
+harness removed its test-owned container and volume, and both cleanup queries
+were empty.
+
+## Previous checkpoint: fixed-span sum and average timechart
 
 Date: 2026-07-31
 
