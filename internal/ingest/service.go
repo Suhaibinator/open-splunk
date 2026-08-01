@@ -20,6 +20,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -310,6 +311,12 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 		return err
 	}
 	authorization = session.Authorization
+	if err := authorization.TokenRateLimits.Validate(); err != nil {
+		return status.Error(
+			codes.Unavailable,
+			"collector admission service returned invalid token authority",
+		)
+	}
 	if len(authorization.AuthorizedIndexes) == 0 {
 		return status.Error(
 			codes.Unauthenticated,
@@ -498,6 +505,28 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 			response.SentAt = timestamppb.New(s.config.Clock().UTC())
 			if err := stream.Send(response); err != nil {
 				return err
+			}
+			if state.pendingThrottle != nil {
+				if responseSequence == math.MaxUint64 {
+					return status.Error(codes.ResourceExhausted, "server stream sequence exhausted")
+				}
+				responseSequence++
+				throttle := state.pendingThrottle
+				state.pendingThrottle = nil
+				sentAt := s.config.Clock().UTC()
+				throttle.EffectiveUntil = timestamppb.New(
+					sentAt.Add(throttle.GetMinimumSendDelay().AsDuration()),
+				)
+				followup := &opensplunkv1.CollectResponse{
+					StreamSequence: responseSequence,
+					SentAt:         timestamppb.New(sentAt),
+					Payload: &opensplunkv1.CollectResponse_Throttle{
+						Throttle: throttle,
+					},
+				}
+				if err := stream.Send(followup); err != nil {
+					return err
+				}
 			}
 		default:
 			return status.Error(codes.InvalidArgument, "collector request payload is required")
@@ -821,6 +850,12 @@ func (s *Service) refreshLeaseAuthorization(
 	if deferred && authorization.CollectorID == "" {
 		return nil, status.Error(codes.Unavailable, "collector authentication service is unavailable")
 	}
+	if err := authorization.TokenRateLimits.Validate(); err != nil {
+		return nil, status.Error(
+			codes.Unavailable,
+			"collector authentication service returned invalid token authority",
+		)
+	}
 	if authorization.CollectorID == "" {
 		return nil, status.Error(codes.Unauthenticated, "collector authentication is no longer valid")
 	}
@@ -850,7 +885,7 @@ func (s *Service) refreshLeaseAuthorization(
 	if len(authorization.AuthorizedIndexes) == 0 {
 		return nil, status.Error(codes.Unavailable, "collector authentication service is unavailable")
 	}
-	if slices.Equal(
+	if authorization.TokenRateLimits == state.authorization.TokenRateLimits && slices.Equal(
 		authorization.AuthorizedIndexes,
 		state.authorization.AuthorizedIndexes,
 	) {
@@ -1034,12 +1069,13 @@ func (s *Service) validateHeartbeat(
 }
 
 type streamState struct {
-	collectorID   string
-	instanceID    string
-	protocolMajor uint32
-	protocolMinor uint32
-	authorization Authorization
-	indexPolicies map[string]resolvedIndexPolicy
+	collectorID     string
+	instanceID      string
+	protocolMajor   uint32
+	protocolMinor   uint32
+	authorization   Authorization
+	indexPolicies   map[string]resolvedIndexPolicy
+	pendingThrottle *opensplunkv1.Throttle
 
 	hasHighestBatchSequence bool
 	highestBatchSequence    uint64
@@ -1075,9 +1111,10 @@ type resolvedIndexAuthority struct {
 }
 
 type resolvedIndexPolicy struct {
-	defaultSourcetype string
-	validator         Validator
-	retentionPeriod   time.Duration
+	defaultSourcetype   string
+	validator           Validator
+	retentionPeriod     time.Duration
+	ingestionRateLimits ingestquota.Limits
 }
 
 func (s *Service) resolveAuthorizedIndexPolicies(
@@ -1108,9 +1145,10 @@ func (s *Service) resolveAuthorizedIndexPolicies(
 		}
 		effectiveLimits := effectiveIndexLimits(s.config.Limits, policy.Limits)
 		result.byName[policy.Name] = resolvedIndexPolicy{
-			defaultSourcetype: policy.DefaultSourcetype,
-			validator:         s.validator.withLimits(effectiveLimits),
-			retentionPeriod:   retention,
+			defaultSourcetype:   policy.DefaultSourcetype,
+			validator:           s.validator.withLimits(effectiveLimits),
+			retentionPeriod:     retention,
+			ingestionRateLimits: policy.IngestionRateLimits,
 		}
 	}
 	return result, true

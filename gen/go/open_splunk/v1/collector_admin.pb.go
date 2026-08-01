@@ -521,21 +521,22 @@ func (x *IngestionTokenConstraints) GetBoundCollectorId() string {
 // IngestionToken never contains the secret or its hash. token_prefix is a safe
 // short identifier for operator recognition.
 type IngestionToken struct {
-	state            protoimpl.MessageState     `protogen:"open.v1"`
-	IngestionTokenId string                     `protobuf:"bytes,1,opt,name=ingestion_token_id,json=ingestionTokenId,proto3" json:"ingestion_token_id,omitempty"`
-	Version          uint64                     `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
-	Name             string                     `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	Description      *string                    `protobuf:"bytes,4,opt,name=description,proto3,oneof" json:"description,omitempty"`
-	TokenPrefix      string                     `protobuf:"bytes,5,opt,name=token_prefix,json=tokenPrefix,proto3" json:"token_prefix,omitempty"`
-	State            IngestionTokenState        `protobuf:"varint,6,opt,name=state,proto3,enum=open_splunk.v1.IngestionTokenState" json:"state,omitempty"`
-	Constraints      *IngestionTokenConstraints `protobuf:"bytes,7,opt,name=constraints,proto3" json:"constraints,omitempty"`
-	CreatedAt        *timestamppb.Timestamp     `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt        *timestamppb.Timestamp     `protobuf:"bytes,9,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	LastUsedAt       *timestamppb.Timestamp     `protobuf:"bytes,10,opt,name=last_used_at,json=lastUsedAt,proto3" json:"last_used_at,omitempty"`
-	ExpiresAt        *timestamppb.Timestamp     `protobuf:"bytes,11,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	RevokedAt        *timestamppb.Timestamp     `protobuf:"bytes,12,opt,name=revoked_at,json=revokedAt,proto3" json:"revoked_at,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state               protoimpl.MessageState     `protogen:"open.v1"`
+	IngestionTokenId    string                     `protobuf:"bytes,1,opt,name=ingestion_token_id,json=ingestionTokenId,proto3" json:"ingestion_token_id,omitempty"`
+	Version             uint64                     `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	Name                string                     `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Description         *string                    `protobuf:"bytes,4,opt,name=description,proto3,oneof" json:"description,omitempty"`
+	TokenPrefix         string                     `protobuf:"bytes,5,opt,name=token_prefix,json=tokenPrefix,proto3" json:"token_prefix,omitempty"`
+	State               IngestionTokenState        `protobuf:"varint,6,opt,name=state,proto3,enum=open_splunk.v1.IngestionTokenState" json:"state,omitempty"`
+	Constraints         *IngestionTokenConstraints `protobuf:"bytes,7,opt,name=constraints,proto3" json:"constraints,omitempty"`
+	CreatedAt           *timestamppb.Timestamp     `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt           *timestamppb.Timestamp     `protobuf:"bytes,9,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	LastUsedAt          *timestamppb.Timestamp     `protobuf:"bytes,10,opt,name=last_used_at,json=lastUsedAt,proto3" json:"last_used_at,omitempty"`
+	ExpiresAt           *timestamppb.Timestamp     `protobuf:"bytes,11,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	RevokedAt           *timestamppb.Timestamp     `protobuf:"bytes,12,opt,name=revoked_at,json=revokedAt,proto3" json:"revoked_at,omitempty"`
+	IngestionRateLimits *IngestionRateLimits       `protobuf:"bytes,13,opt,name=ingestion_rate_limits,json=ingestionRateLimits,proto3" json:"ingestion_rate_limits,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *IngestionToken) Reset() {
@@ -652,11 +653,18 @@ func (x *IngestionToken) GetRevokedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *IngestionToken) GetIngestionRateLimits() *IngestionRateLimits {
+	if x != nil {
+		return x.IngestionRateLimits
+	}
+	return nil
+}
+
 var File_open_splunk_v1_collector_admin_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_collector_admin_proto_rawDesc = "" +
 	"\n" +
-	"$open_splunk/v1/collector_admin.proto\x12\x0eopen_splunk.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1eopen_splunk/v1/collector.proto\"\xef\b\n" +
+	"$open_splunk/v1/collector_admin.proto\x12\x0eopen_splunk.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1eopen_splunk/v1/collector.proto\x1a%open_splunk/v1/ingestion_policy.proto\"\xef\b\n" +
 	"\x0fCollectorRecord\x12!\n" +
 	"\fcollector_id\x18\x01 \x01(\tR\vcollectorId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12&\n" +
@@ -698,7 +706,7 @@ const file_open_splunk_v1_collector_admin_proto_rawDesc = "" +
 	"\x14allowed_host_regexes\x18\x02 \x03(\tR\x12allowedHostRegexes\x124\n" +
 	"\x16allowed_source_regexes\x18\x03 \x03(\tR\x14allowedSourceRegexes\x121\n" +
 	"\x12bound_collector_id\x18\x04 \x01(\tH\x00R\x10boundCollectorId\x88\x01\x01B\x15\n" +
-	"\x13_bound_collector_id\"\xf8\x04\n" +
+	"\x13_bound_collector_id\"\xd1\x05\n" +
 	"\x0eIngestionToken\x12,\n" +
 	"\x12ingestion_token_id\x18\x01 \x01(\tR\x10ingestionTokenId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x12\n" +
@@ -717,7 +725,8 @@ const file_open_splunk_v1_collector_admin_proto_rawDesc = "" +
 	"\n" +
 	"expires_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x129\n" +
 	"\n" +
-	"revoked_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\trevokedAtB\x0e\n" +
+	"revoked_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\trevokedAt\x12W\n" +
+	"\x15ingestion_rate_limits\x18\r \x01(\v2#.open_splunk.v1.IngestionRateLimitsR\x13ingestionRateLimitsB\x0e\n" +
 	"\f_description*\xe4\x01\n" +
 	"\x18CollectorConnectionState\x12*\n" +
 	"&COLLECTOR_CONNECTION_STATE_UNSPECIFIED\x10\x00\x12%\n" +
@@ -762,6 +771,7 @@ var file_open_splunk_v1_collector_admin_proto_goTypes = []any{
 	(*CollectorQueueStats)(nil),             // 8: open_splunk.v1.CollectorQueueStats
 	(*CollectorInputHealth)(nil),            // 9: open_splunk.v1.CollectorInputHealth
 	(*timestamppb.Timestamp)(nil),           // 10: google.protobuf.Timestamp
+	(*IngestionRateLimits)(nil),             // 11: open_splunk.v1.IngestionRateLimits
 }
 var file_open_splunk_v1_collector_admin_proto_depIdxs = []int32{
 	0,  // 0: open_splunk.v1.CollectorRecord.connection_state:type_name -> open_splunk.v1.CollectorConnectionState
@@ -783,11 +793,12 @@ var file_open_splunk_v1_collector_admin_proto_depIdxs = []int32{
 	10, // 16: open_splunk.v1.IngestionToken.last_used_at:type_name -> google.protobuf.Timestamp
 	10, // 17: open_splunk.v1.IngestionToken.expires_at:type_name -> google.protobuf.Timestamp
 	10, // 18: open_splunk.v1.IngestionToken.revoked_at:type_name -> google.protobuf.Timestamp
-	19, // [19:19] is the sub-list for method output_type
-	19, // [19:19] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	11, // 19: open_splunk.v1.IngestionToken.ingestion_rate_limits:type_name -> open_splunk.v1.IngestionRateLimits
+	20, // [20:20] is the sub-list for method output_type
+	20, // [20:20] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_collector_admin_proto_init() }
@@ -796,6 +807,7 @@ func file_open_splunk_v1_collector_admin_proto_init() {
 		return
 	}
 	file_open_splunk_v1_collector_proto_init()
+	file_open_splunk_v1_ingestion_policy_proto_init()
 	file_open_splunk_v1_collector_admin_proto_msgTypes[0].OneofWrappers = []any{}
 	file_open_splunk_v1_collector_admin_proto_msgTypes[1].OneofWrappers = []any{}
 	file_open_splunk_v1_collector_admin_proto_msgTypes[2].OneofWrappers = []any{}

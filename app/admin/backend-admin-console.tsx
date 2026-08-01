@@ -1462,6 +1462,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           searchAccess: IndexAccessState.INDEX_ACCESS_STATE_ENABLED,
           defaultSourcetype: undefined,
           limits: undefined,
+          ingestionRateLimits: undefined,
         },
         clientRequestId: undefined,
       });
@@ -1973,6 +1974,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             boundCollectorId: definition.boundCollectorId,
           },
           expiresAt: definition.expiresAt,
+          ingestionRateLimits: undefined,
         },
         clientRequestId: undefined,
       });
@@ -2172,6 +2174,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             boundCollectorId: tokenCollectorId || target.constraints?.boundCollectorId,
           },
           expiresAt: expirationFromForm(tokenExpiration, authoritativeServerNowMs()),
+          ingestionRateLimits: target.ingestionRateLimits,
         },
         updateMask,
       });

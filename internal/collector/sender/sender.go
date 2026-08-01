@@ -160,11 +160,23 @@ type Sender struct {
 	mu    sync.Mutex
 	stats Stats
 
+	// retryMu guards retryNotBefore. Unlike conn.pendingRetry, these deadlines
+	// belong to the Sender so a RetryBatch remains effective when its stream is
+	// disconnected before the delayed resend. The WAL is rewound on reconnect;
+	// the new connection consults this state before sending the retained batch.
+	retryMu        sync.Mutex
+	retryNotBefore map[uint64]batchRetryDeadline
+
 	// terminalMu serializes PrepareAck -> OnTerminalMarks -> Ack transactions
 	// across the receive loop and the pump's negotiated-limit dead-letter path.
 	// Without this barrier, a concurrent queue mutation could invalidate the
 	// read-only prefix preview before its checkpoint callback commits.
 	terminalMu sync.Mutex
+}
+
+type batchRetryDeadline struct {
+	batchID   string
+	notBefore time.Time
 }
 
 // New constructs a Sender that consumes from queue, dead-letters permanent
@@ -190,13 +202,14 @@ func New(opts Options, queue wal.Queue, deadLetter DeadLetterSink, reporter Stat
 		deadLetter = nopDeadLetterSink{}
 	}
 	s := &Sender{
-		opts:         opts,
-		queue:        queue,
-		deadLetter:   deadLetter,
-		reporter:     reporter,
-		logger:       logger,
-		now:          time.Now,
-		drainTimeout: 3 * time.Second,
+		opts:           opts,
+		queue:          queue,
+		deadLetter:     deadLetter,
+		reporter:       reporter,
+		logger:         logger,
+		now:            time.Now,
+		drainTimeout:   3 * time.Second,
+		retryNotBefore: make(map[uint64]batchRetryDeadline),
 	}
 	// #nosec G404 -- this PRNG only jitters reconnect timing; it never generates
 	// tokens, identifiers, or other security-sensitive values.
@@ -326,6 +339,62 @@ func (s *Sender) sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
+// deferBatchRetry records the latest server-mandated retry instant for a
+// durable batch. Deadlines are connection-independent: reconnecting cannot
+// turn a delayed RetryBatch into an immediate WAL replay.
+func (s *Sender) deferBatchRetry(batch *opensplunkv1.EventBatch, delay time.Duration) {
+	if delay < 0 {
+		delay = 0
+	}
+	notBefore := s.now().Add(delay)
+	sequence := batch.GetBatchSequence()
+	batchID := batch.GetBatchId()
+
+	s.retryMu.Lock()
+	current, ok := s.retryNotBefore[sequence]
+	if !ok || current.batchID != batchID || current.notBefore.Before(notBefore) {
+		s.retryNotBefore[sequence] = batchRetryDeadline{batchID: batchID, notBefore: notBefore}
+	}
+	s.retryMu.Unlock()
+}
+
+// batchRetryWait returns how much longer batch must remain held. Expired and
+// stale sequence entries are removed eagerly to keep the map bounded.
+func (s *Sender) batchRetryWait(batch *opensplunkv1.EventBatch, now time.Time) time.Duration {
+	sequence := batch.GetBatchSequence()
+	s.retryMu.Lock()
+	defer s.retryMu.Unlock()
+
+	deadline, ok := s.retryNotBefore[sequence]
+	if !ok {
+		return 0
+	}
+	if deadline.batchID != batch.GetBatchId() {
+		delete(s.retryNotBefore, sequence)
+		return 0
+	}
+	wait := deadline.notBefore.Sub(now)
+	if wait <= 0 {
+		delete(s.retryNotBefore, sequence)
+		return 0
+	}
+	return wait
+}
+
+func (s *Sender) clearBatchRetry(batchSequence uint64, cumulative bool) {
+	s.retryMu.Lock()
+	if cumulative {
+		for sequence := range s.retryNotBefore {
+			if sequence <= batchSequence {
+				delete(s.retryNotBefore, sequence)
+			}
+		}
+	} else {
+		delete(s.retryNotBefore, batchSequence)
+	}
+	s.retryMu.Unlock()
+}
+
 // --- stats accounting -------------------------------------------------------
 
 func (s *Sender) report() {
@@ -440,6 +509,7 @@ func (s *Sender) commitTerminal(batchSequence uint64, cumulative bool) (uint64, 
 	if err != nil {
 		return 0, err
 	}
+	s.clearBatchRetry(batchSequence, cumulative)
 	return s.queue.Stats().LastAckedBatchSequence, nil
 }
 

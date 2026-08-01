@@ -75,7 +75,9 @@ type conn struct {
 	throttleMaxInFlt   int
 	throttleMaxEvents  uint32
 	throttleMaxBytes   uint64
+	throttleGeneration uint64
 	lastBatchSendAt    time.Time
+	nextBatchSendAt    time.Time
 	draining           bool
 	serverShutdown     bool
 	serverReconnectDur time.Duration
@@ -304,23 +306,8 @@ func (c *conn) pumpLoop() {
 	// temporary throttle forbids it right now; it must not be re-appended.
 	var pending *opensplunkv1.EventBatch
 	for {
-		c.mu.Lock()
-		for {
-			if c.ctx.Err() != nil || c.draining {
-				c.mu.Unlock()
-				return
-			}
-			if c.inflightN < c.effectiveMaxInFlightLocked() {
-				break
-			}
-			c.cond.Wait()
-		}
-		c.mu.Unlock()
-
-		if d := c.throttleWaitDuration(); d > 0 {
-			if !c.s.sleep(c.ctx, d) {
-				return
-			}
+		if !c.waitForInFlightCapacity(c.ctx) {
+			return
 		}
 
 		batch := pending
@@ -351,43 +338,198 @@ func (c *conn) pumpLoop() {
 			continue
 		}
 
-		// A batch that exceeds only a TEMPORARY throttle's reduced limits must NOT
-		// be dropped: hold it and wait out the throttle, then retry the same batch.
-		// Head-of-line blocking during a throttle is the correct behavior.
-		if c.batchExceedsThrottleLimits(batch) {
-			pending = batch
-			if !c.waitOutThrottle() {
-				return
-			}
-			continue
-		}
-
-		c.mu.Lock()
-		c.inflightN++
-		c.inflight[batch.GetBatchSequence()] = batch
-		if batch.GetBatchSequence() > c.highestSentBatchSequence {
-			c.highestSentBatchSequence = batch.GetBatchSequence()
-		}
-		c.mu.Unlock()
-
-		if err := c.send(&opensplunkv1.CollectRequest{
-			Payload: &opensplunkv1.CollectRequest_Batch{Batch: batch},
-		}); err != nil {
+		result, wait, throttleGeneration, err := c.trySendBatch(batch)
+		if err != nil {
 			c.fail(err)
 			return
 		}
-		c.mu.Lock()
-		c.lastBatchSendAt = c.s.now()
+		switch result {
+		case batchSendStopped:
+			return
+		case batchSendWaitPacing:
+			pending = batch
+			if !c.waitForThrottleUpdateOrDelay(c.ctx, wait, throttleGeneration) {
+				return
+			}
+			continue
+		case batchSendWaitThrottle:
+			// A batch that exceeds only a TEMPORARY throttle's reduced limits
+			// is held rather than dead-lettered. Head-of-line blocking is the
+			// correct behavior until the temporary policy is lifted or expires.
+			pending = batch
+			if !c.waitOutThrottle(c.ctx, throttleGeneration) {
+				return
+			}
+			continue
+		case batchSendWaitInFlight:
+			// A throttle may reduce max-in-flight while NextBatch is blocked.
+			// Keep this already-dequeued batch pending and let the outer capacity
+			// loop wait without taking another item from the WAL.
+			pending = batch
+			continue
+		case batchSent:
+			c.s.markSent(batch)
+		}
+	}
+}
+
+type batchSendResult uint8
+
+const (
+	batchSent batchSendResult = iota
+	batchSendStopped
+	batchSendWaitPacing
+	batchSendWaitThrottle
+	batchSendWaitInFlight
+)
+
+// trySendBatch performs the final throttle, retry, and in-flight checks after
+// NextBatch returns. sendMu makes applying a Throttle and starting a batch send
+// a single ordered decision: a throttle that wins the lock is observed here;
+// otherwise this send was already in progress before that throttle applied.
+func (c *conn) trySendBatch(
+	batch *opensplunkv1.EventBatch,
+) (batchSendResult, time.Duration, uint64, error) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+
+	c.mu.Lock()
+	throttleGeneration := c.throttleGeneration
+	if c.ctx.Err() != nil || c.draining {
 		c.mu.Unlock()
-		c.s.markSent(batch)
+		return batchSendStopped, 0, throttleGeneration, nil
+	}
+	now := c.s.now()
+	if c.throttleActiveLocked() {
+		if c.batchExceedsThrottleLimitsLocked(batch) {
+			c.mu.Unlock()
+			return batchSendWaitThrottle, 0, throttleGeneration, nil
+		}
+		if wait := c.nextBatchSendAt.Sub(now); wait > 0 {
+			c.mu.Unlock()
+			return batchSendWaitPacing, wait, throttleGeneration, nil
+		}
+	}
+	if wait := c.s.batchRetryWait(batch, now); wait > 0 {
+		c.mu.Unlock()
+		return batchSendWaitPacing, wait, throttleGeneration, nil
+	}
+	if c.inflightN >= c.effectiveMaxInFlightLocked() {
+		c.mu.Unlock()
+		return batchSendWaitInFlight, 0, throttleGeneration, nil
+	}
+
+	c.inflightN++
+	c.inflight[batch.GetBatchSequence()] = batch
+	if batch.GetBatchSequence() > c.highestSentBatchSequence {
+		c.highestSentBatchSequence = batch.GetBatchSequence()
+	}
+	c.recordBatchSendLocked(now)
+	c.mu.Unlock()
+
+	err := c.sendLocked(&opensplunkv1.CollectRequest{
+		Payload: &opensplunkv1.CollectRequest_Batch{Batch: batch},
+	})
+	return batchSent, 0, throttleGeneration, err
+}
+
+func (c *conn) recordBatchSendLocked(sentAt time.Time) {
+	c.lastBatchSendAt = sentAt
+	if c.throttleActiveLocked() && c.minSendDelay > 0 {
+		c.nextBatchSendAt = sentAt.Add(c.minSendDelay)
 	}
 }
 
 func (c *conn) effectiveMaxInFlightLocked() int {
-	if c.throttleActiveLocked() && c.throttleMaxInFlt > 0 {
+	if c.throttleActiveLocked() && c.throttleMaxInFlt > 0 &&
+		c.throttleMaxInFlt < c.maxInFlight {
 		return c.throttleMaxInFlt
 	}
 	return c.maxInFlight
+}
+
+// waitForInFlightCapacity observes finite throttle expiry as well as explicit
+// condition broadcasts. Without the expiry timer, a temporary reduced
+// max-in-flight limit could strand an already-dequeued batch until an unrelated
+// acknowledgment or throttle update happened to wake the condition.
+func (c *conn) waitForInFlightCapacity(ctx context.Context) bool {
+	stopContextWake := context.AfterFunc(ctx, c.broadcastWaiters)
+	defer stopContextWake()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for {
+		if ctx.Err() != nil || c.draining {
+			return false
+		}
+		if c.inflightN < c.effectiveMaxInFlightLocked() {
+			return true
+		}
+		var deadline time.Time
+		if c.throttled {
+			deadline = c.throttleUntil
+		}
+		c.waitOnConditionLocked(deadline)
+	}
+}
+
+// waitForThrottleUpdateOrDelay waits for the computed delay unless a newer
+// Throttle arrives first. The generation check closes the window between the
+// caller's final state check and entering Cond.Wait.
+func (c *conn) waitForThrottleUpdateOrDelay(
+	ctx context.Context,
+	wait time.Duration,
+	throttleGeneration uint64,
+) bool {
+	if wait <= 0 {
+		return ctx.Err() == nil
+	}
+	c.mu.Lock()
+	if ctx.Err() != nil || c.draining {
+		c.mu.Unlock()
+		return false
+	}
+	if c.throttleGeneration != throttleGeneration {
+		c.mu.Unlock()
+		return true
+	}
+	// Register both wakeups while holding c.mu. If either fires immediately,
+	// its callback cannot acquire the mutex until Cond.Wait atomically releases
+	// it, which prevents an elapsed timer or cancellation from being lost in
+	// the final predicate-check-to-wait window.
+	stopContextWake := context.AfterFunc(ctx, c.broadcastWaiters)
+	timer := time.AfterFunc(wait, c.broadcastWaiters)
+	c.cond.Wait()
+	stopped := ctx.Err() != nil || c.draining
+	c.mu.Unlock()
+	timer.Stop()
+	stopContextWake()
+	return !stopped
+}
+
+// waitOnConditionLocked waits for a state broadcast or an optional deadline.
+// The caller holds c.mu, so checking a predicate and entering Cond.Wait cannot
+// lose a concurrent throttle update. A timer callback takes the same lock and
+// broadcasts when a finite throttle expires.
+func (c *conn) waitOnConditionLocked(deadline time.Time) {
+	var timer *time.Timer
+	if !deadline.IsZero() {
+		wait := deadline.Sub(c.s.now())
+		if wait <= 0 {
+			return
+		}
+		timer = time.AfterFunc(wait, c.broadcastWaiters)
+	}
+	c.cond.Wait()
+	if timer != nil {
+		timer.Stop()
+	}
+}
+
+func (c *conn) broadcastWaiters() {
+	c.mu.Lock()
+	c.cond.Broadcast()
+	c.mu.Unlock()
 }
 
 func (c *conn) throttleActiveLocked() bool {
@@ -410,8 +552,7 @@ func (c *conn) throttleWaitDuration() time.Duration {
 	if !c.throttleActiveLocked() || c.minSendDelay <= 0 {
 		return 0
 	}
-	earliest := c.lastBatchSendAt.Add(c.minSendDelay)
-	d := earliest.Sub(c.s.now())
+	d := c.nextBatchSendAt.Sub(c.s.now())
 	if d < 0 {
 		return 0
 	}
@@ -438,15 +579,7 @@ func (c *conn) batchExceedsReadyLimits(batch *opensplunkv1.EventBatch) (string, 
 	return "", false
 }
 
-// batchExceedsThrottleLimits reports whether an active throttle's reduced limits
-// (tighter than Ready) currently forbid batch. Because a throttle is temporary,
-// such a batch is not dropped: the pump waits it out and retries the same batch.
-func (c *conn) batchExceedsThrottleLimits(batch *opensplunkv1.EventBatch) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.throttleActiveLocked() {
-		return false
-	}
+func (c *conn) batchExceedsThrottleLimitsLocked(batch *opensplunkv1.EventBatch) bool {
 	// #nosec G115 -- len is non-negative and every supported Go int value is
 	// exactly representable as uint64.
 	if c.throttleMaxEvents > 0 && uint64(len(batch.GetEvents())) > uint64(c.throttleMaxEvents) {
@@ -458,36 +591,28 @@ func (c *conn) batchExceedsThrottleLimits(batch *opensplunkv1.EventBatch) bool {
 	return false
 }
 
-// waitOutThrottle blocks until the active throttle expires or is lifted, so the
-// held batch can be retried. When the throttle has an effective_until it uses a
-// ctx-aware sleep to that instant; otherwise it waits on cond for the next
-// Throttle or connection state change. It returns false when ctx is canceled.
-func (c *conn) waitOutThrottle() bool {
+// waitOutThrottle blocks until the observed throttle expires or is replaced,
+// so the held batch can be checked against the current policy again. Finite
+// expiry, replacement Throttle messages, terminal retry cancellation, and
+// connection teardown all wake the same predicate loop. It returns false when
+// ctx is canceled or the stream drains.
+func (c *conn) waitOutThrottle(ctx context.Context, throttleGeneration uint64) bool {
+	stopContextWake := context.AfterFunc(ctx, c.broadcastWaiters)
+	defer stopContextWake()
 	c.mu.Lock()
-	if !c.throttleActiveLocked() {
-		c.mu.Unlock()
-		return c.ctx.Err() == nil
-	}
-	until := c.throttleUntil
-	c.mu.Unlock()
-
-	if !until.IsZero() {
-		d := until.Sub(c.s.now())
-		if d <= 0 {
-			return c.ctx.Err() == nil
+	defer c.mu.Unlock()
+	for {
+		if ctx.Err() != nil || c.draining {
+			return false
 		}
-		return c.s.sleep(c.ctx, d)
+		if c.throttleGeneration != throttleGeneration {
+			return true
+		}
+		if !c.throttleActiveLocked() {
+			return true
+		}
+		c.waitOnConditionLocked(c.throttleUntil)
 	}
-
-	// No expiry time: block until a Throttle update, inflight release, drain, or
-	// teardown broadcasts on cond. The outer pump loop re-evaluates afterward.
-	c.mu.Lock()
-	if c.ctx.Err() == nil && !c.draining {
-		c.cond.Wait()
-	}
-	stopped := c.ctx.Err() != nil
-	c.mu.Unlock()
-	return !stopped
 }
 
 // --- heartbeat --------------------------------------------------------------
@@ -548,7 +673,7 @@ func (c *conn) receiveLoop() error {
 				return err
 			}
 		case resp.GetThrottle() != nil:
-			c.handleThrottle(resp.GetThrottle())
+			c.handleThrottle(resp)
 		case resp.GetNotice() != nil:
 			c.handleNotice(resp.GetNotice())
 		default:
@@ -713,6 +838,7 @@ func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) error {
 		c.mu.Unlock()
 		return fmt.Errorf("collector/sender: retry batch id %q does not match sequence %d", retry.GetBatchId(), seq)
 	}
+	c.s.deferBatchRetry(batch, retry.GetRetryAfter().AsDuration())
 	if _, scheduled := c.pendingRetry[seq]; scheduled {
 		// A resend is already pending for this sequence; coalesce so a flood of
 		// RetryBatch messages cannot spawn thousands of goroutines.
@@ -727,7 +853,6 @@ func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) error {
 	c.mu.Unlock()
 
 	c.s.markRetried()
-	delay := retry.GetRetryAfter().AsDuration()
 	go func(state *scheduledRetry) {
 		defer close(state.done)
 		defer state.cancel()
@@ -738,19 +863,36 @@ func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) error {
 			}
 			c.mu.Unlock()
 		}()
-		if delay > 0 {
-			if !c.s.sleep(retryCtx, delay) {
+		for {
+			if wait := c.s.batchRetryWait(batch, c.s.now()); wait > 0 {
+				if !c.s.sleep(retryCtx, wait) {
+					return
+				}
+			}
+			if retryCtx.Err() != nil {
 				return
 			}
-		}
-		if retryCtx.Err() != nil {
-			return
-		}
-		sent, err := c.sendRetryIfCurrent(seq, batch, state, &opensplunkv1.CollectRequest{
-			Payload: &opensplunkv1.CollectRequest_Batch{Batch: batch},
-		})
-		if sent && err != nil {
-			c.fail(err)
+			sent, wait, throttleGeneration, throttleLimited, err := c.sendRetryIfCurrent(seq, batch, state, &opensplunkv1.CollectRequest{
+				Payload: &opensplunkv1.CollectRequest_Batch{Batch: batch},
+			})
+			if sent {
+				if err != nil {
+					c.fail(err)
+				}
+				return
+			}
+			if err != nil || retryCtx.Err() != nil {
+				return
+			}
+			if throttleLimited {
+				if !c.waitOutThrottle(retryCtx, throttleGeneration) {
+					return
+				}
+				continue
+			}
+			if wait <= 0 || !c.waitForThrottleUpdateOrDelay(retryCtx, wait, throttleGeneration) {
+				return
+			}
 		}
 	}(scheduled)
 	return nil
@@ -767,36 +909,98 @@ func (c *conn) sendRetryIfCurrent(
 	batch *opensplunkv1.EventBatch,
 	state *scheduledRetry,
 	req *opensplunkv1.CollectRequest,
-) (bool, error) {
+) (sent bool, wait time.Duration, throttleGeneration uint64, throttleLimited bool, err error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 
 	c.mu.Lock()
 	current := c.inflight[seq]
 	eligible := current == batch && c.pendingRetry[seq] == state && state != nil && c.ctx.Err() == nil
-	c.mu.Unlock()
+	throttleGeneration = c.throttleGeneration
 	if !eligible {
-		return false, nil
+		c.mu.Unlock()
+		return false, 0, throttleGeneration, false, nil
 	}
-	return true, c.sendLocked(req)
+	now := c.s.now()
+	if c.throttleActiveLocked() {
+		if c.batchExceedsThrottleLimitsLocked(batch) {
+			c.mu.Unlock()
+			return false, 0, throttleGeneration, true, nil
+		}
+		if wait := c.nextBatchSendAt.Sub(now); wait > 0 {
+			c.mu.Unlock()
+			return false, wait, throttleGeneration, false, nil
+		}
+	}
+	if wait := c.s.batchRetryWait(batch, now); wait > 0 {
+		c.mu.Unlock()
+		return false, wait, throttleGeneration, false, nil
+	}
+	c.recordBatchSendLocked(now)
+	c.mu.Unlock()
+	return true, 0, throttleGeneration, false, c.sendLocked(req)
 }
 
-// handleThrottle applies the pacing and in-flight limits until effective_until
-// (or another Throttle). Zero limit fields leave the negotiated limit in place.
-func (c *conn) handleThrottle(throttle *opensplunkv1.Throttle) {
+// handleThrottle applies pacing and in-flight limits until effective_until (or
+// another Throttle). Server absolute timestamps are never compared directly to
+// the collector clock: when both timestamps are valid, their server-relative
+// duration is applied from local receipt time. A malformed/missing sent_at
+// falls back to at least minimum_send_delay.
+func (c *conn) handleThrottle(resp *opensplunkv1.CollectResponse) {
+	throttle := resp.GetThrottle()
+	if throttle == nil {
+		return
+	}
+	receivedAt := c.s.now()
+	minimumDelay := throttle.GetMinimumSendDelay().AsDuration()
+	if minimumDelay < 0 {
+		minimumDelay = 0
+	}
+	until := localThrottleUntil(receivedAt, resp.GetSentAt(), throttle.GetEffectiveUntil(), minimumDelay)
+
+	// Serialize applying the response with every outbound Send. This establishes
+	// whether a send started before or after the new throttle without holding mu
+	// across gRPC flow control.
+	c.sendMu.Lock()
 	c.mu.Lock()
 	c.throttled = true
-	c.minSendDelay = throttle.GetMinimumSendDelay().AsDuration()
-	if throttle.GetEffectiveUntil() != nil {
-		c.throttleUntil = throttle.GetEffectiveUntil().AsTime()
-	} else {
-		c.throttleUntil = time.Time{}
+	c.throttleGeneration++
+	c.minSendDelay = minimumDelay
+	c.throttleUntil = until
+	c.nextBatchSendAt = receivedAt.Add(minimumDelay)
+	if !c.lastBatchSendAt.IsZero() {
+		fromLastSend := c.lastBatchSendAt.Add(minimumDelay)
+		if fromLastSend.After(c.nextBatchSendAt) {
+			c.nextBatchSendAt = fromLastSend
+		}
 	}
 	c.throttleMaxInFlt = int(throttle.GetMaxInFlightBatches())
 	c.throttleMaxEvents = throttle.GetMaxBatchEvents()
 	c.throttleMaxBytes = throttle.GetMaxBatchBytes()
 	c.cond.Broadcast()
 	c.mu.Unlock()
+	c.sendMu.Unlock()
+}
+
+func localThrottleUntil(
+	receivedAt time.Time,
+	serverSentAt *timestamppb.Timestamp,
+	effectiveUntil *timestamppb.Timestamp,
+	minimumDelay time.Duration,
+) time.Time {
+	if effectiveUntil == nil {
+		return time.Time{}
+	}
+	activeFor := minimumDelay
+	if serverSentAt != nil && serverSentAt.CheckValid() == nil && effectiveUntil.CheckValid() == nil {
+		if relative := effectiveUntil.AsTime().Sub(serverSentAt.AsTime()); relative > activeFor {
+			activeFor = relative
+		}
+	}
+	if activeFor < 0 {
+		activeFor = 0
+	}
+	return receivedAt.Add(activeFor)
 }
 
 // handleNotice reacts to server notices. A shutting-down notice drains the

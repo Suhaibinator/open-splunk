@@ -578,13 +578,14 @@ func (x *SetCollectorEnabledResponse) GetCollector() *CollectorAdministrationSna
 }
 
 type IngestionTokenDefinition struct {
-	state         protoimpl.MessageState     `protogen:"open.v1"`
-	Name          string                     `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Description   *string                    `protobuf:"bytes,2,opt,name=description,proto3,oneof" json:"description,omitempty"`
-	Constraints   *IngestionTokenConstraints `protobuf:"bytes,3,opt,name=constraints,proto3" json:"constraints,omitempty"`
-	ExpiresAt     *timestamppb.Timestamp     `protobuf:"bytes,4,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState     `protogen:"open.v1"`
+	Name                string                     `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Description         *string                    `protobuf:"bytes,2,opt,name=description,proto3,oneof" json:"description,omitempty"`
+	Constraints         *IngestionTokenConstraints `protobuf:"bytes,3,opt,name=constraints,proto3" json:"constraints,omitempty"`
+	ExpiresAt           *timestamppb.Timestamp     `protobuf:"bytes,4,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`
+	IngestionRateLimits *IngestionRateLimits       `protobuf:"bytes,5,opt,name=ingestion_rate_limits,json=ingestionRateLimits,proto3" json:"ingestion_rate_limits,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *IngestionTokenDefinition) Reset() {
@@ -641,6 +642,13 @@ func (x *IngestionTokenDefinition) GetConstraints() *IngestionTokenConstraints {
 func (x *IngestionTokenDefinition) GetExpiresAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *IngestionTokenDefinition) GetIngestionRateLimits() *IngestionRateLimits {
+	if x != nil {
+		return x.IngestionRateLimits
 	}
 	return nil
 }
@@ -1200,7 +1208,7 @@ var File_open_splunk_v1_collector_admin_api_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_collector_admin_api_proto_rawDesc = "" +
 	"\n" +
-	"(open_splunk/v1/collector_admin_api.proto\x12\x0eopen_splunk.v1\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a$open_splunk/v1/collector_admin.proto\x1a\x1bopen_splunk/v1/common.proto\"\x94\x03\n" +
+	"(open_splunk/v1/collector_admin_api.proto\x12\x0eopen_splunk.v1\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a$open_splunk/v1/collector_admin.proto\x1a\x1bopen_splunk/v1/common.proto\x1a%open_splunk/v1/ingestion_policy.proto\"\x94\x03\n" +
 	"\x15ListCollectorsRequest\x12/\n" +
 	"\x04page\x18\x01 \x01(\v2\x1b.open_splunk.v1.PageRequestR\x04page\x12M\n" +
 	"\rstate_filters\x18\x02 \x03(\x0e2(.open_splunk.v1.CollectorConnectionStateR\fstateFilters\x12/\n" +
@@ -1234,13 +1242,14 @@ const file_open_splunk_v1_collector_admin_api_proto_rawDesc = "" +
 	"\x10expected_version\x18\x02 \x01(\x04R\x0fexpectedVersion\x12_\n" +
 	"\x14administrative_state\x18\x03 \x01(\x0e2,.open_splunk.v1.CollectorAdministrativeStateR\x13administrativeState\"l\n" +
 	"\x1bSetCollectorEnabledResponse\x12M\n" +
-	"\tcollector\x18\x01 \x01(\v2/.open_splunk.v1.CollectorAdministrationSnapshotR\tcollector\"\x81\x02\n" +
+	"\tcollector\x18\x01 \x01(\v2/.open_splunk.v1.CollectorAdministrationSnapshotR\tcollector\"\xda\x02\n" +
 	"\x18IngestionTokenDefinition\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12%\n" +
 	"\vdescription\x18\x02 \x01(\tH\x00R\vdescription\x88\x01\x01\x12K\n" +
 	"\vconstraints\x18\x03 \x01(\v2).open_splunk.v1.IngestionTokenConstraintsR\vconstraints\x12>\n" +
 	"\n" +
-	"expires_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampH\x01R\texpiresAt\x88\x01\x01B\x0e\n" +
+	"expires_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampH\x01R\texpiresAt\x88\x01\x01\x12W\n" +
+	"\x15ingestion_rate_limits\x18\x05 \x01(\v2#.open_splunk.v1.IngestionRateLimitsR\x13ingestionRateLimitsB\x0e\n" +
 	"\f_descriptionB\r\n" +
 	"\v_expires_at\"\xae\x01\n" +
 	"\x1bCreateIngestionTokenRequest\x12H\n" +
@@ -1345,8 +1354,9 @@ var file_open_splunk_v1_collector_admin_api_proto_goTypes = []any{
 	(CollectorAdministrativeState)(0),       // 28: open_splunk.v1.CollectorAdministrativeState
 	(*IngestionTokenConstraints)(nil),       // 29: open_splunk.v1.IngestionTokenConstraints
 	(*timestamppb.Timestamp)(nil),           // 30: google.protobuf.Timestamp
-	(*IngestionToken)(nil),                  // 31: open_splunk.v1.IngestionToken
-	(IngestionTokenState)(0),                // 32: open_splunk.v1.IngestionTokenState
+	(*IngestionRateLimits)(nil),             // 31: open_splunk.v1.IngestionRateLimits
+	(*IngestionToken)(nil),                  // 32: open_splunk.v1.IngestionToken
+	(IngestionTokenState)(0),                // 33: open_splunk.v1.IngestionTokenState
 }
 var file_open_splunk_v1_collector_admin_api_proto_depIdxs = []int32{
 	21, // 0: open_splunk.v1.ListCollectorsRequest.page:type_name -> open_splunk.v1.PageRequest
@@ -1362,24 +1372,25 @@ var file_open_splunk_v1_collector_admin_api_proto_depIdxs = []int32{
 	27, // 10: open_splunk.v1.SetCollectorEnabledResponse.collector:type_name -> open_splunk.v1.CollectorAdministrationSnapshot
 	29, // 11: open_splunk.v1.IngestionTokenDefinition.constraints:type_name -> open_splunk.v1.IngestionTokenConstraints
 	30, // 12: open_splunk.v1.IngestionTokenDefinition.expires_at:type_name -> google.protobuf.Timestamp
-	10, // 13: open_splunk.v1.CreateIngestionTokenRequest.definition:type_name -> open_splunk.v1.IngestionTokenDefinition
-	31, // 14: open_splunk.v1.CreateIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
-	31, // 15: open_splunk.v1.GetIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
-	21, // 16: open_splunk.v1.ListIngestionTokensRequest.page:type_name -> open_splunk.v1.PageRequest
-	32, // 17: open_splunk.v1.ListIngestionTokensRequest.state_filters:type_name -> open_splunk.v1.IngestionTokenState
-	1,  // 18: open_splunk.v1.ListIngestionTokensRequest.sort_by:type_name -> open_splunk.v1.IngestionTokenSortBy
-	23, // 19: open_splunk.v1.ListIngestionTokensRequest.sort_direction:type_name -> open_splunk.v1.SortDirection
-	31, // 20: open_splunk.v1.ListIngestionTokensResponse.ingestion_tokens:type_name -> open_splunk.v1.IngestionToken
-	25, // 21: open_splunk.v1.ListIngestionTokensResponse.page:type_name -> open_splunk.v1.PageResponse
-	10, // 22: open_splunk.v1.UpdateIngestionTokenRequest.definition:type_name -> open_splunk.v1.IngestionTokenDefinition
-	26, // 23: open_splunk.v1.UpdateIngestionTokenRequest.update_mask:type_name -> google.protobuf.FieldMask
-	31, // 24: open_splunk.v1.UpdateIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
-	31, // 25: open_splunk.v1.RevokeIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
-	26, // [26:26] is the sub-list for method output_type
-	26, // [26:26] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	31, // 13: open_splunk.v1.IngestionTokenDefinition.ingestion_rate_limits:type_name -> open_splunk.v1.IngestionRateLimits
+	10, // 14: open_splunk.v1.CreateIngestionTokenRequest.definition:type_name -> open_splunk.v1.IngestionTokenDefinition
+	32, // 15: open_splunk.v1.CreateIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
+	32, // 16: open_splunk.v1.GetIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
+	21, // 17: open_splunk.v1.ListIngestionTokensRequest.page:type_name -> open_splunk.v1.PageRequest
+	33, // 18: open_splunk.v1.ListIngestionTokensRequest.state_filters:type_name -> open_splunk.v1.IngestionTokenState
+	1,  // 19: open_splunk.v1.ListIngestionTokensRequest.sort_by:type_name -> open_splunk.v1.IngestionTokenSortBy
+	23, // 20: open_splunk.v1.ListIngestionTokensRequest.sort_direction:type_name -> open_splunk.v1.SortDirection
+	32, // 21: open_splunk.v1.ListIngestionTokensResponse.ingestion_tokens:type_name -> open_splunk.v1.IngestionToken
+	25, // 22: open_splunk.v1.ListIngestionTokensResponse.page:type_name -> open_splunk.v1.PageResponse
+	10, // 23: open_splunk.v1.UpdateIngestionTokenRequest.definition:type_name -> open_splunk.v1.IngestionTokenDefinition
+	26, // 24: open_splunk.v1.UpdateIngestionTokenRequest.update_mask:type_name -> google.protobuf.FieldMask
+	32, // 25: open_splunk.v1.UpdateIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
+	32, // 26: open_splunk.v1.RevokeIngestionTokenResponse.ingestion_token:type_name -> open_splunk.v1.IngestionToken
+	27, // [27:27] is the sub-list for method output_type
+	27, // [27:27] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_collector_admin_api_proto_init() }
@@ -1389,6 +1400,7 @@ func file_open_splunk_v1_collector_admin_api_proto_init() {
 	}
 	file_open_splunk_v1_collector_admin_proto_init()
 	file_open_splunk_v1_common_proto_init()
+	file_open_splunk_v1_ingestion_policy_proto_init()
 	file_open_splunk_v1_collector_admin_api_proto_msgTypes[0].OneofWrappers = []any{}
 	file_open_splunk_v1_collector_admin_api_proto_msgTypes[4].OneofWrappers = []any{}
 	file_open_splunk_v1_collector_admin_api_proto_msgTypes[8].OneofWrappers = []any{}

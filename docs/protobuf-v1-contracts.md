@@ -367,6 +367,16 @@ invalidates a list cursor whose snapshot included it. Its former plaintext
 credential remains indistinguishable from every other unauthorized credential
 at the collector boundary.
 
+`IngestionRateLimits` is shared by `IndexDefinition` and
+`IngestionTokenDefinition`; returned `Index` and `IngestionToken` records expose
+the same stored values. Its optional `max_events_per_second` and
+`max_uncompressed_bytes_per_second` fields use zero or absence to mean
+unlimited. Index and token update masks accept the whole
+`ingestion_rate_limits` message or either leaf, with the usual optional-field
+clear semantics. The hard ceilings, accepted-event charging, durable virtual
+schedule, exact-retry precedence, and collector backpressure behavior are
+normative in [Ingestion rate limits v0.1](ingestion-rate-limits-v0.1.md).
+
 Search creation always creates a job record—even parse or planning failures transition that job to `FAILED` and therefore appear in history. Search and export cancellation are idempotent, and an already-terminal job is returned unchanged.
 
 Result cursors are scoped to one immutable search snapshot and one column selection. A page token must not be reused with another job or changed request parameters. Rows contain exactly one cell per schema column; a nonexistent field uses `MISSING_VALUE_MISSING`, while an explicitly present null uses `NULL_VALUE_NULL`.
@@ -379,7 +389,7 @@ The native service is `open_splunk.v1.CollectorIngestService/Collect`, a bidirec
 2. Its first frame has connection sequence `1` and a `CollectorHello`. Credentials never appear in protobuf payloads.
 3. The server authenticates the token, negotiates protocol limits, and returns `CollectorReady`. Authentication/protocol failures that invalidate the stream use canonical gRPC status codes.
 4. The collector sends durable `EventBatch` records and periodic `CollectorHeartbeat` frames while respecting negotiated in-flight and byte/event limits.
-5. `BatchAck` and `BatchReject` are terminal dispositions. An ack may contain permanent per-event rejections; accepted, duplicate, and rejected counts must sum to the original event count. Rejected events go to the collector dead-letter output while the durable batch advances. `RetryBatch` is non-terminal and requires replay of the unchanged batch. `Throttle` applies to future sending without acknowledging anything.
+5. `BatchAck` and `BatchReject` are terminal dispositions. An ack may contain permanent per-event rejections; accepted, duplicate, and rejected counts must sum to the original event count. Rejected events go to the collector dead-letter output while the durable batch advances. `RetryBatch` is non-terminal and requires replay of the unchanged batch. `Throttle` applies to future sending without acknowledging anything. A quota denial sends a `RATE_LIMITED` retry for the current batch followed by a separately sequenced `TOKEN_QUOTA` or `INDEX_QUOTA` throttle for later sends; the throttle's zero limit overrides preserve the negotiated batch limits.
 6. On disconnect, the collector reconnects, sends its last contiguous acknowledged sequence, and replays every unacknowledged batch with the same batch ID, sequence, event IDs, and event-ID digest.
 
 The control plane retains at most 256 durable collector identities per tenant,

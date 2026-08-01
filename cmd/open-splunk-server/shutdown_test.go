@@ -270,7 +270,7 @@ func TestShutdownHTTPServerUnblocksActiveWebSocketHandlerEvenOnCloseError(t *tes
 	}
 	select {
 	case <-handlerDone:
-	default:
+	case <-time.After(time.Second):
 		t.Fatal("active websocket handler did not return")
 	}
 }

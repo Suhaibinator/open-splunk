@@ -14,6 +14,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/searchtimebounds"
 )
 
@@ -69,11 +70,12 @@ func (limits Limits) Validate() error {
 // Policy is one immutable, versioned index-policy snapshot admitted at a
 // collector authorization boundary.
 type Policy struct {
-	Name              string
-	Version           uint64
-	RetentionPeriod   time.Duration
-	DefaultSourcetype string
-	Limits            Limits
+	Name                string
+	Version             uint64
+	RetentionPeriod     time.Duration
+	DefaultSourcetype   string
+	Limits              Limits
+	IngestionRateLimits ingestquota.Limits
 }
 
 // ResolveRetentionAt validates the complete policy at reference and returns
@@ -109,6 +111,9 @@ func (policy Policy) ValidateStoredAt(reference time.Time) error {
 		return errors.New("default sourcetype is invalid")
 	}
 	if err := policy.Limits.Validate(); err != nil {
+		return err
+	}
+	if err := policy.IngestionRateLimits.Validate(); err != nil {
 		return err
 	}
 	return ValidateRetentionAt(policy.RetentionPeriod, reference, true)

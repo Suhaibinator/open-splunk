@@ -24,6 +24,7 @@ import {
   ingestionTokenStateToJSON,
 } from "./collector_admin";
 import { PageRequest, PageResponse, SortDirection, sortDirectionFromJSON, sortDirectionToJSON } from "./common";
+import { IngestionRateLimits } from "./ingestion_policy";
 
 export enum CollectorSortBy {
   COLLECTOR_SORT_BY_UNSPECIFIED = 0,
@@ -179,6 +180,7 @@ export interface IngestionTokenDefinition {
   description?: string | undefined;
   constraints: IngestionTokenConstraints | undefined;
   expiresAt?: Date | undefined;
+  ingestionRateLimits: IngestionRateLimits | undefined;
 }
 
 /** POST /api/v1/ingestion-tokens/create */
@@ -991,7 +993,13 @@ export const SetCollectorEnabledResponse: MessageFns<SetCollectorEnabledResponse
 };
 
 function createBaseIngestionTokenDefinition(): IngestionTokenDefinition {
-  return { name: "", description: undefined, constraints: undefined, expiresAt: undefined };
+  return {
+    name: "",
+    description: undefined,
+    constraints: undefined,
+    expiresAt: undefined,
+    ingestionRateLimits: undefined,
+  };
 }
 
 export const IngestionTokenDefinition: MessageFns<IngestionTokenDefinition> = {
@@ -1007,6 +1015,9 @@ export const IngestionTokenDefinition: MessageFns<IngestionTokenDefinition> = {
     }
     if (message.expiresAt !== undefined) {
       Timestamp.encode(toTimestamp(message.expiresAt), writer.uint32(34).fork()).join();
+    }
+    if (message.ingestionRateLimits !== undefined) {
+      IngestionRateLimits.encode(message.ingestionRateLimits, writer.uint32(42).fork()).join();
     }
     return writer;
   },
@@ -1050,6 +1061,14 @@ export const IngestionTokenDefinition: MessageFns<IngestionTokenDefinition> = {
           message.expiresAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
           continue;
         }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.ingestionRateLimits = IngestionRateLimits.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1069,6 +1088,11 @@ export const IngestionTokenDefinition: MessageFns<IngestionTokenDefinition> = {
         : isSet(object.expires_at)
         ? fromJsonTimestamp(object.expires_at)
         : undefined,
+      ingestionRateLimits: isSet(object.ingestionRateLimits)
+        ? IngestionRateLimits.fromJSON(object.ingestionRateLimits)
+        : isSet(object.ingestion_rate_limits)
+        ? IngestionRateLimits.fromJSON(object.ingestion_rate_limits)
+        : undefined,
     };
   },
 
@@ -1086,6 +1110,9 @@ export const IngestionTokenDefinition: MessageFns<IngestionTokenDefinition> = {
     if (message.expiresAt !== undefined) {
       obj.expiresAt = message.expiresAt.toISOString();
     }
+    if (message.ingestionRateLimits !== undefined) {
+      obj.ingestionRateLimits = IngestionRateLimits.toJSON(message.ingestionRateLimits);
+    }
     return obj;
   },
 
@@ -1100,6 +1127,9 @@ export const IngestionTokenDefinition: MessageFns<IngestionTokenDefinition> = {
       ? IngestionTokenConstraints.fromPartial(object.constraints)
       : undefined;
     message.expiresAt = object.expiresAt ?? undefined;
+    message.ingestionRateLimits = (object.ingestionRateLimits !== undefined && object.ingestionRateLimits !== null)
+      ? IngestionRateLimits.fromPartial(object.ingestionRateLimits)
+      : undefined;
     return message;
   },
 };

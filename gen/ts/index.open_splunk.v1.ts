@@ -11,6 +11,7 @@ export * from "./open_splunk/v1/app_api";
 export * from "./open_splunk/v1/value";
 export * from "./open_splunk/v1/event";
 export * from "./open_splunk/v1/collector";
+export * from "./open_splunk/v1/ingestion_policy";
 export * from "./open_splunk/v1/collector_admin";
 export * from "./open_splunk/v1/collector_admin_api";
 export * from "./open_splunk/v1/export";

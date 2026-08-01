@@ -159,6 +159,7 @@ func (authorizer collectorAuthorizer) Authorize(ctx context.Context, token strin
 		SubjectID:         authentication.TokenID,
 		TenantID:          authorizer.tenantID,
 		CollectorID:       authentication.BoundCollectorID,
+		TokenRateLimits:   authentication.TokenRateLimits,
 		AuthorizedIndexes: slices.Clone(authentication.AuthorizedIndexes),
 	}, nil
 }
@@ -331,6 +332,7 @@ func collectorAuthenticationAuthorization(
 		SubjectID:         authentication.TokenID,
 		TenantID:          tenantID,
 		CollectorID:       authentication.BoundCollectorID,
+		TokenRateLimits:   authentication.TokenRateLimits,
 		AuthorizedIndexes: slices.Clone(authentication.AuthorizedIndexes),
 	}
 }

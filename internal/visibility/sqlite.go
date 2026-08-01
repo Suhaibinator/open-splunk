@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"modernc.org/sqlite"
 )
 
@@ -26,6 +28,10 @@ const (
 	maxBatchKeyBytes     = 512
 	maxSequenceKeyBytes  = 512
 	maxAttemptIDBytes    = 128
+	// One token plus one index per admitted event is the largest valid quota
+	// shape. Keeping the bound explicit makes the dynamically constructed bulk
+	// read and upsert statements independent of caller-controlled slice sizes.
+	maximumQuotaAdmissionScopes = int(ingestquota.HardMaxAdmissionEvents) + 1
 	// Cleanup is detached from any one Shutdown caller so a short deadline
 	// cannot strand process ownership. Its own hard bound prevents a drained
 	// owner from retaining the borrowed database behind a stuck pool.
@@ -520,6 +526,10 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 	if capacityErr := ensurePendingCapacity(ctx, tx, len(request.Outbox)); capacityErr != nil {
 		return Reservation{}, capacityErr
 	}
+	quotaPlan, err := planQuotaReservation(ctx, tx, request)
+	if err != nil {
+		return Reservation{}, err
+	}
 	sequence, err = allocateSequence(ctx, tx)
 	if err != nil {
 		return Reservation{}, err
@@ -557,6 +567,11 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 			return Reservation{}, ErrConflict
 		}
 		return Reservation{}, fmt.Errorf("persist visibility reservation: %w", err)
+	}
+	if quotaPlan != nil {
+		if err := persistQuotaReservation(ctx, tx, request.BatchKey, *quotaPlan); err != nil {
+			return Reservation{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return Reservation{}, fmt.Errorf("commit visibility reservation: %w", err)
@@ -1054,6 +1069,343 @@ func validateAttemptID(ctx context.Context, attemptID string) error {
 	}
 	if attemptID == "" || len(attemptID) > maxAttemptIDBytes || !utf8.ValidString(attemptID) {
 		return fmt.Errorf("%w: attempt ID must contain 1 to %d valid UTF-8 bytes", ErrInvalidArgument, maxAttemptIDBytes)
+	}
+	return nil
+}
+
+type quotaReservationPlan struct {
+	updates               []ingestquota.StateUpdate
+	admittedAtUnixMicro   int64
+	eventCount            uint64
+	uncompressedByteCount uint64
+}
+
+// planQuotaReservation runs only after Reserve has proved there is no active
+// durable disposition for the exact batch. The returned updates remain
+// speculative until the caller persists them in the same transaction as the
+// identity, reservation, and admission marker.
+func planQuotaReservation(
+	ctx context.Context,
+	tx *sql.Tx,
+	request ReserveRequest,
+) (*quotaReservationPlan, error) {
+	if request.QuotaAdmission == nil {
+		return nil, nil
+	}
+	var alreadyAdmitted int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM ingest_quota_admissions
+			WHERE batch_key = ?
+		)`, request.BatchKey).Scan(&alreadyAdmitted); err != nil {
+		return nil, fmt.Errorf("read durable ingestion quota admission: %w", err)
+	}
+	if alreadyAdmitted != 0 {
+		return nil, nil
+	}
+
+	admission, eventCount, byteCount, err := hydrateQuotaAdmission(
+		ctx,
+		tx,
+		request.QuotaEvaluatedAt,
+		*request.QuotaAdmission,
+	)
+	if err != nil {
+		return nil, err
+	}
+	decision, err := ingestquota.Evaluate(request.QuotaEvaluatedAt, admission)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate durable ingestion quota: %w", err)
+	}
+	if !decision.Allowed {
+		return nil, &ingestquota.ExceededError{
+			Scope:      decision.BlockingScope,
+			RetryAfter: decision.RetryAfter,
+		}
+	}
+	admittedAt := request.QuotaEvaluatedAt.Round(0).UTC().UnixMicro()
+	if admittedAt <= 0 {
+		return nil, fmt.Errorf("%w: quota evaluation time is outside persistent bounds", ErrInvalidArgument)
+	}
+	return &quotaReservationPlan{
+		updates:               decision.Updates,
+		admittedAtUnixMicro:   admittedAt,
+		eventCount:            eventCount,
+		uncompressedByteCount: byteCount,
+	}, nil
+}
+
+func hydrateQuotaAdmission(
+	ctx context.Context,
+	tx *sql.Tx,
+	evaluatedAt time.Time,
+	source ingestquota.Admission,
+) (ingestquota.Admission, uint64, uint64, error) {
+	if len(source.Charges) > maximumQuotaAdmissionScopes {
+		return ingestquota.Admission{}, 0, 0, fmt.Errorf(
+			"%w: quota admission contains too many scopes",
+			ErrInvalidArgument,
+		)
+	}
+	// Evaluate once without database state to validate the caller-owned policy,
+	// costs, time, and duplicate-scope shape before using any scope as a SQL key.
+	for _, charge := range source.Charges {
+		if charge.State != nil {
+			return ingestquota.Admission{}, 0, 0, fmt.Errorf(
+				"%w: quota admission must not supply durable state",
+				ErrInvalidArgument,
+			)
+		}
+	}
+	if _, err := ingestquota.Evaluate(evaluatedAt, source); err != nil {
+		return ingestquota.Admission{}, 0, 0, fmt.Errorf(
+			"%w: invalid quota admission: %w",
+			ErrInvalidArgument,
+			err,
+		)
+	}
+
+	admission := ingestquota.Admission{
+		Charges: append([]ingestquota.Charge(nil), source.Charges...),
+	}
+	var tokenCharge *ingestquota.Charge
+	var tenantID string
+	var indexCount int
+	var indexEvents, indexBytes uint64
+	for index := range admission.Charges {
+		charge := &admission.Charges[index]
+		if tenantID == "" {
+			tenantID = charge.Scope.TenantID
+		} else if charge.Scope.TenantID != tenantID {
+			return ingestquota.Admission{}, 0, 0, fmt.Errorf(
+				"%w: quota admission spans multiple tenants",
+				ErrInvalidArgument,
+			)
+		}
+		switch charge.Scope.Kind {
+		case ingestquota.ScopeKindToken:
+			if tokenCharge != nil {
+				return ingestquota.Admission{}, 0, 0, fmt.Errorf(
+					"%w: quota admission requires exactly one token scope",
+					ErrInvalidArgument,
+				)
+			}
+			tokenCharge = charge
+		case ingestquota.ScopeKindIndex:
+			indexCount++
+			if math.MaxUint64-indexEvents < charge.Events ||
+				math.MaxUint64-indexBytes < charge.UncompressedBytes {
+				return ingestquota.Admission{}, 0, 0, fmt.Errorf(
+					"%w: quota index charge totals overflow",
+					ErrInvalidArgument,
+				)
+			}
+			indexEvents += charge.Events
+			indexBytes += charge.UncompressedBytes
+		}
+	}
+	if tokenCharge == nil || indexCount == 0 {
+		return ingestquota.Admission{}, 0, 0, fmt.Errorf(
+			"%w: quota admission requires one token and at least one index scope",
+			ErrInvalidArgument,
+		)
+	}
+	if tokenCharge.Events != indexEvents ||
+		tokenCharge.UncompressedBytes != indexBytes {
+		return ingestquota.Admission{}, 0, 0, fmt.Errorf(
+			"%w: token quota charge does not equal the index charge total",
+			ErrInvalidArgument,
+		)
+	}
+	states, err := readQuotaStates(ctx, tx, admission.Charges)
+	if err != nil {
+		return ingestquota.Admission{}, 0, 0, err
+	}
+	for index := range admission.Charges {
+		admission.Charges[index].State = states[admission.Charges[index].Scope]
+	}
+	return admission, tokenCharge.Events, tokenCharge.UncompressedBytes, nil
+}
+
+func readQuotaStates(
+	ctx context.Context,
+	tx *sql.Tx,
+	charges []ingestquota.Charge,
+) (map[ingestquota.ScopeKey]*ingestquota.State, error) {
+	if len(charges) == 0 || len(charges) > maximumQuotaAdmissionScopes {
+		return nil, errors.New("read ingestion quota buckets: scope count is outside bounds")
+	}
+
+	var statement strings.Builder
+	statement.Grow(512 + len(charges)*8)
+	statement.WriteString(`
+		WITH requested(scope_kind, scope_id) AS (
+			VALUES `)
+	arguments := make([]any, 0, len(charges)*2+1)
+	for index, charge := range charges {
+		if index != 0 {
+			statement.WriteString(", ")
+		}
+		statement.WriteString("(?, ?)")
+		arguments = append(arguments, string(charge.Scope.Kind), charge.Scope.Identity)
+	}
+	statement.WriteString(`
+		)
+		SELECT bucket.scope_kind,
+		       bucket.scope_id,
+		       bucket.max_ingest_events_per_second,
+		       bucket.max_ingest_uncompressed_bytes_per_second,
+		       bucket.next_event_admission_unix_nano,
+		       bucket.next_byte_admission_unix_nano,
+		       bucket.updated_at_unix_micro
+		FROM requested
+		JOIN ingest_quota_buckets AS bucket
+		  ON bucket.tenant_id = ?
+		 AND bucket.scope_kind = requested.scope_kind
+		 AND bucket.scope_id = requested.scope_id`)
+	arguments = append(arguments, charges[0].Scope.TenantID)
+
+	// #nosec G201 -- the dynamic portion contains only a bounded number of fixed
+	// placeholder tuples; every scope value remains a bound argument.
+	rows, err := tx.QueryContext(ctx, statement.String(), arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("read ingestion quota buckets: %w", err)
+	}
+	defer rows.Close()
+
+	states := make(map[ingestquota.ScopeKey]*ingestquota.State, len(charges))
+	for rows.Next() {
+		var kind, identity string
+		var eventRate, byteRate int64
+		var nextEvent, nextByte, updatedAt int64
+		if err := rows.Scan(
+			&kind,
+			&identity,
+			&eventRate,
+			&byteRate,
+			&nextEvent,
+			&nextByte,
+			&updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("read ingestion quota bucket: %w", err)
+		}
+		if eventRate < 0 || byteRate < 0 {
+			return nil, errors.New("ingestion quota bucket contains a negative rate")
+		}
+		key := ingestquota.ScopeKey{
+			Kind:     ingestquota.ScopeKind(kind),
+			TenantID: charges[0].Scope.TenantID,
+			Identity: identity,
+		}
+		states[key] = &ingestquota.State{
+			Limits: ingestquota.Limits{
+				MaxEventsPerSecond:            uint64(eventRate),
+				MaxUncompressedBytesPerSecond: uint64(byteRate),
+			},
+			NextEventAdmissionUnixNano: nextEvent,
+			NextByteAdmissionUnixNano:  nextByte,
+			UpdatedAtUnixMicro:         updatedAt,
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read ingestion quota buckets: %w", err)
+	}
+	return states, nil
+}
+
+func persistQuotaReservation(
+	ctx context.Context,
+	tx *sql.Tx,
+	batchKey string,
+	plan quotaReservationPlan,
+) error {
+	if err := persistQuotaUpdates(ctx, tx, plan.updates); err != nil {
+		return err
+	}
+	// #nosec G115 -- Evaluate bounds admission events far below math.MaxInt64.
+	eventCount := int64(plan.eventCount)
+	// #nosec G115 -- Evaluate bounds admission bytes far below math.MaxInt64.
+	uncompressedByteCount := int64(plan.uncompressedByteCount)
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO ingest_quota_admissions (
+			batch_key, admitted_at_unix_micro, event_count, uncompressed_bytes
+		) VALUES (?, ?, ?, ?)`,
+		batchKey,
+		plan.admittedAtUnixMicro,
+		eventCount,
+		uncompressedByteCount,
+	); err != nil {
+		return fmt.Errorf("persist ingestion quota admission: %w", err)
+	}
+	return nil
+}
+
+func persistQuotaUpdates(
+	ctx context.Context,
+	tx *sql.Tx,
+	updates []ingestquota.StateUpdate,
+) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	if len(updates) > maximumQuotaAdmissionScopes {
+		return errors.New("persist ingestion quota buckets: update count is outside bounds")
+	}
+
+	var statement strings.Builder
+	statement.Grow(768 + len(updates)*30)
+	statement.WriteString(`
+		INSERT INTO ingest_quota_buckets (
+			tenant_id, scope_kind, scope_id,
+			max_ingest_events_per_second,
+			max_ingest_uncompressed_bytes_per_second,
+			next_event_admission_unix_nano,
+			next_byte_admission_unix_nano,
+			updated_at_unix_micro,
+			token_owner_id
+		) VALUES `)
+	arguments := make([]any, 0, len(updates)*9)
+	for index, update := range updates {
+		if index != 0 {
+			statement.WriteString(", ")
+		}
+		statement.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		var tokenOwnerID any
+		if update.Scope.Kind == ingestquota.ScopeKindToken {
+			tokenOwnerID = update.Scope.Identity
+		}
+		// #nosec G115 -- Evaluate rejects quota limits above the protocol hard
+		// maximum, which is far below math.MaxInt64.
+		maxEventsPerSecond := int64(update.State.Limits.MaxEventsPerSecond)
+		// #nosec G115 -- Evaluate rejects quota limits above the protocol hard
+		// maximum, which is far below math.MaxInt64.
+		maxBytesPerSecond := int64(update.State.Limits.MaxUncompressedBytesPerSecond)
+		arguments = append(
+			arguments,
+			update.Scope.TenantID,
+			string(update.Scope.Kind),
+			update.Scope.Identity,
+			maxEventsPerSecond,
+			maxBytesPerSecond,
+			update.State.NextEventAdmissionUnixNano,
+			update.State.NextByteAdmissionUnixNano,
+			update.State.UpdatedAtUnixMicro,
+			tokenOwnerID,
+		)
+	}
+	statement.WriteString(`
+		ON CONFLICT (tenant_id, scope_kind, scope_id) DO UPDATE SET
+			max_ingest_events_per_second = excluded.max_ingest_events_per_second,
+			max_ingest_uncompressed_bytes_per_second = excluded.max_ingest_uncompressed_bytes_per_second,
+			next_event_admission_unix_nano = excluded.next_event_admission_unix_nano,
+			next_byte_admission_unix_nano = excluded.next_byte_admission_unix_nano,
+			updated_at_unix_micro = excluded.updated_at_unix_micro,
+			token_owner_id = excluded.token_owner_id`)
+	// #nosec G201 -- the dynamic portion contains only a bounded number of fixed
+	// placeholder tuples; every bucket value remains a bound argument.
+	if _, err := tx.ExecContext(ctx, statement.String(), arguments...); err != nil {
+		return fmt.Errorf("persist ingestion quota buckets: %w", err)
 	}
 	return nil
 }

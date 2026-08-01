@@ -286,16 +286,17 @@ type IndexDefinition struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name is immutable after creation because it is part of SPL and collector
 	// configuration. Use display_name for operator-facing renames.
-	Name              string               `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	DisplayName       string               `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Description       *string              `protobuf:"bytes,3,opt,name=description,proto3,oneof" json:"description,omitempty"`
-	RetentionPeriod   *durationpb.Duration `protobuf:"bytes,4,opt,name=retention_period,json=retentionPeriod,proto3,oneof" json:"retention_period,omitempty"`
-	IngestionAccess   IndexAccessState     `protobuf:"varint,5,opt,name=ingestion_access,json=ingestionAccess,proto3,enum=open_splunk.v1.IndexAccessState" json:"ingestion_access,omitempty"`
-	SearchAccess      IndexAccessState     `protobuf:"varint,6,opt,name=search_access,json=searchAccess,proto3,enum=open_splunk.v1.IndexAccessState" json:"search_access,omitempty"`
-	DefaultSourcetype *string              `protobuf:"bytes,7,opt,name=default_sourcetype,json=defaultSourcetype,proto3,oneof" json:"default_sourcetype,omitempty"`
-	Limits            *IndexLimits         `protobuf:"bytes,8,opt,name=limits,proto3" json:"limits,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	Name                string               `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	DisplayName         string               `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Description         *string              `protobuf:"bytes,3,opt,name=description,proto3,oneof" json:"description,omitempty"`
+	RetentionPeriod     *durationpb.Duration `protobuf:"bytes,4,opt,name=retention_period,json=retentionPeriod,proto3,oneof" json:"retention_period,omitempty"`
+	IngestionAccess     IndexAccessState     `protobuf:"varint,5,opt,name=ingestion_access,json=ingestionAccess,proto3,enum=open_splunk.v1.IndexAccessState" json:"ingestion_access,omitempty"`
+	SearchAccess        IndexAccessState     `protobuf:"varint,6,opt,name=search_access,json=searchAccess,proto3,enum=open_splunk.v1.IndexAccessState" json:"search_access,omitempty"`
+	DefaultSourcetype   *string              `protobuf:"bytes,7,opt,name=default_sourcetype,json=defaultSourcetype,proto3,oneof" json:"default_sourcetype,omitempty"`
+	Limits              *IndexLimits         `protobuf:"bytes,8,opt,name=limits,proto3" json:"limits,omitempty"`
+	IngestionRateLimits *IngestionRateLimits `protobuf:"bytes,9,opt,name=ingestion_rate_limits,json=ingestionRateLimits,proto3" json:"ingestion_rate_limits,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *IndexDefinition) Reset() {
@@ -380,6 +381,13 @@ func (x *IndexDefinition) GetDefaultSourcetype() string {
 func (x *IndexDefinition) GetLimits() *IndexLimits {
 	if x != nil {
 		return x.Limits
+	}
+	return nil
+}
+
+func (x *IndexDefinition) GetIngestionRateLimits() *IngestionRateLimits {
+	if x != nil {
+		return x.IngestionRateLimits
 	}
 	return nil
 }
@@ -648,7 +656,7 @@ var File_open_splunk_v1_index_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_index_proto_rawDesc = "" +
 	"\n" +
-	"\x1aopen_splunk/v1/index.proto\x12\x0eopen_splunk.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"Y\n" +
+	"\x1aopen_splunk/v1/index.proto\x12\x0eopen_splunk.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a%open_splunk/v1/ingestion_policy.proto\"Y\n" +
 	"\rIndexSelector\x12\x1b\n" +
 	"\bindex_id\x18\x01 \x01(\tH\x00R\aindexId\x12\x1f\n" +
 	"\n" +
@@ -665,7 +673,7 @@ const file_open_splunk_v1_index_proto_rawDesc = "" +
 	"\x10_max_field_countB\x14\n" +
 	"\x12_max_nesting_depthB\x16\n" +
 	"\x14_maximum_future_skewB\x14\n" +
-	"\x12_maximum_event_age\"\xf3\x03\n" +
+	"\x12_maximum_event_age\"\xcc\x04\n" +
 	"\x0fIndexDefinition\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12%\n" +
@@ -674,7 +682,8 @@ const file_open_splunk_v1_index_proto_rawDesc = "" +
 	"\x10ingestion_access\x18\x05 \x01(\x0e2 .open_splunk.v1.IndexAccessStateR\x0fingestionAccess\x12E\n" +
 	"\rsearch_access\x18\x06 \x01(\x0e2 .open_splunk.v1.IndexAccessStateR\fsearchAccess\x122\n" +
 	"\x12default_sourcetype\x18\a \x01(\tH\x02R\x11defaultSourcetype\x88\x01\x01\x123\n" +
-	"\x06limits\x18\b \x01(\v2\x1b.open_splunk.v1.IndexLimitsR\x06limitsB\x0e\n" +
+	"\x06limits\x18\b \x01(\v2\x1b.open_splunk.v1.IndexLimitsR\x06limits\x12W\n" +
+	"\x15ingestion_rate_limits\x18\t \x01(\v2#.open_splunk.v1.IngestionRateLimitsR\x13ingestionRateLimitsB\x0e\n" +
 	"\f_descriptionB\x13\n" +
 	"\x11_retention_periodB\x15\n" +
 	"\x13_default_sourcetype\"\xa5\x02\n" +
@@ -742,7 +751,8 @@ var file_open_splunk_v1_index_proto_goTypes = []any{
 	(*IndexStats)(nil),            // 6: open_splunk.v1.IndexStats
 	(*IndexSummary)(nil),          // 7: open_splunk.v1.IndexSummary
 	(*durationpb.Duration)(nil),   // 8: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
+	(*IngestionRateLimits)(nil),   // 9: open_splunk.v1.IngestionRateLimits
+	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
 }
 var file_open_splunk_v1_index_proto_depIdxs = []int32{
 	8,  // 0: open_splunk.v1.IndexLimits.maximum_future_skew:type_name -> google.protobuf.Duration
@@ -751,21 +761,22 @@ var file_open_splunk_v1_index_proto_depIdxs = []int32{
 	1,  // 3: open_splunk.v1.IndexDefinition.ingestion_access:type_name -> open_splunk.v1.IndexAccessState
 	1,  // 4: open_splunk.v1.IndexDefinition.search_access:type_name -> open_splunk.v1.IndexAccessState
 	3,  // 5: open_splunk.v1.IndexDefinition.limits:type_name -> open_splunk.v1.IndexLimits
-	4,  // 6: open_splunk.v1.Index.definition:type_name -> open_splunk.v1.IndexDefinition
-	0,  // 7: open_splunk.v1.Index.state:type_name -> open_splunk.v1.IndexState
-	9,  // 8: open_splunk.v1.Index.created_at:type_name -> google.protobuf.Timestamp
-	9,  // 9: open_splunk.v1.Index.updated_at:type_name -> google.protobuf.Timestamp
-	9,  // 10: open_splunk.v1.IndexStats.earliest_event_time:type_name -> google.protobuf.Timestamp
-	9,  // 11: open_splunk.v1.IndexStats.latest_event_time:type_name -> google.protobuf.Timestamp
-	9,  // 12: open_splunk.v1.IndexStats.measured_at:type_name -> google.protobuf.Timestamp
-	0,  // 13: open_splunk.v1.IndexSummary.state:type_name -> open_splunk.v1.IndexState
-	1,  // 14: open_splunk.v1.IndexSummary.ingestion_access:type_name -> open_splunk.v1.IndexAccessState
-	1,  // 15: open_splunk.v1.IndexSummary.search_access:type_name -> open_splunk.v1.IndexAccessState
-	16, // [16:16] is the sub-list for method output_type
-	16, // [16:16] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	9,  // 6: open_splunk.v1.IndexDefinition.ingestion_rate_limits:type_name -> open_splunk.v1.IngestionRateLimits
+	4,  // 7: open_splunk.v1.Index.definition:type_name -> open_splunk.v1.IndexDefinition
+	0,  // 8: open_splunk.v1.Index.state:type_name -> open_splunk.v1.IndexState
+	10, // 9: open_splunk.v1.Index.created_at:type_name -> google.protobuf.Timestamp
+	10, // 10: open_splunk.v1.Index.updated_at:type_name -> google.protobuf.Timestamp
+	10, // 11: open_splunk.v1.IndexStats.earliest_event_time:type_name -> google.protobuf.Timestamp
+	10, // 12: open_splunk.v1.IndexStats.latest_event_time:type_name -> google.protobuf.Timestamp
+	10, // 13: open_splunk.v1.IndexStats.measured_at:type_name -> google.protobuf.Timestamp
+	0,  // 14: open_splunk.v1.IndexSummary.state:type_name -> open_splunk.v1.IndexState
+	1,  // 15: open_splunk.v1.IndexSummary.ingestion_access:type_name -> open_splunk.v1.IndexAccessState
+	1,  // 16: open_splunk.v1.IndexSummary.search_access:type_name -> open_splunk.v1.IndexAccessState
+	17, // [17:17] is the sub-list for method output_type
+	17, // [17:17] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_index_proto_init() }
@@ -773,6 +784,7 @@ func file_open_splunk_v1_index_proto_init() {
 	if File_open_splunk_v1_index_proto != nil {
 		return
 	}
+	file_open_splunk_v1_ingestion_policy_proto_init()
 	file_open_splunk_v1_index_proto_msgTypes[0].OneofWrappers = []any{
 		(*IndexSelector_IndexId)(nil),
 		(*IndexSelector_IndexName)(nil),

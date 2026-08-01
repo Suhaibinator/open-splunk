@@ -31,6 +31,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -58,30 +59,36 @@ const (
 var errImmutableTokenCollectorBinding = errors.New("ingestion token collector binding is immutable")
 
 var indexUpdatePaths = map[string]string{
-	"display_name":                          "display_name",
-	"definition.display_name":               "display_name",
-	"description":                           "description",
-	"definition.description":                "description",
-	"retention_period":                      "retention_period",
-	"definition.retention_period":           "retention_period",
-	"ingestion_access":                      "ingestion_access",
-	"definition.ingestion_access":           "ingestion_access",
-	"search_access":                         "search_access",
-	"definition.search_access":              "search_access",
-	"default_sourcetype":                    "default_sourcetype",
-	"definition.default_sourcetype":         "default_sourcetype",
-	"limits":                                "limits",
-	"definition.limits":                     "limits",
-	"limits.max_event_bytes":                "limits.max_event_bytes",
-	"definition.limits.max_event_bytes":     "limits.max_event_bytes",
-	"limits.max_field_count":                "limits.max_field_count",
-	"definition.limits.max_field_count":     "limits.max_field_count",
-	"limits.max_nesting_depth":              "limits.max_nesting_depth",
-	"definition.limits.max_nesting_depth":   "limits.max_nesting_depth",
-	"limits.maximum_future_skew":            "limits.maximum_future_skew",
-	"definition.limits.maximum_future_skew": "limits.maximum_future_skew",
-	"limits.maximum_event_age":              "limits.maximum_event_age",
-	"definition.limits.maximum_event_age":   "limits.maximum_event_age",
+	"display_name":                                            "display_name",
+	"definition.display_name":                                 "display_name",
+	"description":                                             "description",
+	"definition.description":                                  "description",
+	"retention_period":                                        "retention_period",
+	"definition.retention_period":                             "retention_period",
+	"ingestion_access":                                        "ingestion_access",
+	"definition.ingestion_access":                             "ingestion_access",
+	"search_access":                                           "search_access",
+	"definition.search_access":                                "search_access",
+	"default_sourcetype":                                      "default_sourcetype",
+	"definition.default_sourcetype":                           "default_sourcetype",
+	"limits":                                                  "limits",
+	"definition.limits":                                       "limits",
+	"limits.max_event_bytes":                                  "limits.max_event_bytes",
+	"definition.limits.max_event_bytes":                       "limits.max_event_bytes",
+	"limits.max_field_count":                                  "limits.max_field_count",
+	"definition.limits.max_field_count":                       "limits.max_field_count",
+	"limits.max_nesting_depth":                                "limits.max_nesting_depth",
+	"definition.limits.max_nesting_depth":                     "limits.max_nesting_depth",
+	"limits.maximum_future_skew":                              "limits.maximum_future_skew",
+	"definition.limits.maximum_future_skew":                   "limits.maximum_future_skew",
+	"limits.maximum_event_age":                                "limits.maximum_event_age",
+	"definition.limits.maximum_event_age":                     "limits.maximum_event_age",
+	"ingestion_rate_limits":                                   "ingestion_rate_limits",
+	"definition.ingestion_rate_limits":                        "ingestion_rate_limits",
+	"ingestion_rate_limits.max_events_per_second":             "ingestion_rate_limits.max_events_per_second",
+	"definition.ingestion_rate_limits.max_events_per_second":  "ingestion_rate_limits.max_events_per_second",
+	"ingestion_rate_limits.max_uncompressed_bytes_per_second": "ingestion_rate_limits.max_uncompressed_bytes_per_second",
+	"definition.ingestion_rate_limits.max_uncompressed_bytes_per_second": "ingestion_rate_limits.max_uncompressed_bytes_per_second",
 }
 
 var tokenUpdatePaths = map[string]string{
@@ -92,7 +99,13 @@ var tokenUpdatePaths = map[string]string{
 	"constraints":                    "constraints",
 	"definition.constraints":         "constraints",
 	"constraints.bound_collector_id": "constraints.bound_collector_id",
-	"definition.constraints.bound_collector_id": "constraints.bound_collector_id",
+	"definition.constraints.bound_collector_id":                          "constraints.bound_collector_id",
+	"ingestion_rate_limits":                                              "ingestion_rate_limits",
+	"definition.ingestion_rate_limits":                                   "ingestion_rate_limits",
+	"ingestion_rate_limits.max_events_per_second":                        "ingestion_rate_limits.max_events_per_second",
+	"definition.ingestion_rate_limits.max_events_per_second":             "ingestion_rate_limits.max_events_per_second",
+	"ingestion_rate_limits.max_uncompressed_bytes_per_second":            "ingestion_rate_limits.max_uncompressed_bytes_per_second",
+	"definition.ingestion_rate_limits.max_uncompressed_bytes_per_second": "ingestion_rate_limits.max_uncompressed_bytes_per_second",
 	"expires_at":            "expires_at",
 	"definition.expires_at": "expires_at",
 }
@@ -1579,10 +1592,15 @@ func indexDefinitionFromProto(input *opensplunkv1.IndexDefinition) (control.Inde
 	if err != nil {
 		return control.IndexDefinition{}, err
 	}
+	rateLimits, err := ingestionRateLimitsFromProto(input.GetIngestionRateLimits())
+	if err != nil {
+		return control.IndexDefinition{}, err
+	}
 	return control.IndexDefinition{
 		Name: name, DisplayName: displayName, Description: description,
 		RetentionPeriod: retention, IngestionEnabled: ingestionEnabled,
 		SearchEnabled: searchEnabled, DefaultSourcetype: defaultSourcetype, Limits: limits,
+		IngestionRateLimits: rateLimits,
 	}, nil
 }
 
@@ -1663,6 +1681,16 @@ func applyIndexUpdate(current control.IndexDefinition, input *opensplunkv1.Index
 				value = input.GetLimits().GetMaximumEventAge()
 			}
 			result.Limits.MaximumEventAge, err = nonnegativeProtoDuration(value, "maximum event age")
+		case "ingestion_rate_limits":
+			result.IngestionRateLimits, err = ingestionRateLimitsFromProto(
+				input.GetIngestionRateLimits(),
+			)
+		case "ingestion_rate_limits.max_events_per_second":
+			result.IngestionRateLimits.MaxEventsPerSecond = input.
+				GetIngestionRateLimits().GetMaxEventsPerSecond()
+		case "ingestion_rate_limits.max_uncompressed_bytes_per_second":
+			result.IngestionRateLimits.MaxUncompressedBytesPerSecond = input.
+				GetIngestionRateLimits().GetMaxUncompressedBytesPerSecond()
 		}
 		if err != nil {
 			return control.IndexDefinition{}, err
@@ -1670,6 +1698,9 @@ func applyIndexUpdate(current control.IndexDefinition, input *opensplunkv1.Index
 	}
 	if err := validateIndexLimits(result.Limits); err != nil {
 		return control.IndexDefinition{}, err
+	}
+	if err := result.IngestionRateLimits.Validate(); err != nil {
+		return control.IndexDefinition{}, errors.New("index ingestion rate limits are invalid")
 	}
 	if err := indexpolicy.ValidateRetentionAt(result.RetentionPeriod, time.Now().UTC(), true); err != nil {
 		return control.IndexDefinition{}, errors.New("index retention period is invalid")
@@ -1705,6 +1736,9 @@ func validateIndexLimits(limits control.IndexLimits) error {
 
 func indexToProto(record control.Index) (*opensplunkv1.Index, error) {
 	if err := validateIndexLimits(record.Definition.Limits); err != nil {
+		return nil, errors.New("invalid index record")
+	}
+	if err := record.Definition.IngestionRateLimits.Validate(); err != nil {
 		return nil, errors.New("invalid index record")
 	}
 	normalizedName, nameErr := control.NormalizeIndexName(record.Definition.Name)
@@ -1751,6 +1785,9 @@ func indexToProto(record control.Index) (*opensplunkv1.Index, error) {
 		definition.DefaultSourcetype = stringPointer(record.Definition.DefaultSourcetype)
 	}
 	definition.Limits = indexLimitsToProto(record.Definition.Limits)
+	definition.IngestionRateLimits = ingestionRateLimitsToProto(
+		record.Definition.IngestionRateLimits,
+	)
 	return &opensplunkv1.Index{
 		IndexId: record.ID, Version: record.Version, Definition: definition,
 		State: indexStateToProto(record.State), CreatedAt: created, UpdatedAt: updated,
@@ -1778,6 +1815,40 @@ func indexLimitsToProto(limits control.IndexLimits) *opensplunkv1.IndexLimits {
 	}
 	if limits.MaximumEventAge != 0 {
 		result.MaximumEventAge = durationpb.New(limits.MaximumEventAge)
+	}
+	return result
+}
+
+func ingestionRateLimitsFromProto(
+	input *opensplunkv1.IngestionRateLimits,
+) (ingestquota.Limits, error) {
+	if input == nil {
+		return ingestquota.Limits{}, nil
+	}
+	limits := ingestquota.Limits{
+		MaxEventsPerSecond:            input.GetMaxEventsPerSecond(),
+		MaxUncompressedBytesPerSecond: input.GetMaxUncompressedBytesPerSecond(),
+	}
+	if err := limits.Validate(); err != nil {
+		return ingestquota.Limits{}, errors.New("ingestion rate limits are invalid")
+	}
+	return limits, nil
+}
+
+func ingestionRateLimitsToProto(
+	limits ingestquota.Limits,
+) *opensplunkv1.IngestionRateLimits {
+	if limits == (ingestquota.Limits{}) {
+		return nil
+	}
+	result := &opensplunkv1.IngestionRateLimits{}
+	if limits.MaxEventsPerSecond != 0 {
+		result.MaxEventsPerSecond = uint64Pointer(limits.MaxEventsPerSecond)
+	}
+	if limits.MaxUncompressedBytesPerSecond != 0 {
+		result.MaxUncompressedBytesPerSecond = uint64Pointer(
+			limits.MaxUncompressedBytesPerSecond,
+		)
 	}
 	return result
 }
@@ -1836,9 +1907,14 @@ func tokenDefinitionFromProtoWithCurrentBinding(
 		}
 		expiresAt = input.GetExpiresAt().AsTime().Round(0).UTC()
 	}
+	rateLimits, err := ingestionRateLimitsFromProto(input.GetIngestionRateLimits())
+	if err != nil {
+		return auth.UpdateCollectorTokenRequest{}, err
+	}
 	return auth.UpdateCollectorTokenRequest{
 		Name: name, Description: description, BoundCollectorID: boundCollectorID,
 		AllowedIndexNames: allowedIndexes, ExpiresAt: expiresAt,
+		IngestionRateLimits: rateLimits,
 	}, nil
 }
 
@@ -1896,6 +1972,7 @@ func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.Ingestion
 		Name: current.Name, Description: current.Description,
 		BoundCollectorID:  current.BoundCollectorID,
 		AllowedIndexNames: slices.Clone(current.AllowedIndexNames), ExpiresAt: current.ExpiresAt,
+		IngestionRateLimits: current.IngestionRateLimits,
 	}
 	for _, path := range paths {
 		switch path {
@@ -1934,7 +2011,23 @@ func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.Ingestion
 				}
 				result.ExpiresAt = input.GetExpiresAt().AsTime().Round(0).UTC()
 			}
+		case "ingestion_rate_limits":
+			result.IngestionRateLimits, err = ingestionRateLimitsFromProto(
+				input.GetIngestionRateLimits(),
+			)
+		case "ingestion_rate_limits.max_events_per_second":
+			result.IngestionRateLimits.MaxEventsPerSecond = input.
+				GetIngestionRateLimits().GetMaxEventsPerSecond()
+		case "ingestion_rate_limits.max_uncompressed_bytes_per_second":
+			result.IngestionRateLimits.MaxUncompressedBytesPerSecond = input.
+				GetIngestionRateLimits().GetMaxUncompressedBytesPerSecond()
 		}
+		if err != nil {
+			return auth.UpdateCollectorTokenRequest{}, err
+		}
+	}
+	if err := result.IngestionRateLimits.Validate(); err != nil {
+		return auth.UpdateCollectorTokenRequest{}, errors.New("ingestion token rate limits are invalid")
 	}
 	return result, nil
 }
@@ -1946,6 +2039,9 @@ func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, err
 		validateBoundedIdentifier(record.Prefix, 32, false) != nil ||
 		(record.BoundCollectorID != "" && !validTokenCollectorID(record.BoundCollectorID)) ||
 		len(record.AllowedIndexNames) == 0 || len(record.AllowedIndexNames) > maximumTokenScopes {
+		return nil, errors.New("invalid ingestion token record")
+	}
+	if err := record.IngestionRateLimits.Validate(); err != nil {
 		return nil, errors.New("invalid ingestion token record")
 	}
 	previousScope := ""
@@ -1980,6 +2076,7 @@ func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, err
 		TokenPrefix: record.Prefix, State: state,
 		Constraints: &opensplunkv1.IngestionTokenConstraints{AllowedIndexNames: slices.Clone(record.AllowedIndexNames)},
 		CreatedAt:   created, UpdatedAt: updated,
+		IngestionRateLimits: ingestionRateLimitsToProto(record.IngestionRateLimits),
 	}
 	if record.Description != "" {
 		result.Description = stringPointer(record.Description)

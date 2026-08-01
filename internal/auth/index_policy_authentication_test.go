@@ -10,6 +10,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 )
 
 func TestAuthenticateReturnsDetachedCurrentAuthorizedIndexPolicies(t *testing.T) {
@@ -173,6 +174,22 @@ func TestAuthenticateFailsClosedForCorruptAuthorizedIndexPolicy(t *testing.T) {
 		"maximum event age above hard ceiling": {
 			statement: `UPDATE indexes SET maximum_event_age_nanoseconds = ? WHERE name = 'main'`,
 			value:     int64(indexpolicy.HardMaxEventAge + time.Nanosecond),
+		},
+		"max ingest events per second negative": {
+			statement: `UPDATE indexes SET max_ingest_events_per_second = ? WHERE name = 'main'`,
+			value:     int64(-1),
+		},
+		"max ingest events per second above hard ceiling": {
+			statement: `UPDATE indexes SET max_ingest_events_per_second = ? WHERE name = 'main'`,
+			value:     int64(ingestquota.HardMaxEventsPerSecond + 1),
+		},
+		"max ingest uncompressed bytes per second negative": {
+			statement: `UPDATE indexes SET max_ingest_uncompressed_bytes_per_second = ? WHERE name = 'main'`,
+			value:     int64(-1),
+		},
+		"max ingest uncompressed bytes per second above hard ceiling": {
+			statement: `UPDATE indexes SET max_ingest_uncompressed_bytes_per_second = ? WHERE name = 'main'`,
+			value:     int64(ingestquota.HardMaxUncompressedBytesPerSecond + 1),
 		},
 	}
 	for name, test := range tests {

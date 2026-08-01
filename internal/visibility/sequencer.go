@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 )
 
 var (
@@ -72,6 +74,11 @@ type ReserveRequest struct {
 	PayloadSHA256 [32]byte
 	Metadata      []byte
 	Outbox        []byte
+	// QuotaAdmission is present only for fresh normalized ingestion. It is
+	// ignored by existing-only and active durable replay paths. Nil preserves
+	// the legacy non-quota reservation contract.
+	QuotaAdmission   *ingestquota.Admission
+	QuotaEvaluatedAt time.Time
 }
 
 // RejectRequest carries the stable event identity and compact server-derived

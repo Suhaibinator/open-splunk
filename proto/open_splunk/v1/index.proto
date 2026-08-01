@@ -4,6 +4,7 @@ package open_splunk.v1;
 
 import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/ingestion_policy.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
 
@@ -46,6 +47,7 @@ message IndexDefinition {
   IndexAccessState search_access = 6;
   optional string default_sourcetype = 7;
   IndexLimits limits = 8;
+  IngestionRateLimits ingestion_rate_limits = 9;
 }
 
 message Index {

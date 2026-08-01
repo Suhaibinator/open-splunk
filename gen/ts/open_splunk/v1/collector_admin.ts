@@ -14,6 +14,7 @@ import {
   CollectorInputHealth,
   CollectorQueueStats,
 } from "./collector";
+import { IngestionRateLimits } from "./ingestion_policy";
 
 export enum CollectorConnectionState {
   COLLECTOR_CONNECTION_STATE_UNSPECIFIED = 0,
@@ -217,6 +218,7 @@ export interface IngestionToken {
   lastUsedAt: Date | undefined;
   expiresAt: Date | undefined;
   revokedAt: Date | undefined;
+  ingestionRateLimits: IngestionRateLimits | undefined;
 }
 
 function createBaseCollectorRecord(): CollectorRecord {
@@ -949,6 +951,7 @@ function createBaseIngestionToken(): IngestionToken {
     lastUsedAt: undefined,
     expiresAt: undefined,
     revokedAt: undefined,
+    ingestionRateLimits: undefined,
   };
 }
 
@@ -992,6 +995,9 @@ export const IngestionToken: MessageFns<IngestionToken> = {
     }
     if (message.revokedAt !== undefined) {
       Timestamp.encode(toTimestamp(message.revokedAt), writer.uint32(98).fork()).join();
+    }
+    if (message.ingestionRateLimits !== undefined) {
+      IngestionRateLimits.encode(message.ingestionRateLimits, writer.uint32(106).fork()).join();
     }
     return writer;
   },
@@ -1099,6 +1105,14 @@ export const IngestionToken: MessageFns<IngestionToken> = {
           message.revokedAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
           continue;
         }
+        case 13: {
+          if (tag !== 106) {
+            break;
+          }
+
+          message.ingestionRateLimits = IngestionRateLimits.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1150,6 +1164,11 @@ export const IngestionToken: MessageFns<IngestionToken> = {
         : isSet(object.revoked_at)
         ? fromJsonTimestamp(object.revoked_at)
         : undefined,
+      ingestionRateLimits: isSet(object.ingestionRateLimits)
+        ? IngestionRateLimits.fromJSON(object.ingestionRateLimits)
+        : isSet(object.ingestion_rate_limits)
+        ? IngestionRateLimits.fromJSON(object.ingestion_rate_limits)
+        : undefined,
     };
   },
 
@@ -1191,6 +1210,9 @@ export const IngestionToken: MessageFns<IngestionToken> = {
     if (message.revokedAt !== undefined) {
       obj.revokedAt = message.revokedAt.toISOString();
     }
+    if (message.ingestionRateLimits !== undefined) {
+      obj.ingestionRateLimits = IngestionRateLimits.toJSON(message.ingestionRateLimits);
+    }
     return obj;
   },
 
@@ -1213,6 +1235,9 @@ export const IngestionToken: MessageFns<IngestionToken> = {
     message.lastUsedAt = object.lastUsedAt ?? undefined;
     message.expiresAt = object.expiresAt ?? undefined;
     message.revokedAt = object.revokedAt ?? undefined;
+    message.ingestionRateLimits = (object.ingestionRateLimits !== undefined && object.ingestionRateLimits !== null)
+      ? IngestionRateLimits.fromPartial(object.ingestionRateLimits)
+      : undefined;
     return message;
   },
 };

@@ -19,6 +19,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"gorm.io/gorm"
 )
 
@@ -87,19 +88,20 @@ const (
 // CollectorToken contains safe token metadata. It never contains a secret or
 // digest.
 type CollectorToken struct {
-	ID                string
-	Version           uint64
-	Name              string
-	Description       string
-	Prefix            string
-	State             CollectorTokenState
-	BoundCollectorID  string
-	AllowedIndexNames []string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	LastUsedAt        time.Time
-	ExpiresAt         time.Time
-	RevokedAt         time.Time
+	ID                  string
+	Version             uint64
+	Name                string
+	Description         string
+	Prefix              string
+	State               CollectorTokenState
+	BoundCollectorID    string
+	AllowedIndexNames   []string
+	IngestionRateLimits ingestquota.Limits
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	LastUsedAt          time.Time
+	ExpiresAt           time.Time
+	RevokedAt           time.Time
 }
 
 // Secret is an opaque newly-issued collector credential. Plaintext is
@@ -134,21 +136,23 @@ func (issued IssuedCollectorToken) GoString() string { return issued.String() }
 // CreateCollectorTokenRequest describes a collector token and its explicit
 // ingestion-index scope.
 type CreateCollectorTokenRequest struct {
-	Name              string
-	Description       string
-	AllowedIndexNames []string
-	BoundCollectorID  string
-	ExpiresAt         time.Time
+	Name                string
+	Description         string
+	AllowedIndexNames   []string
+	BoundCollectorID    string
+	ExpiresAt           time.Time
+	IngestionRateLimits ingestquota.Limits
 }
 
 // UpdateCollectorTokenRequest replaces the mutable definition of an existing
 // collector token. The credential digest and safe prefix are immutable.
 type UpdateCollectorTokenRequest struct {
-	Name              string
-	Description       string
-	AllowedIndexNames []string
-	BoundCollectorID  string
-	ExpiresAt         time.Time
+	Name                string
+	Description         string
+	AllowedIndexNames   []string
+	BoundCollectorID    string
+	ExpiresAt           time.Time
+	IngestionRateLimits ingestquota.Limits
 }
 
 // Principal is the safe result of a collector authorization check.
@@ -173,6 +177,7 @@ type Authentication struct {
 	TokenID           string
 	TokenName         string
 	BoundCollectorID  string
+	TokenRateLimits   ingestquota.Limits
 	AuthorizedIndexes []AuthorizedIndexPolicy
 }
 
@@ -271,6 +276,13 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 	if err != nil {
 		return IssuedCollectorToken{}, err
 	}
+	if err := request.IngestionRateLimits.Validate(); err != nil {
+		return IssuedCollectorToken{}, fmt.Errorf(
+			"%w: ingestion token rate limits: %w",
+			control.ErrInvalidArgument,
+			err,
+		)
+	}
 	if !validCollectorID(request.BoundCollectorID) {
 		return IssuedCollectorToken{}, fmt.Errorf(
 			"%w: bound collector ID must be a canonical identifier containing between 1 and %d ASCII bytes",
@@ -319,18 +331,26 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 		expirationUnixMicro := expiresAt.UnixMicro()
 		expiration = &expirationUnixMicro
 	}
+	// #nosec G115 -- validated ingestion rate ceilings fit in signed SQLite integers.
+	maxIngestEventsPerSecond := int64(request.IngestionRateLimits.MaxEventsPerSecond)
+	// #nosec G115 -- validated ingestion rate ceilings fit in signed SQLite integers.
+	maxIngestUncompressedBytesPerSecond := int64(
+		request.IngestionRateLimits.MaxUncompressedBytesPerSecond,
+	)
 	record := collectorTokenRecord{
-		IngestionTokenID:   tokenID,
-		Version:            1,
-		Name:               name,
-		Description:        description,
-		TokenPrefix:        prefix,
-		TokenDigest:        digest,
-		State:              CollectorTokenStateActive,
-		CreatedAtUnixMicro: now.UnixMicro(),
-		UpdatedAtUnixMicro: now.UnixMicro(),
-		ExpiresAtUnixMicro: expiration,
-		BoundCollectorID:   &request.BoundCollectorID,
+		IngestionTokenID:                    tokenID,
+		Version:                             1,
+		Name:                                name,
+		Description:                         description,
+		TokenPrefix:                         prefix,
+		TokenDigest:                         digest,
+		State:                               CollectorTokenStateActive,
+		CreatedAtUnixMicro:                  now.UnixMicro(),
+		UpdatedAtUnixMicro:                  now.UnixMicro(),
+		ExpiresAtUnixMicro:                  expiration,
+		BoundCollectorID:                    &request.BoundCollectorID,
+		MaxIngestEventsPerSecond:            maxIngestEventsPerSecond,
+		MaxIngestUncompressedBytesPerSecond: maxIngestUncompressedBytesPerSecond,
 	}
 	if err := tx.Create(&record).Error; err != nil {
 		// No bound SQL value contains plaintext: only the HMAC digest is sent
@@ -356,9 +376,10 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 	metadata := CollectorToken{
 		ID: tokenID, Version: 1, Name: name, Description: description,
 		Prefix: prefix, State: CollectorTokenStateActive,
-		BoundCollectorID:  request.BoundCollectorID,
-		AllowedIndexNames: append([]string(nil), allowedNames...),
-		CreatedAt:         now, UpdatedAt: now, ExpiresAt: expiresAt,
+		BoundCollectorID:    request.BoundCollectorID,
+		AllowedIndexNames:   append([]string(nil), allowedNames...),
+		IngestionRateLimits: request.IngestionRateLimits,
+		CreatedAt:           now, UpdatedAt: now, ExpiresAt: expiresAt,
 	}
 	return IssuedCollectorToken{Token: metadata, Secret: Secret{plaintext: plaintext}}, nil
 }
@@ -402,6 +423,13 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 	if err != nil {
 		return CollectorToken{}, err
 	}
+	if err := request.IngestionRateLimits.Validate(); err != nil {
+		return CollectorToken{}, fmt.Errorf(
+			"%w: ingestion token rate limits: %w",
+			control.ErrInvalidArgument,
+			err,
+		)
+	}
 	name, description, allowedNames, expiresAt, err := normalizeTokenDefinition(
 		request.Name, request.Description, request.AllowedIndexNames, request.ExpiresAt, now,
 	)
@@ -440,12 +468,20 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 		expirationUnixMicro := expiresAt.UnixMicro()
 		expiration = &expirationUnixMicro
 	}
+	// #nosec G115 -- validated ingestion rate ceilings fit in signed SQLite integers.
+	maxIngestEventsPerSecond := int64(request.IngestionRateLimits.MaxEventsPerSecond)
+	// #nosec G115 -- validated ingestion rate ceilings fit in signed SQLite integers.
+	maxIngestUncompressedBytesPerSecond := int64(
+		request.IngestionRateLimits.MaxUncompressedBytesPerSecond,
+	)
 	updateValues := map[string]any{
-		"name":                  name,
-		"description":           description,
-		"expires_at_unix_micro": expiration,
-		"updated_at_unix_micro": now.UnixMicro(),
-		"version":               gorm.Expr("version + 1"),
+		"name":                         name,
+		"description":                  description,
+		"expires_at_unix_micro":        expiration,
+		"updated_at_unix_micro":        now.UnixMicro(),
+		"max_ingest_events_per_second": maxIngestEventsPerSecond,
+		"max_ingest_uncompressed_bytes_per_second": maxIngestUncompressedBytesPerSecond,
+		"version": gorm.Expr("version + 1"),
 	}
 	if current.BoundCollectorID == "" && boundCollectorID != "" {
 		updateValues["bound_collector_id"] = boundCollectorID
@@ -612,7 +648,9 @@ func (store *Store) authenticateWithIndexAuthority(
 		Select(`
 			token.ingestion_token_id,
 			token.name,
-			token.bound_collector_id`).
+			token.bound_collector_id,
+			token.max_ingest_events_per_second,
+			token.max_ingest_uncompressed_bytes_per_second`).
 		Where(
 			`token.token_digest = ?
 			 AND token.state = ?
@@ -640,10 +678,28 @@ func (store *Store) authenticateWithIndexAuthority(
 	if !validCollectorID(row.BoundCollectorID) {
 		return Authentication{}, errors.New("authenticate collector token: invalid bound collector ID in control-plane database")
 	}
+	if row.MaxIngestEventsPerSecond < 0 ||
+		row.MaxIngestUncompressedBytesPerSecond < 0 {
+		return Authentication{}, errors.New(
+			"authenticate collector token: invalid rate limits in control-plane database",
+		)
+	}
+	tokenRateLimits := ingestquota.Limits{
+		MaxEventsPerSecond: uint64(row.MaxIngestEventsPerSecond),
+		MaxUncompressedBytesPerSecond: uint64(
+			row.MaxIngestUncompressedBytesPerSecond,
+		),
+	}
+	if err := tokenRateLimits.Validate(); err != nil {
+		return Authentication{}, errors.New(
+			"authenticate collector token: invalid rate limits in control-plane database",
+		)
+	}
 	authentication := Authentication{
 		TokenID:          row.IngestionTokenID,
 		TokenName:        row.Name,
 		BoundCollectorID: row.BoundCollectorID,
+		TokenRateLimits:  tokenRateLimits,
 	}
 	var scopes []collectorTokenAuthenticationScopeRow
 	scopeResult := database.
@@ -659,6 +715,8 @@ func (store *Store) authenticateWithIndexAuthority(
 			"COALESCE(target.max_nesting_depth, -1) AS max_nesting_depth",
 			"COALESCE(target.maximum_future_skew_nanoseconds, -1) AS maximum_future_skew_nanoseconds",
 			"COALESCE(target.maximum_event_age_nanoseconds, -1) AS maximum_event_age_nanoseconds",
+			"COALESCE(target.max_ingest_events_per_second, -1) AS max_ingest_events_per_second",
+			"COALESCE(target.max_ingest_uncompressed_bytes_per_second, -1) AS max_ingest_uncompressed_bytes_per_second",
 			"COALESCE(target.state, '') AS state",
 			"COALESCE(target.ingestion_enabled, -1) AS ingestion_enabled",
 		).
@@ -737,7 +795,9 @@ func authorizedIndexPolicyFromScope(
 		scope.MaxNestingDepth < 0 ||
 		scope.MaxNestingDepth > math.MaxUint32 ||
 		scope.MaximumFutureSkewNanoseconds < 0 ||
-		scope.MaximumEventAgeNanoseconds < 0 {
+		scope.MaximumEventAgeNanoseconds < 0 ||
+		scope.MaxIngestEventsPerSecond < 0 ||
+		scope.MaxIngestUncompressedBytesPerSecond < 0 {
 		return AuthorizedIndexPolicy{}, errors.New("invalid authorized index policy")
 	}
 	policy := AuthorizedIndexPolicy{
@@ -751,6 +811,12 @@ func authorizedIndexPolicyFromScope(
 			MaxNestingDepth:   uint32(scope.MaxNestingDepth),
 			MaximumFutureSkew: time.Duration(scope.MaximumFutureSkewNanoseconds),
 			MaximumEventAge:   time.Duration(scope.MaximumEventAgeNanoseconds),
+		},
+		IngestionRateLimits: ingestquota.Limits{
+			MaxEventsPerSecond: uint64(scope.MaxIngestEventsPerSecond),
+			MaxUncompressedBytesPerSecond: uint64(
+				scope.MaxIngestUncompressedBytesPerSecond,
+			),
 		},
 	}
 	if err := policy.ValidateStoredAt(reference); err != nil {
@@ -1376,7 +1442,9 @@ func collectorTokenParentProjectionQuery(database *gorm.DB) *gorm.DB {
 			token.expires_at_unix_micro,
 			token.revoked_at_unix_micro,
 			token.last_used_at_unix_micro,
-			token.bound_collector_id`)
+			token.bound_collector_id,
+			token.max_ingest_events_per_second,
+			token.max_ingest_uncompressed_bytes_per_second`)
 }
 
 func collectorTokenProjectionWidthQuery(database *gorm.DB) *gorm.DB {
@@ -1769,6 +1837,25 @@ func collectorTokenFromMetadataRow(
 			errCollectorTokenCatalogInconsistent,
 		)
 	}
+	if row.MaxIngestEventsPerSecond < 0 ||
+		row.MaxIngestUncompressedBytesPerSecond < 0 {
+		return CollectorToken{}, fmt.Errorf(
+			"%w: invalid collector token rate limits in control-plane database",
+			errCollectorTokenCatalogInconsistent,
+		)
+	}
+	rateLimits := ingestquota.Limits{
+		MaxEventsPerSecond: uint64(row.MaxIngestEventsPerSecond),
+		MaxUncompressedBytesPerSecond: uint64(
+			row.MaxIngestUncompressedBytesPerSecond,
+		),
+	}
+	if err := rateLimits.Validate(); err != nil {
+		return CollectorToken{}, fmt.Errorf(
+			"%w: invalid collector token rate limits in control-plane database",
+			errCollectorTokenCatalogInconsistent,
+		)
+	}
 	if row.UpdatedAtUnixMicro < row.CreatedAtUnixMicro ||
 		row.ExpiresAtUnixMicro != nil &&
 			*row.ExpiresAtUnixMicro <= row.CreatedAtUnixMicro ||
@@ -1785,14 +1872,15 @@ func collectorTokenFromMetadataRow(
 	}
 
 	token := CollectorToken{
-		ID:          row.IngestionTokenID,
-		Version:     uint64(row.Version),
-		Name:        row.Name,
-		Description: row.Description,
-		Prefix:      row.TokenPrefix,
-		State:       row.State,
-		CreatedAt:   time.UnixMicro(row.CreatedAtUnixMicro).UTC(),
-		UpdatedAt:   time.UnixMicro(row.UpdatedAtUnixMicro).UTC(),
+		ID:                  row.IngestionTokenID,
+		Version:             uint64(row.Version),
+		Name:                row.Name,
+		Description:         row.Description,
+		Prefix:              row.TokenPrefix,
+		State:               row.State,
+		IngestionRateLimits: rateLimits,
+		CreatedAt:           time.UnixMicro(row.CreatedAtUnixMicro).UTC(),
+		UpdatedAt:           time.UnixMicro(row.UpdatedAtUnixMicro).UTC(),
 	}
 	if row.BoundCollectorID != nil {
 		if !validCollectorID(*row.BoundCollectorID) {

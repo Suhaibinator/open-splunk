@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -32,6 +33,7 @@ func (s *Service) processBatchWithIndexAuthority(
 	boundaryAt time.Time,
 	deferredIndexAuthority error,
 ) (*opensplunkv1.CollectResponse, error) {
+	state.pendingThrottle = nil
 	if rejection := s.validateBatchHardEnvelope(batch, state); rejection != nil {
 		if deferredIndexAuthority != nil {
 			return nil, indexAuthorityRPCError(deferredIndexAuthority)
@@ -76,7 +78,7 @@ func (s *Service) processBatchWithIndexAuthority(
 			if deferredIndexAuthority != nil {
 				return nil, indexAuthorityRPCError(deferredIndexAuthority)
 			}
-			return s.storeFailure(batch, lookupErr)
+			return s.storeFailure(batch, state, lookupErr)
 		}
 		switch storedState {
 		case StoredBatchCommitted:
@@ -108,7 +110,7 @@ func (s *Service) processBatchWithIndexAuthority(
 						return nil, indexAuthorityRPCError(deferredIndexAuthority)
 					}
 					completeBatchIdentity(state, batch.GetBatchSequence(), identity)
-					return s.storeFailure(batch, resumeErr)
+					return s.storeFailure(batch, state, resumeErr)
 				}
 				if !rememberDurablePendingBatchIdentity(
 					state,
@@ -123,7 +125,7 @@ func (s *Service) processBatchWithIndexAuthority(
 						)
 					}
 				}
-				return s.storeFailure(batch, resumeErr)
+				return s.storeFailure(batch, state, resumeErr)
 			}
 			observeBatchSequence(state, batch.GetBatchSequence())
 			completeBatchIdentity(state, batch.GetBatchSequence(), identity)
@@ -173,6 +175,8 @@ func (s *Service) processBatchWithIndexAuthority(
 	rejections := make([]*opensplunkv1.EventRejection, 0)
 	seenEventIDs := make(map[string]struct{}, len(batch.GetEvents()))
 	retentionByIndex := make(map[string]time.Duration)
+	quotaByIndex := make(map[string]*ingestquota.Charge)
+	var admittedUncompressedBytes uint64
 	for eventIndex, event := range batch.GetEvents() {
 		var policy resolvedIndexPolicy
 		if event != nil {
@@ -250,7 +254,28 @@ func (s *Service) processBatchWithIndexAuthority(
 			continue
 		}
 		normalized = append(normalized, normalizedEvent)
-		retentionByIndex[normalizedEvent.Event.GetIndexName()] = policy.retentionPeriod
+		indexName := normalizedEvent.Event.GetIndexName()
+		retentionByIndex[indexName] = policy.retentionPeriod
+		sourceBytes, sizeOK := protobufSizeUint64(event)
+		if !sizeOK || sourceBytes == 0 ||
+			admittedUncompressedBytes > HardMaxBatchBytes-sourceBytes {
+			return nil, status.Error(codes.Internal, "admitted quota charge is outside the durable range")
+		}
+		admittedUncompressedBytes += sourceBytes
+		charge := quotaByIndex[indexName]
+		if charge == nil {
+			charge = &ingestquota.Charge{
+				Scope: ingestquota.ScopeKey{
+					Kind:     ingestquota.ScopeKindIndex,
+					TenantID: state.authorization.TenantID,
+					Identity: indexName,
+				},
+				Limits: policy.ingestionRateLimits,
+			}
+			quotaByIndex[indexName] = charge
+		}
+		charge.Events++
+		charge.UncompressedBytes += sourceBytes
 	}
 
 	if len(normalized) == 0 {
@@ -283,6 +308,28 @@ func (s *Service) processBatchWithIndexAuthority(
 	if !countOK {
 		return nil, status.Error(codes.Internal, "validated batch event count is outside the durable range")
 	}
+	admittedEventCount, admittedCountOK := nonNegativeIntUint64(len(normalized))
+	if !admittedCountOK || admittedEventCount == 0 ||
+		admittedEventCount > uint64(HardMaxBatchEvents) {
+		return nil, status.Error(codes.Internal, "admitted quota count is outside the durable range")
+	}
+	quotaCharges := make([]ingestquota.Charge, 0, len(quotaByIndex)+1)
+	quotaCharges = append(quotaCharges, ingestquota.Charge{
+		Scope: ingestquota.ScopeKey{
+			Kind:     ingestquota.ScopeKindToken,
+			TenantID: state.authorization.TenantID,
+			Identity: state.authorization.SubjectID,
+		},
+		Limits:            state.authorization.TokenRateLimits,
+		Events:            admittedEventCount,
+		UncompressedBytes: admittedUncompressedBytes,
+	})
+	for _, authorizedPolicy := range state.authorization.AuthorizedIndexes {
+		if charge := quotaByIndex[authorizedPolicy.Name]; charge != nil {
+			quotaCharges = append(quotaCharges, *charge)
+		}
+	}
+	quotaAdmission := &ingestquota.Admission{Charges: quotaCharges}
 
 	result, err := s.store.Store(ctx, StoreBatch{
 		TenantID:           state.authorization.TenantID,
@@ -295,12 +342,14 @@ func (s *Service) processBatchWithIndexAuthority(
 		Events:             normalized,
 		RetentionByIndex:   retentionByIndex,
 		RejectedEvents:     rejections,
+		QuotaAdmission:     quotaAdmission,
+		QuotaEvaluatedAt:   boundaryAt.UTC(),
 	})
 	if err != nil {
 		if isDurableIdentityConflict(err) {
 			completeBatchIdentity(state, batch.GetBatchSequence(), identity)
 		}
-		return s.storeFailure(batch, err)
+		return s.storeFailure(batch, state, err)
 	}
 	completeBatchIdentity(state, batch.GetBatchSequence(), identity)
 	return s.responseForStoredBatch(batch, result, rejections)
@@ -332,13 +381,17 @@ func (s *Service) rejectRecordedBatch(
 		if isDurableIdentityConflict(err) {
 			completeBatchIdentity(state, batch.GetBatchSequence(), identity)
 		}
-		return s.storeFailure(batch, err)
+		return s.storeFailure(batch, state, err)
 	}
 	completeBatchIdentity(state, batch.GetBatchSequence(), identity)
 	return s.responseForStoredBatch(batch, result, nil)
 }
 
-func (s *Service) storeFailure(batch *opensplunkv1.EventBatch, err error) (*opensplunkv1.CollectResponse, error) {
+func (s *Service) storeFailure(
+	batch *opensplunkv1.EventBatch,
+	state *streamState,
+	err error,
+) (*opensplunkv1.CollectResponse, error) {
 	if isDurableIdentityConflict(err) {
 		return responseWithBatchReject(batchRejection(
 			batch,
@@ -349,7 +402,19 @@ func (s *Service) storeFailure(batch *opensplunkv1.EventBatch, err error) (*open
 		)), nil
 	}
 	if retry, ok := retryDetails(err, s.config.DefaultRetryAfter); ok {
-		return responseWithRetryBatch(batch, retry.reason, retry.after, "temporary storage failure"), nil
+		message := "temporary storage failure"
+		var storeError *TransientStoreError
+		if errors.As(err, &storeError) &&
+			storeError.ThrottleReason != opensplunkv1.ThrottleReason_THROTTLE_REASON_UNSPECIFIED {
+			throttleMessage := "ingestion rate limit reached"
+			state.pendingThrottle = &opensplunkv1.Throttle{
+				Reason:           storeError.ThrottleReason,
+				MinimumSendDelay: durationpb.New(retry.after),
+				Message:          &throttleMessage,
+			}
+			message = throttleMessage
+		}
+		return responseWithRetryBatch(batch, retry.reason, retry.after, message), nil
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil, status.FromContextError(err).Err()
@@ -1002,6 +1067,10 @@ func retryDetails(err error, defaultAfter time.Duration) (retryInfo, bool) {
 		after := storeError.RetryAfter
 		if after <= 0 {
 			after = defaultAfter
+		}
+		if reason == opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED &&
+			after > ingestquota.MaximumRetryAfter {
+			after = ingestquota.MaximumRetryAfter
 		}
 		return retryInfo{reason: reason, after: after}, true
 	}

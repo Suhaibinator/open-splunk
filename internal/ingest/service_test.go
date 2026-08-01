@@ -1527,7 +1527,11 @@ func TestProcessBatchMapsDurableIdentityConflictToBatchReject(t *testing.T) {
 
 func TestProcessBatchTerminallyRejectsExpandedDurableOutbox(t *testing.T) {
 	config := testServiceConfig()
-	config.Redaction.Replacement = strings.Repeat("r", 100)
+	// Keep each redacted event below the 1 MiB event ceiling while expanding the
+	// complete batch past the 16 MiB durable-outbox ceiling. A large replacement
+	// with fewer matches preserves that boundary without making race/coverage
+	// instrumentation perform hundreds of thousands of replacement operations.
+	config.Redaction.Replacement = strings.Repeat("r", 8_192)
 	config = withTestSessionManager(config, staticTestAuthorizer())
 	store := &recoverableTestStore{}
 	service, err := NewService(config, staticTestAuthorizer(), store)
@@ -1537,7 +1541,7 @@ func TestProcessBatchTerminallyRejectsExpandedDurableOutbox(t *testing.T) {
 	events := make([]*opensplunkv1.LogEvent, 20)
 	for i := range events {
 		events[i] = validTestEvent(fmt.Sprintf("event-%d", i), "main")
-		events[i].Raw = []byte(strings.Repeat("token=x ", 8_000))
+		events[i].Raw = []byte(strings.Repeat("token=x ", 105))
 	}
 	batch := validTestBatch("collector-a", "expanded-redaction", 1, events...)
 	response, err := service.processBatch(

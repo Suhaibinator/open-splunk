@@ -15,6 +15,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"gorm.io/gorm"
 )
 
@@ -44,14 +45,15 @@ type IndexLimits = indexpolicy.Limits
 // IndexDefinition contains the mutable configuration of an index except for
 // Name, whose normalized value is immutable after creation.
 type IndexDefinition struct {
-	Name              string
-	DisplayName       string
-	Description       string
-	RetentionPeriod   time.Duration
-	IngestionEnabled  bool
-	SearchEnabled     bool
-	DefaultSourcetype string
-	Limits            IndexLimits
+	Name                string
+	DisplayName         string
+	Description         string
+	RetentionPeriod     time.Duration
+	IngestionEnabled    bool
+	SearchEnabled       bool
+	DefaultSourcetype   string
+	Limits              IndexLimits
+	IngestionRateLimits ingestquota.Limits
 }
 
 // Index is an optimistic-versioned logical index record.
@@ -513,41 +515,45 @@ func visibleIndexRecords(database *gorm.DB) *gorm.DB {
 
 func newIndexRecord(id string, definition IndexDefinition, now time.Time) indexRecord {
 	return indexRecord{
-		IndexID:                      id,
-		Version:                      1,
-		Name:                         definition.Name,
-		DisplayName:                  definition.DisplayName,
-		Description:                  definition.Description,
-		RetentionNanoseconds:         int64(definition.RetentionPeriod),
-		IngestionEnabled:             boolInteger(definition.IngestionEnabled),
-		SearchEnabled:                boolInteger(definition.SearchEnabled),
-		DefaultSourcetype:            definition.DefaultSourcetype,
-		MaxEventBytes:                int64(definition.Limits.MaxEventBytes), // #nosec G115 -- validation bounds this value.
-		MaxFieldCount:                int64(definition.Limits.MaxFieldCount),
-		MaxNestingDepth:              int64(definition.Limits.MaxNestingDepth),
-		MaximumFutureSkewNanoseconds: int64(definition.Limits.MaximumFutureSkew),
-		MaximumEventAgeNanoseconds:   int64(definition.Limits.MaximumEventAge),
-		State:                        IndexStateActive,
-		CreatedAtUnixMicro:           now.UnixMicro(),
-		UpdatedAtUnixMicro:           now.UnixMicro(),
+		IndexID:                             id,
+		Version:                             1,
+		Name:                                definition.Name,
+		DisplayName:                         definition.DisplayName,
+		Description:                         definition.Description,
+		RetentionNanoseconds:                int64(definition.RetentionPeriod),
+		IngestionEnabled:                    boolInteger(definition.IngestionEnabled),
+		SearchEnabled:                       boolInteger(definition.SearchEnabled),
+		DefaultSourcetype:                   definition.DefaultSourcetype,
+		MaxEventBytes:                       int64(definition.Limits.MaxEventBytes), // #nosec G115 -- validation bounds this value.
+		MaxFieldCount:                       int64(definition.Limits.MaxFieldCount),
+		MaxNestingDepth:                     int64(definition.Limits.MaxNestingDepth),
+		MaximumFutureSkewNanoseconds:        int64(definition.Limits.MaximumFutureSkew),
+		MaximumEventAgeNanoseconds:          int64(definition.Limits.MaximumEventAge),
+		State:                               IndexStateActive,
+		CreatedAtUnixMicro:                  now.UnixMicro(),
+		UpdatedAtUnixMicro:                  now.UnixMicro(),
+		MaxIngestEventsPerSecond:            int64(definition.IngestionRateLimits.MaxEventsPerSecond),            // #nosec G115 -- validation bounds this value.
+		MaxIngestUncompressedBytesPerSecond: int64(definition.IngestionRateLimits.MaxUncompressedBytesPerSecond), // #nosec G115 -- validation bounds this value.
 	}
 }
 
 func indexDefinitionUpdates(definition IndexDefinition, now time.Time) map[string]any {
 	return map[string]any{
-		"default_sourcetype":              definition.DefaultSourcetype,
-		"description":                     definition.Description,
-		"display_name":                    definition.DisplayName,
-		"ingestion_enabled":               boolInteger(definition.IngestionEnabled),
-		"max_event_bytes":                 int64(definition.Limits.MaxEventBytes), // #nosec G115 -- validation bounds this value.
-		"max_field_count":                 int64(definition.Limits.MaxFieldCount),
-		"max_nesting_depth":               int64(definition.Limits.MaxNestingDepth),
-		"maximum_event_age_nanoseconds":   int64(definition.Limits.MaximumEventAge),
-		"maximum_future_skew_nanoseconds": int64(definition.Limits.MaximumFutureSkew),
-		"retention_nanoseconds":           int64(definition.RetentionPeriod),
-		"search_enabled":                  boolInteger(definition.SearchEnabled),
-		"updated_at_unix_micro":           now.UnixMicro(),
-		"version":                         gorm.Expr("version + 1"),
+		"default_sourcetype":                       definition.DefaultSourcetype,
+		"description":                              definition.Description,
+		"display_name":                             definition.DisplayName,
+		"ingestion_enabled":                        boolInteger(definition.IngestionEnabled),
+		"max_event_bytes":                          int64(definition.Limits.MaxEventBytes), // #nosec G115 -- validation bounds this value.
+		"max_field_count":                          int64(definition.Limits.MaxFieldCount),
+		"max_nesting_depth":                        int64(definition.Limits.MaxNestingDepth),
+		"maximum_event_age_nanoseconds":            int64(definition.Limits.MaximumEventAge),
+		"maximum_future_skew_nanoseconds":          int64(definition.Limits.MaximumFutureSkew),
+		"max_ingest_events_per_second":             int64(definition.IngestionRateLimits.MaxEventsPerSecond),            // #nosec G115 -- validation bounds this value.
+		"max_ingest_uncompressed_bytes_per_second": int64(definition.IngestionRateLimits.MaxUncompressedBytesPerSecond), // #nosec G115 -- validation bounds this value.
+		"retention_nanoseconds":                    int64(definition.RetentionPeriod),
+		"search_enabled":                           boolInteger(definition.SearchEnabled),
+		"updated_at_unix_micro":                    now.UnixMicro(),
+		"version":                                  gorm.Expr("version + 1"),
 	}
 }
 
@@ -584,6 +590,8 @@ func indexFromRecord(record indexRecord) (Index, error) {
 		record.MaxNestingDepth > math.MaxUint32 ||
 		record.MaximumFutureSkewNanoseconds < 0 ||
 		record.MaximumEventAgeNanoseconds < 0 ||
+		record.MaxIngestEventsPerSecond < 0 ||
+		record.MaxIngestUncompressedBytesPerSecond < 0 ||
 		(record.IngestionEnabled != 0 && record.IngestionEnabled != 1) ||
 		(record.SearchEnabled != 0 && record.SearchEnabled != 1) ||
 		!validIndexState(record.State) {
@@ -602,6 +610,14 @@ func indexFromRecord(record indexRecord) (Index, error) {
 	if err := limits.Validate(); err != nil {
 		return Index{}, errors.New("invalid index record in control-plane database")
 	}
+	ingestionRateLimits := ingestquota.Limits{
+		// #nosec G115 -- the signed database scalars are checked nonnegative above.
+		MaxEventsPerSecond:            uint64(record.MaxIngestEventsPerSecond),
+		MaxUncompressedBytesPerSecond: uint64(record.MaxIngestUncompressedBytesPerSecond),
+	}
+	if err := ingestionRateLimits.Validate(); err != nil {
+		return Index{}, errors.New("invalid index record in control-plane database")
+	}
 	updatedAt := time.UnixMicro(record.UpdatedAtUnixMicro).UTC()
 	if err := indexpolicy.ValidateRetentionAt(
 		time.Duration(record.RetentionNanoseconds),
@@ -614,14 +630,15 @@ func indexFromRecord(record indexRecord) (Index, error) {
 		ID:      record.IndexID,
 		Version: uint64(record.Version),
 		Definition: IndexDefinition{
-			Name:              record.Name,
-			DisplayName:       record.DisplayName,
-			Description:       record.Description,
-			RetentionPeriod:   time.Duration(record.RetentionNanoseconds),
-			IngestionEnabled:  record.IngestionEnabled == 1,
-			SearchEnabled:     record.SearchEnabled == 1,
-			DefaultSourcetype: record.DefaultSourcetype,
-			Limits:            limits,
+			Name:                record.Name,
+			DisplayName:         record.DisplayName,
+			Description:         record.Description,
+			RetentionPeriod:     time.Duration(record.RetentionNanoseconds),
+			IngestionEnabled:    record.IngestionEnabled == 1,
+			SearchEnabled:       record.SearchEnabled == 1,
+			DefaultSourcetype:   record.DefaultSourcetype,
+			Limits:              limits,
+			IngestionRateLimits: ingestionRateLimits,
 		},
 		State:     record.State,
 		CreatedAt: time.UnixMicro(record.CreatedAtUnixMicro).UTC(),
@@ -678,6 +695,9 @@ func validateIndexDefinition(
 	}
 	if err := definition.Limits.Validate(); err != nil {
 		return IndexDefinition{}, fmt.Errorf("%w: index limits: %w", ErrInvalidArgument, err)
+	}
+	if err := definition.IngestionRateLimits.Validate(); err != nil {
+		return IndexDefinition{}, fmt.Errorf("%w: index ingestion rate limits: %w", ErrInvalidArgument, err)
 	}
 	return definition, nil
 }

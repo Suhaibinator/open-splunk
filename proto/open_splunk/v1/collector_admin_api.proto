@@ -6,6 +6,7 @@ import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 import "open_splunk/v1/collector_admin.proto";
 import "open_splunk/v1/common.proto";
+import "open_splunk/v1/ingestion_policy.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
 
@@ -69,6 +70,7 @@ message IngestionTokenDefinition {
   optional string description = 2;
   IngestionTokenConstraints constraints = 3;
   optional google.protobuf.Timestamp expires_at = 4;
+  IngestionRateLimits ingestion_rate_limits = 5;
 }
 
 // POST /api/v1/ingestion-tokens/create

@@ -3,6 +3,8 @@ package indexpolicy
 import (
 	"testing"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 )
 
 var policyTestNow = time.Date(2026, 7, 31, 12, 0, 0, 123_456_789, time.UTC)
@@ -78,5 +80,32 @@ func TestLimitsAndCanonicalTextShareHardPolicyBoundary(t *testing.T) {
 		if ValidDefaultSourcetype(invalid) {
 			t.Fatalf("ValidDefaultSourcetype(%q) = true", invalid)
 		}
+	}
+}
+
+func TestPolicyValidatesIngestionRateLimits(t *testing.T) {
+	t.Parallel()
+
+	policy := Policy{
+		Name:    "main",
+		Version: 1,
+		IngestionRateLimits: ingestquota.Limits{
+			MaxEventsPerSecond:            ingestquota.HardMaxEventsPerSecond,
+			MaxUncompressedBytesPerSecond: ingestquota.HardMaxUncompressedBytesPerSecond,
+		},
+	}
+	if err := policy.ValidateStoredAt(policyTestNow); err != nil {
+		t.Fatalf("ValidateStoredAt(hard limits): %v", err)
+	}
+
+	policy.IngestionRateLimits.MaxEventsPerSecond = ingestquota.HardMaxEventsPerSecond + 1
+	if err := policy.ValidateStoredAt(policyTestNow); err == nil {
+		t.Fatal("ValidateStoredAt accepted an ingestion event rate above the hard ceiling")
+	}
+	policy.IngestionRateLimits.MaxEventsPerSecond = 0
+	policy.IngestionRateLimits.MaxUncompressedBytesPerSecond =
+		ingestquota.HardMaxUncompressedBytesPerSecond + 1
+	if err := policy.ValidateStoredAt(policyTestNow); err == nil {
+		t.Fatal("ValidateStoredAt accepted an ingestion byte rate above the hard ceiling")
 	}
 }

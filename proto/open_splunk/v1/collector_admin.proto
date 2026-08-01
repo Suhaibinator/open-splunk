@@ -4,6 +4,7 @@ package open_splunk.v1;
 
 import "google/protobuf/timestamp.proto";
 import "open_splunk/v1/collector.proto";
+import "open_splunk/v1/ingestion_policy.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
 
@@ -86,4 +87,5 @@ message IngestionToken {
   google.protobuf.Timestamp last_used_at = 10;
   google.protobuf.Timestamp expires_at = 11;
   google.protobuf.Timestamp revoked_at = 12;
+  IngestionRateLimits ingestion_rate_limits = 13;
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 )
 
@@ -20,8 +21,8 @@ const (
 	// HardMax* bounds are protocol and resource-safety ceilings. Deployment
 	// configuration may tighten them, but must never advertise or accept values
 	// which exceed the durable ingestion format's assumptions.
-	HardMaxBatchEvents       uint32 = 1_000
-	HardMaxBatchBytes        uint64 = 8 << 20
+	HardMaxBatchEvents       uint32 = uint32(ingestquota.HardMaxAdmissionEvents)
+	HardMaxBatchBytes        uint64 = ingestquota.HardMaxAdmissionUncompressedBytes
 	HardMaxEventBytes        uint64 = indexpolicy.HardMaxEventBytes
 	HardMaxFields            uint32 = indexpolicy.HardMaxFieldCount
 	HardMaxNestingDepth      uint32 = indexpolicy.HardMaxNestingDepth
@@ -209,6 +210,7 @@ type Authorization struct {
 	SubjectID         string
 	TenantID          string
 	CollectorID       string
+	TokenRateLimits   ingestquota.Limits
 	AuthorizedIndexes []IndexPolicy
 }
 
@@ -311,6 +313,12 @@ type StoreBatch struct {
 	// omitted from Events. Durable stores retain it so a lost acknowledgment is
 	// reproduced exactly even if authorization or validation policy changes.
 	RejectedEvents []*opensplunkv1.EventRejection
+	// QuotaAdmission is the trusted token-and-index charge for this fresh
+	// normalized batch. Nil is reserved for legacy callers and identity-only
+	// durable replay. QuotaEvaluatedAt is attempt-scoped and must not reuse the
+	// stable ReceivedAt timestamp across RetryBatch requests.
+	QuotaAdmission   *ingestquota.Admission
+	QuotaEvaluatedAt time.Time
 }
 
 // StoreBatchIdentity identifies an exact collector wire batch without
@@ -394,9 +402,10 @@ func (f EventStoreFunc) Store(ctx context.Context, batch StoreBatch) (StoreResul
 // TransientStoreError marks a failure for which the collector must retain and
 // resend the exact same batch.
 type TransientStoreError struct {
-	Err        error
-	Reason     opensplunkv1.RetryBatchReason
-	RetryAfter time.Duration
+	Err            error
+	Reason         opensplunkv1.RetryBatchReason
+	ThrottleReason opensplunkv1.ThrottleReason
+	RetryAfter     time.Duration
 }
 
 func (e *TransientStoreError) Error() string {

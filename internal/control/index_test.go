@@ -12,6 +12,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 )
 
 func TestIndexLifecycleNormalizesNameAndUsesOptimisticVersions(t *testing.T) {
@@ -34,6 +35,10 @@ func TestIndexLifecycleNormalizesNameAndUsesOptimisticVersions(t *testing.T) {
 			MaxNestingDepth:   16,
 			MaximumFutureSkew: 5 * time.Minute,
 			MaximumEventAge:   90 * 24 * time.Hour,
+		},
+		IngestionRateLimits: ingestquota.Limits{
+			MaxEventsPerSecond:            2_000,
+			MaxUncompressedBytesPerSecond: 8 << 20,
 		},
 	})
 	if err != nil {
@@ -67,11 +72,18 @@ func TestIndexLifecycleNormalizesNameAndUsesOptimisticVersions(t *testing.T) {
 	replacement := created.Definition
 	replacement.Name = "GRADETHIS-PROD" // same normalized immutable name
 	replacement.DisplayName = "Production Logs"
+	replacement.IngestionRateLimits = ingestquota.Limits{
+		MaxEventsPerSecond:            4_000,
+		MaxUncompressedBytesPerSecond: 16 << 20,
+	}
 	updated, err := db.UpdateIndex(ctx, created.ID, created.Version, replacement)
 	if err != nil {
 		t.Fatalf("UpdateIndex() error = %v", err)
 	}
-	if updated.Version != 2 || updated.Definition.DisplayName != "Production Logs" || updated.Definition.Name != created.Definition.Name {
+	if updated.Version != 2 ||
+		updated.Definition.DisplayName != "Production Logs" ||
+		updated.Definition.Name != created.Definition.Name ||
+		updated.Definition.IngestionRateLimits != replacement.IngestionRateLimits {
 		t.Fatalf("UpdateIndex() = %#v", updated)
 	}
 
@@ -611,6 +623,20 @@ func TestIndexValidationAndNotFoundErrors(t *testing.T) {
 			t.Fatalf("%s CreateIndex() error = %v, want ErrInvalidArgument", name, err)
 		}
 	}
+	for name, limits := range map[string]ingestquota.Limits{
+		"event rate": {
+			MaxEventsPerSecond: ingestquota.HardMaxEventsPerSecond + 1,
+		},
+		"byte rate": {
+			MaxUncompressedBytesPerSecond: ingestquota.HardMaxUncompressedBytesPerSecond + 1,
+		},
+	} {
+		definition := enabledIndex("over-hard-ingest-" + strings.ReplaceAll(name, " ", "-"))
+		definition.IngestionRateLimits = limits
+		if _, err := db.CreateIndex(ctx, definition); !errors.Is(err, ErrInvalidArgument) {
+			t.Fatalf("%s CreateIndex() error = %v, want ErrInvalidArgument", name, err)
+		}
+	}
 	if _, err := db.GetIndex(ctx, "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetIndex(missing) error = %v, want ErrNotFound", err)
 	}
@@ -725,6 +751,37 @@ func TestIndexReadsRejectCorruptRecordsWithoutLeakingFields(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), created.Definition.Description) {
 		t.Fatalf("GetIndex() error disclosed persisted field: %v", err)
+	}
+}
+
+func TestIndexReadsRejectCorruptIngestionRateLimits(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	created, err := db.CreateIndex(ctx, enabledIndex("corrupt-ingest-rate"))
+	if err != nil {
+		t.Fatalf("CreateIndex(): %v", err)
+	}
+
+	connection, err := db.SQLDB().Conn(ctx)
+	if err != nil {
+		t.Fatalf("acquire corruption connection: %v", err)
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatalf("disable test-only check constraints: %v", err)
+	}
+	if _, err := connection.ExecContext(ctx, `
+		UPDATE indexes
+		SET max_ingest_events_per_second = ?
+		WHERE index_id = ?`, ingestquota.HardMaxEventsPerSecond+1, created.ID); err != nil {
+		t.Fatalf("corrupt index ingestion rate: %v", err)
+	}
+
+	_, err = db.GetIndex(ctx, created.ID)
+	if err == nil || !strings.Contains(err.Error(), "invalid index record in control-plane database") {
+		t.Fatalf("GetIndex() error = %v, want invalid-record error", err)
 	}
 }
 

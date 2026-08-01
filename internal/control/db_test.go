@@ -15,6 +15,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/migrations"
 	"gorm.io/gorm"
 	_ "modernc.org/sqlite"
@@ -39,8 +40,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 20 {
-		t.Fatalf("schema migration count = %d, want 20", migrationCount)
+	if migrationCount != 21 {
+		t.Fatalf("schema migration count = %d, want 21", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -88,8 +89,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 20 {
-		t.Fatalf("schema migration count after reopen = %d, want 20", migrationCount)
+	if migrationCount != 21 {
+		t.Fatalf("schema migration count after reopen = %d, want 21", migrationCount)
 	}
 }
 
@@ -171,6 +172,15 @@ func TestIndexRecordMatchesMigratedSQLiteColumns(t *testing.T) {
 	nameField := statement.Schema.LookUpField("Name")
 	if idField == nil || !idField.PrimaryKey || nameField == nil || !nameField.Unique {
 		t.Fatalf("GORM index keys are not explicit: ID=%#v name=%#v", idField, nameField)
+	}
+	checks := statement.Schema.ParseCheckConstraints()
+	for _, name := range []string{
+		"indexes_max_ingest_events_per_second_bounded",
+		"indexes_max_ingest_uncompressed_bytes_per_second_bounded",
+	} {
+		if _, ok := checks[name]; !ok {
+			t.Errorf("GORM index check %q is missing", name)
+		}
 	}
 }
 
@@ -627,8 +637,214 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 20 {
-		t.Fatalf("schema migration count = %d, want 20", count)
+	if count != 21 {
+		t.Fatalf("schema migration count = %d, want 21", count)
+	}
+}
+
+func TestIngestionRateLimitMigrationUpgradesAndConstrainsSchema(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	raw, err := sql.Open(
+		"sqlite",
+		filepath.Join(t.TempDir(), "ingestion-rate-limit-upgrade.sqlite")+
+			"?_pragma=foreign_keys(1)&_txlock=immediate",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if err := ApplyMigrations(ctx, raw, migrationsBefore(t, "0021_")); err != nil {
+		t.Fatalf("apply pre-ingestion-rate-limit migrations: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO indexes (
+			index_id, version, name, display_name,
+			ingestion_enabled, search_enabled, state,
+			created_at_unix_micro, updated_at_unix_micro
+		) VALUES (
+			'legacy-index', 1, 'legacy', 'Legacy',
+			1, 1, 'active', 1, 1
+		);
+		INSERT INTO ingestion_tokens (
+			ingestion_token_id, version, name, token_prefix, token_digest,
+			state, created_at_unix_micro, updated_at_unix_micro,
+			bound_collector_id
+		) VALUES (
+			'legacy-token', 1, 'Legacy', '12345678', zeroblob(32),
+			'active', 1, 1, 'collector-1'
+		)`); err != nil {
+		t.Fatalf("seed pre-ingestion-rate-limit records: %v", err)
+	}
+
+	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+		t.Fatalf("apply ingestion-rate-limit migration: %v", err)
+	}
+	var tokenOwnerIndexSQL string
+	if err := raw.QueryRowContext(ctx, `
+		SELECT sql
+		FROM sqlite_schema
+		WHERE type = 'index'
+		  AND name = 'ingest_quota_buckets_token_owner_idx'`,
+	).Scan(&tokenOwnerIndexSQL); err != nil {
+		t.Fatalf("read quota token-owner index: %v", err)
+	}
+	if !strings.Contains(tokenOwnerIndexSQL, "ON ingest_quota_buckets (token_owner_id)") ||
+		!strings.Contains(tokenOwnerIndexSQL, "WHERE token_owner_id IS NOT NULL") {
+		t.Fatalf("quota token-owner index = %q", tokenOwnerIndexSQL)
+	}
+	for _, test := range []struct {
+		table string
+		id    string
+		query string
+	}{
+		{
+			table: "indexes",
+			id:    "legacy-index",
+			query: `
+				SELECT max_ingest_events_per_second,
+				       max_ingest_uncompressed_bytes_per_second
+				FROM indexes
+				WHERE index_id = ?`,
+		},
+		{
+			table: "ingestion_tokens",
+			id:    "legacy-token",
+			query: `
+				SELECT max_ingest_events_per_second,
+				       max_ingest_uncompressed_bytes_per_second
+				FROM ingestion_tokens
+				WHERE ingestion_token_id = ?`,
+		},
+	} {
+		var maxEvents, maxBytes int64
+		if err := raw.QueryRowContext(ctx, test.query, test.id).Scan(&maxEvents, &maxBytes); err != nil {
+			t.Fatalf("read upgraded %s limits: %v", test.table, err)
+		}
+		if maxEvents != 0 || maxBytes != 0 {
+			t.Fatalf("upgraded %s limits = %d events / %d bytes, want zero defaults", test.table, maxEvents, maxBytes)
+		}
+	}
+	if _, err := raw.ExecContext(ctx, `
+		UPDATE indexes
+		SET max_ingest_events_per_second = ?
+		WHERE index_id = 'legacy-index'`, ingestquota.HardMaxEventsPerSecond+1); err == nil {
+		t.Fatal("index accepted an event rate above the hard ceiling")
+	}
+	if _, err := raw.ExecContext(ctx, `
+		UPDATE ingestion_tokens
+		SET max_ingest_uncompressed_bytes_per_second = ?
+		WHERE ingestion_token_id = 'legacy-token'`, ingestquota.HardMaxUncompressedBytesPerSecond+1); err == nil {
+		t.Fatal("ingestion token accepted a byte rate above the hard ceiling")
+	}
+
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO ingest_quota_buckets (
+			tenant_id, scope_kind, scope_id,
+			max_ingest_events_per_second,
+			max_ingest_uncompressed_bytes_per_second,
+			next_event_admission_unix_nano,
+			next_byte_admission_unix_nano,
+			updated_at_unix_micro
+		) VALUES (
+			'tenant-1', 'index', 'legacy-index',
+			1000, 0, 1, 0, 1
+		)`); err != nil {
+		t.Fatalf("insert quota bucket: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO ingest_quota_buckets (
+			tenant_id, scope_kind, scope_id,
+			max_ingest_events_per_second,
+			max_ingest_uncompressed_bytes_per_second,
+			next_event_admission_unix_nano,
+			next_byte_admission_unix_nano,
+			updated_at_unix_micro,
+			token_owner_id
+		) VALUES (
+			'tenant-1', 'token', 'legacy-token',
+			1000, 0, 1, 0, 1, 'legacy-token'
+		)`); err != nil {
+		t.Fatalf("insert token quota bucket: %v", err)
+	}
+	for name, statement := range map[string]string{
+		"empty tenant": `
+			INSERT INTO ingest_quota_buckets VALUES
+			('', 'index', 'empty-tenant', 1, 0, 1, 0, 1, NULL)`,
+		"unknown scope": `
+			INSERT INTO ingest_quota_buckets VALUES
+			('tenant-1', 'collector', 'bad-kind', 1, 0, 1, 0, 1, NULL)`,
+		"disabled event rate with schedule": `
+			INSERT INTO ingest_quota_buckets VALUES
+			('tenant-2', 'token', 'legacy-token', 0, 0, 1, 0, 1, 'legacy-token')`,
+		"enabled byte rate without schedule": `
+			INSERT INTO ingest_quota_buckets VALUES
+			('tenant-3', 'token', 'legacy-token', 0, 1, 0, 0, 1, 'legacy-token')`,
+		"orphan token owner": `
+			INSERT INTO ingest_quota_buckets VALUES
+			('tenant-1', 'token', 'missing-token', 1, 0, 1, 0, 1, 'missing-token')`,
+		"index with token owner": `
+			INSERT INTO ingest_quota_buckets VALUES
+			('tenant-1', 'index', 'owned-index', 1, 0, 1, 0, 1, 'legacy-token')`,
+	} {
+		if _, err := raw.ExecContext(ctx, statement); err == nil {
+			t.Fatalf("quota bucket accepted %s", name)
+		}
+	}
+
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO ingest_batch_identities (
+			batch_key, sequence_key, payload_sha256,
+			first_visibility_seq, created_at_unix_micro
+		) VALUES ('quota-batch', 'quota-sequence', zeroblob(32), 1, 1);
+		INSERT INTO ingest_quota_admissions (
+			batch_key, admitted_at_unix_micro, event_count, uncompressed_bytes
+		) VALUES ('quota-batch', 1, 1000, 8388608)`); err != nil {
+		t.Fatalf("insert quota admission without a policy bucket: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO ingest_quota_admissions (
+			batch_key, admitted_at_unix_micro, event_count, uncompressed_bytes
+		) VALUES ('missing-batch', 1, 1, 1)`); err == nil {
+		t.Fatal("quota admission accepted a missing batch identity")
+	}
+	if _, err := raw.ExecContext(ctx, `
+		UPDATE ingest_quota_admissions
+		SET event_count = 0
+		WHERE batch_key = 'quota-batch'`); err == nil {
+		t.Fatal("quota admission accepted a zero event count")
+	}
+	if _, err := raw.ExecContext(ctx, `
+		DELETE FROM ingest_batch_identities
+		WHERE batch_key = 'quota-batch'`); err != nil {
+		t.Fatalf("delete quota batch identity: %v", err)
+	}
+	var admissionCount int
+	if err := raw.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM ingest_quota_admissions
+		WHERE batch_key = 'quota-batch'`).Scan(&admissionCount); err != nil {
+		t.Fatal(err)
+	}
+	if admissionCount != 0 {
+		t.Fatalf("quota admission count after identity deletion = %d, want 0", admissionCount)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		DELETE FROM ingestion_tokens
+		WHERE ingestion_token_id = 'legacy-token'`); err != nil {
+		t.Fatalf("delete ingestion token: %v", err)
+	}
+	var tokenBucketCount int
+	if err := raw.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM ingest_quota_buckets
+		WHERE scope_kind = 'token' AND scope_id = 'legacy-token'`,
+	).Scan(&tokenBucketCount); err != nil {
+		t.Fatal(err)
+	}
+	if tokenBucketCount != 0 {
+		t.Fatalf("token quota buckets after token deletion = %d, want 0", tokenBucketCount)
 	}
 }
 

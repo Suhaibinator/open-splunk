@@ -25,6 +25,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
@@ -157,6 +158,9 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	t.Cleanup(func() { _ = queryConnection.Close() })
 	t.Run("terminal rejection writes no ClickHouse block", func(t *testing.T) {
 		testTerminalRejectionAgainstClickHouse(t, ctx, config, queryConnection, indexTime)
+	})
+	t.Run("durable quota denial writes no ClickHouse block", func(t *testing.T) {
+		testQuotaDenialAgainstClickHouse(t, ctx, config, queryConnection, indexTime)
 	})
 	t.Run("ambiguous committed insert recovers after server restart", func(t *testing.T) {
 		testAmbiguousCommittedInsertRecovery(t, ctx, config, queryConnection, indexTime)
@@ -354,6 +358,138 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 			indexTime,
 		)
 	})
+}
+
+func testQuotaDenialAgainstClickHouse(
+	t *testing.T,
+	ctx context.Context,
+	config Config,
+	queryConnection clickhousedriver.Conn,
+	receivedAt time.Time,
+) {
+	t.Helper()
+	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "quota.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = controlDB.Close() })
+	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sequencer.Close() })
+	store, err := Open(config, fixedRetention(30*24*time.Hour), sequencer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	const (
+		tenantID    = "quota-integration-tenant"
+		collectorID = "quota-integration-collector"
+		indexName   = "quota-integration-index"
+		tokenID     = "quota-integration-token"
+	)
+	if _, err := controlDB.SQLDB().ExecContext(ctx, `
+		INSERT INTO ingestion_tokens (
+			ingestion_token_id, version, name, token_prefix, token_digest,
+			state, created_at_unix_micro, updated_at_unix_micro,
+			bound_collector_id
+		) VALUES (?, 1, 'quota integration token', 'quota123', zeroblob(32),
+			'active', 1, 1, ?)`, tokenID, collectorID,
+	); err != nil {
+		t.Fatalf("seed quota integration token: %v", err)
+	}
+	evaluatedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	limits := ingestquota.Limits{MaxEventsPerSecond: 1}
+	tokenScope := ingestquota.ScopeKey{
+		Kind:     ingestquota.ScopeKindToken,
+		TenantID: tenantID,
+		Identity: tokenID,
+	}
+	batchFor := func(batchID, eventID string, sequence uint64, quotaTime time.Time) ingest.StoreBatch {
+		event := testStoredEvent(eventID, indexName, receivedAt)
+		event.TenantID = tenantID
+		event.CollectorID = collectorID
+		event.BatchID = batchID
+		return ingest.StoreBatch{
+			TenantID:           tenantID,
+			CollectorID:        collectorID,
+			BatchID:            batchID,
+			BatchSequence:      sequence,
+			OriginalEventCount: 1,
+			SourceBatchSHA256:  testSourceBatchDigest(batchID),
+			ReceivedAt:         receivedAt,
+			Events:             []*ingest.StoredEvent{event},
+			QuotaAdmission: &ingestquota.Admission{Charges: []ingestquota.Charge{
+				{
+					Scope: tokenScope, Limits: limits,
+					Events: 1, UncompressedBytes: 100,
+				},
+				{
+					Scope: ingestquota.ScopeKey{
+						Kind:     ingestquota.ScopeKindIndex,
+						TenantID: tenantID,
+						Identity: indexName,
+					},
+					Limits: limits, Events: 1, UncompressedBytes: 100,
+				},
+			}},
+			QuotaEvaluatedAt: quotaTime,
+		}
+	}
+
+	first := batchFor("quota-integration-first", "quota-integration-first-event", 1, evaluatedAt)
+	if result, storeErr := store.Store(ctx, first); storeErr != nil || result.Accepted != 1 {
+		t.Fatalf("store first quota batch: result=%+v error=%v", result, storeErr)
+	}
+
+	second := batchFor("quota-integration-second", "quota-integration-second-event", 2, evaluatedAt)
+	_, storeErr := store.Store(ctx, second)
+	var transient *ingest.TransientStoreError
+	if !errors.As(storeErr, &transient) {
+		t.Fatalf("store above quota error = %v, want TransientStoreError", storeErr)
+	}
+	if transient.Reason != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED ||
+		transient.ThrottleReason != opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA ||
+		transient.RetryAfter != time.Second {
+		t.Fatalf("store above quota error = %+v", transient)
+	}
+	var deniedRows uint64
+	if err := queryConnection.QueryRow(
+		ctx,
+		"SELECT count() FROM open_splunk.events WHERE tenant_id = ? AND batch_id = ?",
+		tenantID,
+		second.BatchID,
+	).Scan(&deniedRows); err != nil {
+		t.Fatal(err)
+	}
+	if deniedRows != 0 {
+		t.Fatalf("quota-denied batch wrote %d ClickHouse rows", deniedRows)
+	}
+	if cutoff, cutoffErr := store.VisibilityCutoff(ctx); cutoffErr != nil || cutoff != 1 {
+		t.Fatalf("visibility cutoff after quota denial = %d, error=%v; want 1", cutoff, cutoffErr)
+	}
+
+	second.QuotaEvaluatedAt = evaluatedAt.Add(time.Second)
+	result, err := store.Store(ctx, second)
+	if err != nil || result.Accepted != 1 || result.Duplicate != 0 {
+		t.Fatalf("retry at quota boundary: result=%+v error=%v", result, err)
+	}
+	if err := queryConnection.QueryRow(
+		ctx,
+		"SELECT count() FROM open_splunk.events WHERE tenant_id = ? AND batch_id = ?",
+		tenantID,
+		second.BatchID,
+	).Scan(&deniedRows); err != nil {
+		t.Fatal(err)
+	}
+	if deniedRows != 1 {
+		t.Fatalf("quota-boundary retry stored %d rows, want 1", deniedRows)
+	}
+	if cutoff, cutoffErr := store.VisibilityCutoff(ctx); cutoffErr != nil || cutoff != 2 {
+		t.Fatalf("visibility cutoff after quota retry = %d, error=%v; want 2", cutoff, cutoffErr)
+	}
 }
 
 func testTerminalRejectionAgainstClickHouse(

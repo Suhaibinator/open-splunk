@@ -33,6 +33,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"google.golang.org/protobuf/proto"
 )
@@ -569,14 +570,16 @@ func (s *Store) storeAdmitted(
 		return ingest.StoreResult{}, s.classifyError(fmt.Errorf("create ClickHouse visibility attempt: %w", err))
 	}
 	request := visibility.ReserveRequest{
-		BatchKey:      deduplicationKey,
-		SequenceKey:   sequenceKey,
-		AttemptID:     attemptID,
-		ExistingOnly:  existingOnly,
-		IndexTime:     indexTime,
-		PayloadSHA256: payloadDigest,
-		Metadata:      metadata,
-		Outbox:        outbox,
+		BatchKey:         deduplicationKey,
+		SequenceKey:      sequenceKey,
+		AttemptID:        attemptID,
+		ExistingOnly:     existingOnly,
+		IndexTime:        indexTime,
+		PayloadSHA256:    payloadDigest,
+		Metadata:         metadata,
+		Outbox:           outbox,
+		QuotaAdmission:   batch.QuotaAdmission,
+		QuotaEvaluatedAt: batch.QuotaEvaluatedAt,
 	}
 	reservation, err := s.visibility.Reserve(ctx, request)
 	if found && !resumeOnly && errors.Is(err, visibility.ErrReservationGone) {
@@ -598,7 +601,10 @@ func (s *Store) storeAdmitted(
 		// A failed SQLite commit can be outcome-ambiguous. Wake the server-owned
 		// reconciler so any reservation that did persist is not dependent on a
 		// collector retry or process restart.
-		s.wakeReconciler()
+		var quotaExceeded *ingestquota.ExceededError
+		if !errors.As(err, &quotaExceeded) {
+			s.wakeReconciler()
+		}
 		if !resumeOnly && errors.Is(err, visibility.ErrReservationGone) {
 			return ingest.StoreResult{}, &ingest.TransientStoreError{
 				Err:        fmt.Errorf("reserve fresh ClickHouse visibility sequence: %w", err),
@@ -1062,6 +1068,31 @@ func (s *Store) visibilityFailure(operation string, err error) error {
 	}
 	if errors.Is(err, visibility.ErrConflict) {
 		return &ingest.DurableIdentityConflictError{Err: fmt.Errorf("%s: %w", operation, err)}
+	}
+	var quotaExceeded *ingestquota.ExceededError
+	if errors.As(err, &quotaExceeded) {
+		var throttleReason opensplunkv1.ThrottleReason
+		switch quotaExceeded.Scope.Kind {
+		case ingestquota.ScopeKindToken:
+			throttleReason = opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA
+		case ingestquota.ScopeKindIndex:
+			throttleReason = opensplunkv1.ThrottleReason_THROTTLE_REASON_INDEX_QUOTA
+		default:
+			return fmt.Errorf("%s: quota denial has an invalid scope: %w", operation, err)
+		}
+		retryAfter := quotaExceeded.RetryAfter
+		if retryAfter <= 0 {
+			retryAfter = s.retryAfter
+		}
+		if retryAfter > ingestquota.MaximumRetryAfter {
+			retryAfter = ingestquota.MaximumRetryAfter
+		}
+		return &ingest.TransientStoreError{
+			Err:            fmt.Errorf("%s: %w", operation, err),
+			Reason:         opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED,
+			ThrottleReason: throttleReason,
+			RetryAfter:     retryAfter,
+		}
 	}
 	if errors.Is(err, visibility.ErrInvalidArgument) || errors.Is(err, visibility.ErrExhausted) {
 		return fmt.Errorf("%s: %w", operation, err)

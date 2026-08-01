@@ -8,6 +8,7 @@
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Duration } from "../../google/protobuf/duration";
 import { Timestamp } from "../../google/protobuf/timestamp";
+import { IngestionRateLimits } from "./ingestion_policy";
 
 export enum IndexState {
   INDEX_STATE_UNSPECIFIED = 0,
@@ -118,6 +119,7 @@ export interface IndexDefinition {
   searchAccess: IndexAccessState;
   defaultSourcetype?: string | undefined;
   limits: IndexLimits | undefined;
+  ingestionRateLimits: IngestionRateLimits | undefined;
 }
 
 export interface Index {
@@ -413,6 +415,7 @@ function createBaseIndexDefinition(): IndexDefinition {
     searchAccess: 0,
     defaultSourcetype: undefined,
     limits: undefined,
+    ingestionRateLimits: undefined,
   };
 }
 
@@ -441,6 +444,9 @@ export const IndexDefinition: MessageFns<IndexDefinition> = {
     }
     if (message.limits !== undefined) {
       IndexLimits.encode(message.limits, writer.uint32(66).fork()).join();
+    }
+    if (message.ingestionRateLimits !== undefined) {
+      IngestionRateLimits.encode(message.ingestionRateLimits, writer.uint32(74).fork()).join();
     }
     return writer;
   },
@@ -516,6 +522,14 @@ export const IndexDefinition: MessageFns<IndexDefinition> = {
           message.limits = IndexLimits.decode(reader, reader.uint32());
           continue;
         }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.ingestionRateLimits = IngestionRateLimits.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -555,6 +569,11 @@ export const IndexDefinition: MessageFns<IndexDefinition> = {
         ? globalThis.String(object.default_sourcetype)
         : undefined,
       limits: isSet(object.limits) ? IndexLimits.fromJSON(object.limits) : undefined,
+      ingestionRateLimits: isSet(object.ingestionRateLimits)
+        ? IngestionRateLimits.fromJSON(object.ingestionRateLimits)
+        : isSet(object.ingestion_rate_limits)
+        ? IngestionRateLimits.fromJSON(object.ingestion_rate_limits)
+        : undefined,
     };
   },
 
@@ -584,6 +603,9 @@ export const IndexDefinition: MessageFns<IndexDefinition> = {
     if (message.limits !== undefined) {
       obj.limits = IndexLimits.toJSON(message.limits);
     }
+    if (message.ingestionRateLimits !== undefined) {
+      obj.ingestionRateLimits = IngestionRateLimits.toJSON(message.ingestionRateLimits);
+    }
     return obj;
   },
 
@@ -603,6 +625,9 @@ export const IndexDefinition: MessageFns<IndexDefinition> = {
     message.defaultSourcetype = object.defaultSourcetype ?? undefined;
     message.limits = (object.limits !== undefined && object.limits !== null)
       ? IndexLimits.fromPartial(object.limits)
+      : undefined;
+    message.ingestionRateLimits = (object.ingestionRateLimits !== undefined && object.ingestionRateLimits !== null)
+      ? IngestionRateLimits.fromPartial(object.ingestionRateLimits)
       : undefined;
     return message;
   },
