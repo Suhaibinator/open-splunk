@@ -1041,11 +1041,11 @@ func TestValidateTimechartSchemaEnforcesRuntimeWideContract(t *testing.T) {
 		{Name: "NULL", Kind: ValueKindUnsigned},
 		{Name: "OTHER", Kind: ValueKindUnsigned},
 	}}
-	if err := validateTimechartSchema(valid, []string{"_time"}, output); err != nil {
+	if err := ValidateTimechartSchema(valid, []string{"_time"}, output); err != nil {
 		t.Fatalf("valid timechart schema: %v", err)
 	}
 	maximumNormalized := "VALUE_" + strings.Repeat("x", 255)
-	if err := validateTimechartSchema(Schema{Columns: []Column{
+	if err := ValidateTimechartSchema(Schema{Columns: []Column{
 		{Name: "_time", Kind: ValueKindTime},
 		{Name: maximumNormalized, Kind: ValueKindUnsigned},
 	}}, []string{"_time"}, output); err != nil {
@@ -1076,8 +1076,8 @@ func TestValidateTimechartSchemaEnforcesRuntimeWideContract(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if err := validateTimechartSchema(test.schema, test.expected, output); !errors.Is(err, ErrInvalidResult) {
-				t.Fatalf("validateTimechartSchema() = %v, want ErrInvalidResult", err)
+			if err := ValidateTimechartSchema(test.schema, test.expected, output); !errors.Is(err, ErrInvalidResult) {
+				t.Fatalf("ValidateTimechartSchema() = %v, want ErrInvalidResult", err)
 			}
 		})
 	}
@@ -1094,7 +1094,7 @@ func TestValidateTimechartSchemaEnforcesStaticCountContract(t *testing.T) {
 		{Name: "_time", Kind: ValueKindTime},
 		{Name: "count", Kind: ValueKindUnsigned},
 	}}
-	if err := validateTimechartSchema(
+	if err := ValidateTimechartSchema(
 		valid,
 		[]string{"_time", "count"},
 		output,
@@ -1124,12 +1124,12 @@ func TestValidateTimechartSchemaEnforcesStaticCountContract(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if err := validateTimechartSchema(
+			if err := ValidateTimechartSchema(
 				test.schema,
 				test.expected,
 				test.output,
 			); !errors.Is(err, ErrInvalidResult) {
-				t.Fatalf("validateTimechartSchema() = %v, want ErrInvalidResult", err)
+				t.Fatalf("ValidateTimechartSchema() = %v, want ErrInvalidResult", err)
 			}
 		})
 	}

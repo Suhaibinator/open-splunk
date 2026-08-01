@@ -81,9 +81,13 @@ func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 				Range: sourceRange,
 			},
 			&plan.Timechart{
-				Time: plan.FieldRef{Name: "_time"},
+				Time: plan.FieldRef{Name: "_time", Canonical: true},
+				Measure: plan.AggregateMeasure{
+					Function: plan.AggregateFunctionCountRows,
+					Output:   "count",
+				},
 				Split: &plan.TimechartSplit{
-					Field:     plan.FieldRef{Name: "host"},
+					Field:     plan.FieldRef{Name: "host", Canonical: true},
 					NullLabel: "private-null-label", OtherLabel: "private-other-label",
 				},
 				Range: sourceRange,
@@ -105,6 +109,9 @@ func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 			&plan.Limit{Count: 10, Range: sourceRange},
 		},
 		OutputFields: []string{"host", "events"},
+	}
+	if _, err := plan.Analyze(query); err != nil {
+		t.Fatalf("Analyze fixture: %v", err)
 	}
 
 	projected, err := projectLogicalPlan(context.Background(), query, source)

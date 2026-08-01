@@ -471,42 +471,23 @@ func schemaMatchesCompiledQuery(schema searchjobs.Schema, compiled clickhouse.Co
 	if compiled.Timechart == nil && compiled.Chart == nil {
 		return len(schema.Columns) > 0 && slices.Equal(compiled.OutputFields, schemaColumnNames(schema))
 	}
-	if compiled.Timechart != nil &&
-		compiled.Timechart.Mode == clickhouse.TimechartModeFixedCount {
-		if compiled.Timechart.MaxSeries != 1 ||
-			compiled.Timechart.MaxLabelBytes != 0 ||
-			!slices.Equal(compiled.OutputFields, []string{"_time", "count"}) {
-			return false
-		}
-		return equalResultSchemas(schema, searchjobs.Schema{Columns: []searchjobs.Column{
-			{Name: "_time", Kind: searchjobs.ValueKindTime},
-			{Name: "count", Kind: searchjobs.ValueKindUnsigned},
-		}})
-	}
-	// The remaining bounded runtime-wide operators publish the same wide
-	// shape: one fixed, plan-time column followed by at most MaxSeries
-	// unsigned count columns whose names came from runtime values.
-	fixedName := "_time"
-	var fixedKind searchjobs.ValueKind
-	var maxSeries int
-	var maxLabelBytes int
 	if compiled.Timechart != nil {
-		if compiled.Timechart.Mode != clickhouse.TimechartModeRuntimeWide {
-			return false
-		}
-		fixedKind = searchjobs.ValueKindTime
-		maxSeries = int(compiled.Timechart.MaxSeries)
-		maxLabelBytes = int(compiled.Timechart.MaxLabelBytes)
-	} else {
-		kind, ok := chartRowExportKind(compiled.Chart.RowKind)
-		if !ok || compiled.Chart.RowField == "" {
-			return false
-		}
-		fixedName = compiled.Chart.RowField
-		fixedKind = kind
-		maxSeries = int(compiled.Chart.MaxSeries)
-		maxLabelBytes = int(compiled.Chart.MaxLabelBytes)
+		return searchjobs.ValidateTimechartSchema(
+			schema,
+			compiled.OutputFields,
+			*compiled.Timechart,
+		) == nil
 	}
+	// The remaining bounded runtime-wide operator is chart: one fixed,
+	// plan-time row column followed by at most MaxSeries unsigned count columns
+	// whose names came from runtime values.
+	fixedKind, ok := chartRowExportKind(compiled.Chart.RowKind)
+	if !ok || compiled.Chart.RowField == "" {
+		return false
+	}
+	fixedName := compiled.Chart.RowField
+	maxSeries := int(compiled.Chart.MaxSeries)
+	maxLabelBytes := int(compiled.Chart.MaxLabelBytes)
 	if !slices.Equal(compiled.OutputFields, []string{fixedName}) || len(schema.Columns) == 0 ||
 		len(schema.Columns)-1 > maxSeries {
 		return false

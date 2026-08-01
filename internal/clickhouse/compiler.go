@@ -44,9 +44,15 @@ const (
 	// representable.
 	TimechartOrdinalColumn = "__os_timechart_ordinal"
 	TimechartCountColumn   = "__os_timechart_count"
-	TimechartNamesColumn   = "__os_timechart_names"
-	TimechartCountsColumn  = "__os_timechart_counts"
-	TimechartInvalidColumn = "__os_timechart_invalid"
+	// The percentile transport is deliberately distinct from the count
+	// transport. Its nullable value and repeated upstream-presence proof let the
+	// executor distinguish a real all-ineligible input (publish a null grid)
+	// from a wholly empty input (publish only the fixed schema).
+	TimechartPercentileColumn   = "__os_timechart_percentile"
+	TimechartInputPresentColumn = "__os_timechart_input_present"
+	TimechartNamesColumn        = "__os_timechart_names"
+	TimechartCountsColumn       = "__os_timechart_counts"
+	TimechartInvalidColumn      = "__os_timechart_invalid"
 	// Chart physical columns are the same executor-only transport with one
 	// additional column: the pivot's row axis is runtime data rather than a
 	// plan-time constant, so the row value itself crosses the boundary beside
@@ -375,6 +381,7 @@ const (
 	// fixtures remain explicit through their bounded series metadata.
 	TimechartModeRuntimeWide TimechartMode = iota
 	TimechartModeFixedCount
+	TimechartModeFixedPercentile
 )
 
 // TimechartOutput describes either a bounded fixed-count or runtime-wide
@@ -386,6 +393,10 @@ type TimechartOutput struct {
 	BucketCount   uint64
 	MaxSeries     uint16
 	MaxLabelBytes uint16
+	// ValueField is populated only for a fixed percentile. It binds the private
+	// transport to the exact public nullable-Double column validated by the
+	// executor instead of trusting mutable OutputFields alone.
+	ValueField string
 }
 
 // Compile compiles one plan without mutating it.
@@ -1283,6 +1294,12 @@ func wrapCompiledChronologicalValidation(
 		switch compiled.Timechart.Mode {
 		case TimechartModeFixedCount:
 			resultColumns = []string{TimechartOrdinalColumn, TimechartCountColumn}
+		case TimechartModeFixedPercentile:
+			resultColumns = []string{
+				TimechartOrdinalColumn,
+				TimechartPercentileColumn,
+				TimechartInputPresentColumn,
+			}
 		case TimechartModeRuntimeWide:
 			resultColumns = []string{
 				TimechartOrdinalColumn,
@@ -2537,8 +2554,8 @@ func compileTimechart(
 	scan *plan.Scan,
 	alias string,
 ) (CompiledQuery, error) {
-	if operator == nil || operator.Function != plan.AggregateFunctionCountRows {
-		return CompiledQuery{}, errors.New("compile ClickHouse timechart: count operator is required")
+	if err := validateTimechartMeasure(operator, state); err != nil {
+		return CompiledQuery{}, err
 	}
 	if operator.Span < time.Second || operator.Span > 24*time.Hour || operator.Span%time.Second != 0 || operator.FirstBucket.Nanosecond() != 0 ||
 		operator.FirstBucket.IsZero() || operator.BucketCount == 0 || operator.BucketCount > 10_000 || !operator.FixedRange ||
@@ -2580,6 +2597,40 @@ func compileTimechart(
 			Message: "timechart requires the unmodified canonical _time field",
 			Range:   operator.Range,
 		}
+	}
+
+	if operator.Measure.Function == plan.AggregateFunctionPercentile {
+		if len(outputFields) != 2 || outputFields[0] != "_time" ||
+			outputFields[1] != operator.Measure.Output || outputFields[1] == "_time" ||
+			dynamic != nil {
+			return CompiledQuery{}, errors.New(
+				"compile ClickHouse timechart: fixed percentile output contract is invalid",
+			)
+		}
+		measureField, measureExists, resolveErr := resolveCompiledField(
+			operator.Measure.Input,
+			state,
+		)
+		if resolveErr != nil {
+			return CompiledQuery{}, resolveErr
+		}
+		measureInputSQL := "CAST([], 'Array(Float64)')"
+		var measureArgs []any
+		if measureExists {
+			measureInputSQL, measureArgs = numericArrayInputSQL(measureField)
+		}
+		return compileFixedPercentileTimechart(
+			relation,
+			args,
+			operator,
+			timeField,
+			measureInputSQL,
+			measureArgs,
+			outputFields,
+			spanNanoseconds,
+			firstBucketNumber,
+			alias,
+		)
 	}
 
 	if operator.Split == nil {
@@ -2832,6 +2883,70 @@ func compileTimechart(
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
 }
 
+func validateTimechartMeasure(operator *plan.Timechart, state compileState) error {
+	if operator == nil {
+		return errors.New("compile ClickHouse timechart: operator is required")
+	}
+	measure := operator.Measure
+	if measure.Predicate != nil {
+		return errors.New(
+			"compile ClickHouse timechart: aggregate measure contains predicate metadata",
+		)
+	}
+	switch measure.Function {
+	case plan.AggregateFunctionCountRows:
+		if measure.Input.Name != "" || measure.Input.Canonical ||
+			measure.Input.Path != nil || measure.Input.Range != (spl.Range{}) ||
+			measure.Percentile != 0 || measure.Output != "count" {
+			return errors.New(
+				"compile ClickHouse timechart: count measure contract is invalid",
+			)
+		}
+	case plan.AggregateFunctionPercentile:
+		if operator.Split != nil {
+			return errors.New(
+				"compile ClickHouse timechart: percentile cannot split by a field",
+			)
+		}
+		if measure.Percentile < 1 || measure.Percentile > 99 {
+			return errors.New(
+				"compile ClickHouse timechart: percentile must be from 1 through 99",
+			)
+		}
+		if err := validateCanonicalFieldRef(
+			"timechart",
+			"input",
+			measure.Input,
+		); err != nil {
+			return err
+		}
+		if _, err := plan.ResolveField(measure.Output, operator.Range); err != nil {
+			return fmt.Errorf(
+				"compile ClickHouse timechart: invalid output field %q: %w",
+				measure.Output,
+				err,
+			)
+		}
+		if measure.Output == "_time" {
+			return errors.New(
+				"compile ClickHouse timechart: fixed percentile output contract is invalid",
+			)
+		}
+		if state.eventRows && state.allowDynamic && measure.Input.Name == "fields" {
+			return &plan.Diagnostic{
+				Code:    "SPL_AMBIGUOUS_TIMECHART_FIELD",
+				Message: "timechart cannot read the event result's reserved fields payload without an exact upstream schema",
+				Range:   measure.Input.Range,
+			}
+		}
+	default:
+		return errors.New(
+			"compile ClickHouse timechart: aggregate function is unsupported",
+		)
+	}
+	return nil
+}
+
 func compileFixedCountTimechart(
 	relation compiledRelation,
 	args []any,
@@ -2927,6 +3042,147 @@ func compileFixedCountTimechart(
 			BucketCount:   operator.BucketCount,
 			MaxSeries:     1,
 			MaxLabelBytes: 0,
+		},
+	}
+	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
+}
+
+func compileFixedPercentileTimechart(
+	relation compiledRelation,
+	args []any,
+	operator *plan.Timechart,
+	timeField fieldState,
+	measureInputSQL string,
+	measureArgs []any,
+	outputFields []string,
+	spanNanoseconds int64,
+	firstBucketNumber int64,
+	alias string,
+) (CompiledQuery, error) {
+	q := quoteIdentifier
+	source := q("__os_timechart_source")
+	aggregates := q("__os_timechart_percentile_groups")
+	inputPresence := q("__os_timechart_input_presence")
+	grid := q("__os_timechart_grid")
+	ticks := q("__os_tc_ticks")
+	measureValues := q("__os_tc_measure_values")
+	bucketNumber := q("__os_tc_bucket_number")
+	percentileState := q("__os_tc_percentile_state")
+	upstreamPresent := q("__os_tc_input_present")
+	ordinal := q(TimechartOrdinalColumn)
+
+	var sql strings.Builder
+	sql.Grow(len(relation.sql) + len(measureInputSQL) + 2_048)
+	sql.WriteString("WITH ")
+	sql.WriteString(source)
+	sql.WriteString(" AS (SELECT reinterpretAsInt64(")
+	sql.WriteString(timeField.valueSQL)
+	sql.WriteString(") AS ")
+	sql.WriteString(ticks)
+	sql.WriteString(", ")
+	sql.WriteString(measureInputSQL)
+	sql.WriteString(" AS ")
+	sql.WriteString(measureValues)
+	sql.WriteString(" FROM (")
+	sql.WriteString(relation.sql)
+	sql.WriteString(") AS ")
+	sql.WriteString(alias)
+	sql.WriteString("), ")
+
+	sql.WriteString(aggregates)
+	sql.WriteString(" AS MATERIALIZED (SELECT ")
+	sql.WriteString(epochFloorBucketNumberSQL(ticks))
+	sql.WriteString(" AS ")
+	sql.WriteString(bucketNumber)
+	sql.WriteString(", quantilesGKOrNullArray(100, ")
+	sql.WriteString(statsPercentileLevelSQL(operator.Measure.Percentile))
+	sql.WriteString(")(")
+	sql.WriteString(measureValues)
+	sql.WriteString(") AS ")
+	sql.WriteString(percentileState)
+	sql.WriteString(" FROM ")
+	sql.WriteString(source)
+	sql.WriteString(" GROUP BY ")
+	sql.WriteString(bucketNumber)
+	sql.WriteString("), ")
+
+	sql.WriteString(inputPresence)
+	sql.WriteString(" AS (SELECT toUInt8(count() > 0) AS ")
+	sql.WriteString(upstreamPresent)
+	sql.WriteString(" FROM ")
+	sql.WriteString(aggregates)
+	sql.WriteString("), ")
+
+	sql.WriteString(grid)
+	sql.WriteString(" AS (")
+	sql.WriteString(ordinalGridSQL(ordinal, bucketNumber))
+	sql.WriteString(") SELECT ")
+	sql.WriteString(grid)
+	sql.WriteString(".")
+	sql.WriteString(ordinal)
+	sql.WriteString(" AS ")
+	sql.WriteString(ordinal)
+	sql.WriteString(", arrayElementOrNull(")
+	sql.WriteString(aggregates)
+	sql.WriteString(".")
+	sql.WriteString(percentileState)
+	sql.WriteString(", 1) AS ")
+	sql.WriteString(q(TimechartPercentileColumn))
+	sql.WriteString(", ")
+	sql.WriteString(inputPresence)
+	sql.WriteString(".")
+	sql.WriteString(upstreamPresent)
+	sql.WriteString(" AS ")
+	sql.WriteString(q(TimechartInputPresentColumn))
+	sql.WriteString(" FROM ")
+	sql.WriteString(grid)
+	sql.WriteString(" CROSS JOIN ")
+	sql.WriteString(inputPresence)
+	sql.WriteString(" LEFT JOIN ")
+	sql.WriteString(aggregates)
+	sql.WriteString(" ON ")
+	sql.WriteString(aggregates)
+	sql.WriteString(".")
+	sql.WriteString(bucketNumber)
+	sql.WriteString(" = ")
+	sql.WriteString(grid)
+	sql.WriteString(".")
+	sql.WriteString(bucketNumber)
+	sql.WriteString(" ORDER BY ")
+	sql.WriteString(grid)
+	sql.WriteString(".")
+	sql.WriteString(ordinal)
+	sql.WriteString(" ASC")
+	sql.WriteString(materializedCTESettingsSQL)
+
+	args = prependArguments(measureArgs, args)
+	args = appendOrdinalGridArgs(
+		args,
+		spanNanoseconds,
+		firstBucketNumber,
+		operator.BucketCount,
+	)
+	sourceDepth := relationalNodeDepth(relation.depth)
+	aggregatesDepth := relationalNodeDepth(sourceDepth)
+	inputPresenceDepth := relationalNodeDepth(aggregatesDepth)
+	gridDepth := relationalNodeDepth()
+	resultDepth := relationalNodeDepth(
+		gridDepth,
+		aggregatesDepth,
+		inputPresenceDepth,
+	)
+	compiled := CompiledQuery{
+		SQL:          sql.String(),
+		Args:         args,
+		OutputFields: slices.Clone(outputFields),
+		Timechart: &TimechartOutput{
+			Mode:          TimechartModeFixedPercentile,
+			FirstBucket:   operator.FirstBucket.UTC(),
+			Span:          operator.Span,
+			BucketCount:   operator.BucketCount,
+			MaxSeries:     1,
+			MaxLabelBytes: 0,
+			ValueField:    operator.Measure.Output,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil

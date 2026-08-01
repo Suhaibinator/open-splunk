@@ -93,7 +93,7 @@
     {
       "name": "timechart",
       "insertion": "timechart span=5m count",
-      "detail": "Chart count over fixed time buckets, optionally split BY one field."
+      "detail": "Chart count or one percentile over fixed time buckets; only count may split BY one field."
     },
     {
       "name": "chart",
@@ -108,6 +108,20 @@
       "detail": "Count rows, matching predicates, or present field values.",
       "class": "aggregate",
       "highlight_requires_call": false
+    },
+    {
+      "name": "p50",
+      "insertion": "p50(",
+      "detail": "Estimate the 50th percentile of non-null numeric field values.",
+      "class": "aggregate",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "p95",
+      "insertion": "p95(",
+      "detail": "Estimate the 95th percentile of non-null numeric field values.",
+      "class": "aggregate",
+      "highlight_requires_call": true
     },
     {
       "name": "c",

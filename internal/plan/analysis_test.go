@@ -137,9 +137,10 @@ func TestAnalyzeOperatorReadPositions(t *testing.T) {
 		{
 			name: "timechart axes",
 			operator: &Timechart{
-				Time: analysisField("_time"),
+				Time:    mustResolveEventAggregateField(t, "_time"),
+				Measure: AggregateMeasure{Function: AggregateFunctionCountRows, Output: "count"},
 				Split: &TimechartSplit{
-					Field: analysisField("timechart_series"),
+					Field: mustResolveEventAggregateField(t, "timechart_series"),
 				},
 			},
 			want: []string{"_time", "timechart_series"},
@@ -147,7 +148,8 @@ func TestAnalyzeOperatorReadPositions(t *testing.T) {
 		{
 			name: "unsplit timechart",
 			operator: &Timechart{
-				Time: analysisField("_time"),
+				Time:    mustResolveEventAggregateField(t, "_time"),
+				Measure: AggregateMeasure{Function: AggregateFunctionCountRows, Output: "count"},
 			},
 			want: []string{"_time"},
 		},

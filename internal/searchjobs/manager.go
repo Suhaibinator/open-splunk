@@ -2084,7 +2084,7 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 	case sink.timechart != nil && sink.chart != nil:
 		schemaErr = fmt.Errorf("%w: two wide result contracts were declared", ErrInvalidResult)
 	case sink.timechart != nil:
-		schemaErr = validateTimechartSchema(schema, sink.expectedFields, *sink.timechart)
+		schemaErr = ValidateTimechartSchema(schema, sink.expectedFields, *sink.timechart)
 	case sink.chart != nil:
 		schemaErr = validateChartSchema(schema, sink.expectedFields, *sink.chart)
 	default:
@@ -2334,10 +2334,14 @@ func validateSchema(schema Schema, expected []string) error {
 	return nil
 }
 
-func validateTimechartSchema(schema Schema, expected []string, output clickhouse.TimechartOutput) error {
+// ValidateTimechartSchema verifies a public result schema against the complete
+// compiler-declared timechart output contract. Re-execution consumers use the
+// same boundary so ordinary jobs and exports cannot diverge.
+func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse.TimechartOutput) error {
 	if output.Mode == clickhouse.TimechartModeFixedCount {
 		if output.MaxSeries != 1 ||
 			output.MaxLabelBytes != 0 ||
+			output.ValueField != "" ||
 			!slices.Equal(expected, []string{"_time", "count"}) ||
 			len(schema.Columns) != 2 {
 			return fmt.Errorf("%w: static timechart schema does not match the compiled output", ErrInvalidResult)
@@ -2356,10 +2360,40 @@ func validateTimechartSchema(schema Schema, expected []string, output clickhouse
 		}
 		return nil
 	}
+	if output.Mode == clickhouse.TimechartModeFixedPercentile {
+		resolvedValueField, valueFieldErr := plan.ResolveField(
+			output.ValueField,
+			spl.Range{},
+		)
+		if output.MaxSeries != 1 || output.MaxLabelBytes != 0 ||
+			output.ValueField == "" || output.ValueField == "_time" ||
+			valueFieldErr != nil || resolvedValueField.Name != output.ValueField ||
+			!slices.Equal(expected, []string{"_time", output.ValueField}) ||
+			len(schema.Columns) != 2 {
+			return fmt.Errorf(
+				"%w: fixed percentile timechart schema does not match the compiled output",
+				ErrInvalidResult,
+			)
+		}
+		timeColumn := schema.Columns[0]
+		valueColumn := schema.Columns[1]
+		if timeColumn.Name != "_time" || timeColumn.Kind != ValueKindTime ||
+			timeColumn.Nullable || timeColumn.Multivalue ||
+			valueColumn.Name != output.ValueField ||
+			valueColumn.Kind != ValueKindDouble || !valueColumn.Nullable ||
+			valueColumn.Multivalue {
+			return fmt.Errorf(
+				"%w: fixed percentile timechart schema is invalid",
+				ErrInvalidResult,
+			)
+		}
+		return nil
+	}
 	if output.Mode != clickhouse.TimechartModeRuntimeWide {
 		return fmt.Errorf("%w: timechart output mode is invalid", ErrInvalidResult)
 	}
-	if !slices.Equal(expected, []string{"_time"}) || len(schema.Columns) == 0 || len(schema.Columns)-1 > int(output.MaxSeries) {
+	if output.ValueField != "" || !slices.Equal(expected, []string{"_time"}) ||
+		len(schema.Columns) == 0 || len(schema.Columns)-1 > int(output.MaxSeries) {
 		return fmt.Errorf("%w: timechart schema exceeds the compiled output", ErrInvalidResult)
 	}
 	seen := make(map[string]struct{}, len(schema.Columns))

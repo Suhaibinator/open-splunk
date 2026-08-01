@@ -29,7 +29,9 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
@@ -262,7 +264,8 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	columnTypes := rows.ColumnTypes()
 	columns := rows.Columns()
 	if query.Timechart != nil {
-		if query.Timechart.Mode == clickhouse.TimechartModeFixedCount {
+		switch query.Timechart.Mode {
+		case clickhouse.TimechartModeFixedCount:
 			buffered, readErr := readFixedTimechartRows(
 				executionContext,
 				rows,
@@ -279,6 +282,23 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 				return classifyQueryError(executionContext, fmt.Errorf("close ClickHouse fixed timechart result stream: %w", closeErr))
 			}
 			return publishFixedTimechart(executionContext, sink, buffered)
+		case clickhouse.TimechartModeFixedPercentile:
+			buffered, readErr := readFixedPercentileTimechartRows(
+				executionContext,
+				rows,
+				columns,
+				columnTypes,
+				*query.Timechart,
+			)
+			if readErr != nil {
+				return readErr
+			}
+			closeErr := rows.Close()
+			rowsClosed = true
+			if closeErr != nil {
+				return classifyQueryError(executionContext, fmt.Errorf("close ClickHouse fixed percentile timechart result stream: %w", closeErr))
+			}
+			return publishFixedPercentileTimechart(executionContext, sink, buffered)
 		}
 		buffered, err := readTimechartRows(
 			executionContext,
@@ -460,13 +480,26 @@ func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 	switch output.Mode {
 	case clickhouse.TimechartModeFixedCount:
 		if !slices.Equal(query.OutputFields, []string{"_time", "count"}) ||
-			output.MaxSeries != 1 || output.MaxLabelBytes != 0 {
+			output.MaxSeries != 1 || output.MaxLabelBytes != 0 || output.ValueField != "" {
 			return fmt.Errorf("%w: compiled fixed timechart output contract is invalid", searchjobs.ErrInvalidResult)
+		}
+	case clickhouse.TimechartModeFixedPercentile:
+		resolvedValueField, valueFieldErr := plan.ResolveField(
+			output.ValueField,
+			spl.Range{},
+		)
+		if len(query.OutputFields) != 2 || query.OutputFields[0] != "_time" ||
+			query.OutputFields[1] == "" || query.OutputFields[1] == "_time" ||
+			query.OutputFields[1] != output.ValueField || output.MaxSeries != 1 ||
+			output.MaxLabelBytes != 0 || valueFieldErr != nil ||
+			resolvedValueField.Name != output.ValueField {
+			return fmt.Errorf("%w: compiled fixed percentile timechart output contract is invalid", searchjobs.ErrInvalidResult)
 		}
 	case clickhouse.TimechartModeRuntimeWide:
 		if !slices.Equal(query.OutputFields, []string{"_time"}) ||
 			output.MaxSeries == 0 || output.MaxSeries > maximumTimechartSeries ||
-			output.MaxLabelBytes == 0 || output.MaxLabelBytes > maximumTimechartLabel {
+			output.MaxLabelBytes == 0 || output.MaxLabelBytes > maximumTimechartLabel ||
+			output.ValueField != "" {
 			return fmt.Errorf("%w: compiled dynamic timechart output contract is invalid", searchjobs.ErrInvalidResult)
 		}
 	default:
@@ -581,6 +614,145 @@ func readFixedTimechartRows(
 		// A wholly empty upstream relation is represented by the exact zero grid
 		// so truncation remains detectable, but Splunk publishes no result rows.
 		buffered.counts = nil
+	}
+	return buffered, nil
+}
+
+type bufferedFixedPercentileTimechart struct {
+	first      time.Time
+	span       time.Duration
+	valueField string
+	values     []nullableFloat64
+}
+
+type nullableFloat64 struct {
+	value float64
+	valid bool
+}
+
+func readFixedPercentileTimechartRows(
+	ctx context.Context,
+	rows driver.Rows,
+	columns []string,
+	columnTypes []driver.ColumnType,
+	output clickhouse.TimechartOutput,
+) (bufferedFixedPercentileTimechart, error) {
+	if err := ctx.Err(); err != nil {
+		return bufferedFixedPercentileTimechart{}, err
+	}
+	expectedColumns := []string{
+		clickhouse.TimechartOrdinalColumn,
+		clickhouse.TimechartPercentileColumn,
+		clickhouse.TimechartInputPresentColumn,
+	}
+	if len(columnTypes) != len(expectedColumns) || !slices.Equal(columns, expectedColumns) {
+		return bufferedFixedPercentileTimechart{}, fmt.Errorf(
+			"%w: ClickHouse fixed percentile timechart columns do not match the compiled output",
+			searchjobs.ErrInvalidResult,
+		)
+	}
+	expectedTypes := []struct {
+		databaseType string
+		scanType     reflect.Type
+		nullable     bool
+	}{
+		{databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+		{
+			databaseType: "Nullable(Float64)",
+			scanType:     reflect.TypeOf((*float64)(nil)),
+			nullable:     true,
+		},
+		{databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+	}
+	for index, columnType := range columnTypes {
+		expected := expectedTypes[index]
+		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] ||
+			columnType.Nullable() != expected.nullable ||
+			strings.TrimSpace(columnType.DatabaseTypeName()) != expected.databaseType ||
+			columnType.ScanType() != expected.scanType {
+			return bufferedFixedPercentileTimechart{}, fmt.Errorf(
+				"%w: ClickHouse fixed percentile timechart column %q has an invalid type",
+				searchjobs.ErrInvalidResult,
+				expectedColumns[index],
+			)
+		}
+	}
+
+	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
+	bucketCapacity := int(output.BucketCount)
+	buffered := bufferedFixedPercentileTimechart{
+		first:      output.FirstBucket,
+		span:       output.Span,
+		valueField: output.ValueField,
+		values:     make([]nullableFloat64, 0, bucketCapacity),
+	}
+	var upstreamPresent uint8
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return bufferedFixedPercentileTimechart{}, err
+		}
+		if uint64(len(buffered.values)) >= output.BucketCount {
+			return bufferedFixedPercentileTimechart{}, fmt.Errorf(
+				"%w: ClickHouse fixed percentile timechart returned too many buckets",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+		var ordinal uint64
+		var value *float64
+		var rowUpstreamPresent uint8
+		if err := rows.Scan(&ordinal, &value, &rowUpstreamPresent); err != nil {
+			return bufferedFixedPercentileTimechart{}, classifyQueryError(
+				ctx,
+				fmt.Errorf("scan ClickHouse fixed percentile timechart result row: %w", err),
+			)
+		}
+		if err := ctx.Err(); err != nil {
+			return bufferedFixedPercentileTimechart{}, err
+		}
+		rowIndex := len(buffered.values)
+		if ordinal >= output.BucketCount || ordinal != uint64(rowIndex) ||
+			rowUpstreamPresent > 1 || (rowIndex > 0 && rowUpstreamPresent != upstreamPresent) ||
+			(rowUpstreamPresent == 0 && value != nil) {
+			return bufferedFixedPercentileTimechart{}, fmt.Errorf(
+				"%w: ClickHouse fixed percentile timechart row is invalid",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+		if rowIndex == 0 {
+			upstreamPresent = rowUpstreamPresent
+		}
+		bufferedValue := nullableFloat64{}
+		if value != nil {
+			if math.IsNaN(*value) || math.IsInf(*value, 0) {
+				return bufferedFixedPercentileTimechart{}, fmt.Errorf(
+					"%w: ClickHouse fixed percentile timechart value is not finite",
+					searchjobs.ErrInvalidResult,
+				)
+			}
+			bufferedValue = nullableFloat64{value: *value, valid: true}
+		}
+		buffered.values = append(buffered.values, bufferedValue)
+	}
+	if err := rows.Err(); err != nil {
+		return bufferedFixedPercentileTimechart{}, classifyQueryError(
+			ctx,
+			fmt.Errorf("iterate ClickHouse fixed percentile timechart results: %w", err),
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return bufferedFixedPercentileTimechart{}, err
+	}
+	if uint64(len(buffered.values)) != output.BucketCount {
+		return bufferedFixedPercentileTimechart{}, fmt.Errorf(
+			"%w: ClickHouse fixed percentile timechart returned an incomplete bucket sequence",
+			searchjobs.ErrInvalidResult,
+		)
+	}
+	if upstreamPresent == 0 {
+		// The complete zero-presence grid proves both that the transport was not
+		// truncated and that no upstream row exists. Preserve the static schema
+		// while suppressing every public result row, matching fixed count.
+		buffered.values = nil
 	}
 	return buffered, nil
 }
@@ -798,6 +970,55 @@ func publishFixedTimechart(
 		if err := sink.AddRow([]searchjobs.Value{
 			searchjobs.TimeValue(time.Unix(bucketUnix, 0).UTC()),
 			searchjobs.UnsignedValue(count),
+		}); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
+
+func publishFixedPercentileTimechart(
+	ctx context.Context,
+	sink searchjobs.ResultSink,
+	buffered bufferedFixedPercentileTimechart,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	spanSeconds := int64(buffered.span / time.Second)
+	if len(buffered.values) > 0 {
+		// #nosec G115 -- the complete fixed grid was validated before schema publication.
+		if _, ok := checkedBucketBoundary(
+			buffered.first.Unix(),
+			spanSeconds,
+			uint64(len(buffered.values)-1),
+		); !ok {
+			return fmt.Errorf(
+				"%w: compiled timechart bucket arithmetic overflowed",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+	}
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "_time", Kind: searchjobs.ValueKindTime},
+		{Name: buffered.valueField, Kind: searchjobs.ValueKindDouble, Nullable: true},
+	}}
+	if err := sink.SetSchema(schema); err != nil {
+		return err
+	}
+	for ordinal, value := range buffered.values {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// #nosec G115 -- the complete fixed grid was validated before schema publication.
+		bucketUnix := buffered.first.Unix() + int64(ordinal)*spanSeconds
+		publicValue := searchjobs.NullValue()
+		if value.valid {
+			publicValue = searchjobs.DoubleValue(value.value)
+		}
+		if err := sink.AddRow([]searchjobs.Value{
+			searchjobs.TimeValue(time.Unix(bucketUnix, 0).UTC()),
+			publicValue,
 		}); err != nil {
 			return err
 		}

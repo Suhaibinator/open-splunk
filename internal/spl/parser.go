@@ -737,7 +737,7 @@ func (p *parser) unsupportedBinSyntax(tok token, message string) *Diagnostic {
 
 func (p *parser) parseTimechartCommand(name token) (Command, error) {
 	if !p.isKeyword("SPAN") {
-		return nil, p.unsupportedTimechartSyntax(p.current(), "timechart requires span=<positive integer><s|m|h> before count")
+		return nil, p.unsupportedTimechartSyntax(p.current(), "timechart requires span=<positive integer><s|m|h> before its aggregate")
 	}
 	spanOption := p.current()
 	p.advance()
@@ -764,22 +764,40 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 	}
 	p.advance()
 
-	aggregate := p.current()
-	if aggregate.kind != tokenWord || !strings.EqualFold(aggregate.text, "count") {
-		return nil, &Diagnostic{
-			Code:        "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
-			Message:     "only argument-free count is supported by timechart",
-			Range:       aggregate.sourceRange,
-			Suggestions: []string{timechartSyntaxSuggestion},
-		}
+	aggregate, aggregateEnd, err := p.parseTimechartAggregate()
+	if err != nil {
+		return nil, err
 	}
-	p.advance()
+	if aggregate.Function == AggregateFunctionPercentile {
+		if p.isKeyword("BY") {
+			return nil, p.unsupportedTimechartSyntax(
+				p.current(),
+				"percentile timechart does not support a BY split field",
+			)
+		}
+		if !p.atCommandEnd() {
+			return nil, p.unsupportedTimechartSyntax(
+				p.current(),
+				"percentile timechart accepts exactly one aggregate and an optional AS output",
+			)
+		}
+		return &TimechartCommand{
+			Span:      span,
+			Aggregate: aggregate,
+			Range: Range{
+				Start: name.sourceRange.Start,
+				End:   aggregateEnd,
+			},
+		}, nil
+	}
 	if p.atCommandEnd() {
 		return &TimechartCommand{
-			Span:           span,
-			Function:       AggregateFunctionCount,
-			AggregateRange: aggregate.sourceRange,
-			Range:          Range{Start: name.sourceRange.Start, End: aggregate.sourceRange.End},
+			Span:      span,
+			Aggregate: aggregate,
+			Range: Range{
+				Start: name.sourceRange.Start,
+				End:   aggregateEnd,
+			},
 		}, nil
 	}
 	if !p.isKeyword("BY") {
@@ -802,12 +820,94 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 		return nil, p.unsupportedTimechartSyntax(p.current(), "only one timechart split field is currently supported")
 	}
 	return &TimechartCommand{
-		Span:           span,
-		Function:       AggregateFunctionCount,
-		AggregateRange: aggregate.sourceRange,
-		SplitBy:        &StatsGroupField{Name: field.text, Range: field.sourceRange},
-		Range:          Range{Start: name.sourceRange.Start, End: field.sourceRange.End},
+		Span:      span,
+		Aggregate: aggregate,
+		SplitBy:   &StatsGroupField{Name: field.text, Range: field.sourceRange},
+		Range:     Range{Start: name.sourceRange.Start, End: field.sourceRange.End},
 	}, nil
+}
+
+func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
+	function := p.current()
+	if function.kind != tokenWord {
+		return StatsAggregate{}, function.sourceRange.End,
+			p.unsupportedTimechartAggregate(
+				function,
+				"timechart requires argument-free count or one pN/percN(field) percentile",
+			)
+	}
+	functionName := strings.ToLower(function.text)
+	if functionName == "count" {
+		p.advance()
+		return StatsAggregate{
+			Function:   AggregateFunctionCount,
+			Alias:      "count",
+			Range:      function.sourceRange,
+			AliasRange: function.sourceRange,
+		}, function.sourceRange.End, nil
+	}
+	percentile, supported := parseStatsPercentileSuffix(functionName)
+	if !supported {
+		return StatsAggregate{}, function.sourceRange.End,
+			p.unsupportedTimechartAggregate(
+				function,
+				fmt.Sprintf("timechart aggregate %q is not supported; use argument-free count or pN/percN(field) for integer N from 1 through 99", function.text),
+			)
+	}
+	p.advance()
+	if !p.match(tokenLeftParen) {
+		return StatsAggregate{}, function.sourceRange.End,
+			p.unsupportedTimechartSyntax(
+				function,
+				"timechart percentile requires one exact unquoted field in parentheses",
+			)
+	}
+	input := p.current()
+	if input.kind != tokenWord || strings.Contains(input.text, "*") ||
+		(strings.EqualFold(input.text, "eval") &&
+			p.index+1 < len(p.tokens) &&
+			p.tokens[p.index+1].kind == tokenLeftParen) {
+		return StatsAggregate{}, input.sourceRange.End,
+			p.unsupportedTimechartSyntax(
+				input,
+				"timechart percentile requires one exact unquoted field",
+			)
+	}
+	p.advance()
+	if !p.match(tokenRightParen) {
+		return StatsAggregate{}, input.sourceRange.End,
+			p.unsupportedTimechartSyntax(
+				p.current(),
+				"timechart percentile accepts exactly one field argument",
+			)
+	}
+	end := p.previous().sourceRange.End
+	aggregate := StatsAggregate{
+		Function:   AggregateFunctionPercentile,
+		Input:      input.text,
+		InputRange: input.sourceRange,
+		Percentile: percentile,
+		Alias:      "perc" + strconv.Itoa(int(percentile)) + "(" + input.text + ")",
+		Range:      Range{Start: function.sourceRange.Start, End: end},
+		AliasRange: Range{Start: function.sourceRange.Start, End: end},
+	}
+	if !p.isKeyword("AS") {
+		return aggregate, end, nil
+	}
+	p.advance()
+	alias := p.current()
+	if alias.kind != tokenWord || p.isKeyword("BY") || strings.Contains(alias.text, "*") {
+		return StatsAggregate{}, end, p.unsupportedTimechartSyntax(
+			alias,
+			"timechart percentile AS requires one exact unquoted output field",
+		)
+	}
+	aggregate.Alias = alias.text
+	aggregate.ExplicitAlias = true
+	aggregate.AliasRange = alias.sourceRange
+	aggregate.Range.End = alias.sourceRange.End
+	p.advance()
+	return aggregate, aggregate.Range.End, nil
 }
 
 func parseTimechartSpan(tok token) (TimeSpan, error) {
@@ -955,7 +1055,23 @@ func (p *parser) unsupportedTimechartSyntax(tok token, message string) *Diagnost
 		Code:        "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
 		Message:     message,
 		Range:       tok.sourceRange,
-		Suggestions: []string{timechartSyntaxSuggestion},
+		Suggestions: timechartSyntaxSuggestions(),
+	}
+}
+
+func (p *parser) unsupportedTimechartAggregate(tok token, message string) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
+		Message:     message,
+		Range:       tok.sourceRange,
+		Suggestions: timechartSyntaxSuggestions(),
+	}
+}
+
+func timechartSyntaxSuggestions() []string {
+	return []string{
+		timechartSyntaxSuggestion,
+		"timechart span=5m p95(field) AS p95_field",
 	}
 }
 

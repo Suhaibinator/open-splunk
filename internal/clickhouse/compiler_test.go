@@ -1484,9 +1484,9 @@ func TestCompileTimechartRevalidatesExactGridAndOutputContract(t *testing.T) {
 			{
 				name: "aggregate replaced",
 				corrupt: func(_ *plan.Query, operator *plan.Timechart) {
-					operator.Function = plan.AggregateFunctionSum
+					operator.Measure.Function = plan.AggregateFunctionSum
 				},
-				want: "count operator is required",
+				want: "aggregate function is unsupported",
 			},
 		} {
 			test := test

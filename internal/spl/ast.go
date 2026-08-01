@@ -694,16 +694,16 @@ func (*BinCommand) command()             {}
 func (c *BinCommand) Name() string       { return c.CommandName }
 func (c *BinCommand) SourceRange() Range { return c.Range }
 
-// TimechartCommand produces a count series over fixed _time buckets. Without
-// SplitBy the output is the static _time/count schema; with SplitBy it is a
-// bounded runtime-wide relation. Both forms are terminal transforming
-// commands in this compatibility slice.
+// TimechartCommand produces one aggregate series over fixed _time buckets.
+// Aggregate retains the same source-located representation used by stats.
+// Argument-free count may optionally use SplitBy for a bounded runtime-wide
+// relation; percentile is deliberately unsplit and therefore has a static
+// _time/aggregate-output schema. Both forms are terminal transforming commands.
 type TimechartCommand struct {
-	Span           TimeSpan
-	Function       AggregateFunction
-	AggregateRange Range
-	SplitBy        *StatsGroupField
-	Range          Range
+	Span      TimeSpan
+	Aggregate StatsAggregate
+	SplitBy   *StatsGroupField
+	Range     Range
 }
 
 func (*TimechartCommand) command()             {}

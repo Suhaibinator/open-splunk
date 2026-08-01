@@ -1708,7 +1708,8 @@ func TestBuildTimechartProducesBoundedRuntimeWideSchema(t *testing.T) {
 	}
 	if operator.Time.Name != "_time" || !operator.Time.Canonical || operator.Split == nil ||
 		operator.Split.Field.Name != "level" ||
-		operator.Function != AggregateFunctionCountRows || operator.Span != 5*time.Minute ||
+		operator.Measure.Function != AggregateFunctionCountRows ||
+		operator.Measure.Output != "count" || operator.Span != 5*time.Minute ||
 		!operator.FirstBucket.Equal(time.Date(2026, 7, 21, 8, 0, 0, 0, time.UTC)) || operator.BucketCount != 3 ||
 		operator.Split.SeriesLimit != 10 || !operator.Split.IncludeNull || operator.Split.NullLabel != "NULL" ||
 		!operator.Split.IncludeOther || operator.Split.OtherLabel != "OTHER" || !operator.FixedRange ||
@@ -1747,7 +1748,8 @@ func TestBuildTimechartWithoutSplitProducesStaticCountSchema(t *testing.T) {
 	if operator.Time.Name != "_time" ||
 		!operator.Time.Canonical ||
 		operator.Split != nil ||
-		operator.Function != AggregateFunctionCountRows ||
+		operator.Measure.Function != AggregateFunctionCountRows ||
+		operator.Measure.Output != "count" ||
 		operator.Span != 5*time.Minute ||
 		!operator.FirstBucket.Equal(time.Date(2026, 7, 21, 8, 0, 0, 0, time.UTC)) ||
 		operator.BucketCount != 3 ||

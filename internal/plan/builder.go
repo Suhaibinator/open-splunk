@@ -952,6 +952,12 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				},
 			)
 		case *spl.TimechartCommand:
+			if command == nil {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_QUERY",
+					Message: "timechart command is nil",
+				}
+			}
 			if commandIndex+1 != len(query.Commands) {
 				next := query.Commands[commandIndex+1]
 				return nil, &Diagnostic{
@@ -961,12 +967,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Suggestions: []string{"move timechart to the final pipeline stage"},
 				}
 			}
-			if command.Function != spl.AggregateFunctionCount {
-				return nil, &Diagnostic{
-					Code:    "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
-					Message: "unsupported timechart aggregate",
-					Range:   command.AggregateRange,
-				}
+			measure, measureErr := buildTimechartMeasure(command, outputSchemaKnown)
+			if measureErr != nil {
+				return nil, measureErr
 			}
 			if !canonicalTimeAvailable {
 				return nil, &Diagnostic{
@@ -1011,13 +1014,13 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					MaxSeries:   maxTimechartSeries,
 				}
 			} else {
-				result.OutputFields = []string{"_time", "count"}
+				result.OutputFields = []string{"_time", measure.Output}
 				result.DynamicOutput = nil
 			}
 			result.Operators = append(result.Operators, &Timechart{
 				Time:           timeField,
 				Split:          split,
-				Function:       AggregateFunctionCountRows,
+				Measure:        measure,
 				Span:           span,
 				FirstBucket:    firstBucket,
 				BucketCount:    bucketCount,
@@ -1109,6 +1112,108 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		}
 	}
 	return result, nil
+}
+
+func buildTimechartMeasure(
+	command *spl.TimechartCommand,
+	outputSchemaKnown bool,
+) (AggregateMeasure, error) {
+	if command == nil {
+		return AggregateMeasure{}, &Diagnostic{
+			Code:    "SPL_INVALID_QUERY",
+			Message: "timechart command is nil",
+		}
+	}
+	aggregate := command.Aggregate
+	if aggregate.Predicate != nil {
+		return AggregateMeasure{}, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
+			Message: "timechart aggregate cannot contain predicate metadata",
+			Range:   aggregate.Range,
+		}
+	}
+	switch aggregate.Function {
+	case spl.AggregateFunctionCount:
+		if aggregate.Input != "" ||
+			aggregate.InputRange != (spl.Range{}) ||
+			aggregate.Percentile != 0 ||
+			aggregate.Alias != "count" ||
+			aggregate.ExplicitAlias {
+			return AggregateMeasure{}, &Diagnostic{
+				Code: "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
+				Message: "timechart count must be argument-free and use its " +
+					"unaliased count output",
+				Range: aggregate.Range,
+			}
+		}
+		return AggregateMeasure{
+			Function: AggregateFunctionCountRows,
+			Output:   "count",
+		}, nil
+	case spl.AggregateFunctionPercentile:
+		if command.SplitBy != nil {
+			return AggregateMeasure{}, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+				Message: "percentile timechart does not support a BY split field",
+				Range:   command.SplitBy.Range,
+			}
+		}
+		if aggregate.Input == "" ||
+			aggregate.InputRange == (spl.Range{}) ||
+			aggregate.Percentile < 1 ||
+			aggregate.Percentile > 99 ||
+			aggregate.Alias == "" {
+			return AggregateMeasure{}, &Diagnostic{
+				Code: "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
+				Message: "timechart percentile requires one exact input field, " +
+					"an integer level from 1 through 99, and one output",
+				Range: aggregate.Range,
+			}
+		}
+		canonicalOutput := "perc" + strconv.Itoa(int(aggregate.Percentile)) +
+			"(" + aggregate.Input + ")"
+		if !aggregate.ExplicitAlias && aggregate.Alias != canonicalOutput {
+			return AggregateMeasure{}, &Diagnostic{
+				Code: "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
+				Message: "unaliased timechart percentile output must use its " +
+					"canonical percN(field) name",
+				Range: aggregate.Range,
+			}
+		}
+		if !outputSchemaKnown && aggregate.Input == "fields" {
+			return AggregateMeasure{}, &Diagnostic{
+				Code:    "SPL_AMBIGUOUS_TIMECHART_FIELD",
+				Message: "timechart cannot read the event result's reserved fields payload without an exact upstream schema",
+				Range:   aggregate.InputRange,
+			}
+		}
+		input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
+		if inputErr != nil {
+			return AggregateMeasure{}, inputErr
+		}
+		if _, outputErr := ResolveField(aggregate.Alias, aggregate.AliasRange); outputErr != nil {
+			return AggregateMeasure{}, outputErr
+		}
+		if aggregate.Alias == "_time" {
+			return AggregateMeasure{}, &Diagnostic{
+				Code:    "SPL_DUPLICATE_FIELD",
+				Message: "timechart aggregate output collides with the _time axis",
+				Range:   aggregate.AliasRange,
+			}
+		}
+		return AggregateMeasure{
+			Function:   AggregateFunctionPercentile,
+			Input:      input,
+			Percentile: aggregate.Percentile,
+			Output:     aggregate.Alias,
+		}, nil
+	default:
+		return AggregateMeasure{}, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
+			Message: "unsupported timechart aggregate",
+			Range:   aggregate.Range,
+		}
+	}
 }
 
 func fixedTimechartSpan(span spl.TimeSpan) (time.Duration, error) {

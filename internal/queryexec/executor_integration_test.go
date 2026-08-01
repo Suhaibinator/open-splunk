@@ -202,6 +202,16 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	eventIndexTime := queryIntegrationInsertEvent(t, ctx, connection)
 	binaryIndexTime := queryIntegrationInsertBinaryEvent(t, ctx, connection)
 	timechartBase, timechartIndexTime := queryIntegrationInsertTimechartEvents(t, ctx, connection)
+	t.Run("fixed percentile timechart", func(t *testing.T) {
+		queryIntegrationTestFixedPercentileTimechart(
+			t,
+			ctx,
+			connection,
+			executor,
+			timechartBase,
+			timechartIndexTime,
+		)
+	})
 	gradeThisBase, gradeThisIndexTime, gradeThisTraceID := queryIntegrationInsertGradeThisEvents(t, ctx, connection)
 	chartBase, chartIndexTime := queryIntegrationInsertChartEvents(t, ctx, connection)
 	t.Run("structured EXPLAIN accepts an index-free MergeTree read", func(t *testing.T) {
@@ -2309,6 +2319,191 @@ func queryIntegrationInsertGradeThisEvents(
 	return base, indexTime, traceID
 }
 
+func queryIntegrationTestFixedPercentileTimechart(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	executor *Executor,
+	base time.Time,
+	indexTime time.Time,
+) {
+	t.Helper()
+
+	earliest := base.Add(2 * time.Minute)
+	latest := base.Add(18 * time.Minute)
+	const percentileSource = `index=main source="timechart-percentile" | timechart span=5m p95(metric) AS p95_metric`
+	compiled := queryIntegrationCompileSearchRange(
+		t,
+		percentileSource,
+		indexTime,
+		earliest,
+		latest,
+	)
+	if got := strings.Count(compiled.SQL, "quantilesGKOrNullArray("); got != 1 ||
+		strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") ||
+		strings.Count(compiled.SQL, `FROM "open_splunk"."events"`) != 1 {
+		t.Fatalf("percentile timechart compiler shape is not one bounded scoped state:\n%s", compiled.SQL)
+	}
+
+	actionRows, err := connection.Query(
+		ctx,
+		"EXPLAIN actions=1 "+compiled.SQL,
+		compiled.Args...,
+	)
+	if err != nil {
+		t.Fatalf("EXPLAIN percentile timechart: %v\nSQL: %s\nargs: %#v", err, compiled.SQL, compiled.Args)
+	}
+	var actionLines []string
+	for actionRows.Next() {
+		var line string
+		if err := actionRows.Scan(&line); err != nil {
+			_ = actionRows.Close()
+			t.Fatalf("scan percentile timechart EXPLAIN: %v", err)
+		}
+		actionLines = append(actionLines, line)
+	}
+	if err := actionRows.Err(); err != nil {
+		_ = actionRows.Close()
+		t.Fatalf("iterate percentile timechart EXPLAIN: %v", err)
+	}
+	if err := actionRows.Close(); err != nil {
+		t.Fatalf("close percentile timechart EXPLAIN: %v", err)
+	}
+	actions := strings.Join(actionLines, "\n")
+	physicalStates := 0
+	for _, line := range actionLines {
+		if strings.Contains(line, "Function:") && strings.Contains(line, "quantilesGK") {
+			physicalStates++
+		}
+	}
+	if physicalStates != 1 || strings.Contains(actions, "ArrayJoin") {
+		t.Fatalf(
+			"percentile timechart physical plan has %d GK states or expands rows:\n%s",
+			physicalStates,
+			actions,
+		)
+	}
+	t.Run("fixed percentile normalization gaps and scope through manager", func(t *testing.T) {
+		job, page := queryIntegrationRunSearchRange(
+			t,
+			ctx,
+			executor,
+			indexTime,
+			"queryexec-timechart-percentile",
+			percentileSource,
+			earliest,
+			latest,
+		)
+		if job.State != searchjobs.StateCompleted {
+			t.Fatalf("percentile timechart state = %v, failure=%#v", job.State, job.Failure)
+		}
+		if len(page.Schema.Columns) != 2 ||
+			page.Schema.Columns[0] != (searchjobs.Column{Name: "_time", Kind: searchjobs.ValueKindTime}) ||
+			page.Schema.Columns[1] != (searchjobs.Column{
+				Name: "p95_metric", Kind: searchjobs.ValueKindDouble, Nullable: true,
+			}) {
+			t.Fatalf("percentile timechart schema = %#v", page.Schema)
+		}
+		if len(page.Rows) != 4 {
+			t.Fatalf("percentile timechart rows = %d, want 4", len(page.Rows))
+		}
+		wantValues := map[int]float64{0: 100, 2: 300, 3: 400}
+		for rowIndex, row := range page.Rows {
+			bucket, ok := row.Values[0].Time()
+			wantBucket := base.Add(time.Duration(rowIndex) * 5 * time.Minute)
+			if !ok || !bucket.Equal(wantBucket) {
+				t.Fatalf("percentile timechart row %d bucket = %v, %v, want %v", rowIndex, bucket, ok, wantBucket)
+			}
+			wantValue, populated := wantValues[rowIndex]
+			if !populated {
+				if !row.Values[1].IsNull() {
+					t.Fatalf("percentile timechart gap = %#v, want null", row.Values[1])
+				}
+				continue
+			}
+			value, ok := row.Values[1].Double()
+			if !ok || value != wantValue {
+				t.Fatalf("percentile timechart row %d value = %v, %v, want %v", rowIndex, value, ok, wantValue)
+			}
+		}
+
+		// The populated buckets must agree exactly with stats over the same
+		// fixed bins. This is the durable normalization oracle for native,
+		// lexical, decimal, and multivalue metric representations.
+		statsJob, statsPage := queryIntegrationRunSearchRange(
+			t,
+			ctx,
+			executor,
+			indexTime,
+			"queryexec-timechart-percentile-stats-oracle",
+			`index=main source="timechart-percentile" | bin _time span=5m AS bucket | stats p95(metric) AS p95_metric BY bucket | sort bucket`,
+			earliest,
+			latest,
+		)
+		if statsJob.State != searchjobs.StateCompleted {
+			t.Fatalf("stats oracle state = %v, failure=%#v", statsJob.State, statsJob.Failure)
+		}
+		if len(statsPage.Rows) != len(wantValues) {
+			t.Fatalf("stats oracle rows = %d, want %d", len(statsPage.Rows), len(wantValues))
+		}
+		statsByBucket := make(map[int64]float64, len(statsPage.Rows))
+		for _, row := range statsPage.Rows {
+			bucket, bucketOK := row.Values[0].Time()
+			value, valueOK := row.Values[1].Double()
+			if !bucketOK || !valueOK {
+				t.Fatalf("stats oracle row = %#v", row)
+			}
+			statsByBucket[bucket.Unix()] = value
+		}
+		for rowIndex, wantValue := range wantValues {
+			bucket := base.Add(time.Duration(rowIndex) * 5 * time.Minute)
+			if got, ok := statsByBucket[bucket.Unix()]; !ok || got != wantValue {
+				t.Fatalf("stats oracle bucket %v = %v, %v, want %v", bucket, got, ok, wantValue)
+			}
+		}
+	})
+
+	t.Run("fixed percentile nonempty all-ineligible input keeps null grid", func(t *testing.T) {
+		job, page := queryIntegrationRunSearchRange(
+			t,
+			ctx,
+			executor,
+			indexTime,
+			"queryexec-timechart-percentile-ineligible",
+			`index=main source="timechart-percentile-ineligible" | timechart span=5m p95(metric) AS p95_metric`,
+			earliest,
+			latest,
+		)
+		if job.State != searchjobs.StateCompleted || len(page.Rows) != 4 {
+			t.Fatalf("all-ineligible percentile job=%#v page=%#v", job, page)
+		}
+		for index, row := range page.Rows {
+			if !row.Values[1].IsNull() {
+				t.Fatalf("all-ineligible percentile row %d = %#v, want null", index, row.Values[1])
+			}
+		}
+	})
+
+	t.Run("fixed percentile empty input publishes static schema only", func(t *testing.T) {
+		job, page := queryIntegrationRunSearchRange(
+			t,
+			ctx,
+			executor,
+			indexTime,
+			"queryexec-timechart-percentile-empty",
+			`index=main source="timechart-percentile-empty" | timechart span=5m p95(metric) AS p95_metric`,
+			earliest,
+			latest,
+		)
+		if job.State != searchjobs.StateCompleted || len(page.Rows) != 0 ||
+			len(page.Schema.Columns) != 2 || page.Schema.Columns[1] != (searchjobs.Column{
+			Name: "p95_metric", Kind: searchjobs.ValueKindDouble, Nullable: true,
+		}) {
+			t.Fatalf("empty percentile job=%#v page=%#v", job, page)
+		}
+	})
+}
+
 func queryIntegrationInsertTimechartEvents(t *testing.T, ctx context.Context, connection clickhousedriver.Conn) (time.Time, time.Time) {
 	t.Helper()
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
@@ -2334,6 +2529,8 @@ func queryIntegrationInsertTimechartEvents(t *testing.T, ctx context.Context, co
 		pathSet    bool
 		pathName   string
 		path       any
+		metricSet  bool
+		metric     clickhousedriver.Dynamic
 		visibility uint64
 	}
 	events := []fixtureEvent{
@@ -2385,6 +2582,38 @@ func queryIntegrationInsertTimechartEvents(t *testing.T, ctx context.Context, co
 		fixtureEvent{id: "other-index", indexName: "other", source: "timechart-level", at: base.Add(3 * time.Minute), level: &outsideLevel},
 		fixtureEvent{id: "future-visibility", source: "timechart-level", at: base.Add(3 * time.Minute), level: &outsideLevel, visibility: 2},
 	)
+	numericList := func(values ...any) clickhousedriver.Dynamic {
+		items := make([]clickhousedriver.Dynamic, len(values))
+		for index, value := range values {
+			items[index] = clickhousedriver.NewDynamic(value)
+		}
+		return clickhousedriver.NewDynamicWithType(items, "Array(Dynamic)")
+	}
+	events = append(events,
+		// Visible values within each populated bucket are intentionally equal,
+		// making the approximate GK result exact while still exercising every
+		// normalization path shared with stats: native integers/floats, numeric
+		// strings, tagged decimals, and multivalue arrays containing null and
+		// nonnumeric elements.
+		fixtureEvent{id: "percentile-before", source: "timechart-percentile", at: base.Add(2*time.Minute - time.Nanosecond), metricSet: true, metric: clickhousedriver.NewDynamic(int64(9_999))},
+		fixtureEvent{id: "percentile-int", source: "timechart-percentile", at: base.Add(2 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(int64(100))},
+		fixtureEvent{id: "percentile-string", source: "timechart-percentile", at: base.Add(3 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic("100")},
+		fixtureEvent{id: "percentile-double", source: "timechart-percentile", at: base.Add(4 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(float64(100))},
+		fixtureEvent{id: "percentile-list", source: "timechart-percentile", at: base.Add(4*time.Minute + time.Second), metricSet: true, metric: numericList(int64(100), "100", "not-numeric", nil)},
+		fixtureEvent{id: "percentile-second-int", source: "timechart-percentile", at: base.Add(10 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(uint64(300))},
+		fixtureEvent{id: "percentile-second-decimal", source: "timechart-percentile", at: base.Add(11 * time.Minute), metricSet: true, metric: queryIntegrationExtendedValue("decimal/v1", "300.000")},
+		fixtureEvent{id: "percentile-third-list", source: "timechart-percentile", at: base.Add(15 * time.Minute), metricSet: true, metric: numericList(int64(400), "400", nil)},
+		fixtureEvent{id: "percentile-latest", source: "timechart-percentile", at: base.Add(18 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(int64(9_999))},
+		fixtureEvent{id: "percentile-other-tenant", tenant: "other", source: "timechart-percentile", at: base.Add(3 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(int64(8_888))},
+		fixtureEvent{id: "percentile-other-index", indexName: "other", source: "timechart-percentile", at: base.Add(3 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(int64(7_777))},
+		fixtureEvent{id: "percentile-future-visibility", source: "timechart-percentile", at: base.Add(3 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(int64(6_666)), visibility: 2},
+		// A nonempty scoped relation with no numeric candidates must retain the
+		// complete grid and publish nulls rather than looking like empty input.
+		fixtureEvent{id: "percentile-ineligible-missing", source: "timechart-percentile-ineligible", at: base.Add(2 * time.Minute)},
+		fixtureEvent{id: "percentile-ineligible-text", source: "timechart-percentile-ineligible", at: base.Add(6 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic("not-numeric")},
+		fixtureEvent{id: "percentile-ineligible-bool", source: "timechart-percentile-ineligible", at: base.Add(11 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(true)},
+		fixtureEvent{id: "percentile-ineligible-null", source: "timechart-percentile-ineligible", at: base.Add(16 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(nil)},
+	)
 	for index, event := range events {
 		message := "timechart " + event.id
 		document := clickhousedriver.NewJSON()
@@ -2396,6 +2625,11 @@ func queryIntegrationInsertTimechartEvents(t *testing.T, ctx context.Context, co
 			}
 			document.SetValueAtPath(pathName, clickhousedriver.NewDynamic(event.path))
 			fieldNames = []string{pathName}
+		}
+		if event.metricSet {
+			document.SetValueAtPath("metric", event.metric)
+			fieldNames = append(fieldNames, "metric")
+			slices.Sort(fieldNames)
 		}
 		tenant := event.tenant
 		if tenant == "" {

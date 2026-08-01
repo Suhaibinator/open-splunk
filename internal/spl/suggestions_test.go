@@ -603,8 +603,8 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 			if command.Insertion != "timechart span=5m count" {
 				t.Fatalf("timechart insertion = %q, want static count form", command.Insertion)
 			}
-			if command.Detail != "Chart count over fixed time buckets, optionally split BY one field." {
-				t.Fatalf("timechart detail = %q, want optional split description", command.Detail)
+			if command.Detail != "Chart count or one percentile over fixed time buckets; only count may split BY one field." {
+				t.Fatalf("timechart detail = %q, want aggregate/split description", command.Detail)
 			}
 		}
 	}
@@ -613,7 +613,7 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 	}
 
 	wantFunctions := []string{
-		"count", "c", "dc", "distinct_count", "values", "list", "min", "max",
+		"count", "p50", "p95", "c", "dc", "distinct_count", "values", "list", "min", "max",
 		"earliest", "latest", "sum", "avg", "if", "case", "now", "strftime",
 		"strptime", "relative_time", "tonumber", "tostring", "replace", "isnull",
 		"isnotnull", "coalesce", "lower", "upper", "len", "length", "round",

@@ -1573,7 +1573,7 @@ func TestParseTimechartFixedSpanCountByField(t *testing.T) {
 				t.Fatalf("command = %T, want *TimechartCommand", query.Commands[0])
 			}
 			if command.Span.Magnitude != test.magnitude || command.Span.Unit != test.unit ||
-				command.Function != AggregateFunctionCount || command.SplitBy == nil ||
+				command.Aggregate.Function != AggregateFunctionCount || command.SplitBy == nil ||
 				command.SplitBy.Name != test.field {
 				t.Fatalf("timechart = %#v", command)
 			}
@@ -1581,7 +1581,7 @@ func TestParseTimechartFixedSpanCountByField(t *testing.T) {
 			if !strings.EqualFold(spanText, strconv.FormatUint(test.magnitude, 10)+command.Span.Unit.String()) {
 				t.Fatalf("span source = %q", spanText)
 			}
-			if aggregateText := test.source[command.AggregateRange.Start.Offset:command.AggregateRange.End.Offset]; !strings.EqualFold(aggregateText, "count") {
+			if aggregateText := test.source[command.Aggregate.Range.Start.Offset:command.Aggregate.Range.End.Offset]; !strings.EqualFold(aggregateText, "count") {
 				t.Fatalf("aggregate source = %q", aggregateText)
 			}
 			if fieldText := test.source[command.SplitBy.Range.Start.Offset:command.SplitBy.Range.End.Offset]; fieldText != test.field {
@@ -1635,14 +1635,14 @@ func TestParseTimechartFixedSpanCountWithoutSplit(t *testing.T) {
 			}
 			if command.Span.Magnitude != test.magnitude ||
 				command.Span.Unit != test.unit ||
-				command.Function != AggregateFunctionCount ||
+				command.Aggregate.Function != AggregateFunctionCount ||
 				command.SplitBy != nil {
 				t.Fatalf("timechart = %#v", command)
 			}
 			if got := test.source[command.SourceRange().Start.Offset:command.SourceRange().End.Offset]; got != test.commandText {
 				t.Fatalf("command source = %q", got)
 			}
-			if got := test.source[command.AggregateRange.Start.Offset:command.AggregateRange.End.Offset]; !strings.EqualFold(got, "count") {
+			if got := test.source[command.Aggregate.Range.Start.Offset:command.Aggregate.Range.End.Offset]; !strings.EqualFold(got, "count") {
 				t.Fatalf("aggregate source = %q", got)
 			}
 		})
@@ -1934,7 +1934,7 @@ func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{"log span keeps legacy diagnostic", `index=main | timechart span=2log10 count by level`, "SPL_INVALID_ARGUMENT", "2log10"},
 		{"compound span", `index=main | timechart span=1h30m count by level`, "SPL_INVALID_ARGUMENT", "1h30m"},
 		{"missing aggregate", `index=main | timechart span=5m`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", ""},
-		{"unsupported aggregate", `index=main | timechart span=5m p95(duration) by level`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", "p95"},
+		{"unsupported aggregate", `index=main | timechart span=5m sum(duration) by level`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", "sum"},
 		{"count arguments", `index=main | timechart span=5m count() by level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "("},
 		{"missing by", `index=main | timechart span=5m count level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "level"},
 		{"missing split field", `index=main | timechart span=5m count by`, "SPL_EXPECTED_FIELD", ""},

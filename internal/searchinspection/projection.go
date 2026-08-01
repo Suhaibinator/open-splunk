@@ -305,7 +305,7 @@ func describeOperator(
 		}
 		outputs = []string{"_time"}
 		if concrete.Split == nil {
-			outputs = append(outputs, "count")
+			outputs = append(outputs, concrete.Measure.Output)
 		}
 	case *plan.Chart:
 		if concrete == nil {

@@ -2,7 +2,7 @@
 
 **Status:** executable implementation contract
 **Compatibility version:** `0.1`
-**Last updated:** July 27, 2026
+**Last updated:** July 31, 2026
 
 Open Splunk accepts only the syntax and behavior described here. Unsupported
 commands or forms fail with a source-located diagnostic; the compiler never
@@ -2380,24 +2380,36 @@ rather than falling back to an approximate or data-dependent bin.
 ```spl
 | timechart span=5m count
 | timechart span=5m count BY level
+| timechart span=5m p95(duration_ms)
+| timechart span=1h perc50(duration_ms) AS median_ms
 ```
 
-The initial slice accepts exactly one argument-free `count`, an optional `BY`
-with one exact split field, and a positive fixed `s`, `m`, or `h` span from one
-second through 24 hours. Without `BY`, the result has the fixed `_time,count`
-schema. With `BY`, split values still determine the wide output columns at
-runtime. Both forms are time-series results, but only the split form has
-runtime-named columns. The current `timechart` lowering must be the final
-command in either form. Options, aliases, calendar/subsecond spans, multiple
-split fields, and other aggregate functions fail explicitly.
+The supported aggregate forms are exactly one argument-free `count`, or one
+unsplit integer-suffix percentile. `count` retains its optional `BY` with one
+exact split field and cannot be aliased. A percentile is written
+`pN(field)` or `percN(field)`, where `N` is an integer from 1 through 99 and
+`field` is one exact unquoted field. It accepts an optional exact unquoted
+`AS` output. Without `AS`, both spellings publish the canonical lowercase
+`percN(field)` name; for example, `p095(duration_ms)` publishes
+`perc95(duration_ms)`. Function and clause names are case-insensitive. A
+percentile never accepts `BY`.
+
+Every form requires a positive fixed `s`, `m`, or `h` span from one second
+through 24 hours and must be the final pipeline command. Unsplit count has the
+fixed `_time,count` schema. An unsplit percentile has the fixed
+`_time,<percentile-output>` schema. With count `BY`, split values determine the
+wide output columns at runtime. All are time-series results, but only count
+`BY` has runtime-named columns.
 
 The search time range remains half-open `[earliest, latest)`. Buckets are
 aligned to Unix epoch boundaries using mathematical floor division, including
-before 1970. Partial first and last buckets are retained. When at least one
-input event exists, missing buckets are filled with zero counts and rows are
-ordered by `_time` ascending. A completely empty input returns zero rows while
-preserving the known schema: `_time,count` without `BY`, or `_time` with `BY`
-because there are no observed runtime series. `timechart` requires the
+before 1970. Partial first and last buckets are retained. For either count
+form, when at least one input event exists, missing buckets are filled with
+zero counts and rows are ordered by `_time` ascending. A completely empty
+input returns zero rows while preserving the known schema: `_time,count`
+without `BY`, the fixed
+`_time,<percentile-output>` schema for a percentile, or `_time` with count
+`BY` because there are no observed runtime series. `timechart` requires the
 unmodified canonical `_time`; removing, replacing, or transforming it is a
 source-located error.
 
@@ -2407,8 +2419,8 @@ with `span=7h` retains the partial bucket beginning at
 `1899-12-31T19:00:00Z`; the executor reconstructs public bucket timestamps from
 bounded integer ordinals rather than round-tripping them through `DateTime64`.
 
-Without `BY`, `_time` is a non-null timestamp and `count` is a non-null
-unsigned count. With `BY`, the public result remains wide: `_time` is followed
+For count, `_time` is a non-null timestamp and every count is a non-null
+unsigned value. With `BY`, the public result remains wide: `_time` is followed
 by non-null unsigned count columns. The ten ordinary string series with the
 highest total count across the complete range are retained; equal scores use
 UTF-8 lexical order. Ordinary output columns are then ordered lexically,
@@ -2417,6 +2429,33 @@ ordinary series. `NULL` does not consume a top-ten slot. Split values beginning
 with `_` receive Splunk's `VALUE` prefix (`_audit` becomes `VALUE_audit`). An
 upstream projection that removes the split field treats it as missing for all
 retained events.
+
+The percentile input uses the same numeric and immediate-member normalization
+as `stats` numeric aggregates. Finite integers, floats, numeric Strings, tagged
+decimals, and canonical timestamps converted to Unix epoch seconds are
+eligible. Missing, null, empty-String, Boolean, bytes, object, nonnumeric,
+`NaN`, and infinite inputs are ignored. Each finite numeric scalar in a
+top-level runtime or fixed multivalue contributes independently, including
+duplicates; nonnumeric members and nested containers are ignored. Members are
+never expanded into separate event rows.
+
+The percentile output is `Nullable(Float64)`. When at least one scoped input
+row exists, the command publishes the complete fixed bucket grid in ascending
+time order; a bucket with no eligible numeric contribution contains null, not
+zero. This distinguishes an empty scoped input, which publishes the schema but
+zero rows, from present input whose percentile field is missing or wholly
+ineligible, which publishes every bucket with null values.
+
+The percentile lowering scans the tenant/index/time/snapshot-scoped source
+once, computing bucket ticks and normalized numeric-member arrays inline. It
+materializes only the resulting at-most-10,000 bucket groups. The final join
+and global input-presence proof reuse those bounded groups rather than
+materializing or scanning the event relation again. It emits one physical
+`quantilesGKOrNullArray(100, level)` GK state for the single requested level.
+No `ARRAY JOIN` is emitted, no multivalue member multiplies source rows, and no
+second scoped storage scan is performed. The approximation, roughly
+1%-rank-error accuracy, and resource limits are the same as the `stats`
+percentile contract.
 
 The split form supports string split values plus missing/null. Numeric,
 Boolean, extended, list, and object split values fail the whole command before
@@ -2432,6 +2471,17 @@ grows with the requested bucket count to at most 130,000 states. Domains with
 enough distinct raw values to exceed that budget fail atomically with an
 execution-limit error; an explicitly configured lower group cap remains
 authoritative.
+
+Retained unsupported forms fail rather than being approximated. These include
+count arguments or aliases; percentile `BY`; wildcard, quoted, missing,
+multiple, or eval-expression percentile inputs; wildcard, quoted, or missing
+percentile aliases after `AS`; multiple aggregates; every other aggregate such
+as `sum`, `avg`, `dc`, `values`, or `count(field)`; suffixes outside 1 through
+99 or with a decimal level; `perc(field, N)`, `upperperc`, and `exactperc`;
+options; malformed, wildcard, quoted, missing, or multiple count split fields;
+and omitted, nonpositive, overflowing, compound, logarithmic, calendar, or
+subsecond spans. Every unsupported form retains a source-located timechart
+diagnostic.
 
 ### `chart`
 

@@ -536,10 +536,6 @@ func classifyChartSuggestion(context SuggestionContext, tokens []token) Suggesti
 }
 
 func classifyTimechartSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
-	if topLevelWordIndex(tokens, "BY") >= 0 {
-		context.Kinds = []SuggestionKind{SuggestionKindField}
-		return context
-	}
 	if len(tokens) == 0 {
 		context.Kinds = []SuggestionKind{SuggestionKindKeyword}
 		context.Keywords = []string{"span="}
@@ -553,16 +549,47 @@ func classifyTimechartSuggestion(context SuggestionContext, tokens []token) Sugg
 		tokens[1].kind == tokenEqual &&
 		tokens[2].kind == tokenWord {
 		context = aggregateSuggestionContext(context)
-		context.FunctionNames = []string{"count"}
+		context.FunctionNames = []string{"count", "p50", "p95"}
 		return context
 	}
-	if len(tokens) == 4 &&
-		tokenWordEqual(tokens[0], "span") &&
-		tokens[1].kind == tokenEqual &&
-		tokens[2].kind == tokenWord &&
-		tokenWordEqual(tokens[3], "count") {
+	if len(tokens) < 4 ||
+		!tokenWordEqual(tokens[0], "span") ||
+		tokens[1].kind != tokenEqual ||
+		tokens[2].kind != tokenWord {
+		return context
+	}
+	aggregate := tokens[3:]
+	if tokenWordEqual(aggregate[0], "count") {
+		if topLevelWordIndex(aggregate, "BY") >= 0 {
+			context.Kinds = []SuggestionKind{SuggestionKindField}
+			return context
+		}
+		if len(aggregate) != 1 {
+			return context
+		}
 		context.Kinds = []SuggestionKind{SuggestionKindKeyword}
 		context.Keywords = []string{"BY"}
+		return context
+	}
+	if _, percentile := parseStatsPercentileSuffix(strings.ToLower(aggregate[0].text)); !percentile {
+		return context
+	}
+	if parenthesisDepth(aggregate) > 0 {
+		context.Kinds = []SuggestionKind{SuggestionKindField}
+		return context
+	}
+	if asIndex := topLevelWordIndex(aggregate, "AS"); asIndex >= 0 {
+		if len(aggregate) == asIndex+1 {
+			context.Kinds = []SuggestionKind{SuggestionKindField}
+		}
+		return context
+	}
+	if len(aggregate) == 4 &&
+		aggregate[1].kind == tokenLeftParen &&
+		aggregate[2].kind == tokenWord &&
+		aggregate[3].kind == tokenRightParen {
+		context.Kinds = []SuggestionKind{SuggestionKindKeyword}
+		context.Keywords = []string{"AS"}
 	}
 	return context
 }
